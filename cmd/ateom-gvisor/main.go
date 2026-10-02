@@ -964,6 +964,21 @@ func (s *AteomService) TerminateWorkload(ctx context.Context, req *ateompb.Termi
 
 	attribution := ateomstats.ActorAttributionFromRequest(req)
 
+	// Run and Restore host the actor before creating its sandbox, and unhost
+	// it only after deleting it, so an actor this ateom does not host has no
+	// sandbox here. Any runsc state left for it belongs to an earlier ateom,
+	// whose sandbox died with it. runsc would SIGKILL whatever now holds the
+	// PIDs recorded there, so the state is wiped without calling runsc.
+	if s.lookupActor(attribution.UID) == nil {
+		slog.InfoContext(ctx, "Actor is not hosted by this ateom, clearing its runsc state without running runsc",
+			slog.String("actor", attribution.Ref.String()),
+			slog.String("actorUID", attribution.UID))
+		if err := resetRunscStateAndPidFileDirs(req.GetActorDirs()); err != nil {
+			return nil, fmt.Errorf("failed to terminate workload: %w", err)
+		}
+		return &ateompb.TerminateWorkloadResponse{}, nil
+	}
+
 	if err := s.terminateWorkload(ctx, attribution.Ref, attribution.UID, req.GetRunscPath(), req.GetActorDirs(), req.GetSpec().GetContainers()); err != nil {
 		return nil, fmt.Errorf("failed to terminate workload: %w", err)
 	}

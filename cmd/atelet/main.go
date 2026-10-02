@@ -1299,9 +1299,14 @@ func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequ
 		Spec:                  spec,
 		ActorDirs:             ateletpath.ActorDirs(actorUID),
 	}); err != nil {
-		if status.Code(err) == codes.NotFound {
+		switch {
+		case status.Code(err) == codes.NotFound:
 			slog.InfoContext(ctx, "workload not found on ateom during terminate", slog.Any("actor", actorRef), slog.String("actorUID", actorUID))
-		} else {
+		case ateomDead(ctx, req.GetTargetAteomUid()):
+			// The sandbox died with ateom, so there is nothing left for it to tear down.
+			slog.WarnContext(ctx, "ateom is dead during terminate, treating the workload as terminated",
+				slog.Any("actor", actorRef), slog.String("actorUID", actorUID), slog.String("ateomUID", req.GetTargetAteomUid()), slog.Any("err", err))
+		default:
 			return nil, fmt.Errorf("failed calling ateom.TerminateWorkload (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
 		}
 	}
@@ -1680,6 +1685,18 @@ func (d *AteomDialer) DialAteomPod(ctx context.Context, podUID string) (*grpc.Cl
 	d.conns.Add(key, conn)
 
 	return conn, nil
+}
+
+// ateomDead reports whether nothing is listening on the ateom socket for
+// podUID.
+func ateomDead(ctx context.Context, podUID string) bool {
+	var d net.Dialer
+	conn, err := d.DialContext(ctx, "unix", ateomSocketPath(podUID))
+	if err != nil {
+		return errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ENOENT)
+	}
+	conn.Close()
+	return false
 }
 
 // validateRunRequest, validateCheckpointRequest, and validateRestoreRequest

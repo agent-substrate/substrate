@@ -18,10 +18,15 @@ package main
 
 import (
 	"context"
+	"errors"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"google.golang.org/grpc/codes"
 
+	"github.com/agent-substrate/substrate/internal/actorlock"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 )
@@ -50,6 +55,69 @@ func TestRPCsRejectMissingActorDirs(t *testing.T) {
 	} {
 		if got := apierror.Code(call()); got != codes.InvalidArgument {
 			t.Errorf("%s() code = %v, want %v", name, got, codes.InvalidArgument)
+		}
+	}
+}
+
+// An actor this ateom does not host, as after an ateom restart, terminates
+// without runsc: the PIDs in the runsc state it left are not its sandbox's.
+// Repeating the call succeeds too.
+func TestTerminateWorkloadOfUnhostedActorSkipsRunsc(t *testing.T) {
+	tmp := t.TempDir()
+	root := filepath.Join(tmp, "actor")
+	actorDirs := &ateompb.ActorDirs{
+		RootDir:                   root,
+		OciBundleDir:              filepath.Join(root, "bundles"),
+		CheckpointDir:             filepath.Join(root, "checkpoint"),
+		RestoreDir:                filepath.Join(root, "restore"),
+		DurableDirVolumeMountsDir: filepath.Join(root, "durable"),
+		SystemInfoVolumeRootsDir:  filepath.Join(root, "systeminfo"),
+		VolumesDir:                filepath.Join(root, "volumes"),
+	}
+	// What a dead ateom leaves behind for the actor.
+	for _, f := range []string{
+		filepath.Join(runscStateDir(actorDirs), "pause.state"),
+		filepath.Join(pidFileDir(actorDirs), "pause.pid"),
+	} {
+		if err := os.MkdirAll(filepath.Dir(f), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(f, []byte("stale"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	invoked := filepath.Join(tmp, "runsc-invoked")
+	runscPath := filepath.Join(tmp, "runsc")
+	if err := os.WriteFile(runscPath, []byte("#!/bin/sh\ntouch "+invoked+"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	s := &AteomService{locks: actorlock.New(), actors: map[string]*hostedActor{}}
+	req := &ateompb.TerminateWorkloadRequest{
+		Atespace:  "default",
+		ActorName: "actor",
+		ActorUid:  "actor-uid",
+		RunscPath: runscPath,
+		ActorDirs: actorDirs,
+		Spec:      &ateompb.WorkloadSpec{Containers: []*ateompb.Container{{Name: "app"}}},
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		if _, err := s.TerminateWorkload(context.Background(), req); err != nil {
+			t.Fatalf("TerminateWorkload() attempt %d error = %v, want nil", attempt, err)
+		}
+	}
+
+	if _, err := os.Stat(invoked); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("runsc was invoked (stat err = %v), want no runsc calls", err)
+	}
+	for _, dir := range []string{runscStateDir(actorDirs), pidFileDir(actorDirs)} {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Errorf("ReadDir(%q) error = %v, want an empty dir", dir, err)
+			continue
+		}
+		if len(entries) != 0 {
+			t.Errorf("%q holds %d entries, want none", dir, len(entries))
 		}
 	}
 }
