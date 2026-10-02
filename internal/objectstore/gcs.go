@@ -18,10 +18,23 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"cloud.google.com/go/storage"
+	"github.com/googleapis/gax-go/v2"
 	"google.golang.org/api/iterator"
 )
+
+// gcsRetry retries transient errors (408, 429, 5xx), such as the 429s GCS
+// returns while it scales a cold bucket. RetryAlways is safe: a repeated
+// delete gets a 404, which Delete treats as success, and a repeated copy
+// rewrites the same object. Every caller waits on these calls, so each
+// gives up after 5 attempts (under 4s of sleep).
+var gcsRetry = []storage.RetryOption{
+	storage.WithPolicy(storage.RetryAlways),
+	storage.WithBackoff(gax.Backoff{Initial: 250 * time.Millisecond, Max: 2 * time.Second, Multiplier: 2}),
+	storage.WithMaxAttempts(5),
+}
 
 type gcsStore struct {
 	client *storage.Client
@@ -32,13 +45,19 @@ func NewGCS(client *storage.Client) Store {
 	return &gcsStore{client: client}
 }
 
+// bucket returns a handle to the named bucket that retries with gcsRetry.
+// Objects taken from it inherit the setting.
+func (g *gcsStore) bucket(name string) *storage.BucketHandle {
+	return g.client.Bucket(name).Retryer(gcsRetry...)
+}
+
 func (g *gcsStore) List(ctx context.Context, bucket, prefix string) ([]string, error) {
 	query := &storage.Query{Prefix: prefix}
 	// Only the name is ever used, and asking for less makes GCS send less.
 	if err := query.SetAttrSelection([]string{"Name"}); err != nil {
 		return nil, fmt.Errorf("while selecting object attributes: %w", err)
 	}
-	it := g.client.Bucket(bucket).Objects(ctx, query)
+	it := g.bucket(bucket).Objects(ctx, query)
 	var objects []string
 	for {
 		attrs, err := it.Next()
@@ -53,7 +72,7 @@ func (g *gcsStore) List(ctx context.Context, bucket, prefix string) ([]string, e
 }
 
 func (g *gcsStore) Delete(ctx context.Context, bucket, object string) error {
-	err := g.client.Bucket(bucket).Object(object).Delete(ctx)
+	err := g.bucket(bucket).Object(object).Delete(ctx)
 	// An object that is already gone is the state this asks for.
 	if err != nil && !errors.Is(err, storage.ErrObjectNotExist) {
 		return fmt.Errorf("while deleting gs://%s/%s: %w", bucket, object, err)
@@ -62,8 +81,9 @@ func (g *gcsStore) Delete(ctx context.Context, bucket, object string) error {
 }
 
 func (g *gcsStore) Copy(ctx context.Context, srcBucket, srcObject, dstBucket, dstObject string) error {
-	src := g.client.Bucket(srcBucket).Object(srcObject)
-	dst := g.client.Bucket(dstBucket).Object(dstObject)
+	src := g.bucket(srcBucket).Object(srcObject)
+	// The copier retries with dst's settings, not src's.
+	dst := g.bucket(dstBucket).Object(dstObject)
 	// Copier.Run drives GCS's rewrite API, following the rewrite token until
 	// the copy completes. The bytes move inside GCS whatever the object's size,
 	// so a multi-gigabyte memory image never reaches this process.
