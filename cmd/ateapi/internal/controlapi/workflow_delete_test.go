@@ -32,6 +32,7 @@ func TestDeleteActorWorkflow_ExecutionPaths(t *testing.T) {
 	tests := []struct {
 		name        string
 		seedState   ateapipb.ActorState
+		admitted    bool
 		anyState    bool
 		missingTmpl bool
 		wantErr     bool
@@ -52,6 +53,7 @@ func TestDeleteActorWorkflow_ExecutionPaths(t *testing.T) {
 		{
 			name:      "delete deleting actor succeeds",
 			seedState: ateapipb.ActorState_ACTOR_STATE_DELETING,
+			admitted:  true,
 			anyState:  false,
 			wantErr:   false,
 		},
@@ -122,6 +124,11 @@ func TestDeleteActorWorkflow_ExecutionPaths(t *testing.T) {
 				tmplName = "missing-tmpl"
 			}
 			seedWorkflowActor(t, ctx, st, actorRef, "ns", tmplName, tc.seedState)
+			if tc.admitted {
+				if _, err := st.MarkActorForDeletion(ctx, actorRef, store.DeletePreconditions{}, nil); err != nil {
+					t.Fatalf("MarkActorForDeletion: %v", err)
+				}
+			}
 
 			deleted, err := w.DeleteActor(ctx, actorRef, tc.anyState, store.DeletePreconditions{})
 			if tc.wantErr {
@@ -147,6 +154,9 @@ func TestEnsureMarkedDeleting_StateMatrix(t *testing.T) {
 	tests := []struct {
 		name     string
 		anyState bool
+		// admitted marks the actor before the call: an admitted actor is
+		// deleted from whatever state it is in.
+		admitted bool
 		allowed  map[ateapipb.ActorState]bool
 	}{
 		{
@@ -155,7 +165,6 @@ func TestEnsureMarkedDeleting_StateMatrix(t *testing.T) {
 			allowed: map[ateapipb.ActorState]bool{
 				ateapipb.ActorState_ACTOR_STATE_SUSPENDED: true,
 				ateapipb.ActorState_ACTOR_STATE_CRASHED:   true,
-				ateapipb.ActorState_ACTOR_STATE_DELETING:  true, // skipped
 			},
 		},
 		{
@@ -171,7 +180,24 @@ func TestEnsureMarkedDeleting_StateMatrix(t *testing.T) {
 				ateapipb.ActorState_ACTOR_STATE_SUSPENDED:   true,
 				ateapipb.ActorState_ACTOR_STATE_CRASHED:     true,
 				ateapipb.ActorState_ACTOR_STATE_REVERTING:   true,
-				ateapipb.ActorState_ACTOR_STATE_DELETING:    true, // skipped
+				ateapipb.ActorState_ACTOR_STATE_DELETING:    true,
+			},
+		},
+		{
+			name:     "admitted delete",
+			anyState: false,
+			admitted: true,
+			allowed: map[ateapipb.ActorState]bool{
+				ateapipb.ActorState_ACTOR_STATE_UNSPECIFIED: true,
+				ateapipb.ActorState_ACTOR_STATE_RUNNING:     true,
+				ateapipb.ActorState_ACTOR_STATE_RESUMING:    true,
+				ateapipb.ActorState_ACTOR_STATE_SUSPENDING:  true,
+				ateapipb.ActorState_ACTOR_STATE_PAUSING:     true,
+				ateapipb.ActorState_ACTOR_STATE_PAUSED:      true,
+				ateapipb.ActorState_ACTOR_STATE_SUSPENDED:   true,
+				ateapipb.ActorState_ACTOR_STATE_CRASHED:     true,
+				ateapipb.ActorState_ACTOR_STATE_REVERTING:   true,
+				ateapipb.ActorState_ACTOR_STATE_DELETING:    true,
 			},
 		},
 	}
@@ -185,14 +211,34 @@ func TestEnsureMarkedDeleting_StateMatrix(t *testing.T) {
 
 				actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
 				seedWorkflowActor(t, ctx, st, actorRef, "ns", "tmpl1", seedState)
-				actor, err := st.GetActor(ctx, actorRef)
+				if tc.admitted {
+					if _, err := st.MarkActorForDeletion(ctx, actorRef, store.DeletePreconditions{}, nil); err != nil {
+						t.Fatalf("state %v: mark seeded actor: %v", seedState, err)
+					}
+				}
+				seeded, err := st.GetActor(ctx, actorRef)
 				if err != nil {
 					t.Fatalf("state %v: get seeded actor: %v", seedState, err)
 				}
 
-				updated, err := w.ensureMarkedDeleting(ctx, actorRef, actor, tc.anyState)
+				updated, err := w.ensureMarkedDeleting(ctx, actorRef, tc.anyState, store.DeletePreconditions{})
 				assertPrerequisiteResult(t, seedState, err, tc.allowed[seedState])
-				if err == nil && seedState != ateapipb.ActorState_ACTOR_STATE_DELETING {
+				if err != nil {
+					// A refusal admits nothing.
+					refused, getErr := st.GetActor(ctx, actorRef)
+					if getErr != nil {
+						t.Fatalf("state %v: get refused actor: %v", seedState, getErr)
+					}
+					if refused.GetMetadata().GetDeleteTime() != nil || refused.GetStatus().GetState() != seedState || refused.GetMetadata().GetVersion() != seeded.GetMetadata().GetVersion() {
+						t.Errorf("state %v: a refused delete wrote: delete_time %v, state %v, version %d", seedState, refused.GetMetadata().GetDeleteTime(), refused.GetStatus().GetState(), refused.GetMetadata().GetVersion())
+					}
+				}
+				if err == nil && tc.admitted {
+					if got, want := updated.GetMetadata().GetVersion(), seeded.GetMetadata().GetVersion(); got != want {
+						t.Errorf("state %v: an admitted actor was written again: version %d, want %d", seedState, got, want)
+					}
+				}
+				if err == nil && !tc.admitted && seedState != ateapipb.ActorState_ACTOR_STATE_DELETING {
 					if updated.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_DELETING {
 						t.Errorf("state %v: ensureMarkedDeleting returned actor in %v, want DELETING", seedState, updated.GetStatus().GetState())
 					}
@@ -513,5 +559,77 @@ func TestDeleteActor_CollectsSnapshotsAfterWorkerDelete(t *testing.T) {
 				t.Errorf("deleting the actor left %v under its own prefix, want everything it wrote collected", left)
 			}
 		})
+	}
+}
+
+func TestDeleteActorWorkflow_RetryKeepsAdmission(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	objects := objectstoretest.New()
+	w := NewActorWorkflow(persistence, nil, nil, nil, nil, nil, "", nil, objects)
+
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "gone-tmpl"},
+		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_CRASHED},
+	})
+	inFlight := mustActorSnapshotURI(t, &ateapipb.ActorTemplate{
+		SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: testStorageLocation},
+	}, actor, "abandoned")
+	objects.PutSnapshot(t, inFlight, "manifest.json")
+	observed := mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
+		s.InProgressSnapshotUri = inFlight.String()
+	})
+	// The guards a client sends after reading the actor.
+	guards := store.DeletePreconditions{UID: observed.GetMetadata().GetUid(), Version: observed.GetMetadata().GetVersion()}
+
+	objects.OnDelete = func(string, string) error { return errObjectStore }
+	if _, err := w.DeleteActor(ctx, actorRef, true, guards); !errors.Is(err, errObjectStore) {
+		t.Fatalf("DeleteActor = %v, want an error wrapping %v", err, errObjectStore)
+	}
+	admitted, err := persistence.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("GetActor after the failure: %v", err)
+	}
+	if admitted.GetMetadata().GetDeleteTime() == nil {
+		t.Fatal("a failed delete left delete_time unset")
+	}
+	if got := admitted.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_DELETING {
+		t.Fatalf("state after the failure = %v, want DELETING", got)
+	}
+
+	if _, err := w.DeleteActor(ctx, actorRef, true, store.DeletePreconditions{UID: guards.UID}); !errors.Is(err, errObjectStore) {
+		t.Fatalf("retried DeleteActor = %v, want an error wrapping %v", err, errObjectStore)
+	}
+	retried, err := persistence.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("GetActor after the retried failure: %v", err)
+	}
+	if got, want := retried.GetMetadata().GetVersion(), admitted.GetMetadata().GetVersion(); got != want {
+		t.Errorf("a retried delete moved the version to %d, want %d: admission is read-only once done", got, want)
+	}
+
+	objects.OnDelete = nil
+	// Admission spent the version guard; the uid guard still holds.
+	if _, err := w.DeleteActor(ctx, actorRef, true, guards); status.Code(err) != codes.Aborted {
+		t.Fatalf("retry with the original version = %v, want ABORTED", err)
+	}
+	refused, err := persistence.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("GetActor after the refused retry: %v", err)
+	}
+	if !refused.GetMetadata().GetDeleteTime().AsTime().Equal(admitted.GetMetadata().GetDeleteTime().AsTime()) {
+		t.Errorf("a refused retry re-stamped delete_time: %v, want %v", refused.GetMetadata().GetDeleteTime().AsTime(), admitted.GetMetadata().GetDeleteTime().AsTime())
+	}
+	deleted, err := w.DeleteActor(ctx, actorRef, true, store.DeletePreconditions{UID: guards.UID})
+	if err != nil {
+		t.Fatalf("retry with the uid alone: %v", err)
+	}
+	if !deleted.GetMetadata().GetDeleteTime().AsTime().Equal(admitted.GetMetadata().GetDeleteTime().AsTime()) {
+		t.Errorf("the retry re-stamped delete_time: %v, want %v", deleted.GetMetadata().GetDeleteTime().AsTime(), admitted.GetMetadata().GetDeleteTime().AsTime())
+	}
+	if _, err := w.DeleteActor(ctx, actorRef, true, store.DeletePreconditions{}); status.Code(err) != codes.NotFound {
+		t.Errorf("DeleteActor after the row is gone = %v, want NOT_FOUND", err)
 	}
 }

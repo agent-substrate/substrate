@@ -436,15 +436,34 @@ func TestDeleteTag_ReleasesExternalSnapshot(t *testing.T) {
 	if _, err := w.DeleteTag(ctx, tagRef, store.DeletePreconditions{}); !errors.Is(err, errObjectStore) {
 		t.Fatalf("DeleteTag = %v, want an error wrapping %v", err, errObjectStore)
 	}
-	if _, err := persistence.GetTag(ctx, tagRef); err != nil {
+	admitted, err := persistence.GetTag(ctx, tagRef)
+	if err != nil {
 		t.Fatalf("GetTag after the failure: %v", err)
+	}
+	if admitted.GetMetadata().GetDeleteTime() == nil {
+		t.Fatal("a failed delete left delete_time unset")
+	}
+
+	if _, err := w.DeleteTag(ctx, tagRef, store.DeletePreconditions{}); !errors.Is(err, errObjectStore) {
+		t.Fatalf("retried DeleteTag = %v, want an error wrapping %v", err, errObjectStore)
+	}
+	retried, err := persistence.GetTag(ctx, tagRef)
+	if err != nil {
+		t.Fatalf("GetTag after the retried failure: %v", err)
+	}
+	if got, want := retried.GetMetadata().GetVersion(), admitted.GetMetadata().GetVersion(); got != want {
+		t.Errorf("a retried delete moved the version to %d, want %d", got, want)
 	}
 
 	// Simulates a retried deletion. Now, the object deletion succeeds,
 	// so we can remove the row from the DB.
 	objects.OnDelete = nil
-	if _, err := w.DeleteTag(ctx, tagRef, store.DeletePreconditions{}); err != nil {
+	deleted, err := w.DeleteTag(ctx, tagRef, store.DeletePreconditions{})
+	if err != nil {
 		t.Fatalf("retried DeleteTag: %v", err)
+	}
+	if !deleted.GetMetadata().GetDeleteTime().AsTime().Equal(admitted.GetMetadata().GetDeleteTime().AsTime()) {
+		t.Errorf("the retry re-stamped delete_time: %v, want %v", deleted.GetMetadata().GetDeleteTime().AsTime(), admitted.GetMetadata().GetDeleteTime().AsTime())
 	}
 	if got := objects.Snapshot(t, uri); len(got) != 0 {
 		t.Errorf("the tag's external snapshot still holds %v, want it collected", got)
@@ -473,9 +492,9 @@ func TestDeleteTag_ReleasesPendingSnapshot(t *testing.T) {
 	objects.PutSnapshot(t, uri, "manifest.json")
 
 	// Cleanup must work without the source actor or its template.
-	mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
-		s.State = ateapipb.ActorState_ACTOR_STATE_DELETING
-	})
+	if _, err := persistence.MarkActorForDeletion(ctx, resources.ActorRefFromActor(actor), store.DeletePreconditions{}, nil); err != nil {
+		t.Fatalf("MarkActorForDeletion: %v", err)
+	}
 	if _, err := persistence.DeleteActor(ctx, resources.ActorRefFromActor(actor), store.DeletePreconditions{}); err != nil {
 		t.Fatalf("DeleteActor: %v", err)
 	}

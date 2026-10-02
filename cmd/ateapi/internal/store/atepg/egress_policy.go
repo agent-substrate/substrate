@@ -24,6 +24,7 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/jackc/pgx/v5"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func (p *Persistence) CreateEgressPolicy(ctx context.Context, actorRef resources.ActorRef, policy *ateapipb.EgressPolicy) (*ateapipb.EgressPolicy, error) {
@@ -112,7 +113,12 @@ func (p *Persistence) DeleteEgressPolicy(ctx context.Context, actorRef resources
 	if err != nil {
 		return nil, fmt.Errorf("deleting egress policy for %s: %w", actorRef, err)
 	}
-	return unmarshalEgressPolicy(uid, version, protoBytes)
+	deleted, err := unmarshalEgressPolicy(uid, version, protoBytes)
+	if err != nil {
+		return nil, err
+	}
+	deleted.Metadata.DeleteTime = timestamppb.Now()
+	return deleted, nil
 }
 
 func getEgressPolicyRow(ctx context.Context, q querier, query string, args ...any) (*ateapipb.EgressPolicy, error) {

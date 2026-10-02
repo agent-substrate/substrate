@@ -25,6 +25,8 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // TestActorStateChangeRecords drives each transition that commits a new state
@@ -72,8 +74,8 @@ func TestActorStateChangeRecords(t *testing.T) {
 		{
 			name:      "delete marks the actor deleting",
 			seedState: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
-			transition: func(t *testing.T, w *ActorWorkflow, ref resources.ActorRef, actor *ateapipb.Actor, _ *ateapipb.ActorTemplate) {
-				if _, err := w.ensureMarkedDeleting(context.Background(), ref, actor, false); err != nil {
+			transition: func(t *testing.T, w *ActorWorkflow, ref resources.ActorRef, _ *ateapipb.Actor, _ *ateapipb.ActorTemplate) {
+				if _, err := w.ensureMarkedDeleting(context.Background(), ref, false, store.DeletePreconditions{}); err != nil {
 					t.Fatalf("ensureMarkedDeleting: %v", err)
 				}
 			},
@@ -215,9 +217,9 @@ func TestActorDeletedRecord(t *testing.T) {
 
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
 	seedWorkflowActor(t, ctx, persistence, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_DELETING)
-	actor, err := persistence.GetActor(ctx, actorRef)
+	actor, err := persistence.MarkActorForDeletion(ctx, actorRef, store.DeletePreconditions{}, nil)
 	if err != nil {
-		t.Fatalf("get actor: %v", err)
+		t.Fatalf("mark actor: %v", err)
 	}
 
 	w := &ActorWorkflow{store: persistence}
@@ -260,7 +262,7 @@ func TestActorStateChangeRecordSkippedOnConflict(t *testing.T) {
 	}
 
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
-	seedWorkflowActor(t, ctx, persistence, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
+	seedWorkflowActor(t, ctx, persistence, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_RUNNING)
 	stale, err := persistence.GetActor(ctx, actorRef)
 	if err != nil {
 		t.Fatalf("get actor: %v", err)
@@ -274,11 +276,41 @@ func TestActorStateChangeRecordSkippedOnConflict(t *testing.T) {
 		t.Fatalf("bump version: %v", err)
 	}
 
+	// The stale guard is refused before the state gate sees the RUNNING actor.
 	w := &ActorWorkflow{store: persistence}
-	if _, err := w.ensureMarkedDeleting(ctx, actorRef, stale, false); err == nil {
-		t.Fatal("ensureMarkedDeleting on a stale actor = nil, want a conflict")
+	if _, err := w.ensureMarkedDeleting(ctx, actorRef, false, store.DeletePreconditions{Version: stale.GetMetadata().GetVersion()}); status.Code(err) != codes.Aborted {
+		t.Fatalf("ensureMarkedDeleting with a stale guard = %v, want ABORTED", err)
 	}
 	if len(*records) != 0 {
 		t.Errorf("got %d state records from a losing writer, want 0: %v", len(*records), *records)
+	}
+}
+
+func TestActorStateChangeRecordNotRepeatedOnRetry(t *testing.T) {
+	ctx := context.Background()
+	records := logRecords(t, actorevent.StateChanged.Body)
+
+	persistence := newTestPersistence(t)
+	storetest.MustCreateAtespace(t, ctx, persistence, "ns")
+	if _, err := persistence.CreateActorTemplate(ctx, &ateapipb.ActorTemplate{
+		Metadata:       &ateapipb.ResourceMetadata{Atespace: "ns", Name: "tmpl1"},
+		SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: testStorageLocation},
+	}); err != nil {
+		t.Fatalf("create template: %v", err)
+	}
+
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+	seedWorkflowActor(t, ctx, persistence, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
+
+	w := &ActorWorkflow{store: persistence}
+	if _, err := w.ensureMarkedDeleting(ctx, actorRef, false, store.DeletePreconditions{}); err != nil {
+		t.Fatalf("ensureMarkedDeleting: %v", err)
+	}
+	// A retry re-applies DELETING to an actor already in it.
+	if _, err := w.ensureMarkedDeleting(ctx, actorRef, false, store.DeletePreconditions{}); err != nil {
+		t.Fatalf("retried ensureMarkedDeleting: %v", err)
+	}
+	if len(*records) != 1 {
+		t.Errorf("got %d state records across a retry, want 1: %v", len(*records), *records)
 	}
 }

@@ -125,8 +125,11 @@ func TestActorTemplateCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DeleteActorTemplate failed: %v", err)
 	}
-	if diff := cmp.Diff(created, deleted, protocmp.Transform()); diff != "" {
+	if diff := cmp.Diff(created, deleted, protocmp.Transform(), ignoreVersion, ignoreTimestamps); diff != "" {
 		t.Errorf("DeleteActorTemplate response mismatch (-created +deleted):\n%s", diff)
+	}
+	if deleted.GetMetadata().GetDeleteTime() == nil {
+		t.Errorf("the deleted template carries no delete_time")
 	}
 	_, err = tc.client.GetActorTemplate(ctx, &ateapipb.GetActorTemplateRequest{ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-a"}})
 	assertGrpcError(t, err, codes.NotFound, "ActorTemplate "+testAtespace+"/tmpl-a not found")

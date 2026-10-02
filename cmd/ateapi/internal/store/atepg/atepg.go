@@ -303,6 +303,7 @@ func setCreateMetadata(metadata *ateapipb.ResourceMetadata) {
 	metadata.Version = 1
 	metadata.CreateTime = timestamppb.Now()
 	metadata.UpdateTime = metadata.CreateTime
+	metadata.DeleteTime = nil
 }
 
 // validateProtoMetadataMatchesColumns verifies that the metadata in the database
@@ -322,6 +323,7 @@ func setUpdateMetadata(newMeta, oldMeta *ateapipb.ResourceMetadata) {
 	newMeta.Version = oldMeta.Version + 1
 	newMeta.CreateTime = oldMeta.CreateTime
 	newMeta.UpdateTime = timestamppb.Now()
+	newMeta.DeleteTime = oldMeta.DeleteTime
 }
 
 func mapDeleteError(err error, uid string, version int64, precondition store.DeletePreconditions) error {

@@ -152,6 +152,9 @@ func TestDeleteAtespace_Empty_Success(t *testing.T) {
 	if got := deleted.GetMetadata().GetName(); got != "team-a" {
 		t.Errorf("deleted atespace name = %q, want team-a", got)
 	}
+	if deleted.GetMetadata().GetDeleteTime() == nil {
+		t.Errorf("the deleted atespace carries no delete_time")
+	}
 
 	_, err = tc.client.GetAtespace(context.Background(), &ateapipb.GetAtespaceRequest{Atespace: &ateapipb.ObjectRef{Name: "team-a"}})
 	assertGrpcError(t, err, codes.NotFound, "Atespace team-a not found")

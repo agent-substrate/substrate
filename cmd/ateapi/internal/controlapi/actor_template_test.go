@@ -284,6 +284,9 @@ func TestDeleteActorTemplate(t *testing.T) {
 				if _, err := persistence.GetTag(ctx, tagRef); err != nil {
 					t.Fatalf("golden tag after the refused delete: %v", err)
 				}
+				if current, err := persistence.GetActorTemplate(ctx, templateRef); err != nil || current.GetMetadata().GetDeleteTime() != nil {
+					t.Fatalf("template after the refused delete = %v, %v; want it present and not marked", current, err)
+				}
 			}
 			req := &ateapipb.DeleteActorTemplateRequest{ActorTemplate: templateRef.ToObjectRef()}
 			deleted, err := svc.DeleteActorTemplate(ctx, req)
@@ -291,8 +294,12 @@ func TestDeleteActorTemplate(t *testing.T) {
 				if !errors.Is(err, errObjectStore) {
 					t.Fatalf("DeleteActorTemplate = %v, want object storage error", err)
 				}
-				if _, err := persistence.GetActorTemplate(ctx, templateRef); err != nil {
-					t.Fatalf("template lost after cleanup failure: %v", err)
+				admitted, getErr := persistence.GetActorTemplate(ctx, templateRef)
+				if getErr != nil {
+					t.Fatalf("template lost after cleanup failure: %v", getErr)
+				}
+				if admitted.GetMetadata().GetDeleteTime() == nil {
+					t.Fatal("a failed delete left delete_time unset")
 				}
 				if _, err := persistence.GetTag(ctx, tagRef); err != nil {
 					t.Fatalf("tag lost after cleanup failure: %v", err)
@@ -301,14 +308,27 @@ func TestDeleteActorTemplate(t *testing.T) {
 				if tt.wantActorAfterFailure && actorErr != nil || !tt.wantActorAfterFailure && !errors.Is(actorErr, store.ErrNotFound) {
 					t.Fatalf("GetActor after failure = %v, want present %v", actorErr, tt.wantActorAfterFailure)
 				}
+				if _, err := svc.DeleteActorTemplate(ctx, req); !errors.Is(err, errObjectStore) {
+					t.Fatalf("retried DeleteActorTemplate = %v, want object storage error", err)
+				}
+				retried, retryErr := persistence.GetActorTemplate(ctx, templateRef)
+				if retryErr != nil {
+					t.Fatalf("template lost after a retried cleanup failure: %v", retryErr)
+				}
+				if got, want := retried.GetMetadata().GetVersion(), admitted.GetMetadata().GetVersion(); got != want {
+					t.Errorf("a retried delete moved the version to %d, want %d", got, want)
+				}
 				objects.OnDelete = nil
 				deleted, err = svc.DeleteActorTemplate(ctx, req)
 			}
 			if err != nil {
 				t.Fatal(err)
 			}
-			if diff := cmp.Diff(tmpl, deleted, protocmp.Transform()); diff != "" {
+			if diff := cmp.Diff(tmpl, deleted, protocmp.Transform(), ignoreVersion, ignoreTimestamps); diff != "" {
 				t.Fatalf("deleted template mismatch (-want +got):\n%s", diff)
+			}
+			if deleted.GetMetadata().GetDeleteTime() == nil {
+				t.Fatal("the deleted template carries no delete_time")
 			}
 			if _, err := persistence.GetActorTemplate(ctx, templateRef); !errors.Is(err, store.ErrNotFound) {
 				t.Fatalf("GetActorTemplate after delete = %v, want NotFound", err)

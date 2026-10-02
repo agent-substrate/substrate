@@ -208,6 +208,14 @@ func (p *Persistence) UpdateTag(ctx context.Context, tagRef resources.TagRef, pr
 	if err := precondition.Validate(); err != nil {
 		return nil, err
 	}
+	return p.updateTag(ctx, tagRef, store.DeletePreconditions(precondition), mutate, false)
+}
+
+func (p *Persistence) MarkTagForDeletion(ctx context.Context, tagRef resources.TagRef, precondition store.DeletePreconditions, mutate func(*ateapipb.Tag) error) (*ateapipb.Tag, error) {
+	return p.updateTag(ctx, tagRef, precondition, mutate, true)
+}
+
+func (p *Persistence) updateTag(ctx context.Context, tagRef resources.TagRef, precondition store.DeletePreconditions, mutate func(*ateapipb.Tag) error, markForDeletion bool) (*ateapipb.Tag, error) {
 	atespace, name := tagRef.Atespace, tagRef.Name
 	var currentUID string
 	var currentVersion int64
@@ -233,8 +241,10 @@ func (p *Persistence) UpdateTag(ctx context.Context, tagRef resources.TagRef, pr
 	}
 	tagBeforeMutation := proto.Clone(dbTag).(*ateapipb.Tag)
 	oldMeta := proto.CloneOf(dbTag.Metadata)
-	if err := mutate(dbTag); err != nil {
-		return nil, err
+	if mutate != nil {
+		if err := mutate(dbTag); err != nil {
+			return nil, err
+		}
 	}
 	// TODO: this should be done through DV and removed from here
 	if err := validateUpdateTagMutation(tagBeforeMutation, dbTag); err != nil {
@@ -243,6 +253,9 @@ func (p *Persistence) UpdateTag(ctx context.Context, tagRef resources.TagRef, pr
 	// Stored metadata is authoritative; discard any metadata edits made by the
 	// closure and derive the next revision from the state this attempt read.
 	setUpdateMetadata(dbTag.Metadata, oldMeta)
+	if markForDeletion && dbTag.Metadata.DeleteTime == nil {
+		dbTag.Metadata.DeleteTime = proto.CloneOf(dbTag.Metadata.UpdateTime)
+	}
 
 	updatedBytes, err := proto.Marshal(dbTag)
 	if err != nil {

@@ -1070,6 +1070,9 @@ func TestDeleteActor_Success(t *testing.T) {
 	if got := deleted.GetMetadata().GetName(); got != "id1" {
 		t.Errorf("deleted actor name = %q, want id1", got)
 	}
+	if deleted.GetMetadata().GetDeleteTime() == nil {
+		t.Errorf("the deleted actor carries no delete_time")
+	}
 	if got := deleted.GetMetadata().GetAtespace(); got != testAtespace {
 		t.Errorf("deleted actor atespace = %q, want %q", got, testAtespace)
 	}
@@ -1203,6 +1206,9 @@ func TestDeleteActor_StateDeleting(t *testing.T) {
 	}
 	if _, err := tc.persistence.CreateActor(context.Background(), deletingActor); err != nil {
 		t.Fatalf("CreateActor: %v", err)
+	}
+	if _, err := tc.persistence.MarkActorForDeletion(context.Background(), resources.ActorRef{Atespace: testAtespace, Name: "deleting-actor"}, store.DeletePreconditions{}, nil); err != nil {
+		t.Fatalf("MarkActorForDeletion: %v", err)
 	}
 
 	if _, err := tc.service.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{
@@ -2858,8 +2864,7 @@ func TestResumeActor(t *testing.T) {
 		},
 	}
 
-	if diff := cmp.Diff(wantWorker, actorWorker, protocmp.Transform(), ignoreServerMetadata,
-		protocmp.IgnoreFields(&ateapipb.ResourceMetadata{}, "version")); diff != "" {
+	if diff := cmp.Diff(wantWorker, actorWorker, protocmp.Transform(), ignoreUID, ignoreVersion, ignoreTimestamps); diff != "" {
 		t.Errorf("Worker state mismatch (-want +got):\n%s", diff)
 	}
 }

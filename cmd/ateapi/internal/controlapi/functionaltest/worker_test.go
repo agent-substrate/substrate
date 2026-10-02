@@ -105,7 +105,7 @@ func TestCreateAndGetWorker(t *testing.T) {
 	want := newTestWorker(ns)
 	want.Metadata.Version = 1
 	want.Status = &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE}
-	if diff := cmp.Diff(want, created, protocmp.Transform(), ignoreServerMetadata); diff != "" {
+	if diff := cmp.Diff(want, created, protocmp.Transform(), ignoreUID, ignoreTimestamps); diff != "" {
 		t.Errorf("CreateWorker response mismatch (-want +got):\n%s", diff)
 	}
 	if created.GetMetadata().GetUid() == "" {
@@ -168,7 +168,7 @@ func TestListWorkers(t *testing.T) {
 		},
 	}
 
-	if diff := cmp.Diff(want, filteredWorkers, protocmp.Transform(), ignoreServerMetadata); diff != "" {
+	if diff := cmp.Diff(want, filteredWorkers, protocmp.Transform(), ignoreUID, ignoreTimestamps); diff != "" {
 		t.Errorf("ListWorkers response mismatch (-want +got):\n%s", diff)
 	}
 }
@@ -242,7 +242,7 @@ func TestUpdateWorker(t *testing.T) {
 	want.Metadata.Version = 2
 	want.Labels = map[string]string{"tier": "batch"}
 	want.Status = &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE}
-	if diff := cmp.Diff(want, updated, protocmp.Transform(), ignoreServerMetadata); diff != "" {
+	if diff := cmp.Diff(want, updated, protocmp.Transform(), ignoreUID, ignoreTimestamps); diff != "" {
 		t.Errorf("UpdateWorker response mismatch (-want +got):\n%s", diff)
 	}
 }
@@ -266,7 +266,7 @@ func TestDrainWorker(t *testing.T) {
 	want := newTestWorker(ns)
 	want.Metadata.Version = 2
 	want.Status = &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_DRAINING}
-	if diff := cmp.Diff(want, drained, protocmp.Transform(), ignoreServerMetadata); diff != "" {
+	if diff := cmp.Diff(want, drained, protocmp.Transform(), ignoreUID, ignoreTimestamps); diff != "" {
 		t.Errorf("DrainWorker response mismatch (-want +got):\n%s", diff)
 	}
 
@@ -274,9 +274,9 @@ func TestDrainWorker(t *testing.T) {
 }
 
 // TestDeleteWorker deregisters a Worker and checks it is gone. The delete
-// drains the Worker on its way out, so the record it returns is that one rather
-// than the one Create stored. Deregistering is not silently idempotent, so a
-// second attempt reports NOT_FOUND.
+// admits and drains the Worker in one write on its way out, so the record it
+// returns is one write past the one Create stored. Deregistering is not
+// silently idempotent, so a second attempt reports NOT_FOUND.
 func TestDeleteWorker(t *testing.T) {
 	ns := namespaceForTest("ns-worker-delete")
 	tc := setupTest(t, ns)
@@ -292,8 +292,11 @@ func TestDeleteWorker(t *testing.T) {
 	want := newTestWorker(ns)
 	want.Metadata.Version = 2
 	want.Status = &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_DRAINING}
-	if diff := cmp.Diff(want, deleted, protocmp.Transform(), ignoreServerMetadata); diff != "" {
+	if diff := cmp.Diff(want, deleted, protocmp.Transform(), ignoreUID, ignoreTimestamps); diff != "" {
 		t.Errorf("DeleteWorker response mismatch (-want +got):\n%s", diff)
+	}
+	if deleted.GetMetadata().GetDeleteTime() == nil {
+		t.Error("DeleteWorker returned a worker without delete_time")
 	}
 
 	listed, err := tc.client.ListWorkers(ctx, &ateapipb.ListWorkersRequest{})

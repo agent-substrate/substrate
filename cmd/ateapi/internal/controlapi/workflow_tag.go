@@ -114,39 +114,44 @@ func (w *ActorWorkflow) DeleteTag(ctx context.Context, tagRef resources.TagRef, 
 	}
 	defer lease.Close()
 
-	tag, err := w.loadTagForDelete(ctx, tagRef)
+	tag, err := w.ensureTagMarkedForDeletion(ctx, tagRef, precondition)
 	if err != nil {
 		return nil, err
-	}
-	// Checked before the snapshot is collected: a stale caller must not
-	// reach that step.
-	if err := precondition.Check(tag.GetMetadata()); err != nil {
-		if errors.Is(err, store.ErrUIDConflict) {
-			return nil, status.Errorf(codes.Aborted, "Tag %s does not have uid %s", tagRef, precondition.UID)
-		}
-		return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
 	}
 	if err := w.ensureTagSnapshotReleased(ctx, tag); err != nil {
 		return nil, err
 	}
-	return w.finalizeTagDeleted(ctx, tagRef, precondition)
+	return w.finalizeTagDeleted(ctx, tag)
 }
 
-// loadTagForDelete fetches the row the delete works from. The row records where
-// the snapshot lives, so the work is rediscovered from it rather than rebuilt
-// from the source actor, which may be long gone.
-func (w *ActorWorkflow) loadTagForDelete(ctx context.Context, tagRef resources.TagRef) (_ *ateapipb.Tag, err error) {
-	ctx, done := stepSpan(ctx, "LoadTagForDelete")
+func (w *ActorWorkflow) ensureTagMarkedForDeletion(ctx context.Context, tagRef resources.TagRef, precondition store.DeletePreconditions) (_ *ateapipb.Tag, err error) {
+	ctx, done := stepSpan(ctx, "MarkTagForDeletion")
 	defer func() { err = done(err) }()
 
-	tag, err := w.store.GetTag(ctx, tagRef)
+	var already *ateapipb.Tag
+	marked, err := w.store.MarkTagForDeletion(ctx, tagRef, precondition, func(toUpdate *ateapipb.Tag) error {
+		if toUpdate.GetMetadata().GetDeleteTime() != nil {
+			already = toUpdate
+			return errAlreadyMarked
+		}
+		return nil
+	})
+	if errors.Is(err, errAlreadyMarked) {
+		return already, nil
+	}
 	if err != nil {
+		if errors.Is(err, store.ErrUIDConflict) {
+			return nil, status.Errorf(codes.Aborted, "Tag %s does not have uid %s", tagRef, precondition.UID)
+		}
+		if errors.Is(err, store.ErrVersionConflict) {
+			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
+		}
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, status.Errorf(codes.NotFound, "Tag %s not found", tagRef)
 		}
-		return nil, fmt.Errorf("while getting tag %s: %w", tagRef, err)
+		return nil, fmt.Errorf("while marking tag %s for deletion: %w", tagRef, err)
 	}
-	return tag, nil
+	return marked, nil
 }
 
 // ensureTagSnapshotReleased deletes the objects the tag's external snapshot is
@@ -172,20 +177,19 @@ func (w *ActorWorkflow) ensureTagSnapshotReleased(ctx context.Context, tag *atea
 }
 
 // finalizeTagDeleted drops the row, once nothing it names is left behind.
-func (w *ActorWorkflow) finalizeTagDeleted(ctx context.Context, tagRef resources.TagRef, precondition store.DeletePreconditions) (_ *ateapipb.Tag, err error) {
+func (w *ActorWorkflow) finalizeTagDeleted(ctx context.Context, tag *ateapipb.Tag) (_ *ateapipb.Tag, err error) {
 	ctx, done := stepSpan(ctx, "FinalizeTagDeleted")
 	defer func() { err = done(err) }()
 
-	tag, err := w.store.DeleteTag(ctx, tagRef, precondition)
+	tagRef := resources.TagRefFromTag(tag)
+	precondition := store.DeletePreconditions{UID: tag.GetMetadata().GetUid()}
+	tag, err = w.store.DeleteTag(ctx, tagRef, precondition)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, status.Errorf(codes.NotFound, "Tag %s not found", tagRef)
 		}
 		if errors.Is(err, store.ErrUIDConflict) {
 			return nil, status.Errorf(codes.Aborted, "Tag %s does not have uid %s", tagRef, precondition.UID)
-		}
-		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
 		}
 		return nil, fmt.Errorf("while deleting tag %s: %w", tagRef, err)
 	}

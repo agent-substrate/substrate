@@ -291,6 +291,15 @@ message ResourceMetadata {
   // +k8s:optional
   // +k8s:update=NoUnset
   google.protobuf.Timestamp update_time = 6;
+
+  // delete_time is the time the resource started its deletion.
+  //
+  // This field is ignored on input.
+  //
+  // +k8s:optional
+  // +k8s:update=NoModify
+  // +k8s:update=NoUnset
+  google.protobuf.Timestamp delete_time = 7;
 }
 
 message ExternalVolume {
