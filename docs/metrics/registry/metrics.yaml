@@ -476,7 +476,10 @@ groups:
             - id: unavailable
               stability: development
               value: unavailable
-              brief: A dependency was not available.
+              brief: >
+                The request got an Unavailable status, or a 503 without a gRPC
+                cause. For example, a full parking lot, a denied egress
+                request, or a failed policy or credential lookup.
             - id: rate_limited
               stability: development
               value: rate_limited
