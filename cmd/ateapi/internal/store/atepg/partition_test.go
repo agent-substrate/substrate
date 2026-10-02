@@ -133,6 +133,7 @@ func runContractSuitePartitioned(t *testing.T, key string, tables []string, allo
 		}
 		t.Cleanup(p.Close)
 		clearAll(t, p)
+		setTestPolicyManager(t, p)
 		return p
 	})
 	// A table the suite never reads or writes goes unchecked, so a missing

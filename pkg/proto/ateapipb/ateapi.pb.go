@@ -7480,6 +7480,506 @@ func (x *RequestActorSuspendResponse) GetActor() *Actor {
 	return nil
 }
 
+// AccessPolicy is an access policy resource nested under a parent resource (or
+// the global singleton installation). Every parent resource has at most one
+// access policy resource, named "default".
+type AccessPolicy struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Standard resource metadata. Atespace must match the parent resource (empty
+	// for global-scoped parents like Global and Atespace) and name must be
+	// "default". Both are caller-specified on create and immutable. UID, version,
+	// create_time, and update_time are server-managed.
+	//
+	// +k8s:required
+	// +k8s:customValidation # name must be "default"
+	Metadata *ResourceMetadata `protobuf:"bytes,1,opt,name=metadata,proto3" json:"metadata,omitempty"`
+	// Role bindings granting permissions on the parent resource.
+	//
+	// +k8s:optional
+	// +k8s:listType=atomic
+	// +k8s:maxItems=100
+	Bindings      []*Binding `protobuf:"bytes,2,rep,name=bindings,proto3" json:"bindings,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AccessPolicy) Reset() {
+	*x = AccessPolicy{}
+	mi := &file_ateapi_proto_msgTypes[104]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AccessPolicy) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AccessPolicy) ProtoMessage() {}
+
+func (x *AccessPolicy) ProtoReflect() protoreflect.Message {
+	mi := &file_ateapi_proto_msgTypes[104]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AccessPolicy.ProtoReflect.Descriptor instead.
+func (*AccessPolicy) Descriptor() ([]byte, []int) {
+	return file_ateapi_proto_rawDescGZIP(), []int{104}
+}
+
+func (x *AccessPolicy) GetMetadata() *ResourceMetadata {
+	if x != nil {
+		return x.Metadata
+	}
+	return nil
+}
+
+func (x *AccessPolicy) GetBindings() []*Binding {
+	if x != nil {
+		return x.Bindings
+	}
+	return nil
+}
+
+// Binding associates a list of principals (members) with a single role.
+type Binding struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The role name for the parent resource type (e.g., "owner", "editor",
+	// "viewer").
+	//
+	// +k8s:required
+	// +k8s:maxLength=64
+	Role string `protobuf:"bytes,1,opt,name=role,proto3" json:"role,omitempty"`
+	// Principal identities granted this role.
+	// Examples:
+	//   - "user:alice@example.com"
+	//   - "user:sa-ci-runner"
+	//
+	// +k8s:required
+	// +k8s:listType=set
+	// +k8s:maxItems=1500
+	// +k8s:eachVal=+k8s:maxLength=512
+	Members       []string `protobuf:"bytes,2,rep,name=members,proto3" json:"members,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Binding) Reset() {
+	*x = Binding{}
+	mi := &file_ateapi_proto_msgTypes[105]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Binding) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Binding) ProtoMessage() {}
+
+func (x *Binding) ProtoReflect() protoreflect.Message {
+	mi := &file_ateapi_proto_msgTypes[105]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Binding.ProtoReflect.Descriptor instead.
+func (*Binding) Descriptor() ([]byte, []int) {
+	return file_ateapi_proto_rawDescGZIP(), []int{105}
+}
+
+func (x *Binding) GetRole() string {
+	if x != nil {
+		return x.Role
+	}
+	return ""
+}
+
+func (x *Binding) GetMembers() []string {
+	if x != nil {
+		return x.Members
+	}
+	return nil
+}
+
+// GetGlobalAccessPolicyRequest retrieves the deployment-wide global access policy singleton.
+type GetGlobalAccessPolicyRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetGlobalAccessPolicyRequest) Reset() {
+	*x = GetGlobalAccessPolicyRequest{}
+	mi := &file_ateapi_proto_msgTypes[106]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetGlobalAccessPolicyRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetGlobalAccessPolicyRequest) ProtoMessage() {}
+
+func (x *GetGlobalAccessPolicyRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_ateapi_proto_msgTypes[106]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetGlobalAccessPolicyRequest.ProtoReflect.Descriptor instead.
+func (*GetGlobalAccessPolicyRequest) Descriptor() ([]byte, []int) {
+	return file_ateapi_proto_rawDescGZIP(), []int{106}
+}
+
+// CreateGlobalAccessPolicyRequest creates the deployment-wide global access policy singleton.
+type CreateGlobalAccessPolicyRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The policy to create. metadata.name must be "default" and
+	// metadata.atespace must be empty.
+	//
+	// +k8s:required
+	AccessPolicy  *AccessPolicy `protobuf:"bytes,1,opt,name=access_policy,json=accessPolicy,proto3" json:"access_policy,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateGlobalAccessPolicyRequest) Reset() {
+	*x = CreateGlobalAccessPolicyRequest{}
+	mi := &file_ateapi_proto_msgTypes[107]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateGlobalAccessPolicyRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateGlobalAccessPolicyRequest) ProtoMessage() {}
+
+func (x *CreateGlobalAccessPolicyRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_ateapi_proto_msgTypes[107]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateGlobalAccessPolicyRequest.ProtoReflect.Descriptor instead.
+func (*CreateGlobalAccessPolicyRequest) Descriptor() ([]byte, []int) {
+	return file_ateapi_proto_rawDescGZIP(), []int{107}
+}
+
+func (x *CreateGlobalAccessPolicyRequest) GetAccessPolicy() *AccessPolicy {
+	if x != nil {
+		return x.AccessPolicy
+	}
+	return nil
+}
+
+// UpdateGlobalAccessPolicyRequest replaces the deployment-wide global access policy singleton.
+type UpdateGlobalAccessPolicyRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Full replacement. Metadata UID and version are required preconditions;
+	// metadata.name must be "default" and metadata.atespace must be empty.
+	//
+	// +k8s:required
+	AccessPolicy  *AccessPolicy `protobuf:"bytes,1,opt,name=access_policy,json=accessPolicy,proto3" json:"access_policy,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UpdateGlobalAccessPolicyRequest) Reset() {
+	*x = UpdateGlobalAccessPolicyRequest{}
+	mi := &file_ateapi_proto_msgTypes[108]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpdateGlobalAccessPolicyRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpdateGlobalAccessPolicyRequest) ProtoMessage() {}
+
+func (x *UpdateGlobalAccessPolicyRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_ateapi_proto_msgTypes[108]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpdateGlobalAccessPolicyRequest.ProtoReflect.Descriptor instead.
+func (*UpdateGlobalAccessPolicyRequest) Descriptor() ([]byte, []int) {
+	return file_ateapi_proto_rawDescGZIP(), []int{108}
+}
+
+func (x *UpdateGlobalAccessPolicyRequest) GetAccessPolicy() *AccessPolicy {
+	if x != nil {
+		return x.AccessPolicy
+	}
+	return nil
+}
+
+// GetAtespaceAccessPolicyRequest identifies an Atespace's access policy.
+type GetAtespaceAccessPolicyRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The parent Atespace of the access policy resource to retrieve.
+	//
+	// +k8s:required
+	// +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+	Atespace      *ObjectRef `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetAtespaceAccessPolicyRequest) Reset() {
+	*x = GetAtespaceAccessPolicyRequest{}
+	mi := &file_ateapi_proto_msgTypes[109]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetAtespaceAccessPolicyRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetAtespaceAccessPolicyRequest) ProtoMessage() {}
+
+func (x *GetAtespaceAccessPolicyRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_ateapi_proto_msgTypes[109]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetAtespaceAccessPolicyRequest.ProtoReflect.Descriptor instead.
+func (*GetAtespaceAccessPolicyRequest) Descriptor() ([]byte, []int) {
+	return file_ateapi_proto_rawDescGZIP(), []int{109}
+}
+
+func (x *GetAtespaceAccessPolicyRequest) GetAtespace() *ObjectRef {
+	if x != nil {
+		return x.Atespace
+	}
+	return nil
+}
+
+// CreateAtespaceAccessPolicyRequest creates an access policy for an Atespace.
+type CreateAtespaceAccessPolicyRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Parent Atespace under which to create the policy resource.
+	//
+	// +k8s:required
+	// +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+	Atespace *ObjectRef `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
+	// The policy to create. metadata.name must be "default" and
+	// metadata.atespace must be empty.
+	//
+	// +k8s:required
+	AccessPolicy  *AccessPolicy `protobuf:"bytes,2,opt,name=access_policy,json=accessPolicy,proto3" json:"access_policy,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateAtespaceAccessPolicyRequest) Reset() {
+	*x = CreateAtespaceAccessPolicyRequest{}
+	mi := &file_ateapi_proto_msgTypes[110]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateAtespaceAccessPolicyRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateAtespaceAccessPolicyRequest) ProtoMessage() {}
+
+func (x *CreateAtespaceAccessPolicyRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_ateapi_proto_msgTypes[110]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateAtespaceAccessPolicyRequest.ProtoReflect.Descriptor instead.
+func (*CreateAtespaceAccessPolicyRequest) Descriptor() ([]byte, []int) {
+	return file_ateapi_proto_rawDescGZIP(), []int{110}
+}
+
+func (x *CreateAtespaceAccessPolicyRequest) GetAtespace() *ObjectRef {
+	if x != nil {
+		return x.Atespace
+	}
+	return nil
+}
+
+func (x *CreateAtespaceAccessPolicyRequest) GetAccessPolicy() *AccessPolicy {
+	if x != nil {
+		return x.AccessPolicy
+	}
+	return nil
+}
+
+// UpdateAtespaceAccessPolicyRequest replaces an Atespace's access policy.
+type UpdateAtespaceAccessPolicyRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Parent Atespace under which to update the policy resource.
+	//
+	// +k8s:required
+	// +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+	Atespace *ObjectRef `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
+	// Full replacement. Metadata UID and version are required preconditions;
+	// metadata.name must be "default" and metadata.atespace must be empty.
+	//
+	// +k8s:required
+	AccessPolicy  *AccessPolicy `protobuf:"bytes,2,opt,name=access_policy,json=accessPolicy,proto3" json:"access_policy,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UpdateAtespaceAccessPolicyRequest) Reset() {
+	*x = UpdateAtespaceAccessPolicyRequest{}
+	mi := &file_ateapi_proto_msgTypes[111]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpdateAtespaceAccessPolicyRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpdateAtespaceAccessPolicyRequest) ProtoMessage() {}
+
+func (x *UpdateAtespaceAccessPolicyRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_ateapi_proto_msgTypes[111]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpdateAtespaceAccessPolicyRequest.ProtoReflect.Descriptor instead.
+func (*UpdateAtespaceAccessPolicyRequest) Descriptor() ([]byte, []int) {
+	return file_ateapi_proto_rawDescGZIP(), []int{111}
+}
+
+func (x *UpdateAtespaceAccessPolicyRequest) GetAtespace() *ObjectRef {
+	if x != nil {
+		return x.Atespace
+	}
+	return nil
+}
+
+func (x *UpdateAtespaceAccessPolicyRequest) GetAccessPolicy() *AccessPolicy {
+	if x != nil {
+		return x.AccessPolicy
+	}
+	return nil
+}
+
+// DeleteAtespaceAccessPolicyRequest identifies an Atespace's access policy.
+type DeleteAtespaceAccessPolicyRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The parent Atespace of the access policy resource to delete.
+	//
+	// +k8s:required
+	// +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+	Atespace *ObjectRef `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
+	// Optional per-delete preconditions.
+	//
+	// +k8s:optional
+	Options       *DeleteOptions `protobuf:"bytes,2,opt,name=options,proto3" json:"options,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteAtespaceAccessPolicyRequest) Reset() {
+	*x = DeleteAtespaceAccessPolicyRequest{}
+	mi := &file_ateapi_proto_msgTypes[112]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteAtespaceAccessPolicyRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteAtespaceAccessPolicyRequest) ProtoMessage() {}
+
+func (x *DeleteAtespaceAccessPolicyRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_ateapi_proto_msgTypes[112]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteAtespaceAccessPolicyRequest.ProtoReflect.Descriptor instead.
+func (*DeleteAtespaceAccessPolicyRequest) Descriptor() ([]byte, []int) {
+	return file_ateapi_proto_rawDescGZIP(), []int{112}
+}
+
+func (x *DeleteAtespaceAccessPolicyRequest) GetAtespace() *ObjectRef {
+	if x != nil {
+		return x.Atespace
+	}
+	return nil
+}
+
+func (x *DeleteAtespaceAccessPolicyRequest) GetOptions() *DeleteOptions {
+	if x != nil {
+		return x.Options
+	}
+	return nil
+}
+
 var File_ateapi_proto protoreflect.FileDescriptor
 
 const file_ateapi_proto_rawDesc = "" +
@@ -7873,7 +8373,29 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x05actor\x18\x02 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\x12\x1b\n" +
 	"\tactor_uid\x18\x03 \x01(\tR\bactorUid\"B\n" +
 	"\x1bRequestActorSuspendResponse\x12#\n" +
-	"\x05actor\x18\x01 \x01(\v2\r.ateapi.ActorR\x05actor*\x80\x01\n" +
+	"\x05actor\x18\x01 \x01(\v2\r.ateapi.ActorR\x05actor\"q\n" +
+	"\fAccessPolicy\x124\n" +
+	"\bmetadata\x18\x01 \x01(\v2\x18.ateapi.ResourceMetadataR\bmetadata\x12+\n" +
+	"\bbindings\x18\x02 \x03(\v2\x0f.ateapi.BindingR\bbindings\"7\n" +
+	"\aBinding\x12\x12\n" +
+	"\x04role\x18\x01 \x01(\tR\x04role\x12\x18\n" +
+	"\amembers\x18\x02 \x03(\tR\amembers\"\x1e\n" +
+	"\x1cGetGlobalAccessPolicyRequest\"\\\n" +
+	"\x1fCreateGlobalAccessPolicyRequest\x129\n" +
+	"\raccess_policy\x18\x01 \x01(\v2\x14.ateapi.AccessPolicyR\faccessPolicy\"\\\n" +
+	"\x1fUpdateGlobalAccessPolicyRequest\x129\n" +
+	"\raccess_policy\x18\x01 \x01(\v2\x14.ateapi.AccessPolicyR\faccessPolicy\"O\n" +
+	"\x1eGetAtespaceAccessPolicyRequest\x12-\n" +
+	"\batespace\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\batespace\"\x8d\x01\n" +
+	"!CreateAtespaceAccessPolicyRequest\x12-\n" +
+	"\batespace\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\batespace\x129\n" +
+	"\raccess_policy\x18\x02 \x01(\v2\x14.ateapi.AccessPolicyR\faccessPolicy\"\x8d\x01\n" +
+	"!UpdateAtespaceAccessPolicyRequest\x12-\n" +
+	"\batespace\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\batespace\x129\n" +
+	"\raccess_policy\x18\x02 \x01(\v2\x14.ateapi.AccessPolicyR\faccessPolicy\"\x83\x01\n" +
+	"!DeleteAtespaceAccessPolicyRequest\x12-\n" +
+	"\batespace\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\batespace\x12/\n" +
+	"\aoptions\x18\x02 \x01(\v2\x15.ateapi.DeleteOptionsR\aoptions*\x80\x01\n" +
 	"\x14SnapshotContentScope\x12&\n" +
 	"\"SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED\x10\x00\x12\x1f\n" +
 	"\x1bSNAPSHOT_CONTENT_SCOPE_FULL\x10\x01\x12\x1f\n" +
@@ -7906,7 +8428,7 @@ const file_ateapi_proto_rawDesc = "" +
 	"\vWorkerState\x12\x1c\n" +
 	"\x18WORKER_STATE_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13WORKER_STATE_ACTIVE\x10\x01\x12\x19\n" +
-	"\x15WORKER_STATE_DRAINING\x10\x022\xef\x13\n" +
+	"\x15WORKER_STATE_DRAINING\x10\x022\xfe\x18\n" +
 	"\aControl\x124\n" +
 	"\bGetActor\x12\x17.ateapi.GetActorRequest\x1a\r.ateapi.Actor\"\x00\x12:\n" +
 	"\vCreateActor\x12\x1a.ateapi.CreateActorRequest\x1a\r.ateapi.Actor\"\x00\x12:\n" +
@@ -7944,7 +8466,14 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x13CreateActorTemplate\x12\".ateapi.CreateActorTemplateRequest\x1a\x15.ateapi.ActorTemplate\"\x00\x12L\n" +
 	"\x10GetActorTemplate\x12\x1f.ateapi.GetActorTemplateRequest\x1a\x15.ateapi.ActorTemplate\"\x00\x12]\n" +
 	"\x12ListActorTemplates\x12!.ateapi.ListActorTemplatesRequest\x1a\".ateapi.ListActorTemplatesResponse\"\x00\x12R\n" +
-	"\x13DeleteActorTemplate\x12\".ateapi.DeleteActorTemplateRequest\x1a\x15.ateapi.ActorTemplate\"\x002\xbb\x02\n" +
+	"\x13DeleteActorTemplate\x12\".ateapi.DeleteActorTemplateRequest\x1a\x15.ateapi.ActorTemplate\"\x00\x12U\n" +
+	"\x15GetGlobalAccessPolicy\x12$.ateapi.GetGlobalAccessPolicyRequest\x1a\x14.ateapi.AccessPolicy\"\x00\x12[\n" +
+	"\x18CreateGlobalAccessPolicy\x12'.ateapi.CreateGlobalAccessPolicyRequest\x1a\x14.ateapi.AccessPolicy\"\x00\x12[\n" +
+	"\x18UpdateGlobalAccessPolicy\x12'.ateapi.UpdateGlobalAccessPolicyRequest\x1a\x14.ateapi.AccessPolicy\"\x00\x12Y\n" +
+	"\x17GetAtespaceAccessPolicy\x12&.ateapi.GetAtespaceAccessPolicyRequest\x1a\x14.ateapi.AccessPolicy\"\x00\x12_\n" +
+	"\x1aCreateAtespaceAccessPolicy\x12).ateapi.CreateAtespaceAccessPolicyRequest\x1a\x14.ateapi.AccessPolicy\"\x00\x12_\n" +
+	"\x1aUpdateAtespaceAccessPolicy\x12).ateapi.UpdateAtespaceAccessPolicyRequest\x1a\x14.ateapi.AccessPolicy\"\x00\x12_\n" +
+	"\x1aDeleteAtespaceAccessPolicy\x12).ateapi.DeleteAtespaceAccessPolicyRequest\x1a\x14.ateapi.AccessPolicy\"\x002\xbb\x02\n" +
 	"\rWorkerService\x12X\n" +
 	"\x11SetWorkerCapacity\x12 .ateapi.SetWorkerCapacityRequest\x1a!.ateapi.SetWorkerCapacityResponse\x12p\n" +
 	"\x19MintAteomActorCertificate\x12(.ateapi.MintAteomActorCertificateRequest\x1a).ateapi.MintAteomActorCertificateResponse\x12^\n" +
@@ -7963,7 +8492,7 @@ func file_ateapi_proto_rawDescGZIP() []byte {
 }
 
 var file_ateapi_proto_enumTypes = make([]protoimpl.EnumInfo, 7)
-var file_ateapi_proto_msgTypes = make([]protoimpl.MessageInfo, 107)
+var file_ateapi_proto_msgTypes = make([]protoimpl.MessageInfo, 116)
 var file_ateapi_proto_goTypes = []any{
 	(SnapshotContentScope)(0),                  // 0: ateapi.SnapshotContentScope
 	(TagScope)(0),                              // 1: ateapi.TagScope
@@ -8076,19 +8605,28 @@ var file_ateapi_proto_goTypes = []any{
 	(*MintAteomActorCertificateResponse)(nil),  // 108: ateapi.MintAteomActorCertificateResponse
 	(*RequestActorSuspendRequest)(nil),         // 109: ateapi.RequestActorSuspendRequest
 	(*RequestActorSuspendResponse)(nil),        // 110: ateapi.RequestActorSuspendResponse
-	nil,                                        // 111: ateapi.Selector.MatchLabelsEntry
-	nil,                                        // 112: ateapi.ExternalVolume.VolumeContextEntry
-	nil,                                        // 113: ateapi.Worker.LabelsEntry
-	(*timestamppb.Timestamp)(nil),              // 114: google.protobuf.Timestamp
+	(*AccessPolicy)(nil),                       // 111: ateapi.AccessPolicy
+	(*Binding)(nil),                            // 112: ateapi.Binding
+	(*GetGlobalAccessPolicyRequest)(nil),       // 113: ateapi.GetGlobalAccessPolicyRequest
+	(*CreateGlobalAccessPolicyRequest)(nil),    // 114: ateapi.CreateGlobalAccessPolicyRequest
+	(*UpdateGlobalAccessPolicyRequest)(nil),    // 115: ateapi.UpdateGlobalAccessPolicyRequest
+	(*GetAtespaceAccessPolicyRequest)(nil),     // 116: ateapi.GetAtespaceAccessPolicyRequest
+	(*CreateAtespaceAccessPolicyRequest)(nil),  // 117: ateapi.CreateAtespaceAccessPolicyRequest
+	(*UpdateAtespaceAccessPolicyRequest)(nil),  // 118: ateapi.UpdateAtespaceAccessPolicyRequest
+	(*DeleteAtespaceAccessPolicyRequest)(nil),  // 119: ateapi.DeleteAtespaceAccessPolicyRequest
+	nil,                           // 120: ateapi.Selector.MatchLabelsEntry
+	nil,                           // 121: ateapi.ExternalVolume.VolumeContextEntry
+	nil,                           // 122: ateapi.Worker.LabelsEntry
+	(*timestamppb.Timestamp)(nil), // 123: google.protobuf.Timestamp
 }
 var file_ateapi_proto_depIdxs = []int32{
 	0,   // 0: ateapi.ExternalSnapshot.content_scope:type_name -> ateapi.SnapshotContentScope
 	0,   // 1: ateapi.LocalSnapshot.content_scope:type_name -> ateapi.SnapshotContentScope
-	111, // 2: ateapi.Selector.match_labels:type_name -> ateapi.Selector.MatchLabelsEntry
-	114, // 3: ateapi.ResourceMetadata.create_time:type_name -> google.protobuf.Timestamp
-	114, // 4: ateapi.ResourceMetadata.update_time:type_name -> google.protobuf.Timestamp
+	120, // 2: ateapi.Selector.match_labels:type_name -> ateapi.Selector.MatchLabelsEntry
+	123, // 3: ateapi.ResourceMetadata.create_time:type_name -> google.protobuf.Timestamp
+	123, // 4: ateapi.ResourceMetadata.update_time:type_name -> google.protobuf.Timestamp
 	6,   // 5: ateapi.ExternalVolume.status:type_name -> ateapi.ExternalVolume.Status
-	112, // 6: ateapi.ExternalVolume.volume_context:type_name -> ateapi.ExternalVolume.VolumeContextEntry
+	121, // 6: ateapi.ExternalVolume.volume_context:type_name -> ateapi.ExternalVolume.VolumeContextEntry
 	10,  // 7: ateapi.Actor.metadata:type_name -> ateapi.ResourceMetadata
 	29,  // 8: ateapi.Actor.actor_template:type_name -> ateapi.ObjectRef
 	9,   // 9: ateapi.Actor.worker_selector:type_name -> ateapi.Selector
@@ -8113,7 +8651,7 @@ var file_ateapi_proto_depIdxs = []int32{
 	8,   // 28: ateapi.ActorStatus.local_snapshot:type_name -> ateapi.LocalSnapshot
 	11,  // 29: ateapi.ActorStatus.actor_volumes:type_name -> ateapi.ExternalVolume
 	24,  // 30: ateapi.ActorStatus.crash:type_name -> ateapi.ActorCrash
-	114, // 31: ateapi.ActorCrash.crash_time:type_name -> google.protobuf.Timestamp
+	123, // 31: ateapi.ActorCrash.crash_time:type_name -> google.protobuf.Timestamp
 	29,  // 32: ateapi.WorkerAssignment.worker:type_name -> ateapi.ObjectRef
 	7,   // 33: ateapi.TagStatus.snapshot:type_name -> ateapi.ExternalSnapshot
 	10,  // 34: ateapi.Tag.metadata:type_name -> ateapi.ResourceMetadata
@@ -8131,7 +8669,7 @@ var file_ateapi_proto_depIdxs = []int32{
 	34,  // 46: ateapi.ActorTemplate.status:type_name -> ateapi.ActorTemplateStatus
 	32,  // 47: ateapi.Resources.limits:type_name -> ateapi.Limits
 	29,  // 48: ateapi.GoldenSnapshotStatus.golden_tag:type_name -> ateapi.ObjectRef
-	114, // 49: ateapi.GoldenSnapshotStatus.take_golden_snapshot_at:type_name -> google.protobuf.Timestamp
+	123, // 49: ateapi.GoldenSnapshotStatus.take_golden_snapshot_at:type_name -> google.protobuf.Timestamp
 	33,  // 50: ateapi.ActorTemplateStatus.golden_snapshot_status:type_name -> ateapi.GoldenSnapshotStatus
 	3,   // 51: ateapi.SandboxConfig.sandbox_class:type_name -> ateapi.SandboxClass
 	0,   // 52: ateapi.SnapshotConfig.on_pause:type_name -> ateapi.SnapshotContentScope
@@ -8184,7 +8722,7 @@ var file_ateapi_proto_depIdxs = []int32{
 	89,  // 99: ateapi.DeleteActorEgressPolicyRequest.options:type_name -> ateapi.DeleteOptions
 	29,  // 100: ateapi.GetTagRequest.tag:type_name -> ateapi.ObjectRef
 	29,  // 101: ateapi.MintActorJWTRequest.actor:type_name -> ateapi.ObjectRef
-	114, // 102: ateapi.MintActorJWTResponse.expires_at:type_name -> google.protobuf.Timestamp
+	123, // 102: ateapi.MintActorJWTResponse.expires_at:type_name -> google.protobuf.Timestamp
 	29,  // 103: ateapi.MintActorCertificateRequest.actor:type_name -> ateapi.ObjectRef
 	27,  // 104: ateapi.ListTagsResponse.tags:type_name -> ateapi.Tag
 	27,  // 105: ateapi.CreateTagRequest.tag:type_name -> ateapi.Tag
@@ -8202,7 +8740,7 @@ var file_ateapi_proto_depIdxs = []int32{
 	29,  // 117: ateapi.DrainWorkerRequest.worker:type_name -> ateapi.ObjectRef
 	12,  // 118: ateapi.ListActorsResponse.actors:type_name -> ateapi.Actor
 	10,  // 119: ateapi.Worker.metadata:type_name -> ateapi.ResourceMetadata
-	113, // 120: ateapi.Worker.labels:type_name -> ateapi.Worker.LabelsEntry
+	122, // 120: ateapi.Worker.labels:type_name -> ateapi.Worker.LabelsEntry
 	102, // 121: ateapi.Worker.status:type_name -> ateapi.WorkerStatus
 	5,   // 122: ateapi.WorkerStatus.state:type_name -> ateapi.WorkerState
 	103, // 123: ateapi.WorkerStatus.capacity:type_name -> ateapi.WorkerResources
@@ -8219,87 +8757,112 @@ var file_ateapi_proto_depIdxs = []int32{
 	29,  // 134: ateapi.RequestActorSuspendRequest.worker:type_name -> ateapi.ObjectRef
 	29,  // 135: ateapi.RequestActorSuspendRequest.actor:type_name -> ateapi.ObjectRef
 	12,  // 136: ateapi.RequestActorSuspendResponse.actor:type_name -> ateapi.Actor
-	63,  // 137: ateapi.Control.GetActor:input_type -> ateapi.GetActorRequest
-	64,  // 138: ateapi.Control.CreateActor:input_type -> ateapi.CreateActorRequest
-	65,  // 139: ateapi.Control.UpdateActor:input_type -> ateapi.UpdateActorRequest
-	66,  // 140: ateapi.Control.SuspendActor:input_type -> ateapi.SuspendActorRequest
-	68,  // 141: ateapi.Control.PauseActor:input_type -> ateapi.PauseActorRequest
-	70,  // 142: ateapi.Control.ResumeActor:input_type -> ateapi.ResumeActorRequest
-	72,  // 143: ateapi.Control.RevertActor:input_type -> ateapi.RevertActorRequest
-	74,  // 144: ateapi.Control.DeleteActor:input_type -> ateapi.DeleteActorRequest
-	75,  // 145: ateapi.Control.GetActorEgressPolicy:input_type -> ateapi.GetActorEgressPolicyRequest
-	76,  // 146: ateapi.Control.CreateActorEgressPolicy:input_type -> ateapi.CreateActorEgressPolicyRequest
-	77,  // 147: ateapi.Control.UpdateActorEgressPolicy:input_type -> ateapi.UpdateActorEgressPolicyRequest
-	78,  // 148: ateapi.Control.DeleteActorEgressPolicy:input_type -> ateapi.DeleteActorEgressPolicyRequest
-	80,  // 149: ateapi.Control.MintActorJWT:input_type -> ateapi.MintActorJWTRequest
-	82,  // 150: ateapi.Control.MintActorCertificate:input_type -> ateapi.MintActorCertificateRequest
-	86,  // 151: ateapi.Control.CreateTag:input_type -> ateapi.CreateTagRequest
-	79,  // 152: ateapi.Control.GetTag:input_type -> ateapi.GetTagRequest
-	84,  // 153: ateapi.Control.ListTags:input_type -> ateapi.ListTagsRequest
-	87,  // 154: ateapi.Control.UpdateTag:input_type -> ateapi.UpdateTagRequest
-	88,  // 155: ateapi.Control.DeleteTag:input_type -> ateapi.DeleteTagRequest
-	92,  // 156: ateapi.Control.ListWorkers:input_type -> ateapi.ListWorkersRequest
-	94,  // 157: ateapi.Control.GetWorker:input_type -> ateapi.GetWorkerRequest
-	95,  // 158: ateapi.Control.CreateWorker:input_type -> ateapi.CreateWorkerRequest
-	96,  // 159: ateapi.Control.UpdateWorker:input_type -> ateapi.UpdateWorkerRequest
-	97,  // 160: ateapi.Control.DeleteWorker:input_type -> ateapi.DeleteWorkerRequest
-	98,  // 161: ateapi.Control.DrainWorker:input_type -> ateapi.DrainWorkerRequest
-	90,  // 162: ateapi.Control.ListWorkerActorAssignments:input_type -> ateapi.ListWorkerActorAssignmentsRequest
-	99,  // 163: ateapi.Control.ListActors:input_type -> ateapi.ListActorsRequest
-	53,  // 164: ateapi.Control.CreateAtespace:input_type -> ateapi.CreateAtespaceRequest
-	54,  // 165: ateapi.Control.GetAtespace:input_type -> ateapi.GetAtespaceRequest
-	55,  // 166: ateapi.Control.ListAtespaces:input_type -> ateapi.ListAtespacesRequest
-	57,  // 167: ateapi.Control.DeleteAtespace:input_type -> ateapi.DeleteAtespaceRequest
-	58,  // 168: ateapi.Control.CreateActorTemplate:input_type -> ateapi.CreateActorTemplateRequest
-	59,  // 169: ateapi.Control.GetActorTemplate:input_type -> ateapi.GetActorTemplateRequest
-	60,  // 170: ateapi.Control.ListActorTemplates:input_type -> ateapi.ListActorTemplatesRequest
-	62,  // 171: ateapi.Control.DeleteActorTemplate:input_type -> ateapi.DeleteActorTemplateRequest
-	105, // 172: ateapi.WorkerService.SetWorkerCapacity:input_type -> ateapi.SetWorkerCapacityRequest
-	107, // 173: ateapi.WorkerService.MintAteomActorCertificate:input_type -> ateapi.MintAteomActorCertificateRequest
-	109, // 174: ateapi.WorkerService.RequestActorSuspend:input_type -> ateapi.RequestActorSuspendRequest
-	12,  // 175: ateapi.Control.GetActor:output_type -> ateapi.Actor
-	12,  // 176: ateapi.Control.CreateActor:output_type -> ateapi.Actor
-	12,  // 177: ateapi.Control.UpdateActor:output_type -> ateapi.Actor
-	67,  // 178: ateapi.Control.SuspendActor:output_type -> ateapi.SuspendActorResponse
-	69,  // 179: ateapi.Control.PauseActor:output_type -> ateapi.PauseActorResponse
-	71,  // 180: ateapi.Control.ResumeActor:output_type -> ateapi.ResumeActorResponse
-	73,  // 181: ateapi.Control.RevertActor:output_type -> ateapi.RevertActorResponse
-	12,  // 182: ateapi.Control.DeleteActor:output_type -> ateapi.Actor
-	13,  // 183: ateapi.Control.GetActorEgressPolicy:output_type -> ateapi.EgressPolicy
-	13,  // 184: ateapi.Control.CreateActorEgressPolicy:output_type -> ateapi.EgressPolicy
-	13,  // 185: ateapi.Control.UpdateActorEgressPolicy:output_type -> ateapi.EgressPolicy
-	13,  // 186: ateapi.Control.DeleteActorEgressPolicy:output_type -> ateapi.EgressPolicy
-	81,  // 187: ateapi.Control.MintActorJWT:output_type -> ateapi.MintActorJWTResponse
-	83,  // 188: ateapi.Control.MintActorCertificate:output_type -> ateapi.MintActorCertificateResponse
-	27,  // 189: ateapi.Control.CreateTag:output_type -> ateapi.Tag
-	27,  // 190: ateapi.Control.GetTag:output_type -> ateapi.Tag
-	85,  // 191: ateapi.Control.ListTags:output_type -> ateapi.ListTagsResponse
-	27,  // 192: ateapi.Control.UpdateTag:output_type -> ateapi.Tag
-	27,  // 193: ateapi.Control.DeleteTag:output_type -> ateapi.Tag
-	93,  // 194: ateapi.Control.ListWorkers:output_type -> ateapi.ListWorkersResponse
-	101, // 195: ateapi.Control.GetWorker:output_type -> ateapi.Worker
-	101, // 196: ateapi.Control.CreateWorker:output_type -> ateapi.Worker
-	101, // 197: ateapi.Control.UpdateWorker:output_type -> ateapi.Worker
-	101, // 198: ateapi.Control.DeleteWorker:output_type -> ateapi.Worker
-	101, // 199: ateapi.Control.DrainWorker:output_type -> ateapi.Worker
-	91,  // 200: ateapi.Control.ListWorkerActorAssignments:output_type -> ateapi.ListWorkerActorAssignmentsResponse
-	100, // 201: ateapi.Control.ListActors:output_type -> ateapi.ListActorsResponse
-	28,  // 202: ateapi.Control.CreateAtespace:output_type -> ateapi.Atespace
-	28,  // 203: ateapi.Control.GetAtespace:output_type -> ateapi.Atespace
-	56,  // 204: ateapi.Control.ListAtespaces:output_type -> ateapi.ListAtespacesResponse
-	28,  // 205: ateapi.Control.DeleteAtespace:output_type -> ateapi.Atespace
-	30,  // 206: ateapi.Control.CreateActorTemplate:output_type -> ateapi.ActorTemplate
-	30,  // 207: ateapi.Control.GetActorTemplate:output_type -> ateapi.ActorTemplate
-	61,  // 208: ateapi.Control.ListActorTemplates:output_type -> ateapi.ListActorTemplatesResponse
-	30,  // 209: ateapi.Control.DeleteActorTemplate:output_type -> ateapi.ActorTemplate
-	106, // 210: ateapi.WorkerService.SetWorkerCapacity:output_type -> ateapi.SetWorkerCapacityResponse
-	108, // 211: ateapi.WorkerService.MintAteomActorCertificate:output_type -> ateapi.MintAteomActorCertificateResponse
-	110, // 212: ateapi.WorkerService.RequestActorSuspend:output_type -> ateapi.RequestActorSuspendResponse
-	175, // [175:213] is the sub-list for method output_type
-	137, // [137:175] is the sub-list for method input_type
-	137, // [137:137] is the sub-list for extension type_name
-	137, // [137:137] is the sub-list for extension extendee
-	0,   // [0:137] is the sub-list for field type_name
+	10,  // 137: ateapi.AccessPolicy.metadata:type_name -> ateapi.ResourceMetadata
+	112, // 138: ateapi.AccessPolicy.bindings:type_name -> ateapi.Binding
+	111, // 139: ateapi.CreateGlobalAccessPolicyRequest.access_policy:type_name -> ateapi.AccessPolicy
+	111, // 140: ateapi.UpdateGlobalAccessPolicyRequest.access_policy:type_name -> ateapi.AccessPolicy
+	29,  // 141: ateapi.GetAtespaceAccessPolicyRequest.atespace:type_name -> ateapi.ObjectRef
+	29,  // 142: ateapi.CreateAtespaceAccessPolicyRequest.atespace:type_name -> ateapi.ObjectRef
+	111, // 143: ateapi.CreateAtespaceAccessPolicyRequest.access_policy:type_name -> ateapi.AccessPolicy
+	29,  // 144: ateapi.UpdateAtespaceAccessPolicyRequest.atespace:type_name -> ateapi.ObjectRef
+	111, // 145: ateapi.UpdateAtespaceAccessPolicyRequest.access_policy:type_name -> ateapi.AccessPolicy
+	29,  // 146: ateapi.DeleteAtespaceAccessPolicyRequest.atespace:type_name -> ateapi.ObjectRef
+	89,  // 147: ateapi.DeleteAtespaceAccessPolicyRequest.options:type_name -> ateapi.DeleteOptions
+	63,  // 148: ateapi.Control.GetActor:input_type -> ateapi.GetActorRequest
+	64,  // 149: ateapi.Control.CreateActor:input_type -> ateapi.CreateActorRequest
+	65,  // 150: ateapi.Control.UpdateActor:input_type -> ateapi.UpdateActorRequest
+	66,  // 151: ateapi.Control.SuspendActor:input_type -> ateapi.SuspendActorRequest
+	68,  // 152: ateapi.Control.PauseActor:input_type -> ateapi.PauseActorRequest
+	70,  // 153: ateapi.Control.ResumeActor:input_type -> ateapi.ResumeActorRequest
+	72,  // 154: ateapi.Control.RevertActor:input_type -> ateapi.RevertActorRequest
+	74,  // 155: ateapi.Control.DeleteActor:input_type -> ateapi.DeleteActorRequest
+	75,  // 156: ateapi.Control.GetActorEgressPolicy:input_type -> ateapi.GetActorEgressPolicyRequest
+	76,  // 157: ateapi.Control.CreateActorEgressPolicy:input_type -> ateapi.CreateActorEgressPolicyRequest
+	77,  // 158: ateapi.Control.UpdateActorEgressPolicy:input_type -> ateapi.UpdateActorEgressPolicyRequest
+	78,  // 159: ateapi.Control.DeleteActorEgressPolicy:input_type -> ateapi.DeleteActorEgressPolicyRequest
+	80,  // 160: ateapi.Control.MintActorJWT:input_type -> ateapi.MintActorJWTRequest
+	82,  // 161: ateapi.Control.MintActorCertificate:input_type -> ateapi.MintActorCertificateRequest
+	86,  // 162: ateapi.Control.CreateTag:input_type -> ateapi.CreateTagRequest
+	79,  // 163: ateapi.Control.GetTag:input_type -> ateapi.GetTagRequest
+	84,  // 164: ateapi.Control.ListTags:input_type -> ateapi.ListTagsRequest
+	87,  // 165: ateapi.Control.UpdateTag:input_type -> ateapi.UpdateTagRequest
+	88,  // 166: ateapi.Control.DeleteTag:input_type -> ateapi.DeleteTagRequest
+	92,  // 167: ateapi.Control.ListWorkers:input_type -> ateapi.ListWorkersRequest
+	94,  // 168: ateapi.Control.GetWorker:input_type -> ateapi.GetWorkerRequest
+	95,  // 169: ateapi.Control.CreateWorker:input_type -> ateapi.CreateWorkerRequest
+	96,  // 170: ateapi.Control.UpdateWorker:input_type -> ateapi.UpdateWorkerRequest
+	97,  // 171: ateapi.Control.DeleteWorker:input_type -> ateapi.DeleteWorkerRequest
+	98,  // 172: ateapi.Control.DrainWorker:input_type -> ateapi.DrainWorkerRequest
+	90,  // 173: ateapi.Control.ListWorkerActorAssignments:input_type -> ateapi.ListWorkerActorAssignmentsRequest
+	99,  // 174: ateapi.Control.ListActors:input_type -> ateapi.ListActorsRequest
+	53,  // 175: ateapi.Control.CreateAtespace:input_type -> ateapi.CreateAtespaceRequest
+	54,  // 176: ateapi.Control.GetAtespace:input_type -> ateapi.GetAtespaceRequest
+	55,  // 177: ateapi.Control.ListAtespaces:input_type -> ateapi.ListAtespacesRequest
+	57,  // 178: ateapi.Control.DeleteAtespace:input_type -> ateapi.DeleteAtespaceRequest
+	58,  // 179: ateapi.Control.CreateActorTemplate:input_type -> ateapi.CreateActorTemplateRequest
+	59,  // 180: ateapi.Control.GetActorTemplate:input_type -> ateapi.GetActorTemplateRequest
+	60,  // 181: ateapi.Control.ListActorTemplates:input_type -> ateapi.ListActorTemplatesRequest
+	62,  // 182: ateapi.Control.DeleteActorTemplate:input_type -> ateapi.DeleteActorTemplateRequest
+	113, // 183: ateapi.Control.GetGlobalAccessPolicy:input_type -> ateapi.GetGlobalAccessPolicyRequest
+	114, // 184: ateapi.Control.CreateGlobalAccessPolicy:input_type -> ateapi.CreateGlobalAccessPolicyRequest
+	115, // 185: ateapi.Control.UpdateGlobalAccessPolicy:input_type -> ateapi.UpdateGlobalAccessPolicyRequest
+	116, // 186: ateapi.Control.GetAtespaceAccessPolicy:input_type -> ateapi.GetAtespaceAccessPolicyRequest
+	117, // 187: ateapi.Control.CreateAtespaceAccessPolicy:input_type -> ateapi.CreateAtespaceAccessPolicyRequest
+	118, // 188: ateapi.Control.UpdateAtespaceAccessPolicy:input_type -> ateapi.UpdateAtespaceAccessPolicyRequest
+	119, // 189: ateapi.Control.DeleteAtespaceAccessPolicy:input_type -> ateapi.DeleteAtespaceAccessPolicyRequest
+	105, // 190: ateapi.WorkerService.SetWorkerCapacity:input_type -> ateapi.SetWorkerCapacityRequest
+	107, // 191: ateapi.WorkerService.MintAteomActorCertificate:input_type -> ateapi.MintAteomActorCertificateRequest
+	109, // 192: ateapi.WorkerService.RequestActorSuspend:input_type -> ateapi.RequestActorSuspendRequest
+	12,  // 193: ateapi.Control.GetActor:output_type -> ateapi.Actor
+	12,  // 194: ateapi.Control.CreateActor:output_type -> ateapi.Actor
+	12,  // 195: ateapi.Control.UpdateActor:output_type -> ateapi.Actor
+	67,  // 196: ateapi.Control.SuspendActor:output_type -> ateapi.SuspendActorResponse
+	69,  // 197: ateapi.Control.PauseActor:output_type -> ateapi.PauseActorResponse
+	71,  // 198: ateapi.Control.ResumeActor:output_type -> ateapi.ResumeActorResponse
+	73,  // 199: ateapi.Control.RevertActor:output_type -> ateapi.RevertActorResponse
+	12,  // 200: ateapi.Control.DeleteActor:output_type -> ateapi.Actor
+	13,  // 201: ateapi.Control.GetActorEgressPolicy:output_type -> ateapi.EgressPolicy
+	13,  // 202: ateapi.Control.CreateActorEgressPolicy:output_type -> ateapi.EgressPolicy
+	13,  // 203: ateapi.Control.UpdateActorEgressPolicy:output_type -> ateapi.EgressPolicy
+	13,  // 204: ateapi.Control.DeleteActorEgressPolicy:output_type -> ateapi.EgressPolicy
+	81,  // 205: ateapi.Control.MintActorJWT:output_type -> ateapi.MintActorJWTResponse
+	83,  // 206: ateapi.Control.MintActorCertificate:output_type -> ateapi.MintActorCertificateResponse
+	27,  // 207: ateapi.Control.CreateTag:output_type -> ateapi.Tag
+	27,  // 208: ateapi.Control.GetTag:output_type -> ateapi.Tag
+	85,  // 209: ateapi.Control.ListTags:output_type -> ateapi.ListTagsResponse
+	27,  // 210: ateapi.Control.UpdateTag:output_type -> ateapi.Tag
+	27,  // 211: ateapi.Control.DeleteTag:output_type -> ateapi.Tag
+	93,  // 212: ateapi.Control.ListWorkers:output_type -> ateapi.ListWorkersResponse
+	101, // 213: ateapi.Control.GetWorker:output_type -> ateapi.Worker
+	101, // 214: ateapi.Control.CreateWorker:output_type -> ateapi.Worker
+	101, // 215: ateapi.Control.UpdateWorker:output_type -> ateapi.Worker
+	101, // 216: ateapi.Control.DeleteWorker:output_type -> ateapi.Worker
+	101, // 217: ateapi.Control.DrainWorker:output_type -> ateapi.Worker
+	91,  // 218: ateapi.Control.ListWorkerActorAssignments:output_type -> ateapi.ListWorkerActorAssignmentsResponse
+	100, // 219: ateapi.Control.ListActors:output_type -> ateapi.ListActorsResponse
+	28,  // 220: ateapi.Control.CreateAtespace:output_type -> ateapi.Atespace
+	28,  // 221: ateapi.Control.GetAtespace:output_type -> ateapi.Atespace
+	56,  // 222: ateapi.Control.ListAtespaces:output_type -> ateapi.ListAtespacesResponse
+	28,  // 223: ateapi.Control.DeleteAtespace:output_type -> ateapi.Atespace
+	30,  // 224: ateapi.Control.CreateActorTemplate:output_type -> ateapi.ActorTemplate
+	30,  // 225: ateapi.Control.GetActorTemplate:output_type -> ateapi.ActorTemplate
+	61,  // 226: ateapi.Control.ListActorTemplates:output_type -> ateapi.ListActorTemplatesResponse
+	30,  // 227: ateapi.Control.DeleteActorTemplate:output_type -> ateapi.ActorTemplate
+	111, // 228: ateapi.Control.GetGlobalAccessPolicy:output_type -> ateapi.AccessPolicy
+	111, // 229: ateapi.Control.CreateGlobalAccessPolicy:output_type -> ateapi.AccessPolicy
+	111, // 230: ateapi.Control.UpdateGlobalAccessPolicy:output_type -> ateapi.AccessPolicy
+	111, // 231: ateapi.Control.GetAtespaceAccessPolicy:output_type -> ateapi.AccessPolicy
+	111, // 232: ateapi.Control.CreateAtespaceAccessPolicy:output_type -> ateapi.AccessPolicy
+	111, // 233: ateapi.Control.UpdateAtespaceAccessPolicy:output_type -> ateapi.AccessPolicy
+	111, // 234: ateapi.Control.DeleteAtespaceAccessPolicy:output_type -> ateapi.AccessPolicy
+	106, // 235: ateapi.WorkerService.SetWorkerCapacity:output_type -> ateapi.SetWorkerCapacityResponse
+	108, // 236: ateapi.WorkerService.MintAteomActorCertificate:output_type -> ateapi.MintAteomActorCertificateResponse
+	110, // 237: ateapi.WorkerService.RequestActorSuspend:output_type -> ateapi.RequestActorSuspendResponse
+	193, // [193:238] is the sub-list for method output_type
+	148, // [148:193] is the sub-list for method input_type
+	148, // [148:148] is the sub-list for extension type_name
+	148, // [148:148] is the sub-list for extension extendee
+	0,   // [0:148] is the sub-list for field type_name
 }
 
 func init() { file_ateapi_proto_init() }
@@ -8313,7 +8876,7 @@ func file_ateapi_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ateapi_proto_rawDesc), len(file_ateapi_proto_rawDesc)),
 			NumEnums:      7,
-			NumMessages:   107,
+			NumMessages:   116,
 			NumExtensions: 0,
 			NumServices:   2,
 		},
