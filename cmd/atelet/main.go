@@ -44,6 +44,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/credbundle"
 	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/nodepath"
+	"github.com/agent-substrate/substrate/internal/objectstore"
 	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/otlprelay"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
@@ -236,7 +237,7 @@ func main() {
 	}
 
 	var wrappedGCS objectstorage.ObjectStorage
-	storageBackend := os.Getenv("ATE_STORAGE_BACKEND")
+	storageBackend := objectstore.BackendEnv.Get()
 	switch storageBackend {
 	case "s3":
 		slog.InfoContext(ctx, "Using S3 storage backend")
@@ -247,7 +248,7 @@ func main() {
 			serverboot.Fatal(ctx, "Failed to load S3 config", err)
 		}
 		wrappedGCS = objectstorage.NewS3Client(s3.NewFromConfig(cfg, func(o *s3.Options) {
-			if usePathStyle := os.Getenv("AWS_S3_USE_PATH_STYLE"); usePathStyle == "true" {
+			if objectstore.S3PathStyleEnv.Get() {
 				o.UsePathStyle = true
 			}
 		}))

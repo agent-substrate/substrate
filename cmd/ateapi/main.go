@@ -37,6 +37,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workerservice"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/credbundle"
+	"github.com/agent-substrate/substrate/internal/env"
 	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/localjwtauthority"
@@ -377,14 +378,14 @@ func drainOnShutdown(ctx context.Context, srv *grpc.Server, readiness *serverboo
 func loadFlagsFromEnv() {
 	overrides := []struct {
 		flag *string
-		env  string
+		env  env.Var[string]
 	}{
-		{postgresConnectionString, "ATE_API_POSTGRES_CONNECTION_STRING"},
-		{postgresSchema, "ATE_API_POSTGRES_SCHEMA"},
+		{postgresConnectionString, postgresConnectionStringEnv},
+		{postgresSchema, postgresSchemaEnv},
 	}
 	for _, o := range overrides {
 		if *o.flag == "@env" {
-			*o.flag = os.Getenv(o.env)
+			*o.flag = o.env.Get()
 		}
 	}
 	if v := os.Getenv("ATE_API_EXPERIMENTAL_ENABLE_AUTHZ"); v != "" && !pflag.CommandLine.Changed("experimental-enable-authz") {
@@ -415,7 +416,7 @@ func logFlagValues(ctx context.Context) {
 // writes snapshots through, so both ends of a snapshot's life agree on where
 // it lives.
 func newObjectStore(ctx context.Context) (objectstore.Store, error) {
-	switch backend := os.Getenv("ATE_STORAGE_BACKEND"); backend {
+	switch backend := objectstore.BackendEnv.Get(); backend {
 	case "s3":
 		slog.InfoContext(ctx, "Using S3 storage backend")
 		// Depends on the standard AWS environment variables, which have to be
@@ -425,7 +426,7 @@ func newObjectStore(ctx context.Context) (objectstore.Store, error) {
 			return nil, fmt.Errorf("loading S3 config: %w", err)
 		}
 		return objectstore.NewS3(s3.NewFromConfig(cfg, func(o *s3.Options) {
-			if os.Getenv("AWS_S3_USE_PATH_STYLE") == "true" {
+			if objectstore.S3PathStyleEnv.Get() {
 				o.UsePathStyle = true
 			}
 		})), nil

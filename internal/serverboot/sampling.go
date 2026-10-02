@@ -18,16 +18,10 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
 	"strconv"
 	"strings"
 
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-)
-
-const (
-	tracesSamplerEnv    = "OTEL_TRACES_SAMPLER"
-	tracesSamplerArgEnv = "OTEL_TRACES_SAMPLER_ARG"
 )
 
 // ControlPlaneTraceRatio is the default root sampling ratio for the control
@@ -69,8 +63,8 @@ func ParentNeverSampling() TraceSampling {
 // to 100% sampling on invalid values where this keeps the default and logs.
 // That includes a ratio sampler without an arg, which the spec reads as 1.0.
 func ResolveTraceSampling(ctx context.Context, def TraceSampling) TraceSampling {
-	name, nameSet := os.LookupEnv(tracesSamplerEnv)
-	arg, argSet := os.LookupEnv(tracesSamplerArgEnv)
+	name, nameSet := traceSampler.Lookup()
+	arg, argSet := traceSamplerArg.Lookup()
 	resolved, err := resolveTraceSampling(name, nameSet, arg, argSet, def)
 	if err != nil {
 		slog.WarnContext(ctx, "Invalid trace sampler environment, keeping the component default",

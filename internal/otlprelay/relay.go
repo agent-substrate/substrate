@@ -62,6 +62,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/agent-substrate/substrate/internal/env"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -78,30 +79,6 @@ import (
 )
 
 const (
-	// endpointEnv and its signal-specific overrides are the standard OTLP
-	// exporter variables. The relay resolves them itself because it dials the
-	// collector directly rather than through an OTel SDK exporter.
-	endpointEnv        = "OTEL_EXPORTER_OTLP_ENDPOINT"
-	tracesEndpointEnv  = "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"
-	metricsEndpointEnv = "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT"
-	logsEndpointEnv    = "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT"
-
-	// compressionEnv and its signal-specific overrides configure upstream
-	// gRPC compression (gzip or none).
-	compressionEnv        = "OTEL_EXPORTER_OTLP_COMPRESSION"
-	tracesCompressionEnv  = "OTEL_EXPORTER_OTLP_TRACES_COMPRESSION"
-	metricsCompressionEnv = "OTEL_EXPORTER_OTLP_METRICS_COMPRESSION"
-	logsCompressionEnv    = "OTEL_EXPORTER_OTLP_LOGS_COMPRESSION"
-
-	// headersEnv and its signal-specific overrides carry the headers the
-	// collector expects (an API key, a tenant id). Unlike the endpoint and the
-	// compression, these are per-call metadata rather than per-connection, so
-	// traces, metrics, and logs may legitimately differ and are resolved separately.
-	headersEnv        = "OTEL_EXPORTER_OTLP_HEADERS"
-	tracesHeadersEnv  = "OTEL_EXPORTER_OTLP_TRACES_HEADERS"
-	metricsHeadersEnv = "OTEL_EXPORTER_OTLP_METRICS_HEADERS"
-	logsHeadersEnv    = "OTEL_EXPORTER_OTLP_LOGS_HEADERS"
-
 	// otlpDefaultPort matches atenet's normalizeOtlpCollector.
 	otlpDefaultPort = "4317"
 
@@ -278,14 +255,14 @@ func parseHeaders(raw string) (metadata.MD, error) {
 // upstreamHeaders resolves the headers for one signal. Per the OTLP spec the
 // signal-specific variable replaces the generic one rather than merging with
 // it, so a component that sets both gets exactly what the SDK would have sent.
-func upstreamHeaders(signalEnv string) (metadata.MD, error) {
-	env, raw := signalEnv, strings.TrimSpace(os.Getenv(signalEnv))
+func upstreamHeaders(signalEnv env.Var[string]) (metadata.MD, error) {
+	name, raw := signalEnv.Name, strings.TrimSpace(signalEnv.Get())
 	if raw == "" {
-		env, raw = headersEnv, os.Getenv(headersEnv)
+		name, raw = headersEnv, headersVar.Get()
 	}
 	md, err := parseHeaders(raw)
 	if err != nil {
-		return nil, fmt.Errorf("while reading %s: %w", env, err)
+		return nil, fmt.Errorf("while reading %s: %w", name, err)
 	}
 	return md, nil
 }
@@ -398,15 +375,15 @@ func NewServer(ctx context.Context, sockPath string) (*Server, error) {
 	// otherwise become a per-export failure against a collector that rejects the
 	// unauthenticated calls, which is harder to read than refusing to start the
 	// relay. ateom then finds no socket and exports directly.
-	traceHeaders, err := upstreamHeaders(tracesHeadersEnv)
+	traceHeaders, err := upstreamHeaders(tracesHeadersVar)
 	if err != nil {
 		return nil, err
 	}
-	metricHeaders, err := upstreamHeaders(metricsHeadersEnv)
+	metricHeaders, err := upstreamHeaders(metricsHeadersVar)
 	if err != nil {
 		return nil, err
 	}
-	logHeaders, err := upstreamHeaders(logsHeadersEnv)
+	logHeaders, err := upstreamHeaders(logsHeadersVar)
 	if err != nil {
 		return nil, err
 	}
@@ -508,7 +485,7 @@ func headerNames(md metadata.MD) []string {
 // upstreamCompression resolves the compression algorithm (gzip or none) to use
 // for upstream export.
 func upstreamCompression() (string, error) {
-	resolved, err := resolvePerSignal("compression settings", compressionEnv, tracesCompressionEnv, metricsCompressionEnv, logsCompressionEnv)
+	resolved, err := resolvePerSignal("compression settings", compressionVar, tracesCompressionVar, metricsCompressionVar, logsCompressionVar)
 	if err != nil {
 		return "", err
 	}
@@ -530,7 +507,7 @@ func upstreamCompression() (string, error) {
 // them differently is a misconfiguration rather than something to silently pick
 // a winner for.
 func upstreamTarget() (string, error) {
-	resolved, err := resolvePerSignal("endpoints", endpointEnv, tracesEndpointEnv, metricsEndpointEnv, logsEndpointEnv)
+	resolved, err := resolvePerSignal("endpoints", endpointVar, tracesEndpointVar, metricsEndpointVar, logsEndpointVar)
 	if err != nil {
 		return "", err
 	}
@@ -545,13 +522,13 @@ func upstreamTarget() (string, error) {
 // carries every signal over one connection. The error names the variables the
 // two values came from, since a fallback pulls the generic in under a signal
 // that is not itself set.
-func resolvePerSignal(what, genericEnv string, signalEnvs ...string) (string, error) {
-	generic := strings.TrimSpace(os.Getenv(genericEnv))
+func resolvePerSignal(what string, genericEnv env.Var[string], signalEnvs ...env.Var[string]) (string, error) {
+	generic := strings.TrimSpace(genericEnv.Get())
 	resolved, resolvedEnv := "", ""
-	for _, env := range signalEnvs {
-		v, src := strings.TrimSpace(os.Getenv(env)), env
+	for _, signal := range signalEnvs {
+		v, src := strings.TrimSpace(signal.Get()), signal.Name
 		if v == "" {
-			v, src = generic, genericEnv
+			v, src = generic, genericEnv.Name
 		}
 		if v == "" {
 			continue

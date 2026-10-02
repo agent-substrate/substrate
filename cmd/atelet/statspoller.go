@@ -603,7 +603,7 @@ func startStatsPoller(ctx context.Context, interval time.Duration, inst *statsIn
 	}
 	// NODE_NAME comes from the Downward API; without it the samples still
 	// flow, just grouped without pool labels.
-	if nodeName := os.Getenv("NODE_NAME"); nodeName != "" {
+	if nodeName := nodeNameEnv.Get(); nodeName != "" {
 		poller.fetchWorkerPools = newWorkerPoolFetcher(k8sClient, nodeName)
 	} else {
 		slog.WarnContext(ctx, "NODE_NAME not set; actor stats will carry no worker pool labels")
