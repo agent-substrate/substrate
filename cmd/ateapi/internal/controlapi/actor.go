@@ -39,6 +39,7 @@ import (
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
@@ -293,7 +294,8 @@ func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorR
 		// The repointed ref must also resolve, mirroring CreateActor's
 		// check (same non-atomicity caveat; resume re-resolves and fails
 		// cleanly), and the replacement's sandbox config, volumes, and
-		// volume mounts must match the old template's.
+		// volume mounts must match the old template's. It must also store
+		// snapshots under the location the actor's own already live in.
 		if !proto.Equal(oldVal.GetActorTemplate(), newVal.GetActorTemplate()) {
 			if state := oldVal.GetStatus().GetState(); state != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
 				return status.Errorf(codes.FailedPrecondition,
@@ -301,6 +303,9 @@ func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorR
 			}
 			newTemplate, err := resolveActorTemplate(ctx, s.store, newVal)
 			if err != nil {
+				return err
+			}
+			if err := validateSnapshotLocationUnchanged(oldVal, newTemplate); err != nil {
 				return err
 			}
 			oldTemplate, err := resolveActorTemplate(ctx, s.store, oldVal)
@@ -381,6 +386,40 @@ func validateTemplateVolumesUnchanged(oldTemplate, newTemplate *ateapipb.ActorTe
 			return status.Errorf(codes.FailedPrecondition,
 				"volume mounts of container %q differ between the current and the new actor template; volume mounts must be identical to repoint an actor", oldC.GetName())
 		}
+	}
+	return nil
+}
+
+// validateSnapshotLocationUnchanged rejects a template repoint that would
+// store the actor's next snapshots under a different location than the one it
+// already owns. This is needed to not leak snapshots when the actor is deleted:
+// Deleting an actor collects everything under its external snapshot prefix. If
+// the location prefix ever changes, we risk leaking the snapshots under the old prefix.
+func validateSnapshotLocationUnchanged(actor *ateapipb.Actor, newTemplate *ateapipb.ActorTemplate) error {
+	currentSnapshotURI := actor.GetStatus().GetExternalSnapshot().GetSnapshotUri()
+	if currentSnapshotURI == "" {
+		return nil
+	}
+	currentURI, err := resources.ParseSnapshotURI(currentSnapshotURI)
+	if err != nil {
+		return fmt.Errorf("while parsing the external snapshot %q: %w", currentSnapshotURI, err)
+	}
+	// Tag-owned snapshot
+	if !currentURI.OwnedBy(actorSnapshotOwner(actor)) {
+		return nil
+	}
+	// Compared as prefixes, so a newLocation spelled with and without a
+	// trailing slash counts as the same.
+	newLocation := newTemplate.GetSnapshotConfig().GetStorageLocation()
+	// Generate what the new snapshot prefix would look like for this actor.
+	nextSnapshotLocationPrefix, err := currentURI.Owner().Prefix(newLocation)
+	if err != nil {
+		return fmt.Errorf("while resolving the new actor template's storage location %q: %w", newLocation, err)
+	}
+	if nextSnapshotLocationPrefix != currentURI.OwnerPrefix() {
+		return status.Errorf(codes.FailedPrecondition,
+			"the actor's snapshots are stored under %q but the new actor template stores them under %q: the storage location must be identical to repoint an actor that owns a snapshot",
+			currentURI.Location(), newLocation)
 	}
 	return nil
 }
@@ -531,14 +570,17 @@ func (s *RPCService) MintActorJWT(ctx context.Context, req *ateapipb.MintActorJW
 		return nil, fmt.Errorf("at least one audience must be requested")
 	}
 
+	// JWT timestamps have one-second resolution; truncating keeps expires_at
+	// equal to the exp claim.
+	now := time.Now().Truncate(time.Second)
+	expiresAt := now.Add(time.Duration(req.GetExpirationSeconds()) * time.Second)
 	actorClaims := &actoridjwt.Claims{
-		Issuer: s.actorJWTIssuer,
-		// TODO(identity): this format is very likely going to change.
-		Subject:    fmt.Sprintf("atespaces:%s:actors:%s", dbActor.GetMetadata().GetAtespace(), dbActor.GetMetadata().GetName()),
+		Issuer:     s.actorJWTIssuer,
+		Subject:    fmt.Sprintf("actor/%s/%s", dbActor.GetMetadata().GetAtespace(), dbActor.GetMetadata().GetName()),
 		Audiences:  req.GetAudience(),
-		Expiration: time.Now().Add(15 * time.Minute),
-		NotBefore:  time.Now().Add(-5 * time.Minute),
-		IssuedAt:   time.Now(),
+		Expiration: expiresAt,
+		NotBefore:  now.Add(-5 * time.Minute),
+		IssuedAt:   now,
 		JTI:        rand.Text(),
 
 		Substrate: actoridjwt.SubstrateClaims{
@@ -554,7 +596,8 @@ func (s *RPCService) MintActorJWT(ctx context.Context, req *ateapipb.MintActorJW
 	}
 
 	return &ateapipb.MintActorJWTResponse{
-		ActorJwt: actorJWT,
+		ActorJwt:  actorJWT,
+		ExpiresAt: timestamppb.New(expiresAt),
 	}, nil
 }
 

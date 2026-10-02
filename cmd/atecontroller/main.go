@@ -125,7 +125,7 @@ func main() {
 	// own Prometheus registry, which the manager serves on a port nothing scrapes.
 	// Bridging it as a Producer puts them on the OTLP path instead.
 	mp, err := serverboot.InitMetricsPushOnly(ctx, serviceName,
-		prombridge.NewMetricProducer(prombridge.WithGatherer(ctrlmetrics.Registry)))
+		padEmptyExponentialHistograms(prombridge.NewMetricProducer(prombridge.WithGatherer(ctrlmetrics.Registry))))
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize metrics", err)
 	}
@@ -253,7 +253,7 @@ func main() {
 	// Start registers the informer event handlers, so it has to run before the
 	// factory does: the initial list then synthesizes an Add for every pod that
 	// already exists, and no explicit startup re-list is needed.
-	workersync.NewWorkerPoolSyncer(ateapiClient, workerPodInformer, workerPoolInformer.Informer()).Start(runCtx)
+	workersync.NewWorkerPoolSyncer(ateapiClient, k8sClient.CoreV1(), workerPodInformer, workerPoolInformer.Informer()).Start(runCtx)
 
 	workerPodInformerFactory.Start(runCtx.Done())
 	ateFactory.Start(runCtx.Done())

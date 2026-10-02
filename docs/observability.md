@@ -274,7 +274,7 @@ For `ate.imagecache.requests`:
 
 The three snapshot labels are orthogonal and mean the same thing on every histogram that carries them:
 * `ate.snapshot.kind`: which snapshot the operation reads or writes. `local` (node-local, written by a pause), `latest` (the actor's own durable snapshot), `golden` (the template's image), or `boot` (from scratch, so it never appears on the atelet histograms).
-* `ate.snapshot.scope`: what content it covers. `full`, `data`, or `data_on_golden` (restore-only: the actor's data combined with the golden guest state).
+* `ate.snapshot.scope`: what content it covers. `full` or `data`.
 * `ate.snapshot.phase`: which step was timed. `volume_mount`, `manifest_fetch`, `sandbox_assets`, `download`, `oci_unpack`, `ateom_restore` on restore; `sandbox_assets`, `ateom_checkpoint`, `persist` on checkpoint; `total` on both.
 
 **Phases overlap and do not sum to `total`.** The download runs concurrently with the asset fetch and OCI unpack, so each is an independent observation; use `total` as the denominator. A phase that never started is absent rather than zero.
@@ -325,6 +325,8 @@ These can be used to answer whether the controller is keeping up, e.g. rising `w
 `docs/metrics/substrate.yaml` records these as prefixes under `bridged_metric_families`, and not one metric at a time. The upstream library owns the names, the labels and the buckets, and a version bump can add a family. A copy in the registry becomes wrong with no signal. `controller_runtime_version` dates the list, thus a bump has an obvious place to check.
 
 Note that controller-runtime enables native histograms on `controller_runtime_reconcile_time_seconds`, `workqueue_queue_duration_seconds`, and `workqueue_work_duration_seconds`, so those three arrive as OTLP exponential histograms rather than fixed-bucket ones.
+
+A queue that has never processed an item bridges as an exponential histogram with no positive buckets, which the Telemetry API (the Cloud Monitoring OTLP endpoint) rejects on ingest. atecontroller gives each such data point one positive bucket with a count of 0 before the OTLP push (`cmd/atecontroller/metrics.go`), so an idle queue no longer causes an error every tick. The padding carries no observations, so other backends are unaffected.
 
 ### Local Metrics with Prometheus (Kind Cluster)
 

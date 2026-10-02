@@ -186,8 +186,8 @@ func (p *Persistence) ListActorTemplates(ctx context.Context, atespace string, o
 			return store.ListResponse[*ateapipb.ActorTemplate]{}, fmt.Errorf("scanning actor template row: %w", err)
 		}
 		template := &ateapipb.ActorTemplate{}
-		if err := unmarshalStored(protoBytes, template); err != nil {
-			return store.ListResponse[*ateapipb.ActorTemplate]{}, fmt.Errorf("unmarshaling actor template: %w", err)
+		if err := unmarshalRow(protoBytes, template, "actor template", k.atespace, k.name); err != nil {
+			return store.ListResponse[*ateapipb.ActorTemplate]{}, err
 		}
 		keys = append(keys, k)
 		result = append(result, template)

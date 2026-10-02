@@ -37,6 +37,10 @@ type fakeControlClient struct {
 	resumeErrs []error
 	// suspendErrs does the same for SuspendActor.
 	suspendErrs []error
+
+	// createActorFn, when set, is called with each CreateActor's actor name;
+	// a non-nil error is returned in place of the actor.
+	createActorFn func(name string) error
 }
 
 // nextErr pops the head of errs, or returns nil once it is drained. Callers
@@ -59,8 +63,18 @@ func (f *fakeControlClient) CreateAtespace(ctx context.Context, in *ateapipb.Cre
 
 func (f *fakeControlClient) CreateActor(ctx context.Context, in *ateapipb.CreateActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.calls = append(f.calls, "CreateActor")
+	fn := f.createActorFn
+	f.mu.Unlock()
+	if fn != nil {
+		actorName := ""
+		if in != nil && in.Actor != nil && in.Actor.Metadata != nil {
+			actorName = in.Actor.Metadata.Name
+		}
+		if err := fn(actorName); err != nil {
+			return nil, err
+		}
+	}
 	return &ateapipb.Actor{}, nil
 }
 

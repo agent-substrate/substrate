@@ -46,7 +46,7 @@ func validWorker(name string, mods ...func(*ateapipb.Worker)) *ateapipb.Worker {
 		WorkerPod:       "worker-pod-1",
 		WorkerPodUid:    name,
 		NodeName:        "node-1",
-		Ip:              "10.1.2.3",
+		Ips:             []string{"10.1.2.3"},
 		SandboxClass:    "gvisor",
 	}
 	for _, m := range mods {
@@ -289,8 +289,10 @@ func TestCreateWorker_InvalidArgument(t *testing.T) {
 		{name: "no worker"},
 		{name: "no name", mutate: func(w *ateapipb.Worker) { w.Metadata = &ateapipb.ResourceMetadata{} }},
 		{name: "atespace set", mutate: func(w *ateapipb.Worker) { w.Metadata.Atespace = "team-a" }},
-		{name: "no ip", mutate: func(w *ateapipb.Worker) { w.Ip = "" }},
-		{name: "bad ip", mutate: func(w *ateapipb.Worker) { w.Ip = "not-an-ip" }},
+		{name: "no ips", mutate: func(w *ateapipb.Worker) { w.Ips = nil }},
+		{name: "bad ip", mutate: func(w *ateapipb.Worker) { w.Ips = []string{"not-an-ip"} }},
+		{name: "two ipv4 ips", mutate: func(w *ateapipb.Worker) { w.Ips = []string{"10.1.2.3", "10.1.2.4"} }},
+		{name: "three ips", mutate: func(w *ateapipb.Worker) { w.Ips = []string{"10.1.2.3", "fd00::1", "fd00::2"} }},
 		{name: "no node", mutate: func(w *ateapipb.Worker) { w.NodeName = "" }},
 		{name: "no pool", mutate: func(w *ateapipb.Worker) { w.WorkerPool = "" }},
 		{name: "no pod", mutate: func(w *ateapipb.Worker) { w.WorkerPod = "" }},
@@ -456,7 +458,8 @@ func TestUpdateWorker_Errors(t *testing.T) {
 		}, codes.NotFound},
 		// Immutable fields, changed. A replacement update carries the whole
 		// worker, so these are the cases where it carries a different one.
-		{"ip changed", func(w *ateapipb.Worker) { w.Ip = "10.9.9.9" }, codes.InvalidArgument},
+		{"ips changed", func(w *ateapipb.Worker) { w.Ips = []string{"10.9.9.9"} }, codes.InvalidArgument},
+		{"ips family added", func(w *ateapipb.Worker) { w.Ips = append(w.Ips, "fd00::1") }, codes.InvalidArgument},
 		{"worker_pod changed", func(w *ateapipb.Worker) { w.WorkerPod = "worker-pod-2" }, codes.InvalidArgument},
 		{"node_name changed", func(w *ateapipb.Worker) { w.NodeName = "node-2" }, codes.InvalidArgument},
 		{"sandbox_class changed", func(w *ateapipb.Worker) { w.SandboxClass = "microvm" }, codes.InvalidArgument},
@@ -466,7 +469,7 @@ func TestUpdateWorker_Errors(t *testing.T) {
 		//
 		// And immutable fields dropped, which a replacement update reads as a
 		// request to clear them. Rejected rather than silently applied.
-		{"ip omitted", func(w *ateapipb.Worker) { w.Ip = "" }, codes.InvalidArgument},
+		{"ips omitted", func(w *ateapipb.Worker) { w.Ips = nil }, codes.InvalidArgument},
 		{"sandbox_class omitted", func(w *ateapipb.Worker) { w.SandboxClass = "" }, codes.InvalidArgument},
 	}
 	for _, tc := range tests {
@@ -697,7 +700,7 @@ func TestServiceImplUpdateWorker_ImmutableFields(t *testing.T) {
 		{"worker_pod", "worker_pod", func(w *ateapipb.Worker) { w.WorkerPod = "other-pod" }},
 		{"worker_pod_uid", "worker_pod_uid", func(w *ateapipb.Worker) { w.WorkerPodUid = apiOtherWorkerName }},
 		{"node_name", "node_name", func(w *ateapipb.Worker) { w.NodeName = "other-node" }},
-		{"ip", "ip", func(w *ateapipb.Worker) { w.Ip = "10.0.0.9" }},
+		{"ips", "ips", func(w *ateapipb.Worker) { w.Ips = []string{"10.0.0.9"} }},
 		// capacity is absent: it is reported into status, which a client
 		// cannot write. See TestUpdateWorker_CannotChangeCapacity.
 	} {

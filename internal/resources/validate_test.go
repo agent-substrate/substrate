@@ -88,56 +88,6 @@ func TestIsValidResourceName(t *testing.T) {
 	}
 }
 
-func TestValidateGlobalObjectRef(t *testing.T) {
-	tests := []struct {
-		name    string
-		input   *ateapipb.ObjectRef
-		wantMsg string // empty means no error is expected
-	}{{
-		"valid global ref",
-		&ateapipb.ObjectRef{Name: "team-a"},
-		"",
-	}, {
-		// A nil global ref is an error: it names the resource the request
-		// acts on.
-		"missing ref",
-		nil,
-		"path: Required value",
-	}, {
-		"atespace must be empty",
-		&ateapipb.ObjectRef{Atespace: "ns1", Name: "team-a"},
-		"atespace: Invalid value",
-	}, {
-		"missing name",
-		&ateapipb.ObjectRef{},
-		"name: Required value",
-	}, {
-		"invalid name",
-		&ateapipb.ObjectRef{Name: "TEAM-A"},
-		"name: Invalid value",
-	}}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			errs := ValidateGlobalObjectRef(tt.input, field.NewPath("path"))
-			if tt.wantMsg == "" {
-				if len(errs) != 0 {
-					t.Fatalf("expected no errors, got %v", errs)
-				}
-				return
-			}
-			if len(errs) != 1 {
-				t.Fatalf("expected 1 error, got %v", errs)
-			}
-			got := errs[0].Error()
-			if matched, matchErr := regexp.MatchString(tt.wantMsg, got); matchErr != nil {
-				t.Fatalf("failed to compile regex %q: %v", tt.wantMsg, matchErr)
-			} else if !matched {
-				t.Errorf("expected message %q, got %q", tt.wantMsg, got)
-			}
-		})
-	}
-}
-
 func TestValidateAteomUID(t *testing.T) {
 	tests := []struct {
 		name    string

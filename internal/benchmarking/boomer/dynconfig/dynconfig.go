@@ -68,6 +68,14 @@ type Config struct {
 	SweperfTotalSteps     int    // total steps in trace; 0 falls back to default
 	SweperfNumCycles      int    // number of cycles to partition steps into; 0 falls back to default
 	SweperfPollIntervalMs int    // /status poll interval in ms; 0 falls back to default
+
+	AgentSessionScript     string  // built-in agent-session script variant; "" falls back to the default
+	AgentSessionScriptFile string  // path to a script YAML on the worker; wins over AgentSessionScript when set
+	AgentSessionThinkScale float64 // multiplier on the script's per-step think times; 0 reads as 1.0
+
+	TotalActors      int           // spawn batch size; 0 keeps --total-actors
+	SpawnConcurrency int           // actors the spawn batch creates concurrently; 0 keeps --spawn-concurrency
+	ActorDeadline    time.Duration // per-actor timeout in the spawn batch; 0 keeps --actor-deadline
 }
 
 // Holder lets readers Load() the current Config and writers Store() a new
@@ -116,6 +124,14 @@ type payload struct {
 	SweperfTotalSteps     *float64 `json:"sweperf_total_steps"`
 	SweperfNumCycles      *float64 `json:"sweperf_num_cycles"`
 	SweperfPollIntervalMs *float64 `json:"sweperf_poll_interval_ms"`
+
+	AgentSessionScript     *string  `json:"agentsession_script"`
+	AgentSessionScriptFile *string  `json:"agentsession_script_file"`
+	AgentSessionThinkScale *float64 `json:"agentsession_think_scale"`
+
+	TotalActors      *float64 `json:"total_actors"`
+	SpawnConcurrency *float64 `json:"spawn_concurrency"`
+	ActorDeadline    *float64 `json:"actor_deadline"`
 }
 
 // Parse decodes a JSON blob (typically from a CLI flag) and merges its
@@ -209,6 +225,18 @@ func (c Config) Validate() error {
 	if c.SweperfPollIntervalMs < 0 {
 		return fmt.Errorf("sweperf_poll_interval_ms cannot be negative: %d", c.SweperfPollIntervalMs)
 	}
+	if c.AgentSessionThinkScale < 0 {
+		return fmt.Errorf("agentsession_think_scale cannot be negative: %f", c.AgentSessionThinkScale)
+	}
+	if c.TotalActors < 0 {
+		return fmt.Errorf("total_actors cannot be negative: %d", c.TotalActors)
+	}
+	if c.SpawnConcurrency < 0 {
+		return fmt.Errorf("spawn_concurrency cannot be negative: %d", c.SpawnConcurrency)
+	}
+	if c.ActorDeadline < 0 {
+		return fmt.Errorf("actor_deadline cannot be negative: %v", c.ActorDeadline)
+	}
 	// MaxPingsPerWake < 1 is treated as 1 at read time (see iterate() in
 	// glutton/lifecycle.go), so Config's zero value stays usable — no
 	// validate rejection here.
@@ -277,6 +305,24 @@ func (p payload) merge(current Config) Config {
 	}
 	if p.SweperfPollIntervalMs != nil {
 		out.SweperfPollIntervalMs = int(*p.SweperfPollIntervalMs)
+	}
+	if p.AgentSessionScript != nil {
+		out.AgentSessionScript = *p.AgentSessionScript
+	}
+	if p.AgentSessionScriptFile != nil {
+		out.AgentSessionScriptFile = *p.AgentSessionScriptFile
+	}
+	if p.AgentSessionThinkScale != nil {
+		out.AgentSessionThinkScale = *p.AgentSessionThinkScale
+	}
+	if p.TotalActors != nil {
+		out.TotalActors = int(*p.TotalActors)
+	}
+	if p.SpawnConcurrency != nil {
+		out.SpawnConcurrency = int(*p.SpawnConcurrency)
+	}
+	if p.ActorDeadline != nil {
+		out.ActorDeadline = time.Duration(*p.ActorDeadline * float64(time.Second))
 	}
 	return out
 }
@@ -354,6 +400,12 @@ func StartPoll(
 					slog.Int("sweperf_total_steps", next.SweperfTotalSteps),
 					slog.Int("sweperf_num_cycles", next.SweperfNumCycles),
 					slog.Int("sweperf_poll_interval_ms", next.SweperfPollIntervalMs),
+					slog.String("agentsession_script", next.AgentSessionScript),
+					slog.String("agentsession_script_file", next.AgentSessionScriptFile),
+					slog.Float64("agentsession_think_scale", next.AgentSessionThinkScale),
+					slog.Int("total_actors", next.TotalActors),
+					slog.Int("spawn_concurrency", next.SpawnConcurrency),
+					slog.Duration("actor_deadline", next.ActorDeadline),
 				)
 			}
 		}
@@ -401,6 +453,12 @@ func SubscribeSpawn(url string, holder *Holder, sampler ProbabilityUpdater, fetc
 			slog.Int("sweperf_total_steps", next.SweperfTotalSteps),
 			slog.Int("sweperf_num_cycles", next.SweperfNumCycles),
 			slog.Int("sweperf_poll_interval_ms", next.SweperfPollIntervalMs),
+			slog.String("agentsession_script", next.AgentSessionScript),
+			slog.String("agentsession_script_file", next.AgentSessionScriptFile),
+			slog.Float64("agentsession_think_scale", next.AgentSessionThinkScale),
+			slog.Int("total_actors", next.TotalActors),
+			slog.Int("spawn_concurrency", next.SpawnConcurrency),
+			slog.Duration("actor_deadline", next.ActorDeadline),
 		)
 	})
 }

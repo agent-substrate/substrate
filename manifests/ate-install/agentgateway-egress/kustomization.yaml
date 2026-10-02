@@ -20,3 +20,4 @@ resources:
 
 components:
   - ../components/agentgateway
+  - ../components/agentgateway-egress

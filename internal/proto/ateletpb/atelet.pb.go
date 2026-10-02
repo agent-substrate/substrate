@@ -151,14 +151,7 @@ const (
 	// Capture only the contents of attached volumes that support snapshots
 	// (currently DurableDir-typed volumes). Memory and the rest of rootfs are
 	// excluded.
-	SnapshotScope_SNAPSHOT_SCOPE_DATA SnapshotScope = 2
-	// Restore-only: restore the ActorTemplate's golden snapshot's guest state
-	// (memory + full filesystem delta) combined with the snapshot's durable
-	// data. Never valid for Checkpoint — snapshots only ever capture FULL or
-	// DATA; whether a snapshot restores from its own content or on the golden
-	// is decided by the control plane from the template's onResume
-	// configuration.
-	SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN SnapshotScope = 3 // Keep this in sync with the maximums on fields of this type.
+	SnapshotScope_SNAPSHOT_SCOPE_DATA SnapshotScope = 2 // Keep this in sync with the maximums on fields of this type.
 )
 
 // Enum value maps for SnapshotScope.
@@ -167,13 +160,11 @@ var (
 		0: "SNAPSHOT_SCOPE_UNSPECIFIED",
 		1: "SNAPSHOT_SCOPE_FULL",
 		2: "SNAPSHOT_SCOPE_DATA",
-		3: "SNAPSHOT_SCOPE_DATA_ON_GOLDEN",
 	}
 	SnapshotScope_value = map[string]int32{
-		"SNAPSHOT_SCOPE_UNSPECIFIED":    0,
-		"SNAPSHOT_SCOPE_FULL":           1,
-		"SNAPSHOT_SCOPE_DATA":           2,
-		"SNAPSHOT_SCOPE_DATA_ON_GOLDEN": 3,
+		"SNAPSHOT_SCOPE_UNSPECIFIED": 0,
+		"SNAPSHOT_SCOPE_FULL":        1,
+		"SNAPSHOT_SCOPE_DATA":        2,
 	}
 )
 
@@ -1583,12 +1574,7 @@ func (x *ActorMetadataDataSource) GetItems() []*ActorMetadataItem {
 	return nil
 }
 
-// TrustBundleDataSource projects the trust anchors of a named trust bundle
-// to a file at the given path, relative to the root of the enclosing
-// system-info volume. atelet resolves the name against its supported-bundle
-// allowlist and reads the backing ClusterTrustBundle through its informer at
-// write time, sanitizing kubelet-style; an unsupported name or missing
-// bundle fails the actor start.
+// TrustBundleDataSource corresponds to TrustBundleDataSource in ateapi.proto
 type TrustBundleDataSource struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// path must be a clean relative Unix path; the rule is shared with the
@@ -1600,9 +1586,12 @@ type TrustBundleDataSource struct {
 	// +k8s:customValidation # clean relative path
 	Path string `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
 	// +k8s:required
-	// +k8s:minLength=1
-	// +k8s:maxLength=253 # matches the template's bundle-name bound
-	Name          string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	// +k8s:minItems=1
+	// +k8s:maxItems=1 # matches the template's names bound
+	// +k8s:listType=atomic
+	// +k8s:eachVal=+k8s:minLength=1
+	// +k8s:eachVal=+k8s:maxLength=253 # matches the template's bundle-name bound
+	Names         []string `protobuf:"bytes,3,rep,name=names,proto3" json:"names,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1644,11 +1633,11 @@ func (x *TrustBundleDataSource) GetPath() string {
 	return ""
 }
 
-func (x *TrustBundleDataSource) GetName() string {
+func (x *TrustBundleDataSource) GetNames() []string {
 	if x != nil {
-		return x.Name
+		return x.Names
 	}
-	return ""
+	return nil
 }
 
 // SystemInfoDataSource selects exactly one projection to place in the
@@ -2643,7 +2632,7 @@ type CheckpointRequest struct {
 	//
 	// +k8s:required
 	// +k8s:minimum=1
-	// +k8s:maximum=2 # FULL or DATA; DATA_ON_GOLDEN is restore-only. Keep this in sync with the SnapshotScope enum
+	// +k8s:maximum=2 # keep this in sync with the SnapshotScope enum
 	Scope         SnapshotScope `protobuf:"varint,11,opt,name=scope,proto3,enum=atelet.SnapshotScope" json:"scope,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2829,12 +2818,12 @@ type UploadPausedCheckpointRequest struct {
 	// Scope the uploaded snapshot must have (the commit scope; FULL or DATA).
 	// The scope the pause checkpoint captured is not sent: atelet reads it from
 	// the local snapshot's own manifest, which is authoritative. When they
-	// differ, atelet converts where possible (micro-VM FULL capture to a DATA
-	// upload by selecting the durable-dir tar) and rejects otherwise.
+	// differ, atelet converts where possible (a FULL capture to a DATA upload
+	// of the data-scope files ateom reported) and rejects otherwise.
 	//
 	// +k8s:required
 	// +k8s:minimum=1
-	// +k8s:maximum=2 # FULL or DATA; DATA_ON_GOLDEN is restore-only. Keep this in sync with the SnapshotScope enum
+	// +k8s:maximum=2 # keep this in sync with the SnapshotScope enum
 	DesiredScope  SnapshotScope `protobuf:"varint,8,opt,name=desired_scope,json=desiredScope,proto3,enum=atelet.SnapshotScope" json:"desired_scope,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2962,7 +2951,7 @@ func (*UploadPausedCheckpointResponse) Descriptor() ([]byte, []int) {
 	return file_atelet_proto_rawDescGZIP(), []int{41}
 }
 
-// +k8s:customValidation # the set config matches type; base_config only with DATA_ON_GOLDEN
+// +k8s:customValidation # the set config matches type
 type RestoreRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// +k8s:required
@@ -3004,16 +2993,8 @@ type RestoreRequest struct {
 	//
 	// +k8s:required
 	// +k8s:minimum=1
-	// +k8s:maximum=3 # keep this in sync with the SnapshotScope enum
+	// +k8s:maximum=2 # keep this in sync with the SnapshotScope enum
 	Scope SnapshotScope `protobuf:"varint,11,opt,name=scope,proto3,enum=atelet.SnapshotScope" json:"scope,omitempty"`
-	// The base guest state (memory + rootfs delta) combined with the
-	// checkpoint's durable data when scope is SNAPSHOT_SCOPE_DATA_ON_GOLDEN,
-	// and only then. Separate from local_config and external_config: the
-	// actor's snapshot may be local (a pause checkpoint) while the base is
-	// always external.
-	//
-	// +k8s:optional
-	BaseConfig *ExternalRestoreConfiguration `protobuf:"bytes,12,opt,name=base_config,json=baseConfig,proto3" json:"base_config,omitempty"`
 	// When absent the actor has no egress: its TCP is captured and refused.
 	//
 	// +k8s:optional
@@ -3144,13 +3125,6 @@ func (x *RestoreRequest) GetScope() SnapshotScope {
 		return x.Scope
 	}
 	return SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED
-}
-
-func (x *RestoreRequest) GetBaseConfig() *ExternalRestoreConfiguration {
-	if x != nil {
-		return x.BaseConfig
-	}
-	return nil
 }
 
 func (x *RestoreRequest) GetEgressGateway() *EgressGateway {
@@ -3313,10 +3287,10 @@ const file_atelet_proto_rawDesc = "" +
 	"\x05field\x18\x01 \x01(\x0e2\x1a.atelet.ActorMetadataFieldR\x05field\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\"J\n" +
 	"\x17ActorMetadataDataSource\x12/\n" +
-	"\x05items\x18\x01 \x03(\v2\x19.atelet.ActorMetadataItemR\x05items\"?\n" +
+	"\x05items\x18\x01 \x03(\v2\x19.atelet.ActorMetadataItemR\x05items\"M\n" +
 	"\x15TrustBundleDataSource\x12\x12\n" +
-	"\x04path\x18\x01 \x01(\tR\x04path\x12\x12\n" +
-	"\x04name\x18\x02 \x01(\tR\x04name\"\xa0\x01\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\x12\x14\n" +
+	"\x05names\x18\x03 \x03(\tR\x05namesJ\x04\b\x02\x10\x03R\x04name\"\xa0\x01\n" +
 	"\x14SystemInfoDataSource\x12F\n" +
 	"\x0eactor_metadata\x18\x01 \x01(\v2\x1f.atelet.ActorMetadataDataSourceR\ractorMetadata\x12@\n" +
 	"\ftrust_bundle\x18\x02 \x01(\v2\x1d.atelet.TrustBundleDataSourceR\vtrustBundle\"S\n" +
@@ -3394,7 +3368,7 @@ const file_atelet_proto_rawDesc = "" +
 	"\x13local_snapshot_name\x18\x06 \x01(\tR\x11localSnapshotName\x128\n" +
 	"\x18destination_snapshot_uri\x18\a \x01(\tR\x16destinationSnapshotUri\x12:\n" +
 	"\rdesired_scope\x18\b \x01(\x0e2\x15.atelet.SnapshotScopeR\fdesiredScope\" \n" +
-	"\x1eUploadPausedCheckpointResponse\"\xb0\x06\n" +
+	"\x1eUploadPausedCheckpointResponse\"\xe9\x05\n" +
 	"\x0eRestoreRequest\x12(\n" +
 	"\x10target_ateom_uid\x18\x01 \x01(\tR\x0etargetAteomUid\x12\x1a\n" +
 	"\batespace\x18\x02 \x01(\tR\batespace\x12\x1d\n" +
@@ -3408,9 +3382,7 @@ const file_atelet_proto_rawDesc = "" +
 	"\flocal_config\x18\t \x01(\v2$.atelet.LocalCheckpointConfigurationR\vlocalConfig\x12M\n" +
 	"\x0fexternal_config\x18\n" +
 	" \x01(\v2$.atelet.ExternalRestoreConfigurationR\x0eexternalConfig\x12+\n" +
-	"\x05scope\x18\v \x01(\x0e2\x15.atelet.SnapshotScopeR\x05scope\x12E\n" +
-	"\vbase_config\x18\f \x01(\v2$.atelet.ExternalRestoreConfigurationR\n" +
-	"baseConfig\x12A\n" +
+	"\x05scope\x18\v \x01(\x0e2\x15.atelet.SnapshotScopeR\x05scope\x12A\n" +
 	"\x0eegress_gateway\x18\r \x01(\v2\x15.atelet.EgressGatewayH\x00R\regressGateway\x88\x01\x01\x12\x1b\n" +
 	"\tcpu_milli\x18\x0e \x01(\x03R\bcpuMilli\x12!\n" +
 	"\fmemory_bytes\x18\x0f \x01(\x03R\vmemoryBytes\x12<\n" +
@@ -3425,12 +3397,11 @@ const file_atelet_proto_rawDesc = "" +
 	"\x0eCheckpointType\x12\x1f\n" +
 	"\x1bCHECKPOINT_TYPE_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15CHECKPOINT_TYPE_LOCAL\x10\x01\x12\x1c\n" +
-	"\x18CHECKPOINT_TYPE_EXTERNAL\x10\x02*\x84\x01\n" +
+	"\x18CHECKPOINT_TYPE_EXTERNAL\x10\x02*a\n" +
 	"\rSnapshotScope\x12\x1e\n" +
 	"\x1aSNAPSHOT_SCOPE_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13SNAPSHOT_SCOPE_FULL\x10\x01\x12\x17\n" +
-	"\x13SNAPSHOT_SCOPE_DATA\x10\x02\x12!\n" +
-	"\x1dSNAPSHOT_SCOPE_DATA_ON_GOLDEN\x10\x032\xb1\x02\n" +
+	"\x13SNAPSHOT_SCOPE_DATA\x10\x022\xb1\x02\n" +
 	"\fAteomSupport\x12c\n" +
 	"\x14MintActorCertificate\x12#.atelet.MintActorCertificateRequest\x1a$.atelet.MintActorCertificateResponse\"\x00\x12Z\n" +
 	"\x11SetWorkerCapacity\x12 .atelet.SetWorkerCapacityRequest\x1a!.atelet.SetWorkerCapacityResponse\"\x00\x12`\n" +
@@ -3549,32 +3520,31 @@ var file_atelet_proto_depIdxs = []int32{
 	38, // 36: atelet.RestoreRequest.local_config:type_name -> atelet.LocalCheckpointConfiguration
 	40, // 37: atelet.RestoreRequest.external_config:type_name -> atelet.ExternalRestoreConfiguration
 	2,  // 38: atelet.RestoreRequest.scope:type_name -> atelet.SnapshotScope
-	40, // 39: atelet.RestoreRequest.base_config:type_name -> atelet.ExternalRestoreConfiguration
-	15, // 40: atelet.RestoreRequest.egress_gateway:type_name -> atelet.EgressGateway
-	18, // 41: atelet.RestoreRequest.sandbox_assets:type_name -> atelet.SandboxAssets
-	16, // 42: atelet.ArchAssets.FilesEntry.value:type_name -> atelet.AssetFile
-	17, // 43: atelet.SandboxAssets.AssetsEntry.value:type_name -> atelet.ArchAssets
-	10, // 44: atelet.AteomSupport.MintActorCertificate:input_type -> atelet.MintActorCertificateRequest
-	3,  // 45: atelet.AteomSupport.SetWorkerCapacity:input_type -> atelet.SetWorkerCapacityRequest
-	8,  // 46: atelet.AteomSupport.RequestActorSuspend:input_type -> atelet.RequestActorSuspendRequest
-	14, // 47: atelet.AteomHerder.Run:input_type -> atelet.RunRequest
-	41, // 48: atelet.AteomHerder.Checkpoint:input_type -> atelet.CheckpointRequest
-	45, // 49: atelet.AteomHerder.Restore:input_type -> atelet.RestoreRequest
-	43, // 50: atelet.AteomHerder.UploadPausedCheckpoint:input_type -> atelet.UploadPausedCheckpointRequest
-	12, // 51: atelet.AteomHerder.Terminate:input_type -> atelet.TerminateRequest
-	11, // 52: atelet.AteomSupport.MintActorCertificate:output_type -> atelet.MintActorCertificateResponse
-	7,  // 53: atelet.AteomSupport.SetWorkerCapacity:output_type -> atelet.SetWorkerCapacityResponse
-	9,  // 54: atelet.AteomSupport.RequestActorSuspend:output_type -> atelet.RequestActorSuspendResponse
-	37, // 55: atelet.AteomHerder.Run:output_type -> atelet.RunResponse
-	42, // 56: atelet.AteomHerder.Checkpoint:output_type -> atelet.CheckpointResponse
-	46, // 57: atelet.AteomHerder.Restore:output_type -> atelet.RestoreResponse
-	44, // 58: atelet.AteomHerder.UploadPausedCheckpoint:output_type -> atelet.UploadPausedCheckpointResponse
-	13, // 59: atelet.AteomHerder.Terminate:output_type -> atelet.TerminateResponse
-	52, // [52:60] is the sub-list for method output_type
-	44, // [44:52] is the sub-list for method input_type
-	44, // [44:44] is the sub-list for extension type_name
-	44, // [44:44] is the sub-list for extension extendee
-	0,  // [0:44] is the sub-list for field type_name
+	15, // 39: atelet.RestoreRequest.egress_gateway:type_name -> atelet.EgressGateway
+	18, // 40: atelet.RestoreRequest.sandbox_assets:type_name -> atelet.SandboxAssets
+	16, // 41: atelet.ArchAssets.FilesEntry.value:type_name -> atelet.AssetFile
+	17, // 42: atelet.SandboxAssets.AssetsEntry.value:type_name -> atelet.ArchAssets
+	10, // 43: atelet.AteomSupport.MintActorCertificate:input_type -> atelet.MintActorCertificateRequest
+	3,  // 44: atelet.AteomSupport.SetWorkerCapacity:input_type -> atelet.SetWorkerCapacityRequest
+	8,  // 45: atelet.AteomSupport.RequestActorSuspend:input_type -> atelet.RequestActorSuspendRequest
+	14, // 46: atelet.AteomHerder.Run:input_type -> atelet.RunRequest
+	41, // 47: atelet.AteomHerder.Checkpoint:input_type -> atelet.CheckpointRequest
+	45, // 48: atelet.AteomHerder.Restore:input_type -> atelet.RestoreRequest
+	43, // 49: atelet.AteomHerder.UploadPausedCheckpoint:input_type -> atelet.UploadPausedCheckpointRequest
+	12, // 50: atelet.AteomHerder.Terminate:input_type -> atelet.TerminateRequest
+	11, // 51: atelet.AteomSupport.MintActorCertificate:output_type -> atelet.MintActorCertificateResponse
+	7,  // 52: atelet.AteomSupport.SetWorkerCapacity:output_type -> atelet.SetWorkerCapacityResponse
+	9,  // 53: atelet.AteomSupport.RequestActorSuspend:output_type -> atelet.RequestActorSuspendResponse
+	37, // 54: atelet.AteomHerder.Run:output_type -> atelet.RunResponse
+	42, // 55: atelet.AteomHerder.Checkpoint:output_type -> atelet.CheckpointResponse
+	46, // 56: atelet.AteomHerder.Restore:output_type -> atelet.RestoreResponse
+	44, // 57: atelet.AteomHerder.UploadPausedCheckpoint:output_type -> atelet.UploadPausedCheckpointResponse
+	13, // 58: atelet.AteomHerder.Terminate:output_type -> atelet.TerminateResponse
+	51, // [51:59] is the sub-list for method output_type
+	43, // [43:51] is the sub-list for method input_type
+	43, // [43:43] is the sub-list for extension type_name
+	43, // [43:43] is the sub-list for extension extendee
+	0,  // [0:43] is the sub-list for field type_name
 }
 
 func init() { file_atelet_proto_init() }

@@ -91,12 +91,19 @@ atespace access.
 * `header` names the request header to replace.
 * `prefix` is prepended verbatim to the credential — include the separator,
   e.g. `"Bearer "` with the trailing space.
-* `credentialUri` is a source-agnostic reference,
-  `ate-secret://<provider-class>/<provider-name>/<provider-specific-tail>`,
-  interpreted by the provider. For the Kubernetes Secrets provider:
-  `ate-secret://k8s.io/default/<namespace>/<secret>/<key>`. Segments are used
-  literally: a URI with `%`-escapes is refused when the policy is written.
+* `credentialUri` names the credential; see [Credential URIs](#credential-uris).
 
+### Credential URIs
+
+A credential URI has the form `ate-secret://<provider-class>/<path>`: the host
+names the provider that resolves it, and the path is that provider's to
+interpret. A URI the provider refuses denies the request with 403.
+
+* **Kubernetes Secrets** (provider class `k8s.io`) — see
+  [The reference provider](#the-reference-provider).
+* **Google Cloud Secret Manager** (provider class
+  `secretmanager.googleapis.com`) — see its
+  [README](../internal/plugins/gcp-secret-manager/README.md#credential-uris).
 
 ## What the gateway does
 
@@ -208,6 +215,8 @@ wrong provider.
 
 The gateway reads only the URI host, to confirm the URI targets the provider it
 serves. Everything after the host is the provider's to interpret.
+
+`internal/plugins/gcp-secret-manager` is such a provider for Google Cloud Secret Manager.
 
 **Trust model.** The gateway dials the provider over mTLS with its own pod
 identity, `spiffe://cluster.local/ns/ate-system/sa/atenet-egress`, and every

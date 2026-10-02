@@ -60,7 +60,7 @@ func seedAPIActor(t *testing.T, ctx context.Context, persistence store.Interface
 				WorkerPool:      "pool-1",
 				WorkerPod:       "worker-pod-1",
 				WorkerPodUid:    apiWorkerName,
-				WorkerPodIp:     "10.1.2.3",
+				WorkerPodIps:    []string{"10.1.2.3"},
 			},
 		},
 	}

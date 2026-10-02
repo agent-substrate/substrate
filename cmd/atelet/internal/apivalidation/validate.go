@@ -114,18 +114,9 @@ func ValidateCustom_CheckpointRequest(_ context.Context, _ operation.Operation, 
 	return validateConfigMatchesType(fldPath, value.GetType(), value.GetLocalConfig() != nil, value.GetExternalConfig() != nil)
 }
 
-// ValidateCustom_RestoreRequest requires the config that matches type, and
-// base_config exactly when the scope is DATA_ON_GOLDEN.
+// ValidateCustom_RestoreRequest requires the config that matches type.
 func ValidateCustom_RestoreRequest(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateletpb.RestoreRequest) field.ErrorList {
-	errs := validateConfigMatchesType(fldPath, value.GetType(), value.GetLocalConfig() != nil, value.GetExternalConfig() != nil)
-	onGolden := value.GetScope() == ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
-	switch {
-	case onGolden && value.GetBaseConfig() == nil:
-		errs = append(errs, field.Required(fldPath.Child("base_config"), "required when scope is SNAPSHOT_SCOPE_DATA_ON_GOLDEN"))
-	case !onGolden && value.GetBaseConfig() != nil:
-		errs = append(errs, field.Forbidden(fldPath.Child("base_config"), "only valid when scope is SNAPSHOT_SCOPE_DATA_ON_GOLDEN"))
-	}
-	return errs
+	return validateConfigMatchesType(fldPath, value.GetType(), value.GetLocalConfig() != nil, value.GetExternalConfig() != nil)
 }
 
 // validateConfigMatchesType requires the config that matches a checkpoint

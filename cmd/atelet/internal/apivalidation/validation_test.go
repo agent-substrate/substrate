@@ -562,8 +562,8 @@ func TestValidateCheckpointRequest(t *testing.T) {
 		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED }),
 		want: field.ErrorList{field.Required(field.NewPath("scope"), "")},
 	}, {
-		name: "data-on-golden scope is restore-only",
-		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN }),
+		name: "unknown scope",
+		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.Scope = 3 }),
 		want: field.ErrorList{field.Invalid(field.NewPath("scope"), nil, "").WithOrigin("maximum")},
 	}}
 	for _, tt := range tests {
@@ -574,10 +574,7 @@ func TestValidateCheckpointRequest(t *testing.T) {
 }
 
 func TestValidateRestoreRequest(t *testing.T) {
-	const (
-		snapshotURI = "gs://bucket/root/atespaces/team-a/actors/01234567-89ab-cdef-0123-456789abcdef/snapshots/snap-1"
-		goldenURI   = "gs://bucket/root/atespaces/ate-golden/actors/9c2f7b41-6d05-4e83-a1f7-3b8c0d5e2a94/snapshots/golden-1"
-	)
+	const snapshotURI = "gs://bucket/root/atespaces/team-a/actors/01234567-89ab-cdef-0123-456789abcdef/snapshots/snap-1"
 	valid := func(mutate ...func(*ateletpb.RestoreRequest)) *ateletpb.RestoreRequest {
 		r := &ateletpb.RestoreRequest{
 			TargetAteomUid:        "0f9a3b1c-2d4e-5f60-7182-93a4b5c6d7e8",
@@ -604,10 +601,6 @@ func TestValidateRestoreRequest(t *testing.T) {
 			r.LocalConfig = &ateletpb.LocalCheckpointConfiguration{SnapshotName: name}
 		}
 	}
-	onGolden := func(r *ateletpb.RestoreRequest) {
-		r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
-		r.BaseConfig = &ateletpb.ExternalRestoreConfiguration{SnapshotUri: goldenURI}
-	}
 
 	tests := []struct {
 		name string
@@ -622,12 +615,6 @@ func TestValidateRestoreRequest(t *testing.T) {
 	}, {
 		name: "valid data scope",
 		obj:  valid(func(r *ateletpb.RestoreRequest) { r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA }),
-	}, {
-		name: "valid data-on-golden",
-		obj:  valid(onGolden),
-	}, {
-		name: "valid data-on-golden from a local checkpoint",
-		obj:  valid(local("pause-snap-1"), onGolden),
 	}, {
 		name: "valid size and egress",
 		obj: valid(func(r *ateletpb.RestoreRequest) {
@@ -724,26 +711,8 @@ func TestValidateRestoreRequest(t *testing.T) {
 		want: field.ErrorList{field.Required(field.NewPath("scope"), "")},
 	}, {
 		name: "unknown scope",
-		obj:  valid(func(r *ateletpb.RestoreRequest) { r.Scope = ateletpb.SnapshotScope(4) }),
+		obj:  valid(func(r *ateletpb.RestoreRequest) { r.Scope = ateletpb.SnapshotScope(3) }),
 		want: field.ErrorList{field.Invalid(field.NewPath("scope"), nil, "").WithOrigin("maximum")},
-	}, {
-		name: "data-on-golden without base_config",
-		obj:  valid(onGolden, func(r *ateletpb.RestoreRequest) { r.BaseConfig = nil }),
-		want: field.ErrorList{field.Required(field.NewPath("base_config"), "")},
-	}, {
-		name: "data-on-golden with empty base_config",
-		obj:  valid(onGolden, func(r *ateletpb.RestoreRequest) { r.BaseConfig.SnapshotUri = "" }),
-		want: field.ErrorList{field.Required(field.NewPath("base_config", "snapshot_uri"), "")},
-	}, {
-		name: "data-on-golden with invalid base_config",
-		obj:  valid(onGolden, func(r *ateletpb.RestoreRequest) { r.BaseConfig.SnapshotUri = "relative/path" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("base_config", "snapshot_uri"), nil, "")},
-	}, {
-		name: "base_config without data-on-golden",
-		obj: valid(func(r *ateletpb.RestoreRequest) {
-			r.BaseConfig = &ateletpb.ExternalRestoreConfiguration{SnapshotUri: goldenURI}
-		}),
-		want: field.ErrorList{field.Forbidden(field.NewPath("base_config"), "")},
 	}, {
 		name: "negative cpu_milli",
 		obj:  valid(func(r *ateletpb.RestoreRequest) { r.CpuMilli = -1 }),
@@ -874,9 +843,9 @@ func TestValidateUploadPausedCheckpointRequest(t *testing.T) {
 		}),
 		want: field.ErrorList{field.Required(field.NewPath("desired_scope"), "")},
 	}, {
-		name: "data-on-golden desired_scope is restore-only",
+		name: "unknown desired_scope",
 		obj: valid(func(r *ateletpb.UploadPausedCheckpointRequest) {
-			r.DesiredScope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
+			r.DesiredScope = 3
 		}),
 		want: field.ErrorList{field.Invalid(field.NewPath("desired_scope"), nil, "").WithOrigin("maximum")},
 	}}
@@ -1166,7 +1135,7 @@ func TestValidateVolume(t *testing.T) {
 		return &ateletpb.Volume{Name: "data", SystemInfo: &ateletpb.SystemInfoVolume{DataSources: ds}}
 	}
 	bundle := func(name, path string) *ateletpb.SystemInfoDataSource {
-		return &ateletpb.SystemInfoDataSource{TrustBundle: &ateletpb.TrustBundleDataSource{Name: name, Path: path}}
+		return &ateletpb.SystemInfoDataSource{TrustBundle: &ateletpb.TrustBundleDataSource{Names: []string{name}, Path: path}}
 	}
 	item := func(f ateletpb.ActorMetadataField, path string) *ateletpb.ActorMetadataItem {
 		return &ateletpb.ActorMetadataItem{Field: f, Path: path}
@@ -1273,7 +1242,7 @@ func TestValidateVolume(t *testing.T) {
 			name: "system info: data source with both set",
 			obj: systemInfo(&ateletpb.SystemInfoDataSource{
 				ActorMetadata: &ateletpb.ActorMetadataDataSource{Items: []*ateletpb.ActorMetadataItem{item(fieldName, "name")}},
-				TrustBundle:   &ateletpb.TrustBundleDataSource{Name: "podcert", Path: "p"},
+				TrustBundle:   &ateletpb.TrustBundleDataSource{Names: []string{"podcert"}, Path: "p"},
 			}),
 			want: field.ErrorList{field.Invalid(dsPath.Index(0), nil, "").WithOrigin("union")},
 		}, {
@@ -1312,13 +1281,21 @@ func TestValidateVolume(t *testing.T) {
 			obj:  systemInfo(bundle("podcert", strings.Repeat("p", 256))),
 			want: field.ErrorList{field.TooLong(bundlePath.Child("path"), nil, 255).WithOrigin("maxLength")},
 		}, {
-			name: "trust bundle: missing name",
+			name: "trust bundle: no names",
+			obj:  systemInfo(&ateletpb.SystemInfoDataSource{TrustBundle: &ateletpb.TrustBundleDataSource{Path: "trust/bundle.pem"}}),
+			want: field.ErrorList{field.Required(bundlePath.Child("names"), "")},
+		}, {
+			name: "trust bundle: too many names",
+			obj:  systemInfo(&ateletpb.SystemInfoDataSource{TrustBundle: &ateletpb.TrustBundleDataSource{Names: []string{"a", "b"}, Path: "trust/bundle.pem"}}),
+			want: field.ErrorList{field.TooMany(bundlePath.Child("names"), 2, 1).WithOrigin("maxItems")},
+		}, {
+			name: "trust bundle: empty name",
 			obj:  systemInfo(bundle("", "trust/bundle.pem")),
-			want: field.ErrorList{field.Required(bundlePath.Child("name"), "")},
+			want: field.ErrorList{field.TooShort(bundlePath.Child("names").Index(0), "", 1).WithOrigin("minLength")},
 		}, {
 			name: "trust bundle: name too long",
 			obj:  systemInfo(bundle(strings.Repeat("n", 254), "trust/bundle.pem")),
-			want: field.ErrorList{field.TooLong(bundlePath.Child("name"), nil, 253).WithOrigin("maxLength")},
+			want: field.ErrorList{field.TooLong(bundlePath.Child("names").Index(0), nil, 253).WithOrigin("maxLength")},
 		},
 
 		// ActorMetadataDataSource.

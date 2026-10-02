@@ -2812,7 +2812,7 @@ func TestResumeActor(t *testing.T) {
 				WorkerPool:      "pool1",
 				WorkerPod:       "worker-1",
 				WorkerPodUid:    podUID,
-				WorkerPodIp:     "127.0.0.1",
+				WorkerPodIps:    []string{"127.0.0.1"},
 				NodeName:        "node1",
 			},
 		},
@@ -2843,7 +2843,7 @@ func TestResumeActor(t *testing.T) {
 		WorkerPool:      "pool1",
 		WorkerPod:       "worker-1",
 		WorkerPodUid:    podUID,
-		Ip:              "127.0.0.1",
+		Ips:             []string{"127.0.0.1"},
 		NodeName:        "node1",
 		SandboxClass:    "gvisor",
 		Labels:          map[string]string{poolLabelKey: ns},
@@ -2917,11 +2917,10 @@ func TestResumeActorPassesLiteralEnv(t *testing.T) {
 	}
 }
 
-// createGoldenDataTemplate creates "tmpl1" like createTemplate, but with
-// onCommit DATA and onResume.fromData GOLDEN, so a resumed-after-suspend
-// actor takes the DATA_ON_GOLDEN path: its data snapshot combined with the
-// template's golden.
-func createGoldenDataTemplate(t *testing.T, tc *testContext, ns string) *ateapipb.ActorTemplate {
+// createDataCommitTemplate creates "tmpl1" like createTemplate, but with
+// onCommit DATA, so a resumed-after-suspend actor restores from a DATA
+// snapshot while the template also has a golden snapshot.
+func createDataCommitTemplate(t *testing.T, tc *testContext, ns string) *ateapipb.ActorTemplate {
 	t.Helper()
 	ensureDefaultGvisorSandboxConfig(t, tc)
 	createWorkerPool(t, tc, ns, "pool1", map[string]string{poolLabelKey: ns})
@@ -2936,7 +2935,6 @@ func createGoldenDataTemplate(t *testing.T, tc *testContext, ns string) *ateapip
 				StorageLocation: testStorageLocation,
 				OnPause:         ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 				OnCommit:        ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
-				OnResume:        &ateapipb.OnResumeConfig{FromData: ateapipb.ResumeSource_RESUME_SOURCE_GOLDEN},
 			},
 			SandboxConfig: &ateapipb.SandboxConfig{
 				SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
@@ -2988,15 +2986,15 @@ func createGoldenDataTemplate(t *testing.T, tc *testContext, ns string) *ateapip
 	return updated
 }
 
-// TestResumeActor_GoldenDataResumeSetsBaseConfig drives the DATA_ON_GOLDEN
-// resume end to end and pins the wire request: the actor's data snapshot in
-// config and the template's golden snapshot in base_config.
-func TestResumeActor_GoldenDataResumeSetsBaseConfig(t *testing.T) {
-	ns := namespaceForTest("ns-resume-golden-data")
+// TestResumeActor_DataSnapshotIgnoresGolden drives a resume from a DATA
+// snapshot end to end and pins the wire request: a plain DATA restore of the
+// actor's own snapshot, even though the template has a golden snapshot.
+func TestResumeActor_DataSnapshotIgnoresGolden(t *testing.T) {
+	ns := namespaceForTest("ns-resume-data")
 	tc := setupTest(t, ns)
 	defer tc.cleanup()
 
-	createGoldenDataTemplate(t, tc, ns)
+	createDataCommitTemplate(t, tc, ns)
 	workerName := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
 
 	const name = "id1"
@@ -3023,8 +3021,7 @@ func TestResumeActor_GoldenDataResumeSetsBaseConfig(t *testing.T) {
 		t.Fatal("SuspendActor recorded no external snapshot")
 	}
 
-	// Second resume: the actor's DATA snapshot rides on the template's
-	// golden.
+	// Second resume restores the actor's DATA snapshot on its own.
 	if _, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{Actor: actorRef}); err != nil {
 		t.Fatalf("ResumeActor (second) failed: %v", err)
 	}
@@ -3032,15 +3029,11 @@ func TestResumeActor_GoldenDataResumeSetsBaseConfig(t *testing.T) {
 	if restoreReq == nil {
 		t.Fatal("second resume sent no Restore request to atelet")
 	}
-	if got := restoreReq.GetScope(); got != ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN {
-		t.Fatalf("restore scope = %v, want SNAPSHOT_SCOPE_DATA_ON_GOLDEN", got)
+	if got := restoreReq.GetScope(); got != ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA {
+		t.Fatalf("restore scope = %v, want SNAPSHOT_SCOPE_DATA", got)
 	}
 	if got := restoreReq.GetExternalConfig().GetSnapshotUri(); got != actorSnapshotURI {
 		t.Errorf("restore config snapshot uri = %q, want the actor's data snapshot %q", got, actorSnapshotURI)
-	}
-	golden := goldenSnapshotURI(t)
-	if got := restoreReq.GetBaseConfig().GetSnapshotUri(); got != golden {
-		t.Errorf("restore base_config uri = %q, want the template's golden %q", got, golden)
 	}
 }
 
@@ -3723,9 +3716,6 @@ func TestResumeActor_RepointTemplateBeforeResume(t *testing.T) {
 			if got := restoreReq.GetExternalConfig().GetSnapshotUri(); got != cloneActor.GetStatus().GetExternalSnapshot().GetSnapshotUri() {
 				t.Errorf("restore request to atelet had snapshot uri = %q, want the clone's borrowed %q", got, cloneActor.GetStatus().GetExternalSnapshot().GetSnapshotUri())
 			}
-			if restoreReq.GetBaseConfig() != nil {
-				t.Errorf("restore request to atelet had base_config = %v, want unset", restoreReq.GetBaseConfig())
-			}
 		})
 	}
 }
@@ -4141,7 +4131,7 @@ func TestResumeActor_CrashesIfAssignedWorkerIsDraining(t *testing.T) {
 			WorkerPool:      "pool1",
 			WorkerPod:       "worker-a",
 			WorkerPodUid:    podA,
-			WorkerPodIp:     "127.0.0.1",
+			WorkerPodIps:    []string{"127.0.0.1"},
 		}
 		return nil
 	}); err != nil {
@@ -4393,7 +4383,7 @@ func TestResumeActor_DanglingWorker(t *testing.T) {
 			WorkerPool:      "pool1",
 			WorkerPod:       "worker-a",
 			WorkerPodUid:    podA,
-			WorkerPodIp:     "127.0.0.1",
+			WorkerPodIps:    []string{"127.0.0.1"},
 		}
 		return nil
 	}); err != nil {
@@ -5033,8 +5023,9 @@ func TestMintActorJWT_Success(t *testing.T) {
 			Atespace: createResp.GetMetadata().GetAtespace(),
 			Name:     createResp.GetMetadata().GetName(),
 		},
-		ActorUid: createResp.GetMetadata().GetUid(),
-		Audience: []string{"foo"},
+		ActorUid:          createResp.GetMetadata().GetUid(),
+		Audience:          []string{"foo"},
+		ExpirationSeconds: 1800,
 	})
 	if err != nil {
 		t.Fatalf("Error while calling MintActorJWT: %v", err)
@@ -5056,8 +5047,21 @@ func TestMintActorJWT_Success(t *testing.T) {
 	if claims.Issuer != testActorJWTIssuer {
 		t.Errorf("iss = %q, want %q", claims.Issuer, testActorJWTIssuer)
 	}
-	if want := "atespaces:" + testAtespace + ":actors:id1"; claims.Subject != want {
+	if want := "actor/" + testAtespace + "/id1"; claims.Subject != want {
 		t.Errorf("sub = %q, want %q", claims.Subject, want)
+	}
+	assertActorJWTLifetime(t, mintResp, claims, 30*time.Minute)
+}
+
+// assertActorJWTLifetime checks that expires_at matches the exp claim and that
+// the token is valid for want after it was issued.
+func assertActorJWTLifetime(t *testing.T, resp *ateapipb.MintActorJWTResponse, claims actoridjwt.WireClaims, want time.Duration) {
+	t.Helper()
+	if got, exp := resp.GetExpiresAt().AsTime(), time.Unix(int64(claims.Expiration), 0); !got.Equal(exp) {
+		t.Errorf("expires_at = %v, want the exp claim %v", got, exp)
+	}
+	if got := time.Duration(claims.Expiration-claims.IssuedAt) * time.Second; got != want {
+		t.Errorf("exp - iat = %v, want %v", got, want)
 	}
 }
 

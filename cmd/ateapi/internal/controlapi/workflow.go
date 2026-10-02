@@ -188,8 +188,10 @@ type workerWorkflowStore interface {
 	UpdateWorker(ctx context.Context, name string, precondition store.Precondition, mutate func(toUpdate *ateapipb.Worker) error) (*ateapipb.Worker, error)
 	DeleteWorker(ctx context.Context, name string, precondition store.DeletePreconditions) (*ateapipb.Worker, error)
 	ListWorkerAssignments(ctx context.Context, workerName string, opts store.ListOptions) (store.ListResponse[*ateapipb.ActorAssignment], error)
+	ReleaseActorFromWorker(ctx context.Context, workerName string, actorUID string) (*ateapipb.Worker, error)
 	GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error)
 	UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(toUpdate *ateapipb.Actor) error) (*ateapipb.Actor, error)
+	AcquireLease(ctx context.Context, key string) (*store.Lease, error)
 }
 
 // leaseHolder takes the distributed leases that serialize the operations on one
@@ -213,8 +215,13 @@ func acquireLease(ctx context.Context, holder leaseHolder, key, subject string) 
 	return lease.Context(), lease, nil
 }
 
+// actorLeaseKey names the lease that serializes the operations on an Actor.
+func actorLeaseKey(actorRef resources.ActorRef) string {
+	return "lease:actor:" + actorRef.Atespace + ":" + actorRef.Name
+}
+
 func (w *ActorWorkflow) acquireActorLease(ctx context.Context, actorRef resources.ActorRef) (context.Context, *store.Lease, error) {
-	return acquireLease(ctx, w.store, "lease:actor:"+actorRef.Atespace+":"+actorRef.Name, "actor")
+	return acquireLease(ctx, w.store, actorLeaseKey(actorRef), "actor")
 }
 
 func acquireTagLease(ctx context.Context, holder leaseHolder, tagRef resources.TagRef) (context.Context, *store.Lease, error) {

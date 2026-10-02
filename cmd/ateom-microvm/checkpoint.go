@@ -23,8 +23,10 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/resources"
 
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/ch"
@@ -33,8 +35,6 @@ import (
 	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"golang.org/x/sync/errgroup"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // CheckpointWorkload suspends the actor and writes a portable snapshot.
@@ -65,7 +65,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		return nil, err
 	}
 	if !s.locks.Lock(ctx, req.GetActorUid()) {
-		return nil, status.Error(codes.Canceled, "gave up waiting for the actor's lock")
+		return nil, fmt.Errorf("gave up waiting for the actor's lock: %w", ctx.Err())
 	}
 	defer s.locks.Unlock(req.GetActorUid())
 
@@ -95,7 +95,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 			})
 	}()
 
-	if err := s.deactivateActorNetworking(ctx, attribution); err != nil {
+	if err := s.tunnel.Deactivate(ctx, attribution); err != nil {
 		return nil, err
 	}
 
@@ -110,8 +110,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	//
 	// Durable-dir volumes are host-backed, so they are captured the same way
 	// under either scope — and are the ONLY thing a Data-scope snapshot
-	// captures. DATA_ON_GOLDEN is restore-only (a DataOnGolden commit arrives
-	// here as plain DATA) and lands in the default rejection.
+	// captures.
 	durable := hasDurableVolumes(req.GetSpec().GetContainers())
 	csi := hasCsiVolumes(req.GetSpec().GetContainers())
 	switch scope {
@@ -119,11 +118,11 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
 		// TODO: Revisit handling for CSI volumes since snapshots are currently quietly ignored.
 		if !durable && !csi {
-			return nil, status.Error(codes.FailedPrecondition,
+			return nil, apierror.FailedPrecondition(
 				"no durable-dir or CSI volumes found for a Data-scope snapshot")
 		}
 	default:
-		return nil, status.Errorf(codes.InvalidArgument, "unsupported snapshot scope: %v", scope)
+		return nil, apierror.InvalidArgument("unsupported snapshot scope: %v", scope)
 	}
 
 	// The actor's CH was booted by RunWorkload or relaunched by RestoreWorkload;
@@ -164,8 +163,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	//   - CH snapshot (Full only): the guest memory + VM state. A Data snapshot
 	//     deliberately captures no VM state — no memory image, and no base-id,
 	//     since nothing will reattach to the frozen virtio-fs lower: at restore
-	//     the actor cold-boots from the OCI image (or, under an OnGolden data
-	//     resume policy, is combined with the golden snapshot's guest state).
+	//     the actor cold-boots from the OCI image.
 	//   - Durable-dir tar (any scope, when declared): host-backed, so pausing
 	//     the write-through share makes the tar coherent.
 	//   - Rootfs upper tar (Full only): host-backed like the durable volumes —
@@ -231,7 +229,11 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		// rootfs_upper), and the tar durations scale with the actor's data.
 		slog.Duration("durable_dir", dDurable), slog.Duration("rootfs_upper", dUpper),
 		slog.Duration("teardown", dTeardown))
-	return &ateompb.CheckpointWorkloadResponse{SnapshotFiles: snapshotFiles}, nil
+	resp := &ateompb.CheckpointWorkloadResponse{SnapshotFiles: snapshotFiles}
+	if slices.Contains(snapshotFiles, durableTarFile) {
+		resp.DataSnapshotFiles = []string{durableTarFile}
+	}
+	return resp, nil
 }
 
 // snapshotVMState captures the paused guest into checkpointDir: the CH snapshot
@@ -385,7 +387,7 @@ func (s *AteomService) TerminateWorkload(ctx context.Context, req *ateompb.Termi
 		return nil, err
 	}
 	if !s.locks.Lock(ctx, req.GetActorUid()) {
-		return nil, status.Error(codes.Canceled, "gave up waiting for the actor's lock")
+		return nil, fmt.Errorf("gave up waiting for the actor's lock: %w", ctx.Err())
 	}
 	defer s.locks.Unlock(req.GetActorUid())
 
@@ -412,7 +414,7 @@ func (s *AteomService) stopActorVM(ctx context.Context, actorUID string, actorDi
 
 func (s *AteomService) terminateWorkload(ctx context.Context, actor resources.ActorAttribution, actorDirs *ateompb.ActorDirs) error {
 	var errs []error
-	if err := s.deactivateActorNetworking(ctx, actor); err != nil {
+	if err := s.tunnel.Deactivate(ctx, actor); err != nil {
 		errs = append(errs, fmt.Errorf("while deactivating actor networking: %w", err))
 	}
 

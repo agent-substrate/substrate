@@ -667,8 +667,8 @@ func validSystemInfoVolumeSource(mutate ...func(*ateapipb.SystemInfoVolumeSource
 			},
 		}, {
 			TrustBundle: &ateapipb.TrustBundleDataSource{
-				Name: "egress-mitm.ate.dev",
-				Path: "trust-bundle.pem",
+				Names: []string{"egress-mitm.ate.dev"},
+				Path:  "trust-bundle.pem",
 			},
 		}},
 	}
@@ -698,7 +698,7 @@ func TestValidateSystemInfoVolumeSource(t *testing.T) {
 		obj: valid(func(s *ateapipb.SystemInfoVolumeSource) {
 			for len(s.DataSources) <= 8 {
 				s.DataSources = append(s.DataSources, &ateapipb.SystemInfoDataSource{
-					TrustBundle: &ateapipb.TrustBundleDataSource{Name: "egress-mitm.ate.dev", Path: "tb.pem"},
+					TrustBundle: &ateapipb.TrustBundleDataSource{Names: []string{"egress-mitm.ate.dev"}, Path: "tb.pem"},
 				})
 			}
 		}),
@@ -713,8 +713,8 @@ func TestValidateSystemInfoVolumeSource(t *testing.T) {
 		name: "both union members set",
 		obj: valid(func(s *ateapipb.SystemInfoVolumeSource) {
 			s.DataSources[0].TrustBundle = &ateapipb.TrustBundleDataSource{
-				Name: "egress-mitm.ate.dev",
-				Path: "tb2.pem",
+				Names: []string{"egress-mitm.ate.dev"},
+				Path:  "tb2.pem",
 			}
 		}),
 		want: field.ErrorList{field.Invalid(dsPath.Index(0), nil, "").WithOrigin("union")},
@@ -810,8 +810,8 @@ func TestValidateSystemInfoVolumeSource(t *testing.T) {
 func TestValidateTrustBundleDataSource(t *testing.T) {
 	valid := func(mutate ...func(*ateapipb.TrustBundleDataSource)) *ateapipb.TrustBundleDataSource {
 		tb := &ateapipb.TrustBundleDataSource{
-			Name: "egress-mitm.ate.dev",
-			Path: "trust-bundle.pem",
+			Names: []string{"egress-mitm.ate.dev"},
+			Path:  "trust-bundle.pem",
 		}
 		for _, m := range mutate {
 			m(tb)
@@ -827,13 +827,23 @@ func TestValidateTrustBundleDataSource(t *testing.T) {
 		name: "valid",
 		obj:  valid(),
 	}, {
+		name: "no names",
+		obj:  valid(func(tb *ateapipb.TrustBundleDataSource) { tb.Names = nil }),
+		want: field.ErrorList{field.Required(field.NewPath("names"), "")},
+	}, {
+		name: "too many names",
+		obj: valid(func(tb *ateapipb.TrustBundleDataSource) {
+			tb.Names = []string{"a", "b"}
+		}),
+		want: field.ErrorList{field.TooMany(field.NewPath("names"), 2, 1).WithOrigin("maxItems")},
+	}, {
 		name: "empty name",
-		obj:  valid(func(tb *ateapipb.TrustBundleDataSource) { tb.Name = "" }),
-		want: field.ErrorList{field.Required(field.NewPath("name"), "")},
+		obj:  valid(func(tb *ateapipb.TrustBundleDataSource) { tb.Names = []string{""} }),
+		want: field.ErrorList{field.TooShort(field.NewPath("names").Index(0), "", 1).WithOrigin("minLength")},
 	}, {
 		name: "name too long",
-		obj:  valid(func(tb *ateapipb.TrustBundleDataSource) { tb.Name = strings.Repeat("n", 254) }),
-		want: field.ErrorList{field.TooLong(field.NewPath("name"), nil, 253).WithOrigin("maxLength")},
+		obj:  valid(func(tb *ateapipb.TrustBundleDataSource) { tb.Names = []string{strings.Repeat("n", 254)} }),
+		want: field.ErrorList{field.TooLong(field.NewPath("names").Index(0), nil, 253).WithOrigin("maxLength")},
 	}, {
 		name: "empty path",
 		obj:  valid(func(tb *ateapipb.TrustBundleDataSource) { tb.Path = "" }),

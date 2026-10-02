@@ -368,38 +368,6 @@ func TestValidateActorTemplate(t *testing.T) {
 		},
 		want: field.ErrorList{field.Invalid(field.NewPath("snapshot_config", "on_pause"), nil, "").WithOrigin("minimum")},
 	}, {
-		name:   "missing on_resume",
-		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.SnapshotConfig.OnResume = nil },
-		want:   field.ErrorList{field.Required(field.NewPath("snapshot_config", "on_resume"), "")},
-	}, {
-		name: "unspecified on_resume from_data",
-		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.SnapshotConfig.OnResume = &ateapipb.OnResumeConfig{}
-		},
-		want: field.ErrorList{field.Required(field.NewPath("snapshot_config", "on_resume", "from_data"), "")},
-	}, {
-		name: "valid on_resume",
-		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.SnapshotConfig.OnResume = &ateapipb.OnResumeConfig{FromData: ateapipb.ResumeSource_RESUME_SOURCE_COLD_BOOT}
-		},
-	}, {
-		name: "valid on_resume with golden",
-		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.SnapshotConfig.OnResume = &ateapipb.OnResumeConfig{FromData: ateapipb.ResumeSource_RESUME_SOURCE_GOLDEN}
-		},
-	}, {
-		name: "negative on_resume from_data",
-		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.SnapshotConfig.OnResume = &ateapipb.OnResumeConfig{FromData: ateapipb.ResumeSource(-1)}
-		},
-		want: field.ErrorList{field.Invalid(field.NewPath("snapshot_config", "on_resume", "from_data"), nil, "").WithOrigin("minimum")},
-	}, {
-		name: "on_resume from_data outside the enum",
-		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.SnapshotConfig.OnResume = &ateapipb.OnResumeConfig{FromData: ateapipb.ResumeSource(99)}
-		},
-		want: field.ErrorList{field.Invalid(field.NewPath("snapshot_config", "on_resume", "from_data"), nil, "").WithOrigin("maximum")},
-	}, {
 		name:   "no containers",
 		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.Containers = nil },
 		want:   field.ErrorList{field.Required(field.NewPath("containers"), "")},
@@ -888,7 +856,6 @@ func validActorTemplate(mutations ...func(*ateapipb.ActorTemplate)) *ateapipb.Ac
 			StorageLocation: "gs://my-bucket/snapshots",
 			OnPause:         ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 			OnCommit:        ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
-			OnResume:        &ateapipb.OnResumeConfig{FromData: ateapipb.ResumeSource_RESUME_SOURCE_COLD_BOOT},
 		},
 		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR, ConfigName: "gvisor-default"},
 	}

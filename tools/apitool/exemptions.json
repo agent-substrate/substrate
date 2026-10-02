@@ -326,11 +326,6 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.SnapshotConfig",
-    "message": "message has no doc comment"
-  },
-  {
-    "rule": "documented",
     "subject": "ateapi.SnapshotContentScope",
     "message": "enum has no doc comment"
   },
@@ -371,11 +366,6 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.TrustBundleDataSource.name",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
     "subject": "ateapi.UpdateWorkerRequest",
     "message": "message has no doc comment"
   },
@@ -392,11 +382,6 @@
   {
     "rule": "documented",
     "subject": "ateapi.Volume.system_info",
-    "message": "field has no doc comment"
-  },
-  {
-    "rule": "documented",
-    "subject": "ateapi.Worker.ip",
     "message": "field has no doc comment"
   },
   {

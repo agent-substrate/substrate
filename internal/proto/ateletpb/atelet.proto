@@ -429,12 +429,7 @@ message ActorMetadataDataSource {
   repeated ActorMetadataItem items = 1;
 }
 
-// TrustBundleDataSource projects the trust anchors of a named trust bundle
-// to a file at the given path, relative to the root of the enclosing
-// system-info volume. atelet resolves the name against its supported-bundle
-// allowlist and reads the backing ClusterTrustBundle through its informer at
-// write time, sanitizing kubelet-style; an unsupported name or missing
-// bundle fails the actor start.
+// TrustBundleDataSource corresponds to TrustBundleDataSource in ateapi.proto
 message TrustBundleDataSource {
   // path must be a clean relative Unix path; the rule is shared with the
   // control plane through internal/resources.
@@ -444,11 +439,15 @@ message TrustBundleDataSource {
   // +k8s:maxLength=255
   // +k8s:customValidation # clean relative path
   string path = 1;
-
   // +k8s:required
-  // +k8s:minLength=1
-  // +k8s:maxLength=253 # matches the template's bundle-name bound
-  string name = 2;
+  // +k8s:minItems=1
+  // +k8s:maxItems=1 # matches the template's names bound
+  // +k8s:listType=atomic
+  // +k8s:eachVal=+k8s:minLength=1
+  // +k8s:eachVal=+k8s:maxLength=253 # matches the template's bundle-name bound
+  repeated string names = 3;
+  reserved 2;
+  reserved "name";
 }
 
 // SystemInfoDataSource selects exactly one projection to place in the
@@ -696,13 +695,6 @@ enum SnapshotScope {
   // (currently DurableDir-typed volumes). Memory and the rest of rootfs are
   // excluded.
   SNAPSHOT_SCOPE_DATA = 2;
-  // Restore-only: restore the ActorTemplate's golden snapshot's guest state
-  // (memory + full filesystem delta) combined with the snapshot's durable
-  // data. Never valid for Checkpoint — snapshots only ever capture FULL or
-  // DATA; whether a snapshot restores from its own content or on the golden
-  // is decided by the control plane from the template's onResume
-  // configuration.
-  SNAPSHOT_SCOPE_DATA_ON_GOLDEN = 3;
   // Keep this in sync with the maximums on fields of this type.
 }
 
@@ -775,7 +767,7 @@ message CheckpointRequest {
   //
   // +k8s:required
   // +k8s:minimum=1
-  // +k8s:maximum=2 # FULL or DATA; DATA_ON_GOLDEN is restore-only. Keep this in sync with the SnapshotScope enum
+  // +k8s:maximum=2 # keep this in sync with the SnapshotScope enum
   SnapshotScope scope = 11;
 }
 
@@ -825,19 +817,19 @@ message UploadPausedCheckpointRequest {
   // Scope the uploaded snapshot must have (the commit scope; FULL or DATA).
   // The scope the pause checkpoint captured is not sent: atelet reads it from
   // the local snapshot's own manifest, which is authoritative. When they
-  // differ, atelet converts where possible (micro-VM FULL capture to a DATA
-  // upload by selecting the durable-dir tar) and rejects otherwise.
+  // differ, atelet converts where possible (a FULL capture to a DATA upload
+  // of the data-scope files ateom reported) and rejects otherwise.
   //
   // +k8s:required
   // +k8s:minimum=1
-  // +k8s:maximum=2 # FULL or DATA; DATA_ON_GOLDEN is restore-only. Keep this in sync with the SnapshotScope enum
+  // +k8s:maximum=2 # keep this in sync with the SnapshotScope enum
   SnapshotScope desired_scope = 8;
 }
 
 message UploadPausedCheckpointResponse {
 }
 
-// +k8s:customValidation # the set config matches type; base_config only with DATA_ON_GOLDEN
+// +k8s:customValidation # the set config matches type
 message RestoreRequest {
   // +k8s:required
   // +k8s:format=k8s-short-name
@@ -888,18 +880,8 @@ message RestoreRequest {
   //
   // +k8s:required
   // +k8s:minimum=1
-  // +k8s:maximum=3 # keep this in sync with the SnapshotScope enum
+  // +k8s:maximum=2 # keep this in sync with the SnapshotScope enum
   SnapshotScope scope = 11;
-
-  // The base guest state (memory + rootfs delta) combined with the
-  // checkpoint's durable data when scope is SNAPSHOT_SCOPE_DATA_ON_GOLDEN,
-  // and only then. Separate from local_config and external_config: the
-  // actor's snapshot may be local (a pause checkpoint) while the base is
-  // always external.
-  //
-  // +k8s:optional
-  ExternalRestoreConfiguration base_config = 12;
-
   // When absent the actor has no egress: its TCP is captured and refused.
   //
   // +k8s:optional
