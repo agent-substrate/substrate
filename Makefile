@@ -33,6 +33,12 @@ KO_FLAGS ?=
 # cmd/ate-setup/internal/ko passes the same flag.
 KO_NAMING := --base-import-paths
 
+# Labels every image gets, kept out of KO_FLAGS for the same reason.
+# org.opencontainers.image.source links a package published to ghcr.io to this
+# repository, which lets the repository's GITHUB_TOKEN write to it.
+IMAGE_SOURCE := https://github.com/agent-substrate/substrate
+KO_LABELS    := --image-label=org.opencontainers.image.source=$(IMAGE_SOURCE)
+
 # Image tags, kept out of KO_FLAGS for the same reason. Empty by default, so ko
 # tags `latest`; build-release-images sets it to $(VERSION).
 KO_TAGS :=
@@ -94,7 +100,7 @@ build: build-images build-atectl build-ate-setup
 
 .PHONY: build-images
 build-images:
-	$(KO) build $(KO_NAMING) $(KO_TAGS) $(KO_FLAGS) \
+	$(KO) build $(KO_NAMING) $(KO_LABELS) $(KO_TAGS) $(KO_FLAGS) \
 	    --ldflags="$(LDFLAGS)" \
 	    $(IMAGES)
 
@@ -121,7 +127,7 @@ build-junittool:
 
 .PHONY: build-demos
 build-demos:
-	$(KO) build $(KO_NAMING) $(KO_TAGS) $(KO_FLAGS) \
+	$(KO) build $(KO_NAMING) $(KO_LABELS) $(KO_TAGS) $(KO_FLAGS) \
 	    --ldflags="$(LDFLAGS)" \
 	    $(DEMOS)
 
@@ -129,6 +135,7 @@ build-demos:
 build-envoy-dataplane:
 	docker buildx build --push $(DOCKER_BUILD_FLAGS) \
 	    --platform=$(DOCKERFILE_PLATFORMS) \
+	    --label=org.opencontainers.image.source=$(IMAGE_SOURCE) \
 	    -t $(KO_DOCKER_REPO)/envoy-dataplane:$(VERSION) \
 	    cmd/dataplane/envoy
 
@@ -139,6 +146,13 @@ build-envoy-dataplane:
 .PHONY: build-release-images
 build-release-images: KO_TAGS = --tags=$(VERSION)
 build-release-images: build-images build-demos build-envoy-dataplane
+
+# Prints the name of every image build-release-images publishes, one per line.
+# hack/release/verify-images.sh checks a published release against this list.
+.PHONY: print-release-images
+print-release-images:
+	@for pkg in $(IMAGES) $(DEMOS); do basename "$$pkg"; done
+	@echo envoy-dataplane
 
 .PHONY: test
 test:
