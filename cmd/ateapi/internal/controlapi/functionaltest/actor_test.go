@@ -5363,20 +5363,21 @@ func TestRevertActor_FromCrashed(t *testing.T) {
 	}
 }
 
-// TestRevertActor_TerminateFailureCrashes verifies that an atelet error while
-// terminating the discarded execution crashes the actor, and that a later
-// successful revert clears the recorded crash.
-func TestRevertActor_TerminateFailureCrashes(t *testing.T) {
-	ns := namespaceForTest("ns-revert-terminate-crash")
+// TestRevertActor_TerminateFailureLeavesActorReverting verifies that an atelet
+// error while terminating the discarded execution leaves the actor REVERTING on
+// its worker, and that the next revert terminates it and finishes.
+func TestRevertActor_TerminateFailureLeavesActorReverting(t *testing.T) {
+	ns := namespaceForTest("ns-revert-terminate-fail")
 	tc := setupTest(t, ns)
 	defer tc.cleanup()
 
 	createTemplate(t, tc, ns)
-	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+	podUID := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
 
 	ctx := context.Background()
 	const name = "id1"
-	actorRef := &ateapipb.ObjectRef{Atespace: testAtespace, Name: name}
+	ref := &ateapipb.ObjectRef{Atespace: testAtespace, Name: name}
+	actorRef := resources.ActorRef{Atespace: testAtespace, Name: name}
 
 	if _, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
 		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
@@ -5384,27 +5385,116 @@ func TestRevertActor_TerminateFailureCrashes(t *testing.T) {
 	}}); err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
-	if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: actorRef}); err != nil {
+	if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: ref}); err != nil {
 		t.Fatalf("ResumeActor failed: %v", err)
 	}
 
 	tc.fakeAtelet.Lock.Lock()
-	tc.fakeAtelet.FailTerminate = status.Error(codes.Internal, "injected terminate failure at /var/lib/node-path")
+	tc.fakeAtelet.FailTerminate = status.Error(codes.Internal, "injected terminate failure")
 	tc.fakeAtelet.Lock.Unlock()
-	if _, err := tc.client.RevertActor(ctx, &ateapipb.RevertActorRequest{Actor: actorRef}); err == nil {
-		t.Fatal("RevertActor succeeded despite failing terminate")
+	_, err := tc.client.RevertActor(ctx, &ateapipb.RevertActorRequest{Actor: ref})
+	if got := status.Code(err); got != codes.Internal {
+		t.Fatalf("RevertActor status code = %v, want %v (err: %v)", got, codes.Internal, err)
 	}
-	assertActorCrashStatus(t, tc, name, "revert failed: atelet Terminate: workflow failed at step CallAteletTerminate: while terminating actor on atelet: rpc error: code = Internal desc = injected terminate failure at /var/lib/node-path")
+
+	actor, err := tc.persistence.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("failed to get actor from store: %v", err)
+	}
+	if got := actor.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_REVERTING {
+		t.Errorf("state after failed terminate = %v, want REVERTING", got)
+	}
+	if crash := actor.GetStatus().GetCrash(); crash != nil {
+		t.Errorf("crash recorded after failed terminate: %v", crash)
+	}
+	if got := actor.GetStatus().GetWorkerAssignment().GetWorker().GetName(); got != podUID {
+		t.Errorf("assigned worker = %q, want %q kept for the retry", got, podUID)
+	}
 
 	tc.fakeAtelet.Lock.Lock()
 	tc.fakeAtelet.FailTerminate = nil
+	tc.fakeAtelet.TerminateCalled = false
 	tc.fakeAtelet.Lock.Unlock()
-	reverted, err := tc.client.RevertActor(ctx, &ateapipb.RevertActorRequest{Actor: actorRef})
+	reverted, err := tc.client.RevertActor(ctx, &ateapipb.RevertActorRequest{Actor: ref})
 	if err != nil {
 		t.Fatalf("second RevertActor failed: %v", err)
 	}
-	if got := reverted.GetActor().GetStatus().GetCrash(); got != nil {
-		t.Errorf("Crash = %v, want cleared by the successful revert", got)
+	if got := reverted.GetActor().GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+		t.Errorf("state after retry = %v, want SUSPENDED", got)
+	}
+	if got := reverted.GetActor().GetStatus().GetWorkerAssignment(); got != nil {
+		t.Errorf("worker assignment after retry = %v, want nil", got)
+	}
+	tc.fakeAtelet.Lock.Lock()
+	terminated := tc.fakeAtelet.TerminateCalled
+	tc.fakeAtelet.Lock.Unlock()
+	if !terminated {
+		t.Error("retried revert did not call atelet Terminate")
+	}
+}
+
+// TestDeleteActor_TerminateFailureLeavesActorDeleting verifies that an atelet
+// error while terminating a running actor leaves it DELETING on its worker,
+// and that the next delete terminates it and removes it.
+func TestDeleteActor_TerminateFailureLeavesActorDeleting(t *testing.T) {
+	ns := namespaceForTest("ns-delete-terminate-fail")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	createTemplate(t, tc, ns)
+	podUID := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+
+	ctx := context.Background()
+	const name = "id1"
+	ref := &ateapipb.ObjectRef{Atespace: testAtespace, Name: name}
+	actorRef := resources.ActorRef{Atespace: testAtespace, Name: name}
+
+	if _, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+	}}); err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+	if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: ref}); err != nil {
+		t.Fatalf("ResumeActor failed: %v", err)
+	}
+
+	tc.fakeAtelet.Lock.Lock()
+	tc.fakeAtelet.FailTerminate = status.Error(codes.Internal, "injected terminate failure")
+	tc.fakeAtelet.Lock.Unlock()
+	if _, err := tc.client.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref, AnyState: true}); err == nil {
+		t.Fatal("DeleteActor succeeded despite failing terminate")
+	}
+
+	actor, err := tc.persistence.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("failed to get actor from store: %v", err)
+	}
+	if got := actor.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_DELETING {
+		t.Errorf("state after failed terminate = %v, want DELETING", got)
+	}
+	if crash := actor.GetStatus().GetCrash(); crash != nil {
+		t.Errorf("crash recorded after failed terminate: %v", crash)
+	}
+	if got := actor.GetStatus().GetWorkerAssignment().GetWorker().GetName(); got != podUID {
+		t.Errorf("assigned worker = %q, want %q kept for the retry", got, podUID)
+	}
+
+	tc.fakeAtelet.Lock.Lock()
+	tc.fakeAtelet.FailTerminate = nil
+	tc.fakeAtelet.TerminateCalled = false
+	tc.fakeAtelet.Lock.Unlock()
+	if _, err := tc.client.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref, AnyState: true}); err != nil {
+		t.Fatalf("second DeleteActor failed: %v", err)
+	}
+	if _, err := tc.client.GetActor(ctx, &ateapipb.GetActorRequest{Actor: ref}); status.Code(err) != codes.NotFound {
+		t.Errorf("GetActor after retried delete err = %v, want NotFound", err)
+	}
+	tc.fakeAtelet.Lock.Lock()
+	terminated := tc.fakeAtelet.TerminateCalled
+	tc.fakeAtelet.Lock.Unlock()
+	if !terminated {
+		t.Error("retried delete did not call atelet Terminate")
 	}
 }
 
