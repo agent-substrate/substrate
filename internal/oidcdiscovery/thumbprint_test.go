@@ -34,12 +34,35 @@ func mustDecode(t *testing.T, s string) []byte {
 	return b
 }
 
-func TestThumbprintRFC7638Example(t *testing.T) {
-	// The example key and result from RFC 7638 section 3.1.
-	n := "0vx7agoebGcQSuuPiLJXZptN9nndrQmbXEps2aiAFbWhM78LhWx4cbbfAAtVT86zwu1RK7aPFFxuhDR1L6tSoc_BJECPebWKRXjBZCiFV4n3oknjhMstn64tZ_2W-5JsGY4Hc5n9yBXArwl93lqt7_RN5w6Cf0h4QyQ5v-65YGjQR0_FDW2QvzqY368QQMicAtaSqzs8KJZgnYb9c7d0zgdAZHzu6qMQvRL5hajrn1n91CbOpbISD08qNLyrdkt-bFTWhAI4vMQFh6WeZu0fM4lFd2NcRwr3XPksINHaQ-G_xBniIqbw0Ls1jF44-csFCur-kEgU8awapJzKnqDKgw"
-	pub := &rsa.PublicKey{N: new(big.Int).SetBytes(mustDecode(t, n)), E: 65537}
+// The example RSA key from RFC 7638 section 3.1.
+const (
+	rfcRSAN = "0vx7agoebGcQSuuPiLJXZptN9nndrQmbXEps2aiAFbWhM78LhWx4cbbfAAtVT86zwu1RK7aPFFxuhDR1L6tSoc_BJECPebWKRXjBZCiFV4n3oknjhMstn64tZ_2W-5JsGY4Hc5n9yBXArwl93lqt7_RN5w6Cf0h4QyQ5v-65YGjQR0_FDW2QvzqY368QQMicAtaSqzs8KJZgnYb9c7d0zgdAZHzu6qMQvRL5hajrn1n91CbOpbISD08qNLyrdkt-bFTWhAI4vMQFh6WeZu0fM4lFd2NcRwr3XPksINHaQ-G_xBniIqbw0Ls1jF44-csFCur-kEgU8awapJzKnqDKgw"
+	rfcRSAE = "AQAB"
+)
 
-	got, err := Thumbprint(pub)
+// The P-256 key from RFC 7517 appendix A.1.
+const (
+	rfcECX = "MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4"
+	rfcECY = "4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM"
+)
+
+func rfcRSAKey(t *testing.T) *rsa.PublicKey {
+	t.Helper()
+	return &rsa.PublicKey{N: new(big.Int).SetBytes(mustDecode(t, rfcRSAN)), E: 65537}
+}
+
+func rfcECKey(t *testing.T) *ecdsa.PublicKey {
+	t.Helper()
+	point := append([]byte{0x04}, mustDecode(t, rfcECX)...)
+	pub, err := ecdsa.ParseUncompressedPublicKey(elliptic.P256(), append(point, mustDecode(t, rfcECY)...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pub
+}
+
+func TestThumbprintRFC7638Example(t *testing.T) {
+	got, err := Thumbprint(rfcRSAKey(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,16 +72,9 @@ func TestThumbprintRFC7638Example(t *testing.T) {
 }
 
 func TestThumbprintEC(t *testing.T) {
-	// The P-256 key from RFC 7517 appendix A.1. RFC 7638 has no EC example;
-	// the expected value is go-jose's thumbprint of this key.
-	point := append([]byte{0x04}, mustDecode(t, "MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4")...)
-	point = append(point, mustDecode(t, "4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM")...)
-	pub, err := ecdsa.ParseUncompressedPublicKey(elliptic.P256(), point)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	got, err := Thumbprint(pub)
+	// RFC 7638 has no EC example; the expected value is go-jose's thumbprint
+	// of the RFC 7517 key.
+	got, err := Thumbprint(rfcECKey(t))
 	if err != nil {
 		t.Fatal(err)
 	}
