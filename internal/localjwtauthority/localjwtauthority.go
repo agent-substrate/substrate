@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/actoridjwt"
+	"github.com/agent-substrate/substrate/internal/oidcdiscovery"
 )
 
 // Pool is the interface for a JWT signing pool.
@@ -55,6 +56,7 @@ type Pool interface {
 
 type VerificationKey struct {
 	KeyID     string
+	Algorithm string
 	PublicKey crypto.PublicKey
 }
 
@@ -167,8 +169,6 @@ func (p *ConcretePool) SignJWT(claims *actoridjwt.Claims) (string, error) {
 		selectedAuthority = p.Authorities[0]
 	}
 
-	// TODO(identity): The key IDs should probably be SHA256 of the key, to
-	// prevent user misuse.
 	jwt, err := sign(payloadBytes, selectedAuthority.SigningKey, selectedAuthority.Algorithm, selectedAuthority.ID)
 	if err != nil {
 		return "", fmt.Errorf("while signing JWT: %w", err)
@@ -182,6 +182,7 @@ func (p *ConcretePool) VerificationKeys() ([]*VerificationKey, error) {
 	for _, authority := range p.Authorities {
 		vk := &VerificationKey{
 			KeyID:     authority.ID,
+			Algorithm: authority.Algorithm,
 			PublicKey: authority.SigningKey.Public(),
 		}
 		keys = append(keys, vk)
@@ -338,16 +339,32 @@ func Unmarshal(wireBytes []byte) (*ConcretePool, error) {
 	return pool, nil
 }
 
-// GenerateECDSAP256Authority generates an ECDSA P256 JWT signing key.
-func GenerateECDSAP256Authority(id string) (*Authority, error) {
-	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+// GenerateAuthority generates a JWT signing key for algorithm, which must be
+// RS256 or ES256. An empty id defaults to the RFC 7638 thumbprint of the
+// public key.
+func GenerateAuthority(algorithm, id string) (*Authority, error) {
+	var key crypto.Signer
+	var err error
+	switch algorithm {
+	case "RS256":
+		key, err = rsa.GenerateKey(rand.Reader, 2048)
+	case "ES256":
+		key, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	default:
+		return nil, fmt.Errorf("unsupported algorithm %q, want RS256 or ES256", algorithm)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("while generating key: %w", err)
 	}
-
+	if id == "" {
+		id, err = oidcdiscovery.Thumbprint(key.Public())
+		if err != nil {
+			return nil, fmt.Errorf("while computing key thumbprint: %w", err)
+		}
+	}
 	return &Authority{
 		ID:         id,
-		Algorithm:  "ES256",
-		SigningKey: privKey,
+		Algorithm:  algorithm,
+		SigningKey: key,
 	}, nil
 }

@@ -186,7 +186,7 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 		}
 	}
 
-	actorJWTAuthority, err := localjwtauthority.GenerateECDSAP256Authority("1")
+	actorJWTAuthority, err := localjwtauthority.GenerateAuthority("ES256", "1")
 	if err != nil {
 		t.Fatalf("Error generating actor JWT authority: %v", err)
 	}
