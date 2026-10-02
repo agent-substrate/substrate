@@ -190,6 +190,101 @@ func TestSignJWTHeader(t *testing.T) {
 	}
 }
 
+func authorityIDs(p *ConcretePool) []string {
+	var ids []string
+	for _, a := range p.Authorities {
+		ids = append(ids, a.ID)
+	}
+	return ids
+}
+
+func testPool(t *testing.T, ids ...string) *ConcretePool {
+	t.Helper()
+	pool := &ConcretePool{ActiveForSigning: ids[0]}
+	for _, id := range ids {
+		authority, err := GenerateAuthority("ES256", id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pool.Authorities = append(pool.Authorities, authority)
+	}
+	return pool
+}
+
+func TestPoolRotation(t *testing.T) {
+	pool := testPool(t, "old")
+	next, err := GenerateAuthority("RS256", "next")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := pool.AddAuthority(next); err != nil {
+		t.Fatalf("AddAuthority: %v", err)
+	}
+	if pool.ActiveForSigning != "old" {
+		t.Errorf("after AddAuthority, active = %q, want old", pool.ActiveForSigning)
+	}
+	if err := pool.Activate("next"); err != nil {
+		t.Fatalf("Activate: %v", err)
+	}
+	if err := pool.RemoveAuthority("old"); err != nil {
+		t.Fatalf("RemoveAuthority: %v", err)
+	}
+
+	if diff := cmp.Diff([]string{"next"}, authorityIDs(pool)); diff != "" {
+		t.Errorf("authorities (-want +got):\n%s", diff)
+	}
+	jwt, err := pool.SignJWT(&actoridjwt.Claims{Subject: "actor/a/b", Audiences: []string{"aud"}})
+	if err != nil {
+		t.Fatalf("SignJWT: %v", err)
+	}
+	header, err := base64.RawURLEncoding.DecodeString(strings.Split(jwt, ".")[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `{"typ":"JWT","alg":"RS256","kid":"next"}`; string(header) != want {
+		t.Errorf("header = %s, want %s", header, want)
+	}
+}
+
+func TestPoolRotationRejects(t *testing.T) {
+	dup, err := GenerateAuthority("ES256", "1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	noID := &Authority{Algorithm: "ES256", SigningKey: dup.SigningKey}
+
+	for _, tc := range []struct {
+		name   string
+		pool   *ConcretePool
+		change func(*ConcretePool) error
+	}{
+		{name: "add duplicate ID", pool: testPool(t, "1", "2"), change: func(p *ConcretePool) error { return p.AddAuthority(dup) }},
+		{name: "add without ID", pool: testPool(t, "1"), change: func(p *ConcretePool) error { return p.AddAuthority(noID) }},
+		{name: "activate absent", pool: testPool(t, "1"), change: func(p *ConcretePool) error { return p.Activate("2") }},
+		{name: "remove absent", pool: testPool(t, "1"), change: func(p *ConcretePool) error { return p.RemoveAuthority("2") }},
+		{name: "remove active", pool: testPool(t, "1", "2"), change: func(p *ConcretePool) error { return p.RemoveAuthority("1") }},
+		{name: "remove first with none designated", pool: func() *ConcretePool {
+			p := testPool(t, "1", "2")
+			p.ActiveForSigning = ""
+			return p
+		}(), change: func(p *ConcretePool) error { return p.RemoveAuthority("1") }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wantIDs, wantActive := authorityIDs(tc.pool), tc.pool.ActiveForSigning
+			if err := tc.change(tc.pool); err == nil {
+				t.Error("got nil error")
+			}
+			if diff := cmp.Diff(wantIDs, authorityIDs(tc.pool)); diff != "" {
+				t.Errorf("authorities changed (-want +got):\n%s", diff)
+			}
+			if tc.pool.ActiveForSigning != wantActive {
+				t.Errorf("active = %q, want %q", tc.pool.ActiveForSigning, wantActive)
+			}
+		})
+	}
+}
+
 func TestGenerateAuthority(t *testing.T) {
 	for _, alg := range []string{"RS256", "ES256"} {
 		t.Run(alg, func(t *testing.T) {
