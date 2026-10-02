@@ -998,24 +998,34 @@ func (s *AteomService) terminateWorkload(ctx context.Context, actorRef resources
 		errs = append(errs, fmt.Errorf("while deactivating actor networking: %w", err))
 	}
 
-	rcmd := &runsc{
-		path:      runscPath,
-		actorUID:  actorUID,
-		actorDirs: actorDirs,
-	}
+	// Only run runsc for actors hosted by this ateom. An actor this ateom does not
+	// host lost its sandbox with an earlier ateom, or an earlier call here already
+	// ran runsc for it. runsc would SIGKILL whatever now holds the PIDs recorded in
+	// leftover state, so it is skipped.
+	if s.lookupActor(actorUID) != nil {
+		rcmd := &runsc{
+			path:      runscPath,
+			actorUID:  actorUID,
+			actorDirs: actorDirs,
+		}
 
-	// Detached from the caller: a deadline mid-`runsc delete` would leave the
-	// container without its record and the actor unrecoverable.
-	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-	defer cancel()
-	// Stop the containers before deleting them, to avoid leaving a live container
-	// with no bundle on disk. Best-effort: if they are already stopped, the
-	// delete succeeds anyway.
-	stopContainers(cleanupCtx, rcmd, containers)
-	// Keep this as best-effort cleanup: atelet resets the bundle and checkpoint
-	// directories after uploading the snapshot.
-	if err := cleanupContainers(cleanupCtx, rcmd, containers); err != nil {
-		errs = append(errs, fmt.Errorf("while cleaning up runsc containers: %w", err))
+		// Detached from the caller: a deadline mid-`runsc delete` would leave the
+		// container without its record and the actor unrecoverable.
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+		// Stop the containers before deleting them, to avoid leaving a live container
+		// with no bundle on disk. Best-effort: if they are already stopped, the
+		// delete succeeds anyway.
+		stopContainers(cleanupCtx, rcmd, containers)
+		// Keep this as best-effort cleanup: atelet resets the bundle and checkpoint
+		// directories after uploading the snapshot.
+		if err := cleanupContainers(cleanupCtx, rcmd, containers); err != nil {
+			errs = append(errs, fmt.Errorf("while cleaning up runsc containers: %w", err))
+		}
+	} else {
+		slog.InfoContext(ctx, "Actor is not hosted by this ateom, terminating it without running runsc",
+			slog.String("actor", actorRef.String()),
+			slog.String("actorUID", actorUID))
 	}
 
 	// The actor may resume on another worker, so this one may never see another
