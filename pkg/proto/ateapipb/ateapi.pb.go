@@ -2799,7 +2799,7 @@ type SnapshotConfig struct {
 	// +k8s:required
 	// +k8s:maxLength=1024
 	// +k8s:customValidation # Validate URI
-	StorageLocation string `protobuf:"bytes,4,opt,name=storage_location,json=storageLocation,proto3" json:"storage_location,omitempty"`
+	StorageLocation string `protobuf:"bytes,3,opt,name=storage_location,json=storageLocation,proto3" json:"storage_location,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -7633,7 +7633,7 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x0eSnapshotConfig\x127\n" +
 	"\bon_pause\x18\x01 \x01(\x0e2\x1c.ateapi.SnapshotContentScopeR\aonPause\x129\n" +
 	"\ton_commit\x18\x02 \x01(\x0e2\x1c.ateapi.SnapshotContentScopeR\bonCommit\x12)\n" +
-	"\x10storage_location\x18\x04 \x01(\tR\x0fstorageLocation\"\xf5\x02\n" +
+	"\x10storage_location\x18\x03 \x01(\tR\x0fstorageLocation\"\xf5\x02\n" +
 	"\tContainer\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05image\x18\x02 \x01(\tR\x05image\x12\x18\n" +

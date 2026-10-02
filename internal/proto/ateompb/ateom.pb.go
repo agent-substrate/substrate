@@ -1349,14 +1349,14 @@ type RestoreWorkloadRequest struct {
 	// What content to restore from the snapshot.
 	Scope SnapshotScope `protobuf:"varint,10,opt,name=scope,proto3,enum=ateom.SnapshotScope" json:"scope,omitempty"`
 	// When absent the actor has no egress: its TCP is captured and refused.
-	EgressGateway *EgressGateway `protobuf:"bytes,12,opt,name=egress_gateway,json=egressGateway,proto3,oneof" json:"egress_gateway,omitempty"`
+	EgressGateway *EgressGateway `protobuf:"bytes,11,opt,name=egress_gateway,json=egressGateway,proto3,oneof" json:"egress_gateway,omitempty"`
 	// The actor's declared size, from the ActorTemplate's resource limits. Used to
 	// (re)size the sandbox on a DATA-scope restore (fresh guest container). On a
 	// FULL micro-VM restore the size baked into the snapshot is authoritative and
 	// these are ignored. Zero means "unset": keep the runtime default.
-	CpuMilli      int64      `protobuf:"varint,14,opt,name=cpu_milli,json=cpuMilli,proto3" json:"cpu_milli,omitempty"`          // CPU limit in millicores (1000 = one core).
-	MemoryBytes   int64      `protobuf:"varint,15,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"` // Memory limit in bytes.
-	ActorDirs     *ActorDirs `protobuf:"bytes,16,opt,name=actor_dirs,json=actorDirs,proto3" json:"actor_dirs,omitempty"`
+	CpuMilli      int64      `protobuf:"varint,12,opt,name=cpu_milli,json=cpuMilli,proto3" json:"cpu_milli,omitempty"`          // CPU limit in millicores (1000 = one core).
+	MemoryBytes   int64      `protobuf:"varint,13,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"` // Memory limit in bytes.
+	ActorDirs     *ActorDirs `protobuf:"bytes,14,opt,name=actor_dirs,json=actorDirs,proto3" json:"actor_dirs,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2003,11 +2003,11 @@ const file_ateom_proto_rawDesc = "" +
 	"\x13runtime_asset_paths\x18\t \x03(\v24.ateom.RestoreWorkloadRequest.RuntimeAssetPathsEntryR\x11runtimeAssetPaths\x12*\n" +
 	"\x05scope\x18\n" +
 	" \x01(\x0e2\x14.ateom.SnapshotScopeR\x05scope\x12@\n" +
-	"\x0eegress_gateway\x18\f \x01(\v2\x14.ateom.EgressGatewayH\x00R\regressGateway\x88\x01\x01\x12\x1b\n" +
-	"\tcpu_milli\x18\x0e \x01(\x03R\bcpuMilli\x12!\n" +
-	"\fmemory_bytes\x18\x0f \x01(\x03R\vmemoryBytes\x12/\n" +
+	"\x0eegress_gateway\x18\v \x01(\v2\x14.ateom.EgressGatewayH\x00R\regressGateway\x88\x01\x01\x12\x1b\n" +
+	"\tcpu_milli\x18\f \x01(\x03R\bcpuMilli\x12!\n" +
+	"\fmemory_bytes\x18\r \x01(\x03R\vmemoryBytes\x12/\n" +
 	"\n" +
-	"actor_dirs\x18\x10 \x01(\v2\x10.ateom.ActorDirsR\tactorDirs\x1aD\n" +
+	"actor_dirs\x18\x0e \x01(\v2\x10.ateom.ActorDirsR\tactorDirs\x1aD\n" +
 	"\x16RuntimeAssetPathsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\x11\n" +

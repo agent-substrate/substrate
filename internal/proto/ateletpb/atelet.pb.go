@@ -2786,16 +2786,16 @@ type RestoreRequest struct {
 	// What content to restore from the checkpoint.
 	Scope SnapshotScope `protobuf:"varint,11,opt,name=scope,proto3,enum=atelet.SnapshotScope" json:"scope,omitempty"`
 	// When absent the actor has no egress: its TCP is captured and refused.
-	EgressGateway *EgressGateway `protobuf:"bytes,13,opt,name=egress_gateway,json=egressGateway,proto3,oneof" json:"egress_gateway,omitempty"`
+	EgressGateway *EgressGateway `protobuf:"bytes,12,opt,name=egress_gateway,json=egressGateway,proto3,oneof" json:"egress_gateway,omitempty"`
 	// The actor's declared size, from the ActorTemplate's resource limits. For
 	// gVisor and micro-VM DATA-scope restores the sandbox is (re)sized to these;
 	// for a FULL micro-VM restore the size baked into the snapshot wins. Zero
 	// means "unset": keep the runtime default.
-	CpuMilli    int64 `protobuf:"varint,14,opt,name=cpu_milli,json=cpuMilli,proto3" json:"cpu_milli,omitempty"`          // CPU limit in millicores (1000 = one core).
-	MemoryBytes int64 `protobuf:"varint,15,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"` // Memory limit in bytes.
+	CpuMilli    int64 `protobuf:"varint,13,opt,name=cpu_milli,json=cpuMilli,proto3" json:"cpu_milli,omitempty"`          // CPU limit in millicores (1000 = one core).
+	MemoryBytes int64 `protobuf:"varint,14,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"` // Memory limit in bytes.
 	// The sandbox binaries and pause image to restore with, resolved from the
 	// ActorTemplate's SandboxConfig. Required.
-	SandboxAssets *SandboxAssets `protobuf:"bytes,16,opt,name=sandbox_assets,json=sandboxAssets,proto3" json:"sandbox_assets,omitempty"`
+	SandboxAssets *SandboxAssets `protobuf:"bytes,15,opt,name=sandbox_assets,json=sandboxAssets,proto3" json:"sandbox_assets,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3193,10 +3193,10 @@ const file_atelet_proto_rawDesc = "" +
 	"\x0fexternal_config\x18\n" +
 	" \x01(\v2$.atelet.ExternalRestoreConfigurationH\x00R\x0eexternalConfig\x12+\n" +
 	"\x05scope\x18\v \x01(\x0e2\x15.atelet.SnapshotScopeR\x05scope\x12A\n" +
-	"\x0eegress_gateway\x18\r \x01(\v2\x15.atelet.EgressGatewayH\x01R\regressGateway\x88\x01\x01\x12\x1b\n" +
-	"\tcpu_milli\x18\x0e \x01(\x03R\bcpuMilli\x12!\n" +
-	"\fmemory_bytes\x18\x0f \x01(\x03R\vmemoryBytes\x12<\n" +
-	"\x0esandbox_assets\x18\x10 \x01(\v2\x15.atelet.SandboxAssetsR\rsandboxAssetsB\b\n" +
+	"\x0eegress_gateway\x18\f \x01(\v2\x15.atelet.EgressGatewayH\x01R\regressGateway\x88\x01\x01\x12\x1b\n" +
+	"\tcpu_milli\x18\r \x01(\x03R\bcpuMilli\x12!\n" +
+	"\fmemory_bytes\x18\x0e \x01(\x03R\vmemoryBytes\x12<\n" +
+	"\x0esandbox_assets\x18\x0f \x01(\v2\x15.atelet.SandboxAssetsR\rsandboxAssetsB\b\n" +
 	"\x06configB\x11\n" +
 	"\x0f_egress_gateway\"\x11\n" +
 	"\x0fRestoreResponse*\x9a\x01\n" +

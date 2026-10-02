@@ -335,15 +335,15 @@ message RestoreWorkloadRequest {
   SnapshotScope scope = 10;
 
   // When absent the actor has no egress: its TCP is captured and refused.
-  optional EgressGateway egress_gateway = 12;
+  optional EgressGateway egress_gateway = 11;
 
   // The actor's declared size, from the ActorTemplate's resource limits. Used to
   // (re)size the sandbox on a DATA-scope restore (fresh guest container). On a
   // FULL micro-VM restore the size baked into the snapshot is authoritative and
   // these are ignored. Zero means "unset": keep the runtime default.
-  int64 cpu_milli = 14;    // CPU limit in millicores (1000 = one core).
-  int64 memory_bytes = 15; // Memory limit in bytes.
-  ActorDirs actor_dirs = 16;
+  int64 cpu_milli = 12;    // CPU limit in millicores (1000 = one core).
+  int64 memory_bytes = 13; // Memory limit in bytes.
+  ActorDirs actor_dirs = 14;
 }
 
 message RestoreWorkloadResponse {

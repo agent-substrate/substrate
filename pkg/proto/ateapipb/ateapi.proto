@@ -1053,7 +1053,7 @@ message SnapshotConfig {
   // +k8s:required
   // +k8s:maxLength=1024
   // +k8s:customValidation # Validate URI
-  string storage_location = 4;
+  string storage_location = 3;
 }
 
 // Container is a single application container of an ActorTemplate.

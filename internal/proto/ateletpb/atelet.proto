@@ -527,18 +527,18 @@ message RestoreRequest {
   SnapshotScope scope = 11;
 
   // When absent the actor has no egress: its TCP is captured and refused.
-  optional EgressGateway egress_gateway = 13;
+  optional EgressGateway egress_gateway = 12;
 
   // The actor's declared size, from the ActorTemplate's resource limits. For
   // gVisor and micro-VM DATA-scope restores the sandbox is (re)sized to these;
   // for a FULL micro-VM restore the size baked into the snapshot wins. Zero
   // means "unset": keep the runtime default.
-  int64 cpu_milli = 14;    // CPU limit in millicores (1000 = one core).
-  int64 memory_bytes = 15; // Memory limit in bytes.
+  int64 cpu_milli = 13;    // CPU limit in millicores (1000 = one core).
+  int64 memory_bytes = 14; // Memory limit in bytes.
 
   // The sandbox binaries and pause image to restore with, resolved from the
   // ActorTemplate's SandboxConfig. Required.
-  SandboxAssets sandbox_assets = 16;
+  SandboxAssets sandbox_assets = 15;
 }
 
 message RestoreResponse {
