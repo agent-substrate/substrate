@@ -22,6 +22,7 @@ import (
 	"net"
 	"slices"
 	"strconv"
+	"sync"
 
 	"github.com/agent-substrate/substrate/internal/atelet"
 	"github.com/agent-substrate/substrate/internal/credbundle"
@@ -52,6 +53,9 @@ type ateletConn struct {
 // AteletDialer handles gRPC connections to Atelet pods.
 type AteletDialer struct {
 	ateletIndexer cache.Indexer
+	// mu makes the lookup, stale eviction and insert in DialForAteletOnNode
+	// atomic, so concurrent callers cannot evict each other's fresh conn.
+	mu sync.Mutex
 	// ateletConns holds one *ateletConn per atelet pod UID.
 	ateletConns *lru.Cache
 	// dialCredentials builds the transport credentials used to dial a given
@@ -106,7 +110,7 @@ func NewAteletDialer(ateletIndexer cache.Indexer, ateletSPIFFEID, clientBundlePa
 // up in practice.
 func newAteletConnCache(size int) *lru.Cache {
 	return lru.NewWithEvictionFunc(size, func(_ lru.Key, value interface{}) {
-		value.(*ateletConn).conn.Close()
+		_ = value.(*ateletConn).conn.Close()
 	})
 }
 
@@ -133,6 +137,9 @@ func (d *AteletDialer) DialForAteletOnNode(nodeName string) (*grpc.ClientConn, e
 	}
 	ateletKey := string(selectedAtelet.ObjectMeta.UID)
 	ateletIP := selectedAtelet.Status.PodIPs[0].IP
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
 
 	if cached, ok := d.ateletConns.Get(ateletKey); ok {
 		if c := cached.(*ateletConn); c.ip == ateletIP {
