@@ -637,20 +637,91 @@ func TestExtractIntoPrecreatedVolumeDir(t *testing.T) {
 	}
 }
 
-func TestExtractSupportsDeviceEntry(t *testing.T) {
+// A crafted archive must not be able to create a usable device node: only the
+// 0:0 whiteout is allowed.
+func TestExtractRejectsDeviceNodes(t *testing.T) {
+	for _, hdr := range []tar.Header{
+		{Name: "null", Typeflag: tar.TypeChar, Devmajor: 1, Devminor: 3},
+		{Name: "mem", Typeflag: tar.TypeChar, Devmajor: 1, Devminor: 1, Mode: 0o666},
+		{Name: "sda", Typeflag: tar.TypeBlock, Devmajor: 8, Devminor: 0},
+		{Name: "blk0", Typeflag: tar.TypeBlock},
+	} {
+		t.Run(hdr.Name, func(t *testing.T) {
+			tarPath := filepath.Join(t.TempDir(), "dev.tar")
+			writeTar(t, tarPath, hdr)
+			dst := t.TempDir()
+			if err := Extract(tarPath, dst); err == nil {
+				t.Fatal("Extract succeeded, want an error")
+			}
+			if _, err := os.Lstat(filepath.Join(dst, hdr.Name)); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("device node %q exists after a refused extract (err = %v)", hdr.Name, err)
+			}
+		})
+	}
+}
+
+// Create skips devices Extract would refuse, so a stray one in the tree does
+// not make the snapshot unrestorable.
+func TestCreateSkipsNonWhiteoutDevices(t *testing.T) {
 	roottest.Require(t, "creating a device node requires root")
 
+	src := t.TempDir()
+	if err := unix.Mknod(filepath.Join(src, "null"), unix.S_IFCHR|0o666, int(unix.Mkdev(1, 3))); err != nil {
+		t.Fatalf("creating device node: %v", err)
+	}
+	if err := unix.Mknod(filepath.Join(src, "whiteout"), unix.S_IFCHR, int(unix.Mkdev(0, 0))); err != nil {
+		t.Fatalf("creating whiteout: %v", err)
+	}
 	tarPath := filepath.Join(t.TempDir(), "dev.tar")
-	writeTar(t, tarPath, tar.Header{Name: "null", Typeflag: tar.TypeChar, Devmajor: 1, Devminor: 3})
+	if err := Create(t.Context(), tarPath, src); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
 	dst := t.TempDir()
 	if err := Extract(tarPath, dst); err != nil {
-		t.Fatalf("Extract failed on a device entry: %v", err)
+		t.Fatalf("Extract: %v", err)
 	}
-	st, err := os.Lstat(filepath.Join(dst, "null"))
-	if err != nil {
-		t.Fatalf("stat extracted device node: %v", err)
+	if _, err := os.Lstat(filepath.Join(dst, "null")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("non-whiteout device was archived (err = %v)", err)
 	}
-	if st.Mode()&os.ModeCharDevice == 0 {
-		t.Errorf("extracted node mode = %v, want a character device", st.Mode())
+	if _, err := os.Lstat(filepath.Join(dst, "whiteout")); err != nil {
+		t.Errorf("whiteout was not archived: %v", err)
+	}
+}
+
+// Extract restores only allowlisted xattrs. security.capability would grant
+// file capabilities, and the other trusted.overlay.* attributes are trusted by
+// the kernel when the upper is mounted.
+func TestExtractDropsDisallowedXattrs(t *testing.T) {
+	roottest.Require(t, "trusted.* and security.* xattrs require root")
+
+	tarPath := filepath.Join(t.TempDir(), "xattr.tar")
+	writeTar(t, tarPath, tar.Header{
+		Name: "f", Typeflag: tar.TypeReg, Mode: 0o755, Size: 1,
+		PAXRecords: map[string]string{
+			"SCHILY.xattr.security.capability":      "\x01\x00\x00\x02\xff\xff\xff\xff\x00\x00\x00\x00\xff\xff\xff\xff\x00\x00\x00\x00",
+			"SCHILY.xattr.trusted.overlay.origin":   "x",
+			"SCHILY.xattr.trusted.overlay.metacopy": "",
+			"SCHILY.xattr.trusted.other":            "x",
+			"SCHILY.xattr.trusted.overlay.opaque":   "y",
+			"SCHILY.xattr.user.custom":              "val",
+		},
+	})
+	dst := t.TempDir()
+	if err := Extract(tarPath, dst); err != nil {
+		if errors.Is(err, unix.ENOTSUP) {
+			t.Skipf("filesystem does not support trusted xattrs: %v", err)
+		}
+		t.Fatalf("Extract: %v", err)
+	}
+	path := filepath.Join(dst, "f")
+	for _, attr := range []string{"security.capability", "trusted.overlay.origin", "trusted.overlay.metacopy", "trusted.other"} {
+		if _, err := unix.Lgetxattr(path, attr, nil); !errors.Is(err, unix.ENODATA) {
+			t.Errorf("%s: Lgetxattr err = %v, want ENODATA", attr, err)
+		}
+	}
+	for _, attr := range []string{"trusted.overlay.opaque", "user.custom"} {
+		if _, err := unix.Lgetxattr(path, attr, nil); err != nil {
+			t.Errorf("%s was not restored: %v", attr, err)
+		}
 	}
 }

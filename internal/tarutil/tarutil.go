@@ -16,8 +16,8 @@
 
 // Package tarutil archives and restores a directory tree as a tar file,
 // preserving the metadata a workload's data directory depends on: modes,
-// ownership, modification times, symlinks, hardlinks, FIFOs, device nodes,
-// and user.* / trusted.overlay.* extended attributes (as PAX SCHILY.xattr
+// ownership, modification times, symlinks, hardlinks, FIFOs, overlay
+// whiteouts, and user.* / overlay extended attributes (as PAX SCHILY.xattr
 // records).
 //
 // It exists for snapshotting durable-dir volumes and rootfs overlay uppers
@@ -30,7 +30,9 @@
 // resurrects deleted content after a resume.
 //
 // Extraction is confined to the destination with os.Root, so a crafted archive
-// cannot write outside it via "..", an absolute path, or a symlink.
+// cannot write outside it via "..", an absolute path, or a symlink. It also
+// refuses device nodes other than whiteouts and restores only the xattrs
+// keepXattr allows.
 package tarutil
 
 import (
@@ -87,10 +89,11 @@ type readerOnly struct{ io.Reader }
 // relative to srcDir, so extracting into another directory reproduces the tree.
 // srcDir itself is not an entry.
 //
-// Regular files, directories, symlinks, FIFOs, and device nodes are archived
-// with their mode, ownership, modification time, and user.* / trusted.overlay.*
-// xattrs. A file with multiple links inside srcDir is archived once and
-// referenced as a hardlink thereafter. Sockets are skipped (see writeTree).
+// Regular files, directories, symlinks, FIFOs, and overlay whiteouts are
+// archived with their mode, ownership, modification time, and the xattrs
+// keepXattr allows. A file with multiple links inside srcDir is archived once
+// and referenced as a hardlink thereafter. Sockets and other device nodes are
+// skipped (see writeTree).
 func Create(ctx context.Context, tarPath, srcDir string) error {
 	return CreateFiltered(ctx, tarPath, srcDir, nil)
 }
@@ -235,12 +238,18 @@ func writeTree(ctx context.Context, tw *tar.Writer, srcDir string, skip SkipFunc
 			}
 			return copyFileInto(tw, path)
 
-		case d.IsDir(), info.Mode()&os.ModeSymlink != 0, info.Mode()&os.ModeNamedPipe != 0,
-			info.Mode()&os.ModeDevice != 0:
-			// FileInfoHeader already populated the Typeflag (and, for devices,
-			// the major/minor) with size 0. Devices are archived rather than
-			// rejected because an overlay upper legitimately contains them:
-			// every deleted lower-layer file is a 0:0 char-device whiteout.
+		case info.Mode()&os.ModeDevice != 0:
+			// Only overlay whiteouts are archived; Extract refuses any other
+			// device, so archiving one would make the snapshot unrestorable.
+			if !isWhiteout(hdr) {
+				slog.WarnContext(ctx, "Skipping device node while archiving directory",
+					slog.String("path", path), slog.String("root", srcDir))
+				return nil
+			}
+			return tw.WriteHeader(hdr)
+
+		case d.IsDir(), info.Mode()&os.ModeSymlink != 0, info.Mode()&os.ModeNamedPipe != 0:
+			// FileInfoHeader already populated the Typeflag with size 0.
 			return tw.WriteHeader(hdr)
 
 		default:
@@ -383,6 +392,13 @@ func extractEntry(root *os.Root, tr *tar.Reader, hdr *tar.Header, name string, d
 		return nil
 
 	case tar.TypeChar, tar.TypeBlock:
+		// A real device node would hand whoever can reach the extracted tree
+		// access to host hardware. Overlay whiteouts are the only devices a
+		// snapshot legitimately carries.
+		if !isWhiteout(hdr) {
+			return fmt.Errorf("refusing device node %q (%d:%d): only 0:0 character devices (overlay whiteouts) are allowed",
+				name, hdr.Devmajor, hdr.Devminor)
+		}
 		if err := replaceExisting(root, name); err != nil {
 			return err
 		}
@@ -394,6 +410,12 @@ func extractEntry(root *os.Root, tr *tar.Reader, hdr *tar.Header, name string, d
 	default:
 		return fmt.Errorf("unsupported tar entry type %q at %q", string([]byte{hdr.Typeflag}), name)
 	}
+}
+
+// isWhiteout reports whether hdr is an overlayfs whiteout: a 0:0 character
+// device.
+func isWhiteout(hdr *tar.Header) bool {
+	return hdr.Typeflag == tar.TypeChar && hdr.Devmajor == 0 && hdr.Devminor == 0
 }
 
 // replaceExisting removes whatever currently occupies name so the new entry
@@ -462,9 +484,8 @@ func restoreMeta(root *os.Root, name string, hdr *tar.Header) error {
 	return restoreOverlayXattrs(root, name, hdr)
 }
 
-// restoreOverlayXattrs re-applies the user.* and trusted.overlay.* xattrs
-// recorded in the entry's PAX records (writeTree's SCHILY.xattr.* — the
-// overlayfs deletion metadata plus workload-owned user attrs). Writing
+// restoreOverlayXattrs re-applies the xattrs recorded in the entry's PAX
+// records (writeTree's SCHILY.xattr.*) that keepXattr allows. Writing
 // trusted.* requires CAP_SYS_ADMIN; extraction runs as root in ateom, and the
 // tests gate on it.
 //
@@ -479,13 +500,14 @@ func restoreMeta(root *os.Root, name string, hdr *tar.Header) error {
 func restoreOverlayXattrs(root *os.Root, name string, hdr *tar.Header) error {
 	var attrs map[string]string
 	for k, v := range hdr.PAXRecords {
-		if strings.HasPrefix(k, "SCHILY.xattr.user.") ||
-			strings.HasPrefix(k, "SCHILY.xattr.trusted.overlay.") {
-			if attrs == nil {
-				attrs = map[string]string{}
-			}
-			attrs[strings.TrimPrefix(k, "SCHILY.xattr.")] = v
+		attr, ok := strings.CutPrefix(k, "SCHILY.xattr.")
+		if !ok || !keepXattr(attr) {
+			continue
 		}
+		if attrs == nil {
+			attrs = map[string]string{}
+		}
+		attrs[attr] = v
 	}
 	if len(attrs) == 0 {
 		return nil
@@ -508,12 +530,29 @@ func restoreOverlayXattrs(root *os.Root, name string, hdr *tar.Header) error {
 	return nil
 }
 
-// readOverlayXattrs returns path's user.* and trusted.overlay.* extended
-// attributes. Filesystems without xattr support report none rather than
-// failing: tarutil archives arbitrary workload trees, and only those two
-// namespaces carry state the round trip must preserve (trusted.overlay.* is
-// the host kernel's overlay deletion metadata; reading it requires root,
-// which archiving in ateom always has).
+// overlayXattrs are the trusted.overlay.* attributes the round trip keeps: the
+// path-based ones the rootfs overlay mount writes to its upper (see
+// kata.StageMergedRootfs). The rest are either file handles that go stale on
+// another node (origin, upper) or belong to features the mount turns off
+// (metacopy, index), and the kernel trusts all of them when it mounts the
+// upper, so a crafted archive must not be able to plant them.
+var overlayXattrs = map[string]bool{
+	"trusted.overlay.opaque":   true,
+	"trusted.overlay.redirect": true,
+	"trusted.overlay.impure":   true,
+}
+
+// keepXattr reports whether attr is archived and restored: any user.* attribute
+// (workload data, which the workload can set itself) or one of overlayXattrs.
+// Everything else, notably security.capability, is dropped.
+func keepXattr(attr string) bool {
+	return strings.HasPrefix(attr, "user.") || overlayXattrs[attr]
+}
+
+// readOverlayXattrs returns path's extended attributes that keepXattr allows.
+// Filesystems without xattr support report none rather than failing: tarutil
+// archives arbitrary workload trees. Reading trusted.* requires root, which
+// archiving in ateom always has.
 func readOverlayXattrs(path string) (map[string]string, error) {
 	sz, err := unix.Llistxattr(path, nil)
 	if err != nil {
@@ -532,7 +571,7 @@ func readOverlayXattrs(path string) (map[string]string, error) {
 
 	var attrs map[string]string
 	for _, attr := range strings.Split(string(buf[:sz]), "\x00") {
-		if !strings.HasPrefix(attr, "user.") && !strings.HasPrefix(attr, "trusted.overlay.") {
+		if !keepXattr(attr) {
 			continue
 		}
 		vsz, err := unix.Lgetxattr(path, attr, nil)
