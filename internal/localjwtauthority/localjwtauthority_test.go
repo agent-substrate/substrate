@@ -286,6 +286,27 @@ func TestPoolRotationRejects(t *testing.T) {
 	}
 }
 
+func TestPoolActiveID(t *testing.T) {
+	designated := testPool(t, "1", "2")
+	designated.ActiveForSigning = "2"
+	undesignated := testPool(t, "1", "2")
+	undesignated.ActiveForSigning = ""
+
+	for _, tc := range []struct {
+		name string
+		pool *ConcretePool
+		want string
+	}{
+		{name: "designated", pool: designated, want: "2"},
+		{name: "none designated", pool: undesignated, want: "1"},
+		{name: "empty", pool: &ConcretePool{}, want: ""},
+	} {
+		if got := tc.pool.ActiveID(); got != tc.want {
+			t.Errorf("%s: ActiveID() = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestGenerateAuthority(t *testing.T) {
 	for _, alg := range []string{"RS256", "ES256"} {
 		t.Run(alg, func(t *testing.T) {
