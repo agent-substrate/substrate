@@ -34,6 +34,9 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/defaults"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	rdsauth "github.com/aws/aws-sdk-go-v2/feature/rds/auth"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -112,12 +115,21 @@ var ErrUnavailable = errors.New("PostgreSQL is unavailable")
 
 // Connect opens a pgxpool against dsn, creates schema if necessary, and
 // applies pending schema migrations. A dedicated watch pool isolates outbox
-// polling and maintenance from writes.
-func Connect(ctx context.Context, dsn, schema string) (*Persistence, error) {
+// polling and maintenance from writes. If iamAuth is true, connections use
+// an RDS/Aurora IAM auth token instead of dsn's password, which requires TLS.
+func Connect(ctx context.Context, dsn, schema string, iamAuth bool) (*Persistence, error) {
 	if schema == "" {
 		return nil, fmt.Errorf("PostgreSQL schema must not be empty")
 	}
-	cfg, err := poolConfig(dsn)
+	var awsCfg aws.Config
+	if iamAuth {
+		var err error
+		awsCfg, err = awsconfig.LoadDefaultConfig(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("loading AWS config for PostgreSQL IAM auth: %w", err)
+		}
+	}
+	cfg, err := poolConfig(dsn, iamAuth, awsCfg)
 	if err != nil {
 		return nil, err
 	}
@@ -173,17 +185,9 @@ func createSchema(ctx context.Context, pool *pgxpool.Pool, schema string) error 
 	return nil
 }
 
-// poolConfig parses dsn into a pool configuration whose TLS material is read
-// from disk again for every new connection.
-//
-// pgx resolves sslcert, sslkey and sslrootcert once, when the connection
-// string is parsed, and pins the result for the life of the pool. The paths in
-// use here are projected pod certificates that the kubelet replaces about
-// every day, so a long-lived process would keep presenting the client
-// certificate it started with, and keep trusting only the CAs it started with,
-// until connections started failing. Re-parsing in BeforeConnect costs one
-// small file read per new connection and picks up every rotation.
-func poolConfig(dsn string) (*pgxpool.Config, error) {
+// poolConfig parses dsn, chaining a TLS refresh hook and, if iamAuth is
+// true, an IAM auth hook. IAM auth requires TLS.
+func poolConfig(dsn string, iamAuth bool, awsCfg aws.Config) (*pgxpool.Config, error) {
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("parsing PostgreSQL connection string: %w", err)
@@ -192,10 +196,39 @@ func poolConfig(dsn string) (*pgxpool.Config, error) {
 	for _, fallback := range cfg.ConnConfig.Fallbacks {
 		usesTLS = usesTLS || fallback.TLSConfig != nil
 	}
-	if !usesTLS {
-		return cfg, nil
+	if iamAuth && !usesTLS {
+		return nil, fmt.Errorf("PostgreSQL AWS IAM auth requires TLS: configure sslmode in the connection string")
 	}
-	cfg.BeforeConnect = func(_ context.Context, cc *pgx.ConnConfig) error {
+
+	var hooks []func(ctx context.Context, cc *pgx.ConnConfig) error
+	if usesTLS {
+		hooks = append(hooks, tlsBeforeConnect(dsn))
+	}
+	if iamAuth {
+		hooks = append(hooks, iamBeforeConnect(awsCfg))
+	}
+	if len(hooks) > 0 {
+		cfg.BeforeConnect = chainBeforeConnect(hooks)
+	}
+	return cfg, nil
+}
+
+// chainBeforeConnect runs every hook in order, stopping at the first error.
+func chainBeforeConnect(hooks []func(ctx context.Context, cc *pgx.ConnConfig) error) func(ctx context.Context, cc *pgx.ConnConfig) error {
+	return func(ctx context.Context, cc *pgx.ConnConfig) error {
+		for _, hook := range hooks {
+			if err := hook(ctx, cc); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+}
+
+// tlsBeforeConnect re-reads dsn's TLS material from disk on every new
+// connection, so a long-lived pool picks up certificate rotation.
+func tlsBeforeConnect(dsn string) func(ctx context.Context, cc *pgx.ConnConfig) error {
+	return func(_ context.Context, cc *pgx.ConnConfig) error {
 		fresh, err := pgx.ParseConfig(dsn)
 		if err != nil {
 			return fmt.Errorf("re-reading PostgreSQL TLS material: %w", err)
@@ -204,7 +237,20 @@ func poolConfig(dsn string) (*pgxpool.Config, error) {
 		cc.Fallbacks = fresh.Fallbacks
 		return nil
 	}
-	return cfg, nil
+}
+
+// iamBeforeConnect generates a fresh RDS/Aurora IAM auth token per
+// connection, since tokens expire after 15 minutes.
+func iamBeforeConnect(awsCfg aws.Config) func(ctx context.Context, cc *pgx.ConnConfig) error {
+	return func(ctx context.Context, cc *pgx.ConnConfig) error {
+		endpoint := fmt.Sprintf("%s:%d", cc.Host, cc.Port)
+		token, err := rdsauth.BuildAuthToken(ctx, endpoint, awsCfg.Region, cc.User, awsCfg.Credentials)
+		if err != nil {
+			return fmt.Errorf("building RDS IAM auth token: %w", err)
+		}
+		cc.Password = token
+		return nil
+	}
 }
 
 // NewPersistence wraps an already-open pool, applying pending migrations.

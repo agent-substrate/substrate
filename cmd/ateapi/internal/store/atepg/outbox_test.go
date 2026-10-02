@@ -43,7 +43,7 @@ func TestConnect_DedicatedWatchPool(t *testing.T) {
 	requirePool(t) // ensures the container is up and containerDSN is set
 	ctx := context.Background()
 
-	p, err := Connect(ctx, containerDSN, "public")
+	p, err := Connect(ctx, containerDSN, "public", false)
 	if err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
@@ -860,7 +860,7 @@ func TestWatchWorkers_ClosesAfterPersistentPollFailure(t *testing.T) {
 
 	// Connect so the watcher has its own pool: killing it simulates a
 	// persistent outage without touching the shared container pool.
-	p, err := Connect(ctx, containerDSN, "public")
+	p, err := Connect(ctx, containerDSN, "public", false)
 	if err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
@@ -1037,7 +1037,7 @@ func TestLocalPublishReachesWatchers(t *testing.T) {
 	requirePool(t)
 	ctx := context.Background()
 
-	p, err := Connect(ctx, containerDSN, "public")
+	p, err := Connect(ctx, containerDSN, "public", false)
 	if err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
@@ -1121,7 +1121,7 @@ func TestLocalPublishSurvivesWatchClose(t *testing.T) {
 	requirePool(t)
 	ctx := context.Background()
 
-	p, err := Connect(ctx, containerDSN, "public")
+	p, err := Connect(ctx, containerDSN, "public", false)
 	if err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}

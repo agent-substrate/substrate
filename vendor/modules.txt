@@ -167,6 +167,9 @@ github.com/aws/aws-sdk-go-v2/credentials/stscreds
 ## explicit; go 1.24
 github.com/aws/aws-sdk-go-v2/feature/ec2/imds
 github.com/aws/aws-sdk-go-v2/feature/ec2/imds/internal/config
+# github.com/aws/aws-sdk-go-v2/feature/rds/auth v1.6.23
+## explicit; go 1.24
+github.com/aws/aws-sdk-go-v2/feature/rds/auth
 # github.com/aws/aws-sdk-go-v2/feature/s3/manager v1.22.10
 ## explicit; go 1.24
 github.com/aws/aws-sdk-go-v2/feature/s3/manager
