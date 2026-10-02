@@ -4,7 +4,7 @@ This runbook upgrades a running Agent Substrate install to a new build
 version, one node at a time. No actor loses state. On a cluster with
 more than one node, at most one node's worth of capacity is out of
 service while the rest of the fleet keeps serving; a single-node cluster
-stops fully during step 5. It needs `kubectl`, `kubectl ate`, `go run
+stops fully during step 5. It needs `kubectl`, `kubectl-ate`, `go run
 ./cmd/ate-setup`, `jq`, and `grpcurl`. The numbered steps are the same
 on every Kubernetes provider; the provider-specific parts sit in their
 own sections, [before](#on-gke) and [after](#after-the-roll-on-gke)
@@ -159,7 +159,7 @@ instead of adding a second DaemonSet. A tagged checkout differs by
 construction; if the install pinned `VERSION`, pin a new value now
 and keep it for every command of this upgrade.
 
-Install the new `kubectl ate` with `go install ./cmd/kubectl-ate`.
+Install the new `kubectl-ate` with `go install ./cmd/kubectl-ate`.
 
 ### On GKE
 
@@ -273,7 +273,7 @@ Each warning comes back at the step where the mistake becomes possible.
 > to reach the control plane and finish. An actor still awake when the
 > window closes moves to `ACTOR_STATE_CRASHED`: `resume` and `suspend`
 > are both refused, and everything since its last snapshot is lost. Call
-> `RevertActor` (`kubectl ate revert`) to discard the crashed run and
+> `RevertActor` (`kubectl-ate revert`) to discard the crashed run and
 > return the actor to `ACTOR_STATE_SUSPENDED` at its last external snapshot
 > so it can be resumed. Scaling a serving pool down removes pods the same
 > way, without suspending the actors on them. (Step 4 clones the pool; it
@@ -420,7 +420,7 @@ only stops new placements.
 
 ```bash
 # A worker's name is its pod's UID; that is what DrainWorker takes.
-for w in $(kubectl ate get workers -o json \
+for w in $(kubectl-ate get workers -o json \
              | jq -r --arg node "$NODE" '.workers[] | select(.nodeName == $node) | .metadata.name'); do
   grpcurl -cacert /tmp/ate-ca.pem -authority api.ate-system.svc \
     -H "authorization: Bearer ${TOKEN}" \
@@ -435,14 +435,14 @@ snapshot lives on this node. A paused actor sits on no worker, so it
 shows up only in the second list.
 
 ```bash
-kubectl ate get workers -o json | jq -r --arg node "$NODE" '
+kubectl-ate get workers -o json | jq -r --arg node "$NODE" '
   ["WORKER", "POD", "ASSIGNED ACTOR"],
   (.workers[] | select(.nodeName == $node)
    | [.metadata.name, .workerPod,
       (.status.assignment.actor | if . then .atespace + "/" + .name else "<none>" end)])
   | @tsv' | column -t -s $'\t'
 
-kubectl ate get actors -A -o json | jq -r --arg node "$NODE" '
+kubectl-ate get actors -A -o json | jq -r --arg node "$NODE" '
   ["PAUSED_ACTOR", "STATE"],
   (.actors[]
    | select(.status.localSnapshot.nodeVmsWithLocalSnapshots // [] | index($node))
@@ -451,7 +451,7 @@ kubectl ate get actors -A -o json | jq -r --arg node "$NODE" '
 ```
 
 **c. Suspend them at your own pace.** Every actor in either list has to be suspended
-before the node moves (`kubectl ate suspend actor <name> -a
+before the node moves (`kubectl-ate suspend actor <name> -a
 <atespace>`). Suspend releases the worker and uploads the durable
 snapshot, so the actor resumes on demand onto any free matching worker
 afterwards. Repeat step b until the `ASSIGNED ACTOR` column reads
@@ -500,14 +500,14 @@ kubectl -n $NS get pods -l ate.dev/worker-pool=$OLD_WORKERPOOL --field-selector 
 New-pool pods Pending on other nodes are expected until those nodes
 move.
 
-**g. Take the next node.** Start again at step a once `kubectl ate get
+**g. Take the next node.** Start again at step a once `kubectl-ate get
 workers` shows at least one FREE worker for the suspended actors to
 land on.
 
 You are done when `kubectl get nodes -L ate.dev/substrate-version`
 shows every node at `$NEW_VERSION` (a node that joined mid-roll still
 carries `$OLD_VERSION`; apply step 5 to roll it) and every assigned
-actor in `kubectl ate get actors -A` sits on a new-pool pod.
+actor in `kubectl-ate get actors -A` sits on a new-pool pod.
 
 ### 6. Upgrade the rest of the control plane
 
@@ -614,7 +614,7 @@ kubectl -n $NS get workerpool $OLD_WORKERPOOL -o yaml > old-pool-backup.yaml
 # expected); no actor assigned to an old-pool worker.
 kubectl get nodes -l ate.dev/substrate-version=$OLD_VERSION
 kubectl -n $NS get pods -l ate.dev/worker-pool=$OLD_WORKERPOOL
-kubectl ate get workers
+kubectl-ate get workers
 
 # Retire the old pool (its Deployment and pods go with it) and the
 # old atelet DaemonSet.

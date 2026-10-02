@@ -14,7 +14,7 @@
 
 # Worker pool for the manual micro-VM CSI test. The ActorTemplate lives in
 # counter-microvm-csi-test-template.yaml and is created through the ate API
-# with `kubectl ate create actor-template`.
+# with `kubectl-ate create actor-template`.
 
 apiVersion: v1
 kind: Namespace

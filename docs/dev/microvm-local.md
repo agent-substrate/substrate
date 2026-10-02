@@ -68,7 +68,7 @@ template.
 ```sh
 kubectl get pods -n ate-demo-counter-microvm
 kubectl get workerpools -A
-kubectl ate get actor-templates -a ate-demo-counter-microvm
+kubectl-ate get actor-templates -a ate-demo-counter-microvm
 ```
 
 Expected:

@@ -266,7 +266,7 @@ func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Client
 		// clear above keeps the next run working regardless.
 		_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: ref})
 		if _, err := clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref}); err != nil {
-			t.Logf("cleanup: DeleteActor %q failed, actor leaked (remove with: kubectl ate delete actor %s -a %s): %v", id, id, probeNamespace, err)
+			t.Logf("cleanup: DeleteActor %q failed, actor leaked (remove with: kubectl-ate delete actor %s -a %s): %v", id, id, probeNamespace, err)
 		}
 	})
 

@@ -17,7 +17,7 @@
 # suspend/resume across pods shows the count continuing — proving the guest
 # memory snapshot round-tripped. The ActorTemplate is not a CRD: it lives in
 # counter-microvm-template.yaml.tmpl and is created through the ate API with
-# `kubectl ate create actor-template`. The cluster-wide `microvm`
+# `kubectl-ate create actor-template`. The cluster-wide `microvm`
 # SandboxConfig referenced by the pool is installed by
 # hack/install-microvm-deps.sh
 

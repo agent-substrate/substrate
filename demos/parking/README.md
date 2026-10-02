@@ -35,7 +35,7 @@ This command will:
 - Create the `ate-demo-parking` namespace and a **2-replica** `WorkerPool`
   (`parking`, from `parking.yaml.tmpl`).
 - Create the `ate-demo-parking` atespace and the `parking` actor template in it
-  (`parking-template.yaml.tmpl`, applied with `kubectl ate create actor-template`).
+  (`parking-template.yaml.tmpl`, applied with `kubectl-ate create actor-template`).
 - Wait until the pool is rolled out and the template's golden snapshot is built.
 
 ### 2. Create more actors than workers
@@ -49,7 +49,7 @@ go install ./cmd/kubectl-ate
 
 # 4 actors share a 2-worker pool -> oversubscribed.
 for id in p1 p2 p3 p4; do
-  kubectl ate create actor "$id" --atespace ate-demo-parking --template parking
+  kubectl-ate create actor "$id" --atespace ate-demo-parking --template parking
 done
 ```
 
@@ -74,8 +74,8 @@ Fill both workers by requesting two actors, leaving them `RUNNING`:
 curl -s -H "ate-target-actor: ate-demo-parking/p1" http://localhost:8000
 curl -s -H "ate-target-actor: ate-demo-parking/p2" http://localhost:8000
 
-kubectl ate get workers   # both workers are now bound to p1 and p2
-kubectl ate get actors    # p1,p2 RUNNING; p3,p4 SUSPENDED
+kubectl-ate get workers   # both workers are now bound to p1 and p2
+kubectl-ate get actors    # p1,p2 RUNNING; p3,p4 SUSPENDED
 ```
 
 Now request **p3** with timing. The pool is full, so this request **parks** —
@@ -90,7 +90,7 @@ While that is hanging, in a **second terminal** free a worker by suspending p1
 (within the 5s park budget):
 
 ```bash
-kubectl ate suspend actor p1 --atespace ate-demo-parking
+kubectl-ate suspend actor p1 --atespace ate-demo-parking
 ```
 
 Back in the first terminal, the parked request now completes with **`HTTP 200`**,

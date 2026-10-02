@@ -86,8 +86,8 @@ rejects that option with agentgateway rather than silently omitting it.
   (set in `manifests/ate-install/ate-api-server.yaml`). ateapi stamps the address onto every
   atelet `Run`/`Restore`, which turns on tunneled egress cluster-wide.
 - **Egress policy** — the gateway denies by default, so the demo Actor needs an `EgressPolicy`
-  before its fetches succeed. `kubectl ate create egress-policy` creates one from a manifest
-  (step 3 below) and `kubectl ate get egress-policy` reads it back; the e2e suites create theirs
+  before its fetches succeed. `kubectl-ate create egress-policy` creates one from a manifest
+  (step 3 below) and `kubectl-ate get egress-policy` reads it back; the e2e suites create theirs
   with `e2e.EnsureEgressPolicy`. An `all` rule reproduces the pre-policy behavior.
 - **Actor-identity trust** — the gateway mounts the `actor-id-ca-certs` Secret, a cert-only copy of
   the actor-identity CA root that `hack/install-ate.sh` derives from `actor-id-ca-pool` (which also
@@ -111,7 +111,7 @@ the `egress` ActorTemplate (a substrate resource, not a CRD) through the ate
 API, and blocks until the template's golden snapshot is built:
 
 ```bash
-kubectl ate get actor-template egress -a ate-demo-egress
+kubectl-ate get actor-template egress -a ate-demo-egress
 ```
 
 ## Run the automated test (easiest)
@@ -143,13 +143,13 @@ TARGET_IP=$(kubectl -n egress-target get svc whoami -o jsonpath='{.spec.clusterI
 
 # 2. Create and resume an Actor in the demo's atespace: --template
 #    resolves the template by name within the actor's own atespace.
-kubectl ate create actor egress-demo -a ate-demo-egress --template egress
-kubectl ate resume actor egress-demo -a ate-demo-egress   # wait for ACTOR_STATE_RUNNING
+kubectl-ate create actor egress-demo -a ate-demo-egress --template egress
+kubectl-ate resume actor egress-demo -a ate-demo-egress   # wait for ACTOR_STATE_RUNNING
 
 # 3. Allow the Actor's egress; without a policy the gateway denies everything.
 #    Any host or address: cleartext HTTP on any port, and HTTPS on 443,
 #    intercepted by the gateway.
-kubectl ate create egress-policy egress-demo -a ate-demo-egress -f - <<'EOF'
+kubectl-ate create egress-policy egress-demo -a ate-demo-egress -f - <<'EOF'
 rules:
 - http: {hostnames: ["*"], ports: {all: {}}}
 - https: {hostnames: ["*"]}

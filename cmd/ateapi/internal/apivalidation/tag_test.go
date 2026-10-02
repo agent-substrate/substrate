@@ -426,7 +426,7 @@ func TestValidateListTagsRequest(t *testing.T) {
 		},
 		{
 			// Empty atespace means "all atespaces"
-			// (kubectl ate get tags -A).
+			// (kubectl-ate get tags -A).
 			name:      "valid, empty atespace means all atespaces",
 			req:       &ateapipb.ListTagsRequest{},
 			wantError: nil,

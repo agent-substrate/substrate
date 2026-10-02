@@ -324,7 +324,7 @@ If `wakeupProbe` is omitted from a container, `ResumeActor` returns as soon as t
 ### Example
 
 A protojson-shaped `ateapipb.ActorTemplate`, created through the ate API with
-`kubectl ate create actor-template -f secret-agent.yaml` (the `ate-demo`
+`kubectl-ate create actor-template -f secret-agent.yaml` (the `ate-demo`
 atespace must exist):
 
 ```yaml
@@ -445,7 +445,7 @@ When an `ActorTemplate` is created:
 `CreateActor` uses an explicit `sourceTag` when supplied; otherwise it resolves the template's golden tag and records that snapshot on the new actor. If the golden tag is not ready yet, the actor starts without a snapshot and cold-boots even if the tag becomes ready before its first resume. The default does not populate the caller-owned `sourceTag` field. Deleting the template collects its golden tag and any unfinished golden actor.
 
 ### Resumption Lifecycle
-Once a template is `Ready`, creating an actor logically (via `kubectl ate create actor`) allows it to be resumed instantly on any free worker in the referenced `WorkerPool`. Substrate bypasses the standard container boot and restores the process directly from its last saved state.
+Once a template is `Ready`, creating an actor logically (via `kubectl-ate create actor`) allows it to be resumed instantly on any free worker in the referenced `WorkerPool`. Substrate bypasses the standard container boot and restores the process directly from its last saved state.
 
 ---
 
@@ -453,7 +453,7 @@ Once a template is `Ready`, creating an actor logically (via `kubectl ate create
 *   **Startup Logic:** Place expensive initialization (loading large models, establishing baseline connections) in your application's entry point. These will be captured in the Golden Snapshot and won't need to be repeated on every resumption.
 *   **Placement:** Ensure your `ActorTemplate`'s `sandboxClass` matches your `WorkerPool`'s, and use the template's `workerSelector` to target specific pools — pool selection is by label match, not by namespace or RBAC.
 *   **Version Management:** When updating code, create a new `ActorTemplate` (e.g. `v2`). Substrate treats each template as an immutable state root.
-*   **Eviction:** When its worker pod is evicted, an actor gets `SIGTERM` and 30 minutes to be suspended. After that it is killed and moves to `ACTOR_STATE_CRASHED`, and everything since its last snapshot is lost. So an actor that runs for more than 30 minutes without a suspend can lose data. A `CRASHED` actor can be recovered back to `ACTOR_STATE_SUSPENDED` at its last external snapshot using `RevertActor` (`kubectl ate revert`).
+*   **Eviction:** When its worker pod is evicted, an actor gets `SIGTERM` and 30 minutes to be suspended. After that it is killed and moves to `ACTOR_STATE_CRASHED`, and everything since its last snapshot is lost. So an actor that runs for more than 30 minutes without a suspend can lose data. A `CRASHED` actor can be recovered back to `ACTOR_STATE_SUSPENDED` at its last external snapshot using `RevertActor` (`kubectl-ate revert`).
 
 ---
 

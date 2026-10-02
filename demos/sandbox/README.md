@@ -37,12 +37,12 @@ This command will:
 - Create the `ate-demo-sandbox` namespace and `WorkerPool` (`sandbox.yaml.tmpl`).
 - Create the `ate-demo-sandbox` atespace and the `sandbox-template` actor
   template in it (`sandbox-template.yaml.tmpl`, applied with
-  `kubectl ate create actor-template`).
+  `kubectl-ate create actor-template`).
 - Wait until the template's golden snapshot is built.
 
 Inspect the template with:
 ```bash
-kubectl ate get actor-template sandbox-template -a ate-demo-sandbox
+kubectl-ate get actor-template sandbox-template -a ate-demo-sandbox
 ```
 
 ### 2. Create a Sandbox Actor
@@ -53,7 +53,7 @@ Create the sandbox actor in the demo's atespace with a chosen name (e.g., `my-sa
 # Install the CLI as a kubectl plugin if not already installed
 go install ./cmd/kubectl-ate
 
-kubectl ate create actor my-sandbox-1 -a ate-demo-sandbox --template sandbox-template
+kubectl-ate create actor my-sandbox-1 -a ate-demo-sandbox --template sandbox-template
 ```
 
 ### 3. Port-Forward Services
@@ -101,7 +101,7 @@ Type `exit` to leave. This will automatically trigger the suspension of the acto
 
 To permanently delete the suspended actor:
 ```bash
-kubectl ate delete actor my-sandbox-1 -a ate-demo-sandbox
+kubectl-ate delete actor my-sandbox-1 -a ate-demo-sandbox
 ```
 
 ## How to Uninstall

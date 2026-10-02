@@ -305,7 +305,7 @@ func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Client
 			t.Logf("cleanup: SuspendActor %q: %v", id, err)
 		}
 		if _, err := clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref}); err != nil {
-			t.Logf("cleanup: DeleteActor %q failed, actor leaked (remove with: kubectl ate delete actor %s -a %s): %v", id, id, probeNamespace, err)
+			t.Logf("cleanup: DeleteActor %q failed, actor leaked (remove with: kubectl-ate delete actor %s -a %s): %v", id, id, probeNamespace, err)
 		}
 	})
 	// One https rule per hostname, each carrying the injection whose outcome

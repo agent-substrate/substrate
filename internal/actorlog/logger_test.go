@@ -251,7 +251,7 @@ func TestWrapContainerLogs_ReservedNamespace(t *testing.T) {
 // not write. An actor can set either spelling, and the unwritten one is not inert:
 // off GCE a forged logging.googleapis.com/labels is the very key Cloud Logging
 // promotes into LogEntry.labels, so leaving it alone would let the actor outrank
-// substrate's own attribution, and let it match another actor's kubectl ate logs
+// substrate's own attribution, and let it match another actor's kubectl-ate logs
 // stream. Both spellings fold into one sanitized group.
 func TestWrapContainerLogs_ForeignLabelGroup(t *testing.T) {
 	tests := []struct {

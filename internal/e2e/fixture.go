@@ -71,7 +71,7 @@ func substrateTemplateSubstitutions(bucket, name string, trustBundle bool) (inli
 // ---separated protojson-shaped ActorTemplate documents. Strict, so a block
 // placeholder landing at the wrong depth or a misspelled field fails here
 // rather than applying cleanly and doing nothing — the same contract
-// `kubectl ate create actor-template` enforces.
+// `kubectl-ate create actor-template` enforces.
 func decodeSubstrateTemplates(t *testing.T, rendered []byte) []*ateapipb.ActorTemplate {
 	t.Helper()
 	var templates []*ateapipb.ActorTemplate

@@ -93,7 +93,7 @@ This command will:
   (`counter`, starting with 5 replicas).
 - Create the `ate-demo-autoscaled-workerpool` atespace and the `counter` actor
   template in it (`autoscaled-workerpool-template.yaml.tmpl`, applied with
-  `kubectl ate create actor-template`), waiting until the pool is rolled out
+  `kubectl-ate create actor-template`), waiting until the pool is rolled out
   and the template's golden snapshot is built.
 - Deploy `prometheus-adapter` into `ate-demo-autoscaled-workerpool` to serve `ate_workerpool_workers` on `external.metrics.k8s.io`, and one `HorizontalPodAutoscaler` (`counter`).
 
@@ -121,7 +121,7 @@ go install ./cmd/kubectl-ate
 
 # Create 15 actors to generate load
 for i in {001..015}; do
-  kubectl ate create actor c$i -a ate-demo-autoscaled-workerpool --template counter
+  kubectl-ate create actor c$i -a ate-demo-autoscaled-workerpool --template counter
 done
 ```
 
@@ -159,7 +159,7 @@ Suspend the actors to drop the count of full workers. After the 300s stabilizati
 
 ```sh
 for i in {001..015}; do
-  kubectl ate suspend actor c$i -a ate-demo-autoscaled-workerpool
+  kubectl-ate suspend actor c$i -a ate-demo-autoscaled-workerpool
 done
 ```
 

@@ -12,7 +12,7 @@ You can use `go install` to compile the tool and place the binary directly into 
 ```bash
 go install ./cmd/kubectl-ate
 ```
-You can now run it seamlessly anywhere as a native Kubernetes command: `kubectl ate <command>`.
+You can now run it seamlessly anywhere as a native Kubernetes command: `kubectl-ate <command>`.
 
 ### 2. Run directly from source (Development)
 If you are testing changes to the codebase, you can bypass compilation and run the CLI directly from the source tree:
@@ -54,7 +54,7 @@ The kind overlay installed by `hack/install-ate-kind.sh --deploy-ate-system` alr
 Port-forward the Jaeger UI and invoke any command with `--trace`:
 ```bash
 kubectl port-forward -n otel-system svc/jaeger 16686:16686 &
-kubectl ate get actor my-counter-1 --trace
+kubectl-ate get actor my-counter-1 --trace
 # open http://localhost:16686 and search for the most recent trace
 ```
 
@@ -79,30 +79,30 @@ List and inspect the state of actors and workers across the cluster.
 
 ```bash
 # List actors in one atespace; -a is shorthand for --atespace
-kubectl ate get actors --atespace <atespace>
-kubectl ate get actors -a <atespace>
+kubectl-ate get actors --atespace <atespace>
+kubectl-ate get actors -a <atespace>
 
 # List actors across all atespaces
-kubectl ate get actors -A
+kubectl-ate get actors -A
 
 # Get a specific actor by name and output as raw YAML
-kubectl ate get actor <actor-name> --atespace <atespace> -o yaml
+kubectl-ate get actor <actor-name> --atespace <atespace> -o yaml
 
 # List all physical workers and see which actors are assigned to them
-kubectl ate get workers
+kubectl-ate get workers
 
 # Filter workers by Kubernetes namespace, assigned-actor atespace, or
 # worker pool labels (same flags as `top workers`)
-kubectl ate get workers -n <namespace>
-kubectl ate get workers -a <atespace>
-kubectl ate get workers -l <label-selector>
+kubectl-ate get workers -n <namespace>
+kubectl-ate get workers -a <atespace>
+kubectl-ate get workers -l <label-selector>
 ```
 
 > **Note:** `get actors` requires either `--atespace <name>` / `-a <name>` (one atespace) or `-A`/`--all-atespaces` (all atespaces) — there is no default atespace. Getting a single actor always requires `--atespace`/`-a`, since an actor is addressed by `(atespace, name)`. `-a` (lower-case) scopes to one atespace; `-A` (upper-case) spans all.
 
-> **Note:** Actors, workers, and actor templates are not Kubernetes CRDs — they live in the Substrate control plane's PostgreSQL database, not `etcd`. `kubectl get actor`, `kubectl get worker`, and `kubectl get actortemplate` will not return anything; only `kubectl ate get …` queries the control plane (see [Actor Templates](#actor-templates)). `kubectl get workerpool` *does* work, because pools are CRDs.
+> **Note:** Actors, workers, and actor templates are not Kubernetes CRDs — they live in the Substrate control plane's PostgreSQL database, not `etcd`. `kubectl get actor`, `kubectl get worker`, and `kubectl get actortemplate` will not return anything; only `kubectl-ate get …` queries the control plane (see [Actor Templates](#actor-templates)). `kubectl get workerpool` *does* work, because pools are CRDs.
 
-#### `kubectl ate get actor` output columns
+#### `kubectl-ate get actor` output columns
 
 | Column | Meaning |
 |---|---|
@@ -115,7 +115,7 @@ kubectl ate get workers -l <label-selector>
 | `VERSION` | Monotonic integer that increments on every state transition (resume / suspend / checkpoint). Useful for distinguishing snapshots. |
 | `AGE` | Time elapsed since the actor was created. |
 
-#### `kubectl ate get worker` output columns
+#### `kubectl-ate get worker` output columns
 
 | Column | Meaning |
 |---|---|
@@ -131,21 +131,21 @@ An **atespace** is the isolation boundary an actor belongs to. It must exist bef
 
 ```bash
 # Create an atespace
-kubectl ate create atespace <atespace>
+kubectl-ate create atespace <atespace>
 
 # List all atespaces
-kubectl ate get atespaces
+kubectl-ate get atespaces
 
 # Get an atespace
-kubectl ate get atespace <atespace>
+kubectl-ate get atespace <atespace>
 
 # Delete an atespace (must be empty — fails if any actors remain)
-kubectl ate delete atespace <atespace>
+kubectl-ate delete atespace <atespace>
 ```
 
 > **Note:** `create actor … -a <atespace>` requires the atespace to already exist, otherwise it fails with `FailedPrecondition`. `delete atespace` only removes an **empty** atespace; delete its actors and tags first (cascade delete is not yet supported).
 
-#### `kubectl ate get atespace` output columns
+#### `kubectl-ate get atespace` output columns
 
 | Column | Meaning |
 |---|---|
@@ -163,21 +163,21 @@ one.
 # Create a template from a manifest (protojson-shaped ateapipb.ActorTemplate,
 # a single YAML/JSON document; use -f - for stdin). The metadata's atespace
 # must already exist.
-kubectl ate create actor-template -f template.yaml
+kubectl-ate create actor-template -f template.yaml
 
 # List templates, or get one (also: -o yaml prints the re-applyable manifest).
-kubectl ate get actor-templates -a <atespace>
-kubectl ate get actor-template <name> -a <atespace> -o yaml
+kubectl-ate get actor-templates -a <atespace>
+kubectl-ate get actor-template <name> -a <atespace> -o yaml
 
 # Delete a template. This also deletes its golden actor and golden snapshot.
-kubectl ate delete actor-template <name> -a <atespace>
+kubectl-ate delete actor-template <name> -a <atespace>
 ```
 
 See
 [`demos/counter/counter-template.yaml.tmpl`](../../demos/counter/counter-template.yaml.tmpl)
 for a complete manifest example.
 
-#### `kubectl ate get actor-templates` output columns
+#### `kubectl-ate get actor-templates` output columns
 
 | Column | Meaning |
 |---|---|
@@ -194,22 +194,22 @@ Manage the execution state of your workloads.
 
 ```bash
 # Create a new actor from an ActorTemplate.
-kubectl ate create actor my-actor --template=<template-name> -a <atespace>
+kubectl-ate create actor my-actor --template=<template-name> -a <atespace>
 
 # Resume an actor (assigns it to a free worker and restores its state)
-kubectl ate resume actor my-actor -a <atespace>
+kubectl-ate resume actor my-actor -a <atespace>
 
 # Suspend an actor (snapshots its state to storage and frees the worker)
-kubectl ate suspend actor my-actor -a <atespace>
+kubectl-ate suspend actor my-actor -a <atespace>
 
 # Revert an actor to its last external snapshot (discards live, paused, or crashed state and returns to SUSPENDED)
-kubectl ate revert actor my-actor -a <atespace>
+kubectl-ate revert actor my-actor -a <atespace>
 
 # Delete an actor (by default, requires the actor to be SUSPENDED or CRASHED).
-kubectl ate delete actor my-actor -a <atespace>
+kubectl-ate delete actor my-actor -a <atespace>
 
 # Delete an actor from any state (e.g. RUNNING, PAUSED), terminating workloads and detaching volumes.
-kubectl ate delete actor my-actor -a <atespace> --any-state
+kubectl-ate delete actor my-actor -a <atespace> --any-state
 ```
 
 ### Actor Snapshots
@@ -221,18 +221,18 @@ so suspending or deleting the actor afterwards cannot collect it.
 
 ```bash
 # List an Atespace's tags, all Atespaces' tags, or resolve tags by name.
-kubectl ate get tags -a <atespace>
-kubectl ate get tags -A
-kubectl ate get tag <tag-name> [<tag-name> ...] -a <atespace>
+kubectl-ate get tags -a <atespace>
+kubectl-ate get tags -A
+kubectl-ate get tag <tag-name> [<tag-name> ...] -a <atespace>
 
 # Tag the snapshot a suspended actor holds, then publish or unpublish the tag.
-kubectl ate create tag <tag-name> -a <atespace> --actor <actor-name> [--scope published]
-kubectl ate update tag <tag-name> -a <atespace> --scope published
-kubectl ate update tag <tag-name> -a <atespace> --scope atespace
+kubectl-ate create tag <tag-name> -a <atespace> --actor <actor-name> [--scope published]
+kubectl-ate update tag <tag-name> -a <atespace> --scope published
+kubectl-ate update tag <tag-name> -a <atespace> --scope atespace
 
 # Create an actor from a tag.
-kubectl ate create actor <actor-name> -a <atespace> --template <template-name> --tag <tag-name>
-kubectl ate delete tag <tag-name> -a <atespace>
+kubectl-ate create actor <actor-name> -a <atespace> --template <template-name> --tag <tag-name>
+kubectl-ate delete tag <tag-name> -a <atespace>
 ```
 
 ### Egress Policies
@@ -243,26 +243,26 @@ An actor has at most one egress policy.
 
 ```bash
 # Get an actor's egress policy.
-kubectl ate get egress-policy <actor-name> -a <atespace>
-kubectl ate get egress-policy <actor-name> -a <atespace> -o yaml
+kubectl-ate get egress-policy <actor-name> -a <atespace>
+kubectl-ate get egress-policy <actor-name> -a <atespace> -o yaml
 
 # Create an egress policy.
-kubectl ate create egress-policy <actor-name> -a <atespace> -f policy.yaml
+kubectl-ate create egress-policy <actor-name> -a <atespace> -f policy.yaml
 
 # Copy the egress policy of another actor.
-kubectl ate get egress-policy <src-actor> -a <atespace> -o yaml | \
-  kubectl ate create egress-policy <actor-name> -a <atespace> -f -
+kubectl-ate get egress-policy <src-actor> -a <atespace> -o yaml | \
+  kubectl-ate create egress-policy <actor-name> -a <atespace> -f -
 
 # Replace an actor's egress policy: dump it, edit the rules, send it back.
-kubectl ate get egress-policy <actor-name> -a <atespace> -o yaml > policy.yaml
+kubectl-ate get egress-policy <actor-name> -a <atespace> -o yaml > policy.yaml
 $EDITOR policy.yaml
-kubectl ate update egress-policy <actor-name> -a <atespace> -f policy.yaml
+kubectl-ate update egress-policy <actor-name> -a <atespace> -f policy.yaml
 
 # Delete an actor's egress policy; the actor keeps running with all egress denied.
-kubectl ate delete egress-policy <actor-name> -a <atespace>
+kubectl-ate delete egress-policy <actor-name> -a <atespace>
 
 # Delete it only if it is still the policy you read.
-kubectl ate delete egress-policy <actor-name> -a <atespace> --uid <uid> --version <n>
+kubectl-ate delete egress-policy <actor-name> -a <atespace> --uid <uid> --version <n>
 ```
 
 #### Details
@@ -273,7 +273,7 @@ kubectl ate delete egress-policy <actor-name> -a <atespace> --uid <uid> --versio
 * `delete` with the optional `--uid` and `--version` flags removes the policy only if
   the given values still match what `get -o yaml` reported; the server answers `Aborted` otherwise.
 
-#### `kubectl ate get egress-policy` output columns
+#### `kubectl-ate get egress-policy` output columns
 
 | Column | Meaning |
 |---|---|
@@ -285,19 +285,19 @@ kubectl ate delete egress-policy <actor-name> -a <atespace> --uid <uid> --versio
 
 ### Logs
 
-`kubectl ate logs` requires a resource-type subcommand; running `kubectl ate logs <actor-name>` on its own prints help. The only supported resource type is `actors`:
+`kubectl-ate logs` requires a resource-type subcommand; running `kubectl-ate logs <actor-name>` on its own prints help. The only supported resource type is `actors`:
 
 ```bash
 # Print the logs an actor has produced on its current worker.
 # -a/--atespace is required, since an actor is addressed by (atespace, name).
-kubectl ate logs actors my-actor -a <atespace>
+kubectl-ate logs actors my-actor -a <atespace>
 
 # Follow the logs with -f. The stream is aggregated across worker
 # reassignments, so the same actor stays queryable as it teleports between pods.
-kubectl ate logs actors my-actor -a <atespace> -f
+kubectl-ate logs actors my-actor -a <atespace> -f
 
 # Show only one container's logs with -c/--container.
-kubectl ate logs actors my-actor -a <atespace> -c my-container
+kubectl-ate logs actors my-actor -a <atespace> -c my-container
 ```
 
 Logs are streamable only while the actor is bound to a worker (i.e., `ACTOR_STATE_RUNNING`). For history across worker migrations, route through a centralized log backend (Cloud Logging, Loki, etc.); see `docs/observability.md`.
@@ -307,13 +307,13 @@ Commands for bootstrapping the Substrate control plane.
 
 ```bash
 # Generate a new Actor ID CA pool and push it directly to a Kubernetes Secret
-kubectl ate admin make-ca-pool \
+kubectl-ate admin make-ca-pool \
   --name actor-id-ca-pool \
   --secret-namespace ate-system \
   --ca-id "1"
 
 # Generate a new JWT authority pool and push it to a Kubernetes Secret
-kubectl ate admin make-jwt-pool \
+kubectl-ate admin make-jwt-pool \
   --name actor-id-jwt-pool \
   --secret-namespace ate-system \
   --key-id "1"

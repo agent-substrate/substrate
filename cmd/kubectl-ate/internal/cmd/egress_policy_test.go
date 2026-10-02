@@ -786,7 +786,7 @@ rules:
 			outputFmt:    "table",
 			updater:      &fakeEgressPolicyUpdater{err: status.Error(codes.NotFound, "EgressPolicy not found")},
 			wantActorReq: &ateapipb.GetActorRequest{Actor: actor},
-			wantErr:      `actor "c1" in atespace "team-a" has no egress policy to update; create it with "kubectl ate create egress-policy"`,
+			wantErr:      `actor "c1" in atespace "team-a" has no egress policy to update; create it with "kubectl-ate create egress-policy"`,
 		},
 		{
 			name:         "actor lookup error wraps",

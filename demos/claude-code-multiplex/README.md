@@ -43,7 +43,7 @@ This guide assumes you know Kubernetes and the general shape of agent runtimes (
 | Path | Purpose |
 |---|---|
 | `demos/claude-code-multiplex/claude-code-multiplex.yaml.tmpl` | Namespace and WorkerPool manifest |
-| `demos/claude-code-multiplex/agent-*-template.yaml.tmpl` | One protojson ActorTemplate per agent, created through the ate API with `kubectl ate create actor-template` |
+| `demos/claude-code-multiplex/agent-*-template.yaml.tmpl` | One protojson ActorTemplate per agent, created through the ate API with `kubectl-ate create actor-template` |
 | `cmd/ate-setup/internal/demos/claudemultiplex/` | The installer's demo package, behind `--deploy-demo-claude-code-multiplex` / `--delete-demo-claude-code-multiplex` |
 | `demos/claude-code-multiplex/workload/` | The agent container image source (Dockerfile + entrypoint that wires Claude Code; built and pushed by the deploy step) |
 | `demos/claude-code-multiplex/ui/` | Static dashboard (`index.html` + `server.go`) that talks to the cluster |

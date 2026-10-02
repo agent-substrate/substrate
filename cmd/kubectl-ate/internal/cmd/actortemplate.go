@@ -113,7 +113,7 @@ var createActorTemplateCmd = &cobra.Command{
 
 The manifest is a single YAML (or JSON) document holding one ateapipb.ActorTemplate
 message in its protojson form, exactly as printed by
-"kubectl ate get actor-template <name> -a <atespace> -o yaml".
+"kubectl-ate get actor-template <name> -a <atespace> -o yaml".
 The template's atespace and name come from the manifest's metadata.
 The atespace must already exist.
 

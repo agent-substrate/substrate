@@ -633,7 +633,7 @@ func TestValidateListActorsRequest(t *testing.T) {
 		&ateapipb.ListActorsRequest{Atespace: "ns1"},
 		nil,
 	}, {
-		// Empty atespace means "all atespaces" (kubectl ate get actors -A).
+		// Empty atespace means "all atespaces" (kubectl-ate get actors -A).
 		"valid, empty atespace means all atespaces",
 		&ateapipb.ListActorsRequest{},
 		nil,

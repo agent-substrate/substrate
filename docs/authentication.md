@@ -41,7 +41,7 @@ issued by your identity provider and configure them explicitly.
 With the provider configured, pipe the token to `kubectl-ate`:
 
 ```sh
-gcloud auth print-identity-token | kubectl ate --token-file=- get actors
+gcloud auth print-identity-token | kubectl-ate --token-file=- get actors
 ```
 
 `--token-file` accepts either a file path or `-` for stdin and only replaces the

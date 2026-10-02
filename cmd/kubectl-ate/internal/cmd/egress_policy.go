@@ -56,7 +56,7 @@ var createEgressPolicyCmd = &cobra.Command{
 	Long: `Create the egress policy of an actor from a manifest file.
 
 The manifest is a YAML or JSON EgressPolicy, as printed by
-"kubectl ate get egress-policy <actor-name> -a <atespace> -o yaml".
+"kubectl-ate get egress-policy <actor-name> -a <atespace> -o yaml".
 Its metadata may be omitted.`,
 	Args: cobra.ExactArgs(1),
 	RunE: runCreateEgressPolicy,
@@ -69,7 +69,7 @@ var updateEgressPolicyCmd = &cobra.Command{
 	Long: `Replace the egress policy of an actor from a manifest file.
 
 The manifest is a YAML or JSON EgressPolicy, as printed by
-"kubectl ate get egress-policy <actor-name> -a <atespace> -o yaml".
+"kubectl-ate get egress-policy <actor-name> -a <atespace> -o yaml".
 Its metadata.uid and metadata.version are required preconditions; the server
 rejects the update when they no longer match those of the stored egress policy.`,
 	Args: cobra.ExactArgs(1),
@@ -293,7 +293,7 @@ func (r *updateEgressPolicyRunner) Run(ctx context.Context) error {
 			}
 			return fmt.Errorf("failed to get actor %q in atespace %q: %w", r.actor.GetName(), r.actor.GetAtespace(), err)
 		}
-		return fmt.Errorf(`actor %q in atespace %q has no egress policy to update; create it with "kubectl ate create egress-policy"`,
+		return fmt.Errorf(`actor %q in atespace %q has no egress policy to update; create it with "kubectl-ate create egress-policy"`,
 			r.actor.GetName(), r.actor.GetAtespace())
 	}
 	if status.Code(err) == codes.Aborted {

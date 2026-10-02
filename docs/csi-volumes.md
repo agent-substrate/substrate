@@ -157,7 +157,7 @@ spec:
 ```
 
 The `ActorTemplate` is a protojson-shaped `ateapipb.ActorTemplate`, created
-through the ate API with `kubectl ate create actor-template -f -` (the
+through the ate API with `kubectl-ate create actor-template -f -` (the
 `ate-demo` atespace must exist):
 
 ```yaml

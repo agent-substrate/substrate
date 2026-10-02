@@ -221,7 +221,7 @@ administrative operations and actor environment definitions.
   * **ActorTemplate** (ate API resource): An immutable definition of an
     actor-version. It encapsulates the container image, configuration, and
     environment required to generate a "golden" snapshot. ActorTemplates are
-    created and managed through the substrate gRPC API (e.g. `kubectl ate
+    created and managed through the substrate gRPC API (e.g. `kubectl-ate
     create actor-template`) and stored in the control-plane state store; they
     are not Kubernetes objects.
 

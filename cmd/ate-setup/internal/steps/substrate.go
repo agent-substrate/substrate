@@ -50,7 +50,7 @@ func EnsureAtespace(ctx context.Context, client *ateclient.Client, atespace stri
 }
 
 // ActorTemplateFromManifest parses a single protojson-shaped YAML or JSON
-// document into an ActorTemplate, as `kubectl ate create actor-template`
+// document into an ActorTemplate, as `kubectl-ate create actor-template`
 // does. Parsing is strict: unknown fields are an error, so typos don't
 // silently drop configuration.
 func ActorTemplateFromManifest(manifest []byte) (*ateapipb.ActorTemplate, error) {

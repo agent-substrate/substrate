@@ -13,7 +13,7 @@
 # limitations under the License.
 
 # ActorTemplate (protojson-shaped ateapipb.ActorTemplate) for the manual
-# micro-VM CSI test. Applied with `kubectl ate create actor-template -f -`
+# micro-VM CSI test. Applied with `kubectl-ate create actor-template -f -`
 # after `ko resolve` replaces the ko:// image reference; the
 # ate-demo-counter-microvm-csi atespace must exist.
 metadata:

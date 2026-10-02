@@ -4,7 +4,7 @@ This directory contains a demo of a stateful counter application running on Agen
 
 It deploys a simple Go HTTP server (`counter.go`) that increments two counters on every request — one in process memory, one in a file on a durable volume — and preserves both across suspends and resumes: the template's `Full`-scope `onCommit` snapshot captures process memory alongside the durable volumes, so the in-memory count continues from where it left off. (With a `Data`-scope snapshot policy, only the durable-volume counter would survive and the in-memory counter would restart from a cold boot.)
 
-The demo uses two kinds of resources: the `WorkerPool` is a Kubernetes CRD, while the actor template is a Substrate `ActorTemplate` resource — an `ateapipb.ActorTemplate` living in an **atespace** rather than a Kubernetes namespace, managed through the ate API with `kubectl ate`.
+The demo uses two kinds of resources: the `WorkerPool` is a Kubernetes CRD, while the actor template is a Substrate `ActorTemplate` resource — an `ateapipb.ActorTemplate` living in an **atespace** rather than a Kubernetes namespace, managed through the ate API with `kubectl-ate`.
 
 ## Prerequisites
 
@@ -39,14 +39,14 @@ This command will:
 - Build the counter server image using `ko`.
 - Apply [`counter.yaml.tmpl`](counter.yaml.tmpl): the `ate-demo-counter` namespace and the `counter` `WorkerPool`, then wait for the worker rollout.
 - Create the `ate-demo-counter` atespace.
-- Create the `counter` actor template through the ate API (`kubectl ate create actor-template`) from [`counter-template.yaml.tmpl`](counter-template.yaml.tmpl). The manifest is the message's protojson form — the same shape `kubectl ate get actor-template -o yaml` prints inside its `actorTemplates` list.
+- Create the `counter` actor template through the ate API (`kubectl-ate create actor-template`) from [`counter-template.yaml.tmpl`](counter-template.yaml.tmpl). The manifest is the message's protojson form — the same shape `kubectl-ate get actor-template -o yaml` prints inside its `actorTemplates` list.
 - Wait until the template's golden snapshot is ready.
 
 Inspect the deployed template with:
 
 ```bash
-kubectl ate get actor-templates -a ate-demo-counter
-kubectl ate get actor-template counter -a ate-demo-counter -o yaml
+kubectl-ate get actor-templates -a ate-demo-counter
+kubectl-ate get actor-template counter -a ate-demo-counter -o yaml
 ```
 
 ### 2. Create a Counter Actor
@@ -58,7 +58,7 @@ Create the counter actor with a chosen ID (e.g., `my-counter-1`) using `--templa
 go install ./cmd/kubectl-ate
 
 # Create the actor from the counter template.
-kubectl ate create actor my-counter-1 -a ate-demo-counter --template counter
+kubectl-ate create actor my-counter-1 -a ate-demo-counter --template counter
 ```
 
 ### 3. Port-Forward Services
@@ -89,12 +89,12 @@ curl -X POST \
 
 2. Verify that the actor is now in a `RUNNING` state and assigned to a worker pod:
 ```bash
-kubectl ate get actor my-counter-1 -a ate-demo-counter
+kubectl-ate get actor my-counter-1 -a ate-demo-counter
 ```
 
 3. When finished, you can manually suspend the actor back to snapshot storage:
 ```bash
-kubectl ate suspend actor my-counter-1 -a ate-demo-counter
+kubectl-ate suspend actor my-counter-1 -a ate-demo-counter
 ```
 
 Repeat the `curl` from step 1 and the actor resumes from its snapshot —
@@ -104,7 +104,7 @@ memory, the file counter from the durable volume.
 
 4. To permanently delete the suspended actor:
 ```bash
-kubectl ate delete actor my-counter-1 -a ate-demo-counter
+kubectl-ate delete actor my-counter-1 -a ate-demo-counter
 ```
 
 ## Reaching a non-default port

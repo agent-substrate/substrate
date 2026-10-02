@@ -34,7 +34,7 @@ This command will:
   `ate-demo-multi-template-fspersist` — and an actor template in each:
   `counter` (`counter-template.yaml.tmpl`) and `fspersist`
   (`fspersist-template.yaml.tmpl`), both selecting the pool via the same
-  `workerSelector` label and applied with `kubectl ate create actor-template`.
+  `workerSelector` label and applied with `kubectl-ate create actor-template`.
 - Wait until both templates' golden snapshots are built.
 
 ### 2. Create one actor per template
@@ -47,8 +47,8 @@ resolved in the actor's atespace — and their DNS names embed that atespace:
 go install ./cmd/kubectl-ate
 
 # Create two actors from different templates, one per atespace.
-kubectl ate create actor c1 -a ate-demo-multi-template-counter --template counter
-kubectl ate create actor f1 -a ate-demo-multi-template-fspersist --template fspersist
+kubectl-ate create actor c1 -a ate-demo-multi-template-counter --template counter
+kubectl-ate create actor f1 -a ate-demo-multi-template-fspersist --template fspersist
 ```
 
 ### 3. Port-forward the atenet router
@@ -81,7 +81,7 @@ curl -s -H "ate-target-actor: ate-demo-multi-template-fspersist/f1" http://local
 Confirm both actors landed on workers in the one `shared-pool`:
 
 ```bash
-kubectl ate get workers
+kubectl-ate get workers
 ```
 
 The `counter` increments its in-memory count on each request, while `fspersist` prepends
@@ -89,7 +89,7 @@ a line to its history file on each request. Suspending and re-requesting an acto
 preserves that state across the snapshot/restore cycle:
 
 ```bash
-kubectl ate suspend actor f1 -a ate-demo-multi-template-fspersist
+kubectl-ate suspend actor f1 -a ate-demo-multi-template-fspersist
 curl -s -H "ate-target-actor: ate-demo-multi-template-fspersist/f1" http://localhost:8000  # history persists; count keeps climbing
 ```
 

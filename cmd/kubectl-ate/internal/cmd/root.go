@@ -35,7 +35,7 @@ var (
 var rootCmd = &cobra.Command{
 	Use:          "kubectl-ate",
 	Short:        "A kubectl plugin for managing Agent Substrate environments",
-	Long:         `kubectl ate is a CLI tool to manage Actor and Worker lifecycles in an Agent Substrate.`,
+	Long:         `kubectl-ate is a CLI tool to manage Actor and Worker lifecycles in an Agent Substrate.`,
 	Version:      version.String(),
 	SilenceUsage: true,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {

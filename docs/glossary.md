@@ -13,7 +13,7 @@ For how the pieces fit together, see the [Architecture](architecture.md) and
   treated as immutable: you create a new template for a new version rather
   than editing an existing one. It is analogous to a Pod template, but for a
   checkpointable workload. ActorTemplates are created and managed through the
-  substrate gRPC API (e.g. `kubectl ate create actor-template`) and stored in
+  substrate gRPC API (e.g. `kubectl-ate create actor-template`) and stored in
   the control-plane database; they are not Kubernetes objects.
 
 - **WorkerPool** (Kubernetes CRD): declares warm compute capacity, a fleet of

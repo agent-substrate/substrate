@@ -14,7 +14,7 @@
 
 # Worker pool for the manual multi-volume test. The ActorTemplate lives in
 # manual-test-multi-template.yaml and is created through the ate API with
-# `kubectl ate create actor-template`.
+# `kubectl-ate create actor-template`.
 
 apiVersion: v1
 kind: Namespace

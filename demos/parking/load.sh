@@ -36,7 +36,7 @@
 #   ./load.sh -d 60 p1 p2 p3 p4 p5 p6
 #
 # Prerequisites:
-#   * `kubectl ate` plugin installed (go install ./cmd/kubectl-ate)
+#   * `kubectl-ate` plugin installed (go install ./cmd/kubectl-ate)
 #   * router port-forwarded:  kubectl port-forward -n ate-system svc/atenet-router 8000:80
 
 set -uo pipefail
@@ -57,7 +57,7 @@ Usage: ./load.sh [-d duration_secs] [-r router_url] [-a atespace] [actor_id ...]
   -a   atespace for the actors  (default ate-demo-parking)
   args actor IDs                (default: p1 p2 p3 p4)
 
-Prereqs: `kubectl ate` installed and the router port-forwarded
+Prereqs: `kubectl-ate` installed and the router port-forwarded
          (kubectl port-forward -n ate-system svc/atenet-router 8000:80).
 EOF
 }
@@ -94,9 +94,9 @@ echo
 # Preflight: make sure the atespace and actors exist (idempotent; ignore
 # "already exists").
 echo "==> ensuring atespace ${ATESPACE} and actors exist (template ${TEMPLATE})"
-kubectl ate create atespace "${ATESPACE}" >/dev/null 2>&1 || true
+kubectl-ate create atespace "${ATESPACE}" >/dev/null 2>&1 || true
 for a in "${ACTORS[@]}"; do
-  kubectl ate create actor "${a}" --atespace "${ATESPACE}" --template "${TEMPLATE}" >/dev/null 2>&1 || true
+  kubectl-ate create actor "${a}" --atespace "${ATESPACE}" --template "${TEMPLATE}" >/dev/null 2>&1 || true
 done
 
 # One worker per actor: hammer it with request->suspend until the deadline.
@@ -109,7 +109,7 @@ worker() {
       -H "ate-target-actor: ${ATESPACE}/${actor}" \
       "${ROUTER}" >>"${log}" 2>/dev/null
     # Free the worker so a parked competitor can proceed (simulate going idle).
-    kubectl ate suspend actor "${actor}" --atespace "${ATESPACE}" >/dev/null 2>&1 || true
+    kubectl-ate suspend actor "${actor}" --atespace "${ATESPACE}" >/dev/null 2>&1 || true
   done
 }
 

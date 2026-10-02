@@ -28,19 +28,19 @@ Agent Substrate captures container standard output/error, wraps them into struct
 For quick, on-demand debugging of an active actor, use the Agent Substrate CLI:
 
 ```bash
-kubectl ate logs actors <actor-name> --atespace <atespace> [--follow / -f]
+kubectl-ate logs actors <actor-name> --atespace <atespace> [--follow / -f]
 ```
 
 `--atespace` (short form `-a`) is required: actor names are only unique within
 an atespace, so an actor is always addressed by `(atespace, name)`.
 
-> **Note:** By default, `kubectl ate logs` queries the Kubernetes API of the worker pod where the actor is *currently* running. It is designed for immediate inspection of active actors. To view historical logs across past worker pods and suspension cycles, use a centralized logging backend.
+> **Note:** By default, `kubectl-ate logs` queries the Kubernetes API of the worker pod where the actor is *currently* running. It is designed for immediate inspection of active actors. To view historical logs across past worker pods and suspension cycles, use a centralized logging backend.
 
 #### Example 1: Actor Not Currently Running
 If an actor is suspended or not assigned to a worker pod, the CLI informs you immediately:
 
 ```bash
-$ kubectl ate logs actors test -a demo
+$ kubectl-ate logs actors test -a demo
 Error: actor test is not currently running on any worker pod
 ```
 
@@ -48,7 +48,7 @@ Error: actor test is not currently running on any worker pod
 When an active actor is assigned to a worker pod, the CLI outputs clean, uniform JSON lines stripped of Substrate metadata, perfectly matching standard `kubectl logs` behavior:
 
 ```bash
-$ kubectl ate logs actors test -a demo
+$ kubectl-ate logs actors test -a demo
 {"time":"2026-05-22T21:49:15.23700774Z","message":"Actor started"}
 {"time":"2026-05-22T21:49:15.23700774Z","level":"INFO","msg":"Starting counter server on port 80"}
 {"time":"2026-05-22T21:49:15.255765354Z","count":0,"fshash":"mCY7G4S318ztOUojPTF2NA/W+ZSmWyr+T5K3udFuP50","level":"INFO","msg":"Count"}
@@ -59,7 +59,7 @@ $ kubectl ate logs actors test -a demo
 To stream actor logs in real-time, append the `--follow` (or `-f`) flag. The CLI is fully actor-aware, automatically resuming the stream if the actor is suspended or migrates to a different worker pod:
 
 ```bash
-$ kubectl ate logs actors test -a demo -f
+$ kubectl-ate logs actors test -a demo -f
 Actor is currently running on pod ate-demo-counter/counter-d8f99-m7d96
 {"time":"2026-05-22T21:49:15.255765354Z","count":0,"fshash":"mCY7...","level":"INFO","msg":"Count"}
 {"time":"2026-05-22T21:49:25.263744806Z","count":1,"fshash":"mCY7...","level":"INFO","msg":"Count"}
@@ -71,7 +71,7 @@ Actor is currently running on pod ate-demo-counter/counter-ab123-x4y5z
 An actor can run several containers. By default every line is shown, including the synthetic lifecycle events (`Actor started`, `Actor checkpointing`, ...). `--container` (short form `-c`) restricts the output to the named container's logs:
 
 ```bash
-kubectl ate logs actors <actor-name> -a <atespace> -c <container-name>
+kubectl-ate logs actors <actor-name> -a <atespace> -c <container-name>
 ```
 
 ---
@@ -372,15 +372,15 @@ To visualize traces locally:
 
 3. **Generate Traces**: Run a CLI command or API call with the `--trace` flag, e.g.:
    ```bash
-   kubectl ate get actor -A --trace
+   kubectl-ate get actor -A --trace
    # or
-   kubectl ate suspend actor <actor-name> -a <atespace> --trace
+   kubectl-ate suspend actor <actor-name> -a <atespace> --trace
    ```
    The kind overlay pins `ateapi` to `parentbased_always_on`, so API calls show up even without `--trace`; the flag additionally prints the trace ID and forces sampling on every hop.
 
 4. **Search and Inspect**: Copy the printed Trace ID from the CLI output and paste it into the Jaeger search box (top right), or select `ateapi`, `atelet`, or `ateom-gvisor` under the **Service** dropdown and click **Find Traces** to inspect detailed call stacks, DB transactions, state updates, and worker pod handoffs.
 
-> ateom carries no manual spans — its only instrumentation is the `otelgrpc` interceptor on the gRPC surface `atelet` calls. So it produces a span for an actor lifecycle operation (`suspend`, `resume`) and nothing at all for a read like `kubectl ate get actor`. Its sampler is parent based, so a lifecycle command is traced end to end into ateom whenever `ateapi` roots a sampled trace, which the kind overlay makes unconditional; the per-component ratio never enters into it. To check whether ateom exported its spans through the [OTLP relay](#the-ateom-otlp-relay) rather than falling back to direct network egress, inspect the span's resource attributes: `ate.otlp.relay` will be set to `"relay"` (instead of `"direct"`).
+> ateom carries no manual spans — its only instrumentation is the `otelgrpc` interceptor on the gRPC surface `atelet` calls. So it produces a span for an actor lifecycle operation (`suspend`, `resume`) and nothing at all for a read like `kubectl-ate get actor`. Its sampler is parent based, so a lifecycle command is traced end to end into ateom whenever `ateapi` roots a sampled trace, which the kind overlay makes unconditional; the per-component ratio never enters into it. To check whether ateom exported its spans through the [OTLP relay](#the-ateom-otlp-relay) rather than falling back to direct network egress, inspect the span's resource attributes: `ate.otlp.relay` will be set to `"relay"` (instead of `"direct"`).
 
 > **Developer Guide:** For detailed instructions on configuring OpenTelemetry tracer providers, middleware, and exporters in your servers or clients, please refer to the [Tracing Best Practices](dev/best-practices/tracing.md) guide.
 
