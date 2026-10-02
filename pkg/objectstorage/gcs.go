@@ -20,41 +20,72 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"sync"
 	"sync/atomic"
 	"time"
 
 	"cloud.google.com/go/storage"
 	"github.com/googleapis/gax-go/v2"
+	"golang.org/x/sync/errgroup"
 	"google.golang.org/api/option"
 )
 
 type gcsClient struct {
-	client *storage.Client
-	// opts are how client was built, so the pool below is built the same way.
-	// A pooled client that authenticates differently from the one that opened
-	// an object fails partway through reading it.
-	opts []option.ClientOption
-	// pool holds extra clients so concurrent parts get their own connections;
-	// built on first use by uploadClient.
-	poolOnce sync.Once
-	pool     []*storage.Client
-	// nextClient spreads concurrent objects across the pool; see rotation.
-	nextClient atomic.Uint32
+	// controlClient serves metadata-only calls (compose, copy, delete). Object bytes
+	// never go through it: see poolClient.
+	controlClient *storage.Client
+	// pool holds the clients that move object bytes, so concurrent transfers get
+	// their own connections. All are built from the same options as controlClient:
+	// a pooled client that authenticates differently from the one that opened an
+	// object fails partway through reading it.
+	pool []*storage.Client
+	// next is the pool index poolClient hands out next.
+	next atomic.Uint32
 }
 
+// poolSize is how many storage.Clients object transfers spread over. One client keeps
+// a single HTTP/2 connection per host and multiplexes every request onto it, so
+// transfers that should be independent share one TCP stream: measured on a GKE worker
+// node at 8 streams, 334 MB/s shared against 518 MB/s with a connection each.
+const poolSize = 8
+
 // NewGCSClient returns a GCS-backed ObjectStorage. It builds its own
-// storage.Client from opts (and more from the same opts for the part-upload
-// pool, see uploadClient) rather than accepting one, because it installs a
+// storage.Clients from opts rather than accepting one, because it installs a
 // RetryAlways policy (see setRetry) that is only safe for this package's own
-// operations and must not leak onto a client shared with other code.
+// operations and must not leak onto a client shared with other code. The clients
+// are built concurrently, here rather than on first use, so no request waits on
+// their setup.
 func NewGCSClient(ctx context.Context, opts ...option.ClientOption) (ObjectStorage, error) {
-	client, err := storage.NewClient(ctx, opts...)
-	if err != nil {
+	clients := make([]*storage.Client, 1+poolSize)
+	var grp errgroup.Group
+	for i := range clients {
+		grp.Go(func() error {
+			// The clients outlive this call, so they must not hold a context that
+			// ends with it.
+			c, err := storage.NewClient(context.WithoutCancel(ctx), opts...)
+			if err != nil {
+				return err
+			}
+			setRetry(c)
+			clients[i] = c
+			return nil
+		})
+	}
+	if err := grp.Wait(); err != nil {
+		for _, c := range clients {
+			if c != nil {
+				_ = c.Close()
+			}
+		}
 		return nil, err
 	}
-	setRetry(client)
-	return &gcsClient{client: client, opts: opts}, nil
+	return &gcsClient{controlClient: clients[0], pool: clients[1:]}, nil
+}
+
+// poolClient returns the client for the next request that moves object bytes. It
+// advances on every call, so consecutive parts or ranges of one object land on
+// distinct connections and concurrent objects interleave evenly across the pool.
+func (g *gcsClient) poolClient() *storage.Client {
+	return g.pool[g.next.Add(1)%uint32(len(g.pool))]
 }
 
 // setRetry makes every operation on c retry transient errors (408, 429, 5xx)
@@ -108,7 +139,7 @@ func (g *gcsClient) PutObject(ctx context.Context, bucket, object string, reader
 
 // putSingle writes the whole body in one resumable request.
 func (g *gcsClient) putSingle(ctx context.Context, bucket, object string, reader io.Reader) error {
-	wc := g.uploadClient(ctx, g.rotation()).Bucket(bucket).Object(object).NewWriter(ctx)
+	wc := g.poolClient().Bucket(bucket).Object(object).NewWriter(ctx)
 	wc.ChunkSize = uploadChunkSize
 	// io.Copy reports local read errors; wc.Close() reports the actual
 	// GCS upload (auth, permissions, transient). Join both so the caller
@@ -119,13 +150,4 @@ func (g *gcsClient) putSingle(ctx context.Context, bucket, object string, reader
 		return fmt.Errorf("while putting GCS object: %w", err)
 	}
 	return nil
-}
-
-// rotation returns the pool index an object's first request uses; its other parts
-// or ranges follow from there. It advances per object because the node moves many
-// snapshots at once: were every object to start at the same client, a snapshot
-// under three parts long would leave most of the pool idle while all of them split
-// the first few connections.
-func (g *gcsClient) rotation() int {
-	return int(g.nextClient.Add(1) % uploadPoolSize)
 }
