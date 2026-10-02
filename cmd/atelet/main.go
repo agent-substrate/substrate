@@ -785,8 +785,31 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	if err := resetActorDirs(actorUID); err != nil {
 		return nil, fmt.Errorf("while resetting actor dirs: %w", err)
 	}
+	if req.GetType() == ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL {
+		removeSuspendedActorDir(ctx, actorRef, actorUID)
+	}
 
 	return &ateletpb.CheckpointResponse{}, nil
+}
+
+// removeSuspendedActorDir removes what resetActorDirs leaves of an actor
+// checkpointed to object storage: the directory itself, the sandbox record,
+// and whatever ateom kept at its root (runsc state, pidfiles, resolv.conf).
+//
+// An external checkpoint is a suspend, so the actor is leaving this node. A
+// resume restores it onto whichever node it is placed on, and the restore
+// creates the directory from scratch, as it does on any node. A pause keeps
+// the directory, since its local snapshot lives there.
+//
+// It runs after resetActorDirs, which refuses to proceed while a volume
+// directory is still populated, so it cannot delete through a mount. It is
+// best-effort: the snapshot is already uploaded, and failing would crash the
+// actor over leftovers that atelet's sweep reclaims anyway.
+func removeSuspendedActorDir(ctx context.Context, actorRef resources.ActorRef, actorUID string) {
+	if err := os.RemoveAll(ateletpath.ActorPath(actorUID)); err != nil {
+		slog.WarnContext(ctx, "failed to remove the actor directory after an external checkpoint; the actor GC reclaims it",
+			slog.Any("actor", actorRef), slog.String("actorUID", actorUID), slog.Any("err", err))
+	}
 }
 
 func checkpointSnapshotFiles(resp *ateompb.CheckpointWorkloadResponse, required bool) (files, dataFiles []string, err error) {

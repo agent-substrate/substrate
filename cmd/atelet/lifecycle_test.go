@@ -138,6 +138,92 @@ func serveFakeAteom(t *testing.T, f *fakeAteom) {
 	t.Cleanup(func() { ateomSocketPath = orig })
 }
 
+// TestSuspendRemovesActorDir walks an actor through run -> suspend over atelet's
+// RPC surface: an external checkpoint moves the actor off the node, so nothing
+// of it should stay behind. A pause keeps its directory for the local snapshot,
+// which TestLocalSnapshotGC restores from.
+func TestSuspendRemovesActorDir(t *testing.T) {
+	useTempNodeDirs(t)
+	ctx := t.Context()
+
+	const (
+		atespace  = "ate-demo"
+		actorName = "counter"
+		actorUID  = "actor-uid-1"
+		ateomUID  = "ateom-uid-1"
+	)
+
+	serveFakeAteom(t, &fakeAteom{snapshotFiles: map[string]string{"checkpoint.img": "guest-memory"}})
+
+	host := imageVolumeTestRegistry(t)
+	image := host + "/actor:v1"
+	pushTestImage(t, image, singleFileLayer(t, "bin/app", "app"))
+
+	runsc := []byte("runsc binary")
+	// External snapshots upload through the object-store plugin, into a store
+	// that accepts and discards them.
+	s := newPluginHerder(t, fakeObjectStorage{})
+	s.ateomDialer = newAteomDialer(1)
+	s.imageCache = newImageVolumeStore(t)
+	s.anonGCSClient = fakeObjectStorage{data: runsc}
+	s.systemInfoVolumes = newSystemInfoVolumeRefresher(nil, nil)
+	spec := &ateletpb.WorkloadSpec{
+		Containers: []*ateletpb.Container{{Name: "app", Image: image, Command: []string{"/bin/app"}}},
+	}
+	if _, err := s.Run(ctx, &ateletpb.RunRequest{
+		Atespace:              atespace,
+		ActorName:             actorName,
+		ActorUid:              actorUID,
+		ActorTemplateAtespace: "default",
+		ActorTemplateName:     "counter",
+		TargetAteomUid:        ateomUID,
+		SandboxAssets: &ateletpb.SandboxAssets{
+			SandboxClass: "gvisor",
+			PauseImage:   image,
+			Assets: map[string]*ateletpb.ArchAssets{
+				runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
+					runscAssetName: {
+						Url:    "gs://test-bucket/runsc",
+						Sha256: fmt.Sprintf("%x", sha256.Sum256(runsc)),
+					},
+				}},
+			},
+		},
+		Spec: spec,
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if _, err := os.Stat(ateletpath.ActorPath(actorUID)); err != nil {
+		t.Fatalf("run did not create the actor directory: %v", err)
+	}
+
+	if _, err := s.Checkpoint(ctx, &ateletpb.CheckpointRequest{
+		Atespace:              atespace,
+		ActorName:             actorName,
+		ActorUid:              actorUID,
+		ActorTemplateAtespace: "default",
+		ActorTemplateName:     "counter",
+		TargetAteomUid:        ateomUID,
+		Spec:                  spec,
+		Fidelity:              ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+		Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
+		Config: &ateletpb.CheckpointRequest_ExternalConfig{
+			ExternalConfig: &ateletpb.ExternalCheckpointConfiguration{SnapshotUri: testSnapshotURI},
+		},
+	}); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+
+	if actorDir := ateletpath.ActorPath(actorUID); !isGone(actorDir) {
+		entries, _ := os.ReadDir(actorDir)
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Errorf("%s survived the suspend holding %v, want it removed", actorDir, names)
+	}
+}
+
 // TestLocalSnapshotGC walks an actor through
 // run -> pause -> resume -> terminate over atelet's RPC surface and ensures that
 // the local snapshot is garbage collected after the actor is terminated.
