@@ -749,8 +749,6 @@ func toAteomSnapshotScope(scope ateletpb.SnapshotScope) ateompb.SnapshotScope {
 	switch scope {
 	case ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
 		return ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA
-	case ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN:
-		return ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
 	default:
 		return ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL
 	}
@@ -1131,31 +1129,6 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		return nil, fmt.Errorf("unexpected checkpoint type: %v", req.GetType())
 	}
 
-	// On a DATA_ON_GOLDEN restore the actor's snapshot holds only durable-dir data; the guest
-	// state (memory + VM state) comes from the template's golden snapshot. Fetch
-	// the golden manifest too: its SnapshotFiles complete the restore set below.
-	baseCfg := req.GetBaseConfig()
-	var goldenRec *sandboxAssetsRecord
-	if req.GetScope() == ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN {
-		goldenURI, err := resources.ParseSnapshotURI(baseCfg.GetSnapshotUri())
-		if err != nil {
-			return nil, err
-		}
-		manifestURI, err := goldenURI.ObjectURI(sandboxManifestName)
-		if err != nil {
-			return nil, err
-		}
-		manifest, err := objectstorage.FetchFromGCS(ctx, s.gcsClient, manifestURI)
-		if err != nil {
-			return nil, fmt.Errorf("while fetching golden snapshot manifest: %w", err)
-		}
-		if goldenRec, err = unmarshalSandboxRecord(manifest); err != nil {
-			return nil, fmt.Errorf("while unmarshalling golden sandbox record: %w", err)
-		}
-		if goldenRec.SandboxClass != sandboxRec.SandboxClass {
-			return nil, status.Errorf(codes.FailedPrecondition, "golden snapshot sandbox class %q does not match actor snapshot sandbox class %q", goldenRec.SandboxClass, sandboxRec.SandboxClass)
-		}
-	}
 	dManifest = time.Since(tManifest)
 	manifestDone = true
 
@@ -1190,40 +1163,11 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		}()
 		switch req.GetType() {
 		case ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL:
-			if req.GetScope() == ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN {
-				if goldenRec == nil {
-					return fmt.Errorf("no golden snapshot record for a %s restore", req.GetScope())
-				}
-				if err := s.downloadCombinedCheckpoint(gctx, req.GetExternalConfig().GetSnapshotUri(), baseCfg.GetSnapshotUri(), checkpointDir, sandboxRec.SnapshotFiles, goldenRec.SnapshotFiles); err != nil {
-					return err
-				}
-			} else if err := s.downloadExternalCheckpoint(gctx, req.GetExternalConfig().GetSnapshotUri(), checkpointDir, sandboxRec.SnapshotFiles); err != nil {
+			if err := s.downloadExternalCheckpoint(gctx, req.GetExternalConfig().GetSnapshotUri(), checkpointDir, sandboxRec.SnapshotFiles); err != nil {
 				return err
 			}
 		case ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL:
-			combineWithGolden := req.GetScope() == ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
-			if combineWithGolden && goldenRec == nil {
-				return fmt.Errorf("no golden snapshot record for a %s restore", req.GetScope())
-			}
-			// A local (pause) checkpoint may still combine with the golden
-			// snapshot: the actor's files come from the local checkpoint dir,
-			// the golden's from object storage, concurrently.
-			gLocal, gLocalCtx := errgroup.WithContext(gctx)
-			gLocal.Go(func() error {
-				if err := s.copyLocalCheckpoint(gLocalCtx, ateletpath.ActorPath(actorUID), req.GetLocalConfig().GetSnapshotName(), ateletpath.LocalCheckpointsDir(actorUID), checkpointDir, sandboxRec.SnapshotFiles); err != nil {
-					return err
-				}
-				return nil
-			})
-			if combineWithGolden {
-				gLocal.Go(func() error {
-					if err := s.downloadExternalCheckpoint(gLocalCtx, baseCfg.GetSnapshotUri(), checkpointDir, goldenOnlyFiles(sandboxRec.SnapshotFiles, goldenRec.SnapshotFiles)); err != nil {
-						return err
-					}
-					return nil
-				})
-			}
-			if err := gLocal.Wait(); err != nil {
+			if err := s.copyLocalCheckpoint(gctx, ateletpath.ActorPath(actorUID), req.GetLocalConfig().GetSnapshotName(), ateletpath.LocalCheckpointsDir(actorUID), checkpointDir, sandboxRec.SnapshotFiles); err != nil {
 				return err
 			}
 		}
@@ -1290,10 +1234,6 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		EgressGateway:         toAteomEgressGateway(req.GetEgressGateway()),
 		CpuMilli:              req.GetCpuMilli(),
 		MemoryBytes:           req.GetMemoryBytes(),
-		// Informational: for DATA_ON_GOLDEN the golden snapshot's files are
-		// already staged into the restore dir by the combined download above;
-		// ateom restores from the shared dir and never fetches this URI.
-		GoldenSnapshotUri: baseCfg.GetSnapshotUri(),
 	})
 	dAteom = time.Since(tAteom)
 	if err != nil {
@@ -1467,39 +1407,6 @@ func copyRootFile(root *os.Root, src, dst string) (int64, error) {
 	}
 	nBytes, err := sparsefile.Copy(source, destination)
 	return nBytes, errors.Join(err, destination.Close())
-}
-
-// goldenOnlyFiles returns the golden snapshot files not shadowed by the
-// actor's own snapshot: on a DATA_ON_GOLDEN restore the actor's files (the
-// durable-dir data) win name collisions, and the golden snapshot supplies
-// the rest (guest memory + VM state).
-func goldenOnlyFiles(actorFiles, goldenFiles []string) []string {
-	shadowed := make(map[string]bool, len(actorFiles))
-	for _, f := range actorFiles {
-		shadowed[f] = true
-	}
-	rest := make([]string, 0, len(goldenFiles))
-	for _, f := range goldenFiles {
-		if !shadowed[f] {
-			rest = append(rest, f)
-		}
-	}
-	return rest
-}
-
-// downloadCombinedCheckpoint stages a DATA_ON_GOLDEN restore set into dstDir
-// as a single folder: every file of the actor's own snapshot (the durable-dir
-// data) plus the golden snapshot's files the actor's set does not shadow, so
-// the result looks like a Full snapshot whose durable-dir data is the actor's.
-func (s *AteomHerder) downloadCombinedCheckpoint(ctx context.Context, actorURI, goldenURI, dstDir string, actorFiles, goldenFiles []string) error {
-	g, gctx := errgroup.WithContext(ctx)
-	g.Go(func() error {
-		return s.downloadExternalCheckpoint(gctx, actorURI, dstDir, actorFiles)
-	})
-	g.Go(func() error {
-		return s.downloadExternalCheckpoint(gctx, goldenURI, dstDir, goldenOnlyFiles(actorFiles, goldenFiles))
-	})
-	return g.Wait()
 }
 
 func (s *AteomHerder) downloadExternalCheckpoint(ctx context.Context, snapshotURI string, dstDir string, files []string) error {
@@ -1831,13 +1738,6 @@ func validateCheckpointRequest(req *ateletpb.CheckpointRequest) error {
 	default:
 		return fmt.Errorf("invalid checkpoint type: %v", req.GetType())
 	}
-
-	// DATA_ON_GOLDEN is a restore-time operation (combine the golden
-	// snapshot's guest state with the actor's data): checkpoints only ever
-	// capture FULL or DATA.
-	if req.GetScope() == ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN {
-		return fmt.Errorf("snapshot scope %s is restore-only; checkpoints capture %s or %s", req.GetScope(), ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL, ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA)
-	}
 	return nil
 }
 
@@ -1881,17 +1781,6 @@ func validateRestoreRequest(req *ateletpb.RestoreRequest) error {
 	default:
 		return fmt.Errorf("invalid checkpoint type: %v", req.GetType())
 	}
-
-	// A DATA_ON_GOLDEN restore needs both halves: the actor's data snapshot
-	// (local pause checkpoint or external commit) and the base snapshot,
-	// which is always external.
-	if req.GetScope() == ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN {
-		if _, err := resources.ParseSnapshotURI(req.GetBaseConfig().GetSnapshotUri()); err != nil {
-			return fmt.Errorf("invalid base_config.snapshot_uri: %w", err)
-		}
-	} else if req.GetBaseConfig() != nil {
-		return fmt.Errorf("base_config is only valid with snapshot scope %s", ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN)
-	}
 	return nil
 }
 
@@ -1916,8 +1805,7 @@ func validateTerminateRequest(req *ateletpb.TerminateRequest) error {
 func validateSnapshotScope(scope ateletpb.SnapshotScope) error {
 	switch scope {
 	case ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
-		ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA,
-		ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN:
+		ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
 		return nil
 	case ateletpb.SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED:
 		return fmt.Errorf("snapshot scope must be non-zero")
@@ -1940,8 +1828,7 @@ func validateUploadPausedCheckpointRequest(req *ateletpb.UploadPausedCheckpointR
 	if _, err := resources.ParseSnapshotURI(req.GetDestinationSnapshotUri()); err != nil {
 		errs = append(errs, field.Invalid(field.NewPath("destination_snapshot_uri"), req.GetDestinationSnapshotUri(), err.Error()))
 	}
-	// Uploads only ever produce FULL or DATA snapshots; DATA_ON_GOLDEN is a
-	// restore-time combination.
+	// Uploads only ever produce FULL or DATA snapshots.
 	switch req.GetDesiredScope() {
 	case ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL, ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
 	default:

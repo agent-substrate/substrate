@@ -43,7 +43,6 @@ import (
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/pkg/objectstorage"
 	"github.com/google/go-cmp/cmp"
-	"github.com/klauspost/compress/zstd"
 	"github.com/spf13/pflag"
 	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
@@ -58,16 +57,13 @@ const testPauseImage = "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca95
 
 const (
 	snapshotOwnerUID = "3d7f1b62-8a04-4c19-b5e6-2f9c7a1d0e38"
-	goldenActorUID   = "9c2f7b41-6d05-4e83-a1f7-3b8c0d5e2a94"
 
 	// Bucket-relative paths, as the object store keys them.
 	testSnapshotPath   = "bucket/root/atespaces/ate-demo/actors/" + snapshotOwnerUID + "/snapshots/counter-1-snap"
 	pausedSnapshotPath = "bucket/root/atespaces/ate-demo/actors/" + snapshotOwnerUID + "/snapshots/snap-1"
-	goldenSnapshotPath = "bucket/golden-root/atespaces/ate-golden/actors/" + goldenActorUID + "/snapshots/golden-1"
 
 	testSnapshotURI   = "gs://" + testSnapshotPath
 	pausedSnapshotURI = "gs://" + pausedSnapshotPath
-	goldenSnapshotURI = "gs://" + goldenSnapshotPath
 )
 
 // TestPortFlagDefault verifies the default value of the --port flag.
@@ -535,9 +531,6 @@ func TestValidateCheckpointRequest(t *testing.T) {
 		{"unspecified snapshot type", makeReq(func(r *ateletpb.CheckpointRequest) { r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_UNSPECIFIED }), true},
 		{"unspecified snapshot scope", makeReq(func(r *ateletpb.CheckpointRequest) { r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED }), true},
 		{"invalid snapshot scope", makeReq(func(r *ateletpb.CheckpointRequest) { r.Scope = ateletpb.SnapshotScope(23) }), true},
-		// DATA_ON_GOLDEN is a restore-only scope: checkpoints only ever
-		// capture FULL or DATA, so a checkpoint carrying it is a bug upstream.
-		{"data-on-golden scope is restore-only", makeReq(func(r *ateletpb.CheckpointRequest) { r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN }), true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -596,33 +589,6 @@ func TestValidateRestoreRequest(t *testing.T) {
 		{"unspecified snapshot type", makeReq(func(r *ateletpb.RestoreRequest) { r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_UNSPECIFIED }), true},
 		{"unspecified snapshot scope", makeReq(func(r *ateletpb.RestoreRequest) { r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED }), true},
 		{"invalid snapshot scope", makeReq(func(r *ateletpb.RestoreRequest) { r.Scope = ateletpb.SnapshotScope(23) }), true},
-		{"data-on-golden with base config", makeReq(func(r *ateletpb.RestoreRequest) {
-			r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
-			r.BaseConfig = &ateletpb.ExternalRestoreConfiguration{SnapshotUri: goldenSnapshotURI}
-		}), false},
-		{"data-on-golden without base config", makeReq(func(r *ateletpb.RestoreRequest) {
-			r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
-		}), true},
-		{"data-on-golden with empty base config", makeReq(func(r *ateletpb.RestoreRequest) {
-			r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
-			r.BaseConfig = &ateletpb.ExternalRestoreConfiguration{}
-		}), true},
-		{"data-on-golden with bucketless base config", makeReq(func(r *ateletpb.RestoreRequest) {
-			r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
-			r.BaseConfig = &ateletpb.ExternalRestoreConfiguration{SnapshotUri: "relative/path"}
-		}), true},
-		// A pause (local) checkpoint may combine with the base snapshot:
-		// base_config is a top-level field precisely so LOCAL restores can
-		// carry it.
-		{"data-on-golden with local checkpoint type", makeReq(func(r *ateletpb.RestoreRequest) {
-			r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
-			r.BaseConfig = &ateletpb.ExternalRestoreConfiguration{SnapshotUri: goldenSnapshotURI}
-			r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
-			r.Config = &ateletpb.RestoreRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: "local-snap-1"}}
-		}), false},
-		{"base config with non-data-on-golden scope", makeReq(func(r *ateletpb.RestoreRequest) {
-			r.BaseConfig = &ateletpb.ExternalRestoreConfiguration{SnapshotUri: goldenSnapshotURI}
-		}), true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -633,8 +599,7 @@ func TestValidateRestoreRequest(t *testing.T) {
 	}
 }
 
-// Every valid atelet scope must map to its ateom counterpart; in particular
-// DATA_ON_GOLDEN must never silently degrade to FULL.
+// Every valid atelet scope must map to its ateom counterpart.
 func TestToAteomSnapshotScope(t *testing.T) {
 	tests := []struct {
 		in   ateletpb.SnapshotScope
@@ -642,7 +607,6 @@ func TestToAteomSnapshotScope(t *testing.T) {
 	}{
 		{ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL, ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL},
 		{ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA, ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA},
-		{ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN, ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN},
 	}
 	for _, tc := range tests {
 		if got := toAteomSnapshotScope(tc.in); got != tc.want {
@@ -1034,45 +998,6 @@ func TestToAteomEgressGateway(t *testing.T) {
 	}
 }
 
-// TestGoldenOnlyFiles verifies the DataOnGolden combine rule: the actor's own
-// snapshot files shadow same-named golden files (the durable-dir tar), and the
-// golden snapshot supplies the rest.
-func TestGoldenOnlyFiles(t *testing.T) {
-	tests := []struct {
-		name        string
-		actorFiles  []string
-		goldenFiles []string
-		want        []string
-	}{
-		{
-			name:        "durable tar shadowed, guest files kept",
-			actorFiles:  []string{"durable-dir.tar"},
-			goldenFiles: []string{"config.json", "state.json", "memory-ranges", "base-id", "durable-dir.tar"},
-			want:        []string{"config.json", "state.json", "memory-ranges", "base-id"},
-		},
-		{
-			name:        "golden without durable tar is kept whole",
-			actorFiles:  []string{"durable-dir.tar"},
-			goldenFiles: []string{"config.json", "state.json"},
-			want:        []string{"config.json", "state.json"},
-		},
-		{
-			name:        "no actor files keeps everything",
-			actorFiles:  nil,
-			goldenFiles: []string{"config.json"},
-			want:        []string{"config.json"},
-		},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := goldenOnlyFiles(tc.actorFiles, tc.goldenFiles)
-			if diff := cmp.Diff(tc.want, got); diff != "" {
-				t.Errorf("goldenOnlyFiles diff (-want +got):\n%s", diff)
-			}
-		})
-	}
-}
-
 func TestRemoveActorDirsReclaimsTheRoot(t *testing.T) {
 	useTempNodeDirs(t)
 	const actorUID = "actor-uid-1"
@@ -1122,85 +1047,6 @@ func TestRemoveActorDirsKeepsPopulatedVolume(t *testing.T) {
 	}
 	if _, err := os.Stat(stillMounted); err != nil {
 		t.Errorf("removeActorDirs deleted the contents of a volume that was still populated: %v", err)
-	}
-}
-
-// mapObjectStorage serves per-object bytes so multi-object downloads can be
-// tested; the key is "<bucket>/<object>".
-type mapObjectStorage struct {
-	objects map[string][]byte
-}
-
-func (m mapObjectStorage) GetObject(_ context.Context, bucket, object string) (io.ReadCloser, error) {
-	data, ok := m.objects[bucket+"/"+object]
-	if !ok {
-		return nil, fmt.Errorf("object %s/%s not found", bucket, object)
-	}
-	return io.NopCloser(bytes.NewReader(data)), nil
-}
-
-func (mapObjectStorage) PutObject(_ context.Context, _, _ string, _ io.Reader) error { return nil }
-
-// TestDownloadCombinedCheckpoint verifies a DataOnGolden restore stages one
-// folder holding the actor snapshot's durable-dir tar and the golden
-// snapshot's remaining files — and that the golden's own durable-dir tar is
-// the one that loses the name collision.
-func TestDownloadCombinedCheckpoint(t *testing.T) {
-	zstdBytes := func(t *testing.T, s string) []byte {
-		t.Helper()
-		var buf bytes.Buffer
-		zw, err := zstd.NewWriter(&buf)
-		if err != nil {
-			t.Fatalf("zstd.NewWriter: %v", err)
-		}
-		if _, err := zw.Write([]byte(s)); err != nil {
-			t.Fatalf("zstd write: %v", err)
-		}
-		if err := zw.Close(); err != nil {
-			t.Fatalf("zstd close: %v", err)
-		}
-		return buf.Bytes()
-	}
-
-	store := mapObjectStorage{objects: map[string][]byte{
-		testSnapshotPath + "/durable-dir.tar.zstd":   zstdBytes(t, "actor durable data"),
-		goldenSnapshotPath + "/config.json.zstd":     zstdBytes(t, "golden config"),
-		goldenSnapshotPath + "/memory-ranges.zstd":   zstdBytes(t, "golden memory"),
-		goldenSnapshotPath + "/durable-dir.tar.zstd": zstdBytes(t, "golden durable data (must not be downloaded)"),
-	}}
-	s := &AteomHerder{gcsClient: store}
-
-	dstDir := t.TempDir()
-	err := s.downloadCombinedCheckpoint(context.Background(),
-		testSnapshotURI,
-		goldenSnapshotURI,
-		dstDir,
-		[]string{"durable-dir.tar"},
-		[]string{"config.json", "memory-ranges", "durable-dir.tar"})
-	if err != nil {
-		t.Fatalf("downloadCombinedCheckpoint: %v", err)
-	}
-
-	want := map[string]string{
-		"durable-dir.tar": "actor durable data",
-		"config.json":     "golden config",
-		"memory-ranges":   "golden memory",
-	}
-	entries, err := os.ReadDir(dstDir)
-	if err != nil {
-		t.Fatalf("ReadDir: %v", err)
-	}
-	if len(entries) != len(want) {
-		t.Errorf("staged %d files, want %d", len(entries), len(want))
-	}
-	for name, content := range want {
-		got, err := os.ReadFile(filepath.Join(dstDir, name))
-		if err != nil {
-			t.Fatalf("ReadFile(%s): %v", name, err)
-		}
-		if string(got) != content {
-			t.Errorf("%s content = %q, want %q", name, got, content)
-		}
 	}
 }
 
@@ -1694,9 +1540,6 @@ func TestValidateUploadPausedCheckpointRequest(t *testing.T) {
 		{"invalid snapshot uri", func(r *ateletpb.UploadPausedCheckpointRequest) { r.DestinationSnapshotUri = "not-a-uri" }, true},
 		{"unspecified scope", func(r *ateletpb.UploadPausedCheckpointRequest) {
 			r.DesiredScope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED
-		}, true},
-		{"data-on-golden scope", func(r *ateletpb.UploadPausedCheckpointRequest) {
-			r.DesiredScope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
 		}, true},
 	}
 	for _, tc := range tests {

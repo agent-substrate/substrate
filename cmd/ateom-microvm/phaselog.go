@@ -86,8 +86,6 @@ func scopeLogValue(scope ateompb.SnapshotScope) string {
 		return ateattr.SnapshotScopeFull
 	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
 		return ateattr.SnapshotScopeData
-	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN:
-		return ateattr.SnapshotScopeDataOnGolden
 	default:
 		return ateattr.SnapshotScopeUnknown
 	}

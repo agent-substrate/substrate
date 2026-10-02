@@ -437,13 +437,6 @@ enum SnapshotScope {
   // (currently DurableDir-typed volumes). Memory and the rest of rootfs are
   // excluded.
   SNAPSHOT_SCOPE_DATA = 2;
-  // Restore-only: restore the ActorTemplate's golden snapshot's guest state
-  // (memory + full filesystem delta) combined with the snapshot's durable
-  // data. Never valid for Checkpoint — snapshots only ever capture FULL or
-  // DATA; whether a snapshot restores from its own content or on the golden
-  // is decided by the control plane from the template's onResume
-  // configuration.
-  SNAPSHOT_SCOPE_DATA_ON_GOLDEN = 3;
 }
 
 // ExternalRestoreConfiguration is an external snapshot a restore reads.
@@ -535,12 +528,6 @@ message RestoreRequest {
 
   // What content to restore from the checkpoint.
   SnapshotScope scope = 11;
-
-  // The base guest state (memory + rootfs delta) combined with `config`'s
-  // durable data when scope is SNAPSHOT_SCOPE_DATA_ON_GOLDEN. A top-level
-  // field rather than part of the `config` oneof: the actor's snapshot may
-  // be local (a pause checkpoint) while the base is always external.
-  ExternalRestoreConfiguration base_config = 12;
 
   // When absent the actor has no egress: its TCP is captured and refused.
   optional EgressGateway egress_gateway = 13;

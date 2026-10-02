@@ -3716,9 +3716,6 @@ func TestResumeActor_RepointTemplateBeforeResume(t *testing.T) {
 			if got := restoreReq.GetExternalConfig().GetSnapshotUri(); got != cloneActor.GetStatus().GetExternalSnapshot().GetSnapshotUri() {
 				t.Errorf("restore request to atelet had snapshot uri = %q, want the clone's borrowed %q", got, cloneActor.GetStatus().GetExternalSnapshot().GetSnapshotUri())
 			}
-			if restoreReq.GetBaseConfig() != nil {
-				t.Errorf("restore request to atelet had base_config = %v, want unset", restoreReq.GetBaseConfig())
-			}
 		})
 	}
 }
