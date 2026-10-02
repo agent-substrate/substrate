@@ -213,3 +213,45 @@ func TestRepositoryCommandDefaults(t *testing.T) {
 		t.Errorf("bootstrap --repository-name default = %q, want %q", got, want)
 	}
 }
+
+func TestBootstrapRepositoryOptIn(t *testing.T) {
+	if os.Getenv("SETUP_GCP_TEST_BOOTSTRAP") == "1" {
+		for i, arg := range os.Args {
+			if arg == "--" {
+				rootCmd.SetArgs(os.Args[i+1:])
+				if err := Execute(); err != nil {
+					os.Exit(1)
+				}
+				os.Exit(0)
+			}
+		}
+		t.Fatal("missing bootstrap arguments")
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, env, want string
+		args            []string
+	}{
+		{"default skips repository validation", "", "--bucket-name is required", nil},
+		{"flag enables over environment", "false", "repository name must be", []string{"--create-repository"}},
+		{"environment enables creation", "true", "repository name must be", nil},
+		{"flag disables environment", "true", "--bucket-name is required", []string{"--create-repository=false"}},
+		{"seven steps by default", "", "Step 1/7:", []string{"--repository-name=ate-images", "--bucket-name=test-bucket"}},
+		{"eight steps when enabled", "", "Step 1/8:", []string{"--repository-name=ate-images", "--bucket-name=test-bucket", "--create-repository"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := []string{"-test.run=^TestBootstrapRepositoryOptIn$", "--", "bootstrap", "--project-id=test-project", "--region=europe-west1", "--repository-name=invalid/name", "--bucket-name="}
+			cmd := exec.CommandContext(t.Context(), executable, append(args, tc.args...)...)
+			cmd.Env = append(os.Environ(), "SETUP_GCP_TEST_BOOTSTRAP=1", "CREATE_ARTIFACT_REPOSITORY="+tc.env,
+				"GOOGLE_APPLICATION_CREDENTIALS="+t.TempDir()+"/missing-credentials.json")
+			// Stop at validation or credential loading, before any cloud requests.
+			out, err := cmd.CombinedOutput()
+			if err == nil || !strings.Contains(string(out), tc.want) {
+				t.Fatalf("bootstrap: %v\n%s\nwant %q", err, out, tc.want)
+			}
+		})
+	}
+}

@@ -45,6 +45,7 @@ type Config struct {
 
 	BucketName                 string
 	ArtifactRegistryRepository string
+	CreateArtifactRepository   bool
 
 	CloudSQLInstance  string
 	CloudSQLTier      string

@@ -140,7 +140,7 @@ prints the installed version, off the atelet DaemonSet the install created.
 
 3. Provision the required GCP resources (Artifact Registry repository, GKE cluster, GCS, and IAM bindings):
    ```bash
-   go run ./tools/setup-gcp bootstrap
+   go run ./tools/setup-gcp bootstrap --create-repository
    ```
 
    On a fresh project this step also creates the atelet Workload Identity IAM
@@ -196,7 +196,8 @@ If you need to delete the resources created by the setup script, you can use the
 ```
 
 This also deletes the Artifact Registry repository and its images. Use
-`--all --keep-repository` to retain a shared repository.
+`--all --keep-repository` to retain a shared repository or when setup did not
+create one.
 
 Or run individual teardown steps as needed (see `./hack/teardown.sh` for available options).
 

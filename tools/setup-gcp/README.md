@@ -42,8 +42,10 @@ source .ate-dev-env.sh
 
 ### Image repository
 
-`bootstrap` creates the `ate-images` Docker repository in `${GCE_REGION}`
-(`us-west1` by default). Images are pushed to
+`bootstrap --create-repository` creates the `ate-images` Docker repository in
+`${GCE_REGION}` (`us-west1` by default) for source builds. The flag defaults to
+`false` and can also be set with `CREATE_ARTIFACT_REPOSITORY=true`. Pre-built
+installs do not need a repository. Images are pushed to
 `${GCE_REGION}-docker.pkg.dev/${PROJECT_ID}/${ARTIFACT_REGISTRY_REPOSITORY}`.
 
 To provision only the repository in an existing project:
@@ -60,13 +62,14 @@ to match. Pushing images requires `roles/artifactregistry.writer` or equivalent
 permissions.
 
 Custom `KO_DOCKER_REPO` values are preserved; they do not change which repository
-`bootstrap` creates. Existing `.ate-dev-env.sh` files must be updated manually
-to use the new defaults, then images must be rebuilt and redeployed.
+`bootstrap --create-repository` creates. Existing `.ate-dev-env.sh` files must be
+updated manually to use the new defaults, then images must be rebuilt and redeployed.
 
 To delete the repository and its images, run `./hack/teardown.sh --delete-repository`.
 Set `PROJECT_ID`, `GCE_REGION`, and `ARTIFACT_REGISTRY_REPOSITORY` (default:
 `ate-images`) to match the repository created during setup. `--all` also deletes
-the repository; use `--all --keep-repository` if it is shared or still needed.
+the repository; use `--all --keep-repository` if it is shared, still needed, or
+was not created during setup.
 
 ## Global Flags
 
@@ -282,7 +285,8 @@ go run ./tools/setup-gcp create dashboards [flags]
 
 ### 6. Bootstrap (All Steps)
 
-Runs all the setup steps in the correct order to fully bootstrap the environment.
+Runs the setup steps in order. Add `--create-repository` when building images
+from source; pre-built installs leave it off.
 
 ```bash
 go run ./tools/setup-gcp bootstrap [flags]
@@ -301,6 +305,7 @@ go run ./tools/setup-gcp bootstrap [flags]
 | `--boot-disk-size` | Boot disk size in GB for the node pool (0 = GKE default). | `BOOT_DISK_SIZE_GB` | None |
 | `--boot-disk-type` | Boot disk type for the node pool (empty = GKE default). | `BOOT_DISK_TYPE` | None |
 | `--bucket-name` | Name of the GCS bucket for snapshots. | `BUCKET_NAME` | None (Required*) |
+| `--create-repository` | Create the image repository for source builds. | `CREATE_ARTIFACT_REPOSITORY` | `false` |
 | `--repository-name` | Name of the Artifact Registry Docker repository. | `ARTIFACT_REGISTRY_REPOSITORY` | `ate-images` |
 | `--dashboard-dir` | Directory containing dashboard JSON files. | `DASHBOARD_DIR` | `tools/setup-gcp/dashboards` |
 
