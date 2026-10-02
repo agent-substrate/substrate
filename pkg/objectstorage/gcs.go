@@ -64,8 +64,8 @@ func NewGCSClient(ctx context.Context, opts ...option.ClientOption) (ObjectStora
 func setRetry(c *storage.Client) {
 	c.SetRetry(
 		storage.WithPolicy(storage.RetryAlways),
-		// Suspend is latency-sensitive, so bound the worst case: at most 5
-		// attempts, under 5s of backoff sleep in total (250ms+500ms+1s+2s).
+		// Suspend is latency-sensitive, so keep the backoff short. MaxAttempts
+		// does not cap uploads (see gcs_retry_test.go).
 		storage.WithBackoff(gax.Backoff{Initial: 250 * time.Millisecond, Max: 2 * time.Second, Multiplier: 2}),
 		storage.WithMaxAttempts(5),
 	)
