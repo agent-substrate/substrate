@@ -23,13 +23,13 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/resources"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/testing/protocmp"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -109,7 +109,7 @@ func TestCreateActorTemplate_SandboxConfigChecks(t *testing.T) {
 				tmpl.SandboxConfig = tt.sandbox
 			})}
 			_, err := s.CreateActorTemplate(ctx, req)
-			if status.Code(err) != tt.wantCode {
+			if apierror.Code(err) != tt.wantCode {
 				t.Errorf("CreateActorTemplate error = %v, want code %v", err, tt.wantCode)
 			}
 		})
@@ -128,7 +128,7 @@ func TestCreateActorTemplate(t *testing.T) {
 		})}
 	}
 
-	if _, err := s.CreateActorTemplate(ctx, req("ns-missing", "tmpl-a")); status.Code(err) != codes.FailedPrecondition {
+	if _, err := s.CreateActorTemplate(ctx, req("ns-missing", "tmpl-a")); apierror.Code(err) != codes.FailedPrecondition {
 		t.Errorf("CreateActorTemplate in missing atespace = %v, want FailedPrecondition", err)
 	}
 
@@ -274,7 +274,7 @@ func TestDeleteActorTemplate(t *testing.T) {
 					t.Fatal(err)
 				}
 				stale := store.DeletePreconditions{UID: current.GetMetadata().GetUid(), Version: current.GetMetadata().GetVersion() + 1}
-				if _, err := workflow.DeleteActorTemplate(ctx, templateRef, stale); status.Code(err) != codes.Aborted {
+				if _, err := workflow.DeleteActorTemplate(ctx, templateRef, stale); apierror.Code(err) != codes.Aborted {
 					t.Fatalf("DeleteActorTemplate with a stale version = %v, want code Aborted", err)
 				}
 				if _, err := persistence.GetActor(ctx, goldenRef); err != nil {
@@ -323,7 +323,7 @@ func TestDeleteActorTemplate(t *testing.T) {
 					t.Errorf("snapshot %s still holds %v", uri, got)
 				}
 			}
-			if _, err := svc.DeleteActorTemplate(ctx, req); status.Code(err) != codes.NotFound {
+			if _, err := svc.DeleteActorTemplate(ctx, req); apierror.Code(err) != codes.NotFound {
 				t.Fatalf("delete missing template = %v, want NotFound", err)
 			}
 		})
@@ -374,7 +374,7 @@ func TestResolveActorTemplate(t *testing.T) {
 	t.Run("ref to a missing template is FailedPrecondition", func(t *testing.T) {
 		actor := &ateapipb.Actor{ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "absent"}}
 		_, err := resolveActorTemplate(ctx, persistence, actor)
-		if got := status.Code(err); got != codes.FailedPrecondition {
+		if got := apierror.Code(err); got != codes.FailedPrecondition {
 			t.Fatalf("status.Code = %v, want FailedPrecondition (err: %v)", got, err)
 		}
 	})

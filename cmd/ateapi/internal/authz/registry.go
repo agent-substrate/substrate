@@ -15,9 +15,8 @@
 package authz
 
 import (
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // targetExtractor extracts the OpenFGA (relation, object) tuple to verify for a request.
@@ -30,7 +29,7 @@ type targetExtractor func(req any) (relation string, object string, err error)
 func globalRule[T any](relation string) targetExtractor {
 	return func(req any) (string, string, error) {
 		if _, ok := req.(T); !ok {
-			return "", "", status.Errorf(codes.Internal, "authz: unexpected request type %T", req)
+			return "", "", apierror.Internal("authz: unexpected request type %T", req)
 		}
 		return relation, GlobalRootObject, nil
 	}
@@ -40,7 +39,7 @@ func atespaceRule[T any](relation string, getRef func(T) *ateapipb.ObjectRef) ta
 	return func(req any) (string, string, error) {
 		r, ok := req.(T)
 		if !ok {
-			return "", "", status.Errorf(codes.Internal, "authz: unexpected request type %T", req)
+			return "", "", apierror.Internal("authz: unexpected request type %T", req)
 		}
 		name := getRef(r).GetName()
 		if name == "" {

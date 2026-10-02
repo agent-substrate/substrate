@@ -23,10 +23,9 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/apivalidation"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/ateletauth"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -39,7 +38,7 @@ func (s *Server) SetWorkerCapacity(ctx context.Context, req *ateapipb.SetWorkerC
 		return nil, err
 	}
 	if errs := apivalidation.ValidateSetWorkerCapacityRequest(ctx, req); len(errs) > 0 {
-		return nil, resources.ToGRPCStatusError(errs)
+		return nil, resources.ToAPIError(errs)
 	}
 	reported := req.GetCapacity()
 	name := req.GetWorker().GetName()
@@ -48,7 +47,7 @@ func (s *Server) SetWorkerCapacity(ctx context.Context, req *ateapipb.SetWorkerC
 	worker, err := s.store.GetWorker(ctx, name)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, status.Errorf(codes.NotFound, "Worker %s not found", name)
+			return nil, apierror.NotFound("Worker %s not found", name)
 		}
 		return nil, fmt.Errorf("while fetching worker %s: %w", name, err)
 	}
@@ -59,7 +58,7 @@ func (s *Server) SetWorkerCapacity(ctx context.Context, req *ateapipb.SetWorkerC
 			slog.String("worker_node", worker.GetNodeName()),
 			slog.String("caller_node", caller.NodeName),
 			slog.String("caller_pod", caller.PodName))
-		return nil, status.Errorf(codes.NotFound, "Worker %s not found", name)
+		return nil, apierror.NotFound("Worker %s not found", name)
 	}
 
 	if proto.Equal(worker.GetStatus().GetCapacity(), reported) {
@@ -75,9 +74,9 @@ func (s *Server) SetWorkerCapacity(ctx context.Context, req *ateapipb.SetWorkerC
 	switch {
 	case err == nil:
 	case errors.Is(err, store.ErrNotFound):
-		return nil, status.Errorf(codes.NotFound, "Worker %s not found", name)
+		return nil, apierror.NotFound("Worker %s not found", name)
 	case errors.Is(err, store.ErrUIDConflict), errors.Is(err, store.ErrVersionConflict):
-		return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
+		return nil, apierror.Aborted("concurrent update conflict, please retry")
 	default:
 		return nil, fmt.Errorf("while recording capacity for worker %s: %w", name, err)
 	}

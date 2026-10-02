@@ -16,9 +16,12 @@ package controlapi
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -302,9 +305,13 @@ func TestRecordLifecycleOp_OutcomeClassification(t *testing.T) {
 		wantErrorType string // empty means error.type must be absent
 	}{
 		{name: "create success", op: ateattr.OperationCreate, err: nil, wantErrorType: ""},
-		{name: "create not found", op: ateattr.OperationCreate, err: status.Error(codes.NotFound, "missing"), wantErrorType: "NotFound"},
-		{name: "resume aborted", op: ateattr.OperationResume, err: status.Error(codes.Aborted, "conflict"), wantErrorType: "Aborted"},
-		{name: "resume crash", op: ateattr.OperationResume, err: status.Error(codes.DataLoss, "crashed"), wantErrorType: "DataLoss"},
+		{name: "create not found", op: ateattr.OperationCreate, err: apierror.NotFound("missing"), wantErrorType: "NotFound"},
+		{name: "resume aborted", op: ateattr.OperationResume, err: apierror.Aborted("conflict"), wantErrorType: "Aborted"},
+		{name: "resume crash", op: ateattr.OperationResume, err: apierror.DataLoss("crashed"), wantErrorType: "DataLoss"},
+		{name: "wrapped apierror", op: ateattr.OperationResume, err: fmt.Errorf("workflow failed at step Load: %w", apierror.NotFound("missing")), wantErrorType: "NotFound"},
+		{name: "upstream status is what the caller gets", op: ateattr.OperationResume, err: fmt.Errorf("actor crashed: %w", status.Error(codes.Unavailable, "atelet down")), wantErrorType: "Internal"},
+		{name: "context deadline", op: ateattr.OperationSuspend, err: fmt.Errorf("while checkpointing: %w", context.DeadlineExceeded), wantErrorType: "DeadlineExceeded"},
+		{name: "plain error", op: ateattr.OperationPause, err: errors.New("store is down"), wantErrorType: "Internal"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -358,7 +365,7 @@ func TestSchedulerAssignmentShapeAndOutcomes(t *testing.T) {
 			outcome:  ateattr.SchedulerOutcomeNoCapacity,
 			pool:     "",
 			class:    "gvisor",
-			err:      status.Error(codes.FailedPrecondition, "no free workers available"),
+			err:      apierror.FailedPrecondition("no free workers available"),
 			wantKeys: []attribute.Key{ateattr.SchedulerOutcomeKey, ateattr.SandboxClassKey},
 		},
 		{
@@ -366,7 +373,7 @@ func TestSchedulerAssignmentShapeAndOutcomes(t *testing.T) {
 			outcome:       ateattr.SchedulerOutcomeError,
 			pool:          "",
 			class:         "",
-			err:           status.Error(codes.Internal, "boom"),
+			err:           errors.New("boom"),
 			wantKeys:      []attribute.Key{ateattr.SchedulerOutcomeKey, ateattr.ErrorTypeKey},
 			wantErrorType: "Internal",
 		},
