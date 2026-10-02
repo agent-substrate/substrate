@@ -43,14 +43,20 @@ const (
 	RoleEditor = "editor"
 	RoleViewer = "viewer"
 
-	RelationCanCreateAtespace     = "can_create_atespace"
-	RelationCanListAtespaces      = "can_list_atespaces"
-	RelationCanGet                = "can_get"
-	RelationCanDelete             = "can_delete"
-	RelationCanCreateAccessPolicy = "can_create_access_policy"
-	RelationCanGetAccessPolicy    = "can_get_access_policy"
-	RelationCanUpdateAccessPolicy = "can_update_access_policy"
-	RelationCanDeleteAccessPolicy = "can_delete_access_policy"
+	RelationCanCreateAtespace      = "can_create_atespace"
+	RelationCanListAtespaces       = "can_list_atespaces"
+	RelationCanCreateActor         = "can_create_actor"
+	RelationCanListActors          = "can_list_actors"
+	RelationCanCreateActorTemplate = "can_create_actor_template"
+	RelationCanListActorTemplates  = "can_list_actor_templates"
+	RelationCanGet                 = "can_get"
+	RelationCanUse                 = "can_use"
+	RelationCanUpdate              = "can_update"
+	RelationCanDelete              = "can_delete"
+	RelationCanCreateAccessPolicy  = "can_create_access_policy"
+	RelationCanGetAccessPolicy     = "can_get_access_policy"
+	RelationCanUpdateAccessPolicy  = "can_update_access_policy"
+	RelationCanDeleteAccessPolicy  = "can_delete_access_policy"
 
 	// maxTuplesPerWrite is OpenFGA's default maximum number of tuples allowed in a single Write request.
 	maxTuplesPerWrite = 100
@@ -77,9 +83,37 @@ var tupleReplacer = strings.NewReplacer(
 	"*", "%2A",
 )
 
+// objectIDReplacer escapes resource names in OpenFGA object IDs. Unlike
+// tupleReplacer it also escapes '/', which separates the atespace from the
+// name in atespaced object IDs, so each ID names exactly one resource.
+var objectIDReplacer = strings.NewReplacer(
+	"%", "%25",
+	":", "%3A",
+	"#", "%23",
+	" ", "%20",
+	"*", "%2A",
+	"/", "%2F",
+)
+
 // AtespaceObject formats an atespace name as an OpenFGA object string.
 func AtespaceObject(name string) string {
-	return "atespace:" + tupleReplacer.Replace(name)
+	return "atespace:" + objectIDReplacer.Replace(name)
+}
+
+// ActorObject formats an actor as an OpenFGA object string.
+func ActorObject(atespace, name string) string {
+	return "actor:" + atespacedID(atespace, name)
+}
+
+// ActorTemplateObject formats an actor template as an OpenFGA object string.
+func ActorTemplateObject(atespace, name string) string {
+	return "actor_template:" + atespacedID(atespace, name)
+}
+
+// atespacedID formats the object ID of an atespaced resource as
+// "<atespace>/<name>". contextualTuples parses the atespace back out of it.
+func atespacedID(atespace, name string) string {
+	return objectIDReplacer.Replace(atespace) + "/" + objectIDReplacer.Replace(name)
 }
 
 // formatUser formats a principal ID as a valid OpenFGA user string.

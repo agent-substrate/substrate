@@ -571,3 +571,16 @@ func TestFormatUser_NoCollision(t *testing.T) {
 		t.Fatalf("formatUser(\"alice\") and formatUser(\"user:alice\") collided on %q", u1)
 	}
 }
+
+func TestAtespacedObjects_NoCollision(t *testing.T) {
+	// '/' separates the atespace from the name, so a '/' inside either must
+	// not produce another resource's ID.
+	for _, format := range []func(atespace, name string) string{ActorObject, ActorTemplateObject} {
+		if o1, o2 := format("a/b", "c"), format("a", "b/c"); o1 == o2 {
+			t.Errorf("(%q, %q) and (%q, %q) collided on %q", "a/b", "c", "a", "b/c", o1)
+		}
+	}
+	if o1, o2 := ActorObject("a", "b"), ActorTemplateObject("a", "b"); o1 == o2 {
+		t.Errorf("ActorObject and ActorTemplateObject collided on %q", o1)
+	}
+}
