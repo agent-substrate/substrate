@@ -16,6 +16,7 @@ package ateomstats
 
 import (
 	"context"
+	"errors"
 	"math"
 	"sync"
 	"time"
@@ -74,6 +75,9 @@ func (a *Activation) WithEpoch(s *ateompb.WorkloadStatsSample) *ateompb.Workload
 	return s
 }
 
+// errNoSample is a read that returned neither a sample nor an error.
+var errNoSample = errors.New("usage reading returned no sample")
+
 // Measure takes a reading with read and returns its sample with the epoch set
 // and the raw CPU replaced by the CPU used in this activation.
 //
@@ -94,6 +98,9 @@ func (a *Activation) Measure(ctx context.Context, read func() (*ateompb.Workload
 	s, parts, err := read()
 	if err != nil {
 		return nil, err
+	}
+	if s == nil {
+		return nil, errNoSample
 	}
 	s.EpochUnixNano = a.epoch
 	if parts == nil {
@@ -135,7 +142,8 @@ func addSat(a, b uint64) uint64 {
 	return a + b
 }
 
-// Store records s as the latest sample unless a newer one is already stored.
+// Store records s as the latest sample, and as the newest measured one when it
+// has numbers, each unless a newer one is already there.
 func (a *Activation) Store(s *ateompb.WorkloadStatsSample) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -143,11 +151,13 @@ func (a *Activation) Store(s *ateompb.WorkloadStatsSample) {
 }
 
 func (a *Activation) store(s *ateompb.WorkloadStatsSample) {
-	if a.latest != nil && s.GetObservedAtUnixNano() < a.latest.GetObservedAtUnixNano() {
-		return
+	if a.latest == nil || s.GetObservedAtUnixNano() >= a.latest.GetObservedAtUnixNano() {
+		a.latest = s
 	}
-	a.latest = s
-	if s.GetSource() != ateompb.StatsSource_STATS_SOURCE_UNSPECIFIED {
+	// Compared on its own: a pending sample stored first must not discard a
+	// measured one read earlier.
+	if s.GetSource() != ateompb.StatsSource_STATS_SOURCE_UNSPECIFIED &&
+		(a.measured == nil || s.GetObservedAtUnixNano() >= a.measured.GetObservedAtUnixNano()) {
 		a.measured = s
 	}
 }

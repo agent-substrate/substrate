@@ -276,3 +276,39 @@ func TestActivationFinalOnce(t *testing.T) {
 		t.Errorf("Final wrote %d records, want 1", writes)
 	}
 }
+
+// TestActivationStoreMeasuredAfterNewerPending stores a pending sample, then a
+// measured one read earlier: the discovery read keeps the newer pending sample,
+// and the final record still gets the measured one.
+func TestActivationStoreMeasuredAfterNewerPending(t *testing.T) {
+	t.Parallel()
+	a := NewActivation(time.Now(), false)
+	older := &ateompb.WorkloadStatsSample{Source: ateompb.StatsSource_STATS_SOURCE_CGROUP, ObservedAtUnixNano: 10}
+	a.Store(&ateompb.WorkloadStatsSample{Source: ateompb.StatsSource_STATS_SOURCE_CGROUP, ObservedAtUnixNano: 5})
+	pending := &ateompb.WorkloadStatsSample{ObservedAtUnixNano: 20}
+	a.Store(pending)
+	a.Store(older)
+	if a.Latest() != pending {
+		t.Errorf("Latest() = %v, want the newer pending sample", a.Latest())
+	}
+	a.Final(func(m *ateompb.WorkloadStatsSample) {
+		if m != older {
+			t.Errorf("final sample = %v, want the measured sample read at 10", m)
+		}
+	})
+}
+
+// TestActivationMeasureNilSample pins that a read returning no sample and no
+// error is a failed reading, not a panic, and leaves the counters unstarted.
+func TestActivationMeasureNilSample(t *testing.T) {
+	t.Parallel()
+	a := NewActivation(time.Now(), true)
+	if _, err := a.Measure(context.Background(), func() (*ateompb.WorkloadStatsSample, map[string]uint64, error) {
+		return nil, nil, nil
+	}); !errors.Is(err, errNoSample) {
+		t.Fatalf("Measure() error = %v, want errNoSample", err)
+	}
+	if got := measure(t, a, reading{"": 700}); got != 0 {
+		t.Errorf("first reading after the empty one = %d, want 0 (it is the baseline)", got)
+	}
+}
