@@ -91,7 +91,7 @@ func TestBuildAuthenticationConfig(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := buildAuthenticationConfig(tc.issuer); got != tc.want {
+			if got := buildAuthenticationConfig(tc.issuer, NamespaceAteSystem); got != tc.want {
 				t.Errorf("buildAuthenticationConfig(%q) =\n%q\nwant\n%q", tc.issuer, got, tc.want)
 			}
 		})

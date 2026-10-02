@@ -28,6 +28,8 @@ import (
 	"strings"
 	"time"
 
+	"k8s.io/apimachinery/pkg/util/validation"
+
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/images"
 	"github.com/agent-substrate/substrate/internal/installdefaults"
 )
@@ -88,11 +90,11 @@ type Config struct {
 	Kind bool
 
 	// Namespace is the namespace the control plane is installed into, from
-	// ATE_NAMESPACE. It defaults to the canonical installdefaults.SystemNamespace,
-	// so an install that does not set it is unaffected. The checked-in manifests
-	// under manifests/ate-install/ name that namespace literally, so the
-	// manifest-applying steps refuse any other value; see Env.RequireCanonicalNamespace.
+	// ATE_NAMESPACE. It defaults to installdefaults.SystemNamespace.
 	Namespace string
+	// PodcertNamespace is the namespace of the certificate controller and its
+	// signer pools, from ATE_PODCERT_NAMESPACE.
+	PodcertNamespace string
 
 	// Kubeconfig and Context select the target cluster. Empty Context means
 	// "use the current context" (the KUBECTL_CONTEXT convention).
@@ -234,6 +236,8 @@ type Options struct {
 	Kind                                  bool
 	Kubeconfig                            string
 	Context                               string
+	Namespace                             string
+	PodcertNamespace                      string
 	Router                                string
 	RolloutTimeout                        string
 	PodcertWorkersPerSigner               int
@@ -330,7 +334,8 @@ func Load(opts Options) (*Config, error) {
 	cfg := &Config{
 		Root:                     root,
 		Kind:                     kind,
-		Namespace:                firstNonEmpty(env["ATE_NAMESPACE"], installdefaults.SystemNamespace),
+		Namespace:                firstNonEmpty(opts.Namespace, env["ATE_NAMESPACE"], installdefaults.SystemNamespace),
+		PodcertNamespace:         firstNonEmpty(opts.PodcertNamespace, env["ATE_PODCERT_NAMESPACE"], "podcertificate-controller-system"),
 		Kubeconfig:               kubeconfig,
 		Context:                  firstNonEmpty(opts.Context, env["KUBECTL_CONTEXT"]),
 		ProjectID:                env["PROJECT_ID"],
@@ -418,6 +423,13 @@ func applyKindDefaults(cfg *Config) {
 }
 
 func validate(cfg *Config) error {
+	for flag, namespace := range map[string]string{
+		"--namespace": cfg.Namespace, "--podcert-namespace": cfg.PodcertNamespace,
+	} {
+		if errs := validation.IsDNS1123Label(namespace); len(errs) != 0 {
+			return fmt.Errorf("%s %q is invalid: %s", flag, namespace, strings.Join(errs, ", "))
+		}
+	}
 	if err := cfg.Images.Validate(); err != nil {
 		return err
 	}
@@ -490,10 +502,24 @@ func (c *Config) PostgresConnString() string {
 	if c.PostgresConnectionString != "" {
 		return c.PostgresConnectionString
 	}
+	namespace := firstNonEmpty(c.Namespace, installdefaults.SystemNamespace)
+	conn := strings.ReplaceAll(DefaultPostgresConnectionString, installdefaults.SystemNamespace, namespace)
 	if c.ClusterSize == ClusterSizeSize10 {
-		return DefaultPostgresConnectionString + Size10PostgresPoolParams
+		return conn + Size10PostgresPoolParams
 	}
-	return DefaultPostgresConnectionString
+	return conn
+}
+
+// InstallManifest relocates the canonical namespaces in a rendered
+// installation manifest. Call it after kustomize, whose patch targets name the
+// canonical resources.
+func (c *Config) InstallManifest(manifest []byte) []byte {
+	namespace := firstNonEmpty(c.Namespace, installdefaults.SystemNamespace)
+	podcertNamespace := firstNonEmpty(c.PodcertNamespace, "podcertificate-controller-system")
+	return []byte(strings.NewReplacer(
+		"podcertificate-controller-system", podcertNamespace,
+		installdefaults.SystemNamespace, namespace,
+	).Replace(string(manifest)))
 }
 
 // Size10 reports whether the size10 footprint profile is selected.
@@ -571,15 +597,17 @@ func (c *Config) ScriptEnv() []string {
 	// The resolved values win: they already account for flags, the dev env,
 	// and the kind profile.
 	for name, value := range map[string]string{
-		"KUBECTL_CONTEXT":     c.Context,
-		"KUBECONFIG":          c.kubeconfigEnv,
-		"BUCKET_NAME":         c.BucketName,
-		"KO_DOCKER_REPO":      c.KODockerRepo,
-		"KO_DEFAULTPLATFORMS": c.KODefaultPlatforms,
-		"PROJECT_ID":          c.ProjectID,
-		"CLUSTER_NAME":        c.ClusterName,
-		"CLUSTER_LOCATION":    c.ClusterLocation,
-		"ATE_OTLP_ENDPOINT":   c.OtlpEndpoint,
+		"ATE_NAMESPACE":         c.Namespace,
+		"ATE_PODCERT_NAMESPACE": c.PodcertNamespace,
+		"KUBECTL_CONTEXT":       c.Context,
+		"KUBECONFIG":            c.kubeconfigEnv,
+		"BUCKET_NAME":           c.BucketName,
+		"KO_DOCKER_REPO":        c.KODockerRepo,
+		"KO_DEFAULTPLATFORMS":   c.KODefaultPlatforms,
+		"PROJECT_ID":            c.ProjectID,
+		"CLUSTER_NAME":          c.ClusterName,
+		"CLUSTER_LOCATION":      c.ClusterLocation,
+		"ATE_OTLP_ENDPOINT":     c.OtlpEndpoint,
 	} {
 		if value == "" {
 			// An empty value means "not configured". Leaving the variable set

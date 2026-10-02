@@ -71,7 +71,7 @@ func TestSetPodcertWorkersPerSigner(t *testing.T) {
 			if got := workersPerSigner(t, objs); len(got) != 1 {
 				t.Fatalf("base manifest WORKERS_PER_SIGNER = %v, want exactly one entry", got)
 			}
-			if err := setPodcertWorkersPerSigner(objs, 8); err != nil {
+			if err := setPodcertWorkersPerSigner(objs, NamespacePodCert, 8); err != nil {
 				t.Fatalf("setPodcertWorkersPerSigner: %v", err)
 			}
 			if got := workersPerSigner(t, objs); len(got) != 1 || got[0] != "8" {
@@ -91,7 +91,7 @@ func TestSetPodcertWorkersPerSignerAppendsWhenAbsent(t *testing.T) {
 		}}},
 	}}
 	objs := []*unstructured.Unstructured{dep}
-	if err := setPodcertWorkersPerSigner(objs, 3); err != nil {
+	if err := setPodcertWorkersPerSigner(objs, NamespacePodCert, 3); err != nil {
 		t.Fatalf("setPodcertWorkersPerSigner: %v", err)
 	}
 	if got := workersPerSigner(t, objs); len(got) != 1 || got[0] != "3" {
@@ -106,7 +106,7 @@ func TestSetPodcertWorkersPerSignerRejectsMissingDeployment(t *testing.T) {
 			withoutDeployment = append(withoutDeployment, obj)
 		}
 	}
-	if err := setPodcertWorkersPerSigner(withoutDeployment, 2); err == nil {
+	if err := setPodcertWorkersPerSigner(withoutDeployment, NamespacePodCert, 2); err == nil {
 		t.Error("setPodcertWorkersPerSigner succeeded without a Deployment, want an error")
 	}
 }

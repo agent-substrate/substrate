@@ -94,6 +94,8 @@ func init() {
 		"Target a local Kind cluster: use the kind overlays, the local registry, and host-architecture builds (or ATE_INSTALL_KIND=true)")
 	f.StringVar(&opts.Kubeconfig, "kubeconfig", "", "Path to the kubeconfig file")
 	f.StringVar(&opts.Context, "context", "", "Name of the kubeconfig context to use (defaults to KUBECTL_CONTEXT)")
+	f.StringVar(&opts.Namespace, "namespace", "", "Namespace for the Substrate control plane (default ate-system; ATE_NAMESPACE)")
+	f.StringVar(&opts.PodcertNamespace, "podcert-namespace", "", "Namespace for podcertificate-controller (default podcertificate-controller-system; ATE_PODCERT_NAMESPACE)")
 	f.StringVar(&opts.Router, "atenet-dataplane", "", "Atenet ingress and egress dataplane: envoy or agentgateway (default envoy)")
 	f.StringVar(&opts.RolloutTimeout, "rollout-timeout", "", "Timeout for workload rollouts as a duration string (e.g. 60s, 5m)")
 	f.IntVar(&opts.PodcertWorkersPerSigner, "podcert-workers-per-signer", 0, "Number of worker goroutines per signer in podcertificate-controller")
@@ -106,7 +108,7 @@ func init() {
 	f.StringVar(&opts.AdditionalEgressExtprocService, "experimental-additional-egress-extproc-service", "", "Run an additional ext_proc authorization filter served by NS/SVC:PORT (requires --atenet-dataplane=envoy)")
 	f.BoolVar(&opts.ExperimentalEgressCredentialInjection, "experimental-egress-credential-injection", false, "Point the egress gateway's MITM-leg handler at a credential provider so a matching EgressPolicy rule injects its credential (requires --atenet-dataplane=envoy)")
 	f.StringVar(&opts.CredentialProviderName, "credential-provider-name", "", "Credential provider the injector serves, as a ate-secret:// prefix (default ate-secret://k8s.io)")
-	f.StringVar(&opts.CredentialProviderAddress, "credential-provider-address", "", "Address the egress gateway dials the credential provider at (default k8s-credential-provider.ate-system.svc:50051)")
+	f.StringVar(&opts.CredentialProviderAddress, "credential-provider-address", "", "Address the egress gateway dials the credential provider at (default k8s-credential-provider.<namespace>.svc:50051)")
 	f.StringVar(&opts.OtlpEndpoint, "otlp-endpoint", "", "Send control plane telemetry to this OTLP collector instead of the cluster default (defaults to ATE_OTLP_ENDPOINT)")
 	f.BoolVar(&opts.NoDevEnv, "no-dev-env", false, "Do not source .ate-dev-env.sh")
 

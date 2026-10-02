@@ -93,13 +93,13 @@ func (e *Env) EnsureEgressMITMCAPoolSecret(ctx context.Context) error {
 // podcertificate controller issues from.
 func (e *Env) CreatePodCertificateControllerCAs(ctx context.Context) error {
 	log.Step("create_podcertificate_controller_cas")
-	if err := e.Kube.EnsureNamespace(ctx, NamespacePodCert); err != nil {
+	if err := e.Kube.EnsureNamespace(ctx, e.PodcertNamespace()); err != nil {
 		return err
 	}
-	if err := e.createCAPool(ctx, NamespacePodCert, SecretServiceDNSCA); err != nil {
+	if err := e.createCAPool(ctx, e.PodcertNamespace(), SecretServiceDNSCA); err != nil {
 		return err
 	}
-	return e.createCAPool(ctx, NamespacePodCert, SecretPodIdentityCA)
+	return e.createCAPool(ctx, e.PodcertNamespace(), SecretPodIdentityCA)
 }
 
 // CreateActorIDCACertsSecret derives a certificate-only trust bundle from the
@@ -127,7 +127,7 @@ func (e *Env) CreateAPIAuthenticationConfig(ctx context.Context) error {
 		return err
 	}
 
-	authnConfig := buildAuthenticationConfig(e.jwtIssuer(ctx))
+	authnConfig := buildAuthenticationConfig(e.jwtIssuer(ctx), e.Namespace())
 	// The issuer decides which tokens the apiserver accepts at all, and a
 	// wrong one fails as an opaque 401 much later, so show what was written.
 	log.Infof("%s authentication.yaml:", ConfigMapAPIAuthn)
@@ -170,10 +170,10 @@ const inClusterIssuer = "https://kubernetes.default.svc"
 // An in-cluster issuer is not reachable over public discovery, so the apiserver
 // is pointed at its own projected service account CA and token to complete the
 // OIDC discovery handshake. A GKE or otherwise external issuer needs neither.
-func buildAuthenticationConfig(issuer string) string {
+func buildAuthenticationConfig(issuer, namespace string) string {
 	config := fmt.Sprintf(
-		"actorIdentityJWTProvider: kubernetes\njwtProviders:\n- name: kubernetes\n  issuer: %s\n  audiences: [api.ate-system.svc]\n",
-		issuer)
+		"actorIdentityJWTProvider: kubernetes\njwtProviders:\n- name: kubernetes\n  issuer: %s\n  audiences: [api.%s.svc]\n",
+		issuer, namespace)
 	switch issuer {
 	case inClusterIssuer, inClusterIssuer + ".cluster.local":
 		config += "  certificateAuthorityFile: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt\n" +

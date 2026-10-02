@@ -24,6 +24,8 @@ a pre-scan pass, so they may appear anywhere on its command line.
 | `ate-setup` | `hack/install-ate.sh` | Notes |
 |---|---|---|
 | `--kind` | `hack/install-ate-kind.sh`, or `ATE_INSTALL_KIND=true` | Kind overlays, the local registry, and host-architecture image builds |
+| `--namespace NAME` | `ATE_NAMESPACE=NAME` | Control-plane namespace (default `ate-system`) |
+| `--podcert-namespace NAME` | `ATE_PODCERT_NAMESPACE=NAME` | Pod-certificate-controller namespace (default `podcertificate-controller-system`) |
 | `--atenet-dataplane envoy\|agentgateway` | `--atenet-dataplane envoy\|agentgateway` | atenet ingress and egress dataplane (default `envoy`) |
 | `--rollout-timeout DURATION` | `--rollout-timeout DURATION` | Readiness timeout for workloads (default `60s`). Unlike the shell flag it also governs the podcertificate-controller and CSI waits, which stay at their 120s default until it is passed |
 | `--podcert-workers-per-signer N` | `--podcert-workers-per-signer N` | Concurrent workers per podcertificate-controller signer |

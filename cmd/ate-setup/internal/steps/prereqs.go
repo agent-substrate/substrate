@@ -44,7 +44,7 @@ func (e *Env) EnsureAPIServerPrerequisites(ctx context.Context) error {
 	if err := e.ensureSecret(ctx, e.Namespace(), SecretActorIDCACerts, e.CreateActorIDCACertsSecret); err != nil {
 		return err
 	}
-	if err := e.ensureSecret(ctx, NamespacePodCert, SecretServiceDNSCA, e.CreatePodCertificateControllerCAs); err != nil {
+	if err := e.ensureSecret(ctx, e.PodcertNamespace(), SecretServiceDNSCA, e.CreatePodCertificateControllerCAs); err != nil {
 		return err
 	}
 	// Always reconcile the PostgreSQL connection settings, so that a changed
@@ -67,7 +67,7 @@ func (e *Env) EnsureAPIServerPrerequisites(ctx context.Context) error {
 // missing.
 func (e *Env) EnsurePodCertificateCAs(ctx context.Context) error {
 	for _, name := range []string{SecretServiceDNSCA, SecretPodIdentityCA} {
-		exists, err := e.Kube.SecretExists(ctx, NamespacePodCert, name)
+		exists, err := e.Kube.SecretExists(ctx, e.PodcertNamespace(), name)
 		if err != nil {
 			return err
 		}
@@ -84,7 +84,7 @@ func (e *Env) WaitForPodCertificateTrustBundles(ctx context.Context) error {
 	log.Infof("Waiting for podcertificate ClusterTrustBundles to be ready...")
 	err := e.Kube.WaitClusterTrustBundles(ctx, trustBundleNames, e.Cfg.WaitTimeout(TrustBundleTimeout))
 	if err != nil {
-		return fmt.Errorf("%w\n%s", err, trustBundleDiagnostics)
+		return fmt.Errorf("%w\n%s", err, fmt.Sprintf(trustBundleDiagnostics, e.PodcertNamespace(), e.PodcertNamespace(), e.PodcertNamespace()))
 	}
 	return nil
 }
@@ -97,9 +97,9 @@ const trustBundleDiagnostics = `The podcertificate-controller pod is likely Read
 (missing CA-pool secret, crash-looping after first Ready, RBAC denial, or a
 name mismatch after an upgrade). Investigate with:
   kubectl get clustertrustbundles -A
-  kubectl -n podcertificate-controller-system logs deploy/podcertificate-controller --tail=200
-  kubectl -n podcertificate-controller-system get pods,secrets,configmaps
-  kubectl -n podcertificate-controller-system get events --sort-by=.lastTimestamp | tail -20`
+  kubectl -n %s logs deploy/podcertificate-controller --tail=200
+  kubectl -n %s get pods,secrets,configmaps
+  kubectl -n %s get events --sort-by=.lastTimestamp | tail -20`
 
 // ensureSecret runs create when the named Secret is absent.
 func (e *Env) ensureSecret(ctx context.Context, namespace, name string, create func(context.Context) error) error {

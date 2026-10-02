@@ -58,6 +58,8 @@ func loadEnv(t *testing.T) {
 		"ATE_INSTALL_KIND",
 		"ATE_INSTALL_PODCERT_WORKERS_PER_SIGNER",
 		"ATE_INSTALL_ROLLOUT_TIMEOUT",
+		"ATE_NAMESPACE",
+		"ATE_PODCERT_NAMESPACE",
 		"ATE_OTLP_ENDPOINT",
 		"BENCHMARK_ACTOR_MEMORY",
 		"BUCKET_NAME",
@@ -99,9 +101,13 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Router != RouterEnvoy {
 		t.Errorf("Router = %q, want %q", cfg.Router, RouterEnvoy)
 	}
+	if cfg.Namespace != "ate-system" || cfg.PodcertNamespace != "podcertificate-controller-system" {
+		t.Errorf("default namespaces = %q, %q", cfg.Namespace, cfg.PodcertNamespace)
+	}
 	if cfg.PostgresConnString() != DefaultPostgresConnectionString {
 		t.Errorf("PostgresConnString() = %q, want %q", cfg.PostgresConnString(), DefaultPostgresConnectionString)
 	}
+
 	if cfg.RolloutTimeout != DefaultRolloutTimeout {
 		t.Errorf("RolloutTimeout = %v, want %v", cfg.RolloutTimeout, DefaultRolloutTimeout)
 	}
@@ -110,6 +116,41 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.CordonControlPlane {
 		t.Error("CordonControlPlane = true, want false")
+	}
+}
+
+func TestLoadNamespaces(t *testing.T) {
+	loadEnv(t)
+	t.Setenv("ATE_NAMESPACE", "env-system")
+	t.Setenv("ATE_PODCERT_NAMESPACE", "env-cert")
+	cfg, err := Load(Options{Namespace: "flag-system", PodcertNamespace: "flag-cert"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Namespace != "flag-system" || cfg.PodcertNamespace != "flag-cert" {
+		t.Errorf("flag namespaces = %q, %q", cfg.Namespace, cfg.PodcertNamespace)
+	}
+	if got := cfg.PostgresConnString(); !strings.Contains(got, "postgres.flag-system.svc") {
+		t.Errorf("PostgresConnString() = %q", got)
+	}
+	env := scriptEnvMap(t, cfg)
+	if env["ATE_NAMESPACE"] != "flag-system" || env["ATE_PODCERT_NAMESPACE"] != "flag-cert" {
+		t.Errorf("script namespaces = %q, %q", env["ATE_NAMESPACE"], env["ATE_PODCERT_NAMESPACE"])
+	}
+	shared, err := Load(Options{Namespace: "shared", PodcertNamespace: "shared"})
+	if err != nil {
+		t.Fatalf("Load() with shared namespace: %v", err)
+	}
+	if shared.Namespace != "shared" || shared.PodcertNamespace != "shared" {
+		t.Errorf("shared namespaces = %q, %q", shared.Namespace, shared.PodcertNamespace)
+	}
+	for _, opts := range []Options{
+		{Namespace: "UPPER"},
+		{PodcertNamespace: "invalid.namespace"},
+	} {
+		if _, err := Load(opts); err == nil {
+			t.Errorf("Load(%+v) accepted invalid namespaces", opts)
+		}
 	}
 }
 

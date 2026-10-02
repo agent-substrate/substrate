@@ -11,6 +11,21 @@ make build-ate-setup    # builds bin/ate-setup
 that existing command lines and CI jobs keep working; it holds no install logic
 of its own.
 
+Use `--namespace` (or `ATE_NAMESPACE`) to install the control plane outside
+`ate-system`, and `--podcert-namespace` (or `ATE_PODCERT_NAMESPACE`) for the
+pod-certificate controller and CA pools outside
+`podcertificate-controller-system`. For example:
+
+```
+go run ./cmd/ate-setup --kind --namespace substrate-demo \
+  --podcert-namespace substrate-cert-demo deploy ate-system
+```
+
+Specify both flags again for component redeploys or teardown. CRDs and signer
+trust bundles are cluster-scoped; separate installations cannot coexist in one
+cluster. The two namespaces may also be the same when the pod-certificate
+controller runs alongside the control plane.
+
 ## Installing a release
 
 By default every image is built from the checkout with `ko`, which is what a

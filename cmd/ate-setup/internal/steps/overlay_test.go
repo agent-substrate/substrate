@@ -656,6 +656,35 @@ func TestRenderAtenetEgressManifestPrebuilt(t *testing.T) {
 	}
 }
 
+func TestRenderEgressPreservesExplicitCredentialAddress(t *testing.T) {
+	const digest = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+	const address = "credentials.ate-system.svc:50051"
+	src := images.Source{Repo: "example.com/substrate", Tag: "v1.2.3"}
+	e := &Env{
+		Cfg: &config.Config{
+			Root: repoRoot(t), Namespace: "substrate-demo", PodcertNamespace: "cert-demo",
+			Images: src, Router: config.RouterEnvoy, ExperimentalUseSDSMint: true,
+			ExperimentalEgressCredentialInjection: true, CredentialProviderAddress: address,
+		},
+		resolver: images.NewPrebuilt(src, func(_ context.Context, _ string) (string, error) {
+			return digest, nil
+		}),
+	}
+	out, err := e.renderAtenetEgressManifest(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"--credential-provider-address=" + address,
+		"--credential-provider-server-name=credentials.ate-system.svc",
+		"namespace: substrate-demo",
+	} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("rendered manifest missing %q", want)
+		}
+	}
+}
+
 // A release that did not publish envoy-dataplane fails the install with a
 // message naming the image and the target that publishes it, rather than a bare
 // registry error.

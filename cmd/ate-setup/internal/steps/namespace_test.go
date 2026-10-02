@@ -15,11 +15,26 @@
 package steps
 
 import (
+	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
+	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kube"
 )
+
+type namespaceTestResolver struct{}
+
+func (namespaceTestResolver) ResolvePath(_ context.Context, path string) ([]byte, error) {
+	return kube.ReadPath(path)
+}
+
+func (namespaceTestResolver) ResolveBytes(_ context.Context, manifest []byte) ([]byte, error) {
+	return manifest, nil
+}
 
 func TestEnvNamespace(t *testing.T) {
 	tests := []struct {
@@ -41,27 +56,82 @@ func TestEnvNamespace(t *testing.T) {
 	}
 }
 
-// The checked-in manifests under manifests/ate-install/ name ate-system
-// literally, so the steps that apply them must refuse any other namespace
-// rather than scatter the install across two.
-func TestRequireCanonicalNamespace(t *testing.T) {
-	t.Run("permits the canonical namespace", func(t *testing.T) {
-		e := &Env{Cfg: &config.Config{Namespace: NamespaceAteSystem}}
-		if err := e.RequireCanonicalNamespace("deploy ate-system"); err != nil {
-			t.Errorf("RequireCanonicalNamespace() = %v, want nil", err)
-		}
-	})
-
-	t.Run("refuses a relocated namespace and names both the step and the value", func(t *testing.T) {
-		e := &Env{Cfg: &config.Config{Namespace: "substrate-dev"}}
-		err := e.RequireCanonicalNamespace("deploy ate-system")
-		if err == nil {
-			t.Fatal("RequireCanonicalNamespace() = nil, want an error")
-		}
-		for _, want := range []string{"deploy ate-system", "substrate-dev", NamespaceAteSystem} {
-			if !strings.Contains(err.Error(), want) {
-				t.Errorf("error %q does not mention %q", err, want)
+func TestInstallNamespaces(t *testing.T) {
+	root, err := config.RepoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{
+		Root: root, Namespace: "substrate-demo", PodcertNamespace: "cert-demo",
+	}
+	e := &Env{Cfg: cfg, resolver: namespaceTestResolver{}}
+	for _, path := range []string{
+		cfg.Manifest("pod-certificate-controller.yaml"),
+		cfg.Manifest("ate-api-server.yaml"),
+		cfg.Manifest("postgres", "postgres.yaml"),
+		cfg.Path(SystemOverlay(cfg)),
+		cfg.Path("manifests/ate-install/kind"),
+		cfg.Path("manifests/ate-install/agentgateway"),
+		cfg.Path("manifests/ate-install/kind-agentgateway"),
+		cfg.Manifest("podcert-size10"),
+	} {
+		t.Run(path, func(t *testing.T) {
+			manifest, err := e.renderResolve(t.Context(), path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(manifest), "podcertificate-controller-system") || strings.Contains(string(manifest), "ate-system") {
+				t.Fatal("rendered manifest still refers to a canonical namespace")
+			}
+			if _, err := kube.DecodeManifestBytes(manifest); err != nil {
+				t.Fatalf("relocated manifest is invalid: %v", err)
+			}
+			if filepath.Base(path) == "ate-controller.yaml" || filepath.Base(path) == "atelet.yaml" {
+				for _, want := range []string{"api.substrate-demo.svc", "namespace: substrate-demo"} {
+					if !strings.Contains(string(manifest), want) {
+						t.Errorf("rendered %s missing %q", path, want)
+					}
+				}
+			}
+		})
+	}
+	if got := e.PodcertNamespace(); got != "cert-demo" {
+		t.Errorf("PodcertNamespace() = %q", got)
+	}
+	objs, err := e.installPathObjects(cfg.Manifest("pod-certificate-controller.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	binding := false
+	for _, obj := range objs {
+		if obj.GetKind() == "Deployment" && obj.GetName() == "podcertificate-controller" {
+			found = true
+			if obj.GetNamespace() != "cert-demo" {
+				t.Errorf("controller namespace = %q", obj.GetNamespace())
 			}
 		}
-	})
+		if obj.GetKind() == "ClusterRoleBinding" {
+			subjects, found, err := unstructured.NestedSlice(obj.Object, "subjects")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if found && len(subjects) > 0 {
+				subject := subjects[0].(map[string]any)
+				if subject["namespace"] != "cert-demo" {
+					t.Errorf("ClusterRoleBinding %s subject namespace = %v", obj.GetName(), subject["namespace"])
+				}
+				binding = true
+			}
+		}
+	}
+	if !found {
+		t.Fatal("missing controller Deployment")
+	}
+	if !binding {
+		t.Fatal("missing podcert ClusterRoleBinding")
+	}
+	if err := setPodcertWorkersPerSigner(objs, e.PodcertNamespace(), 8); err != nil {
+		t.Fatalf("size10 worker override in relocated namespace: %v", err)
+	}
 }
