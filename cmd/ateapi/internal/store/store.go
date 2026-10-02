@@ -252,6 +252,12 @@ type Interface interface {
 	// assignment was already absent.
 	ReleaseActorFromWorker(ctx context.Context, workerName string, actorUID string) (*ateapipb.Worker, error)
 
+	// SetAssignmentWorkerPodIPs points a Worker's assignment for actorUID at
+	// ips, the Worker's ips at ipsGeneration, leaving the Worker and its
+	// allocation alone. An assignment already at ipsGeneration or later is left
+	// as it is. ErrNotFound when the Worker is not hosting that Actor.
+	SetAssignmentWorkerPodIPs(ctx context.Context, workerName, actorUID string, ips []string, ipsGeneration int64) error
+
 	// GetWorkerAssignment returns a Worker's assignment for actorUID, or
 	// ErrNotFound when the Worker is not hosting that Actor.
 	GetWorkerAssignment(ctx context.Context, workerName, actorUID string) (*ateapipb.ActorAssignment, error)

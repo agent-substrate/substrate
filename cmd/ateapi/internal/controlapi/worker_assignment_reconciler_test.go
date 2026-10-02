@@ -17,6 +17,8 @@ package controlapi
 import (
 	"context"
 	"errors"
+	"maps"
+	"slices"
 	"testing"
 	"time"
 
@@ -42,11 +44,18 @@ func TestWorkerAssignmentReconciler_QueuesUnobservedWorkers(t *testing.T) {
 	r := NewWorkerAssignmentReconciler(nil, noWorkers{})
 	defer r.queue.ShutDown()
 
+	withIPsGeneration := func(w *ateapipb.Worker, generation, observed int64) *ateapipb.Worker {
+		w.Status.IpsGeneration = generation
+		w.Status.ObservedIpsGeneration = observed
+		return w
+	}
 	for _, w := range []*ateapipb.Worker{
 		epochWorker("observed", 2, 2),
 		epochWorker("restarted", 3, 2),
 		epochWorker("unreported", 0, 0),
 		epochWorker("registered-before-epochs", 4, 0),
+		withIPsGeneration(epochWorker("ip-observed", 2, 2), 3, 3),
+		withIPsGeneration(epochWorker("ip-changed", 2, 2), 4, 3),
 	} {
 		r.enqueue(w)
 	}
@@ -57,8 +66,12 @@ func TestWorkerAssignmentReconciler_QueuesUnobservedWorkers(t *testing.T) {
 		got[name] = true
 		r.queue.Done(name)
 	}
-	want := map[string]bool{"restarted": true, "registered-before-epochs": true}
-	if len(got) != len(want) || !got["restarted"] || !got["registered-before-epochs"] {
+	want := map[string]bool{
+		"restarted":                true,
+		"registered-before-epochs": true,
+		"ip-changed":               true,
+	}
+	if !maps.Equal(got, want) {
 		t.Errorf("queued %v, want %v", got, want)
 	}
 }
@@ -129,6 +142,37 @@ func TestWorkerAssignmentReconciler_ReleasesRestartedWorker(t *testing.T) {
 	}
 	if a := firstAssignment(t, persistence, apiWorkerName); a != nil {
 		t.Errorf("worker still hosts %v, want the assignment released", a)
+	}
+}
+
+// End to end: the syncer's ip change is all it takes for the reconciler to
+// point the Worker's Actors at it.
+func TestWorkerAssignmentReconciler_RewritesChangedIP(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	svc, persistence := newWorkerAPIService(t)
+	seedEpochWorker(t, ctx, persistence, 1, 1)
+	seedRunningActor(t, ctx, persistence)
+	startAssignmentReconciler(t, ctx, persistence)
+
+	changeIPs(t, ctx, svc, persistence, "10.9.9.9")
+
+	deadline := time.Now().Add(10 * time.Second)
+	for status := mustGetWorker(t, ctx, persistence).GetStatus(); status.GetObservedIpsGeneration() < status.GetIpsGeneration(); status = mustGetWorker(t, ctx, persistence).GetStatus() {
+		if time.Now().After(deadline) {
+			t.Fatal("observed_ips_generation never caught up with ips_generation")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	got := mustGetActor(t, ctx, persistence)
+	if ips := got.GetStatus().GetWorkerAssignment().GetWorkerPodIps(); !slices.Equal(ips, []string{"10.9.9.9"}) {
+		t.Errorf("actor worker_pod_ips = %v, want [10.9.9.9]", ips)
+	}
+	if ips := firstAssignment(t, persistence, apiWorkerName).GetWorkerPodIps(); !slices.Equal(ips, []string{"10.9.9.9"}) {
+		t.Errorf("assignment worker_pod_ips = %v, want [10.9.9.9]", ips)
+	}
+	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+		t.Errorf("actor state = %v, want RUNNING", got.GetStatus().GetState())
 	}
 }
 
