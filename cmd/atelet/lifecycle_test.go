@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
 	"github.com/agent-substrate/substrate/internal/nodepath"
@@ -32,6 +33,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"k8s.io/apimachinery/pkg/util/wait"
 )
 
 // useTempNodeDirs roots atelet's on-node state in temp directories so a test
@@ -113,9 +115,9 @@ func (f *fakeAteom) TerminateWorkload(_ context.Context, req *ateompb.TerminateW
 	return &ateompb.TerminateWorkloadResponse{}, nil
 }
 
-// serveFakeAteom serves ateom on a unix socket and points atelet's dialer at
-// it. The socket lives in its own short temp dir.
-func serveFakeAteom(t *testing.T, f *fakeAteom) {
+// pointAtAteomSocket points atelet's dialer at a socket in its own short temp
+// dir, and returns the socket's path. Nothing serves it yet.
+func pointAtAteomSocket(t *testing.T) string {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "ateom-")
 	if err != nil {
@@ -124,6 +126,16 @@ func serveFakeAteom(t *testing.T, f *fakeAteom) {
 	t.Cleanup(func() { os.RemoveAll(dir) })
 
 	sock := filepath.Join(dir, "ateom.sock")
+	orig := ateomSocketPath
+	ateomSocketPath = func(string) string { return sock }
+	t.Cleanup(func() { ateomSocketPath = orig })
+	return sock
+}
+
+// serveFakeAteomOn serves f on sock until the returned stop is called. stop
+// takes ateom down: its connections close and its socket is removed.
+func serveFakeAteomOn(t *testing.T, f *fakeAteom, sock string) (stop func()) {
+	t.Helper()
 	lis, err := net.Listen("unix", sock)
 	if err != nil {
 		t.Fatalf("listening on %q: %v", sock, err)
@@ -132,24 +144,22 @@ func serveFakeAteom(t *testing.T, f *fakeAteom) {
 	ateompb.RegisterAteomServer(srv, f)
 	go func() { _ = srv.Serve(lis) }()
 	t.Cleanup(srv.Stop)
+	return srv.Stop
+}
 
-	orig := ateomSocketPath
-	ateomSocketPath = func(string) string { return sock }
-	t.Cleanup(func() { ateomSocketPath = orig })
+// serveFakeAteom serves ateom on a unix socket and points atelet's dialer at
+// it. The socket lives in its own short temp dir.
+func serveFakeAteom(t *testing.T, f *fakeAteom) {
+	t.Helper()
+	serveFakeAteomOn(t, f, pointAtAteomSocket(t))
 }
 
 // pointAtDeadAteom points atelet's dialer at the socket of an ateom that has
-// exited. leaveSocketAlive keeps the socket file behind, lika a crashed ateom
+// exited. leaveSocketAlive keeps the socket file behind, like a crashed ateom
 // does on its hostPath.
 func pointAtDeadAteom(t *testing.T, leaveSocketAlive bool) {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "ateom-")
-	if err != nil {
-		t.Fatalf("creating socket dir: %v", err)
-	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
-
-	sock := filepath.Join(dir, "ateom.sock")
+	sock := pointAtAteomSocket(t)
 	if leaveSocketAlive {
 		lis, err := net.ListenUnix("unix", &net.UnixAddr{Name: sock, Net: "unix"})
 		if err != nil {
@@ -158,34 +168,49 @@ func pointAtDeadAteom(t *testing.T, leaveSocketAlive bool) {
 		lis.SetUnlinkOnClose(false)
 		lis.Close()
 	}
+}
 
-	orig := ateomSocketPath
-	ateomSocketPath = func(string) string { return sock }
-	t.Cleanup(func() { ateomSocketPath = orig })
+// testRunsc is the runsc binary newAteomHerder's fake bucket serves.
+var testRunsc = []byte("runsc binary")
+
+// testSandboxAssets returns gvisor sandbox assets whose runsc asset is
+// testRunsc, which newAteomHerder's fake bucket serves.
+func testSandboxAssets(pauseImage string) *ateletpb.SandboxAssets {
+	return &ateletpb.SandboxAssets{
+		SandboxClass: "gvisor",
+		PauseImage:   pauseImage,
+		Assets: map[string]*ateletpb.ArchAssets{
+			runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
+				runscAssetName: {
+					Url:    "gs://test-bucket/runsc",
+					Sha256: fmt.Sprintf("%x", sha256.Sum256(testRunsc)),
+				},
+			}},
+		},
+	}
+}
+
+// newAteomHerder returns an AteomHerder that pulls images into a temp image
+// cache and fetches the runsc asset of testSandboxAssets from a fake bucket.
+func newAteomHerder(t *testing.T) *AteomHerder {
+	t.Helper()
+	return &AteomHerder{
+		ateomDialer:       newAteomDialer(1),
+		imageCache:        newImageVolumeStore(t),
+		anonGCSClient:     fakeObjectStorage{data: testRunsc},
+		systemInfoVolumes: newSystemInfoVolumeRefresher(nil, nil),
+	}
 }
 
 // TestTerminateWhenTerminateWorkloadFails pins that a failed TerminateWorkload
 // fails Terminate only while ateom is alive. A dead ateom took the sandbox with
 // it, so atelet goes on to reclaim the actor's node state.
 func TestTerminateWhenTerminateWorkloadFails(t *testing.T) {
-	runsc := []byte("runsc binary")
-	sandboxRec, err := recordFromRequest(&ateletpb.SandboxAssets{
-		SandboxClass: "gvisor",
-		PauseImage:   testPauseImage,
-		Assets: map[string]*ateletpb.ArchAssets{
-			runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
-				runscAssetName: {
-					Url:    "gs://test-bucket/runsc",
-					Sha256: fmt.Sprintf("%x", sha256.Sum256(runsc)),
-				},
-			}},
-		},
-	})
+	const actorUID = "actor-uid-1"
+	sandboxRec, err := recordFromRequest(testSandboxAssets(testPauseImage))
 	if err != nil {
 		t.Fatalf("recordFromRequest: %v", err)
 	}
-
-	const actorUID = "actor-uid-1"
 
 	tests := []struct {
 		name    string
@@ -220,13 +245,8 @@ func TestTerminateWhenTerminateWorkloadFails(t *testing.T) {
 				t.Fatalf("writeSandboxRecord: %v", err)
 			}
 			tt.ateom(t)
-			s := &AteomHerder{
-				ateomDialer:       newAteomDialer(1),
-				anonGCSClient:     fakeObjectStorage{data: runsc},
-				systemInfoVolumes: newSystemInfoVolumeRefresher(nil, nil),
-			}
 
-			_, err := s.Terminate(t.Context(), &ateletpb.TerminateRequest{
+			_, err := newAteomHerder(t).Terminate(t.Context(), &ateletpb.TerminateRequest{
 				Atespace:              "ate-demo",
 				ActorName:             "counter",
 				ActorUid:              actorUID,
@@ -245,6 +265,146 @@ func TestTerminateWhenTerminateWorkloadFails(t *testing.T) {
 				t.Errorf("actor dir removed = %v, want %v (stat err: %v)", removed, !tt.wantErr, statErr)
 			}
 		})
+	}
+}
+
+// TestTerminateAfterAteomRestart terminates an actor after the ateom it ran on
+// restarted, closing the conn atelet's dialer caches for it. The new ateom
+// serves the same socket, and Terminate reaches it on its first attempt.
+func TestTerminateAfterAteomRestart(t *testing.T) {
+	ctx := t.Context()
+
+	// 1. Serve the first ateom on the socket atelet dials.
+	useTempNodeDirs(t)
+	sock := pointAtAteomSocket(t)
+	stop := serveFakeAteomOn(t, &fakeAteom{}, sock)
+	s := newAteomHerder(t)
+	image := imageVolumeTestRegistry(t) + "/actor:v1"
+	pushTestImage(t, image, singleFileLayer(t, "bin/app", "app"))
+	spec := &ateletpb.WorkloadSpec{
+		Containers: []*ateletpb.Container{{Name: "app", Image: image, Command: []string{"/bin/app"}}},
+	}
+
+	// 2. Run an actor on it, leaving the dialer holding a conn to it.
+	if _, err := s.Run(ctx, &ateletpb.RunRequest{
+		Atespace:              "ate-demo",
+		ActorName:             "counter",
+		ActorUid:              "actor-uid-1",
+		ActorTemplateAtespace: "default",
+		ActorTemplateName:     "counter",
+		TargetAteomUid:        "ateom-uid-1",
+		SandboxAssets:         testSandboxAssets(image),
+		Spec:                  spec,
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// 3. Restart ateom: stop the first one, closing the cached conn, and serve
+	// a new one on the same socket.
+	stop()
+	restarted := &fakeAteom{}
+	serveFakeAteomOn(t, restarted, sock)
+
+	// 4. Terminate the actor. It succeeds on the first attempt.
+	if _, err := s.Terminate(ctx, &ateletpb.TerminateRequest{
+		Atespace:              "ate-demo",
+		ActorName:             "counter",
+		ActorUid:              "actor-uid-1",
+		ActorTemplateAtespace: "default",
+		ActorTemplateName:     "counter",
+		TargetAteomUid:        "ateom-uid-1",
+		Spec:                  spec,
+	}); err != nil {
+		t.Fatalf("Terminate after the restart: %v", err)
+	}
+
+	// 5. Verify the terminate reached the restarted ateom.
+	if got, want := restarted.actorDirs["TerminateWorkload"], ateletpath.ActorDirs("actor-uid-1"); !proto.Equal(got, want) {
+		t.Errorf("restarted ateom's TerminateWorkload carried actor dirs %v, want %v", got, want)
+	}
+}
+
+// TestTerminateAcrossAteomOutage terminates two actors that ran on an ateom
+// that exits and later comes back on the same socket. While it is down,
+// Terminate treats the workload as gone with it. Once it is back, the dialer's
+// conn can still be backing off from the refused reconnect, and since ateom is
+// alive Terminate fails rather than report the workload stopped. A retry
+// reaches the new ateom.
+func TestTerminateAcrossAteomOutage(t *testing.T) {
+	ctx := t.Context()
+
+	// 1. Serve the first ateom on the socket atelet dials.
+	useTempNodeDirs(t)
+	sock := pointAtAteomSocket(t)
+	stop := serveFakeAteomOn(t, &fakeAteom{}, sock)
+	s := newAteomHerder(t)
+	image := imageVolumeTestRegistry(t) + "/actor:v1"
+	pushTestImage(t, image, singleFileLayer(t, "bin/app", "app"))
+	spec := &ateletpb.WorkloadSpec{
+		Containers: []*ateletpb.Container{{Name: "app", Image: image, Command: []string{"/bin/app"}}},
+	}
+
+	// 2. Run two actors on it, leaving the dialer holding a conn to it.
+	for _, actorUID := range []string{"actor-uid-1", "actor-uid-2"} {
+		if _, err := s.Run(ctx, &ateletpb.RunRequest{
+			Atespace:              "ate-demo",
+			ActorName:             "counter",
+			ActorUid:              actorUID,
+			ActorTemplateAtespace: "default",
+			ActorTemplateName:     "counter",
+			TargetAteomUid:        "ateom-uid-1",
+			SandboxAssets:         testSandboxAssets(image),
+			Spec:                  spec,
+		}); err != nil {
+			t.Fatalf("Run(%s): %v", actorUID, err)
+		}
+	}
+
+	// 3. Take ateom down, removing its socket.
+	stop()
+
+	// 4. Terminate the first actor while ateom is down. Its workload died with
+	// ateom, so Terminate succeeds. The refused reconnect puts the conn in
+	// backoff.
+	if _, err := s.Terminate(ctx, &ateletpb.TerminateRequest{
+		Atespace:              "ate-demo",
+		ActorName:             "counter",
+		ActorUid:              "actor-uid-1",
+		ActorTemplateAtespace: "default",
+		ActorTemplateName:     "counter",
+		TargetAteomUid:        "ateom-uid-1",
+		Spec:                  spec,
+	}); err != nil {
+		t.Fatalf("Terminate with ateom down: %v", err)
+	}
+
+	// 5. Bring ateom back on the same socket.
+	back := &fakeAteom{}
+	serveFakeAteomOn(t, back, sock)
+
+	// 6. Retry terminating the second actor until it succeeds. Attempts fail
+	// while the conn is still backing off, since ateom is alive and could
+	// still host the workload.
+	terminateReq := &ateletpb.TerminateRequest{
+		Atespace:              "ate-demo",
+		ActorName:             "counter",
+		ActorUid:              "actor-uid-2",
+		ActorTemplateAtespace: "default",
+		ActorTemplateName:     "counter",
+		TargetAteomUid:        "ateom-uid-1",
+		Spec:                  spec,
+	}
+	var lastErr error
+	if err := wait.PollUntilContextTimeout(ctx, 100*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
+		_, lastErr = s.Terminate(ctx, terminateReq)
+		return lastErr == nil, nil
+	}); err != nil {
+		t.Fatalf("Terminate never succeeded once ateom was back: %v", lastErr)
+	}
+
+	// 7. Verify the terminate that succeeded reached the returned ateom.
+	if got, want := back.actorDirs["TerminateWorkload"], ateletpath.ActorDirs("actor-uid-2"); !proto.Equal(got, want) {
+		t.Errorf("returned ateom's TerminateWorkload carried actor dirs %v, want %v", got, want)
 	}
 }
 
