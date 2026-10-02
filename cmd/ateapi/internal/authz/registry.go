@@ -82,6 +82,13 @@ func onAtespaceOrGlobal(relation, atespace string, fldPath *field.Path) ([]check
 	return onAtespace(relation, atespace, fldPath)
 }
 
+func onWorker(relation, name string, fldPath *field.Path) ([]check, field.ErrorList) {
+	if errs := validateName(name, fldPath); len(errs) > 0 {
+		return nil, errs
+	}
+	return []check{{relation: relation, object: WorkerObject(name)}}, nil
+}
+
 // resourceRef identifies an atespaced resource. Both *ateapipb.ObjectRef and
 // *ateapipb.ResourceMetadata satisfy it, including as nil pointers.
 type resourceRef interface {
@@ -210,5 +217,61 @@ var defaultRPCPermissions = map[string]rpcRule{
 	})),
 	ateapipb.Control_DeleteActor_FullMethodName: rule(checksOf(func(r *ateapipb.DeleteActorRequest) ([]check, field.ErrorList) {
 		return onActor(RelationCanDelete, r.GetActor(), field.NewPath("actor"))
+	})),
+
+	// TODO: grant the system components that call the RPCs below
+	// (atenet-router: ResumeActor; atenet-egress: GetActor,
+	// GetActorEgressPolicy; ate-controller: worker RPCs) through system roles
+	// in model.fga.
+
+	// Actor lifecycle.
+	ateapipb.Control_PauseActor_FullMethodName: rule(checksOf(func(r *ateapipb.PauseActorRequest) ([]check, field.ErrorList) {
+		return onActor(RelationCanPause, r.GetActor(), field.NewPath("actor"))
+	})),
+	ateapipb.Control_ResumeActor_FullMethodName: rule(checksOf(func(r *ateapipb.ResumeActorRequest) ([]check, field.ErrorList) {
+		return onActor(RelationCanResume, r.GetActor(), field.NewPath("actor"))
+	})),
+	ateapipb.Control_SuspendActor_FullMethodName: rule(checksOf(func(r *ateapipb.SuspendActorRequest) ([]check, field.ErrorList) {
+		return onActor(RelationCanSuspend, r.GetActor(), field.NewPath("actor"))
+	})),
+	ateapipb.Control_RevertActor_FullMethodName: rule(checksOf(func(r *ateapipb.RevertActorRequest) ([]check, field.ErrorList) {
+		return onActor(RelationCanRevert, r.GetActor(), field.NewPath("actor"))
+	})),
+
+	// Actor egress policies.
+	ateapipb.Control_GetActorEgressPolicy_FullMethodName: rule(checksOf(func(r *ateapipb.GetActorEgressPolicyRequest) ([]check, field.ErrorList) {
+		return onActor(RelationCanGetEgressPolicy, r.GetActor(), field.NewPath("actor"))
+	})),
+	ateapipb.Control_CreateActorEgressPolicy_FullMethodName: rule(checksOf(func(r *ateapipb.CreateActorEgressPolicyRequest) ([]check, field.ErrorList) {
+		return onActor(RelationCanCreateEgressPolicy, r.GetActor(), field.NewPath("actor"))
+	})),
+	ateapipb.Control_UpdateActorEgressPolicy_FullMethodName: rule(checksOf(func(r *ateapipb.UpdateActorEgressPolicyRequest) ([]check, field.ErrorList) {
+		return onActor(RelationCanUpdateEgressPolicy, r.GetActor(), field.NewPath("actor"))
+	})),
+	ateapipb.Control_DeleteActorEgressPolicy_FullMethodName: rule(checksOf(func(r *ateapipb.DeleteActorEgressPolicyRequest) ([]check, field.ErrorList) {
+		return onActor(RelationCanDeleteEgressPolicy, r.GetActor(), field.NewPath("actor"))
+	})),
+
+	// Workers.
+	ateapipb.Control_CreateWorker_FullMethodName: rule(checksOf(func(*ateapipb.CreateWorkerRequest) ([]check, field.ErrorList) {
+		return onGlobal(RelationCanCreateWorker)
+	})),
+	ateapipb.Control_ListWorkers_FullMethodName: rule(checksOf(func(*ateapipb.ListWorkersRequest) ([]check, field.ErrorList) {
+		return onGlobal(RelationCanListWorkers)
+	})),
+	ateapipb.Control_GetWorker_FullMethodName: rule(checksOf(func(r *ateapipb.GetWorkerRequest) ([]check, field.ErrorList) {
+		return onWorker(RelationCanGet, r.GetWorker().GetName(), field.NewPath("worker", "name"))
+	})),
+	ateapipb.Control_UpdateWorker_FullMethodName: rule(checksOf(func(r *ateapipb.UpdateWorkerRequest) ([]check, field.ErrorList) {
+		return onWorker(RelationCanUpdate, r.GetWorker().GetMetadata().GetName(), field.NewPath("worker", "metadata", "name"))
+	})),
+	ateapipb.Control_DeleteWorker_FullMethodName: rule(checksOf(func(r *ateapipb.DeleteWorkerRequest) ([]check, field.ErrorList) {
+		return onWorker(RelationCanDelete, r.GetWorker().GetName(), field.NewPath("worker", "name"))
+	})),
+	ateapipb.Control_DrainWorker_FullMethodName: rule(checksOf(func(r *ateapipb.DrainWorkerRequest) ([]check, field.ErrorList) {
+		return onWorker(RelationCanDrain, r.GetWorker().GetName(), field.NewPath("worker", "name"))
+	})),
+	ateapipb.Control_ListWorkerActorAssignments_FullMethodName: rule(checksOf(func(r *ateapipb.ListWorkerActorAssignmentsRequest) ([]check, field.ErrorList) {
+		return onWorker(RelationCanListActorAssignments, r.GetWorker().GetName(), field.NewPath("worker", "name"))
 	})),
 }
