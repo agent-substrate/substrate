@@ -16,7 +16,6 @@ package authz
 
 import (
 	"context"
-	"errors"
 	"os"
 	"os/exec"
 	"runtime"
@@ -28,13 +27,12 @@ import (
 	"github.com/jackc/pgx/v5/stdlib"
 	openfgav1 "github.com/openfga/api/proto/openfga/v1"
 	"github.com/openfga/openfga/pkg/server"
-	serverErrors "github.com/openfga/openfga/pkg/server/errors"
 	"github.com/pressly/goose/v3"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/principal"
 )
 
@@ -451,7 +449,7 @@ func TestAuthorizerAndPolicyManager_RuntimeChecks(t *testing.T) {
 
 	// 1b. A nil Authorizer fails closed with codes.Internal unless explicitly bypassed.
 	var nilAuthorizer *Authorizer
-	if err := nilAuthorizer.Check(ctx, RelationCanCreateAtespace, GlobalRootObject); status.Code(err) != codes.Internal {
+	if err := nilAuthorizer.Check(ctx, RelationCanCreateAtespace, GlobalRootObject); apierror.Code(err) != codes.Internal {
 		t.Errorf("expected Internal for nil Authorizer, got %v", err)
 	}
 	if err := nilAuthorizer.Check(WithBypass(ctx), RelationCanCreateAtespace, GlobalRootObject); err != nil {
@@ -459,7 +457,7 @@ func TestAuthorizerAndPolicyManager_RuntimeChecks(t *testing.T) {
 	}
 
 	// 2. Unauthenticated request (no PrincipalInfo) fails with Unauthenticated unless bypassed.
-	if err := authorizer.Check(ctx, RelationCanCreateAtespace, GlobalRootObject); status.Code(err) != codes.Unauthenticated {
+	if err := authorizer.Check(ctx, RelationCanCreateAtespace, GlobalRootObject); apierror.Code(err) != codes.Unauthenticated {
 		t.Errorf("expected Unauthenticated for empty context, got %v", err)
 	}
 	if err := authorizer.Check(WithBypass(ctx), RelationCanCreateAtespace, GlobalRootObject); err != nil {
@@ -479,10 +477,10 @@ func TestAuthorizerAndPolicyManager_RuntimeChecks(t *testing.T) {
 			t.Errorf("expected global owner to be allowed can_list_atespaces, got %v", err)
 		}
 	}
-	if err := authorizer.Check(bobCtx, RelationCanCreateAtespace, GlobalRootObject); status.Code(err) != codes.PermissionDenied {
+	if err := authorizer.Check(bobCtx, RelationCanCreateAtespace, GlobalRootObject); apierror.Code(err) != codes.PermissionDenied {
 		t.Errorf("expected bob to be denied can_create_atespace, got %v", err)
 	}
-	if err := authorizer.Check(bobCtx, RelationCanListAtespaces, GlobalRootObject); status.Code(err) != codes.PermissionDenied {
+	if err := authorizer.Check(bobCtx, RelationCanListAtespaces, GlobalRootObject); apierror.Code(err) != codes.PermissionDenied {
 		t.Errorf("expected bob to be denied can_list_atespaces, got %v", err)
 	}
 
@@ -493,7 +491,7 @@ func TestAuthorizerAndPolicyManager_RuntimeChecks(t *testing.T) {
 		if err := authorizer.Check(aliceCtx, rel, AtespaceObject("team-x")); err != nil {
 			t.Errorf("expected global owner alice allowed %s on team-x via contextual tuples, got %v", rel, err)
 		}
-		if err := authorizer.Check(bobCtx, rel, AtespaceObject("team-x")); status.Code(err) != codes.PermissionDenied {
+		if err := authorizer.Check(bobCtx, rel, AtespaceObject("team-x")); apierror.Code(err) != codes.PermissionDenied {
 			t.Errorf("expected bob denied %s on team-x, got %v", rel, err)
 		}
 	}
@@ -519,48 +517,24 @@ func TestAuthorizerAndPolicyManager_RuntimeChecks(t *testing.T) {
 	if err := txDel.Commit(ctx); err != nil {
 		t.Fatalf("txDel.Commit failed: %v", err)
 	}
-	if err := authorizer.Check(bobCtx, RelationCanGet, AtespaceObject("team-x")); status.Code(err) != codes.PermissionDenied {
+	if err := authorizer.Check(bobCtx, RelationCanGet, AtespaceObject("team-x")); apierror.Code(err) != codes.PermissionDenied {
 		t.Errorf("expected bob's direct tuple removed after DeleteAtespacePolicies, got %v", err)
 	}
 
-	// 7. Check preserves Canceled and DeadlineExceeded and maps server-side
-	// OpenFGA errors (such as model/tuple validation failures) to Internal.
+	// 7. Every OpenFGA error, including a cancelled or expired context and a
+	// model/tuple validation failure, reaches the caller as Internal.
 	canceledCtx, cancel := context.WithCancel(aliceCtx)
 	cancel()
-	if err := authorizer.Check(canceledCtx, RelationCanGet, AtespaceObject("team-x")); status.Code(err) != codes.Canceled {
-		t.Errorf("expected Canceled for canceled context, got %v (%v)", status.Code(err), err)
+	if err := authorizer.Check(canceledCtx, RelationCanGet, AtespaceObject("team-x")); apierror.Code(err) != codes.Internal {
+		t.Errorf("expected Internal for canceled context, got %v (%v)", apierror.Code(err), err)
 	}
 	expiredCtx, cancelDeadline := context.WithDeadline(aliceCtx, time.Now().Add(-time.Second))
 	defer cancelDeadline()
-	if err := authorizer.Check(expiredCtx, RelationCanGet, AtespaceObject("team-x")); status.Code(err) != codes.DeadlineExceeded {
-		t.Errorf("expected DeadlineExceeded for expired context, got %v (%v)", status.Code(err), err)
+	if err := authorizer.Check(expiredCtx, RelationCanGet, AtespaceObject("team-x")); apierror.Code(err) != codes.Internal {
+		t.Errorf("expected Internal for expired context, got %v (%v)", apierror.Code(err), err)
 	}
-	if err := authorizer.Check(aliceCtx, "unknown_relation", GlobalRootObject); status.Code(err) != codes.Internal {
-		t.Errorf("expected Internal for unknown relation, got %v (%v)", status.Code(err), err)
-	}
-}
-
-func TestStatusFromFGAError(t *testing.T) {
-	tests := []struct {
-		name     string
-		err      error
-		wantCode codes.Code
-	}{
-		{"context.Canceled", context.Canceled, codes.Canceled},
-		{"OpenFGA ErrRequestCancelled", serverErrors.ErrRequestCancelled, codes.Canceled},
-		{"context.DeadlineExceeded", context.DeadlineExceeded, codes.DeadlineExceeded},
-		{"OpenFGA ErrRequestDeadlineExceeded", serverErrors.ErrRequestDeadlineExceeded, codes.DeadlineExceeded},
-		{"gRPC InvalidArgument from OpenFGA", status.Error(codes.InvalidArgument, "bad tuple"), codes.Internal},
-		{"OpenFGA validation error code", serverErrors.ValidationError(errors.New("bad relation")), codes.Internal},
-		{"OpenFGA internal error code", serverErrors.NewInternalError("", errors.New("db down")), codes.Internal},
-		{"untyped error", errors.New("boom"), codes.Internal},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := status.Code(statusFromFGAError(tc.err)); got != tc.wantCode {
-				t.Errorf("status.Code(statusFromFGAError(%v)) = %v, want %v", tc.err, got, tc.wantCode)
-			}
-		})
+	if err := authorizer.Check(aliceCtx, "unknown_relation", GlobalRootObject); apierror.Code(err) != codes.Internal {
+		t.Errorf("expected Internal for unknown relation, got %v (%v)", apierror.Code(err), err)
 	}
 }
 

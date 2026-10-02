@@ -19,12 +19,12 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
-	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/labels"
 )
 
@@ -185,7 +185,7 @@ func NewInstruments(meter metric.Meter) (*Instruments, error) {
 }
 
 // recordLifecycleOp records op's duration. A non-nil err is classified onto
-// error.type via its gRPC status code; error.type's absence marks success, so
+// error.type as the code the caller gets; error.type's absence marks success, so
 // there is no parallel failure counter. extraAttrs carries the per-operation
 // dimensions (template, pool, class, snapshot kind).
 func (i *Instruments) recordLifecycleOp(ctx context.Context, op string, start time.Time, err error, extraAttrs ...attribute.KeyValue) {
@@ -196,7 +196,7 @@ func (i *Instruments) recordLifecycleOp(ctx context.Context, op string, start ti
 	attrs = append(attrs, ateattr.ActorOperationNameKey.String(op))
 	attrs = append(attrs, extraAttrs...)
 	if err != nil {
-		attrs = append(attrs, ateattr.ErrorTypeKey.String(status.Code(err).String()))
+		attrs = append(attrs, ateattr.ErrorTypeKey.String(apierror.Code(err).String()))
 	}
 	i.lifecycleOpDuration.Record(ctx, time.Since(start).Seconds(), metric.WithAttributes(attrs...))
 }
@@ -244,7 +244,7 @@ func (i *Instruments) recordSchedulerAssignment(ctx context.Context, start time.
 		attrs = append(attrs, ateattr.SandboxClassKey.String(class))
 	}
 	if outcome == ateattr.SchedulerOutcomeError && err != nil {
-		attrs = append(attrs, ateattr.ErrorTypeKey.String(status.Code(err).String()))
+		attrs = append(attrs, ateattr.ErrorTypeKey.String(apierror.Code(err).String()))
 	}
 	i.schedulerAssignmentDuration.Record(ctx, time.Since(start).Seconds(), metric.WithAttributes(attrs...))
 }
