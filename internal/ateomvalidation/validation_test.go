@@ -77,6 +77,7 @@ func validRunWorkloadRequest(mutate ...func(*ateompb.RunWorkloadRequest)) *ateom
 func TestValidateRunWorkloadRequest(t *testing.T) {
 	valid := validRunWorkloadRequest
 	assets := field.NewPath("runtime_asset_paths")
+	probe := field.NewPath("spec", "containers").Index(0).Child("wakeup_probe")
 
 	tests := []struct {
 		name string
@@ -186,6 +187,47 @@ func TestValidateRunWorkloadRequest(t *testing.T) {
 		name: "bad container name",
 		obj:  valid(func(r *ateompb.RunWorkloadRequest) { r.Spec.Containers[0].Name = "Main" }),
 		want: field.ErrorList{field.Invalid(field.NewPath("spec", "containers").Index(0).Child("name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name: "valid: no wakeup probe",
+		obj:  valid(func(r *ateompb.RunWorkloadRequest) { r.Spec.Containers[0].WakeupProbe = nil }),
+	}, {
+		name: "empty wakeup probe",
+		obj:  valid(func(r *ateompb.RunWorkloadRequest) { r.Spec.Containers[0].WakeupProbe = &ateompb.WakeupProbe{} }),
+		want: field.ErrorList{
+			field.Required(probe.Child("http_get"), ""),
+			field.Required(probe.Child("timeout_seconds"), ""),
+		},
+	}, {
+		name: "wakeup probe timeout too long",
+		obj:  valid(func(r *ateompb.RunWorkloadRequest) { r.Spec.Containers[0].WakeupProbe.TimeoutSeconds = 3601 }),
+		want: field.ErrorList{field.Invalid(probe.Child("timeout_seconds"), nil, "").WithOrigin("maximum")},
+	}, {
+		name: "empty http_get",
+		obj: valid(func(r *ateompb.RunWorkloadRequest) {
+			r.Spec.Containers[0].WakeupProbe.HttpGet = &ateompb.HttpGetAction{}
+		}),
+		want: field.ErrorList{
+			field.Required(probe.Child("http_get", "path"), ""),
+			field.Required(probe.Child("http_get", "port"), ""),
+		},
+	}, {
+		name: "http_get path without leading slash",
+		obj:  valid(func(r *ateompb.RunWorkloadRequest) { r.Spec.Containers[0].WakeupProbe.HttpGet.Path = "healthz" }),
+		want: field.ErrorList{field.Invalid(probe.Child("http_get", "path"), nil, "")},
+	}, {
+		name: "http_get path with query",
+		obj:  valid(func(r *ateompb.RunWorkloadRequest) { r.Spec.Containers[0].WakeupProbe.HttpGet.Path = "/healthz?x=1" }),
+		want: field.ErrorList{field.Invalid(probe.Child("http_get", "path"), nil, "")},
+	}, {
+		name: "http_get path too long",
+		obj: valid(func(r *ateompb.RunWorkloadRequest) {
+			r.Spec.Containers[0].WakeupProbe.HttpGet.Path = "/" + strings.Repeat("x", 1024)
+		}),
+		want: field.ErrorList{field.TooLong(probe.Child("http_get", "path"), nil, 1024).WithOrigin("maxLength")},
+	}, {
+		name: "http_get port past the range",
+		obj:  valid(func(r *ateompb.RunWorkloadRequest) { r.Spec.Containers[0].WakeupProbe.HttpGet.Port = 65536 }),
+		want: field.ErrorList{field.Invalid(probe.Child("http_get", "port"), nil, "").WithOrigin("maximum")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
