@@ -265,3 +265,26 @@ func TestGenerateAuthorityRejectsUnsupportedAlgorithm(t *testing.T) {
 		t.Error("GenerateAuthority(HS256) returned nil error")
 	}
 }
+
+func TestVerificationKeysCarryAlgorithm(t *testing.T) {
+	es, err := GenerateAuthority("ES256", "es")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rs, err := GenerateAuthority("RS256", "rs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := &ConcretePool{Authorities: []*Authority{es, rs}, ActiveForSigning: "es"}
+	keys, err := pool.VerificationKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, key := range keys {
+		got[key.KeyID] = key.Algorithm
+	}
+	if diff := cmp.Diff(map[string]string{"es": "ES256", "rs": "RS256"}, got); diff != "" {
+		t.Errorf("verification key algorithms (-want +got):\n%s", diff)
+	}
+}

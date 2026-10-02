@@ -56,6 +56,7 @@ type Pool interface {
 
 type VerificationKey struct {
 	KeyID     string
+	Algorithm string
 	PublicKey crypto.PublicKey
 }
 
@@ -181,6 +182,7 @@ func (p *ConcretePool) VerificationKeys() ([]*VerificationKey, error) {
 	for _, authority := range p.Authorities {
 		vk := &VerificationKey{
 			KeyID:     authority.ID,
+			Algorithm: authority.Algorithm,
 			PublicKey: authority.SigningKey.Public(),
 		}
 		keys = append(keys, vk)
