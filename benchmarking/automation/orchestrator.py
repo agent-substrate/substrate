@@ -332,6 +332,7 @@ def deploy_workloads(
     sandbox_class: str = "gvisor",
     actor_memory: str = "",
     wait_timeout_secs: int | str = "",
+    worker_memory: str = "",
 ) -> None:
     cmd = [
         "benchmarking/workloads/deploy.sh",
@@ -345,6 +346,10 @@ def deploy_workloads(
     # minimum); RAM-consuming suites set actorMemory in tests.yaml.
     if actor_memory:
         cmd += ["--actor-memory", actor_memory]
+    # Empty leaves the worker pods unsized; set workerMemory in tests.yaml to
+    # control how many workers the scheduler packs onto a node.
+    if worker_memory:
+        cmd += ["--worker-memory", worker_memory]
     # Empty keeps deploy.sh's own default; large fleets set workerWaitTimeout
     # (whole seconds).
     if wait_timeout_secs != "":
@@ -524,6 +529,7 @@ def main() -> None:
                     sandbox_class,
                     test.get("actorMemory", ""),
                     test.get("workerWaitTimeout", ""),
+                    test.get("workerMemory", ""),
                 )
                 try:
                     status = run_test(

@@ -49,6 +49,10 @@ SANDBOX_CLASS="gvisor"
 # so benchmark actors do not inherit the 2 GiB kata default and drag its page
 # cache into every memory snapshot. Raise it for RAM-consuming suites.
 ACTOR_MEMORY="256Mi"
+# Worker pod memory (WorkerPool spec.template.resources), set as both request
+# and limit. Empty leaves the pod unsized. The limit is also the memory the
+# worker reports as its actor capacity.
+WORKER_MEMORY=""
 # The address to which an instrumented actor container sends its telemetry.
 # --otlp-endpoint sets it. Without the flag, resolve_otlp_endpoint reads the
 # address that the control plane uses.
@@ -68,6 +72,8 @@ usage() {
   echo "                              microvm requires hack/install-microvm-deps.sh --install to have run."
   echo "  --actor-memory SIZE         Memory limit for the benchmark ActorTemplates (default: 256Mi,"
   echo "                              the smallest size microvm admits)"
+  echo "  --worker-memory SIZE        Memory request and limit for each WorkerPool pod"
+  echo "                              (default: unset, the pod is unsized)"
   echo "  --otlp-endpoint URL         The address to which an instrumented actor container"
   echo "                              sends telemetry (default: the endpoint in the"
   echo "                              ate-otel-config ConfigMap)"
@@ -121,11 +127,15 @@ substitute() {
   # hack/install-ate.sh; microvm is applied by hack/install-microvm-deps.sh.
   # The protojson templates take the sandbox class as its proto enum spelling.
   local manifest="$1"
-  local sandbox_config_name sandbox_class_enum
+  local sandbox_config_name sandbox_class_enum worker_template=""
   case "${SANDBOX_CLASS}" in
     gvisor)  sandbox_config_name="gvisor-default" sandbox_class_enum="SANDBOX_CLASS_GVISOR" ;;
     microvm) sandbox_config_name="microvm"        sandbox_class_enum="SANDBOX_CLASS_MICROVM" ;;
   esac
+  # One flow-style line, so an unset WORKER_MEMORY leaves only a blank line.
+  if [[ -n "${WORKER_MEMORY}" ]]; then
+    worker_template="template: {resources: {requests: {memory: ${WORKER_MEMORY}}, limits: {memory: ${WORKER_MEMORY}}}}"
+  fi
   sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" \
       -e "s|\${WORKER_COUNT}|${WORKER_COUNT}|g" \
       -e "s|\${SANDBOX_CLASS}|${SANDBOX_CLASS}|g" \
@@ -133,6 +143,7 @@ substitute() {
       -e "s|\${SANDBOX_CONFIG_NAME}|${sandbox_config_name}|g" \
       -e "s|\${OTLP_ENDPOINT}|${OTLP_ENDPOINT}|g" \
       -e "s|\${ACTOR_MEMORY}|${ACTOR_MEMORY}|g" \
+      -e "s|\${WORKER_TEMPLATE}|${worker_template}|g" \
       -e "s|\${SWEPERF_IMAGE}|${SWEPERF_IMAGE:-}|g" \
       "${manifest}"
 }
@@ -184,7 +195,7 @@ wait_templates_ready() {
 
 deploy() {
   resolve_otlp_endpoint
-  echo "Deploying workloads (worker_count=${WORKER_COUNT}, actor_memory=${ACTOR_MEMORY}, otlp_endpoint=${OTLP_ENDPOINT})..."
+  echo "Deploying workloads (worker_count=${WORKER_COUNT}, actor_memory=${ACTOR_MEMORY}, worker_memory=${WORKER_MEMORY:-unset}, otlp_endpoint=${OTLP_ENDPOINT})..."
   substitute "${POOL_MANIFEST}" | hack/run-tool.sh ko apply -f -
   echo "Waiting for worker pool to be ready (timeout: ${WAIT_TIMEOUT_SECS}s)..."
   kubectl wait --for=create deployment/benchmark-ateom \
@@ -270,6 +281,13 @@ while [[ "$#" -gt 0 ]]; do
       ;;
     --actor-memory=*)
       ACTOR_MEMORY="${1#*=}"
+      ;;
+    --worker-memory)
+      shift
+      WORKER_MEMORY="$1"
+      ;;
+    --worker-memory=*)
+      WORKER_MEMORY="${1#*=}"
       ;;
     --wait-timeout)
       shift

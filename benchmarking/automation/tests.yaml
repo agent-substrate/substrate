@@ -35,6 +35,12 @@
 #   actorMemory    Optional (default "256Mi", the smallest size microvm
 #                  admits). Memory limit on the benchmark ActorTemplates;
 #                  raise it for suites that exercise glutton's WriteRAM path.
+#   workerMemory   Optional (default unset: the worker pods have no requests
+#                  or limits). Memory request and limit on each WorkerPool
+#                  pod. Use it to fix how many workers share a node: one per
+#                  node needs more than half the node's allocatable memory.
+#                  The limit is also the memory the worker reports as its
+#                  actor capacity.
 #   workerWaitTimeout
 #                  Optional (default 300, set by workloads/deploy.sh).
 #                  Whole seconds to wait after the WorkerPool deploy for
