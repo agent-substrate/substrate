@@ -33,9 +33,9 @@
 set -o errexit -o nounset -o pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
-REPO="${GITHUB_REPOSITORY:-agent-substrate/substrate}"
-SEMVER='^v[0-9]+\.[0-9]+\.[0-9]+$'
-SEMVER_PRE='^v[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z.-]+$'
+# shellcheck source=hack/release/lib.sh
+source "${ROOT}/hack/release/lib.sh"
+REPO="${GITHUB_REPOSITORY:-${UPSTREAM_REPO}}"
 
 usage() {
   echo "usage: $0 [--dry-run] <tag>" >&2
@@ -140,6 +140,16 @@ if ! notes="$(api "generating notes" "repos/${REPO}/releases/generate-notes" \
       "Generating notes needs write access, even for --dry-run." >&2
   fi
   exit 1
+fi
+
+# Only the upstream release workflow publishes images (see
+# .github/workflows/release.yaml), so only its notes say where they are.
+if [[ "${REPO}" == "${UPSTREAM_REPO}" ]]; then
+  notes+=$'\n\n## Install\n\n'
+  notes+="Container images for this release are published to \`${RELEASE_IMAGE_REPO}\`."
+  notes+=$' From a checkout of the tag:\n\n```sh\n'
+  notes+="ate-setup deploy ate-system --image-repo ${RELEASE_IMAGE_REPO} --image-tag ${tag}"
+  notes+=$'\n```'
 fi
 
 # GitHub only lists first-time contributors; list everyone, as v0.1.0 did.
