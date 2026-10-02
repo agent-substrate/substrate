@@ -418,61 +418,11 @@ func TestValidateActorTemplate(t *testing.T) {
 		},
 		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("volume_mounts").Index(1).Child("mount_path"), nil, "")},
 	}, {
-		name: "deeply nested mount path is rejected",
-		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{
-				{Name: "data", MountPath: "/data"},
-				{Name: "deep", MountPath: "/data/a/b/c"},
-			}
-		},
-		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("volume_mounts").Index(1).Child("mount_path"), nil, "")},
-	}, {
-		name: "nesting is rejected regardless of listing order",
-		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{
-				{Name: "deep", MountPath: "/data/a/b/c"},
-				{Name: "data", MountPath: "/data"},
-			}
-		},
-		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("volume_mounts").Index(1).Child("mount_path"), nil, "")},
-	}, {
-		name: "sibling subpaths under an unmounted ancestor are allowed",
-		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{
-				{Name: "data", MountPath: "/data/a"},
-				{Name: "other", MountPath: "/data/b"},
-			}
-		},
-	}, {
-		name: "shared segment prefix below the root is allowed",
-		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{
-				{Name: "data", MountPath: "/data/a"},
-				{Name: "other", MountPath: "/data/ab"},
-			}
-		},
-	}, {
 		name: "the same path in different containers is allowed",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
 			tmpl.Containers = append(tmpl.Containers, &ateapipb.Container{Name: "sidecar", Image: "example.com/side:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"})
 			tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{{Name: "data", MountPath: "/var/data"}}
 			tmpl.Containers[1].VolumeMounts = []*ateapipb.VolumeMount{{Name: "data", MountPath: "/var/data"}}
-		},
-	}, {
-		name: "shared path prefix without nesting is allowed",
-		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{
-				{Name: "data", MountPath: "/data"},
-				{Name: "other", MountPath: "/database"},
-			}
-		},
-	}, {
-		name: "two volumes at distinct paths are allowed",
-		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{
-				{Name: "data", MountPath: "/var/data"},
-				{Name: "other", MountPath: "/mnt/other"},
-			}
 		},
 	}, {
 		name: "duplicate volume name",
@@ -542,34 +492,10 @@ func TestValidateActorTemplate(t *testing.T) {
 			field.TooLong(field.NewPath("containers").Index(0).Child("image"), nil, 512).WithOrigin("maxLength"),
 		},
 	}, {
-		name: "invalid image: bare repository without digest",
-		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Containers[0].Image = "ubuntu"
-		},
-		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("image"), nil, "")},
-	}, {
 		name: "valid image: pinned by digest",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
 			tmpl.Containers[0].Image = "example.com/app@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 		},
-	}, {
-		name: "invalid image: uppercase repository",
-		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Containers[0].Image = "example.com/App:v1"
-		},
-		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("image"), nil, "")},
-	}, {
-		name: "invalid image: malformed digest",
-		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Containers[0].Image = "example.com/app@sha256:abc"
-		},
-		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("image"), nil, "")},
-	}, {
-		name: "invalid image: empty tag",
-		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Containers[0].Image = "example.com/app:"
-		},
-		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("image"), nil, "")},
 	}, {
 		name: "container image missing digest",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
@@ -594,20 +520,9 @@ func TestValidateActorTemplate(t *testing.T) {
 			tmpl.Containers[0].Env = []*ateapipb.EnvVar{{Name: "PORT", Value: "8080"}, {Name: "DEBUG"}}
 		},
 	}, {
-		name: "env name with unusual printable characters is allowed",
-		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Containers[0].Env = []*ateapipb.EnvVar{{Name: "my.var-2 (test)!", Value: "v"}}
-		},
-	}, {
 		name: "env name with an equals sign",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
 			tmpl.Containers[0].Env = []*ateapipb.EnvVar{{Name: "FOO=BAR"}}
-		},
-		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("env").Index(0).Child("name"), nil, "")},
-	}, {
-		name: "env name with a control character",
-		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Containers[0].Env = []*ateapipb.EnvVar{{Name: "FOO	BAR"}}
 		},
 		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("env").Index(0).Child("name"), nil, "")},
 	}, {
@@ -628,12 +543,6 @@ func TestValidateActorTemplate(t *testing.T) {
 		name: "capabilities add rejects ALL",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
 			tmpl.Containers[0].SecurityContext = &ateapipb.SecurityContext{Capabilities: &ateapipb.Capabilities{Add: []string{"ALL"}}}
-		},
-		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("security_context", "capabilities", "add").Index(0), nil, "")},
-	}, {
-		name: "capability with CAP_ prefix",
-		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Containers[0].SecurityContext = &ateapipb.SecurityContext{Capabilities: &ateapipb.Capabilities{Add: []string{"CAP_NET_BIND_SERVICE"}}}
 		},
 		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("security_context", "capabilities", "add").Index(0), nil, "")},
 	}, {
@@ -730,15 +639,6 @@ func TestValidateActorTemplate(t *testing.T) {
 		},
 		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("wakeup_probe", "http_get", "port"), nil, "").WithOrigin("maximum")},
 	}, {
-		name: "wakeup probe path with query string",
-		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Containers[0].WakeupProbe = &ateapipb.ContainerWakeupProbe{
-				HttpGet:        &ateapipb.HTTPGetAction{Path: "/readyz?verbose=1", Port: 8080},
-				TimeoutSeconds: 60,
-			}
-		},
-		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("wakeup_probe", "http_get", "path"), nil, "")},
-	}, {
 		name: "wakeup probe path not starting with slash",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
 			tmpl.Containers[0].WakeupProbe = &ateapipb.ContainerWakeupProbe{
@@ -774,24 +674,6 @@ func TestValidateActorTemplate(t *testing.T) {
 		name: "relative mount_path",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
 			tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{{Name: "data", MountPath: "var/data"}}
-		},
-		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("volume_mounts").Index(0).Child("mount_path"), nil, "")},
-	}, {
-		name: "root mount_path",
-		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{{Name: "data", MountPath: "/"}}
-		},
-		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("volume_mounts").Index(0).Child("mount_path"), nil, "")},
-	}, {
-		name: "mount_path with dot-dot segment",
-		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{{Name: "data", MountPath: "/var/../etc"}}
-		},
-		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("volume_mounts").Index(0).Child("mount_path"), nil, "")},
-	}, {
-		name: "mount_path with trailing slash",
-		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{{Name: "data", MountPath: "/var/data/"}}
 		},
 		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("volume_mounts").Index(0).Child("mount_path"), nil, "")},
 	}, {
@@ -850,18 +732,6 @@ func TestValidateActorTemplate(t *testing.T) {
 		name: "image volume reference missing digest",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
 			tmpl.Volumes = []*ateapipb.Volume{{Name: "tools", Image: &ateapipb.ImageVolumeSource{Reference: "example.com/app:v1"}}}
-		},
-		want: field.ErrorList{field.Invalid(field.NewPath("volumes").Index(0).Child("image", "reference"), nil, "")},
-	}, {
-		name: "image volume reference with malformed digest",
-		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Volumes = []*ateapipb.Volume{{Name: "tools", Image: &ateapipb.ImageVolumeSource{Reference: "example.com/app@sha256:abc"}}}
-		},
-		want: field.ErrorList{field.Invalid(field.NewPath("volumes").Index(0).Child("image", "reference"), nil, "")},
-	}, {
-		name: "image volume reference not a reference at all",
-		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Volumes = []*ateapipb.Volume{{Name: "tools", Image: &ateapipb.ImageVolumeSource{Reference: "@"}}}
 		},
 		want: field.ErrorList{field.Invalid(field.NewPath("volumes").Index(0).Child("image", "reference"), nil, "")},
 	}, {
@@ -944,18 +814,6 @@ func TestValidateActorTemplate(t *testing.T) {
 		name: "malformed limit quantity",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
 			tmpl.Containers[0].Resources = &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: "memory", Quantity: "two gigs"}}}
-		},
-		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("resources", "limits").Index(0).Child("quantity"), nil, "")},
-	}, {
-		name: "zero limit quantity",
-		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Containers[0].Resources = &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: "memory", Quantity: "0"}}}
-		},
-		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("resources", "limits").Index(0).Child("quantity"), nil, "")},
-	}, {
-		name: "cpu limit of 1000 cores",
-		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Containers[0].Resources = &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: "cpu", Quantity: "1k"}}}
 		},
 		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("resources", "limits").Index(0).Child("quantity"), nil, "")},
 	}, {

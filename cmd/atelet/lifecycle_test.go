@@ -141,7 +141,7 @@ func TestLocalSnapshotGC(t *testing.T) {
 	const (
 		atespace     = "ate-demo"
 		actorName    = "counter"
-		actorUID     = "actor-uid-1"
+		actorUID     = "01234567-89ab-cdef-0123-456789abcdef"
 		ateomUID     = "ateom-uid-1"
 		snapshotName = "pause-snap-1"
 	)
@@ -151,7 +151,7 @@ func TestLocalSnapshotGC(t *testing.T) {
 
 	host := imageVolumeTestRegistry(t)
 	image := host + "/actor:v1"
-	pushTestImage(t, image, singleFileLayer(t, "bin/app", "app"))
+	pinnedImage := pushTestImage(t, image, singleFileLayer(t, "bin/app", "app"))
 
 	// A single "runsc" asset served from a fake bucket: enough to exercise the
 	// content-addressed asset fetch without a gVisor release tarball.
@@ -164,7 +164,7 @@ func TestLocalSnapshotGC(t *testing.T) {
 	}
 	sandboxAssets := &ateletpb.SandboxAssets{
 		SandboxClass: "gvisor",
-		PauseImage:   image,
+		PauseImage:   pinnedImage,
 		Assets: map[string]*ateletpb.ArchAssets{
 			runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
 				runscAssetName: {
@@ -175,7 +175,7 @@ func TestLocalSnapshotGC(t *testing.T) {
 		},
 	}
 	spec := &ateletpb.WorkloadSpec{
-		Containers: []*ateletpb.Container{{Name: "app", Image: image, Command: []string{"/bin/app"}}},
+		Containers: []*ateletpb.Container{{Name: "app", Image: pinnedImage, Command: []string{"/bin/app"}}},
 	}
 
 	if _, err := s.Run(ctx, &ateletpb.RunRequest{
@@ -202,9 +202,7 @@ func TestLocalSnapshotGC(t *testing.T) {
 		Spec:                  spec,
 		Scope:                 ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
 		Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
-		Config: &ateletpb.CheckpointRequest_LocalConfig{
-			LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: snapshotName},
-		},
+		LocalConfig:           &ateletpb.LocalCheckpointConfiguration{SnapshotName: snapshotName},
 	}); err != nil {
 		t.Fatalf("Checkpoint: %v", err)
 	}
@@ -225,9 +223,7 @@ func TestLocalSnapshotGC(t *testing.T) {
 		Spec:                  spec,
 		Scope:                 ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
 		Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
-		Config: &ateletpb.RestoreRequest_LocalConfig{
-			LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: snapshotName},
-		},
+		LocalConfig:           &ateletpb.LocalCheckpointConfiguration{SnapshotName: snapshotName},
 	}); err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
@@ -287,7 +283,7 @@ func TestRestoreUsesRequestSandboxAssets(t *testing.T) {
 	const (
 		atespace     = "ate-demo"
 		actorName    = "counter"
-		actorUID     = "actor-uid-1"
+		actorUID     = "01234567-89ab-cdef-0123-456789abcdef"
 		ateomUID     = "ateom-uid-1"
 		snapshotName = "pause-snap-1"
 	)
@@ -297,11 +293,9 @@ func TestRestoreUsesRequestSandboxAssets(t *testing.T) {
 
 	host := imageVolumeTestRegistry(t)
 	image := host + "/actor:v1"
-	pushTestImage(t, image, singleFileLayer(t, "bin/app", "app"))
-	checkpointPause := host + "/pause:v1"
-	pushTestImage(t, checkpointPause, singleFileLayer(t, "pause", "pause-v1"))
-	restorePause := host + "/pause:v2"
-	pushTestImage(t, restorePause, singleFileLayer(t, "pause", "pause-v2"))
+	pinnedImage := pushTestImage(t, image, singleFileLayer(t, "bin/app", "app"))
+	checkpointPause := pushTestImage(t, host+"/pause:v1", singleFileLayer(t, "pause", "pause-v1"))
+	restorePause := pushTestImage(t, host+"/pause:v2", singleFileLayer(t, "pause", "pause-v2"))
 
 	runsc := []byte("runsc binary")
 	s := &AteomHerder{
@@ -325,7 +319,7 @@ func TestRestoreUsesRequestSandboxAssets(t *testing.T) {
 		}
 	}
 	spec := &ateletpb.WorkloadSpec{
-		Containers: []*ateletpb.Container{{Name: "app", Image: image, Command: []string{"/bin/app"}}},
+		Containers: []*ateletpb.Container{{Name: "app", Image: pinnedImage, Command: []string{"/bin/app"}}},
 	}
 
 	if _, err := s.Run(ctx, &ateletpb.RunRequest{
@@ -351,9 +345,7 @@ func TestRestoreUsesRequestSandboxAssets(t *testing.T) {
 		Spec:                  spec,
 		Scope:                 ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
 		Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
-		Config: &ateletpb.CheckpointRequest_LocalConfig{
-			LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: snapshotName},
-		},
+		LocalConfig:           &ateletpb.LocalCheckpointConfiguration{SnapshotName: snapshotName},
 	}); err != nil {
 		t.Fatalf("Checkpoint: %v", err)
 	}
@@ -381,9 +373,7 @@ func TestRestoreUsesRequestSandboxAssets(t *testing.T) {
 		Spec:                  spec,
 		Scope:                 ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
 		Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
-		Config: &ateletpb.RestoreRequest_LocalConfig{
-			LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: snapshotName},
-		},
+		LocalConfig:           &ateletpb.LocalCheckpointConfiguration{SnapshotName: snapshotName},
 	}); err != nil {
 		t.Fatalf("Restore: %v", err)
 	}

@@ -16,12 +16,11 @@ package apivalidation
 
 import (
 	"context"
-	"strings"
 
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/api/validate"
-	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
@@ -134,34 +133,10 @@ func ValidateCustom_WorkerAssignment_WorkerPodIps(_ context.Context, _ operation
 	return validateDualStackIPs(fldPath, value)
 }
 
-// ValidateCustom_ExternalVolume_VolumeType checks that a volume type string is well-formed.
-// It allows an optional "substrate.io/" prefix, followed by a valid DNS-1123 subdomain.
 func ValidateCustom_ExternalVolume_VolumeType(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
-	if value == nil || *value == "" {
-		return nil
-	}
-	var errs field.ErrorList
-	valToValidate := strings.TrimPrefix(*value, "substrate.io/")
-	for _, msg := range validation.IsDNS1123Subdomain(valToValidate) {
-		errs = append(errs, field.Invalid(fldPath, *value, msg))
-	}
-	return errs
+	return resources.ValidateVolumeType(fldPath, *value)
 }
 
-// ValidateCustom_ExternalVolume_StorageVolumeId checks that an external volume's storage ID does not
-// contain control characters (U+0000-U+0008, U+000B, U+000C, U+000E-U+001F, U+007F-U+009F).
 func ValidateCustom_ExternalVolume_StorageVolumeId(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
-	if value == nil || *value == "" {
-		return nil
-	}
-	for _, r := range *value {
-		if (r >= 0x0000 && r <= 0x0008) ||
-			r == 0x000B ||
-			r == 0x000C ||
-			(r >= 0x000E && r <= 0x001F) ||
-			(r >= 0x007F && r <= 0x009F) {
-			return field.ErrorList{field.Invalid(fldPath, *value, "must not contain control characters (U+0000-U+0008, U+000B, U+000C, U+000E-U+001F, U+007F-U+009F)")}
-		}
-	}
-	return nil
+	return resources.ValidateStorageVolumeID(fldPath, *value)
 }

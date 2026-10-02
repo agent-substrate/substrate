@@ -74,9 +74,7 @@ func (s *ctbStore) remove(t *testing.T) {
 func trustVolumeSpec(relPath string) *ateletpb.SystemInfoVolume {
 	return &ateletpb.SystemInfoVolume{
 		DataSources: []*ateletpb.SystemInfoDataSource{
-			{DataSource: &ateletpb.SystemInfoDataSource_TrustBundle{
-				TrustBundle: &ateletpb.TrustBundleDataSource{Names: []string{EgressTrustBundleName}, Path: relPath},
-			}},
+			{TrustBundle: &ateletpb.TrustBundleDataSource{Names: []string{EgressTrustBundleName}, Path: relPath}},
 		},
 	}
 }
@@ -84,13 +82,11 @@ func trustVolumeSpec(relPath string) *ateletpb.SystemInfoVolume {
 func metadataVolumeSpec() *ateletpb.SystemInfoVolume {
 	return &ateletpb.SystemInfoVolume{
 		DataSources: []*ateletpb.SystemInfoDataSource{
-			{DataSource: &ateletpb.SystemInfoDataSource_ActorMetadata{
-				ActorMetadata: &ateletpb.ActorMetadataDataSource{
-					Items: []*ateletpb.ActorMetadataItem{
-						{Field: ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_NAME, Path: "actor-name"},
-						{Field: ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_ATESPACE, Path: "atespace"},
-						{Field: ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_UID, Path: "identity/actor-uid"},
-					},
+			{ActorMetadata: &ateletpb.ActorMetadataDataSource{
+				Items: []*ateletpb.ActorMetadataItem{
+					{Field: ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_NAME, Path: "actor-name"},
+					{Field: ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_ATESPACE, Path: "atespace"},
+					{Field: ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_UID, Path: "identity/actor-uid"},
 				},
 			}},
 		},
@@ -566,9 +562,9 @@ func TestSystemInfoVolumeRefresher_RegisterTwiceSupersedes(t *testing.T) {
 
 func TestSystemInfoVolumesFor(t *testing.T) {
 	spec := &ateletpb.WorkloadSpec{Volumes: []*ateletpb.Volume{
-		{Name: "data", Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}}},
-		{Name: "trust", Source: &ateletpb.Volume_SystemInfo{SystemInfo: trustVolumeSpec("ca.pem")}},
-		{Name: "meta", Source: &ateletpb.Volume_SystemInfo{SystemInfo: metadataVolumeSpec()}},
+		{Name: "data", DurableDir: &ateletpb.DurableDirVolume{}},
+		{Name: "trust", SystemInfo: trustVolumeSpec("ca.pem")},
+		{Name: "meta", SystemInfo: metadataVolumeSpec()},
 	}}
 	got := systemInfoVolumesFor("uid-1", spec)
 	if len(got) != 2 || got[0].Name != "trust" || got[1].Name != "meta" {

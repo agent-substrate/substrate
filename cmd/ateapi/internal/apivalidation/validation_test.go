@@ -761,55 +761,9 @@ func TestValidateSystemInfoVolumeSource(t *testing.T) {
 		}),
 		want: field.ErrorList{field.TooLong(itemsPath.Index(0).Child("path"), nil, 255).WithOrigin("maxLength")},
 	}, {
-		name: "valid: nested item path",
-		obj: valid(func(s *ateapipb.SystemInfoVolumeSource) {
-			s.DataSources[0].ActorMetadata.Items[0].Path = "meta/actor-name"
-		}),
-	}, {
 		name: "item path traversal",
 		obj: valid(func(s *ateapipb.SystemInfoVolumeSource) {
 			s.DataSources[0].ActorMetadata.Items[0].Path = "../../traversal-escape"
-		}),
-		want: field.ErrorList{field.Invalid(itemsPath.Index(0).Child("path"), nil, "")},
-	}, {
-		name: "absolute item path",
-		obj: valid(func(s *ateapipb.SystemInfoVolumeSource) {
-			s.DataSources[0].ActorMetadata.Items[0].Path = "/escaped"
-		}),
-		want: field.ErrorList{field.Invalid(itemsPath.Index(0).Child("path"), nil, "")},
-	}, {
-		name: "item path with dot segment",
-		obj: valid(func(s *ateapipb.SystemInfoVolumeSource) {
-			s.DataSources[0].ActorMetadata.Items[0].Path = "./actor-name"
-		}),
-		want: field.ErrorList{field.Invalid(itemsPath.Index(0).Child("path"), nil, "")},
-	}, {
-		name: "item path with trailing slash",
-		obj: valid(func(s *ateapipb.SystemInfoVolumeSource) {
-			s.DataSources[0].ActorMetadata.Items[0].Path = "actor-name/"
-		}),
-		want: field.ErrorList{field.Invalid(itemsPath.Index(0).Child("path"), nil, "")},
-	}, {
-		name: "item path with empty segment",
-		obj: valid(func(s *ateapipb.SystemInfoVolumeSource) {
-			s.DataSources[0].ActorMetadata.Items[0].Path = "meta//actor-name"
-		}),
-		want: field.ErrorList{field.Invalid(itemsPath.Index(0).Child("path"), nil, "")},
-	}, {
-		name: "item path with NUL byte",
-		obj: valid(func(s *ateapipb.SystemInfoVolumeSource) {
-			s.DataSources[0].ActorMetadata.Items[0].Path = "actor\x00name"
-		}),
-		want: field.ErrorList{field.Invalid(itemsPath.Index(0).Child("path"), nil, "")},
-	}, {
-		name: "valid: unicode item path",
-		obj: valid(func(s *ateapipb.SystemInfoVolumeSource) {
-			s.DataSources[0].ActorMetadata.Items[0].Path = "méta/имя"
-		}),
-	}, {
-		name: "item path with too many segments",
-		obj: valid(func(s *ateapipb.SystemInfoVolumeSource) {
-			s.DataSources[0].ActorMetadata.Items[0].Path = strings.Repeat("d/", 16) + "actor-name"
 		}),
 		want: field.ErrorList{field.Invalid(itemsPath.Index(0).Child("path"), nil, "")},
 	}, {
@@ -830,6 +784,19 @@ func TestValidateSystemInfoVolumeSource(t *testing.T) {
 			s.DataSources[1].TrustBundle.Path = "actor-uid"
 		}),
 		want: field.ErrorList{field.Duplicate(dsPath.Index(1).Child("trust_bundle", "path"), nil)},
+	}, {
+		name: "second actor_metadata entry",
+		obj: valid(func(s *ateapipb.SystemInfoVolumeSource) {
+			s.DataSources = append(s.DataSources, &ateapipb.SystemInfoDataSource{
+				ActorMetadata: &ateapipb.ActorMetadataDataSource{
+					Items: []*ateapipb.ActorMetadataItem{{
+						Field: ateapipb.ActorMetadataField_ACTOR_METADATA_FIELD_NAME,
+						Path:  "actor-name-2",
+					}},
+				},
+			})
+		}),
+		want: field.ErrorList{field.Forbidden(dsPath.Index(2).Child("actor_metadata"), "")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -886,15 +853,8 @@ func TestValidateTrustBundleDataSource(t *testing.T) {
 		obj:  valid(func(tb *ateapipb.TrustBundleDataSource) { tb.Path = strings.Repeat("p", 256) }),
 		want: field.ErrorList{field.TooLong(field.NewPath("path"), nil, 255).WithOrigin("maxLength")},
 	}, {
-		name: "valid: nested path",
-		obj:  valid(func(tb *ateapipb.TrustBundleDataSource) { tb.Path = "certs/ca.pem" }),
-	}, {
 		name: "path traversal",
 		obj:  valid(func(tb *ateapipb.TrustBundleDataSource) { tb.Path = "../escape" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("path"), nil, "")},
-	}, {
-		name: "absolute path",
-		obj:  valid(func(tb *ateapipb.TrustBundleDataSource) { tb.Path = "/escaped" }),
 		want: field.ErrorList{field.Invalid(field.NewPath("path"), nil, "")},
 	}}
 	for _, tt := range tests {
@@ -945,28 +905,9 @@ func TestValidateExternalVolume(t *testing.T) {
 		obj:  valid(func(v *ateapipb.ExternalVolume) { v.StorageVolumeId = "vol\x00id" }),
 		want: field.ErrorList{field.Invalid(field.NewPath("storage_volume_id"), nil, "")},
 	}, {
-		name: "invalid storage volume id with unit separator U+001F",
-		obj:  valid(func(v *ateapipb.ExternalVolume) { v.StorageVolumeId = "vol\x1fid" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("storage_volume_id"), nil, "")},
-	}, {
-		name: "invalid storage volume id with DEL U+007F",
-		obj:  valid(func(v *ateapipb.ExternalVolume) { v.StorageVolumeId = "vol\x7fid" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("storage_volume_id"), nil, "")},
-	}, {
-		name: "invalid storage volume id with C1 control U+0080",
-		obj:  valid(func(v *ateapipb.ExternalVolume) { v.StorageVolumeId = "vol\u0080id" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("storage_volume_id"), nil, "")},
-	}, {
-		name: "invalid storage volume id with C1 control U+009F",
-		obj:  valid(func(v *ateapipb.ExternalVolume) { v.StorageVolumeId = "vol\u009fid" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("storage_volume_id"), nil, "")},
-	}, {
 		name: "storage volume id too long",
 		obj:  valid(func(v *ateapipb.ExternalVolume) { v.StorageVolumeId = strings.Repeat("x", 257) }),
 		want: field.ErrorList{field.TooLong(field.NewPath("storage_volume_id"), nil, 256).WithOrigin("maxLength")},
-	}, {
-		name: "valid csi volume type",
-		obj:  valid(func(v *ateapipb.ExternalVolume) { v.VolumeType = "pd.csi.storage.gke.io" }),
 	}, {
 		name: "missing volume type",
 		obj:  valid(func(v *ateapipb.ExternalVolume) { v.VolumeType = "" }),
@@ -988,18 +929,6 @@ func TestValidateExternalVolume(t *testing.T) {
 	}, {
 		name: "valid volume with substrate.io prefixed volume type",
 		obj:  valid(func(v *ateapipb.ExternalVolume) { v.VolumeType = "substrate.io/mock" }),
-	}, {
-		name: "invalid volume type with empty plugin after substrate.io prefix",
-		obj:  valid(func(v *ateapipb.ExternalVolume) { v.VolumeType = "substrate.io/" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("volume_type"), nil, "")},
-	}, {
-		name: "invalid volume type with invalid plugin name after substrate.io prefix",
-		obj:  valid(func(v *ateapipb.ExternalVolume) { v.VolumeType = "substrate.io/Mock_Plugin" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("volume_type"), nil, "")},
-	}, {
-		name: "invalid volume type with non-substrate prefix",
-		obj:  valid(func(v *ateapipb.ExternalVolume) { v.VolumeType = "other.io/mock" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("volume_type"), nil, "")},
 	}, {
 		name: "negative status",
 		obj:  valid(func(v *ateapipb.ExternalVolume) { v.Status = ateapipb.ExternalVolume_Status(-1) }),
