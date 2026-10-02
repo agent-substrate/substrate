@@ -136,7 +136,7 @@ func TestActorEgressCredentialInjection(t *testing.T) {
 		t.Fatalf("GetActor %q: %v", id, err)
 	}
 
-	rc, err := e2e.NewRouterClient(ctx)
+	rc, err := e2e.NewRouterClient(t, ctx)
 	if err != nil {
 		t.Fatalf("NewRouterClient: %v", err)
 	}
