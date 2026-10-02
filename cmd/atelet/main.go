@@ -1290,43 +1290,15 @@ func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequ
 	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
 	actorUID := req.GetActorUid()
 
-	if req.GetTargetAteomUid() != "" {
-		var assetPaths map[string]string
-		sandboxRec, err := readSandboxRecord(actorUID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read sandbox record during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
-		}
-		paths, err := s.ensureSandboxAssets(ctx, sandboxRec)
-		if err != nil {
-			return nil, fmt.Errorf("failed to ensure sandbox assets during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
-		}
-		assetPaths = paths
+	// Built here rather than next to the RPC it feeds, so a malformed spec is
+	// still rejected as INVALID_ARGUMENT on the paths that skip that RPC.
+	spec, err := buildAteomWorkloadSpec(req.GetSpec(), nil)
+	if err != nil {
+		return nil, apierror.InvalidArgument("invalid workload spec: %v", err)
+	}
 
-		client, err := s.dialAteom(ctx, req.GetTargetAteomUid())
-		if err != nil {
-			return nil, fmt.Errorf("failed to dial ateom for terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
-		}
-
-		spec, err := buildAteomWorkloadSpec(req.GetSpec(), nil)
-		if err != nil {
-			return nil, apierror.InvalidArgument("invalid workload spec: %v", err)
-		}
-		if _, err := client.TerminateWorkload(ctx, &ateompb.TerminateWorkloadRequest{
-			Atespace:              req.GetAtespace(),
-			ActorName:             req.GetActorName(),
-			ActorUid:              req.GetActorUid(),
-			ActorTemplateAtespace: req.GetActorTemplateAtespace(),
-			ActorTemplateName:     req.GetActorTemplateName(),
-			RunscPath:             runscPathFor(assetPaths),
-			Spec:                  spec,
-			ActorDirs:             ateletpath.ActorDirs(actorUID),
-		}); err != nil {
-			if status.Code(err) == codes.NotFound {
-				slog.InfoContext(ctx, "workload not found on ateom during terminate", slog.Any("actor", actorRef), slog.String("actorUID", actorUID))
-			} else {
-				return nil, fmt.Errorf("failed calling ateom.TerminateWorkload (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
-			}
-		}
+	if err := s.terminateWorkloadOnAteom(ctx, req, spec, actorRef, actorUID); err != nil {
+		return nil, err
 	}
 
 	// Deregister after teardown succeeds
@@ -1352,6 +1324,92 @@ func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequ
 	}
 
 	return &ateletpb.TerminateResponse{}, nil
+}
+
+// terminateWorkloadOnAteom tears the workload down on the ateom hosting it.
+//
+// A Terminate can legitimately arrive with no ateom to tear down: none named,
+// because the actor no longer holds a worker (the delete or revert of a paused
+// or crashed actor), or one named that is gone, its worker pod deleted,
+// evicted, or its node drained. Either way the actor's state is still on the
+// node, and that state is precisely what the rest of Terminate exists to
+// reclaim — so the teardown is skipped rather than failing the RPC and leaving
+// tens of GB of actor state behind.
+//
+// An ateom that is present but rejects the call still fails: that is a live
+// sandbox this could not tear down, and reclaiming its directories underneath
+// it would be worse than leaving them.
+func (s *AteomHerder) terminateWorkloadOnAteom(ctx context.Context, req *ateletpb.TerminateRequest, spec *ateompb.WorkloadSpec, actorRef resources.ActorRef, actorUID string) error {
+	ateomUID := req.GetTargetAteomUid()
+	if ateomUID == "" {
+		// No ateom named: the actor has no worker pod left, only state on
+		// this node, such as a paused or crashed actor's on delete or revert.
+		slog.InfoContext(ctx, "no ateom named during terminate; reclaiming the actor's node state without a sandbox teardown",
+			slog.Any("actor", actorRef), slog.String("actorUID", actorUID))
+		return nil
+	}
+	// The socket is the ateom's liveness: it lives under the pod's own
+	// directory, which the ateom creates when it boots and which goes away
+	// with the pod. Checked before the sandbox record so the common
+	// pod-is-gone path does no other work — in particular, it never reaches
+	// ensureSandboxAssets, which would fetch binaries for a sandbox that no
+	// longer exists.
+	if _, err := os.Stat(ateomSocketPath(ateomUID)); err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("failed to stat the ateom socket during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
+		}
+		slog.InfoContext(ctx, "ateom is gone during terminate; reclaiming the actor's node state without a sandbox teardown",
+			slog.Any("actor", actorRef), slog.String("actorUID", actorUID), slog.String("ateomUID", ateomUID))
+		return nil
+	}
+
+	sandboxRec, err := readSandboxRecord(actorUID)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			// Written at Run/Restore, so its absence means no sandbox was ever
+			// started for this actor on this node. Nothing to tear down, and
+			// there is no runsc path to tear it down with.
+			slog.InfoContext(ctx, "no sandbox record during terminate; reclaiming the actor's node state without a sandbox teardown",
+				slog.Any("actor", actorRef), slog.String("actorUID", actorUID))
+			return nil
+		}
+		return fmt.Errorf("failed to read sandbox record during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
+	}
+	assetPaths, err := s.ensureSandboxAssets(ctx, sandboxRec)
+	if err != nil {
+		return fmt.Errorf("failed to ensure sandbox assets during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
+	}
+
+	client, err := s.dialAteom(ctx, ateomUID)
+	if err != nil {
+		return fmt.Errorf("failed to dial ateom for terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
+	}
+
+	if _, err := client.TerminateWorkload(ctx, &ateompb.TerminateWorkloadRequest{
+		Atespace:              req.GetAtespace(),
+		ActorName:             req.GetActorName(),
+		ActorUid:              req.GetActorUid(),
+		ActorTemplateAtespace: req.GetActorTemplateAtespace(),
+		ActorTemplateName:     req.GetActorTemplateName(),
+		RunscPath:             runscPathFor(assetPaths),
+		Spec:                  spec,
+		ActorDirs:             ateletpath.ActorDirs(actorUID),
+	}); err != nil {
+		switch status.Code(err) {
+		case codes.NotFound:
+			slog.InfoContext(ctx, "workload not found on ateom during terminate", slog.Any("actor", actorRef), slog.String("actorUID", actorUID))
+		case codes.Unavailable:
+			// The socket outlived the process serving it (an ateom shutting
+			// down while this RPC was in flight, or a stale socket file). Same
+			// situation as a missing socket: there is nothing left to tear
+			// down, and the state on disk still has to go.
+			slog.InfoContext(ctx, "ateom unreachable during terminate; reclaiming the actor's node state without a sandbox teardown",
+				slog.Any("actor", actorRef), slog.String("actorUID", actorUID), slog.Any("err", err))
+		default:
+			return fmt.Errorf("failed calling ateom.TerminateWorkload (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
+		}
+	}
+	return nil
 }
 
 // checkLocalSnapshotFiles verifies each snapshot file exists in dir as a

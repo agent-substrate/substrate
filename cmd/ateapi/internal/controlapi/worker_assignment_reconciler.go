@@ -57,7 +57,7 @@ type WorkerAssignmentReconciler struct {
 func NewWorkerAssignmentReconciler(persistence workerWorkflowStore, workers workerWatcher) *WorkerAssignmentReconciler {
 	return &WorkerAssignmentReconciler{
 		persistence: persistence,
-		workflow:    NewWorkerWorkflow(persistence),
+		workflow:    NewWorkerWorkflow(persistence, nil),
 		workers:     workers,
 		queue:       workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
 	}

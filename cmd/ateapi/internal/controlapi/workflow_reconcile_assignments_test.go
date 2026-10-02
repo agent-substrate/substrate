@@ -67,7 +67,7 @@ func mustRaiseEpoch(t *testing.T, ctx context.Context, svc *RPCService, persiste
 
 func mustReconcileAssignments(t *testing.T, ctx context.Context, persistence store.Interface) {
 	t.Helper()
-	if err := NewWorkerWorkflow(persistence).ReconcileAssignments(ctx, apiWorkerName); err != nil {
+	if err := NewWorkerWorkflow(persistence, nil).ReconcileAssignments(ctx, apiWorkerName); err != nil {
 		t.Fatalf("ReconcileAssignments() failed: %v", err)
 	}
 }
@@ -378,7 +378,7 @@ func TestReconcileAssignments_WaitsForBusyActor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AcquireLease() failed: %v", err)
 	}
-	err = NewWorkerWorkflow(persistence).ReconcileAssignments(ctx, apiWorkerName)
+	err = NewWorkerWorkflow(persistence, nil).ReconcileAssignments(ctx, apiWorkerName)
 	if !errors.Is(err, errActorBusy) {
 		t.Fatalf("ReconcileAssignments() = %v, want errActorBusy", err)
 	}
@@ -455,7 +455,7 @@ func TestReconcileAssignments_KeepsActorReboundSinceList(t *testing.T) {
 			t.Fatalf("UpdateActor() failed: %v", err)
 		}
 	}}
-	if err := NewWorkerWorkflow(rebinding).ReconcileAssignments(ctx, apiWorkerName); err != nil {
+	if err := NewWorkerWorkflow(rebinding, nil).ReconcileAssignments(ctx, apiWorkerName); err != nil {
 		t.Fatalf("ReconcileAssignments() failed: %v", err)
 	}
 
@@ -484,7 +484,7 @@ func TestReconcileAssignments_RetriesRecordAfterConcurrentBind(t *testing.T) {
 	binding := &hookedStore{Interface: persistence, beforeUpdateWorker: func() {
 		assignAPIWorker(t, ctx, persistence, apiWorkerName, boundUID)
 	}}
-	if err := NewWorkerWorkflow(binding).ReconcileAssignments(ctx, apiWorkerName); err != nil {
+	if err := NewWorkerWorkflow(binding, nil).ReconcileAssignments(ctx, apiWorkerName); err != nil {
 		t.Fatalf("ReconcileAssignments() failed: %v", err)
 	}
 
@@ -518,7 +518,7 @@ func TestReconcileAssignments_LeavesReplacedWorker(t *testing.T) {
 		}
 		seedEpochWorker(t, ctx, persistence, 1, 1)
 	}}
-	if err := NewWorkerWorkflow(replacing).ReconcileAssignments(ctx, apiWorkerName); err != nil {
+	if err := NewWorkerWorkflow(replacing, nil).ReconcileAssignments(ctx, apiWorkerName); err != nil {
 		t.Fatalf("ReconcileAssignments() failed: %v", err)
 	}
 
@@ -536,7 +536,7 @@ func TestReconcileAssignments_FailureKeepsObservedEpoch(t *testing.T) {
 	seedRunningActor(t, ctx, persistence)
 	mustRaiseEpoch(t, ctx, svc, persistence, 2)
 
-	failing := NewWorkerWorkflow(failingUpdateActorStore{Interface: persistence, err: errors.New("crash failed")})
+	failing := NewWorkerWorkflow(failingUpdateActorStore{Interface: persistence, err: errors.New("crash failed")}, nil)
 	if err := failing.ReconcileAssignments(ctx, apiWorkerName); err == nil {
 		t.Fatal("ReconcileAssignments() = nil error, want the crash failure reported")
 	}

@@ -17,17 +17,29 @@ package controlapi
 import (
 	"context"
 	"errors"
+	"net"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
+	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
+	"google.golang.org/grpc/test/bufconn"
+	"google.golang.org/protobuf/proto"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // newWorkerDeleteWorkflow returns a workflow backed by a real store, which is
@@ -37,7 +49,7 @@ func newWorkerDeleteWorkflow(t *testing.T) (*WorkerWorkflow, store.Interface) {
 	t.Helper()
 	persistence, cleanup := storetest.SetupTestStore(t)
 	t.Cleanup(cleanup)
-	return NewWorkerWorkflow(persistence), persistence
+	return NewWorkerWorkflow(persistence, nil), persistence
 }
 
 // apiActorRef names the Actor seedAPIActor stores.
@@ -87,7 +99,7 @@ func TestDeleteWorkerWorkflow_DrainsBeforeSweeping(t *testing.T) {
 	actor := seedAPIActor(t, ctx, persistence, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 	assignAPIWorker(t, ctx, persistence, apiWorkerName, actor.GetMetadata().GetUid())
 
-	wf := NewWorkerWorkflow(failingUpdateActorStore{Interface: persistence, err: errors.New("release failed")})
+	wf := NewWorkerWorkflow(failingUpdateActorStore{Interface: persistence, err: errors.New("release failed")}, nil)
 	if _, err := wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{}); err == nil {
 		t.Fatal("DeleteWorker() = nil error, want the release failure reported")
 	}
@@ -316,7 +328,7 @@ func TestDeleteWorkerWorkflow_FailedReleaseKeepsWorker(t *testing.T) {
 			actor := seedAPIActor(t, ctx, persistence, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 			assignAPIWorker(t, ctx, persistence, apiWorkerName, actor.GetMetadata().GetUid())
 
-			wf := NewWorkerWorkflow(failingUpdateActorStore{Interface: persistence, err: tc.updateErr})
+			wf := NewWorkerWorkflow(failingUpdateActorStore{Interface: persistence, err: tc.updateErr}, nil)
 			_, err := wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{})
 			if err == nil {
 				t.Fatal("DeleteWorker() = nil error, want the release failure reported")
@@ -349,7 +361,7 @@ func TestDeleteWorkerWorkflow_ActorDeletedDuringRelease(t *testing.T) {
 	actor := seedAPIActor(t, ctx, persistence, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 	assignAPIWorker(t, ctx, persistence, apiWorkerName, actor.GetMetadata().GetUid())
 
-	wf := NewWorkerWorkflow(failingUpdateActorStore{Interface: persistence, err: store.ErrNotFound})
+	wf := NewWorkerWorkflow(failingUpdateActorStore{Interface: persistence, err: store.ErrNotFound}, nil)
 	if _, err := wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{}); err != nil {
 		t.Fatalf("DeleteWorker() failed: %v", err)
 	}
@@ -384,4 +396,248 @@ type failingUpdateActorStore struct {
 
 func (f failingUpdateActorStore) UpdateActor(context.Context, resources.ActorRef, store.Precondition, func(*ateapipb.Actor) error) (*ateapipb.Actor, error) {
 	return nil, f.err
+}
+
+// A Worker is deleted because its pod is gone, and the pod took the ateom with
+// it but not the actor's state directory on the node — a durdir actor leaves
+// gigabytes there. This delete is the earliest point to reclaim it, ahead of
+// the actor's delete or revert and the orphan sweep.
+func TestDeleteWorkerWorkflow_ReclaimsActorNodeState(t *testing.T) {
+	tests := []struct {
+		name string
+		// state the actor is in when its pod disappears.
+		state ateapipb.ActorState
+		// seed further shapes the stored actor.
+		seed func(*ateapipb.Actor)
+		// terminateErr is what the atelet answers, if anything.
+		terminateErr  error
+		wantTerminate bool
+	}{
+		{
+			name:          "running actor is reclaimed",
+			state:         ateapipb.ActorState_ACTOR_STATE_RUNNING,
+			wantTerminate: true,
+		},
+		{
+			// It saved its state externally and stays resumable, but it is
+			// resumable somewhere else: what it left on this node is dead
+			// weight, and the release path skips it for every other purpose.
+			name:          "cleanly suspended actor is reclaimed too",
+			state:         ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+			wantTerminate: true,
+		},
+		{
+			// Terminate prunes local checkpoints, and a local snapshot is the
+			// one piece of actor state this node holds deliberately. Leaving
+			// it costs disk a sweep can still reclaim; deleting it is
+			// unrecoverable.
+			name:  "actor with a local snapshot is left alone",
+			state: ateapipb.ActorState_ACTOR_STATE_PAUSED,
+			seed: func(a *ateapipb.Actor) {
+				a.Status.Snapshots = []*ateapipb.Snapshot{newLocalSnapshot(1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "pause-1", ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)}
+				a.Status.AssignedNode = "node-1"
+			},
+			wantTerminate: false,
+		},
+		{
+			// An unreachable or unhappy node must not wedge deregistration:
+			// the worker still goes, and the orphan sweep collects what this
+			// could not.
+			name:          "a failing terminate does not fail the delete",
+			state:         ateapipb.ActorState_ACTOR_STATE_RUNNING,
+			terminateErr:  status.Error(codes.Internal, "atelet is having a bad day"),
+			wantTerminate: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			persistence, cleanup := storetest.SetupTestStore(t)
+			t.Cleanup(cleanup)
+
+			atelet := &capturingTerminator{err: tt.terminateErr}
+			wf := NewWorkerWorkflow(persistence, newNodeAteletDialer(t, atelet))
+
+			seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
+			seeds := []func(*ateapipb.Actor){}
+			if tt.seed != nil {
+				seeds = append(seeds, tt.seed)
+			}
+			actor := seedAPIActor(t, ctx, persistence, tt.state, seeds...)
+			assignAPIWorker(t, ctx, persistence, apiWorkerName, actor.GetMetadata().GetUid())
+
+			if _, err := wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{}); err != nil {
+				t.Fatalf("DeleteWorker() failed: %v", err)
+			}
+
+			got := atelet.requests()
+			if !tt.wantTerminate {
+				if len(got) != 0 {
+					t.Fatalf("atelet received %d Terminate calls, want none: %v", len(got), got)
+				}
+				return
+			}
+			if len(got) != 1 {
+				t.Fatalf("atelet received %d Terminate calls, want exactly 1", len(got))
+			}
+			req := got[0]
+			// The actor the node has to be told about, and the ateom UID it
+			// was hosted by — which is what atelet resolves the (now absent)
+			// sandbox through.
+			if req.GetActorUid() != actor.GetMetadata().GetUid() {
+				t.Errorf("Terminate actor_uid = %q, want %q", req.GetActorUid(), actor.GetMetadata().GetUid())
+			}
+			if req.GetAtespace() != apiActorRef.Atespace || req.GetActorName() != apiActorRef.Name {
+				t.Errorf("Terminate named %s/%s, want %s", req.GetAtespace(), req.GetActorName(), apiActorRef)
+			}
+			if want := validWorker(apiWorkerName).GetWorkerPodUid(); req.GetTargetAteomUid() != want {
+				t.Errorf("Terminate target_ateom_uid = %q, want the worker's pod uid %q", req.GetTargetAteomUid(), want)
+			}
+		})
+	}
+}
+
+// A Worker whose record names no node cannot be reclaimed against: the node is
+// the only handle left on the atelet once the pod is gone. The delete carries
+// on regardless.
+func TestDeleteWorkerWorkflow_ReclaimSkippedWithoutANode(t *testing.T) {
+	ctx := context.Background()
+	persistence, cleanup := storetest.SetupTestStore(t)
+	t.Cleanup(cleanup)
+
+	atelet := &capturingTerminator{}
+	wf := NewWorkerWorkflow(persistence, newNodeAteletDialer(t, atelet))
+
+	seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName, func(w *ateapipb.Worker) { w.NodeName = "" }))
+	actor := seedAPIActor(t, ctx, persistence, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+	assignAPIWorker(t, ctx, persistence, apiWorkerName, actor.GetMetadata().GetUid())
+
+	if _, err := wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{}); err != nil {
+		t.Fatalf("DeleteWorker() failed: %v", err)
+	}
+	if got := atelet.requests(); len(got) != 0 {
+		t.Errorf("atelet received %d Terminate calls, want none: %v", len(got), got)
+	}
+}
+
+// An unmount that hangs, such as one against a dead NFS server, must not wedge
+// deregistration. Each reclaim gets workerReclaimTimeout, and once one times
+// out the worker's other actors leave theirs to the orphan sweep: a worker
+// lives on one node, so they would only time out too.
+func TestDeleteWorkerWorkflow_HungReclaimDoesNotWedgeDelete(t *testing.T) {
+	orig := workerReclaimTimeout
+	workerReclaimTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { workerReclaimTimeout = orig })
+
+	ctx := context.Background()
+	persistence, cleanup := storetest.SetupTestStore(t)
+	t.Cleanup(cleanup)
+
+	atelet := &capturingTerminator{hang: true}
+	wf := NewWorkerWorkflow(persistence, newNodeAteletDialer(t, atelet))
+
+	seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
+	var refs []resources.ActorRef
+	for _, name := range []string{"actor-1", "actor-2", "actor-3"} {
+		actor := seedAPIActor(t, ctx, persistence, ateapipb.ActorState_ACTOR_STATE_RUNNING, func(a *ateapipb.Actor) {
+			a.Metadata.Name = name
+		})
+		ref := resources.ActorRefFromActor(actor)
+		if err := persistence.BindActorToWorker(ctx, apiWorkerName, &ateapipb.ActorAssignment{
+			Actor:    &ateapipb.ObjectRef{Atespace: ref.Atespace, Name: ref.Name},
+			ActorUid: actor.GetMetadata().GetUid(),
+		}, nil); err != nil {
+			t.Fatalf("assigning %s to worker %s: %v", ref, apiWorkerName, err)
+		}
+		refs = append(refs, ref)
+	}
+
+	// A deadline, as the RPC has. A Terminate without a timeout of its own runs
+	// into it, and the release after it fails.
+	rpcCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if _, err := wf.DeleteWorker(rpcCtx, apiWorkerName, store.DeletePreconditions{}); err != nil {
+		t.Fatalf("DeleteWorker() failed: %v", err)
+	}
+	if got := len(atelet.requests()); got != 1 {
+		t.Errorf("atelet received %d Terminate calls, want 1: the first timeout gives up on the node", got)
+	}
+	for _, ref := range refs {
+		got, err := persistence.GetActor(ctx, ref)
+		if err != nil {
+			t.Fatalf("GetActor(%s) failed: %v", ref, err)
+		}
+		if got.GetStatus().GetWorkerAssignment() != nil {
+			t.Errorf("actor %s still points at a worker: %v", ref, got.GetStatus().GetWorkerAssignment())
+		}
+	}
+}
+
+// capturingTerminator is an atelet that records the Terminate calls it is sent
+// and answers them with err, or, with hang set, blocks until the caller gives
+// up, like an atelet stuck in an unmount.
+type capturingTerminator struct {
+	ateletpb.UnimplementedAteomHerderServer
+	err  error
+	hang bool
+
+	mu   sync.Mutex
+	reqs []*ateletpb.TerminateRequest
+}
+
+func (f *capturingTerminator) Terminate(ctx context.Context, req *ateletpb.TerminateRequest) (*ateletpb.TerminateResponse, error) {
+	f.mu.Lock()
+	f.reqs = append(f.reqs, proto.Clone(req).(*ateletpb.TerminateRequest))
+	f.mu.Unlock()
+	if f.hang {
+		<-ctx.Done()
+		return nil, status.FromContextError(ctx.Err()).Err()
+	}
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &ateletpb.TerminateResponse{}, nil
+}
+
+func (f *capturingTerminator) requests() []*ateletpb.TerminateRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.reqs)
+}
+
+// newNodeAteletDialer resolves node-1's atelet to an in-process fake. The conn
+// cache is pre-warmed by the atelet pod's UID and IP, so the by-node lookup
+// under test runs for real and only the transport is short-circuited.
+func newNodeAteletDialer(t *testing.T, srvImpl ateletpb.AteomHerderServer) *AteletDialer {
+	t.Helper()
+
+	srv := grpc.NewServer()
+	ateletpb.RegisterAteomHerderServer(srv, srvImpl)
+	lis := bufconn.Listen(1 << 20)
+	go func() {
+		if err := srv.Serve(lis); err != nil {
+			t.Logf("fake atelet server exited: %v", err)
+		}
+	}()
+	conn, err := grpc.NewClient("passthrough://bufnet",
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
+			return lis.DialContext(ctx)
+		}))
+	if err != nil {
+		t.Fatalf("connecting to the fake atelet: %v", err)
+	}
+	t.Cleanup(func() {
+		conn.Close()
+		srv.Stop()
+	})
+
+	dialer := dialerWithAtelets(t, &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "ate-system", Name: "atelet-1", UID: "atelet-uid"},
+		Spec:       corev1.PodSpec{NodeName: "node-1"},
+		Status:     corev1.PodStatus{PodIPs: []corev1.PodIP{{IP: "10.0.0.1"}}},
+	})
+	dialer.ateletConns.Add("atelet-uid", &ateletConn{ip: "10.0.0.1", conn: conn})
+	return dialer
 }
