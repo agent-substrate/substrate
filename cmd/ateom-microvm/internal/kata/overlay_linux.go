@@ -70,9 +70,10 @@ func VirtiofsdSocketPath(id string) string { return filepath.Join(VMDir(id), "vi
 // UpperWorkDirs returns the HOST overlay upperdir and workdir for one container
 // under the actor's rootfs-upper base dir: SIBLING directories, <cid>/fs and
 // <cid>/work. Both properties are load-bearing — the kernel requires upperdir
-// and workdir on the same filesystem and rejects a nested workdir — and the
-// layout is also the snapshot tar's entry layout, so a change here breaks both
-// every overlay mount and every existing snapshot. Covered by regression tests.
+// and workdir on the same filesystem and rejects a nested workdir. The
+// snapshot only carries each upperdir's contents (see
+// cmd/ateom-microvm/rootfsupper.go); ateom creates this layout itself.
+// Covered by regression tests.
 func UpperWorkDirs(upperBase, containerID string) (upper, work string) {
 	return filepath.Join(upperBase, containerID, "fs"), filepath.Join(upperBase, containerID, "work")
 }

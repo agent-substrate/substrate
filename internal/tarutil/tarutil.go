@@ -103,6 +103,22 @@ type SkipFunc func(rel string) bool
 // CreateFiltered is Create with entries omitted where skip returns true. A nil
 // skip archives everything.
 func CreateFiltered(ctx context.Context, tarPath, srcDir string, skip SkipFunc) error {
+	return create(ctx, tarPath, srcDir, skip, false)
+}
+
+// CreateWithRoot is Create plus a "./" entry carrying srcDir's own mode,
+// ownership, modification time, and xattrs, which Extract applies to dstDir.
+func CreateWithRoot(ctx context.Context, tarPath, srcDir string) error {
+	return CreateFilteredWithRoot(ctx, tarPath, srcDir, nil)
+}
+
+// CreateFilteredWithRoot is CreateWithRoot with entries omitted where skip
+// returns true. The root entry is never skipped.
+func CreateFilteredWithRoot(ctx context.Context, tarPath, srcDir string, skip SkipFunc) error {
+	return create(ctx, tarPath, srcDir, skip, true)
+}
+
+func create(ctx context.Context, tarPath, srcDir string, skip SkipFunc, includeRoot bool) error {
 	f, err := os.Create(tarPath)
 	if err != nil {
 		return fmt.Errorf("creating tar %q: %w", tarPath, err)
@@ -116,7 +132,7 @@ func CreateFiltered(ctx context.Context, tarPath, srcDir string, skip SkipFunc) 
 		tarWriterPool.Put(bw)
 	}()
 	tw := tar.NewWriter(bw)
-	if err := writeTree(ctx, tw, srcDir, skip); err != nil {
+	if err := writeTree(ctx, tw, srcDir, skip, includeRoot); err != nil {
 		return err
 	}
 	if err := tw.Close(); err != nil {
@@ -137,9 +153,9 @@ func CreateFiltered(ctx context.Context, tarPath, srcDir string, skip SkipFunc) 
 
 // writeTree walks srcDir in lexical order (filepath.WalkDir) and writes one
 // entry per path, omitting entries (and, for directories, subtrees) that skip
-// selects. The deterministic order keeps archives of identical trees
+// selects. srcDir itself is written as "./" only if includeRoot is set. The deterministic order keeps archives of identical trees
 // byte-comparable, which makes snapshot diffs meaningful.
-func writeTree(ctx context.Context, tw *tar.Writer, srcDir string, skip SkipFunc) error {
+func writeTree(ctx context.Context, tw *tar.Writer, srcDir string, skip SkipFunc, includeRoot bool) error {
 	// Maps an already-archived multi-link inode to the name it was archived
 	// under, so later links become tar hardlink entries instead of copies.
 	linked := map[inodeKey]string{}
@@ -152,10 +168,10 @@ func writeTree(ctx context.Context, tw *tar.Writer, srcDir string, skip SkipFunc
 		if err != nil {
 			return err
 		}
-		if rel == "." {
+		if rel == "." && !includeRoot {
 			return nil
 		}
-		if skip != nil && skip(filepath.ToSlash(rel)) {
+		if rel != "." && skip != nil && skip(filepath.ToSlash(rel)) {
 			if d.IsDir() {
 				return filepath.SkipDir
 			}
@@ -310,6 +326,10 @@ func Extract(tarPath, dstDir string) error {
 			return fmt.Errorf("invalid entry in tar %q: %w", tarPath, err)
 		}
 		if skip {
+			// A "./" entry (see CreateWithRoot) carries dstDir's own metadata.
+			if hdr.Name != "" && hdr.Typeflag == tar.TypeDir {
+				dirs["."] = hdr
+			}
 			continue
 		}
 		if err := extractEntry(root, tr, hdr, name, dirs); err != nil {
@@ -415,13 +435,18 @@ func replaceExisting(root *os.Root, name string) error {
 // restoreDirMeta applies the archived modes, ownership, and times to extracted
 // directories, deepest first: a directory's path is always longer than its
 // parent's, so length-descending order restores children before the parent's
-// mode can make them unreachable.
+// mode can make them unreachable. The root ("."), if archived, goes last.
 func restoreDirMeta(root *os.Root, dirs map[string]*tar.Header) error {
 	names := make([]string, 0, len(dirs))
 	for name := range dirs {
 		names = append(names, name)
 	}
-	sort.Slice(names, func(i, j int) bool { return len(names[i]) > len(names[j]) })
+	sort.Slice(names, func(i, j int) bool {
+		if names[i] == "." || names[j] == "." {
+			return names[j] == "."
+		}
+		return len(names[i]) > len(names[j])
+	})
 	for _, name := range names {
 		if err := restoreMeta(root, name, dirs[name]); err != nil {
 			return err

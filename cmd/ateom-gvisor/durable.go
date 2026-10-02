@@ -18,7 +18,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,10 +29,18 @@ import (
 	"github.com/agent-substrate/substrate/internal/tarutil"
 )
 
-// durableTarFile is the snapshot file holding the tar of the actor's durable-dir
-// volumes. Its entries are <volumeName>/... relative to
-// ActorDirs.durable_dir_volume_mounts_dir, so extraction restores the same layout.
-const durableTarFile = "durable-dir.tar"
+// durableTarFile is the snapshot file holding the tar of one durable-dir
+// volume: the contents of <volumeName> under
+// ActorDirs.durable_dir_volume_mounts_dir, plus a root entry for the volume
+// directory's own metadata. The volume directory itself comes from atelet,
+// never from the snapshot: runsc bind-mounts it by path, so a symlink planted
+// there would expose whatever it points at to the sandbox.
+func durableTarFile(volumeName string) (string, error) {
+	if volumeName == "" || volumeName == "." || strings.Contains(volumeName, "/") || !filepath.IsLocal(volumeName) {
+		return "", fmt.Errorf("invalid durable-dir volume name %q", volumeName)
+	}
+	return "durable-dir-" + volumeName + ".tar", nil
+}
 
 // hasDurableVolumes reports whether any container mounts a durable-dir volume.
 func hasDurableVolumes(containers []*ateompb.Container) bool {
@@ -42,36 +52,57 @@ func hasDurableVolumes(containers []*ateompb.Container) bool {
 	return false
 }
 
-// tarDurableVolumes archives the actor's durable-dir volumes (dir) into the
-// checkpoint directory. The caller must have paused the guest first.
+// tarDurableVolumes archives each durable-dir volume under dir into the
+// checkpoint directory, one tar per volume, and returns the file names. The
+// caller must have paused the guest first.
 //
 // Sockets the workload left behind and gVisor internal files (.gvisor.*) are
 // skipped rather than archived.
-func tarDurableVolumes(ctx context.Context, dir, checkpointDir string) error {
+func tarDurableVolumes(ctx context.Context, dir, checkpointDir string, volumes []string) ([]string, error) {
 	skip := func(rel string) bool {
 		base := filepath.Base(rel)
 		return strings.HasPrefix(base, ".gvisor.")
 	}
-	if err := tarutil.CreateFiltered(ctx, filepath.Join(checkpointDir, durableTarFile), dir, skip); err != nil {
-		return fmt.Errorf("while archiving durable-dir volumes from %q: %w", dir, err)
+	var files []string
+	for _, vol := range volumes {
+		name, err := durableTarFile(vol)
+		if err != nil {
+			return nil, err
+		}
+		if err := tarutil.CreateFilteredWithRoot(ctx, filepath.Join(checkpointDir, name), filepath.Join(dir, vol), skip); err != nil {
+			return nil, fmt.Errorf("while archiving durable-dir volume %q: %w", vol, err)
+		}
+		files = append(files, name)
 	}
-	return nil
+	return files, nil
 }
 
-// untarDurableVolumes restores the durable-dir volumes from a snapshot into the
-// actor's host directory (dir, which atelet has already created, empty).
-func untarDurableVolumes(dir, snapshotDir string) error {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("while creating durable-dir volumes dir %q: %w", dir, err)
-	}
-	if err := tarutil.Extract(filepath.Join(snapshotDir, durableTarFile), dir); err != nil {
-		return fmt.Errorf("while restoring durable-dir volumes into %q: %w", dir, err)
-	}
-	_ = filepath.Walk(dir, func(p string, info os.FileInfo, err error) error {
-		if err == nil && !info.IsDir() && strings.HasPrefix(info.Name(), ".gvisor.") {
-			_ = os.Remove(p)
+// untarDurableVolumes restores each durable-dir volume from the snapshot into
+// its directory under dir, which atelet has already created, empty. A volume
+// with no tar in the snapshot (added to the template since) stays empty.
+func untarDurableVolumes(dir, snapshotDir string, volumes []string) error {
+	for _, vol := range volumes {
+		name, err := durableTarFile(vol)
+		if err != nil {
+			return err
 		}
-		return nil
-	})
+		tarPath := filepath.Join(snapshotDir, name)
+		if _, err := os.Stat(tarPath); errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		volDir := filepath.Join(dir, vol)
+		if err := os.MkdirAll(volDir, 0o700); err != nil {
+			return fmt.Errorf("while creating durable-dir volume dir %q: %w", volDir, err)
+		}
+		if err := tarutil.Extract(tarPath, volDir); err != nil {
+			return fmt.Errorf("while restoring durable-dir volume %q: %w", vol, err)
+		}
+		_ = filepath.Walk(volDir, func(p string, info os.FileInfo, err error) error {
+			if err == nil && !info.IsDir() && strings.HasPrefix(info.Name(), ".gvisor.") {
+				_ = os.Remove(p)
+			}
+			return nil
+		})
+	}
 	return nil
 }

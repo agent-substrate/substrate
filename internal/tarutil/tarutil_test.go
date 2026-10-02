@@ -18,6 +18,7 @@ package tarutil
 
 import (
 	"archive/tar"
+	"context"
 	"errors"
 	"net"
 	"os"
@@ -652,5 +653,88 @@ func TestExtractSupportsDeviceEntry(t *testing.T) {
 	}
 	if st.Mode()&os.ModeCharDevice == 0 {
 		t.Errorf("extracted node mode = %v, want a character device", st.Mode())
+	}
+}
+
+// CreateWithRoot carries srcDir's own metadata, applied to dstDir; Create
+// leaves dstDir's alone.
+func TestCreateWithRootRestoresRootMeta(t *testing.T) {
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "f"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Lsetxattr(src, "user.root-attr", []byte("v"), 0); err != nil {
+		t.Skipf("filesystem does not support user xattrs: %v", err)
+	}
+	if err := os.Chmod(src, 0o750|os.ModeSetgid); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name     string
+		create   func(ctx context.Context, tarPath, srcDir string) error
+		wantMode os.FileMode
+		wantAttr bool
+	}{
+		{"CreateWithRoot", CreateWithRoot, 0o750 | os.ModeSetgid, true},
+		{"Create", Create, 0o755, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tarPath := filepath.Join(t.TempDir(), "root.tar")
+			if err := tc.create(t.Context(), tarPath, src); err != nil {
+				t.Fatalf("create: %v", err)
+			}
+			dst := filepath.Join(t.TempDir(), "dst")
+			if err := os.Mkdir(dst, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(dst, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := Extract(tarPath, dst); err != nil {
+				t.Fatalf("Extract: %v", err)
+			}
+			fi, err := os.Stat(dst)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := fi.Mode() & (os.ModePerm | os.ModeSetgid); got != tc.wantMode {
+				t.Errorf("dst mode = %v, want %v", got, tc.wantMode)
+			}
+			_, err = unix.Lgetxattr(dst, "user.root-attr", make([]byte, 8))
+			if gotAttr := err == nil; gotAttr != tc.wantAttr {
+				t.Errorf("dst has user.root-attr = %v (err %v), want %v", gotAttr, err, tc.wantAttr)
+			}
+			if b, err := os.ReadFile(filepath.Join(dst, "f")); err != nil || string(b) != "x" {
+				t.Errorf("f = %q, %v; want %q", b, err, "x")
+			}
+		})
+	}
+}
+
+// Only a directory "./" entry is root metadata: anything else at the root is
+// skipped, never created in place of dstDir.
+func TestExtractIgnoresNonDirRootEntry(t *testing.T) {
+	tarPath := filepath.Join(t.TempDir(), "root-symlink.tar")
+	f, err := os.Create(tarPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tw := tar.NewWriter(f)
+	if err := tw.WriteHeader(&tar.Header{Name: "./", Typeflag: tar.TypeSymlink, Linkname: "/"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	dst := t.TempDir()
+	if err := Extract(tarPath, dst); err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if fi, err := os.Lstat(dst); err != nil || !fi.IsDir() {
+		t.Errorf("dst: Lstat = %v, %v; want it still a directory", fi, err)
 	}
 }

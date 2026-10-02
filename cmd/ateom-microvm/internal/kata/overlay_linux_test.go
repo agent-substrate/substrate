@@ -59,9 +59,7 @@ func TestEnsureOCIMountpoints(t *testing.T) {
 
 // The kernel requires overlay upperdir and workdir on the same filesystem and
 // rejects a workdir nested inside (or equal to) upperdir — so they must be
-// SIBLINGS under the container's subdirectory of the actor's upper base. The
-// layout is also the snapshot tar's entry layout (<cid>/fs, <cid>/work), so a
-// change here breaks every overlay mount AND every existing snapshot.
+// SIBLINGS under the container's subdirectory of the actor's upper base.
 func TestUpperWorkDirsAreSiblings(t *testing.T) {
 	const base = "/var/lib/ateom-gvisor/actors/uid/rootfs-upper"
 	upper, work := UpperWorkDirs(base, "app")
@@ -74,10 +72,6 @@ func TestUpperWorkDirsAreSiblings(t *testing.T) {
 	}
 	if strings.HasPrefix(work+"/", upper+"/") {
 		t.Errorf("UpperWorkDirs: work %q is nested inside upper %q", work, upper)
-	}
-	// Tar-layout invariant: entries are <cid>/fs and <cid>/work.
-	if upper != filepath.Join(base, "app", "fs") || work != filepath.Join(base, "app", "work") {
-		t.Errorf("UpperWorkDirs = %q, %q; want the snapshot layout <base>/app/{fs,work}", upper, work)
 	}
 }
 
