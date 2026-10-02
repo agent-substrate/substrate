@@ -252,7 +252,7 @@ func TestEnsureAteletSuspended_DialFailureLeavesActorRetryable(t *testing.T) {
 			created := storetest.MustCreateActor(t, ctx, persistence, actor)
 
 			w := &ActorWorkflow{store: persistence, dialer: newDanglingDialer()}
-			if _, err := w.ensureAteletSuspended(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, created, &ateapipb.ActorTemplate{}); err == nil {
+			if _, _, err := w.ensureAteletSuspended(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, created, &ateapipb.ActorTemplate{}); err == nil {
 				t.Fatal("ensureAteletSuspended: want error when atelet is unreachable, got nil")
 			}
 
@@ -305,7 +305,7 @@ func TestEnsureSuspendedFinalized_NoAssignment(t *testing.T) {
 		Metadata:       &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "tmpl", Uid: "tmpl-uid-1"},
 		SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: testStorageLocation},
 	}
-	stored, err := w.ensureSuspendedFinalized(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, tmpl)
+	stored, err := w.ensureSuspendedFinalized(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, tmpl, nil)
 	if err != nil {
 		t.Fatalf("ensureSuspendedFinalized: %v", err)
 	}
@@ -384,7 +384,7 @@ func TestEnsureSuspendedFinalized_ReleasesReplacedSnapshot(t *testing.T) {
 				s.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: previous.String()}
 			})
 
-			stored, err := w.ensureSuspendedFinalized(ctx, actorRef, template)
+			stored, err := w.ensureSuspendedFinalized(ctx, actorRef, template, nil)
 			if err != nil {
 				t.Fatalf("ensureSuspendedFinalized: %v", err)
 			}
@@ -436,7 +436,7 @@ func TestEnsureSuspendedFinalized_CommitsDespiteObjectStoreFailure(t *testing.T)
 	})
 
 	objects.OnDelete = func(string, string) error { return errObjectStore }
-	stored, err := w.ensureSuspendedFinalized(ctx, actorRef, template)
+	stored, err := w.ensureSuspendedFinalized(ctx, actorRef, template, nil)
 	if err != nil {
 		t.Fatalf("ensureSuspendedFinalized: %v", err)
 	}
@@ -484,7 +484,7 @@ func TestEnsureSuspendedFinalized_KeepsReplacedSnapshotOnConflict(t *testing.T) 
 	})
 
 	w := &ActorWorkflow{store: &conflictingUpdateStore{Interface: persistence}, objectStore: objects}
-	if _, err := w.ensureSuspendedFinalized(ctx, actorRef, template); status.Code(err) != codes.Aborted {
+	if _, err := w.ensureSuspendedFinalized(ctx, actorRef, template, nil); status.Code(err) != codes.Aborted {
 		t.Fatalf("ensureSuspendedFinalized = %v, want code Aborted", err)
 	}
 	if len(objects.Snapshot(t, previous)) == 0 {
@@ -569,7 +569,7 @@ func TestEnsureSuspendedFinalized_ReleasesOnlyOwnWorker(t *testing.T) {
 
 			w := &ActorWorkflow{store: persistence}
 			tmpl := &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://bucket/root"}}
-			if _, err := w.ensureSuspendedFinalized(ctx, resources.ActorRef{Atespace: "team-a", Name: "shared"}, tmpl); err != nil {
+			if _, err := w.ensureSuspendedFinalized(ctx, resources.ActorRef{Atespace: "team-a", Name: "shared"}, tmpl, nil); err != nil {
 				t.Fatalf("ensureSuspendedFinalized: %v", err)
 			}
 
@@ -709,7 +709,7 @@ func TestEnsurePausedSnapshotUploaded_Preconditions(t *testing.T) {
 			},
 		})
 
-		if _, err := w.ensurePausedSnapshotUploaded(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, created, &ateapipb.ActorTemplate{}); err == nil {
+		if _, _, err := w.ensurePausedSnapshotUploaded(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, created, &ateapipb.ActorTemplate{}); err == nil {
 			t.Fatal("ensurePausedSnapshotUploaded = nil, want error for missing node record")
 		}
 
@@ -737,7 +737,7 @@ func TestEnsurePausedSnapshotUploaded_Preconditions(t *testing.T) {
 		})
 
 		tmpl := &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://snapshots"}}
-		_, err := w.ensurePausedSnapshotUploaded(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, created, tmpl)
+		_, _, err := w.ensurePausedSnapshotUploaded(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, created, tmpl)
 		if !errors.Is(err, ErrNoAteletOnNode) {
 			t.Fatalf("ensurePausedSnapshotUploaded = %v, want ErrNoAteletOnNode", err)
 		}

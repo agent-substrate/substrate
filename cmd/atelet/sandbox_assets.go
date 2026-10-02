@@ -33,7 +33,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -44,11 +43,6 @@ import (
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/objectstorage"
 )
-
-// sandboxManifestName is the object/file name of the per-snapshot manifest that
-// records the actor identity, snapshot files, and sandbox binaries. It is written
-// next to the checkpoint images so a snapshot is self-describing.
-const sandboxManifestName = "manifest.json"
 
 // maxAssetBytes guards disk against an unbounded download URL; a var so tests can lower it.
 // ponytail: 8GiB ceiling, make it a flag if a rootfs ever needs more.
@@ -76,38 +70,13 @@ type assetEntry struct {
 // asset set keyed by asset name (gVisor uses a single "gvisor" release-tarball
 // asset; records written before the tarball release mechanism use a bare
 // "runsc" asset).
-// It is both the per-actor on-node record (written at Run/Restore, read at
-// Checkpoint) and the snapshot manifest (written at Checkpoint, read at
-// Restore).
+// It is the per-actor on-node record, written at Run/Restore and read at
+// Checkpoint.
 type sandboxAssetsRecord struct {
 	SandboxClass string                `json:"sandboxClass"`
 	Assets       map[string]assetEntry `json:"assets"`
-	// PauseImage is the root sandbox container's image. It is recorded here
-	// rather than taken from the request at Restore so a snapshot is rebuilt
-	// with the same sandbox it was captured from.
+	// PauseImage is the root sandbox container's image.
 	PauseImage string `json:"pauseImage"`
-	// Actor identity makes a flat snapshot self-identifying if control-plane
-	// persistence is unavailable.
-	Atespace              string `json:"atespace,omitempty"`
-	ActorName             string `json:"actorName,omitempty"`
-	ActorUID              string `json:"actorUid,omitempty"`
-	ActorTemplateAtespace string `json:"actorTemplateAtespace,omitempty"`
-	ActorTemplateName     string `json:"actorTemplateName,omitempty"`
-	// SnapshotFiles are the (relative) names of the files ateom wrote into the
-	// checkpoint directory, as reported by CheckpointWorkloadResponse. Recorded
-	// in the snapshot manifest so Restore ships/downloads exactly this set
-	// (gVisor's image files, cloud-hypervisor's snapshot set, ...). Empty in the
-	// on-node record written at Run/Restore; populated at Checkpoint.
-	SnapshotFiles []string `json:"snapshotFiles,omitempty"`
-	// DataSnapshotFiles is the subset of SnapshotFiles that restores the actor
-	// at DATA scope on its own, as reported by CheckpointWorkloadResponse.
-	// Empty when the capture holds no durable data.
-	DataSnapshotFiles []string `json:"dataSnapshotFiles,omitempty"`
-	// Scope is the snapshot scope the checkpoint captured, as the shared
-	// ateattr label ("full" or "data"), so a snapshot's content is knowable
-	// from the manifest alone. Empty in the on-node record written at
-	// Run/Restore and in snapshot manifests written before this field existed.
-	Scope string `json:"scope,omitempty"`
 }
 
 // recordFromRequest projects a request's per-architecture SandboxAssets onto the
@@ -457,7 +426,7 @@ func (s *AteomHerder) openAsset(ctx context.Context, url string) (io.ReadCloser,
 
 // writeSandboxRecord persists the actor's running sandbox assets on-node so a
 // later Checkpoint (whose request no longer carries the sandbox config) can
-// re-fetch the same binaries and pin them into the snapshot manifest.
+// re-fetch the same binaries.
 func writeSandboxRecord(actorUID string, rec *sandboxAssetsRecord) error {
 	data, err := json.Marshal(rec)
 	if err != nil {
@@ -487,51 +456,14 @@ func readSandboxRecord(actorUID string) (*sandboxAssetsRecord, error) {
 func unmarshalSandboxRecord(data []byte) (*sandboxAssetsRecord, error) {
 	rec := &sandboxAssetsRecord{}
 	if err := json.Unmarshal(data, rec); err != nil {
-		return nil, fmt.Errorf("while parsing sandbox record/manifest: %w", err)
+		return nil, fmt.Errorf("while parsing sandbox record: %w", err)
 	}
 	// Fail loudly rather than let an empty image reach the image pull: a record
-	// without one predates the pause image moving into the sandbox config, and
-	// its snapshot cannot be rebuilt with a known-matching sandbox.
+	// without one predates the pause image moving into the sandbox config.
 	if rec.PauseImage == "" {
-		return nil, fmt.Errorf("sandbox record/manifest has no pauseImage")
-	}
-	if err := validateSnapshotFiles(rec.SnapshotFiles); err != nil {
-		return nil, fmt.Errorf("sandbox record/manifest has invalid snapshotFiles: %w", err)
-	}
-	if err := validateDataSnapshotFiles(rec.SnapshotFiles, rec.DataSnapshotFiles); err != nil {
-		return nil, fmt.Errorf("sandbox record/manifest has invalid dataSnapshotFiles: %w", err)
+		return nil, fmt.Errorf("sandbox record has no pauseImage")
 	}
 	return rec, nil
-}
-
-// validateSnapshotFiles requires each name to be a distinct plain file name in
-// the checkpoint directory, other than the manifest atelet writes beside them.
-// Actual file access must still use os.Root so symlinks cannot escape that
-// directory.
-func validateSnapshotFiles(files []string) error {
-	seen := make(map[string]bool, len(files))
-	for i, name := range files {
-		switch {
-		case name != filepath.Base(name) || !filepath.IsLocal(name) || name == ".":
-			return fmt.Errorf("snapshotFiles[%d] %q is not a file name in the checkpoint directory", i, name)
-		case name == sandboxManifestName:
-			return fmt.Errorf("snapshotFiles[%d] %q is reserved for the snapshot manifest", i, name)
-		case seen[name]:
-			return fmt.Errorf("snapshotFiles[%d] %q is duplicated", i, name)
-		}
-		seen[name] = true
-	}
-	return nil
-}
-
-// validateDataSnapshotFiles requires each data file to be one of files.
-func validateDataSnapshotFiles(files, dataFiles []string) error {
-	for _, name := range dataFiles {
-		if !slices.Contains(files, name) {
-			return fmt.Errorf("data snapshot file %q is not one of the snapshot files", name)
-		}
-	}
-	return nil
 }
 
 func wrapFileSystemErr(msg string, err error) error {

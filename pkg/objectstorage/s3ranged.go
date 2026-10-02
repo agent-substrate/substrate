@@ -29,6 +29,21 @@ import (
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
+// StatObject looks the object up by its metadata alone. A HEAD response has
+// no body, so absence arrives as a bare 404, which objectAbsent classifies.
+func (s *s3Client) StatObject(ctx context.Context, bucket, object string) error {
+	if _, err := s.client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(object),
+	}); err != nil {
+		if objectAbsent(err) {
+			return fmt.Errorf("%w: S3 Bucket:%q, Object:%q", ErrObjectNotFound, bucket, object)
+		}
+		return err
+	}
+	return nil
+}
+
 // GetObject streams the object, fetching it as parallel byte ranges when it spans
 // more than one chunk (see rangedget.go). Smaller objects stay a single request.
 //

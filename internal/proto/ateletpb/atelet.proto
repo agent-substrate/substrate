@@ -173,8 +173,8 @@ service AteomHerder {
 
   // UploadPausedCheckpoint copies a local (pause) checkpoint from this node's
   // disk to object storage. Unlike Checkpoint it drives no ateom: the actor is
-  // paused, its sandbox is gone; the checkpoint files plus their manifest
-  // already sit under the actor's local-checkpoints directory.
+  // paused, its sandbox is gone; the checkpoint files already sit under the
+  // actor's local-checkpoints directory.
   rpc UploadPausedCheckpoint(UploadPausedCheckpointRequest) returns (UploadPausedCheckpointResponse) {}
 
   // Terminate tells atelet to terminate/kill any running workload for an actor,
@@ -212,7 +212,7 @@ message RunRequest {
 
   // The sandbox binaries to use for booting this actor from scratch. atelet
   // fetches the relevant assets and records them with the actor's on-node state
-  // so a later Checkpoint can pin the same version into the snapshot manifest.
+  // so a later Checkpoint runs the same version.
   SandboxAssets sandbox_assets = 8;
 
   // When absent the actor has no egress: its TCP is captured and refused.
@@ -257,9 +257,7 @@ message SandboxAssets {
   map<string, ArchAssets> assets = 2; // arch -> {name -> file}
 
   // pause_image is the image for the sandbox's root container. Like the
-  // binaries above it is sandbox configuration, not workload configuration,
-  // and atelet pins it into the snapshot manifest so a restore rebuilds the
-  // sandbox from the same image.
+  // binaries above it is sandbox configuration, not workload configuration.
   string pause_image = 3;
 }
 
@@ -457,8 +455,8 @@ message CheckpointRequest {
   string actor_template_name = 6;
 
   // Sandbox binary config is not sent on checkpoint: atelet uses the version the
-  // actor is currently running (recorded with the actor's on-node state at
-  // Run/Restore) and records it into the snapshot manifest.
+  // actor is currently running, recorded with the actor's on-node state at
+  // Run/Restore.
   WorkloadSpec spec = 7;
 
   CheckpointType type = 8;
@@ -474,6 +472,13 @@ message CheckpointRequest {
 }
 
 message CheckpointResponse {
+  // The files the snapshot consists of, as relative names in the snapshot
+  // directory, reported by ateom.
+  repeated string snapshot_files = 1;
+
+  // The subset of snapshot_files that restores the actor at DATA scope on
+  // its own, reported by ateom. Empty when the capture holds no durable data.
+  repeated string data_snapshot_files = 2;
 }
 
 message UploadPausedCheckpointRequest {
@@ -493,14 +498,36 @@ message UploadPausedCheckpointRequest {
   string destination_snapshot_uri = 7;
 
   // Scope the uploaded snapshot must have (the commit scope; FULL or DATA).
-  // The scope the pause checkpoint captured is not sent: atelet reads it from
-  // the local snapshot's own manifest, which is authoritative. When they
-  // differ, atelet converts where possible (a FULL capture to a DATA upload
-  // of the data-scope files ateom reported) and rejects otherwise.
+  // When it differs from captured_scope, atelet converts where possible (a
+  // FULL capture to a DATA upload of data_snapshot_files) and rejects
+  // otherwise.
   SnapshotScope desired_scope = 8;
+
+  // The files of the local snapshot, as recorded when the pause captured it.
+  // atelet uploads the subset that desired_scope needs.
+  repeated string snapshot_files = 9;
+
+  // The scope the pause checkpoint captured (FULL or DATA), as recorded on
+  // the actor's LocalSnapshot. With desired_scope, snapshot_files and
+  // data_snapshot_files it determines the files the upload writes, including
+  // on a retry after the local snapshot was pruned.
+  SnapshotScope captured_scope = 10;
+
+  // The sandbox class the pause checkpoint was captured with (e.g.
+  // "gvisor"), from the ActorTemplate's sandbox_config. It labels the upload
+  // metrics.
+  string sandbox_class = 11;
+
+  // The subset of snapshot_files that restores the actor at DATA scope, as
+  // recorded on the actor's LocalSnapshot. A FULL capture uploaded as DATA
+  // writes exactly these files; empty means it has no durable data.
+  repeated string data_snapshot_files = 12;
 }
 
 message UploadPausedCheckpointResponse {
+  // The files the uploaded snapshot consists of, as relative names in the
+  // snapshot directory.
+  repeated string snapshot_files = 1;
 }
 
 message RestoreRequest {
@@ -539,6 +566,10 @@ message RestoreRequest {
   // The sandbox binaries and pause image to restore with, resolved from the
   // ActorTemplate's SandboxConfig. Required.
   SandboxAssets sandbox_assets = 16;
+
+  // The files of the snapshot referenced by `config`, as recorded when it
+  // was taken.
+  repeated string snapshot_files = 17;
 }
 
 message RestoreResponse {

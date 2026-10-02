@@ -127,6 +127,9 @@ type FakeAteletServer struct {
 	UploadCalled  bool
 	UploadRequest *ateletpb.UploadPausedCheckpointRequest
 	FailUpload    error
+	// UploadedFiles, when set, is what UploadPausedCheckpoint reports it
+	// uploaded; otherwise it reports the request's files.
+	UploadedFiles []string
 
 	TerminateCalled  bool
 	TerminateRequest *ateletpb.TerminateRequest
@@ -142,6 +145,13 @@ type FakeAteletServer struct {
 // arbitrary: nothing in the control plane reads them, it only copies and
 // deletes whatever shares the snapshot's prefix.
 var snapshotObjects = []string{"manifest.json", "memory.zst"}
+
+// checkpointFiles are the snapshot files the fake Checkpoint reports.
+var checkpointFiles = []string{"checkpoint.img", "durable-dir.tar"}
+
+// checkpointDataFiles is the data-scope subset of checkpointFiles the fake
+// atelet reports.
+var checkpointDataFiles = []string{"durable-dir.tar"}
 
 // SetObjectStore points the fake at the store a checkpoint should write to.
 func (f *FakeAteletServer) SetObjectStore(store *objectstoretest.Fake) {
@@ -179,6 +189,7 @@ func (f *FakeAteletServer) Reset() {
 	f.UploadCalled = false
 	f.UploadRequest = nil
 	f.FailUpload = nil
+	f.UploadedFiles = nil
 
 	f.TerminateCalled = false
 	f.TerminateRequest = nil
@@ -199,7 +210,11 @@ func (f *FakeAteletServer) UploadPausedCheckpoint(ctx context.Context, req *atel
 	if err := f.writeSnapshot(req.GetDestinationSnapshotUri()); err != nil {
 		return nil, err
 	}
-	return &ateletpb.UploadPausedCheckpointResponse{}, nil
+	files := req.GetSnapshotFiles()
+	if f.UploadedFiles != nil {
+		files = f.UploadedFiles
+	}
+	return &ateletpb.UploadPausedCheckpointResponse{SnapshotFiles: files}, nil
 }
 
 func (f *FakeAteletServer) Run(ctx context.Context, req *ateletpb.RunRequest) (*ateletpb.RunResponse, error) {
@@ -228,7 +243,7 @@ func (f *FakeAteletServer) Checkpoint(ctx context.Context, req *ateletpb.Checkpo
 	if err := f.writeSnapshot(req.GetExternalConfig().GetSnapshotUri()); err != nil {
 		return nil, err
 	}
-	return &ateletpb.CheckpointResponse{}, nil
+	return &ateletpb.CheckpointResponse{SnapshotFiles: checkpointFiles, DataSnapshotFiles: checkpointDataFiles}, nil
 }
 
 func (f *FakeAteletServer) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (*ateletpb.RestoreResponse, error) {

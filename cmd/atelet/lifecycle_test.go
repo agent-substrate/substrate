@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"testing"
 
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
@@ -192,7 +193,7 @@ func TestLocalSnapshotGC(t *testing.T) {
 	}
 
 	// Pause: a local checkpoint, which leaves the snapshot on this node.
-	if _, err := s.Checkpoint(ctx, &ateletpb.CheckpointRequest{
+	checkpointResp, err := s.Checkpoint(ctx, &ateletpb.CheckpointRequest{
 		Atespace:              atespace,
 		ActorName:             actorName,
 		ActorUid:              actorUID,
@@ -205,12 +206,22 @@ func TestLocalSnapshotGC(t *testing.T) {
 		Config: &ateletpb.CheckpointRequest_LocalConfig{
 			LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: snapshotName},
 		},
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("Checkpoint: %v", err)
+	}
+	if got, want := checkpointResp.GetSnapshotFiles(), []string{"checkpoint.img"}; !slices.Equal(got, want) {
+		t.Errorf("Checkpoint reported snapshot files %v, want %v", got, want)
 	}
 	snapshotFile := filepath.Join(ateletpath.LocalSnapshotDir(actorUID, snapshotName), "checkpoint.img")
 	if _, err := os.Stat(snapshotFile); err != nil {
 		t.Fatalf("pause did not write the local snapshot: %v", err)
+	}
+	// The snapshot is only its files: the control plane records the list.
+	if entries, err := os.ReadDir(ateletpath.LocalSnapshotDir(actorUID, snapshotName)); err != nil {
+		t.Fatalf("reading local snapshot dir: %v", err)
+	} else if len(entries) != 1 {
+		t.Errorf("local snapshot dir holds %d entries, want only checkpoint.img", len(entries))
 	}
 
 	// Resume: restores from that local snapshot.
@@ -228,6 +239,7 @@ func TestLocalSnapshotGC(t *testing.T) {
 		Config: &ateletpb.RestoreRequest_LocalConfig{
 			LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: snapshotName},
 		},
+		SnapshotFiles: checkpointResp.GetSnapshotFiles(),
 	}); err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
@@ -278,8 +290,7 @@ func TestLocalSnapshotGC(t *testing.T) {
 }
 
 // TestRestoreUsesRequestSandboxAssets checks that Restore runs the actor with
-// the sandbox assets on the request, not the ones recorded in the snapshot
-// manifest.
+// the sandbox assets on the request, not the ones it was checkpointed with.
 func TestRestoreUsesRequestSandboxAssets(t *testing.T) {
 	useTempNodeDirs(t)
 	ctx := t.Context()
@@ -341,7 +352,7 @@ func TestRestoreUsesRequestSandboxAssets(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 
-	if _, err := s.Checkpoint(ctx, &ateletpb.CheckpointRequest{
+	checkpointResp, err := s.Checkpoint(ctx, &ateletpb.CheckpointRequest{
 		Atespace:              atespace,
 		ActorName:             actorName,
 		ActorUid:              actorUID,
@@ -354,20 +365,9 @@ func TestRestoreUsesRequestSandboxAssets(t *testing.T) {
 		Config: &ateletpb.CheckpointRequest_LocalConfig{
 			LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: snapshotName},
 		},
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("Checkpoint: %v", err)
-	}
-
-	manifest, err := os.ReadFile(filepath.Join(ateletpath.LocalSnapshotDir(actorUID, snapshotName), sandboxManifestName))
-	if err != nil {
-		t.Fatalf("reading snapshot manifest: %v", err)
-	}
-	manifestRec, err := unmarshalSandboxRecord(manifest)
-	if err != nil {
-		t.Fatalf("unmarshalling snapshot manifest: %v", err)
-	}
-	if manifestRec.PauseImage != checkpointPause {
-		t.Fatalf("manifest pause image = %q, want %q", manifestRec.PauseImage, checkpointPause)
 	}
 
 	if _, err := s.Restore(ctx, &ateletpb.RestoreRequest{
@@ -384,6 +384,7 @@ func TestRestoreUsesRequestSandboxAssets(t *testing.T) {
 		Config: &ateletpb.RestoreRequest_LocalConfig{
 			LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: snapshotName},
 		},
+		SnapshotFiles: checkpointResp.GetSnapshotFiles(),
 	}); err != nil {
 		t.Fatalf("Restore: %v", err)
 	}

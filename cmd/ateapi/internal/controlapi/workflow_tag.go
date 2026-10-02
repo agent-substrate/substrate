@@ -297,10 +297,12 @@ func (w *ActorWorkflow) ensureTagFinalized(ctx context.Context, tag *ateapipb.Ta
 	defer func() { err = done(err) }()
 
 	tagRef := resources.TagRefFromTag(tag)
-	// The copy is byte-identical to the source, so it carries the same content.
+	// The copy is byte-identical to the source, so it carries the same content
+	// and files.
 	finalSnapshot := &ateapipb.ExternalSnapshot{
-		SnapshotUri:  dst.String(),
-		ContentScope: snapshot.GetContentScope(),
+		SnapshotUri:   dst.String(),
+		ContentScope:  snapshot.GetContentScope(),
+		SnapshotFiles: snapshot.GetSnapshotFiles(),
 	}
 	stored, err := w.store.UpdateTag(ctx, tagRef, store.PreconditionFrom(tag), func(toUpdate *ateapipb.Tag) error {
 		toUpdate.Status.Snapshot = finalSnapshot

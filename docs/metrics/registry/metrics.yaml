@@ -271,7 +271,7 @@ groups:
                 The default is not gvisor. Thus a bad record stays visible.
                 ateapi reports it for a Worker that CreateWorker accepted with
                 no class, and for an ActorTemplate with no sandbox config.
-                atelet reports it for a snapshot manifest with no class.
+                atelet reports it for a request or on-node record with no class.
 
   - id: registry.ate.snapshot
     type: attribute_group
@@ -332,10 +332,6 @@ groups:
               stability: development
               value: volume_mount
               brief: Restore. atelet mounts the volumes of the actor.
-            - id: manifest_fetch
-              stability: development
-              value: manifest_fetch
-              brief: Restore. atelet reads the snapshot manifest.
             - id: sandbox_assets
               stability: development
               value: sandbox_assets
@@ -862,8 +858,8 @@ groups:
       - ref: ate.snapshot.phase
         requirement_level: required
       - ref: ate.snapshot.kind
-        requirement_level:
-          conditionally_required: atelet read the snapshot manifest. The boot value does not occur on this instrument.
+        requirement_level: required
+        note: The boot value does not occur on this instrument.
       - ref: ate.sandbox.class
         requirement_level:
           conditionally_required: The class is known.
