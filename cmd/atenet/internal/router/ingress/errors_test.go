@@ -62,9 +62,9 @@ func TestMapResumeError(t *testing.T) {
 		},
 		{
 			name:     "FailedPrecondition maps to 503 and preserves desc",
-			err:      status.Error(codes.FailedPrecondition, "no free workers available"),
+			err:      status.Error(codes.FailedPrecondition, "no worker has room for the actor"),
 			wantCode: envoy_type.StatusCode_ServiceUnavailable,
-			wantBody: `actor team-a/ctr6 unavailable: no free workers available`,
+			wantBody: `actor team-a/ctr6 unavailable: no worker has room for the actor`,
 		},
 		{
 			name:     "Unavailable maps to 503",
@@ -92,9 +92,9 @@ func TestMapResumeError(t *testing.T) {
 		},
 		{
 			name:     "budget exhausted on capacity keeps a clean body through the wrapper",
-			err:      &budgetExhaustedError{lastErr: status.Error(codes.FailedPrecondition, "no free workers available")},
+			err:      &budgetExhaustedError{lastErr: status.Error(codes.FailedPrecondition, "no worker has room for the actor")},
 			wantCode: envoy_type.StatusCode_ServiceUnavailable,
-			wantBody: `actor team-a/ctr6 unavailable: no free workers available`,
+			wantBody: `actor team-a/ctr6 unavailable: no worker has room for the actor`,
 		},
 		{
 			name:     "bare context.Canceled maps to 408 client-gone, not 500",
@@ -124,9 +124,9 @@ func TestMapResumeError(t *testing.T) {
 			// Pool saturation is 503, not 429: the fleet is full, the caller
 			// did not send too many requests.
 			name:     "ResourceExhausted maps to 503 preserving the description",
-			err:      status.Error(codes.ResourceExhausted, "no free workers available"),
+			err:      status.Error(codes.ResourceExhausted, "no worker has room for the actor"),
 			wantCode: envoy_type.StatusCode_ServiceUnavailable,
-			wantBody: `actor team-a/ctr6 unavailable: no free workers available`,
+			wantBody: `actor team-a/ctr6 unavailable: no worker has room for the actor`,
 		},
 		{
 			name:     "unknown gRPC code maps to 500 without leaking desc",

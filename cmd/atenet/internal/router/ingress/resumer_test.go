@@ -196,7 +196,7 @@ func TestActorResumer_ResumeActor(t *testing.T) {
 				resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
 					resumeCalled.Add(1)
 					<-gate
-					return nil, status.Error(codes.ResourceExhausted, "no free workers available")
+					return nil, status.Error(codes.ResourceExhausted, "no worker has room for the actor")
 				},
 			}
 
@@ -327,7 +327,7 @@ func TestActorResumer_Parking(t *testing.T) {
 					mu.Unlock()
 					if n < 3 {
 						// Worker pool momentarily saturated.
-						return nil, status.Error(codes.FailedPrecondition, "no free workers available")
+						return nil, status.Error(codes.FailedPrecondition, "no worker has room for the actor")
 					}
 					return &ateapipb.ResumeActorResponse{
 						Actor: &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: testActorName}, Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING, WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIps: []string{expectedIP}}}},
@@ -360,7 +360,7 @@ func TestActorResumer_Parking(t *testing.T) {
 					mu.Lock()
 					calls++
 					mu.Unlock()
-					return nil, status.Error(codes.FailedPrecondition, "no free workers available")
+					return nil, status.Error(codes.FailedPrecondition, "no worker has room for the actor")
 				},
 			}
 
@@ -468,7 +468,7 @@ func TestActorResumer_Parking(t *testing.T) {
 					attemptStarts = append(attemptStarts, time.Since(base))
 					mu.Unlock()
 					if n == 1 {
-						return nil, status.Error(codes.ResourceExhausted, "no free workers available")
+						return nil, status.Error(codes.ResourceExhausted, "no worker has room for the actor")
 					}
 					// The restore overshoots the budget, as it routinely does
 					// under CI node contention.
@@ -518,7 +518,7 @@ func TestActorResumer_Parking(t *testing.T) {
 					calls++
 					mu.Unlock()
 					time.Sleep(budget + 100*time.Millisecond)
-					return nil, status.Error(codes.ResourceExhausted, "no free workers available")
+					return nil, status.Error(codes.ResourceExhausted, "no worker has room for the actor")
 				},
 			}
 
@@ -548,7 +548,7 @@ func TestActorResumer_Parking(t *testing.T) {
 					mu.Lock()
 					calls++
 					mu.Unlock()
-					return nil, status.Error(codes.FailedPrecondition, "no free workers available")
+					return nil, status.Error(codes.FailedPrecondition, "no worker has room for the actor")
 				},
 			}
 
@@ -733,7 +733,7 @@ func TestActorResumer_LotAdmission(t *testing.T) {
 					n := calls
 					mu.Unlock()
 					if n == 1 {
-						return nil, status.Error(codes.ResourceExhausted, "no free workers available")
+						return nil, status.Error(codes.ResourceExhausted, "no worker has room for the actor")
 					}
 					// By the retry, the parked caller must already hold its
 					// slot: the bubble advances past the backoff sleep only
@@ -785,7 +785,7 @@ func TestActorResumer_LotAdmission(t *testing.T) {
 					mu.Lock()
 					calls++
 					mu.Unlock()
-					return nil, status.Error(codes.ResourceExhausted, "no free workers available")
+					return nil, status.Error(codes.ResourceExhausted, "no worker has room for the actor")
 				},
 			}
 
@@ -830,7 +830,7 @@ func TestActorResumer_LotAdmission(t *testing.T) {
 					n := calls
 					mu.Unlock()
 					if n == 1 {
-						return nil, status.Error(codes.ResourceExhausted, "no free workers available")
+						return nil, status.Error(codes.ResourceExhausted, "no worker has room for the actor")
 					}
 					<-proceed
 					return runningResp(), nil
@@ -891,7 +891,7 @@ func TestActorResumer_LotAdmission(t *testing.T) {
 					in *ateapipb.ResumeActorRequest,
 					opts ...grpc.CallOption,
 				) (*ateapipb.ResumeActorResponse, error) {
-					return nil, status.Error(codes.ResourceExhausted, "no free workers available")
+					return nil, status.Error(codes.ResourceExhausted, "no worker has room for the actor")
 				},
 			}
 
@@ -928,7 +928,7 @@ func TestActorResumer_LotAdmission(t *testing.T) {
 					n := calls
 					mu.Unlock()
 					if n == 1 {
-						return nil, status.Error(codes.ResourceExhausted, "no free workers available")
+						return nil, status.Error(codes.ResourceExhausted, "no worker has room for the actor")
 					}
 					<-proceed
 					return runningResp(), nil

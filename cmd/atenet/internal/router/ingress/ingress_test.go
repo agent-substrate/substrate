@@ -175,9 +175,9 @@ func TestHandleRequestHeaders(t *testing.T) {
 		{
 			name:           "FailedPrecondition maps to 503 with preserved desc",
 			authority:      testUUID + ".team-a.actors.resources.substrate.ate.dev",
-			resumeErr:      status.Error(codes.FailedPrecondition, "no free workers available"),
+			resumeErr:      status.Error(codes.FailedPrecondition, "no worker has room for the actor"),
 			expectErr:      true,
-			expectedErrStr: `actor team-a/123e4567-e89b-12d3-a456-426614174000 unavailable: no free workers available`,
+			expectedErrStr: `actor team-a/123e4567-e89b-12d3-a456-426614174000 unavailable: no worker has room for the actor`,
 			expectedStatus: envoy_type.StatusCode_ServiceUnavailable,
 		},
 		{
@@ -486,7 +486,7 @@ func TestHandleRequestHeaders_FullLotShedsParkedRequest(t *testing.T) {
 				opts ...grpc.CallOption,
 			) (*ateapipb.ResumeActorResponse, error) {
 				resumeCalls.Add(1)
-				return nil, status.Error(codes.ResourceExhausted, "no free workers available")
+				return nil, status.Error(codes.ResourceExhausted, "no worker has room for the actor")
 			},
 		}
 

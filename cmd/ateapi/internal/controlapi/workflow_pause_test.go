@@ -32,7 +32,7 @@ import (
 //
 // Old behavior: NodeVmsWithLocalSnapshots = []string{""}, which made the
 // scheduler's node restriction search for a worker with node name "", never
-// found, a permanent "no free workers available" on resume.
+// found, a permanent "no worker has room for the actor" on resume.
 //
 // Current behavior: NodeVmsWithLocalSnapshots is left nil, and the actor is
 // crashed instead of left PAUSED, since a local snapshot with an unknown node

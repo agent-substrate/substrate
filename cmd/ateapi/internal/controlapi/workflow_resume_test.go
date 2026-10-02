@@ -259,7 +259,7 @@ func TestAssignWorkerAttempt_SkipsWorkerAssignedInOtherAtespace(t *testing.T) {
 	}
 	_, _, err := w.assignWorkerAttempt(ctx, resources.ActorRef{Atespace: "team-a", Name: "shared"}, actor, tmpl)
 	if status.Code(err) != codes.ResourceExhausted {
-		t.Fatalf("assignWorkerAttempt() error = %v, want ResourceExhausted (no free workers)", err)
+		t.Fatalf("assignWorkerAttempt() error = %v, want ResourceExhausted (no worker has room)", err)
 	}
 
 	stored := firstAssignment(t, persistence, testWorkerUID("pod-1"))

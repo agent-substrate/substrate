@@ -117,8 +117,8 @@ func mapResumeError(actorRef resources.ActorRef, err error) error {
 		re.Msg = fmt.Sprintf("actor %s authentication required", actorRef)
 	case codes.ResourceExhausted:
 		// Preserve the gRPC description for ResourceExhausted. It carries actionable
-		// client-facing context (e.g. "no free workers available") and are not
-		// security-sensitive.
+		// client-facing context (e.g. "no worker has room for the actor") and are
+		// not security-sensitive.
 		// Pool saturation (ResourceExhausted) is 503 rather than 429: the fleet is
 		// full, the caller did not send too many requests.
 		re.StatusCode = int(envoy_type.StatusCode_ServiceUnavailable)
