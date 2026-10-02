@@ -174,17 +174,22 @@ func main() {
 		}
 	}
 
-	// EgressMITMTrustReconciler watches the Secret `egress-mitm-ca-pool`.
+	// EgressMITMTrustReconciler and ActorJWKSReconciler each watch one Secret
+	// in the system namespace. A cache takes only one field selector per
+	// namespace, so the Secret cache covers the namespace.
 	systemNamespace := installdefaults.NamespaceFromPodEnv()
-	egressMITMCAPool := controllers.EgressMITMCAPoolRef(systemNamespace)
+	actorJWKS := controllers.ActorJWKSRef(systemNamespace)
 	mgr, err := ctrl.NewManager(k8sConfig, ctrl.Options{
 		Scheme: scheme,
 		Cache: cache.Options{
 			ByObject: map[client.Object]cache.ByObject{
 				&corev1.Secret{}: {
+					Namespaces: map[string]cache.Config{systemNamespace: {}},
+				},
+				&corev1.ConfigMap{}: {
 					Namespaces: map[string]cache.Config{
-						egressMITMCAPool.Namespace: {
-							FieldSelector: fields.OneTermEqualSelector("metadata.name", egressMITMCAPool.Name),
+						actorJWKS.Namespace: {
+							FieldSelector: fields.OneTermEqualSelector("metadata.name", actorJWKS.Name),
 						},
 					},
 				},
@@ -227,6 +232,14 @@ func main() {
 		SystemNamespace: systemNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "EgressMITMTrust")
+		os.Exit(1)
+	}
+
+	if err = (&controllers.ActorJWKSReconciler{
+		Client:          mgr.GetClient(),
+		SystemNamespace: systemNamespace,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ActorJWKS")
 		os.Exit(1)
 	}
 
