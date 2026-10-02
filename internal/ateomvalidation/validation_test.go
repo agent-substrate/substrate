@@ -26,9 +26,8 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
-// Every request is validated. Still opaque: egress_gateway, the wakeup probe,
-// and the items of the four mount lists; their contents get rules in
-// follow-ups.
+// Every request is validated down to its leaves: identity, paths, the spec's
+// containers, their probes and mounts, and the egress gateway.
 
 func fullSpec() *ateompb.WorkloadSpec {
 	return &ateompb.WorkloadSpec{Containers: []*ateompb.Container{{
@@ -418,8 +417,10 @@ func TestValidateWorkloadSpec(t *testing.T) {
 	}
 }
 
-// The mount lists' items and the probe are still opaque; the list rules
-// (no nil entries, at most 32, unique mount paths) apply already.
+// The list rules (no nil entries, at most 32, unique mount paths within a
+// list) come from the tags; the items' own rules and the cross-list nesting
+// and duplicate checks are covered below. The probe is covered from the Run
+// table.
 func TestValidateContainer(t *testing.T) {
 	valid := func(mutate ...func(*ateompb.Container)) *ateompb.Container {
 		c := fullSpec().Containers[0]
@@ -466,8 +467,57 @@ func TestValidateContainer(t *testing.T) {
 		obj:  valid(func(c *ateompb.Container) { c.ImageVolumeMounts = []*ateompb.ImageVolumeMount{nil} }),
 		want: field.ErrorList{field.Required(field.NewPath("image_volume_mounts").Index(0), "")},
 	}, {
-		name: "opaque: an empty system-info mount passes for now",
+		name: "valid: no mounts",
+		obj: valid(func(c *ateompb.Container) {
+			c.DurableDirVolumeMounts, c.CsiVolumeMounts, c.SystemInfoVolumeMounts, c.ImageVolumeMounts = nil, nil, nil, nil
+		}),
+	}, {
+		name: "empty system-info mount",
 		obj:  valid(func(c *ateompb.Container) { c.SystemInfoVolumeMounts = []*ateompb.SystemInfoVolumeMount{{}} }),
+		want: field.ErrorList{
+			field.Required(field.NewPath("system_info_volume_mounts").Index(0).Child("volume_name"), ""),
+			field.Required(field.NewPath("system_info_volume_mounts").Index(0).Child("mount_path"), ""),
+		},
+	}, {
+		name: "invalid csi mount volume_name: uppercase",
+		obj:  valid(func(c *ateompb.Container) { c.CsiVolumeMounts[0].VolumeName = "CSI" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("csi_volume_mounts").Index(0).Child("volume_name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name: "relative durable-dir mount_path",
+		obj:  valid(func(c *ateompb.Container) { c.DurableDirVolumeMounts[0].MountPath = "data" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("durable_dir_volume_mounts").Index(0).Child("mount_path"), nil, "")},
+	}, {
+		name: "image mount_path with dot-dot",
+		obj:  valid(func(c *ateompb.Container) { c.ImageVolumeMounts[0].MountPath = "/img/../etc" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("image_volume_mounts").Index(0).Child("mount_path"), nil, "")},
+	}, {
+		name: "image mount_path too long",
+		obj:  valid(func(c *ateompb.Container) { c.ImageVolumeMounts[0].MountPath = "/" + strings.Repeat("x", 4096) }),
+		want: field.ErrorList{field.TooLong(field.NewPath("image_volume_mounts").Index(0).Child("mount_path"), nil, 4096).WithOrigin("maxLength")},
+	}, {
+		name: "csi mount nested under another in its list",
+		obj: valid(func(c *ateompb.Container) {
+			c.CsiVolumeMounts = append(c.CsiVolumeMounts, &ateompb.VolumeMount{VolumeName: "csi-2", MountPath: "/csi/inner"})
+		}),
+		want: field.ErrorList{field.Invalid(field.NewPath("csi_volume_mounts").Index(1).Child("mount_path"), nil, "")},
+	}, {
+		name: "system-info mount nested under a csi mount",
+		obj: valid(func(c *ateompb.Container) {
+			c.SystemInfoVolumeMounts = append(c.SystemInfoVolumeMounts, &ateompb.SystemInfoVolumeMount{VolumeName: "sysinfo-2", MountPath: "/csi/inner"})
+		}),
+		want: field.ErrorList{field.Invalid(field.NewPath("system_info_volume_mounts").Index(1).Child("mount_path"), nil, "")},
+	}, {
+		name: "image mount nested over a system-info mount",
+		obj: valid(func(c *ateompb.Container) {
+			c.ImageVolumeMounts = append(c.ImageVolumeMounts, &ateompb.ImageVolumeMount{VolumeName: "etc", MountPath: "/etc"})
+		}),
+		want: field.ErrorList{field.Invalid(field.NewPath("image_volume_mounts").Index(1).Child("mount_path"), nil, "")},
+	}, {
+		name: "same mount path in two lists",
+		obj: valid(func(c *ateompb.Container) {
+			c.ImageVolumeMounts = append(c.ImageVolumeMounts, &ateompb.ImageVolumeMount{VolumeName: "data-again", MountPath: "/data"})
+		}),
+		want: field.ErrorList{field.Duplicate(field.NewPath("image_volume_mounts").Index(1).Child("mount_path"), nil)},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

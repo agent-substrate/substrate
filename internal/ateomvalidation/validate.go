@@ -122,6 +122,70 @@ func ValidateCustom_HttpGetAction_Path(_ context.Context, _ operation.Operation,
 	return resources.ValidateHTTPGetPath(fldPath, *value)
 }
 
+// The four mount messages share one mount_path rule: a clean absolute Unix
+// path, the shape atelet already enforces, shared through internal/resources.
+
+func ValidateCustom_VolumeMount_MountPath(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return resources.ValidateMountPath(fldPath, *value)
+}
+
+func ValidateCustom_DurableDirVolumeMount_MountPath(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return resources.ValidateMountPath(fldPath, *value)
+}
+
+func ValidateCustom_SystemInfoVolumeMount_MountPath(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return resources.ValidateMountPath(fldPath, *value)
+}
+
+func ValidateCustom_ImageVolumeMount_MountPath(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return resources.ValidateMountPath(fldPath, *value)
+}
+
+// ValidateCustom_Container holds a container's mount paths unique and
+// non-nesting across its four mount lists, as atelet does for its single
+// list: volumes cannot mount onto other volumes. A repeat within one list is
+// the list key's finding and is not reported again here.
+func ValidateCustom_Container(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateompb.Container) field.ErrorList {
+	type mount struct {
+		path, list string
+		fld        *field.Path
+	}
+	var mounts []mount
+	add := func(list string, i int, path string) {
+		mounts = append(mounts, mount{path: path, list: list, fld: fldPath.Child(list).Index(i).Child("mount_path")})
+	}
+	for i, m := range value.GetDurableDirVolumeMounts() {
+		add("durable_dir_volume_mounts", i, m.GetMountPath())
+	}
+	for i, m := range value.GetCsiVolumeMounts() {
+		add("csi_volume_mounts", i, m.GetMountPath())
+	}
+	for i, m := range value.GetSystemInfoVolumeMounts() {
+		add("system_info_volume_mounts", i, m.GetMountPath())
+	}
+	for i, m := range value.GetImageVolumeMounts() {
+		add("image_volume_mounts", i, m.GetMountPath())
+	}
+
+	var errs field.ErrorList
+	firstList := make(map[string]string, len(mounts))
+	paths := make([]string, len(mounts))
+	for i, m := range mounts {
+		paths[i] = m.path
+		if m.path == "" {
+			continue
+		}
+		if list, seen := firstList[m.path]; seen {
+			if list != m.list {
+				errs = append(errs, field.Duplicate(m.fld, m.path))
+			}
+			continue
+		}
+		firstList[m.path] = m.list
+	}
+	return append(errs, resources.ValidateNestedMountPathsAt(paths, func(i int) *field.Path { return mounts[i].fld })...)
+}
+
 // ValidateCustom_ActorDirs holds every directory to an absolute, clean path.
 // Presence and length are the tags' job. The rule is the one both ateom
 // binaries applied by hand before, shared through internal/resources.

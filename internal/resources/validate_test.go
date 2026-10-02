@@ -586,6 +586,20 @@ func TestValidateNestedMountPaths(t *testing.T) {
 	}
 }
 
+// TestValidateNestedMountPathsAt pins that each finding lands on the field
+// the caller maps its index to, which is how a caller spanning several lists
+// points at the right one.
+func TestValidateNestedMountPathsAt(t *testing.T) {
+	fields := []*field.Path{
+		field.NewPath("csi_volume_mounts").Index(0).Child("mount_path"),
+		field.NewPath("image_volume_mounts").Index(0).Child("mount_path"),
+		field.NewPath("image_volume_mounts").Index(1).Child("mount_path"),
+	}
+	got := ValidateNestedMountPathsAt([]string{"/a", "/b", "/a/c"}, func(i int) *field.Path { return fields[i] })
+	want := field.ErrorList{field.Invalid(fields[2], nil, "")}
+	field.ErrorMatcher{}.ByType().ByField().Test(t, want, got)
+}
+
 func TestValidateCSIMap(t *testing.T) {
 	path := field.NewPath("publish_context")
 	many := make(map[string]string, 100)
