@@ -212,6 +212,9 @@ func (r *taskRuntime) startUser(ctx context.Context) (*gluttonUser, error) {
 			cfg:         r.cfg,
 			actorName:   "sb-" + uuid.NewString(),
 			firstResume: true,
+			// Drawn per actor rather than per VU so a VU with several
+			// actors still spreads them over the pools.
+			pool: r.cfg.Pools.Pick(),
 		}
 		// Ensuring the atespace is idempotent (swallows AlreadyExists), so
 		// doing it once per VU is enough — subsequent actors would just make
@@ -314,6 +317,9 @@ func (u *gluttonUser) replaceActor(ctx context.Context, broken *gluttonActor) {
 		cfg:         broken.cfg,
 		actorName:   "sb-" + uuid.NewString(),
 		firstResume: true,
+		// A new actor with no snapshot yet, so it is free to land anywhere;
+		// drawing afresh keeps replacements spread like the originals.
+		pool: broken.cfg.Pools.Pick(),
 	}
 	if err := replacement.create(ctx); err != nil {
 		slog.Warn("glutton actor replacement create failed; will retry on next failure",
@@ -351,6 +357,11 @@ type gluttonActor struct {
 	// consecutiveFailures counts replaceIfPersistent failures since the last
 	// success. See noteFailure.
 	consecutiveFailures int
+	// pool is the worker pool this actor is pinned to, drawn once when the
+	// actor is minted (startUser, or replaceActor for a replacement) and
+	// never redrawn (see userclass.PoolPicker). Empty means no per-actor
+	// constraint.
+	pool string
 }
 
 // noteFailure records a failed lifecycle RPC against the actor and reports
@@ -407,12 +418,16 @@ func (u *gluttonActor) ensureAtespace(ctx context.Context) error {
 }
 
 func (u *gluttonActor) create(ctx context.Context) error {
+	actor := &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: u.cfg.Atespace, Name: u.actorName},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: templateAtespace, Name: templateName},
+	}
+	// ANDed with the template's workerSelector by the scheduler, so this only
+	// narrows the actor to one pool. Nil when no pools are configured.
+	actor.WorkerSelector = u.cfg.Pools.SelectorFor(u.pool)
 	return u.tracedCall(ctx, "CreateActor", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.CreateActor(callCtx, &ateapipb.CreateActorRequest{
-			Actor: &ateapipb.Actor{
-				Metadata:      &ateapipb.ResourceMetadata{Atespace: u.cfg.Atespace, Name: u.actorName},
-				ActorTemplate: &ateapipb.ObjectRef{Atespace: templateAtespace, Name: templateName},
-			},
+			Actor: actor,
 		}, grpc.Trailer(tr))
 		return err
 	})

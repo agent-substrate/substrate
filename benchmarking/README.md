@@ -26,12 +26,52 @@ image, then deploys the Locust workers:
 
 Useful flags:
 
-* `--worker-count N` — number of `WorkerPool` replicas (default 1).
+* `--worker-count N` — number of `WorkerPool` replicas when `--worker-pools` is
+  not set (default 1).
+* `--worker-pools LIST` — comma-separated `name:count[:nodeSelectorKey=value]`
+  entries. See [Multiple worker pools](#multiple-worker-pools).
 * `--worker-memory SIZE` — memory request and limit for each `WorkerPool` pod
   (default unset, the pod is unsized). Set it above half a node's allocatable
   memory to get one worker per node.
 * `--skip-build` — reuse the existing `:latest` locust image (skip the
   `docker build && docker push` step).
+
+### Multiple worker pools
+
+By default the stack creates one `WorkerPool` with `--worker-count` replicas,
+and the scheduler may place an actor on any of its workers. `--worker-pools`
+creates one `WorkerPool` per entry instead, with the given worker `count`, and
+pins each actor to a single pool for its whole life (weighted by each pool's
+worker count):
+
+```bash
+./benchmarking/deploy_locust.sh --deploy \
+  --worker-pools 'n4d:50:cloud.google.com/machine-family=n4d,c4:50:cloud.google.com/machine-family=c4'
+```
+
+That run creates a 50-worker `n4d` pool and a 50-worker `c4` pool, and sends
+half the actors to each.
+
+Pinning is a correctness requirement once the pools differ in machine type, not
+a tuning knob. A suspended actor's memory snapshot records the CPU features the
+guest saw, and nothing masks them to a common baseline on resume, so an actor
+that moves between CPU models fails to restore. Pinning is also how a run
+measures one machine type against another in the same test.
+
+A pool name identifies a pool of interchangeable workers (`WorkerPool`), not a
+single worker: it reaches the scheduler as a `pool=<name>` label that every
+worker in that `WorkerPool` inherits, so an actor pinned to `pool=<name>` may
+run on (and resume onto) any worker in that pool, but never across pools whose
+snapshots are incompatible. The key is `pool` and not `cpu-class` because CPU
+compatibility is only today's reason to separate workers.
+
+The pool list reaches the actors through the boomer workers, which set it as
+each actor's `worker_selector`; `deploy_locust.sh` forwards the same `name:count`
+list to both halves so the worker replica counts and actor placement weights
+cannot drift. Passing `--worker-pools` to `benchmarking/workloads/deploy.sh`
+alone creates the pools but leaves the actors unpinned.
+
+### Teardown
 
 To tear everything down (locust then workloads, in reverse order):
 
@@ -47,9 +87,10 @@ convenience:
 ./hack/install-ate.sh --delete-benchmarks
 ```
 
-The installer accepts `--benchmark-worker-count N` (default `1`).
-`--skip-build` and `--worker-memory` are only available when invoking
-`benchmarking/deploy_locust.sh` directly.
+The installer accepts `--benchmark-worker-count N` (default `1`) and
+`--benchmark-worker-pools LIST`, which it forwards to `ate-setup` and
+`benchmarking/deploy_locust.sh`. `--skip-build` and `--worker-memory` are only
+available when invoking `benchmarking/deploy_locust.sh` directly.
 
 ## Running Tests
 

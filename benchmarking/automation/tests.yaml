@@ -29,9 +29,14 @@
 #   sandboxClass   Optional (default "gvisor"). Sandbox runtime for the
 #                  benchmark WorkerPool: "gvisor" | "microvm".
 #   workerCount    Optional (default 1). WorkerPool replica count for the
-#                  deploy that runs before this test. The orchestrator
-#                  redeploys workloads between tests, so each test can
-#                  pick its own scale.
+#                  deploy that runs before this test, when workerPools is not
+#                  set. The orchestrator redeploys workloads between tests, so
+#                  each test can pick its own scale.
+#   workerPools    Optional. Comma-separated name:count[:nodeSelectorKey=value]
+#                  entries passed to `workloads/deploy.sh --worker-pools` (and,
+#                  with node selectors stripped, to `runner.py --worker-pools`
+#                  for locust tests) so actors are spread across multiple
+#                  WorkerPools in proportion to each pool's worker count.
 #   actorMemory    Optional (default "256Mi", the smallest size microvm
 #                  admits). Memory limit on the benchmark ActorTemplates;
 #                  raise it for suites that exercise glutton's WriteRAM path.

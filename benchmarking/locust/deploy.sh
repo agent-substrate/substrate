@@ -41,6 +41,10 @@ BENCHMARK_USER_CLASS=glutton
 AGENTSESSION_SCRIPT=""
 AGENTSESSION_SCRIPT_MOUNT=/etc/agentsession/script.yaml
 
+# Substituted into the boomer container's --worker-pools argument. Set only by
+# --worker-pools; empty leaves the actors unpinned.
+BENCHMARK_WORKER_POOLS=""
+
 usage() {
   echo "Usage: $0 [options]"
   echo ""
@@ -51,6 +55,8 @@ usage() {
   echo "  --agentsession-script FILE"
   echo "                     Run this script YAML in the agentsession user class instead of a"
   echo "                     built-in variant. Validated locally, then mounted into the workers."
+  echo "  --worker-pools LIST  Comma-separated name:count entries pinning each actor to one"
+  echo "                     WorkerPool. Use the names and counts the pools were created with."
   echo "  -h|--help          Show this help message"
 }
 
@@ -67,7 +73,7 @@ deploy() {
     kubectl -n benchmarking create configmap agentsession-script \
       --from-file="script.yaml=${AGENTSESSION_SCRIPT}" --dry-run=client -o yaml | kubectl apply -f -
   fi
-  echo "Deploying Locust load (PROJECT_ID=${PROJECT_ID}, user_class=${BENCHMARK_USER_CLASS}, agentsession_script=${AGENTSESSION_SCRIPT:-<built-in>})..."
+  echo "Deploying Locust load (PROJECT_ID=${PROJECT_ID}, user_class=${BENCHMARK_USER_CLASS}, agentsession_script=${AGENTSESSION_SCRIPT:-<built-in>}, worker_pools=${BENCHMARK_WORKER_POOLS:-none})..."
   envsubst < "${MANIFEST}" | kubectl apply -f -
 }
 
@@ -91,6 +97,8 @@ while [[ "$#" -gt 0 ]]; do
     --user-class=*) BENCHMARK_USER_CLASS="$(printf '%s' "${1#*=}" | tr '[:upper:]' '[:lower:]')" ;;
     --agentsession-script) shift; AGENTSESSION_SCRIPT="$1" ;;
     --agentsession-script=*) AGENTSESSION_SCRIPT="${1#*=}" ;;
+    --worker-pools) shift; BENCHMARK_WORKER_POOLS="$1" ;;
+    --worker-pools=*) BENCHMARK_WORKER_POOLS="${1#*=}" ;;
     -h|--help) usage; exit 0 ;;
     *)
       echo "Error: Unknown option: $1" >&2
@@ -128,6 +136,7 @@ if [[ -n "${AGENTSESSION_SCRIPT}" ]]; then
   AGENTSESSION_SCRIPT_SHA="$( (sha256sum "${AGENTSESSION_SCRIPT}" 2>/dev/null || shasum -a 256 "${AGENTSESSION_SCRIPT}") | cut -c1-16)"
 fi
 export AGENTSESSION_SCRIPT_FILE AGENTSESSION_SCRIPT_SHA
+export BENCHMARK_WORKER_POOLS
 
 if [[ "${action}" == "deploy" ]]; then
   deploy

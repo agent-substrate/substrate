@@ -290,8 +290,11 @@ def _harvest_cluster_packing(
     steady_end_ts: int,
 ) -> dict[str, Any]:
     """Workers with an actor over all workers, per sample and as percentiles."""
+    # One WorkerPool by default (benchmark-ateom), or benchmark-ateom-<name>
+    # per --worker-pools entry; summed so packing covers every pool.
     packing_query = (
-        'ate_workerpool_workers{ate_workerpool_name="benchmark-ateom"}'
+        'sum by (exported_instance, instance, ate_worker_state) ('
+        'ate_workerpool_workers{ate_workerpool_name=~"benchmark-ateom(-.+)?"})'
     )
     packing_series = query_prometheus_range(
         prom_url, packing_query, start_ts, end_ts, step="10s"

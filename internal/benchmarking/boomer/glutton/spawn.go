@@ -255,6 +255,7 @@ func (r *spawnRuntime) runOneActor(ctx context.Context, batchStart time.Time, ac
 }
 
 func (r *spawnRuntime) createActorWithRetry(ctx context.Context, actorName string) error {
+	pool := r.cfg.Pools.Pick()
 	delay := spawnInitialRetryBackoff
 	for attempt := 0; ; attempt++ {
 		if ctx.Err() != nil {
@@ -264,8 +265,9 @@ func (r *spawnRuntime) createActorWithRetry(ctx context.Context, actorName strin
 		err := r.tracedCall(ctx, "CreateActor", func(callCtx context.Context, tr *metadata.MD) error {
 			_, callErr := r.cfg.APIStub.CreateActor(callCtx, &ateapipb.CreateActorRequest{
 				Actor: &ateapipb.Actor{
-					Metadata:      &ateapipb.ResourceMetadata{Atespace: r.cfg.Atespace, Name: actorName},
-					ActorTemplate: &ateapipb.ObjectRef{Atespace: templateAtespace, Name: templateName},
+					Metadata:       &ateapipb.ResourceMetadata{Atespace: r.cfg.Atespace, Name: actorName},
+					ActorTemplate:  &ateapipb.ObjectRef{Atespace: templateAtespace, Name: templateName},
+					WorkerSelector: r.cfg.Pools.SelectorFor(pool),
 				},
 			}, grpc.Trailer(tr))
 			return callErr

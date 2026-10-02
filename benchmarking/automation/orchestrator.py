@@ -275,6 +275,65 @@ def wait_for_job(name: str, timeout_seconds: int) -> str:
 
 
 SANDBOX_CLASSES = ("gvisor", "microvm")
+MAX_WORKER_POOL_NAME_LEN = 63 - len("benchmark-ateom-")
+_WORKER_POOL_NAME_RE = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
+
+
+def parse_worker_pools(spec: str) -> list[tuple[str, int, str]]:
+    """Parse a comma-separated name:count[:nodeSelectorKey=value] workerPools
+    spec into (name, count, selector) tuples, raising ValueError on malformed
+    entries."""
+    if not isinstance(spec, str):
+        raise ValueError(f"workerPools must be a string, got {type(spec).__name__}")
+    pools: list[tuple[str, int, str]] = []
+    seen: set[str] = set()
+    for raw in spec.split(","):
+        entry = raw.strip()
+        if not entry:
+            continue
+        parts = entry.split(":", 2)
+        if len(parts) < 2:
+            raise ValueError(
+                f"worker pool {entry!r}: want name:count[:nodeSelectorKey=value]"
+            )
+        name, count_str = parts[0], parts[1]
+        selector = parts[2] if len(parts) == 3 else ""
+        if not name:
+            raise ValueError(f"worker pool {entry!r}: name must not be empty")
+        if len(name) > MAX_WORKER_POOL_NAME_LEN:
+            raise ValueError(
+                f"worker pool {entry!r}: name is longer than the "
+                f"{MAX_WORKER_POOL_NAME_LEN}-character limit"
+            )
+        if not _WORKER_POOL_NAME_RE.fullmatch(name):
+            raise ValueError(
+                f"worker pool {entry!r}: name must be a lowercase DNS-1123 label"
+            )
+        if name in seen:
+            raise ValueError(
+                f"worker pool {entry!r}: duplicate pool name {name!r}"
+            )
+        seen.add(name)
+        if not count_str.isdigit() or int(count_str) < 1:
+            raise ValueError(
+                f"worker pool {entry!r}: count must be a positive integer"
+            )
+        if selector:
+            key, sep, val = selector.partition("=")
+            if not sep or not key or not val:
+                raise ValueError(
+                    f"worker pool {entry!r}: node selector must be key=value"
+                )
+        pools.append((name, int(count_str), selector))
+    if not pools:
+        raise ValueError("workerPools is set but names no pool")
+    return pools
+
+
+def boomer_worker_pools(spec: str) -> str:
+    """Strip optional :nodeSelectorKey=value suffixes from a workerPools spec
+    so boomer receives only name:count entries."""
+    return ",".join(f"{name}:{count}" for name, count, _ in parse_worker_pools(spec))
 
 
 def validate_and_normalize_tests(tests: list[dict[str, Any]]) -> None:
@@ -291,6 +350,11 @@ def validate_and_normalize_tests(tests: list[dict[str, Any]]) -> None:
                 f"test {name!r} has invalid sandboxClass {sandbox_class!r} "
                 f"(want one of {list(SANDBOX_CLASSES)})"
             )
+        if t.get("workerPools"):
+            try:
+                parse_worker_pools(t["workerPools"])
+            except ValueError as e:
+                raise ValueError(f"test {name!r} has invalid workerPools: {e}") from e
         if "type" not in t:
             raise ValueError(
                 f"test {name!r} missing required 'type' field "
@@ -301,6 +365,10 @@ def validate_and_normalize_tests(tests: list[dict[str, Any]]) -> None:
             raise ValueError(
                 f"test {name!r} has invalid type {ttype!r} "
                 f"(want one of {list(TEST_TYPES)})"
+            )
+        if t.get("workerPools") and ttype != "locust":
+            raise ValueError(
+                f"test {name!r}: workerPools is only supported for 'locust' tests, got {ttype!r}"
             )
         TYPES[ttype].validate(t)
 
@@ -333,6 +401,7 @@ def deploy_workloads(
     actor_memory: str = "",
     wait_timeout_secs: int | str = "",
     worker_memory: str = "",
+    worker_pools: str = "",
 ) -> None:
     cmd = [
         "benchmarking/workloads/deploy.sh",
@@ -342,6 +411,8 @@ def deploy_workloads(
         "--sandbox-class",
         sandbox_class,
     ]
+    if worker_pools:
+        cmd += ["--worker-pools", worker_pools]
     # Empty keeps the default in workloads/deploy.sh (256Mi, the microvm
     # minimum); RAM-consuming suites set actorMemory in tests.yaml.
     if actor_memory:
@@ -381,7 +452,10 @@ def run_test(
     mod = TYPES[test_type(test)]
     tmpl = mod.job_tmpl(manifests_dir)
     subs.update(mod.job_subs(test))
-    manifest = render_template(tmpl, subs, test.get("flags", []))
+    extra_args = list(test.get("flags", []))
+    if test.get("workerPools"):
+        extra_args.extend(["--worker-pools", boomer_worker_pools(test["workerPools"])])
+    manifest = render_template(tmpl, subs, extra_args)
     wait_for_no_active_runners()
     print(f"Submitting Job {job_name}", flush=True)
     subprocess.run(
@@ -530,6 +604,7 @@ def main() -> None:
                     test.get("actorMemory", ""),
                     test.get("workerWaitTimeout", ""),
                     test.get("workerMemory", ""),
+                    test.get("workerPools", ""),
                 )
                 try:
                     status = run_test(
