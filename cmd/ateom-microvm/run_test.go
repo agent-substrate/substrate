@@ -18,9 +18,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"slices"
 	"strings"
@@ -195,6 +197,41 @@ func TestBuildVMConfigConsole(t *testing.T) {
 	}
 	if !strings.Contains(dbg.Payload.Cmdline, "earlycon=") {
 		t.Errorf("debug cmdline = %q, want an earlycon", dbg.Payload.Cmdline)
+	}
+}
+
+// The guest image must be a virtio-pmem device mounted with DAX, not a disk: through
+// a disk, everything the guest reads from its image is copied into guest RAM, and
+// every snapshot carries it. The device must discard writes, since every actor on the
+// node maps the same file. Checked on the JSON cloud-hypervisor receives, which
+// matches fields by name.
+func TestBuildVMConfigImageOnPmem(t *testing.T) {
+	const id = "actor-1"
+	cfg := buildVMConfig(id, "/vmlinux", "/rootfs.img", "", kata.ConsoleLogPath(id), 256, 1, true, false)
+
+	body, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("json.Marshal(VmConfig) = %v", err)
+	}
+	var wire map[string]any
+	if err := json.Unmarshal(body, &wire); err != nil {
+		t.Fatalf("json.Unmarshal = %v", err)
+	}
+	wantPmem := []any{map[string]any{"file": "/rootfs.img", "discard_writes": true}}
+	if got := wire["pmem"]; !reflect.DeepEqual(got, wantPmem) {
+		t.Errorf("pmem = %v, want %v", got, wantPmem)
+	}
+	if got, ok := wire["disks"]; ok {
+		t.Errorf("disks = %v, want none: the image is on virtio-pmem", got)
+	}
+
+	for _, want := range []string{"root=/dev/pmem0p1 ", "rootflags=dax,", " ro ", "rootfstype=ext4"} {
+		if !strings.Contains(cfg.Payload.Cmdline, want) {
+			t.Errorf("cmdline = %q, missing %q", cfg.Payload.Cmdline, want)
+		}
+	}
+	if strings.Contains(cfg.Payload.Cmdline, "/dev/vd") {
+		t.Errorf("cmdline = %q, still names a virtio-blk root", cfg.Payload.Cmdline)
 	}
 }
 
