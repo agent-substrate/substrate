@@ -474,8 +474,9 @@ groups:
               value: unavailable
               brief: >
                 The request got an Unavailable status, or a 503 without a gRPC
-                cause. For example, a full parking lot, a denied egress
-                request, or a failed policy or credential lookup.
+                cause. For example, a denied egress request, a failed policy or
+                credential lookup, or a full parking lot when the resume did not
+                fail with ResourceExhausted.
             - id: rate_limited
               stability: development
               value: rate_limited

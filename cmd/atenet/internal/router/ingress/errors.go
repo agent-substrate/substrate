@@ -47,7 +47,16 @@ func statusDescription(err error) string {
 
 // parkingFullErr returns a 503 denial signaling that the router's parking lot
 // is at capacity, so the request was shed without waiting. Clients should retry.
-func parkingFullErr(actorID string) error {
+//
+// retryErr is the failure that made the flight retry. A ResourceExhausted
+// retryErr is kept as the cause, so the route metric reports no_capacity. Any
+// other retryErr is dropped: a shed request is not a lock conflict or a failed
+// precondition, so it reports unavailable.
+func parkingFullErr(actorID string, retryErr error) error {
+	if status.Code(retryErr) == codes.ResourceExhausted {
+		return extproc.WrapReqError(envoy_type.StatusCode_ServiceUnavailable, retryErr,
+			"actor %q unavailable: router at capacity", actorID)
+	}
 	return extproc.NewReqError(envoy_type.StatusCode_ServiceUnavailable,
 		"actor %q unavailable: router at capacity", actorID)
 }

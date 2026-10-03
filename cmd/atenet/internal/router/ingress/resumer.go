@@ -222,7 +222,6 @@ func (r *ActorResumer) runFlight(f *resumeActorFlight, key string, actorRef reso
 	backoff := r.backoff
 
 	var resumeResp *ateapipb.ResumeActorResponse
-	var lastRetryErr error
 
 	err := wait.ExponentialBackoffWithContext(bgCtx, backoff, func(context.Context) (bool, error) {
 		var err error
@@ -234,14 +233,17 @@ func (r *ActorResumer) runFlight(f *resumeActorFlight, key string, actorRef reso
 		}
 
 		if r.retryable(err) {
+			// Store the error before the signal. A caller that is shed
+			// after it sees retrying reads the error in parkingFullErr.
+			// The error also marks a budget that elapses as exhaustion.
+			f.setRetryErr(err)
 			f.signalRetrying()
-			lastRetryErr = err // remember it in case the budget elapses
-			return false, nil  // park: retry until the budget elapses
+			return false, nil // park: retry until the budget elapses
 		}
 		return false, err
 	})
 
-	r.publish(f, key, flightResult(bgCtx, resumeResp, err, lastRetryErr, reqID))
+	r.publish(f, key, flightResult(bgCtx, resumeResp, err, f.retryErr(), reqID))
 }
 
 // flightResult classifies the retry loop's terminal state into the shared
@@ -294,7 +296,7 @@ func (r *ActorResumer) awaitFlight(ctx context.Context, f *resumeActorFlight, ac
 
 	release, ok := r.enterLot(ctx)
 	if !ok {
-		return nil, ResumeOutcomeUnknown, parkingFullErr(actorRef.String())
+		return nil, ResumeOutcomeUnknown, parkingFullErr(actorRef.String(), f.retryErr())
 	}
 	var finalErr error
 	defer func() { release(parkOutcomeFor(finalErr)) }()

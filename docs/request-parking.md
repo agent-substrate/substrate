@@ -170,7 +170,8 @@ bounds the wait.
   | `error`            | The resume failed with a non-retryable error (`NotFound`, `PermissionDenied`, ...). |
 
 - `atenet.router.parking.rejected` — counter: requests shed because the lot was
-  full.
+  full. On `atenet.router.route.duration`, a shed request reports `no_capacity`
+  when its resume failed with `ResourceExhausted`, and `unavailable` otherwise.
 
 **Status page** (`/statusz`): a "Request Parking" card shows whether parking is
 enabled, the current vs. maximum parked count, and the max wait.
