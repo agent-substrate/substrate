@@ -26,6 +26,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"strings"
 
@@ -64,6 +65,8 @@ func DeletePrefix(ctx context.Context, s Store, uri resources.StoragePrefix) err
 	objects, err := s.List(ctx, bucket, prefix)
 	if err != nil {
 		if isMissingBucket(err) {
+			slog.WarnContext(ctx, "snapshot bucket is missing; treating prefix as already deleted",
+				slog.String("bucket", bucket), slog.String("prefix", prefix), slog.Any("error", err))
 			return nil
 		}
 		return fmt.Errorf("while listing %s: %w", uri, err)
@@ -72,7 +75,12 @@ func DeletePrefix(ctx context.Context, s Store, uri resources.StoragePrefix) err
 	group.SetLimit(prefixConcurrency)
 	for _, object := range objects {
 		group.Go(func() error {
-			if err := s.Delete(ctx, bucket, object); err != nil && !isMissingBucket(err) {
+			if err := s.Delete(ctx, bucket, object); err != nil {
+				if isMissingBucket(err) {
+					slog.WarnContext(ctx, "snapshot bucket is missing; treating object as already deleted",
+						slog.String("bucket", bucket), slog.String("object", object), slog.Any("error", err))
+					return nil
+				}
 				return fmt.Errorf("while deleting %s from bucket %s: %w", object, bucket, err)
 			}
 			return nil
