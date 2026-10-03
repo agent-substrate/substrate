@@ -25,22 +25,22 @@ import (
 func TestUniformWaitStaysInRange(t *testing.T) {
 	lo, hi := 200*time.Millisecond, time.Second
 	for i := 0; i < 1000; i++ {
-		got := uniformWait(lo, hi)
+		got := dynconfig.Uniform(lo, hi)
 		if got < lo || got > hi {
-			t.Fatalf("uniformWait(%v, %v) = %v, outside range", lo, hi, got)
+			t.Fatalf("dynconfig.Uniform(%v, %v) = %v, outside range", lo, hi, got)
 		}
 	}
 }
 
 func TestUniformWaitDegenerateRanges(t *testing.T) {
-	if got := uniformWait(0, 0); got != 0 {
-		t.Errorf("uniformWait(0, 0) = %v, want 0", got)
+	if got := dynconfig.Uniform(0, 0); got != 0 {
+		t.Errorf("dynconfig.Uniform(0, 0) = %v, want 0", got)
 	}
-	if got := uniformWait(3*time.Second, 3*time.Second); got != 3*time.Second {
+	if got := dynconfig.Uniform(3*time.Second, 3*time.Second); got != 3*time.Second {
 		t.Errorf("equal bounds: got %v, want 3s", got)
 	}
 	// An inverted range yields the lower bound rather than a negative wait.
-	if got := uniformWait(5*time.Second, time.Second); got != 5*time.Second {
+	if got := dynconfig.Uniform(5*time.Second, time.Second); got != 5*time.Second {
 		t.Errorf("inverted bounds: got %v, want 5s", got)
 	}
 }
@@ -48,9 +48,8 @@ func TestUniformWaitDegenerateRanges(t *testing.T) {
 // The wait window and the live window read different config fields, so a
 // run that sets only one of them must not leak into the other.
 func TestWaitAndLiveWindowsAreIndependent(t *testing.T) {
-	rt := &taskRuntime{cfg: &userclass.Config{Dyn: dynconfig.NewHolder(dynconfig.Config{
-		MinWait: 200 * time.Millisecond,
-		MaxWait: time.Second,
+	rt := &taskRuntime{cfg: &userclass.Config{Dyn: dynconfig.Static(gluttonKnobs{
+		WaitTime: dynconfig.WaitTime{MinWait: dynconfig.Seconds(200 * time.Millisecond), MaxWait: dynconfig.Seconds(time.Second)},
 	})}}
 	for i := 0; i < 100; i++ {
 		if got := rt.liveWait(); got != 0 {
@@ -61,7 +60,7 @@ func TestWaitAndLiveWindowsAreIndependent(t *testing.T) {
 		}
 	}
 
-	rt.cfg.Dyn.Store(dynconfig.Config{MinLive: 9 * time.Second, MaxLive: 14 * time.Second})
+	rt.cfg.Dyn = dynconfig.Static(gluttonKnobs{MinLive: dynconfig.Seconds(9 * time.Second), MaxLive: dynconfig.Seconds(14 * time.Second)})
 	for i := 0; i < 100; i++ {
 		if got := rt.dynamicWait(); got != 0 {
 			t.Fatalf("dynamicWait with zero wait window = %v, want 0", got)
