@@ -15,7 +15,7 @@
 # limitations under the License.
 
 # verify_sql_migrations checks a Goose migration directory against the
-# migration file rules in docs/dev/postgresql-schema-evolution.md and refuses
+# migration file rules in docs/dev/schema-evolution.md and refuses
 # changes to migrations from the newest release tag that has any (or from
 # released-ref). Run it from the repository root.
 #

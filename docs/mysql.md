@@ -72,7 +72,7 @@ Each `ateapi` replica can therefore open at most the read/write limit plus 5 con
 ## Startup and migrations
 `ateapi` applies pending migrations before it becomes ready. Replicas serialize migration runs with a named lock (`GET_LOCK`) scoped to the database and wait up to 5 minutes for another replica's run. `ateapi` retries the initial connection while the database is unreachable.
 
-The next startup reruns a migration file that failed partway through. See [Schema evolution](dev/postgresql-schema-evolution.md#mysql-migrations) for the migration rules.
+The next startup reruns a migration file that failed partway through. See [Schema evolution](dev/schema-evolution.md#mysql-migrations) for the migration rules.
 
 ## PlanetScale
 Use a PlanetScale database on Vitess. Create the database in PlanetScale first, and name it in both DSNs.

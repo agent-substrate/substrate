@@ -86,7 +86,7 @@ for this purpose.
 All code changes should be accompanied by tests. We will not merge code that
 does not have tests, and we will not merge code that causes tests to fail.
 
-Follow the [schema evolution rules](docs/dev/postgresql-schema-evolution.md) for each application schema change. Make each change in both the PostgreSQL and MySQL migrations.
+Follow the [schema evolution rules](docs/dev/schema-evolution.md) for each application schema change. Make each change in both the PostgreSQL and MySQL migrations.
 
 Each pull request title becomes its line in the [release notes](docs/dev/release-notes.md).
 
