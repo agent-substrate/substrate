@@ -1307,40 +1307,42 @@ func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequ
 	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
 	actorUID := req.GetActorUid()
 
-	var assetPaths map[string]string
-	sandboxRec, err := readSandboxRecord(actorUID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read sandbox record during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
-	}
-	paths, err := s.ensureSandboxAssets(ctx, sandboxRec)
-	if err != nil {
-		return nil, fmt.Errorf("failed to ensure sandbox assets during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
-	}
-	assetPaths = paths
+	if req.GetTargetAteomUid() != "" {
+		var assetPaths map[string]string
+		sandboxRec, err := readSandboxRecord(actorUID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read sandbox record during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
+		}
+		paths, err := s.ensureSandboxAssets(ctx, sandboxRec)
+		if err != nil {
+			return nil, fmt.Errorf("failed to ensure sandbox assets during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
+		}
+		assetPaths = paths
 
-	client, err := s.dialAteom(ctx, req.GetTargetAteomUid())
-	if err != nil {
-		return nil, fmt.Errorf("failed to dial ateom for terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
-	}
+		client, err := s.dialAteom(ctx, req.GetTargetAteomUid())
+		if err != nil {
+			return nil, fmt.Errorf("failed to dial ateom for terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
+		}
 
-	spec, err := buildAteomWorkloadSpec(req.GetSpec())
-	if err != nil {
-		return nil, apierror.InvalidArgument("invalid workload spec: %v", err)
-	}
-	if _, err := client.TerminateWorkload(ctx, &ateompb.TerminateWorkloadRequest{
-		Atespace:              req.GetAtespace(),
-		ActorName:             req.GetActorName(),
-		ActorUid:              req.GetActorUid(),
-		ActorTemplateAtespace: req.GetActorTemplateAtespace(),
-		ActorTemplateName:     req.GetActorTemplateName(),
-		RunscPath:             runscPathFor(assetPaths),
-		Spec:                  spec,
-		ActorDirs:             ateletpath.ActorDirs(actorUID),
-	}); err != nil {
-		if status.Code(err) == codes.NotFound {
-			slog.InfoContext(ctx, "workload not found on ateom during terminate", slog.Any("actor", actorRef), slog.String("actorUID", actorUID))
-		} else {
-			return nil, fmt.Errorf("failed calling ateom.TerminateWorkload (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
+		spec, err := buildAteomWorkloadSpec(req.GetSpec())
+		if err != nil {
+			return nil, apierror.InvalidArgument("invalid workload spec: %v", err)
+		}
+		if _, err := client.TerminateWorkload(ctx, &ateompb.TerminateWorkloadRequest{
+			Atespace:              req.GetAtespace(),
+			ActorName:             req.GetActorName(),
+			ActorUid:              req.GetActorUid(),
+			ActorTemplateAtespace: req.GetActorTemplateAtespace(),
+			ActorTemplateName:     req.GetActorTemplateName(),
+			RunscPath:             runscPathFor(assetPaths),
+			Spec:                  spec,
+			ActorDirs:             ateletpath.ActorDirs(actorUID),
+		}); err != nil {
+			if status.Code(err) == codes.NotFound {
+				slog.InfoContext(ctx, "workload not found on ateom during terminate", slog.Any("actor", actorRef), slog.String("actorUID", actorUID))
+			} else {
+				return nil, fmt.Errorf("failed calling ateom.TerminateWorkload (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
+			}
 		}
 	}
 
@@ -1854,8 +1856,10 @@ func validateTerminateRequest(req *ateletpb.TerminateRequest) error {
 	if len(errs) > 0 {
 		return errs.ToAggregate()
 	}
-	if err := resources.ValidateAteomUID(req.GetTargetAteomUid()); err != nil {
-		return err
+	if req.GetTargetAteomUid() != "" {
+		if err := resources.ValidateAteomUID(req.GetTargetAteomUid()); err != nil {
+			return err
+		}
 	}
 	names := make([]string, 0, len(req.GetSpec().GetContainers()))
 	for _, ctr := range req.GetSpec().GetContainers() {

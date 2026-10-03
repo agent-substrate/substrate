@@ -222,14 +222,12 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 	// 1. Free the worker (if it hasn't been freed yet)
 	if assignment := latestActor.GetStatus().GetWorkerAssignment(); assignment != nil {
 		worker, err := w.store.GetWorker(ctx, assignment.GetWorker().GetName())
-		nodeName := ""
 		if err != nil {
 			if !errors.Is(err, store.ErrNotFound) {
 				return nil, fmt.Errorf("while getting worker for release: %w", err)
 			}
 			slog.Warn("Worker already gone during finalize pause, skipping release", "worker", assignment.GetWorkerPod())
 		} else {
-			nodeName = worker.GetNodeName()
 			// Drop just this actor's assignment; any other actors the worker
 			// hosts keep theirs.
 			_, err := w.store.ReleaseActorFromWorker(ctx, worker.GetMetadata().GetName(), latestActor.GetMetadata().GetUid())
@@ -249,7 +247,7 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 		wasAlreadyCrashed := latestActor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_CRASHED
 		newState := ateapipb.ActorState_ACTOR_STATE_PAUSED
 		var crashStatus *ateapipb.ActorCrash
-		if nodeName == "" {
+		if latestActor.GetStatus().GetAssignedNode() == "" {
 			// Without a node name we cannot record where the local snapshot lives,
 			// so the actor can never be resumed (the scheduler would search for a
 			// worker on an unknown node forever). Crash it instead of leaving it
@@ -278,9 +276,6 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 				localSnapshot := &ateapipb.LocalSnapshot{
 					SnapshotName: toUpdate.GetStatus().GetInProgressLocalSnapshotName(),
 					ContentScope: contentScope,
-				}
-				if newState != ateapipb.ActorState_ACTOR_STATE_CRASHED {
-					localSnapshot.NodeVmsWithLocalSnapshots = []string{nodeName}
 				}
 				toUpdate.Status.LocalSnapshot = localSnapshot
 				toUpdate.Status.InProgressLocalSnapshotName = ""

@@ -499,30 +499,19 @@ func (x *ExternalSnapshot) GetActorTemplateUid() string {
 // LocalSnapshot records information about a node-local snapshot.
 type LocalSnapshot struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The name of the local checkpoint on each of the nodes below. Checkpoint
-	// names are server-generated UUIDs, but any resource name is valid here.
+	// The name of the local checkpoint on the node. Checkpoint names are
+	// server-generated UUIDs, but any resource name is valid here.
 	//
 	// +k8s:optional
 	// +k8s:format=k8s-short-name
 	SnapshotName string `protobuf:"bytes,1,opt,name=snapshot_name,json=snapshotName,proto3" json:"snapshot_name,omitempty"`
-	// Node VMs that have local snapshots for this actor, while it's PAUSED.
-	// Each node appears at most once.
-	//
-	// TODO: revisit this design; a snapshot propagated to every node would
-	// grow this list with the fleet, and the bound below is provisional.
-	//
-	// +k8s:optional
-	// +k8s:maxItems=256
-	// +k8s:listType=set
-	// +k8s:eachVal=+k8s:format=k8s-long-name
-	NodeVmsWithLocalSnapshots []string `protobuf:"bytes,2,rep,name=node_vms_with_local_snapshots,json=nodeVmsWithLocalSnapshots,proto3" json:"node_vms_with_local_snapshots,omitempty"`
 	// Scope the pause checkpoint captured (the template's onPause at pause
 	// time). UNSPECIFIED is tolerated for compatibility and reads as FULL.
 	//
 	// +k8s:optional
 	// +k8s:minimum=1
 	// +k8s:maximum=2 # keep this in sync with the SnapshotContentScope enum
-	ContentScope  SnapshotContentScope `protobuf:"varint,3,opt,name=content_scope,json=contentScope,proto3,enum=ateapi.SnapshotContentScope" json:"content_scope,omitempty"`
+	ContentScope  SnapshotContentScope `protobuf:"varint,2,opt,name=content_scope,json=contentScope,proto3,enum=ateapi.SnapshotContentScope" json:"content_scope,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -562,13 +551,6 @@ func (x *LocalSnapshot) GetSnapshotName() string {
 		return x.SnapshotName
 	}
 	return ""
-}
-
-func (x *LocalSnapshot) GetNodeVmsWithLocalSnapshots() []string {
-	if x != nil {
-		return x.NodeVmsWithLocalSnapshots
-	}
-	return nil
 }
 
 func (x *LocalSnapshot) GetContentScope() SnapshotContentScope {
@@ -1774,7 +1756,14 @@ type ActorStatus struct {
 	// CRASHED state and cleared when a revert returns the Actor to SUSPENDED.
 	//
 	// +k8s:optional
-	Crash         *ActorCrash `protobuf:"bytes,9,opt,name=crash,proto3" json:"crash,omitempty"`
+	Crash *ActorCrash `protobuf:"bytes,9,opt,name=crash,proto3" json:"crash,omitempty"`
+	// assigned_node is the Kubernetes node the Actor is currently attached to
+	// (hosting its active worker or its node-local snapshots). Unset when the
+	// Actor is detached from any node.
+	//
+	// +k8s:optional
+	// +k8s:format=k8s-long-name
+	AssignedNode  string `protobuf:"bytes,10,opt,name=assigned_node,json=assignedNode,proto3" json:"assigned_node,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1863,6 +1852,13 @@ func (x *ActorStatus) GetCrash() *ActorCrash {
 		return x.Crash
 	}
 	return nil
+}
+
+func (x *ActorStatus) GetAssignedNode() string {
+	if x != nil {
+		return x.AssignedNode
+	}
+	return ""
 }
 
 // ActorCrash describes the failure that moved an Actor to CRASHED.
@@ -7986,11 +7982,10 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x10ExternalSnapshot\x12!\n" +
 	"\fsnapshot_uri\x18\x01 \x01(\tR\vsnapshotUri\x12A\n" +
 	"\rcontent_scope\x18\x02 \x01(\x0e2\x1c.ateapi.SnapshotContentScopeR\fcontentScope\x12,\n" +
-	"\x12actor_template_uid\x18\x03 \x01(\tR\x10actorTemplateUid\"\xb9\x01\n" +
+	"\x12actor_template_uid\x18\x03 \x01(\tR\x10actorTemplateUid\"w\n" +
 	"\rLocalSnapshot\x12#\n" +
-	"\rsnapshot_name\x18\x01 \x01(\tR\fsnapshotName\x12@\n" +
-	"\x1dnode_vms_with_local_snapshots\x18\x02 \x03(\tR\x19nodeVmsWithLocalSnapshots\x12A\n" +
-	"\rcontent_scope\x18\x03 \x01(\x0e2\x1c.ateapi.SnapshotContentScopeR\fcontentScope\"\x90\x01\n" +
+	"\rsnapshot_name\x18\x01 \x01(\tR\fsnapshotName\x12A\n" +
+	"\rcontent_scope\x18\x02 \x01(\x0e2\x1c.ateapi.SnapshotContentScopeR\fcontentScope\"\x90\x01\n" +
 	"\bSelector\x12D\n" +
 	"\fmatch_labels\x18\x01 \x03(\v2!.ateapi.Selector.MatchLabelsEntryR\vmatchLabels\x1a>\n" +
 	"\x10MatchLabelsEntry\x12\x10\n" +
@@ -8061,7 +8056,7 @@ const file_ateapi_proto_rawDesc = "" +
 	"\tactor_jwt\x18\x04 \x01(\v2\x16.ateapi.ActorJWTSourceR\bactorJwt\"]\n" +
 	"\x0eActorJWTSource\x12\x1c\n" +
 	"\taudiences\x18\x01 \x03(\tR\taudiences\x12-\n" +
-	"\x12expiration_seconds\x18\x02 \x01(\x03R\x11expirationSeconds\"\xe9\x03\n" +
+	"\x12expiration_seconds\x18\x02 \x01(\x03R\x11expirationSeconds\"\x8e\x04\n" +
 	"\vActorStatus\x12(\n" +
 	"\x05state\x18\x01 \x01(\x0e2\x12.ateapi.ActorStateR\x05state\x12E\n" +
 	"\x11worker_assignment\x18\x02 \x01(\v2\x18.ateapi.WorkerAssignmentR\x10workerAssignment\x127\n" +
@@ -8070,7 +8065,9 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x0elocal_snapshot\x18\x05 \x01(\v2\x15.ateapi.LocalSnapshotR\rlocalSnapshot\x12;\n" +
 	"\ractor_volumes\x18\a \x03(\v2\x16.ateapi.ExternalVolumeR\factorVolumes\x12D\n" +
 	"\x1fin_progress_local_snapshot_name\x18\b \x01(\tR\x1binProgressLocalSnapshotName\x12(\n" +
-	"\x05crash\x18\t \x01(\v2\x12.ateapi.ActorCrashR\x05crash\"a\n" +
+	"\x05crash\x18\t \x01(\v2\x12.ateapi.ActorCrashR\x05crash\x12#\n" +
+	"\rassigned_node\x18\n" +
+	" \x01(\tR\fassignedNode\"a\n" +
 	"\n" +
 	"ActorCrash\x12\x18\n" +
 	"\amessage\x18\x01 \x01(\tR\amessage\x129\n" +

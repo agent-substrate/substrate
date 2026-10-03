@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/volume"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -202,26 +201,11 @@ func actorVolumeID(actorUID string, volumeName string) string {
 	return fmt.Sprintf("substrate-%s-%s", actorUID, volumeName)
 }
 
-// detachActorVolumes detaches all mounted external volumes for an actor from its worker node.
-func detachActorVolumes(ctx context.Context, st detachActorVolumesStore, registry VolumePluginRegistry, actor *ateapipb.Actor, template *ateapipb.ActorTemplate, action string) error {
-	assignment := actor.GetStatus().GetWorkerAssignment()
-	if assignment == nil {
-		slog.WarnContext(ctx, fmt.Sprintf("Actor has no assigned worker pod during %s, skipping detach volumes", action), slog.String("actor_id", actor.GetMetadata().GetName()))
-		return nil
-	}
-
-	worker, err := st.GetWorker(ctx, assignment.GetWorker().GetName())
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			slog.WarnContext(ctx, fmt.Sprintf("Worker not found in store during %s, skipping detach volumes", action), slog.String("actor_id", actor.GetMetadata().GetName()))
-			return nil
-		}
-		return fmt.Errorf("failed to get worker: %w", err)
-	}
-
-	node := worker.GetNodeName()
+// detachActorVolumes detaches all mounted external volumes for an actor from its assigned node.
+func detachActorVolumes(ctx context.Context, registry VolumePluginRegistry, actor *ateapipb.Actor, template *ateapipb.ActorTemplate, action string) error {
+	node := actor.GetStatus().GetAssignedNode()
 	if node == "" {
-		slog.WarnContext(ctx, fmt.Sprintf("Worker has no assigned node name during %s, skipping detach volumes", action), slog.String("actor_id", actor.GetMetadata().GetName()))
+		slog.WarnContext(ctx, fmt.Sprintf("Actor has no assigned node during %s, skipping detach volumes", action), slog.String("actor_id", actor.GetMetadata().GetName()))
 		return nil
 	}
 
@@ -258,10 +242,4 @@ func detachActorVolumes(ctx context.Context, st detachActorVolumesStore, registr
 		}
 	}
 	return errors.Join(errs...)
-}
-
-// detachActorVolumesStore enumerates the subset of store methods needed to
-// detach actor volumes.
-type detachActorVolumesStore interface {
-	GetWorker(ctx context.Context, name string) (*ateapipb.Worker, error)
 }

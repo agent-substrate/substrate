@@ -183,6 +183,7 @@ service AteomHerder {
 }
 
 message TerminateRequest {
+  // If unset, the atelet will just cleanup node resources for the actor.
   string target_ateom_uid = 1;
 
   string atespace = 2;

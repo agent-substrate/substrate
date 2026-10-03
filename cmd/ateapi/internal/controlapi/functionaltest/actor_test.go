@@ -1116,25 +1116,44 @@ func TestDeleteActor_Crashed(t *testing.T) {
 	defer tc.cleanup()
 
 	createTemplate(t, tc, ns)
+	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
 
-	created, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+	ctx := context.Background()
+	actorRef := &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id1"}
+	if _, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
 		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "id1"},
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
-	}})
-	if err != nil {
+	}}); err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
 
-	actorRef := resources.ActorRef{Atespace: testAtespace, Name: "id1"}
-	if _, err := tc.persistence.UpdateActor(context.Background(), actorRef, store.PreconditionFrom(created), func(toUpdate *ateapipb.Actor) error {
-		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_CRASHED
-		return nil
-	}); err != nil {
-		t.Fatalf("UpdateActor failed: %v", err)
+	// Resume onto worker-1 so AssignedNode is set to "node1", then delete
+	// worker-1 so the actor crashes and loses its WorkerAssignment.
+	if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: actorRef}); err != nil {
+		t.Fatalf("ResumeActor failed: %v", err)
+	}
+	deleteWorkerPod(t, tc, ns, "worker-1")
+
+	crashed, err := tc.client.GetActor(ctx, &ateapipb.GetActorRequest{Actor: actorRef})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	if got := crashed.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+		t.Fatalf("state = %v, want CRASHED", got)
+	}
+	if got := crashed.GetStatus().GetAssignedNode(); got != "node1" {
+		t.Fatalf("assigned node = %q, want node1", got)
+	}
+	if got := crashed.GetStatus().GetWorkerAssignment(); got != nil {
+		t.Fatalf("worker assignment = %v, want nil", got)
 	}
 
-	deleted, err := tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id1"},
+	tc.fakeAtelet.Lock.Lock()
+	tc.fakeAtelet.TerminateCalled = false
+	tc.fakeAtelet.Lock.Unlock()
+
+	deleted, err := tc.client.DeleteActor(ctx, &ateapipb.DeleteActorRequest{
+		Actor: actorRef,
 	})
 	if err != nil {
 		t.Fatalf("DeleteActor of crashed actor failed: %v", err)
@@ -1142,9 +1161,14 @@ func TestDeleteActor_Crashed(t *testing.T) {
 	if got := deleted.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_DELETING {
 		t.Errorf("deleted actor state = %v, want %v", got, ateapipb.ActorState_ACTOR_STATE_DELETING)
 	}
+	if !tc.fakeAtelet.TerminateCalled {
+		t.Errorf("expected Terminate call to clean up assigned node for crashed actor")
+	} else if gotUID := tc.fakeAtelet.TerminateRequest.GetTargetAteomUid(); gotUID != "" {
+		t.Errorf("TerminateRequest.TargetAteomUid = %q, want empty for crashed actor", gotUID)
+	}
 
-	_, err = tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id1"},
+	_, err = tc.client.GetActor(ctx, &ateapipb.GetActorRequest{
+		Actor: actorRef,
 	})
 	assertGrpcError(t, err, codes.NotFound, "Actor test-atespace/id1 not found")
 }
@@ -2806,6 +2830,7 @@ func TestResumeActor(t *testing.T) {
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
 		Status: &ateapipb.ActorStatus{
 			State:            ateapipb.ActorState_ACTOR_STATE_RUNNING,
+			AssignedNode:     "node1",
 			ExternalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, ActorTemplateUid: tmpl.GetMetadata().GetUid()},
 			WorkerAssignment: &ateapipb.WorkerAssignment{
 				Worker:          &ateapipb.ObjectRef{Name: podUID},
@@ -3909,10 +3934,10 @@ func TestPauseActor(t *testing.T) {
 		Metadata:      &ateapipb.ResourceMetadata{Name: name, Atespace: testAtespace},
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
 		Status: &ateapipb.ActorStatus{
-			State: ateapipb.ActorState_ACTOR_STATE_PAUSED,
+			State:        ateapipb.ActorState_ACTOR_STATE_PAUSED,
+			AssignedNode: "node1",
 			LocalSnapshot: &ateapipb.LocalSnapshot{
-				NodeVmsWithLocalSnapshots: []string{"node1"},
-				ContentScope:              ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+				ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 			},
 			ExternalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, ActorTemplateUid: tmpl.GetMetadata().GetUid()},
 		},
@@ -4826,8 +4851,8 @@ func TestResumeActor_RelocatesAfterSuspendFromPaused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetActor(%s) failed: %v", pinned, err)
 	}
-	if got := paused.GetStatus().GetLocalSnapshot().GetNodeVmsWithLocalSnapshots(); len(got) != 1 || got[0] != "node1" {
-		t.Fatalf("paused actor pinned to %v, want [node1]", got)
+	if got := paused.GetStatus().GetAssignedNode(); got != "node1" {
+		t.Fatalf("paused actor pinned to %q, want node1", got)
 	}
 	waitForWorkerAvailable(t, tc, workerName)
 
@@ -5272,8 +5297,13 @@ func TestRevertActor_FromPaused(t *testing.T) {
 	if got.GetWorkerAssignment() != nil {
 		t.Errorf("worker assignment = %v, want nil", got.GetWorkerAssignment())
 	}
-	if tc.fakeAtelet.TerminateCalled {
-		t.Errorf("unexpected Terminate call for paused actor")
+	if got.GetAssignedNode() != "" {
+		t.Errorf("assigned node = %q, want empty", got.GetAssignedNode())
+	}
+	if !tc.fakeAtelet.TerminateCalled {
+		t.Errorf("expected Terminate call to clean up assigned node for paused actor")
+	} else if gotUID := tc.fakeAtelet.TerminateRequest.GetTargetAteomUid(); gotUID != "" {
+		t.Errorf("TerminateRequest.TargetAteomUid = %q, want empty for paused actor", gotUID)
 	}
 	if tc.fakeAtelet.CheckpointCalled {
 		t.Errorf("RevertActor checkpointed the workload, want the execution discarded")
@@ -5348,8 +5378,13 @@ func TestRevertActor_FromCrashed(t *testing.T) {
 	if got.GetWorkerAssignment() != nil {
 		t.Errorf("worker assignment = %v, want nil", got.GetWorkerAssignment())
 	}
-	if tc.fakeAtelet.TerminateCalled {
-		t.Errorf("unexpected Terminate call for crashed actor with no worker")
+	if got.GetAssignedNode() != "" {
+		t.Errorf("assigned node = %q, want empty", got.GetAssignedNode())
+	}
+	if !tc.fakeAtelet.TerminateCalled {
+		t.Errorf("expected Terminate call to clean up assigned node for crashed actor")
+	} else if gotUID := tc.fakeAtelet.TerminateRequest.GetTargetAteomUid(); gotUID != "" {
+		t.Errorf("TerminateRequest.TargetAteomUid = %q, want empty for crashed actor", gotUID)
 	}
 	if tc.fakeAtelet.CheckpointCalled {
 		t.Errorf("RevertActor checkpointed the workload, want the execution discarded")

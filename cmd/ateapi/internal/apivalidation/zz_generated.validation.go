@@ -904,6 +904,37 @@ func Validate_ActorStatus(
 		errs = append(errs, fn(fldPath.Child("crash"), obj.Crash, oldVal, oldObj != nil)...)
 	}
 
+	{ // field ateapipb.ActorStatus.AssignedNode
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.LongName(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.ActorStatus) *string {
+				return &oldObj.AssignedNode
+			})
+		errs = append(errs, fn(fldPath.Child("assigned_node"), &obj.AssignedNode, oldVal, oldObj != nil)...)
+	}
+
 	return errs
 }
 
@@ -5541,45 +5572,6 @@ func Validate_LocalSnapshot(
 				return &oldObj.SnapshotName
 			})
 		errs = append(errs, fn(fldPath.Child("snapshot_name"), &obj.SnapshotName, oldVal, oldObj != nil)...)
-	}
-
-	{ // field ateapipb.LocalSnapshot.NodeVmsWithLocalSnapshots
-		fn := func(
-			fldPath *field.Path,
-			obj, oldObj []string,
-			oldValueCorrelated bool) (errs field.ErrorList) {
-			// don't revalidate unchanged data
-			if oldValueCorrelated && op.Type == operation.Update {
-				if ateDeepEqual(obj, oldObj) {
-					return nil
-				}
-			}
-			// call field-attached validations
-			earlyReturn := false
-			if e := validate.MaxItems(ctx, op, fldPath, obj, oldObj, 256).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
-				earlyReturn = true
-			}
-			if e := validate.OptionalSlice(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				earlyReturn = true
-			}
-			if earlyReturn {
-				return // do not proceed
-			}
-			if e := validate.EachValSliceVal(ctx, op, fldPath, obj, oldObj, validate.DirectEqual, nil, validate.LongName); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			// lists with set semantics require unique values
-			if e := validate.ValSliceUnique(ctx, op, fldPath, obj, oldObj, validate.DirectEqual); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			return
-		}
-		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.LocalSnapshot) []string {
-				return oldObj.NodeVmsWithLocalSnapshots
-			})
-		errs = append(errs, fn(fldPath.Child("node_vms_with_local_snapshots"), obj.NodeVmsWithLocalSnapshots, oldVal, oldObj != nil)...)
 	}
 
 	{ // field ateapipb.LocalSnapshot.ContentScope

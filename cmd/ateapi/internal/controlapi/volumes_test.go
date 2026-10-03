@@ -26,7 +26,6 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/testing/protocmp"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/volume"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -452,25 +451,6 @@ func (m *mockPluginRegistry) GetPlugin(ctx context.Context, name string) (volume
 	return p, nil
 }
 
-type mockDetachStore struct {
-	workers map[string]*ateapipb.Worker
-	err     error
-}
-
-func (m *mockDetachStore) GetWorker(ctx context.Context, name string) (*ateapipb.Worker, error) {
-	if m.err != nil {
-		return nil, m.err
-	}
-	if m.workers == nil {
-		return nil, store.ErrNotFound
-	}
-	w, ok := m.workers[name]
-	if !ok {
-		return nil, store.ErrNotFound
-	}
-	return w, nil
-}
-
 type detachCall struct {
 	VolumeID string
 	Node     string
@@ -495,16 +475,10 @@ func (m *mockDetachVolumePlugin) DetachVolume(ctx context.Context, volumeID, nod
 func TestDetachActorVolumes(t *testing.T) {
 	ctx := context.Background()
 
-	baseWorker := &ateapipb.Worker{
-		Metadata: &ateapipb.ResourceMetadata{Name: "worker-1"},
-		NodeName: "node-1",
-	}
-
 	tests := []struct {
 		name            string
 		actor           *ateapipb.Actor
 		template        *ateapipb.ActorTemplate
-		store           *mockDetachStore
 		plugin          *mockDetachVolumePlugin
 		pluginRegistry  *mockPluginRegistry
 		wantDetachCalls []detachCall
@@ -516,9 +490,7 @@ func TestDetachActorVolumes(t *testing.T) {
 			actor: &ateapipb.Actor{
 				Metadata: &ateapipb.ResourceMetadata{Name: "actor-1", Atespace: "default"},
 				Status: &ateapipb.ActorStatus{
-					WorkerAssignment: &ateapipb.WorkerAssignment{
-						Worker: &ateapipb.ObjectRef{Name: "worker-1"},
-					},
+					AssignedNode: "node-1",
 					ActorVolumes: []*ateapipb.ExternalVolume{
 						{VolumeName: "vol1", StorageVolumeId: "storage-vol-1", VolumeType: "mock"},
 						{VolumeName: "vol2", StorageVolumeId: "storage-vol-2", VolumeType: "mock"},
@@ -539,9 +511,6 @@ func TestDetachActorVolumes(t *testing.T) {
 					},
 				},
 			},
-			store: &mockDetachStore{
-				workers: map[string]*ateapipb.Worker{"worker-1": baseWorker},
-			},
 			wantDetachCalls: []detachCall{
 				{VolumeID: "storage-vol-1", Node: "node-1"},
 				{VolumeID: "storage-vol-2", Node: "node-1"},
@@ -552,9 +521,7 @@ func TestDetachActorVolumes(t *testing.T) {
 			actor: &ateapipb.Actor{
 				Metadata: &ateapipb.ResourceMetadata{Name: "actor-1", Atespace: "default"},
 				Status: &ateapipb.ActorStatus{
-					WorkerAssignment: &ateapipb.WorkerAssignment{
-						Worker: &ateapipb.ObjectRef{Name: "worker-1"},
-					},
+					AssignedNode: "node-1",
 					ActorVolumes: []*ateapipb.ExternalVolume{
 						{VolumeName: "mounted-vol", StorageVolumeId: "storage-vol-mounted", VolumeType: "mock"},
 						{VolumeName: "unmounted-vol", StorageVolumeId: "storage-vol-unmounted", VolumeType: "mock"},
@@ -574,9 +541,6 @@ func TestDetachActorVolumes(t *testing.T) {
 					},
 				},
 			},
-			store: &mockDetachStore{
-				workers: map[string]*ateapipb.Worker{"worker-1": baseWorker},
-			},
 			wantDetachCalls: []detachCall{
 				{VolumeID: "storage-vol-mounted", Node: "node-1"},
 			},
@@ -586,9 +550,7 @@ func TestDetachActorVolumes(t *testing.T) {
 			actor: &ateapipb.Actor{
 				Metadata: &ateapipb.ResourceMetadata{Name: "actor-1", Atespace: "default"},
 				Status: &ateapipb.ActorStatus{
-					WorkerAssignment: &ateapipb.WorkerAssignment{
-						Worker: &ateapipb.ObjectRef{Name: "worker-1"},
-					},
+					AssignedNode: "node-1",
 					ActorVolumes: []*ateapipb.ExternalVolume{
 						{VolumeName: "vol1", StorageVolumeId: "", VolumeType: "mock"},
 						{VolumeName: "vol2", StorageVolumeId: "storage-vol-2", VolumeType: "mock"},
@@ -609,9 +571,6 @@ func TestDetachActorVolumes(t *testing.T) {
 					},
 				},
 			},
-			store: &mockDetachStore{
-				workers: map[string]*ateapipb.Worker{"worker-1": baseWorker},
-			},
 			wantDetachCalls: []detachCall{
 				{VolumeID: "storage-vol-2", Node: "node-1"},
 			},
@@ -621,9 +580,7 @@ func TestDetachActorVolumes(t *testing.T) {
 			actor: &ateapipb.Actor{
 				Metadata: &ateapipb.ResourceMetadata{Name: "actor-1", Atespace: "default"},
 				Status: &ateapipb.ActorStatus{
-					WorkerAssignment: &ateapipb.WorkerAssignment{
-						Worker: &ateapipb.ObjectRef{Name: "worker-1"},
-					},
+					AssignedNode: "node-1",
 					ActorVolumes: []*ateapipb.ExternalVolume{
 						{VolumeName: "vol1", StorageVolumeId: "storage-vol-1", VolumeType: "mock"},
 						{VolumeName: "vol2", StorageVolumeId: "storage-vol-2", VolumeType: "mock"},
@@ -631,9 +588,6 @@ func TestDetachActorVolumes(t *testing.T) {
 				},
 			},
 			template: nil,
-			store: &mockDetachStore{
-				workers: map[string]*ateapipb.Worker{"worker-1": baseWorker},
-			},
 			wantDetachCalls: []detachCall{
 				{VolumeID: "storage-vol-1", Node: "node-1"},
 				{VolumeID: "storage-vol-2", Node: "node-1"},
@@ -644,9 +598,7 @@ func TestDetachActorVolumes(t *testing.T) {
 			actor: &ateapipb.Actor{
 				Metadata: &ateapipb.ResourceMetadata{Name: "actor-1", Atespace: "default"},
 				Status: &ateapipb.ActorStatus{
-					WorkerAssignment: &ateapipb.WorkerAssignment{
-						Worker: &ateapipb.ObjectRef{Name: "worker-1"},
-					},
+					AssignedNode: "node-1",
 					ActorVolumes: []*ateapipb.ExternalVolume{
 						{VolumeName: "vol1", StorageVolumeId: "storage-vol-1", VolumeType: "mock"},
 					},
@@ -656,9 +608,6 @@ func TestDetachActorVolumes(t *testing.T) {
 				detachErrs: map[string]error{
 					"storage-vol-1": status.Error(codes.NotFound, "volume not found"),
 				},
-			},
-			store: &mockDetachStore{
-				workers: map[string]*ateapipb.Worker{"worker-1": baseWorker},
 			},
 			wantDetachCalls: []detachCall{
 				{VolumeID: "storage-vol-1", Node: "node-1"},
@@ -670,9 +619,7 @@ func TestDetachActorVolumes(t *testing.T) {
 			actor: &ateapipb.Actor{
 				Metadata: &ateapipb.ResourceMetadata{Name: "actor-1", Atespace: "default"},
 				Status: &ateapipb.ActorStatus{
-					WorkerAssignment: &ateapipb.WorkerAssignment{
-						Worker: &ateapipb.ObjectRef{Name: "worker-1"},
-					},
+					AssignedNode: "node-1",
 					ActorVolumes: []*ateapipb.ExternalVolume{
 						{VolumeName: "vol1", StorageVolumeId: "storage-vol-1", VolumeType: "mock"},
 						{VolumeName: "vol2", StorageVolumeId: "storage-vol-2", VolumeType: "mock"},
@@ -683,9 +630,6 @@ func TestDetachActorVolumes(t *testing.T) {
 				detachErrs: map[string]error{
 					"storage-vol-1": status.Error(codes.Internal, "disk detach failed"),
 				},
-			},
-			store: &mockDetachStore{
-				workers: map[string]*ateapipb.Worker{"worker-1": baseWorker},
 			},
 			wantDetachCalls: []detachCall{
 				{VolumeID: "storage-vol-1", Node: "node-1"},
@@ -699,95 +643,28 @@ func TestDetachActorVolumes(t *testing.T) {
 			actor: &ateapipb.Actor{
 				Metadata: &ateapipb.ResourceMetadata{Name: "actor-1", Atespace: "default"},
 				Status: &ateapipb.ActorStatus{
-					WorkerAssignment: &ateapipb.WorkerAssignment{
-						Worker: &ateapipb.ObjectRef{Name: "worker-1"},
-					},
+					AssignedNode: "node-1",
 					ActorVolumes: []*ateapipb.ExternalVolume{
 						{VolumeName: "vol1", StorageVolumeId: "storage-vol-1", VolumeType: "unknown-plugin"},
 					},
 				},
 			},
-			store: &mockDetachStore{
-				workers: map[string]*ateapipb.Worker{"worker-1": baseWorker},
-			},
 			wantErr:         true,
 			wantErrContains: "failed to get volume plugin for \"unknown-plugin\"",
 		},
 		{
-			name: "no worker assignment skips detach",
+			name: "no assigned node skips detach",
 			actor: &ateapipb.Actor{
 				Metadata: &ateapipb.ResourceMetadata{Name: "actor-1", Atespace: "default"},
 				Status: &ateapipb.ActorStatus{
-					WorkerAssignment: nil,
+					AssignedNode: "",
 					ActorVolumes: []*ateapipb.ExternalVolume{
 						{VolumeName: "vol1", StorageVolumeId: "storage-vol-1", VolumeType: "mock"},
-					},
-				},
-			},
-			store:           &mockDetachStore{},
-			wantDetachCalls: nil,
-			wantErr:         false,
-		},
-		{
-			name: "worker not found in store skips detach",
-			actor: &ateapipb.Actor{
-				Metadata: &ateapipb.ResourceMetadata{Name: "actor-1", Atespace: "default"},
-				Status: &ateapipb.ActorStatus{
-					WorkerAssignment: &ateapipb.WorkerAssignment{
-						Worker: &ateapipb.ObjectRef{Name: "nonexistent-worker"},
-					},
-					ActorVolumes: []*ateapipb.ExternalVolume{
-						{VolumeName: "vol1", StorageVolumeId: "storage-vol-1", VolumeType: "mock"},
-					},
-				},
-			},
-			store:           &mockDetachStore{workers: map[string]*ateapipb.Worker{}},
-			wantDetachCalls: nil,
-			wantErr:         false,
-		},
-		{
-			name: "worker has empty node name skips detach",
-			actor: &ateapipb.Actor{
-				Metadata: &ateapipb.ResourceMetadata{Name: "actor-1", Atespace: "default"},
-				Status: &ateapipb.ActorStatus{
-					WorkerAssignment: &ateapipb.WorkerAssignment{
-						Worker: &ateapipb.ObjectRef{Name: "worker-1"},
-					},
-					ActorVolumes: []*ateapipb.ExternalVolume{
-						{VolumeName: "vol1", StorageVolumeId: "storage-vol-1", VolumeType: "mock"},
-					},
-				},
-			},
-			store: &mockDetachStore{
-				workers: map[string]*ateapipb.Worker{
-					"worker-1": {
-						Metadata: &ateapipb.ResourceMetadata{Name: "worker-1"},
-						NodeName: "",
 					},
 				},
 			},
 			wantDetachCalls: nil,
 			wantErr:         false,
-		},
-		{
-			name: "store internal error returns error",
-			actor: &ateapipb.Actor{
-				Metadata: &ateapipb.ResourceMetadata{Name: "actor-1", Atespace: "default"},
-				Status: &ateapipb.ActorStatus{
-					WorkerAssignment: &ateapipb.WorkerAssignment{
-						Worker: &ateapipb.ObjectRef{Name: "worker-1"},
-					},
-					ActorVolumes: []*ateapipb.ExternalVolume{
-						{VolumeName: "vol1", StorageVolumeId: "storage-vol-1", VolumeType: "mock"},
-					},
-				},
-			},
-			store: &mockDetachStore{
-				err: errors.New("db connection failure"),
-			},
-			wantDetachCalls: nil,
-			wantErr:         true,
-			wantErrContains: "failed to get worker: db connection failure",
 		},
 	}
 
@@ -806,7 +683,7 @@ func TestDetachActorVolumes(t *testing.T) {
 				}
 			}
 
-			err := detachActorVolumes(ctx, tt.store, registry, tt.actor, tt.template, "test")
+			err := detachActorVolumes(ctx, registry, tt.actor, tt.template, "test")
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("detachActorVolumes() error = %v, wantErr %v", err, tt.wantErr)
 			}

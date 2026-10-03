@@ -196,24 +196,12 @@ message ExternalSnapshot {
 
 // LocalSnapshot records information about a node-local snapshot.
 message LocalSnapshot {
-  // The name of the local checkpoint on each of the nodes below. Checkpoint
-  // names are server-generated UUIDs, but any resource name is valid here.
+  // The name of the local checkpoint on the node. Checkpoint names are
+  // server-generated UUIDs, but any resource name is valid here.
   //
   // +k8s:optional
   // +k8s:format=k8s-short-name
   string snapshot_name = 1;
-
-  // Node VMs that have local snapshots for this actor, while it's PAUSED.
-  // Each node appears at most once.
-  //
-  // TODO: revisit this design; a snapshot propagated to every node would
-  // grow this list with the fleet, and the bound below is provisional.
-  //
-  // +k8s:optional
-  // +k8s:maxItems=256
-  // +k8s:listType=set
-  // +k8s:eachVal=+k8s:format=k8s-long-name
-  repeated string node_vms_with_local_snapshots = 2;
 
   // Scope the pause checkpoint captured (the template's onPause at pause
   // time). UNSPECIFIED is tolerated for compatibility and reads as FULL.
@@ -221,7 +209,7 @@ message LocalSnapshot {
   // +k8s:optional
   // +k8s:minimum=1
   // +k8s:maximum=2 # keep this in sync with the SnapshotContentScope enum
-  SnapshotContentScope content_scope = 3;
+  SnapshotContentScope content_scope = 2;
 }
 
 enum SnapshotContentScope {
@@ -763,6 +751,14 @@ message ActorStatus {
   //
   // +k8s:optional
   ActorCrash crash = 9;
+
+  // assigned_node is the Kubernetes node the Actor is currently attached to
+  // (hosting its active worker or its node-local snapshots). Unset when the
+  // Actor is detached from any node.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-long-name
+  string assigned_node = 10;
 }
 
 // ActorCrash describes the failure that moved an Actor to CRASHED.

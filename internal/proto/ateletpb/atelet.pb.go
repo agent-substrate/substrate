@@ -693,14 +693,15 @@ func (x *MintActorCertificateResponse) GetActorCertificates() [][]byte {
 }
 
 type TerminateRequest struct {
-	state                 protoimpl.MessageState `protogen:"open.v1"`
-	TargetAteomUid        string                 `protobuf:"bytes,1,opt,name=target_ateom_uid,json=targetAteomUid,proto3" json:"target_ateom_uid,omitempty"`
-	Atespace              string                 `protobuf:"bytes,2,opt,name=atespace,proto3" json:"atespace,omitempty"`
-	ActorName             string                 `protobuf:"bytes,3,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
-	ActorUid              string                 `protobuf:"bytes,4,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
-	ActorTemplateAtespace string                 `protobuf:"bytes,5,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
-	ActorTemplateName     string                 `protobuf:"bytes,6,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
-	Spec                  *WorkloadSpec          `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// If unset, the atelet will just cleanup node resources for the actor.
+	TargetAteomUid        string        `protobuf:"bytes,1,opt,name=target_ateom_uid,json=targetAteomUid,proto3" json:"target_ateom_uid,omitempty"`
+	Atespace              string        `protobuf:"bytes,2,opt,name=atespace,proto3" json:"atespace,omitempty"`
+	ActorName             string        `protobuf:"bytes,3,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
+	ActorUid              string        `protobuf:"bytes,4,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
+	ActorTemplateAtespace string        `protobuf:"bytes,5,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
+	ActorTemplateName     string        `protobuf:"bytes,6,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
+	Spec                  *WorkloadSpec `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
 	unknownFields         protoimpl.UnknownFields
 	sizeCache             protoimpl.SizeCache
 }
