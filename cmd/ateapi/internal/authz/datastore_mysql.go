@@ -21,30 +21,20 @@ import (
 	"database/sql/driver"
 	"encoding/hex"
 	"fmt"
-	"time"
 
 	sq "github.com/Masterminds/squirrel"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storesql"
-	openfgav1 "github.com/openfga/api/proto/openfga/v1"
-	"github.com/openfga/openfga/pkg/storage"
 	"github.com/openfga/openfga/pkg/storage/mysql"
 	"github.com/openfga/openfga/pkg/storage/sqlcommon"
 )
 
-// mysqlTransactionalDatastore is the MySQL counterpart of
-// transactionalDatastore; the NOTE in datastore.go applies to both. It wraps
-// github.com/openfga/openfga/pkg/storage/mysql/mysql.go, whose schema atemy
-// migration 000002 pins.
-type mysqlTransactionalDatastore struct {
-	*mysql.Datastore
-}
-
-// newMySQLTransactionalDatastore wraps an upstream MySQL datastore on db.
-// mysql.NewWithDB (mysql.go:78-86) calls db.SetMaxOpenConns,
-// SetConnMaxIdleTime, and SetConnMaxLifetime unconditionally, so the config
-// carries db's open-connection limit forward and restates the lifetimes
-// atemy.Connect sets. database/sql exposes no getter for the lifetimes.
-func newMySQLTransactionalDatastore(db *sql.DB) (*mysqlTransactionalDatastore, error) {
+// newMySQLDatastore builds the upstream OpenFGA MySQL datastore on db, whose
+// schema atemy migration 000002 pins. mysql.NewWithDB (mysql.go:78-86) calls
+// db.SetMaxOpenConns, SetConnMaxIdleTime, and SetConnMaxLifetime
+// unconditionally, so the config carries db's open-connection limit forward
+// and restates the lifetimes atemy.Connect sets. database/sql exposes no
+// getter for the lifetimes.
+func newMySQLDatastore(db *sql.DB) (*mysql.Datastore, error) {
 	cfg := sqlcommon.NewConfig()
 	cfg.MaxOpenConns = db.Stats().MaxOpenConnections
 	cfg.ConnMaxLifetime = storesql.ConnMaxLifetime
@@ -53,63 +43,11 @@ func newMySQLTransactionalDatastore(db *sql.DB) (*mysqlTransactionalDatastore, e
 	if err != nil {
 		return nil, fmt.Errorf("creating OpenFGA mysql adapter: %w", err)
 	}
-	return &mysqlTransactionalDatastore{Datastore: ds}, nil
+	return ds, nil
 }
 
-// Close is a no-op because the underlying *sql.DB is owned and closed by the
-// caller (cmd/ateapi/main.go), and OpenFGA's server.Close() calls datastore.Close().
-// Upstream equivalent: (*mysql.Datastore).Close (mysql.go:129-134).
-func (d *mysqlTransactionalDatastore) Close() {}
-
-// ReadAuthorizationModel queries the authorization_model table on the *sql.Tx
-// in ctx when present, and otherwise delegates to the pool datastore.
-//
-// 1:1 with (*mysql.Datastore).ReadAuthorizationModel (mysql.go:410-415).
-func (d *mysqlTransactionalDatastore) ReadAuthorizationModel(ctx context.Context, store string, modelID string) (*openfgav1.AuthorizationModel, error) {
-	tx, ok := sqlTxFromContext(ctx)
-	if !ok {
-		return d.Datastore.ReadAuthorizationModel(ctx, store, modelID)
-	}
-	return readAuthorizationModelOnTx(ctx, sqlTxStatements(tx), store, modelID)
-}
-
-// ReadPage requires an active *sql.Tx on ctx via ContextWithTx and executes the
-// paginated tuple query on that transaction.
-//
-// 1:1 with (*mysql.Datastore).ReadPage (mysql.go:150-161).
-func (d *mysqlTransactionalDatastore) ReadPage(
-	ctx context.Context,
-	store string,
-	filter storage.ReadFilter,
-	options storage.ReadPageOptions,
-) ([]*openfgav1.Tuple, string, error) {
-	tx, ok := sqlTxFromContext(ctx)
-	if !ok {
-		return nil, "", ErrNoTransactionInContext
-	}
-	return readPageOnTx(ctx, sqlTxStatements(tx), store, filter, options)
-}
-
-// Write requires an active *sql.Tx on ctx via ContextWithTx and executes the
-// write on that transaction without calling BeginTx or Commit.
-//
-// 1:1 with (*mysql.Datastore).Write (mysql.go:221-238).
-func (d *mysqlTransactionalDatastore) Write(
-	ctx context.Context,
-	store string,
-	deletes storage.Deletes,
-	writes storage.Writes,
-	opts ...storage.TupleWriteOption,
-) error {
-	tx, ok := sqlTxFromContext(ctx)
-	if !ok {
-		return ErrNoTransactionInContext
-	}
-	return writeOnTx(ctx, sqlTxStatements(tx), store, deletes, writes, storage.NewTupleWriteOptions(opts...), time.Now().UTC())
-}
-
-func sqlTxStatements(tx *sql.Tx) txStatements {
-	return txStatements{
+func sqlTxStatements(tx *sql.Tx) *txStatements {
+	return &txStatements{
 		stbl:      sq.StatementBuilder.PlaceholderFormat(sq.Question),
 		connector: sqlcommon.NewTxConnector(tx),
 		exec: func(ctx context.Context, stmt string, args ...any) (int64, error) {
@@ -120,6 +58,7 @@ func sqlTxStatements(tx *sql.Tx) txStatements {
 			return res.RowsAffected()
 		},
 		handleError: mysql.HandleSQLError,
+		mysql:       true,
 	}
 }
 
@@ -141,22 +80,31 @@ func acquireMySQLInitLock(ctx context.Context, db *sql.DB) (func(), error) {
 	if err != nil {
 		return nil, fmt.Errorf("acquiring connection for OpenFGA init lock: %w", err)
 	}
+	fail := func(err error) (func(), error) {
+		_ = conn.Close()
+		return nil, fmt.Errorf("acquiring OpenFGA init lock: %w", err)
+	}
 	var database string
 	if err := conn.QueryRowContext(ctx, `SELECT DATABASE()`).Scan(&database); err != nil {
-		_ = conn.Close()
-		return nil, fmt.Errorf("acquiring OpenFGA init lock: %w", err)
+		return fail(err)
 	}
 	name := mysqlInitLockName(database)
-	var acquired sql.NullInt64
-	// A negative timeout waits indefinitely; canceling ctx closes the
-	// connection, which ends the wait.
-	if err := conn.QueryRowContext(ctx, `SELECT GET_LOCK(?, -1)`, name).Scan(&acquired); err != nil {
-		_ = conn.Close()
-		return nil, fmt.Errorf("acquiring OpenFGA init lock: %w", err)
-	}
-	if !acquired.Valid || acquired.Int64 != 1 {
-		_ = conn.Close()
-		return nil, fmt.Errorf("acquiring OpenFGA init lock: GET_LOCK did not grant %q", name)
+	// GET_LOCK waits one second at a time because the server keeps waiting
+	// after the client gives up, so a canceled ctx must end the loop.
+	for {
+		var acquired sql.NullInt64
+		if err := conn.QueryRowContext(ctx, `SELECT GET_LOCK(?, 1)`, name).Scan(&acquired); err != nil {
+			return fail(err)
+		}
+		if !acquired.Valid {
+			return fail(fmt.Errorf("GET_LOCK returned NULL for %q", name))
+		}
+		if acquired.Int64 == 1 {
+			break
+		}
+		if err := ctx.Err(); err != nil {
+			return fail(err)
+		}
 	}
 	return func() {
 		_, _ = conn.ExecContext(context.Background(), `SELECT RELEASE_LOCK(?)`, name)

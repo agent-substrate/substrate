@@ -103,7 +103,6 @@ func requireContainer(t *testing.T, name string, err error) {
 type testDB struct {
 	name    string
 	backend Backend
-	begin   func(t *testing.T, ctx context.Context) testTx
 	// queryBool runs a single-row, single-column boolean query on the pool.
 	queryBool func(t *testing.T, ctx context.Context, query string) bool
 	ping      func(ctx context.Context) error
@@ -185,23 +184,6 @@ func startPostgres(t *testing.T) testDB {
 	return testDB{
 		name:    "postgres",
 		backend: PostgresBackend(pool),
-		begin: func(t *testing.T, ctx context.Context) testTx {
-			t.Helper()
-			tx, err := pool.Begin(ctx)
-			if err != nil {
-				t.Fatalf("pool.Begin failed: %v", err)
-			}
-			t.Cleanup(func() { _ = tx.Rollback(context.Background()) })
-			return testTx{
-				tx: PgxTx(tx),
-				exec: func(ctx context.Context, query string) error {
-					_, err := tx.Exec(ctx, query)
-					return err
-				},
-				commit:   tx.Commit,
-				rollback: tx.Rollback,
-			}
-		},
 		queryBool: func(t *testing.T, ctx context.Context, query string) bool {
 			t.Helper()
 			var v bool
@@ -308,23 +290,6 @@ func startMySQL(t *testing.T) testDB {
 	return testDB{
 		name:    "mysql",
 		backend: MySQLBackend(db),
-		begin: func(t *testing.T, ctx context.Context) testTx {
-			t.Helper()
-			tx, err := db.BeginTx(ctx, nil)
-			if err != nil {
-				t.Fatalf("db.BeginTx failed: %v", err)
-			}
-			t.Cleanup(func() { _ = tx.Rollback() })
-			return testTx{
-				tx: SQLTx(tx),
-				exec: func(ctx context.Context, query string) error {
-					_, err := tx.ExecContext(ctx, query)
-					return err
-				},
-				commit:   func(context.Context) error { return tx.Commit() },
-				rollback: func(context.Context) error { return tx.Rollback() },
-			}
-		},
 		queryBool: func(t *testing.T, ctx context.Context, query string) bool {
 			t.Helper()
 			var v bool
@@ -505,6 +470,21 @@ func TestAcquireInitLock(t *testing.T) {
 	})
 }
 
+func TestAcquireInitLock_CanceledWhileHeld(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, db testDB) {
+		unlock, err := acquireInitLock(t.Context(), db.backend)
+		if err != nil {
+			t.Fatalf("acquireInitLock failed: %v", err)
+		}
+		defer unlock()
+		ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+		defer cancel()
+		if _, err := acquireInitLock(ctx, db.backend); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("acquireInitLock while held = %v, want context.DeadlineExceeded", err)
+		}
+	})
+}
+
 func TestTransactionalDatastore_RollbackAndCommit(t *testing.T) {
 	forEachBackend(t, func(t *testing.T, db testDB) {
 		ctx := context.Background()
@@ -666,6 +646,11 @@ func TestTransactionalDatastore_RollbackAndCommit(t *testing.T) {
 	})
 }
 
+func (db testDB) begin(t *testing.T, ctx context.Context) testTx {
+	t.Helper()
+	return beginOn(t, ctx, db.backend)
+}
+
 // beginOn opens a transaction on backend's own pool, which may differ from
 // the testDB pool (such as a single-connection pool).
 func beginOn(t *testing.T, ctx context.Context, backend Backend) testTx {
@@ -676,7 +661,15 @@ func beginOn(t *testing.T, ctx context.Context, backend Backend) testTx {
 			t.Fatalf("pool.Begin failed: %v", err)
 		}
 		t.Cleanup(func() { _ = tx.Rollback(context.Background()) })
-		return testTx{tx: PgxTx(tx), commit: tx.Commit, rollback: tx.Rollback}
+		return testTx{
+			tx: PgxTx(tx),
+			exec: func(ctx context.Context, query string) error {
+				_, err := tx.Exec(ctx, query)
+				return err
+			},
+			commit:   tx.Commit,
+			rollback: tx.Rollback,
+		}
 	}
 	tx, err := backend.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -684,7 +677,11 @@ func beginOn(t *testing.T, ctx context.Context, backend Backend) testTx {
 	}
 	t.Cleanup(func() { _ = tx.Rollback() })
 	return testTx{
-		tx:       SQLTx(tx),
+		tx: SQLTx(tx),
+		exec: func(ctx context.Context, query string) error {
+			_, err := tx.ExecContext(ctx, query)
+			return err
+		},
 		commit:   func(context.Context) error { return tx.Commit() },
 		rollback: func(context.Context) error { return tx.Rollback() },
 	}

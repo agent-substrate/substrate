@@ -27,7 +27,6 @@ import (
 	openfgav1 "github.com/openfga/api/proto/openfga/v1"
 	"github.com/openfga/language/pkg/go/transformer"
 	"github.com/openfga/openfga/pkg/server"
-	"github.com/openfga/openfga/pkg/storage"
 	"github.com/openfga/openfga/pkg/storage/postgres"
 	"github.com/openfga/openfga/pkg/storage/sqlcommon"
 	"google.golang.org/protobuf/proto"
@@ -130,20 +129,20 @@ func MySQLBackend(db *sql.DB) Backend { return Backend{db: db} }
 // returned server stops OpenFGA's background workers without closing the
 // caller-owned pool.
 func NewOpenFGAServer(backend Backend) (*server.Server, error) {
-	var datastore storage.OpenFGADatastore
+	var datastore *transactionalDatastore
 	switch {
 	case backend.pool != nil:
-		rawDatastore, err := postgres.NewWithDB(backend.pool, nil, sqlcommon.NewConfig())
+		ds, err := postgres.NewWithDB(backend.pool, nil, sqlcommon.NewConfig())
 		if err != nil {
 			return nil, fmt.Errorf("creating OpenFGA postgres adapter: %w", err)
 		}
-		datastore = newTransactionalDatastore(rawDatastore)
+		datastore = &transactionalDatastore{OpenFGADatastore: ds}
 	case backend.db != nil:
-		mysqlDatastore, err := newMySQLTransactionalDatastore(backend.db)
+		ds, err := newMySQLDatastore(backend.db)
 		if err != nil {
 			return nil, err
 		}
-		datastore = mysqlDatastore
+		datastore = &transactionalDatastore{OpenFGADatastore: ds, mysql: true}
 	default:
 		return nil, fmt.Errorf("store backend must not be empty")
 	}

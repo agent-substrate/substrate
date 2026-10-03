@@ -25,17 +25,26 @@ import (
 // it with PgxTx for the PostgreSQL store or SQLTx for the MySQL store; the
 // zero value carries no transaction.
 type Tx struct {
-	pgx pgx.Tx
-	sql *sql.Tx
+	q *txStatements
 }
 
 // PgxTx wraps a PostgreSQL store transaction.
-func PgxTx(tx pgx.Tx) Tx { return Tx{pgx: tx} }
+func PgxTx(tx pgx.Tx) Tx {
+	if tx == nil {
+		return Tx{}
+	}
+	return Tx{q: pgxTxStatements(tx)}
+}
 
 // SQLTx wraps a MySQL store transaction.
-func SQLTx(tx *sql.Tx) Tx { return Tx{sql: tx} }
+func SQLTx(tx *sql.Tx) Tx {
+	if tx == nil {
+		return Tx{}
+	}
+	return Tx{q: sqlTxStatements(tx)}
+}
 
-func (t Tx) isZero() bool { return t.pgx == nil && t.sql == nil }
+func (t Tx) isZero() bool { return t.q == nil }
 
 type txContextKey struct{}
 
@@ -51,16 +60,4 @@ func ContextWithTx(ctx context.Context, tx Tx) context.Context {
 func TxFromContext(ctx context.Context) (Tx, bool) {
 	tx, ok := ctx.Value(txContextKey{}).(Tx)
 	return tx, ok && !tx.isZero()
-}
-
-// pgxTxFromContext retrieves the active PostgreSQL transaction from ctx.
-func pgxTxFromContext(ctx context.Context) (pgx.Tx, bool) {
-	tx, _ := TxFromContext(ctx)
-	return tx.pgx, tx.pgx != nil
-}
-
-// sqlTxFromContext retrieves the active MySQL transaction from ctx.
-func sqlTxFromContext(ctx context.Context) (*sql.Tx, bool) {
-	tx, _ := TxFromContext(ctx)
-	return tx.sql, tx.sql != nil
 }
