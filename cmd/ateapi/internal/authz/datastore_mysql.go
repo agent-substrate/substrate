@@ -89,22 +89,14 @@ func acquireMySQLInitLock(ctx context.Context, db *sql.DB) (func(), error) {
 		return fail(err)
 	}
 	name := mysqlInitLockName(database)
-	// GET_LOCK waits one second at a time because the server keeps waiting
-	// after the client gives up, so a canceled ctx must end the loop.
-	for {
-		var acquired sql.NullInt64
-		if err := conn.QueryRowContext(ctx, `SELECT GET_LOCK(?, 1)`, name).Scan(&acquired); err != nil {
-			return fail(err)
-		}
-		if !acquired.Valid {
-			return fail(fmt.Errorf("GET_LOCK returned NULL for %q", name))
-		}
-		if acquired.Int64 == 1 {
-			break
-		}
-		if err := ctx.Err(); err != nil {
-			return fail(err)
-		}
+	// A negative timeout waits until the lock is free. Canceling ctx closes the
+	// connection, and the server then abandons the wait.
+	var acquired sql.NullInt64
+	if err := conn.QueryRowContext(ctx, `SELECT GET_LOCK(?, -1)`, name).Scan(&acquired); err != nil {
+		return fail(err)
+	}
+	if !acquired.Valid || acquired.Int64 != 1 {
+		return fail(fmt.Errorf("GET_LOCK did not grant %q", name))
 	}
 	return func() {
 		_, _ = conn.ExecContext(context.Background(), `SELECT RELEASE_LOCK(?)`, name)

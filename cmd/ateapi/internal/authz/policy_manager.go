@@ -155,8 +155,8 @@ func (m *PolicyManager) reconcileBindings(ctx context.Context, tx Tx, obj string
 			if err != nil {
 				return err
 			}
-			if m.maxUserLength > 0 && utf8.RuneCountInString(fgaUser) > m.maxUserLength {
-				return status.Errorf(codes.InvalidArgument, "member %q is %d characters once encoded; this store holds at most %d", rawMember, utf8.RuneCountInString(fgaUser), m.maxUserLength)
+			if n := utf8.RuneCountInString(fgaUser); m.maxUserLength > 0 && n > m.maxUserLength {
+				return status.Errorf(codes.InvalidArgument, "member %q is %d characters once encoded; this store holds at most %d", rawMember, n, m.maxUserLength)
 			}
 			ru := relUser{relation: role, user: fgaUser}
 			if _, alreadyDesired := desiredSet[ru]; alreadyDesired {

@@ -134,7 +134,7 @@ type txStatements struct {
 	stbl        sq.StatementBuilderType
 	connector   sqlcommon.Connector
 	exec        func(ctx context.Context, stmt string, args ...any) (rowsAffected int64, err error)
-	handleError func(err error, args ...interface{}) error
+	handleError func(err error, args ...any) error
 	mysql       bool
 }
 

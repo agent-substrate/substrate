@@ -890,7 +890,7 @@ func TestPolicyManager_MemberLengthPerBackend(t *testing.T) {
 			t.Errorf("a 256-character member failed: %v", err)
 		}
 		err = reconcile("user:" + strings.Repeat("a", 252))
-		if db.backend.db == nil {
+		if db.name == "postgres" {
 			if err != nil {
 				t.Errorf("a 257-character member failed on PostgreSQL: %v", err)
 			}
