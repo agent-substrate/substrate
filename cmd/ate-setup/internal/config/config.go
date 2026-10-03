@@ -188,6 +188,14 @@ type Config struct {
 	// mysql-server-ca Secret, which ate-api-server mounts at
 	// /run/mysql-server-ca/server-ca.pem.
 	MySQLServerCAFile string
+	// MySQL TLS files already inside the ate-api-server pod, such as the pod
+	// identity credential bundle (ATE_API_MYSQL_TLS_CA_FILE,
+	// ATE_API_MYSQL_TLS_CERT_FILE, ATE_API_MYSQL_TLS_KEY_FILE). They play the
+	// part of the sslrootcert, sslcert and sslkey paths a PostgreSQL DSN names,
+	// which a MySQL DSN cannot carry.
+	MySQLTLSCAFile   string
+	MySQLTLSCertFile string
+	MySQLTLSKeyFile  string
 
 	// RolloutTimeout is the timeout duration for rollout status checks.
 	RolloutTimeout time.Duration
@@ -399,6 +407,9 @@ func Load(opts Options) (*Config, error) {
 		MySQLOwnerConnectionString:     firstNonEmpty(env["ATE_API_MYSQL_OWNER_CONNECTION_STRING"], mysqlReadWriteConnectionString),
 		MySQLPoolMaxConns:              env["ATE_API_MYSQL_POOL_MAX_CONNS"],
 		MySQLServerCAFile:              env["ATE_API_MYSQL_SERVER_CA_FILE"],
+		MySQLTLSCAFile:                 env["ATE_API_MYSQL_TLS_CA_FILE"],
+		MySQLTLSCertFile:               env["ATE_API_MYSQL_TLS_CERT_FILE"],
+		MySQLTLSKeyFile:                env["ATE_API_MYSQL_TLS_KEY_FILE"],
 		RolloutTimeout:                 rolloutTimeout,
 		rolloutTimeoutSet:              timeoutStr != "",
 		PodcertWorkersPerSigner:        podcertWorkers,
@@ -454,6 +465,12 @@ func validateStoreBackend(cfg *Config, env map[string]string) error {
 			if n, err := strconv.ParseInt(v, 10, 32); err != nil || n <= 0 {
 				return fmt.Errorf("ATE_API_MYSQL_POOL_MAX_CONNS must be a positive integer, got %q", v)
 			}
+		}
+		if cfg.MySQLServerCAFile != "" && cfg.MySQLTLSCAFile != "" {
+			return fmt.Errorf("set ATE_API_MYSQL_SERVER_CA_FILE (a local file to upload) or ATE_API_MYSQL_TLS_CA_FILE (a path in the pod), not both")
+		}
+		if (cfg.MySQLTLSCertFile == "") != (cfg.MySQLTLSKeyFile == "") {
+			return fmt.Errorf("ATE_API_MYSQL_TLS_CERT_FILE and ATE_API_MYSQL_TLS_KEY_FILE must be set together")
 		}
 	default:
 		return fmt.Errorf("ATE_API_STORE_BACKEND must be %s or %s, got %q",

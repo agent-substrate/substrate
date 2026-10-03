@@ -515,6 +515,28 @@ func TestCheckRecordedStoreBackend(t *testing.T) {
 
 // ate-api-server.yaml has to read every MySQL setting the installer writes and
 // mount the Secret at the path ATE_API_MYSQL_TLS_CA_FILE names.
+// The TLS files a MySQL DSN cannot name are forwarded as paths in the pod,
+// the way a PostgreSQL DSN names its sslrootcert, sslcert and sslkey.
+func TestMySQLAPIServerEnvVarsForwardTLSFiles(t *testing.T) {
+	const bundle = "/run/podidentity.podcert.ate.dev/credential-bundle.pem"
+	cfg := &config.Config{
+		StoreBackend:                   config.StoreBackendMySQL,
+		MySQLReadWriteConnectionString: "runtime:pw@tcp(db:3306)/substrate",
+		MySQLTLSCAFile:                 "/run/servicedns.podcert.ate.dev/trust-bundle.pem",
+		MySQLTLSCertFile:               bundle,
+		MySQLTLSKeyFile:                bundle,
+	}
+	configVars, _ := mysqlAPIServerEnvVars(cfg)
+	want := map[string]string{
+		"ATE_API_MYSQL_TLS_CA_FILE":   "/run/servicedns.podcert.ate.dev/trust-bundle.pem",
+		"ATE_API_MYSQL_TLS_CERT_FILE": bundle,
+		"ATE_API_MYSQL_TLS_KEY_FILE":  bundle,
+	}
+	if !maps.Equal(configVars, want) {
+		t.Errorf("ConfigMap data = %v, want %v", configVars, want)
+	}
+}
+
 func TestAPIServerManifestReadsMySQLSettings(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(repoRoot(t), "manifests", "ate-install", "ate-api-server.yaml"))
 	if err != nil {

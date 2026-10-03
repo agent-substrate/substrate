@@ -91,7 +91,9 @@ export ATE_API_MYSQL_POOL_MAX_CONNS=20
 
 The installer skips the bundled PostgreSQL. It stores the DSNs and the backend choice in the `ate-api-server-secret-envvars` Secret, and the pool size in the `ate-api-server-envvars` ConfigMap.
 
-`ATE_API_MYSQL_SERVER_CA_FILE` names a local PEM file with the server CA. The installer publishes it as the `mysql-server-ca` Secret, which `ate-api-server` mounts at `/run/mysql-server-ca/server-ca.pem`, and sets `ATE_API_MYSQL_TLS_CA_FILE` to that path. The installer does not forward client certificate files.
+`ATE_API_MYSQL_SERVER_CA_FILE` names a local PEM file with the server CA. The installer publishes it as the `mysql-server-ca` Secret, which `ate-api-server` mounts at `/run/mysql-server-ca/server-ca.pem`, and sets `ATE_API_MYSQL_TLS_CA_FILE` to that path.
+
+`ATE_API_MYSQL_TLS_CA_FILE`, `ATE_API_MYSQL_TLS_CERT_FILE`, and `ATE_API_MYSQL_TLS_KEY_FILE` name files already inside the `ate-api-server` pod, and the installer passes them through unchanged. They fill the role of the `sslrootcert`, `sslcert`, and `sslkey` paths a PostgreSQL DSN names. For example, point the certificate and key at the pod identity bundle, `/run/podidentity.podcert.ate.dev/credential-bundle.pem`, for a server that trusts the pod identity CA. Set `ATE_API_MYSQL_SERVER_CA_FILE` or `ATE_API_MYSQL_TLS_CA_FILE`, not both.
 
 A MySQL install rejects any non-empty `ATE_API_POSTGRES_*` variable, and a PostgreSQL install rejects any non-empty `ATE_API_MYSQL_*` variable. The Cloud SQL helpers in `tools/setup-gcp` support PostgreSQL only. A redeploy with `ATE_API_STORE_BACKEND` unset fails on a cluster that records `mysql`; set the variable again on every deploy. See [`cmd/ate-setup/differences.md`](../cmd/ate-setup/differences.md) for details.
 

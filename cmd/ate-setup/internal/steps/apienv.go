@@ -212,6 +212,15 @@ func mysqlAPIServerEnvVars(cfg *config.Config) (configVars, secretVars map[strin
 	if cfg.MySQLPoolMaxConns != "" {
 		configVars["ATE_API_MYSQL_POOL_MAX_CONNS"] = cfg.MySQLPoolMaxConns
 	}
+	for name, value := range map[string]string{
+		"ATE_API_MYSQL_TLS_CA_FILE":   cfg.MySQLTLSCAFile,
+		"ATE_API_MYSQL_TLS_CERT_FILE": cfg.MySQLTLSCertFile,
+		"ATE_API_MYSQL_TLS_KEY_FILE":  cfg.MySQLTLSKeyFile,
+	} {
+		if value != "" {
+			configVars[name] = value
+		}
+	}
 	if cfg.MySQLServerCAFile != "" {
 		configVars["ATE_API_MYSQL_TLS_CA_FILE"] = mysqlServerCAPath
 	}

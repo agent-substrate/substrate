@@ -324,7 +324,9 @@ never adopts the cluster's Cloud SQL record, so it removes a proxy sidecar left
 by an earlier PostgreSQL install.
 
 `ATE_API_MYSQL_SERVER_CA_FILE` is published as the `mysql-server-ca` Secret and
-turns on TLS verified against that CA. The backend is recorded in
+turns on TLS verified against that CA. `ATE_API_MYSQL_TLS_CA_FILE`,
+`ATE_API_MYSQL_TLS_CERT_FILE` and `ATE_API_MYSQL_TLS_KEY_FILE` pass paths inside
+the pod through unchanged, as a PostgreSQL DSN names its certificate files. The backend is recorded in
 `ate-api-server-secret-envvars`. A redeploy with `ATE_API_STORE_BACKEND` unset
 fails on a cluster that records `mysql`, rather than moving it onto an empty
 bundled PostgreSQL.
