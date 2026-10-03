@@ -352,6 +352,10 @@ groups:
               stability: development
               value: ateom_restore
               brief: Restore. This is the ateom restore call.
+            - id: sandbox_record
+              stability: development
+              value: sandbox_record
+              brief: Restore. atelet records the running sandbox assets for a later checkpoint.
             - id: ateom_checkpoint
               stability: development
               value: ateom_checkpoint

@@ -1063,7 +1063,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	// the way out, so a failed restore still accounts for the phases it completed.
 	// Phases left at zero never ran.
 	tStart := time.Now()
-	var dMount, dManifest, dAssets, dDownload, dBundles, dAteom time.Duration
+	var dMount, dManifest, dAssets, dDownload, dBundles, dAteom, dSandboxRecord time.Duration
 	op := snapshotOp{
 		templateNamespace: req.GetActorTemplateAtespace(),
 		templateName:      req.GetActorTemplateName(),
@@ -1086,6 +1086,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 			{ateattr.SnapshotPhaseDownload, dDownload},
 			{ateattr.SnapshotPhaseOCIUnpack, dBundles},
 			{ateattr.SnapshotPhaseAteomRestore, dAteom},
+			{ateattr.SnapshotPhaseSandboxRecord, dSandboxRecord},
 			{ateattr.SnapshotPhaseTotal, time.Since(tStart)},
 		}
 		s.instruments.recordRestore(ctx, op, phases...)
@@ -1272,7 +1273,10 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	// Record the sandbox binaries actually running the guest on-node so a
 	// subsequent Checkpoint of this restored actor can re-pin the same version
 	// (Checkpoint overwrites the identity fields from its own request).
-	if err := writeSandboxRecord(actorUID, runtimeRec); err != nil {
+	tSandboxRecord := time.Now()
+	err = writeSandboxRecord(actorUID, runtimeRec)
+	dSandboxRecord = time.Since(tSandboxRecord)
+	if err != nil {
 		// Note: crash the actor right away, if we cannot write the sandbox record now, we will not be able to checkpoint it later.
 		return nil, err
 	}
