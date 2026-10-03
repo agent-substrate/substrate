@@ -25,6 +25,70 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
+func TestValidateCreateActorTemplateRequestDataVolumes(t *testing.T) {
+	durable := &ateapipb.Volume{Name: "data", DurableDir: &ateapipb.DurableDirVolumeSource{}}
+	csi := &ateapipb.Volume{Name: "data", ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
+		Capacity: "1Gi", StorageClassName: "standard",
+	}}
+	image := &ateapipb.Volume{Name: "data", Image: &ateapipb.ImageVolumeSource{
+		Reference: "example.com/data@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+	}}
+	for _, sandbox := range []ateapipb.SandboxClass{
+		ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
+		ateapipb.SandboxClass_SANDBOX_CLASS_MICROVM,
+	} {
+		for _, scopes := range []struct {
+			name     string
+			onPause  ateapipb.SnapshotContentScope
+			onCommit ateapipb.SnapshotContentScope
+		}{
+			{"full", ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
+			{"data commit", ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA},
+			{"data pause and commit", ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA},
+		} {
+			for _, tt := range []struct {
+				name         string
+				volume       *ateapipb.Volume
+				mounted      bool
+				supportsData bool
+			}{
+				{"no volumes", nil, false, false},
+				{"mounted durable-dir", durable, true, true},
+				{"unmounted durable-dir", durable, false, false},
+				{"mounted CSI", csi, true, sandbox == ateapipb.SandboxClass_SANDBOX_CLASS_MICROVM},
+				{"unmounted CSI", csi, false, false},
+				{"mounted image", image, true, false},
+			} {
+				t.Run(sandbox.String()+"/"+scopes.name+"/"+tt.name, func(t *testing.T) {
+					tmpl := validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
+						tmpl.SandboxConfig.SandboxClass = sandbox
+						tmpl.SnapshotConfig.OnPause = scopes.onPause
+						tmpl.SnapshotConfig.OnCommit = scopes.onCommit
+						if tt.volume != nil {
+							tmpl.Volumes = []*ateapipb.Volume{tt.volume}
+						}
+						if tt.mounted {
+							tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{{Name: "data", MountPath: "/data"}}
+						}
+					})
+					var want field.ErrorList
+					if !tt.supportsData {
+						for _, scope := range []struct {
+							name  string
+							value ateapipb.SnapshotContentScope
+						}{{"on_pause", scopes.onPause}, {"on_commit", scopes.onCommit}} {
+							if scope.value == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA {
+								want = append(want, field.Invalid(field.NewPath("actor_template", "snapshot_config", scope.name), scope.value.String(), ""))
+							}
+						}
+					}
+					assertValidateErr(t, ValidateCreateActorTemplateRequest(context.Background(), &ateapipb.CreateActorTemplateRequest{ActorTemplate: tmpl}), want)
+				})
+			}
+		}
+	}
+}
+
 func TestValidateCreateActorTemplateRequest(t *testing.T) {
 	tests := []struct {
 		name string
@@ -67,6 +131,8 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
 			tmpl.SnapshotConfig.OnPause = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
 			tmpl.SnapshotConfig.OnCommit = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
+			tmpl.Volumes = []*ateapipb.Volume{{Name: "data", DurableDir: &ateapipb.DurableDirVolumeSource{}}}
+			tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{{Name: "data", MountPath: "/data"}}
 		})},
 		nil,
 	}, {
@@ -141,6 +207,8 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
 			tmpl.SnapshotConfig.OnPause = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
 			tmpl.SnapshotConfig.OnCommit = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL
+			tmpl.Volumes = []*ateapipb.Volume{{Name: "data", DurableDir: &ateapipb.DurableDirVolumeSource{}}}
+			tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{{Name: "data", MountPath: "/data"}}
 		})},
 		field.ErrorList{field.Invalid(field.NewPath("actor_template", "snapshot_config", "on_commit"), "SNAPSHOT_CONTENT_SCOPE_FULL", "")},
 	}, {
@@ -151,6 +219,8 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
 			tmpl.SnapshotConfig.OnPause = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
 			tmpl.SnapshotConfig.OnCommit = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED
+			tmpl.Volumes = []*ateapipb.Volume{{Name: "data", DurableDir: &ateapipb.DurableDirVolumeSource{}}}
+			tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{{Name: "data", MountPath: "/data"}}
 		})},
 		field.ErrorList{
 			field.Required(field.NewPath("actor_template", "snapshot_config", "on_commit"), ""),
