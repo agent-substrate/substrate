@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/pressly/goose/v3"
+	"github.com/pressly/goose/v3/database"
 	"github.com/pressly/goose/v3/lock"
 )
 
@@ -53,34 +54,70 @@ func applyMigrations(ctx context.Context, db *sql.DB) error {
 	if err != nil {
 		return fmt.Errorf("open embedded MySQL migrations: %w", err)
 	}
-	var database string
-	if err := db.QueryRowContext(ctx, `SELECT DATABASE()`).Scan(&database); err != nil {
-		return fmt.Errorf("get MySQL database name: %w", err)
-	}
-	provider, err := goose.NewProvider(
-		goose.DialectMySQL,
-		db,
-		migrations,
-		goose.WithTableName(migrationTableName),
-		goose.WithSessionLocker(migrationLocker{name: migrationLockName(database)}),
-	)
+	provider, err := newMigrationProvider(ctx, db, migrations)
 	if err != nil {
-		return fmt.Errorf("create MySQL migration provider: %w", err)
+		return err
 	}
 	// provider.Close would close db, which the caller owns.
 	return migrateToLatest(ctx, provider)
 }
 
+// newMigrationProvider returns a Goose provider for migrations on db that
+// serializes runs across replicas.
+func newMigrationProvider(ctx context.Context, db *sql.DB, migrations fs.FS) (*goose.Provider, error) {
+	var name string
+	if err := db.QueryRowContext(ctx, `SELECT DATABASE()`).Scan(&name); err != nil {
+		return nil, fmt.Errorf("get MySQL database name: %w", err)
+	}
+	base, err := database.NewStore(database.DialectMySQL, migrationTableName)
+	if err != nil {
+		return nil, fmt.Errorf("create MySQL migration store: %w", err)
+	}
+	provider, err := goose.NewProvider(
+		goose.DialectCustom,
+		db,
+		migrations,
+		goose.WithStore(migrationStore{Store: base}),
+		goose.WithSessionLocker(migrationLocker{name: migrationLockName(name)}),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create MySQL migration provider: %w", err)
+	}
+	return provider, nil
+}
+
+// migrationStore is Goose's MySQL store with a version-table check that also
+// works on Vitess. Goose compares table_schema to DATABASE() in a SELECT with
+// no FROM clause, which vtgate answers with the keyspace name rather than the
+// MySQL schema behind it, so the table never appears to exist and the next
+// startup fails to create it again.
+type migrationStore struct {
+	database.Store
+}
+
+var _ database.StoreExtender = migrationStore{}
+
+func (s migrationStore) TableExists(ctx context.Context, db database.DBTxConn) (bool, error) {
+	var n int
+	if err := db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM information_schema.tables
+		WHERE table_schema = DATABASE() AND table_name = ?`, s.Tablename()).Scan(&n); err != nil {
+		return false, fmt.Errorf("check MySQL migration ledger: %w", err)
+	}
+	return n > 0, nil
+}
+
 // requireMySQL8 reports a clear error before an older server rejects the
 // schema with an opaque one. The schema needs MySQL 8.0 for utf8mb4_0900_bin,
 // FOR SHARE and SKIP LOCKED. Vitess reports a version such as 8.0.40-Vitess.
+// MariaDB numbers its releases 10 and up but lacks utf8mb4_0900_bin.
 func requireMySQL8(ctx context.Context, db *sql.DB) error {
 	var version string
 	if err := db.QueryRowContext(ctx, `SELECT VERSION()`).Scan(&version); err != nil {
 		return fmt.Errorf("get MySQL version: %w", err)
 	}
 	major, _, _ := strings.Cut(version, ".")
-	if n, err := strconv.Atoi(major); err != nil || n < 8 {
+	if n, err := strconv.Atoi(major); err != nil || n < 8 || strings.Contains(strings.ToLower(version), "mariadb") {
 		return fmt.Errorf("atemy requires MySQL 8.0 or newer. VERSION() is %q", version)
 	}
 	return nil
