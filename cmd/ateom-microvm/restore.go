@@ -380,6 +380,14 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 		return fmt.Errorf("while restoring VM with net FDs: %w", err)
 	}
 	tVMRestore := time.Now()
+	if memMode == ch.MemRestoreEager {
+		// An eager restore has read the whole snapshot into guest memory, and nothing
+		// merges against it afterwards, so drop the staged memory image and evict its
+		// page cache before resuming the VM so guest RAM and snapshot page cache do
+		// not overlap during Resume and wakeup probe gating.
+		dropStagedMemoryImage(ctx, p.actorDirs, restoreDir)
+	}
+	dropActorSnapshotCacheAsync(p.actorDirs, memMode == ch.MemRestoreEager, restoreDir)
 	if err := client.Resume(ctx); err != nil {
 		return fmt.Errorf("while resuming restored guest: %w", err)
 	}
