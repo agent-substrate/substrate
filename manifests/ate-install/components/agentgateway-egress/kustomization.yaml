@@ -114,11 +114,10 @@ patches:
                         cert: /run/podidentity.podcert.ate.dev/credential-bundle.pem
                         key: /run/podidentity.podcert.ate.dev/credential-bundle.pem
                         root: /run/servicedns-ca/trust-bundle.pem
-            - protocol: TCP
+            - protocol: TLS
               tcpRoutes:
               - backends:
-                - dynamic:
-                    target: source.connectHeaders["host"]
+                - dynamic: {}
   - target:
       group: apps
       version: v1

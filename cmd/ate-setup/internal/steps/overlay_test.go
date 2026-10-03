@@ -557,6 +557,45 @@ func TestAgentgatewayEgressOverlay(t *testing.T) {
 	if !strings.Contains(string(built), SecretEgressMITMCAPool) {
 		t.Errorf("the MITM overlay does not mount the %s Secret", SecretEgressMITMCAPool)
 	}
+	foundConfig := false
+	for _, doc := range strings.Split(string(built), "\n---\n") {
+		var cm corev1.ConfigMap
+		if err := yaml.Unmarshal([]byte(doc), &cm); err != nil || cm.Name != "atenet-egress-agentgateway-substrate-config" {
+			continue
+		}
+		foundConfig = true
+		var gateway struct {
+			Binds []struct {
+				Mode      string `json:"mode"`
+				Protocol  string `json:"protocol"`
+				Listeners []struct {
+					Protocol string `json:"protocol"`
+				} `json:"listeners"`
+			} `json:"binds"`
+		}
+		if err := yaml.Unmarshal([]byte(cm.Data["config.yaml"]), &gateway); err != nil {
+			t.Fatalf("parsing agentgateway config: %v", err)
+		}
+		var protocols []string
+		for _, bind := range gateway.Binds {
+			if bind.Mode != "internal" {
+				continue
+			}
+			if bind.Protocol != "AUTO" {
+				t.Errorf("internal bind protocol = %q, want AUTO", bind.Protocol)
+			}
+			for _, listener := range bind.Listeners {
+				protocols = append(protocols, listener.Protocol)
+			}
+		}
+		slices.Sort(protocols)
+		if !slices.Equal(protocols, []string{"HTTP", "HTTPS", "TLS"}) {
+			t.Errorf("egress listeners = %v, want HTTP, HTTPS interception, and TLS passthrough", protocols)
+		}
+	}
+	if !foundConfig {
+		t.Fatal("agentgateway egress ConfigMap is missing")
+	}
 
 	if err := e.EnsureEgressMITMCAPoolSecret(t.Context()); err != nil {
 		t.Fatalf("EnsureEgressMITMCAPoolSecret() error = %v", err)

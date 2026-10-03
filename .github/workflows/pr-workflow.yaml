@@ -131,23 +131,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # AgentGateway runs pre-submit only for release-* branches. Everywhere
-        # else it runs post-merge (push to main) and on the weekly schedule.
-        include: >-
-          ${{ fromJSON(
-            (
-              (github.event_name != 'pull_request' && github.event_name != 'merge_group')
-              || startsWith(github.base_ref, 'release-')
-              || startsWith(github.event.merge_group.base_ref, 'refs/heads/release-')
-            )
-            && '[
-              {"dataplane": "envoy", "experimental": false},
-              {"dataplane": "agentgateway", "experimental": true}
-            ]'
-            || '[
-              {"dataplane": "envoy", "experimental": false}
-            ]'
-          ) }}
+        include:
+          - dataplane: envoy
+            experimental: false
+          - dataplane: agentgateway
+            experimental: true
     env:
       E2E_ATENET_DATAPLANE: ${{ matrix.dataplane }}
       # The installer requires a credential provider selection, and deploys the
