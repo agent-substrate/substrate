@@ -349,8 +349,10 @@ func (s *AteomService) restoreMemoryFidelity(ctx context.Context, p actorBootPar
 		restoredNets = append(restoredNets, rn)
 	}
 
-	// Relaunch CH and restore with the tap FDs attached (SCM_RIGHTS). CH reopens
-	// /dev/vda (image) + each /dev/vd{b+i} (actor rootfs) from the snapshot config paths.
+	// Relaunch CH and restore with the tap FDs attached (SCM_RIGHTS). CH reopens the
+	// guest image from the snapshot config's path, as whichever device that config
+	// names: virtio-pmem, or the virtio-blk disk of a snapshot taken before the image
+	// moved to pmem (those keep restoring as they were taken).
 	apiSocket := filepath.Join(kata.VMDir(actorUID), "clh-api-restore.sock")
 	tTap := time.Now()
 	chCmd, client, err := ch.LaunchVMM(ctx, ch.LaunchVMMOptions{
@@ -524,9 +526,9 @@ func maybeDropStagedMemoryImage(ctx context.Context, restoreDir, memMode string,
 // rewriteSnapshotSocketPaths repoints the snapshot config.json's per-VMDir paths from
 // the source actor's VMDir to the restoring actor's: the hybrid-vsock socket, the
 // File serial console, and each virtio-fs socket, so the sockets/files we create are
-// the ones CH reopens. The kernel and /dev/vda kata image are content-addressed static
-// files with identical paths on every node, so they need no rewrite, and the overlay
-// has no per-actor disk to repoint.
+// the ones CH reopens. The kernel and the kata image (virtio-pmem, or virtio-blk in
+// older snapshots) are content-addressed static files with identical paths on every
+// node, so they need no rewrite, and the overlay has no per-actor disk to repoint.
 func rewriteSnapshotSocketPaths(snapshotDir, id string) error {
 	cfgPath := filepath.Join(snapshotDir, "config.json")
 	b, err := os.ReadFile(cfgPath)

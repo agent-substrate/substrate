@@ -26,7 +26,7 @@ type VmConfig struct {
 	Cpus     CpusConfig      `json:"cpus"`
 	Memory   MemoryConfig    `json:"memory"`
 	Payload  PayloadConfig   `json:"payload"`
-	Disks    []DiskConfig    `json:"disks,omitempty"`
+	Pmem     []PmemConfig    `json:"pmem,omitempty"`
 	Fs       []FsConfig      `json:"fs,omitempty"`
 	Rng      *RngConfig      `json:"rng,omitempty"`
 	Serial   *ConsoleConfig  `json:"serial,omitempty"`
@@ -66,22 +66,20 @@ type MemoryConfig struct {
 }
 
 // PayloadConfig points at the guest kernel + its cmdline (initramfs/firmware
-// unused: the kata guest boots from a virtio-blk image disk, root=/dev/vda1).
+// unused: the kata guest boots from its image on virtio-pmem, root=/dev/pmem0p1).
 type PayloadConfig struct {
 	Kernel  string `json:"kernel"`
 	Cmdline string `json:"cmdline"`
 }
 
-// DiskConfig is one virtio-blk disk. The only disk is the kata guest image
-// (/dev/vda, read-only); the actor rootfs is an overlay served over virtio-fs, not a
-// disk. NumQueues/QueueSize mirror kata's clh (num_queues = vcpus, queue_size = 1024).
-type DiskConfig struct {
-	Path      string `json:"path"`
-	Readonly  bool   `json:"readonly"`
-	Direct    bool   `json:"direct"`
-	NumQueues int32  `json:"num_queues,omitempty"`
-	QueueSize int32  `json:"queue_size,omitempty"`
-	ImageType string `json:"image_type,omitempty"`
+// PmemConfig is one virtio-pmem device: CH maps File into guest physical memory,
+// and the guest sees it as /dev/pmem<N>. The only one is the kata guest image; the
+// actor rootfs is an overlay served over virtio-fs. DiscardWrites maps File
+// MAP_PRIVATE (and opens it read-only), so a guest write lands in a private copy of
+// the page and never reaches the image the node's other actors share.
+type PmemConfig struct {
+	File          string `json:"file"`
+	DiscardWrites bool   `json:"discard_writes,omitempty"`
 }
 
 // RngConfig sets the entropy source (kata uses /dev/urandom).

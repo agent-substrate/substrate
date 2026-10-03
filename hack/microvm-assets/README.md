@@ -12,6 +12,12 @@ set. The asset set is four files:
 - `vmlinux` — the guest kernel (from kata-static)
 - `rootfs.img` — the guest rootfs image (from kata-static)
 
+ateom attaches `rootfs.img` over virtio-pmem and mounts its root filesystem with DAX
+(`root=/dev/pmem0p1`), so a replacement image must be a whole number of 2MiB (cloud-hypervisor
+rejects any other pmem size) with its root filesystem in partition 1 (ext4 with 4KiB blocks,
+which DAX needs), and a replacement kernel needs `CONFIG_VIRTIO_PMEM` and `CONFIG_FS_DAX`.
+kata's own image and kernel meet all of this.
+
 These helpers assemble the asset set for your node arch, stage it into the cluster's rustfs
 S3 bucket, and the demo manifest's `SandboxConfig` points at it. When `/dev/kvm` is
 available, `hack/create-kind-cluster.sh` mounts it into the node; atelet then advertises
