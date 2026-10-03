@@ -636,7 +636,7 @@ func connectWithRetries[T any](ctx context.Context, database string, unavailable
 			return zero, err
 		}
 		connectErr = err
-		slog.WarnContext(ctx, "Failed to connect to "+database+", retrying...", slog.Int("attempt", attempt), slog.Any("err", err))
+		slog.WarnContext(ctx, "Failed to connect to database, retrying...", slog.String("database", database), slog.Int("attempt", attempt), slog.Any("err", err))
 		if attempt == storeConnectTries {
 			break
 		}

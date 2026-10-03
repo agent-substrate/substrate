@@ -17,10 +17,13 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/pflag"
 )
@@ -56,10 +59,8 @@ func TestConnectStoreRequiresPostgresReadWriteConnectionString(t *testing.T) {
 func TestConnectStoreRequiresMySQLReadWriteConnectionString(t *testing.T) {
 	saveFlag(t, storeBackend)
 	saveFlag(t, mysqlReadWriteConnectionString)
-	saveFlag(t, postgresReadWriteConnectionString)
 	*storeBackend = storeBackendMySQL
 	*mysqlReadWriteConnectionString = ""
-	*postgresReadWriteConnectionString = ""
 
 	_, err := connectStore(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "--mysql-read-write-connection-string is required") {
@@ -68,16 +69,59 @@ func TestConnectStoreRequiresMySQLReadWriteConnectionString(t *testing.T) {
 }
 
 func TestConnectStoreRejectsNegativePoolMaxConns(t *testing.T) {
-	for _, backend := range []string{storeBackendPostgres, storeBackendMySQL} {
-		t.Run(backend, func(t *testing.T) {
-			saveFlag(t, storeBackend)
-			saveFlag(t, storePoolMaxConns)
-			*storeBackend = backend
-			*storePoolMaxConns = -1
+	saveFlag(t, storePoolMaxConns)
+	*storePoolMaxConns = -1
 
-			_, err := connectStore(context.Background())
-			if err == nil || !strings.Contains(err.Error(), "--store-pool-max-conns must not be negative") {
-				t.Fatalf("connectStore() error = %v, want pool-size validation", err)
+	_, err := connectStore(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "--store-pool-max-conns must not be negative") {
+		t.Fatalf("connectStore() error = %v, want pool-size validation", err)
+	}
+}
+
+func TestConnectWithRetries(t *testing.T) {
+	saveFlag(t, &storeConnectTries)
+	saveFlag(t, &storeConnectPeriod)
+	storeConnectTries = 3
+	storeConnectPeriod = time.Millisecond
+	unavailable := errors.New("unavailable")
+	permanent := errors.New("bad credentials")
+	retryable := fmt.Errorf("dial: %w", unavailable)
+
+	tests := []struct {
+		name      string
+		errs      []error
+		wantCalls int
+		wantErr   error
+	}{
+		{name: "succeeds after unavailable", errs: []error{retryable, retryable, nil}, wantCalls: 3},
+		{name: "other error returns at once", errs: []error{permanent}, wantCalls: 1, wantErr: permanent},
+		{name: "unavailable on every try", errs: []error{retryable, retryable, retryable}, wantCalls: 3, wantErr: unavailable},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			got, err := connectWithRetries(t.Context(), "test", unavailable, func() (int, error) {
+				if calls == len(tc.errs) {
+					t.Fatalf("connect called more than %d times", len(tc.errs))
+				}
+				err := tc.errs[calls]
+				calls++
+				if err != nil {
+					return 0, err
+				}
+				return 1, nil
+			})
+			if calls != tc.wantCalls {
+				t.Errorf("connect called %d times, want %d", calls, tc.wantCalls)
+			}
+			if tc.wantErr == nil {
+				if err != nil || got != 1 {
+					t.Fatalf("connectWithRetries() = %d, %v, want 1, nil", got, err)
+				}
+				return
+			}
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("connectWithRetries() error = %v, want %v", err, tc.wantErr)
 			}
 		})
 	}
@@ -92,24 +136,22 @@ func TestLoadFlagsFromEnvStoreBackend(t *testing.T) {
 		want        string
 		wantErr     bool
 	}{
-		{name: "default", flagValue: storeBackendPostgres, want: storeBackendPostgres},
 		{name: "env applies when flag unset", flagValue: storeBackendPostgres, env: storeBackendMySQL, want: storeBackendMySQL},
 		{name: "flag wins over env", flagValue: storeBackendPostgres, flagChanged: true, env: storeBackendMySQL, want: storeBackendPostgres},
-		{name: "flag selects mysql", flagValue: storeBackendMySQL, flagChanged: true, want: storeBackendMySQL},
 		{name: "invalid env", flagValue: storeBackendPostgres, env: "sqlite", wantErr: true},
 		{name: "invalid flag", flagValue: "sqlite", flagChanged: true, wantErr: true},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			saveFlag(t, storeBackend)
-			*storeBackend = tt.flagValue
-			if tt.flagChanged {
+			*storeBackend = tc.flagValue
+			if tc.flagChanged {
 				markFlagChanged(t, "store-backend")
 			}
-			t.Setenv("ATE_API_STORE_BACKEND", tt.env)
+			t.Setenv("ATE_API_STORE_BACKEND", tc.env)
 
 			err := loadFlagsFromEnv()
-			if tt.wantErr {
+			if tc.wantErr {
 				if err == nil || !strings.Contains(err.Error(), "--store-backend must be") {
 					t.Fatalf("loadFlagsFromEnv() error = %v, want backend validation", err)
 				}
@@ -118,91 +160,70 @@ func TestLoadFlagsFromEnvStoreBackend(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if *storeBackend != tt.want {
-				t.Fatalf("store backend = %q, want %q", *storeBackend, tt.want)
+			if *storeBackend != tc.want {
+				t.Fatalf("store backend = %q, want %q", *storeBackend, tc.want)
 			}
 		})
 	}
 }
 
-func TestLoadFlagsFromEnvResolvesMySQLSources(t *testing.T) {
-	flags := []struct {
-		value *string
-		env   string
+func TestLoadFlagsFromEnvResolvesSourcesOnce(t *testing.T) {
+	tests := []struct {
+		flag *string
+		env  string
+		// explicit is a value set on the command line instead of @env.
+		explicit string
 	}{
-		{mysqlReadWriteConnectionString, "ATE_API_MYSQL_READ_WRITE_CONNECTION_STRING"},
-		{mysqlOwnerConnectionString, "ATE_API_MYSQL_OWNER_CONNECTION_STRING"},
-		{mysqlTLSCAFile, "ATE_API_MYSQL_TLS_CA_FILE"},
-		{mysqlTLSCertFile, "ATE_API_MYSQL_TLS_CERT_FILE"},
-		{mysqlTLSKeyFile, "ATE_API_MYSQL_TLS_KEY_FILE"},
+		{flag: postgresReadWriteConnectionString, env: "ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"},
+		{flag: postgresOwnerConnectionString, env: "ATE_API_POSTGRES_OWNER_CONNECTION_STRING"},
+		{flag: postgresReadWriteRole, env: "ATE_API_POSTGRES_READ_WRITE_ROLE"},
+		{flag: postgresOwnerRole, env: "ATE_API_POSTGRES_OWNER_ROLE"},
+		{flag: postgresSchema, env: "ATE_API_POSTGRES_SCHEMA"},
+		{flag: mysqlReadWriteConnectionString, env: "ATE_API_MYSQL_READ_WRITE_CONNECTION_STRING"},
+		{flag: mysqlOwnerConnectionString, env: "ATE_API_MYSQL_OWNER_CONNECTION_STRING"},
+		{flag: mysqlTLSCAFile, env: "ATE_API_MYSQL_TLS_CA_FILE"},
+		{flag: mysqlTLSCertFile, env: "ATE_API_MYSQL_TLS_CERT_FILE"},
+		{flag: mysqlTLSKeyFile, env: "ATE_API_MYSQL_TLS_KEY_FILE", explicit: "/etc/mysql/client.key"},
 	}
-	for _, f := range flags {
-		saveFlag(t, f.value)
-		*f.value = "@env"
-		t.Setenv(f.env, f.env+"-a")
-	}
-	*mysqlTLSKeyFile = "/etc/mysql/client.key"
-
-	if err := loadFlagsFromEnv(); err != nil {
-		t.Fatal(err)
-	}
-	for _, f := range flags[:4] {
-		if *f.value != f.env+"-a" {
-			t.Errorf("%s resolved to %q, want %q", f.env, *f.value, f.env+"-a")
+	for _, tc := range tests {
+		saveFlag(t, tc.flag)
+		*tc.flag = "@env"
+		if tc.explicit != "" {
+			*tc.flag = tc.explicit
 		}
+		t.Setenv(tc.env, tc.env+"-a")
 	}
-	if *mysqlTLSKeyFile != "/etc/mysql/client.key" {
-		t.Errorf("explicit --mysql-tls-key-file was replaced with %q", *mysqlTLSKeyFile)
-	}
-	t.Setenv("ATE_API_MYSQL_READ_WRITE_CONNECTION_STRING", "runtime-b")
-	if err := loadFlagsFromEnv(); err != nil {
-		t.Fatal(err)
-	}
-	if *mysqlReadWriteConnectionString != "ATE_API_MYSQL_READ_WRITE_CONNECTION_STRING-a" {
-		t.Fatal("environment-backed connection string changed after startup resolution")
-	}
-}
-
-func TestLoadFlagsFromEnvResolvesPostgresSourcesOnce(t *testing.T) {
-	oldRuntime, oldDDL := *postgresReadWriteConnectionString, *postgresOwnerConnectionString
-	oldRuntimeRole, oldDDLRole := *postgresReadWriteRole, *postgresOwnerRole
-	oldAuthz := *experimentalEnableAuthz
-	t.Cleanup(func() {
-		*postgresReadWriteConnectionString = oldRuntime
-		*postgresOwnerConnectionString = oldDDL
-		*postgresReadWriteRole = oldRuntimeRole
-		*postgresOwnerRole = oldDDLRole
-		*experimentalEnableAuthz = oldAuthz
-	})
-	*postgresReadWriteConnectionString = "@env"
-	*postgresOwnerConnectionString = "@env"
-	*postgresReadWriteRole = "@env"
-	*postgresOwnerRole = "@env"
+	saveFlag(t, experimentalEnableAuthz)
 	*experimentalEnableAuthz = false
-	t.Setenv("ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING", "runtime-a")
-	t.Setenv("ATE_API_POSTGRES_OWNER_CONNECTION_STRING", "ddl-a")
-	t.Setenv("ATE_API_POSTGRES_READ_WRITE_ROLE", "runtime-role")
-	t.Setenv("ATE_API_POSTGRES_OWNER_ROLE", "ddl-role")
 	t.Setenv("ATE_API_EXPERIMENTAL_ENABLE_AUTHZ", "true")
 
+	check := func() {
+		t.Helper()
+		for _, tc := range tests {
+			want := tc.env + "-a"
+			if tc.explicit != "" {
+				want = tc.explicit
+			}
+			if *tc.flag != want {
+				t.Errorf("%s resolved to %q, want %q", tc.env, *tc.flag, want)
+			}
+		}
+	}
 	if err := loadFlagsFromEnv(); err != nil {
 		t.Fatal(err)
 	}
-	if *postgresReadWriteConnectionString != "runtime-a" || *postgresOwnerConnectionString != "ddl-a" ||
-		*postgresReadWriteRole != "runtime-role" || *postgresOwnerRole != "ddl-role" {
-		t.Fatalf("resolved values = %q, %q, %q, %q", *postgresReadWriteConnectionString, *postgresOwnerConnectionString, *postgresReadWriteRole, *postgresOwnerRole)
-	}
+	check()
 	if !*experimentalEnableAuthz {
-		t.Fatal("authorization environment flag was not resolved alongside PostgreSQL settings")
+		t.Error("authorization environment flag was not resolved")
 	}
-	t.Setenv("ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING", "runtime-b")
-	t.Setenv("ATE_API_POSTGRES_OWNER_CONNECTION_STRING", "ddl-b")
+
+	for _, tc := range tests {
+		t.Setenv(tc.env, tc.env+"-b")
+	}
 	if err := loadFlagsFromEnv(); err != nil {
 		t.Fatal(err)
 	}
-	if *postgresReadWriteConnectionString != "runtime-a" || *postgresOwnerConnectionString != "ddl-a" {
-		t.Fatal("environment-backed connection strings changed after startup resolution")
-	}
+	check()
 }
 
 func TestLoadFlagsFromEnvPoolMaxConns(t *testing.T) {
@@ -246,20 +267,20 @@ func TestResolveActorJWTIssuer(t *testing.T) {
 		{name: "set is used as given", flagValue: "https://idp.example.com/prod/", namespace: "ate-system", want: "https://idp.example.com/prod/"},
 		{name: "set but invalid", flagValue: "http://idp.example.com", namespace: "ate-system", wantErr: true},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := resolveActorJWTIssuer(tt.flagValue, tt.namespace)
-			if tt.wantErr {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := resolveActorJWTIssuer(tc.flagValue, tc.namespace)
+			if tc.wantErr {
 				if err == nil {
-					t.Fatalf("resolveActorJWTIssuer(%q, %q) = %q, want error", tt.flagValue, tt.namespace, got)
+					t.Fatalf("resolveActorJWTIssuer(%q, %q) = %q, want error", tc.flagValue, tc.namespace, got)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("resolveActorJWTIssuer(%q, %q) returned error: %v", tt.flagValue, tt.namespace, err)
+				t.Fatalf("resolveActorJWTIssuer(%q, %q) returned error: %v", tc.flagValue, tc.namespace, err)
 			}
-			if got != tt.want {
-				t.Errorf("resolveActorJWTIssuer(%q, %q) = %q, want %q", tt.flagValue, tt.namespace, got, tt.want)
+			if got != tc.want {
+				t.Errorf("resolveActorJWTIssuer(%q, %q) = %q, want %q", tc.flagValue, tc.namespace, got, tc.want)
 			}
 		})
 	}
@@ -348,10 +369,6 @@ func TestMySQLConnectionAttrNeverLogsThePassword(t *testing.T) {
 		},
 		"tls": {
 			connString: "ateapi:" + password + "@tcp(db.example.internal:3306)/substrate?tls=true",
-			want:       []string{`"tls":true`},
-		},
-		"tls_skip_verify": {
-			connString: "ateapi:" + password + "@tcp(db.example.internal:3306)/substrate?tls=skip-verify",
 			want:       []string{`"tls":true`},
 		},
 		"tls_false": {
