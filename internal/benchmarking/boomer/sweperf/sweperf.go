@@ -28,7 +28,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"math/rand/v2"
 	"net/http"
 	"strings"
 	"sync"
@@ -37,6 +36,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/atenet"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/boomerutil"
+	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/dynconfig"
 	bmetrics "github.com/agent-substrate/substrate/internal/benchmarking/boomer/metrics"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -84,8 +84,38 @@ func init() {
 		Name:       "sweperf",
 		LocustFile: "sweperf.py",
 		UserClass:  sweperfUserClass,
+		Config:     knobsCodec,
 		Init:       initSweperf,
 	})
+}
+
+// knobs is the SweperfUser slice of the runtime config. Each zero falls
+// back to the default above; the master populates the keys from the
+// --sweperf-* locust flags (common/sweperf_config.py).
+type knobs struct {
+	dynconfig.WaitTime
+	Template       string `json:"sweperf_template"`
+	TotalSteps     int    `json:"sweperf_total_steps"`
+	NumCycles      int    `json:"sweperf_num_cycles"`
+	PollIntervalMs int    `json:"sweperf_poll_interval_ms"`
+}
+
+var knobsCodec = dynconfig.Typed[knobs]{
+	Validate: func(k knobs) error {
+		if err := k.WaitTime.Validate(); err != nil {
+			return err
+		}
+		if k.TotalSteps < 0 {
+			return fmt.Errorf("sweperf_total_steps cannot be negative: %d", k.TotalSteps)
+		}
+		if k.NumCycles < 0 {
+			return fmt.Errorf("sweperf_num_cycles cannot be negative: %d", k.NumCycles)
+		}
+		if k.PollIntervalMs < 0 {
+			return fmt.Errorf("sweperf_poll_interval_ms cannot be negative: %d", k.PollIntervalMs)
+		}
+		return nil
+	},
 }
 
 // chunk partitions totalSteps instructions into numCycles slices.
@@ -151,19 +181,19 @@ type sweperfRuntime struct {
 // the --sweperf-* locust flags (common/sweperf_config.py); an unset field
 // falls back to the built-in default below.
 func (r *sweperfRuntime) resolveConfig() (string, int, int) {
-	dyn := r.cfg.Dyn.Load()
+	dyn := dynconfig.Get[knobs](r.cfg.Dyn)
 
-	template := dyn.SweperfTemplate
+	template := dyn.Template
 	if template == "" {
 		template = defaultSweperfTemplate
 	}
 
-	totalSteps := dyn.SweperfTotalSteps
+	totalSteps := dyn.TotalSteps
 	if totalSteps <= 0 {
 		totalSteps = defaultSweperfTotalSteps
 	}
 
-	numCycles := dyn.SweperfNumCycles
+	numCycles := dyn.NumCycles
 	if numCycles <= 0 {
 		numCycles = defaultSweperfNumCycles
 	}
@@ -175,7 +205,7 @@ func (r *sweperfRuntime) resolveConfig() (string, int, int) {
 // (--sweperf-poll-interval-ms), or the default when unset. Read per job, so a
 // mid-run change applies to the next cycle.
 func pollInterval(cfg *userclass.Config) time.Duration {
-	if ms := cfg.Dyn.Load().SweperfPollIntervalMs; ms > 0 {
+	if ms := dynconfig.Get[knobs](cfg.Dyn).PollIntervalMs; ms > 0 {
 		return time.Duration(ms) * time.Millisecond
 	}
 	return defaultSweperfPollInterval
@@ -184,12 +214,7 @@ func pollInterval(cfg *userclass.Config) time.Duration {
 // dynamicWait is the think time between cycles: a uniform draw from
 // [MinWait, MaxWait), or MinWait when the range is empty.
 func (r *sweperfRuntime) dynamicWait() time.Duration {
-	cfg := r.cfg.Dyn.Load()
-	if cfg.MaxWait <= cfg.MinWait {
-		return cfg.MinWait
-	}
-	jitter := cfg.MaxWait - cfg.MinWait
-	return cfg.MinWait + time.Duration(rand.Float64()*float64(jitter))
+	return dynconfig.Get[knobs](r.cfg.Dyn).WaitTime.Draw()
 }
 
 // iterate is the boomer task function, one call per goroutine per iteration.

@@ -19,6 +19,8 @@ import (
 	"fmt"
 	"slices"
 	"sync"
+
+	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/dynconfig"
 )
 
 // Entry declares one user class: the flag value that selects it, the Locust
@@ -31,6 +33,12 @@ type Entry struct {
 	// UserClass is the Python class name. It must equal boomer.Task.Name or
 	// the master's spawn messages never match and no users start.
 	UserClass string
+	// Config is the class's runtime config codec: a dynconfig.Typed over
+	// the struct it reads its knobs from, with its defaults and rules. The
+	// worker builds the holder from it, so a payload the class cannot run
+	// on is refused at fetch time rather than failing in the middle of a
+	// run. Nil when the class reads no runtime config.
+	Config dynconfig.Codec
 	// Init builds the boomer task func and its shutdown hook.
 	Init func(*Config) (task func(), shutdown func(context.Context))
 }

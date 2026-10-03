@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -27,232 +28,170 @@ import (
 	"github.com/myzhan/boomer"
 )
 
-func TestParseValid(t *testing.T) {
-	jsonBlob := []byte(`{
-		"trace_probability": 0.5,
-		"min_wait_time": 0.1,
-		"max_wait_time": 0.5,
-		"min_live_time": 9,
-		"max_live_time": 14,
-		"durdir_file_size_bytes": 1048576,
-		"resume_mode": "explicit",
-		"lifecycle_mode": "pause",
-		"durdir_read_mode": "data",
-		"durdir_template": "glutton-durdir-data",
-		"cpu_cores": 2,
-		"cpu_duty_cycle": 0.1,
-		"sweperf_template": "swebench-astropy-7336",
-		"sweperf_total_steps": 21,
-		"sweperf_num_cycles": 4,
-		"sweperf_poll_interval_ms": 100,
-		"agentsession_script": "coding-session",
-		"agentsession_script_file": "/etc/agentsession/script.yaml",
-		"total_actors": 50,
-		"spawn_concurrency": 5,
-		"actor_deadline": 60.0
-	}`)
+// knobs is the kind of struct a user class declares: its slice of the
+// payload with its own defaults and rules.
+type knobs struct {
+	WaitTime
+	Lifecycle
+	Template string `json:"test_template"`
+	Workers  int    `json:"test_workers"`
+}
 
-	cfg, err := Parse(jsonBlob, Config{})
+var knobsCodec = Typed[knobs]{
+	Defaults: knobs{Template: "stock", Workers: 1},
+	Validate: func(k knobs) error {
+		if err := k.WaitTime.Validate(); err != nil {
+			return err
+		}
+		if err := k.Lifecycle.Validate(); err != nil {
+			return err
+		}
+		if k.Workers < 1 {
+			return fmt.Errorf("test_workers must be positive: %d", k.Workers)
+		}
+		return nil
+	},
+}
+
+func mustApply(t *testing.T, h *Holder, payload string) bool {
+	t.Helper()
+	changed, err := h.Apply([]byte(payload))
 	if err != nil {
-		t.Fatalf("Parse failed: %v", err)
+		t.Fatalf("Apply(%s): %v", payload, err)
 	}
+	return changed
+}
 
-	if cfg.TraceProbability != 0.5 {
-		t.Errorf("TraceProbability: got %f, want 0.5", cfg.TraceProbability)
+// A payload sets the keys it carries, leaves the ones it nulls or omits at
+// their current values, converts seconds to durations, and ignores keys
+// the class does not name.
+func TestApplyMerges(t *testing.T) {
+	h := NewHolder(knobsCodec)
+	if got := Get[knobs](h); got != knobsCodec.Defaults {
+		t.Fatalf("fresh holder = %+v, want the defaults", got)
 	}
-	if cfg.MinWait != 100*time.Millisecond {
-		t.Errorf("MinWait: got %v, want 100ms", cfg.MinWait)
+	mustApply(t, h, `{
+		"min_wait_time": 0.5, "max_wait_time": 2,
+		"resume_mode": "implicit",
+		"test_workers": 3,
+		"someone_elses_key": "ignored"
+	}`)
+	want := knobs{
+		WaitTime:  WaitTime{MinWait: Seconds(500 * time.Millisecond), MaxWait: Seconds(2 * time.Second)},
+		Lifecycle: Lifecycle{ResumeMode: ResumeModeImplicit},
+		Template:  "stock",
+		Workers:   3,
 	}
-	if cfg.MaxWait != 500*time.Millisecond {
-		t.Errorf("MaxWait: got %v, want 500ms", cfg.MaxWait)
+	if got := Get[knobs](h); got != want {
+		t.Errorf("after first payload =\n %+v, want\n %+v", got, want)
 	}
-	if cfg.MinLive != 9*time.Second {
-		t.Errorf("MinLive: got %v, want 9s", cfg.MinLive)
+	mustApply(t, h, `{"test_template": "big", "test_workers": null, "max_wait_time": null}`)
+	want.Template = "big"
+	if got := Get[knobs](h); got != want {
+		t.Errorf("after nulls =\n %+v, want\n %+v", got, want)
 	}
-	if cfg.MaxLive != 14*time.Second {
-		t.Errorf("MaxLive: got %v, want 14s", cfg.MaxLive)
+	if changed := mustApply(t, h, `{"test_template": "big"}`); changed {
+		t.Error("a payload that changes nothing reported a change")
 	}
-	if cfg.DurDirFileSize != 1048576 {
-		t.Errorf("DurDirFileSize: got %d, want 1048576", cfg.DurDirFileSize)
-	}
-	if cfg.ResumeMode != ResumeModeExplicit {
-		t.Errorf("ResumeMode: got %q, want %q", cfg.ResumeMode, ResumeModeExplicit)
-	}
-	if cfg.LifecycleMode != LifecycleModePause {
-		t.Errorf("LifecycleMode: got %q, want %q", cfg.LifecycleMode, LifecycleModePause)
-	}
-	if cfg.DurDirReadMode != ReadModeData {
-		t.Errorf("DurDirReadMode: got %q, want %q", cfg.DurDirReadMode, ReadModeData)
-	}
-	if cfg.DurDirTemplate != "glutton-durdir-data" {
-		t.Errorf("DurDirTemplate: got %q, want glutton-durdir-data", cfg.DurDirTemplate)
-	}
-	if cfg.CPUCores != 2 {
-		t.Errorf("CPUCores: got %d, want 2", cfg.CPUCores)
-	}
-	if cfg.CPUDutyCycle != 0.1 {
-		t.Errorf("CPUDutyCycle: got %f, want 0.1", cfg.CPUDutyCycle)
-	}
-	if cfg.SweperfTemplate != "swebench-astropy-7336" {
-		t.Errorf("SweperfTemplate: got %q, want swebench-astropy-7336", cfg.SweperfTemplate)
-	}
-	if cfg.SweperfTotalSteps != 21 {
-		t.Errorf("SweperfTotalSteps: got %d, want 21", cfg.SweperfTotalSteps)
-	}
-	if cfg.SweperfNumCycles != 4 {
-		t.Errorf("SweperfNumCycles: got %d, want 4", cfg.SweperfNumCycles)
-	}
-	if cfg.SweperfPollIntervalMs != 100 {
-		t.Errorf("SweperfPollIntervalMs: got %d, want 100", cfg.SweperfPollIntervalMs)
-	}
-	if cfg.AgentSessionScript != "coding-session" {
-		t.Errorf("AgentSessionScript: got %q, want coding-session", cfg.AgentSessionScript)
-	}
-	if cfg.AgentSessionScriptFile != "/etc/agentsession/script.yaml" {
-		t.Errorf("AgentSessionScriptFile: got %q", cfg.AgentSessionScriptFile)
-	}
-	if cfg.TotalActors != 50 {
-		t.Errorf("TotalActors: got %d, want 50", cfg.TotalActors)
-	}
-	if cfg.SpawnConcurrency != 5 {
-		t.Errorf("SpawnConcurrency: got %d, want 5", cfg.SpawnConcurrency)
-	}
-	if cfg.ActorDeadline != 60*time.Second {
-		t.Errorf("ActorDeadline: got %v, want 60s", cfg.ActorDeadline)
+	if changed := mustApply(t, h, ``); changed {
+		t.Error("an empty payload reported a change")
 	}
 }
 
-func TestParseInvalidValues(t *testing.T) {
-	tests := []struct {
-		name string
-		json string
-	}{
-		{
-			name: "negative trace probability",
-			json: `{"trace_probability": -0.1}`,
-		},
-		{
-			name: "trace probability > 1.0",
-			json: `{"trace_probability": 1.5}`,
-		},
-		{
-			name: "negative min wait",
-			json: `{"min_wait_time": -1.0}`,
-		},
-		{
-			name: "negative max wait",
-			json: `{"max_wait_time": -1.0}`,
-		},
-		{
-			name: "max wait less than min wait",
-			json: `{"min_wait_time": 2.0, "max_wait_time": 1.0}`,
-		},
-		{
-			name: "negative min live",
-			json: `{"min_live_time": -1.0}`,
-		},
-		{
-			name: "negative max live",
-			json: `{"max_live_time": -1.0}`,
-		},
-		{
-			name: "max live less than min live",
-			json: `{"min_live_time": 14.0, "max_live_time": 9.0}`,
-		},
-		{
-			name: "negative file size",
-			json: `{"durdir_file_size_bytes": -100}`,
-		},
-		{
-			name: "file size exceeds 2 GiB",
-			json: `{"durdir_file_size_bytes": 2147483648}`,
-		},
-		{
-			name: "invalid resume mode",
-			json: `{"resume_mode": "invalid_mode"}`,
-		},
-		{
-			name: "invalid lifecycle mode",
-			json: `{"lifecycle_mode": "invalid_lifecycle"}`,
-		},
-		{
-			name: "invalid read mode",
-			json: `{"durdir_read_mode": "invalid_read"}`,
-		},
-		{
-			name: "negative cpu cores",
-			json: `{"cpu_cores": -1}`,
-		},
-		{
-			name: "negative cpu duty cycle",
-			json: `{"cpu_duty_cycle": -0.1}`,
-		},
-		{
-			name: "cpu duty cycle > 1.0",
-			json: `{"cpu_duty_cycle": 1.5}`,
-		},
-		{
-			name: "negative sweperf total steps",
-			json: `{"sweperf_total_steps": -1}`,
-		},
-		{
-			name: "negative sweperf num cycles",
-			json: `{"sweperf_num_cycles": -1}`,
-		},
-		{
-			name: "negative sweperf poll interval",
-			json: `{"sweperf_poll_interval_ms": -1}`,
-		},
-		{
-			name: "negative total actors",
-			json: `{"total_actors": -1}`,
-		},
-		{
-			name: "negative spawn concurrency",
-			json: `{"spawn_concurrency": -1}`,
-		},
-		{
-			name: "negative actor deadline",
-			json: `{"actor_deadline": -1.0}`,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := Parse([]byte(tt.json), Config{})
-			if err == nil {
-				t.Errorf("expected Parse to fail for %s, got nil error", tt.name)
+// A payload the class's rules or Common refuse leaves the holder as it was,
+// so a bad value from the master cannot take a run down.
+func TestApplyRefuses(t *testing.T) {
+	h := NewHolder(knobsCodec)
+	mustApply(t, h, `{"test_workers": 2, "trace_probability": 0.5}`)
+	before := Get[knobs](h)
+	for name, payload := range map[string]string{
+		"class rule":  `{"test_workers": 0}`,
+		"embedded":    `{"max_wait_time": 1, "min_wait_time": 2}`,
+		"mode":        `{"lifecycle_mode": "hibernate"}`,
+		"wrong type":  `{"test_workers": "three"}`,
+		"bad seconds": `{"min_wait_time": "soon"}`,
+		"common rule": `{"trace_probability": 1.5}`,
+		"not json":    `<html>`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed, err := h.Apply([]byte(payload))
+			if err == nil || changed {
+				t.Fatalf("Apply(%s) = changed %v, err %v; want a refusal", payload, changed, err)
+			}
+			if got := Get[knobs](h); got != before {
+				t.Errorf("a refused payload changed the config to %+v", got)
+			}
+			if got := h.Common().TraceProbability; got != 0.5 {
+				t.Errorf("a refused payload changed trace_probability to %v", got)
 			}
 		})
 	}
 }
 
-func TestFetchValidAndInvalid(t *testing.T) {
+// Get on the wrong type is a programming error that must not pass
+// silently; a nil holder is the zero value, for classes that run without
+// one in tests.
+func TestGetTypeChecks(t *testing.T) {
+	if got := Get[knobs](nil); got != (knobs{}) {
+		t.Errorf("Get on a nil holder = %+v, want zero", got)
+	}
+	defer func() {
+		if recover() == nil {
+			t.Error("Get with the wrong type did not panic")
+		}
+	}()
+	Get[Common](NewHolder(knobsCodec))
+}
+
+func TestStaticAndNilCodec(t *testing.T) {
+	h := Static(knobs{Template: "t", WaitTime: WaitTime{MaxWait: Seconds(3 * time.Second)}})
+	if got := Get[knobs](h); got.Template != "t" || got.MaxWait != Seconds(3*time.Second) {
+		t.Errorf("Static round trip = %+v", got)
+	}
+	// A class without knobs still gets Common.
+	h = NewHolder(nil)
+	mustApply(t, h, `{"trace_probability": 0.25, "anything": 1}`)
+	if got := h.Common().TraceProbability; got != 0.25 {
+		t.Errorf("trace_probability = %v, want 0.25", got)
+	}
+}
+
+func TestWaitTimeDraw(t *testing.T) {
+	window := WaitTime{MinWait: Seconds(10 * time.Millisecond), MaxWait: Seconds(50 * time.Millisecond)}
+	for i := 0; i < 100; i++ {
+		if got := window.Draw(); got < 10*time.Millisecond || got > 50*time.Millisecond {
+			t.Fatalf("Draw = %v, outside the window", got)
+		}
+	}
+	inverted := WaitTime{MinWait: Seconds(100 * time.Millisecond), MaxWait: Seconds(50 * time.Millisecond)}
+	if got := inverted.Draw(); got != 100*time.Millisecond {
+		t.Errorf("inverted Draw = %v, want the lower bound", got)
+	}
+	if got := Uniform(0, 0); got != 0 {
+		t.Errorf("Uniform(0, 0) = %v, want 0", got)
+	}
+	if got := Uniform(3*time.Second, 3*time.Second); got != 3*time.Second {
+		t.Errorf("Uniform(3s, 3s) = %v, want 3s", got)
+	}
+}
+
+func TestFetchReportsErrors(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/valid", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"resume_mode": "implicit", "durdir_read_mode": "digest"}`))
+		_, _ = w.Write([]byte(`{"resume_mode": "implicit"}`))
 	})
-	mux.HandleFunc("/invalid", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"resume_mode": "bogus"}`))
+	mux.HandleFunc("/busy", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "busy", http.StatusServiceUnavailable)
 	})
 	ts := httptest.NewServer(mux)
 	defer ts.Close()
 
-	ctx := context.Background()
-
-	cfg, err := Fetch(ctx, ts.URL+"/valid", Config{})
-	if err != nil {
-		t.Fatalf("Fetch valid failed: %v", err)
+	body, err := Fetch(context.Background(), ts.URL+"/valid")
+	if err != nil || string(body) != `{"resume_mode": "implicit"}` {
+		t.Errorf("Fetch valid = %q, %v", body, err)
 	}
-	if cfg.ResumeMode != ResumeModeImplicit || cfg.DurDirReadMode != ReadModeDigest {
-		t.Errorf("Fetch valid values mismatch: got %+v", cfg)
-	}
-
-	_, err = Fetch(ctx, ts.URL+"/invalid", Config{})
-	if err == nil {
-		t.Errorf("expected Fetch invalid to fail, got nil")
+	if _, err := Fetch(context.Background(), ts.URL+"/busy"); err == nil {
+		t.Error("Fetch of a 503 returned no error")
 	}
 }
 
@@ -293,7 +232,7 @@ func TestStartPollAppliesAChange(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	holder := NewHolder(Config{})
+	holder := NewHolder(knobsCodec)
 	sampler := &fakeSampler{}
 	StartPoll(ctx, ts.URL, holder, sampler, 10*time.Millisecond, time.Second,
 		func(err error) { t.Errorf("unexpected poll error: %v", err) })
@@ -306,7 +245,7 @@ func TestStartPollAppliesAChange(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if got := holder.Load().TraceProbability; got != 0.5 {
+	if got := holder.Common().TraceProbability; got != 0.5 {
 		t.Fatalf("holder trace_probability = %v, want 0.5", got)
 	}
 
@@ -318,17 +257,47 @@ func TestStartPollAppliesAChange(t *testing.T) {
 	}
 }
 
+// A poll that brings a value the class refuses goes to onError and leaves
+// the holder as it was.
+func TestStartPollReportsRefusedConfig(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"test_workers": 0}`))
+	}))
+	defer ts.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	holder := NewHolder(knobsCodec)
+	errs := make(chan error, 1)
+	StartPoll(ctx, ts.URL, holder, &fakeSampler{}, 10*time.Millisecond, time.Second, func(err error) {
+		select {
+		case errs <- err:
+		default:
+		}
+	})
+	select {
+	case err := <-errs:
+		if !strings.Contains(err.Error(), "test_workers") {
+			t.Errorf("onError got %v, want the refusing key named", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("a refused poll never reached onError")
+	}
+	if got := Get[knobs](holder); got != knobsCodec.Defaults {
+		t.Errorf("a refused poll changed the holder to %+v", got)
+	}
+}
+
 func TestStartPollStopsWithTheContext(t *testing.T) {
 	var hits atomic.Int64
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits.Add(1)
-		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{}`))
 	}))
 	defer ts.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	StartPoll(ctx, ts.URL, NewHolder(Config{}), &fakeSampler{},
+	StartPoll(ctx, ts.URL, NewHolder(nil), &fakeSampler{},
 		10*time.Millisecond, time.Second, func(error) {})
 	time.Sleep(60 * time.Millisecond)
 	cancel()
@@ -351,7 +320,6 @@ func TestSubscribeSpawnReportsPriorSuccess(t *testing.T) {
 			http.Error(w, "busy", http.StatusServiceUnavailable)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"trace_probability": 0.25}`))
 	}))
 	defer ts.Close()
@@ -361,7 +329,7 @@ func TestSubscribeSpawnReportsPriorSuccess(t *testing.T) {
 		fetched bool
 	}
 	var calls []call
-	holder := NewHolder(Config{})
+	holder := NewHolder(nil)
 	// boomer.Events is a process-wide bus and SubscribeSpawn owns the handler
 	// value, so the subscription outlives this test. No other test publishes
 	// boomer:spawn, and each test uses its own holder, so that is harmless.
@@ -373,8 +341,8 @@ func TestSubscribeSpawnReportsPriorSuccess(t *testing.T) {
 
 	fail.Store(true)
 	boomer.Events.Publish("boomer:spawn", 1, 1.0)
-	if len(calls) != 1 || calls[0].fetched {
-		t.Fatalf("after a failure with no prior success: calls = %+v, want one with fetched=false", calls)
+	if len(calls) != 1 || calls[0].fetched || calls[0].err == nil {
+		t.Fatalf("after a failure with no prior success: calls = %+v, want one error with fetched=false", calls)
 	}
 
 	fail.Store(false)
@@ -382,7 +350,7 @@ func TestSubscribeSpawnReportsPriorSuccess(t *testing.T) {
 	if len(calls) != 1 {
 		t.Fatalf("a successful fetch invoked onError: %+v", calls)
 	}
-	if got := holder.Load().TraceProbability; got != 0.25 {
+	if got := holder.Common().TraceProbability; got != 0.25 {
 		t.Fatalf("holder trace_probability = %v, want 0.25", got)
 	}
 
@@ -391,7 +359,7 @@ func TestSubscribeSpawnReportsPriorSuccess(t *testing.T) {
 	if len(calls) != 2 || !calls[1].fetched {
 		t.Fatalf("after a failure with a prior success: calls = %+v, want a second with fetched=true", calls)
 	}
-	if got := holder.Load().TraceProbability; got != 0.25 {
+	if got := holder.Common().TraceProbability; got != 0.25 {
 		t.Fatalf("failed fetch changed holder trace_probability to %v", got)
 	}
 }
@@ -404,7 +372,7 @@ func TestStartPollZeroInterval(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	StartPoll(context.Background(), ts.URL, NewHolder(Config{}), &fakeSampler{},
+	StartPoll(context.Background(), ts.URL, NewHolder(nil), &fakeSampler{},
 		0, time.Second, func(error) {})
 	time.Sleep(50 * time.Millisecond)
 	if hits.Load() != 0 {
