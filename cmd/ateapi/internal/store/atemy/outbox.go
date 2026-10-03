@@ -23,11 +23,13 @@
 // before its transaction commits, though, and InnoDB exposes its oldest open
 // transaction only through INNODB_TRX, which Vitess does not serve, so a
 // poller can see seq N+1 before seq N commits.
+//
 // The poller delivers what it sees and remembers each skipped seq as
 // pending, delivering it when it commits. A pending seq is dropped only once
-// a locking probe shows no write holds it, which means it rolled back. That reorders events only
-// across workers: two writes to one worker hold its row lock in turn, so the
-// later write's seq is assigned after the earlier one commits.
+// a locking probe shows no write holds it, which means it rolled back. This
+// reorders events only across workers: two writes to one worker hold its row
+// lock in turn, so the later write's seq is assigned after the earlier one
+// commits.
 
 package atemy
 

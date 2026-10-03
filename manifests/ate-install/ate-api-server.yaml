@@ -139,7 +139,7 @@ spec:
         - configMapRef:
             name: ate-otel-config
         # Inject env vars from a ConfigMap created by each developer.  This lets
-        # each developer customize their own PostgreSQL connection settings without having
+        # each developer customize their own store connection settings without having
         # to edit this manifest, which can remain constant across all
         # developers.
         - configMapRef:

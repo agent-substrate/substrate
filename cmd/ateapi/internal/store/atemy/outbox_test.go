@@ -727,8 +727,9 @@ func TestWatchWorkers_StartsAtTheCommittedSeq(t *testing.T) {
 	}
 }
 
-// Unlike atepg's xmin fence, the seq cursor waits only on writes that hold
-// the sequence row, so an unrelated open transaction does not delay delivery.
+// Unlike atepg's xmin fence, the seq cursor waits only on skipped outbox
+// seqs, so an open transaction that writes no outbox row does not delay
+// delivery.
 func TestWatchWorkers_UnrelatedTransactionDoesNotDelayDelivery(t *testing.T) {
 	s := setupMySQLPersistence(t)
 	ctx := t.Context()
@@ -793,8 +794,8 @@ func TestTrimWorkerOutbox_ConcurrentPassesAreHarmless(t *testing.T) {
 }
 
 // Retention and worker writes lock disjoint rows (the trim row and old outbox
-// rows against the sequence row and new outbox rows), so running them at once
-// must neither deadlock nor fail a write.
+// rows against new outbox rows), so running them at once must neither
+// deadlock nor fail a write.
 func TestTrimWorkerOutbox_ConcurrentWritersDoNotDeadlock(t *testing.T) {
 	s := setupMySQLPersistence(t)
 	ctx := t.Context()

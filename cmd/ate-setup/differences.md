@@ -317,19 +317,18 @@ or PlanetScale database through `ATE_API_MYSQL_READ_WRITE_CONNECTION_STRING`
 (required) and `ATE_API_MYSQL_OWNER_CONNECTION_STRING`. There is no bundled
 MySQL, so the PostgreSQL StatefulSet is skipped.
 
-Each backend rejects the other's variables: any `ATE_API_POSTGRES_*` on a MySQL
-install, or any `ATE_API_MYSQL_*` on a PostgreSQL install, is an error. An
-exported empty `ATE_API_POSTGRES_CLOUDSQL_INSTANCE` is allowed. A MySQL install
-never adopts the cluster's Cloud SQL record, so it removes a proxy sidecar left
-by an earlier PostgreSQL install.
+Each backend rejects the other's non-empty variables; exported empty ones are
+allowed. A MySQL install never adopts the cluster's Cloud SQL record, so it
+removes a proxy sidecar left by an earlier PostgreSQL install.
 
 `ATE_API_MYSQL_SERVER_CA_FILE` is published as the `mysql-server-ca` Secret and
 turns on TLS verified against that CA. `ATE_API_MYSQL_TLS_CA_FILE`,
 `ATE_API_MYSQL_TLS_CERT_FILE` and `ATE_API_MYSQL_TLS_KEY_FILE` pass paths inside
-the pod through unchanged, as a PostgreSQL DSN names its certificate files. The backend is recorded in
-`ate-api-server-secret-envvars`. A redeploy with `ATE_API_STORE_BACKEND` unset
-fails on a cluster that records `mysql`, rather than moving it onto an empty
-bundled PostgreSQL.
+the pod through unchanged, as a PostgreSQL DSN names its certificate files.
+
+The backend is recorded in `ate-api-server-secret-envvars`. A redeploy with
+`ATE_API_STORE_BACKEND` unset fails on a cluster that records `mysql`, rather
+than moving it onto an empty bundled PostgreSQL.
 
 ## Testing
 

@@ -2,7 +2,9 @@
 
 `ateapi` applies migrations for its store backend, PostgreSQL or MySQL, before it becomes ready. During a rolling update, the previous binary continues to serve requests while the new binary changes the schema.
 
-Goose commits one migration at a time. A failed migration run can leave any completed migration prefix in place. These rules keep the previous binary safe with every migration prefix on both backends. MySQL adds the constraints in [MySQL migrations](#mysql-migrations).
+Goose commits one migration at a time. A failed migration run can leave any completed migration prefix in place. These rules keep the previous binary safe with every migration prefix on both backends.
+
+MySQL adds the constraints in [MySQL migrations](#mysql-migrations).
 
 ## Compatibility contract
 
@@ -49,7 +51,9 @@ This sequence keeps the previous binary compatible during a rollout and a tempor
 
 ## Migration file rules
 
-Store PostgreSQL migration files in `cmd/ateapi/internal/store/atepg/migrations` and MySQL migration files in `cmd/ateapi/internal/store/atemy/migrations`. Make each schema change for both backends in the same change. Give the two files the same number, name, and intent, so the directories stay in step. `hack/verify/mysql-migrations.sh` applies the rules below to the MySQL directory.
+Store PostgreSQL migration files in `cmd/ateapi/internal/store/atepg/migrations` and MySQL migration files in `cmd/ateapi/internal/store/atemy/migrations`. Make each schema change for both backends in the same change. Give the two files the same number, name, and intent, so the directories stay in step.
+
+`hack/verify/mysql-migrations.sh` applies the rules below to the MySQL directory.
 
 On PostgreSQL, standalone Substrate defaults to the `substrate` schema, including under Kagent's umbrella chart. Set `postgres.schema` in Helm or `ATE_API_POSTGRES_SCHEMA` in local setup to use another schema.
 
@@ -74,7 +78,8 @@ Do not edit the `schema_migrations` ledger manually.
 MySQL commits each DDL statement on its own, even inside the Goose transaction. A failed MySQL migration file can therefore leave some of its statements applied without a ledger entry, and the next startup runs the whole file again. Each file boundary is still a durable state, but a file is not atomic.
 
 - Make every MySQL statement safe to run again. Use `CREATE TABLE IF NOT EXISTS`, which the MySQL verifier allows, and seed rows with `INSERT ... ON DUPLICATE KEY UPDATE`.
-- MySQL has no `IF NOT EXISTS` for `ALTER TABLE` or `CREATE INDEX`. Put each such statement in its own migration file, so a failure cannot leave a file half applied. A crash after the statement commits but before Goose records the file still needs a manual repair. Split the PostgreSQL file the same way, so the numbering stays in step.
+- MySQL has no `IF NOT EXISTS` for `ALTER TABLE` or `CREATE INDEX`. Put each such statement in its own migration file, so a failure cannot leave a file half applied. Split the PostgreSQL file the same way, so the numbering stays in step.
+- A crash after such a statement commits but before Goose records the file still needs a manual repair.
 - Order the statements so that every statement prefix is compatible with the previous binary.
 - Use only features PlanetScale's Vitess supports. Do not add foreign keys, stored routines, triggers, partitioning, or `CREATE DATABASE`.
 - Declare `DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_bin` on new tables, so key columns compare byte for byte as they do in PostgreSQL.
@@ -88,11 +93,12 @@ See the [MySQL configuration guide](../mysql.md) for the operator side.
 2. Check those operations against every new migration prefix.
 3. Use expand and contract when one prefix would break an operation.
 4. Add or update a test for the schema behavior.
-5. Run both migration verifiers and both store test suites. `ATE_TEST_STORE_BACKEND=mysql` reruns the store-backed control plane tests on MySQL.
+5. Run both migration verifiers and both store test suites. `ATE_TEST_STORE_BACKEND=mysql` reruns the store-backed control plane tests on MySQL, and the `vitess` build tag runs the MySQL store tests through Vitess, as CI does.
 
 ```sh
 hack/verify/postgresql-migrations.sh
 hack/verify/mysql-migrations.sh
 go test ./cmd/ateapi/internal/store/atepg ./cmd/ateapi/internal/store/atemy
 ATE_TEST_STORE_BACKEND=mysql go test ./cmd/ateapi/internal/controlapi/... ./cmd/ateapi/internal/workerservice/...
+go test -tags vitess -run TestVitess ./cmd/ateapi/internal/store/atemy/
 ```
