@@ -104,5 +104,6 @@ Keep this up to date when updating AGENTS.md.
 
 - **Workload Isolation**: The project uses `gVisor` (`runsc`) for sandboxing and security isolation of workloads on pods.
 - **JWTs and JWKs**: Signing (`internal/localjwtauthority`), verification (`cmd/ateapi/internal/oidcjwt`), and JWK set publishing (`internal/oidcdiscovery`) are built on the standard library's crypto packages. Extend those packages rather than adding go-jose or another JOSE library, so the code that decides whether a token is valid stays small and supports only the algorithms Substrate uses.
+- **Ingress Authentication**: `atenet-router --ingress-auth-mode=static-mtls` requires clients to present a SPIFFE certificate signed by `--ingress-client-ca-file` whose ID is in `--ingress-allowed-spiffe-ids`; that list is the whole authorization policy, so any listed client may reach any Actor. The default, `deprecated-insecure`, checks a certificate only when a client presents one, and also serves plaintext listeners that accept any client. Install with it via `ate-setup --ingress-auth-mode=static-mtls` (`manifests/ate-install/components/router-static-mtls`); the allowlist lives in `manifests/ate-install/atenet-router.yaml`.
 
 For future plans for security, reference `docs/roadmap.md`.

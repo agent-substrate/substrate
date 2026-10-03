@@ -223,6 +223,24 @@ spec:
         # CONNECT-tunneled ingress (arbitrary-port support).
         - "--port-connect=8081"
         - "--port-connect-tls=8444"
+        # Client auth on the TLS listeners (--port-https, --port-connect-tls).
+        # A client certificate must chain to the podidentity
+        # ClusterTrustBundle, which the envoy container mounts too, and carry
+        # one of the SPIFFE IDs below. The default --ingress-auth-mode,
+        # deprecated-insecure, only checks a certificate a client chooses to
+        # present, and keeps the plaintext listeners open;
+        # components/router-static-mtls makes the certificate mandatory.
+        #
+        # Allowed SPIFFE IDs (exact match), one per client workload:
+        #
+        #   spiffe://cluster.local/ns/ate-e2e-router-client/sa/router-client
+        #       The e2e suites' router client (see internal/e2e/ingressauth.go).
+        #
+        # Add an ID for every in-cluster workload that sends traffic to actors
+        # through the router. The podidentity signer issues
+        # spiffe://cluster.local/ns/<namespace>/sa/<service-account>.
+        - "--ingress-client-ca-file=/run/podidentity.podcert.ate.dev/trust-bundle.pem"
+        - "--ingress-allowed-spiffe-ids=spiffe://cluster.local/ns/ate-e2e-router-client/sa/router-client"
         # Client auth to ateapi (mtls): verify the serving cert against the
         # servicedns trust bundle and present the podidentity client cert.
         - "--ateapi-address=k8s:///api.ate-system.svc:443"

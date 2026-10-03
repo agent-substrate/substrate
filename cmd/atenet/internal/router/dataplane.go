@@ -24,6 +24,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/ingress"
+	"github.com/agent-substrate/substrate/internal/credbundle"
 )
 
 type dataplaneHealthCheck struct {
@@ -76,6 +77,27 @@ func (s *RouterServer) startEnvoyDataplane(ctx context.Context, g *errgroup.Grou
 	}
 
 	xdsSrv.SetTlsConfig(s.cfg.HttpsPort, s.cfg.EnvoyCertPath)
+	// validateIngressAuth guarantees the client auth settings whenever a TLS
+	// listener is enabled, so every TLS listener validates any certificate a
+	// client presents. Only static-mtls also refuses a client that presents
+	// none; deprecated-insecure lets it through, as the plaintext listeners do.
+	if s.cfg.tlsIngressEnabled() {
+		// Envoy is what reads the bundle, but it would only surface a bad
+		// one as a listener that never warms. Parse it here so the router
+		// fails startup instead.
+		if _, err := credbundle.ParsePool(s.cfg.IngressAuth.ClientCAFile); err != nil {
+			return fmt.Errorf("loading --ingress-client-ca-file: %w", err)
+		}
+		require := s.cfg.IngressAuth.mode() == IngressAuthStaticMTLS
+		xdsSrv.SetDownstreamClientAuth(s.cfg.IngressAuth.ClientCAFile, s.cfg.IngressAuth.AllowedSPIFFEIDs, require)
+		slog.InfoContext(ctx, "TLS ingress listeners validate client certificates",
+			slog.Bool("client_cert_required", require),
+			slog.String("client_ca_file", s.cfg.IngressAuth.ClientCAFile),
+			slog.Any("allowed_spiffe_ids", s.cfg.IngressAuth.AllowedSPIFFEIDs))
+	}
+	if s.cfg.IngressAuth.mode() == IngressAuthDeprecatedInsecure {
+		slog.WarnContext(ctx, "Ingress client authentication is optional: any client that presents no certificate, or uses a plaintext listener, can reach any actor. Set --ingress-auth-mode=static-mtls to require mTLS")
+	}
 	xdsSrv.SetUpstreamTls(s.cfg.UpstreamCredentialBundlePath, s.cfg.UpstreamTrustBundlePath, s.cfg.UpstreamSpiffePrefix)
 
 	// The snapshot is a pure function of the configuration applied above, so it
