@@ -257,3 +257,58 @@ func TestStatesNotAdvanced(t *testing.T) {
 		})
 	}
 }
+
+const sampleEgressEnvoyScrape = `# TYPE envoy_http_ext_proc_egress_identity_streams_started counter
+envoy_http_ext_proc_egress_identity_streams_started{envoy_http_conn_manager_prefix="egress_connect"} 6
+# TYPE envoy_http_ext_proc_egress_policy_mitm_streams_started counter
+envoy_http_ext_proc_egress_policy_mitm_streams_started{envoy_http_conn_manager_prefix="mitm_http"} 1
+# TYPE envoy_http_ext_proc_egress_policy_cleartext_streams_started counter
+envoy_http_ext_proc_egress_policy_cleartext_streams_started{envoy_http_conn_manager_prefix="mitm_cleartext"} 0
+# TYPE envoy_http_ext_proc_egress_identity_streams_closed counter
+envoy_http_ext_proc_egress_identity_streams_closed{envoy_http_conn_manager_prefix="egress_connect"} 6
+`
+
+func TestEgressExtProcStreamCounts(t *testing.T) {
+	tests := []struct {
+		name   string
+		scrape string
+		want   map[string]int
+	}{
+		{
+			name:   "per-leg ext_proc counters",
+			scrape: sampleEgressEnvoyScrape,
+			want: map[string]int{
+				EgressExtProcIdentityStatPrefix:   6,
+				EgressExtProcPolicyMITMStatPrefix: 1,
+				"egress_policy_cleartext":         0,
+			},
+		},
+		{
+			name:   "summed across replicas",
+			scrape: sampleEgressEnvoyScrape + sampleEgressEnvoyScrape,
+			want: map[string]int{
+				EgressExtProcIdentityStatPrefix:   12,
+				EgressExtProcPolicyMITMStatPrefix: 2,
+				"egress_policy_cleartext":         0,
+			},
+		},
+		{
+			name:   "empty scrape",
+			scrape: "",
+			want:   map[string]int{},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := EgressExtProcStreamCounts(tt.scrape)
+			if len(got) != len(tt.want) {
+				t.Fatalf("EgressExtProcStreamCounts() = %v, want %v", got, tt.want)
+			}
+			for prefix, want := range tt.want {
+				if got[prefix] != want {
+					t.Errorf("EgressExtProcStreamCounts()[%q] = %d, want %d", prefix, got[prefix], want)
+				}
+			}
+		})
+	}
+}

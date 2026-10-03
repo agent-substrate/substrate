@@ -99,8 +99,17 @@ func TestActorEgressMITMTrust(t *testing.T) {
 	// deleted it), leaving the gateway briefly signing with the old CA — so
 	// certificate failures retry for one propagation window before counting.
 	deadline := time.Now().Add(2 * time.Minute)
-	var pos fetchResponse
+	var (
+		beforeExtProc map[string]int
+		pos           fetchResponse
+	)
 	for {
+		beforeScrape, err := e2e.ScrapeEgressEnvoyMetrics(ctx)
+		if err != nil {
+			t.Fatalf("ScrapeEgressEnvoyMetrics before fetches: %v", err)
+		}
+		beforeExtProc = e2e.EgressExtProcStreamCounts(beforeScrape)
+
 		pos = probeFetch(t, ctx, rc, id, origin, "bundle")
 		isCertErr := strings.Contains(pos.Error, "certificate") || strings.Contains(pos.Error, "x509")
 		if pos.Error == "" || !isCertErr || time.Now().After(deadline) {
@@ -167,6 +176,26 @@ func TestActorEgressMITMTrust(t *testing.T) {
 		t.Errorf("fetch of a host outside the policy was intercepted (certificate error %q), want the connection closed at the ClientHello", denied.Error)
 	case denied.Status != "":
 		t.Errorf("fetch of a host outside the policy got status %s with error %q, want no HTTP exchange at all", denied.Status, denied.Error)
+	}
+
+	afterScrape, err := e2e.ScrapeEgressEnvoyMetrics(ctx)
+	if err != nil {
+		t.Fatalf("ScrapeEgressEnvoyMetrics after fetches: %v", err)
+	}
+	afterExtProc := e2e.EgressExtProcStreamCounts(afterScrape)
+
+	// Each of the 6 fetches opens a CONNECT tunnel (egress_identity), while
+	// only the positive MITM fetch completes the inner TLS handshake and sends
+	// an HTTP request through the MITM chain (egress_policy_mitm).
+	const (
+		wantIdentityCalls   = 6
+		wantMITMPolicyCalls = 1
+	)
+	if got := afterExtProc[e2e.EgressExtProcIdentityStatPrefix] - beforeExtProc[e2e.EgressExtProcIdentityStatPrefix]; got != wantIdentityCalls {
+		t.Errorf("egress ext_proc %s streams_started delta = %d, want %d", e2e.EgressExtProcIdentityStatPrefix, got, wantIdentityCalls)
+	}
+	if got := afterExtProc[e2e.EgressExtProcPolicyMITMStatPrefix] - beforeExtProc[e2e.EgressExtProcPolicyMITMStatPrefix]; got != wantMITMPolicyCalls {
+		t.Errorf("egress ext_proc %s streams_started delta = %d, want %d", e2e.EgressExtProcPolicyMITMStatPrefix, got, wantMITMPolicyCalls)
 	}
 }
 

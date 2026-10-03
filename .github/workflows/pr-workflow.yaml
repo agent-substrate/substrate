@@ -87,8 +87,8 @@ jobs:
           ~/.cargo/registry/index
           ~/.cargo/registry/cache
           ~/.cargo/git/db
-          cmd/dataplane/envoy/dynamic-modules/*/target
-        key: cargo-${{ runner.os }}-${{ hashFiles('cmd/dataplane/envoy/dynamic-modules/*/Cargo.lock') }}
+          cmd/dataplane/envoy/dynamic-modules/target
+        key: cargo-${{ runner.os }}-${{ hashFiles('cmd/dataplane/envoy/dynamic-modules/Cargo.lock') }}
         restore-keys: cargo-${{ runner.os }}-
     - name: dynamic module tests
       run: |
