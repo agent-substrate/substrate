@@ -29,8 +29,8 @@ import (
 )
 
 // ErrNoTransactionInContext is returned by ReadPage and Write when called
-// without an active pgx.Tx injected via ContextWithTx.
-var ErrNoTransactionInContext = errors.New("authz datastore: active pgx.Tx required in context")
+// without an active store transaction injected via ContextWithTx.
+var ErrNoTransactionInContext = errors.New("authz datastore: active store transaction required in context")
 
 // NOTE: The SQL query and tuple write/delete/changelog execution helpers in this
 // file are 1:1 adaptations of unexported methods and package-private types in
@@ -87,7 +87,7 @@ func (d *transactionalDatastore) Close() {}
 // 1:1 with (*postgres.Datastore).ReadAuthorizationModel (postgres.go:831-858),
 // except rows are queried via tx.Query instead of db.Query when tx is present.
 func (d *transactionalDatastore) ReadAuthorizationModel(ctx context.Context, store string, modelID string) (*openfgav1.AuthorizationModel, error) {
-	tx, ok := TxFromContext(ctx)
+	tx, ok := pgxTxFromContext(ctx)
 	if !ok {
 		return d.Datastore.ReadAuthorizationModel(ctx, store, modelID)
 	}
@@ -124,7 +124,7 @@ func (d *transactionalDatastore) ReadPage(
 	filter storage.ReadFilter,
 	options storage.ReadPageOptions,
 ) ([]*openfgav1.Tuple, string, error) {
-	tx, ok := TxFromContext(ctx)
+	tx, ok := pgxTxFromContext(ctx)
 	if !ok {
 		return nil, "", ErrNoTransactionInContext
 	}
@@ -196,7 +196,7 @@ func (d *transactionalDatastore) Write(
 	writes storage.Writes,
 	opts ...storage.TupleWriteOption,
 ) error {
-	tx, ok := TxFromContext(ctx)
+	tx, ok := pgxTxFromContext(ctx)
 	if !ok {
 		return ErrNoTransactionInContext
 	}

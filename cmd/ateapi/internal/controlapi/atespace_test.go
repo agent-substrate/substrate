@@ -125,7 +125,7 @@ func TestAtespace_EndToEndOpenFGAScenarios(t *testing.T) {
 			t.Fatalf("pool.Begin failed: %v", err)
 		}
 		defer tx.Rollback(ctx) //nolint:errcheck
-		_, err = fgaServer.Write(authz.ContextWithTx(ctx, tx), &openfgav1.WriteRequest{
+		_, err = fgaServer.Write(authz.ContextWithTx(ctx, authz.PgxTx(tx)), &openfgav1.WriteRequest{
 			StoreId: storeID,
 			Writes: &openfgav1.WriteRequestWrites{
 				TupleKeys: []*openfgav1.TupleKey{

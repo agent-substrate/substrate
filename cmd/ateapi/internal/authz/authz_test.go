@@ -160,7 +160,7 @@ func TestEnsureStoreAndModel_InitializeAndCheck(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pool.Begin failed: %v", err)
 	}
-	_, err = fgaSrv.Write(ContextWithTx(ctx, tx), &openfgav1.WriteRequest{
+	_, err = fgaSrv.Write(ContextWithTx(ctx, PgxTx(tx)), &openfgav1.WriteRequest{
 		StoreId:              storeID,
 		AuthorizationModelId: modelID,
 		Writes: &openfgav1.WriteRequestWrites{
@@ -308,7 +308,7 @@ func TestTransactionalDatastore_RollbackAndCommit(t *testing.T) {
 	if _, err := txRollback.Exec(ctx, "INSERT INTO atespaces (name, uid, version, proto) VALUES ('team-tx', 'uid-1', 1, $1)", []byte{}); err != nil {
 		t.Fatalf("txRollback insert atespaces failed: %v", err)
 	}
-	writeTuple(ContextWithTx(ctx, txRollback))
+	writeTuple(ContextWithTx(ctx, PgxTx(txRollback)))
 	if err := txRollback.Rollback(ctx); err != nil {
 		t.Fatalf("Rollback failed: %v", err)
 	}
@@ -328,7 +328,7 @@ func TestTransactionalDatastore_RollbackAndCommit(t *testing.T) {
 	if _, err := txCommit.Exec(ctx, "INSERT INTO atespaces (name, uid, version, proto) VALUES ('team-tx', 'uid-1', 1, $1)", []byte{}); err != nil {
 		t.Fatalf("txCommit insert atespaces failed: %v", err)
 	}
-	writeTuple(ContextWithTx(ctx, txCommit))
+	writeTuple(ContextWithTx(ctx, PgxTx(txCommit)))
 	if err := txCommit.Commit(ctx); err != nil {
 		t.Fatalf("Commit failed: %v", err)
 	}
@@ -372,7 +372,7 @@ func TestTransactionalDatastore_RollbackAndCommit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("singlePool.Begin failed: %v", err)
 	}
-	txCtx := ContextWithTx(txCtxTimeout, singleTx)
+	txCtx := ContextWithTx(txCtxTimeout, PgxTx(singleTx))
 
 	readResp, err := singleFGASrv.Read(txCtx, &openfgav1.ReadRequest{
 		StoreId:  storeID,
@@ -409,7 +409,7 @@ func writeTestTuple(t *testing.T, ctx context.Context, pool *pgxpool.Pool, pm *P
 		t.Fatalf("pool.Begin failed: %v", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err := pm.fgaServer.Write(ContextWithTx(ctx, tx), &openfgav1.WriteRequest{
+	if _, err := pm.fgaServer.Write(ContextWithTx(ctx, PgxTx(tx)), &openfgav1.WriteRequest{
 		StoreId:              pm.storeID,
 		AuthorizationModelId: pm.modelID,
 		Writes: &openfgav1.WriteRequestWrites{
@@ -506,14 +506,14 @@ func TestAuthorizerAndPolicyManager_RuntimeChecks(t *testing.T) {
 
 	// 6. PolicyManager.DeleteAtespacePolicies requires a transaction, and
 	// removes all tuples on team-x when committed.
-	if err := policyManager.DeleteAtespacePolicies(ctx, nil, "team-x"); !errors.Is(err, ErrNilTransaction) {
+	if err := policyManager.DeleteAtespacePolicies(ctx, Tx{}, "team-x"); !errors.Is(err, ErrNilTransaction) {
 		t.Fatalf("DeleteAtespacePolicies with nil tx = %v, want ErrNilTransaction", err)
 	}
 	txDel, err := pool.Begin(ctx)
 	if err != nil {
 		t.Fatalf("pool.Begin failed: %v", err)
 	}
-	if err := policyManager.DeleteAtespacePolicies(ctx, txDel, "team-x"); err != nil {
+	if err := policyManager.DeleteAtespacePolicies(ctx, PgxTx(txDel), "team-x"); err != nil {
 		t.Fatalf("DeleteAtespacePolicies failed: %v", err)
 	}
 	if err := txDel.Commit(ctx); err != nil {
