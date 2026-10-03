@@ -509,7 +509,10 @@ func TestUpdateActor_RepointTemplateStorageLocation(t *testing.T) {
 			if tt.snapshot != nil {
 				uri := tt.snapshot(t, actor)
 				actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
-					s.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: uri}
+					s.LastAssignedGeneration = 1
+					s.Snapshots = []*ateapipb.Snapshot{
+						newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", uri, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+					}
 				})
 			}
 
@@ -814,7 +817,7 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 				Scope:       ateapipb.TagScope_TAG_SCOPE_PUBLISHED,
 				Status: &ateapipb.TagStatus{
 					ActorTemplateUid: tmpl.GetMetadata().GetUid(),
-					Snapshot:         &ateapipb.ExternalSnapshot{SnapshotUri: "gs://bucket/atespaces/ate-golden/tags/" + someActorUID, Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY},
+					Snapshot:         newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), "gs://bucket/atespaces/ate-golden/tags/"+someActorUID, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
 				},
 			}
 			wantCode := codes.OK
@@ -828,7 +831,7 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 				tag.Status.ActorTemplateUid = "other"
 				wantCode = codes.FailedPrecondition
 			case "data scope":
-				tag.Status.Snapshot.Fidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
+				tag.Status.Snapshot.Storage[0].Fidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
 				wantCode = codes.FailedPrecondition
 			}
 			if scenario != "missing" {
@@ -845,7 +848,7 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 			actor := &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor"}, ActorTemplate: resources.ActorTemplateRefFromActorTemplate(tmpl).ToObjectRef()}
 			if scenario == "explicit tag" {
 				tag.Metadata.Name = "explicit"
-				tag.Status.Snapshot.SnapshotUri = "gs://bucket/atespaces/ate-golden/tags/explicit"
+				tag.Status.Snapshot = newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), "gs://bucket/atespaces/ate-golden/tags/explicit", ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
 				if _, err := persistence.CreateTag(ctx, tag); err != nil {
 					t.Fatal(err)
 				}
@@ -859,8 +862,9 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 			if err != nil {
 				return
 			}
-			if got := created.GetStatus(); got.GetExternalSnapshot().GetSnapshotUri() != tag.GetStatus().GetSnapshot().GetSnapshotUri() || got.GetExternalSnapshot().GetActorTemplateUid() != tmpl.GetMetadata().GetUid() {
-				t.Fatalf("incorrect initial status: %v", got)
+			gotSnap, gotSt := findLatestSnapshotStorage(created.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+			if gotSt.GetObject().GetSnapshotUri() != tagDurableSnapshotURI(tag, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED) || gotSnap.GetActorTemplateUid() != tmpl.GetMetadata().GetUid() {
+				t.Fatalf("incorrect initial status: %v", created.GetStatus())
 			}
 			if scenario == "own snapshot" {
 				uri, err := resources.NewActorSnapshotURI(tmpl.GetSnapshotConfig().GetStorageLocation(), "team-a", created.GetMetadata().GetUid(), "snapshot")
@@ -868,7 +872,10 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 					t.Fatal(err)
 				}
 				if _, err := persistence.UpdateActor(ctx, resources.ActorRefFromActor(created), store.PreconditionFrom(created), func(db *ateapipb.Actor) error {
-					db.Status.ExternalSnapshot.SnapshotUri = uri.String()
+					db.Status.LastAssignedGeneration = 1
+					db.Status.Snapshots = []*ateapipb.Snapshot{
+						newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), uri.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+					}
 					return nil
 				}); err != nil {
 					t.Fatal(err)

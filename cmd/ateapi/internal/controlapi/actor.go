@@ -128,20 +128,19 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 		ActorVolumes: initVols,
 	}
 	if sourceTag != nil {
-		// The Actor starts out borrowing the tag's external snapshot rather than
+		// The Actor starts out borrowing the tag's snapshot rather than
 		// copying it. The snapshot URI is under the tag's prefix, not the Actor's, which
 		// is what keeps the Actor from collecting those objects. Its first
 		// suspend writes a snapshot under its own prefix and takes over from
 		// there.
-		outActor.Status.ExternalSnapshot = proto.CloneOf(sourceTag.GetStatus().GetSnapshot())
+		snap := proto.CloneOf(sourceTag.GetStatus().GetSnapshot())
+		snap.Generation = 1
+		snap.Owner = ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG
 		// The Actor is born with guest state, so stamp the template that state
-		// was built on now rather than at the first resume. The Tag records it
-		// beside its snapshot rather than on it, so the clone above does not
-		// carry it. Left empty, a repoint before that first resume reads as "no
-		// guest state" instead of "replaced template", and the resume restores
-		// the old template's memory and rootfs in full instead of the volume
-		// data alone.
-		outActor.Status.ExternalSnapshot.ActorTemplateUid = sourceTag.GetStatus().GetActorTemplateUid()
+		// was built on now rather than at the first resume.
+		snap.ActorTemplateUid = sourceTag.GetStatus().GetActorTemplateUid()
+		outActor.Status.Snapshots = []*ateapipb.Snapshot{snap}
+		outActor.Status.LastAssignedGeneration = 1
 	}
 	if errs := apivalidation.ValidateActorUpdate(ctx, field.NewPath("actor"), outActor, inActor, true); len(errs) > 0 {
 		return nil, toGRPCInternalError(errs)
@@ -187,7 +186,7 @@ func (s *ServiceImpl) resolveTagSource(ctx context.Context, actorAtespace string
 		return nil, apierror.FailedPrecondition("source Tag has an invalid scope")
 	}
 	// A tag might have an empty Snapshot URI if the tag creation failed or is ongoing.
-	if tag.GetStatus().GetSnapshot().GetSnapshotUri() == "" {
+	if tagDurableSnapshotURI(tag, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED) == "" {
 		return nil, apierror.FailedPrecondition("source Tag is still being created or failed creation")
 	}
 	// TODO: Permit compatible VOLUMES snapshots when runtimes can extract portable data.
@@ -395,7 +394,8 @@ func validateTemplateVolumesUnchanged(oldTemplate, newTemplate *ateapipb.ActorTe
 // Deleting an actor collects everything under its external snapshot prefix. If
 // the location prefix ever changes, we risk leaking the snapshots under the old prefix.
 func validateSnapshotLocationUnchanged(actor *ateapipb.Actor, newTemplate *ateapipb.ActorTemplate) error {
-	currentSnapshotURI := actor.GetStatus().GetExternalSnapshot().GetSnapshotUri()
+	_, st := findLatestSnapshotStorage(actor.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+	currentSnapshotURI := st.GetObject().GetSnapshotUri()
 	if currentSnapshotURI == "" {
 		return nil
 	}
