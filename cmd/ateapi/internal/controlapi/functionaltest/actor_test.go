@@ -22,16 +22,20 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"cloud.google.com/go/storage"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/actoridjwt"
 	"github.com/agent-substrate/substrate/internal/ateattr"
+	"github.com/agent-substrate/substrate/internal/objectstore"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/volume"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"go.opentelemetry.io/otel/attribute"
@@ -1078,6 +1082,81 @@ func TestDeleteActor_Success(t *testing.T) {
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id1"},
 	})
 	assertGrpcError(t, err, codes.NotFound, "Actor test-atespace/id1 not found")
+}
+
+func TestDeleteActor_MissingSnapshotBucket(t *testing.T) {
+	for _, provider := range []struct {
+		name string
+		err  error
+	}{
+		{name: "S3", err: &types.NoSuchBucket{}},
+		{name: "GCS", err: storage.ErrBucketNotExist},
+	} {
+		for _, state := range []ateapipb.ActorState{
+			ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+			ateapipb.ActorState_ACTOR_STATE_DELETING,
+		} {
+			t.Run(provider.name+"/"+state.String(), func(t *testing.T) {
+				ns := namespaceForTest("ns-delete-missing-bucket")
+				tc := setupTest(t, ns)
+				defer tc.cleanup()
+				createTemplate(t, tc, ns)
+				ctx := t.Context()
+				ref := &ateapipb.ObjectRef{Atespace: testAtespace, Name: testActorID}
+				actor, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+					Metadata:      &ateapipb.ResourceMetadata{Atespace: ref.GetAtespace(), Name: ref.GetName()},
+					ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+				}})
+				if err != nil {
+					t.Fatalf("CreateActor: %v", err)
+				}
+				uri, err := resources.NewActorSnapshotURI(testStorageLocation, testAtespace, actor.GetMetadata().GetUid(), "snapshot")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := tc.persistence.UpdateActor(ctx, resources.ActorRefFromActor(actor), store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
+					toUpdate.Status.State = state
+					toUpdate.Status.ExternalSnapshot = nil
+					if state == ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+						toUpdate.Status.ExternalSnapshot = &ateapipb.ExternalSnapshot{
+							SnapshotUri: uri.String(), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+						}
+					} else {
+						// A failed upload leaves only the in-progress URI, even
+						// when a prior deletion already marked the actor DELETING.
+						toUpdate.Status.InProgressSnapshotUri = uri.String()
+					}
+					return nil
+				}); err != nil {
+					t.Fatalf("UpdateActor: %v", err)
+				}
+				bucket, prefix, err := objectstore.BucketPrefix(uri.OwnerPrefix())
+				if err != nil {
+					t.Fatal(err)
+				}
+				var listCalls atomic.Int32
+				tc.objectStore.OnList = func(gotBucket, gotPrefix string) error {
+					listCalls.Add(1)
+					if gotBucket != bucket || gotPrefix != prefix {
+						return fmt.Errorf("unexpected cleanup prefix: %s/%s", gotBucket, gotPrefix)
+					}
+					return fmt.Errorf("snapshot bucket removed: %w", provider.err)
+				}
+				deleted, err := tc.client.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref})
+				if err != nil {
+					t.Fatalf("DeleteActor with missing snapshot bucket: %v", err)
+				}
+				if deleted.GetMetadata().GetUid() != actor.GetMetadata().GetUid() {
+					t.Errorf("DeleteActor returned a different actor: %v", deleted)
+				}
+				if got := listCalls.Load(); got != 1 {
+					t.Errorf("snapshot cleanup list calls = %d, want 1", got)
+				}
+				_, err = tc.client.GetActor(ctx, &ateapipb.GetActorRequest{Actor: ref})
+				assertGrpcError(t, err, codes.NotFound, "Actor test-atespace/id1 not found")
+			})
+		}
+	}
 }
 
 func TestDeleteActor_NotSuspended(t *testing.T) {

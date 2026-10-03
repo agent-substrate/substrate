@@ -15,6 +15,7 @@
 package objectstore_test
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -28,6 +29,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/smithy-go"
 	"github.com/google/go-cmp/cmp"
 )
 
@@ -141,6 +143,62 @@ func TestS3List(t *testing.T) {
 	want := []string{"root/snap/manifest.json", "root/snap/memory.zst"}
 	if diff := cmp.Diff(want, objects); diff != "" {
 		t.Errorf("List() differs (-want +got):\n%s", diff)
+	}
+}
+
+func TestS3DeletePrefixBucketErrors(t *testing.T) {
+	tests := []struct {
+		name      string
+		code      string
+		status    int
+		afterList bool
+		wantErr   bool
+	}{
+		{name: "missing bucket", code: "NoSuchBucket", status: http.StatusNotFound},
+		{name: "bucket removed after listing", code: "NoSuchBucket", status: http.StatusNotFound, afterList: true},
+		{name: "list access denied", code: "AccessDenied", status: http.StatusForbidden, wantErr: true},
+		{name: "delete access denied", code: "AccessDenied", status: http.StatusForbidden, afterList: true, wantErr: true},
+		{name: "unspecified not found", code: "NotFound", status: http.StatusNotFound, wantErr: true},
+		{name: "service failure", code: "InternalError", status: http.StatusInternalServerError, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fake, store := newS3(t)
+			uri := mustActorSnapshotURI(t, testLocation, "space", "actor-1", "current").Prefix()
+			bucket, prefix, err := objectstore.BucketPrefix(uri)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fake.handle = func(w http.ResponseWriter, r *http.Request) bool {
+				w.Header().Set("Content-Type", "application/xml")
+				if tt.afterList && r.Method == http.MethodGet {
+					writeXML(w, `<ListBucketResult><IsTruncated>false</IsTruncated><Contents><Key>`+prefix+`durable-dir.tar</Key></Contents></ListBucketResult>`)
+					return true
+				}
+				w.WriteHeader(tt.status)
+				writeXML(w, `<Error><Code>`+tt.code+`</Code><Message>storage failure</Message></Error>`)
+				return true
+			}
+			err = objectstore.DeletePrefix(t.Context(), store, uri)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("DeletePrefix() = %v, want an error: %v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				var apiErr smithy.APIError
+				if !errors.As(err, &apiErr) || apiErr.ErrorCode() != tt.code {
+					t.Fatalf("DeletePrefix() = %v, want S3 error %s", err, tt.code)
+				}
+			}
+			if !tt.afterList {
+				if _, err := store.List(t.Context(), bucket, prefix); err == nil {
+					t.Error("List() = nil, want an error")
+				}
+				dst := mustTagSnapshotURI(t, testLocation, "space", "tag-1").Prefix()
+				if err := objectstore.CopyPrefix(t.Context(), store, uri, dst); err == nil {
+					t.Error("CopyPrefix() = nil, want an error")
+				}
+			}
+		})
 	}
 }
 
