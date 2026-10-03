@@ -56,10 +56,7 @@ func (p *Persistence) ListTags(ctx context.Context, atespace string, opts store.
 	}
 	items, next, err := listScoped(ctx, p.db, "tags", storesql.KindTag, atespace, opts, decode)
 	if err != nil {
-		if errors.Is(err, store.ErrInvalidPageToken) {
-			return store.ListResponse[*ateapipb.Tag]{}, err
-		}
-		return store.ListResponse[*ateapipb.Tag]{}, fmt.Errorf("listing tags: %w", err)
+		return store.ListResponse[*ateapipb.Tag]{}, err
 	}
 	return store.ListResponse[*ateapipb.Tag]{Items: items, NextPageToken: next}, nil
 }

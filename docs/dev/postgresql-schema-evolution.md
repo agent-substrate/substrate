@@ -82,7 +82,7 @@ MySQL commits each DDL statement on its own, even inside the Goose transaction. 
 - A crash after such a statement commits but before Goose records the file still needs a manual repair.
 - Order the statements so that every statement prefix is compatible with the previous binary.
 - Use only features PlanetScale's Vitess supports. Do not add foreign keys, stored routines, triggers, partitioning, or `CREATE DATABASE`.
-- Declare `DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_bin` on new tables, so key columns compare byte for byte as they do in PostgreSQL.
+- Declare `DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_bin` on new tables, so key columns compare byte for byte. Equality then matches PostgreSQL. Listings sort by byte, which matches PostgreSQL only under the `C` collation.
 - Enforce parent and child relationships in the transactions that write them, as the helpers in `cmd/ateapi/internal/store/atemy/relations.go` do.
 
 See the [MySQL configuration guide](../mysql.md) for the operator side.

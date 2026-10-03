@@ -91,10 +91,7 @@ func (p *Persistence) ListAtespaces(ctx context.Context, opts store.ListOptions)
 		return a, storesql.UnmarshalRow(b, a, "atespace", keys...)
 	}, query, args...)
 	if err != nil {
-		if errors.Is(err, store.ErrInvalidPageToken) {
-			return store.ListResponse[*ateapipb.Atespace]{}, err
-		}
-		return store.ListResponse[*ateapipb.Atespace]{}, fmt.Errorf("listing atespaces: %w", err)
+		return store.ListResponse[*ateapipb.Atespace]{}, err
 	}
 	return store.ListResponse[*ateapipb.Atespace]{Items: items, NextPageToken: next}, nil
 }

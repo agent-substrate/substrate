@@ -28,13 +28,13 @@ import (
 func listPage[T any](ctx context.Context, q querier, kind storesql.Kind, scope string, pageSize int32, decode func(b []byte, keys []string) (T, error), query string, args ...any) ([]T, string, error) {
 	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, "", err
+		return nil, "", fmt.Errorf("listing %s rows: %w", kind, err)
 	}
 	defer rows.Close()
 
 	cols, err := rows.Columns()
 	if err != nil {
-		return nil, "", err
+		return nil, "", fmt.Errorf("listing %s rows: %w", kind, err)
 	}
 	var items []T
 	var lastKeys [][]string
@@ -57,7 +57,7 @@ func listPage[T any](ctx context.Context, q querier, kind storesql.Kind, scope s
 		lastKeys = append(lastKeys, keys)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, "", err
+		return nil, "", fmt.Errorf("listing %s rows: %w", kind, err)
 	}
 	if len(items) <= int(pageSize) {
 		return items, "", nil

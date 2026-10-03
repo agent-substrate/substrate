@@ -45,15 +45,8 @@ var databaseCount atomic.Uint64
 // subtests in parallel; databases are dropped during cleanup.
 func SetupTestStore(t *testing.T) (store.Interface, func()) {
 	t.Helper()
-	switch backend := os.Getenv(BackendEnv); backend {
-	case "", "postgres":
-		return SetupPostgresPersistence(t), func() {}
-	case "mysql":
-		return SetupMySQLPersistence(t), func() {}
-	default:
-		t.Fatalf("%s must be postgres or mysql, got %q", BackendEnv, backend)
-		return nil, nil
-	}
+	s, _ := SetupAuthzTestStore(t)
+	return s, func() {}
 }
 
 // AuthzStore is a test store that also takes an authz policy manager.

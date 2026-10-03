@@ -15,7 +15,7 @@
 // Package storesql holds the backend-neutral pieces shared by the SQL store
 // backends, atepg (PostgreSQL) and atemy (MySQL): proto record handling,
 // keyset page tokens, the worker event codec and in-process fan-out, and the
-// lease renewal loop. Nothing here issues SQL.
+// lease renewal loop. The backends supply every SQL statement.
 package storesql
 
 import (
@@ -76,6 +76,18 @@ func SetUpdateMetadata(newMeta, oldMeta *ateapipb.ResourceMetadata) {
 	newMeta.Version = oldMeta.Version + 1
 	newMeta.CreateTime = oldMeta.CreateTime
 	newMeta.UpdateTime = timestamppb.Now()
+}
+
+// ValidateUpdateActorTemplateMutation rejects a mutation that changes an
+// actor template's identity.
+func ValidateUpdateActorTemplateMutation(storedTemplate, mutatedTemplate *ateapipb.ActorTemplate) error {
+	if stored, mutated := storedTemplate.GetMetadata().GetAtespace(), mutatedTemplate.GetMetadata().GetAtespace(); stored != mutated {
+		return fmt.Errorf("metadata.atespace is immutable: mutation changed it from %q to %q", stored, mutated)
+	}
+	if stored, mutated := storedTemplate.GetMetadata().GetName(), mutatedTemplate.GetMetadata().GetName(); stored != mutated {
+		return fmt.Errorf("metadata.name is immutable: mutation changed it from %q to %q", stored, mutated)
+	}
+	return nil
 }
 
 // ValidateUpdateTagMutation reports a mutation that changed a field of a tag
