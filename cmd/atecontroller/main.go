@@ -36,6 +36,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -44,6 +45,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
@@ -94,6 +96,26 @@ func newControllerRuntimeLogger(h slog.Handler) logr.Logger {
 	return logr.FromSlogHandler(h)
 }
 
+// managerOptions configures the controller-runtime manager. Its metrics
+// listener is off: the registry it would serve leaves over OTLP instead.
+func managerOptions(egressMITMCAPool types.NamespacedName) ctrl.Options {
+	return ctrl.Options{
+		Scheme:  scheme,
+		Metrics: metricsserver.Options{BindAddress: "0"}, // "0" disables the server.
+		Cache: cache.Options{
+			ByObject: map[client.Object]cache.ByObject{
+				&corev1.Secret{}: {
+					Namespaces: map[string]cache.Config{
+						egressMITMCAPool.Namespace: {
+							FieldSelector: fields.OneTermEqualSelector("metadata.name", egressMITMCAPool.Name),
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
 func main() {
 	pflag.Parse()
 	if *showVersion {
@@ -121,8 +143,9 @@ func main() {
 	defer serverboot.ShutdownProvider("TracerProvider", tp.Shutdown)
 
 	// controller-runtime records reconcile, workqueue, and runtime metrics into its
-	// own Prometheus registry, which the manager serves. On the OTLP path the
-	// bridged queue histograms are padded so the Telemetry API accepts idle ones.
+	// own Prometheus registry. The manager's own scrape listener is disabled in
+	// managerOptions, so the registry goes out over OTLP only. The bridged queue
+	// histograms are padded so the Telemetry API accepts idle ones.
 	mp, err := serverboot.InitMetricsBridged(ctx, serviceName, ctrlmetrics.Registry, padEmptyExponentialHistograms)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize metrics", err)
@@ -174,20 +197,7 @@ func main() {
 	// EgressMITMTrustReconciler watches the Secret `egress-mitm-ca-pool`.
 	systemNamespace := installdefaults.NamespaceFromPodEnv()
 	egressMITMCAPool := controllers.EgressMITMCAPoolRef(systemNamespace)
-	mgr, err := ctrl.NewManager(k8sConfig, ctrl.Options{
-		Scheme: scheme,
-		Cache: cache.Options{
-			ByObject: map[client.Object]cache.ByObject{
-				&corev1.Secret{}: {
-					Namespaces: map[string]cache.Config{
-						egressMITMCAPool.Namespace: {
-							FieldSelector: fields.OneTermEqualSelector("metadata.name", egressMITMCAPool.Name),
-						},
-					},
-				},
-			},
-		},
-	})
+	mgr, err := ctrl.NewManager(k8sConfig, managerOptions(egressMITMCAPool))
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
 		os.Exit(1)
