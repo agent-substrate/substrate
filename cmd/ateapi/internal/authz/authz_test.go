@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -858,4 +859,45 @@ func TestFormatUser_NoCollision(t *testing.T) {
 	if u1 == u2 {
 		t.Fatalf("formatUser(\"alice\") and formatUser(\"user:alice\") collided on %q", u1)
 	}
+}
+
+// TestPolicyManager_MemberLengthPerBackend pins the one difference between
+// the backends: OpenFGA's MySQL schema holds a tuple user in 256 characters,
+// so only the MySQL store refuses longer members, as InvalidArgument.
+func TestPolicyManager_MemberLengthPerBackend(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, db testDB) {
+		ctx := t.Context()
+		fgaSrv, err := NewOpenFGAServer(db.backend)
+		if err != nil {
+			t.Fatalf("NewOpenFGAServer failed: %v", err)
+		}
+		t.Cleanup(fgaSrv.Close)
+		_, policyManager, err := New(ctx, db.backend, fgaSrv, nil)
+		if err != nil {
+			t.Fatalf("New failed: %v", err)
+		}
+		reconcile := func(member string) error {
+			t.Helper()
+			tx := db.begin(t, ctx)
+			defer tx.rollback(ctx) //nolint:errcheck // the test only inspects the reconcile error
+			return policyManager.ReconcileGlobalBindings(ctx, tx.tx, []*ateapipb.Binding{{Role: "owner", Members: []string{member}}})
+		}
+
+		if err := reconcile("user:" + strings.Repeat("a", 251)); err != nil {
+			t.Errorf("a 256-character member failed: %v", err)
+		}
+		err = reconcile("user:" + strings.Repeat("a", 252))
+		if db.backend.db == nil {
+			if err != nil {
+				t.Errorf("a 257-character member failed on PostgreSQL: %v", err)
+			}
+			return
+		}
+		if status.Code(err) != codes.InvalidArgument {
+			t.Errorf("a 257-character member on MySQL = %v, want InvalidArgument", err)
+		}
+		if err := reconcile("user:" + strings.Repeat(":", 84)); status.Code(err) != codes.InvalidArgument {
+			t.Errorf("a member past the limit once encoded on MySQL = %v, want InvalidArgument", err)
+		}
+	})
 }

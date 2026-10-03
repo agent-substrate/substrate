@@ -18,10 +18,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"unicode/utf8"
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	openfgav1 "github.com/openfga/api/proto/openfga/v1"
 	"github.com/openfga/openfga/pkg/server"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
@@ -35,7 +38,14 @@ type PolicyManager struct {
 	fgaServer *server.Server
 	storeID   string
 	modelID   string
+	// maxUserLength caps a tuple's encoded user in characters; zero means no
+	// cap beyond the API's own validation.
+	maxUserLength int
 }
+
+// mysqlMaxTupleUserLength is the width of the tuple._user column in OpenFGA's
+// MySQL schema. PostgreSQL stores the user as TEXT.
+const mysqlMaxTupleUserLength = 256
 
 // ReconcileGlobalBindings reconciles the OpenFGA role bindings on global:root
 // within tx. The tuple changes commit or roll back with tx.
@@ -144,6 +154,9 @@ func (m *PolicyManager) reconcileBindings(ctx context.Context, tx Tx, obj string
 			fgaUser, err := FormatMember(rawMember)
 			if err != nil {
 				return err
+			}
+			if m.maxUserLength > 0 && utf8.RuneCountInString(fgaUser) > m.maxUserLength {
+				return status.Errorf(codes.InvalidArgument, "member %q is %d characters once encoded; this store holds at most %d", rawMember, utf8.RuneCountInString(fgaUser), m.maxUserLength)
 			}
 			ru := relUser{relation: role, user: fgaUser}
 			if _, alreadyDesired := desiredSet[ru]; alreadyDesired {

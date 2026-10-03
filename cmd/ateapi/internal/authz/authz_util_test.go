@@ -15,7 +15,6 @@
 package authz
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -39,9 +38,6 @@ func TestFormatMember(t *testing.T) {
 		{name: "NUL", member: "user:alice\x00", wantErr: true},
 		{name: "DEL", member: "user:alice\x7f", wantErr: true},
 		{name: "C1 control", member: "user:alice\u0085", wantErr: true},
-		{name: "longest", member: "user:" + strings.Repeat("a", 251), want: "user:" + strings.Repeat("a", 251)},
-		{name: "too long", member: "user:" + strings.Repeat("a", 252), wantErr: true},
-		{name: "too long once encoded", member: "user:" + strings.Repeat(":", 84), wantErr: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
