@@ -97,9 +97,9 @@ the system trust store, where as most things that support SSL_CERT_FILE treat it
 as *additive* to the system trust store.  If you need to support this scenario,
 you will need to use an entrypoint wrapper to build a file containing the
 substrate-provided roots along with your custom roots (or directly configure
-this setup in your application's startup logic).    See the [example](#example-wrapper) below.
+this setup in your application's startup logic).    See the [example](#example-entrypoint-wrapper-for-custom-roots) below.
 
-## Example entrypoint wrapper for custom roots {:#example-wrapper}
+## Example entrypoint wrapper for custom roots
 
 ```sh
 #!/bin/sh
