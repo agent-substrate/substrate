@@ -20,6 +20,7 @@ import (
 	"fmt"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storesql"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/jackc/pgx/v5"
@@ -38,7 +39,7 @@ func (p *Persistence) GetTag(ctx context.Context, tagRef resources.TagRef) (*ate
 		return nil, fmt.Errorf("getting tag %s/%s: %w", atespace, name, err)
 	}
 	tag := &ateapipb.Tag{}
-	if err := unmarshalStored(protoBytes, tag); err != nil {
+	if err := storesql.UnmarshalStored(protoBytes, tag); err != nil {
 		return nil, fmt.Errorf("unmarshaling tag: %w", err)
 	}
 	return tag, nil
@@ -63,7 +64,7 @@ func (p *Persistence) ListTags(ctx context.Context, atespace string, opts store.
 }
 
 func (p *Persistence) listTagsScoped(ctx context.Context, atespace string, pageSize int32, pageTokenStr string) ([]*ateapipb.Tag, string, error) {
-	token, err := decodePageToken(pageTokenStr, kindTag, atespace, 1)
+	token, err := storesql.DecodePageToken(pageTokenStr, storesql.KindTag, atespace, 1)
 	if err != nil {
 		return nil, "", err
 	}
@@ -90,7 +91,7 @@ func (p *Persistence) listTagsScoped(ctx context.Context, atespace string, pageS
 			return nil, "", fmt.Errorf("scanning tag row: %w", err)
 		}
 		tag := &ateapipb.Tag{}
-		if err := unmarshalRow(protoBytes, tag, "tag", atespace, name); err != nil {
+		if err := storesql.UnmarshalRow(protoBytes, tag, "tag", atespace, name); err != nil {
 			return nil, "", err
 		}
 		result = append(result, tag)
@@ -102,13 +103,13 @@ func (p *Persistence) listTagsScoped(ctx context.Context, atespace string, pageS
 	var nextToken string
 	if len(result) > int(pageSize) {
 		result = result[:pageSize]
-		nextToken = encodePageToken(kindTag, atespace, []string{names[pageSize-1]})
+		nextToken = storesql.EncodePageToken(storesql.KindTag, atespace, []string{names[pageSize-1]})
 	}
 	return result, nextToken, nil
 }
 
 func (p *Persistence) listTagsGlobal(ctx context.Context, pageSize int32, pageTokenStr string) ([]*ateapipb.Tag, string, error) {
-	token, err := decodePageToken(pageTokenStr, kindTag, "", 2)
+	token, err := storesql.DecodePageToken(pageTokenStr, storesql.KindTag, "", 2)
 	if err != nil {
 		return nil, "", err
 	}
@@ -136,7 +137,7 @@ func (p *Persistence) listTagsGlobal(ctx context.Context, pageSize int32, pageTo
 			return nil, "", fmt.Errorf("scanning tag row: %w", err)
 		}
 		tag := &ateapipb.Tag{}
-		if err := unmarshalRow(protoBytes, tag, "tag", k.atespace, k.name); err != nil {
+		if err := storesql.UnmarshalRow(protoBytes, tag, "tag", k.atespace, k.name); err != nil {
 			return nil, "", err
 		}
 		result = append(result, tag)
@@ -149,7 +150,7 @@ func (p *Persistence) listTagsGlobal(ctx context.Context, pageSize int32, pageTo
 	if len(result) > int(pageSize) {
 		result = result[:pageSize]
 		last := keys[pageSize-1]
-		nextToken = encodePageToken(kindTag, "", []string{last.atespace, last.name})
+		nextToken = storesql.EncodePageToken(storesql.KindTag, "", []string{last.atespace, last.name})
 	}
 	return result, nextToken, nil
 }
@@ -158,7 +159,7 @@ func (p *Persistence) CreateTag(ctx context.Context, tag *ateapipb.Tag) (*ateapi
 	atespace := tag.GetMetadata().GetAtespace()
 	name := tag.GetMetadata().GetName()
 	dbTag := proto.CloneOf(tag)
-	setCreateMetadata(dbTag.Metadata)
+	storesql.SetCreateMetadata(dbTag.Metadata)
 	protoBytes, err := proto.Marshal(dbTag)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling tag: %w", err)
@@ -185,25 +186,6 @@ func (p *Persistence) CreateTag(ctx context.Context, tag *ateapipb.Tag) (*ateapi
 	return dbTag, nil
 }
 
-func validateUpdateTagMutation(storedTag, mutatedTag *ateapipb.Tag) error {
-	if stored, mutated := storedTag.GetMetadata().GetAtespace(), mutatedTag.GetMetadata().GetAtespace(); stored != mutated {
-		return fmt.Errorf("metadata.atespace is immutable: mutation changed it from %q to %q", stored, mutated)
-	}
-	if stored, mutated := storedTag.GetMetadata().GetName(), mutatedTag.GetMetadata().GetName(); stored != mutated {
-		return fmt.Errorf("metadata.name is immutable: mutation changed it from %q to %q", stored, mutated)
-	}
-	if stored, mutated := storedTag.GetStatus().GetSnapshot(), mutatedTag.GetStatus().GetSnapshot(); stored != nil && !proto.Equal(stored, mutated) {
-		return fmt.Errorf("status.snapshot is immutable once set: mutation changed it from %s to %s", stored, mutated)
-	}
-	if stored, mutated := storedTag.GetStatus().GetStorageLocation(), mutatedTag.GetStatus().GetStorageLocation(); stored != mutated {
-		return fmt.Errorf("status.storage_location is immutable: mutation changed it from %q to %q", stored, mutated)
-	}
-	if stored, mutated := storedTag.GetStatus().GetActorTemplateUid(), mutatedTag.GetStatus().GetActorTemplateUid(); stored != mutated {
-		return fmt.Errorf("status.actor_template_uid is immutable: mutation changed it from %q to %q", stored, mutated)
-	}
-	return nil
-}
-
 func (p *Persistence) UpdateTag(ctx context.Context, tagRef resources.TagRef, precondition store.Precondition, mutate func(*ateapipb.Tag) error) (*ateapipb.Tag, error) {
 	if err := precondition.Validate(); err != nil {
 		return nil, err
@@ -222,10 +204,10 @@ func (p *Persistence) UpdateTag(ctx context.Context, tagRef resources.TagRef, pr
 	}
 
 	dbTag := &ateapipb.Tag{}
-	if err := unmarshalStored(currentBytes, dbTag); err != nil {
+	if err := storesql.UnmarshalStored(currentBytes, dbTag); err != nil {
 		return nil, fmt.Errorf("unmarshaling tag: %w", err)
 	}
-	if err := validateProtoMetadataMatchesColumns(fmt.Sprintf("tag %s/%s", atespace, name), dbTag.GetMetadata(), currentUID, currentVersion); err != nil {
+	if err := storesql.ValidateProtoMetadataMatchesColumns(fmt.Sprintf("tag %s/%s", atespace, name), dbTag.GetMetadata(), currentUID, currentVersion); err != nil {
 		return nil, err
 	}
 	if err := precondition.Check(dbTag.GetMetadata()); err != nil {
@@ -237,12 +219,12 @@ func (p *Persistence) UpdateTag(ctx context.Context, tagRef resources.TagRef, pr
 		return nil, err
 	}
 	// TODO: this should be done through DV and removed from here
-	if err := validateUpdateTagMutation(tagBeforeMutation, dbTag); err != nil {
+	if err := storesql.ValidateUpdateTagMutation(tagBeforeMutation, dbTag); err != nil {
 		return nil, fmt.Errorf("%w: %w", store.ErrImmutableField, err)
 	}
 	// Stored metadata is authoritative; discard any metadata edits made by the
 	// closure and derive the next revision from the state this attempt read.
-	setUpdateMetadata(dbTag.Metadata, oldMeta)
+	storesql.SetUpdateMetadata(dbTag.Metadata, oldMeta)
 
 	updatedBytes, err := proto.Marshal(dbTag)
 	if err != nil {
@@ -284,7 +266,7 @@ func (p *Persistence) DeleteTag(ctx context.Context, tagRef resources.TagRef, pr
 		return nil, fmt.Errorf("deleting tag %s/%s: %w", atespace, name, err)
 	}
 	tag := &ateapipb.Tag{}
-	if err := unmarshalStored(protoBytes, tag); err != nil {
+	if err := storesql.UnmarshalStored(protoBytes, tag); err != nil {
 		return nil, fmt.Errorf("unmarshaling deleted tag: %w", err)
 	}
 	return tag, nil

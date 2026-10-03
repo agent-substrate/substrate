@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package atepg
+package storesql
 
 import "testing"
 
 func TestDecodePageTokenRejectsWrongKeyShape(t *testing.T) {
-	token := encodePageToken(kindActor, "", []string{"only-an-atespace"})
-	if _, err := decodePageToken(token, kindActor, "", 2); err == nil {
-		t.Fatal("decodePageToken() accepted a global actor token with only one key part")
+	token := EncodePageToken(KindActor, "", []string{"only-an-atespace"})
+	if _, err := DecodePageToken(token, KindActor, "", 2); err == nil {
+		t.Fatal("DecodePageToken() accepted a global actor token with only one key part")
 	}
 }

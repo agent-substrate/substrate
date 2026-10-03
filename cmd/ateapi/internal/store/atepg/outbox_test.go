@@ -32,6 +32,7 @@ import (
 	"google.golang.org/protobuf/testing/protocmp"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storesql"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
@@ -183,7 +184,7 @@ func TestWatchWorkers_OutOfOrderCommitNotSkipped(t *testing.T) {
 	defer watch.Close()
 
 	mkPayload := func(pod string) []byte {
-		payload, err := marshalWorkerEvent(store.WorkerEventCreated,
+		payload, err := storesql.MarshalWorkerEvent(store.WorkerEventCreated,
 			&ateapipb.Worker{
 				Metadata:        &ateapipb.ResourceMetadata{Name: pod},
 				WorkerNamespace: "ns", WorkerPool: "pool", WorkerPod: pod,
@@ -646,7 +647,7 @@ func TestWatchWorkers_ClosesWhenTrimmedPastCursor(t *testing.T) {
 	// Atomically append three events and trim them away unconsumed —
 	// the watcher never gets a chance to see them, exactly as if
 	// retention took rows a lagging watcher had not reached.
-	payload, err := marshalWorkerEvent(store.WorkerEventUpdated, worker)
+	payload, err := storesql.MarshalWorkerEvent(store.WorkerEventUpdated, worker)
 	if err != nil {
 		t.Fatalf("marshaling event: %v", err)
 	}
@@ -972,35 +973,6 @@ func TestWatchWorkers_BaselineDoesNotMaskOwedTrims(t *testing.T) {
 		// Closed: loss surfaced.
 	case <-time.After(5 * time.Second):
 		t.Fatal("watch stayed open: the trimmed owed event was silently lost (baseline masked the trim)")
-	}
-}
-
-// TestUnmarshalWorkerEvent_BoundaryAssertions pins the write-side invariants
-// asserted at the read boundary: known event-type byte and a keyable worker.
-func TestUnmarshalWorkerEvent_BoundaryAssertions(t *testing.T) {
-	valid, err := marshalWorkerEvent(store.WorkerEventUpdated, &ateapipb.Worker{
-		Metadata: &ateapipb.ResourceMetadata{Name: "w1"},
-	})
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	for name, tc := range map[string]struct {
-		payload []byte
-		wantErr bool
-	}{
-		"valid":             {valid, false},
-		"empty":             {nil, true},
-		"unknown type byte": {[]byte{0xff, 0x00}, true},
-		"type byte only":    {[]byte{byte(store.WorkerEventCreated)}, true}, // empty proto = nameless
-		"garbage proto":     {append([]byte{byte(store.WorkerEventCreated)}, 0xde, 0xad, 0xbe), true},
-		"nameless worker":   {func() []byte { b, _ := marshalWorkerEvent(store.WorkerEventDeleted, &ateapipb.Worker{}); return b }(), true},
-	} {
-		t.Run(name, func(t *testing.T) {
-			_, err := unmarshalWorkerEvent(tc.payload)
-			if (err != nil) != tc.wantErr {
-				t.Fatalf("unmarshalWorkerEvent() err = %v, wantErr = %v", err, tc.wantErr)
-			}
-		})
 	}
 }
 

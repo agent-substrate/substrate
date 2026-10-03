@@ -20,6 +20,7 @@ import (
 	"fmt"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storesql"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/jackc/pgx/v5"
 	"google.golang.org/protobuf/proto"
@@ -30,7 +31,7 @@ func (p *Persistence) CreateWorker(ctx context.Context, worker *ateapipb.Worker)
 	if dbWorker.Metadata == nil {
 		dbWorker.Metadata = &ateapipb.ResourceMetadata{}
 	}
-	setCreateMetadata(dbWorker.Metadata)
+	storesql.SetCreateMetadata(dbWorker.Metadata)
 
 	protoBytes, err := proto.Marshal(dbWorker)
 	if err != nil {
@@ -66,7 +67,7 @@ func getWorkerRow(ctx context.Context, q querier, name string) (*ateapipb.Worker
 		return nil, fmt.Errorf("getting worker %s: %w", name, err)
 	}
 	out := &ateapipb.Worker{}
-	if err := unmarshalStored(protoBytes, out); err != nil {
+	if err := storesql.UnmarshalStored(protoBytes, out); err != nil {
 		return nil, fmt.Errorf("unmarshaling worker: %w", err)
 	}
 	return out, nil
@@ -88,7 +89,7 @@ func getWorkerRowForUpdate(ctx context.Context, tx pgx.Tx, name string) (*ateapi
 		return nil, fmt.Errorf("locking worker %s for update: %w", name, err)
 	}
 	out := &ateapipb.Worker{}
-	if err := unmarshalStored(protoBytes, out); err != nil {
+	if err := storesql.UnmarshalStored(protoBytes, out); err != nil {
 		return nil, fmt.Errorf("unmarshaling worker: %w", err)
 	}
 	return out, nil
@@ -121,7 +122,7 @@ func (p *Persistence) UpdateWorker(ctx context.Context, name string, preconditio
 		}
 		// Stored metadata is authoritative; discard any metadata edits made by
 		// the closure and derive the next revision from the row we locked.
-		setUpdateMetadata(dbWorker.Metadata, oldMeta)
+		storesql.SetUpdateMetadata(dbWorker.Metadata, oldMeta)
 
 		protoBytes, err := proto.Marshal(dbWorker)
 		if err != nil {
@@ -171,7 +172,7 @@ func (p *Persistence) ListWorkers(ctx context.Context, opts store.ListOptions) (
 		return store.ListResponse[*ateapipb.Worker]{}, err
 	}
 	pageSize, pageTokenStr := opts.PageSize, opts.PageToken
-	token, err := decodePageToken(pageTokenStr, kindWorker, "", 1)
+	token, err := storesql.DecodePageToken(pageTokenStr, storesql.KindWorker, "", 1)
 	if err != nil {
 		return store.ListResponse[*ateapipb.Worker]{}, err
 	}
@@ -199,7 +200,7 @@ func (p *Persistence) ListWorkers(ctx context.Context, opts store.ListOptions) (
 			return store.ListResponse[*ateapipb.Worker]{}, fmt.Errorf("scanning worker row: %w", err)
 		}
 		w := &ateapipb.Worker{}
-		if err := unmarshalRow(protoBytes, w, "worker", name); err != nil {
+		if err := storesql.UnmarshalRow(protoBytes, w, "worker", name); err != nil {
 			return store.ListResponse[*ateapipb.Worker]{}, err
 		}
 		result = append(result, w)
@@ -212,7 +213,7 @@ func (p *Persistence) ListWorkers(ctx context.Context, opts store.ListOptions) (
 	var nextToken string
 	if len(result) > int(pageSize) {
 		result = result[:pageSize]
-		nextToken = encodePageToken(kindWorker, "", []string{names[pageSize-1]})
+		nextToken = storesql.EncodePageToken(storesql.KindWorker, "", []string{names[pageSize-1]})
 	}
 	return store.ListResponse[*ateapipb.Worker]{Items: result, NextPageToken: nextToken}, nil
 }

@@ -26,20 +26,15 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
-	"sync"
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/authz"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/defaults"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storesql"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // Persistence is a service that stores ate state in PostgreSQL.
@@ -67,46 +62,8 @@ type Persistence struct {
 	pollFailureCloseAfter time.Duration
 	stopMaintenance       context.CancelFunc
 	maintenanceDone       chan struct{}
-	// watchMu guards watchers, the live WatchWorkers channels.
-	watchMu  sync.Mutex
-	watchers map[chan store.WorkerEvent]struct{}
-}
-
-// addWatcher enrolls a WatchWorkers channel to receive locally published events.
-func (p *Persistence) addWatcher(ch chan store.WorkerEvent) {
-	p.watchMu.Lock()
-	defer p.watchMu.Unlock()
-	p.watchers[ch] = struct{}{}
-}
-
-// removeWatcher unenrolls a channel. The caller must call it before closing
-// the channel: once it returns, publishLocally can no longer send on it.
-func (p *Persistence) removeWatcher(ch chan store.WorkerEvent) {
-	p.watchMu.Lock()
-	defer p.watchMu.Unlock()
-	delete(p.watchers, ch)
-}
-
-// publishLocally hands a committed event to this process's watchers a poll
-// interval ahead of the outbox, one copy each. Sends are non-blocking: a
-// watcher with a full buffer is skipped and gets the event from the outbox.
-func (p *Persistence) publishLocally(ctx context.Context, payload []byte) {
-	p.watchMu.Lock()
-	defer p.watchMu.Unlock()
-	if len(p.watchers) == 0 {
-		return
-	}
-	event, err := unmarshalWorkerEvent(payload)
-	if err != nil {
-		slog.ErrorContext(ctx, "decoding locally published worker event failed", slog.Any("err", err))
-		return
-	}
-	for ch := range p.watchers {
-		select {
-		case ch <- store.WorkerEvent{Type: event.Type, Worker: proto.Clone(event.Worker).(*ateapipb.Worker)}:
-		default:
-		}
-	}
+	// watchers are the live WatchWorkers channels.
+	watchers storesql.Watchers
 }
 
 var _ store.Interface = (*Persistence)(nil)
@@ -282,11 +239,10 @@ func newPersistence(ctx context.Context, pool, watchPool, ownerPool *pgxpool.Poo
 		pool:                  pool,
 		watchPool:             watchPool,
 		ownerPool:             ownerPool,
-		leaseTTL:              defaultLeaseTTL,
+		leaseTTL:              storesql.DefaultLeaseTTL,
 		pollFailureCloseAfter: outboxPollFailureCloseAfter,
 		stopMaintenance:       stopMaintenance,
 		maintenanceDone:       make(chan struct{}),
-		watchers:              make(map[chan store.WorkerEvent]struct{}),
 	}
 	// Cover the partition lead before accepting writes; from then on the
 	// maintenance loop keeps partitions ahead of the clock (and the
@@ -340,53 +296,6 @@ type querier interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
-}
-
-// unmarshalStored decodes a stored proto, dropping fields this binary has no
-// descriptor for. This means a newer replica can have written such a field.
-// It also backfills defaults to make all resources are properly defaulted, even
-// the ones stored before a field with defaults was introduced.
-func unmarshalStored(b []byte, m proto.Message) error {
-	if err := (proto.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(b, m); err != nil {
-		return err
-	}
-	defaults.Apply(m)
-	return nil
-}
-
-// unmarshalRow is unmarshalStored for a row in a listing. A listing fails as a
-// whole on one bad row, so the error names the row.
-func unmarshalRow(b []byte, m proto.Message, kind string, id ...string) error {
-	if err := unmarshalStored(b, m); err != nil {
-		return fmt.Errorf("unmarshaling %s %s: %w", kind, strings.Join(id, "/"), err)
-	}
-	return nil
-}
-
-func setCreateMetadata(metadata *ateapipb.ResourceMetadata) {
-	metadata.Uid = uuid.NewString()
-	metadata.Version = 1
-	metadata.CreateTime = timestamppb.Now()
-	metadata.UpdateTime = metadata.CreateTime
-}
-
-// validateProtoMetadataMatchesColumns verifies that the metadata in the database
-// matches the metadata in the proto.
-func validateProtoMetadataMatchesColumns(resource string, metadata *ateapipb.ResourceMetadata, uid string, version int64) error {
-	if metadata.GetUid() != uid {
-		return fmt.Errorf("%s uid projection %q does not match proto metadata uid %q", resource, uid, metadata.GetUid())
-	}
-	if metadata.GetVersion() != version {
-		return fmt.Errorf("%s version projection %d does not match proto metadata version %d", resource, version, metadata.GetVersion())
-	}
-	return nil
-}
-
-func setUpdateMetadata(newMeta, oldMeta *ateapipb.ResourceMetadata) {
-	newMeta.Uid = oldMeta.Uid
-	newMeta.Version = oldMeta.Version + 1
-	newMeta.CreateTime = oldMeta.CreateTime
-	newMeta.UpdateTime = timestamppb.Now()
 }
 
 func mapDeleteError(err error, uid string, version int64, precondition store.DeletePreconditions) error {

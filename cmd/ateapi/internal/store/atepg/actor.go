@@ -20,6 +20,7 @@ import (
 	"fmt"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storesql"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/jackc/pgx/v5"
@@ -35,7 +36,7 @@ func (p *Persistence) CreateActor(ctx context.Context, actor *ateapipb.Actor) (*
 	// mutate it in place.  This breaks some of the contract tests, so we can
 	// fix it later.
 	dbActor := proto.Clone(actor).(*ateapipb.Actor)
-	setCreateMetadata(dbActor.Metadata)
+	storesql.SetCreateMetadata(dbActor.Metadata)
 
 	protoBytes, err := proto.Marshal(dbActor)
 	if err != nil {
@@ -70,7 +71,7 @@ func (p *Persistence) GetActor(ctx context.Context, actorRef resources.ActorRef)
 		return nil, fmt.Errorf("getting actor %s/%s: %w", actorRef.Atespace, actorRef.Name, err)
 	}
 	out := &ateapipb.Actor{}
-	if err := unmarshalStored(protoBytes, out); err != nil {
+	if err := storesql.UnmarshalStored(protoBytes, out); err != nil {
 		return nil, fmt.Errorf("unmarshaling actor: %w", err)
 	}
 	return out, nil
@@ -94,10 +95,10 @@ func (p *Persistence) UpdateActor(ctx context.Context, actorRef resources.ActorR
 	}
 
 	dbActor := &ateapipb.Actor{}
-	if err := unmarshalStored(currentBytes, dbActor); err != nil {
+	if err := storesql.UnmarshalStored(currentBytes, dbActor); err != nil {
 		return nil, fmt.Errorf("unmarshaling actor for update: %w", err)
 	}
-	if err := validateProtoMetadataMatchesColumns("actor "+actorRef.String(), dbActor.GetMetadata(), currentUID, currentVersion); err != nil {
+	if err := storesql.ValidateProtoMetadataMatchesColumns("actor "+actorRef.String(), dbActor.GetMetadata(), currentUID, currentVersion); err != nil {
 		return nil, err
 	}
 	if err := precondition.Check(dbActor.GetMetadata()); err != nil {
@@ -109,7 +110,7 @@ func (p *Persistence) UpdateActor(ctx context.Context, actorRef resources.ActorR
 	}
 	// Stored metadata is authoritative; discard any metadata edits made by the
 	// closure and derive the next revision from the state this attempt read.
-	setUpdateMetadata(dbActor.Metadata, oldMeta)
+	storesql.SetUpdateMetadata(dbActor.Metadata, oldMeta)
 
 	updatedBytes, err := proto.Marshal(dbActor)
 	if err != nil {
@@ -151,7 +152,7 @@ func (p *Persistence) DeleteActor(ctx context.Context, actorRef resources.ActorR
 		return nil, fmt.Errorf("deleting actor %s/%s: %w", atespace, name, err)
 	}
 	out := &ateapipb.Actor{}
-	if err := unmarshalStored(protoBytes, out); err != nil {
+	if err := storesql.UnmarshalStored(protoBytes, out); err != nil {
 		return nil, fmt.Errorf("unmarshaling deleted actor: %w", err)
 	}
 	return out, nil
@@ -176,7 +177,7 @@ func (p *Persistence) ListActors(ctx context.Context, atespace string, opts stor
 }
 
 func (p *Persistence) listActorsScoped(ctx context.Context, atespace string, pageSize int32, pageTokenStr string) ([]*ateapipb.Actor, string, error) {
-	token, err := decodePageToken(pageTokenStr, kindActor, atespace, 1)
+	token, err := storesql.DecodePageToken(pageTokenStr, storesql.KindActor, atespace, 1)
 	if err != nil {
 		return nil, "", err
 	}
@@ -204,7 +205,7 @@ func (p *Persistence) listActorsScoped(ctx context.Context, atespace string, pag
 			return nil, "", fmt.Errorf("scanning actor row: %w", err)
 		}
 		a := &ateapipb.Actor{}
-		if err := unmarshalRow(protoBytes, a, "actor", atespace, name); err != nil {
+		if err := storesql.UnmarshalRow(protoBytes, a, "actor", atespace, name); err != nil {
 			return nil, "", err
 		}
 		result = append(result, a)
@@ -217,13 +218,13 @@ func (p *Persistence) listActorsScoped(ctx context.Context, atespace string, pag
 	var nextToken string
 	if len(result) > int(pageSize) {
 		result = result[:pageSize]
-		nextToken = encodePageToken(kindActor, atespace, []string{names[pageSize-1]})
+		nextToken = storesql.EncodePageToken(storesql.KindActor, atespace, []string{names[pageSize-1]})
 	}
 	return result, nextToken, nil
 }
 
 func (p *Persistence) listActorsGlobal(ctx context.Context, pageSize int32, pageTokenStr string) ([]*ateapipb.Actor, string, error) {
-	token, err := decodePageToken(pageTokenStr, kindActor, "", 2)
+	token, err := storesql.DecodePageToken(pageTokenStr, storesql.KindActor, "", 2)
 	if err != nil {
 		return nil, "", err
 	}
@@ -252,7 +253,7 @@ func (p *Persistence) listActorsGlobal(ctx context.Context, pageSize int32, page
 			return nil, "", fmt.Errorf("scanning actor row: %w", err)
 		}
 		a := &ateapipb.Actor{}
-		if err := unmarshalRow(protoBytes, a, "actor", k.atespace, k.name); err != nil {
+		if err := storesql.UnmarshalRow(protoBytes, a, "actor", k.atespace, k.name); err != nil {
 			return nil, "", err
 		}
 		result = append(result, a)
@@ -266,7 +267,7 @@ func (p *Persistence) listActorsGlobal(ctx context.Context, pageSize int32, page
 	if len(result) > int(pageSize) {
 		result = result[:pageSize]
 		last := keys[pageSize-1]
-		nextToken = encodePageToken(kindActor, "", []string{last.atespace, last.name})
+		nextToken = storesql.EncodePageToken(storesql.KindActor, "", []string{last.atespace, last.name})
 	}
 	return result, nextToken, nil
 }

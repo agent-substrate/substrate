@@ -29,44 +29,10 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storesql"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/jackc/pgx/v5"
-	"google.golang.org/protobuf/proto"
 )
-
-// Outbox payload format: one event-type byte followed by the binary Worker proto.
-// The tag byte is read by other replicas during rolling deploys, so
-// store.WorkerEventType values must stay append-only stable and fit a byte.
-func marshalWorkerEvent(eventType store.WorkerEventType, worker *ateapipb.Worker) ([]byte, error) {
-	b, err := proto.Marshal(worker)
-	if err != nil {
-		return nil, fmt.Errorf("in proto.Marshal: %w", err)
-	}
-	return append([]byte{byte(eventType)}, b...), nil
-}
-
-func unmarshalWorkerEvent(payload []byte) (store.WorkerEvent, error) {
-	if len(payload) == 0 {
-		return store.WorkerEvent{}, fmt.Errorf("empty worker event payload")
-	}
-	// Assert invariants at the boundary. Corrupted payloads or unknown types
-	// must fail here to trigger a loud resync, rather than falling through
-	// downstream as silent no-ops.
-	eventType := store.WorkerEventType(payload[0])
-	switch eventType {
-	case store.WorkerEventCreated, store.WorkerEventUpdated, store.WorkerEventDeleted:
-	default:
-		return store.WorkerEvent{}, fmt.Errorf("unknown worker event type byte %d", payload[0])
-	}
-	worker := &ateapipb.Worker{}
-	if err := unmarshalStored(payload[1:], worker); err != nil {
-		return store.WorkerEvent{}, fmt.Errorf("in unmarshalStored: %w", err)
-	}
-	if worker.GetMetadata().GetName() == "" {
-		return store.WorkerEvent{}, fmt.Errorf("worker event payload has no worker name")
-	}
-	return store.WorkerEvent{Type: eventType, Worker: worker}, nil
-}
 
 // writeAndAppendEvent runs fn inside a transaction, then--only if fn reports a
 // worker worth publishing--appends the event to the worker_outbox table in the
@@ -90,7 +56,7 @@ func (p *Persistence) writeAndAppendEvent(ctx context.Context, eventType store.W
 
 	var payload []byte
 	if worker != nil {
-		payload, err = marshalWorkerEvent(eventType, worker)
+		payload, err = storesql.MarshalWorkerEvent(eventType, worker)
 		if err != nil {
 			return nil, fmt.Errorf("marshaling worker event: %w", err)
 		}
@@ -103,7 +69,7 @@ func (p *Persistence) writeAndAppendEvent(ctx context.Context, eventType store.W
 		return nil, fmt.Errorf("committing transaction: %w", err)
 	}
 	if payload != nil {
-		p.publishLocally(ctx, payload)
+		p.watchers.Publish(ctx, payload)
 	}
 	return worker, nil
 }
@@ -445,10 +411,10 @@ func (p *Persistence) WatchWorkers(ctx context.Context) (*store.WorkerWatch, err
 	ch := make(chan store.WorkerEvent, 128)
 	// Committed writes in this process are published straight onto ch, ahead
 	// of the poll that would carry them.
-	p.addWatcher(ch)
+	p.watchers.Add(ch)
 	go func() {
 		defer func() {
-			p.removeWatcher(ch)
+			p.watchers.Remove(ch)
 			close(ch)
 		}()
 		ticker := time.NewTicker(outboxPollInterval)
@@ -537,7 +503,7 @@ func (p *Persistence) WatchWorkers(ctx context.Context) (*store.WorkerWatch, err
 				}
 
 				for _, r := range batch {
-					event, err := unmarshalWorkerEvent(r.payload)
+					event, err := storesql.UnmarshalWorkerEvent(r.payload)
 					if err != nil {
 						// Close to force a relist. Skipping it would cause silent
 						// data loss. The fresh watch starts at the current xmin,
