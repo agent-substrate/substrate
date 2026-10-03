@@ -1,0 +1,185 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Tests for the opt-in SLIM_ROOTFS=true guest image, which pr-workflow's E2E never
+# builds. guest-image builds it on a rootless BuildKit, rebuilds it to check the bytes
+# come out the same, and boot-tests it under QEMU; slim-rootfs-smoke runs it through
+# ateom in a kind cluster. Building it compiles kata-agent from source, so this runs
+# only for pull requests that touch what builds, assembles or installs the micro-VM
+# assets, and on demand.
+name: microvm-slim-smoke
+on:
+  pull_request:
+    paths:
+    - 'hack/microvm-assets/*.sh'
+    - 'hack/microvm-assets/rootfs/**'
+    - 'hack/install-microvm-deps.sh'
+    - '.github/workflows/microvm-slim-smoke.yaml'
+  workflow_dispatch:
+# Nothing here writes to the repository: the jobs check the tree out, build it, and
+# run it in a throwaway VM or cluster.
+permissions:
+  contents: read
+# A newer push to the same pull request supersedes the running smoke test.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  guest-image:
+    name: Guest image (rootless build, boot test)
+    runs-on: ubuntu-latest
+    # A from-source kata-agent build, a partial rebuild and a short boot; generous,
+    # but far short of the six-hour platform default a hung step would otherwise
+    # consume.
+    timeout-minutes: 60
+    env:
+      OUT: ${{ github.workspace }}/bin/microvm-assets/amd64
+    steps:
+    - name: Checkout
+      uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      with:
+        persist-credentials: false
+    - name: Enable KVM
+      # test-rootfs.sh boots the guest with KVM when /dev/kvm is usable, and emulates
+      # it, several times slower, otherwise.
+      run: |
+        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+          | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+        sudo udevadm control --reload-rules
+        sudo udevadm trigger --name-match=kvm
+    - name: Start a rootless BuildKit
+      # The guest image has to build without privileges, so it builds on BuildKit's
+      # rootless image, running as its unprivileged user with no added capabilities
+      # or devices. The daemon sets up a user namespace of its own, which needs
+      # seccomp and AppArmor to allow it, and Ubuntu's AppArmor restriction on
+      # unprivileged user namespaces lifted.
+      run: |
+        if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+        fi
+        docker run -d --name buildkitd \
+          --security-opt seccomp=unconfined --security-opt apparmor=unconfined \
+          moby/buildkit:v0.33.0-rootless@sha256:80b15f0735e87bab7bf59ec4d695dfb4a7cfb25521cf56dc75d6f256285b63ef \
+          --oci-worker-no-process-sandbox
+        docker buildx create --name rootless --driver remote docker-container://buildkitd
+        for _ in $(seq 30); do
+          if docker buildx inspect --bootstrap rootless >/dev/null 2>&1; then
+            break
+          fi
+          sleep 1
+        done
+        docker buildx inspect --bootstrap rootless
+    - name: Assemble the slim asset set
+      # Builds rootfs.img on the rootless builder and downloads the kernel it boots.
+      env:
+        SLIM_ROOTFS: "true"
+        ARCH: amd64
+        BUILDX_BUILDER: rootless
+      run: hack/microvm-assets/assemble.sh
+    - name: Rebuild and compare
+      # Reruns apt, prune.sh and pack-image.sh, reusing only the agent build, and
+      # expects the same bytes: the same packages must always make the same image.
+      # Debian can publish an update between the two builds; the package lists then
+      # differ as well, and the step only warns.
+      env:
+        BUILDX_BUILDER: rootless
+      run: |
+        kata_ver="$(sed -n 's/^kata=//p' "${OUT}/.asset-versions")"
+        KATA_VER="${kata_ver}" OUT="${RUNNER_TEMP}/rebuild" \
+          hack/microvm-assets/build-rootfs.sh --no-cache-filter rootfs --no-cache-filter image
+        if ! cmp "${OUT}/rootfs.img" "${RUNNER_TEMP}/rebuild/rootfs.img"; then
+          if ! diff "${OUT}/rootfs-packages.txt" "${RUNNER_TEMP}/rebuild/rootfs-packages.txt"; then
+            echo "::warning::Debian published package updates between the two builds, so their bytes were not compared."
+            exit 0
+          fi
+          echo "::error::The same packages packed into different bytes: rootfs.img is not reproducible."
+          exit 1
+        fi
+    - name: Boot test
+      run: hack/microvm-assets/test-rootfs.sh "${OUT}/rootfs.img" "${OUT}/vmlinux"
+  slim-rootfs-smoke:
+    name: Micro-VM smoke (SLIM_ROOTFS)
+    runs-on: ubuntu-latest
+    # Cluster bring-up, a from-source kata-agent build and one E2E test; generous,
+    # but far short of the six-hour platform default a hung step would otherwise
+    # consume.
+    timeout-minutes: 90
+    env:
+      ARTIFACTS: ${{ github.workspace }}/_artifacts
+    steps:
+    - name: Checkout
+      uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      with:
+        persist-credentials: false
+    - name: Setup Go
+      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+      with:
+        go-version-file: 'go.mod'
+    - name: Enable KVM
+      # Grant the runner access to /dev/kvm so create-kind-cluster.sh mounts it into
+      # the node and labels it for the micro-VM sandbox class.
+      run: |
+        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+          | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+        sudo udevadm control --reload-rules
+        sudo udevadm trigger --name-match=kvm
+    - name: Create cluster
+      run: hack/create-kind-cluster.sh
+    - name: Deploy micro-VM counter demo (SLIM_ROOTFS=true)
+      # Deploys the control plane, assembles the slim asset set (rootfs.img built from
+      # debian:trixie-slim with kata-agent rebuilt from source), stages it, applies
+      # the SandboxConfig with the built image's sha256 and waits for the demo's golden
+      # snapshot: a cold boot of the slim guest through to a checkpoint. There is
+      # deliberately no asset cache, since rebuilding with the changed inputs is the
+      # point.
+      env:
+        SLIM_ROOTFS: "true"
+      run: hack/run-microvm-demo-kind.sh
+    - name: Run actor lifecycle E2E (micro-VM)
+      # Builds its own golden on the slim guest, then creates actors from it and
+      # pauses, suspends, resumes, reverts and deletes them, so the slim guest is
+      # also restored from snapshots rather than only cold-booted.
+      env:
+        E2E_SANDBOX_CLASS: microvm
+        E2E_JUNIT_FILE: ${{ github.workspace }}/_artifacts/e2e-slim-rootfs.xml
+      run: hack/run-e2e-kind.sh ./internal/e2e/suites/demo -run '^TestActorLifecycle$' -v -args --no-color
+    - name: Require tests to have run
+      if: always()
+      run: |
+        make build-junittool
+        bin/junittool verify -manifest "${ARTIFACTS}/expected-junit.txt"
+    - name: Upload test results
+      if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      with:
+        name: test-results-slim-rootfs-smoke
+        path: ${{ env.ARTIFACTS }}
+        if-no-files-found: error
+    - name: Dump diagnostics on failure
+      if: failure()
+      run: |
+        df -h / /tmp || true
+        kubectl --context kind-kind get workerpool,pods -A -o wide || true
+        dump() {
+          echo "=== logs: $1/$2 ==="
+          kubectl --context kind-kind logs -n "$1" "$2" --all-containers --tail=300 2>/dev/null || true
+        }
+        for p in $(kubectl --context kind-kind get pods -n ate-system -o name 2>/dev/null); do
+          dump ate-system "$p"
+        done
+        # Every worker pod: the demo pool plus the E2E test's own namespace. A
+        # micro-VM worker's logs carry ateom's output and the guest console tail.
+        kubectl --context kind-kind get pods -A -l ate.dev/worker-pool \
+          -o 'custom-columns=:.metadata.namespace,:.metadata.name' --no-headers 2>/dev/null \
+          | while read -r ns name; do dump "$ns" "$name"; done
