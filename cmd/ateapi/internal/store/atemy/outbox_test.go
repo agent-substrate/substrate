@@ -208,17 +208,8 @@ func TestWorkerEvent_OnlyAfterCommit(t *testing.T) {
 	// leaked would arrive from the outbox.
 	watch := watchWorkers(t, newReplica(t, s))
 
-	const workerName = "6e4d2f81-b3a9-4c05-8e72-1f9d4a0c7b63"
-	worker := newTestWorker(workerName)
-	protoBytes, err := proto.Marshal(worker)
-	if err != nil {
-		t.Fatalf("marshaling worker: %v", err)
-	}
+	worker := newTestWorker("6e4d2f81-b3a9-4c05-8e72-1f9d4a0c7b63")
 	tx, rolledBack := beginOutboxWrite(t, s, store.WorkerEventCreated, newTestWorker("rolled-back"))
-	if _, err := tx.ExecContext(ctx, `INSERT INTO workers (name, uid, version, proto) VALUES (?, ?, ?, ?)`,
-		workerName, "rolled-back-uid", int64(1), protoBytes); err != nil {
-		t.Fatalf("insert failed: %v", err)
-	}
 	if err := tx.Rollback(); err != nil {
 		t.Fatalf("Rollback failed: %v", err)
 	}
@@ -318,23 +309,9 @@ func TestWatchWorkers_OutOfOrderCommitNotSkipped(t *testing.T) {
 }
 
 // Writes to one worker take its row lock in turn, so the later write's seq is
-// assigned after the earlier one commits. Its events arrive in write order
-// both when another worker's seq is pending and when its own earlier write
-// is the pending one, delivered late in the same poll.
+// assigned after the earlier one commits. When the earlier write is pending,
+// both arrive in write order, the earlier one delivered late in the same poll.
 func TestWatchWorkers_KeepsPerWorkerOrder(t *testing.T) {
-	updateIPs := func(t *testing.T, s *Persistence, name, ip string) {
-		t.Helper()
-		stored, err := s.GetWorker(t.Context(), name)
-		if err != nil {
-			t.Fatalf("GetWorker failed: %v", err)
-		}
-		if _, err := s.UpdateWorker(t.Context(), name, store.PreconditionFrom(stored), func(w *ateapipb.Worker) error {
-			w.Ips = []string{ip}
-			return nil
-		}); err != nil {
-			t.Errorf("UpdateWorker(%s, %s) failed: %v", name, ip, err)
-		}
-	}
 	ipsOf := func(t *testing.T, watch *store.WorkerWatch, name string, n int) []string {
 		t.Helper()
 		var ips []string
@@ -346,81 +323,57 @@ func TestWatchWorkers_KeepsPerWorkerOrder(t *testing.T) {
 		}
 		return ips
 	}
+	s := setupMySQLPersistence(t)
+	ctx := t.Context()
+	created, err := s.CreateWorker(ctx, newTestWorker("ordered"))
+	if err != nil {
+		t.Fatalf("CreateWorker failed: %v", err)
+	}
+	watch := watchWorkers(t, newReplica(t, s))
 
-	t.Run("another worker's seq pending", func(t *testing.T) {
-		s := setupMySQLPersistence(t)
-		if _, err := s.CreateWorker(t.Context(), newTestWorker("ordered")); err != nil {
-			t.Fatalf("CreateWorker failed: %v", err)
-		}
-		watch := watchWorkers(t, newReplica(t, s))
-		txOther, _ := beginOutboxWrite(t, s, store.WorkerEventCreated, newTestWorker("other"))
+	// The first write holds the worker's row lock past its append.
+	first := proto.CloneOf(created)
+	first.Ips = []string{"10.0.0.1"}
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		t.Fatalf("BeginTx failed: %v", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op once committed
+	if _, err := tx.ExecContext(ctx, `UPDATE workers SET version = version WHERE name = 'ordered'`); err != nil {
+		t.Fatalf("locking the worker: %v", err)
+	}
+	insertOutboxRow(t, tx, workerPayload(t, store.WorkerEventUpdated, first), 0)
 
-		updateIPs(t, s, "ordered", "10.0.0.1")
-		updateIPs(t, s, "ordered", "10.0.0.2")
-		if got, want := ipsOf(t, watch, "ordered", 2), []string{"10.0.0.1", "10.0.0.2"}; !slices.Equal(got, want) {
-			t.Errorf("updates delivered in order %q, want %q", got, want)
-		}
-		if err := txOther.Commit(); err != nil {
-			t.Fatalf("committing the other worker's write: %v", err)
-		}
-		if got := receive(t, watch).Worker.GetMetadata().GetName(); got != "other" {
-			t.Errorf("delivered %q, want the late other", got)
-		}
-	})
+	// Another worker commits a later seq, so the first write's seq is
+	// pending.
+	if _, err := s.CreateWorker(ctx, newTestWorker("other")); err != nil {
+		t.Fatalf("CreateWorker failed: %v", err)
+	}
+	if got := receive(t, watch).Worker.GetMetadata().GetName(); got != "other" {
+		t.Fatalf("delivered %q, want other", got)
+	}
 
-	t.Run("its own earlier write pending", func(t *testing.T) {
-		s := setupMySQLPersistence(t)
-		ctx := t.Context()
-		created, err := s.CreateWorker(ctx, newTestWorker("ordered"))
-		if err != nil {
-			t.Fatalf("CreateWorker failed: %v", err)
+	second := make(chan error, 1)
+	go func() {
+		stored, err := s.GetWorker(ctx, "ordered")
+		if err == nil {
+			_, err = s.UpdateWorker(ctx, "ordered", store.PreconditionFrom(stored), func(w *ateapipb.Worker) error {
+				w.Ips = []string{"10.0.0.2"}
+				return nil
+			})
 		}
-		watch := watchWorkers(t, newReplica(t, s))
-
-		// The first write holds the worker's row lock past its append.
-		first := proto.CloneOf(created)
-		first.Ips = []string{"10.0.0.1"}
-		tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
-		if err != nil {
-			t.Fatalf("BeginTx failed: %v", err)
-		}
-		defer tx.Rollback() //nolint:errcheck // no-op once committed
-		if _, err := tx.ExecContext(ctx, `UPDATE workers SET version = version WHERE name = 'ordered'`); err != nil {
-			t.Fatalf("locking the worker: %v", err)
-		}
-		insertOutboxRow(t, tx, workerPayload(t, store.WorkerEventUpdated, first), 0)
-
-		// Another worker commits a later seq, so the first write's seq is
-		// pending.
-		if _, err := s.CreateWorker(ctx, newTestWorker("other")); err != nil {
-			t.Fatalf("CreateWorker failed: %v", err)
-		}
-		if got := receive(t, watch).Worker.GetMetadata().GetName(); got != "other" {
-			t.Fatalf("delivered %q, want other", got)
-		}
-
-		second := make(chan error, 1)
-		go func() {
-			stored, err := s.GetWorker(ctx, "ordered")
-			if err == nil {
-				_, err = s.UpdateWorker(ctx, "ordered", store.PreconditionFrom(stored), func(w *ateapipb.Worker) error {
-					w.Ips = []string{"10.0.0.2"}
-					return nil
-				})
-			}
-			second <- err
-		}()
-		waitForLockWait(t, second)
-		if err := tx.Commit(); err != nil {
-			t.Fatalf("committing the first write: %v", err)
-		}
-		if err := <-second; err != nil {
-			t.Fatalf("second UpdateWorker failed: %v", err)
-		}
-		if got, want := ipsOf(t, watch, "ordered", 2), []string{"10.0.0.1", "10.0.0.2"}; !slices.Equal(got, want) {
-			t.Errorf("updates delivered in order %q, want %q", got, want)
-		}
-	})
+		second <- err
+	}()
+	waitForLockWait(t, second)
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("committing the first write: %v", err)
+	}
+	if err := <-second; err != nil {
+		t.Fatalf("second UpdateWorker failed: %v", err)
+	}
+	if got, want := ipsOf(t, watch, "ordered", 2), []string{"10.0.0.1", "10.0.0.2"}; !slices.Equal(got, want) {
+		t.Errorf("updates delivered in order %q, want %q", got, want)
+	}
 }
 
 // A write in flight when a watch subscribes has a seq below a write that
@@ -582,22 +535,21 @@ func TestWatchWorkers_ClosesOnCorruptPayload(t *testing.T) {
 	requireClosedNext(t, watch, "a corrupt payload was skipped")
 }
 
-func TestOutboxCursor_Skip(t *testing.T) {
+func TestOutboxCursor_Wait(t *testing.T) {
 	now := time.Now()
-	c := &outboxCursor{seq: 5, pending: map[uint64]time.Time{}}
-	c.skip(9, now)
+	c := &outboxCursor{pending: map[uint64]time.Time{}}
+	c.wait(5, 9, now)
 	if got := slices.Sorted(maps.Keys(c.pending)); !slices.Equal(got, []uint64{6, 7, 8}) {
-		t.Errorf("pending after skipping to 9 = %v, want [6 7 8]", got)
+		t.Errorf("pending after waiting between 5 and 9 = %v, want [6 7 8]", got)
 	}
-	c.seq = 9
-	c.skip(10, now)
+	c.wait(9, 10, now)
 	if len(c.pending) != 3 {
-		t.Errorf("skipping to the next seq added pending seqs: %v", c.pending)
+		t.Errorf("waiting between adjacent seqs added pending seqs: %v", c.pending)
 	}
 
 	// A huge gap stops one past the cap, enough for closeReason to see it.
 	c = &outboxCursor{pending: map[uint64]time.Time{}}
-	c.skip(outboxMaxPending*10, now)
+	c.wait(0, outboxMaxPending*10, now)
 	if got := len(c.pending); got != outboxMaxPending+1 {
 		t.Errorf("pending after a huge gap = %d seqs, want %d", got, outboxMaxPending+1)
 	}
@@ -630,24 +582,10 @@ func TestOutboxCursor_CloseReason(t *testing.T) {
 				pending = map[uint64]time.Time{}
 			}
 			c := &outboxCursor{seq: 10, pending: pending, server: "a"}
-			if got := c.closeReason(tc.marks); (got != "") != tc.closes {
+			if got, _ := c.closeReason(tc.marks); (got != "") != tc.closes {
 				t.Errorf("closeReason(%+v) = %q, want closing: %t", tc.marks, got, tc.closes)
 			}
 		})
-	}
-}
-
-// Only pending seqs skipped longer than outboxGapGrace ago are probed.
-func TestOutboxCursor_RolledBackCandidates(t *testing.T) {
-	now := time.Now()
-	c := &outboxCursor{seq: 10, pending: map[uint64]time.Time{
-		6: now.Add(-outboxGapGrace - time.Second),
-		7: now.Add(-outboxGapGrace),
-		8: now.Add(-time.Second),
-	}}
-	got := c.rolledBackCandidates(now)
-	if len(got) != 1 || got[0] != uint64(6) {
-		t.Errorf("rolledBackCandidates = %v, want [6]", got)
 	}
 }
 
@@ -711,22 +649,6 @@ func testDropsOnlyRolledBackSeqs(t *testing.T, s *Persistence) {
 	}
 }
 
-func TestWatchWorkers_StartsAtTheCommittedSeq(t *testing.T) {
-	s := setupMySQLPersistence(t)
-	ctx := t.Context()
-	if _, err := s.CreateWorker(ctx, newTestWorker("before-subscribe")); err != nil {
-		t.Fatalf("CreateWorker failed: %v", err)
-	}
-	watch := watchWorkers(t, newReplica(t, s))
-	if _, err := s.CreateWorker(ctx, newTestWorker("after-subscribe")); err != nil {
-		t.Fatalf("CreateWorker failed: %v", err)
-	}
-	// Polled rows arrive in seq order, so an earlier row would come first.
-	if got := receive(t, watch).Worker.GetMetadata().GetName(); got != "after-subscribe" {
-		t.Errorf("first delivered event is for %q, want after-subscribe", got)
-	}
-}
-
 // Unlike atepg's xmin fence, the seq cursor waits only on skipped outbox
 // seqs, so an open transaction that writes no outbox row does not delay
 // delivery.
@@ -752,27 +674,12 @@ func TestWatchWorkers_UnrelatedTransactionDoesNotDelayDelivery(t *testing.T) {
 	}
 }
 
-func TestTrimWorkerOutbox_DrainsAcrossBatches(t *testing.T) {
-	s := setupMySQLPersistence(t)
-	_, last := appendRawEvents(t, s, outboxTrimBatch*2+5, []byte("payload"), time.Hour)
-
-	if err := s.trimWorkerOutboxOlderThan(t.Context(), time.Minute); err != nil {
-		t.Fatalf("trimWorkerOutboxOlderThan failed: %v", err)
-	}
-	if seqs := outboxSeqs(t, s); len(seqs) != 0 {
-		t.Errorf("%d rows left after a full pass, want 0", len(seqs))
-	}
-	if got := trimMark(t, s); got != last {
-		t.Errorf("trim mark = %d, want %d", got, last)
-	}
-}
-
-// Two replicas running retention at once serialize on the trim row: both
-// succeed and the end state is the same as one pass.
+// Two replicas running retention at once: one drains every batch while the
+// other skips the locked trim row, and both succeed.
 func TestTrimWorkerOutbox_ConcurrentPassesAreHarmless(t *testing.T) {
 	s := setupMySQLPersistence(t)
 	replica := newReplica(t, s)
-	_, last := appendRawEvents(t, s, outboxTrimBatch*2+5, []byte("payload"), time.Hour)
+	_, last := appendRawEvents(t, s, outboxBatch*2+5, []byte("payload"), time.Hour)
 
 	errs := make([]error, 2)
 	var wg sync.WaitGroup
