@@ -244,7 +244,11 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 
 		switch state := actor.GetStatus().GetState(); state {
 		case ateapipb.ActorState_ACTOR_STATE_CRASHED:
-			return 0, r.fail(ctx, tmpl, reasonGoldenActorCrashed, "golden actor crashed before its snapshot was taken")
+			message := "golden actor crashed before its snapshot was taken"
+			if detail := actor.GetStatus().GetCrash().GetMessage(); detail != "" {
+				message += ": " + detail
+			}
+			return 0, r.fail(ctx, tmpl, reasonGoldenActorCrashed, message)
 
 		case ateapipb.ActorState_ACTOR_STATE_RUNNING:
 			takeAt := goldenSnapshotStatus.GetTakeGoldenSnapshotAt()
