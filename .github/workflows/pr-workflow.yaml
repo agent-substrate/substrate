@@ -55,11 +55,21 @@ jobs:
     # this guards, and that happens on the push to main, not on the PR.
     - name: Verify immutable PostgreSQL migrations
       run: hack/verify/postgresql-migrations.sh
+    - name: Verify immutable MySQL migrations
+      run: hack/verify/mysql-migrations.sh
     # gotestsum wraps go test to emit JUnit; the go test arguments are unchanged.
     - name: unit tests
       run: hack/run-tool.sh gotestsum --junitfile "${ARTIFACTS}/unit.xml"
         --jsonfile "${ARTIFACTS}/unit.json" --format standard-verbose
         -- -race -v ./...
+    # The unit tests above run the store-backed control plane suites on
+    # PostgreSQL; rerun them on MySQL. atemy's own tests already ran above.
+    - name: MySQL store tests
+      env:
+        ATE_TEST_STORE_BACKEND: mysql
+      run: hack/run-tool.sh gotestsum --junitfile "${ARTIFACTS}/unit-mysql.xml"
+        --jsonfile "${ARTIFACTS}/unit-mysql.json" --format standard-verbose
+        -- -race -v ./cmd/ateapi/internal/controlapi/... ./cmd/ateapi/internal/workerservice/...
     # tools/apitool has its own module so we need to run it explicitly.
     # run-tool.sh resolves the repo root itself, so it works from the subdir.
     - name: apitool tests
