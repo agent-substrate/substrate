@@ -15,6 +15,7 @@
 package atemy
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -23,6 +24,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/go-sql-driver/mysql"
 
@@ -232,7 +234,7 @@ func TestInTx_ReportsARepeatedDeadlockAsVersionConflict(t *testing.T) {
 	partnerErr := make(chan error, 1)
 	go func() {
 		partnerErr <- func() error {
-			for attempt := range txAttempts {
+			for attempt := range txRetries + 1 {
 				<-aLocked
 				tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 				if err != nil {
@@ -281,8 +283,48 @@ func TestInTx_ReportsARepeatedDeadlockAsVersionConflict(t *testing.T) {
 	if !errors.Is(err, store.ErrVersionConflict) || !errors.As(err, &myErr) || myErr.Number != 1213 {
 		t.Errorf("inTx after repeated deadlocks = %v, want ErrVersionConflict wrapping a deadlock", err)
 	}
-	if attempts != txAttempts {
-		t.Errorf("inTx ran %d attempts, want %d", attempts, txAttempts)
+	if attempts != txRetries+1 {
+		t.Errorf("inTx ran %d attempts, want %d", attempts, txRetries+1)
+	}
+}
+
+// Deadlock retries back off exponentially, for at least the sum of the base
+// delays, and stop when ctx ends.
+func TestInTx_BacksOffBetweenDeadlockRetries(t *testing.T) {
+	s := setupMySQLPersistence(t)
+	deadlock := &mysql.MySQLError{Number: 1213, Message: "Deadlock found when trying to get lock"}
+
+	attempts := 0
+	start := time.Now()
+	err := inTx(t.Context(), s.db, func(*sql.Tx) error {
+		attempts++
+		return deadlock
+	})
+	if !errors.Is(err, store.ErrVersionConflict) || !errors.Is(err, deadlock) {
+		t.Errorf("inTx after repeated deadlocks = %v, want ErrVersionConflict wrapping the deadlock", err)
+	}
+	if attempts != txRetries+1 {
+		t.Errorf("inTx ran %d attempts, want %d", attempts, txRetries+1)
+	}
+	var minDelay time.Duration
+	for b := txBackoff(); b.Steps > 0; {
+		d := b.Duration
+		b.Step()
+		minDelay += d
+	}
+	if elapsed := time.Since(start); elapsed < minDelay {
+		t.Errorf("inTx retried for %v, want at least %v of backoff", elapsed, minDelay)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	attempts = 0
+	err = inTx(ctx, s.db, func(*sql.Tx) error {
+		attempts++
+		cancel()
+		return deadlock
+	})
+	if !errors.Is(err, context.Canceled) || attempts != 1 {
+		t.Errorf("inTx with ctx canceled after a deadlock = %v after %d attempts, want context.Canceled after 1", err, attempts)
 	}
 }
 

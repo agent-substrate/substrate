@@ -43,6 +43,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storesql"
 	"github.com/go-sql-driver/mysql"
+	"k8s.io/apimachinery/pkg/util/wait"
 )
 
 const (
@@ -344,27 +345,44 @@ type querier interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }
 
-// txAttempts bounds how many times inTx runs a transaction InnoDB chose as a
+// txRetries bounds how many times inTx reruns a transaction InnoDB chose as a
 // deadlock victim.
-const txAttempts = 3
+const txRetries = 5
+
+// txBackoff spaces deadlock retries, so the transaction that won has time to
+// commit, as the loser would wait for it on PostgreSQL. The delays start at
+// 10ms and double, with jitter, for about 0.3s to 0.6s in all.
+func txBackoff() wait.Backoff {
+	return wait.Backoff{Steps: txRetries, Duration: 10 * time.Millisecond, Factor: 2, Jitter: 1}
+}
 
 // inTx runs fn in a transaction on db, READ COMMITTED through the session
-// setting newConnector applies, and commits if fn succeeds. InnoDB resolves a deadlock by
-// rolling back one transaction, which can happen even between two inserts of
-// one key, so inTx runs fn again from the start up to txAttempts times. fn
-// must therefore be safe to repeat, as the store's update contract already
-// requires of mutate.
+// setting newConnector applies, and commits if fn succeeds. InnoDB resolves a
+// deadlock by rolling back one transaction, which can happen even between two
+// inserts of one key, so inTx runs fn again from the start, up to txRetries
+// times after a backoff. fn must therefore be safe to repeat, as the store's
+// update contract already requires of mutate.
 func inTx(ctx context.Context, db *sql.DB, fn func(tx *sql.Tx) error) error {
-	var err error
-	for range txAttempts {
-		if err = runTx(ctx, db, fn); mysqlErrNumber(err) != errDeadlock {
+	backoff := txBackoff()
+	for {
+		err := runTx(ctx, db, fn)
+		if mysqlErrNumber(err) != errDeadlock {
 			return err
 		}
+		if backoff.Steps == 0 {
+			// The write lost to a concurrent one and the caller may retry. A
+			// lock wait timeout is returned as is, like a lock wait that runs
+			// into a context deadline on PostgreSQL.
+			return fmt.Errorf("%w: %w", store.ErrVersionConflict, err)
+		}
+		retry := time.NewTimer(backoff.Step())
+		select {
+		case <-ctx.Done():
+			retry.Stop()
+			return fmt.Errorf("retrying a deadlocked transaction: %w", ctx.Err())
+		case <-retry.C:
+		}
 	}
-	// The write lost to a concurrent one and the caller may retry. A lock wait
-	// timeout is returned as is, like a lock wait that runs into a context
-	// deadline on PostgreSQL.
-	return fmt.Errorf("%w: %w", store.ErrVersionConflict, err)
 }
 
 func runTx(ctx context.Context, db *sql.DB, fn func(tx *sql.Tx) error) error {
