@@ -24,6 +24,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/jackc/pgx/v5"
 )
 
 func TestCreateActorWithTemplate_HoldsSharedLockThroughInsert(t *testing.T) {
@@ -178,11 +179,19 @@ func TestCreateActorWithTemplate_CancellationReleasesLock(t *testing.T) {
 
 func waitForActorQueryLock(t *testing.T, ctx context.Context, s *Persistence, pattern string, count int) {
 	t.Helper()
+	// Observe on a connection outside the pool under test: the test holds every
+	// pooled connection while the blocked statements are in flight, so polling
+	// through s.pool would deadlock on a runner with a small connection budget.
+	observer, err := pgx.ConnectConfig(ctx, s.pool.Config().ConnConfig.Copy())
+	if err != nil {
+		t.Fatalf("connecting to observe blocked queries: %v", err)
+	}
+	defer observer.Close(context.Background()) //nolint:errcheck // Test-local connection.
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	for {
 		var blocked int
-		if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity
+		if err := observer.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity
 			WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE $1`, pattern).Scan(&blocked); err != nil {
 			t.Fatalf("checking blocked queries: %v", err)
 		}
