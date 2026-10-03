@@ -78,11 +78,8 @@ func (s *RPCService) CreateActor(ctx context.Context, req *ateapipb.CreateActorR
 }
 
 func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) (*ateapipb.Actor, error) {
-	// Check that the referenced ActorTemplate exists.
-	// FIXME: This is not atomic and it is not a guarantee that the template
-	// will still exist later.  Checking it here produces a nice error UX, but
-	// we still have to handle the template not existing later, which makes the
-	// UX inconsistent, at best.  Is it actually worth checking at all?
+	// Resolve the template used to prepare the actor. The store rechecks its
+	// UID under a shared row lock when inserting the actor.
 	template, err := resolveActorTemplate(ctx, s.store, inActor)
 	if err != nil {
 		return nil, err
@@ -149,8 +146,14 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 	}
 
 	// Save the data in the storage layer.
-	stored, err := s.store.CreateActor(ctx, outActor)
+	stored, err := s.store.CreateActorWithTemplate(ctx, outActor, template.GetMetadata().GetUid())
 	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, fmt.Errorf("%w; ObjectRef: %s ", errActorTemplateNotFound, resources.ActorTemplateRefFromActorTemplate(template))
+		}
+		if errors.Is(err, store.ErrUIDConflict) {
+			return nil, status.Error(codes.Aborted, "ActorTemplate was replaced during actor creation, please retry")
+		}
 		if errors.Is(err, store.ErrAlreadyExists) {
 			return nil, status.Errorf(codes.AlreadyExists, "Actor %s already exists", name)
 		}
@@ -165,6 +168,10 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 	logActorStateChanged(ctx, stored, ateattr.OperationCreate)
 
 	return stored, nil
+}
+
+func (s *ServiceImpl) CreateActorWithTemplate(ctx context.Context, actor *ateapipb.Actor, templateUID string) (*ateapipb.Actor, error) {
+	return s.store.CreateActorWithTemplate(ctx, actor, templateUID)
 }
 
 // resolveTagSource resolves a CreateActor request's source tag

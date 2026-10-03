@@ -27,6 +27,45 @@ import (
 )
 
 func (p *Persistence) CreateActor(ctx context.Context, actor *ateapipb.Actor) (*ateapipb.Actor, error) {
+	return p.createActor(ctx, actor, nil)
+}
+
+func (p *Persistence) CreateActorWithTemplate(ctx context.Context, actor *ateapipb.Actor, templateUID string) (*ateapipb.Actor, error) {
+	if templateUID == "" {
+		return nil, store.ErrPreconditionRequired
+	}
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("starting actor creation transaction: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // Commit or the returned error decides the outcome.
+
+	ref := resources.ActorTemplateRefFromObjectRef(actor.GetActorTemplate())
+	var currentUID string
+	// KEY SHARE blocks deletion without blocking ordinary template status updates.
+	err = tx.QueryRow(ctx, `
+		SELECT uid FROM actor_templates
+		WHERE atespace = $1 AND name = $2 FOR KEY SHARE`, ref.Atespace, ref.Name).Scan(&currentUID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, store.ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("locking actor template %s: %w", ref, err)
+	}
+	if currentUID != templateUID {
+		return nil, store.ErrUIDConflict
+	}
+	created, err := p.createActor(ctx, actor, tx)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("committing actor creation: %w", err)
+	}
+	return created, nil
+}
+
+func (p *Persistence) createActor(ctx context.Context, actor *ateapipb.Actor, tx pgx.Tx) (*ateapipb.Actor, error) {
 	atespace := actor.GetMetadata().GetAtespace()
 	name := actor.GetMetadata().GetName()
 
@@ -42,7 +81,11 @@ func (p *Persistence) CreateActor(ctx context.Context, actor *ateapipb.Actor) (*
 		return nil, fmt.Errorf("marshaling actor: %w", err)
 	}
 
-	_, err = p.pool.Exec(ctx, `
+	exec := p.pool.Exec
+	if tx != nil {
+		exec = tx.Exec
+	}
+	_, err = exec(ctx, `
 		INSERT INTO actors (atespace, name, uid, version, proto)
 		VALUES ($1, $2, $3, $4, $5)`,
 		atespace, name, dbActor.GetMetadata().GetUid(), dbActor.GetMetadata().GetVersion(), protoBytes)

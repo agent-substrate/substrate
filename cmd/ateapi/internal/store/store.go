@@ -72,6 +72,13 @@ type Interface interface {
 	// ErrFailedPrecondition if the actor's atespace does not exist.
 	CreateActor(ctx context.Context, actor *ateapipb.Actor) (*ateapipb.Actor, error)
 
+	// CreateActorWithTemplate additionally holds a shared lock on the referenced
+	// template until the actor is committed. templateUID must be the UID used to
+	// prepare the actor. Returns ErrPreconditionRequired for an empty UID,
+	// ErrNotFound if the template is absent, or ErrUIDConflict if it was replaced.
+	// Other behavior and errors are the same as CreateActor.
+	CreateActorWithTemplate(ctx context.Context, actor *ateapipb.Actor, templateUID string) (*ateapipb.Actor, error)
+
 	// Fetches an actor by reference. Returns ErrNotFound if missing.
 	GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error)
 
