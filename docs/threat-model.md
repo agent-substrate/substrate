@@ -43,7 +43,7 @@ Substrate is an early, fast moving product. It is full of debate and subject to 
 * **atenet-router:** Substrate runs Envoy with an `ext_proc` external processor to handle Actor ingress. The ext_proc reads and validates `ate-target-actor`, calls the Substrate API to resume the Actor and obtain its current worker assignment, and selects that worker as a dynamic backend. It overwrites the routing header before forwarding. The router then connects with mTLS to `atunnel`; `atunnel` validates the router identity and authorizes the header against the Actor currently assigned to that worker.
 * **Object Storage:** Used to store actor snapshots.  
 * **Filesystem support:** Container local filesystem is saved in snapshots, future integrations likely to include networked storage.  
-* **Substrate Database:** PostgreSQL. On GCP, PostgreSQL may be Cloud SQL reached through the Cloud SQL Auth Proxy sidecar (see [tools/setup-gcp/cloud-sql.md](../tools/setup-gcp/cloud-sql.md)); that path adds two egress flows from ate-api-server: HTTPS to `sqladmin.googleapis.com:443` and the proxy tunnel to the instance IP on port 3307, both authenticated via IAM and encrypted.  
+* **Substrate Database:** PostgreSQL, or an external MySQL 8.0+ or PlanetScale database (see [mysql.md](mysql.md)). On GCP, PostgreSQL may be Cloud SQL reached through the Cloud SQL Auth Proxy sidecar (see [tools/setup-gcp/cloud-sql.md](../tools/setup-gcp/cloud-sql.md)); that path adds two egress flows from ate-api-server: HTTPS to `sqladmin.googleapis.com:443` and the proxy tunnel to the instance IP on port 3307, both authenticated via IAM and encrypted.  
 * **Kubernetes:** The underlying infrastructure that Substrate runs on is expected to be Kubernetes.
 
 # Threats and Mitigations

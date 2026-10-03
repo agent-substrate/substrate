@@ -1,8 +1,8 @@
-# PostgreSQL schema evolution
+# Schema evolution
 
-`ateapi` applies PostgreSQL migrations before it becomes ready. During a rolling update, the previous binary continues to serve requests while the new binary changes the schema.
+`ateapi` applies migrations for its store backend, PostgreSQL or MySQL, before it becomes ready. During a rolling update, the previous binary continues to serve requests while the new binary changes the schema.
 
-Goose commits one migration at a time. A failed migration run can leave any completed migration prefix in place. These rules keep the previous binary safe with every migration prefix.
+Goose commits one migration at a time. A failed migration run can leave any completed migration prefix in place. These rules keep the previous binary safe with every migration prefix on both backends. MySQL adds the constraints in [MySQL migrations](#mysql-migrations).
 
 ## Compatibility contract
 
@@ -29,6 +29,8 @@ Do not run a large data backfill during startup. Propose a separate migration pr
 
 ## Keep the actors table partitionable
 
+These rules apply to the PostgreSQL schema and queries. The MySQL backend does not partition tables.
+
 To preserve the option to partition the `actors` table by `atespace` or by `name`, and every other table with an `atespace` column by `atespace`, do not add a schema change or a query that introduces:
 
 - A unique index or constraint on one of these tables that omits `atespace`, or on `actors` that omits `name`.
@@ -47,9 +49,9 @@ This sequence keeps the previous binary compatible during a rollout and a tempor
 
 ## Migration file rules
 
-Store migration files in `cmd/ateapi/internal/store/atepg/migrations`.
+Store PostgreSQL migration files in `cmd/ateapi/internal/store/atepg/migrations` and MySQL migration files in `cmd/ateapi/internal/store/atemy/migrations`. Make each schema change for both backends in the same change. Give the two files the same number, name, and intent, so the directories stay in step. `hack/verify/mysql-migrations.sh` applies the rules below to the MySQL directory.
 
-Standalone Substrate defaults to the `substrate` schema, including under Kagent's umbrella chart. Set `postgres.schema` in Helm or `ATE_API_POSTGRES_SCHEMA` in local setup to use another schema.
+On PostgreSQL, standalone Substrate defaults to the `substrate` schema, including under Kagent's umbrella chart. Set `postgres.schema` in Helm or `ATE_API_POSTGRES_SCHEMA` in local setup to use another schema.
 
 - Use the next sequential `NNNNNN_name.sql` filename.
 - Add exactly one `-- +goose Up` annotation.
@@ -57,9 +59,9 @@ Standalone Substrate defaults to the `substrate` schema, including under Kagent'
 - Do not add down migrations.
 - Do not use `NO TRANSACTION` or `ENVSUB`.
 - Do not add SQL transaction control statements.
-- Do not use `IF NOT EXISTS` for a schema change.
+- Do not use `IF NOT EXISTS` for a PostgreSQL schema change. MySQL needs it; see [MySQL migrations](#mysql-migrations).
 - Keep each startup migration short.
-- A database administrator must configure the owner role's default table and sequence privileges for the read/write role before migrations. These grants do not go to `PUBLIC` or Kagent's roles. In this first pass, migration ledgers receive the same table privileges as other objects.
+- On PostgreSQL, a database administrator must configure the owner role's default table and sequence privileges for the read/write role before migrations. These grants do not go to `PUBLIC` or Kagent's roles. In this first pass, migration ledgers receive the same table privileges as other objects.
 
 Before the first stable v1 release, developers can change or squash migration files. Recreate a development database after its migration history changes.
 
@@ -67,15 +69,30 @@ After the first stable v1 release, do not change or delete a released migration 
 
 Do not edit the `schema_migrations` ledger manually.
 
+## MySQL migrations
+
+MySQL commits each DDL statement on its own, even inside the Goose transaction. A failed MySQL migration file can therefore leave some of its statements applied without a ledger entry, and the next startup runs the whole file again. Each file boundary is still a durable state, but a file is not atomic.
+
+- Make every MySQL statement safe to run again. Use `CREATE TABLE IF NOT EXISTS`, which the MySQL verifier allows, and seed rows with `INSERT ... ON DUPLICATE KEY UPDATE`.
+- MySQL has no `IF NOT EXISTS` for `ALTER TABLE` or `CREATE INDEX`. Put each such statement in its own migration file, so a failure cannot leave a file half applied. A crash after the statement commits but before Goose records the file still needs a manual repair. Split the PostgreSQL file the same way, so the numbering stays in step.
+- Order the statements so that every statement prefix is compatible with the previous binary.
+- Use only features PlanetScale's Vitess supports. Do not add foreign keys, stored routines, triggers, partitioning, or `CREATE DATABASE`.
+- Declare `DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_bin` on new tables, so key columns compare byte for byte as they do in PostgreSQL.
+- Enforce parent and child relationships in the transactions that write them, as the helpers in `cmd/ateapi/internal/store/atemy/relations.go` do.
+
+See the [MySQL configuration guide](../mysql.md) for the operator side.
+
 ## Before you submit
 
 1. Identify the previous binary reads and writes that use the changed objects.
 2. Check those operations against every new migration prefix.
 3. Use expand and contract when one prefix would break an operation.
 4. Add or update a test for the schema behavior.
-5. Run the migration verifier and PostgreSQL store tests.
+5. Run both migration verifiers and both store test suites. `ATE_TEST_STORE_BACKEND=mysql` reruns the store-backed control plane tests on MySQL.
 
 ```sh
 hack/verify/postgresql-migrations.sh
-go test ./cmd/ateapi/internal/store/atepg
+hack/verify/mysql-migrations.sh
+go test ./cmd/ateapi/internal/store/atepg ./cmd/ateapi/internal/store/atemy
+ATE_TEST_STORE_BACKEND=mysql go test ./cmd/ateapi/internal/controlapi/... ./cmd/ateapi/internal/workerservice/...
 ```

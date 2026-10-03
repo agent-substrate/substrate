@@ -94,6 +94,7 @@ See the [metric registry](docs/observability.md#the-metric-registry) section of 
 3. Run `make verify` locally before requesting a code review to catch common issues like missed copyright headers or formatting drift.
 4. For end-to-end tests involving the actual infrastructure, ensure you have a running cluster (setup via `hack/ate-dev-env.sh.example` and `go run ./tools/setup-gcp bootstrap`).
 5. A test that skips when a precondition is missing — Docker, a cluster, an artifact directory — must **fail** on it in CI, because a skip and a pass are the same exit code. Resolve strictness through a named predicate rather than an inline `os.Getenv("CI")`; `cmd/ateapi/internal/store/dockerenv.Required()` is the reference implementation. Prove the strict branch red before merging: a guard only ever observed passing is not known to guard anything. See `docs/dev/best-practices/ci-fail-closed.md`.
+6. The store has a PostgreSQL backend (`cmd/ateapi/internal/store/atepg`) and a MySQL backend (`cmd/ateapi/internal/store/atemy`). Make every store or schema change in both, following `docs/dev/postgresql-schema-evolution.md`. Store-backed suites use PostgreSQL by default; run them with `ATE_TEST_STORE_BACKEND=mysql` too, as CI does for `./cmd/ateapi/internal/controlapi/...` and `./cmd/ateapi/internal/workerservice/...`.
 
 ## Security Considerations
 
