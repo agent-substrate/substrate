@@ -57,6 +57,7 @@ COPY benchmarking/locust/shapes/ /app/shapes/
 COPY benchmarking/locust/tests/ /app/tests/
 COPY benchmarking/locust/runner.py /app/runner.py
 COPY benchmarking/locust/cluster_facts.py /app/cluster_facts.py
+COPY benchmarking/locust/server_telemetry.py /app/server_telemetry.py
 
 ENV PYTHONPATH=/app:/app/deps
 ENV PYTHONUNBUFFERED=1

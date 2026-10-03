@@ -314,10 +314,6 @@ groups:
               stability: development
               value: data
               brief: Only the data of the actor.
-            - id: data_on_golden
-              stability: development
-              value: data_on_golden
-              brief: The data of the actor with the golden guest state. This occurs on a restore only.
             - id: unknown
               stability: development
               value: unknown
@@ -476,7 +472,10 @@ groups:
             - id: unavailable
               stability: development
               value: unavailable
-              brief: A dependency was not available.
+              brief: >
+                The request got an Unavailable status, or a 503 without a gRPC
+                cause. For example, a full parking lot, a denied egress
+                request, or a failed policy or credential lookup.
             - id: rate_limited
               stability: development
               value: rate_limited
@@ -909,11 +908,12 @@ groups:
     instrument: histogram
     unit: By
     stability: development
-    brief: The size in bytes of each gVisor snapshot image that a checkpoint writes, before compression.
+    brief: The uncompressed allocated size in bytes of each snapshot image that a checkpoint writes.
     note: >
-      atelet records one measurement for each image file. It does not record one
-      measurement for each checkpoint. Use the file.name key to compare the same
-      type of image.
+      atelet records one measurement for each image file from its allocated disk
+      blocks (st_blocks * 512, excluding sparse holes in micro-VM
+      memory-ranges). It does not record one measurement for each checkpoint.
+      Use the file.name key to compare the same type of image.
     annotations:
       substrate:
         emitted_by: [atelet]

@@ -17,6 +17,8 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -100,7 +102,7 @@ func TestRestoreDurationShape(t *testing.T) {
 		templateNamespace: testTemplateNamespace,
 		templateName:      testTemplateName,
 		kind:              ateattr.SnapshotKindLatest,
-		scope:             ateattr.SnapshotScopeDataOnGolden,
+		scope:             ateattr.SnapshotScopeData,
 		sandboxClass:      "gvisor",
 	}
 	inst.recordRestore(context.Background(), op,
@@ -127,7 +129,7 @@ func TestRestoreDurationShape(t *testing.T) {
 		{ateattr.TemplateAtespaceKey, testTemplateNamespace},
 		{ateattr.TemplateNameKey, testTemplateName},
 		{ateattr.SnapshotKindKey, ateattr.SnapshotKindLatest},
-		{ateattr.SnapshotScopeKey, ateattr.SnapshotScopeDataOnGolden},
+		{ateattr.SnapshotScopeKey, ateattr.SnapshotScopeData},
 		{ateattr.SandboxClassKey, "gvisor"},
 	} {
 		if v := attrString(t, got, tc.key); v != tc.want {
@@ -320,15 +322,6 @@ func TestRestoreSnapshotKind(t *testing.T) {
 			rec:  nil,
 			want: "",
 		},
-		{
-			name: "data on golden keeps the actor snapshot's own kind",
-			req: &ateletpb.RestoreRequest{
-				Type:  ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
-				Scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN,
-			},
-			rec:  &sandboxAssetsRecord{Atespace: "team-a"},
-			want: ateattr.SnapshotKindLocal,
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -372,5 +365,75 @@ func TestCheckpointSnapshotKind(t *testing.T) {
 				t.Errorf("checkpointSnapshotKind() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+// patternBytes returns a byte slice of length n filled with a repeating
+// non-zero byte pattern so test data is incompressible and not treated as zero
+// blocks.
+func patternBytes(n int64) []byte {
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = byte(i%251 + 1)
+	}
+	return b
+}
+
+func TestAllocatedBytesSparseImage(t *testing.T) {
+	const (
+		apparent = 2 << 30 // 2 GiB
+		written  = 1 << 20 // 1 MiB
+	)
+
+	path := filepath.Join(t.TempDir(), "memory-ranges")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatalf("create sparse image: %v", err)
+	}
+	if _, err := f.Write(patternBytes(written)); err != nil {
+		f.Close()
+		t.Fatalf("write initial pages: %v", err)
+	}
+	if err := f.Truncate(apparent); err != nil {
+		f.Close()
+		t.Fatalf("extend sparse image: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close sparse image: %v", err)
+	}
+
+	fi, err := os.Lstat(path)
+	if err != nil {
+		t.Fatalf("lstat sparse image: %v", err)
+	}
+	if fi.Size() != apparent {
+		t.Fatalf("fi.Size() = %d, want %d", fi.Size(), int64(apparent))
+	}
+
+	got := allocatedBytes(fi)
+	if got >= apparent/2 {
+		t.Skipf("file did not end up sparse (%d of %d bytes allocated); "+
+			"this filesystem cannot report holes", got, int64(apparent))
+	}
+	if got == 0 || got > written*16 {
+		t.Errorf("allocatedBytes() = %d, want > 0 and << %d (wrote %d)", got, int64(apparent), int64(written))
+	}
+}
+
+func TestAllocatedBytesDenseImage(t *testing.T) {
+	const size = 64 << 10
+
+	path := filepath.Join(t.TempDir(), "state.json")
+	if err := os.WriteFile(path, patternBytes(size), 0o600); err != nil {
+		t.Fatalf("write dense image: %v", err)
+	}
+	fi, err := os.Lstat(path)
+	if err != nil {
+		t.Fatalf("lstat dense image: %v", err)
+	}
+
+	got := allocatedBytes(fi)
+	if got < size || got > size*2 {
+		t.Errorf("allocatedBytes() = %d, want ~%d", got, size)
 	}
 }

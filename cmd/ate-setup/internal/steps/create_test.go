@@ -27,22 +27,20 @@ import (
 	"github.com/agent-substrate/substrate/internal/localca"
 )
 
-// ate-api-server resolves --postgres-connection-string=@env and
-// --postgres-schema=@env from this ConfigMap. These are the keys the shell
-// installer writes, and an empty value for either makes the apiserver exit
-// ("--postgres-connection-string is required", "PostgreSQL schema must not be
-// empty"), so both the key set and the values are pinned here.
+// ate-api-server requires both connection strings and its schema in the
+// credential-bearing Secret.
 func TestBuildAPIServerEnvVars(t *testing.T) {
-	const dsn = "postgresql://postgres@postgres.ate-system.svc:5432/atepg?sslmode=verify-full"
+	const readWriteDSN = "postgresql://readwrite@postgres/atepg"
+	const ownerDSN = "postgresql://owner@postgres/atepg"
 
-	got := buildAPIServerEnvVars(dsn, "public")
+	got := buildAPIServerEnvVars(readWriteDSN, ownerDSN, "public")
 
-	want := []string{"ATE_API_POSTGRES_CONNECTION_STRING", "ATE_API_POSTGRES_SCHEMA"}
+	want := []string{"ATE_API_POSTGRES_OWNER_CONNECTION_STRING", "ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING", "ATE_API_POSTGRES_SCHEMA"}
 	if keys := slices.Sorted(maps.Keys(got)); !slices.Equal(keys, want) {
 		t.Errorf("keys = %v, want %v", keys, want)
 	}
-	if got["ATE_API_POSTGRES_CONNECTION_STRING"] != dsn {
-		t.Errorf("ATE_API_POSTGRES_CONNECTION_STRING = %q, want %q", got["ATE_API_POSTGRES_CONNECTION_STRING"], dsn)
+	if got["ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"] != readWriteDSN || got["ATE_API_POSTGRES_OWNER_CONNECTION_STRING"] != ownerDSN {
+		t.Errorf("unexpected PostgreSQL connections: %v", got)
 	}
 	if got["ATE_API_POSTGRES_SCHEMA"] != "public" {
 		t.Errorf("ATE_API_POSTGRES_SCHEMA = %q, want %q", got["ATE_API_POSTGRES_SCHEMA"], "public")

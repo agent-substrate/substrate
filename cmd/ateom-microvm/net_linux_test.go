@@ -24,6 +24,7 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/ateomnet"
 	"github.com/agent-substrate/substrate/internal/ateomnet/netns"
+	"github.com/agent-substrate/substrate/internal/ateomtunnel"
 	"github.com/agent-substrate/substrate/internal/atunnel"
 	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -39,16 +40,10 @@ func TestHostActorReplacesSameActor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dns, err := atunnel.NewDNSRelay([]string{"127.0.0.1:53"})
-	if err != nil {
-		t.Fatal(err)
-	}
 	service := &AteomService{
-		atunnelEgress:     egress,
-		atunnelEgressPort: 15001,
-		dnsRelay:          dns,
-		actors:            map[string]*hostedActor{},
-		maxActors:         1,
+		tunnel:    &ateomtunnel.Tunnel{Egress: egress, EgressPort: 15001},
+		actors:    map[string]*hostedActor{},
+		maxActors: 1,
 	}
 	const actorUID = "microvm-network-replace"
 	t.Cleanup(func() {

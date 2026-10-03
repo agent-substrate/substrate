@@ -33,6 +33,10 @@ KO_FLAGS ?=
 # cmd/ate-setup/internal/ko passes the same flag.
 KO_NAMING := --base-import-paths
 
+# Image tags, kept out of KO_FLAGS for the same reason. Empty by default, so ko
+# tags `latest`; build-release-images sets it to $(VERSION).
+KO_TAGS :=
+
 # Binaries
 BINDIR := bin/
 ATECTL := $(BINDIR)/kubectl-ate
@@ -47,7 +51,8 @@ LDFLAGS := -X=$(VERSION_PKG).Version=$(VERSION)
 # Every image the installer can deploy, defined once. These two sets together
 # have to cover images.Components in cmd/ate-setup/internal/images: a package
 # missing here has no image for a build from source, and one missing there has
-# none for an install from a release.
+# none for an install from a release. envoy-dataplane is built from a
+# Dockerfile, not with ko, so it is in neither; see build-envoy-dataplane.
 CONTROL_PLANE_IMAGES := ./cmd/ateapi \
                         ./cmd/atecontroller \
                         ./cmd/atelet \
@@ -70,6 +75,17 @@ SKIP_IMAGES ?=
 IMAGES      := $(filter-out $(SKIP_IMAGES),$(ALL_IMAGES))
 DEMOS       := $(filter-out $(SKIP_IMAGES),$(DEMO_IMAGES))
 
+# Images ko cannot build: envoy-dataplane is Envoy plus a Rust dynamic module.
+# It is pushed as $(KO_DOCKER_REPO)/envoy-dataplane:$(VERSION), beside the ko
+# images, where `ate-setup deploy --image-repo --image-tag` looks for it. A
+# build from source doesn't need this; ate-setup builds the image itself.
+#
+# Platforms default to KO_DEFAULTPLATFORMS, else linux/amd64, as in ate-setup.
+# Another architecture compiles Rust under QEMU, which the build host must have
+# registered with binfmt. Extra buildx flags go in DOCKER_BUILD_FLAGS.
+DOCKERFILE_PLATFORMS ?= $(or $(KO_DEFAULTPLATFORMS),linux/amd64)
+DOCKER_BUILD_FLAGS   ?=
+
 .PHONY: all
 all: build
 
@@ -78,7 +94,7 @@ build: build-images build-atectl build-ate-setup
 
 .PHONY: build-images
 build-images:
-	$(KO) build $(KO_NAMING) $(KO_FLAGS) \
+	$(KO) build $(KO_NAMING) $(KO_TAGS) $(KO_FLAGS) \
 	    --ldflags="$(LDFLAGS)" \
 	    $(IMAGES)
 
@@ -105,13 +121,33 @@ build-junittool:
 
 .PHONY: build-demos
 build-demos:
-	$(KO) build $(KO_NAMING) $(KO_FLAGS) \
+	$(KO) build $(KO_NAMING) $(KO_TAGS) $(KO_FLAGS) \
 	    --ldflags="$(LDFLAGS)" \
 	    $(DEMOS)
+
+.PHONY: build-envoy-dataplane
+build-envoy-dataplane:
+	docker buildx build --push $(DOCKER_BUILD_FLAGS) \
+	    --platform=$(DOCKERFILE_PLATFORMS) \
+	    -t $(KO_DOCKER_REPO)/envoy-dataplane:$(VERSION) \
+	    cmd/dataplane/envoy
+
+# Every image a pre-built install needs, all tagged $(VERSION), which is what
+# `ate-setup deploy --image-repo $(KO_DOCKER_REPO) --image-tag $(VERSION)`
+# installs. Stage a release with e.g.
+#   make build-release-images KO_DOCKER_REPO=REPO VERSION=TAG
+.PHONY: build-release-images
+build-release-images: KO_TAGS = --tags=$(VERSION)
+build-release-images: build-images build-demos build-envoy-dataplane
 
 .PHONY: test
 test:
 	$(GO) test -race ./...
+
+# The Envoy dynamic modules are Rust. CI runs this target.
+.PHONY: test-dynamic-modules
+test-dynamic-modules:
+	hack/test-dynamic-modules.sh
 
 .PHONY: e2e
 e2e: build build-demos

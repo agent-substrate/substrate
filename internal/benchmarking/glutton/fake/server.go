@@ -37,6 +37,10 @@ const (
 	ReadDiskRoute  = glutton.ReadDiskRoute
 	WriteRAMRoute  = glutton.WriteRAMRoute
 	ReadRAMRoute   = glutton.ReadRAMRoute
+	BurnCPURoute   = glutton.BurnCPURoute
+	IngestRoute    = glutton.IngestRoute
+	PingRoute      = glutton.PingRoute
+	UseCPURoute    = glutton.UseCPURoute
 )
 
 // Server is an httptest-backed stand-in for a glutton actor holding one file.
@@ -65,6 +69,9 @@ type Server struct {
 	ramWriteSizes []string
 	ramWriteModes []gluttonpb.WriteMode
 	ramReadSizes  []string
+	burnMillis    []int64
+	ingestSizes   []int64
+	cpuRequests   []*gluttonpb.UseCPURequest
 }
 
 func (s *Server) reportedDigest() []byte {
@@ -126,6 +133,13 @@ func (s *Server) RecordedRAMReadSizes() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]string(nil), s.ramReadSizes...)
+}
+
+// RecordedCPURequests returns each /usecpu request.
+func (s *Server) RecordedCPURequests() []*gluttonpb.UseCPURequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]*gluttonpb.UseCPURequest(nil), s.cpuRequests...)
 }
 
 func (s *Server) Start(t *testing.T) *httptest.Server {
@@ -231,7 +245,93 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		resp, _ := proto.Marshal(&gluttonpb.ReadRAMResponse{Size: int64(len(s.Data))})
 		_, _ = w.Write(resp)
 
+	case BurnCPURoute:
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		var req gluttonpb.BurnCPURequest
+		if err := proto.Unmarshal(body, &req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		s.mu.Lock()
+		s.burnMillis = append(s.burnMillis, req.GetDurationMs())
+		s.mu.Unlock()
+
+		resp, _ := proto.Marshal(&gluttonpb.BurnCPUResponse{Iterations: 1})
+		_, _ = w.Write(resp)
+
+	case IngestRoute:
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		var req gluttonpb.IngestRequest
+		if err := proto.Unmarshal(body, &req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		s.mu.Lock()
+		s.ingestSizes = append(s.ingestSizes, int64(len(req.GetPayload())))
+		s.mu.Unlock()
+
+		digest := sha256.Sum256(req.GetPayload())
+		resp, _ := proto.Marshal(&gluttonpb.IngestResponse{
+			Size:   int64(len(req.GetPayload())),
+			Sha256: digest[:],
+		})
+		_, _ = w.Write(resp)
+
+	case PingRoute:
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		var req gluttonpb.PingRequest
+		if err := proto.Unmarshal(body, &req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		resp, _ := proto.Marshal(&gluttonpb.PingResponse{Message: req.GetMessage()})
+		_, _ = w.Write(resp)
+
+	case UseCPURoute:
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		var req gluttonpb.UseCPURequest
+		if err := proto.Unmarshal(body, &req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		s.mu.Lock()
+		s.cpuRequests = append(s.cpuRequests, &req)
+		s.mu.Unlock()
+
+		resp, _ := proto.Marshal(&gluttonpb.UseCPUResponse{NumCores: req.GetNumCores()})
+		_, _ = w.Write(resp)
+
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+// RecordedBurnMillis returns each /burncpu request's duration_ms.
+func (s *Server) RecordedBurnMillis() []int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]int64(nil), s.burnMillis...)
+}
+
+// RecordedIngestSizes returns each /ingest request's payload length.
+func (s *Server) RecordedIngestSizes() []int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]int64(nil), s.ingestSizes...)
 }

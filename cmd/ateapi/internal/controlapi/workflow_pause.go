@@ -199,12 +199,7 @@ func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resourc
 	wireSnapshotScope = ateattr.SnapshotScopeValue(req.Scope)
 
 	if _, err = client.Checkpoint(ctx, req); err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "Setting Actor to crashed due to error",
-			append(ateattr.ActorRefLogAttrs(actorRef), slog.Any("err", err))...)
-		if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationPause, ateletCrashMessage("Checkpoint", err)); cerr != nil {
-			return wireSnapshotScope, cerr
-		}
-		return wireSnapshotScope, fmt.Errorf("actor %s crashed: %w", actorRef, err)
+		return wireSnapshotScope, handleAteletError(ctx, w.store, actorRef, ateattr.OperationPause, "Checkpoint", false, err)
 	}
 	return wireSnapshotScope, nil
 }

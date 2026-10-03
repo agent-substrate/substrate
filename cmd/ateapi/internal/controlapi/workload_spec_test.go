@@ -179,7 +179,7 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 						Name: "system-info",
 						SystemInfo: &ateapipb.SystemInfoVolumeSource{
 							DataSources: []*ateapipb.SystemInfoDataSource{
-								{TrustBundle: &ateapipb.TrustBundleDataSource{Name: "egress-trust", Path: "trust/ca.pem"}},
+								{TrustBundle: &ateapipb.TrustBundleDataSource{Names: []string{"egress-trust"}, Path: "trust/ca.pem"}},
 							},
 						},
 					},
@@ -204,7 +204,7 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 							SystemInfo: &ateletpb.SystemInfoVolume{
 								DataSources: []*ateletpb.SystemInfoDataSource{
 									{DataSource: &ateletpb.SystemInfoDataSource_TrustBundle{
-										TrustBundle: &ateletpb.TrustBundleDataSource{Name: "egress-trust", Path: "trust/ca.pem"},
+										TrustBundle: &ateletpb.TrustBundleDataSource{Names: []string{"egress-trust"}, Path: "trust/ca.pem"},
 									}},
 								},
 							},

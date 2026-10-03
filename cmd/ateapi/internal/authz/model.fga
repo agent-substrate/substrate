@@ -17,7 +17,7 @@ model
 # Naming Conventions:
 # - Roles and graph edges are nouns (e.g. owner, editor, viewer, parent_global, host_node).
 # - Permission checks evaluated at runtime must start with the 'can_' prefix
-#   (e.g. can_get, can_set_policy, can_create_actor).
+#   (e.g. can_get, can_create_access_policy, can_create_actor).
 
 # Unified Principal Identity (human users, machine service accounts, SPIFFE workload identities)
 type user
@@ -40,9 +40,10 @@ type global
     define can_list_atespaces: viewer
     define can_get: viewer
 
-    # --- Policy Governance (SetPolicy / GetPolicy) ---
-    define can_set_policy: owner
-    define can_get_policy: viewer
+    # --- Policy Governance ---
+    define can_create_access_policy: owner
+    define can_get_access_policy: viewer
+    define can_update_access_policy: owner
 
 type atespace
   relations
@@ -54,9 +55,11 @@ type atespace
     define editor: [user] or owner
     define viewer: [user] or editor or viewer from parent_global
 
-    # --- 2. Policy Governance (SetPolicy / GetPolicy) ---
-    define can_set_policy: owner
-    define can_get_policy: viewer
+    # --- 2. Policy Governance ---
+    define can_create_access_policy: owner
+    define can_get_access_policy: viewer
+    define can_update_access_policy: owner
+    define can_delete_access_policy: owner
 
     # --- 3. Atespace Lifecycle & Container Operations ---
     define can_create_actor: editor

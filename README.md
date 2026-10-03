@@ -91,7 +91,7 @@ To quickly set up the complete environment:
 hack/create-kind-cluster.sh
 
 # install ate, PostgreSQL, rustfs
-hack/install-ate-kind.sh --deploy-ate-system
+hack/install-ate-kind.sh --deploy-ate-system --credential-provider='{"name":"k8s.io"}'
 
 # install counter demo
 hack/install-ate-kind.sh --deploy-demo-counter
@@ -106,6 +106,12 @@ kubectl ate create actor my-counter-1 -a ate-demo-counter --template counter
 # port-forward the network router to bind to local port `8000`
 kubectl port-forward -n ate-system svc/atenet-router 8000:80
 ```
+
+> [!IMPORTANT]
+> `{"name":"k8s.io"}` deploys the bundled credential provider with an empty,
+> default-deny namespace policy. Before an actor can have a credential
+> injected, grant its atespace the namespaces whose Secrets it may read; see
+> [Enable it](docs/egress-credential-injection.md#enable-it).
 
 3. In a **separate terminal**, send an HTTP request to increment the counter:
 ```shell
@@ -152,8 +158,19 @@ prints the installed version, off the atelet DaemonSet the install created.
 
 4. Deploy the Agent Substrate system to your cluster:
    ```bash
-   ./hack/install-ate.sh --deploy-ate-system
+   ./hack/install-ate.sh --deploy-ate-system --credential-provider='{"name":"k8s.io"}'
    ```
+
+   `--credential-provider` is required. `{"name":"k8s.io"}` also deploys the
+   bundled Kubernetes Secrets provider, with a NetworkPolicy that admits only
+   the egress gateway; `{"enabled":false}` turns egress credential injection off
+   (see [docs/egress-credential-injection.md](docs/egress-credential-injection.md)).
+   `ATE_CREDENTIAL_PROVIDER` in `.ate-dev-env.sh` is the same choice.
+
+   **Credential injection needs a namespace policy.** The bundled provider
+   starts with an empty, default-deny one, so it resolves no Secrets until you
+   grant each atespace the namespaces it may read; see
+   [Enable it](docs/egress-credential-injection.md#enable-it).
 
    Nodes that GKE adds later (autoscaling, auto-repair, node upgrades) are
    born with the node pool's labels, so the pool needs

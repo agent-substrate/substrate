@@ -36,7 +36,7 @@ usage() {
   cat <<EOF
 Usage: $0 [options]
   --envoy-cpu N             router cpu pin, the independent variable (default: ${ENVOY_CPU})
-  --actors N                actor fleet size; needs that many workers Running (default: ${ACTORS})
+  --actors N                actor fleet size; needs at least one worker Running (default: ${ACTORS})
   --tail-latency-slo-ms N   SLO bound; 0 disables (default: ${TAIL_LATENCY_SLO_MS})
   --atespace NAME           actor namespace (default: ${ATESPACE})
   --dest gs://...           results root (default: gs://\$BUCKET_NAME/nighthawk-ingress-results)
@@ -80,13 +80,14 @@ docker info >/dev/null 2>&1 || {
 
 kubectl get deployment atenet-router -n ate-system >/dev/null 2>&1 || {
   echo "ERROR: substrate is not deployed on ${CLUSTER_NAME}. Run:" >&2
-  echo "  hack/install-ate.sh --deploy-ate-system" >&2
+  echo "  hack/install-ate.sh --deploy-ate-system --credential-provider='{\"name\":\"k8s.io\"}'" >&2
   exit 1
 }
 
+# A worker hosts many actors, so the fleet can outnumber the workers.
 RUNNING_WORKERS="$(kubectl get pods -n benchmark-workloads --no-headers 2>/dev/null | grep -c ' Running ' || true)"
-if (( RUNNING_WORKERS < ACTORS )); then
-  echo "ERROR: ${RUNNING_WORKERS} workers Running in benchmark-workloads, need ${ACTORS}. Run:" >&2
+if (( RUNNING_WORKERS < 1 )); then
+  echo "ERROR: no workers Running in benchmark-workloads. Run:" >&2
   echo "  benchmarking/workloads/deploy.sh --deploy --worker-count ${ACTORS} --sandbox-class gvisor" >&2
   exit 1
 fi

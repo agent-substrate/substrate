@@ -44,3 +44,11 @@ def add_sweperf_arguments(parser: LocustArgumentParser) -> None:
         help="Number of suspend/resume cycles to partition the workload steps into (default: 4)",
         include_in_web_ui=True,
     )
+    parser.add_argument(
+        "--sweperf-poll-interval-ms",
+        type=int,
+        default=100,
+        env_var="LOCUST_SWEPERF_POLL_INTERVAL_MS",
+        help="Interval in ms between /status polls while a cycle's job runs (default: 100)",
+        include_in_web_ui=True,
+    )

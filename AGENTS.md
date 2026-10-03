@@ -34,6 +34,7 @@ tools/        # Standalone Go tools (go run ./tools/<name>) for Dev/CI
 | Internal proto (atelet / ateom) | `internal/proto/<name>` |
 | Dev/CI scripts | `hack/` |
 | Standalone Go dev/CI tools | `tools/<name>` with its own `go.mod` |
+| Self-contained plugin that nothing in the repo depends on | `internal/plugins/<name>` with its own `go.mod`, importing only `pkg/`; see `internal/plugins/README.md` |
 
 See `docs/dev/code-layout.md` for the full rationale and per-directory details.
 
@@ -45,6 +46,7 @@ Agent Substrate uses a `Makefile` for its build and test tasks.
 - **Binaries**: `make build` (builds images and `kubectl-ate`) or `make build-atectl`
 - **Images**: `make build-images` (uses ko to build container images)
 - **Demos**: `make build-demos`
+- **Release images**: `make build-release-images KO_DOCKER_REPO=REPO VERSION=TAG` (every image a pre-built install needs, all tagged `TAG`, including the docker-built `envoy-dataplane`; `make build-envoy-dataplane` builds only that one)
 
 ### Testing and Verification
 - **Run Unit Tests**: `make test`
@@ -59,6 +61,14 @@ Agent Substrate uses a `Makefile` for its build and test tasks.
 - **Go Modules**: Ensure `go.mod` is clean. Run `go mod tidy` if adding or removing dependencies.
 - **Comments**: Keep them brief and to the point. Comment the final state of the code, not the path taken to it — a problem that only existed partway through writing the change is noise to the next reader, as is a pointer to a scratch or planning file that isn't in the repository.
 - **Spelling**: American English. `golangci-lint` runs `misspell` with `locale: US`, so British spellings fail lint.
+
+## Backward Compatibility
+
+<!-- TODO #2004: Remove this section at the v1.0.0 release. -->
+
+Agent Substrate makes no compatibility guarantee before v1.0.0. Do not add code to stay compatible with older clients, binaries, protos, flags, or config.
+Remove or rename fields, RPCs, flags, and types outright and update every caller in the same change.
+Do not add `reserved` statements to protos, deprecated aliases, fallbacks for old formats, or version negotiation.
 
 ## Commit Messages
 

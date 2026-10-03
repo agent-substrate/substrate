@@ -10,7 +10,7 @@ over time.
 For day-to-day collaboration norms (PR workflow, communication, AI-tool
 disclosure), see [COLLABORATING.md](COLLABORATING.md). For build and
 contribution instructions, see [CONTRIBUTING.md](CONTRIBUTING.md). For
-community conduct, see [code-of-conduct.md](code-of-conduct.md).
+community conduct, see [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 
 ## Roles
 
@@ -97,7 +97,7 @@ Maintainer requirements and can commit to ongoing participation.
 - **Disputes.** Try to resolve on the PR or issue first. If that fails, any
   participant can ask the Maintainers to decide.
 - **Code-of-Conduct issues.** Reported and handled per
-  [code-of-conduct.md](code-of-conduct.md).
+  [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 
 ## Activity
 

@@ -298,11 +298,12 @@ shell-installed cluster rolls `ate-api-server` once.
 
 **Cloud SQL DSNs are synthesized, not adopted verbatim.** With
 `ATE_API_POSTGRES_CLOUDSQL_INSTANCE` set and no explicit
-`ATE_API_POSTGRES_CONNECTION_STRING`, the DSN is built passwordless
+`ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING`, the DSN is built passwordless
 against the proxy's loopback listener from the GSA's email
 ([`cloud-sql.md`](../../tools/setup-gcp/cloud-sql.md)), so
 `ATE_API_POSTGRES_CLOUDSQL_IAM_AUTH=false` is rejected rather than producing a
-DSN that cannot authenticate. An *unset* instance variable is distinct from an
+DSN that cannot authenticate. The owner connection uses the same IAM login
+unless `ATE_API_POSTGRES_OWNER_CONNECTION_STRING` is set. An *unset* instance variable is distinct from an
 exported empty one: unset adopts whatever the cluster already records in
 `ate-api-server-envvars`, including the IP type and the GSA from the
 `iam.gke.io/gcp-service-account` annotation, so a redeploy from a shell that

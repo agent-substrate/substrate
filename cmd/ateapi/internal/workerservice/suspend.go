@@ -20,13 +20,13 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/apivalidation"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/ateletauth"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
 // RequestActorSuspend suspends an Actor on behalf of the Worker hosting it. The
@@ -36,23 +36,8 @@ func (s *Server) RequestActorSuspend(ctx context.Context, req *ateapipb.RequestA
 	if err != nil {
 		return nil, err
 	}
-	// TODO: replace the three checks below with the generated
-	// Validate_RequestActorSuspendRequest, which already enforces all of them
-	// from the tags on the message. It lives in controlapi today, because that
-	// package holds the only +k8s:validation-gen marker, and this package must
-	// not depend on the Control service. Once the marker moves to a neutral
-	// package both can import, call the generated validator here and drop
-	// validateActorRef with it.
-	//
-	// Workers are global-scoped, so the reference carries no atespace.
-	if errs := resources.ValidateGlobalObjectRef(req.GetWorker(), field.NewPath("worker")); len(errs) > 0 {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid worker: %v", errs.ToAggregate())
-	}
-	if errs := validateActorRef(req.GetActor(), field.NewPath("actor")); len(errs) > 0 {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid actor: %v", errs.ToAggregate())
-	}
-	if req.GetActorUid() == "" {
-		return nil, status.Error(codes.InvalidArgument, "actor_uid is required")
+	if errs := apivalidation.ValidateRequestActorSuspendRequest(ctx, req); len(errs) > 0 {
+		return nil, resources.ToGRPCStatusError(errs)
 	}
 
 	// A golden actor may be suspended, but only by the template controller:
@@ -149,28 +134,4 @@ func checkActorHostedBy(ctx context.Context, actor *ateapipb.Actor, workerName, 
 		return status.Errorf(codes.NotFound, "Actor %s not found", actorRef)
 	}
 	return nil
-}
-
-// validateActorRef checks that a reference to an atespace-scoped resource is
-// well-formed. Unlike resources.ValidateGlobalObjectRef, which forbids the
-// atespace, an Actor is always in one and must name it.
-func validateActorRef(ref *ateapipb.ObjectRef, fldPath *field.Path) field.ErrorList {
-	if ref == nil {
-		return field.ErrorList{field.Required(fldPath, "")}
-	}
-	var errs field.ErrorList
-	for _, part := range []struct {
-		value   string
-		fldPath *field.Path
-	}{
-		{ref.GetAtespace(), fldPath.Child("atespace")},
-		{ref.GetName(), fldPath.Child("name")},
-	} {
-		if part.value == "" {
-			errs = append(errs, field.Required(part.fldPath, ""))
-			continue
-		}
-		errs = append(errs, resources.ValidateResourceName(part.value, part.fldPath)...)
-	}
-	return errs
 }

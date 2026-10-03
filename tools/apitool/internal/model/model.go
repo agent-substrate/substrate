@@ -552,6 +552,7 @@ func Resources(api *API) ([]Resource, error) {
 // TODO: We should consider adding proto options to attach this (and other)
 // metadata in the proto service descriptor itself.
 var resourceNames = []string{
+	"AccessPolicy",
 	"Actor",
 	"ActorSnapshot",
 	"Tag",

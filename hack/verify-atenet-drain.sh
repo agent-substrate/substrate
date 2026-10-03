@@ -33,9 +33,9 @@
 # the e2e runner executes suites in parallel, so this check must run alone.
 #
 # Prerequisites: a cluster with the ate system and the counter demo installed
-# (hack/install-ate-kind.sh --deploy-ate-system --deploy-demo-counter), and no
-# actors currently running on the counter demo pool (the pool is scaled to 1
-# for the duration of the check and restored afterwards).
+# (hack/install-ate-kind.sh --deploy-ate-system --credential-provider='{"name":"k8s.io"}' --deploy-demo-counter),
+# and no actors currently running on the counter demo pool (the pool is scaled
+# to 1 for the duration of the check and restored afterwards).
 #
 # Respects KUBECTL_CONTEXT like the other hack scripts.
 

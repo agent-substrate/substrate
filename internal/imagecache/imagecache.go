@@ -56,6 +56,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -181,9 +182,8 @@ func retryBackoffFor(registry string) remote.Backoff {
 type Store struct {
 	root string
 
-	// authenticator, when set, is attached to pulls from registries that use
-	// GCP credentials (gcr.io / pkg.dev). See remoteOpts.
-	authenticator authn.Authenticator
+	// keychain, when set, supplies credentials for pulls. See withCredentials.
+	keychain authn.Keychain
 
 	localhostRegistryReplacement string
 
@@ -229,10 +229,17 @@ type Store struct {
 // Option configures a Store.
 type Option func(*Store)
 
-// WithAuthenticator attaches an authenticator used for gcr.io / pkg.dev
-// registries. A nil authenticator is ignored.
-func WithAuthenticator(a authn.Authenticator) Option {
-	return func(s *Store) { s.authenticator = a }
+// CandidateKeychain returns several credentials to try in order.
+type CandidateKeychain interface {
+	authn.Keychain
+	Candidates(ctx context.Context, target authn.Resource) ([]authn.Authenticator, error)
+}
+
+// WithKeychain attaches a keychain consulted for every pull, whatever the
+// registry — the keychain itself decides which registries it has credentials
+// for. A nil keychain is ignored.
+func WithKeychain(k authn.Keychain) Option {
+	return func(s *Store) { s.keychain = k }
 }
 
 // WithLocalhostRegistryReplacement rewrites localhost/loopback registry refs
@@ -435,7 +442,11 @@ func (s *Store) EnsureImage(ctx context.Context, ref string) (_ *Image, err erro
 	} else {
 		// Tag ref: one small HEAD request pins it to an immutable manifest
 		// digest, which is the only safe cache key for mutable tags.
-		desc, headErr := remote.Head(parsedRef, s.remoteOpts(ctx, parsedRef)...)
+		var desc *v1.Descriptor
+		headErr := s.withCredentials(ctx, parsedRef, func(opts []remote.Option) (err error) {
+			desc, err = remote.Head(parsedRef, opts...)
+			return err
+		})
 		if headErr != nil {
 			err = fmt.Errorf("while resolving tag %q to a digest: %w", ref, headErr)
 			return nil, err
@@ -543,9 +554,21 @@ func (s *Store) pull(ctx context.Context, parsedRef name.Reference, digest v1.Ha
 		return img, nil
 	}
 
+	// Retry the whole pull per credential: the config and layer blobs are
+	// fetched after the manifest, and finished layers are reused.
+	var out *Image
+	err := s.withCredentials(ctx, parsedRef, func(opts []remote.Option) (err error) {
+		out, err = s.pullWith(ctx, parsedRef, digest, opts)
+		return err
+	})
+	return out, err
+}
+
+// pullWith is pull with the given remote options.
+func (s *Store) pullWith(ctx context.Context, parsedRef name.Reference, digest v1.Hash, opts []remote.Option) (*Image, error) {
 	tStart := time.Now()
 	digestRef := parsedRef.Context().Digest(digest.String())
-	img, err := remote.Image(digestRef, s.remoteOpts(ctx, parsedRef)...)
+	img, err := remote.Image(digestRef, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("in remote.Image: %w", err)
 	}
@@ -782,15 +805,47 @@ func (s *Store) remoteOpts(ctx context.Context, parsedRef name.Reference) []remo
 		remote.WithPlatform(platform),
 		remote.WithRetryBackoff(retryBackoffFor(registry)),
 	}
-	if s.authenticator != nil && registryUsesGCPAuth(registry) {
-		opts = append(opts, remote.WithAuth(s.authenticator))
-	}
 	return opts
 }
 
-func registryUsesGCPAuth(registry string) bool {
-	return registry == "gcr.io" || strings.HasSuffix(registry, ".gcr.io") ||
-		registry == "pkg.dev" || strings.HasSuffix(registry, ".pkg.dev")
+// withCredentials calls fetch with each credential until one succeeds, or
+// once anonymously if there are none.
+func (s *Store) withCredentials(ctx context.Context, parsedRef name.Reference, fetch func([]remote.Option) error) error {
+	opts := s.remoteOpts(ctx, parsedRef)
+	auths, err := s.credentials(ctx, parsedRef.Context())
+	if err != nil {
+		return fmt.Errorf("while resolving pull credentials: %w", err)
+	}
+	if len(auths) == 0 {
+		return fetch(opts)
+	}
+	var errs []error
+	for _, auth := range auths {
+		err := fetch(append(slices.Clip(opts), remote.WithAuth(auth)))
+		if err == nil {
+			return nil
+		}
+		errs = append(errs, err)
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func (s *Store) credentials(ctx context.Context, repo name.Repository) ([]authn.Authenticator, error) {
+	switch kc := s.keychain.(type) {
+	case nil:
+		return nil, nil
+	case CandidateKeychain:
+		return kc.Candidates(ctx, repo)
+	default:
+		auth, err := authn.Resolve(ctx, kc, repo)
+		if err != nil {
+			return nil, err
+		}
+		return []authn.Authenticator{auth}, nil
+	}
 }
 
 // parseRef applies the localhost-registry rewrite (kind local registries) and

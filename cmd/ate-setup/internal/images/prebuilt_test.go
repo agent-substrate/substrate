@@ -295,6 +295,40 @@ func TestPrebuiltReportsDigestFailures(t *testing.T) {
 	}
 }
 
+// Pin finds an image no manifest names by ko:// reference, such as the
+// Dockerfile-built envoy-dataplane, under the same repository and tag as the ko
+// images, and pins it the same way.
+func TestPrebuiltPin(t *testing.T) {
+	tests := []struct {
+		name string
+		src  images.Source
+		want string
+	}{
+		{
+			name: "looked up",
+			src:  testSource,
+			want: "example.com/substrate/envoy-dataplane:v1.2.3" + digestSuffix,
+		},
+		{
+			name: "tag already carries a digest",
+			src:  images.Source{Repo: "example.com/substrate", Tag: "v1.2.3" + digestSuffix},
+			want: "example.com/substrate/envoy-dataplane:v1.2.3" + digestSuffix,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := images.NewPrebuilt(tt.src, newStubRegistry().digest).
+				Pin(context.Background(), "envoy-dataplane")
+			if err != nil {
+				t.Fatalf("Pin() error = %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("Pin() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 // resolvedRef matches a rewritten reference in testSource's repository.
 var resolvedRef = regexp.MustCompile(regexp.QuoteMeta(testSource.Repo) + `/[^\s"',\]}]+`)
 

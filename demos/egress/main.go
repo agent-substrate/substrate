@@ -53,6 +53,7 @@ type fetchRequest struct {
 type fetchResponse struct {
 	StatusCode int    `json:"statusCode,omitempty"`
 	Body       string `json:"body,omitempty"`
+	ServerCert string `json:"serverCert,omitempty"`
 	Error      string `json:"error,omitempty"`
 }
 
@@ -147,7 +148,11 @@ func newHandler(client *http.Client) http.Handler {
 			writeJSON(w, http.StatusBadGateway, fetchResponse{Error: fmt.Sprintf("reading response: %v", err)})
 			return
 		}
-		writeJSON(w, response.StatusCode, fetchResponse{StatusCode: response.StatusCode, Body: string(body)})
+		var serverCert string
+		if response.TLS != nil && len(response.TLS.PeerCertificates) > 0 {
+			serverCert = response.TLS.PeerCertificates[0].Issuer.String()
+		}
+		writeJSON(w, response.StatusCode, fetchResponse{StatusCode: response.StatusCode, Body: string(body), ServerCert: serverCert})
 	})
 	mux.HandleFunc("/grpc", handleGRPC)
 	return mux
