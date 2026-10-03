@@ -181,7 +181,8 @@ type Config struct {
 	MySQLReadWriteConnectionString string
 	MySQLOwnerConnectionString     string
 	// MySQLPoolMaxConns sizes the apiserver's read/write pool
-	// (ATE_API_MYSQL_POOL_MAX_CONNS). Empty leaves the driver default.
+	// (ATE_API_MYSQL_POOL_MAX_CONNS). Empty leaves the default of the larger of
+	// 4 and the CPU count.
 	MySQLPoolMaxConns string
 	// MySQLServerCAFile is a local PEM file holding the MySQL server CA
 	// (ATE_API_MYSQL_SERVER_CA_FILE). Its contents are published as the
@@ -455,16 +456,17 @@ func validateStoreBackend(cfg *Config, env map[string]string) error {
 	switch cfg.StoreBackend {
 	case StoreBackendPostgres:
 		conflictPrefix = "ATE_API_MYSQL_"
+		if err := validatePoolMaxConns("ATE_API_POSTGRES_POOL_MAX_CONNS", cfg.PostgresPoolMaxConns); err != nil {
+			return err
+		}
 	case StoreBackendMySQL:
 		conflictPrefix = "ATE_API_POSTGRES_"
 		if cfg.MySQLReadWriteConnectionString == "" {
 			return fmt.Errorf("ATE_API_STORE_BACKEND=%s requires ATE_API_MYSQL_READ_WRITE_CONNECTION_STRING; "+
 				"there is no bundled MySQL", StoreBackendMySQL)
 		}
-		if v := cfg.MySQLPoolMaxConns; v != "" {
-			if n, err := strconv.ParseInt(v, 10, 32); err != nil || n <= 0 {
-				return fmt.Errorf("ATE_API_MYSQL_POOL_MAX_CONNS must be a positive integer, got %q", v)
-			}
+		if err := validatePoolMaxConns("ATE_API_MYSQL_POOL_MAX_CONNS", cfg.MySQLPoolMaxConns); err != nil {
+			return err
 		}
 		if cfg.MySQLServerCAFile != "" && cfg.MySQLTLSCAFile != "" {
 			return fmt.Errorf("set ATE_API_MYSQL_SERVER_CA_FILE (a local file to upload) or ATE_API_MYSQL_TLS_CA_FILE (a path in the pod), not both")
@@ -486,6 +488,18 @@ func validateStoreBackend(cfg *Config, env map[string]string) error {
 		sort.Strings(conflicts)
 		return fmt.Errorf("ATE_API_STORE_BACKEND=%s conflicts with %s; unset them or select the other backend",
 			cfg.StoreBackend, strings.Join(conflicts, ", "))
+	}
+	return nil
+}
+
+// validatePoolMaxConns applies the rule ateapi applies to a pool size: empty
+// or a positive int32.
+func validatePoolMaxConns(name, value string) error {
+	if value == "" {
+		return nil
+	}
+	if n, err := strconv.ParseInt(value, 10, 32); err != nil || n <= 0 {
+		return fmt.Errorf("%s must be a positive integer, got %q", name, value)
 	}
 	return nil
 }

@@ -81,6 +81,20 @@ func TestConnectStoreRejectsNegativeMySQLPoolMaxConns(t *testing.T) {
 	}
 }
 
+func TestConnectStoreRejectsNegativePostgresPoolMaxConns(t *testing.T) {
+	saveFlag(t, storeBackend)
+	saveFlag(t, postgresReadWriteConnectionString)
+	saveFlag(t, postgresPoolMaxConns)
+	*storeBackend = storeBackendPostgres
+	*postgresReadWriteConnectionString = "postgresql://ateapi@db.example.internal/atepg"
+	*postgresPoolMaxConns = -1
+
+	_, err := connectStore(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "--postgres-pool-max-conns must not be negative") {
+		t.Fatalf("connectStore() error = %v, want pool-size validation", err)
+	}
+}
+
 func TestConnectStoreRejectsUnknownBackend(t *testing.T) {
 	saveFlag(t, storeBackend)
 	*storeBackend = "sqlite"
@@ -214,8 +228,8 @@ func TestMySQLConnectConfig(t *testing.T) {
 	*mysqlPoolMaxConns = 12
 
 	cfg := mysqlConnectConfig()
-	if cfg.ReadWriteDSN != readWrite || cfg.OwnerDSN != readWrite {
-		t.Fatalf("DSNs = %q, %q, want the owner to default to the read/write DSN", cfg.ReadWriteDSN, cfg.OwnerDSN)
+	if cfg.ReadWriteDSN != readWrite || cfg.OwnerDSN != "" {
+		t.Fatalf("DSNs = %q, %q, want the owner left empty, as for PostgreSQL", cfg.ReadWriteDSN, cfg.OwnerDSN)
 	}
 	if cfg.TLS.CAFile != "ca.pem" || cfg.TLS.CertFile != "cert.pem" || cfg.TLS.KeyFile != "key.pem" || cfg.PoolMaxConns != 12 {
 		t.Fatalf("config = %+v", cfg)
@@ -395,19 +409,23 @@ func TestMySQLConnectionAttrNeverLogsThePassword(t *testing.T) {
 	}{
 		"tcp": {
 			connString: "ateapi:" + password + "@tcp(db.example.internal:3307)/substrate?parseTime=true",
-			want:       []string{`"addr":"db.example.internal:3307"`, `"database":"substrate"`, `"user":"ateapi"`, `"password-set":true`, `"tls":""`},
+			want:       []string{`"host":"db.example.internal"`, `"port":3307`, `"database":"substrate"`, `"user":"ateapi"`, `"password-set":true`, `"tls":false`},
 		},
 		"reserved_characters": {
 			connString: "ateapi:" + password + "@:x@tcp(db.example.internal:3306)/substrate",
-			want:       []string{`"addr":"db.example.internal:3306"`, `"password-set":true`},
+			want:       []string{`"host":"db.example.internal"`, `"port":3306`, `"password-set":true`},
 		},
 		"tls": {
 			connString: "ateapi:" + password + "@tcp(db.example.internal:3306)/substrate?tls=true",
-			want:       []string{`"tls":"true"`},
+			want:       []string{`"tls":true`},
 		},
 		"tls_skip_verify": {
 			connString: "ateapi:" + password + "@tcp(db.example.internal:3306)/substrate?tls=skip-verify",
-			want:       []string{`"tls":"skip-verify"`},
+			want:       []string{`"tls":true`},
+		},
+		"tls_false": {
+			connString: "ateapi:" + password + "@tcp(db.example.internal:3306)/substrate?tls=false",
+			want:       []string{`"tls":false`},
 		},
 		"passwordless": {
 			connString: "ateapi@tcp(mysql.ate-system.svc:3306)/substrate",
@@ -426,6 +444,14 @@ func TestMySQLConnectionAttrNeverLogsThePassword(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("tls_files", func(t *testing.T) {
+		saveFlag(t, mysqlTLSCAFile)
+		*mysqlTLSCAFile = "/run/mysql-server-ca/server-ca.pem"
+		if got := render("ateapi@tcp(db.example.internal:3306)/substrate"); !strings.Contains(got, `"tls":true`) {
+			t.Errorf("log line reports TLS off with a CA file set: %s", got)
+		}
+	})
 
 	for name, raw := range map[string]string{
 		"missing_database_separator": "ateapi:" + password + "@tcp(db.example.internal:3306)",
@@ -482,7 +508,7 @@ func TestLogFlagValuesDoesNotLogADatabasePassword(t *testing.T) {
 		}
 	}
 	for _, key := range []string{"mysql-read-write-connection-string", "mysql-owner-connection-string"} {
-		if !strings.Contains(got, `"`+key+`":{"addr":"db.example.internal:3306"`) {
+		if !strings.Contains(got, `"`+key+`":{"host":"db.example.internal","port":3306`) {
 			t.Errorf("startup line missing the structured %s summary: %s", key, got)
 		}
 	}

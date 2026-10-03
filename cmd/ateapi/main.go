@@ -86,7 +86,7 @@ var (
 	postgresSchema                    = pflag.String("postgres-schema", "substrate", "PostgreSQL schema for Substrate tables. This overrides a search_path connection parameter.")
 	postgresPoolMaxConns              = pflag.Int32("postgres-pool-max-conns", 0, "Maximum connections in the shared Substrate and OpenFGA read/write PostgreSQL pool. Does not affect the owner or watch pools. The DSN or pgx default is used when unset.")
 	mysqlReadWriteConnectionString    = pflag.String("mysql-read-write-connection-string", "", "MySQL connection string (go-sql-driver DSN) naming the Substrate database.")
-	mysqlOwnerConnectionString        = pflag.String("mysql-owner-connection-string", "", "MySQL owner connection string (go-sql-driver DSN) used for migrations. Empty means the read/write connection string.")
+	mysqlOwnerConnectionString        = pflag.String("mysql-owner-connection-string", "", "MySQL owner connection string (go-sql-driver DSN).")
 	mysqlTLSCAFile                    = pflag.String("mysql-tls-ca-file", "", "PEM file with the CA that verifies the MySQL server certificate. Empty uses the system roots when TLS is enabled.")
 	mysqlTLSCertFile                  = pflag.String("mysql-tls-cert-file", "", "PEM file with the client certificate presented to MySQL.")
 	mysqlTLSKeyFile                   = pflag.String("mysql-tls-key-file", "", "PEM file with the private key for --mysql-tls-cert-file.")
@@ -529,7 +529,8 @@ func postgresConnectionAttr(key, connString string) slog.Attr {
 	)
 }
 
-// mysqlConnectionAttr is the MySQL counterpart of postgresConnectionAttr.
+// mysqlConnectionAttr is the MySQL counterpart of postgresConnectionAttr. TLS
+// is on when the DSN asks for it or any --mysql-tls-*-file flag is set.
 func mysqlConnectionAttr(key, connString string) slog.Attr {
 	if connString == "" {
 		return slog.String(key, "")
@@ -538,12 +539,19 @@ func mysqlConnectionAttr(key, connString string) slog.Attr {
 	if err != nil {
 		return slog.String(key, "<invalid mysql connection string>")
 	}
+	host, port, err := net.SplitHostPort(cfg.Addr)
+	if err != nil {
+		host = cfg.Addr
+	}
+	portNumber, _ := strconv.Atoi(port)
+	tlsFiles := *mysqlTLSCAFile != "" || *mysqlTLSCertFile != "" || *mysqlTLSKeyFile != ""
 	return slog.Group(key,
-		slog.String("addr", cfg.Addr),
+		slog.String("host", host),
+		slog.Int("port", portNumber),
 		slog.String("database", cfg.DBName),
 		slog.String("user", cfg.User),
 		slog.Bool("password-set", cfg.Passwd != ""),
-		slog.String("tls", cfg.TLSConfig),
+		slog.Bool("tls", tlsFiles || (cfg.TLSConfig != "" && cfg.TLSConfig != "false")),
 	)
 }
 
@@ -623,13 +631,9 @@ func connectMySQL(ctx context.Context) (connectedStore, error) {
 }
 
 func mysqlConnectConfig() atemy.ConnectConfig {
-	ownerDSN := *mysqlOwnerConnectionString
-	if ownerDSN == "" {
-		ownerDSN = *mysqlReadWriteConnectionString
-	}
 	return atemy.ConnectConfig{
 		ReadWriteDSN: *mysqlReadWriteConnectionString,
-		OwnerDSN:     ownerDSN,
+		OwnerDSN:     *mysqlOwnerConnectionString,
 		TLS: atemy.TLSFiles{
 			CAFile:   *mysqlTLSCAFile,
 			CertFile: *mysqlTLSCertFile,

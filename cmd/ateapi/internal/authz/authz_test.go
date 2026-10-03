@@ -265,7 +265,9 @@ func startMySQL(t *testing.T) testDB {
 			mysqlErr = err
 			return
 		}
-		dsn, err := ctr.ConnectionString(ctx, "parseTime=true", "clientFoundRows=true", "interpolateParams=true")
+		// The session settings atemy.Open applies; importing atemy here
+		// would be an import cycle.
+		dsn, err := ctr.ConnectionString(ctx, "parseTime=true", "loc=UTC", "clientFoundRows=true", "interpolateParams=true", "transaction_isolation=%27READ-COMMITTED%27")
 		if err != nil {
 			mysqlErr = err
 			return
@@ -340,8 +342,12 @@ func startMySQL(t *testing.T) testDB {
 		},
 		initLockHeld: func(t *testing.T, ctx context.Context) bool {
 			t.Helper()
+			var database string
+			if err := db.QueryRowContext(ctx, "SELECT DATABASE()").Scan(&database); err != nil {
+				t.Fatalf("SELECT DATABASE() failed: %v", err)
+			}
 			var free bool
-			if err := db.QueryRowContext(ctx, "SELECT IS_FREE_LOCK(?)", ateFGAInitLockName).Scan(&free); err != nil {
+			if err := db.QueryRowContext(ctx, "SELECT IS_FREE_LOCK(?)", mysqlInitLockName(database)).Scan(&free); err != nil {
 				t.Fatalf("IS_FREE_LOCK failed: %v", err)
 			}
 			return !free

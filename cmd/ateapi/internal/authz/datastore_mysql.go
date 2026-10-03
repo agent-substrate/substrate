@@ -16,8 +16,10 @@ package authz
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"database/sql/driver"
+	"encoding/hex"
 	"fmt"
 	"time"
 
@@ -121,35 +123,43 @@ func sqlTxStatements(tx *sql.Tx) txStatements {
 	}
 }
 
-// ateFGAInitLockName names the MySQL user-level lock that serializes OpenFGA
-// store provisioning across replicas. Unlike a PostgreSQL advisory lock,
-// GET_LOCK is scoped to the server rather than the database, so deployments
-// sharing a server also serialize with each other, which is harmless here.
-const ateFGAInitLockName = "atefga-init"
+// mysqlInitLockName names the user-level lock that serializes OpenFGA store
+// provisioning across replicas. GET_LOCK names are server-wide, so the name
+// carries the database, as a PostgreSQL advisory lock is scoped to one. MySQL
+// caps names at 64 characters, so the database name is hashed.
+func mysqlInitLockName(database string) string {
+	sum := sha256.Sum256([]byte(database))
+	return "atefga-init:" + hex.EncodeToString(sum[:16])
+}
 
-// mysqlInitLockTimeout bounds one GET_LOCK wait. Provisioning holds the lock
-// for milliseconds, so expiry means a stuck holder.
-const mysqlInitLockTimeout = 5 * time.Minute
-
-// acquireMySQLInitLock is the MySQL counterpart of acquireInitLock. GET_LOCK
-// belongs to the session, so it pins one connection until unlock. It uses
-// SELECT GET_LOCK without FROM, the only form PlanetScale Vitess accepts.
+// acquireMySQLInitLock is the MySQL counterpart of acquireInitLock, and like
+// it waits until the lock is free or ctx ends. GET_LOCK belongs to the
+// session, so it pins one connection until unlock. It uses SELECT GET_LOCK
+// without FROM, the only form PlanetScale Vitess accepts.
 func acquireMySQLInitLock(ctx context.Context, db *sql.DB) (func(), error) {
 	conn, err := db.Conn(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("acquiring connection for OpenFGA init lock: %w", err)
 	}
+	var database string
+	if err := conn.QueryRowContext(ctx, `SELECT DATABASE()`).Scan(&database); err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("acquiring OpenFGA init lock: %w", err)
+	}
+	name := mysqlInitLockName(database)
 	var acquired sql.NullInt64
-	if err := conn.QueryRowContext(ctx, `SELECT GET_LOCK(?, ?)`, ateFGAInitLockName, int(mysqlInitLockTimeout.Seconds())).Scan(&acquired); err != nil {
+	// A negative timeout waits indefinitely; canceling ctx closes the
+	// connection, which ends the wait.
+	if err := conn.QueryRowContext(ctx, `SELECT GET_LOCK(?, -1)`, name).Scan(&acquired); err != nil {
 		_ = conn.Close()
 		return nil, fmt.Errorf("acquiring OpenFGA init lock: %w", err)
 	}
 	if !acquired.Valid || acquired.Int64 != 1 {
 		_ = conn.Close()
-		return nil, fmt.Errorf("acquiring OpenFGA init lock: GET_LOCK did not grant %q within %s", ateFGAInitLockName, mysqlInitLockTimeout)
+		return nil, fmt.Errorf("acquiring OpenFGA init lock: GET_LOCK did not grant %q", name)
 	}
 	return func() {
-		_, _ = conn.ExecContext(context.Background(), `SELECT RELEASE_LOCK(?)`, ateFGAInitLockName)
+		_, _ = conn.ExecContext(context.Background(), `SELECT RELEASE_LOCK(?)`, name)
 		// Discard the session rather than pool it. That frees the lock even if
 		// RELEASE_LOCK failed, and Vitess keeps a session that took a lock on
 		// a reserved connection until the client disconnects.

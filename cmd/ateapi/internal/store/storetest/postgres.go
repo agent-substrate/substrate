@@ -58,6 +58,7 @@ func SetupPostgresPersistence(t *testing.T) *atepg.Persistence {
 		t.Fatalf("creating PostgreSQL persistence: %v", err)
 	}
 	t.Cleanup(func() {
+		persistence.Close()
 		pool.Close()
 		if _, err := admin.Exec(context.Background(), "DROP DATABASE "+databaseName); err != nil {
 			t.Errorf("dropping PostgreSQL test database: %v", err)
