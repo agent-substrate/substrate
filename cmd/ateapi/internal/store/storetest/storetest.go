@@ -28,6 +28,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/authz"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
@@ -52,6 +53,29 @@ func SetupTestStore(t *testing.T) (store.Interface, func()) {
 	default:
 		t.Fatalf("%s must be postgres or mysql, got %q", BackendEnv, backend)
 		return nil, nil
+	}
+}
+
+// AuthzStore is a test store that also takes an authz policy manager.
+type AuthzStore interface {
+	store.Interface
+	SetPolicyManager(*authz.PolicyManager)
+}
+
+// SetupAuthzTestStore is SetupTestStore for tests that wire their own OpenFGA
+// authorizer: it also returns the authz backend over the store's pool.
+func SetupAuthzTestStore(t *testing.T) (AuthzStore, authz.Backend) {
+	t.Helper()
+	switch backend := os.Getenv(BackendEnv); backend {
+	case "", "postgres":
+		p := SetupPostgresPersistence(t)
+		return p, authz.PostgresBackend(p.Pool())
+	case "mysql":
+		p := SetupMySQLPersistence(t)
+		return p, authz.MySQLBackend(p.DB())
+	default:
+		t.Fatalf("%s must be postgres or mysql, got %q", BackendEnv, backend)
+		return nil, authz.Backend{}
 	}
 }
 
