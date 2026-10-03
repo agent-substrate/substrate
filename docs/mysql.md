@@ -48,16 +48,16 @@ Every table with text columns declares `utf8mb4`, and Substrate's key columns co
 Without TLS settings, connections are unencrypted. There are two ways to turn TLS on.
 
 - Add `tls=true` to the DSN. The driver verifies the server certificate against the system roots and the DSN host name.
-- Set `ATE_API_MYSQL_TLS_CA_FILE`, `ATE_API_MYSQL_TLS_CERT_FILE`, or `ATE_API_MYSQL_TLS_KEY_FILE` (or the matching `--mysql-tls-*-file` flags). Setting any of them turns on TLS with that material and replaces the DSN's `tls` setting.
+- Set `ATE_API_MYSQL_TLS_CA_FILE`, the client certificate and key (`ATE_API_MYSQL_TLS_CERT_FILE` and `ATE_API_MYSQL_TLS_KEY_FILE`), or all three. The matching `--mysql-tls-*-file` flags work too. These settings turn on TLS with that material and replace the DSN's `tls` setting.
 
-With the TLS files, an empty CA file uses the system roots. The server certificate must always match the DSN host name, even with a CA file. That is stricter than PostgreSQL's `sslmode=verify-ca`, which checks only the certificate chain.
+When the CA file is unset, the system roots verify the server certificate. The server certificate must always match the DSN host name, even with a CA file. That is stricter than PostgreSQL's `sslmode=verify-ca`, which checks only the certificate chain.
 
-The client certificate and key must be set together; both may name the same file. `ateapi` reads the files again for every new connection, so rotated certificates apply without a restart. Open connections keep the certificate they started with.
+The client certificate and key must be set together, and `ateapi` refuses to start with only one. Both may name the same file. `ateapi` reads the files again for every new connection, so rotated certificates apply without a restart. Open connections keep the certificate they started with.
 
 The TLS files always require TLS. A `tls=preferred` setting in the DSN does not let the driver fall back to an unencrypted connection when the files are set.
 
 ### Pool sizing
-`ATE_API_MYSQL_POOL_MAX_CONNS` (or `--mysql-pool-max-conns`) caps the read/write pool, which Substrate and OpenFGA share. It must be a positive integer. When unset, the limit is the larger of 4 and the CPU count, the same default the PostgreSQL pool uses.
+`ATE_API_STORE_POOL_MAX_CONNS` (or `--store-pool-max-conns`) caps the read/write pool, which Substrate and OpenFGA share. The same setting sizes the PostgreSQL pool. It must be a positive integer. When unset, the limit is the larger of 4 and the CPU count.
 
 Connections are replaced after 1 hour, or after 30 minutes idle, as with PostgreSQL.
 
@@ -87,7 +87,7 @@ Do not apply Substrate migrations through a deploy request. The ledger would not
 
 **Locks and limits.** The migration lock and the OpenFGA setup lock use `GET_LOCK` at startup, and both lock names are scoped to the database. Vitess keeps a session that took a lock on a reserved connection until it disconnects, so `ateapi` closes each lock connection after unlocking. The OpenFGA setup lock waits until it is free, as PostgreSQL's advisory lock does.
 
-PlanetScale ends a transaction after 20 seconds, which `ateapi` reports as an internal error rather than a version conflict. Count each replica as the read/write pool size plus 5 connections against the database's connection limit.
+PlanetScale ends a transaction after 20 seconds, which `ateapi` reports as an internal error rather than a version conflict. Size the pool against the database's connection limit as described in [Pool sizing](#pool-sizing).
 
 **Foreign keys.** Substrate declares no foreign keys, so the PlanetScale foreign key setting does not affect it.
 
@@ -104,21 +104,11 @@ See PlanetScale's documentation on [safe migrations](https://planetscale.com/doc
 export ATE_API_STORE_BACKEND=mysql
 export ATE_API_MYSQL_READ_WRITE_CONNECTION_STRING='substrate_rw:<password>@tcp(mysql.example.com:3306)/substrate?tls=true'
 export ATE_API_MYSQL_OWNER_CONNECTION_STRING='substrate_owner:<password>@tcp(mysql.example.com:3306)/substrate?tls=true'
-export ATE_API_MYSQL_POOL_MAX_CONNS=20
+export ATE_API_STORE_POOL_MAX_CONNS=20
 ./hack/install-ate.sh --deploy-ate-system
 ```
 
-The installer skips the bundled PostgreSQL. It stores the DSNs and the backend choice in the `ate-api-server-secret-envvars` Secret. The pool size and the TLS file paths go in the `ate-api-server-envvars` ConfigMap.
-
-`ATE_API_MYSQL_SERVER_CA_FILE` names a local PEM file with the server CA. The installer publishes it as the `mysql-server-ca` Secret, which `ate-api-server` mounts at `/run/mysql-server-ca/server-ca.pem`, and sets `ATE_API_MYSQL_TLS_CA_FILE` to that path.
-
-`ATE_API_MYSQL_TLS_CA_FILE`, `ATE_API_MYSQL_TLS_CERT_FILE`, and `ATE_API_MYSQL_TLS_KEY_FILE` name files already inside the `ate-api-server` pod. The installer passes them through unchanged, in the role of the `sslrootcert`, `sslcert`, and `sslkey` paths a PostgreSQL DSN names. Set the certificate and key together, and set `ATE_API_MYSQL_SERVER_CA_FILE` or `ATE_API_MYSQL_TLS_CA_FILE`, not both.
-
-For example, point the certificate and key at the pod identity bundle, `/run/podidentity.podcert.ate.dev/credential-bundle.pem`, for a server that trusts the pod identity CA.
-
-Each backend rejects the other's non-empty variables; exported empty ones are allowed. The Cloud SQL helpers in `tools/setup-gcp` support PostgreSQL only.
-
-A redeploy with `ATE_API_STORE_BACKEND` unset fails on a cluster that records `mysql`; set the variable again on every deploy. See [`cmd/ate-setup/differences.md`](../cmd/ate-setup/differences.md) for details.
+`hack/install-ate.sh --help` lists the TLS variables. See [`cmd/ate-setup/differences.md`](../cmd/ate-setup/differences.md#known-differences-worth-flagging) for how the installer handles the server CA, the backend conflict check, and a redeploy with `ATE_API_STORE_BACKEND` unset. The Cloud SQL helpers in `tools/setup-gcp` support PostgreSQL only.
 
 ## Differences from PostgreSQL
 These differences follow from MySQL and Vitess features, and they affect operation.
@@ -127,7 +117,7 @@ These differences follow from MySQL and Vitess features, and they affect operati
 - **Pending seqs.** A seq pending for more than 2 seconds is probed with a `FOR SHARE NOWAIT` read. The watch drops it only when the probe finds no row and no writer holding it, which means the write rolled back.
 - **Event order.** Events for one worker arrive in order, because writes to one worker take its row lock in turn. Events for different workers can arrive out of seq order.
 - **Subscribe window.** A new watch tracks seqs still committing among rows written in the last 5 minutes. A write that took its seq earlier than that and commits after the watch starts is not delivered to that watch.
-- **Outbox durability.** The MySQL outbox table is durable, so a restart of the same server loses no events. PostgreSQL uses unlogged partitions and resyncs watchers after a restart.
+- **Outbox durability.** The MySQL outbox table is durable, so a restart of the same server loses no events. This assumes `innodb_flush_log_at_trx_commit=1`, the default. PostgreSQL uses unlogged partitions and resyncs watchers after a restart.
 - **Outbox retention.** Background cleanup deletes the outbox rows older than 15 minutes that it read, in batches. The replica that locks the trim row with `SKIP LOCKED` runs the pass and the others skip it, as with PostgreSQL's elected retention. PostgreSQL drops whole partitions.
 - **Parent and child rows.** There are no foreign keys. A transaction that writes a child row takes a shared lock on its parent, and a parent delete takes an exclusive lock first.
 - **Leases.** Acquiring a lease takes over an expired row with an `UPDATE`, then inserts a new row if none exists. PostgreSQL uses one conditional upsert.
@@ -135,4 +125,3 @@ These differences follow from MySQL and Vitess features, and they affect operati
 - **Lock wait timeouts.** A lock wait timeout returns the database error as is, as a lock wait that hits a deadline does on PostgreSQL.
 - **Watch resync.** A watch closes so its consumer resyncs from the primary tables when the server changes (`@@server_uuid`, as after a failover), or when the outbox moves behind its cursor (lost writes). It also closes when it falls behind retention, when retention deletes a row it was waiting for, or when it has more than 4096 pending seqs.
 - **Policy members.** OpenFGA's MySQL schema holds a tuple user in 256 characters, so the MySQL store rejects an access policy member longer than that once encoded, as an invalid argument. PostgreSQL accepts members up to the API limit of 512 characters.
-- **Migrations.** A failed migration file can be partly applied. The current files are idempotent, so a restart completes them. See [Startup and migrations](#startup-and-migrations).

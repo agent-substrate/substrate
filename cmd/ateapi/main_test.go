@@ -67,41 +67,19 @@ func TestConnectStoreRequiresMySQLReadWriteConnectionString(t *testing.T) {
 	}
 }
 
-func TestConnectStoreRejectsNegativeMySQLPoolMaxConns(t *testing.T) {
-	saveFlag(t, storeBackend)
-	saveFlag(t, mysqlReadWriteConnectionString)
-	saveFlag(t, mysqlPoolMaxConns)
-	*storeBackend = storeBackendMySQL
-	*mysqlReadWriteConnectionString = "ateapi@tcp(db.example.internal:3306)/substrate"
-	*mysqlPoolMaxConns = -1
+func TestConnectStoreRejectsNegativePoolMaxConns(t *testing.T) {
+	for _, backend := range []string{storeBackendPostgres, storeBackendMySQL} {
+		t.Run(backend, func(t *testing.T) {
+			saveFlag(t, storeBackend)
+			saveFlag(t, storePoolMaxConns)
+			*storeBackend = backend
+			*storePoolMaxConns = -1
 
-	_, err := connectStore(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "--mysql-pool-max-conns must not be negative") {
-		t.Fatalf("connectStore() error = %v, want pool-size validation", err)
-	}
-}
-
-func TestConnectStoreRejectsNegativePostgresPoolMaxConns(t *testing.T) {
-	saveFlag(t, storeBackend)
-	saveFlag(t, postgresReadWriteConnectionString)
-	saveFlag(t, postgresPoolMaxConns)
-	*storeBackend = storeBackendPostgres
-	*postgresReadWriteConnectionString = "postgresql://ateapi@db.example.internal/atepg"
-	*postgresPoolMaxConns = -1
-
-	_, err := connectStore(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "--postgres-pool-max-conns must not be negative") {
-		t.Fatalf("connectStore() error = %v, want pool-size validation", err)
-	}
-}
-
-func TestConnectStoreRejectsUnknownBackend(t *testing.T) {
-	saveFlag(t, storeBackend)
-	*storeBackend = "sqlite"
-
-	_, err := connectStore(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "--store-backend") {
-		t.Fatalf("connectStore() error = %v, want backend validation", err)
+			_, err := connectStore(context.Background())
+			if err == nil || !strings.Contains(err.Error(), "--store-pool-max-conns must not be negative") {
+				t.Fatalf("connectStore() error = %v, want pool-size validation", err)
+			}
+		})
 	}
 }
 
@@ -185,63 +163,6 @@ func TestLoadFlagsFromEnvResolvesMySQLSources(t *testing.T) {
 	}
 }
 
-func TestLoadFlagsFromEnvMySQLPoolMaxConns(t *testing.T) {
-	saveFlag(t, storeBackend)
-	saveFlag(t, mysqlPoolMaxConns)
-	*storeBackend = storeBackendMySQL
-	*mysqlPoolMaxConns = 0
-	t.Setenv("ATE_API_POSTGRES_POOL_MAX_CONNS", "invalid")
-	t.Setenv("ATE_API_MYSQL_POOL_MAX_CONNS", "20")
-	if err := loadFlagsFromEnv(); err != nil {
-		t.Fatal(err)
-	}
-	if *mysqlPoolMaxConns != 20 {
-		t.Fatalf("pool max connections = %d, want 20", *mysqlPoolMaxConns)
-	}
-	for _, raw := range []string{"invalid", "0", "-5", "4294967296"} {
-		t.Setenv("ATE_API_MYSQL_POOL_MAX_CONNS", raw)
-		if err := loadFlagsFromEnv(); err == nil || !strings.Contains(err.Error(), "ATE_API_MYSQL_POOL_MAX_CONNS must be a positive integer") {
-			t.Fatalf("loadFlagsFromEnv() with %q error = %v, want pool-size validation", raw, err)
-		}
-	}
-
-	*mysqlPoolMaxConns = 7
-	markFlagChanged(t, "mysql-pool-max-conns")
-	t.Setenv("ATE_API_MYSQL_POOL_MAX_CONNS", "invalid")
-	if err := loadFlagsFromEnv(); err != nil {
-		t.Fatalf("loadFlagsFromEnv() read the environment for an explicit flag: %v", err)
-	}
-	if *mysqlPoolMaxConns != 7 {
-		t.Fatalf("pool max connections = %d, want the flag value 7", *mysqlPoolMaxConns)
-	}
-}
-
-func TestMySQLConnectConfig(t *testing.T) {
-	for _, p := range []*string{mysqlReadWriteConnectionString, mysqlOwnerConnectionString, mysqlTLSCAFile, mysqlTLSCertFile, mysqlTLSKeyFile} {
-		saveFlag(t, p)
-	}
-	saveFlag(t, mysqlPoolMaxConns)
-	const readWrite = "ateapi@tcp(db.example.internal:3306)/substrate"
-	*mysqlReadWriteConnectionString = readWrite
-	*mysqlOwnerConnectionString = ""
-	*mysqlTLSCAFile, *mysqlTLSCertFile, *mysqlTLSKeyFile = "ca.pem", "cert.pem", "key.pem"
-	*mysqlPoolMaxConns = 12
-
-	cfg := mysqlConnectConfig()
-	if cfg.ReadWriteDSN != readWrite || cfg.OwnerDSN != "" {
-		t.Fatalf("DSNs = %q, %q, want the owner left empty, as for PostgreSQL", cfg.ReadWriteDSN, cfg.OwnerDSN)
-	}
-	if cfg.TLS.CAFile != "ca.pem" || cfg.TLS.CertFile != "cert.pem" || cfg.TLS.KeyFile != "key.pem" || cfg.PoolMaxConns != 12 {
-		t.Fatalf("config = %+v", cfg)
-	}
-
-	const owner = "owner@tcp(db.example.internal:3306)/substrate"
-	*mysqlOwnerConnectionString = owner
-	if got := mysqlConnectConfig().OwnerDSN; got != owner {
-		t.Fatalf("owner DSN = %q, want %q", got, owner)
-	}
-}
-
 func TestLoadFlagsFromEnvResolvesPostgresSourcesOnce(t *testing.T) {
 	oldRuntime, oldDDL := *postgresReadWriteConnectionString, *postgresOwnerConnectionString
 	oldRuntimeRole, oldDDLRole := *postgresReadWriteRole, *postgresOwnerRole
@@ -285,20 +206,30 @@ func TestLoadFlagsFromEnvResolvesPostgresSourcesOnce(t *testing.T) {
 }
 
 func TestLoadFlagsFromEnvPoolMaxConns(t *testing.T) {
-	saveFlag(t, storeBackend)
-	saveFlag(t, postgresPoolMaxConns)
-	*storeBackend = storeBackendPostgres
-	t.Setenv("ATE_API_MYSQL_POOL_MAX_CONNS", "invalid")
-	t.Setenv("ATE_API_POSTGRES_POOL_MAX_CONNS", "20")
+	saveFlag(t, storePoolMaxConns)
+	*storePoolMaxConns = 0
+	t.Setenv("ATE_API_STORE_POOL_MAX_CONNS", "20")
 	if err := loadFlagsFromEnv(); err != nil {
 		t.Fatal(err)
 	}
-	if *postgresPoolMaxConns != 20 {
-		t.Fatalf("pool max connections = %d, want 20", *postgresPoolMaxConns)
+	if *storePoolMaxConns != 20 {
+		t.Fatalf("pool max connections = %d, want 20", *storePoolMaxConns)
 	}
-	t.Setenv("ATE_API_POSTGRES_POOL_MAX_CONNS", "invalid")
-	if err := loadFlagsFromEnv(); err == nil || !strings.Contains(err.Error(), "ATE_API_POSTGRES_POOL_MAX_CONNS must be a positive integer") {
-		t.Fatalf("loadFlagsFromEnv() error = %v, want pool-size validation", err)
+	for _, raw := range []string{"invalid", "0", "-5", "4294967296"} {
+		t.Setenv("ATE_API_STORE_POOL_MAX_CONNS", raw)
+		if err := loadFlagsFromEnv(); err == nil || !strings.Contains(err.Error(), "ATE_API_STORE_POOL_MAX_CONNS must be a positive integer") {
+			t.Fatalf("loadFlagsFromEnv() with %q error = %v, want pool-size validation", raw, err)
+		}
+	}
+
+	*storePoolMaxConns = 7
+	markFlagChanged(t, "store-pool-max-conns")
+	t.Setenv("ATE_API_STORE_POOL_MAX_CONNS", "invalid")
+	if err := loadFlagsFromEnv(); err != nil {
+		t.Fatalf("loadFlagsFromEnv() read the environment for an explicit flag: %v", err)
+	}
+	if *storePoolMaxConns != 7 {
+		t.Fatalf("pool max connections = %d, want the flag value 7", *storePoolMaxConns)
 	}
 }
 

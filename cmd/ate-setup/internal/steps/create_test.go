@@ -64,7 +64,7 @@ func TestMySQLAPIServerEnvVars(t *testing.T) {
 	}{
 		{
 			name:       "one login",
-			cfg:        config.Config{MySQLReadWriteConnectionString: readWriteDSN},
+			cfg:        config.Config{MySQLReadWriteConnectionString: readWriteDSN, MySQLOwnerConnectionString: readWriteDSN},
 			wantConfig: map[string]string{},
 			wantSecret: map[string]string{
 				"ATE_API_STORE_BACKEND":                      config.StoreBackendMySQL,
@@ -77,11 +77,11 @@ func TestMySQLAPIServerEnvVars(t *testing.T) {
 			cfg: config.Config{
 				MySQLReadWriteConnectionString: readWriteDSN,
 				MySQLOwnerConnectionString:     ownerDSN,
-				MySQLPoolMaxConns:              "40",
+				StorePoolMaxConns:              "40",
 				MySQLServerCAFile:              "/local/ca.pem",
 			},
 			wantConfig: map[string]string{
-				"ATE_API_MYSQL_POOL_MAX_CONNS": "40",
+				"ATE_API_STORE_POOL_MAX_CONNS": "40",
 				"ATE_API_MYSQL_TLS_CA_FILE":    "/run/mysql-server-ca/server-ca.pem",
 			},
 			wantSecret: map[string]string{

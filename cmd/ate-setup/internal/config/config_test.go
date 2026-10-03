@@ -46,19 +46,18 @@ func loadEnv(t *testing.T) {
 		"ATE_API_POSTGRES_CLOUDSQL_IP_TYPE",
 		"ATE_API_POSTGRES_OWNER_CONNECTION_STRING",
 		"ATE_API_POSTGRES_OWNER_ROLE",
-		"ATE_API_POSTGRES_POOL_MAX_CONNS",
 		"ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING",
 		"ATE_API_POSTGRES_READ_WRITE_ROLE",
 		"ATE_API_POSTGRES_SCHEMA",
 		"ATE_API_POSTGRES_SERVER_CA_FILE",
 		"ATE_API_MYSQL_OWNER_CONNECTION_STRING",
-		"ATE_API_MYSQL_POOL_MAX_CONNS",
 		"ATE_API_MYSQL_READ_WRITE_CONNECTION_STRING",
 		"ATE_API_MYSQL_SERVER_CA_FILE",
 		"ATE_API_MYSQL_TLS_CA_FILE",
 		"ATE_API_MYSQL_TLS_CERT_FILE",
 		"ATE_API_MYSQL_TLS_KEY_FILE",
 		"ATE_API_STORE_BACKEND",
+		"ATE_API_STORE_POOL_MAX_CONNS",
 		"ATE_ATENET_DATAPLANE",
 		"ATE_CREDENTIAL_PROVIDER",
 		"ATE_IMAGE_REPO",
@@ -299,15 +298,15 @@ func TestLoadPostgresSchema(t *testing.T) {
 // mounted file respectively, neither of which the shell installer synthesizes.
 func TestLoadPostgresTuning(t *testing.T) {
 	loadEnv(t)
-	t.Setenv("ATE_API_POSTGRES_POOL_MAX_CONNS", "50")
+	t.Setenv("ATE_API_STORE_POOL_MAX_CONNS", "50")
 	t.Setenv("ATE_API_POSTGRES_SERVER_CA_FILE", "/etc/ssl/server-ca.pem")
 
 	cfg, err := Load(Options{})
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if cfg.PostgresPoolMaxConns != "50" {
-		t.Errorf("PostgresPoolMaxConns = %q, want 50", cfg.PostgresPoolMaxConns)
+	if cfg.StorePoolMaxConns != "50" {
+		t.Errorf("StorePoolMaxConns = %q, want 50", cfg.StorePoolMaxConns)
 	}
 	if want := "/etc/ssl/server-ca.pem"; cfg.PostgresServerCAFile != want {
 		t.Errorf("PostgresServerCAFile = %q, want %q", cfg.PostgresServerCAFile, want)
@@ -381,7 +380,7 @@ func TestLoadMySQL(t *testing.T) {
 		loadEnv(t)
 		t.Setenv("ATE_API_STORE_BACKEND", StoreBackendMySQL)
 		t.Setenv("ATE_API_MYSQL_READ_WRITE_CONNECTION_STRING", dsn)
-		t.Setenv("ATE_API_MYSQL_POOL_MAX_CONNS", "32")
+		t.Setenv("ATE_API_STORE_POOL_MAX_CONNS", "32")
 		t.Setenv("ATE_API_MYSQL_SERVER_CA_FILE", "/etc/ssl/mysql-ca.pem")
 
 		cfg, err := Load(Options{})
@@ -394,8 +393,8 @@ func TestLoadMySQL(t *testing.T) {
 		if cfg.MySQLReadWriteConnectionString != dsn || cfg.MySQLOwnerConnectionString != dsn {
 			t.Errorf("MySQL connections = %q, %q, want %q for both", cfg.MySQLReadWriteConnectionString, cfg.MySQLOwnerConnectionString, dsn)
 		}
-		if cfg.MySQLPoolMaxConns != "32" || cfg.MySQLServerCAFile != "/etc/ssl/mysql-ca.pem" {
-			t.Errorf("MySQL tuning = %q, %q", cfg.MySQLPoolMaxConns, cfg.MySQLServerCAFile)
+		if cfg.StorePoolMaxConns != "32" || cfg.MySQLServerCAFile != "/etc/ssl/mysql-ca.pem" {
+			t.Errorf("MySQL tuning = %q, %q", cfg.StorePoolMaxConns, cfg.MySQLServerCAFile)
 		}
 		// Explicitly empty, so the cluster's recorded instance is not adopted
 		// and a leftover proxy sidecar is removed.
@@ -480,14 +479,10 @@ func TestLoadRejectsInvalidStoreBackend(t *testing.T) {
 		{"MySQL with a Cloud SQL GSA", with(mysql, "ATE_API_POSTGRES_CLOUDSQL_GSA", "ate@p.iam.gserviceaccount.com"), "ATE_API_POSTGRES_CLOUDSQL_GSA"},
 		{"MySQL with a PostgreSQL DSN", with(mysql, "ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING", "postgresql://db/atepg"), "ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"},
 		{"MySQL with a PostgreSQL server CA", with(mysql, "ATE_API_POSTGRES_SERVER_CA_FILE", "/ca.pem"), "ATE_API_POSTGRES_SERVER_CA_FILE"},
-		{"MySQL with a zero pool size", with(mysql, "ATE_API_MYSQL_POOL_MAX_CONNS", "0"), "ATE_API_MYSQL_POOL_MAX_CONNS"},
-		{"MySQL with a negative pool size", with(mysql, "ATE_API_MYSQL_POOL_MAX_CONNS", "-1"), "ATE_API_MYSQL_POOL_MAX_CONNS"},
-		{"MySQL with a non-numeric pool size", with(mysql, "ATE_API_MYSQL_POOL_MAX_CONNS", "many"), "ATE_API_MYSQL_POOL_MAX_CONNS"},
-		{"MySQL with an int32 overflow pool size", with(mysql, "ATE_API_MYSQL_POOL_MAX_CONNS", "2147483648"), "ATE_API_MYSQL_POOL_MAX_CONNS"},
-		{"PostgreSQL with a zero pool size", map[string]string{"ATE_API_POSTGRES_POOL_MAX_CONNS": "0"}, "ATE_API_POSTGRES_POOL_MAX_CONNS"},
-		{"PostgreSQL with a negative pool size", map[string]string{"ATE_API_POSTGRES_POOL_MAX_CONNS": "-1"}, "ATE_API_POSTGRES_POOL_MAX_CONNS"},
-		{"PostgreSQL with a non-numeric pool size", map[string]string{"ATE_API_POSTGRES_POOL_MAX_CONNS": "many"}, "ATE_API_POSTGRES_POOL_MAX_CONNS"},
-		{"PostgreSQL with an int32 overflow pool size", map[string]string{"ATE_API_POSTGRES_POOL_MAX_CONNS": "2147483648"}, "ATE_API_POSTGRES_POOL_MAX_CONNS"},
+		{"MySQL with a zero pool size", with(mysql, "ATE_API_STORE_POOL_MAX_CONNS", "0"), "ATE_API_STORE_POOL_MAX_CONNS"},
+		{"negative pool size", map[string]string{"ATE_API_STORE_POOL_MAX_CONNS": "-1"}, "ATE_API_STORE_POOL_MAX_CONNS"},
+		{"non-numeric pool size", map[string]string{"ATE_API_STORE_POOL_MAX_CONNS": "many"}, "ATE_API_STORE_POOL_MAX_CONNS"},
+		{"int32 overflow pool size", map[string]string{"ATE_API_STORE_POOL_MAX_CONNS": "2147483648"}, "ATE_API_STORE_POOL_MAX_CONNS"},
 		{"MySQL with both CA settings", with(with(mysql, "ATE_API_MYSQL_SERVER_CA_FILE", "/ca.pem"), "ATE_API_MYSQL_TLS_CA_FILE", "/run/ca.pem"), "not both"},
 		{"MySQL client certificate without a key", with(mysql, "ATE_API_MYSQL_TLS_CERT_FILE", "/run/cert.pem"), "set together"},
 		{"MySQL client key without a certificate", with(mysql, "ATE_API_MYSQL_TLS_KEY_FILE", "/run/key.pem"), "set together"},

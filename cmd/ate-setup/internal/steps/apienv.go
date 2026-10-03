@@ -109,7 +109,7 @@ func (e *Env) postgresAPIServerEnvVars(ctx context.Context) (configVars, secretV
 	ownerDSN := e.Cfg.PostgresOwnerConnectionString
 	readWriteRole := e.Cfg.PostgresReadWriteRole
 	ownerRole := e.Cfg.PostgresOwnerRole
-	poolMaxConns := e.Cfg.PostgresPoolMaxConns
+	poolMaxConns := e.Cfg.StorePoolMaxConns
 
 	cloudsql, err := e.resolveCloudSQL(ctx)
 	if err != nil {
@@ -162,7 +162,7 @@ func (e *Env) postgresAPIServerEnvVars(ctx context.Context) (configVars, secretV
 			ownerRole = recorded["ATE_API_POSTGRES_OWNER_ROLE"]
 		}
 		if poolMaxConns == "" {
-			poolMaxConns = recorded["ATE_API_POSTGRES_POOL_MAX_CONNS"]
+			poolMaxConns = recorded["ATE_API_STORE_POOL_MAX_CONNS"]
 		}
 		if e.Cfg.PostgresSchema == "" {
 			secret, err := e.Kube.GetSecret(ctx, e.Namespace(), SecretAPIEnvVars)
@@ -178,7 +178,7 @@ func (e *Env) postgresAPIServerEnvVars(ctx context.Context) (configVars, secretV
 	configVars["ATE_API_POSTGRES_READ_WRITE_ROLE"] = readWriteRole
 	configVars["ATE_API_POSTGRES_OWNER_ROLE"] = ownerRole
 	if poolMaxConns != "" {
-		configVars["ATE_API_POSTGRES_POOL_MAX_CONNS"] = poolMaxConns
+		configVars["ATE_API_STORE_POOL_MAX_CONNS"] = poolMaxConns
 	}
 	return configVars, buildAPIServerEnvVars(readWriteDSN, ownerDSN, schema), nil
 }
@@ -209,8 +209,8 @@ func buildAPIServerEnvVars(readWriteDSN, ownerDSN, schema string) map[string]str
 // keys, which prunes any an earlier PostgreSQL install left behind.
 func mysqlAPIServerEnvVars(cfg *config.Config) (configVars, secretVars map[string]string) {
 	configVars = map[string]string{}
-	if cfg.MySQLPoolMaxConns != "" {
-		configVars["ATE_API_MYSQL_POOL_MAX_CONNS"] = cfg.MySQLPoolMaxConns
+	if cfg.StorePoolMaxConns != "" {
+		configVars["ATE_API_STORE_POOL_MAX_CONNS"] = cfg.StorePoolMaxConns
 	}
 	for name, value := range map[string]string{
 		"ATE_API_MYSQL_TLS_CA_FILE":   cfg.MySQLTLSCAFile,
@@ -224,14 +224,10 @@ func mysqlAPIServerEnvVars(cfg *config.Config) (configVars, secretVars map[strin
 	if cfg.MySQLServerCAFile != "" {
 		configVars["ATE_API_MYSQL_TLS_CA_FILE"] = mysqlServerCAPath
 	}
-	ownerDSN := cfg.MySQLOwnerConnectionString
-	if ownerDSN == "" {
-		ownerDSN = cfg.MySQLReadWriteConnectionString
-	}
 	secretVars = map[string]string{
 		envStoreBackend: config.StoreBackendMySQL,
 		"ATE_API_MYSQL_READ_WRITE_CONNECTION_STRING": cfg.MySQLReadWriteConnectionString,
-		"ATE_API_MYSQL_OWNER_CONNECTION_STRING":      ownerDSN,
+		"ATE_API_MYSQL_OWNER_CONNECTION_STRING":      cfg.MySQLOwnerConnectionString,
 	}
 	return configVars, secretVars
 }

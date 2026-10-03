@@ -79,18 +79,17 @@ var (
 
 	authenticationConfigFile          = pflag.String("authentication-config", "", "YAML file configuring trusted JWT providers.")
 	storeBackend                      = pflag.String("store-backend", storeBackendPostgres, "Database backend for Substrate state: postgres or mysql.")
+	storePoolMaxConns                 = pflag.Int32("store-pool-max-conns", 0, "Maximum connections in the shared Substrate and OpenFGA read/write pool of the selected backend. Does not affect the owner or watch pools. When unset, PostgreSQL uses the DSN or pgxpool default and MySQL uses the larger of 4 and the CPU count.")
 	postgresReadWriteConnectionString = pflag.String("postgres-read-write-connection-string", "", "PostgreSQL connection string (libpq DSN or URI).")
 	postgresOwnerConnectionString     = pflag.String("postgres-owner-connection-string", "", "PostgreSQL owner connection string (libpq DSN or URI).")
 	postgresReadWriteRole             = pflag.String("postgres-read-write-role", "", "Required PostgreSQL role assumed by read/write connections.")
 	postgresOwnerRole                 = pflag.String("postgres-owner-role", "", "Required PostgreSQL role assumed by owner connections.")
 	postgresSchema                    = pflag.String("postgres-schema", "substrate", "PostgreSQL schema for Substrate tables. This overrides a search_path connection parameter.")
-	postgresPoolMaxConns              = pflag.Int32("postgres-pool-max-conns", 0, "Maximum connections in the shared Substrate and OpenFGA read/write PostgreSQL pool. Does not affect the owner or watch pools. The DSN or pgx default is used when unset.")
 	mysqlReadWriteConnectionString    = pflag.String("mysql-read-write-connection-string", "", "MySQL connection string (go-sql-driver DSN) naming the Substrate database.")
 	mysqlOwnerConnectionString        = pflag.String("mysql-owner-connection-string", "", "MySQL owner connection string (go-sql-driver DSN).")
 	mysqlTLSCAFile                    = pflag.String("mysql-tls-ca-file", "", "PEM file with the CA that verifies the MySQL server certificate. Empty uses the system roots when TLS is enabled.")
 	mysqlTLSCertFile                  = pflag.String("mysql-tls-cert-file", "", "PEM file with the client certificate presented to MySQL.")
 	mysqlTLSKeyFile                   = pflag.String("mysql-tls-key-file", "", "PEM file with the private key for --mysql-tls-cert-file.")
-	mysqlPoolMaxConns                 = pflag.Int32("mysql-pool-max-conns", 0, "Maximum connections in the shared Substrate and OpenFGA read/write MySQL pool. Does not affect the owner or watch pools. The larger of 4 and the CPU count when unset, as for PostgreSQL.")
 	experimentalEnableAuthz           = pflag.Bool("experimental-enable-authz", false, "Enforce OpenFGA authorization checks on all registered RPCs (experimental). AccessPolicy RPCs are always checked.")
 	// TODO: Move the authz settings into the hot-reloadable config proto
 	// (agent-substrate/substrate#2021) once it lands, so bootstrap owner
@@ -420,25 +419,12 @@ func loadFlagsFromEnv() error {
 	if *storeBackend != storeBackendPostgres && *storeBackend != storeBackendMySQL {
 		return fmt.Errorf("--store-backend must be %q or %q, got %q", storeBackendPostgres, storeBackendMySQL, *storeBackend)
 	}
-	for _, p := range []struct {
-		backend string
-		flag    string
-		env     string
-		value   *int32
-	}{
-		{storeBackendPostgres, "postgres-pool-max-conns", "ATE_API_POSTGRES_POOL_MAX_CONNS", postgresPoolMaxConns},
-		{storeBackendMySQL, "mysql-pool-max-conns", "ATE_API_MYSQL_POOL_MAX_CONNS", mysqlPoolMaxConns},
-	} {
-		if p.backend != *storeBackend || pflag.CommandLine.Changed(p.flag) {
-			continue
+	if raw := os.Getenv("ATE_API_STORE_POOL_MAX_CONNS"); raw != "" && !pflag.CommandLine.Changed("store-pool-max-conns") {
+		value, err := strconv.ParseInt(raw, 10, 32)
+		if err != nil || value <= 0 {
+			return fmt.Errorf("ATE_API_STORE_POOL_MAX_CONNS must be a positive integer")
 		}
-		if raw, ok := os.LookupEnv(p.env); ok && raw != "" {
-			value, err := strconv.ParseInt(raw, 10, 32)
-			if err != nil || value <= 0 {
-				return fmt.Errorf("%s must be a positive integer", p.env)
-			}
-			*p.value = int32(value)
-		}
+		*storePoolMaxConns = int32(value)
 	}
 	if v := os.Getenv("ATE_API_EXPERIMENTAL_ENABLE_AUTHZ"); v != "" && !pflag.CommandLine.Changed("experimental-enable-authz") {
 		*experimentalEnableAuthz = (v == "true" || v == "1")
@@ -452,18 +438,17 @@ func logFlagValues(ctx context.Context) {
 		slog.String("grpc-server-cred-bundle", *grpcServerCredBundle),
 		slog.String("authentication-config", *authenticationConfigFile),
 		slog.String("store-backend", *storeBackend),
+		slog.Int("store-pool-max-conns", int(*storePoolMaxConns)),
 		postgresConnectionAttr("postgres-read-write-connection-string", *postgresReadWriteConnectionString),
 		postgresConnectionAttr("postgres-owner-connection-string", *postgresOwnerConnectionString),
 		slog.String("postgres-read-write-role", *postgresReadWriteRole),
 		slog.String("postgres-owner-role", *postgresOwnerRole),
 		slog.String("postgres-schema", *postgresSchema),
-		slog.Int("postgres-pool-max-conns", int(*postgresPoolMaxConns)),
 		mysqlConnectionAttr("mysql-read-write-connection-string", *mysqlReadWriteConnectionString),
 		mysqlConnectionAttr("mysql-owner-connection-string", *mysqlOwnerConnectionString),
 		slog.String("mysql-tls-ca-file", *mysqlTLSCAFile),
 		slog.String("mysql-tls-cert-file", *mysqlTLSCertFile),
 		slog.String("mysql-tls-key-file", *mysqlTLSKeyFile),
-		slog.Int("mysql-pool-max-conns", int(*mysqlPoolMaxConns)),
 		slog.Bool("experimental-enable-authz", *experimentalEnableAuthz),
 		slog.Any("authz-bootstrap-owners", *authzBootstrapOwners),
 		slog.String("actor-id-jwt-pool", *actorIDJWTPoolFile),
@@ -579,22 +564,18 @@ type connectedStore struct {
 // connectStore connects the backend selected by --store-backend. Startup fails
 // if its configuration is missing or the database can't be reached.
 func connectStore(ctx context.Context) (connectedStore, error) {
-	switch *storeBackend {
-	case storeBackendPostgres:
-		return connectPostgres(ctx)
-	case storeBackendMySQL:
-		return connectMySQL(ctx)
-	default:
-		return connectedStore{}, fmt.Errorf("--store-backend must be %q or %q, got %q", storeBackendPostgres, storeBackendMySQL, *storeBackend)
+	if *storePoolMaxConns < 0 {
+		return connectedStore{}, fmt.Errorf("--store-pool-max-conns must not be negative")
 	}
+	if *storeBackend == storeBackendMySQL {
+		return connectMySQL(ctx)
+	}
+	return connectPostgres(ctx)
 }
 
 func connectPostgres(ctx context.Context) (connectedStore, error) {
 	if *postgresReadWriteConnectionString == "" {
 		return connectedStore{}, fmt.Errorf("--postgres-read-write-connection-string is required")
-	}
-	if *postgresPoolMaxConns < 0 {
-		return connectedStore{}, fmt.Errorf("--postgres-pool-max-conns must not be negative")
 	}
 	persistence, err := connectWithRetries(ctx, "PostgreSQL", atepg.ErrUnavailable, func() (*atepg.Persistence, error) {
 		return atepg.Connect(ctx, atepg.ConnectConfig{
@@ -603,7 +584,7 @@ func connectPostgres(ctx context.Context) (connectedStore, error) {
 			ReadWriteRole: *postgresReadWriteRole,
 			OwnerRole:     *postgresOwnerRole,
 			Schema:        *postgresSchema,
-			PoolMaxConns:  *postgresPoolMaxConns,
+			PoolMaxConns:  *storePoolMaxConns,
 		})
 	})
 	if err != nil {
@@ -617,30 +598,23 @@ func connectMySQL(ctx context.Context) (connectedStore, error) {
 	if *mysqlReadWriteConnectionString == "" {
 		return connectedStore{}, fmt.Errorf("--mysql-read-write-connection-string is required")
 	}
-	if *mysqlPoolMaxConns < 0 {
-		return connectedStore{}, fmt.Errorf("--mysql-pool-max-conns must not be negative")
-	}
 	persistence, err := connectWithRetries(ctx, "MySQL", atemy.ErrUnavailable, func() (*atemy.Persistence, error) {
-		return atemy.Connect(ctx, mysqlConnectConfig())
+		return atemy.Connect(ctx, atemy.ConnectConfig{
+			ReadWriteDSN: *mysqlReadWriteConnectionString,
+			OwnerDSN:     *mysqlOwnerConnectionString,
+			TLS: atemy.TLSFiles{
+				CAFile:   *mysqlTLSCAFile,
+				CertFile: *mysqlTLSCertFile,
+				KeyFile:  *mysqlTLSKeyFile,
+			},
+			PoolMaxConns: *storePoolMaxConns,
+		})
 	})
 	if err != nil {
 		return connectedStore{}, fmt.Errorf("setting up MySQL: %w", err)
 	}
 	db := persistence.DB()
 	return connectedStore{persistence: persistence, authz: authz.MySQLBackend(db), closePool: func() { _ = db.Close() }}, nil
-}
-
-func mysqlConnectConfig() atemy.ConnectConfig {
-	return atemy.ConnectConfig{
-		ReadWriteDSN: *mysqlReadWriteConnectionString,
-		OwnerDSN:     *mysqlOwnerConnectionString,
-		TLS: atemy.TLSFiles{
-			CAFile:   *mysqlTLSCAFile,
-			CertFile: *mysqlTLSCertFile,
-			KeyFile:  *mysqlTLSKeyFile,
-		},
-		PoolMaxConns: *mysqlPoolMaxConns,
-	}
 }
 
 var (

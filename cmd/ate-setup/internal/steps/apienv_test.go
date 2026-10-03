@@ -154,7 +154,7 @@ func TestCreateAPIServerEnvVarsPostgresIdentities(t *testing.T) {
 func TestCreateAPIServerEnvVarsPoolSize(t *testing.T) {
 	cfg := config.Config{
 		PostgresReadWriteConnectionString: "postgres://runtime@postgres/atepg",
-		PostgresPoolMaxConns:              "20",
+		StorePoolMaxConns:                 "20",
 	}
 	e := &Env{Cfg: &cfg, Kube: fakeKube(t,
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: NamespaceAteSystem}},
@@ -172,9 +172,9 @@ func TestCreateAPIServerEnvVarsPoolSize(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cm.Data["ATE_API_POSTGRES_POOL_MAX_CONNS"] != "20" ||
+	if cm.Data["ATE_API_STORE_POOL_MAX_CONNS"] != "20" ||
 		secret.StringData["ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"] != cfg.PostgresReadWriteConnectionString {
-		t.Fatalf("pool size %q, connection %q", cm.Data["ATE_API_POSTGRES_POOL_MAX_CONNS"],
+		t.Fatalf("pool size %q, connection %q", cm.Data["ATE_API_STORE_POOL_MAX_CONNS"],
 			secret.StringData["ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"])
 	}
 }
@@ -212,7 +212,7 @@ func TestCreateAPIServerEnvVarsAdoptsPostgresIdentity(t *testing.T) {
 				PostgresOwnerRoleSet:          true,
 				PostgresOwnerConnectionString: explicitOwnerDSN,
 				PostgresSchema:                "other_schema",
-				PostgresPoolMaxConns:          "30",
+				StorePoolMaxConns:             "30",
 			},
 			wantReadWrite: config.DefaultPostgresReadWriteRole,
 			wantOwner:     config.DefaultPostgresOwnerRole,
@@ -230,7 +230,7 @@ func TestCreateAPIServerEnvVarsAdoptsPostgresIdentity(t *testing.T) {
 						"ATE_API_POSTGRES_CLOUDSQL_INSTANCE": "p:r:i",
 						"ATE_API_POSTGRES_READ_WRITE_ROLE":   "tenant_readwrite",
 						"ATE_API_POSTGRES_OWNER_ROLE":        "tenant_owner",
-						"ATE_API_POSTGRES_POOL_MAX_CONNS":    "20",
+						"ATE_API_STORE_POOL_MAX_CONNS":       "20",
 					},
 				},
 				&corev1.Secret{
@@ -262,13 +262,13 @@ func TestCreateAPIServerEnvVarsAdoptsPostgresIdentity(t *testing.T) {
 			}
 			if cm.Data["ATE_API_POSTGRES_READ_WRITE_ROLE"] != tc.wantReadWrite ||
 				cm.Data["ATE_API_POSTGRES_OWNER_ROLE"] != tc.wantOwner ||
-				cm.Data["ATE_API_POSTGRES_POOL_MAX_CONNS"] != tc.wantPoolSize ||
+				cm.Data["ATE_API_STORE_POOL_MAX_CONNS"] != tc.wantPoolSize ||
 				secret.StringData["ATE_API_POSTGRES_SCHEMA"] != tc.wantSchema ||
 				secret.StringData["ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"] != recordedDSN ||
 				secret.StringData["ATE_API_POSTGRES_OWNER_CONNECTION_STRING"] != tc.wantOwnerDSN {
 				t.Fatalf("identity after redeploy: roles %q/%q, schema %q, pool size %q, connections %q/%q",
 					cm.Data["ATE_API_POSTGRES_READ_WRITE_ROLE"], cm.Data["ATE_API_POSTGRES_OWNER_ROLE"],
-					secret.StringData["ATE_API_POSTGRES_SCHEMA"], cm.Data["ATE_API_POSTGRES_POOL_MAX_CONNS"],
+					secret.StringData["ATE_API_POSTGRES_SCHEMA"], cm.Data["ATE_API_STORE_POOL_MAX_CONNS"],
 					secret.StringData["ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"],
 					secret.StringData["ATE_API_POSTGRES_OWNER_CONNECTION_STRING"])
 			}
@@ -408,7 +408,7 @@ func TestCreateAPIServerEnvVarsMySQL(t *testing.T) {
 		StoreBackendSet:                true,
 		MySQLReadWriteConnectionString: readWriteDSN,
 		MySQLOwnerConnectionString:     readWriteDSN,
-		MySQLPoolMaxConns:              "16",
+		StorePoolMaxConns:              "16",
 		MySQLServerCAFile:              caFile,
 		CloudSQL:                       config.CloudSQLConfig{InstanceSet: true},
 	}
@@ -437,7 +437,7 @@ func TestCreateAPIServerEnvVarsMySQL(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantConfig := map[string]string{
-		"ATE_API_MYSQL_POOL_MAX_CONNS": "16",
+		"ATE_API_STORE_POOL_MAX_CONNS": "16",
 		"ATE_API_MYSQL_TLS_CA_FILE":    mysqlServerCAPath,
 	}
 	for k, v := range wantConfig {

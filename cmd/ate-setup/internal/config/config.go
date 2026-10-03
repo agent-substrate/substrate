@@ -149,6 +149,9 @@ type Config struct {
 	// than defaulted, so that a redeploy that does not name a backend cannot
 	// silently move a MySQL install onto the bundled PostgreSQL.
 	StoreBackendSet bool
+	// StorePoolMaxConns sizes the apiserver's read/write pool for either
+	// backend (ATE_API_STORE_POOL_MAX_CONNS). Empty leaves the backend default.
+	StorePoolMaxConns string
 	// The read/write and owner connections can use different login identities.
 	// With one configured connection, both pools use it. Both empty selects
 	// bundled PostgreSQL.
@@ -163,9 +166,6 @@ type Config struct {
 	// PostgresSchema is the PostgreSQL schema for the Substrate tables
 	// (ATE_API_POSTGRES_SCHEMA). Empty means DefaultPostgresSchema.
 	PostgresSchema string
-	// PostgresPoolMaxConns sizes the apiserver's read/write pool
-	// (ATE_API_POSTGRES_POOL_MAX_CONNS). Empty leaves the DSN or pgxpool default.
-	PostgresPoolMaxConns string
 	// PostgresServerCAFile is a local PEM file holding the server CA of an
 	// external PostgreSQL (ATE_API_POSTGRES_SERVER_CA_FILE). Its contents are
 	// published as the postgres-server-ca Secret, which ate-api-server mounts
@@ -180,10 +180,6 @@ type Config struct {
 	// defaults to the read/write one.
 	MySQLReadWriteConnectionString string
 	MySQLOwnerConnectionString     string
-	// MySQLPoolMaxConns sizes the apiserver's read/write pool
-	// (ATE_API_MYSQL_POOL_MAX_CONNS). Empty leaves the default of the larger of
-	// 4 and the CPU count.
-	MySQLPoolMaxConns string
 	// MySQLServerCAFile is a local PEM file holding the MySQL server CA
 	// (ATE_API_MYSQL_SERVER_CA_FILE). Its contents are published as the
 	// mysql-server-ca Secret, which ate-api-server mounts at
@@ -388,6 +384,7 @@ func Load(opts Options) (*Config, error) {
 		Images:                            loadImageSource(opts, env),
 		StoreBackend:                      firstNonEmpty(env["ATE_API_STORE_BACKEND"], StoreBackendPostgres),
 		StoreBackendSet:                   env["ATE_API_STORE_BACKEND"] != "",
+		StorePoolMaxConns:                 env["ATE_API_STORE_POOL_MAX_CONNS"],
 		PostgresReadWriteConnectionString: readWriteConnectionString,
 		PostgresOwnerConnectionString:     ownerConnectionString,
 		PostgresReadWriteRole:             firstNonEmpty(env["ATE_API_POSTGRES_READ_WRITE_ROLE"], DefaultPostgresReadWriteRole),
@@ -395,7 +392,6 @@ func Load(opts Options) (*Config, error) {
 		PostgresReadWriteRoleSet:          env["ATE_API_POSTGRES_READ_WRITE_ROLE"] != "",
 		PostgresOwnerRoleSet:              env["ATE_API_POSTGRES_OWNER_ROLE"] != "",
 		PostgresSchema:                    env["ATE_API_POSTGRES_SCHEMA"],
-		PostgresPoolMaxConns:              env["ATE_API_POSTGRES_POOL_MAX_CONNS"],
 		PostgresServerCAFile:              env["ATE_API_POSTGRES_SERVER_CA_FILE"],
 		CloudSQL: CloudSQLConfig{
 			Instance:    cloudsqlInstance,
@@ -406,7 +402,6 @@ func Load(opts Options) (*Config, error) {
 		},
 		MySQLReadWriteConnectionString: mysqlReadWriteConnectionString,
 		MySQLOwnerConnectionString:     firstNonEmpty(env["ATE_API_MYSQL_OWNER_CONNECTION_STRING"], mysqlReadWriteConnectionString),
-		MySQLPoolMaxConns:              env["ATE_API_MYSQL_POOL_MAX_CONNS"],
 		MySQLServerCAFile:              env["ATE_API_MYSQL_SERVER_CA_FILE"],
 		MySQLTLSCAFile:                 env["ATE_API_MYSQL_TLS_CA_FILE"],
 		MySQLTLSCertFile:               env["ATE_API_MYSQL_TLS_CERT_FILE"],
@@ -452,21 +447,18 @@ func Load(opts Options) (*Config, error) {
 // sidecar for a database the apiserver no longer uses. An exported but empty
 // ATE_API_POSTGRES_CLOUDSQL_INSTANCE is allowed, since it asks for removal.
 func validateStoreBackend(cfg *Config, env map[string]string) error {
+	if err := validatePoolMaxConns("ATE_API_STORE_POOL_MAX_CONNS", cfg.StorePoolMaxConns); err != nil {
+		return err
+	}
 	var conflictPrefix string
 	switch cfg.StoreBackend {
 	case StoreBackendPostgres:
 		conflictPrefix = "ATE_API_MYSQL_"
-		if err := validatePoolMaxConns("ATE_API_POSTGRES_POOL_MAX_CONNS", cfg.PostgresPoolMaxConns); err != nil {
-			return err
-		}
 	case StoreBackendMySQL:
 		conflictPrefix = "ATE_API_POSTGRES_"
 		if cfg.MySQLReadWriteConnectionString == "" {
 			return fmt.Errorf("ATE_API_STORE_BACKEND=%s requires ATE_API_MYSQL_READ_WRITE_CONNECTION_STRING; "+
 				"there is no bundled MySQL", StoreBackendMySQL)
-		}
-		if err := validatePoolMaxConns("ATE_API_MYSQL_POOL_MAX_CONNS", cfg.MySQLPoolMaxConns); err != nil {
-			return err
 		}
 		if cfg.MySQLServerCAFile != "" && cfg.MySQLTLSCAFile != "" {
 			return fmt.Errorf("set ATE_API_MYSQL_SERVER_CA_FILE (a local file to upload) or ATE_API_MYSQL_TLS_CA_FILE (a path in the pod), not both")
