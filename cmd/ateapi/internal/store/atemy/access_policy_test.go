@@ -27,139 +27,59 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
-func TestGlobalAccessPolicy_Lifecycle(t *testing.T) {
+// TestAccessPolicy_TuplesFollowBindings checks that each policy write leaves
+// the OpenFGA tuples matching the stored bindings.
+func TestAccessPolicy_TuplesFollowBindings(t *testing.T) {
 	p := setupMySQLPersistence(t)
 	ctx := t.Context()
 
-	if _, err := p.GetGlobalAccessPolicy(ctx); !errors.Is(err, store.ErrNotFound) {
-		t.Fatalf("GetGlobalAccessPolicy before create = %v, want ErrNotFound", err)
-	}
-
-	policy := &ateapipb.AccessPolicy{
-		Bindings: []*ateapipb.Binding{
-			{Role: authz.RoleViewer, Members: []string{"user:bob"}},
-			{Role: authz.RoleOwner, Members: []string{"user:alice"}},
-		},
-	}
-	created, err := p.CreateGlobalAccessPolicy(ctx, policy)
+	global, err := p.CreateGlobalAccessPolicy(ctx, &ateapipb.AccessPolicy{Bindings: []*ateapipb.Binding{
+		{Role: authz.RoleViewer, Members: []string{"user:bob"}},
+		{Role: authz.RoleOwner, Members: []string{"user:alice"}},
+	}})
 	if err != nil {
 		t.Fatalf("CreateGlobalAccessPolicy failed: %v", err)
 	}
-	if created.GetMetadata().GetName() != "default" || created.GetMetadata().GetVersion() != 1 || created.GetMetadata().GetUid() == "" {
-		t.Fatalf("unexpected created metadata: %+v", created.GetMetadata())
-	}
-	if diff := cmp.Diff(policy.GetBindings(), created.GetBindings(), protocmp.Transform()); diff != "" {
-		t.Errorf("created bindings (-want +got):\n%s", diff)
-	}
 	if diff := cmp.Diff([]string{"owner user:alice", "viewer user:bob"}, tuplesOn(t, p, "global", "root")); diff != "" {
-		t.Errorf("tuples after create (-want +got):\n%s", diff)
+		t.Errorf("global tuples after create (-want +got):\n%s", diff)
 	}
-
-	if _, err := p.CreateGlobalAccessPolicy(ctx, policy); !errors.Is(err, store.ErrAlreadyExists) {
-		t.Fatalf("second CreateGlobalAccessPolicy = %v, want ErrAlreadyExists", err)
-	}
-
-	got, err := p.GetGlobalAccessPolicy(ctx)
-	if err != nil || !cmp.Equal(got, created, protocmp.Transform()) {
-		t.Fatalf("GetGlobalAccessPolicy = %v, %v; want %v", got, err, created)
-	}
-
-	if _, err := p.UpdateGlobalAccessPolicy(ctx, store.Precondition{}, func(*ateapipb.AccessPolicy) error { return nil }); !errors.Is(err, store.ErrPreconditionRequired) {
-		t.Fatalf("UpdateGlobalAccessPolicy without precondition = %v, want ErrPreconditionRequired", err)
-	}
-	if _, err := p.UpdateGlobalAccessPolicy(ctx, store.Precondition{UID: created.GetMetadata().GetUid(), Version: 99}, func(*ateapipb.AccessPolicy) error { return nil }); !errors.Is(err, store.ErrVersionConflict) {
-		t.Fatalf("UpdateGlobalAccessPolicy wrong version = %v, want ErrVersionConflict", err)
-	}
-	if _, err := p.UpdateGlobalAccessPolicy(ctx, store.Precondition{UID: "wrong-uid", Version: 1}, func(*ateapipb.AccessPolicy) error { return nil }); !errors.Is(err, store.ErrUIDConflict) {
-		t.Fatalf("UpdateGlobalAccessPolicy wrong uid = %v, want ErrUIDConflict", err)
-	}
-
-	updated, err := p.UpdateGlobalAccessPolicy(ctx, store.PreconditionFrom(created), func(toUpdate *ateapipb.AccessPolicy) error {
-		toUpdate.Bindings = []*ateapipb.Binding{
-			{Role: authz.RoleOwner, Members: []string{"user:alice", "user:carol"}},
-		}
+	if _, err := p.UpdateGlobalAccessPolicy(ctx, store.PreconditionFrom(global), func(ap *ateapipb.AccessPolicy) error {
+		ap.Bindings = []*ateapipb.Binding{{Role: authz.RoleOwner, Members: []string{"user:alice", "user:carol"}}}
 		return nil
-	})
-	if err != nil || updated.GetMetadata().GetVersion() != 2 {
-		t.Fatalf("UpdateGlobalAccessPolicy = %v, %v; want version 2", updated, err)
+	}); err != nil {
+		t.Fatalf("UpdateGlobalAccessPolicy failed: %v", err)
 	}
 	if diff := cmp.Diff([]string{"owner user:alice", "owner user:carol"}, tuplesOn(t, p, "global", "root")); diff != "" {
-		t.Errorf("tuples after update (-want +got):\n%s", diff)
+		t.Errorf("global tuples after update (-want +got):\n%s", diff)
 	}
-}
 
-func TestAtespaceAccessPolicy_LifecycleAndCascade(t *testing.T) {
-	p := setupMySQLPersistence(t)
-	ctx := t.Context()
-
-	policy := &ateapipb.AccessPolicy{
-		Bindings: []*ateapipb.Binding{
-			{Role: authz.RoleEditor, Members: []string{"user:bob"}},
-		},
-	}
+	policy := &ateapipb.AccessPolicy{Bindings: []*ateapipb.Binding{{Role: authz.RoleEditor, Members: []string{"user:bob"}}}}
 	if _, err := p.CreateAtespaceAccessPolicy(ctx, "missing-space", policy); !errors.Is(err, store.ErrFailedPrecondition) {
 		t.Fatalf("CreateAtespaceAccessPolicy on missing atespace = %v, want ErrFailedPrecondition", err)
 	}
 	if got := atespaceTuples(t, p, "missing-space"); len(got) != 0 {
-		t.Fatalf("refused CreateAtespaceAccessPolicy left tuples %q", got)
+		t.Errorf("refused CreateAtespaceAccessPolicy left tuples %q", got)
 	}
-
 	createTestAtespace(t, p, "team-a")
-	if _, err := p.GetAtespaceAccessPolicy(ctx, "team-a"); !errors.Is(err, store.ErrNotFound) {
-		t.Fatalf("GetAtespaceAccessPolicy before create = %v, want ErrNotFound", err)
-	}
-
 	created, err := p.CreateAtespaceAccessPolicy(ctx, "team-a", policy)
 	if err != nil {
 		t.Fatalf("CreateAtespaceAccessPolicy failed: %v", err)
 	}
-	if _, err := p.CreateAtespaceAccessPolicy(ctx, "team-a", policy); !errors.Is(err, store.ErrAlreadyExists) {
-		t.Fatalf("second CreateAtespaceAccessPolicy = %v, want ErrAlreadyExists", err)
-	}
-
-	updated, err := p.UpdateAtespaceAccessPolicy(ctx, "team-a", store.PreconditionFrom(created), func(toUpdate *ateapipb.AccessPolicy) error {
-		toUpdate.Bindings = []*ateapipb.Binding{
-			{Role: authz.RoleViewer, Members: []string{"user:dave"}},
-		}
+	updated, err := p.UpdateAtespaceAccessPolicy(ctx, "team-a", store.PreconditionFrom(created), func(ap *ateapipb.AccessPolicy) error {
+		ap.Bindings = []*ateapipb.Binding{{Role: authz.RoleViewer, Members: []string{"user:dave"}}}
 		return nil
 	})
-	if err != nil || updated.GetMetadata().GetVersion() != 2 {
-		t.Fatalf("UpdateAtespaceAccessPolicy = %v, %v; want version 2", updated, err)
+	if err != nil {
+		t.Fatalf("UpdateAtespaceAccessPolicy failed: %v", err)
 	}
 	if diff := cmp.Diff([]string{"viewer user:dave"}, atespaceTuples(t, p, "team-a")); diff != "" {
-		t.Errorf("tuples after update (-want +got):\n%s", diff)
+		t.Errorf("atespace tuples after update (-want +got):\n%s", diff)
 	}
-
-	if _, err := p.DeleteAtespaceAccessPolicy(ctx, "team-a", store.DeletePreconditions{Version: 99}); !errors.Is(err, store.ErrVersionConflict) {
-		t.Fatalf("DeleteAtespaceAccessPolicy wrong version = %v, want ErrVersionConflict", err)
-	}
-	if _, err := p.DeleteAtespaceAccessPolicy(ctx, "team-a", store.DeletePreconditions{UID: "wrong-uid"}); !errors.Is(err, store.ErrUIDConflict) {
-		t.Fatalf("DeleteAtespaceAccessPolicy wrong uid = %v, want ErrUIDConflict", err)
-	}
-
-	deleted, err := p.DeleteAtespaceAccessPolicy(ctx, "team-a", store.DeletePreconditions{
-		UID:     updated.GetMetadata().GetUid(),
-		Version: updated.GetMetadata().GetVersion(),
-	})
-	if err != nil || !cmp.Equal(deleted, updated, protocmp.Transform()) {
-		t.Fatalf("DeleteAtespaceAccessPolicy = %v, %v; want %v", deleted, err, updated)
-	}
-	if _, err := p.GetAtespaceAccessPolicy(ctx, "team-a"); !errors.Is(err, store.ErrNotFound) {
-		t.Fatalf("GetAtespaceAccessPolicy after delete = %v, want ErrNotFound", err)
+	if _, err := p.DeleteAtespaceAccessPolicy(ctx, "team-a", store.DeletePreconditions{UID: updated.GetMetadata().GetUid()}); err != nil {
+		t.Fatalf("DeleteAtespaceAccessPolicy failed: %v", err)
 	}
 	if got := atespaceTuples(t, p, "team-a"); len(got) != 0 {
-		t.Fatalf("tuples after DeleteAtespaceAccessPolicy = %q, want none", got)
-	}
-
-	// Recreate the policy and verify DeleteAtespace removes it.
-	if _, err := p.CreateAtespaceAccessPolicy(ctx, "team-a", policy); err != nil {
-		t.Fatalf("re-creating access policy failed: %v", err)
-	}
-	if _, err := p.DeleteAtespace(ctx, "team-a", store.DeletePreconditions{}); err != nil {
-		t.Fatalf("DeleteAtespace failed: %v", err)
-	}
-	if _, err := p.GetAtespaceAccessPolicy(ctx, "team-a"); !errors.Is(err, store.ErrNotFound) {
-		t.Fatalf("GetAtespaceAccessPolicy after DeleteAtespace = %v, want ErrNotFound", err)
+		t.Errorf("tuples after DeleteAtespaceAccessPolicy = %q, want none", got)
 	}
 }
 

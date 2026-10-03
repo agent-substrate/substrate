@@ -31,56 +31,45 @@ func newTestWorker(name string) *ateapipb.Worker {
 	}
 }
 
-// TestSaveWorker_RejectsAStaleWrite proves the precondition saveWorker states
-// on top of the row lock its callers hold: a Worker read before someone else
-// wrote it cannot overwrite that write.
-func TestSaveWorker_RejectsAStaleWrite(t *testing.T) {
-	p := setupMySQLPersistence(t)
-	ctx := t.Context()
+// saveWorker checks the stored version on top of the row lock its callers
+// hold, so a Worker read before another write, or before a delete, cannot
+// overwrite the row.
+func TestSaveWorker_RejectsAStaleCopy(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		after func(*testing.T, *Persistence, *ateapipb.Worker)
+	}{
+		{"updated since read", func(t *testing.T, p *Persistence, w *ateapipb.Worker) {
+			if _, err := p.UpdateWorker(t.Context(), w.GetMetadata().GetName(), store.PreconditionFrom(w), func(toUpdate *ateapipb.Worker) error {
+				toUpdate.Ips = []string{"10.0.0.1"}
+				return nil
+			}); err != nil {
+				t.Fatalf("UpdateWorker failed: %v", err)
+			}
+		}},
+		{"deleted since read", func(t *testing.T, p *Persistence, w *ateapipb.Worker) {
+			if _, err := p.DeleteWorker(t.Context(), w.GetMetadata().GetName(), store.DeletePreconditions{}); err != nil {
+				t.Fatalf("DeleteWorker failed: %v", err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := setupMySQLPersistence(t)
+			ctx := t.Context()
+			created, err := p.CreateWorker(ctx, newTestWorker("stale-worker"))
+			if err != nil {
+				t.Fatalf("CreateWorker failed: %v", err)
+			}
+			tc.after(t, p, created)
 
-	created, err := p.CreateWorker(ctx, newTestWorker("stale-write-worker"))
-	if err != nil {
-		t.Fatalf("CreateWorker failed: %v", err)
-	}
-
-	// Move the stored Worker on, so the copy above is a version behind.
-	if _, err := p.UpdateWorker(ctx, created.GetMetadata().GetName(), store.PreconditionFrom(created), func(toUpdate *ateapipb.Worker) error {
-		toUpdate.Ips = []string{"10.0.0.1"}
-		return nil
-	}); err != nil {
-		t.Fatalf("UpdateWorker failed: %v", err)
-	}
-
-	tx, err := p.db.BeginTx(ctx, nil)
-	if err != nil {
-		t.Fatalf("BeginTx failed: %v", err)
-	}
-	defer tx.Rollback() //nolint:errcheck // never committed
-	if err := saveWorker(ctx, tx, created); !errors.Is(err, store.ErrVersionConflict) {
-		t.Errorf("saveWorker() with a stale Worker = %v, want ErrVersionConflict", err)
-	}
-}
-
-// TestSaveWorker_RejectsAVanishedWorker keeps a deleted row from being an
-// update of nothing.
-func TestSaveWorker_RejectsAVanishedWorker(t *testing.T) {
-	p := setupMySQLPersistence(t)
-	ctx := t.Context()
-
-	created, err := p.CreateWorker(ctx, newTestWorker("vanished-worker"))
-	if err != nil {
-		t.Fatalf("CreateWorker failed: %v", err)
-	}
-	if _, err := p.DeleteWorker(ctx, created.GetMetadata().GetName(), store.DeletePreconditions{}); err != nil {
-		t.Fatalf("DeleteWorker failed: %v", err)
-	}
-
-	tx, err := p.db.BeginTx(ctx, nil)
-	if err != nil {
-		t.Fatalf("BeginTx failed: %v", err)
-	}
-	defer tx.Rollback() //nolint:errcheck // never committed
-	if err := saveWorker(ctx, tx, created); !errors.Is(err, store.ErrVersionConflict) {
-		t.Errorf("saveWorker() on a deleted Worker = %v, want ErrVersionConflict", err)
+			tx, err := p.db.BeginTx(ctx, nil)
+			if err != nil {
+				t.Fatalf("BeginTx failed: %v", err)
+			}
+			defer tx.Rollback() //nolint:errcheck // never committed
+			if err := saveWorker(ctx, tx, created); !errors.Is(err, store.ErrVersionConflict) {
+				t.Errorf("saveWorker() = %v, want ErrVersionConflict", err)
+			}
+		})
 	}
 }

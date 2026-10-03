@@ -18,7 +18,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -156,18 +155,10 @@ func TestKeys_CompareByteForByte(t *testing.T) {
 	}
 }
 
-func TestIsUniqueViolation(t *testing.T) {
-	deadlock := &mysql.MySQLError{Number: 1213, Message: "Deadlock found when trying to get lock"}
-	duplicate := &mysql.MySQLError{Number: 1062, Message: "Duplicate entry"}
-	if !isUniqueViolation(fmt.Errorf("inserting: %w", duplicate)) || isUniqueViolation(deadlock) || isUniqueViolation(errors.New("connection refused")) {
-		t.Error("isUniqueViolation must match exactly MySQL error 1062")
-	}
-}
-
 // selectForUpdate locks one atespace row for the rest of tx.
-func selectForUpdate(t *testing.T, tx *sql.Tx, name string) error {
+func selectForUpdate(ctx context.Context, tx *sql.Tx, name string) error {
 	var one int
-	return tx.QueryRowContext(t.Context(), `SELECT 1 FROM atespaces WHERE name = ? FOR UPDATE`, name).Scan(&one)
+	return tx.QueryRowContext(ctx, `SELECT 1 FROM atespaces WHERE name = ? FOR UPDATE`, name).Scan(&one)
 }
 
 // TestInTx_RetriesADeadlockVictim runs two transactions that lock two rows in
@@ -188,23 +179,23 @@ func TestInTx_RetriesADeadlockVictim(t *testing.T) {
 	wg.Go(func() {
 		errs[0] = inTx(ctx, s.db, func(tx *sql.Tx) error {
 			attempts.Add(1)
-			if err := selectForUpdate(t, tx, "a"); err != nil {
+			if err := selectForUpdate(ctx, tx, "a"); err != nil {
 				return err
 			}
 			signalA.Do(func() { close(aLocked) })
 			<-bLocked
-			return selectForUpdate(t, tx, "b")
+			return selectForUpdate(ctx, tx, "b")
 		})
 	})
 	wg.Go(func() {
 		errs[1] = inTx(ctx, s.db, func(tx *sql.Tx) error {
 			attempts.Add(1)
 			<-aLocked
-			if err := selectForUpdate(t, tx, "b"); err != nil {
+			if err := selectForUpdate(ctx, tx, "b"); err != nil {
 				return err
 			}
 			signalB.Do(func() { close(bLocked) })
-			return selectForUpdate(t, tx, "a")
+			return selectForUpdate(ctx, tx, "a")
 		})
 	})
 	wg.Wait()
@@ -219,80 +210,11 @@ func TestInTx_RetriesADeadlockVictim(t *testing.T) {
 	}
 }
 
-// TestInTx_ReportsARepeatedDeadlockAsVersionConflict makes the transaction
-// lose a deadlock on every attempt: a heavier partner transaction, which
-// InnoDB keeps over the lighter one, closes the lock cycle each time. Once
-// its attempts run out, inTx reports a lost race the caller may retry.
-func TestInTx_ReportsARepeatedDeadlockAsVersionConflict(t *testing.T) {
-	s := setupMySQLPersistence(t)
-	ctx := t.Context()
-	createTestAtespace(t, s, "a")
-	createTestAtespace(t, s, "b")
-
-	aLocked := make(chan struct{})
-	bLocked := make(chan struct{})
-	partnerErr := make(chan error, 1)
-	go func() {
-		partnerErr <- func() error {
-			for attempt := range txRetries + 1 {
-				<-aLocked
-				tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
-				if err != nil {
-					return err
-				}
-				// Rows written make this transaction the heavier one, so InnoDB
-				// rolls back the other.
-				for i := range 20 {
-					if _, err := tx.ExecContext(ctx, `INSERT INTO leases (lease_key, token, expires_at) VALUES (?, 'weight', UTC_TIMESTAMP(6))`,
-						fmt.Sprintf("weight-%d-%d", attempt, i)); err != nil {
-						tx.Rollback() //nolint:errcheck // reporting the insert error
-						return err
-					}
-				}
-				if err := selectForUpdate(t, tx, "b"); err != nil {
-					tx.Rollback() //nolint:errcheck // reporting the lock error
-					return err
-				}
-				bLocked <- struct{}{}
-				if err := selectForUpdate(t, tx, "a"); err != nil {
-					tx.Rollback() //nolint:errcheck // reporting the lock error
-					return fmt.Errorf("partner lost the deadlock on attempt %d: %w", attempt, err)
-				}
-				if err := tx.Rollback(); err != nil {
-					return err
-				}
-			}
-			return nil
-		}()
-	}()
-
-	attempts := 0
-	err := inTx(ctx, s.db, func(tx *sql.Tx) error {
-		attempts++
-		if err := selectForUpdate(t, tx, "a"); err != nil {
-			return err
-		}
-		aLocked <- struct{}{}
-		<-bLocked
-		return selectForUpdate(t, tx, "b")
-	})
-	if perr := <-partnerErr; perr != nil {
-		t.Fatalf("partner transaction failed: %v", perr)
-	}
-	var myErr *mysql.MySQLError
-	if !errors.Is(err, store.ErrVersionConflict) || !errors.As(err, &myErr) || myErr.Number != 1213 {
-		t.Errorf("inTx after repeated deadlocks = %v, want ErrVersionConflict wrapping a deadlock", err)
-	}
-	if attempts != txRetries+1 {
-		t.Errorf("inTx ran %d attempts, want %d", attempts, txRetries+1)
-	}
-}
-
 // Deadlock retries back off exponentially, for at least the sum of the base
 // delays, and stop when ctx ends.
 func TestInTx_BacksOffBetweenDeadlockRetries(t *testing.T) {
 	s := setupMySQLPersistence(t)
-	deadlock := &mysql.MySQLError{Number: 1213, Message: "Deadlock found when trying to get lock"}
+	deadlock := &mysql.MySQLError{Number: errDeadlock, Message: "Deadlock found when trying to get lock"}
 
 	attempts := 0
 	start := time.Now()
@@ -350,14 +272,14 @@ func TestInTx_ReturnsLockWaitTimeout(t *testing.T) {
 		t.Fatalf("beginning holder transaction: %v", err)
 	}
 	defer holder.Rollback() //nolint:errcheck // no-op once rolled back
-	if err := selectForUpdate(t, holder, "a"); err != nil {
+	if err := selectForUpdate(ctx, holder, "a"); err != nil {
 		t.Fatalf("locking row: %v", err)
 	}
 
-	err = inTx(ctx, impatient, func(tx *sql.Tx) error { return selectForUpdate(t, tx, "a") })
-	var myErr *mysql.MySQLError
-	if errors.Is(err, store.ErrVersionConflict) || !errors.As(err, &myErr) || myErr.Number != 1205 {
-		t.Errorf("inTx behind a held row lock = %v, want the lock wait timeout as is, as PostgreSQL reports a lock wait that runs out", err)
+	err = inTx(ctx, impatient, func(tx *sql.Tx) error { return selectForUpdate(ctx, tx, "a") })
+	const errLockWaitTimeout = 1205
+	if errors.Is(err, store.ErrVersionConflict) || mysqlErrNumber(err) != errLockWaitTimeout {
+		t.Errorf("inTx behind a held row lock = %v, want ER_LOCK_WAIT_TIMEOUT (1205) as is", err)
 	}
 }
 

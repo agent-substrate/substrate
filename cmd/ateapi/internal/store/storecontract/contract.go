@@ -35,6 +35,7 @@ import (
 	"google.golang.org/protobuf/testing/protocmp"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/authz"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -212,6 +213,7 @@ func RunContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
 	runLeaseContractTests(t, setup)
 	runListOptionsContractTests(t, setup)
 	runUnknownFieldContractTests(t, setup)
+	runAccessPolicyContractTests(t, setup)
 }
 
 func runEgressPolicyContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
@@ -508,6 +510,19 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 		}
 	})
 
+	t.Run("CreateActor_UnknownAtespace", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+
+		actor := newTestSuspendedActor("team-missing", "session-1")
+		if _, err := s.CreateActor(ctx, actor); !errors.Is(err, store.ErrFailedPrecondition) {
+			t.Errorf("CreateActor in an unknown atespace = %v, want ErrFailedPrecondition", err)
+		}
+		if _, err := s.GetActor(ctx, resources.ActorRefFromActor(actor)); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("GetActor after a refused create = %v, want ErrNotFound", err)
+		}
+	})
+
 	t.Run("UpdateActor_Success", func(t *testing.T) {
 		s := setup(t)
 		ctx := context.Background()
@@ -738,6 +753,51 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 					t.Errorf("UpdateActor error = %v, want one matching store.ErrPreconditionRequired", err)
 				}
 			})
+		}
+	})
+
+	// A write that lands while mutate runs fails the outer update without
+	// retrying it, and the concurrent write survives.
+	t.Run("UpdateActor_ConcurrentWrite", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		mustCreateAtespace(t, s, testAtespace)
+		created, err := s.CreateActor(ctx, newTestSuspendedActor(testAtespace, "session-1"))
+		if err != nil {
+			t.Fatalf("CreateActor failed: %v", err)
+		}
+		actorRef := resources.ActorRefFromActor(created)
+
+		mutations := 0
+		_, err = s.UpdateActor(ctx, actorRef, store.PreconditionFrom(created), func(toUpdate *ateapipb.Actor) error {
+			mutations++
+			if _, err := s.UpdateActor(ctx, actorRef, store.PreconditionFrom(created), func(concurrent *ateapipb.Actor) error {
+				concurrent.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}}
+				return nil
+			}); err != nil {
+				return fmt.Errorf("concurrent actor update: %w", err)
+			}
+			toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
+			return nil
+		})
+		if !errors.Is(err, store.ErrVersionConflict) {
+			t.Fatalf("UpdateActor error = %v, want ErrVersionConflict", err)
+		}
+		if mutations != 1 {
+			t.Errorf("mutation ran %d times, want 1", mutations)
+		}
+		stored, err := s.GetActor(ctx, actorRef)
+		if err != nil {
+			t.Fatalf("GetActor failed: %v", err)
+		}
+		if stored.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+			t.Errorf("state = %v, want SUSPENDED: losing update was persisted", stored.GetStatus().GetState())
+		}
+		if got := stored.GetWorkerSelector().GetMatchLabels()["tier"]; got != "paid" {
+			t.Errorf("worker selector tier = %q, want paid", got)
+		}
+		if got, want := stored.GetMetadata().GetVersion(), created.GetMetadata().GetVersion()+1; got != want {
+			t.Errorf("version = %d, want %d", got, want)
 		}
 	})
 
@@ -982,6 +1042,16 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 			t.Errorf("ListActors(all) = %v, want exactly {a1, a2, b1}", got)
 		}
 
+		teamAPage, err := s.ListActors(ctx, "team-a", store.ListOptions{PageSize: 1})
+		if err != nil || teamAPage.NextPageToken == "" {
+			t.Fatalf("ListActors(team-a, PageSize 1) = %v, %v; want a next page token", teamAPage, err)
+		}
+		for _, scope := range []string{"team-b", ""} {
+			if _, err := s.ListActors(ctx, scope, store.ListOptions{PageSize: 1, PageToken: teamAPage.NextPageToken}); !errors.Is(err, store.ErrInvalidPageToken) {
+				t.Errorf("ListActors(%q) with a team-a page token = %v, want ErrInvalidPageToken", scope, err)
+			}
+		}
+
 		if _, err := s.GetActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "a1"}); err != nil {
 			t.Errorf("GetActor(team-a, a1) failed: %v", err)
 		}
@@ -1121,6 +1191,88 @@ func runActorTemplateContractTests(t *testing.T, setup func(t *testing.T) store.
 					t.Errorf("UpdateActorTemplate error = %v, want one matching store.ErrPreconditionRequired", err)
 				}
 			})
+		}
+	})
+
+	t.Run("UpdateActorTemplate_ConcurrentWrite", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		mustCreateAtespace(t, s, "team-a")
+		created, err := s.CreateActorTemplate(ctx, newTestActorTemplate("team-a", "tmpl-a"))
+		if err != nil {
+			t.Fatalf("CreateActorTemplate failed: %v", err)
+		}
+		templateRef := resources.ActorTemplateRef{Atespace: "team-a", Name: "tmpl-a"}
+
+		mutations := 0
+		_, err = s.UpdateActorTemplate(ctx, templateRef, store.PreconditionFrom(created), func(toUpdate *ateapipb.ActorTemplate) error {
+			mutations++
+			if _, err := s.UpdateActorTemplate(ctx, templateRef, store.PreconditionFrom(created), func(concurrent *ateapipb.ActorTemplate) error {
+				concurrent.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}}
+				return nil
+			}); err != nil {
+				return fmt.Errorf("concurrent actor template update: %w", err)
+			}
+			toUpdate.Status = &ateapipb.ActorTemplateStatus{GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
+				ErrorMessage: "LosingUpdate",
+			}}
+			return nil
+		})
+		if !errors.Is(err, store.ErrVersionConflict) {
+			t.Fatalf("UpdateActorTemplate error = %v, want ErrVersionConflict", err)
+		}
+		if mutations != 1 {
+			t.Errorf("mutation ran %d times, want 1", mutations)
+		}
+		stored, err := s.GetActorTemplate(ctx, templateRef)
+		if err != nil {
+			t.Fatalf("GetActorTemplate failed: %v", err)
+		}
+		if got := stored.GetWorkerSelector().GetMatchLabels()["tier"]; got != "paid" {
+			t.Errorf("worker selector tier = %q, want paid", got)
+		}
+		if got := stored.GetStatus().GetGoldenSnapshotStatus().GetErrorMessage(); got != "" {
+			t.Errorf("status error message = %q, want empty: losing update was persisted", got)
+		}
+	})
+
+	t.Run("ActorTemplate_BackfillsSnapshotConfigDefaults", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		mustCreateAtespace(t, s, "team-a")
+		input := newTestActorTemplate("team-a", "tmpl-a")
+		input.SnapshotConfig = &ateapipb.SnapshotConfig{}
+		if _, err := s.CreateActorTemplate(ctx, input); err != nil {
+			t.Fatalf("CreateActorTemplate failed: %v", err)
+		}
+
+		want := &ateapipb.SnapshotConfig{
+			OnPause:  ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+			OnCommit: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+		}
+		got, err := s.GetActorTemplate(ctx, resources.ActorTemplateRef{Atespace: "team-a", Name: "tmpl-a"})
+		if err != nil {
+			t.Fatalf("GetActorTemplate failed: %v", err)
+		}
+		if diff := cmp.Diff(want, got.GetSnapshotConfig(), protocmp.Transform()); diff != "" {
+			t.Errorf("GetActorTemplate snapshot_config (-want +got):\n%s", diff)
+		}
+		page, err := s.ListActorTemplates(ctx, "team-a", store.ListOptions{PageSize: 10})
+		if err != nil {
+			t.Fatalf("ListActorTemplates failed: %v", err)
+		}
+		if len(page.Items) != 1 {
+			t.Fatalf("ListActorTemplates returned %d items, want 1", len(page.Items))
+		}
+		if diff := cmp.Diff(want, page.Items[0].GetSnapshotConfig(), protocmp.Transform()); diff != "" {
+			t.Errorf("ListActorTemplates snapshot_config (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("CreateActorTemplate_UnknownAtespace", func(t *testing.T) {
+		s := setup(t)
+		if _, err := s.CreateActorTemplate(context.Background(), newTestActorTemplate("team-missing", "tmpl-a")); !errors.Is(err, store.ErrFailedPrecondition) {
+			t.Errorf("CreateActorTemplate in an unknown atespace = %v, want ErrFailedPrecondition", err)
 		}
 	})
 
@@ -1446,6 +1598,41 @@ func runTagContractTests(t *testing.T, setup func(t *testing.T) store.Interface)
 					t.Errorf("UpdateTag error = %v, want one matching store.ErrPreconditionRequired", err)
 				}
 			})
+		}
+	})
+
+	// Deleting and recreating a tag under a running update must fail the
+	// update on the new incarnation rather than overwrite it.
+	t.Run("UpdateTag_DeleteRecreateConflict", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		actor := seedSuspendedActor(t, s, "team-a", "actor-1")
+		original := storeTag(t, s, newTestInProgressTag("production", actor))
+		tagRef := resources.TagRefFromTag(original)
+
+		mutations := 0
+		var recreated *ateapipb.Tag
+		_, err := s.UpdateTag(ctx, tagRef, store.PreconditionFrom(original), func(toUpdate *ateapipb.Tag) error {
+			mutations++
+			if _, err := s.DeleteTag(ctx, tagRef, store.DeletePreconditions{}); err != nil {
+				return fmt.Errorf("deleting original tag: %w", err)
+			}
+			recreated = storeTag(t, s, newTestInProgressTag("production", actor))
+			toUpdate.Scope = ateapipb.TagScope_TAG_SCOPE_PUBLISHED
+			return nil
+		})
+		if !errors.Is(err, store.ErrVersionConflict) {
+			t.Fatalf("UpdateTag error = %v, want ErrVersionConflict", err)
+		}
+		if mutations != 1 {
+			t.Errorf("guarded mutation ran %d times, want 1", mutations)
+		}
+		stored, err := s.GetTag(ctx, tagRef)
+		if err != nil {
+			t.Fatalf("GetTag failed: %v", err)
+		}
+		if diff := cmp.Diff(recreated, stored, protocmp.Transform()); diff != "" {
+			t.Errorf("recreated tag was overwritten (-want +got):\n%s", diff)
 		}
 	})
 
@@ -3363,5 +3550,127 @@ func runUnknownFieldContractTests(t *testing.T, setup func(t *testing.T) store.I
 			t.Fatalf("DeleteWorker failed: %v", err)
 		}
 		assertPruned(t, "DeleteWorker", created, deleted)
+	})
+}
+
+func runAccessPolicyContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
+	t.Helper()
+
+	t.Run("GlobalAccessPolicy_Lifecycle", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+
+		if _, err := s.GetGlobalAccessPolicy(ctx); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("GetGlobalAccessPolicy before create = %v, want ErrNotFound", err)
+		}
+
+		policy := &ateapipb.AccessPolicy{
+			Bindings: []*ateapipb.Binding{
+				{Role: authz.RoleViewer, Members: []string{"user:bob"}},
+				{Role: authz.RoleOwner, Members: []string{"user:alice"}},
+			},
+		}
+		created, err := s.CreateGlobalAccessPolicy(ctx, policy)
+		if err != nil {
+			t.Fatalf("CreateGlobalAccessPolicy failed: %v", err)
+		}
+		if created.GetMetadata().GetName() != "default" || created.GetMetadata().GetVersion() != 1 || created.GetMetadata().GetUid() == "" {
+			t.Fatalf("unexpected created metadata: %+v", created.GetMetadata())
+		}
+		if diff := cmp.Diff(policy.GetBindings(), created.GetBindings(), protocmp.Transform()); diff != "" {
+			t.Errorf("created bindings (-want +got):\n%s", diff)
+		}
+		if _, err := s.CreateGlobalAccessPolicy(ctx, policy); !errors.Is(err, store.ErrAlreadyExists) {
+			t.Fatalf("second CreateGlobalAccessPolicy = %v, want ErrAlreadyExists", err)
+		}
+		got, err := s.GetGlobalAccessPolicy(ctx)
+		if err != nil || !cmp.Equal(got, created, protocmp.Transform()) {
+			t.Fatalf("GetGlobalAccessPolicy = %v, %v; want %v", got, err, created)
+		}
+
+		noop := func(*ateapipb.AccessPolicy) error { return nil }
+		if _, err := s.UpdateGlobalAccessPolicy(ctx, store.Precondition{}, noop); !errors.Is(err, store.ErrPreconditionRequired) {
+			t.Fatalf("UpdateGlobalAccessPolicy without precondition = %v, want ErrPreconditionRequired", err)
+		}
+		if _, err := s.UpdateGlobalAccessPolicy(ctx, store.Precondition{UID: created.GetMetadata().GetUid(), Version: 99}, noop); !errors.Is(err, store.ErrVersionConflict) {
+			t.Fatalf("UpdateGlobalAccessPolicy wrong version = %v, want ErrVersionConflict", err)
+		}
+		if _, err := s.UpdateGlobalAccessPolicy(ctx, store.Precondition{UID: foreignUID, Version: 1}, noop); !errors.Is(err, store.ErrUIDConflict) {
+			t.Fatalf("UpdateGlobalAccessPolicy wrong uid = %v, want ErrUIDConflict", err)
+		}
+
+		updated, err := s.UpdateGlobalAccessPolicy(ctx, store.PreconditionFrom(created), func(toUpdate *ateapipb.AccessPolicy) error {
+			toUpdate.Bindings = []*ateapipb.Binding{
+				{Role: authz.RoleOwner, Members: []string{"user:alice", "user:carol"}},
+			}
+			return nil
+		})
+		if err != nil || updated.GetMetadata().GetVersion() != 2 {
+			t.Fatalf("UpdateGlobalAccessPolicy = %v, %v; want version 2", updated, err)
+		}
+	})
+
+	t.Run("AtespaceAccessPolicy_LifecycleAndCascade", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+
+		policy := &ateapipb.AccessPolicy{
+			Bindings: []*ateapipb.Binding{
+				{Role: authz.RoleEditor, Members: []string{"user:bob"}},
+			},
+		}
+		if _, err := s.CreateAtespaceAccessPolicy(ctx, "team-missing", policy); !errors.Is(err, store.ErrFailedPrecondition) {
+			t.Fatalf("CreateAtespaceAccessPolicy on missing atespace = %v, want ErrFailedPrecondition", err)
+		}
+
+		mustCreateAtespace(t, s, "team-a")
+		if _, err := s.GetAtespaceAccessPolicy(ctx, "team-a"); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("GetAtespaceAccessPolicy before create = %v, want ErrNotFound", err)
+		}
+		created, err := s.CreateAtespaceAccessPolicy(ctx, "team-a", policy)
+		if err != nil {
+			t.Fatalf("CreateAtespaceAccessPolicy failed: %v", err)
+		}
+		if _, err := s.CreateAtespaceAccessPolicy(ctx, "team-a", policy); !errors.Is(err, store.ErrAlreadyExists) {
+			t.Fatalf("second CreateAtespaceAccessPolicy = %v, want ErrAlreadyExists", err)
+		}
+
+		updated, err := s.UpdateAtespaceAccessPolicy(ctx, "team-a", store.PreconditionFrom(created), func(toUpdate *ateapipb.AccessPolicy) error {
+			toUpdate.Bindings = []*ateapipb.Binding{
+				{Role: authz.RoleViewer, Members: []string{"user:dave"}},
+			}
+			return nil
+		})
+		if err != nil || updated.GetMetadata().GetVersion() != 2 {
+			t.Fatalf("UpdateAtespaceAccessPolicy = %v, %v; want version 2", updated, err)
+		}
+
+		if _, err := s.DeleteAtespaceAccessPolicy(ctx, "team-a", store.DeletePreconditions{Version: 99}); !errors.Is(err, store.ErrVersionConflict) {
+			t.Fatalf("DeleteAtespaceAccessPolicy wrong version = %v, want ErrVersionConflict", err)
+		}
+		if _, err := s.DeleteAtespaceAccessPolicy(ctx, "team-a", store.DeletePreconditions{UID: foreignUID}); !errors.Is(err, store.ErrUIDConflict) {
+			t.Fatalf("DeleteAtespaceAccessPolicy wrong uid = %v, want ErrUIDConflict", err)
+		}
+		deleted, err := s.DeleteAtespaceAccessPolicy(ctx, "team-a", store.DeletePreconditions{
+			UID:     updated.GetMetadata().GetUid(),
+			Version: updated.GetMetadata().GetVersion(),
+		})
+		if err != nil || !cmp.Equal(deleted, updated, protocmp.Transform()) {
+			t.Fatalf("DeleteAtespaceAccessPolicy = %v, %v; want %v", deleted, err, updated)
+		}
+		if _, err := s.GetAtespaceAccessPolicy(ctx, "team-a"); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("GetAtespaceAccessPolicy after delete = %v, want ErrNotFound", err)
+		}
+
+		// An access policy does not block its atespace's deletion; it goes with it.
+		if _, err := s.CreateAtespaceAccessPolicy(ctx, "team-a", policy); err != nil {
+			t.Fatalf("re-creating access policy failed: %v", err)
+		}
+		if _, err := s.DeleteAtespace(ctx, "team-a", store.DeletePreconditions{}); err != nil {
+			t.Fatalf("DeleteAtespace failed: %v", err)
+		}
+		if _, err := s.GetAtespaceAccessPolicy(ctx, "team-a"); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("GetAtespaceAccessPolicy after DeleteAtespace = %v, want ErrNotFound", err)
+		}
 	})
 }

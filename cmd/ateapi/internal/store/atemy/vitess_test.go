@@ -61,6 +61,12 @@ func TestVitess(t *testing.T) {
 	t.Run("DropsOnlyRolledBackSeqs", func(t *testing.T) {
 		testDropsOnlyRolledBackSeqs(t, setupPersistenceOn(t, db))
 	})
+	t.Run("TrimsOnlyTheExpiredPrefix", func(t *testing.T) {
+		testTrimsOnlyTheExpiredPrefix(t, setupPersistenceOn(t, db))
+	})
+	t.Run("CleanupSkipsLockedRows", func(t *testing.T) {
+		testCleanupSkipsLockedRows(t, setupPersistenceOn(t, db))
+	})
 }
 
 func startVitess(t *testing.T) *sql.DB {

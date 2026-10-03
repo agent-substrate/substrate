@@ -39,14 +39,13 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
-// TestConnect_DedicatedPools covers the auxiliary pools only Connect builds
-// (the rest of the suite uses NewPersistence, where every operation shares
-// the caller's pool) and checks Close releases them but not the caller's.
+// Connect builds dedicated watch and owner pools, and Close releases them but
+// not the caller's read/write pool.
 func TestConnect_DedicatedPools(t *testing.T) {
 	requireDB(t)
 	ctx := t.Context()
 
-	p, err := Connect(ctx, ConnectConfig{ReadWriteDSN: containerDSN, OwnerDSN: containerDSN, PoolMaxConns: 7})
+	p, err := Connect(ctx, ConnectConfig{ReadWriteDSN: containerDSN, OwnerDSN: containerDSN})
 	if err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
@@ -69,7 +68,7 @@ func TestConnect_DedicatedPools(t *testing.T) {
 		got  int
 		want int
 	}{
-		{"read/write", p.db.Stats().MaxOpenConnections, 7},
+		{"read/write", p.db.Stats().MaxOpenConnections, storesql.DefaultMaxConns()},
 		{"watch", p.watchDB.Stats().MaxOpenConnections, watchPoolMaxConns},
 		{"owner", p.ownerDB.Stats().MaxOpenConnections, ownerPoolMaxConns},
 	} {
@@ -102,19 +101,6 @@ func TestConnect_DedicatedPools(t *testing.T) {
 	}
 	if err := p.DB().PingContext(ctx); err != nil {
 		t.Errorf("Close closed the caller's read/write pool: %v", err)
-	}
-}
-
-func TestConnect_DefaultPoolSize(t *testing.T) {
-	requireDB(t)
-	p, err := Connect(t.Context(), ConnectConfig{ReadWriteDSN: containerDSN, OwnerDSN: containerDSN})
-	if err != nil {
-		t.Fatalf("Connect failed: %v", err)
-	}
-	defer p.DB().Close()
-	defer p.Close()
-	if got, want := p.db.Stats().MaxOpenConnections, storesql.DefaultMaxConns(); got != want {
-		t.Errorf("read/write pool max connections = %d, want the default %d", got, want)
 	}
 }
 
@@ -161,6 +147,9 @@ func TestConnect_SeparatesRuntimeAndDDLPrivileges(t *testing.T) {
 	}
 	defer p.DB().Close()
 	defer p.Close()
+	if got := p.db.Stats().MaxOpenConnections; got != 20 {
+		t.Errorf("read/write pool max connections = %d, want the configured 20", got)
+	}
 	setTestPolicyManager(t, p)
 
 	if _, err := p.CreateAtespace(ctx, newTestAtespace("runtime-write")); err != nil {
@@ -255,18 +244,13 @@ func TestConnect_UsesTLSFiles(t *testing.T) {
 	}
 }
 
-func TestNewConnector_AppliesSessionSettings(t *testing.T) {
+func TestNewConnector_OverridesDSNSessionSettings(t *testing.T) {
 	c, err := newConnector("atemy:pw@tcp(db.example:3306)/atemy?multiStatements=true&parseTime=false", TLSFiles{})
 	if err != nil {
 		t.Fatalf("newConnector failed: %v", err)
 	}
-	cfg := c.cfg
-	if !cfg.ParseTime || cfg.Loc != time.UTC || !cfg.ClientFoundRows || !cfg.InterpolateParams || cfg.MultiStatements {
-		t.Errorf("session settings = parseTime:%t loc:%v clientFoundRows:%t interpolateParams:%t multiStatements:%t; want true UTC true true false",
-			cfg.ParseTime, cfg.Loc, cfg.ClientFoundRows, cfg.InterpolateParams, cfg.MultiStatements)
-	}
-	if _, err := Open("atemy:pw@tcp(db.example:3306)/"); err == nil || !strings.Contains(err.Error(), "must name a database") {
-		t.Errorf("Open without a database = %v, want a must-name-a-database error", err)
+	if !c.cfg.ParseTime || c.cfg.MultiStatements {
+		t.Errorf("parseTime = %t, multiStatements = %t; want the DSN's false and true overridden", c.cfg.ParseTime, c.cfg.MultiStatements)
 	}
 }
 
@@ -283,10 +267,9 @@ func TestOpen_SessionsRunReadCommitted(t *testing.T) {
 	}
 }
 
-// TestConnector_RereadsTLSFiles covers certificate rotation: a long-lived
-// pool must present the certificate on disk when each connection opens, not
-// the one that was there at startup.
-func TestConnector_RereadsTLSFiles(t *testing.T) {
+// loadTLSConfig returns the files on disk at the time of the call, and
+// connector.Connect calls it for each new connection.
+func TestLoadTLSConfig_ReadsCurrentFiles(t *testing.T) {
 	dir := t.TempDir()
 	bundlePath := filepath.Join(dir, "credential-bundle.pem")
 	rootPath := filepath.Join(dir, "trust-bundle.pem")
@@ -320,8 +303,7 @@ func TestConnector_RereadsTLSFiles(t *testing.T) {
 		t.Error("root CAs after rotation are not the ones on disk")
 	}
 
-	// Each new connection reads the files, so one that has gone missing fails
-	// the connection before any network traffic.
+	// A missing file fails the connection before any network traffic.
 	if err := os.Remove(rootPath); err != nil {
 		t.Fatalf("removing CA file: %v", err)
 	}

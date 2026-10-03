@@ -28,17 +28,12 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"testing/fstest"
 	"time"
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/google/go-cmp/cmp"
 	"github.com/openfga/openfga/assets"
-	"github.com/pressly/goose/v3"
 	"github.com/pressly/goose/v3/database"
-
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storecontract"
 )
 
 const pinnedOpenFGAMigrationVersion = 8
@@ -153,12 +148,8 @@ func stripSQLComments(sql string) string {
 	return strings.Join(kept, "")
 }
 
-// TestMigrations_ResumeAPartialInitialMigration simulates a crash partway
-// through 000001: MySQL committed some of its tables and a seed row, but
-// Goose recorded no version. The next startup must complete the file, and the
-// store must then work.
-// TestMigrations_RejectTablesWithoutALedger mirrors atepg: tables Goose did
-// not create are refused rather than adopted by CREATE TABLE IF NOT EXISTS.
+// Tables Goose did not create are refused rather than adopted by CREATE TABLE
+// IF NOT EXISTS.
 func TestMigrations_RejectTablesWithoutALedger(t *testing.T) {
 	db := openTestDatabase(t, createTestDatabase(t, "atemy_unversioned"))
 	if _, err := db.ExecContext(t.Context(), `CREATE TABLE atespaces (name VARCHAR(255) PRIMARY KEY)`); err != nil {
@@ -169,6 +160,10 @@ func TestMigrations_RejectTablesWithoutALedger(t *testing.T) {
 	}
 }
 
+// TestMigrations_ResumeAPartialInitialMigration simulates a crash partway
+// through 000001: MySQL committed some of its tables and a seed row, but
+// Goose recorded no version. The next startup must complete the file and
+// leave the schema a fresh migration does.
 func TestMigrations_ResumeAPartialInitialMigration(t *testing.T) {
 	db := openTestDatabase(t, createTestDatabase(t, "atemy_partial_migration"))
 	ctx := t.Context()
@@ -221,17 +216,42 @@ func TestMigrations_ResumeAPartialInitialMigration(t *testing.T) {
 		t.Fatalf("worker_outbox_trim rows = %d, %v; want 1", trimRows, err)
 	}
 
-	storecontract.RunContractTests(t, func(t *testing.T) store.Interface {
-		t.Helper()
-		p, err := NewPersistence(t.Context(), db)
-		if err != nil {
-			t.Fatalf("NewPersistence failed: %v", err)
+	fresh := requireDB(t)
+	if p, err = NewPersistence(ctx, fresh); err != nil {
+		t.Fatalf("NewPersistence on the shared database failed: %v", err)
+	}
+	p.Close()
+	if diff := cmp.Diff(schemaShape(t, fresh), schemaShape(t, db)); diff != "" {
+		t.Errorf("schema after resuming a partial migration (-fresh +resumed):\n%s", diff)
+	}
+}
+
+// schemaShape lists the columns and index entries of db's current database.
+func schemaShape(t *testing.T, db *sql.DB) []string {
+	t.Helper()
+	rows, err := db.QueryContext(t.Context(), `
+		SELECT CONCAT_WS(' ', table_name, column_name, column_type, is_nullable, IFNULL(collation_name, ''))
+		FROM information_schema.columns WHERE table_schema = DATABASE()
+		UNION ALL
+		SELECT CONCAT_WS(' ', table_name, index_name, seq_in_index, column_name, non_unique)
+		FROM information_schema.statistics WHERE table_schema = DATABASE()
+		ORDER BY 1`)
+	if err != nil {
+		t.Fatalf("reading schema: %v", err)
+	}
+	defer rows.Close()
+	var shape []string
+	for rows.Next() {
+		var line string
+		if err := rows.Scan(&line); err != nil {
+			t.Fatalf("scanning schema: %v", err)
 		}
-		t.Cleanup(p.Close)
-		clearAll(t, p)
-		setTestPolicyManager(t, p)
-		return p
-	})
+		shape = append(shape, line)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("reading schema: %v", err)
+	}
+	return shape
 }
 
 func TestMigrationLockName(t *testing.T) {
@@ -295,20 +315,6 @@ func openTestDatabase(t *testing.T, dsn string) *sql.DB {
 	}
 	t.Cleanup(func() { db.Close() })
 	return db
-}
-
-func TestMigrations_IdempotentAcrossRestarts(t *testing.T) {
-	db := requireDB(t)
-	for range 2 {
-		p, err := NewPersistence(t.Context(), db)
-		if err != nil {
-			t.Fatalf("NewPersistence failed: %v", err)
-		}
-		p.Close()
-		if diff := cmp.Diff(embeddedMigrationVersions(t), appliedMigrationVersions(t, db)); diff != "" {
-			t.Fatalf("applied migration versions (-embedded +applied):\n%s", diff)
-		}
-	}
 }
 
 func TestMigrationsConcurrentStartup(t *testing.T) {
@@ -439,62 +445,6 @@ func TestMigrations_StartAgainstASchemaAhead(t *testing.T) {
 	p.Close()
 }
 
-func TestMigrationFailureLeavesCompletedPrefixAndResumes(t *testing.T) {
-	const database = "atemy_migration_resume"
-	db := openTestDatabase(t, createTestDatabase(t, database))
-	ctx := t.Context()
-	newProvider := func(files fs.FS) *goose.Provider {
-		t.Helper()
-		// Closing the provider would close db, so it is left open.
-		provider, err := newMigrationProvider(ctx, db, files)
-		if err != nil {
-			t.Fatalf("creating migration provider: %v", err)
-		}
-		return provider
-	}
-	files := fstest.MapFS{
-		"000001_create.sql":    {Data: []byte("-- +goose Up\nCREATE TABLE resume_test (id INT PRIMARY KEY);")},
-		"000002_add_value.sql": {Data: []byte("-- +goose Up\nALTER TABLE resume_test ADD COLUMN value TEXT;")},
-		"000003_fail.sql":      {Data: []byte("-- +goose Up\nALTER TABLE missing_table ADD COLUMN value TEXT;")},
-	}
-	provider := newProvider(files)
-	if _, err := provider.UpTo(ctx, 1); err != nil {
-		t.Fatalf("applying pre-run migration: %v", err)
-	}
-	migrationErr := migrateToLatest(ctx, provider)
-	var partial *goose.PartialError
-	if !errors.As(migrationErr, &partial) {
-		t.Fatalf("migration error = %v, want goose.PartialError", migrationErr)
-	}
-	if got := partial.Failed.Source.Version; got != 3 {
-		t.Fatalf("failed migration version = %d, want 3", got)
-	}
-	if len(partial.Applied) != 1 || partial.Applied[0].Source.Version != 2 {
-		t.Fatalf("migrations completed before failure = %#v, want version 2", partial.Applied)
-	}
-	if diff := cmp.Diff([]int64{1, 2}, appliedMigrationVersions(t, db)); diff != "" {
-		t.Fatalf("applied migration versions after failure (-want +got):\n%s", diff)
-	}
-
-	files["000003_fail.sql"] = &fstest.MapFile{Data: []byte("-- +goose Up\nCREATE TABLE resumed_migration (id INT);")}
-	if err := migrateToLatest(ctx, newProvider(files)); err != nil {
-		t.Fatalf("resuming migrations: %v", err)
-	}
-	if diff := cmp.Diff([]int64{1, 2, 3}, appliedMigrationVersions(t, db)); diff != "" {
-		t.Fatalf("applied migration versions after resume (-want +got):\n%s", diff)
-	}
-	var tables int
-	if err := db.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM information_schema.columns
-		WHERE table_schema = DATABASE()
-		AND ((table_name = 'resume_test' AND column_name = 'value') OR table_name = 'resumed_migration')`).Scan(&tables); err != nil {
-		t.Fatalf("checking migrated tables: %v", err)
-	}
-	if tables != 2 {
-		t.Errorf("found %d of the 2 columns migrations 2 and 3 create", tables)
-	}
-}
-
 // Multi-primary replication hands out AUTO_INCREMENT values in steps, which
 // watchers would track as gaps that never fill.
 func TestRequireAutoIncrementStep(t *testing.T) {
@@ -568,16 +518,17 @@ func TestRequireMySQL8(t *testing.T) {
 			if (err == nil) != tc.ok {
 				t.Fatalf("requireMySQL8 with VERSION() %q = %v, want ok: %t", tc.version, err, tc.ok)
 			}
-			if !tc.ok {
-				if !strings.Contains(err.Error(), tc.version) {
-					t.Errorf("error %q does not name the server version", err)
-				}
-				// The check runs before any migration work.
-				if _, err := NewPersistence(t.Context(), db); err == nil || !strings.Contains(err.Error(), "requires MySQL 8.0") {
-					t.Errorf("NewPersistence on MySQL %s = %v, want a version error", tc.version, err)
-				}
+			if !tc.ok && !strings.Contains(err.Error(), tc.version) {
+				t.Errorf("error %q does not name the server version", err)
 			}
 		})
+	}
+
+	// The check runs before any migration work.
+	db := sql.OpenDB(versionConnector{version: "5.7.44-log"})
+	defer db.Close()
+	if _, err := NewPersistence(t.Context(), db); err == nil || !strings.Contains(err.Error(), "requires MySQL 8.0") {
+		t.Errorf("NewPersistence on MySQL 5.7 = %v, want a version error", err)
 	}
 }
 

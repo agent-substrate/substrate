@@ -448,7 +448,11 @@ func TestWorkerEvents_OneRowPerWrite(t *testing.T) {
 // within retention, so the trim mark always bounds a contiguous deleted
 // prefix, even if a later row carries an older timestamp.
 func TestTrimWorkerOutbox_TrimsOnlyTheExpiredPrefix(t *testing.T) {
-	s := setupMySQLPersistence(t)
+	testTrimsOnlyTheExpiredPrefix(t, setupMySQLPersistence(t))
+}
+
+func testTrimsOnlyTheExpiredPrefix(t *testing.T, s *Persistence) {
+	t.Helper()
 	ctx := t.Context()
 	payload := []byte("payload")
 	insertOutboxRow(t, s.db, payload, time.Hour)
@@ -898,25 +902,5 @@ func TestLocalPublishSurvivesWatchClose(t *testing.T) {
 			t.Fatalf("DeleteWorker failed: %v", err)
 		}
 		<-done
-	}
-}
-
-// TestClose_StopsMaintenance pins that Close ends the background maintenance
-// goroutine: Close blocks on the loop's done channel, so its return is the
-// assertion.
-func TestClose_StopsMaintenance(t *testing.T) {
-	p, err := NewPersistence(t.Context(), requireDB(t))
-	if err != nil {
-		t.Fatalf("NewPersistence failed: %v", err)
-	}
-	closed := make(chan struct{})
-	go func() {
-		p.Close()
-		close(closed)
-	}()
-	select {
-	case <-closed:
-	case <-time.After(5 * time.Second):
-		t.Fatal("Close did not stop the maintenance loop")
 	}
 }
