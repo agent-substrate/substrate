@@ -76,7 +76,8 @@ jobs:
     - name: Vitess store tests
       run: hack/run-tool.sh gotestsum --junitfile "${ARTIFACTS}/unit-vitess.xml"
         --jsonfile "${ARTIFACTS}/unit-vitess.json" --format standard-verbose
-        -- -race -v -tags vitess -run TestVitess ./cmd/ateapi/internal/store/atemy/
+        -- -race -v -tags vitess -run '^TestVitess$' ./cmd/ateapi/internal/store/atemy/
+        && grep -q '"Action":"pass".*"Test":"TestVitess"' "${ARTIFACTS}/unit-vitess.json"
     # tools/apitool has its own module so we need to run it explicitly.
     # run-tool.sh resolves the repo root itself, so it works from the subdir.
     - name: apitool tests
