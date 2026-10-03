@@ -110,6 +110,7 @@ func init() {
 			`{"enabled":false} turns injection off; `+
 			`{"name":"<provider>","address":"<host>:<port>"} uses a provider you deploy yourself. A provider requires --atenet-dataplane=envoy`)
 	f.StringVar(&opts.OtlpEndpoint, "otlp-endpoint", "", "Send control plane telemetry to this OTLP collector instead of the cluster default (defaults to ATE_OTLP_ENDPOINT)")
+	f.BoolVar(&opts.EnablePreview, "enable-preview", false, "Enable preview features")
 	f.BoolVar(&opts.NoDevEnv, "no-dev-env", false, "Do not source .ate-dev-env.sh")
 
 	f.StringVar(&opts.ImageRepo, "image-repo", "",

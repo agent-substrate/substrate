@@ -79,6 +79,7 @@ usage() {
   echo "Overall infrastructure (all infrastructure components):"
   echo ""
   echo "  --deploy-ate-system                    Deploy core system (CRDs, atelet, apiserver)"
+  echo "  --enable-preview                       Enable preview features for this deployment"
   echo "  --setup-csi[=DRIVER]                   Setup CSI driver: nfs, hostpath, both, none (default: none;"
   echo "                                         a bare --setup-csi means nfs; hostpath is Kind only)"
   echo "  --delete-ate-system                    Delete core system"
@@ -253,6 +254,7 @@ for ((i = 0; i < ${#prescan_args[@]}; i++)); do
       fi
       GLOBAL_FLAGS+=("--atenet-dataplane=${prescan_args[$((i + 1))]}")
       ;;
+    --enable-preview) GLOBAL_FLAGS+=(--enable-preview) ;;
     --experimental-additional-egress-extproc-service=*)
       GLOBAL_FLAGS+=("${prescan_args[i]}")
       ;;
@@ -355,6 +357,7 @@ while [[ "$#" -gt 0 ]]; do
     --benchmark-worker-count=*|--benchmark-sandbox-class=*|--benchmark-actor-memory=*) ;;
 
     --deploy-ate-system) ate_setup deploy ate-system "--setup-csi=${SETUP_CSI}" ;;
+    --enable-preview) shift ;;
     --setup-csi=*) ate_setup setup csi "${SETUP_CSI}" ;;
     --setup-csi)
       if [[ "$#" -gt 1 && "$2" != --* ]]; then

@@ -67,7 +67,6 @@ const (
 // into one whose references are pullable. *ko.Runner builds and publishes them
 // from source; *images.Prebuilt maps them onto an already-published release.
 type imageResolver interface {
-	ResolvePath(ctx context.Context, path string) ([]byte, error)
 	ResolveBytes(ctx context.Context, manifest []byte) ([]byte, error)
 }
 
@@ -202,16 +201,26 @@ func (e *Env) ResolveAndApply(ctx context.Context, path string) error {
 // ResolveManifest turns the ko:// references in a manifest path into pullable
 // image references.
 func (e *Env) ResolveManifest(ctx context.Context, path string) ([]byte, error) {
+	manifest, err := kube.ReadPath(path)
+	if err != nil {
+		return nil, err
+	}
+	resolved, err := e.ResolveManifestBytes(ctx, manifest)
+	if err != nil {
+		return nil, fmt.Errorf("in %s: %w", path, err)
+	}
+	return resolved, nil
+}
+
+// ResolveManifestBytes resolves an in-memory manifest, such as kustomize output.
+// Every manifest that deploys a substrate component passes through here, so
+// this is also where each component gets its --preview argument.
+func (e *Env) ResolveManifestBytes(ctx context.Context, manifest []byte) ([]byte, error) {
 	resolver, err := e.imageResolver()
 	if err != nil {
 		return nil, err
 	}
-	return resolver.ResolvePath(ctx, path)
-}
-
-// ResolveManifestBytes resolves an in-memory manifest, such as kustomize output.
-func (e *Env) ResolveManifestBytes(ctx context.Context, manifest []byte) ([]byte, error) {
-	resolver, err := e.imageResolver()
+	manifest, err = injectPreviewArg(manifest, e.Cfg.EnablePreview)
 	if err != nil {
 		return nil, err
 	}

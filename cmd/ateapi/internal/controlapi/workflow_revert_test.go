@@ -334,7 +334,7 @@ func TestEnsureInProgressSnapshotDiscarded(t *testing.T) {
 func TestEnsureRevertedFinalized_NoObjectStore(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
-	w := &ActorWorkflow{store: persistence}
+	w := &ActorWorkflow{impl: persistence}
 
 	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
 		Metadata:      &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},

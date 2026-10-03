@@ -24,6 +24,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/objectstore"
+	"github.com/agent-substrate/substrate/internal/preview"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -107,11 +108,11 @@ func (w *ActorWorkflow) loadActorForSuspend(ctx context.Context, actorRef resour
 	ctx, done := stepSpan(ctx, "LoadActorForSuspend")
 	defer func() { err = done(err) }()
 
-	actor, err := w.store.GetActor(ctx, actorRef)
+	actor, err := w.impl.GetActor(ctx, actorRef)
 	if err != nil {
 		return nil, nil, err
 	}
-	actorTemplate, err := resolveActorTemplate(ctx, w.store, actor)
+	actorTemplate, err := resolveActorTemplate(ctx, w.impl, actor)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -149,7 +150,7 @@ func (w *ActorWorkflow) ensureMarkedSuspending(ctx context.Context, actorRef res
 	if err != nil {
 		return nil, err
 	}
-	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
+	storedActor, err := w.impl.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDING
 		toUpdate.Status.InProgressSnapshotUri = uri.String()
 		return nil
@@ -212,7 +213,7 @@ func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef reso
 	assignment := actor.GetStatus().GetWorkerAssignment()
 	if assignment == nil {
 		// Missing active worker pod reference in SUSPENDING state indicates corrupted store state.
-		if err := crashActor(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageWorkerAssignmentMissing); err != nil {
+		if err := crashActor(ctx, w.impl, actorRef, ateattr.OperationSuspend, crashMessageWorkerAssignmentMissing); err != nil {
 			slog.ErrorContext(ctx, "Failed to crash actor", slog.String("err", err.Error()))
 		}
 		return "", fmt.Errorf("actor is CRASHED because it was in SUSPENDING state but has no active worker")
@@ -251,7 +252,7 @@ func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef reso
 	wireSnapshotScope = ateattr.SnapshotScopeValue(req.Scope)
 
 	if _, err = client.Checkpoint(ctx, req); err != nil {
-		return wireSnapshotScope, handleAteletError(ctx, w.store, actorRef, ateattr.OperationSuspend, "Checkpoint", false, err)
+		return wireSnapshotScope, handleAteletError(ctx, w.impl, actorRef, ateattr.OperationSuspend, "Checkpoint", false, err)
 	}
 	return wireSnapshotScope, nil
 }
@@ -270,7 +271,7 @@ func (w *ActorWorkflow) ensurePausedSnapshotUploaded(ctx context.Context, actorR
 	if len(local.GetNodeVmsWithLocalSnapshots()) == 0 {
 		// Without the node the snapshot can never be found (mirrors
 		// FinalizePaused, which crashes rather than record an unknown node).
-		if err := crashActor(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageLocalSnapshotNodeUnknown); err != nil {
+		if err := crashActor(ctx, w.impl, actorRef, ateattr.OperationSuspend, crashMessageLocalSnapshotNodeUnknown); err != nil {
 			slog.ErrorContext(ctx, "Failed to crash actor", slog.String("err", err.Error()))
 		}
 		return "", fmt.Errorf("actor is CRASHED because it was suspending a paused snapshot with no node recorded")
@@ -300,7 +301,7 @@ func (w *ActorWorkflow) ensurePausedSnapshotUploaded(ctx context.Context, actorR
 	wireSnapshotScope = ateattr.SnapshotScopeValue(req.DesiredScope)
 
 	if _, err = client.UploadPausedCheckpoint(ctx, req); err != nil {
-		return wireSnapshotScope, handleAteletError(ctx, w.store, actorRef, ateattr.OperationSuspend, "UploadPausedCheckpoint", false, err)
+		return wireSnapshotScope, handleAteletError(ctx, w.impl, actorRef, ateattr.OperationSuspend, "UploadPausedCheckpoint", false, err)
 	}
 	return wireSnapshotScope, nil
 }
@@ -325,7 +326,12 @@ func (w *ActorWorkflow) ensureVolumesDetached(ctx context.Context, actor *ateapi
 	ctx, done := stepSpan(ctx, spanName)
 	defer func() { err = done(err) }()
 
-	return detachActorVolumes(ctx, w.store, w.pluginRegistry, actor, actorTemplate, op)
+	if !preview.IsEnabled(preview.GatePreview) {
+		markSkipped(ctx, "external volumes are disabled")
+		return nil
+	}
+
+	return detachActorVolumes(ctx, w.impl, w.pluginRegistry, actor, actorTemplate, op)
 }
 
 // ensureSuspendedFinalized releases the actor's worker (only when it is still
@@ -357,7 +363,7 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 	}()
 
 	t := time.Now()
-	latestActor, err := w.store.GetActor(ctx, actorRef)
+	latestActor, err := w.impl.GetActor(ctx, actorRef)
 	dGetActor = time.Since(t)
 	if err != nil {
 		return nil, err
@@ -366,7 +372,7 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 	// 1. Free the worker (if it hasn't been freed yet)
 	if latestActor.GetStatus().GetWorkerAssignment() != nil {
 		t = time.Now()
-		_, _, err := releaseWorker(ctx, w.store, latestActor)
+		_, _, err := releaseWorker(ctx, w.impl, latestActor)
 		dReleaseWorker = time.Since(t)
 		if err != nil {
 			return nil, err
@@ -374,7 +380,7 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 
 		// Re-fetch the actor now that the worker is freed.
 		t = time.Now()
-		latestActor, err = w.store.GetActor(ctx, actorRef)
+		latestActor, err = w.impl.GetActor(ctx, actorRef)
 		dRefetchActor = time.Since(t)
 		if err != nil {
 			return nil, err
@@ -396,7 +402,7 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 
 	// 3. Commit the actor.
 	t = time.Now()
-	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapipb.Actor) error {
+	storedActor, err := w.impl.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
 		if inProgressSnapshotURI != "" {
 			// The recorded URI is under the actor's own prefix, so the actor now

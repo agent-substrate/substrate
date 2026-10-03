@@ -32,7 +32,7 @@ import (
 func (w *ActorWorkflow) DeleteActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.DeletePreconditions) (*ateapipb.ActorTemplate, error) {
 	// Serializes against the reconciler, which creates the golden actor and
 	// tag under the same lease.
-	ctx, lease, err := acquireLease(ctx, w.store, "lease:actortemplate:"+templateRef.Atespace+":"+templateRef.Name, "ActorTemplate "+templateRef.String())
+	ctx, lease, err := acquireLease(ctx, w.impl, "lease:actortemplate:"+templateRef.Atespace+":"+templateRef.Name, "ActorTemplate "+templateRef.String())
 	if err != nil {
 		return nil, err
 	}
@@ -67,7 +67,7 @@ func (w *ActorWorkflow) loadTemplateForDelete(ctx context.Context, templateRef r
 	ctx, done := stepSpan(ctx, "LoadTemplateForDelete")
 	defer func() { err = done(err) }()
 
-	tmpl, err := w.store.GetActorTemplate(ctx, templateRef)
+	tmpl, err := w.impl.GetActorTemplate(ctx, templateRef)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, status.Errorf(codes.NotFound, "ActorTemplate %s not found", templateRef)
@@ -116,7 +116,7 @@ func (w *ActorWorkflow) finalizeTemplateDeleted(ctx context.Context, templateRef
 	ctx, done := stepSpan(ctx, "FinalizeTemplateDeleted")
 	defer func() { err = done(err) }()
 
-	deleted, err := w.store.DeleteActorTemplate(ctx, templateRef, precondition)
+	deleted, err := w.impl.DeleteActorTemplate(ctx, templateRef, precondition)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, status.Errorf(codes.NotFound, "ActorTemplate %s not found", templateRef)

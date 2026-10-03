@@ -101,7 +101,7 @@ func logActorState(ctx context.Context, actor *ateapipb.Actor, opName, state str
 
 // ActorWorkflow handles the workflows for actor's resume / suspend operations.
 type ActorWorkflow struct {
-	store                actorWorkflowStore
+	impl                 actorWorkflowStore
 	workerCache          *workercache.Cache
 	scheduler            scheduling.Scheduler
 	dialer               *AteletDialer
@@ -119,7 +119,7 @@ type ActorWorkflow struct {
 // copying and releasing them. Only tests that never reach those steps pass nil;
 // ate-api always builds one.
 func NewActorWorkflow(
-	store actorWorkflowStore,
+	impl actorWorkflowStore,
 	workerCache *workercache.Cache,
 	dialer *AteletDialer,
 	sandboxConfigLister listersv1alpha1.SandboxConfigLister,
@@ -130,7 +130,7 @@ func NewActorWorkflow(
 	objectStore objectstore.Store,
 ) *ActorWorkflow {
 	return &ActorWorkflow{
-		store:                store,
+		impl:                 impl,
 		workerCache:          workerCache,
 		scheduler:            scheduling.New(workerCache),
 		dialer:               dialer,
@@ -221,7 +221,7 @@ func actorLeaseKey(actorRef resources.ActorRef) string {
 }
 
 func (w *ActorWorkflow) acquireActorLease(ctx context.Context, actorRef resources.ActorRef) (context.Context, *store.Lease, error) {
-	return acquireLease(ctx, w.store, actorLeaseKey(actorRef), "actor")
+	return acquireLease(ctx, w.impl, actorLeaseKey(actorRef), "actor")
 }
 
 func acquireTagLease(ctx context.Context, holder leaseHolder, tagRef resources.TagRef) (context.Context, *store.Lease, error) {

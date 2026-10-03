@@ -112,7 +112,7 @@ func TestActorStateChangeRecords(t *testing.T) {
 				t.Fatalf("get template: %v", err)
 			}
 
-			w := &ActorWorkflow{store: persistence}
+			w := &ActorWorkflow{impl: persistence}
 			tt.transition(t, w, actorRef, actor, tmpl)
 
 			if len(*records) != 1 {
@@ -220,7 +220,7 @@ func TestActorDeletedRecord(t *testing.T) {
 		t.Fatalf("get actor: %v", err)
 	}
 
-	w := &ActorWorkflow{store: persistence}
+	w := &ActorWorkflow{impl: persistence}
 	if _, err := w.finalizeDeleted(ctx, actor); err != nil {
 		t.Fatalf("finalizeDeleted: %v", err)
 	}
@@ -274,7 +274,7 @@ func TestActorStateChangeRecordSkippedOnConflict(t *testing.T) {
 		t.Fatalf("bump version: %v", err)
 	}
 
-	w := &ActorWorkflow{store: persistence}
+	w := &ActorWorkflow{impl: persistence}
 	if _, err := w.ensureMarkedDeleting(ctx, actorRef, stale, false); err == nil {
 		t.Fatal("ensureMarkedDeleting on a stale actor = nil, want a conflict")
 	}

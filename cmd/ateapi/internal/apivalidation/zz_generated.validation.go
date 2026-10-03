@@ -814,6 +814,13 @@ func Validate_ActorStatus(
 				errs = append(errs, e...)
 				earlyReturn = true
 			}
+			if e := validate.IfOption(ctx, op, fldPath, obj, oldObj, "Preview", false, validate.ForbiddenSlice).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if e := validate.IfOption(ctx, op, fldPath, obj, oldObj, "Preview", false, validate.OptionalSlice).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
 			if e := validate.MaxItems(ctx, op, fldPath, obj, oldObj, 32).MarkShortCircuit(); len(e) != 0 {
 				errs = append(errs, e...)
 				earlyReturn = true
@@ -8272,6 +8279,13 @@ func Validate_Volume(
 			}
 			// call field-attached validations
 			earlyReturn := false
+			if e := validate.IfOption(ctx, op, fldPath, obj, oldObj, "Preview", false, validate.ForbiddenPointer).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if e := validate.IfOption(ctx, op, fldPath, obj, oldObj, "Preview", false, validate.OptionalPointer).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
 			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
 				earlyReturn = true
 			}

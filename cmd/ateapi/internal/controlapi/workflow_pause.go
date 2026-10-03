@@ -98,11 +98,11 @@ func (w *ActorWorkflow) loadActorForPause(ctx context.Context, actorRef resource
 	ctx, done := stepSpan(ctx, "LoadActorForPause")
 	defer func() { err = done(err) }()
 
-	actor, err := w.store.GetActor(ctx, actorRef)
+	actor, err := w.impl.GetActor(ctx, actorRef)
 	if err != nil {
 		return nil, nil, err
 	}
-	actorTemplate, err := resolveActorTemplate(ctx, w.store, actor)
+	actorTemplate, err := resolveActorTemplate(ctx, w.impl, actor)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -132,7 +132,7 @@ func (w *ActorWorkflow) ensureMarkedPausing(ctx context.Context, actorRef resour
 	}
 
 	snapshotName := resources.NewSnapshotName()
-	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
+	storedActor, err := w.impl.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_PAUSING
 		toUpdate.Status.InProgressLocalSnapshotName = snapshotName
 		return nil
@@ -160,7 +160,7 @@ func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resourc
 	assignment := actor.GetStatus().GetWorkerAssignment()
 	if assignment == nil {
 		// Missing active worker pod reference in PAUSING state indicates corrupted store state.
-		if err := crashActor(ctx, w.store, actorRef, ateattr.OperationPause, crashMessageWorkerAssignmentMissing); err != nil {
+		if err := crashActor(ctx, w.impl, actorRef, ateattr.OperationPause, crashMessageWorkerAssignmentMissing); err != nil {
 			slog.ErrorContext(ctx, "Failed to crash actor", slog.String("err", err.Error()))
 		}
 		return "", status.Errorf(codes.FailedPrecondition, "CallAteletPause prerequisite not met for Actor: %s. No worker assignment", actorRef)
@@ -199,7 +199,7 @@ func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resourc
 	wireSnapshotScope = ateattr.SnapshotScopeValue(req.Scope)
 
 	if _, err = client.Checkpoint(ctx, req); err != nil {
-		return wireSnapshotScope, handleAteletError(ctx, w.store, actorRef, ateattr.OperationPause, "Checkpoint", false, err)
+		return wireSnapshotScope, handleAteletError(ctx, w.impl, actorRef, ateattr.OperationPause, "Checkpoint", false, err)
 	}
 	return wireSnapshotScope, nil
 }
@@ -215,14 +215,14 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 	ctx, done := stepSpan(ctx, "FinalizePaused")
 	defer func() { err = done(err) }()
 
-	latestActor, err := w.store.GetActor(ctx, actorRef)
+	latestActor, err := w.impl.GetActor(ctx, actorRef)
 	if err != nil {
 		return nil, err
 	}
 
 	// 1. Free the worker (if it hasn't been freed yet)
 	if assignment := latestActor.GetStatus().GetWorkerAssignment(); assignment != nil {
-		worker, err := w.store.GetWorker(ctx, assignment.GetWorker().GetName())
+		worker, err := w.impl.GetWorker(ctx, assignment.GetWorker().GetName())
 		nodeName := ""
 		if err != nil {
 			if !errors.Is(err, store.ErrNotFound) {
@@ -233,7 +233,7 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 			nodeName = worker.GetNodeName()
 			// Drop just this actor's assignment; any other actors the worker
 			// hosts keep theirs.
-			_, err := w.store.ReleaseActorFromWorker(ctx, worker.GetMetadata().GetName(), latestActor.GetMetadata().GetUid())
+			_, err := w.impl.ReleaseActorFromWorker(ctx, worker.GetMetadata().GetName(), latestActor.GetMetadata().GetUid())
 			if err != nil {
 				if errors.Is(err, store.ErrVersionConflict) {
 					return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
@@ -243,7 +243,7 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 		}
 
 		// 2. Clear the actor's assignment, now that the worker is freed
-		latestActor, err = w.store.GetActor(ctx, actorRef)
+		latestActor, err = w.impl.GetActor(ctx, actorRef)
 		if err != nil {
 			return nil, err
 		}
@@ -269,7 +269,7 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 		latestActor.Status.State = newState
 		crashAttrs := ateattr.ActorMetricAttributes(latestActor, sandboxClass, ateattr.OperationPause)
 
-		storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapipb.Actor) error {
+		storedActor, err := w.impl.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapipb.Actor) error {
 			toUpdate.Status.State = newState
 			if newState == ateapipb.ActorState_ACTOR_STATE_CRASHED && !wasAlreadyCrashed {
 				toUpdate.Status.Crash = crashStatus

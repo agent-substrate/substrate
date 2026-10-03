@@ -195,6 +195,9 @@ type Config struct {
 	// OtlpEndpoint is where the control plane ships telemetry
 	// (ATE_OTLP_ENDPOINT). Benchmark actors are pointed at it too.
 	OtlpEndpoint string
+	// EnablePreview turns on every preview gate in every substrate component
+	// (ATE_ENABLE_PREVIEW) by passing --preview=* to each.
+	EnablePreview bool
 	// BenchmarkActorMemory is the memory limit for benchmark actors
 	// (BENCHMARK_ACTOR_MEMORY). Empty leaves the workload default in place.
 	BenchmarkActorMemory string
@@ -251,6 +254,7 @@ type Options struct {
 	AdditionalEgressExtprocService string
 	CredentialProvider             string
 	OtlpEndpoint                   string
+	EnablePreview                  bool
 
 	// Image source selection.
 	ImageRepo string
@@ -375,6 +379,7 @@ func Load(opts Options) (*Config, error) {
 		AnthropicAPIKey:                env["ANTHROPIC_API_KEY"],
 		OtlpEndpoint:                   firstNonEmpty(opts.OtlpEndpoint, env["ATE_OTLP_ENDPOINT"]),
 		BenchmarkActorMemory:           env["BENCHMARK_ACTOR_MEMORY"],
+		EnablePreview:                  opts.EnablePreview || env["ATE_ENABLE_PREVIEW"] == "true",
 		kubeconfigEnv:                  kubeconfigEnv,
 		shellEnv:                       env,
 	}
@@ -695,6 +700,10 @@ func (c *Config) ScriptEnv() []string {
 	delete(merged, "ATE_INSTALL_CLUSTER_SIZE")
 	if c.ClusterSize != "" && c.ClusterSize != ClusterSizeSize0 {
 		merged["ATE_INSTALL_CLUSTER_SIZE"] = c.ClusterSize
+	}
+	delete(merged, "ATE_ENABLE_PREVIEW")
+	if c.EnablePreview {
+		merged["ATE_ENABLE_PREVIEW"] = "true"
 	}
 	delete(merged, "ATE_INSTALL_CORDON_CONTROL_PLANE")
 	if c.CordonControlPlane {
