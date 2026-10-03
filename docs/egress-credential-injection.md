@@ -289,13 +289,13 @@ may only resolve Secrets in namespaces explicitly granted to it.
 
 ## See also
 
-* [egress-trust-bundle.md](egress-trust-bundle.md) — the TLS-terminated leg
-  this feature runs on, and the actor-side trust projection it presupposes.
+* [egress-trust-bundle.md](egress-trust-bundle.md) — the actor-side trust
+  projection needed for HTTPS injection.
 * `demos/egress/README.md` — how tunneled egress, actor identity, and policy
   authorization fit together.
 * `pkg/proto/credproviderpb/credprovider.proto` — the provider plugin API and
   its trust model.
 * `cmd/credential-provider/kubernetes-secrets` — the reference provider.
 * `internal/e2e/suites/egresscredinject` — the e2e suite that proves the
-  behavior table above. It runs only with `E2E_EGRESS_CREDINJECT=1`, against a
-  cluster installed with `--credential-provider='{"name":"k8s.io"}'`.
+  behavior table above on both sandbox classes, against a cluster installed
+  with `--credential-provider='{"name":"k8s.io"}'`.

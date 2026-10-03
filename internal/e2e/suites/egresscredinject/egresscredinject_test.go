@@ -26,7 +26,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -86,16 +85,13 @@ var withPlaceholder = []string{"header=" + url.QueryEscape("Authorization:"+plac
 //     (default-deny), 403 or 500 for a URI naming a provider this gateway
 //     does not serve.
 //
-// The gate: this needs the install made with the bundled provider, which
+// This needs the install made with the bundled provider, which
 // deploys the k8s-credential-provider and points the egress gateway at it.
 // Locally:
 //
 //	hack/install-ate-kind.sh --deploy-atenet --credential-provider='{"name":"k8s.io"}'
-//	E2E_EGRESS_CREDINJECT=1 hack/run-e2e-kind.sh ./internal/e2e/suites/egresscredinject -v -args --no-color
+//	hack/run-e2e-kind.sh ./internal/e2e/suites/egresscredinject -v -args --no-color
 func TestActorEgressCredentialInjection(t *testing.T) {
-	if os.Getenv("E2E_EGRESS_CREDINJECT") == "" {
-		t.Skip(`needs the egress gateway with credential injection: deploy with hack/install-ate-kind.sh --deploy-atenet --credential-provider='{"name":"k8s.io"}', then set E2E_EGRESS_CREDINJECT=1`)
-	}
 	env, err := e2e.CheckEnv("BUCKET_NAME", "KO_DOCKER_REPO")
 	if err != nil {
 		t.Fatalf("CheckEnv failed: %v", err)
