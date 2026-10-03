@@ -92,7 +92,7 @@ rm -f "${OUT}/${STAMP_FILE}"
 cd "$WORK"
 
 echo ">> Downloading kata-static ${KATA_VER} (${ARCH})..."
-curl -fSL -o kata-static.tar.zst \
+curl -fSL -C - --retry 5 --retry-delay 3 --max-time 600 -o kata-static.tar.zst \
   "https://github.com/kata-containers/kata-containers/releases/download/${KATA_VER}/kata-static-${KATA_VER}-${ARCH}.tar.zst"
 mkdir -p kata
 tar --zstd -xf kata-static.tar.zst -C kata
@@ -105,7 +105,7 @@ cp "${KROOT}/libexec/virtiofsd" "${OUT}/virtiofsd"
 chmod +x "${OUT}/virtiofsd"
 
 echo ">> Downloading cloud-hypervisor ${CH_VER} (${CH_ASSET})..."
-curl -fSL -o "${OUT}/cloud-hypervisor" \
+curl -fSL -C - --retry 5 --retry-delay 3 --max-time 600 -o "${OUT}/cloud-hypervisor" \
   "https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/${CH_VER}/${CH_ASSET}"
 chmod +x "${OUT}/cloud-hypervisor"
 
