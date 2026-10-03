@@ -646,10 +646,10 @@ func TestSpawnRunBatch_DynConfigOverride(t *testing.T) {
 
 	t.Run("overrides when set", func(t *testing.T) {
 		fakeAPI := &fakeControlClient{}
-		dyn := dynconfig.NewHolder(dynconfig.Config{
+		dyn := dynconfig.Static(spawnKnobs{
 			TotalActors:      3,
 			SpawnConcurrency: 2,
-			ActorDeadline:    5 * time.Second,
+			ActorDeadline:    dynconfig.Seconds(5 * time.Second),
 		})
 		cfg := &userclass.Config{
 			APIStub:          fakeAPI,
@@ -684,7 +684,7 @@ func TestSpawnRunBatch_DynConfigOverride(t *testing.T) {
 
 	t.Run("falls back to cfg when dynconfig is zero", func(t *testing.T) {
 		fakeAPI := &fakeControlClient{}
-		dyn := dynconfig.NewHolder(dynconfig.Config{
+		dyn := dynconfig.Static(spawnKnobs{
 			TotalActors:      0, // 0 = unset
 			SpawnConcurrency: 0,
 			ActorDeadline:    0,

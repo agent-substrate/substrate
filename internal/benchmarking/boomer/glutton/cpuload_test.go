@@ -19,13 +19,12 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/dynconfig"
 	"github.com/agent-substrate/substrate/internal/benchmarking/glutton/fake"
 )
 
 func TestEnsureCPULoadRequestsConfiguredLoad(t *testing.T) {
 	srv := &fake.Server{}
-	u := newTestGluttonActor(t, srv, dynconfig.Config{CPUCores: 2, CPUDutyCycle: 0.1})
+	u := newTestGluttonActor(t, srv, gluttonKnobs{CPUCores: 2, CPUDutyCycle: 0.1})
 
 	u.ensureCPULoad(context.Background())
 
@@ -49,7 +48,7 @@ func TestEnsureCPULoadRequestsConfiguredLoad(t *testing.T) {
 
 func TestEnsureCPULoadDisabledByDefault(t *testing.T) {
 	srv := &fake.Server{}
-	u := newTestGluttonActor(t, srv, dynconfig.Config{})
+	u := newTestGluttonActor(t, srv, gluttonKnobs{})
 
 	u.ensureCPULoad(context.Background())
 
@@ -63,7 +62,7 @@ func TestEnsureCPULoadDisabledByDefault(t *testing.T) {
 
 func TestEnsureCPULoadRetriesAfterFailure(t *testing.T) {
 	srv := &fake.Server{Status: http.StatusServiceUnavailable}
-	u := newTestGluttonActor(t, srv, dynconfig.Config{CPUCores: 1, CPUDutyCycle: 0.5})
+	u := newTestGluttonActor(t, srv, gluttonKnobs{CPUCores: 1, CPUDutyCycle: 0.5})
 	ctx := context.Background()
 
 	u.ensureCPULoad(ctx)

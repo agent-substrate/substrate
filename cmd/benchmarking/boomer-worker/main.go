@@ -47,7 +47,7 @@ func main() {
 		routerURL               = flag.String("router-url", "http://atenet-router.ate-system.svc.cluster.local", "atenet HTTP router base URL (no trailing slash).")
 		atespace                = flag.String("atespace", "benchmark", "Atespace every actor this worker creates lives in. Ensured (CreateAtespace, AlreadyExists is ok) at startup.")
 		promAddr                = flag.String("prometheus-addr", ":8001", "Address for the Prometheus /metrics endpoint.")
-		configJSON              = flag.String("config-json", "", "Initial dynconfig as a JSON object (keys: trace_probability, min_wait_time, max_wait_time, min_live_time, max_live_time in seconds, durdir_file_size_bytes, resume_mode, lifecycle_mode, durdir_read_mode, durdir_template, mem_target, mem_churn, mem_read, cpu_cores, cpu_duty_cycle, max_pings_per_wake). Unset fields keep their built-in defaults.")
+		configJSON              = flag.String("config-json", "", "Initial dynconfig as a JSON object keyed by locust flag name in snake_case (trace_probability, min_wait_time, ...); the selected user class reads the keys it documents and ignores the rest. Unset keys keep the class's built-in defaults. Each payload the master serves later stands on its own in the same way, so a key it leaves null is back at the default.")
 		masterWebPort           = flag.Int("master-web-port", 0, "If non-zero, fetch dynconfig from http://{master-host}:{master-web-port}/boomer-config on each spawn message. Exits if the first fetch fails; later failures keep the last fetched values. {master-host} comes from boomer's existing --master-host flag.")
 		configPollInterval      = flag.Duration("config-poll-interval", 10*time.Second, "With --master-web-port, also fetch dynconfig on this interval. A spawn message comes only when the number of users or the spawn rate changes, thus a load shape that changes the sample rate alone needs this. Zero stops the polling.")
 		userClass               = flag.String("user-class", "glutton", fmt.Sprintf("Locust user class to run, lowercase; one of %s.", strings.Join(userclass.Names(), "|")))
@@ -102,17 +102,27 @@ func main() {
 		return
 	}
 
-	initialCfg, err := dynconfig.Parse([]byte(*configJSON), dynconfig.Config{
-		MaxWait:         500 * time.Millisecond,
-		MaxPingsPerWake: 1,
-	})
-	if err != nil {
-		slog.Error("failed to parse --config-json", slog.String("err", err.Error()))
+	entry, ok := userclass.Lookup(class)
+	if !ok {
+		slog.Error("fatal: unknown --user-class value",
+			slog.String("user_class", *userClass),
+			slog.String("known", strings.Join(userclass.Names(), ",")))
 		os.Exit(1)
 	}
 
+	// The holder is built from the class's own codec, so a --config-json
+	// the class cannot run on fails here, and a bad value from the master
+	// later is refused in favor of the last good config.
+	dyn := dynconfig.NewHolder(entry.Config)
+	if *configJSON != "" {
+		if _, _, err := dyn.Apply([]byte(*configJSON)); err != nil {
+			slog.Error("failed to parse --config-json", slog.String("err", err.Error()))
+			os.Exit(1)
+		}
+	}
+
 	ctx := context.Background()
-	sampler := btrace.NewUpdatableSampler(initialCfg.TraceProbability)
+	sampler := btrace.NewUpdatableSampler(dyn.Common().TraceProbability)
 	tp, err := btrace.Init(ctx, "substrate-boomer", sampler)
 	if err != nil {
 		slog.Error("failed to initialize tracing", slog.String("err", err.Error()))
@@ -143,8 +153,6 @@ func main() {
 	transport.MaxIdleConnsPerHost = *httpMaxIdleConnsPerHost
 	transport.IdleConnTimeout = 5 * time.Minute
 	httpClient := &http.Client{Timeout: 30 * time.Second, Transport: transport}
-
-	dyn := dynconfig.NewHolder(initialCfg)
 
 	if *masterWebPort > 0 {
 		masterHost := flag.Lookup("master-host").Value.String()
@@ -195,13 +203,6 @@ func main() {
 		ActorDeadline:    time.Duration(*actorDeadline * float64(time.Second)),
 	}
 
-	entry, ok := userclass.Lookup(class)
-	if !ok {
-		slog.Error("fatal: unknown --user-class value",
-			slog.String("user_class", *userClass),
-			slog.String("known", strings.Join(userclass.Names(), ",")))
-		os.Exit(1)
-	}
 	taskFn, shutdownFn := entry.Init(cfg)
 
 	slog.Info("registered boomer task",
