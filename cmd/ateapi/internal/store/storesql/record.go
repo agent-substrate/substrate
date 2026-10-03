@@ -14,8 +14,9 @@
 
 // Package storesql holds the backend-neutral pieces shared by the SQL store
 // backends, atepg (PostgreSQL) and atemy (MySQL): proto record handling,
-// keyset page tokens, the worker event codec and in-process fan-out, and the
-// lease renewal loop. The backends supply every SQL statement.
+// keyset page tokens, the worker event codec and in-process fan-out, the
+// lease renewal loop, and the migration runner. The backends supply every SQL
+// statement.
 package storesql
 
 import (
@@ -31,8 +32,8 @@ import (
 
 // UnmarshalStored decodes a stored proto, dropping fields this binary has no
 // descriptor for. This means a newer replica can have written such a field.
-// It also backfills defaults to make all resources are properly defaulted, even
-// the ones stored before a field with defaults was introduced.
+// It also backfills defaults, including for resources stored before a field
+// with defaults was introduced.
 func UnmarshalStored(b []byte, m proto.Message) error {
 	if err := (proto.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(b, m); err != nil {
 		return err

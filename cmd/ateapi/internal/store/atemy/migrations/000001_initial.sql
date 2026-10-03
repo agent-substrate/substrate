@@ -19,9 +19,10 @@
 -- statement is idempotent so the next startup completes the file.
 
 -- No table declares a foreign key, because PlanetScale disables them by
--- default. atemy enforces every parent and child relationship in the transaction that writes the child or deletes
--- the parent. Key columns use a binary collation so names compare byte for
--- byte, as text equality does in PostgreSQL.
+-- default. atemy enforces every parent and child relationship in the
+-- transaction that writes the child or deletes the parent. Key columns use a
+-- binary collation so names compare byte for byte, as text equality does in
+-- PostgreSQL.
 
 CREATE TABLE IF NOT EXISTS atespaces (
     name     VARCHAR(255) NOT NULL,

@@ -40,7 +40,6 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
@@ -171,7 +170,7 @@ func (p *Persistence) trimWorkerOutboxOlderThan(ctx context.Context, age time.Du
 			// Only the rows read, so a write still committing below last is
 			// never waited on. A watcher waiting on such a row closes once the
 			// trim mark passes it.
-			if _, err := tx.ExecContext(ctx, `DELETE FROM worker_outbox WHERE seq IN (?`+strings.Repeat(", ?", len(expiredSeqs)-1)+`)`, expiredSeqs...); err != nil {
+			if _, err := tx.ExecContext(ctx, `DELETE FROM worker_outbox WHERE seq IN `+inList(len(expiredSeqs)), expiredSeqs...); err != nil {
 				return fmt.Errorf("deleting expired outbox rows: %w", err)
 			}
 			if _, err := tx.ExecContext(ctx, `UPDATE worker_outbox_trim SET seq = GREATEST(seq, ?) WHERE id = 1`, last); err != nil {
@@ -425,7 +424,7 @@ func (p *Persistence) pollWorkerOutbox(ctx context.Context, cursor *outboxCursor
 		SELECT seq, payload FROM worker_outbox
 		WHERE seq > ? ORDER BY seq LIMIT ?`, cursor.seq, outboxBatch)
 	if err != nil {
-		return nil, false, false, err
+		return nil, false, false, fmt.Errorf("reading new worker outbox rows: %w", err)
 	}
 	var late []outboxRow
 	if len(cursor.pending) > 0 {
@@ -435,14 +434,14 @@ func (p *Persistence) pollWorkerOutbox(ctx context.Context, cursor *outboxCursor
 		}
 		late, err = p.queryOutboxRows(ctx, `
 			SELECT seq, payload FROM worker_outbox
-			WHERE seq IN (?`+strings.Repeat(", ?", len(seqs)-1)+`) ORDER BY seq`, seqs...)
+			WHERE seq IN `+inList(len(seqs))+` ORDER BY seq`, seqs...)
 		if err != nil {
-			return nil, false, false, err
+			return nil, false, false, fmt.Errorf("reading pending worker outbox rows: %w", err)
 		}
 	}
 	marks, err := p.readOutboxMarks(ctx)
 	if err != nil {
-		return nil, false, false, err
+		return nil, false, false, fmt.Errorf("reading worker outbox marks: %w", err)
 	}
 
 	now := time.Now()
@@ -480,7 +479,7 @@ func (p *Persistence) dropRolledBack(ctx context.Context, cursor *outboxCursor, 
 	// A scan would lock, and fail NOWAIT on, rows other writes hold.
 	rows, err := p.watchDB.QueryContext(ctx, `
 		SELECT seq FROM worker_outbox FORCE INDEX (PRIMARY)
-		WHERE seq IN (?`+strings.Repeat(", ?", len(candidates)-1)+`)
+		WHERE seq IN `+inList(len(candidates))+`
 		FOR SHARE NOWAIT`, candidates...)
 	if mysqlErrNumber(err) == errLockNowait {
 		return nil // a write is still committing; probe again next poll

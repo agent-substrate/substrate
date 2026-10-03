@@ -33,9 +33,9 @@ const DefaultLeaseTTL = 30 * time.Second
 // one holding many row locks.
 const LeaseCleanupBatch = 1000
 
-// LeaseSQL is the database half of a distributed lease. Each func runs one
-// statement against the database clock; AcquireLease supplies the token and
-// drives renewal and release.
+// LeaseSQL is the database half of a distributed lease. Each func is atomic
+// and decides expiry by the database clock; AcquireLease supplies the token
+// and drives renewal and release.
 type LeaseSQL struct {
 	// Database names the backend in log lines.
 	Database string

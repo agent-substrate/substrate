@@ -21,9 +21,7 @@
 // (primary keys, versions, pagination, update/delete preconditions) plus
 // the complete protobuf message, binary-encoded, in a LONGBLOB column.
 // Parent and child rows are kept consistent by the transactions that write
-// them, in place of foreign keys. TLS is configured through the tls
-// connection string parameter, or through ConnectConfig.TLS files that are
-// read again for every new connection.
+// them, in place of foreign keys.
 package atemy
 
 import (
@@ -37,6 +35,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/authz"
@@ -270,10 +269,8 @@ func Open(dsn string) (*sql.DB, error) {
 	return sql.OpenDB(c), nil
 }
 
-// NewPersistence wraps an already-open database, applying pending migrations.
-// Callers that already hold a *sql.DB (e.g. tests using testcontainers) use
-// this directly instead of Connect; outbox watch traffic shares the given
-// database. Open db with Open.
+// NewPersistence wraps a database opened with Open, applying pending
+// migrations. Watch and owner traffic share it.
 func NewPersistence(ctx context.Context, db *sql.DB) (*Persistence, error) {
 	return newPersistence(ctx, db, db, db)
 }
@@ -345,13 +342,15 @@ type querier interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }
 
+// inList returns a parenthesized list of n placeholders for an IN clause.
+func inList(n int) string { return "(?" + strings.Repeat(", ?", n-1) + ")" }
+
 // txRetries bounds how many times inTx reruns a transaction InnoDB chose as a
 // deadlock victim.
 const txRetries = 5
 
-// txBackoff spaces deadlock retries, so the transaction that won has time to
-// commit, as the loser would wait for it on PostgreSQL. The delays start at
-// 10ms and double, with jitter, for about 0.3s to 0.6s in all.
+// txBackoff spaces deadlock retries so the transaction that won has time to
+// commit.
 func txBackoff() wait.Backoff {
 	return wait.Backoff{Steps: txRetries, Duration: 10 * time.Millisecond, Factor: 2, Jitter: 1}
 }
@@ -370,9 +369,7 @@ func inTx(ctx context.Context, db *sql.DB, fn func(tx *sql.Tx) error) error {
 			return err
 		}
 		if backoff.Steps == 0 {
-			// The write lost to a concurrent one and the caller may retry. A
-			// lock wait timeout is returned as is, like a lock wait that runs
-			// into a context deadline on PostgreSQL.
+			// The write lost to a concurrent one and the caller may retry.
 			return fmt.Errorf("%w: %w", store.ErrVersionConflict, err)
 		}
 		retry := time.NewTimer(backoff.Step())

@@ -20,9 +20,8 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"log/slog"
-	"time"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storesql"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
@@ -130,49 +129,6 @@ func rejectUnversionedSubstrateSchema(ctx context.Context, pool *pgxpool.Pool) e
 	return nil
 }
 
-func migrateToLatest(ctx context.Context, provider *goose.Provider) (migrationErr error) {
-	started := time.Now()
-	current, latest, err := provider.GetVersions(ctx)
-	if err != nil {
-		return fmt.Errorf("get PostgreSQL migration versions: %w", err)
-	}
-	starting := current
-
-	applied := 0
-	defer func() {
-		attributes := []any{
-			slog.Int64("starting_version", starting),
-			slog.Int64("current_version", current),
-			slog.Int64("latest_version", latest),
-			slog.Int("applied_migrations", applied),
-			slog.Duration("duration", time.Since(started)),
-		}
-		if migrationErr != nil {
-			attributes = append(attributes, slog.Any("err", migrationErr))
-			slog.ErrorContext(ctx, "PostgreSQL migrations failed", attributes...)
-			return
-		}
-		slog.InfoContext(ctx, "PostgreSQL migrations ready", attributes...)
-	}()
-
-	results, err := provider.Up(ctx)
-	if err != nil {
-		var partial *goose.PartialError
-		if errors.As(err, &partial) {
-			applied = len(partial.Applied)
-		}
-		applyErr := fmt.Errorf("apply PostgreSQL migrations: %w", err)
-		failedCurrent, _, versionErr := provider.GetVersions(ctx)
-		if versionErr != nil {
-			return errors.Join(applyErr, fmt.Errorf("get PostgreSQL migration versions after a failure: %w", versionErr))
-		}
-		current = failedCurrent
-		return applyErr
-	}
-	applied = len(results)
-	current, _, err = provider.GetVersions(ctx)
-	if err != nil {
-		return fmt.Errorf("get PostgreSQL migration versions after migration: %w", err)
-	}
-	return nil
+func migrateToLatest(ctx context.Context, provider *goose.Provider) error {
+	return storesql.MigrateToLatest(ctx, provider, "PostgreSQL")
 }

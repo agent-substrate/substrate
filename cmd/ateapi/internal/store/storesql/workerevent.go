@@ -53,7 +53,7 @@ func UnmarshalWorkerEvent(payload []byte) (store.WorkerEvent, error) {
 	}
 	worker := &ateapipb.Worker{}
 	if err := UnmarshalStored(payload[1:], worker); err != nil {
-		return store.WorkerEvent{}, fmt.Errorf("in unmarshalStored: %w", err)
+		return store.WorkerEvent{}, fmt.Errorf("unmarshaling worker event payload: %w", err)
 	}
 	if worker.GetMetadata().GetName() == "" {
 		return store.WorkerEvent{}, fmt.Errorf("worker event payload has no worker name")
