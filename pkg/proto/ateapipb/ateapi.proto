@@ -451,6 +451,20 @@ message EgressPolicy {
   repeated EgressRule rules = 2;
 }
 
+// EgressPolicyTemplate defines an initial Actor egress policy without resource
+// metadata. Rules have the same defaults, validation, and semantics as
+// EgressPolicy.rules.
+message EgressPolicyTemplate {
+  // Rules are an unordered set of allows, with the same precedence and effects
+  // as EgressPolicy.rules. Traffic is denied when no rule matches.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=256
+  // +k8s:listType=atomic
+  // +k8s:customValidation # no two rules tie on a name and port
+  repeated EgressRule rules = 1;
+}
+
 // EgressRule allows traffic for a given protocol and destination (host name
 // or IP, and port). The protocol fixes what the gateway matches on and when:
 // a request, or a TLS connection at its ClientHello. Traffic that matches no
@@ -986,6 +1000,16 @@ message ActorTemplate {
 
   // +k8s:optional
   ActorTemplateStatus status = 8;
+
+  // Initial egress policy, copied atomically when an Actor is created from
+  // this template, including the golden Actor used for initialization. The
+  // policy is named "default" in the Actor's atespace, with its own metadata.
+  // Callers may update or delete the copy independently; changing the Actor's
+  // template does not update its policy. If absent, no policy is created;
+  // an empty block creates a policy with no rules.
+  //
+  // +k8s:optional
+  EgressPolicyTemplate default_egress_policy = 9;
 }
 
 message Resources {

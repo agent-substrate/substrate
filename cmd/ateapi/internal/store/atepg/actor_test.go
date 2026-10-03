@@ -23,6 +23,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestUpdateActor_ConcurrentWriteReturnsConflict(t *testing.T) {
@@ -33,7 +34,7 @@ func TestUpdateActor_ConcurrentWriteReturnsConflict(t *testing.T) {
 		Metadata:      &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-a"},
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: "default", Name: "template-a"},
 		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
@@ -85,8 +86,77 @@ func TestCreateActor_MissingAtespace_FailedPrecondition(t *testing.T) {
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: "ns1", Name: "tmpl1"},
 		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 	}
-	if _, err := s.CreateActor(ctx, actor); !errors.Is(err, store.ErrFailedPrecondition) {
+	if _, err := s.CreateActor(ctx, actor, nil); !errors.Is(err, store.ErrFailedPrecondition) {
 		t.Errorf("CreateActor with missing atespace = %v, want ErrFailedPrecondition", err)
+	}
+}
+
+func TestCreateActor_EgressPolicyRollback(t *testing.T) {
+	p := setupPostgresPersistence(t)
+	ctx := t.Context()
+	createTestAtespace(t, p, "team-a")
+	actor := &ateapipb.Actor{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "fail-policy"},
+		Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+	}
+	policy := &ateapipb.EgressPolicy{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "default"},
+		Rules: []*ateapipb.EgressRule{{
+			Http: &ateapipb.HTTPRule{Hostnames: []string{"api.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{80}}},
+		}},
+	}
+	wantActor, wantPolicy := proto.CloneOf(actor), proto.CloneOf(policy)
+	ref := resources.ActorRefFromActor(actor)
+
+	// Fail the policy INSERT after the actor INSERT has succeeded.
+	if _, err := p.pool.Exec(ctx, `ALTER TABLE actor_egress_policies ADD CONSTRAINT fail_policy CHECK (actor_name <> 'fail-policy')`); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if _, err := p.pool.Exec(context.Background(), `ALTER TABLE actor_egress_policies DROP CONSTRAINT IF EXISTS fail_policy`); err != nil {
+			t.Error(err)
+		}
+	})
+	if _, err := p.CreateActor(ctx, actor, policy); err == nil {
+		t.Fatal("expected policy insert failure")
+	}
+	if _, err := p.GetActor(ctx, ref); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("actor after rollback: %v, want ErrNotFound", err)
+	}
+	if _, err := p.GetEgressPolicy(ctx, ref); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("policy after rollback: %v, want ErrNotFound", err)
+	}
+	if _, err := p.pool.Exec(ctx, `ALTER TABLE actor_egress_policies DROP CONSTRAINT fail_policy`); err != nil {
+		t.Fatal(err)
+	}
+	created, err := p.CreateActor(ctx, actor, policy)
+	if err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	got, err := p.GetActor(ctx, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !proto.Equal(created, got) {
+		t.Errorf("stored actor = %v, want %v", got, created)
+	}
+	if !proto.Equal(wantActor, actor) || !proto.Equal(wantPolicy, policy) {
+		t.Error("CreateActor mutated its inputs")
+	}
+	if _, err := p.CreateActor(ctx, actor, &ateapipb.EgressPolicy{}); !errors.Is(err, store.ErrAlreadyExists) {
+		t.Fatalf("duplicate create: %v, want ErrAlreadyExists", err)
+	}
+	storedPolicy, err := p.GetEgressPolicy(ctx, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPolicy.Metadata = storedPolicy.Metadata
+	if !proto.Equal(wantPolicy, storedPolicy) {
+		t.Errorf("stored policy = %v, want %v", storedPolicy, wantPolicy)
+	}
+	md := storedPolicy.GetMetadata()
+	if md.GetAtespace() != ref.Atespace || md.GetName() != "default" || md.GetUid() == "" || md.GetUid() == created.GetMetadata().GetUid() || md.GetVersion() != 1 || md.GetCreateTime() == nil || md.GetUpdateTime() == nil {
+		t.Errorf("unexpected policy metadata: %v", md)
 	}
 }
 
@@ -110,7 +180,7 @@ func TestListActors_CrossScopePageToken(t *testing.T) {
 		t.Fatalf("CreateAtespace(team-b) failed: %v", err)
 	}
 	for _, name := range []string{"a1", "a2"} {
-		if _, err := s.CreateActor(ctx, &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: name, Atespace: "team-a"}, Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED}}); err != nil {
+		if _, err := s.CreateActor(ctx, &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: name, Atespace: "team-a"}, Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED}}, nil); err != nil {
 			t.Fatalf("CreateActor failed: %v", err)
 		}
 	}
