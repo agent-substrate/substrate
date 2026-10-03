@@ -260,3 +260,28 @@ func TestProxySidecarPatchNamesTheContainer(t *testing.T) {
 		t.Errorf("the patch declares no %q initContainer; reconcileCloudSQLProxySidecar keys its removal branch on that name", cloudSQLProxyContainer)
 	}
 }
+
+// A MySQL install loads with an explicitly empty Cloud SQL instance, so the
+// sidecar an earlier PostgreSQL install added is removed even though the
+// cluster still records the instance.
+func TestReconcileCloudSQLProxySidecarRemovesItOnMySQL(t *testing.T) {
+	dep := apiServerDeployment(SecretAPIEnvVars)
+	dep.Spec.Template.Spec.InitContainers = []corev1.Container{{Name: cloudSQLProxyContainer}}
+	e := &Env{
+		Cfg: &config.Config{
+			StoreBackend: config.StoreBackendMySQL,
+			CloudSQL:     config.CloudSQLConfig{InstanceSet: true},
+		},
+		Kube: fakeKube(t, dep, apiServerEnvVarsConfigMap(map[string]string{envCloudSQLInstance: "p:r:i"})),
+	}
+	if err := e.reconcileCloudSQLProxySidecar(t.Context()); err != nil {
+		t.Fatalf("reconcileCloudSQLProxySidecar() error = %v", err)
+	}
+	installed, err := e.cloudSQLProxyInstalled(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if installed {
+		t.Error("the Cloud SQL proxy sidecar is still installed on a MySQL install")
+	}
+}

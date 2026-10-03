@@ -39,7 +39,8 @@ the atelet DaemonSet, then waits for each to roll out.
 
 The bundled PostgreSQL StatefulSet is skipped when
 ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING or the ATE_API_POSTGRES_CLOUDSQL_* variables
-select an external database.
+select an external database, or when ATE_API_STORE_BACKEND=mysql selects an
+external MySQL.
 
 Shape the install with the global --atenet-dataplane, --cluster-size, and
 --cordon-control-plane flags.`,
@@ -123,7 +124,7 @@ var deployPostgresCmd = &cobra.Command{
 "deploy ate-system" already brings PostgreSQL up, unless
 ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING or the ATE_API_POSTGRES_CLOUDSQL_* variables
 select an external database; this subcommand is for bringing the StatefulSet up
-by itself.`,
+by itself. It refuses to run with ATE_API_STORE_BACKEND=mysql.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		return env.DeployPostgres(cmd.Context())

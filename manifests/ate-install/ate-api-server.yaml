@@ -94,6 +94,11 @@ spec:
           - --postgres-read-write-role=@env
           - --postgres-owner-role=@env
           - --postgres-schema=@env
+          - --mysql-read-write-connection-string=@env
+          - --mysql-owner-connection-string=@env
+          - --mysql-tls-ca-file=@env
+          - --mysql-tls-cert-file=@env
+          - --mysql-tls-key-file=@env
           - --actor-id-jwt-pool=/run/actor-id-jwt-pool/pool.json
           - --actor-id-ca-pool=/run/actor-id-ca-pool/pool.json
           - --atelet-client-cred-bundle=/run/podidentity.podcert.ate.dev/credential-bundle.pem
@@ -171,6 +176,12 @@ spec:
         # itself.
         - name: "postgres-server-ca"
           mountPath: "/run/postgres-server-ca"
+          readOnly: true
+        # mysql-server-ca: server CA for an external MySQL, read through
+        # ATE_API_MYSQL_TLS_CA_FILE. Empty unless the mysql-server-ca Secret
+        # exists.
+        - name: "mysql-server-ca"
+          mountPath: "/run/mysql-server-ca"
           readOnly: true
         ports:
         - containerPort: 443
@@ -256,6 +267,10 @@ spec:
       - name: "postgres-server-ca"
         secret:
           secretName: "postgres-server-ca"
+          optional: true
+      - name: "mysql-server-ca"
+        secret:
+          secretName: "mysql-server-ca"
           optional: true
 ---
 # Allow voluntary disruptions (node drains, cluster upgrades) to take
