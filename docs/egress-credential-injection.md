@@ -20,10 +20,9 @@ the secret, nor choose the value that leaves the cluster.
 Actors call APIs that need bearer tokens or API keys, and those secrets must
 stay out of the actor's filesystem, environment, and snapshots.
 
-Injection happens only on HTTPS that an `https` rule allows, so the actor must
-make the request over HTTPS and must trust the gateway CA — see
-[egress-trust-bundle.md](egress-trust-bundle.md). Cleartext HTTP allowed by an
-`http` rule is never injected into.
+Injection is supported on HTTP and HTTPS requests allowed by an `http` or
+`https` rule with credential replacement effects. For HTTPS, the actor must
+trust the gateway CA — see [egress-trust-bundle.md](egress-trust-bundle.md).
 
 ## How it works
 
@@ -62,7 +61,7 @@ deploys.
 
 ## The policy
 
-Injection is declared in the `effects` of an `https` rule. This policy allows
+Injection is declared in the `effects` of an `http` or `https` rule. This policy allows
 HTTPS to `api.example.com` on port 443, the default, and replaces the actor's
 `Authorization` header with a credential:
 
@@ -109,28 +108,27 @@ interpret. A URI the provider refuses denies the request with 403.
 
 | Situation | Outcome |
 |---|---|
-| Request decided by an `https` rule, carries the header, provider configured, credential resolves | Header value replaced with the credential; request re-originated upstream |
-| Request decided by an `https` rule, does not carry the header | Forwarded unchanged; no credential is fetched |
-| Cleartext request decided by an `http` rule with `replaceHeaders` | Injection **skipped**, request passes through without the credential — a secret is never put on a cleartext wire |
-| Request decided by an `https` rule, carries the header, no provider configured (`--credential-provider='{"enabled":false}'`) | **500**, fail closed |
+| Request decided by an `http` or `https` rule, carries the header, provider configured, credential resolves | Header value replaced with the credential; request re-originated upstream |
+| Request decided by an `http` or `https` rule, does not carry the header | Forwarded unchanged; no credential is fetched |
+| Request decided by an `http` or `https` rule, carries the header, no provider configured (`--credential-provider='{"enabled":false}'`) | **500** (Envoy) or **403** (agentgateway), fail closed |
 | Secret missing, or namespace not authorized for the atespace | **403**, fail closed |
 | Provider unreachable or timed out | **503**, fail closed but retryable |
 | Provider returns an empty credential, or one containing control characters | **503**, fail closed |
-| URI names a provider class this gateway does not serve; unusable header name; unparseable URI | **500**, fail closed |
+| URI names a provider class this gateway does not serve; unusable header name; unparseable URI | **500** (Envoy) or **403** (agentgateway), fail closed |
 
-Only a request that does not carry the header, or a cleartext one, skips
-injection. On an intercepted HTTPS request that carries it, any failure to
-produce the credential, including having no provider, denies the request
-rather than letting it out without the credential.
+A request that does not carry the header skips injection. On an HTTP or HTTPS
+request that carries it, any failure to produce the credential, including
+having no provider, denies the request rather than letting it out without
+the credential.
 
 ## For cluster admins
 
 ### Enable it
 
 **1. The gateway.** The provider is selected when the egress gateway is
-deployed, with `--deploy-ate-system` or `--deploy-atenet`, and requires the
-Envoy dataplane (the default). The selection is required: an install that
-wants no injection says so with `{"enabled":false}`.
+deployed, with `--deploy-ate-system` or `--deploy-atenet`, for either the Envoy
+or agentgateway dataplane. The selection is required: an install that wants
+no injection says so with `{"enabled":false}`.
 
 ```bash
 hack/install-ate.sh --deploy-atenet --credential-provider='{"name":"k8s.io"}'
@@ -291,13 +289,13 @@ may only resolve Secrets in namespaces explicitly granted to it.
 
 ## See also
 
-* [egress-trust-bundle.md](egress-trust-bundle.md) — the TLS-terminated leg
-  this feature runs on, and the actor-side trust projection it presupposes.
+* [egress-trust-bundle.md](egress-trust-bundle.md) — the actor-side trust
+  projection needed for HTTPS injection.
 * `demos/egress/README.md` — how tunneled egress, actor identity, and policy
   authorization fit together.
 * `pkg/proto/credproviderpb/credprovider.proto` — the provider plugin API and
   its trust model.
 * `cmd/credential-provider/kubernetes-secrets` — the reference provider.
 * `internal/e2e/suites/egresscredinject` — the e2e suite that proves the
-  behavior table above. It runs only with `E2E_EGRESS_CREDINJECT=1`, against a
-  cluster installed with `--credential-provider='{"name":"k8s.io"}'`.
+  behavior table above on both sandbox classes, against a cluster installed
+  with `--credential-provider='{"name":"k8s.io"}'`.

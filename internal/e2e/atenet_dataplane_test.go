@@ -33,18 +33,3 @@ func TestAtenetDataplaneEgressPolicyDenial(t *testing.T) {
 		}
 	})
 }
-
-func TestAtenetDataplaneTLSPassthroughEgressPolicy(t *testing.T) {
-	t.Run("envoy", func(t *testing.T) {
-		t.Setenv(AtenetDataplaneEnv, "")
-		if !CurrentAtenetDataplane().SupportsTLSPassthroughEgressPolicy() {
-			t.Error("Envoy TLS passthrough egress policy was not supported")
-		}
-	})
-	t.Run("agentgateway", func(t *testing.T) {
-		t.Setenv(AtenetDataplaneEnv, "agentgateway")
-		if CurrentAtenetDataplane().SupportsTLSPassthroughEgressPolicy() {
-			t.Error("AgentGateway TLS passthrough egress policy unexpectedly reported support")
-		}
-	})
-}
