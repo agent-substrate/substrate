@@ -47,15 +47,6 @@ func applyMigrations(ctx context.Context, db *sql.DB) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := requireMySQL8(ctx, db); err != nil {
-		return err
-	}
-	if err := requireAutoIncrementStep(ctx, db); err != nil {
-		return err
-	}
-	if err := requireStrictMode(ctx, db); err != nil {
-		return err
-	}
 	if err := rejectUnversionedSubstrateSchema(ctx, db); err != nil {
 		return err
 	}

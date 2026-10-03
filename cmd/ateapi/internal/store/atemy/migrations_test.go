@@ -31,6 +31,7 @@ import (
 	"testing/fstest"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
 	"github.com/google/go-cmp/cmp"
 	"github.com/openfga/openfga/assets"
 	"github.com/pressly/goose/v3"
@@ -517,6 +518,26 @@ func TestRequireAutoIncrementStep(t *testing.T) {
 	}
 	if _, err := NewPersistence(ctx, db); err == nil || !strings.Contains(err.Error(), "auto_increment_increment") {
 		t.Errorf("NewPersistence with a step of 2 = %v, want a step error", err)
+	}
+}
+
+// The read/write DSN can turn strict mode off for the sessions that write,
+// while the owner pool that migrates stays strict.
+func TestNewPersistence_RequiresStrictReadWriteSessions(t *testing.T) {
+	ctx := t.Context()
+	owner := requireDB(t)
+	cfg, err := mysql.ParseDSN(containerDSNForTest(t))
+	if err != nil {
+		t.Fatalf("parsing DSN: %v", err)
+	}
+	cfg.Params = map[string]string{"sql_mode": "''"}
+	db, err := Open(cfg.FormatDSN())
+	if err != nil {
+		t.Fatalf("opening pool: %v", err)
+	}
+	defer db.Close()
+	if _, err := newPersistence(ctx, db, db, owner); err == nil || !strings.Contains(err.Error(), "strict sql_mode") {
+		t.Errorf("newPersistence with a non-strict read/write pool = %v, want a strict mode error", err)
 	}
 }
 

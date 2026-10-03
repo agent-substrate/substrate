@@ -83,8 +83,8 @@ func TestList_NamesAnUndecodableRow(t *testing.T) {
 }
 
 // Key columns use utf8mb4_0900_bin, so names that a case-insensitive or
-// PAD SPACE collation would fold together stay distinct, and listings and
-// their page tokens follow byte order, as they do in PostgreSQL.
+// PAD SPACE collation would fold together stay distinct, as they do in
+// PostgreSQL, and listings and their page tokens follow byte order.
 func TestKeys_CompareByteForByte(t *testing.T) {
 	s := setupMySQLPersistence(t)
 	ctx := t.Context()
@@ -154,36 +154,10 @@ func TestKeys_CompareByteForByte(t *testing.T) {
 	}
 }
 
-func TestMapLockError(t *testing.T) {
+func TestIsUniqueViolation(t *testing.T) {
 	deadlock := &mysql.MySQLError{Number: 1213, Message: "Deadlock found when trying to get lock"}
-	lockWait := &mysql.MySQLError{Number: 1205, Message: "Lock wait timeout exceeded"}
 	duplicate := &mysql.MySQLError{Number: 1062, Message: "Duplicate entry"}
-	other := errors.New("connection refused")
-	for _, tc := range []struct {
-		name         string
-		err          error
-		wantConflict bool
-	}{
-		{"deadlock", deadlock, true},
-		{"lock wait timeout", lockWait, false},
-		{"wrapped deadlock", fmt.Errorf("committing transaction: %w", deadlock), true},
-		{"duplicate key", duplicate, false},
-		{"not a MySQL error", other, false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			got := mapLockError(tc.err)
-			if errors.Is(got, store.ErrVersionConflict) != tc.wantConflict {
-				t.Errorf("mapLockError(%v) = %v, want ErrVersionConflict: %t", tc.err, got, tc.wantConflict)
-			}
-			if !errors.Is(got, tc.err) {
-				t.Errorf("mapLockError(%v) = %v, which no longer wraps the cause", tc.err, got)
-			}
-		})
-	}
-	if err := mapLockError(nil); err != nil {
-		t.Errorf("mapLockError(nil) = %v, want nil", err)
-	}
-	if !isUniqueViolation(fmt.Errorf("inserting: %w", duplicate)) || isUniqueViolation(deadlock) || isUniqueViolation(other) {
+	if !isUniqueViolation(fmt.Errorf("inserting: %w", duplicate)) || isUniqueViolation(deadlock) || isUniqueViolation(errors.New("connection refused")) {
 		t.Error("isUniqueViolation must match exactly MySQL error 1062")
 	}
 }
@@ -312,7 +286,7 @@ func TestInTx_ReportsARepeatedDeadlockAsVersionConflict(t *testing.T) {
 	}
 }
 
-func TestInTx_LockWaitTimeoutReportsVersionConflict(t *testing.T) {
+func TestInTx_ReturnsLockWaitTimeout(t *testing.T) {
 	s := setupMySQLPersistence(t)
 	ctx := t.Context()
 	createTestAtespace(t, s, "a")

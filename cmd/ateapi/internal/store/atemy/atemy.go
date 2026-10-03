@@ -278,6 +278,17 @@ func NewPersistence(ctx context.Context, db *sql.DB) (*Persistence, error) {
 }
 
 func newPersistence(ctx context.Context, db, watchDB, ownerDB *sql.DB) (*Persistence, error) {
+	if err := requireMySQL8(ctx, db); err != nil {
+		return nil, err
+	}
+	// The read/write pool's sessions run every write, and its DSN can set
+	// session variables, so the session checks run there.
+	if err := requireAutoIncrementStep(ctx, db); err != nil {
+		return nil, err
+	}
+	if err := requireStrictMode(ctx, db); err != nil {
+		return nil, err
+	}
 	if err := applyMigrations(ctx, ownerDB); err != nil {
 		return nil, err
 	}
@@ -347,10 +358,13 @@ func inTx(ctx context.Context, db *sql.DB, fn func(tx *sql.Tx) error) error {
 	var err error
 	for range txAttempts {
 		if err = runTx(ctx, db, fn); mysqlErrNumber(err) != errDeadlock {
-			break
+			return err
 		}
 	}
-	return mapLockError(err)
+	// The write lost to a concurrent one and the caller may retry. A lock wait
+	// timeout is returned as is, like a lock wait that runs into a context
+	// deadline on PostgreSQL.
+	return fmt.Errorf("%w: %w", store.ErrVersionConflict, err)
 }
 
 func runTx(ctx context.Context, db *sql.DB, fn func(tx *sql.Tx) error) error {
@@ -366,17 +380,6 @@ func runTx(ctx context.Context, db *sql.DB, fn func(tx *sql.Tx) error) error {
 		return fmt.Errorf("committing transaction: %w", err)
 	}
 	return nil
-}
-
-// mapLockError reports a deadlock that outlasted inTx's attempts as
-// ErrVersionConflict: the write lost to a concurrent one and the caller may
-// retry. A lock wait timeout is returned as is, like a lock wait that runs
-// into a context deadline on PostgreSQL.
-func mapLockError(err error) error {
-	if mysqlErrNumber(err) == errDeadlock {
-		return fmt.Errorf("%w: %w", store.ErrVersionConflict, err)
-	}
-	return err
 }
 
 // MySQL error numbers atemy acts on.
