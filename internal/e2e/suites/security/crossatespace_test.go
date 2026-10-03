@@ -225,7 +225,7 @@ func testTagScopeBoundary(t *testing.T, ctx context.Context, clients *e2e.Client
 	if err != nil {
 		t.Fatalf("SuspendActor %s/%s: %v", ns.a, source, err)
 	}
-	if suspended.GetActor().GetStatus().GetExternalSnapshot().GetSnapshotUri() == "" {
+	if durableSnapshotURI(suspended.GetActor().GetStatus()) == "" {
 		t.Fatalf("suspended actor %s/%s has no external snapshot, so there is nothing for a tag to capture", ns.a, source)
 	}
 
@@ -246,7 +246,7 @@ func testTagScopeBoundary(t *testing.T, ctx context.Context, clients *e2e.Client
 	if err != nil {
 		t.Fatalf("CreateTag %s/%s: %v", ns.a, tagRef.GetName(), err)
 	}
-	if tag.GetStatus().GetSnapshot().GetSnapshotUri() == "" {
+	if snapshotURI(tag.GetStatus().GetSnapshot()) == "" {
 		t.Fatalf("tag %s/%s has no snapshot uri, so it could seed an Actor in NO atespace and the negative case below would be vacuous",
 			ns.a, tagRef.GetName())
 	}
@@ -450,4 +450,26 @@ func probeFileOp(t *testing.T, ctx context.Context, rc *e2e.RouterClient, actor 
 		t.Fatalf("decoding %s for %s: %v", endpoint, actor, err)
 	}
 	return out
+}
+
+func durableSnapshotURI(status *ateapipb.ActorStatus) string {
+	var best *ateapipb.Snapshot
+	for _, snap := range status.GetSnapshots() {
+		if uri := snapshotURI(snap); uri != "" {
+			if best == nil || snap.GetGeneration() > best.GetGeneration() {
+				best = snap
+			}
+		}
+	}
+	return snapshotURI(best)
+}
+
+func snapshotURI(snap *ateapipb.Snapshot) string {
+	for _, st := range snap.GetStorage() {
+		if st.GetDurability() == ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE &&
+			st.GetStatus() == ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED {
+			return st.GetObject().GetSnapshotUri()
+		}
+	}
+	return ""
 }

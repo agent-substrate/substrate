@@ -377,7 +377,7 @@ An actor takes a series of snapshots over its life, so it gets a prefix of its o
 
 An owner is collected by deleting everything under its prefix, and it can delete nothing else. That is what makes a borrowed snapshot safe: an actor created from a tag points at a URI under `tags/`, which its own prefix does not cover. See [Snapshot lifetime](#snapshot-lifetime).
 
-An `Actor` reports its current snapshot in the server-managed `status.externalSnapshot` and a `Tag` in `status.snapshot`, each an `ExternalSnapshot` carrying `snapshotUri`, `fidelity`, and `actorTemplateUid`. The URI is recorded when the snapshot is written. `actorTemplateUid` records the `ActorTemplate` whose sandbox the guest state was captured from, which is not always the template the actor points at now: an actor may be repointed while `SUSPENDED`, and the snapshot on disk still came from the old one. A resume that finds the two disagree restores the durable data only and boots the guest fresh, because memory captured under one sandbox image cannot be resumed under another. An `ActorTemplate` references its golden tag with the `ObjectRef` in `status.goldenSnapshotStatus.goldenTag`. These status fields are server-owned and ignored on input. Parse a URI only against the scheme above.
+An `Actor` reports its snapshots in the server-managed `status.snapshots` (and `status.lastAssignedGeneration`) and a `Tag` in `status.snapshot`, each a `Snapshot` carrying `generation`, `owner`, `actorTemplateUid`, and `storage`. The URI and `fidelity` are recorded in a `DURABLE` `SnapshotStorage` entry (`object.snapshotUri` and `fidelity`) when the snapshot is written. `actorTemplateUid` records the `ActorTemplate` whose sandbox the guest state was captured from, which is not always the template the actor points at now: an actor may be repointed while `SUSPENDED`, and the snapshot on disk still came from the old one. A resume that finds the two disagree restores the durable data only and boots the guest fresh, because memory captured under one sandbox image cannot be resumed under another. An `ActorTemplate` references its golden tag with the `ObjectRef` in `status.goldenSnapshotStatus.goldenTag`. These status fields are server-owned and ignored on input. Parse a URI only against the scheme above.
 
 An `ActorTemplate` belongs to one atespace, but one `storageLocation` still holds snapshots for many atespaces: the golden actor lives in the reserved `ate-golden` atespace, and a `PUBLISHED` snapshot may be cloned from other atespaces. The `<atespace>` level exists so that access can be granted per tenant: an object-storage policy can only condition on an **object-name prefix**, and cannot read the identity recorded inside a snapshot's manifest. Binding a per-atespace grant on GCS looks like:
 
@@ -490,7 +490,7 @@ The Substrate Control Plane (`ate-api-server`) exposes a gRPC interface for mana
 Registers a new logical actor in the system.
 *   **Request:** `CreateActorRequest`
     *   `actor`: `Actor` — the actor to create. Its `metadata` carries the atespace and name (name must be a DNS-1123 label); the `actor_template` ref (atespace + name) selects the `ActorTemplate`.
-    *   `actor.source_tag`: (Optional) `ObjectRef` of a `Tag` to seed the actor from. The tag must be taken under the same `ActorTemplate`, and either in the actor's own atespace or `PUBLISHED`. Nothing is copied: the new actor's `status.externalSnapshot` points at the tag's snapshot, under the tag's prefix, until its own first suspend.
+    *   `actor.source_tag`: (Optional) `ObjectRef` of a `Tag` to seed the actor from. The tag must be taken under the same `ActorTemplate`, and either in the actor's own atespace or `PUBLISHED`. Nothing is copied: the new actor's `status.snapshots` points at the tag's snapshot, under the tag's prefix, until its own first suspend.
 *   **Response:** the initialized `Actor`.
 
 #### `UpdateActor`
@@ -513,7 +513,7 @@ Activates a suspended actor by restoring it onto a physical worker.
 Hibernate a running actor, capturing its current RAM and disk state into a snapshot.
 *   **Request:** `SuspendActorRequest`
     *   `actor`: `ObjectRef` of the actor to suspend.
-*   **Response:** `SuspendActorResponse` containing the `Actor` object in `ACTOR_STATE_SUSPENDED`, with its snapshot in `status.externalSnapshot`.
+*   **Response:** `SuspendActorResponse` containing the `Actor` object in `ACTOR_STATE_SUSPENDED`, with its snapshot in `status.snapshots`.
 *   A successful suspend releases the actor's previous external snapshot: an actor keeps one, and only tags outlive it. To keep the snapshot a suspend just wrote, tag it with `CreateTag` while the actor is still suspended.
 
 #### Snapshot lifetime
@@ -522,21 +522,21 @@ Every external snapshot has exactly one owner, and the control plane deletes it 
 
 | Owner | Released when |
 | :--- | :--- |
-| The actor that took it (`status.externalSnapshot`) | The actor's next successful suspend replaces it, or the actor is deleted. |
+| The actor that took it (`status.snapshots`) | The actor's next successful suspend replaces it, or the actor is deleted. |
 | The tag that copied it (`status.snapshot`) | The tag is deleted. |
 
 An actor created from a tag borrows the tag's copy instead of taking one of its own. The borrowed URI sits under the tag's prefix, which the actor's own prefix does not cover, so neither suspending nor deleting the actor can reach it; its first own suspend writes a snapshot under the actor's prefix, and it owns its snapshots from then on.
 
 Deletion always runs before the database reference is dropped, and a failure fails the whole RPC. Clients are expected to retry with the same arguments: destinations are deterministic and every phase tolerates a partly-completed predecessor, so a retry resumes rather than duplicating work. The cost of that ordering is that a crash between the two can leave an external snapshot no row names; the reverse order would instead lose the handle needed to ever delete it.
 
-> **Do not delete a tag while actors created from it exist.** A clone borrows the tag's snapshot rather than copying it, and only stops borrowing at its own first suspend (its `status.externalSnapshot.snapshotUri` still names the tag's prefix while it is). Deleting the tag leaves such a clone unable to resume. This is not prevented today.
+> **Do not delete a tag while actors created from it exist.** A clone borrows the tag's snapshot rather than copying it, and only stops borrowing at its own first suspend (its `status.snapshots` entry still names the tag's prefix while it is). Deleting the tag leaves such a clone unable to resume. This is not prevented today.
 
 #### `RevertActor`
-Discards an actor's live or crashed execution and transitions it to `ACTOR_STATE_SUSPENDED` at its last completed external snapshot (`status.externalSnapshot`).
+Discards an actor's live or crashed execution and transitions it to `ACTOR_STATE_SUSPENDED` at its last completed external snapshot (`status.snapshots`).
 *   **Request:** `RevertActorRequest`
     *   `actor`: `ObjectRef` of the actor to revert. Accepted from `ACTOR_STATE_RUNNING`, `ACTOR_STATE_PAUSED`, and `ACTOR_STATE_CRASHED` (plus `ACTOR_STATE_REVERTING` for idempotent retries). Calling `RevertActor` on an already `ACTOR_STATE_SUSPENDED` actor returns `FAILED_PRECONDITION`.
 *   **Response:** `RevertActorResponse` containing the reverted `Actor` in `ACTOR_STATE_SUSPENDED`.
-*   Reverting terminates any bound worker sandbox, clears node-local pause checkpoints (`localSnapshot`), and garbage-collects any partial external snapshot left by an interrupted suspend while preserving the last committed `externalSnapshot`.
+*   Reverting terminates any bound worker sandbox, clears node-local pause checkpoints, and garbage-collects any partial external snapshot left by an interrupted suspend while preserving the last committed durable snapshot in `status.snapshots`.
 *   External volumes are not reverted. Their contents are never part of a snapshot, so a reverted actor comes back with its memory and root filesystem rewound but its volumes exactly as the discarded execution left them.
 
 #### `DeleteActor`

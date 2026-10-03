@@ -474,7 +474,7 @@ Triggered by an explicit `SuspendActor` call.
      borrowed from a tag is left alone, since the tag owns it.
 
   5. **State**: State transitions back to `ACTOR_STATE_SUSPENDED`, and the Actor's
-     `status.externalSnapshot` names the external snapshot it resumes from.
+     `status.snapshots` records the external snapshot it resumes from.
 
 Snapshots may be given tags owned and addressed by an Atespace. The same tag 
 name may exist in different Atespaces. A tag is an immutable alias and retention pin:
