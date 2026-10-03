@@ -200,8 +200,8 @@ func assertPruned(t *testing.T, op string, want, got proto.Message) {
 // against a fresh store.Interface built by setup for each subtest. setup is
 // responsible for its own cleanup (e.g. via t.Cleanup).
 //
-// PostgreSQL-specific behavior such as foreign-key races and transactional
-// notifications is not covered here; see atepg's own test file for that.
+// Backend-specific behavior such as worker outbox notifications is covered by
+// each backend's own tests.
 func RunContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
 	runActorContractTests(t, setup)
 	runEgressPolicyContractTests(t, setup)
@@ -1050,6 +1050,9 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 			if _, err := s.ListActors(ctx, scope, store.ListOptions{PageSize: 1, PageToken: teamAPage.NextPageToken}); !errors.Is(err, store.ErrInvalidPageToken) {
 				t.Errorf("ListActors(%q) with a team-a page token = %v, want ErrInvalidPageToken", scope, err)
 			}
+		}
+		if _, err := s.ListAtespaces(ctx, store.ListOptions{PageSize: 1, PageToken: teamAPage.NextPageToken}); !errors.Is(err, store.ErrInvalidPageToken) {
+			t.Errorf("ListAtespaces with an actor page token = %v, want ErrInvalidPageToken", err)
 		}
 
 		if _, err := s.GetActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "a1"}); err != nil {
