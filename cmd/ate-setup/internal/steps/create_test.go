@@ -90,6 +90,26 @@ func TestMySQLAPIServerEnvVars(t *testing.T) {
 				"ATE_API_MYSQL_OWNER_CONNECTION_STRING":      ownerDSN,
 			},
 		},
+		{
+			name: "TLS files in the pod",
+			cfg: config.Config{
+				MySQLReadWriteConnectionString: readWriteDSN,
+				MySQLOwnerConnectionString:     readWriteDSN,
+				MySQLTLSCAFile:                 "/run/servicedns.podcert.ate.dev/trust-bundle.pem",
+				MySQLTLSCertFile:               "/run/podidentity.podcert.ate.dev/credential-bundle.pem",
+				MySQLTLSKeyFile:                "/run/podidentity.podcert.ate.dev/credential-bundle.pem",
+			},
+			wantConfig: map[string]string{
+				"ATE_API_MYSQL_TLS_CA_FILE":   "/run/servicedns.podcert.ate.dev/trust-bundle.pem",
+				"ATE_API_MYSQL_TLS_CERT_FILE": "/run/podidentity.podcert.ate.dev/credential-bundle.pem",
+				"ATE_API_MYSQL_TLS_KEY_FILE":  "/run/podidentity.podcert.ate.dev/credential-bundle.pem",
+			},
+			wantSecret: map[string]string{
+				"ATE_API_STORE_BACKEND":                      config.StoreBackendMySQL,
+				"ATE_API_MYSQL_READ_WRITE_CONNECTION_STRING": readWriteDSN,
+				"ATE_API_MYSQL_OWNER_CONNECTION_STRING":      readWriteDSN,
+			},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			configVars, secretVars := mysqlAPIServerEnvVars(&tc.cfg)

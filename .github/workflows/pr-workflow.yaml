@@ -64,7 +64,7 @@ jobs:
         -- -race -v ./...
     # The unit tests above run the store-backed control plane suites on
     # PostgreSQL; rerun them on MySQL. atemy's own tests already ran above.
-    - name: MySQL store tests
+    - name: MySQL control plane tests
       env:
         ATE_TEST_STORE_BACKEND: mysql
       run: hack/run-tool.sh gotestsum --junitfile "${ARTIFACTS}/unit-mysql.xml"

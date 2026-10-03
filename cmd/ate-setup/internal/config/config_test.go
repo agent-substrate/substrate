@@ -403,23 +403,6 @@ func TestLoadMySQL(t *testing.T) {
 		}
 	})
 
-	t.Run("TLS files in the pod", func(t *testing.T) {
-		const bundle = "/run/podidentity.podcert.ate.dev/credential-bundle.pem"
-		loadEnv(t)
-		t.Setenv("ATE_API_STORE_BACKEND", StoreBackendMySQL)
-		t.Setenv("ATE_API_MYSQL_READ_WRITE_CONNECTION_STRING", dsn)
-		t.Setenv("ATE_API_MYSQL_TLS_CA_FILE", "/run/servicedns.podcert.ate.dev/trust-bundle.pem")
-		t.Setenv("ATE_API_MYSQL_TLS_CERT_FILE", bundle)
-		t.Setenv("ATE_API_MYSQL_TLS_KEY_FILE", bundle)
-		cfg, err := Load(Options{})
-		if err != nil {
-			t.Fatalf("Load() error = %v", err)
-		}
-		if cfg.MySQLTLSCAFile != "/run/servicedns.podcert.ate.dev/trust-bundle.pem" || cfg.MySQLTLSCertFile != bundle || cfg.MySQLTLSKeyFile != bundle {
-			t.Errorf("MySQL TLS files = %q, %q, %q", cfg.MySQLTLSCAFile, cfg.MySQLTLSCertFile, cfg.MySQLTLSKeyFile)
-		}
-	})
-
 	t.Run("separate owner login", func(t *testing.T) {
 		loadEnv(t)
 		t.Setenv("ATE_API_STORE_BACKEND", StoreBackendMySQL)

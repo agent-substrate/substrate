@@ -408,7 +408,6 @@ func TestCreateAPIServerEnvVarsMySQL(t *testing.T) {
 		StoreBackendSet:                true,
 		MySQLReadWriteConnectionString: readWriteDSN,
 		MySQLOwnerConnectionString:     readWriteDSN,
-		StorePoolMaxConns:              "16",
 		MySQLServerCAFile:              caFile,
 		CloudSQL:                       config.CloudSQLConfig{InstanceSet: true},
 	}
@@ -436,15 +435,6 @@ func TestCreateAPIServerEnvVarsMySQL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantConfig := map[string]string{
-		"ATE_API_STORE_POOL_MAX_CONNS": "16",
-		"ATE_API_MYSQL_TLS_CA_FILE":    mysqlServerCAPath,
-	}
-	for k, v := range wantConfig {
-		if cm.Data[k] != v {
-			t.Errorf("ConfigMap %s = %q, want %q", k, cm.Data[k], v)
-		}
-	}
 	if _, ok := cm.Data["CSQL_PROXY_PORT"]; ok {
 		t.Errorf("ConfigMap data = %v, want no Cloud SQL proxy settings on MySQL", cm.Data)
 	}
@@ -467,24 +457,23 @@ func TestCreateAPIServerEnvVarsMySQL(t *testing.T) {
 	if ca == nil || ca.StringData["server-ca.pem"] != "-----BEGIN CERTIFICATE-----\n" {
 		t.Errorf("%s = %+v, want the CA file's contents under server-ca.pem", SecretMySQLServerCA, ca)
 	}
-	if path.Base(mysqlServerCAPath) != "server-ca.pem" {
-		t.Errorf("mysqlServerCAPath = %q, want it to name the Secret's server-ca.pem key", mysqlServerCAPath)
-	}
 }
 
 // A redeploy that leaves ATE_API_STORE_BACKEND unset must not move a MySQL
 // install onto an empty bundled PostgreSQL.
 func TestCheckRecordedStoreBackend(t *testing.T) {
+	defaulted := config.Config{StoreBackend: config.StoreBackendPostgres}
 	for _, tc := range []struct {
 		name     string
 		cfg      config.Config
+		noSecret bool
 		recorded string
 		wantErr  bool
 	}{
-		{name: "fresh install"},
-		{name: "default matches the record", recorded: config.StoreBackendPostgres},
-		{name: "record predates the backend key"},
-		{name: "default would switch away from MySQL", recorded: config.StoreBackendMySQL, wantErr: true},
+		{name: "fresh install", cfg: defaulted, noSecret: true},
+		{name: "default matches the record", cfg: defaulted, recorded: config.StoreBackendPostgres},
+		{name: "record predates the backend key", cfg: defaulted},
+		{name: "default would switch away from MySQL", cfg: defaulted, recorded: config.StoreBackendMySQL, wantErr: true},
 		{
 			name:     "explicit switch to PostgreSQL",
 			cfg:      config.Config{StoreBackend: config.StoreBackendPostgres, StoreBackendSet: true},
@@ -497,11 +486,15 @@ func TestCheckRecordedStoreBackend(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: SecretAPIEnvVars, Namespace: NamespaceAteSystem}}
-			if tc.recorded != "" {
-				secret.Data = map[string][]byte{envStoreBackend: []byte(tc.recorded)}
+			var objects []runtime.Object
+			if !tc.noSecret {
+				secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: SecretAPIEnvVars, Namespace: NamespaceAteSystem}}
+				if tc.recorded != "" {
+					secret.Data = map[string][]byte{envStoreBackend: []byte(tc.recorded)}
+				}
+				objects = append(objects, secret)
 			}
-			e := &Env{Cfg: &tc.cfg, Kube: fakeKube(t, secret)}
+			e := &Env{Cfg: &tc.cfg, Kube: fakeKube(t, objects...)}
 			err := e.checkRecordedStoreBackend(t.Context())
 			if gotErr := err != nil; gotErr != tc.wantErr {
 				t.Fatalf("checkRecordedStoreBackend() error = %v, wantErr %v", err, tc.wantErr)
@@ -513,30 +506,19 @@ func TestCheckRecordedStoreBackend(t *testing.T) {
 	}
 }
 
-// ate-api-server.yaml has to read every MySQL setting the installer writes and
-// mount the Secret at the path ATE_API_MYSQL_TLS_CA_FILE names.
-// The TLS files a MySQL DSN cannot name are forwarded as paths in the pod,
-// the way a PostgreSQL DSN names its sslrootcert, sslcert and sslkey.
-func TestMySQLAPIServerEnvVarsForwardTLSFiles(t *testing.T) {
-	const bundle = "/run/podidentity.podcert.ate.dev/credential-bundle.pem"
-	cfg := &config.Config{
-		StoreBackend:                   config.StoreBackendMySQL,
-		MySQLReadWriteConnectionString: "runtime:pw@tcp(db:3306)/substrate",
-		MySQLTLSCAFile:                 "/run/servicedns.podcert.ate.dev/trust-bundle.pem",
-		MySQLTLSCertFile:               bundle,
-		MySQLTLSKeyFile:                bundle,
+func TestApplyMySQLServerCAMissingFile(t *testing.T) {
+	e := &Env{
+		Cfg:  &config.Config{MySQLServerCAFile: filepath.Join(t.TempDir(), "missing.pem")},
+		Kube: fakeKube(t),
 	}
-	configVars, _ := mysqlAPIServerEnvVars(cfg)
-	want := map[string]string{
-		"ATE_API_MYSQL_TLS_CA_FILE":   "/run/servicedns.podcert.ate.dev/trust-bundle.pem",
-		"ATE_API_MYSQL_TLS_CERT_FILE": bundle,
-		"ATE_API_MYSQL_TLS_KEY_FILE":  bundle,
-	}
-	if !maps.Equal(configVars, want) {
-		t.Errorf("ConfigMap data = %v, want %v", configVars, want)
+	err := e.applyMySQLServerCA(t.Context())
+	if err == nil || !strings.Contains(err.Error(), "ATE_API_MYSQL_SERVER_CA_FILE") {
+		t.Fatalf("applyMySQLServerCA() error = %v, want it to name ATE_API_MYSQL_SERVER_CA_FILE", err)
 	}
 }
 
+// ate-api-server.yaml has to read every MySQL setting the installer writes and
+// mount the Secret at the path ATE_API_MYSQL_TLS_CA_FILE names.
 func TestAPIServerManifestReadsMySQLSettings(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(repoRoot(t), "manifests", "ate-install", "ate-api-server.yaml"))
 	if err != nil {

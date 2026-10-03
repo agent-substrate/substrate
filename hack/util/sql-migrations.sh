@@ -27,10 +27,13 @@ verify_sql_migrations() {
   local migrations_dir="$1"
   local database="$2"
   local if_not_exists="$3"
-  local migrations migration name version expected released_ref tag
+  local released_ref="${4:-}"
+  local migrations migration name version expected tag nullglob
 
+  nullglob="$(shopt -p nullglob || true)"
   shopt -s nullglob
   migrations=("${migrations_dir}"/*.sql)
+  eval "${nullglob}"
   if (( ${#migrations[@]} == 0 )); then
     echo "Add at least one ${database} migration." >&2
     exit 1
@@ -75,7 +78,6 @@ verify_sql_migrations() {
     expected=$((expected + 1))
   done
 
-  released_ref="${4:-}"
   if [[ -z "${released_ref}" ]]; then
     while read -r tag; do
       if [[ ! "${tag}" =~ ^v[1-9][0-9]*\.[0-9]+\.[0-9]+$ ]]; then

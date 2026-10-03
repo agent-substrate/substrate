@@ -47,8 +47,8 @@ func (e *Env) EnsureAPIServerPrerequisites(ctx context.Context) error {
 	if err := e.ensureSecret(ctx, NamespacePodCert, SecretServiceDNSCA, e.CreatePodCertificateControllerCAs); err != nil {
 		return err
 	}
-	// Always reconcile the PostgreSQL connection settings, so that a changed
-	// ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING reaches an existing install.
+	// Always reconcile the store settings, so that a changed connection string
+	// reaches an existing install.
 	if err := e.CreateAPIServerEnvVars(ctx); err != nil {
 		return err
 	}

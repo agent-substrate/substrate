@@ -36,18 +36,14 @@ const envHashAnnotation = "ate.dev/env-hash"
 // Secret's server-ca.pem.
 const mysqlServerCAPath = "/run/mysql-server-ca/server-ca.pem"
 
-// CreateAPIServerEnvVars reconciles how ate-api-server reaches its store. For
-// PostgreSQL: both DSNs and the schema into the ate-api-server-secret-envvars
-// Secret, stable roles and Cloud SQL settings into the ConfigMap, and an
-// external server CA into postgres-server-ca. For MySQL: both DSNs into the
-// Secret, the pool size and CA path into the ConfigMap, and the server CA into
-// mysql-server-ca. The backend selector goes into the Secret either way.
+// CreateAPIServerEnvVars reconciles how ate-api-server reaches its store. The
+// connection strings, the backend selector, and the PostgreSQL schema go into
+// the ate-api-server-secret-envvars Secret, other settings into the ConfigMap,
+// and an external server CA into its own Secret.
 //
-// ate-api-server.yaml pulls both in through optional envFrom sources and
-// resolves the connection, role, and schema flags from the result. It lists
+// ate-api-server.yaml pulls both in through optional envFrom sources and lists
 // the secretRef last, so the Secret wins over a DSN a previous installer left
-// in the ConfigMap. Each backend writes the selector and only its own keys,
-// so ateapi never reads a key the other backend left behind.
+// in the ConfigMap. Each backend writes only its own keys.
 func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 	log.Step("create_api_server_env_vars")
 	if err := e.Kube.EnsureNamespace(ctx, e.Namespace()); err != nil {
@@ -94,12 +90,12 @@ func (e *Env) checkRecordedStoreBackend(ctx context.Context) error {
 		return err
 	}
 	recorded := string(secret.Data[envStoreBackend])
-	if recorded == "" || recorded == e.Cfg.StoreBackendName() {
+	if recorded == "" || recorded == e.Cfg.StoreBackend {
 		return nil
 	}
 	return fmt.Errorf("ate-api-server uses the %s store backend and ATE_API_STORE_BACKEND is unset; "+
 		"set ATE_API_STORE_BACKEND=%s with its connection settings to keep it, or ATE_API_STORE_BACKEND=%s to switch",
-		recorded, recorded, e.Cfg.StoreBackendName())
+		recorded, recorded, e.Cfg.StoreBackend)
 }
 
 // postgresAPIServerEnvVars resolves the PostgreSQL ConfigMap and Secret
