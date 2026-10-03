@@ -171,7 +171,7 @@ func TestMigrations_ResumeAPartialInitialMigration(t *testing.T) {
 			t.Fatalf("running %q: %v", stmt, err)
 		}
 		ran = append(ran, stmt)
-		if strings.Contains(stmt, "INSERT INTO worker_outbox_sequence") {
+		if strings.Contains(stmt, "INSERT INTO worker_outbox_trim") {
 			break
 		}
 	}
@@ -191,9 +191,9 @@ func TestMigrations_ResumeAPartialInitialMigration(t *testing.T) {
 	if diff := cmp.Diff(embeddedMigrationVersions(t), appliedMigrationVersions(t, db)); diff != "" {
 		t.Fatalf("applied migration versions (-embedded +applied):\n%s", diff)
 	}
-	var seqRows int
-	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM worker_outbox_sequence`).Scan(&seqRows); err != nil || seqRows != 1 {
-		t.Fatalf("worker_outbox_sequence rows = %d, %v; want 1", seqRows, err)
+	var trimRows int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM worker_outbox_trim`).Scan(&trimRows); err != nil || trimRows != 1 {
+		t.Fatalf("worker_outbox_trim rows = %d, %v; want 1", trimRows, err)
 	}
 
 	storecontract.RunContractTests(t, func(t *testing.T) store.Interface {
@@ -468,6 +468,39 @@ func TestMigrationFailureLeavesCompletedPrefixAndResumes(t *testing.T) {
 	if tables != 2 {
 		t.Errorf("found %d of the 2 columns migrations 2 and 3 create", tables)
 	}
+}
+
+// Multi-primary replication hands out AUTO_INCREMENT values in steps, which
+// watchers would track as gaps that never fill.
+func TestRequireAutoIncrementStep(t *testing.T) {
+	db, err := Open(containerDSNForTest(t))
+	if err != nil {
+		t.Fatalf("opening pool: %v", err)
+	}
+	defer db.Close()
+	// One connection, kept, so the session setting applies to every query.
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	ctx := t.Context()
+	if err := requireAutoIncrementStep(ctx, db); err != nil {
+		t.Fatalf("requireAutoIncrementStep with the default step = %v, want nil", err)
+	}
+	if _, err := db.ExecContext(ctx, `SET SESSION auto_increment_increment = 2`); err != nil {
+		t.Fatalf("setting auto_increment_increment: %v", err)
+	}
+	if err := requireAutoIncrementStep(ctx, db); err == nil || !strings.Contains(err.Error(), "auto_increment_increment = 1, got 2") {
+		t.Errorf("requireAutoIncrementStep with a step of 2 = %v, want a step error", err)
+	}
+	if _, err := NewPersistence(ctx, db); err == nil || !strings.Contains(err.Error(), "auto_increment_increment") {
+		t.Errorf("NewPersistence with a step of 2 = %v, want a step error", err)
+	}
+}
+
+// containerDSNForTest returns the shared container's DSN once it is up.
+func containerDSNForTest(t *testing.T) string {
+	t.Helper()
+	requireDB(t)
+	return containerDSN
 }
 
 func TestRequireMySQL8(t *testing.T) {

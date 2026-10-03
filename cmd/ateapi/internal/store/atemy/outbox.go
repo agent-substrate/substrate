@@ -18,12 +18,14 @@
 // deletes rows past retention and records how far it deleted, so lagging
 // watchers detect the loss and resync (trimWorkerOutbox).
 //
-// PostgreSQL fences its xid cursor behind the oldest in-flight transaction.
-// MySQL exposes no such horizon, so seq is handed out by a single counter
-// row that each worker write locks from its append until it commits. Writes
-// therefore commit in seq order, and a row a poller has not yet seen can
-// never carry a seq below the cursor. The cost is that worker writes
-// serialize for the duration of their final statement and commit.
+// seq is an AUTO_INCREMENT key taken by each write's last statement, so
+// writes never wait on one another, as with atepg's xids. A seq is assigned
+// before its transaction commits, though, and PostgreSQL's snapshot horizon
+// has no MySQL counterpart, so a poller can see seq N+1 before seq N commits.
+// The poller delivers what it sees and remembers each skipped seq as
+// pending, delivering it if it commits later. That reorders events only
+// across workers: two writes to one worker hold its row lock in turn, so the
+// later write's seq is assigned after the earlier one commits.
 
 package atemy
 
@@ -32,6 +34,8 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
@@ -59,14 +63,11 @@ func (p *Persistence) writeAndAppendEvent(ctx context.Context, eventType store.W
 		if err != nil {
 			return fmt.Errorf("marshaling worker event: %w", err)
 		}
-		// The counter row lock is taken last and held to commit; see the
-		// file comment.
-		if _, err := tx.ExecContext(ctx, `UPDATE worker_outbox_sequence SET seq = seq + 1 WHERE id = 1`); err != nil {
-			return fmt.Errorf("advancing worker outbox sequence: %w", err)
-		}
+		// Last, so the seq is assigned as close to commit as possible: a seq
+		// waiting on its commit is a gap pollers must track.
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO worker_outbox (seq, created_at, payload)
-			SELECT seq, UTC_TIMESTAMP(6), ? FROM worker_outbox_sequence WHERE id = 1`, payload); err != nil {
+			INSERT INTO worker_outbox (created_at, payload)
+			VALUES (UTC_TIMESTAMP(6), ?)`, payload); err != nil {
 			return fmt.Errorf("appending worker outbox: %w", err)
 		}
 		return nil
@@ -93,6 +94,16 @@ const (
 
 	// Rows one retention transaction deletes.
 	outboxTrimBatch = 1000
+
+	// How long a watcher waits for a skipped seq to commit. A seq is assigned
+	// by a write's last statement, so only a commit stalled this long, or a
+	// rollback, leaves a gap open past it. It is well under
+	// outboxRetentionAge, so retention never deletes a row a watcher still
+	// waits for unless that row's commit stalled for minutes.
+	outboxGapWait = 5 * time.Minute
+
+	// Caps the skipped seqs a watcher tracks; past it the watcher resyncs.
+	outboxMaxPending = 4096
 )
 
 // Bounds stale-serving during polling outages: after this duration of
@@ -112,6 +123,7 @@ func (p *Persistence) trimWorkerOutboxOlderThan(ctx context.Context, age time.Du
 	for {
 		var deleted int
 		err := inTx(ctx, p.watchDB, func(tx *sql.Tx) error {
+			deleted = 0
 			var mark uint64
 			if err := tx.QueryRowContext(ctx, `SELECT seq FROM worker_outbox_trim WHERE id = 1 FOR UPDATE`).Scan(&mark); err != nil {
 				return fmt.Errorf("locking outbox trim mark: %w", err)
@@ -143,6 +155,9 @@ func (p *Persistence) trimWorkerOutboxOlderThan(ctx context.Context, age time.Du
 			if deleted == 0 {
 				return nil
 			}
+			// A row below last that is still uncommitted holds its lock, so
+			// this waits for it and deletes it too if it commits; the trim
+			// mark then covers it for watchers still waiting on it.
 			if _, err := tx.ExecContext(ctx, `DELETE FROM worker_outbox WHERE seq <= ?`, last); err != nil {
 				return fmt.Errorf("deleting expired outbox rows: %w", err)
 			}
@@ -157,26 +172,100 @@ func (p *Persistence) trimWorkerOutboxOlderThan(ctx context.Context, age time.Du
 	}
 }
 
+// outboxMarks are the values a poll checks against its cursor, read after
+// the poll's rows.
+type outboxMarks struct {
+	// trim is the greatest seq retention has deleted.
+	trim uint64
+	// head is the greatest seq written: the larger of the greatest stored
+	// seq and trim.
+	head uint64
+	// server identifies the MySQL server that answered (@@server_uuid). A
+	// failover to another server can lose writes it never received.
+	server string
+}
+
+func (p *Persistence) readOutboxMarks(ctx context.Context) (outboxMarks, error) {
+	var m outboxMarks
+	err := p.watchDB.QueryRowContext(ctx, `
+		SELECT t.seq, GREATEST(t.seq, COALESCE((SELECT MAX(seq) FROM worker_outbox), 0)), @@server_uuid
+		FROM worker_outbox_trim AS t WHERE t.id = 1`).Scan(&m.trim, &m.head, &m.server)
+	return m, err
+}
+
+// outboxCursor is a watcher's position: every seq at or below seq was
+// delivered, written before the watch, or is pending.
+type outboxCursor struct {
+	seq uint64
+	// pending holds skipped seqs below seq, each with when it was skipped.
+	pending map[uint64]time.Time
+	server  string
+}
+
+// skip records the seqs between the cursor and next as pending.
+func (c *outboxCursor) skip(next uint64, now time.Time) {
+	c.wait(c.seq, next, now)
+}
+
+// wait records the seqs strictly between lo and hi as pending, stopping one
+// past outboxMaxPending so closeReason reports the overflow.
+func (c *outboxCursor) wait(lo, hi uint64, now time.Time) {
+	for s := lo + 1; s < hi && len(c.pending) <= outboxMaxPending; s++ {
+		c.pending[s] = now
+	}
+}
+
+// closeReason reports why marks force a resync, or "" if they do not.
+func (c *outboxCursor) closeReason(m outboxMarks) string {
+	switch {
+	case m.server != c.server:
+		return "MySQL server changed under the outbox (failover)"
+	case m.head < c.seq:
+		return "worker outbox moved behind the watch cursor (lost writes)"
+	case m.trim > c.seq:
+		return "worker watch fell behind outbox retention"
+	case len(c.pending) > outboxMaxPending:
+		return "worker watch is waiting on too many uncommitted outbox rows"
+	}
+	for s := range c.pending {
+		if s <= m.trim {
+			return "outbox retention deleted a row the watch was still waiting for"
+		}
+	}
+	return ""
+}
+
+// expire stops waiting on seqs skipped longer than outboxGapWait ago; their
+// transactions rolled back.
+func (c *outboxCursor) expire(now time.Time) {
+	for s, at := range c.pending {
+		if now.Sub(at) > outboxGapWait {
+			delete(c.pending, s)
+		}
+	}
+}
+
 // WatchWorkers subscribes by polling the worker_outbox table with a seq
-// cursor. The cursor starts at the last committed seq, so the watch sees every
-// write that commits after it subscribes and none from before.
+// cursor. The cursor starts at the greatest seq written, and the seqs below it
+// still uncommitted start pending, so the watch sees every write that commits
+// after it subscribes.
 //
 // This process's own writes are published at commit, ahead of the poll, and
 // again on the poll, so consumers must reconcile versions and tolerate
 // duplicates.
 //
-// If the watcher falls behind retention, or the database loses committed
-// writes so that the sequence moves behind the cursor, it closes the channel
-// to force the consumer to resync from the primary tables. Unlike atepg's
-// UNLOGGED outbox, worker_outbox is durable, so a clean restart loses no
-// events.
+// The watch closes to force the consumer to resync from the primary tables
+// when it may have missed an event: it fell behind retention, the server
+// changed or lost writes, or it waits on too many uncommitted seqs. Unlike
+// atepg's UNLOGGED outbox, worker_outbox is durable, so a restart of the same
+// server loses no events.
 func (p *Persistence) WatchWorkers(ctx context.Context) (*store.WorkerWatch, error) {
 	watchCtx, cancel := context.WithCancel(ctx)
 
-	var cursor uint64
-	if err := p.watchDB.QueryRowContext(watchCtx, `SELECT seq FROM worker_outbox_sequence WHERE id = 1`).Scan(&cursor); err != nil {
+	cursor, err := p.subscribeWorkerOutbox(watchCtx)
+	if err != nil {
 		cancel()
-		return nil, fmt.Errorf("reading worker outbox cursor: %w", err)
+		return nil, err
 	}
 
 	ch := make(chan store.WorkerEvent, 128)
@@ -202,7 +291,7 @@ func (p *Persistence) WatchWorkers(ctx context.Context) (*store.WorkerWatch, err
 			// Drain until a batch is partial. Sleeping between full batches would
 			// cap throughput and cause unrecoverable lag during bursts.
 			for {
-				batch, trim, head, err := p.pollWorkerOutbox(watchCtx, cursor)
+				batch, full, resync, err := p.pollWorkerOutbox(watchCtx, cursor)
 				if err != nil {
 					if watchCtx.Err() != nil {
 						return
@@ -221,20 +310,8 @@ func (p *Persistence) WatchWorkers(ctx context.Context) (*store.WorkerWatch, err
 					break
 				}
 				failingSince = time.Time{}
-				// A head behind the cursor means the database lost committed
-				// writes (a failover or a restore). New writes would reuse seqs
-				// the cursor has passed, so close for a resync.
-				if head < cursor {
-					slog.WarnContext(watchCtx, "worker outbox sequence moved behind the watch cursor; closing for resync",
-						slog.Uint64("cursor_seq", cursor), slog.Uint64("head_seq", head))
-					return
-				}
-				// Retention safety: if retention deleted past the cursor, a row
-				// this watcher never consumed may be gone. Close before
-				// delivering anything past the gap.
-				if trim > cursor {
-					slog.WarnContext(watchCtx, "worker watch fell behind outbox retention; closing for resync",
-						slog.Uint64("cursor_seq", cursor))
+				if resync != "" {
+					slog.WarnContext(watchCtx, resync+"; closing watch for resync", slog.Uint64("cursor_seq", cursor.seq))
 					return
 				}
 				for _, r := range batch {
@@ -249,12 +326,11 @@ func (p *Persistence) WatchWorkers(ctx context.Context) (*store.WorkerWatch, err
 					}
 					select {
 					case ch <- event:
-						cursor = r.seq
 					case <-watchCtx.Done():
 						return
 					}
 				}
-				if len(batch) < outboxBatch {
+				if !full {
 					break // caught up; wait for the next tick
 				}
 			}
@@ -263,39 +339,129 @@ func (p *Persistence) WatchWorkers(ctx context.Context) (*store.WorkerWatch, err
 	return store.NewWorkerWatch(ch, cancel), nil
 }
 
+// subscribeWorkerOutbox places a new watch at the greatest seq written. It
+// walks back from there through the rows written in the last outboxGapWait.
+// The seqs missing among them, and between the oldest of them and the row
+// before it, may belong to writes still committing, so they start pending.
+// Rows present were written before the watch and are not delivered.
+func (p *Persistence) subscribeWorkerOutbox(ctx context.Context) (*outboxCursor, error) {
+	marks, err := p.readOutboxMarks(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("reading worker outbox cursor: %w", err)
+	}
+	cursor := &outboxCursor{seq: marks.head, pending: map[uint64]time.Time{}, server: marks.server}
+	now := time.Now()
+	// above is the lowest recent row seen so far; the walk ends at the first
+	// row older than the window, or at the trim mark.
+	above, recent := marks.head+1, true
+	for recent {
+		rows, err := p.watchDB.QueryContext(ctx, `
+			SELECT seq, created_at >= UTC_TIMESTAMP(6) - INTERVAL ? MICROSECOND
+			FROM worker_outbox WHERE seq > ? AND seq < ?
+			ORDER BY seq DESC LIMIT ?`, outboxGapWait.Microseconds(), marks.trim, above, outboxBatch)
+		if err != nil {
+			return nil, fmt.Errorf("reading recent worker outbox rows: %w", err)
+		}
+		n := 0
+		for rows.Next() && recent {
+			var seq uint64
+			if err := rows.Scan(&seq, &recent); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("reading recent worker outbox rows: %w", err)
+			}
+			if above <= marks.head {
+				cursor.wait(seq, above, now)
+			}
+			if recent {
+				above = seq
+			}
+			n++
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf("reading recent worker outbox rows: %w", err)
+		}
+		if n < outboxBatch {
+			break
+		}
+	}
+	if recent && above <= marks.head {
+		// Every row down to the trim mark is recent.
+		cursor.wait(marks.trim, above, now)
+	}
+	if reason := cursor.closeReason(marks); reason != "" {
+		return nil, fmt.Errorf("subscribing to the worker outbox: %s", reason)
+	}
+	return cursor, nil
+}
+
 type outboxRow struct {
 	seq     uint64
 	payload []byte
 }
 
-// pollWorkerOutbox reads the rows after cursor, then the trim mark and the
-// sequence head. The marks are read second: a trim that commits between the
-// two reads raises the trim mark, so a row missing from the batch is always
-// detected.
-func (p *Persistence) pollWorkerOutbox(ctx context.Context, cursor uint64) (batch []outboxRow, trim, head uint64, err error) {
-	rows, err := p.watchDB.QueryContext(ctx, `
+// pollWorkerOutbox returns the rows to deliver, in seq order: pending seqs
+// that have committed, then up to outboxBatch rows past the cursor, and
+// advances cursor past them. full reports that more rows may follow; resync,
+// when set, says why the watch must close instead.
+//
+// The marks are read after the rows. A trim that commits between the reads
+// raises the trim mark, so a row missing from the batch is always detected.
+// Pending rows are read after new rows, so any write to a worker that the
+// new rows carry finds that worker's earlier pending write committed too.
+func (p *Persistence) pollWorkerOutbox(ctx context.Context, cursor *outboxCursor) (batch []outboxRow, full bool, resync string, err error) {
+	fresh, err := p.queryOutboxRows(ctx, `
 		SELECT seq, payload FROM worker_outbox
-		WHERE seq > ? ORDER BY seq LIMIT ?`, cursor, outboxBatch)
+		WHERE seq > ? ORDER BY seq LIMIT ?`, cursor.seq, outboxBatch)
 	if err != nil {
-		return nil, 0, 0, err
+		return nil, false, "", err
 	}
+	var late []outboxRow
+	if len(cursor.pending) > 0 {
+		seqs := make([]any, 0, len(cursor.pending))
+		for s := range cursor.pending {
+			seqs = append(seqs, s)
+		}
+		late, err = p.queryOutboxRows(ctx, `
+			SELECT seq, payload FROM worker_outbox
+			WHERE seq IN (?`+strings.Repeat(", ?", len(seqs)-1)+`) ORDER BY seq`, seqs...)
+		if err != nil {
+			return nil, false, "", err
+		}
+	}
+	marks, err := p.readOutboxMarks(ctx)
+	if err != nil {
+		return nil, false, "", err
+	}
+
+	now := time.Now()
+	for _, r := range late {
+		delete(cursor.pending, r.seq)
+	}
+	for _, r := range fresh {
+		cursor.skip(r.seq, now)
+		cursor.seq = r.seq
+	}
+	if reason := cursor.closeReason(marks); reason != "" {
+		return nil, false, reason, nil
+	}
+	cursor.expire(now)
+	return slices.Concat(late, fresh), len(fresh) == outboxBatch, "", nil
+}
+
+func (p *Persistence) queryOutboxRows(ctx context.Context, query string, args ...any) ([]outboxRow, error) {
+	rows, err := p.watchDB.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []outboxRow
 	for rows.Next() {
 		var r outboxRow
 		if err := rows.Scan(&r.seq, &r.payload); err != nil {
-			rows.Close()
-			return nil, 0, 0, err
+			return nil, err
 		}
-		batch = append(batch, r)
+		out = append(out, r)
 	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return nil, 0, 0, err
-	}
-	if err := p.watchDB.QueryRowContext(ctx, `
-		SELECT t.seq, s.seq FROM worker_outbox_trim AS t
-		JOIN worker_outbox_sequence AS s ON s.id = t.id
-		WHERE t.id = 1`).Scan(&trim, &head); err != nil {
-		return nil, 0, 0, err
-	}
-	return batch, trim, head, nil
+	return out, rows.Err()
 }

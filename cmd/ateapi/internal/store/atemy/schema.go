@@ -50,6 +50,9 @@ func applyMigrations(ctx context.Context, db *sql.DB) error {
 	if err := requireMySQL8(ctx, db); err != nil {
 		return err
 	}
+	if err := requireAutoIncrementStep(ctx, db); err != nil {
+		return err
+	}
 	migrations, err := fs.Sub(migrationFiles, "migrations")
 	if err != nil {
 		return fmt.Errorf("open embedded MySQL migrations: %w", err)
@@ -105,6 +108,21 @@ func (s migrationStore) TableExists(ctx context.Context, db database.DBTxConn) (
 		return false, fmt.Errorf("check MySQL migration ledger: %w", err)
 	}
 	return n > 0, nil
+}
+
+// requireAutoIncrementStep refuses a server that hands out AUTO_INCREMENT
+// values in steps, as multi-primary replication does. Watchers treat every
+// skipped worker outbox seq as a write still committing, so steps would leave
+// them tracking gaps that never fill.
+func requireAutoIncrementStep(ctx context.Context, db *sql.DB) error {
+	var step int
+	if err := db.QueryRowContext(ctx, `SELECT @@auto_increment_increment`).Scan(&step); err != nil {
+		return fmt.Errorf("get MySQL auto_increment_increment: %w", err)
+	}
+	if step != 1 {
+		return fmt.Errorf("atemy requires auto_increment_increment = 1, got %d", step)
+	}
+	return nil
 }
 
 // requireMySQL8 reports a clear error before an older server rejects the

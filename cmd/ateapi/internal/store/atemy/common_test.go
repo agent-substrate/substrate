@@ -41,7 +41,9 @@ func clearAll(t *testing.T, p *Persistence) {
 		`DELETE FROM workers`,
 		`DELETE FROM worker_assignments`,
 		`DELETE FROM leases`,
-		`DELETE FROM worker_outbox`,
+		// TRUNCATE also restarts seq at 1, so no seq skipped by an earlier
+		// test reads as a pending write to the next test's watchers.
+		`TRUNCATE TABLE worker_outbox`,
 		`UPDATE worker_outbox_trim SET seq = 0`,
 		`DELETE FROM tuple`,
 		`DELETE FROM changelog`,

@@ -78,12 +78,12 @@ func TestConnect_DedicatedPools(t *testing.T) {
 		}
 	}
 
+	clearAll(t, p)
 	watch, err := p.WatchWorkers(ctx)
 	if err != nil {
 		t.Fatalf("WatchWorkers failed: %v", err)
 	}
 	defer watch.Close()
-	clearAll(t, p)
 	if _, err := p.CreateWorker(ctx, newTestWorker("watchpool-worker")); err != nil {
 		t.Fatalf("CreateWorker failed: %v", err)
 	}

@@ -90,27 +90,15 @@ CREATE TABLE IF NOT EXISTS worker_assignments (
     KEY worker_assignments_worker_idx (worker_name, actor_uid)
 ) DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_bin;
 
--- Transactional outbox backing WatchWorkers. Each worker write takes the next
--- seq from worker_outbox_sequence and holds that row lock until it commits, so
--- rows commit in seq order and a poller reading past its cursor never skips
--- a row that commits later. Retention deletes the oldest rows and records the
--- greatest deleted seq in worker_outbox_trim.
+-- Transactional outbox backing WatchWorkers. Each worker write inserts one
+-- row as its last statement, taking the next seq. Retention deletes the oldest
+-- rows and records the greatest deleted seq in worker_outbox_trim.
 CREATE TABLE IF NOT EXISTS worker_outbox (
-    seq         BIGINT UNSIGNED NOT NULL,
+    seq         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     created_at  DATETIME(6) NOT NULL,
     payload     LONGBLOB NOT NULL,
     PRIMARY KEY (seq)
 );
-
--- Single row (id = 1): the last seq handed to a worker write.
-CREATE TABLE IF NOT EXISTS worker_outbox_sequence (
-    id   TINYINT UNSIGNED NOT NULL,
-    seq  BIGINT UNSIGNED NOT NULL,
-    PRIMARY KEY (id)
-);
-
-INSERT INTO worker_outbox_sequence (id, seq) VALUES (1, 0)
-    ON DUPLICATE KEY UPDATE id = id;
 
 -- Single row (id = 1): the greatest seq retention has deleted. Watchers
 -- compare it against their cursor to detect that unconsumed rows were
