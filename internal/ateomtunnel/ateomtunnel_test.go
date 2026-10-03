@@ -275,8 +275,11 @@ func TestActivateAndDeactivate(t *testing.T) {
 	actor := resources.ActorAttribution{Ref: resources.ActorRef{Atespace: "space", Name: "actor"}, UID: "uid"}
 	dial := func(context.Context, string, string) (net.Conn, error) { return nil, net.ErrClosed }
 
-	if err := tunnel.Activate(actor, dial, nil); err != nil {
-		t.Fatalf("Activate without egress: %v", err)
+	if err := tunnel.ActivateEgress(actor, nil); err != nil {
+		t.Fatalf("ActivateEgress without a gateway: %v", err)
+	}
+	if err := tunnel.ActivateIngress(actor, dial); err != nil {
+		t.Fatalf("ActivateIngress: %v", err)
 	}
 	if err := tunnel.Deactivate(ctx, actor); err != nil {
 		t.Fatalf("Deactivate: %v", err)
@@ -286,8 +289,8 @@ func TestActivateAndDeactivate(t *testing.T) {
 		t.Fatalf("second Deactivate: %v", err)
 	}
 
-	err := tunnel.Activate(resources.ActorAttribution{UID: "uid"}, dial, nil)
+	err := tunnel.ActivateIngress(resources.ActorAttribution{UID: "uid"}, dial)
 	if err == nil || !strings.Contains(err.Error(), "while activating actor ingress") {
-		t.Fatalf("Activate with no actor reference = %v, want an ingress error", err)
+		t.Fatalf("ActivateIngress with no actor reference = %v, want an ingress error", err)
 	}
 }

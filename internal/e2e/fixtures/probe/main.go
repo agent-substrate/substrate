@@ -439,7 +439,75 @@ func writeJSON(w http.ResponseWriter, v any) {
 	}
 }
 
+// bootFetchURLEnv names a URL the probe must fetch, through the egress gateway
+// and with the projected trust bundle, before it listens. A probe that cannot
+// fetch it exits and never answers its wakeup probe, so a golden snapshot of
+// it proves the actor had egress while it booted.
+const bootFetchURLEnv = "PROBE_BOOT_FETCH_URL"
+
+// bootFetchBudget bounds the boot fetch, inside the template's wakeupProbe
+// timeout.
+const bootFetchBudget = 45 * time.Second
+
+// bootFetch GETs url, trusting only trustBundle, until it answers 200 or
+// budget runs out. It retries because the gateway caches a missing
+// EgressPolicy for its TTL, and a suite can only give the golden actor one
+// once the actor exists.
+func bootFetch(ctx context.Context, url, trustBundle string, budget time.Duration) error {
+	ctx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+	b, err := os.ReadFile(trustBundle)
+	if err != nil {
+		return fmt.Errorf("reading trust bundle: %w", err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(b) {
+		return fmt.Errorf("no certificates parsed from %s", trustBundle)
+	}
+	client := &http.Client{
+		Timeout:   10 * time.Second,
+		Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool}},
+	}
+	defer client.CloseIdleConnections()
+	for {
+		lastErr := fetchOnce(ctx, client, url)
+		if lastErr == nil {
+			return nil
+		}
+		log.Printf("probe: boot fetch of %s: %v", url, lastErr)
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("boot fetch of %s: %w", url, lastErr)
+		case <-time.After(time.Second):
+		}
+	}
+}
+
+func fetchOnce(ctx context.Context, client *http.Client, url string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	res, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(res.Body, maxFetchBody))
+	if res.StatusCode != http.StatusOK {
+		return fmt.Errorf("status %d", res.StatusCode)
+	}
+	return nil
+}
+
 func main() {
+	if url := os.Getenv(bootFetchURLEnv); url != "" {
+		if err := bootFetch(context.Background(), url, trustFile, bootFetchBudget); err != nil {
+			log.Fatalf("probe: %v", err)
+		}
+		log.Printf("probe: boot fetch of %s succeeded", url)
+	}
+
 	// Hold the identity file open before serving: every snapshot of this actor
 	// then contains an open guest handle on a system-info file (see
 	// heldIdentity).

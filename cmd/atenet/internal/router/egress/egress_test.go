@@ -689,7 +689,7 @@ func TestHandleRequestHeadersAuthorization(t *testing.T) {
 		want  envoy_type.StatusCode
 	}{
 		{
-			name: "actor is not running",
+			name: "actor is suspended",
 			actor: &ateapipb.Actor{
 				Metadata: &ateapipb.ResourceMetadata{
 					Atespace: testEgressAtespace,
@@ -718,6 +718,37 @@ func TestHandleRequestHeadersAuthorization(t *testing.T) {
 			leaf := ca.issueActorCert(t, "spiffe://substrate-actor.local/ateom-for-actor/foo/bar", actorCertOptions{})
 			_, err := h.HandleRequestHeaders(context.Background(), egressMetadata(xfccHeader(leaf)))
 			wantStatus(t, err, tc.want)
+		})
+	}
+}
+
+// Egress follows the actor's placement on a worker: a resuming actor is booting
+// or restoring there and may fetch what it needs to become ready; every other
+// state has left its worker or is leaving it.
+func TestHandleRequestHeadersActorState(t *testing.T) {
+	ca := newTestCA(t, "actor-identity-ca")
+	allowed := map[ateapipb.ActorState]bool{
+		ateapipb.ActorState_ACTOR_STATE_RESUMING: true,
+		ateapipb.ActorState_ACTOR_STATE_RUNNING:  true,
+	}
+	for value := range ateapipb.ActorState_name {
+		state := ateapipb.ActorState(value)
+		if state == ateapipb.ActorState_ACTOR_STATE_UNSPECIFIED {
+			continue
+		}
+		t.Run(state.String(), func(t *testing.T) {
+			actor := runningActor()
+			actor.Status.State = state
+			h := egressHandler(ca.roots(), actor, nil)
+			leaf := ca.issueActorCert(t, "spiffe://substrate-actor.local/ateom-for-actor/foo/bar", actorCertOptions{})
+			_, err := h.HandleRequestHeaders(context.Background(), egressMetadata(xfccHeader(leaf)))
+			if allowed[state] {
+				if err != nil {
+					t.Fatalf("HandleRequestHeaders() error = %v, want nil", err)
+				}
+				return
+			}
+			wantStatus(t, err, envoy_type.StatusCode_Forbidden)
 		})
 	}
 }

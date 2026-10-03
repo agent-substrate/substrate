@@ -274,10 +274,21 @@ func (e *Egress) handle(downstream net.Conn, active *egressActivation) {
 		_ = downstream.Close()
 		return
 	}
+	if active.dialer == nil {
+		e.mu.Unlock()
+		// From inside the sandbox this is a connection that opens and closes at
+		// once, indistinguishable from a network failure.
+		slog.WarnContext(active.ctx, "atunnel dropped an egress connection: actor egress is not active",
+			slog.String("peer", downstream.RemoteAddr().String()))
+		_ = downstream.Close()
+		return
+	}
 	if time.Now().Compare(active.expiresAt) >= 0 {
 		// Expiry blocks only new tunnels. Connections admitted with a valid
 		// certificate have completed mTLS and are allowed to drain normally.
 		e.mu.Unlock()
+		slog.WarnContext(active.ctx, "atunnel dropped an egress connection: actor certificate expired",
+			slog.String("peer", downstream.RemoteAddr().String()))
 		_ = downstream.Close()
 		return
 	}
