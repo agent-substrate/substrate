@@ -190,7 +190,7 @@ func newTestConfig(t *testing.T, handler http.Handler) (*userclass.Config, *http
 		HTTPClient: ts.Client(),
 		RouterURL:  ts.URL,
 		Atespace:   "benchmark-test",
-		Dyn:        dynconfig.NewHolder(dynconfig.Config{}),
+		Dyn:        dynconfig.Static(knobs{}),
 		Tracer:     otel.Tracer("test-sweperf"),
 	}
 	return cfg, ts, fakeCtrl
@@ -283,7 +283,7 @@ func TestResolveConfig(t *testing.T) {
 	t.Run("default fallback values", func(t *testing.T) {
 		rt := &sweperfRuntime{
 			cfg: &userclass.Config{
-				Dyn: dynconfig.NewHolder(dynconfig.Config{}),
+				Dyn: dynconfig.Static(knobs{}),
 			},
 		}
 		tmpl, steps, cycles := rt.resolveConfig()
@@ -301,10 +301,10 @@ func TestResolveConfig(t *testing.T) {
 	t.Run("dynamic config overrides", func(t *testing.T) {
 		rt := &sweperfRuntime{
 			cfg: &userclass.Config{
-				Dyn: dynconfig.NewHolder(dynconfig.Config{
-					SweperfTemplate:   "custom-template",
-					SweperfTotalSteps: 50,
-					SweperfNumCycles:  5,
+				Dyn: dynconfig.Static(knobs{
+					Template:   "custom-template",
+					TotalSteps: 50,
+					NumCycles:  5,
 				}),
 			},
 		}
@@ -329,7 +329,7 @@ func TestPollInterval(t *testing.T) {
 		{0, defaultSweperfPollInterval},
 		{250, 250 * time.Millisecond},
 	} {
-		cfg := &userclass.Config{Dyn: dynconfig.NewHolder(dynconfig.Config{SweperfPollIntervalMs: tt.ms})}
+		cfg := &userclass.Config{Dyn: dynconfig.Static(knobs{PollIntervalMs: tt.ms})}
 		if got := pollInterval(cfg); got != tt.want {
 			t.Errorf("pollInterval(%d) = %v, want %v", tt.ms, got, tt.want)
 		}
@@ -581,9 +581,8 @@ func TestDynamicWait(t *testing.T) {
 	t.Run("returns MinWait when MaxWait <= MinWait", func(t *testing.T) {
 		rt := &sweperfRuntime{
 			cfg: &userclass.Config{
-				Dyn: dynconfig.NewHolder(dynconfig.Config{
-					MinWait: 100 * time.Millisecond,
-					MaxWait: 50 * time.Millisecond,
+				Dyn: dynconfig.Static(knobs{
+					WaitTime: dynconfig.WaitTime{MinWait: dynconfig.Seconds(100 * time.Millisecond), MaxWait: dynconfig.Seconds(50 * time.Millisecond)},
 				}),
 			},
 		}
@@ -597,9 +596,8 @@ func TestDynamicWait(t *testing.T) {
 		maxW := 50 * time.Millisecond
 		rt := &sweperfRuntime{
 			cfg: &userclass.Config{
-				Dyn: dynconfig.NewHolder(dynconfig.Config{
-					MinWait: minW,
-					MaxWait: maxW,
+				Dyn: dynconfig.Static(knobs{
+					WaitTime: dynconfig.WaitTime{MinWait: dynconfig.Seconds(minW), MaxWait: dynconfig.Seconds(maxW)},
 				}),
 			},
 		}
@@ -620,9 +618,8 @@ func TestInitSweperfAndTaskFn(t *testing.T) {
 		}
 	})
 	cfg, _, _ := newTestConfig(t, handler)
-	cfg.Dyn = dynconfig.NewHolder(dynconfig.Config{
-		MinWait: 1 * time.Millisecond,
-		MaxWait: 2 * time.Millisecond,
+	cfg.Dyn = dynconfig.Static(knobs{
+		WaitTime: dynconfig.WaitTime{MinWait: dynconfig.Seconds(time.Millisecond), MaxWait: dynconfig.Seconds(2 * time.Millisecond)},
 	})
 
 	taskFn, shutdownFn := initSweperf(cfg)
