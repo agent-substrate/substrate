@@ -2,12 +2,19 @@
 
 ## Overview
 
-Traffic leaving an actor bound for a destination, like example.com, *always*
-transits the egress gateway, but the handling is different based on the type of
-egress policy rule that is allowing the traffic.
+Substrate has special handling for traffic leaving actors --- it is routed
+through the egress gateway.  Connections that use TLS (likely the vast majority
+of your traffic to external destinations, like requests to google.com) require
+special configuration inside your actor in order to successfully establish the
+TLS connection.
 
-Connections allowed via a `tls_passthrough` rule is just forwarded through the
-egress gateway, with no modifications.  The TLS connections is established
+The exact needed configuration is slightly different depending on whether you
+are using `tls_passthrough` (no interception) rules, or `https` (interception)
+rules.  This doc gives you a recipe for configuring your actors that will work
+for both scenarios.
+
+Connections allowed via a `tls_passthrough` rule are just forwarded through the
+egress gateway, with no modifications.  The TLS connections are established
 directly between the actor and the external destination, so the egress gateway
 has no visibility into the connection (beyond metadata such as the destination).
 
@@ -22,11 +29,12 @@ you run inside the actor must be explicitly configured to trust this built-in
 CA.  Substrate can automatically inject the root certificates for this CA into
 the actor's filesystem using a SystemInfo volume with a TrustBundle data source.
 
-Note: DNS traffic from the actor (both TCP and UDP) is not captured by atunnel
-and forwarded to the gateway.  Instead, the DNS traffic is allowed to directly
-exit the worker pod and be answered by the host cluster's configured DNS server.
+Note: DNS traffic from the actor (both TCP and UDP) is not forwarded to the
+gateway, and thus cannot be affected by egress policies.  Instead, the DNS
+traffic is allowed to directly exit the worker pod and be answered by the host
+cluster's configured DNS server.  See the [example](#example-wrapper) below.
 
-## Configuring a workload to trust the man-in-the-middle CA
+## Configuring a workload to trust public and man-in-the-middle CAs
 
 Add a `systemInfo` volume with a `trustBundle` data source, and mount it:
 
@@ -66,7 +74,7 @@ Substrate only offers a few built-in trust bundles with well-known names:
 You then need to configure your application to use the trust-bundle file.  In
 general, this is application specific, but many runtimes respect the
 SSL_CERT_FILE environment variables.  Here are some common scenarios and the
-configuration they support
+configuration they support:
 
 | Runtime/Library | Setting | Notes |
 |---|---|---|
@@ -91,6 +99,22 @@ you will need to use an entrypoint wrapper to build a file containing the
 substrate-provided roots along with your custom roots (or directly configure
 this setup in your application's startup logic).
 
+## Example entrypoint wrapper for custom roots {:#example-wrapper}
+
+```sh
+#!/bin/sh
+set -eu
+sys=/etc/ssl/certs/ca-certificates.crt   # RHEL family: /etc/pki/tls/certs/ca-bundle.crt
+ca=/run/ate/trust-bundle.pem
+out=/tmp/ca-bundle.pem
+{ cat "$sys"; echo; cat "$ca"; } > "$out"
+export SSL_CERT_FILE="$out" REQUESTS_CA_BUNDLE="$out" CURL_CA_BUNDLE="$out" GIT_SSL_CAINFO="$out" PIP_CERT="$out"
+export NODE_EXTRA_CA_CERTS="$ca" DENO_CERT="$ca"
+exec "$@"
+```
+
+Note: Do not bake the bundle into the image at build time. It will tie the image to one cluster's CA and breaks on rotation.
+
 ## Verify
 
 `demos/egress/egress-template.yaml.tmpl` is a complete working template that
@@ -114,9 +138,8 @@ bundle did the validating.
   see an error message like `... certificate signed by unknown authority ...`,
   the most likely cause is that your actor is not configured to trust the MITM
   CA correctly.
-* This CA configuration does not help the actor authentication to the
-  destination.  For that, refer to our documentation on egress credential
-  injection. 
+* This CA configuration does not help the actor authenticate to the destination.
+  For that, refer to our documentation on egress credential injection. 
 
 ## See also
 
