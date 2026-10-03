@@ -131,10 +131,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # AgentGateway runs on merged code: pushes to main and the weekly schedule.
+        # AgentGateway runs pre-submit only for release-* branches. Everywhere
+        # else it runs post-merge (push to main) and on the weekly schedule.
         include: >-
           ${{ fromJSON(
-            (github.event_name == 'push' || github.event_name == 'schedule')
+            (
+              (github.event_name != 'pull_request' && github.event_name != 'merge_group')
+              || startsWith(github.base_ref, 'release-')
+              || startsWith(github.event.merge_group.base_ref, 'refs/heads/release-')
+            )
             && '[
               {"dataplane": "envoy", "experimental": false},
               {"dataplane": "agentgateway", "experimental": true}
