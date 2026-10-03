@@ -23,6 +23,7 @@ Flag registration lives in the modules that own each flag:
   * --durdir-*                      → common.durdir_config.add_durdir_arguments
   * --mem-target / --mem-churn / --mem-read → common.memload_config.add_memload_arguments
   * --cpu-cores / --cpu-duty-cycle  → common.cpuload_config.add_cpuload_arguments
+  * --egress-*                      → common.egress_config.add_egress_arguments
   * --max-pings-per-wake            → common.ping_config.add_ping_arguments
 
 This module ties them together so boomer-Go workers can pick up the values
@@ -65,6 +66,9 @@ _FLAGS = {
     "--mem-read": str,
     "--cpu-cores": int,
     "--cpu-duty-cycle": float,
+    "--egress-url": str,
+    "--egress-interval": float,
+    "--egress-connection": str,
     "--max-pings-per-wake": int,
     "--sweperf-template": str,
     "--sweperf-total-steps": int,
@@ -154,6 +158,7 @@ def init_boomer_config() -> None:
     from common.agentsession_config import add_agentsession_arguments  # noqa: F401
     from common.cpuload_config import add_cpuload_arguments
     from common.durdir_config import add_durdir_arguments
+    from common.egress_config import add_egress_arguments
     from common.lifecycle_mode import add_lifecycle_mode_arguments
     from common.memload_config import add_memload_arguments
     from common.ping_config import add_ping_arguments

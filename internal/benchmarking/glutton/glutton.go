@@ -35,13 +35,15 @@ const (
 // success before the listener is reachable. The fake in ./fake aliases these,
 // which is what keeps the stand-in and the real mux from drifting apart.
 const (
-	ReadyzRoute    = "/readyz"
-	PingRoute      = "/ping"
-	WriteDiskRoute = "/writedisk"
-	ReadDiskRoute  = "/readdisk"
-	WriteRAMRoute  = "/writeram"
-	ReadRAMRoute   = "/readram"
-	BurnCPURoute   = "/burncpu"
-	IngestRoute    = "/ingest"
-	UseCPURoute    = "/usecpu"
+	ReadyzRoute      = "/readyz"
+	PingRoute        = "/ping"
+	WriteDiskRoute   = "/writedisk"
+	ReadDiskRoute    = "/readdisk"
+	WriteRAMRoute    = "/writeram"
+	ReadRAMRoute     = "/readram"
+	BurnCPURoute     = "/burncpu"
+	IngestRoute      = "/ingest"
+	UseCPURoute      = "/usecpu"
+	UseEgressRoute   = "/useegress"
+	DrainEgressRoute = "/drainegress"
 )

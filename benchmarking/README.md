@@ -329,6 +329,71 @@ The web UI shows the same fields; `0` keeps the value boomer-worker started with
 The `actors_per_*` ratios in `trial_summary` are wrong for this test: they
 count users × `--actors-per-user`, not `--total-actors`.
 
+### Egress Benchmark
+
+The egress benchmark loads the path an actor's own outbound connections take:
+the actor's TCP connection is redirected to atunnel, carried in a CONNECT
+tunnel to the atenet-egress gateway, checked against the actor's egress
+policy, and sent on to the upstream. Every new actor connection costs the
+gateway an ateapi `GetActor` call; policies are cached for 10s.
+
+It runs on `GluttonUser`. With `--egress-url` set, each wake of an actor:
+
+1. Creates the actor's egress policy before its first resume: one `http` rule
+   for the URL's host and port. Deleting the actor deletes the policy. Until
+   the create succeeds the actor is not resumed, so the gateway never caches
+   a missing policy.
+2. After the resume, starts glutton's egress loop, which GETs the URL now
+   and then once per interval.
+3. After the live window, stops and drains the loop, then hibernates. A call
+   in flight finishes first, so no call is frozen by the suspend, and the
+   first call of the next wake opens a new connection.
+
+The loop only runs while the actor is awake, so set a live window:
+`--min-live-time` / `--max-live-time` in seconds. With the default zero window
+the actor suspends right after one ping and makes no egress call. A 5s window
+at a 1s interval makes 5 or 6 calls a wake.
+
+#### Egress Configuration Knobs
+
+* `--egress-url`: The `http` URL to GET (default empty = disabled). The host
+  must be a lowercase DNS name, not an IP address, since the egress policy
+  matches on it. HTTPS is not supported yet.
+* `--egress-interval`: Seconds between two calls, which is also each call's
+  timeout (default `1.0`). A call slower than the interval fails.
+* `--egress-connection`: Connection handling (default `reuse`):
+  * `reuse`: Keeps the connection alive between calls, as an LLM client
+    library does.
+  * `new`: Opens a new connection, and so a new tunnel and `GetActor`, for
+    every call.
+
+The policy is created once per actor, so changing `--egress-url` mid-run only
+takes effect for actors created afterwards.
+
+The gateway resolves and dials the URL's host itself, so it must reach it. For
+`example.com`, nodes without external IPs need Cloud NAT.
+
+#### Egress Reported Metrics
+
+The calls are timed inside the actor, from the start of the GET until the body
+is read, and recorded with method `egress`. Failures carry the HTTP status or
+the error, with the local address stripped so they group.
+
+* `GluttonEgressFirst`: The first call of each wake, on a new connection
+  through a new tunnel.
+* `GluttonEgress`: Later calls that reused a kept-alive connection.
+* `GluttonEgressNewConn`: Later calls that opened a new connection.
+* `CreateEgressPolicy`, `GluttonUseEgress`, `GluttonDrainEgress`: The policy
+  create and the two calls that start and drain the loop.
+
+The sandbox's `resolv.conf` keeps the worker pod's search domains and
+`ndots:5`, so an external name such as `example.com` goes through about six
+failed lookups before the real one on every new connection. That time is in
+`GluttonEgressFirst` and `GluttonEgressNewConn`.
+
+The `egress` block of `server_summary.json` holds the server side; see
+[Server ground truth](#server-ground-truth).
+
 ### Viewing Traces
 You must have enabled otel tracing for your cluster to view traces.
 
@@ -414,6 +479,17 @@ actually did, independent of what the load generator reported.
   volume over the steady-state window, and since the atelet started.
 * `snapshots.checkpoint_mb_s`: bytes written per second spent checkpointing,
   not per second of wall clock.
+* `egress.gateway.cpu_cores`, `memory_mb`, `rx_mb_s`, `tx_mb_s`: CPU,
+  working set, and network throughput of each atenet-egress pod, with every
+  pod's samples pooled. `egress.gateway.pods` is how many pods were seen.
+  These are present in every run: without egress load they show the idle
+  gateway.
+* `egress.get_actor` and `egress.get_egress_policy`: `calls_in_window`,
+  `rps`, `mean_s` and `p50_s` through `p99_s` of the ateapi `GetActor` and
+  `GetActorEgressPolicy` RPCs the gateway makes: one `GetActor` per new actor
+  connection, and a policy fetch per cache miss. The actors' own OTLP
+  exporters open gateway connections too, so compare `calls_in_window`
+  against the `GluttonEgressFirst` and `GluttonEgressNewConn` counts.
 
 Every distribution reports p50, p90, p95 and p99 over the steady-state window.
 The steady-state window runs from the first to the last Locust sample at 90% or
@@ -427,7 +503,8 @@ every 10s.
 The atelet exports before Prometheus scrapes it, so the harvest waits
 `--atelet-lag-s` seconds (default 70, enough for the OTel SDK's 60s default
 export and a 10s scrape)
-and reads the snapshot window half that late. The window ends at the last
+and reads the snapshot window half that late. The ateapi RPCs in `egress` are
+read the same way. The window ends at the last
 full-load sample, so teardown suspends are left out.
 
 `metadata.start_ts` and `end_ts` bound the whole run, which the packing

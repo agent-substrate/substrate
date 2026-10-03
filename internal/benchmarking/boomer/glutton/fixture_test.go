@@ -37,6 +37,9 @@ type fakeControlClient struct {
 	resumeErrs []error
 	// suspendErrs does the same for SuspendActor.
 	suspendErrs []error
+	// egressPolicyErrs does the same for CreateActorEgressPolicy.
+	egressPolicyErrs     []error
+	egressPolicyRequests []*ateapipb.CreateActorEgressPolicyRequest
 
 	// createActorFn, when set, is called with each CreateActor's actor name;
 	// a non-nil error is returned in place of the actor.
@@ -111,6 +114,23 @@ func (f *fakeControlClient) DeleteActor(ctx context.Context, in *ateapipb.Delete
 	f.calls = append(f.calls, "DeleteActor")
 	f.deleteRequests = append(f.deleteRequests, in)
 	return &ateapipb.Actor{}, nil
+}
+
+func (f *fakeControlClient) CreateActorEgressPolicy(ctx context.Context, in *ateapipb.CreateActorEgressPolicyRequest, opts ...grpc.CallOption) (*ateapipb.EgressPolicy, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, "CreateActorEgressPolicy")
+	f.egressPolicyRequests = append(f.egressPolicyRequests, in)
+	if err := nextErr(&f.egressPolicyErrs); err != nil {
+		return nil, err
+	}
+	return in.GetEgressPolicy(), nil
+}
+
+func (f *fakeControlClient) recordedEgressPolicyRequests() []*ateapipb.CreateActorEgressPolicyRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]*ateapipb.CreateActorEgressPolicyRequest(nil), f.egressPolicyRequests...)
 }
 
 func (f *fakeControlClient) recordedCalls() []string {

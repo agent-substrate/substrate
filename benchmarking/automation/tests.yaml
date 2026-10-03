@@ -323,6 +323,81 @@ tests:
       - "0.5"
       - "--max-wait-time"
       - "1.0"
+  # Egress: while awake, each actor GETs http://example.com/ once a second
+  # through its egress path (atunnel -> atenet-egress gateway -> upstream).
+  # The driver creates each actor's EgressPolicy before its first resume,
+  # starts the glutton loop after every resume, and drains it before every
+  # suspend, so the first call of a wake always opens a new tunnel
+  # (GluttonEgressFirst). The 5s live window is what lets the loop run: with
+  # the default zero window the actor suspends right after one ping. The
+  # gateway must reach example.com: private nodes need Cloud NAT.
+  # --egress-connection new opens a new connection for every call, which
+  # costs the gateway an ateapi GetActor each time.
+  - name: glutton_egress_1_user
+    type: locust
+    description: "Egress: 1 user, GET http://example.com/ every second while awake, kept-alive connection"
+    targetCluster: dev
+    file: /app/tests/glutton.py
+    duration: 2m
+    users: 1
+    workerCount: 1
+    flags:
+      - "--egress-url"
+      - "http://example.com/"
+      - "--egress-interval"
+      - "1.0"
+      - "--min-live-time"
+      - "5"
+      - "--max-live-time"
+      - "5"
+      - "--min-wait-time"
+      - "1.0"
+      - "--max-wait-time"
+      - "1.0"
+  - name: glutton_egress_1_user_new_conn
+    type: locust
+    description: "Egress: 1 user, GET http://example.com/ every second while awake, new connection per call"
+    targetCluster: dev
+    file: /app/tests/glutton.py
+    duration: 2m
+    users: 1
+    workerCount: 1
+    flags:
+      - "--egress-url"
+      - "http://example.com/"
+      - "--egress-interval"
+      - "1.0"
+      - "--egress-connection"
+      - "new"
+      - "--min-live-time"
+      - "5"
+      - "--max-live-time"
+      - "5"
+      - "--min-wait-time"
+      - "1.0"
+      - "--max-wait-time"
+      - "1.0"
+  - name: glutton_egress_10_users
+    type: locust
+    description: "Egress: 10 users, GET http://example.com/ every second while awake, kept-alive connection"
+    targetCluster: dev
+    file: /app/tests/glutton.py
+    duration: 2m
+    users: 10
+    workerCount: 10
+    flags:
+      - "--egress-url"
+      - "http://example.com/"
+      - "--egress-interval"
+      - "1.0"
+      - "--min-live-time"
+      - "5"
+      - "--max-live-time"
+      - "5"
+      - "--min-wait-time"
+      - "1.0"
+      - "--max-wait-time"
+      - "1.0"
   # The observability ladder of benchmarking/observability.md. Each entry
   # runs on glutton, and thus on boomer: Python and gRPC hold each other at
   # a high number of users, which would make the latency of the load

@@ -105,6 +105,8 @@ func newMux(svc *Service) *http.ServeMux {
 	mux.HandleFunc(BurnCPURoute, protoRoute("BurnCPU", svc.BurnCPU))
 	mux.HandleFunc(IngestRoute, protoRoute("Ingest", svc.Ingest))
 	mux.HandleFunc(UseCPURoute, protoRoute("UseCPU", svc.UseCPU))
+	mux.HandleFunc(UseEgressRoute, protoRoute("UseEgress", svc.UseEgress))
+	mux.HandleFunc(DrainEgressRoute, protoRoute("DrainEgress", svc.DrainEgress))
 	return mux
 }
 

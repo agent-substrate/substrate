@@ -26,10 +26,15 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/myzhan/boomer"
+
+	"github.com/agent-substrate/substrate/internal/egresspolicy"
 )
 
 // Resume modes. Explicit issues a ResumeActor RPC before sending traffic.
@@ -45,6 +50,9 @@ const (
 
 	LifecycleModeSuspend = "suspend"
 	LifecycleModePause   = "pause"
+
+	EgressConnectionReuse = "reuse"
+	EgressConnectionNew   = "new"
 )
 
 // Config is the dynamic-mutable subset of boomer's behavior. Holder swaps
@@ -77,6 +85,10 @@ type Config struct {
 
 	CPUCores     int     // goroutines each GluttonUser's actor spins via UseCPU; 0 disables
 	CPUDutyCycle float64 // fraction of one core each of those goroutines consumes, in [0, 1]
+
+	EgressURL        string        // http URL each GluttonUser actor GETs through its egress path while awake; "" disables
+	EgressInterval   time.Duration // time between two of those calls, and each call's timeout
+	EgressConnection string        // EgressConnectionReuse | EgressConnectionNew
 
 	AgentSessionScript     string  // built-in agent-session script variant; "" falls back to the default
 	AgentSessionScriptFile string  // path to a script YAML on the worker; wins over AgentSessionScript when set
@@ -130,6 +142,9 @@ type payload struct {
 	MemRead               *string  `json:"mem_read"`
 	CPUCores              *float64 `json:"cpu_cores"`
 	CPUDutyCycle          *float64 `json:"cpu_duty_cycle"`
+	EgressURL             *string  `json:"egress_url"`
+	EgressInterval        *float64 `json:"egress_interval"`
+	EgressConnection      *string  `json:"egress_connection"`
 	MaxPingsPerWake       *float64 `json:"max_pings_per_wake"`
 	SweperfTemplate       *string  `json:"sweperf_template"`
 	SweperfTotalSteps     *float64 `json:"sweperf_total_steps"`
@@ -233,6 +248,21 @@ func (c Config) Validate() error {
 	if c.CPUDutyCycle < 0 || c.CPUDutyCycle > 1 {
 		return fmt.Errorf("cpu_duty_cycle must be between 0.0 and 1.0, got: %f", c.CPUDutyCycle)
 	}
+	if c.EgressConnection != "" && c.EgressConnection != EgressConnectionReuse && c.EgressConnection != EgressConnectionNew {
+		return fmt.Errorf("invalid egress_connection %q: must be %q or %q", c.EgressConnection, EgressConnectionReuse, EgressConnectionNew)
+	}
+	if c.EgressURL != "" {
+		if _, _, err := ParseEgressURL(c.EgressURL); err != nil {
+			return err
+		}
+		// glutton takes the interval in whole milliseconds, and 0 stops its loop.
+		if c.EgressInterval < time.Millisecond {
+			return fmt.Errorf("egress_interval must be at least 1ms when egress_url is set, got: %v", c.EgressInterval)
+		}
+		if c.EgressInterval > math.MaxInt32*time.Millisecond {
+			return fmt.Errorf("egress_interval cannot exceed %v, got: %v", math.MaxInt32*time.Millisecond, c.EgressInterval)
+		}
+	}
 	if c.SweperfTotalSteps < 0 {
 		return fmt.Errorf("sweperf_total_steps cannot be negative: %d", c.SweperfTotalSteps)
 	}
@@ -262,6 +292,36 @@ func (c Config) Validate() error {
 	// whole-array walk), which owns the parse; invalid values fail loudly
 	// there as GluttonFillRAM / GluttonChurnRAM / GluttonReadRAM errors.
 	return nil
+}
+
+// ParseEgressURL returns the host and port an egress URL reaches. Only
+// cleartext http is accepted, and the host must be a name the EgressPolicy API
+// accepts as an http rule hostname: a lowercase DNS name, not an IP address or
+// a wildcard.
+func ParseEgressURL(raw string) (host string, port int32, err error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", 0, fmt.Errorf("invalid egress_url %q: %w", raw, err)
+	}
+	if u.Scheme != "http" {
+		return "", 0, fmt.Errorf("egress_url %q must be an http URL", raw)
+	}
+	host = u.Hostname()
+	if strings.Contains(host, "*") {
+		return "", 0, fmt.Errorf("egress_url %q must not use a wildcard host", raw)
+	}
+	if _, err := egresspolicy.ParseHostnamePattern(host); err != nil {
+		return "", 0, fmt.Errorf("egress_url %q needs a lowercase DNS name as its host: %w", raw, err)
+	}
+	port = 80
+	if p := u.Port(); p != "" {
+		n, err := strconv.ParseUint(p, 10, 16)
+		if err != nil || n == 0 {
+			return "", 0, fmt.Errorf("egress_url %q has an invalid port %q", raw, p)
+		}
+		port = int32(n)
+	}
+	return host, port, nil
 }
 
 // merge folds the payload's set fields into `current`, leaving unset fields
@@ -313,6 +373,15 @@ func (p payload) merge(current Config) Config {
 	}
 	if p.CPUDutyCycle != nil {
 		out.CPUDutyCycle = *p.CPUDutyCycle
+	}
+	if p.EgressURL != nil {
+		out.EgressURL = *p.EgressURL
+	}
+	if p.EgressInterval != nil {
+		out.EgressInterval = time.Duration(*p.EgressInterval * float64(time.Second))
+	}
+	if p.EgressConnection != nil {
+		out.EgressConnection = *p.EgressConnection
 	}
 	if p.MaxPingsPerWake != nil {
 		out.MaxPingsPerWake = int(*p.MaxPingsPerWake)
@@ -420,6 +489,12 @@ func StartPoll(
 					slog.String("mem_read", next.MemRead),
 					slog.Int("cpu_cores", next.CPUCores),
 					slog.Float64("cpu_duty_cycle", next.CPUDutyCycle),
+					slog.String("egress_url", next.EgressURL),
+					slog.Duration("egress_interval", next.EgressInterval),
+					slog.String("egress_connection", next.EgressConnection),
+					slog.String("egress_url", next.EgressURL),
+					slog.Duration("egress_interval", next.EgressInterval),
+					slog.String("egress_connection", next.EgressConnection),
 					slog.Int("max_pings_per_wake", next.MaxPingsPerWake),
 					slog.String("sweperf_template", next.SweperfTemplate),
 					slog.Int("sweperf_total_steps", next.SweperfTotalSteps),
