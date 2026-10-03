@@ -40,8 +40,9 @@ WINDOW = {"prom_url": "http://localhost:9090", "start_ts": 100,
           "end_ts": 105, "steady_start_ts": 100}
 
 
-def ranges(packing, node=(), pod=()):
-    """A query_prometheus_range fake answering packing, node PSI and pod PSI.
+def ranges(packing, node=(), pod=(), egress=()):
+    """A query_prometheus_range fake answering packing, node PSI, pod PSI and
+    the egress gateway.
 
     Pod PSI only answers the pod-slice selector, so a query that loses the id
     regex (and would also sum the pause container) gets nothing back. Node PSI
@@ -52,6 +53,8 @@ def ranges(packing, node=(), pod=()):
     worker_nodes = "and on (instance) sum by (instance) (rate("
 
     def fake(_url, query, *_args, **_kwargs):
+        if server_telemetry.EGRESS_GATEWAY_SELECTOR in query:
+            return list(egress)
         if "ate_workerpool_workers" in query:
             return packing
         if 'container="node"' in query:
@@ -95,6 +98,12 @@ SUMS = {
     "checkpoint_sum": 'seconds_sum{rpc_method="atelet.AteomHerder/Checkpoint"}',
     "checkpoint_count":
         'seconds_count{rpc_method="atelet.AteomHerder/Checkpoint"}',
+    "get_actor_sum": 'seconds_sum{rpc_method="ateapi.Control/GetActor"}',
+    "get_actor_count": 'seconds_count{rpc_method="ateapi.Control/GetActor"}',
+    "policy_sum":
+        'seconds_sum{rpc_method="ateapi.Control/GetActorEgressPolicy"}',
+    "policy_count":
+        'seconds_count{rpc_method="ateapi.Control/GetActorEgressPolicy"}',
 }
 
 
@@ -234,16 +243,23 @@ class ServerTelemetryTest(unittest.TestCase):
                   "values": [[100, "0.0"], [105, "0.0"]]} for n in "ab"]
         pods = [{"metric": {"pod": f"benchmark-ateom-{p}"},
                  "values": [[100, "0.5"], [105, "0.5"]]} for p in "ab"]
-        mock_range.side_effect = ranges([partial, full, idle], node=quiet, pod=pods)
+        gateway = [{"metric": {"pod": "atenet-egress-a"},
+                    "values": [[100, "0.25"], [105, "0.25"]]}]
+        mock_range.side_effect = ranges(
+            [partial, full, idle], node=quiet, pod=pods, egress=gateway)
         # The default 70s lag reads the snapshot window at 135 and 140.
         mock_instant.side_effect = snapshot_prom(
             "11.5",
             start={"count": "100", "size": "0", "restore_sum": "0",
                    "restore_count": "0", "checkpoint_sum": "0",
-                   "checkpoint_count": "0"},
+                   "checkpoint_count": "0", "get_actor_sum": "0",
+                   "get_actor_count": "0", "policy_sum": "0",
+                   "policy_count": "0"},
             end={"count": "150", "size": str(100 * MB), "bytes": str(100 * MB),
                  "seconds": "50", "restore_sum": "4", "restore_count": "8",
-                 "checkpoint_sum": "100", "checkpoint_count": "50"},
+                 "checkpoint_sum": "100", "checkpoint_count": "50",
+                 "get_actor_sum": "5", "get_actor_count": "50",
+                 "policy_sum": "0.05", "policy_count": "5"},
             at=(135, 140))
 
         with tempfile.TemporaryDirectory() as td:
@@ -273,7 +289,8 @@ class ServerTelemetryTest(unittest.TestCase):
                          {(100, 105)})
         self.assertEqual(
             set(summary),
-            {"metadata", "cluster_packing", "node_psi", "pod_psi", "snapshots"},
+            {"metadata", "cluster_packing", "node_psi", "pod_psi", "snapshots",
+             "egress"},
         )
         packing = summary["cluster_packing"]
         self.assertEqual(packing["summary"]["p50"], 0.8)  # 3 + 1 busy / 5 workers
@@ -290,10 +307,20 @@ class ServerTelemetryTest(unittest.TestCase):
         self.assertEqual(snapshots["checkpoints_in_window"], 50)  # 150 - 100
         self.assertEqual(snapshots["checkpoints_cumulative"], 150)
 
+        egress = summary["egress"]
+        self.assertEqual(egress["gateway"]["pods"], 1)
+        self.assertEqual(egress["gateway"]["cpu_cores"]["p99"], 0.25)
+        # 50 GetActor calls over the 5s window, 5s spent in them.
+        self.assertEqual(egress["get_actor"]["calls_in_window"], 50)
+        self.assertEqual(egress["get_actor"]["rps"], 10.0)
+        self.assertEqual(egress["get_actor"]["mean_s"], 0.1)
+        self.assertEqual(egress["get_egress_policy"]["rps"], 1.0)
+        self.assertEqual(egress["get_egress_policy"]["mean_s"], 0.01)
+
         self.assertEqual(row["metric"], "server_summary")
         m = row["measurements"]
         # Every source answered, so a key wired to a wrong name would read None.
-        self.assertEqual(len(m), 45)
+        self.assertEqual(len(m), 73)
         self.assertEqual([k for k, v in m.items() if v is None], [])
         # Every value a string, so one row's types match every other row's.
         self.assertTrue(all(isinstance(v, str) for v in m.values()))
@@ -304,6 +331,11 @@ class ServerTelemetryTest(unittest.TestCase):
         self.assertEqual(m["snapshot_size_p95_mb"], "11.5")
         self.assertEqual(m["restore_mean_s"], "0.5")
         self.assertEqual(m["checkpoint_mean_s"], "2.0")
+        self.assertEqual(m["egress_gateway_cpu_p99"], "0.25")
+        self.assertEqual(m["egress_gateway_mem_p50_mb"], "0.25")
+        self.assertEqual(m["egress_gateway_tx_p95_mb_s"], "0.25")
+        self.assertEqual(m["egress_get_actor_rps"], "10.0")
+        self.assertEqual(m["egress_get_egress_policy_p99_s"], "11.5")
 
     @mock.patch("server_telemetry.query_prometheus_range")
     @mock.patch("server_telemetry.query_prometheus_instant")
@@ -524,6 +556,37 @@ class ServerTelemetryTest(unittest.TestCase):
         self.assertTrue(telemetry.called)
         self.assertEqual(telemetry.call_args.kwargs["lag_s"], 70)
         self.assertNotIn("worker_pod_count", telemetry.call_args.kwargs)
+
+    @mock.patch("server_telemetry.query_prometheus_range")
+    @mock.patch("server_telemetry.query_prometheus_instant")
+    def test_egress_fields_are_null_not_zero(self, mock_instant, mock_range):
+        # No gateway series and no ateapi RPCs: every egress figure is None.
+        mock_range.side_effect = ranges([])
+        mock_instant.return_value = []
+        egress = harvest()["egress"]
+        self.assertEqual(egress["gateway"]["pods"], 0)
+        for res in ("cpu_cores", "memory_mb", "rx_mb_s", "tx_mb_s"):
+            self.assertEqual(egress["gateway"][res], NO_PERCENTILES)
+        for rpc in ("get_actor", "get_egress_policy"):
+            self.assertEqual(
+                set(egress[rpc].values()), {None}, f"{rpc}: {egress[rpc]}")
+
+    @mock.patch("server_telemetry.query_prometheus_range")
+    @mock.patch("server_telemetry.query_prometheus_instant")
+    def test_egress_network_keeps_pod_slice(self, mock_instant, mock_range):
+        # Network series are pod-level; the pause container's copy is dropped
+        # by the same pod-slice id as the worker pod PSI.
+        mock_range.return_value = []
+        mock_instant.return_value = []
+        server_telemetry._harvest_egress(
+            WINDOW["prom_url"], 100, 105, 100, 105)
+        net = [c.args[1] for c in mock_range.call_args_list
+               if "container_network_" in c.args[1]]
+        self.assertEqual(len(net), 2)
+        for query in net:
+            self.assertIn('id=~".*[/-]pod[^/]+(\\\\.slice)?"', query)
+            self.assertIn(server_telemetry.EGRESS_GATEWAY_SELECTOR, query)
+
 
 
 if __name__ == "__main__":

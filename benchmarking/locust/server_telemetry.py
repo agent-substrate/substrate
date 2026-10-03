@@ -15,8 +15,8 @@
 """Harvests server-side Prometheus ground-truth timeseries during benchmark trials.
 
 Queries Prometheus over [T_start, T_end] and the steady-state window [T_steady, T_end]
-to capture cluster packing, node and pod PSI stalls, and snapshot sizes, latencies
-and throughput.
+to capture cluster packing, node and pod PSI stalls, snapshot sizes, latencies
+and throughput, and the cost of the egress path.
 """
 
 import csv
@@ -399,6 +399,97 @@ def _ratio(
     return round(num / den / scale, 4)
 
 
+# The egress gateway pods, whichever dataplane runs them.
+EGRESS_GATEWAY_SELECTOR = 'namespace="ate-system", pod=~"atenet-egress-.*"'
+
+# The ateapi RPCs the egress gateway makes: GetActor for every new actor
+# connection, GetActorEgressPolicy on a policy cache miss.
+EGRESS_RPCS = {
+    "get_actor": "ateapi.Control/GetActor",
+    "get_egress_policy": "ateapi.Control/GetActorEgressPolicy",
+}
+
+
+def _harvest_egress(
+    prom_url: str, start_ts: int, end_ts: int, steady_start_ts: int,
+    steady_end_ts: int, lag_s: int = 0,
+) -> dict[str, Any]:
+    """Egress gateway resource use and the ateapi load of its checks.
+
+    The gateway figures come from cAdvisor, scraped directly, as per-pod sums
+    with every pod's steady samples pooled. Network series are pod-level, so
+    they keep the pod-slice id like POD_PSI_SELECTOR, which drops the pause
+    container, and sum every interface.
+
+    ateapi exports on an interval like the atelet, so its RPCs are read
+    `lag_s // 2` late, as in `_harvest_snapshots`. In a run whose actors make
+    egress calls only the gateway calls these RPCs, but the actors' own OTLP
+    exporters open gateway connections too, so the counts cover more than the
+    benchmark's calls.
+    """
+    mb = 1024 * 1024
+    sel = EGRESS_GATEWAY_SELECTOR
+    net = f'{sel}, container="", id=~".*[/-]pod[^/]+(\\\\.slice)?"'
+    queries = {
+        "cpu_cores": (
+            f'sum by (pod) (rate(container_cpu_usage_seconds_total'
+            f'{{{sel}, container!=""}}[1m]))'
+        ),
+        "memory_mb": (
+            f'sum by (pod) (container_memory_working_set_bytes'
+            f'{{{sel}, container!=""}}) / {mb}'
+        ),
+        "rx_mb_s": (
+            f'sum by (pod) (rate(container_network_receive_bytes_total'
+            f'{{{net}}}[1m])) / {mb}'
+        ),
+        "tx_mb_s": (
+            f'sum by (pod) (rate(container_network_transmit_bytes_total'
+            f'{{{net}}}[1m])) / {mb}'
+        ),
+    }
+    gateway: dict[str, Any] = {}
+    pods: set[str] = set()
+    for key, query in queries.items():
+        res = query_prometheus_range(prom_url, query, start_ts, end_ts, step="10s")
+        pods.update(s.get("metric", {}).get("pod", "") for s in res)
+        gateway[key] = compute_percentiles(
+            _steady_values(res, steady_start_ts, steady_end_ts)
+        )
+    gateway["pods"] = len(pods - {""})
+
+    start_at, end_at = steady_start_ts + lag_s // 2, steady_end_ts + lag_s // 2
+    out: dict[str, Any] = {"gateway": gateway}
+    for key, method in EGRESS_RPCS.items():
+        rpc = f'{{rpc_method="{method}"}}'
+        count = _window_delta(
+            prom_url, f"rpc_server_call_duration_seconds_count{rpc}",
+            start_at, end_at,
+        )[0]
+        spent = _window_delta(
+            prom_url, f"rpc_server_call_duration_seconds_sum{rpc}",
+            start_at, end_at,
+        )[0]
+        q = [
+            _query_window_quantile(
+                prom_url, quantile,
+                f"rpc_server_call_duration_seconds_bucket{rpc}",
+                start_at, end_at,
+            )
+            for quantile in (0.50, 0.90, 0.95, 0.99)
+        ]
+        out[key] = {
+            "calls_in_window": round(count) if count is not None else None,
+            "rps": _ratio(count, end_at - start_at),
+            "mean_s": _ratio(spent, count),
+            "p50_s": q[0],
+            "p90_s": q[1],
+            "p95_s": q[2],
+            "p99_s": q[3],
+        }
+    return out
+
+
 def _harvest_snapshots(
     prom_url: str, steady_start_ts: int, steady_end_ts: int, lag_s: int = 0
 ) -> dict[str, Any]:
@@ -485,8 +576,9 @@ def harvest_server_telemetry(
 ) -> dict[str, Any]:
     """Harvests the ground truth metric streams from Prometheus.
 
-    Only the atelet-exported snapshot block is read late, by up to `lag_s`;
-    packing and PSI are scraped directly and read over the run window as is.
+    Only the atelet-exported snapshot block and the ateapi egress RPCs are
+    read late, by up to `lag_s`; packing, PSI and the egress gateway's
+    cAdvisor figures are read over the run window as is.
     """
     steady_end = end_ts if steady_end_ts is None else steady_end_ts
     return {
@@ -501,6 +593,9 @@ def harvest_server_telemetry(
         ),
         "snapshots": _harvest_snapshots(
             prom_url, steady_start_ts, steady_end, lag_s
+        ),
+        "egress": _harvest_egress(
+            prom_url, start_ts, end_ts, steady_start_ts, steady_end, lag_s
         ),
     }
 
@@ -595,6 +690,20 @@ def extract_and_record_server_telemetry(
             measurements[f"{rpc}_{p}_s"] = snaps.get(f"{rpc}_{p}_s")
         measurements[f"{rpc}_mean_s"] = snaps.get(f"{rpc}_mean_s")
     measurements["checkpoint_mb_s"] = snaps.get("checkpoint_mb_s")
+    egress = telemetry.get("egress", {})
+    gateway = egress.get("gateway", {})
+    for res, name, unit in (("cpu_cores", "cpu", ""), ("memory_mb", "mem", "_mb"),
+                            ("rx_mb_s", "rx", "_mb_s"), ("tx_mb_s", "tx", "_mb_s")):
+        for p in ps:
+            measurements[f"egress_gateway_{name}_{p}{unit}"] = (
+                gateway.get(res, {}).get(p)
+            )
+    for rpc in EGRESS_RPCS:
+        stats = egress.get(rpc, {})
+        measurements[f"egress_{rpc}_rps"] = stats.get("rps")
+        measurements[f"egress_{rpc}_mean_s"] = stats.get("mean_s")
+        for p in ps:
+            measurements[f"egress_{rpc}_{p}_s"] = stats.get(f"{p}_s")
 
     jsonl_row = {
         "timestamp": data_ts,

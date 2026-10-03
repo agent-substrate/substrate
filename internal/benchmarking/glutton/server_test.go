@@ -300,4 +300,45 @@ func TestHTTPRoutes(t *testing.T) {
 		t.Errorf("POST %s bad key status: got %d, want 400", ReadDiskRoute, res.StatusCode)
 	}
 	res.Body.Close()
+
+	// 11. POST /useegress with a bad url -> 400 (InvalidArgument mapping)
+	badEgressBytes, _ := proto.Marshal(&gluttonpb.UseEgressRequest{Url: "not a url", IntervalMs: 1000})
+	res, err = http.Post(ts.URL+UseEgressRoute, "application/x-protobuf", bytes.NewReader(badEgressBytes))
+	if err != nil {
+		t.Fatalf("POST %s bad url failed: %v", UseEgressRoute, err)
+	}
+	if res.StatusCode != http.StatusBadRequest {
+		t.Errorf("POST %s bad url status: got %d, want 400", UseEgressRoute, res.StatusCode)
+	}
+	res.Body.Close()
+
+	// 12. POST /useegress -> 200, then POST /drainegress{stop} -> the loop's
+	// call to this server's own /readyz
+	egressBytes, _ := proto.Marshal(&gluttonpb.UseEgressRequest{Url: ts.URL + ReadyzRoute, IntervalMs: 1000})
+	res, err = http.Post(ts.URL+UseEgressRoute, "application/x-protobuf", bytes.NewReader(egressBytes))
+	if err != nil {
+		t.Fatalf("POST %s failed: %v", UseEgressRoute, err)
+	}
+	if res.StatusCode != http.StatusOK {
+		t.Errorf("POST %s status: got %d, want 200", UseEgressRoute, res.StatusCode)
+	}
+	res.Body.Close()
+
+	drainBytes, _ := proto.Marshal(&gluttonpb.DrainEgressRequest{Stop: true})
+	res, err = http.Post(ts.URL+DrainEgressRoute, "application/x-protobuf", bytes.NewReader(drainBytes))
+	if err != nil {
+		t.Fatalf("POST %s failed: %v", DrainEgressRoute, err)
+	}
+	if res.StatusCode != http.StatusOK {
+		t.Errorf("POST %s status: got %d, want 200", DrainEgressRoute, res.StatusCode)
+	}
+	body, _ = io.ReadAll(res.Body)
+	res.Body.Close()
+	var drainResp gluttonpb.DrainEgressResponse
+	if err := proto.Unmarshal(body, &drainResp); err != nil {
+		t.Fatalf("unmarshal DrainEgressResponse failed: %v", err)
+	}
+	if samples := drainResp.GetSamples(); len(samples) != 1 || samples[0].GetStatusCode() != http.StatusOK {
+		t.Errorf("DrainEgressResponse samples: got %v, want one call answered 200", samples)
+	}
 }

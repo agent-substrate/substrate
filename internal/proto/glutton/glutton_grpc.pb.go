@@ -33,16 +33,18 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Glutton_WriteRAM_FullMethodName  = "/glutton.Glutton/WriteRAM"
-	Glutton_ReadRAM_FullMethodName   = "/glutton.Glutton/ReadRAM"
-	Glutton_WriteDisk_FullMethodName = "/glutton.Glutton/WriteDisk"
-	Glutton_ReadDisk_FullMethodName  = "/glutton.Glutton/ReadDisk"
-	Glutton_OpenFD_FullMethodName    = "/glutton.Glutton/OpenFD"
-	Glutton_Ping_FullMethodName      = "/glutton.Glutton/Ping"
-	Glutton_Gossip_FullMethodName    = "/glutton.Glutton/Gossip"
-	Glutton_BurnCPU_FullMethodName   = "/glutton.Glutton/BurnCPU"
-	Glutton_Ingest_FullMethodName    = "/glutton.Glutton/Ingest"
-	Glutton_UseCPU_FullMethodName    = "/glutton.Glutton/UseCPU"
+	Glutton_WriteRAM_FullMethodName    = "/glutton.Glutton/WriteRAM"
+	Glutton_ReadRAM_FullMethodName     = "/glutton.Glutton/ReadRAM"
+	Glutton_WriteDisk_FullMethodName   = "/glutton.Glutton/WriteDisk"
+	Glutton_ReadDisk_FullMethodName    = "/glutton.Glutton/ReadDisk"
+	Glutton_OpenFD_FullMethodName      = "/glutton.Glutton/OpenFD"
+	Glutton_Ping_FullMethodName        = "/glutton.Glutton/Ping"
+	Glutton_Gossip_FullMethodName      = "/glutton.Glutton/Gossip"
+	Glutton_BurnCPU_FullMethodName     = "/glutton.Glutton/BurnCPU"
+	Glutton_Ingest_FullMethodName      = "/glutton.Glutton/Ingest"
+	Glutton_UseCPU_FullMethodName      = "/glutton.Glutton/UseCPU"
+	Glutton_UseEgress_FullMethodName   = "/glutton.Glutton/UseEgress"
+	Glutton_DrainEgress_FullMethodName = "/glutton.Glutton/DrainEgress"
 )
 
 // GluttonClient is the client API for Glutton service.
@@ -88,6 +90,14 @@ type GluttonClient interface {
 	// load; calling again replaces it, and num_cores=0 stops it. See
 	// UseCPURequest for the (goroutines x duty cycle) shape.
 	UseCPU(ctx context.Context, in *UseCPURequest, opts ...grpc.CallOption) (*UseCPUResponse, error)
+	// Tells the glutton to send an HTTP GET to a URL on a fixed interval. The
+	// calls leave the actor through its egress path, and their results are
+	// kept until DrainEgress collects them. Calling again replaces the loop,
+	// and interval_ms=0 stops it.
+	UseEgress(ctx context.Context, in *UseEgressRequest, opts ...grpc.CallOption) (*UseEgressResponse, error)
+	// Returns, and forgets, the results of the egress calls made since the
+	// last drain, optionally stopping the loop first.
+	DrainEgress(ctx context.Context, in *DrainEgressRequest, opts ...grpc.CallOption) (*DrainEgressResponse, error)
 }
 
 type gluttonClient struct {
@@ -198,6 +208,26 @@ func (c *gluttonClient) UseCPU(ctx context.Context, in *UseCPURequest, opts ...g
 	return out, nil
 }
 
+func (c *gluttonClient) UseEgress(ctx context.Context, in *UseEgressRequest, opts ...grpc.CallOption) (*UseEgressResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UseEgressResponse)
+	err := c.cc.Invoke(ctx, Glutton_UseEgress_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gluttonClient) DrainEgress(ctx context.Context, in *DrainEgressRequest, opts ...grpc.CallOption) (*DrainEgressResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DrainEgressResponse)
+	err := c.cc.Invoke(ctx, Glutton_DrainEgress_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // GluttonServer is the server API for Glutton service.
 // All implementations must embed UnimplementedGluttonServer
 // for forward compatibility.
@@ -241,6 +271,14 @@ type GluttonServer interface {
 	// load; calling again replaces it, and num_cores=0 stops it. See
 	// UseCPURequest for the (goroutines x duty cycle) shape.
 	UseCPU(context.Context, *UseCPURequest) (*UseCPUResponse, error)
+	// Tells the glutton to send an HTTP GET to a URL on a fixed interval. The
+	// calls leave the actor through its egress path, and their results are
+	// kept until DrainEgress collects them. Calling again replaces the loop,
+	// and interval_ms=0 stops it.
+	UseEgress(context.Context, *UseEgressRequest) (*UseEgressResponse, error)
+	// Returns, and forgets, the results of the egress calls made since the
+	// last drain, optionally stopping the loop first.
+	DrainEgress(context.Context, *DrainEgressRequest) (*DrainEgressResponse, error)
 	mustEmbedUnimplementedGluttonServer()
 }
 
@@ -280,6 +318,12 @@ func (UnimplementedGluttonServer) Ingest(context.Context, *IngestRequest) (*Inge
 }
 func (UnimplementedGluttonServer) UseCPU(context.Context, *UseCPURequest) (*UseCPUResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method UseCPU not implemented")
+}
+func (UnimplementedGluttonServer) UseEgress(context.Context, *UseEgressRequest) (*UseEgressResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method UseEgress not implemented")
+}
+func (UnimplementedGluttonServer) DrainEgress(context.Context, *DrainEgressRequest) (*DrainEgressResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DrainEgress not implemented")
 }
 func (UnimplementedGluttonServer) mustEmbedUnimplementedGluttonServer() {}
 func (UnimplementedGluttonServer) testEmbeddedByValue()                 {}
@@ -482,6 +526,42 @@ func _Glutton_UseCPU_Handler(srv interface{}, ctx context.Context, dec func(inte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Glutton_UseEgress_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UseEgressRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GluttonServer).UseEgress(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Glutton_UseEgress_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GluttonServer).UseEgress(ctx, req.(*UseEgressRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Glutton_DrainEgress_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DrainEgressRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GluttonServer).DrainEgress(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Glutton_DrainEgress_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GluttonServer).DrainEgress(ctx, req.(*DrainEgressRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Glutton_ServiceDesc is the grpc.ServiceDesc for Glutton service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -528,6 +608,14 @@ var Glutton_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "UseCPU",
 			Handler:    _Glutton_UseCPU_Handler,
+		},
+		{
+			MethodName: "UseEgress",
+			Handler:    _Glutton_UseEgress_Handler,
+		},
+		{
+			MethodName: "DrainEgress",
+			Handler:    _Glutton_DrainEgress_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
