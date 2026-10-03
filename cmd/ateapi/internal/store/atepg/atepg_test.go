@@ -34,7 +34,7 @@ func TestList_NamesAnUndecodableRow(t *testing.T) {
 	if _, err := s.CreateActor(ctx, &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Name: "a1", Atespace: "team-a"},
 		Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
-	}); err != nil {
+	}, nil); err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
 	if _, err := s.CreateWorker(ctx, &ateapipb.Worker{
