@@ -14,13 +14,16 @@
 
 -- +goose Up
 
--- No table declares a foreign key. PlanetScale disables them by default and
--- InnoDB rejects them on partitioned tables, so atemy enforces every parent
--- and child relationship in the transaction that writes the child or deletes
+-- MySQL commits each DDL statement on its own, so a run that fails partway
+-- through this file leaves some tables behind with no ledger row. Every
+-- statement is idempotent so the next startup completes the file.
+
+-- No table declares a foreign key, because PlanetScale disables them by
+-- default. atemy enforces every parent and child relationship in the transaction that writes the child or deletes
 -- the parent. Key columns use a binary collation so names compare byte for
 -- byte, as they do in PostgreSQL.
 
-CREATE TABLE atespaces (
+CREATE TABLE IF NOT EXISTS atespaces (
     name     VARCHAR(255) NOT NULL,
     uid      VARCHAR(255) NOT NULL,
     version  BIGINT NOT NULL,
@@ -28,7 +31,7 @@ CREATE TABLE atespaces (
     PRIMARY KEY (name)
 ) DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_bin;
 
-CREATE TABLE actors (
+CREATE TABLE IF NOT EXISTS actors (
     atespace  VARCHAR(255) NOT NULL,
     name      VARCHAR(255) NOT NULL,
     uid       VARCHAR(255) NOT NULL,
@@ -37,7 +40,7 @@ CREATE TABLE actors (
     PRIMARY KEY (atespace, name)
 ) DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_bin;
 
-CREATE TABLE actor_egress_policies (
+CREATE TABLE IF NOT EXISTS actor_egress_policies (
     atespace    VARCHAR(255) NOT NULL,
     actor_name  VARCHAR(255) NOT NULL,
     uid         VARCHAR(255) NOT NULL,
@@ -46,7 +49,7 @@ CREATE TABLE actor_egress_policies (
     PRIMARY KEY (atespace, actor_name)
 ) DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_bin;
 
-CREATE TABLE actor_templates (
+CREATE TABLE IF NOT EXISTS actor_templates (
     atespace  VARCHAR(255) NOT NULL,
     name      VARCHAR(255) NOT NULL,
     uid       VARCHAR(255) NOT NULL,
@@ -55,7 +58,7 @@ CREATE TABLE actor_templates (
     PRIMARY KEY (atespace, name)
 ) DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_bin;
 
-CREATE TABLE tags (
+CREATE TABLE IF NOT EXISTS tags (
     atespace  VARCHAR(255) NOT NULL,
     name      VARCHAR(255) NOT NULL,
     uid       VARCHAR(255) NOT NULL,
@@ -66,7 +69,7 @@ CREATE TABLE tags (
 
 -- Workers are global-scoped and named by their Kubernetes pod UID, so name
 -- alone is the primary key.
-CREATE TABLE workers (
+CREATE TABLE IF NOT EXISTS workers (
     name     VARCHAR(255) NOT NULL,
     uid      VARCHAR(255) NOT NULL,
     version  BIGINT NOT NULL,
@@ -79,7 +82,7 @@ CREATE TABLE workers (
 -- Worker. Kept separate from workers so Worker reads, writes, and watch events
 -- do not grow with occupancy. The primary key finds an Actor's Worker;
 -- worker_name lists a Worker's Actors.
-CREATE TABLE worker_assignments (
+CREATE TABLE IF NOT EXISTS worker_assignments (
     actor_uid    VARCHAR(255) NOT NULL,
     worker_name  VARCHAR(255) NOT NULL,
     proto        LONGBLOB NOT NULL,
@@ -92,7 +95,7 @@ CREATE TABLE worker_assignments (
 -- rows commit in seq order and a poller reading past its cursor never skips
 -- a row that commits later. Retention deletes the oldest rows and records the
 -- greatest deleted seq in worker_outbox_trim.
-CREATE TABLE worker_outbox (
+CREATE TABLE IF NOT EXISTS worker_outbox (
     seq         BIGINT UNSIGNED NOT NULL,
     created_at  DATETIME(6) NOT NULL,
     payload     LONGBLOB NOT NULL,
@@ -100,26 +103,28 @@ CREATE TABLE worker_outbox (
 );
 
 -- Single row (id = 1): the last seq handed to a worker write.
-CREATE TABLE worker_outbox_sequence (
+CREATE TABLE IF NOT EXISTS worker_outbox_sequence (
     id   TINYINT UNSIGNED NOT NULL,
     seq  BIGINT UNSIGNED NOT NULL,
     PRIMARY KEY (id)
 );
 
-INSERT INTO worker_outbox_sequence (id, seq) VALUES (1, 0);
+INSERT INTO worker_outbox_sequence (id, seq) VALUES (1, 0)
+    ON DUPLICATE KEY UPDATE id = id;
 
 -- Single row (id = 1): the greatest seq retention has deleted. Watchers
 -- compare it against their cursor to detect that unconsumed rows were
 -- deleted out from under them.
-CREATE TABLE worker_outbox_trim (
+CREATE TABLE IF NOT EXISTS worker_outbox_trim (
     id   TINYINT UNSIGNED NOT NULL,
     seq  BIGINT UNSIGNED NOT NULL,
     PRIMARY KEY (id)
 );
 
-INSERT INTO worker_outbox_trim (id, seq) VALUES (1, 0);
+INSERT INTO worker_outbox_trim (id, seq) VALUES (1, 0)
+    ON DUPLICATE KEY UPDATE id = id;
 
-CREATE TABLE leases (
+CREATE TABLE IF NOT EXISTS leases (
     lease_key   VARCHAR(512) NOT NULL,
     token       VARCHAR(255) NOT NULL,
     expires_at  DATETIME(6) NOT NULL,

@@ -28,4 +28,4 @@ fi
 
 # shellcheck source=hack/util/sql-migrations.sh
 source "${ROOT}/hack/util/sql-migrations.sh"
-verify_sql_migrations "cmd/ateapi/internal/store/atemy/migrations" "MySQL" "${1:-}"
+verify_sql_migrations "cmd/ateapi/internal/store/atemy/migrations" "MySQL" allow "${1:-}"

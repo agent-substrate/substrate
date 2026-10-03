@@ -14,7 +14,8 @@
 
 // Package atemy is an ate storage backend built on MySQL 8.0 or later. It
 // uses only features PlanetScale's Vitess supports: no foreign keys, stored
-// routines, triggers, partitioning, CREATE DATABASE or runtime DDL.
+// routines, triggers, partitioning or CREATE DATABASE, and no DDL outside the
+// migrations applied at startup.
 //
 // Each table holds native SQL columns for fields SQL must operate on
 // (primary keys, versions, pagination, update/delete preconditions) plus
@@ -124,10 +125,15 @@ func Connect(ctx context.Context, config ConnectConfig) (*Persistence, error) {
 		return nil, fmt.Errorf("MySQL read/write and owner connection strings name different databases")
 	}
 
-	db := sql.OpenDB(readWrite)
+	maxConns := storesql.DefaultMaxConns()
 	if config.PoolMaxConns > 0 {
-		db.SetMaxOpenConns(int(config.PoolMaxConns))
+		maxConns = int(config.PoolMaxConns)
 	}
+	db := sql.OpenDB(readWrite)
+	db.SetMaxOpenConns(maxConns)
+	db.SetMaxIdleConns(maxConns)
+	db.SetConnMaxLifetime(storesql.ConnMaxLifetime)
+	db.SetConnMaxIdleTime(storesql.ConnMaxIdleTime)
 	if err := db.PingContext(ctx); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("%w: pinging MySQL: %w", ErrUnavailable, err)
@@ -143,6 +149,8 @@ func Connect(ctx context.Context, config ConnectConfig) (*Persistence, error) {
 	watchDB := sql.OpenDB(readWrite)
 	watchDB.SetMaxOpenConns(watchPoolMaxConns)
 	watchDB.SetMaxIdleConns(watchPoolMaxConns)
+	watchDB.SetConnMaxLifetime(storesql.ConnMaxLifetime)
+	watchDB.SetConnMaxIdleTime(storesql.ConnMaxIdleTime)
 
 	p, err := newPersistence(ctx, db, watchDB, ownerDB)
 	if err != nil {
@@ -205,6 +213,9 @@ func (c *connector) Connect(ctx context.Context) (driver.Conn, error) {
 		}
 		cfg = c.cfg.Clone()
 		cfg.TLS = tlsConfig
+		// TLS files demand TLS; tls=preferred in the DSN must not turn
+		// that into an optional upgrade.
+		cfg.AllowFallbackToPlaintext = false
 	}
 	conn, err := mysql.NewConnector(cfg)
 	if err != nil {
@@ -315,26 +326,44 @@ type querier interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }
 
+// txAttempts bounds how many times inTx runs a transaction InnoDB chose as a
+// deadlock victim.
+const txAttempts = 3
+
 // inTx runs fn in a READ COMMITTED transaction on db, the isolation PostgreSQL
-// gives atepg, and commits if fn succeeds. A deadlock, which InnoDB resolves
-// by rolling back one of the transactions, is reported as a lost race.
+// gives atepg, and commits if fn succeeds. InnoDB resolves a deadlock by
+// rolling back one transaction, which can happen even between two inserts of
+// one key, so inTx runs fn again from the start up to txAttempts times. fn
+// must therefore be safe to repeat, as the store's update contract already
+// requires of mutate.
 func inTx(ctx context.Context, db *sql.DB, fn func(tx *sql.Tx) error) error {
+	var err error
+	for range txAttempts {
+		if err = runTx(ctx, db, fn); mysqlErrNumber(err) != 1213 {
+			break
+		}
+	}
+	return mapLockError(err)
+}
+
+func runTx(ctx context.Context, db *sql.DB, fn func(tx *sql.Tx) error) error {
 	tx, err := db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return fmt.Errorf("beginning transaction: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op once committed
 	if err := fn(tx); err != nil {
-		return mapLockError(err)
+		return err
 	}
 	if err := tx.Commit(); err != nil {
-		return mapLockError(fmt.Errorf("committing transaction: %w", err))
+		return fmt.Errorf("committing transaction: %w", err)
 	}
 	return nil
 }
 
-// mapLockError reports a deadlock or lock wait timeout as ErrVersionConflict:
-// the write lost to a concurrent one and the caller may retry.
+// mapLockError reports a deadlock that outlasted inTx's attempts, or a lock
+// wait timeout, as ErrVersionConflict: the write lost to a concurrent one and
+// the caller may retry.
 func mapLockError(err error) error {
 	switch mysqlErrNumber(err) {
 	case 1213, 1205:

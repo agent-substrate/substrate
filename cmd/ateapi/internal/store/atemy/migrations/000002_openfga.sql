@@ -20,7 +20,7 @@
 -- Substrate tables so resource mutations and authorization tuple updates
 -- execute within the same MySQL transaction.
 
-CREATE TABLE tuple (
+CREATE TABLE IF NOT EXISTS tuple (
     store             CHAR(26) NOT NULL,
     object_type       VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
     object_id         VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
@@ -36,7 +36,7 @@ CREATE TABLE tuple (
     KEY idx_user_lookup (store, _user, relation, object_type, object_id)
 ) DEFAULT CHARSET = utf8mb4;
 
-CREATE TABLE authorization_model (
+CREATE TABLE IF NOT EXISTS authorization_model (
     store                  CHAR(26) NOT NULL,
     authorization_model_id CHAR(26) NOT NULL,
     type                   VARCHAR(256) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
@@ -46,7 +46,7 @@ CREATE TABLE authorization_model (
     PRIMARY KEY (store, authorization_model_id, type)
 ) DEFAULT CHARSET = utf8mb4;
 
-CREATE TABLE store (
+CREATE TABLE IF NOT EXISTS store (
     id         CHAR(26) NOT NULL,
     name       VARCHAR(64) NOT NULL,
     created_at TIMESTAMP NOT NULL,
@@ -55,14 +55,14 @@ CREATE TABLE store (
     PRIMARY KEY (id)
 ) DEFAULT CHARSET = utf8mb4;
 
-CREATE TABLE assertion (
+CREATE TABLE IF NOT EXISTS assertion (
     store                  CHAR(26) NOT NULL,
     authorization_model_id CHAR(26) NOT NULL,
     assertions             BLOB,
     PRIMARY KEY (store, authorization_model_id)
 ) DEFAULT CHARSET = utf8mb4;
 
-CREATE TABLE changelog (
+CREATE TABLE IF NOT EXISTS changelog (
     store             CHAR(26) NOT NULL,
     object_type       VARCHAR(256) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
     object_id         VARCHAR(256) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,

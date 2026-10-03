@@ -22,6 +22,7 @@ import (
 	"time"
 
 	sq "github.com/Masterminds/squirrel"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storesql"
 	openfgav1 "github.com/openfga/api/proto/openfga/v1"
 	"github.com/openfga/openfga/pkg/storage"
 	"github.com/openfga/openfga/pkg/storage/mysql"
@@ -39,12 +40,13 @@ type mysqlTransactionalDatastore struct {
 // newMySQLTransactionalDatastore wraps an upstream MySQL datastore on db.
 // mysql.NewWithDB (mysql.go:78-86) calls db.SetMaxOpenConns,
 // SetConnMaxIdleTime, and SetConnMaxLifetime unconditionally, so the config
-// carries db's current open-connection limit forward. database/sql exposes no
-// getter for the two lifetimes; NewConfig leaves them at zero, which is the
-// database/sql default.
+// carries db's open-connection limit forward and restates the lifetimes
+// atemy.Connect sets. database/sql exposes no getter for the lifetimes.
 func newMySQLTransactionalDatastore(db *sql.DB) (*mysqlTransactionalDatastore, error) {
 	cfg := sqlcommon.NewConfig()
 	cfg.MaxOpenConns = db.Stats().MaxOpenConnections
+	cfg.ConnMaxLifetime = storesql.ConnMaxLifetime
+	cfg.ConnMaxIdleTime = storesql.ConnMaxIdleTime
 	ds, err := mysql.NewWithDB(db, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("creating OpenFGA mysql adapter: %w", err)
@@ -147,14 +149,11 @@ func acquireMySQLInitLock(ctx context.Context, db *sql.DB) (func(), error) {
 		return nil, fmt.Errorf("acquiring OpenFGA init lock: GET_LOCK did not grant %q within %s", ateFGAInitLockName, mysqlInitLockTimeout)
 	}
 	return func() {
-		var released sql.NullInt64
-		err := conn.QueryRowContext(context.Background(), `SELECT RELEASE_LOCK(?)`, ateFGAInitLockName).Scan(&released)
-		if err != nil || released.Int64 != 1 {
-			// Close would return the session to the pool still holding the
-			// lock; ErrBadConn makes database/sql discard it, which ends the
-			// session and frees the lock.
-			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
-		}
+		_, _ = conn.ExecContext(context.Background(), `SELECT RELEASE_LOCK(?)`, ateFGAInitLockName)
+		// Discard the session rather than pool it. That frees the lock even if
+		// RELEASE_LOCK failed, and Vitess keeps a session that took a lock on
+		// a reserved connection until the client disconnects.
+		_ = conn.Raw(func(any) error { return driver.ErrBadConn })
 		_ = conn.Close()
 	}, nil
 }

@@ -19,10 +19,14 @@
 # changes to migrations from the newest release tag that has any (or from
 # released-ref). Run it from the repository root.
 #
-# Usage: verify_sql_migrations <migrations-dir> <database-name> [released-ref]
+# Usage: verify_sql_migrations <migrations-dir> <database-name> <if-not-exists> [released-ref]
+#
+# if-not-exists is "deny" or "allow". MySQL commits DDL statement by statement,
+# so its migrations use IF NOT EXISTS to stay rerunnable after a partial run.
 verify_sql_migrations() {
   local migrations_dir="$1"
   local database="$2"
+  local if_not_exists="$3"
   local migrations migration name version expected released_ref tag
 
   shopt -s nullglob
@@ -53,10 +57,10 @@ verify_sql_migrations() {
       exit 1
     fi
     if grep -Fiq -- '-- +goose no transaction' "${migration}"; then
-      echo "Migration file ${name} must run in a ${database} transaction." >&2
+      echo "Migration file ${name} must not opt out of the Goose transaction." >&2
       exit 1
     fi
-    if grep -Fiq -- 'IF NOT EXISTS' "${migration}"; then
+    if [[ "${if_not_exists}" == "deny" ]] && grep -Fiq -- 'IF NOT EXISTS' "${migration}"; then
       echo "Migration file ${name} must not contain an IF NOT EXISTS guard." >&2
       exit 1
     fi
@@ -71,7 +75,7 @@ verify_sql_migrations() {
     expected=$((expected + 1))
   done
 
-  released_ref="${3:-}"
+  released_ref="${4:-}"
   if [[ -z "${released_ref}" ]]; then
     while read -r tag; do
       if [[ ! "${tag}" =~ ^v[1-9][0-9]*\.[0-9]+\.[0-9]+$ ]]; then

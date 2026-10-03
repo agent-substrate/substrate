@@ -49,6 +49,7 @@ func (p *Persistence) writeAndAppendEvent(ctx context.Context, eventType store.W
 	var worker *ateapipb.Worker
 	var payload []byte
 	err := inTx(ctx, p.db, func(tx *sql.Tx) error {
+		payload = nil
 		var err error
 		worker, err = fn(ctx, tx)
 		if err != nil || worker == nil {
@@ -164,9 +165,11 @@ func (p *Persistence) trimWorkerOutboxOlderThan(ctx context.Context, age time.Du
 // again on the poll, so consumers must reconcile versions and tolerate
 // duplicates.
 //
-// If the watcher falls behind retention, it closes the channel to force the
-// consumer to resync from the primary tables. Unlike atepg's UNLOGGED outbox,
-// worker_outbox is durable, so a database restart loses no events.
+// If the watcher falls behind retention, or the database loses committed
+// writes so that the sequence moves behind the cursor, it closes the channel
+// to force the consumer to resync from the primary tables. Unlike atepg's
+// UNLOGGED outbox, worker_outbox is durable, so a clean restart loses no
+// events.
 func (p *Persistence) WatchWorkers(ctx context.Context) (*store.WorkerWatch, error) {
 	watchCtx, cancel := context.WithCancel(ctx)
 
@@ -199,7 +202,7 @@ func (p *Persistence) WatchWorkers(ctx context.Context) (*store.WorkerWatch, err
 			// Drain until a batch is partial. Sleeping between full batches would
 			// cap throughput and cause unrecoverable lag during bursts.
 			for {
-				batch, fellBehind, err := p.pollWorkerOutbox(watchCtx, cursor)
+				batch, trim, head, err := p.pollWorkerOutbox(watchCtx, cursor)
 				if err != nil {
 					if watchCtx.Err() != nil {
 						return
@@ -218,10 +221,18 @@ func (p *Persistence) WatchWorkers(ctx context.Context) (*store.WorkerWatch, err
 					break
 				}
 				failingSince = time.Time{}
+				// A head behind the cursor means the database lost committed
+				// writes (a failover or a restore). New writes would reuse seqs
+				// the cursor has passed, so close for a resync.
+				if head < cursor {
+					slog.WarnContext(watchCtx, "worker outbox sequence moved behind the watch cursor; closing for resync",
+						slog.Uint64("cursor_seq", cursor), slog.Uint64("head_seq", head))
+					return
+				}
 				// Retention safety: if retention deleted past the cursor, a row
 				// this watcher never consumed may be gone. Close before
 				// delivering anything past the gap.
-				if fellBehind {
+				if trim > cursor {
 					slog.WarnContext(watchCtx, "worker watch fell behind outbox retention; closing for resync",
 						slog.Uint64("cursor_seq", cursor))
 					return
@@ -257,33 +268,34 @@ type outboxRow struct {
 	payload []byte
 }
 
-// pollWorkerOutbox reads the rows after cursor, then whether retention has
-// deleted past it. The trim mark is read second: a trim that commits between
-// the two reads raises the mark, so a row missing from the batch is always
+// pollWorkerOutbox reads the rows after cursor, then the trim mark and the
+// sequence head. The marks are read second: a trim that commits between the
+// two reads raises the trim mark, so a row missing from the batch is always
 // detected.
-func (p *Persistence) pollWorkerOutbox(ctx context.Context, cursor uint64) ([]outboxRow, bool, error) {
+func (p *Persistence) pollWorkerOutbox(ctx context.Context, cursor uint64) (batch []outboxRow, trim, head uint64, err error) {
 	rows, err := p.watchDB.QueryContext(ctx, `
 		SELECT seq, payload FROM worker_outbox
 		WHERE seq > ? ORDER BY seq LIMIT ?`, cursor, outboxBatch)
 	if err != nil {
-		return nil, false, err
+		return nil, 0, 0, err
 	}
-	var batch []outboxRow
 	for rows.Next() {
 		var r outboxRow
 		if err := rows.Scan(&r.seq, &r.payload); err != nil {
 			rows.Close()
-			return nil, false, err
+			return nil, 0, 0, err
 		}
 		batch = append(batch, r)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return nil, false, err
+		return nil, 0, 0, err
 	}
-	var mark uint64
-	if err := p.watchDB.QueryRowContext(ctx, `SELECT seq FROM worker_outbox_trim WHERE id = 1`).Scan(&mark); err != nil {
-		return nil, false, err
+	if err := p.watchDB.QueryRowContext(ctx, `
+		SELECT t.seq, s.seq FROM worker_outbox_trim AS t
+		JOIN worker_outbox_sequence AS s ON s.id = t.id
+		WHERE t.id = 1`).Scan(&trim, &head); err != nil {
+		return nil, 0, 0, err
 	}
-	return batch, mark > cursor, nil
+	return batch, trim, head, nil
 }

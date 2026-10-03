@@ -15,7 +15,7 @@
 -- +goose Up
 
 -- Singleton: atemy only ever writes id = 1, so the table holds at most one row.
-CREATE TABLE global_access_policy (
+CREATE TABLE IF NOT EXISTS global_access_policy (
     id      TINYINT UNSIGNED NOT NULL,
     uid     VARCHAR(255) NOT NULL,
     version BIGINT NOT NULL,
@@ -23,7 +23,7 @@ CREATE TABLE global_access_policy (
     PRIMARY KEY (id)
 ) DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_bin;
 
-CREATE TABLE atespace_access_policies (
+CREATE TABLE IF NOT EXISTS atespace_access_policies (
     atespace_name VARCHAR(255) NOT NULL,
     uid           VARCHAR(255) NOT NULL,
     version       BIGINT NOT NULL,

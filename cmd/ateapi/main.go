@@ -90,7 +90,7 @@ var (
 	mysqlTLSCAFile                    = pflag.String("mysql-tls-ca-file", "", "PEM file with the CA that verifies the MySQL server certificate. Empty uses the system roots when TLS is enabled.")
 	mysqlTLSCertFile                  = pflag.String("mysql-tls-cert-file", "", "PEM file with the client certificate presented to MySQL.")
 	mysqlTLSKeyFile                   = pflag.String("mysql-tls-key-file", "", "PEM file with the private key for --mysql-tls-cert-file.")
-	mysqlPoolMaxConns                 = pflag.Int32("mysql-pool-max-conns", 0, "Maximum connections in the shared Substrate and OpenFGA read/write MySQL pool. Does not affect the owner or watch pools. Unlimited when unset.")
+	mysqlPoolMaxConns                 = pflag.Int32("mysql-pool-max-conns", 0, "Maximum connections in the shared Substrate and OpenFGA read/write MySQL pool. Does not affect the owner or watch pools. The larger of 4 and the CPU count when unset, as for PostgreSQL.")
 	experimentalEnableAuthz           = pflag.Bool("experimental-enable-authz", false, "Enforce OpenFGA authorization checks on all registered RPCs (experimental). AccessPolicy RPCs are always checked.")
 	// TODO: Move the authz settings into the hot-reloadable config proto
 	// (agent-substrate/substrate#2021) once it lands, so bootstrap owner

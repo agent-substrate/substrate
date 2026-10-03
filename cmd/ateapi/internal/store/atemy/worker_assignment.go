@@ -80,10 +80,12 @@ func (p *Persistence) BindActorToWorker(ctx context.Context, workerName string, 
 	// The store assigns identity. atespace is empty because Workers are
 	// global-scoped; the name is the Actor's UID, which is also the row key.
 	// This is the identity a first bind gets; a rebind keeps the recorded one.
-	assignment.Metadata = &ateapipb.ResourceMetadata{Name: actorUID}
-	storesql.SetCreateMetadata(assignment.Metadata)
+	createMeta := &ateapipb.ResourceMetadata{Name: actorUID}
+	storesql.SetCreateMetadata(createMeta)
 
 	_, err := p.writeAndAppendEvent(ctx, store.WorkerEventUpdated, func(ctx context.Context, tx *sql.Tx) (*ateapipb.Worker, error) {
+		// A retried transaction starts again from the first bind's identity.
+		assignment.Metadata = proto.CloneOf(createMeta)
 		worker, err := getWorkerForUpdate(ctx, tx, workerName)
 		if err != nil {
 			return nil, err

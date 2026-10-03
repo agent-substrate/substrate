@@ -38,15 +38,21 @@ func (p *Persistence) CreateAtespace(ctx context.Context, atespace *ateapipb.Ate
 		return nil, fmt.Errorf("marshaling atespace: %w", err)
 	}
 
-	_, err = p.db.ExecContext(ctx, `
-		INSERT INTO atespaces (name, uid, version, proto)
-		VALUES (?, ?, ?, ?)`,
-		name, dbAtespace.GetMetadata().GetUid(), dbAtespace.GetMetadata().GetVersion(), protoBytes)
-	if err != nil {
+	err = inTx(ctx, p.db, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
+			INSERT INTO atespaces (name, uid, version, proto)
+			VALUES (?, ?, ?, ?)`,
+			name, dbAtespace.GetMetadata().GetUid(), dbAtespace.GetMetadata().GetVersion(), protoBytes)
 		if isUniqueViolation(err) {
-			return nil, store.ErrAlreadyExists
+			return store.ErrAlreadyExists
 		}
-		return nil, fmt.Errorf("inserting atespace %q: %w", name, err)
+		if err != nil {
+			return fmt.Errorf("inserting atespace %q: %w", name, err)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	return dbAtespace, nil
 }

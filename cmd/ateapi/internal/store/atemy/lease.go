@@ -41,8 +41,9 @@ func (p *Persistence) AcquireLease(ctx context.Context, key string) (*store.Leas
 // acquireLease takes over an expired row, or inserts one if the key has none.
 // MySQL has no conditional upsert, so this is two statements; each is atomic
 // and a racing acquirer loses on one of them. A concurrent takeover waits on
-// the row lock and then finds the row unexpired; a concurrent insert hits the
-// duplicate key.
+// the row lock and then finds the row unexpired. A concurrent insert hits the
+// duplicate key, or, when the row was just released, a deadlock InnoDB
+// resolves in favor of the other inserter.
 func (p *Persistence) acquireLease(ctx context.Context, key, token string, ttl time.Duration) (bool, error) {
 	res, err := p.db.ExecContext(ctx, `
 		UPDATE leases
@@ -59,7 +60,7 @@ func (p *Persistence) acquireLease(ctx context.Context, key, token string, ttl t
 	if _, err := p.db.ExecContext(ctx, `
 		INSERT INTO leases (lease_key, token, expires_at)
 		VALUES (?, ?, UTC_TIMESTAMP(6) + INTERVAL ? MICROSECOND)`, key, token, ttl.Microseconds()); err != nil {
-		if isUniqueViolation(err) {
+		if isUniqueViolation(err) || mysqlErrNumber(err) == 1213 {
 			return false, nil
 		}
 		return false, fmt.Errorf("acquiring lease for %q: %w", key, err)
