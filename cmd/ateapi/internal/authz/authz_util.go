@@ -22,6 +22,7 @@ import (
 	"log/slog"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	openfgav1 "github.com/openfga/api/proto/openfga/v1"
@@ -92,6 +93,12 @@ func formatUser(id string) string {
 	return "user:" + tupleReplacer.Replace(id)
 }
 
+// maxTupleUserLength is the longest OpenFGA user string a tuple can hold:
+// OpenFGA's MySQL schema stores it in VARCHAR(256). PostgreSQL has no limit,
+// but both backends enforce this one so a policy valid on one is valid on the
+// other.
+const maxTupleUserLength = 256
+
 // FormatMember validates a policy member string (such as "user:alice@example.com")
 // and returns the percent-encoded OpenFGA user string. Control characters are
 // rejected because OpenFGA does not accept them in tuple user IDs.
@@ -106,7 +113,11 @@ func FormatMember(member string) (string, error) {
 	if strings.ContainsFunc(id, unicode.IsControl) {
 		return "", fmt.Errorf("member %q must not contain control characters", member)
 	}
-	return formatUser(id), nil
+	user := formatUser(id)
+	if n := utf8.RuneCountInString(user); n > maxTupleUserLength {
+		return "", fmt.Errorf("member %q is %d characters once encoded, longer than %d", member, n, maxTupleUserLength)
+	}
+	return user, nil
 }
 
 //go:embed model.fga
