@@ -101,8 +101,9 @@ a running cluster.
 
 The store is PostgreSQL by default. `ATE_API_STORE_BACKEND=mysql` with
 `ATE_API_MYSQL_READ_WRITE_CONNECTION_STRING` selects an existing external MySQL
-instead and skips the bundled StatefulSet; `deploy postgres` refuses to run
-then. See [`differences.md`](differences.md) for the MySQL variables.
+instead, skips the bundled StatefulSet, and makes `deploy postgres` refuse to
+run. See [`differences.md`](differences.md#known-differences-worth-flagging)
+for the MySQL variables.
 
 ## Publish
 

@@ -100,5 +100,5 @@ hack/verify/postgresql-migrations.sh
 hack/verify/mysql-migrations.sh
 go test ./cmd/ateapi/internal/store/atepg ./cmd/ateapi/internal/store/atemy
 ATE_TEST_STORE_BACKEND=mysql go test ./cmd/ateapi/internal/controlapi/... ./cmd/ateapi/internal/workerservice/...
-go test -tags vitess -run TestVitess ./cmd/ateapi/internal/store/atemy/
+go test -tags vitess -run TestVitess ./cmd/ateapi/internal/store/atemy
 ```
