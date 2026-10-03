@@ -94,7 +94,8 @@ patches:
                   policies:
                     backendTLS: {}
                 policies:
-                  substrateEgress:
+                  substrateEgress: &egressPolicy
+                    #ATE_AGENTGATEWAY_CREDENTIAL_PROVIDERS
                     host: api.ate-system.svc:443
                     policies:
                       backendTLS:
@@ -107,13 +108,7 @@ patches:
                 - dynamic:
                     target: source.connectHeaders["host"]
                 policies:
-                  substrateEgress:
-                    host: api.ate-system.svc:443
-                    policies:
-                      backendTLS:
-                        cert: /run/podidentity.podcert.ate.dev/credential-bundle.pem
-                        key: /run/podidentity.podcert.ate.dev/credential-bundle.pem
-                        root: /run/servicedns-ca/trust-bundle.pem
+                  substrateEgress: *egressPolicy
             - protocol: TLS
               tcpRoutes:
               - backends:

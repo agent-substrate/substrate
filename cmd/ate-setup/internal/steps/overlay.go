@@ -142,7 +142,15 @@ func (e *Env) renderAtenetEgressManifest(ctx context.Context, provider config.Cr
 		if general {
 			return nil, fmt.Errorf("--experimental-additional-egress-extproc-service requires --atenet-dataplane=envoy")
 		}
-		return e.renderResolve(ctx, e.Cfg.Path(installDir+"/agentgateway-egress"))
+		raw, err := e.render(e.Cfg.Path(installDir + "/agentgateway-egress"))
+		if err != nil {
+			return nil, err
+		}
+		raw, err = patchAgentgatewayEgressInject(raw, provider)
+		if err != nil {
+			return nil, err
+		}
+		return e.ResolveManifestBytes(ctx, raw)
 	}
 
 	imageReference, err := e.dockerfileImage(ctx, envoyDataplaneImage, envoyDataplaneDockefile)
@@ -190,25 +198,45 @@ func (e *Env) patchAtenetEgressInject(raw []byte, provider config.CredentialProv
 	if provider.Enabled() {
 		flagsBlock = emitEgressInjectFlags(provider.Name, provider.Address, provider.ServerName())
 	}
+	return replaceManifestMarker(raw, "#ATE_EGRESS_INJECT_FLAGS", flagsBlock)
+}
 
+// The HTTP and HTTPS listeners share the egress policy and its providers.
+func patchAgentgatewayEgressInject(raw []byte, provider config.CredentialProvider) ([]byte, error) {
+	var block string
+	if provider.Enabled() {
+		block = fmt.Sprintf(`credentialProviders:
+- uriAuthority: %q
+  target:
+    host: %q
+    policies:
+      backendTLS:
+        hostname: %q
+        cert: /run/podidentity.podcert.ate.dev/credential-bundle.pem
+        key: /run/podidentity.podcert.ate.dev/credential-bundle.pem
+        root: /run/servicedns-ca/trust-bundle.pem`, provider.Name, provider.Address, provider.ServerName())
+	}
+	return replaceManifestMarker(raw, "#ATE_AGENTGATEWAY_CREDENTIAL_PROVIDERS", block)
+}
+
+func replaceManifestMarker(raw []byte, marker, block string) ([]byte, error) {
 	var out []string
-	flagsReplaced := 0
+	replaced := 0
 	for _, line := range strings.Split(string(raw), "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "#ATE_EGRESS_INJECT_FLAGS") {
+		if strings.HasPrefix(strings.TrimSpace(line), marker) {
 			indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
-			if flagsBlock != "" {
-				for _, l := range strings.Split(flagsBlock, "\n") {
+			if block != "" {
+				for _, l := range strings.Split(block, "\n") {
 					out = append(out, indent+l)
 				}
 			}
-			flagsReplaced++
+			replaced++
 			continue
 		}
 		out = append(out, line)
 	}
-	if flagsReplaced != 1 {
-		return nil, fmt.Errorf("expected 1 #ATE_EGRESS_INJECT_FLAGS marker in %s, found %d",
-			e.atenetEgressManifestPath(), flagsReplaced)
+	if replaced != 1 {
+		return nil, fmt.Errorf("expected 1 %s marker, found %d", marker, replaced)
 	}
 	return []byte(strings.Join(out, "\n")), nil
 }

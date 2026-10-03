@@ -201,11 +201,7 @@ func TestRequestLegDecidesHostAndDialedPort(t *testing.T) {
 		{name: "passthrough rule does not decide the cleartext leg", policy: passthroughPolicy(allPorts(), "*"), authority: "api.example.com", want: envoy_type.StatusCode_Forbidden},
 		{name: "unparseable host", policy: allowAllPolicy(), authority: "exa mple.com", want: envoy_type.StatusCode_Forbidden},
 		{name: "empty host", policy: allowAllPolicy(), authority: "", want: envoy_type.StatusCode_Forbidden},
-		// On the cleartext leg a rule that requires injection is let through
-		// without the credential, not denied: the secret is never re-originated in
-		// the clear, and blocking allowed egress is worse than an unauthenticated
-		// request. See the dedicated injection tests for the TLS leg.
-		{name: "cleartext rule requires injection passes through uninjected", policy: cleartextInjectionPolicy("api.example.com"), authority: "api.example.com"},
+		{name: "cleartext injection rule without the header passes through", policy: cleartextInjectionPolicy("api.example.com"), authority: "api.example.com"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

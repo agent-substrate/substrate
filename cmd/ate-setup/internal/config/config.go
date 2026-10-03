@@ -553,9 +553,6 @@ func (c *Config) CredentialProvider() (CredentialProvider, error) {
 	if errs := validation.IsDNS1123Subdomain(spec.Name); len(errs) > 0 {
 		return invalid("name %q is not a valid DNS name: %s", spec.Name, strings.Join(errs, "; "))
 	}
-	if c.Router != RouterEnvoy {
-		return invalid(`a credential provider requires --atenet-dataplane=envoy; pass {"enabled":false} on the agentgateway dataplane`)
-	}
 	if spec.Address == "" {
 		if spec.Name != K8sCredentialProviderName {
 			return invalid("a provider you deploy needs an address as host:port")

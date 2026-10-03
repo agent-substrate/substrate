@@ -139,11 +139,10 @@ jobs:
     env:
       E2E_ATENET_DATAPLANE: ${{ matrix.dataplane }}
       # The installer requires a credential provider selection, and deploys the
-      # bundled Kubernetes Secrets provider with the control plane. Envoy only:
-      # it has no agentgateway credential-provider configuration yet. Job-wide
+      # bundled Kubernetes Secrets provider with the control plane. Job-wide
       # because every ate-setup invocation reads it, including the control
       # plane redeploy in run-microvm-demo-kind.sh.
-      ATE_CREDENTIAL_PROVIDER: ${{ matrix.dataplane == 'envoy' && '{"name":"k8s.io"}' || '{"enabled":false}' }}
+      ATE_CREDENTIAL_PROVIDER: '{"name":"k8s.io"}'
       # E2E_JUNIT_FILE is set per step, not here: the lanes below share this
       # job, so one job-level path would have each overwrite the last.
       ARTIFACTS: ${{ github.workspace }}/_artifacts
@@ -207,7 +206,7 @@ jobs:
       env:
         # Gates the injection suite. Injection happens inside the gateway, so
         # the sandbox class does not matter and only this lane runs it.
-        E2E_EGRESS_CREDINJECT: ${{ matrix.dataplane == 'envoy' && '1' || '' }}
+        E2E_EGRESS_CREDINJECT: '1'
         E2E_JUNIT_FILE: ${{ github.workspace }}/_artifacts/e2e-gvisor.xml
       # The identity suite runs last and alone (see below), not here.
       run: hack/run-e2e-kind.sh -skip '^TestActorIdentity' -v -args --no-color
