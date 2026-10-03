@@ -134,20 +134,28 @@ sandbox_config:
 }
 
 func TestActorTemplateFromManifest_Errors(t *testing.T) {
+	const oneDoc = "metadata: {atespace: a, name: counter}\n"
 	tests := []struct {
-		name     string
-		manifest string
+		name            string
+		manifest        string
+		wantErrContains string
 	}{
-		{name: "empty", manifest: ""},
-		{name: "unknown field", manifest: "metadata: {atespace: a, name: n}\nsandboxClass: gvisor\n"},
-		{name: "bad enum", manifest: "sandboxConfig: {sandboxClass: gvisor}\n"},
-		{name: "crd shape", manifest: "apiVersion: ate.dev/v1alpha1\nkind: ActorTemplate\nmetadata: {name: counter}\n"},
-		{name: "not yaml", manifest: "\t{"},
+		{name: "empty", manifest: "", wantErrContains: "manifest is empty"},
+		{name: "second document", manifest: oneDoc + "---\n" + oneDoc, wantErrContains: "more than one document"},
+		{name: "empty second document", manifest: oneDoc + "---\n", wantErrContains: "more than one document"},
+		{name: "unknown field", manifest: oneDoc + "sandboxClass: gvisor\n", wantErrContains: "unknown field"},
+		{name: "bad enum", manifest: "sandboxConfig: {sandboxClass: gvisor}\n", wantErrContains: "sandboxClass"},
+		{name: "crd shape", manifest: "apiVersion: ate.dev/v1alpha1\nkind: ActorTemplate\nmetadata: {name: counter}\n", wantErrContains: "apiVersion"},
+		{name: "not yaml", manifest: "\t{", wantErrContains: "invalid YAML"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if got, err := actorTemplateFromManifest([]byte(test.manifest)); err == nil {
+			got, err := actorTemplateFromManifest([]byte(test.manifest))
+			if err == nil {
 				t.Fatalf("actorTemplateFromManifest succeeded: %v", got)
+			}
+			if !strings.Contains(err.Error(), test.wantErrContains) {
+				t.Errorf("error = %q, want it to contain %q", err, test.wantErrContains)
 			}
 		})
 	}
