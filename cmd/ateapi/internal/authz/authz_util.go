@@ -16,6 +16,7 @@ package authz
 
 import (
 	"context"
+	"database/sql"
 	_ "embed"
 	"fmt"
 	"log/slog"
@@ -26,6 +27,7 @@ import (
 	openfgav1 "github.com/openfga/api/proto/openfga/v1"
 	"github.com/openfga/language/pkg/go/transformer"
 	"github.com/openfga/openfga/pkg/server"
+	"github.com/openfga/openfga/pkg/storage"
 	"github.com/openfga/openfga/pkg/storage/postgres"
 	"github.com/openfga/openfga/pkg/storage/sqlcommon"
 	"google.golang.org/protobuf/proto"
@@ -110,19 +112,43 @@ func FormatMember(member string) (string, error) {
 //go:embed model.fga
 var modelDSL string
 
-// NewOpenFGAServer creates an embedded OpenFGA server backed by a transaction-aware
-// PostgreSQL datastore on pool. Calling Close on the returned server stops
-// OpenFGA's background workers without closing the caller-owned pool.
-func NewOpenFGAServer(pool *pgxpool.Pool) (*server.Server, error) {
-	if pool == nil {
-		return nil, fmt.Errorf("postgres pool must not be nil")
-	}
-	rawDatastore, err := postgres.NewWithDB(pool, nil, sqlcommon.NewConfig())
-	if err != nil {
-		return nil, fmt.Errorf("creating OpenFGA postgres adapter: %w", err)
+// Backend is the store database that holds the OpenFGA tables. Build it with
+// PostgresBackend or MySQLBackend; the zero value names no database.
+type Backend struct {
+	pool *pgxpool.Pool
+	db   *sql.DB
+}
+
+// PostgresBackend names the PostgreSQL store's connection pool.
+func PostgresBackend(pool *pgxpool.Pool) Backend { return Backend{pool: pool} }
+
+// MySQLBackend names the MySQL store's connection pool.
+func MySQLBackend(db *sql.DB) Backend { return Backend{db: db} }
+
+// NewOpenFGAServer creates an embedded OpenFGA server backed by a
+// transaction-aware datastore on the backend's pool. Calling Close on the
+// returned server stops OpenFGA's background workers without closing the
+// caller-owned pool.
+func NewOpenFGAServer(backend Backend) (*server.Server, error) {
+	var datastore storage.OpenFGADatastore
+	switch {
+	case backend.pool != nil:
+		rawDatastore, err := postgres.NewWithDB(backend.pool, nil, sqlcommon.NewConfig())
+		if err != nil {
+			return nil, fmt.Errorf("creating OpenFGA postgres adapter: %w", err)
+		}
+		datastore = newTransactionalDatastore(rawDatastore)
+	case backend.db != nil:
+		mysqlDatastore, err := newMySQLTransactionalDatastore(backend.db)
+		if err != nil {
+			return nil, err
+		}
+		datastore = mysqlDatastore
+	default:
+		return nil, fmt.Errorf("store backend must not be empty")
 	}
 	fgaServer, err := server.NewServerWithOpts(
-		server.WithDatastore(newTransactionalDatastore(rawDatastore)),
+		server.WithDatastore(datastore),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("creating OpenFGA server: %w", err)
@@ -131,17 +157,17 @@ func NewOpenFGAServer(pool *pgxpool.Pool) (*server.Server, error) {
 }
 
 // EnsureStoreAndModel ensures the default OpenFGA store and checked-in authorization model
-// are provisioned on fgaServer (serialized across replicas via a PostgreSQL
-// advisory lock on pool) and returns the provisioned (storeID, modelID).
-func EnsureStoreAndModel(ctx context.Context, pool *pgxpool.Pool, fgaServer *server.Server) (string, string, error) {
-	if pool == nil {
-		return "", "", fmt.Errorf("postgres pool must not be nil")
+// are provisioned on fgaServer (serialized across replicas via a database lock
+// on the backend) and returns the provisioned (storeID, modelID).
+func EnsureStoreAndModel(ctx context.Context, backend Backend, fgaServer *server.Server) (string, string, error) {
+	if backend.pool == nil && backend.db == nil {
+		return "", "", fmt.Errorf("store backend must not be empty")
 	}
 	if fgaServer == nil {
 		return "", "", fmt.Errorf("fgaServer must not be nil")
 	}
 
-	unlock, err := acquireInitLock(ctx, pool)
+	unlock, err := acquireInitLock(ctx, backend)
 	if err != nil {
 		return "", "", err
 	}
@@ -165,12 +191,12 @@ func EnsureStoreAndModel(ctx context.Context, pool *pgxpool.Pool, fgaServer *ser
 // PolicyManager. bootstrapOwners are principal IDs (with or without the
 // "user:" prefix) that the Authorizer treats as owners of global:root on every
 // check, independent of any stored AccessPolicy.
-func New(ctx context.Context, pool *pgxpool.Pool, fgaServer *server.Server, bootstrapOwners []string) (*Authorizer, *PolicyManager, error) {
+func New(ctx context.Context, backend Backend, fgaServer *server.Server, bootstrapOwners []string) (*Authorizer, *PolicyManager, error) {
 	owners, err := parseBootstrapOwners(bootstrapOwners)
 	if err != nil {
 		return nil, nil, err
 	}
-	storeID, modelID, err := EnsureStoreAndModel(ctx, pool, fgaServer)
+	storeID, modelID, err := EnsureStoreAndModel(ctx, backend, fgaServer)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -206,8 +232,11 @@ func parseBootstrapOwners(ids []string) (map[string]struct{}, error) {
 // OpenFGA store provisioning across replicas.
 const ateFGAInitLockID = int64(0x6174656667610000) // "atefga\0\0"
 
-func acquireInitLock(ctx context.Context, pool *pgxpool.Pool) (func(), error) {
-	conn, err := pool.Acquire(ctx)
+func acquireInitLock(ctx context.Context, backend Backend) (func(), error) {
+	if backend.db != nil {
+		return acquireMySQLInitLock(ctx, backend.db)
+	}
+	conn, err := backend.pool.Acquire(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("acquiring connection for OpenFGA init lock: %w", err)
 	}

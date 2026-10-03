@@ -58,3 +58,9 @@ func pgxTxFromContext(ctx context.Context) (pgx.Tx, bool) {
 	tx, _ := TxFromContext(ctx)
 	return tx.pgx, tx.pgx != nil
 }
+
+// sqlTxFromContext retrieves the active MySQL transaction from ctx.
+func sqlTxFromContext(ctx context.Context) (*sql.Tx, bool) {
+	tx, _ := TxFromContext(ctx)
+	return tx.sql, tx.sql != nil
+}

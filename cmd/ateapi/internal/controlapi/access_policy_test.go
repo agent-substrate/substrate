@@ -33,7 +33,7 @@ func TestAccessPolicy_GlobalAndAtespaceGovernance(t *testing.T) {
 	ctx := context.Background()
 
 	pool := persistence.Pool()
-	fgaServer, err := authz.NewOpenFGAServer(pool)
+	fgaServer, err := authz.NewOpenFGAServer(authz.PostgresBackend(pool))
 	if err != nil {
 		t.Fatalf("NewOpenFGAServer failed: %v", err)
 	}
@@ -41,7 +41,7 @@ func TestAccessPolicy_GlobalAndAtespaceGovernance(t *testing.T) {
 
 	// alice@example.com is a bootstrap owner: a global owner through server
 	// configuration, never through a stored AccessPolicy.
-	authorizer, policyManager, err := authz.New(ctx, pool, fgaServer, []string{"alice@example.com"})
+	authorizer, policyManager, err := authz.New(ctx, authz.PostgresBackend(pool), fgaServer, []string{"alice@example.com"})
 	if err != nil {
 		t.Fatalf("authz.New failed: %v", err)
 	}
@@ -195,7 +195,7 @@ func TestAccessPolicy_GlobalAndAtespaceGovernance(t *testing.T) {
 	// 6. Removing Alice from the bootstrap owners (a restart with a different
 	// configuration) leaves only her stored grant; once that is gone too she
 	// is denied, while the new bootstrap owner is allowed.
-	restarted, _, err := authz.New(ctx, pool, fgaServer, []string{"charlie@example.com"})
+	restarted, _, err := authz.New(ctx, authz.PostgresBackend(pool), fgaServer, []string{"charlie@example.com"})
 	if err != nil {
 		t.Fatalf("authz.New after restart failed: %v", err)
 	}

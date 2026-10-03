@@ -36,31 +36,36 @@ var ErrNoTransactionInContext = errors.New("authz datastore: active store transa
 // file are 1:1 adaptations of unexported methods and package-private types in
 // github.com/openfga/openfga/pkg/storage/postgres/postgres.go (pinned to
 // PostgreSQL migration version 6 via TestOpenFGAMigrationVersionGuard in
-// cmd/ateapi/internal/store/atepg/migrations_test.go).
+// cmd/ateapi/internal/store/atepg/migrations_test.go) and of sqlcommon.Write in
+// github.com/openfga/openfga/pkg/storage/sqlcommon/sqlcommon.go, which the
+// upstream MySQL datastore uses. Both upstream paths run the same statements;
+// they differ only in placeholder format, driver, and error mapping, which
+// txStatements carries. datastore_mysql.go holds the MySQL wrapper.
 //
 // Why this wrapper is necessary:
-//   1. Upstream (*postgres.Datastore).Write (postgres.go:584-649) always opens
-//      its own transaction via s.primaryDB.BeginTx(ctx, ...) and commits it
-//      before returning, making it impossible to atomically commit or roll back
-//      OpenFGA tuple mutations alongside Substrate table mutations.
-//   2. Upstream (*postgres.Datastore).ReadPage / ReadAuthorizationModel
-//      always query s.getPgxPool(...) instead of an active pgx.Tx, which both
-//      escapes the caller's transaction snapshot (e.g. RepeatableRead / Serializable)
-//      and can deadlock a pool when all connections are held by active write transactions.
-//   3. Upstream (*postgres.Datastore).Close (postgres.go:307-314) closes the
-//      underlying *pgxpool.Pool, which would close Substrate's shared pool when
+//   1. Upstream (*postgres.Datastore).Write (postgres.go:584-649) and
+//      sqlcommon.Write (sqlcommon.go:987-1139) always open their own
+//      transaction and commit it before returning, making it impossible to
+//      atomically commit or roll back OpenFGA tuple mutations alongside
+//      Substrate table mutations.
+//   2. Upstream ReadPage / ReadAuthorizationModel always query the pool
+//      instead of an active transaction, which both escapes the caller's
+//      transaction snapshot (e.g. RepeatableRead / Serializable) and can
+//      deadlock a pool when all connections are held by active write transactions.
+//   3. Upstream Close (postgres.go:307-314, mysql.go:129-134) closes the
+//      underlying pool, which would close Substrate's shared pool when
 //      fgaServer.Close() is called.
 //
 // Transaction enforcement rules:
 //   - Write and ReadPage (called by fgaServer.Write and fgaServer.Read) require
-//     an active pgx.Tx in ctx via ContextWithTx and fail fast with
-//     ErrNoTransactionInContext if absent.
-//   - ReadAuthorizationModel uses the active pgx.Tx when present in ctx (e.g.
-//     when fgaServer.Write validates tuples against the model), and falls back
-//     to the connection pool when called outside a transaction (e.g. during
-//     fgaServer.Check or EnsureStoreAndModel).
+//     an active transaction for the datastore's backend in ctx via
+//     ContextWithTx and fail fast with ErrNoTransactionInContext if absent.
+//   - ReadAuthorizationModel uses the active transaction when present in ctx
+//     (e.g. when fgaServer.Write validates tuples against the model), and falls
+//     back to the connection pool when called outside a transaction (e.g.
+//     during fgaServer.Check or EnsureStoreAndModel).
 //   - All other datastore methods (e.g. Read, ReadUserTuple, ReadUsersetTuples)
-//     are inherited from the embedded *postgres.Datastore and run on the pool.
+//     are inherited from the embedded upstream datastore and run on the pool.
 
 // transactionalDatastore wraps OpenFGA's postgres.Datastore to allow ReadPage and Write
 // operations to participate in an existing external transaction passed via ContextWithTx.
@@ -91,26 +96,7 @@ func (d *transactionalDatastore) ReadAuthorizationModel(ctx context.Context, sto
 	if !ok {
 		return d.Datastore.ReadAuthorizationModel(ctx, store, modelID)
 	}
-	stmt, args, err := sq.StatementBuilder.PlaceholderFormat(sq.Dollar).
-		Select("authorization_model_id", "schema_version", "type", "type_definition", "serialized_protobuf").
-		From("authorization_model").
-		Where(sq.Eq{
-			"store":                  store,
-			"authorization_model_id": modelID,
-		}).ToSql()
-	if err != nil {
-		return nil, postgres.HandleSQLError(err)
-	}
-	rows, err := tx.Query(ctx, stmt, args...)
-	if err != nil {
-		return nil, postgres.HandleSQLError(err)
-	}
-	defer rows.Close()
-	ret, err := sqlcommon.ConstructAuthorizationModelFromSQLRows(&pgxRowsWrapper{rows: rows})
-	if err != nil {
-		return nil, postgres.HandleSQLError(err)
-	}
-	return ret, nil
+	return readAuthorizationModelOnTx(ctx, pgxTxStatements(tx), store, modelID)
 }
 
 // ReadPage requires an active pgx.Tx on ctx via ContextWithTx and executes the
@@ -128,7 +114,94 @@ func (d *transactionalDatastore) ReadPage(
 	if !ok {
 		return nil, "", ErrNoTransactionInContext
 	}
-	iter, err := readOnTx(tx, store, filter, options)
+	return readPageOnTx(ctx, pgxTxStatements(tx), store, filter, options)
+}
+
+// Write requires an active pgx.Tx on ctx via ContextWithTx and executes the
+// write on that transaction without calling BeginTx or Commit. If no transaction
+// is present in ctx, it fails fast with ErrNoTransactionInContext.
+//
+// 1:1 with (*postgres.Datastore).Write (postgres.go:421-431).
+func (d *transactionalDatastore) Write(
+	ctx context.Context,
+	store string,
+	deletes storage.Deletes,
+	writes storage.Writes,
+	opts ...storage.TupleWriteOption,
+) error {
+	tx, ok := pgxTxFromContext(ctx)
+	if !ok {
+		return ErrNoTransactionInContext
+	}
+	return writeOnTx(ctx, pgxTxStatements(tx), store, deletes, writes, storage.NewTupleWriteOptions(opts...), time.Now().UTC())
+}
+
+// txStatements runs OpenFGA statements on one caller-owned transaction. It
+// holds what differs between the upstream PostgreSQL and MySQL datastores.
+type txStatements struct {
+	stbl        sq.StatementBuilderType
+	connector   sqlcommon.Connector
+	exec        func(ctx context.Context, stmt string, args ...any) (rowsAffected int64, err error)
+	handleError func(err error, args ...interface{}) error
+}
+
+func pgxTxStatements(tx pgx.Tx) txStatements {
+	return txStatements{
+		stbl:      sq.StatementBuilder.PlaceholderFormat(sq.Dollar),
+		connector: &pgxTxConnector{tx: tx},
+		exec: func(ctx context.Context, stmt string, args ...any) (int64, error) {
+			tag, err := tx.Exec(ctx, stmt, args...)
+			if err != nil {
+				return 0, err
+			}
+			return tag.RowsAffected(), nil
+		},
+		handleError: postgres.HandleSQLError,
+	}
+}
+
+// readAuthorizationModelOnTx is a 1:1 copy of the query in
+// (*postgres.Datastore).ReadAuthorizationModel (postgres.go:831-858) and
+// sqlcommon.ReadAuthorizationModel (sqlcommon.go:1267-1290), run on q's
+// transaction.
+func readAuthorizationModelOnTx(ctx context.Context, q txStatements, store, modelID string) (*openfgav1.AuthorizationModel, error) {
+	stmt, args, err := q.stbl.
+		Select("authorization_model_id", "schema_version", "type", "type_definition", "serialized_protobuf").
+		From("authorization_model").
+		Where(sq.Eq{
+			"store":                  store,
+			"authorization_model_id": modelID,
+		}).ToSql()
+	if err != nil {
+		return nil, q.handleError(err)
+	}
+	conn, err := q.connector.Connect(ctx)
+	if err != nil {
+		return nil, q.handleError(err)
+	}
+	defer conn.Close()
+	rows, err := conn.Query(ctx, stmt, args...)
+	if err != nil {
+		return nil, q.handleError(err)
+	}
+	defer rows.Close()
+	ret, err := sqlcommon.ConstructAuthorizationModelFromSQLRows(rows)
+	if err != nil {
+		return nil, q.handleError(err)
+	}
+	return ret, nil
+}
+
+// readPageOnTx is a 1:1 copy of (*postgres.Datastore).ReadPage
+// (postgres.go:349-361) and (*mysql.Datastore).ReadPage (mysql.go:150-161).
+func readPageOnTx(
+	ctx context.Context,
+	q txStatements,
+	store string,
+	filter storage.ReadFilter,
+	options storage.ReadPageOptions,
+) ([]*openfgav1.Tuple, string, error) {
+	iter, err := readOnTx(q, store, filter, options)
 	if err != nil {
 		return nil, "", err
 	}
@@ -136,16 +209,16 @@ func (d *transactionalDatastore) ReadPage(
 	return iter.ToArray(ctx, options.Pagination)
 }
 
-// readOnTx is a 1:1 copy of (*postgres.Datastore).read (postgres.go:363-418),
-// replacing (*pgxPoolConnector)(db) with &pgxTxConnector{tx: tx}.
+// readOnTx is a 1:1 copy of (*postgres.Datastore).read (postgres.go:363-418)
+// and (*mysql.Datastore).read (mysql.go:163-218), replacing the pool
+// connector with q's transaction connector.
 func readOnTx(
-	tx pgx.Tx,
+	q txStatements,
 	store string,
 	filter storage.ReadFilter,
 	pageOpts storage.ReadPageOptions,
 ) (*sqlcommon.SQLTupleIterator, error) {
-	stbl := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
-	sb := stbl.
+	sb := q.stbl.
 		Select(sqlcommon.SQLIteratorColumns()...).
 		From("tuple").
 		Where(sq.Eq{"store": store}).
@@ -177,38 +250,19 @@ func readOnTx(
 	if pageOpts.Pagination.PageSize != 0 {
 		sb = sb.Limit(uint64(pageOpts.Pagination.PageSize + 1))
 	}
-	rowGetter, err := sqlcommon.NewRowGetter(&pgxTxConnector{tx: tx}, sb)
+	rowGetter, err := sqlcommon.NewRowGetter(q.connector, sb)
 	if err != nil {
-		return nil, postgres.HandleSQLError(err)
+		return nil, q.handleError(err)
 	}
-	return sqlcommon.NewSQLTupleIterator(rowGetter, postgres.HandleSQLError), nil
-}
-
-// Write requires an active pgx.Tx on ctx via ContextWithTx and executes the
-// write on that transaction without calling BeginTx or Commit. If no transaction
-// is present in ctx, it fails fast with ErrNoTransactionInContext.
-//
-// 1:1 with (*postgres.Datastore).Write (postgres.go:421-431).
-func (d *transactionalDatastore) Write(
-	ctx context.Context,
-	store string,
-	deletes storage.Deletes,
-	writes storage.Writes,
-	opts ...storage.TupleWriteOption,
-) error {
-	tx, ok := pgxTxFromContext(ctx)
-	if !ok {
-		return ErrNoTransactionInContext
-	}
-	return d.writeOnTx(ctx, tx, store, deletes, writes, storage.NewTupleWriteOptions(opts...), time.Now().UTC())
+	return sqlcommon.NewSQLTupleIterator(rowGetter, q.handleError), nil
 }
 
 // writeOnTx is a 1:1 copy of (*postgres.Datastore).write (postgres.go:584-649)
-// and selectAllExistingRowsForUpdate (postgres.go:435-455), except that it uses
-// the caller-supplied tx instead of calling s.primaryDB.BeginTx / txn.Rollback / txn.Commit.
-func (d *transactionalDatastore) writeOnTx(
+// and sqlcommon.Write (sqlcommon.go:987-1139), except that it uses the
+// caller-supplied transaction instead of calling BeginTx / Rollback / Commit.
+func writeOnTx(
 	ctx context.Context,
-	tx pgx.Tx,
+	q txStatements,
 	store string,
 	deletes storage.Deletes,
 	writes storage.Writes,
@@ -220,8 +274,6 @@ func (d *transactionalDatastore) writeOnTx(
 		return nil
 	}
 
-	connector := &pgxTxConnector{tx: tx}
-	stbl := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
 	existing := make(map[string]*openfgav1.Tuple, len(lockKeys))
 
 	for start := 0; start < len(lockKeys); start += storage.DefaultMaxTuplesPerWrite {
@@ -229,7 +281,7 @@ func (d *transactionalDatastore) writeOnTx(
 		if end > len(lockKeys) {
 			end = len(lockKeys)
 		}
-		if err := selectExistingRowsForWrite(ctx, stbl, connector, store, lockKeys[start:end], existing); err != nil {
+		if err := selectExistingRowsForWrite(ctx, q, store, lockKeys[start:end], existing); err != nil {
 			return err
 		}
 	}
@@ -245,42 +297,41 @@ func (d *transactionalDatastore) writeOnTx(
 		return err
 	}
 
-	if err := executeDeleteTuples(ctx, tx, store, deleteConditions); err != nil {
+	if err := executeDeleteTuples(ctx, q, store, deleteConditions); err != nil {
 		return err
 	}
-	if err := executeWriteTuples(ctx, tx, writeItems); err != nil {
+	if err := executeWriteTuples(ctx, q, writeItems); err != nil {
 		return err
 	}
-	if err := executeInsertChanges(ctx, tx, changeLogItems); err != nil {
+	if err := executeInsertChanges(ctx, q, changeLogItems); err != nil {
 		return err
 	}
 	return nil
 }
 
 // selectExistingRowsForWrite is a 1:1 copy of upstream selectExistingRowsForWrite
-// in github.com/openfga/openfga/pkg/storage/postgres/postgres.go.
+// in postgres.go:1401 and sqlcommon.go:819-844.
 func selectExistingRowsForWrite(
 	ctx context.Context,
-	stbl sq.StatementBuilderType,
-	connector sqlcommon.Connector,
+	q txStatements,
 	store string,
 	keys []sqlcommon.TupleLockKey,
 	existing map[string]*openfgav1.Tuple,
 ) error {
 	inExpr, args := sqlcommon.BuildRowConstructorIN(keys)
-	sb := stbl.
+	sb := q.stbl.
 		Select(sqlcommon.SQLIteratorColumns()...).
 		From("tuple").
 		Where(sq.Eq{"store": store}).
 		Where(sq.Expr("(object_type, object_id, relation, _user, user_type) IN "+inExpr, args...)).
 		Suffix("FOR UPDATE")
 
-	poolGetRows, err := sqlcommon.NewRowGetter(connector, sb)
+	rowGetter, err := sqlcommon.NewRowGetter(q.connector, sb)
 	if err != nil {
-		return postgres.HandleSQLError(err)
+		return q.handleError(err)
 	}
 
-	iter := sqlcommon.NewSQLTupleIterator(poolGetRows, postgres.HandleSQLError)
+	iter := sqlcommon.NewSQLTupleIterator(rowGetter, q.handleError)
 	defer iter.Stop()
 
 	items, _, err := iter.ToArray(ctx, storage.PaginationOptions{PageSize: len(keys)})
@@ -293,9 +344,10 @@ func selectExistingRowsForWrite(
 	return nil
 }
 
-// executeDeleteTuples is a 1:1 copy of upstream executeDeleteTuples (postgres.go:458-488).
-func executeDeleteTuples(ctx context.Context, tx pgx.Tx, store string, deleteConditions sq.Or) error {
-	stbl := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
+// executeDeleteTuples is a 1:1 copy of upstream executeDeleteTuples
+// (postgres.go:458-488) and the delete loop in sqlcommon.Write
+// (sqlcommon.go:1032-1057).
+func executeDeleteTuples(ctx context.Context, q txStatements, store string, deleteConditions sq.Or) error {
 	for start, totalDeletes := 0, len(deleteConditions); start < totalDeletes; start += storage.DefaultMaxTuplesPerWrite {
 		end := start + storage.DefaultMaxTuplesPerWrite
 		if end > totalDeletes {
@@ -303,28 +355,29 @@ func executeDeleteTuples(ctx context.Context, tx pgx.Tx, store string, deleteCon
 		}
 
 		deleteConditionsBatch := deleteConditions[start:end]
-		stmt, args, err := stbl.Delete("tuple").
+		stmt, args, err := q.stbl.Delete("tuple").
 			Where(sq.Eq{"store": store}).
 			Where(deleteConditionsBatch).
 			ToSql()
 		if err != nil {
-			return postgres.HandleSQLError(err)
+			return q.handleError(err)
 		}
 
-		res, err := tx.Exec(ctx, stmt, args...)
+		rowsAffected, err := q.exec(ctx, stmt, args...)
 		if err != nil {
-			return postgres.HandleSQLError(err)
+			return q.handleError(err)
 		}
-		if res.RowsAffected() != int64(len(deleteConditionsBatch)) {
+		if rowsAffected != int64(len(deleteConditionsBatch)) {
 			return storage.ErrWriteConflictOnDelete
 		}
 	}
 	return nil
 }
 
-// executeWriteTuples is a 1:1 copy of upstream executeWriteTuples (postgres.go:491-538).
-func executeWriteTuples(ctx context.Context, tx pgx.Tx, writeItems [][]interface{}) error {
-	stbl := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
+// executeWriteTuples is a 1:1 copy of upstream executeWriteTuples
+// (postgres.go:491-538) and the insert loop in sqlcommon.Write
+// (sqlcommon.go:1059-1097).
+func executeWriteTuples(ctx context.Context, q txStatements, writeItems [][]interface{}) error {
 	for start, totalWrites := 0, len(writeItems); start < totalWrites; start += storage.DefaultMaxTuplesPerWrite {
 		end := start + storage.DefaultMaxTuplesPerWrite
 		if end > totalWrites {
@@ -332,7 +385,7 @@ func executeWriteTuples(ctx context.Context, tx pgx.Tx, writeItems [][]interface
 		}
 
 		writesBatch := writeItems[start:end]
-		insertBuilder := stbl.
+		insertBuilder := q.stbl.
 			Insert("tuple").
 			Columns(
 				"store",
@@ -353,12 +406,11 @@ func executeWriteTuples(ctx context.Context, tx pgx.Tx, writeItems [][]interface
 
 		stmt, args, err := insertBuilder.ToSql()
 		if err != nil {
-			return postgres.HandleSQLError(err)
+			return q.handleError(err)
 		}
 
-		_, err = tx.Exec(ctx, stmt, args...)
-		if err != nil {
-			dberr := postgres.HandleSQLError(err)
+		if _, err := q.exec(ctx, stmt, args...); err != nil {
+			dberr := q.handleError(err)
 			if errors.Is(dberr, storage.ErrCollision) {
 				return storage.ErrWriteConflictOnInsert
 			}
@@ -368,9 +420,10 @@ func executeWriteTuples(ctx context.Context, tx pgx.Tx, writeItems [][]interface
 	return nil
 }
 
-// executeInsertChanges is a 1:1 copy of upstream executeInsertChanges (postgres.go:540-582).
-func executeInsertChanges(ctx context.Context, tx pgx.Tx, changeLogItems [][]interface{}) error {
-	stbl := sq.StatementBuilder.PlaceholderFormat(sq.Dollar)
+// executeInsertChanges is a 1:1 copy of upstream executeInsertChanges
+// (postgres.go:540-582) and the changelog loop in sqlcommon.Write
+// (sqlcommon.go:1100-1131).
+func executeInsertChanges(ctx context.Context, q txStatements, changeLogItems [][]interface{}) error {
 	for start, totalItems := 0, len(changeLogItems); start < totalItems; start += storage.DefaultMaxTuplesPerWrite {
 		end := start + storage.DefaultMaxTuplesPerWrite
 		if end > totalItems {
@@ -378,7 +431,7 @@ func executeInsertChanges(ctx context.Context, tx pgx.Tx, changeLogItems [][]int
 		}
 
 		changeLogBatch := changeLogItems[start:end]
-		changelogBuilder := stbl.
+		changelogBuilder := q.stbl.
 			Insert("changelog").
 			Columns(
 				"store",
@@ -399,12 +452,11 @@ func executeInsertChanges(ctx context.Context, tx pgx.Tx, changeLogItems [][]int
 
 		stmt, args, err := changelogBuilder.ToSql()
 		if err != nil {
-			return postgres.HandleSQLError(err)
+			return q.handleError(err)
 		}
 
-		_, err = tx.Exec(ctx, stmt, args...)
-		if err != nil {
-			return postgres.HandleSQLError(err)
+		if _, err := q.exec(ctx, stmt, args...); err != nil {
+			return q.handleError(err)
 		}
 	}
 	return nil

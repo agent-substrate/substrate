@@ -29,19 +29,19 @@ import (
 func setupTestAuthorizer(t *testing.T) *Authorizer {
 	t.Helper()
 	ctx := context.Background()
-	pool := startPostgres(t)
+	db := startPostgres(t)
 
-	fgaServer, err := NewOpenFGAServer(pool)
+	fgaServer, err := NewOpenFGAServer(db.backend)
 	if err != nil {
 		t.Fatalf("NewOpenFGAServer failed: %v", err)
 	}
 	t.Cleanup(fgaServer.Close)
 
-	authorizer, policyManager, err := New(ctx, pool, fgaServer, nil)
+	authorizer, policyManager, err := New(ctx, db.backend, fgaServer, nil)
 	if err != nil {
 		t.Fatalf("New failed: %v", err)
 	}
-	writeTestTuple(t, ctx, pool, policyManager, "alice@example.com", "owner", GlobalRootObject)
+	writeTestTuple(t, ctx, db, policyManager, "alice@example.com", "owner", GlobalRootObject)
 	return authorizer
 }
 

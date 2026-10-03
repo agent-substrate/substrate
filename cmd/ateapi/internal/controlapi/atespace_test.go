@@ -52,13 +52,13 @@ func TestAtespace_EndToEndOpenFGAScenarios(t *testing.T) {
 	persistence := storetest.SetupPostgresPersistence(t)
 	pool := persistence.Pool()
 
-	fgaServer, err := authz.NewOpenFGAServer(pool)
+	fgaServer, err := authz.NewOpenFGAServer(authz.PostgresBackend(pool))
 	if err != nil {
 		t.Fatalf("authz.NewOpenFGAServer failed: %v", err)
 	}
 	t.Cleanup(fgaServer.Close)
 
-	authorizer, policyManager, err := authz.New(ctx, pool, fgaServer, nil)
+	authorizer, policyManager, err := authz.New(ctx, authz.PostgresBackend(pool), fgaServer, nil)
 	if err != nil {
 		t.Fatalf("authz.New failed: %v", err)
 	}
