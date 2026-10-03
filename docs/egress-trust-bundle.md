@@ -32,7 +32,7 @@ the actor's filesystem using a SystemInfo volume with a TrustBundle data source.
 Note: DNS traffic from the actor (both TCP and UDP) is not forwarded to the
 gateway, and thus cannot be affected by egress policies.  Instead, the DNS
 traffic is allowed to directly exit the worker pod and be answered by the host
-cluster's configured DNS server.  See the [example](#example-wrapper) below.
+cluster's configured DNS server.
 
 ## Configuring a workload to trust public and man-in-the-middle CAs
 
@@ -97,7 +97,7 @@ the system trust store, where as most things that support SSL_CERT_FILE treat it
 as *additive* to the system trust store.  If you need to support this scenario,
 you will need to use an entrypoint wrapper to build a file containing the
 substrate-provided roots along with your custom roots (or directly configure
-this setup in your application's startup logic).
+this setup in your application's startup logic).    See the [example](#example-wrapper) below.
 
 ## Example entrypoint wrapper for custom roots {:#example-wrapper}
 
