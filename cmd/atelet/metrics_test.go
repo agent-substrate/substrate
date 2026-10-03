@@ -388,10 +388,10 @@ func patternBytes(n int64) []byte {
 	return b
 }
 
-func TestPopulatedBytesSparseImage(t *testing.T) {
+func TestAllocatedBytesSparseImage(t *testing.T) {
 	const (
 		apparent = 2 << 30 // 2 GiB
-		chunk    = 1 << 20 // 1 MiB
+		written  = 1 << 20 // 1 MiB
 	)
 
 	path := filepath.Join(t.TempDir(), "memory-ranges")
@@ -399,46 +399,50 @@ func TestPopulatedBytesSparseImage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create sparse image: %v", err)
 	}
-	defer f.Close()
-
+	if _, err := f.Write(patternBytes(written)); err != nil {
+		f.Close()
+		t.Fatalf("write initial pages: %v", err)
+	}
 	if err := f.Truncate(apparent); err != nil {
+		f.Close()
 		t.Fatalf("extend sparse image: %v", err)
 	}
-	if got := populatedBytes(f, apparent); got != 0 {
-		t.Fatalf("populatedBytes(all-hole) = %d, want 0", got)
+	if err := f.Close(); err != nil {
+		t.Fatalf("close sparse image: %v", err)
 	}
 
-	// Write two disjoint extents without fsync so dirty delalloc pages in the
-	// page cache are exercised directly.
-	data := patternBytes(chunk)
-	if _, err := f.WriteAt(data, 0); err != nil {
-		t.Fatalf("write first extent: %v", err)
+	fi, err := os.Lstat(path)
+	if err != nil {
+		t.Fatalf("lstat sparse image: %v", err)
 	}
-	if _, err := f.WriteAt(data, 64<<20); err != nil {
-		t.Fatalf("write second extent: %v", err)
+	if fi.Size() != apparent {
+		t.Fatalf("fi.Size() = %d, want %d", fi.Size(), int64(apparent))
 	}
 
-	const written = 2 * chunk
-	got := populatedBytes(f, apparent)
-	if got < written || got >= apparent/10 {
-		t.Errorf("populatedBytes() = %d, want in [%d, %d)", got, written, apparent/10)
+	got := allocatedBytes(fi)
+	if got >= apparent/2 {
+		t.Skipf("file did not end up sparse (%d of %d bytes allocated); "+
+			"this filesystem cannot report holes", got, int64(apparent))
+	}
+	if got == 0 || got > written*16 {
+		t.Errorf("allocatedBytes() = %d, want > 0 and << %d (wrote %d)", got, int64(apparent), int64(written))
 	}
 }
 
-func TestPopulatedBytesDenseImage(t *testing.T) {
+func TestAllocatedBytesDenseImage(t *testing.T) {
 	const size = 64 << 10
 
 	path := filepath.Join(t.TempDir(), "state.json")
 	if err := os.WriteFile(path, patternBytes(size), 0o600); err != nil {
 		t.Fatalf("write dense image: %v", err)
 	}
-	f, err := os.Open(path)
+	fi, err := os.Lstat(path)
 	if err != nil {
-		t.Fatalf("open dense image: %v", err)
+		t.Fatalf("lstat dense image: %v", err)
 	}
-	defer f.Close()
 
-	if got := populatedBytes(f, size); got != size {
-		t.Errorf("populatedBytes() = %d, want %d", got, size)
+	got := allocatedBytes(fi)
+	if got < size || got > size*2 {
+		t.Errorf("allocatedBytes() = %d, want ~%d", got, size)
 	}
 }

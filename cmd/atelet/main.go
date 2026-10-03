@@ -557,7 +557,7 @@ func initSnapshotSizeMetric() error {
 	snapshotSizeBytes, err = otel.Meter("atelet").Int64Histogram(
 		"atelet.snapshot.size",
 		metric.WithUnit("By"),
-		metric.WithDescription("Uncompressed populated size in bytes of each snapshot image written during checkpoint."),
+		metric.WithDescription("Uncompressed allocated size in bytes of each snapshot image written during checkpoint."),
 
 		metric.WithExplicitBucketBoundaries(
 			1e6, 5e6, 1e7, 2.5e7, 5e7, 1e8, 2.5e8, 5e8, 1e9, 2e9, 5e9, 1e10,
@@ -580,55 +580,14 @@ func recordSnapshotSize(ctx context.Context, file string, size int64, templateAt
 	))
 }
 
-func populatedFileBytes(root *os.Root, name string, fallback int64) int64 {
-	f, err := root.Open(name)
-	if err != nil {
-		return fallback
+// allocatedBytes returns the disk space allocated to info (st_blocks * 512)
+// rather than its apparent size, which for sparse snapshot images reflects the
+// guest RAM ceiling; ext4/XFS/btrfs include delalloc blocks before writeback.
+func allocatedBytes(info os.FileInfo) int64 {
+	if st, ok := info.Sys().(*syscall.Stat_t); ok {
+		return int64(st.Blocks) * 512
 	}
-	defer f.Close()
-	return populatedBytes(f, fallback)
-}
-
-// populatedBytes sums the SEEK_DATA/SEEK_HOLE extents of f. Unlike st_blocks,
-// SEEK_DATA includes dirty ext4 delayed-allocation pages in the page cache
-// (ateom skips fsync before handing checkpoint files to atelet) while still
-// excluding sparse holes in micro-VM memory-ranges. Falls back to size if the
-// filesystem does not support SEEK_DATA.
-func populatedBytes(f *os.File, size int64) int64 {
-	if size <= 0 {
-		return 0
-	}
-	fd := int(f.Fd())
-	defer func() {
-		_, _ = unix.Seek(fd, 0, unix.SEEK_SET)
-	}()
-
-	var total int64
-	for off := int64(0); off < size; {
-		dataOff, err := unix.Seek(fd, off, unix.SEEK_DATA)
-		if err != nil {
-			if errors.Is(err, unix.ENXIO) {
-				break
-			}
-			return size
-		}
-		if dataOff >= size {
-			break
-		}
-		holeOff, err := unix.Seek(fd, dataOff, unix.SEEK_HOLE)
-		if err != nil {
-			return size
-		}
-		if holeOff <= dataOff {
-			return size
-		}
-		if holeOff > size {
-			holeOff = size
-		}
-		total += holeOff - dataOff
-		off = holeOff
-	}
-	return total
+	return info.Size()
 }
 
 func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest) (_ *ateletpb.CheckpointResponse, err error) {
@@ -838,7 +797,7 @@ func (s *AteomHerder) moveLocalCheckpoint(ctx context.Context, req *ateletpb.Che
 		if !info.Mode().IsRegular() {
 			return fmt.Errorf("checkpoint file %s is not a regular file", fileName)
 		}
-		recordSnapshotSize(ctx, fileName, populatedFileBytes(root, src, info.Size()), req.GetActorTemplateAtespace(), req.GetActorTemplateName())
+		recordSnapshotSize(ctx, fileName, allocatedBytes(info), req.GetActorTemplateAtespace(), req.GetActorTemplateName())
 
 		if err := root.Rename(src, dst); err != nil {
 			return fmt.Errorf("failed to move %s to %s: %w", src, dst, err)
@@ -907,7 +866,7 @@ func (s *AteomHerder) uploadSnapshot(ctx context.Context, uri resources.Snapshot
 			if !info.Mode().IsRegular() {
 				return fmt.Errorf("snapshot file %s is not a regular file", fileName)
 			}
-			recordSnapshotSize(ctx, fileName, populatedBytes(local, info.Size()), templateAtespace, templateName)
+			recordSnapshotSize(ctx, fileName, allocatedBytes(info), templateAtespace, templateName)
 
 			objectURI, err := uri.ObjectURI(fileName + ".zstd")
 			if err != nil {
