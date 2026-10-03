@@ -76,7 +76,8 @@ func TestAcquireLease_LeavesOtherKeysExpiredRows(t *testing.T) {
 }
 
 // An expired row for the key itself is taken over in place by the UPDATE
-// path rather than inserted beside.
+// path rather than inserted beside. Close leaves the row expired for the next
+// acquirer to take over.
 func TestAcquireLease_TakesOverItsOwnExpiredRow(t *testing.T) {
 	s := setupMySQLPersistence(t)
 	ctx := t.Context()
@@ -89,9 +90,21 @@ func TestAcquireLease_TakesOverItsOwnExpiredRow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AcquireLease over an expired row: %v", err)
 	}
-	defer lease.Close()
 	if n := countRows(t, s, `SELECT COUNT(*) FROM leases WHERE lease_key = 'reclaimed' AND token <> 'old' AND expires_at > UTC_TIMESTAMP(6)`); n != 1 {
 		t.Errorf("%d live rows with a new token, want 1", n)
+	}
+
+	lease.Close()
+	if n := countRows(t, s, `SELECT COUNT(*) FROM leases WHERE lease_key = 'reclaimed' AND expires_at <= UTC_TIMESTAMP(6)`); n != 1 {
+		t.Errorf("%d expired rows after Close, want 1", n)
+	}
+	lease, err = s.AcquireLease(ctx, "reclaimed")
+	if err != nil {
+		t.Fatalf("AcquireLease after Close: %v", err)
+	}
+	defer lease.Close()
+	if got := countLeases(t, s, "reclaimed"); got != 1 {
+		t.Errorf("%d rows after reacquiring a released lease, want 1", got)
 	}
 }
 
@@ -142,7 +155,11 @@ func TestCleanupExpiredLeases_DrainsAcrossBatches(t *testing.T) {
 // would, and checks the pass returns without waiting on it and takes the
 // row on the next pass once the lock is gone.
 func TestCleanupExpiredLeases_SkipsLockedRows(t *testing.T) {
-	s := setupMySQLPersistence(t)
+	testCleanupSkipsLockedRows(t, setupMySQLPersistence(t))
+}
+
+func testCleanupSkipsLockedRows(t *testing.T, s *Persistence) {
+	t.Helper()
 	ctx := t.Context()
 	if _, err := s.db.ExecContext(ctx, `
 		INSERT INTO leases (lease_key, token, expires_at) VALUES
@@ -187,7 +204,7 @@ func TestCleanupExpiredLeases_SkipsLockedRows(t *testing.T) {
 
 func TestAcquireLease_ExpiresAfterHolderStops(t *testing.T) {
 	s := setupMySQLPersistence(t)
-	s.leaseTTL = 2 * time.Second
+	s.leaseTTL = 300 * time.Millisecond
 	holderCtx, cancelHolder := context.WithCancel(t.Context())
 	lease, err := s.AcquireLease(holderCtx, "test-lease")
 	if err != nil {
@@ -219,6 +236,39 @@ func TestAcquireLease_ExpiresAfterHolderStops(t *testing.T) {
 			t.Fatal("lease was never released by expiry")
 		}
 		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// The holder renews the lease past its TTL, and the lease's context ends once
+// another token holds the row.
+func TestAcquireLease_RenewsUntilTheRowChangesHands(t *testing.T) {
+	s := setupMySQLPersistence(t)
+	s.leaseTTL = 300 * time.Millisecond
+	ctx := t.Context()
+	lease, err := s.AcquireLease(ctx, "renewed-lease")
+	if err != nil {
+		t.Fatalf("AcquireLease failed: %v", err)
+	}
+	defer lease.Close()
+
+	time.Sleep(4 * s.leaseTTL)
+	if err := lease.Context().Err(); err != nil {
+		t.Fatalf("lease context ended while its holder was renewing: %v", err)
+	}
+	if other, err := s.AcquireLease(ctx, "renewed-lease"); !errors.Is(err, store.ErrLeaseConflict) {
+		if other != nil {
+			other.Close()
+		}
+		t.Fatalf("AcquireLease after %v of renewal = %v, want ErrLeaseConflict", 4*s.leaseTTL, err)
+	}
+
+	if _, err := s.db.ExecContext(ctx, `UPDATE leases SET token = 'usurper' WHERE lease_key = 'renewed-lease'`); err != nil {
+		t.Fatalf("replacing the lease token: %v", err)
+	}
+	select {
+	case <-lease.Context().Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("lease context outlived the loss of its row")
 	}
 }
 
@@ -291,8 +341,7 @@ func TestAcquireLease_ConcurrentFirstAcquire(t *testing.T) {
 }
 
 // TestAcquireLease_ChurnKeepsOneHolder has many clients acquire and release
-// one key at once. Two inserts racing on a just-released row can deadlock in
-// InnoDB; every failure must still read as a lost race, and the lease must
+// one key at once. Every failure must read as a lost race, and the lease must
 // never have two holders.
 func TestAcquireLease_ChurnKeepsOneHolder(t *testing.T) {
 	s := setupMySQLPersistence(t)
