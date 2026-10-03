@@ -192,6 +192,13 @@ func newConnector(dsn string, files TLSFiles) (*connector, error) {
 	// trips the driver would otherwise spend on every parameterized statement.
 	cfg.InterpolateParams = true
 	cfg.MultiStatements = false
+	// Every transaction runs at READ COMMITTED, the isolation PostgreSQL gives
+	// atepg. Setting it once per session spares each transaction the SET
+	// TRANSACTION round trip, which Vitess applies to the session anyway.
+	if cfg.Params == nil {
+		cfg.Params = map[string]string{}
+	}
+	cfg.Params["transaction_isolation"] = "'READ-COMMITTED'"
 	if files.enabled() {
 		if _, err := loadTLSConfig(files, ""); err != nil {
 			return nil, err
@@ -330,8 +337,8 @@ type querier interface {
 // deadlock victim.
 const txAttempts = 3
 
-// inTx runs fn in a READ COMMITTED transaction on db, the isolation PostgreSQL
-// gives atepg, and commits if fn succeeds. InnoDB resolves a deadlock by
+// inTx runs fn in a transaction on db, READ COMMITTED through the session
+// setting newConnector applies, and commits if fn succeeds. InnoDB resolves a deadlock by
 // rolling back one transaction, which can happen even between two inserts of
 // one key, so inTx runs fn again from the start up to txAttempts times. fn
 // must therefore be safe to repeat, as the store's update contract already
@@ -347,7 +354,7 @@ func inTx(ctx context.Context, db *sql.DB, fn func(tx *sql.Tx) error) error {
 }
 
 func runTx(ctx context.Context, db *sql.DB, fn func(tx *sql.Tx) error) error {
-	tx, err := db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("beginning transaction: %w", err)
 	}
