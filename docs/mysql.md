@@ -14,7 +14,9 @@ Connection strings use the [go-sql-driver/mysql DSN format](https://github.com/g
 substrate_rw:<password>@tcp(mysql.example.com:3306)/substrate?tls=true
 ```
 
-`ateapi` always sets `parseTime=true`, `loc=UTC`, `clientFoundRows=true`, and `interpolateParams=true`, and turns off `multiStatements`. These values replace any set in the DSN.
+`ateapi` always sets `parseTime=true`, `loc=UTC`, `clientFoundRows=true`, and `interpolateParams=true`, turns off `multiStatements`, and sets the session's `transaction_isolation` to `READ-COMMITTED`. These values replace any set in the DSN.
+
+OpenFGA writes `TIMESTAMP` columns with `NOW()`, which follows the session time zone. Run a self-hosted server with a UTC time zone. PlanetScale fixes it to UTC.
 
 `ATE_API_MYSQL_READ_WRITE_CONNECTION_STRING` (or `--mysql-read-write-connection-string`) is required. `ATE_API_MYSQL_OWNER_CONNECTION_STRING` (or `--mysql-owner-connection-string`) is optional and defaults to the read/write DSN. When running `ateapi` directly, pass the DSNs as flags or use `@env` flags to read these environment variables; the installer manifest already uses `@env`.
 
@@ -66,11 +68,15 @@ Use a PlanetScale database on Vitess. Create the database in PlanetScale first, 
 
 **Safe migrations.** A branch with safe migrations enabled rejects direct DDL. `ateapi` runs DDL at startup whenever a migration is pending, including the first install. Keep safe migrations off on the branch that `ateapi` uses, or turn it off before you upgrade to a release that adds migrations. Do not apply Substrate migrations through a deploy request: the ledger would not record them, and `ateapi` would try to apply them again.
 
+**Locks and limits.** The migration lock and the OpenFGA setup lock use `GET_LOCK`, which pins a reserved connection while the lock is held, only during startup. PlanetScale ends a transaction after 20 seconds, which `ateapi` reports as an internal error rather than a version conflict. Count each replica as the read/write pool size plus 5 connections against the database's connection limit.
+
 **Foreign keys.** Substrate declares no foreign keys, so the PlanetScale foreign key setting does not affect it.
 
 **TLS.** PlanetScale server certificates are signed by a common system root. Use `tls=true` in the DSN and leave the CA file unset.
 
-See PlanetScale's documentation on [safe migrations](https://planetscale.com/docs/vitess/schema-changes/safe-migrations), [password roles](https://planetscale.com/docs/vitess/security/password-roles), and [secure connections](https://planetscale.com/docs/vitess/connecting/secure-connections), and the Vitess [locking functions](https://vitess.io/docs/reference/query-serving/locking-functions) reference.
+CI runs the store contract suite through `vitess/vttestserver` with foreign keys disallowed (`go test -tags vitess -run TestVitess ./cmd/ateapi/internal/store/atemy/`).
+
+See PlanetScale's documentation on [safe migrations](https://planetscale.com/docs/vitess/schema-changes/safe-migrations), [password roles](https://planetscale.com/docs/vitess/security/password-roles), [secure connections](https://planetscale.com/docs/vitess/connecting/secure-connections), and [system limits](https://planetscale.com/docs/vitess/planetscale-system-limits), and the Vitess [locking functions](https://vitess.io/docs/reference/query-serving/locking-functions) reference.
 
 ## Installer configuration
 `ate-setup` and `hack/install-ate.sh` read these variables:

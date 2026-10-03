@@ -70,6 +70,13 @@ jobs:
       run: hack/run-tool.sh gotestsum --junitfile "${ARTIFACTS}/unit-mysql.xml"
         --jsonfile "${ARTIFACTS}/unit-mysql.json" --format standard-verbose
         -- -race -v ./cmd/ateapi/internal/controlapi/... ./cmd/ateapi/internal/workerservice/...
+    # PlanetScale serves MySQL through Vitess, which rejects or rewrites some
+    # statements plain MySQL accepts. The vitess build tag keeps the large
+    # amd64-only vttestserver image out of the default test run.
+    - name: Vitess store tests
+      run: hack/run-tool.sh gotestsum --junitfile "${ARTIFACTS}/unit-vitess.xml"
+        --jsonfile "${ARTIFACTS}/unit-vitess.json" --format standard-verbose
+        -- -race -v -tags vitess -run TestVitess ./cmd/ateapi/internal/store/atemy/
     # tools/apitool has its own module so we need to run it explicitly.
     # run-tool.sh resolves the repo root itself, so it works from the subdir.
     - name: apitool tests
