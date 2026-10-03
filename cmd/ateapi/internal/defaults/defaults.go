@@ -52,6 +52,7 @@ func applyActorTemplateDefaults(t *ateapipb.ActorTemplate) {
 		return
 	}
 	applySnapshotConfigDefaults(t.SnapshotConfig)
+	applyEgressRuleDefaults(t.GetDefaultEgressPolicy().GetRules())
 	for _, c := range t.Containers {
 		applyContainerDefaults(c)
 	}
@@ -91,14 +92,15 @@ func applyActorDefaults(*ateapipb.Actor) {}
 
 func applyAtespaceDefaults(*ateapipb.Atespace) {}
 
-// applyEgressPolicyDefaults fills the port of an http or https rule that
+func applyEgressPolicyDefaults(p *ateapipb.EgressPolicy) {
+	applyEgressRuleDefaults(p.GetRules())
+}
+
+// applyEgressRuleDefaults fills the port of an http or https rule that
 // names none: the protocol's well-known port. A tls_passthrough rule has no
 // default; validation requires its ports.
-func applyEgressPolicyDefaults(p *ateapipb.EgressPolicy) {
-	if p == nil {
-		return
-	}
-	for _, r := range p.Rules {
+func applyEgressRuleDefaults(rules []*ateapipb.EgressRule) {
+	for _, r := range rules {
 		switch {
 		case r.GetHttp() != nil && r.Http.Ports == nil:
 			r.Http.Ports = &ateapipb.Ports{Numbers: []int32{80}}
