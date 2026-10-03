@@ -32,15 +32,10 @@ containers:
 - name: egress
   image: ko://github.com/agent-substrate/substrate/demos/egress
   command: ["/ko-app/egress"]
-  # The demo fetches with a stock net/http client. SSL_CERT_FILE adds the
-  # gateway CA, and Go still scans /etc/ssl/certs, so the image's public
-  # roots stay available for tls_passthrough origins. SSL_CERT_DIR would
-  # drop them, so it is deliberately not set.
   env:
-  - name: SSL_CERT_FILE
-    value: /run/ate/trust-bundle.pem
+  - name: SSL_CERT_DIR
+    value: /run/ate/egress-trust-bundle/
   volumeMounts:
-  # the bundle lands at /run/ate/trust-bundle.pem
   - name: system-info
     mountPath: /run/ate
   wakeupProbe:
@@ -56,7 +51,8 @@ volumes:
     - trustBundle:
         names:
         - egress-mitm.ate.dev
-        path: trust-bundle.pem
+        - system-roots.ate.dev
+        path: egress-trust-bundle/trust-bundle.pem
 sandboxConfig:
   sandboxClass: SANDBOX_CLASS_GVISOR
   configName: gvisor-default
