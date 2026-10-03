@@ -55,14 +55,11 @@ func TestVitess(t *testing.T) {
 
 	storecontract.RunContractTests(t, func(t *testing.T) store.Interface {
 		t.Helper()
-		p, err := NewPersistence(t.Context(), db)
-		if err != nil {
-			t.Fatalf("NewPersistence through vtgate failed: %v", err)
-		}
-		t.Cleanup(p.Close)
-		clearAll(t, p)
-		setTestPolicyManager(t, p)
-		return p
+		return setupPersistenceOn(t, db)
+	})
+	// The rollback probe's FOR SHARE NOWAIT must pass through vtgate.
+	t.Run("DropsOnlyRolledBackSeqs", func(t *testing.T) {
+		testDropsOnlyRolledBackSeqs(t, setupPersistenceOn(t, db))
 	})
 }
 

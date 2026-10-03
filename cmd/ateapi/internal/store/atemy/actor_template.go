@@ -135,6 +135,9 @@ func (p *Persistence) ListActorTemplates(ctx context.Context, atespace string, o
 	}
 	items, next, err := listScoped(ctx, p.db, "actor_templates", storesql.KindActorTemplate, atespace, opts, decode)
 	if err != nil {
+		if errors.Is(err, store.ErrInvalidPageToken) {
+			return store.ListResponse[*ateapipb.ActorTemplate]{}, err
+		}
 		return store.ListResponse[*ateapipb.ActorTemplate]{}, fmt.Errorf("listing actor templates: %w", err)
 	}
 	return store.ListResponse[*ateapipb.ActorTemplate]{Items: items, NextPageToken: next}, nil

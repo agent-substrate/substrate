@@ -53,6 +53,12 @@ func applyMigrations(ctx context.Context, db *sql.DB) error {
 	if err := requireAutoIncrementStep(ctx, db); err != nil {
 		return err
 	}
+	if err := requireStrictMode(ctx, db); err != nil {
+		return err
+	}
+	if err := rejectUnversionedSubstrateSchema(ctx, db); err != nil {
+		return err
+	}
 	migrations, err := fs.Sub(migrationFiles, "migrations")
 	if err != nil {
 		return fmt.Errorf("open embedded MySQL migrations: %w", err)
@@ -108,6 +114,47 @@ func (s migrationStore) TableExists(ctx context.Context, db database.DBTxConn) (
 		return false, fmt.Errorf("check MySQL migration ledger: %w", err)
 	}
 	return n > 0, nil
+}
+
+// requireStrictMode refuses a session that would truncate an overlong value
+// with a warning instead of an error. PostgreSQL never truncates.
+func requireStrictMode(ctx context.Context, db *sql.DB) error {
+	var mode string
+	if err := db.QueryRowContext(ctx, `SELECT @@SESSION.sql_mode`).Scan(&mode); err != nil {
+		return fmt.Errorf("get MySQL sql_mode: %w", err)
+	}
+	for m := range strings.SplitSeq(strings.ToUpper(mode), ",") {
+		if m == "STRICT_TRANS_TABLES" || m == "STRICT_ALL_TABLES" {
+			return nil
+		}
+	}
+	return fmt.Errorf("atemy requires a strict sql_mode (STRICT_TRANS_TABLES or STRICT_ALL_TABLES), got %q", mode)
+}
+
+// rejectUnversionedSubstrateSchema stops Goose from adopting tables it did not
+// create, as atepg does: CREATE TABLE IF NOT EXISTS would otherwise accept a
+// same-named table of any shape. Goose creates the migration ledger before
+// the first migration, so a partial run still has one.
+func rejectUnversionedSubstrateSchema(ctx context.Context, db *sql.DB) error {
+	var hasMetadata, hasSubstrateTables bool
+	err := db.QueryRowContext(ctx, `
+		SELECT
+			EXISTS (SELECT 1 FROM information_schema.tables
+				WHERE table_schema = DATABASE() AND table_name = ?),
+			EXISTS (SELECT 1 FROM information_schema.tables
+				WHERE table_schema = DATABASE()
+				AND table_name IN (
+					'atespaces', 'actors', 'actor_egress_policies', 'actor_templates',
+					'tags', 'workers', 'worker_assignments', 'worker_outbox',
+					'worker_outbox_trim', 'leases'
+				))`, migrationTableName).Scan(&hasMetadata, &hasSubstrateTables)
+	if err != nil {
+		return fmt.Errorf("check MySQL migration ledger: %w", err)
+	}
+	if hasSubstrateTables && !hasMetadata {
+		return errors.New("unsupported MySQL schema: Substrate tables exist without a migration ledger")
+	}
+	return nil
 }
 
 // requireAutoIncrementStep refuses a server that hands out AUTO_INCREMENT

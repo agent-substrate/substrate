@@ -309,6 +309,9 @@ func (p *Persistence) ListWorkerAssignments(ctx context.Context, workerName stri
 		return assignment, nil
 	}, query, args...)
 	if err != nil {
+		if errors.Is(err, store.ErrInvalidPageToken) {
+			return store.ListResponse[*ateapipb.ActorAssignment]{}, err
+		}
 		return store.ListResponse[*ateapipb.ActorAssignment]{}, fmt.Errorf("listing assignments of worker %s: %w", workerName, err)
 	}
 	return store.ListResponse[*ateapipb.ActorAssignment]{Items: items, NextPageToken: next}, nil

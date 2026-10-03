@@ -34,6 +34,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/openfga/openfga/assets"
 	"github.com/pressly/goose/v3"
+	"github.com/pressly/goose/v3/database"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storecontract"
@@ -155,12 +156,35 @@ func stripSQLComments(sql string) string {
 // through 000001: MySQL committed some of its tables and a seed row, but
 // Goose recorded no version. The next startup must complete the file, and the
 // store must then work.
+// TestMigrations_RejectTablesWithoutALedger mirrors atepg: tables Goose did
+// not create are refused rather than adopted by CREATE TABLE IF NOT EXISTS.
+func TestMigrations_RejectTablesWithoutALedger(t *testing.T) {
+	db := openTestDatabase(t, createTestDatabase(t, "atemy_unversioned"))
+	if _, err := db.ExecContext(t.Context(), `CREATE TABLE atespaces (name VARCHAR(255) PRIMARY KEY)`); err != nil {
+		t.Fatalf("creating a stray atespaces table: %v", err)
+	}
+	if _, err := NewPersistence(t.Context(), db); err == nil || !strings.Contains(err.Error(), "without a migration ledger") {
+		t.Fatalf("NewPersistence over tables without a ledger = %v, want a refusal", err)
+	}
+}
+
 func TestMigrations_ResumeAPartialInitialMigration(t *testing.T) {
 	db := openTestDatabase(t, createTestDatabase(t, "atemy_partial_migration"))
 	ctx := t.Context()
 	initial, err := fs.ReadFile(migrationFiles, "migrations/000001_initial.sql")
 	if err != nil {
 		t.Fatalf("reading 000001: %v", err)
+	}
+	// Goose creates its ledger, holding version 0, before it runs 000001.
+	ledger, err := database.NewStore(database.DialectMySQL, migrationTableName)
+	if err != nil {
+		t.Fatalf("creating the migration store: %v", err)
+	}
+	if err := ledger.CreateVersionTable(ctx, db); err != nil {
+		t.Fatalf("creating the migration ledger: %v", err)
+	}
+	if err := ledger.Insert(ctx, db, database.InsertRequest{Version: 0}); err != nil {
+		t.Fatalf("recording version 0: %v", err)
 	}
 	var ran []string
 	for stmt := range strings.SplitSeq(stripSQLComments(string(initial)), ";") {

@@ -181,6 +181,9 @@ func (p *Persistence) ListWorkers(ctx context.Context, opts store.ListOptions) (
 		return w, storesql.UnmarshalRow(b, w, "worker", keys...)
 	}, query, args...)
 	if err != nil {
+		if errors.Is(err, store.ErrInvalidPageToken) {
+			return store.ListResponse[*ateapipb.Worker]{}, err
+		}
 		return store.ListResponse[*ateapipb.Worker]{}, fmt.Errorf("listing workers: %w", err)
 	}
 	return store.ListResponse[*ateapipb.Worker]{Items: items, NextPageToken: next}, nil

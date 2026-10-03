@@ -56,8 +56,15 @@ func clearAll(t *testing.T, p *Persistence) {
 
 func setupMySQLPersistence(t *testing.T) *Persistence {
 	t.Helper()
+	return setupPersistenceOn(t, requireDB(t))
+}
+
+// setupPersistenceOn is setupMySQLPersistence over db, which may be a
+// vtgate rather than the shared MySQL container.
+func setupPersistenceOn(t *testing.T, db *sql.DB) *Persistence {
+	t.Helper()
 	ctx := context.Background()
-	p, err := NewPersistence(ctx, requireDB(t))
+	p, err := NewPersistence(ctx, db)
 	if err != nil {
 		t.Fatalf("NewPersistence failed: %v", err)
 	}

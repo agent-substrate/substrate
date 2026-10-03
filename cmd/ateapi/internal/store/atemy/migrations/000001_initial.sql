@@ -21,7 +21,7 @@
 -- No table declares a foreign key, because PlanetScale disables them by
 -- default. atemy enforces every parent and child relationship in the transaction that writes the child or deletes
 -- the parent. Key columns use a binary collation so names compare byte for
--- byte, as they do in PostgreSQL.
+-- byte, as text equality does in PostgreSQL.
 
 CREATE TABLE IF NOT EXISTS atespaces (
     name     VARCHAR(255) NOT NULL,
@@ -87,7 +87,7 @@ CREATE TABLE IF NOT EXISTS worker_assignments (
     worker_name  VARCHAR(255) NOT NULL,
     proto        LONGBLOB NOT NULL,
     PRIMARY KEY (actor_uid),
-    KEY worker_assignments_worker_idx (worker_name, actor_uid)
+    KEY worker_assignments_worker_idx (worker_name)
 ) DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_bin;
 
 -- Transactional outbox backing WatchWorkers. Each worker write inserts one
@@ -106,7 +106,8 @@ CREATE TABLE IF NOT EXISTS worker_outbox (
 CREATE TABLE IF NOT EXISTS worker_outbox_trim (
     id   TINYINT UNSIGNED NOT NULL,
     seq  BIGINT UNSIGNED NOT NULL,
-    PRIMARY KEY (id)
+    PRIMARY KEY (id),
+    CONSTRAINT worker_outbox_trim_singleton CHECK (id = 1)
 );
 
 INSERT INTO worker_outbox_trim (id, seq) VALUES (1, 0)

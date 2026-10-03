@@ -152,6 +152,9 @@ func (p *Persistence) ListActors(ctx context.Context, atespace string, opts stor
 	}
 	items, next, err := listScoped(ctx, p.db, "actors", storesql.KindActor, atespace, opts, decode)
 	if err != nil {
+		if errors.Is(err, store.ErrInvalidPageToken) {
+			return store.ListResponse[*ateapipb.Actor]{}, err
+		}
 		return store.ListResponse[*ateapipb.Actor]{}, fmt.Errorf("listing actors: %w", err)
 	}
 	return store.ListResponse[*ateapipb.Actor]{Items: items, NextPageToken: next}, nil

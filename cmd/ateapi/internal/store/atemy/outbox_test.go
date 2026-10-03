@@ -238,7 +238,7 @@ func TestWorkerEvent_OnlyAfterCommit(t *testing.T) {
 		t.Errorf("event worker mismatch (-want +got):\n%s", diff)
 	}
 
-	// The rolled-back seq stays pending without closing the watch.
+	// The rolled-back seq does not close the watch.
 	if _, err := s.CreateWorker(ctx, newTestWorker("after-rollback")); err != nil {
 		t.Fatalf("CreateWorker failed: %v", err)
 	}
@@ -430,7 +430,7 @@ func TestWatchWorkers_DeliversAWriteInFlightAtSubscribe(t *testing.T) {
 	s := setupMySQLPersistence(t)
 	ctx := t.Context()
 	// An earlier row, outside the gap window, as on a quiet system.
-	insertOutboxRow(t, s.db, workerPayload(t, store.WorkerEventCreated, newTestWorker("long-ago")), 2*outboxGapWait)
+	insertOutboxRow(t, s.db, workerPayload(t, store.WorkerEventCreated, newTestWorker("long-ago")), 2*outboxSubscribeWindow)
 
 	tx, inFlight := beginOutboxWrite(t, s, store.WorkerEventCreated, newTestWorker("in-flight"))
 	if _, err := s.CreateWorker(ctx, newTestWorker("committed-before-subscribe")); err != nil {
@@ -637,18 +637,77 @@ func TestOutboxCursor_CloseReason(t *testing.T) {
 	}
 }
 
-// A rolled-back write leaves a seq that never commits. The watcher stops
-// waiting on it after outboxGapWait.
-func TestOutboxCursor_Expire(t *testing.T) {
+// Only pending seqs skipped longer than outboxGapGrace ago are probed.
+func TestOutboxCursor_RolledBackCandidates(t *testing.T) {
 	now := time.Now()
 	c := &outboxCursor{seq: 10, pending: map[uint64]time.Time{
-		6: now.Add(-outboxGapWait - time.Second),
-		7: now.Add(-outboxGapWait),
+		6: now.Add(-outboxGapGrace - time.Second),
+		7: now.Add(-outboxGapGrace),
 		8: now.Add(-time.Second),
 	}}
-	c.expire(now)
-	if got := slices.Sorted(maps.Keys(c.pending)); !slices.Equal(got, []uint64{7, 8}) {
-		t.Errorf("pending after expire = %v, want [7 8]", got)
+	got := c.rolledBackCandidates(now)
+	if len(got) != 1 || got[0] != uint64(6) {
+		t.Errorf("rolledBackCandidates = %v, want [6]", got)
+	}
+}
+
+// A rolled-back write leaves a seq that never commits. The watcher drops it
+// once a NOWAIT probe finds neither a row nor a writer holding it, and keeps
+// every pending seq while some write is still committing, however long that
+// takes, as atepg's xmin fence waits.
+func TestPollWorkerOutbox_DropsOnlyRolledBackSeqs(t *testing.T) {
+	testDropsOnlyRolledBackSeqs(t, setupMySQLPersistence(t))
+}
+
+func testDropsOnlyRolledBackSeqs(t *testing.T, s *Persistence) {
+	t.Helper()
+	ctx := t.Context()
+	rolledBackTx, rolledBack := beginOutboxWrite(t, s, store.WorkerEventCreated, newTestWorker("rolled-back"))
+	if err := rolledBackTx.Rollback(); err != nil {
+		t.Fatalf("Rollback failed: %v", err)
+	}
+	inFlight, inFlightSeq := beginOutboxWrite(t, s, store.WorkerEventCreated, newTestWorker("in-flight"))
+	defer inFlight.Rollback() //nolint:errcheck // no-op once committed
+	if _, err := s.CreateWorker(ctx, newTestWorker("committed")); err != nil {
+		t.Fatalf("CreateWorker failed: %v", err)
+	}
+
+	cursor, err := s.subscribeWorkerOutbox(ctx)
+	if err != nil {
+		t.Fatalf("subscribeWorkerOutbox failed: %v", err)
+	}
+	if _, ok := cursor.pending[rolledBack]; !ok {
+		t.Fatalf("pending = %v, want the rolled-back seq %d", cursor.pending, rolledBack)
+	}
+	age := func() {
+		for seq := range cursor.pending {
+			cursor.pending[seq] = time.Now().Add(-2 * outboxGapGrace)
+		}
+	}
+
+	age()
+	if _, _, resync, err := s.pollWorkerOutbox(ctx, cursor); err != nil || resync {
+		t.Fatalf("poll with a write in flight = resync %t, %v", resync, err)
+	}
+	for _, seq := range []uint64{rolledBack, inFlightSeq} {
+		if _, ok := cursor.pending[seq]; !ok {
+			t.Errorf("seq %d left pending while a write is in flight; pending = %v", seq, cursor.pending)
+		}
+	}
+
+	if err := inFlight.Commit(); err != nil {
+		t.Fatalf("Commit failed: %v", err)
+	}
+	age()
+	batch, _, resync, err := s.pollWorkerOutbox(ctx, cursor)
+	if err != nil || resync {
+		t.Fatalf("poll after the commit = resync %t, %v", resync, err)
+	}
+	if len(batch) != 1 || batch[0].seq != inFlightSeq {
+		t.Errorf("delivered %v, want the late seq %d", batch, inFlightSeq)
+	}
+	if len(cursor.pending) != 0 {
+		t.Errorf("pending = %v, want the rolled-back seq dropped", cursor.pending)
 	}
 }
 

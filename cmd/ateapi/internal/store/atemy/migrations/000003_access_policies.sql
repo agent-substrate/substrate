@@ -14,13 +14,14 @@
 
 -- +goose Up
 
--- Singleton: atemy only ever writes id = 1, so the table holds at most one row.
+-- Singleton: the id column only admits 1, so the table holds at most one row.
 CREATE TABLE IF NOT EXISTS global_access_policy (
     id      TINYINT UNSIGNED NOT NULL,
     uid     VARCHAR(255) NOT NULL,
     version BIGINT NOT NULL,
     proto   LONGBLOB NOT NULL,
-    PRIMARY KEY (id)
+    PRIMARY KEY (id),
+    CONSTRAINT global_access_policy_singleton CHECK (id = 1)
 ) DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_bin;
 
 CREATE TABLE IF NOT EXISTS atespace_access_policies (

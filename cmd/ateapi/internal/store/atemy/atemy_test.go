@@ -165,7 +165,7 @@ func TestMapLockError(t *testing.T) {
 		wantConflict bool
 	}{
 		{"deadlock", deadlock, true},
-		{"lock wait timeout", lockWait, true},
+		{"lock wait timeout", lockWait, false},
 		{"wrapped deadlock", fmt.Errorf("committing transaction: %w", deadlock), true},
 		{"duplicate key", duplicate, false},
 		{"not a MySQL error", other, false},
@@ -340,8 +340,8 @@ func TestInTx_LockWaitTimeoutReportsVersionConflict(t *testing.T) {
 
 	err = inTx(ctx, impatient, func(tx *sql.Tx) error { return selectForUpdate(t, tx, "a") })
 	var myErr *mysql.MySQLError
-	if !errors.Is(err, store.ErrVersionConflict) || !errors.As(err, &myErr) || myErr.Number != 1205 {
-		t.Errorf("inTx behind a held row lock = %v, want ErrVersionConflict wrapping a lock wait timeout", err)
+	if errors.Is(err, store.ErrVersionConflict) || !errors.As(err, &myErr) || myErr.Number != 1205 {
+		t.Errorf("inTx behind a held row lock = %v, want the lock wait timeout as is, as PostgreSQL reports a lock wait that runs out", err)
 	}
 }
 

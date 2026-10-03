@@ -346,7 +346,7 @@ const txAttempts = 3
 func inTx(ctx context.Context, db *sql.DB, fn func(tx *sql.Tx) error) error {
 	var err error
 	for range txAttempts {
-		if err = runTx(ctx, db, fn); mysqlErrNumber(err) != 1213 {
+		if err = runTx(ctx, db, fn); mysqlErrNumber(err) != errDeadlock {
 			break
 		}
 	}
@@ -368,19 +368,25 @@ func runTx(ctx context.Context, db *sql.DB, fn func(tx *sql.Tx) error) error {
 	return nil
 }
 
-// mapLockError reports a deadlock that outlasted inTx's attempts, or a lock
-// wait timeout, as ErrVersionConflict: the write lost to a concurrent one and
-// the caller may retry.
+// mapLockError reports a deadlock that outlasted inTx's attempts as
+// ErrVersionConflict: the write lost to a concurrent one and the caller may
+// retry. A lock wait timeout is returned as is, like a lock wait that runs
+// into a context deadline on PostgreSQL.
 func mapLockError(err error) error {
-	switch mysqlErrNumber(err) {
-	case 1213, 1205:
+	if mysqlErrNumber(err) == errDeadlock {
 		return fmt.Errorf("%w: %w", store.ErrVersionConflict, err)
-	default:
-		return err
 	}
+	return err
 }
 
-func isUniqueViolation(err error) bool { return mysqlErrNumber(err) == 1062 }
+// MySQL error numbers atemy acts on.
+const (
+	errDuplicateKey = 1062
+	errDeadlock     = 1213
+	errLockNowait   = 3572
+)
+
+func isUniqueViolation(err error) bool { return mysqlErrNumber(err) == errDuplicateKey }
 
 func mysqlErrNumber(err error) uint16 {
 	var myErr *mysql.MySQLError
@@ -424,7 +430,7 @@ func (p *Persistence) maintenance(ctx context.Context) {
 		}
 		passCtx, cancel := context.WithTimeout(ctx, maintenancePassTimeout)
 		if err := p.trimWorkerOutbox(passCtx); err != nil && ctx.Err() == nil {
-			slog.WarnContext(ctx, "worker outbox retention failed", slog.Any("err", err))
+			slog.WarnContext(ctx, "worker outbox maintenance failed", slog.Any("err", err))
 		}
 		if deleted, err := p.cleanupExpiredLeases(passCtx); err != nil && ctx.Err() == nil {
 			slog.WarnContext(ctx, "expired lease cleanup failed", slog.Int64("deleted", deleted), slog.Any("err", err))
