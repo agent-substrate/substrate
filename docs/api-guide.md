@@ -138,7 +138,7 @@ Unlike a Pod, an actor is sized by its **`limits`** (CPU and Memory): the size i
 2. **Gate scheduling.** An actor is only placed on a `WorkerPool` whose [worker capacity](#worker-capacity-spectemplateresources) is `>=` these limits.
 3. **Fall back to runtime defaults.** A zero or absent limit leaves that dimension at the runtime default: unlimited for gVisor, and 2 GiB / 1 vCPU for the micro-VM.
 
-`requests` are not consulted today (an actor occupies its whole worker). Because the size is baked into snapshots, a **micro-VM FULL-scope restore reuses the size in the snapshot**; changing an actor's limits takes effect on its next cold boot.
+`requests` are not consulted today: only `limits` size and place an actor. Because the size is baked into snapshots, a **micro-VM FULL-scope restore reuses the size in the snapshot**; changing an actor's limits takes effect on its next cold boot.
 
 Container environment variables support literal `value` entries only. Values are not interpolated (`$(VAR)` references are not expanded), and Kubernetes `envFrom`/`valueFrom` sources are not supported.
 
