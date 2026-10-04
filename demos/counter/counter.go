@@ -21,11 +21,13 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -149,6 +151,23 @@ func main() {
 		w.Write([]byte(response))
 	})
 
+	// /netinfo reports the address families the sandbox itself has, which is
+	// the only place they can be observed: an actor's interior network is
+	// configured differently by each sandbox class, and nothing outside the
+	// sandbox can see what the actor ended up with.
+	defaultMux.HandleFunc("/netinfo", func(w http.ResponseWriter, r *http.Request) {
+		info, err := currentNetInfo()
+		if err != nil {
+			slog.ErrorContext(r.Context(), "Error collecting interface addresses", slog.Any("err", err))
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(info); err != nil {
+			slog.ErrorContext(r.Context(), "Error writing netinfo response", slog.Any("err", err))
+		}
+	})
+
 	go func() {
 		slog.InfoContext(ctx, "Starting counter server on port 80")
 		if err := http.ListenAndServe(":80", defaultMux); err != nil {
@@ -245,6 +264,77 @@ func hashRandomFile() string {
 
 	hash := sha256.Sum256(rfBytes)
 	return base64.RawStdEncoding.EncodeToString(hash[:])
+}
+
+// netInfo is the /netinfo response: the address families the sandbox actually
+// has, plus the raw per-interface CIDRs they were derived from, so a failing
+// assertion reports what the actor saw rather than just that it disagreed.
+type netInfo struct {
+	Interfaces []ifaceInfo `json:"interfaces"`
+	IPv4       []string    `json:"ipv4"`
+	IPv6       []string    `json:"ipv6"`
+}
+
+type ifaceInfo struct {
+	Name  string   `json:"name"`
+	CIDRs []string `json:"cidrs"`
+}
+
+func currentNetInfo() (netInfo, error) {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return netInfo{}, fmt.Errorf("listing interfaces: %w", err)
+	}
+	info := netInfo{Interfaces: make([]ifaceInfo, 0, len(ifaces))}
+	for _, iface := range ifaces {
+		addrs, err := iface.Addrs()
+		if err != nil {
+			// A link can disappear between the two calls; report the rest.
+			slog.Warn("Error getting interface addresses", slog.String("iface", iface.Name), slog.Any("err", err))
+			continue
+		}
+		entry := ifaceInfo{Name: iface.Name, CIDRs: make([]string, 0, len(addrs))}
+		for _, addr := range addrs {
+			entry.CIDRs = append(entry.CIDRs, addr.String())
+		}
+		info.Interfaces = append(info.Interfaces, entry)
+	}
+	info.IPv4, info.IPv6 = assignedAddrs(info.Interfaces)
+	return info, nil
+}
+
+// assignedAddrs splits the CIDRs on ifaces into the IPv4 and IPv6 addresses
+// somebody assigned to this sandbox, which is not the same question as which
+// are globally routable: the actor veth's IPv4 is 169.254.17.2, link-local by
+// RFC 3927, and its IPv6 is a ULA. Both are kept.
+//
+// IPv6 link-local is the one exclusion, and the asymmetry with IPv4 link-local
+// is the point: the kernel puts an fe80:: on every link that has IPv6 compiled
+// in, so counting it would make "does this actor have IPv6" vacuously true,
+// whereas 169.254.17.2 was deliberately assigned and is the actor's only IPv4.
+func assignedAddrs(ifaces []ifaceInfo) (v4, v6 []string) {
+	v4, v6 = []string{}, []string{}
+	for _, iface := range ifaces {
+		for _, cidr := range iface.CIDRs {
+			prefix, err := netip.ParsePrefix(cidr)
+			if err != nil {
+				continue
+			}
+			addr := prefix.Addr().Unmap()
+			if addr.IsLoopback() || addr.IsUnspecified() || addr.IsMulticast() {
+				continue
+			}
+			if addr.Is4() {
+				v4 = append(v4, addr.String())
+				continue
+			}
+			if addr.IsLinkLocalUnicast() {
+				continue
+			}
+			v6 = append(v6, addr.String())
+		}
+	}
+	return v4, v6
 }
 
 func getCurrentIP() string {
