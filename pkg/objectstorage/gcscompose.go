@@ -75,24 +75,13 @@ const (
 // into object. Only for objects past uploadCompositeMin; putSingle handles the rest.
 func (g *gcsClient) putComposite(ctx context.Context, bucket, object string, head io.Reader, rest io.Reader) (err error) {
 	bkt := g.client.Bucket(bucket)
-	// A run id keeps concurrent or retried uploads of the same object from colliding on
-	// part names, and makes leftovers from a crash identifiable.
-	var idBytes [8]byte
-	if _, err := rand.Read(idBytes[:]); err != nil {
-		return fmt.Errorf("while naming upload parts: %w", err)
+	runID, err := newRunID()
+	if err != nil {
+		return err
 	}
-	runID := hex.EncodeToString(idBytes[:])
 
 	var parts []*storage.ObjectHandle
-	defer func() {
-		// Parts are scratch either way, and deleting them must not mask the real error.
-		for _, p := range parts {
-			if delErr := p.Delete(context.WithoutCancel(ctx)); delErr != nil &&
-				!errors.Is(delErr, storage.ErrObjectNotExist) && err == nil {
-				err = fmt.Errorf("while removing upload part %q: %w", p.ObjectName(), delErr)
-			}
-		}
-	}()
+	defer func() { err = removeScratch(ctx, parts, err) }()
 
 	// The stream is read in order here and whole parts handed to the uploaders; buffers
 	// cycle through free so the peak stays at uploadConcurrency of them.
@@ -137,6 +126,29 @@ func (g *gcsClient) putComposite(ctx context.Context, bucket, object string, hea
 	return composeAll(ctx, bkt, object, parts, runID)
 }
 
+// newRunID returns an id that keeps concurrent or retried uploads of the same object
+// from colliding on part names, and makes leftovers from a crash identifiable.
+func newRunID() (string, error) {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("while naming upload parts: %w", err)
+	}
+	return hex.EncodeToString(b[:]), nil
+}
+
+// removeScratch deletes objs, which are scratch whether or not the upload succeeded.
+// It returns err, or the first delete failure if err is nil, so cleanup never masks
+// the real error.
+func removeScratch(ctx context.Context, objs []*storage.ObjectHandle, err error) error {
+	for _, o := range objs {
+		if delErr := o.Delete(context.WithoutCancel(ctx)); delErr != nil &&
+			!errors.Is(delErr, storage.ErrObjectNotExist) && err == nil {
+			err = fmt.Errorf("while removing upload part %q: %w", o.ObjectName(), delErr)
+		}
+	}
+	return err
+}
+
 // writeObject writes data to obj in one request.
 func writeObject(ctx context.Context, obj *storage.ObjectHandle, data []byte, size int) error {
 	w := obj.NewWriter(ctx)
@@ -150,11 +162,15 @@ func writeObject(ctx context.Context, obj *storage.ObjectHandle, data []byte, si
 }
 
 // composeAll composes parts into object, folding in rounds when there are more parts
-// than GCS accepts in one call. Intermediates are cleaned up as they are consumed.
-func composeAll(ctx context.Context, bkt *storage.BucketHandle, object string, parts []*storage.ObjectHandle, runID string) error {
+// than GCS accepts in one call. The intermediates it creates are removed on return; the
+// caller removes parts.
+func composeAll(ctx context.Context, bkt *storage.BucketHandle, object string, parts []*storage.ObjectHandle, runID string) (err error) {
 	if len(parts) == 0 {
 		return fmt.Errorf("no parts to compose into %q", object)
 	}
+	var mids []*storage.ObjectHandle
+	defer func() { err = removeScratch(ctx, mids, err) }()
+
 	round := 0
 	for len(parts) > maxComposeSources {
 		var next []*storage.ObjectHandle
@@ -169,11 +185,7 @@ func composeAll(ctx context.Context, bkt *storage.BucketHandle, object string, p
 			if _, err := mid.ComposerFrom(group...).Run(ctx); err != nil {
 				return fmt.Errorf("while composing parts of %q: %w", object, err)
 			}
-			// The sources are dead once folded; the caller's deferred cleanup only
-			// knows about the leaf parts.
-			for _, s := range group {
-				_ = s.Delete(context.WithoutCancel(ctx))
-			}
+			mids = append(mids, mid)
 			next = append(next, mid)
 		}
 		parts = next

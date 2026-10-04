@@ -16,8 +16,6 @@ package objectstorage
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -61,25 +59,17 @@ func (g *gcsClient) PutSparseFile(ctx context.Context, bucket, object string, f 
 	}
 	groups := planSparseParts(exts, populated, n)
 
-	var idBytes [8]byte
-	if _, err := rand.Read(idBytes[:]); err != nil {
-		return res, fmt.Errorf("while naming upload parts: %w", err)
+	runID, err := newRunID()
+	if err != nil {
+		return res, err
 	}
-	runID := hex.EncodeToString(idBytes[:])
 
 	bkt := g.client.Bucket(bucket)
 	parts := make([]*storage.ObjectHandle, len(groups))
 	for i := range groups {
 		parts[i] = bkt.Object(fmt.Sprintf("%s.part-%s-%04d", object, runID, i))
 	}
-	defer func() {
-		for _, p := range parts {
-			if delErr := p.Delete(context.WithoutCancel(ctx)); delErr != nil &&
-				!errors.Is(delErr, storage.ErrObjectNotExist) && err == nil {
-				err = fmt.Errorf("while removing upload part %q: %w", p.ObjectName(), delErr)
-			}
-		}
-	}()
+	defer func() { err = removeScratch(ctx, parts, err) }()
 
 	grp, gctx := errgroup.WithContext(ctx)
 	for i, ranges := range groups {
