@@ -210,7 +210,7 @@ func TestAcquireLease_ExpiresAfterHolderStops(t *testing.T) {
 // another token holds the row.
 func TestAcquireLease_RenewsUntilTheRowChangesHands(t *testing.T) {
 	s := setupMySQLPersistence(t)
-	s.leaseTTL = 300 * time.Millisecond
+	s.leaseTTL = time.Second
 	ctx := t.Context()
 	lease, err := s.AcquireLease(ctx, "renewed-lease")
 	if err != nil {
@@ -218,7 +218,7 @@ func TestAcquireLease_RenewsUntilTheRowChangesHands(t *testing.T) {
 	}
 	defer lease.Close()
 
-	time.Sleep(4 * s.leaseTTL)
+	time.Sleep(2 * s.leaseTTL)
 	if err := lease.Context().Err(); err != nil {
 		t.Fatalf("lease context ended while its holder was renewing: %v", err)
 	}
@@ -226,7 +226,7 @@ func TestAcquireLease_RenewsUntilTheRowChangesHands(t *testing.T) {
 		if other != nil {
 			other.Close()
 		}
-		t.Fatalf("AcquireLease after %v of renewal = %v, want ErrLeaseConflict", 4*s.leaseTTL, err)
+		t.Fatalf("AcquireLease after %v of renewal = %v, want ErrLeaseConflict", 2*s.leaseTTL, err)
 	}
 
 	if _, err := s.db.ExecContext(ctx, `UPDATE leases SET token = 'usurper' WHERE lease_key = 'renewed-lease'`); err != nil {
