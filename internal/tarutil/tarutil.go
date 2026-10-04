@@ -49,6 +49,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -219,6 +220,10 @@ func writeTree(ctx context.Context, tw *tar.Writer, srcDir string, skip SkipFunc
 		if err != nil {
 			return fmt.Errorf("building tar header for %q: %w", path, err)
 		}
+		// PAX preserves fractional mtimes. Access and change times are not
+		// restored and must not affect deterministic archives.
+		hdr.Format = tar.FormatPAX
+		hdr.AccessTime, hdr.ChangeTime = time.Time{}, time.Time{}
 		hdr.Name = rel
 		if info.IsDir() {
 			hdr.Name += "/"
