@@ -140,7 +140,7 @@ func setup(t *testing.T) (*ateapipb.ActorTemplate, string) {
 		t.Fatal(err)
 	}
 	image := strings.TrimSpace(string(e2e.RunCmdOutput(t, []string{"KO_CONFIG_PATH=" + root},
-		filepath.Join(root, "hack/run-tool.sh"), "ko", "build", "--bare",
+		filepath.Join(root, "hack/run-tool.sh"), "ko", "build", "--base-import-paths",
 		"github.com/agent-substrate/substrate/internal/e2e/fixtures/golden")))
 	clients := e2e.GetClients()
 	ctx := t.Context()
@@ -164,6 +164,7 @@ func setup(t *testing.T) (*ateapipb.ActorTemplate, string) {
 		ObjectMeta: metav1.ObjectMeta{Name: "golden", Namespace: ns, Labels: labels},
 		Spec: v1alpha1.WorkerPoolSpec{
 			Replicas: 2, WorkerImage: wp.Spec.WorkerImage, SandboxClass: wp.Spec.SandboxClass,
+			Template: wp.Spec.Template.DeepCopy(),
 		},
 	}, metav1.CreateOptions{}); err != nil {
 		t.Fatal(err)
