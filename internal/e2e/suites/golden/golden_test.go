@@ -104,8 +104,8 @@ func TestGoldenApplications(t *testing.T) {
 			t.Cleanup(func() {
 				ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 				defer cancel()
-				if _, err := api.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref}); err != nil {
-					t.Logf("cleanup actor %v: %v", ref, err)
+				if _, err := api.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref, AnyState: true}); err != nil {
+					t.Errorf("cleanup actor %v: %v", ref, err)
 				}
 			})
 			if got := actor.GetStatus().GetExternalSnapshot().GetSnapshotUri(); got != goldenURI {
@@ -178,7 +178,7 @@ func setup(t *testing.T) (*ateapipb.ActorTemplate, string) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
 		if _, err := clients.SubstrateAPI.DeleteAtespace(ctx, &ateapipb.DeleteAtespaceRequest{Atespace: &ateapipb.ObjectRef{Name: ns}}); err != nil {
-			t.Logf("cleanup atespace %s: %v", ns, err)
+			t.Errorf("cleanup atespace %s: %v", ns, err)
 		}
 	})
 	return &ateapipb.ActorTemplate{
@@ -219,7 +219,7 @@ func createTemplate(t *testing.T, base *ateapipb.ActorTemplate, name string, con
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
 		if _, err := e2e.GetClients().SubstrateAPI.DeleteActorTemplate(ctx, &ateapipb.DeleteActorTemplateRequest{ActorTemplate: e2e.TemplateRef(created)}); err != nil {
-			t.Logf("cleanup template %s: %v", name, err)
+			t.Errorf("cleanup template %s: %v", name, err)
 		}
 	})
 	return created
