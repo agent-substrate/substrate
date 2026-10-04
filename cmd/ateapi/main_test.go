@@ -206,18 +206,20 @@ func TestLoadFlagsFromEnvResolvesSourcesOnce(t *testing.T) {
 }
 
 func TestLoadFlagsFromEnvPoolMaxConns(t *testing.T) {
-	old := *postgresPoolMaxConns
-	t.Cleanup(func() { *postgresPoolMaxConns = old })
-	t.Setenv("ATE_API_POSTGRES_POOL_MAX_CONNS", "20")
+	saveFlag(t, storePoolMaxConns)
+	*storePoolMaxConns = 0
+	t.Setenv("ATE_API_STORE_POOL_MAX_CONNS", "20")
 	if err := loadFlagsFromEnv(); err != nil {
 		t.Fatal(err)
 	}
-	if *postgresPoolMaxConns != 20 {
-		t.Fatalf("pool max connections = %d, want 20", *postgresPoolMaxConns)
+	if *storePoolMaxConns != 20 {
+		t.Fatalf("pool max connections = %d, want 20", *storePoolMaxConns)
 	}
-	t.Setenv("ATE_API_POSTGRES_POOL_MAX_CONNS", "invalid")
-	if err := loadFlagsFromEnv(); err == nil || !strings.Contains(err.Error(), "ATE_API_POSTGRES_POOL_MAX_CONNS must be a positive integer") {
-		t.Fatalf("loadFlagsFromEnv() error = %v, want pool-size validation", err)
+	for _, raw := range []string{"invalid", "0"} {
+		t.Setenv("ATE_API_STORE_POOL_MAX_CONNS", raw)
+		if err := loadFlagsFromEnv(); err == nil || !strings.Contains(err.Error(), "ATE_API_STORE_POOL_MAX_CONNS must be a positive integer") {
+			t.Fatalf("loadFlagsFromEnv() with %q error = %v, want pool-size validation", raw, err)
+		}
 	}
 }
 

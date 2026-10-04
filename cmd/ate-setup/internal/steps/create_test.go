@@ -59,14 +59,16 @@ func TestMySQLAPIServerEnvVars(t *testing.T) {
 	configVars, secretVars := mysqlAPIServerEnvVars(&config.Config{
 		MySQLReadWriteConnectionString: readWriteDSN,
 		MySQLOwnerConnectionString:     ownerDSN,
+		StorePoolMaxConns:              "40",
 		MySQLServerCAFile:              "/local/ca.pem",
 		MySQLTLSCertFile:               "/run/podidentity.podcert.ate.dev/credential-bundle.pem",
 		MySQLTLSKeyFile:                "/run/podidentity.podcert.ate.dev/credential-bundle.pem",
 	})
 	wantConfig := map[string]string{
-		"ATE_API_MYSQL_TLS_CA_FILE":   "/run/mysql-server-ca/server-ca.pem",
-		"ATE_API_MYSQL_TLS_CERT_FILE": "/run/podidentity.podcert.ate.dev/credential-bundle.pem",
-		"ATE_API_MYSQL_TLS_KEY_FILE":  "/run/podidentity.podcert.ate.dev/credential-bundle.pem",
+		"ATE_API_STORE_POOL_MAX_CONNS": "40",
+		"ATE_API_MYSQL_TLS_CA_FILE":    "/run/mysql-server-ca/server-ca.pem",
+		"ATE_API_MYSQL_TLS_CERT_FILE":  "/run/podidentity.podcert.ate.dev/credential-bundle.pem",
+		"ATE_API_MYSQL_TLS_KEY_FILE":   "/run/podidentity.podcert.ate.dev/credential-bundle.pem",
 	}
 	if diff := cmp.Diff(wantConfig, configVars); diff != "" {
 		t.Errorf("ConfigMap data differs (-want +got):\n%s", diff)

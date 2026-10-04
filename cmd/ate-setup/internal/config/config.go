@@ -149,6 +149,9 @@ type Config struct {
 	// than defaulted, so that a redeploy that does not name a backend cannot
 	// silently move a MySQL install onto the bundled PostgreSQL.
 	StoreBackendSet bool
+	// StorePoolMaxConns sizes the apiserver's read/write pool for either
+	// backend (ATE_API_STORE_POOL_MAX_CONNS). Empty leaves the backend default.
+	StorePoolMaxConns string
 	// The read/write and owner connections can use different login identities.
 	// With one configured connection, both pools use it. Both empty selects
 	// bundled PostgreSQL.
@@ -163,9 +166,6 @@ type Config struct {
 	// PostgresSchema is the PostgreSQL schema for the Substrate tables
 	// (ATE_API_POSTGRES_SCHEMA). Empty means DefaultPostgresSchema.
 	PostgresSchema string
-	// PostgresPoolMaxConns sizes the apiserver's read/write pool
-	// (ATE_API_POSTGRES_POOL_MAX_CONNS). Empty leaves the DSN or pgxpool default.
-	PostgresPoolMaxConns string
 	// PostgresServerCAFile is a local PEM file holding the server CA of an
 	// external PostgreSQL (ATE_API_POSTGRES_SERVER_CA_FILE). Its contents are
 	// published as the postgres-server-ca Secret, which ate-api-server mounts
@@ -384,6 +384,7 @@ func Load(opts Options) (*Config, error) {
 		Images:                            loadImageSource(opts, env),
 		StoreBackend:                      firstNonEmpty(env["ATE_API_STORE_BACKEND"], StoreBackendPostgres),
 		StoreBackendSet:                   env["ATE_API_STORE_BACKEND"] != "",
+		StorePoolMaxConns:                 env["ATE_API_STORE_POOL_MAX_CONNS"],
 		PostgresReadWriteConnectionString: readWriteConnectionString,
 		PostgresOwnerConnectionString:     ownerConnectionString,
 		PostgresReadWriteRole:             firstNonEmpty(env["ATE_API_POSTGRES_READ_WRITE_ROLE"], DefaultPostgresReadWriteRole),
@@ -391,7 +392,6 @@ func Load(opts Options) (*Config, error) {
 		PostgresReadWriteRoleSet:          env["ATE_API_POSTGRES_READ_WRITE_ROLE"] != "",
 		PostgresOwnerRoleSet:              env["ATE_API_POSTGRES_OWNER_ROLE"] != "",
 		PostgresSchema:                    env["ATE_API_POSTGRES_SCHEMA"],
-		PostgresPoolMaxConns:              env["ATE_API_POSTGRES_POOL_MAX_CONNS"],
 		PostgresServerCAFile:              env["ATE_API_POSTGRES_SERVER_CA_FILE"],
 		CloudSQL: CloudSQLConfig{
 			Instance:    cloudsqlInstance,

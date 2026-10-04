@@ -61,7 +61,9 @@ The client certificate and key must be set together, and `ateapi` refuses to sta
 The TLS files always require TLS. A `tls=preferred` setting in the DSN does not let the driver fall back to an unencrypted connection when the files are set.
 
 ## Pool sizing
-The read/write pool, which Substrate and OpenFGA share, holds up to the larger of 4 and the CPU count. Connections are replaced after 1 hour, or after 30 minutes idle, as with PostgreSQL.
+`ATE_API_STORE_POOL_MAX_CONNS` (or `--store-pool-max-conns`) caps the read/write pool, which Substrate and OpenFGA share. The same setting sizes the PostgreSQL pool. It must be a positive integer.
+
+When unset, the limit is the larger of 4 and the CPU count. Connections are replaced after 1 hour, or after 30 minutes idle, as with PostgreSQL.
 
 The owner pool is capped at 2 connections and keeps none idle. The watch pool is capped at 3 connections and uses the read/write DSN.
 
@@ -100,6 +102,7 @@ See PlanetScale's documentation on [safe migrations](https://planetscale.com/doc
 export ATE_API_STORE_BACKEND=mysql
 export ATE_API_MYSQL_READ_WRITE_CONNECTION_STRING='substrate_rw:<password>@tcp(mysql.example.com:3306)/substrate?tls=true'
 export ATE_API_MYSQL_OWNER_CONNECTION_STRING='substrate_owner:<password>@tcp(mysql.example.com:3306)/substrate?tls=true'
+export ATE_API_STORE_POOL_MAX_CONNS=20
 ./hack/install-ate.sh --deploy-ate-system
 ```
 

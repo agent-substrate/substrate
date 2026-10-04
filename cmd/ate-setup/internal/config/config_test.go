@@ -57,7 +57,7 @@ func loadEnv(t *testing.T) {
 		"ATE_API_MYSQL_TLS_CERT_FILE",
 		"ATE_API_MYSQL_TLS_KEY_FILE",
 		"ATE_API_STORE_BACKEND",
-		"ATE_API_POSTGRES_POOL_MAX_CONNS",
+		"ATE_API_STORE_POOL_MAX_CONNS",
 		"ATE_ATENET_DATAPLANE",
 		"ATE_CREDENTIAL_PROVIDER",
 		"ATE_IMAGE_REPO",
@@ -298,15 +298,15 @@ func TestLoadPostgresSchema(t *testing.T) {
 // mounted file respectively, neither of which the shell installer synthesizes.
 func TestLoadPostgresTuning(t *testing.T) {
 	loadEnv(t)
-	t.Setenv("ATE_API_POSTGRES_POOL_MAX_CONNS", "50")
+	t.Setenv("ATE_API_STORE_POOL_MAX_CONNS", "50")
 	t.Setenv("ATE_API_POSTGRES_SERVER_CA_FILE", "/etc/ssl/server-ca.pem")
 
 	cfg, err := Load(Options{})
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if cfg.PostgresPoolMaxConns != "50" {
-		t.Errorf("PostgresPoolMaxConns = %q, want 50", cfg.PostgresPoolMaxConns)
+	if cfg.StorePoolMaxConns != "50" {
+		t.Errorf("StorePoolMaxConns = %q, want 50", cfg.StorePoolMaxConns)
 	}
 	if want := "/etc/ssl/server-ca.pem"; cfg.PostgresServerCAFile != want {
 		t.Errorf("PostgresServerCAFile = %q, want %q", cfg.PostgresServerCAFile, want)

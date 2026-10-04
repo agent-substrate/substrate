@@ -105,7 +105,7 @@ func (e *Env) postgresAPIServerEnvVars(ctx context.Context) (configVars, secretV
 	ownerDSN := e.Cfg.PostgresOwnerConnectionString
 	readWriteRole := e.Cfg.PostgresReadWriteRole
 	ownerRole := e.Cfg.PostgresOwnerRole
-	poolMaxConns := e.Cfg.PostgresPoolMaxConns
+	poolMaxConns := e.Cfg.StorePoolMaxConns
 
 	cloudsql, err := e.resolveCloudSQL(ctx)
 	if err != nil {
@@ -158,7 +158,7 @@ func (e *Env) postgresAPIServerEnvVars(ctx context.Context) (configVars, secretV
 			ownerRole = recorded["ATE_API_POSTGRES_OWNER_ROLE"]
 		}
 		if poolMaxConns == "" {
-			poolMaxConns = recorded["ATE_API_POSTGRES_POOL_MAX_CONNS"]
+			poolMaxConns = recorded["ATE_API_STORE_POOL_MAX_CONNS"]
 		}
 		if e.Cfg.PostgresSchema == "" {
 			secret, err := e.Kube.GetSecret(ctx, e.Namespace(), SecretAPIEnvVars)
@@ -174,7 +174,7 @@ func (e *Env) postgresAPIServerEnvVars(ctx context.Context) (configVars, secretV
 	configVars["ATE_API_POSTGRES_READ_WRITE_ROLE"] = readWriteRole
 	configVars["ATE_API_POSTGRES_OWNER_ROLE"] = ownerRole
 	if poolMaxConns != "" {
-		configVars["ATE_API_POSTGRES_POOL_MAX_CONNS"] = poolMaxConns
+		configVars["ATE_API_STORE_POOL_MAX_CONNS"] = poolMaxConns
 	}
 	return configVars, buildAPIServerEnvVars(readWriteDSN, ownerDSN, schema), nil
 }
@@ -205,6 +205,9 @@ func buildAPIServerEnvVars(readWriteDSN, ownerDSN, schema string) map[string]str
 // keys, which prunes any an earlier PostgreSQL install left behind.
 func mysqlAPIServerEnvVars(cfg *config.Config) (configVars, secretVars map[string]string) {
 	configVars = map[string]string{}
+	if cfg.StorePoolMaxConns != "" {
+		configVars["ATE_API_STORE_POOL_MAX_CONNS"] = cfg.StorePoolMaxConns
+	}
 	for name, value := range map[string]string{
 		"ATE_API_MYSQL_TLS_CA_FILE":   cfg.MySQLTLSCAFile,
 		"ATE_API_MYSQL_TLS_CERT_FILE": cfg.MySQLTLSCertFile,
