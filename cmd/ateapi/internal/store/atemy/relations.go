@@ -70,8 +70,8 @@ func (p *Persistence) insertChild(ctx context.Context, what string, lock func(tx
 }
 
 // deleteLockedRow locks the row of table that where selects, checks
-// precondition against it, deletes it, and returns its columns. Returns ErrNotFound if no
-// row matches. table and where are trusted SQL fragments.
+// precondition against it, deletes it, and returns its columns. Returns
+// ErrNotFound if no row matches. table and where are trusted SQL fragments.
 func deleteLockedRow(ctx context.Context, tx *sql.Tx, table, where string, precondition store.DeletePreconditions, args ...any) (uid string, version int64, protoBytes []byte, err error) {
 	if err := tx.QueryRowContext(ctx, `SELECT uid, version, proto FROM `+table+` WHERE `+where+` FOR UPDATE`, args...).Scan(&uid, &version, &protoBytes); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

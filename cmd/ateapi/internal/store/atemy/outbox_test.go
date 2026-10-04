@@ -12,10 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Tests for the worker outbox (outbox.go): transactional append, delivery of
-// AUTO_INCREMENT seqs that commit out of order, retention and the trim mark,
-// and the watch's close-for-resync signals.
-
 package atemy
 
 import (
@@ -47,8 +43,7 @@ func workerPayload(t *testing.T, eventType store.WorkerEventType, worker *ateapi
 }
 
 // insertOutboxRow appends payload on q, stamped age before now, the way
-// writeAndAppendEvent does, and returns its seq. Inside a transaction, the
-// seq stays uncommitted until the transaction ends.
+// writeAndAppendEvent does, and returns its seq.
 func insertOutboxRow(t *testing.T, q querier, payload []byte, age time.Duration) uint64 {
 	t.Helper()
 	res, err := q.ExecContext(t.Context(), `
@@ -745,12 +740,10 @@ func TestTrimWorkerOutbox_ConcurrentWritersDoNotDeadlock(t *testing.T) {
 	}
 }
 
-// TestWatchWorkers_ClosesWhenTrimmedPastCursor lets a watcher fall behind for
-// real: its consumer stops reading, the poller blocks with a full channel
-// partway through its first batch, and retention deletes every row, including
-// the ones after that batch. Once the consumer resumes, the watcher delivers
-// the batch it already read and then closes, because rows it never read were
-// deleted.
+// TestWatchWorkers_ClosesWhenTrimmedPastCursor stalls the consumer so the
+// poller blocks partway through its first batch, then retention deletes every
+// row. On resume the watcher delivers the batch it read and closes, because
+// rows it never read were deleted.
 func TestWatchWorkers_ClosesWhenTrimmedPastCursor(t *testing.T) {
 	s := setupMySQLPersistence(t)
 	watch := watchWorkers(t, newReplica(t, s))

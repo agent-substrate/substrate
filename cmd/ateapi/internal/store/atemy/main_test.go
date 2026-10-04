@@ -28,9 +28,8 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/dockerenv"
 )
 
-// One MySQL container serves every test in this package; each test gets
-// isolation via clearAll rather than a fresh container, which would be far
-// slower. Tests in this package are not safe to run with -parallel.
+// One MySQL container serves every test in this package, and clearAll isolates
+// them, so tests here are not safe to run with -parallel.
 var (
 	containerOnce  sync.Once
 	containerDB    *sql.DB

@@ -78,8 +78,6 @@ func SetupPostgresPersistence(t *testing.T) *atepg.Persistence {
 	return persistence
 }
 
-// shutdownPostgres terminates the shared PostgreSQL container, if one was
-// started.
 func shutdownPostgres() {
 	if adminPool != nil {
 		adminPool.Close()

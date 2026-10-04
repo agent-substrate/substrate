@@ -140,8 +140,7 @@ func (p *Persistence) UpdateWorker(ctx context.Context, name string, preconditio
 // DeleteWorker removes the worker's assignments with it.
 func (p *Persistence) DeleteWorker(ctx context.Context, name string, precondition store.DeletePreconditions) (*ateapipb.Worker, error) {
 	return p.writeAndAppendEvent(ctx, store.WorkerEventDeleted, func(ctx context.Context, tx *sql.Tx) (*ateapipb.Worker, error) {
-		// Locked rather than plainly read so the incarnation precondition was
-		// evaluated against is the one the DELETE removes.
+		// Locked so the precondition checks the incarnation the DELETE removes.
 		deleted, err := getWorkerRowForUpdate(ctx, tx, name)
 		if err != nil {
 			return nil, err

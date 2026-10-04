@@ -14,11 +14,10 @@
 
 -- +goose Up
 
--- OpenFGA storage schema: the final state of github.com/openfga/openfga MySQL
--- migrations 001 through 008, the counterpart of the PostgreSQL schema pinned
--- in atepg. Kept in the same database and Goose migration directory as
--- Substrate tables so resource mutations and authorization tuple updates
--- execute within the same MySQL transaction.
+-- The OpenFGA storage schema after github.com/openfga/openfga MySQL migrations
+-- 001 through 008, matching the PostgreSQL schema pinned in atepg. It shares
+-- the Goose directory with Substrate tables so resource mutations and
+-- authorization tuple updates commit in one MySQL transaction.
 
 CREATE TABLE IF NOT EXISTS tuple (
     store             CHAR(26) NOT NULL,

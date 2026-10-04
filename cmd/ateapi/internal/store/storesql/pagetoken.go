@@ -40,7 +40,7 @@ const (
 )
 
 // PageToken is the opaque keyset page token of the SQL backends. It carries no
-// database topology: just enough to resume an ORDER BY ... WHERE (cols) > (last) scan.
+// database topology, only what resumes an ORDER BY ... WHERE (cols) > (last) scan.
 type PageToken struct {
 	Version int      `json:"v"`
 	Kind    Kind     `json:"kind"`

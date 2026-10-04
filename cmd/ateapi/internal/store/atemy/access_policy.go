@@ -27,7 +27,6 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// globalAccessPolicyID is the key of the global_access_policy singleton row.
 const globalAccessPolicyID = 1
 
 func (p *Persistence) CreateGlobalAccessPolicy(ctx context.Context, policy *ateapipb.AccessPolicy) (*ateapipb.AccessPolicy, error) {

@@ -14,7 +14,6 @@
 
 -- +goose Up
 
--- Singleton: the id column only admits 1, so the table holds at most one row.
 CREATE TABLE IF NOT EXISTS global_access_policy (
     id      TINYINT UNSIGNED NOT NULL,
     uid     VARCHAR(255) NOT NULL,

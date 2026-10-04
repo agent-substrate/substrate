@@ -189,7 +189,6 @@ func waitForLockWait(t *testing.T, done <-chan error) {
 	}
 }
 
-// countRows runs a COUNT query against p's database.
 func countRows(t *testing.T, p *Persistence, query string, args ...any) int {
 	t.Helper()
 	var n int

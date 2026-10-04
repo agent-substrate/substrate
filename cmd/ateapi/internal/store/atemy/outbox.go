@@ -89,9 +89,8 @@ const (
 	// Bound worker-event delivery latency.
 	outboxPollInterval = 50 * time.Millisecond
 
-	// Cap rows fetched per poll and deleted per retention transaction; a burst
-	// beyond it carries over to the next poll (events are delayed, never
-	// dropped).
+	// Caps rows per poll and per retention transaction. A larger burst carries
+	// over to the next poll.
 	outboxBatch = 1024
 
 	// Minimum time retention keeps outbox rows.
@@ -115,7 +114,6 @@ const (
 	outboxPollFailureCloseAfter = 30 * time.Second
 )
 
-// trimWorkerOutbox deletes rows older than retention, oldest first.
 func (p *Persistence) trimWorkerOutbox(ctx context.Context) error {
 	return p.trimWorkerOutboxOlderThan(ctx, outboxRetentionAge)
 }
@@ -286,8 +284,7 @@ func (p *Persistence) WatchWorkers(ctx context.Context) (*store.WorkerWatch, err
 		}()
 		ticker := time.NewTicker(outboxPollInterval)
 		defer ticker.Stop()
-		// failingSince limits how long consumers serve stale state during an
-		// outage. Past pollFailureCloseAfter, the channel closes.
+		// failingSince bounds how long consumers serve stale state during an outage.
 		var failingSince time.Time
 		for {
 			select {
@@ -337,7 +334,7 @@ func (p *Persistence) WatchWorkers(ctx context.Context) (*store.WorkerWatch, err
 					}
 				}
 				if !full {
-					break // caught up; wait for the next tick
+					break
 				}
 			}
 		}
@@ -345,12 +342,10 @@ func (p *Persistence) WatchWorkers(ctx context.Context) (*store.WorkerWatch, err
 	return store.NewWorkerWatch(ch, cancel), nil
 }
 
-// subscribeWorkerOutbox places a new watch at the greatest seq written. It
-// walks back from there through the rows written in the last
-// outboxSubscribeWindow.
-// The seqs missing among them, and between the oldest of them and the row
-// before it, may belong to writes still committing, so they start pending.
-// Rows present were written before the watch and are not delivered.
+// subscribeWorkerOutbox places a new watch at the greatest seq written. Seqs
+// missing among the rows written in the last outboxSubscribeWindow, and
+// between the oldest of them and the row before it, may belong to writes still
+// committing, so they start pending. Rows present are not delivered.
 func (p *Persistence) subscribeWorkerOutbox(ctx context.Context) (*outboxCursor, error) {
 	marks, err := p.readOutboxMarks(ctx)
 	if err != nil {

@@ -341,7 +341,6 @@ func TestDeleteAtespace_RemovesAccessPolicyAndTuples(t *testing.T) {
 	if got := atespaceTuples(t, s, "team-a"); len(got) != 0 {
 		t.Errorf("tuples after DeleteAtespace = %q, want none", got)
 	}
-	// Another atespace's policy and tuples are untouched.
 	if _, err := s.GetAtespaceAccessPolicy(ctx, "team-b"); err != nil {
 		t.Errorf("GetAtespaceAccessPolicy(team-b) = %v, want the policy", err)
 	}

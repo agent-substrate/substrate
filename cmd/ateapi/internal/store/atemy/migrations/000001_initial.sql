@@ -14,9 +14,9 @@
 
 -- +goose Up
 
--- MySQL commits each DDL statement on its own, so a run that fails partway
--- through this file leaves some tables behind with no ledger row. Every
--- statement is idempotent so the next startup completes the file.
+-- MySQL commits each DDL statement on its own, so a failed run can leave tables
+-- with no ledger row. Every statement is idempotent so the next startup
+-- completes the file.
 
 -- No table declares a foreign key, because PlanetScale disables them by
 -- default. atemy enforces every parent and child relationship in the
@@ -101,9 +101,8 @@ CREATE TABLE IF NOT EXISTS worker_outbox (
     PRIMARY KEY (seq)
 );
 
--- Single row (id = 1): the greatest seq retention has deleted. Watchers
--- compare it against their cursor to detect that unconsumed rows were
--- deleted out from under them.
+-- Holds one row with the greatest seq retention has deleted. Watchers compare
+-- it with their cursor to detect deleted rows they had not consumed.
 CREATE TABLE IF NOT EXISTS worker_outbox_trim (
     id   TINYINT UNSIGNED NOT NULL,
     seq  BIGINT UNSIGNED NOT NULL,

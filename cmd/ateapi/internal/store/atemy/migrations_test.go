@@ -59,17 +59,12 @@ func migrationVersion(t *testing.T, name string) int {
 	return v
 }
 
-// TestOpenFGAMigrationVersionGuard ensures that bumping
-// github.com/openfga/openfga in go.mod cannot silently introduce schema or
-// query drift.
-//
-// Substrate manages the OpenFGA MySQL tables directly in
-// migrations/000002_openfga.sql, the final state of upstream MySQL migrations
-// 001 through 008, so they share the database and migration ledger with the
-// Substrate tables, and cmd/ateapi/internal/authz/datastore_mysql.go adapts
-// upstream MySQL queries to run on the caller's transaction. A new upstream
-// migration fails this test until its DDL is ported as a new migration here
-// and the adapted queries are checked.
+// TestOpenFGAMigrationVersionGuard fails when a github.com/openfga/openfga bump
+// adds an upstream MySQL migration. migrations/000002_openfga.sql holds the
+// final state of upstream migrations 001 through 008, and
+// cmd/ateapi/internal/authz/datastore_mysql.go adapts upstream queries to run
+// on the caller's transaction. Port each new upstream migration and recheck
+// those queries.
 func TestOpenFGAMigrationVersionGuard(t *testing.T) {
 	entries, err := fs.ReadDir(assets.EmbedMigrations, assets.MySQLMigrationDir)
 	if err != nil {
@@ -269,7 +264,6 @@ func TestMigrationLockName(t *testing.T) {
 	}
 }
 
-// embeddedMigrationVersions lists the versions of the embedded migrations.
 func embeddedMigrationVersions(t *testing.T) []int64 {
 	t.Helper()
 	names, err := fs.Glob(migrationFiles, "migrations/*.sql")

@@ -83,7 +83,6 @@ func SetupMySQLPersistence(t *testing.T) *atemy.Persistence {
 	return persistence
 }
 
-// shutdownMySQL terminates the shared MySQL container, if one was started.
 func shutdownMySQL() {
 	if mysqlAdmin != nil {
 		mysqlAdmin.Close()

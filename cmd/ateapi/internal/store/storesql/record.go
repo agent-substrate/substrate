@@ -32,8 +32,8 @@ import (
 
 // UnmarshalStored decodes a stored proto, dropping fields this binary has no
 // descriptor for. This means a newer replica can have written such a field.
-// It also backfills defaults, including for resources stored before a field
-// with defaults was introduced.
+// It also backfills defaults, including for fields added after the resource
+// was stored.
 func UnmarshalStored(b []byte, m proto.Message) error {
 	if err := (proto.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(b, m); err != nil {
 		return err

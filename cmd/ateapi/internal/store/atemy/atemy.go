@@ -321,7 +321,6 @@ func (p *Persistence) Close() {
 	}
 }
 
-// DB returns the underlying MySQL connection pool.
 func (p *Persistence) DB() *sql.DB {
 	return p.db
 }
@@ -334,8 +333,7 @@ func (p *Persistence) SetPolicyManager(pm *authz.PolicyManager) {
 	p.policyManager = pm
 }
 
-// querier is satisfied by *sql.DB and *sql.Tx, letting read helpers run
-// either directly against the pool or inside an in-flight transaction.
+// querier is satisfied by *sql.DB and *sql.Tx.
 type querier interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
@@ -430,13 +428,13 @@ const (
 	// Paces the maintenance loop (outbox retention and expired leases).
 	maintenanceInterval = time.Minute
 
-	// Bounds a maintenance pass to prevent indefinite hangs (e.g., from lock
-	// waits). Stalls abort and retry.
+	// Bounds a maintenance pass so a stall, such as a lock wait, aborts and
+	// retries next tick.
 	maintenancePassTimeout = 5 * time.Minute
 )
 
-// Trims the worker outbox and reaps expired leases on a fixed timer. The two
-// are independent: a failure in one still lets the other run.
+// maintenance trims the worker outbox and reaps expired leases each tick. A
+// failure in one does not skip the other.
 func (p *Persistence) maintenance(ctx context.Context) {
 	ticker := time.NewTicker(maintenanceInterval)
 	defer ticker.Stop()
