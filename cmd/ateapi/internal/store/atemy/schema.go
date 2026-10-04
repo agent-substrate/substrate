@@ -59,7 +59,7 @@ func applyMigrations(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 	// provider.Close would close db, which the caller owns.
-	return migrateToLatest(ctx, provider)
+	return storesql.MigrateToLatest(ctx, provider, "MySQL")
 }
 
 // newMigrationProvider returns a Goose provider for migrations on db that
@@ -215,8 +215,4 @@ func (l migrationLocker) SessionUnlock(ctx context.Context, conn *sql.Conn) erro
 		return fmt.Errorf("release MySQL migration lock: this session did not hold it")
 	}
 	return nil
-}
-
-func migrateToLatest(ctx context.Context, provider *goose.Provider) error {
-	return storesql.MigrateToLatest(ctx, provider, "MySQL")
 }

@@ -35,7 +35,9 @@ func (p *Persistence) CreateEgressPolicy(ctx context.Context, actorRef resources
 	if err != nil {
 		return nil, fmt.Errorf("marshaling egress policy: %w", err)
 	}
-	err = p.insertChild(ctx, "egress policy for "+actorRef.String(), func(tx *sql.Tx) error { return lockActor(ctx, tx, actorRef.Atespace, actorRef.Name) }, `
+	err = p.insertChild(ctx, "egress policy for "+actorRef.String(), func(tx *sql.Tx) error {
+		return lockParent(ctx, tx, `SELECT 1 FROM actors WHERE atespace = ? AND name = ? FOR SHARE`, actorRef.Atespace, actorRef.Name)
+	}, `
 		INSERT INTO actor_egress_policies (atespace, actor_name, uid, version, proto)
 		VALUES (?, ?, ?, ?, ?)`, actorRef.Atespace, actorRef.Name, dbPolicy.GetMetadata().GetUid(), dbPolicy.GetMetadata().GetVersion(), protoBytes)
 	if err != nil {

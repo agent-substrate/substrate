@@ -108,7 +108,6 @@ func (p *Persistence) UpdateTag(ctx context.Context, tagRef resources.TagRef, pr
 		return nil, err
 	}
 	tagBeforeMutation := proto.Clone(dbTag).(*ateapipb.Tag)
-	oldMeta := proto.CloneOf(dbTag.Metadata)
 	if err := mutate(dbTag); err != nil {
 		return nil, err
 	}
@@ -117,7 +116,7 @@ func (p *Persistence) UpdateTag(ctx context.Context, tagRef resources.TagRef, pr
 	}
 	// Stored metadata is authoritative; discard any metadata edits made by the
 	// closure and derive the next revision from the state this attempt read.
-	storesql.SetUpdateMetadata(dbTag.Metadata, oldMeta)
+	storesql.SetUpdateMetadata(dbTag.Metadata, tagBeforeMutation.GetMetadata())
 
 	updatedBytes, err := proto.Marshal(dbTag)
 	if err != nil {

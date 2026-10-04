@@ -29,7 +29,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"database/sql"
-	"database/sql/driver"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -59,11 +58,9 @@ const (
 type Persistence struct {
 	db *sql.DB
 	// watchDB serves WatchWorkers pollers, outbox retention and expired-lease
-	// cleanup. ownerDB applies migrations.
+	// cleanup.
 	watchDB               *sql.DB
-	ownerDB               *sql.DB
 	ownsWatchDB           bool
-	ownsOwnerDB           bool
 	policyManager         *authz.PolicyManager
 	leaseTTL              time.Duration
 	pollFailureCloseAfter time.Duration
@@ -105,7 +102,8 @@ type ConnectConfig struct {
 	PoolMaxConns int32
 }
 
-// Connect opens read/write and owner pools and applies migrations.
+// Connect opens a read/write pool and applies migrations through an owner
+// pool it closes before returning.
 func Connect(ctx context.Context, config ConnectConfig) (*Persistence, error) {
 	if config.PoolMaxConns < 0 {
 		return nil, fmt.Errorf("MySQL pool maximum connections must not be negative")
@@ -113,16 +111,24 @@ func Connect(ctx context.Context, config ConnectConfig) (*Persistence, error) {
 	if config.OwnerDSN == "" {
 		return nil, fmt.Errorf("MySQL owner connection string must not be empty")
 	}
-	readWrite, err := newConnector(config.ReadWriteDSN, config.TLS)
+	readWriteConfig, err := parseConfig(config.ReadWriteDSN, config.TLS)
 	if err != nil {
 		return nil, err
 	}
-	owner, err := newConnector(config.OwnerDSN, config.TLS)
+	ownerConfig, err := parseConfig(config.OwnerDSN, config.TLS)
 	if err != nil {
 		return nil, fmt.Errorf("parse MySQL owner connection string: %w", err)
 	}
-	if readWrite.cfg.DBName != owner.cfg.DBName {
+	if readWriteConfig.DBName != ownerConfig.DBName {
 		return nil, fmt.Errorf("MySQL read/write and owner connection strings name different databases")
+	}
+	readWrite, err := mysql.NewConnector(readWriteConfig)
+	if err != nil {
+		return nil, err
+	}
+	owner, err := mysql.NewConnector(ownerConfig)
+	if err != nil {
+		return nil, fmt.Errorf("parse MySQL owner connection string: %w", err)
 	}
 
 	maxConns := storesql.DefaultMaxConns()
@@ -140,7 +146,6 @@ func Connect(ctx context.Context, config ConnectConfig) (*Persistence, error) {
 	}
 	ownerDB := sql.OpenDB(owner)
 	ownerDB.SetMaxOpenConns(ownerPoolMaxConns)
-	ownerDB.SetMaxIdleConns(0)
 	if err := ownerDB.PingContext(ctx); err != nil {
 		ownerDB.Close()
 		db.Close()
@@ -153,28 +158,18 @@ func Connect(ctx context.Context, config ConnectConfig) (*Persistence, error) {
 	watchDB.SetConnMaxIdleTime(storesql.ConnMaxIdleTime)
 
 	p, err := newPersistence(ctx, db, watchDB, ownerDB)
+	ownerDB.Close()
 	if err != nil {
 		watchDB.Close()
-		ownerDB.Close()
 		db.Close()
 		return nil, err
 	}
 	p.ownsWatchDB = true
-	p.ownsOwnerDB = true
 	return p, nil
 }
 
-// connector opens MySQL connections from a parsed DSN, loading TLS material
-// from files for each new connection when TLSFiles are set.
-type connector struct {
-	cfg *mysql.Config
-	tls TLSFiles
-}
-
-var _ driver.Connector = (*connector)(nil)
-
-// newConnector parses dsn and applies the session settings atemy relies on.
-func newConnector(dsn string, files TLSFiles) (*connector, error) {
+// parseConfig parses dsn and applies the session settings atemy relies on.
+func parseConfig(dsn string, files TLSFiles) (*mysql.Config, error) {
 	cfg, err := mysql.ParseDSN(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("parsing MySQL connection string: invalid value")
@@ -199,39 +194,31 @@ func newConnector(dsn string, files TLSFiles) (*connector, error) {
 		cfg.Params = map[string]string{}
 	}
 	cfg.Params["transaction_isolation"] = "'READ-COMMITTED'"
-	if files.enabled() {
-		if _, err := loadTLSConfig(files, ""); err != nil {
-			return nil, err
-		}
+	if !files.enabled() {
+		return cfg, nil
 	}
-	return &connector{cfg: cfg, tls: files}, nil
-}
-
-func (c *connector) Connect(ctx context.Context) (driver.Conn, error) {
-	cfg := c.cfg
-	if c.tls.enabled() {
-		host, _, err := net.SplitHostPort(c.cfg.Addr)
-		if err != nil {
-			host = c.cfg.Addr
-		}
-		tlsConfig, err := loadTLSConfig(c.tls, host)
-		if err != nil {
-			return nil, err
-		}
-		cfg = c.cfg.Clone()
-		cfg.TLS = tlsConfig
-		// TLS files demand TLS; tls=preferred in the DSN must not turn
-		// that into an optional upgrade.
-		cfg.AllowFallbackToPlaintext = false
-	}
-	conn, err := mysql.NewConnector(cfg)
-	if err != nil {
+	if _, err := loadTLSConfig(files, ""); err != nil {
 		return nil, err
 	}
-	return conn.Connect(ctx)
+	// The driver passes BeforeConnect a fresh copy of cfg for each new
+	// connection, so rotated files are read again.
+	err = cfg.Apply(mysql.BeforeConnect(func(_ context.Context, c *mysql.Config) error {
+		host, _, err := net.SplitHostPort(c.Addr)
+		if err != nil {
+			host = c.Addr
+		}
+		tlsConfig, err := loadTLSConfig(files, host)
+		if err != nil {
+			return err
+		}
+		c.TLS = tlsConfig
+		// TLS files demand TLS; tls=preferred in the DSN must not turn that
+		// into an optional upgrade.
+		c.AllowFallbackToPlaintext = false
+		return nil
+	}))
+	return cfg, err
 }
-
-func (c *connector) Driver() driver.Driver { return &mysql.MySQLDriver{} }
 
 func loadTLSConfig(files TLSFiles, serverName string) (*tls.Config, error) {
 	cfg := &tls.Config{MinVersion: tls.VersionTLS12, ServerName: serverName}
@@ -262,7 +249,11 @@ func loadTLSConfig(files TLSFiles, serverName string) (*tls.Config, error) {
 // Open returns a pool on dsn with the session settings atemy relies on,
 // without connecting. Pass the result to NewPersistence.
 func Open(dsn string) (*sql.DB, error) {
-	c, err := newConnector(dsn, TLSFiles{})
+	cfg, err := parseConfig(dsn, TLSFiles{})
+	if err != nil {
+		return nil, err
+	}
+	c, err := mysql.NewConnector(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -294,7 +285,6 @@ func newPersistence(ctx context.Context, db, watchDB, ownerDB *sql.DB) (*Persist
 	p := &Persistence{
 		db:                    db,
 		watchDB:               watchDB,
-		ownerDB:               ownerDB,
 		leaseTTL:              storesql.DefaultLeaseTTL,
 		pollFailureCloseAfter: outboxPollFailureCloseAfter,
 		stopMaintenance:       stopMaintenance,
@@ -308,16 +298,13 @@ func newPersistence(ctx context.Context, db, watchDB, ownerDB *sql.DB) (*Persist
 }
 
 // Close stops the maintenance loop and waits for it to exit, then closes the
-// auxiliary pools if Connect created them. It does not close the main
-// database, which the caller owns.
+// watch pool if Connect created it. It does not close the main database,
+// which the caller owns.
 func (p *Persistence) Close() {
 	p.stopMaintenance()
 	<-p.maintenanceDone
 	if p.ownsWatchDB {
 		p.watchDB.Close()
-	}
-	if p.ownsOwnerDB {
-		p.ownerDB.Close()
 	}
 }
 
@@ -354,7 +341,7 @@ func txBackoff() wait.Backoff {
 }
 
 // inTx runs fn in a transaction on db, READ COMMITTED through the session
-// setting newConnector applies, and commits if fn succeeds. InnoDB resolves a
+// setting parseConfig applies, and commits if fn succeeds. InnoDB resolves a
 // deadlock by rolling back one transaction, which can happen even between two
 // inserts of one key, so inTx runs fn again from the start, up to txRetries
 // times after a backoff. fn must therefore be safe to repeat, as the store's
@@ -445,7 +432,7 @@ func (p *Persistence) maintenance(ctx context.Context) {
 		case <-ticker.C:
 		}
 		passCtx, cancel := context.WithTimeout(ctx, maintenancePassTimeout)
-		if err := p.trimWorkerOutbox(passCtx); err != nil && ctx.Err() == nil {
+		if err := p.trimWorkerOutboxOlderThan(passCtx, outboxRetentionAge); err != nil && ctx.Err() == nil {
 			slog.WarnContext(ctx, "worker outbox maintenance failed", slog.Any("err", err))
 		}
 		if deleted, err := p.cleanupExpiredLeases(passCtx); err != nil && ctx.Err() == nil {

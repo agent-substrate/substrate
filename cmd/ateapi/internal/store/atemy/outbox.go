@@ -16,7 +16,7 @@
 // worker_outbox in the same transaction (writeAndAppendEvent), per-replica
 // watchers poll it with a seq cursor (WatchWorkers), and the maintenance loop
 // deletes rows past retention and records how far it deleted, so lagging
-// watchers detect the loss and resync (trimWorkerOutbox).
+// watchers detect the loss and resync (trimWorkerOutboxOlderThan).
 //
 // seq is an AUTO_INCREMENT key taken by each write's last statement, so
 // writes never wait on one another, as with atepg's xids. A seq is assigned
@@ -114,10 +114,6 @@ const (
 	outboxPollFailureCloseAfter = 30 * time.Second
 )
 
-func (p *Persistence) trimWorkerOutbox(ctx context.Context) error {
-	return p.trimWorkerOutboxOlderThan(ctx, outboxRetentionAge)
-}
-
 // trimWorkerOutboxOlderThan deletes, in batches, the longest seq prefix of
 // rows created more than age ago by the database clock. Each batch raises the
 // trim mark to its greatest seq in the same transaction. The replica that
@@ -125,9 +121,9 @@ func (p *Persistence) trimWorkerOutbox(ctx context.Context) error {
 // retention does.
 func (p *Persistence) trimWorkerOutboxOlderThan(ctx context.Context, age time.Duration) error {
 	for {
-		var deleted int
+		var expiredSeqs []any
 		err := inTx(ctx, p.watchDB, func(tx *sql.Tx) error {
-			deleted = 0
+			expiredSeqs = nil
 			var mark uint64
 			err := tx.QueryRowContext(ctx, `SELECT seq FROM worker_outbox_trim WHERE id = 1 FOR UPDATE SKIP LOCKED`).Scan(&mark)
 			if errors.Is(err, sql.ErrNoRows) {
@@ -142,8 +138,6 @@ func (p *Persistence) trimWorkerOutboxOlderThan(ctx context.Context, age time.Du
 			if err != nil {
 				return fmt.Errorf("reading expired outbox rows: %w", err)
 			}
-			var expiredSeqs []any
-			var last uint64
 			for rows.Next() {
 				var seq uint64
 				var expired bool
@@ -155,28 +149,26 @@ func (p *Persistence) trimWorkerOutboxOlderThan(ctx context.Context, age time.Du
 					break
 				}
 				expiredSeqs = append(expiredSeqs, seq)
-				last = seq
-				deleted++
 			}
 			rows.Close()
 			if err := rows.Err(); err != nil {
 				return fmt.Errorf("reading expired outbox rows: %w", err)
 			}
-			if deleted == 0 {
+			if len(expiredSeqs) == 0 {
 				return nil
 			}
-			// Only the rows read, so a write still committing below last is
-			// never waited on. A watcher waiting on such a row closes once the
-			// trim mark passes it.
+			// Only the rows read, so a write still committing below the last
+			// seq read is never waited on. A watcher waiting on such a row
+			// closes once the trim mark passes it.
 			if _, err := tx.ExecContext(ctx, `DELETE FROM worker_outbox WHERE seq IN `+inList(len(expiredSeqs)), expiredSeqs...); err != nil {
 				return fmt.Errorf("deleting expired outbox rows: %w", err)
 			}
-			if _, err := tx.ExecContext(ctx, `UPDATE worker_outbox_trim SET seq = GREATEST(seq, ?) WHERE id = 1`, last); err != nil {
+			if _, err := tx.ExecContext(ctx, `UPDATE worker_outbox_trim SET seq = GREATEST(seq, ?) WHERE id = 1`, expiredSeqs[len(expiredSeqs)-1]); err != nil {
 				return fmt.Errorf("recording outbox trim mark: %w", err)
 			}
 			return nil
 		})
-		if err != nil || deleted < outboxBatch {
+		if err != nil || len(expiredSeqs) < outboxBatch {
 			return err
 		}
 	}

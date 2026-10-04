@@ -35,12 +35,6 @@ func lockAtespace(ctx context.Context, tx *sql.Tx, name string) error {
 	return lockParent(ctx, tx, `SELECT 1 FROM atespaces WHERE name = ? FOR SHARE`, name)
 }
 
-// lockActor takes a shared lock on an actor for the rest of tx. Returns
-// ErrFailedPrecondition if the actor does not exist.
-func lockActor(ctx context.Context, tx *sql.Tx, atespace, name string) error {
-	return lockParent(ctx, tx, `SELECT 1 FROM actors WHERE atespace = ? AND name = ? FOR SHARE`, atespace, name)
-}
-
 func lockParent(ctx context.Context, tx *sql.Tx, query string, args ...any) error {
 	var found int
 	if err := tx.QueryRowContext(ctx, query, args...).Scan(&found); err != nil {
@@ -82,12 +76,8 @@ func deleteLockedRow(ctx context.Context, tx *sql.Tx, table, where string, preco
 	if err := precondition.Check(&ateapipb.ResourceMetadata{Uid: uid, Version: version}); err != nil {
 		return "", 0, nil, err
 	}
-	res, err := tx.ExecContext(ctx, `DELETE FROM `+table+` WHERE `+where, args...)
-	if err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM `+table+` WHERE `+where, args...); err != nil {
 		return "", 0, nil, fmt.Errorf("deleting %s row: %w", table, err)
-	}
-	if err := requireOneRow(res, "deleting "+table+" row"); err != nil {
-		return "", 0, nil, err
 	}
 	return uid, version, protoBytes, nil
 }

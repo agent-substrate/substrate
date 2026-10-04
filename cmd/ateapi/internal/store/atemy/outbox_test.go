@@ -468,8 +468,8 @@ func testTrimsOnlyTheExpiredPrefix(t *testing.T, s *Persistence) {
 	}
 
 	// The production retention keeps rows younger than outboxRetentionAge.
-	if err := s.trimWorkerOutbox(ctx); err != nil {
-		t.Fatalf("trimWorkerOutbox failed: %v", err)
+	if err := s.trimWorkerOutboxOlderThan(ctx, outboxRetentionAge); err != nil {
+		t.Fatalf("trimWorkerOutboxOlderThan failed: %v", err)
 	}
 	if diff := cmp.Diff([]uint64{fresh, lateOld}, outboxSeqs(t, s)); diff != "" {
 		t.Errorf("outbox seqs after production retention (-want +got):\n%s", diff)

@@ -195,9 +195,7 @@ func (p *Persistence) BindActorToWorker(ctx context.Context, workerName string, 
 }
 
 func (p *Persistence) ReleaseActorFromWorker(ctx context.Context, workerName string, actorUID string) (*ateapipb.Worker, error) {
-	var released *ateapipb.Worker
-	_, err := p.writeAndAppendEvent(ctx, store.WorkerEventUpdated, func(ctx context.Context, tx *sql.Tx) (*ateapipb.Worker, error) {
-		released = nil
+	return p.writeAndAppendEvent(ctx, store.WorkerEventUpdated, func(ctx context.Context, tx *sql.Tx) (*ateapipb.Worker, error) {
 		worker, err := getWorkerForUpdate(ctx, tx, workerName)
 		if err != nil {
 			return nil, err
@@ -214,12 +212,8 @@ func (p *Persistence) ReleaseActorFromWorker(ctx context.Context, workerName str
 		if err != nil {
 			return nil, fmt.Errorf("releasing actor %s from worker %s: %w", actorUID, workerName, err)
 		}
-		res, err := tx.ExecContext(ctx, `DELETE FROM worker_assignments WHERE actor_uid = ? AND worker_name = ?`, actorUID, workerName)
-		if err != nil {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM worker_assignments WHERE actor_uid = ? AND worker_name = ?`, actorUID, workerName); err != nil {
 			return nil, fmt.Errorf("releasing actor %s from worker %s: %w", actorUID, workerName, err)
-		}
-		if err := requireOneRow(res, "releasing actor "+actorUID+" from worker "+workerName); err != nil {
-			return nil, err
 		}
 		assignment := &ateapipb.ActorAssignment{}
 		if err := proto.Unmarshal(protoBytes, assignment); err != nil {
@@ -237,13 +231,8 @@ func (p *Persistence) ReleaseActorFromWorker(ctx context.Context, workerName str
 		if err := saveWorker(ctx, tx, worker); err != nil {
 			return nil, err
 		}
-		released = worker
 		return worker, nil
 	})
-	if err != nil {
-		return nil, err
-	}
-	return released, nil
 }
 
 // getAssignmentRow reads the assignment for actorUID and names the worker

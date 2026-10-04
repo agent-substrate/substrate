@@ -39,8 +39,8 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
-// Connect builds dedicated watch and owner pools, and Close releases them but
-// not the caller's read/write pool.
+// Connect builds a dedicated watch pool, and Close releases it but not the
+// caller's read/write pool.
 func TestConnect_DedicatedPools(t *testing.T) {
 	requireDB(t)
 	ctx := t.Context()
@@ -60,9 +60,6 @@ func TestConnect_DedicatedPools(t *testing.T) {
 	if p.watchDB == p.db || !p.ownsWatchDB {
 		t.Fatal("Connect must own a dedicated watch pool")
 	}
-	if p.ownerDB == p.db || p.ownerDB == p.watchDB || !p.ownsOwnerDB {
-		t.Fatal("Connect must own a dedicated owner pool")
-	}
 	for _, tc := range []struct {
 		name string
 		got  int
@@ -70,7 +67,6 @@ func TestConnect_DedicatedPools(t *testing.T) {
 	}{
 		{"read/write", p.db.Stats().MaxOpenConnections, storesql.DefaultMaxConns()},
 		{"watch", p.watchDB.Stats().MaxOpenConnections, watchPoolMaxConns},
-		{"owner", p.ownerDB.Stats().MaxOpenConnections, ownerPoolMaxConns},
 	} {
 		if tc.got != tc.want {
 			t.Errorf("%s pool max connections = %d, want %d", tc.name, tc.got, tc.want)
@@ -95,9 +91,6 @@ func TestConnect_DedicatedPools(t *testing.T) {
 	closed = true
 	if err := p.watchDB.PingContext(ctx); err == nil {
 		t.Error("watch pool still open after Close")
-	}
-	if err := p.ownerDB.PingContext(ctx); err == nil {
-		t.Error("owner pool still open after Close")
 	}
 	if err := p.DB().PingContext(ctx); err != nil {
 		t.Errorf("Close closed the caller's read/write pool: %v", err)
@@ -244,13 +237,13 @@ func TestConnect_UsesTLSFiles(t *testing.T) {
 	}
 }
 
-func TestNewConnector_OverridesDSNSessionSettings(t *testing.T) {
-	c, err := newConnector("atemy:pw@tcp(db.example:3306)/atemy?multiStatements=true&parseTime=false", TLSFiles{})
+func TestParseConfig_OverridesDSNSessionSettings(t *testing.T) {
+	cfg, err := parseConfig("atemy:pw@tcp(db.example:3306)/atemy?multiStatements=true&parseTime=false", TLSFiles{})
 	if err != nil {
-		t.Fatalf("newConnector failed: %v", err)
+		t.Fatalf("parseConfig failed: %v", err)
 	}
-	if !c.cfg.ParseTime || c.cfg.MultiStatements {
-		t.Errorf("parseTime = %t, multiStatements = %t; want the DSN's false and true overridden", c.cfg.ParseTime, c.cfg.MultiStatements)
+	if !cfg.ParseTime || cfg.MultiStatements {
+		t.Errorf("parseTime = %t, multiStatements = %t; want the DSN's false and true overridden", cfg.ParseTime, cfg.MultiStatements)
 	}
 }
 
@@ -267,8 +260,8 @@ func TestOpen_SessionsRunReadCommitted(t *testing.T) {
 	}
 }
 
-// loadTLSConfig returns the files on disk at the time of the call, and
-// connector.Connect calls it for each new connection.
+// loadTLSConfig returns the files on disk at the time of the call, and the
+// connector calls it for each new connection.
 func TestLoadTLSConfig_ReadsCurrentFiles(t *testing.T) {
 	dir := t.TempDir()
 	bundlePath := filepath.Join(dir, "credential-bundle.pem")
@@ -276,11 +269,15 @@ func TestLoadTLSConfig_ReadsCurrentFiles(t *testing.T) {
 	writeCredentialBundle(t, bundlePath, rootPath, 1)
 	files := TLSFiles{CAFile: rootPath, CertFile: bundlePath, KeyFile: bundlePath}
 
-	c, err := newConnector("atemy:pw@tcp(mysql.ate-system.svc:3306)/atemy", files)
+	mycfg, err := parseConfig("atemy:pw@tcp(mysql.ate-system.svc:3306)/atemy", files)
 	if err != nil {
-		t.Fatalf("newConnector failed: %v", err)
+		t.Fatalf("parseConfig failed: %v", err)
 	}
-	cfg, err := loadTLSConfig(c.tls, "mysql.ate-system.svc")
+	c, err := mysql.NewConnector(mycfg)
+	if err != nil {
+		t.Fatalf("NewConnector failed: %v", err)
+	}
+	cfg, err := loadTLSConfig(files, "mysql.ate-system.svc")
 	if err != nil {
 		t.Fatalf("loadTLSConfig: %v", err)
 	}
@@ -292,7 +289,7 @@ func TestLoadTLSConfig_ReadsCurrentFiles(t *testing.T) {
 	}
 
 	writeCredentialBundle(t, bundlePath, rootPath, 2)
-	cfg, err = loadTLSConfig(c.tls, "mysql.ate-system.svc")
+	cfg, err = loadTLSConfig(files, "mysql.ate-system.svc")
 	if err != nil {
 		t.Fatalf("loadTLSConfig after rotation: %v", err)
 	}

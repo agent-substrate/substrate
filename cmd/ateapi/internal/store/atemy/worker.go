@@ -57,9 +57,9 @@ func (p *Persistence) CreateWorker(ctx context.Context, worker *ateapipb.Worker)
 	return created, nil
 }
 
-func getWorkerRow(ctx context.Context, q querier, name string) (*ateapipb.Worker, error) {
+func (p *Persistence) GetWorker(ctx context.Context, name string) (*ateapipb.Worker, error) {
 	var protoBytes []byte
-	err := q.QueryRowContext(ctx, `SELECT proto FROM workers WHERE name = ?`, name).Scan(&protoBytes)
+	err := p.db.QueryRowContext(ctx, `SELECT proto FROM workers WHERE name = ?`, name).Scan(&protoBytes)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, store.ErrNotFound
@@ -71,10 +71,6 @@ func getWorkerRow(ctx context.Context, q querier, name string) (*ateapipb.Worker
 		return nil, fmt.Errorf("unmarshaling worker: %w", err)
 	}
 	return out, nil
-}
-
-func (p *Persistence) GetWorker(ctx context.Context, name string) (*ateapipb.Worker, error) {
-	return getWorkerRow(ctx, p.db, name)
 }
 
 func getWorkerRowForUpdate(ctx context.Context, tx *sql.Tx, name string) (*ateapipb.Worker, error) {
