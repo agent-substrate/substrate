@@ -23,6 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/yaml"
 
+	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kube"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
 )
@@ -61,8 +62,11 @@ type postgresPlan struct {
 
 // planPostgres decides between the bundled database and an external one,
 // configured either as an explicit DSN or as a Cloud SQL instance — the
-// latter possibly adopted from the cluster.
+// latter possibly adopted from the cluster. A MySQL store is always external.
 func (e *Env) planPostgres(ctx context.Context) (postgresPlan, error) {
+	if e.Cfg.MySQL() {
+		return postgresPlan{external: "ATE_API_STORE_BACKEND=" + config.StoreBackendMySQL}, nil
+	}
 	if e.Cfg.PostgresReadWriteConnectionString != "" {
 		return postgresPlan{external: "ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"}, nil
 	}
@@ -228,6 +232,10 @@ func applyPostgresSize10Overrides(objs []*unstructured.Unstructured, confPatch [
 // StatefulSet on its own.
 func (e *Env) DeployPostgres(ctx context.Context) error {
 	log.Step("deploy_postgres")
+	if e.Cfg.MySQL() {
+		return fmt.Errorf("ATE_API_STORE_BACKEND=%s keeps ateapi's state in an external MySQL; "+
+			"the bundled PostgreSQL would go unused", config.StoreBackendMySQL)
+	}
 
 	if err := e.EnsureAteSystemNamespace(ctx); err != nil {
 		return err

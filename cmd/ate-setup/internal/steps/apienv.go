@@ -32,21 +32,75 @@ import (
 // is what turns a new DSN into a restart.
 const envHashAnnotation = "ate.dev/env-hash"
 
-// CreateAPIServerEnvVars reconciles how ate-api-server reaches its PostgreSQL
-// store: both DSNs and the schema into the ate-api-server-secret-envvars Secret,
-// stable roles and Cloud SQL settings into the ConfigMap,
-// and an external server CA into postgres-server-ca.
+// mysqlServerCAPath is where ate-api-server.yaml mounts the mysql-server-ca
+// Secret's server-ca.pem.
+const mysqlServerCAPath = "/run/mysql-server-ca/server-ca.pem"
+
+// CreateAPIServerEnvVars reconciles how ate-api-server reaches its store. The
+// connection strings, the backend selector, and the PostgreSQL schema go into
+// the ate-api-server-secret-envvars Secret, other settings into the ConfigMap,
+// and an external server CA into its own Secret.
 //
-// ate-api-server.yaml pulls both in through optional envFrom sources and
-// resolves the PostgreSQL connection, role, and schema flags from
-// the result. It lists the secretRef last, so the Secret wins over a DSN a
-// previous installer left in the ConfigMap.
+// ate-api-server.yaml pulls both in through optional envFrom sources and lists
+// the secretRef last, so the Secret wins over a DSN a previous installer left
+// in the ConfigMap. Each backend writes only its own keys.
 func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 	log.Step("create_api_server_env_vars")
 	if err := e.Kube.EnsureNamespace(ctx, e.Namespace()); err != nil {
 		return err
 	}
+	if err := e.checkRecordedStoreBackend(ctx); err != nil {
+		return err
+	}
 
+	var configVars, secretVars map[string]string
+	if e.Cfg.MySQL() {
+		configVars, secretVars = mysqlAPIServerEnvVars(e.Cfg)
+	} else {
+		var err error
+		if configVars, secretVars, err = e.postgresAPIServerEnvVars(ctx); err != nil {
+			return err
+		}
+	}
+	if err := e.Kube.ApplyConfigMap(ctx, e.Namespace(), ConfigMapAPIEnvVars, configVars); err != nil {
+		return err
+	}
+	if err := e.Kube.ApplySecret(ctx, e.Namespace(), SecretAPIEnvVars, secretVars); err != nil {
+		return err
+	}
+	if err := e.applyServerCA(ctx, e.Cfg.PostgresServerCAFile, "ATE_API_POSTGRES_SERVER_CA_FILE", SecretPostgresServerCA); err != nil {
+		return err
+	}
+	if err := e.applyServerCA(ctx, e.Cfg.MySQLServerCAFile, "ATE_API_MYSQL_SERVER_CA_FILE", SecretMySQLServerCA); err != nil {
+		return err
+	}
+	return e.annotateAPIServerEnvHash(ctx)
+}
+
+// checkRecordedStoreBackend refuses to move a cluster off the backend its
+// Secret records when ATE_API_STORE_BACKEND was left at its default. Without
+// it, a redeploy of a MySQL install from a shell that never exported the
+// variable would point the apiserver at a new, empty bundled PostgreSQL.
+func (e *Env) checkRecordedStoreBackend(ctx context.Context) error {
+	if e.Cfg.StoreBackendSet {
+		return nil
+	}
+	secret, err := e.Kube.GetSecret(ctx, e.Namespace(), SecretAPIEnvVars)
+	if err != nil || secret == nil {
+		return err
+	}
+	recorded := string(secret.Data[envStoreBackend])
+	if recorded == "" || recorded == e.Cfg.StoreBackend {
+		return nil
+	}
+	return fmt.Errorf("ate-api-server uses the %s store backend and ATE_API_STORE_BACKEND is unset; "+
+		"set ATE_API_STORE_BACKEND=%s with its connection settings to keep it, or ATE_API_STORE_BACKEND=%s to switch",
+		recorded, recorded, e.Cfg.StoreBackend)
+}
+
+// postgresAPIServerEnvVars resolves the PostgreSQL ConfigMap and Secret
+// payloads, adopting what the cluster records for Cloud SQL.
+func (e *Env) postgresAPIServerEnvVars(ctx context.Context) (configVars, secretVars map[string]string, err error) {
 	readWriteDSN := e.Cfg.PostgresReadWriteConnectionString
 	ownerDSN := e.Cfg.PostgresOwnerConnectionString
 	readWriteRole := e.Cfg.PostgresReadWriteRole
@@ -55,13 +109,13 @@ func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 
 	cloudsql, err := e.resolveCloudSQL(ctx)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 	if readWriteDSN == "" && cloudsql.Adopted {
 		// Fill missing credentials from the adopted Cloud SQL configuration.
 		recordedReadWriteDSN, recordedOwnerDSN, err := e.recordedConnectionStrings(ctx)
 		if err != nil {
-			return err
+			return nil, nil, err
 		}
 		readWriteDSN = recordedReadWriteDSN
 		if ownerDSN == "" {
@@ -71,7 +125,7 @@ func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 	if readWriteDSN == "" {
 		if cloudsql.Instance != "" {
 			if readWriteDSN, err = cloudSQLDSN(cloudsql); err != nil {
-				return err
+				return nil, nil, err
 			}
 		} else {
 			readWriteDSN = config.DefaultPostgresConnectionString
@@ -95,7 +149,7 @@ func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 	if cloudsql.Adopted {
 		recorded, err := e.recordedAPIServerEnvVars(ctx)
 		if err != nil {
-			return err
+			return nil, nil, err
 		}
 		if !e.Cfg.PostgresReadWriteRoleSet && recorded["ATE_API_POSTGRES_READ_WRITE_ROLE"] != "" {
 			readWriteRole = recorded["ATE_API_POSTGRES_READ_WRITE_ROLE"]
@@ -109,45 +163,66 @@ func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 		if e.Cfg.PostgresSchema == "" {
 			secret, err := e.Kube.GetSecret(ctx, e.Namespace(), SecretAPIEnvVars)
 			if err != nil {
-				return err
+				return nil, nil, err
 			}
 			if secret != nil && len(secret.Data["ATE_API_POSTGRES_SCHEMA"]) != 0 {
 				schema = string(secret.Data["ATE_API_POSTGRES_SCHEMA"])
 			}
 		}
 	}
-	configVars := cloudSQLEnvVars(cloudsql)
+	configVars = cloudSQLEnvVars(cloudsql)
 	configVars["ATE_API_POSTGRES_READ_WRITE_ROLE"] = readWriteRole
 	configVars["ATE_API_POSTGRES_OWNER_ROLE"] = ownerRole
 	if poolMaxConns != "" {
 		configVars["ATE_API_POSTGRES_POOL_MAX_CONNS"] = poolMaxConns
 	}
-	if err := e.Kube.ApplyConfigMap(ctx, e.Namespace(), ConfigMapAPIEnvVars, configVars); err != nil {
-		return err
-	}
-	if err := e.Kube.ApplySecret(ctx, e.Namespace(), SecretAPIEnvVars,
-		buildAPIServerEnvVars(readWriteDSN, ownerDSN, schema)); err != nil {
-		return err
-	}
-	if err := e.applyPostgresServerCA(ctx); err != nil {
-		return err
-	}
-	return e.annotateAPIServerEnvHash(ctx)
+	return configVars, buildAPIServerEnvVars(readWriteDSN, ownerDSN, schema), nil
 }
 
-// buildAPIServerEnvVars is the Secret payload. ate-api-server takes both
-// connection strings and the schema from it, and exits on an empty schema; an
-// unrecognized key here reaches the container as a stray environment variable.
+// envStoreBackend selects ateapi's backend. It sits in the Secret with the
+// DSNs, so the record of which backend the DSNs belong to moves with them.
+const envStoreBackend = "ATE_API_STORE_BACKEND"
+
+// buildAPIServerEnvVars is the PostgreSQL Secret payload. ate-api-server takes
+// both connection strings and the schema from it, and exits on an empty
+// schema; an unrecognized key here reaches the container as a stray
+// environment variable.
 //
 // The DSN can carry a password, for an external database without IAM
 // authentication, which is why this is a Secret and not the ConfigMap
 // alongside it.
 func buildAPIServerEnvVars(readWriteDSN, ownerDSN, schema string) map[string]string {
 	return map[string]string{
+		envStoreBackend: config.StoreBackendPostgres,
 		"ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING": readWriteDSN,
 		"ATE_API_POSTGRES_OWNER_CONNECTION_STRING":      ownerDSN,
 		"ATE_API_POSTGRES_SCHEMA":                       schema,
 	}
+}
+
+// mysqlAPIServerEnvVars is the MySQL ConfigMap and Secret payload. The DSNs
+// carry passwords, so they go in the Secret. The ConfigMap holds no Cloud SQL
+// keys, which prunes any an earlier PostgreSQL install left behind.
+func mysqlAPIServerEnvVars(cfg *config.Config) (configVars, secretVars map[string]string) {
+	configVars = map[string]string{}
+	for name, value := range map[string]string{
+		"ATE_API_MYSQL_TLS_CA_FILE":   cfg.MySQLTLSCAFile,
+		"ATE_API_MYSQL_TLS_CERT_FILE": cfg.MySQLTLSCertFile,
+		"ATE_API_MYSQL_TLS_KEY_FILE":  cfg.MySQLTLSKeyFile,
+	} {
+		if value != "" {
+			configVars[name] = value
+		}
+	}
+	if cfg.MySQLServerCAFile != "" {
+		configVars["ATE_API_MYSQL_TLS_CA_FILE"] = mysqlServerCAPath
+	}
+	secretVars = map[string]string{
+		envStoreBackend: config.StoreBackendMySQL,
+		"ATE_API_MYSQL_READ_WRITE_CONNECTION_STRING": cfg.MySQLReadWriteConnectionString,
+		"ATE_API_MYSQL_OWNER_CONNECTION_STRING":      cfg.MySQLOwnerConnectionString,
+	}
+	return configVars, secretVars
 }
 
 // recordedConnectionStrings reads the credentials paired with an adopted Cloud
@@ -165,21 +240,20 @@ func (e *Env) recordedConnectionStrings(ctx context.Context) (string, string, er
 	return readWriteDSN, ownerDSN, nil
 }
 
-// applyPostgresServerCA publishes the server CA of an external PostgreSQL,
-// which ate-api-server mounts at /run/postgres-server-ca/server-ca.pem for
-// sslmode=verify-ca DSNs. For Cloud SQL:
+// applyServerCA publishes the server CA of an external database, read from
+// the file the env variable names, into secret. ate-api-server mounts it at
+// /run/<secret>/server-ca.pem. For Cloud SQL:
 //
 //	gcloud sql ssl server-ca-certs list --instance=<name> --format="value(cert)"
-func (e *Env) applyPostgresServerCA(ctx context.Context) error {
-	path := e.Cfg.PostgresServerCAFile
+func (e *Env) applyServerCA(ctx context.Context, path, env, secret string) error {
 	if path == "" {
 		return nil
 	}
 	pem, err := os.ReadFile(path)
 	if err != nil {
-		return fmt.Errorf("reading ATE_API_POSTGRES_SERVER_CA_FILE: %w", err)
+		return fmt.Errorf("reading %s: %w", env, err)
 	}
-	return e.Kube.ApplySecret(ctx, e.Namespace(), SecretPostgresServerCA, map[string]string{
+	return e.Kube.ApplySecret(ctx, e.Namespace(), secret, map[string]string{
 		"server-ca.pem": string(pem),
 	})
 }

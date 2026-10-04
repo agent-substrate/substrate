@@ -311,12 +311,32 @@ never exported the variables leaves a working proxy alone. Exporting it empty
 removes the sidecar and the annotation and falls back to the bundled
 StatefulSet.
 
+**MySQL is new in `ate-setup`.** The shell installer only knew PostgreSQL.
+`ATE_API_STORE_BACKEND=mysql` points ate-api-server at an existing MySQL 8.0+
+or PlanetScale database through `ATE_API_MYSQL_READ_WRITE_CONNECTION_STRING`
+(required) and `ATE_API_MYSQL_OWNER_CONNECTION_STRING`. There is no bundled
+MySQL, so the PostgreSQL StatefulSet is skipped.
+
+Each backend rejects the other's non-empty variables; exported empty ones are
+allowed. A MySQL install never adopts the cluster's Cloud SQL record, so it
+removes a proxy sidecar left by an earlier PostgreSQL install.
+
+`ATE_API_MYSQL_SERVER_CA_FILE` is published as the `mysql-server-ca` Secret and
+turns on TLS verified against that CA. `ATE_API_MYSQL_TLS_CA_FILE`,
+`ATE_API_MYSQL_TLS_CERT_FILE`, and `ATE_API_MYSQL_TLS_KEY_FILE` pass paths
+inside the pod through unchanged, as a PostgreSQL DSN names its certificate
+files.
+
+The backend is recorded in `ate-api-server-secret-envvars`. A redeploy with
+`ATE_API_STORE_BACKEND` unset fails on a cluster that records `mysql`, rather
+than moving it onto an empty bundled PostgreSQL.
+
 ## Testing
 
 The shell installer had no tests. `cmd/ate-setup` has unit tests for template
 rendering, overlay selection, config resolution, the authentication config, the
-apiserver environment ConfigMap and Secret, Cloud SQL resolution, the OTLP
-endpoint override, delegated script arguments, manifest deletion, per-demo
-rendering, image reference rewriting, kustomize composition, the control plane
-pinning on every apply path, and the size10 PostgreSQL resize against the real
-manifests.
+apiserver environment ConfigMap and Secret for each store backend, Cloud SQL
+resolution, the OTLP endpoint override, delegated script arguments, manifest
+deletion, per-demo rendering, image reference rewriting, kustomize composition,
+the control plane pinning on every apply path, and the size10 PostgreSQL resize
+against the real manifests.

@@ -24,18 +24,19 @@ import (
 	"github.com/google/go-cmp/cmp"
 	corev1 "k8s.io/api/core/v1"
 
+	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
 	"github.com/agent-substrate/substrate/internal/localca"
 )
 
 // ate-api-server requires both connection strings and its schema in the
-// credential-bearing Secret.
+// credential-bearing Secret, along with the backend they belong to.
 func TestBuildAPIServerEnvVars(t *testing.T) {
 	const readWriteDSN = "postgresql://readwrite@postgres/atepg"
 	const ownerDSN = "postgresql://owner@postgres/atepg"
 
 	got := buildAPIServerEnvVars(readWriteDSN, ownerDSN, "public")
 
-	want := []string{"ATE_API_POSTGRES_OWNER_CONNECTION_STRING", "ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING", "ATE_API_POSTGRES_SCHEMA"}
+	want := []string{"ATE_API_POSTGRES_OWNER_CONNECTION_STRING", "ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING", "ATE_API_POSTGRES_SCHEMA", "ATE_API_STORE_BACKEND"}
 	if keys := slices.Sorted(maps.Keys(got)); !slices.Equal(keys, want) {
 		t.Errorf("keys = %v, want %v", keys, want)
 	}
@@ -44,6 +45,39 @@ func TestBuildAPIServerEnvVars(t *testing.T) {
 	}
 	if got["ATE_API_POSTGRES_SCHEMA"] != "public" {
 		t.Errorf("ATE_API_POSTGRES_SCHEMA = %q, want %q", got["ATE_API_POSTGRES_SCHEMA"], "public")
+	}
+	if got["ATE_API_STORE_BACKEND"] != config.StoreBackendPostgres {
+		t.Errorf("ATE_API_STORE_BACKEND = %q, want %q", got["ATE_API_STORE_BACKEND"], config.StoreBackendPostgres)
+	}
+}
+
+// The MySQL contract: DSNs and the backend in the Secret, tuning and the CA
+// path in the ConfigMap, and no PostgreSQL or Cloud SQL key in either.
+func TestMySQLAPIServerEnvVars(t *testing.T) {
+	const readWriteDSN = "runtime:pw@tcp(db:3306)/substrate?tls=true"
+	const ownerDSN = "owner:pw@tcp(db:3306)/substrate?tls=true"
+	configVars, secretVars := mysqlAPIServerEnvVars(&config.Config{
+		MySQLReadWriteConnectionString: readWriteDSN,
+		MySQLOwnerConnectionString:     ownerDSN,
+		MySQLServerCAFile:              "/local/ca.pem",
+		MySQLTLSCertFile:               "/run/podidentity.podcert.ate.dev/credential-bundle.pem",
+		MySQLTLSKeyFile:                "/run/podidentity.podcert.ate.dev/credential-bundle.pem",
+	})
+	wantConfig := map[string]string{
+		"ATE_API_MYSQL_TLS_CA_FILE":   "/run/mysql-server-ca/server-ca.pem",
+		"ATE_API_MYSQL_TLS_CERT_FILE": "/run/podidentity.podcert.ate.dev/credential-bundle.pem",
+		"ATE_API_MYSQL_TLS_KEY_FILE":  "/run/podidentity.podcert.ate.dev/credential-bundle.pem",
+	}
+	if diff := cmp.Diff(wantConfig, configVars); diff != "" {
+		t.Errorf("ConfigMap data differs (-want +got):\n%s", diff)
+	}
+	wantSecret := map[string]string{
+		"ATE_API_STORE_BACKEND":                      config.StoreBackendMySQL,
+		"ATE_API_MYSQL_READ_WRITE_CONNECTION_STRING": readWriteDSN,
+		"ATE_API_MYSQL_OWNER_CONNECTION_STRING":      ownerDSN,
+	}
+	if diff := cmp.Diff(wantSecret, secretVars); diff != "" {
+		t.Errorf("Secret data differs (-want +got):\n%s", diff)
 	}
 }
 

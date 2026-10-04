@@ -152,6 +152,7 @@ func TestApplyPostgresSize10OverridesRejectsMissingObjects(t *testing.T) {
 func TestPlanPostgres(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
+		backend    string
 		connString string
 		cloudSQL   config.CloudSQLConfig
 		recorded   map[string]string
@@ -184,10 +185,20 @@ func TestPlanPostgres(t *testing.T) {
 			recorded: map[string]string{envCloudSQLInstance: "p:r:i"},
 			want:     postgresPlan{bundled: true},
 		},
+		{
+			// There is no bundled MySQL, and a recorded Cloud SQL instance
+			// from an earlier PostgreSQL install does not matter.
+			name:     "MySQL",
+			backend:  config.StoreBackendMySQL,
+			cloudSQL: config.CloudSQLConfig{InstanceSet: true},
+			recorded: map[string]string{envCloudSQLInstance: "p:r:i"},
+			want:     postgresPlan{external: "ATE_API_STORE_BACKEND=mysql"},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := &Env{
 				Cfg: &config.Config{
+					StoreBackend:                      tc.backend,
 					PostgresReadWriteConnectionString: tc.connString,
 					CloudSQL:                          tc.cloudSQL,
 				},
@@ -269,5 +280,16 @@ func TestApplyPostgresRequiresPostgresPool(t *testing.T) {
 	err := e.applyPostgres(t.Context())
 	if err == nil || !strings.Contains(err.Error(), postgresPoolSelector) {
 		t.Fatalf("applyPostgres() error = %v, want the missing %s pool", err, postgresPoolSelector)
+	}
+}
+
+func TestDeployPostgresRefusesMySQL(t *testing.T) {
+	e := &Env{
+		Cfg:  &config.Config{Root: repoRoot(t), StoreBackend: config.StoreBackendMySQL},
+		Kube: fakeKube(t),
+	}
+	err := e.DeployPostgres(t.Context())
+	if err == nil || !strings.Contains(err.Error(), "ATE_API_STORE_BACKEND=mysql") {
+		t.Fatalf("DeployPostgres() error = %v, want a refusal naming the MySQL backend", err)
 	}
 }

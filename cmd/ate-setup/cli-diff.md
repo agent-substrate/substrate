@@ -23,7 +23,8 @@ Deliberately, and covered by `shim_test.go`:
 - Every environment variable, including `SETUP_CSI`, `STORAGE_CLASS`,
   `NO_DEV_ENV`, `ATE_INSTALL_KIND`, `KUBECTL_CONTEXT`, `PROJECT_ID`, and the
   `ATE_API_POSTGRES_*` set. `ate-setup` reads them directly, so they need no
-  translation.
+  translation. The same holds for the `ATE_API_STORE_BACKEND` and
+  `ATE_API_MYSQL_*` variables.
 - `--help` / `-h` anywhere on the line, no arguments at all (usage, exit 1),
   and an unrecognized flag (`Error: unknown option: …`, usage, exit 1) —
   including after earlier actions on the same line have already run.

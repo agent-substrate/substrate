@@ -38,6 +38,7 @@ const (
 	SecretEgressMITMCAPool = "egress-mitm-ca-pool"
 	SecretAPIEnvVars       = "ate-api-server-secret-envvars"
 	SecretPostgresServerCA = "postgres-server-ca"
+	SecretMySQLServerCA    = "mysql-server-ca"
 	ConfigMapAPIEnvVars    = "ate-api-server-envvars"
 	ConfigMapAPIAuthn      = "ate-api-authentication"
 	// poolKeyID is the identifier given to the first CA and JWT key in a new

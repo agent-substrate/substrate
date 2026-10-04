@@ -15,6 +15,7 @@
 package config
 
 import (
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -45,11 +46,18 @@ func loadEnv(t *testing.T) {
 		"ATE_API_POSTGRES_CLOUDSQL_IP_TYPE",
 		"ATE_API_POSTGRES_OWNER_CONNECTION_STRING",
 		"ATE_API_POSTGRES_OWNER_ROLE",
-		"ATE_API_POSTGRES_POOL_MAX_CONNS",
 		"ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING",
 		"ATE_API_POSTGRES_READ_WRITE_ROLE",
 		"ATE_API_POSTGRES_SCHEMA",
 		"ATE_API_POSTGRES_SERVER_CA_FILE",
+		"ATE_API_MYSQL_OWNER_CONNECTION_STRING",
+		"ATE_API_MYSQL_READ_WRITE_CONNECTION_STRING",
+		"ATE_API_MYSQL_SERVER_CA_FILE",
+		"ATE_API_MYSQL_TLS_CA_FILE",
+		"ATE_API_MYSQL_TLS_CERT_FILE",
+		"ATE_API_MYSQL_TLS_KEY_FILE",
+		"ATE_API_STORE_BACKEND",
+		"ATE_API_POSTGRES_POOL_MAX_CONNS",
 		"ATE_ATENET_DATAPLANE",
 		"ATE_CREDENTIAL_PROVIDER",
 		"ATE_IMAGE_REPO",
@@ -114,6 +122,9 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.CordonControlPlane {
 		t.Error("CordonControlPlane = true, want false")
+	}
+	if cfg.StoreBackend != StoreBackendPostgres || cfg.StoreBackendSet || cfg.MySQL() {
+		t.Errorf("StoreBackend = %q (set %v), want a defaulted %q", cfg.StoreBackend, cfg.StoreBackendSet, StoreBackendPostgres)
 	}
 }
 
@@ -361,6 +372,79 @@ func TestLoadCloudSQL(t *testing.T) {
 			t.Fatalf("Load() error = %v, want it to name the invalid IP type", err)
 		}
 	})
+}
+
+func TestLoadMySQL(t *testing.T) {
+	const dsn = "runtime:pw@tcp(db:3306)/substrate?tls=true"
+	t.Run("one login", func(t *testing.T) {
+		loadEnv(t)
+		t.Setenv("ATE_API_STORE_BACKEND", StoreBackendMySQL)
+		t.Setenv("ATE_API_MYSQL_READ_WRITE_CONNECTION_STRING", dsn)
+
+		cfg, err := Load(Options{})
+		if err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+		if !cfg.MySQL() || !cfg.StoreBackendSet {
+			t.Errorf("StoreBackend = %q (set %v), want an explicit %q", cfg.StoreBackend, cfg.StoreBackendSet, StoreBackendMySQL)
+		}
+		if cfg.MySQLReadWriteConnectionString != dsn || cfg.MySQLOwnerConnectionString != dsn {
+			t.Errorf("MySQL connections = %q, %q, want %q for both", cfg.MySQLReadWriteConnectionString, cfg.MySQLOwnerConnectionString, dsn)
+		}
+		// Explicitly empty, so the cluster's recorded instance is not adopted
+		// and a leftover proxy sidecar is removed.
+		if want := (CloudSQLConfig{InstanceSet: true}); cfg.CloudSQL != want {
+			t.Errorf("CloudSQL = %+v, want %+v", cfg.CloudSQL, want)
+		}
+	})
+
+	t.Run("exported but empty Cloud SQL instance is allowed", func(t *testing.T) {
+		loadEnv(t)
+		t.Setenv("ATE_API_STORE_BACKEND", StoreBackendMySQL)
+		t.Setenv("ATE_API_MYSQL_READ_WRITE_CONNECTION_STRING", dsn)
+		t.Setenv("ATE_API_POSTGRES_CLOUDSQL_INSTANCE", "")
+		if _, err := Load(Options{}); err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+	})
+}
+
+func TestLoadRejectsInvalidStoreBackend(t *testing.T) {
+	const dsn = "runtime:pw@tcp(db:3306)/substrate"
+	mysql := map[string]string{
+		"ATE_API_STORE_BACKEND":                      StoreBackendMySQL,
+		"ATE_API_MYSQL_READ_WRITE_CONNECTION_STRING": dsn,
+	}
+	with := func(base map[string]string, name, value string) map[string]string {
+		env := maps.Clone(base)
+		env[name] = value
+		return env
+	}
+	for _, tc := range []struct {
+		name    string
+		env     map[string]string
+		wantErr string
+	}{
+		{"unknown backend", map[string]string{"ATE_API_STORE_BACKEND": "sqlite"}, "ATE_API_STORE_BACKEND must be"},
+		{"MySQL without a DSN", map[string]string{"ATE_API_STORE_BACKEND": StoreBackendMySQL}, "ATE_API_MYSQL_READ_WRITE_CONNECTION_STRING"},
+		{"MySQL with a Cloud SQL instance", with(mysql, "ATE_API_POSTGRES_CLOUDSQL_INSTANCE", "p:r:i"), "ATE_API_POSTGRES_CLOUDSQL_INSTANCE"},
+		{"MySQL with both CA settings", with(with(mysql, "ATE_API_MYSQL_SERVER_CA_FILE", "/ca.pem"), "ATE_API_MYSQL_TLS_CA_FILE", "/run/ca.pem"), "not both"},
+		{"MySQL client certificate without a key", with(mysql, "ATE_API_MYSQL_TLS_CERT_FILE", "/run/cert.pem"), "set together"},
+		// Without the backend switch the DSN would be ignored and the bundled
+		// PostgreSQL deployed in its place.
+		{"PostgreSQL with a MySQL DSN", map[string]string{"ATE_API_MYSQL_READ_WRITE_CONNECTION_STRING": dsn}, "ATE_API_MYSQL_READ_WRITE_CONNECTION_STRING"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			loadEnv(t)
+			for name, value := range tc.env {
+				t.Setenv(name, value)
+			}
+			_, err := Load(Options{})
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("Load() error = %v, want it to contain %q", err, tc.wantErr)
+			}
+		})
+	}
 }
 
 // EXPECTED_JWT_ISSUER overrides the issuer derived from the GKE coordinates,

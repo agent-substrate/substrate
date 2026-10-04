@@ -99,6 +99,12 @@ apiserver, the controller, atenet, and atelet. It creates every `create`
 resource below on the way, so those subcommands are only needed to redo one on
 a running cluster.
 
+The store is PostgreSQL by default. `ATE_API_STORE_BACKEND=mysql` with
+`ATE_API_MYSQL_READ_WRITE_CONNECTION_STRING` selects an existing external MySQL
+instead, skips the bundled StatefulSet, and makes `deploy postgres` refuse to
+run. See [`differences.md`](differences.md#known-differences-worth-flagging)
+for the MySQL variables.
+
 ## Publish
 
 | `ate-setup` | `hack/install-ate.sh` |
@@ -131,6 +137,9 @@ Individual secrets and config that `deploy ate-system` creates automatically.
 | `create podcertificate-controller-cas` | `--create-podcertificate-controller-cas` |
 | `create api-server-env-vars` | `--create-api-server-env-vars` |
 | `create api-authentication-config` | `--create-api-authentication-config` |
+
+`create api-server-env-vars` writes the store backend and the connection
+settings of that backend only.
 
 ## Setup
 

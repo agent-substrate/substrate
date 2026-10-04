@@ -27,8 +27,9 @@
 #
 # The environment variables the installer reads -- BUCKET_NAME, KO_DOCKER_REPO,
 # PROJECT_ID, CLUSTER_NAME, CLUSTER_LOCATION, KUBECTL_CONTEXT, NO_DEV_ENV, the
-# ATE_API_POSTGRES_* set, and the rest -- are read by ate-setup directly, as is
-# .ate-dev-env.sh. They need no translation and are not repeated here.
+# ATE_API_POSTGRES_* and ATE_API_MYSQL_* sets, and the rest -- are read by
+# ate-setup directly, as is .ate-dev-env.sh. They need no translation and are
+# not repeated here.
 
 set -o errexit -o nounset -o pipefail
 
@@ -145,6 +146,19 @@ usage() {
   echo "  ATE_API_POSTGRES_POOL_MAX_CONNS        pgxpool max connections per ateapi replica (default: max(4, NumCPU))"
   echo "  ATE_API_POSTGRES_SERVER_CA_FILE        PEM file to mount for verify-ca DSNs (non-Cloud-SQL databases)"
   echo "  ATE_API_POSTGRES_SCHEMA                Select the Substrate schema (default: substrate)"
+  echo ""
+  echo "MySQL configuration (MySQL 8.0+ or PlanetScale). The database is external and must"
+  echo "already exist. ATE_API_POSTGRES_* variables must be unset or empty:"
+  echo ""
+  echo "  ATE_API_STORE_BACKEND                  postgres (default) | mysql. mysql skips the bundled PostgreSQL"
+  echo "  ATE_API_MYSQL_READ_WRITE_CONNECTION_STRING"
+  echo "                                         Required go-sql-driver DSN, e.g."
+  echo "                                         user:pass@tcp(host:3306)/substrate?tls=true (stored in a Secret)"
+  echo "  ATE_API_MYSQL_OWNER_CONNECTION_STRING  Optional owner DSN for migrations; defaults to the read/write DSN"
+  echo "  ATE_API_MYSQL_SERVER_CA_FILE           PEM file with the server CA; turns on TLS verified against it"
+  echo "  ATE_API_MYSQL_TLS_CA_FILE              Server CA path inside the pod (instead of ATE_API_MYSQL_SERVER_CA_FILE)"
+  echo "  ATE_API_MYSQL_TLS_CERT_FILE            Client certificate path inside the pod, e.g. the pod identity bundle"
+  echo "  ATE_API_MYSQL_TLS_KEY_FILE             Client key path inside the pod; set with ATE_API_MYSQL_TLS_CERT_FILE"
   echo ""
   echo "Authentication configuration:"
   echo ""

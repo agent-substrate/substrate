@@ -15,14 +15,21 @@
 package steps
 
 import (
+	"maps"
+	"os"
+	"path"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
+	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kube"
 )
 
 // The digest exists to turn an envFrom change into a rollout, so what matters
@@ -384,4 +391,163 @@ func TestAnnotateAPIServerEnvHash(t *testing.T) {
 			t.Errorf("%s = %q, want %q", envHashAnnotation, got, want)
 		}
 	})
+}
+
+// Switching a Cloud SQL PostgreSQL install to MySQL writes the MySQL contract
+// and does not adopt the recorded instance. The fake clientset merges an apply
+// over keys it did not write, so the stale keys seeded here survive; on a
+// cluster, server-side apply prunes the ones ate-setup wrote earlier.
+func TestCreateAPIServerEnvVarsMySQL(t *testing.T) {
+	const readWriteDSN = "runtime:pw@tcp(db:3306)/substrate?tls=true"
+	caFile := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(caFile, []byte("-----BEGIN CERTIFICATE-----\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{
+		StoreBackend:                   config.StoreBackendMySQL,
+		StoreBackendSet:                true,
+		MySQLReadWriteConnectionString: readWriteDSN,
+		MySQLOwnerConnectionString:     readWriteDSN,
+		MySQLServerCAFile:              caFile,
+		CloudSQL:                       config.CloudSQLConfig{InstanceSet: true},
+	}
+	e := &Env{Cfg: &cfg, Kube: fakeKube(t,
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: NamespaceAteSystem}},
+		apiServerEnvVarsConfigMap(map[string]string{
+			envCloudSQLInstance:                "p:r:i",
+			"ATE_API_POSTGRES_READ_WRITE_ROLE": "tenant_readwrite",
+		}),
+		&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: SecretAPIEnvVars, Namespace: NamespaceAteSystem},
+			Data: map[string][]byte{
+				"ATE_API_STORE_BACKEND":                         []byte(config.StoreBackendPostgres),
+				"ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING": []byte("user=svc@p.iam host=127.0.0.1"),
+			},
+		},
+		// The fake clientset applies only over an existing object.
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: SecretMySQLServerCA, Namespace: NamespaceAteSystem}},
+	)}
+	if err := e.CreateAPIServerEnvVars(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	cm, err := e.Kube.GetConfigMap(t.Context(), NamespaceAteSystem, ConfigMapAPIEnvVars)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := cm.Data["CSQL_PROXY_PORT"]; ok {
+		t.Errorf("ConfigMap data = %v, want no Cloud SQL proxy settings on MySQL", cm.Data)
+	}
+	secret, err := e.Kube.GetSecret(t.Context(), NamespaceAteSystem, SecretAPIEnvVars)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantSecret := map[string]string{
+		"ATE_API_STORE_BACKEND":                      config.StoreBackendMySQL,
+		"ATE_API_MYSQL_READ_WRITE_CONNECTION_STRING": readWriteDSN,
+		"ATE_API_MYSQL_OWNER_CONNECTION_STRING":      readWriteDSN,
+	}
+	if !maps.Equal(secret.StringData, wantSecret) {
+		t.Errorf("Secret data = %v, want %v", secret.StringData, wantSecret)
+	}
+	ca, err := e.Kube.GetSecret(t.Context(), NamespaceAteSystem, SecretMySQLServerCA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ca == nil || ca.StringData["server-ca.pem"] != "-----BEGIN CERTIFICATE-----\n" {
+		t.Errorf("%s = %+v, want the CA file's contents under server-ca.pem", SecretMySQLServerCA, ca)
+	}
+}
+
+// A redeploy that leaves ATE_API_STORE_BACKEND unset must not move a MySQL
+// install onto an empty bundled PostgreSQL.
+func TestCheckRecordedStoreBackend(t *testing.T) {
+	defaulted := config.Config{StoreBackend: config.StoreBackendPostgres}
+	for _, tc := range []struct {
+		name     string
+		cfg      config.Config
+		noSecret bool
+		recorded string
+		wantErr  bool
+	}{
+		{name: "fresh install", cfg: defaulted, noSecret: true},
+		{name: "default matches the record", cfg: defaulted, recorded: config.StoreBackendPostgres},
+		{name: "record predates the backend key", cfg: defaulted},
+		{name: "default would switch away from MySQL", cfg: defaulted, recorded: config.StoreBackendMySQL, wantErr: true},
+		{
+			name:     "explicit switch to PostgreSQL",
+			cfg:      config.Config{StoreBackend: config.StoreBackendPostgres, StoreBackendSet: true},
+			recorded: config.StoreBackendMySQL,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var objects []runtime.Object
+			if !tc.noSecret {
+				secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: SecretAPIEnvVars, Namespace: NamespaceAteSystem}}
+				if tc.recorded != "" {
+					secret.Data = map[string][]byte{envStoreBackend: []byte(tc.recorded)}
+				}
+				objects = append(objects, secret)
+			}
+			e := &Env{Cfg: &tc.cfg, Kube: fakeKube(t, objects...)}
+			err := e.checkRecordedStoreBackend(t.Context())
+			if gotErr := err != nil; gotErr != tc.wantErr {
+				t.Fatalf("checkRecordedStoreBackend() error = %v, wantErr %v", err, tc.wantErr)
+			}
+			if err != nil && !strings.Contains(err.Error(), "ATE_API_STORE_BACKEND=mysql") {
+				t.Errorf("checkRecordedStoreBackend() error = %q, want it to name the setting that keeps MySQL", err)
+			}
+		})
+	}
+}
+
+// ate-api-server.yaml has to read every MySQL setting the installer writes and
+// mount the Secret at the path ATE_API_MYSQL_TLS_CA_FILE names.
+func TestAPIServerManifestReadsMySQLSettings(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), "manifests", "ate-install", "ate-api-server.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	objs, err := kube.DecodeManifestBytes(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	obj := findObject(objs, "Deployment", "ate-api-server")
+	if obj == nil {
+		t.Fatal("ate-api-server.yaml has no deployment/ate-api-server")
+	}
+	var dep appsv1.Deployment
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(obj.Object, &dep); err != nil {
+		t.Fatal(err)
+	}
+	container := dep.Spec.Template.Spec.Containers[0]
+	for _, arg := range []string{
+		"--mysql-read-write-connection-string=@env",
+		"--mysql-owner-connection-string=@env",
+		"--mysql-tls-ca-file=@env",
+		"--mysql-tls-cert-file=@env",
+		"--mysql-tls-key-file=@env",
+	} {
+		if !slices.Contains(container.Args, arg) {
+			t.Errorf("ate-api-server args lack %s", arg)
+		}
+	}
+	var mounted bool
+	for _, m := range container.VolumeMounts {
+		if m.Name == SecretMySQLServerCA {
+			mounted = m.ReadOnly && m.MountPath == path.Dir(mysqlServerCAPath)
+		}
+	}
+	if !mounted {
+		t.Errorf("ate-api-server does not mount %s read-only at %s", SecretMySQLServerCA, path.Dir(mysqlServerCAPath))
+	}
+	var optional bool
+	for _, v := range dep.Spec.Template.Spec.Volumes {
+		if v.Name == SecretMySQLServerCA && v.Secret != nil && v.Secret.SecretName == SecretMySQLServerCA {
+			optional = v.Secret.Optional != nil && *v.Secret.Optional
+		}
+	}
+	if !optional {
+		t.Errorf("volume %s is not the optional %s Secret; PostgreSQL installs never create it", SecretMySQLServerCA, SecretMySQLServerCA)
+	}
 }

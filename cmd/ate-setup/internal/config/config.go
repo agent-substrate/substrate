@@ -72,6 +72,12 @@ const (
 	DefaultPostgresOwnerRole     = "substrate_owner"
 )
 
+// Store backends, the values ATE_API_STORE_BACKEND accepts.
+const (
+	StoreBackendPostgres = "postgres"
+	StoreBackendMySQL    = "mysql"
+)
+
 // Cloud SQL Auth Proxy IP types, the values ATE_API_POSTGRES_CLOUDSQL_IP_TYPE
 // accepts.
 const (
@@ -136,6 +142,13 @@ type Config struct {
 
 	// Router selects the atenet router dataplane.
 	Router string
+	// StoreBackend is the database ateapi keeps its state in
+	// (ATE_API_STORE_BACKEND): StoreBackendPostgres or StoreBackendMySQL.
+	StoreBackend string
+	// StoreBackendSet records whether ATE_API_STORE_BACKEND was given rather
+	// than defaulted, so that a redeploy that does not name a backend cannot
+	// silently move a MySQL install onto the bundled PostgreSQL.
+	StoreBackendSet bool
 	// The read/write and owner connections can use different login identities.
 	// With one configured connection, both pools use it. Both empty selects
 	// bundled PostgreSQL.
@@ -161,6 +174,25 @@ type Config struct {
 	// CloudSQL points the apiserver at a Cloud SQL instance through the Auth
 	// Proxy sidecar instead of a directly reachable PostgreSQL.
 	CloudSQL CloudSQLConfig
+
+	// MySQL settings, used only when StoreBackend is StoreBackendMySQL. The
+	// database is always external and must already exist. The owner DSN
+	// defaults to the read/write one.
+	MySQLReadWriteConnectionString string
+	MySQLOwnerConnectionString     string
+	// MySQLServerCAFile is a local PEM file holding the MySQL server CA
+	// (ATE_API_MYSQL_SERVER_CA_FILE). Its contents are published as the
+	// mysql-server-ca Secret, which ate-api-server mounts at
+	// /run/mysql-server-ca/server-ca.pem.
+	MySQLServerCAFile string
+	// MySQL TLS files already inside the ate-api-server pod, such as the pod
+	// identity credential bundle (ATE_API_MYSQL_TLS_CA_FILE,
+	// ATE_API_MYSQL_TLS_CERT_FILE, ATE_API_MYSQL_TLS_KEY_FILE). They play the
+	// part of the sslrootcert, sslcert and sslkey paths a PostgreSQL DSN names,
+	// which a MySQL DSN cannot carry.
+	MySQLTLSCAFile   string
+	MySQLTLSCertFile string
+	MySQLTLSKeyFile  string
 
 	// RolloutTimeout is the timeout duration for rollout status checks.
 	RolloutTimeout time.Duration
@@ -334,6 +366,7 @@ func Load(opts Options) (*Config, error) {
 	kubeconfig, kubeconfigEnv := loadKubeconfig(opts.Kubeconfig, env["KUBECONFIG"])
 	readWriteConnectionString := env["ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"]
 	ownerConnectionString := firstNonEmpty(env["ATE_API_POSTGRES_OWNER_CONNECTION_STRING"], readWriteConnectionString)
+	mysqlReadWriteConnectionString := env["ATE_API_MYSQL_READ_WRITE_CONNECTION_STRING"]
 
 	cfg := &Config{
 		Root:                              root,
@@ -349,6 +382,8 @@ func Load(opts Options) (*Config, error) {
 		KODockerRepo:                      env["KO_DOCKER_REPO"],
 		KODefaultPlatforms:                env["KO_DEFAULTPLATFORMS"],
 		Images:                            loadImageSource(opts, env),
+		StoreBackend:                      firstNonEmpty(env["ATE_API_STORE_BACKEND"], StoreBackendPostgres),
+		StoreBackendSet:                   env["ATE_API_STORE_BACKEND"] != "",
 		PostgresReadWriteConnectionString: readWriteConnectionString,
 		PostgresOwnerConnectionString:     ownerConnectionString,
 		PostgresReadWriteRole:             firstNonEmpty(env["ATE_API_POSTGRES_READ_WRITE_ROLE"], DefaultPostgresReadWriteRole),
@@ -365,6 +400,12 @@ func Load(opts Options) (*Config, error) {
 			IAMAuth:     env["ATE_API_POSTGRES_CLOUDSQL_IAM_AUTH"],
 			IPType:      env["ATE_API_POSTGRES_CLOUDSQL_IP_TYPE"],
 		},
+		MySQLReadWriteConnectionString: mysqlReadWriteConnectionString,
+		MySQLOwnerConnectionString:     firstNonEmpty(env["ATE_API_MYSQL_OWNER_CONNECTION_STRING"], mysqlReadWriteConnectionString),
+		MySQLServerCAFile:              env["ATE_API_MYSQL_SERVER_CA_FILE"],
+		MySQLTLSCAFile:                 env["ATE_API_MYSQL_TLS_CA_FILE"],
+		MySQLTLSCertFile:               env["ATE_API_MYSQL_TLS_CERT_FILE"],
+		MySQLTLSKeyFile:                env["ATE_API_MYSQL_TLS_KEY_FILE"],
 		RolloutTimeout:                 rolloutTimeout,
 		rolloutTimeoutSet:              timeoutStr != "",
 		PodcertWorkersPerSigner:        podcertWorkers,
@@ -388,7 +429,56 @@ func Load(opts Options) (*Config, error) {
 	if err := validate(cfg); err != nil {
 		return nil, err
 	}
+	if err := validateStoreBackend(cfg, env); err != nil {
+		return nil, err
+	}
+	if cfg.StoreBackend == StoreBackendMySQL {
+		// An explicitly empty instance rather than an unset one: a MySQL
+		// install never adopts the cluster's recorded Cloud SQL instance, so
+		// a proxy sidecar left by an earlier PostgreSQL install is removed.
+		cfg.CloudSQL = CloudSQLConfig{InstanceSet: true}
+	}
 	return cfg, nil
+}
+
+// validateStoreBackend checks the backend choice and refuses settings for the
+// other backend, which would otherwise be ignored without a word. The prefix
+// check covers the Cloud SQL variables too: on MySQL they would keep a proxy
+// sidecar for a database the apiserver no longer uses. An exported but empty
+// ATE_API_POSTGRES_CLOUDSQL_INSTANCE is allowed, since it asks for removal.
+func validateStoreBackend(cfg *Config, env map[string]string) error {
+	var conflictPrefix string
+	switch cfg.StoreBackend {
+	case StoreBackendPostgres:
+		conflictPrefix = "ATE_API_MYSQL_"
+	case StoreBackendMySQL:
+		conflictPrefix = "ATE_API_POSTGRES_"
+		if cfg.MySQLReadWriteConnectionString == "" {
+			return fmt.Errorf("ATE_API_STORE_BACKEND=%s requires ATE_API_MYSQL_READ_WRITE_CONNECTION_STRING; "+
+				"there is no bundled MySQL", StoreBackendMySQL)
+		}
+		if cfg.MySQLServerCAFile != "" && cfg.MySQLTLSCAFile != "" {
+			return fmt.Errorf("set ATE_API_MYSQL_SERVER_CA_FILE (a local file to upload) or ATE_API_MYSQL_TLS_CA_FILE (a path in the pod), not both")
+		}
+		if (cfg.MySQLTLSCertFile == "") != (cfg.MySQLTLSKeyFile == "") {
+			return fmt.Errorf("ATE_API_MYSQL_TLS_CERT_FILE and ATE_API_MYSQL_TLS_KEY_FILE must be set together")
+		}
+	default:
+		return fmt.Errorf("ATE_API_STORE_BACKEND must be %s or %s, got %q",
+			StoreBackendPostgres, StoreBackendMySQL, cfg.StoreBackend)
+	}
+	var conflicts []string
+	for name, value := range env {
+		if strings.HasPrefix(name, conflictPrefix) && value != "" {
+			conflicts = append(conflicts, name)
+		}
+	}
+	if len(conflicts) > 0 {
+		sort.Strings(conflicts)
+		return fmt.Errorf("ATE_API_STORE_BACKEND=%s conflicts with %s; unset them or select the other backend",
+			cfg.StoreBackend, strings.Join(conflicts, ", "))
+	}
+	return nil
 }
 
 // loadKubeconfig splits the kubeconfig setting into the path handed to
@@ -601,6 +691,11 @@ func (c *Config) PostgresSchemaName() string {
 		return c.PostgresSchema
 	}
 	return DefaultPostgresSchema
+}
+
+// MySQL reports whether ateapi keeps its state in MySQL.
+func (c *Config) MySQL() bool {
+	return c.StoreBackend == StoreBackendMySQL
 }
 
 // WaitTimeout returns how long to wait for a workload whose historical timeout
