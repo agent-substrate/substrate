@@ -60,6 +60,14 @@ jobs:
       run: hack/run-tool.sh gotestsum --junitfile "${ARTIFACTS}/unit.xml"
         --jsonfile "${ARTIFACTS}/unit.json" --format standard-verbose
         -- -race -v ./...
+    # The unit tests above run the store-backed control plane suites on
+    # PostgreSQL; rerun them on MySQL. atemy's own tests already ran above.
+    - name: MySQL control plane tests
+      env:
+        ATE_TEST_STORE_BACKEND: mysql
+      run: hack/run-tool.sh gotestsum --junitfile "${ARTIFACTS}/unit-mysql.xml"
+        --jsonfile "${ARTIFACTS}/unit-mysql.json" --format standard-verbose
+        -- -race -v ./cmd/ateapi/internal/controlapi/... ./cmd/ateapi/internal/workerservice/...
     # PlanetScale serves MySQL through Vitess, which rejects or rewrites some
     # statements plain MySQL accepts. The vitess build tag keeps the large
     # amd64-only vttestserver image out of the default test run.

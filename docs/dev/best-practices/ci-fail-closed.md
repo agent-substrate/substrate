@@ -33,7 +33,9 @@ func Required() bool {
 }
 ```
 
-Callers branch on it (`storetest.go:187-192`, `atepg/main_test.go:105-110`):
+Callers branch on it (`storetest/postgres.go:133-138`,
+`storetest/mysql.go:138-143`, `atepg/main_test.go:105-110`,
+`atemy/main_test.go:100-105`):
 
 ```go
 if containerErr != nil {
@@ -77,6 +79,7 @@ merging:
 # Docker precondition, without Docker
 sudo systemctl stop docker.socket docker.service
 CI=true go test ./cmd/ateapi/internal/store/...          # expect FAIL, not SKIP
+CI=true ATE_TEST_STORE_BACKEND=mysql go test ./cmd/ateapi/internal/controlapi/...  # same
 
 # JUnit precondition, unset
 CI=true hack/run-e2e.sh ./internal/e2e/suites/example    # expect exit 1
