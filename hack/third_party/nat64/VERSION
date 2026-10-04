@@ -1,0 +1,12 @@
+# Pin for the vendored kubernetes-sigs/nat64 install manifest.
+#
+# Sourced by hack/update/nat64.sh, which regenerates install.yaml from it.
+# Bump these, re-run that script, and commit the result.
+
+# Upstream commit install.yaml is copied from. A full sha, not a tag: the
+# manifest we need is only ever on a moving branch (see README.md).
+NAT64_COMMIT=95969a2eef50252c3bf0b70b8f20a75ae0808c25
+
+# Agent image the manifest is rewritten to use. Upstream names a floating tag;
+# this is the digest that tag resolved to when the pin was taken.
+NAT64_IMAGE=registry.k8s.io/networking/nat64:v0.4.1@sha256:292dcea96049903abb59777d61d18c4088c8b48db716c9aa14b971c24fbd58d3
