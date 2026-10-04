@@ -17,65 +17,192 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net/url"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/spf13/pflag"
 )
 
-func TestConnectStoreRequiresPostgresReadWriteConnectionString(t *testing.T) {
-	oldDSN := *postgresReadWriteConnectionString
-	t.Cleanup(func() {
-		*postgresReadWriteConnectionString = oldDSN
-	})
-	*postgresReadWriteConnectionString = ""
+// saveFlag restores a flag variable when the test ends.
+func saveFlag[T any](t *testing.T, p *T) {
+	t.Helper()
+	old := *p
+	t.Cleanup(func() { *p = old })
+}
 
-	_, err := connectStore(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "--postgres-read-write-connection-string is required") {
-		t.Fatalf("connectStore() error = %v, want missing-connection-string error", err)
+// markFlagChanged makes a flag look as if it was set on the command line.
+func markFlagChanged(t *testing.T, name string) {
+	t.Helper()
+	f := pflag.CommandLine.Lookup(name)
+	old := f.Changed
+	t.Cleanup(func() { f.Changed = old })
+	f.Changed = true
+}
+
+func TestConnectStoreRequiresReadWriteConnectionString(t *testing.T) {
+	for _, tc := range []struct {
+		backend string
+		flag    *string
+		wantErr string
+	}{
+		{storeBackendPostgres, postgresReadWriteConnectionString, "--postgres-read-write-connection-string is required"},
+		{storeBackendMySQL, mysqlReadWriteConnectionString, "--mysql-read-write-connection-string is required"},
+	} {
+		t.Run(tc.backend, func(t *testing.T) {
+			saveFlag(t, storeBackend)
+			saveFlag(t, tc.flag)
+			*storeBackend = tc.backend
+			*tc.flag = ""
+
+			_, err := connectStore(context.Background())
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("connectStore() error = %v, want %q", err, tc.wantErr)
+			}
+		})
 	}
 }
 
-func TestLoadFlagsFromEnvResolvesPostgresSourcesOnce(t *testing.T) {
-	oldRuntime, oldDDL := *postgresReadWriteConnectionString, *postgresOwnerConnectionString
-	oldRuntimeRole, oldDDLRole := *postgresReadWriteRole, *postgresOwnerRole
-	oldAuthz := *experimentalEnableAuthz
-	t.Cleanup(func() {
-		*postgresReadWriteConnectionString = oldRuntime
-		*postgresOwnerConnectionString = oldDDL
-		*postgresReadWriteRole = oldRuntimeRole
-		*postgresOwnerRole = oldDDLRole
-		*experimentalEnableAuthz = oldAuthz
-	})
-	*postgresReadWriteConnectionString = "@env"
-	*postgresOwnerConnectionString = "@env"
-	*postgresReadWriteRole = "@env"
-	*postgresOwnerRole = "@env"
+func TestConnectWithRetries(t *testing.T) {
+	saveFlag(t, &storeConnectTries)
+	saveFlag(t, &storeConnectPeriod)
+	storeConnectTries = 3
+	storeConnectPeriod = time.Millisecond
+	unavailable := errors.New("unavailable")
+	permanent := errors.New("bad credentials")
+	retryable := fmt.Errorf("dial: %w", unavailable)
+
+	tests := []struct {
+		name      string
+		errs      []error
+		wantCalls int
+		wantErr   error
+	}{
+		{name: "succeeds after unavailable", errs: []error{retryable, retryable, nil}, wantCalls: 3},
+		{name: "other error returns at once", errs: []error{permanent}, wantCalls: 1, wantErr: permanent},
+		{name: "unavailable on every try", errs: []error{retryable, retryable, retryable}, wantCalls: 3, wantErr: unavailable},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			got, err := connectWithRetries(t.Context(), "test", unavailable, func() (int, error) {
+				if calls == len(tc.errs) {
+					t.Fatalf("connect called more than %d times", len(tc.errs))
+				}
+				err := tc.errs[calls]
+				calls++
+				if err != nil {
+					return 0, err
+				}
+				return 1, nil
+			})
+			if calls != tc.wantCalls {
+				t.Errorf("connect called %d times, want %d", calls, tc.wantCalls)
+			}
+			if tc.wantErr == nil {
+				if err != nil || got != 1 {
+					t.Fatalf("connectWithRetries() = %d, %v, want 1, nil", got, err)
+				}
+				return
+			}
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("connectWithRetries() error = %v, want %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestLoadFlagsFromEnvStoreBackend(t *testing.T) {
+	tests := []struct {
+		name        string
+		flagValue   string
+		flagChanged bool
+		env         string
+		want        string
+		wantErr     bool
+	}{
+		{name: "env applies when flag unset", flagValue: storeBackendPostgres, env: storeBackendMySQL, want: storeBackendMySQL},
+		{name: "flag wins over env", flagValue: storeBackendPostgres, flagChanged: true, env: storeBackendMySQL, want: storeBackendPostgres},
+		{name: "invalid env", flagValue: storeBackendPostgres, env: "sqlite", wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			saveFlag(t, storeBackend)
+			*storeBackend = tc.flagValue
+			if tc.flagChanged {
+				markFlagChanged(t, "store-backend")
+			}
+			t.Setenv("ATE_API_STORE_BACKEND", tc.env)
+
+			err := loadFlagsFromEnv()
+			if tc.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "--store-backend must be") {
+					t.Fatalf("loadFlagsFromEnv() error = %v, want backend validation", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if *storeBackend != tc.want {
+				t.Fatalf("store backend = %q, want %q", *storeBackend, tc.want)
+			}
+		})
+	}
+}
+
+func TestLoadFlagsFromEnvResolvesSourcesOnce(t *testing.T) {
+	tests := []struct {
+		flag *string
+		env  string
+	}{
+		{flag: postgresReadWriteConnectionString, env: "ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"},
+		{flag: postgresOwnerConnectionString, env: "ATE_API_POSTGRES_OWNER_CONNECTION_STRING"},
+		{flag: postgresReadWriteRole, env: "ATE_API_POSTGRES_READ_WRITE_ROLE"},
+		{flag: postgresOwnerRole, env: "ATE_API_POSTGRES_OWNER_ROLE"},
+		{flag: postgresSchema, env: "ATE_API_POSTGRES_SCHEMA"},
+		{flag: mysqlReadWriteConnectionString, env: "ATE_API_MYSQL_READ_WRITE_CONNECTION_STRING"},
+		{flag: mysqlOwnerConnectionString, env: "ATE_API_MYSQL_OWNER_CONNECTION_STRING"},
+		{flag: mysqlTLSCAFile, env: "ATE_API_MYSQL_TLS_CA_FILE"},
+		{flag: mysqlTLSCertFile, env: "ATE_API_MYSQL_TLS_CERT_FILE"},
+		{flag: mysqlTLSKeyFile, env: "ATE_API_MYSQL_TLS_KEY_FILE"},
+	}
+	for _, tc := range tests {
+		saveFlag(t, tc.flag)
+		*tc.flag = "@env"
+		t.Setenv(tc.env, tc.env+"-a")
+	}
+	saveFlag(t, experimentalEnableAuthz)
 	*experimentalEnableAuthz = false
-	t.Setenv("ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING", "runtime-a")
-	t.Setenv("ATE_API_POSTGRES_OWNER_CONNECTION_STRING", "ddl-a")
-	t.Setenv("ATE_API_POSTGRES_READ_WRITE_ROLE", "runtime-role")
-	t.Setenv("ATE_API_POSTGRES_OWNER_ROLE", "ddl-role")
 	t.Setenv("ATE_API_EXPERIMENTAL_ENABLE_AUTHZ", "true")
 
+	check := func() {
+		t.Helper()
+		for _, tc := range tests {
+			if want := tc.env + "-a"; *tc.flag != want {
+				t.Errorf("%s resolved to %q, want %q", tc.env, *tc.flag, want)
+			}
+		}
+	}
 	if err := loadFlagsFromEnv(); err != nil {
 		t.Fatal(err)
 	}
-	if *postgresReadWriteConnectionString != "runtime-a" || *postgresOwnerConnectionString != "ddl-a" ||
-		*postgresReadWriteRole != "runtime-role" || *postgresOwnerRole != "ddl-role" {
-		t.Fatalf("resolved values = %q, %q, %q, %q", *postgresReadWriteConnectionString, *postgresOwnerConnectionString, *postgresReadWriteRole, *postgresOwnerRole)
-	}
+	check()
 	if !*experimentalEnableAuthz {
-		t.Fatal("authorization environment flag was not resolved alongside PostgreSQL settings")
+		t.Error("authorization environment flag was not resolved")
 	}
-	t.Setenv("ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING", "runtime-b")
-	t.Setenv("ATE_API_POSTGRES_OWNER_CONNECTION_STRING", "ddl-b")
+
+	for _, tc := range tests {
+		t.Setenv(tc.env, tc.env+"-b")
+	}
 	if err := loadFlagsFromEnv(); err != nil {
 		t.Fatal(err)
 	}
-	if *postgresReadWriteConnectionString != "runtime-a" || *postgresOwnerConnectionString != "ddl-a" {
-		t.Fatal("environment-backed connection strings changed after startup resolution")
-	}
+	check()
 }
 
 func TestLoadFlagsFromEnvPoolMaxConns(t *testing.T) {
@@ -187,18 +314,90 @@ func TestPostgresConnectionAttrNeverLogsThePassword(t *testing.T) {
 	})
 }
 
-// TestLogFlagValuesDoesNotLogThePostgresPassword goes through the real startup
+func TestMySQLConnectionAttrNeverLogsThePassword(t *testing.T) {
+	const password = "hunter2-very-secret"
+	render := func(connString string) string {
+		var buf bytes.Buffer
+		slog.New(slog.NewJSONHandler(&buf, nil)).LogAttrs(context.Background(), slog.LevelInfo, "Final flag values", mysqlConnectionAttr("mysql-connection-string", connString))
+		return buf.String()
+	}
+
+	for name, tc := range map[string]struct {
+		connString string
+		want       []string
+	}{
+		"tcp": {
+			connString: "ateapi:" + password + "@tcp(db.example.internal:3307)/substrate?parseTime=true",
+			want:       []string{`"host":"db.example.internal"`, `"port":3307`, `"database":"substrate"`, `"user":"ateapi"`, `"password-set":true`, `"tls":false`},
+		},
+		"reserved_characters": {
+			connString: "ateapi:" + password + "@:x@tcp(db.example.internal:3306)/substrate",
+			want:       []string{`"host":"db.example.internal"`, `"port":3306`, `"password-set":true`},
+		},
+		"tls": {
+			connString: "ateapi:" + password + "@tcp(db.example.internal:3306)/substrate?tls=true",
+			want:       []string{`"tls":true`},
+		},
+		"tls_false": {
+			connString: "ateapi:" + password + "@tcp(db.example.internal:3306)/substrate?tls=false",
+			want:       []string{`"tls":false`},
+		},
+		"passwordless": {
+			connString: "ateapi@tcp(mysql.ate-system.svc:3306)/substrate",
+			want:       []string{`"user":"ateapi"`, `"password-set":false`},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := render(tc.connString)
+			if strings.Contains(got, password) {
+				t.Fatalf("log line contains the password: %s", got)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(got, want) {
+					t.Errorf("log line missing %s: %s", want, got)
+				}
+			}
+		})
+	}
+
+	t.Run("tls_files", func(t *testing.T) {
+		saveFlag(t, mysqlTLSCAFile)
+		*mysqlTLSCAFile = "/run/mysql-server-ca/server-ca.pem"
+		if got := render("ateapi@tcp(db.example.internal:3306)/substrate"); !strings.Contains(got, `"tls":true`) {
+			t.Errorf("log line reports TLS off with a CA file set: %s", got)
+		}
+	})
+
+	t.Run("missing_database_separator", func(t *testing.T) {
+		raw := "ateapi:" + password + "@tcp(db.example.internal:3306)"
+		got := render(raw)
+		if strings.Contains(got, password) || strings.Contains(got, raw) {
+			t.Fatalf("log line echoes an unparseable connection string: %s", got)
+		}
+		if !strings.Contains(got, `"mysql-connection-string":"<invalid mysql connection string>"`) {
+			t.Errorf("expected the unparseable marker: %s", got)
+		}
+	})
+
+	t.Run("empty", func(t *testing.T) {
+		if got := render(""); !strings.Contains(got, `"mysql-connection-string":""`) {
+			t.Errorf("expected empty marker: %s", got)
+		}
+	})
+}
+
+// TestLogFlagValuesDoesNotLogADatabasePassword goes through the real startup
 // log call, so a change at the call site (logging the flag directly again)
 // fails here even if the helper stays correct.
-func TestLogFlagValuesDoesNotLogThePostgresPassword(t *testing.T) {
+func TestLogFlagValuesDoesNotLogADatabasePassword(t *testing.T) {
 	const password = "hunter2-very-secret"
-	origReadWrite, origOwner := *postgresReadWriteConnectionString, *postgresOwnerConnectionString
-	t.Cleanup(func() {
-		*postgresReadWriteConnectionString = origReadWrite
-		*postgresOwnerConnectionString = origOwner
-	})
+	for _, p := range []*string{postgresReadWriteConnectionString, postgresOwnerConnectionString, mysqlReadWriteConnectionString, mysqlOwnerConnectionString} {
+		saveFlag(t, p)
+	}
 	*postgresReadWriteConnectionString = "postgresql://runtime:" + password + "@db.example.internal:5432/atepg?sslmode=disable"
 	*postgresOwnerConnectionString = "postgresql://owner:" + password + "@db.example.internal:5432/atepg?sslmode=disable"
+	*mysqlReadWriteConnectionString = "runtime:" + password + "@tcp(db.example.internal:3306)/substrate"
+	*mysqlOwnerConnectionString = "owner:" + password + "@tcp(db.example.internal:3306)/substrate"
 
 	var buf bytes.Buffer
 	origLogger := slog.Default()
@@ -216,6 +415,11 @@ func TestLogFlagValuesDoesNotLogThePostgresPassword(t *testing.T) {
 	}
 	for _, key := range []string{"postgres-read-write-connection-string", "postgres-owner-connection-string"} {
 		if !strings.Contains(got, `"`+key+`":{"host":"db.example.internal"`) {
+			t.Errorf("startup line missing the structured %s summary: %s", key, got)
+		}
+	}
+	for _, key := range []string{"mysql-read-write-connection-string", "mysql-owner-connection-string"} {
+		if !strings.Contains(got, `"`+key+`":{"host":"db.example.internal","port":3306`) {
 			t.Errorf("startup line missing the structured %s summary: %s", key, got)
 		}
 	}

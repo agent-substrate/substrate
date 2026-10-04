@@ -33,6 +33,8 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/authz"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/controlapi"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/oidcjwt"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/atemy"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/atepg"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workerservice"
@@ -51,6 +53,7 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/go-sql-driver/mysql"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/spf13/pflag"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
@@ -75,12 +78,18 @@ var (
 	grpcServerCredBundle = pflag.String("grpc-server-cred-bundle", "", "File with the server TLS credential bundle.")
 
 	authenticationConfigFile          = pflag.String("authentication-config", "", "YAML file configuring trusted JWT providers.")
+	storeBackend                      = pflag.String("store-backend", storeBackendPostgres, "Database backend for Substrate state: postgres or mysql.")
 	postgresReadWriteConnectionString = pflag.String("postgres-read-write-connection-string", "", "PostgreSQL connection string (libpq DSN or URI).")
 	postgresOwnerConnectionString     = pflag.String("postgres-owner-connection-string", "", "PostgreSQL owner connection string (libpq DSN or URI).")
 	postgresReadWriteRole             = pflag.String("postgres-read-write-role", "", "Required PostgreSQL role assumed by read/write connections.")
 	postgresOwnerRole                 = pflag.String("postgres-owner-role", "", "Required PostgreSQL role assumed by owner connections.")
 	postgresSchema                    = pflag.String("postgres-schema", "substrate", "PostgreSQL schema for Substrate tables. This overrides a search_path connection parameter.")
 	postgresPoolMaxConns              = pflag.Int32("postgres-pool-max-conns", 0, "Maximum connections in the shared Substrate and OpenFGA read/write PostgreSQL pool. Does not affect the owner or watch pools. The DSN or pgx default is used when unset.")
+	mysqlReadWriteConnectionString    = pflag.String("mysql-read-write-connection-string", "", "MySQL connection string (go-sql-driver DSN) naming the Substrate database.")
+	mysqlOwnerConnectionString        = pflag.String("mysql-owner-connection-string", "", "MySQL owner connection string (go-sql-driver DSN).")
+	mysqlTLSCAFile                    = pflag.String("mysql-tls-ca-file", "", "PEM file with the CA that verifies the MySQL server certificate. Empty uses the system roots when TLS is enabled.")
+	mysqlTLSCertFile                  = pflag.String("mysql-tls-cert-file", "", "PEM file with the client certificate presented to MySQL.")
+	mysqlTLSKeyFile                   = pflag.String("mysql-tls-key-file", "", "PEM file with the private key for --mysql-tls-cert-file.")
 	experimentalEnableAuthz           = pflag.Bool("experimental-enable-authz", false, "Enforce OpenFGA authorization checks on all registered RPCs (experimental). AccessPolicy RPCs are always checked.")
 	// TODO: Move the authz settings into the hot-reloadable config proto
 	// (agent-substrate/substrate#2021) once it lands, so bootstrap owner
@@ -117,7 +126,7 @@ func main() {
 		serverboot.Fatal(ctx, "Invalid --log-level", err)
 	}
 	if err := loadFlagsFromEnv(); err != nil {
-		serverboot.Fatal(ctx, "Invalid PostgreSQL configuration", err)
+		serverboot.Fatal(ctx, "Invalid database configuration", err)
 	}
 	slog.InfoContext(ctx, "ateapi starting", slog.String("version", version.Version))
 	if *templateResyncInterval < minResyncInterval {
@@ -172,14 +181,14 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to initialize JWT providers", err)
 	}
 
-	persistence, err := connectStore(shutdownCtx)
+	backend, err := connectStore(shutdownCtx)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to set up persistence backend", err)
 	}
-	pool := persistence.Pool()
-	defer pool.Close()
-	// Backends may run background maintenance rooted in their own context
-	// (atepg's outbox maintenance loop); stop it on shutdown before closing pool.
+	persistence := backend.persistence
+	defer backend.closePool()
+	// Backends run background maintenance rooted in their own context (the
+	// outbox maintenance loop); stop it on shutdown before closing the pool.
 	defer persistence.Close()
 
 	// The authz stack is always wired so policy tuples stay in sync with the
@@ -190,12 +199,12 @@ func main() {
 		// AccessPolicy, so the enforced API would be unusable.
 		serverboot.Fatal(ctx, "Invalid flags", fmt.Errorf("--authz-bootstrap-owners must list at least one principal when --experimental-enable-authz is set"))
 	}
-	fgaServer, err := authz.NewOpenFGAServer(authz.PostgresBackend(pool))
+	fgaServer, err := authz.NewOpenFGAServer(backend.authz)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to create OpenFGA server", err)
 	}
 	defer fgaServer.Close()
-	authorizer, policyManager, err := authz.New(shutdownCtx, authz.PostgresBackend(pool), fgaServer, *authzBootstrapOwners)
+	authorizer, policyManager, err := authz.New(shutdownCtx, backend.authz, fgaServer, *authzBootstrapOwners)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize OpenFGA authz", err)
 	}
@@ -393,11 +402,22 @@ func loadFlagsFromEnv() error {
 		{postgresReadWriteRole, "ATE_API_POSTGRES_READ_WRITE_ROLE"},
 		{postgresOwnerRole, "ATE_API_POSTGRES_OWNER_ROLE"},
 		{postgresSchema, "ATE_API_POSTGRES_SCHEMA"},
+		{mysqlReadWriteConnectionString, "ATE_API_MYSQL_READ_WRITE_CONNECTION_STRING"},
+		{mysqlOwnerConnectionString, "ATE_API_MYSQL_OWNER_CONNECTION_STRING"},
+		{mysqlTLSCAFile, "ATE_API_MYSQL_TLS_CA_FILE"},
+		{mysqlTLSCertFile, "ATE_API_MYSQL_TLS_CERT_FILE"},
+		{mysqlTLSKeyFile, "ATE_API_MYSQL_TLS_KEY_FILE"},
 	}
 	for _, o := range overrides {
 		if *o.flag == "@env" {
 			*o.flag = os.Getenv(o.env)
 		}
+	}
+	if v := os.Getenv("ATE_API_STORE_BACKEND"); v != "" && !pflag.CommandLine.Changed("store-backend") {
+		*storeBackend = v
+	}
+	if *storeBackend != storeBackendPostgres && *storeBackend != storeBackendMySQL {
+		return fmt.Errorf("--store-backend must be %q or %q, got %q", storeBackendPostgres, storeBackendMySQL, *storeBackend)
 	}
 	if !pflag.CommandLine.Changed("postgres-pool-max-conns") {
 		if raw, ok := os.LookupEnv("ATE_API_POSTGRES_POOL_MAX_CONNS"); ok && raw != "" {
@@ -419,12 +439,18 @@ func logFlagValues(ctx context.Context) {
 		slog.String("grpc-listen-addr", *listenAddr),
 		slog.String("grpc-server-cred-bundle", *grpcServerCredBundle),
 		slog.String("authentication-config", *authenticationConfigFile),
+		slog.String("store-backend", *storeBackend),
 		postgresConnectionAttr("postgres-read-write-connection-string", *postgresReadWriteConnectionString),
 		postgresConnectionAttr("postgres-owner-connection-string", *postgresOwnerConnectionString),
 		slog.String("postgres-read-write-role", *postgresReadWriteRole),
 		slog.String("postgres-owner-role", *postgresOwnerRole),
 		slog.String("postgres-schema", *postgresSchema),
 		slog.Int("postgres-pool-max-conns", int(*postgresPoolMaxConns)),
+		mysqlConnectionAttr("mysql-read-write-connection-string", *mysqlReadWriteConnectionString),
+		mysqlConnectionAttr("mysql-owner-connection-string", *mysqlOwnerConnectionString),
+		slog.String("mysql-tls-ca-file", *mysqlTLSCAFile),
+		slog.String("mysql-tls-cert-file", *mysqlTLSCertFile),
+		slog.String("mysql-tls-key-file", *mysqlTLSKeyFile),
 		slog.Bool("experimental-enable-authz", *experimentalEnableAuthz),
 		slog.Any("authz-bootstrap-owners", *authzBootstrapOwners),
 		slog.String("actor-id-jwt-pool", *actorIDJWTPoolFile),
@@ -490,31 +516,71 @@ func postgresConnectionAttr(key, connString string) slog.Attr {
 	)
 }
 
-// connectStore builds the PostgreSQL-backed *atepg.Persistence. Startup fails if
-// its configuration is missing or the database can't be reached.
-func connectStore(ctx context.Context) (*atepg.Persistence, error) {
-	if *postgresReadWriteConnectionString == "" {
-		return nil, fmt.Errorf("--postgres-read-write-connection-string is required")
+// mysqlConnectionAttr is the MySQL counterpart of postgresConnectionAttr. TLS
+// is on when the DSN asks for it or any --mysql-tls-*-file flag is set.
+func mysqlConnectionAttr(key, connString string) slog.Attr {
+	if connString == "" {
+		return slog.String(key, "")
 	}
-	if *postgresPoolMaxConns < 0 {
-		return nil, fmt.Errorf("--postgres-pool-max-conns must not be negative")
-	}
-	persistence, err := connectPostgresWithRetries(ctx)
+	cfg, err := mysql.ParseDSN(connString)
 	if err != nil {
-		return nil, fmt.Errorf("setting up PostgreSQL: %w", err)
+		return slog.String(key, "<invalid mysql connection string>")
 	}
-	return persistence, nil
+	host, port, err := net.SplitHostPort(cfg.Addr)
+	if err != nil {
+		host = cfg.Addr
+	}
+	portNumber, _ := strconv.Atoi(port)
+	tlsFiles := *mysqlTLSCAFile != "" || *mysqlTLSCertFile != "" || *mysqlTLSKeyFile != ""
+	return slog.Group(key,
+		slog.String("host", host),
+		slog.Int("port", portNumber),
+		slog.String("database", cfg.DBName),
+		slog.String("user", cfg.User),
+		slog.Bool("password-set", cfg.Passwd != ""),
+		slog.Bool("tls", tlsFiles || (cfg.TLSConfig != "" && cfg.TLSConfig != "false")),
+	)
 }
 
-var (
-	postgresConnectTries  = 30
-	postgresConnectPeriod = 2 * time.Second
+const (
+	storeBackendPostgres = "postgres"
+	storeBackendMySQL    = "mysql"
 )
 
-func connectPostgresWithRetries(ctx context.Context) (*atepg.Persistence, error) {
-	var connectErr error
-	for attempt := 1; attempt <= postgresConnectTries; attempt++ {
-		persistence, err := atepg.Connect(ctx, atepg.ConnectConfig{
+// persistenceBackend is the part of a store backend that main uses beyond
+// store.Interface.
+type persistenceBackend interface {
+	store.Interface
+	Close()
+	SetPolicyManager(*authz.PolicyManager)
+}
+
+// connectedStore is a connected store backend and the shared read/write pool
+// it runs on. The caller owns the pool and closes it after the persistence.
+type connectedStore struct {
+	persistence persistenceBackend
+	authz       authz.Backend
+	closePool   func()
+}
+
+// connectStore connects the backend selected by --store-backend. Startup fails
+// if its configuration is missing or the database can't be reached.
+func connectStore(ctx context.Context) (connectedStore, error) {
+	if *storeBackend == storeBackendMySQL {
+		return connectMySQL(ctx)
+	}
+	return connectPostgres(ctx)
+}
+
+func connectPostgres(ctx context.Context) (connectedStore, error) {
+	if *postgresReadWriteConnectionString == "" {
+		return connectedStore{}, fmt.Errorf("--postgres-read-write-connection-string is required")
+	}
+	if *postgresPoolMaxConns < 0 {
+		return connectedStore{}, fmt.Errorf("--postgres-pool-max-conns must not be negative")
+	}
+	persistence, err := connectWithRetries(ctx, "PostgreSQL", atepg.ErrUnavailable, func() (*atepg.Persistence, error) {
+		return atepg.Connect(ctx, atepg.ConnectConfig{
 			ReadWriteDSN:  *postgresReadWriteConnectionString,
 			OwnerDSN:      *postgresOwnerConnectionString,
 			ReadWriteRole: *postgresReadWriteRole,
@@ -522,24 +588,66 @@ func connectPostgresWithRetries(ctx context.Context) (*atepg.Persistence, error)
 			Schema:        *postgresSchema,
 			PoolMaxConns:  *postgresPoolMaxConns,
 		})
+	})
+	if err != nil {
+		return connectedStore{}, fmt.Errorf("setting up PostgreSQL: %w", err)
+	}
+	pool := persistence.Pool()
+	return connectedStore{persistence: persistence, authz: authz.PostgresBackend(pool), closePool: pool.Close}, nil
+}
+
+func connectMySQL(ctx context.Context) (connectedStore, error) {
+	if *mysqlReadWriteConnectionString == "" {
+		return connectedStore{}, fmt.Errorf("--mysql-read-write-connection-string is required")
+	}
+	persistence, err := connectWithRetries(ctx, "MySQL", atemy.ErrUnavailable, func() (*atemy.Persistence, error) {
+		return atemy.Connect(ctx, atemy.ConnectConfig{
+			ReadWriteDSN: *mysqlReadWriteConnectionString,
+			OwnerDSN:     *mysqlOwnerConnectionString,
+			TLS: atemy.TLSFiles{
+				CAFile:   *mysqlTLSCAFile,
+				CertFile: *mysqlTLSCertFile,
+				KeyFile:  *mysqlTLSKeyFile,
+			},
+		})
+	})
+	if err != nil {
+		return connectedStore{}, fmt.Errorf("setting up MySQL: %w", err)
+	}
+	db := persistence.DB()
+	return connectedStore{persistence: persistence, authz: authz.MySQLBackend(db), closePool: func() { _ = db.Close() }}, nil
+}
+
+var (
+	storeConnectTries  = 30
+	storeConnectPeriod = 2 * time.Second
+)
+
+// connectWithRetries retries connect while it fails with unavailable, so
+// ateapi can start before its database is reachable.
+func connectWithRetries[T any](ctx context.Context, database string, unavailable error, connect func() (T, error)) (T, error) {
+	var zero T
+	var connectErr error
+	for attempt := 1; attempt <= storeConnectTries; attempt++ {
+		persistence, err := connect()
 		if err == nil {
 			return persistence, nil
 		}
-		if !errors.Is(err, atepg.ErrUnavailable) {
-			return nil, err
+		if !errors.Is(err, unavailable) {
+			return zero, err
 		}
 		connectErr = err
-		slog.WarnContext(ctx, "Failed to connect to PostgreSQL, retrying...", slog.Int("attempt", attempt), slog.Any("err", err))
-		if attempt == postgresConnectTries {
+		slog.WarnContext(ctx, "Failed to connect to database, retrying...", slog.String("database", database), slog.Int("attempt", attempt), slog.Any("err", err))
+		if attempt == storeConnectTries {
 			break
 		}
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(postgresConnectPeriod):
+			return zero, ctx.Err()
+		case <-time.After(storeConnectPeriod):
 		}
 	}
-	return nil, fmt.Errorf("connect to PostgreSQL after %d attempts: %w", postgresConnectTries, connectErr)
+	return zero, fmt.Errorf("connect to %s after %d attempts: %w", database, storeConnectTries, connectErr)
 }
 
 // newKubeClients builds the standard Kubernetes clientset and the ate
