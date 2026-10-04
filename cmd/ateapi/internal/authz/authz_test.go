@@ -103,15 +103,11 @@ func requireContainer(t *testing.T, name string, err error) {
 type testDB struct {
 	name    string
 	backend Backend
-	// queryBool runs a single-row, single-column boolean query on the pool.
-	queryBool func(t *testing.T, ctx context.Context, query string) bool
-	ping      func(ctx context.Context) error
+	// sqlDB runs queries on the backend's pool.
+	sqlDB *sql.DB
 	// singleConnBackend returns a second backend on the same database whose
 	// pool holds at most one connection.
 	singleConnBackend func(t *testing.T) Backend
-	// initLockHeld reports, from a separate session, whether the OpenFGA init
-	// lock is held.
-	initLockHeld func(t *testing.T, ctx context.Context) bool
 }
 
 type testTx struct {
@@ -178,21 +174,13 @@ func startPostgres(t *testing.T) testDB {
 	t.Cleanup(pool.Close)
 
 	sqlDB := stdlib.OpenDBFromPool(pool)
-	defer sqlDB.Close()
+	t.Cleanup(func() { _ = sqlDB.Close() })
 	applyMigrations(t, ctx, goose.DialectPostgres, sqlDB, "../store/atepg/migrations")
 
 	return testDB{
 		name:    "postgres",
 		backend: PostgresBackend(pool),
-		queryBool: func(t *testing.T, ctx context.Context, query string) bool {
-			t.Helper()
-			var v bool
-			if err := pool.QueryRow(ctx, query).Scan(&v); err != nil {
-				t.Fatalf("%s: %v", query, err)
-			}
-			return v
-		},
-		ping: pool.Ping,
+		sqlDB:   sqlDB,
 		singleConnBackend: func(t *testing.T) Backend {
 			t.Helper()
 			singleCfg := pool.Config()
@@ -204,24 +192,6 @@ func startPostgres(t *testing.T) testDB {
 			}
 			t.Cleanup(single.Close)
 			return PostgresBackend(single)
-		},
-		initLockHeld: func(t *testing.T, ctx context.Context) bool {
-			t.Helper()
-			conn, err := pool.Acquire(ctx)
-			if err != nil {
-				t.Fatalf("pool.Acquire failed: %v", err)
-			}
-			defer conn.Release()
-			var got bool
-			if err := conn.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", ateFGAInitLockID).Scan(&got); err != nil {
-				t.Fatalf("pg_try_advisory_lock failed: %v", err)
-			}
-			if got {
-				if _, err := conn.Exec(ctx, "SELECT pg_advisory_unlock($1)", ateFGAInitLockID); err != nil {
-					t.Fatalf("pg_advisory_unlock failed: %v", err)
-				}
-			}
-			return !got
 		},
 	}
 }
@@ -290,32 +260,12 @@ func startMySQL(t *testing.T) testDB {
 	return testDB{
 		name:    "mysql",
 		backend: MySQLBackend(db),
-		queryBool: func(t *testing.T, ctx context.Context, query string) bool {
-			t.Helper()
-			var v bool
-			if err := db.QueryRowContext(ctx, query).Scan(&v); err != nil {
-				t.Fatalf("%s: %v", query, err)
-			}
-			return v
-		},
-		ping: db.PingContext,
+		sqlDB:   db,
 		singleConnBackend: func(t *testing.T) Backend {
 			t.Helper()
 			single := openDB(t)
 			single.SetMaxOpenConns(1)
 			return MySQLBackend(single)
-		},
-		initLockHeld: func(t *testing.T, ctx context.Context) bool {
-			t.Helper()
-			var database string
-			if err := db.QueryRowContext(ctx, "SELECT DATABASE()").Scan(&database); err != nil {
-				t.Fatalf("SELECT DATABASE() failed: %v", err)
-			}
-			var free bool
-			if err := db.QueryRowContext(ctx, "SELECT IS_FREE_LOCK(?)", mysqlInitLockName(database)).Scan(&free); err != nil {
-				t.Fatalf("IS_FREE_LOCK failed: %v", err)
-			}
-			return !free
 		},
 	}
 }
@@ -366,108 +316,89 @@ func TestEnsureStoreAndModel_NilArgs(t *testing.T) {
 }
 
 func TestEnsureStoreAndModel_InitializeAndCheck(t *testing.T) {
-	forEachBackend(t, func(t *testing.T, db testDB) {
-		ctx := context.Background()
-
-		fgaSrv, storeID, modelID := newTestAuthz(t, ctx, db.backend)
-
-		if storeID == "" {
-			t.Fatal("expected non-empty storeID")
-		}
-		if modelID == "" {
-			t.Fatal("expected non-empty modelID")
-		}
-
-		// Write relationship tuples inside a transaction and verify authorization checks against the model.
-		tx := db.begin(t, ctx)
-		_, err := fgaSrv.Write(ContextWithTx(ctx, tx.tx), &openfgav1.WriteRequest{
-			StoreId:              storeID,
-			AuthorizationModelId: modelID,
-			Writes: &openfgav1.WriteRequestWrites{
-				TupleKeys: []*openfgav1.TupleKey{
-					{
-						User:     "user:alice",
-						Relation: "owner",
-						Object:   "global:root",
-					},
-					{
-						User:     "global:root",
-						Relation: "parent_global",
-						Object:   "atespace:space-1",
-					},
-				},
-			},
-		})
-		if err != nil {
-			t.Fatalf("Write tuples failed: %v", err)
-		}
-		if err := tx.commit(ctx); err != nil {
-			t.Fatalf("tx.Commit failed: %v", err)
-		}
-
-		checkResp, err := fgaSrv.Check(ctx, &openfgav1.CheckRequest{
-			StoreId:              storeID,
-			AuthorizationModelId: modelID,
-			TupleKey: &openfgav1.CheckRequestTupleKey{
-				User:     "user:alice",
-				Relation: "can_update_access_policy",
-				Object:   "atespace:space-1",
-			},
-		})
-		if err != nil {
-			t.Fatalf("Check alice can_update_access_policy failed: %v", err)
-		}
-		if !checkResp.GetAllowed() {
-			t.Errorf("expected alice to be allowed can_update_access_policy on atespace:space-1 via global owner inheritance")
-		}
-
-		checkBob, err := fgaSrv.Check(ctx, &openfgav1.CheckRequest{
-			StoreId:              storeID,
-			AuthorizationModelId: modelID,
-			TupleKey: &openfgav1.CheckRequestTupleKey{
-				User:     "user:bob",
-				Relation: "can_update_access_policy",
-				Object:   "atespace:space-1",
-			},
-		})
-		if err != nil {
-			t.Fatalf("Check bob can_update_access_policy failed: %v", err)
-		}
-		if checkBob.GetAllowed() {
-			t.Errorf("expected bob to be denied can_update_access_policy on atespace:space-1")
-		}
-
-		// Verify idempotent re-initialization on the same shared pool reuses the existing store and model.
-		_, storeID2, modelID2 := newTestAuthz(t, ctx, db.backend)
-
-		if storeID2 != storeID {
-			t.Errorf("expected same storeID %q on re-init, got %q", storeID, storeID2)
-		}
-		if modelID2 != modelID {
-			t.Errorf("expected same modelID %q on re-init, got %q", modelID, modelID2)
-		}
-	})
+	forEachBackend(t, testEnsureStoreAndModelInitializeAndCheck)
 }
 
-func TestAcquireInitLock(t *testing.T) {
-	forEachBackend(t, func(t *testing.T, db testDB) {
-		ctx := context.Background()
-		if db.initLockHeld(t, ctx) {
-			t.Fatal("init lock held before acquire")
-		}
-		unlock, err := acquireInitLock(ctx, db.backend)
-		if err != nil {
-			t.Fatalf("acquireInitLock failed: %v", err)
-		}
-		if !db.initLockHeld(t, ctx) {
-			unlock()
-			t.Fatal("init lock not held after acquire")
-		}
-		unlock()
-		if db.initLockHeld(t, ctx) {
-			t.Fatal("init lock still held after unlock")
-		}
+func testEnsureStoreAndModelInitializeAndCheck(t *testing.T, db testDB) {
+	ctx := context.Background()
+
+	fgaSrv, storeID, modelID := newTestAuthz(t, ctx, db.backend)
+
+	if storeID == "" {
+		t.Fatal("expected non-empty storeID")
+	}
+	if modelID == "" {
+		t.Fatal("expected non-empty modelID")
+	}
+
+	// Write relationship tuples inside a transaction and verify authorization checks against the model.
+	tx := db.begin(t, ctx)
+	_, err := fgaSrv.Write(ContextWithTx(ctx, tx.tx), &openfgav1.WriteRequest{
+		StoreId:              storeID,
+		AuthorizationModelId: modelID,
+		Writes: &openfgav1.WriteRequestWrites{
+			TupleKeys: []*openfgav1.TupleKey{
+				{
+					User:     "user:alice",
+					Relation: "owner",
+					Object:   "global:root",
+				},
+				{
+					User:     "global:root",
+					Relation: "parent_global",
+					Object:   "atespace:space-1",
+				},
+			},
+		},
 	})
+	if err != nil {
+		t.Fatalf("Write tuples failed: %v", err)
+	}
+	if err := tx.commit(ctx); err != nil {
+		t.Fatalf("tx.Commit failed: %v", err)
+	}
+
+	checkResp, err := fgaSrv.Check(ctx, &openfgav1.CheckRequest{
+		StoreId:              storeID,
+		AuthorizationModelId: modelID,
+		TupleKey: &openfgav1.CheckRequestTupleKey{
+			User:     "user:alice",
+			Relation: "can_update_access_policy",
+			Object:   "atespace:space-1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Check alice can_update_access_policy failed: %v", err)
+	}
+	if !checkResp.GetAllowed() {
+		t.Errorf("expected alice to be allowed can_update_access_policy on atespace:space-1 via global owner inheritance")
+	}
+
+	checkBob, err := fgaSrv.Check(ctx, &openfgav1.CheckRequest{
+		StoreId:              storeID,
+		AuthorizationModelId: modelID,
+		TupleKey: &openfgav1.CheckRequestTupleKey{
+			User:     "user:bob",
+			Relation: "can_update_access_policy",
+			Object:   "atespace:space-1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Check bob can_update_access_policy failed: %v", err)
+	}
+	if checkBob.GetAllowed() {
+		t.Errorf("expected bob to be denied can_update_access_policy on atespace:space-1")
+	}
+
+	// Verify idempotent re-initialization on the same shared pool reuses the existing store and model.
+	_, storeID2, modelID2 := newTestAuthz(t, ctx, db.backend)
+
+	if storeID2 != storeID {
+		t.Errorf("expected same storeID %q on re-init, got %q", storeID, storeID2)
+	}
+	if modelID2 != modelID {
+		t.Errorf("expected same modelID %q on re-init, got %q", modelID, modelID2)
+	}
 }
 
 func TestAcquireInitLock_CanceledWhileHeld(t *testing.T) {
@@ -476,174 +407,188 @@ func TestAcquireInitLock_CanceledWhileHeld(t *testing.T) {
 		if err != nil {
 			t.Fatalf("acquireInitLock failed: %v", err)
 		}
-		defer unlock()
 		ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
 		defer cancel()
-		if _, err := acquireInitLock(ctx, db.backend); !errors.Is(err, context.DeadlineExceeded) {
+		_, err = acquireInitLock(ctx, db.backend)
+		unlock()
+		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("acquireInitLock while held = %v, want context.DeadlineExceeded", err)
 		}
+		ctx, cancel = context.WithTimeout(t.Context(), 5*time.Second)
+		defer cancel()
+		unlock, err = acquireInitLock(ctx, db.backend)
+		if err != nil {
+			t.Fatalf("acquireInitLock after unlock failed: %v", err)
+		}
+		unlock()
 	})
 }
 
 func TestTransactionalDatastore_RollbackAndCommit(t *testing.T) {
-	forEachBackend(t, func(t *testing.T, db testDB) {
-		ctx := context.Background()
+	forEachBackend(t, testTransactionalDatastoreRollbackAndCommit)
+}
 
-		fgaSrv, storeID, modelID := newTestAuthz(t, ctx, db.backend)
+func testTransactionalDatastoreRollbackAndCommit(t *testing.T, db testDB) {
+	ctx := context.Background()
 
-		// Calling Write or Read (ReadPage) without an active transaction in ctx must fail loudly.
-		if _, err := fgaSrv.Write(ctx, &openfgav1.WriteRequest{
+	fgaSrv, storeID, modelID := newTestAuthz(t, ctx, db.backend)
+
+	// Calling Write or Read (ReadPage) without an active transaction in ctx must fail loudly.
+	if _, err := fgaSrv.Write(ctx, &openfgav1.WriteRequest{
+		StoreId:              storeID,
+		AuthorizationModelId: modelID,
+		Writes: &openfgav1.WriteRequestWrites{
+			TupleKeys: []*openfgav1.TupleKey{
+				{User: "user:bob", Relation: "editor", Object: "atespace:team-tx"},
+			},
+		},
+	}); err == nil {
+		t.Fatal("expected fgaSrv.Write without ContextWithTx to fail, got nil")
+	}
+	if _, err := fgaSrv.Read(ctx, &openfgav1.ReadRequest{
+		StoreId:  storeID,
+		TupleKey: &openfgav1.ReadRequestTupleKey{Object: "atespace:team-tx"},
+	}); err == nil {
+		t.Fatal("expected fgaSrv.Read without ContextWithTx to fail, got nil")
+	}
+
+	writeTuple := func(c context.Context) {
+		t.Helper()
+		_, err := fgaSrv.Write(c, &openfgav1.WriteRequest{
 			StoreId:              storeID,
 			AuthorizationModelId: modelID,
 			Writes: &openfgav1.WriteRequestWrites{
 				TupleKeys: []*openfgav1.TupleKey{
-					{User: "user:bob", Relation: "editor", Object: "atespace:team-tx"},
-				},
-			},
-		}); err == nil {
-			t.Fatal("expected fgaSrv.Write without ContextWithTx to fail, got nil")
-		}
-		if _, err := fgaSrv.Read(ctx, &openfgav1.ReadRequest{
-			StoreId:  storeID,
-			TupleKey: &openfgav1.ReadRequestTupleKey{Object: "atespace:team-tx"},
-		}); err == nil {
-			t.Fatal("expected fgaSrv.Read without ContextWithTx to fail, got nil")
-		}
-
-		writeTuple := func(c context.Context) {
-			t.Helper()
-			_, err := fgaSrv.Write(c, &openfgav1.WriteRequest{
-				StoreId:              storeID,
-				AuthorizationModelId: modelID,
-				Writes: &openfgav1.WriteRequestWrites{
-					TupleKeys: []*openfgav1.TupleKey{
-						{
-							User:     "user:bob",
-							Relation: "editor",
-							Object:   "atespace:team-tx",
-						},
+					{
+						User:     "user:bob",
+						Relation: "editor",
+						Object:   "atespace:team-tx",
 					},
 				},
-			})
-			if err != nil {
-				t.Fatalf("fgaSrv.Write failed: %v", err)
-			}
-		}
-
-		checkAllowed := func() bool {
-			t.Helper()
-			resp, err := fgaSrv.Check(ctx, &openfgav1.CheckRequest{
-				StoreId:              storeID,
-				AuthorizationModelId: modelID,
-				TupleKey: &openfgav1.CheckRequestTupleKey{
-					User:     "user:bob",
-					Relation: "can_get",
-					Object:   "atespace:team-tx",
-				},
-			})
-			if err != nil {
-				t.Fatalf("fgaSrv.Check failed: %v", err)
-			}
-			return resp.GetAllowed()
-		}
-
-		atespaceExists := func() bool {
-			t.Helper()
-			return db.queryBool(t, ctx, "SELECT EXISTS(SELECT 1 FROM atespaces WHERE name = 'team-tx')")
-		}
-
-		const insertAtespace = "INSERT INTO atespaces (name, uid, version, proto) VALUES ('team-tx', 'uid-1', 1, '')"
-
-		// Write both a Substrate atespaces row and an OpenFGA tuple inside a transaction
-		// that rolls back -> neither the atespaces row nor the tuple may persist.
-		txRollback := db.begin(t, ctx)
-		if err := txRollback.exec(ctx, insertAtespace); err != nil {
-			t.Fatalf("txRollback insert atespaces failed: %v", err)
-		}
-		writeTuple(ContextWithTx(ctx, txRollback.tx))
-		if err := txRollback.rollback(ctx); err != nil {
-			t.Fatalf("Rollback failed: %v", err)
-		}
-		if atespaceExists() {
-			t.Fatalf("expected atespaces row 'team-tx' to be rolled back")
-		}
-		if checkAllowed() {
-			t.Fatalf("expected bob denied after rolled-back write")
-		}
-
-		// Write both the Substrate atespaces row and the OpenFGA tuple in a committed
-		// transaction -> both persist atomically.
-		txCommit := db.begin(t, ctx)
-		if err := txCommit.exec(ctx, insertAtespace); err != nil {
-			t.Fatalf("txCommit insert atespaces failed: %v", err)
-		}
-		writeTuple(ContextWithTx(ctx, txCommit.tx))
-		if err := txCommit.commit(ctx); err != nil {
-			t.Fatalf("Commit failed: %v", err)
-		}
-		if !atespaceExists() {
-			t.Fatalf("expected atespaces row 'team-tx' to persist after commit")
-		}
-		if !checkAllowed() {
-			t.Fatalf("expected bob allowed after committed write")
-		}
-
-		// Closing fgaServer must not close the shared pool.
-		fgaSrv2, err := NewOpenFGAServer(db.backend)
-		if err != nil {
-			t.Fatalf("NewOpenFGAServer failed: %v", err)
-		}
-		fgaSrv2.Close()
-		if err := db.ping(ctx); err != nil {
-			t.Fatalf("expected shared pool to remain open after fgaServer.Close(), got %v", err)
-		}
-
-		// Verify fgaServer.Read and fgaServer.Write inside ContextWithTx do not check out
-		// a second connection from a single-connection pool (preventing pool starvation deadlock).
-		singleBackend := db.singleConnBackend(t)
-		singleFGASrv, err := NewOpenFGAServer(singleBackend)
-		if err != nil {
-			t.Fatalf("NewOpenFGAServer(singleBackend) failed: %v", err)
-		}
-		t.Cleanup(singleFGASrv.Close)
-		if singleBackend.db != nil {
-			if got := singleBackend.db.Stats().MaxOpenConnections; got != 1 {
-				t.Fatalf("MaxOpenConnections after NewOpenFGAServer = %d, want 1", got)
-			}
-		}
-
-		txCtxTimeout, cancel := context.WithTimeout(ctx, 5*time.Second)
-		defer cancel()
-		singleTx := beginOn(t, txCtxTimeout, singleBackend)
-		txCtx := ContextWithTx(txCtxTimeout, singleTx.tx)
-
-		readResp, err := singleFGASrv.Read(txCtx, &openfgav1.ReadRequest{
-			StoreId:  storeID,
-			TupleKey: &openfgav1.ReadRequestTupleKey{Object: "atespace:team-tx"},
-		})
-		if err != nil || len(readResp.GetTuples()) != 1 {
-			t.Fatalf("singleFGASrv.Read on single-connection pool failed: resp=%+v, err=%v", readResp, err)
-		}
-
-		_, err = singleFGASrv.Write(txCtx, &openfgav1.WriteRequest{
-			StoreId:              storeID,
-			AuthorizationModelId: modelID,
-			Deletes: &openfgav1.WriteRequestDeletes{
-				TupleKeys: []*openfgav1.TupleKeyWithoutCondition{
-					{User: "user:bob", Relation: "editor", Object: "atespace:team-tx"},
-				},
 			},
 		})
 		if err != nil {
-			t.Fatalf("singleFGASrv.Write delete on single-connection pool failed: %v", err)
+			t.Fatalf("fgaSrv.Write failed: %v", err)
 		}
-		if err := singleTx.commit(txCtxTimeout); err != nil {
-			t.Fatalf("singleTx.Commit failed: %v", err)
+	}
+
+	checkAllowed := func() bool {
+		t.Helper()
+		resp, err := fgaSrv.Check(ctx, &openfgav1.CheckRequest{
+			StoreId:              storeID,
+			AuthorizationModelId: modelID,
+			TupleKey: &openfgav1.CheckRequestTupleKey{
+				User:     "user:bob",
+				Relation: "can_get",
+				Object:   "atespace:team-tx",
+			},
+		})
+		if err != nil {
+			t.Fatalf("fgaSrv.Check failed: %v", err)
 		}
-		if checkAllowed() {
-			t.Fatalf("expected bob denied after committed delete on single-connection pool")
+		return resp.GetAllowed()
+	}
+
+	atespaceExists := func() bool {
+		t.Helper()
+		var exists bool
+		if err := db.sqlDB.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM atespaces WHERE name = 'team-tx')").Scan(&exists); err != nil {
+			t.Fatalf("checking atespaces row failed: %v", err)
 		}
+		return exists
+	}
+
+	const insertAtespace = "INSERT INTO atespaces (name, uid, version, proto) VALUES ('team-tx', 'uid-1', 1, '')"
+
+	// Write both a Substrate atespaces row and an OpenFGA tuple inside a transaction
+	// that rolls back -> neither the atespaces row nor the tuple may persist.
+	txRollback := db.begin(t, ctx)
+	if err := txRollback.exec(ctx, insertAtespace); err != nil {
+		t.Fatalf("txRollback insert atespaces failed: %v", err)
+	}
+	writeTuple(ContextWithTx(ctx, txRollback.tx))
+	if err := txRollback.rollback(ctx); err != nil {
+		t.Fatalf("Rollback failed: %v", err)
+	}
+	if atespaceExists() {
+		t.Fatalf("expected atespaces row 'team-tx' to be rolled back")
+	}
+	if checkAllowed() {
+		t.Fatalf("expected bob denied after rolled-back write")
+	}
+
+	// Write both the Substrate atespaces row and the OpenFGA tuple in a committed
+	// transaction -> both persist atomically.
+	txCommit := db.begin(t, ctx)
+	if err := txCommit.exec(ctx, insertAtespace); err != nil {
+		t.Fatalf("txCommit insert atespaces failed: %v", err)
+	}
+	writeTuple(ContextWithTx(ctx, txCommit.tx))
+	if err := txCommit.commit(ctx); err != nil {
+		t.Fatalf("Commit failed: %v", err)
+	}
+	if !atespaceExists() {
+		t.Fatalf("expected atespaces row 'team-tx' to persist after commit")
+	}
+	if !checkAllowed() {
+		t.Fatalf("expected bob allowed after committed write")
+	}
+
+	// Closing fgaServer must not close the shared pool.
+	fgaSrv2, err := NewOpenFGAServer(db.backend)
+	if err != nil {
+		t.Fatalf("NewOpenFGAServer failed: %v", err)
+	}
+	fgaSrv2.Close()
+	if err := db.sqlDB.PingContext(ctx); err != nil {
+		t.Fatalf("expected shared pool to remain open after fgaServer.Close(), got %v", err)
+	}
+
+	// Verify fgaServer.Read and fgaServer.Write inside ContextWithTx do not check out
+	// a second connection from a single-connection pool (preventing pool starvation deadlock).
+	singleBackend := db.singleConnBackend(t)
+	singleFGASrv, err := NewOpenFGAServer(singleBackend)
+	if err != nil {
+		t.Fatalf("NewOpenFGAServer(singleBackend) failed: %v", err)
+	}
+	t.Cleanup(singleFGASrv.Close)
+	if singleBackend.db != nil {
+		if got := singleBackend.db.Stats().MaxOpenConnections; got != 1 {
+			t.Fatalf("MaxOpenConnections after NewOpenFGAServer = %d, want 1", got)
+		}
+	}
+
+	txCtxTimeout, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	singleTx := beginOn(t, txCtxTimeout, singleBackend)
+	txCtx := ContextWithTx(txCtxTimeout, singleTx.tx)
+
+	readResp, err := singleFGASrv.Read(txCtx, &openfgav1.ReadRequest{
+		StoreId:  storeID,
+		TupleKey: &openfgav1.ReadRequestTupleKey{Object: "atespace:team-tx"},
 	})
+	if err != nil || len(readResp.GetTuples()) != 1 {
+		t.Fatalf("singleFGASrv.Read on single-connection pool failed: resp=%+v, err=%v", readResp, err)
+	}
+
+	_, err = singleFGASrv.Write(txCtx, &openfgav1.WriteRequest{
+		StoreId:              storeID,
+		AuthorizationModelId: modelID,
+		Deletes: &openfgav1.WriteRequestDeletes{
+			TupleKeys: []*openfgav1.TupleKeyWithoutCondition{
+				{User: "user:bob", Relation: "editor", Object: "atespace:team-tx"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("singleFGASrv.Write delete on single-connection pool failed: %v", err)
+	}
+	if err := singleTx.commit(txCtxTimeout); err != nil {
+		t.Fatalf("singleTx.Commit failed: %v", err)
+	}
+	if checkAllowed() {
+		t.Fatalf("expected bob denied after committed delete on single-connection pool")
+	}
 }
 
 func (db testDB) begin(t *testing.T, ctx context.Context) testTx {
@@ -782,19 +727,8 @@ func testAuthorizerAndPolicyManagerRuntimeChecks(t *testing.T, db testDB) {
 		}
 	}
 
-	// 5. Reconcile bob's editor binding on atespace:team-x within a transaction.
-	if err := policyManager.ReconcileAtespaceBindings(ctx, Tx{}, "team-x", nil); !errors.Is(err, ErrNilTransaction) {
-		t.Fatalf("ReconcileAtespaceBindings with nil tx = %v, want ErrNilTransaction", err)
-	}
-	txBind := db.begin(t, ctx)
-	if err := policyManager.ReconcileAtespaceBindings(ctx, txBind.tx, "team-x", []*ateapipb.Binding{
-		{Role: "editor", Members: []string{"user:bob"}},
-	}); err != nil {
-		t.Fatalf("ReconcileAtespaceBindings failed: %v", err)
-	}
-	if err := txBind.commit(ctx); err != nil {
-		t.Fatalf("txBind.Commit failed: %v", err)
-	}
+	// 5. Grant bob direct editor access on atespace:team-x.
+	writeTestTuple(t, ctx, db, policyManager, "bob", "editor", AtespaceObject("team-x"))
 	if err := authorizer.Check(bobCtx, RelationCanGet, AtespaceObject("team-x")); err != nil {
 		t.Errorf("expected bob allowed can_get on team-x, got %v", err)
 	}

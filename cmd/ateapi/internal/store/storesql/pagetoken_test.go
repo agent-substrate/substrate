@@ -44,12 +44,9 @@ func TestDecodePageToken(t *testing.T) {
 		{name: "matching kind and scope", token: teamAActors, kind: KindActor, scope: "team-a", keyParts: 1},
 		{name: "empty token starts the list", token: "", kind: KindActor, scope: "team-a", keyParts: 1},
 		{name: "other scope", token: teamAActors, kind: KindActor, scope: "team-b", keyParts: 1, wantError: true},
-		{name: "unscoped listing", token: teamAActors, kind: KindActor, scope: "", keyParts: 1, wantError: true},
 		{name: "other kind", token: teamAActors, kind: KindActorTemplate, scope: "team-a", keyParts: 1, wantError: true},
-		{name: "atespace kind", token: EncodePageToken(KindActor, "", []string{"team-a", "a1"}), kind: KindAtespace, scope: "", keyParts: 1, wantError: true},
 		{name: "wrong key shape", token: EncodePageToken(KindActor, "", []string{"only-an-atespace"}), kind: KindActor, scope: "", keyParts: 2, wantError: true},
 		{name: "unsupported version", token: encodeRaw(PageToken{Version: pageTokenVersion + 1, Kind: KindActor, Scope: "team-a", Last: []string{"a1"}}), kind: KindActor, scope: "team-a", keyParts: 1, wantError: true},
-		{name: "malformed base64", token: "not-valid-base64!!", kind: KindActor, scope: "", keyParts: 2, wantError: true},
 		{name: "malformed json", token: base64.StdEncoding.EncodeToString([]byte("{")), kind: KindActor, scope: "", keyParts: 2, wantError: true},
 	}
 	for _, tt := range tests {

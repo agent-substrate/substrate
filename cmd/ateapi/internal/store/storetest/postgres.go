@@ -64,17 +64,7 @@ func SetupPostgresPersistence(t *testing.T) *atepg.Persistence {
 			t.Errorf("dropping PostgreSQL test database: %v", err)
 		}
 	})
-	// The server always wires a PolicyManager, so test stores do too.
-	fgaServer, err := authz.NewOpenFGAServer(authz.PostgresBackend(pool))
-	if err != nil {
-		t.Fatalf("creating OpenFGA server: %v", err)
-	}
-	t.Cleanup(fgaServer.Close)
-	_, policyManager, err := authz.New(ctx, authz.PostgresBackend(pool), fgaServer, nil)
-	if err != nil {
-		t.Fatalf("initializing OpenFGA authz: %v", err)
-	}
-	persistence.SetPolicyManager(policyManager)
+	wirePolicyManager(t, ctx, persistence, authz.PostgresBackend(pool))
 	return persistence
 }
 

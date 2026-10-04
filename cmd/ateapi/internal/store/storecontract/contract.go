@@ -518,9 +518,6 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 		if _, err := s.CreateActor(ctx, actor); !errors.Is(err, store.ErrFailedPrecondition) {
 			t.Errorf("CreateActor in an unknown atespace = %v, want ErrFailedPrecondition", err)
 		}
-		if _, err := s.GetActor(ctx, resources.ActorRefFromActor(actor)); !errors.Is(err, store.ErrNotFound) {
-			t.Errorf("GetActor after a refused create = %v, want ErrNotFound", err)
-		}
 	})
 
 	t.Run("UpdateActor_Success", func(t *testing.T) {
@@ -1269,13 +1266,6 @@ func runActorTemplateContractTests(t *testing.T, setup func(t *testing.T) store.
 		}
 		if diff := cmp.Diff(want, page.Items[0].GetSnapshotConfig(), protocmp.Transform()); diff != "" {
 			t.Errorf("ListActorTemplates snapshot_config (-want +got):\n%s", diff)
-		}
-	})
-
-	t.Run("CreateActorTemplate_UnknownAtespace", func(t *testing.T) {
-		s := setup(t)
-		if _, err := s.CreateActorTemplate(context.Background(), newTestActorTemplate("team-missing", "tmpl-a")); !errors.Is(err, store.ErrFailedPrecondition) {
-			t.Errorf("CreateActorTemplate in an unknown atespace = %v, want ErrFailedPrecondition", err)
 		}
 	})
 

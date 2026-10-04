@@ -76,6 +76,22 @@ func nextDatabaseName() string {
 	return fmt.Sprintf("ateapi_test_%d", databaseCount.Add(1))
 }
 
+// wirePolicyManager gives s an OpenFGA PolicyManager on backend. The server
+// always wires one, so test stores do too.
+func wirePolicyManager(t *testing.T, ctx context.Context, s AuthzStore, backend authz.Backend) {
+	t.Helper()
+	fgaServer, err := authz.NewOpenFGAServer(backend)
+	if err != nil {
+		t.Fatalf("creating OpenFGA server: %v", err)
+	}
+	t.Cleanup(fgaServer.Close)
+	_, policyManager, err := authz.New(ctx, backend, fgaServer, nil)
+	if err != nil {
+		t.Fatalf("initializing OpenFGA authz: %v", err)
+	}
+	s.SetPolicyManager(policyManager)
+}
+
 // MustCreateAtespace creates name unless it already exists. Both backends enforce
 // the parent relationship for actor and snapshot records, so test fixtures use
 // this before seeding those resources.
