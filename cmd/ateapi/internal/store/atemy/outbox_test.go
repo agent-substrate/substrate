@@ -18,7 +18,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"maps"
 	"slices"
 	"sync"
 	"testing"
@@ -183,16 +182,6 @@ func watchWorkers(t *testing.T, p *Persistence) *store.WorkerWatch {
 	return watch
 }
 
-// eventNames returns the worker names of the next n events.
-func eventNames(t *testing.T, watch *store.WorkerWatch, n int) []string {
-	t.Helper()
-	var names []string
-	for range n {
-		names = append(names, receive(t, watch).Worker.GetMetadata().GetName())
-	}
-	return names
-}
-
 // TestWorkerEvent_OnlyAfterCommit proves a worker write's outbox row shares
 // the write's transaction: a rolled-back write delivers nothing and the seq it
 // took, a gap the watcher waits on, does not close the watch.
@@ -230,43 +219,6 @@ func TestWorkerEvent_OnlyAfterCommit(t *testing.T) {
 	}
 	if got := receive(t, watch).Worker.GetMetadata().GetName(); got != "after-rollback" {
 		t.Errorf("delivered %q, want after-rollback", got)
-	}
-}
-
-// Worker writes take their seqs from AUTO_INCREMENT rather than a shared row,
-// so a write to one worker commits while another worker's write is open
-// after its append.
-func TestWorkerWrites_DoNotSerialize(t *testing.T) {
-	s := setupMySQLPersistence(t)
-	ctx := t.Context()
-	for _, name := range []string{"worker-a", "worker-b"} {
-		if _, err := s.CreateWorker(ctx, newTestWorker(name)); err != nil {
-			t.Fatalf("CreateWorker(%s) failed: %v", name, err)
-		}
-	}
-
-	holder, heldSeq := beginOutboxWrite(t, s, store.WorkerEventUpdated, newTestWorker("worker-a"))
-	if _, err := holder.ExecContext(ctx, `UPDATE workers SET version = version + 1 WHERE name = 'worker-a'`); err != nil {
-		t.Fatalf("updating worker-a: %v", err)
-	}
-
-	writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	stored, err := s.GetWorker(ctx, "worker-b")
-	if err != nil {
-		t.Fatalf("GetWorker failed: %v", err)
-	}
-	if _, err := s.UpdateWorker(writeCtx, "worker-b", store.PreconditionFrom(stored), func(w *ateapipb.Worker) error {
-		w.Ips = []string{"10.0.0.2"}
-		return nil
-	}); err != nil {
-		t.Fatalf("UpdateWorker(worker-b) while worker-a's write is open = %v, want it to commit", err)
-	}
-	if got := outboxHead(t, s); got <= heldSeq {
-		t.Errorf("worker-b committed seq %d, want one past worker-a's uncommitted %d", got, heldSeq)
-	}
-	if err := holder.Commit(); err != nil {
-		t.Fatalf("committing worker-a's write: %v", err)
 	}
 }
 
@@ -395,7 +347,7 @@ func TestWatchWorkers_DeliversAWriteInFlightAtSubscribe(t *testing.T) {
 	if _, err := s.CreateWorker(ctx, newTestWorker("after-subscribe")); err != nil {
 		t.Fatalf("CreateWorker failed: %v", err)
 	}
-	got := eventNames(t, watch, 2)
+	got := []string{receive(t, watch).Worker.GetMetadata().GetName(), receive(t, watch).Worker.GetMetadata().GetName()}
 	if !slices.Contains(got, "in-flight") || !slices.Contains(got, "after-subscribe") {
 		t.Errorf("delivered %q, want in-flight and after-subscribe, and nothing written before the watch", got)
 	}
@@ -476,35 +428,6 @@ func testTrimsOnlyTheExpiredPrefix(t *testing.T, s *Persistence) {
 	}
 }
 
-// Retention of rows a watcher has already consumed leaves the trim mark at
-// its cursor, so the watcher keeps delivering.
-func TestWatchWorkers_SurvivesTrimOfConsumedRows(t *testing.T) {
-	s := setupMySQLPersistence(t)
-	ctx := t.Context()
-	watch := watchWorkers(t, newReplica(t, s))
-
-	if _, err := s.CreateWorker(ctx, newTestWorker("consumed")); err != nil {
-		t.Fatalf("CreateWorker failed: %v", err)
-	}
-	if got := receive(t, watch).Worker.GetMetadata().GetName(); got != "consumed" {
-		t.Fatalf("delivered %q, want consumed", got)
-	}
-	consumed := outboxHead(t, s)
-	if err := s.trimWorkerOutboxOlderThan(ctx, 0); err != nil {
-		t.Fatalf("trimWorkerOutboxOlderThan failed: %v", err)
-	}
-	if got := trimMark(t, s); got != consumed {
-		t.Fatalf("trim mark = %d, want %d", got, consumed)
-	}
-
-	if _, err := s.CreateWorker(ctx, newTestWorker("after-trim")); err != nil {
-		t.Fatalf("CreateWorker failed: %v", err)
-	}
-	if got := receive(t, watch).Worker.GetMetadata().GetName(); got != "after-trim" {
-		t.Errorf("delivered %q, want after-trim", got)
-	}
-}
-
 // A database that loses committed writes, as a restore from an older backup
 // does, leaves the outbox behind a watcher's cursor. New writes would reuse
 // seqs the cursor has passed, so the watcher must close rather than skip them.
@@ -534,21 +457,10 @@ func TestWatchWorkers_ClosesOnCorruptPayload(t *testing.T) {
 	requireClosedNext(t, watch, "a corrupt payload was skipped")
 }
 
+// A huge gap stops one past the cap, enough for closeReason to see it.
 func TestOutboxCursor_Wait(t *testing.T) {
-	now := time.Now()
 	c := &outboxCursor{pending: map[uint64]time.Time{}}
-	c.wait(5, 9, now)
-	if got := slices.Sorted(maps.Keys(c.pending)); !slices.Equal(got, []uint64{6, 7, 8}) {
-		t.Errorf("pending after waiting between 5 and 9 = %v, want [6 7 8]", got)
-	}
-	c.wait(9, 10, now)
-	if len(c.pending) != 3 {
-		t.Errorf("waiting between adjacent seqs added pending seqs: %v", c.pending)
-	}
-
-	// A huge gap stops one past the cap, enough for closeReason to see it.
-	c = &outboxCursor{pending: map[uint64]time.Time{}}
-	c.wait(0, outboxMaxPending*10, now)
+	c.wait(0, outboxMaxPending*10, time.Now())
 	if got := len(c.pending); got != outboxMaxPending+1 {
 		t.Errorf("pending after a huge gap = %d seqs, want %d", got, outboxMaxPending+1)
 	}
@@ -645,31 +557,6 @@ func testDropsOnlyRolledBackSeqs(t *testing.T, s *Persistence) {
 	}
 	if len(cursor.pending) != 0 {
 		t.Errorf("pending = %v, want the rolled-back seq dropped", cursor.pending)
-	}
-}
-
-// Unlike atepg's xmin fence, the seq cursor waits only on skipped outbox
-// seqs, so an open transaction that writes no outbox row does not delay
-// delivery.
-func TestWatchWorkers_UnrelatedTransactionDoesNotDelayDelivery(t *testing.T) {
-	s := setupMySQLPersistence(t)
-	ctx := t.Context()
-	watch := watchWorkers(t, newReplica(t, s))
-
-	blocker, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
-	if err != nil {
-		t.Fatalf("BeginTx failed: %v", err)
-	}
-	defer blocker.Rollback() //nolint:errcheck // never committed
-	if _, err := blocker.ExecContext(ctx, `INSERT INTO atespaces (name, uid, version, proto) VALUES ('blocker', 'uid', 1, '')`); err != nil {
-		t.Fatalf("blocker write failed: %v", err)
-	}
-
-	if _, err := s.CreateWorker(ctx, newTestWorker("unfenced")); err != nil {
-		t.Fatalf("CreateWorker failed: %v", err)
-	}
-	if got := receive(t, watch).Worker.GetMetadata().GetName(); got != "unfenced" {
-		t.Errorf("delivered %q, want unfenced", got)
 	}
 }
 

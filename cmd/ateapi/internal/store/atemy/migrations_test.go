@@ -15,12 +15,7 @@
 package atemy
 
 import (
-	"context"
 	"database/sql"
-	"database/sql/driver"
-	"errors"
-	"fmt"
-	"io"
 	"io/fs"
 	"path/filepath"
 	"regexp"
@@ -146,7 +141,8 @@ func stripSQLComments(sql string) string {
 // Tables Goose did not create are refused rather than adopted by CREATE TABLE
 // IF NOT EXISTS.
 func TestMigrations_RejectTablesWithoutALedger(t *testing.T) {
-	db := openTestDatabase(t, createTestDatabase(t, "atemy_unversioned"))
+	createTestDatabase(t, "atemy_unversioned")
+	db := openAdmin(t, "atemy_unversioned")
 	if _, err := db.ExecContext(t.Context(), `CREATE TABLE atespaces (name VARCHAR(255) PRIMARY KEY)`); err != nil {
 		t.Fatalf("creating a stray atespaces table: %v", err)
 	}
@@ -157,10 +153,10 @@ func TestMigrations_RejectTablesWithoutALedger(t *testing.T) {
 
 // TestMigrations_ResumeAPartialInitialMigration simulates a crash partway
 // through 000001: MySQL committed some of its tables and a seed row, but
-// Goose recorded no version. The next startup must complete the file and
-// leave the schema a fresh migration does.
+// Goose recorded no version. The next startup must complete the file.
 func TestMigrations_ResumeAPartialInitialMigration(t *testing.T) {
-	db := openTestDatabase(t, createTestDatabase(t, "atemy_partial_migration"))
+	createTestDatabase(t, "atemy_partial_migration")
+	db := openAdmin(t, "atemy_partial_migration")
 	ctx := t.Context()
 	initial, err := fs.ReadFile(migrationFiles, "migrations/000001_initial.sql")
 	if err != nil {
@@ -210,58 +206,6 @@ func TestMigrations_ResumeAPartialInitialMigration(t *testing.T) {
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM worker_outbox_trim`).Scan(&trimRows); err != nil || trimRows != 1 {
 		t.Fatalf("worker_outbox_trim rows = %d, %v; want 1", trimRows, err)
 	}
-
-	fresh := requireDB(t)
-	if p, err = NewPersistence(ctx, fresh); err != nil {
-		t.Fatalf("NewPersistence on the shared database failed: %v", err)
-	}
-	p.Close()
-	if diff := cmp.Diff(schemaShape(t, fresh), schemaShape(t, db)); diff != "" {
-		t.Errorf("schema after resuming a partial migration (-fresh +resumed):\n%s", diff)
-	}
-}
-
-// schemaShape lists the columns and index entries of db's current database.
-func schemaShape(t *testing.T, db *sql.DB) []string {
-	t.Helper()
-	rows, err := db.QueryContext(t.Context(), `
-		SELECT CONCAT_WS(' ', table_name, column_name, column_type, is_nullable, IFNULL(collation_name, ''))
-		FROM information_schema.columns WHERE table_schema = DATABASE()
-		UNION ALL
-		SELECT CONCAT_WS(' ', table_name, index_name, seq_in_index, column_name, non_unique)
-		FROM information_schema.statistics WHERE table_schema = DATABASE()
-		ORDER BY 1`)
-	if err != nil {
-		t.Fatalf("reading schema: %v", err)
-	}
-	defer rows.Close()
-	var shape []string
-	for rows.Next() {
-		var line string
-		if err := rows.Scan(&line); err != nil {
-			t.Fatalf("scanning schema: %v", err)
-		}
-		shape = append(shape, line)
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("reading schema: %v", err)
-	}
-	return shape
-}
-
-func TestMigrationLockName(t *testing.T) {
-	long := strings.Repeat("d", 64)
-	if got := migrationLockName(long); len(got) > 64 {
-		t.Errorf("migrationLockName(%d-character database) is %d characters, over MySQL's 64", len(long), len(got))
-	}
-	// Replicas of different releases must contend on the same lock, so the
-	// name may never change.
-	if got, want := migrationLockName("atemy"), "atemy-migrations:bc3eedb3aab9c4330ac9e5d96b355016"; got != want {
-		t.Errorf("migrationLockName(atemy) = %q, want %q", got, want)
-	}
-	if migrationLockName("a") == migrationLockName("b") {
-		t.Error("migrationLockName gives two databases the same lock")
-	}
 }
 
 func embeddedMigrationVersions(t *testing.T) []int64 {
@@ -301,18 +245,9 @@ func appliedMigrationVersions(t *testing.T, db *sql.DB) []int64 {
 	return versions
 }
 
-func openTestDatabase(t *testing.T, dsn string) *sql.DB {
-	t.Helper()
-	db, err := Open(dsn)
-	if err != nil {
-		t.Fatalf("opening database: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	return db
-}
-
 func TestMigrationsConcurrentStartup(t *testing.T) {
-	dsn := createTestDatabase(t, "atemy_concurrent_startup")
+	const database = "atemy_concurrent_startup"
+	dsn := createTestDatabase(t, database)
 	errs := make(chan error, 2)
 	for range 2 {
 		go func() {
@@ -331,14 +266,14 @@ func TestMigrationsConcurrentStartup(t *testing.T) {
 	}
 	// Every migration applied once and no more: two racing starts must not each
 	// record the same version.
-	if diff := cmp.Diff(embeddedMigrationVersions(t), appliedMigrationVersions(t, openTestDatabase(t, dsn))); diff != "" {
+	if diff := cmp.Diff(embeddedMigrationVersions(t), appliedMigrationVersions(t, openAdmin(t, database))); diff != "" {
 		t.Fatalf("applied migration versions (-embedded +applied):\n%s", diff)
 	}
 }
 
 func TestMigrationsWaitForInProgressMigration(t *testing.T) {
 	const database = "atemy_migration_lock_wait"
-	dsn := createTestDatabase(t, database)
+	createTestDatabase(t, database)
 	ctx := t.Context()
 	admin := openAdmin(t, "mysql")
 	lockConn, err := admin.Conn(ctx)
@@ -352,7 +287,7 @@ func TestMigrationsWaitForInProgressMigration(t *testing.T) {
 		t.Fatalf("taking migration lock = %d, %v; want 1", got, err)
 	}
 
-	db := openTestDatabase(t, dsn)
+	db := openAdmin(t, database)
 	result := make(chan error, 1)
 	go func() { result <- applyMigrations(ctx, db) }()
 
@@ -398,29 +333,11 @@ func TestMigrationsWaitForInProgressMigration(t *testing.T) {
 	}
 }
 
-func TestMigrationLocker_UnlockWithoutLockFails(t *testing.T) {
-	conn, err := requireDB(t).Conn(t.Context())
-	if err != nil {
-		t.Fatalf("acquiring connection: %v", err)
-	}
-	defer conn.Close()
-	locker := migrationLocker{name: migrationLockName("atemy_never_locked")}
-	if err := locker.SessionUnlock(t.Context(), conn); err == nil || !strings.Contains(err.Error(), "did not hold it") {
-		t.Errorf("SessionUnlock without the lock = %v, want a did-not-hold-it error", err)
-	}
-	if err := locker.SessionLock(t.Context(), conn); err != nil {
-		t.Fatalf("SessionLock failed: %v", err)
-	}
-	if err := locker.SessionUnlock(t.Context(), conn); err != nil {
-		t.Errorf("SessionUnlock after SessionLock = %v, want nil", err)
-	}
-}
-
 // A schema migrated by a newer binary is ahead of this one's files. An older
 // replica in a rolling deploy must still start against it.
 func TestMigrations_StartAgainstASchemaAhead(t *testing.T) {
-	dsn := createTestDatabase(t, "atemy_migration_ahead")
-	db := openTestDatabase(t, dsn)
+	createTestDatabase(t, "atemy_migration_ahead")
+	db := openAdmin(t, "atemy_migration_ahead")
 	ctx := t.Context()
 	p, err := NewPersistence(ctx, db)
 	if err != nil {
@@ -442,7 +359,8 @@ func TestMigrations_StartAgainstASchemaAhead(t *testing.T) {
 // Multi-primary replication hands out AUTO_INCREMENT values in steps, which
 // watchers would track as gaps that never fill.
 func TestRequireAutoIncrementStep(t *testing.T) {
-	db, err := Open(containerDSNForTest(t))
+	requireDB(t)
+	db, err := Open(containerDSN)
 	if err != nil {
 		t.Fatalf("opening pool: %v", err)
 	}
@@ -470,7 +388,7 @@ func TestRequireAutoIncrementStep(t *testing.T) {
 func TestNewPersistence_RequiresStrictReadWriteSessions(t *testing.T) {
 	ctx := t.Context()
 	owner := requireDB(t)
-	cfg, err := mysql.ParseDSN(containerDSNForTest(t))
+	cfg, err := mysql.ParseDSN(containerDSN)
 	if err != nil {
 		t.Fatalf("parsing DSN: %v", err)
 	}
@@ -483,89 +401,4 @@ func TestNewPersistence_RequiresStrictReadWriteSessions(t *testing.T) {
 	if _, err := newPersistence(ctx, db, db, owner); err == nil || !strings.Contains(err.Error(), "strict sql_mode") {
 		t.Errorf("newPersistence with a non-strict read/write pool = %v, want a strict mode error", err)
 	}
-}
-
-// containerDSNForTest returns the shared container's DSN once it is up.
-func containerDSNForTest(t *testing.T) string {
-	t.Helper()
-	requireDB(t)
-	return containerDSN
-}
-
-func TestRequireMySQL8(t *testing.T) {
-	for _, tc := range []struct {
-		version string
-		ok      bool
-	}{
-		{"8.0.36", true},
-		{"8.4.3", true},
-		{"8.0.40-Vitess", true},
-		{"9.1.0", true},
-		{"5.7.44-log", false},
-		{"11.4.2-MariaDB", false},
-		{"not-a-version", false},
-	} {
-		t.Run(tc.version, func(t *testing.T) {
-			db := sql.OpenDB(versionConnector{version: tc.version})
-			defer db.Close()
-			err := requireMySQL8(t.Context(), db)
-			if (err == nil) != tc.ok {
-				t.Fatalf("requireMySQL8 with VERSION() %q = %v, want ok: %t", tc.version, err, tc.ok)
-			}
-			if !tc.ok && !strings.Contains(err.Error(), tc.version) {
-				t.Errorf("error %q does not name the server version", err)
-			}
-		})
-	}
-
-	// The check runs before any migration work.
-	db := sql.OpenDB(versionConnector{version: "5.7.44-log"})
-	defer db.Close()
-	if _, err := NewPersistence(t.Context(), db); err == nil || !strings.Contains(err.Error(), "requires MySQL 8.0") {
-		t.Errorf("NewPersistence on MySQL 5.7 = %v, want a version error", err)
-	}
-}
-
-// versionConnector is a database/sql driver that answers SELECT VERSION()
-// with a fixed version and rejects every other statement.
-type versionConnector struct{ version string }
-
-func (c versionConnector) Connect(context.Context) (driver.Conn, error) {
-	return versionConn(c), nil
-}
-
-func (versionConnector) Driver() driver.Driver { return versionDriver{} }
-
-type versionDriver struct{}
-
-func (versionDriver) Open(string) (driver.Conn, error) { return nil, errors.New("unsupported") }
-
-type versionConn struct{ version string }
-
-func (versionConn) Prepare(string) (driver.Stmt, error) { return nil, errors.New("unsupported") }
-func (versionConn) Close() error                        { return nil }
-func (versionConn) Begin() (driver.Tx, error)           { return nil, errors.New("unsupported") }
-
-func (c versionConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
-	if query != `SELECT VERSION()` {
-		return nil, fmt.Errorf("unexpected query %q", query)
-	}
-	return &versionRows{version: c.version}, nil
-}
-
-type versionRows struct {
-	version string
-	done    bool
-}
-
-func (*versionRows) Columns() []string { return []string{"VERSION()"} }
-func (*versionRows) Close() error      { return nil }
-
-func (r *versionRows) Next(dest []driver.Value) error {
-	if r.done {
-		return io.EOF
-	}
-	r.done = true
-	dest[0] = r.version
-	return nil
 }

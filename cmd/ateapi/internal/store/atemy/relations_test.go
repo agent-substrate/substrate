@@ -83,6 +83,20 @@ func raceOutcome(t *testing.T, deleteErr error, createErrs []error) bool {
 	return deleteErr == nil
 }
 
+// race runs fns concurrently, releasing them together, and waits for all.
+func race(fns ...func()) {
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for _, fn := range fns {
+		wg.Go(func() {
+			<-start
+			fn()
+		})
+	}
+	close(start)
+	wg.Wait()
+}
+
 func TestDeleteAtespace_RacingChildCreatesLeaveNoOrphans(t *testing.T) {
 	s := setupMySQLPersistence(t)
 	ctx := t.Context()
@@ -92,13 +106,13 @@ func TestDeleteAtespace_RacingChildCreatesLeaveNoOrphans(t *testing.T) {
 		atespace := fmt.Sprintf("race-%d", i)
 		createTestAtespace(t, s, atespace)
 
-		start := make(chan struct{})
 		createErrs := make([]error, creators)
 		var deleteErr error
-		var wg sync.WaitGroup
+		racers := []func(){func() {
+			_, deleteErr = s.DeleteAtespace(ctx, atespace, store.DeletePreconditions{})
+		}}
 		for c := range creators {
-			wg.Go(func() {
-				<-start
+			racers = append(racers, func() {
 				name := fmt.Sprintf("child-%d", c)
 				meta := &ateapipb.ResourceMetadata{Atespace: atespace, Name: name}
 				switch c % 3 {
@@ -111,12 +125,7 @@ func TestDeleteAtespace_RacingChildCreatesLeaveNoOrphans(t *testing.T) {
 				}
 			})
 		}
-		wg.Go(func() {
-			<-start
-			_, deleteErr = s.DeleteAtespace(ctx, atespace, store.DeletePreconditions{})
-		})
-		close(start)
-		wg.Wait()
+		race(racers...)
 		if raceOutcome(t, deleteErr, createErrs) {
 			deletesWon++
 		}
@@ -133,19 +142,12 @@ func TestDeleteAtespace_RacingAccessPolicyCreateLeavesNoOrphans(t *testing.T) {
 		atespace := fmt.Sprintf("policy-race-%d", i)
 		createTestAtespace(t, s, atespace)
 
-		start := make(chan struct{})
 		var createErr, deleteErr error
-		var wg sync.WaitGroup
-		wg.Go(func() {
-			<-start
+		race(func() {
 			_, createErr = s.CreateAtespaceAccessPolicy(ctx, atespace, policy)
-		})
-		wg.Go(func() {
-			<-start
+		}, func() {
 			_, deleteErr = s.DeleteAtespace(ctx, atespace, store.DeletePreconditions{})
 		})
-		close(start)
-		wg.Wait()
 		// An access policy does not block its atespace's deletion; it goes
 		// with it.
 		if deleteErr != nil {
@@ -173,22 +175,15 @@ func TestDeleteAtespace_RacingAccessPolicyUpdateLeavesNoOrphans(t *testing.T) {
 			t.Fatalf("CreateAtespaceAccessPolicy failed: %v", err)
 		}
 
-		start := make(chan struct{})
 		var updateErr, deleteErr error
-		var wg sync.WaitGroup
-		wg.Go(func() {
-			<-start
+		race(func() {
 			_, updateErr = s.UpdateAtespaceAccessPolicy(ctx, atespace, store.PreconditionFrom(created), func(ap *ateapipb.AccessPolicy) error {
 				ap.Bindings = []*ateapipb.Binding{{Role: authz.RoleViewer, Members: []string{"user:carol"}}}
 				return nil
 			})
-		})
-		wg.Go(func() {
-			<-start
+		}, func() {
 			_, deleteErr = s.DeleteAtespace(ctx, atespace, store.DeletePreconditions{})
 		})
-		close(start)
-		wg.Wait()
 		if deleteErr != nil {
 			t.Errorf("DeleteAtespace = %v, want nil", deleteErr)
 		}
@@ -210,21 +205,14 @@ func TestDeleteActor_RacingEgressPolicyCreateLeavesNoOrphans(t *testing.T) {
 		}
 		actorRef := resources.ActorRefFromActor(actor)
 
-		start := make(chan struct{})
 		var createErr, deleteErr error
-		var wg sync.WaitGroup
-		wg.Go(func() {
-			<-start
+		race(func() {
 			_, createErr = s.CreateEgressPolicy(ctx, actorRef, &ateapipb.EgressPolicy{
 				Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "default"},
 			})
-		})
-		wg.Go(func() {
-			<-start
+		}, func() {
 			_, deleteErr = s.DeleteActor(ctx, actorRef, store.DeletePreconditions{})
 		})
-		close(start)
-		wg.Wait()
 		if deleteErr != nil {
 			t.Errorf("DeleteActor = %v, want nil", deleteErr)
 		}
@@ -247,19 +235,12 @@ func TestDeleteWorker_RacingBindLeavesNoOrphans(t *testing.T) {
 			t.Fatalf("CreateWorker failed: %v", err)
 		}
 
-		start := make(chan struct{})
 		var bindErr, deleteErr error
-		var wg sync.WaitGroup
-		wg.Go(func() {
-			<-start
+		race(func() {
 			bindErr = s.BindActorToWorker(ctx, name, &ateapipb.ActorAssignment{ActorUid: fmt.Sprintf("uid-%d", i)}, nil)
-		})
-		wg.Go(func() {
-			<-start
+		}, func() {
 			_, deleteErr = s.DeleteWorker(ctx, name, store.DeletePreconditions{})
 		})
-		close(start)
-		wg.Wait()
 		if deleteErr != nil {
 			t.Errorf("DeleteWorker = %v, want nil", deleteErr)
 		}

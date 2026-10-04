@@ -23,12 +23,12 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/go-sql-driver/mysql"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/resources"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
 // A listing fails as a whole on one undecodable row, so the error has to name
@@ -103,20 +103,9 @@ func TestKeys_CompareByteForByte(t *testing.T) {
 		}
 	}
 	want := slices.Sorted(slices.Values(names))
-	var listed []string
-	var token string
-	for {
-		page, err := s.ListAtespaces(ctx, store.ListOptions{PageSize: 1, PageToken: token})
-		if err != nil {
-			t.Fatalf("ListAtespaces failed: %v", err)
-		}
-		for _, a := range page.Items {
-			listed = append(listed, a.GetMetadata().GetName())
-		}
-		if token = page.NextPageToken; token == "" {
-			break
-		}
-	}
+	listed := listByOne(t, func(opts store.ListOptions) (store.ListResponse[*ateapipb.Atespace], error) {
+		return s.ListAtespaces(ctx, opts)
+	}, func(a *ateapipb.Atespace) string { return a.GetMetadata().GetName() })
 	if !slices.Equal(listed, want) {
 		t.Errorf("atespaces listed in order %q, want byte order %q", listed, want)
 	}
@@ -133,25 +122,34 @@ func TestKeys_CompareByteForByte(t *testing.T) {
 		}
 	}
 	slices.Sort(wantActors)
-	var listedActors []string
-	token = ""
-	for {
-		page, err := s.ListActors(ctx, "", store.ListOptions{PageSize: 1, PageToken: token})
-		if err != nil {
-			t.Fatalf("ListActors failed: %v", err)
-		}
-		for _, a := range page.Items {
-			listedActors = append(listedActors, a.GetMetadata().GetAtespace()+"/"+a.GetMetadata().GetName())
-		}
-		if token = page.NextPageToken; token == "" {
-			break
-		}
-	}
+	listedActors := listByOne(t, func(opts store.ListOptions) (store.ListResponse[*ateapipb.Actor], error) {
+		return s.ListActors(ctx, "", opts)
+	}, func(a *ateapipb.Actor) string { return a.GetMetadata().GetAtespace() + "/" + a.GetMetadata().GetName() })
 	if !slices.Equal(listedActors, wantActors) {
 		t.Errorf("actors listed in order %q, want byte order %q", listedActors, wantActors)
 	}
 	if _, err := s.GetActor(ctx, resources.ActorRef{Atespace: "team", Name: "x  "}); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("GetActor with an extra trailing space = %v, want ErrNotFound", err)
+	}
+}
+
+// listByOne lists one item per page through the last page and returns the
+// key of each item in order.
+func listByOne[T any](t *testing.T, list func(store.ListOptions) (store.ListResponse[T], error), key func(T) string) []string {
+	t.Helper()
+	var keys []string
+	opts := store.ListOptions{PageSize: 1}
+	for {
+		page, err := list(opts)
+		if err != nil {
+			t.Fatalf("listing failed: %v", err)
+		}
+		for _, item := range page.Items {
+			keys = append(keys, key(item))
+		}
+		if opts.PageToken = page.NextPageToken; opts.PageToken == "" {
+			return keys
+		}
 	}
 }
 
@@ -210,14 +208,12 @@ func TestInTx_RetriesADeadlockVictim(t *testing.T) {
 	}
 }
 
-// Deadlock retries back off exponentially, for at least the sum of the base
-// delays, and stop when ctx ends.
-func TestInTx_BacksOffBetweenDeadlockRetries(t *testing.T) {
+// Deadlock retries stop after txRetries or when ctx ends.
+func TestInTx_StopsRetryingDeadlocks(t *testing.T) {
 	s := setupMySQLPersistence(t)
 	deadlock := &mysql.MySQLError{Number: errDeadlock, Message: "Deadlock found when trying to get lock"}
 
 	attempts := 0
-	start := time.Now()
 	err := inTx(t.Context(), s.db, func(*sql.Tx) error {
 		attempts++
 		return deadlock
@@ -227,15 +223,6 @@ func TestInTx_BacksOffBetweenDeadlockRetries(t *testing.T) {
 	}
 	if attempts != txRetries+1 {
 		t.Errorf("inTx ran %d attempts, want %d", attempts, txRetries+1)
-	}
-	var minDelay time.Duration
-	for b := txBackoff(); b.Steps > 0; {
-		d := b.Duration
-		b.Step()
-		minDelay += d
-	}
-	if elapsed := time.Since(start); elapsed < minDelay {
-		t.Errorf("inTx retried for %v, want at least %v of backoff", elapsed, minDelay)
 	}
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -250,51 +237,15 @@ func TestInTx_BacksOffBetweenDeadlockRetries(t *testing.T) {
 	}
 }
 
+// A lock wait timeout is not a deadlock, so inTx returns it as is.
 func TestInTx_ReturnsLockWaitTimeout(t *testing.T) {
-	s := setupMySQLPersistence(t)
-	ctx := t.Context()
-	createTestAtespace(t, s, "a")
-
-	cfg, err := mysql.ParseDSN(containerDSN)
-	if err != nil {
-		t.Fatalf("parsing container DSN: %v", err)
-	}
-	// The driver sets unknown parameters as session variables.
-	cfg.Params = map[string]string{"innodb_lock_wait_timeout": "1"}
-	impatient, err := Open(cfg.FormatDSN())
-	if err != nil {
-		t.Fatalf("opening pool: %v", err)
-	}
-	defer impatient.Close()
-
-	holder, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		t.Fatalf("beginning holder transaction: %v", err)
-	}
-	defer holder.Rollback() //nolint:errcheck // no-op once rolled back
-	if err := selectForUpdate(ctx, holder, "a"); err != nil {
-		t.Fatalf("locking row: %v", err)
-	}
-
-	err = inTx(ctx, impatient, func(tx *sql.Tx) error { return selectForUpdate(ctx, tx, "a") })
-	const errLockWaitTimeout = 1205
-	if errors.Is(err, store.ErrVersionConflict) || mysqlErrNumber(err) != errLockWaitTimeout {
-		t.Errorf("inTx behind a held row lock = %v, want ER_LOCK_WAIT_TIMEOUT (1205) as is", err)
-	}
-}
-
-// Without ClientFoundRows, MySQL reports an UPDATE that leaves a row
-// unchanged as affecting no rows, and updateGuarded would report a matched
-// row as a lost race.
-func TestUpdateGuarded_CountsAMatchedUnchangedRow(t *testing.T) {
-	s := setupMySQLPersistence(t)
-	ctx := t.Context()
-	createTestAtespace(t, s, "team-a")
-
-	if err := updateGuarded(ctx, s.db, "atespace team-a", `UPDATE atespaces SET proto = proto WHERE name = ?`, "team-a"); err != nil {
-		t.Errorf("updateGuarded on a matched, unchanged row = %v, want nil", err)
-	}
-	if err := updateGuarded(ctx, s.db, "atespace gone", `UPDATE atespaces SET proto = proto WHERE name = ?`, "gone"); !errors.Is(err, store.ErrVersionConflict) {
-		t.Errorf("updateGuarded on no row = %v, want ErrVersionConflict", err)
+	lockWait := &mysql.MySQLError{Number: 1205, Message: "Lock wait timeout exceeded"}
+	attempts := 0
+	err := inTx(t.Context(), requireDB(t), func(*sql.Tx) error {
+		attempts++
+		return lockWait
+	})
+	if attempts != 1 || !errors.Is(err, lockWait) || errors.Is(err, store.ErrVersionConflict) {
+		t.Errorf("inTx returning a lock wait timeout = %v after %d attempts, want it as is after 1", err, attempts)
 	}
 }

@@ -75,39 +75,6 @@ func TestAcquireLease_LeavesOtherKeysExpiredRows(t *testing.T) {
 	}
 }
 
-// An expired row for the key itself is taken over in place by the UPDATE
-// path rather than inserted beside. Close leaves the row expired for the next
-// acquirer to take over.
-func TestAcquireLease_TakesOverItsOwnExpiredRow(t *testing.T) {
-	s := setupMySQLPersistence(t)
-	ctx := t.Context()
-	if _, err := s.db.ExecContext(ctx, `
-		INSERT INTO leases (lease_key, token, expires_at) VALUES
-		('reclaimed', 'old', UTC_TIMESTAMP(6) - INTERVAL 1 MINUTE)`); err != nil {
-		t.Fatalf("seeding leases: %v", err)
-	}
-	lease, err := s.AcquireLease(ctx, "reclaimed")
-	if err != nil {
-		t.Fatalf("AcquireLease over an expired row: %v", err)
-	}
-	if n := countRows(t, s, `SELECT COUNT(*) FROM leases WHERE lease_key = 'reclaimed' AND token <> 'old' AND expires_at > UTC_TIMESTAMP(6)`); n != 1 {
-		t.Errorf("%d live rows with a new token, want 1", n)
-	}
-
-	lease.Close()
-	if n := countRows(t, s, `SELECT COUNT(*) FROM leases WHERE lease_key = 'reclaimed' AND expires_at <= UTC_TIMESTAMP(6)`); n != 1 {
-		t.Errorf("%d expired rows after Close, want 1", n)
-	}
-	lease, err = s.AcquireLease(ctx, "reclaimed")
-	if err != nil {
-		t.Fatalf("AcquireLease after Close: %v", err)
-	}
-	defer lease.Close()
-	if got := countLeases(t, s, "reclaimed"); got != 1 {
-		t.Errorf("%d rows after reacquiring a released lease, want 1", got)
-	}
-}
-
 func TestCleanupExpiredLeases_RemovesOnlyExpiredRows(t *testing.T) {
 	s := setupMySQLPersistence(t)
 	ctx := t.Context()

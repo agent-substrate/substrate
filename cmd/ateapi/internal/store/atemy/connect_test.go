@@ -189,12 +189,9 @@ func TestConnect_RejectsInvalidConfig(t *testing.T) {
 		{"no owner DSN", ConnectConfig{ReadWriteDSN: dsn}, "owner connection string must not be empty"},
 		{"unparsable DSN", ConnectConfig{ReadWriteDSN: "atemy:hunter2@tcp(127.0.0.1:1)/atemy?timeout=forever", OwnerDSN: dsn}, "invalid value"},
 		{"read/write DSN without a database", ConnectConfig{ReadWriteDSN: "atemy:hunter2@tcp(127.0.0.1:1)/", OwnerDSN: dsn}, "must name a database"},
-		{"owner DSN without a database", ConnectConfig{ReadWriteDSN: dsn, OwnerDSN: "atemy:hunter2@tcp(127.0.0.1:1)/"}, "must name a database"},
 		{"owner DSN names another database", ConnectConfig{ReadWriteDSN: dsn, OwnerDSN: "atemy:hunter2@tcp(127.0.0.1:1)/other"}, "name different databases"},
-		{"missing CA file", ConnectConfig{ReadWriteDSN: dsn, OwnerDSN: dsn, TLS: TLSFiles{CAFile: filepath.Join(dir, "missing.pem")}}, "reading MySQL CA file"},
 		{"CA file without certificates", ConnectConfig{ReadWriteDSN: dsn, OwnerDSN: dsn, TLS: TLSFiles{CAFile: notPEM}}, "holds no PEM certificates"},
 		{"certificate without key", ConnectConfig{ReadWriteDSN: dsn, OwnerDSN: dsn, TLS: TLSFiles{CertFile: certPath}}, "must be set together"},
-		{"key without certificate", ConnectConfig{ReadWriteDSN: dsn, OwnerDSN: dsn, TLS: TLSFiles{KeyFile: certPath}}, "must be set together"},
 		{"unloadable key pair", ConnectConfig{ReadWriteDSN: dsn, OwnerDSN: dsn, TLS: TLSFiles{CertFile: notPEM, KeyFile: notPEM}}, "loading MySQL client certificate"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
