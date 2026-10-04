@@ -58,8 +58,8 @@ var ErrNoTransactionInContext = errors.New("authz datastore: active store transa
 //
 // Transaction enforcement rules:
 //   - Write and ReadPage (called by fgaServer.Write and fgaServer.Read) require
-//     an active transaction for the datastore's backend in ctx via
-//     ContextWithTx and fail fast with ErrNoTransactionInContext if absent.
+//     an active store transaction in ctx via ContextWithTx and fail fast with
+//     ErrNoTransactionInContext if absent.
 //   - ReadAuthorizationModel uses the active transaction when present in ctx
 //     (e.g. when fgaServer.Write validates tuples against the model), and falls
 //     back to the connection pool when called outside a transaction (e.g.
@@ -71,94 +71,28 @@ var ErrNoTransactionInContext = errors.New("authz datastore: active store transa
 // Write join the store transaction passed via ContextWithTx.
 type transactionalDatastore struct {
 	storage.OpenFGADatastore
-	mysql bool
-}
-
-// txFromContext returns the statements of the store transaction in ctx if it
-// belongs to d's backend.
-func (d *transactionalDatastore) txFromContext(ctx context.Context) (*txStatements, bool) {
-	tx, ok := TxFromContext(ctx)
-	if !ok || tx.q.mysql != d.mysql {
-		return nil, false
-	}
-	return tx.q, true
 }
 
 // Close is a no-op because the caller (cmd/ateapi/main.go) owns the pool, and
 // OpenFGA's server.Close() calls datastore.Close().
 func (d *transactionalDatastore) Close() {}
 
-// ReadAuthorizationModel runs on the store transaction in ctx when present,
-// and otherwise on the upstream pool datastore.
+// ReadAuthorizationModel checks for an active store transaction on ctx. If
+// present (e.g. during fgaServer.Write tuple validation), it queries the
+// authorization_model table on that transaction so Write never needs to check
+// out a second connection from the pool. When no transaction is in ctx (e.g.
+// during fgaServer.Check or EnsureStoreAndModel), it delegates to the
+// underlying pool datastore.
+//
+// 1:1 with (*postgres.Datastore).ReadAuthorizationModel (postgres.go:831-858)
+// and sqlcommon.ReadAuthorizationModel (sqlcommon.go:1267-1290), except rows
+// are queried on the transaction instead of the pool when it is present.
 func (d *transactionalDatastore) ReadAuthorizationModel(ctx context.Context, store string, modelID string) (*openfgav1.AuthorizationModel, error) {
-	q, ok := d.txFromContext(ctx)
+	tx, ok := TxFromContext(ctx)
 	if !ok {
 		return d.OpenFGADatastore.ReadAuthorizationModel(ctx, store, modelID)
 	}
-	return readAuthorizationModelOnTx(ctx, q, store, modelID)
-}
-
-// ReadPage runs the paginated tuple query on the store transaction in ctx.
-func (d *transactionalDatastore) ReadPage(
-	ctx context.Context,
-	store string,
-	filter storage.ReadFilter,
-	options storage.ReadPageOptions,
-) ([]*openfgav1.Tuple, string, error) {
-	q, ok := d.txFromContext(ctx)
-	if !ok {
-		return nil, "", ErrNoTransactionInContext
-	}
-	return readPageOnTx(ctx, q, store, filter, options)
-}
-
-// Write runs the write on the store transaction in ctx without calling
-// BeginTx or Commit.
-func (d *transactionalDatastore) Write(
-	ctx context.Context,
-	store string,
-	deletes storage.Deletes,
-	writes storage.Writes,
-	opts ...storage.TupleWriteOption,
-) error {
-	q, ok := d.txFromContext(ctx)
-	if !ok {
-		return ErrNoTransactionInContext
-	}
-	return writeOnTx(ctx, q, store, deletes, writes, storage.NewTupleWriteOptions(opts...), time.Now().UTC())
-}
-
-// txStatements runs OpenFGA statements on one caller-owned transaction. It
-// holds what differs between the upstream PostgreSQL and MySQL datastores.
-type txStatements struct {
-	stbl        sq.StatementBuilderType
-	connector   sqlcommon.Connector
-	exec        func(ctx context.Context, stmt string, args ...any) (rowsAffected int64, err error)
-	handleError func(err error, args ...any) error
-	mysql       bool
-}
-
-func pgxTxStatements(tx pgx.Tx) *txStatements {
-	return &txStatements{
-		stbl:      sq.StatementBuilder.PlaceholderFormat(sq.Dollar),
-		connector: &pgxTxConnector{tx: tx},
-		exec: func(ctx context.Context, stmt string, args ...any) (int64, error) {
-			tag, err := tx.Exec(ctx, stmt, args...)
-			if err != nil {
-				return 0, err
-			}
-			return tag.RowsAffected(), nil
-		},
-		handleError: postgres.HandleSQLError,
-	}
-}
-
-// readAuthorizationModelOnTx is a 1:1 copy of the query in
-// (*postgres.Datastore).ReadAuthorizationModel (postgres.go:831-858) and
-// sqlcommon.ReadAuthorizationModel (sqlcommon.go:1267-1290), run on q's
-// transaction.
-func readAuthorizationModelOnTx(ctx context.Context, q *txStatements, store, modelID string) (*openfgav1.AuthorizationModel, error) {
-	stmt, args, err := q.stbl.
+	stmt, args, err := tx.q.stbl.
 		Select("authorization_model_id", "schema_version", "type", "type_definition", "serialized_protobuf").
 		From("authorization_model").
 		Where(sq.Eq{
@@ -166,35 +100,42 @@ func readAuthorizationModelOnTx(ctx context.Context, q *txStatements, store, mod
 			"authorization_model_id": modelID,
 		}).ToSql()
 	if err != nil {
-		return nil, q.handleError(err)
+		return nil, tx.q.handleError(err)
 	}
-	conn, err := q.connector.Connect(ctx)
+	conn, err := tx.q.connector.Connect(ctx)
 	if err != nil {
-		return nil, q.handleError(err)
+		return nil, tx.q.handleError(err)
 	}
 	defer conn.Close()
 	rows, err := conn.Query(ctx, stmt, args...)
 	if err != nil {
-		return nil, q.handleError(err)
+		return nil, tx.q.handleError(err)
 	}
 	defer rows.Close()
 	ret, err := sqlcommon.ConstructAuthorizationModelFromSQLRows(rows)
 	if err != nil {
-		return nil, q.handleError(err)
+		return nil, tx.q.handleError(err)
 	}
 	return ret, nil
 }
 
-// readPageOnTx is a 1:1 copy of (*postgres.Datastore).ReadPage
-// (postgres.go:349-361) and (*mysql.Datastore).ReadPage (mysql.go:150-161).
-func readPageOnTx(
+// ReadPage requires an active store transaction on ctx via ContextWithTx and
+// executes the paginated tuple query on that transaction. If no transaction is
+// present in ctx, it fails fast with ErrNoTransactionInContext.
+//
+// 1:1 with (*postgres.Datastore).ReadPage (postgres.go:349-361) and
+// (*mysql.Datastore).ReadPage (mysql.go:150-161).
+func (d *transactionalDatastore) ReadPage(
 	ctx context.Context,
-	q *txStatements,
 	store string,
 	filter storage.ReadFilter,
 	options storage.ReadPageOptions,
 ) ([]*openfgav1.Tuple, string, error) {
-	iter, err := readOnTx(q, store, filter, options)
+	tx, ok := TxFromContext(ctx)
+	if !ok {
+		return nil, "", ErrNoTransactionInContext
+	}
+	iter, err := readOnTx(tx.q, store, filter, options)
 	if err != nil {
 		return nil, "", err
 	}
@@ -250,10 +191,29 @@ func readOnTx(
 	return sqlcommon.NewSQLTupleIterator(rowGetter, q.handleError), nil
 }
 
+// Write requires an active store transaction on ctx via ContextWithTx and
+// executes the write on that transaction without calling BeginTx or Commit. If
+// no transaction is present in ctx, it fails fast with ErrNoTransactionInContext.
+//
+// 1:1 with (*postgres.Datastore).Write (postgres.go:421-431).
+func (d *transactionalDatastore) Write(
+	ctx context.Context,
+	store string,
+	deletes storage.Deletes,
+	writes storage.Writes,
+	opts ...storage.TupleWriteOption,
+) error {
+	tx, ok := TxFromContext(ctx)
+	if !ok {
+		return ErrNoTransactionInContext
+	}
+	return d.writeOnTx(ctx, tx.q, store, deletes, writes, storage.NewTupleWriteOptions(opts...), time.Now().UTC())
+}
+
 // writeOnTx is a 1:1 copy of (*postgres.Datastore).write (postgres.go:584-649)
 // and sqlcommon.Write (sqlcommon.go:987-1139), except that it uses the
 // caller-supplied transaction instead of calling BeginTx / Rollback / Commit.
-func writeOnTx(
+func (d *transactionalDatastore) writeOnTx(
 	ctx context.Context,
 	q *txStatements,
 	store string,
@@ -319,12 +279,12 @@ func selectExistingRowsForWrite(
 		Where(sq.Expr("(object_type, object_id, relation, _user, user_type) IN "+inExpr, args...)).
 		Suffix("FOR UPDATE")
 
-	rowGetter, err := sqlcommon.NewRowGetter(q.connector, sb)
+	poolGetRows, err := sqlcommon.NewRowGetter(q.connector, sb)
 	if err != nil {
 		return q.handleError(err)
 	}
 
-	iter := sqlcommon.NewSQLTupleIterator(rowGetter, q.handleError)
+	iter := sqlcommon.NewSQLTupleIterator(poolGetRows, q.handleError)
 	defer iter.Stop()
 
 	items, _, err := iter.ToArray(ctx, storage.PaginationOptions{PageSize: len(keys)})
@@ -402,7 +362,8 @@ func executeWriteTuples(ctx context.Context, q *txStatements, writeItems [][]int
 			return q.handleError(err)
 		}
 
-		if _, err := q.exec(ctx, stmt, args...); err != nil {
+		_, err = q.exec(ctx, stmt, args...)
+		if err != nil {
 			dberr := q.handleError(err)
 			if errors.Is(dberr, storage.ErrCollision) {
 				return storage.ErrWriteConflictOnInsert
@@ -448,11 +409,36 @@ func executeInsertChanges(ctx context.Context, q *txStatements, changeLogItems [
 			return q.handleError(err)
 		}
 
-		if _, err := q.exec(ctx, stmt, args...); err != nil {
+		_, err = q.exec(ctx, stmt, args...)
+		if err != nil {
 			return q.handleError(err)
 		}
 	}
 	return nil
+}
+
+// txStatements runs OpenFGA statements on one caller-owned transaction. It
+// holds what differs between the upstream PostgreSQL and MySQL datastores.
+type txStatements struct {
+	stbl        sq.StatementBuilderType
+	connector   sqlcommon.Connector
+	exec        func(ctx context.Context, stmt string, args ...any) (rowsAffected int64, err error)
+	handleError func(err error, args ...any) error
+}
+
+func pgxTxStatements(tx pgx.Tx) *txStatements {
+	return &txStatements{
+		stbl:      sq.StatementBuilder.PlaceholderFormat(sq.Dollar),
+		connector: &pgxTxConnector{tx: tx},
+		exec: func(ctx context.Context, stmt string, args ...any) (int64, error) {
+			tag, err := tx.Exec(ctx, stmt, args...)
+			if err != nil {
+				return 0, err
+			}
+			return tag.RowsAffected(), nil
+		},
+		handleError: postgres.HandleSQLError,
+	}
 }
 
 // pgxTxConnector, pgxTxConnection, and pgxRowsWrapper are 1:1 copies of the

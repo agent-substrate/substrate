@@ -58,7 +58,6 @@ func sqlTxStatements(tx *sql.Tx) *txStatements {
 			return res.RowsAffected()
 		},
 		handleError: mysql.HandleSQLError,
-		mysql:       true,
 	}
 }
 
