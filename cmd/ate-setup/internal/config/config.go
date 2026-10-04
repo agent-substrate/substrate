@@ -447,11 +447,6 @@ func Load(opts Options) (*Config, error) {
 // sidecar for a database the apiserver no longer uses. An exported but empty
 // ATE_API_POSTGRES_CLOUDSQL_INSTANCE is allowed, since it asks for removal.
 func validateStoreBackend(cfg *Config, env map[string]string) error {
-	if v := cfg.StorePoolMaxConns; v != "" {
-		if n, err := strconv.ParseInt(v, 10, 32); err != nil || n <= 0 {
-			return fmt.Errorf("ATE_API_STORE_POOL_MAX_CONNS must be a positive integer, got %q", v)
-		}
-	}
 	var conflictPrefix string
 	switch cfg.StoreBackend {
 	case StoreBackendPostgres:

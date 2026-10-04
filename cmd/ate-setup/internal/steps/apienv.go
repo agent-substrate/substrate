@@ -68,10 +68,10 @@ func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 	if err := e.Kube.ApplySecret(ctx, e.Namespace(), SecretAPIEnvVars, secretVars); err != nil {
 		return err
 	}
-	if err := e.applyPostgresServerCA(ctx); err != nil {
+	if err := e.applyServerCA(ctx, e.Cfg.PostgresServerCAFile, "ATE_API_POSTGRES_SERVER_CA_FILE", SecretPostgresServerCA); err != nil {
 		return err
 	}
-	if err := e.applyMySQLServerCA(ctx); err != nil {
+	if err := e.applyServerCA(ctx, e.Cfg.MySQLServerCAFile, "ATE_API_MYSQL_SERVER_CA_FILE", SecretMySQLServerCA); err != nil {
 		return err
 	}
 	return e.annotateAPIServerEnvHash(ctx)
@@ -243,37 +243,20 @@ func (e *Env) recordedConnectionStrings(ctx context.Context) (string, string, er
 	return readWriteDSN, ownerDSN, nil
 }
 
-// applyPostgresServerCA publishes the server CA of an external PostgreSQL,
-// which ate-api-server mounts at /run/postgres-server-ca/server-ca.pem for
-// sslmode=verify-ca DSNs. For Cloud SQL:
+// applyServerCA publishes the server CA of an external database, read from
+// the file the env variable names, into secret. ate-api-server mounts it at
+// /run/<secret>/server-ca.pem. For Cloud SQL:
 //
 //	gcloud sql ssl server-ca-certs list --instance=<name> --format="value(cert)"
-func (e *Env) applyPostgresServerCA(ctx context.Context) error {
-	path := e.Cfg.PostgresServerCAFile
+func (e *Env) applyServerCA(ctx context.Context, path, env, secret string) error {
 	if path == "" {
 		return nil
 	}
 	pem, err := os.ReadFile(path)
 	if err != nil {
-		return fmt.Errorf("reading ATE_API_POSTGRES_SERVER_CA_FILE: %w", err)
+		return fmt.Errorf("reading %s: %w", env, err)
 	}
-	return e.Kube.ApplySecret(ctx, e.Namespace(), SecretPostgresServerCA, map[string]string{
-		"server-ca.pem": string(pem),
-	})
-}
-
-// applyMySQLServerCA publishes the server CA of an external MySQL, which
-// ate-api-server mounts at mysqlServerCAPath.
-func (e *Env) applyMySQLServerCA(ctx context.Context) error {
-	path := e.Cfg.MySQLServerCAFile
-	if path == "" {
-		return nil
-	}
-	pem, err := os.ReadFile(path)
-	if err != nil {
-		return fmt.Errorf("reading ATE_API_MYSQL_SERVER_CA_FILE: %w", err)
-	}
-	return e.Kube.ApplySecret(ctx, e.Namespace(), SecretMySQLServerCA, map[string]string{
+	return e.Kube.ApplySecret(ctx, e.Namespace(), secret, map[string]string{
 		"server-ca.pem": string(pem),
 	})
 }

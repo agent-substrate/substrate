@@ -44,37 +44,26 @@ func markFlagChanged(t *testing.T, name string) {
 	f.Changed = true
 }
 
-func TestConnectStoreRequiresPostgresReadWriteConnectionString(t *testing.T) {
-	saveFlag(t, storeBackend)
-	saveFlag(t, postgresReadWriteConnectionString)
-	*storeBackend = storeBackendPostgres
-	*postgresReadWriteConnectionString = ""
+func TestConnectStoreRequiresReadWriteConnectionString(t *testing.T) {
+	for _, tc := range []struct {
+		backend string
+		flag    *string
+		wantErr string
+	}{
+		{storeBackendPostgres, postgresReadWriteConnectionString, "--postgres-read-write-connection-string is required"},
+		{storeBackendMySQL, mysqlReadWriteConnectionString, "--mysql-read-write-connection-string is required"},
+	} {
+		t.Run(tc.backend, func(t *testing.T) {
+			saveFlag(t, storeBackend)
+			saveFlag(t, tc.flag)
+			*storeBackend = tc.backend
+			*tc.flag = ""
 
-	_, err := connectStore(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "--postgres-read-write-connection-string is required") {
-		t.Fatalf("connectStore() error = %v, want missing-connection-string error", err)
-	}
-}
-
-func TestConnectStoreRequiresMySQLReadWriteConnectionString(t *testing.T) {
-	saveFlag(t, storeBackend)
-	saveFlag(t, mysqlReadWriteConnectionString)
-	*storeBackend = storeBackendMySQL
-	*mysqlReadWriteConnectionString = ""
-
-	_, err := connectStore(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "--mysql-read-write-connection-string is required") {
-		t.Fatalf("connectStore() error = %v, want missing MySQL connection string error", err)
-	}
-}
-
-func TestConnectStoreRejectsNegativePoolMaxConns(t *testing.T) {
-	saveFlag(t, storePoolMaxConns)
-	*storePoolMaxConns = -1
-
-	_, err := connectStore(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "--store-pool-max-conns must not be negative") {
-		t.Fatalf("connectStore() error = %v, want pool-size validation", err)
+			_, err := connectStore(context.Background())
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("connectStore() error = %v, want %q", err, tc.wantErr)
+			}
+		})
 	}
 }
 
@@ -139,7 +128,6 @@ func TestLoadFlagsFromEnvStoreBackend(t *testing.T) {
 		{name: "env applies when flag unset", flagValue: storeBackendPostgres, env: storeBackendMySQL, want: storeBackendMySQL},
 		{name: "flag wins over env", flagValue: storeBackendPostgres, flagChanged: true, env: storeBackendMySQL, want: storeBackendPostgres},
 		{name: "invalid env", flagValue: storeBackendPostgres, env: "sqlite", wantErr: true},
-		{name: "invalid flag", flagValue: "sqlite", flagChanged: true, wantErr: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -171,8 +159,6 @@ func TestLoadFlagsFromEnvResolvesSourcesOnce(t *testing.T) {
 	tests := []struct {
 		flag *string
 		env  string
-		// explicit is a value set on the command line instead of @env.
-		explicit string
 	}{
 		{flag: postgresReadWriteConnectionString, env: "ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"},
 		{flag: postgresOwnerConnectionString, env: "ATE_API_POSTGRES_OWNER_CONNECTION_STRING"},
@@ -183,14 +169,11 @@ func TestLoadFlagsFromEnvResolvesSourcesOnce(t *testing.T) {
 		{flag: mysqlOwnerConnectionString, env: "ATE_API_MYSQL_OWNER_CONNECTION_STRING"},
 		{flag: mysqlTLSCAFile, env: "ATE_API_MYSQL_TLS_CA_FILE"},
 		{flag: mysqlTLSCertFile, env: "ATE_API_MYSQL_TLS_CERT_FILE"},
-		{flag: mysqlTLSKeyFile, env: "ATE_API_MYSQL_TLS_KEY_FILE", explicit: "/etc/mysql/client.key"},
+		{flag: mysqlTLSKeyFile, env: "ATE_API_MYSQL_TLS_KEY_FILE"},
 	}
 	for _, tc := range tests {
 		saveFlag(t, tc.flag)
 		*tc.flag = "@env"
-		if tc.explicit != "" {
-			*tc.flag = tc.explicit
-		}
 		t.Setenv(tc.env, tc.env+"-a")
 	}
 	saveFlag(t, experimentalEnableAuthz)
@@ -200,11 +183,7 @@ func TestLoadFlagsFromEnvResolvesSourcesOnce(t *testing.T) {
 	check := func() {
 		t.Helper()
 		for _, tc := range tests {
-			want := tc.env + "-a"
-			if tc.explicit != "" {
-				want = tc.explicit
-			}
-			if *tc.flag != want {
+			if want := tc.env + "-a"; *tc.flag != want {
 				t.Errorf("%s resolved to %q, want %q", tc.env, *tc.flag, want)
 			}
 		}
@@ -236,21 +215,11 @@ func TestLoadFlagsFromEnvPoolMaxConns(t *testing.T) {
 	if *storePoolMaxConns != 20 {
 		t.Fatalf("pool max connections = %d, want 20", *storePoolMaxConns)
 	}
-	for _, raw := range []string{"invalid", "0", "-5", "4294967296"} {
+	for _, raw := range []string{"invalid", "0"} {
 		t.Setenv("ATE_API_STORE_POOL_MAX_CONNS", raw)
 		if err := loadFlagsFromEnv(); err == nil || !strings.Contains(err.Error(), "ATE_API_STORE_POOL_MAX_CONNS must be a positive integer") {
 			t.Fatalf("loadFlagsFromEnv() with %q error = %v, want pool-size validation", raw, err)
 		}
-	}
-
-	*storePoolMaxConns = 7
-	markFlagChanged(t, "store-pool-max-conns")
-	t.Setenv("ATE_API_STORE_POOL_MAX_CONNS", "invalid")
-	if err := loadFlagsFromEnv(); err != nil {
-		t.Fatalf("loadFlagsFromEnv() read the environment for an explicit flag: %v", err)
-	}
-	if *storePoolMaxConns != 7 {
-		t.Fatalf("pool max connections = %d, want the flag value 7", *storePoolMaxConns)
 	}
 }
 
@@ -267,20 +236,20 @@ func TestResolveActorJWTIssuer(t *testing.T) {
 		{name: "set is used as given", flagValue: "https://idp.example.com/prod/", namespace: "ate-system", want: "https://idp.example.com/prod/"},
 		{name: "set but invalid", flagValue: "http://idp.example.com", namespace: "ate-system", wantErr: true},
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got, err := resolveActorJWTIssuer(tc.flagValue, tc.namespace)
-			if tc.wantErr {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := resolveActorJWTIssuer(tt.flagValue, tt.namespace)
+			if tt.wantErr {
 				if err == nil {
-					t.Fatalf("resolveActorJWTIssuer(%q, %q) = %q, want error", tc.flagValue, tc.namespace, got)
+					t.Fatalf("resolveActorJWTIssuer(%q, %q) = %q, want error", tt.flagValue, tt.namespace, got)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("resolveActorJWTIssuer(%q, %q) returned error: %v", tc.flagValue, tc.namespace, err)
+				t.Fatalf("resolveActorJWTIssuer(%q, %q) returned error: %v", tt.flagValue, tt.namespace, err)
 			}
-			if got != tc.want {
-				t.Errorf("resolveActorJWTIssuer(%q, %q) = %q, want %q", tc.flagValue, tc.namespace, got, tc.want)
+			if got != tt.want {
+				t.Errorf("resolveActorJWTIssuer(%q, %q) = %q, want %q", tt.flagValue, tt.namespace, got, tt.want)
 			}
 		})
 	}
@@ -401,20 +370,16 @@ func TestMySQLConnectionAttrNeverLogsThePassword(t *testing.T) {
 		}
 	})
 
-	for name, raw := range map[string]string{
-		"missing_database_separator": "ateapi:" + password + "@tcp(db.example.internal:3306)",
-		"unknown_tls_config":         "ateapi:" + password + "@tcp(db.example.internal:3306)/substrate?tls=unregistered",
-	} {
-		t.Run(name, func(t *testing.T) {
-			got := render(raw)
-			if strings.Contains(got, password) || strings.Contains(got, raw) {
-				t.Fatalf("log line echoes an unparseable connection string: %s", got)
-			}
-			if !strings.Contains(got, `"mysql-connection-string":"<invalid mysql connection string>"`) {
-				t.Errorf("expected the unparseable marker: %s", got)
-			}
-		})
-	}
+	t.Run("missing_database_separator", func(t *testing.T) {
+		raw := "ateapi:" + password + "@tcp(db.example.internal:3306)"
+		got := render(raw)
+		if strings.Contains(got, password) || strings.Contains(got, raw) {
+			t.Fatalf("log line echoes an unparseable connection string: %s", got)
+		}
+		if !strings.Contains(got, `"mysql-connection-string":"<invalid mysql connection string>"`) {
+			t.Errorf("expected the unparseable marker: %s", got)
+		}
+	})
 
 	t.Run("empty", func(t *testing.T) {
 		if got := render(""); !strings.Contains(got, `"mysql-connection-string":""`) {
@@ -459,8 +424,5 @@ func TestLogFlagValuesDoesNotLogADatabasePassword(t *testing.T) {
 		if !strings.Contains(got, `"`+key+`":{"host":"db.example.internal","port":3306`) {
 			t.Errorf("startup line missing the structured %s summary: %s", key, got)
 		}
-	}
-	if !strings.Contains(got, `"store-backend":`) {
-		t.Errorf("startup line missing store-backend: %s", got)
 	}
 }

@@ -56,70 +56,30 @@ func TestBuildAPIServerEnvVars(t *testing.T) {
 func TestMySQLAPIServerEnvVars(t *testing.T) {
 	const readWriteDSN = "runtime:pw@tcp(db:3306)/substrate?tls=true"
 	const ownerDSN = "owner:pw@tcp(db:3306)/substrate?tls=true"
-	for _, tc := range []struct {
-		name       string
-		cfg        config.Config
-		wantConfig map[string]string
-		wantSecret map[string]string
-	}{
-		{
-			name:       "one login",
-			cfg:        config.Config{MySQLReadWriteConnectionString: readWriteDSN, MySQLOwnerConnectionString: readWriteDSN},
-			wantConfig: map[string]string{},
-			wantSecret: map[string]string{
-				"ATE_API_STORE_BACKEND":                      config.StoreBackendMySQL,
-				"ATE_API_MYSQL_READ_WRITE_CONNECTION_STRING": readWriteDSN,
-				"ATE_API_MYSQL_OWNER_CONNECTION_STRING":      readWriteDSN,
-			},
-		},
-		{
-			name: "separate logins, pool size, and server CA",
-			cfg: config.Config{
-				MySQLReadWriteConnectionString: readWriteDSN,
-				MySQLOwnerConnectionString:     ownerDSN,
-				StorePoolMaxConns:              "40",
-				MySQLServerCAFile:              "/local/ca.pem",
-			},
-			wantConfig: map[string]string{
-				"ATE_API_STORE_POOL_MAX_CONNS": "40",
-				"ATE_API_MYSQL_TLS_CA_FILE":    "/run/mysql-server-ca/server-ca.pem",
-			},
-			wantSecret: map[string]string{
-				"ATE_API_STORE_BACKEND":                      config.StoreBackendMySQL,
-				"ATE_API_MYSQL_READ_WRITE_CONNECTION_STRING": readWriteDSN,
-				"ATE_API_MYSQL_OWNER_CONNECTION_STRING":      ownerDSN,
-			},
-		},
-		{
-			name: "TLS files in the pod",
-			cfg: config.Config{
-				MySQLReadWriteConnectionString: readWriteDSN,
-				MySQLOwnerConnectionString:     readWriteDSN,
-				MySQLTLSCAFile:                 "/run/servicedns.podcert.ate.dev/trust-bundle.pem",
-				MySQLTLSCertFile:               "/run/podidentity.podcert.ate.dev/credential-bundle.pem",
-				MySQLTLSKeyFile:                "/run/podidentity.podcert.ate.dev/credential-bundle.pem",
-			},
-			wantConfig: map[string]string{
-				"ATE_API_MYSQL_TLS_CA_FILE":   "/run/servicedns.podcert.ate.dev/trust-bundle.pem",
-				"ATE_API_MYSQL_TLS_CERT_FILE": "/run/podidentity.podcert.ate.dev/credential-bundle.pem",
-				"ATE_API_MYSQL_TLS_KEY_FILE":  "/run/podidentity.podcert.ate.dev/credential-bundle.pem",
-			},
-			wantSecret: map[string]string{
-				"ATE_API_STORE_BACKEND":                      config.StoreBackendMySQL,
-				"ATE_API_MYSQL_READ_WRITE_CONNECTION_STRING": readWriteDSN,
-				"ATE_API_MYSQL_OWNER_CONNECTION_STRING":      readWriteDSN,
-			},
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			configVars, secretVars := mysqlAPIServerEnvVars(&tc.cfg)
-			if diff := cmp.Diff(tc.wantConfig, configVars); diff != "" {
-				t.Errorf("ConfigMap data differs (-want +got):\n%s", diff)
-			}
-			if diff := cmp.Diff(tc.wantSecret, secretVars); diff != "" {
-				t.Errorf("Secret data differs (-want +got):\n%s", diff)
-			}
-		})
+	configVars, secretVars := mysqlAPIServerEnvVars(&config.Config{
+		MySQLReadWriteConnectionString: readWriteDSN,
+		MySQLOwnerConnectionString:     ownerDSN,
+		StorePoolMaxConns:              "40",
+		MySQLServerCAFile:              "/local/ca.pem",
+		MySQLTLSCertFile:               "/run/podidentity.podcert.ate.dev/credential-bundle.pem",
+		MySQLTLSKeyFile:                "/run/podidentity.podcert.ate.dev/credential-bundle.pem",
+	})
+	wantConfig := map[string]string{
+		"ATE_API_STORE_POOL_MAX_CONNS": "40",
+		"ATE_API_MYSQL_TLS_CA_FILE":    "/run/mysql-server-ca/server-ca.pem",
+		"ATE_API_MYSQL_TLS_CERT_FILE":  "/run/podidentity.podcert.ate.dev/credential-bundle.pem",
+		"ATE_API_MYSQL_TLS_KEY_FILE":   "/run/podidentity.podcert.ate.dev/credential-bundle.pem",
+	}
+	if diff := cmp.Diff(wantConfig, configVars); diff != "" {
+		t.Errorf("ConfigMap data differs (-want +got):\n%s", diff)
+	}
+	wantSecret := map[string]string{
+		"ATE_API_STORE_BACKEND":                      config.StoreBackendMySQL,
+		"ATE_API_MYSQL_READ_WRITE_CONNECTION_STRING": readWriteDSN,
+		"ATE_API_MYSQL_OWNER_CONNECTION_STRING":      ownerDSN,
+	}
+	if diff := cmp.Diff(wantSecret, secretVars); diff != "" {
+		t.Errorf("Secret data differs (-want +got):\n%s", diff)
 	}
 }
 

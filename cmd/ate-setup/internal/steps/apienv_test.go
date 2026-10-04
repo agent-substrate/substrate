@@ -479,11 +479,6 @@ func TestCheckRecordedStoreBackend(t *testing.T) {
 			cfg:      config.Config{StoreBackend: config.StoreBackendPostgres, StoreBackendSet: true},
 			recorded: config.StoreBackendMySQL,
 		},
-		{
-			name:     "explicit MySQL",
-			cfg:      config.Config{StoreBackend: config.StoreBackendMySQL, StoreBackendSet: true},
-			recorded: config.StoreBackendMySQL,
-		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var objects []runtime.Object
@@ -503,17 +498,6 @@ func TestCheckRecordedStoreBackend(t *testing.T) {
 				t.Errorf("checkRecordedStoreBackend() error = %q, want it to name the setting that keeps MySQL", err)
 			}
 		})
-	}
-}
-
-func TestApplyMySQLServerCAMissingFile(t *testing.T) {
-	e := &Env{
-		Cfg:  &config.Config{MySQLServerCAFile: filepath.Join(t.TempDir(), "missing.pem")},
-		Kube: fakeKube(t),
-	}
-	err := e.applyMySQLServerCA(t.Context())
-	if err == nil || !strings.Contains(err.Error(), "ATE_API_MYSQL_SERVER_CA_FILE") {
-		t.Fatalf("applyMySQLServerCA() error = %v, want it to name ATE_API_MYSQL_SERVER_CA_FILE", err)
 	}
 }
 

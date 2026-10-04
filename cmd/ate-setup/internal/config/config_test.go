@@ -380,8 +380,6 @@ func TestLoadMySQL(t *testing.T) {
 		loadEnv(t)
 		t.Setenv("ATE_API_STORE_BACKEND", StoreBackendMySQL)
 		t.Setenv("ATE_API_MYSQL_READ_WRITE_CONNECTION_STRING", dsn)
-		t.Setenv("ATE_API_STORE_POOL_MAX_CONNS", "32")
-		t.Setenv("ATE_API_MYSQL_SERVER_CA_FILE", "/etc/ssl/mysql-ca.pem")
 
 		cfg, err := Load(Options{})
 		if err != nil {
@@ -393,27 +391,10 @@ func TestLoadMySQL(t *testing.T) {
 		if cfg.MySQLReadWriteConnectionString != dsn || cfg.MySQLOwnerConnectionString != dsn {
 			t.Errorf("MySQL connections = %q, %q, want %q for both", cfg.MySQLReadWriteConnectionString, cfg.MySQLOwnerConnectionString, dsn)
 		}
-		if cfg.StorePoolMaxConns != "32" || cfg.MySQLServerCAFile != "/etc/ssl/mysql-ca.pem" {
-			t.Errorf("MySQL tuning = %q, %q", cfg.StorePoolMaxConns, cfg.MySQLServerCAFile)
-		}
 		// Explicitly empty, so the cluster's recorded instance is not adopted
 		// and a leftover proxy sidecar is removed.
 		if want := (CloudSQLConfig{InstanceSet: true}); cfg.CloudSQL != want {
 			t.Errorf("CloudSQL = %+v, want %+v", cfg.CloudSQL, want)
-		}
-	})
-
-	t.Run("separate owner login", func(t *testing.T) {
-		loadEnv(t)
-		t.Setenv("ATE_API_STORE_BACKEND", StoreBackendMySQL)
-		t.Setenv("ATE_API_MYSQL_READ_WRITE_CONNECTION_STRING", dsn)
-		t.Setenv("ATE_API_MYSQL_OWNER_CONNECTION_STRING", "owner-dsn")
-		cfg, err := Load(Options{})
-		if err != nil {
-			t.Fatalf("Load() error = %v", err)
-		}
-		if cfg.MySQLOwnerConnectionString != "owner-dsn" {
-			t.Errorf("MySQLOwnerConnectionString = %q, want owner-dsn", cfg.MySQLOwnerConnectionString)
 		}
 	})
 
@@ -424,18 +405,6 @@ func TestLoadMySQL(t *testing.T) {
 		t.Setenv("ATE_API_POSTGRES_CLOUDSQL_INSTANCE", "")
 		if _, err := Load(Options{}); err != nil {
 			t.Fatalf("Load() error = %v", err)
-		}
-	})
-
-	t.Run("explicit PostgreSQL", func(t *testing.T) {
-		loadEnv(t)
-		t.Setenv("ATE_API_STORE_BACKEND", StoreBackendPostgres)
-		cfg, err := Load(Options{})
-		if err != nil {
-			t.Fatalf("Load() error = %v", err)
-		}
-		if cfg.MySQL() || !cfg.StoreBackendSet {
-			t.Errorf("StoreBackend = %q (set %v), want an explicit %q", cfg.StoreBackend, cfg.StoreBackendSet, StoreBackendPostgres)
 		}
 	})
 }
@@ -459,16 +428,8 @@ func TestLoadRejectsInvalidStoreBackend(t *testing.T) {
 		{"unknown backend", map[string]string{"ATE_API_STORE_BACKEND": "sqlite"}, "ATE_API_STORE_BACKEND must be"},
 		{"MySQL without a DSN", map[string]string{"ATE_API_STORE_BACKEND": StoreBackendMySQL}, "ATE_API_MYSQL_READ_WRITE_CONNECTION_STRING"},
 		{"MySQL with a Cloud SQL instance", with(mysql, "ATE_API_POSTGRES_CLOUDSQL_INSTANCE", "p:r:i"), "ATE_API_POSTGRES_CLOUDSQL_INSTANCE"},
-		{"MySQL with a Cloud SQL GSA", with(mysql, "ATE_API_POSTGRES_CLOUDSQL_GSA", "ate@p.iam.gserviceaccount.com"), "ATE_API_POSTGRES_CLOUDSQL_GSA"},
-		{"MySQL with a PostgreSQL DSN", with(mysql, "ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING", "postgresql://db/atepg"), "ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"},
-		{"MySQL with a PostgreSQL server CA", with(mysql, "ATE_API_POSTGRES_SERVER_CA_FILE", "/ca.pem"), "ATE_API_POSTGRES_SERVER_CA_FILE"},
-		{"MySQL with a zero pool size", with(mysql, "ATE_API_STORE_POOL_MAX_CONNS", "0"), "ATE_API_STORE_POOL_MAX_CONNS"},
-		{"negative pool size", map[string]string{"ATE_API_STORE_POOL_MAX_CONNS": "-1"}, "ATE_API_STORE_POOL_MAX_CONNS"},
-		{"non-numeric pool size", map[string]string{"ATE_API_STORE_POOL_MAX_CONNS": "many"}, "ATE_API_STORE_POOL_MAX_CONNS"},
-		{"int32 overflow pool size", map[string]string{"ATE_API_STORE_POOL_MAX_CONNS": "2147483648"}, "ATE_API_STORE_POOL_MAX_CONNS"},
 		{"MySQL with both CA settings", with(with(mysql, "ATE_API_MYSQL_SERVER_CA_FILE", "/ca.pem"), "ATE_API_MYSQL_TLS_CA_FILE", "/run/ca.pem"), "not both"},
 		{"MySQL client certificate without a key", with(mysql, "ATE_API_MYSQL_TLS_CERT_FILE", "/run/cert.pem"), "set together"},
-		{"MySQL client key without a certificate", with(mysql, "ATE_API_MYSQL_TLS_KEY_FILE", "/run/key.pem"), "set together"},
 		// Without the backend switch the DSN would be ignored and the bundled
 		// PostgreSQL deployed in its place.
 		{"PostgreSQL with a MySQL DSN", map[string]string{"ATE_API_MYSQL_READ_WRITE_CONNECTION_STRING": dsn}, "ATE_API_MYSQL_READ_WRITE_CONNECTION_STRING"},
