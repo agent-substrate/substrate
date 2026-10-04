@@ -14,26 +14,34 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# verify_sql_migrations checks a Goose migration directory against the
-# migration file rules in docs/dev/schema-evolution.md and refuses
-# changes to migrations from the newest release tag that has any (or from
-# released-ref). Run it from the repository root.
-#
-# Usage: verify_sql_migrations <migrations-dir> <database-name> <if-not-exists> [released-ref]
-#
-# if-not-exists is "deny" or "allow". MySQL commits DDL statement by statement,
+# Checks the PostgreSQL and MySQL Goose migration directories against the
+# migration file rules in docs/dev/schema-evolution.md and refuses changes to
+# migrations from the newest release tag that has any (or from released-ref).
+
+set -o errexit -o nounset -o pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "${ROOT}"
+
+export LC_ALL=C
+
+if (( $# > 1 )); then
+  echo "Usage: $0 [released-ref]" >&2
+  exit 2
+fi
+
+shopt -s nullglob
+
+# if_not_exists is "deny" or "allow". MySQL commits DDL statement by statement,
 # so its migrations use IF NOT EXISTS to stay rerunnable after a partial run.
-verify_sql_migrations() {
+verify_migrations() {
   local migrations_dir="$1"
   local database="$2"
   local if_not_exists="$3"
-  local released_ref="${4:-}"
-  local migrations migration name version expected tag nullglob
+  local released_ref="$4"
+  local migrations migration name version expected tag
 
-  nullglob="$(shopt -p nullglob || true)"
-  shopt -s nullglob
   migrations=("${migrations_dir}"/*.sql)
-  eval "${nullglob}"
   if (( ${#migrations[@]} == 0 )); then
     echo "Add at least one ${database} migration." >&2
     exit 1
@@ -96,3 +104,6 @@ verify_sql_migrations() {
     exit 1
   fi
 }
+
+verify_migrations "cmd/ateapi/internal/store/atepg/migrations" "PostgreSQL" deny "${1:-}"
+verify_migrations "cmd/ateapi/internal/store/atemy/migrations" "MySQL" allow "${1:-}"

@@ -53,7 +53,7 @@ This sequence keeps the previous binary compatible during a rollout and a tempor
 
 Store PostgreSQL migration files in `cmd/ateapi/internal/store/atepg/migrations` and MySQL migration files in `cmd/ateapi/internal/store/atemy/migrations`. Make each schema change for both backends in the same change. Give the two files the same number, name, and intent, so the directories stay in step.
 
-`hack/verify/mysql-migrations.sh` applies the rules below to the MySQL directory.
+`hack/verify/sql-migrations.sh` applies the rules below to both directories.
 
 On PostgreSQL, standalone Substrate defaults to the `substrate` schema, including under Kagent's umbrella chart. Set `postgres.schema` in Helm or `ATE_API_POSTGRES_SCHEMA` in local setup to use another schema.
 
@@ -93,11 +93,10 @@ See the [MySQL configuration guide](../mysql.md) for the operator side.
 2. Check those operations against every new migration prefix.
 3. Use expand and contract when one prefix would break an operation.
 4. Add or update a test for the schema behavior.
-5. Run both migration verifiers and both store test suites. `ATE_TEST_STORE_BACKEND=mysql` reruns the store-backed control plane tests on MySQL, and the `vitess` build tag runs the MySQL store tests through Vitess, as CI does.
+5. Run the migration verifier and both store test suites. `ATE_TEST_STORE_BACKEND=mysql` reruns the store-backed control plane tests on MySQL, and the `vitess` build tag runs the MySQL store tests through Vitess, as CI does.
 
 ```sh
-hack/verify/postgresql-migrations.sh
-hack/verify/mysql-migrations.sh
+hack/verify/sql-migrations.sh
 go test ./cmd/ateapi/internal/store/atepg ./cmd/ateapi/internal/store/atemy
 ATE_TEST_STORE_BACKEND=mysql go test ./cmd/ateapi/internal/controlapi/... ./cmd/ateapi/internal/workerservice/...
 go test -tags vitess -run TestVitess ./cmd/ateapi/internal/store/atemy
