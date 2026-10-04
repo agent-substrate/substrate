@@ -78,7 +78,11 @@ func (e *Env) AteletDaemonSetName() (string, error) {
 var unquotedVersionScalar = regexp.MustCompile(`(?m)^(\s*[^:\n]+): \$\{SUBSTRATE_VERSION\}$`)
 
 // SubstituteVersion fills the ${SUBSTRATE_VERSION} and
-// ${SUBSTRATE_VERSION_SUFFIX} placeholders in a rendered manifest.
+// ${SUBSTRATE_VERSION_SUFFIX} placeholders in a rendered manifest, plus the
+// AWS-overlay placeholders ${AWS_REGION}, ${ATE_API_SERVER_ROLE_ARN}, and
+// ${ATELET_ROLE_ARN}. The AWS placeholders only appear in the aws overlays;
+// substituting the empty string on non-AWS installs is a no-op there and
+// leaves the rendered manifest unchanged.
 func (e *Env) SubstituteVersion(manifest []byte) ([]byte, error) {
 	version, suffix, err := e.SubstrateVersion()
 	if err != nil {
@@ -87,6 +91,14 @@ func (e *Env) SubstituteVersion(manifest []byte) ([]byte, error) {
 	s := unquotedVersionScalar.ReplaceAllString(string(manifest), `$1: "$${SUBSTRATE_VERSION}"`)
 	s = strings.ReplaceAll(s, "${SUBSTRATE_VERSION}", version)
 	s = strings.ReplaceAll(s, "${SUBSTRATE_VERSION_SUFFIX}", suffix)
+	// Cfg is nil in a handful of narrowly-scoped unit tests that only exercise
+	// the version placeholders; skip the AWS pass there rather than making
+	// every such test construct an empty config.
+	if e.Cfg != nil {
+		s = strings.ReplaceAll(s, "${AWS_REGION}", e.Cfg.AWSRegion)
+		s = strings.ReplaceAll(s, "${ATE_API_SERVER_ROLE_ARN}", e.Cfg.AteAPIServerRoleARN)
+		s = strings.ReplaceAll(s, "${ATELET_ROLE_ARN}", e.Cfg.AteletRoleARN)
+	}
 	return []byte(s), nil
 }
 

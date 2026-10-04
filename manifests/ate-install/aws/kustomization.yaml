@@ -1,0 +1,71 @@
+# Copyright 2026 Ant Weiss
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# The aws overlay targets EKS: real S3 for snapshots and IRSA for identity,
+# rather than the kind overlay's in-cluster rustfs with static credentials.
+# ${AWS_REGION} and ${ATE_API_SERVER_ROLE_ARN} are expanded by ate-setup's
+# SubstituteVersion before the manifest is applied; see
+# cmd/ate-setup/internal/steps/version.go.
+#
+# pod-certificate-controller.yaml, the sandboxconfig files, and both
+# atenet-egress variants are deliberately absent, as in ../base: the installers
+# apply those on their own and re-applying them from this bundle would revert
+# the WORKERS_PER_SIGNER and size10 overrides.
+#
+# The OTLP endpoint is intentionally not patched here: the control plane picks
+# up the operator's ADOT collector address through the existing
+# --otlp-endpoint / ATE_OTLP_ENDPOINT post-install patch
+# (applyOtelEndpointOverride in steps/overlay.go), which already handles the
+# ConfigMap patch and the rollout restart.
+resources:
+  - ../ate-api-server.yaml
+  - ../ate-controller.yaml
+  - ./atelet
+  - ../atenet-router.yaml
+  - ../atenet-router-monitoring.yaml
+  - ../ate-otel-config.yaml
+
+# ate-api-server needs its ServiceAccount annotated for IRSA so the AWS SDK
+# running inside the pod picks up AWS_ROLE_ARN + AWS_WEB_IDENTITY_TOKEN_FILE,
+# and its env rewritten for the S3 backend. IRSA injects the credentials; the
+# kind-style AWS_ENDPOINT_URL / AWS_S3_USE_PATH_STYLE / AWS_ACCESS_KEY_ID /
+# AWS_SECRET_ACCESS_KEY block is deliberately dropped.
+patches:
+  - patch: |-
+      apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        name: ate-api-server
+        namespace: ate-system
+        annotations:
+          eks.amazonaws.com/role-arn: ${ATE_API_SERVER_ROLE_ARN}
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ate-api-server
+        namespace: ate-system
+      spec:
+        template:
+          spec:
+            containers:
+            - name: ate-api-server
+              env:
+              - name: ATE_STORAGE_BACKEND
+                value: s3
+              - name: AWS_REGION
+                value: ${AWS_REGION}
