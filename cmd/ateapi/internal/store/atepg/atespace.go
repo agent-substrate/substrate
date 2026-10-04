@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/authz"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storesql"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -144,7 +145,7 @@ func (p *Persistence) DeleteAtespace(ctx context.Context, name string, precondit
 		}
 		return nil, fmt.Errorf("deleting atespace %q: %w", name, err)
 	}
-	if err := p.policyManager.DeleteAtespacePolicies(ctx, tx, name); err != nil {
+	if err := p.policyManager.DeleteAtespacePolicies(ctx, authz.PgxTx(tx), name); err != nil {
 		return nil, fmt.Errorf("deleting authorization tuples for atespace %q: %w", name, err)
 	}
 	if err := tx.Commit(ctx); err != nil {

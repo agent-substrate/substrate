@@ -52,13 +52,13 @@ func TestAtespace_EndToEndOpenFGAScenarios(t *testing.T) {
 	persistence := storetest.SetupPostgresPersistence(t)
 	pool := persistence.Pool()
 
-	fgaServer, err := authz.NewOpenFGAServer(pool)
+	fgaServer, err := authz.NewOpenFGAServer(authz.PostgresBackend(pool))
 	if err != nil {
 		t.Fatalf("authz.NewOpenFGAServer failed: %v", err)
 	}
 	t.Cleanup(fgaServer.Close)
 
-	authorizer, policyManager, err := authz.New(ctx, pool, fgaServer, nil)
+	authorizer, policyManager, err := authz.New(ctx, authz.PostgresBackend(pool), fgaServer, nil)
 	if err != nil {
 		t.Fatalf("authz.New failed: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestAtespace_EndToEndOpenFGAScenarios(t *testing.T) {
 			t.Fatalf("pool.Begin failed: %v", err)
 		}
 		defer tx.Rollback(ctx) //nolint:errcheck
-		_, err = fgaServer.Write(authz.ContextWithTx(ctx, tx), &openfgav1.WriteRequest{
+		_, err = fgaServer.Write(authz.ContextWithTx(ctx, authz.PgxTx(tx)), &openfgav1.WriteRequest{
 			StoreId: storeID,
 			Writes: &openfgav1.WriteRequestWrites{
 				TupleKeys: []*openfgav1.TupleKey{

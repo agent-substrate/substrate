@@ -49,12 +49,12 @@ func setupPostgresPersistence(t *testing.T) *Persistence {
 // always does.
 func setTestPolicyManager(t *testing.T, p *Persistence) {
 	t.Helper()
-	fgaServer, err := authz.NewOpenFGAServer(p.pool)
+	fgaServer, err := authz.NewOpenFGAServer(authz.PostgresBackend(p.pool))
 	if err != nil {
 		t.Fatalf("NewOpenFGAServer failed: %v", err)
 	}
 	t.Cleanup(fgaServer.Close)
-	_, policyManager, err := authz.New(t.Context(), p.pool, fgaServer, nil)
+	_, policyManager, err := authz.New(t.Context(), authz.PostgresBackend(p.pool), fgaServer, nil)
 	if err != nil {
 		t.Fatalf("authz.New failed: %v", err)
 	}

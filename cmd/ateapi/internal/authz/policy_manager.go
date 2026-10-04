@@ -18,41 +18,50 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"unicode/utf8"
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"github.com/jackc/pgx/v5"
 	openfgav1 "github.com/openfga/api/proto/openfga/v1"
 	"github.com/openfga/openfga/pkg/server"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
 // ErrNilTransaction is returned by PolicyManager tuple writes called without a
-// PostgreSQL transaction.
-var ErrNilTransaction = errors.New("authz: policy tuple writes require a non-nil pgx.Tx")
+// store transaction.
+var ErrNilTransaction = errors.New("authz: policy tuple writes require a store transaction")
 
 // PolicyManager writes OpenFGA tuples for access policy and atespace
-// mutations within the caller's PostgreSQL transaction.
+// mutations within the caller's store transaction.
 type PolicyManager struct {
 	fgaServer *server.Server
 	storeID   string
 	modelID   string
+	// maxUserLength caps a tuple's encoded user in characters; zero means no
+	// cap beyond the API's own validation.
+	maxUserLength int
 }
+
+// mysqlMaxTupleUserLength is the width of the tuple._user column in OpenFGA's
+// MySQL schema. PostgreSQL stores the user as TEXT.
+const mysqlMaxTupleUserLength = 256
 
 // ReconcileGlobalBindings reconciles the OpenFGA role bindings on global:root
 // within tx. The tuple changes commit or roll back with tx.
-func (m *PolicyManager) ReconcileGlobalBindings(ctx context.Context, tx pgx.Tx, bindings []*ateapipb.Binding) error {
+func (m *PolicyManager) ReconcileGlobalBindings(ctx context.Context, tx Tx, bindings []*ateapipb.Binding) error {
 	return m.reconcileBindings(ctx, tx, GlobalRootObject, bindings)
 }
 
 // ReconcileAtespaceBindings reconciles the OpenFGA role bindings on an atespace
 // within tx. The tuple changes commit or roll back with tx.
-func (m *PolicyManager) ReconcileAtespaceBindings(ctx context.Context, tx pgx.Tx, name string, bindings []*ateapipb.Binding) error {
+func (m *PolicyManager) ReconcileAtespaceBindings(ctx context.Context, tx Tx, name string, bindings []*ateapipb.Binding) error {
 	return m.reconcileBindings(ctx, tx, AtespaceObject(name), bindings)
 }
 
 // DeleteAtespacePolicies removes all OpenFGA tuples associated with an atespace
 // within tx. The tuple deletions commit or roll back with tx.
-func (m *PolicyManager) DeleteAtespacePolicies(ctx context.Context, tx pgx.Tx, name string) error {
+func (m *PolicyManager) DeleteAtespacePolicies(ctx context.Context, tx Tx, name string) error {
 	return m.reconcileBindings(ctx, tx, AtespaceObject(name), nil)
 }
 
@@ -115,8 +124,8 @@ func (m *PolicyManager) readObjectTuples(ctx context.Context, obj string) ([]*op
 // reconcileBindings diffs the existing OpenFGA tuples on obj against
 // desiredBindings and writes only the net additions and deletions in batches
 // within tx, leaving unchanged (relation, user) tuples untouched.
-func (m *PolicyManager) reconcileBindings(ctx context.Context, tx pgx.Tx, obj string, desiredBindings []*ateapipb.Binding) error {
-	if tx == nil {
+func (m *PolicyManager) reconcileBindings(ctx context.Context, tx Tx, obj string, desiredBindings []*ateapipb.Binding) error {
+	if tx.isZero() {
 		return ErrNilTransaction
 	}
 	// The OpenFGA server API only carries ctx, so the transactional datastore
@@ -145,6 +154,9 @@ func (m *PolicyManager) reconcileBindings(ctx context.Context, tx pgx.Tx, obj st
 			fgaUser, err := FormatMember(rawMember)
 			if err != nil {
 				return err
+			}
+			if n := utf8.RuneCountInString(fgaUser); m.maxUserLength > 0 && n > m.maxUserLength {
+				return status.Errorf(codes.InvalidArgument, "member %q is %d characters once encoded; this store holds at most %d", rawMember, n, m.maxUserLength)
 			}
 			ru := relUser{relation: role, user: fgaUser}
 			if _, alreadyDesired := desiredSet[ru]; alreadyDesired {

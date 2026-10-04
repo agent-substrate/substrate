@@ -16,14 +16,17 @@ package authz
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"fmt"
 	"os"
-	"os/exec"
-	"runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	gomysql "github.com/go-sql-driver/mysql"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 	openfgav1 "github.com/openfga/api/proto/openfga/v1"
@@ -31,102 +34,272 @@ import (
 	serverErrors "github.com/openfga/openfga/pkg/server/errors"
 	"github.com/pressly/goose/v3"
 	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/modules/postgres"
+	tcmysql "github.com/testcontainers/testcontainers-go/modules/mysql"
+	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/dockerenv"
 	"github.com/agent-substrate/substrate/internal/principal"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
-func configureDockerEnv(ctx context.Context) error {
-	if os.Getenv("DOCKER_HOST") != "" {
-		return nil
+// One container per backend serves every test in this package. Each test gets
+// a fresh database in it, so OpenFGA stores and tuples never leak between tests.
+var (
+	databaseSeq atomic.Int64
+
+	postgresOnce      sync.Once
+	postgresContainer *tcpostgres.PostgresContainer
+	postgresAdmin     *pgxpool.Pool
+	postgresErr       error
+
+	mysqlOnce      sync.Once
+	mysqlContainer *tcmysql.MySQLContainer
+	mysqlAdmin     *sql.DB
+	mysqlAdminDSN  string
+	mysqlErr       error
+)
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if postgresAdmin != nil {
+		postgresAdmin.Close()
 	}
-	output, err := exec.CommandContext(ctx, "docker", "context", "inspect", "--format", "{{.Endpoints.docker.Host}}").Output()
-	if err != nil {
-		return err
+	if mysqlAdmin != nil {
+		_ = mysqlAdmin.Close()
 	}
-	host := strings.TrimSpace(string(output))
-	if host == "" {
-		return nil
+	var containers []testcontainers.Container
+	if postgresContainer != nil {
+		containers = append(containers, postgresContainer)
 	}
-	_ = os.Setenv("DOCKER_HOST", host)
-	if os.Getenv("TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE") == "" {
-		socket := host
-		if runtime.GOOS == "darwin" {
-			socket = "/var/run/docker.sock"
+	if mysqlContainer != nil {
+		containers = append(containers, mysqlContainer)
+	}
+	for _, ctr := range containers {
+		if err := testcontainers.TerminateContainer(ctr); err != nil {
+			fmt.Fprintf(os.Stderr, "terminating testcontainer: %v\n", err)
+			if code == 0 {
+				code = 1
+			}
 		}
-		_ = os.Setenv("TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE", socket)
 	}
-	return nil
+	os.Exit(code)
 }
 
-func startPostgres(t *testing.T) *pgxpool.Pool {
+func requireContainer(t *testing.T, name string, err error) {
+	t.Helper()
+	if err == nil {
+		return
+	}
+	if dockerenv.Required() {
+		t.Fatalf("%s testcontainer unavailable and required (CI or REQUIRE_DOCKER is set): %v", name, err)
+	}
+	t.Skipf("%s testcontainer unavailable (requires Docker): %v", name, err)
+}
+
+// testDB is one migrated store database and the backend-specific operations
+// the tests need on it.
+type testDB struct {
+	name    string
+	backend Backend
+	// sqlDB runs queries on the backend's pool.
+	sqlDB *sql.DB
+	// singleConnBackend returns a second backend on the same database whose
+	// pool holds at most one connection.
+	singleConnBackend func(t *testing.T) Backend
+}
+
+type testTx struct {
+	tx       Tx
+	exec     func(ctx context.Context, query string) error
+	commit   func(ctx context.Context) error
+	rollback func(ctx context.Context) error
+}
+
+// forEachBackend runs fn against a fresh PostgreSQL and a fresh MySQL store
+// database.
+func forEachBackend(t *testing.T, fn func(t *testing.T, db testDB)) {
+	t.Run("postgres", func(t *testing.T) { fn(t, startPostgres(t)) })
+	t.Run("mysql", func(t *testing.T) { fn(t, startMySQL(t)) })
+}
+
+func startPostgres(t *testing.T) testDB {
 	t.Helper()
 	ctx := context.Background()
-	if err := configureDockerEnv(ctx); err != nil {
-		t.Skipf("skipping test; docker is unavailable: %v", err)
-	}
-
-	pgContainer, err := postgres.Run(ctx,
-		"postgres:18-alpine",
-		postgres.WithDatabase("testdb"),
-		postgres.WithUsername("postgres"),
-		postgres.WithPassword("postgres"),
-		postgres.BasicWaitStrategies(),
-	)
-	if err != nil {
-		t.Skipf("skipping test; failed to start postgres container: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = testcontainers.TerminateContainer(pgContainer)
+	postgresOnce.Do(func() {
+		if err := dockerenv.Configure(ctx); err != nil {
+			postgresErr = err
+			return
+		}
+		ctr, err := tcpostgres.Run(ctx,
+			"postgres:18-alpine",
+			tcpostgres.WithDatabase("testdb"),
+			tcpostgres.WithUsername("postgres"),
+			tcpostgres.WithPassword("postgres"),
+			tcpostgres.BasicWaitStrategies(),
+		)
+		if ctr != nil {
+			postgresContainer = ctr
+		}
+		if err != nil {
+			postgresErr = err
+			return
+		}
+		connStr, err := ctr.ConnectionString(ctx, "sslmode=disable")
+		if err != nil {
+			postgresErr = err
+			return
+		}
+		pool, err := pgxpool.New(ctx, connStr)
+		if err != nil {
+			postgresErr = err
+			return
+		}
+		postgresAdmin = pool
+		postgresErr = pingWithRetries(ctx, pool.Ping)
 	})
+	requireContainer(t, "PostgreSQL", postgresErr)
 
-	connStr, err := pgContainer.ConnectionString(ctx, "sslmode=disable")
-	if err != nil {
-		t.Fatalf("getting connection string: %v", err)
+	dbName := fmt.Sprintf("authz_%d", databaseSeq.Add(1))
+	if _, err := postgresAdmin.Exec(ctx, "CREATE DATABASE "+dbName); err != nil {
+		t.Fatalf("creating database %s: %v", dbName, err)
 	}
-
-	pool, err := pgxpool.New(ctx, connStr)
+	cfg := postgresAdmin.Config().Copy()
+	cfg.ConnConfig.Database = dbName
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		t.Fatalf("creating pgxpool: %v", err)
 	}
-	t.Cleanup(func() {
-		pool.Close()
-	})
+	t.Cleanup(pool.Close)
 
-	var pingErr error
+	sqlDB := stdlib.OpenDBFromPool(pool)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	applyMigrations(t, ctx, goose.DialectPostgres, sqlDB, "../store/atepg/migrations")
+
+	return testDB{
+		name:    "postgres",
+		backend: PostgresBackend(pool),
+		sqlDB:   sqlDB,
+		singleConnBackend: func(t *testing.T) Backend {
+			t.Helper()
+			singleCfg := pool.Config()
+			singleCfg.MaxConns = 1
+			singleCfg.MinConns = 0
+			single, err := pgxpool.NewWithConfig(context.Background(), singleCfg)
+			if err != nil {
+				t.Fatalf("creating single-conn pool: %v", err)
+			}
+			t.Cleanup(single.Close)
+			return PostgresBackend(single)
+		},
+	}
+}
+
+func startMySQL(t *testing.T) testDB {
+	t.Helper()
+	ctx := context.Background()
+	mysqlOnce.Do(func() {
+		if err := dockerenv.Configure(ctx); err != nil {
+			mysqlErr = err
+			return
+		}
+		ctr, err := tcmysql.Run(ctx,
+			"mysql:8.4",
+			tcmysql.WithDatabase("authz"),
+			tcmysql.WithUsername("root"),
+			tcmysql.WithPassword("root"),
+		)
+		if ctr != nil {
+			mysqlContainer = ctr
+		}
+		if err != nil {
+			mysqlErr = err
+			return
+		}
+		// The session settings atemy.Open applies; importing atemy here
+		// would be an import cycle.
+		dsn, err := ctr.ConnectionString(ctx, "parseTime=true", "loc=UTC", "clientFoundRows=true", "interpolateParams=true", "transaction_isolation=%27READ-COMMITTED%27")
+		if err != nil {
+			mysqlErr = err
+			return
+		}
+		db, err := sql.Open("mysql", dsn)
+		if err != nil {
+			mysqlErr = err
+			return
+		}
+		mysqlAdmin = db
+		mysqlAdminDSN = dsn
+		mysqlErr = pingWithRetries(ctx, db.PingContext)
+	})
+	requireContainer(t, "MySQL", mysqlErr)
+
+	dbName := fmt.Sprintf("authz_%d", databaseSeq.Add(1))
+	if _, err := mysqlAdmin.ExecContext(ctx, "CREATE DATABASE "+dbName); err != nil {
+		t.Fatalf("creating database %s: %v", dbName, err)
+	}
+	cfg, err := gomysql.ParseDSN(mysqlAdminDSN)
+	if err != nil {
+		t.Fatalf("parsing MySQL DSN: %v", err)
+	}
+	cfg.DBName = dbName
+	dsn := cfg.FormatDSN()
+	openDB := func(t *testing.T) *sql.DB {
+		t.Helper()
+		db, err := sql.Open("mysql", dsn)
+		if err != nil {
+			t.Fatalf("opening MySQL database: %v", err)
+		}
+		t.Cleanup(func() { _ = db.Close() })
+		return db
+	}
+	db := openDB(t)
+	applyMigrations(t, ctx, goose.DialectMySQL, db, "../store/atemy/migrations")
+
+	return testDB{
+		name:    "mysql",
+		backend: MySQLBackend(db),
+		sqlDB:   db,
+		singleConnBackend: func(t *testing.T) Backend {
+			t.Helper()
+			single := openDB(t)
+			single.SetMaxOpenConns(1)
+			return MySQLBackend(single)
+		},
+	}
+}
+
+func pingWithRetries(ctx context.Context, ping func(context.Context) error) error {
+	var err error
 	for i := 0; i < 30; i++ {
-		pingErr = pool.Ping(ctx)
-		if pingErr == nil {
-			break
+		if err = ping(ctx); err == nil {
+			return nil
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
-	if pingErr != nil {
-		t.Fatalf("timed out waiting for postgres ping: %v", pingErr)
-	}
+	return fmt.Errorf("pinging database after retries: %w", err)
+}
 
-	db := stdlib.OpenDBFromPool(pool)
-	defer db.Close()
-	provider, err := goose.NewProvider(goose.DialectPostgres, db, os.DirFS("../store/atepg/migrations"))
+func applyMigrations(t *testing.T, ctx context.Context, dialect goose.Dialect, db *sql.DB, dir string) {
+	t.Helper()
+	provider, err := goose.NewProvider(dialect, db, os.DirFS(dir))
 	if err != nil {
 		t.Fatalf("create goose provider: %v", err)
 	}
 	if _, err := provider.Up(ctx); err != nil {
 		t.Fatalf("run Substrate and OpenFGA migrations: %v", err)
 	}
-	return pool
 }
 
-func newTestAuthz(t *testing.T, ctx context.Context, pool *pgxpool.Pool) (*server.Server, string, string) {
+func newTestAuthz(t *testing.T, ctx context.Context, backend Backend) (*server.Server, string, string) {
 	t.Helper()
-	fgaSrv, err := NewOpenFGAServer(pool)
+	fgaSrv, err := NewOpenFGAServer(backend)
 	if err != nil {
 		t.Fatalf("NewOpenFGAServer failed: %v", err)
 	}
 	t.Cleanup(fgaSrv.Close)
-	storeID, modelID, err := EnsureStoreAndModel(ctx, pool, fgaSrv)
+	storeID, modelID, err := EnsureStoreAndModel(ctx, backend, fgaSrv)
 	if err != nil {
 		t.Fatalf("EnsureStoreAndModel failed: %v", err)
 	}
@@ -134,19 +307,22 @@ func newTestAuthz(t *testing.T, ctx context.Context, pool *pgxpool.Pool) (*serve
 }
 
 func TestEnsureStoreAndModel_NilArgs(t *testing.T) {
-	if _, err := NewOpenFGAServer(nil); err == nil {
-		t.Fatal("expected error when pool is nil in NewOpenFGAServer")
+	if _, err := NewOpenFGAServer(Backend{}); err == nil {
+		t.Fatal("expected error when the backend is empty in NewOpenFGAServer")
 	}
-	if _, _, err := EnsureStoreAndModel(context.Background(), nil, nil); err == nil {
-		t.Fatal("expected error when pool is nil in EnsureStoreAndModel")
+	if _, _, err := EnsureStoreAndModel(context.Background(), Backend{}, nil); err == nil {
+		t.Fatal("expected error when the backend is empty in EnsureStoreAndModel")
 	}
 }
 
 func TestEnsureStoreAndModel_InitializeAndCheck(t *testing.T) {
-	pool := startPostgres(t)
+	forEachBackend(t, testEnsureStoreAndModelInitializeAndCheck)
+}
+
+func testEnsureStoreAndModelInitializeAndCheck(t *testing.T, db testDB) {
 	ctx := context.Background()
 
-	fgaSrv, storeID, modelID := newTestAuthz(t, ctx, pool)
+	fgaSrv, storeID, modelID := newTestAuthz(t, ctx, db.backend)
 
 	if storeID == "" {
 		t.Fatal("expected non-empty storeID")
@@ -156,11 +332,8 @@ func TestEnsureStoreAndModel_InitializeAndCheck(t *testing.T) {
 	}
 
 	// Write relationship tuples inside a transaction and verify authorization checks against the model.
-	tx, err := pool.Begin(ctx)
-	if err != nil {
-		t.Fatalf("pool.Begin failed: %v", err)
-	}
-	_, err = fgaSrv.Write(ContextWithTx(ctx, tx), &openfgav1.WriteRequest{
+	tx := db.begin(t, ctx)
+	_, err := fgaSrv.Write(ContextWithTx(ctx, tx.tx), &openfgav1.WriteRequest{
 		StoreId:              storeID,
 		AuthorizationModelId: modelID,
 		Writes: &openfgav1.WriteRequestWrites{
@@ -181,7 +354,7 @@ func TestEnsureStoreAndModel_InitializeAndCheck(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Write tuples failed: %v", err)
 	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := tx.commit(ctx); err != nil {
 		t.Fatalf("tx.Commit failed: %v", err)
 	}
 
@@ -218,7 +391,7 @@ func TestEnsureStoreAndModel_InitializeAndCheck(t *testing.T) {
 	}
 
 	// Verify idempotent re-initialization on the same shared pool reuses the existing store and model.
-	_, storeID2, modelID2 := newTestAuthz(t, ctx, pool)
+	_, storeID2, modelID2 := newTestAuthz(t, ctx, db.backend)
 
 	if storeID2 != storeID {
 		t.Errorf("expected same storeID %q on re-init, got %q", storeID, storeID2)
@@ -228,13 +401,57 @@ func TestEnsureStoreAndModel_InitializeAndCheck(t *testing.T) {
 	}
 }
 
+func TestAcquireInitLock_CanceledWhileHeld(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, db testDB) {
+		unlock, err := acquireInitLock(t.Context(), db.backend)
+		if err != nil {
+			t.Fatalf("acquireInitLock failed: %v", err)
+		}
+		ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+		defer cancel()
+		_, err = acquireInitLock(ctx, db.backend)
+		unlock()
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("acquireInitLock while held = %v, want context.DeadlineExceeded", err)
+		}
+		ctx, cancel = context.WithTimeout(t.Context(), 5*time.Second)
+		defer cancel()
+		unlock, err = acquireInitLock(ctx, db.backend)
+		if err != nil {
+			t.Fatalf("acquireInitLock after unlock failed: %v", err)
+		}
+		unlock()
+	})
+}
+
+// Concurrent OpenFGA MySQL datastores race on a goose global unless
+// newMySQLDatastore serializes them. Run with -race.
+func TestNewOpenFGAServer_ConcurrentMySQL(t *testing.T) {
+	db := startMySQL(t)
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Go(func() {
+			fgaServer, err := NewOpenFGAServer(db.backend)
+			if err != nil {
+				t.Errorf("NewOpenFGAServer failed: %v", err)
+				return
+			}
+			fgaServer.Close()
+		})
+	}
+	wg.Wait()
+}
+
 func TestTransactionalDatastore_RollbackAndCommit(t *testing.T) {
+	forEachBackend(t, testTransactionalDatastoreRollbackAndCommit)
+}
+
+func testTransactionalDatastoreRollbackAndCommit(t *testing.T, db testDB) {
 	ctx := context.Background()
-	pool := startPostgres(t)
 
-	fgaSrv, storeID, modelID := newTestAuthz(t, ctx, pool)
+	fgaSrv, storeID, modelID := newTestAuthz(t, ctx, db.backend)
 
-	// Calling Write or Read (ReadPage) without an active pgx.Tx in ctx must fail loudly.
+	// Calling Write or Read (ReadPage) without an active transaction in ctx must fail loudly.
 	if _, err := fgaSrv.Write(ctx, &openfgav1.WriteRequest{
 		StoreId:              storeID,
 		AuthorizationModelId: modelID,
@@ -293,23 +510,22 @@ func TestTransactionalDatastore_RollbackAndCommit(t *testing.T) {
 	atespaceExists := func() bool {
 		t.Helper()
 		var exists bool
-		if err := pool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM atespaces WHERE name = 'team-tx')").Scan(&exists); err != nil {
+		if err := db.sqlDB.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM atespaces WHERE name = 'team-tx')").Scan(&exists); err != nil {
 			t.Fatalf("checking atespaces row failed: %v", err)
 		}
 		return exists
 	}
 
+	const insertAtespace = "INSERT INTO atespaces (name, uid, version, proto) VALUES ('team-tx', 'uid-1', 1, '')"
+
 	// Write both a Substrate atespaces row and an OpenFGA tuple inside a transaction
 	// that rolls back -> neither the atespaces row nor the tuple may persist.
-	txRollback, err := pool.Begin(ctx)
-	if err != nil {
-		t.Fatalf("pool.Begin failed: %v", err)
-	}
-	if _, err := txRollback.Exec(ctx, "INSERT INTO atespaces (name, uid, version, proto) VALUES ('team-tx', 'uid-1', 1, $1)", []byte{}); err != nil {
+	txRollback := db.begin(t, ctx)
+	if err := txRollback.exec(ctx, insertAtespace); err != nil {
 		t.Fatalf("txRollback insert atespaces failed: %v", err)
 	}
-	writeTuple(ContextWithTx(ctx, txRollback))
-	if err := txRollback.Rollback(ctx); err != nil {
+	writeTuple(ContextWithTx(ctx, txRollback.tx))
+	if err := txRollback.rollback(ctx); err != nil {
 		t.Fatalf("Rollback failed: %v", err)
 	}
 	if atespaceExists() {
@@ -321,15 +537,12 @@ func TestTransactionalDatastore_RollbackAndCommit(t *testing.T) {
 
 	// Write both the Substrate atespaces row and the OpenFGA tuple in a committed
 	// transaction -> both persist atomically.
-	txCommit, err := pool.Begin(ctx)
-	if err != nil {
-		t.Fatalf("pool.Begin failed: %v", err)
-	}
-	if _, err := txCommit.Exec(ctx, "INSERT INTO atespaces (name, uid, version, proto) VALUES ('team-tx', 'uid-1', 1, $1)", []byte{}); err != nil {
+	txCommit := db.begin(t, ctx)
+	if err := txCommit.exec(ctx, insertAtespace); err != nil {
 		t.Fatalf("txCommit insert atespaces failed: %v", err)
 	}
-	writeTuple(ContextWithTx(ctx, txCommit))
-	if err := txCommit.Commit(ctx); err != nil {
+	writeTuple(ContextWithTx(ctx, txCommit.tx))
+	if err := txCommit.commit(ctx); err != nil {
 		t.Fatalf("Commit failed: %v", err)
 	}
 	if !atespaceExists() {
@@ -340,39 +553,33 @@ func TestTransactionalDatastore_RollbackAndCommit(t *testing.T) {
 	}
 
 	// Closing fgaServer must not close the shared pool.
-	fgaSrv2, err := NewOpenFGAServer(pool)
+	fgaSrv2, err := NewOpenFGAServer(db.backend)
 	if err != nil {
 		t.Fatalf("NewOpenFGAServer failed: %v", err)
 	}
 	fgaSrv2.Close()
-	if err := pool.Ping(ctx); err != nil {
+	if err := db.sqlDB.PingContext(ctx); err != nil {
 		t.Fatalf("expected shared pool to remain open after fgaServer.Close(), got %v", err)
 	}
 
 	// Verify fgaServer.Read and fgaServer.Write inside ContextWithTx do not check out
-	// a second connection from a pool with MaxConns=1 (preventing pool starvation deadlock).
-	singleConnCfg := pool.Config()
-	singleConnCfg.MaxConns = 1
-	singleConnCfg.MinConns = 0
-	singlePool, err := pgxpool.NewWithConfig(ctx, singleConnCfg)
+	// a second connection from a single-connection pool (preventing pool starvation deadlock).
+	singleBackend := db.singleConnBackend(t)
+	singleFGASrv, err := NewOpenFGAServer(singleBackend)
 	if err != nil {
-		t.Fatalf("creating single-conn pool: %v", err)
-	}
-	t.Cleanup(singlePool.Close)
-
-	singleFGASrv, err := NewOpenFGAServer(singlePool)
-	if err != nil {
-		t.Fatalf("NewOpenFGAServer(singlePool) failed: %v", err)
+		t.Fatalf("NewOpenFGAServer(singleBackend) failed: %v", err)
 	}
 	t.Cleanup(singleFGASrv.Close)
+	if singleBackend.db != nil {
+		if got := singleBackend.db.Stats().MaxOpenConnections; got != 1 {
+			t.Fatalf("MaxOpenConnections after NewOpenFGAServer = %d, want 1", got)
+		}
+	}
 
 	txCtxTimeout, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	singleTx, err := singlePool.Begin(txCtxTimeout)
-	if err != nil {
-		t.Fatalf("singlePool.Begin failed: %v", err)
-	}
-	txCtx := ContextWithTx(txCtxTimeout, singleTx)
+	singleTx := beginOn(t, txCtxTimeout, singleBackend)
+	txCtx := ContextWithTx(txCtxTimeout, singleTx.tx)
 
 	readResp, err := singleFGASrv.Read(txCtx, &openfgav1.ReadRequest{
 		StoreId:  storeID,
@@ -394,7 +601,7 @@ func TestTransactionalDatastore_RollbackAndCommit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("singleFGASrv.Write delete on single-connection pool failed: %v", err)
 	}
-	if err := singleTx.Commit(txCtxTimeout); err != nil {
+	if err := singleTx.commit(txCtxTimeout); err != nil {
 		t.Fatalf("singleTx.Commit failed: %v", err)
 	}
 	if checkAllowed() {
@@ -402,14 +609,51 @@ func TestTransactionalDatastore_RollbackAndCommit(t *testing.T) {
 	}
 }
 
-func writeTestTuple(t *testing.T, ctx context.Context, pool *pgxpool.Pool, pm *PolicyManager, user, relation, object string) {
+func (db testDB) begin(t *testing.T, ctx context.Context) testTx {
 	t.Helper()
-	tx, err := pool.Begin(ctx)
-	if err != nil {
-		t.Fatalf("pool.Begin failed: %v", err)
+	return beginOn(t, ctx, db.backend)
+}
+
+// beginOn opens a transaction on backend's own pool, which may differ from
+// the testDB pool (such as a single-connection pool).
+func beginOn(t *testing.T, ctx context.Context, backend Backend) testTx {
+	t.Helper()
+	if backend.pool != nil {
+		tx, err := backend.pool.Begin(ctx)
+		if err != nil {
+			t.Fatalf("pool.Begin failed: %v", err)
+		}
+		t.Cleanup(func() { _ = tx.Rollback(context.Background()) })
+		return testTx{
+			tx: PgxTx(tx),
+			exec: func(ctx context.Context, query string) error {
+				_, err := tx.Exec(ctx, query)
+				return err
+			},
+			commit:   tx.Commit,
+			rollback: tx.Rollback,
+		}
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err := pm.fgaServer.Write(ContextWithTx(ctx, tx), &openfgav1.WriteRequest{
+	tx, err := backend.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("db.BeginTx failed: %v", err)
+	}
+	t.Cleanup(func() { _ = tx.Rollback() })
+	return testTx{
+		tx: SQLTx(tx),
+		exec: func(ctx context.Context, query string) error {
+			_, err := tx.ExecContext(ctx, query)
+			return err
+		},
+		commit:   func(context.Context) error { return tx.Commit() },
+		rollback: func(context.Context) error { return tx.Rollback() },
+	}
+}
+
+func writeTestTuple(t *testing.T, ctx context.Context, db testDB, pm *PolicyManager, user, relation, object string) {
+	t.Helper()
+	tx := db.begin(t, ctx)
+	if _, err := pm.fgaServer.Write(ContextWithTx(ctx, tx.tx), &openfgav1.WriteRequest{
 		StoreId:              pm.storeID,
 		AuthorizationModelId: pm.modelID,
 		Writes: &openfgav1.WriteRequestWrites{
@@ -425,29 +669,32 @@ func writeTestTuple(t *testing.T, ctx context.Context, pool *pgxpool.Pool, pm *P
 	}); err != nil {
 		t.Fatalf("writeTestTuple(%s, %s, %s) failed: %v", user, relation, object, err)
 	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := tx.commit(ctx); err != nil {
 		t.Fatalf("tx.Commit failed: %v", err)
 	}
 }
 
 func TestAuthorizerAndPolicyManager_RuntimeChecks(t *testing.T) {
-	pool := startPostgres(t)
+	forEachBackend(t, testAuthorizerAndPolicyManagerRuntimeChecks)
+}
+
+func testAuthorizerAndPolicyManagerRuntimeChecks(t *testing.T, db testDB) {
 	ctx := context.Background()
 
-	fgaSrv, err := NewOpenFGAServer(pool)
+	fgaSrv, err := NewOpenFGAServer(db.backend)
 	if err != nil {
 		t.Fatalf("NewOpenFGAServer failed: %v", err)
 	}
 	t.Cleanup(fgaSrv.Close)
 
-	authorizer, policyManager, err := New(ctx, pool, fgaSrv, nil)
+	authorizer, policyManager, err := New(ctx, db.backend, fgaSrv, nil)
 	if err != nil {
 		t.Fatalf("authz.New failed: %v", err)
 	}
 
 	// 1. Seed global owners (including a Kubernetes ServiceAccount ID with colons).
-	writeTestTuple(t, ctx, pool, policyManager, "alice", "owner", GlobalRootObject)
-	writeTestTuple(t, ctx, pool, policyManager, "system:serviceaccount:default:default", "owner", GlobalRootObject)
+	writeTestTuple(t, ctx, db, policyManager, "alice", "owner", GlobalRootObject)
+	writeTestTuple(t, ctx, db, policyManager, "system:serviceaccount:default:default", "owner", GlobalRootObject)
 
 	// 1b. A nil Authorizer fails closed with codes.Internal unless explicitly bypassed.
 	var nilAuthorizer *Authorizer
@@ -499,24 +746,21 @@ func TestAuthorizerAndPolicyManager_RuntimeChecks(t *testing.T) {
 	}
 
 	// 5. Grant bob direct editor access on atespace:team-x.
-	writeTestTuple(t, ctx, pool, policyManager, "bob", "editor", AtespaceObject("team-x"))
+	writeTestTuple(t, ctx, db, policyManager, "bob", "editor", AtespaceObject("team-x"))
 	if err := authorizer.Check(bobCtx, RelationCanGet, AtespaceObject("team-x")); err != nil {
 		t.Errorf("expected bob allowed can_get on team-x, got %v", err)
 	}
 
 	// 6. PolicyManager.DeleteAtespacePolicies requires a transaction, and
 	// removes all tuples on team-x when committed.
-	if err := policyManager.DeleteAtespacePolicies(ctx, nil, "team-x"); !errors.Is(err, ErrNilTransaction) {
+	if err := policyManager.DeleteAtespacePolicies(ctx, Tx{}, "team-x"); !errors.Is(err, ErrNilTransaction) {
 		t.Fatalf("DeleteAtespacePolicies with nil tx = %v, want ErrNilTransaction", err)
 	}
-	txDel, err := pool.Begin(ctx)
-	if err != nil {
-		t.Fatalf("pool.Begin failed: %v", err)
-	}
-	if err := policyManager.DeleteAtespacePolicies(ctx, txDel, "team-x"); err != nil {
+	txDel := db.begin(t, ctx)
+	if err := policyManager.DeleteAtespacePolicies(ctx, txDel.tx, "team-x"); err != nil {
 		t.Fatalf("DeleteAtespacePolicies failed: %v", err)
 	}
-	if err := txDel.Commit(ctx); err != nil {
+	if err := txDel.commit(ctx); err != nil {
 		t.Fatalf("txDel.Commit failed: %v", err)
 	}
 	if err := authorizer.Check(bobCtx, RelationCanGet, AtespaceObject("team-x")); status.Code(err) != codes.PermissionDenied {
@@ -570,4 +814,45 @@ func TestFormatUser_NoCollision(t *testing.T) {
 	if u1 == u2 {
 		t.Fatalf("formatUser(\"alice\") and formatUser(\"user:alice\") collided on %q", u1)
 	}
+}
+
+// TestPolicyManager_MemberLengthPerBackend pins the one difference between
+// the backends: OpenFGA's MySQL schema holds a tuple user in 256 characters,
+// so only the MySQL store refuses longer members, as InvalidArgument.
+func TestPolicyManager_MemberLengthPerBackend(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, db testDB) {
+		ctx := t.Context()
+		fgaSrv, err := NewOpenFGAServer(db.backend)
+		if err != nil {
+			t.Fatalf("NewOpenFGAServer failed: %v", err)
+		}
+		t.Cleanup(fgaSrv.Close)
+		_, policyManager, err := New(ctx, db.backend, fgaSrv, nil)
+		if err != nil {
+			t.Fatalf("New failed: %v", err)
+		}
+		reconcile := func(member string) error {
+			t.Helper()
+			tx := db.begin(t, ctx)
+			defer tx.rollback(ctx) //nolint:errcheck // the test only inspects the reconcile error
+			return policyManager.ReconcileGlobalBindings(ctx, tx.tx, []*ateapipb.Binding{{Role: "owner", Members: []string{member}}})
+		}
+
+		if err := reconcile("user:" + strings.Repeat("a", 251)); err != nil {
+			t.Errorf("a 256-character member failed: %v", err)
+		}
+		err = reconcile("user:" + strings.Repeat("a", 252))
+		if db.name == "postgres" {
+			if err != nil {
+				t.Errorf("a 257-character member failed on PostgreSQL: %v", err)
+			}
+			return
+		}
+		if status.Code(err) != codes.InvalidArgument {
+			t.Errorf("a 257-character member on MySQL = %v, want InvalidArgument", err)
+		}
+		if err := reconcile("user:" + strings.Repeat(":", 84)); status.Code(err) != codes.InvalidArgument {
+			t.Errorf("a member past the limit once encoded on MySQL = %v, want InvalidArgument", err)
+		}
+	})
 }

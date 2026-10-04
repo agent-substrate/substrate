@@ -16,22 +16,48 @@ package authz
 
 import (
 	"context"
+	"database/sql"
 
 	"github.com/jackc/pgx/v5"
 )
 
+// Tx is the store transaction that OpenFGA tuple reads and writes join. Build
+// it with PgxTx for the PostgreSQL store or SQLTx for the MySQL store; the
+// zero value carries no transaction.
+type Tx struct {
+	q *txStatements
+}
+
+// PgxTx wraps a PostgreSQL store transaction.
+func PgxTx(tx pgx.Tx) Tx {
+	if tx == nil {
+		return Tx{}
+	}
+	return Tx{q: pgxTxStatements(tx)}
+}
+
+// SQLTx wraps a MySQL store transaction.
+func SQLTx(tx *sql.Tx) Tx {
+	if tx == nil {
+		return Tx{}
+	}
+	return Tx{q: sqlTxStatements(tx)}
+}
+
+func (t Tx) isZero() bool { return t.q == nil }
+
 type txContextKey struct{}
 
-// ContextWithTx injects an active pgx.Tx into ctx.
-func ContextWithTx(ctx context.Context, tx pgx.Tx) context.Context {
-	if tx == nil {
+// ContextWithTx injects an active store transaction into ctx.
+func ContextWithTx(ctx context.Context, tx Tx) context.Context {
+	if tx.isZero() {
 		return ctx
 	}
 	return context.WithValue(ctx, txContextKey{}, tx)
 }
 
-// TxFromContext retrieves the active pgx.Tx from ctx, if present.
-func TxFromContext(ctx context.Context) (pgx.Tx, bool) {
-	tx, ok := ctx.Value(txContextKey{}).(pgx.Tx)
-	return tx, ok && tx != nil
+// TxFromContext retrieves the active store transaction from ctx, if present.
+func TxFromContext(ctx context.Context) (Tx, bool) {
+	tx, ok := ctx.Value(txContextKey{}).(Tx)
+	return tx, ok && !tx.isZero()
 }
