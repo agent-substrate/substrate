@@ -1,6 +1,8 @@
 # Database Configuration
 
 ## Overview
+PostgreSQL is Substrate's default store backend. `ATE_API_STORE_BACKEND=mysql` (or `--store-backend=mysql`) selects MySQL instead; see the [MySQL configuration guide](mysql.md).
+
 Substrate supports separate connections for schema ownership (DDL) and normal reads and writes (DML). Migrations and partition maintenance use the owner connection; application queries use the read/write connection. Each connection assumes its configured PostgreSQL role.
 
 The bundled development database uses its existing `postgres` account and role for both pools. For restricted runtime access, provision separate owner and read/write roles in an external database. A single login can also be used if it has membership in both roles.

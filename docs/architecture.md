@@ -229,7 +229,7 @@ administrative operations and actor environment definitions.
 
 These resources represent the high-frequency, ephemeral state of individual
 actors and workers. They are stored in a high-performance, low-latency state
-store (PostgreSQL) to support real-time operations.
+store (PostgreSQL or MySQL) to support real-time operations.
 
   * **Actor**: A specific instance of an ActorTemplate. An Actor record tracks
     its globally unique identifier, physical location (Worker IP), current
@@ -310,7 +310,7 @@ The brain of the system. It exposes a gRPC API for the data plane and CLI to
 manage actor lifecycles.
 
   * **State Store**: Tracks the mapping of Actors to Workers in a
-    PostgreSQL store.
+    PostgreSQL or MySQL store.
 
   * **Scheduler**: Selects a ready worker for a resumption request.
 

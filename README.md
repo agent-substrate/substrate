@@ -192,6 +192,7 @@ go run ./tools/setup-gcp create bucket
 
 To run the PostgreSQL store backend on Cloud SQL — with IAM database
 authentication and no passwords — see [tools/setup-gcp/cloud-sql.md](tools/setup-gcp/cloud-sql.md).
+To use an external MySQL 8.0+ or PlanetScale database instead, see [docs/mysql.md](docs/mysql.md).
 
 Similarly, you can deploy or cleanup specific Agent Substrate components using the installation script. See `./hack/install-ate.sh --help` for all options.
 ```bash
