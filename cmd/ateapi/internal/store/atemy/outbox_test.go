@@ -1,0 +1,786 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package atemy
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"slices"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/google/go-cmp/cmp"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/testing/protocmp"
+
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storesql"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+)
+
+func workerPayload(t *testing.T, eventType store.WorkerEventType, worker *ateapipb.Worker) []byte {
+	t.Helper()
+	payload, err := storesql.MarshalWorkerEvent(eventType, worker)
+	if err != nil {
+		t.Fatalf("marshaling event for %q: %v", worker.GetMetadata().GetName(), err)
+	}
+	return payload
+}
+
+// insertOutboxRow appends payload on q, stamped age before now, the way
+// writeAndAppendEvent does, and returns its seq.
+func insertOutboxRow(t *testing.T, q querier, payload []byte, age time.Duration) uint64 {
+	t.Helper()
+	res, err := q.ExecContext(t.Context(), `
+		INSERT INTO worker_outbox (created_at, payload)
+		VALUES (UTC_TIMESTAMP(6) - INTERVAL ? MICROSECOND, ?)`, age.Microseconds(), payload)
+	if err != nil {
+		t.Fatalf("appending outbox row: %v", err)
+	}
+	seq, err := res.LastInsertId()
+	if err != nil {
+		t.Fatalf("reading appended seq: %v", err)
+	}
+	return uint64(seq)
+}
+
+// beginOutboxWrite opens a transaction that appends an event for worker and
+// stays open, as a worker write between its append and its commit does.
+func beginOutboxWrite(t *testing.T, p *Persistence, eventType store.WorkerEventType, worker *ateapipb.Worker) (*sql.Tx, uint64) {
+	t.Helper()
+	tx, err := p.db.BeginTx(t.Context(), &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		t.Fatalf("BeginTx failed: %v", err)
+	}
+	t.Cleanup(func() { tx.Rollback() }) //nolint:errcheck // no-op once committed
+	return tx, insertOutboxRow(t, tx, workerPayload(t, eventType, worker), 0)
+}
+
+// appendRawEvents commits n outbox rows carrying payload in one statement,
+// stamped age before now, and returns the first and last seq.
+func appendRawEvents(t *testing.T, p *Persistence, n int, payload []byte, age time.Duration) (first, last uint64) {
+	t.Helper()
+	ctx := t.Context()
+	conn, err := p.db.Conn(ctx)
+	if err != nil {
+		t.Fatalf("acquiring connection: %v", err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `SET SESSION cte_max_recursion_depth = ?`, n+1); err != nil {
+		t.Fatalf("raising recursion depth: %v", err)
+	}
+	if _, err := conn.ExecContext(ctx, `
+		INSERT INTO worker_outbox (created_at, payload)
+		WITH RECURSIVE r (i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM r WHERE i < ?)
+		SELECT UTC_TIMESTAMP(6) - INTERVAL ? MICROSECOND, ? FROM r`,
+		n, age.Microseconds(), payload); err != nil {
+		t.Fatalf("appending outbox rows: %v", err)
+	}
+	if err := conn.QueryRowContext(ctx, `SELECT LAST_INSERT_ID()`).Scan(&first); err != nil {
+		t.Fatalf("reading first seq: %v", err)
+	}
+	return first, first + uint64(n) - 1
+}
+
+// outboxHead returns the greatest stored seq.
+func outboxHead(t *testing.T, p *Persistence) uint64 {
+	t.Helper()
+	var seq uint64
+	if err := p.db.QueryRowContext(t.Context(), `SELECT COALESCE(MAX(seq), 0) FROM worker_outbox`).Scan(&seq); err != nil {
+		t.Fatalf("reading outbox head: %v", err)
+	}
+	return seq
+}
+
+func trimMark(t *testing.T, p *Persistence) uint64 {
+	t.Helper()
+	var seq uint64
+	if err := p.db.QueryRowContext(t.Context(), `SELECT seq FROM worker_outbox_trim WHERE id = 1`).Scan(&seq); err != nil {
+		t.Fatalf("reading trim mark: %v", err)
+	}
+	return seq
+}
+
+func outboxSeqs(t *testing.T, p *Persistence) []uint64 {
+	t.Helper()
+	rows, err := p.db.QueryContext(t.Context(), `SELECT seq FROM worker_outbox ORDER BY seq`)
+	if err != nil {
+		t.Fatalf("reading outbox: %v", err)
+	}
+	defer rows.Close()
+	var seqs []uint64
+	for rows.Next() {
+		var seq uint64
+		if err := rows.Scan(&seq); err != nil {
+			t.Fatalf("scanning outbox row: %v", err)
+		}
+		seqs = append(seqs, seq)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("reading outbox: %v", err)
+	}
+	return seqs
+}
+
+func seqRange(first, last uint64) []uint64 {
+	var seqs []uint64
+	for seq := first; seq <= last; seq++ {
+		seqs = append(seqs, seq)
+	}
+	return seqs
+}
+
+// receive returns the next event, failing if the watch closes or stays quiet.
+func receive(t *testing.T, watch *store.WorkerWatch) store.WorkerEvent {
+	t.Helper()
+	select {
+	case event, ok := <-watch.Events:
+		if !ok {
+			t.Fatal("watch closed, want an event")
+		}
+		return event
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for an event")
+	}
+	return store.WorkerEvent{}
+}
+
+// requireClosedNext fails unless the watch's next signal is its close.
+func requireClosedNext(t *testing.T, watch *store.WorkerWatch, why string) {
+	t.Helper()
+	select {
+	case event, ok := <-watch.Events:
+		if ok {
+			t.Fatalf("delivered event for %q, want the watch to close: %s", event.Worker.GetMetadata().GetName(), why)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("watch stayed open: %s", why)
+	}
+}
+
+func watchWorkers(t *testing.T, p *Persistence) *store.WorkerWatch {
+	t.Helper()
+	watch, err := p.WatchWorkers(t.Context())
+	if err != nil {
+		t.Fatalf("WatchWorkers failed: %v", err)
+	}
+	t.Cleanup(watch.Close)
+	return watch
+}
+
+// TestWorkerEvent_OnlyAfterCommit proves a worker write's outbox row shares
+// the write's transaction: a rolled-back write delivers nothing and the seq it
+// took, a gap the watcher waits on, does not close the watch.
+func TestWorkerEvent_OnlyAfterCommit(t *testing.T) {
+	s := setupMySQLPersistence(t)
+	ctx := t.Context()
+	// A replica's watcher sees only polled rows, so a rolled-back row that
+	// leaked would arrive from the outbox.
+	watch := watchWorkers(t, newReplica(t, s))
+
+	worker := newTestWorker("6e4d2f81-b3a9-4c05-8e72-1f9d4a0c7b63")
+	tx, rolledBack := beginOutboxWrite(t, s, store.WorkerEventCreated, newTestWorker("rolled-back"))
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("Rollback failed: %v", err)
+	}
+
+	created, err := s.CreateWorker(ctx, worker)
+	if err != nil {
+		t.Fatalf("CreateWorker failed: %v", err)
+	}
+	if created.GetMetadata().GetName() == "" || outboxHead(t, s) <= rolledBack {
+		t.Fatalf("committed write did not take a seq past the rolled-back %d", rolledBack)
+	}
+	event := receive(t, watch)
+	if event.Type != store.WorkerEventCreated {
+		t.Errorf("event type = %v, want WorkerEventCreated", event.Type)
+	}
+	if diff := cmp.Diff(created, event.Worker, protocmp.Transform()); diff != "" {
+		t.Errorf("event worker mismatch (-want +got):\n%s", diff)
+	}
+
+	// The rolled-back seq does not close the watch.
+	if _, err := s.CreateWorker(ctx, newTestWorker("after-rollback")); err != nil {
+		t.Fatalf("CreateWorker failed: %v", err)
+	}
+	if got := receive(t, watch).Worker.GetMetadata().GetName(); got != "after-rollback" {
+		t.Errorf("delivered %q, want after-rollback", got)
+	}
+}
+
+// TestWatchWorkers_OutOfOrderCommitNotSkipped commits seq N+1 while seq N is
+// still open. The watcher delivers N+1, remembers N as pending, and delivers
+// N late once it commits, without losing it or closing the watch.
+func TestWatchWorkers_OutOfOrderCommitNotSkipped(t *testing.T) {
+	s := setupMySQLPersistence(t)
+	ctx := t.Context()
+	watch := watchWorkers(t, newReplica(t, s))
+
+	txA, seqA := beginOutboxWrite(t, s, store.WorkerEventCreated, newTestWorker("first-seq-late-commit"))
+	if _, err := s.CreateWorker(ctx, newTestWorker("second-seq-early-commit")); err != nil {
+		t.Fatalf("CreateWorker failed: %v", err)
+	}
+	if got := outboxHead(t, s); got <= seqA {
+		t.Fatalf("early commit took seq %d, want one past the open %d", got, seqA)
+	}
+	if got := receive(t, watch).Worker.GetMetadata().GetName(); got != "second-seq-early-commit" {
+		t.Fatalf("delivered %q, want second-seq-early-commit", got)
+	}
+
+	if err := txA.Commit(); err != nil {
+		t.Fatalf("committing the first writer: %v", err)
+	}
+	if got := receive(t, watch).Worker.GetMetadata().GetName(); got != "first-seq-late-commit" {
+		t.Fatalf("delivered %q, want the late first-seq-late-commit", got)
+	}
+	if _, err := s.CreateWorker(ctx, newTestWorker("after-late-commit")); err != nil {
+		t.Fatalf("CreateWorker failed: %v", err)
+	}
+	if got := receive(t, watch).Worker.GetMetadata().GetName(); got != "after-late-commit" {
+		t.Errorf("delivered %q, want after-late-commit", got)
+	}
+}
+
+// Writes to one worker take its row lock in turn, so the later write's seq is
+// assigned after the earlier one commits. When the earlier write is pending,
+// both arrive in write order, the earlier one delivered late in the same poll.
+func TestWatchWorkers_KeepsPerWorkerOrder(t *testing.T) {
+	ipsOf := func(t *testing.T, watch *store.WorkerWatch, name string, n int) []string {
+		t.Helper()
+		var ips []string
+		for len(ips) < n {
+			event := receive(t, watch)
+			if event.Worker.GetMetadata().GetName() == name {
+				ips = append(ips, event.Worker.GetIps()...)
+			}
+		}
+		return ips
+	}
+	s := setupMySQLPersistence(t)
+	ctx := t.Context()
+	created, err := s.CreateWorker(ctx, newTestWorker("ordered"))
+	if err != nil {
+		t.Fatalf("CreateWorker failed: %v", err)
+	}
+	watch := watchWorkers(t, newReplica(t, s))
+
+	// The first write holds the worker's row lock past its append.
+	first := proto.CloneOf(created)
+	first.Ips = []string{"10.0.0.1"}
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		t.Fatalf("BeginTx failed: %v", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op once committed
+	if _, err := tx.ExecContext(ctx, `UPDATE workers SET version = version WHERE name = 'ordered'`); err != nil {
+		t.Fatalf("locking the worker: %v", err)
+	}
+	insertOutboxRow(t, tx, workerPayload(t, store.WorkerEventUpdated, first), 0)
+
+	// Another worker commits a later seq, so the first write's seq is
+	// pending.
+	if _, err := s.CreateWorker(ctx, newTestWorker("other")); err != nil {
+		t.Fatalf("CreateWorker failed: %v", err)
+	}
+	if got := receive(t, watch).Worker.GetMetadata().GetName(); got != "other" {
+		t.Fatalf("delivered %q, want other", got)
+	}
+
+	second := make(chan error, 1)
+	go func() {
+		stored, err := s.GetWorker(ctx, "ordered")
+		if err == nil {
+			_, err = s.UpdateWorker(ctx, "ordered", store.PreconditionFrom(stored), func(w *ateapipb.Worker) error {
+				w.Ips = []string{"10.0.0.2"}
+				return nil
+			})
+		}
+		second <- err
+	}()
+	waitForLockWait(t, second)
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("committing the first write: %v", err)
+	}
+	if err := <-second; err != nil {
+		t.Fatalf("second UpdateWorker failed: %v", err)
+	}
+	if got, want := ipsOf(t, watch, "ordered", 2), []string{"10.0.0.1", "10.0.0.2"}; !slices.Equal(got, want) {
+		t.Errorf("updates delivered in order %q, want %q", got, want)
+	}
+}
+
+// A write in flight when a watch subscribes has a seq below a write that
+// committed before the watch, so the watch starts with it pending and
+// delivers it once it commits. Rows already committed are not replayed.
+func TestWatchWorkers_DeliversAWriteInFlightAtSubscribe(t *testing.T) {
+	s := setupMySQLPersistence(t)
+	ctx := t.Context()
+	// An earlier row, outside the gap window, as on a quiet system.
+	insertOutboxRow(t, s.db, workerPayload(t, store.WorkerEventCreated, newTestWorker("long-ago")), 2*outboxSubscribeWindow)
+
+	tx, inFlight := beginOutboxWrite(t, s, store.WorkerEventCreated, newTestWorker("in-flight"))
+	if _, err := s.CreateWorker(ctx, newTestWorker("committed-before-subscribe")); err != nil {
+		t.Fatalf("CreateWorker failed: %v", err)
+	}
+	if got := outboxHead(t, s); got <= inFlight {
+		t.Fatalf("committed write took seq %d, want one past the in-flight %d", got, inFlight)
+	}
+	watch := watchWorkers(t, newReplica(t, s))
+
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("Commit failed: %v", err)
+	}
+	if _, err := s.CreateWorker(ctx, newTestWorker("after-subscribe")); err != nil {
+		t.Fatalf("CreateWorker failed: %v", err)
+	}
+	got := []string{receive(t, watch).Worker.GetMetadata().GetName(), receive(t, watch).Worker.GetMetadata().GetName()}
+	if !slices.Contains(got, "in-flight") || !slices.Contains(got, "after-subscribe") {
+		t.Errorf("delivered %q, want in-flight and after-subscribe, and nothing written before the watch", got)
+	}
+}
+
+// TestWorkerEvents_OneRowPerWrite pins the invariant the seq cursor rests on:
+// each committed worker write appends exactly one outbox row, and a write
+// that announces nothing appends none.
+func TestWorkerEvents_OneRowPerWrite(t *testing.T) {
+	s := setupMySQLPersistence(t)
+	ctx := t.Context()
+
+	if _, err := s.CreateWorker(ctx, newTestWorker("one-row-worker")); err != nil {
+		t.Fatalf("CreateWorker failed: %v", err)
+	}
+	for i := range 10 {
+		stored, err := s.GetWorker(ctx, "one-row-worker")
+		if err != nil {
+			t.Fatalf("GetWorker failed: %v", err)
+		}
+		if _, err := s.UpdateWorker(ctx, "one-row-worker", store.PreconditionFrom(stored), func(*ateapipb.Worker) error {
+			return nil
+		}); err != nil {
+			t.Fatalf("UpdateWorker %d failed: %v", i, err)
+		}
+	}
+	if released, err := s.ReleaseActorFromWorker(ctx, "one-row-worker", "not-hosted"); err != nil || released != nil {
+		t.Fatalf("ReleaseActorFromWorker of an unhosted actor = %v, %v; want nil, nil", released, err)
+	}
+	if _, err := s.DeleteWorker(ctx, "one-row-worker", store.DeletePreconditions{}); err != nil {
+		t.Fatalf("DeleteWorker failed: %v", err)
+	}
+
+	const writes = 12
+	seqs := outboxSeqs(t, s)
+	if len(seqs) != writes {
+		t.Fatalf("%d outbox rows, want %d", len(seqs), writes)
+	}
+	if diff := cmp.Diff(seqRange(seqs[0], seqs[0]+writes-1), seqs); diff != "" {
+		t.Errorf("outbox seqs are not contiguous (-want +got):\n%s", diff)
+	}
+}
+
+// Retention deletes rows oldest seq first and stops at the first row still
+// within retention, so the trim mark always bounds a contiguous deleted
+// prefix, even if a later row carries an older timestamp.
+func TestTrimWorkerOutbox_TrimsOnlyTheExpiredPrefix(t *testing.T) {
+	testTrimsOnlyTheExpiredPrefix(t, setupMySQLPersistence(t))
+}
+
+func testTrimsOnlyTheExpiredPrefix(t *testing.T, s *Persistence) {
+	t.Helper()
+	ctx := t.Context()
+	payload := []byte("payload")
+	insertOutboxRow(t, s.db, payload, time.Hour)
+	secondOld := insertOutboxRow(t, s.db, payload, time.Hour)
+	fresh := insertOutboxRow(t, s.db, payload, 0)
+	lateOld := insertOutboxRow(t, s.db, payload, time.Hour)
+
+	for range 2 {
+		if err := s.trimWorkerOutboxOlderThan(ctx, 30*time.Minute); err != nil {
+			t.Fatalf("trimWorkerOutboxOlderThan failed: %v", err)
+		}
+		if diff := cmp.Diff([]uint64{fresh, lateOld}, outboxSeqs(t, s)); diff != "" {
+			t.Errorf("outbox seqs after trim (-want +got):\n%s", diff)
+		}
+		if got := trimMark(t, s); got != secondOld {
+			t.Errorf("trim mark = %d, want %d", got, secondOld)
+		}
+	}
+
+	// The production retention keeps rows younger than outboxRetentionAge.
+	if err := s.trimWorkerOutboxOlderThan(ctx, outboxRetentionAge); err != nil {
+		t.Fatalf("trimWorkerOutboxOlderThan failed: %v", err)
+	}
+	if diff := cmp.Diff([]uint64{fresh, lateOld}, outboxSeqs(t, s)); diff != "" {
+		t.Errorf("outbox seqs after production retention (-want +got):\n%s", diff)
+	}
+}
+
+// A database that loses committed writes, as a restore from an older backup
+// does, leaves the outbox behind a watcher's cursor. New writes would reuse
+// seqs the cursor has passed, so the watcher must close rather than skip them.
+func TestWatchWorkers_ClosesWhenTheOutboxMovesBehindTheCursor(t *testing.T) {
+	s := setupMySQLPersistence(t)
+	ctx := t.Context()
+	watch := watchWorkers(t, newReplica(t, s))
+
+	if _, err := s.CreateWorker(ctx, newTestWorker("lost-worker")); err != nil {
+		t.Fatalf("CreateWorker failed: %v", err)
+	}
+	if got := receive(t, watch).Worker.GetMetadata().GetName(); got != "lost-worker" {
+		t.Fatalf("delivered %q, want lost-worker", got)
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM worker_outbox`); err != nil {
+		t.Fatalf("dropping the outbox rows: %v", err)
+	}
+	requireClosedNext(t, watch, "the outbox moved behind the cursor")
+}
+
+// TestWatchWorkers_ClosesOnCorruptPayload pins close-over-skip: a payload
+// that fails to decode must close the watch rather than advance past it.
+func TestWatchWorkers_ClosesOnCorruptPayload(t *testing.T) {
+	s := setupMySQLPersistence(t)
+	watch := watchWorkers(t, s)
+	insertOutboxRow(t, s.db, []byte{0xff, 0xde, 0xad}, 0)
+	requireClosedNext(t, watch, "a corrupt payload was skipped")
+}
+
+// A huge gap stops one past the cap, enough for closeReason to see it.
+func TestOutboxCursor_Wait(t *testing.T) {
+	c := &outboxCursor{pending: map[uint64]time.Time{}}
+	c.wait(0, outboxMaxPending*10, time.Now())
+	if got := len(c.pending); got != outboxMaxPending+1 {
+		t.Errorf("pending after a huge gap = %d seqs, want %d", got, outboxMaxPending+1)
+	}
+}
+
+func TestOutboxCursor_CloseReason(t *testing.T) {
+	healthy := outboxMarks{trim: 5, head: 20, server: "a"}
+	tooMany := map[uint64]time.Time{}
+	for s := range uint64(outboxMaxPending + 1) {
+		tooMany[100+s] = time.Time{}
+	}
+	for _, tc := range []struct {
+		name    string
+		pending map[uint64]time.Time
+		marks   outboxMarks
+		closes  bool
+	}{
+		{"healthy", map[uint64]time.Time{8: {}}, healthy, false},
+		{"head at the cursor", nil, outboxMarks{trim: 5, head: 10, server: "a"}, false},
+		{"trim at the cursor", nil, outboxMarks{trim: 10, head: 10, server: "a"}, false},
+		{"server changed", nil, outboxMarks{trim: 5, head: 20, server: "b"}, true},
+		{"head behind the cursor", nil, outboxMarks{trim: 5, head: 9, server: "a"}, true},
+		{"trim past the cursor", nil, outboxMarks{trim: 11, head: 20, server: "a"}, true},
+		{"too many pending", tooMany, healthy, true},
+		{"pending at the trim mark", map[uint64]time.Time{5: {}}, healthy, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pending := tc.pending
+			if pending == nil {
+				pending = map[uint64]time.Time{}
+			}
+			c := &outboxCursor{seq: 10, pending: pending, server: "a"}
+			if got, _ := c.closeReason(tc.marks); (got != "") != tc.closes {
+				t.Errorf("closeReason(%+v) = %q, want closing: %t", tc.marks, got, tc.closes)
+			}
+		})
+	}
+}
+
+// A rolled-back write leaves a seq that never commits. The watcher drops it
+// once a NOWAIT probe finds neither a row nor a writer holding it, and keeps
+// every pending seq while some write is still committing, however long that
+// takes, as atepg's xmin fence waits.
+func TestPollWorkerOutbox_DropsOnlyRolledBackSeqs(t *testing.T) {
+	testDropsOnlyRolledBackSeqs(t, setupMySQLPersistence(t))
+}
+
+func testDropsOnlyRolledBackSeqs(t *testing.T, s *Persistence) {
+	t.Helper()
+	ctx := t.Context()
+	rolledBackTx, rolledBack := beginOutboxWrite(t, s, store.WorkerEventCreated, newTestWorker("rolled-back"))
+	if err := rolledBackTx.Rollback(); err != nil {
+		t.Fatalf("Rollback failed: %v", err)
+	}
+	inFlight, inFlightSeq := beginOutboxWrite(t, s, store.WorkerEventCreated, newTestWorker("in-flight"))
+	defer inFlight.Rollback() //nolint:errcheck // no-op once committed
+	if _, err := s.CreateWorker(ctx, newTestWorker("committed")); err != nil {
+		t.Fatalf("CreateWorker failed: %v", err)
+	}
+
+	cursor, err := s.subscribeWorkerOutbox(ctx)
+	if err != nil {
+		t.Fatalf("subscribeWorkerOutbox failed: %v", err)
+	}
+	if _, ok := cursor.pending[rolledBack]; !ok {
+		t.Fatalf("pending = %v, want the rolled-back seq %d", cursor.pending, rolledBack)
+	}
+	age := func() {
+		for seq := range cursor.pending {
+			cursor.pending[seq] = time.Now().Add(-2 * outboxGapGrace)
+		}
+	}
+
+	age()
+	if _, _, resync, err := s.pollWorkerOutbox(ctx, cursor); err != nil || resync {
+		t.Fatalf("poll with a write in flight = resync %t, %v", resync, err)
+	}
+	for _, seq := range []uint64{rolledBack, inFlightSeq} {
+		if _, ok := cursor.pending[seq]; !ok {
+			t.Errorf("seq %d left pending while a write is in flight; pending = %v", seq, cursor.pending)
+		}
+	}
+
+	if err := inFlight.Commit(); err != nil {
+		t.Fatalf("Commit failed: %v", err)
+	}
+	age()
+	batch, _, resync, err := s.pollWorkerOutbox(ctx, cursor)
+	if err != nil || resync {
+		t.Fatalf("poll after the commit = resync %t, %v", resync, err)
+	}
+	if len(batch) != 1 || batch[0].seq != inFlightSeq {
+		t.Errorf("delivered %v, want the late seq %d", batch, inFlightSeq)
+	}
+	if len(cursor.pending) != 0 {
+		t.Errorf("pending = %v, want the rolled-back seq dropped", cursor.pending)
+	}
+}
+
+// Two replicas running retention at once: one drains every batch while the
+// other skips the locked trim row, and both succeed.
+func TestTrimWorkerOutbox_ConcurrentPassesAreHarmless(t *testing.T) {
+	s := setupMySQLPersistence(t)
+	replica := newReplica(t, s)
+	_, last := appendRawEvents(t, s, outboxBatch*2+5, []byte("payload"), time.Hour)
+
+	errs := make([]error, 2)
+	var wg sync.WaitGroup
+	for i, p := range []*Persistence{s, replica} {
+		wg.Go(func() { errs[i] = p.trimWorkerOutboxOlderThan(t.Context(), time.Minute) })
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("concurrent pass %d returned error: %v", i, err)
+		}
+	}
+	if seqs := outboxSeqs(t, s); len(seqs) != 0 {
+		t.Errorf("%d rows left after both passes, want 0", len(seqs))
+	}
+	if got := trimMark(t, s); got != last {
+		t.Errorf("trim mark = %d, want %d", got, last)
+	}
+}
+
+// Retention and worker writes lock disjoint rows (the trim row and old outbox
+// rows against new outbox rows), so running them at once must neither
+// deadlock nor fail a write.
+func TestTrimWorkerOutbox_ConcurrentWritersDoNotDeadlock(t *testing.T) {
+	s := setupMySQLPersistence(t)
+	ctx := t.Context()
+
+	writerCtx, stopWriters := context.WithCancel(ctx)
+	defer stopWriters()
+	var wg sync.WaitGroup
+	writerErrs := make(chan error, 4)
+	for g := range 4 {
+		wg.Go(func() {
+			for i := 0; writerCtx.Err() == nil; i++ {
+				if _, err := s.CreateWorker(writerCtx, newTestWorker(fmt.Sprintf("trim-writer-%d-%d", g, i))); err != nil && writerCtx.Err() == nil {
+					writerErrs <- fmt.Errorf("writer %d iteration %d: %w", g, i, err)
+					return
+				}
+			}
+		})
+	}
+	for i := range 20 {
+		if err := s.trimWorkerOutboxOlderThan(ctx, 0); err != nil {
+			t.Errorf("trim pass %d failed under concurrent writers: %v", i, err)
+		}
+	}
+	stopWriters()
+	wg.Wait()
+	close(writerErrs)
+	for err := range writerErrs {
+		t.Errorf("concurrent writer failed: %v", err)
+	}
+	mark := trimMark(t, s)
+	if seqs := outboxSeqs(t, s); len(seqs) > 0 && seqs[0] <= mark {
+		t.Errorf("row %d survived at or below the trim mark %d", seqs[0], mark)
+	}
+	if mark == 0 {
+		t.Error("no trim pass deleted anything")
+	}
+}
+
+// TestWatchWorkers_ClosesWhenTrimmedPastCursor stalls the consumer so the
+// poller blocks partway through its first batch, then retention deletes every
+// row. On resume the watcher delivers the batch it read and closes, because
+// rows it never read were deleted.
+func TestWatchWorkers_ClosesWhenTrimmedPastCursor(t *testing.T) {
+	s := setupMySQLPersistence(t)
+	watch := watchWorkers(t, newReplica(t, s))
+
+	appendRawEvents(t, s, outboxBatch+100, workerPayload(t, store.WorkerEventUpdated, newTestWorker("lagging-worker")), 0)
+	deadline := time.Now().Add(10 * time.Second)
+	for len(watch.Events) < cap(watch.Events) {
+		if time.Now().After(deadline) {
+			t.Fatalf("watch buffered %d of %d events, want it full", len(watch.Events), cap(watch.Events))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := s.trimWorkerOutboxOlderThan(t.Context(), 0); err != nil {
+		t.Fatalf("trimWorkerOutboxOlderThan failed: %v", err)
+	}
+	if seqs := outboxSeqs(t, s); len(seqs) != 0 {
+		t.Fatalf("%d rows survived the trim, want 0", len(seqs))
+	}
+
+	delivered := 0
+	for {
+		select {
+		case _, ok := <-watch.Events:
+			if !ok {
+				if delivered != outboxBatch {
+					t.Errorf("delivered %d events before closing, want the %d of the batch read before the trim", delivered, outboxBatch)
+				}
+				return
+			}
+			delivered++
+		case <-time.After(5 * time.Second):
+			t.Fatalf("watch stayed open after %d events; rows it never read were trimmed", delivered)
+		}
+	}
+}
+
+// TestWatchWorkers_ClosesAfterPersistentPollFailure pins the loss signal for
+// polling outages: a persistent failure must close the channel within
+// pollFailureCloseAfter so consumers stop serving a frozen fleet view.
+func TestWatchWorkers_ClosesAfterPersistentPollFailure(t *testing.T) {
+	requireDB(t)
+	ctx := t.Context()
+	// Connect gives the watcher its own pool, so closing it simulates an
+	// outage without touching the shared pool.
+	p, err := Connect(ctx, ConnectConfig{ReadWriteDSN: containerDSN, OwnerDSN: containerDSN})
+	if err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+	defer p.DB().Close()
+	defer p.Close()
+	p.pollFailureCloseAfter = 300 * time.Millisecond
+
+	watch, err := p.WatchWorkers(ctx)
+	if err != nil {
+		t.Fatalf("WatchWorkers failed: %v", err)
+	}
+	defer watch.Close()
+	p.watchDB.Close()
+
+	requireClosedNext(t, watch, "polling failed persistently")
+}
+
+// TestLocalPublishReachesWatchers pins the local fast path: every worker
+// event is on an active watcher's channel by the time the write call
+// returns, carrying the committed state. Each read is non-blocking, so only
+// the commit-time publish can satisfy it.
+func TestLocalPublishReachesWatchers(t *testing.T) {
+	p := setupMySQLPersistence(t)
+	ctx := t.Context()
+	watch := watchWorkers(t, p)
+
+	// nextEvent takes the next buffered event of type want, skipping outbox
+	// copies of earlier writes.
+	nextEvent := func(what string, want store.WorkerEventType) store.WorkerEvent {
+		t.Helper()
+		for {
+			select {
+			case ev, ok := <-watch.Events:
+				if !ok {
+					t.Fatalf("after %s: watch closed", what)
+				}
+				if ev.Type == want {
+					return ev
+				}
+			default:
+				t.Fatalf("after %s: no %v on the watch channel; the commit-time publish did not reach the watcher", what, want)
+				return store.WorkerEvent{}
+			}
+		}
+	}
+
+	created, err := p.CreateWorker(ctx, newTestWorker("local-publish-worker"))
+	if err != nil {
+		t.Fatalf("CreateWorker failed: %v", err)
+	}
+	ev := nextEvent("create", store.WorkerEventCreated)
+	if got, want := ev.Worker.GetMetadata().GetVersion(), created.GetMetadata().GetVersion(); got != want {
+		t.Errorf("created event version = %d, want committed version %d", got, want)
+	}
+
+	updated, err := p.UpdateWorker(ctx, created.GetMetadata().GetName(), store.PreconditionFrom(created), func(toUpdate *ateapipb.Worker) error {
+		toUpdate.Ips = []string{"10.0.0.9"}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("UpdateWorker failed: %v", err)
+	}
+	ev = nextEvent("update", store.WorkerEventUpdated)
+	if got, want := ev.Worker.GetMetadata().GetVersion(), updated.GetMetadata().GetVersion(); got != want {
+		t.Errorf("updated event version = %d, want committed version %d", got, want)
+	}
+	if !slices.Equal(ev.Worker.GetIps(), []string{"10.0.0.9"}) {
+		t.Errorf("updated event carries Ips %q, want the committed mutation", ev.Worker.GetIps())
+	}
+	if ev.Worker == updated {
+		t.Error("locally published Worker aliases the caller's returned Worker; it must be a copy")
+	}
+
+	if _, err := p.DeleteWorker(ctx, created.GetMetadata().GetName(), store.DeletePreconditions{}); err != nil {
+		t.Fatalf("DeleteWorker failed: %v", err)
+	}
+	ev = nextEvent("delete", store.WorkerEventDeleted)
+	if ev.Worker.GetMetadata().GetName() != created.GetMetadata().GetName() {
+		t.Errorf("deleted event names worker %q, want %q", ev.Worker.GetMetadata().GetName(), created.GetMetadata().GetName())
+	}
+}
+
+// TestLocalPublishSurvivesWatchClose covers the close race the watcher
+// registry exists to prevent: a write publishing concurrently with a watch
+// shutting down must not send on a closed channel.
+func TestLocalPublishSurvivesWatchClose(t *testing.T) {
+	p := setupMySQLPersistence(t)
+	ctx := t.Context()
+	for i := range 20 {
+		watch, err := p.WatchWorkers(ctx)
+		if err != nil {
+			t.Fatalf("WatchWorkers failed: %v", err)
+		}
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			watch.Close()
+		}()
+		w, err := p.CreateWorker(ctx, newTestWorker(fmt.Sprintf("close-race-worker-%d", i)))
+		if err != nil {
+			t.Fatalf("CreateWorker failed: %v", err)
+		}
+		if _, err := p.DeleteWorker(ctx, w.GetMetadata().GetName(), store.DeletePreconditions{}); err != nil {
+			t.Fatalf("DeleteWorker failed: %v", err)
+		}
+		<-done
+	}
+}
