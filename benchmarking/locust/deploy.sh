@@ -37,13 +37,7 @@ if [[ -z "${LOCUST_IMAGE:-}" ]]; then
   fi
 fi
 
-if [[ -z "${LOCUST_IMAGE_PULL_POLICY:-}" ]]; then
-  if [[ "${LOCUST_IMAGE}" =~ ^localhost: ]]; then
-    LOCUST_IMAGE_PULL_POLICY="IfNotPresent"
-  else
-    LOCUST_IMAGE_PULL_POLICY="Always"
-  fi
-fi
+LOCUST_IMAGE_PULL_POLICY="${LOCUST_IMAGE_PULL_POLICY:-Always}"
 
 export LOCUST_IMAGE LOCUST_IMAGE_PULL_POLICY
 

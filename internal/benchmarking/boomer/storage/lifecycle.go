@@ -23,7 +23,6 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"net/http"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,6 +30,7 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/atenet"
+	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/boomerutil"
 	bmetrics "github.com/agent-substrate/substrate/internal/benchmarking/boomer/metrics"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
 	gluttonpb "github.com/agent-substrate/substrate/internal/proto/glutton"
@@ -92,7 +92,7 @@ func (r *taskRuntime) iterate() {
 		time.Sleep(r.dynamicWait())
 	}()
 
-	gid := goroutineID()
+	gid := boomerutil.GoroutineID()
 	val, loaded := r.users.Load(gid)
 	if !loaded {
 		u, err := r.startUser(context.Background())
@@ -373,19 +373,3 @@ func elapsedFromMD(tr metadata.MD, key string, fallback time.Duration) (time.Dur
 }
 
 func msFloat(d time.Duration) float64 { return float64(d.Nanoseconds()) / 1e6 }
-
-func goroutineID() int64 {
-	var buf [64]byte
-	n := runtime.Stack(buf[:], false)
-	line := string(buf[:n])
-	const prefix = "goroutine "
-	if !strings.HasPrefix(line, prefix) {
-		return 0
-	}
-	end := strings.IndexByte(line[len(prefix):], ' ')
-	if end < 0 {
-		return 0
-	}
-	id, _ := strconv.ParseInt(line[len(prefix):len(prefix)+end], 10, 64)
-	return id
-}

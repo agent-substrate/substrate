@@ -24,6 +24,7 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/atenet"
+	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/boomerutil"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/dynconfig"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
 	gluttonpb "github.com/agent-substrate/substrate/internal/proto/glutton"
@@ -110,7 +111,7 @@ func TestIterateSkipsCrashedActorAndStillWaits(t *testing.T) {
 	rt := &taskRuntime{cfg: &userclass.Config{
 		Dyn: dynconfig.NewHolder(dynconfig.Config{MinWait: wait, MaxWait: wait}),
 	}}
-	rt.users.Store(goroutineID(), &gluttonStorageUser{cfg: rt.cfg, actorName: "a", crashed: true})
+	rt.users.Store(boomerutil.GoroutineID(), &gluttonStorageUser{cfg: rt.cfg, actorName: "a", crashed: true})
 
 	start := time.Now()
 	rt.iterate()
