@@ -20,6 +20,7 @@ import (
 	"fmt"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storesql"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/jackc/pgx/v5"
@@ -32,7 +33,7 @@ func (p *Persistence) CreateActorTemplate(ctx context.Context, template *ateapip
 	if dbTemplate.Metadata == nil {
 		dbTemplate.Metadata = &ateapipb.ResourceMetadata{}
 	}
-	setCreateMetadata(dbTemplate.Metadata)
+	storesql.SetCreateMetadata(dbTemplate.Metadata)
 	protoBytes, err := proto.Marshal(dbTemplate)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling actor template: %w", err)
@@ -63,20 +64,10 @@ func (p *Persistence) GetActorTemplate(ctx context.Context, templateRef resource
 		return nil, fmt.Errorf("getting actor template %s: %w", templateRef, err)
 	}
 	out := &ateapipb.ActorTemplate{}
-	if err := unmarshalStored(protoBytes, out); err != nil {
+	if err := storesql.UnmarshalStored(protoBytes, out); err != nil {
 		return nil, fmt.Errorf("unmarshaling actor template: %w", err)
 	}
 	return out, nil
-}
-
-func validateUpdateActorTemplateMutation(storedTemplate, mutatedTemplate *ateapipb.ActorTemplate) error {
-	if stored, mutated := storedTemplate.GetMetadata().GetAtespace(), mutatedTemplate.GetMetadata().GetAtespace(); stored != mutated {
-		return fmt.Errorf("metadata.atespace is immutable: mutation changed it from %q to %q", stored, mutated)
-	}
-	if stored, mutated := storedTemplate.GetMetadata().GetName(), mutatedTemplate.GetMetadata().GetName(); stored != mutated {
-		return fmt.Errorf("metadata.name is immutable: mutation changed it from %q to %q", stored, mutated)
-	}
-	return nil
 }
 
 func (p *Persistence) UpdateActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.Precondition, mutate func(*ateapipb.ActorTemplate) error) (*ateapipb.ActorTemplate, error) {
@@ -96,10 +87,10 @@ func (p *Persistence) UpdateActorTemplate(ctx context.Context, templateRef resou
 	}
 
 	dbTemplate := &ateapipb.ActorTemplate{}
-	if err := unmarshalStored(currentBytes, dbTemplate); err != nil {
+	if err := storesql.UnmarshalStored(currentBytes, dbTemplate); err != nil {
 		return nil, fmt.Errorf("unmarshaling actor template for update: %w", err)
 	}
-	if err := validateProtoMetadataMatchesColumns("actor template "+templateRef.String(), dbTemplate.GetMetadata(), currentUID, currentVersion); err != nil {
+	if err := storesql.ValidateProtoMetadataMatchesColumns("actor template "+templateRef.String(), dbTemplate.GetMetadata(), currentUID, currentVersion); err != nil {
 		return nil, err
 	}
 	if err := precondition.Check(dbTemplate.GetMetadata()); err != nil {
@@ -109,13 +100,13 @@ func (p *Persistence) UpdateActorTemplate(ctx context.Context, templateRef resou
 	if err := mutate(dbTemplate); err != nil {
 		return nil, err
 	}
-	if err := validateUpdateActorTemplateMutation(templateBeforeMutation, dbTemplate); err != nil {
+	if err := storesql.ValidateUpdateActorTemplateMutation(templateBeforeMutation, dbTemplate); err != nil {
 		return nil, err
 	}
 	if dbTemplate.Metadata == nil {
 		dbTemplate.Metadata = &ateapipb.ResourceMetadata{}
 	}
-	setUpdateMetadata(dbTemplate.Metadata, templateBeforeMutation.GetMetadata())
+	storesql.SetUpdateMetadata(dbTemplate.Metadata, templateBeforeMutation.GetMetadata())
 	updatedBytes, err := proto.Marshal(dbTemplate)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling actor template: %w", err)
@@ -146,7 +137,7 @@ func (p *Persistence) ListActorTemplates(ctx context.Context, atespace string, o
 	if atespace != "" {
 		keyParts = 1
 	}
-	token, err := decodePageToken(pageTokenStr, kindActorTemplate, atespace, keyParts)
+	token, err := storesql.DecodePageToken(pageTokenStr, storesql.KindActorTemplate, atespace, keyParts)
 	if err != nil {
 		return store.ListResponse[*ateapipb.ActorTemplate]{}, err
 	}
@@ -186,7 +177,7 @@ func (p *Persistence) ListActorTemplates(ctx context.Context, atespace string, o
 			return store.ListResponse[*ateapipb.ActorTemplate]{}, fmt.Errorf("scanning actor template row: %w", err)
 		}
 		template := &ateapipb.ActorTemplate{}
-		if err := unmarshalRow(protoBytes, template, "actor template", k.atespace, k.name); err != nil {
+		if err := storesql.UnmarshalRow(protoBytes, template, "actor template", k.atespace, k.name); err != nil {
 			return store.ListResponse[*ateapipb.ActorTemplate]{}, err
 		}
 		keys = append(keys, k)
@@ -203,7 +194,7 @@ func (p *Persistence) ListActorTemplates(ctx context.Context, atespace string, o
 		if atespace != "" {
 			lastParts = []string{last.name}
 		}
-		nextToken = encodePageToken(kindActorTemplate, atespace, lastParts)
+		nextToken = storesql.EncodePageToken(storesql.KindActorTemplate, atespace, lastParts)
 	}
 	return store.ListResponse[*ateapipb.ActorTemplate]{Items: result, NextPageToken: nextToken}, nil
 }
@@ -226,7 +217,7 @@ func (p *Persistence) DeleteActorTemplate(ctx context.Context, templateRef resou
 		return nil, fmt.Errorf("deleting actor template %s: %w", templateRef, err)
 	}
 	out := &ateapipb.ActorTemplate{}
-	if err := unmarshalStored(protoBytes, out); err != nil {
+	if err := storesql.UnmarshalStored(protoBytes, out); err != nil {
 		return nil, fmt.Errorf("unmarshaling deleted actor template: %w", err)
 	}
 	return out, nil

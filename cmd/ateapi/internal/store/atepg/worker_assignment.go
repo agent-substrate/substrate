@@ -20,6 +20,7 @@ import (
 	"fmt"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storesql"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/jackc/pgx/v5"
@@ -49,7 +50,7 @@ func getWorkerForUpdate(ctx context.Context, tx pgx.Tx, name string) (*ateapipb.
 // version. This assumes the caller holds the row lock getWorkerForUpdate took.
 func saveWorker(ctx context.Context, tx pgx.Tx, worker *ateapipb.Worker) error {
 	read := proto.CloneOf(worker.GetMetadata())
-	setUpdateMetadata(worker.GetMetadata(), worker.GetMetadata())
+	storesql.SetUpdateMetadata(worker.GetMetadata(), worker.GetMetadata())
 	protoBytes, err := proto.Marshal(worker)
 	if err != nil {
 		return fmt.Errorf("marshaling worker: %w", err)
@@ -78,7 +79,7 @@ func (p *Persistence) BindActorToWorker(ctx context.Context, workerName string, 
 	// global-scoped; the name is the Actor's UID, which is also the row key.
 	// This is the identity a first bind gets; a rebind keeps the recorded one.
 	assignment.Metadata = &ateapipb.ResourceMetadata{Name: actorUID}
-	setCreateMetadata(assignment.Metadata)
+	storesql.SetCreateMetadata(assignment.Metadata)
 
 	_, err := p.writeAndAppendEvent(ctx, store.WorkerEventUpdated, func(ctx context.Context, tx pgx.Tx) (*ateapipb.Worker, error) {
 		worker, err := getWorkerForUpdate(ctx, tx, workerName)
@@ -160,7 +161,7 @@ func (p *Persistence) BindActorToWorker(ctx context.Context, workerName string, 
 
 		// A rebind updates the assignment already recorded, so re-stamping it
 		// as a create would make a retried claim look like a new subresource.
-		setUpdateMetadata(assignment.Metadata, previous.GetMetadata())
+		storesql.SetUpdateMetadata(assignment.Metadata, previous.GetMetadata())
 		rebindBytes, err := proto.Marshal(assignment)
 		if err != nil {
 			return nil, fmt.Errorf("marshaling rebound assignment: %w", err)
@@ -272,7 +273,7 @@ func (p *Persistence) ListWorkerAssignments(ctx context.Context, workerName stri
 	pageSize := opts.PageSize
 	// The token is scoped to the Worker, so one cannot be replayed against
 	// another Worker's assignments.
-	token, err := decodePageToken(opts.PageToken, kindWorkerAssign, workerName, 1)
+	token, err := storesql.DecodePageToken(opts.PageToken, storesql.KindWorkerAssign, workerName, 1)
 	if err != nil {
 		return store.ListResponse[*ateapipb.ActorAssignment]{}, err
 	}
@@ -313,7 +314,7 @@ func (p *Persistence) ListWorkerAssignments(ctx context.Context, workerName stri
 	var nextToken string
 	if len(result) > int(pageSize) {
 		result = result[:pageSize]
-		nextToken = encodePageToken(kindWorkerAssign, workerName, []string{uids[pageSize-1]})
+		nextToken = storesql.EncodePageToken(storesql.KindWorkerAssign, workerName, []string{uids[pageSize-1]})
 	}
 	return store.ListResponse[*ateapipb.ActorAssignment]{Items: result, NextPageToken: nextToken}, nil
 }

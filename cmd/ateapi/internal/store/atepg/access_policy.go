@@ -20,6 +20,7 @@ import (
 	"fmt"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storesql"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/jackc/pgx/v5"
 	"google.golang.org/protobuf/proto"
@@ -28,7 +29,7 @@ import (
 func (p *Persistence) CreateGlobalAccessPolicy(ctx context.Context, policy *ateapipb.AccessPolicy) (*ateapipb.AccessPolicy, error) {
 	dbPolicy := proto.Clone(policy).(*ateapipb.AccessPolicy)
 	dbPolicy.Metadata = &ateapipb.ResourceMetadata{Name: "default"}
-	setCreateMetadata(dbPolicy.Metadata)
+	storesql.SetCreateMetadata(dbPolicy.Metadata)
 	protoBytes, err := proto.Marshal(dbPolicy)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling global access policy: %w", err)
@@ -89,7 +90,7 @@ func (p *Persistence) UpdateGlobalAccessPolicy(ctx context.Context, precondition
 		return nil, err
 	}
 	dbPolicy.Metadata = oldMeta
-	setUpdateMetadata(dbPolicy.Metadata, oldMeta)
+	storesql.SetUpdateMetadata(dbPolicy.Metadata, oldMeta)
 	protoBytes, err := proto.Marshal(dbPolicy)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling updated global access policy: %w", err)
@@ -112,7 +113,7 @@ func (p *Persistence) UpdateGlobalAccessPolicy(ctx context.Context, precondition
 func (p *Persistence) CreateAtespaceAccessPolicy(ctx context.Context, name string, policy *ateapipb.AccessPolicy) (*ateapipb.AccessPolicy, error) {
 	dbPolicy := proto.Clone(policy).(*ateapipb.AccessPolicy)
 	dbPolicy.Metadata = &ateapipb.ResourceMetadata{Name: "default"}
-	setCreateMetadata(dbPolicy.Metadata)
+	storesql.SetCreateMetadata(dbPolicy.Metadata)
 	protoBytes, err := proto.Marshal(dbPolicy)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling access policy: %w", err)
@@ -176,7 +177,7 @@ func (p *Persistence) UpdateAtespaceAccessPolicy(ctx context.Context, name strin
 		return nil, err
 	}
 	dbPolicy.Metadata = oldMeta
-	setUpdateMetadata(dbPolicy.Metadata, oldMeta)
+	storesql.SetUpdateMetadata(dbPolicy.Metadata, oldMeta)
 	protoBytes, err := proto.Marshal(dbPolicy)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling updated access policy: %w", err)
@@ -247,10 +248,10 @@ func getAccessPolicyRow(ctx context.Context, q querier, query string, args ...an
 
 func unmarshalAccessPolicy(uid string, version int64, protoBytes []byte) (*ateapipb.AccessPolicy, error) {
 	policy := &ateapipb.AccessPolicy{}
-	if err := unmarshalStored(protoBytes, policy); err != nil {
+	if err := storesql.UnmarshalStored(protoBytes, policy); err != nil {
 		return nil, fmt.Errorf("unmarshaling access policy: %w", err)
 	}
-	if err := validateProtoMetadataMatchesColumns("access policy", policy.GetMetadata(), uid, version); err != nil {
+	if err := storesql.ValidateProtoMetadataMatchesColumns("access policy", policy.GetMetadata(), uid, version); err != nil {
 		return nil, err
 	}
 	return policy, nil

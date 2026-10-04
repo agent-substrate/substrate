@@ -18,72 +18,20 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/google/uuid"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storesql"
 	"github.com/jackc/pgx/v5"
 )
 
-// defaultLeaseTTL is how long a lease may go unrenewed before another client
-// can reclaim it.
-const defaultLeaseTTL = 30 * time.Second
-
-// leaseCleanupBatch bounds one DELETE of a cleanup pass, so a backlog of
-// expired rows drains over several short statements rather than one long
-// one holding many row locks.
-const leaseCleanupBatch = 1000
-
 func (p *Persistence) AcquireLease(ctx context.Context, key string) (*store.Lease, error) {
-	ttl := p.leaseTTL
-	token := uuid.NewString()
-	// Acquisition runs before any workflow step span opens, so log the
-	// query's duration to make this window attributable.
-	t := time.Now()
-	acquired, err := p.acquireLease(ctx, key, token, ttl)
-	dAcquire := time.Since(t)
-	slog.InfoContext(ctx, "PostgreSQL lease acquisition finished",
-		slog.String("key", key),
-		slog.Bool("acquired", acquired && err == nil),
-		slog.Duration("acquire", dAcquire))
-	if err != nil {
-		return nil, err
-	}
-	if !acquired {
-		return nil, store.ErrLeaseConflict
-	}
-
-	leaseCtx, cancel := context.WithCancel(ctx)
-	renewalDone := make(chan struct{})
-	go func() {
-		defer close(renewalDone)
-		defer cancel()
-		p.renewLeaseLoop(leaseCtx, key, token, ttl)
-	}()
-
-	closeFn := func() {
-		// Close runs after the last workflow step span ends but inside the
-		// operation, so log its two waits: the renewal goroutine may be
-		// mid-query when cancelled, and the release DELETE may wait on a
-		// concurrent write to the same row.
-		t := time.Now()
-		cancel()
-		<-renewalDone
-		dRenewalStop := time.Since(t)
-
-		releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer releaseCancel()
-		t = time.Now()
-		if err := p.releaseLease(releaseCtx, key, token); err != nil {
-			slog.WarnContext(releaseCtx, "failed to release PostgreSQL lease, relying on TTL to reclaim it", "key", key, "error", err)
-		}
-		slog.InfoContext(releaseCtx, "PostgreSQL lease released",
-			slog.String("key", key),
-			slog.Duration("renewal_stop", dRenewalStop),
-			slog.Duration("release", time.Since(t)))
-	}
-	return store.NewLease(leaseCtx, closeFn), nil
+	return storesql.LeaseSQL{
+		Database: "PostgreSQL",
+		Acquire:  p.acquireLease,
+		Renew:    p.renewLease,
+		Release:  p.releaseLease,
+	}.AcquireLease(ctx, key, p.leaseTTL)
 }
 
 // cleanupExpiredLeases deletes expired lease rows and returns how many it
@@ -104,12 +52,12 @@ func (p *Persistence) cleanupExpiredLeases(ctx context.Context) (int64, error) {
 				SELECT key FROM leases
 				WHERE expires_at <= clock_timestamp()
 				LIMIT $1
-				FOR UPDATE SKIP LOCKED)`, leaseCleanupBatch)
+				FOR UPDATE SKIP LOCKED)`, storesql.LeaseCleanupBatch)
 		if err != nil {
 			return deleted, fmt.Errorf("deleting expired leases: %w", err)
 		}
 		deleted += tag.RowsAffected()
-		if tag.RowsAffected() < leaseCleanupBatch {
+		if tag.RowsAffected() < storesql.LeaseCleanupBatch {
 			return deleted, nil
 		}
 	}
@@ -132,68 +80,6 @@ func (p *Persistence) acquireLease(ctx context.Context, key, token string, ttl t
 		return false, fmt.Errorf("acquiring lease for %q: %w", key, err)
 	}
 	return true, nil
-}
-
-const (
-	renewIntervalDivisor    = 3
-	renewRetryPeriodDivisor = 10
-	renewDeadlineFraction   = 2.0 / 3.0
-)
-
-func (p *Persistence) renewLeaseLoop(ctx context.Context, key, token string, ttl time.Duration) {
-	interval := ttl / renewIntervalDivisor
-	renewDeadline := time.Duration(float64(ttl) * renewDeadlineFraction)
-
-	lastRenewed := time.Now()
-	timer := time.NewTimer(interval)
-	defer timer.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-timer.C:
-			renewCtx, cancel := context.WithDeadline(ctx, lastRenewed.Add(renewDeadline))
-			renewed := p.tryRenewLease(renewCtx, key, token, ttl)
-			cancel()
-			if !renewed {
-				return
-			}
-			lastRenewed = time.Now()
-			timer.Reset(interval)
-		}
-	}
-}
-
-func (p *Persistence) tryRenewLease(ctx context.Context, key, token string, ttl time.Duration) bool {
-	retryPeriod := ttl / renewRetryPeriodDivisor
-	retry := time.NewTimer(0)
-	defer retry.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				slog.WarnContext(ctx, "failed to renew PostgreSQL lease before its deadline", "key", key)
-			}
-			return false
-		case <-retry.C:
-			renewed, err := p.renewLease(ctx, key, token, ttl)
-			if ctx.Err() != nil {
-				return false
-			}
-			switch {
-			case err == nil && renewed:
-				return true
-			case err == nil:
-				slog.WarnContext(ctx, "PostgreSQL lease renewal found lease no longer owned", "key", key)
-				return false
-			default:
-				slog.WarnContext(ctx, "failed to renew PostgreSQL lease, retrying", "key", key, "error", err)
-				retry.Reset(retryPeriod)
-			}
-		}
-	}
 }
 
 func (p *Persistence) renewLease(ctx context.Context, key, token string, ttl time.Duration) (bool, error) {

@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storesql"
 )
 
 // countLeases returns how many lease rows exist for key.
@@ -83,7 +84,7 @@ func TestCleanupExpiredLeases_RemovesOnlyExpiredRows(t *testing.T) {
 func TestCleanupExpiredLeases_DrainsAcrossBatches(t *testing.T) {
 	s := setupPostgresPersistence(t)
 	ctx := context.Background()
-	const seeded = leaseCleanupBatch*2 + 7
+	const seeded = storesql.LeaseCleanupBatch*2 + 7
 	if _, err := s.pool.Exec(ctx, `
 		INSERT INTO leases (key, token, expires_at)
 		SELECT 'expired-' || i, 'old', clock_timestamp() - interval '1 minute'

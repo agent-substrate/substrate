@@ -20,6 +20,7 @@ import (
 	"fmt"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storesql"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/jackc/pgx/v5"
 	"google.golang.org/protobuf/proto"
@@ -29,7 +30,7 @@ func (p *Persistence) CreateAtespace(ctx context.Context, atespace *ateapipb.Ate
 	name := atespace.GetMetadata().GetName()
 
 	dbAtespace := proto.Clone(atespace).(*ateapipb.Atespace)
-	setCreateMetadata(dbAtespace.Metadata)
+	storesql.SetCreateMetadata(dbAtespace.Metadata)
 
 	protoBytes, err := proto.Marshal(dbAtespace)
 	if err != nil {
@@ -59,7 +60,7 @@ func (p *Persistence) GetAtespace(ctx context.Context, name string) (*ateapipb.A
 		return nil, fmt.Errorf("getting atespace %q: %w", name, err)
 	}
 	out := &ateapipb.Atespace{}
-	if err := unmarshalStored(protoBytes, out); err != nil {
+	if err := storesql.UnmarshalStored(protoBytes, out); err != nil {
 		return nil, fmt.Errorf("unmarshaling atespace: %w", err)
 	}
 	return out, nil
@@ -71,7 +72,7 @@ func (p *Persistence) ListAtespaces(ctx context.Context, opts store.ListOptions)
 		return store.ListResponse[*ateapipb.Atespace]{}, err
 	}
 	pageSize, pageTokenStr := opts.PageSize, opts.PageToken
-	token, err := decodePageToken(pageTokenStr, kindAtespace, "", 1)
+	token, err := storesql.DecodePageToken(pageTokenStr, storesql.KindAtespace, "", 1)
 	if err != nil {
 		return store.ListResponse[*ateapipb.Atespace]{}, err
 	}
@@ -99,7 +100,7 @@ func (p *Persistence) ListAtespaces(ctx context.Context, opts store.ListOptions)
 			return store.ListResponse[*ateapipb.Atespace]{}, fmt.Errorf("scanning atespace row: %w", err)
 		}
 		a := &ateapipb.Atespace{}
-		if err := unmarshalRow(protoBytes, a, "atespace", name); err != nil {
+		if err := storesql.UnmarshalRow(protoBytes, a, "atespace", name); err != nil {
 			return store.ListResponse[*ateapipb.Atespace]{}, err
 		}
 		result = append(result, a)
@@ -112,7 +113,7 @@ func (p *Persistence) ListAtespaces(ctx context.Context, opts store.ListOptions)
 	var nextToken string
 	if len(result) > int(pageSize) {
 		result = result[:pageSize]
-		nextToken = encodePageToken(kindAtespace, "", []string{names[pageSize-1]})
+		nextToken = storesql.EncodePageToken(storesql.KindAtespace, "", []string{names[pageSize-1]})
 	}
 	return store.ListResponse[*ateapipb.Atespace]{Items: result, NextPageToken: nextToken}, nil
 }
@@ -150,7 +151,7 @@ func (p *Persistence) DeleteAtespace(ctx context.Context, name string, precondit
 		return nil, fmt.Errorf("committing atespace delete %q: %w", name, err)
 	}
 	out := &ateapipb.Atespace{}
-	if err := unmarshalStored(protoBytes, out); err != nil {
+	if err := storesql.UnmarshalStored(protoBytes, out); err != nil {
 		return nil, fmt.Errorf("unmarshaling deleted atespace: %w", err)
 	}
 	return out, nil

@@ -20,6 +20,7 @@ import (
 	"fmt"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storesql"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/jackc/pgx/v5"
@@ -28,7 +29,7 @@ import (
 
 func (p *Persistence) CreateEgressPolicy(ctx context.Context, actorRef resources.ActorRef, policy *ateapipb.EgressPolicy) (*ateapipb.EgressPolicy, error) {
 	dbPolicy := proto.Clone(policy).(*ateapipb.EgressPolicy)
-	setCreateMetadata(dbPolicy.Metadata)
+	storesql.SetCreateMetadata(dbPolicy.Metadata)
 	protoBytes, err := proto.Marshal(dbPolicy)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling egress policy: %w", err)
@@ -74,7 +75,7 @@ func (p *Persistence) UpdateEgressPolicy(ctx context.Context, actorRef resources
 		return nil, err
 	}
 	dbPolicy.Metadata = oldMeta
-	setUpdateMetadata(dbPolicy.Metadata, oldMeta)
+	storesql.SetUpdateMetadata(dbPolicy.Metadata, oldMeta)
 	protoBytes, err := proto.Marshal(dbPolicy)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling updated egress policy: %w", err)
@@ -130,10 +131,10 @@ func getEgressPolicyRow(ctx context.Context, q querier, query string, args ...an
 
 func unmarshalEgressPolicy(uid string, version int64, protoBytes []byte) (*ateapipb.EgressPolicy, error) {
 	policy := &ateapipb.EgressPolicy{}
-	if err := unmarshalStored(protoBytes, policy); err != nil {
+	if err := storesql.UnmarshalStored(protoBytes, policy); err != nil {
 		return nil, fmt.Errorf("unmarshaling egress policy: %w", err)
 	}
-	if err := validateProtoMetadataMatchesColumns("egress policy", policy.GetMetadata(), uid, version); err != nil {
+	if err := storesql.ValidateProtoMetadataMatchesColumns("egress policy", policy.GetMetadata(), uid, version); err != nil {
 		return nil, err
 	}
 	return policy, nil
