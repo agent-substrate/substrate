@@ -1,0 +1,146 @@
+# eksctl ClusterConfig for Agent Substrate on EKS.
+#
+# Rendered by hack/setup-aws/setup-aws.sh into bin/aws-cluster.yaml via envsubst.
+# Mirrors what tools/setup-gcp provisions on GCP: VPC + cluster + node groups +
+# OIDC + IRSA roles for ate-system/{atelet,ate-api-server} + core add-ons.
+#
+# Not covered here (handled by setup-aws.sh phases): S3 snapshot bucket, ECR
+# repository, RDS PostgreSQL instance.
+
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+
+metadata:
+  name: ${CLUSTER_NAME}
+  region: ${AWS_REGION}
+  version: "${K8S_VERSION}"
+  tags:
+    managed-by: substrate-setup-aws
+
+# EKS ≥ 1.33 is required so certificates.k8s.io/v1beta1 (PodCertificateRequest,
+# ClusterTrustBundle) is served. Beta APIs are not toggleable post-create on EKS;
+# the installer will hang waiting for ClusterTrustBundles if these are missing.
+
+iam:
+  withOIDC: true
+  serviceAccounts:
+    - metadata:
+        name: atelet
+        namespace: ate-system
+      roleName: ${CLUSTER_NAME}-atelet
+      roleOnly: false
+      attachPolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - s3:ListBucket
+              - s3:GetBucketLocation
+            Resource: arn:aws:s3:::${BUCKET_NAME}
+          - Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:PutObject
+              - s3:DeleteObject
+              - s3:AbortMultipartUpload
+            Resource: arn:aws:s3:::${BUCKET_NAME}/*
+    - metadata:
+        name: ate-api-server
+        namespace: ate-system
+      roleName: ${CLUSTER_NAME}-ate-api-server
+      roleOnly: false
+      attachPolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - s3:ListBucket
+              - s3:GetBucketLocation
+            Resource: arn:aws:s3:::${BUCKET_NAME}
+          - Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:PutObject
+              - s3:DeleteObject
+              - s3:AbortMultipartUpload
+            Resource: arn:aws:s3:::${BUCKET_NAME}/*
+      # rds-db:connect is attached post-RDS-create by `setup-aws.sh rds-grant`,
+      # since the DbiResourceId is only known once the instance exists.
+
+vpc:
+  nat:
+    gateway: HighlyAvailable  # one NAT per AZ
+
+addons:
+  - name: vpc-cni
+    version: latest
+    # NetworkPolicy is required because ate-controller installs per-workload
+    # NetworkPolicies and k8s-credential-provider is admitted only from
+    # atenet-egress via NetworkPolicy.
+    configurationValues: |
+      enableNetworkPolicy: "true"
+  - name: coredns
+    version: latest
+  - name: kube-proxy
+    version: latest
+  - name: aws-ebs-csi-driver
+    version: latest
+    wellKnownPolicies:
+      ebsCSIController: true
+  - name: eks-pod-identity-agent
+    version: latest
+
+managedNodeGroups:
+  # Control-plane / general workloads. The installer stamps
+  # ate.dev/substrate-version=<v> on every existing node at install time; any
+  # scale-out node must be born with it, so update node group labels after each
+  # upgrade (equivalent to the GCP warning in tools/setup-gcp/README.md:99-125).
+  - name: control-plane
+    instanceType: ${CONTROL_PLANE_INSTANCE_TYPE}
+    desiredCapacity: ${CONTROL_PLANE_DESIRED}
+    minSize: ${CONTROL_PLANE_MIN}
+    maxSize: ${CONTROL_PLANE_MAX}
+    privateNetworking: true
+    volumeSize: 100
+    volumeType: gp3
+    labels:
+      ate.dev/role: control-plane
+    # atelet host-mounts /var/lib/ate with mountPropagation: Bidirectional.
+    preBootstrapCommands:
+      - mkdir -p /var/lib/ate && chmod 755 /var/lib/ate
+
+  # Worker pool for actor pods. Add a taint when you want to pin actor
+  # workloads here (atelet tolerates ate.dev/sandboxClass=*:NoSchedule).
+  - name: workers
+    instanceType: ${WORKER_INSTANCE_TYPE}
+    desiredCapacity: ${WORKER_DESIRED}
+    minSize: ${WORKER_MIN}
+    maxSize: ${WORKER_MAX}
+    privateNetworking: true
+    volumeSize: 100
+    volumeType: gp3
+    labels:
+      ate.dev/role: worker
+    preBootstrapCommands:
+      - mkdir -p /var/lib/ate && chmod 755 /var/lib/ate
+
+  # For microVM workloads, add a third node group with a bare-metal instance
+  # type (e.g. m5.metal) so /dev/kvm is exposed. Example:
+  #
+  # - name: workers-microvm
+  #   instanceType: m5.metal
+  #   desiredCapacity: 1
+  #   minSize: 0
+  #   maxSize: 4
+  #   privateNetworking: true
+  #   volumeSize: 200
+  #   volumeType: gp3
+  #   labels:
+  #     ate.dev/role: worker
+  #     ate.dev/sandboxClass: microvm
+  #   taints:
+  #     - key: ate.dev/sandboxClass
+  #       value: microvm
+  #       effect: NoSchedule
+  #   preBootstrapCommands:
+  #     - mkdir -p /var/lib/ate && chmod 755 /var/lib/ate
