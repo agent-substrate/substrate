@@ -23,8 +23,8 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
-	"github.com/agent-substrate/substrate/internal/roottest"
+	"go.ate.dev/substrate/internal/proto/ateompb"
+	"go.ate.dev/substrate/internal/roottest"
 )
 
 func TestResetRunscStateAndPidFileDirs(t *testing.T) {

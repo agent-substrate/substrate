@@ -24,7 +24,7 @@ workerSelector:
     workload: counter-microvm-csi
 containers:
 - name: counter
-  image: ko://github.com/agent-substrate/substrate/demos/counter
+  image: ko://go.ate.dev/substrate/demos/counter
   wakeupProbe:
     httpGet:
       path: /readyz

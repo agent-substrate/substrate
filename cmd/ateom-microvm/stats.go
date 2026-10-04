@@ -25,11 +25,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/agentstats"
-	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/third_party/kata/agentpb"
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
-	"github.com/agent-substrate/substrate/internal/resources"
+	"go.ate.dev/substrate/cmd/ateom-microvm/internal/agentstats"
+	"go.ate.dev/substrate/cmd/ateom-microvm/internal/third_party/kata/agentpb"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/proto/ateompb"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 // statsCallTimeout bounds one container's guest-agent call. The RPC is polled

@@ -17,7 +17,7 @@ package lint
 import (
 	"strings"
 
-	"github.com/agent-substrate/substrate/tools/apitool/internal/model"
+	"go.ate.dev/substrate/tools/apitool/internal/model"
 )
 
 // Documented requires every message, enum, message field, and RPC method

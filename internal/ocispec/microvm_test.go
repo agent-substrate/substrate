@@ -17,8 +17,8 @@ package ocispec
 import (
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/opencontainers/runtime-spec/specs-go"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
 )
 
 // The device allowlist and CPU shares from guestResources are the proven-good

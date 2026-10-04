@@ -25,9 +25,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/google/go-cmp/cmp"
 	"github.com/klauspost/compress/zstd"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
 )
 
 func TestExtractTarArchive(t *testing.T) {

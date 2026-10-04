@@ -19,10 +19,10 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/agent-substrate/substrate/internal/principal"
 	openfgav1 "github.com/openfga/api/proto/openfga/v1"
 	"github.com/openfga/openfga/pkg/server"
 	serverErrors "github.com/openfga/openfga/pkg/server/errors"
+	"go.ate.dev/substrate/internal/principal"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )

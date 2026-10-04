@@ -17,8 +17,8 @@ package claudemultiplex
 import (
 	"testing"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos/demotest"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/demos"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/demos/demotest"
 )
 
 // TestRenderManifests covers this demo's manifests, which the shared render

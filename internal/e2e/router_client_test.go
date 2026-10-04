@@ -21,8 +21,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/atenet"
-	"github.com/agent-substrate/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/atenet"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 func TestRouterClientPostJSON(t *testing.T) {

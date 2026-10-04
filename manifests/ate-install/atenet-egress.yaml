@@ -1102,7 +1102,7 @@ spec:
         # staying two CONTAINERS is what keeps the MITM signing key off the
         # data plane and gives the minter the separate memory limit the header
         # of this file depends on.
-        image: ko://github.com/agent-substrate/substrate/cmd/atenet
+        image: ko://go.ate.dev/substrate/cmd/atenet
         restartPolicy: Always
         args:
         - "sdsmint"
@@ -1272,7 +1272,7 @@ spec:
       # independently, not because they need separate binaries: one instance can
       # serve both directions with --mode=all.
       - name: ext-proc
-        image: ko://github.com/agent-substrate/substrate/cmd/atenet
+        image: ko://go.ate.dev/substrate/cmd/atenet
         args:
         - router
         - --mode=egress

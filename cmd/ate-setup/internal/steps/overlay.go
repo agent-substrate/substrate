@@ -22,9 +22,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kustomize"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/kustomize"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
 )
 
 const (

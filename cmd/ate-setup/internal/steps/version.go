@@ -25,9 +25,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/ko"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
-	"github.com/agent-substrate/substrate/internal/versionlabel"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/ko"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
+	"go.ate.dev/substrate/internal/versionlabel"
 )
 
 // SubstrateVersion returns the build version and the object-name suffix for atelet.

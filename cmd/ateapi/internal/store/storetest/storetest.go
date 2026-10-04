@@ -29,13 +29,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/authz"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/atepg"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/dockerenv"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
+	"go.ate.dev/substrate/cmd/ateapi/internal/authz"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store/atepg"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store/dockerenv"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 var (

@@ -20,7 +20,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/agent-substrate/substrate/internal/version"
+	"go.ate.dev/substrate/internal/version"
 )
 
 var (

@@ -23,7 +23,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/images"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/images"
 )
 
 // loadEnv isolates Load from the ambient environment.

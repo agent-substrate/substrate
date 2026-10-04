@@ -37,12 +37,12 @@ import (
 	"go.opentelemetry.io/otel/log"
 	"go.opentelemetry.io/otel/log/global"
 
-	"github.com/agent-substrate/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/ateattr"
 )
 
 // ScopeName is the instrumentation scope of every actor event. A consumer
 // selects a stream by event name.
-const ScopeName = "github.com/agent-substrate/substrate/internal/actorevent"
+const ScopeName = "go.ate.dev/substrate/internal/actorevent"
 
 // Event is one name in the closed vocabulary. Name is the LogRecord's own event
 // name field, not an attribute. Body and Severity live here rather than at a

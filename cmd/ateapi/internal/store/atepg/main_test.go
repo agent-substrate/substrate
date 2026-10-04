@@ -25,7 +25,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/dockerenv"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store/dockerenv"
 )
 
 // One Postgres container serves every test in this package; each test gets

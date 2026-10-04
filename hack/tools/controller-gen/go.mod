@@ -1,4 +1,4 @@
-module github.com/agent-substrate/substrate/hack/tools/controller-gen
+module go.ate.dev/substrate/hack/tools/controller-gen
 
 go 1.27.0
 

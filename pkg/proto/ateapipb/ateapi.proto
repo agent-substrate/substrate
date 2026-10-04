@@ -18,7 +18,7 @@ package ateapi;
 
 import "google/protobuf/timestamp.proto";
 
-option go_package = "github.com/agent-substrate/substrate/pkg/proto/ateapipb";
+option go_package = "go.ate.dev/substrate/pkg/proto/ateapipb";
 
 // Control is the primary RPC interface for Agentic Substrate.
 service Control {

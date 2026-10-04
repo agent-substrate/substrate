@@ -19,7 +19,7 @@ package main
 import (
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"go.ate.dev/substrate/internal/proto/ateompb"
 )
 
 func TestHasCsiVolumes(t *testing.T) {

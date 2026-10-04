@@ -32,8 +32,8 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/agent-substrate/substrate/internal/ateinterceptors"
-	gluttonpb "github.com/agent-substrate/substrate/internal/proto/glutton"
+	"go.ate.dev/substrate/internal/ateinterceptors"
+	gluttonpb "go.ate.dev/substrate/internal/proto/glutton"
 )
 
 // Handler builds the request handler for the given wire mode. ModeGRPC serves

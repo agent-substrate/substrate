@@ -153,7 +153,7 @@ metadata:
     workload: stateful-agent
 spec:
   replicas: 5
-  workerImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
+  workerImage: ko://go.ate.dev/substrate/cmd/ateom-gvisor
 ```
 
 The `ActorTemplate` is a protojson-shaped `ateapipb.ActorTemplate`, created

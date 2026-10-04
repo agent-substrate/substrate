@@ -23,7 +23,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"go.ate.dev/substrate/internal/proto/ateompb"
 )
 
 // fakeRunsc stands in for *runsc. containers is the set runsc has a record of;

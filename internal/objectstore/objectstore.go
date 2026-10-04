@@ -28,7 +28,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/agent-substrate/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/resources"
 	"golang.org/x/sync/errgroup"
 )
 

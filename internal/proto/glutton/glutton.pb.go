@@ -1308,7 +1308,7 @@ const file_glutton_proto_rawDesc = "" +
 	"\x06Gossip\x12\x16.glutton.GossipRequest\x1a\x17.glutton.GossipResponse\"\x00\x12>\n" +
 	"\aBurnCPU\x12\x17.glutton.BurnCPURequest\x1a\x18.glutton.BurnCPUResponse\"\x00\x12;\n" +
 	"\x06Ingest\x12\x16.glutton.IngestRequest\x1a\x17.glutton.IngestResponse\"\x00\x12;\n" +
-	"\x06UseCPU\x12\x16.glutton.UseCPURequest\x1a\x17.glutton.UseCPUResponse\"\x00B=Z;github.com/agent-substrate/substrate/internal/proto/gluttonb\x06proto3"
+	"\x06UseCPU\x12\x16.glutton.UseCPURequest\x1a\x17.glutton.UseCPUResponse\"\x00B-Z+go.ate.dev/substrate/internal/proto/gluttonb\x06proto3"
 
 var (
 	file_glutton_proto_rawDescOnce sync.Once

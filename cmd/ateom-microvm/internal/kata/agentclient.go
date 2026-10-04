@@ -25,8 +25,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/third_party/kata/agentpb"
 	"github.com/containerd/ttrpc"
+	"go.ate.dev/substrate/cmd/ateom-microvm/internal/third_party/kata/agentpb"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 

@@ -19,9 +19,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos"
-	_ "github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos/all"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/demos"
+	_ "go.ate.dev/substrate/cmd/ate-setup/internal/demos/all"
 )
 
 // nonDemoPackages are the directories under internal/demos that are support

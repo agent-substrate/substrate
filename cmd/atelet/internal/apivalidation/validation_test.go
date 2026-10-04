@@ -19,7 +19,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 

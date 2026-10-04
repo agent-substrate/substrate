@@ -23,8 +23,8 @@ import (
 	"os"
 	"slices"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
 )
 
 // envHashAnnotation carries a digest of the apiserver's environment on the pod

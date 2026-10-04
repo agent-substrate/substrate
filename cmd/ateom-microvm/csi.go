@@ -21,9 +21,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
-	"github.com/agent-substrate/substrate/internal/ocispec"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"go.ate.dev/substrate/cmd/ateom-microvm/internal/kata"
+	"go.ate.dev/substrate/internal/ocispec"
+	"go.ate.dev/substrate/internal/proto/ateompb"
 )
 
 // hasCsiVolumes reports whether any container mounts a CSI volume.

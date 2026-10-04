@@ -20,7 +20,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
 )
 
 // setupCSIWithoutACluster runs SetupCSI against an Env holding no cluster

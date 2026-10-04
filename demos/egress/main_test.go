@@ -29,7 +29,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 
-	"github.com/agent-substrate/substrate/internal/proto/grpcechopb"
+	"go.ate.dev/substrate/internal/proto/grpcechopb"
 )
 
 func TestFetch(t *testing.T) {

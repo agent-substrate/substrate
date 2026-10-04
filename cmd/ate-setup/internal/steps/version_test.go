@@ -17,8 +17,8 @@ package steps
 import (
 	"testing"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/images"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/images"
 )
 
 // TestSubstrateVersionPrebuilt covers the version a prebuilt install stamps.

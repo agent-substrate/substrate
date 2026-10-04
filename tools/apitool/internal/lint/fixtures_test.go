@@ -18,7 +18,7 @@
 package lint_test
 
 import (
-	"github.com/agent-substrate/substrate/tools/apitool/internal/model"
+	"go.ate.dev/substrate/tools/apitool/internal/model"
 )
 
 // standardMethodAPI builds a minimal API with one Control.GetAtespace

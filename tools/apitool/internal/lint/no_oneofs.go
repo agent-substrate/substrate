@@ -17,7 +17,7 @@ package lint
 import (
 	"fmt"
 
-	"github.com/agent-substrate/substrate/tools/apitool/internal/model"
+	"go.ate.dev/substrate/tools/apitool/internal/model"
 )
 
 // NoOneofs requires that no field belong to an explicit `oneof` group.

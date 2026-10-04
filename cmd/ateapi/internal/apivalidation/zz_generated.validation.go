@@ -22,7 +22,7 @@ package apivalidation
 import (
 	context "context"
 
-	ateapipb "github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	ateapipb "go.ate.dev/substrate/pkg/proto/ateapipb"
 	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 	operation "k8s.io/apimachinery/pkg/api/operation"
 	safe "k8s.io/apimachinery/pkg/api/safe"
@@ -2330,7 +2330,7 @@ func Validate_CreateWorkerRequest(
 	return errs
 }
 
-var unionMembershipFor_github_com_agent_substrate_substrate_pkg_proto_ateapipb_CredentialHeader_ = validate.NewUnionMembership(validate.NewUnionMember("credential_uri"), validate.NewUnionMember("actor_jwt"))
+var unionMembershipFor_go_ate_dev_substrate_pkg_proto_ateapipb_CredentialHeader_ = validate.NewUnionMembership(validate.NewUnionMember("credential_uri"), validate.NewUnionMember("actor_jwt"))
 
 // Validate_CredentialHeader validates an instance of CredentialHeader according
 // to declarative validation rules in the API schema.
@@ -2338,7 +2338,7 @@ func Validate_CredentialHeader(
 	ctx context.Context, op operation.Operation, fldPath *field.Path,
 	obj, oldObj *ateapipb.CredentialHeader) (errs field.ErrorList) {
 
-	if e := validate.Union(ctx, op, fldPath, obj, oldObj, unionMembershipFor_github_com_agent_substrate_substrate_pkg_proto_ateapipb_CredentialHeader_,
+	if e := validate.Union(ctx, op, fldPath, obj, oldObj, unionMembershipFor_go_ate_dev_substrate_pkg_proto_ateapipb_CredentialHeader_,
 		func(obj *ateapipb.CredentialHeader) bool {
 			if obj == nil {
 				return false
@@ -3357,7 +3357,7 @@ func Validate_EgressPolicy(
 	return errs
 }
 
-var unionMembershipFor_github_com_agent_substrate_substrate_pkg_proto_ateapipb_EgressRule_ = validate.NewUnionMembership(validate.NewUnionMember("http"), validate.NewUnionMember("https"), validate.NewUnionMember("tls_passthrough"))
+var unionMembershipFor_go_ate_dev_substrate_pkg_proto_ateapipb_EgressRule_ = validate.NewUnionMembership(validate.NewUnionMember("http"), validate.NewUnionMember("https"), validate.NewUnionMember("tls_passthrough"))
 
 // Validate_EgressRule validates an instance of EgressRule according
 // to declarative validation rules in the API schema.
@@ -3365,7 +3365,7 @@ func Validate_EgressRule(
 	ctx context.Context, op operation.Operation, fldPath *field.Path,
 	obj, oldObj *ateapipb.EgressRule) (errs field.ErrorList) {
 
-	if e := validate.Union(ctx, op, fldPath, obj, oldObj, unionMembershipFor_github_com_agent_substrate_substrate_pkg_proto_ateapipb_EgressRule_,
+	if e := validate.Union(ctx, op, fldPath, obj, oldObj, unionMembershipFor_go_ate_dev_substrate_pkg_proto_ateapipb_EgressRule_,
 		func(obj *ateapipb.EgressRule) bool {
 			if obj == nil {
 				return false
@@ -6119,7 +6119,7 @@ func Validate_PauseActorRequest(
 	return errs
 }
 
-var unionMembershipFor_github_com_agent_substrate_substrate_pkg_proto_ateapipb_Ports_ = validate.NewUnionMembership(validate.NewUnionMember("all"), validate.NewUnionMember("numbers"))
+var unionMembershipFor_go_ate_dev_substrate_pkg_proto_ateapipb_Ports_ = validate.NewUnionMembership(validate.NewUnionMember("all"), validate.NewUnionMember("numbers"))
 
 // Validate_Ports validates an instance of Ports according
 // to declarative validation rules in the API schema.
@@ -6127,7 +6127,7 @@ func Validate_Ports(
 	ctx context.Context, op operation.Operation, fldPath *field.Path,
 	obj, oldObj *ateapipb.Ports) (errs field.ErrorList) {
 
-	if e := validate.Union(ctx, op, fldPath, obj, oldObj, unionMembershipFor_github_com_agent_substrate_substrate_pkg_proto_ateapipb_Ports_,
+	if e := validate.Union(ctx, op, fldPath, obj, oldObj, unionMembershipFor_go_ate_dev_substrate_pkg_proto_ateapipb_Ports_,
 		func(obj *ateapipb.Ports) bool {
 			if obj == nil {
 				return false
@@ -6862,7 +6862,7 @@ func Validate_SecurityContext(
 	return errs
 }
 
-var unionMembershipFor_github_com_agent_substrate_substrate_pkg_proto_ateapipb_Selector_ = validate.NewUnionMembership(validate.NewUnionMember("match_labels"))
+var unionMembershipFor_go_ate_dev_substrate_pkg_proto_ateapipb_Selector_ = validate.NewUnionMembership(validate.NewUnionMember("match_labels"))
 
 // Validate_Selector validates an instance of Selector according
 // to declarative validation rules in the API schema.
@@ -6870,7 +6870,7 @@ func Validate_Selector(
 	ctx context.Context, op operation.Operation, fldPath *field.Path,
 	obj, oldObj *ateapipb.Selector) (errs field.ErrorList) {
 
-	if e := validate.Union(ctx, op, fldPath, obj, oldObj, unionMembershipFor_github_com_agent_substrate_substrate_pkg_proto_ateapipb_Selector_,
+	if e := validate.Union(ctx, op, fldPath, obj, oldObj, unionMembershipFor_go_ate_dev_substrate_pkg_proto_ateapipb_Selector_,
 		func(obj *ateapipb.Selector) bool {
 			if obj == nil {
 				return false
@@ -7189,7 +7189,7 @@ func Validate_SuspendActorRequest(
 	return errs
 }
 
-var unionMembershipFor_github_com_agent_substrate_substrate_pkg_proto_ateapipb_SystemInfoDataSource_ = validate.NewUnionMembership(validate.NewUnionMember("actor_metadata"), validate.NewUnionMember("trust_bundle"))
+var unionMembershipFor_go_ate_dev_substrate_pkg_proto_ateapipb_SystemInfoDataSource_ = validate.NewUnionMembership(validate.NewUnionMember("actor_metadata"), validate.NewUnionMember("trust_bundle"))
 
 // Validate_SystemInfoDataSource validates an instance of SystemInfoDataSource according
 // to declarative validation rules in the API schema.
@@ -7197,7 +7197,7 @@ func Validate_SystemInfoDataSource(
 	ctx context.Context, op operation.Operation, fldPath *field.Path,
 	obj, oldObj *ateapipb.SystemInfoDataSource) (errs field.ErrorList) {
 
-	if e := validate.Union(ctx, op, fldPath, obj, oldObj, unionMembershipFor_github_com_agent_substrate_substrate_pkg_proto_ateapipb_SystemInfoDataSource_,
+	if e := validate.Union(ctx, op, fldPath, obj, oldObj, unionMembershipFor_go_ate_dev_substrate_pkg_proto_ateapipb_SystemInfoDataSource_,
 		func(obj *ateapipb.SystemInfoDataSource) bool {
 			if obj == nil {
 				return false
@@ -8163,7 +8163,7 @@ func Validate_UpdateWorkerRequest(
 	return errs
 }
 
-var unionMembershipFor_github_com_agent_substrate_substrate_pkg_proto_ateapipb_Volume_ = validate.NewUnionMembership(validate.NewUnionMember("durable_dir"), validate.NewUnionMember("external_volume_template"), validate.NewUnionMember("system_info"), validate.NewUnionMember("image"))
+var unionMembershipFor_go_ate_dev_substrate_pkg_proto_ateapipb_Volume_ = validate.NewUnionMembership(validate.NewUnionMember("durable_dir"), validate.NewUnionMember("external_volume_template"), validate.NewUnionMember("system_info"), validate.NewUnionMember("image"))
 
 // Validate_Volume validates an instance of Volume according
 // to declarative validation rules in the API schema.
@@ -8171,7 +8171,7 @@ func Validate_Volume(
 	ctx context.Context, op operation.Operation, fldPath *field.Path,
 	obj, oldObj *ateapipb.Volume) (errs field.ErrorList) {
 
-	if e := validate.Union(ctx, op, fldPath, obj, oldObj, unionMembershipFor_github_com_agent_substrate_substrate_pkg_proto_ateapipb_Volume_,
+	if e := validate.Union(ctx, op, fldPath, obj, oldObj, unionMembershipFor_go_ate_dev_substrate_pkg_proto_ateapipb_Volume_,
 		func(obj *ateapipb.Volume) bool {
 			if obj == nil {
 				return false

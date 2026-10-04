@@ -29,7 +29,7 @@ workerSelector:
     workload: caps
 containers:
 - name: probe
-  image: ko://github.com/agent-substrate/substrate/internal/e2e/fixtures/probe
+  image: ko://go.ate.dev/substrate/internal/e2e/fixtures/probe
   command: ["/ko-app/probe"]
   wakeupProbe:
     httpGet:
@@ -54,7 +54,7 @@ workerSelector:
     workload: caps
 containers:
 - name: probe
-  image: ko://github.com/agent-substrate/substrate/internal/e2e/fixtures/probe
+  image: ko://go.ate.dev/substrate/internal/e2e/fixtures/probe
   command: ["/ko-app/probe"]
   # The probe binds :80, which is exactly what NET_BIND_SERVICE permits, so
   # this template also proves the granted capability is usable and not merely

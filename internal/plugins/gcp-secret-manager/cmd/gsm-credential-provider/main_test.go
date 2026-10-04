@@ -32,7 +32,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
 
-	"github.com/agent-substrate/substrate/pkg/proto/credproviderpb"
+	"go.ate.dev/substrate/pkg/proto/credproviderpb"
 )
 
 // /healthz passes regardless of readiness; /readyz follows the ready flag.

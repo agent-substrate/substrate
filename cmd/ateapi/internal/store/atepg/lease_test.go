@@ -21,7 +21,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 )
 
 // countLeases returns how many lease rows exist for key.

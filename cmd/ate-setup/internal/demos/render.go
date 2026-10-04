@@ -15,8 +15,8 @@
 package demos
 
 import (
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/render"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/steps"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/render"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/steps"
 )
 
 // bucketNamePlaceholder is substituted into every demo template with the

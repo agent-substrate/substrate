@@ -22,7 +22,7 @@ import (
 
 	pluginapi "k8s.io/kubelet/pkg/apis/deviceplugin/v1beta1"
 
-	"github.com/agent-substrate/substrate/internal/deviceplugin"
+	"go.ate.dev/substrate/internal/deviceplugin"
 )
 
 // hostDevRoot is where the node's /dev is mounted into atelet (see
@@ -37,7 +37,7 @@ const hostDevRoot = "/host/dev"
 // reliable eligibility signal — known at atelet startup, before any WorkerPool
 // schedules here.
 //
-// TODO(https://github.com/agent-substrate/substrate/pull/1207): /dev/kvm is
+// TODO(https://go.ate.dev/substrate/pull/1207): /dev/kvm is
 // not the only micro-VM hypervisor device; once /dev/mshv support lands, an
 // mshv-only node would be wrongly reported incapable here. Treat presence of
 // any micro-VM hypervisor device in SandboxDevices as capability, not KVM

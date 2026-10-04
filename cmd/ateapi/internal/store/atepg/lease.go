@@ -21,9 +21,9 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 )
 
 // defaultLeaseTTL is how long a lease may go unrenewed before another client

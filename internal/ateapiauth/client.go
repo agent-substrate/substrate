@@ -20,8 +20,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/agent-substrate/substrate/internal/credbundle"
-	"github.com/agent-substrate/substrate/internal/k8sresolver"
+	"go.ate.dev/substrate/internal/credbundle"
+	"go.ate.dev/substrate/internal/k8sresolver"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"k8s.io/client-go/kubernetes"

@@ -24,7 +24,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/resource"
 	"google.golang.org/grpc"
 
-	"github.com/agent-substrate/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/ateattr"
 )
 
 func TestResolveLogsExporter(t *testing.T) {

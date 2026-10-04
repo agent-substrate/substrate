@@ -23,7 +23,7 @@ workerSelector:
     workload: benchmark-ateom
 containers:
 - name: glutton
-  image: ko://github.com/agent-substrate/substrate/cmd/benchmarking/glutton
+  image: ko://go.ate.dev/substrate/cmd/benchmarking/glutton
   command:
   - "/ko-app/glutton"
   - "--grpc-listen-addr=:80"

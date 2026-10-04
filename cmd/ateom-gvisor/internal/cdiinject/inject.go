@@ -33,7 +33,7 @@ import (
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
 
-	"github.com/agent-substrate/substrate/internal/cdi"
+	"go.ate.dev/substrate/internal/cdi"
 )
 
 // Options tune what a merge is allowed to do. Everything vendor-specific lives

@@ -18,8 +18,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // parseAtespacedName parses a reference to an atespace-scoped resource,

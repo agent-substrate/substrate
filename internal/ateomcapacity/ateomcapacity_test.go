@@ -25,7 +25,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/protobuf/testing/protocmp"
 
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
 )
 
 // testActors stands in for the ateom's own ceiling, which is a flag in

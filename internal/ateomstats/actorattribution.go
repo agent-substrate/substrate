@@ -21,8 +21,8 @@
 package ateomstats
 
 import (
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
-	"github.com/agent-substrate/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/proto/ateompb"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 // attributionSource is the attribution-bearing subset of the ateom requests

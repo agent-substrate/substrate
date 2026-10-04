@@ -4694,7 +4694,7 @@ const file_agent_proto_rawDesc = "" +
 	"\vAddSwapPath\x12\x18.grpc.AddSwapPathRequest\x1a\x16.google.protobuf.Empty\x12E\n" +
 	"\x0eGetVolumeStats\x12\x18.grpc.VolumeStatsRequest\x1a\x19.grpc.VolumeStatsResponse\x12A\n" +
 	"\fResizeVolume\x12\x19.grpc.ResizeVolumeRequest\x1a\x16.google.protobuf.Empty\x12;\n" +
-	"\tSetPolicy\x12\x16.grpc.SetPolicyRequest\x1a\x16.google.protobuf.EmptyBVZTgithub.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata/agentpb;agentpbb\x06proto3"
+	"\tSetPolicy\x12\x16.grpc.SetPolicyRequest\x1a\x16.google.protobuf.EmptyBRZPgo.ate.dev/substrate/cmd/ateom-microvm/internal/third_party/kata/agentpb;agentpbb\x06proto3"
 
 var (
 	file_agent_proto_rawDescOnce sync.Once

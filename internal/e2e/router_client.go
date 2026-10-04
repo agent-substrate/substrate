@@ -28,10 +28,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/ateclient"
-	"github.com/agent-substrate/substrate/internal/atenet"
-	"github.com/agent-substrate/substrate/internal/portforward"
-	"github.com/agent-substrate/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/ateclient"
+	"go.ate.dev/substrate/internal/atenet"
+	"go.ate.dev/substrate/internal/portforward"
+	"go.ate.dev/substrate/internal/resources"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 )

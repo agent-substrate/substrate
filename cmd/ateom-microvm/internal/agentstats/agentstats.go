@@ -29,7 +29,7 @@
 package agentstats
 
 import (
-	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/third_party/kata/agentpb"
+	"go.ate.dev/substrate/cmd/ateom-microvm/internal/third_party/kata/agentpb"
 )
 
 // Sample is a point-in-time reading for one container, or the sum of several.

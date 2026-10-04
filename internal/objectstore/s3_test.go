@@ -24,11 +24,11 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/objectstore"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/google/go-cmp/cmp"
+	"go.ate.dev/substrate/internal/objectstore"
 )
 
 // s3Request is one call the SDK made, reduced to what the tests assert on.

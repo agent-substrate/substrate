@@ -20,7 +20,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/serverboot"
+	"go.ate.dev/substrate/internal/serverboot"
 )
 
 // TestEndToEndThroughServerboot exercises the whole path an ateom span actually

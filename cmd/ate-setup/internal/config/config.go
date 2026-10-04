@@ -33,8 +33,8 @@ import (
 
 	"k8s.io/apimachinery/pkg/util/validation"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/images"
-	"github.com/agent-substrate/substrate/internal/installdefaults"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/images"
+	"go.ate.dev/substrate/internal/installdefaults"
 )
 
 // Enumerated values for the install-shaping flags.

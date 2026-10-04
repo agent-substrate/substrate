@@ -21,7 +21,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/agent-substrate/substrate/internal/nodepath"
+	"go.ate.dev/substrate/internal/nodepath"
 )
 
 // Use a directory that is shared between atelet and ateom but not cleaned up by atelet

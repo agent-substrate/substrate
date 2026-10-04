@@ -19,7 +19,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
 )
 
 // workerImages are the ateom images a WorkerPool points at through

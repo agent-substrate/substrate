@@ -17,9 +17,9 @@ package ateletauth_test
 import (
 	"testing"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/ateletauth"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/ateletauth/ateletauthtest"
-	"github.com/agent-substrate/substrate/internal/installdefaults"
+	"go.ate.dev/substrate/cmd/ateapi/internal/ateletauth"
+	"go.ate.dev/substrate/cmd/ateapi/internal/ateletauth/ateletauthtest"
+	"go.ate.dev/substrate/internal/installdefaults"
 )
 
 // TestAuthenticateHonorsConfiguredIdentity checks that the identity

@@ -82,7 +82,7 @@ address for whichever environment it is deployed to:
 ```yaml
       containers:
         - name: ateapi
-          image: ko://github.com/agent-substrate/substrate/cmd/ateapi
+          image: ko://go.ate.dev/substrate/cmd/ateapi
           ports:
             - containerPort: 443
           # Supplies OTEL_EXPORTER_OTLP_ENDPOINT (and, on kind, the metric

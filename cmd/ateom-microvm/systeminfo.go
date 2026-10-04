@@ -49,10 +49,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
-	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/reaper"
-	"github.com/agent-substrate/substrate/internal/ocispec"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"go.ate.dev/substrate/cmd/ateom-microvm/internal/kata"
+	"go.ate.dev/substrate/cmd/ateom-microvm/internal/reaper"
+	"go.ate.dev/substrate/internal/ocispec"
+	"go.ate.dev/substrate/internal/proto/ateompb"
 )
 
 // hasSystemInfoVolumes reports whether any container mounts a system-info

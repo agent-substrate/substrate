@@ -19,11 +19,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/objectstore"
-	"github.com/agent-substrate/substrate/internal/objectstore/objectstoretest"
-	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
+	"go.ate.dev/substrate/internal/objectstore"
+	"go.ate.dev/substrate/internal/objectstore/objectstoretest"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 const testLocation = "gs://bucket/root"

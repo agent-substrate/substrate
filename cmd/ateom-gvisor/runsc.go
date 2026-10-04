@@ -29,9 +29,9 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/agent-substrate/substrate/internal/ocispec"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
-	"github.com/agent-substrate/substrate/internal/sizing"
+	"go.ate.dev/substrate/internal/ocispec"
+	"go.ate.dev/substrate/internal/proto/ateompb"
+	"go.ate.dev/substrate/internal/sizing"
 )
 
 type runsc struct {

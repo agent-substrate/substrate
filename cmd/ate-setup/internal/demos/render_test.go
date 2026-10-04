@@ -19,9 +19,9 @@ package demos_test
 import (
 	"testing"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos"
-	_ "github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos/all"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos/demotest"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/demos"
+	_ "go.ate.dev/substrate/cmd/ate-setup/internal/demos/all"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/demos/demotest"
 )
 
 // TestDemoTemplatesRender guards against drift between the demo templates and

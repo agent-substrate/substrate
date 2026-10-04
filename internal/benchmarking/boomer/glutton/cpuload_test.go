@@ -19,8 +19,8 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/dynconfig"
-	"github.com/agent-substrate/substrate/internal/benchmarking/glutton/fake"
+	"go.ate.dev/substrate/internal/benchmarking/boomer/dynconfig"
+	"go.ate.dev/substrate/internal/benchmarking/glutton/fake"
 )
 
 func TestEnsureCPULoadRequestsConfiguredLoad(t *testing.T) {

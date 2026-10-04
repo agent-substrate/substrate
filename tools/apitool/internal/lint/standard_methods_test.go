@@ -17,7 +17,7 @@ package lint_test
 import (
 	"testing"
 
-	"github.com/agent-substrate/substrate/tools/apitool/internal/lint"
+	"go.ate.dev/substrate/tools/apitool/internal/lint"
 )
 
 func TestStandardMethodReturnsResource(t *testing.T) {

@@ -22,8 +22,8 @@ import (
 
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 
-	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
-	"github.com/agent-substrate/substrate/internal/apierror"
+	"go.ate.dev/substrate/cmd/ateom-microvm/internal/kata"
+	"go.ate.dev/substrate/internal/apierror"
 )
 
 // guestEnvelope is the ceiling an actor's container limits must fit inside.

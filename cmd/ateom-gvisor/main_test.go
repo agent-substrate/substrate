@@ -22,8 +22,8 @@ import (
 
 	"google.golang.org/grpc/codes"
 
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/proto/ateompb"
 )
 
 // Every RPC rejects a request without ActorDirs before touching any state.

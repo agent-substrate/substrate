@@ -29,11 +29,11 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/contextlogging"
 	"github.com/google/uuid"
 	promclient "github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/contextlogging"
 	prombridge "go.opentelemetry.io/contrib/bridges/prometheus"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"

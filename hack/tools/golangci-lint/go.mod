@@ -1,4 +1,4 @@
-module github.com/agent-substrate/substrate/hack/tools/golangci-lint
+module go.ate.dev/substrate/hack/tools/golangci-lint
 
 go 1.27.0
 

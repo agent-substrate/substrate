@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/agent-substrate/substrate/tools/apitool/internal/model"
+	"go.ate.dev/substrate/tools/apitool/internal/model"
 )
 
 // ListMethodShape requires a "List*" method's request to have exactly

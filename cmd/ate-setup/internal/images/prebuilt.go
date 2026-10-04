@@ -23,7 +23,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kube"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/kube"
 )
 
 // koRef matches a whole ko:// reference: the prefix plus everything up to the

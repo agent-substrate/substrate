@@ -33,7 +33,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/api/validate/content"
 
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // Destination is what a request is going to, as far as the leg evaluating it

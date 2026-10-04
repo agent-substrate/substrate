@@ -24,7 +24,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	corev1 "k8s.io/api/core/v1"
 
-	"github.com/agent-substrate/substrate/internal/localca"
+	"go.ate.dev/substrate/internal/localca"
 )
 
 // ate-api-server requires both connection strings and its schema in the

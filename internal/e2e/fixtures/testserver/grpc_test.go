@@ -31,7 +31,7 @@ import (
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/status"
 
-	"github.com/agent-substrate/substrate/internal/proto/grpcechopb"
+	"go.ate.dev/substrate/internal/proto/grpcechopb"
 )
 
 // The e2e suite reads this fixture's answers as evidence about the egress

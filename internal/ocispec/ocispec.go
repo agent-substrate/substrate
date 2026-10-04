@@ -23,9 +23,9 @@ import (
 	"path"
 	"path/filepath"
 
-	"github.com/agent-substrate/substrate/internal/imagecache"
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/opencontainers/runtime-spec/specs-go"
+	"go.ate.dev/substrate/internal/imagecache"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
 )
 
 // specFile is the OCI spec file name within a bundle.

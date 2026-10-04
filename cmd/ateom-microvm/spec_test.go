@@ -26,9 +26,9 @@ import (
 	"google.golang.org/grpc/codes"
 	"k8s.io/utils/ptr"
 
-	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/ocispec"
+	"go.ate.dev/substrate/cmd/ateom-microvm/internal/kata"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/ocispec"
 )
 
 // Limits the guest can never satisfy must be rejected before the containers

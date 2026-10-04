@@ -36,7 +36,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	grpcstatus "google.golang.org/grpc/status"
 
-	"github.com/agent-substrate/substrate/internal/proto/grpcechopb"
+	"go.ate.dev/substrate/internal/proto/grpcechopb"
 )
 
 const (

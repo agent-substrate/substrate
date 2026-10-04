@@ -18,10 +18,10 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/agent-substrate/substrate/cmd/atenet/internal/router"
-	"github.com/agent-substrate/substrate/cmd/atenet/internal/sdsmint"
-	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/spf13/cobra"
+	"go.ate.dev/substrate/cmd/atenet/internal/router"
+	"go.ate.dev/substrate/cmd/atenet/internal/sdsmint"
+	"go.ate.dev/substrate/internal/version"
 )
 
 var rootCmd = &cobra.Command{

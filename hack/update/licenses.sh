@@ -73,7 +73,7 @@ for target in "${targets[@]}"; do
   }
 
   # Bug in go-licenses?  Our repo gets included in a loop
-  rm -rf "${tmp_out}/github.com/agent-substrate/substrate"
+  rm -rf "${tmp_out}/go.ate.dev/substrate"
 
   # Merge the results into the main OUTDIR
   if [ "$(ls -A "${tmp_out}")" ]; then

@@ -33,8 +33,8 @@ import (
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
 
-	"github.com/agent-substrate/substrate/internal/ateomnet/netns"
-	"github.com/agent-substrate/substrate/internal/roottest"
+	"go.ate.dev/substrate/internal/ateomnet/netns"
+	"go.ate.dev/substrate/internal/roottest"
 )
 
 var testNetNSSequence uint64

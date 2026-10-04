@@ -17,8 +17,8 @@ package validate_test
 import (
 	"testing"
 
-	"github.com/agent-substrate/substrate/tools/apitool/internal/exemption"
-	"github.com/agent-substrate/substrate/tools/apitool/internal/validate"
+	"go.ate.dev/substrate/tools/apitool/internal/exemption"
+	"go.ate.dev/substrate/tools/apitool/internal/validate"
 )
 
 func TestExemptions(t *testing.T) {

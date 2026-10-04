@@ -22,8 +22,8 @@ import (
 	"testing"
 
 	"cloud.google.com/go/storage"
-	"github.com/agent-substrate/substrate/internal/objectstore"
 	"github.com/google/go-cmp/cmp"
+	"go.ate.dev/substrate/internal/objectstore"
 )
 
 // emulatorStore returns a Store bound to a GCS emulator, or skips. The Go

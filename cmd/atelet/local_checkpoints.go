@@ -22,7 +22,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
+	"go.ate.dev/substrate/cmd/atelet/internal/ateletpath"
 )
 
 // pruneLocalCheckpoints removes every local snapshot of the actor. A missing

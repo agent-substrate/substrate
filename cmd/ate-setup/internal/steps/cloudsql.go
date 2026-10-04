@@ -20,8 +20,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/log"
 )
 
 // Keys the Cloud SQL Auth Proxy sidecar reads out of the ate-api-server-envvars

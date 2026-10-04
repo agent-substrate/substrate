@@ -25,10 +25,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/ateomnet"
-	"github.com/agent-substrate/substrate/internal/ateomnet/netns"
-	"github.com/agent-substrate/substrate/internal/atunnel"
-	"github.com/agent-substrate/substrate/internal/roottest"
+	"go.ate.dev/substrate/internal/ateomnet"
+	"go.ate.dev/substrate/internal/ateomnet/netns"
+	"go.ate.dev/substrate/internal/atunnel"
+	"go.ate.dev/substrate/internal/roottest"
 )
 
 // Verify redirection preserves the destination, including unconfigured ports.
