@@ -53,8 +53,8 @@ jobs:
         go-version-file: 'go.mod'
     # Unconditional: a released migration becoming permanent is exactly what
     # this guards, and that happens on the push to main, not on the PR.
-    - name: Verify immutable PostgreSQL migrations
-      run: hack/verify/postgresql-migrations.sh
+    - name: Verify immutable SQL migrations
+      run: hack/verify/sql-migrations.sh
     # gotestsum wraps go test to emit JUnit; the go test arguments are unchanged.
     - name: unit tests
       run: hack/run-tool.sh gotestsum --junitfile "${ARTIFACTS}/unit.xml"

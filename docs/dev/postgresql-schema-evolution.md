@@ -76,6 +76,6 @@ Do not edit the `schema_migrations` ledger manually.
 5. Run the migration verifier and PostgreSQL store tests.
 
 ```sh
-hack/verify/postgresql-migrations.sh
+hack/verify/sql-migrations.sh
 go test ./cmd/ateapi/internal/store/atepg
 ```
