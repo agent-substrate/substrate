@@ -198,6 +198,9 @@ type Config struct {
 	// BenchmarkActorMemory is the memory limit for benchmark actors
 	// (BENCHMARK_ACTOR_MEMORY). Empty leaves the workload default in place.
 	BenchmarkActorMemory string
+	// EnvoyConcurrency overrides the Envoy egress gateway worker thread count
+	// (E2E_ENVOY_CONCURRENCY). Empty leaves Envoy's default concurrency in place.
+	EnvoyConcurrency string
 
 	// kubeconfigEnv is what ScriptEnv exports as $KUBECONFIG. Unlike Kubeconfig
 	// it may be a PATH-style list of files, which kubectl understands and
@@ -375,6 +378,7 @@ func Load(opts Options) (*Config, error) {
 		AnthropicAPIKey:                env["ANTHROPIC_API_KEY"],
 		OtlpEndpoint:                   firstNonEmpty(opts.OtlpEndpoint, env["ATE_OTLP_ENDPOINT"]),
 		BenchmarkActorMemory:           env["BENCHMARK_ACTOR_MEMORY"],
+		EnvoyConcurrency:               env["E2E_ENVOY_CONCURRENCY"],
 		kubeconfigEnv:                  kubeconfigEnv,
 		shellEnv:                       env,
 	}

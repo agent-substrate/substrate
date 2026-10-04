@@ -157,6 +157,45 @@ func TestActorEgressHTTPSByHostnamePassthrough(t *testing.T) {
 	}
 }
 
+// TestActorEgressPolicyCache sends 5 requests to example.com and checks that
+// the egress policy cache counters record 4 hits and 1 miss.
+func TestActorEgressPolicyCache(t *testing.T) {
+	ctx := context.Background()
+	router, actorRef := hostnamePolicyActor(t, ctx)
+
+	beforeScrape, err := e2e.ScrapeEgressEnvoyMetrics(ctx)
+	if err != nil {
+		t.Fatalf("ScrapeEgressEnvoyMetrics before fetches: %v", err)
+	}
+	beforeHits, beforeMisses := e2e.EgressPolicyCacheCounts(beforeScrape)
+
+	const numRequests = 5
+	payload := []byte(`{"url":"https://example.com/","disableKeepAlive":true}`)
+	for i := range numRequests {
+		status, body := postThroughEgressActorUntil(t, ctx, router, actorRef, "/", payload, reached)
+		if status != http.StatusOK {
+			t.Fatalf("request %d to example.com returned HTTP %d, want 200; body: %s", i+1, status, body)
+		}
+	}
+
+	afterScrape, err := e2e.ScrapeEgressEnvoyMetrics(ctx)
+	if err != nil {
+		t.Fatalf("ScrapeEgressEnvoyMetrics after fetches: %v", err)
+	}
+	afterHits, afterMisses := e2e.EgressPolicyCacheCounts(afterScrape)
+
+	const (
+		wantHits   = 4
+		wantMisses = 1
+	)
+	if got := afterHits - beforeHits; got != wantHits {
+		t.Errorf("egress policy cache hits delta = %d, want %d", got, wantHits)
+	}
+	if got := afterMisses - beforeMisses; got != wantMisses {
+		t.Errorf("egress policy cache misses delta = %d, want %d", got, wantMisses)
+	}
+}
+
 // fetchThroughEgressActorUntil is fetchThroughEgressActor with the caller
 // deciding which answer is final.
 func fetchThroughEgressActorUntil(t *testing.T, ctx context.Context, router *e2e.RouterClient, actorRef resources.ActorRef, url string, done func(status int, body []byte) bool) (int, []byte) {

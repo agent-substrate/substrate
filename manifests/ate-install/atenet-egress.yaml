@@ -1214,6 +1214,8 @@ spec:
         - atenet-egress
         - --service-cluster
         - atenet-egress
+        # E2E_ENVOY_CONCURRENCY is substituted in renderAtenetEgressManifest
+        - ${E2E_ENVOY_CONCURRENCY}
         # Prevents Envoy from fast-exiting on SIGTERM before the ext-proc
         # sidecar finishes its drain sequence. Polls for the drain-complete
         # marker the sidecar writes on the shared emptyDir, terminating Envoy

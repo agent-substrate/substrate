@@ -266,6 +266,10 @@ envoy_http_ext_proc_egress_policy_mitm_streams_started{envoy_http_conn_manager_p
 envoy_http_ext_proc_egress_policy_cleartext_streams_started{envoy_http_conn_manager_prefix="mitm_cleartext"} 0
 # TYPE envoy_http_ext_proc_egress_identity_streams_closed counter
 envoy_http_ext_proc_egress_identity_streams_closed{envoy_http_conn_manager_prefix="egress_connect"} 6
+# TYPE envoy_dynamicmodulescustom_ate_egress_connect_cache_hit counter
+envoy_dynamicmodulescustom_ate_egress_connect_cache_hit{} 4
+# TYPE envoy_dynamicmodulescustom_ate_egress_connect_cache_miss counter
+envoy_dynamicmodulescustom_ate_egress_connect_cache_miss{} 1
 `
 
 func TestEgressExtProcStreamCounts(t *testing.T) {
@@ -308,6 +312,42 @@ func TestEgressExtProcStreamCounts(t *testing.T) {
 				if got[prefix] != want {
 					t.Errorf("EgressExtProcStreamCounts()[%q] = %d, want %d", prefix, got[prefix], want)
 				}
+			}
+		})
+	}
+}
+
+func TestEgressPolicyCacheCounts(t *testing.T) {
+	tests := []struct {
+		name       string
+		scrape     string
+		wantHits   int
+		wantMisses int
+	}{
+		{
+			name:       "single replica",
+			scrape:     sampleEgressEnvoyScrape,
+			wantHits:   4,
+			wantMisses: 1,
+		},
+		{
+			name:       "summed across replicas",
+			scrape:     sampleEgressEnvoyScrape + sampleEgressEnvoyScrape,
+			wantHits:   8,
+			wantMisses: 2,
+		},
+		{
+			name:       "empty scrape",
+			scrape:     "",
+			wantHits:   0,
+			wantMisses: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotHits, gotMisses := EgressPolicyCacheCounts(tt.scrape)
+			if gotHits != tt.wantHits || gotMisses != tt.wantMisses {
+				t.Errorf("EgressPolicyCacheCounts() = (%d, %d), want (%d, %d)", gotHits, gotMisses, tt.wantHits, tt.wantMisses)
 			}
 		})
 	}

@@ -168,6 +168,7 @@ func (e *Env) renderAtenetEgressManifest(ctx context.Context, provider config.Cr
 		return nil, err
 	}
 	raw = e.patchEnvoyDataplaneImage(raw, imageReference)
+	raw = e.patchEnvoyConcurrency(raw, e.Cfg.EnvoyConcurrency)
 	rendered, err := e.renderBytes(raw)
 	if err != nil {
 		return nil, err
@@ -179,6 +180,25 @@ func (e *Env) renderAtenetEgressManifest(ctx context.Context, provider config.Cr
 // the manifest with imageRef.
 func (e *Env) patchEnvoyDataplaneImage(raw []byte, imageRef string) []byte {
 	return bytes.ReplaceAll(raw, []byte("${ENVOY_DATAPLANE_IMAGE}"), []byte(imageRef))
+}
+
+// patchEnvoyConcurrency replaces the - ${E2E_ENVOY_CONCURRENCY} placeholder in
+// the manifest with --concurrency <value> when concurrency is set, or removes
+// the placeholder line when empty.
+func (e *Env) patchEnvoyConcurrency(raw []byte, concurrency string) []byte {
+	const placeholder = "- ${E2E_ENVOY_CONCURRENCY}"
+	var out []string
+	for _, line := range strings.Split(string(raw), "\n") {
+		if strings.TrimSpace(line) == placeholder {
+			if concurrency != "" {
+				indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+				out = append(out, indent+"- --concurrency", fmt.Sprintf("%s- %q", indent, concurrency))
+			}
+			continue
+		}
+		out = append(out, line)
+	}
+	return []byte(strings.Join(out, "\n"))
 }
 
 // patchAtenetEgressInject replaces the #ATE_EGRESS_INJECT_FLAGS marker in the

@@ -47,7 +47,8 @@ const (
 )
 
 type fetchRequest struct {
-	URL string `json:"url"`
+	URL              string `json:"url"`
+	DisableKeepAlive bool   `json:"disableKeepAlive,omitempty"`
 }
 
 type fetchResponse struct {
@@ -133,6 +134,10 @@ func newHandler(client *http.Client) http.Handler {
 			writeJSON(w, http.StatusBadRequest, fetchResponse{Error: fmt.Sprintf("invalid URL: %v", err)})
 			return
 		}
+		if input.DisableKeepAlive {
+			outbound.Close = true
+			client.CloseIdleConnections()
+		}
 		if traceparent := r.Header.Get("traceparent"); traceparent != "" {
 			outbound.Header.Set("traceparent", traceparent)
 		}
@@ -144,6 +149,7 @@ func newHandler(client *http.Client) http.Handler {
 		defer response.Body.Close()
 
 		body, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBody))
+		_ = response.Body.Close()
 		if err != nil {
 			writeJSON(w, http.StatusBadGateway, fetchResponse{Error: fmt.Sprintf("reading response: %v", err)})
 			return

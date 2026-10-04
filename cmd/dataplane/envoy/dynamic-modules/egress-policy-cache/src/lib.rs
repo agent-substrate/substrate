@@ -20,7 +20,7 @@ use envoy_proxy_dynamic_modules_rust_sdk::{
     envoy_dynamic_module_type_on_http_filter_request_headers_status,
     envoy_dynamic_module_type_on_http_filter_response_headers_status,
   },
-  declare_init_functions, envoy_log_error, EnvoyHttpFilter,
+  declare_init_functions, envoy_log_error, EnvoyCounterId, EnvoyHttpFilter,
   EnvoyHttpFilterConfig, HttpFilter, HttpFilterConfig,
 };
 use lru::LruCache;
@@ -34,6 +34,12 @@ use thread_local::ThreadLocal;
 /// Key holding the egress policy SNI rules JSON.
 pub const ATE_POLICY_EGRESS: &str = "dev.ate.policy.egress";
 
+/// Counter name for egress policy cache hits on CONNECT.
+pub const CONNECT_CACHE_HIT_COUNTER: &str = "ate_egress.connect_cache_hit";
+
+/// Counter name for egress policy cache misses on CONNECT.
+pub const CONNECT_CACHE_MISS_COUNTER: &str = "ate_egress.connect_cache_miss";
+
 /// Thread-local store of LRU caches with `String` keys and values.
 pub type ThreadLocalCache = ThreadLocal<RefCell<LruCache<String, String>>>;
 
@@ -46,12 +52,22 @@ fn init() -> bool {
 
 /// Called when a new HTTP filter configuration is created.
 fn new_http_filter_config_fn<EC: EnvoyHttpFilterConfig, EHF: EnvoyHttpFilter>(
-  _envoy_filter_config: &mut EC,
+  envoy_filter_config: &mut EC,
   _filter_name: &str,
   filter_config: &[u8],
 ) -> Option<Box<dyn HttpFilterConfig<EHF>>> {
   let config = parse_config(filter_config)?;
-  Some(Box::new(EgressPolicyCacheFilterConfig::new(config)))
+  let cache_hit_counter = envoy_filter_config
+    .define_counter(CONNECT_CACHE_HIT_COUNTER)
+    .ok()?;
+  let cache_miss_counter = envoy_filter_config
+    .define_counter(CONNECT_CACHE_MISS_COUNTER)
+    .ok()?;
+  Some(Box::new(EgressPolicyCacheFilterConfig::with_counters(
+    config,
+    cache_hit_counter,
+    cache_miss_counter,
+  )))
 }
 
 fn parse_config(filter_config: &[u8]) -> Option<Config> {
@@ -114,13 +130,25 @@ fn new_lru_cache(max_cache_items: usize) -> RefCell<LruCache<String, String>> {
 pub struct EgressPolicyCacheFilterConfig {
   pub config: Config,
   pub cache: Arc<ThreadLocalCache>,
+  pub cache_hit_counter: EnvoyCounterId,
+  pub cache_miss_counter: EnvoyCounterId,
 }
 
 impl EgressPolicyCacheFilterConfig {
   pub fn new(config: Config) -> Self {
+    Self::with_counters(config, EnvoyCounterId(0), EnvoyCounterId(1))
+  }
+
+  pub fn with_counters(
+    config: Config,
+    cache_hit_counter: EnvoyCounterId,
+    cache_miss_counter: EnvoyCounterId,
+  ) -> Self {
     Self {
       config,
       cache: Arc::new(ThreadLocal::new()),
+      cache_hit_counter,
+      cache_miss_counter,
     }
   }
 
@@ -137,6 +165,8 @@ impl<EHF: EnvoyHttpFilter> HttpFilterConfig<EHF> for EgressPolicyCacheFilterConf
     Box::new(EgressPolicyCacheFilter {
       config: self.config.clone(),
       cache: Arc::clone(&self.cache),
+      cache_hit_counter: self.cache_hit_counter,
+      cache_miss_counter: self.cache_miss_counter,
     })
   }
 }
@@ -145,6 +175,8 @@ impl<EHF: EnvoyHttpFilter> HttpFilterConfig<EHF> for EgressPolicyCacheFilterConf
 pub struct EgressPolicyCacheFilter {
   pub config: Config,
   pub cache: Arc<ThreadLocalCache>,
+  pub cache_hit_counter: EnvoyCounterId,
+  pub cache_miss_counter: EnvoyCounterId,
 }
 
 impl EgressPolicyCacheFilter {
@@ -186,14 +218,18 @@ fn read_peer_cert_digest<EHF: EnvoyHttpFilter>(envoy_filter: &EHF) -> Option<Str
 impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for EgressPolicyCacheFilter {
   fn on_request_headers(
     &mut self,
-    _envoy_filter: &mut EHF,
+    envoy_filter: &mut EHF,
     _end_of_stream: bool,
   ) -> envoy_dynamic_module_type_on_http_filter_request_headers_status {
-    let _ = (
-      &self.config.cache_ttl,
-      self.config.cache_enabled,
-      self.local_cache(),
-    );
+    let _ = (&self.config.cache_ttl, self.config.cache_enabled);
+    if let Some(cert_digest) = read_peer_cert_digest(envoy_filter)
+      && let Some(policy) = self.local_cache().borrow_mut().get(&cert_digest).cloned()
+    {
+      envoy_filter.set_filter_state_bytes(ATE_POLICY_EGRESS.as_bytes(), policy.as_bytes());
+      let _ = envoy_filter.increment_counter(self.cache_hit_counter, 1);
+    } else {
+      let _ = envoy_filter.increment_counter(self.cache_miss_counter, 1);
+    }
     envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue
   }
 
@@ -217,7 +253,173 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for EgressPolicyCacheFilter {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use envoy_proxy_dynamic_modules_rust_sdk::{EnvoyBuffer, MockEnvoyHttpFilter};
+  use envoy_proxy_dynamic_modules_rust_sdk::{
+    abi::{
+      envoy_dynamic_module_type_http_callout_init_result,
+      envoy_dynamic_module_type_metrics_result,
+    },
+    EnvoyBuffer, EnvoyCounterVecId, EnvoyGaugeId, EnvoyGaugeVecId,
+    EnvoyHistogramId, EnvoyHistogramVecId, EnvoyHttpFilterConfigScheduler,
+    MockEnvoyHttpFilter,
+  };
+
+  #[derive(Default)]
+  struct TestEnvoyHttpFilterConfig {
+    defined_counters: Vec<String>,
+  }
+
+  impl EnvoyHttpFilterConfig for TestEnvoyHttpFilterConfig {
+    fn define_counter(
+      &mut self,
+      name: &str,
+    ) -> Result<EnvoyCounterId, envoy_dynamic_module_type_metrics_result> {
+      self.defined_counters.push(name.to_string());
+      Ok(EnvoyCounterId(self.defined_counters.len()))
+    }
+    fn define_counter_vec(
+      &mut self,
+      _: &str,
+      _: &[&str],
+    ) -> Result<EnvoyCounterVecId, envoy_dynamic_module_type_metrics_result> {
+      todo!()
+    }
+    fn define_gauge(
+      &mut self,
+      _: &str,
+    ) -> Result<EnvoyGaugeId, envoy_dynamic_module_type_metrics_result> {
+      todo!()
+    }
+    fn define_gauge_vec(
+      &mut self,
+      _: &str,
+      _: &[&str],
+    ) -> Result<EnvoyGaugeVecId, envoy_dynamic_module_type_metrics_result> {
+      todo!()
+    }
+    fn define_histogram(
+      &mut self,
+      _: &str,
+    ) -> Result<EnvoyHistogramId, envoy_dynamic_module_type_metrics_result> {
+      todo!()
+    }
+    fn define_histogram_vec(
+      &mut self,
+      _: &str,
+      _: &[&str],
+    ) -> Result<EnvoyHistogramVecId, envoy_dynamic_module_type_metrics_result> {
+      todo!()
+    }
+    fn increment_counter(
+      &self,
+      _: EnvoyCounterId,
+      _: u64,
+    ) -> Result<(), envoy_dynamic_module_type_metrics_result> {
+      todo!()
+    }
+    fn increment_counter_vec(
+      &self,
+      _: EnvoyCounterVecId,
+      _: &[&str],
+      _: u64,
+    ) -> Result<(), envoy_dynamic_module_type_metrics_result> {
+      todo!()
+    }
+    fn increase_gauge(
+      &self,
+      _: EnvoyGaugeId,
+      _: u64,
+    ) -> Result<(), envoy_dynamic_module_type_metrics_result> {
+      todo!()
+    }
+    fn increase_gauge_vec(
+      &self,
+      _: EnvoyGaugeVecId,
+      _: &[&str],
+      _: u64,
+    ) -> Result<(), envoy_dynamic_module_type_metrics_result> {
+      todo!()
+    }
+    fn decrease_gauge(
+      &self,
+      _: EnvoyGaugeId,
+      _: u64,
+    ) -> Result<(), envoy_dynamic_module_type_metrics_result> {
+      todo!()
+    }
+    fn decrease_gauge_vec(
+      &self,
+      _: EnvoyGaugeVecId,
+      _: &[&str],
+      _: u64,
+    ) -> Result<(), envoy_dynamic_module_type_metrics_result> {
+      todo!()
+    }
+    fn set_gauge(
+      &self,
+      _: EnvoyGaugeId,
+      _: u64,
+    ) -> Result<(), envoy_dynamic_module_type_metrics_result> {
+      todo!()
+    }
+    fn set_gauge_vec(
+      &self,
+      _: EnvoyGaugeVecId,
+      _: &[&str],
+      _: u64,
+    ) -> Result<(), envoy_dynamic_module_type_metrics_result> {
+      todo!()
+    }
+    fn record_histogram_value(
+      &self,
+      _: EnvoyHistogramId,
+      _: u64,
+    ) -> Result<(), envoy_dynamic_module_type_metrics_result> {
+      todo!()
+    }
+    fn record_histogram_value_vec(
+      &self,
+      _: EnvoyHistogramVecId,
+      _: &[&str],
+      _: u64,
+    ) -> Result<(), envoy_dynamic_module_type_metrics_result> {
+      todo!()
+    }
+    fn new_scheduler(&self) -> Box<dyn EnvoyHttpFilterConfigScheduler> {
+      todo!()
+    }
+    fn send_http_callout<'a>(
+      &mut self,
+      _: &'a str,
+      _: &'a [(&'a str, &'a [u8])],
+      _: Option<&'a [u8]>,
+      _: u64,
+    ) -> (envoy_dynamic_module_type_http_callout_init_result, u64) {
+      todo!()
+    }
+    fn start_http_stream<'a>(
+      &mut self,
+      _: &'a str,
+      _: &'a [(&'a str, &'a [u8])],
+      _: Option<&'a [u8]>,
+      _: bool,
+      _: u64,
+    ) -> (envoy_dynamic_module_type_http_callout_init_result, u64) {
+      todo!()
+    }
+    unsafe fn send_http_stream_data(&mut self, _: u64, _: &[u8], _: bool) -> bool {
+      todo!()
+    }
+    unsafe fn send_http_stream_trailers<'a>(
+      &mut self,
+      _: u64,
+      _: &'a [(&'a str, &'a [u8])],
+    ) -> bool {
+      todo!()
+    }
+    unsafe fn reset_http_stream(&mut self, _: u64) {
+      todo!()
+    }
+  }
 
   #[test]
   fn test_config_defaults_and_overrides() {
@@ -259,17 +461,44 @@ mod tests {
   }
 
   #[test]
+  fn test_new_http_filter_config_defines_counters() {
+    let mut test_config = TestEnvoyHttpFilterConfig::default();
+    let filter_config = new_http_filter_config_fn::<
+      TestEnvoyHttpFilterConfig,
+      MockEnvoyHttpFilter,
+    >(&mut test_config, "egress_policy_cache", b"{}");
+    assert!(filter_config.is_some());
+    assert_eq!(
+      test_config.defined_counters,
+      vec![
+        CONNECT_CACHE_HIT_COUNTER.to_string(),
+        CONNECT_CACHE_MISS_COUNTER.to_string(),
+      ]
+    );
+  }
+
+  #[test]
   fn test_headers_continue() {
-    let config = EgressPolicyCacheFilterConfig::new(Config::default());
+    let hit_id = EnvoyCounterId(1);
+    let miss_id = EnvoyCounterId(2);
+    let config =
+      EgressPolicyCacheFilterConfig::with_counters(Config::default(), hit_id, miss_id);
     let mut mock_filter = MockEnvoyHttpFilter::new();
+    mock_filter
+      .expect_get_attribute_string()
+      .withf(|id| {
+        *id == envoy_dynamic_module_type_attribute_id::ConnectionSha256PeerCertificateDigest
+      })
+      .returning(|_| Some(EnvoyBuffer::new(b"unknown_digest")));
+    mock_filter
+      .expect_increment_counter()
+      .withf(move |id, val| *id == miss_id && *val == 1)
+      .return_const(Ok(()))
+      .once();
     mock_filter
       .expect_get_response_header_value()
       .withf(|key| key == ":status")
       .returning(|_| None);
-    mock_filter
-      .expect_get_attribute_int()
-      .withf(|id| *id == envoy_dynamic_module_type_attribute_id::ResponseCode)
-      .return_const(None);
     let mut filter = config.new_http_filter(&mut mock_filter);
 
     assert_eq!(
@@ -279,6 +508,45 @@ mod tests {
     assert_eq!(
       filter.on_response_headers(&mut mock_filter, false),
       envoy_dynamic_module_type_on_http_filter_response_headers_status::Continue
+    );
+  }
+
+  #[test]
+  fn test_on_request_headers_cache_hit_writes_filter_state_and_increments_hit_counter() {
+    let hit_id = EnvoyCounterId(1);
+    let miss_id = EnvoyCounterId(2);
+    let config =
+      EgressPolicyCacheFilterConfig::with_counters(Config::default(), hit_id, miss_id);
+    let expected_policy = r#"{"rules":[{"pattern":"*.example.com","mode":"mitm"}]}"#;
+    config
+      .local_cache()
+      .borrow_mut()
+      .put("abc123digest".to_string(), expected_policy.to_string());
+
+    let mut mock_filter = MockEnvoyHttpFilter::new();
+    mock_filter
+      .expect_get_attribute_string()
+      .withf(|id| {
+        *id == envoy_dynamic_module_type_attribute_id::ConnectionSha256PeerCertificateDigest
+      })
+      .returning(|_| Some(EnvoyBuffer::new(b"abc123digest")));
+    mock_filter
+      .expect_set_filter_state_bytes()
+      .withf(move |key, val| {
+        key == ATE_POLICY_EGRESS.as_bytes() && val == expected_policy.as_bytes()
+      })
+      .return_const(true)
+      .once();
+    mock_filter
+      .expect_increment_counter()
+      .withf(move |id, val| *id == hit_id && *val == 1)
+      .return_const(Result::<(), envoy_dynamic_module_type_metrics_result>::Ok(()))
+      .once();
+
+    let mut filter = config.new_http_filter(&mut mock_filter);
+    assert_eq!(
+      filter.on_request_headers(&mut mock_filter, false),
+      envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue
     );
   }
 
@@ -349,10 +617,14 @@ mod tests {
     let filter1 = EgressPolicyCacheFilter {
       config: filter_config.config.clone(),
       cache: Arc::clone(&filter_config.cache),
+      cache_hit_counter: filter_config.cache_hit_counter,
+      cache_miss_counter: filter_config.cache_miss_counter,
     };
     let filter2 = EgressPolicyCacheFilter {
       config: filter_config.config.clone(),
       cache: Arc::clone(&filter_config.cache),
+      cache_hit_counter: filter_config.cache_hit_counter,
+      cache_miss_counter: filter_config.cache_miss_counter,
     };
 
     assert_eq!(filter1.local_cache().borrow().cap().get(), 2);
@@ -393,6 +665,8 @@ mod tests {
       let other_filter = EgressPolicyCacheFilter {
         config: filter_config_clone.config.clone(),
         cache: Arc::clone(&filter_config_clone.cache),
+        cache_hit_counter: filter_config_clone.cache_hit_counter,
+        cache_miss_counter: filter_config_clone.cache_miss_counter,
       };
       assert_eq!(other_filter.local_cache().borrow().cap().get(), 2);
       other_filter.local_cache().borrow().len()

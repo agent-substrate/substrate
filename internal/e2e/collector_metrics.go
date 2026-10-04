@@ -46,6 +46,13 @@ const (
 	// EgressExtProcPolicyMITMStatPrefix is the Envoy ext_proc filter stat_prefix
 	// on the inner MITM HTTP leg in atenet-egress.
 	EgressExtProcPolicyMITMStatPrefix = "egress_policy_mitm"
+
+	// EgressConnectCacheHitCounter is the Envoy dynamic-module counter name for
+	// CONNECT policy cache hits in atenet-egress.
+	EgressConnectCacheHitCounter = "ate_egress_connect_cache_hit"
+	// EgressConnectCacheMissCounter is the Envoy dynamic-module counter name for
+	// CONNECT policy cache misses in atenet-egress.
+	EgressConnectCacheMissCounter = "ate_egress_connect_cache_miss"
 )
 
 // PlatformMetricPrefixes are the Prometheus metric-name prefixes (OTLP dots
@@ -236,6 +243,32 @@ func EgressExtProcStreamCounts(scrape string) map[string]int {
 		counts[statPrefix] += int(v)
 	}
 	return counts
+}
+
+// EgressPolicyCacheCounts returns the CONNECT policy cache hit and miss counts
+// from an Envoy /stats/prometheus scrape, summed across instances.
+func EgressPolicyCacheCounts(scrape string) (hits, misses int) {
+	for _, line := range strings.Split(scrape, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		name := strings.TrimSuffix(metricNameFromLine(line), "_total")
+		fields := strings.Fields(line)
+		v, err := strconv.ParseFloat(fields[len(fields)-1], 64)
+		if err != nil {
+			continue
+		}
+		switch name {
+		case "envoy_dynamicmodulescustom_" + EgressConnectCacheHitCounter,
+			"envoy_" + EgressConnectCacheHitCounter:
+			hits += int(v)
+		case "envoy_dynamicmodulescustom_" + EgressConnectCacheMissCounter,
+			"envoy_" + EgressConnectCacheMissCounter:
+			misses += int(v)
+		}
+	}
+	return hits, misses
 }
 
 // MissingPlatformMetrics returns the prefixes with no matching series in the
