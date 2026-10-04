@@ -163,7 +163,7 @@ Unlike a Pod, an actor is sized by its **`limits`** (CPU and Memory): the size i
    - **microVM (`ateworker-microvm`)** — `limits.cpuMillicores` sets Cloud Hypervisor `BootVcpus` / `MaxVcpus` (rounded up to whole vCPUs); `limits.memoryBytes` sets guest RAM, reserving a small configurable margin (default 256 MiB, `--vmm-mem-reserve-mib`) for the VMM and virtiofsd so the pod cgroup does not OOM.
 2. **Gate scheduling.** An actor is only placed on a `WorkerPool` whose [worker capacity](#worker-capacity-spectemplateresources) is `>=` these limits.
 
-`requests` are not consulted today (an actor occupies its whole worker). Because the size is baked into snapshots, a **microVM MEMORY-fidelity restore reuses the size in the snapshot**; changing an actor's limits takes effect on its next cold boot.
+`requests` are not consulted today: only `limits` size and place an actor. Because the size is baked into snapshots, a **microVM MEMORY-fidelity restore reuses the size in the snapshot**; changing an actor's limits takes effect on its next cold boot.
 
 Container environment variables support literal `value` entries only. Values are not interpolated (`$(VAR)` references are not expanded), and Kubernetes `envFrom`/`valueFrom` sources are not supported.
 
