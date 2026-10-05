@@ -190,15 +190,15 @@ func TestEnsureStoreAndModel_InitializeAndCheck(t *testing.T) {
 		AuthorizationModelId: modelID,
 		TupleKey: &openfgav1.CheckRequestTupleKey{
 			User:     "user:alice",
-			Relation: "can_set_policy",
+			Relation: "can_update_access_policy",
 			Object:   "atespace:space-1",
 		},
 	})
 	if err != nil {
-		t.Fatalf("Check alice can_set_policy failed: %v", err)
+		t.Fatalf("Check alice can_update_access_policy failed: %v", err)
 	}
 	if !checkResp.GetAllowed() {
-		t.Errorf("expected alice to be allowed can_set_policy on atespace:space-1 via global owner inheritance")
+		t.Errorf("expected alice to be allowed can_update_access_policy on atespace:space-1 via global owner inheritance")
 	}
 
 	checkBob, err := fgaSrv.Check(ctx, &openfgav1.CheckRequest{
@@ -206,15 +206,15 @@ func TestEnsureStoreAndModel_InitializeAndCheck(t *testing.T) {
 		AuthorizationModelId: modelID,
 		TupleKey: &openfgav1.CheckRequestTupleKey{
 			User:     "user:bob",
-			Relation: "can_set_policy",
+			Relation: "can_update_access_policy",
 			Object:   "atespace:space-1",
 		},
 	})
 	if err != nil {
-		t.Fatalf("Check bob can_set_policy failed: %v", err)
+		t.Fatalf("Check bob can_update_access_policy failed: %v", err)
 	}
 	if checkBob.GetAllowed() {
-		t.Errorf("expected bob to be denied can_set_policy on atespace:space-1")
+		t.Errorf("expected bob to be denied can_update_access_policy on atespace:space-1")
 	}
 
 	// Verify idempotent re-initialization on the same shared pool reuses the existing store and model.
@@ -440,7 +440,7 @@ func TestAuthorizerAndPolicyManager_RuntimeChecks(t *testing.T) {
 	}
 	t.Cleanup(fgaSrv.Close)
 
-	authorizer, policyManager, err := New(ctx, pool, fgaSrv)
+	authorizer, policyManager, err := New(ctx, pool, fgaSrv, nil)
 	if err != nil {
 		t.Fatalf("authz.New failed: %v", err)
 	}
@@ -504,16 +504,16 @@ func TestAuthorizerAndPolicyManager_RuntimeChecks(t *testing.T) {
 		t.Errorf("expected bob allowed can_get on team-x, got %v", err)
 	}
 
-	// 6. PolicyManager.DeleteAtespacePolicies requires an active transaction in ctx,
-	// and removes all tuples on team-x when committed.
-	if err := policyManager.DeleteAtespacePolicies(ctx, "team-x"); err == nil {
-		t.Fatalf("expected DeleteAtespacePolicies without ContextWithTx to fail, got nil")
+	// 6. PolicyManager.DeleteAtespacePolicies requires a transaction, and
+	// removes all tuples on team-x when committed.
+	if err := policyManager.DeleteAtespacePolicies(ctx, nil, "team-x"); !errors.Is(err, ErrNilTransaction) {
+		t.Fatalf("DeleteAtespacePolicies with nil tx = %v, want ErrNilTransaction", err)
 	}
 	txDel, err := pool.Begin(ctx)
 	if err != nil {
 		t.Fatalf("pool.Begin failed: %v", err)
 	}
-	if err := policyManager.DeleteAtespacePolicies(ContextWithTx(ctx, txDel), "team-x"); err != nil {
+	if err := policyManager.DeleteAtespacePolicies(ctx, txDel, "team-x"); err != nil {
 		t.Fatalf("DeleteAtespacePolicies failed: %v", err)
 	}
 	if err := txDel.Commit(ctx); err != nil {

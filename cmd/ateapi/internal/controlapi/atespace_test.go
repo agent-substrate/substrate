@@ -58,7 +58,7 @@ func TestAtespace_EndToEndOpenFGAScenarios(t *testing.T) {
 	}
 	t.Cleanup(fgaServer.Close)
 
-	authorizer, policyManager, err := authz.New(ctx, pool, fgaServer)
+	authorizer, policyManager, err := authz.New(ctx, pool, fgaServer, nil)
 	if err != nil {
 		t.Fatalf("authz.New failed: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestAtespace_EndToEndOpenFGAScenarios(t *testing.T) {
 	svc := &RPCService{
 		impl: newServiceImpl(persistence, nil),
 	}
-	interceptor := authz.UnaryServerInterceptor(authorizer)
+	interceptor := authz.UnaryServerInterceptor(authorizer, true)
 
 	asUser := func(id string) context.Context {
 		return principal.InjectContext(ctx, principal.PrincipalInfo{

@@ -143,6 +143,32 @@ service Control {
   // Delete an ActorTemplate together with its golden actor and golden
   // tag in the reserved ate-golden atespace.
   rpc DeleteActorTemplate(DeleteActorTemplateRequest) returns (ActorTemplate) {}
+
+  // Get the deployment-wide global access policy singleton. Returns NotFound
+  // until the policy has been created.
+  rpc GetGlobalAccessPolicy(GetGlobalAccessPolicyRequest) returns (AccessPolicy) {}
+
+  // Create the deployment-wide global access policy singleton. The server's
+  // configured bootstrap owners are global owners whether or not this policy
+  // exists, so they can create it.
+  rpc CreateGlobalAccessPolicy(CreateGlobalAccessPolicyRequest) returns (AccessPolicy) {}
+
+  // Replace the deployment-wide global access policy singleton. Empty
+  // bindings revoke every grant held through the policy; bootstrap owners
+  // keep access.
+  rpc UpdateGlobalAccessPolicy(UpdateGlobalAccessPolicyRequest) returns (AccessPolicy) {}
+
+  // Get the access policy resource nested under an Atespace.
+  rpc GetAtespaceAccessPolicy(GetAtespaceAccessPolicyRequest) returns (AccessPolicy) {}
+
+  // Create the access policy resource nested under an Atespace.
+  rpc CreateAtespaceAccessPolicy(CreateAtespaceAccessPolicyRequest) returns (AccessPolicy) {}
+
+  // Replace the access policy resource nested under an Atespace.
+  rpc UpdateAtespaceAccessPolicy(UpdateAtespaceAccessPolicyRequest) returns (AccessPolicy) {}
+
+  // Delete the access policy resource nested under an Atespace.
+  rpc DeleteAtespaceAccessPolicy(DeleteAtespaceAccessPolicyRequest) returns (AccessPolicy) {}
 }
 
 // ExternalSnapshot addresses a snapshot held in object storage.
@@ -2346,4 +2372,120 @@ message RequestActorSuspendRequest {
 message RequestActorSuspendResponse {
   // The Actor as the suspend workflow left it.
   Actor actor = 1;
+}
+
+// AccessPolicy is an access policy resource nested under a parent resource (or
+// the global singleton installation). Every parent resource has at most one
+// access policy resource, named "default".
+message AccessPolicy {
+  // Standard resource metadata. Atespace must match the parent resource (empty
+  // for global-scoped parents like Global and Atespace) and name must be
+  // "default". Both are caller-specified on create and immutable. UID, version,
+  // create_time, and update_time are server-managed.
+  //
+  // +k8s:required
+  // +k8s:customValidation # name must be "default"
+  ResourceMetadata metadata = 1;
+
+  // Role bindings granting permissions on the parent resource.
+  //
+  // +k8s:optional
+  // +k8s:listType=atomic
+  // +k8s:maxItems=100
+  repeated Binding bindings = 2;
+}
+
+// Binding associates a list of principals (members) with a single role.
+message Binding {
+  // The role name for the parent resource type (e.g., "owner", "editor",
+  // "viewer").
+  //
+  // +k8s:required
+  // +k8s:maxLength=64
+  string role = 1;
+
+  // Principal identities granted this role.
+  // Examples:
+  //   - "user:alice@example.com"
+  //   - "user:sa-ci-runner"
+  //
+  // +k8s:required
+  // +k8s:listType=set
+  // +k8s:maxItems=1500
+  // +k8s:eachVal=+k8s:maxLength=512
+  repeated string members = 2;
+}
+
+// GetGlobalAccessPolicyRequest retrieves the deployment-wide global access policy singleton.
+message GetGlobalAccessPolicyRequest {}
+
+// CreateGlobalAccessPolicyRequest creates the deployment-wide global access policy singleton.
+message CreateGlobalAccessPolicyRequest {
+  // The policy to create. metadata.name must be "default" and
+  // metadata.atespace must be empty.
+  //
+  // +k8s:required
+  AccessPolicy access_policy = 1;
+}
+
+// UpdateGlobalAccessPolicyRequest replaces the deployment-wide global access policy singleton.
+message UpdateGlobalAccessPolicyRequest {
+  // Full replacement. Metadata UID and version are required preconditions;
+  // metadata.name must be "default" and metadata.atespace must be empty.
+  //
+  // +k8s:required
+  AccessPolicy access_policy = 1;
+}
+
+// GetAtespaceAccessPolicyRequest identifies an Atespace's access policy.
+message GetAtespaceAccessPolicyRequest {
+  // The parent Atespace of the access policy resource to retrieve.
+  //
+  // +k8s:required
+  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  ObjectRef atespace = 1;
+}
+
+// CreateAtespaceAccessPolicyRequest creates an access policy for an Atespace.
+message CreateAtespaceAccessPolicyRequest {
+  // Parent Atespace under which to create the policy resource.
+  //
+  // +k8s:required
+  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  ObjectRef atespace = 1;
+
+  // The policy to create. metadata.name must be "default" and
+  // metadata.atespace must be empty.
+  //
+  // +k8s:required
+  AccessPolicy access_policy = 2;
+}
+
+// UpdateAtespaceAccessPolicyRequest replaces an Atespace's access policy.
+message UpdateAtespaceAccessPolicyRequest {
+  // Parent Atespace under which to update the policy resource.
+  //
+  // +k8s:required
+  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  ObjectRef atespace = 1;
+
+  // Full replacement. Metadata UID and version are required preconditions;
+  // metadata.name must be "default" and metadata.atespace must be empty.
+  //
+  // +k8s:required
+  AccessPolicy access_policy = 2;
+}
+
+// DeleteAtespaceAccessPolicyRequest identifies an Atespace's access policy.
+message DeleteAtespaceAccessPolicyRequest {
+  // The parent Atespace of the access policy resource to delete.
+  //
+  // +k8s:required
+  // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
+  ObjectRef atespace = 1;
+
+  // Optional per-delete preconditions.
+  //
+  // +k8s:optional
+  DeleteOptions options = 2;
 }

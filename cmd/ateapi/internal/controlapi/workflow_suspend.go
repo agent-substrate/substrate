@@ -252,12 +252,7 @@ func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef reso
 
 	resp, err := client.Checkpoint(ctx, req)
 	if err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "Setting Actor to crashed due to error",
-			append(ateattr.ActorRefLogAttrs(actorRef), slog.Any("err", err))...)
-		if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationSuspend, ateletCrashMessage("Checkpoint", err)); cerr != nil {
-			return wireSnapshotScope, nil, cerr
-		}
-		return wireSnapshotScope, nil, fmt.Errorf("actor %s crashed: %w", actorRef, err)
+		return wireSnapshotScope, nil, handleAteletError(ctx, w.store, actorRef, ateattr.OperationSuspend, "Checkpoint", false, err)
 	}
 	return wireSnapshotScope, resp.GetSnapshotFiles(), nil
 }
@@ -314,12 +309,7 @@ func (w *ActorWorkflow) ensurePausedSnapshotUploaded(ctx context.Context, actorR
 
 	resp, err := client.UploadPausedCheckpoint(ctx, req)
 	if err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "Setting Actor to crashed due to error",
-			append(ateattr.ActorRefLogAttrs(actorRef), slog.Any("err", err))...)
-		if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationSuspend, ateletCrashMessage("UploadPausedCheckpoint", err)); cerr != nil {
-			return wireSnapshotScope, nil, cerr
-		}
-		return wireSnapshotScope, nil, fmt.Errorf("actor %s crashed: %w", actorRef, err)
+		return wireSnapshotScope, nil, handleAteletError(ctx, w.store, actorRef, ateattr.OperationSuspend, "UploadPausedCheckpoint", false, err)
 	}
 	// atelet uploads only the files the desired scope needs, so the uploaded
 	// snapshot can be a subset of the paused one.

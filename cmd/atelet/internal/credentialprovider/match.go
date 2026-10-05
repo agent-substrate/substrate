@@ -78,26 +78,26 @@ func splitHost(u *url.URL) (parts []string, port string) {
 	return strings.Split(host, "."), port
 }
 
-// bestAuthKey picks the key of auth that best matches image, or "" when none
-// does. Ties break by reverse lexical order, as the kubelet's docker keyring
-// does: longer keys before shorter ones sharing their prefix, and concrete keys
-// before wildcards ("*" sorts below any character a registry can start with).
-func bestAuthKey[V any](auth map[string]V, image string) (string, error) {
+// matchingAuthKeys returns the keys of auth that match image, best first.
+func matchingAuthKeys[V any](auth map[string]V, image string) ([]string, error) {
 	var matches []string
 	for key := range auth {
 		matched, err := matchesImage(key, image)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 		if matched {
 			matches = append(matches, key)
 		}
 	}
-	if len(matches) == 0 {
-		return "", nil
-	}
-	sort.Sort(sort.Reverse(sort.StringSlice(matches)))
-	return matches[0], nil
+	sortAuthKeys(matches)
+	return matches, nil
+}
+
+// sortAuthKeys sorts keys in reverse lexical order, like the kubelet's
+// keyring: longer paths before their prefixes, wildcards last.
+func sortAuthKeys(keys []string) {
+	sort.Sort(sort.Reverse(sort.StringSlice(keys)))
 }
 
 // registryOf returns the domain (with port, if any) of an image reference,

@@ -68,9 +68,6 @@ type SandboxNetworkConfig struct {
 	// EgressPort is where atunnel serves this actor. Every TCP connection the
 	// actor makes is redirected to it, whatever port it was aimed at.
 	EgressPort uint16
-
-	// DNSPort is where the DNS relay answers, on the sandbox's default gateway.
-	DNSPort uint16
 }
 
 // SetupSandboxNetwork creates isolated networking with fixed sandbox addresses.
@@ -353,7 +350,7 @@ type SandboxSession struct {
 
 // ServeSandbox builds a sandbox's network and serves egress and DNS from its
 // gateway namespace. A nil server leaves that unserved, which fails closed.
-func ServeSandbox(ctx context.Context, cfg SandboxNetworkConfig, egress egressServer, resolver dns.Server) (_ *SandboxSession, retErr error) {
+func ServeSandbox(ctx context.Context, cfg SandboxNetworkConfig, egress egressServer, resolver *dns.Relay) (_ *SandboxSession, retErr error) {
 	network, err := SetupSandboxNetwork(ctx, cfg)
 	if err != nil {
 		return nil, err
@@ -367,7 +364,7 @@ func ServeSandbox(ctx context.Context, cfg SandboxNetworkConfig, egress egressSe
 
 	var serve []func()
 	if resolver != nil {
-		closers, serveDNS, err := dns.Serve(ctx, resolver, network.GatewayNetNS, cfg.DNSPort)
+		closers, serveDNS, err := resolver.Serve(ctx, network.GatewayNetNS)
 		if err != nil {
 			return nil, err
 		}

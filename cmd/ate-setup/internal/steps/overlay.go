@@ -135,16 +135,12 @@ func (e *Env) atenetEgressManifestPath() string {
 }
 
 // renderAtenetEgressManifest produces the atenet egress manifest.
-func (e *Env) renderAtenetEgressManifest(ctx context.Context) ([]byte, error) {
+func (e *Env) renderAtenetEgressManifest(ctx context.Context, provider config.CredentialProvider) ([]byte, error) {
 	general := e.Cfg.AdditionalEgressExtprocService != ""
-	injection := e.Cfg.ExperimentalEgressCredentialInjection
 
 	if e.Cfg.Router == config.RouterAgentgateway {
 		if general {
 			return nil, fmt.Errorf("--experimental-additional-egress-extproc-service requires --atenet-dataplane=envoy")
-		}
-		if injection {
-			return nil, fmt.Errorf("--experimental-egress-credential-injection requires --atenet-dataplane=envoy")
 		}
 		return e.renderResolve(ctx, e.Cfg.Path(installDir+"/agentgateway-egress"))
 	}
@@ -167,11 +163,9 @@ func (e *Env) renderAtenetEgressManifest(ctx context.Context) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if injection {
-		raw, err = e.patchAtenetEgressInject(raw)
-		if err != nil {
-			return nil, err
-		}
+	raw, err = e.patchAtenetEgressInject(raw, provider)
+	if err != nil {
+		return nil, err
 	}
 	raw = e.patchEnvoyDataplaneImage(raw, imageReference)
 	rendered, err := e.renderBytes(raw)
@@ -187,34 +181,23 @@ func (e *Env) patchEnvoyDataplaneImage(raw []byte, imageRef string) []byte {
 	return bytes.ReplaceAll(raw, []byte("${ENVOY_DATAPLANE_IMAGE}"), []byte(imageRef))
 }
 
-// patchAtenetEgressInject splices the credential-provider flags into the egress
-// sidecar over the #ATE_EGRESS_INJECT_FLAGS marker. It takes the manifest bytes
-// rather than reading the file so it can run after the general patch.
-func (e *Env) patchAtenetEgressInject(raw []byte) ([]byte, error) {
-	name := e.Cfg.CredentialProviderName
-	if name == "" {
-		name = "ate-secret://k8s.io"
+// patchAtenetEgressInject replaces the #ATE_EGRESS_INJECT_FLAGS marker in the
+// egress sidecar's args with the credential-provider flags, or removes it when
+// injection is off, which leaves the gateway with no provider. It takes the
+// manifest bytes so it can run after the general patch.
+func (e *Env) patchAtenetEgressInject(raw []byte, provider config.CredentialProvider) ([]byte, error) {
+	var flagsBlock string
+	if provider.Enabled() {
+		flagsBlock = emitEgressInjectFlags(provider.Name, provider.Address, provider.ServerName())
 	}
-	address := e.Cfg.CredentialProviderAddress
-	if address == "" {
-		address = "k8s-credential-provider.ate-system.svc:50051"
-	}
-	serverName := address
-	if i := strings.LastIndex(address, ":"); i >= 0 {
-		serverName = address[:i]
-	}
-
-	flagsBlock := emitEgressInjectFlags(name, address, serverName)
 
 	var out []string
 	flagsReplaced := 0
 	for _, line := range strings.Split(string(raw), "\n") {
 		if strings.HasPrefix(strings.TrimSpace(line), "#ATE_EGRESS_INJECT_FLAGS") {
 			indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
-			for _, l := range strings.Split(flagsBlock, "\n") {
-				if l == "" {
-					out = append(out, "")
-				} else {
+			if flagsBlock != "" {
+				for _, l := range strings.Split(flagsBlock, "\n") {
 					out = append(out, indent+l)
 				}
 			}
@@ -373,8 +356,8 @@ func emitAdditionalEgressExtprocCluster(address, port, serverName string) string
               port_value: %s`, additionalEgressExtprocCluster, serverName, serverName, additionalEgressExtprocCluster, address, port)
 }
 
-func (e *Env) applyAtenetEgress(ctx context.Context) error {
-	manifests, err := e.renderAtenetEgressManifest(ctx)
+func (e *Env) applyAtenetEgress(ctx context.Context, provider config.CredentialProvider) error {
+	manifests, err := e.renderAtenetEgressManifest(ctx, provider)
 	if err != nil {
 		return err
 	}
@@ -388,7 +371,7 @@ func (e *Env) applyAtenetEgress(ctx context.Context) error {
 		return err
 	}
 
-	if running && (e.Cfg.AdditionalEgressExtprocService != "" || e.Cfg.ExperimentalEgressCredentialInjection) {
+	if running && (e.Cfg.AdditionalEgressExtprocService != "" || provider.Enabled()) {
 		if err := e.Kube.RolloutRestartDeployment(ctx, e.Namespace(), "atenet-egress", time.Now()); err != nil {
 			return err
 		}

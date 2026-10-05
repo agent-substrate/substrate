@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package atunnel
+package dns
 
 import (
 	"bytes"
@@ -30,54 +30,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
-func TestResolvConfNameservers(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		content string
-		want    []string
-		wantErr bool
-	}{
-		{
-			name:    "cluster resolv.conf",
-			content: "search ate-system.svc.cluster.local svc.cluster.local\nnameserver 10.96.0.10\noptions ndots:5\n",
-			want:    []string{"10.96.0.10:53"},
-		},
-		{
-			name:    "several, in order",
-			content: "nameserver 10.96.0.10\nnameserver 8.8.8.8\n",
-			want:    []string{"10.96.0.10:53", "8.8.8.8:53"},
-		},
-		{
-			name:    "comments and blanks",
-			content: "# generated\n\n  nameserver 10.96.0.10  # cluster\n;nameserver 1.1.1.1\n",
-			want:    []string{"10.96.0.10:53"},
-		},
-		{name: "no nameserver", content: "search cluster.local\n", wantErr: true},
-		{name: "unparsable address", content: "nameserver not-an-ip\n", wantErr: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "resolv.conf")
-			if err := os.WriteFile(path, []byte(tc.content), 0o644); err != nil {
-				t.Fatal(err)
-			}
-			got, err := ResolvConfNameservers(path)
-			if tc.wantErr {
-				if err == nil {
-					t.Fatalf("ResolvConfNameservers() = %v, want an error", got)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("ResolvConfNameservers: %v", err)
-			}
-			if diff := cmp.Diff(tc.want, got); diff != "" {
-				t.Errorf("nameservers mismatch (-want +got):\n%s", diff)
-			}
-		})
-	}
-}
-
-func TestDNSRelayCancelsUDPExchange(t *testing.T) {
+func TestRelayCancelsUDPExchange(t *testing.T) {
 	// A resolver that receives the query and never answers, so the exchange is
 	// blocked on the read when the context is canceled.
 	silent, err := net.ListenPacket("udp", "127.0.0.1:0")
@@ -101,7 +54,7 @@ func TestDNSRelayCancelsUDPExchange(t *testing.T) {
 
 	// Two upstreams: a canceled exchange must not move on to the second.
 	second := newFakeResolver(t, func(query []byte) []byte { return query })
-	relay, err := NewDNSRelay([]string{silent.LocalAddr().String(), second})
+	relay, err := NewRelayForUpstreams([]string{silent.LocalAddr().String(), second})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,12 +82,12 @@ func TestDNSRelayCancelsUDPExchange(t *testing.T) {
 	}
 }
 
-func TestDNSRelayForwardsUDPVerbatim(t *testing.T) {
+func TestRelayForwardsUDPVerbatim(t *testing.T) {
 	upstream := newFakeResolver(t, func(query []byte) []byte {
 		return append([]byte{0xff}, query...)
 	})
 
-	relay, err := NewDNSRelay([]string{upstream})
+	relay, err := NewRelayForUpstreams([]string{upstream})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +103,7 @@ func TestDNSRelayForwardsUDPVerbatim(t *testing.T) {
 	}
 }
 
-func TestDNSRelayFallsBackToTheNextResolver(t *testing.T) {
+func TestRelayFallsBackToTheNextResolver(t *testing.T) {
 	dead, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -160,7 +113,7 @@ func TestDNSRelayFallsBackToTheNextResolver(t *testing.T) {
 	dead.Close()
 
 	live := newFakeResolver(t, func(query []byte) []byte { return []byte("answered") })
-	relay, err := NewDNSRelay([]string{deadAddress, live})
+	relay, err := NewRelayForUpstreams([]string{deadAddress, live})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,12 +127,19 @@ func TestDNSRelayFallsBackToTheNextResolver(t *testing.T) {
 	}
 }
 
-func TestNewDNSRelayRejects(t *testing.T) {
-	if _, err := NewDNSRelay(nil); err == nil {
-		t.Error("NewDNSRelay(nil) succeeded; a relay with no upstream can answer nothing")
+func TestNewRelayRejects(t *testing.T) {
+	empty := filepath.Join(t.TempDir(), "resolv.conf")
+	if err := os.WriteFile(empty, nil, 0o644); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := NewDNSRelay([]string{"10.96.0.10"}); err == nil {
-		t.Error("NewDNSRelay accepted an address with no port")
+	if _, err := NewRelay(empty); err == nil {
+		t.Error("NewRelay succeeded with an empty resolv.conf")
+	}
+	if _, err := NewRelayForUpstreams(nil); err == nil {
+		t.Error("NewRelayForUpstreams(nil) succeeded; a relay with no upstream can answer nothing")
+	}
+	if _, err := NewRelayForUpstreams([]string{"10.96.0.10"}); err == nil {
+		t.Error("NewRelayForUpstreams accepted an address with no port")
 	}
 }
 
@@ -207,7 +167,7 @@ func newFakeResolver(t *testing.T, respond func([]byte) []byte) string {
 }
 
 // serveRelayUDP runs the relay on a loopback socket and returns a connection to it.
-func serveRelayUDP(t *testing.T, relay *DNSRelay) net.Conn {
+func serveRelayUDP(t *testing.T, relay *Relay) net.Conn {
 	t.Helper()
 	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
@@ -215,7 +175,7 @@ func serveRelayUDP(t *testing.T, relay *DNSRelay) net.Conn {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	go func() { _ = relay.ServePacket(ctx, pc) }()
+	go func() { _ = relay.servePacket(ctx, pc) }()
 
 	client, err := net.Dial("udp", pc.LocalAddr().String())
 	if err != nil {
@@ -238,7 +198,7 @@ func readWithin(t *testing.T, conn net.Conn) []byte {
 	return buf[:n]
 }
 
-func TestDNSRelayForwardsAnswersLargerThanTheCommonBuffer(t *testing.T) {
+func TestRelayForwardsAnswersLargerThanTheCommonBuffer(t *testing.T) {
 	const size = 9000
 	answer := make([]byte, size)
 	for i := range answer {
@@ -246,7 +206,7 @@ func TestDNSRelayForwardsAnswersLargerThanTheCommonBuffer(t *testing.T) {
 	}
 	upstream := newFakeResolver(t, func([]byte) []byte { return answer })
 
-	relay, err := NewDNSRelay([]string{upstream})
+	relay, err := NewRelayForUpstreams([]string{upstream})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -264,7 +224,7 @@ func TestDNSRelayForwardsAnswersLargerThanTheCommonBuffer(t *testing.T) {
 	}
 }
 
-func TestDNSRelayDropsQueriesBeyondItsInFlightLimit(t *testing.T) {
+func TestRelayDropsQueriesBeyondItsInFlightLimit(t *testing.T) {
 	// Hold concurrent queries to exercise the relay's limit.
 	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
@@ -291,7 +251,7 @@ func TestDNSRelayDropsQueriesBeyondItsInFlightLimit(t *testing.T) {
 		}
 	}()
 
-	relay, err := NewDNSRelay([]string{pc.LocalAddr().String()})
+	relay, err := NewRelayForUpstreams([]string{pc.LocalAddr().String()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -354,14 +314,14 @@ func newHeldTCPResolver(t *testing.T) (address string, accepted *atomic.Int64) {
 }
 
 // serveRelayTCP runs the relay's TCP side on a loopback listener.
-func serveRelayTCP(t *testing.T, relay *DNSRelay, ctx context.Context) net.Addr {
+func serveRelayTCP(t *testing.T, relay *Relay, ctx context.Context) net.Addr {
 	t.Helper()
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { lis.Close() })
-	go func() { _ = relay.Serve(ctx, lis) }()
+	go func() { _ = relay.serveTCP(ctx, lis) }()
 	return lis.Addr()
 }
 
@@ -378,9 +338,9 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 	t.Fatalf("timed out waiting for %s", what)
 }
 
-func TestDNSRelayRefusesTCPConnectionsBeyondItsLimit(t *testing.T) {
+func TestRelayRefusesTCPConnectionsBeyondItsLimit(t *testing.T) {
 	upstream, held := newHeldTCPResolver(t)
-	relay, err := NewDNSRelay([]string{upstream})
+	relay, err := NewRelayForUpstreams([]string{upstream})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -414,9 +374,9 @@ func TestDNSRelayRefusesTCPConnectionsBeyondItsLimit(t *testing.T) {
 	}
 }
 
-func TestDNSRelayClosesTCPConnectionsWhenServingEnds(t *testing.T) {
+func TestRelayClosesTCPConnectionsWhenServingEnds(t *testing.T) {
 	upstream, held := newHeldTCPResolver(t)
-	relay, err := NewDNSRelay([]string{upstream})
+	relay, err := NewRelayForUpstreams([]string{upstream})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -464,7 +424,7 @@ func dnsAnswer(query []byte, rcode byte) []byte {
 // A resolver that answers SERVFAIL has not answered the question, and the
 // sandbox can no longer consult the pod's other resolvers itself: it is given
 // the gateway as its only nameserver. The relay has to fail over for it.
-func TestDNSRelayFailsOverOnServerFailure(t *testing.T) {
+func TestRelayFailsOverOnServerFailure(t *testing.T) {
 	var sickCalls, healthyCalls atomic.Int32
 	sick := newFakeResolver(t, func(query []byte) []byte {
 		sickCalls.Add(1)
@@ -475,7 +435,7 @@ func TestDNSRelayFailsOverOnServerFailure(t *testing.T) {
 		return dnsAnswer(query, 0)
 	})
 
-	relay, err := NewDNSRelay([]string{sick, healthy})
+	relay, err := NewRelayForUpstreams([]string{sick, healthy})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -493,11 +453,11 @@ func TestDNSRelayFailsOverOnServerFailure(t *testing.T) {
 
 // With every resolver failing there is nothing better to return, and a real
 // SERVFAIL beats a timeout: the sandbox's resolver can act on it.
-func TestDNSRelayReturnsServerFailureWhenAllFail(t *testing.T) {
+func TestRelayReturnsServerFailureWhenAllFail(t *testing.T) {
 	first := newFakeResolver(t, func(query []byte) []byte { return dnsAnswer(query, rcodeServFail) })
 	second := newFakeResolver(t, func(query []byte) []byte { return dnsAnswer(query, rcodeRefused) })
 
-	relay, err := NewDNSRelay([]string{first, second})
+	relay, err := NewRelayForUpstreams([]string{first, second})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -512,7 +472,7 @@ func TestDNSRelayReturnsServerFailureWhenAllFail(t *testing.T) {
 
 // NXDOMAIN is an answer, not a failure: failing over would ask every resolver
 // about a name that does not exist.
-func TestDNSRelayReturnsNXDomainWithoutFailover(t *testing.T) {
+func TestRelayReturnsNXDomainWithoutFailover(t *testing.T) {
 	const rcodeNXDomain = 3
 	var secondCalls atomic.Int32
 	first := newFakeResolver(t, func(query []byte) []byte { return dnsAnswer(query, rcodeNXDomain) })
@@ -521,7 +481,7 @@ func TestDNSRelayReturnsNXDomainWithoutFailover(t *testing.T) {
 		return dnsAnswer(query, 0)
 	})
 
-	relay, err := NewDNSRelay([]string{first, second})
+	relay, err := NewRelayForUpstreams([]string{first, second})
 	if err != nil {
 		t.Fatal(err)
 	}

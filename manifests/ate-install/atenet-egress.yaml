@@ -951,7 +951,7 @@ data:
               http2_protocol_options: {}
 
       # The MITM leg's by-address upstreams: the address the actor dialed, from
-      # the original_dst_address filter state. Nothing sets this anymoroe.
+      # the original_dst_address filter state. Nothing sets this anymore.
       # Same TLS as the forward proxies above, SNI and certificate check from
       # the Host, so a Host the dialed origin cannot prove fails the handshake.
       - name: egress_original_dst_tls
@@ -1296,14 +1296,11 @@ spec:
         # drain sequence dials a closed port, reads the connection refusal as
         # "Envoy already exited", and reports a drain it never performed.
         - --envoy-admin-address=127.0.0.1:15000
-        # Egress credential-injection flags. Inert until hack/install-ate.sh
-        # --experimental-egress-credential-injection replaces this marker with
-        # the --credential-provider-* flags that point the egress handler at the
-        # credential provider. The MITM leg already calls this handler over
-        # ext_proc, so a provider address is all that is needed to turn injection
-        # on; with the flag off no provider is set and a policy rule that requires
-        # an injection is skipped, passing the request through without the
-        # credential (see egress.applyEffects).
+        # Egress credential-injection flags. The installer replaces this marker
+        # with the --credential-provider-* flags for the provider that the
+        # installer's --credential-provider selects, or removes it when that is
+        # {"enabled":false}. Without a provider, a request matching a rule that
+        # requires an injection is denied (see egress.applyEffects).
         #ATE_EGRESS_INJECT_FLAGS -- Don't modify this line.
         env:
         - name: POD_NAME

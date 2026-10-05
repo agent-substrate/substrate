@@ -85,7 +85,7 @@ func (h *Handler) handleRequest(ctx context.Context, md *extproc.RequestMetadata
 		slog.WarnContext(ctx, "egress denied: no rule allows the destination", attrs(decision)...)
 		return extproc.Result{}, extproc.NewReqError(envoy_type.StatusCode_Forbidden, deniedBody)
 	}
-	injected, err := h.applyEffects(ctx, ref, dest, leg, decision.Effects)
+	injected, err := h.applyEffects(ctx, ref, dest, leg, md.Headers, decision.Effects)
 	if err != nil {
 		return extproc.Result{}, err
 	}

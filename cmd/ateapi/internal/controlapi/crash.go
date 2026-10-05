@@ -26,6 +26,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -51,6 +52,47 @@ const maxCrashMessageBytes = 4096
 // TODO: consider sanizing the error message returned by atelet.
 func ateletCrashMessage(rpc string, err error) string {
 	return fmt.Sprintf("atelet %s: %s", rpc, status.Convert(err).Message())
+}
+
+// ateletErrorCrashesActor reports whether a failed call to atelet's rpc should
+// crash the actor.
+func ateletErrorCrashesActor(ctx context.Context, isTerminateRPC bool, err error) bool {
+	// atelet.Terminate runs while the actor is being reverted or deleted. Crashing
+	// would clear the worker assignment the retry needs to terminate a sandbox
+	// that may still be running and to detach its volumes.
+	if isTerminateRPC {
+		return false
+	}
+
+	// Workflow's own context ended: the caller went away or the actor lease
+	// was lost.
+	if ctx.Err() != nil {
+		return false
+	}
+
+	switch status.Code(err) {
+	// Usually transport errors or atelet retriable errors.
+	case codes.Unavailable, codes.Canceled, codes.DeadlineExceeded:
+		return false
+	default:
+		return true
+	}
+}
+
+// handleAteletError handles an error from the atelet call rpc made for opName.
+// It crashes the actor if ateletErrorCrashesActor says so, and otherwise
+// returns the error for the operation to be retried.
+func handleAteletError(ctx context.Context, st crashActorStore, actorRef resources.ActorRef, opName, rpc string, isTerminateRPC bool, err error) error {
+	if ateletErrorCrashesActor(ctx, isTerminateRPC, err) {
+		slog.LogAttrs(ctx, slog.LevelError, "Setting Actor to crashed due to Atelet error",
+			append(ateattr.ActorRefLogAttrs(actorRef), slog.Any("err", err))...)
+		if cerr := crashActor(ctx, st, actorRef, opName, ateletCrashMessage(rpc, err)); cerr != nil {
+			return cerr
+		}
+		return fmt.Errorf("actor %s crashed: %w", actorRef, err)
+	}
+
+	return fmt.Errorf("while calling atelet %s: %w", rpc, err)
 }
 
 // crashActor moves the actor to CRASHED state and frees the worker it was

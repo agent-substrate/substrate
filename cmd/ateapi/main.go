@@ -24,6 +24,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -51,7 +52,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/spf13/pflag"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/otel"
@@ -74,10 +74,18 @@ var (
 	metricsListenAddr    = pflag.String("metrics-listen-addr", ":9090", "Address and port the prometheus metrics server should listen on.")
 	grpcServerCredBundle = pflag.String("grpc-server-cred-bundle", "", "File with the server TLS credential bundle.")
 
-	authenticationConfigFile = pflag.String("authentication-config", "", "YAML file configuring trusted JWT providers.")
-	postgresConnectionString = pflag.String("postgres-connection-string", "", "PostgreSQL connection string (libpq DSN or URI).")
-	postgresSchema           = pflag.String("postgres-schema", "public", "PostgreSQL schema for Substrate tables. This overrides a search_path connection parameter.")
-	experimentalEnableAuthz  = pflag.Bool("experimental-enable-authz", false, "Enable OpenFGA authorization checks (experimental).")
+	authenticationConfigFile          = pflag.String("authentication-config", "", "YAML file configuring trusted JWT providers.")
+	postgresReadWriteConnectionString = pflag.String("postgres-read-write-connection-string", "", "PostgreSQL connection string (libpq DSN or URI).")
+	postgresOwnerConnectionString     = pflag.String("postgres-owner-connection-string", "", "PostgreSQL owner connection string (libpq DSN or URI).")
+	postgresReadWriteRole             = pflag.String("postgres-read-write-role", "", "Required PostgreSQL role assumed by read/write connections.")
+	postgresOwnerRole                 = pflag.String("postgres-owner-role", "", "Required PostgreSQL role assumed by owner connections.")
+	postgresSchema                    = pflag.String("postgres-schema", "substrate", "PostgreSQL schema for Substrate tables. This overrides a search_path connection parameter.")
+	postgresPoolMaxConns              = pflag.Int32("postgres-pool-max-conns", 0, "Maximum connections in the shared Substrate and OpenFGA read/write PostgreSQL pool. Does not affect the owner or watch pools. The DSN or pgx default is used when unset.")
+	experimentalEnableAuthz           = pflag.Bool("experimental-enable-authz", false, "Enforce OpenFGA authorization checks on all registered RPCs (experimental). AccessPolicy RPCs are always checked.")
+	// TODO: Move the authz settings into the hot-reloadable config proto
+	// (agent-substrate/substrate#2021) once it lands, so bootstrap owner
+	// changes take effect without a restart.
+	authzBootstrapOwners = pflag.StringSlice("authz-bootstrap-owners", nil, "Principal IDs that are always global owners while listed, independent of the stored global AccessPolicy. Removing an ID revokes its access on restart. At least one is required when --experimental-enable-authz is set.")
 
 	actorIDJWTPoolFile          = pflag.String("actor-id-jwt-pool", "", "The file that contains the serialized JWT authority pool for signing actor JWTs")
 	actorJWTIssuer              = pflag.String("actor-jwt-issuer", "", "Issuer URL placed in the iss claim of actor JWTs. Relying parties fetch <issuer>/.well-known/openid-configuration to verify them. Must be https with no query or fragment. Empty means https://"+installdefaults.IDPServiceName+".<pod namespace>.svc.")
@@ -107,6 +115,9 @@ func main() {
 	serverboot.InitLogger()
 	if err := serverboot.SetLogLevel(*logLevelFlag); err != nil {
 		serverboot.Fatal(ctx, "Invalid --log-level", err)
+	}
+	if err := loadFlagsFromEnv(); err != nil {
+		serverboot.Fatal(ctx, "Invalid PostgreSQL configuration", err)
 	}
 	slog.InfoContext(ctx, "ateapi starting", slog.String("version", version.Version))
 	if *templateResyncInterval < minResyncInterval {
@@ -151,7 +162,6 @@ func main() {
 		defer serverboot.ShutdownProvider("LoggerProvider", lp.Shutdown)
 	}
 
-	loadFlagsFromEnv()
 	logFlagValues(ctx)
 	authenticationConfig, err := apiauthn.LoadAuthenticationConfig(*authenticationConfigFile)
 	if err != nil {
@@ -172,21 +182,24 @@ func main() {
 	// (atepg's outbox maintenance loop); stop it on shutdown before closing pool.
 	defer persistence.Close()
 
-	var authorizer *authz.Authorizer
-	if *experimentalEnableAuthz {
-		fgaServer, err := authz.NewOpenFGAServer(pool)
-		if err != nil {
-			serverboot.Fatal(ctx, "Failed to create OpenFGA server", err)
-		}
-		defer fgaServer.Close()
-
-		var policyManager *authz.PolicyManager
-		authorizer, policyManager, err = authz.New(shutdownCtx, pool, fgaServer)
-		if err != nil {
-			serverboot.Fatal(ctx, "Failed to initialize OpenFGA authz", err)
-		}
-		persistence.SetPolicyManager(policyManager)
+	// The authz stack is always wired so policy tuples stay in sync with the
+	// store; --experimental-enable-authz only controls enforcement in the
+	// interceptor.
+	if *experimentalEnableAuthz && len(*authzBootstrapOwners) == 0 {
+		// Without a bootstrap owner, nobody could create the global
+		// AccessPolicy, so the enforced API would be unusable.
+		serverboot.Fatal(ctx, "Invalid flags", fmt.Errorf("--authz-bootstrap-owners must list at least one principal when --experimental-enable-authz is set"))
 	}
+	fgaServer, err := authz.NewOpenFGAServer(pool)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to create OpenFGA server", err)
+	}
+	defer fgaServer.Close()
+	authorizer, policyManager, err := authz.New(shutdownCtx, pool, fgaServer, *authzBootstrapOwners)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to initialize OpenFGA authz", err)
+	}
+	persistence.SetPolicyManager(policyManager)
 
 	clientset, ateClient, err := newKubeClients()
 	if err != nil {
@@ -302,13 +315,9 @@ func main() {
 		apiauthn.UnaryServerInterceptor(authCfg),
 		ateinterceptors.MaxDeadlineUnaryInterceptor(maxRPCDeadline),
 		ateinterceptors.ServerUnaryInterceptor,
-	}
-	if *experimentalEnableAuthz {
-		unaryInterceptors = append(unaryInterceptors, authz.UnaryServerInterceptor(authorizer))
-	}
-	unaryInterceptors = append(unaryInterceptors,
+		authz.UnaryServerInterceptor(authorizer, *experimentalEnableAuthz),
 		ateinterceptors.RejectUnknownFieldsUnaryInterceptor,
-	)
+	}
 
 	mux := grpc.NewServer(
 		grpc.Creds(serverCreds),
@@ -374,12 +383,15 @@ func drainOnShutdown(ctx context.Context, srv *grpc.Server, readiness *serverboo
 // against a known environment variable. Lets one set of Kubernetes
 // manifests source per-developer config from a ConfigMap without
 // editing the manifests for each branch.
-func loadFlagsFromEnv() {
+func loadFlagsFromEnv() error {
 	overrides := []struct {
 		flag *string
 		env  string
 	}{
-		{postgresConnectionString, "ATE_API_POSTGRES_CONNECTION_STRING"},
+		{postgresReadWriteConnectionString, "ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"},
+		{postgresOwnerConnectionString, "ATE_API_POSTGRES_OWNER_CONNECTION_STRING"},
+		{postgresReadWriteRole, "ATE_API_POSTGRES_READ_WRITE_ROLE"},
+		{postgresOwnerRole, "ATE_API_POSTGRES_OWNER_ROLE"},
 		{postgresSchema, "ATE_API_POSTGRES_SCHEMA"},
 	}
 	for _, o := range overrides {
@@ -387,9 +399,19 @@ func loadFlagsFromEnv() {
 			*o.flag = os.Getenv(o.env)
 		}
 	}
+	if !pflag.CommandLine.Changed("postgres-pool-max-conns") {
+		if raw, ok := os.LookupEnv("ATE_API_POSTGRES_POOL_MAX_CONNS"); ok && raw != "" {
+			value, err := strconv.ParseInt(raw, 10, 32)
+			if err != nil || value <= 0 {
+				return fmt.Errorf("ATE_API_POSTGRES_POOL_MAX_CONNS must be a positive integer")
+			}
+			*postgresPoolMaxConns = int32(value)
+		}
+	}
 	if v := os.Getenv("ATE_API_EXPERIMENTAL_ENABLE_AUTHZ"); v != "" && !pflag.CommandLine.Changed("experimental-enable-authz") {
 		*experimentalEnableAuthz = (v == "true" || v == "1")
 	}
+	return nil
 }
 
 func logFlagValues(ctx context.Context) {
@@ -397,9 +419,14 @@ func logFlagValues(ctx context.Context) {
 		slog.String("grpc-listen-addr", *listenAddr),
 		slog.String("grpc-server-cred-bundle", *grpcServerCredBundle),
 		slog.String("authentication-config", *authenticationConfigFile),
-		postgresConnectionAttr(*postgresConnectionString),
+		postgresConnectionAttr("postgres-read-write-connection-string", *postgresReadWriteConnectionString),
+		postgresConnectionAttr("postgres-owner-connection-string", *postgresOwnerConnectionString),
+		slog.String("postgres-read-write-role", *postgresReadWriteRole),
+		slog.String("postgres-owner-role", *postgresOwnerRole),
 		slog.String("postgres-schema", *postgresSchema),
+		slog.Int("postgres-pool-max-conns", int(*postgresPoolMaxConns)),
 		slog.Bool("experimental-enable-authz", *experimentalEnableAuthz),
+		slog.Any("authz-bootstrap-owners", *authzBootstrapOwners),
 		slog.String("actor-id-jwt-pool", *actorIDJWTPoolFile),
 		slog.String("actor-jwt-issuer", *actorJWTIssuer),
 		slog.String("actor-id-ca-pool", *actorIDCAPoolFile),
@@ -445,8 +472,7 @@ func newObjectStore(ctx context.Context) (objectstore.Store, error) {
 // value would otherwise be written to the log on every restart. Only the
 // parsed, non-secret parts are logged; a string that does not parse is
 // reported as invalid and connectStore surfaces the actual error.
-func postgresConnectionAttr(connString string) slog.Attr {
-	const key = "postgres-connection-string"
+func postgresConnectionAttr(key, connString string) slog.Attr {
 	if connString == "" {
 		return slog.String(key, "")
 	}
@@ -467,11 +493,11 @@ func postgresConnectionAttr(connString string) slog.Attr {
 // connectStore builds the PostgreSQL-backed *atepg.Persistence. Startup fails if
 // its configuration is missing or the database can't be reached.
 func connectStore(ctx context.Context) (*atepg.Persistence, error) {
-	if *postgresConnectionString == "" {
-		return nil, fmt.Errorf("--postgres-connection-string is required")
+	if *postgresReadWriteConnectionString == "" {
+		return nil, fmt.Errorf("--postgres-read-write-connection-string is required")
 	}
-	if _, err := pgxpool.ParseConfig(*postgresConnectionString); err != nil {
-		return nil, fmt.Errorf("parsing PostgreSQL connection string: %w", err)
+	if *postgresPoolMaxConns < 0 {
+		return nil, fmt.Errorf("--postgres-pool-max-conns must not be negative")
 	}
 	persistence, err := connectPostgresWithRetries(ctx)
 	if err != nil {
@@ -488,7 +514,14 @@ var (
 func connectPostgresWithRetries(ctx context.Context) (*atepg.Persistence, error) {
 	var connectErr error
 	for attempt := 1; attempt <= postgresConnectTries; attempt++ {
-		persistence, err := atepg.Connect(ctx, *postgresConnectionString, *postgresSchema)
+		persistence, err := atepg.Connect(ctx, atepg.ConnectConfig{
+			ReadWriteDSN:  *postgresReadWriteConnectionString,
+			OwnerDSN:      *postgresOwnerConnectionString,
+			ReadWriteRole: *postgresReadWriteRole,
+			OwnerRole:     *postgresOwnerRole,
+			Schema:        *postgresSchema,
+			PoolMaxConns:  *postgresPoolMaxConns,
+		})
 		if err == nil {
 			return persistence, nil
 		}

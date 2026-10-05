@@ -238,6 +238,24 @@ const (
 	ImageCacheOutcomeTimeout   = "timeout"
 )
 
+// Values for RouterOutcomeKey. RouterOutcomeNoCapacity means that no worker
+// that meets the constraints of the actor had room. scheduling.ErrNoCapacity
+// reports the same condition. It is a capacity signal, not a defect. A 503
+// without a gRPC cause, such as a full parking lot, a denied egress request,
+// or a failed policy lookup, is RouterOutcomeUnavailable.
+const (
+	RouterOutcomeOK                 = "ok"
+	RouterOutcomeCancelled          = "cancelled"
+	RouterOutcomeTimeout            = "timeout"
+	RouterOutcomeNoCapacity         = "no_capacity"
+	RouterOutcomeFailedPrecondition = "failed_precondition"
+	RouterOutcomeLockConflict       = "lock_conflict"
+	RouterOutcomeNotFound           = "not_found"
+	RouterOutcomeUnavailable        = "unavailable"
+	RouterOutcomeRateLimited        = "rate_limited"
+	RouterOutcomeResumeError        = "resume_error"
+)
+
 // ErrorTypeKey is the OTel registry attribute, reused verbatim (not aliased into
 // ate.*): failures are reported on the same instrument via this key, its absence
 // meaning success, never as a parallel _failures counter.

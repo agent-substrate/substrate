@@ -17,11 +17,13 @@ package imagecache
 import (
 	"archive/tar"
 	"context"
+	"errors"
 	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -98,33 +100,87 @@ func TestEnsureImage_KeychainAuthenticatesPull(t *testing.T) {
 	}
 }
 
-func TestRemoteOptsAttachesKeychain(t *testing.T) {
-	kc := &staticKeychain{auth: authn.Anonymous}
+// candidateKeychain returns a fixed list of credentials.
+type candidateKeychain struct {
+	auths []authn.Authenticator
+	calls atomic.Int32
+}
 
-	// remote.Option values are opaque, so assert on how many the store
-	// attaches: three unconditional ones (context, platform, retry backoff)
-	// plus the keychain when one is set. The keychain is registry-agnostic --
-	// it decides for itself which registries it can authenticate.
-	const base = 3
+func (k *candidateKeychain) Resolve(authn.Resource) (authn.Authenticator, error) {
+	return nil, errors.New("Resolve called on a CandidateKeychain")
+}
+
+func (k *candidateKeychain) Candidates(context.Context, authn.Resource) ([]authn.Authenticator, error) {
+	k.calls.Add(1)
+	return k.auths, nil
+}
+
+func TestEnsureImage_TriesCandidatesInOrder(t *testing.T) {
+	host, requireAuth := newAuthedRegistry(t, "robot", "s3cret")
+	tagRef := host + "/test/app:latest"
+	img := pushImage(t, tagRef, v1.Config{}, layerFromEntries(t, []tarEntry{
+		{name: "app", typeflag: tar.TypeReg, mode: 0o644, body: "app"},
+	}))
+	digest, err := img.Digest()
+	if err != nil {
+		t.Fatalf("Digest: %v", err)
+	}
+	requireAuth()
+
+	wrong := authn.FromConfig(authn.AuthConfig{Username: "robot", Password: "wrong"})
+	right := authn.FromConfig(authn.AuthConfig{Username: "robot", Password: "s3cret"})
 	for _, tc := range []struct {
-		name string
-		opts []Option
-		ref  string
-		want int
+		name    string
+		ref     string
+		auths   []authn.Authenticator
+		wantErr bool
 	}{
-		{name: "no keychain", ref: "gcr.io/proj/img", want: base},
-		{name: "keychain, gcp registry", opts: []Option{WithKeychain(kc)}, ref: "gcr.io/proj/img", want: base + 1},
-		{name: "keychain, other registry", opts: []Option{WithKeychain(kc)}, ref: "quay.io/proj/img", want: base + 1},
+		{name: "rejected then accepted, digest ref", ref: host + "/test/app@" + digest.String(), auths: []authn.Authenticator{wrong, right}},
+		{name: "rejected then accepted, tag ref", ref: tagRef, auths: []authn.Authenticator{wrong, right}},
+		{name: "all rejected", ref: tagRef, auths: []authn.Authenticator{wrong, wrong}, wantErr: true},
+		{name: "none, anonymous", ref: tagRef, wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			s := newTestStore(t, tc.opts...)
-			parsed, err := s.parseRef(tc.ref)
-			if err != nil {
-				t.Fatalf("parseRef(%q): %v", tc.ref, err)
+			kc := &candidateKeychain{auths: tc.auths}
+			_, err := newTestStore(t, WithKeychain(kc)).EnsureImage(context.Background(), tc.ref)
+			if gotErr := err != nil; gotErr != tc.wantErr {
+				t.Fatalf("EnsureImage error = %v, want error: %v", err, tc.wantErr)
 			}
-			if got := len(s.remoteOpts(context.Background(), parsed)); got != tc.want {
-				t.Errorf("remoteOpts returned %d options, want %d", got, tc.want)
+			if kc.calls.Load() == 0 {
+				t.Error("keychain was never consulted")
 			}
 		})
+	}
+}
+
+// The first credential can read the manifest but not the blobs.
+func TestEnsureImage_RetriesCandidateRejectedOnBlobs(t *testing.T) {
+	inner := registry.New(registry.Logger(log.New(io.Discard, "", 0)))
+	var locked atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if locked.Load() {
+			_, p, ok := r.BasicAuth()
+			if !ok || (strings.Contains(r.URL.Path, "/blobs/") && p != "s3cret") {
+				w.Header().Set("WWW-Authenticate", `Basic realm="test"`)
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+		}
+		inner.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	host := strings.TrimPrefix(srv.URL, "http://")
+	ref := host + "/test/app:latest"
+	pushImage(t, ref, v1.Config{}, layerFromEntries(t, []tarEntry{
+		{name: "app", typeflag: tar.TypeReg, mode: 0o644, body: "app"},
+	}))
+	locked.Store(true)
+
+	kc := &candidateKeychain{auths: []authn.Authenticator{
+		authn.FromConfig(authn.AuthConfig{Username: "robot", Password: "manifests-only"}),
+		authn.FromConfig(authn.AuthConfig{Username: "robot", Password: "s3cret"}),
+	}}
+	if _, err := newTestStore(t, WithKeychain(kc)).EnsureImage(context.Background(), ref); err != nil {
+		t.Fatalf("EnsureImage: %v", err)
 	}
 }

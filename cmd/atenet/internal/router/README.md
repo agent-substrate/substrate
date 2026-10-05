@@ -92,15 +92,16 @@ request's `Host`. The outer chain shares the CONNECT authority with the inner
 listener as `dev.ate.connect.authority`, and the request legs match `ports`
 against it; a dataplane that does not share it gets no port enforcement.
 
-The CONNECT leg decides nothing about the destination yet: it opens the tunnel
-for any actor whose policy has rules, with nothing to dial, and refuses one
-without. That is the gap to the API. The gateway does not decide at the
-ClientHello, so every TLS connection is intercepted and a `tls_passthrough`
-rule matches nothing; a connection it names is decrypted and then denied
-unless an `https` rule covers it too. The `dev.ate.egress:passthrough_destination`
-answer, the `ORIGINAL_DST` filter state it feeds, and the passthrough chains
-that dial it are in place for when that decision exists; until then those
-chains close every connection.
+The CONNECT leg decides per connection: it refuses an actor without a policy
+with rules, and for the rest hands the inner listener the port the actor
+dialed, as `envoy.upstream.dynamic_port`, and the policy's SNI rules for that
+port, as `dev.ate.policy.egress`. At the ClientHello the egress-policy module
+reads those rules and picks the chain: `egress_tls_mitm` under an `https`
+rule, `egress_passthrough` under a `tls_passthrough` rule, and `denied`, which
+matches no chain and closes the connection, when neither covers the SNI. The
+passthrough chain resolves the SNI and relays the bytes to it on the dialed
+port; the address the actor dialed plays no part (see
+`docs/network-egress.md`).
 
 Identity on the request legs is `dev.ate.actor.identity`, the actor's SPIFFE
 ID that the outer chain set from the verified peer certificate and shares with
@@ -117,9 +118,10 @@ create, update or delete is visible to new requests within one TTL, and a
 deleted policy becomes a deny. Every policy denial answers a fixed
 `egress denied` body; the reason is in the sidecar's log.
 
-Credential injection (`replace_headers`) is not implemented yet: a
-matched rule that declares one is denied with 501 rather than forwarded
-without the credential the policy promised.
+Credential injection (`replace_headers`) runs on the MITM leg: a header the
+request carries is replaced with the credential from the provider, and a
+request without it is forwarded unchanged. See
+`docs/egress-credential-injection.md`.
 
 ## adding a dataplane attribute
 
@@ -132,7 +134,6 @@ a request are declared once, in `extproc/attributes.go`.
 | `dev.ate.actor.atespace` | ingress | carries the atespace across CONNECT re-entry |
 | `dev.ate.connect.authority` | ingress, egress | carries the outer CONNECT authority across re-entry: target-port selection on ingress, the dialed port the request legs match `ports` against on egress |
 | `dev.ate.actor.identity` | egress | carries the authenticated actor identity to the policy ext_proc, the logs and additional ext_proc services |
-| `dev.ate.egress:passthrough_destination` | egress | dynamic metadata: the CONNECT leg's answer, the dialed address a `tls_passthrough` rule allowed, copied into the ORIGINAL_DST filter state |
 | `dev.ate.egress:dial` | egress | dynamic metadata: a request leg's answer, `name` or `address`, which picks the route |
 | `dev.ate.extproc.direction` | egress | selects the egress handler for dataplanes without Envoy filter chains |
 

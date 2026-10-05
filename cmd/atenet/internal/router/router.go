@@ -220,8 +220,8 @@ func (s *RouterServer) Run(ctx context.Context) error {
 		}
 		// Enable egress credential injection when a credential provider address
 		// is set: dial the provider over mTLS and hand the client to the handler.
-		// With no address the handler gets no provider, so an
-		// injection-requiring rule is skipped (see egress.applyEffects).
+		// With no address the handler gets no provider, and a request matching
+		// an injection-requiring rule is denied (see egress.applyEffects).
 		var provider credproviderpb.CredentialProviderClient
 		var providerName string
 		if s.cfg.CredentialProvider.Address != "" {

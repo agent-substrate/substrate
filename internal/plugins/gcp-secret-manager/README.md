@@ -20,7 +20,7 @@ namespace:
 
 | | |
 |---|---|
-| Provider name | `ate-secret://secretmanager.googleapis.com` |
+| Provider name | `secretmanager.googleapis.com`, the host of its `ate-secret://` credential URIs |
 | Address | `gsm-credential-provider.ate-system.svc:50051` |
 | API | `credprovider.CredentialProvider/FetchSecret` over mutual TLS |
 
@@ -184,9 +184,8 @@ the provider: it fails each fetch with `PermissionDenied`.
 **4. Point the egress gateway at the provider.** From the repository root:
 
 ```bash
-hack/install-ate.sh --deploy-atenet --experimental-egress-credential-injection \
-  --credential-provider-name ate-secret://secretmanager.googleapis.com \
-  --credential-provider-address gsm-credential-provider.ate-system.svc:50051
+hack/install-ate.sh --deploy-atenet \
+  --credential-provider='{"name":"secretmanager.googleapis.com","address":"gsm-credential-provider.ate-system.svc:50051"}'
 ```
 
 This sets the `--credential-provider-*` flags on the `ext-proc` container of
@@ -237,8 +236,8 @@ provider while the gateway still points at it makes every credential fetch
 fail.
 
 ```bash
-hack/install-ate.sh --deploy-atenet   # from the repository root
-make undeploy                         # from this directory
+hack/install-ate.sh --deploy-atenet --credential-provider='{"enabled":false}'   # from the repository root
+make undeploy                                                        # from this directory
 ```
 
 `make undeploy` removes the provider's ServiceAccount, Deployment and Service,

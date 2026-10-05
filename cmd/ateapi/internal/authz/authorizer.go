@@ -33,12 +33,20 @@ type Authorizer struct {
 	fgaServer *server.Server
 	storeID   string
 	modelID   string
+
+	// bootstrapOwners holds the OpenFGA user strings of the server-configured
+	// global owners. They hold owner on global:root through a contextual tuple
+	// on every Check rather than a stored tuple, so they are not part of any
+	// AccessPolicy, cannot be revoked through the API, and lose access once
+	// the server runs without them in its configuration.
+	bootstrapOwners map[string]struct{}
 }
 
 // Check verifies that the principal in ctx has relation on object.
 // Structural hierarchy links (such as global:root as parent_global of every
-// atespace) are injected as OpenFGA ContextualTuples at evaluation time rather
-// than persisted in the tuple table.
+// atespace) and the caller's bootstrap owner grant, if any, are injected as
+// OpenFGA ContextualTuples at evaluation time rather than persisted in the
+// tuple table.
 func (a *Authorizer) Check(ctx context.Context, relation, object string) error {
 	if IsBypassed(ctx) {
 		return nil
@@ -62,8 +70,18 @@ func (a *Authorizer) Check(ctx context.Context, relation, object string) error {
 }
 
 func (a *Authorizer) checkRaw(ctx context.Context, user, relation, object string) (bool, error) {
+	tuples := contextualTuples(object)
+	// A Check only evaluates the caller, so only the caller's own bootstrap
+	// grant can affect the result.
+	if _, ok := a.bootstrapOwners[user]; ok {
+		tuples = append(tuples, &openfgav1.TupleKey{
+			User:     user,
+			Relation: RoleOwner,
+			Object:   GlobalRootObject,
+		})
+	}
 	var ctxTuples *openfgav1.ContextualTupleKeys
-	if tuples := contextualTuples(object); len(tuples) > 0 {
+	if len(tuples) > 0 {
 		ctxTuples = &openfgav1.ContextualTupleKeys{TupleKeys: tuples}
 	}
 	resp, err := a.fgaServer.Check(ctx, &openfgav1.CheckRequest{

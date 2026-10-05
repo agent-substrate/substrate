@@ -164,7 +164,7 @@ func TestPlanPostgres(t *testing.T) {
 		{
 			name:       "explicit DSN",
 			connString: "postgresql://user@db.example.com:5432/atepg",
-			want:       postgresPlan{external: "ATE_API_POSTGRES_CONNECTION_STRING"},
+			want:       postgresPlan{external: "ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"},
 		},
 		{
 			name:     "Cloud SQL instance from the environment",
@@ -188,8 +188,8 @@ func TestPlanPostgres(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			e := &Env{
 				Cfg: &config.Config{
-					PostgresConnectionString: tc.connString,
-					CloudSQL:                 tc.cloudSQL,
+					PostgresReadWriteConnectionString: tc.connString,
+					CloudSQL:                          tc.cloudSQL,
 				},
 				Kube: fakeKube(t, apiServerEnvVarsConfigMap(tc.recorded)),
 			}

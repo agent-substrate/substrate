@@ -116,6 +116,8 @@ var (
 	drainTimeout = pflag.Duration("drain-timeout", 5*time.Minute, "Deadline for the graceful gRPC drain on shutdown. In-flight RPCs still running past it are forcefully cancelled.")
 )
 
+var _ imagecache.CandidateKeychain = (*credentialprovider.Keychain)(nil)
+
 func main() {
 	pflag.Parse()
 	if *showVersion {

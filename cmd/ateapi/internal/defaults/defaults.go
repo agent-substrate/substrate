@@ -28,6 +28,8 @@ import (
 // Apply set default values to Substrate resource proto messages.
 func Apply(m proto.Message) {
 	switch v := m.(type) {
+	case *ateapipb.AccessPolicy:
+		applyAccessPolicyDefaults(v)
 	case *ateapipb.Actor:
 		applyActorDefaults(v)
 	case *ateapipb.ActorTemplate:
@@ -82,6 +84,8 @@ func applyContainerDefaults(c *ateapipb.Container) {
 		hg.Path = defaultWakeupProbePath
 	}
 }
+
+func applyAccessPolicyDefaults(*ateapipb.AccessPolicy) {}
 
 func applyActorDefaults(*ateapipb.Actor) {}
 

@@ -43,4 +43,5 @@ const (
 	ReadRAMRoute   = "/readram"
 	BurnCPURoute   = "/burncpu"
 	IngestRoute    = "/ingest"
+	UseCPURoute    = "/usecpu"
 )

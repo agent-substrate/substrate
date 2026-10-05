@@ -40,12 +40,8 @@ func TestHostActorReplacesSameActor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dns, err := atunnel.NewDNSRelay([]string{"127.0.0.1:53"})
-	if err != nil {
-		t.Fatal(err)
-	}
 	service := &AteomService{
-		tunnel:    &ateomtunnel.Tunnel{Egress: egress, EgressPort: 15001, DNSRelay: dns},
+		tunnel:    &ateomtunnel.Tunnel{Egress: egress, EgressPort: 15001},
 		actors:    map[string]*hostedActor{},
 		maxActors: 1,
 	}

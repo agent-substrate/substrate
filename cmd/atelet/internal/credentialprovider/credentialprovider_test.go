@@ -15,11 +15,14 @@
 package credentialprovider
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -195,44 +198,63 @@ func TestKeychainAnonymousWhenPluginReturnsNoAuth(t *testing.T) {
 	}
 }
 
-func TestKeychainSurfacesPluginFailure(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	failingPlugin(t, dir, "fake-provider", "metadata server unreachable")
-
-	kc, err := New(writeConfig(t, dir, gcpLikeConfig), dir)
-	if err != nil {
-		t.Fatalf("New returned unexpected error: %v", err)
-	}
-
-	_, err = kc.Resolve(repo(t, "gcr.io/proj/img:latest"))
-	if err == nil {
-		t.Fatal("Resolve returned no error for a failing plugin, want one")
-	}
-	// The plugin's own diagnostics are the only clue to why a pull lost its
-	// credentials, so they must reach the error.
-	if !strings.Contains(err.Error(), "metadata server unreachable") {
-		t.Errorf("Resolve error %q does not carry the plugin's stderr", err)
-	}
+// captureLogs sends the default logger to a buffer until the test ends.
+func captureLogs(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return &buf
 }
 
-func TestKeychainRejectsMismatchedResponseVersion(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	fakePlugin(t, dir, "fake-provider", `{
+// Not parallel: captureLogs swaps the default logger.
+func TestKeychainSkipsFailingPlugin(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		plugin  func(t *testing.T, dir string)
+		wantLog string
+	}{
+		{
+			name: "plugin exits non-zero",
+			plugin: func(t *testing.T, dir string) {
+				failingPlugin(t, dir, "fake-provider", "metadata server unreachable")
+			},
+			wantLog: "metadata server unreachable",
+		},
+		{
+			name: "response at an unrequested apiVersion",
+			plugin: func(t *testing.T, dir string) {
+				fakePlugin(t, dir, "fake-provider", `{
   "kind": "CredentialProviderResponse",
   "apiVersion": "credentialprovider.kubelet.k8s.io/v1beta1",
   "cacheKeyType": "Registry",
   "auth": {"gcr.io": {"username": "u", "password": "p"}}
 }`)
+			},
+			wantLog: "v1beta1",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logs := captureLogs(t)
+			dir := t.TempDir()
+			tc.plugin(t, dir)
+			kc, err := New(writeConfig(t, dir, gcpLikeConfig), dir)
+			if err != nil {
+				t.Fatalf("New returned unexpected error: %v", err)
+			}
 
-	kc, err := New(writeConfig(t, dir, gcpLikeConfig), dir)
-	if err != nil {
-		t.Fatalf("New returned unexpected error: %v", err)
-	}
-
-	if _, err := kc.Resolve(repo(t, "gcr.io/proj/img:latest")); err == nil {
-		t.Fatal("Resolve accepted a response encoded at an unrequested apiVersion, want an error")
+			authenticator, err := kc.Resolve(repo(t, "gcr.io/proj/img:latest"))
+			if err != nil {
+				t.Fatalf("Resolve returned unexpected error: %v", err)
+			}
+			if authenticator != authn.Anonymous {
+				t.Errorf("Resolve returned %v, want authn.Anonymous", authenticator)
+			}
+			if !strings.Contains(logs.String(), tc.wantLog) {
+				t.Errorf("logs do not mention %q:\n%s", tc.wantLog, logs)
+			}
+		})
 	}
 }
 
@@ -254,7 +276,36 @@ func TestKeychainFallsThroughToSecondProvider(t *testing.T) {
   "auth": {"gcr.io": {"username": "second", "password": "creds"}}
 }`)
 
-	kc, err := New(writeConfig(t, dir, `kind: CredentialProviderConfig
+	kc, err := New(writeConfig(t, dir, twoProviderConfig), dir)
+	if err != nil {
+		t.Fatalf("New returned unexpected error: %v", err)
+	}
+
+	got := resolvedAuth(t, kc, "gcr.io/proj/img:latest")
+	if got.Username != "second" {
+		t.Errorf("Resolve returned username %q, want %q from the second provider", got.Username, "second")
+	}
+}
+
+// candidateUsernames returns the usernames of ref's candidates, in order.
+func candidateUsernames(t *testing.T, kc *Keychain, ref string) []string {
+	t.Helper()
+	auths, err := kc.Candidates(context.Background(), repo(t, ref))
+	if err != nil {
+		t.Fatalf("Candidates(%q) returned unexpected error: %v", ref, err)
+	}
+	var names []string
+	for _, a := range auths {
+		cfg, err := a.Authorization()
+		if err != nil {
+			t.Fatalf("Authorization() returned unexpected error: %v", err)
+		}
+		names = append(names, cfg.Username)
+	}
+	return names
+}
+
+const twoProviderConfig = `kind: CredentialProviderConfig
 apiVersion: kubelet.config.k8s.io/v1
 providers:
   - name: first-provider
@@ -265,14 +316,97 @@ providers:
     apiVersion: credentialprovider.kubelet.k8s.io/v1
     matchImages: ["gcr.io"]
     defaultCacheDuration: 1m
-`), dir)
+`
+
+func TestKeychainCandidatesCombineProviders(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	fakePlugin(t, dir, "first-provider", `{
+  "kind": "CredentialProviderResponse",
+  "apiVersion": "credentialprovider.kubelet.k8s.io/v1",
+  "cacheKeyType": "Registry",
+  "auth": {"gcr.io": {"username": "first", "password": "p"}, "*.io": {"username": "shared", "password": "p"}}
+}`)
+	fakePlugin(t, dir, "second-provider", `{
+  "kind": "CredentialProviderResponse",
+  "apiVersion": "credentialprovider.kubelet.k8s.io/v1",
+  "cacheKeyType": "Registry",
+  "auth": {"gcr.io": {"username": "second", "password": "p"}, "gcr.io/proj": {"username": "specific", "password": "p"}, "*.io": {"username": "shared", "password": "p"}}
+}`)
+
+	kc, err := New(writeConfig(t, dir, twoProviderConfig), dir)
 	if err != nil {
 		t.Fatalf("New returned unexpected error: %v", err)
 	}
+	got := candidateUsernames(t, kc, "gcr.io/proj/img:latest")
+	if want := []string{"specific", "first", "second", "shared"}; !slices.Equal(got, want) {
+		t.Errorf("Candidates = %q, want %q", got, want)
+	}
+	if got := resolvedAuth(t, kc, "gcr.io/proj/img:latest").Username; got != "specific" {
+		t.Errorf("Resolve returned username %q, want the first candidate %q", got, "specific")
+	}
+}
 
-	got := resolvedAuth(t, kc, "gcr.io/proj/img:latest")
-	if got.Username != "second" {
-		t.Errorf("Resolve returned username %q, want %q from the second provider", got.Username, "second")
+func TestKeychainCandidatesDeduplicate(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	for _, name := range []string{"first-provider", "second-provider"} {
+		fakePlugin(t, dir, name, `{
+  "kind": "CredentialProviderResponse",
+  "apiVersion": "credentialprovider.kubelet.k8s.io/v1",
+  "cacheKeyType": "Registry",
+  "auth": {"gcr.io": {"username": "same", "password": "p"}}
+}`)
+	}
+	kc, err := New(writeConfig(t, dir, twoProviderConfig), dir)
+	if err != nil {
+		t.Fatalf("New returned unexpected error: %v", err)
+	}
+	if got, want := candidateUsernames(t, kc, "gcr.io/proj/img"), []string{"same"}; !slices.Equal(got, want) {
+		t.Errorf("Candidates = %q, want %q", got, want)
+	}
+}
+
+func TestKeychainCandidatesSkipInvalidAuthKey(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	fakePlugin(t, dir, "first-provider", `{
+  "kind": "CredentialProviderResponse",
+  "apiVersion": "credentialprovider.kubelet.k8s.io/v1",
+  "cacheKeyType": "Registry",
+  "auth": {"gcr.io": {"username": "first", "password": "p"}}
+}`)
+	fakePlugin(t, dir, "second-provider", `{
+  "kind": "CredentialProviderResponse",
+  "apiVersion": "credentialprovider.kubelet.k8s.io/v1",
+  "cacheKeyType": "Registry",
+  "auth": {"gcr.io:badport": {"username": "second", "password": "p"}}
+}`)
+	kc, err := New(writeConfig(t, dir, twoProviderConfig), dir)
+	if err != nil {
+		t.Fatalf("New returned unexpected error: %v", err)
+	}
+	if got, want := candidateUsernames(t, kc, "gcr.io/proj/img"), []string{"first"}; !slices.Equal(got, want) {
+		t.Errorf("Candidates = %q, want %q", got, want)
+	}
+}
+
+func TestKeychainCandidatesSkipFailingProvider(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	failingPlugin(t, dir, "first-provider", "metadata server unreachable")
+	fakePlugin(t, dir, "second-provider", `{
+  "kind": "CredentialProviderResponse",
+  "apiVersion": "credentialprovider.kubelet.k8s.io/v1",
+  "cacheKeyType": "Registry",
+  "auth": {"gcr.io": {"username": "second", "password": "p"}}
+}`)
+	kc, err := New(writeConfig(t, dir, twoProviderConfig), dir)
+	if err != nil {
+		t.Fatalf("New returned unexpected error: %v", err)
+	}
+	if got, want := candidateUsernames(t, kc, "gcr.io/proj/img"), []string{"second"}; !slices.Equal(got, want) {
+		t.Errorf("Candidates = %q, want %q", got, want)
 	}
 }
 

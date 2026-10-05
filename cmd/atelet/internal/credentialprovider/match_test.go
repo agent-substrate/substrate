@@ -14,7 +14,10 @@
 
 package credentialprovider
 
-import "testing"
+import (
+	"slices"
+	"testing"
+)
 
 func TestMatchesImage(t *testing.T) {
 	t.Parallel()
@@ -58,13 +61,13 @@ func TestMatchesImage(t *testing.T) {
 	}
 }
 
-func TestBestAuthKey(t *testing.T) {
+func TestMatchingAuthKeys(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name  string
 		auth  map[string]string
 		image string
-		want  string
+		want  []string
 	}{
 		{
 			name:  "no keys",
@@ -80,29 +83,29 @@ func TestBestAuthKey(t *testing.T) {
 			name:  "single match",
 			auth:  map[string]string{"*.pkg.dev": "a"},
 			image: "us-docker.pkg.dev/proj/repo/img",
-			want:  "*.pkg.dev",
+			want:  []string{"*.pkg.dev"},
 		},
 		{
-			name:  "concrete key beats wildcard",
+			name:  "concrete key before wildcard",
 			auth:  map[string]string{"*.pkg.dev": "a", "us-docker.pkg.dev": "b"},
 			image: "us-docker.pkg.dev/proj/repo/img",
-			want:  "us-docker.pkg.dev",
+			want:  []string{"us-docker.pkg.dev", "*.pkg.dev"},
 		},
 		{
-			name:  "longer path beats shorter",
-			auth:  map[string]string{"gcr.io": "a", "gcr.io/proj": "b"},
+			name:  "longer path before shorter",
+			auth:  map[string]string{"gcr.io": "a", "gcr.io/proj": "b", "quay.io": "c"},
 			image: "gcr.io/proj/img",
-			want:  "gcr.io/proj",
+			want:  []string{"gcr.io/proj", "gcr.io"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := bestAuthKey(tc.auth, tc.image)
+			got, err := matchingAuthKeys(tc.auth, tc.image)
 			if err != nil {
-				t.Fatalf("bestAuthKey returned unexpected error: %v", err)
+				t.Fatalf("matchingAuthKeys returned unexpected error: %v", err)
 			}
-			if got != tc.want {
-				t.Errorf("bestAuthKey(%v, %q) = %q, want %q", tc.auth, tc.image, got, tc.want)
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("matchingAuthKeys(%v, %q) = %q, want %q", tc.auth, tc.image, got, tc.want)
 			}
 		})
 	}
