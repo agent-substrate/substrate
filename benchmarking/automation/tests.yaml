@@ -85,6 +85,13 @@
 # `--trace-probability` in `flags` is the rate before the first such step.
 # Thus a ladder with no probability in any step keeps the rate of the flag.
 #
+# A step can end in `@target_rps` (e.g. `200:3m@4000`), which caps the
+# requests per second of the whole boomer worker from the step's start; 0
+# removes the cap. Boomer users that pace themselves (resumecold) honor it.
+# Keep `users` at or above the rate times the p99 of one user iteration in
+# seconds, or the step falls short of its rate. A resumecold iteration is a
+# resume plus a pause, so size it by the p99 of both together.
+#
 # ---- type: nighthawk-ingress --------------------------------------------------------
 #
 # Runs the Nighthawk adaptive router-capacity benchmark. `duration` is the
