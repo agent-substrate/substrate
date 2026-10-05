@@ -142,6 +142,10 @@ func main() {
 	if err := preview.Init(*previewFlags...); err != nil {
 		serverboot.Fatal(ctx, "Invalid --preview", err)
 	}
+	if err := serverboot.ValidateWatchNamespace(*watchNamespace); err != nil {
+		serverboot.Fatal(ctx, "Invalid --watch-namespace", err)
+	}
+	slog.InfoContext(ctx, "Resolved workload watch scope", "watch-namespace", *watchNamespace, "all-namespaces", *watchNamespace == "")
 	slog.InfoContext(ctx, "atecontroller starting", slog.String("version", version.Version))
 	ctrl.SetLogger(newControllerRuntimeLogger(slog.Default().Handler()))
 
