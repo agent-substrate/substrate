@@ -24,10 +24,10 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // withEpoch returns a modifier func (see validWorker) which sets the worker's
@@ -162,7 +162,7 @@ func TestUpdateWorker_EpochCannotDecrease(t *testing.T) {
 			seedEpochWorker(t, ctx, persistence, 3, 3)
 
 			_, err := raiseEpoch(t, ctx, svc, persistence, tc.to)
-			if got := status.Code(err); got != codes.InvalidArgument {
+			if got := apierror.Code(err); got != codes.InvalidArgument {
 				t.Fatalf("UpdateWorker() = %v (err %v), want %v", got, err, codes.InvalidArgument)
 			}
 			if got := mustGetWorker(t, ctx, persistence).GetEpoch(); got != 3 {

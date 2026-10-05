@@ -261,16 +261,10 @@ func (r *runsc) cmdResume(ctx context.Context, containerName string) error {
 	return nil
 }
 
-// We take a checkpoint only of the root container of the sandbox, but we need
-// to call restore on each container, using the same checkpoint.
-func (r *runsc) cmdRestore(ctx context.Context, out io.Writer, containerName, checkpointPath string) error {
-	slog.InfoContext(ctx, "About to run runsc restore", slog.String("container", containerName))
-
-	if err := r.shapeSpec(containerName); err != nil {
-		return fmt.Errorf("while shaping the OCI spec for %q: %w", containerName, err)
-	}
-
-	restoreArgs := []string{
+// restoreArgs builds the argv for `runsc restore <container>`. Factored out so
+// the argument construction can be unit-tested without executing runsc.
+func (r *runsc) restoreArgs(containerName, checkpointPath string) []string {
+	return []string{
 		"-log-format", "json",
 		"--alsologtostderr",
 		// "-debug",
@@ -281,8 +275,6 @@ func (r *runsc) cmdRestore(ctx context.Context, out io.Writer, containerName, ch
 		"-root", runscStateDir(r.actorDirs),
 		// Match cmdCreate: size the restored sentry from the cgroup CPU quota.
 		"--cpu-num-from-quota",
-	}
-	restoreArgs = append(restoreArgs,
 		"restore",
 		"-bundle", ociBundlePath(r.actorDirs, containerName),
 		"-image-path", checkpointPath,
@@ -290,8 +282,19 @@ func (r *runsc) cmdRestore(ctx context.Context, out io.Writer, containerName, ch
 		"-background",
 		"-detach",
 		containerName,
-	)
-	cmd := exec.CommandContext(ctx, r.path, restoreArgs...)
+	}
+}
+
+// We take a checkpoint only of the root container of the sandbox, but we need
+// to call restore on each container, using the same checkpoint.
+func (r *runsc) cmdRestore(ctx context.Context, out io.Writer, containerName, checkpointPath string) error {
+	slog.InfoContext(ctx, "About to run runsc restore", slog.String("container", containerName))
+
+	if err := r.shapeSpec(containerName); err != nil {
+		return fmt.Errorf("while shaping the OCI spec for %q: %w", containerName, err)
+	}
+
+	cmd := exec.CommandContext(ctx, r.path, r.restoreArgs(containerName, checkpointPath)...)
 	cmd.Stdout = out
 	cmd.Stderr = out
 	if err := reaper.RunCommand(cmd); err != nil {

@@ -21,8 +21,10 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -321,6 +323,39 @@ func TestLoadScriptFollowsTheKnob(t *testing.T) {
 	}
 }
 
+// TestShutdownFansOut: at thousands of sessions a serial suspend+delete
+// sweep leaks most actors before boomer's shutdown budget runs out, so the
+// hook must run sessions concurrently and still clean up every one.
+func TestShutdownFansOut(t *testing.T) {
+	const sessions = 40
+	ctl := &fakeControlClient{deleteDelay: 20 * time.Millisecond}
+	u := newTestUser(t, &fake.Server{}, ctl, dynconfig.Config{})
+	rt := &runtime{cfg: u.cfg}
+	for i := range sessions {
+		rt.users.Store(int64(i), &sessionUser{cfg: u.cfg, actorName: "agent-" + strconv.Itoa(i)})
+	}
+
+	start := time.Now()
+	rt.shutdown(context.Background())
+	elapsed := time.Since(start)
+
+	if got := countCalls(ctl.recordedCalls(), "DeleteActor"); got != sessions {
+		t.Fatalf("DeleteActor calls = %d, want %d", got, sessions)
+	}
+	if ctl.maxInFlight.Load() < 2 {
+		t.Errorf("max concurrent DeleteActor = %d, want > 1", ctl.maxInFlight.Load())
+	}
+	if serial := sessions * ctl.deleteDelay; elapsed >= serial {
+		t.Errorf("shutdown took %v, no faster than a serial sweep (%v)", elapsed, serial)
+	}
+	rt.users.Range(func(_, val any) bool {
+		if !val.(*sessionUser).cleanedUp {
+			t.Errorf("session %s not cleaned up", val.(*sessionUser).actorName)
+		}
+		return true
+	})
+}
+
 // TestLoadFile reads a script from disk and reports the path on errors.
 func TestLoadFile(t *testing.T) {
 	dir := t.TempDir()
@@ -509,6 +544,11 @@ type fakeControlClient struct {
 	// templateMemory is the memory limit GetActorTemplate reports; "" means
 	// the template sets none.
 	templateMemory string
+	// deleteDelay stalls each DeleteActor; inFlight and maxInFlight count
+	// concurrent DeleteActor calls, to prove shutdown fans out.
+	deleteDelay time.Duration
+	inFlight    atomic.Int32
+	maxInFlight atomic.Int32
 }
 
 func nextErr(errs *[]error) error {
@@ -575,6 +615,17 @@ func (f *fakeControlClient) PauseActor(ctx context.Context, in *ateapipb.PauseAc
 
 func (f *fakeControlClient) DeleteActor(ctx context.Context, in *ateapipb.DeleteActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
 	f.record(ctx, "DeleteActor")
+	n := f.inFlight.Add(1)
+	defer f.inFlight.Add(-1)
+	for {
+		cur := f.maxInFlight.Load()
+		if n <= cur || f.maxInFlight.CompareAndSwap(cur, n) {
+			break
+		}
+	}
+	if f.deleteDelay > 0 {
+		time.Sleep(f.deleteDelay)
+	}
 	return &ateapipb.Actor{}, nil
 }
 
@@ -697,8 +748,39 @@ func TestRunStep_KeepsActorThroughCapacityShortage(t *testing.T) {
 	}
 }
 
-// HTTP failures carry no gRPC code, so they count toward the threshold: an
-// actor whose sandbox is dead but whose record looks healthy is replaced
+// A router 503 is the fleet being full or the control plane being busy,
+// the HTTP face of ResourceExhausted and Unavailable. Replacing the actor
+// would ask for the room that is missing, so it must not count.
+func TestRunStep_KeepsActorThroughRouterCapacityErrors(t *testing.T) {
+	for _, status := range []int{503, 504, 429} {
+		t.Run(strconv.Itoa(status), func(t *testing.T) {
+			ctl := &fakeControlClient{}
+			u := newTestUser(t, &fake.Server{Status: status}, ctl, dynconfig.Config{})
+			for range maxConsecutiveStepFailures + 2 {
+				if u.runStep(context.Background(), pingStep) {
+					t.Fatal("runStep = true with a failing router")
+				}
+			}
+			if u.broken || u.consecutiveFailures != 0 {
+				t.Errorf("HTTP %d: broken=%v consecutiveFailures=%d, want false/0", status, u.broken, u.consecutiveFailures)
+			}
+		})
+	}
+}
+
+// A router 404 means the actor record is gone; nothing the driver can call
+// brings it back, so it is replaced on the first failure.
+func TestRunStep_ReplacesActorOnRouterNotFound(t *testing.T) {
+	ctl := &fakeControlClient{}
+	u := newTestUser(t, &fake.Server{Status: 404}, ctl, dynconfig.Config{})
+	u.runStep(context.Background(), pingStep)
+	if !u.broken {
+		t.Error("broken = false after a 404 wake; want immediate replacement")
+	}
+}
+
+// Other HTTP failures carry no verdict, so they count toward the threshold:
+// an actor whose sandbox is dead but whose record looks healthy is replaced
 // after maxConsecutiveStepFailures steps.
 func TestRunStep_ReplacesActorAfterRepeatedStepFailures(t *testing.T) {
 	ctl := &fakeControlClient{}

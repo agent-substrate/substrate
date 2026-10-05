@@ -29,6 +29,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/apivalidation"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/substratex509"
@@ -37,7 +38,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/peer"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/testing/protocmp"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -217,7 +217,7 @@ func TestUpdateActor(t *testing.T) {
 			updated, err := svc.UpdateActor(context.Background(), &ateapipb.UpdateActorRequest{Actor: tt.req})
 
 			if tt.wantCode != codes.OK {
-				if code := status.Code(err); code != tt.wantCode {
+				if code := apierror.Code(err); code != tt.wantCode {
 					t.Errorf("UpdateActor error = %v (code %v), want code %v", err, code, tt.wantCode)
 				}
 				return
@@ -295,7 +295,7 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 		Metadata:      created.GetMetadata(),
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "absent"},
 	}})
-	if got := status.Code(err); got != codes.FailedPrecondition {
+	if got := apierror.Code(err); got != codes.FailedPrecondition {
 		t.Fatalf("UpdateActor to an absent template = %v, want FailedPrecondition (err: %v)", got, err)
 	}
 
@@ -304,7 +304,7 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 		Metadata:      created.GetMetadata(),
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-c"},
 	}})
-	if got := status.Code(err); got != codes.FailedPrecondition {
+	if got := apierror.Code(err); got != codes.FailedPrecondition {
 		t.Fatalf("UpdateActor to a template with different mounts = %v, want FailedPrecondition (err: %v)", got, err)
 	}
 
@@ -313,7 +313,7 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 		Metadata:      created.GetMetadata(),
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-d"},
 	}})
-	if got := status.Code(err); got != codes.FailedPrecondition {
+	if got := apierror.Code(err); got != codes.FailedPrecondition {
 		t.Fatalf("UpdateActor to a template with different volumes = %v, want FailedPrecondition (err: %v)", got, err)
 	}
 
@@ -322,7 +322,7 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 		Metadata:      created.GetMetadata(),
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-e"},
 	}})
-	if got := status.Code(err); got != codes.FailedPrecondition {
+	if got := apierror.Code(err); got != codes.FailedPrecondition {
 		t.Fatalf("UpdateActor to a template with a different sandbox config = %v, want FailedPrecondition (err: %v)", got, err)
 	}
 
@@ -369,7 +369,7 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 		Metadata:      running.GetMetadata(),
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-b"},
 	}})
-	if got := status.Code(err); got != codes.FailedPrecondition {
+	if got := apierror.Code(err); got != codes.FailedPrecondition {
 		t.Fatalf("UpdateActor repointing a running actor = %v, want FailedPrecondition (err: %v)", got, err)
 	}
 
@@ -488,14 +488,14 @@ func TestUpdateActor_RepointTemplateStorageLocation(t *testing.T) {
 			template:  "same-location",
 			snapshot:  unparseableSnapshot,
 			repointTo: "different-location",
-			wantCode:  codes.Unknown,
+			wantCode:  codes.Internal,
 		},
 		{
 			name:      "invalid storage location on the new template",
 			template:  "same-location",
 			snapshot:  snapshotOwnedByActor,
 			repointTo: "corrupt",
-			wantCode:  codes.Unknown,
+			wantCode:  codes.Internal,
 		},
 	}
 	svc := &RPCService{impl: newServiceImpl(persistence, nil)}
@@ -517,7 +517,7 @@ func TestUpdateActor_RepointTemplateStorageLocation(t *testing.T) {
 				Metadata:      actor.GetMetadata(),
 				ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: tt.repointTo},
 			}})
-			if got := status.Code(err); got != tt.wantCode {
+			if got := apierror.Code(err); got != tt.wantCode {
 				t.Fatalf("UpdateActor to %s = %v, want %v (err: %v)", tt.repointTo, got, tt.wantCode, err)
 			}
 			if err == nil {
@@ -624,7 +624,7 @@ func TestValidateTemplateVolumesUnchanged(t *testing.T) {
 				t.Fatalf("validateVolumeMountsUnchanged() error = %v, wantErr %v", err, tt.wantErr)
 			}
 			if err != nil {
-				if got := status.Code(err); got != codes.FailedPrecondition {
+				if got := apierror.Code(err); got != codes.FailedPrecondition {
 					t.Errorf("status code = %v, want FailedPrecondition", got)
 				}
 			}
@@ -684,7 +684,7 @@ func TestUpdateActor_DeleteRecreateRace(t *testing.T) {
 	// The client asserts "only update the actor with uid A".
 	original.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}}
 	_, err = svc.UpdateActor(ctx, &ateapipb.UpdateActorRequest{Actor: original})
-	if code := status.Code(err); code != codes.Aborted {
+	if code := apierror.Code(err); code != codes.Aborted {
 		t.Errorf("UpdateActor error = %v (code %v), want code Aborted: the actor holding uid %s was deleted mid-update",
 			err, code, original.GetMetadata().GetUid())
 	}
@@ -746,7 +746,7 @@ func TestUpdateActor_ConcurrentDisjointUpdates(t *testing.T) {
 	// This update must fail: the racing update bumped the version.
 	original.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}}
 	_, err := svc.UpdateActor(ctx, &ateapipb.UpdateActorRequest{Actor: original})
-	if code := status.Code(err); code != codes.Aborted {
+	if code := apierror.Code(err); code != codes.Aborted {
 		t.Errorf("UpdateActor error = %v (code %v), want code Aborted: the guarded version moved under the update", err, code)
 	}
 
@@ -853,7 +853,7 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 			}
 			svc := &ServiceImpl{store: persistence}
 			created, err := svc.CreateActor(ctx, actor)
-			if status.Code(err) != wantCode {
+			if apierror.Code(err) != wantCode {
 				t.Fatalf("CreateActor = %v, want %v", err, wantCode)
 			}
 			if err != nil {

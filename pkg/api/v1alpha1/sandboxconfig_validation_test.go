@@ -37,15 +37,19 @@ const vapManifestPath = "../../../manifests/ate-install/sandboxconfig-validation
 
 const validPauseImage = "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
 
+// sandboxConfig returns a config with a pause image iff the class needs one.
 func sandboxConfig(name string, class SandboxClass, assets map[string]map[string]AssetFile) *SandboxConfig {
-	return &SandboxConfig{
+	sc := &SandboxConfig{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
 		Spec: SandboxConfigSpec{
 			SandboxClass: class,
-			PauseImage:   validPauseImage,
 			Assets:       assets,
 		},
 	}
+	if class == SandboxClassGvisor {
+		sc.Spec.PauseImage = validPauseImage
+	}
+	return sc
 }
 
 // withPauseImage overrides the pause image on an otherwise-valid config.
@@ -193,10 +197,15 @@ func TestSandboxConfigValidation(t *testing.T) {
 		wantErr: true,
 		errMsg:  "sha256",
 	}, {
-		name:    "missing pauseImage",
+		name:    "gvisor missing pauseImage",
 		sc:      withPauseImage(sandboxConfig("bad-no-pause", SandboxClassGvisor, map[string]map[string]AssetFile{"amd64": {"gvisor": gvisorAsset()}}), ""),
 		wantErr: true,
-		errMsg:  "pauseImage",
+		errMsg:  "pauseImage is required for gvisor and not allowed",
+	}, {
+		name:    "microvm with pauseImage",
+		sc:      withPauseImage(sandboxConfig("bad-microvm-pause", SandboxClassMicroVM, map[string]map[string]AssetFile{"amd64": microVMAssets()}), validPauseImage),
+		wantErr: true,
+		errMsg:  "pauseImage is required for gvisor and not allowed",
 	}, {
 		name:    "unpinned pauseImage",
 		sc:      withPauseImage(sandboxConfig("bad-unpinned-pause", SandboxClassGvisor, map[string]map[string]AssetFile{"amd64": {"gvisor": gvisorAsset()}}), "registry.k8s.io/pause:3.10.2"),

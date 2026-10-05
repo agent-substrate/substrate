@@ -47,7 +47,7 @@ func TestClassifyLifecycleFailure(t *testing.T) {
 		{"misconfigured run", status.Error(codes.InvalidArgument, "bad template"), RetryLater},
 		{"unauthorized", status.Error(codes.PermissionDenied, "denied"), RetryLater},
 		{"update conflict", conflictErr(), ReplaceIfPersistent},
-		{"wrapped atelet error", status.Error(codes.Unknown, "while checkpointing workload"), ReplaceIfPersistent},
+		{"wrapped atelet error", status.Error(codes.Internal, "internal server error: while checkpointing workload"), ReplaceIfPersistent},
 		{"internal", status.Error(codes.Internal, "boom"), ReplaceIfPersistent},
 		{"not a status", errors.New("plain error"), ReplaceIfPersistent},
 	} {

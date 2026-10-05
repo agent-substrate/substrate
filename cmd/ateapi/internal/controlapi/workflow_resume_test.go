@@ -28,6 +28,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -259,7 +260,7 @@ func TestAssignWorkerAttempt_SkipsWorkerAssignedInOtherAtespace(t *testing.T) {
 		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR},
 	}
 	_, _, err := w.assignWorkerAttempt(ctx, resources.ActorRef{Atespace: "team-a", Name: "shared"}, actor, tmpl)
-	if status.Code(err) != codes.ResourceExhausted {
+	if apierror.Code(err) != codes.ResourceExhausted {
 		t.Fatalf("assignWorkerAttempt() error = %v, want ResourceExhausted (no free workers)", err)
 	}
 
@@ -549,8 +550,8 @@ func TestAssignWorkerAttempt_ConflictRefreshesActor(t *testing.T) {
 					t.Errorf("refreshed actor WorkerSelector = %v, want %v (concurrent write must survive)", refreshed.GetWorkerSelector(), injected.GetWorkerSelector())
 				}
 			} else {
-				if got := status.Code(err); got != codes.Aborted {
-					t.Fatalf("status.Code(err) = %v, want %v (err: %v)", got, codes.Aborted, err)
+				if got := apierror.Code(err); got != codes.Aborted {
+					t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, codes.Aborted, err)
 				}
 			}
 
@@ -614,8 +615,8 @@ func TestResumeActorWorkflow_RejectedAndIdempotentPaths(t *testing.T) {
 
 			actor, resumed, err := w.ResumeActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
 			if tc.wantErr {
-				if got := status.Code(err); got != codes.FailedPrecondition {
-					t.Fatalf("status.Code(err) = %v, want %v (err: %v)", got, codes.FailedPrecondition, err)
+				if got := apierror.Code(err); got != codes.FailedPrecondition {
+					t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, codes.FailedPrecondition, err)
 				}
 			} else {
 				if err != nil {
@@ -729,8 +730,8 @@ func TestResumeActor_CrashesOnMissingWorkerAssignment(t *testing.T) {
 	})
 
 	_, _, err := w.ResumeActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
-	if got := status.Code(err); got != codes.Aborted {
-		t.Fatalf("status.Code(err) = %v, want %v (err: %v)", got, codes.Aborted, err)
+	if got := apierror.Code(err); got != codes.Aborted {
+		t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, codes.Aborted, err)
 	}
 
 	got, err := st.GetActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
@@ -898,8 +899,8 @@ func TestValidateAssignedWorker(t *testing.T) {
 			}
 			tmpl := &ateapipb.ActorTemplate{SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR}}
 			_, err := w.validateAssignedWorker(ctx, resources.ActorRef{Atespace: "team-a", Name: "shared"}, resumingActor, tmpl)
-			if got := status.Code(err); got != tt.wantCode {
-				t.Fatalf("status.Code(err) = %v, want %v (err: %v)", got, tt.wantCode, err)
+			if got := apierror.Code(err); got != tt.wantCode {
+				t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, tt.wantCode, err)
 			}
 
 			actor, err := persistence.GetActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "shared"})
@@ -1527,8 +1528,8 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			if err == nil {
 				_, err = w.ensureAteletRestored(ctx, actorRef, actor, loadedTmpl, src)
 			}
-			if got := status.Code(err); got != tt.want.code {
-				t.Fatalf("status.Code(err) = %v, want %v (err: %v)", got, tt.want.code, err)
+			if got := apierror.Code(err); got != tt.want.code {
+				t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, tt.want.code, err)
 			}
 
 			restore, run := atelet.requests()

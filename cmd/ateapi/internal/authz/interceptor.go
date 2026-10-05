@@ -17,10 +17,9 @@ package authz
 import (
 	"context"
 
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/principal"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // UnaryServerInterceptor returns a gRPC unary interceptor that enforces per-RPC
@@ -43,7 +42,7 @@ func UnaryServerInterceptor(authorizer *Authorizer, enforce bool) grpc.UnaryServ
 		if relation == "" || object == "" {
 			p, hasPrincipal := principal.FromContext(ctx)
 			if !hasPrincipal || p.ID == "" {
-				return nil, status.Error(codes.Unauthenticated, "unauthenticated: missing principal in context")
+				return nil, apierror.Unauthenticated("unauthenticated: missing principal in context")
 			}
 			return handler(ctx, req)
 		}

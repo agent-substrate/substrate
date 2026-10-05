@@ -41,6 +41,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
+	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/objectstorage"
 )
 
@@ -75,8 +76,8 @@ type assetEntry struct {
 type sandboxAssetsRecord struct {
 	SandboxClass string                `json:"sandboxClass"`
 	Assets       map[string]assetEntry `json:"assets"`
-	// PauseImage is the root sandbox container's image.
-	PauseImage string `json:"pauseImage"`
+	// PauseImage is the root sandbox container's image. Only gVisor has one.
+	PauseImage string `json:"pauseImage,omitempty"`
 }
 
 // recordFromRequest projects a request's per-architecture SandboxAssets onto the
@@ -90,8 +91,8 @@ func recordFromRequest(sa *ateletpb.SandboxAssets) (*sandboxAssetsRecord, error)
 	if archAssets == nil || len(archAssets.GetFiles()) == 0 {
 		return nil, fmt.Errorf("sandbox_assets has no assets for architecture %q", arch)
 	}
-	if sa.GetPauseImage() == "" {
-		return nil, fmt.Errorf("sandbox_assets has no pause_image")
+	if err := checkPauseImage(sa.GetSandboxClass(), sa.GetPauseImage()); err != nil {
+		return nil, fmt.Errorf("invalid sandbox_assets: %w", err)
 	}
 	rec := &sandboxAssetsRecord{
 		SandboxClass: sa.GetSandboxClass(),
@@ -102,6 +103,15 @@ func recordFromRequest(sa *ateletpb.SandboxAssets) (*sandboxAssetsRecord, error)
 		rec.Assets[name] = assetEntry{URL: f.GetUrl(), SHA256: f.GetSha256()}
 	}
 	return rec, nil
+}
+
+// checkPauseImage requires a pause image for gVisor, the only sandbox class
+// that runs a pause container.
+func checkPauseImage(sandboxClass, pauseImage string) error {
+	if sandboxClass == string(v1alpha1.SandboxClassGvisor) && pauseImage == "" {
+		return fmt.Errorf("gvisor sandbox has no pauseImage")
+	}
+	return nil
 }
 
 // ensureSandboxAssets fetches every asset in the record content-addressed and
@@ -458,10 +468,8 @@ func unmarshalSandboxRecord(data []byte) (*sandboxAssetsRecord, error) {
 	if err := json.Unmarshal(data, rec); err != nil {
 		return nil, fmt.Errorf("while parsing sandbox record: %w", err)
 	}
-	// Fail loudly rather than let an empty image reach the image pull: a record
-	// without one predates the pause image moving into the sandbox config.
-	if rec.PauseImage == "" {
-		return nil, fmt.Errorf("sandbox record has no pauseImage")
+	if err := checkPauseImage(rec.SandboxClass, rec.PauseImage); err != nil {
+		return nil, fmt.Errorf("invalid sandbox record: %w", err)
 	}
 	return rec, nil
 }

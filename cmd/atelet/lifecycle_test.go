@@ -61,6 +61,9 @@ type fakeAteom struct {
 	restored map[string]string
 	// actorDirs records the ActorDirs each RPC arrived with, by RPC name.
 	actorDirs map[string]*ateompb.ActorDirs
+	// preserveRestoreDir records the PreserveRestoreDir flag from the most
+	// recent RestoreWorkload request.
+	preserveRestoreDir bool
 }
 
 func (f *fakeAteom) recordActorDirs(rpc string, actorDirs *ateompb.ActorDirs) {
@@ -90,6 +93,7 @@ func (f *fakeAteom) CheckpointWorkload(_ context.Context, req *ateompb.Checkpoin
 
 func (f *fakeAteom) RestoreWorkload(_ context.Context, req *ateompb.RestoreWorkloadRequest) (*ateompb.RestoreWorkloadResponse, error) {
 	f.recordActorDirs("RestoreWorkload", req.GetActorDirs())
+	f.preserveRestoreDir = req.GetPreserveRestoreDir()
 	dir := req.GetActorDirs().GetRestoreDir()
 	f.restored = map[string]string{}
 	for name := range f.snapshotFiles {
@@ -246,6 +250,12 @@ func TestLocalSnapshotGC(t *testing.T) {
 	if got := ateom.restored["checkpoint.img"]; got != "guest-memory" {
 		t.Fatalf("restore staged %q for ateom, want the pause snapshot's %q", got, "guest-memory")
 	}
+	if !ateom.preserveRestoreDir {
+		t.Errorf("RestoreWorkload preserve_restore_dir = false, want true for pure-local restore")
+	}
+	if entries, err := os.ReadDir(ateletpath.RestoreStateDir(actorUID)); err != nil || len(entries) != 0 {
+		t.Fatalf("expected RestoreStateDir to remain empty on local pause restore, got entries=%v err=%v", entries, err)
+	}
 
 	// Terminate: the actor is gone, and so should its snapshot be.
 	if _, err := s.Terminate(ctx, &ateletpb.TerminateRequest{
@@ -260,10 +270,14 @@ func TestLocalSnapshotGC(t *testing.T) {
 		t.Fatalf("Terminate: %v", err)
 	}
 
-	// Every RPC hands ateom the same directory set; the fake already relied
-	// on checkpoint_dir and restore_dir above to place and find the snapshot.
-	want := ateletpath.ActorDirs(actorUID)
+	// Every RPC hands ateom the same directory set, except that a local
+	// restore points restore_dir at the pause snapshot; the fake already
+	// relied on checkpoint_dir and restore_dir above to place and find it.
 	for _, rpc := range []string{"RunWorkload", "CheckpointWorkload", "RestoreWorkload", "TerminateWorkload"} {
+		want := ateletpath.ActorDirs(actorUID)
+		if rpc == "RestoreWorkload" {
+			want.RestoreDir = ateletpath.LocalSnapshotDir(actorUID, snapshotName)
+		}
 		if got := ateom.actorDirs[rpc]; !proto.Equal(got, want) {
 			t.Errorf("%s carried actor actorDirs %v, want %v", rpc, got, want)
 		}

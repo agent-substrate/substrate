@@ -24,12 +24,11 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/scheduling"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -145,7 +144,7 @@ func validateGoldenSnapshotScope(snapshot *ateapipb.ExternalSnapshot) error {
 		ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL:
 		return nil
 	default:
-		return status.Errorf(codes.FailedPrecondition,
+		return apierror.FailedPrecondition(
 			"ActorTemplate golden snapshot %q was taken with scope %s, not Full; regenerate the golden snapshot",
 			snapshot.GetSnapshotUri(), scope)
 	}
@@ -161,7 +160,7 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 	actor, err := w.store.GetActor(ctx, actorRef)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, nil, src, status.Errorf(codes.NotFound, "Actor %s not found", actorRef)
+			return nil, nil, src, apierror.NotFound("Actor %s not found", actorRef)
 		}
 		return nil, nil, src, fmt.Errorf("while getting actor from DB: %w", err)
 	}
@@ -179,7 +178,7 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 	}
 	if uri := actor.GetStatus().GetExternalSnapshot().GetSnapshotUri(); uri != "" {
 		if src.SnapshotURI, err = resources.ParseSnapshotURI(uri); err != nil {
-			return nil, nil, src, status.Errorf(codes.DataLoss, "Actor %s external snapshot: %v", actorRef, err)
+			return nil, nil, src, apierror.DataLoss("Actor %s external snapshot: %v", actorRef, err)
 		}
 		src.Scope = actor.GetStatus().GetExternalSnapshot().GetContentScope()
 		src.SnapshotFiles = actor.GetStatus().GetExternalSnapshot().GetSnapshotFiles()
@@ -227,7 +226,7 @@ func (w *ActorWorkflow) ensureVolumesCreated(ctx context.Context, actorRef resou
 	storedActor, updateErr := w.store.UpdateActor(ctx, actorRef, updatePrecondition, persistVolumes)
 	if updateErr != nil {
 		if errors.Is(updateErr, store.ErrVersionConflict) {
-			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
+			return nil, apierror.Aborted("concurrent update conflict, please retry")
 		}
 		return nil, fmt.Errorf("while updating actor after volume creation: %w", updateErr)
 	}
@@ -259,7 +258,7 @@ func (w *ActorWorkflow) ensureWorkerAssigned(ctx context.Context, actorRef resou
 		return actor, worker, nil
 	case ateapipb.ActorState_ACTOR_STATE_SUSPENDED, ateapipb.ActorState_ACTOR_STATE_PAUSED:
 	default:
-		return nil, nil, status.Errorf(codes.FailedPrecondition, "AssignWorker prerequisite not met for Actor: %s (got: %v, want %s or %s)", actorRef, actor.GetStatus().GetState(), ateapipb.ActorState_ACTOR_STATE_SUSPENDED, ateapipb.ActorState_ACTOR_STATE_PAUSED)
+		return nil, nil, apierror.FailedPrecondition("AssignWorker prerequisite not met for Actor: %s (got: %v, want %s or %s)", actorRef, actor.GetStatus().GetState(), ateapipb.ActorState_ACTOR_STATE_SUSPENDED, ateapipb.ActorState_ACTOR_STATE_PAUSED)
 	}
 
 	// Bound contention retries to about three seconds.
@@ -311,7 +310,7 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 		if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume, crashMessageWorkerAssignmentMissing); cerr != nil {
 			return nil, cerr
 		}
-		return nil, status.Errorf(codes.Aborted, "actor %s crashed", actorRef)
+		return nil, apierror.Aborted("actor %s crashed", actorRef)
 	}
 
 	worker, err := w.store.GetWorker(ctx, assignment.GetWorker().GetName())
@@ -321,7 +320,7 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 			if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume, crashMessageWorkerGone); cerr != nil {
 				return nil, cerr
 			}
-			return nil, status.Errorf(codes.Aborted, "actor %s crashed", actorRef)
+			return nil, apierror.Aborted("actor %s crashed", actorRef)
 		}
 		return nil, fmt.Errorf("failed to get already assigned worker for actor %w", err)
 	}
@@ -332,7 +331,7 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 		if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume, crashMessageWorkerDraining); cerr != nil {
 			return nil, cerr
 		}
-		return nil, status.Errorf(codes.Aborted, "actor %s crashed", actorRef.String())
+		return nil, apierror.Aborted("actor %s crashed", actorRef.String())
 	}
 	// Verify the worker is still hosting this Actor.
 	hosted, err := workerHostsActor(ctx, w.store, worker.GetMetadata().GetName(), actor.GetMetadata().GetUid())
@@ -345,7 +344,7 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 		if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume, crashMessageWorkerReassigned); cerr != nil {
 			return nil, fmt.Errorf("while crashing actor: %w", cerr)
 		}
-		return nil, status.Errorf(codes.Aborted, "actor %s crashed", actorRef)
+		return nil, apierror.Aborted("actor %s crashed", actorRef)
 	}
 	constraints, err := schedulingConstraints(actor, actorTemplate)
 	if err != nil {
@@ -363,7 +362,7 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 		if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume, crashMessageWorkerIneligible); cerr != nil {
 			return nil, fmt.Errorf("while crashing actor: %w", cerr)
 		}
-		return nil, status.Errorf(codes.Aborted, "actor %s crashed", actorRef)
+		return nil, apierror.Aborted("actor %s crashed", actorRef)
 	}
 	return worker, nil
 }
@@ -446,8 +445,8 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 		pickedWorker, err := w.scheduler.Schedule(ctx, constraints)
 		if err != nil {
 			if errors.Is(err, scheduling.ErrNoCapacity) {
-				outcome = ateattr.SchedulerOutcomeNoFreeWorker
-				return nil, nil, status.Errorf(codes.ResourceExhausted, "no free workers available")
+				outcome = ateattr.SchedulerOutcomeNoCapacity
+				return nil, nil, apierror.ResourceExhausted("no free workers available")
 			}
 			return nil, nil, err
 		}
@@ -509,7 +508,7 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 			slog.InfoContext(ctx, "Retrying assignment due to actor version conflict", slog.Any("actor", actorRef))
 			return fresh, nil, err
 		default:
-			return nil, nil, status.Errorf(codes.Aborted, "actor %s is %s and can no longer be resumed", actorRef, fresh.GetStatus().GetState())
+			return nil, nil, apierror.Aborted("actor %s is %s and can no longer be resumed", actorRef, fresh.GetStatus().GetState())
 		}
 	}
 	poolNamespace = assignedWorker.GetWorkerNamespace()
@@ -749,7 +748,7 @@ func (w *ActorWorkflow) finalizeRunning(ctx context.Context, actorRef resources.
 	})
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
+			return nil, apierror.Aborted("concurrent update conflict, please retry")
 		}
 		return nil, err
 	}

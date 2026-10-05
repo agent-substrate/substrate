@@ -20,11 +20,11 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/testing/protocmp"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
@@ -102,7 +102,7 @@ func TestListTags(t *testing.T) {
 	}
 
 	_, err := svc.ListTags(ctx, &ateapipb.ListTagsRequest{PageToken: "not-a-token"})
-	if code := status.Code(err); code != codes.InvalidArgument {
+	if code := apierror.Code(err); code != codes.InvalidArgument {
 		t.Errorf("ListTags(bad page_token) error = %v (code %v), want code InvalidArgument", err, code)
 	}
 }
@@ -168,7 +168,7 @@ func TestUpdateTag(t *testing.T) {
 			updated, err := svc.UpdateTag(context.Background(), &ateapipb.UpdateTagRequest{Tag: tt.req})
 
 			if tt.wantCode != codes.OK {
-				if code := status.Code(err); code != tt.wantCode {
+				if code := apierror.Code(err); code != tt.wantCode {
 					t.Errorf("UpdateTag error = %v (code %v), want code %v", err, code, tt.wantCode)
 				}
 				return
@@ -198,7 +198,7 @@ func TestUpdateTag_BlindWrite(t *testing.T) {
 	stored.Metadata.Uid, stored.Metadata.Version = "", 0
 	stored.Scope = ateapipb.TagScope_TAG_SCOPE_PUBLISHED
 	_, err := svc.UpdateTag(context.Background(), &ateapipb.UpdateTagRequest{Tag: stored})
-	if code := status.Code(err); code != codes.InvalidArgument {
+	if code := apierror.Code(err); code != codes.InvalidArgument {
 		t.Errorf("UpdateTag error = %v (code %v), want code InvalidArgument", err, code)
 	}
 }
@@ -218,7 +218,7 @@ func TestUpdateTag_UnsetScopeDoesNotUnpublish(t *testing.T) {
 	_, err := svc.UpdateTag(ctx, &ateapipb.UpdateTagRequest{
 		Tag: stored,
 	})
-	if code := status.Code(err); code != codes.InvalidArgument {
+	if code := apierror.Code(err); code != codes.InvalidArgument {
 		t.Errorf("UpdateTag error = %v (code %v), want code InvalidArgument", err, code)
 	}
 
@@ -339,7 +339,7 @@ func TestUpdateTag_DeleteRecreateRace(t *testing.T) {
 	_, err := svc.UpdateTag(ctx, &ateapipb.UpdateTagRequest{
 		Tag: originalTag,
 	})
-	if code := status.Code(err); code != codes.Aborted {
+	if code := apierror.Code(err); code != codes.Aborted {
 		t.Errorf("UpdateTag error = %v (code %v), want code Aborted: the tag holding uid %s was deleted mid-update",
 			err, code, originalTag.GetMetadata().GetUid())
 	}
@@ -388,7 +388,7 @@ func TestUpdateTag_ConcurrentUpdate(t *testing.T) {
 	_, err := svc.UpdateTag(ctx, &ateapipb.UpdateTagRequest{
 		Tag: originalTag,
 	})
-	if code := status.Code(err); code != codes.Aborted {
+	if code := apierror.Code(err); code != codes.Aborted {
 		t.Errorf("UpdateTag error = %v (code %v), want code Aborted: the guarded version moved under the update", err, code)
 	}
 
@@ -420,7 +420,7 @@ func TestUpdateTag_PendingTag(t *testing.T) {
 
 	tag.Scope = ateapipb.TagScope_TAG_SCOPE_PUBLISHED
 	_, err := svc.UpdateTag(ctx, &ateapipb.UpdateTagRequest{Tag: tag})
-	if code := status.Code(err); code != codes.FailedPrecondition {
+	if code := apierror.Code(err); code != codes.FailedPrecondition {
 		t.Fatalf("UpdateTag error = %v (code %v), want code FailedPrecondition", err, code)
 	}
 

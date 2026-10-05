@@ -22,13 +22,12 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel/attribute"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // PauseActor executes the workflow to pause a running actor. Idempotent:
@@ -124,12 +123,12 @@ func (w *ActorWorkflow) ensureMarkedPausing(ctx context.Context, actorRef resour
 	}
 	// The pause edge only exists from RUNNING.
 	if actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
-		return nil, status.Errorf(codes.FailedPrecondition, "MarkPausing prerequisite not met for Actor: %s (got: %v, want %s)", actorRef, actor.GetStatus().GetState(), ateapipb.ActorState_ACTOR_STATE_RUNNING)
+		return nil, apierror.FailedPrecondition("MarkPausing prerequisite not met for Actor: %s (got: %v, want %s)", actorRef, actor.GetStatus().GetState(), ateapipb.ActorState_ACTOR_STATE_RUNNING)
 	}
 	// By design a golden actor cannot be paused — it can only be suspended
 	// (committed).
 	if actorRef.Atespace == resources.GoldenActorAtespace {
-		return nil, status.Errorf(codes.FailedPrecondition, "actors in atespace %q are golden actors, which cannot be paused", actorRef.Atespace)
+		return nil, apierror.FailedPrecondition("actors in atespace %q are golden actors, which cannot be paused", actorRef.Atespace)
 	}
 
 	snapshotName := resources.NewSnapshotName()
@@ -140,7 +139,7 @@ func (w *ActorWorkflow) ensureMarkedPausing(ctx context.Context, actorRef resour
 	})
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
+			return nil, apierror.Aborted("concurrent update conflict, please retry")
 		}
 		return nil, err
 	}
@@ -164,7 +163,7 @@ func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resourc
 		if err := crashActor(ctx, w.store, actorRef, ateattr.OperationPause, crashMessageWorkerAssignmentMissing); err != nil {
 			slog.ErrorContext(ctx, "Failed to crash actor", slog.String("err", err.Error()))
 		}
-		return "", nil, status.Errorf(codes.FailedPrecondition, "CallAteletPause prerequisite not met for Actor: %s. No worker assignment", actorRef)
+		return "", nil, apierror.FailedPrecondition("CallAteletPause prerequisite not met for Actor: %s. No worker assignment", actorRef)
 	}
 
 	ateletConn, err := w.dialer.DialForAteletOnNode(assignment.GetNodeName())
@@ -238,7 +237,7 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 			_, err := w.store.ReleaseActorFromWorker(ctx, worker.GetMetadata().GetName(), latestActor.GetMetadata().GetUid())
 			if err != nil {
 				if errors.Is(err, store.ErrVersionConflict) {
-					return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
+					return nil, apierror.Aborted("concurrent update conflict, please retry")
 				}
 				return nil, err
 			}
@@ -302,7 +301,7 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 		}
 		if err != nil {
 			if errors.Is(err, store.ErrVersionConflict) {
-				return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
+				return nil, apierror.Aborted("concurrent update conflict, please retry")
 			}
 			return nil, err
 		}

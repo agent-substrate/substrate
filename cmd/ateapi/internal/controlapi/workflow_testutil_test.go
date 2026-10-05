@@ -22,12 +22,12 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/objectstore/objectstoretest"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // testWorkerUID derives a stable pod UID from a pod name, for Workers seeded
@@ -176,7 +176,7 @@ func assertPrerequisiteResult(t *testing.T, st ateapipb.ActorState, err error, w
 		t.Errorf("state %v: CheckPrerequisite = nil, want FailedPrecondition", st)
 		return
 	}
-	if got := status.Code(err); got != codes.FailedPrecondition {
+	if got := apierror.Code(err); got != codes.FailedPrecondition {
 		t.Errorf("state %v: status.Code = %v, want %v", st, got, codes.FailedPrecondition)
 	}
 }

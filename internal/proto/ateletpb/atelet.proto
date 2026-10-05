@@ -258,6 +258,7 @@ message SandboxAssets {
 
   // pause_image is the image for the sandbox's root container. Like the
   // binaries above it is sandbox configuration, not workload configuration.
+  // Empty for sandboxes without a pause container (microvm).
   string pause_image = 3;
 }
 

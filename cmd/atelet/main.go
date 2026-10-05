@@ -572,7 +572,7 @@ func initSnapshotSizeMetric() error {
 	snapshotSizeBytes, err = otel.Meter("atelet").Int64Histogram(
 		"atelet.snapshot.size",
 		metric.WithUnit("By"),
-		metric.WithDescription("Uncompressed size in bytes of each gVisor snapshot image written during checkpoint."),
+		metric.WithDescription("Uncompressed allocated size in bytes of each snapshot image written during checkpoint."),
 
 		metric.WithExplicitBucketBoundaries(
 			1e6, 5e6, 1e7, 2.5e7, 5e7, 1e8, 2.5e8, 5e8, 1e9, 2e9, 5e9, 1e10,
@@ -593,6 +593,16 @@ func recordSnapshotSize(ctx context.Context, file string, size int64, templateAt
 		ateattr.TemplateAtespaceKey.String(templateAtespace),
 		ateattr.TemplateNameKey.String(templateName),
 	))
+}
+
+// allocatedBytes returns the disk space allocated to info (st_blocks * 512)
+// rather than its apparent size, which for sparse snapshot images reflects the
+// guest RAM ceiling; ext4/XFS/btrfs include delalloc blocks before writeback.
+func allocatedBytes(info os.FileInfo) int64 {
+	if st, ok := info.Sys().(*syscall.Stat_t); ok {
+		return int64(st.Blocks) * 512
+	}
+	return info.Size()
 }
 
 func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest) (_ *ateletpb.CheckpointResponse, err error) {
@@ -797,7 +807,7 @@ func (s *AteomHerder) moveLocalCheckpoint(ctx context.Context, req *ateletpb.Che
 		if !info.Mode().IsRegular() {
 			return fmt.Errorf("checkpoint file %s is not a regular file", fileName)
 		}
-		recordSnapshotSize(ctx, fileName, info.Size(), req.GetActorTemplateAtespace(), req.GetActorTemplateName())
+		recordSnapshotSize(ctx, fileName, allocatedBytes(info), req.GetActorTemplateAtespace(), req.GetActorTemplateName())
 
 		if err := root.Rename(src, dst); err != nil {
 			return fmt.Errorf("failed to move %s to %s: %w", src, dst, err)
@@ -855,7 +865,7 @@ func (s *AteomHerder) uploadSnapshot(ctx context.Context, uri resources.Snapshot
 			if !info.Mode().IsRegular() {
 				return fmt.Errorf("snapshot file %s is not a regular file", fileName)
 			}
-			recordSnapshotSize(ctx, fileName, info.Size(), templateAtespace, templateName)
+			recordSnapshotSize(ctx, fileName, allocatedBytes(info), templateAtespace, templateName)
 
 			objectURI, err := uri.ObjectURI(fileName + ".zstd")
 			if err != nil {
@@ -1068,6 +1078,10 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	}
 
 	checkpointDir := ateletpath.RestoreStateDir(actorUID)
+	directLocal := req.GetType() == ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
+	if directLocal {
+		checkpointDir = ateletpath.LocalSnapshotDir(actorUID, req.GetLocalConfig().GetSnapshotName())
+	}
 
 	snapshotFiles := req.GetSnapshotFiles()
 
@@ -1083,8 +1097,6 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	// needs both — so overlapping the GCS download (~0.5s warm) with the asset
 	// fetch + image unpack hides whichever leg is shorter, and on a cold node
 	// (uncached assets + image, ~2.5s unpack) that overlap is large.
-	// TODO(dberkov): the old pause checkpoint files are not deleted after they are
-	// copied to checkpointDir for the LOCAL case.
 	var assetPaths map[string]string
 	// One per leg: a single field written from both goroutines would race.
 	var downloadErr, prepErr error
@@ -1093,7 +1105,9 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	g.Go(func() (err error) {
 		t := time.Now()
 		defer func() {
-			dDownload = time.Since(t)
+			if !directLocal {
+				dDownload = time.Since(t)
+			}
 			downloadErr = err
 		}()
 		switch req.GetType() {
@@ -1102,7 +1116,8 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 				return err
 			}
 		case ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL:
-			if err := s.copyLocalCheckpoint(gctx, ateletpath.ActorPath(actorUID), req.GetLocalConfig().GetSnapshotName(), ateletpath.LocalCheckpointsDir(actorUID), checkpointDir, snapshotFiles); err != nil {
+			// Restore in place from LocalSnapshotDir; no staging.
+			if err := checkLocalSnapshotFiles(checkpointDir, snapshotFiles); err != nil {
 				return err
 			}
 		}
@@ -1152,6 +1167,9 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		return nil, apierror.InvalidArgument("invalid workload spec: %v", err)
 	}
 
+	actorDirs := ateletpath.ActorDirs(actorUID)
+	actorDirs.RestoreDir = checkpointDir
+
 	// The ateom_restore phase is opaque from here; ateom logs its own breakdown of
 	// this call as "Actor restore phases".
 	tAteom := time.Now()
@@ -1165,7 +1183,8 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		Spec:                  spec,
 		Scope:                 toAteomSnapshotScope(req.GetScope()),
 		ActorUid:              req.GetActorUid(),
-		ActorDirs:             ateletpath.ActorDirs(actorUID),
+		ActorDirs:             actorDirs,
+		PreserveRestoreDir:    directLocal,
 		EgressGateway:         toAteomEgressGateway(req.GetEgressGateway()),
 		CpuMilli:              req.GetCpuMilli(),
 		MemoryBytes:           req.GetMemoryBytes(),
@@ -1257,6 +1276,21 @@ func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequ
 	}
 
 	return &ateletpb.TerminateResponse{}, nil
+}
+
+// checkLocalSnapshotFiles verifies each snapshot file exists in dir as a
+// regular file. Lstat, so a symlink cannot point ateom outside the snapshot.
+func checkLocalSnapshotFiles(dir string, files []string) error {
+	for _, name := range files {
+		info, err := os.Lstat(filepath.Join(dir, name))
+		if err != nil {
+			return wrapFileSystemErr("while checking local checkpoint file", err)
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("local checkpoint file %s is not a regular file", name)
+		}
+	}
+	return nil
 }
 
 // copyLocalCheckpoint stages files from the local checkpoint snapshotName under
@@ -1386,7 +1420,8 @@ func (s *AteomHerder) downloadExternalCheckpoint(ctx context.Context, snapshotUR
 // container and every application container in spec, in parallel. pauseImage
 // comes from the sandbox record, not the workload spec: it is sandbox
 // configuration, and on a restore it must be the image the snapshot was taken
-// with.
+// with. It is empty for sandboxes without a pause container, which get no
+// pause bundle.
 func (s *AteomHerder) prepareOCIBundles(
 	ctx context.Context,
 	actorUID string,
@@ -1408,27 +1443,28 @@ func (s *AteomHerder) prepareOCIBundles(
 
 	g, gCtx := errgroup.WithContext(ctx)
 
-	// Pause container.
-	g.Go(func() error {
-		if err := prepareOCIDirectory(
-			gCtx,
-			s.imageCache,
-			actorUID,
-			ocispec.PauseContainer,
-			pauseImage,
-			[]string{"/pause"},
-			nil,
-			nil,
-			nodepath.ActorNetNSPath(actorUID),
-			nil, // pause is sandbox infra; it mounts no volumes.
-			nil,
-			nil, // pause only reaps; it needs no capabilities.
-			nil, // pause carries no user-declared limits.
-		); err != nil {
-			return wrapFileSystemErr("while creating pause OCI bundle", err)
-		}
-		return nil
-	})
+	if pauseImage != "" {
+		g.Go(func() error {
+			if err := prepareOCIDirectory(
+				gCtx,
+				s.imageCache,
+				actorUID,
+				ocispec.PauseContainer,
+				pauseImage,
+				[]string{"/pause"},
+				nil,
+				nil,
+				nodepath.ActorNetNSPath(actorUID),
+				nil, // pause is sandbox infra; it mounts no volumes.
+				nil,
+				nil, // pause only reaps; it needs no capabilities.
+				nil, // pause carries no user-declared limits.
+			); err != nil {
+				return wrapFileSystemErr("while creating pause OCI bundle", err)
+			}
+			return nil
+		})
+	}
 
 	// Application containers.
 	for _, ctr := range spec.GetContainers() {
@@ -1870,46 +1906,22 @@ func resetActorDirs(actorUID string) error {
 	// making them writable. (The rootfs itself is just an empty mountpoint
 	// here: the overlay is mounted in the ateom pod's mount namespace, not
 	// atelet's, and is detached by ateom at teardown.)
-	bundleDir := ateletpath.OCIBundleDir(actorUID)
-	if err := imagecache.RemoveAllWritable(bundleDir); err != nil {
-		return wrapFileSystemErr("while deleting bundle dir: %w", err)
+	if err := resetDir("bundle dir", ateletpath.OCIBundleDir(actorUID), imagecache.RemoveAllWritable, 0o700); err != nil {
+		return err
 	}
-	if err := os.MkdirAll(bundleDir, 0o700); err != nil {
-		return wrapFileSystemErr("while creating bundle dir: %w", err)
+	if err := resetDir("checkpoint-state dir", ateletpath.CheckpointStateDir(actorUID), os.RemoveAll, 0o700); err != nil {
+		return err
 	}
-
-	checkpointDir := ateletpath.CheckpointStateDir(actorUID)
-	if err := os.RemoveAll(checkpointDir); err != nil {
-		return wrapFileSystemErr("while deleting checkpoint-state dir: %w", err)
+	if err := resetDir("restore-state dir", ateletpath.RestoreStateDir(actorUID), os.RemoveAll, 0o700); err != nil {
+		return err
 	}
-	if err := os.MkdirAll(checkpointDir, 0o700); err != nil {
-		return wrapFileSystemErr("while creating checkpoint-state dir: %w", err)
+	if err := resetDir("durable-dir volumes mount dir", ateletpath.DurableDirVolumeMountsDir(actorUID), os.RemoveAll, 0o755); err != nil {
+		return err
 	}
-
-	restoreStateDir := ateletpath.RestoreStateDir(actorUID)
-	if err := os.RemoveAll(restoreStateDir); err != nil {
-		return wrapFileSystemErr("while deleting restore-state dir: %w", err)
-	}
-	if err := os.MkdirAll(restoreStateDir, 0o700); err != nil {
-		return wrapFileSystemErr("while creating restore-state dir: %w", err)
-	}
-
-	durableDirVolumesMountDir := ateletpath.DurableDirVolumeMountsDir(actorUID)
-	if err := os.RemoveAll(durableDirVolumesMountDir); err != nil {
-		return wrapFileSystemErr("while deleting durable-dir volumes mount dir: %w", err)
-	}
-	if err := os.MkdirAll(durableDirVolumesMountDir, 0o755); err != nil {
-		return wrapFileSystemErr("while creating durable-dir volumes mount dir: %w", err)
-	}
-
 	// World-readable (0o755): bind-mounted read-only into the actor, whose
 	// workload reads it through the gofer.
-	systemInfoVolumeRootsDir := ateletpath.SystemInfoVolumeRootsDir(actorUID)
-	if err := os.RemoveAll(systemInfoVolumeRootsDir); err != nil {
-		return wrapFileSystemErr("while deleting system-info volume roots dir: %w", err)
-	}
-	if err := os.MkdirAll(systemInfoVolumeRootsDir, 0o755); err != nil {
-		return wrapFileSystemErr("while creating system-info volume roots dir: %w", err)
+	if err := resetDir("system-info volume roots dir", ateletpath.SystemInfoVolumeRootsDir(actorUID), os.RemoveAll, 0o755); err != nil {
+		return err
 	}
 
 	// Do not call RemoveAll on volume directories in case the unmount failed.
@@ -1917,18 +1929,30 @@ func resetActorDirs(actorUID string) error {
 	volumesDir := ateletpath.VolumesDir(actorUID)
 	entries, err := os.ReadDir(volumesDir)
 	if err != nil && !os.IsNotExist(err) {
-		return wrapFileSystemErr("while reading volumes dir: %w", err)
+		return wrapFileSystemErr("while reading volumes dir", err)
 	}
 	for _, entry := range entries {
 		volPath := filepath.Join(volumesDir, entry.Name())
 		if err := os.Remove(volPath); err != nil {
-			return wrapFileSystemErr("while removing volume dir: %w", err)
+			return wrapFileSystemErr("while removing volume dir", err)
 		}
 	}
 	if err := os.MkdirAll(volumesDir, 0o755); err != nil {
-		return wrapFileSystemErr("while creating volumes dir: %w", err)
+		return wrapFileSystemErr("while creating volumes dir", err)
 	}
 
+	return nil
+}
+
+// resetDir empties dir with remove and recreates it with mode. what names the
+// directory in errors.
+func resetDir(what, dir string, remove func(string) error, mode os.FileMode) error {
+	if err := remove(dir); err != nil {
+		return wrapFileSystemErr("while deleting "+what, err)
+	}
+	if err := os.MkdirAll(dir, mode); err != nil {
+		return wrapFileSystemErr("while creating "+what, err)
+	}
 	return nil
 }
 
@@ -1944,7 +1968,7 @@ func removeActorDirs(actorUID string) error {
 		return err
 	}
 	if err := os.RemoveAll(ateletpath.ActorPath(actorUID)); err != nil {
-		return wrapFileSystemErr("while deleting actor dir: %w", err)
+		return wrapFileSystemErr("while deleting actor dir", err)
 	}
 	return nil
 }

@@ -33,6 +33,7 @@ var (
 	poolSecretNameFlag      string
 	makeCaPoolIDFlag        string
 	makeCaPoolKeyTypeFlag   string
+	makeCaPoolValidityFlag  time.Duration
 	makeJwtPoolKeyIDFlag    string
 )
 
@@ -70,7 +71,7 @@ var makeCaPoolCmd = &cobra.Command{
 		ca, err := localca.GenerateCA(
 			makeCaPoolIDFlag,
 			keyType,
-			365*24*time.Hour,
+			makeCaPoolValidityFlag,
 		)
 		if err != nil {
 			return fmt.Errorf("while generating CA: %w", err)
@@ -175,6 +176,7 @@ func init() {
 	makeCaPoolCmd.Flags().StringVar(&poolSecretNamespaceFlag, "secret-namespace", "default", "Create the secret in this namespace")
 	makeCaPoolCmd.Flags().StringVar(&poolSecretNameFlag, "name", "", "Create the secret with this name")
 	makeCaPoolCmd.Flags().StringVar(&makeCaPoolKeyTypeFlag, "key-type", "ED25519", "CA key type.  One of [ED25519, ECDSAP256]")
+	makeCaPoolCmd.Flags().DurationVar(&makeCaPoolValidityFlag, "validity", 365*24*time.Hour, "How long the CA certificate is valid for")
 	_ = makeCaPoolCmd.MarkFlagRequired("name")
 	adminCmd.AddCommand(makeCaPoolCmd)
 
