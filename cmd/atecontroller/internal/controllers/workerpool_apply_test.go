@@ -28,6 +28,7 @@ import (
 	appsv1ac "k8s.io/client-go/applyconfigurations/apps/v1"
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 	metav1ac "k8s.io/client-go/applyconfigurations/meta/v1"
+	"k8s.io/utils/ptr"
 
 	"github.com/agent-substrate/substrate/internal/ateomcapacity"
 	"github.com/agent-substrate/substrate/internal/deviceplugin"
@@ -140,6 +141,15 @@ func TestBuildDeploymentApplyConfig(t *testing.T) {
 			}),
 			want: expectedDeploymentApplyConfig(func(podSpecAC *corev1ac.PodSpecApplyConfiguration) {
 				podSpecAC.WithPriorityClassName("interactive-workerpool")
+			}),
+		},
+		{
+			name: "with service account name",
+			wp: testWorkerPoolApplyConfig(&atev1alpha1.WorkerPoolPodTemplate{
+				ServiceAccountName: ptr.To("substrate-worker"),
+			}),
+			want: expectedDeploymentApplyConfig(func(podSpecAC *corev1ac.PodSpecApplyConfiguration) {
+				podSpecAC.WithServiceAccountName("substrate-worker").WithDeprecatedServiceAccount("substrate-worker")
 			}),
 		},
 		{
@@ -891,6 +901,7 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 		sandboxClassTolerationAC(atev1alpha1.SandboxClassGvisor),
 	}
 	podSpecAC.WithPriorityClassName("")
+	podSpecAC.WithServiceAccountName("").WithDeprecatedServiceAccount("")
 	podSpecAC.WithAffinity(corev1ac.Affinity())
 	podSpecAC.WithTerminationGracePeriodSeconds(workerTerminationGracePeriodSeconds)
 	if mutatePodSpec != nil {

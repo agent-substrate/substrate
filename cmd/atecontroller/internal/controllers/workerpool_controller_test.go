@@ -37,6 +37,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/util/retry"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -346,7 +347,8 @@ func sampleWorkerPoolPodTemplate() *atev1alpha1.WorkerPoolPodTemplate {
 			Operator: corev1.TolerationOpExists,
 			Effect:   corev1.TaintEffectNoSchedule,
 		}},
-		PriorityClassName: "substrate-workers",
+		PriorityClassName:  "substrate-workers",
+		ServiceAccountName: ptr.To("substrate-worker"),
 		NodeAffinity: &corev1.NodeAffinity{
 			RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
 				NodeSelectorTerms: []corev1.NodeSelectorTerm{{
@@ -406,6 +408,9 @@ func TestWorkerPoolPodTemplatePropagation(t *testing.T) {
 			return false, nil
 		}
 		if podSpec.PriorityClassName != "substrate-workers" {
+			return false, nil
+		}
+		if podSpec.ServiceAccountName != "substrate-worker" {
 			return false, nil
 		}
 		if podSpec.Affinity == nil || podSpec.Affinity.NodeAffinity == nil {
@@ -503,6 +508,7 @@ func TestWorkerPoolPodTemplateClearAll(t *testing.T) {
 		return podSpec.NodeSelector["workload"] == "substrate" &&
 			len(podSpec.Tolerations) == 2 &&
 			podSpec.PriorityClassName == "substrate-workers" &&
+			podSpec.ServiceAccountName == "substrate-worker" &&
 			podSpec.Affinity != nil &&
 			podSpec.Affinity.NodeAffinity != nil &&
 			container.Resources.Requests.Cpu().String() == "500m", nil
@@ -524,6 +530,7 @@ func TestWorkerPoolPodTemplateClearAll(t *testing.T) {
 			len(podSpec.Tolerations) == 1 &&
 			podSpec.Tolerations[0].Key == sandboxClassTaintKey &&
 			podSpec.PriorityClassName == "" &&
+			podSpec.ServiceAccountName == "" &&
 			(podSpec.Affinity == nil || podSpec.Affinity.NodeAffinity == nil) &&
 			len(container.Resources.Limits) == 0 &&
 			len(container.Resources.Requests) == 0, nil

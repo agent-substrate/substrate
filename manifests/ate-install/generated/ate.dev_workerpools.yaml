@@ -392,6 +392,13 @@ spec:
                           More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                         type: object
                     type: object
+                  serviceAccountName:
+                    description: |-
+                      ServiceAccountName for the worker pods. The ServiceAccount must exist
+                      in the WorkerPool's namespace. When omitted, the pods use the
+                      namespace's default ServiceAccount.
+                    minLength: 1
+                    type: string
                   tolerations:
                     description: Tolerations for the worker pods.
                     items:
