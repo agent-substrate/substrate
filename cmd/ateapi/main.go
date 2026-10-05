@@ -100,6 +100,8 @@ var (
 
 	templateResyncInterval = pflag.Duration("template-resync-interval", 20*time.Second, fmt.Sprintf("Interval between actor template resyncs. Must be at least %s.", minResyncInterval))
 
+	watchNamespace = pflag.String("watch-namespace", "", "Namespace containing the WorkerPools to watch. Empty watches all namespaces. Does not change the system namespace or cluster-scoped resources.")
+
 	showVersion  = pflag.Bool("version", false, "Print version and exit.")
 	logLevelFlag = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
 )
@@ -215,7 +217,7 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to seed worker cache", err)
 	}
 
-	ateFactory := externalversions.NewSharedInformerFactory(ateClient, 0)
+	ateFactory := externalversions.NewSharedInformerFactoryWithOptions(ateClient, 0, externalversions.WithNamespace(*watchNamespace))
 	workerPoolLister := ateFactory.Api().V1alpha1().WorkerPools().Lister()
 	sandboxConfigLister := ateFactory.Api().V1alpha1().SandboxConfigs().Lister()
 	csiDriverConfigLister := ateFactory.Api().V1alpha1().CSIDriverConfigs().Lister()

@@ -125,12 +125,12 @@ func setupSyncerTest(t *testing.T, ctx context.Context, api *fakeControl, initPo
 
 	//nolint:staticcheck // NewSimpleClientset is what the informer machinery takes.
 	fakeK8s := fake.NewSimpleClientset()
-	workerFactory, workerInformer := WorkerPodInformer(fakeK8s)
+	workerFactory, workerInformer := WorkerPodInformer(fakeK8s, "")
 	workerPoolInformer, _ := newWorkerPoolInformer(t, initPools...)
 
 	// Start before the factory: the informer's initial list is what seeds the
 	// queue with the pods that already exist.
-	NewWorkerPoolSyncer(api, fakeK8s.CoreV1(), workerInformer, workerPoolInformer).Start(ctx)
+	NewWorkerPoolSyncer(api, fakeK8s.CoreV1(), workerInformer, workerPoolInformer, "").Start(ctx)
 	workerFactory.Start(ctx.Done())
 	workerFactory.WaitForCacheSync(ctx.Done())
 
@@ -146,10 +146,43 @@ func setupReconcileTest(t *testing.T, api *fakeControl, initPools ...*atev1alpha
 
 	//nolint:staticcheck // NewSimpleClientset is what the informer machinery takes.
 	fakeK8s := fake.NewSimpleClientset()
-	_, workerInformer := WorkerPodInformer(fakeK8s)
+	_, workerInformer := WorkerPodInformer(fakeK8s, "")
 	workerPoolInformer, poolIndexer := newWorkerPoolInformer(t, initPools...)
 
-	return NewWorkerPoolSyncer(api, fakeK8s.CoreV1(), workerInformer, workerPoolInformer), workerInformer.GetIndexer(), poolIndexer
+	return NewWorkerPoolSyncer(api, fakeK8s.CoreV1(), workerInformer, workerPoolInformer, ""), workerInformer.GetIndexer(), poolIndexer
+}
+
+func TestStartupScanRespectsNamespace(t *testing.T) {
+	for _, namespace := range []string{"agent-workloads", ""} {
+		t.Run("namespace="+namespace, func(t *testing.T) {
+			api := newFakeControl()
+			// Put the out-of-scope worker on the first page, so skipping it
+			// must still advance to the in-scope worker on the next page.
+			api.listPageSize = 1
+			api.put(registeredWorker("other", "pool", "live", testPodUID, "10.0.0.1"))
+			api.put(registeredWorker("agent-workloads", "pool", "deleted", otherPodUID, "10.0.0.2"))
+			kc := fake.NewClientset()
+			_, pods := WorkerPodInformer(kc, namespace)
+			pools, _ := newWorkerPoolInformer(t)
+			s := NewWorkerPoolSyncer(api, kc.CoreV1(), pods, pools, namespace)
+			defer s.queue.ShutDown()
+			s.enqueueRegisteredWorkers(t.Context())
+			for s.queue.Len() > 0 {
+				key, _ := s.queue.Get()
+				if err := s.reconcile(t.Context(), key); err != nil {
+					t.Fatal(err)
+				}
+				s.queue.Done(key)
+			}
+			var want []string
+			if namespace != "" {
+				want = []string{testPodUID}
+			}
+			if got := api.names(); !slices.Equal(got, want) {
+				t.Fatalf("workers after startup scan = %v, want %v", got, want)
+			}
+		})
+	}
 }
 
 // seedPod puts a pod in the syncer's cache as though the informer had delivered

@@ -152,6 +152,48 @@ Kubernetes is the industry standard platform for running modern workloads.  It
 is built to support a wide array of workloads, and it can scale to very large
 clusters. Agent Substrate leverages Kubernetes for infrastructure provisioning and worker lifecycle management (Kubernetes Pods). It builds on top of Kubernetes features like Pods and Pod autoscaling, while Agent Substrate provides agent-specific scheduling and control to achieve lower latency. Using Kubernetes as the underlying system enables consistent infrastructure management across all workloads types that are required for end to end agentic deployments and allows holistic infrastructure optimizations for RL scenarios that span agentic, inference and training cycles.
 
+### Namespace-scoped Kubernetes watches
+
+By default, `atecontroller` and `ateapi` watch WorkerPools in all Kubernetes
+namespaces. To manage workloads in a single namespace, set the same flag on
+both binaries, for example:
+
+```text
+--watch-namespace=agent-workloads
+```
+
+This scopes the controller's WorkerPool, Deployment, NetworkPolicy, and worker
+Pod caches, including its separate worker syncer. It also scopes the API
+server's WorkerPool informer. An empty value watches all namespaces.
+The worker syncer's startup scan leaves registry entries from other namespaces
+alone, because a Pod absent from a scoped cache is not necessarily deleted.
+
+The system namespace remains the Pod's `POD_NAMESPACE`, supplied by the
+Kubernetes downward API. The API server still watches atelet Pods there, and
+the controller still watches the `egress-mitm-ca-pool` Secret there. The flag
+does not move system components or scope cluster resources.
+
+The flag changes requests, not RBAC grants. For a restricted installation,
+replace the default broad ClusterRoleBindings with namespace RoleBindings for
+namespaced resources and separate ClusterRoleBindings for cluster resources.
+Preserve the verbs from the existing role definitions:
+
+| Component | Namespace grants | Cluster grants still required |
+| --- | --- | --- |
+| `atecontroller` | WorkerPools and their status/finalizers, Deployments, NetworkPolicies, and Pods in the watched namespace; the CA pool Secret and API EndpointSlices in the system namespace | ClusterTrustBundles and the egress MITM signer attestation permission |
+| `ateapi` | WorkerPools in the watched namespace; atelet Pods in the system namespace | SandboxConfigs, CSIDriverConfigs, and StorageClasses |
+
+A Role alone cannot grant the remaining cluster permissions. Keeping the
+default ClusterRoleBindings also keeps their broader access, regardless of the
+flag. The installer does not rewrite those bindings when this flag is added.
+
+This setting does not partition the PostgreSQL Worker registry, constrain API
+principals, or provide tenant isolation. Before narrowing an existing
+installation's scope, drain and retire workloads outside the new namespace;
+otherwise their registered Workers remain available to the API scheduler while
+this controller no longer manages their Pods. Configure RBAC before starting
+the scoped components, and use the same watch namespace on each replica.
+
 ### Why do we need a specialized control plane for Agent Substrate?
  * Idle Pods still consume resources.  While Kubernetes is very scalable,
    compute capacity is finite and has real costs.  Whether we're talking about
