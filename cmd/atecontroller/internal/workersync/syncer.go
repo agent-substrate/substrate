@@ -101,6 +101,7 @@ type WorkerPoolSyncer struct {
 	apps               appsv1client.AppsV1Interface
 	workerInformer     cache.SharedIndexInformer
 	workerPoolInformer cache.SharedIndexInformer
+	watchNamespace     string
 	queue              workqueue.TypedRateLimitingInterface[workerKey]
 	workerCount        int
 
@@ -114,13 +115,16 @@ type WorkerPoolSyncer struct {
 // NewWorkerPoolSyncer creates a new WorkerPoolSyncer. pods is used to delete
 // worker pods that have reached a terminal phase or outlived their pool, and
 // apps to tell the latter from pods the garbage collector is still removing.
-func NewWorkerPoolSyncer(client ateapi.ControlClient, pods corev1client.PodsGetter, apps appsv1client.AppsV1Interface, workerInformer, workerPoolInformer cache.SharedIndexInformer, workerCount int) *WorkerPoolSyncer {
+// watchNamespace must match the informers' namespace; empty watches all
+// namespaces.
+func NewWorkerPoolSyncer(client ateapi.ControlClient, pods corev1client.PodsGetter, apps appsv1client.AppsV1Interface, workerInformer, workerPoolInformer cache.SharedIndexInformer, watchNamespace string, workerCount int) *WorkerPoolSyncer {
 	return &WorkerPoolSyncer{
 		client:             client,
 		pods:               pods,
 		apps:               apps,
 		workerInformer:     workerInformer,
 		workerPoolInformer: workerPoolInformer,
+		watchNamespace:     watchNamespace,
 		queue:              workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[workerKey]()),
 		workerCount:        workerCount,
 		listBackoff:        defaultListBackoff,
@@ -549,7 +553,8 @@ const (
 )
 
 // enqueueRegisteredWorkers enqueues a key for every worker record in the
-// registry. Records whose pods are live and unchanged reconcile to a no-op;
+// watched namespace, or all namespaces when unset. Records whose pods are live
+// and unchanged reconcile to a no-op;
 // orphaned records (pod gone, or its name reused by a new pod UID) get cleaned
 // up.
 //
@@ -571,6 +576,10 @@ func (s *WorkerPoolSyncer) enqueueRegisteredWorkers(ctx context.Context) {
 			return
 		}
 		for _, w := range page.GetWorkers() {
+			// Workers outside our Pod cache are not evidence of deleted Pods.
+			if s.watchNamespace != "" && w.GetWorkerNamespace() != s.watchNamespace {
+				continue
+			}
 			// The key is a pod identity, so it is rebuilt from the recorded pod
 			// fields rather than from the Worker's name.
 			s.queue.Add(workerKey{
