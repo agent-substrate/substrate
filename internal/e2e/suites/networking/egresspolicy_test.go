@@ -203,6 +203,61 @@ func TestActorEgressPolicyCache(t *testing.T) {
 	}
 }
 
+// TestActorEgressPolicyCacheExpiration verifies that cached egress policy
+// entries expire after the configured cache_ttl (5s default), triggering a
+// cache miss and a new ext_proc lookup on the next request.
+func TestActorEgressPolicyCacheExpiration(t *testing.T) {
+	ctx := context.Background()
+	router, actorRef := hostnamePolicyActor(t, ctx)
+
+	beforeScrape, err := e2e.ScrapeEgressEnvoyMetrics(ctx)
+	if err != nil {
+		t.Fatalf("ScrapeEgressEnvoyMetrics before fetches: %v", err)
+	}
+	beforeHits, beforeMisses := e2e.EgressPolicyCacheCounts(beforeScrape)
+	beforeExtProc := e2e.EgressExtProcStreamCounts(beforeScrape)
+
+	payload := []byte(`{"url":"https://example.com/","disableKeepAlive":true}`)
+	for i := range 2 {
+		status, body := postThroughEgressActorUntil(t, ctx, router, actorRef, "/", payload, reached)
+		if status != http.StatusOK {
+			t.Fatalf("pre-expiration request %d to example.com returned HTTP %d, want 200; body: %s", i+1, status, body)
+		}
+	}
+
+	// Wait longer than the 5s default cache_ttl so the cached policy expires.
+	time.Sleep(6 * time.Second)
+
+	for i := range 2 {
+		status, body := postThroughEgressActorUntil(t, ctx, router, actorRef, "/", payload, reached)
+		if status != http.StatusOK {
+			t.Fatalf("post-expiration request %d to example.com returned HTTP %d, want 200; body: %s", i+1, status, body)
+		}
+	}
+
+	afterScrape, err := e2e.ScrapeEgressEnvoyMetrics(ctx)
+	if err != nil {
+		t.Fatalf("ScrapeEgressEnvoyMetrics after fetches: %v", err)
+	}
+	afterHits, afterMisses := e2e.EgressPolicyCacheCounts(afterScrape)
+	afterExtProc := e2e.EgressExtProcStreamCounts(afterScrape)
+
+	const (
+		wantHits         = 2
+		wantMisses       = 2
+		wantExtProcCalls = 2
+	)
+	if got := afterHits - beforeHits; got != wantHits {
+		t.Errorf("egress policy cache hits delta = %d, want %d", got, wantHits)
+	}
+	if got := afterMisses - beforeMisses; got != wantMisses {
+		t.Errorf("egress policy cache misses delta = %d, want %d", got, wantMisses)
+	}
+	if got := afterExtProc[e2e.EgressExtProcIdentityStatPrefix] - beforeExtProc[e2e.EgressExtProcIdentityStatPrefix]; got != wantExtProcCalls {
+		t.Errorf("egress_identity ext_proc streams_started delta = %d, want %d", got, wantExtProcCalls)
+	}
+}
+
 // fetchThroughEgressActorUntil is fetchThroughEgressActor with the caller
 // deciding which answer is final.
 func fetchThroughEgressActorUntil(t *testing.T, ctx context.Context, router *e2e.RouterClient, actorRef resources.ActorRef, url string, done func(status int, body []byte) bool) (int, []byte) {

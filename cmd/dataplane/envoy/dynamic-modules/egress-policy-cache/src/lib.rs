@@ -28,7 +28,7 @@ use serde::Deserialize;
 use std::cell::RefCell;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use thread_local::ThreadLocal;
 
 /// Key holding the egress policy SNI rules JSON.
@@ -44,8 +44,21 @@ pub const CONNECT_CACHE_HIT_COUNTER: &str = "ate_egress.connect_cache_hit";
 /// Counter name for egress policy cache misses on CONNECT.
 pub const CONNECT_CACHE_MISS_COUNTER: &str = "ate_egress.connect_cache_miss";
 
-/// Thread-local store of LRU caches with `String` keys and values.
-pub type ThreadLocalCache = ThreadLocal<RefCell<LruCache<String, String>>>;
+/// Cached egress policy value and the timestamp when it was stored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CachedPolicy {
+  pub policy: String,
+  pub stored_at: Instant,
+}
+
+impl CachedPolicy {
+  pub fn new(policy: String, stored_at: Instant) -> Self {
+    Self { policy, stored_at }
+  }
+}
+
+/// Thread-local store of LRU caches with `String` keys and [`CachedPolicy`] values.
+pub type ThreadLocalCache = ThreadLocal<RefCell<LruCache<String, CachedPolicy>>>;
 
 declare_init_functions!(init, new_http_filter_config_fn);
 
@@ -125,7 +138,7 @@ impl Default for Config {
   }
 }
 
-fn new_lru_cache(max_cache_items: usize) -> RefCell<LruCache<String, String>> {
+fn new_lru_cache(max_cache_items: usize) -> RefCell<LruCache<String, CachedPolicy>> {
   let cap = NonZeroUsize::new(max_cache_items).unwrap_or(NonZeroUsize::MIN);
   RefCell::new(LruCache::new(cap))
 }
@@ -158,7 +171,7 @@ impl EgressPolicyCacheFilterConfig {
 
   /// Returns a reference to the current thread's LRU cache, initializing it
   /// with capacity `config.max_cache_items` on first access.
-  pub fn local_cache(&self) -> &RefCell<LruCache<String, String>> {
+  pub fn local_cache(&self) -> &RefCell<LruCache<String, CachedPolicy>> {
     let max_items = self.config.max_cache_items;
     self.cache.get_or(|| new_lru_cache(max_items))
   }
@@ -186,7 +199,7 @@ pub struct EgressPolicyCacheFilter {
 impl EgressPolicyCacheFilter {
   /// Returns a reference to the current thread's LRU cache, initializing it
   /// with capacity `config.max_cache_items` on first access.
-  pub fn local_cache(&self) -> &RefCell<LruCache<String, String>> {
+  pub fn local_cache(&self) -> &RefCell<LruCache<String, CachedPolicy>> {
     let max_items = self.config.max_cache_items;
     self.cache.get_or(|| new_lru_cache(max_items))
   }
@@ -197,6 +210,12 @@ fn is_http_200<EHF: EnvoyHttpFilter>(envoy_filter: &EHF) -> bool {
     return status.as_slice() == b"200";
   }
   false
+}
+
+fn has_cached_egress_policy<EHF: EnvoyHttpFilter>(envoy_filter: &EHF) -> bool {
+  envoy_filter
+    .get_filter_state_bytes(ATE_POLICY_EGRESS_CACHED.as_bytes())
+    .is_some()
 }
 
 fn read_egress_policy<EHF: EnvoyHttpFilter>(envoy_filter: &EHF) -> Option<String> {
@@ -225,10 +244,24 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for EgressPolicyCacheFilter {
     envoy_filter: &mut EHF,
     _end_of_stream: bool,
   ) -> envoy_dynamic_module_type_on_http_filter_request_headers_status {
-    let _ = (&self.config.cache_ttl, self.config.cache_enabled);
-    if let Some(cert_digest) = read_peer_cert_digest(envoy_filter)
-      && let Some(policy) = self.local_cache().borrow_mut().get(&cert_digest).cloned()
-    {
+    let _ = self.config.cache_enabled;
+    let cached_policy = if let Some(cert_digest) = read_peer_cert_digest(envoy_filter) {
+      let mut cache = self.local_cache().borrow_mut();
+      if let Some(entry) = cache.get(&cert_digest) {
+        if entry.stored_at.elapsed() > self.config.cache_ttl {
+          cache.pop(&cert_digest);
+          None
+        } else {
+          Some(entry.policy.clone())
+        }
+      } else {
+        None
+      }
+    } else {
+      None
+    };
+
+    if let Some(policy) = cached_policy {
       envoy_filter.set_filter_state_bytes(ATE_POLICY_EGRESS_CACHED.as_bytes(), policy.as_bytes());
       let _ = envoy_filter.increment_counter(self.cache_hit_counter, 1);
     } else {
@@ -242,13 +275,18 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for EgressPolicyCacheFilter {
     envoy_filter: &mut EHF,
     _end_of_stream: bool,
   ) -> envoy_dynamic_module_type_on_http_filter_response_headers_status {
-    // Store policy in cache in case it was authorized (200 response)
-    // Actor identity comes from cert's subject. Use cert digest as key, since
-    // it uniquely identifies the cert and hence actor.
-    if is_http_200(envoy_filter) 
-      && let Some(policy) = read_egress_policy(envoy_filter) 
-      && let Some(cert_digest) = read_peer_cert_digest(envoy_filter) {
-      self.local_cache().borrow_mut().put(cert_digest, policy);
+    // Store policy in cache in case it was authorized (200 response) on a
+    // cache miss. Actor identity comes from cert's subject. Use cert digest as
+    // key, since it uniquely identifies the cert and hence actor.
+    if is_http_200(envoy_filter)
+      && !has_cached_egress_policy(envoy_filter)
+      && let Some(policy) = read_egress_policy(envoy_filter)
+      && let Some(cert_digest) = read_peer_cert_digest(envoy_filter)
+    {
+      self.local_cache().borrow_mut().put(
+        cert_digest,
+        CachedPolicy::new(policy, Instant::now()),
+      );
     }
     envoy_dynamic_module_type_on_http_filter_response_headers_status::Continue
   }
@@ -522,10 +560,10 @@ mod tests {
     let config =
       EgressPolicyCacheFilterConfig::with_counters(Config::default(), hit_id, miss_id);
     let expected_policy = r#"{"rules":[{"pattern":"*.example.com","mode":"mitm"}]}"#;
-    config
-      .local_cache()
-      .borrow_mut()
-      .put("abc123digest".to_string(), expected_policy.to_string());
+    config.local_cache().borrow_mut().put(
+      "abc123digest".to_string(),
+      CachedPolicy::new(expected_policy.to_string(), Instant::now()),
+    );
 
     let mut mock_filter = MockEnvoyHttpFilter::new();
     mock_filter
@@ -555,6 +593,49 @@ mod tests {
   }
 
   #[test]
+  fn test_on_request_headers_expired_cache_entry_is_removed_and_increments_miss_counter() {
+    let hit_id = EnvoyCounterId(1);
+    let miss_id = EnvoyCounterId(2);
+    let config = EgressPolicyCacheFilterConfig::with_counters(
+      Config {
+        cache_ttl: Duration::from_secs(5),
+        cache_enabled: true,
+        max_cache_items: 1000,
+      },
+      hit_id,
+      miss_id,
+    );
+    config.local_cache().borrow_mut().put(
+      "abc123digest".to_string(),
+      CachedPolicy::new(
+        r#"{"rules":[{"pattern":"*.example.com","mode":"mitm"}]}"#.to_string(),
+        Instant::now() - Duration::from_secs(10),
+      ),
+    );
+
+    let mut mock_filter = MockEnvoyHttpFilter::new();
+    mock_filter
+      .expect_get_attribute_string()
+      .withf(|id| {
+        *id == envoy_dynamic_module_type_attribute_id::ConnectionSha256PeerCertificateDigest
+      })
+      .returning(|_| Some(EnvoyBuffer::new(b"abc123digest")));
+    mock_filter.expect_set_filter_state_bytes().never();
+    mock_filter
+      .expect_increment_counter()
+      .withf(move |id, val| *id == miss_id && *val == 1)
+      .return_const(Result::<(), envoy_dynamic_module_type_metrics_result>::Ok(()))
+      .once();
+
+    let mut filter = config.new_http_filter(&mut mock_filter);
+    assert_eq!(
+      filter.on_request_headers(&mut mock_filter, false),
+      envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue
+    );
+    assert!(config.local_cache().borrow_mut().get("abc123digest").is_none());
+  }
+
+  #[test]
   fn test_on_response_headers_caches_on_200_with_policy_and_cert_digest() {
     let config = EgressPolicyCacheFilterConfig::new(Config::default());
     let mut mock_filter = MockEnvoyHttpFilter::new();
@@ -562,6 +643,10 @@ mod tests {
       .expect_get_response_header_value()
       .withf(|key| key == ":status")
       .returning(|_| Some(EnvoyBuffer::new(b"200")));
+    mock_filter
+      .expect_get_filter_state_bytes()
+      .withf(|key| key == ATE_POLICY_EGRESS_CACHED.as_bytes())
+      .returning(|_| None);
     mock_filter
       .expect_get_filter_state_bytes()
       .withf(|key| key == ATE_POLICY_EGRESS.as_bytes())
@@ -583,14 +668,58 @@ mod tests {
       envoy_dynamic_module_type_on_http_filter_response_headers_status::Continue
     );
 
+    let cached = config
+      .local_cache()
+      .borrow_mut()
+      .get("abc123digest")
+      .cloned()
+      .expect("expected entry in cache");
     assert_eq!(
-      config
-        .local_cache()
-        .borrow_mut()
-        .get("abc123digest")
-        .map(String::as_str),
-      Some(r#"{"rules":[{"pattern":"*.example.com","mode":"mitm"}]}"#)
+      cached.policy,
+      r#"{"rules":[{"pattern":"*.example.com","mode":"mitm"}]}"#
     );
+    assert!(cached.stored_at.elapsed() < Duration::from_secs(5));
+  }
+
+  #[test]
+  fn test_on_response_headers_skips_cache_when_already_cached() {
+    let config = EgressPolicyCacheFilterConfig::new(Config::default());
+    let initial_stored_at = Instant::now() - Duration::from_secs(3);
+    config.local_cache().borrow_mut().put(
+      "abc123digest".to_string(),
+      CachedPolicy::new(
+        r#"{"rules":[{"pattern":"*.example.com","mode":"mitm"}]}"#.to_string(),
+        initial_stored_at,
+      ),
+    );
+
+    let mut mock_filter = MockEnvoyHttpFilter::new();
+    mock_filter
+      .expect_get_response_header_value()
+      .withf(|key| key == ":status")
+      .returning(|_| Some(EnvoyBuffer::new(b"200")));
+    mock_filter
+      .expect_get_filter_state_bytes()
+      .withf(|key| key == ATE_POLICY_EGRESS_CACHED.as_bytes())
+      .returning(|_| {
+        Some(EnvoyBuffer::new(
+          br#"{"rules":[{"pattern":"*.example.com","mode":"mitm"}]}"#,
+        ))
+      });
+
+    let mut filter = config.new_http_filter(&mut mock_filter);
+    assert_eq!(
+      filter.on_response_headers(&mut mock_filter, false),
+      envoy_dynamic_module_type_on_http_filter_response_headers_status::Continue
+    );
+
+    let cached = config
+      .local_cache()
+      .borrow_mut()
+      .get("abc123digest")
+      .cloned()
+      .expect("expected entry in cache");
+    assert_eq!(cached.stored_at, initial_stored_at);
   }
 
   #[test]
@@ -633,18 +762,23 @@ mod tests {
 
     assert_eq!(filter1.local_cache().borrow().cap().get(), 2);
 
+    let now = Instant::now();
     filter1
       .local_cache()
       .borrow_mut()
-      .put("k1".to_string(), "v1".to_string());
+      .put("k1".to_string(), CachedPolicy::new("v1".to_string(), now));
     filter1
       .local_cache()
       .borrow_mut()
-      .put("k2".to_string(), "v2".to_string());
+      .put("k2".to_string(), CachedPolicy::new("v2".to_string(), now));
 
     // Second filter created from the same config on the same thread sees the entries.
     assert_eq!(
-      filter2.local_cache().borrow_mut().get("k1").map(String::as_str),
+      filter2
+        .local_cache()
+        .borrow_mut()
+        .get("k1")
+        .map(|e| e.policy.as_str()),
       Some("v1")
     );
 
@@ -652,14 +786,22 @@ mod tests {
     filter2
       .local_cache()
       .borrow_mut()
-      .put("k3".to_string(), "v3".to_string());
+      .put("k3".to_string(), CachedPolicy::new("v3".to_string(), now));
     assert_eq!(filter1.local_cache().borrow_mut().get("k2"), None);
     assert_eq!(
-      filter1.local_cache().borrow_mut().get("k1").map(String::as_str),
+      filter1
+        .local_cache()
+        .borrow_mut()
+        .get("k1")
+        .map(|e| e.policy.as_str()),
       Some("v1")
     );
     assert_eq!(
-      filter1.local_cache().borrow_mut().get("k3").map(String::as_str),
+      filter1
+        .local_cache()
+        .borrow_mut()
+        .get("k3")
+        .map(|e| e.policy.as_str()),
       Some("v3")
     );
 
