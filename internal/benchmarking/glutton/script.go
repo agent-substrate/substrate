@@ -99,6 +99,9 @@ func validateOperation(op *gluttonpb.Operation, path string) error {
 // checked between passes only: the pass in progress finishes, so a loop
 // overruns its budget by at most one pass and nothing is cut mid-flight.
 // The only errors are the caller's context ending and a failing request.
+// The context is checked before every step, since most requests run to
+// completion without looking at it: a looped block of CPU burns or disk
+// writes stops at the next step once the caller is gone, not at its budget.
 func (s *Service) runBlock(ctx context.Context, block *gluttonpb.Block, path string, deadline time.Time) (*gluttonpb.StepResult, error) {
 	start := time.Now()
 	result := newResult(len(block.GetSteps()))
@@ -111,6 +114,10 @@ func (s *Service) runBlock(ctx context.Context, block *gluttonpb.Block, path str
 	for {
 		result.Stats.Passes++
 		for i, step := range block.GetSteps() {
+			if err := ctx.Err(); err != nil {
+				result.Stats.ElapsedMs = time.Since(start).Milliseconds()
+				return result, status.FromContextError(err).Err()
+			}
 			child, err := s.runStep(ctx, step, fmt.Sprintf("%s.steps[%d]", path, i), deadline)
 			if child != nil {
 				addResult(result.Children[i], child)
