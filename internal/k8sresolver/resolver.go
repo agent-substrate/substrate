@@ -53,10 +53,8 @@ func (b *Builder) Build(target resolver.Target, cc resolver.ClientConn, opts res
 		return nil, fmt.Errorf("k8sresolver: %w", err)
 	}
 
-	cli := b.client
-
 	selector := labels.Set{"kubernetes.io/service-name": svc}.AsSelector()
-	factory := informers.NewSharedInformerFactoryWithOptions(cli, 0,
+	factory := informers.NewSharedInformerFactoryWithOptions(b.client, 0,
 		informers.WithNamespace(ns),
 		informers.WithTweakListOptions(func(o *metav1.ListOptions) { o.LabelSelector = selector.String() }),
 	)

@@ -111,9 +111,9 @@ func testServer(t *testing.T, opts serverOptions) *server {
 	return newServer(m, opts)
 }
 
-// startServer runs DeltaSecrets against a fake stream and returns the stream
-// plus a func that stops it and reports the server's error.
-func startServer(t *testing.T, srv *server) (*fakeDeltaStream, func() error) {
+// startServer runs DeltaSecrets against a fake stream. The stream is
+// cancelled when the test ends, and an error DeltaSecrets returned fails it.
+func startServer(t *testing.T, srv *server) *fakeDeltaStream {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	stream := newFakeDeltaStream(ctx)
@@ -121,16 +121,18 @@ func startServer(t *testing.T, srv *server) (*fakeDeltaStream, func() error) {
 	done := make(chan error, 1)
 	go func() { done <- srv.DeltaSecrets(stream) }()
 
-	return stream, func() error {
+	t.Cleanup(func() {
 		cancel()
 		select {
 		case err := <-done:
-			return err
+			if err != nil {
+				t.Errorf("DeltaSecrets returned %v", err)
+			}
 		case <-time.After(respondWait):
-			t.Fatal("DeltaSecrets did not return after the stream was cancelled")
-			return nil
+			t.Error("DeltaSecrets did not return after the stream was cancelled")
 		}
-	}
+	})
+	return stream
 }
 
 func resourceNames(resp *discovery.DeltaDiscoveryResponse) []string {
@@ -176,12 +178,7 @@ func leafFromResource(t *testing.T, res *discovery.Resource) *x509.Certificate {
 func TestDeltaSecretsMintsSubscribedName(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		srv := testServer(t, serverOptions{})
-		stream, stop := startServer(t, srv)
-		defer func() {
-			if err := stop(); err != nil {
-				t.Errorf("DeltaSecrets returned %v", err)
-			}
-		}()
+		stream := startServer(t, srv)
 
 		stream.requests <- &discovery.DeltaDiscoveryRequest{
 			TypeUrl:                secretTypeURL,
@@ -230,12 +227,7 @@ func TestDeltaSecretsMintsSubscribedName(t *testing.T) {
 func TestDeltaSecretsStampsResourceTTL(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		srv := testServer(t, serverOptions{})
-		stream, stop := startServer(t, srv)
-		defer func() {
-			if err := stop(); err != nil {
-				t.Errorf("DeltaSecrets returned %v", err)
-			}
-		}()
+		stream := startServer(t, srv)
 
 		stream.requests <- &discovery.DeltaDiscoveryRequest{
 			TypeUrl:                secretTypeURL,
@@ -262,12 +254,7 @@ func TestDeltaSecretsStampsResourceTTL(t *testing.T) {
 func TestDeltaSecretsWithdrawsRefusedName(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		srv := testServer(t, serverOptions{})
-		stream, stop := startServer(t, srv)
-		defer func() {
-			if err := stop(); err != nil {
-				t.Errorf("DeltaSecrets returned %v", err)
-			}
-		}()
+		stream := startServer(t, srv)
 
 		// The minter refuses names, not destinations: "*.evil.test" is turned away
 		// for being a wildcard rather than for being anyone in particular. What
@@ -295,12 +282,7 @@ func TestDeltaSecretsWithdrawsRefusedName(t *testing.T) {
 func TestDeltaSecretsBareAckSendsNothing(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		srv := testServer(t, serverOptions{})
-		stream, stop := startServer(t, srv)
-		defer func() {
-			if err := stop(); err != nil {
-				t.Errorf("DeltaSecrets returned %v", err)
-			}
-		}()
+		stream := startServer(t, srv)
 
 		stream.requests <- &discovery.DeltaDiscoveryRequest{
 			TypeUrl:                secretTypeURL,
@@ -330,12 +312,7 @@ func TestDeltaSecretsNeverPushesUnprompted(t *testing.T) {
 		// The TTL testServer's minter is built with.
 		const ttl = defaultTTL
 		srv := testServer(t, serverOptions{})
-		stream, stop := startServer(t, srv)
-		defer func() {
-			if err := stop(); err != nil {
-				t.Errorf("DeltaSecrets returned %v", err)
-			}
-		}()
+		stream := startServer(t, srv)
 
 		stream.requests <- &discovery.DeltaDiscoveryRequest{
 			TypeUrl:                secretTypeURL,
@@ -357,12 +334,7 @@ func TestDeltaSecretsNeverPushesUnprompted(t *testing.T) {
 func TestDeltaSecretsIgnoresUnsubscribe(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		srv := testServer(t, serverOptions{})
-		stream, stop := startServer(t, srv)
-		defer func() {
-			if err := stop(); err != nil {
-				t.Errorf("DeltaSecrets returned %v", err)
-			}
-		}()
+		stream := startServer(t, srv)
 
 		stream.requests <- &discovery.DeltaDiscoveryRequest{
 			TypeUrl:                secretTypeURL,
@@ -397,12 +369,7 @@ func TestDeltaSecretsIgnoresUnsubscribe(t *testing.T) {
 func TestDeltaSecretsReplayOnlyRequestIsSilent(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		srv := testServer(t, serverOptions{})
-		stream, stop := startServer(t, srv)
-		defer func() {
-			if err := stop(); err != nil {
-				t.Errorf("DeltaSecrets returned %v", err)
-			}
-		}()
+		stream := startServer(t, srv)
 
 		stream.requests <- &discovery.DeltaDiscoveryRequest{
 			TypeUrl:                 secretTypeURL,
@@ -445,12 +412,7 @@ func TestDeltaSecretsRejectsWrongTypeURL(t *testing.T) {
 func TestDeltaSecretsSurvivesNack(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		srv := testServer(t, serverOptions{})
-		stream, stop := startServer(t, srv)
-		defer func() {
-			if err := stop(); err != nil {
-				t.Errorf("DeltaSecrets returned %v", err)
-			}
-		}()
+		stream := startServer(t, srv)
 
 		stream.requests <- &discovery.DeltaDiscoveryRequest{
 			TypeUrl:                secretTypeURL,
@@ -485,12 +447,7 @@ func TestDeltaSecretsSurvivesNack(t *testing.T) {
 func TestResubscribeIsMintedAgain(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		srv := testServer(t, serverOptions{})
-		stream, stop := startServer(t, srv)
-		defer func() {
-			if err := stop(); err != nil {
-				t.Errorf("DeltaSecrets returned %v", err)
-			}
-		}()
+		stream := startServer(t, srv)
 
 		subscribe := &discovery.DeltaDiscoveryRequest{
 			TypeUrl:                secretTypeURL,

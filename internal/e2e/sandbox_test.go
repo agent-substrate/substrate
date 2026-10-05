@@ -70,6 +70,17 @@ func renderPool(t *testing.T, relPath string) *v1alpha1.WorkerPool {
 	}
 
 	pool := &v1alpha1.WorkerPool{}
+	strictDecodeKinds(t, relPath, raw, map[string]any{"WorkerPool": pool})
+	if pool.Name == "" {
+		t.Fatalf("rendered %s is missing a WorkerPool", relPath)
+	}
+	return pool
+}
+
+// strictDecodeKinds strict-decodes each YAML document in raw whose kind is a
+// key of into into that value, and skips the rest.
+func strictDecodeKinds(t *testing.T, what string, raw []byte, into map[string]any) {
+	t.Helper()
 	for doc := range strings.SplitSeq(string(raw), "\n---\n") {
 		if strings.TrimSpace(doc) == "" {
 			continue
@@ -78,27 +89,24 @@ func renderPool(t *testing.T, relPath string) *v1alpha1.WorkerPool {
 			Kind string `json:"kind"`
 		}
 		if err := yaml.Unmarshal([]byte(doc), &meta); err != nil {
-			t.Fatalf("rendered %s is not valid YAML: %v\n%s", relPath, err, doc)
+			t.Fatalf("rendered %s is not valid YAML: %v\n%s", what, err, doc)
 		}
-		if meta.Kind != "WorkerPool" {
+		obj, ok := into[meta.Kind]
+		if !ok {
 			continue
 		}
-		if err := yaml.UnmarshalStrict([]byte(doc), pool); err != nil {
-			t.Fatalf("rendered %s WorkerPool does not match the API type: %v\n%s", relPath, meta.Kind, doc)
+		if err := yaml.UnmarshalStrict([]byte(doc), obj); err != nil {
+			t.Fatalf("rendered %s %s does not match the API type: %v\n%s", what, meta.Kind, err, doc)
 		}
 	}
-	if pool.Name == "" {
-		t.Fatalf("rendered %s is missing a WorkerPool", relPath)
-	}
-	return pool
 }
 
 // renderTemplates renders a fixture's substrate template manifest and
 // strict-decodes its ActorTemplate documents; the protojson decode plays the
 // same misplaced-placeholder tripwire renderPool's strict mode does.
-func renderTemplates(t *testing.T, relPath string) []*ateapipb.ActorTemplate {
+func renderTemplates(t *testing.T, relPath string, trustBundle bool) []*ateapipb.ActorTemplate {
 	t.Helper()
-	inline, blocks := substrateTemplateSubstitutions("test-bucket", "render", false)
+	inline, blocks := substrateTemplateSubstitutions("test-bucket", "render", trustBundle)
 	rendered, err := os.ReadFile(renderManifest(t, relPath, inline, blocks))
 	if err != nil {
 		t.Fatalf("reading the rendered %s: %v", relPath, err)
@@ -132,7 +140,7 @@ func TestRenderSubstrateFixtures_GVisor(t *testing.T) {
 				t.Errorf("WorkerPool carries micro-VM runtime fields: class=%q", pool.Spec.SandboxClass)
 			}
 
-			templates := renderTemplates(t, fixture.manifests.Template)
+			templates := renderTemplates(t, fixture.manifests.Template, false)
 			if len(templates) != fixture.templates {
 				t.Fatalf("rendered %s yields %d templates, want %d", fixture.manifests.Template, len(templates), fixture.templates)
 			}
@@ -181,7 +189,7 @@ func TestRenderSubstrateFixtures_MicroVM(t *testing.T) {
 				t.Errorf("WorkerPool runtime = class %q, want microvm", pool.Spec.SandboxClass)
 			}
 
-			templates := renderTemplates(t, fixture.manifests.Template)
+			templates := renderTemplates(t, fixture.manifests.Template, false)
 			if len(templates) != fixture.templates {
 				t.Fatalf("rendered %s yields %d templates, want %d", fixture.manifests.Template, len(templates), fixture.templates)
 			}

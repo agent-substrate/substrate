@@ -149,28 +149,14 @@ func TestNetworkPolicyDataPlaneEnforcement(t *testing.T) {
 	// Create and Resume Actor
 	actorName := "netpol-dataplane-" + nsObj.Name
 	t.Logf("Creating Actor %q in Atespace %q...", actorName, nsObj.Name)
-	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: nsObj.Name, Name: actorName},
-		ActorTemplate: e2e.TemplateRef(at),
-	}}); err != nil {
-		t.Fatalf("failed to create Actor: %v", err)
-	}
-	defer func() {
-		_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: nsObj.Name, Name: actorName},
-		})
-		_, _ = clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: nsObj.Name, Name: actorName},
-		})
-	}()
+	actorRef := &ateapipb.ObjectRef{Atespace: nsObj.Name, Name: actorName}
+	e2e.CreateActor(t, ctx, clients, actorRef, e2e.TemplateRef(at))
 
 	t.Logf("Resuming Actor %q...", actorName)
-	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: nsObj.Name, Name: actorName},
-	}); err != nil {
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: actorRef}); err != nil {
 		t.Fatalf("failed to resume Actor: %v", err)
 	}
-	waitForActorRunning(ctx, t, clients, nsObj.Name, actorName)
+	e2e.WaitForActorState(t, ctx, clients, actorRef, ateapipb.ActorState_ACTOR_STATE_RUNNING, time.Minute)
 
 	// === Positive Data Plane Verification (Authorized Ingress) ===
 	t.Log("=== Verifying authorized ingress via atenet-router ===")
@@ -248,7 +234,7 @@ func TestNetworkPolicyDataPlaneEnforcement(t *testing.T) {
 	if _, err := clients.K8s.CoreV1().Pods(rogueNsObj.Name).Create(ctx, probePod, metav1.CreateOptions{}); err != nil {
 		t.Fatalf("failed to create probe pod: %v", err)
 	}
-	waitForPodRunning(ctx, t, clients, rogueNsObj.Name, probePod.Name)
+	e2e.WaitForPodReady(t, ctx, rogueNsObj.Name, probePod.Name, time.Minute)
 
 	// Attempt direct connection to worker pod IP from unauthorized probe pod
 	execArgs := []string{"exec", "-n", rogueNsObj.Name, probePod.Name}
@@ -285,34 +271,4 @@ func setupDemoCounterTemplate(ctx context.Context, t *testing.T, clients *e2e.Cl
 		Labels:       map[string]string{"netpol-test": ns},
 	})
 	return poolName, at
-}
-
-func waitForActorRunning(ctx context.Context, t *testing.T, clients *e2e.Clients, atespace, actorName string) {
-	t.Helper()
-	deadline := time.Now().Add(60 * time.Second)
-	for time.Now().Before(deadline) {
-		resp, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: atespace, Name: actorName},
-		})
-		if err == nil && resp.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_RUNNING {
-			t.Logf("Actor %q reached RUNNING state", actorName)
-			return
-		}
-		time.Sleep(1 * time.Second)
-	}
-	t.Fatalf("timed out waiting for actor %q to reach RUNNING state", actorName)
-}
-
-func waitForPodRunning(ctx context.Context, t *testing.T, clients *e2e.Clients, namespace, podName string) {
-	t.Helper()
-	deadline := time.Now().Add(60 * time.Second)
-	for time.Now().Before(deadline) {
-		pod, err := clients.K8s.CoreV1().Pods(namespace).Get(ctx, podName, metav1.GetOptions{})
-		if err == nil && pod.Status.Phase == corev1.PodRunning {
-			t.Logf("Pod %s/%s is RUNNING", namespace, podName)
-			return
-		}
-		time.Sleep(1 * time.Second)
-	}
-	t.Fatalf("timed out waiting for pod %s/%s to reach RUNNING status", namespace, podName)
 }

@@ -16,7 +16,6 @@ package networking
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -193,11 +192,7 @@ func TestActorEgressNonStandardPort(t *testing.T) {
 // the status and body it echoes back.
 func fetchThroughEgressActor(t *testing.T, ctx context.Context, router *e2e.RouterClient, actorRef resources.ActorRef, url string) (int, []byte) {
 	t.Helper()
-	payload, err := json.Marshal(map[string]string{"url": url})
-	if err != nil {
-		t.Fatalf("marshaling the fetch request for %s: %v", url, err)
-	}
-	return postThroughEgressActor(t, ctx, router, actorRef, "/", payload)
+	return fetchThroughEgressActorUntil(t, ctx, router, actorRef, url, reached)
 }
 
 // postThroughEgressActor POSTs payload to path on the egress demo Actor and
@@ -208,9 +203,7 @@ func fetchThroughEgressActor(t *testing.T, ctx context.Context, router *e2e.Rout
 // the Actor reports as a 502.
 func postThroughEgressActor(t *testing.T, ctx context.Context, router *e2e.RouterClient, actorRef resources.ActorRef, path string, payload []byte) (int, []byte) {
 	t.Helper()
-	return postThroughEgressActorUntil(t, ctx, router, actorRef, path, payload, func(status int, _ []byte) bool {
-		return status == http.StatusOK
-	})
+	return postThroughEgressActorUntil(t, ctx, router, actorRef, path, payload, reached)
 }
 
 // postThroughEgressActorUntil is postThroughEgressActor with the caller

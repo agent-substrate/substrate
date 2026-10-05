@@ -62,6 +62,7 @@ type routerHealth struct {
 	report RouterHealthReport
 
 	interval        time.Duration
+	timeout         time.Duration
 	clientset       kubernetes.Interface
 	apiClient       ateapipb.ControlClient
 	cfg             routerConfig
@@ -74,6 +75,7 @@ func newRouterHealth(interval time.Duration, clientset kubernetes.Interface, api
 	}
 	return &routerHealth{
 		interval:        interval,
+		timeout:         dependencyHealthCheckTimeout,
 		clientset:       clientset,
 		apiClient:       apiClient,
 		cfg:             cfg,
@@ -165,7 +167,7 @@ func (rh *routerHealth) checkDataplane(ctx context.Context) (bool, string) {
 		return true, "Skipped (egress mode)"
 	}
 
-	timeoutCtx, cancel := context.WithTimeout(ctx, dependencyHealthCheckTimeout)
+	timeoutCtx, cancel := context.WithTimeout(ctx, rh.timeout)
 	defer cancel()
 
 	check := rh.cfg.atenetRouter().healthCheck()
@@ -202,7 +204,7 @@ func (rh *routerHealth) checkK8s(ctx context.Context) (bool, string) {
 		return true, "Skipped (no Kubernetes client)"
 	}
 
-	timeoutCtx, cancel := context.WithTimeout(ctx, dependencyHealthCheckTimeout)
+	timeoutCtx, cancel := context.WithTimeout(ctx, rh.timeout)
 	defer cancel()
 
 	restClient := rh.clientset.Discovery().RESTClient()
@@ -226,7 +228,7 @@ func (rh *routerHealth) checkAteAPI(ctx context.Context) (bool, string) {
 		return false, "No client"
 	}
 
-	timeoutCtx, cancel := context.WithTimeout(ctx, dependencyHealthCheckTimeout)
+	timeoutCtx, cancel := context.WithTimeout(ctx, rh.timeout)
 	defer cancel()
 
 	_, err := rh.apiClient.ListActors(timeoutCtx, &ateapipb.ListActorsRequest{PageSize: 1})

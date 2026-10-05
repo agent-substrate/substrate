@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -230,22 +231,10 @@ func (f *fakeEnvoyAdmin) handler() http.HandlerFunc {
 			// Includes an admin line that must be excluded from the sum.
 			w.Write([]byte(
 				"listener.admin.downstream_cx_active: 1\n" +
-					"listener.0.0.0.0_8080.downstream_cx_active: " + itoa(active) + "\n" +
+					"listener.0.0.0.0_8080.downstream_cx_active: " + strconv.Itoa(active) + "\n" +
 					"http.ingress_http.downstream_cx_active_unrelated: 99\n"))
 		}
 	}
-}
-
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var b []byte
-	for n > 0 {
-		b = append([]byte{byte('0' + n%10)}, b...)
-		n /= 10
-	}
-	return string(b)
 }
 
 // TestEnvoyDrainerDrainsToZero asserts the drainer POSTs the two admin calls
@@ -298,7 +287,7 @@ func TestEnvoyDrainerReachesIPv6OnlyAdmin(t *testing.T) {
 	srv.Start()
 	defer srv.Close()
 
-	d := newEnvoyDrainer(net.JoinHostPort("localhost", itoa(ln.Addr().(*net.TCPAddr).Port)))
+	d := newEnvoyDrainer(net.JoinHostPort("localhost", strconv.Itoa(ln.Addr().(*net.TCPAddr).Port)))
 	d.pollInterval = 5 * time.Millisecond
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)

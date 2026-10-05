@@ -36,25 +36,16 @@ import (
 )
 
 // Tuning knobs. Sized for actor cold-start where the HTTP server may take
-// a few seconds to bind; HTTPClient below is a var so tests can substitute
-// a transport that targets a test server's loopback address.
+// a few seconds to bind.
 const (
 	RequestTimeout   = 250 * time.Millisecond
 	PollInterval     = 1 * time.Millisecond
 	maxIdleConnsHost = 1
 )
 
-// DialFunc reaches the actor, which lives in its own network namespace and is
-// not addressable from the caller's. Nil dials from the caller's namespace.
-type DialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
-
-// HTTPClient builds a keep-alive HTTP client tuned for fast, repeated
-// probing of a single endpoint. Exposed as a var so tests can substitute a
-// transport that targets a test server's loopback address.
-var HTTPClient = func() *http.Client { return newClient(nil) }
-
-// newClient probes through dial, or from the caller's namespace when nil.
-func newClient(dial DialFunc) *http.Client {
+// newClient builds a keep-alive HTTP client tuned for fast, repeated probing of
+// a single endpoint, through dial or from the caller's namespace when nil.
+func newClient(dial func(context.Context, string, string) (net.Conn, error)) *http.Client {
 	if dial == nil {
 		dial = (&net.Dialer{Timeout: RequestTimeout}).DialContext
 	}
@@ -70,13 +61,12 @@ func newClient(dial DialFunc) *http.Client {
 // WaitAll blocks until every container with a wakeup probe set reports 200 through dial,
 // or returns the first error. Containers without a probe are skipped (their
 // absence means "no wakeup gate").
-func WaitAll(ctx context.Context, containers []*ateompb.Container, actorIP string, dial DialFunc) error {
+func WaitAll(ctx context.Context, containers []*ateompb.Container, actorIP string, dial func(context.Context, string, string) (net.Conn, error)) error {
 	g, gctx := errgroup.WithContext(ctx)
 	for _, ac := range containers {
 		if ac.GetWakeupProbe() == nil {
 			continue
 		}
-		ac := ac
 		g.Go(func() error {
 			return Wait(gctx, ac.GetName(), ac.GetWakeupProbe(), actorIP, dial)
 		})
@@ -85,8 +75,10 @@ func WaitAll(ctx context.Context, containers []*ateompb.Container, actorIP strin
 }
 
 // Wait polls the configured HTTP endpoint through dial until it returns 200,
-// the context is cancelled, or the overall deadline is exceeded.
-func Wait(ctx context.Context, containerName string, probe *ateompb.WakeupProbe, actorIP string, dial DialFunc) error {
+// the context is cancelled, or the overall deadline is exceeded. dial reaches
+// the actor, which lives in its own network namespace and is not addressable
+// from the caller's; nil dials from the caller's namespace.
+func Wait(ctx context.Context, containerName string, probe *ateompb.WakeupProbe, actorIP string, dial func(context.Context, string, string) (net.Conn, error)) error {
 	url, err := URL(probe, actorIP)
 	if err != nil {
 		return fmt.Errorf("invalid wakeup probe config for %q: %w", containerName, err)
@@ -96,10 +88,7 @@ func Wait(ctx context.Context, containerName string, probe *ateompb.WakeupProbe,
 		return fmt.Errorf("invalid wakeup probe config for %q: %w", containerName, err)
 	}
 
-	client := HTTPClient()
-	if dial != nil {
-		client = newClient(dial)
-	}
+	client := newClient(dial)
 	defer client.CloseIdleConnections()
 
 	start := time.Now()

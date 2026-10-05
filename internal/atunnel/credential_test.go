@@ -16,8 +16,6 @@ package atunnel
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -112,12 +110,12 @@ func (s *ateomSupportStub) MintActorCertificate(_ context.Context, req *ateletpb
 		KeyUsage:    x509.KeyUsageDigitalSignature,
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 	}
-	der, err := x509.CreateCertificate(rand.Reader, template, s.ca.cert, csr.PublicKey, s.ca.key)
+	chain, err := s.ca.pool.CreateCertificate(template, csr.PublicKey)
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 	s.publicKeys <- csr.RawSubjectPublicKeyInfo
-	return &ateletpb.MintActorCertificateResponse{ActorCertificates: [][]byte{der}}, nil
+	return &ateletpb.MintActorCertificateResponse{ActorCertificates: chain}, nil
 }
 
 func newTestBrokerCertificateSource(t *testing.T, ateletIdentity *substratex509.PodIdentity, lifetime time.Duration) (*BrokerCertificateSource, *ateomSupportStub) {
@@ -200,26 +198,13 @@ func testAteletIdentity(nodeName string) *substratex509.PodIdentity {
 
 func issueTestPodCertificate(t *testing.T, ca *testCA, identity *substratex509.PodIdentity, spiffeID string, usages []x509.ExtKeyUsage) tls.Certificate {
 	t.Helper()
-	cert := ca.issue(t, spiffeID, usages)
-	template, err := x509.ParseCertificate(cert.Certificate[0])
+	uri, err := url.Parse(spiffeID)
 	if err != nil {
 		t.Fatal(err)
 	}
+	template := &x509.Certificate{URIs: []*url.URL{uri}, ExtKeyUsage: usages}
 	if err := substratex509.AddPodIdentityToCertificate(identity, template); err != nil {
 		t.Fatal(err)
 	}
-	key, ok := cert.PrivateKey.(*ecdsa.PrivateKey)
-	if !ok {
-		t.Fatalf("private key has type %T", cert.PrivateKey)
-	}
-	der, err := x509.CreateCertificate(rand.Reader, template, ca.cert, &key.PublicKey, ca.key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cert.Certificate[0] = der
-	cert.Leaf, err = x509.ParseCertificate(der)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return cert
+	return ca.sign(t, template)
 }

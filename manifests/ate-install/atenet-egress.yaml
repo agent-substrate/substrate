@@ -20,11 +20,10 @@
 #
 # What goes through the tunnel is authorized against the actor's EgressPolicy
 # by the ext_proc sidecar. Cleartext HTTP and the TLS this gateway terminates
-# are decided per request: the rules in policy order, over the Host and the
-# address the actor dialed, and the request goes to what the matching rule
-# checked, the Host resolved here or the dialed address. Anything else reaches
-# the dialed address only when an address rule allowed it at the CONNECT. See
-# cmd/atenet/internal/router/README.md.
+# are decided per request, on the Host and the port the actor dialed, and the
+# request goes to the Host resolved here. Other TLS is decided at the
+# ClientHello by the SNI rules the sidecar returned on CONNECT, and relayed
+# unread to the resolved SNI. See cmd/atenet/internal/router/README.md.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -292,9 +291,8 @@ data:
       # request the policy denies never reaches it.
       #
       # The passthrough chain is a tcp_proxy, so it has no HTTP filters of its
-      # own, and it decides nothing: it dials the address the CONNECT leg
-      # allowed, carried here as filter state, and closes when there is none.
-      # Nothing selects it yet.
+      # own, and it decides nothing: the module already matched the SNI to a
+      # tls_passthrough rule, and the chain relays the bytes to that name.
       # ---------------------------------------------------------------------
       - name: mitm_listener
         stat_prefix: mitm
@@ -447,8 +445,8 @@ data:
                   # the `upgrade` header, pin that route to HTTP/1.1, and let
                   # everything else negotiate.
                   #
-                  # Each of the two exists once per dial the sidecar answers
-                  # with (dev.ate.egress:dial), and there is no default: a
+                  # Both match only the dial the sidecar answers with
+                  # (dev.ate.egress:dial), and there is no default: a
                   # request it did not answer for has no route.
                   - match:
                       prefix: "/"
@@ -465,19 +463,6 @@ data:
                       timeout: 0s
                   - match:
                       prefix: "/"
-                      headers:
-                      - name: content-type
-                        string_match:
-                          prefix: application/grpc
-                      dynamic_metadata:
-                      - filter: dev.ate.egress
-                        path: [{ key: dial }]
-                        value: { string_match: { exact: address } }
-                    route:
-                      cluster: egress_original_dst_tls_grpc
-                      timeout: 0s
-                  - match:
-                      prefix: "/"
                       dynamic_metadata:
                       - filter: dev.ate.egress
                         path: [{ key: dial }]
@@ -486,15 +471,6 @@ data:
                       cluster: egress_forward_proxy
                       # The route timeout runs until the response completes, which
                       # for SSE or long-poll is never, so 0.
-                      timeout: 0s
-                  - match:
-                      prefix: "/"
-                      dynamic_metadata:
-                      - filter: dev.ate.egress
-                        path: [{ key: dial }]
-                        value: { string_match: { exact: address } }
-                    route:
-                      cluster: egress_original_dst_tls
                       timeout: 0s
               http_filters:
               # Every request on this chain is authorized against the actor's
@@ -516,8 +492,6 @@ data:
                   - xds.filter_chain_name
                   - filter_state['dev.ate.actor.identity']
                   - filter_state['dev.ate.connect.authority']
-                  - filter_state['envoy.network.transport_socket.original_dst_address'].ip
-                  - filter_state['envoy.network.transport_socket.original_dst_address'].port
                   - connection.requested_server_name
                   processing_mode:
                     request_header_mode: SEND
@@ -539,8 +513,7 @@ data:
                       untyped:
                       - dev.ate.egress
               #ATE_MITM_EXTPROC_FILTER -- see the mitm_listener comment above.
-              # Resolves the Host for the by-name route. It does nothing for a
-              # route to any other kind of cluster.
+              # Resolves the Host for the route.
               - name: envoy.filters.http.dynamic_forward_proxy
                 typed_config:
                   "@type": type.googleapis.com/envoy.extensions.filters.http.dynamic_forward_proxy.v3.FilterConfig
@@ -633,8 +606,9 @@ data:
                 virtual_hosts:
                 - name: all
                   domains: ["*"]
-                  # One route per dial the sidecar answers with, and no default:
-                  # a request it did not answer for has no route.
+                  # Only the dial the sidecar answers with has a route, and
+                  # there is no default: a request it did not answer for has
+                  # no route.
                   routes:
                   - match:
                       prefix: "/"
@@ -644,15 +618,6 @@ data:
                         value: { string_match: { exact: name } }
                     route:
                       cluster: egress_forward_proxy_cleartext
-                      timeout: 0s
-                  - match:
-                      prefix: "/"
-                      dynamic_metadata:
-                      - filter: dev.ate.egress
-                        path: [{ key: dial }]
-                        value: { string_match: { exact: address } }
-                    route:
-                      cluster: egress_original_dst_cleartext
                       timeout: 0s
               http_filters:
               # Every request on this chain is authorized against the actor's
@@ -674,8 +639,6 @@ data:
                   - xds.filter_chain_name
                   - filter_state['dev.ate.actor.identity']
                   - filter_state['dev.ate.connect.authority']
-                  - filter_state['envoy.network.transport_socket.original_dst_address'].ip
-                  - filter_state['envoy.network.transport_socket.original_dst_address'].port
                   - connection.requested_server_name
                   processing_mode:
                     request_header_mode: SEND
@@ -697,8 +660,7 @@ data:
                       untyped:
                       - dev.ate.egress
               #ATE_MITM_EXTPROC_FILTER -- Don't modify this line.
-              # Resolves the Host for the by-name route. It does nothing for a
-              # route to any other kind of cluster.
+              # Resolves the Host for the route.
               - name: envoy.filters.http.dynamic_forward_proxy
                 typed_config:
                   "@type": type.googleapis.com/envoy.extensions.filters.http.dynamic_forward_proxy.v3.FilterConfig
@@ -943,67 +905,6 @@ data:
             # on egress_forward_proxy, which does re-originate TLS, would be
             # the hole it is named after.
             allow_insecure_cluster_options: true
-        typed_extension_protocol_options:
-          envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
-            "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
-            use_downstream_protocol_config:
-              http_protocol_options: {}
-              http2_protocol_options: {}
-
-      # The MITM leg's by-address upstreams: the address the actor dialed, from
-      # the original_dst_address filter state. Nothing sets this anymore.
-      # Same TLS as the forward proxies above, SNI and certificate check from
-      # the Host, so a Host the dialed origin cannot prove fails the handshake.
-      - name: egress_original_dst_tls
-        type: ORIGINAL_DST
-        lb_policy: CLUSTER_PROVIDED
-        connect_timeout: 5s
-        typed_extension_protocol_options:
-          envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
-            "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
-            upstream_http_protocol_options:
-              auto_sni: true
-              auto_san_validation: true
-            explicit_http_config:
-              http_protocol_options: {}
-        transport_socket:
-          name: envoy.transport_sockets.tls
-          typed_config:
-            "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
-            common_tls_context:
-              validation_context:
-                trusted_ca:
-                  filename: /etc/ssl/certs/ca-certificates.crt
-
-      - name: egress_original_dst_tls_grpc
-        type: ORIGINAL_DST
-        lb_policy: CLUSTER_PROVIDED
-        connect_timeout: 5s
-        typed_extension_protocol_options:
-          envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
-            "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
-            upstream_http_protocol_options:
-              auto_sni: true
-              auto_san_validation: true
-            auto_config:
-              http_protocol_options: {}
-              http2_protocol_options: {}
-        transport_socket:
-          name: envoy.transport_sockets.tls
-          typed_config:
-            "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
-            common_tls_context:
-              validation_context:
-                trusted_ca:
-                  filename: /etc/ssl/certs/ca-certificates.crt
-
-      # The cleartext chain's by-address upstream: the address the actor
-      # dialed, from the same original_dst_address filter state the passthrough
-      # chains use. Plaintext, like the forward proxy above.
-      - name: egress_original_dst_cleartext
-        type: ORIGINAL_DST
-        lb_policy: CLUSTER_PROVIDED
-        connect_timeout: 5s
         typed_extension_protocol_options:
           envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
             "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions

@@ -16,10 +16,6 @@ package identity
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"io"
-	"net/http"
 	"testing"
 	"time"
 
@@ -174,11 +170,11 @@ func TestActorIdentity_AfterRestore_IsOwnID_NotGolden(t *testing.T) {
 	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: ref}); err != nil {
 		t.Fatalf("SuspendActor %q: %v", id, err)
 	}
-	waitForActorState(t, ctx, clients, id, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
+	e2e.WaitForActorState(t, ctx, clients, ref, ateapipb.ActorState_ACTOR_STATE_SUSPENDED, time.Minute)
 	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: ref}); err != nil {
 		t.Fatalf("ResumeActor %q (after suspend): %v", id, err)
 	}
-	waitForActorState(t, ctx, clients, id, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+	e2e.WaitForActorState(t, ctx, clients, ref, ateapipb.ActorState_ACTOR_STATE_RUNNING, time.Minute)
 
 	got := whoami(t, ctx, rc, id)
 	if got.File != id {
@@ -230,21 +226,6 @@ func seenUIDFor(t *testing.T, seenUIDs map[string]string, id string) string {
 	return ""
 }
 
-func waitForActorState(t *testing.T, ctx context.Context, clients *e2e.Clients, actorName string, want ateapipb.ActorState) {
-	t.Helper()
-	deadline := time.Now().Add(60 * time.Second)
-	for time.Now().Before(deadline) {
-		resp, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: probeNamespace, Name: actorName},
-		})
-		if err == nil && resp.GetStatus().GetState() == want {
-			return
-		}
-		time.Sleep(1 * time.Second)
-	}
-	t.Fatalf("timed out waiting for actor %q to reach state %v", actorName, want)
-}
-
 func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Clients, id string) {
 	t.Helper()
 	ref := &ateapipb.ObjectRef{Atespace: probeNamespace, Name: id}
@@ -271,7 +252,7 @@ func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Client
 	})
 
 	// Resume from the golden snapshot (the restore path).
-	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: probeNamespace, Name: id}}); err != nil {
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: ref}); err != nil {
 		t.Fatalf("ResumeActor %q: %v", id, err)
 	}
 }
@@ -288,17 +269,6 @@ func whoami(t *testing.T, ctx context.Context, rc *e2e.RouterClient, id string) 
 // tryWhoami is whoami returning the error instead of failing the test.
 func tryWhoami(ctx context.Context, rc *e2e.RouterClient, id string) (whoamiResponse, error) {
 	var out whoamiResponse
-	resp, err := rc.Get(ctx, resources.ActorRef{Atespace: probeNamespace, Name: id}, "/whoami")
-	if err != nil {
-		return out, fmt.Errorf("GET /whoami for %q: %w", id, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return out, fmt.Errorf("GET /whoami for %q: status %d, body %q", id, resp.StatusCode, body)
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return out, fmt.Errorf("decoding /whoami for %q: %w", id, err)
-	}
-	return out, nil
+	err := rc.GetJSON(ctx, resources.ActorRef{Atespace: probeNamespace, Name: id}, "/whoami", &out)
+	return out, err
 }

@@ -45,7 +45,6 @@ type Handlers map[Direction]Handler
 // Server implements the external processing gRPC server, dispatching each
 // request to the Handler for the direction it arrived on.
 type Server struct {
-	port          int
 	handlers      Handlers
 	recorder      *QueryRecorder
 	routeDuration metric.Float64Histogram
@@ -54,9 +53,8 @@ type Server struct {
 // NewServer builds the ext_proc mux serving the given handlers. Passing a
 // subset of the directions is how --mode restricts an instance to the traffic
 // its deployment fronts.
-func NewServer(port int, routeDuration metric.Float64Histogram, handlers Handlers) *Server {
+func NewServer(routeDuration metric.Float64Histogram, handlers Handlers) *Server {
 	return &Server{
-		port:          port,
 		handlers:      handlers,
 		recorder:      NewQueryRecorder(100),
 		routeDuration: routeDuration,

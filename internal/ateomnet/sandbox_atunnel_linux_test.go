@@ -45,16 +45,16 @@ func TestSandboxEgressReachesAtunnelOnAnyPort(t *testing.T) {
 	}
 	t.Cleanup(func() { ateomnet.CleanupSandboxNetwork(n) })
 
-	listeners, err := netns.Listen(ctx, n.GatewayNetNS, []uint16{egressPort})
+	listener, err := netns.Listen(ctx, n.GatewayNetNS, egressPort)
 	if err != nil {
 		t.Fatalf("netns.Listen: %v", err)
 	}
-	defer listeners[0].Close()
+	defer listener.Close()
 
 	type capture struct{ destination, payload string }
 	got := make(chan capture, 1)
 	accept := func() {
-		c, err := listeners[0].Accept()
+		c, err := listener.Accept()
 		if err != nil {
 			return
 		}

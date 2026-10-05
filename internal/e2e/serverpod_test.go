@@ -24,7 +24,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
-	"sigs.k8s.io/yaml"
 )
 
 // renderServerPodDocs renders spec and decodes the Pod and Service out of it.
@@ -45,29 +44,7 @@ func renderServerPodDocs(t *testing.T, spec ServerPod) (*corev1.Pod, *corev1.Ser
 	}
 
 	pod, service := &corev1.Pod{}, &corev1.Service{}
-	for doc := range strings.SplitSeq(string(raw), "\n---\n") {
-		if strings.TrimSpace(doc) == "" {
-			continue
-		}
-		var meta struct {
-			Kind string `json:"kind"`
-		}
-		if err := yaml.Unmarshal([]byte(doc), &meta); err != nil {
-			t.Fatalf("rendered server manifest is not valid YAML: %v\n%s", err, doc)
-		}
-		var into any
-		switch meta.Kind {
-		case "Pod":
-			into = pod
-		case "Service":
-			into = service
-		default:
-			continue
-		}
-		if err := yaml.UnmarshalStrict([]byte(doc), into); err != nil {
-			t.Fatalf("rendered server %s does not match the API type: %v\n%s", meta.Kind, err, doc)
-		}
-	}
+	strictDecodeKinds(t, "server manifest", raw, map[string]any{"Pod": pod, "Service": service})
 	if pod.Name == "" || service.Name == "" {
 		t.Fatalf("rendered server manifest is missing a Pod or a Service:\n%s", raw)
 	}
@@ -131,34 +108,10 @@ func TestRenderServerPod_GRPCProbe(t *testing.T) {
 	}
 }
 
-// TestRenderServerPod_HTTPProbe covers the other probe kind, and the default
-// health path a server gets when it does not name one.
-func TestRenderServerPod_HTTPProbe(t *testing.T) {
-	pod, _ := renderServerPodDocs(t, ServerPod{
-		Name:       "httporigin",
-		ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
-		Args:       []string{"http"},
-		Port:       8080,
-	})
-
-	probe := pod.Spec.Containers[0].ReadinessProbe
-	if probe == nil || probe.HTTPGet == nil {
-		t.Fatalf("readinessProbe = %+v, want an httpGet probe", probe)
-	}
-	if got, want := probe.HTTPGet.Path, "/healthz"; got != want {
-		t.Errorf("probe path = %q, want the default %q", got, want)
-	}
-	if got := probe.HTTPGet.Port.IntValue(); got != 8080 {
-		t.Errorf("probe port = %d, want 8080", got)
-	}
-	if probe.GRPC != nil {
-		t.Errorf("readinessProbe also carries a gRPC probe: %+v", probe.GRPC)
-	}
-}
-
 // TestRenderServerPod covers where each port lands: every field kubelet or
 // the binary reaches follows the listener, while the Service alone keeps the
-// published port.
+// published port. Neither server names a health path, so both get the default
+// HTTP probe.
 func TestRenderServerPod(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -204,6 +157,12 @@ func TestRenderServerPod(t *testing.T) {
 			}
 			if got := probe.HTTPGet.Port.IntValue(); got != tc.wantListen {
 				t.Errorf("probe port = %d, want the listen port %d", got, tc.wantListen)
+			}
+			if got, want := probe.HTTPGet.Path, "/healthz"; got != want {
+				t.Errorf("probe path = %q, want the default %q", got, want)
+			}
+			if probe.GRPC != nil {
+				t.Errorf("readinessProbe also carries a gRPC probe: %+v", probe.GRPC)
 			}
 
 			if got := service.Spec.Ports[0].Port; got != tc.wantPublished {

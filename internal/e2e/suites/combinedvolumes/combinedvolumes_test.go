@@ -21,10 +21,8 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"strings"
 	"testing"
@@ -240,20 +238,9 @@ func createTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, ns 
 // probeJSON calls a probe endpoint through the router and decodes its reply.
 func probeJSON(ctx context.Context, t *testing.T, router *e2e.RouterClient, actorRef resources.ActorRef, path string) map[string]string {
 	t.Helper()
-
-	resp, err := router.Get(ctx, actorRef, path)
-	if err != nil {
-		t.Fatalf("GET %s: %v", path, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("GET %s: status %d: %s", path, resp.StatusCode, body)
-	}
-
 	var out map[string]string
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		t.Fatalf("decoding %s: %v", path, err)
+	if err := router.GetJSON(ctx, actorRef, path, &out); err != nil {
+		t.Fatal(err)
 	}
 	return out
 }
@@ -334,19 +321,7 @@ func TestCombinedVolumes(t *testing.T) {
 	tmpl := createTemplate(ctx, t, clients, ns, fixtureImage, storageClass)
 
 	actorRef := resources.ActorRef{Atespace: atespace, Name: "cv-" + ns.Name}
-	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{
-		Actor: &ateapipb.Actor{
-			Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
-			ActorTemplate: e2e.TemplateRef(tmpl),
-		},
-	}); err != nil {
-		t.Fatalf("CreateActor: %v", err)
-	}
-	t.Cleanup(func() {
-		cleanupCtx := context.Background()
-		_, _ = clients.SubstrateAPI.SuspendActor(cleanupCtx, &ateapipb.SuspendActorRequest{Actor: actorRef.ToObjectRef()})
-		_, _ = clients.SubstrateAPI.DeleteActor(cleanupCtx, &ateapipb.DeleteActorRequest{Actor: actorRef.ToObjectRef()})
-	})
+	e2e.CreateActor(t, ctx, clients, actorRef.ToObjectRef(), e2e.TemplateRef(tmpl))
 
 	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: actorRef.ToObjectRef()}); err != nil {
 		t.Fatalf("ResumeActor: %v", err)

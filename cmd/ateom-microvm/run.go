@@ -576,7 +576,7 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 	tContainers := time.Now()
 
 	// Block until every wakeup-probe-enabled container reports 200.
-	if err := wakeupprobe.WaitAll(ctx, containers, ateomnet.ActorVethIP, wakeupprobe.DialFunc(s.sandboxDialer(actorUID))); err != nil {
+	if err := wakeupprobe.WaitAll(ctx, containers, ateomnet.ActorVethIP, s.sandboxDialer(actorUID)); err != nil {
 		return fmt.Errorf("while waiting for container wakeup probe: %w", err)
 	}
 

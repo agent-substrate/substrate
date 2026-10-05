@@ -213,13 +213,7 @@ func TestEgressExpiryRejectsNewButPreservesEstablished(t *testing.T) {
 	actor, proxy := net.Pipe()
 	defer actor.Close()
 	egress.handle(proxy, egress.active[testActorUID])
-	deadline := time.Now().Add(time.Second)
-	for dials.Load() == 0 && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
-	}
-	if dials.Load() != 1 {
-		t.Fatalf("dials = %d, want 1", dials.Load())
-	}
+	waitFor(t, "the tunnel to be dialed", func() bool { return dials.Load() == 1 })
 	time.Sleep(100 * time.Millisecond)
 	go func() { _, _ = actor.Write([]byte("still-open")) }()
 	buf := make([]byte, len("still-open"))
@@ -271,19 +265,11 @@ func TestEgressRenewsBeforeExpiry(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("certificate was not renewed")
 	}
-	deadline := time.Now().Add(time.Second)
-	for {
+	waitFor(t, "the renewed certificate expiry to be installed", func() bool {
 		egress.mu.Lock()
-		expiresAt := egress.active[testActorUID].expiresAt
-		egress.mu.Unlock()
-		if expiresAt.Equal(renewedExpiry) {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("renewed certificate expiry was not installed")
-		}
-		time.Sleep(time.Millisecond)
-	}
+		defer egress.mu.Unlock()
+		return egress.active[testActorUID].expiresAt.Equal(renewedExpiry)
+	})
 	actor, proxy := net.Pipe()
 	defer actor.Close()
 	egress.handle(proxy, egress.active[testActorUID])
@@ -301,6 +287,7 @@ func TestEgressRetriesRenewalAfterExpiry(t *testing.T) {
 func TestEgressStopsAfterTerminalRenewalFailure(t *testing.T) {
 	for _, code := range []codes.Code{codes.Aborted, codes.FailedPrecondition, codes.PermissionDenied} {
 		t.Run(code.String(), func(t *testing.T) {
+			t.Parallel()
 			called := make(chan struct{}, 1)
 			egress, err := NewEgress(func(net.Conn) (string, error) { return "", nil })
 			if err != nil {
@@ -321,19 +308,11 @@ func TestEgressStopsAfterTerminalRenewalFailure(t *testing.T) {
 				t.Fatal("certificate renewal did not start")
 			}
 
-			deadline := time.Now().Add(time.Second)
-			for {
+			waitFor(t, "the terminal renewal failure to block new egress", func() bool {
 				egress.mu.Lock()
-				expiresAt := egress.active[testActorUID].expiresAt
-				egress.mu.Unlock()
-				if expiresAt.IsZero() {
-					break
-				}
-				if time.Now().After(deadline) {
-					t.Fatal("terminal renewal failure did not block new egress")
-				}
-				time.Sleep(time.Millisecond)
-			}
+				defer egress.mu.Unlock()
+				return egress.active[testActorUID].expiresAt.IsZero()
+			})
 			_ = egress.Deactivate(context.Background(), testActorUID)
 		})
 	}
@@ -540,4 +519,17 @@ func TestEgressIsArmedPerActor(t *testing.T) {
 	if _, ok := egress.active["actor-uid-2"]; !ok {
 		t.Error("actor-uid-2 lost its egress when another actor was torn down")
 	}
+}
+
+// waitFor polls until cond holds, failing the test if it never does.
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", what)
 }

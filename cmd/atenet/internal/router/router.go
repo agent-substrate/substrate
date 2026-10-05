@@ -255,7 +255,7 @@ func (s *RouterServer) Run(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("failed to create route-duration histogram: %w", err)
 		}
-		s.extprocSrv = extproc.NewServer(s.cfg.ExtprocPort, routeDuration, handlers)
+		s.extprocSrv = extproc.NewServer(routeDuration, handlers)
 	}
 
 	s.health = newRouterHealth(s.cfg.HealthInterval, s.clientset, s.apiClient, s.cfg)

@@ -16,9 +16,6 @@ package sizing
 
 import (
 	"context"
-	"encoding/json"
-	"io"
-	"net/http"
 	"testing"
 
 	"github.com/agent-substrate/substrate/internal/e2e"
@@ -119,38 +116,20 @@ func deploySizedProbe(t *testing.T, ctx context.Context, clients *e2e.Clients, b
 
 func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Clients, id string) {
 	t.Helper()
-	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: sizingNamespace, Name: id},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: sizingNamespace, Name: sizingTemplate},
-	}}); err != nil {
-		t.Fatalf("CreateActor %q: %v", id, err)
-	}
-	t.Cleanup(func() {
-		// DeleteActor requires the actor to be suspended.
-		_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: &ateapipb.ObjectRef{Atespace: sizingNamespace, Name: id}})
-		_, _ = clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: &ateapipb.ObjectRef{Atespace: sizingNamespace, Name: id}})
-	})
+	ref := &ateapipb.ObjectRef{Atespace: sizingNamespace, Name: id}
+	e2e.CreateActor(t, ctx, clients, ref, &ateapipb.ObjectRef{Atespace: sizingNamespace, Name: sizingTemplate})
 
 	// Resume from the golden snapshot (the restore path).
-	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: sizingNamespace, Name: id}}); err != nil {
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: ref}); err != nil {
 		t.Fatalf("ResumeActor %q: %v", id, err)
 	}
 }
 
 func getResources(t *testing.T, ctx context.Context, rc *e2e.RouterClient, id string) resourcesResponse {
 	t.Helper()
-	resp, err := rc.Get(ctx, resources.ActorRef{Atespace: sizingNamespace, Name: id}, "/resources")
-	if err != nil {
-		t.Fatalf("GET /resources for %q: %v", id, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("GET /resources for %q: status %d, body %q", id, resp.StatusCode, body)
-	}
 	var out resourcesResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		t.Fatalf("decoding /resources for %q: %v", id, err)
+	if err := rc.GetJSON(ctx, resources.ActorRef{Atespace: sizingNamespace, Name: id}, "/resources", &out); err != nil {
+		t.Fatal(err)
 	}
 	return out
 }

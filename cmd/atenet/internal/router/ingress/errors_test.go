@@ -27,22 +27,6 @@ import (
 	"github.com/agent-substrate/substrate/internal/resources"
 )
 
-func TestActorNotFoundErr(t *testing.T) {
-	t.Parallel()
-
-	err := actorNotFoundErr(resources.ActorRef{Atespace: "team-a", Name: "ctr6"})
-	var reqErr *extproc.ReqError
-	if !errors.As(err, &reqErr) {
-		t.Fatalf("errors.As(*extproc.ReqError) = false, want true; err type = %T", err)
-	}
-	if reqErr.StatusCode != int(envoy_type.StatusCode_NotFound) {
-		t.Errorf("StatusCode = %d, want %d", reqErr.StatusCode, envoy_type.StatusCode_NotFound)
-	}
-	if got, want := err.Error(), `actor team-a/ctr6 not found`; got != want {
-		t.Errorf("Error() = %q, want %q", got, want)
-	}
-}
-
 func TestMapResumeError(t *testing.T) {
 	t.Parallel()
 

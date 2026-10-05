@@ -37,20 +37,12 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes"
-
-	"github.com/agent-substrate/substrate/internal/ateclient"
 	"github.com/agent-substrate/substrate/internal/e2e"
-	"github.com/agent-substrate/substrate/internal/portforward"
 )
 
 const (
@@ -149,40 +141,14 @@ func startProbe(t *testing.T, ctx context.Context) *probeClient {
 	ns := e2e.CreateNamespace(t).Name
 
 	provisionProbeCredentials(t, ctx, ns)
-	root, err := e2e.FindRepoRoot()
-	if err != nil {
-		t.Fatalf("FindRepoRoot: %v", err)
-	}
+	e2e.KoApplyTemplate(t, "internal/e2e/fixtures/testserver/egressprobe.yaml.tmpl", map[string]string{
+		"${NAMESPACE}":              ns,
+		"${SYSTEM_NAMESPACE}":       e2e.SystemNamespace(),
+		"${EGRESS_GATEWAY_SERVICE}": e2e.ResourceName("atenet-egress"),
+	})
+	e2e.WaitForPodReady(t, ctx, ns, probeName, 3*time.Minute)
 
-	tmpl, err := os.ReadFile(filepath.Join(root, "internal/e2e/fixtures/testserver/egressprobe.yaml.tmpl"))
-	if err != nil {
-		t.Fatalf("reading egressprobe manifest template: %v", err)
-	}
-	manifest := filepath.Join(t.TempDir(), "egressprobe.yaml")
-	rendered := strings.ReplaceAll(string(tmpl), "${NAMESPACE}", ns)
-	rendered = strings.ReplaceAll(rendered, "${SYSTEM_NAMESPACE}", e2e.SystemNamespace())
-	rendered = strings.ReplaceAll(rendered, "${EGRESS_GATEWAY_SERVICE}", e2e.ResourceName("atenet-egress"))
-	if err := os.WriteFile(manifest, []byte(rendered), 0o644); err != nil {
-		t.Fatalf("writing rendered egressprobe manifest: %v", err)
-	}
-
-	applyArgs := []string{"ko", "apply", "-f", manifest}
-	if e2e.KubeContext != "" {
-		applyArgs = append(applyArgs, "--", "--context="+e2e.KubeContext)
-	}
-	e2e.RunCmdWithEnv(t, []string{"KO_CONFIG_PATH=" + root}, filepath.Join(root, "hack/run-tool.sh"), applyArgs...)
-
-	waitForProbeReady(t, ctx, ns)
-
-	config, err := ateclient.LoadKubeConfig(e2e.KubeConfig, e2e.KubeContext)
-	if err != nil {
-		t.Fatalf("loading kubeconfig: %v", err)
-	}
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		t.Fatalf("creating k8s client for port-forward: %v", err)
-	}
-	localPort, stop, err := portforward.ServicePortForward(ctx, config, clientset, ns, probeName, 8080)
+	localPort, stop, err := e2e.ServicePortForward(ctx, ns, probeName, 8080)
 	if err != nil {
 		t.Fatalf("port-forwarding %s/%s: %v", ns, probeName, err)
 	}
@@ -192,42 +158,6 @@ func startProbe(t *testing.T, ctx context.Context) *probeClient {
 		baseURL: fmt.Sprintf("http://127.0.0.1:%d", localPort),
 		http:    &http.Client{Timeout: 90 * time.Second},
 	}
-}
-
-func waitForProbeReady(t *testing.T, ctx context.Context, ns string) {
-	t.Helper()
-	const timeout = 3 * time.Minute
-	deadline := time.Now().Add(timeout)
-	var lastState string
-	for time.Now().Before(deadline) {
-		pod, err := e2e.GetClients().K8s.CoreV1().Pods(ns).Get(ctx, probeName, metav1.GetOptions{})
-		switch {
-		case err != nil:
-			lastState = err.Error()
-		case portforward.IsPodReady(pod):
-			t.Logf("probe pod %s/%s is ready", ns, probeName)
-			return
-		default:
-			lastState = describeProbeState(pod)
-		}
-		time.Sleep(2 * time.Second)
-	}
-	t.Fatalf("timed out after %v waiting for probe pod %s/%s to become ready: %s", timeout, ns, probeName, lastState)
-}
-
-func describeProbeState(pod *corev1.Pod) string {
-	parts := []string{"phase=" + string(pod.Status.Phase)}
-	for _, cs := range pod.Status.ContainerStatuses {
-		switch {
-		case cs.State.Waiting != nil:
-			parts = append(parts, fmt.Sprintf("%s waiting: %s: %s", cs.Name, cs.State.Waiting.Reason, cs.State.Waiting.Message))
-		case cs.State.Terminated != nil:
-			parts = append(parts, fmt.Sprintf("%s terminated: %s: %s", cs.Name, cs.State.Terminated.Reason, cs.State.Terminated.Message))
-		default:
-			parts = append(parts, fmt.Sprintf("%s running, ready=%t", cs.Name, cs.Ready))
-		}
-	}
-	return strings.Join(parts, "; ")
 }
 
 // handshakeAs asks the probe to complete one CONNECT plus inner TLS handshake

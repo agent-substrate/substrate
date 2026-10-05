@@ -108,17 +108,11 @@ func (e *Egress) activationLocked(actorUID string) *egressActivation {
 }
 
 func (e *Egress) serve(ctx context.Context, listener net.Listener, active *egressActivation) error {
-	done := make(chan struct{})
-	go func() {
-		select {
-		case <-ctx.Done():
-			_ = listener.Close()
-		case <-active.ctx.Done():
-			_ = listener.Close()
-		case <-done:
-		}
-	}()
-	defer close(done)
+	closeListener := func() { _ = listener.Close() }
+	stop := context.AfterFunc(ctx, closeListener)
+	defer stop()
+	stopOnDeactivate := context.AfterFunc(active.ctx, closeListener)
+	defer stopOnDeactivate()
 
 	for {
 		conn, err := listener.Accept()

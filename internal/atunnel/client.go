@@ -210,9 +210,6 @@ func validateDestination(destination string) error {
 	if err != nil {
 		return fmt.Errorf("atunnel: invalid egress destination %q: %w", destination, err)
 	}
-	if host == "" {
-		return fmt.Errorf("atunnel: invalid egress destination %q: host is empty", destination)
-	}
 	if net.ParseIP(host) == nil {
 		return fmt.Errorf("atunnel: invalid egress destination %q: host must be an IP address", destination)
 	}

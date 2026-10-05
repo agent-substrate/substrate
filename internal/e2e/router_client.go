@@ -18,6 +18,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -28,12 +29,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/ateclient"
 	"github.com/agent-substrate/substrate/internal/atenet"
-	"github.com/agent-substrate/substrate/internal/portforward"
 	"github.com/agent-substrate/substrate/internal/resources"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
 )
 
 const (
@@ -54,12 +51,6 @@ type RouterClient struct {
 	http    *http.Client
 	stop    func()
 
-	// config/clientset are retained to lazily open a second port-forward, to
-	// routerConnectServicePort, only if Connect is ever called -- most callers
-	// never CONNECT, so the plain HTTP one from NewRouterClient covers them.
-	config    *rest.Config
-	clientset kubernetes.Interface
-
 	connectOnce sync.Once
 	connectAddr string
 	connectStop func()
@@ -69,26 +60,15 @@ type RouterClient struct {
 // NewRouterClient establishes a port-forward to the ingress atenet-router. Call Close
 // to tear it down.
 func NewRouterClient(ctx context.Context) (*RouterClient, error) {
-	config, err := ateclient.LoadKubeConfig(KubeConfig, KubeContext)
-	if err != nil {
-		return nil, fmt.Errorf("loading kubeconfig: %w", err)
-	}
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		return nil, fmt.Errorf("creating k8s client: %w", err)
-	}
-
-	localPort, stop, err := portforward.ServicePortForward(ctx, config, clientset, SystemNamespace(), ResourceName("atenet-router"), 80)
+	localPort, stop, err := ServicePortForward(ctx, SystemNamespace(), ResourceName("atenet-router"), 80)
 	if err != nil {
 		return nil, err
 	}
 
 	return &RouterClient{
-		baseURL:   fmt.Sprintf("http://127.0.0.1:%d", localPort),
-		http:      &http.Client{Timeout: 30 * time.Second},
-		stop:      stop,
-		config:    config,
-		clientset: clientset,
+		baseURL: fmt.Sprintf("http://127.0.0.1:%d", localPort),
+		http:    &http.Client{Timeout: 30 * time.Second},
+		stop:    stop,
 	}, nil
 }
 
@@ -114,6 +94,24 @@ func (c *RouterClient) Get(ctx context.Context, actorRef resources.ActorRef, pat
 // caller must close the response body.
 func (c *RouterClient) PostJSON(ctx context.Context, actorRef resources.ActorRef, path string, body []byte) (*http.Response, error) {
 	return c.request(ctx, http.MethodPost, actorRef, path, bytes.NewReader(body))
+}
+
+// GetJSON issues GET path to actor through the router and decodes the JSON
+// body into out. An answer other than 200 is an error carrying its body.
+func (c *RouterClient) GetJSON(ctx context.Context, actorRef resources.ActorRef, path string, out any) error {
+	resp, err := c.Get(ctx, actorRef, path)
+	if err != nil {
+		return fmt.Errorf("GET %s for %s: %w", path, actorRef, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("GET %s for %s: status %d, body %q", path, actorRef, resp.StatusCode, body)
+	}
+	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		return fmt.Errorf("decoding %s for %s: %w", path, actorRef, err)
+	}
+	return nil
 }
 
 func (c *RouterClient) request(ctx context.Context, method string, actorRef resources.ActorRef, path string, body io.Reader) (*http.Response, error) {
@@ -188,7 +186,7 @@ func (c *RouterClient) Connect(ctx context.Context, actorRef resources.ActorRef,
 // in one test don't each pay for a fresh port-forward.
 func (c *RouterClient) ensureConnectPortForward(ctx context.Context) error {
 	c.connectOnce.Do(func() {
-		localPort, stop, err := portforward.ServicePortForward(ctx, c.config, c.clientset, SystemNamespace(), ResourceName("atenet-router"), routerConnectServicePort)
+		localPort, stop, err := ServicePortForward(ctx, SystemNamespace(), ResourceName("atenet-router"), routerConnectServicePort)
 		if err != nil {
 			c.connectErr = fmt.Errorf("port-forwarding to the router's CONNECT listener: %w", err)
 			return

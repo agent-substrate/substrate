@@ -16,11 +16,7 @@ package multiactor
 
 import (
 	"context"
-	"encoding/json"
-	"io"
-	"net/http"
 	"testing"
-	"time"
 
 	"github.com/agent-substrate/substrate/internal/e2e"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -57,7 +53,7 @@ func TestTwoActorsShareOneWorker(t *testing.T) {
 	names := []string{"ma-first", "ma-second"}
 	pods := map[string]string{}
 	for _, name := range names {
-		createActor(t, ctx, clients, name)
+		e2e.CreateActor(t, ctx, clients, &ateapipb.ObjectRef{Atespace: multiactorNamespace, Name: name}, &ateapipb.ObjectRef{Atespace: multiactorNamespace, Name: multiactorTemplate})
 		resumeActor(t, ctx, clients, name)
 		pods[name] = workerPodOf(t, ctx, clients, name)
 		t.Logf("actor %s is RUNNING on worker pod %s", name, pods[name])
@@ -87,25 +83,6 @@ func TestTwoActorsShareOneWorker(t *testing.T) {
 		t.Errorf("after suspending %s, %s answered as %q; suspending one actor disturbed its neighbor",
 			names[0], names[1], got.File)
 	}
-}
-
-func createActor(t *testing.T, ctx context.Context, clients *e2e.Clients, name string) {
-	t.Helper()
-	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: multiactorNamespace, Name: name},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: multiactorNamespace, Name: multiactorTemplate},
-	}}); err != nil {
-		t.Fatalf("CreateActor %q: %v", name, err)
-	}
-	t.Cleanup(func() {
-		cctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		defer cancel()
-		// DeleteActor requires the actor to be suspended.
-		_, _ = clients.SubstrateAPI.SuspendActor(cctx, &ateapipb.SuspendActorRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: multiactorNamespace, Name: name}})
-		_, _ = clients.SubstrateAPI.DeleteActor(cctx, &ateapipb.DeleteActorRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: multiactorNamespace, Name: name}})
-	})
 }
 
 func resumeActor(t *testing.T, ctx context.Context, clients *e2e.Clients, name string) {
@@ -144,18 +121,9 @@ func workerPodOf(t *testing.T, ctx context.Context, clients *e2e.Clients, name s
 
 func whoami(t *testing.T, ctx context.Context, rc *e2e.RouterClient, name string) whoamiResponse {
 	t.Helper()
-	resp, err := rc.Get(ctx, resources.ActorRef{Atespace: multiactorNamespace, Name: name}, "/whoami")
-	if err != nil {
-		t.Fatalf("GET /whoami for %q: %v", name, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("GET /whoami for %q: status %d, body %q", name, resp.StatusCode, body)
-	}
 	var out whoamiResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		t.Fatalf("decoding /whoami for %q: %v", name, err)
+	if err := rc.GetJSON(ctx, resources.ActorRef{Atespace: multiactorNamespace, Name: name}, "/whoami", &out); err != nil {
+		t.Fatal(err)
 	}
 	if out.Error != "" {
 		t.Logf("/whoami for %q reported: %s", name, out.Error)

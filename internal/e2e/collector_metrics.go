@@ -22,10 +22,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/agent-substrate/substrate/internal/ateclient"
-	"github.com/agent-substrate/substrate/internal/portforward"
-	"k8s.io/client-go/kubernetes"
 )
 
 const (
@@ -58,73 +54,42 @@ var PlatformMetricPrefixes = []string{
 // ScrapeAgentGatewayRouterMetrics reads the AgentGateway router's native
 // Prometheus stats endpoint. AgentGateway instruments are not OTLP exports.
 func ScrapeAgentGatewayRouterMetrics(ctx context.Context) (string, error) {
-	config, err := ateclient.LoadKubeConfig(KubeConfig, KubeContext)
-	if err != nil {
-		return "", fmt.Errorf("loading kubeconfig: %w", err)
-	}
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		return "", fmt.Errorf("creating k8s client: %w", err)
-	}
-	localPort, stop, err := portforward.ServicePortForward(ctx, config, clientset, SystemNamespace(), ResourceName("atenet-router"), agentGatewayRouterStatsPort)
-	if err != nil {
-		return "", err
-	}
-	defer stop()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/metrics", localPort), nil)
-	if err != nil {
-		return "", err
-	}
-	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
-	if err != nil {
-		return "", fmt.Errorf("scraping AgentGateway metrics: %w", err)
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("reading AgentGateway metrics: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("AgentGateway metrics returned %d: %s", resp.StatusCode, body)
-	}
-	return string(body), nil
+	return scrapeServiceMetrics(ctx, "AgentGateway", SystemNamespace(), ResourceName("atenet-router"), agentGatewayRouterStatsPort)
 }
 
 // ScrapeCollectorMetrics port-forwards the kind stack's OTel Collector and reads
 // its Prometheus exporter surface, returning the raw exposition text.
 func ScrapeCollectorMetrics(ctx context.Context) (string, error) {
-	config, err := ateclient.LoadKubeConfig(KubeConfig, KubeContext)
-	if err != nil {
-		return "", fmt.Errorf("loading kubeconfig: %w", err)
-	}
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		return "", fmt.Errorf("creating k8s client: %w", err)
-	}
+	return scrapeServiceMetrics(ctx, "collector", collectorNamespace, collectorService, collectorPromPort)
+}
 
-	localPort, stop, err := portforward.ServicePortForward(ctx, config, clientset, collectorNamespace, collectorService, collectorPromPort)
+// scrapeServiceMetrics port-forwards port of the Service namespace/name and
+// returns its /metrics body. what names the source in errors.
+func scrapeServiceMetrics(ctx context.Context, what, namespace, name string, port int32) (string, error) {
+	localPort, stop, err := ServicePortForward(ctx, namespace, name, port)
 	if err != nil {
 		return "", err
 	}
 	defer stop()
+	return fetchMetrics(ctx, what, fmt.Sprintf("http://127.0.0.1:%d/metrics", localPort))
+}
 
-	url := fmt.Sprintf("http://127.0.0.1:%d/metrics", localPort)
+func fetchMetrics(ctx context.Context, what, url string) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "", err
 	}
 	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
 	if err != nil {
-		return "", fmt.Errorf("scraping collector metrics: %w", err)
+		return "", fmt.Errorf("scraping %s metrics: %w", what, err)
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("reading collector metrics: %w", err)
+		return "", fmt.Errorf("reading %s metrics: %w", what, err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("collector metrics returned %d: %s", resp.StatusCode, body)
+		return "", fmt.Errorf("%s metrics returned %d: %s", what, resp.StatusCode, body)
 	}
 	return string(body), nil
 }

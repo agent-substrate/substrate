@@ -20,10 +20,6 @@ import (
 	"fmt"
 	"net/http"
 	"time"
-
-	"github.com/agent-substrate/substrate/internal/ateclient"
-	"github.com/agent-substrate/substrate/internal/portforward"
-	"k8s.io/client-go/kubernetes"
 )
 
 // routerStatusPort is the atenet-router Service port for the router's
@@ -42,16 +38,7 @@ type StatuszClient struct {
 // NewStatuszClient establishes a port-forward to the router's status port.
 // Call Close to tear it down.
 func NewStatuszClient(ctx context.Context) (*StatuszClient, error) {
-	config, err := ateclient.LoadKubeConfig(KubeConfig, KubeContext)
-	if err != nil {
-		return nil, fmt.Errorf("loading kubeconfig: %w", err)
-	}
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		return nil, fmt.Errorf("creating k8s client: %w", err)
-	}
-
-	localPort, stop, err := portforward.ServicePortForward(ctx, config, clientset, SystemNamespace(), ResourceName("atenet-router"), routerStatusPort)
+	localPort, stop, err := ServicePortForward(ctx, SystemNamespace(), ResourceName("atenet-router"), routerStatusPort)
 	if err != nil {
 		return nil, err
 	}
@@ -96,17 +83,29 @@ func (c *StatuszClient) Parking(ctx context.Context) (*ParkingStatusz, error) {
 
 // WaitForCount polls the request-parking gauge until cond holds.
 func (c *StatuszClient) WaitForCount(ctx context.Context, cond func(int) bool) (int, error) {
-	deadline := time.Now().Add(4 * time.Second)
+	return pollParkingCount(ctx, func(ctx context.Context) (int, error) {
+		parking, err := c.Parking(ctx)
+		if err != nil {
+			return 0, err
+		}
+		return parking.Active, nil
+	}, cond, 4*time.Second, 150*time.Millisecond)
+}
+
+// pollParkingCount reads the parking gauge until cond holds, and returns the
+// last value it read either way. A failed read counts as not there yet.
+func pollParkingCount(ctx context.Context, read func(context.Context) (int, error), cond func(int) bool, timeout, interval time.Duration) (int, error) {
+	deadline := time.Now().Add(timeout)
 	var last int
 	for time.Now().Before(deadline) {
-		parking, err := c.Parking(ctx)
+		active, err := read(ctx)
 		if err == nil {
-			last = parking.Active
-			if cond(last) {
-				return last, nil
+			last = active
+			if cond(active) {
+				return active, nil
 			}
 		}
-		time.Sleep(150 * time.Millisecond)
+		time.Sleep(interval)
 	}
 	return last, fmt.Errorf("timed out waiting for the parking gauge to satisfy the condition")
 }

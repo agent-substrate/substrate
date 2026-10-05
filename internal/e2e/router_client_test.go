@@ -67,6 +67,51 @@ func TestRouterClientPostJSON(t *testing.T) {
 	response.Body.Close()
 }
 
+func TestRouterClientGetJSON(t *testing.T) {
+	answers := map[string]struct {
+		status int
+		body   string
+	}{
+		"/ok":      {http.StatusOK, `{"name":"fetcher"}`},
+		"/missing": {http.StatusNotFound, "no route"},
+		"/garbled": {http.StatusOK, "not json"},
+	}
+	client := &RouterClient{
+		baseURL: "http://router.test",
+		http: &http.Client{Transport: testRoundTripper(func(request *http.Request) (*http.Response, error) {
+			if request.Method != http.MethodGet {
+				t.Errorf("method = %q, want GET", request.Method)
+			}
+			if got := request.Header.Get(atenet.TargetActorHeader); got != "demo/fetcher" {
+				t.Errorf("target actor = %q, want demo/fetcher", got)
+			}
+			answer := answers[request.URL.Path]
+			return &http.Response{
+				StatusCode: answer.status,
+				Body:       io.NopCloser(strings.NewReader(answer.body)),
+				Header:     make(http.Header),
+			}, nil
+		})},
+	}
+	actorRef := resources.ActorRef{Atespace: "demo", Name: "fetcher"}
+
+	var out struct{ Name string }
+	if err := client.GetJSON(context.Background(), actorRef, "/ok", &out); err != nil {
+		t.Fatalf("GetJSON /ok: %v", err)
+	}
+	if out.Name != "fetcher" {
+		t.Errorf("decoded name = %q, want fetcher", out.Name)
+	}
+
+	err := client.GetJSON(context.Background(), actorRef, "/missing", &out)
+	if err == nil || !strings.Contains(err.Error(), "status 404") || !strings.Contains(err.Error(), "no route") {
+		t.Errorf("GetJSON /missing = %v, want an error carrying the status and body", err)
+	}
+	if err := client.GetJSON(context.Background(), actorRef, "/garbled", &out); err == nil || !strings.HasPrefix(err.Error(), "decoding /garbled") {
+		t.Errorf("GetJSON /garbled = %v, want a decode error", err)
+	}
+}
+
 type testRoundTripper func(*http.Request) (*http.Response, error)
 
 func (f testRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {

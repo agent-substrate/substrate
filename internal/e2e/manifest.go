@@ -94,6 +94,14 @@ func yamlListBlock[T any](t *testing.T, key string, items []T, indent int) strin
 	return strings.Join(out, "\n")
 }
 
+// KoApplyTemplate renders the manifest template at relPath (repo-relative)
+// with the inline placeholders (see renderManifest), then applies it as
+// koApply does.
+func KoApplyTemplate(t *testing.T, relPath string, inline map[string]string) {
+	t.Helper()
+	koApply(t, renderManifest(t, relPath, inline, nil))
+}
+
 // koApply builds and pushes the ko:// images named in manifest and applies it.
 //
 // Through the repo's pinned ko (hack/run-tool.sh), because CI does not install

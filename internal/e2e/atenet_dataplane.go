@@ -125,19 +125,7 @@ func (agentGatewayAtenetDataplane) SupportsIngressProtocolDowngrade() bool { ret
 type agentGatewayParkingObserver struct{}
 
 func (agentGatewayParkingObserver) WaitForCount(ctx context.Context, cond func(int) bool) (int, error) {
-	deadline := time.Now().Add(4 * time.Second)
-	var last int
-	for time.Now().Before(deadline) {
-		active, err := agentGatewayParkingCount(ctx)
-		if err == nil {
-			last = active
-			if cond(active) {
-				return active, nil
-			}
-		}
-		time.Sleep(150 * time.Millisecond)
-	}
-	return last, fmt.Errorf("timed out waiting for the parking gauge to satisfy the condition")
+	return pollParkingCount(ctx, agentGatewayParkingCount, cond, 4*time.Second, 150*time.Millisecond)
 }
 
 func (agentGatewayParkingObserver) Close() {}

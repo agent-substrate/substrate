@@ -614,7 +614,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	}
 
 	// Block until every wakeup-probe-enabled container reports 200.
-	if err := wakeupprobe.WaitAll(ctx, req.GetSpec().GetContainers(), ateomnet.ActorVethIP, wakeupprobe.DialFunc(s.sandboxDialer(req.GetActorUid()))); err != nil {
+	if err := wakeupprobe.WaitAll(ctx, req.GetSpec().GetContainers(), ateomnet.ActorVethIP, s.sandboxDialer(req.GetActorUid())); err != nil {
 		return nil, fmt.Errorf("while waiting for container wakeup probe: %w", err)
 	}
 	if err := s.tunnel.Activate(ateomstats.ActorAttributionFromRequest(req), s.sandboxDialer(req.GetActorUid()), egress); err != nil {
@@ -940,7 +940,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	}
 
 	// Block until every wakeup-probe-enabled container reports 200.
-	if err := wakeupprobe.WaitAll(ctx, req.GetSpec().GetContainers(), ateomnet.ActorVethIP, wakeupprobe.DialFunc(s.sandboxDialer(req.GetActorUid()))); err != nil {
+	if err := wakeupprobe.WaitAll(ctx, req.GetSpec().GetContainers(), ateomnet.ActorVethIP, s.sandboxDialer(req.GetActorUid())); err != nil {
 		return nil, fmt.Errorf("while waiting for container wakeup probe: %w", err)
 	}
 	if err := s.tunnel.Activate(ateomstats.ActorAttributionFromRequest(req), s.sandboxDialer(req.GetActorUid()), egress); err != nil {

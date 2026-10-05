@@ -159,24 +159,27 @@ func assertHCMWebsocketUpgrade(t *testing.T, l *listenerv3.Listener) {
 	}
 }
 
-func TestXdsServer_UpdateSnapshot(t *testing.T) {
-	server := NewXdsServer(18000)
-	server.SetConfig(8081, 50052, "10.0.0.1")
-
-	err := server.UpdateSnapshot()
-	if err != nil {
+// publishedSnapshot publishes server's snapshot and returns it.
+func publishedSnapshot(t *testing.T, server *XdsServer) *cachev3.Snapshot {
+	t.Helper()
+	if err := server.UpdateSnapshot(); err != nil {
 		t.Fatalf("UpdateSnapshot failed: %v", err)
 	}
-
 	res, err := server.snapshot.GetSnapshot(NodeID)
 	if err != nil {
-		t.Fatalf("Failed to get generated snapshot: %v", err)
+		t.Fatalf("Failed to get snapshot: %v", err)
 	}
-
 	snap, ok := res.(*cachev3.Snapshot)
 	if !ok {
 		t.Fatalf("Snapshot doesn't conform to type *cachev3.Snapshot, got %T", res)
 	}
+	return snap
+}
+
+func TestXdsServer_UpdateSnapshot(t *testing.T) {
+	server := NewXdsServer(18000)
+	server.SetConfig(8081, 50052, "10.0.0.1")
+	snap := publishedSnapshot(t, server)
 
 	// Check consistent snapshot
 	if err := snap.Consistent(); err != nil {
@@ -274,21 +277,7 @@ func TestXdsServer_UpdateSnapshot_WithHttps(t *testing.T) {
 	server := NewXdsServer(18000)
 	server.SetConfig(8085, 50053, "127.0.0.1")
 	server.SetTlsConfig(8443, certPath)
-
-	err := server.UpdateSnapshot()
-	if err != nil {
-		t.Fatalf("UpdateSnapshot failed: %v", err)
-	}
-
-	res, err := server.snapshot.GetSnapshot(NodeID)
-	if err != nil {
-		t.Fatalf("Failed to get snapshot: %v", err)
-	}
-
-	snap, ok := res.(*cachev3.Snapshot)
-	if !ok {
-		t.Fatalf("Snapshot doesn't conform to type *cachev3.Snapshot, got %T", res)
-	}
+	snap := publishedSnapshot(t, server)
 
 	listenersMap := snap.GetResources(resourcev3.ListenerType)
 	if len(listenersMap) != 2 {
@@ -359,19 +348,7 @@ func TestXdsServer_UpdateSnapshot_HttpsWithoutCertPath(t *testing.T) {
 	// --envoy-cert-path. An SDS secret with an empty filename would be
 	// NACKed by Envoy, so the HTTPS listener must be skipped entirely.
 	server.SetTlsConfig(8443, "")
-
-	if err := server.UpdateSnapshot(); err != nil {
-		t.Fatalf("UpdateSnapshot failed: %v", err)
-	}
-
-	res, err := server.snapshot.GetSnapshot(NodeID)
-	if err != nil {
-		t.Fatalf("Failed to get snapshot: %v", err)
-	}
-	snap, ok := res.(*cachev3.Snapshot)
-	if !ok {
-		t.Fatalf("Snapshot doesn't conform to type *cachev3.Snapshot, got %T", res)
-	}
+	snap := publishedSnapshot(t, server)
 
 	listenersMap := snap.GetResources(resourcev3.ListenerType)
 	if _, exists := listenersMap[IngressHTTPSListener]; exists {
@@ -393,15 +370,7 @@ func TestXdsServer_UpdateSnapshot_HttpsWithoutCertPath(t *testing.T) {
 func TestXdsServer_UpdateSnapshot_ConnectDisabledByDefault(t *testing.T) {
 	server := NewXdsServer(18000)
 	server.SetConfig(8085, 50053, "127.0.0.1")
-
-	if err := server.UpdateSnapshot(); err != nil {
-		t.Fatalf("UpdateSnapshot failed: %v", err)
-	}
-	res, err := server.snapshot.GetSnapshot(NodeID)
-	if err != nil {
-		t.Fatalf("Failed to get snapshot: %v", err)
-	}
-	snap := res.(*cachev3.Snapshot)
+	snap := publishedSnapshot(t, server)
 
 	clustersMap := snap.GetResources(resourcev3.ClusterType)
 	if _, exists := clustersMap[MainInternalName]; exists {
@@ -434,15 +403,7 @@ func TestXdsServer_UpdateSnapshot_WithConnect(t *testing.T) {
 	server.SetConnectPorts(8081, 8444)
 	// httpsPort left at 0: only the CONNECT-TLS listener wants the cert here.
 	server.SetTlsConfig(0, certPath)
-
-	if err := server.UpdateSnapshot(); err != nil {
-		t.Fatalf("UpdateSnapshot failed: %v", err)
-	}
-	res, err := server.snapshot.GetSnapshot(NodeID)
-	if err != nil {
-		t.Fatalf("Failed to get snapshot: %v", err)
-	}
-	snap := res.(*cachev3.Snapshot)
+	snap := publishedSnapshot(t, server)
 	if err := snap.Consistent(); err != nil {
 		t.Fatalf("Integrity check failed on snapshot: %v", err)
 	}
@@ -488,17 +449,7 @@ func TestXdsServer_UpdateSnapshot_WithConnect(t *testing.T) {
 func TestXdsServer_UpdateSnapshot_NoHttps_NoSecrets(t *testing.T) {
 	server := NewXdsServer(18000)
 	server.SetConfig(8085, 50053, "127.0.0.1")
-
-	if err := server.UpdateSnapshot(); err != nil {
-		t.Fatalf("UpdateSnapshot failed: %v", err)
-	}
-
-	res, err := server.snapshot.GetSnapshot(NodeID)
-	if err != nil {
-		t.Fatalf("Failed to get snapshot: %v", err)
-	}
-	snap := res.(*cachev3.Snapshot)
-	if got := snap.GetResources(resourcev3.SecretType); len(got) != 0 {
+	if got := publishedSnapshot(t, server).GetResources(resourcev3.SecretType); len(got) != 0 {
 		t.Errorf("Expected no secrets without TLS config, got %d", len(got))
 	}
 }
@@ -604,15 +555,15 @@ const (
 	newDataDirName = "..data_tmp"
 )
 
-// TestTlsSecret_ProjectedVolumeRotation checks the reload contract the
+// testProjectedVolumeRotation checks the reload contract a file-backed SDS
 // secret relies on: a kubelet podCertificate rotation swaps the ..data
 // symlink directly inside WatchedDirectory (the move Envoy watches for),
-// after which the cert filename resolves to the new bundle. Envoy's actual
-// reload behavior is out of unit-test reach and belongs to e2e.
-func TestTlsSecret_ProjectedVolumeRotation(t *testing.T) {
+// after which the cert filename resolves to the new bundle. secret builds the
+// secret under test for a bundle path. Envoy's actual reload behavior is out
+// of unit-test reach and belongs to e2e.
+func testProjectedVolumeRotation(t *testing.T, certA, certB string, secret func(bundlePath string) *tlsv3.TlsCertificate) {
+	t.Helper()
 	dir := t.TempDir()
-	certA := "serving-cert-a"
-	certB := "serving-cert-b"
 	certPath := filepath.Join(dir, "credential-bundle.pem")
 	bundleA := makeServingBundle(t, certA)
 	bundleB := makeServingBundle(t, certB)
@@ -621,9 +572,7 @@ func TestTlsSecret_ProjectedVolumeRotation(t *testing.T) {
 	const tsDirB = "..2026_07_25_00_00_00.0000000002"
 	writeProjectedVolume(t, dir, tsDirA, bundleA)
 
-	server := NewXdsServer(18000)
-	server.SetTlsConfig(8443, certPath)
-	tlsCert := server.buildTlsSecret().GetTlsCertificate()
+	tlsCert := secret(certPath)
 
 	chainPath := tlsCert.GetCertificateChain().GetFilename()
 	if got := readServingCN(t, chainPath); got != certA {
@@ -648,6 +597,24 @@ func TestTlsSecret_ProjectedVolumeRotation(t *testing.T) {
 	if got := readServingCN(t, chainPath); got != certB {
 		t.Fatalf("Expected rotated bundle to serve %q, got %q", certB, got)
 	}
+}
+
+func TestTlsSecret_ProjectedVolumeRotation(t *testing.T) {
+	testProjectedVolumeRotation(t, "serving-cert-a", "serving-cert-b", func(bundlePath string) *tlsv3.TlsCertificate {
+		server := NewXdsServer(18000)
+		server.SetTlsConfig(8443, bundlePath)
+		return server.buildTlsSecret().GetTlsCertificate()
+	})
+}
+
+// The podidentity bundle rotates the same way the servicedns one does, and
+// the upstream secret has to follow it.
+func TestUpstreamCertSecret_ProjectedVolumeRotation(t *testing.T) {
+	testProjectedVolumeRotation(t, "upstream-client-cert-a", "upstream-client-cert-b", func(bundlePath string) *tlsv3.TlsCertificate {
+		server := NewXdsServer(18000)
+		server.SetUpstreamTls(bundlePath, "", "")
+		return server.buildUpstreamCertSecret().GetTlsCertificate()
+	})
 }
 
 // makeServingBundle returns a podCertificate-style PEM bundle: a PKCS8
@@ -885,66 +852,11 @@ func TestXdsServer_UpdateSnapshot_UpstreamSecrets(t *testing.T) {
 	})
 }
 
-// TestUpstreamCertSecret_ProjectedVolumeRotation is the client-cert twin of
-// TestTlsSecret_ProjectedVolumeRotation: the podidentity bundle rotates the
-// same way the servicedns one does, and the upstream secret has to follow it.
-func TestUpstreamCertSecret_ProjectedVolumeRotation(t *testing.T) {
-	dir := t.TempDir()
-	certA := "upstream-client-cert-a"
-	certB := "upstream-client-cert-b"
-	credPath := filepath.Join(dir, "credential-bundle.pem")
-	bundleA := makeServingBundle(t, certA)
-	bundleB := makeServingBundle(t, certB)
-
-	const tsDirA = "..2026_07_25_00_00_00.0000000001"
-	const tsDirB = "..2026_07_25_00_00_00.0000000002"
-	writeProjectedVolume(t, dir, tsDirA, bundleA)
-
-	server := NewXdsServer(18000)
-	server.SetUpstreamTls(credPath, "", "")
-	tlsCert := server.buildUpstreamCertSecret().GetTlsCertificate()
-
-	chainPath := tlsCert.GetCertificateChain().GetFilename()
-	if got := readServingCN(t, chainPath); got != certA {
-		t.Fatalf("Expected initial bundle to present %q, got %q", certA, got)
-	}
-
-	swapPath := filepath.Join(tlsCert.GetWatchedDirectory().GetPath(), dataDirName)
-	before, err := os.Readlink(swapPath)
-	if err != nil {
-		t.Fatalf("The rotation symlink is not a direct child of WatchedDirectory: %v", err)
-	}
-
-	rotateProjectedVolume(t, dir, tsDirB, tsDirA, bundleB)
-
-	after, err := os.Readlink(swapPath)
-	if err != nil {
-		t.Fatalf("The rotation symlink left WatchedDirectory after rotation: %v", err)
-	}
-	if after == before {
-		t.Fatalf("Rotation did not retarget the %s symlink (still %q); an in-place write would not trigger Envoy's reload", dataDirName, after)
-	}
-	if got := readServingCN(t, chainPath); got != certB {
-		t.Fatalf("Expected rotated bundle to present %q, got %q", certB, got)
-	}
-}
-
 // snapshotSecrets publishes a snapshot and returns its SDS secrets by name.
 func snapshotSecrets(t *testing.T, server *XdsServer) map[string]*tlsv3.Secret {
 	t.Helper()
-	if err := server.UpdateSnapshot(); err != nil {
-		t.Fatalf("UpdateSnapshot failed: %v", err)
-	}
-	res, err := server.snapshot.GetSnapshot(NodeID)
-	if err != nil {
-		t.Fatalf("Failed to get snapshot: %v", err)
-	}
-	snap, ok := res.(*cachev3.Snapshot)
-	if !ok {
-		t.Fatalf("Snapshot doesn't conform to type *cachev3.Snapshot, got %T", res)
-	}
 	secrets := make(map[string]*tlsv3.Secret)
-	for name, raw := range snap.GetResources(resourcev3.SecretType) {
+	for name, raw := range publishedSnapshot(t, server).GetResources(resourcev3.SecretType) {
 		secret, ok := raw.(*tlsv3.Secret)
 		if !ok {
 			t.Fatalf("Secret '%s' doesn't conform to type *tlsv3.Secret, got %T", name, raw)
@@ -1278,14 +1190,7 @@ func TestXdsServer_SetOtlpCollector_EmptyDisablesTracing(t *testing.T) {
 	if tr := x.buildTracing(); tr != nil {
 		t.Errorf("buildTracing() = %v, want nil when no collector is configured", tr)
 	}
-	if err := x.UpdateSnapshot(); err != nil {
-		t.Fatalf("UpdateSnapshot failed: %v", err)
-	}
-	res, err := x.snapshot.GetSnapshot(NodeID)
-	if err != nil {
-		t.Fatalf("GetSnapshot failed: %v", err)
-	}
-	if _, ok := res.GetResources(resourcev3.ClusterType)[OtlpClusterName]; ok {
+	if _, ok := publishedSnapshot(t, x).GetResources(resourcev3.ClusterType)[OtlpClusterName]; ok {
 		t.Errorf("snapshot contains cluster %q, want it omitted when tracing is disabled", OtlpClusterName)
 	}
 }
@@ -1355,22 +1260,10 @@ func TestXdsServer_BuildTracingRandomSamplingFromPolicy(t *testing.T) {
 }
 
 func TestSnapshotVersionsUniqueAcrossRestarts(t *testing.T) {
-	deployAndGetVersion := func(t *testing.T, x *XdsServer) string {
-		t.Helper()
-		if err := x.UpdateSnapshot(); err != nil {
-			t.Fatalf("UpdateSnapshot: %v", err)
-		}
-		snap, err := x.snapshot.GetSnapshot(NodeID)
-		if err != nil {
-			t.Fatalf("GetSnapshot: %v", err)
-		}
-		return snap.GetVersion(resourcev3.ClusterType)
-	}
-
 	seen := map[string]bool{}
 	first := NewXdsServer(0)
 	for range 3 {
-		v := deployAndGetVersion(t, first)
+		v := publishedSnapshot(t, first).GetVersion(resourcev3.ClusterType)
 		if seen[v] {
 			t.Fatalf("version %q minted twice by the same server", v)
 		}
@@ -1379,7 +1272,7 @@ func TestSnapshotVersionsUniqueAcrossRestarts(t *testing.T) {
 
 	restarted := NewXdsServer(0)
 	for range 3 {
-		v := deployAndGetVersion(t, restarted)
+		v := publishedSnapshot(t, restarted).GetVersion(resourcev3.ClusterType)
 		if seen[v] {
 			t.Fatalf("version %q reused after restart; Envoy holding that version would not receive the new config", v)
 		}
@@ -1415,17 +1308,7 @@ func TestXdsServer_ALPN(t *testing.T) {
 	server.SetConfig(8085, 50053, "127.0.0.1")
 	server.SetTlsConfig(8443, certPath)
 	server.SetConnectPorts(0, 8444)
-	if err := server.UpdateSnapshot(); err != nil {
-		t.Fatalf("UpdateSnapshot failed: %v", err)
-	}
-	res, err := server.snapshot.GetSnapshot(NodeID)
-	if err != nil {
-		t.Fatalf("Failed to get snapshot: %v", err)
-	}
-	listeners := map[string]any{}
-	for name, l := range res.(*cachev3.Snapshot).GetResources(resourcev3.ListenerType) {
-		listeners[name] = l
-	}
+	listeners := publishedSnapshot(t, server).GetResources(resourcev3.ListenerType)
 
 	// h2 first: ALPN is server-preference, and a client that can speak HTTP/2
 	// must land on it rather than on http/1.1.

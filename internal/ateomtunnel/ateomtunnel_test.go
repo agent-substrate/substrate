@@ -18,14 +18,7 @@ package ateomtunnel
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
-	"crypto/x509"
-	"crypto/x509/pkix"
-	"encoding/pem"
 	"flag"
-	"math/big"
 	"net"
 	"os"
 	"path/filepath"
@@ -33,6 +26,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/spf13/pflag"
@@ -94,31 +88,19 @@ func testConfig(t *testing.T) Config {
 	t.Helper()
 	dir := t.TempDir()
 
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	// The CA is its own credential: nothing here completes a handshake.
+	ca, err := localca.GenerateCA("test", localca.KeyTypeECDSAP256, time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
-	now := time.Now()
-	template := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "test"},
-		NotBefore:             now.Add(-time.Minute),
-		NotAfter:              now.Add(time.Hour),
-		IsCA:                  true,
-		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
-		BasicConstraintsValid: true,
-	}
-	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	certPEM, err := ca.TLSCertificateChainPEM()
 	if err != nil {
 		t.Fatal(err)
 	}
-	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
+	keyPEM, err := ca.TLSPrivateKeyPEM()
 	if err != nil {
 		t.Fatal(err)
 	}
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
 	bundle := filepath.Join(dir, "bundle.pem")
 	trust := filepath.Join(dir, "trust.pem")
 	if err := os.WriteFile(bundle, append(certPEM, keyPEM...), 0o600); err != nil {

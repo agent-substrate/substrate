@@ -17,16 +17,11 @@ package atunnel
 import (
 	"bufio"
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
-	"math/big"
 	"net"
 	"net/http"
 	"os"
@@ -357,33 +352,5 @@ func serveTestRefusingGateway(t *testing.T, serverCA, clientCA *testCA, maxVersi
 
 func issueDNSCertificate(t *testing.T, ca *testCA, dnsName string) tls.Certificate {
 	t.Helper()
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	now := time.Now()
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(now.UnixNano()),
-		NotBefore:    now.Add(-time.Minute),
-		NotAfter:     now.Add(time.Hour),
-		DNSNames:     []string{dnsName},
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-	}
-	der, err := x509.CreateCertificate(rand.Reader, template, ca.cert, &key.PublicKey, ca.key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cert, err := tls.X509KeyPair(
-		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}),
-		pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return cert
+	return ca.sign(t, &x509.Certificate{DNSNames: []string{dnsName}, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}})
 }

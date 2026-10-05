@@ -125,7 +125,7 @@ func TestRecordRouteDuration_Attributes(t *testing.T) {
 		t.Fatalf("failed to create histogram: %v", err)
 	}
 
-	s := NewServer(50051, h, nil)
+	s := NewServer(h, nil)
 	s.recordRouteDuration(context.Background(), 10*time.Millisecond, "team-a-ns", "tmpl-a", classifyOutcome(nil), ateattr.RouterResumeTriggered)
 
 	var rm metricdata.ResourceMetrics
@@ -159,7 +159,7 @@ func TestRecordRouteDuration_NormalizesEmptyTemplateDimensions(t *testing.T) {
 		t.Fatalf("failed to create histogram: %v", err)
 	}
 
-	s := NewServer(50051, h, nil)
+	s := NewServer(h, nil)
 	s.recordRouteDuration(context.Background(), 5*time.Millisecond, "", "", classifyOutcome(errors.New("fail")), ateattr.RouterResumeUnknown)
 
 	var rm metricdata.ResourceMetrics

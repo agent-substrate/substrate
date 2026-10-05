@@ -139,6 +139,7 @@ func TestCheckK8sTimesOut(t *testing.T) {
 	defer server.Close()
 
 	rh := newRouterHealth(time.Second, newHealthTestClientset(t, server), nil, routerConfig{})
+	rh.timeout = 20 * time.Millisecond
 	startedAt := time.Now()
 	healthy, msg := rh.checkK8s(context.Background())
 	elapsed := time.Since(startedAt)
@@ -149,8 +150,8 @@ func TestCheckK8sTimesOut(t *testing.T) {
 	if !strings.Contains(msg, context.DeadlineExceeded.Error()) {
 		t.Fatalf("checkK8s message = %q, want context deadline exceeded", msg)
 	}
-	if elapsed > 3*dependencyHealthCheckTimeout {
-		t.Fatalf("checkK8s took %v, want a bounded timeout near %v", elapsed, dependencyHealthCheckTimeout)
+	if elapsed > dependencyHealthCheckTimeout {
+		t.Fatalf("checkK8s took %v, want a bounded timeout near %v", elapsed, rh.timeout)
 	}
 }
 

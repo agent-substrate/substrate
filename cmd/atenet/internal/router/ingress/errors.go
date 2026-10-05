@@ -27,11 +27,6 @@ import (
 	"github.com/agent-substrate/substrate/internal/resources"
 )
 
-// actorNotFoundErr returns a 404 denial identifying the missing actor.
-func actorNotFoundErr(actorRef resources.ActorRef) error {
-	return extproc.NewReqError(envoy_type.StatusCode_NotFound, "actor %s not found", actorRef)
-}
-
 // statusDescription returns the gRPC status description of err, unwrapping
 // any wrapper (e.g. budgetExhaustedError) first. status.Convert on a wrapping
 // error replaces the description with the wrapper's full "rpc error: ..."
@@ -92,15 +87,12 @@ func mapResumeError(actorRef resources.ActorRef, err error) error {
 	case codes.NotFound:
 		re.StatusCode = int(envoy_type.StatusCode_NotFound)
 		re.Msg = fmt.Sprintf("actor %s not found", actorRef)
-	case codes.FailedPrecondition:
-		// Preserve the gRPC description for FailedPrecondition and Aborted:
-		// they carry actionable client-facing context (e.g. "another operation is
-		// in progress for this actor") and are not security-sensitive.
-		re.StatusCode = int(envoy_type.StatusCode_ServiceUnavailable)
-		re.Msg = fmt.Sprintf("actor %s unavailable: %s", actorRef, statusDescription(err))
-	case codes.Aborted:
-		// A concurrency conflict that outlived its retries (e.g. a park budget
-		// spent entirely on Aborted). Retryable by the client, hence 503.
+	case codes.FailedPrecondition, codes.Aborted, codes.ResourceExhausted:
+		// Retryable by the client, hence 503. The gRPC description is kept:
+		// it carries actionable context ("no free workers available", "another
+		// operation is in progress for this actor") and is not security
+		// sensitive. Pool saturation is 503 rather than 429 because the fleet
+		// is full, not because the caller sent too many requests.
 		re.StatusCode = int(envoy_type.StatusCode_ServiceUnavailable)
 		re.Msg = fmt.Sprintf("actor %s unavailable: %s", actorRef, statusDescription(err))
 	case codes.Unavailable:
@@ -115,14 +107,6 @@ func mapResumeError(actorRef resources.ActorRef, err error) error {
 	case codes.Unauthenticated:
 		re.StatusCode = int(envoy_type.StatusCode_Unauthorized)
 		re.Msg = fmt.Sprintf("actor %s authentication required", actorRef)
-	case codes.ResourceExhausted:
-		// Preserve the gRPC description for ResourceExhausted. It carries actionable
-		// client-facing context (e.g. "no free workers available") and are not
-		// security-sensitive.
-		// Pool saturation (ResourceExhausted) is 503 rather than 429: the fleet is
-		// full, the caller did not send too many requests.
-		re.StatusCode = int(envoy_type.StatusCode_ServiceUnavailable)
-		re.Msg = fmt.Sprintf("actor %s unavailable: %s", actorRef, statusDescription(err))
 	default:
 		re.StatusCode = int(envoy_type.StatusCode_InternalServerError)
 		re.Msg = fmt.Sprintf("error resuming actor %s", actorRef)

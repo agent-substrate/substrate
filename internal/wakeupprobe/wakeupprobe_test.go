@@ -30,6 +30,7 @@ import (
 )
 
 func TestURL(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		probe   *ateompb.WakeupProbe
@@ -143,6 +144,7 @@ func TestWait_WaitsForServerToBecomeReady(t *testing.T) {
 }
 
 func TestWait_ContextCancellation(t *testing.T) {
+	t.Parallel()
 	// Bind a port and immediately close to ensure connect-refused, so the
 	// poll loop is exercised but no server ever returns 200.
 	port := pickFreePort(t)
@@ -161,6 +163,7 @@ func TestWait_ContextCancellation(t *testing.T) {
 }
 
 func TestPollTimeout(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		probe   *ateompb.WakeupProbe
@@ -197,6 +200,7 @@ func TestPollTimeout(t *testing.T) {
 }
 
 func TestWait_GivesUpAtProbeTimeout(t *testing.T) {
+	t.Parallel()
 	// Nothing ever binds this port, so the poll loop runs until the
 	// probe's own deadline rather than the package default.
 	port := pickFreePort(t)
@@ -225,6 +229,7 @@ func TestWait_GivesUpAtProbeTimeout(t *testing.T) {
 }
 
 func TestWaitAll_SkipsContainersWithoutProbe(t *testing.T) {
+	t.Parallel()
 	// No server bound, but no probes => should return nil immediately.
 	containers := []*ateompb.Container{
 		{Name: "a"},

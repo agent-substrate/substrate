@@ -23,41 +23,36 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-// egressManifests is the envoy egress gateway ate-setup installs, which
-// terminates and re-originates the tunneled TLS.
-var egressManifests = []string{
-	"../../../../manifests/ate-install/atenet-egress.yaml",
-}
+// egressManifest is the envoy egress gateway ate-setup installs, which
+// terminates and re-originates the tunneled TLS and runs the egress-policy
+// module.
+const egressManifest = "../../../../manifests/ate-install/atenet-egress.yaml"
 
 // TestEgressManifestsDisableTheConnectTimeout is the static-config half of
 // TestBuildConnectRoutes_DisablesTimeout: Envoy applies a route's timeout to a
 // CONNECT tunnel's whole lifetime rather than to its headers, so a route left
 // at Envoy's 15s default caps how long any actor's outbound connection may
 // exist -- streaming responses, long downloads and SSH sessions all die
-// mid-stream at 15s. These manifests are what the gateway actually runs, and
-// nothing else in the tree notices when one of them loses the line.
+// mid-stream at 15s. This manifest is what the gateway actually runs, and
+// nothing else in the tree notices when it loses the line.
 func TestEgressManifestsDisableTheConnectTimeout(t *testing.T) {
-	for _, path := range egressManifests {
-		t.Run(path, func(t *testing.T) {
-			routes := connectRoutes(t, envoyConfig(t, path))
-			if len(routes) == 0 {
-				t.Fatal("found no connect_matcher route; the manifest changed shape and this test is checking nothing")
-			}
-			for _, r := range routes {
-				if r.Route.Timeout == nil {
-					t.Errorf("connect_matcher route to cluster %q sets no timeout, so it falls back to Envoy's 15s default and cuts every tunnel after 15s", r.Route.Cluster)
-					continue
-				}
-				d, err := time.ParseDuration(*r.Route.Timeout)
-				if err != nil {
-					t.Errorf("connect_matcher route to cluster %q has timeout %q, which is not a duration: %v", r.Route.Cluster, *r.Route.Timeout, err)
-					continue
-				}
-				if d != 0 {
-					t.Errorf("connect_matcher route to cluster %q has timeout %s; it must be 0 to disable it", r.Route.Cluster, d)
-				}
-			}
-		})
+	routes := connectRoutes(t, envoyConfig(t, egressManifest))
+	if len(routes) == 0 {
+		t.Fatal("found no connect_matcher route; the manifest changed shape and this test is checking nothing")
+	}
+	for _, r := range routes {
+		if r.Route.Timeout == nil {
+			t.Errorf("connect_matcher route to cluster %q sets no timeout, so it falls back to Envoy's 15s default and cuts every tunnel after 15s", r.Route.Cluster)
+			continue
+		}
+		d, err := time.ParseDuration(*r.Route.Timeout)
+		if err != nil {
+			t.Errorf("connect_matcher route to cluster %q has timeout %q, which is not a duration: %v", r.Route.Cluster, *r.Route.Timeout, err)
+			continue
+		}
+		if d != 0 {
+			t.Errorf("connect_matcher route to cluster %q has timeout %s; it must be 0 to disable it", r.Route.Cluster, d)
+		}
 	}
 }
 

@@ -23,17 +23,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/ateclient"
-	"github.com/agent-substrate/substrate/internal/atenet"
 	"github.com/agent-substrate/substrate/internal/e2e"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/client-go/tools/portforward"
-	"k8s.io/client-go/transport/spdy"
 )
 
 const demoAtespace = "demo"
@@ -1336,20 +1331,8 @@ func waitForActorState(ctx context.Context, t *testing.T, clients *e2e.Clients, 
 func waitForActorStateWithTimeout(ctx context.Context, t *testing.T, clients *e2e.Clients, actorName string, expectedState ateapipb.ActorState, timeout time.Duration) {
 	t.Helper()
 	t.Logf("Waiting for Actor %q to be %v...", actorName, expectedState)
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		resp, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
-		})
-		if err == nil {
-			if resp.GetStatus().GetState() == expectedState {
-				t.Logf("Actor %q reached state %v", actorName, expectedState)
-				return
-			}
-		}
-		time.Sleep(1 * time.Second)
-	}
-	t.Fatalf("timed out waiting for actor %q to reach state %v", actorName, expectedState)
+	e2e.WaitForActorState(t, ctx, clients, &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName}, expectedState, timeout)
+	t.Logf("Actor %q reached state %v", actorName, expectedState)
 }
 
 func callActor(t *testing.T, actorRef resources.ActorRef) (string, error) {
@@ -1375,79 +1358,25 @@ func callActorPath(t *testing.T, actorRef resources.ActorRef, method, path strin
 
 func callActorPathOnce(t *testing.T, actorRef resources.ActorRef, method, path string) (string, error) {
 	t.Helper()
-	clients := e2e.GetClients()
-
-	svc, err := clients.K8s.CoreV1().Services(e2e.SystemNamespace()).Get(context.Background(), e2e.ResourceName("atenet-router"), metav1.GetOptions{})
+	setupCtx, cancelSetup := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelSetup()
+	rc, err := e2e.NewRouterClient(setupCtx)
 	if err != nil {
-		return "", fmt.Errorf("failed to get atenet-router service: %w", err)
+		return "", fmt.Errorf("port-forwarding atenet-router: %w", err)
 	}
+	defer rc.Close()
 
-	selector := labels.SelectorFromSet(svc.Spec.Selector).String()
-	pods, err := clients.K8s.CoreV1().Pods(e2e.SystemNamespace()).List(context.Background(), metav1.ListOptions{LabelSelector: selector})
-	if err != nil {
-		return "", fmt.Errorf("failed to list atenet-router pods: %w", err)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	var resp *http.Response
+	switch method {
+	case http.MethodGet:
+		resp, err = rc.Get(ctx, actorRef, path)
+	case http.MethodPost:
+		resp, err = rc.PostJSON(ctx, actorRef, path, nil)
+	default:
+		return "", fmt.Errorf("unsupported method %s", method)
 	}
-	if len(pods.Items) == 0 {
-		return "", fmt.Errorf("no atenet-router pods found")
-	}
-	targetPod := pods.Items[0]
-
-	config, err := ateclient.LoadKubeConfig(e2e.KubeConfig, e2e.KubeContext)
-	if err != nil {
-		return "", fmt.Errorf("failed to load kubeconfig: %w", err)
-	}
-
-	reqConfig := clients.K8s.CoreV1().RESTClient().Post().
-		Resource("pods").
-		Namespace(targetPod.Namespace).
-		Name(targetPod.Name).
-		SubResource("portforward")
-
-	transport, upgrader, err := spdy.RoundTripperFor(config)
-	if err != nil {
-		return "", fmt.Errorf("failed to create SPDY transport: %w", err)
-	}
-
-	dialer := spdy.NewDialer(upgrader, &http.Client{Transport: transport}, http.MethodPost, reqConfig.URL())
-
-	stopCh := make(chan struct{})
-	readyCh := make(chan struct{})
-	defer close(stopCh)
-
-	fw, err := portforward.New(dialer, []string{"0:8080"}, stopCh, readyCh, io.Discard, io.Discard)
-	if err != nil {
-		return "", fmt.Errorf("failed to create port forwarder: %w", err)
-	}
-
-	errCh := make(chan error, 1)
-	go func() {
-		if err := fw.ForwardPorts(); err != nil {
-			errCh <- err
-		}
-	}()
-
-	select {
-	case <-readyCh:
-	case err := <-errCh:
-		return "", fmt.Errorf("port forwarding failed: %w", err)
-	case <-time.After(10 * time.Second):
-		return "", fmt.Errorf("timeout waiting for port-forward")
-	}
-
-	forwardedPorts, err := fw.GetPorts()
-	if err != nil || len(forwardedPorts) == 0 {
-		return "", fmt.Errorf("failed to get forwarded ports: %w", err)
-	}
-	localPort := forwardedPorts[0].Local
-
-	reqHttp, err := http.NewRequest(method, fmt.Sprintf("http://127.0.0.1:%d%s", localPort, path), nil)
-	if err != nil {
-		return "", fmt.Errorf("failed to create request: %w", err)
-	}
-	reqHttp.Header.Set(atenet.TargetActorHeader, actorRef.String())
-
-	httpClient := &http.Client{Timeout: 15 * time.Second}
-	resp, err := httpClient.Do(reqHttp)
 	if err != nil {
 		return "", fmt.Errorf("failed to do request: %w", err)
 	}

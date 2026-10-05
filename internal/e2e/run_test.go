@@ -12,13 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package egressauthz
+package e2e
 
-import (
-	"os"
-	"testing"
+import "testing"
 
-	"github.com/agent-substrate/substrate/internal/e2e"
-)
+func TestRunCmdOutput(t *testing.T) {
+	got := RunCmdOutput(t, []string{"RUN_CMD_TEST=from-env"}, "sh", "-c", `printf '%s' "$RUN_CMD_TEST"`)
+	if string(got) != "from-env" {
+		t.Errorf("RunCmdOutput = %q, want %q", got, "from-env")
+	}
+}
 
-func TestMain(m *testing.M) { os.Exit(e2e.RunTestMain(m)) }
+func TestRunCmd(t *testing.T) {
+	RunCmd(t, "true")
+	RunCmdWithEnv(t, []string{"RUN_CMD_TEST=x"}, "sh", "-c", `test "$RUN_CMD_TEST" = x`)
+}

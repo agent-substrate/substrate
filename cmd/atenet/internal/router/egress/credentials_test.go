@@ -70,6 +70,15 @@ func withAuthorization(md *extproc.RequestMetadata) *extproc.RequestMetadata {
 	return md
 }
 
+// providerClient keeps a nil *fakeProvider a nil interface, which is how the
+// handler sees "no provider configured".
+func providerClient(p *fakeProvider) credproviderpb.CredentialProviderClient {
+	if p == nil {
+		return nil
+	}
+	return p
+}
+
 // On the TLS-terminated MITM leg an allowed rule's credential is resolved and
 // injected as an overwriting header, and the provider is asked for the policy's
 // URI with the actor's SPIFFE identity as context.
@@ -145,11 +154,7 @@ func TestInjectionSkippedWithoutHeader(t *testing.T) {
 		{name: "actor JWT", policy: jwtPolicy, provider: &fakeProvider{resp: bearerTokenResponse("s3cr3t")}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			var provider credproviderpb.CredentialProviderClient
-			if tc.provider != nil {
-				provider = tc.provider
-			}
-			h := injectionHandlerFor(tc.policy, provider, injectionProviderName)
+			h := injectionHandlerFor(tc.policy, providerClient(tc.provider), injectionProviderName)
 			res, err := h.HandleRequestHeaders(context.Background(),
 				innerMetadata(extproc.EgressTLSMITMFilterChainName, "GET", "api.example.com", nil))
 			if err != nil {
@@ -301,12 +306,7 @@ func TestActorJWTInjectionNotImplemented(t *testing.T) {
 	}}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			var h *Handler
-			if tc.provider == nil {
-				h = injectionHandlerFor(tc.policy, nil, injectionProviderName)
-			} else {
-				h = injectionHandlerFor(tc.policy, tc.provider, injectionProviderName)
-			}
+			h := injectionHandlerFor(tc.policy, providerClient(tc.provider), injectionProviderName)
 			res, err := h.HandleRequestHeaders(context.Background(),
 				withAuthorization(innerMetadata(tc.leg, "GET", "api.example.com", nil)))
 			if tc.wantDeny {

@@ -146,15 +146,8 @@ func (r *Relay) ServeOn(ctx context.Context, packet net.PacketConn, stream net.L
 
 // servePacket answers UDP queries until ctx is canceled or the socket fails.
 func (r *Relay) servePacket(ctx context.Context, pc net.PacketConn) error {
-	done := make(chan struct{})
-	go func() {
-		select {
-		case <-ctx.Done():
-			_ = pc.Close()
-		case <-done:
-		}
-	}()
-	defer close(done)
+	stop := context.AfterFunc(ctx, func() { _ = pc.Close() })
+	defer stop()
 
 	var wg sync.WaitGroup
 	defer wg.Wait()
@@ -196,15 +189,8 @@ func (r *Relay) servePacket(ctx context.Context, pc net.PacketConn) error {
 
 // serveTCP relays TCP DNS connections until ctx is canceled or the listener closes.
 func (r *Relay) serveTCP(ctx context.Context, listener net.Listener) error {
-	done := make(chan struct{})
-	go func() {
-		select {
-		case <-ctx.Done():
-			_ = listener.Close()
-		case <-done:
-		}
-	}()
-	defer close(done)
+	stop := context.AfterFunc(ctx, func() { _ = listener.Close() })
+	defer stop()
 
 	// Wait for the relays to drain before returning, so a closed listener
 	// leaves no goroutine still holding a connection slot.
@@ -307,16 +293,11 @@ func (r *Relay) relayTCP(ctx context.Context, downstream net.Conn) {
 	defer upstream.Close()
 
 	// Cancel active copies on teardown to release the worker's connection slots.
-	relayDone := make(chan struct{})
-	defer close(relayDone)
-	go func() {
-		select {
-		case <-ctx.Done():
-			_ = downstream.Close()
-			_ = upstream.Close()
-		case <-relayDone:
-		}
-	}()
+	stop := context.AfterFunc(ctx, func() {
+		_ = downstream.Close()
+		_ = upstream.Close()
+	})
+	defer stop()
 
 	deadline := time.Now().Add(dnsTCPTimeout)
 	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {

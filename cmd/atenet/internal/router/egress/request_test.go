@@ -18,7 +18,7 @@ import (
 	"context"
 	"maps"
 	"testing"
-	"time"
+	"testing/synctest"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type/v3"
@@ -407,23 +407,20 @@ func TestDenialBodyIsUniform(t *testing.T) {
 
 // A caller that gives up mid-fetch is neither a denial nor an outage.
 func TestCanceledCallerIsNotAPolicyFailure(t *testing.T) {
-	client := &egressMockClient{policy: allowAllPolicy(), policyGate: make(chan struct{})}
-	h := New(client, nil, 0, nil, "")
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() {
-		_, err := h.HandleRequestHeaders(ctx, requestMetadata("example.com"))
-		done <- err
-	}()
-	deadline := time.Now().Add(5 * time.Second)
-	for client.policyCalls.Load() == 0 {
-		if time.Now().After(deadline) {
-			t.Fatal("no fetch started")
-		}
-		time.Sleep(time.Millisecond)
-	}
-	cancel()
-	err := <-done
-	close(client.policyGate)
-	wantStatus(t, err, envoy_type.StatusCode_RequestTimeout)
+	synctest.Test(t, func(t *testing.T) {
+		client := &egressMockClient{policy: allowAllPolicy(), policyGate: make(chan struct{})}
+		h := New(client, nil, 0, nil, "")
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() {
+			_, err := h.HandleRequestHeaders(ctx, requestMetadata("example.com"))
+			done <- err
+		}()
+		// Returns once the caller is parked on the fetch.
+		synctest.Wait()
+		cancel()
+		err := <-done
+		close(client.policyGate)
+		wantStatus(t, err, envoy_type.StatusCode_RequestTimeout)
+	})
 }

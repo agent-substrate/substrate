@@ -83,7 +83,7 @@ func TestProcessRequestHeadersDispatchesByMode(t *testing.T) {
 				handlers[d] = stubs[d]
 			}
 
-			s := NewServer(50051, nil, handlers)
+			s := NewServer(nil, handlers)
 			req := connectRequest("envoy.filters.http.ext_proc", tc.chain)
 			resp := s.processRequestHeaders(context.Background(), req, req.GetRequestHeaders())
 

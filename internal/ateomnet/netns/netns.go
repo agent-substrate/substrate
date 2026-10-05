@@ -53,33 +53,20 @@ func GetFromName(name string) (Handle, error) {
 // it again. Removal only unmounts and unlinks the name. Anything still
 // holding the namespace keeps it alive, and existing handles stay usable.
 func CreateNamed(name string) (Handle, error) {
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-
 	if err := RemoveNamed(name); err != nil {
 		return -1, fmt.Errorf("while removing the leftover netns %s: %w", name, err)
 	}
-
-	// We need to create the new NS, then switch back to the current netns.
-	curNetNS, err := vishnetns.Get()
-	if err != nil {
-		return -1, fmt.Errorf("while getting current netns: %w", err)
-	}
-	// Registered before the restoring defer below since deferred calls are LIFO.
-	defer curNetNS.Close()
-	defer func() {
-		if err := vishnetns.Set(curNetNS); err != nil {
-			// Better to blow up the program than continue execution with
-			// one OS thread randomly in a different netns.
-			panic(fmt.Sprintf("Failed to restore original netns: %v", err))
+	var ns Handle
+	if err := onRestoredThread(func() error {
+		var err error
+		if ns, err = vishnetns.NewNamed(name); err != nil {
+			return fmt.Errorf("while creating interior network namespace: %w", err)
 		}
-	}()
-
-	interiorNetNS, err := vishnetns.NewNamed(name)
-	if err != nil {
-		return -1, fmt.Errorf("while creating interior network namespace: %w", err)
+		return nil
+	}); err != nil {
+		return -1, err
 	}
-	return interiorNetNS, nil
+	return ns, nil
 }
 
 // RemoveNamed unmounts and unlinks a name under /run/netns, without following
@@ -101,10 +88,23 @@ func RemoveNamed(name string) error {
 
 // Do runs do() with the OS thread switched into targetNS, then restores it.
 func Do(ctx context.Context, targetNS Handle, do func(context.Context) error) error {
+	return onRestoredThread(func() error {
+		if err := vishnetns.Set(targetNS); err != nil {
+			return fmt.Errorf("setting target netns: %w", err)
+		}
+		if err := do(ctx); err != nil {
+			return fmt.Errorf("while executing function in target netns: %w", err)
+		}
+		return nil
+	})
+}
+
+// onRestoredThread runs fn on a locked OS thread and puts the thread back in
+// the caller's netns afterwards, whichever netns fn left it in.
+func onRestoredThread(fn func() error) error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	// We need to create the new NS, then switch back to the current netns.
 	curNetNS, err := vishnetns.Get()
 	if err != nil {
 		return fmt.Errorf("while getting current netns: %w", err)
@@ -118,38 +118,22 @@ func Do(ctx context.Context, targetNS Handle, do func(context.Context) error) er
 			panic(fmt.Sprintf("Failed to restore original netns: %v", err))
 		}
 	}()
-
-	if err := vishnetns.Set(targetNS); err != nil {
-		return fmt.Errorf("setting target netns: %w", err)
-	}
-	if err := do(ctx); err != nil {
-		return fmt.Errorf("while executing function in target netns: %w", err)
-	}
-	return nil
+	return fn()
 }
 
-// Listen opens wildcard TCP listeners inside ns.
-// Sockets retain their namespace and can be served from another namespace.
-func Listen(ctx context.Context, ns Handle, ports []uint16) (_ []net.Listener, retErr error) {
-	var listeners []net.Listener
-	defer func() {
-		if retErr != nil {
-			for _, l := range listeners {
-				_ = l.Close()
-			}
-		}
-	}()
+// Listen opens a wildcard TCP listener on port inside ns. The socket retains
+// its namespace and can be served from another namespace.
+func Listen(ctx context.Context, ns Handle, port uint16) (net.Listener, error) {
+	var listener net.Listener
 	if err := Do(ctx, ns, func(context.Context) error {
-		for _, port := range ports {
-			l, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port))
-			if err != nil {
-				return fmt.Errorf("while listening on port %d: %w", port, err)
-			}
-			listeners = append(listeners, l)
+		l, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port))
+		if err != nil {
+			return fmt.Errorf("while listening on port %d: %w", port, err)
 		}
+		listener = l
 		return nil
 	}); err != nil {
 		return nil, err
 	}
-	return listeners, nil
+	return listener, nil
 }

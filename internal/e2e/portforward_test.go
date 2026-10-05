@@ -12,13 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package egressauthz
+package e2e
 
 import (
-	"os"
+	"context"
+	"path/filepath"
+	"strings"
 	"testing"
-
-	"github.com/agent-substrate/substrate/internal/e2e"
 )
 
-func TestMain(m *testing.M) { os.Exit(e2e.RunTestMain(m)) }
+func TestServicePortForwardBadKubeconfig(t *testing.T) {
+	saved := KubeConfig
+	t.Cleanup(func() { KubeConfig = saved })
+	KubeConfig = filepath.Join(t.TempDir(), "missing")
+
+	_, _, err := ServicePortForward(context.Background(), "ns", "svc", 80)
+	if err == nil || !strings.HasPrefix(err.Error(), "loading kubeconfig:") {
+		t.Fatalf("ServicePortForward with a missing kubeconfig = %v, want a kubeconfig error", err)
+	}
+}

@@ -57,16 +57,7 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 		Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: metricsAtespace}},
 	})
 
-	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: metricsAtespace, Name: actorID},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: tmpl.Atespace, Name: tmpl.Name},
-	}}); err != nil {
-		t.Fatalf("CreateActor: %v", err)
-	}
-	t.Cleanup(func() {
-		_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: &ateapipb.ObjectRef{Atespace: metricsAtespace, Name: actorID}})
-		_, _ = clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: &ateapipb.ObjectRef{Atespace: metricsAtespace, Name: actorID}})
-	})
+	e2e.CreateActor(t, ctx, clients, &ateapipb.ObjectRef{Atespace: metricsAtespace, Name: actorID}, &ateapipb.ObjectRef{Atespace: tmpl.Atespace, Name: tmpl.Name})
 
 	// Resume so the pool has an assigned worker, which the ateapi worker-count
 	// observable reports. Later metric slices extend e2e.PlatformMetricPrefixes;
@@ -136,52 +127,30 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 		if len(missing) == 0 && ateomSeen && controllerSeen && routeDurationSeen && lifecycleSeen {
 			var errs []string
 
-			// Verify ate_workerpool_desired_workers carries required namespaced attributes.
-			foundDesiredLine := false
-			for _, line := range strings.Split(scrape, "\n") {
-				if strings.HasPrefix(line, "ate_workerpool_desired_workers") {
-					foundDesiredLine = true
-					nsVal := extractLabelValue(line, "ate_workerpool_namespace")
-					poolVal := extractLabelValue(line, "ate_workerpool_name")
-					var lineErrs []string
-					if nsVal == "" {
-						lineErrs = append(lineErrs, "ate_workerpool_namespace label is missing or empty")
-					}
-					if poolVal == "" {
-						lineErrs = append(lineErrs, "ate_workerpool_name label is missing or empty")
-					}
-					if len(lineErrs) > 0 {
-						errs = append(errs, fmt.Sprintf("ate_workerpool_desired_workers validation failed on line %q: %s (Extracted labels: ate_workerpool_namespace=%q, ate_workerpool_name=%q)",
-							line, strings.Join(lineErrs, "; "), nsVal, poolVal))
-					}
-				}
-			}
-			if !foundDesiredLine {
-				errs = append(errs, "ate_workerpool_desired_workers validation failed: metric line not found in collector scrape text (no time series emitted by atecontroller callback)")
-			}
-
-			// Verify ate_workerpool_ready_workers carries required namespaced attributes.
-			foundReadyLine := false
-			for _, line := range strings.Split(scrape, "\n") {
-				if strings.HasPrefix(line, "ate_workerpool_ready_workers") {
-					foundReadyLine = true
-					nsVal := extractLabelValue(line, "ate_workerpool_namespace")
-					poolVal := extractLabelValue(line, "ate_workerpool_name")
-					var lineErrs []string
-					if nsVal == "" {
-						lineErrs = append(lineErrs, "ate_workerpool_namespace label is missing or empty")
-					}
-					if poolVal == "" {
-						lineErrs = append(lineErrs, "ate_workerpool_name label is missing or empty")
-					}
-					if len(lineErrs) > 0 {
-						errs = append(errs, fmt.Sprintf("ate_workerpool_ready_workers validation failed on line %q: %s (Extracted labels: ate_workerpool_namespace=%q, ate_workerpool_name=%q)",
-							line, strings.Join(lineErrs, "; "), nsVal, poolVal))
+			// Verify the workerpool gauges carry required namespaced attributes.
+			for _, metric := range []string{"ate_workerpool_desired_workers", "ate_workerpool_ready_workers"} {
+				foundLine := false
+				for _, line := range strings.Split(scrape, "\n") {
+					if strings.HasPrefix(line, metric) {
+						foundLine = true
+						nsVal := extractLabelValue(line, "ate_workerpool_namespace")
+						poolVal := extractLabelValue(line, "ate_workerpool_name")
+						var lineErrs []string
+						if nsVal == "" {
+							lineErrs = append(lineErrs, "ate_workerpool_namespace label is missing or empty")
+						}
+						if poolVal == "" {
+							lineErrs = append(lineErrs, "ate_workerpool_name label is missing or empty")
+						}
+						if len(lineErrs) > 0 {
+							errs = append(errs, fmt.Sprintf("%s validation failed on line %q: %s (Extracted labels: ate_workerpool_namespace=%q, ate_workerpool_name=%q)",
+								metric, line, strings.Join(lineErrs, "; "), nsVal, poolVal))
+						}
 					}
 				}
-			}
-			if !foundReadyLine {
-				errs = append(errs, "ate_workerpool_ready_workers validation failed: metric line not found in collector scrape text (no time series emitted by atecontroller callback)")
+				if !foundLine {
+					errs = append(errs, metric+" validation failed: metric line not found in collector scrape text (no time series emitted by atecontroller callback)")
+				}
 			}
 
 			// Verify ate_actor_crashes metric carries valid, non-empty low-cardinality labels for all attributes.
@@ -362,17 +331,7 @@ func suspend(t *testing.T, ctx context.Context, clients *e2e.Clients, actorID st
 
 func waitForStatus(t *testing.T, ctx context.Context, clients *e2e.Clients, actorID string, want ateapipb.ActorState) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Minute)
-	for time.Now().Before(deadline) {
-		resp, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: metricsAtespace, Name: actorID},
-		})
-		if err == nil && resp.GetStatus().GetState() == want {
-			return
-		}
-		time.Sleep(2 * time.Second)
-	}
-	t.Fatalf("actor %q never reached %v", actorID, want)
+	e2e.WaitForActorState(t, ctx, clients, &ateapipb.ObjectRef{Atespace: metricsAtespace, Name: actorID}, want, 2*time.Minute)
 }
 
 func extractLabelValue(line, labelName string) string {

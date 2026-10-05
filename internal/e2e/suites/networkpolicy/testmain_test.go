@@ -21,8 +21,4 @@ import (
 	"github.com/agent-substrate/substrate/internal/e2e"
 )
 
-func run(m *testing.M) int {
-	return e2e.RunTestMain(m)
-}
-
-func TestMain(m *testing.M) { os.Exit(run(m)) }
+func TestMain(m *testing.M) { os.Exit(e2e.RunTestMain(m)) }

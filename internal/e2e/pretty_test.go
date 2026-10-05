@@ -109,48 +109,6 @@ func TestColorf(t *testing.T) {
 	}
 }
 
-func TestFColorfAndFColorfln(t *testing.T) {
-	t.Run("FColorf", func(t *testing.T) {
-		var buf bytes.Buffer
-		NoColor = false
-		err := FColorf(&buf, "Hello <green>%s</green>", "world")
-		if err != nil {
-			t.Fatalf("FColorf failed: %v", err)
-		}
-		want := "Hello \033[32mworld\033[0m"
-		if buf.String() != want {
-			t.Errorf("FColorf output = %q, want %q", buf.String(), want)
-		}
-	})
-
-	t.Run("FColorfln", func(t *testing.T) {
-		var buf bytes.Buffer
-		NoColor = false
-		err := FColorfln(&buf, "Hello <green>%s</green>", "world")
-		if err != nil {
-			t.Fatalf("FColorfln failed: %v", err)
-		}
-		want := "Hello \033[32mworld\033[0m\n"
-		if buf.String() != want {
-			t.Errorf("FColorfln output = %q, want %q", buf.String(), want)
-		}
-	})
-
-	t.Run("FColorf no color", func(t *testing.T) {
-		var buf bytes.Buffer
-		NoColor = true
-		defer func() { NoColor = false }()
-		err := FColorf(&buf, "Hello <green>%s</green>", "world")
-		if err != nil {
-			t.Fatalf("FColorf failed: %v", err)
-		}
-		want := "Hello world"
-		if buf.String() != want {
-			t.Errorf("FColorf output = %q, want %q", buf.String(), want)
-		}
-	})
-}
-
 func TestColorWriter(t *testing.T) {
 	tests := []struct {
 		name    string

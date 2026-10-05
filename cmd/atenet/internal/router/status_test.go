@@ -16,16 +16,9 @@ package router
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
-	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/json"
-	"encoding/pem"
 	"fmt"
 	"io"
-	"math/big"
 	"net"
 	"net/http"
 	"os"
@@ -36,6 +29,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/ingress"
+	"github.com/agent-substrate/substrate/internal/localca"
 )
 
 func TestStatuszEndpoint(t *testing.T) {
@@ -66,7 +60,7 @@ func TestStatuszEndpoint(t *testing.T) {
 		ExtprocPort:        50051,
 		ExtProcMaxRequests: defaultExtProcMaxRequests,
 		MetricsAddr:        "127.0.0.1:0",
-		ParkedRequest:      ingress.DefaultParkedRequestConfig(),
+		ParkedRequest:      ingress.ParkedRequestConfig{Max: ingress.DefaultParkedRequestMax},
 		Auth: authConfig{
 			AteapiCAFile:         caPath,
 			AteapiClientCertPath: clientCertPath,
@@ -78,7 +72,7 @@ func TestStatuszEndpoint(t *testing.T) {
 		t.Fatalf("Failed generating router server: %v", err)
 	}
 
-	srv.extprocSrv = extproc.NewServer(cfg.ExtprocPort, nil, nil)
+	srv.extprocSrv = extproc.NewServer(nil, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -109,12 +103,12 @@ func TestStatuszEndpoint(t *testing.T) {
 
 	var resp *http.Response
 	var getErr error
-	for i := 0; i < 20; i++ {
+	for i := 0; i < 200; i++ {
 		resp, getErr = http.Get(statuszUrl)
 		if getErr == nil {
 			break
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	}
 	if getErr != nil {
 		t.Fatalf("Failed retrieving status request output details after retries: %v", getErr)
@@ -196,34 +190,24 @@ users:
 	return path
 }
 
-// writeTestTLSMaterial generates a self-signed certificate and writes a CA trust
-// bundle and a client credential bundle to temp files, returning their paths.
-// Run() (mtls mode) requires both to build its ateapi mTLS credentials.
+// writeTestTLSMaterial writes a CA trust bundle and a client credential bundle
+// to temp files, returning their paths. Run() (mtls mode) requires both to
+// build its ateapi mTLS credentials; nothing here completes a handshake, so
+// the CA is its own client credential.
 func writeTestTLSMaterial(t *testing.T) (caPath, clientCertPath string) {
 	t.Helper()
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	ca, err := localca.GenerateCA("test-ca", localca.KeyTypeECDSAP256, time.Hour)
 	if err != nil {
-		t.Fatalf("generating key: %v", err)
+		t.Fatalf("generating CA: %v", err)
 	}
-	template := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "test-ca"},
-		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().Add(time.Hour),
-		IsCA:                  true,
-		BasicConstraintsValid: true,
-		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
-	}
-	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	certPEM, err := ca.TLSCertificateChainPEM()
 	if err != nil {
-		t.Fatalf("creating certificate: %v", err)
+		t.Fatalf("encoding CA certificate: %v", err)
 	}
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
-	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
+	keyPEM, err := ca.TLSPrivateKeyPEM()
 	if err != nil {
-		t.Fatalf("marshaling key: %v", err)
+		t.Fatalf("encoding CA key: %v", err)
 	}
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
 
 	dir := t.TempDir()
 	caPath = filepath.Join(dir, "ca.pem")

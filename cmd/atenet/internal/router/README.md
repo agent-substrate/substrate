@@ -25,12 +25,12 @@ Router has several responsibilities:
   dataplane container's `preStop` hook. See `drain.go` and `envoydrain.go`.
 * Authenticates actor identity on egress: on every CONNECT, the egress
   gateway's ext_proc handler re-verifies the actor's client certificate against
-  the actor-identity CA, reads the `ActorIdentity` X.509 extension out of it,
-  and checks the certified UID against the ATE API.
+  the actor-identity CA, reads the actor from its SPIFFE URI SAN, and checks
+  with the ATE API that the actor exists and is running.
 * Authorizes egress against the actor's `EgressPolicy`: every request the
-  gateway can read is decided on its `Host` and the address the actor dialed,
-  rules in order, first match wins; what it cannot read is decided by address
-  at the CONNECT. An actor with no policy gets no tunnel. See
+  gateway can read is decided on its `Host` and the port the actor dialed,
+  the most specific rule winning; TLS it does not terminate is decided by SNI
+  at the ClientHello. An actor with no policy gets no tunnel. See
   [egress legs](#egress-legs).
 * Serves arbitrary-port ingress: a client reaches a port on the actor other
   than its default (80) by sending an HTTP CONNECT to
@@ -130,11 +130,13 @@ a request are declared once, in `extproc/attributes.go`.
 
 | key | direction | purpose |
 | --- | --- | --- |
-| `dev.ate.actor.name` | ingress | carries the actor name across CONNECT re-entry |
-| `dev.ate.actor.atespace` | ingress | carries the atespace across CONNECT re-entry |
+| `dev.ate.target.actor` | ingress | carries the actor routing target across CONNECT re-entry |
 | `dev.ate.connect.authority` | ingress, egress | carries the outer CONNECT authority across re-entry: target-port selection on ingress, the dialed port the request legs match `ports` against on egress |
 | `dev.ate.actor.identity` | egress | carries the authenticated actor identity to the policy ext_proc, the logs and additional ext_proc services |
-| `dev.ate.egress:dial` | egress | dynamic metadata: a request leg's answer, `name` or `address`, which picks the route |
+| `dev.ate.policy.egress` | egress | dynamic metadata, then filter state: the CONNECT leg's SNI rules for the dialed port, read by the egress-policy module |
+| `dev.ate.egress:dialed_port` | egress | dynamic metadata: the CONNECT leg's answer, the port the passthrough chain dials the resolved SNI on |
+| `dev.ate.egress:dial` | egress | dynamic metadata: a request leg's answer, `name`, which picks the route |
+| `dev.ate.egress.filter_chain` | egress | filter state: the egress-policy module's verdict, which selects the inner filter chain |
 | `dev.ate.extproc.direction` | egress | selects the egress handler for dataplanes without Envoy filter chains |
 
 ### name it
@@ -195,7 +197,7 @@ its own static configuration because ingress and egress scale independently.
 
 ## status page
 
-Serve a `/statusz` page on port 8080.
+Serve a `/statusz` page on `--status-port` (4040 by default).
 
 Contents:
 

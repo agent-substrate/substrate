@@ -28,13 +28,10 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 
-	"github.com/agent-substrate/substrate/internal/ateclient"
 	"github.com/agent-substrate/substrate/internal/atenet"
 	"github.com/agent-substrate/substrate/internal/e2e"
-	"github.com/agent-substrate/substrate/internal/portforward"
 	"github.com/agent-substrate/substrate/internal/proto/grpcechopb"
 	"github.com/agent-substrate/substrate/internal/resources"
-	"k8s.io/client-go/kubernetes"
 )
 
 // grpcEchoFixtureManifests name the fixture this suite installs to get a
@@ -303,15 +300,7 @@ func waitForGRPCRouteReady(t *testing.T, ctx context.Context, client grpcechopb.
 // negotiates with the router.
 func routerAddress(t *testing.T, ctx context.Context) string {
 	t.Helper()
-	config, err := ateclient.LoadKubeConfig(e2e.KubeConfig, e2e.KubeContext)
-	if err != nil {
-		t.Fatalf("loading kubeconfig: %v", err)
-	}
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		t.Fatalf("creating k8s client: %v", err)
-	}
-	localPort, stop, err := portforward.ServicePortForward(ctx, config, clientset, e2e.SystemNamespace(), e2e.ResourceName("atenet-router"), 80)
+	localPort, stop, err := e2e.ServicePortForward(ctx, e2e.SystemNamespace(), e2e.ResourceName("atenet-router"), 80)
 	if err != nil {
 		t.Fatalf("port-forwarding to the router: %v", err)
 	}

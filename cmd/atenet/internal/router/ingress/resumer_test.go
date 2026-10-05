@@ -106,37 +106,40 @@ func TestActorResumer_ResumeActor(t *testing.T) {
 		}
 	})
 
+	// Inside a synctest bubble so the backoff between attempts is fake time.
 	t.Run("RetryOnAbortedConflict", func(t *testing.T) {
-		var resumeCalled int
-		mock := &resumerMockClient{
-			resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
-				resumeCalled++
-				if resumeCalled < 3 {
-					return nil, status.Error(codes.Aborted, "concurrent update conflict")
-				}
-				return &ateapipb.ResumeActorResponse{
-					Actor: &ateapipb.Actor{
-						Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING, WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIps: []string{expectedIP}}},
-					},
-					Resumed: true,
-				}, nil
-			},
-		}
+		synctest.Test(t, func(t *testing.T) {
+			var resumeCalled int
+			mock := &resumerMockClient{
+				resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+					resumeCalled++
+					if resumeCalled < 3 {
+						return nil, status.Error(codes.Aborted, "concurrent update conflict")
+					}
+					return &ateapipb.ResumeActorResponse{
+						Actor: &ateapipb.Actor{
+							Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING, WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIps: []string{expectedIP}}},
+						},
+						Resumed: true,
+					}, nil
+				},
+			}
 
-		resumer := NewActorResumer(mock)
-		actor, outcome, err := resumer.ResumeActor(context.Background(), testActorRef)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if !slices.Equal(actor.GetStatus().GetWorkerAssignment().GetWorkerPodIps(), []string{expectedIP}) {
-			t.Errorf("expected IP %q, got %q", expectedIP, actor.GetStatus().GetWorkerAssignment().GetWorkerPodIps())
-		}
-		if outcome != ResumeOutcomeTriggered {
-			t.Errorf("expected outcome %q, got %q", ResumeOutcomeTriggered, outcome)
-		}
-		if resumeCalled != 3 {
-			t.Errorf("expected ResumeActor called 3 times, got %d", resumeCalled)
-		}
+			resumer := NewActorResumer(mock)
+			actor, outcome, err := resumer.ResumeActor(context.Background(), testActorRef)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !slices.Equal(actor.GetStatus().GetWorkerAssignment().GetWorkerPodIps(), []string{expectedIP}) {
+				t.Errorf("expected IP %q, got %q", expectedIP, actor.GetStatus().GetWorkerAssignment().GetWorkerPodIps())
+			}
+			if outcome != ResumeOutcomeTriggered {
+				t.Errorf("expected outcome %q, got %q", ResumeOutcomeTriggered, outcome)
+			}
+			if resumeCalled != 3 {
+				t.Errorf("expected ResumeActor called 3 times, got %d", resumeCalled)
+			}
+		})
 	})
 
 	t.Run("ActorNotFound", func(t *testing.T) {
@@ -237,71 +240,75 @@ func TestActorResumer_ResumeActor(t *testing.T) {
 	})
 
 	t.Run("SingleflightDeduplication_Disambiguation", func(t *testing.T) {
-		var resumeCalled int
-		var mu sync.Mutex
+		synctest.Test(t, func(t *testing.T) {
+			var resumeCalled int
+			var mu sync.Mutex
 
-		mock := &resumerMockClient{
-			resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
-				mu.Lock()
-				resumeCalled++
-				mu.Unlock()
-				time.Sleep(20 * time.Millisecond)
-				return &ateapipb.ResumeActorResponse{
-					Actor: &ateapipb.Actor{
-						Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING, WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIps: []string{expectedIP}}},
-					},
-					Resumed: true,
-				}, nil
-			},
-		}
-
-		resumer := NewActorResumer(mock)
-
-		var wg sync.WaitGroup
-		const concurrentRequests = 10
-		results := make([]*ateapipb.Actor, concurrentRequests)
-		outcomes := make([]ResumeOutcome, concurrentRequests)
-		errs := make([]error, concurrentRequests)
-
-		wg.Add(concurrentRequests)
-		for i := 0; i < concurrentRequests; i++ {
-			go func(idx int) {
-				defer wg.Done()
-				results[idx], outcomes[idx], errs[idx] = resumer.ResumeActor(context.Background(), testActorRef)
-			}(i)
-		}
-		wg.Wait()
-
-		var triggeredCount, joinedCount int
-		for i := 0; i < concurrentRequests; i++ {
-			if errs[i] != nil {
-				t.Fatalf("request %d failed: %v", i, errs[i])
+			mock := &resumerMockClient{
+				resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+					mu.Lock()
+					resumeCalled++
+					mu.Unlock()
+					// Fake time: the sleep ends only once every caller is
+					// parked on the flight, so all of them join it.
+					time.Sleep(20 * time.Millisecond)
+					return &ateapipb.ResumeActorResponse{
+						Actor: &ateapipb.Actor{
+							Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING, WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIps: []string{expectedIP}}},
+						},
+						Resumed: true,
+					}, nil
+				},
 			}
-			if !slices.Equal(results[i].GetStatus().GetWorkerAssignment().GetWorkerPodIps(), []string{expectedIP}) {
-				t.Errorf("request %d expected IP %q, got %q", i, expectedIP, results[i].GetStatus().GetWorkerAssignment().GetWorkerPodIps())
-			}
-			switch outcomes[i] {
-			case ResumeOutcomeTriggered:
-				triggeredCount++
-			case ResumeOutcomeJoined:
-				joinedCount++
-			default:
-				t.Errorf("unexpected outcome for request %d: %q", i, outcomes[i])
-			}
-		}
 
-		if triggeredCount != 1 {
-			t.Errorf("expected exactly 1 request to have outcome 'triggered', got %d", triggeredCount)
-		}
-		if joinedCount != concurrentRequests-1 {
-			t.Errorf("expected %d requests to have outcome 'joined', got %d", concurrentRequests-1, joinedCount)
-		}
+			resumer := NewActorResumer(mock)
 
-		mu.Lock()
-		defer mu.Unlock()
-		if resumeCalled != 1 {
-			t.Errorf("expected ResumeActor called exactly once by singleflight, got %d", resumeCalled)
-		}
+			var wg sync.WaitGroup
+			const concurrentRequests = 10
+			results := make([]*ateapipb.Actor, concurrentRequests)
+			outcomes := make([]ResumeOutcome, concurrentRequests)
+			errs := make([]error, concurrentRequests)
+
+			wg.Add(concurrentRequests)
+			for i := 0; i < concurrentRequests; i++ {
+				go func(idx int) {
+					defer wg.Done()
+					results[idx], outcomes[idx], errs[idx] = resumer.ResumeActor(context.Background(), testActorRef)
+				}(i)
+			}
+			wg.Wait()
+
+			var triggeredCount, joinedCount int
+			for i := 0; i < concurrentRequests; i++ {
+				if errs[i] != nil {
+					t.Fatalf("request %d failed: %v", i, errs[i])
+				}
+				if !slices.Equal(results[i].GetStatus().GetWorkerAssignment().GetWorkerPodIps(), []string{expectedIP}) {
+					t.Errorf("request %d expected IP %q, got %q", i, expectedIP, results[i].GetStatus().GetWorkerAssignment().GetWorkerPodIps())
+				}
+				switch outcomes[i] {
+				case ResumeOutcomeTriggered:
+					triggeredCount++
+				case ResumeOutcomeJoined:
+					joinedCount++
+				default:
+					t.Errorf("unexpected outcome for request %d: %q", i, outcomes[i])
+				}
+			}
+
+			if triggeredCount != 1 {
+				t.Errorf("expected exactly 1 request to have outcome 'triggered', got %d", triggeredCount)
+			}
+			if joinedCount != concurrentRequests-1 {
+				t.Errorf("expected %d requests to have outcome 'joined', got %d", concurrentRequests-1, joinedCount)
+			}
+
+			mu.Lock()
+			defer mu.Unlock()
+			if resumeCalled != 1 {
+				t.Errorf("expected ResumeActor called exactly once by singleflight, got %d", resumeCalled)
+			}
+		})
 	})
 }
 

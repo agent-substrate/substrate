@@ -38,6 +38,36 @@ import (
 
 const testEgressPort = 15001
 
+// setupTestSandbox builds a sandbox network and removes it when the test ends.
+func setupTestSandbox(t *testing.T, cfg SandboxNetworkConfig) *SandboxNetwork {
+	t.Helper()
+	n, err := SetupSandboxNetwork(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("SetupSandboxNetwork: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := CleanupSandboxNetwork(n); err != nil {
+			t.Errorf("CleanupSandboxNetwork: %v", err)
+		}
+	})
+	return n
+}
+
+// listenInActor binds where a real actor's app binds, inside its namespace.
+func listenInActor(t *testing.T, n *SandboxNetwork) net.Listener {
+	t.Helper()
+	var lis net.Listener
+	if err := netns.Do(context.Background(), n.RuntimeNetNS, func(context.Context) error {
+		l, err := net.Listen("tcp", net.JoinHostPort(ActorVethIP, "80"))
+		lis = l
+		return err
+	}); err != nil {
+		t.Fatalf("actor listen: %v", err)
+	}
+	t.Cleanup(func() { lis.Close() })
+	return lis
+}
+
 func TestSandboxSessionDialerAfterClose(t *testing.T) {
 	session := &SandboxSession{}
 	dial := session.Dialer()
@@ -87,7 +117,6 @@ func TestSandboxSessionDialerConcurrentClose(t *testing.T) {
 
 func TestSetupSandboxNetwork(t *testing.T) {
 	roottest.Require(t, "creates network namespaces")
-	ctx := context.Background()
 
 	type actor struct {
 		net  *SandboxNetwork
@@ -95,26 +124,8 @@ func TestSetupSandboxNetwork(t *testing.T) {
 	}
 	actors := map[string]*actor{}
 	for _, uid := range []string{"11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222"} {
-		n, err := SetupSandboxNetwork(ctx, SandboxNetworkConfig{ActorUID: uid, Veth: true, EgressPort: testEgressPort})
-		if err != nil {
-			t.Fatalf("SetupSandboxNetwork(%s): %v", uid, err)
-		}
-		t.Cleanup(func() {
-			if err := CleanupSandboxNetwork(n); err != nil {
-				t.Errorf("cleanup %s: %v", uid, err)
-			}
-		})
-
-		// The actor's app, bound where a real one binds, inside its namespace.
-		var lis net.Listener
-		if err := netns.Do(ctx, n.RuntimeNetNS, func(context.Context) error {
-			l, err := net.Listen("tcp", net.JoinHostPort(ActorVethIP, "80"))
-			lis = l
-			return err
-		}); err != nil {
-			t.Fatalf("actor %s listen: %v", uid, err)
-		}
-		t.Cleanup(func() { lis.Close() })
+		n := setupTestSandbox(t, SandboxNetworkConfig{ActorUID: uid, Veth: true, EgressPort: testEgressPort})
+		lis := listenInActor(t, n)
 		body := "i-am-" + uid[:8]
 		go http.Serve(lis, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			io.WriteString(w, body)
@@ -146,14 +157,9 @@ func TestSetupSandboxNetwork(t *testing.T) {
 func TestActorEgressIsFailClosedWithoutAtunnel(t *testing.T) {
 	roottest.Require(t, "creates network namespaces")
 	ctx := context.Background()
-
-	n, err := SetupSandboxNetwork(ctx, SandboxNetworkConfig{
+	n := setupTestSandbox(t, SandboxNetworkConfig{
 		ActorUID: "33333333-3333-3333-3333-333333333333", Veth: true, EgressPort: testEgressPort,
 	})
-	if err != nil {
-		t.Fatalf("SetupSandboxNetwork: %v", err)
-	}
-	t.Cleanup(func() { CleanupSandboxNetwork(n) })
 
 	for _, destination := range []string{"93.184.216.34:443", "93.184.216.34:8080"} {
 		if err := netns.Do(ctx, n.RuntimeNetNS, func(context.Context) error {
@@ -172,22 +178,8 @@ func TestActorEgressIsFailClosedWithoutAtunnel(t *testing.T) {
 func TestIngressCrossesThePairWhileEgressIsCaptured(t *testing.T) {
 	roottest.Require(t, "creates network namespaces")
 	ctx := context.Background()
-
-	n, err := SetupSandboxNetwork(ctx, SandboxNetworkConfig{ActorUID: "44444444-4444-4444-4444-444444444444", Veth: true, EgressPort: testEgressPort})
-	if err != nil {
-		t.Fatalf("SetupSandboxNetwork: %v", err)
-	}
-	t.Cleanup(func() { CleanupSandboxNetwork(n) })
-
-	var app net.Listener
-	if err := netns.Do(ctx, n.RuntimeNetNS, func(context.Context) error {
-		l, e := net.Listen("tcp", net.JoinHostPort(ActorVethIP, "80"))
-		app = l
-		return e
-	}); err != nil {
-		t.Fatalf("actor listen: %v", err)
-	}
-	defer app.Close()
+	n := setupTestSandbox(t, SandboxNetworkConfig{ActorUID: "44444444-4444-4444-4444-444444444444", Veth: true, EgressPort: testEgressPort})
+	app := listenInActor(t, n)
 	go func() {
 		for {
 			c, e := app.Accept()
@@ -223,15 +215,10 @@ func TestIngressCrossesThePairWhileEgressIsCaptured(t *testing.T) {
 func TestSetupSandboxNetworkWithoutVeth(t *testing.T) {
 	roottest.Require(t, "creates network namespaces")
 	ctx := context.Background()
-
-	n, err := SetupSandboxNetwork(ctx, SandboxNetworkConfig{
+	n := setupTestSandbox(t, SandboxNetworkConfig{
 		ActorUID:   "77777777-7777-7777-7777-777777777777",
 		EgressPort: testEgressPort,
 	})
-	if err != nil {
-		t.Fatalf("SetupSandboxNetwork: %v", err)
-	}
-	t.Cleanup(func() { CleanupSandboxNetwork(n) })
 
 	if n.GatewayNetNS != n.RuntimeNetNS {
 		t.Errorf("got a second namespace (%v vs %v); this shape needs one", n.GatewayNetNS, n.RuntimeNetNS)
@@ -275,11 +262,7 @@ func TestSetupSucceedsOverALeftoverNamespace(t *testing.T) {
 		}
 	}
 
-	second, err := SetupSandboxNetwork(ctx, cfg)
-	if err != nil {
-		t.Fatalf("the actor is wedged by its own leftover namespace: %v", err)
-	}
-	t.Cleanup(func() { CleanupSandboxNetwork(second) })
+	second := setupTestSandbox(t, cfg)
 
 	if err := netns.Do(ctx, second.RuntimeNetNS, func(context.Context) error {
 		if _, err := netlink.LinkByName(ActorVethName); err != nil {
@@ -295,14 +278,9 @@ func TestSetupSucceedsOverALeftoverNamespace(t *testing.T) {
 func TestActorUDPHasNowhereToGoBeyondTheNamespacePair(t *testing.T) {
 	roottest.Require(t, "creates network namespaces")
 	ctx := context.Background()
-
-	n, err := SetupSandboxNetwork(ctx, SandboxNetworkConfig{
+	n := setupTestSandbox(t, SandboxNetworkConfig{
 		ActorUID: "bbbbbbbb-0000-0000-0000-00000000000b", Veth: true, EgressPort: testEgressPort,
 	})
-	if err != nil {
-		t.Fatalf("SetupSandboxNetwork: %v", err)
-	}
-	t.Cleanup(func() { CleanupSandboxNetwork(n) })
 
 	for _, destination := range []string{"93.184.216.34:443", "93.184.216.34:53"} {
 		if err := netns.Do(ctx, n.GatewayNetNS, func(context.Context) error {
@@ -323,7 +301,7 @@ func TestCleanupClosesEachDescriptorOnce(t *testing.T) {
 	roottest.Require(t, "creates network namespaces")
 	network, err := SetupSandboxNetwork(context.Background(), SandboxNetworkConfig{
 		ActorUID:   "close-once",
-		EgressPort: 15001,
+		EgressPort: testEgressPort,
 	})
 	if err != nil {
 		t.Fatal(err)

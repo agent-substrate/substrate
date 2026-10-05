@@ -38,10 +38,6 @@ import (
 )
 
 const (
-	// DefaultConnectPort is the worker port on which atunnel accepts inbound
-	// mTLS CONNECT tunnels from the ingress router.
-	DefaultConnectPort = 8443
-
 	// StaleAssignmentHeader distinguishes an atunnel routing rejection from a
 	// 421 returned by the actor application itself.
 	StaleAssignmentHeader = "X-Ate-Assignment-Stale"
@@ -73,11 +69,8 @@ type Config struct {
 
 // Server is an HTTPS reverse proxy for the worker's active actors.
 type Server struct {
-	credentialBundlePath string
-	tlsConfig            *tls.Config
-	upstream             *url.URL
-	// Overridable by tests to avoid dialing real sandboxes.
-	newProxy func(DialFunc) *httputil.ReverseProxy
+	tlsConfig *tls.Config
+	upstream  *url.URL
 
 	mu sync.Mutex
 	// Keyed by the request's actor identity.
@@ -129,17 +122,13 @@ func NewServer(cfg Config) (*Server, error) {
 	}
 
 	s := &Server{
-		credentialBundlePath: cfg.CredentialBundlePath,
-		upstream:             cfg.Upstream,
-		active:               map[resources.ActorRef]*activation{},
-	}
-	s.newProxy = func(dial DialFunc) *httputil.ReverseProxy {
-		return newActorProxy(cfg.Upstream, dial)
+		upstream: cfg.Upstream,
+		active:   map[resources.ActorRef]*activation{},
 	}
 	s.tlsConfig = &tls.Config{
 		MinVersion: tls.VersionTLS12,
 		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
-			return loadCredentialBundle(s.credentialBundlePath)
+			return loadCredentialBundle(cfg.CredentialBundlePath)
 		},
 		ClientAuth: tls.RequireAndVerifyClientCert,
 		// TODO(liorlieberman): reload the trust bundle per connection via
@@ -292,16 +281,9 @@ func (s *Server) serve(ctx context.Context, lis net.Listener, handler http.Handl
 		TLSConfig:         tlsConfig,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-	done := make(chan struct{})
-	go func() {
-		select {
-		case <-ctx.Done():
-			_ = httpServer.Close()
-		case <-done:
-		}
-	}()
+	stop := context.AfterFunc(ctx, func() { _ = httpServer.Close() })
 	err := httpServer.ServeTLS(lis, "", "")
-	close(done)
+	stop()
 	if errors.Is(err, http.ErrServerClosed) && ctx.Err() != nil {
 		return nil
 	}
@@ -451,7 +433,7 @@ func (s *Server) Activate(atespace, actorName, actorUID string, dial DialFunc) e
 		ctx:    ctx,
 		cancel: cancel,
 		dial:   dial,
-		proxy:  s.newProxy(dial),
+		proxy:  newActorProxy(s.upstream, dial),
 	}
 	return nil
 }

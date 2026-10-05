@@ -126,8 +126,7 @@ func DeploySubstrateFixture(t *testing.T, ctx context.Context, clients *Clients,
 	// The pool manifest also carries the namespace. Its cleanup is registered
 	// first so it runs last (t.Cleanup is LIFO), after the templates that
 	// select the pool's workers are gone.
-	inline, blocks := fixtureSubstitutions(bucket, name)
-	poolManifest := renderManifest(t, manifests.Pool, inline, blocks)
+	poolManifest := RenderFixtureManifest(t, manifests.Pool, bucket, name)
 	koApply(t, poolManifest)
 	t.Cleanup(func() {
 		delArgs := []string{"delete", "--ignore-not-found", "-f", poolManifest}
