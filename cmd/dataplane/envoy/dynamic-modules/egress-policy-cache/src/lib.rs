@@ -34,6 +34,10 @@ use thread_local::ThreadLocal;
 /// Key holding the egress policy SNI rules JSON.
 pub const ATE_POLICY_EGRESS: &str = "dev.ate.policy.egress";
 
+/// Key holding the cached egress policy SNI rules JSON before it is copied to
+/// upstream-shared filter state.
+pub const ATE_POLICY_EGRESS_CACHED: &str = "dev.ate.policy.egress.cached";
+
 /// Counter name for egress policy cache hits on CONNECT.
 pub const CONNECT_CACHE_HIT_COUNTER: &str = "ate_egress.connect_cache_hit";
 
@@ -225,7 +229,7 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for EgressPolicyCacheFilter {
     if let Some(cert_digest) = read_peer_cert_digest(envoy_filter)
       && let Some(policy) = self.local_cache().borrow_mut().get(&cert_digest).cloned()
     {
-      envoy_filter.set_filter_state_bytes(ATE_POLICY_EGRESS.as_bytes(), policy.as_bytes());
+      envoy_filter.set_filter_state_bytes(ATE_POLICY_EGRESS_CACHED.as_bytes(), policy.as_bytes());
       let _ = envoy_filter.increment_counter(self.cache_hit_counter, 1);
     } else {
       let _ = envoy_filter.increment_counter(self.cache_miss_counter, 1);
@@ -533,7 +537,7 @@ mod tests {
     mock_filter
       .expect_set_filter_state_bytes()
       .withf(move |key, val| {
-        key == ATE_POLICY_EGRESS.as_bytes() && val == expected_policy.as_bytes()
+        key == ATE_POLICY_EGRESS_CACHED.as_bytes() && val == expected_policy.as_bytes()
       })
       .return_const(true)
       .once();

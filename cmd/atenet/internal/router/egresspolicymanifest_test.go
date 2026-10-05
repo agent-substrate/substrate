@@ -172,8 +172,8 @@ func TestEgressManifestsNameEveryExtProcChain(t *testing.T) {
 		t.Run(path, func(t *testing.T) {
 			var got []string
 			for _, lc := range allChains(bootstrapTree(t, path)) {
-				h := hcm(lc.chain)
-				if h == nil || filterIndex(list(h, "http_filters"), extProcFilter) < 0 {
+				cfg, _, _ := extProcOf(lc.chain)
+				if cfg == nil {
 					continue
 				}
 				name := str(lc.chain, "name")
@@ -196,11 +196,19 @@ func TestEgressManifestsNameEveryExtProcChain(t *testing.T) {
 // among the http_filters, or nil and -1.
 func extProcOf(chain node) (node, int, []node) {
 	filters := list(hcm(chain), "http_filters")
-	i := filterIndex(filters, extProcFilter)
-	if i < 0 {
-		return nil, -1, filters
+	if i := filterIndex(filters, extProcFilter); i >= 0 {
+		return child(filters[i], "typed_config"), i, filters
 	}
-	return child(filters[i], "typed_config"), i, filters
+	if i := filterIndex(filters, "envoy.filters.http.composite"); i >= 0 {
+		matchers := list(child(child(child(filters[i], "typed_config"), "matcher"), "matcher_list"), "matchers")
+		for _, m := range matchers {
+			action := child(child(child(m, "on_match"), "action"), "typed_config")
+			if inner := child(action, "typed_config"); str(inner, "name") == extProcFilter {
+				return child(inner, "typed_config"), i, filters
+			}
+		}
+	}
+	return nil, -1, filters
 }
 
 // Every ext_proc in the egress gateway fails closed, talks to the co-located
@@ -592,10 +600,9 @@ func TestEgressManifestsConnectLegHandsTheSNIRulesToTheInnerListener(t *testing.
 	}
 
 	writers := filterStateWriters(tree, extproc.EgressPolicyMetadataNamespace)
-	if len(writers) != 1 {
-		t.Fatalf("%s is set by %d filters, want exactly the CONNECT leg's copy of its answer", extproc.EgressPolicyMetadataNamespace, len(writers))
+	if len(writers) != 2 {
+		t.Fatalf("%s is set by %d entries, want 2 (ext_proc dynamic metadata and cached filter state)", extproc.EgressPolicyMetadataNamespace, len(writers))
 	}
-	entry := writers[0]
 	at := -1
 	for i, f := range filters {
 		if str(f, "name") != setFilterStateFilter {
@@ -613,18 +620,21 @@ func TestEgressManifestsConnectLegHandsTheSNIRulesToTheInnerListener(t *testing.
 	if at < extProcAt {
 		t.Errorf("%s is set at http_filters[%d], before ext_proc at [%d]; the metadata it reads does not exist yet", extproc.EgressPolicyMetadataNamespace, at, extProcAt)
 	}
-	format := child(entry, "format_string")
-	if got := str(child(format, "text_format_source"), "inline_string"); got != extproc.EgressPolicyMetadataFormat {
-		t.Errorf("%s is set from %q, want %q", extproc.EgressPolicyMetadataNamespace, got, extproc.EgressPolicyMetadataFormat)
-	}
-	if got := str(entry, "factory_key"); got != "envoy.string" {
-		t.Errorf("%s uses factory %q, want envoy.string, the string accessor the module reads", extproc.EgressPolicyMetadataNamespace, got)
-	}
-	if skip, _ := entry["skip_if_empty"].(bool); !skip {
-		t.Errorf("%s is not skip_if_empty; an absent answer would be written as unparseable JSON", extproc.EgressPolicyMetadataNamespace)
-	}
-	if str(entry, "shared_with_upstream") == "" {
-		t.Errorf("%s is not shared with upstream; the inner listener would never see it", extproc.EgressPolicyMetadataNamespace)
+	wantFormats := []string{extproc.EgressPolicyMetadataFormat, extproc.EgressPolicyCachedFormat}
+	for i, entry := range writers {
+		format := child(entry, "format_string")
+		if got := str(child(format, "text_format_source"), "inline_string"); got != wantFormats[i] {
+			t.Errorf("%s writer[%d] is set from %q, want %q", extproc.EgressPolicyMetadataNamespace, i, got, wantFormats[i])
+		}
+		if got := str(entry, "factory_key"); got != "envoy.string" {
+			t.Errorf("%s writer[%d] uses factory %q, want envoy.string, the string accessor the module reads", extproc.EgressPolicyMetadataNamespace, i, got)
+		}
+		if skip, _ := entry["skip_if_empty"].(bool); !skip {
+			t.Errorf("%s writer[%d] is not skip_if_empty; an absent answer would be written as unparseable JSON", extproc.EgressPolicyMetadataNamespace, i)
+		}
+		if str(entry, "shared_with_upstream") == "" {
+			t.Errorf("%s writer[%d] is not shared with upstream; the inner listener would never see it", extproc.EgressPolicyMetadataNamespace, i)
+		}
 	}
 }
 

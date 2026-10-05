@@ -158,7 +158,8 @@ func TestActorEgressHTTPSByHostnamePassthrough(t *testing.T) {
 }
 
 // TestActorEgressPolicyCache sends 5 requests to example.com and checks that
-// the egress policy cache counters record 4 hits and 1 miss.
+// the egress policy cache counters record 4 hits and 1 miss, and that the
+// outer CONNECT ext_proc filter is invoked only once.
 func TestActorEgressPolicyCache(t *testing.T) {
 	ctx := context.Background()
 	router, actorRef := hostnamePolicyActor(t, ctx)
@@ -168,6 +169,7 @@ func TestActorEgressPolicyCache(t *testing.T) {
 		t.Fatalf("ScrapeEgressEnvoyMetrics before fetches: %v", err)
 	}
 	beforeHits, beforeMisses := e2e.EgressPolicyCacheCounts(beforeScrape)
+	beforeExtProc := e2e.EgressExtProcStreamCounts(beforeScrape)
 
 	const numRequests = 5
 	payload := []byte(`{"url":"https://example.com/","disableKeepAlive":true}`)
@@ -183,16 +185,21 @@ func TestActorEgressPolicyCache(t *testing.T) {
 		t.Fatalf("ScrapeEgressEnvoyMetrics after fetches: %v", err)
 	}
 	afterHits, afterMisses := e2e.EgressPolicyCacheCounts(afterScrape)
+	afterExtProc := e2e.EgressExtProcStreamCounts(afterScrape)
 
 	const (
-		wantHits   = 4
-		wantMisses = 1
+		wantHits         = 4
+		wantMisses       = 1
+		wantExtProcCalls = 1
 	)
 	if got := afterHits - beforeHits; got != wantHits {
 		t.Errorf("egress policy cache hits delta = %d, want %d", got, wantHits)
 	}
 	if got := afterMisses - beforeMisses; got != wantMisses {
 		t.Errorf("egress policy cache misses delta = %d, want %d", got, wantMisses)
+	}
+	if got := afterExtProc[e2e.EgressExtProcIdentityStatPrefix] - beforeExtProc[e2e.EgressExtProcIdentityStatPrefix]; got != wantExtProcCalls {
+		t.Errorf("egress_identity ext_proc streams_started delta = %d, want %d", got, wantExtProcCalls)
 	}
 }
 

@@ -196,47 +196,73 @@ data:
               # certificate (see cmd/atenet/internal/router/egress) and returns
               # the SNI rules in dev.ate.policy.egress and the dialed port in
               # dev.ate.egress. Fails closed if the router is down.
-              - name: envoy.filters.http.ext_proc
+              # Skipped when envoy_substrate_egress_policy_cache already populated
+              # dev.ate.policy.egress.cached in filter state on a cache hit.
+              - name: envoy.filters.http.composite
                 typed_config:
-                  "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor
-                  stat_prefix: egress_identity
-                  grpc_service:
-                    envoy_grpc:
-                      cluster_name: ext_proc_server
-                    timeout: 2s
-                  failure_mode_allow: false
-                  # Set ext_proc timeout to 5s (from default 200ms) to handle slower ext_proc transactions.
-                  message_timeout: 5s
-                  # How the ext_proc server tells egress from ingress. It applies
-                  # opposite trust models to the two directions, and dispatches on
-                  # this Envoy-asserted filter chain name so that no client can
-                  # select the egress path by crafting a request. The value must
-                  # match EgressFilterChainName in
-                  # cmd/atenet/internal/router/extproc/dispatch.go; renaming the
-                  # filter chain above without updating it fails closed (the
-                  # request is classified as ingress, which this --mode=egress
-                  # instance does not serve, and is refused with a 404).
-                  request_attributes:
-                  - xds.filter_chain_name
-                  processing_mode:
-                    request_header_mode: SEND
-                    response_header_mode: SKIP
-                    request_body_mode: NONE
-                    response_body_mode: NONE
-                    request_trailer_mode: SKIP
-                    response_trailer_mode: SKIP
-                  # This leg authenticates and never rewrites; the sidecar may
-                  # not touch routing or Envoy's own headers here.
-                  mutation_rules:
-                    disallow_system: true
-                    disallow_is_error: true
-                  # Envoy silently drops metadata from a namespace not listed
-                  # here, and the filter state below would never be set.
-                  metadata_options:
-                    receiving_namespaces:
-                      untyped:
-                      - dev.ate.egress
-                      - dev.ate.policy.egress
+                  "@type": type.googleapis.com/envoy.extensions.filters.http.composite.v3.Composite
+                  matcher:
+                    matcher_list:
+                      matchers:
+                      - predicate:
+                          not_matcher:
+                            single_predicate:
+                              input:
+                                name: filter_state
+                                typed_config:
+                                  "@type": type.googleapis.com/envoy.extensions.matching.common_inputs.network.v3.FilterStateInput
+                                  key: dev.ate.policy.egress.cached
+                              value_match:
+                                safe_regex:
+                                  google_re2: {}
+                                  regex: ".*"
+                        on_match:
+                          action:
+                            name: composite-action
+                            typed_config:
+                              "@type": type.googleapis.com/envoy.extensions.filters.http.composite.v3.ExecuteFilterAction
+                              typed_config:
+                                name: envoy.filters.http.ext_proc
+                                typed_config:
+                                  "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor
+                                  stat_prefix: egress_identity
+                                  grpc_service:
+                                    envoy_grpc:
+                                      cluster_name: ext_proc_server
+                                    timeout: 2s
+                                  failure_mode_allow: false
+                                  # Set ext_proc timeout to 5s (from default 200ms) to handle slower ext_proc transactions.
+                                  message_timeout: 5s
+                                  # How the ext_proc server tells egress from ingress. It applies
+                                  # opposite trust models to the two directions, and dispatches on
+                                  # this Envoy-asserted filter chain name so that no client can
+                                  # select the egress path by crafting a request. The value must
+                                  # match EgressFilterChainName in
+                                  # cmd/atenet/internal/router/extproc/dispatch.go; renaming the
+                                  # filter chain above without updating it fails closed (the
+                                  # request is classified as ingress, which this --mode=egress
+                                  # instance does not serve, and is refused with a 404).
+                                  request_attributes:
+                                  - xds.filter_chain_name
+                                  processing_mode:
+                                    request_header_mode: SEND
+                                    response_header_mode: SKIP
+                                    request_body_mode: NONE
+                                    response_body_mode: NONE
+                                    request_trailer_mode: SKIP
+                                    response_trailer_mode: SKIP
+                                  # This leg authenticates and never rewrites; the sidecar may
+                                  # not touch routing or Envoy's own headers here.
+                                  mutation_rules:
+                                    disallow_system: true
+                                    disallow_is_error: true
+                                  # Envoy silently drops metadata from a namespace not listed
+                                  # here, and the filter state below would never be set.
+                                  metadata_options:
+                                    receiving_namespaces:
+                                      untyped:
+                                      - dev.ate.egress
+                                      - dev.ate.policy.egress
               # The CONNECT leg's answers, copied into filter state shared with
               # the inner listener. Must stay after ext_proc.
               - name: envoy.filters.http.set_filter_state
@@ -263,6 +289,14 @@ data:
                     format_string:
                       text_format_source:
                         inline_string: "%DYNAMIC_METADATA(dev.ate.policy.egress)%"
+                      omit_empty_values: true
+                  - object_key: dev.ate.policy.egress
+                    factory_key: envoy.string
+                    skip_if_empty: true
+                    shared_with_upstream: ONCE
+                    format_string:
+                      text_format_source:
+                        inline_string: "%FILTER_STATE(dev.ate.policy.egress.cached:PLAIN)%"
                       omit_empty_values: true
               - name: envoy.filters.http.router
                 typed_config:
