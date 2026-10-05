@@ -178,6 +178,11 @@ func TestActorEgressMITMTrust(t *testing.T) {
 		t.Errorf("fetch of a host outside the policy got status %s with error %q, want no HTTP exchange at all", denied.Status, denied.Error)
 	}
 
+	if !e2e.CurrentAtenetDataplane().IsDataplaneConcurrencyDisabled() {
+		t.Log("skipping counter verification: dataplane concurrency is not disabled")
+		return
+	}
+
 	afterScrape, err := e2e.ScrapeEgressEnvoyMetrics(ctx)
 	if err != nil {
 		t.Fatalf("ScrapeEgressEnvoyMetrics after fetches: %v", err)

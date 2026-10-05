@@ -39,6 +39,7 @@ type AtenetDataplane interface {
 	PlatformMetricPrefixes([]string) []string
 	RouteDurationSeen(context.Context, string) (bool, error)
 	SupportsIngressProtocolDowngrade() bool
+	IsDataplaneConcurrencyDisabled() bool
 }
 
 // CurrentAtenetDataplane returns the implementation selected for this test
@@ -83,6 +84,10 @@ func (envoyAtenetDataplane) RouteDurationSeen(_ context.Context, collectorScrape
 
 func (envoyAtenetDataplane) SupportsIngressProtocolDowngrade() bool { return true }
 
+func (envoyAtenetDataplane) IsDataplaneConcurrencyDisabled() bool {
+	return os.Getenv("E2E_ENVOY_CONCURRENCY") == "1"
+}
+
 type agentGatewayAtenetDataplane struct{}
 
 func (agentGatewayAtenetDataplane) NewParkingObserver(context.Context) (ParkingObserver, error) {
@@ -121,6 +126,8 @@ func (agentGatewayAtenetDataplane) RouteDurationSeen(ctx context.Context, _ stri
 }
 
 func (agentGatewayAtenetDataplane) SupportsIngressProtocolDowngrade() bool { return false }
+
+func (agentGatewayAtenetDataplane) IsDataplaneConcurrencyDisabled() bool { return false }
 
 type agentGatewayParkingObserver struct{}
 

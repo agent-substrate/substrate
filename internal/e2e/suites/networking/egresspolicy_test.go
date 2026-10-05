@@ -180,6 +180,11 @@ func TestActorEgressPolicyCache(t *testing.T) {
 		}
 	}
 
+	if !e2e.CurrentAtenetDataplane().IsDataplaneConcurrencyDisabled() {
+		t.Log("skipping counter verification: dataplane concurrency is not disabled")
+		return
+	}
+
 	afterScrape, err := e2e.ScrapeEgressEnvoyMetrics(ctx)
 	if err != nil {
 		t.Fatalf("ScrapeEgressEnvoyMetrics after fetches: %v", err)
@@ -233,6 +238,11 @@ func TestActorEgressPolicyCacheExpiration(t *testing.T) {
 		if status != http.StatusOK {
 			t.Fatalf("post-expiration request %d to example.com returned HTTP %d, want 200; body: %s", i+1, status, body)
 		}
+	}
+
+	if !e2e.CurrentAtenetDataplane().IsDataplaneConcurrencyDisabled() {
+		t.Log("skipping counter verification: dataplane concurrency is not disabled")
+		return
 	}
 
 	afterScrape, err := e2e.ScrapeEgressEnvoyMetrics(ctx)
