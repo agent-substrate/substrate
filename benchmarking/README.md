@@ -332,7 +332,8 @@ nothing. Actors are named `spawn-<run-id>-<n>` and deleted when boomer exits.
 
 #### Spawn Configuration Knobs
 
-* `--total-actors`: Actors in the batch (default `100`).
+* `--total-actors`: Actors in the batch (default `100`). The same flag sizes
+  the [ResumeCold](#resumecold-benchmark) fleet.
 * `--spawn-concurrency`: Actors created concurrently (default `1`).
 * `--actor-deadline`: Per-actor timeout in seconds, covering create, resume and
   first ping (default `120`).
@@ -349,6 +350,59 @@ The web UI shows the same fields; `0` keeps the value boomer-worker started with
 * `TimeToAllReady`: From batch start until the last ready actor answered.
   Actors that failed show up as `ActorTimeToReady` failures instead.
 * `CrashCount`: Actors that crashed during resume.
+
+The `actors_per_*` ratios in `trial_summary` are wrong for this test: they
+count users × `--actors-per-user`, not `--total-actors`.
+
+### ResumeCold Benchmark
+
+The ResumeCold benchmark drives ate-api-server's cold resume path at a set
+rate. At startup each boomer process creates a fleet of actors from the
+`glutton` template and makes each one cold with a resume and a pause, before
+it connects to the locust master, so the warm-up stays out of the measured
+steps. Each user then takes a paused actor from the fleet, resumes it, and
+pauses it again, so every measured resume is cold. All users share the fleet.
+
+It sends no requests to the actors themselves, so it runs on the fake data
+plane, where it measures what a cold resume costs ate-api-server and Postgres
+without the router or the restore in the way. The pauses run at the resume
+rate, so a capacity it finds is one of resume and pause cycles, not of resumes
+alone.
+
+Actors are named `rc-<uuid>` and deleted when boomer exits. If the atespace
+cannot be ensured or no actor becomes cold, boomer exits at startup; an actor
+that fails to warm is deleted and the run goes on with the rest.
+
+#### ResumeCold Configuration Knobs
+
+* `--total-actors`: Fleet size (default `100`). Each user holds one actor per
+  cycle, so set it to at least the number of users. The fleet is created when
+  boomer starts, so only the value boomer starts with counts: its
+  `--total-actors` flag, which `runner.py` forwards, or a `total_actors` in its
+  `--config-json`.
+* `--target-rps`: Cold resumes per second the whole boomer process paces to
+  (default `0`, unpaced). A `--ladder` step ending in `@target_rps`, as in
+  `200:3m@1000`, changes it as the step starts. Keep the users at or above the
+  rate times the p99 of one resume plus one pause in seconds, or the step falls
+  short of its rate.
+
+In the web UI deployment, the boomer sidecar starts and warms its fleet before
+any form is submitted, so the form's total actors field has no effect and the
+fleet is always 100 actors. The form's target rate works as above. A rate
+change reaches boomer at its next poll of the master, within 10 s, so trim the
+start of each ladder step.
+
+#### ResumeCold Reported Metrics
+
+* `ResumeActorCold`: Latency of each measured resume. A resume that finds its
+  actor already running fails, as no cold resume happened.
+* `PauseActor`: Latency of the pause that makes the actor cold again.
+* `FleetExhausted`: A user found no cold actor ready. A step with these
+  failures was limited by the fleet, not the server; raise `--total-actors`.
+
+The warm-up calls (`CreateActor`, `ResumeActorWarmup`, `PauseActorWarmup`) run
+before boomer connects to the master, so they appear only in boomer's
+Prometheus metrics, not in the locust stats.
 
 The `actors_per_*` ratios in `trial_summary` are wrong for this test: they
 count users × `--actors-per-user`, not `--total-actors`.
