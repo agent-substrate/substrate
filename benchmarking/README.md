@@ -353,6 +353,57 @@ The web UI shows the same fields; `0` keeps the value boomer-worker started with
 The `actors_per_*` ratios in `trial_summary` are wrong for this test: they
 count users × `--actors-per-user`, not `--total-actors`.
 
+### ResumePaused Benchmark
+
+The ResumePaused benchmark drives ate-api-server's cold resume path at a set
+rate. A cold resume here is a ResumeActor of a paused actor: ateapi takes the
+actor lease, binds a worker, and restores the actor from its snapshot. A
+ResumeActor of a running actor does none of that. Each user owns one actor
+from the `glutton` template. On its first iteration the user creates the actor
+and makes it cold with a resume and a pause; every later iteration resumes the
+actor and pauses it again, so every measured resume is cold.
+
+The warm-up runs in the step that added the user, unpaced, and is recorded
+under its own names.
+
+It sends no requests to the actors themselves, so it runs on the fake data
+plane, where it measures what a cold resume costs ate-api-server and Postgres
+without the router or the restore in the way. The pauses run at the resume
+rate, so a capacity it finds is one of resume and pause cycles, not of resumes
+alone.
+
+Actors are named `rp-<uuid>` and deleted when boomer exits. If the atespace
+cannot be ensured, boomer exits at startup. An actor that fails to warm is
+deleted, and its user creates another on its next iteration. When a step lowers
+the user count, the actors of the stopped users stay paused, unused, until
+boomer exits.
+
+#### ResumePaused Configuration Knobs
+
+* `--target-rps`: Cold resumes per second the whole boomer process paces to
+  (default `0`, unpaced). A `--ladder` step ending in `@target_rps`, as in
+  `200:3m@1000`, changes it as the step starts. Keep the users at or above the
+  rate times the p99 of one resume plus one pause in seconds, or the step falls
+  short of its rate.
+
+The web UI shows the same field.
+
+Trim the start of each ladder step. A rate change reaches boomer at its next
+poll of the master, within 10 s, and a step that adds users carries their
+warm-up until they have all joined at the spawn rate.
+
+#### ResumePaused Reported Metrics
+
+* `ResumeActorCold`: Latency of each measured resume. A resume that finds its
+  actor already running fails, as no cold resume happened.
+* `PauseActor`: Latency of the pause that makes the actor cold again.
+* `PauseActorRecovery`: After a failed cycle, the pause that makes the actor
+  cold for the next one. It is load on the server, so it is recorded, but
+  apart from `PauseActor`. A recovery pause that finds the actor already
+  paused counts as a success.
+* `CreateActor`, `ResumeActorWarmup`, `PauseActorWarmup`: A user's warm-up of
+  its actor, in the step that added the user.
+
 ### Viewing Traces
 You must have enabled otel tracing for your cluster to view traces.
 
