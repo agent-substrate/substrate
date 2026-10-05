@@ -244,7 +244,6 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for EgressPolicyCacheFilter {
     envoy_filter: &mut EHF,
     _end_of_stream: bool,
   ) -> envoy_dynamic_module_type_on_http_filter_request_headers_status {
-    let _ = self.config.cache_enabled;
     let cached_policy = if let Some(cert_digest) = read_peer_cert_digest(envoy_filter) {
       let mut cache = self.local_cache().borrow_mut();
       if let Some(entry) = cache.get(&cert_digest) {
@@ -278,7 +277,8 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for EgressPolicyCacheFilter {
     // Store policy in cache in case it was authorized (200 response) on a
     // cache miss. Actor identity comes from cert's subject. Use cert digest as
     // key, since it uniquely identifies the cert and hence actor.
-    if is_http_200(envoy_filter)
+    if self.config.cache_enabled
+      && is_http_200(envoy_filter)
       && !has_cached_egress_policy(envoy_filter)
       && let Some(policy) = read_egress_policy(envoy_filter)
       && let Some(cert_digest) = read_peer_cert_digest(envoy_filter)
@@ -720,6 +720,24 @@ mod tests {
       .cloned()
       .expect("expected entry in cache");
     assert_eq!(cached.stored_at, initial_stored_at);
+  }
+
+  #[test]
+  fn test_on_response_headers_skips_cache_when_disabled() {
+    let config = EgressPolicyCacheFilterConfig::new(Config {
+      cache_ttl: Duration::from_secs(5),
+      cache_enabled: false,
+      max_cache_items: 1000,
+    });
+    let mut mock_filter = MockEnvoyHttpFilter::new();
+    mock_filter.expect_get_response_header_value().never();
+
+    let mut filter = config.new_http_filter(&mut mock_filter);
+    assert_eq!(
+      filter.on_response_headers(&mut mock_filter, false),
+      envoy_dynamic_module_type_on_http_filter_response_headers_status::Continue
+    );
+    assert_eq!(config.local_cache().borrow().len(), 0);
   }
 
   #[test]
