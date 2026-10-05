@@ -23,6 +23,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
+	"github.com/agent-substrate/substrate/pkg/postgressetup"
 )
 
 // The digest exists to turn an envFrom change into a rollout, so what matters
@@ -60,8 +61,8 @@ func TestCreateAPIServerEnvVarsPostgresIdentities(t *testing.T) {
 		{
 			name:          "bundled identities",
 			cfg:           config.Config{PostgresReadWriteRole: config.DefaultPostgresReadWriteRole, PostgresOwnerRole: config.DefaultPostgresOwnerRole},
-			readWriteDSN:  bundledPostgresDSN(bundledPostgresReadWriteUser, bundledPostgresReadWritePassword),
-			ownerDSN:      bundledPostgresDSN(bundledPostgresOwnerUser, bundledPostgresOwnerPassword),
+			readWriteDSN:  bundledPostgresDSN(postgressetup.ReadWriteUser, postgressetup.ReadWritePassword),
+			ownerDSN:      bundledPostgresDSN(postgressetup.OwnerUser, postgressetup.OwnerPassword),
 			readWriteRole: config.DefaultPostgresReadWriteRole, ownerRole: config.DefaultPostgresOwnerRole,
 		},
 		{
@@ -69,8 +70,8 @@ func TestCreateAPIServerEnvVarsPostgresIdentities(t *testing.T) {
 			cfg: config.Config{
 				ClusterSize: config.ClusterSizeSize10, PostgresReadWriteRole: config.DefaultPostgresReadWriteRole, PostgresOwnerRole: config.DefaultPostgresOwnerRole,
 			},
-			readWriteDSN:  bundledPostgresDSN(bundledPostgresReadWriteUser, bundledPostgresReadWritePassword) + config.Size10PostgresPoolParams,
-			ownerDSN:      bundledPostgresDSN(bundledPostgresOwnerUser, bundledPostgresOwnerPassword),
+			readWriteDSN:  bundledPostgresDSN(postgressetup.ReadWriteUser, postgressetup.ReadWritePassword) + config.Size10PostgresPoolParams,
+			ownerDSN:      bundledPostgresDSN(postgressetup.OwnerUser, postgressetup.OwnerPassword),
 			readWriteRole: config.DefaultPostgresReadWriteRole, ownerRole: config.DefaultPostgresOwnerRole,
 		},
 		{

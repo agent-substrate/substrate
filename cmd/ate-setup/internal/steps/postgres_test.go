@@ -283,10 +283,10 @@ func TestBundledPostgresIdentityConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if readWrite != bundledPostgresDSN(bundledPostgresReadWriteUser, bundledPostgresReadWritePassword) {
+	if readWrite != bundledPostgresDSN(postgressetup.ReadWriteUser, postgressetup.ReadWritePassword) {
 		t.Errorf("read/write DSN = %q", readWrite)
 	}
-	if owner != bundledPostgresDSN(bundledPostgresOwnerUser, bundledPostgresOwnerPassword) {
+	if owner != bundledPostgresDSN(postgressetup.OwnerUser, postgressetup.OwnerPassword) {
 		t.Errorf("owner DSN = %q", owner)
 	}
 	for _, want := range []string{

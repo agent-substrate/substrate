@@ -18,6 +18,13 @@ package postgressetup
 
 import _ "embed"
 
+const (
+	OwnerUser         = "substrate_owner_user"
+	OwnerPassword     = "substrate-owner"
+	ReadWriteUser     = "substrate_readwrite_user"
+	ReadWritePassword = "substrate-readwrite"
+)
+
 //go:embed setup.sql
 var sql string
 

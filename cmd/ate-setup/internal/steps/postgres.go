@@ -32,13 +32,7 @@ import (
 	"github.com/agent-substrate/substrate/pkg/postgressetup"
 )
 
-const (
-	bundledPostgresOwnerUser         = "substrate_owner_user"
-	bundledPostgresOwnerPassword     = "substrate-owner"
-	bundledPostgresReadWriteUser     = "substrate_readwrite_user"
-	bundledPostgresReadWritePassword = "substrate-readwrite"
-	postgresTLSParams                = "sslmode=verify-full&sslrootcert=/run/servicedns.podcert.ate.dev/trust-bundle.pem&sslcert=/run/podidentity.podcert.ate.dev/credential-bundle.pem&sslkey=/run/podidentity.podcert.ate.dev/credential-bundle.pem&channel_binding=disable"
-)
+const postgresTLSParams = "sslmode=verify-full&sslrootcert=/run/servicedns.podcert.ate.dev/trust-bundle.pem&sslcert=/run/podidentity.podcert.ate.dev/credential-bundle.pem&sslkey=/run/podidentity.podcert.ate.dev/credential-bundle.pem&channel_binding=disable"
 
 func bundledPostgresDSN(user, password string) string {
 	return fmt.Sprintf("postgresql://%s:%s@postgres.ate-system.svc:5432/atepg?%s", user, password, postgresTLSParams)
@@ -51,11 +45,11 @@ func (e *Env) postgresReadWriteConnectionStrings() (string, string, error) {
 		return "", "", fmt.Errorf("bundled PostgreSQL requires roles %q and %q and schema %q",
 			config.DefaultPostgresReadWriteRole, config.DefaultPostgresOwnerRole, config.DefaultPostgresSchema)
 	}
-	readWriteDSN := bundledPostgresDSN(bundledPostgresReadWriteUser, bundledPostgresReadWritePassword)
+	readWriteDSN := bundledPostgresDSN(postgressetup.ReadWriteUser, postgressetup.ReadWritePassword)
 	if e.Cfg.Size10() {
 		readWriteDSN += config.Size10PostgresPoolParams
 	}
-	return readWriteDSN, bundledPostgresDSN(bundledPostgresOwnerUser, bundledPostgresOwnerPassword), nil
+	return readWriteDSN, bundledPostgresDSN(postgressetup.OwnerUser, postgressetup.OwnerPassword), nil
 }
 
 func (e *Env) ensureBundledPostgresAdmin(ctx context.Context) error {
