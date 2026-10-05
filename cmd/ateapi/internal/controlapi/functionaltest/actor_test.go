@@ -3320,8 +3320,8 @@ func TestResumeActor_AteletUnavailableLeavesActorResuming(t *testing.T) {
 
 	tc.fakeAtelet.FailRestore = status.Error(codes.Unavailable, "connection refused")
 	_, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{Actor: ref})
-	if got := status.Code(err); got != codes.Internal {
-		t.Fatalf("ResumeActor status code = %v, want %v (err: %v)", got, codes.Internal, err)
+	if got := status.Code(err); got != codes.Unavailable {
+		t.Fatalf("ResumeActor status code = %v, want %v (err: %v)", got, codes.Unavailable, err)
 	}
 
 	actor, err := tc.persistence.GetActor(context.Background(), actorRef)
