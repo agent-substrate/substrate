@@ -177,14 +177,29 @@ func waitForSocket(ctx context.Context, path string, timeout time.Duration) erro
 	}
 }
 
-// unmount drops a mount at dst, falling back to lazy unmount if busy.
-func unmount(dst string) {
+// Unmount drops a mount at dst, falling back to lazy unmount if busy.
+func Unmount(dst string) {
 	if err := unix.Unmount(dst, 0); err != nil {
 		if errors.Is(err, syscall.EINVAL) || errors.Is(err, syscall.ENOENT) {
 			return
 		}
 		_ = unix.Unmount(dst, unix.MNT_DETACH)
 	}
+}
+
+// RemountReadOnly remounts a bind mount at dst as read-only, preserving existing
+// per-mount flags (nosuid, nodev, noexec, etc.) like libmount's remount,bind,ro.
+func RemountReadOnly(dst string) error {
+	var st unix.Statfs_t
+	var flags uintptr = unix.MS_BIND | unix.MS_REMOUNT | unix.MS_RDONLY
+	if err := unix.Statfs(dst, &st); err == nil {
+		flags |= uintptr(st.Flags & (unix.ST_NOSUID | unix.ST_NODEV | unix.ST_NOEXEC |
+			unix.ST_NOATIME | unix.ST_NODIRATIME | unix.ST_RELATIME | unix.ST_SYNCHRONOUS | unix.ST_MANDLOCK))
+	}
+	if err := unix.Mount("", dst, "", flags, ""); err != nil {
+		return err
+	}
+	return nil
 }
 
 // StageImageVolume bind-mounts one composed image volume read-only at
@@ -200,7 +215,7 @@ func StageImageVolume(ctx context.Context, src, id, cid, volumeName string) erro
 	// Read-only is this volume type's contract (the image is someone else's,
 	// mounted for its contents); the other subtree consumers stay writable.
 	dst := SharedVolumeDir(id, cid, volumeName)
-	if err := unix.Mount("", dst, "", unix.MS_BIND|unix.MS_REMOUNT|unix.MS_RDONLY, ""); err != nil {
+	if err := RemountReadOnly(dst); err != nil {
 		return fmt.Errorf("remounting image volume %q read-only: %w", dst, err)
 	}
 	return nil
@@ -223,7 +238,7 @@ func StageMergedRootfs(ctx context.Context, bundleRootfs, upperBase, restoreID, 
 	dst := filepath.Join(SharedDir(restoreID), cid, "rootfs")
 	upper, work := UpperWorkDirs(upperBase, cid)
 	// Drop any stale mount first (lazy if busy), then ensure clean mountpoints.
-	unmount(dst)
+	Unmount(dst)
 	// The workdir is scratch: wipe it so a volatile mount is never refused by a
 	// dirty marker left behind by the previous activation.
 	if err := os.RemoveAll(work); err != nil {
@@ -289,7 +304,7 @@ func ensureOCIMountpoints(rootfs string) error {
 // CleanupSandboxState's sweep catches stragglers on the next boot.
 func UnmountMergedRootfs(restoreID, cid string) {
 	dst := filepath.Join(SharedDir(restoreID), cid, "rootfs")
-	unmount(dst)
+	Unmount(dst)
 }
 
 // BindIntoShare bind-mounts a host directory at SharedDir(id)/<name>, so the
@@ -318,7 +333,7 @@ func BindIntoShare(ctx context.Context, src, id, rel string) error {
 	}
 	dst := filepath.Join(SharedDir(id), rel)
 	// Drop any stale bind first (lazy if busy), then ensure a clean mountpoint.
-	unmount(dst)
+	Unmount(dst)
 	if err := os.MkdirAll(dst, 0o755); err != nil {
 		return fmt.Errorf("creating share subdir %q: %w", dst, err)
 	}
@@ -344,7 +359,7 @@ func ReconstructSharedDirFromImage(ctx context.Context, bundleRootfs, restoreID,
 	dst := filepath.Join(SharedDir(restoreID), cid, "rootfs")
 	// Drop any stale bind first (lazy if busy), then ensure a clean mountpoint. Not
 	// RemoveAll: that would chase a live bind into bundleRootfs.
-	unmount(dst)
+	Unmount(dst)
 	if err := os.MkdirAll(dst, 0o755); err != nil {
 		return fmt.Errorf("creating shared dir %q: %w", dst, err)
 	}
@@ -359,7 +374,7 @@ func ReconstructSharedDirFromImage(ctx context.Context, bundleRootfs, restoreID,
 	}
 	// Remount read-only: the lower is immutable, so all writes go to the overlay upper
 	// and it stays byte-identical across reconstructions (required by find-paths migration).
-	if err := unix.Mount("", dst, "", unix.MS_BIND|unix.MS_REMOUNT|unix.MS_RDONLY, ""); err != nil {
+	if err := RemountReadOnly(dst); err != nil {
 		return fmt.Errorf("remounting overlay lower read-only %q: %w", dst, err)
 	}
 	return nil
