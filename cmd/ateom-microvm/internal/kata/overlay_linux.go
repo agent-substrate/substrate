@@ -194,9 +194,9 @@ func RemountReadOnly(dst string) error {
 	if err := unix.Statfs(dst, &st); err != nil {
 		return fmt.Errorf("statfs %q: %w", dst, err)
 	}
-	flags := uintptr(unix.MS_BIND | unix.MS_REMOUNT | unix.MS_RDONLY)
-	flags |= uintptr(st.Flags & (unix.ST_NOSUID | unix.ST_NODEV | unix.ST_NOEXEC | unix.ST_NOATIME | unix.ST_NODIRATIME))
-	if err := unix.Mount("", dst, "", flags, ""); err != nil {
+	flags := unix.MS_BIND | unix.MS_REMOUNT | unix.MS_RDONLY |
+		int(st.Flags&(unix.ST_NOSUID|unix.ST_NODEV|unix.ST_NOEXEC|unix.ST_NOATIME|unix.ST_NODIRATIME))
+	if err := unix.Mount("", dst, "", uintptr(flags), ""); err != nil {
 		return err
 	}
 	return nil
