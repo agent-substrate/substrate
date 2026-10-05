@@ -1027,7 +1027,6 @@ func TestValidateMintActorJWTRequest(t *testing.T) {
 	withExpiration := func(seconds int64) *ateapipb.MintActorJWTRequest {
 		return &ateapipb.MintActorJWTRequest{
 			Actor:             &ateapipb.ObjectRef{Atespace: "ns1", Name: "id1"},
-			ActorUid:          "0f8fad5b-d9cb-469f-a165-70867728950e",
 			Audience:          []string{"https://example.com"},
 			ExpirationSeconds: seconds,
 		}

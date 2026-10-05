@@ -5082,7 +5082,6 @@ func TestMintActorJWT_Success(t *testing.T) {
 			Atespace: createResp.GetMetadata().GetAtespace(),
 			Name:     createResp.GetMetadata().GetName(),
 		},
-		ActorUid:          createResp.GetMetadata().GetUid(),
 		Audience:          []string{"foo"},
 		ExpirationSeconds: 1800,
 	})
@@ -5108,6 +5107,9 @@ func TestMintActorJWT_Success(t *testing.T) {
 	}
 	if want := "actor/" + testAtespace + "/id1"; claims.Subject != want {
 		t.Errorf("sub = %q, want %q", claims.Subject, want)
+	}
+	if want := createResp.GetMetadata().GetUid(); claims.Substrate.ActorUID != want {
+		t.Errorf("ate.dev.actorUID = %q, want the stored actor's %q", claims.Substrate.ActorUID, want)
 	}
 	assertActorJWTLifetime(t, mintResp, claims, 30*time.Minute)
 }

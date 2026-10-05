@@ -1700,13 +1700,6 @@ message MintActorJWTRequest {
   // +k8s:required
   ObjectRef actor = 5;
 
-  // The UID of the actor --- used to guard against deletion and recreation of
-  // an actor with the same name.
-  //
-  // +k8s:required
-  // +k8s:format=k8s-uuid
-  string actor_uid = 7;
-
   // The audiences the minted JWT is bound to. Tokens are only issued with
   // audience bindings, so at least one is required.
   //
