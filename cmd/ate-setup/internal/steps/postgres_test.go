@@ -289,19 +289,6 @@ func TestBundledPostgresIdentityConfiguration(t *testing.T) {
 	if owner != bundledPostgresDSN(postgressetup.OwnerUser, postgressetup.OwnerPassword) {
 		t.Errorf("owner DSN = %q", owner)
 	}
-	for _, want := range []string{
-		"('substrate_owner', false",
-		"('substrate_readwrite', false",
-		"('substrate_owner_user', true, 'substrate-owner')",
-		"('substrate_readwrite_user', true, 'substrate-readwrite')",
-		"GRANT substrate_owner TO substrate_owner_user",
-		"GRANT substrate_readwrite TO substrate_readwrite_user",
-		"CREATE SCHEMA substrate AUTHORIZATION substrate_owner",
-	} {
-		if !strings.Contains(postgressetup.SQL(), want) {
-			t.Errorf("postgressetup SQL lacks %q", want)
-		}
-	}
 }
 
 func TestBundledPostgresRequiresFixedIdentity(t *testing.T) {

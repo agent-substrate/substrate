@@ -126,13 +126,8 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 	if err != nil {
 		return err
 	}
-	if err := e.applyBundledPostgres(ctx, postgres); err != nil {
+	if err := e.deployPostgres(ctx, postgres); err != nil {
 		return err
-	}
-	if postgres.bundled {
-		if err := e.waitAndSetupBundledPostgres(ctx); err != nil {
-			return err
-		}
 	}
 
 	manifests, err := e.renderSystemManifests(ctx)
@@ -293,13 +288,8 @@ func (e *Env) DeployAteAPIServer(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if postgres.bundled {
-		if err := e.applyBundledPostgres(ctx, postgres); err != nil {
-			return err
-		}
-		if err := e.waitAndSetupBundledPostgres(ctx); err != nil {
-			return err
-		}
+	if err := e.deployPostgres(ctx, postgres); err != nil {
+		return err
 	}
 	if err := e.renderResolveApply(ctx, e.Cfg.Manifest("ate-api-server.yaml")); err != nil {
 		return err

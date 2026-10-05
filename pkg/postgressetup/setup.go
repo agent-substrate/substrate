@@ -31,3 +31,6 @@ var sql string
 // SQL returns the idempotent SQL that creates Substrate's development roles,
 // users, and schema. The caller owns the surrounding transaction.
 func SQL() string { return sql }
+
+// Script returns SQL as a complete transaction for direct execution.
+func Script() string { return "BEGIN;\n" + sql + "\nCOMMIT;\n" }

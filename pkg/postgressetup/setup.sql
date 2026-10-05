@@ -30,7 +30,7 @@ BEGIN
           INTO role_attrs FROM pg_roles WHERE rolname = managed.name;
         IF NOT FOUND THEN
             IF managed.can_login THEN
-                EXECUTE format('CREATE ROLE %I LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION PASSWORD %L', managed.name, managed.password);
+                EXECUTE format('CREATE ROLE %I LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION', managed.name);
             ELSE
                 EXECUTE format('CREATE ROLE %I NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION', managed.name);
             END IF;

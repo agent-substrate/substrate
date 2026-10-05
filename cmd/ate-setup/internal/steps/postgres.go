@@ -75,7 +75,7 @@ func (e *Env) setupBundledPostgres(ctx context.Context) error {
 	var stdout, stderr bytes.Buffer
 	err := e.Kube.Exec(ctx, e.Namespace(), "postgres-0", "postgres", []string{
 		"psql", "--no-psqlrc", "--set=ON_ERROR_STOP=1", "--username", "postgres", "--dbname", "atepg",
-	}, strings.NewReader("BEGIN;\n"+postgressetup.SQL()+"\nCOMMIT;\n"), &stdout, &stderr)
+	}, strings.NewReader(postgressetup.Script()), &stdout, &stderr)
 	if err != nil {
 		if detail := strings.TrimSpace(stderr.String()); detail != "" {
 			return fmt.Errorf("setting up bundled PostgreSQL identities: %w: %s", err, detail)
@@ -83,13 +83,6 @@ func (e *Env) setupBundledPostgres(ctx context.Context) error {
 		return fmt.Errorf("setting up bundled PostgreSQL identities: %w", err)
 	}
 	return nil
-}
-
-func (e *Env) waitAndSetupBundledPostgres(ctx context.Context) error {
-	if err := e.Kube.RolloutStatus(ctx, kube.KindStatefulSet, e.Namespace(), "postgres", e.Cfg.RolloutTimeout); err != nil {
-		return err
-	}
-	return e.setupBundledPostgres(ctx)
 }
 
 // The size10 PostgreSQL container. Deliberately no CPU limit: under
@@ -141,14 +134,20 @@ func (e *Env) planPostgres(ctx context.Context) (postgresPlan, error) {
 	return postgresPlan{bundled: true}, nil
 }
 
-// applyBundledPostgres applies the bundled PostgreSQL StatefulSet, or logs that
-// it was skipped in favor of an external database.
-func (e *Env) applyBundledPostgres(ctx context.Context, plan postgresPlan) error {
+// deployPostgres applies, waits for, and sets up bundled PostgreSQL, or logs
+// that it was skipped in favor of an external database.
+func (e *Env) deployPostgres(ctx context.Context, plan postgresPlan) error {
 	if !plan.bundled {
 		log.Stepf("Skipping bundled PostgreSQL: external database configured (%s)", plan.external)
 		return nil
 	}
-	return e.applyPostgres(ctx)
+	if err := e.applyPostgres(ctx); err != nil {
+		return err
+	}
+	if err := e.Kube.RolloutStatus(ctx, kube.KindStatefulSet, e.Namespace(), "postgres", e.Cfg.RolloutTimeout); err != nil {
+		return err
+	}
+	return e.setupBundledPostgres(ctx)
 }
 
 // postgresManifestPath is the bundled PostgreSQL manifest for the environment:
@@ -311,8 +310,5 @@ func (e *Env) DeployPostgres(ctx context.Context) error {
 		return err
 	}
 
-	if err := e.applyPostgres(ctx); err != nil {
-		return err
-	}
-	return e.waitAndSetupBundledPostgres(ctx)
+	return e.deployPostgres(ctx, postgresPlan{bundled: true})
 }
