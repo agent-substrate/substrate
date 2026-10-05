@@ -35,11 +35,6 @@ import (
 // stale a decision can be.
 const DefaultPolicyCacheTTL = 10 * time.Second
 
-// policyFetchTimeout caps one GetActorEgressPolicy call. It sits under the
-// ext_proc message_timeout (5s in both manifests) so a slow control plane is a
-// 503 rather than an Envoy timeout.
-const policyFetchTimeout = 4 * time.Second
-
 // errNoPolicy reports that the actor has no EgressPolicy. Cached like a
 // policy, so a flood of denied requests does not hit ateapi.
 var errNoPolicy = errors.New("actor has no egress policy")
@@ -94,16 +89,15 @@ func (c *policyCache) get(ctx context.Context, ref resources.ActorRef) (*egressp
 	}
 
 	// The fetch outlives the caller: the leader of a flight going away must
-	// not fail the callers that joined it.
+	// not fail the callers that joined it. It has no timeout of its own, so a
+	// slow fetch still lands in the cache for the next request.
 	ch := c.flight.DoChan(ref.String(), func() (any, error) {
 		// A flight that finished between the miss above and DoChan has
 		// already stored a fresh entry.
 		if policy, ok := c.cached(ref); ok {
 			return policy, nil
 		}
-		fetchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), policyFetchTimeout)
-		defer cancel()
-		return c.fetch(fetchCtx, ref)
+		return c.fetch(context.WithoutCancel(ctx), ref)
 	})
 	select {
 	case <-ctx.Done():
