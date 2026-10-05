@@ -19,6 +19,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
@@ -33,6 +34,16 @@ func TestToGRPCStatusError(t *testing.T) {
 	}
 	if !strings.Contains(status.Convert(err).Message(), "actor_name") {
 		t.Errorf("message %q does not name the field", status.Convert(err).Message())
+	}
+}
+
+func TestToAPIError(t *testing.T) {
+	err := ToAPIError(field.ErrorList{field.Required(field.NewPath("actor_name"), "")})
+	if got := apierror.Code(err); got != codes.InvalidArgument {
+		t.Errorf("code = %v, want InvalidArgument", got)
+	}
+	if !strings.Contains(err.Error(), "actor_name") {
+		t.Errorf("message %q does not name the field", err.Error())
 	}
 }
 

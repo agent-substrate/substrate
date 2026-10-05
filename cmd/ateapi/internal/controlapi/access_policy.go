@@ -22,10 +22,9 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/apivalidation"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/defaults"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
@@ -58,7 +57,7 @@ func (s *ServiceImpl) GetGlobalAccessPolicy(ctx context.Context) (*ateapipb.Acce
 	policy, err := s.store.GetGlobalAccessPolicy(ctx)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, status.Error(codes.NotFound, "Global AccessPolicy not found")
+			return nil, apierror.NotFound("Global AccessPolicy not found")
 		}
 		return nil, fmt.Errorf("while getting Global access policy: %w", err)
 	}
@@ -118,7 +117,7 @@ func (s *ServiceImpl) GetAtespaceAccessPolicy(ctx context.Context, name string) 
 	policy, err := s.store.GetAtespaceAccessPolicy(ctx, name)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, status.Errorf(codes.NotFound, "AccessPolicy for atespace %s not found", name)
+			return nil, apierror.NotFound("AccessPolicy for atespace %s not found", name)
 		}
 		return nil, fmt.Errorf("while getting Atespace access policy: %w", err)
 	}
@@ -178,30 +177,18 @@ func mapAccessPolicyWrite(policy *ateapipb.AccessPolicy, err error) (*ateapipb.A
 	case err == nil:
 		return policy, nil
 	case errors.Is(err, store.ErrNotFound):
-		return nil, status.Error(codes.NotFound, "AccessPolicy not found")
+		return nil, apierror.NotFound("AccessPolicy not found")
 	case errors.Is(err, store.ErrAlreadyExists):
-		return nil, status.Error(codes.AlreadyExists, "AccessPolicy already exists")
+		return nil, apierror.AlreadyExists("AccessPolicy already exists")
 	case errors.Is(err, store.ErrVersionConflict):
-		return nil, status.Error(codes.Aborted, "AccessPolicy version conflict")
+		return nil, apierror.Aborted("AccessPolicy version conflict")
 	case errors.Is(err, store.ErrUIDConflict):
-		return nil, status.Error(codes.Aborted, "AccessPolicy UID conflict")
+		return nil, apierror.Aborted("AccessPolicy UID conflict")
 	case errors.Is(err, store.ErrPreconditionRequired):
-		return nil, status.Error(codes.InvalidArgument, "AccessPolicy UID and version are required")
+		return nil, apierror.InvalidArgument("AccessPolicy UID and version are required")
 	case errors.Is(err, store.ErrFailedPrecondition):
-		return nil, status.Error(codes.FailedPrecondition, "parent Atespace does not exist")
+		return nil, apierror.FailedPrecondition("parent Atespace does not exist")
 	default:
-		return nil, toCanonicalStatus(fmt.Errorf("while writing AccessPolicy: %w", err))
+		return nil, fmt.Errorf("while writing AccessPolicy: %w", err)
 	}
-}
-
-// toCanonicalStatus passes err through when it carries a canonical gRPC code
-// (including a plain error, which gRPC reports as Unknown), and reports
-// anything else as Internal. Backends such as OpenFGA return statuses with
-// nonstandard codes (for example Code(2000)) that clients cannot interpret.
-func toCanonicalStatus(err error) error {
-	st, ok := status.FromError(err)
-	if !ok || st.Code() <= codes.Unauthenticated {
-		return err
-	}
-	return status.Error(codes.Internal, err.Error())
 }

@@ -19,11 +19,11 @@ import (
 	"testing"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // TestEnsurePausedFinalized_WorkerGone reproduces the scenario where the worker
@@ -210,8 +210,8 @@ func TestPauseActorWorkflow_RejectedAndIdempotentPaths(t *testing.T) {
 
 			actor, err := w.PauseActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
 			if tc.wantErr {
-				if got := status.Code(err); got != codes.FailedPrecondition {
-					t.Fatalf("status.Code(err) = %v, want %v (err: %v)", got, codes.FailedPrecondition, err)
+				if got := apierror.Code(err); got != codes.FailedPrecondition {
+					t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, codes.FailedPrecondition, err)
 				}
 			} else {
 				if err != nil {
@@ -335,8 +335,8 @@ func TestPauseActor_CrashesWhenPausingActorMissingWorkerPod(t *testing.T) {
 	seedWorkflowActor(t, ctx, st, resources.ActorRef{Atespace: "team-a", Name: "id1"}, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_PAUSING)
 
 	_, err := w.PauseActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
-	if got := status.Code(err); got != codes.FailedPrecondition {
-		t.Fatalf("status.Code(err) = %v, want %v (err: %v)", got, codes.FailedPrecondition, err)
+	if got := apierror.Code(err); got != codes.FailedPrecondition {
+		t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, codes.FailedPrecondition, err)
 	}
 
 	got, err := st.GetActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
@@ -361,7 +361,7 @@ func TestEnsureMarkedPausing_GoldenAtespaceRejected(t *testing.T) {
 	_, err := w.ensureMarkedPausing(context.Background(),
 		resources.ActorRef{Atespace: resources.GoldenActorAtespace, Name: "golden-1"},
 		&ateapipb.Actor{Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING}})
-	if got := status.Code(err); got != codes.FailedPrecondition {
+	if got := apierror.Code(err); got != codes.FailedPrecondition {
 		t.Fatalf("status.Code = %v (err %v), want FailedPrecondition", got, err)
 	}
 }

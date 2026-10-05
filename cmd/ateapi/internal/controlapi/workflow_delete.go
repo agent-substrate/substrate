@@ -21,6 +21,7 @@ import (
 	"log/slog"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/objectstore"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
@@ -45,9 +46,9 @@ func (w *ActorWorkflow) DeleteActor(ctx context.Context, actorRef resources.Acto
 
 	if err := precondition.Check(actor.GetMetadata()); err != nil {
 		if errors.Is(err, store.ErrUIDConflict) {
-			return nil, status.Errorf(codes.Aborted, "Actor %s does not have uid %s", actorRef, precondition.UID)
+			return nil, apierror.Aborted("Actor %s does not have uid %s", actorRef, precondition.UID)
 		}
-		return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
+		return nil, apierror.Aborted("concurrent update conflict, please retry")
 	}
 
 	if actor, err = w.ensureMarkedDeleting(ctx, actorRef, actor, anyState); err != nil {
@@ -113,7 +114,7 @@ func (w *ActorWorkflow) loadActorForDelete(ctx context.Context, actorRef resourc
 	actor, err := w.store.GetActor(ctx, actorRef)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, status.Errorf(codes.NotFound, "Actor %s not found", actorRef)
+			return nil, apierror.NotFound("Actor %s not found", actorRef)
 		}
 		return nil, fmt.Errorf("while fetching actor: %w", err)
 	}
@@ -292,7 +293,7 @@ func (w *ActorWorkflow) ensureWorkerReleased(ctx context.Context, actorRef resou
 		})
 		if err != nil {
 			if errors.Is(err, store.ErrVersionConflict) {
-				return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
+				return nil, apierror.Aborted("concurrent update conflict, please retry")
 			}
 			return nil, err
 		}
@@ -323,7 +324,7 @@ func (w *ActorWorkflow) ensureMarkedDeleting(ctx context.Context, actorRef resou
 		shouldDelete = anyState
 	}
 	if !shouldDelete {
-		return nil, status.Errorf(codes.FailedPrecondition, "Actor %s is not in a deletable state (state: %v)", actorRef, st)
+		return nil, apierror.FailedPrecondition("Actor %s is not in a deletable state (state: %v)", actorRef, st)
 	}
 
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
@@ -335,7 +336,7 @@ func (w *ActorWorkflow) ensureMarkedDeleting(ctx context.Context, actorRef resou
 	})
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
+			return nil, apierror.Aborted("concurrent update conflict, please retry")
 		}
 		return nil, fmt.Errorf("while setting actor state to DELETING: %w", err)
 	}
@@ -351,11 +352,11 @@ func (w *ActorWorkflow) ensureVolumesDeleted(ctx context.Context, actor *ateapip
 
 	st := actor.GetStatus().GetState()
 	if st != ateapipb.ActorState_ACTOR_STATE_DELETING {
-		return status.Errorf(codes.FailedPrecondition, "DeleteVolumes prerequisite not met for Actor: %s (got: %v, want %s)", actor.GetMetadata().GetName(), st, ateapipb.ActorState_ACTOR_STATE_DELETING)
+		return apierror.FailedPrecondition("DeleteVolumes prerequisite not met for Actor: %s (got: %v, want %s)", actor.GetMetadata().GetName(), st, ateapipb.ActorState_ACTOR_STATE_DELETING)
 	}
 
 	if err := deleteActorVolumes(ctx, w.pluginRegistry, actor.GetMetadata().GetUid(), actor.GetStatus().GetActorVolumes()); err != nil {
-		return status.Errorf(codes.Internal, "while deleting actor volumes: %v", err)
+		return apierror.Internal("while deleting actor volumes: %v", err)
 	}
 	return nil
 }
@@ -434,13 +435,13 @@ func (w *ActorWorkflow) finalizeDeleted(ctx context.Context, actor *ateapipb.Act
 	deleted, err := w.store.DeleteActor(ctx, actorRef, precondition)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, status.Errorf(codes.NotFound, "Actor %s not found", actorRef)
+			return nil, apierror.NotFound("Actor %s not found", actorRef)
 		}
 		if errors.Is(err, store.ErrUIDConflict) {
-			return nil, status.Errorf(codes.Aborted, "Actor %s does not have uid %s", actorRef, precondition.UID)
+			return nil, apierror.Aborted("Actor %s does not have uid %s", actorRef, precondition.UID)
 		}
 		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
+			return nil, apierror.Aborted("concurrent update conflict, please retry")
 		}
 		return nil, fmt.Errorf("while deleting actor from DB: %w", err)
 	}

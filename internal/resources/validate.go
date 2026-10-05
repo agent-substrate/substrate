@@ -23,6 +23,7 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -34,8 +35,17 @@ import (
 
 // ToGRPCStatusError turns validation errors into the InvalidArgument error an
 // RPC handler responds with. Callers check len(errs) > 0 first.
+//
+// TODO: Delete once atelet's AteomSupport server returns apierrors, and use
+// ToAPIError instead.
 func ToGRPCStatusError(errs field.ErrorList) error {
 	return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
+}
+
+// ToAPIError turns validation errors into the InvalidArgument error an RPC
+// handler responds with. Callers check len(errs) > 0 first.
+func ToAPIError(errs field.ErrorList) error {
+	return apierror.InvalidArgument("%v", errs.ToAggregate())
 }
 
 // DeepEqual compares two values of any type, using proto.Equal if both are

@@ -97,8 +97,8 @@ func newReseedNonce() ([]byte, error) {
 //   - DATA: there is no guest to resume — re-materialize the durable-dir volumes and
 //     cold-boot the actor, which starts its containers afresh from the OCI image.
 //
-// Contract with atelet: the snapshot's files have been downloaded to
-// ActorDirs.restore_dir, and the durable-dir volume directories re-created (empty).
+// Contract with atelet: the snapshot's files are in ActorDirs.restore_dir,
+// and the durable-dir volume directories re-created (empty).
 func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.RestoreWorkloadRequest) (resp *ateompb.RestoreWorkloadResponse, retErr error) {
 	if err := validateActorDirs(req.GetActorDirs()); err != nil {
 		return nil, err
@@ -171,7 +171,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 
 	switch scope := req.GetScope(); scope {
 	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL:
-		if err := s.restoreFullScope(ctx, p, scope, restoreDir, tStart); err != nil {
+		if err := s.restoreFullScope(ctx, p, scope, restoreDir, req.GetPreserveRestoreDir(), tStart); err != nil {
 			return nil, err
 		}
 	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
@@ -208,7 +208,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 // and resume. Guest RAM — the actor's in-memory state and the frozen network config —
 // comes back from the memory snapshot; the durable-dir volumes were restored by the
 // caller from their tar.
-func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, scope ateompb.SnapshotScope, restoreDir string, tStart time.Time) (retErr error) {
+func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, scope ateompb.SnapshotScope, restoreDir string, preserveRestoreDir bool, tStart time.Time) (retErr error) {
 	actorUID := p.actorUID
 
 	rr := s.resolveRuntime(p.assetPaths)
@@ -459,24 +459,10 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 			{phaseTotal, dTotal},
 		})
 
-	// An eager restore has read the whole snapshot into guest memory, and nothing
-	// merges against it afterwards, so the staged copy is dead weight from here on —
-	// a second ~160MiB per running actor on top of the checkpoint it will write.
-	// Drop the memory image but keep the directory: atelet re-stages it wholesale
-	// before any later restore, and the small files beside it stay cheap to keep.
-	if memMode == ch.MemRestoreEager {
-		staged := filepath.Join(restoreDir, "memory-ranges")
-		if err := os.Remove(staged); err != nil && !os.IsNotExist(err) {
-			// Not fatal: it only costs disk until the actor is torn down.
-			slog.WarnContext(ctx, "could not drop the staged memory image", "error", err)
-		} else {
-			slog.InfoContext(ctx, "dropped the staged memory image (eager restore needs no merge base)")
-		}
-	}
-
 	ra := &runningActor{
 		chCmd: chCmd, vfsdCmd: vfsdCmd,
 		apiSocket: apiSocket, baseID: srcID, restoreSourceDir: restoreDir,
+		preserveRestoreSource:   preserveRestoreDir,
 		snapshotIsSelfContained: memMode == ch.MemRestoreEager,
 		// Signaling an id the agent does not know fails the whole graceful
 		// shutdown with InvalidContainerId, so these must be what the guest runs.
@@ -497,6 +483,9 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 	}
 	s.setRunningVM(actorUID, ra)
 
+	// After the last error return, so a failed restore stays retryable.
+	maybeDropStagedMemoryImage(ctx, restoreDir, memMode, preserveRestoreDir)
+
 	// Publish the guest to GetWorkloadStats, past the last error return above
 	// for the same reason as in coldBootActor. Same client the forwarding above
 	// reads over.
@@ -505,6 +494,22 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 	slog.InfoContext(ctx, "Actor restored (overlay rootfs)",
 		slog.String("id", actorUID), slog.Duration("total", time.Since(tStart)))
 	return nil
+}
+
+// maybeDropStagedMemoryImage deletes memory-ranges after an eager restore (it is
+// fully in guest memory and nothing merges against it), unless restoreDir is a
+// preserved snapshot.
+func maybeDropStagedMemoryImage(ctx context.Context, restoreDir, memMode string, preserveRestoreDir bool) {
+	if memMode != ch.MemRestoreEager || preserveRestoreDir {
+		return
+	}
+	staged := filepath.Join(restoreDir, "memory-ranges")
+	if err := os.Remove(staged); err != nil && !os.IsNotExist(err) {
+		// Not fatal: it only costs disk until the actor is torn down.
+		slog.WarnContext(ctx, "could not drop the staged memory image", "error", err)
+	} else {
+		slog.InfoContext(ctx, "dropped the staged memory image (eager restore needs no merge base)")
+	}
 }
 
 // rewriteSnapshotSocketPaths repoints the snapshot config.json's per-VMDir paths from
@@ -523,8 +528,13 @@ func rewriteSnapshotSocketPaths(snapshotDir, id string) error {
 	if err := json.Unmarshal(b, &cfg); err != nil {
 		return fmt.Errorf("parsing %q: %w", cfgPath, err)
 	}
+	changed := false
 	if vsock, ok := cfg["vsock"].(map[string]any); ok {
-		vsock["socket"] = kata.VsockSocketPath(id)
+		want := kata.VsockSocketPath(id)
+		if got, _ := vsock["socket"].(string); got != want {
+			vsock["socket"] = want
+			changed = true
+		}
 	}
 	// ateom captures the guest console to a file under the source actor's VMDir
 	// (virtio-console normally, plus the UART in debug mode). On restore those paths
@@ -540,7 +550,10 @@ func rewriteSnapshotSocketPaths(snapshotDir, id string) error {
 			continue
 		}
 		if mode, _ := dev["mode"].(string); mode == "File" {
-			dev["file"] = path
+			if got, _ := dev["file"].(string); got != path {
+				dev["file"] = path
+				changed = true
+			}
 		}
 	}
 	// The virtio-fs share is served by its per-VMDir virtiofsd socket; the
@@ -553,22 +566,25 @@ func rewriteSnapshotSocketPaths(snapshotDir, id string) error {
 			}
 			switch tag, _ := fm["tag"].(string); tag {
 			case kata.FsTag:
-				fm["socket"] = kata.VirtiofsdSocketPath(id)
+				want := kata.VirtiofsdSocketPath(id)
+				if got, _ := fm["socket"].(string); got != want {
+					fm["socket"] = want
+					changed = true
+				}
 			default:
 				return fmt.Errorf("snapshot config %q has fs device with unknown tag %q", cfgPath, tag)
 			}
 		}
 	}
+	if !changed {
+		// Same-actor resume: nothing to rewrite, so leave a preserved snapshot untouched.
+		return nil
+	}
 	out, err := json.Marshal(cfg)
 	if err != nil {
 		return err
 	}
-	// Temp file + rename, not os.WriteFile: atelet stages a local checkpoint by
-	// hard-linking it into this dir, so config.json can share an inode with the
-	// actor's cached pause snapshot. O_TRUNC would write straight through that link
-	// and rewrite the snapshot, and a crash mid-write would leave the actor's only
-	// local restore point holding a truncated config. Renaming replaces the name
-	// here and leaves the linked original whole.
+	// Temp file + rename, not O_TRUNC, which would write through a shared inode.
 	tmp, err := os.CreateTemp(snapshotDir, ".config.json.tmp-*")
 	if err != nil {
 		return err

@@ -24,6 +24,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/internal/actorevent"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/objectstore"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -33,8 +34,6 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
-	grpcCodes "google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	storagev1listers "k8s.io/client-go/listers/storage/v1"
 )
 
@@ -207,7 +206,7 @@ func acquireLease(ctx context.Context, holder leaseHolder, key, subject string) 
 	lease, err := holder.AcquireLease(ctx, key)
 	if err != nil {
 		if errors.Is(err, store.ErrLeaseConflict) {
-			return nil, nil, status.Errorf(grpcCodes.Aborted, "another operation is in progress for this %s", subject)
+			return nil, nil, apierror.Aborted("another operation is in progress for this %s", subject)
 		}
 		return nil, nil, fmt.Errorf("while acquiring lease: %w", err)
 	}

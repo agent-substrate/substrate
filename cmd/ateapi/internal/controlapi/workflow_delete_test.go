@@ -21,11 +21,11 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/objectstore/objectstoretest"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 func TestDeleteActorWorkflow_ExecutionPaths(t *testing.T) {
@@ -125,8 +125,8 @@ func TestDeleteActorWorkflow_ExecutionPaths(t *testing.T) {
 
 			deleted, err := w.DeleteActor(ctx, actorRef, tc.anyState, store.DeletePreconditions{})
 			if tc.wantErr {
-				if got := status.Code(err); got != tc.wantCode {
-					t.Fatalf("status.Code(err) = %v, want %v (err: %v)", got, tc.wantCode, err)
+				if got := apierror.Code(err); got != tc.wantCode {
+					t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, tc.wantCode, err)
 				}
 			} else {
 				if err != nil {

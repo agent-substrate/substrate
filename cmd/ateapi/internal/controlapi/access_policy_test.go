@@ -21,11 +21,11 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/authz"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/principal"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 func TestAccessPolicy_GlobalAndAtespaceGovernance(t *testing.T) {
@@ -94,10 +94,10 @@ func TestAccessPolicy_GlobalAndAtespaceGovernance(t *testing.T) {
 
 	// 1. No global policy exists at startup. Alice (bootstrap owner) is
 	// authorized and sees NotFound; Bob (unprivileged) is denied.
-	if _, err := getGlobal(bobCtx); status.Code(err) != codes.PermissionDenied {
+	if _, err := getGlobal(bobCtx); apierror.Code(err) != codes.PermissionDenied {
 		t.Fatalf("expected PermissionDenied for Bob on GetGlobalAccessPolicy, got %v", err)
 	}
-	if _, err := getGlobal(aliceCtx); status.Code(err) != codes.NotFound {
+	if _, err := getGlobal(aliceCtx); apierror.Code(err) != codes.NotFound {
 		t.Fatalf("expected NotFound for Alice before CreateGlobalAccessPolicy, got %v", err)
 	}
 
@@ -112,7 +112,7 @@ func TestAccessPolicy_GlobalAndAtespaceGovernance(t *testing.T) {
 			},
 		},
 	}
-	if _, err := createGlobal(bobCtx, createGlobalReq); status.Code(err) != codes.PermissionDenied {
+	if _, err := createGlobal(bobCtx, createGlobalReq); apierror.Code(err) != codes.PermissionDenied {
 		t.Fatalf("expected PermissionDenied for Bob on CreateGlobalAccessPolicy, got %v", err)
 	}
 	globalPol, err := createGlobal(aliceCtx, createGlobalReq)
@@ -122,7 +122,7 @@ func TestAccessPolicy_GlobalAndAtespaceGovernance(t *testing.T) {
 	if globalPol.GetMetadata().GetName() != "default" || globalPol.GetMetadata().GetVersion() != 1 {
 		t.Fatalf("unexpected created global policy metadata: %+v", globalPol.GetMetadata())
 	}
-	if _, err := createGlobal(aliceCtx, createGlobalReq); status.Code(err) != codes.AlreadyExists {
+	if _, err := createGlobal(aliceCtx, createGlobalReq); apierror.Code(err) != codes.AlreadyExists {
 		t.Fatalf("expected AlreadyExists for second CreateGlobalAccessPolicy, got %v", err)
 	}
 
@@ -139,7 +139,7 @@ func TestAccessPolicy_GlobalAndAtespaceGovernance(t *testing.T) {
 			},
 		},
 	}
-	if _, err := updateGlobal(bobCtx, updateGlobalReq); status.Code(err) != codes.PermissionDenied {
+	if _, err := updateGlobal(bobCtx, updateGlobalReq); apierror.Code(err) != codes.PermissionDenied {
 		t.Fatalf("expected Bob (global viewer) to be denied UpdateGlobalAccessPolicy, got %v", err)
 	}
 
@@ -151,7 +151,7 @@ func TestAccessPolicy_GlobalAndAtespaceGovernance(t *testing.T) {
 	if updatedGlobal.GetMetadata().GetVersion() != 2 {
 		t.Fatalf("expected global policy version 2, got %d", updatedGlobal.GetMetadata().GetVersion())
 	}
-	if _, err := updateGlobal(daveCtx, updateGlobalReq); status.Code(err) != codes.Aborted {
+	if _, err := updateGlobal(daveCtx, updateGlobalReq); apierror.Code(err) != codes.Aborted {
 		t.Fatalf("expected Aborted for stale version on UpdateGlobalAccessPolicy, got %v", err)
 	}
 
@@ -166,10 +166,10 @@ func TestAccessPolicy_GlobalAndAtespaceGovernance(t *testing.T) {
 	if len(emptied.GetBindings()) != 0 || emptied.GetMetadata().GetVersion() != 3 {
 		t.Fatalf("unexpected emptied global policy: %+v", emptied)
 	}
-	if _, err := getGlobal(bobCtx); status.Code(err) != codes.PermissionDenied {
+	if _, err := getGlobal(bobCtx); apierror.Code(err) != codes.PermissionDenied {
 		t.Fatalf("expected Bob denied after empty update, got %v", err)
 	}
-	if _, err := getGlobal(daveCtx); status.Code(err) != codes.PermissionDenied {
+	if _, err := getGlobal(daveCtx); apierror.Code(err) != codes.PermissionDenied {
 		t.Fatalf("expected Dave denied after empty update, got %v", err)
 	}
 	if _, err := getGlobal(aliceCtx); err != nil {
@@ -214,7 +214,7 @@ func TestAccessPolicy_GlobalAndAtespaceGovernance(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("UpdateGlobalAccessPolicy removing Alice failed: %v", err)
 	}
-	if err := getGlobalAfterRestart(aliceCtx); status.Code(err) != codes.PermissionDenied {
+	if err := getGlobalAfterRestart(aliceCtx); apierror.Code(err) != codes.PermissionDenied {
 		t.Fatalf("expected Alice denied after removal from bootstrap owners and the policy, got %v", err)
 	}
 	if err := getGlobalAfterRestart(charlieCtx); err != nil {
@@ -241,7 +241,7 @@ func TestAccessPolicy_GlobalAndAtespaceGovernance(t *testing.T) {
 	}
 	if _, err := invoke(aliceCtx, ateapipb.Control_GetAtespaceAccessPolicy_FullMethodName, getSpacePolReq, func(c context.Context, r any) (any, error) {
 		return svc.GetAtespaceAccessPolicy(c, r.(*ateapipb.GetAtespaceAccessPolicyRequest))
-	}); status.Code(err) != codes.NotFound {
+	}); apierror.Code(err) != codes.NotFound {
 		t.Fatalf("expected NotFound before CreateAtespaceAccessPolicy, got %v", err)
 	}
 
@@ -287,7 +287,7 @@ func TestAccessPolicy_GlobalAndAtespaceGovernance(t *testing.T) {
 	}
 	if _, err := invoke(charlieCtx, ateapipb.Control_UpdateAtespaceAccessPolicy_FullMethodName, updateSpacePolReq, func(c context.Context, r any) (any, error) {
 		return svc.UpdateAtespaceAccessPolicy(c, r.(*ateapipb.UpdateAtespaceAccessPolicyRequest))
-	}); status.Code(err) != codes.PermissionDenied {
+	}); apierror.Code(err) != codes.PermissionDenied {
 		t.Fatalf("expected Charlie (atespace editor) denied UpdateAtespaceAccessPolicy, got %v", err)
 	}
 	deleteSpacePolReq := &ateapipb.DeleteAtespaceAccessPolicyRequest{
@@ -295,7 +295,7 @@ func TestAccessPolicy_GlobalAndAtespaceGovernance(t *testing.T) {
 	}
 	if _, err := invoke(charlieCtx, ateapipb.Control_DeleteAtespaceAccessPolicy_FullMethodName, deleteSpacePolReq, func(c context.Context, r any) (any, error) {
 		return svc.DeleteAtespaceAccessPolicy(c, r.(*ateapipb.DeleteAtespaceAccessPolicyRequest))
-	}); status.Code(err) != codes.PermissionDenied {
+	}); apierror.Code(err) != codes.PermissionDenied {
 		t.Fatalf("expected Charlie (atespace editor) denied DeleteAtespaceAccessPolicy, got %v", err)
 	}
 
@@ -320,7 +320,7 @@ func TestAccessPolicy_GlobalAndAtespaceGovernance(t *testing.T) {
 	// Charlie's tuple on team-alpha was removed, so Charlie can no longer GetAtespaceAccessPolicy.
 	if _, err := invoke(charlieCtx, ateapipb.Control_GetAtespaceAccessPolicy_FullMethodName, getSpacePolReq, func(c context.Context, r any) (any, error) {
 		return svc.GetAtespaceAccessPolicy(c, r.(*ateapipb.GetAtespaceAccessPolicyRequest))
-	}); status.Code(err) != codes.PermissionDenied {
+	}); apierror.Code(err) != codes.PermissionDenied {
 		t.Fatalf("expected Charlie denied after DeleteAtespaceAccessPolicy, got %v", err)
 	}
 
@@ -338,7 +338,7 @@ func TestAccessPolicy_GlobalAndAtespaceGovernance(t *testing.T) {
 	}
 	if _, err := invoke(aliceCtx, ateapipb.Control_UpdateAtespaceAccessPolicy_FullMethodName, updateSpacePolReq, func(c context.Context, r any) (any, error) {
 		return svc.UpdateAtespaceAccessPolicy(c, r.(*ateapipb.UpdateAtespaceAccessPolicyRequest))
-	}); status.Code(err) != codes.Aborted || !strings.Contains(err.Error(), "UID conflict") {
+	}); apierror.Code(err) != codes.Aborted || !strings.Contains(err.Error(), "UID conflict") {
 		t.Fatalf("expected Aborted UID conflict for UpdateAtespaceAccessPolicy with old UID, got %v", err)
 	}
 }

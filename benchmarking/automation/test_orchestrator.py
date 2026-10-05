@@ -14,10 +14,14 @@
 
 """Unit tests for orchestrator.py: python3 benchmarking/automation/test_orchestrator.py"""
 
+import os
 import unittest
 from unittest import mock
 
+import yaml
+
 import orchestrator
+from testtypes import locust
 
 
 class DeployWorkloadsTest(unittest.TestCase):
@@ -67,6 +71,33 @@ class DeployWorkloadsTest(unittest.TestCase):
                 "600",
             ]
         )
+
+
+class RunnerSizingTest(unittest.TestCase):
+    TMPL = os.path.join(os.path.dirname(__file__), "manifests", "runner-job.yaml.tmpl")
+
+    def render(self, test):
+        subs = {"JOB_NAME": "j", "IMAGE": "i", "TAG": "t", "NAME": "n", "DEST": "d"}
+        subs.update(locust.job_subs(test))
+        text = orchestrator.render_template(self.TMPL, subs)
+        job = next(d for d in yaml.safe_load_all(text) if d and d.get("kind") == "Job")
+        return job["spec"]["template"]["spec"]["containers"][0]["resources"]
+
+    def test_defaults(self):
+        res = self.render({"file": "f", "duration": "1m", "users": 1})
+        self.assertEqual(res, {"requests": {"cpu": "500m", "memory": "512Mi"}})
+
+    def test_runner_cpu_and_memory(self):
+        res = self.render(
+            {"file": "f", "duration": "1m", "users": 1000, "runnerCpu": "4", "runnerMemory": "8Gi"}
+        )
+        self.assertEqual(res["requests"], {"cpu": "4", "memory": "8Gi"})
+        self.assertNotIn("limits", res)
+
+    def test_no_placeholder_survives(self):
+        subs = {"JOB_NAME": "j", "IMAGE": "i", "TAG": "t", "NAME": "n", "DEST": "d"}
+        subs.update(locust.job_subs({"file": "f", "duration": "1m", "users": 1}))
+        self.assertNotIn("${", orchestrator.render_template(self.TMPL, subs))
 
 
 if __name__ == "__main__":

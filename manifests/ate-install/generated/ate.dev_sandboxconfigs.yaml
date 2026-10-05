@@ -107,7 +107,8 @@ spec:
                   PauseImage is the container image used as the root sandbox container.
                   It holds the sandbox's namespaces and runs no workload code, so it is an
                   implementation detail of the sandbox rather than something actor authors
-                  choose. It is captured in the snapshot manifest alongside the sandbox
+                  choose. Required for gvisor; not allowed for microvm, which runs no pause
+                  container. It is captured in the snapshot manifest alongside the sandbox
                   binaries, so a restore always re-creates the sandbox from the same image
                   the snapshot was taken with.
 
@@ -130,9 +131,12 @@ spec:
                 - microvm
                 type: string
             required:
-            - pauseImage
             - sandboxClass
             type: object
+            x-kubernetes-validations:
+            - message: pauseImage is required for gvisor and not allowed for other
+                sandbox classes
+              rule: 'self.sandboxClass == ''gvisor'' ? has(self.pauseImage) : !has(self.pauseImage)'
         required:
         - spec
         type: object

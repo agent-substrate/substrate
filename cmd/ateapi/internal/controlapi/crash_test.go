@@ -29,6 +29,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/internal/actorevent"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -359,6 +360,7 @@ func TestHandleAteletError(t *testing.T) {
 		rpc            string
 		isTerminateRPC bool
 		err            error
+		wantCode       codes.Code
 		wantState      ateapipb.ActorState
 	}{
 		{
@@ -366,6 +368,7 @@ func TestHandleAteletError(t *testing.T) {
 			ctx:       context.Background(),
 			rpc:       "Restore",
 			err:       status.Error(codes.Unavailable, "connection refused"),
+			wantCode:  codes.Unavailable,
 			wantState: ateapipb.ActorState_ACTOR_STATE_RUNNING,
 		},
 		{
@@ -373,6 +376,7 @@ func TestHandleAteletError(t *testing.T) {
 			ctx:       context.Background(),
 			rpc:       "Restore",
 			err:       status.Error(codes.Canceled, "grpc: the client connection is closing"),
+			wantCode:  codes.Internal,
 			wantState: ateapipb.ActorState_ACTOR_STATE_RUNNING,
 		},
 		{
@@ -380,6 +384,7 @@ func TestHandleAteletError(t *testing.T) {
 			ctx:       context.Background(),
 			rpc:       "Restore",
 			err:       status.Error(codes.DeadlineExceeded, "context deadline exceeded"),
+			wantCode:  codes.Internal,
 			wantState: ateapipb.ActorState_ACTOR_STATE_RUNNING,
 		},
 		{
@@ -387,6 +392,7 @@ func TestHandleAteletError(t *testing.T) {
 			ctx:       context.Background(),
 			rpc:       "Restore",
 			err:       fmt.Errorf("while restoring actor: %w", status.Error(codes.Unavailable, "connection refused")),
+			wantCode:  codes.Unavailable,
 			wantState: ateapipb.ActorState_ACTOR_STATE_RUNNING,
 		},
 		{
@@ -394,6 +400,7 @@ func TestHandleAteletError(t *testing.T) {
 			ctx:       ended,
 			rpc:       "Restore",
 			err:       status.Error(codes.Internal, "context canceled"),
+			wantCode:  codes.Internal,
 			wantState: ateapipb.ActorState_ACTOR_STATE_RUNNING,
 		},
 		{
@@ -401,6 +408,7 @@ func TestHandleAteletError(t *testing.T) {
 			ctx:       context.Background(),
 			rpc:       "Restore",
 			err:       status.Error(codes.Internal, "while reading local snapshot manifest"),
+			wantCode:  codes.Internal,
 			wantState: ateapipb.ActorState_ACTOR_STATE_CRASHED,
 		},
 		{
@@ -408,6 +416,7 @@ func TestHandleAteletError(t *testing.T) {
 			ctx:       context.Background(),
 			rpc:       "Restore",
 			err:       status.Error(codes.FailedPrecondition, "invalid checkpoint result"),
+			wantCode:  codes.Internal,
 			wantState: ateapipb.ActorState_ACTOR_STATE_CRASHED,
 		},
 		{
@@ -415,6 +424,7 @@ func TestHandleAteletError(t *testing.T) {
 			ctx:       context.Background(),
 			rpc:       "Restore",
 			err:       errors.New("while getting atelet conn"),
+			wantCode:  codes.Internal,
 			wantState: ateapipb.ActorState_ACTOR_STATE_CRASHED,
 		},
 		{
@@ -423,6 +433,7 @@ func TestHandleAteletError(t *testing.T) {
 			rpc:            "Terminate",
 			isTerminateRPC: true,
 			err:            status.Error(codes.Internal, "while unmounting volumes"),
+			wantCode:       codes.Internal,
 			wantState:      ateapipb.ActorState_ACTOR_STATE_RUNNING,
 		},
 	}
@@ -436,10 +447,8 @@ func TestHandleAteletError(t *testing.T) {
 			seedWorker(t, ctx, st, actorRef)
 
 			err := handleAteletError(tt.ctx, st, actorRef, ateattr.OperationResume, tt.rpc, tt.isTerminateRPC, tt.err)
-			// The caller sees atelet's status either way, so a retryable
-			// failure stays retryable.
-			if got, want := status.Code(err), status.Code(tt.err); got != want {
-				t.Errorf("status.Code(handleAteletError()) = %v, want %v (err: %v)", got, want, err)
+			if got := apierror.Code(err); got != tt.wantCode {
+				t.Errorf("apierror.Code(handleAteletError()) = %v, want %v (err: %v)", got, tt.wantCode, err)
 			}
 
 			actor, err := st.GetActor(ctx, actorRef)
