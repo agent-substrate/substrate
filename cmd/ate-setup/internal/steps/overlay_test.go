@@ -31,45 +31,82 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/images"
 )
 
-// Splicing credential injection into the real egress manifest replaces the
-// marker and adds the provider flags to the egress sidecar. CI deploys with
-// injection on envoy, but only this pins the spliced flags themselves.
+// Splicing the provider selection into the real egress manifest replaces the
+// marker: with the provider flags for a selected provider, with nothing when
+// injection is off. CI deploys the bundled provider on envoy, but only this
+// pins the spliced flags themselves and the off shape.
 func TestPatchAtenetEgressInject(t *testing.T) {
 	root, err := config.RepoRoot()
 	if err != nil {
 		t.Fatalf("resolving repo root: %v", err)
 	}
-	env := &Env{Cfg: &config.Config{
-		Root:                                  root,
-		ExperimentalEgressCredentialInjection: true,
-	}}
-
+	env := &Env{Cfg: &config.Config{Root: root}}
 	raw, err := os.ReadFile(env.atenetEgressManifestPath())
 	if err != nil {
 		t.Fatalf("reading egress manifest: %v", err)
 	}
-	patched, err := env.patchAtenetEgressInject(raw)
-	if err != nil {
-		t.Fatalf("patchAtenetEgressInject failed: %v", err)
-	}
-	for _, line := range strings.Split(string(patched), "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "#ATE_EGRESS_INJECT_FLAGS") {
-			t.Errorf("patched manifest still contains an unreplaced marker: %q", line)
-		}
-	}
-	for _, want := range []string{
-		"--credential-provider-name=ate-secret://k8s.io",
-		"--credential-provider-address=k8s-credential-provider.ate-system.svc:50051",
-		"--credential-provider-server-name=k8s-credential-provider.ate-system.svc",
+
+	for _, tc := range []struct {
+		name     string
+		provider config.CredentialProvider
+		want     []string
+	}{
+		{
+			name:     "kubernetes",
+			provider: config.CredentialProvider{Name: config.K8sCredentialProviderName, Address: config.K8sCredentialProviderAddress},
+			want: []string{
+				"--credential-provider-name=k8s.io",
+				"--credential-provider-address=k8s-credential-provider.ate-system.svc:50051",
+				"--credential-provider-server-name=k8s-credential-provider.ate-system.svc",
+				"--credential-provider-ca-file=",
+				"--credential-provider-client-cert=",
+			},
+		},
+		{
+			name:     "another provider",
+			provider: config.CredentialProvider{Name: "vault.example.com", Address: "vault.ate-system.svc:8200"},
+			want: []string{
+				"--credential-provider-name=vault.example.com",
+				"--credential-provider-address=vault.ate-system.svc:8200",
+				"--credential-provider-server-name=vault.ate-system.svc",
+			},
+		},
+		{name: "off"},
 	} {
-		if !strings.Contains(string(patched), want) {
-			t.Errorf("patched manifest is missing spliced flag %q", want)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			patched, err := env.patchAtenetEgressInject(raw, tc.provider)
+			if err != nil {
+				t.Fatalf("patchAtenetEgressInject failed: %v", err)
+			}
+			for _, line := range strings.Split(string(patched), "\n") {
+				if strings.HasPrefix(strings.TrimSpace(line), "#ATE_EGRESS_INJECT_FLAGS") {
+					t.Errorf("patched manifest still contains an unreplaced marker: %q", line)
+				}
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(string(patched), want) {
+					t.Errorf("patched manifest is missing spliced flag %q", want)
+				}
+			}
+			if !tc.provider.Enabled() && strings.Contains(string(patched), "- --credential-provider-") {
+				t.Error("patched manifest carries provider flags with injection off")
+			}
+			assertEgressManifestParses(t, patched)
+		})
 	}
 
-	// The result must still be valid YAML: find the atenet-egress ConfigMap's
-	// envoy.yaml and re-parse it.
-	for _, doc := range strings.Split(string(patched), "\n---\n") {
+	// The marker is what the splice keys on; a manifest without it is a
+	// broken install, not a silent no-op.
+	if _, err := env.patchAtenetEgressInject([]byte("kind: ConfigMap\n"), config.CredentialProvider{}); err == nil {
+		t.Error("patchAtenetEgressInject accepted a manifest without the marker")
+	}
+}
+
+// assertEgressManifestParses checks that every document is still YAML and
+// that the atenet-egress ConfigMap's envoy.yaml re-parses.
+func assertEgressManifestParses(t *testing.T, manifest []byte) {
+	t.Helper()
+	for _, doc := range strings.Split(string(manifest), "\n---\n") {
 		var obj struct {
 			Kind string            `json:"kind"`
 			Data map[string]string `json:"data"`
@@ -82,7 +119,7 @@ func TestPatchAtenetEgressInject(t *testing.T) {
 			if err := yaml.Unmarshal([]byte(obj.Data["envoy.yaml"]), &parsed); err != nil {
 				t.Errorf("patched envoy.yaml is not valid YAML: %v", err)
 			}
-			break
+			return
 		}
 	}
 }
@@ -359,7 +396,7 @@ func pinnedWorkloads(t *testing.T, manifest []byte) (pinned map[string]string, a
 // Under --cordon-control-plane every control plane apply path has to carry the
 // pinning, since each workload reaches the cluster through a different one:
 // the system bundle, the lone redeploy files, the podcert overlay, the
-// postgres file, and the egress variants. postgres gets a pool of its own;
+// postgres file, the egress variants, and the bundled credential provider. postgres gets a pool of its own;
 // every other control plane workload shares one.
 func TestRenderCordonControlPlane(t *testing.T) {
 	root := repoRoot(t)
@@ -418,6 +455,11 @@ func TestRenderCordonControlPlane(t *testing.T) {
 			cfg:  config.Config{Router: config.RouterAgentgateway},
 			path: func(e *Env) string { return e.Cfg.Path(installDir + "/agentgateway-egress") },
 			want: []string{"atenet-egress"},
+		},
+		{
+			name: "credential provider file",
+			path: func(e *Env) string { return e.k8sCredentialProviderPath(k8sCredentialProviderManifest) },
+			want: []string{k8sCredentialProviderDeployment},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -638,7 +680,7 @@ func TestRenderAtenetEgressManifestPrebuilt(t *testing.T) {
 		}),
 	}
 
-	out, err := e.renderAtenetEgressManifest(t.Context())
+	out, err := e.renderAtenetEgressManifest(t.Context(), config.CredentialProvider{})
 	if err != nil {
 		t.Fatalf("renderAtenetEgressManifest() error = %v", err)
 	}

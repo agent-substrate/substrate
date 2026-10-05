@@ -23,16 +23,74 @@ import (
 	"testing"
 )
 
-func TestConnectStoreRequiresPostgresConnectionString(t *testing.T) {
-	oldDSN := *postgresConnectionString
+func TestConnectStoreRequiresPostgresReadWriteConnectionString(t *testing.T) {
+	oldDSN := *postgresReadWriteConnectionString
 	t.Cleanup(func() {
-		*postgresConnectionString = oldDSN
+		*postgresReadWriteConnectionString = oldDSN
 	})
-	*postgresConnectionString = ""
+	*postgresReadWriteConnectionString = ""
 
 	_, err := connectStore(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "--postgres-connection-string is required") {
+	if err == nil || !strings.Contains(err.Error(), "--postgres-read-write-connection-string is required") {
 		t.Fatalf("connectStore() error = %v, want missing-connection-string error", err)
+	}
+}
+
+func TestLoadFlagsFromEnvResolvesPostgresSourcesOnce(t *testing.T) {
+	oldRuntime, oldDDL := *postgresReadWriteConnectionString, *postgresOwnerConnectionString
+	oldRuntimeRole, oldDDLRole := *postgresReadWriteRole, *postgresOwnerRole
+	oldAuthz := *experimentalEnableAuthz
+	t.Cleanup(func() {
+		*postgresReadWriteConnectionString = oldRuntime
+		*postgresOwnerConnectionString = oldDDL
+		*postgresReadWriteRole = oldRuntimeRole
+		*postgresOwnerRole = oldDDLRole
+		*experimentalEnableAuthz = oldAuthz
+	})
+	*postgresReadWriteConnectionString = "@env"
+	*postgresOwnerConnectionString = "@env"
+	*postgresReadWriteRole = "@env"
+	*postgresOwnerRole = "@env"
+	*experimentalEnableAuthz = false
+	t.Setenv("ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING", "runtime-a")
+	t.Setenv("ATE_API_POSTGRES_OWNER_CONNECTION_STRING", "ddl-a")
+	t.Setenv("ATE_API_POSTGRES_READ_WRITE_ROLE", "runtime-role")
+	t.Setenv("ATE_API_POSTGRES_OWNER_ROLE", "ddl-role")
+	t.Setenv("ATE_API_EXPERIMENTAL_ENABLE_AUTHZ", "true")
+
+	if err := loadFlagsFromEnv(); err != nil {
+		t.Fatal(err)
+	}
+	if *postgresReadWriteConnectionString != "runtime-a" || *postgresOwnerConnectionString != "ddl-a" ||
+		*postgresReadWriteRole != "runtime-role" || *postgresOwnerRole != "ddl-role" {
+		t.Fatalf("resolved values = %q, %q, %q, %q", *postgresReadWriteConnectionString, *postgresOwnerConnectionString, *postgresReadWriteRole, *postgresOwnerRole)
+	}
+	if !*experimentalEnableAuthz {
+		t.Fatal("authorization environment flag was not resolved alongside PostgreSQL settings")
+	}
+	t.Setenv("ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING", "runtime-b")
+	t.Setenv("ATE_API_POSTGRES_OWNER_CONNECTION_STRING", "ddl-b")
+	if err := loadFlagsFromEnv(); err != nil {
+		t.Fatal(err)
+	}
+	if *postgresReadWriteConnectionString != "runtime-a" || *postgresOwnerConnectionString != "ddl-a" {
+		t.Fatal("environment-backed connection strings changed after startup resolution")
+	}
+}
+
+func TestLoadFlagsFromEnvPoolMaxConns(t *testing.T) {
+	old := *postgresPoolMaxConns
+	t.Cleanup(func() { *postgresPoolMaxConns = old })
+	t.Setenv("ATE_API_POSTGRES_POOL_MAX_CONNS", "20")
+	if err := loadFlagsFromEnv(); err != nil {
+		t.Fatal(err)
+	}
+	if *postgresPoolMaxConns != 20 {
+		t.Fatalf("pool max connections = %d, want 20", *postgresPoolMaxConns)
+	}
+	t.Setenv("ATE_API_POSTGRES_POOL_MAX_CONNS", "invalid")
+	if err := loadFlagsFromEnv(); err == nil || !strings.Contains(err.Error(), "ATE_API_POSTGRES_POOL_MAX_CONNS must be a positive integer") {
+		t.Fatalf("loadFlagsFromEnv() error = %v, want pool-size validation", err)
 	}
 }
 
@@ -72,7 +130,7 @@ func TestPostgresConnectionAttrNeverLogsThePassword(t *testing.T) {
 	const password = "hunter2-very-secret"
 	render := func(connString string) string {
 		var buf bytes.Buffer
-		slog.New(slog.NewJSONHandler(&buf, nil)).LogAttrs(context.Background(), slog.LevelInfo, "Final flag values", postgresConnectionAttr(connString))
+		slog.New(slog.NewJSONHandler(&buf, nil)).LogAttrs(context.Background(), slog.LevelInfo, "Final flag values", postgresConnectionAttr("postgres-connection-string", connString))
 		return buf.String()
 	}
 
@@ -134,9 +192,13 @@ func TestPostgresConnectionAttrNeverLogsThePassword(t *testing.T) {
 // fails here even if the helper stays correct.
 func TestLogFlagValuesDoesNotLogThePostgresPassword(t *testing.T) {
 	const password = "hunter2-very-secret"
-	orig := *postgresConnectionString
-	t.Cleanup(func() { *postgresConnectionString = orig })
-	*postgresConnectionString = "postgresql://ateapi:" + password + "@db.example.internal:5432/atepg?sslmode=disable"
+	origReadWrite, origOwner := *postgresReadWriteConnectionString, *postgresOwnerConnectionString
+	t.Cleanup(func() {
+		*postgresReadWriteConnectionString = origReadWrite
+		*postgresOwnerConnectionString = origOwner
+	})
+	*postgresReadWriteConnectionString = "postgresql://runtime:" + password + "@db.example.internal:5432/atepg?sslmode=disable"
+	*postgresOwnerConnectionString = "postgresql://owner:" + password + "@db.example.internal:5432/atepg?sslmode=disable"
 
 	var buf bytes.Buffer
 	origLogger := slog.Default()
@@ -152,7 +214,9 @@ func TestLogFlagValuesDoesNotLogThePostgresPassword(t *testing.T) {
 	if strings.Contains(got, password) {
 		t.Fatalf("startup line contains the database password: %s", got)
 	}
-	if !strings.Contains(got, `"postgres-connection-string":{"host":"db.example.internal"`) {
-		t.Errorf("startup line missing the structured connection summary: %s", got)
+	for _, key := range []string{"postgres-read-write-connection-string", "postgres-owner-connection-string"} {
+		if !strings.Contains(got, `"`+key+`":{"host":"db.example.internal"`) {
+			t.Errorf("startup line missing the structured %s summary: %s", key, got)
+		}
 	}
 }

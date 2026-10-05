@@ -256,8 +256,8 @@ func TestValidateRunRequest(t *testing.T) {
 		want: field.ErrorList{field.Required(field.NewPath("sandbox_assets"), "")},
 	}, {
 		name: "sandbox asset errors surface at the sandbox_assets path",
-		obj:  valid(func(r *ateletpb.RunRequest) { r.SandboxAssets.PauseImage = "" }),
-		want: field.ErrorList{field.Required(field.NewPath("sandbox_assets", "pause_image"), "")},
+		obj:  valid(func(r *ateletpb.RunRequest) { r.SandboxAssets.PauseImage = "registry.k8s.io/pause:3.10.2" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("sandbox_assets", "pause_image"), nil, "")},
 	}, {
 		name: "invalid container name: path escape",
 		obj: valid(func(r *ateletpb.RunRequest) {
@@ -361,9 +361,8 @@ func TestValidateSandboxAssets(t *testing.T) {
 		obj:  validSandboxAssets(func(a *ateletpb.SandboxAssets) { a.SandboxClass = "GVISOR" }),
 		want: field.ErrorList{field.NotSupported[string](field.NewPath("sandbox_class"), nil, nil)},
 	}, {
-		name: "missing pause_image",
+		name: "valid: no pause_image (microvm has no pause container)",
 		obj:  validSandboxAssets(func(a *ateletpb.SandboxAssets) { a.PauseImage = "" }),
-		want: field.ErrorList{field.Required(field.NewPath("pause_image"), "")},
 	}, {
 		name: "pause_image not pinned by digest",
 		obj:  validSandboxAssets(func(a *ateletpb.SandboxAssets) { a.PauseImage = "registry.k8s.io/pause:3.10.2" }),

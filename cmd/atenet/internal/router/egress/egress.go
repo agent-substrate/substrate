@@ -84,11 +84,12 @@ type Handler struct {
 	// policies is the per-actor EgressPolicy cache every leg reads through.
 	policies *policyCache
 	// provider resolves an egress policy's credential injections. Nil means
-	// credential injection is not configured, and injection will be skipped.
+	// credential injection is not configured, and a request that needs one is
+	// denied.
 	provider credproviderpb.CredentialProviderClient
 	// providerName, when set, is the provider this gateway serves (the host of
-	// its ate-secret:// prefix); a credential URI naming another provider
-	// is refused.
+	// its ate-secret:// credential URIs); a credential URI naming another
+	// provider is refused.
 	providerName string
 }
 
@@ -97,9 +98,10 @@ type Handler struct {
 // policyCacheTTL of 0 fetches the policy on every callout.
 //
 // provider resolves an allowed rule's credential injections on the
-// TLS-terminated MITM leg; nil leaves credential injection off, so a rule that
-// requires an injection is skipped. providerName, when set, is the provider
-// this gateway serves; a credential URI naming another provider is refused.
+// TLS-terminated MITM leg; nil leaves credential injection off, so a request
+// matching a rule that requires an injection is denied. providerName, when
+// set, is the provider this gateway serves; a credential URI naming another
+// provider is refused.
 func New(apiClient ateapipb.ControlClient, actorIdentityRoots *x509.CertPool, policyCacheTTL time.Duration, provider credproviderpb.CredentialProviderClient, providerName string) *Handler {
 	return &Handler{
 		apiClient:          apiClient,

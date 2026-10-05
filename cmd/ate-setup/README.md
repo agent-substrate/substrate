@@ -19,6 +19,7 @@ images instead, name the registry they were pushed to:
 
 ```
 ate-setup deploy ate-system \
+  --credential-provider='{"name":"k8s.io"}' \
   --image-repo registry.example.com/substrate \
   --image-tag v0.0.0
 ```

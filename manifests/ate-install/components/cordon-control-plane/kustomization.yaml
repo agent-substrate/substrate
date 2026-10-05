@@ -32,9 +32,9 @@
 #
 # Name-regex targets rather than one patch per workload: the install applies
 # these workloads through several different streams (the base bundle, a lone
-# ate-api-server redeploy, the podcert overlay, the postgres file, and the
-# egress variants), and kustomize leaves a stream alone when nothing in it
-# matches, so the same component fits every path.
+# ate-api-server redeploy, the podcert overlay, the postgres file, the egress
+# variants, and the bundled credential provider), and kustomize leaves a stream
+# alone when nothing in it matches, so the same component fits every path.
 
 apiVersion: kustomize.config.k8s.io/v1alpha1
 kind: Component
@@ -42,7 +42,7 @@ kind: Component
 patches:
   - target:
       kind: Deployment
-      name: ate-api-server|ate-controller|atenet-router|atenet-egress|podcertificate-controller
+      name: ate-api-server|ate-controller|atenet-router|atenet-egress|podcertificate-controller|k8s-credential-provider
     patch: |-
       apiVersion: apps/v1
       kind: Deployment

@@ -1098,6 +1098,130 @@ func (x *IngestResponse) GetSha256() []byte {
 	return nil
 }
 
+type UseCPURequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Number of parallel goroutines to spin, each targeting duty_cycle
+	// fraction of one CPU core. Set to 0 to stop all CPU load.
+	NumCores int32 `protobuf:"varint,1,opt,name=num_cores,json=numCores,proto3" json:"num_cores,omitempty"`
+	// Fraction of CPU time each goroutine should consume, in [0.0, 1.0].
+	DutyCycle float64 `protobuf:"fixed64,2,opt,name=duty_cycle,json=dutyCycle,proto3" json:"duty_cycle,omitempty"`
+	// Per-goroutine work/sleep cycle length in milliseconds. Defaults to
+	// 100 when 0 or unset. Smaller values give smoother load at the cost
+	// of scheduler and timer-wheel overhead.
+	CycleLengthMs int32 `protobuf:"varint,3,opt,name=cycle_length_ms,json=cycleLengthMs,proto3" json:"cycle_length_ms,omitempty"`
+	// Whether num_cores should be capped at GOMAXPROCS. Defaults to true
+	// when unset. Uncapped (false) lets the caller force oversubscription
+	// to test scheduler pressure, at the cost of goroutines running below
+	// their target duty cycle.
+	CapAtGomaxprocs *bool `protobuf:"varint,4,opt,name=cap_at_gomaxprocs,json=capAtGomaxprocs,proto3,oneof" json:"cap_at_gomaxprocs,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *UseCPURequest) Reset() {
+	*x = UseCPURequest{}
+	mi := &file_glutton_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UseCPURequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UseCPURequest) ProtoMessage() {}
+
+func (x *UseCPURequest) ProtoReflect() protoreflect.Message {
+	mi := &file_glutton_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UseCPURequest.ProtoReflect.Descriptor instead.
+func (*UseCPURequest) Descriptor() ([]byte, []int) {
+	return file_glutton_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *UseCPURequest) GetNumCores() int32 {
+	if x != nil {
+		return x.NumCores
+	}
+	return 0
+}
+
+func (x *UseCPURequest) GetDutyCycle() float64 {
+	if x != nil {
+		return x.DutyCycle
+	}
+	return 0
+}
+
+func (x *UseCPURequest) GetCycleLengthMs() int32 {
+	if x != nil {
+		return x.CycleLengthMs
+	}
+	return 0
+}
+
+func (x *UseCPURequest) GetCapAtGomaxprocs() bool {
+	if x != nil && x.CapAtGomaxprocs != nil {
+		return *x.CapAtGomaxprocs
+	}
+	return false
+}
+
+type UseCPUResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The number of goroutines actually spun. Equals the request's
+	// num_cores unless it was capped at GOMAXPROCS.
+	NumCores      int32 `protobuf:"varint,1,opt,name=num_cores,json=numCores,proto3" json:"num_cores,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UseCPUResponse) Reset() {
+	*x = UseCPUResponse{}
+	mi := &file_glutton_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UseCPUResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UseCPUResponse) ProtoMessage() {}
+
+func (x *UseCPUResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_glutton_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UseCPUResponse.ProtoReflect.Descriptor instead.
+func (*UseCPUResponse) Descriptor() ([]byte, []int) {
+	return file_glutton_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *UseCPUResponse) GetNumCores() int32 {
+	if x != nil {
+		return x.NumCores
+	}
+	return 0
+}
+
 var File_glutton_proto protoreflect.FileDescriptor
 
 const file_glutton_proto_rawDesc = "" +
@@ -1157,14 +1281,23 @@ const file_glutton_proto_rawDesc = "" +
 	"\x06append\x18\x03 \x01(\bR\x06append\"<\n" +
 	"\x0eIngestResponse\x12\x12\n" +
 	"\x04size\x18\x01 \x01(\x03R\x04size\x12\x16\n" +
-	"\x06sha256\x18\x02 \x01(\fR\x06sha256*_\n" +
+	"\x06sha256\x18\x02 \x01(\fR\x06sha256\"\xba\x01\n" +
+	"\rUseCPURequest\x12\x1b\n" +
+	"\tnum_cores\x18\x01 \x01(\x05R\bnumCores\x12\x1d\n" +
+	"\n" +
+	"duty_cycle\x18\x02 \x01(\x01R\tdutyCycle\x12&\n" +
+	"\x0fcycle_length_ms\x18\x03 \x01(\x05R\rcycleLengthMs\x12/\n" +
+	"\x11cap_at_gomaxprocs\x18\x04 \x01(\bH\x00R\x0fcapAtGomaxprocs\x88\x01\x01B\x14\n" +
+	"\x12_cap_at_gomaxprocs\"-\n" +
+	"\x0eUseCPUResponse\x12\x1b\n" +
+	"\tnum_cores\x18\x01 \x01(\x05R\bnumCores*_\n" +
 	"\tWriteMode\x12\x17\n" +
 	"\x13WRITE_MODE_TRUNCATE\x10\x00\x12\x18\n" +
 	"\x14WRITE_MODE_OVERWRITE\x10\x01\x12\x1f\n" +
 	"\x1bWRITE_MODE_OVERWRITE_ROTATE\x10\x02*9\n" +
 	"\bReadMode\x12\x12\n" +
 	"\x0eREAD_MODE_DATA\x10\x00\x12\x19\n" +
-	"\x15READ_MODE_DIGEST_ONLY\x10\x012\xc3\x04\n" +
+	"\x15READ_MODE_DIGEST_ONLY\x10\x012\x80\x05\n" +
 	"\aGlutton\x12A\n" +
 	"\bWriteRAM\x12\x18.glutton.WriteRAMRequest\x1a\x19.glutton.WriteRAMResponse\"\x00\x12>\n" +
 	"\aReadRAM\x12\x17.glutton.ReadRAMRequest\x1a\x18.glutton.ReadRAMResponse\"\x00\x12D\n" +
@@ -1174,7 +1307,8 @@ const file_glutton_proto_rawDesc = "" +
 	"\x04Ping\x12\x14.glutton.PingRequest\x1a\x15.glutton.PingResponse\"\x00\x12;\n" +
 	"\x06Gossip\x12\x16.glutton.GossipRequest\x1a\x17.glutton.GossipResponse\"\x00\x12>\n" +
 	"\aBurnCPU\x12\x17.glutton.BurnCPURequest\x1a\x18.glutton.BurnCPUResponse\"\x00\x12;\n" +
-	"\x06Ingest\x12\x16.glutton.IngestRequest\x1a\x17.glutton.IngestResponse\"\x00B=Z;github.com/agent-substrate/substrate/internal/proto/gluttonb\x06proto3"
+	"\x06Ingest\x12\x16.glutton.IngestRequest\x1a\x17.glutton.IngestResponse\"\x00\x12;\n" +
+	"\x06UseCPU\x12\x16.glutton.UseCPURequest\x1a\x17.glutton.UseCPUResponse\"\x00B=Z;github.com/agent-substrate/substrate/internal/proto/gluttonb\x06proto3"
 
 var (
 	file_glutton_proto_rawDescOnce sync.Once
@@ -1189,7 +1323,7 @@ func file_glutton_proto_rawDescGZIP() []byte {
 }
 
 var file_glutton_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_glutton_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
+var file_glutton_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
 var file_glutton_proto_goTypes = []any{
 	(WriteMode)(0),            // 0: glutton.WriteMode
 	(ReadMode)(0),             // 1: glutton.ReadMode
@@ -1212,6 +1346,8 @@ var file_glutton_proto_goTypes = []any{
 	(*BurnCPUResponse)(nil),   // 18: glutton.BurnCPUResponse
 	(*IngestRequest)(nil),     // 19: glutton.IngestRequest
 	(*IngestResponse)(nil),    // 20: glutton.IngestResponse
+	(*UseCPURequest)(nil),     // 21: glutton.UseCPURequest
+	(*UseCPUResponse)(nil),    // 22: glutton.UseCPUResponse
 }
 var file_glutton_proto_depIdxs = []int32{
 	0,  // 0: glutton.WriteRAMRequest.write_mode:type_name -> glutton.WriteMode
@@ -1227,17 +1363,19 @@ var file_glutton_proto_depIdxs = []int32{
 	14, // 10: glutton.Glutton.Gossip:input_type -> glutton.GossipRequest
 	17, // 11: glutton.Glutton.BurnCPU:input_type -> glutton.BurnCPURequest
 	19, // 12: glutton.Glutton.Ingest:input_type -> glutton.IngestRequest
-	3,  // 13: glutton.Glutton.WriteRAM:output_type -> glutton.WriteRAMResponse
-	5,  // 14: glutton.Glutton.ReadRAM:output_type -> glutton.ReadRAMResponse
-	7,  // 15: glutton.Glutton.WriteDisk:output_type -> glutton.WriteDiskResponse
-	9,  // 16: glutton.Glutton.ReadDisk:output_type -> glutton.ReadDiskResponse
-	11, // 17: glutton.Glutton.OpenFD:output_type -> glutton.OpenFDResponse
-	13, // 18: glutton.Glutton.Ping:output_type -> glutton.PingResponse
-	15, // 19: glutton.Glutton.Gossip:output_type -> glutton.GossipResponse
-	18, // 20: glutton.Glutton.BurnCPU:output_type -> glutton.BurnCPUResponse
-	20, // 21: glutton.Glutton.Ingest:output_type -> glutton.IngestResponse
-	13, // [13:22] is the sub-list for method output_type
-	4,  // [4:13] is the sub-list for method input_type
+	21, // 13: glutton.Glutton.UseCPU:input_type -> glutton.UseCPURequest
+	3,  // 14: glutton.Glutton.WriteRAM:output_type -> glutton.WriteRAMResponse
+	5,  // 15: glutton.Glutton.ReadRAM:output_type -> glutton.ReadRAMResponse
+	7,  // 16: glutton.Glutton.WriteDisk:output_type -> glutton.WriteDiskResponse
+	9,  // 17: glutton.Glutton.ReadDisk:output_type -> glutton.ReadDiskResponse
+	11, // 18: glutton.Glutton.OpenFD:output_type -> glutton.OpenFDResponse
+	13, // 19: glutton.Glutton.Ping:output_type -> glutton.PingResponse
+	15, // 20: glutton.Glutton.Gossip:output_type -> glutton.GossipResponse
+	18, // 21: glutton.Glutton.BurnCPU:output_type -> glutton.BurnCPUResponse
+	20, // 22: glutton.Glutton.Ingest:output_type -> glutton.IngestResponse
+	22, // 23: glutton.Glutton.UseCPU:output_type -> glutton.UseCPUResponse
+	14, // [14:24] is the sub-list for method output_type
+	4,  // [4:14] is the sub-list for method input_type
 	4,  // [4:4] is the sub-list for extension type_name
 	4,  // [4:4] is the sub-list for extension extendee
 	0,  // [0:4] is the sub-list for field type_name
@@ -1248,13 +1386,14 @@ func file_glutton_proto_init() {
 	if File_glutton_proto != nil {
 		return
 	}
+	file_glutton_proto_msgTypes[19].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_glutton_proto_rawDesc), len(file_glutton_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   19,
+			NumMessages:   21,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -22,7 +22,7 @@ currently full, using a Kubernetes HorizontalPodAutoscaler (HPA) fed by the
 
 ## Prerequisites
 
-- A local kind cluster with Agent Substrate installed (`./hack/install-ate-kind.sh --deploy-ate-system`).
+- A local kind cluster with Agent Substrate installed (`./hack/install-ate-kind.sh --deploy-ate-system --credential-provider='{"name":"k8s.io"}'`).
   Note: this demo is currently only supported on kind.
 - `ko` installed for building images.
 - A GCS bucket for storing snapshots (configured via `BUCKET_NAME` env var).

@@ -74,6 +74,10 @@ type runningActor struct {
 	// un-faulted pages). Empty for cold-run actors (their snapshot is already complete).
 	restoreSourceDir string
 
+	// preserveRestoreSource marks restoreSourceDir as a preserved snapshot
+	// (preserve_restore_dir): the next checkpoint must copy-merge, not move it.
+	preserveRestoreSource bool
+
 	// snapshotIsSelfContained is set when this actor was restored eagerly, which
 	// reads every populated extent up front. Every page the snapshot had is then
 	// resident, so cloud-hypervisor's next snapshot already holds all of it and

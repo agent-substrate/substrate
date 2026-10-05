@@ -27,8 +27,11 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // TestPoolConfigRereadsRotatedCredentials covers the pod certificate rotation
@@ -47,7 +50,7 @@ func TestPoolConfigRereadsRotatedCredentials(t *testing.T) {
 		"postgres://postgres@postgres.ate-system.svc:5432/atepg?sslmode=verify-full&sslrootcert=%s&sslcert=%s&sslkey=%s",
 		rootPath, bundlePath, bundlePath)
 
-	cfg, err := poolConfig(dsn)
+	cfg, err := poolConfig(dsn, "test_role")
 	if err != nil {
 		t.Fatalf("poolConfig: %v", err)
 	}
@@ -75,15 +78,47 @@ func TestPoolConfigRereadsRotatedCredentials(t *testing.T) {
 	}
 }
 
-// TestPoolConfigWithoutTLS keeps the hook off connection strings that have no
-// TLS material to re-read, such as the ones the tests here use.
-func TestPoolConfigWithoutTLS(t *testing.T) {
-	cfg, err := poolConfig("postgres://postgres@localhost:5432/atepg?sslmode=disable")
-	if err != nil {
-		t.Fatalf("poolConfig: %v", err)
+func TestPoolConfigRequiresRole(t *testing.T) {
+	_, err := poolConfig("postgres://runtime@postgres:5432/atepg?sslmode=disable", "")
+	if err == nil || !strings.Contains(err.Error(), "role must not be empty") {
+		t.Fatalf("poolConfig error = %v, want missing-role error", err)
 	}
-	if cfg.BeforeConnect != nil {
-		t.Error("BeforeConnect is set for a connection string with no TLS material")
+}
+
+func TestConnectRequiresRoles(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		readWriteRole string
+		ownerRole     string
+		want          string
+	}{
+		{name: "read/write", ownerRole: "owner", want: "read/write role must not be empty"},
+		{name: "owner", readWriteRole: "readwrite", want: "owner role must not be empty"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Connect(t.Context(), ConnectConfig{
+				ReadWriteDSN:  "unused",
+				OwnerDSN:      "unused",
+				ReadWriteRole: tc.readWriteRole,
+				OwnerRole:     tc.ownerRole,
+				Schema:        "substrate",
+			})
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Connect error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestConnectRequiresOwnerConnectionString(t *testing.T) {
+	_, err := Connect(t.Context(), ConnectConfig{
+		ReadWriteDSN:  "unused",
+		ReadWriteRole: "runtime",
+		OwnerRole:     "owner",
+		Schema:        "substrate",
+	})
+	if err == nil || !strings.Contains(err.Error(), "owner connection string must not be empty") {
+		t.Fatalf("Connect error = %v, want missing-owner error", err)
 	}
 }
 
@@ -177,7 +212,13 @@ func TestConnectUsesConfiguredSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("getting PostgreSQL connection string: %v", err)
 	}
-	persistence, err := Connect(ctx, dsn+"&search_path=public", schema)
+	persistence, err := Connect(ctx, ConnectConfig{
+		ReadWriteDSN:  dsn + "&search_path=public",
+		OwnerDSN:      dsn,
+		ReadWriteRole: "atepg",
+		OwnerRole:     "atepg",
+		Schema:        schema,
+	})
 	if err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
@@ -210,7 +251,7 @@ func TestConnectUsesConfiguredSchema(t *testing.T) {
 		t.Error("migration removed an unrelated table")
 	}
 
-	if err := persistence.dropExpiredWorkerOutboxPartitions(ctx, persistence.watchPool, time.Now()); err != nil {
+	if err := persistence.dropExpiredWorkerOutboxPartitions(ctx, persistence.ownerPool, time.Now()); err != nil {
 		t.Fatalf("dropping expired partitions in the configured schema: %v", err)
 	}
 	var unrelatedPartitionExists bool
@@ -219,5 +260,125 @@ func TestConnectUsesConfiguredSchema(t *testing.T) {
 	}
 	if !unrelatedPartitionExists {
 		t.Error("outbox maintenance removed a partition from another schema")
+	}
+}
+
+func TestConnectSeparatesRuntimeAndDDLPrivileges(t *testing.T) {
+	admin := requirePool(t)
+	ctx := t.Context()
+	const (
+		schema       = "separate-role-test"
+		runtimeRole  = "atepg_runtime_test"
+		ddlRole      = "atepg_ddl_test"
+		runtimeLogin = "atepg_runtime_login_a"
+		ddlLogin     = "atepg_ddl_login_a"
+		password     = "test-password"
+	)
+	if _, err := admin.Exec(ctx, fmt.Sprintf(`
+		DROP SCHEMA IF EXISTS %s CASCADE;
+		DROP ROLE IF EXISTS %s;
+		DROP ROLE IF EXISTS %s;
+		DROP ROLE IF EXISTS %s;
+		DROP ROLE IF EXISTS %s;
+		CREATE ROLE %s NOLOGIN;
+		CREATE ROLE %s NOLOGIN;
+		CREATE ROLE %s LOGIN PASSWORD '%s';
+		CREATE ROLE %s LOGIN PASSWORD '%s';
+		GRANT %s TO %s;
+		GRANT %s TO %s;
+		GRANT CREATE ON DATABASE atepg TO %s`,
+		pgx.Identifier{schema}.Sanitize(),
+		pgx.Identifier{runtimeLogin}.Sanitize(),
+		pgx.Identifier{ddlLogin}.Sanitize(),
+		pgx.Identifier{runtimeRole}.Sanitize(), pgx.Identifier{ddlRole}.Sanitize(),
+		pgx.Identifier{runtimeRole}.Sanitize(), pgx.Identifier{ddlRole}.Sanitize(),
+		pgx.Identifier{runtimeLogin}.Sanitize(), password,
+		pgx.Identifier{ddlLogin}.Sanitize(), password,
+		pgx.Identifier{runtimeRole}.Sanitize(), pgx.Identifier{runtimeLogin}.Sanitize(),
+		pgx.Identifier{ddlRole}.Sanitize(), pgx.Identifier{ddlLogin}.Sanitize(),
+		pgx.Identifier{ddlRole}.Sanitize())); err != nil {
+		t.Fatalf("creating PostgreSQL test roles: %v", err)
+	}
+	if _, err := admin.Exec(ctx, fmt.Sprintf(`
+		CREATE SCHEMA %s AUTHORIZATION %s;
+		GRANT USAGE ON SCHEMA %s TO %s;
+		ALTER DEFAULT PRIVILEGES FOR ROLE %s IN SCHEMA %s
+			GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO %s`,
+		pgx.Identifier{schema}.Sanitize(), pgx.Identifier{ddlRole}.Sanitize(),
+		pgx.Identifier{schema}.Sanitize(), pgx.Identifier{runtimeRole}.Sanitize(),
+		pgx.Identifier{ddlRole}.Sanitize(), pgx.Identifier{schema}.Sanitize(), pgx.Identifier{runtimeRole}.Sanitize())); err != nil {
+		t.Fatalf("creating PostgreSQL test default privileges: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = admin.Exec(context.Background(), fmt.Sprintf(`ALTER DEFAULT PRIVILEGES FOR ROLE %s IN SCHEMA %s
+			REVOKE SELECT, INSERT, UPDATE, DELETE ON TABLES FROM %s`,
+			pgx.Identifier{ddlRole}.Sanitize(), pgx.Identifier{schema}.Sanitize(), pgx.Identifier{runtimeRole}.Sanitize()))
+		_, _ = admin.Exec(context.Background(), fmt.Sprintf(`
+			DROP SCHEMA IF EXISTS %s CASCADE;
+			REVOKE ALL ON DATABASE atepg FROM %s;
+			DROP ROLE IF EXISTS %s;
+			DROP ROLE IF EXISTS %s;
+			DROP ROLE IF EXISTS %s;
+			DROP ROLE IF EXISTS %s`, pgx.Identifier{schema}.Sanitize(),
+			pgx.Identifier{ddlRole}.Sanitize(),
+			pgx.Identifier{runtimeLogin}.Sanitize(),
+			pgx.Identifier{ddlLogin}.Sanitize(),
+			pgx.Identifier{runtimeRole}.Sanitize(), pgx.Identifier{ddlRole}.Sanitize()))
+	})
+
+	runtimeDSN := strings.Replace(containerDSN, "://atepg:atepg@", "://"+runtimeLogin+":"+password+"@", 1)
+	ddlDSN := strings.Replace(containerDSN, "://atepg:atepg@", "://"+ddlLogin+":"+password+"@", 1)
+	if runtimeDSN == containerDSN || ddlDSN == containerDSN {
+		t.Fatalf("unexpected test DSN format: %q", containerDSN)
+	}
+	p, err := Connect(ctx, ConnectConfig{
+		ReadWriteDSN:  runtimeDSN,
+		OwnerDSN:      ddlDSN,
+		ReadWriteRole: runtimeRole,
+		OwnerRole:     ddlRole,
+		Schema:        schema,
+		PoolMaxConns:  20,
+	})
+	if err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+	defer p.pool.Close()
+	defer p.Close()
+	if got := p.pool.Config().MaxConns; got != 20 {
+		t.Fatalf("read/write pool MaxConns = %d, want 20", got)
+	}
+	if got := p.ownerPool.Config().MaxConns; got != ownerPoolMaxConns {
+		t.Fatalf("owner pool MaxConns = %d, want %d", got, ownerPoolMaxConns)
+	}
+
+	if _, err := p.CreateAtespace(ctx, newTestAtespace("runtime-write")); err != nil {
+		t.Fatalf("read/write operation failed: %v", err)
+	}
+	if _, err := p.pool.Exec(ctx, `CREATE TABLE forbidden (id integer)`); err == nil {
+		t.Fatal("read/write role created a table")
+	}
+	var canUpdateLedger bool
+	if err := p.pool.QueryRow(ctx, `SELECT has_table_privilege(current_user, 'schema_migrations', 'UPDATE')`).Scan(&canUpdateLedger); err != nil || !canUpdateLedger {
+		t.Fatalf("read/write role lacks default table privileges on migration ledger: %v", err)
+	}
+	if err := p.createWorkerOutboxPartitions(ctx, time.Now().Add(24*time.Hour)); err != nil {
+		t.Fatalf("owner maintenance failed: %v", err)
+	}
+
+	var canUseOpenFGA bool
+	if err := p.pool.QueryRow(ctx, `
+		SELECT has_table_privilege(current_user, 'tuple', 'SELECT')
+			AND has_table_privilege(current_user, 'tuple', 'INSERT')
+			AND has_table_privilege(current_user, 'tuple', 'UPDATE')
+			AND has_table_privilege(current_user, 'tuple', 'DELETE')`).Scan(&canUseOpenFGA); err != nil || !canUseOpenFGA {
+		t.Fatalf("read/write role lacks OpenFGA table privileges: %v", err)
+	}
+	var owner string
+	if err := admin.QueryRow(ctx, `SELECT pg_get_userbyid(relowner) FROM pg_class WHERE oid = $1::regclass`,
+		pgx.Identifier{schema, "tuple"}.Sanitize()).Scan(&owner); err != nil {
+		t.Fatalf("querying OpenFGA table owner: %v", err)
+	}
+	if owner != ddlRole {
+		t.Errorf("OpenFGA table owner = %q, want stable owner role %q", owner, ddlRole)
 	}
 }

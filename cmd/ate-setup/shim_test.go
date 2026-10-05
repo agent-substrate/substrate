@@ -218,16 +218,13 @@ func TestShimTranslatesFlags(t *testing.T) {
 		args: []string{"--cluster-size=size10", "--deploy-ate-apiserver"},
 		want: []string{"--cluster-size=size10 deploy apiserver"},
 	}, {
-		name: "credential injection forwards provider flags",
-		args: []string{
-			"--deploy-atenet",
-			"--experimental-egress-credential-injection",
-			"--credential-provider-name", "ate-secret://custom",
-			"--credential-provider-address=cred.ate-system.svc:50051",
-		},
-		want: []string{
-			"--experimental-egress-credential-injection --credential-provider-name=ate-secret://custom --credential-provider-address=cred.ate-system.svc:50051 deploy atenet",
-		},
+		name: "--credential-provider is forwarded with a separate value",
+		args: []string{"--deploy-atenet", "--credential-provider", `{"name":"custom","address":"cred.ate-system.svc:50051"}`},
+		want: []string{`--credential-provider={"name":"custom","address":"cred.ate-system.svc:50051"} deploy atenet`},
+	}, {
+		name: "--credential-provider takes an attached value",
+		args: []string{`--credential-provider={"name":"k8s.io"}`, "--deploy-ate-system"},
+		want: []string{`--credential-provider={"name":"k8s.io"} deploy ate-system --setup-csi=none`},
 	}, {
 		name: "actions run in command line order",
 		args: []string{"--deploy-ate-apiserver", "--deploy-atelet", "--delete-atenet"},

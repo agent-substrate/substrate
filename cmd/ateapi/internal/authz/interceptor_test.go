@@ -16,13 +16,14 @@ package authz
 
 import (
 	"context"
+	"strings"
 	"testing"
 
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/principal"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 func setupTestAuthorizer(t *testing.T) *Authorizer {
@@ -36,7 +37,7 @@ func setupTestAuthorizer(t *testing.T) *Authorizer {
 	}
 	t.Cleanup(fgaServer.Close)
 
-	authorizer, policyManager, err := New(ctx, pool, fgaServer)
+	authorizer, policyManager, err := New(ctx, pool, fgaServer, nil)
 	if err != nil {
 		t.Fatalf("New failed: %v", err)
 	}
@@ -56,7 +57,7 @@ func TestUnaryServerInterceptor_QuickRejectionAndDispatch(t *testing.T) {
 		Kind: principal.KindJWT,
 	})
 
-	interceptor := UnaryServerInterceptor(authorizer)
+	interceptor := UnaryServerInterceptor(authorizer, true)
 
 	tests := []struct {
 		name        string
@@ -139,8 +140,8 @@ func TestUnaryServerInterceptor_QuickRejectionAndDispatch(t *testing.T) {
 				handlerCalled = true
 				return "ok", nil
 			})
-			if status.Code(err) != tc.wantCode {
-				t.Fatalf("status.Code(err) = %v, want %v (err: %v)", status.Code(err), tc.wantCode, err)
+			if apierror.Code(err) != tc.wantCode {
+				t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", apierror.Code(err), tc.wantCode, err)
 			}
 			if handlerCalled != tc.wantHandler {
 				t.Fatalf("handlerCalled = %v, want %v", handlerCalled, tc.wantHandler)
@@ -151,7 +152,7 @@ func TestUnaryServerInterceptor_QuickRejectionAndDispatch(t *testing.T) {
 
 func TestUnaryServerInterceptor_MalformedRequestRequiresPrincipalThenDelegatesValidation(t *testing.T) {
 	authorizer := setupTestAuthorizer(t)
-	interceptor := UnaryServerInterceptor(authorizer)
+	interceptor := UnaryServerInterceptor(authorizer, true)
 
 	// 1. Unauthenticated caller with empty atespace name -> Unauthenticated
 	_, err := interceptor(context.Background(), &ateapipb.GetAtespaceRequest{}, &grpc.UnaryServerInfo{
@@ -160,7 +161,7 @@ func TestUnaryServerInterceptor_MalformedRequestRequiresPrincipalThenDelegatesVa
 		t.Fatal("handler must not be invoked for unauthenticated request")
 		return nil, nil
 	})
-	if status.Code(err) != codes.Unauthenticated {
+	if apierror.Code(err) != codes.Unauthenticated {
 		t.Fatalf("expected Unauthenticated for missing principal, got %v", err)
 	}
 
@@ -174,12 +175,12 @@ func TestUnaryServerInterceptor_MalformedRequestRequiresPrincipalThenDelegatesVa
 		FullMethod: ateapipb.Control_GetAtespace_FullMethodName,
 	}, func(ctx context.Context, req any) (any, error) {
 		handlerCalled = true
-		return nil, status.Error(codes.InvalidArgument, "atespace.name is required")
+		return nil, apierror.InvalidArgument("atespace.name is required")
 	})
 	if !handlerCalled {
 		t.Fatal("expected handler to be invoked to return validation error")
 	}
-	if status.Code(err) != codes.InvalidArgument {
+	if apierror.Code(err) != codes.InvalidArgument {
 		t.Fatalf("expected InvalidArgument from handler, got %v", err)
 	}
 
@@ -190,19 +191,99 @@ func TestUnaryServerInterceptor_MalformedRequestRequiresPrincipalThenDelegatesVa
 		t.Fatal("handler must not be invoked when request type assertion fails")
 		return nil, nil
 	})
-	if status.Code(err) != codes.Internal {
+	if apierror.Code(err) != codes.Internal {
 		t.Fatalf("expected Internal for unexpected request type, got %v", err)
 	}
 
-	// 4. Nil authorizer in UnaryServerInterceptor -> fails closed with codes.Internal without calling handler
-	nilInterceptor := UnaryServerInterceptor(nil)
-	_, err = nilInterceptor(authCtx, &ateapipb.GetAtespaceRequest{Atespace: &ateapipb.ObjectRef{Name: "team1"}}, &grpc.UnaryServerInfo{
-		FullMethod: ateapipb.Control_GetAtespace_FullMethodName,
-	}, func(ctx context.Context, req any) (any, error) {
-		t.Fatal("handler must not be invoked when authorizer is nil")
-		return nil, nil
+}
+
+func TestUnaryServerInterceptor_EnforcementDisabled(t *testing.T) {
+	authorizer := setupTestAuthorizer(t)
+	interceptor := UnaryServerInterceptor(authorizer, false)
+	bobCtx := principal.InjectContext(context.Background(), principal.PrincipalInfo{
+		ID:   "bob@example.com",
+		Kind: principal.KindJWT,
 	})
-	if status.Code(err) != codes.Internal {
-		t.Fatalf("expected Internal when authorizer is nil, got %v", err)
+	aliceCtx := principal.InjectContext(context.Background(), principal.PrincipalInfo{
+		ID:   "alice@example.com",
+		Kind: principal.KindJWT,
+	})
+
+	tests := []struct {
+		name       string
+		ctx        context.Context
+		fullMethod string
+		req        any
+		wantCode   codes.Code
+	}{
+		{
+			name:       "regular RPC skips the check",
+			ctx:        bobCtx,
+			fullMethod: ateapipb.Control_CreateAtespace_FullMethodName,
+			req:        &ateapipb.CreateAtespaceRequest{Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "team1"}}},
+			wantCode:   codes.OK,
+		},
+		{
+			name:       "governance RPC is still denied",
+			ctx:        bobCtx,
+			fullMethod: ateapipb.Control_UpdateGlobalAccessPolicy_FullMethodName,
+			req:        &ateapipb.UpdateGlobalAccessPolicyRequest{},
+			wantCode:   codes.PermissionDenied,
+		},
+		{
+			name:       "governance RPC is still allowed for an owner",
+			ctx:        aliceCtx,
+			fullMethod: ateapipb.Control_UpdateGlobalAccessPolicy_FullMethodName,
+			req:        &ateapipb.UpdateGlobalAccessPolicyRequest{},
+			wantCode:   codes.OK,
+		},
+		{
+			name:       "governance RPC still requires a principal",
+			ctx:        context.Background(),
+			fullMethod: ateapipb.Control_GetAtespaceAccessPolicy_FullMethodName,
+			req:        &ateapipb.GetAtespaceAccessPolicyRequest{},
+			wantCode:   codes.Unauthenticated,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			handlerCalled := false
+			_, err := interceptor(tc.ctx, tc.req, &grpc.UnaryServerInfo{FullMethod: tc.fullMethod}, func(ctx context.Context, req any) (any, error) {
+				handlerCalled = true
+				return "ok", nil
+			})
+			if apierror.Code(err) != tc.wantCode {
+				t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", apierror.Code(err), tc.wantCode, err)
+			}
+			if wantHandler := tc.wantCode == codes.OK; handlerCalled != wantHandler {
+				t.Fatalf("handlerCalled = %v, want %v", handlerCalled, wantHandler)
+			}
+		})
+	}
+}
+
+// TestAccessPolicyRPCsAlwaysEnforced guards against an AccessPolicy RPC being
+// added without a governance rule, which would leave it unchecked while
+// enforcement is disabled.
+func TestAccessPolicyRPCsAlwaysEnforced(t *testing.T) {
+	desc := ateapipb.Control_ServiceDesc
+	found := 0
+	for _, m := range desc.Methods {
+		if !strings.Contains(m.MethodName, "AccessPolicy") {
+			continue
+		}
+		found++
+		fullMethod := "/" + desc.ServiceName + "/" + m.MethodName
+		rule, ok := defaultRPCPermissions[fullMethod]
+		if !ok {
+			t.Errorf("%s has no permission rule", fullMethod)
+			continue
+		}
+		if !rule.alwaysEnforce {
+			t.Errorf("%s is not marked alwaysEnforce", fullMethod)
+		}
+	}
+	if found == 0 {
+		t.Fatal("found no AccessPolicy RPCs in Control_ServiceDesc")
 	}
 }

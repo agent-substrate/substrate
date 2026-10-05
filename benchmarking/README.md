@@ -27,6 +27,9 @@ image, then deploys the Locust workers:
 Useful flags:
 
 * `--worker-count N` — number of `WorkerPool` replicas (default 1).
+* `--worker-memory SIZE` — memory request and limit for each `WorkerPool` pod
+  (default unset, the pod is unsized). Set it above half a node's allocatable
+  memory to get one worker per node.
 * `--skip-build` — reuse the existing `:latest` locust image (skip the
   `docker build && docker push` step).
 
@@ -45,7 +48,7 @@ convenience:
 ```
 
 The installer accepts `--benchmark-worker-count N` (default `1`).
-`--skip-build` is only available when invoking
+`--skip-build` and `--worker-memory` are only available when invoking
 `benchmarking/deploy_locust.sh` directly.
 
 ## Running Tests

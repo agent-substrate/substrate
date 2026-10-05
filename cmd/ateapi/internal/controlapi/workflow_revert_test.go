@@ -19,10 +19,10 @@ import (
 	"testing"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // TestEnsureMarkedReverting_StateMatrix pins which states a revert is accepted
@@ -148,7 +148,7 @@ func TestRevertActor_RejectsSuspended(t *testing.T) {
 		actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
 		seedWorkflowActor(t, ctx, st, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
 
-		if _, err := w.RevertActor(ctx, actorRef); status.Code(err) != codes.FailedPrecondition {
+		if _, err := w.RevertActor(ctx, actorRef); apierror.Code(err) != codes.FailedPrecondition {
 			t.Fatalf("RevertActor = %v, want FailedPrecondition", err)
 		}
 	})
@@ -165,7 +165,7 @@ func TestRevertActor_RejectsSuspended(t *testing.T) {
 		if _, err := w.RevertActor(ctx, actorRef); err != nil {
 			t.Fatalf("first RevertActor: %v", err)
 		}
-		if _, err := w.RevertActor(ctx, actorRef); status.Code(err) != codes.FailedPrecondition {
+		if _, err := w.RevertActor(ctx, actorRef); apierror.Code(err) != codes.FailedPrecondition {
 			t.Fatalf("second RevertActor = %v, want FailedPrecondition", err)
 		}
 	})

@@ -63,8 +63,8 @@ type postgresPlan struct {
 // configured either as an explicit DSN or as a Cloud SQL instance — the
 // latter possibly adopted from the cluster.
 func (e *Env) planPostgres(ctx context.Context) (postgresPlan, error) {
-	if e.Cfg.PostgresConnectionString != "" {
-		return postgresPlan{external: "ATE_API_POSTGRES_CONNECTION_STRING"}, nil
+	if e.Cfg.PostgresReadWriteConnectionString != "" {
+		return postgresPlan{external: "ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"}, nil
 	}
 	instance, err := e.resolveCloudSQLInstance(ctx)
 	if err != nil {

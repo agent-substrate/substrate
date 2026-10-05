@@ -15,9 +15,8 @@
 package authz
 
 import (
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // targetExtractor extracts the OpenFGA (relation, object) tuple to verify for a request.
@@ -30,7 +29,7 @@ type targetExtractor func(req any) (relation string, object string, err error)
 func globalRule[T any](relation string) targetExtractor {
 	return func(req any) (string, string, error) {
 		if _, ok := req.(T); !ok {
-			return "", "", status.Errorf(codes.Internal, "authz: unexpected request type %T", req)
+			return "", "", apierror.Internal("authz: unexpected request type %T", req)
 		}
 		return relation, GlobalRootObject, nil
 	}
@@ -40,7 +39,7 @@ func atespaceRule[T any](relation string, getRef func(T) *ateapipb.ObjectRef) ta
 	return func(req any) (string, string, error) {
 		r, ok := req.(T)
 		if !ok {
-			return "", "", status.Errorf(codes.Internal, "authz: unexpected request type %T", req)
+			return "", "", apierror.Internal("authz: unexpected request type %T", req)
 		}
 		name := getRef(r).GetName()
 		if name == "" {
@@ -50,11 +49,35 @@ func atespaceRule[T any](relation string, getRef func(T) *ateapipb.ObjectRef) ta
 	}
 }
 
+// rpcRule is the permission rule for one RPC.
+type rpcRule struct {
+	extract targetExtractor
+	// alwaysEnforce marks RPCs that are checked even when enforcement is
+	// disabled. AccessPolicy RPCs set it so that nobody can grant themselves
+	// access while enforcement is off and keep that grant once it is turned on.
+	alwaysEnforce bool
+}
+
+func rule(extract targetExtractor) rpcRule {
+	return rpcRule{extract: extract}
+}
+
+func governance(extract targetExtractor) rpcRule {
+	return rpcRule{extract: extract, alwaysEnforce: true}
+}
+
 // defaultRPCPermissions is the declarative registry mapping gRPC full method names
 // to their required permission rules.
-var defaultRPCPermissions = map[string]targetExtractor{
-	ateapipb.Control_CreateAtespace_FullMethodName: globalRule[*ateapipb.CreateAtespaceRequest](RelationCanCreateAtespace),
-	ateapipb.Control_ListAtespaces_FullMethodName:  globalRule[*ateapipb.ListAtespacesRequest](RelationCanListAtespaces),
-	ateapipb.Control_GetAtespace_FullMethodName:    atespaceRule(RelationCanGet, (*ateapipb.GetAtespaceRequest).GetAtespace),
-	ateapipb.Control_DeleteAtespace_FullMethodName: atespaceRule(RelationCanDelete, (*ateapipb.DeleteAtespaceRequest).GetAtespace),
+var defaultRPCPermissions = map[string]rpcRule{
+	ateapipb.Control_CreateAtespace_FullMethodName:             rule(globalRule[*ateapipb.CreateAtespaceRequest](RelationCanCreateAtespace)),
+	ateapipb.Control_ListAtespaces_FullMethodName:              rule(globalRule[*ateapipb.ListAtespacesRequest](RelationCanListAtespaces)),
+	ateapipb.Control_GetAtespace_FullMethodName:                rule(atespaceRule(RelationCanGet, (*ateapipb.GetAtespaceRequest).GetAtespace)),
+	ateapipb.Control_DeleteAtespace_FullMethodName:             rule(atespaceRule(RelationCanDelete, (*ateapipb.DeleteAtespaceRequest).GetAtespace)),
+	ateapipb.Control_GetGlobalAccessPolicy_FullMethodName:      governance(globalRule[*ateapipb.GetGlobalAccessPolicyRequest](RelationCanGetAccessPolicy)),
+	ateapipb.Control_CreateGlobalAccessPolicy_FullMethodName:   governance(globalRule[*ateapipb.CreateGlobalAccessPolicyRequest](RelationCanCreateAccessPolicy)),
+	ateapipb.Control_UpdateGlobalAccessPolicy_FullMethodName:   governance(globalRule[*ateapipb.UpdateGlobalAccessPolicyRequest](RelationCanUpdateAccessPolicy)),
+	ateapipb.Control_GetAtespaceAccessPolicy_FullMethodName:    governance(atespaceRule(RelationCanGetAccessPolicy, (*ateapipb.GetAtespaceAccessPolicyRequest).GetAtespace)),
+	ateapipb.Control_CreateAtespaceAccessPolicy_FullMethodName: governance(atespaceRule(RelationCanCreateAccessPolicy, (*ateapipb.CreateAtespaceAccessPolicyRequest).GetAtespace)),
+	ateapipb.Control_UpdateAtespaceAccessPolicy_FullMethodName: governance(atespaceRule(RelationCanUpdateAccessPolicy, (*ateapipb.UpdateAtespaceAccessPolicyRequest).GetAtespace)),
+	ateapipb.Control_DeleteAtespaceAccessPolicy_FullMethodName: governance(atespaceRule(RelationCanDeleteAccessPolicy, (*ateapipb.DeleteAtespaceAccessPolicyRequest).GetAtespace)),
 }

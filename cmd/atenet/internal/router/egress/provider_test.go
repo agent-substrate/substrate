@@ -33,3 +33,21 @@ func TestDialProviderRequiresTLSMaterial(t *testing.T) {
 	}
 	conn.Close()
 }
+
+func TestProviderName(t *testing.T) {
+	for _, tc := range []struct {
+		in, want string
+		wantErr  bool
+	}{
+		{in: "", want: ""},
+		{in: "k8s.io", want: "k8s.io"},
+		{in: "ate-secret://k8s.io", wantErr: true},
+		{in: "k8s.io/default", wantErr: true},
+		{in: "k8s.io?x=1", wantErr: true},
+	} {
+		got, err := ProviderName(tc.in)
+		if (err != nil) != tc.wantErr || got != tc.want {
+			t.Errorf("ProviderName(%q) = %q, %v; want %q, error %t", tc.in, got, err, tc.want, tc.wantErr)
+		}
+	}
+}

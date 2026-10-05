@@ -22,10 +22,9 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/apivalidation"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/defaults"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
@@ -35,7 +34,7 @@ import (
 // them and neither GetWorker nor ListWorkers grows with occupancy.
 func (s *RPCService) ListWorkerActorAssignments(ctx context.Context, req *ateapipb.ListWorkerActorAssignmentsRequest) (*ateapipb.ListWorkerActorAssignmentsResponse, error) {
 	if errs := apivalidation.ValidateListWorkerActorAssignmentsRequest(ctx, req); len(errs) > 0 {
-		return nil, resources.ToGRPCStatusError(errs)
+		return nil, resources.ToAPIError(errs)
 	}
 	name := req.GetWorker().GetName()
 
@@ -44,7 +43,7 @@ func (s *RPCService) ListWorkerActorAssignments(ctx context.Context, req *ateapi
 	// Worker hosting nothing.
 	if _, err := s.impl.GetWorker(ctx, name); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, status.Errorf(codes.NotFound, "Worker %s not found", name)
+			return nil, apierror.NotFound("Worker %s not found", name)
 		}
 		return nil, fmt.Errorf("while fetching worker %s: %w", name, err)
 	}
@@ -62,7 +61,7 @@ func (s *RPCService) ListWorkerActorAssignments(ctx context.Context, req *ateapi
 
 func (s *RPCService) ListWorkers(ctx context.Context, req *ateapipb.ListWorkersRequest) (*ateapipb.ListWorkersResponse, error) {
 	if errs := apivalidation.ValidateListWorkersRequest(ctx, req); len(errs) > 0 {
-		return nil, resources.ToGRPCStatusError(errs)
+		return nil, resources.ToAPIError(errs)
 	}
 
 	page, err := s.impl.ListWorkers(ctx, store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
@@ -81,13 +80,13 @@ func (s *ServiceImpl) ListWorkers(ctx context.Context, opts store.ListOptions) (
 
 func (s *RPCService) GetWorker(ctx context.Context, req *ateapipb.GetWorkerRequest) (*ateapipb.Worker, error) {
 	if errs := apivalidation.ValidateGetWorkerRequest(ctx, req); len(errs) > 0 {
-		return nil, resources.ToGRPCStatusError(errs)
+		return nil, resources.ToAPIError(errs)
 	}
 	name := req.GetWorker().GetName()
 
 	worker, err := s.impl.GetWorker(ctx, name)
 	if errors.Is(err, store.ErrNotFound) {
-		return nil, status.Errorf(codes.NotFound, "Worker %s not found", name)
+		return nil, apierror.NotFound("Worker %s not found", name)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("while getting worker: %w", err)
@@ -116,7 +115,7 @@ func (s *RPCService) CreateWorker(ctx context.Context, req *ateapipb.CreateWorke
 
 	// Validate the request, including the object within it.
 	if errs := apivalidation.ValidateCreateWorkerRequest(ctx, req); len(errs) > 0 {
-		return nil, resources.ToGRPCStatusError(errs)
+		return nil, resources.ToAPIError(errs)
 	}
 
 	// Handle the creation, including validation of the final stored object.
@@ -147,7 +146,7 @@ func (s *ServiceImpl) CreateWorker(ctx context.Context, inWorker *ateapipb.Worke
 	created, err := s.store.CreateWorker(ctx, outWorker)
 	if err != nil {
 		if errors.Is(err, store.ErrAlreadyExists) {
-			return nil, status.Errorf(codes.AlreadyExists, "Worker %s already exists", inWorker.GetMetadata().GetName())
+			return nil, apierror.AlreadyExists("Worker %s already exists", inWorker.GetMetadata().GetName())
 		}
 		return nil, fmt.Errorf("while creating worker: %w", err)
 	}
@@ -170,7 +169,7 @@ func (s *RPCService) UpdateWorker(ctx context.Context, req *ateapipb.UpdateWorke
 
 	// Validate the request.
 	if errs := apivalidation.ValidateUpdateWorkerRequest(ctx, req); len(errs) > 0 {
-		return nil, resources.ToGRPCStatusError(errs)
+		return nil, resources.ToAPIError(errs)
 	}
 
 	return s.mutateWorker(ctx, inWorker.GetMetadata().GetName(), store.PreconditionFrom(inWorker), func(toUpdate *ateapipb.Worker) error {
@@ -202,7 +201,7 @@ func (s *ServiceImpl) UpdateWorker(ctx context.Context, name string, preconditio
 		// what enforces the immutable fields, since only the stored worker
 		// gives declarative validation an old value to compare against.
 		if errs := apivalidation.ValidateWorkerUpdate(ctx, field.NewPath("worker"), newVal, oldVal, false); len(errs) > 0 {
-			return resources.ToGRPCStatusError(errs)
+			return resources.ToAPIError(errs)
 		}
 
 		// Do any further work on the resource.
@@ -241,7 +240,7 @@ func (s *ServiceImpl) FindWorkerHostingActor(ctx context.Context, actorUID strin
 
 func (s *RPCService) DeleteWorker(ctx context.Context, req *ateapipb.DeleteWorkerRequest) (*ateapipb.Worker, error) {
 	if errs := apivalidation.ValidateDeleteWorkerRequest(ctx, req); len(errs) > 0 {
-		return nil, resources.ToGRPCStatusError(errs)
+		return nil, resources.ToAPIError(errs)
 	}
 	// The delete releases the Actor bound to this Worker before removing the
 	// record, so it is a workflow rather than a single store call.
@@ -254,7 +253,7 @@ func (s *ServiceImpl) DeleteWorker(ctx context.Context, name string, preconditio
 
 func (s *RPCService) DrainWorker(ctx context.Context, req *ateapipb.DrainWorkerRequest) (*ateapipb.Worker, error) {
 	if errs := apivalidation.ValidateDrainWorkerRequest(ctx, req); len(errs) > 0 {
-		return nil, resources.ToGRPCStatusError(errs)
+		return nil, resources.ToAPIError(errs)
 	}
 	name := req.GetWorker().GetName()
 
@@ -264,7 +263,7 @@ func (s *RPCService) DrainWorker(ctx context.Context, req *ateapipb.DrainWorkerR
 	// retry, the same as any other guarded update.
 	observed, err := s.impl.GetWorker(ctx, name)
 	if errors.Is(err, store.ErrNotFound) {
-		return nil, status.Errorf(codes.NotFound, "Worker %s not found", name)
+		return nil, apierror.NotFound("Worker %s not found", name)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("while getting worker to drain: %w", err)
@@ -297,13 +296,13 @@ func (s *RPCService) mutateWorker(ctx context.Context, name string, precondition
 	}
 	switch {
 	case errors.Is(err, store.ErrNotFound):
-		return nil, status.Errorf(codes.NotFound, "Worker %s not found", name)
+		return nil, apierror.NotFound("Worker %s not found", name)
 	case errors.Is(err, store.ErrUIDConflict):
-		return nil, status.Errorf(codes.Aborted, "Worker %s is not the one the request describes", name)
+		return nil, apierror.Aborted("Worker %s is not the one the request describes", name)
 	case errors.Is(err, store.ErrVersionConflict):
-		return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
+		return nil, apierror.Aborted("concurrent update conflict, please retry")
 	case errors.Is(err, store.ErrPreconditionRequired):
-		return nil, status.Errorf(codes.InvalidArgument, "while updating worker %s: %v", name, err)
+		return nil, apierror.InvalidArgument("while updating worker %s: %v", name, err)
 	}
 	return nil, fmt.Errorf("while updating worker: %w", err)
 }
