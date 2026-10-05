@@ -61,6 +61,7 @@ import (
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/cache"
 )
 
 // maxRPCDeadline is the max deadline for all RPC methods exposed by this server.
@@ -117,6 +118,10 @@ func main() {
 	if err := serverboot.SetLogLevel(*logLevelFlag); err != nil {
 		serverboot.Fatal(ctx, "Invalid --log-level", err)
 	}
+	if err := serverboot.ValidateWatchNamespace(*watchNamespace); err != nil {
+		serverboot.Fatal(ctx, "Invalid --watch-namespace", err)
+	}
+	slog.InfoContext(ctx, "Resolved workload watch scope", "watch-namespace", *watchNamespace, "all-namespaces", *watchNamespace == "")
 	if err := loadFlagsFromEnv(); err != nil {
 		serverboot.Fatal(ctx, "Invalid PostgreSQL configuration", err)
 	}
@@ -244,9 +249,14 @@ func main() {
 	ateFactory.Start(stopCh)
 	scInformerFactory.Start(stopCh)
 
-	ateletPodInformerFactory.WaitForCacheSync(stopCh)
-	ateFactory.WaitForCacheSync(stopCh)
-	scInformerFactory.WaitForCacheSync(stopCh)
+	if err := waitForAPICaches(shutdownCtx, cacheSyncTimeout, *watchNamespace, ateFactory.Api().V1alpha1().WorkerPools().Informer().HasSynced, map[string]cache.InformerSynced{
+		"atelet Pods":      ateletPodInformer.HasSynced,
+		"SandboxConfigs":   ateFactory.Api().V1alpha1().SandboxConfigs().Informer().HasSynced,
+		"CSIDriverConfigs": ateFactory.Api().V1alpha1().CSIDriverConfigs().Informer().HasSynced,
+		"StorageClasses":   scInformerFactory.Storage().V1().StorageClasses().Informer().HasSynced,
+	}); err != nil {
+		serverboot.Fatal(ctx, "Failed to sync required Kubernetes caches", err)
+	}
 
 	if err := controlapi.RegisterWorkerCount(otel.Meter("ateapi"), workerCache.Workers, workerPoolLister.List); err != nil {
 		serverboot.Fatal(ctx, "Failed to register worker-count metric", err)

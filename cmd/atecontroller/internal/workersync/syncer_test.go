@@ -15,11 +15,14 @@
 package workersync
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -155,12 +158,18 @@ func setupReconcileTest(t *testing.T, api *fakeControl, initPools ...*atev1alpha
 func TestStartupScanRespectsNamespace(t *testing.T) {
 	for _, namespace := range []string{"agent-workloads", ""} {
 		t.Run("namespace="+namespace, func(t *testing.T) {
+			var logs bytes.Buffer
+			oldLogger := slog.Default()
+			slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+			t.Cleanup(func() { slog.SetDefault(oldLogger) })
 			api := newFakeControl()
 			// Put the out-of-scope worker on the first page, so skipping it
 			// must still advance to the in-scope worker on the next page.
 			api.listPageSize = 1
 			api.put(registeredWorker("other", "pool", "live", testPodUID, "10.0.0.1"))
 			api.put(registeredWorker("agent-workloads", "pool", "deleted", otherPodUID, "10.0.0.2"))
+			const thirdPodUID = "33333333-3333-3333-3333-333333333333"
+			api.put(registeredWorker("other", "pool", "also-live", thirdPodUID, "10.0.0.3"))
 			kc := fake.NewClientset()
 			_, pods := WorkerPodInformer(kc, namespace)
 			pools, _ := newWorkerPoolInformer(t)
@@ -176,12 +185,38 @@ func TestStartupScanRespectsNamespace(t *testing.T) {
 			}
 			var want []string
 			if namespace != "" {
-				want = []string{testPodUID}
+				want = []string{testPodUID, thirdPodUID}
+				for _, fragment := range []string{`"level":"WARN"`, `"count":2`, `"watch-namespace":"agent-workloads"`} {
+					if !strings.Contains(logs.String(), fragment) {
+						t.Errorf("skipped-worker warning lacks %q: %s", fragment, logs.String())
+					}
+				}
+				if count := strings.Count(logs.String(), "skipped registered workers"); count != 1 {
+					t.Errorf("got %d skipped-worker warnings across pages, want one", count)
+				}
+			} else if strings.Contains(logs.String(), "skipped registered workers") {
+				t.Errorf("unexpected skipped-worker warning for all namespaces: %s", logs.String())
 			}
 			if got := api.names(); !slices.Equal(got, want) {
 				t.Fatalf("workers after startup scan = %v, want %v", got, want)
 			}
 		})
+	}
+}
+
+func TestReconcileIgnoresWorkerOutsideNamespace(t *testing.T) {
+	api := newFakeControl()
+	api.put(registeredWorker("other", "pool", "live", testPodUID, "10.0.0.1"))
+	s, _, _ := setupReconcileTest(t, api)
+	defer s.queue.ShutDown()
+	s.watchNamespace = "agent-workloads"
+	// An unexpected queue source must not turn absence from our scoped Pod
+	// cache into deletion of a Worker that belongs to another namespace.
+	if err := s.reconcile(t.Context(), workerKey{namespace: "other", name: "live", uid: testPodUID}); err != nil {
+		t.Fatal(err)
+	}
+	if got := api.names(); !slices.Equal(got, []string{testPodUID}) {
+		t.Fatalf("out-of-scope Worker was deregistered: %v", got)
 	}
 }
 

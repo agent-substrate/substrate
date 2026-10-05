@@ -62,6 +62,11 @@ func Start() (*rest.Config, func()) {
 		CRDDirectoryPaths:     []string{filepath.Join(root, "manifests", "ate-install", "generated")},
 		BinaryAssetsDirectory: binDir,
 	}
+	// Match the ClusterTrustBundle API enabled in the kind deployment. The
+	// pinned Kubernetes 1.36 server serves this resource through v1beta1.
+	env.ControlPlane.GetAPIServer().Configure().
+		Set("feature-gates", "ClusterTrustBundle=true").
+		Set("runtime-config", "certificates.k8s.io/v1beta1/clustertrustbundles=true")
 	cfg, err := env.Start()
 	if err != nil {
 		fatal(fmt.Errorf("envtest start: %w", err))

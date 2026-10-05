@@ -24,6 +24,7 @@ import (
 	"github.com/agent-substrate/substrate/pkg/client/clientset/versioned"
 	"github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
 	appsv1 "k8s.io/api/apps/v1"
+	certsv1beta1 "k8s.io/api/certificates/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -85,7 +86,10 @@ func TestNamespaceScopedCachesWithRBAC(t *testing.T) {
 	}
 	create(&rbacv1.ClusterRole{
 		ObjectMeta: metav1.ObjectMeta{Name: username},
-		Rules:      []rbacv1.PolicyRule{{APIGroups: []string{"ate.dev"}, Resources: []string{"sandboxconfigs", "csidriverconfigs"}, Verbs: []string{"get", "list", "watch"}}},
+		Rules: []rbacv1.PolicyRule{
+			{APIGroups: []string{"ate.dev"}, Resources: []string{"sandboxconfigs", "csidriverconfigs"}, Verbs: []string{"get", "list", "watch"}},
+			{APIGroups: []string{"certificates.k8s.io"}, Resources: []string{"clustertrustbundles"}, Verbs: []string{"get", "list", "watch"}},
+		},
 	})
 	create(&rbacv1.ClusterRoleBinding{
 		ObjectMeta: metav1.ObjectMeta{Name: username},
@@ -93,6 +97,12 @@ func TestNamespaceScopedCachesWithRBAC(t *testing.T) {
 		RoleRef:    rbacv1.RoleRef{Kind: "ClusterRole", Name: username, APIGroup: rbacv1.GroupName},
 	})
 	create(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: pool.Name, Namespace: systemNamespace}})
+	_, roots := caPoolSecret(t, "scoped-root")
+	bundle := &certsv1beta1.ClusterTrustBundle{
+		ObjectMeta: metav1.ObjectMeta{Name: username},
+		Spec:       certsv1beta1.ClusterTrustBundleSpec{TrustBundle: rootPEM(t, roots)},
+	}
+	create(bundle)
 	for _, namespace := range []string{workloadNamespace, otherNamespace} {
 		create(&corev1.Pod{
 			ObjectMeta: metav1.ObjectMeta{Name: "worker", Namespace: namespace, Labels: map[string]string{"ate.dev/worker-pool": "pool"}},
@@ -179,7 +189,7 @@ func TestNamespaceScopedCachesWithRBAC(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, obj := range []client.Object{&corev1.Pod{}, &atev1alpha1.WorkerPool{}, &appsv1.Deployment{}, &networkingv1.NetworkPolicy{}, &corev1.Secret{}, &atev1alpha1.SandboxConfig{}} {
+			for _, obj := range []client.Object{&corev1.Pod{}, &atev1alpha1.WorkerPool{}, &appsv1.Deployment{}, &networkingv1.NetworkPolicy{}, &corev1.Secret{}, &certsv1beta1.ClusterTrustBundle{}} {
 				if _, err := c.GetInformer(ctx, obj, cache.BlockUntilSynced(false)); err != nil {
 					t.Fatal(err)
 				}
@@ -199,6 +209,13 @@ func TestNamespaceScopedCachesWithRBAC(t *testing.T) {
 			var secret corev1.Secret
 			if err := c.Get(ctx, pool, &secret); err != nil {
 				t.Fatalf("system CA pool: %v", err)
+			}
+			var cachedBundle certsv1beta1.ClusterTrustBundle
+			if err := c.Get(ctx, types.NamespacedName{Name: bundle.Name}, &cachedBundle); err != nil {
+				t.Fatalf("cluster trust bundle: %v", err)
+			}
+			if cachedBundle.Spec.TrustBundle != bundle.Spec.TrustBundle {
+				t.Fatal("cluster trust bundle cache did not contain the expected certificate")
 			}
 			var pods corev1.PodList
 			if err := c.List(ctx, &pods, client.MatchingLabels{"ate.dev/worker-pool": "pool"}); err != nil {

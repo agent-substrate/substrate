@@ -252,6 +252,9 @@ func (s *WorkerPoolSyncer) processNextWorkItem(ctx context.Context) bool {
 // reconcile converges the registry record for key with the current pod state in
 // the informer cache. Returning an error requeues the key with backoff.
 func (s *WorkerPoolSyncer) reconcile(ctx context.Context, key workerKey) error {
+	if s.watchNamespace != "" && key.namespace != s.watchNamespace {
+		return nil
+	}
 	obj, exists, err := s.workerInformer.GetIndexer().GetByKey(key.namespace + "/" + key.name)
 	if err != nil {
 		return err
@@ -534,6 +537,12 @@ const (
 // enqueued as they are read, so the whole worker set is never held in memory at
 // once and a late failure does not re-scan the pages already enqueued.
 func (s *WorkerPoolSyncer) enqueueRegisteredWorkers(ctx context.Context) {
+	var skipped int
+	defer func() {
+		if skipped > 0 {
+			slog.WarnContext(ctx, "Syncer: skipped registered workers outside the watched namespace; drain these workers before narrowing the watch scope", "count", skipped, "watch-namespace", s.watchNamespace)
+		}
+	}()
 	var pageToken string
 	for {
 		page, err := s.listWorkersPageWithRetry(ctx, pageToken)
@@ -547,6 +556,7 @@ func (s *WorkerPoolSyncer) enqueueRegisteredWorkers(ctx context.Context) {
 		for _, w := range page.GetWorkers() {
 			// Workers outside our Pod cache are not evidence of deleted Pods.
 			if s.watchNamespace != "" && w.GetWorkerNamespace() != s.watchNamespace {
+				skipped++
 				continue
 			}
 			// The key is a pod identity, so it is rebuilt from the recorded pod

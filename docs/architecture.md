@@ -165,8 +165,14 @@ both binaries, for example:
 This scopes the controller's WorkerPool, Deployment, NetworkPolicy, and worker
 Pod caches, including its separate worker syncer. It also scopes the API
 server's WorkerPool informer. An empty value watches all namespaces.
+Both binaries reject invalid namespace names at startup and log the effective
+scope. The API waits up to one minute for its required Kubernetes caches and
+reports any that fail to sync. Its WorkerPool informer only seeds worker-count
+metrics; it syncs in the background and warns after one minute if still unsynced.
 The worker syncer's startup scan leaves registry entries from other namespaces
 alone, because a Pod absent from a scoped cache is not necessarily deleted.
+It logs a single warning with the skipped count and watched namespace when
+such entries exist.
 
 The system namespace remains the Pod's `POD_NAMESPACE`, supplied by the
 Kubernetes downward API. The API server still watches atelet Pods there, and
