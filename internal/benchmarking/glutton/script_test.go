@@ -262,6 +262,23 @@ func TestRunScriptStopsWhenTheContextEnds(t *testing.T) {
 	}
 }
 
+// Requests that do not watch the context, such as RAM and disk writes, run
+// to completion; the block still stops at the next step rather than cycling
+// until its budget, so a looped block of them cannot outlive its caller.
+func TestRunScriptStopsBetweenStepsWhenTheContextEnds(t *testing.T) {
+	svc := newTestService(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := svc.RunScript(ctx, script(loop(10000, op(writeRAM("churn", "4Ki")), op(writeDisk("churn", 16)), op(burn(1)))))
+	if status.Code(err) != codes.DeadlineExceeded {
+		t.Fatalf("error = %v, want DeadlineExceeded", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("took %v to notice the context ended", elapsed)
+	}
+}
+
 // The HTTP route carries the same request and maps a request's status code
 // the way every other route does.
 func TestRunScriptHTTPRoute(t *testing.T) {
