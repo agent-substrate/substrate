@@ -124,10 +124,79 @@ Rendered + generated artifacts land under `bin/` at the repo root
 - `bin/aws-env.sh` — generated secrets + reusable env for subsequent runs
   and for sourcing into shells that invoke `hack/install-ate.sh`
 
-## After the infrastructure is up
+## Next steps
 
-See `AWS_INSTALL.md` at the repo root for the full install walkthrough —
-what the `aws` kustomize overlay (committed) does to adapt the base
-manifests to EKS, what env the installer needs, and the known gotchas (ECR
-auth for the atelet IRSA role, llama.cpp needing `--no-mmap` so the model
-survives gVisor memory snapshots, and so on).
+Once `setup-aws.sh` finishes, source the printed env block and install the
+control plane:
+
+```bash
+source bin/aws-env.sh
+# ...plus the extra install-only env the summary prints (KUBECTL_CONTEXT,
+# ATE_INSTALL_AWS, KO_DOCKER_REPO, EXPECTED_JWT_ISSUER, IRSA role ARNs,
+# ATE_API_POSTGRES_*_CONNECTION_STRING)
+./hack/install-ate.sh --deploy-ate-system
+```
+
+The installer selects the `aws` kustomize overlay (via `ATE_INSTALL_AWS=true`),
+which patches `ate-api-server` and `atelet` for S3 + IRSA + the EKS kubelet
+image-credential-provider hostPath layout.
+
+## Limitations and known gotchas
+
+Carry-over AWS limitations that aren't fixed by this script and need
+operator attention:
+
+- **Keep `PROJECT_ID` unset.** When set, `cmd/ate-setup/internal/config/credentials.go`
+  shells out to `gcloud container clusters get-credentials`, which fails on
+  AWS. Use `KUBECTL_CONTEXT` or `--context` to select the EKS cluster. A
+  future code change could add an `aws eks update-kubeconfig` branch keyed
+  on `AWS_REGION` + `CLUSTER_NAME`.
+- **Don't set `ATE_API_POSTGRES_CLOUDSQL_INSTANCE`.** The Cloud SQL branch in
+  `cmd/ate-setup/internal/steps/cloudsql.go` hardcodes the GKE Workload
+  Identity annotation `iam.gke.io/gcp-service-account`. On AWS, pass the
+  Postgres DSN directly via `ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING`
+  and `ATE_API_POSTGRES_OWNER_CONNECTION_STRING` (both exported by the
+  `summary` phase above).
+- **gVisor assets.** `manifests/ate-install/sandboxconfig-gvisor.yaml` carries
+  `gs://gvisor/releases/nightly/<date>/<arch>/gvisor.tar.zstd` URLs. atelet
+  on EKS can't reach `gs://`. Mirror the files to S3 (any `s3://` URL works
+  — atelet handles the scheme):
+  ```bash
+  for arch in x86_64 aarch64; do
+    curl -L https://storage.googleapis.com/gvisor/releases/nightly/<date>/$arch/gvisor.tar.zstd \
+      | aws s3 cp - s3://$BUCKET_NAME/gvisor/releases/nightly/<date>/$arch/gvisor.tar.zstd
+  done
+  kubectl patch sandboxconfig gvisor-default --type=json -p '[
+    {"op":"replace","path":"/spec/assets/amd64/gvisor/url","value":"s3://..."},
+    {"op":"replace","path":"/spec/assets/arm64/gvisor/url","value":"s3://..."}]'
+  ```
+  Baking this into an aws-specific `sandboxconfig-gvisor.yaml` overlay is a
+  reasonable follow-up; the URL sits deep inside a CRD spec string, so a
+  stable overlay would need env substitution.
+- **microVM assets.** `manifests/microvm/sandboxconfig-microvm.yaml.tmpl`
+  has four more `gs://` URLs. If you need microVM workers, mirror those to
+  S3 the same way, add a bare-metal worker node group (`workers-microvm`
+  example is commented in `cluster.yaml.tmpl`), and use `*.metal` instance
+  types for `/dev/kvm`.
+- **gVisor memory snapshot interactions.** For actor images that `mmap(2)`
+  large data (`llama.cpp` is the canonical example), pass `--no-mmap` or
+  equivalent so weights live in process anon pages. Default-mmap workloads
+  come back cold on resume because file-backed pages aren't captured in the
+  gVisor memory image. Also, actors that run their own HTTP server need
+  proper `Content-Length` + a threading-capable server — otherwise
+  agentgateway buffers responses waiting for connection close and resume
+  requests appear to hang.
+
+Operational responsibilities on each new node (same as on GKE):
+
+- **Node labels.** `atelet` only lands on nodes carrying
+  `ate.dev/substrate-version=<version>`. The installer stamps this on every
+  existing node at install time, but scale-out nodes need to be born with
+  it. Set the label in the managed node group config (or a MachineDeployment,
+  if you move to Karpenter later).
+- **No cluster autoscaler.** Not installed by setup-aws. Add Karpenter or
+  cluster-autoscaler separately when you want scale-out.
+- **Node auto-upgrade.** EKS managed node groups auto-upgrade AMIs on their
+  own schedule — pin them with `releaseVersion` in the node group config if
+  you want control, same as the GKE guidance in
+  `tools/setup-gcp/README.md:99-125`.
