@@ -64,9 +64,9 @@ handles the two gotchas:
 
 - **VPC** across 3 AZs, public + private subnets, one NAT per AZ, subnet tags
   for the AWS Load Balancer Controller.
-- **EKS cluster** at `K8S_VERSION` (default `1.33` — must serve
-  `certificates.k8s.io/v1beta1`; see `AWS_INSTALL.md` §3) with the OIDC
-  provider enabled.
+- **EKS cluster** at `K8S_VERSION` (default `1.37` — must serve
+  `certificates.k8s.io/v1 PodCertificateRequest`; 1.33 doesn't, 1.37 does)
+  with the OIDC provider enabled.
 - **Two managed node groups** (`control-plane`, `workers`), both labeled
   `ate.dev/role=*`, both pre-creating `/var/lib/ate` on the node. See
   `cluster.yaml.tmpl` for a commented example of a bare-metal `workers-microvm`
@@ -75,7 +75,10 @@ handles the two gotchas:
   `aws-ebs-csi-driver`, `eks-pod-identity-agent`.
 - **IRSA roles** for `ate-system/atelet` and `ate-system/ate-api-server` with
   S3 R/W on the snapshot bucket. eksctl annotates the KSAs with
-  `eks.amazonaws.com/role-arn=...` at install time.
+  `eks.amazonaws.com/role-arn=...` at install time. The atelet role also
+  gets the `AmazonEC2ContainerRegistryReadOnly` managed policy — the
+  kubelet image-credential-provider runs as atelet's subprocess, so actor
+  image pulls use atelet's IRSA role rather than the node role.
 - **gp3 StorageClass** marked default (replaces gp2); the bundled Postgres
   StatefulSet requests a 500Gi PVC through it.
 - **S3 bucket** with BlockPublicAccess (all four), SSE-S3 default encryption,

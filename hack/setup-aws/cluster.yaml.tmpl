@@ -17,9 +17,11 @@ metadata:
   tags:
     managed-by: substrate-setup-aws
 
-# EKS ≥ 1.33 is required so certificates.k8s.io/v1beta1 (PodCertificateRequest,
-# ClusterTrustBundle) is served. Beta APIs are not toggleable post-create on EKS;
-# the installer will hang waiting for ClusterTrustBundles if these are missing.
+# EKS ≥ 1.37 is required so certificates.k8s.io/v1 PodCertificateRequest and
+# ClusterTrustBundle are served. On 1.33 the APIs are only alpha and EKS
+# doesn't let you enable the feature gate; podcertificate-controller then
+# CrashLoops with "neither v1 nor v1beta1 PodCertificateRequest is served"
+# and the install hangs waiting for the Deployment to come ready.
 
 iam:
   withOIDC: true
@@ -29,6 +31,13 @@ iam:
         namespace: ate-system
       roleName: ${CLUSTER_NAME}-atelet
       roleOnly: false
+      # ECR read is needed because atelet pulls actor images from ECR using
+      # the kubelet image-credential-provider, which runs as a subprocess of
+      # atelet and therefore uses its IRSA role (not the node role).
+      # Without this, actor sandbox creation fails with 401 Unauthorized on
+      # image pull and the golden snapshot never finishes.
+      attachPolicyARNs:
+        - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
       attachPolicy:
         Version: "2012-10-17"
         Statement:

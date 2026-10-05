@@ -36,7 +36,12 @@ resources:
   - ../ate-controller.yaml
   - ./atelet
   - ../atenet-router.yaml
-  - ../atenet-router-monitoring.yaml
+  # atenet-router-monitoring.yaml is deliberately omitted: it is a GKE
+  # Managed Prometheus `monitoring.googleapis.com/v1 PodMonitoring` CR to
+  # scrape the Envoy admin /stats/prometheus endpoint. The CRD doesn't exist
+  # on EKS, and applying it fails with "no matches for kind PodMonitoring".
+  # An AWS equivalent would be an ADOT ScrapeConfig or a Prometheus Operator
+  # PodMonitor CR; add one here when the ADOT collector is in place.
   - ../ate-otel-config.yaml
 
 # ate-api-server needs its ServiceAccount annotated for IRSA so the AWS SDK

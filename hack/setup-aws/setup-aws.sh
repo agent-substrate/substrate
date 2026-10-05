@@ -50,7 +50,7 @@ Required for the 'rds' phase:
 
 Env with defaults:
   CLUSTER_NAME                 (default: substrate-poc)
-  K8S_VERSION                  (default: 1.33 — see AWS_INSTALL.md §3)
+  K8S_VERSION                  (default: 1.37 — serves PodCertificateRequest v1; 1.33 does not)
   ECR_REPO                     (default: substrate)
   RDS_INSTANCE_ID              (default: substrate-poc)
   RDS_INSTANCE_CLASS           (default: db.t4g.medium)
@@ -80,7 +80,7 @@ EOF
 
 : "${AWS_REGION:?AWS_REGION must be set}"
 CLUSTER_NAME="${CLUSTER_NAME:-substrate-poc}"
-K8S_VERSION="${K8S_VERSION:-1.33}"
+K8S_VERSION="${K8S_VERSION:-1.37}"
 BUCKET_NAME="${BUCKET_NAME:-}"
 ECR_REPO="${ECR_REPO:-substrate}"
 
