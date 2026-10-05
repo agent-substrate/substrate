@@ -43,6 +43,8 @@ type resumeSnapshotSource struct {
 	// snapshot, which takes precedence at restore).
 	SnapshotURI resources.SnapshotURI
 	Scope       ateapipb.SnapshotContentScope
+	// SnapshotFiles are the files recorded for SnapshotURI.
+	SnapshotFiles []string
 	// TemplateReplaced is true when the external snapshot's recorded template
 	// UID differs from the actor's current template.
 	TemplateReplaced bool
@@ -179,6 +181,7 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 			return nil, nil, src, apierror.DataLoss("Actor %s external snapshot: %v", actorRef, err)
 		}
 		src.Scope = actor.GetStatus().GetExternalSnapshot().GetContentScope()
+		src.SnapshotFiles = actor.GetStatus().GetExternalSnapshot().GetSnapshotFiles()
 		capturedUnder := actor.GetStatus().GetExternalSnapshot().GetActorTemplateUid()
 		src.TemplateReplaced = capturedUnder != "" && capturedUnder != actorTemplate.GetMetadata().GetUid()
 	}
@@ -657,6 +660,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		req.Config = &ateletpb.RestoreRequest_LocalConfig{
 			LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: local.GetSnapshotName()},
 		}
+		req.SnapshotFiles = local.GetSnapshotFiles()
 		req.Scope = actorSnapshotContentScopeToAtelet(actorTemplate.GetSnapshotConfig().GetOnPause())
 		tele.WireSnapshotScope = ateattr.SnapshotScopeValue(req.Scope)
 
@@ -685,6 +689,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 					SnapshotUri: src.SnapshotURI.String(),
 				},
 			},
+			SnapshotFiles: src.SnapshotFiles,
 			Scope:         scope,
 			SandboxAssets: sandboxAssets,
 			ActorUid:      actor.GetMetadata().Uid,

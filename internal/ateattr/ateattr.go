@@ -349,7 +349,6 @@ func SnapshotScopeValue(scope ateletpb.SnapshotScope) string {
 // not a partition of Total: summing across them is meaningless.
 const (
 	SnapshotPhaseVolumeMount     = "volume_mount"
-	SnapshotPhaseManifestFetch   = "manifest_fetch"
 	SnapshotPhaseSandboxAssets   = "sandbox_assets"
 	SnapshotPhaseDownload        = "download"
 	SnapshotPhaseOCIUnpack       = "oci_unpack"
@@ -364,10 +363,10 @@ const (
 // SandboxClassUnknown is the NormalizeSandboxClass fallback.
 const SandboxClassUnknown = "unknown"
 
-// NormalizeSandboxClass bounds the label: atelet reads the class from a
-// snapshot manifest in object storage that nothing validates on the way in.
-// Empty reports as unknown rather than the gvisor default, so a manifest
-// problem stays visible.
+// NormalizeSandboxClass bounds the label: the class comes from requests and
+// on-node records that nothing ties to a fixed set of values. Empty reports
+// as unknown rather than the gvisor default, so a missing class stays
+// visible.
 func NormalizeSandboxClass(class string) string {
 	switch atev1alpha1.SandboxClass(class) {
 	case atev1alpha1.SandboxClassGvisor, atev1alpha1.SandboxClassMicroVM:

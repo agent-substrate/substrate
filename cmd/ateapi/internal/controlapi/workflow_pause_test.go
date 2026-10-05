@@ -61,7 +61,7 @@ func TestEnsurePausedFinalized_WorkerGone(t *testing.T) {
 	// Intentionally NOT creating the worker in store, simulates worker already gone.
 
 	w := &ActorWorkflow{store: st}
-	finalized, err := w.ensurePausedFinalized(ctx, actorRef, &ateapipb.ActorTemplate{})
+	finalized, err := w.ensurePausedFinalized(ctx, actorRef, &ateapipb.ActorTemplate{}, nil)
 	if err != nil {
 		t.Fatalf("ensurePausedFinalized: %v", err)
 	}
@@ -156,7 +156,7 @@ func TestEnsurePausedFinalized_RecordsContentScope(t *testing.T) {
 			tmpl := &ateapipb.ActorTemplate{
 				SnapshotConfig: &ateapipb.SnapshotConfig{OnPause: tc.onPause},
 			}
-			got, err := w.ensurePausedFinalized(ctx, actorRef, tmpl)
+			got, err := w.ensurePausedFinalized(ctx, actorRef, tmpl, nil)
 			if err != nil {
 				t.Fatalf("ensurePausedFinalized: %v", err)
 			}
@@ -301,7 +301,7 @@ func TestEnsureAteletPaused_DialFailureLeavesActorRetryable(t *testing.T) {
 			created := storetest.MustCreateActor(t, ctx, persistence, actor)
 
 			w := &ActorWorkflow{store: persistence, dialer: newDanglingDialer()}
-			if _, err := w.ensureAteletPaused(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, created, &ateapipb.ActorTemplate{}); err == nil {
+			if _, _, err := w.ensureAteletPaused(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, created, &ateapipb.ActorTemplate{}); err == nil {
 				t.Fatal("ensureAteletPaused: want error when atelet is unreachable, got nil")
 			}
 

@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -1165,8 +1166,8 @@ func newWireCaptureWorkflow(t *testing.T, persistence store.Interface) (*ActorWo
 // TestResumeActor_AteletWireRequest is the characteristic test for the
 // loadActorForResume + ensureAteletRestored seam: for every combination of
 // boot-source inputs it pins the exact request atelet receives — which RPC,
-// req.Scope, and the snapshot the config names — and that a source-resolution
-// error never produces an atelet RPC.
+// req.Scope, the snapshot the config names, and its recorded files — and
+// that a source-resolution error never produces an atelet RPC.
 //
 // The rows are ordered strictly by input columns (local → external → tmplUID →
 // golden) so a missing permutation is visible by scanning.
@@ -1180,6 +1181,12 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 	fullScope := ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL
 	dataScope := ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
 	unspecScope := ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED
+
+	// Every seeded snapshot records its own files, so a row also pins which
+	// list the restore carries.
+	localFiles := []string{"local.img"}
+	externalFiles := []string{"external.img", "durable-dir.tar"}
+	goldenFiles := []string{"golden.img"}
 
 	// actorSeed is the actor status a row persists before resuming.
 	type actorSeed struct {
@@ -1474,11 +1481,13 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 				t.Fatalf("create template: %v", err)
 			}
 			if tt.tmpl.golden != nil {
+				golden := proto.CloneOf(tt.tmpl.golden)
+				golden.SnapshotFiles = goldenFiles
 				if _, err := persistence.CreateTag(ctx, &ateapipb.Tag{
 					Metadata:    &ateapipb.ResourceMetadata{Atespace: "ns", Name: "golden"},
 					SourceActor: &ateapipb.ObjectRef{Atespace: "ns", Name: "golden"},
 					Scope:       ateapipb.TagScope_TAG_SCOPE_PUBLISHED,
-					Status:      &ateapipb.TagStatus{ActorTemplateUid: createdTmpl.GetMetadata().GetUid(), Snapshot: tt.tmpl.golden},
+					Status:      &ateapipb.TagStatus{ActorTemplateUid: createdTmpl.GetMetadata().GetUid(), Snapshot: golden},
 				}); err != nil {
 					t.Fatalf("create golden tag: %v", err)
 				}
@@ -1496,7 +1505,11 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
 			seedWorkflowActor(t, ctx, persistence, actorRef, "ns", "tmpl1", actorState, func(a *ateapipb.Actor) {
 				a.Status.WorkerAssignment = wireTestAssignment()
-				a.Status.LocalSnapshot = tt.actor.localSnapshot
+				if tt.actor.localSnapshot != nil {
+					local := proto.CloneOf(tt.actor.localSnapshot)
+					local.SnapshotFiles = localFiles
+					a.Status.LocalSnapshot = local
+				}
 				uid := tt.actor.tmplUID
 				if uid == "current" {
 					uid = createdTmpl.GetMetadata().GetUid()
@@ -1506,6 +1519,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 					if ext.ActorTemplateUid == "" {
 						ext.ActorTemplateUid = uid
 					}
+					ext.SnapshotFiles = externalFiles
 					a.Status.ExternalSnapshot = ext
 				}
 			})
@@ -1552,6 +1566,14 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			}
 			if got := restore.GetScope(); got != tt.want.scope {
 				t.Errorf("restore scope = %v, want %v", got, tt.want.scope)
+			}
+			// The files follow the snapshot the config names.
+			wantFiles := externalFiles
+			if tt.want.checkpointType == ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL {
+				wantFiles = localFiles
+			}
+			if got := restore.GetSnapshotFiles(); !slices.Equal(got, wantFiles) {
+				t.Errorf("SnapshotFiles = %q, want %q", got, wantFiles)
 			}
 		})
 	}

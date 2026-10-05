@@ -3514,7 +3514,7 @@ func TestSuspendActor(t *testing.T) {
 		Scope:       ateapipb.TagScope_TAG_SCOPE_ATESPACE,
 		SourceActor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
 		Status: &ateapipb.TagStatus{
-			Snapshot:         &ateapipb.ExternalSnapshot{SnapshotUri: tagSnapshotURI, ContentScope: sourceActor.GetStatus().GetExternalSnapshot().GetContentScope()},
+			Snapshot:         &ateapipb.ExternalSnapshot{SnapshotUri: tagSnapshotURI, ContentScope: sourceActor.GetStatus().GetExternalSnapshot().GetContentScope(), SnapshotFiles: checkpointFiles},
 			ActorTemplateUid: tmpl.GetMetadata().GetUid(),
 			StorageLocation:  tmpl.GetSnapshotConfig().GetStorageLocation(),
 		},
@@ -3622,6 +3622,7 @@ func TestSuspendActor(t *testing.T) {
 				SnapshotUri:      snapshotURI,
 				ContentScope:     sourceActor.GetStatus().GetExternalSnapshot().GetContentScope(),
 				ActorTemplateUid: tmpl.GetMetadata().GetUid(),
+				SnapshotFiles:    checkpointFiles,
 			},
 		},
 	}
@@ -3913,6 +3914,8 @@ func TestPauseActor(t *testing.T) {
 			LocalSnapshot: &ateapipb.LocalSnapshot{
 				NodeVmsWithLocalSnapshots: []string{"node1"},
 				ContentScope:              ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+				SnapshotFiles:             checkpointFiles,
+				DataSnapshotFiles:         checkpointDataFiles,
 			},
 			ExternalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, ActorTemplateUid: tmpl.GetMetadata().GetUid()},
 		},
@@ -4586,8 +4589,13 @@ func TestSuspendActor_FromPaused(t *testing.T) {
 		t.Fatalf("GetActor failed: %v", err)
 	}
 	// Drop the pause's Checkpoint call so the suspend's atelet traffic is
-	// observable in isolation.
+	// observable in isolation. atelet reports a different file list than it
+	// was sent, so the test can tell which one ateapi records.
 	tc.fakeAtelet.Reset()
+	uploadedFiles := []string{"uploaded.img"}
+	tc.fakeAtelet.Lock.Lock()
+	tc.fakeAtelet.UploadedFiles = uploadedFiles
+	tc.fakeAtelet.Lock.Unlock()
 
 	suspended, err := tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
@@ -4612,6 +4620,9 @@ func TestSuspendActor_FromPaused(t *testing.T) {
 	if got := upload.GetDesiredScope(); got != ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL {
 		t.Errorf("upload desired_scope = %v, want FULL (template default)", got)
 	}
+	if got := upload.GetCapturedScope(); got != ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL {
+		t.Errorf("upload captured_scope = %v, want FULL (what the pause captured)", got)
+	}
 
 	actor := suspended.GetActor()
 	if actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
@@ -4625,6 +4636,24 @@ func TestSuspendActor_FromPaused(t *testing.T) {
 	}
 	if got := actor.GetStatus().GetExternalSnapshot().GetContentScope(); got != ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL {
 		t.Errorf("snapshot ContentScope = %v, want FULL", got)
+	}
+	// The pause records the files, and the data-scope subset, its checkpoint
+	// reported. The suspend sends both to atelet and records the files atelet
+	// reports it uploaded.
+	if diff := cmp.Diff(checkpointFiles, paused.GetStatus().GetLocalSnapshot().GetSnapshotFiles()); diff != "" {
+		t.Errorf("LocalSnapshot.SnapshotFiles mismatch (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff(checkpointFiles, upload.GetSnapshotFiles()); diff != "" {
+		t.Errorf("upload snapshot_files mismatch (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff(checkpointDataFiles, paused.GetStatus().GetLocalSnapshot().GetDataSnapshotFiles()); diff != "" {
+		t.Errorf("LocalSnapshot.DataSnapshotFiles mismatch (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff(checkpointDataFiles, upload.GetDataSnapshotFiles()); diff != "" {
+		t.Errorf("upload data_snapshot_files mismatch (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff(uploadedFiles, actor.GetStatus().GetExternalSnapshot().GetSnapshotFiles()); diff != "" {
+		t.Errorf("ExternalSnapshot.SnapshotFiles mismatch (-want +got):\n%s", diff)
 	}
 }
 
