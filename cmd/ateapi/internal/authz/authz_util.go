@@ -43,6 +43,9 @@ const (
 	RoleEditor = "editor"
 	RoleViewer = "viewer"
 
+	// RoleEgressGateway is a system role, granted only through WithSystemRole.
+	RoleEgressGateway = "egress_gateway"
+
 	RelationCanCreateAtespace     = "can_create_atespace"
 	RelationCanListAtespaces      = "can_list_atespaces"
 	RelationCanGet                = "can_get"
@@ -51,6 +54,7 @@ const (
 	RelationCanGetAccessPolicy    = "can_get_access_policy"
 	RelationCanUpdateAccessPolicy = "can_update_access_policy"
 	RelationCanDeleteAccessPolicy = "can_delete_access_policy"
+	RelationCanMintActorJWT       = "can_mint_actor_jwt"
 
 	// maxTuplesPerWrite is OpenFGA's default maximum number of tuples allowed in a single Write request.
 	maxTuplesPerWrite = 100
@@ -160,12 +164,26 @@ func EnsureStoreAndModel(ctx context.Context, pool *pgxpool.Pool, fgaServer *ser
 	return storeID, modelID, nil
 }
 
+// Option configures the Authorizer that New returns.
+type Option func(*Authorizer)
+
+// WithSystemRole grants role on global:root to a caller that authenticated
+// with a client certificate whose SPIFFE ID is spiffeID.
+func WithSystemRole(role, spiffeID string) Option {
+	return func(a *Authorizer) {
+		if a.systemRoles == nil {
+			a.systemRoles = make(map[string]string)
+		}
+		a.systemRoles[spiffeID] = role
+	}
+}
+
 // New provisions the default OpenFGA store and authorization model via
 // EnsureStoreAndModel and returns the read-path Authorizer and write-path
 // PolicyManager. bootstrapOwners are principal IDs (with or without the
 // "user:" prefix) that the Authorizer treats as owners of global:root on every
 // check, independent of any stored AccessPolicy.
-func New(ctx context.Context, pool *pgxpool.Pool, fgaServer *server.Server, bootstrapOwners []string) (*Authorizer, *PolicyManager, error) {
+func New(ctx context.Context, pool *pgxpool.Pool, fgaServer *server.Server, bootstrapOwners []string, opts ...Option) (*Authorizer, *PolicyManager, error) {
 	owners, err := parseBootstrapOwners(bootstrapOwners)
 	if err != nil {
 		return nil, nil, err
@@ -179,6 +197,9 @@ func New(ctx context.Context, pool *pgxpool.Pool, fgaServer *server.Server, boot
 		storeID:         storeID,
 		modelID:         modelID,
 		bootstrapOwners: owners,
+	}
+	for _, opt := range opts {
+		opt(authorizer)
 	}
 	policyManager := &PolicyManager{
 		fgaServer: fgaServer,

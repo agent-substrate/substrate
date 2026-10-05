@@ -36,6 +36,11 @@ type global
     define owner: [user]
     define viewer: [user] or owner
 
+    # System components. ateapi grants these roles from its configuration, to
+    # callers that authenticated with a client certificate; an AccessPolicy
+    # cannot bind them.
+    define egress_gateway: [user]
+
     define can_create_atespace: owner
     define can_list_atespaces: viewer
     define can_get: viewer
@@ -44,6 +49,9 @@ type global
     define can_create_access_policy: owner
     define can_get_access_policy: viewer
     define can_update_access_policy: owner
+
+    # --- Actor Identity ---
+    define can_mint_actor_jwt: egress_gateway
 
 type atespace
   relations
