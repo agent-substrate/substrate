@@ -25,8 +25,8 @@ func TestMissingFlags(t *testing.T) {
 		flags map[string]string
 		want  []string
 	}{
-		{flags: map[string]string{"--issuer": "https://idp.ate-system.svc", "--jwks-file": "/run/jwks.json"}, want: nil},
-		{flags: map[string]string{"--jwks-file": "", "--issuer": "", "--server-cred-bundle": "/run/bundle.pem"}, want: []string{"--issuer", "--jwks-file"}},
+		{flags: map[string]string{"--issuer": "https://idp.ate-system.svc", "--actor-id-jwt-pool": "/run/actor-id-jwt-pool/pool.json"}, want: nil},
+		{flags: map[string]string{"--actor-id-jwt-pool": "", "--issuer": "", "--server-cred-bundle": "/run/bundle.pem"}, want: []string{"--actor-id-jwt-pool", "--issuer"}},
 	}
 	for _, tt := range tests {
 		if diff := cmp.Diff(tt.want, missingFlags(tt.flags)); diff != "" {
