@@ -54,6 +54,17 @@
 #                  as one YAML string, '--credential-provider={"name":"k8s.io"}'
 #                  (no shell quoting: the args are passed without a shell),
 #                  or as ATE_CREDENTIAL_PROVIDER in .ate-dev-env.sh.
+#   isolate        Optional. Isolate mode: serves the WorkerPool with the fake
+#                  data plane (workloads/deploy.sh --isolate) instead of
+#                  worker pods: fake-atelet takes atelet's place on `nodes`
+#                  nodes and answers every lifecycle call after `delay`, and
+#                  fake-workersync honors the pool with workerCount fake
+#                  Workers on them, each reporting the capacity a real worker
+#                  would. ate-api-server and Postgres can then be driven past
+#                  what real nodes restore. Keys: nodes, run, delay
+#                  (deploy.sh's defaults when omitted). Actors do not exist,
+#                  so the entry's user class must send them no requests. The
+#                  teardown undoes it.
 #
 # ---- type: locust -----------------------------------------------------------
 #

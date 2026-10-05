@@ -53,7 +53,7 @@ from typing import Any
 import yaml
 
 from testtypes import TYPES
-from util import parse_duration_seconds, run, run_no_check
+from util import isolate_args, parse_duration_seconds, run, run_no_check
 
 
 SUBSTRATE_DIR = "/workspace/substrate"
@@ -319,6 +319,7 @@ def validate_and_normalize_tests(tests: list[dict[str, Any]]) -> None:
                 f"(want one of {list(TEST_TYPES)})"
             )
         TYPES[ttype].validate(t)
+        isolate_args(t.get("isolate"))
 
 
 def deploy_substrate(ate_args: Iterable[str] = ()) -> None:
@@ -349,6 +350,7 @@ def deploy_workloads(
     actor_memory: str = "",
     wait_timeout_secs: int | str = "",
     worker_memory: str = "",
+    isolate: dict | None = None,
 ) -> None:
     cmd = [
         "benchmarking/workloads/deploy.sh",
@@ -370,6 +372,10 @@ def deploy_workloads(
     # (whole seconds).
     if wait_timeout_secs != "":
         cmd += ["--wait-timeout", str(wait_timeout_secs)]
+    # An isolate block replaces the WorkerPool with fake-atelet and
+    # fake-workersync. teardown_workloads needs no matching flag: deploy.sh
+    # --delete undoes isolate mode whenever it finds it.
+    cmd += isolate_args(isolate)
     # deploy.sh itself blocks until every template's golden snapshot exists.
     run(cmd)
 
@@ -546,6 +552,7 @@ def main() -> None:
                     test.get("actorMemory", ""),
                     test.get("workerWaitTimeout", ""),
                     test.get("workerMemory", ""),
+                    test.get("isolate"),
                 )
                 try:
                     status = run_test(
