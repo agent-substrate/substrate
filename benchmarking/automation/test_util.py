@@ -51,5 +51,56 @@ class BuildAndPushTest(unittest.TestCase):
         self.assertEqual(push_cmd, ["docker", "push", "gcr.io/p/repo/img:tag"])
 
 
+class IsolateArgsTest(unittest.TestCase):
+    def test_absent(self):
+        self.assertEqual(util.isolate_args(None), [])
+
+    def test_empty_block_selects_the_mode(self):
+        self.assertEqual(util.isolate_args({}), ["--isolate"])
+
+    def test_every_key(self):
+        self.assertEqual(
+            util.isolate_args({
+                "nodes": 4,
+                "run": "nightly",
+                "delay": "250ms",
+            }),
+            [
+                "--isolate",
+                "--isolate-nodes", "4",
+                "--isolate-run", "nightly",
+                "--isolate-delay", "250ms",
+            ],
+        )
+
+    def test_durations(self):
+        for delay in ("0", "0s", "1.5s", "1m30s", "250ms", "100us"):
+            with self.subTest(delay=delay):
+                self.assertEqual(
+                    util.isolate_args({"delay": delay}),
+                    ["--isolate", "--isolate-delay", delay],
+                )
+
+    def test_invalid(self):
+        for block in (
+            {"node": 4},
+            {"nodes": 0},
+            {"nodes": "4"},
+            {"nodes": True},
+            {"workersPerNode": 100},
+            {"run": "Nightly"},
+            {"run": "ninechars"},
+            {"run": ""},
+            {"run": 7},
+            {"delay": "fast"},
+            {"delay": "500"},
+            {"delay": "-1s"},
+            {"delay": 0},
+            ["nodes"],
+        ):
+            with self.subTest(block=block), self.assertRaises(ValueError):
+                util.isolate_args(block)
+
+
 if __name__ == "__main__":
     unittest.main()
