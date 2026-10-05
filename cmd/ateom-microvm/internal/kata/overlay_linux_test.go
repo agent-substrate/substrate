@@ -17,11 +17,16 @@
 package kata
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
+
+	"github.com/agent-substrate/substrate/internal/roottest"
+	"golang.org/x/sys/unix"
 )
 
 // The container rootfs is untrusted (the image below, the guest's own snapshot
@@ -99,4 +104,53 @@ func TestVirtiofsdArgs(t *testing.T) {
 	if i := slices.Index(args, "--migration-on-error"); i < 0 || i+1 >= len(args) || args[i+1] != "guest-error" {
 		t.Errorf("args %v do not set --migration-on-error guest-error", args)
 	}
+}
+
+func TestRemountReadOnly_NonExistent(t *testing.T) {
+	dst := filepath.Join(t.TempDir(), "nonexistent")
+	err := RemountReadOnly(dst)
+	if err == nil {
+		t.Fatalf("RemountReadOnly(%q) = nil, want error", dst)
+	}
+	if !strings.Contains(err.Error(), "statfs") {
+		t.Errorf("RemountReadOnly(%q) error = %v, want error from statfs", dst, err)
+	}
+}
+
+func TestUnmount_NonExistent(t *testing.T) {
+	dst := filepath.Join(t.TempDir(), "nonexistent")
+	// Unmount must handle non-existent destinations cleanly without panicking.
+	Unmount(dst)
+}
+
+func TestRemountReadOnlyAndUnmount(t *testing.T) {
+	roottest.Require(t, "bind mounts")
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	dst := filepath.Join(dir, "dst")
+	if err := os.Mkdir(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(dst, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Mount(src, dst, "", unix.MS_BIND, ""); err != nil {
+		t.Fatalf("Mount(%q, %q, BIND) = %v", src, dst, err)
+	}
+	defer Unmount(dst)
+
+	testFile := filepath.Join(dst, "test.txt")
+	if err := os.WriteFile(testFile, []byte("write test"), 0o644); err != nil {
+		t.Fatalf("WriteFile before remount = %v", err)
+	}
+
+	if err := RemountReadOnly(dst); err != nil {
+		t.Fatalf("RemountReadOnly(%q) = %v", dst, err)
+	}
+
+	if err := os.WriteFile(testFile, []byte("should fail"), 0o644); !errors.Is(err, syscall.EROFS) {
+		t.Fatalf("WriteFile after remount = %v, want EROFS", err)
+	}
+
+	Unmount(dst)
 }
