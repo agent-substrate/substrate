@@ -191,11 +191,11 @@ func Unmount(dst string) {
 // per-mount flags (nosuid, nodev, noexec, etc.) like libmount's remount,bind,ro.
 func RemountReadOnly(dst string) error {
 	var st unix.Statfs_t
-	var flags uintptr = unix.MS_BIND | unix.MS_REMOUNT | unix.MS_RDONLY
-	if err := unix.Statfs(dst, &st); err == nil {
-		flags |= uintptr(st.Flags & (unix.ST_NOSUID | unix.ST_NODEV | unix.ST_NOEXEC |
-			unix.ST_NOATIME | unix.ST_NODIRATIME | unix.ST_RELATIME | unix.ST_SYNCHRONOUS | unix.ST_MANDLOCK))
+	if err := unix.Statfs(dst, &st); err != nil {
+		return fmt.Errorf("statfs %q: %w", dst, err)
 	}
+	flags := uintptr(unix.MS_BIND | unix.MS_REMOUNT | unix.MS_RDONLY)
+	flags |= uintptr(st.Flags & (unix.ST_NOSUID | unix.ST_NODEV | unix.ST_NOEXEC | unix.ST_NOATIME | unix.ST_NODIRATIME))
 	if err := unix.Mount("", dst, "", flags, ""); err != nil {
 		return err
 	}
