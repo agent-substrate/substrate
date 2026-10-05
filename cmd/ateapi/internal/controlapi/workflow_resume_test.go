@@ -1060,14 +1060,15 @@ func TestLoadActorForResume_RunningActorShortCircuits(t *testing.T) {
 	}
 }
 
-// capturingAtelet records the last Restore and Run request it receives, so a
-// test can assert on the exact wire request the resume workflow sends.
+// capturingAtelet records the last Restore, Run and Terminate request it
+// receives, so a test can assert on the exact wire request a workflow sends.
 type capturingAtelet struct {
 	ateletpb.UnimplementedAteomHerderServer
 
-	mu      sync.Mutex
-	restore *ateletpb.RestoreRequest
-	run     *ateletpb.RunRequest
+	mu        sync.Mutex
+	restore   *ateletpb.RestoreRequest
+	run       *ateletpb.RunRequest
+	terminate *ateletpb.TerminateRequest
 }
 
 func (f *capturingAtelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (*ateletpb.RestoreResponse, error) {
@@ -1082,6 +1083,24 @@ func (f *capturingAtelet) Run(ctx context.Context, req *ateletpb.RunRequest) (*a
 	defer f.mu.Unlock()
 	f.run = proto.Clone(req).(*ateletpb.RunRequest)
 	return &ateletpb.RunResponse{}, nil
+}
+
+func (f *capturingAtelet) Terminate(ctx context.Context, req *ateletpb.TerminateRequest) (*ateletpb.TerminateResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.terminate = proto.Clone(req).(*ateletpb.TerminateRequest)
+	return &ateletpb.TerminateResponse{}, nil
+}
+
+// terminateRequest returns the recorded Terminate request, nil if Terminate
+// was never called.
+func (f *capturingAtelet) terminateRequest() *ateletpb.TerminateRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.terminate == nil {
+		return nil
+	}
+	return proto.Clone(f.terminate).(*ateletpb.TerminateRequest)
 }
 
 // requests returns the recorded Restore and Run requests, nil for an RPC that

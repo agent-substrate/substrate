@@ -22,10 +22,14 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/internal/apierror"
+	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/objectstore/objectstoretest"
 	"github.com/agent-substrate/substrate/internal/resources"
+	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/google/go-cmp/cmp"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/protobuf/testing/protocmp"
 )
 
 func TestDeleteActorWorkflow_ExecutionPaths(t *testing.T) {
@@ -511,6 +515,103 @@ func TestDeleteActor_CollectsSnapshotsAfterWorkerDelete(t *testing.T) {
 			}
 			if left := objects.Prefix(t, fresh.OwnerPrefix()); len(left) != 0 {
 				t.Errorf("deleting the actor left %v under its own prefix, want everything it wrote collected", left)
+			}
+		})
+	}
+}
+
+// TestEnsureAteletTerminated_SandboxAssets checks that Terminate carries the
+// sandbox the template's SandboxConfig resolves to, and that a hosted actor
+// whose template or SandboxConfig is gone never reaches atelet.
+func TestEnsureAteletTerminated_SandboxAssets(t *testing.T) {
+	tests := []struct {
+		name string
+		// missingTmpl terminates with no ActorTemplate, as a delete does once
+		// the template is gone.
+		missingTmpl bool
+		// configName is the SandboxConfig the template names; the workflow's
+		// lister serves only "gvisor".
+		configName string
+		wantCode   codes.Code
+	}{
+		{
+			name:       "sends the sandbox the template's SandboxConfig resolves to",
+			configName: "gvisor",
+			wantCode:   codes.OK,
+		},
+		{
+			name:       "missing SandboxConfig is rejected before atelet",
+			configName: "missing",
+			wantCode:   codes.FailedPrecondition,
+		},
+		{
+			name:        "missing template is rejected before atelet",
+			missingTmpl: true,
+			wantCode:    codes.FailedPrecondition,
+		},
+	}
+
+	wantSandboxAssets := sandboxAssetsProto(&atev1alpha1.SandboxConfig{Spec: atev1alpha1.SandboxConfigSpec{
+		SandboxClass: atev1alpha1.SandboxClassGvisor,
+		PauseImage:   "pause@sha256:abc",
+		Assets:       testAssets(),
+	}})
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			persistence := newTestPersistence(t)
+			w, atelet := newWireCaptureWorkflow(t, persistence)
+
+			actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+			seedWorkflowActor(t, ctx, persistence, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_RUNNING, func(a *ateapipb.Actor) {
+				a.Status.WorkerAssignment = wireTestAssignment()
+			})
+			actor, err := persistence.GetActor(ctx, actorRef)
+			if err != nil {
+				t.Fatalf("GetActor: %v", err)
+			}
+			assignment := wireTestAssignment()
+			seedAPIWorker(t, ctx, persistence, &ateapipb.Worker{
+				Metadata:        &ateapipb.ResourceMetadata{Name: assignment.GetWorker().GetName()},
+				WorkerNamespace: assignment.GetWorkerNamespace(),
+				WorkerPool:      assignment.GetWorkerPool(),
+				WorkerPod:       assignment.GetWorkerPod(),
+				WorkerPodUid:    assignment.GetWorkerPodUid(),
+			})
+			seedAssignment(t, persistence, assignment.GetWorker().GetName(), &ateapipb.ActorAssignment{
+				Actor:    actorRef.ToObjectRef(),
+				ActorUid: actor.GetMetadata().GetUid(),
+			})
+
+			var tmpl *ateapipb.ActorTemplate
+			if !tt.missingTmpl {
+				tmpl = &ateapipb.ActorTemplate{
+					Metadata: &ateapipb.ResourceMetadata{Atespace: "ns", Name: "tmpl1"},
+					SandboxConfig: &ateapipb.SandboxConfig{
+						SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
+						ConfigName:   tt.configName,
+					},
+				}
+			}
+
+			err = w.ensureAteletTerminated(ctx, actorRef, actor, tmpl, ateattr.OperationDelete)
+			if got := apierror.Code(err); got != tt.wantCode {
+				t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, tt.wantCode, err)
+			}
+
+			req := atelet.terminateRequest()
+			if tt.wantCode != codes.OK {
+				if req != nil {
+					t.Fatalf("atelet received Terminate after a resolution error: %v", req)
+				}
+				return
+			}
+			if req == nil {
+				t.Fatal("atelet received no Terminate request")
+			}
+			if diff := cmp.Diff(wantSandboxAssets, req.GetSandboxAssets(), protocmp.Transform()); diff != "" {
+				t.Errorf("terminate SandboxAssets mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}

@@ -148,45 +148,28 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 		}
 	}
 
+	// atelet tears the sandbox down with the binaries the template's
+	// SandboxConfig names, so a hosted actor cannot be terminated without its
+	// template.
+	if actorTemplate == nil {
+		return fmt.Errorf("%w; ObjectRef: %s; cannot resolve the sandbox to terminate actor %s",
+			errActorTemplateNotFound, resources.ActorTemplateRefFromObjectRef(actor.GetActorTemplate()), actorRef)
+	}
+	workloadSpec, err := workloadSpecFromActorTemplate(actorTemplate, actor)
+	if err != nil {
+		return err
+	}
+	sandboxAssets, err := resolveSandboxAssets(w.sandboxConfigLister, actorTemplate.GetSandboxConfig())
+	if err != nil {
+		return fmt.Errorf("while resolving sandbox assets: %w", err)
+	}
+
 	conn, err := w.dialer.DialForAteletOnNode(assignment.GetNodeName())
 	if err != nil {
 		return fmt.Errorf("while connecting to atelet on node %q: %w", assignment.GetNodeName(), err)
 	}
 
 	client := ateletpb.NewAteomHerderClient(conn)
-
-	var workloadSpec *ateletpb.WorkloadSpec
-	if actorTemplate != nil {
-		spec, err := workloadSpecFromActorTemplate(actorTemplate, actor)
-		if err != nil {
-			return err
-		}
-		workloadSpec = spec
-	} else {
-		// When the template is missing/deleted, build a fallback workload spec with
-		// all external volumes recorded on the actor so atelet can unmount them on the node.
-		slog.WarnContext(ctx, "actor template not found, constructing fallback workload spec for atelet terminate",
-			slog.String("actor", actorRef.Name),
-			slog.String("templateAtespace", actor.GetActorTemplate().GetAtespace()),
-			slog.String("templateName", actor.GetActorTemplate().GetName()))
-		workloadSpec = &ateletpb.WorkloadSpec{}
-		for _, vol := range actor.GetStatus().GetActorVolumes() {
-			// StorageVolumeId is only populated once the volume is provisioned.
-			// Skip volumes that were never created (e.g. failed during PENDING state).
-			if vol.GetStorageVolumeId() != "" {
-				workloadSpec.Volumes = append(workloadSpec.Volumes, &ateletpb.Volume{
-					Name: vol.GetVolumeName(),
-					Source: &ateletpb.Volume_External{
-						External: &ateletpb.ExternalVolumeSource{
-							StorageVolumeId: vol.GetStorageVolumeId(),
-							VolumeType:      vol.GetVolumeType(),
-							VolumeContext:   vol.GetVolumeContext(),
-						},
-					},
-				})
-			}
-		}
-	}
 
 	req := &ateletpb.TerminateRequest{
 		TargetAteomUid:        assignment.GetWorkerPodUid(),
@@ -196,6 +179,7 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 		ActorTemplateAtespace: actor.GetActorTemplate().GetAtespace(),
 		ActorTemplateName:     actor.GetActorTemplate().GetName(),
 		Spec:                  workloadSpec,
+		SandboxAssets:         sandboxAssets,
 	}
 
 	if _, err := client.Terminate(ctx, req); err != nil {

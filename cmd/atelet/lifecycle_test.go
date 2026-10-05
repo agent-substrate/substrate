@@ -63,6 +63,9 @@ type fakeAteom struct {
 	// preserveRestoreDir records the PreserveRestoreDir flag from the most
 	// recent RestoreWorkload request.
 	preserveRestoreDir bool
+	// terminateRunscPath records the RunscPath from the most recent
+	// TerminateWorkload request.
+	terminateRunscPath string
 }
 
 func (f *fakeAteom) recordActorDirs(rpc string, actorDirs *ateompb.ActorDirs) {
@@ -107,6 +110,7 @@ func (f *fakeAteom) RestoreWorkload(_ context.Context, req *ateompb.RestoreWorkl
 
 func (f *fakeAteom) TerminateWorkload(_ context.Context, req *ateompb.TerminateWorkloadRequest) (*ateompb.TerminateWorkloadResponse, error) {
 	f.recordActorDirs("TerminateWorkload", req.GetActorDirs())
+	f.terminateRunscPath = req.GetRunscPath()
 	return &ateompb.TerminateWorkloadResponse{}, nil
 }
 
@@ -253,6 +257,7 @@ func TestLocalSnapshotGC(t *testing.T) {
 		ActorTemplateAtespace: "default",
 		ActorTemplateName:     "counter",
 		TargetAteomUid:        ateomUID,
+		SandboxAssets:         sandboxAssets,
 		Spec:                  spec,
 	}); err != nil {
 		t.Fatalf("Terminate: %v", err)
@@ -408,5 +413,55 @@ func TestRestoreUsesRequestSandboxAssets(t *testing.T) {
 	}
 	if got.PauseImage != restorePause {
 		t.Errorf("restored actor pause image = %q, want the request's %q", got.PauseImage, restorePause)
+	}
+}
+
+// TestTerminateUsesRequestSandboxAssets checks that Terminate tears the
+// workload down with the runsc on the request, without reading an on-node
+// sandbox record.
+func TestTerminateUsesRequestSandboxAssets(t *testing.T) {
+	useTempNodeDirs(t)
+	ctx := t.Context()
+
+	const actorUID = "actor-uid-1"
+
+	ateom := &fakeAteom{}
+	serveFakeAteom(t, ateom)
+
+	runsc := []byte("runsc binary")
+	s := &AteomHerder{
+		ateomDialer:       newAteomDialer(1),
+		anonGCSClient:     fakeObjectStorage{data: runsc},
+		systemInfoVolumes: newSystemInfoVolumeRefresher(nil, nil),
+	}
+
+	if _, err := os.Stat(ateletpath.ActorSandboxAssetsFile(actorUID)); !os.IsNotExist(err) {
+		t.Fatalf("on-node sandbox record exists before Terminate (stat err %v), want none", err)
+	}
+
+	runscSHA := fmt.Sprintf("%x", sha256.Sum256(runsc))
+	if _, err := s.Terminate(ctx, &ateletpb.TerminateRequest{
+		Atespace:              "ate-demo",
+		ActorName:             "counter",
+		ActorUid:              actorUID,
+		ActorTemplateAtespace: "default",
+		ActorTemplateName:     "counter",
+		TargetAteomUid:        "ateom-uid-1",
+		SandboxAssets: &ateletpb.SandboxAssets{
+			SandboxClass: "gvisor",
+			PauseImage:   testPauseImage,
+			Assets: map[string]*ateletpb.ArchAssets{
+				runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
+					runscAssetName: {Url: "gs://test-bucket/runsc", Sha256: runscSHA},
+				}},
+			},
+		},
+		Spec: &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "app"}}},
+	}); err != nil {
+		t.Fatalf("Terminate: %v", err)
+	}
+
+	if want := ateletpath.RunSCBinaryPath(runscSHA); ateom.terminateRunscPath != want {
+		t.Errorf("TerminateWorkload RunscPath = %q, want the request's %q", ateom.terminateRunscPath, want)
 	}
 }

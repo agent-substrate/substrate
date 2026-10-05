@@ -193,6 +193,10 @@ message TerminateRequest {
   string actor_template_name = 6;
 
   WorkloadSpec spec = 7;
+
+  // The sandbox binaries that tear the workload down, resolved from the
+  // ActorTemplate's SandboxConfig. Required.
+  SandboxAssets sandbox_assets = 8;
 }
 
 message TerminateResponse {
