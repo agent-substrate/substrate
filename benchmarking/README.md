@@ -130,6 +130,29 @@ The sweperf benchmark replays a recorded SWE-Perf task inside an actor, suspendi
 resuming between cycles to measure the cost of actor state transitions under a realistic
 agent workload. One task is four cycles by default.
 
+#### Sweperf Templates
+
+Each SWE-perf task is one entry in
+[`workloads/manifests/images.json`](workloads/manifests/images.json): its image tag, digest
+and trajectory step count. There is no per-task manifest. `workloads/deploy.sh` renders the
+generic [`sweperf-template.yaml.tmpl`](workloads/manifests/sweperf-template.yaml.tmpl) for every
+requested `sweperf-<repo>-<id>` template, where the name is `sweperf-` plus the entry's
+`tag` with underscores turned into hyphens (`astropy_7336` becomes `sweperf-astropy-7336`).
+The sweperf templates are not deployed by default; list the ones you need:
+
+```bash
+WORKLOAD_TEMPLATES="sweperf-astropy-7336 sweperf-django-11099" \
+  ./benchmarking/workloads/deploy.sh --deploy
+```
+
+To see the manifest a task would be created from without a cluster, run
+`./benchmarking/workloads/deploy.sh --render sweperf-django-11099`.
+
+The rendered template carries the step count in its `SWEPERF_TOTAL_STEPS` container env var.
+The boomer client reads it with `GetActorTemplate` once per template and splits the trajectory
+into `--sweperf-num-cycles` cycles; a template that does not declare it fails the session.
+To add a task, append its entry to `images.json`.
+
 #### Sweperf Reported Metrics
 
 All rows are in milliseconds. CEL (command execution latency) is the time the trace commands

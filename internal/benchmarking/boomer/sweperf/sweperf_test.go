@@ -21,7 +21,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -107,6 +109,34 @@ type fakeControlClient struct {
 	resumeElapsedUs string
 	// AnyState carried by the most recent DeleteActor request.
 	deleteAnyState bool
+	// GetActorTemplate returns template (when nil, one declaring
+	// defaultTestSteps) or getTemplateErr, and counts its calls in
+	// getTemplateCalls rather than calls so lifecycle call sequences stay
+	// unchanged.
+	template         *ateapipb.ActorTemplate
+	getTemplateErr   error
+	getTemplateCalls int
+}
+
+func (f *fakeControlClient) GetActorTemplate(ctx context.Context, in *ateapipb.GetActorTemplateRequest, opts ...grpc.CallOption) (*ateapipb.ActorTemplate, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.getTemplateCalls++
+	if f.getTemplateErr != nil {
+		return nil, f.getTemplateErr
+	}
+	if f.template != nil {
+		return f.template, nil
+	}
+	return templateWithEnv(&ateapipb.EnvVar{Name: totalStepsEnv, Value: strconv.Itoa(defaultTestSteps)}), nil
+}
+
+// defaultTestSteps is the step count the fake's default template declares.
+const defaultTestSteps = 21
+
+// templateWithEnv is an ActorTemplate whose one container sets env.
+func templateWithEnv(env ...*ateapipb.EnvVar) *ateapipb.ActorTemplate {
+	return &ateapipb.ActorTemplate{Containers: []*ateapipb.Container{{Name: "task", Env: env}}}
 }
 
 func (f *fakeControlClient) CreateAtespace(ctx context.Context, in *ateapipb.CreateAtespaceRequest, opts ...grpc.CallOption) (*ateapipb.Atespace, error) {
@@ -286,12 +316,9 @@ func TestResolveConfig(t *testing.T) {
 				Dyn: dynconfig.NewHolder(dynconfig.Config{}),
 			},
 		}
-		tmpl, steps, cycles := rt.resolveConfig()
+		tmpl, cycles := rt.resolveConfig()
 		if tmpl != defaultSweperfTemplate {
 			t.Errorf("template = %q, want %q", tmpl, defaultSweperfTemplate)
-		}
-		if steps != defaultSweperfTotalSteps {
-			t.Errorf("totalSteps = %d, want %d", steps, defaultSweperfTotalSteps)
 		}
 		if cycles != defaultSweperfNumCycles {
 			t.Errorf("numCycles = %d, want %d", cycles, defaultSweperfNumCycles)
@@ -302,23 +329,138 @@ func TestResolveConfig(t *testing.T) {
 		rt := &sweperfRuntime{
 			cfg: &userclass.Config{
 				Dyn: dynconfig.NewHolder(dynconfig.Config{
-					SweperfTemplate:   "custom-template",
-					SweperfTotalSteps: 50,
-					SweperfNumCycles:  5,
+					SweperfTemplate:  "custom-template",
+					SweperfNumCycles: 5,
 				}),
 			},
 		}
-		tmpl, steps, cycles := rt.resolveConfig()
+		tmpl, cycles := rt.resolveConfig()
 		if tmpl != "custom-template" {
 			t.Errorf("template = %q, want %q", tmpl, "custom-template")
-		}
-		if steps != 50 {
-			t.Errorf("totalSteps = %d, want 50", steps)
 		}
 		if cycles != 5 {
 			t.Errorf("numCycles = %d, want 5", cycles)
 		}
 	})
+}
+
+func TestStepsFromTemplate(t *testing.T) {
+	sleepEnv := &ateapipb.EnvVar{Name: "SWEPERF_DISABLE_INTERNAL_SLEEP", Value: "1"}
+	tests := []struct {
+		name    string
+		tmpl    *ateapipb.ActorTemplate
+		want    int
+		wantErr bool
+	}{
+		{"declared", templateWithEnv(sleepEnv, &ateapipb.EnvVar{Name: totalStepsEnv, Value: "49"}), 49, false},
+		{"not declared", templateWithEnv(sleepEnv), 0, true},
+		{"no containers", &ateapipb.ActorTemplate{}, 0, true},
+		{"not a number", templateWithEnv(&ateapipb.EnvVar{Name: totalStepsEnv, Value: "lots"}), 0, true},
+		{"zero", templateWithEnv(&ateapipb.EnvVar{Name: totalStepsEnv, Value: "0"}), 0, true},
+		{"negative", templateWithEnv(&ateapipb.EnvVar{Name: totalStepsEnv, Value: "-3"}), 0, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := stepsFromTemplate(tt.tmpl)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err = %v, wantErr %v", err, tt.wantErr)
+			}
+			if got != tt.want {
+				t.Errorf("steps = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestTaskTemplateDeclaresSteps keeps the generic SWE-perf ActorTemplate
+// that deploy.sh renders in step with totalStepsEnv.
+func TestTaskTemplateDeclaresSteps(t *testing.T) {
+	data, err := os.ReadFile("../../../../benchmarking/workloads/manifests/sweperf-template.yaml.tmpl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "- name: " + totalStepsEnv; !strings.Contains(string(data), want) {
+		t.Errorf("sweperf-template.yaml.tmpl has no %q env entry", want)
+	}
+}
+
+func TestTemplateStepsCachesPerTemplate(t *testing.T) {
+	cfg, _, ctrl := newTestConfig(t, http.NotFoundHandler())
+	ctrl.template = templateWithEnv(&ateapipb.EnvVar{Name: totalStepsEnv, Value: "15"})
+	rt := &sweperfRuntime{cfg: cfg}
+
+	for i := 0; i < 3; i++ {
+		steps, err := rt.templateSteps(context.Background(), "sweperf-django-11099")
+		if err != nil || steps != 15 {
+			t.Fatalf("call %d: got (%d, %v), want (15, nil)", i, steps, err)
+		}
+	}
+	if ctrl.getTemplateCalls != 1 {
+		t.Errorf("GetActorTemplate calls = %d, want 1 (cached)", ctrl.getTemplateCalls)
+	}
+}
+
+func TestTemplateStepsErrorNotCached(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		setup func(*fakeControlClient)
+	}{
+		{"read failure", func(f *fakeControlClient) { f.getTemplateErr = status.Error(codes.Unavailable, "down") }},
+		{"no step count declared", func(f *fakeControlClient) { f.template = templateWithEnv() }},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, _, ctrl := newTestConfig(t, http.NotFoundHandler())
+			tt.setup(ctrl)
+			rt := &sweperfRuntime{cfg: cfg}
+
+			if _, err := rt.templateSteps(context.Background(), "t"); err == nil {
+				t.Fatal("templateSteps succeeded, want error")
+			}
+			ctrl.getTemplateErr = nil
+			ctrl.template = templateWithEnv(&ateapipb.EnvVar{Name: totalStepsEnv, Value: "7"})
+			if steps, err := rt.templateSteps(context.Background(), "t"); err != nil || steps != 7 {
+				t.Fatalf("retry: got (%d, %v), want (7, nil)", steps, err)
+			}
+		})
+	}
+}
+
+func TestStartUserStepCount(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(statusResponse{Status: "up"})
+	})
+
+	t.Run("steps come from the template", func(t *testing.T) {
+		cfg, _, ctrl := newTestConfig(t, handler)
+		cfg.Dyn = dynconfig.NewHolder(dynconfig.Config{SweperfNumCycles: 4})
+		ctrl.template = templateWithEnv(&ateapipb.EnvVar{Name: totalStepsEnv, Value: "49"})
+		u, err := (&sweperfRuntime{cfg: cfg}).startUser(context.Background())
+		if err != nil {
+			t.Fatalf("startUser: %v", err)
+		}
+		if last := u.chunks[len(u.chunks)-1].end; last != 49 {
+			t.Errorf("chunks end at step %d, want 49", last)
+		}
+	})
+
+	for _, tt := range []struct {
+		name  string
+		setup func(*fakeControlClient)
+	}{
+		{"template read failure", func(f *fakeControlClient) { f.getTemplateErr = status.Error(codes.NotFound, "no such template") }},
+		{"template declares no step count", func(f *fakeControlClient) { f.template = templateWithEnv() }},
+	} {
+		t.Run(tt.name+" fails the session before creating an actor", func(t *testing.T) {
+			cfg, _, ctrl := newTestConfig(t, handler)
+			tt.setup(ctrl)
+			if _, err := (&sweperfRuntime{cfg: cfg}).startUser(context.Background()); err == nil {
+				t.Fatal("startUser succeeded, want error")
+			}
+			if calls := ctrl.recordedCalls(); len(calls) != 0 {
+				t.Errorf("control calls = %v, want none", calls)
+			}
+		})
+	}
 }
 
 func TestPollInterval(t *testing.T) {

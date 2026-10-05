@@ -67,7 +67,6 @@ _FLAGS = {
     "--cpu-duty-cycle": float,
     "--max-pings-per-wake": int,
     "--sweperf-template": str,
-    "--sweperf-total-steps": int,
     "--sweperf-num-cycles": int,
     "--sweperf-poll-interval-ms": int,
     "--agentsession-script": str,

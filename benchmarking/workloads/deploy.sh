@@ -35,7 +35,14 @@ POOL_MANIFEST="${MANIFEST_DIR}/workloads.yaml.tmpl"
 # through the ate API in the benchmark-workloads atespace. WORKLOAD_TEMPLATES
 # overrides the default set — the usermem and kernelmem templates (for the
 # matching locust tests) are not deployed by default.
+#
+# A sweperf-<repo>-<id> name (e.g. sweperf-django-11099) has no file of its
+# own: it is rendered from SWEPERF_TASK_TEMPLATE using that task's entry in
+# SWEPERF_CATALOG, so adding a task only takes an images.json entry. The
+# SWEPERF_CATALOG environment variable points at a different catalog.
 read -r -a TEMPLATES <<<"${WORKLOAD_TEMPLATES:-sleep glutton glutton-durdir-data glutton-durdir-full}"
+SWEPERF_CATALOG="${SWEPERF_CATALOG:-${MANIFEST_DIR}/images.json}"
+SWEPERF_TASK_TEMPLATE="${MANIFEST_DIR}/sweperf-template.yaml.tmpl"
 
 if [[ ! -f "${POOL_MANIFEST}" ]]; then
   echo "Error: ${POOL_MANIFEST} not found in $(pwd)" >&2
@@ -67,6 +74,9 @@ usage() {
   echo "Options:"
   echo "  --deploy                    Substitute env vars and deploy workloads to the cluster using ko apply"
   echo "  --delete                    Substitute env vars and delete workloads from the cluster"
+  echo "  --render NAME               Print the ActorTemplate manifest NAME would be created from,"
+  echo "                              without touching the cluster. Cluster-derived values, such as"
+  echo "                              the OTLP endpoint, stay empty unless their flags are given"
   echo "  --worker-count N            Number of WorkerPool replicas (default: 1)"
   echo "  --sandbox-class CLASS       Sandbox runtime for the WorkerPool: gvisor | microvm (default: gvisor)."
   echo "                              microvm requires hack/install-microvm-deps.sh --install to have run."
@@ -144,8 +154,79 @@ substitute() {
       -e "s|\${OTLP_ENDPOINT}|${OTLP_ENDPOINT}|g" \
       -e "s|\${ACTOR_MEMORY}|${ACTOR_MEMORY}|g" \
       -e "s|\${WORKER_TEMPLATE}|${worker_template}|g" \
-      -e "s|\${SWEPERF_IMAGE}|${SWEPERF_IMAGE:-}|g" \
       "${manifest}"
+}
+
+# sweperf_entry prints the images.json entry whose template name is $1, as
+# tab-separated tag, image, digest and steps. The template name of an entry
+# is "sweperf-" plus its tag with underscores turned into hyphens, e.g.
+# astropy_7336 -> sweperf-astropy-7336.
+sweperf_entry() {
+  jq -r --arg name "$1" '
+    .images[]
+    | select("sweperf-" + (.tag | gsub("_"; "-")) == $name)
+    | [.tag, .image, .digest, (.steps | tostring)]
+    | @tsv' "${SWEPERF_CATALOG}"
+}
+
+# check_templates fails before anything is deployed when a requested template
+# has neither a <name>-template.yaml.tmpl file nor exactly one usable
+# images.json entry.
+check_templates() {
+  local template entry steps
+  for template in "${TEMPLATES[@]}"; do
+    # SWEPERF_TASK_TEMPLATE matches the <name>-template.yaml.tmpl pattern for
+    # the bare name "sweperf", but it only deploys once filled for a task.
+    if [[ "${template}" == "sweperf" ]]; then
+      echo "Error: 'sweperf' is the generic task template; name a task instead, e.g. sweperf-astropy-7336" >&2
+      return 1
+    fi
+    if [[ -f "${MANIFEST_DIR}/${template}-template.yaml.tmpl" ]]; then
+      continue
+    fi
+    if [[ "${template}" != sweperf-* ]]; then
+      echo "Error: no ${MANIFEST_DIR}/${template}-template.yaml.tmpl for template '${template}'" >&2
+      return 1
+    fi
+    if ! command -v jq &>/dev/null; then
+      echo "Error: jq is required to render the ${template} template from ${SWEPERF_CATALOG}" >&2
+      return 1
+    fi
+    entry="$(sweperf_entry "${template}")"
+    if [[ -z "${entry}" ]]; then
+      echo "Error: template '${template}' has no entry in ${SWEPERF_CATALOG}" >&2
+      return 1
+    fi
+    if [[ "${entry}" == *$'\n'* ]]; then
+      echo "Error: template '${template}' matches more than one entry in ${SWEPERF_CATALOG}" >&2
+      return 1
+    fi
+    IFS=$'\t' read -r _ _ _ steps <<<"${entry}"
+    if ! [[ "${steps}" =~ ^[1-9][0-9]*$ ]]; then
+      echo "Error: template '${template}' has invalid steps '${steps}' in ${SWEPERF_CATALOG}" >&2
+      return 1
+    fi
+  done
+}
+
+# render_template prints the substituted manifest for template $1: its own
+# <name>-template.yaml.tmpl when there is one, else the generic SWE-perf task
+# template filled from the task's images.json entry.
+render_template() {
+  local template="$1"
+  local file="${MANIFEST_DIR}/${template}-template.yaml.tmpl"
+  if [[ -f "${file}" ]]; then
+    substitute "${file}"
+    return
+  fi
+  local tag image digest steps
+  IFS=$'\t' read -r tag image digest steps <<<"$(sweperf_entry "${template}")"
+  sed -e "s|\${SWEPERF_NAME}|${template}|g" \
+      -e "s|\${SWEPERF_CONTAINER}|${tag%%_*}|g" \
+      -e "s|\${SWEPERF_IMAGE}|${image}@${digest}|g" \
+      -e "s|\${SWEPERF_STEPS}|${steps}|g" \
+      "${SWEPERF_TASK_TEMPLATE}" \
+    | substitute /dev/stdin
 }
 
 # wait_actortemplate_ready polls a substrate ActorTemplate resource until its
@@ -194,6 +275,7 @@ wait_templates_ready() {
 }
 
 deploy() {
+  check_templates
   resolve_otlp_endpoint
   echo "Deploying workloads (worker_count=${WORKER_COUNT}, actor_memory=${ACTOR_MEMORY}, worker_memory=${WORKER_MEMORY:-unset}, otlp_endpoint=${OTLP_ENDPOINT})..."
   substitute "${POOL_MANIFEST}" | hack/run-tool.sh ko apply -f -
@@ -218,7 +300,7 @@ deploy() {
       >/dev/null 2>&1 || true
     # ko resolve builds the ko:// image references and replaces them with
     # pushed digests before the manifest reaches kubectl-ate.
-    substitute "${MANIFEST_DIR}/${template}-template.yaml.tmpl" \
+    render_template "${template}" \
       | hack/run-tool.sh ko resolve -f - \
       | run_kubectl_ate create actor-template -f -
   done
@@ -253,6 +335,15 @@ while [[ "$#" -gt 0 ]]; do
       ;;
     --delete)
       action="delete"
+      ;;
+    --render)
+      shift
+      action="render"
+      RENDER_TEMPLATE="$1"
+      ;;
+    --render=*)
+      action="render"
+      RENDER_TEMPLATE="${1#*=}"
       ;;
     --worker-count)
       shift
@@ -328,4 +419,8 @@ if [[ "${action}" == "deploy" ]]; then
 elif [[ "${action}" == "delete" ]]; then
   build_kubectl_ate
   delete
+elif [[ "${action}" == "render" ]]; then
+  TEMPLATES=("${RENDER_TEMPLATE}")
+  check_templates
+  render_template "${RENDER_TEMPLATE}"
 fi

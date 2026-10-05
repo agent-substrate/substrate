@@ -71,7 +71,6 @@ type Config struct {
 	MaxPingsPerWake int    // cap on pings a GluttonUser sends during one resume/suspend cycle; values < 1 read as 1
 
 	SweperfTemplate       string // ActorTemplate name for the sweperf workload; "" falls back to default
-	SweperfTotalSteps     int    // total steps in trace; 0 falls back to default
 	SweperfNumCycles      int    // number of cycles to partition steps into; 0 falls back to default
 	SweperfPollIntervalMs int    // /status poll interval in ms; 0 falls back to default
 
@@ -132,7 +131,6 @@ type payload struct {
 	CPUDutyCycle          *float64 `json:"cpu_duty_cycle"`
 	MaxPingsPerWake       *float64 `json:"max_pings_per_wake"`
 	SweperfTemplate       *string  `json:"sweperf_template"`
-	SweperfTotalSteps     *float64 `json:"sweperf_total_steps"`
 	SweperfNumCycles      *float64 `json:"sweperf_num_cycles"`
 	SweperfPollIntervalMs *float64 `json:"sweperf_poll_interval_ms"`
 
@@ -233,9 +231,6 @@ func (c Config) Validate() error {
 	if c.CPUDutyCycle < 0 || c.CPUDutyCycle > 1 {
 		return fmt.Errorf("cpu_duty_cycle must be between 0.0 and 1.0, got: %f", c.CPUDutyCycle)
 	}
-	if c.SweperfTotalSteps < 0 {
-		return fmt.Errorf("sweperf_total_steps cannot be negative: %d", c.SweperfTotalSteps)
-	}
 	if c.SweperfNumCycles < 0 {
 		return fmt.Errorf("sweperf_num_cycles cannot be negative: %d", c.SweperfNumCycles)
 	}
@@ -319,9 +314,6 @@ func (p payload) merge(current Config) Config {
 	}
 	if p.SweperfTemplate != nil {
 		out.SweperfTemplate = *p.SweperfTemplate
-	}
-	if p.SweperfTotalSteps != nil {
-		out.SweperfTotalSteps = int(*p.SweperfTotalSteps)
 	}
 	if p.SweperfNumCycles != nil {
 		out.SweperfNumCycles = int(*p.SweperfNumCycles)
@@ -422,7 +414,6 @@ func StartPoll(
 					slog.Float64("cpu_duty_cycle", next.CPUDutyCycle),
 					slog.Int("max_pings_per_wake", next.MaxPingsPerWake),
 					slog.String("sweperf_template", next.SweperfTemplate),
-					slog.Int("sweperf_total_steps", next.SweperfTotalSteps),
 					slog.Int("sweperf_num_cycles", next.SweperfNumCycles),
 					slog.Int("sweperf_poll_interval_ms", next.SweperfPollIntervalMs),
 					slog.String("agentsession_script", next.AgentSessionScript),
@@ -477,7 +468,6 @@ func SubscribeSpawn(url string, holder *Holder, sampler ProbabilityUpdater, fetc
 			slog.Float64("cpu_duty_cycle", next.CPUDutyCycle),
 			slog.Int("max_pings_per_wake", next.MaxPingsPerWake),
 			slog.String("sweperf_template", next.SweperfTemplate),
-			slog.Int("sweperf_total_steps", next.SweperfTotalSteps),
 			slog.Int("sweperf_num_cycles", next.SweperfNumCycles),
 			slog.Int("sweperf_poll_interval_ms", next.SweperfPollIntervalMs),
 			slog.String("agentsession_script", next.AgentSessionScript),

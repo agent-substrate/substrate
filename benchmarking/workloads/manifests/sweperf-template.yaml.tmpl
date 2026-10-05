@@ -1,0 +1,54 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Generic ActorTemplate for every SWE-perf task in images.json.
+# benchmarking/workloads/deploy.sh renders one copy per requested
+# sweperf-<repo>-<id> template, filling the SWEPERF_* values from that
+# task's images.json entry.
+metadata:
+  atespace: benchmark-workloads
+  name: ${SWEPERF_NAME}
+workerSelector:
+  matchLabels:
+    workload: benchmark-ateom
+containers:
+- name: ${SWEPERF_CONTAINER}
+  # Task image from https://github.com/gke-labs/sweperf, which supplies both
+  # the replay server and the trajectory under test, pinned by digest: these
+  # images are commonly rebuilt in place under the same tag.
+  #
+  # Images must be built from sweperf c30c0d6 (2026-09-21) or later: older
+  # images have no HTTP execution API and fail on the client's first
+  # GET /status. generate.py writes the replay server to /replay.py and the
+  # trajectory to /trace.json at the image root.
+  image: "${SWEPERF_IMAGE}"
+  command:
+  - "python3"
+  - "/replay.py"
+  - "/trace.json"
+  env:
+  - name: SWEPERF_DISABLE_INTERNAL_SLEEP
+    value: "1"
+  # The trajectory's step count. The replay server ignores it; the boomer
+  # sweperf client reads it back with GetActorTemplate to partition the trace
+  # into cycles.
+  - name: SWEPERF_TOTAL_STEPS
+    value: "${SWEPERF_STEPS}"
+sandboxConfig:
+  sandboxClass: ${SANDBOX_CLASS_ENUM}
+  configName: ${SANDBOX_CONFIG_NAME}
+snapshotConfig:
+  onPause: SNAPSHOT_CONTENT_SCOPE_FULL
+  onCommit: SNAPSHOT_CONTENT_SCOPE_FULL
+  storageLocation: gs://${BUCKET_NAME}/benchmark-workloads/${SWEPERF_NAME}/

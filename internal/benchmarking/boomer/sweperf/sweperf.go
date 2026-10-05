@@ -13,9 +13,9 @@
 // limitations under the License.
 
 // Package sweperf implements the boomer-Go implementation of the
-// SweperfUser locust test. Each user creates an actor from a SWE-bench workload
+// SweperfUser locust test. Each user creates an actor from a SWE-perf workload
 // template and drives it through a trajectory of steps that are partitioned into
-// cycles. This is workload-agnostic and can be used to benchmark any SWE-bench
+// cycles. This is workload-agnostic and can be used to benchmark any SWE-perf
 // workload by providing the appropriate template and dynamic configuration.
 
 package sweperf
@@ -30,6 +30,7 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -56,13 +57,23 @@ const (
 	templateNS = "benchmark-workloads"
 )
 
+// totalStepsEnv is the container env var through which an ActorTemplate
+// declares its trajectory's step count. benchmarking/workloads/deploy.sh sets
+// it from the task's images.json entry; the replay server ignores it. A
+// template without it cannot be driven, since nothing else knows how long its
+// trace is.
+const totalStepsEnv = "SWEPERF_TOTAL_STEPS"
+
+// getTemplateTimeout bounds the GetActorTemplate call that reads a template's
+// step count.
+const getTemplateTimeout = 30 * time.Second
+
 // Defaults for a sweperf session, used when neither the dynamic config nor the
 // environment supplies a value.
 const (
-	sweperfUserClass         = "SweperfUser"
-	defaultSweperfTemplate   = "swebench-astropy-7336"
-	defaultSweperfTotalSteps = 21
-	defaultSweperfNumCycles  = 4
+	sweperfUserClass        = "SweperfUser"
+	defaultSweperfTemplate  = "sweperf-astropy-7336"
+	defaultSweperfNumCycles = 4
 	// defaultSweperfPollInterval trades CycleCEL-to-ack accuracy against
 	// /status load on the router; sympy cycles take roughly 1.5-15s.
 	defaultSweperfPollInterval = 100 * time.Millisecond
@@ -144,13 +155,20 @@ func initSweperf(cfg *userclass.Config) (taskFn func(), shutdown func(context.Co
 type sweperfRuntime struct {
 	cfg   *userclass.Config
 	users sync.Map // goroutineID -> *sweperfUser
+
+	// stepsMu guards stepsCache, the step count each template declares
+	// through totalStepsEnv. Templates are immutable, so a lookup is cached
+	// for the life of the worker.
+	stepsMu    sync.Mutex
+	stepsCache map[string]int
 }
 
-// resolveConfig returns the template, total step count and cycle count for a
-// new session. Values come from dynconfig, which the master populates from
-// the --sweperf-* locust flags (common/sweperf_config.py); an unset field
-// falls back to the built-in default below.
-func (r *sweperfRuntime) resolveConfig() (string, int, int) {
+// resolveConfig returns the template and cycle count for a new session.
+// Values come from dynconfig, which the master populates from the --sweperf-*
+// locust flags (common/sweperf_config.py); an unset field falls back to the
+// built-in default below. The step count comes from the template itself (see
+// templateSteps).
+func (r *sweperfRuntime) resolveConfig() (string, int) {
 	dyn := r.cfg.Dyn.Load()
 
 	template := dyn.SweperfTemplate
@@ -158,17 +176,61 @@ func (r *sweperfRuntime) resolveConfig() (string, int, int) {
 		template = defaultSweperfTemplate
 	}
 
-	totalSteps := dyn.SweperfTotalSteps
-	if totalSteps <= 0 {
-		totalSteps = defaultSweperfTotalSteps
-	}
-
 	numCycles := dyn.SweperfNumCycles
 	if numCycles <= 0 {
 		numCycles = defaultSweperfNumCycles
 	}
 
-	return template, totalSteps, numCycles
+	return template, numCycles
+}
+
+// templateSteps returns the step count the named ActorTemplate declares
+// through its totalStepsEnv container env var. The template is read with
+// GetActorTemplate once per worker and cached; a failed read, or a template
+// that declares no valid step count, is returned uncached as an error, so
+// the next session retries.
+func (r *sweperfRuntime) templateSteps(ctx context.Context, template string) (int, error) {
+	r.stepsMu.Lock()
+	defer r.stepsMu.Unlock()
+	if n, ok := r.stepsCache[template]; ok {
+		return n, nil
+	}
+
+	callCtx, cancel := context.WithTimeout(ctx, getTemplateTimeout)
+	defer cancel()
+	tmpl, err := r.cfg.APIStub.GetActorTemplate(callCtx, &ateapipb.GetActorTemplateRequest{
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: templateNS, Name: template},
+	})
+	if err != nil {
+		return 0, fmt.Errorf("GetActorTemplate %s/%s: %w", templateNS, template, err)
+	}
+	n, err := stepsFromTemplate(tmpl)
+	if err != nil {
+		return 0, fmt.Errorf("template %s/%s: %w", templateNS, template, err)
+	}
+	if r.stepsCache == nil {
+		r.stepsCache = make(map[string]int)
+	}
+	r.stepsCache[template] = n
+	return n, nil
+}
+
+// stepsFromTemplate reads totalStepsEnv from the template's containers. It
+// errors when no container sets it or the value is not a positive integer.
+func stepsFromTemplate(tmpl *ateapipb.ActorTemplate) (int, error) {
+	for _, c := range tmpl.GetContainers() {
+		for _, e := range c.GetEnv() {
+			if e.GetName() != totalStepsEnv {
+				continue
+			}
+			n, err := strconv.Atoi(e.GetValue())
+			if err != nil || n <= 0 {
+				return 0, fmt.Errorf("container %s: %s=%q is not a positive integer", c.GetName(), totalStepsEnv, e.GetValue())
+			}
+			return n, nil
+		}
+	}
+	return 0, fmt.Errorf("no container sets %s; deploy SWE-perf templates with benchmarking/workloads/deploy.sh", totalStepsEnv)
 }
 
 // pollInterval is the /status poll interval from dynconfig
@@ -229,10 +291,15 @@ func (r *sweperfRuntime) iterate() {
 
 // startUser creates an actor and blocks until its sandbox serves, so the
 // caller gets a session that is ready to take cycles. Resolves the config per
-// session, which lets a value changed mid-run apply to later sessions. On
-// failure it tears the actor down.
+// session, which lets a value changed mid-run apply to later sessions. The
+// step count is the one the template declares. On failure it tears the actor
+// down.
 func (r *sweperfRuntime) startUser(ctx context.Context) (*sweperfUser, error) {
-	tmpl, totalSteps, numCycles := r.resolveConfig()
+	tmpl, numCycles := r.resolveConfig()
+	totalSteps, err := r.templateSteps(ctx, tmpl)
+	if err != nil {
+		return nil, fmt.Errorf("templateSteps: %w", err)
+	}
 	chunks := generateDynamicChunks(totalSteps, numCycles)
 
 	u := &sweperfUser{
@@ -247,6 +314,7 @@ func (r *sweperfRuntime) startUser(ctx context.Context) (*sweperfUser, error) {
 	slog.Info("Creating new sweperf user session",
 		slog.String("actor", u.actorName),
 		slog.String("template", u.templateName),
+		slog.Int("total_steps", totalSteps),
 	)
 
 	bmetrics.UpdateUsers(u.userClass, 1)
