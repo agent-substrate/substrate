@@ -898,11 +898,12 @@ func TestRPCBoundariesReject(t *testing.T) {
 		wantInvalidArgument(t, "Restore", err)
 	})
 	t.Run("Terminate", func(t *testing.T) {
+		okAssets := &ateletpb.SandboxAssets{SandboxClass: "gvisor", PauseImage: testPauseImage}
 		t.Run("invalid ateom UID", func(t *testing.T) {
 			_, err := s.Terminate(ctx, &ateletpb.TerminateRequest{
 				Atespace: okAtespace, ActorName: okID,
 				ActorUid: okActorUID, ActorTemplateAtespace: "default", ActorTemplateName: "template",
-				TargetAteomUid: badUID, Spec: okSpec,
+				TargetAteomUid: badUID, Spec: okSpec, SandboxAssets: okAssets,
 			})
 			wantInvalidArgument(t, "Terminate", err)
 		})
@@ -910,7 +911,15 @@ func TestRPCBoundariesReject(t *testing.T) {
 			_, err := s.Terminate(ctx, &ateletpb.TerminateRequest{
 				Atespace: okAtespace, ActorName: okID,
 				ActorUid: okActorUID, ActorTemplateAtespace: "default", ActorTemplateName: "template",
-				Spec: okSpec,
+				Spec: okSpec, SandboxAssets: okAssets,
+			})
+			wantInvalidArgument(t, "Terminate", err)
+		})
+		t.Run("missing sandbox assets", func(t *testing.T) {
+			_, err := s.Terminate(ctx, &ateletpb.TerminateRequest{
+				Atespace: okAtespace, ActorName: okID,
+				ActorUid: okActorUID, ActorTemplateAtespace: "default", ActorTemplateName: "template",
+				TargetAteomUid: "ateom-uid-1", Spec: okSpec,
 			})
 			wantInvalidArgument(t, "Terminate", err)
 		})

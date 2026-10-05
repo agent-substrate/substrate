@@ -1290,16 +1290,16 @@ func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequ
 	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
 	actorUID := req.GetActorUid()
 
-	var assetPaths map[string]string
-	sandboxRec, err := readSandboxRecord(actorUID)
+	// The sandbox binaries that tear the workload down come from the request,
+	// resolved by the control plane from the ActorTemplate's SandboxConfig.
+	sandboxRec, err := recordFromRequest(req.GetSandboxAssets())
 	if err != nil {
-		return nil, fmt.Errorf("failed to read sandbox record during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
+		return nil, apierror.InvalidArgument("invalid sandbox_assets: %v", err)
 	}
-	paths, err := s.ensureSandboxAssets(ctx, sandboxRec)
+	assetPaths, err := s.ensureSandboxAssets(ctx, sandboxRec)
 	if err != nil {
 		return nil, fmt.Errorf("failed to ensure sandbox assets during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
 	}
-	assetPaths = paths
 
 	client, err := s.dialAteom(ctx, req.GetTargetAteomUid())
 	if err != nil {
@@ -1844,7 +1844,13 @@ func validateTerminateRequest(req *ateletpb.TerminateRequest) error {
 	for _, ctr := range req.GetSpec().GetContainers() {
 		names = append(names, ctr.GetName())
 	}
-	return resources.ValidateContainerNames(names)
+	if err := resources.ValidateContainerNames(names); err != nil {
+		return err
+	}
+	if req.GetSandboxAssets() == nil {
+		return fmt.Errorf("missing sandbox_assets")
+	}
+	return nil
 }
 
 func validateSnapshotScope(scope ateletpb.SnapshotScope) error {
