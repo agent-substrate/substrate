@@ -3,7 +3,7 @@
 -- Run once, as the RDS master user, after `setup-aws.sh rds` completes:
 --
 --   psql "postgres://substrate_admin:<password>@<rds-endpoint>:5432/substrate?sslmode=verify-full" \
---     -f hack/setup-aws/postgres-bootstrap.sql
+--     -f tools/setup-aws/postgres-bootstrap.sql
 --
 -- The master password is whatever you set via RDS_MASTER_PASSWORD. If you'd
 -- like verify-full, download the RDS CA bundle:

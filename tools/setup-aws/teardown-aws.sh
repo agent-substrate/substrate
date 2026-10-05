@@ -18,7 +18,7 @@
 # setup-aws.sh provisioned, in reverse order. Honors the same env vars as
 # setup-aws.sh (AWS_REGION, CLUSTER_NAME, BUCKET_NAME, ECR_REPO, RDS_INSTANCE_ID)
 # so you can `source bin/aws-env.sh` and run this directly. See
-# hack/setup-aws/README.md for usage.
+# tools/setup-aws/README.md for usage.
 
 set -o errexit -o nounset -o pipefail
 

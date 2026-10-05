@@ -445,7 +445,7 @@ After the `aws` overlay in §6 lands, the remaining gaps are small.
 | JWT issuer defaulted to GKE URL from `PROJECT_ID`/`CLUSTER_LOCATION`/`CLUSTER_NAME` | `cmd/ate-setup/internal/steps/create.go:149-162` | Already works — the fallback honors `EXPECTED_JWT_ISSUER=https://oidc.eks....`. No code change needed. |
 | Workload Identity annotation is hardcoded to `iam.gke.io/gcp-service-account` for Cloud SQL | `cmd/ate-setup/internal/steps/cloudsql.go:37-39` | Do not use the Cloud SQL branch; set DSN directly to RDS. |
 | gVisor + microVM asset URLs are `gs://` inside CRD spec strings — not overlay-friendly | `sandboxconfig-gvisor.yaml`, `microvm/*.tmpl`, `hack/install-microvm-deps.sh` | §6e — mirror assets to S3, update URLs in place; add `stage-to-s3.sh` alongside `stage-to-gcs.sh` |
-| No AWS equivalent of `tools/setup-gcp` | `tools/setup-gcp/` | Hand-rolled Terraform / `eksctl` / `aws` CLI as in §4. Future: `tools/setup-aws/` Go CLI mirroring the GCP one. |
+| AWS equivalent of `tools/setup-gcp` lives under `tools/setup-aws/` | — | Bash + `eksctl` + `aws` CLI one-shot (`./tools/setup-aws/setup-aws.sh`). See `tools/setup-aws/README.md`. A future Go port in the same shape as `tools/setup-gcp/` would be a clean follow-up. |
 
 ---
 

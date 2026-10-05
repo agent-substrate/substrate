@@ -14,74 +14,76 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# Bash analog of tools/setup-gcp for AWS EKS. Provisions the AWS infrastructure
-# that hack/install-ate.sh then installs Agent Substrate onto. See AWS_INSTALL.md
-# §4 for the design, and hack/setup-aws/README.md for usage.
+# Bash analog of tools/setup-gcp for AWS EKS. Provisions every AWS resource
+# Agent Substrate needs to install onto an EKS cluster, in one invocation.
+# See tools/setup-aws/README.md for the walkthrough.
+#
+# Running with no subcommand (./setup-aws.sh) does the full install:
+# cluster -> s3 -> ecr -> rds -> rds-grant -> bootstrap-postgres -> summary.
+# Any missing secrets (BUCKET_NAME, RDS passwords) are auto-generated and
+# persisted to bin/aws-env.sh so re-runs reuse them deterministically.
+# Individual phases can be invoked by name for debugging.
 
 set -o errexit -o nounset -o pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 RENDERED_CONFIG="${ROOT}/bin/aws-cluster.yaml"
+CREDENTIALS_FILE="${ROOT}/bin/aws-env.sh"
 
 usage() {
   cat <<EOF
-Usage: $(basename "$0") <phase>
+Usage: $(basename "$0") [phase]
 
-Phases:
-  cluster     Create VPC, EKS cluster, node groups, IRSA roles, add-ons (eksctl)
-  s3          Create S3 snapshot bucket (private, encrypted)
-  ecr         Create ECR repository
-  rds         Create RDS PostgreSQL instance with IAM auth enabled
-  rds-grant   Attach rds-db:connect to the ate-api-server IRSA role
-              (run after both 'cluster' and 'rds'; the DbiResourceId isn't
-              available until RDS exists)
-  summary     Print the env block to export for hack/install-ate.sh
-  all         cluster + s3 + ecr + rds + rds-grant + summary
+Running with no phase does the full install end-to-end:
+  cluster -> s3 -> ecr -> rds -> rds-grant -> bootstrap-postgres -> summary
+
+Individual phases (for debugging or partial reruns):
+  cluster            Create VPC, EKS cluster, node groups, IRSA roles, add-ons
+  s3                 Create S3 snapshot bucket (private, encrypted, versioned)
+  ecr                Create ECR repository
+  rds                Create RDS PostgreSQL instance with IAM auth enabled
+  rds-grant          Attach rds-db:connect to the ate-api-server IRSA role
+  bootstrap-postgres Create substrate schema and roles inside the RDS instance
+                     via an in-cluster psql pod
+  summary            Print the env block to source for hack/install-ate.sh
+  all                All of the above in order (same as no argument)
 
 Required env:
   AWS_REGION           AWS region (e.g. us-west-2)
-  BUCKET_NAME          Globally unique S3 bucket name for snapshots
 
-Required for the 'rds' phase:
-  RDS_MASTER_PASSWORD  Password for the Postgres master user. Choose something
-                       strong; it is also what hack/install-ate.sh will embed
-                       in the DSN unless you wire up IAM-auth token minting.
+Auto-generated and persisted to ${CREDENTIALS_FILE} on first run:
+  BUCKET_NAME               Globally unique S3 bucket name
+  RDS_MASTER_PASSWORD       Postgres master user password (32 hex chars)
+  RDS_READWRITE_PASSWORD    substrate_readwrite password (32 hex chars)
 
 Env with defaults:
-  CLUSTER_NAME                 (default: substrate-poc)
-  K8S_VERSION                  (default: 1.37 — serves PodCertificateRequest v1; 1.33 does not)
-  ECR_REPO                     (default: substrate)
-  RDS_INSTANCE_ID              (default: substrate-poc)
-  RDS_INSTANCE_CLASS           (default: db.t4g.medium)
-  RDS_DB_NAME                  (default: substrate)
-  RDS_MASTER_USERNAME          (default: substrate_admin)
-  RDS_ENGINE_VERSION           (default: 16.15)
-  RDS_ALLOCATED_STORAGE        (default: 100 GB)
-  CONTROL_PLANE_INSTANCE_TYPE  (default: m6i.xlarge)
-  CONTROL_PLANE_DESIRED/MIN/MAX  (defaults: 2/2/3)
-  WORKER_INSTANCE_TYPE         (default: m6i.xlarge)
-  WORKER_DESIRED/MIN/MAX       (defaults: 2/1/10)
-
-Examples:
-  AWS_REGION=us-west-2 BUCKET_NAME=substrate-snaps-acme-dev $(basename "$0") cluster
-  AWS_REGION=us-west-2 BUCKET_NAME=substrate-snaps-acme-dev $(basename "$0") s3
-  AWS_REGION=us-west-2 RDS_MASTER_PASSWORD=hunter2 $(basename "$0") rds
-  AWS_REGION=us-west-2 BUCKET_NAME=substrate-snaps-acme-dev $(basename "$0") summary
+  CLUSTER_NAME                   (default: substrate-poc)
+  K8S_VERSION                    (default: 1.37 — serves PodCertificateRequest v1)
+  ECR_REPO                       (default: substrate)
+  RDS_INSTANCE_ID                (default: substrate-poc)
+  RDS_INSTANCE_CLASS             (default: db.t4g.medium)
+  RDS_DB_NAME                    (default: substrate)
+  RDS_MASTER_USERNAME            (default: substrate_admin)
+  RDS_ENGINE_VERSION             (default: 16.15)
+  RDS_ALLOCATED_STORAGE          (default: 100 GB)
+  CONTROL_PLANE_INSTANCE_TYPE    (default: m6i.xlarge)
+  CONTROL_PLANE_DESIRED/MIN/MAX  (default: 2/2/3)
+  WORKER_INSTANCE_TYPE           (default: m6i.xlarge)
+  WORKER_DESIRED/MIN/MAX         (default: 2/1/10)
 
 Teardown:
-  eksctl delete cluster --name <CLUSTER_NAME> --region <AWS_REGION>
-  aws rds delete-db-instance --db-instance-identifier <RDS_INSTANCE_ID> \\
-    --skip-final-snapshot --delete-automated-backups
-  aws s3 rb s3://<BUCKET_NAME> --force
-  aws ecr delete-repository --repository-name <ECR_REPO> --force
+  ${SCRIPT_DIR}/teardown-aws.sh
 EOF
 }
 
 : "${AWS_REGION:?AWS_REGION must be set}"
+
+# Load persisted credentials if present (so re-runs reuse what we generated).
+[[ -f "${CREDENTIALS_FILE}" ]] && source "${CREDENTIALS_FILE}"
+
 CLUSTER_NAME="${CLUSTER_NAME:-substrate-poc}"
 K8S_VERSION="${K8S_VERSION:-1.37}"
-BUCKET_NAME="${BUCKET_NAME:-}"
 ECR_REPO="${ECR_REPO:-substrate}"
 
 CONTROL_PLANE_INSTANCE_TYPE="${CONTROL_PLANE_INSTANCE_TYPE:-m6i.xlarge}"
@@ -97,13 +99,12 @@ RDS_INSTANCE_ID="${RDS_INSTANCE_ID:-substrate-poc}"
 RDS_INSTANCE_CLASS="${RDS_INSTANCE_CLASS:-db.t4g.medium}"
 RDS_DB_NAME="${RDS_DB_NAME:-substrate}"
 RDS_MASTER_USERNAME="${RDS_MASTER_USERNAME:-substrate_admin}"
-RDS_MASTER_PASSWORD="${RDS_MASTER_PASSWORD:-}"
 RDS_ENGINE_VERSION="${RDS_ENGINE_VERSION:-16.15}"
 RDS_ALLOCATED_STORAGE="${RDS_ALLOCATED_STORAGE:-100}"
 
 check_tools() {
   local missing=()
-  for t in aws eksctl kubectl jq envsubst; do
+  for t in aws eksctl kubectl jq envsubst openssl; do
     command -v "$t" >/dev/null 2>&1 || missing+=("$t")
   done
   if [[ ${#missing[@]} -gt 0 ]]; then
@@ -113,12 +114,53 @@ check_tools() {
   fi
 }
 
-require_bucket_name() {
-  [[ -n "${BUCKET_NAME}" ]] || { echo "error: BUCKET_NAME must be set" >&2; exit 1; }
+# Auto-generate secrets and persist to bin/aws-env.sh. Reruns of setup-aws.sh
+# re-source the file at the top of the script, so values stay stable.
+ensure_credentials() {
+  mkdir -p "${ROOT}/bin"
+  local account_id region_short changed=false
+  account_id=$(aws sts get-caller-identity --query 'Account' --output text)
+  region_short=$(echo "${AWS_REGION}" | tr -d '-' | sed 's/\(.\{6\}\).*/\1/')
+
+  if [[ -z "${BUCKET_NAME:-}" ]]; then
+    BUCKET_NAME="substrate-snaps-${account_id}-${region_short}"
+    echo "generated BUCKET_NAME=${BUCKET_NAME}"
+    changed=true
+  fi
+  if [[ -z "${RDS_MASTER_PASSWORD:-}" ]]; then
+    RDS_MASTER_PASSWORD=$(openssl rand -hex 16)
+    echo "generated RDS_MASTER_PASSWORD (32 hex)"
+    changed=true
+  fi
+  if [[ -z "${RDS_READWRITE_PASSWORD:-}" ]]; then
+    RDS_READWRITE_PASSWORD=$(openssl rand -hex 16)
+    echo "generated RDS_READWRITE_PASSWORD (32 hex)"
+    changed=true
+  fi
+
+  if [[ "${changed}" == "true" ]]; then
+    cat > "${CREDENTIALS_FILE}" <<EOF
+# Generated by tools/setup-aws/setup-aws.sh. Do not commit (bin/ is gitignored).
+# Re-sourced by setup-aws.sh and teardown-aws.sh so values stay stable.
+export AWS_REGION='${AWS_REGION}'
+export CLUSTER_NAME='${CLUSTER_NAME}'
+export K8S_VERSION='${K8S_VERSION}'
+export BUCKET_NAME='${BUCKET_NAME}'
+export ECR_REPO='${ECR_REPO}'
+export RDS_INSTANCE_ID='${RDS_INSTANCE_ID}'
+export RDS_DB_NAME='${RDS_DB_NAME}'
+export RDS_MASTER_USERNAME='${RDS_MASTER_USERNAME}'
+export RDS_MASTER_PASSWORD='${RDS_MASTER_PASSWORD}'
+export RDS_READWRITE_PASSWORD='${RDS_READWRITE_PASSWORD}'
+export RDS_ENGINE_VERSION='${RDS_ENGINE_VERSION}'
+EOF
+    chmod 600 "${CREDENTIALS_FILE}"
+    echo "wrote ${CREDENTIALS_FILE} (mode 0600)"
+  fi
 }
 
 phase_cluster() {
-  require_bucket_name
+  ensure_credentials
   mkdir -p "${ROOT}/bin"
   echo "==> Rendering eksctl ClusterConfig to ${RENDERED_CONFIG}"
   export AWS_REGION CLUSTER_NAME K8S_VERSION BUCKET_NAME
@@ -161,7 +203,7 @@ EOF
 }
 
 phase_s3() {
-  require_bucket_name
+  ensure_credentials
   echo "==> Creating S3 bucket ${BUCKET_NAME} in ${AWS_REGION}"
   if aws s3api head-bucket --bucket "${BUCKET_NAME}" --region "${AWS_REGION}" 2>/dev/null; then
     echo "    already exists"
@@ -201,11 +243,7 @@ phase_ecr() {
 }
 
 phase_rds() {
-  [[ -n "${RDS_MASTER_PASSWORD}" ]] || {
-    echo "error: RDS_MASTER_PASSWORD must be set for the 'rds' phase" >&2
-    exit 1
-  }
-
+  ensure_credentials
   echo "==> Discovering cluster VPC and private subnets"
   local vpc_id
   vpc_id=$(aws eks describe-cluster --name "${CLUSTER_NAME}" --region "${AWS_REGION}" \
@@ -309,12 +347,57 @@ EOF
     --role-name "${CLUSTER_NAME}-ate-api-server" \
     --policy-name rds-db-connect \
     --policy-document "${policy_doc}"
-  echo "    done. The 'ate_api_server' DB user must be created via psql:"
-  echo "    psql ... -f hack/setup-aws/postgres-bootstrap.sql"
+  echo "    policy attached (used only if you switch to IAM-auth DSN)"
+}
+
+# phase_bootstrap_postgres applies postgres-bootstrap.sql against the RDS
+# instance from an in-cluster psql pod. RDS is in private subnets so this
+# can't run from the operator's laptop. The script templates the SQL with
+# the generated substrate_readwrite password, cps it into a short-lived
+# postgres:16-alpine pod, exec's psql, deletes the pod.
+phase_bootstrap_postgres() {
+  ensure_credentials
+  echo "==> Bootstrapping Postgres schema and roles"
+
+  local rds_endpoint
+  rds_endpoint=$(aws rds describe-db-instances --db-instance-identifier "${RDS_INSTANCE_ID}" \
+    --region "${AWS_REGION}" --query 'DBInstances[0].Endpoint.Address' --output text)
+
+  # Make sure we're talking to the right cluster.
+  local ctx_want="arn:aws:eks:${AWS_REGION}:$(aws sts get-caller-identity --query Account --output text):cluster/${CLUSTER_NAME}"
+  kubectl config use-context "${ctx_want}" >/dev/null 2>&1 || {
+    aws eks update-kubeconfig --region "${AWS_REGION}" --name "${CLUSTER_NAME}" >/dev/null
+    kubectl config use-context "${ctx_want}" >/dev/null
+  }
+
+  # Idempotency: skip if the substrate schema already exists with the right
+  # readwrite password that we can log in with.
+  local tmp_pod="setup-aws-psql-$$"
+  trap 'kubectl delete pod '"${tmp_pod}"' --ignore-not-found --wait=false >/dev/null 2>&1' RETURN
+
+  kubectl delete pod "${tmp_pod}" --ignore-not-found >/dev/null 2>&1
+  kubectl run "${tmp_pod}" --image=postgres:16-alpine --restart=Never \
+    --command -- sleep 300 >/dev/null
+  kubectl wait --for=condition=Ready "pod/${tmp_pod}" --timeout=120s >/dev/null
+
+  # Template the SQL with the real readwrite password.
+  local rendered
+  rendered=$(sed "s/'CHANGE_ME'/'${RDS_READWRITE_PASSWORD}'/g" "${SCRIPT_DIR}/postgres-bootstrap.sql")
+
+  # Skip if substrate schema already exists.
+  local existing
+  existing=$(kubectl exec "${tmp_pod}" -- sh -c "PGPASSWORD='${RDS_MASTER_PASSWORD}' psql 'host=${rds_endpoint} user=${RDS_MASTER_USERNAME} dbname=${RDS_DB_NAME} port=5432 sslmode=require' -tAc \"SELECT 1 FROM pg_namespace WHERE nspname='substrate'\"" 2>/dev/null || true)
+  if [[ "${existing}" == "1" ]]; then
+    echo "    substrate schema already exists; skipping bootstrap"
+    return 0
+  fi
+
+  echo "${rendered}" | kubectl exec -i "${tmp_pod}" -- sh -c "PGPASSWORD='${RDS_MASTER_PASSWORD}' psql 'host=${rds_endpoint} user=${RDS_MASTER_USERNAME} dbname=${RDS_DB_NAME} port=5432 sslmode=require'"
+  echo "    schema and roles created"
 }
 
 phase_summary() {
-  require_bucket_name
+  ensure_credentials
   local account_id oidc_issuer="" rds_endpoint=""
   account_id=$(aws sts get-caller-identity --query 'Account' --output text)
   oidc_issuer=$(aws eks describe-cluster --name "${CLUSTER_NAME}" --region "${AWS_REGION}" \
@@ -325,14 +408,15 @@ phase_summary() {
   cat <<EOF
 
 =================================================================
-Phase 4 complete. Export these before running hack/install-ate.sh:
+AWS infrastructure ready.
+Source these before running hack/install-ate.sh:
 =================================================================
+
+source ${CREDENTIALS_FILE}
 
 export KUBECTL_CONTEXT="$(kubectl config current-context 2>/dev/null || echo "<run: aws eks update-kubeconfig>")"
 export NO_DEV_ENV=true
 export ATE_INSTALL_AWS=true
-export AWS_REGION="${AWS_REGION}"
-export BUCKET_NAME="${BUCKET_NAME}"
 export KO_DOCKER_REPO="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}"
 export EXPECTED_JWT_ISSUER="${oidc_issuer:-<unknown — cluster phase not run>}"
 export ATE_CREDENTIAL_PROVIDER='{"name":"k8s.io"}'
@@ -342,10 +426,8 @@ EOF
 
   if [[ -n "${rds_endpoint}" && "${rds_endpoint}" != "None" ]]; then
     cat <<EOF
-# RDS endpoint (password-based DSN for simplicity; see postgres-bootstrap.sql
-# for the IAM-auth upgrade path, which requires a token-minting sidecar).
-export ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING="postgres://substrate_readwrite:<password>@${rds_endpoint}:5432/${RDS_DB_NAME}?sslmode=verify-full"
-export ATE_API_POSTGRES_SERVER_CA_FILE=/path/to/rds-combined-ca-bundle.pem
+export ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING="postgres://substrate_readwrite:\${RDS_READWRITE_PASSWORD}@${rds_endpoint}:5432/${RDS_DB_NAME}?sslmode=require"
+export ATE_API_POSTGRES_OWNER_CONNECTION_STRING="postgres://${RDS_MASTER_USERNAME}:\${RDS_MASTER_PASSWORD}@${rds_endpoint}:5432/${RDS_DB_NAME}?sslmode=require"
 EOF
   fi
 
@@ -363,22 +445,24 @@ phase_all() {
   phase_ecr
   phase_rds
   phase_rds_grant
+  phase_bootstrap_postgres
   phase_summary
 }
 
 main() {
-  [[ $# -ge 1 ]] || { usage; exit 1; }
   check_tools
-  case "$1" in
-    cluster)   phase_cluster ;;
-    s3)        phase_s3 ;;
-    ecr)       phase_ecr ;;
-    rds)       phase_rds ;;
-    rds-grant) phase_rds_grant ;;
-    summary)   phase_summary ;;
-    all)       phase_all ;;
-    -h|--help) usage ;;
-    *)         echo "error: unknown phase '$1'" >&2; usage; exit 1 ;;
+  local phase="${1:-all}"
+  case "${phase}" in
+    cluster)            phase_cluster ;;
+    s3)                 phase_s3 ;;
+    ecr)                phase_ecr ;;
+    rds)                phase_rds ;;
+    rds-grant)          phase_rds_grant ;;
+    bootstrap-postgres) phase_bootstrap_postgres ;;
+    summary)            phase_summary ;;
+    all)                phase_all ;;
+    -h|--help)          usage ;;
+    *)                  echo "error: unknown phase '${phase}'" >&2; usage; exit 1 ;;
   esac
 }
 
