@@ -25,11 +25,13 @@ import (
 )
 
 // WorkerPodInformer creates a SharedInformerFactory and SharedIndexInformer for
-// worker pods. The resync period re-delivers every cached pod as an update, so
+// worker pods in namespace, or all namespaces when empty. The resync period
+// re-delivers every cached pod as an update, so
 // a registry record that drifted without a corresponding pod event is repaired
 // on the next sweep.
-func WorkerPodInformer(kc kubernetes.Interface) (informers.SharedInformerFactory, cache.SharedIndexInformer) {
+func WorkerPodInformer(kc kubernetes.Interface, namespace string) (informers.SharedInformerFactory, cache.SharedIndexInformer) {
 	factory := informers.NewSharedInformerFactoryWithOptions(kc, 5*time.Minute,
+		informers.WithNamespace(namespace),
 		informers.WithTweakListOptions(func(options *metav1.ListOptions) {
 			options.LabelSelector = workerPodLabel
 		}),
