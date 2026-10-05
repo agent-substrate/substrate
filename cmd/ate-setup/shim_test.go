@@ -207,8 +207,8 @@ func TestShimTranslatesFlags(t *testing.T) {
 		// The value-bearing flags were pre-scanned, so they shape every action
 		// regardless of where they appear.
 		name: "global flags apply to actions that precede them",
-		args: []string{"--deploy-atenet", "--atenet-dataplane", "agentgateway", "--experimental-use-sdsmint"},
-		want: []string{"--atenet-dataplane=agentgateway --experimental-use-sdsmint deploy atenet"},
+		args: []string{"--deploy-atenet", "--atenet-dataplane", "agentgateway"},
+		want: []string{"--atenet-dataplane=agentgateway deploy atenet"},
 	}, {
 		name: "cluster profile flags are forwarded in either value form",
 		args: []string{"--deploy-ate-system", "--cluster-size", "size10", "--cordon-control-plane"},
@@ -218,16 +218,13 @@ func TestShimTranslatesFlags(t *testing.T) {
 		args: []string{"--cluster-size=size10", "--deploy-ate-apiserver"},
 		want: []string{"--cluster-size=size10 deploy apiserver"},
 	}, {
-		name: "credential injection implies sdsmint and forwards provider flags",
-		args: []string{
-			"--deploy-atenet",
-			"--experimental-egress-credential-injection",
-			"--credential-provider-name", "ate-secret://custom",
-			"--credential-provider-address=cred.ate-system.svc:50051",
-		},
-		want: []string{
-			"--experimental-use-sdsmint --experimental-egress-credential-injection --credential-provider-name=ate-secret://custom --credential-provider-address=cred.ate-system.svc:50051 deploy atenet",
-		},
+		name: "--credential-provider is forwarded with a separate value",
+		args: []string{"--deploy-atenet", "--credential-provider", `{"name":"custom","address":"cred.ate-system.svc:50051"}`},
+		want: []string{`--credential-provider={"name":"custom","address":"cred.ate-system.svc:50051"} deploy atenet`},
+	}, {
+		name: "--credential-provider takes an attached value",
+		args: []string{`--credential-provider={"name":"k8s.io"}`, "--deploy-ate-system"},
+		want: []string{`--credential-provider={"name":"k8s.io"} deploy ate-system --setup-csi=none`},
 	}, {
 		name: "actions run in command line order",
 		args: []string{"--deploy-ate-apiserver", "--deploy-atelet", "--delete-atenet"},
@@ -272,9 +269,9 @@ func TestShimTranslatesFlags(t *testing.T) {
 		},
 	}, {
 		name: "demo flags drop the demo- prefix",
-		args: []string{"--deploy-demo-egress-microvm-mitm", "--delete-demo-counter-microvm"},
+		args: []string{"--deploy-demo-egress-microvm", "--delete-demo-counter-microvm"},
 		want: []string{
-			"deploy demo egress-microvm-mitm",
+			"deploy demo egress-microvm",
 			"delete demo counter-microvm",
 		},
 	}, {

@@ -68,6 +68,13 @@ const (
 	Control_GetActorTemplate_FullMethodName           = "/ateapi.Control/GetActorTemplate"
 	Control_ListActorTemplates_FullMethodName         = "/ateapi.Control/ListActorTemplates"
 	Control_DeleteActorTemplate_FullMethodName        = "/ateapi.Control/DeleteActorTemplate"
+	Control_GetGlobalAccessPolicy_FullMethodName      = "/ateapi.Control/GetGlobalAccessPolicy"
+	Control_CreateGlobalAccessPolicy_FullMethodName   = "/ateapi.Control/CreateGlobalAccessPolicy"
+	Control_UpdateGlobalAccessPolicy_FullMethodName   = "/ateapi.Control/UpdateGlobalAccessPolicy"
+	Control_GetAtespaceAccessPolicy_FullMethodName    = "/ateapi.Control/GetAtespaceAccessPolicy"
+	Control_CreateAtespaceAccessPolicy_FullMethodName = "/ateapi.Control/CreateAtespaceAccessPolicy"
+	Control_UpdateAtespaceAccessPolicy_FullMethodName = "/ateapi.Control/UpdateAtespaceAccessPolicy"
+	Control_DeleteAtespaceAccessPolicy_FullMethodName = "/ateapi.Control/DeleteAtespaceAccessPolicy"
 )
 
 // ControlClient is the client API for Control service.
@@ -163,6 +170,25 @@ type ControlClient interface {
 	// Delete an ActorTemplate together with its golden actor and golden
 	// tag in the reserved ate-golden atespace.
 	DeleteActorTemplate(ctx context.Context, in *DeleteActorTemplateRequest, opts ...grpc.CallOption) (*ActorTemplate, error)
+	// Get the deployment-wide global access policy singleton. Returns NotFound
+	// until the policy has been created.
+	GetGlobalAccessPolicy(ctx context.Context, in *GetGlobalAccessPolicyRequest, opts ...grpc.CallOption) (*AccessPolicy, error)
+	// Create the deployment-wide global access policy singleton. The server's
+	// configured bootstrap owners are global owners whether or not this policy
+	// exists, so they can create it.
+	CreateGlobalAccessPolicy(ctx context.Context, in *CreateGlobalAccessPolicyRequest, opts ...grpc.CallOption) (*AccessPolicy, error)
+	// Replace the deployment-wide global access policy singleton. Empty
+	// bindings revoke every grant held through the policy; bootstrap owners
+	// keep access.
+	UpdateGlobalAccessPolicy(ctx context.Context, in *UpdateGlobalAccessPolicyRequest, opts ...grpc.CallOption) (*AccessPolicy, error)
+	// Get the access policy resource nested under an Atespace.
+	GetAtespaceAccessPolicy(ctx context.Context, in *GetAtespaceAccessPolicyRequest, opts ...grpc.CallOption) (*AccessPolicy, error)
+	// Create the access policy resource nested under an Atespace.
+	CreateAtespaceAccessPolicy(ctx context.Context, in *CreateAtespaceAccessPolicyRequest, opts ...grpc.CallOption) (*AccessPolicy, error)
+	// Replace the access policy resource nested under an Atespace.
+	UpdateAtespaceAccessPolicy(ctx context.Context, in *UpdateAtespaceAccessPolicyRequest, opts ...grpc.CallOption) (*AccessPolicy, error)
+	// Delete the access policy resource nested under an Atespace.
+	DeleteAtespaceAccessPolicy(ctx context.Context, in *DeleteAtespaceAccessPolicyRequest, opts ...grpc.CallOption) (*AccessPolicy, error)
 }
 
 type controlClient struct {
@@ -523,6 +549,76 @@ func (c *controlClient) DeleteActorTemplate(ctx context.Context, in *DeleteActor
 	return out, nil
 }
 
+func (c *controlClient) GetGlobalAccessPolicy(ctx context.Context, in *GetGlobalAccessPolicyRequest, opts ...grpc.CallOption) (*AccessPolicy, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AccessPolicy)
+	err := c.cc.Invoke(ctx, Control_GetGlobalAccessPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) CreateGlobalAccessPolicy(ctx context.Context, in *CreateGlobalAccessPolicyRequest, opts ...grpc.CallOption) (*AccessPolicy, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AccessPolicy)
+	err := c.cc.Invoke(ctx, Control_CreateGlobalAccessPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) UpdateGlobalAccessPolicy(ctx context.Context, in *UpdateGlobalAccessPolicyRequest, opts ...grpc.CallOption) (*AccessPolicy, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AccessPolicy)
+	err := c.cc.Invoke(ctx, Control_UpdateGlobalAccessPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) GetAtespaceAccessPolicy(ctx context.Context, in *GetAtespaceAccessPolicyRequest, opts ...grpc.CallOption) (*AccessPolicy, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AccessPolicy)
+	err := c.cc.Invoke(ctx, Control_GetAtespaceAccessPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) CreateAtespaceAccessPolicy(ctx context.Context, in *CreateAtespaceAccessPolicyRequest, opts ...grpc.CallOption) (*AccessPolicy, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AccessPolicy)
+	err := c.cc.Invoke(ctx, Control_CreateAtespaceAccessPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) UpdateAtespaceAccessPolicy(ctx context.Context, in *UpdateAtespaceAccessPolicyRequest, opts ...grpc.CallOption) (*AccessPolicy, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AccessPolicy)
+	err := c.cc.Invoke(ctx, Control_UpdateAtespaceAccessPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) DeleteAtespaceAccessPolicy(ctx context.Context, in *DeleteAtespaceAccessPolicyRequest, opts ...grpc.CallOption) (*AccessPolicy, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AccessPolicy)
+	err := c.cc.Invoke(ctx, Control_DeleteAtespaceAccessPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ControlServer is the server API for Control service.
 // All implementations must embed UnimplementedControlServer
 // for forward compatibility.
@@ -616,6 +712,25 @@ type ControlServer interface {
 	// Delete an ActorTemplate together with its golden actor and golden
 	// tag in the reserved ate-golden atespace.
 	DeleteActorTemplate(context.Context, *DeleteActorTemplateRequest) (*ActorTemplate, error)
+	// Get the deployment-wide global access policy singleton. Returns NotFound
+	// until the policy has been created.
+	GetGlobalAccessPolicy(context.Context, *GetGlobalAccessPolicyRequest) (*AccessPolicy, error)
+	// Create the deployment-wide global access policy singleton. The server's
+	// configured bootstrap owners are global owners whether or not this policy
+	// exists, so they can create it.
+	CreateGlobalAccessPolicy(context.Context, *CreateGlobalAccessPolicyRequest) (*AccessPolicy, error)
+	// Replace the deployment-wide global access policy singleton. Empty
+	// bindings revoke every grant held through the policy; bootstrap owners
+	// keep access.
+	UpdateGlobalAccessPolicy(context.Context, *UpdateGlobalAccessPolicyRequest) (*AccessPolicy, error)
+	// Get the access policy resource nested under an Atespace.
+	GetAtespaceAccessPolicy(context.Context, *GetAtespaceAccessPolicyRequest) (*AccessPolicy, error)
+	// Create the access policy resource nested under an Atespace.
+	CreateAtespaceAccessPolicy(context.Context, *CreateAtespaceAccessPolicyRequest) (*AccessPolicy, error)
+	// Replace the access policy resource nested under an Atespace.
+	UpdateAtespaceAccessPolicy(context.Context, *UpdateAtespaceAccessPolicyRequest) (*AccessPolicy, error)
+	// Delete the access policy resource nested under an Atespace.
+	DeleteAtespaceAccessPolicy(context.Context, *DeleteAtespaceAccessPolicyRequest) (*AccessPolicy, error)
 	mustEmbedUnimplementedControlServer()
 }
 
@@ -730,6 +845,27 @@ func (UnimplementedControlServer) ListActorTemplates(context.Context, *ListActor
 }
 func (UnimplementedControlServer) DeleteActorTemplate(context.Context, *DeleteActorTemplateRequest) (*ActorTemplate, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteActorTemplate not implemented")
+}
+func (UnimplementedControlServer) GetGlobalAccessPolicy(context.Context, *GetGlobalAccessPolicyRequest) (*AccessPolicy, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetGlobalAccessPolicy not implemented")
+}
+func (UnimplementedControlServer) CreateGlobalAccessPolicy(context.Context, *CreateGlobalAccessPolicyRequest) (*AccessPolicy, error) {
+	return nil, status.Error(codes.Unimplemented, "method CreateGlobalAccessPolicy not implemented")
+}
+func (UnimplementedControlServer) UpdateGlobalAccessPolicy(context.Context, *UpdateGlobalAccessPolicyRequest) (*AccessPolicy, error) {
+	return nil, status.Error(codes.Unimplemented, "method UpdateGlobalAccessPolicy not implemented")
+}
+func (UnimplementedControlServer) GetAtespaceAccessPolicy(context.Context, *GetAtespaceAccessPolicyRequest) (*AccessPolicy, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetAtespaceAccessPolicy not implemented")
+}
+func (UnimplementedControlServer) CreateAtespaceAccessPolicy(context.Context, *CreateAtespaceAccessPolicyRequest) (*AccessPolicy, error) {
+	return nil, status.Error(codes.Unimplemented, "method CreateAtespaceAccessPolicy not implemented")
+}
+func (UnimplementedControlServer) UpdateAtespaceAccessPolicy(context.Context, *UpdateAtespaceAccessPolicyRequest) (*AccessPolicy, error) {
+	return nil, status.Error(codes.Unimplemented, "method UpdateAtespaceAccessPolicy not implemented")
+}
+func (UnimplementedControlServer) DeleteAtespaceAccessPolicy(context.Context, *DeleteAtespaceAccessPolicyRequest) (*AccessPolicy, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteAtespaceAccessPolicy not implemented")
 }
 func (UnimplementedControlServer) mustEmbedUnimplementedControlServer() {}
 func (UnimplementedControlServer) testEmbeddedByValue()                 {}
@@ -1382,6 +1518,132 @@ func _Control_DeleteActorTemplate_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Control_GetGlobalAccessPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetGlobalAccessPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).GetGlobalAccessPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_GetGlobalAccessPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).GetGlobalAccessPolicy(ctx, req.(*GetGlobalAccessPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_CreateGlobalAccessPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateGlobalAccessPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).CreateGlobalAccessPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_CreateGlobalAccessPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).CreateGlobalAccessPolicy(ctx, req.(*CreateGlobalAccessPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_UpdateGlobalAccessPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateGlobalAccessPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).UpdateGlobalAccessPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_UpdateGlobalAccessPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).UpdateGlobalAccessPolicy(ctx, req.(*UpdateGlobalAccessPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_GetAtespaceAccessPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetAtespaceAccessPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).GetAtespaceAccessPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_GetAtespaceAccessPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).GetAtespaceAccessPolicy(ctx, req.(*GetAtespaceAccessPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_CreateAtespaceAccessPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateAtespaceAccessPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).CreateAtespaceAccessPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_CreateAtespaceAccessPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).CreateAtespaceAccessPolicy(ctx, req.(*CreateAtespaceAccessPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_UpdateAtespaceAccessPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateAtespaceAccessPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).UpdateAtespaceAccessPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_UpdateAtespaceAccessPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).UpdateAtespaceAccessPolicy(ctx, req.(*UpdateAtespaceAccessPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_DeleteAtespaceAccessPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteAtespaceAccessPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).DeleteAtespaceAccessPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_DeleteAtespaceAccessPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).DeleteAtespaceAccessPolicy(ctx, req.(*DeleteAtespaceAccessPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Control_ServiceDesc is the grpc.ServiceDesc for Control service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1528,6 +1790,34 @@ var Control_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteActorTemplate",
 			Handler:    _Control_DeleteActorTemplate_Handler,
+		},
+		{
+			MethodName: "GetGlobalAccessPolicy",
+			Handler:    _Control_GetGlobalAccessPolicy_Handler,
+		},
+		{
+			MethodName: "CreateGlobalAccessPolicy",
+			Handler:    _Control_CreateGlobalAccessPolicy_Handler,
+		},
+		{
+			MethodName: "UpdateGlobalAccessPolicy",
+			Handler:    _Control_UpdateGlobalAccessPolicy_Handler,
+		},
+		{
+			MethodName: "GetAtespaceAccessPolicy",
+			Handler:    _Control_GetAtespaceAccessPolicy_Handler,
+		},
+		{
+			MethodName: "CreateAtespaceAccessPolicy",
+			Handler:    _Control_CreateAtespaceAccessPolicy_Handler,
+		},
+		{
+			MethodName: "UpdateAtespaceAccessPolicy",
+			Handler:    _Control_UpdateAtespaceAccessPolicy_Handler,
+		},
+		{
+			MethodName: "DeleteAtespaceAccessPolicy",
+			Handler:    _Control_DeleteAtespaceAccessPolicy_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

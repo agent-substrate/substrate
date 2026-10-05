@@ -16,15 +16,12 @@ package authz
 
 import (
 	"context"
-	"errors"
 	"strings"
 
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/principal"
 	openfgav1 "github.com/openfga/api/proto/openfga/v1"
 	"github.com/openfga/openfga/pkg/server"
-	serverErrors "github.com/openfga/openfga/pkg/server/errors"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // Authorizer is the read-only policy decision point that evaluates runtime
@@ -33,22 +30,30 @@ type Authorizer struct {
 	fgaServer *server.Server
 	storeID   string
 	modelID   string
+
+	// bootstrapOwners holds the OpenFGA user strings of the server-configured
+	// global owners. They hold owner on global:root through a contextual tuple
+	// on every Check rather than a stored tuple, so they are not part of any
+	// AccessPolicy, cannot be revoked through the API, and lose access once
+	// the server runs without them in its configuration.
+	bootstrapOwners map[string]struct{}
 }
 
 // Check verifies that the principal in ctx has relation on object.
 // Structural hierarchy links (such as global:root as parent_global of every
-// atespace) are injected as OpenFGA ContextualTuples at evaluation time rather
-// than persisted in the tuple table.
+// atespace) and the caller's bootstrap owner grant, if any, are injected as
+// OpenFGA ContextualTuples at evaluation time rather than persisted in the
+// tuple table.
 func (a *Authorizer) Check(ctx context.Context, relation, object string) error {
 	if IsBypassed(ctx) {
 		return nil
 	}
 	if a == nil || a.fgaServer == nil {
-		return status.Error(codes.Internal, "authz: authorizer is not initialized")
+		return apierror.Internal("authz: authorizer is not initialized")
 	}
 	p, ok := principal.FromContext(ctx)
 	if !ok || p.ID == "" {
-		return status.Error(codes.Unauthenticated, "unauthenticated: missing principal in context")
+		return apierror.Unauthenticated("unauthenticated: missing principal in context")
 	}
 	user := formatUser(p.ID)
 	allowed, err := a.checkRaw(ctx, user, relation, object)
@@ -56,14 +61,24 @@ func (a *Authorizer) Check(ctx context.Context, relation, object string) error {
 		return err
 	}
 	if !allowed {
-		return status.Errorf(codes.PermissionDenied, "permission denied: principal %q lacks %q on %q", user, relation, object)
+		return apierror.PermissionDenied("permission denied: principal %q lacks %q on %q", user, relation, object)
 	}
 	return nil
 }
 
 func (a *Authorizer) checkRaw(ctx context.Context, user, relation, object string) (bool, error) {
+	tuples := contextualTuples(object)
+	// A Check only evaluates the caller, so only the caller's own bootstrap
+	// grant can affect the result.
+	if _, ok := a.bootstrapOwners[user]; ok {
+		tuples = append(tuples, &openfgav1.TupleKey{
+			User:     user,
+			Relation: RoleOwner,
+			Object:   GlobalRootObject,
+		})
+	}
 	var ctxTuples *openfgav1.ContextualTupleKeys
-	if tuples := contextualTuples(object); len(tuples) > 0 {
+	if len(tuples) > 0 {
 		ctxTuples = &openfgav1.ContextualTupleKeys{TupleKeys: tuples}
 	}
 	resp, err := a.fgaServer.Check(ctx, &openfgav1.CheckRequest{
@@ -77,27 +92,9 @@ func (a *Authorizer) checkRaw(ctx context.Context, user, relation, object string
 		ContextualTuples: ctxTuples,
 	})
 	if err != nil {
-		return false, statusFromFGAError(err)
+		return false, err
 	}
 	return resp.GetAllowed(), nil
-}
-
-// statusFromFGAError translates an error returned by the embedded OpenFGA
-// server into a gRPC status error. Context cancellation and deadline expiry
-// (which OpenFGA maps to its own custom error codes) are preserved as
-// codes.Canceled and codes.DeadlineExceeded so client disconnects and timeouts
-// do not surface as 500s; all other OpenFGA errors (such as model/tuple
-// validation or storage failures) indicate a server-side fault and fail closed
-// with codes.Internal.
-func statusFromFGAError(err error) error {
-	switch {
-	case errors.Is(err, context.Canceled), errors.Is(err, serverErrors.ErrRequestCancelled):
-		return status.Errorf(codes.Canceled, "authz check canceled: %v", err)
-	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, serverErrors.ErrRequestDeadlineExceeded):
-		return status.Errorf(codes.DeadlineExceeded, "authz check deadline exceeded: %v", err)
-	default:
-		return status.Errorf(codes.Internal, "authz check failed: %v", err)
-	}
 }
 
 // contextualTuples synthesizes the invariant structural hierarchy tuples for an

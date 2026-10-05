@@ -23,13 +23,12 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/objectstore"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel/attribute"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // revertableStates are the states a revert is accepted from.
@@ -109,7 +108,7 @@ func (w *ActorWorkflow) loadActorForRevert(ctx context.Context, actorRef resourc
 	actor, err := w.store.GetActor(ctx, actorRef)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, nil, status.Errorf(codes.NotFound, "Actor %s not found", actorRef)
+			return nil, nil, apierror.NotFound("Actor %s not found", actorRef)
 		}
 		return nil, nil, fmt.Errorf("while fetching actor: %w", err)
 	}
@@ -141,7 +140,7 @@ func (w *ActorWorkflow) ensureMarkedReverting(ctx context.Context, actorRef reso
 		return actor, nil
 	}
 	if !slices.Contains(revertableStates, st) {
-		return nil, status.Errorf(codes.FailedPrecondition, "Actor %s is not in a revertable state (got: %v, want one of %v)", actorRef, st, revertableStates)
+		return nil, apierror.FailedPrecondition("Actor %s is not in a revertable state (got: %v, want one of %v)", actorRef, st, revertableStates)
 	}
 
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
@@ -150,7 +149,7 @@ func (w *ActorWorkflow) ensureMarkedReverting(ctx context.Context, actorRef reso
 	})
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
+			return nil, apierror.Aborted("concurrent update conflict, please retry")
 		}
 		return nil, fmt.Errorf("while setting actor state to REVERTING: %w", err)
 	}
@@ -180,15 +179,12 @@ func (w *ActorWorkflow) ensureWorkerDiscarded(ctx context.Context, actorRef reso
 			return err
 		}
 		if hosted {
-			if terr := w.ensureAteletTerminated(ctx, actorRef, actor, actorTemplate); terr != nil {
-				// A failed terminate lands the actor in CRASHED, which the user
-				// can revert again — that retry needs no live worker.
-				slog.LogAttrs(ctx, slog.LevelError, "Setting Actor to crashed due to error",
-					append(ateattr.ActorRefLogAttrs(actorRef), slog.Any("err", terr))...)
-				if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationRevert, ateletCrashMessage("Terminate", terr)); cerr != nil {
-					return cerr
-				}
-				return fmt.Errorf("actor %s crashed: %w", actorRef, terr)
+			if err := w.ensureAteletTerminated(ctx, actorRef, actor, actorTemplate, ateattr.OperationRevert); err != nil {
+				// A failed terminate leaves the actor REVERTING with its
+				// assignment, so the next revert terminates it again. If the
+				// worker's pod goes away, worker deletion crashes the actor, and
+				// the next revert needs no live worker.
+				return err
 			}
 			if err := w.ensureVolumesDetached(ctx, actor, actorTemplate, "DetachVolumesForRevert", ateattr.OperationRevert); err != nil {
 				return err
@@ -247,7 +243,7 @@ func (w *ActorWorkflow) ensureRevertedFinalized(ctx context.Context, actorRef re
 		return nil, err
 	}
 	if got := latestActor.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_REVERTING {
-		return nil, status.Errorf(codes.FailedPrecondition, "FinalizeReverted prerequisite not met for Actor: %s (got: %v, want %s)", actorRef, got, ateapipb.ActorState_ACTOR_STATE_REVERTING)
+		return nil, apierror.FailedPrecondition("FinalizeReverted prerequisite not met for Actor: %s (got: %v, want %s)", actorRef, got, ateapipb.ActorState_ACTOR_STATE_REVERTING)
 	}
 
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapipb.Actor) error {
@@ -261,7 +257,7 @@ func (w *ActorWorkflow) ensureRevertedFinalized(ctx context.Context, actorRef re
 	})
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
+			return nil, apierror.Aborted("concurrent update conflict, please retry")
 		}
 		return nil, err
 	}

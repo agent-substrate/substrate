@@ -65,7 +65,6 @@ func TestActorTemplateCRUD(t *testing.T) {
 			StorageLocation: "gs://my-bucket/snapshots",
 			OnPause:         ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 			OnCommit:        ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
-			OnResume:        &ateapipb.OnResumeConfig{FromData: ateapipb.ResumeSource_RESUME_SOURCE_COLD_BOOT},
 		},
 		SandboxConfig: &ateapipb.SandboxConfig{
 			SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,

@@ -166,11 +166,11 @@ func cloudSQLDSN(s cloudSQLSettings) (string, error) {
 	if s.IAMAuth == "false" {
 		return "", fmt.Errorf("ATE_API_POSTGRES_CLOUDSQL_IAM_AUTH=false disables automatic IAM database " +
 			"authentication, so a passwordless DSN cannot be synthesized; set " +
-			"ATE_API_POSTGRES_CONNECTION_STRING explicitly (host=127.0.0.1 to stay on the proxy)")
+			"ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING explicitly (host=127.0.0.1 to stay on the proxy)")
 	}
 	if s.GSA == "" {
 		return "", fmt.Errorf("ATE_API_POSTGRES_CLOUDSQL_INSTANCE requires ATE_API_POSTGRES_CLOUDSQL_GSA " +
-			"(or an explicit ATE_API_POSTGRES_CONNECTION_STRING)")
+			"(or an explicit ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING)")
 	}
 	user := strings.TrimSuffix(s.GSA, gsaEmailSuffix)
 	return fmt.Sprintf("user=%s host=127.0.0.1 port=5432 dbname=atepg sslmode=disable", user), nil

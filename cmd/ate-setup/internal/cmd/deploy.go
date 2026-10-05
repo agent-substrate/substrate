@@ -38,7 +38,7 @@ it signs, PostgreSQL, ate-api-server, ate-controller, the atenet dataplane, and
 the atelet DaemonSet, then waits for each to roll out.
 
 The bundled PostgreSQL StatefulSet is skipped when
-ATE_API_POSTGRES_CONNECTION_STRING or the ATE_API_POSTGRES_CLOUDSQL_* variables
+ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING or the ATE_API_POSTGRES_CLOUDSQL_* variables
 select an external database.
 
 Shape the install with the global --atenet-dataplane, --cluster-size, and
@@ -96,13 +96,32 @@ var deployAtenetCmd = &cobra.Command{
 	},
 }
 
+var deployPodCertControllerCmd = &cobra.Command{
+	Use:     "podcertificate-controller",
+	Aliases: []string{"podcert"},
+	Short:   "Deploy podcertificate-controller only",
+	Args:    cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		return env.DeployPodCertificateController(cmd.Context())
+	},
+}
+
+var deploySandboxConfigCmd = &cobra.Command{
+	Use:   "sandboxconfig",
+	Short: "Deploy the SandboxConfig admission policy and the default gVisor SandboxConfig only",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		return env.DeploySandboxConfig(cmd.Context())
+	},
+}
+
 var deployPostgresCmd = &cobra.Command{
 	Use:   "postgres",
 	Short: "Deploy the single-replica PostgreSQL StatefulSet",
 	Long: `Deploy the experimental single-replica PostgreSQL StatefulSet on its own.
 
 "deploy ate-system" already brings PostgreSQL up, unless
-ATE_API_POSTGRES_CONNECTION_STRING or the ATE_API_POSTGRES_CLOUDSQL_* variables
+ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING or the ATE_API_POSTGRES_CLOUDSQL_* variables
 select an external database; this subcommand is for bringing the StatefulSet up
 by itself.`,
 	Args: cobra.NoArgs,
@@ -119,6 +138,8 @@ func init() {
 		deployAPIServerCmd,
 		deployControllerCmd,
 		deployAtenetCmd,
+		deployPodCertControllerCmd,
+		deploySandboxConfigCmd,
 		deployPostgresCmd,
 	)
 

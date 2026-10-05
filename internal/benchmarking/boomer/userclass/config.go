@@ -16,6 +16,7 @@ package userclass
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/dynconfig"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -46,4 +47,10 @@ type Config struct {
 	// that honor this knob; classes that don't honor it treat every VU as
 	// owning exactly one actor.
 	ActorsPerUser int
+	// TotalActors is the total number of actors to create in the batch (spawn benchmark).
+	TotalActors int
+	// SpawnConcurrency is the number of actors created concurrently (spawn benchmark).
+	SpawnConcurrency int
+	// ActorDeadline is the per-actor timeout covering CreateActor + ResumeActor + Ping (spawn benchmark).
+	ActorDeadline time.Duration
 }

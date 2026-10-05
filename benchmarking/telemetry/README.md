@@ -37,7 +37,7 @@ Install the meter, then send the control plane to it:
 kubectl apply -f benchmarking/telemetry/meter.yaml
 
 METER=http://telemetry-meter.benchmarking.svc.cluster.local:4317
-./hack/install-ate.sh --deploy-ate-system --otlp-endpoint "${METER}"
+./hack/install-ate.sh --deploy-ate-system --credential-provider='{"name":"k8s.io"}' --otlp-endpoint "${METER}"
 ```
 
 `--otlp-endpoint` patches the `ate-otel-config` ConfigMap and restarts the
@@ -223,7 +223,7 @@ upgrade.
 ## Remove the meter
 
 ```bash
-./hack/install-ate.sh --deploy-ate-system
+./hack/install-ate.sh --deploy-ate-system --credential-provider='{"name":"k8s.io"}'
 ./benchmarking/workloads/deploy.sh --deploy
 kubectl delete -f benchmarking/telemetry/meter.yaml
 ```

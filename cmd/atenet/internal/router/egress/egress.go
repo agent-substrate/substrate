@@ -14,10 +14,8 @@
 
 // Package egress implements the ext_proc handler for outbound actor traffic.
 // It authenticates the actor behind an egress CONNECT and authorizes what goes
-// through the tunnel against the actor's EgressPolicy. A request the gateway
-// can read is decided the way the API says: the rules in order, over the Host
-// it named and the address the actor dialed, first match wins. What the
-// gateway cannot read is decided at the CONNECT, by the address alone.
+// through the tunnel against the actor's EgressPolicy. The dataplane decides
+// TLS at the ClientHello using the SNI rules returned on CONNECT.
 //
 // Identity comes from the actor certificate presented in the mTLS handshake,
 // never from a request header. On the inner legs it arrives as filter state
@@ -33,6 +31,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -85,11 +84,12 @@ type Handler struct {
 	// policies is the per-actor EgressPolicy cache every leg reads through.
 	policies *policyCache
 	// provider resolves an egress policy's credential injections. Nil means
-	// credential injection is not configured, and injection will be skipped.
+	// credential injection is not configured, and a request that needs one is
+	// denied.
 	provider credproviderpb.CredentialProviderClient
 	// providerName, when set, is the provider this gateway serves (the host of
-	// its ate-secret:// prefix); a credential URI naming another provider
-	// is refused.
+	// its ate-secret:// credential URIs); a credential URI naming another
+	// provider is refused.
 	providerName string
 }
 
@@ -98,9 +98,10 @@ type Handler struct {
 // policyCacheTTL of 0 fetches the policy on every callout.
 //
 // provider resolves an allowed rule's credential injections on the
-// TLS-terminated MITM leg; nil leaves credential injection off, so a rule that
-// requires an injection is skipped. providerName, when set, is the provider
-// this gateway serves; a credential URI naming another provider is refused.
+// TLS-terminated MITM leg; nil leaves credential injection off, so a request
+// matching a rule that requires an injection is denied. providerName, when
+// set, is the provider this gateway serves; a credential URI naming another
+// provider is refused.
 func New(apiClient ateapipb.ControlClient, actorIdentityRoots *x509.CertPool, policyCacheTTL time.Duration, provider credproviderpb.CredentialProviderClient, providerName string) *Handler {
 	return &Handler{
 		apiClient:          apiClient,
@@ -132,12 +133,8 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 // certificate atunnel presented. Nothing the actor can write contributes to
 // the identity.
 //
-// The tunnel opens for an actor with a policy that has rules, with nothing to
-// dial: every connection is decided inside, request by request. Nothing is
-// decided at the CONNECT yet, so a tls_passthrough rule cannot allow a
-// connection here; until it can, the passthrough chain closes what it gets. An
-// actor with no policy, or none with rules, is refused here, where there is
-// still a response.
+// It returns the SNI rules for the dialed port, and the port itself for the
+// passthrough chain. Actors without policy rules are refused here.
 func (h *Handler) handleConnect(ctx context.Context, md *extproc.RequestMetadata, leg string) (extproc.Result, error) {
 	// Sanity check that we were called on the Egress listener filter chain with
 	// a CONNECT.
@@ -184,30 +181,33 @@ func (h *Handler) handleConnect(ctx context.Context, md *extproc.RequestMetadata
 	if err != nil {
 		return extproc.Result{}, err
 	}
+	rules := policy.SNIRules(dest.Port)
 	slog.InfoContext(ctx, "egress tunnel opened: requests inside it are decided one by one",
-		slog.Any("actor", ref), slog.String("leg", leg), slog.String("destination", md.Host))
+		slog.Any("actor", ref), slog.String("leg", leg), slog.String("destination", md.Host), slog.Int("sniRules", len(rules)))
 	res := allow()
-	res.DynamicMetadata = connectMetadata(policy.HostnamePatterns())
+	res.DynamicMetadata = connectMetadata(dest, rules)
 	return res, nil
 }
 
-// connectMetadata builds the dynamic metadata returned on an allowed CONNECT:
-// the policy's allowed SNI patterns under dev.ate.policy.egress.
-func connectMetadata(allowedSNIs []string) *structpb.Struct {
-	sniValues := make([]*structpb.Value, len(allowedSNIs))
-	for i, sni := range allowedSNIs {
-		sniValues[i] = structpb.NewStringValue(sni)
+// connectMetadata encodes the SNI rules for EgressPolicyMetadataNamespace and
+// the dialed port for EgressMetadataNamespace. The port is always set: without
+// it the passthrough chain falls back to its configured port instead of closing.
+func connectMetadata(dest egresspolicy.Destination, rules []egresspolicy.SNIRule) *structpb.Struct {
+	values := make([]*structpb.Value, len(rules))
+	for i, rule := range rules {
+		values[i] = structpb.NewStructValue(&structpb.Struct{Fields: map[string]*structpb.Value{
+			extproc.EgressSNIRulePatternKey: structpb.NewStringValue(rule.Pattern),
+			extproc.EgressSNIRuleModeKey:    structpb.NewStringValue(string(rule.Mode)),
+		}})
 	}
-	fields := map[string]*structpb.Value{
-		extproc.EgressPolicyMetadataNamespace: structpb.NewStructValue(&structpb.Struct{
-			Fields: map[string]*structpb.Value{
-				extproc.EgressAllowedSNIsKey: structpb.NewListValue(&structpb.ListValue{
-					Values: sniValues,
-				}),
-			},
-		}),
-	}
-	return &structpb.Struct{Fields: fields}
+	return &structpb.Struct{Fields: map[string]*structpb.Value{
+		extproc.EgressMetadataNamespace: structpb.NewStructValue(&structpb.Struct{Fields: map[string]*structpb.Value{
+			extproc.EgressDialedPortKey: structpb.NewStringValue(strconv.Itoa(int(dest.Port))),
+		}}),
+		extproc.EgressPolicyMetadataNamespace: structpb.NewStructValue(&structpb.Struct{Fields: map[string]*structpb.Value{
+			extproc.EgressSNIRulesKey: structpb.NewListValue(&structpb.ListValue{Values: values}),
+		}}),
+	}}
 }
 
 // metadataAnswer is a one-entry answer in the egress metadata namespace.

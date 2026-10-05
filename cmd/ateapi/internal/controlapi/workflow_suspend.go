@@ -22,14 +22,13 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/objectstore"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel/attribute"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -132,7 +131,7 @@ func (w *ActorWorkflow) ensureMarkedSuspending(ctx context.Context, actorRef res
 		return actor, nil
 	}
 	if got := actor.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_RUNNING && got != ateapipb.ActorState_ACTOR_STATE_PAUSED {
-		return nil, status.Errorf(codes.FailedPrecondition, "MarkSuspending prerequisite not met for Actor: %s (got: %v, want %s or %s)", actorRef, got, ateapipb.ActorState_ACTOR_STATE_RUNNING, ateapipb.ActorState_ACTOR_STATE_PAUSED)
+		return nil, apierror.FailedPrecondition("MarkSuspending prerequisite not met for Actor: %s (got: %v, want %s or %s)", actorRef, got, ateapipb.ActorState_ACTOR_STATE_RUNNING, ateapipb.ActorState_ACTOR_STATE_PAUSED)
 	}
 	// A paused-origin suspend uploads what the pause captured; it cannot
 	// fabricate the memory a Full commit needs from a Data-only capture.
@@ -140,7 +139,7 @@ func (w *ActorWorkflow) ensureMarkedSuspending(ctx context.Context, actorRef res
 	if actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_PAUSED &&
 		pausedContentScope(actor.GetStatus().GetLocalSnapshot(), actorTemplate) == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA &&
 		commitSnapshotScope(actorRef.Atespace, actorTemplate) == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL {
-		return nil, status.Errorf(codes.FailedPrecondition, "actor %s paused with a Data snapshot; the template commits Full, which a paused-origin suspend cannot produce", actorRef)
+		return nil, apierror.FailedPrecondition("actor %s paused with a Data snapshot; the template commits Full, which a paused-origin suspend cannot produce", actorRef)
 	}
 
 	// Fail here rather than at checkpoint time if the template's location
@@ -156,7 +155,7 @@ func (w *ActorWorkflow) ensureMarkedSuspending(ctx context.Context, actorRef res
 	})
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
+			return nil, apierror.Aborted("concurrent update conflict, please retry")
 		}
 		return nil, err
 	}
@@ -166,9 +165,8 @@ func (w *ActorWorkflow) ensureMarkedSuspending(ctx context.Context, actorRef res
 
 // commitSnapshotScope returns the scope a commit (suspend) snapshot is taken
 // with. Golden actors always commit Full regardless of the template's
-// onCommit: the golden snapshot is the base an OnGolden data resume is
-// combined with at restore, so it must carry the guest memory and filesystem
-// — a data-only golden would leave nothing to restore the guest from.
+// onCommit: new actors borrow the golden snapshot and resume it Full, so it
+// must carry the guest memory and filesystem.
 func commitSnapshotScope(atespace string, tmpl *ateapipb.ActorTemplate) ateapipb.SnapshotContentScope {
 	if atespace == resources.GoldenActorAtespace {
 		return ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL
@@ -252,12 +250,7 @@ func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef reso
 	wireSnapshotScope = ateattr.SnapshotScopeValue(req.Scope)
 
 	if _, err = client.Checkpoint(ctx, req); err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "Setting Actor to crashed due to error",
-			append(ateattr.ActorRefLogAttrs(actorRef), slog.Any("err", err))...)
-		if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationSuspend, ateletCrashMessage("Checkpoint", err)); cerr != nil {
-			return wireSnapshotScope, cerr
-		}
-		return wireSnapshotScope, fmt.Errorf("actor %s crashed: %w", actorRef, err)
+		return wireSnapshotScope, handleAteletError(ctx, w.store, actorRef, ateattr.OperationSuspend, "Checkpoint", false, err)
 	}
 	return wireSnapshotScope, nil
 }
@@ -306,12 +299,7 @@ func (w *ActorWorkflow) ensurePausedSnapshotUploaded(ctx context.Context, actorR
 	wireSnapshotScope = ateattr.SnapshotScopeValue(req.DesiredScope)
 
 	if _, err = client.UploadPausedCheckpoint(ctx, req); err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "Setting Actor to crashed due to error",
-			append(ateattr.ActorRefLogAttrs(actorRef), slog.Any("err", err))...)
-		if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationSuspend, ateletCrashMessage("UploadPausedCheckpoint", err)); cerr != nil {
-			return wireSnapshotScope, cerr
-		}
-		return wireSnapshotScope, fmt.Errorf("actor %s crashed: %w", actorRef, err)
+		return wireSnapshotScope, handleAteletError(ctx, w.store, actorRef, ateattr.OperationSuspend, "UploadPausedCheckpoint", false, err)
 	}
 	return wireSnapshotScope, nil
 }
@@ -342,9 +330,10 @@ func (w *ActorWorkflow) ensureVolumesDetached(ctx context.Context, actor *ateapi
 // ensureSuspendedFinalized releases the actor's worker (only when it is still
 // owned by this actor), records the in-progress snapshot as the actor's
 // external snapshot, and commits SUSPENDED with the assignment cleared in a
-// single update. It re-reads the actor first so an out-of-band transition
-// (e.g. the syncer crashing the actor after its worker died) is not
-// overwritten: with no assignment left there is nothing to finalize.
+// single update, then releases the external snapshot that update replaced.
+// It re-reads the actor first so an out-of-band transition (e.g. the syncer
+// crashing the actor after its worker died) is not overwritten: with no
+// assignment left there is nothing to finalize.
 func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef resources.ActorRef, actorTemplate *ateapipb.ActorTemplate) (_ *ateapipb.Actor, err error) {
 	ctx, done := stepSpan(ctx, "FinalizeSuspended")
 	defer func() { err = done(err) }()
@@ -354,7 +343,7 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 	// that stalls and then fails still reports where the time went; steps not
 	// reached (or skipped) log zero.
 	start := time.Now()
-	var dGetActor, dReleaseWorker, dRefetchActor, dReleaseSnapshot, dUpdateActor time.Duration
+	var dGetActor, dReleaseWorker, dRefetchActor, dUpdateActor, dReleaseSnapshot time.Duration
 	defer func() {
 		slog.InfoContext(ctx, "FinalizeSuspended store call durations",
 			slog.Any("actor", actorRef),
@@ -362,8 +351,8 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 			slog.Duration("get_actor", dGetActor),
 			slog.Duration("release_worker", dReleaseWorker),
 			slog.Duration("refetch_actor", dRefetchActor),
-			slog.Duration("release_snapshot", dReleaseSnapshot),
-			slog.Duration("update_actor", dUpdateActor))
+			slog.Duration("update_actor", dUpdateActor),
+			slog.Duration("release_snapshot", dReleaseSnapshot))
 	}()
 
 	t := time.Now()
@@ -404,16 +393,7 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 		}
 	}
 
-	// 3. Release the external snapshot this suspend replaces (latestActor.externalSnapshot)
-	// before it's overwritten by externalSnapshot in the commit phase below.
-	t = time.Now()
-	err = w.releaseReplacedSnapshot(ctx, latestActor, externalSnapshot)
-	dReleaseSnapshot = time.Since(t)
-	if err != nil {
-		return nil, err
-	}
-
-	// 4. Commit the actor.
+	// 3. Commit the actor.
 	t = time.Now()
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
@@ -431,18 +411,31 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 	dUpdateActor = time.Since(t)
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
+			return nil, apierror.Aborted("concurrent update conflict, please retry")
 		}
 		return nil, err
 	}
 	logActorStateChanged(ctx, storedActor, ateattr.OperationSuspend)
+
+	// 4. Release the external snapshot this suspend replaced. Best-effort: the
+	// new snapshot is committed and the worker is gone, so failing the
+	// workflow here would only strand the actor. A failure leaves the old
+	// snapshot's objects in storage until the actor is deleted, which removes
+	// its whole prefix.
+	t = time.Now()
+	releaseErr := w.releaseReplacedSnapshot(ctx, latestActor, externalSnapshot)
+	dReleaseSnapshot = time.Since(t)
+	if releaseErr != nil {
+		slog.WarnContext(ctx, "Failed to release the external snapshot a suspend replaced; its objects are left in storage until the actor is deleted",
+			slog.Any("actor", actorRef),
+			slog.String("snapshot_uri", latestActor.GetStatus().GetExternalSnapshot().GetSnapshotUri()),
+			slog.String("err", releaseErr.Error()))
+	}
 	return storedActor, nil
 }
 
 // releaseReplacedSnapshot releases the external snapshot the actor held before
-// this suspend.
-// It runs while the actor record still points at the old snapshot, so an
-// interrupted release is rediscoverable: the retry deletes whatever is left.
+// this suspend. actor is the record as it was before the suspend committed.
 // An actor that borrowed its current snapshot from a tag releases nothing —
 // the snapshot lives under the tag's prefix, and the tag outlives the actor.
 func (w *ActorWorkflow) releaseReplacedSnapshot(ctx context.Context, actor *ateapipb.Actor, nextSnapshot *ateapipb.ExternalSnapshot) (err error) {

@@ -43,15 +43,15 @@ func loadEnv(t *testing.T) {
 		"ATE_API_POSTGRES_CLOUDSQL_GSA",
 		"ATE_API_POSTGRES_CLOUDSQL_IAM_AUTH",
 		"ATE_API_POSTGRES_CLOUDSQL_IP_TYPE",
-		"ATE_API_POSTGRES_CONNECTION_STRING",
+		"ATE_API_POSTGRES_OWNER_CONNECTION_STRING",
+		"ATE_API_POSTGRES_OWNER_ROLE",
 		"ATE_API_POSTGRES_POOL_MAX_CONNS",
+		"ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING",
+		"ATE_API_POSTGRES_READ_WRITE_ROLE",
 		"ATE_API_POSTGRES_SCHEMA",
 		"ATE_API_POSTGRES_SERVER_CA_FILE",
 		"ATE_ATENET_DATAPLANE",
-		"ATE_CREDENTIAL_INJECTION_ENABLED",
-		"ATE_CREDENTIAL_PROVIDER_ADDRESS",
-		"ATE_CREDENTIAL_PROVIDER_NAME",
-		"ATE_EXPERIMENTAL_USE_SDSMINT",
+		"ATE_CREDENTIAL_PROVIDER",
 		"ATE_IMAGE_REPO",
 		"ATE_IMAGE_TAG",
 		"ATE_INSTALL_CLUSTER_SIZE",
@@ -100,8 +100,11 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Router != RouterEnvoy {
 		t.Errorf("Router = %q, want %q", cfg.Router, RouterEnvoy)
 	}
-	if cfg.PostgresConnString() != DefaultPostgresConnectionString {
-		t.Errorf("PostgresConnString() = %q, want %q", cfg.PostgresConnString(), DefaultPostgresConnectionString)
+	if cfg.PostgresReadWriteConnectionString != "" || cfg.PostgresOwnerConnectionString != "" {
+		t.Errorf("unexpected external PostgreSQL connections: %q, %q", cfg.PostgresReadWriteConnectionString, cfg.PostgresOwnerConnectionString)
+	}
+	if cfg.PostgresReadWriteRole != DefaultPostgresReadWriteRole || cfg.PostgresOwnerRole != DefaultPostgresOwnerRole {
+		t.Errorf("unexpected default PostgreSQL roles: %q, %q", cfg.PostgresReadWriteRole, cfg.PostgresOwnerRole)
 	}
 	if cfg.RolloutTimeout != DefaultRolloutTimeout {
 		t.Errorf("RolloutTimeout = %v, want %v", cfg.RolloutTimeout, DefaultRolloutTimeout)
@@ -114,42 +117,34 @@ func TestLoadDefaults(t *testing.T) {
 	}
 }
 
-// --cluster-size=size10 pins the apiserver's pool on the default connection
-// string only. An explicit ATE_API_POSTGRES_CONNECTION_STRING names a database
-// the installer did not size, so it is passed through as written.
 func TestLoadClusterSize(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		opts     Options
 		env      map[string]string
 		wantSize string
-		wantDSN  string
 	}{
 		{
 			name:     "flag",
 			opts:     Options{ClusterSize: ClusterSizeSize10},
 			wantSize: ClusterSizeSize10,
-			wantDSN:  DefaultPostgresConnectionString + Size10PostgresPoolParams,
 		},
 		{
 			name:     "environment",
 			env:      map[string]string{"ATE_INSTALL_CLUSTER_SIZE": ClusterSizeSize10},
 			wantSize: ClusterSizeSize10,
-			wantDSN:  DefaultPostgresConnectionString + Size10PostgresPoolParams,
 		},
 		{
 			name:     "flag beats the environment",
 			opts:     Options{ClusterSize: ClusterSizeSize0},
 			env:      map[string]string{"ATE_INSTALL_CLUSTER_SIZE": ClusterSizeSize10},
 			wantSize: ClusterSizeSize0,
-			wantDSN:  DefaultPostgresConnectionString,
 		},
 		{
 			name:     "explicit connection string is untouched",
 			opts:     Options{ClusterSize: ClusterSizeSize10},
-			env:      map[string]string{"ATE_API_POSTGRES_CONNECTION_STRING": "postgresql://someone@db.example:5432/atepg"},
+			env:      map[string]string{"ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING": "postgresql://someone@db.example:5432/atepg"},
 			wantSize: ClusterSizeSize10,
-			wantDSN:  "postgresql://someone@db.example:5432/atepg",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -166,9 +161,6 @@ func TestLoadClusterSize(t *testing.T) {
 			}
 			if cfg.Size10() != (tc.wantSize == ClusterSizeSize10) {
 				t.Errorf("Size10() = %v, want %v", cfg.Size10(), tc.wantSize == ClusterSizeSize10)
-			}
-			if got := cfg.PostgresConnString(); got != tc.wantDSN {
-				t.Errorf("PostgresConnString() = %q, want %q", got, tc.wantDSN)
 			}
 			env := scriptEnvMap(t, cfg)
 			if tc.wantSize == ClusterSizeSize10 {
@@ -228,23 +220,48 @@ func TestLoadFlagsBeatEnvironment(t *testing.T) {
 	}
 }
 
-// ATE_API_POSTGRES_CONNECTION_STRING is how a developer points the apiserver at
-// their own database, the same override the shell installer honored.
-func TestLoadPostgresConnectionStringOverride(t *testing.T) {
+func TestLoadPostgresConnectionStrings(t *testing.T) {
 	loadEnv(t)
 	const dsn = "postgresql://someone@db.example:5432/atepg?sslmode=disable"
-	t.Setenv("ATE_API_POSTGRES_CONNECTION_STRING", dsn)
+	t.Setenv("ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING", dsn)
 
 	cfg, err := Load(Options{})
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if cfg.PostgresConnString() != dsn {
-		t.Errorf("PostgresConnString() = %q, want %q", cfg.PostgresConnString(), dsn)
+	if cfg.PostgresReadWriteConnectionString != dsn || cfg.PostgresOwnerConnectionString != dsn {
+		t.Errorf("PostgreSQL connections = %q, %q, want %q for both", cfg.PostgresReadWriteConnectionString, cfg.PostgresOwnerConnectionString, dsn)
+	}
+
+	t.Setenv("ATE_API_POSTGRES_OWNER_CONNECTION_STRING", "owner-dsn")
+	cfg, err = Load(Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PostgresReadWriteConnectionString != dsn || cfg.PostgresOwnerConnectionString != "owner-dsn" {
+		t.Errorf("separate PostgreSQL connections = %q, %q, want %q and owner-dsn", cfg.PostgresReadWriteConnectionString, cfg.PostgresOwnerConnectionString, dsn)
 	}
 }
 
-// ATE_API_POSTGRES_SCHEMA defaults to public, as in the shell installer, and
+func TestLoadPostgresIdentityOverrides(t *testing.T) {
+	loadEnv(t)
+	t.Setenv("ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING", "readwrite-dsn")
+	t.Setenv("ATE_API_POSTGRES_OWNER_CONNECTION_STRING", "owner-dsn")
+	t.Setenv("ATE_API_POSTGRES_READ_WRITE_ROLE", "tenant_readwrite")
+	t.Setenv("ATE_API_POSTGRES_OWNER_ROLE", "tenant_owner")
+	cfg, err := Load(Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PostgresReadWriteConnectionString != "readwrite-dsn" || cfg.PostgresOwnerConnectionString != "owner-dsn" || cfg.PostgresReadWriteRole != "tenant_readwrite" || cfg.PostgresOwnerRole != "tenant_owner" {
+		t.Fatalf("PostgreSQL identity overrides not loaded: %+v", cfg)
+	}
+	if !cfg.PostgresReadWriteRoleSet || !cfg.PostgresOwnerRoleSet {
+		t.Fatalf("PostgreSQL role overrides not marked as explicit: %+v", cfg)
+	}
+}
+
+// ATE_API_POSTGRES_SCHEMA defaults to substrate, as in the apiserver, and
 // an explicit value wins.
 func TestLoadPostgresSchema(t *testing.T) {
 	loadEnv(t)
@@ -252,17 +269,17 @@ func TestLoadPostgresSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if cfg.PostgresSchemaName() != DefaultPostgresSchema {
-		t.Errorf("PostgresSchemaName() = %q, want %q", cfg.PostgresSchemaName(), DefaultPostgresSchema)
+	if cfg.PostgresSchemaName() != "substrate" {
+		t.Errorf("PostgresSchemaName() = %q, want %q", cfg.PostgresSchemaName(), "substrate")
 	}
 
-	t.Setenv("ATE_API_POSTGRES_SCHEMA", "substrate")
+	t.Setenv("ATE_API_POSTGRES_SCHEMA", "tenant_schema")
 	cfg, err = Load(Options{})
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if cfg.PostgresSchemaName() != "substrate" {
-		t.Errorf("PostgresSchemaName() = %q, want %q", cfg.PostgresSchemaName(), "substrate")
+	if cfg.PostgresSchemaName() != "tenant_schema" {
+		t.Errorf("PostgresSchemaName() = %q, want %q", cfg.PostgresSchemaName(), "tenant_schema")
 	}
 }
 
@@ -526,17 +543,122 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{"negative rollout timeout", Options{RolloutTimeout: "-30s"}},
 		{"podcert workers", Options{PodcertWorkersPerSigner: -1}},
 		{"cluster size", Options{ClusterSize: "size5"}},
-		{"extproc missing sdsmint", Options{AdditionalEgressExtprocService: "ate-system/extproc:50051"}},
-		{"extproc invalid format", Options{ExperimentalUseSDSMint: true, AdditionalEgressExtprocService: "extproc:50051"}},
-		{"extproc agentgateway", Options{ExperimentalUseSDSMint: true, Router: RouterAgentgateway, AdditionalEgressExtprocService: "ate-system/extproc:50051"}},
-		{"injection missing sdsmint", Options{ExperimentalEgressCredentialInjection: true}},
-		{"injection agentgateway", Options{ExperimentalUseSDSMint: true, Router: RouterAgentgateway, ExperimentalEgressCredentialInjection: true}},
+		{"extproc invalid format", Options{AdditionalEgressExtprocService: "extproc:50051"}},
+		{"extproc agentgateway", Options{Router: RouterAgentgateway, AdditionalEgressExtprocService: "ate-system/extproc:50051"}},
+		{"provider not JSON", Options{CredentialProvider: "k8s.io"}},
+		{"provider as a JSON string", Options{CredentialProvider: `"off"`}},
+		{"provider null", Options{CredentialProvider: `null`}},
+		{"provider without a name", Options{CredentialProvider: `{"address":"vault.ate-system.svc:8200"}`}},
+		{"provider with an unknown key", Options{CredentialProvider: `{"name":"k8s.io","adress":"x:1"}`}},
+		{"provider with trailing data", Options{CredentialProvider: `{"enabled":false} {"name":"k8s.io"}`}},
+		{"provider agentgateway", Options{Router: RouterAgentgateway, CredentialProvider: `{"name":"k8s.io"}`}},
+		{"provider name with a scheme", Options{CredentialProvider: `{"name":"ate-secret://k8s.io"}`}},
+		{"provider name not lowercase", Options{CredentialProvider: `{"name":"Vault.example.com","address":"vault.ate-system.svc:8200"}`}},
+		{"provider name with a port", Options{CredentialProvider: `{"name":"k8s.io:443"}`}},
+		{"provider name with a path", Options{CredentialProvider: `{"name":"k8s.io/default"}`}},
+		{"provider name with a query", Options{CredentialProvider: `{"name":"k8s.io?x=1"}`}},
+		{"disabled with a name", Options{CredentialProvider: `{"enabled":false,"name":"k8s.io"}`}},
+		{"disabled with an address", Options{CredentialProvider: `{"enabled":false,"address":"stale.ate-system.svc:50051"}`}},
+		{"enabled without a name", Options{CredentialProvider: `{"enabled":true}`}},
+		{"kubernetes address without a port", Options{CredentialProvider: `{"name":"k8s.io","address":"secrets.ate-system.svc"}`}},
+		{"other provider without an address", Options{CredentialProvider: `{"name":"vault.example.com"}`}},
+		{"other provider address without a port", Options{CredentialProvider: `{"name":"vault.example.com","address":"vault.ate-system.svc"}`}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := Load(tc.opts); err == nil {
 				t.Fatal("Load() succeeded, want an error")
 			}
 		})
+	}
+}
+
+// The provider selection is required only where the egress gateway is
+// rendered, so Load accepts an absent value and CredentialProvider refuses it.
+func TestCredentialProvider(t *testing.T) {
+	loadEnv(t)
+
+	for _, tc := range []struct {
+		name    string
+		opts    Options
+		env     map[string]string
+		want    CredentialProvider
+		wantErr bool
+	}{
+		{name: "absent is an error", opts: Options{}, wantErr: true},
+		{name: "disabled", opts: Options{CredentialProvider: `{"enabled":false}`}},
+		{name: "disabled on agentgateway", opts: Options{Router: RouterAgentgateway, CredentialProvider: `{"enabled":false}`}},
+		{
+			name: "enabled true names a provider",
+			opts: Options{CredentialProvider: `{"enabled":true,"name":"k8s.io"}`},
+			want: CredentialProvider{Name: K8sCredentialProviderName, Address: K8sCredentialProviderAddress},
+		},
+		{
+			name: "kubernetes gets the bundled address",
+			opts: Options{CredentialProvider: `{"name":"k8s.io"}`},
+			want: CredentialProvider{Name: K8sCredentialProviderName, Address: K8sCredentialProviderAddress},
+		},
+		{
+			name: "kubernetes keeps a given address",
+			opts: Options{CredentialProvider: `{"name":"k8s.io","address":"secrets.ate-system.svc:443"}`},
+			want: CredentialProvider{Name: K8sCredentialProviderName, Address: "secrets.ate-system.svc:443"},
+		},
+		{
+			name: "another provider",
+			opts: Options{CredentialProvider: `{"name":"vault.example.com","address":"vault.ate-system.svc:50051"}`},
+			want: CredentialProvider{Name: "vault.example.com", Address: "vault.ate-system.svc:50051"},
+		},
+		{
+			name: "whitespace is allowed",
+			opts: Options{CredentialProvider: ` { "name" : "k8s.io" } `},
+			want: CredentialProvider{Name: K8sCredentialProviderName, Address: K8sCredentialProviderAddress},
+		},
+		{
+			name: "the environment selects too",
+			env:  map[string]string{"ATE_CREDENTIAL_PROVIDER": `{"name":"k8s.io"}`},
+			want: CredentialProvider{Name: K8sCredentialProviderName, Address: K8sCredentialProviderAddress},
+		},
+		{
+			name: "the flag overrides the environment",
+			opts: Options{CredentialProvider: `{"enabled":false}`},
+			env:  map[string]string{"ATE_CREDENTIAL_PROVIDER": `{"name":"vault.example.com","address":"vault.ate-system.svc:50051"}`},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for k, v := range tc.env {
+				t.Setenv(k, v)
+			}
+			cfg, err := Load(tc.opts)
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			got, err := cfg.CredentialProvider()
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("CredentialProvider() succeeded, want an error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("CredentialProvider() error = %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("CredentialProvider() = %+v, want %+v", got, tc.want)
+			}
+			if got.Enabled() != (tc.want.Name != "") {
+				t.Errorf("Enabled() = %v, want %v", got.Enabled(), tc.want.Name != "")
+			}
+		})
+	}
+}
+
+func TestCredentialProviderServerName(t *testing.T) {
+	for addr, want := range map[string]string{
+		"k8s-credential-provider.ate-system.svc:50051": "k8s-credential-provider.ate-system.svc",
+		"vault.example.com":                            "vault.example.com",
+	} {
+		if got := (CredentialProvider{Address: addr}).ServerName(); got != want {
+			t.Errorf("ServerName(%q) = %q, want %q", addr, got, want)
+		}
 	}
 }
 

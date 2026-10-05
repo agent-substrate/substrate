@@ -101,10 +101,11 @@ required Kubernetes beta APIs, and Managed OpenTelemetry enabled, and the
 Filestore CSI driver disabled).
 
 > [!WARNING]
-> Agent Substrate requires two Kubernetes beta APIs —
-> `certificates.k8s.io/v1beta1/podcertificaterequests` and
-> `certificates.k8s.io/v1beta1/clustertrustbundles` — which constrains the
-> supported GKE versions to exactly two configurations:
+> Agent Substrate requires PodCertificateRequest and ClusterTrustBundle APIs.
+> ClusterTrustBundle discovery prefers `certificates.k8s.io/v1`, falling back
+> to `certificates.k8s.io/v1beta1` only when the stable resource is not served.
+> PodCertificateRequest discovery independently prefers `v1` over `v1beta1`.
+> For GKE deployments, the supported configurations are:
 >
 > * **GKE 1.36 with the beta APIs enabled at cluster creation.** GKE only
 >   honors `enableK8sBetaApis` **at creation time**. Enabling the APIs later

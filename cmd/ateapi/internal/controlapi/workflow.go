@@ -24,6 +24,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/internal/actorevent"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/objectstore"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -33,8 +34,6 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
-	grpcCodes "google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	storagev1listers "k8s.io/client-go/listers/storage/v1"
 )
 
@@ -188,8 +187,10 @@ type workerWorkflowStore interface {
 	UpdateWorker(ctx context.Context, name string, precondition store.Precondition, mutate func(toUpdate *ateapipb.Worker) error) (*ateapipb.Worker, error)
 	DeleteWorker(ctx context.Context, name string, precondition store.DeletePreconditions) (*ateapipb.Worker, error)
 	ListWorkerAssignments(ctx context.Context, workerName string, opts store.ListOptions) (store.ListResponse[*ateapipb.ActorAssignment], error)
+	ReleaseActorFromWorker(ctx context.Context, workerName string, actorUID string) (*ateapipb.Worker, error)
 	GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error)
 	UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(toUpdate *ateapipb.Actor) error) (*ateapipb.Actor, error)
+	AcquireLease(ctx context.Context, key string) (*store.Lease, error)
 }
 
 // leaseHolder takes the distributed leases that serialize the operations on one
@@ -205,7 +206,7 @@ func acquireLease(ctx context.Context, holder leaseHolder, key, subject string) 
 	lease, err := holder.AcquireLease(ctx, key)
 	if err != nil {
 		if errors.Is(err, store.ErrLeaseConflict) {
-			return nil, nil, status.Errorf(grpcCodes.Aborted, "another operation is in progress for this %s", subject)
+			return nil, nil, apierror.Aborted("another operation is in progress for this %s", subject)
 		}
 		return nil, nil, fmt.Errorf("while acquiring lease: %w", err)
 	}
@@ -213,8 +214,13 @@ func acquireLease(ctx context.Context, holder leaseHolder, key, subject string) 
 	return lease.Context(), lease, nil
 }
 
+// actorLeaseKey names the lease that serializes the operations on an Actor.
+func actorLeaseKey(actorRef resources.ActorRef) string {
+	return "lease:actor:" + actorRef.Atespace + ":" + actorRef.Name
+}
+
 func (w *ActorWorkflow) acquireActorLease(ctx context.Context, actorRef resources.ActorRef) (context.Context, *store.Lease, error) {
-	return acquireLease(ctx, w.store, "lease:actor:"+actorRef.Atespace+":"+actorRef.Name, "actor")
+	return acquireLease(ctx, w.store, actorLeaseKey(actorRef), "actor")
 }
 
 func acquireTagLease(ctx context.Context, holder leaseHolder, tagRef resources.TagRef) (context.Context, *store.Lease, error) {

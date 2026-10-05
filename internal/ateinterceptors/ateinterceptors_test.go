@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/protoredact"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -51,16 +52,34 @@ func TestStatusErrorInterceptor(t *testing.T) {
 			expectResponse: true,
 		},
 		{
-			name:       "StatusErrorInChain",
+			name:       "WrappedStatusBecomesInternal",
 			handlerErr: fmt.Errorf("outer error: %w", status.Error(codes.NotFound, "actor not found")),
-			wantCode:   codes.NotFound,
-			wantMsg:    "actor not found",
+			wantCode:   codes.Internal,
+			wantMsg:    "internal server error: outer error: rpc error: code = NotFound desc = actor not found",
 		},
 		{
 			name:       "RawErrorFallback",
 			handlerErr: errors.New("database connection failed"),
 			wantCode:   codes.Internal,
 			wantMsg:    "internal server error: database connection failed",
+		},
+		{
+			name:       "APIErrorInChain",
+			handlerErr: fmt.Errorf("workflow failed at step Load: %w", apierror.NotFound("actor not found")),
+			wantCode:   codes.NotFound,
+			wantMsg:    "actor not found",
+		},
+		{
+			name:       "APIErrorWinsOverStatusItWraps",
+			handlerErr: apierror.Internal("while calling atelet: %w", status.Error(codes.Unavailable, "atelet down")),
+			wantCode:   codes.Internal,
+			wantMsg:    "while calling atelet: rpc error: code = Unavailable desc = atelet down",
+		},
+		{
+			name:       "ContextErrorKeepsItsCode",
+			handlerErr: fmt.Errorf("while loading actor: %w", context.DeadlineExceeded),
+			wantCode:   codes.DeadlineExceeded,
+			wantMsg:    "while loading actor: context deadline exceeded",
 		},
 	}
 
@@ -132,41 +151,48 @@ func errorInfoOf(t *testing.T, err error) *epb.ErrorInfo {
 	return nil
 }
 
-// TestInternalServerUnaryInterceptorPreservesDetails verifies the interceptor
-// returns status errors intact — preserving the code and any ErrorInfo detail —
-// and collapses plain errors to Internal with no ErrorInfo.
-func TestInternalServerUnaryInterceptorPreservesDetails(t *testing.T) {
+func TestInternalServerUnaryInterceptorCodes(t *testing.T) {
 	tests := []struct {
-		name          string
-		handlerErr    error
-		wantCode      codes.Code
-		wantReason    string
-		wantErrorInfo bool
+		name       string
+		handlerErr error
+		wantCode   codes.Code
+		wantMsg    string
 	}{
 		{
-			name:          "structured error keeps code and reason",
-			handlerErr:    statusWithErrorInfo(t, codes.DataLoss, "FAILED_SAVE_SNAPSHOT", nil),
-			wantCode:      codes.DataLoss,
-			wantReason:    "FAILED_SAVE_SNAPSHOT",
-			wantErrorInfo: true,
+			name:       "apierror keeps its code",
+			handlerErr: apierror.FailedPrecondition("snapshot is corrupt"),
+			wantCode:   codes.FailedPrecondition,
+			wantMsg:    "snapshot is corrupt",
 		},
 		{
-			name:          "wrapped plain error collapses to Internal with no ErrorInfo",
-			handlerErr:    fmt.Errorf("while parsing manifest: %w", errors.New("bad json")),
-			wantCode:      codes.Internal,
-			wantErrorInfo: false,
+			name:       "wrapped apierror keeps its code",
+			handlerErr: fmt.Errorf("while restoring: %w", apierror.NotFound("actor not found")),
+			wantCode:   codes.NotFound,
+			wantMsg:    "actor not found",
 		},
 		{
-			name:          "error wrapping a status keeps its code",
-			handlerErr:    fmt.Errorf("while calling downstream: %w", status.Error(codes.Unavailable, "backend down")),
-			wantCode:      codes.Unavailable,
-			wantErrorInfo: false,
+			name:       "upstream status becomes Internal without its details",
+			handlerErr: fmt.Errorf("while calling ateom: %w", statusWithErrorInfo(t, codes.DataLoss, "FAILED_SAVE_SNAPSHOT", nil)),
+			wantCode:   codes.Internal,
+			wantMsg:    "while calling ateom: rpc error: code = DataLoss desc = boom",
 		},
 		{
-			name:          "plain error collapses to Internal with no ErrorInfo",
-			handlerErr:    errors.New("database connection failed"),
-			wantCode:      codes.Internal,
-			wantErrorInfo: false,
+			name:       "wrapped upstream status becomes Internal",
+			handlerErr: fmt.Errorf("while calling downstream: %w", status.Error(codes.Unavailable, "backend down")),
+			wantCode:   codes.Internal,
+			wantMsg:    "while calling downstream: rpc error: code = Unavailable desc = backend down",
+		},
+		{
+			name:       "wrapped context error keeps the context's code",
+			handlerErr: fmt.Errorf("gave up waiting for the actor's lock: %w", context.Canceled),
+			wantCode:   codes.Canceled,
+			wantMsg:    "gave up waiting for the actor's lock: context canceled",
+		},
+		{
+			name:       "wrapped plain error becomes Internal",
+			handlerErr: fmt.Errorf("while parsing manifest: %w", errors.New("bad json")),
+			wantCode:   codes.Internal,
+			wantMsg:    "while parsing manifest: bad json",
 		},
 	}
 
@@ -186,56 +212,13 @@ func TestInternalServerUnaryInterceptorPreservesDetails(t *testing.T) {
 			if st.Code() != tt.wantCode {
 				t.Errorf("code = %v, want %v", st.Code(), tt.wantCode)
 			}
-
-			info := errorInfoOf(t, err)
-			if !tt.wantErrorInfo {
-				if info != nil {
-					t.Errorf("ErrorInfo = %v, want none", info)
-				}
-				return
+			if st.Message() != tt.wantMsg {
+				t.Errorf("message = %q, want %q", st.Message(), tt.wantMsg)
 			}
-			if info == nil {
-				t.Fatal("status is missing the ErrorInfo detail")
-			}
-			if got := info.GetReason(); got != tt.wantReason {
-				t.Errorf("ErrorInfo.Reason = %q, want %q", got, tt.wantReason)
+			if info := errorInfoOf(t, err); info != nil {
+				t.Errorf("ErrorInfo = %v, want none", info)
 			}
 		})
-	}
-}
-
-// TestServerUnaryInterceptorPreservesDetails verifies the public interceptor
-// returns the handler's status intact: ErrorInfo details (reason and metadata)
-// must survive the public wire, even when the status is wrapped.
-func TestServerUnaryInterceptorPreservesDetails(t *testing.T) {
-	metadata := map[string]string{"want": "0.2.0", "have": "0.1.0"}
-	structuredErr := statusWithErrorInfo(t, codes.FailedPrecondition, "INVALID_CHECKPOINT_RESULT", metadata)
-
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return nil, fmt.Errorf("outer error: %w", structuredErr)
-	}
-
-	_, err := ServerUnaryInterceptor(context.Background(), "request", &grpc.UnaryServerInfo{FullMethod: "/test.Service/Method"}, handler)
-	if err == nil {
-		t.Fatal("expected error, got nil")
-	}
-
-	st, _ := status.FromError(err)
-	if st.Code() != codes.FailedPrecondition {
-		t.Errorf("code = %v, want %v", st.Code(), codes.FailedPrecondition)
-	}
-
-	info := errorInfoOf(t, err)
-	if info == nil {
-		t.Fatal("status is missing the ErrorInfo detail")
-	}
-	if got, want := info.GetReason(), "INVALID_CHECKPOINT_RESULT"; got != want {
-		t.Errorf("ErrorInfo.Reason = %q, want %q", got, want)
-	}
-	for k, want := range metadata {
-		if got := info.GetMetadata()[k]; got != want {
-			t.Errorf("ErrorInfo.Metadata[%q] = %q, want %q", k, got, want)
-		}
 	}
 }
 
@@ -501,7 +484,7 @@ func TestDebugRedactFieldsArePinned(t *testing.T) {
 func TestServerUnaryInterceptorLogsNilResponseOnHandlerError(t *testing.T) {
 	log := captureDefaultLog(t)
 	_, err := ServerUnaryInterceptor(context.Background(), &ateapipb.MintActorJWTRequest{}, &grpc.UnaryServerInfo{FullMethod: "/ateapi.Control/MintActorJWT"}, func(ctx context.Context, req interface{}) (interface{}, error) {
-		return nil, status.Error(codes.PermissionDenied, "no")
+		return nil, apierror.PermissionDenied("no")
 	})
 	if status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("err = %v", err)

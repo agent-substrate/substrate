@@ -110,3 +110,13 @@ func requirePool(t *testing.T) *pgxpool.Pool {
 	}
 	return containerPool
 }
+
+func testConnectConfig(schema string) ConnectConfig {
+	return ConnectConfig{
+		ReadWriteDSN:  containerDSN,
+		OwnerDSN:      containerDSN,
+		ReadWriteRole: "atepg",
+		OwnerRole:     "atepg",
+		Schema:        schema,
+	}
+}

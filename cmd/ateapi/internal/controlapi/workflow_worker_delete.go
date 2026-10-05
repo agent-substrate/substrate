@@ -21,11 +21,10 @@ import (
 	"log/slog"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // DeleteWorker executes the workflow to deregister a Worker. The caller reaches
@@ -47,9 +46,9 @@ func (w *WorkerWorkflow) DeleteWorker(ctx context.Context, name string, precondi
 	if err := precondition.Check(worker.GetMetadata()); err != nil {
 		switch {
 		case errors.Is(err, store.ErrUIDConflict):
-			return nil, status.Errorf(codes.Aborted, "Worker %s does not have uid %s", name, precondition.UID)
+			return nil, apierror.Aborted("Worker %s does not have uid %s", name, precondition.UID)
 		case errors.Is(err, store.ErrVersionConflict):
-			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
+			return nil, apierror.Aborted("concurrent update conflict, please retry")
 		}
 		return nil, err
 	}
@@ -86,7 +85,7 @@ func (w *WorkerWorkflow) loadWorkerForDelete(ctx context.Context, name string) (
 	worker, err := w.store.GetWorker(ctx, name)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, status.Errorf(codes.NotFound, "Worker %s not found", name)
+			return nil, apierror.NotFound("Worker %s not found", name)
 		}
 		return nil, fmt.Errorf("while fetching worker: %w", err)
 	}
@@ -192,6 +191,16 @@ func (w *WorkerWorkflow) releaseBoundActor(ctx context.Context, worker *ateapipb
 		markSkipped(ctx, "actor suspended cleanly before the pod went away")
 		return nil
 	}
+	return w.crashBoundActor(ctx, worker, actorRef, actor, "Releasing actor from a worker whose pod is gone", crashMessageWorkerPodGone)
+}
+
+// crashBoundActor moves an Actor that lost its sandbox on the Worker to
+// ACTOR_STATE_CRASHED and clears its pointers at the Worker. crashMsg is
+// recorded in the Actor's status. The Actor's assignment row in the worker is
+// left for the caller to release.
+// A concurrent write to the Actor fails this as ABORTED.
+func (w *WorkerWorkflow) crashBoundActor(ctx context.Context, worker *ateapipb.Worker, actorRef resources.ActorRef, actor *ateapipb.Actor, logMsg, crashMsg string) error {
+	name := worker.GetMetadata().GetName()
 	opName := ateattr.OperationUnknown
 	switch actor.GetStatus().GetState() {
 	case ateapipb.ActorState_ACTOR_STATE_RESUMING:
@@ -209,18 +218,18 @@ func (w *WorkerWorkflow) releaseBoundActor(ctx context.Context, worker *ateapipb
 	// Snapshot crash attributes before pod and pool pointers are cleared on actor.
 	crashAttrs := ateattr.ActorMetricAttributes(actor, worker.GetSandboxClass(), opName)
 
-	slog.LogAttrs(ctx, slog.LevelInfo, "Releasing actor from a worker whose pod is gone",
+	slog.LogAttrs(ctx, slog.LevelInfo, logMsg,
 		append(ateattr.ActorLogAttrs(resources.ActorAttributionFromActor(actor)),
 			slog.String("worker", name))...)
-	_, err = w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
+	_, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_CRASHED
 		if !wasAlreadyCrashed {
-			toUpdate.Status.Crash = newActorCrash(opName, crashMessageWorkerPodGone)
+			toUpdate.Status.Crash = newActorCrash(opName, crashMsg)
 		}
 		toUpdate.Status.WorkerAssignment = nil
-		// Local in-progress checkpoint dies with the worker: it lived on the node
-		// that went away. The external in-progress checkpoint is kept so delete
-		// or revert can delete it.
+		// Local in-progress checkpoint dies with the sandbox that was writing
+		// it. The external in-progress checkpoint is kept so delete or revert
+		// can delete it.
 		toUpdate.Status.InProgressLocalSnapshotName = ""
 		return nil
 	})
@@ -230,7 +239,7 @@ func (w *WorkerWorkflow) releaseBoundActor(ctx context.Context, worker *ateapipb
 		// The actor was deleted out from under us; nothing points here anymore.
 		return nil
 	case errors.Is(err, store.ErrUIDConflict), errors.Is(err, store.ErrVersionConflict):
-		return status.Error(codes.Aborted, "concurrent update conflict, please retry")
+		return apierror.Aborted("concurrent update conflict, please retry")
 	default:
 		return fmt.Errorf("while releasing actor from worker %s: %w", name, err)
 	}
@@ -254,11 +263,11 @@ func (w *WorkerWorkflow) finalizeDeleted(ctx context.Context, name string, preco
 	if err != nil {
 		switch {
 		case errors.Is(err, store.ErrNotFound):
-			return nil, status.Errorf(codes.NotFound, "Worker %s not found", name)
+			return nil, apierror.NotFound("Worker %s not found", name)
 		case errors.Is(err, store.ErrUIDConflict):
-			return nil, status.Errorf(codes.Aborted, "Worker %s does not have uid %s", name, precondition.UID)
+			return nil, apierror.Aborted("Worker %s does not have uid %s", name, precondition.UID)
 		case errors.Is(err, store.ErrVersionConflict):
-			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
+			return nil, apierror.Aborted("concurrent update conflict, please retry")
 		}
 		return nil, fmt.Errorf("while deleting worker from DB: %w", err)
 	}

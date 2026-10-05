@@ -16,7 +16,7 @@
 // snapshot is made of: listing them, copying them, and deleting them once
 // nothing owns them any more.
 //
-// It is deliberately separate from atelet's ategcs, which reads and writes
+// It is deliberately separate from pkg/objectstorage, which reads and writes
 // snapshot content. The control plane never handles those bytes: it copies
 // server-side and deletes by name, so a multi-gigabyte memory image never
 // transits ate-api.

@@ -52,6 +52,9 @@ type WorkerPoolReconciler struct {
 	// OTelTracesSamplerArg is the OTEL_TRACES_SAMPLER_ARG propagated to ateom
 	// pods. Ignored unless OTelTracesSampler is set.
 	OTelTracesSamplerArg string
+	// OTelLogsExporter is the OTEL_LOGS_EXPORTER propagated to ateom pods.
+	// Empty keeps the ateom binary's default.
+	OTelLogsExporter string
 	// SystemNamespace is the namespace substrate's control plane runs in, and
 	// AteletServiceAccount / RouterServiceAccount are the ServiceAccounts those
 	// components run as. Together they name the SPIFFE identities that atunnel
@@ -125,6 +128,7 @@ func (r *WorkerPoolReconciler) applyDeployment(ctx context.Context, wp *atev1alp
 		MetricExportTimeout:  r.OTelMetricExportTimeout,
 		TracesSampler:        r.OTelTracesSampler,
 		TracesSamplerArg:     r.OTelTracesSamplerArg,
+		LogsExporter:         r.OTelLogsExporter,
 	}, r.SystemNamespace, r.AteletServiceAccount, r.RouterServiceAccount)
 	if err := r.Apply(ctx, depAC, client.FieldOwner(workerPoolFieldOwner), client.ForceOwnership); err != nil {
 		return fmt.Errorf("failed to apply Deployment: %w", err)

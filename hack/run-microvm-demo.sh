@@ -26,7 +26,11 @@
 #      ActorTemplate through the ate API).
 #
 # Like the other hack scripts, this sources .ate-dev-env.sh for the cluster /
-# registry / bucket settings unless NO_DEV_ENV is set.
+# registry / bucket settings unless NO_DEV_ENV is set. The control plane deploy
+# requires a credential provider selection, which reaches it only through the
+# environment here: export ATE_CREDENTIAL_PROVIDER (e.g. '{"name":"k8s.io"}';
+# see hack/install-ate.sh --help) before running this, the kind wrapper
+# included.
 #
 # Env (most come from .ate-dev-env.sh):
 #   KO_DOCKER_REPO   (required) image registry, e.g. us-west1-docker.pkg.dev/PROJECT/ate-images for

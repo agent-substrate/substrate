@@ -88,6 +88,8 @@ does not have tests, and we will not merge code that causes tests to fail.
 
 Follow the [PostgreSQL schema evolution rules](docs/dev/postgresql-schema-evolution.md) for each application schema change.
 
+Each pull request title becomes its line in the [release notes](docs/dev/release-notes.md).
+
 ### Root-gated tests
 
 Tests that need root (overlay mounts, mknod, `trusted.*` xattrs, ...) call

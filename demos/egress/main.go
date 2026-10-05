@@ -19,7 +19,6 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -54,6 +53,7 @@ type fetchRequest struct {
 type fetchResponse struct {
 	StatusCode int    `json:"statusCode,omitempty"`
 	Body       string `json:"body,omitempty"`
+	ServerCert string `json:"serverCert,omitempty"`
 	Error      string `json:"error,omitempty"`
 }
 
@@ -105,13 +105,6 @@ func main() {
 }
 
 func newHandler(client *http.Client) http.Handler {
-	httpsTransport := http.DefaultTransport.(*http.Transport).Clone()
-	httpsTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
-	httpsClient := *client
-	if httpsClient.Transport == nil {
-		httpsClient.Transport = httpsTransport
-	}
-
 	mux := http.NewServeMux()
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -143,11 +136,7 @@ func newHandler(client *http.Client) http.Handler {
 		if traceparent := r.Header.Get("traceparent"); traceparent != "" {
 			outbound.Header.Set("traceparent", traceparent)
 		}
-		doClient := client
-		if outbound.URL.Scheme == "https" {
-			doClient = &httpsClient
-		}
-		response, err := doClient.Do(outbound)
+		response, err := client.Do(outbound)
 		if err != nil {
 			writeJSON(w, http.StatusBadGateway, fetchResponse{Error: fmt.Sprintf("request failed: %v", err)})
 			return
@@ -159,7 +148,11 @@ func newHandler(client *http.Client) http.Handler {
 			writeJSON(w, http.StatusBadGateway, fetchResponse{Error: fmt.Sprintf("reading response: %v", err)})
 			return
 		}
-		writeJSON(w, response.StatusCode, fetchResponse{StatusCode: response.StatusCode, Body: string(body)})
+		var serverCert string
+		if response.TLS != nil && len(response.TLS.PeerCertificates) > 0 {
+			serverCert = response.TLS.PeerCertificates[0].Issuer.String()
+		}
+		writeJSON(w, response.StatusCode, fetchResponse{StatusCode: response.StatusCode, Body: string(body), ServerCert: serverCert})
 	})
 	mux.HandleFunc("/grpc", handleGRPC)
 	return mux

@@ -80,8 +80,9 @@ tests:
           owner: true
           viewer: true
           can_create_atespace: true
-          can_set_policy: true
-          can_get_policy: true
+          can_create_access_policy: true
+          can_get_access_policy: true
+          can_update_access_policy: true
           can_get: true
       - user: user:carol
         object: atespace:space-1
@@ -89,12 +90,13 @@ tests:
           owner: true
           editor: true
           viewer: true
-          can_set_policy: true
-          can_get_policy: true
+          can_create_access_policy: true
+          can_get_access_policy: true
+          can_update_access_policy: true
+          can_delete_access_policy: true
           can_create_actor: true
           can_create_actor_template: true
           can_get: true
-          can_update: true
           can_delete: true
 
       # Global Viewer (Frank)
@@ -104,8 +106,9 @@ tests:
           owner: false
           viewer: true
           can_create_atespace: false
-          can_set_policy: false
-          can_get_policy: true
+          can_create_access_policy: false
+          can_get_access_policy: true
+          can_update_access_policy: false
           can_get: true
       - user: user:frank
         object: atespace:space-1
@@ -113,12 +116,13 @@ tests:
           owner: false
           editor: false
           viewer: true
-          can_set_policy: false
-          can_get_policy: true
+          can_create_access_policy: false
+          can_get_access_policy: true
+          can_update_access_policy: false
+          can_delete_access_policy: false
           can_create_actor: false
           can_create_actor_template: false
           can_get: true
-          can_update: false
           can_delete: false
 
   - name: 2. Atespace 3-Tier Roles & Governance Isolation
@@ -129,12 +133,13 @@ tests:
           owner: true
           editor: true
           viewer: true
-          can_set_policy: true
-          can_get_policy: true
+          can_create_access_policy: true
+          can_get_access_policy: true
+          can_update_access_policy: true
+          can_delete_access_policy: true
           can_create_actor: true
           can_create_actor_template: true
           can_get: true
-          can_update: true
           can_delete: true
       - user: user:bob # Editor
         object: atespace:space-1
@@ -142,12 +147,13 @@ tests:
           owner: false
           editor: true
           viewer: true
-          can_set_policy: false
-          can_get_policy: true
+          can_create_access_policy: false
+          can_get_access_policy: true
+          can_update_access_policy: false
+          can_delete_access_policy: false
           can_create_actor: true
           can_create_actor_template: true
           can_get: true
-          can_update: true
           can_delete: false
       - user: user:dave # Viewer
         object: atespace:space-1
@@ -155,12 +161,13 @@ tests:
           owner: false
           editor: false
           viewer: true
-          can_set_policy: false
-          can_get_policy: true
+          can_create_access_policy: false
+          can_get_access_policy: true
+          can_update_access_policy: false
+          can_delete_access_policy: false
           can_create_actor: false
           can_create_actor_template: false
           can_get: true
-          can_update: false
           can_delete: false
       - user: user:eve # External / Unauthenticated
         object: atespace:space-1

@@ -23,22 +23,19 @@ import (
 	"path"
 	"time"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/apivalidation"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/ateletauth"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/controlapi"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
-	"k8s.io/apimachinery/pkg/api/operation"
-	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
 // MintAteomActorCertificate mints a Substrate-issued SPIFFE certificate that asserts
 // an ateom acting on behalf of a particular actor.
 func (s *Server) MintAteomActorCertificate(ctx context.Context, req *ateapipb.MintAteomActorCertificateRequest) (*ateapipb.MintAteomActorCertificateResponse, error) {
-	if errs := validateMintAteomActorCertificateRequest(ctx, req); len(errs) > 0 {
-		return nil, status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
+	if errs := apivalidation.ValidateMintAteomActorCertificateRequest(ctx, req); len(errs) > 0 {
+		return nil, resources.ToAPIError(errs)
 	}
 
 	// TODO(identity): This check should be handled by OpenFGA.
@@ -55,21 +52,21 @@ func (s *Server) MintAteomActorCertificate(ctx context.Context, req *ateapipb.Mi
 	// running, since we may need to issue certificates during actor boot / resume.
 	dbActor, err := s.store.GetActor(ctx, resources.ActorRefFromObjectRef(req.GetActor()))
 	if errors.Is(err, store.ErrNotFound) {
-		return nil, status.Error(codes.NotFound, "actor not found")
+		return nil, apierror.NotFound("actor not found")
 	} else if err != nil {
 		return nil, fmt.Errorf("while retrieving actor: %w", err)
 	}
 	if dbActor.GetMetadata().GetUid() != req.GetActorUid() {
-		return nil, status.Error(codes.Aborted, "conflict; actor has been deleted and recreated")
+		return nil, apierror.Aborted("conflict; actor has been deleted and recreated")
 	}
 
 	// Parse the CSR.
 	csr, err := x509.ParseCertificateRequest(req.GetCertificateSigningRequest())
 	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "Failed to parse CSR: %v", err)
+		return nil, apierror.InvalidArgument("Failed to parse CSR: %v", err)
 	}
 	if err := csr.CheckSignature(); err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "Failed to verify CSR signature: %v", err)
+		return nil, apierror.InvalidArgument("Failed to verify CSR signature: %v", err)
 	}
 
 	template := &x509.Certificate{
@@ -98,9 +95,4 @@ func (s *Server) MintAteomActorCertificate(ctx context.Context, req *ateapipb.Mi
 	return &ateapipb.MintAteomActorCertificateResponse{
 		ActorCertificates: chain,
 	}, nil
-}
-
-func validateMintAteomActorCertificateRequest(ctx context.Context, req *ateapipb.MintAteomActorCertificateRequest) field.ErrorList {
-	op := operation.Operation{Type: operation.Create}
-	return controlapi.Validate_MintAteomActorCertificateRequest(ctx, op, nil, req, nil)
 }

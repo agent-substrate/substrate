@@ -23,10 +23,10 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/ateletauth/ateletauthtest"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 func setRequest(actors int32) *ateapipb.SetWorkerCapacityRequest {
@@ -69,7 +69,7 @@ func TestSetWorkerCapacity_OtherNodeIsNotFound(t *testing.T) {
 	seedReportedWorker(t, st, testNode, &ateapipb.WorkerResources{Actors: 1})
 
 	_, err := s.SetWorkerCapacity(ateletauthtest.ContextWith(ateletauthtest.CertOn(t, "some-other-node")), setRequest(4094))
-	if got := status.Code(err); got != codes.NotFound {
+	if got := apierror.Code(err); got != codes.NotFound {
 		t.Fatalf("code = %v (err %v), want NotFound", got, err)
 	}
 
@@ -134,7 +134,7 @@ func TestSetWorkerCapacity_Errors(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := s.SetWorkerCapacity(tc.ctx, tc.req)
-			if got := status.Code(err); got != tc.want {
+			if got := apierror.Code(err); got != tc.want {
 				t.Errorf("code = %v (err %v), want %v", got, err, tc.want)
 			}
 		})
@@ -167,7 +167,7 @@ func TestSetWorkerCapacity_RejectsNonsense(t *testing.T) {
 				Worker:   &ateapipb.ObjectRef{Name: testWorkerName},
 				Capacity: tc.capacity,
 			})
-			if got := status.Code(err); got != codes.InvalidArgument {
+			if got := apierror.Code(err); got != codes.InvalidArgument {
 				t.Fatalf("code = %v (err %v), want %v", got, err, codes.InvalidArgument)
 			}
 		})

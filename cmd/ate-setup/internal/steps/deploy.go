@@ -64,8 +64,13 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 	if err := e.RequireCanonicalNamespace("deploy ate-system"); err != nil {
 		return err
 	}
-	// Fail fast on an unusable build version before touching the cluster.
+	// Fail fast on an unusable build version or credential provider selection
+	// before touching the cluster.
 	if _, _, err := e.SubstrateVersion(); err != nil {
+		return err
+	}
+	provider, err := e.Cfg.CredentialProvider()
+	if err != nil {
 		return err
 	}
 	// Likewise the CSI request, even though it is only acted on partway
@@ -106,17 +111,7 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 		return err
 	}
 
-	// Enforce per-class SandboxConfig asset requirements. This is applied
-	// before any SandboxConfig so the config below is validated too.
-	if err := e.Kube.ApplyPath(ctx, e.Cfg.Manifest("sandboxconfig-validation.yaml")); err != nil {
-		return err
-	}
-
-	// Install the cluster-wide sandbox config. Sandbox binaries live on
-	// cluster-scoped SandboxConfigs each ActorTemplate names via
-	// sandboxConfig.configName; gVisor templates name this one unless they
-	// create their own SandboxConfig.
-	if err := e.Kube.ApplyPath(ctx, e.Cfg.Manifest("sandboxconfig-gvisor.yaml")); err != nil {
+	if err := e.DeploySandboxConfig(ctx); err != nil {
 		return err
 	}
 
@@ -163,7 +158,17 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 	if err := e.EnsureEgressMITMCAPoolSecret(ctx); err != nil {
 		return err
 	}
-	if err := e.applyAtenetEgress(ctx); err != nil {
+	// After the podcertificate controller: the provider serves with a
+	// projected pod certificate.
+	if provider.Kubernetes() {
+		err = e.deployK8sCredentialProvider(ctx)
+	} else {
+		err = e.removeK8sCredentialProvider(ctx)
+	}
+	if err != nil {
+		return err
+	}
+	if err := e.applyAtenetEgress(ctx, provider); err != nil {
 		return err
 	}
 
@@ -184,6 +189,9 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 		rollout{kube.KindDeployment, "atenet-egress"},
 		rollout{kube.KindDaemonSet, ateletName},
 	)
+	if provider.Kubernetes() {
+		waits = append(waits, rollout{kube.KindDeployment, k8sCredentialProviderDeployment})
+	}
 	for _, w := range waits {
 		if err := e.Kube.RolloutStatus(ctx, w.kind, e.Namespace(), w.name, e.Cfg.RolloutTimeout); err != nil {
 			return err
@@ -375,6 +383,10 @@ func (e *Env) DeployAtelet(ctx context.Context) error {
 func (e *Env) DeployAtenet(ctx context.Context) error {
 	log.Step("deploy_atenet")
 
+	provider, err := e.Cfg.CredentialProvider()
+	if err != nil {
+		return err
+	}
 	if err := e.EnsureCRDs(ctx); err != nil {
 		return err
 	}
@@ -398,16 +410,50 @@ func (e *Env) DeployAtenet(ctx context.Context) error {
 	if err := e.EnsureEgressMITMCAPoolSecret(ctx); err != nil {
 		return err
 	}
-	if err := e.applyAtenetEgress(ctx); err != nil {
+	if provider.Kubernetes() {
+		err = e.deployK8sCredentialProvider(ctx)
+	} else {
+		err = e.removeK8sCredentialProvider(ctx)
+	}
+	if err != nil {
+		return err
+	}
+	if err := e.applyAtenetEgress(ctx, provider); err != nil {
 		return err
 	}
 
-	for _, name := range []string{"atenet-router", "atenet-egress"} {
+	deployments := []string{"atenet-router", "atenet-egress"}
+	if provider.Kubernetes() {
+		deployments = append(deployments, k8sCredentialProviderDeployment)
+	}
+	for _, name := range deployments {
 		if err := e.Kube.RolloutStatus(ctx, kube.KindDeployment, e.Namespace(), name, e.Cfg.RolloutTimeout); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// DeploySandboxConfig applies the SandboxConfig admission policy, then the
+// default gVisor SandboxConfig.
+func (e *Env) DeploySandboxConfig(ctx context.Context) error {
+	log.Step("deploy_sandboxconfig")
+
+	if err := e.EnsureCRDs(ctx); err != nil {
+		return err
+	}
+
+	// Enforce per-class SandboxConfig asset requirements. This is applied
+	// before any SandboxConfig so the config below is validated too.
+	if err := e.Kube.ApplyPath(ctx, e.Cfg.Manifest("sandboxconfig-validation.yaml")); err != nil {
+		return err
+	}
+
+	// Install the cluster-wide sandbox config. Sandbox binaries live on
+	// cluster-scoped SandboxConfigs each ActorTemplate names via
+	// sandboxConfig.configName; gVisor templates name this one unless they
+	// create their own SandboxConfig.
+	return e.Kube.ApplyPath(ctx, e.Cfg.Manifest("sandboxconfig-gvisor.yaml"))
 }
 
 // EnsureCRDs installs the CRDs only if they are missing. Component redeploys

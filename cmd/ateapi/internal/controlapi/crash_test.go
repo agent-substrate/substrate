@@ -17,6 +17,7 @@ package controlapi
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"maps"
 	"slices"
@@ -28,6 +29,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/internal/actorevent"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -58,7 +60,7 @@ func seedActor(t *testing.T, ctx context.Context, st store.Interface, actorRef r
 				WorkerPool:      "pool",
 				WorkerPod:       "pod",
 				WorkerPodUid:    "uid",
-				WorkerPodIp:     "1.2.3.4",
+				WorkerPodIps:    []string{"1.2.3.4"},
 			},
 			InProgressSnapshotUri: "gs://bucket/atespaces/as/actors/uid/snapshots/reserved-snapshot",
 		},
@@ -341,6 +343,123 @@ func TestAteletCrashMessage(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := ateletCrashMessage("Restore", tt.err); got != tt.want {
 				t.Errorf("ateletCrashMessage() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHandleAteletError(t *testing.T) {
+	ended, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	tests := []struct {
+		name string
+		// ctx is the workflow context handed to handleAteletError. Setup and
+		// checks always use a live context.
+		ctx            context.Context
+		rpc            string
+		isTerminateRPC bool
+		err            error
+		wantCode       codes.Code
+		wantState      ateapipb.ActorState
+	}{
+		{
+			name:      "Unavailable leaves the actor as it was",
+			ctx:       context.Background(),
+			rpc:       "Restore",
+			err:       status.Error(codes.Unavailable, "connection refused"),
+			wantCode:  codes.Unavailable,
+			wantState: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+		},
+		{
+			name:      "Canceled leaves the actor as it was",
+			ctx:       context.Background(),
+			rpc:       "Restore",
+			err:       status.Error(codes.Canceled, "grpc: the client connection is closing"),
+			wantCode:  codes.Internal,
+			wantState: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+		},
+		{
+			name:      "DeadlineExceeded leaves the actor as it was",
+			ctx:       context.Background(),
+			rpc:       "Restore",
+			err:       status.Error(codes.DeadlineExceeded, "context deadline exceeded"),
+			wantCode:  codes.Internal,
+			wantState: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+		},
+		{
+			name:      "wrapped Unavailable leaves the actor as it was",
+			ctx:       context.Background(),
+			rpc:       "Restore",
+			err:       fmt.Errorf("while restoring actor: %w", status.Error(codes.Unavailable, "connection refused")),
+			wantCode:  codes.Unavailable,
+			wantState: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+		},
+		{
+			name:      "ended workflow context leaves the actor as it was",
+			ctx:       ended,
+			rpc:       "Restore",
+			err:       status.Error(codes.Internal, "context canceled"),
+			wantCode:  codes.Internal,
+			wantState: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+		},
+		{
+			name:      "Internal crashes the actor",
+			ctx:       context.Background(),
+			rpc:       "Restore",
+			err:       status.Error(codes.Internal, "while reading local snapshot manifest"),
+			wantCode:  codes.Internal,
+			wantState: ateapipb.ActorState_ACTOR_STATE_CRASHED,
+		},
+		{
+			name:      "FailedPrecondition crashes the actor",
+			ctx:       context.Background(),
+			rpc:       "Restore",
+			err:       status.Error(codes.FailedPrecondition, "invalid checkpoint result"),
+			wantCode:  codes.Internal,
+			wantState: ateapipb.ActorState_ACTOR_STATE_CRASHED,
+		},
+		{
+			name:      "plain error crashes the actor",
+			ctx:       context.Background(),
+			rpc:       "Restore",
+			err:       errors.New("while getting atelet conn"),
+			wantCode:  codes.Internal,
+			wantState: ateapipb.ActorState_ACTOR_STATE_CRASHED,
+		},
+		{
+			name:           "Terminate leaves the actor as it was",
+			ctx:            context.Background(),
+			rpc:            "Terminate",
+			isTerminateRPC: true,
+			err:            status.Error(codes.Internal, "while unmounting volumes"),
+			wantCode:       codes.Internal,
+			wantState:      ateapipb.ActorState_ACTOR_STATE_RUNNING,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			st, cleanup := storetest.SetupTestStore(t)
+			defer cleanup()
+			actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+			seedActor(t, ctx, st, actorRef)
+			seedWorker(t, ctx, st, actorRef)
+
+			err := handleAteletError(tt.ctx, st, actorRef, ateattr.OperationResume, tt.rpc, tt.isTerminateRPC, tt.err)
+			if got := apierror.Code(err); got != tt.wantCode {
+				t.Errorf("apierror.Code(handleAteletError()) = %v, want %v (err: %v)", got, tt.wantCode, err)
+			}
+
+			actor, err := st.GetActor(ctx, actorRef)
+			if err != nil {
+				t.Fatalf("GetActor: %v", err)
+			}
+			if got := actor.GetStatus().GetState(); got != tt.wantState {
+				t.Errorf("state = %v, want %v", got, tt.wantState)
+			}
+			if tt.wantState != ateapipb.ActorState_ACTOR_STATE_CRASHED && actor.GetStatus().GetWorkerAssignment() == nil {
+				t.Error("worker assignment was cleared, want it kept for the retry")
 			}
 		})
 	}

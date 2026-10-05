@@ -19,6 +19,8 @@ import (
 	"os"
 	"sort"
 
+	"k8s.io/apimachinery/pkg/util/validation"
+
 	"sigs.k8s.io/yaml"
 )
 
@@ -31,14 +33,49 @@ type namespacePolicyFile struct {
 type atespaceNamespacePolicy struct {
 	Atespace          string   `json:"atespace"`
 	AllowedNamespaces []string `json:"allowedNamespaces"`
+	// SecretSelector, when set, narrows the grant to Secrets in every allowed
+	// namespace that carry all of its labels.
+	//
+	// Leaving it unset grants every Secret in the allowed namespaces, which is
+	// what a policy written before this field existed already means. An empty
+	// selector is the same as leaving the field out: as with a Kubernetes
+	// LabelSelector, an empty selector matches everything. There is no way to
+	// write a grant that admits nothing; leave the policy out instead.
+	SecretSelector *secretSelector `json:"secretSelector,omitempty"`
+}
+
+// secretSelector mirrors the shape of the Selector message the rest of Substrate
+// uses (ateapi.Selector), so a policy selects Secrets the way an ActorTemplate
+// selects workers. matchLabels is exact equality, as it is there. The shape is
+// mirrored rather than imported: this is a config file, not the API.
+type secretSelector struct {
+	MatchLabels map[string]string `json:"matchLabels,omitempty"`
+}
+
+// labels returns the selector's labels, treating an absent selector as no
+// narrowing rather than as a selector that matches nothing.
+func (s *secretSelector) labels() map[string]string {
+	if s == nil {
+		return nil
+	}
+	return s.MatchLabels
+}
+
+// grant is what one atespace may read in one namespace.
+type grant struct {
+	// labels is empty when the grant is not narrowed by label.
+	labels map[string]string
 }
 
 // NamespaceAuthorizer decides whether an atespace may resolve secrets in a given
 // Kubernetes namespace. It is default-deny: an atespace absent from the mapping
 // can resolve nothing.
 type NamespaceAuthorizer struct {
-	// allowed maps atespace -> set of permitted namespaces.
-	allowed map[string]map[string]struct{}
+	// allowed maps atespace -> namespace -> the grants that apply there. Each
+	// policy contributes its own grant and they are OR-ed: a Secret is admitted
+	// when any one of them admits it. Within a grant the criteria are AND-ed,
+	// so every label in one selector must be present.
+	allowed map[string]map[string][]grant
 }
 
 // LoadNamespaceAuthorizer reads the YAML policy file at path and builds an
@@ -49,7 +86,10 @@ func LoadNamespaceAuthorizer(path string) (*NamespaceAuthorizer, error) {
 		return nil, fmt.Errorf("reading namespace policy file %q: %w", path, err)
 	}
 	var file namespacePolicyFile
-	if err := yaml.Unmarshal(data, &file); err != nil {
+	// Strict: a typo like matchLabel, or an unsupported field like
+	// matchExpressions, must fail rather than silently parse as an empty
+	// selector, which would grant every Secret in the namespace.
+	if err := yaml.UnmarshalStrict(data, &file); err != nil {
 		return nil, fmt.Errorf("parsing namespace policy file %q: %w", path, err)
 	}
 	return newNamespaceAuthorizer(file)
@@ -58,18 +98,36 @@ func LoadNamespaceAuthorizer(path string) (*NamespaceAuthorizer, error) {
 // newNamespaceAuthorizer builds an authorizer over a parsed policy file,
 // validating that each grant names an atespace.
 func newNamespaceAuthorizer(file namespacePolicyFile) (*NamespaceAuthorizer, error) {
-	allowed := make(map[string]map[string]struct{})
+	allowed := make(map[string]map[string][]grant)
 	for i, p := range file.Policies {
 		if p.Atespace == "" {
 			return nil, fmt.Errorf("namespace policy %d: atespace is required", i)
 		}
+		// A malformed label can never match, so it would narrow the grant to
+		// nothing and look like the policy was simply ignored. Fail loading
+		// instead.
+		for k, v := range p.SecretSelector.labels() {
+			if len(validation.IsQualifiedName(k)) != 0 {
+				return nil, fmt.Errorf("namespace policy %d: invalid label key %q", i, k)
+			}
+			if len(validation.IsValidLabelValue(v)) != 0 {
+				return nil, fmt.Errorf("namespace policy %d: invalid label value %q for key %q", i, v, k)
+			}
+		}
 		set := allowed[p.Atespace]
 		if set == nil {
-			set = make(map[string]struct{})
+			set = make(map[string][]grant)
 			allowed[p.Atespace] = set
 		}
+		// Each policy keeps its own grant. Merging them into one would AND the
+		// selectors of separate policies together, and would let a narrow policy
+		// take away the namespace a broad one granted.
+		g := grant{labels: map[string]string{}}
+		for k, v := range p.SecretSelector.labels() {
+			g.labels[k] = v
+		}
 		for _, ns := range p.AllowedNamespaces {
-			set[ns] = struct{}{}
+			set[ns] = append(set[ns], g)
 		}
 	}
 	return &NamespaceAuthorizer{allowed: allowed}, nil
@@ -100,6 +158,28 @@ func (a *NamespaceAuthorizer) Allowed(atespace, namespace string) bool {
 	if !ok {
 		return false
 	}
-	_, ok = set[namespace]
-	return ok
+	return len(set[namespace]) > 0
+}
+
+// AllowedSecret reports whether atespace may resolve a Secret with these
+// labels in namespace. A grant without a label selector admits every Secret,
+// including one that does not exist: pass nil labels to ask that question
+// before reading anything from Kubernetes.
+func (a *NamespaceAuthorizer) AllowedSecret(atespace, namespace string, labels map[string]string) bool {
+	for _, g := range a.allowed[atespace][namespace] {
+		if len(g.labels) == 0 {
+			return true
+		}
+		match := true
+		for k, want := range g.labels {
+			if got, ok := labels[k]; !ok || got != want {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
+		}
+	}
+	return false
 }

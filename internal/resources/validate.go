@@ -23,8 +23,8 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -35,8 +35,17 @@ import (
 
 // ToGRPCStatusError turns validation errors into the InvalidArgument error an
 // RPC handler responds with. Callers check len(errs) > 0 first.
+//
+// TODO: Delete once atelet's AteomSupport server returns apierrors, and use
+// ToAPIError instead.
 func ToGRPCStatusError(errs field.ErrorList) error {
 	return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
+}
+
+// ToAPIError turns validation errors into the InvalidArgument error an RPC
+// handler responds with. Callers check len(errs) > 0 first.
+func ToAPIError(errs field.ErrorList) error {
+	return apierror.InvalidArgument("%v", errs.ToAggregate())
 }
 
 // DeepEqual compares two values of any type, using proto.Equal if both are
@@ -76,35 +85,6 @@ func ValidateResourceName(name string, fldPath *field.Path) field.ErrorList {
 // ValidateResourceName. Empty is not a valid name.
 func IsValidResourceName(name string) bool {
 	return len(content.IsDNS1123Label(name)) == 0
-}
-
-// ValidateGlobalObjectRef checks that a reference to a global-scoped resource is
-// well-formed: its atespace must be empty (global resources do not belong to an
-// atespace) and its name must be a valid resource name. It does not check that
-// the referenced resource actually exists.
-//
-// A nil ref is an error rather than a no-op: every global ref in the API names
-// the resource a request acts on, and a request that names nothing cannot be
-// served.
-// TODO: EOL this when DV is fully implemented
-func ValidateGlobalObjectRef(ref *ateapipb.ObjectRef, fldPath *field.Path) field.ErrorList {
-	if ref == nil {
-		return field.ErrorList{field.Required(fldPath, "")}
-	}
-
-	var errs field.ErrorList
-
-	if val, fldPath := ref.Atespace, fldPath.Child("atespace"); val != "" {
-		errs = append(errs, field.Invalid(fldPath, val, "must be empty for a global-scoped resource"))
-	}
-
-	if val, fldPath := ref.Name, fldPath.Child("name"); val == "" {
-		errs = append(errs, field.Required(fldPath, ""))
-	} else {
-		errs = append(errs, ValidateResourceName(val, fldPath)...)
-	}
-
-	return errs
 }
 
 // ValidateAteomUID rejects a target ateom pod UID that could escape the host

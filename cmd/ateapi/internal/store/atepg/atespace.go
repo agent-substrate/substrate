@@ -19,7 +19,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/authz"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/jackc/pgx/v5"
@@ -30,7 +29,7 @@ func (p *Persistence) CreateAtespace(ctx context.Context, atespace *ateapipb.Ate
 	name := atespace.GetMetadata().GetName()
 
 	dbAtespace := proto.Clone(atespace).(*ateapipb.Atespace)
-	dbAtespace.Metadata = newCreateMetadata("", name)
+	setCreateMetadata(dbAtespace.Metadata)
 
 	protoBytes, err := proto.Marshal(dbAtespace)
 	if err != nil {
@@ -100,8 +99,8 @@ func (p *Persistence) ListAtespaces(ctx context.Context, opts store.ListOptions)
 			return store.ListResponse[*ateapipb.Atespace]{}, fmt.Errorf("scanning atespace row: %w", err)
 		}
 		a := &ateapipb.Atespace{}
-		if err := unmarshalStored(protoBytes, a); err != nil {
-			return store.ListResponse[*ateapipb.Atespace]{}, fmt.Errorf("unmarshaling atespace: %w", err)
+		if err := unmarshalRow(protoBytes, a, "atespace", name); err != nil {
+			return store.ListResponse[*ateapipb.Atespace]{}, err
 		}
 		result = append(result, a)
 		names = append(names, name)
@@ -144,10 +143,8 @@ func (p *Persistence) DeleteAtespace(ctx context.Context, name string, precondit
 		}
 		return nil, fmt.Errorf("deleting atespace %q: %w", name, err)
 	}
-	if p.policyManager != nil {
-		if err := p.policyManager.DeleteAtespacePolicies(authz.ContextWithTx(ctx, tx), name); err != nil {
-			return nil, fmt.Errorf("deleting authorization tuples for atespace %q: %w", name, err)
-		}
+	if err := p.policyManager.DeleteAtespacePolicies(ctx, tx, name); err != nil {
+		return nil, fmt.Errorf("deleting authorization tuples for atespace %q: %w", name, err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("committing atespace delete %q: %w", name, err)

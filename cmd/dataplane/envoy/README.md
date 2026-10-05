@@ -18,7 +18,7 @@ cmd/dataplane/envoy/
 
 ## Building and Deployment
 
-During a build from source, `ate-setup` builds the image from this directory via `docker buildx`, pushes it to `$KO_DOCKER_REPO/envoy-dataplane`, and its resolved digest replaces the `${ENVOY_DATAPLANE_IMAGE}` placeholder in the egress manifests (`manifests/ate-install/atenet-egress*.yaml`).
+During a build from source, `ate-setup` builds the image from this directory via `docker buildx`, pushes it to `$KO_DOCKER_REPO/envoy-dataplane`, and its resolved digest replaces the `${ENVOY_DATAPLANE_IMAGE}` placeholder in the egress manifest (`manifests/ate-install/atenet-egress.yaml`).
 
 A pre-built install (`ate-setup deploy --image-repo REPO --image-tag TAG`) builds nothing and pins `REPO/envoy-dataplane:TAG` instead, so a release publishes it with the other images:
 

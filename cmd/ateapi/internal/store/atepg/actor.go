@@ -204,8 +204,8 @@ func (p *Persistence) listActorsScoped(ctx context.Context, atespace string, pag
 			return nil, "", fmt.Errorf("scanning actor row: %w", err)
 		}
 		a := &ateapipb.Actor{}
-		if err := unmarshalStored(protoBytes, a); err != nil {
-			return nil, "", fmt.Errorf("unmarshaling actor: %w", err)
+		if err := unmarshalRow(protoBytes, a, "actor", atespace, name); err != nil {
+			return nil, "", err
 		}
 		result = append(result, a)
 		names = append(names, name)
@@ -252,8 +252,8 @@ func (p *Persistence) listActorsGlobal(ctx context.Context, pageSize int32, page
 			return nil, "", fmt.Errorf("scanning actor row: %w", err)
 		}
 		a := &ateapipb.Actor{}
-		if err := unmarshalStored(protoBytes, a); err != nil {
-			return nil, "", fmt.Errorf("unmarshaling actor: %w", err)
+		if err := unmarshalRow(protoBytes, a, "actor", k.atespace, k.name); err != nil {
+			return nil, "", err
 		}
 		result = append(result, a)
 		keys = append(keys, k)

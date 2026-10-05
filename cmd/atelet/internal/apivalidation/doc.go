@@ -13,17 +13,12 @@
 // limitations under the License.
 
 // Package apivalidation holds the declarative validation generated for the
-// atelet RPC surface. It is a separate package, unlike controlapi where the
-// generated code lives with the handlers, because atelet's handlers live in
-// package main.
+// atelet RPC surface.
 //
 // Kubernetes codegen tools required this to be in doc.go, no other name will
 // work.
 //
-// Only the AteomSupport requests are generated today.
-// +k8s:validation-gen=TypesWithSuffix=SetWorkerCapacityRequest
-// +k8s:validation-gen=TypesWithSuffix=RequestActorSuspendRequest
-// +k8s:validation-gen=TypesWithSuffix=MintActorCertificateRequest
+// +k8s:validation-gen=TypesWithSuffix=Request
 // +k8s:validation-gen-input=github.com/agent-substrate/substrate/internal/proto/ateletpb
 // +k8s:validation-gen-scheme-registry=nil
 // +k8s:validation-gen-deep-equal-func=ateDeepEqual
