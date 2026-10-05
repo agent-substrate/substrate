@@ -28,8 +28,8 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/agent-substrate/substrate/internal/ateinterceptors"
-	gluttonpb "github.com/agent-substrate/substrate/internal/proto/glutton"
+	"go.ate.dev/substrate/internal/ateinterceptors"
+	gluttonpb "go.ate.dev/substrate/internal/proto/glutton"
 )
 
 // TestSplitGRPCServesReadyzAndGRPCOnOneListener starts the grpc-mode handler

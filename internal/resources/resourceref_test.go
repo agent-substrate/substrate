@@ -19,7 +19,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // The ref aliases must stay distinct types: the phantom ResourceRef kind is

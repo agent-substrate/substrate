@@ -19,8 +19,8 @@ package ateletpath
 import (
 	"path/filepath"
 
-	"github.com/agent-substrate/substrate/internal/nodepath"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"go.ate.dev/substrate/internal/nodepath"
+	"go.ate.dev/substrate/internal/proto/ateompb"
 )
 
 var (

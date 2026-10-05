@@ -4,7 +4,7 @@
 //
 
 syntax = "proto3";
-option go_package = "github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/third_party/kata/agentpb;agentpb";
+option go_package = "go.ate.dev/substrate/cmd/ateom-microvm/internal/third_party/kata/agentpb;agentpb";
 
 package grpc;
 

@@ -21,9 +21,9 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/agent-substrate/substrate/internal/imagecache"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/opencontainers/runtime-spec/specs-go"
+	"go.ate.dev/substrate/internal/imagecache"
+	"go.ate.dev/substrate/internal/proto/ateompb"
 )
 
 // Sub-share names inside the micro-VM virtio-fs share.

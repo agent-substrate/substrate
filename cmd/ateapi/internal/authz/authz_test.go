@@ -35,7 +35,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/agent-substrate/substrate/internal/principal"
+	"go.ate.dev/substrate/internal/principal"
 )
 
 func configureDockerEnv(ctx context.Context) error {

@@ -19,7 +19,7 @@ import (
 	"context"
 	"testing"
 
-	gluttonpb "github.com/agent-substrate/substrate/internal/proto/glutton"
+	gluttonpb "go.ate.dev/substrate/internal/proto/glutton"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )

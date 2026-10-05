@@ -25,9 +25,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/agent-substrate/substrate/internal/ateomnet"
-	"github.com/agent-substrate/substrate/internal/ateomnet/dns"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"go.ate.dev/substrate/internal/ateomnet"
+	"go.ate.dev/substrate/internal/ateomnet/dns"
+	"go.ate.dev/substrate/internal/proto/ateompb"
 )
 
 // actorResolvConf writes the resolver bind source outside the actor's rootfs.

@@ -22,11 +22,11 @@ import (
 	"log/slog"
 	"net"
 
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/ateomnet"
-	"github.com/agent-substrate/substrate/internal/atunnel"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
-	"github.com/agent-substrate/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/ateomnet"
+	"go.ate.dev/substrate/internal/atunnel"
+	"go.ate.dev/substrate/internal/proto/ateompb"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 // hostedActor holds one actor's attribution, network, and runtime state.

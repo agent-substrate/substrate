@@ -18,9 +18,9 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/imagecache"
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/opencontainers/runtime-spec/specs-go"
+	"go.ate.dev/substrate/internal/imagecache"
+	"go.ate.dev/substrate/internal/proto/ateletpb"
 )
 
 // mountFor returns the spec's mount at destination dest, or fails.

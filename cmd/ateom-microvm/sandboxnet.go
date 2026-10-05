@@ -20,8 +20,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/agent-substrate/substrate/internal/ateomnet"
-	"github.com/agent-substrate/substrate/internal/ateomnet/dns"
+	"go.ate.dev/substrate/internal/ateomnet"
+	"go.ate.dev/substrate/internal/ateomnet/dns"
 )
 
 // writeActorResolvConf points the guest resolver at its fixed gateway address.

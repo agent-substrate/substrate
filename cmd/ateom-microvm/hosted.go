@@ -23,14 +23,14 @@ import (
 	"net"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/ateomcgroup"
-	"github.com/agent-substrate/substrate/internal/ateomnet"
-	"github.com/agent-substrate/substrate/internal/ateomnet/netns"
-	"github.com/agent-substrate/substrate/internal/atunnel"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/internal/sizing"
+	"go.ate.dev/substrate/cmd/ateom-microvm/internal/kata"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/ateomcgroup"
+	"go.ate.dev/substrate/internal/ateomnet"
+	"go.ate.dev/substrate/internal/ateomnet/netns"
+	"go.ate.dev/substrate/internal/atunnel"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/sizing"
 )
 
 // hostedActor holds one actor's attribution, network, and runtime state.

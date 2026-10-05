@@ -30,7 +30,7 @@ workerSelector:
     workload: egress
 containers:
 - name: egress
-  image: ko://github.com/agent-substrate/substrate/demos/egress
+  image: ko://go.ate.dev/substrate/demos/egress
   command: ["/ko-app/egress"]
   # The demo fetches with a stock net/http client. SSL_CERT_FILE adds the
   # gateway CA, and Go still scans /etc/ssl/certs, so the image's public

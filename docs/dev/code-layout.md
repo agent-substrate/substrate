@@ -25,14 +25,14 @@ substrate/
 ### `pkg/` vs `internal/`
 
 **`pkg/`** is for Go packages with an external API contract — code that users or
-third-party tools may import directly from
-`github.com/agent-substrate/substrate/pkg/...`. Putting a package here signals
-a commitment to backwards-compatibility and discoverability.
+third-party tools may import directly from `go.ate.dev/substrate/pkg/...`.
+Putting a package here signals a commitment to backwards-compatibility and
+discoverability.
 
 **`internal/`** is for Go packages that are shared across multiple binaries
 within this module but are not part of any external API. The Go toolchain
-enforces that nothing outside `github.com/agent-substrate/substrate` can import
-these. The exception is [`internal/plugins/`](../../internal/plugins/README.md):
+enforces that nothing outside `go.ate.dev/substrate` can import these. The
+exception is [`internal/plugins/`](../../internal/plugins/README.md):
 self-contained plugins, each a Go module of its own, in a temporary location
 that nothing else in the repo should depend on or import.
 

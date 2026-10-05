@@ -20,7 +20,7 @@ package reaper
 import (
 	"os/exec"
 
-	"github.com/agent-substrate/substrate/internal/childreap"
+	"go.ate.dev/substrate/internal/childreap"
 )
 
 var shared = childreap.New()

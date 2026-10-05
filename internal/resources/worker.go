@@ -17,7 +17,7 @@ package resources
 import (
 	"fmt"
 
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // AddToAllocated adjusts allocation by an assignment; sign is 1 or -1.

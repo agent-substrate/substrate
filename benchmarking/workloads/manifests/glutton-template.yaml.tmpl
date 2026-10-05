@@ -24,7 +24,7 @@ workerSelector:
     workload: benchmark-ateom
 containers:
 - name: glutton
-  image: ko://github.com/agent-substrate/substrate/cmd/benchmarking/glutton
+  image: ko://go.ate.dev/substrate/cmd/benchmarking/glutton
   # Port 80 is the only inbound port nftables forwards from the worker pod
   # into the actor sandbox (see cmd/ateom-gvisor/main.go). HTTP/1.1 mode
   # lets the atenet router (which forwards HTTP/1.1 upstream) reach Ping.

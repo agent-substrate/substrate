@@ -19,7 +19,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/agent-substrate/substrate/tools/apitool/internal/exemption"
+	"go.ate.dev/substrate/tools/apitool/internal/exemption"
 )
 
 func TestLoadMissingFileIsEmpty(t *testing.T) {

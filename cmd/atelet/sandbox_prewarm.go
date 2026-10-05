@@ -28,9 +28,9 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 
-	"github.com/agent-substrate/substrate/internal/imagecache"
-	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
-	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
+	"go.ate.dev/substrate/internal/imagecache"
+	"go.ate.dev/substrate/pkg/api/v1alpha1"
+	listersv1alpha1 "go.ate.dev/substrate/pkg/client/listers/api/v1alpha1"
 )
 
 // prewarmMaxJitter spreads the fleet's asset downloads after a SandboxConfig

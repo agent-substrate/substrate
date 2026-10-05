@@ -26,7 +26,7 @@ workerSelector:
     workload: probe${FIXTURE_SUFFIX}
 containers:
 - name: probe
-  image: ko://github.com/agent-substrate/substrate/internal/e2e/fixtures/probe
+  image: ko://go.ate.dev/substrate/internal/e2e/fixtures/probe
   command: ["/ko-app/probe"]
   volumeMounts:
   # the probe reads actor metadata and trust bundles under /run/ate

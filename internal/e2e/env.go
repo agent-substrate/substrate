@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/agent-substrate/substrate/internal/installdefaults"
+	"go.ate.dev/substrate/internal/installdefaults"
 )
 
 // CheckEnv checks the list of env vars exist and returns their value.

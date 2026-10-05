@@ -37,9 +37,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/resources"
 
-	"github.com/agent-substrate/substrate/internal/atenet"
+	"go.ate.dev/substrate/internal/atenet"
 )
 
 func TestActivationDialerClosesLateConnection(t *testing.T) {

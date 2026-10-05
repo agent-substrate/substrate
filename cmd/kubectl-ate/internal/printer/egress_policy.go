@@ -19,7 +19,7 @@ import (
 	"io"
 	"text/tabwriter"
 
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // PrintEgressPolicyTo prints one actor's egress policy. json and yaml emit the

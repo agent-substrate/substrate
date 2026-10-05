@@ -17,8 +17,8 @@
 package kata
 
 import (
-	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/third_party/kata/agentpb"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
+	"go.ate.dev/substrate/cmd/ateom-microvm/internal/third_party/kata/agentpb"
 )
 
 // DefaultCPUPeriodUS is the CFS period assumed when a spec carries a quota but

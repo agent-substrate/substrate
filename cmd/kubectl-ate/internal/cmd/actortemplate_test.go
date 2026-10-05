@@ -20,8 +20,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/protobuf/testing/protocmp"
 )
 
@@ -41,7 +41,7 @@ workerSelector:
     workload: counter
 containers:
 - name: counter
-  image: ko://github.com/agent-substrate/substrate/demos/counter
+  image: ko://go.ate.dev/substrate/demos/counter
   command: ["/ko-app/counter", "--extra-port=9090"]
   wakeupProbe:
     httpGet:
@@ -79,7 +79,7 @@ func TestActorTemplateFromManifest(t *testing.T) {
 		WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"workload": "counter"}},
 		Containers: []*ateapipb.Container{{
 			Name:    "counter",
-			Image:   "ko://github.com/agent-substrate/substrate/demos/counter",
+			Image:   "ko://go.ate.dev/substrate/demos/counter",
 			Command: []string{"/ko-app/counter", "--extra-port=9090"},
 			WakeupProbe: &ateapipb.ContainerWakeupProbe{
 				HttpGet: &ateapipb.HTTPGetAction{Path: "/readyz", Port: 80},

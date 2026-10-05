@@ -24,11 +24,11 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/ateom-gvisor/internal/cgroupstats"
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/ocispec"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
-	"github.com/agent-substrate/substrate/internal/resources"
+	"go.ate.dev/substrate/cmd/ateom-gvisor/internal/cgroupstats"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/ocispec"
+	"go.ate.dev/substrate/internal/proto/ateompb"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 // defaultCgroupRoot is the worker pod's own cgroup scope. The worker runs in a

@@ -19,7 +19,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // TestProbeTemplate_TrustBundle pins the opt-in. The bundle is derived from

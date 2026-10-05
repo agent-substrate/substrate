@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/agent-substrate/substrate/tools/apitool/internal/model"
+	"go.ate.dev/substrate/tools/apitool/internal/model"
 )
 
 // EnumZeroValueUnspecified requires every enum's zero value to be named

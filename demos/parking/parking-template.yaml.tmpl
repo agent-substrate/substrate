@@ -24,7 +24,7 @@ workerSelector:
     workload: parking
 containers:
 - name: counter
-  image: ko://github.com/agent-substrate/substrate/demos/counter
+  image: ko://go.ate.dev/substrate/demos/counter
   command: ["/ko-app/counter"]
 snapshotConfig:
   onPause: SNAPSHOT_CONTENT_SCOPE_FULL

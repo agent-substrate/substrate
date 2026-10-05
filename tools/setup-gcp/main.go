@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/agent-substrate/substrate/tools/setup-gcp/cmd"
+	"go.ate.dev/substrate/tools/setup-gcp/cmd"
 )
 
 func main() {

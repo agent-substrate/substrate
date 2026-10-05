@@ -17,9 +17,9 @@ package boomerutil
 import (
 	"fmt"
 
-	"github.com/agent-substrate/substrate/internal/ateapiauth"
-	_ "github.com/agent-substrate/substrate/internal/k8sresolver"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/internal/ateapiauth"
+	_ "go.ate.dev/substrate/internal/k8sresolver"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"k8s.io/client-go/kubernetes"

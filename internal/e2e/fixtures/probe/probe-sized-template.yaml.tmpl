@@ -27,7 +27,7 @@ workerSelector:
     workload: probe-sized
 containers:
 - name: probe
-  image: ko://github.com/agent-substrate/substrate/internal/e2e/fixtures/probe
+  image: ko://go.ate.dev/substrate/internal/e2e/fixtures/probe
   command: ["/ko-app/probe"]
   # Gate the golden snapshot on the probe actually serving, so the single
   # (un-retried) GET /resources the suite makes after resuming cannot race a

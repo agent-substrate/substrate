@@ -20,9 +20,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/agent-substrate/substrate/tools/apitool/internal/exemption"
-	"github.com/agent-substrate/substrate/tools/apitool/internal/lint"
-	"github.com/agent-substrate/substrate/tools/apitool/internal/validate"
+	"go.ate.dev/substrate/tools/apitool/internal/exemption"
+	"go.ate.dev/substrate/tools/apitool/internal/lint"
+	"go.ate.dev/substrate/tools/apitool/internal/validate"
 )
 
 var validateCmd = &cobra.Command{

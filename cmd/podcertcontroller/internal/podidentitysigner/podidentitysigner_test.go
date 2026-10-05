@@ -27,9 +27,9 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/podcertcontroller/internal/podcertificate"
-	"github.com/agent-substrate/substrate/internal/localca"
-	"github.com/agent-substrate/substrate/internal/substratex509"
+	"go.ate.dev/substrate/cmd/podcertcontroller/internal/podcertificate"
+	"go.ate.dev/substrate/internal/localca"
+	"go.ate.dev/substrate/internal/substratex509"
 	certsv1beta1 "k8s.io/api/certificates/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"

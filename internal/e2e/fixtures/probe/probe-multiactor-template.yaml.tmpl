@@ -22,7 +22,7 @@ workerSelector:
     workload: probe-multiactor
 containers:
 - name: probe
-  image: ko://github.com/agent-substrate/substrate/internal/e2e/fixtures/probe
+  image: ko://go.ate.dev/substrate/internal/e2e/fixtures/probe
   command: ["/ko-app/probe"]
   volumeMounts:
   # Identity returned by /whoami.

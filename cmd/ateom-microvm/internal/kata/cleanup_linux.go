@@ -27,7 +27,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/agent-substrate/substrate/internal/nodepath"
+	"go.ate.dev/substrate/internal/nodepath"
 )
 
 // CleanupSandboxState removes leftover host-side state for a sandbox id (the

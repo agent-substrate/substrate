@@ -38,8 +38,8 @@ import (
 
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 // SyncedWriter wraps an io.Writer and synchronizes writes across goroutines.

@@ -286,7 +286,7 @@ const file_csi_proto_rawDesc = "" +
 	"\x06INODES\x10\x02\"G\n" +
 	"\x0fVolumeCondition\x12\x1a\n" +
 	"\babnormal\x18\x01 \x01(\bR\babnormal\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessageBVZTgithub.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata/agentpb;agentpbb\x06proto3"
+	"\amessage\x18\x02 \x01(\tR\amessageBRZPgo.ate.dev/substrate/cmd/ateom-microvm/internal/third_party/kata/agentpb;agentpbb\x06proto3"
 
 var (
 	file_csi_proto_rawDescOnce sync.Once

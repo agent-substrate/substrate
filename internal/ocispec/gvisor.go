@@ -17,8 +17,8 @@ package ocispec
 import (
 	"slices"
 
-	"github.com/agent-substrate/substrate/internal/sizing"
 	"github.com/opencontainers/runtime-spec/specs-go"
+	"go.ate.dev/substrate/internal/sizing"
 )
 
 // PauseContainer is the name of the sandbox root container. The underscore

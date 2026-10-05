@@ -29,21 +29,21 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/ateomstats"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/ateomstats"
 
-	"github.com/agent-substrate/substrate/internal/ateomnet"
+	"go.ate.dev/substrate/internal/ateomnet"
 
-	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/ch"
-	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
-	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/third_party/kata/agentpb"
-	"github.com/agent-substrate/substrate/internal/imagecache"
-	"github.com/agent-substrate/substrate/internal/ocispec"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/internal/sizing"
-	"github.com/agent-substrate/substrate/internal/wakeupprobe"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
+	"go.ate.dev/substrate/cmd/ateom-microvm/internal/ch"
+	"go.ate.dev/substrate/cmd/ateom-microvm/internal/kata"
+	"go.ate.dev/substrate/cmd/ateom-microvm/internal/third_party/kata/agentpb"
+	"go.ate.dev/substrate/internal/imagecache"
+	"go.ate.dev/substrate/internal/ocispec"
+	"go.ate.dev/substrate/internal/proto/ateompb"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/sizing"
+	"go.ate.dev/substrate/internal/wakeupprobe"
 	"golang.org/x/sys/unix"
 )
 

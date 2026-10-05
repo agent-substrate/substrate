@@ -23,11 +23,11 @@ import (
 
 	"cloud.google.com/go/compute/metadata"
 
-	"github.com/agent-substrate/substrate/internal/actorlog"
-	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/contextlogging"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
-	"github.com/agent-substrate/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/actorlog"
+	"go.ate.dev/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/contextlogging"
+	"go.ate.dev/substrate/internal/proto/ateompb"
+	"go.ate.dev/substrate/internal/resources"
 )
 
 // The events channel is the per-actor half of the usage telemetry split: the

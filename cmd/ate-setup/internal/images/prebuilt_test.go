@@ -25,9 +25,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/images"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kube"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/config"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/images"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/kube"
 )
 
 // testSource is the repo/tag every rewrite test resolves against.
@@ -68,29 +68,29 @@ func TestPrebuiltResolveBytes(t *testing.T) {
 	}{
 		{
 			name: "bare scalar",
-			in:   "        image: ko://github.com/agent-substrate/substrate/cmd/ateapi\n",
+			in:   "        image: ko://go.ate.dev/substrate/cmd/ateapi\n",
 			want: "        image: example.com/substrate/ateapi:v1.2.3" + digestSuffix + "\n",
 		},
 		{
 			name: "double quoted",
-			in:   `image: "ko://github.com/agent-substrate/substrate/cmd/atelet"`,
+			in:   `image: "ko://go.ate.dev/substrate/cmd/atelet"`,
 			want: `image: "example.com/substrate/atelet:v1.2.3` + digestSuffix + `"`,
 		},
 		{
 			name: "single quoted",
-			in:   `image: 'ko://github.com/agent-substrate/substrate/cmd/atenet'`,
+			in:   `image: 'ko://go.ate.dev/substrate/cmd/atenet'`,
 			want: `image: 'example.com/substrate/atenet:v1.2.3` + digestSuffix + `'`,
 		},
 		{
 			name: "flow sequence",
-			in:   `images: [ko://github.com/agent-substrate/substrate/demos/counter, other]`,
+			in:   `images: [ko://go.ate.dev/substrate/demos/counter, other]`,
 			want: `images: [example.com/substrate/counter:v1.2.3` + digestSuffix + `, other]`,
 		},
 		{
 			// The reference is a plain CRD field here, not a pod spec, which is
 			// why the rewrite cannot be driven off a Kubernetes schema.
 			name: "CRD field",
-			in:   "spec:\n  workerImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor\n",
+			in:   "spec:\n  workerImage: ko://go.ate.dev/substrate/cmd/ateom-gvisor\n",
 			want: "spec:\n  workerImage: example.com/substrate/ateom-gvisor:v1.2.3" + digestSuffix + "\n",
 		},
 		{
@@ -99,17 +99,17 @@ func TestPrebuiltResolveBytes(t *testing.T) {
 			// expected output is also what catches a redundant lookup.
 			name: "tag already carries a digest",
 			src:  images.Source{Repo: "example.com/substrate", Tag: "v1.2.3" + digestSuffix},
-			in:   "image: ko://github.com/agent-substrate/substrate/cmd/ateapi\n",
+			in:   "image: ko://go.ate.dev/substrate/cmd/ateapi\n",
 			want: "image: example.com/substrate/ateapi:v1.2.3" + digestSuffix + "\n",
 		},
 		{
 			name: "nested package maps to its image name",
-			in:   "image: ko://github.com/agent-substrate/substrate/demos/multi-template/fspersist\n",
+			in:   "image: ko://go.ate.dev/substrate/demos/multi-template/fspersist\n",
 			want: "image: example.com/substrate/fspersist:v1.2.3" + digestSuffix + "\n",
 		},
 		{
 			name: "two references on one line",
-			in:   "a: ko://github.com/agent-substrate/substrate/cmd/ateapi, b: ko://github.com/agent-substrate/substrate/demos/egress\n",
+			in:   "a: ko://go.ate.dev/substrate/cmd/ateapi, b: ko://go.ate.dev/substrate/demos/egress\n",
 			want: "a: example.com/substrate/ateapi:v1.2.3" + digestSuffix + ", b: example.com/substrate/egress:v1.2.3" + digestSuffix + "\n",
 		},
 		{
@@ -133,14 +133,14 @@ func TestPrebuiltResolveBytes(t *testing.T) {
 			// message and nothing else: the truncation cannot collide with a
 			// listed package, because every one of those ends before the "$".
 			name:  "unexpanded placeholder",
-			in:    "image: ko://github.com/agent-substrate/substrate/cmd/ateom-${SANDBOX_CLASS}\n",
+			in:    "image: ko://go.ate.dev/substrate/cmd/ateom-${SANDBOX_CLASS}\n",
 			error: "cmd/ateom-${SANDBOX_CLASS has no published image",
 		},
 		{
 			// A reference extending a known one must not inherit its image. A
 			// literal replacement would leave "-sidecar" dangling on the tag.
 			name:  "reference extending a known one",
-			in:    "image: ko://github.com/agent-substrate/substrate/cmd/atelet-sidecar\n",
+			in:    "image: ko://go.ate.dev/substrate/cmd/atelet-sidecar\n",
 			error: "cmd/atelet-sidecar has no published image",
 		},
 		{
@@ -168,20 +168,20 @@ func TestPrebuiltResolveBytes(t *testing.T) {
 		},
 		{
 			name:  "unknown component",
-			in:    "image: ko://github.com/agent-substrate/substrate/cmd/notacomponent\n",
+			in:    "image: ko://go.ate.dev/substrate/cmd/notacomponent\n",
 			error: "cmd/notacomponent has no published image",
 		},
 		{
 			// The e2e fixtures are not part of an install, so a manifest
 			// reaching the installer with one is a mistake worth reporting.
 			name:  "e2e fixture is not installable",
-			in:    "image: ko://github.com/agent-substrate/substrate/internal/e2e/fixtures/probe\n",
+			in:    "image: ko://go.ate.dev/substrate/internal/e2e/fixtures/probe\n",
 			error: "e2e/fixtures/probe has no published image",
 		},
 		{
 			// Every unmappable reference is named, not just the first.
 			name:  "all failures are reported",
-			in:    "a: ko://github.com/agent-substrate/substrate/cmd/one\nb: ko://github.com/agent-substrate/substrate/cmd/two\n",
+			in:    "a: ko://go.ate.dev/substrate/cmd/one\nb: ko://go.ate.dev/substrate/cmd/two\n",
 			error: "cmd/two has no published image",
 		},
 	}
@@ -217,9 +217,9 @@ func TestPrebuiltResolveBytes(t *testing.T) {
 // Every unmappable reference is reported at once, so a manifest with several
 // problems takes one install attempt to diagnose rather than several.
 func TestPrebuiltReportsEveryFailure(t *testing.T) {
-	in := "a: ko://github.com/agent-substrate/substrate/cmd/ateom-${SANDBOX_CLASS}\n" +
+	in := "a: ko://go.ate.dev/substrate/cmd/ateom-${SANDBOX_CLASS}\n" +
 		"b: ko://github.com/example/other/cmd/thing\n" +
-		"c: ko://github.com/agent-substrate/substrate/cmd/nope\n"
+		"c: ko://go.ate.dev/substrate/cmd/nope\n"
 
 	_, err := images.NewPrebuilt(testSource, newStubRegistry().digest).
 		ResolveBytes(context.Background(), []byte(in))
@@ -235,7 +235,7 @@ func TestPrebuiltReportsEveryFailure(t *testing.T) {
 
 // A repeated bad reference is one problem, not one per occurrence.
 func TestPrebuiltDeduplicatesFailures(t *testing.T) {
-	ref := "image: ko://github.com/agent-substrate/substrate/cmd/nope\n"
+	ref := "image: ko://go.ate.dev/substrate/cmd/nope\n"
 	_, err := images.NewPrebuilt(testSource, newStubRegistry().digest).
 		ResolveBytes(context.Background(), []byte(ref+ref+ref))
 	if err == nil {
@@ -253,9 +253,9 @@ func TestPrebuiltLooksUpEachImageOnce(t *testing.T) {
 	registry := newStubRegistry()
 	resolver := images.NewPrebuilt(testSource, registry.digest)
 
-	in := "a: ko://github.com/agent-substrate/substrate/cmd/ateapi\n" +
-		"b: ko://github.com/agent-substrate/substrate/cmd/atelet\n" +
-		"c: ko://github.com/agent-substrate/substrate/cmd/ateapi\n"
+	in := "a: ko://go.ate.dev/substrate/cmd/ateapi\n" +
+		"b: ko://go.ate.dev/substrate/cmd/atelet\n" +
+		"c: ko://go.ate.dev/substrate/cmd/ateapi\n"
 	for range 2 {
 		if _, err := resolver.ResolveBytes(context.Background(), []byte(in)); err != nil {
 			t.Fatalf("ResolveBytes() error = %v", err)
@@ -278,8 +278,8 @@ func TestPrebuiltReportsDigestFailures(t *testing.T) {
 	registry := newStubRegistry()
 	registry.err = errors.New("UNAUTHORIZED")
 
-	in := "a: ko://github.com/agent-substrate/substrate/cmd/ateapi\n" +
-		"b: ko://github.com/agent-substrate/substrate/cmd/atelet\n"
+	in := "a: ko://go.ate.dev/substrate/cmd/ateapi\n" +
+		"b: ko://go.ate.dev/substrate/cmd/atelet\n"
 	got, err := images.NewPrebuilt(testSource, registry.digest).
 		ResolveBytes(context.Background(), []byte(in))
 	if err == nil {

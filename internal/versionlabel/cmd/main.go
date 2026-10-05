@@ -23,7 +23,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/agent-substrate/substrate/internal/versionlabel"
+	"go.ate.dev/substrate/internal/versionlabel"
 )
 
 func main() {

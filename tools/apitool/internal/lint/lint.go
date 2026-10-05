@@ -17,7 +17,7 @@
 package lint
 
 import (
-	"github.com/agent-substrate/substrate/tools/apitool/internal/model"
+	"go.ate.dev/substrate/tools/apitool/internal/model"
 )
 
 // Finding is one rule violation: which API entity it's about, and why.

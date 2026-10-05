@@ -27,8 +27,8 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 
-	"github.com/agent-substrate/substrate/internal/credbundle"
-	"github.com/agent-substrate/substrate/internal/substratex509"
+	"go.ate.dev/substrate/internal/credbundle"
+	"go.ate.dev/substrate/internal/substratex509"
 )
 
 // TLSConfig authenticates this worker to atelet with its Pod certificate, and

@@ -19,8 +19,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/atenet"
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
+	"go.ate.dev/substrate/internal/atenet"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 

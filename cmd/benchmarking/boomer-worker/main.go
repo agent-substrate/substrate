@@ -28,17 +28,17 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/boomerutil"
-	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/dynconfig"
-	bmetrics "github.com/agent-substrate/substrate/internal/benchmarking/boomer/metrics"
-	btrace "github.com/agent-substrate/substrate/internal/benchmarking/boomer/trace"
-	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
 	"github.com/myzhan/boomer"
+	"go.ate.dev/substrate/internal/benchmarking/boomer/boomerutil"
+	"go.ate.dev/substrate/internal/benchmarking/boomer/dynconfig"
+	bmetrics "go.ate.dev/substrate/internal/benchmarking/boomer/metrics"
+	btrace "go.ate.dev/substrate/internal/benchmarking/boomer/trace"
+	"go.ate.dev/substrate/internal/benchmarking/boomer/userclass"
 
 	// Register user classes via init():
-	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/agentsession"
-	_ "github.com/agent-substrate/substrate/internal/benchmarking/boomer/glutton"
-	_ "github.com/agent-substrate/substrate/internal/benchmarking/boomer/sweperf"
+	"go.ate.dev/substrate/internal/benchmarking/boomer/agentsession"
+	_ "go.ate.dev/substrate/internal/benchmarking/boomer/glutton"
+	_ "go.ate.dev/substrate/internal/benchmarking/boomer/sweperf"
 )
 
 func main() {

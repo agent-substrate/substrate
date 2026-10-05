@@ -149,7 +149,7 @@ spec:
         effect: NoSchedule
       containers:
       - name: atelet
-        image: ko://github.com/agent-substrate/substrate/cmd/atelet
+        image: ko://go.ate.dev/substrate/cmd/atelet
         args:
         # Pull credentials come from the node's own kubelet credential provider
         # plugin (mounted read-only below) rather than a cloud SDK compiled into

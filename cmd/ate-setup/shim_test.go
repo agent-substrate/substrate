@@ -30,10 +30,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/cmd"
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/cmd"
+	"go.ate.dev/substrate/cmd/ate-setup/internal/demos"
 	// Registers every bundled demo, so demos.All() is the real list.
-	_ "github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos/all"
+	_ "go.ate.dev/substrate/cmd/ate-setup/internal/demos/all"
 )
 
 // stubGo is a `go` that records the arguments of every `go run ./cmd/ate-setup`

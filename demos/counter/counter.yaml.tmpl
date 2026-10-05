@@ -37,7 +37,7 @@ spec:
   # pool that cannot place every replica is worse than a smaller one -- the
   # deploy blocks on a rollout that never completes.
   replicas: 3
-  workerImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
+  workerImage: ko://go.ate.dev/substrate/cmd/ateom-gvisor
   template:
     nodeSelector:
       ate.dev/substrate-version: "${SUBSTRATE_VERSION}"

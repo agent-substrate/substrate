@@ -45,7 +45,7 @@ ATESETUP := $(BINDIR)/ate-setup
 # Version stamping. Override on the make command line to pin
 # (e.g. `make VERSION=v0.5.0 build`).
 VERSION    ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-VERSION_PKG := github.com/agent-substrate/substrate/internal/version
+VERSION_PKG := go.ate.dev/substrate/internal/version
 LDFLAGS := -X=$(VERSION_PKG).Version=$(VERSION)
 
 # Every image the installer can deploy, defined once. These two sets together

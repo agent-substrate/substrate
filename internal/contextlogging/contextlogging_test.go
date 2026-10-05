@@ -23,7 +23,7 @@ import (
 
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/agent-substrate/substrate/internal/ateattr"
+	"go.ate.dev/substrate/internal/ateattr"
 )
 
 const (

@@ -18,7 +18,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 // ProbeName is the name of the probe fixture's WorkerPool and ActorTemplate,

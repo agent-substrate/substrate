@@ -30,7 +30,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/actoridjwt"
+	"go.ate.dev/substrate/internal/actoridjwt"
 )
 
 // Pool is the interface for a JWT signing pool.

@@ -23,7 +23,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/localca"
+	"go.ate.dev/substrate/internal/localca"
 )
 
 func testMinter(t *testing.T, opts minterOptions) *minter {

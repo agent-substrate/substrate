@@ -26,7 +26,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/agent-substrate/substrate/internal/roottest"
+	"go.ate.dev/substrate/internal/roottest"
 )
 
 // writeLayer builds a layer dir (fs/ tree + whiteouts.json) as the store's

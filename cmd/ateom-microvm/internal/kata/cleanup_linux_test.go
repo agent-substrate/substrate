@@ -20,7 +20,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/nodepath"
+	"go.ate.dev/substrate/internal/nodepath"
 )
 
 func TestIsSandboxProcess(t *testing.T) {

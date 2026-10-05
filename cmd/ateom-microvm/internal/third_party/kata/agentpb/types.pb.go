@@ -508,7 +508,7 @@ const file_types_proto_rawDesc = "" +
 	"\x13FSGroupChangePolicy\x12\n" +
 	"\n" +
 	"\x06Always\x10\x00\x12\x12\n" +
-	"\x0eOnRootMismatch\x10\x01BVZTgithub.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata/agentpb;agentpbb\x06proto3"
+	"\x0eOnRootMismatch\x10\x01BRZPgo.ate.dev/substrate/cmd/ateom-microvm/internal/third_party/kata/agentpb;agentpbb\x06proto3"
 
 var (
 	file_types_proto_rawDescOnce sync.Once

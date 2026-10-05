@@ -22,13 +22,13 @@ import (
 
 	"github.com/vishvananda/netlink"
 
-	"github.com/agent-substrate/substrate/internal/ateomnet"
-	"github.com/agent-substrate/substrate/internal/ateomnet/netns"
-	"github.com/agent-substrate/substrate/internal/ateomtunnel"
-	"github.com/agent-substrate/substrate/internal/atunnel"
-	"github.com/agent-substrate/substrate/internal/nodepath"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/internal/roottest"
+	"go.ate.dev/substrate/internal/ateomnet"
+	"go.ate.dev/substrate/internal/ateomnet/netns"
+	"go.ate.dev/substrate/internal/ateomtunnel"
+	"go.ate.dev/substrate/internal/atunnel"
+	"go.ate.dev/substrate/internal/nodepath"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/roottest"
 )
 
 // Hosting an actor that is already hosted replaces its network rather than

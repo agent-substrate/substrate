@@ -16,7 +16,7 @@ syntax = "proto3";
 
 package grpcecho;
 
-option go_package = "github.com/agent-substrate/substrate/internal/proto/grpcechopb";
+option go_package = "go.ate.dev/substrate/internal/proto/grpcechopb";
 
 // Echo is the smallest service that can prove a gRPC request and its response
 // crossed a network path intact. It exists for the egress e2e coverage: the

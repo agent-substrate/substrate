@@ -21,8 +21,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/ateclient"
-	"github.com/agent-substrate/substrate/internal/portforward"
+	"go.ate.dev/substrate/internal/ateclient"
+	"go.ate.dev/substrate/internal/portforward"
 	"k8s.io/client-go/kubernetes"
 )
 

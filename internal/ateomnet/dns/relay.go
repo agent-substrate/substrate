@@ -25,7 +25,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/ateomnet/netns"
+	"go.ate.dev/substrate/internal/ateomnet/netns"
 )
 
 const (

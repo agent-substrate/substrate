@@ -17,8 +17,8 @@ package lint_test
 import (
 	"testing"
 
-	"github.com/agent-substrate/substrate/tools/apitool/internal/lint"
-	"github.com/agent-substrate/substrate/tools/apitool/internal/model"
+	"go.ate.dev/substrate/tools/apitool/internal/lint"
+	"go.ate.dev/substrate/tools/apitool/internal/model"
 )
 
 func TestUpdateRequestShape(t *testing.T) {

@@ -25,7 +25,7 @@ import (
 	"os/exec"
 	"syscall"
 
-	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/reaper"
+	"go.ate.dev/substrate/cmd/ateom-microvm/internal/reaper"
 	"golang.org/x/sys/unix"
 )
 

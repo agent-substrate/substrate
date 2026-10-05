@@ -22,9 +22,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -194,7 +194,7 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 		// Golden actors live in the reserved ate-golden atespace, because
 		// the suspend workflow relies on the ate-golden system atespace to
 		// always take a full snapshot of the golden actor.
-		// https://github.com/agent-substrate/substrate/blob/cb7c8385ef2bb489c3d5f7bfa71820fd33935d91/cmd/ateapi/internal/controlapi/workflow_suspend.go#L170-L173
+		// https://go.ate.dev/substrate/blob/cb7c8385ef2bb489c3d5f7bfa71820fd33935d91/cmd/ateapi/internal/controlapi/workflow_suspend.go#L170-L173
 		Atespace: resources.GoldenActorAtespace,
 		// Use the template's UID as golden actor's name to prevent collision
 		// when templates are recreated with the same name.
