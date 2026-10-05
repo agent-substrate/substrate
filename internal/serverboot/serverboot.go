@@ -205,8 +205,7 @@ const metricsExporterEnv = "OTEL_METRICS_EXPORTER"
 
 // metricsPushEnabled applies OTEL_METRICS_EXPORTER: otlp, the default, or none,
 // which drops the OTLP reader for a component whose metrics are scraped
-// instead. An unrecognized value keeps the OTLP export and logs, the same way
-// ResolveLogsExporter treats OTEL_LOGS_EXPORTER.
+// instead. An unrecognized value keeps the OTLP export and logs.
 func metricsPushEnabled(ctx context.Context) bool {
 	switch value := strings.ToLower(strings.TrimSpace(os.Getenv(metricsExporterEnv))); value {
 	case "", "otlp":

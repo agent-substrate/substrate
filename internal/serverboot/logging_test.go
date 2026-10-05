@@ -16,6 +16,7 @@ package serverboot
 
 import (
 	"context"
+	"log/slog"
 	"testing"
 
 	otellog "go.opentelemetry.io/otel/log"
@@ -24,104 +25,31 @@ import (
 	"go.opentelemetry.io/otel/sdk/resource"
 	"google.golang.org/grpc"
 
+	"github.com/agent-substrate/substrate/internal/actorevent"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 )
 
+// TestResolveLogsExporter pins the logs names on top of the shared rules: otlp
+// and console, a default of none, and no other signal's names.
 func TestResolveLogsExporter(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name    string
-		value   string
-		isSet   bool
-		def     LogsExporter
-		want    LogsExporter
-		wantErr bool
-	}{
-		{
-			name: "unset keeps the default",
-			def:  LogsExporterNone,
-			want: LogsExporterNone,
-		},
-		{
-			name:  "set but empty reads as unset",
-			value: "",
-			isSet: true,
-			def:   LogsExporterNone,
-			want:  LogsExporterNone,
-		},
-		{
-			name:  "whitespace only reads as unset",
-			value: "   ",
-			isSet: true,
-			def:   LogsExporterOTLP,
-			want:  LogsExporterOTLP,
-		},
-		{
-			name:  "otlp",
-			value: "otlp",
-			isSet: true,
-			def:   LogsExporterNone,
-			want:  LogsExporterOTLP,
-		},
-		{
-			name:  "none overrides an otlp default",
-			value: "none",
-			isSet: true,
-			def:   LogsExporterOTLP,
-			want:  LogsExporterNone,
-		},
-		{
-			name:  "mixed case and padding",
-			value: "  OTLP\t",
-			isSet: true,
-			def:   LogsExporterNone,
-			want:  LogsExporterOTLP,
-		},
-		{
-			name:    "unsupported value keeps the default",
-			value:   "console",
-			isSet:   true,
-			def:     LogsExporterNone,
-			want:    LogsExporterNone,
-			wantErr: true,
-		},
-		{
-			name:    "unsupported value keeps a non-default default",
-			value:   "otlp/http",
-			isSet:   true,
-			def:     LogsExporterOTLP,
-			want:    LogsExporterOTLP,
-			wantErr: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			got, err := resolveLogsExporter(tt.value, tt.isSet, tt.def)
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("resolveLogsExporter(%q, %v, %q) error = %v, wantErr %v", tt.value, tt.isSet, tt.def, err, tt.wantErr)
-			}
-			if got != tt.want {
-				t.Errorf("resolveLogsExporter(%q, %v, %q) = %q, want %q", tt.value, tt.isSet, tt.def, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestResolveLogsExporterReadsEnv(t *testing.T) {
 	ctx := context.Background()
-
-	t.Setenv(logsExporterEnv, "otlp")
-	if got := ResolveLogsExporter(ctx, LogsExporterNone); got != LogsExporterOTLP {
-		t.Errorf("ResolveLogsExporter() = %q, want %q", got, LogsExporterOTLP)
-	}
-
-	t.Setenv(logsExporterEnv, "not_an_exporter")
-	if got := ResolveLogsExporter(ctx, LogsExporterNone); got != LogsExporterNone {
-		t.Errorf("ResolveLogsExporter() on an invalid value = %q, want the default %q", got, LogsExporterNone)
+	for value, want := range map[string]string{
+		"":                "none",
+		"otlp":            "otlp",
+		"otlp,console":    "console,otlp",
+		"console":         "console",
+		"prometheus":      "none",
+		"otlp,prometheus": "otlp",
+	} {
+		t.Setenv(logsExporterEnv, value)
+		got := ResolveLogsExporter(ctx)
+		// InitLogging rejects a nil set, so nil here would stop every component.
+		if got == nil {
+			t.Fatalf("ResolveLogsExporter() with %q = nil, want a set", value)
+		}
+		if got.String() != want {
+			t.Errorf("ResolveLogsExporter() with %q = %q, want %q", value, got, want)
+		}
 	}
 }
 
@@ -133,7 +61,7 @@ func TestInitLoggingDisabled(t *testing.T) {
 
 	lp, err := InitLogging(context.Background(), LoggingOptions{
 		ServiceName: "test",
-		Exporter:    LogsExporterNone,
+		Exporter:    Exporters{},
 	})
 	if err != nil {
 		t.Fatalf("InitLogging() error = %v", err)
@@ -173,13 +101,13 @@ func TestLoggerProviderRelayAttribute(t *testing.T) {
 // record through a capturing processor, and returns that record's resource.
 func emittedResource(t *testing.T, relayCapable bool, conn *grpc.ClientConn) map[string]string {
 	t.Helper()
-	proc := &captureProcessor{}
+	proc := withCaptureProcessor(t)
 	lp, err := newLoggerProvider(context.Background(), LoggingOptions{
 		ServiceName:  "ateom-gvisor",
-		Exporter:     LogsExporterOTLP,
+		Exporter:     Exporters{ExporterOTLP: true},
 		ExporterConn: conn,
 		RelayCapable: relayCapable,
-	}, proc)
+	})
 	if err != nil {
 		t.Fatalf("newLoggerProvider: %v", err)
 	}
@@ -215,7 +143,7 @@ func TestInitLoggingRequiresOptions(t *testing.T) {
 	}{
 		{
 			name: "no service name",
-			opts: LoggingOptions{Exporter: LogsExporterOTLP},
+			opts: LoggingOptions{Exporter: Exporters{ExporterOTLP: true}},
 		},
 		{
 			name: "no exporter",
@@ -231,5 +159,105 @@ func TestInitLoggingRequiresOptions(t *testing.T) {
 				t.Errorf("InitLogging(%+v) error = nil, want an error", tt.opts)
 			}
 		})
+	}
+}
+
+// TestInitLoggingSetsConsole pins that InitLogging, which every component
+// calls, decides whether an actor event also goes to stdout beside its OTLP
+// event, so no binary has to set it on its own.
+func TestInitLoggingSetsConsole(t *testing.T) {
+	t.Cleanup(func() { actorevent.SetConsole(false) })
+	for _, tc := range []struct {
+		exporter   Exporters
+		wantStdout int
+	}{
+		{Exporters{ExporterConsole: true}, 1},
+		{Exporters{}, 0},
+	} {
+		if _, err := InitLogging(context.Background(), LoggingOptions{ServiceName: "test", Exporter: tc.exporter}); err != nil {
+			t.Fatalf("InitLogging(%v) error = %v", tc.exporter, err)
+		}
+		stdout := &countHandler{}
+		lp := sdklog.NewLoggerProvider(sdklog.WithProcessor(&captureProcessor{}))
+		actorevent.NewEmitterTo(lp, stdout).Log(context.Background(), actorevent.StateChanged, nil)
+		_ = lp.Shutdown(context.Background())
+		if stdout.n != tc.wantStdout {
+			t.Errorf("after InitLogging(%v), an emitted event wrote %d stdout records, want %d", tc.exporter, stdout.n, tc.wantStdout)
+		}
+	}
+}
+
+// TestInitLoggingOTLPAndConsole pins kind's setting: otlp,console installs the
+// provider as the global, built from the caller's options, and also keeps each
+// actor event on stdout.
+func TestInitLoggingOTLPAndConsole(t *testing.T) {
+	t.Cleanup(func() { actorevent.SetConsole(false) })
+	proc := withCaptureProcessor(t)
+	lp, err := InitLogging(context.Background(), LoggingOptions{
+		ServiceName:  "test",
+		Exporter:     Exporters{ExporterOTLP: true, ExporterConsole: true},
+		ExporterConn: lazyConn(t),
+		RelayCapable: true,
+	})
+	if err != nil {
+		t.Fatalf("InitLogging() error = %v", err)
+	}
+	if lp == nil {
+		t.Fatal("InitLogging() with otlp,console returned no provider")
+	}
+	if global.GetLoggerProvider() != lp {
+		t.Error("InitLogging() with otlp,console did not install its provider as the global")
+	}
+	t.Cleanup(func() {
+		// A cancelled context skips the OTLP flush; no collector listens here.
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		_ = lp.Shutdown(ctx)
+	})
+	stdout := &countHandler{}
+	actorevent.NewEmitterTo(lp, stdout).Log(context.Background(), actorevent.StateChanged, nil)
+	if stdout.n != 1 {
+		t.Errorf("with otlp,console an emitted event wrote %d stdout records, want 1", stdout.n)
+	}
+	if proc.res == nil {
+		t.Fatal("no record reached the provider")
+	}
+	attrs := resourceAttrs(proc.res)
+	if got := attrs[string(ateattr.OTLPRelayKey)]; got != "relay" {
+		t.Errorf("%s = %q, want relay: the caller's relay options did not reach the provider", ateattr.OTLPRelayKey, got)
+	}
+	if got := attrs["service.name"]; got != "test" {
+		t.Errorf("service.name = %q, want test", got)
+	}
+}
+
+// withCaptureProcessor adds a capture processor to the providers the test
+// builds, until it ends.
+func withCaptureProcessor(t *testing.T) *captureProcessor {
+	t.Helper()
+	proc := &captureProcessor{}
+	testLogProcessors = []sdklog.Processor{proc}
+	t.Cleanup(func() { testLogProcessors = nil })
+	return proc
+}
+
+// countHandler counts the stdout records it is handed.
+type countHandler struct{ n int }
+
+func (h *countHandler) Enabled(context.Context, slog.Level) bool  { return true }
+func (h *countHandler) Handle(context.Context, slog.Record) error { h.n++; return nil }
+func (h *countHandler) WithAttrs([]slog.Attr) slog.Handler        { return h }
+func (h *countHandler) WithGroup(string) slog.Handler             { return h }
+
+// TestInitLoggingConsoleAlone pins that console without otlp installs no
+// provider: it only keeps the stdout record, which no provider means anyway.
+func TestInitLoggingConsoleAlone(t *testing.T) {
+	t.Cleanup(func() { actorevent.SetConsole(false) })
+	lp, err := InitLogging(context.Background(), LoggingOptions{ServiceName: "test", Exporter: Exporters{ExporterConsole: true}})
+	if err != nil {
+		t.Fatalf("InitLogging() error = %v", err)
+	}
+	if lp != nil {
+		t.Errorf("InitLogging() with console alone = %v, want nil", lp)
 	}
 }
