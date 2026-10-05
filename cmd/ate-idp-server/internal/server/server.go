@@ -17,41 +17,47 @@
 package server
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
-	"os"
 	"path"
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
+	"github.com/agent-substrate/substrate/internal/localjwtauthority"
 	"github.com/agent-substrate/substrate/internal/oidcdiscovery"
 )
 
 const wellKnownPath = "/.well-known/openid-configuration"
 
+// KeySource supplies the verification keys to publish.
+// *localjwtauthority.RefreshingPool is one.
+type KeySource interface {
+	VerificationKeys() ([]*localjwtauthority.VerificationKey, error)
+}
+
 // Server serves the discovery document and JWK set under the issuer's path,
-// plus /healthz and /readyz. It reports not ready, and answers document
-// requests with 503, until Load accepts a key set.
+// plus /healthz and /readyz. It builds both documents from its KeySource on
+// every request. When that fails it serves the last documents it built, and
+// until it has built any it reports not ready and answers document requests
+// with 503.
 type Server struct {
 	issuer        string
 	discoveryPath string
 	jwksPath      string
+	keys          KeySource
 
-	mu        sync.RWMutex
-	discovery []byte
-	jwks      []byte
+	mu         sync.Mutex
+	discovery  []byte
+	jwks       []byte
+	lastErrMsg string
 }
 
-// New returns a Server for issuer.
-func New(issuer string) (*Server, error) {
+// New returns a Server that publishes keys for issuer.
+func New(issuer string, keys KeySource) (*Server, error) {
 	if err := oidcdiscovery.ValidateIssuer(issuer); err != nil {
 		return nil, err
 	}
@@ -66,105 +72,77 @@ func New(issuer string) (*Server, error) {
 		issuer:        issuer,
 		discoveryPath: base + wellKnownPath,
 		jwksPath:      base + oidcdiscovery.JWKSPath,
+		keys:          keys,
 	}, nil
 }
 
-// Load replaces the served JWK set with jwks and rebuilds the discovery
-// document from its keys' algorithms. On error the previous key set is kept.
-func (s *Server) Load(jwks []byte) error {
-	var set struct {
-		Keys []struct {
-			Algorithm string `json:"alg"`
-		} `json:"keys"`
-	}
-	if err := json.Unmarshal(jwks, &set); err != nil {
-		return fmt.Errorf("parsing key set: %w", err)
-	}
-	if len(set.Keys) == 0 {
-		return errors.New("key set has no keys")
-	}
-	algs := make([]string, 0, len(set.Keys))
-	for i, key := range set.Keys {
-		if key.Algorithm == "" {
-			return fmt.Errorf("key %d has no alg", i)
-		}
-		algs = append(algs, key.Algorithm)
-	}
-	discovery, err := oidcdiscovery.DiscoveryDocument(s.issuer, algs)
-	if err != nil {
-		return err
-	}
+// documents returns the discovery document and JWK set for the current keys,
+// or the last ones built if the keys cannot be published. Both are nil until a
+// build succeeds.
+func (s *Server) documents(ctx context.Context) (discovery, jwks []byte) {
+	discovery, jwks, err := s.build()
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.discovery = discovery
-	s.jwks = bytes.Clone(jwks)
-	return nil
+	if err != nil {
+		// A failing source fails every request, so log each distinct
+		// failure once.
+		if msg := err.Error(); msg != s.lastErrMsg {
+			slog.WarnContext(ctx, "Cannot publish the actor JWT keys; serving the last good key set", slog.Any("err", err))
+			s.lastErrMsg = msg
+		}
+		return s.discovery, s.jwks
+	}
+	s.discovery, s.jwks, s.lastErrMsg = discovery, jwks, ""
+	return discovery, jwks
 }
 
-// WatchFile loads the key set from file, then reloads it whenever its contents
-// change, checking every interval until ctx is done. Errors are logged and the
-// last good key set stays in place.
-func (s *Server) WatchFile(ctx context.Context, file string, interval time.Duration) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	var last []byte
-	var lastReadErr string
-	for {
-		data, err := os.ReadFile(file)
-		switch {
-		case err != nil:
-			// The file is absent until the ConfigMap exists; log each
-			// distinct failure once instead of every interval.
-			if err.Error() != lastReadErr {
-				slog.WarnContext(ctx, "Cannot read key set", slog.String("file", file), slog.Any("err", err))
-				lastReadErr = err.Error()
-			}
-		case !bytes.Equal(data, last):
-			if err := s.Load(data); err != nil {
-				slog.WarnContext(ctx, "Ignoring invalid key set", slog.String("file", file), slog.Any("err", err))
-			} else {
-				slog.InfoContext(ctx, "Loaded key set", slog.String("file", file))
-			}
-			last, lastReadErr = data, ""
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
+func (s *Server) build() (discovery, jwks []byte, err error) {
+	verificationKeys, err := s.keys.VerificationKeys()
+	if err != nil {
+		return nil, nil, fmt.Errorf("reading verification keys: %w", err)
 	}
+	algorithms := make([]string, 0, len(verificationKeys))
+	for _, vk := range verificationKeys {
+		algorithms = append(algorithms, vk.Algorithm)
+	}
+	if jwks, err = localjwtauthority.JWKS(verificationKeys); err != nil {
+		return nil, nil, err
+	}
+	if discovery, err = oidcdiscovery.DiscoveryDocument(s.issuer, algorithms); err != nil {
+		return nil, nil, err
+	}
+	return discovery, jwks, nil
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	s.mu.RLock()
-	discovery, jwks := s.discovery, s.jwks
-	s.mu.RUnlock()
-
-	switch path.Clean(r.URL.Path) {
+	switch route := path.Clean(r.URL.Path); route {
 	case "/healthz":
 		w.WriteHeader(http.StatusOK)
 	case "/readyz":
-		if jwks == nil {
+		if _, jwks := s.documents(r.Context()); jwks == nil {
 			http.Error(w, "key set not loaded", http.StatusServiceUnavailable)
 			return
 		}
 		w.WriteHeader(http.StatusOK)
-	case s.discoveryPath:
-		serveDocument(w, r, discovery)
-	case s.jwksPath:
-		serveDocument(w, r, jwks)
+	case s.discoveryPath, s.jwksPath:
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Allow", "GET, HEAD")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		discovery, jwks := s.documents(r.Context())
+		if route == s.discoveryPath {
+			serveDocument(w, r, discovery)
+		} else {
+			serveDocument(w, r, jwks)
+		}
 	default:
 		http.NotFound(w, r)
 	}
 }
 
 func serveDocument(w http.ResponseWriter, r *http.Request, doc []byte) {
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		w.Header().Set("Allow", "GET, HEAD")
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	if doc == nil {
 		http.Error(w, "key set not loaded", http.StatusServiceUnavailable)
 		return

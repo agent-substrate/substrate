@@ -13,8 +13,9 @@
 // limitations under the License.
 
 // Command ate-idp-server serves the OpenID Connect discovery document and JWK
-// set that relying parties use to verify actor JWTs. It serves the key set in
-// --jwks-file and reloads it when the file changes.
+// set that relying parties use to verify actor JWTs. It publishes the public
+// keys of the authority pool in --actor-id-jwt-pool, which it rereads at most
+// once a minute.
 package main
 
 import (
@@ -33,18 +34,18 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ate-idp-server/internal/server"
 	"github.com/agent-substrate/substrate/internal/credbundle"
+	"github.com/agent-substrate/substrate/internal/localjwtauthority"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/version"
 )
 
 var (
-	issuer         = pflag.String("issuer", "", "Actor JWT issuer URL; must match ate-api-server's --actor-jwt-issuer (required).")
-	jwksFile       = pflag.String("jwks-file", "", "File holding the JWK set to serve (required).")
-	reloadInterval = pflag.Duration("reload-interval", 5*time.Second, "How often to check --jwks-file for changes.")
-	listenAddr     = pflag.String("listen-address", ":8443", "HTTPS listen address.")
-	serverBundle   = pflag.String("server-cred-bundle", "", "Credential bundle (PEM key and chain) presented for serving TLS (required).")
-	logLevel       = pflag.String("log-level", "info", "One of debug, info, warn, error.")
-	drainGrace     = pflag.Duration("drain-grace", 5*time.Second, "How long to wait for in-flight requests on shutdown.")
+	issuer       = pflag.String("issuer", "", "Actor JWT issuer URL; must match ate-api-server's --actor-jwt-issuer (required).")
+	poolFile     = pflag.String("actor-id-jwt-pool", "", "File holding the actor JWT authority pool that ate-api-server signs with (required).")
+	listenAddr   = pflag.String("listen-address", ":8443", "HTTPS listen address.")
+	serverBundle = pflag.String("server-cred-bundle", "", "Credential bundle (PEM key and chain) presented for serving TLS (required).")
+	logLevel     = pflag.String("log-level", "info", "One of debug, info, warn, error.")
+	drainGrace   = pflag.Duration("drain-grace", 5*time.Second, "How long to wait for in-flight requests on shutdown.")
 )
 
 func main() {
@@ -65,12 +66,16 @@ func main() {
 func run(ctx context.Context) error {
 	if missing := missingFlags(map[string]string{
 		"--issuer":             *issuer,
-		"--jwks-file":          *jwksFile,
+		"--actor-id-jwt-pool":  *poolFile,
 		"--server-cred-bundle": *serverBundle,
 	}); len(missing) > 0 {
 		return fmt.Errorf("required flags not set: %s", strings.Join(missing, ", "))
 	}
-	srv, err := server.New(*issuer)
+	pool, err := localjwtauthority.NewRefreshingPool(*poolFile)
+	if err != nil {
+		return fmt.Errorf("loading --actor-id-jwt-pool: %w", err)
+	}
+	srv, err := server.New(*issuer, pool)
 	if err != nil {
 		return fmt.Errorf("invalid --issuer: %w", err)
 	}
@@ -78,7 +83,6 @@ func run(ctx context.Context) error {
 
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	go srv.WatchFile(ctx, *jwksFile, *reloadInterval)
 
 	httpSrv := &http.Server{
 		Addr:              *listenAddr,

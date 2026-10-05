@@ -20,25 +20,64 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
-	"time"
 
 	"github.com/google/go-cmp/cmp"
+
+	"github.com/agent-substrate/substrate/internal/localjwtauthority"
 )
 
-const (
-	esKeySet   = `{"keys":[{"kty":"EC","kid":"es","use":"sig","alg":"ES256","crv":"P-256","x":"eA","y":"eQ"}]}`
-	bothKeySet = `{"keys":[{"kty":"RSA","kid":"rs","use":"sig","alg":"RS256","n":"bg","e":"AQAB"},` +
-		`{"kty":"EC","kid":"es","use":"sig","alg":"ES256","crv":"P-256","x":"eA","y":"eQ"}]}`
-)
+// fakeKeys is a KeySource whose keys and error a test can change.
+type fakeKeys struct {
+	mu   sync.Mutex
+	keys []*localjwtauthority.VerificationKey
+	err  error
+}
 
-func newLoadedServer(t *testing.T, issuer, jwks string) *Server {
+func (f *fakeKeys) VerificationKeys() ([]*localjwtauthority.VerificationKey, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.keys, f.err
+}
+
+func (f *fakeKeys) set(keys []*localjwtauthority.VerificationKey, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.keys, f.err = keys, err
+}
+
+// verificationKeys generates one key per algorithm.
+func verificationKeys(t *testing.T, algorithms ...string) []*localjwtauthority.VerificationKey {
 	t.Helper()
-	s, err := New(issuer)
+	pool := &localjwtauthority.ConcretePool{}
+	for _, alg := range algorithms {
+		authority, err := localjwtauthority.GenerateAuthority(alg, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		pool.Authorities = append(pool.Authorities, authority)
+	}
+	keys, err := pool.VerificationKeys()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Load([]byte(jwks)); err != nil {
+	return keys
+}
+
+func keySet(t *testing.T, keys []*localjwtauthority.VerificationKey) string {
+	t.Helper()
+	jwks, err := localjwtauthority.JWKS(keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(jwks)
+}
+
+func newServer(t *testing.T, issuer string, keys KeySource) *Server {
+	t.Helper()
+	s, err := New(issuer, keys)
+	if err != nil {
 		t.Fatal(err)
 	}
 	return s
@@ -57,6 +96,8 @@ type discoveryDoc struct {
 }
 
 func TestServesDocumentsUnderIssuerPath(t *testing.T) {
+	keys := verificationKeys(t, "ES256")
+	want := keySet(t, keys)
 	tests := []struct {
 		issuer      string
 		prefixes    []string
@@ -67,10 +108,10 @@ func TestServesDocumentsUnderIssuerPath(t *testing.T) {
 		{issuer: "https://idp.example.com/a/../b", prefixes: []string{"/b", "/a/../b"}, wantJWKSURI: "https://idp.example.com/a/../b/openid/v1/jwks"},
 	}
 	for _, tt := range tests {
-		s := newLoadedServer(t, tt.issuer, esKeySet)
+		s := newServer(t, tt.issuer, &fakeKeys{keys: keys})
 		for _, prefix := range tt.prefixes {
 			w := get(s, http.MethodGet, prefix+"/openid/v1/jwks")
-			if w.Code != http.StatusOK || w.Body.String() != esKeySet {
+			if w.Code != http.StatusOK || w.Body.String() != want {
 				t.Errorf("%s: GET %s/openid/v1/jwks = %d %q, want 200 and the key set", tt.issuer, prefix, w.Code, w.Body)
 			}
 
@@ -99,11 +140,9 @@ func TestServesDocumentsUnderIssuerPath(t *testing.T) {
 	}
 }
 
-func TestNotReadyUntilLoaded(t *testing.T) {
-	s, err := New("https://idp.ate-system.svc")
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestNotReadyUntilKeysPublish(t *testing.T) {
+	keys := &fakeKeys{err: os.ErrNotExist}
+	s := newServer(t, "https://idp.ate-system.svc", keys)
 	for target, want := range map[string]int{
 		"/healthz":                          http.StatusOK,
 		"/readyz":                           http.StatusServiceUnavailable,
@@ -111,36 +150,46 @@ func TestNotReadyUntilLoaded(t *testing.T) {
 		"/openid/v1/jwks":                   http.StatusServiceUnavailable,
 	} {
 		if got := get(s, http.MethodGet, target).Code; got != want {
-			t.Errorf("before Load: GET %s = %d, want %d", target, got, want)
+			t.Errorf("while keys fail: GET %s = %d, want %d", target, got, want)
 		}
 	}
 
-	if err := s.Load([]byte(esKeySet)); err != nil {
-		t.Fatal(err)
-	}
+	keys.set(verificationKeys(t, "ES256"), nil)
 	if got := get(s, http.MethodGet, "/readyz").Code; got != http.StatusOK {
-		t.Errorf("after Load: GET /readyz = %d, want 200", got)
+		t.Errorf("once keys publish: GET /readyz = %d, want 200", got)
 	}
 }
 
-func TestLoadRejectsBadKeySetsAndKeepsLastGood(t *testing.T) {
-	s := newLoadedServer(t, "https://idp.ate-system.svc", esKeySet)
-	for name, jwks := range map[string]string{
-		"not JSON":        "{",
-		"no keys":         `{"keys":[]}`,
-		"key without alg": `{"keys":[{"kty":"EC","kid":"es"}]}`,
+func TestFollowsKeyChangesAndKeepsLastGood(t *testing.T) {
+	first := verificationKeys(t, "ES256")
+	keys := &fakeKeys{keys: first}
+	s := newServer(t, "https://idp.ate-system.svc", keys)
+	if got, want := get(s, http.MethodGet, "/openid/v1/jwks").Body.String(), keySet(t, first); got != want {
+		t.Fatalf("served key set = %q, want %q", got, want)
+	}
+
+	for name, change := range map[string]func(){
+		"read error": func() { keys.set(nil, os.ErrNotExist) },
+		"empty pool": func() { keys.set(nil, nil) },
 	} {
-		if err := s.Load([]byte(jwks)); err == nil {
-			t.Errorf("Load(%s) returned nil error", name)
+		change()
+		if got, want := get(s, http.MethodGet, "/openid/v1/jwks").Body.String(), keySet(t, first); got != want {
+			t.Errorf("after %s: served key set = %q, want the last good one", name, got)
+		}
+		if got := get(s, http.MethodGet, "/readyz").Code; got != http.StatusOK {
+			t.Errorf("after %s: GET /readyz = %d, want 200", name, got)
 		}
 	}
-	if got := get(s, http.MethodGet, "/openid/v1/jwks").Body.String(); got != esKeySet {
-		t.Errorf("served key set = %q after rejected loads, want the last good one", got)
+
+	rotated := append(verificationKeys(t, "RS256"), first...)
+	keys.set(rotated, nil)
+	if got, want := get(s, http.MethodGet, "/openid/v1/jwks").Body.String(), keySet(t, rotated); got != want {
+		t.Errorf("after rotation: served key set = %q, want %q", got, want)
 	}
 }
 
-func TestDiscoveryAdvertisesKeySetAlgorithms(t *testing.T) {
-	s := newLoadedServer(t, "https://idp.ate-system.svc", bothKeySet)
+func TestDiscoveryAdvertisesPoolAlgorithms(t *testing.T) {
+	s := newServer(t, "https://idp.ate-system.svc", &fakeKeys{keys: verificationKeys(t, "RS256", "ES256")})
 	var doc discoveryDoc
 	if err := json.Unmarshal(get(s, http.MethodGet, "/.well-known/openid-configuration").Body.Bytes(), &doc); err != nil {
 		t.Fatal(err)
@@ -151,7 +200,7 @@ func TestDiscoveryAdvertisesKeySetAlgorithms(t *testing.T) {
 }
 
 func TestMethodsAndUnknownPaths(t *testing.T) {
-	s := newLoadedServer(t, "https://idp.ate-system.svc", esKeySet)
+	s := newServer(t, "https://idp.ate-system.svc", &fakeKeys{keys: verificationKeys(t, "ES256")})
 
 	w := get(s, http.MethodHead, "/openid/v1/jwks")
 	if w.Code != http.StatusOK || w.Body.Len() != 0 || w.Header().Get("Content-Type") == "" {
@@ -168,39 +217,31 @@ func TestMethodsAndUnknownPaths(t *testing.T) {
 	}
 }
 
-func TestWatchFileReloadsOnChange(t *testing.T) {
-	s, err := New("https://idp.ate-system.svc")
+func TestPublishesRefreshingPool(t *testing.T) {
+	wire, keyID, err := localjwtauthority.GeneratePool("ES256", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	file := filepath.Join(t.TempDir(), "jwks.json")
-	if err := os.WriteFile(file, []byte(esKeySet), 0o600); err != nil {
+	file := filepath.Join(t.TempDir(), "pool.json")
+	if err := os.WriteFile(file, wire, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	go s.WatchFile(t.Context(), file, 10*time.Millisecond)
-	waitForKeySet(t, s, esKeySet)
-
-	if err := os.WriteFile(file, []byte(bothKeySet), 0o600); err != nil {
+	pool, err := localjwtauthority.NewRefreshingPool(file)
+	if err != nil {
 		t.Fatal(err)
 	}
-	waitForKeySet(t, s, bothKeySet)
+	s := newServer(t, "https://idp.ate-system.svc", pool)
 
-	if err := os.WriteFile(file, []byte("{"), 0o600); err != nil {
+	var set struct {
+		Keys []map[string]string `json:"keys"`
+	}
+	if err := json.Unmarshal(get(s, http.MethodGet, "/openid/v1/jwks").Body.Bytes(), &set); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(50 * time.Millisecond)
-	if got := get(s, http.MethodGet, "/openid/v1/jwks").Body.String(); got != bothKeySet {
-		t.Errorf("served key set = %q after an invalid file, want the last good one", got)
+	if len(set.Keys) != 1 {
+		t.Fatalf("served %d keys, want 1", len(set.Keys))
 	}
-}
-
-func waitForKeySet(t *testing.T, s *Server, want string) {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for get(s, http.MethodGet, "/openid/v1/jwks").Body.String() != want {
-		if time.Now().After(deadline) {
-			t.Fatalf("key set never became %q", want)
-		}
-		time.Sleep(5 * time.Millisecond)
+	if k := set.Keys[0]; k["kid"] != keyID || k["alg"] != "ES256" || k["d"] != "" {
+		t.Errorf("served key %v; want kid %q, alg ES256, and no private key", k, keyID)
 	}
 }
