@@ -260,6 +260,35 @@ func TestGenerateAuthorityExplicitID(t *testing.T) {
 	}
 }
 
+func TestGeneratePool(t *testing.T) {
+	for _, tc := range []struct{ alg, id string }{{"ES256", ""}, {"RS256", "my-key"}} {
+		wire, id, err := GeneratePool(tc.alg, tc.id)
+		if err != nil {
+			t.Fatalf("GeneratePool(%q, %q): %v", tc.alg, tc.id, err)
+		}
+		pool, err := Unmarshal(wire)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(pool.Authorities) != 1 {
+			t.Fatalf("pool has %d authorities, want 1", len(pool.Authorities))
+		}
+		authority := pool.Authorities[0]
+		if authority.Algorithm != tc.alg {
+			t.Errorf("Algorithm = %q, want %q", authority.Algorithm, tc.alg)
+		}
+		if tc.id != "" && id != tc.id {
+			t.Errorf("returned ID %q, want %q", id, tc.id)
+		}
+		if authority.ID != id || pool.ActiveForSigning != id {
+			t.Errorf("authority %q, active %q; want both to be the returned ID %q", authority.ID, pool.ActiveForSigning, id)
+		}
+	}
+	if _, _, err := GeneratePool("HS256", ""); err == nil {
+		t.Error("GeneratePool(HS256) returned nil error")
+	}
+}
+
 func TestGenerateAuthorityRejectsUnsupportedAlgorithm(t *testing.T) {
 	if _, err := GenerateAuthority("HS256", ""); err == nil {
 		t.Error("GenerateAuthority(HS256) returned nil error")

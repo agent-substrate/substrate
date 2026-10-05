@@ -153,17 +153,9 @@ var makeJwtPoolCmd = &cobra.Command{
 // newJWTPoolSecret builds a Secret holding a pool with one active authority,
 // and returns the authority's key ID.
 func newJWTPoolSecret(namespace, name, algorithm, keyID string) (*corev1.Secret, string, error) {
-	authority, err := localjwtauthority.GenerateAuthority(algorithm, keyID)
+	poolBytes, id, err := localjwtauthority.GeneratePool(algorithm, keyID)
 	if err != nil {
-		return nil, "", fmt.Errorf("while generating JWT authority: %w", err)
-	}
-
-	poolBytes, err := localjwtauthority.Marshal(&localjwtauthority.ConcretePool{
-		Authorities:      []*localjwtauthority.Authority{authority},
-		ActiveForSigning: authority.ID,
-	})
-	if err != nil {
-		return nil, "", fmt.Errorf("while marshaling pool: %w", err)
+		return nil, "", fmt.Errorf("while generating JWT authority pool: %w", err)
 	}
 
 	return &corev1.Secret{
@@ -174,7 +166,7 @@ func newJWTPoolSecret(namespace, name, algorithm, keyID string) (*corev1.Secret,
 		Data: map[string][]byte{
 			"pool": poolBytes,
 		},
-	}, authority.ID, nil
+	}, id, nil
 }
 
 func init() {

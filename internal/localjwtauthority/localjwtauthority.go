@@ -366,3 +366,21 @@ func GenerateAuthority(algorithm, id string) (*Authority, error) {
 		SigningKey: key,
 	}, nil
 }
+
+// GeneratePool generates a pool holding one authority, active for signing, and
+// returns the serialized pool and the authority's ID. algorithm and id are as
+// for GenerateAuthority.
+func GeneratePool(algorithm, id string) ([]byte, string, error) {
+	authority, err := GenerateAuthority(algorithm, id)
+	if err != nil {
+		return nil, "", err
+	}
+	wire, err := Marshal(&ConcretePool{
+		Authorities:      []*Authority{authority},
+		ActiveForSigning: authority.ID,
+	})
+	if err != nil {
+		return nil, "", err
+	}
+	return wire, authority.ID, nil
+}

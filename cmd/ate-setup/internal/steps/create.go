@@ -269,16 +269,9 @@ func (e *Env) createJWTPool(ctx context.Context, namespace, name string) error {
 // newJWTPoolSecretData generates a pool with one active authority for
 // algorithm, keyed by its thumbprint.
 func newJWTPoolSecretData(algorithm string) (map[string][]byte, error) {
-	authority, err := localjwtauthority.GenerateAuthority(algorithm, "")
+	poolBytes, _, err := localjwtauthority.GeneratePool(algorithm, "")
 	if err != nil {
-		return nil, fmt.Errorf("while generating the JWT authority: %w", err)
-	}
-	poolBytes, err := localjwtauthority.Marshal(&localjwtauthority.ConcretePool{
-		Authorities:      []*localjwtauthority.Authority{authority},
-		ActiveForSigning: authority.ID,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("while marshaling the JWT pool: %w", err)
+		return nil, fmt.Errorf("while generating the JWT pool: %w", err)
 	}
 	return map[string][]byte{"pool": poolBytes}, nil
 }
