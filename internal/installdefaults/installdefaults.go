@@ -40,14 +40,16 @@ const (
 
 	// AteletTrustDomain and the ServiceAccount constants are the trust-domain
 	// and service-account segments of the SPIFFE IDs that atelet,
-	// atenet-router and atenet-egress Pod certificates carry, as minted by the
-	// podidentity signer (cmd/podcertcontroller/internal/podidentitysigner).
+	// atenet-router, atenet-egress and ate-controller Pod certificates carry,
+	// as minted by the podidentity signer
+	// (cmd/podcertcontroller/internal/podidentitysigner).
 	// The namespace segment is the namespace they run in, which callers
 	// resolve themselves rather than assume.
-	AteletTrustDomain    = "cluster.local"
-	AteletServiceAccount = "atelet"
-	RouterServiceAccount = "atenet-router"
-	EgressServiceAccount = "atenet-egress"
+	AteletTrustDomain        = "cluster.local"
+	AteletServiceAccount     = "atelet"
+	RouterServiceAccount     = "atenet-router"
+	EgressServiceAccount     = "atenet-egress"
+	ControllerServiceAccount = "ate-controller"
 
 	// PodNamespaceEnv is the conventional env var name for the namespace
 	// a pod is running in, exposed via Kubernetes' downward API.

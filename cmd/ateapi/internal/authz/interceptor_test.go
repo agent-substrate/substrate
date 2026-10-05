@@ -554,3 +554,124 @@ func TestUnaryServerInterceptor_LifecycleEgressAndWorkerChecks(t *testing.T) {
 		})
 	}
 }
+
+func TestUnaryServerInterceptor_SystemGrants(t *testing.T) {
+	ctx := context.Background()
+	pool := startPostgres(t)
+	fgaServer, err := NewOpenFGAServer(pool)
+	if err != nil {
+		t.Fatalf("NewOpenFGAServer failed: %v", err)
+	}
+	t.Cleanup(fgaServer.Close)
+	const (
+		controllerID = "spiffe://cluster.local/ns/ate-system/sa/ate-controller"
+		egressID     = "spiffe://cluster.local/ns/ate-system/sa/atenet-egress"
+		routerID     = "spiffe://cluster.local/ns/ate-system/sa/atenet-router"
+		otherID      = "spiffe://cluster.local/ns/ate-system/sa/other"
+	)
+	authorizer, _, err := New(ctx, pool, fgaServer, nil, WithSystemGrants(
+		SystemGrant{SPIFFEID: controllerID, Role: RoleController},
+		SystemGrant{SPIFFEID: egressID, Role: RoleEgressGateway},
+		SystemGrant{SPIFFEID: routerID, Role: RoleIngressRouter},
+	))
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	type rpcCall struct {
+		fullMethod string
+		req        any
+	}
+	actor := &ateapipb.ObjectRef{Atespace: "team-a", Name: "runner"}
+	worker := &ateapipb.ObjectRef{Name: "w-1"}
+	getActor := rpcCall{ateapipb.Control_GetActor_FullMethodName, &ateapipb.GetActorRequest{Actor: actor}}
+	deleteActor := rpcCall{ateapipb.Control_DeleteActor_FullMethodName, &ateapipb.DeleteActorRequest{Actor: actor}}
+	listAllActors := rpcCall{ateapipb.Control_ListActors_FullMethodName, &ateapipb.ListActorsRequest{}}
+	listAtespaces := rpcCall{ateapipb.Control_ListAtespaces_FullMethodName, &ateapipb.ListAtespacesRequest{}}
+	pause := rpcCall{ateapipb.Control_PauseActor_FullMethodName, &ateapipb.PauseActorRequest{Actor: actor}}
+	resume := rpcCall{ateapipb.Control_ResumeActor_FullMethodName, &ateapipb.ResumeActorRequest{Actor: actor}}
+	suspend := rpcCall{ateapipb.Control_SuspendActor_FullMethodName, &ateapipb.SuspendActorRequest{Actor: actor}}
+	getEgress := rpcCall{ateapipb.Control_GetActorEgressPolicy_FullMethodName, &ateapipb.GetActorEgressPolicyRequest{Actor: actor}}
+	updateEgress := rpcCall{ateapipb.Control_UpdateActorEgressPolicy_FullMethodName, &ateapipb.UpdateActorEgressPolicyRequest{Actor: actor}}
+	createWorker := rpcCall{ateapipb.Control_CreateWorker_FullMethodName, &ateapipb.CreateWorkerRequest{}}
+	listWorkers := rpcCall{ateapipb.Control_ListWorkers_FullMethodName, &ateapipb.ListWorkersRequest{}}
+	getWorker := rpcCall{ateapipb.Control_GetWorker_FullMethodName, &ateapipb.GetWorkerRequest{Worker: worker}}
+	updateWorker := rpcCall{ateapipb.Control_UpdateWorker_FullMethodName, &ateapipb.UpdateWorkerRequest{Worker: &ateapipb.Worker{
+		Metadata: &ateapipb.ResourceMetadata{Name: worker.GetName()},
+	}}}
+	deleteWorker := rpcCall{ateapipb.Control_DeleteWorker_FullMethodName, &ateapipb.DeleteWorkerRequest{Worker: worker}}
+	drainWorker := rpcCall{ateapipb.Control_DrainWorker_FullMethodName, &ateapipb.DrainWorkerRequest{Worker: worker}}
+	listAssignments := rpcCall{ateapipb.Control_ListWorkerActorAssignments_FullMethodName, &ateapipb.ListWorkerActorAssignmentsRequest{Worker: worker}}
+
+	mtls := func(id string) principal.PrincipalInfo {
+		return principal.PrincipalInfo{ID: id, Kind: principal.KindMTLS}
+	}
+	jwt := func(id string) principal.PrincipalInfo {
+		return principal.PrincipalInfo{ID: id, Kind: principal.KindJWT}
+	}
+
+	tests := []struct {
+		name      string
+		principal principal.PrincipalInfo
+		call      rpcCall
+		wantCode  codes.Code
+	}{
+		// ate-controller manages workers and nothing else.
+		{"controller creates worker", mtls(controllerID), createWorker, codes.OK},
+		{"controller lists workers", mtls(controllerID), listWorkers, codes.OK},
+		{"controller gets worker", mtls(controllerID), getWorker, codes.OK},
+		{"controller updates worker", mtls(controllerID), updateWorker, codes.OK},
+		{"controller deletes worker", mtls(controllerID), deleteWorker, codes.OK},
+		{"controller drains worker", mtls(controllerID), drainWorker, codes.OK},
+		{"controller cannot list worker assignments", mtls(controllerID), listAssignments, codes.PermissionDenied},
+		{"controller cannot get actor", mtls(controllerID), getActor, codes.PermissionDenied},
+		{"controller cannot resume actor", mtls(controllerID), resume, codes.PermissionDenied},
+		{"controller cannot list atespaces", mtls(controllerID), listAtespaces, codes.PermissionDenied},
+
+		// atenet-egress reads actors and their egress policies.
+		{"egress gateway gets actor", mtls(egressID), getActor, codes.OK},
+		{"egress gateway gets egress policy", mtls(egressID), getEgress, codes.OK},
+		{"egress gateway cannot update egress policy", mtls(egressID), updateEgress, codes.PermissionDenied},
+		{"egress gateway cannot delete actor", mtls(egressID), deleteActor, codes.PermissionDenied},
+		{"egress gateway cannot resume actor", mtls(egressID), resume, codes.PermissionDenied},
+		{"egress gateway cannot list actors", mtls(egressID), listAllActors, codes.PermissionDenied},
+		{"egress gateway cannot get worker", mtls(egressID), getWorker, codes.PermissionDenied},
+
+		// atenet-router resumes actors and lists them as a health check.
+		{"ingress router resumes actor", mtls(routerID), resume, codes.OK},
+		{"ingress router lists actors", mtls(routerID), listAllActors, codes.OK},
+		{"ingress router cannot get actor", mtls(routerID), getActor, codes.PermissionDenied},
+		{"ingress router cannot pause actor", mtls(routerID), pause, codes.PermissionDenied},
+		{"ingress router cannot suspend actor", mtls(routerID), suspend, codes.PermissionDenied},
+		{"ingress router cannot delete actor", mtls(routerID), deleteActor, codes.PermissionDenied},
+		{"ingress router cannot get egress policy", mtls(routerID), getEgress, codes.PermissionDenied},
+		{"ingress router cannot create worker", mtls(routerID), createWorker, codes.PermissionDenied},
+
+		// A bearer token whose subject is a granted SPIFFE ID gets nothing.
+		{"jwt with controller ID cannot create worker", jwt(controllerID), createWorker, codes.PermissionDenied},
+		{"jwt with egress ID cannot get actor", jwt(egressID), getActor, codes.PermissionDenied},
+		{"jwt with router ID cannot resume actor", jwt(routerID), resume, codes.PermissionDenied},
+
+		// Other SPIFFE IDs get nothing.
+		{"other mTLS identity cannot resume actor", mtls(otherID), resume, codes.PermissionDenied},
+		{"other mTLS identity cannot create worker", mtls(otherID), createWorker, codes.PermissionDenied},
+	}
+
+	interceptor := UnaryServerInterceptor(authorizer, true)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			userCtx := principal.InjectContext(ctx, tc.principal)
+			handlerCalled := false
+			_, err := interceptor(userCtx, tc.call.req, &grpc.UnaryServerInfo{FullMethod: tc.call.fullMethod}, func(context.Context, any) (any, error) {
+				handlerCalled = true
+				return "ok", nil
+			})
+			if status.Code(err) != tc.wantCode {
+				t.Fatalf("status.Code(err) = %v, want %v (err: %v)", status.Code(err), tc.wantCode, err)
+			}
+			if wantHandler := tc.wantCode == codes.OK; handlerCalled != wantHandler {
+				t.Fatalf("handlerCalled = %v, want %v", handlerCalled, wantHandler)
+			}
+		})
+	}
+}

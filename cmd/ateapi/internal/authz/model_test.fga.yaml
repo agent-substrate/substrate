@@ -73,6 +73,18 @@ tuples:
     relation: can_revert
     object: actor:runner-1
 
+  # System component roles (contextual tuples from ateapi's configuration at
+  # runtime)
+  - user: user:sys-controller
+    relation: controller
+    object: global:root
+  - user: user:sys-egress
+    relation: egress_gateway
+    object: global:root
+  - user: user:sys-router
+    relation: ingress_router
+    object: global:root
+
 tests:
   - name: 1. Global Superadmin & Viewer Propagation
     check:
@@ -359,3 +371,84 @@ tests:
           can_update: false
           can_delete: false
           can_drain: false
+
+  - name: 7. System Component Roles (Granted on Global)
+    check:
+      - user: user:sys-controller # ate-controller manages workers only
+        object: global:root
+        assertions:
+          can_create_worker: true
+          can_list_workers: true
+          can_list_actors: false
+          can_list_atespaces: false
+          can_create_atespace: false
+          can_get: false
+          viewer: false
+      - user: user:sys-controller
+        object: worker:pod-1
+        assertions:
+          can_get: true
+          can_update: true
+          can_delete: true
+          can_drain: true
+          can_list_actor_assignments: false
+      - user: user:sys-controller
+        object: actor:runner-1
+        assertions:
+          can_get: false
+          can_resume: false
+          can_delete: false
+      - user: user:sys-egress # atenet-egress reads actors and egress policies
+        object: actor:runner-1
+        assertions:
+          can_get: true
+          can_get_egress_policy: true
+          can_update: false
+          can_delete: false
+          can_create_egress_policy: false
+          can_update_egress_policy: false
+          can_delete_egress_policy: false
+          can_resume: false
+          can_pause: false
+      - user: user:sys-egress
+        object: global:root
+        assertions:
+          can_list_actors: false
+          can_create_worker: false
+      - user: user:sys-egress
+        object: atespace:space-1
+        assertions:
+          viewer: false
+          can_list_actors: false
+          can_get: false
+      - user: user:sys-router # atenet-router resumes actors and lists them
+        object: actor:runner-1
+        assertions:
+          can_resume: true
+          can_get: false
+          can_pause: false
+          can_suspend: false
+          can_revert: false
+          can_delete: false
+          can_get_egress_policy: false
+      - user: user:sys-router
+        object: global:root
+        assertions:
+          can_list_actors: true
+          can_list_workers: false
+          can_list_atespaces: false
+      - user: user:sys-router
+        object: worker:pod-1
+        assertions:
+          can_get: false
+      - user: user:alice # Atespace owner does not hold system roles
+        object: atespace:space-1
+        assertions:
+          egress_gateway: false
+          ingress_router: false
+      - user: user:carol # Global owner does not hold system roles
+        object: global:root
+        assertions:
+          controller: false
+          egress_gateway: false
+          ingress_router: false

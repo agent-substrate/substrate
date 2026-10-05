@@ -82,6 +82,11 @@ var (
 	// (agent-substrate/substrate#2021) once it lands, so bootstrap owner
 	// changes take effect without a restart.
 	authzBootstrapOwners = pflag.StringSlice("authz-bootstrap-owners", nil, "Principal IDs that are always global owners while listed, independent of the stored global AccessPolicy. Removing an ID revokes its access on restart. At least one is required when --experimental-enable-authz is set.")
+	// The SPIFFE IDs of these ServiceAccounts in ateapi's namespace hold the
+	// matching system component role when they call over mTLS.
+	controllerServiceAccount    = pflag.String("controller-service-account", installdefaults.ControllerServiceAccount, "ServiceAccount ate-controller runs as. Its mTLS SPIFFE ID holds the controller authz role, which manages workers.")
+	egressGatewayServiceAccount = pflag.String("egress-gateway-service-account", installdefaults.EgressServiceAccount, "ServiceAccount atenet-egress runs as. Its mTLS SPIFFE ID holds the egress_gateway authz role, which reads actors and their egress policies.")
+	ingressRouterServiceAccount = pflag.String("ingress-router-service-account", installdefaults.RouterServiceAccount, "ServiceAccount atenet-router runs as. Its mTLS SPIFFE ID holds the ingress_router authz role, which resumes and lists actors.")
 
 	actorIDJWTPoolFile          = pflag.String("actor-id-jwt-pool", "", "The file that contains the serialized JWT authority pool for signing actor JWTs")
 	actorJWTIssuer              = pflag.String("actor-jwt-issuer", "", "Issuer URL placed in the iss claim of actor JWTs. Relying parties fetch <issuer>/.well-known/openid-configuration to verify them. Must be https with no query or fragment. Empty means https://"+installdefaults.IDPServiceName+".<pod namespace>.svc.")
@@ -189,7 +194,16 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to create OpenFGA server", err)
 	}
 	defer fgaServer.Close()
-	authorizer, policyManager, err := authz.New(shutdownCtx, pool, fgaServer, *authzBootstrapOwners)
+	systemGrants, err := authzSystemGrants(installdefaults.NamespaceFromPodEnv(), []systemServiceAccount{
+		{role: authz.RoleController, flag: "controller-service-account", serviceAccount: *controllerServiceAccount},
+		{role: authz.RoleEgressGateway, flag: "egress-gateway-service-account", serviceAccount: *egressGatewayServiceAccount},
+		{role: authz.RoleIngressRouter, flag: "ingress-router-service-account", serviceAccount: *ingressRouterServiceAccount},
+	})
+	if err != nil {
+		serverboot.Fatal(ctx, "Invalid flags", err)
+	}
+	slog.InfoContext(ctx, "Resolved authz system grants", slog.Any("authz-system-grants", systemGrants))
+	authorizer, policyManager, err := authz.New(shutdownCtx, pool, fgaServer, *authzBootstrapOwners, authz.WithSystemGrants(systemGrants...))
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize OpenFGA authz", err)
 	}
@@ -593,4 +607,30 @@ func resolveActorJWTIssuer(flagValue, namespace string) (string, error) {
 		return "", err
 	}
 	return issuer, nil
+}
+
+// systemServiceAccount is the ServiceAccount, set by flag, whose SPIFFE ID
+// holds role.
+type systemServiceAccount struct {
+	role           string
+	flag           string
+	serviceAccount string
+}
+
+// authzSystemGrants returns the authz system grants for the SPIFFE IDs of
+// accounts in namespace.
+func authzSystemGrants(namespace string, accounts []systemServiceAccount) ([]authz.SystemGrant, error) {
+	grants := make([]authz.SystemGrant, 0, len(accounts))
+	for _, a := range accounts {
+		// path.Join would drop an empty segment and yield the SPIFFE ID of
+		// the namespace itself rather than of a ServiceAccount.
+		if a.serviceAccount == "" {
+			return nil, fmt.Errorf("--%s must not be empty", a.flag)
+		}
+		grants = append(grants, authz.SystemGrant{
+			SPIFFEID: installdefaults.SPIFFEID(namespace, a.serviceAccount),
+			Role:     a.role,
+		})
+	}
+	return grants, nil
 }

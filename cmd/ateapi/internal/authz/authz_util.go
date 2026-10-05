@@ -19,6 +19,7 @@ import (
 	_ "embed"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -42,6 +43,12 @@ const (
 	RoleOwner  = "owner"
 	RoleEditor = "editor"
 	RoleViewer = "viewer"
+
+	// System component roles on global:root. Only WithSystemGrants grants
+	// them; AccessPolicy validation rejects them.
+	RoleController    = "controller"
+	RoleEgressGateway = "egress_gateway"
+	RoleIngressRouter = "ingress_router"
 
 	RelationCanCreateAtespace       = "can_create_atespace"
 	RelationCanListAtespaces        = "can_list_atespaces"
@@ -212,13 +219,52 @@ func EnsureStoreAndModel(ctx context.Context, pool *pgxpool.Pool, fgaServer *ser
 	return storeID, modelID, nil
 }
 
+// SystemGrant grants a system component role on global:root to the Substrate
+// component that authenticates over mTLS with SPIFFEID.
+type SystemGrant struct {
+	SPIFFEID string
+	Role     string
+}
+
+// systemRoles are the roles a SystemGrant may grant.
+var systemRoles = map[string]struct{}{
+	RoleController:    {},
+	RoleEgressGateway: {},
+	RoleIngressRouter: {},
+}
+
+type options struct {
+	systemGrants []SystemGrant
+}
+
+// Option configures New.
+type Option func(*options)
+
+// WithSystemGrants makes the Authorizer treat each grant's SPIFFE ID as
+// holding its role on global:root on every check, independent of any stored
+// AccessPolicy. A grant only applies to mTLS principals, so a bearer token
+// whose subject equals the SPIFFE ID never receives it.
+func WithSystemGrants(grants ...SystemGrant) Option {
+	return func(o *options) {
+		o.systemGrants = append(o.systemGrants, grants...)
+	}
+}
+
 // New provisions the default OpenFGA store and authorization model via
 // EnsureStoreAndModel and returns the read-path Authorizer and write-path
 // PolicyManager. bootstrapOwners are principal IDs (with or without the
 // "user:" prefix) that the Authorizer treats as owners of global:root on every
 // check, independent of any stored AccessPolicy.
-func New(ctx context.Context, pool *pgxpool.Pool, fgaServer *server.Server, bootstrapOwners []string) (*Authorizer, *PolicyManager, error) {
+func New(ctx context.Context, pool *pgxpool.Pool, fgaServer *server.Server, bootstrapOwners []string, opts ...Option) (*Authorizer, *PolicyManager, error) {
+	var o options
+	for _, opt := range opts {
+		opt(&o)
+	}
 	owners, err := parseBootstrapOwners(bootstrapOwners)
+	if err != nil {
+		return nil, nil, err
+	}
+	grants, err := parseSystemGrants(o.systemGrants)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -231,6 +277,7 @@ func New(ctx context.Context, pool *pgxpool.Pool, fgaServer *server.Server, boot
 		storeID:         storeID,
 		modelID:         modelID,
 		bootstrapOwners: owners,
+		systemGrants:    grants,
 	}
 	policyManager := &PolicyManager{
 		fgaServer: fgaServer,
@@ -252,6 +299,25 @@ func parseBootstrapOwners(ids []string) (map[string]struct{}, error) {
 		owners[user] = struct{}{}
 	}
 	return owners, nil
+}
+
+// parseSystemGrants validates grants and returns the roles of each OpenFGA
+// user string.
+func parseSystemGrants(grants []SystemGrant) (map[string][]string, error) {
+	out := make(map[string][]string, len(grants))
+	for _, g := range grants {
+		if _, ok := systemRoles[g.Role]; !ok {
+			return nil, fmt.Errorf("invalid system grant for %q: unknown role %q", g.SPIFFEID, g.Role)
+		}
+		user, err := FormatMember("user:" + g.SPIFFEID)
+		if err != nil {
+			return nil, fmt.Errorf("invalid system grant SPIFFE ID %q: %w", g.SPIFFEID, err)
+		}
+		if !slices.Contains(out[user], g.Role) {
+			out[user] = append(out[user], g.Role)
+		}
+	}
+	return out, nil
 }
 
 // ateFGAInitLockID is a 64-bit identifier ("atefga") for serializing
