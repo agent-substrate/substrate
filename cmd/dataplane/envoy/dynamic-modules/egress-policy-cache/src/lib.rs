@@ -243,17 +243,41 @@ fn read_peer_cert_digest<EHF: EnvoyHttpFilter>(envoy_filter: &EHF) -> Option<Str
   Some(s.to_owned())
 }
 
+fn extract_destination_port(authority: &str) -> Option<&str> {
+  let (host, port) = authority.rsplit_once(':')?;
+  if host.is_empty() || (host.contains(':') && !host.ends_with(']')) {
+    return None;
+  }
+  let port_num: u16 = port.parse().ok()?;
+  if port_num == 0 {
+    return None;
+  }
+  Some(port)
+}
+
+fn read_destination_port<EHF: EnvoyHttpFilter>(envoy_filter: &EHF) -> Option<String> {
+  let buf = envoy_filter.get_request_header_value(":authority")?;
+  let authority = std::str::from_utf8(buf.as_slice()).ok()?;
+  extract_destination_port(authority).map(str::to_owned)
+}
+
+fn build_cache_key<EHF: EnvoyHttpFilter>(envoy_filter: &EHF) -> Option<String> {
+  let cert_digest = read_peer_cert_digest(envoy_filter)?;
+  let port = read_destination_port(envoy_filter)?;
+  Some(format!("{cert_digest};{port}"))
+}
+
 impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for EgressPolicyCacheFilter {
   fn on_request_headers(
     &mut self,
     envoy_filter: &mut EHF,
     _end_of_stream: bool,
   ) -> envoy_dynamic_module_type_on_http_filter_request_headers_status {
-    let cached_policy = if let Some(cert_digest) = read_peer_cert_digest(envoy_filter) {
+    let cached_policy = if let Some(cache_key) = build_cache_key(envoy_filter) {
       let mut cache = self.local_cache().borrow_mut();
-      if let Some(entry) = cache.get(&cert_digest) {
+      if let Some(entry) = cache.get(&cache_key) {
         if entry.stored_at.elapsed() > self.config.cache_ttl {
-          cache.pop(&cert_digest);
+          cache.pop(&cache_key);
           None
         } else {
           Some(entry.policy.clone())
@@ -281,16 +305,17 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for EgressPolicyCacheFilter {
     _end_of_stream: bool,
   ) -> envoy_dynamic_module_type_on_http_filter_response_headers_status {
     // Store policy in cache in case it was authorized (200 response) on a
-    // cache miss. Actor identity comes from cert's subject. Use cert digest as
-    // key, since it uniquely identifies the cert and hence actor.
+    // cache miss. Actor identity comes from cert's subject. Use cert digest
+    // concatenated with the destination port as key, since SNI rules depend on
+    // both the actor identity and the dialed port.
     if self.config.cache_enabled
       && !self.has_cached_policy
       && is_http_200(envoy_filter)
       && let Some(policy) = read_egress_policy(envoy_filter)
-      && let Some(cert_digest) = read_peer_cert_digest(envoy_filter)
+      && let Some(cache_key) = build_cache_key(envoy_filter)
     {
       self.local_cache().borrow_mut().put(
-        cert_digest,
+        cache_key,
         CachedPolicy::new(policy, Instant::now()),
       );
     }
@@ -526,6 +551,19 @@ mod tests {
   }
 
   #[test]
+  fn test_extract_destination_port() {
+    assert_eq!(extract_destination_port("10.0.0.1:443"), Some("443"));
+    assert_eq!(extract_destination_port("[2001:db8::1]:8443"), Some("8443"));
+    assert_eq!(extract_destination_port("example.com:80"), Some("80"));
+    assert_eq!(extract_destination_port("example.com"), None);
+    assert_eq!(extract_destination_port(":443"), None);
+    assert_eq!(extract_destination_port("10.0.0.1:0"), None);
+    assert_eq!(extract_destination_port("10.0.0.1:70000"), None);
+    assert_eq!(extract_destination_port("2001:db8::1"), None);
+    assert_eq!(extract_destination_port("[2001:db8::1]"), None);
+  }
+
+  #[test]
   fn test_headers_continue() {
     let hit_id = EnvoyCounterId(1);
     let miss_id = EnvoyCounterId(2);
@@ -538,6 +576,10 @@ mod tests {
         *id == envoy_dynamic_module_type_attribute_id::ConnectionSha256PeerCertificateDigest
       })
       .returning(|_| Some(EnvoyBuffer::new(b"unknown_digest")));
+    mock_filter
+      .expect_get_request_header_value()
+      .withf(|key| key == ":authority")
+      .returning(|_| Some(EnvoyBuffer::new(b"10.0.0.1:443")));
     mock_filter
       .expect_increment_counter()
       .withf(move |id, val| *id == miss_id && *val == 1)
@@ -567,7 +609,7 @@ mod tests {
       EgressPolicyCacheFilterConfig::with_counters(Config::default(), hit_id, miss_id);
     let expected_policy = r#"{"rules":[{"pattern":"*.example.com","mode":"mitm"}]}"#;
     config.local_cache().borrow_mut().put(
-      "abc123digest".to_string(),
+      "abc123digest;443".to_string(),
       CachedPolicy::new(expected_policy.to_string(), Instant::now()),
     );
 
@@ -578,6 +620,10 @@ mod tests {
         *id == envoy_dynamic_module_type_attribute_id::ConnectionSha256PeerCertificateDigest
       })
       .returning(|_| Some(EnvoyBuffer::new(b"abc123digest")));
+    mock_filter
+      .expect_get_request_header_value()
+      .withf(|key| key == ":authority")
+      .returning(|_| Some(EnvoyBuffer::new(b"10.0.0.1:443")));
     mock_filter
       .expect_set_filter_state_bytes()
       .withf(move |key, val| {
@@ -614,7 +660,7 @@ mod tests {
       miss_id,
     );
     config.local_cache().borrow_mut().put(
-      "abc123digest".to_string(),
+      "abc123digest;443".to_string(),
       CachedPolicy::new(
         r#"{"rules":[{"pattern":"*.example.com","mode":"mitm"}]}"#.to_string(),
         Instant::now() - Duration::from_secs(10),
@@ -628,6 +674,10 @@ mod tests {
         *id == envoy_dynamic_module_type_attribute_id::ConnectionSha256PeerCertificateDigest
       })
       .returning(|_| Some(EnvoyBuffer::new(b"abc123digest")));
+    mock_filter
+      .expect_get_request_header_value()
+      .withf(|key| key == ":authority")
+      .returning(|_| Some(EnvoyBuffer::new(b"10.0.0.1:443")));
     mock_filter.expect_set_filter_state_bytes().never();
     mock_filter
       .expect_increment_counter()
@@ -641,7 +691,7 @@ mod tests {
       envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue
     );
     assert!(!filter.has_cached_policy);
-    assert!(config.local_cache().borrow_mut().get("abc123digest").is_none());
+    assert!(config.local_cache().borrow_mut().get("abc123digest;443").is_none());
   }
 
   #[test]
@@ -666,6 +716,10 @@ mod tests {
         *id == envoy_dynamic_module_type_attribute_id::ConnectionSha256PeerCertificateDigest
       })
       .returning(|_| Some(EnvoyBuffer::new(b"abc123digest")));
+    mock_filter
+      .expect_get_request_header_value()
+      .withf(|key| key == ":authority")
+      .returning(|_| Some(EnvoyBuffer::new(b"10.0.0.1:443")));
 
     let mut filter = config.new_http_filter(&mut mock_filter);
     assert_eq!(
@@ -676,7 +730,7 @@ mod tests {
     let cached = config
       .local_cache()
       .borrow_mut()
-      .get("abc123digest")
+      .get("abc123digest;443")
       .cloned()
       .expect("expected entry in cache");
     assert_eq!(
@@ -691,7 +745,7 @@ mod tests {
     let config = EgressPolicyCacheFilterConfig::new(Config::default());
     let initial_stored_at = Instant::now() - Duration::from_secs(3);
     config.local_cache().borrow_mut().put(
-      "abc123digest".to_string(),
+      "abc123digest;443".to_string(),
       CachedPolicy::new(
         r#"{"rules":[{"pattern":"*.example.com","mode":"mitm"}]}"#.to_string(),
         initial_stored_at,
@@ -715,7 +769,7 @@ mod tests {
     let cached = config
       .local_cache()
       .borrow_mut()
-      .get("abc123digest")
+      .get("abc123digest;443")
       .cloned()
       .expect("expected entry in cache");
     assert_eq!(cached.stored_at, initial_stored_at);

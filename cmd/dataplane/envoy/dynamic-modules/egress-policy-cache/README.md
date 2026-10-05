@@ -11,16 +11,18 @@ Each `EgressPolicyCacheFilterConfig` owns a `ThreadLocal` store of
 `LruCache<String, CachedPolicy>` instances (`max_cache_items` capacity per
 Envoy worker thread). Each `CachedPolicy` entry stores the serialized egress
 policy JSON string alongside the `Instant` (`stored_at`) when it was cached,
-keyed by the downstream peer certificate's SHA-256 digest
-(`connection.sha256_peer_certificate_digest`).
+keyed by `<peer_cert_digest>;<destination_port>`, where `<peer_cert_digest>` is
+the downstream peer certificate's SHA-256 digest
+(`connection.sha256_peer_certificate_digest`) and `<destination_port>` is the
+destination port extracted from the `:authority` request header.
 
 ### Request path (`on_request_headers`)
 
 When an actor opens a `CONNECT` tunnel on the outer listener:
 
-1. If `cache_enabled` is `false`, the filter returns `Continue` immediately.
-2. The filter reads `connection.sha256_peer_certificate_digest` and looks up
-   the digest in the current worker thread's LRU cache:
+1. The filter builds the cache key `<peer_cert_digest>;<destination_port>` from
+   `connection.sha256_peer_certificate_digest` and the `:authority` request
+   header, and looks it up in the current worker thread's LRU cache:
    - **Fresh hit (`stored_at.elapsed() <= cache_ttl`)**:
      - Writes the cached policy JSON to filter state under key
        `dev.ate.policy.egress.cached`.
@@ -31,9 +33,9 @@ When an actor opens a `CONNECT` tunnel on the outer listener:
      - Removes the expired entry from the LRU cache without setting filter
        state.
      - Increments the `ate_egress.connect_cache_miss` counter.
-   - **Cache miss (or missing certificate digest)**:
+   - **Cache miss (or missing certificate digest / destination port)**:
      - Increments the `ate_egress.connect_cache_miss` counter.
-3. Subsequent filters in the outer HTTP filter chain act on the result:
+2. Subsequent filters in the outer HTTP filter chain act on the result:
    - `envoy.filters.http.composite` checks for the presence of
      `dev.ate.policy.egress.cached` in filter state and invokes
      `envoy.filters.http.ext_proc` only when it is absent.
@@ -51,8 +53,9 @@ When the `CONNECT` response headers arrive:
 1. If `cache_enabled` is `false`, the filter returns `Continue` immediately.
 2. If `:status` is `200` and `!self.has_cached_policy`:
    - Reads the egress policy JSON from filter state key
-     `dev.ate.policy.egress` and the peer certificate digest from
-     `connection.sha256_peer_certificate_digest`.
+     `dev.ate.policy.egress` and builds the cache key
+     `<peer_cert_digest>;<destination_port>` from
+     `connection.sha256_peer_certificate_digest` and `:authority`.
    - Inserts `CachedPolicy { policy, stored_at: Instant::now() }` into the
      current worker thread's LRU cache.
 3. If `self.has_cached_policy` is `true` (the policy for this stream came from
