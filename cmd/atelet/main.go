@@ -896,9 +896,8 @@ func (s *AteomHerder) UploadPausedCheckpoint(ctx context.Context, req *ateletpb.
 		templateName:      req.GetActorTemplateName(),
 		// Always the actor's durable latest: golden actors are never paused
 		// (validation above rejects the golden atespace).
-		kind:         ateattr.SnapshotKindLatest,
-		scope:        ateattr.SnapshotScopeValue(req.GetDesiredScope()),
-		sandboxClass: req.GetSandboxClass(),
+		kind:  ateattr.SnapshotKindLatest,
+		scope: ateattr.SnapshotScopeValue(req.GetDesiredScope()),
 	}
 	defer func() {
 		s.instruments.recordCheckpoint(ctx, op,

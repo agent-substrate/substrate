@@ -41,7 +41,6 @@ import (
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/serverboot"
-	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/objectstorage"
 	"github.com/google/go-cmp/cmp"
 	"github.com/spf13/pflag"
@@ -1429,7 +1428,6 @@ func validUploadPausedCheckpointRequest() *ateletpb.UploadPausedCheckpointReques
 		CapturedScope:          ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
 		SnapshotFiles:          []string{"config.json", "memory-ranges", "durable-dir.tar"},
 		DataSnapshotFiles:      []string{"durable-dir.tar"},
-		SandboxClass:           string(atev1alpha1.SandboxClassMicroVM),
 	}
 }
 

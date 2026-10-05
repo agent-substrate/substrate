@@ -514,15 +514,10 @@ message UploadPausedCheckpointRequest {
   // on a retry after the local snapshot was pruned.
   SnapshotScope captured_scope = 10;
 
-  // The sandbox class the pause checkpoint was captured with (e.g.
-  // "gvisor"), from the ActorTemplate's sandbox_config. It labels the upload
-  // metrics.
-  string sandbox_class = 11;
-
   // The subset of snapshot_files that restores the actor at DATA scope, as
   // recorded on the actor's LocalSnapshot. A FULL capture uploaded as DATA
   // writes exactly these files; empty means it has no durable data.
-  repeated string data_snapshot_files = 12;
+  repeated string data_snapshot_files = 11;
 }
 
 message UploadPausedCheckpointResponse {

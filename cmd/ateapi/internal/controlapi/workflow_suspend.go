@@ -300,9 +300,6 @@ func (w *ActorWorkflow) ensurePausedSnapshotUploaded(ctx context.Context, actorR
 		CapturedScope:     actorSnapshotContentScopeToAtelet(pausedContentScope(local, actorTemplate)),
 		SnapshotFiles:     local.GetSnapshotFiles(),
 		DataSnapshotFiles: local.GetDataSnapshotFiles(),
-		// SandboxConfig is immutable, so the template's class is the one the
-		// pause captured with.
-		SandboxClass: sandboxClassString(actorTemplate.GetSandboxConfig().GetSandboxClass()),
 	}
 	wireSnapshotScope = ateattr.SnapshotScopeValue(req.DesiredScope)
 

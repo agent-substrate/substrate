@@ -2666,14 +2666,10 @@ type UploadPausedCheckpointRequest struct {
 	// data_snapshot_files it determines the files the upload writes, including
 	// on a retry after the local snapshot was pruned.
 	CapturedScope SnapshotScope `protobuf:"varint,10,opt,name=captured_scope,json=capturedScope,proto3,enum=atelet.SnapshotScope" json:"captured_scope,omitempty"`
-	// The sandbox class the pause checkpoint was captured with (e.g.
-	// "gvisor"), from the ActorTemplate's sandbox_config. It labels the upload
-	// metrics.
-	SandboxClass string `protobuf:"bytes,11,opt,name=sandbox_class,json=sandboxClass,proto3" json:"sandbox_class,omitempty"`
 	// The subset of snapshot_files that restores the actor at DATA scope, as
 	// recorded on the actor's LocalSnapshot. A FULL capture uploaded as DATA
 	// writes exactly these files; empty means it has no durable data.
-	DataSnapshotFiles []string `protobuf:"bytes,12,rep,name=data_snapshot_files,json=dataSnapshotFiles,proto3" json:"data_snapshot_files,omitempty"`
+	DataSnapshotFiles []string `protobuf:"bytes,11,rep,name=data_snapshot_files,json=dataSnapshotFiles,proto3" json:"data_snapshot_files,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
@@ -2776,13 +2772,6 @@ func (x *UploadPausedCheckpointRequest) GetCapturedScope() SnapshotScope {
 		return x.CapturedScope
 	}
 	return SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED
-}
-
-func (x *UploadPausedCheckpointRequest) GetSandboxClass() string {
-	if x != nil {
-		return x.SandboxClass
-	}
-	return ""
 }
 
 func (x *UploadPausedCheckpointRequest) GetDataSnapshotFiles() []string {
@@ -3251,7 +3240,7 @@ const file_atelet_proto_rawDesc = "" +
 	"\x06config\"k\n" +
 	"\x12CheckpointResponse\x12%\n" +
 	"\x0esnapshot_files\x18\x01 \x03(\tR\rsnapshotFiles\x12.\n" +
-	"\x13data_snapshot_files\x18\x02 \x03(\tR\x11dataSnapshotFiles\"\xbf\x04\n" +
+	"\x13data_snapshot_files\x18\x02 \x03(\tR\x11dataSnapshotFiles\"\x9a\x04\n" +
 	"\x1dUploadPausedCheckpointRequest\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +
@@ -3264,9 +3253,8 @@ const file_atelet_proto_rawDesc = "" +
 	"\rdesired_scope\x18\b \x01(\x0e2\x15.atelet.SnapshotScopeR\fdesiredScope\x12%\n" +
 	"\x0esnapshot_files\x18\t \x03(\tR\rsnapshotFiles\x12<\n" +
 	"\x0ecaptured_scope\x18\n" +
-	" \x01(\x0e2\x15.atelet.SnapshotScopeR\rcapturedScope\x12#\n" +
-	"\rsandbox_class\x18\v \x01(\tR\fsandboxClass\x12.\n" +
-	"\x13data_snapshot_files\x18\f \x03(\tR\x11dataSnapshotFiles\"G\n" +
+	" \x01(\x0e2\x15.atelet.SnapshotScopeR\rcapturedScope\x12.\n" +
+	"\x13data_snapshot_files\x18\v \x03(\tR\x11dataSnapshotFiles\"G\n" +
 	"\x1eUploadPausedCheckpointResponse\x12%\n" +
 	"\x0esnapshot_files\x18\x01 \x03(\tR\rsnapshotFiles\"\x9e\x06\n" +
 	"\x0eRestoreRequest\x12(\n" +
