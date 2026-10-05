@@ -1506,6 +1506,13 @@ type HttpRuleEffects struct {
 	// the requests that ask for it. Header names must be unique
 	// case-insensitively.
 	//
+	// Replacement is supported on HTTP and HTTPS. On HTTP, the gateway does
+	// not originate TLS to the destination. Without separate transport
+	// protection, observers can read the credential and attackers on the path
+	// can modify the request. Deployments may encrypt traffic outside the
+	// gateway; policy authors must account for any unprotected segments
+	// between credential injection and the intended destination.
+	//
 	// +k8s:optional
 	// +k8s:maxItems=16
 	// +k8s:listType=map
