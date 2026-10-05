@@ -124,6 +124,10 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		return nil, apierror.InvalidArgument("unsupported snapshot scope: %v", scope)
 	}
 
+	// Captured now: the checkpoint unhosts the actor, and the final record
+	// waits for it to succeed.
+	hosted := s.lookupActor(actorUID)
+
 	// The actor's CH was booted by RunWorkload or relaunched by RestoreWorkload;
 	// either way ateom owns it and tracks its api-socket.
 	ra := s.runningVM(actorUID)
@@ -230,6 +234,9 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		// rootfs_upper), and the tar durations scale with the actor's data.
 		slog.Duration("durable_dir", dDurable), slog.Duration("rootfs_upper", dUpper),
 		slog.Duration("teardown", dTeardown))
+	if hosted != nil {
+		s.recordFinal(ctx, hosted)
+	}
 	return &ateompb.CheckpointWorkloadResponse{SnapshotFiles: snapshotFiles, DataSnapshotFiles: durableFiles}, nil
 }
 
@@ -396,11 +403,15 @@ func (s *AteomService) TerminateWorkload(ctx context.Context, req *ateompb.Termi
 
 	attribution := ateomstats.ActorAttributionFromRequest(req)
 
+	hosted := s.lookupActor(attribution.UID)
 	if err := s.terminateWorkload(ctx, attribution, req.GetActorDirs()); err != nil {
 		return nil, fmt.Errorf("failed to terminate workload: %w", err)
 	}
 
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor terminated", attribution)
+	if hosted != nil {
+		s.recordFinal(ctx, hosted)
+	}
 
 	return &ateompb.TerminateWorkloadResponse{}, nil
 }

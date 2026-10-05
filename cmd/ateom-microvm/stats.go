@@ -20,14 +20,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"runtime/debug"
 	"slices"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/agentstats"
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/third_party/kata/agentpb"
 	"github.com/agent-substrate/substrate/internal/apierror"
+	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/resources"
 )
@@ -39,9 +41,9 @@ import (
 // file reads inside the guest, and far short of the lifecycle calls' 20-30s.
 const statsCallTimeout = 2 * time.Second
 
-// The discovery read asks up to statsFanOut guests at once, and gives up on the
-// rest after statsSweepBudget, which stays under atelet's 55s deadline for the
-// whole call. A guest not reached in time reports as pending.
+// A sweep asks up to statsFanOut guests at once and gives up on the rest after
+// statsSweepBudget, so it ends inside the default sample interval. A guest not
+// reached in time reports as pending.
 const (
 	statsFanOut      = 32
 	statsSweepBudget = 45 * time.Second
@@ -106,9 +108,7 @@ func (s *AteomService) GetWorkloadStats(ctx context.Context, req *ateompb.GetWor
 	if hosted == nil {
 		return nil, apierror.NotFound("ateom is not executing actor %q", req.GetActorUid())
 	}
-	active := &hosted.attribution
-
-	sample, err := s.sampleGuest(ctx, active)
+	sample, err := s.measureGuest(ctx, hosted)
 	if err != nil {
 		if errors.Is(err, errStaleGuestTarget) {
 			return nil, apierror.Internal("%v", err)
@@ -129,73 +129,145 @@ func (s *AteomService) GetWorkloadStats(ctx context.Context, req *ateompb.GetWor
 	if s.lookupActor(req.GetActorUid()) != hosted {
 		return nil, apierror.NotFound("ateom stopped executing actor %q while the sample was being taken", req.GetActorUid())
 	}
+	// The reading advanced the activation's CPU, so the cache keeps up with it.
+	hosted.usage.Store(sample)
 
 	return &ateompb.GetWorkloadStatsResponse{Sample: sample}, nil
 }
 
-// GetActiveWorkloadStats implements
-// ateompb.Ateom/GetActiveWorkloadStats: the discovery read, sampling
-// whatever is executing with no identity asserted. Same lock discipline as
-// GetWorkloadStats above, for the same reasons.
+// GetActiveWorkloadStats implements ateompb.Ateom/GetActiveWorkloadStats: the
+// discovery read. It serves each actor's latest sample from the sampler, so a
+// poll puts no load of its own on the guests; an actor not sampled yet is
+// pending.
 func (s *AteomService) GetActiveWorkloadStats(ctx context.Context, req *ateompb.GetActiveWorkloadStatsRequest) (*ateompb.GetActiveWorkloadStatsResponse, error) {
 	hosted := s.hostedActors()
-	sweepCtx, cancel := context.WithTimeout(ctx, statsSweepBudget)
-	defer cancel()
-
-	// A workload with no numbers yet answers as a pending entry, so it stays
-	// attributable even if it dies during boot, and one of several booting
-	// does not stop the rest being reported.
-	samples := make([]*ateompb.WorkloadStatsSample, len(hosted))
-	var stale atomic.Bool
-	slots := make(chan struct{}, statsFanOut)
-	var wg sync.WaitGroup
-	for i, h := range hosted {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			samples[i] = s.sampleHostedGuest(sweepCtx, h, slots, &stale)
-		}()
+	samples := make([]*ateompb.WorkloadStatsSample, 0, len(hosted))
+	for _, h := range hosted {
+		sample := h.usage.Latest()
+		if sample == nil {
+			sample = h.usage.WithEpoch(pendingSample(&h.attribution))
+		}
+		samples = append(samples, sample)
 	}
-	wg.Wait()
-	if stale.Load() {
-		return nil, apierror.Internal("%v", errStaleGuestTarget)
-	}
-	samples = slices.DeleteFunc(samples, func(s *ateompb.WorkloadStatsSample) bool { return s == nil })
 
 	// An empty list is "available", per the proto: a normal answer for a
 	// scraper to get, not an error.
 	return &ateompb.GetActiveWorkloadStatsResponse{Samples: samples}, nil
 }
 
-// sampleHostedGuest measures one actor for the discovery read, or returns nil
-// when it is no longer hosted. A guest not reached before ctx is done, or that
-// does not answer, is pending.
-func (s *AteomService) sampleHostedGuest(ctx context.Context, h *hostedActor, slots chan struct{}, stale *atomic.Bool) *ateompb.WorkloadStatsSample {
-	sample := pendingSample(&h.attribution)
-	select {
-	case slots <- struct{}{}:
-		measured, err := s.sampleGuest(ctx, &h.attribution)
-		<-slots
-		if errors.Is(err, errStaleGuestTarget) {
-			stale.Store(true)
+// sweepUsage samples every hosted actor between its initial reading and its
+// final record, stores each sample and writes its periodic record, and returns
+// the samples. Same lock discipline as GetWorkloadStats, for the same reasons.
+func (s *AteomService) sweepUsage(ctx context.Context) []*ateompb.WorkloadStatsSample {
+	hosted := s.hostedActors()
+	sweepCtx, cancel := context.WithTimeout(ctx, statsSweepBudget)
+	defer cancel()
+
+	// A workload with no numbers yet is a pending entry, so it stays
+	// attributable even if it dies during boot, and one of several booting
+	// does not stop the rest being reported.
+	samples := make([]*ateompb.WorkloadStatsSample, len(hosted))
+	slots := make(chan struct{}, statsFanOut)
+	var wg sync.WaitGroup
+	for i, h := range hosted {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			// The reads run here, outside the sampler's own recover.
+			defer func() {
+				if r := recover(); r != nil {
+					slog.ErrorContext(ctx, "Usage sample panicked", slog.String("actorUID", h.attribution.UID),
+						slog.Any("panic", r), slog.String("stack", string(debug.Stack())))
+				}
+			}()
+			samples[i] = s.sampleHostedGuest(sweepCtx, h, slots)
+		}()
+	}
+	wg.Wait()
+	return slices.DeleteFunc(samples, func(s *ateompb.WorkloadStatsSample) bool { return s == nil })
+}
+
+// sampleHostedGuest measures one actor for the sweep, stores the sample and
+// writes its periodic record, or returns nil when the actor is outside its
+// sampling window or no longer hosted. A guest not reached before ctx is done,
+// or that does not answer, is pending.
+func (s *AteomService) sampleHostedGuest(ctx context.Context, h *hostedActor, slots chan struct{}) *ateompb.WorkloadStatsSample {
+	if !h.usage.Sampling() {
+		return nil
+	}
+	sample := h.usage.WithEpoch(pendingSample(&h.attribution))
+	// The fan-out slot is taken inside the reading, so a sweep waiting for
+	// another reading of this actor holds no slot.
+	measured, err := h.usage.Measure(ctx, func() (*ateompb.WorkloadStatsSample, map[string]uint64, error) {
+		select {
+		case slots <- struct{}{}:
+		case <-ctx.Done():
+			return nil, nil, ctx.Err()
 		}
-		// Otherwise an error is boot, restore, teardown in progress, or a guest
-		// that has stopped answering: all routine, none of them an error.
-		if err == nil {
-			sample = measured
-		}
-	case <-ctx.Done():
+		defer func() { <-slots }()
+		return s.sampleGuest(ctx, h)
+	})
+	if errors.Is(err, errStaleGuestTarget) {
+		slog.ErrorContext(ctx, "Guest stats target belongs to another actor", slog.String("actorUID", h.attribution.UID), slog.Any("err", err))
+	}
+	// Otherwise an error is boot, restore, teardown in progress, a guest that
+	// has stopped answering, or the sweep's budget: all routine.
+	if err == nil {
+		sample = measured
 	}
 	// The guest is found by UID alone. If the actor was re-hosted meanwhile,
-	// perhaps on another template, the numbers are the new activation's:
-	// report it as pending instead.
-	switch latest := s.lookupActor(h.attribution.UID); {
-	case latest == nil:
+	// perhaps on another template, the numbers are the new activation's: drop
+	// them, and let the new activation start with its own initial reading.
+	if s.lookupActor(h.attribution.UID) != h {
 		return nil
-	case latest != h:
-		return pendingSample(&latest.attribution)
 	}
+	h.usage.Periodic(sample, func() { s.usage.Emit(ctx, ateattr.StatsKindPeriodic, sample) })
 	return sample
+}
+
+// measureGuest reads h's guest as a reading of its activation.
+func (s *AteomService) measureGuest(ctx context.Context, h *hostedActor) (*ateompb.WorkloadStatsSample, error) {
+	return h.usage.Measure(ctx, func() (*ateompb.WorkloadStatsSample, map[string]uint64, error) {
+		return s.sampleGuest(ctx, h)
+	})
+}
+
+// recordInitial samples a new activation and writes its initial record. It
+// runs off the resume path, since a guest read can take many seconds, and
+// bounds that read like one sweep's. It recovers from panics, as a sweep does:
+// it runs on its own goroutine, where a panic would take the ateom down. The
+// activation is then sampled without an initial record.
+func (s *AteomService) recordInitial(ctx context.Context, h *hostedActor) {
+	actorUID := h.attribution.UID
+	defer func() {
+		if r := recover(); r != nil {
+			slog.ErrorContext(ctx, "Initial usage sample panicked", slog.String("actorUID", actorUID),
+				slog.Any("panic", r), slog.String("stack", string(debug.Stack())))
+			h.usage.Initial(nil, nil)
+		}
+	}()
+	ctx, cancel := context.WithTimeout(ctx, statsSweepBudget)
+	defer cancel()
+	sample, err := s.measureGuest(ctx, h)
+	if err != nil {
+		slog.WarnContext(ctx, "No initial usage sample", slog.String("actorUID", actorUID), slog.Any("err", err))
+		sample = nil
+	}
+	h.usage.Initial(sample, func() { s.usage.Emit(ctx, ateattr.StatsKindInitial, sample) })
+}
+
+// recordFinal writes the final record of an activation that a checkpoint or a
+// terminate ended, from its newest measured sample. A guest read here would add
+// its latency to the checkpoint, so the record marks where the epoch ends
+// rather than adding a fresher reading.
+func (s *AteomService) recordFinal(ctx context.Context, h *hostedActor) {
+	pending := h.usage.WithEpoch(pendingSample(&h.attribution))
+	h.usage.Final(func(measured *ateompb.WorkloadStatsSample) {
+		if measured == nil {
+			measured = pending
+		}
+		s.usage.EmitFinal(ctx, measured)
+	})
 }
 
 // pendingSample is a workload with no numbers to give yet, as the discovery
@@ -218,8 +290,9 @@ func pendingSample(active *resources.ActorAttribution) *ateompb.WorkloadStatsSam
 
 // errStaleGuestTarget is the one bug-shaped failure sampleGuest can return:
 // the published guest target and the attribution disagree, which the lifecycle
-// RPCs write together under lock and so should never happen. Both stats reads
-// map it to Internal; everything else sampleGuest returns is routine.
+// RPCs write together under lock and so should never happen. GetWorkloadStats
+// maps it to Internal and the sweep logs it as an error; everything else
+// sampleGuest returns is routine.
 var errStaleGuestTarget = errors.New("guest agent connection belongs to a different actor")
 
 // sampleGuest reads the guest's container cgroups through the agent and builds
@@ -228,10 +301,11 @@ var errStaleGuestTarget = errors.New("guest agent connection belongs to a differ
 // is routine here, and unlike the gVisor runtime's local file reads, a vsock
 // call offers no error type that separates "gone" from "broken". The
 // exception is errStaleGuestTarget, above. Errors come back raw because the
-// two RPCs express the routine ones differently: an error code for the keyed
-// read, a pending entry for the discovery read. The read holds no lock, so the
-// keyed caller re-checks the actor record it loaded after this returns.
-func (s *AteomService) sampleGuest(ctx context.Context, active *resources.ActorAttribution) (*ateompb.WorkloadStatsSample, error) {
+// callers express the routine ones differently: an error code for the keyed
+// read, a pending sample for the sweep. The read holds no lifecycle lock, so
+// the keyed caller re-checks the actor record it loaded after this returns.
+func (s *AteomService) sampleGuest(ctx context.Context, h *hostedActor) (*ateompb.WorkloadStatsSample, map[string]uint64, error) {
+	active := &h.attribution
 	// The actor is the one here, but there is no guest to ask yet. Usually that
 	// is a poll landing in the boot or the restore: the ateom retains the
 	// attribution from the moment it accepts the actor, and the target is only
@@ -239,22 +313,24 @@ func (s *AteomService) sampleGuest(ctx context.Context, active *resources.ActorA
 	// like from here, since teardownActor clears the target before it closes
 	// the connection, and what a restore whose post-restore agent dial failed
 	// looks like for the rest of that activation.
-	target := s.guestStatsFor(active.UID)
+	// The target is read from h, not looked up by UID, so a re-host during
+	// this read cannot hand over the next activation's guest.
+	target := s.guestOf(h)
 	if target == nil {
-		return nil, errors.New("no guest agent connection to measure yet")
+		return nil, nil, errors.New("no guest agent connection to measure yet")
 	}
 	// Belt and braces against the one thing that must never happen. The target
 	// is published and cleared under lock alongside the attribution, so this
 	// should be unreachable; if the two ever disagree, decline rather than
 	// report a stale guest's numbers under the requested actor's name.
 	if target.actorUID != active.UID {
-		return nil, fmt.Errorf("%w: %q, not %q", errStaleGuestTarget, target.actorUID, active.UID)
+		return nil, nil, fmt.Errorf("%w: %q, not %q", errStaleGuestTarget, target.actorUID, active.UID)
 	}
 
 	observedAt := time.Now()
-	sample, err := sumContainerStats(ctx, target)
+	sample, cpuByContainer, err := sumContainerStats(ctx, target)
 	if err != nil {
-		return nil, fmt.Errorf("no container stats from the guest agent: %w", err)
+		return nil, nil, fmt.Errorf("no container stats from the guest agent: %w", err)
 	}
 
 	return &ateompb.WorkloadStatsSample{
@@ -273,10 +349,12 @@ func (s *AteomService) sampleGuest(ctx context.Context, active *resources.ActorA
 		CpuUsageUsec:          sample.CPUUsageUsec,
 
 		ObservedAtUnixNano: observedAt.UnixNano(),
-	}, nil
+	}, cpuByContainer, nil
 }
 
-// sumContainerStats reads every container of the actor and adds them up.
+// sumContainerStats reads every container of the actor and adds them up. It
+// also returns each container's CPU by id, so the activation can tell a
+// container it could not read from one whose usage fell.
 //
 // A container the agent cannot report contributes nothing instead of failing
 // the sample. That is not only the "a partial reading beats none" trade the
@@ -294,17 +372,17 @@ func (s *AteomService) sampleGuest(ctx context.Context, active *resources.ActorA
 // maxActorContainers * statsCallTimeout as the ceiling when the caller set
 // none. statsCallTimeout is per call so that one hung container read cannot
 // eat the budget the remaining containers still need.
-func sumContainerStats(ctx context.Context, target *guestStatsTarget) (agentstats.Sample, error) {
+func sumContainerStats(ctx context.Context, target *guestStatsTarget) (agentstats.Sample, map[string]uint64, error) {
 	var (
 		total   agentstats.Sample
-		read    int
+		cpu     = make(map[string]uint64, len(target.workloadIDs))
 		lastErr error
 	)
 	for _, id := range target.workloadIDs {
 		if err := ctx.Err(); err != nil {
 			// The caller is gone; the per-call ctx below would fail instantly
 			// anyway, so stop burning through the remaining containers.
-			return agentstats.Sample{}, err
+			return agentstats.Sample{}, nil, err
 		}
 		callCtx, cancel := context.WithTimeout(ctx, statsCallTimeout)
 		cs, err := target.agent.StatsContainer(callCtx, id)
@@ -313,18 +391,19 @@ func sumContainerStats(ctx context.Context, target *guestStatsTarget) (agentstat
 			lastErr = err
 			continue
 		}
-		read++
-		total = total.Plus(agentstats.FromCgroupStats(cs))
+		one := agentstats.FromCgroupStats(cs)
+		cpu[id] = one.CPUUsageUsec
+		total = total.Plus(one)
 	}
 
-	if read == 0 {
+	if len(cpu) == 0 {
 		if lastErr == nil {
 			// No containers to read. The actor is up with an empty container
 			// list, which the boot path does not produce, so treat it as "no
 			// numbers" rather than reporting a confident zero.
 			lastErr = errors.New("no containers to measure")
 		}
-		return agentstats.Sample{}, lastErr
+		return agentstats.Sample{}, nil, lastErr
 	}
-	return total, nil
+	return total, cpu, nil
 }
