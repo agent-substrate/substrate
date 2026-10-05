@@ -36,6 +36,10 @@ pub const ATE_POLICY_EGRESS: &str = "dev.ate.policy.egress";
 
 /// Key holding the cached egress policy SNI rules JSON before it is copied to
 /// upstream-shared filter state.
+// TODO(yanavlasov): this is a temporary workaround of the Rust dynamic module API
+// limitation that does not allow storing filter state shared with upstream.
+// The dev.ate.policy.egress.cached filter state is later copied into
+// dev.ate.policy.egress filter state by the set_filter_state HTTP filter.
 pub const ATE_POLICY_EGRESS_CACHED: &str = "dev.ate.policy.egress.cached";
 
 /// Counter name for egress policy cache hits on CONNECT.
