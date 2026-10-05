@@ -23,7 +23,6 @@ import (
 	"github.com/spf13/pflag"
 	prombridge "go.opentelemetry.io/contrib/bridges/prometheus"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -112,7 +111,7 @@ func TestManagerOptionsMetricsListener(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			opts := managerOptions(types.NamespacedName{Namespace: "ate-system", Name: "pool"}, tt.servePull)
+			opts := managerOptions("", "ate-system", tt.servePull)
 
 			if opts.Metrics.BindAddress != tt.wantAddr {
 				t.Errorf("metrics address = %q, want %q", opts.Metrics.BindAddress, tt.wantAddr)
@@ -131,8 +130,7 @@ func TestManagerOptionsMetricsListener(t *testing.T) {
 func TestManagerOptionsScopeSecretCache(t *testing.T) {
 	t.Parallel()
 
-	ref := types.NamespacedName{Namespace: "ate-system", Name: "pool"}
-	opts := managerOptions(ref, true)
+	opts := managerOptions("", "ate-system", true)
 
 	var byObject cache.ByObject
 	found := false
@@ -144,11 +142,11 @@ func TestManagerOptionsScopeSecretCache(t *testing.T) {
 	if !found {
 		t.Fatal("no cache scope for Secrets")
 	}
-	cfg, ok := byObject.Namespaces[ref.Namespace]
+	cfg, ok := byObject.Namespaces["ate-system"]
 	if !ok || len(byObject.Namespaces) != 1 {
-		t.Fatalf("Secret cache namespaces = %v, want only %q", byObject.Namespaces, ref.Namespace)
+		t.Fatalf("Secret cache namespaces = %v, want only %q", byObject.Namespaces, "ate-system")
 	}
-	if got := cfg.FieldSelector.String(); got != "metadata.name="+ref.Name {
-		t.Errorf("Secret field selector = %q, want %q", got, "metadata.name="+ref.Name)
+	if got := cfg.FieldSelector.String(); got != "metadata.name=egress-mitm-ca-pool" {
+		t.Errorf("Secret field selector = %q, want %q", got, "metadata.name=egress-mitm-ca-pool")
 	}
 }
