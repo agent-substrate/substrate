@@ -175,16 +175,22 @@ impl EgressPolicyCacheFilterConfig {
     let max_items = self.config.max_cache_items;
     self.cache.get_or(|| new_lru_cache(max_items))
   }
-}
 
-impl<EHF: EnvoyHttpFilter> HttpFilterConfig<EHF> for EgressPolicyCacheFilterConfig {
-  fn new_http_filter(&self, _envoy: &mut EHF) -> Box<dyn HttpFilter<EHF>> {
-    Box::new(EgressPolicyCacheFilter {
+  /// Creates a concrete [`EgressPolicyCacheFilter`] bound to this configuration.
+  pub fn create_filter(&self) -> EgressPolicyCacheFilter {
+    EgressPolicyCacheFilter {
       config: self.config.clone(),
       cache: Arc::clone(&self.cache),
       cache_hit_counter: self.cache_hit_counter,
       cache_miss_counter: self.cache_miss_counter,
-    })
+      has_cached_policy: false,
+    }
+  }
+}
+
+impl<EHF: EnvoyHttpFilter> HttpFilterConfig<EHF> for EgressPolicyCacheFilterConfig {
+  fn new_http_filter(&self, _envoy: &mut EHF) -> Box<dyn HttpFilter<EHF>> {
+    Box::new(self.create_filter())
   }
 }
 
@@ -194,6 +200,7 @@ pub struct EgressPolicyCacheFilter {
   pub cache: Arc<ThreadLocalCache>,
   pub cache_hit_counter: EnvoyCounterId,
   pub cache_miss_counter: EnvoyCounterId,
+  pub has_cached_policy: bool,
 }
 
 impl EgressPolicyCacheFilter {
@@ -210,12 +217,6 @@ fn is_http_200<EHF: EnvoyHttpFilter>(envoy_filter: &EHF) -> bool {
     return status.as_slice() == b"200";
   }
   false
-}
-
-fn has_cached_egress_policy<EHF: EnvoyHttpFilter>(envoy_filter: &EHF) -> bool {
-  envoy_filter
-    .get_filter_state_bytes(ATE_POLICY_EGRESS_CACHED.as_bytes())
-    .is_some()
 }
 
 fn read_egress_policy<EHF: EnvoyHttpFilter>(envoy_filter: &EHF) -> Option<String> {
@@ -261,6 +262,7 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for EgressPolicyCacheFilter {
     };
 
     if let Some(policy) = cached_policy {
+      self.has_cached_policy = true;
       envoy_filter.set_filter_state_bytes(ATE_POLICY_EGRESS_CACHED.as_bytes(), policy.as_bytes());
       let _ = envoy_filter.increment_counter(self.cache_hit_counter, 1);
     } else {
@@ -278,8 +280,8 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for EgressPolicyCacheFilter {
     // cache miss. Actor identity comes from cert's subject. Use cert digest as
     // key, since it uniquely identifies the cert and hence actor.
     if self.config.cache_enabled
+      && !self.has_cached_policy
       && is_http_200(envoy_filter)
-      && !has_cached_egress_policy(envoy_filter)
       && let Some(policy) = read_egress_policy(envoy_filter)
       && let Some(cert_digest) = read_peer_cert_digest(envoy_filter)
     {
@@ -585,11 +587,13 @@ mod tests {
       .return_const(Result::<(), envoy_dynamic_module_type_metrics_result>::Ok(()))
       .once();
 
-    let mut filter = config.new_http_filter(&mut mock_filter);
+    let mut filter = config.create_filter();
+    assert!(!filter.has_cached_policy);
     assert_eq!(
       filter.on_request_headers(&mut mock_filter, false),
       envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue
     );
+    assert!(filter.has_cached_policy);
   }
 
   #[test]
@@ -627,11 +631,12 @@ mod tests {
       .return_const(Result::<(), envoy_dynamic_module_type_metrics_result>::Ok(()))
       .once();
 
-    let mut filter = config.new_http_filter(&mut mock_filter);
+    let mut filter = config.create_filter();
     assert_eq!(
       filter.on_request_headers(&mut mock_filter, false),
       envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue
     );
+    assert!(!filter.has_cached_policy);
     assert!(config.local_cache().borrow_mut().get("abc123digest").is_none());
   }
 
@@ -643,10 +648,6 @@ mod tests {
       .expect_get_response_header_value()
       .withf(|key| key == ":status")
       .returning(|_| Some(EnvoyBuffer::new(b"200")));
-    mock_filter
-      .expect_get_filter_state_bytes()
-      .withf(|key| key == ATE_POLICY_EGRESS_CACHED.as_bytes())
-      .returning(|_| None);
     mock_filter
       .expect_get_filter_state_bytes()
       .withf(|key| key == ATE_POLICY_EGRESS.as_bytes())
@@ -698,16 +699,10 @@ mod tests {
       .expect_get_response_header_value()
       .withf(|key| key == ":status")
       .returning(|_| Some(EnvoyBuffer::new(b"200")));
-    mock_filter
-      .expect_get_filter_state_bytes()
-      .withf(|key| key == ATE_POLICY_EGRESS_CACHED.as_bytes())
-      .returning(|_| {
-        Some(EnvoyBuffer::new(
-          br#"{"rules":[{"pattern":"*.example.com","mode":"mitm"}]}"#,
-        ))
-      });
+    mock_filter.expect_get_filter_state_bytes().never();
 
-    let mut filter = config.new_http_filter(&mut mock_filter);
+    let mut filter = config.create_filter();
+    filter.has_cached_policy = true;
     assert_eq!(
       filter.on_response_headers(&mut mock_filter, false),
       envoy_dynamic_module_type_on_http_filter_response_headers_status::Continue
@@ -765,18 +760,8 @@ mod tests {
       max_cache_items: 2,
     }));
 
-    let filter1 = EgressPolicyCacheFilter {
-      config: filter_config.config.clone(),
-      cache: Arc::clone(&filter_config.cache),
-      cache_hit_counter: filter_config.cache_hit_counter,
-      cache_miss_counter: filter_config.cache_miss_counter,
-    };
-    let filter2 = EgressPolicyCacheFilter {
-      config: filter_config.config.clone(),
-      cache: Arc::clone(&filter_config.cache),
-      cache_hit_counter: filter_config.cache_hit_counter,
-      cache_miss_counter: filter_config.cache_miss_counter,
-    };
+    let filter1 = filter_config.create_filter();
+    let filter2 = filter_config.create_filter();
 
     assert_eq!(filter1.local_cache().borrow().cap().get(), 2);
 
@@ -826,12 +811,7 @@ mod tests {
     // A filter on another worker thread gets its own empty thread-local cache.
     let filter_config_clone = Arc::clone(&filter_config);
     let other_thread_len = std::thread::spawn(move || {
-      let other_filter = EgressPolicyCacheFilter {
-        config: filter_config_clone.config.clone(),
-        cache: Arc::clone(&filter_config_clone.cache),
-        cache_hit_counter: filter_config_clone.cache_hit_counter,
-        cache_miss_counter: filter_config_clone.cache_miss_counter,
-      };
+      let other_filter = filter_config_clone.create_filter();
       assert_eq!(other_filter.local_cache().borrow().cap().get(), 2);
       other_filter.local_cache().borrow().len()
     })

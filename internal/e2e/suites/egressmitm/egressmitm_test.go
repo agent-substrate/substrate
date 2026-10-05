@@ -187,8 +187,9 @@ func TestActorEgressMITMTrust(t *testing.T) {
 	// Each of the 6 fetches opens a CONNECT tunnel (egress_identity), while
 	// only the positive MITM fetch completes the inner TLS handshake and sends
 	// an HTTP request through the MITM chain (egress_policy_mitm).
+	// Since caching is enabled only the first CONNECT request will result in ext_proc call.
 	const (
-		wantIdentityCalls   = 6
+		wantIdentityCalls   = 1
 		wantMITMPolicyCalls = 1
 	)
 	if got := afterExtProc[e2e.EgressExtProcIdentityStatPrefix] - beforeExtProc[e2e.EgressExtProcIdentityStatPrefix]; got != wantIdentityCalls {
