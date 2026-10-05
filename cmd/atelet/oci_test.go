@@ -15,11 +15,18 @@
 package main
 
 import (
+	"fmt"
+	"io"
+	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
+	"github.com/agent-substrate/substrate/internal/imagecache"
+	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
 func TestResolveActorEnv(t *testing.T) {
@@ -148,6 +155,130 @@ func TestResolveProcessArgs(t *testing.T) {
 			}
 			if !slices.Equal(got, tc.want) {
 				t.Errorf("resolveProcessArgs(%v, %v, %v) = %v, want %v", tc.image, tc.command, tc.args, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestResolveUser(t *testing.T) {
+	const passwd = "root:x:0:0:root:/root:/bin/sh\n" +
+		"jovyan:x:1000:100::/home/jovyan:/bin/bash\n" +
+		"nonroot:x:65532:65532::/home/nonroot:/sbin/nologin\n"
+	const group = "root:x:0:\n" +
+		"users:x:100:\n" +
+		"nonroot:x:65532:\n" +
+		"video:x:44:nonroot,jovyan\n" +
+		"audio:x:29:nonroot\n"
+	tests := []struct {
+		name          string
+		user          string
+		passwd, group string // empty: the image lacks the file
+		want          specs.User
+		wantErr       bool
+	}{
+		{name: "bare uid, no passwd", user: "1000", want: specs.User{UID: 1000}},
+		{name: "bare uid takes its login group and memberships", user: "1000", passwd: passwd, group: group, want: specs.User{UID: 1000, GID: 100, AdditionalGids: []uint32{44}}},
+		{name: "bare uid without a passwd entry", user: "1001", passwd: passwd, group: group, want: specs.User{UID: 1001}},
+		{name: "uid:gid passes through", user: "1000:2000", passwd: passwd, group: group, want: specs.User{UID: 1000, GID: 2000}},
+		{name: "named user", user: "nonroot", passwd: passwd, group: group, want: specs.User{UID: 65532, GID: 65532, AdditionalGids: []uint32{44, 29}}},
+		{name: "named user and group", user: "jovyan:video", passwd: passwd, group: group, want: specs.User{UID: 1000, GID: 44}},
+		{name: "named user missing from passwd", user: "nobody", passwd: passwd, wantErr: true},
+		{name: "named group missing from group", user: "1000:staff", passwd: passwd, group: group, wantErr: true},
+		{name: "above int32", user: "2147483648", wantErr: true},
+		{name: "third field", user: "1000:1000:1", wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var passwdR, groupR io.Reader
+			if tc.passwd != "" {
+				passwdR = strings.NewReader(tc.passwd)
+			}
+			if tc.group != "" {
+				groupR = strings.NewReader(tc.group)
+			}
+			got, err := resolveUser(tc.user, passwdR, groupR)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("resolveUser(%q) = %+v, %v; wantErr %v", tc.user, got, err, tc.wantErr)
+			}
+			if err == nil && !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("resolveUser(%q) = %+v, want %+v", tc.user, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestResolveCwd(t *testing.T) {
+	for _, tc := range []struct {
+		image   *v1.Config
+		want    string
+		wantErr bool
+	}{
+		{image: nil, want: "/"},
+		{image: &v1.Config{}, want: "/"},
+		{image: &v1.Config{WorkingDir: "/home/jovyan"}, want: "/home/jovyan"},
+		{image: &v1.Config{WorkingDir: "/app/"}, want: "/app"},
+		{image: &v1.Config{WorkingDir: "app"}, wantErr: true},
+	} {
+		got, err := resolveCwd(tc.image)
+		if (err != nil) != tc.wantErr || got != tc.want {
+			t.Errorf("resolveCwd(%+v) = %q, %v; want %q, wantErr %v", tc.image, got, err, tc.want, tc.wantErr)
+		}
+	}
+}
+
+// User and cwd reach the bundle's config.json, for the pause container too;
+// the cwd is created through ExtraDirs.
+func TestPrepareOCIDirectory(t *testing.T) {
+	host := imageVolumeTestRegistry(t)
+	etc := []v1.Layer{
+		singleFileLayer(t, "etc/passwd", "root:x:0:0:root:/root:/bin/sh\nnonroot:x:65532:65532::/home/nonroot:/sbin/nologin\n"),
+		singleFileLayer(t, "etc/group", "root:x:0:\nnonroot:x:65532:\nvideo:x:44:nonroot\n"),
+	}
+	bin := []v1.Layer{singleFileLayer(t, "bin/app", "x")}
+	tests := []struct {
+		name      string
+		container string
+		user      string
+		layers    []v1.Layer
+		want      specs.User
+		wantErr   bool
+	}{
+		{name: "no USER is root", container: "app", layers: etc},
+		{name: "bare uid resolves against the image's files", container: "app", user: "65532", layers: etc, want: specs.User{UID: 65532, GID: 65532, AdditionalGids: []uint32{44}}},
+		{name: "named user without passwd fails", container: "app", user: "nonroot", layers: bin, wantErr: true},
+		{name: "pause container", container: ocispec.PauseContainer, user: "65532", layers: etc, want: specs.User{UID: 65532, GID: 65532, AdditionalGids: []uint32{44}}},
+	}
+	for i, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ref := fmt.Sprintf("%s/user%d:v1", host, i)
+			pushTestImageWithConfig(t, ref, v1.Config{User: tc.user, Cmd: []string{"/app"}, WorkingDir: "/home/nonroot"}, tc.layers...)
+			bundle := t.TempDir()
+			err := prepareOCIDirectory(t.Context(), newImageVolumeStore(t), bundle, "actor-uid", tc.container, ref, nil, nil, nil, "", nil, nil, nil, nil)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("prepareOCIDirectory succeeded, want an error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("prepareOCIDirectory: %v", err)
+			}
+			spec, err := ocispec.Load(bundle)
+			if err != nil {
+				t.Fatalf("ocispec.Load: %v", err)
+			}
+			if !reflect.DeepEqual(spec.Process.User, tc.want) {
+				t.Errorf("Process.User = %+v, want %+v", spec.Process.User, tc.want)
+			}
+			if spec.Process.Cwd != "/home/nonroot" {
+				t.Errorf("Process.Cwd = %q, want /home/nonroot", spec.Process.Cwd)
+			}
+			overlay, err := imagecache.ReadSpec(bundle)
+			if err != nil {
+				t.Fatalf("imagecache.ReadSpec: %v", err)
+			}
+			if !slices.Contains(overlay.ExtraDirs, "/home/nonroot") {
+				t.Errorf("ExtraDirs = %v, want the working directory", overlay.ExtraDirs)
 			}
 		})
 	}

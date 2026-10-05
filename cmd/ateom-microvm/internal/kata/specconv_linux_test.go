@@ -17,6 +17,7 @@
 package kata
 
 import (
+	"slices"
 	"testing"
 
 	specs "github.com/opencontainers/runtime-spec/specs-go"
@@ -160,5 +161,24 @@ func TestSpecToAgentPB_NonPositiveCPUValuesAreDropped(t *testing.T) {
 				t.Errorf("CPU.Period = %d, want %d", cpu.Period, tt.wantPeriod)
 			}
 		})
+	}
+}
+
+// The agent starts the process as the user it is sent; a dropped identity
+// would run the workload as root in the guest.
+func TestSpecToAgentPB_ForwardsProcessUser(t *testing.T) {
+	got := SpecToAgentPB(&specs.Spec{
+		Process: &specs.Process{User: specs.User{UID: 65532, GID: 65534, AdditionalGids: []uint32{44}}},
+	})
+	u := got.GetProcess().GetUser()
+	if u == nil || u.UID != 65532 || u.GID != 65534 || !slices.Equal(u.AdditionalGids, []uint32{44}) {
+		t.Fatalf("Process.User = %v, want 65532:65534 +44", u)
+	}
+}
+
+func TestSpecToAgentPB_ForwardsCwd(t *testing.T) {
+	got := SpecToAgentPB(&specs.Spec{Process: &specs.Process{Cwd: "/work"}})
+	if got.GetProcess().GetCwd() != "/work" {
+		t.Fatalf("Process.Cwd = %q, want /work", got.GetProcess().GetCwd())
 	}
 }

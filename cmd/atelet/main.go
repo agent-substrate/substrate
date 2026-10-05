@@ -1521,6 +1521,7 @@ func (s *AteomHerder) prepareOCIBundles(
 		if err := prepareOCIDirectory(
 			gCtx,
 			s.imageCache,
+			ateletpath.OCIBundlePath(actorUID, ocispec.PauseContainer),
 			actorUID,
 			ocispec.PauseContainer,
 			pauseImage,
@@ -1549,6 +1550,7 @@ func (s *AteomHerder) prepareOCIBundles(
 			if err := prepareOCIDirectory(
 				gCtx,
 				s.imageCache,
+				ateletpath.OCIBundlePath(actorUID, ctr.GetName()),
 				actorUID,
 				ctr.GetName(),
 				ctr.GetImage(),

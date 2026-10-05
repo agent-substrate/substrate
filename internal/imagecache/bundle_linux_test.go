@@ -17,7 +17,6 @@
 package imagecache
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -28,35 +27,6 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/roottest"
 )
-
-// writeLayer builds a layer dir (fs/ tree + whiteouts.json) as the store's
-// unpack would.
-func writeLayer(t *testing.T, dir string, files map[string]string, wh *whiteoutSet) {
-	t.Helper()
-	fs := filepath.Join(dir, layerFSDirName)
-	if err := os.MkdirAll(fs, 0o755); err != nil {
-		t.Fatalf("mkdir fs: %v", err)
-	}
-	for name, body := range files {
-		p := filepath.Join(fs, name)
-		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-			t.Fatalf("mkdir %s: %v", name, err)
-		}
-		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
-			t.Fatalf("write %s: %v", name, err)
-		}
-	}
-	if wh != nil {
-		wh.Version = 1
-		b, err := json.Marshal(wh)
-		if err != nil {
-			t.Fatalf("marshal whiteouts: %v", err)
-		}
-		if err := os.WriteFile(filepath.Join(dir, layerWhiteoutsFileName), b, 0o600); err != nil {
-			t.Fatalf("write whiteouts.json: %v", err)
-		}
-	}
-}
 
 // FinalizeLayer materializes whiteout devices (mknod, CAP_MKNOD) and opaque
 // xattrs (trusted.*, CAP_SYS_ADMIN); only root has those in a plain test
@@ -206,6 +176,48 @@ func TestSetupBundleRootfs_ImplicitDirMetadataRepair(t *testing.T) {
 	if _, err := os.Lstat(filepath.Join(bundle, "upper", "secret")); err != nil {
 		t.Errorf("repair did not copy up into the bundle upper: %v", err)
 	}
+}
+
+// The merged rootfs root is the container's "/"; at 0700 a non-root container
+// cannot search it and can exec nothing.
+func TestSetupBundleRootfs_RootIsSearchableByNonRoot(t *testing.T) {
+	assertSearchable := func(t *testing.T, rootfs string) {
+		t.Helper()
+		fi, err := os.Stat(rootfs)
+		if err != nil {
+			t.Fatalf("stat merged rootfs root: %v", err)
+		}
+		if perm := fi.Mode().Perm(); perm&0o005 != 0o005 {
+			t.Errorf("merged rootfs root mode = %04o, want world read+search", perm)
+		}
+	}
+
+	t.Run("zero layers", func(t *testing.T) {
+		bundle := t.TempDir()
+		if err := WriteSpec(bundle, &OverlaySpec{Layers: nil}); err != nil {
+			t.Fatalf("WriteSpec: %v", err)
+		}
+		if err := SetupBundleRootfs(bundle); err != nil {
+			t.Fatalf("SetupBundleRootfs: %v", err)
+		}
+		assertSearchable(t, filepath.Join(bundle, "rootfs"))
+	})
+
+	t.Run("overlay", func(t *testing.T) {
+		roottest.Require(t, "mount/unmount")
+		layer := t.TempDir()
+		writeLayer(t, layer, map[string]string{"bin/app": "x"}, nil)
+
+		bundle := t.TempDir()
+		if err := WriteSpec(bundle, &OverlaySpec{Layers: []string{layer}}); err != nil {
+			t.Fatalf("WriteSpec: %v", err)
+		}
+		if err := SetupBundleRootfs(bundle); err != nil {
+			t.Fatalf("SetupBundleRootfs: %v", err)
+		}
+		t.Cleanup(func() { _ = UnmountAllUnder(bundle) })
+		assertSearchable(t, filepath.Join(bundle, "rootfs"))
+	})
 }
 
 // Full overlay mount + UnmountAllUnder round trip; needs CAP_SYS_ADMIN.
