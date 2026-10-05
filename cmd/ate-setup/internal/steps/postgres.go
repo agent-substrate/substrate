@@ -15,17 +15,96 @@
 package steps
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
 	"fmt"
 	"os"
+	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/yaml"
 
+	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kube"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
+	"github.com/agent-substrate/substrate/pkg/postgressetup"
 )
+
+const (
+	bundledPostgresOwnerUser         = "substrate_admin_user"
+	bundledPostgresOwnerPassword     = "substrate-admin"
+	bundledPostgresReadWriteUser     = "substrate_readwrite_user"
+	bundledPostgresReadWritePassword = "substrate-readwrite"
+	postgresTLSParams                = "sslmode=verify-full&sslrootcert=/run/servicedns.podcert.ate.dev/trust-bundle.pem&sslcert=/run/podidentity.podcert.ate.dev/credential-bundle.pem&sslkey=/run/podidentity.podcert.ate.dev/credential-bundle.pem&channel_binding=disable"
+)
+
+func bundledPostgresDSN(user, password string) string {
+	return fmt.Sprintf("postgresql://%s:%s@postgres.ate-system.svc:5432/atepg?%s", user, password, postgresTLSParams)
+}
+
+func (e *Env) postgresReadWriteConnectionStrings() (string, string, error) {
+	if e.Cfg.PostgresReadWriteRole != config.DefaultPostgresReadWriteRole ||
+		e.Cfg.PostgresOwnerRole != config.DefaultPostgresOwnerRole ||
+		e.Cfg.PostgresSchemaName() != config.DefaultPostgresSchema {
+		return "", "", fmt.Errorf("bundled PostgreSQL requires roles %q and %q and schema %q",
+			config.DefaultPostgresReadWriteRole, config.DefaultPostgresOwnerRole, config.DefaultPostgresSchema)
+	}
+	readWriteDSN := bundledPostgresDSN(bundledPostgresReadWriteUser, bundledPostgresReadWritePassword)
+	if e.Cfg.Size10() {
+		readWriteDSN += config.Size10PostgresPoolParams
+	}
+	return readWriteDSN, bundledPostgresDSN(bundledPostgresOwnerUser, bundledPostgresOwnerPassword), nil
+}
+
+func (e *Env) ensureBundledPostgresAdmin(ctx context.Context) error {
+	secret, err := e.Kube.GetSecret(ctx, e.Namespace(), SecretPostgresAdmin)
+	if err != nil {
+		return err
+	}
+	if secret == nil {
+		return e.Kube.ApplySecret(ctx, e.Namespace(), SecretPostgresAdmin, map[string]string{
+			"POSTGRES_USER": "postgres", "POSTGRES_PASSWORD": rand.Text(),
+		})
+	}
+	if string(secret.Data["POSTGRES_USER"]) != "postgres" || len(secret.Data["POSTGRES_PASSWORD"]) == 0 {
+		return fmt.Errorf("secret %s/%s must contain POSTGRES_USER=postgres and a non-empty POSTGRES_PASSWORD", e.Namespace(), SecretPostgresAdmin)
+	}
+	return nil
+}
+
+// setupBundledPostgres creates the fixed development identities before ateapi
+// starts. Administrator credentials stay inside the PostgreSQL pod.
+func (e *Env) setupBundledPostgres(ctx context.Context) error {
+	log.Step("setup_bundled_postgres")
+	secret, err := e.Kube.GetSecret(ctx, e.Namespace(), SecretPostgresAdmin)
+	if err != nil {
+		return err
+	}
+	if secret == nil || len(secret.Data["POSTGRES_USER"]) == 0 {
+		return fmt.Errorf("secret %s/%s must contain POSTGRES_USER", e.Namespace(), SecretPostgresAdmin)
+	}
+
+	var stdout, stderr bytes.Buffer
+	err = e.Kube.Exec(ctx, e.Namespace(), "postgres-0", "postgres", []string{
+		"psql", "--no-psqlrc", "--set=ON_ERROR_STOP=1", "--username", string(secret.Data["POSTGRES_USER"]), "--dbname", "atepg",
+	}, strings.NewReader("BEGIN;\n"+postgressetup.SQL()+"\nCOMMIT;\n"), &stdout, &stderr)
+	if err != nil {
+		if detail := strings.TrimSpace(stderr.String()); detail != "" {
+			return fmt.Errorf("setting up bundled PostgreSQL identities: %w: %s", err, detail)
+		}
+		return fmt.Errorf("setting up bundled PostgreSQL identities: %w", err)
+	}
+	return nil
+}
+
+func (e *Env) waitAndSetupBundledPostgres(ctx context.Context) error {
+	if err := e.Kube.RolloutStatus(ctx, kube.KindStatefulSet, e.Namespace(), "postgres", e.Cfg.RolloutTimeout); err != nil {
+		return err
+	}
+	return e.setupBundledPostgres(ctx)
+}
 
 // The size10 PostgreSQL container. Deliberately no CPU limit: under
 // --cordon-control-plane the dedicated ate-postgres pool keeps the pod alone
@@ -106,6 +185,9 @@ func (e *Env) postgresManifestPath() string {
 // under a different field manager would be exposed to.
 func (e *Env) applyPostgres(ctx context.Context) error {
 	if err := e.requirePostgresPool(ctx); err != nil {
+		return err
+	}
+	if err := e.ensureBundledPostgresAdmin(ctx); err != nil {
 		return err
 	}
 	manifest, err := e.render(e.postgresManifestPath())
@@ -246,5 +328,5 @@ func (e *Env) DeployPostgres(ctx context.Context) error {
 	if err := e.applyPostgres(ctx); err != nil {
 		return err
 	}
-	return e.Kube.RolloutStatus(ctx, kube.KindStatefulSet, e.Namespace(), "postgres", e.Cfg.RolloutTimeout)
+	return e.waitAndSetupBundledPostgres(ctx)
 }

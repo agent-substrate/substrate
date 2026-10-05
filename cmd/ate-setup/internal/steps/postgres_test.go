@@ -27,6 +27,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kube"
+	"github.com/agent-substrate/substrate/pkg/postgressetup"
 )
 
 // postgresObjects loads the bundled postgres manifest of the given
@@ -269,5 +270,88 @@ func TestApplyPostgresRequiresPostgresPool(t *testing.T) {
 	err := e.applyPostgres(t.Context())
 	if err == nil || !strings.Contains(err.Error(), postgresPoolSelector) {
 		t.Fatalf("applyPostgres() error = %v, want the missing %s pool", err, postgresPoolSelector)
+	}
+}
+
+func TestBundledPostgresIdentityConfiguration(t *testing.T) {
+	cfg := &config.Config{
+		PostgresReadWriteRole: config.DefaultPostgresReadWriteRole,
+		PostgresOwnerRole:     config.DefaultPostgresOwnerRole,
+	}
+	e := &Env{Cfg: cfg}
+	readWrite, owner, err := e.postgresReadWriteConnectionStrings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if readWrite != bundledPostgresDSN(bundledPostgresReadWriteUser, bundledPostgresReadWritePassword) {
+		t.Errorf("read/write DSN = %q", readWrite)
+	}
+	if owner != bundledPostgresDSN(bundledPostgresOwnerUser, bundledPostgresOwnerPassword) {
+		t.Errorf("owner DSN = %q", owner)
+	}
+	for _, want := range []string{
+		"('substrate_owner', false",
+		"('substrate_readwrite', false",
+		"('substrate_admin_user', true, 'substrate-admin')",
+		"('substrate_readwrite_user', true, 'substrate-readwrite')",
+		"GRANT substrate_owner TO substrate_admin_user",
+		"GRANT substrate_readwrite TO substrate_readwrite_user",
+		"CREATE SCHEMA substrate AUTHORIZATION substrate_owner",
+	} {
+		if !strings.Contains(postgressetup.SQL(), want) {
+			t.Errorf("postgressetup SQL lacks %q", want)
+		}
+	}
+}
+
+func TestBundledPostgresRequiresFixedIdentity(t *testing.T) {
+	e := &Env{Cfg: &config.Config{PostgresReadWriteRole: "custom", PostgresOwnerRole: config.DefaultPostgresOwnerRole}}
+	if _, _, err := e.postgresReadWriteConnectionStrings(); err == nil {
+		t.Fatal("postgresReadWriteConnectionStrings() accepted a custom bundled role")
+	}
+}
+
+func TestBundledPostgresAdminSecretValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		data map[string][]byte
+		want bool
+	}{
+		{name: "complete", data: map[string][]byte{"POSTGRES_USER": []byte("postgres"), "POSTGRES_PASSWORD": []byte("secret")}},
+		{name: "wrong user", data: map[string][]byte{"POSTGRES_USER": []byte("admin"), "POSTGRES_PASSWORD": []byte("secret")}, want: true},
+		{name: "missing password", data: map[string][]byte{"POSTGRES_USER": []byte("postgres")}, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := &Env{Cfg: &config.Config{}, Kube: fakeKube(t, &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{Name: SecretPostgresAdmin, Namespace: NamespaceAteSystem},
+				Data:       tc.data,
+			})}
+			err := e.ensureBundledPostgresAdmin(t.Context())
+			if (err != nil) != tc.want {
+				t.Fatalf("ensureBundledPostgresAdmin() error = %v, want error %v", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestBundledPostgresManifestUsesPasswordAuthentication(t *testing.T) {
+	manifest, err := os.ReadFile(filepath.Join(repoRoot(t), "manifests", "ate-install", "postgres", "postgres.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(manifest)
+	if strings.Contains(text, "POSTGRES_HOST_AUTH_METHOD") {
+		t.Error("bundled PostgreSQL still configures trust authentication")
+	}
+	for _, want := range []string{
+		"hostssl all postgres all reject",
+		"hostssl atepg all all scram-sha-256 clientcert=verify-ca",
+		"name: postgres-admin",
+		"key: POSTGRES_USER",
+		"key: POSTGRES_PASSWORD",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("postgres manifest lacks %q", want)
+		}
 	}
 }
