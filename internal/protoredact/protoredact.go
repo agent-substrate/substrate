@@ -141,7 +141,14 @@ func hasPopulatedDebugRedact(msg protoreflect.Message) bool {
 	}
 	fields := md.Fields()
 	for i := 0; i < fields.Len(); i++ {
-		if fd := fields.Get(i); msg.Has(fd) && populatedFieldHasDebugRedact(fd, msg.Get(fd)) {
+		fd := fields.Get(i)
+		if hasDebugRedact(fd) {
+			if msg.Has(fd) {
+				return true
+			}
+			continue
+		}
+		if sub := fd.Message(); sub != nil && reachesDebugRedact(sub) && msg.Has(fd) && populatedFieldHasDebugRedact(fd, msg.Get(fd)) {
 			return true
 		}
 	}

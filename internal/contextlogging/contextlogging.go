@@ -158,8 +158,10 @@ func redactValue(v slog.Value) (slog.Value, bool) {
 		r, _ := redactValue(v.Resolve())
 		return r, true
 	case slog.KindAny:
-		if m, ok := v.Any().(proto.Message); ok && protoredact.NeedsRedaction(m) {
-			return slog.AnyValue(protoredact.Redacted(m)), true
+		if m, ok := v.Any().(proto.Message); ok {
+			if r := protoredact.Redacted(m); r != m {
+				return slog.AnyValue(r), true
+			}
 		}
 	case slog.KindGroup:
 		g := v.Group()
