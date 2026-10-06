@@ -1,32 +1,33 @@
 #!/usr/bin/env python3
-"""Profile the cold boot and cold registry pull hidden inside template creation.
+"""Profile the boot from spec, and its image fetch, inside template creation.
 
-profile_lifecycle.py cannot see either. Every actor it creates comes from a
-template that already has a golden snapshot, so every activation is a restore,
-and by then the image is already in the node's layer cache.
+profile_lifecycle.py never sees a boot from spec. Every actor it creates comes
+from a template that already has a golden snapshot, so every activation is a
+restore. A restore still fetches the image if it lands on a node that does not
+have it yet, and profile_lifecycle.py reports that, but the boot itself is
+always a restore.
 
-The cold boot is real, but it happens to a different actor. Creating a template
-makes the reconciler boot a *golden actor* from the template spec. That actor
-has no snapshot, so ateapi takes the boot-from-spec path, and if the image has
-never been on the node it also pays the full registry pull. The golden actor is
-checkpointed into the golden snapshot and deleted
+The boot from spec happens to the template's *golden actor*, not to an actor
+the user creates. Creating a template makes the reconciler boot the golden
+actor from the template spec, fetching the image (registry pull, or image
+streaming) if the node does not have it. The golden actor is then checkpointed
+into the golden snapshot and deleted
 (cmd/ateapi/internal/controlapi/template_reconciler.go).
 
-So this script creates the template rather than reading one back afterwards.
-Scraping after the fact does not work: kubelet rotates container logs by size,
-and ate-api-server is chatty enough that its window is tens of minutes. Driving
-the creation keeps the scrape seconds behind the event, and gives an exact
-wall-clock window to filter on instead of a guess at --since.
+This script (re)creates the template through swebench-template.sh and scrapes
+the ate-api-server, atelet and worker logs over the exact wall-clock window of
+that build. Container logs rotate, so they cannot be read back reliably later.
 
     profiling/profile_coldboot.py --instance matplotlib__matplotlib-23476
 
-The pull is the number worth keeping: it is the baseline any future image
-streaming work has to beat, and on a cold node it dwarfs everything else
-(measured: 14.66 s for a 1.03 GB image, ~97% of the activation).
+The image fetch row is the number to compare: it is measured directly, while
+the build wall clock also includes a resync wait and a fixed warmup.
 
-A pull is only cold the first time a digest reaches a node. Re-running against
-an instance already profiled recreates the template but not the cache, and
-reports HIT. Use an instance this cluster has not seen.
+A fetch is only cold the first time a digest reaches a node. Re-running on the
+same nodes recreates the template but not the node's image cache, so it reports
+a cache HIT (pull) or a stat hit (stream). To get a cold fetch again, run on
+fresh nodes (repeat_matplotlib.sh recreates the node pools every rep) or use an
+instance the cluster has not seen.
 """
 
 import argparse
@@ -39,7 +40,6 @@ import time
 from profile_lifecycle import (
     ATE_SYSTEM,
     atelet_flags,
-    atelet_restore,
     atelet_streaming,
     ateom_timeline,
     log_level_note,
@@ -53,7 +53,7 @@ from profile_lifecycle import (
 )
 
 # Golden actors live in a reserved atespace, because the suspend workflow
-# relies on it to always take a full snapshot (template_reconciler.go:188-193).
+# relies on it to always take a full snapshot (template_reconciler.go).
 GOLDEN_ATESPACE = "ate-golden"
 HERE = os.path.dirname(os.path.abspath(__file__))
 # goldenSnapshotWarmup in template_reconciler.go, which this cannot read. A
@@ -62,20 +62,12 @@ GOLDEN_SNAPSHOT_WARMUP = 20.0
 
 
 def warmup_for(tmpl, warmup):
-    """The delay the reconciler inserts before checkpointing the golden actor.
+    """The fixed delay between the golden actor's boot and its checkpoint.
 
-    Mirrors goldenSnapshotWarmupFor: zero when every container declares a readyz
-    probe, because ResumeActor already blocked until the workload reported 200,
-    and the full delay otherwise. The SWE-bench templates declare none, so they
-    pay it in full.
-
-    Used to annotate the report, not to adjust it. The delay is deterministic
-    and inherent to creating a template -- ResumeActor returning sets a deadline
-    in the template status, and the reconciler requeues on the exact time
-    remaining until it (template_reconciler.go:260-261) -- so it is a real part
-    of the wall clock, not noise and not an artifact of profiling. Subtracting
-    it would report a duration nothing ever took. Naming it lets the reader do
-    the arithmetic knowing what they are removing.
+    Mirrors goldenSnapshotWarmupFor in template_reconciler.go: zero when every
+    container declares a readyz probe, the full delay otherwise. The SWE-bench
+    templates declare none, so they pay all of it. Reported alongside the build
+    wall clock.
     """
     containers = tmpl.get("containers", [])
     if not containers or any(not c.get("readyz") for c in containers):
@@ -84,24 +76,22 @@ def warmup_for(tmpl, warmup):
 
 
 def build_segments(tmpl, api, name, t0, t1):
-    """Break the build wall clock into segments that were each measured.
+    """Split the build wall clock at instants the control plane recorded.
 
-    Better than subtracting the warmup constant, which would report a duration
-    nothing took. Three recorded instants cut the span where responsibility
-    changes hands -- the template's own createTime and takeGoldenSnapshotAt,
-    plus the reconciler's "Added actor template to work queue":
+    The cuts are the template's createTime, the reconciler's "Added actor
+    template to work queue" log, and the template's takeGoldenSnapshotAt:
 
-      t0 -> createTime          this script: crane digest, atespace check
-      createTime -> queued      waiting to be noticed (see below)
-      queued -> deadline        the control plane: pull, boot, and the warmup
-      deadline -> t1            checkpoint and upload, plus this script's poll
-
-    The second row is worth isolating because it is neither work nor a fixed
-    cost. Creating a template does not enqueue it: the only queue.Add is in
-    resync, so the periodic list is the event source
-    (template_reconciler.go:96-105,123). Discovery therefore waits a uniform
-    draw over the resync interval -- 0-20s by default, mean 10s -- and it is
-    the main reason two builds of the same image differ.
+      create -> golden snapshot                  whole build (t0 -> t1)
+      harness prologue                           this script: crane digest, atespace
+                                                 check, (possibly) deleting the old template
+      template created -> reconciler noticed     wait for the periodic resync to pick
+                                                 up the template (0-20 s, varies run to run)
+      reconciler noticed -> snapshot deadline    golden actor placed, image fetched,
+                                                 booted, then the fixed warmup
+      template created -> snapshot deadline      the two rows above combined, used only
+                                                 when the work-queue log is missing
+      snapshot deadline -> golden tag            checkpoint and upload, plus up to one
+                                                 5 s poll of swebench-template.sh
     """
     created = parse_ts(tmpl.get("metadata", {}).get("createTime"))
     deadline = parse_ts(tmpl.get("status", {})
@@ -123,16 +113,13 @@ def build_segments(tmpl, api, name, t0, t1):
 
 
 def build_template(script, instance, atespace, env):
-    """Recreate the template and time the whole golden-snapshot cycle.
+    """Run swebench-template.sh with RECREATE=1 and time it.
 
-    swebench-template.sh already resolves the digest, writes the protojson
-    manifest and polls for the golden tag, so this reuses it rather than
-    keeping a second copy of the manifest in sync with it. RECREATE=1 drops any
-    existing template first, which deletes its golden actor and snapshot and so
-    forces the boot to happen again.
-
-    Returns the wall-clock span to filter logs by. It brackets the cold boot,
-    the warmup, and the checkpoint that follows it, not the boot alone.
+    RECREATE=1 deletes any existing template of the same name, and with it the
+    old golden snapshot, so the golden actor boots from spec again. The script
+    returns once the new golden snapshot is ready. Returns (t0, t1, stdout);
+    t0..t1 covers the boot, the warmup and the checkpoint, and is the window
+    the logs are filtered to.
     """
     cmd = f"RECREATE=1 ATESPACE={atespace} {env} {script} {instance}"
     t0 = time.time()
@@ -162,11 +149,10 @@ def template_json(kubectl_ate, atespace, name):
 
 
 def image_digests(tmpl):
-    """The digests this template's containers pin, keyed digest -> short ref.
+    """Map each digest the template's containers pin to its short ref.
 
-    The image-cache logs carry ref, digest, layers and took but no actor, so
-    the digest is the only exact way to tie a pull to this template rather than
-    to whatever else the node was doing in the same window.
+    atelet's image logs name the digest but not the actor, so the digest is how
+    a pull or stream is tied to this template.
     """
     out = {}
     for c in tmpl.get("containers", []):
@@ -177,10 +163,9 @@ def image_digests(tmpl):
 
 
 def image_size(ref):
-    """Compressed transfer size from the registry manifest, or None.
+    """Compressed image size in bytes (sum of manifest layer sizes), or None.
 
-    The pull duration alone is not comparable across instances; bytes per
-    second is, and that is the figure image streaming has to move.
+    Used to report pull throughput in MB/s.
     """
     p = run(f"crane manifest {ref}", check=False)
     if p.returncode != 0:
@@ -193,14 +178,12 @@ def image_size(ref):
 
 
 def cold_pull(records, digests, sizes, streamed=()):
-    """Cache outcome and pull duration for this template's images.
+    """The golden actor's image cache outcome (HIT/MISS) and pull duration.
 
-    Records are already bounded to the build window, so unlike the steady-state
-    reading in profile_lifecycle.atelet_images the first outcome seen for a
-    digest is the golden actor's own, and later hits cannot overwrite it.
-
-    streamed holds digests that image streaming served; those bypass the layer
-    cache entirely, so their absence from it says nothing about warmth.
+    Records are already limited to the build window, so the first outcome seen
+    for a digest is the golden actor's. Adds MB/s when the size is known, and a
+    note when the image was already cached. Digests in streamed were served by
+    image streaming and never touch the layer cache, so they get no note.
     """
     out, notes = {}, []
     for r in records:
@@ -220,19 +203,18 @@ def cold_pull(records, digests, sizes, streamed=()):
         notes.append(
             "image was already in this node's layer cache: this run measures a "
             "warm boot, not a cold pull. Recreating a template does not evict "
-            "layers; pick an instance this cluster has not pulled before."
+            "layers; run on fresh nodes or pick an instance this cluster has not pulled."
         )
     return out, notes
 
 
 def boot_path(records):
-    """ateapi's account of the golden actor's activation.
+    """Confirm from ateapi's logs that the golden actor booted from spec.
 
-    The reconciler calls ResumeActor in process rather than over gRPC, so the
-    interceptor that logs "Handle RPC" never fires and there is no server-side
-    total to read: the build wall time stands in for it. What the workflow
-    itself logs still distinguishes a boot from a restore, which is the claim
-    this whole script rests on.
+    Returns the worker pod it was placed on, plus notes: the boot-path message
+    ("Booting from ActorTemplate spec", or "NOT a cold boot" if it restored)
+    and "worker <pod> on <node>". The reconciler calls ResumeActor in process,
+    so there is no "Handle RPC" total; the build wall clock stands in for it.
     """
     facts, notes = {}, []
     for r in records:
@@ -258,7 +240,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--instance", default="matplotlib__matplotlib-23476",
-                   help="SWE-bench Verified instance; must be one this cluster has not pulled")
+                   help="SWE-bench Verified instance; the fetch is cold only on nodes that have not pulled it")
     p.add_argument("--atespace", default="ate-profiling")
     p.add_argument("--worker-namespace", default="ate-profiling")
     p.add_argument("--worker-pool", default="profiling")
@@ -314,8 +296,8 @@ def main():
     if not notes:
         print("  - no ateapi workflow record in the window; boot path unconfirmed")
 
-    # Split on the timestamps the reconciler recorded rather than subtracting
-    # the warmup, so every row is something that was measured.
+    # Each row is a measured span between recorded instants; the warmup is
+    # reported, not subtracted.
     warmup = warmup_for(tmpl, args.warmup)
     segments = build_segments(tmpl, api, name, t0, t1)
     table("build wall clock", segments)
@@ -323,22 +305,15 @@ def main():
         print()
         for line in (
             "the build wall clock is not a boot latency. Two waits dominate it:",
-            f"  - a fixed {warmup:.0f}s golden-snapshot warmup, inside 'reconciler noticed ->",
-            "    snapshot deadline', between the boot finishing and the checkpoint starting.",
-            "    Deterministic and inherent to creating any template: not jitter, and not an",
-            "    artifact of profiling. It applies because no container here declares a",
-            "    readyz probe; one that did would drop it to zero.",
-            "  - a variable 0-20s wait to be noticed. Creating a template does not enqueue",
-            "    it; the reconciler's periodic resync is the only event source. This is the",
-            "    main reason two builds of the same image differ, and it is also real.",
-            "  The first and last rows are this script's own cost: crane and kubectl round",
-            "  trips before the create, and up to a 5s poll interval after the tag.",
-            "The pull below is the figure to compare: it is measured directly.",
+            f"  - a fixed {warmup:.0f}s golden-snapshot warmup inside 'reconciler noticed ->",
+            "    snapshot deadline' (no container declares a readyz probe).",
+            "  - a 0-20s wait for the reconciler's periodic resync to notice the template.",
+            "  The first and last rows include this script's own overhead.",
+            "Compare the image pull / streaming rows below: they are measured directly.",
         ):
             print(f"  {line}")
     table("atelet image cache (cold pull baseline)", pulls)
     table("atelet image streaming", streaming)
-    table("atelet phases", atelet_restore(let))
     table("ateom worker steps (boot from spec)", {**phases, "ateom_total": meta.get("ateom_total")})
     table("ateom worker steps (checkpoint to golden)",
           {**ckpt, "ateom_total": ckpt_meta.get("ateom_total")})

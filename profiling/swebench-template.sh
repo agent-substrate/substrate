@@ -24,8 +24,8 @@ NAME="${2:-swebench-$(echo "$INSTANCE" | tr '_' '-' | tr -s '-')}"
 # redeploy cannot move the ground under a profiling run.
 ATESPACE="${ATESPACE:-ate-profiling}"
 WORKLOAD="${WORKLOAD:-profiling}"
-REPO="${REPO:-us-west1-docker.pkg.dev/amywxu-gke-dev/swebench-mirror/swebench-verified}"
-BUCKET_NAME="${BUCKET_NAME:-snapshot-substrate-test-amywxu-gke-dev}"
+REPO="${REPO:-us-west1-docker.pkg.dev/amywxu-gke-dev/swebench-mirror/swebench-verified}" # TODO: set general defaults
+BUCKET_NAME="${BUCKET_NAME:-snapshot-substrate-test-amywxu-gke-dev}" # TODO: set general defaults
 STORAGE_LOCATION="${STORAGE_LOCATION:-gs://${BUCKET_NAME}/${ATESPACE}/}"
 SANDBOX_CONFIG_NAME="${SANDBOX_CONFIG_NAME:-gvisor-default}"
 # An actor occupies its whole worker, so these must stay at or below the

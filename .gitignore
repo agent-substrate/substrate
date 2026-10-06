@@ -56,3 +56,6 @@ Thumbs.db
 
 # Substrate agent workspace scratchpads
 .agents/scratch/
+
+# Local profiling results
+/profiling/results/

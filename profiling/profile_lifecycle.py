@@ -525,6 +525,9 @@ def main():
     p.add_argument("--actor", default="", help="actor name; defaults to a timestamped one")
     p.add_argument("--kubectl-ate", default="kubectl-ate")
     p.add_argument("--settle", type=float, default=3.0, help="seconds to wait before scraping logs")
+    p.add_argument("--step-gap", type=float, default=0.0,
+                   help="seconds to idle before the suspend and before resume #2, outside every "
+                        "measured span, so a cold stream's background layer download can finish")
     p.add_argument("--retries", type=int, default=5, help="retries when the assigned worker pod is gone")
     p.add_argument("--json", default="", help="write the full result to this path")
     p.add_argument("--keep", action="store_true", help="do not delete the actor afterwards")
@@ -572,6 +575,9 @@ def main():
         results.append((boot, f"node {node_before or 'unknown'}"))
 
         # 3. live suspend: checkpoint to object storage and release the worker.
+        #    --step-gap idles first, outside the measured span: a cold stream
+        #    keeps downloading layers in the background after the resume returns.
+        time.sleep(args.step_gap)
         wall, trace, span = ate(args, f"suspend actor {actor}", retries=args.retries)
         time.sleep(args.settle)
         r = collect(args, "live suspend", "SuspendActor", "suspend", trace, since(), actor, span)
@@ -580,7 +586,8 @@ def main():
 
         # 4. second resume: restore from the snapshot just written. Whether it
         #    lands on the same node is the pool's choice, so classify it rather
-        #    than force it.
+        #    than force it. --step-gap idles first, as before the suspend.
+        time.sleep(args.step_gap)
         wall, trace, span = ate(args, f"resume actor {actor}", retries=args.retries)
         time.sleep(args.settle)
         r = collect(args, "resume from snapshot", "ResumeActor", "restore", trace, since(), actor, span)
