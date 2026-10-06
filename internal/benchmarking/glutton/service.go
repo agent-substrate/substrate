@@ -56,7 +56,8 @@ type Service struct {
 	fds       []*os.File
 	peers     map[string]*peerGossip
 
-	cpu cpuLoad
+	cpu    cpuLoad
+	egress egressLoad
 
 	ramWriteBytes  metric.Int64Counter
 	ramReadBytes   metric.Int64Counter
@@ -84,7 +85,7 @@ func New(dir string) (*Service, error) {
 }
 
 // Close cancels every running gossip goroutine and waits for them to exit,
-// then tears down any running CPU load pool.
+// then tears down any running CPU load pool and egress loop.
 func (s *Service) Close() {
 	s.mu.Lock()
 	peers := s.peers
@@ -95,6 +96,7 @@ func (s *Service) Close() {
 		<-p.done
 	}
 	s.cpu.Stop()
+	s.egress.Stop()
 }
 
 // Write to RAM, either overwriting previously-used RAM or allocating additional RAM

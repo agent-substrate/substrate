@@ -33,14 +33,16 @@ import (
 // Routes the fake serves, re-exported from the real server so the stand-in
 // cannot answer a path the actor does not.
 const (
-	WriteDiskRoute = glutton.WriteDiskRoute
-	ReadDiskRoute  = glutton.ReadDiskRoute
-	WriteRAMRoute  = glutton.WriteRAMRoute
-	ReadRAMRoute   = glutton.ReadRAMRoute
-	BurnCPURoute   = glutton.BurnCPURoute
-	IngestRoute    = glutton.IngestRoute
-	PingRoute      = glutton.PingRoute
-	UseCPURoute    = glutton.UseCPURoute
+	WriteDiskRoute   = glutton.WriteDiskRoute
+	ReadDiskRoute    = glutton.ReadDiskRoute
+	WriteRAMRoute    = glutton.WriteRAMRoute
+	ReadRAMRoute     = glutton.ReadRAMRoute
+	BurnCPURoute     = glutton.BurnCPURoute
+	IngestRoute      = glutton.IngestRoute
+	PingRoute        = glutton.PingRoute
+	UseCPURoute      = glutton.UseCPURoute
+	UseEgressRoute   = glutton.UseEgressRoute
+	DrainEgressRoute = glutton.DrainEgressRoute
 )
 
 // Server is an httptest-backed stand-in for a glutton actor holding one file.
@@ -61,6 +63,8 @@ type Server struct {
 	Status int
 	// ElapsedUs sets the x-server-elapsed-us timing header/trailer.
 	ElapsedUs string
+	// EgressDrain is the response /drainegress serves; nil serves an empty one.
+	EgressDrain *gluttonpb.DrainEgressResponse
 
 	mu            sync.Mutex
 	paths         []string
@@ -72,6 +76,8 @@ type Server struct {
 	burnMillis    []int64
 	ingestSizes   []int64
 	cpuRequests   []*gluttonpb.UseCPURequest
+	egressReqs    []*gluttonpb.UseEgressRequest
+	drainReqs     []*gluttonpb.DrainEgressRequest
 }
 
 func (s *Server) reportedDigest() []byte {
@@ -140,6 +146,20 @@ func (s *Server) RecordedCPURequests() []*gluttonpb.UseCPURequest {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]*gluttonpb.UseCPURequest(nil), s.cpuRequests...)
+}
+
+// RecordedEgressRequests returns each /useegress request.
+func (s *Server) RecordedEgressRequests() []*gluttonpb.UseEgressRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]*gluttonpb.UseEgressRequest(nil), s.egressReqs...)
+}
+
+// RecordedDrainRequests returns each /drainegress request.
+func (s *Server) RecordedDrainRequests() []*gluttonpb.DrainEgressRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]*gluttonpb.DrainEgressRequest(nil), s.drainReqs...)
 }
 
 func (s *Server) Start(t *testing.T) *httptest.Server {
@@ -315,6 +335,46 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		s.mu.Unlock()
 
 		resp, _ := proto.Marshal(&gluttonpb.UseCPUResponse{NumCores: req.GetNumCores()})
+		_, _ = w.Write(resp)
+
+	case UseEgressRoute:
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		var req gluttonpb.UseEgressRequest
+		if err := proto.Unmarshal(body, &req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		s.mu.Lock()
+		s.egressReqs = append(s.egressReqs, &req)
+		s.mu.Unlock()
+
+		resp, _ := proto.Marshal(&gluttonpb.UseEgressResponse{})
+		_, _ = w.Write(resp)
+
+	case DrainEgressRoute:
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		var req gluttonpb.DrainEgressRequest
+		if err := proto.Unmarshal(body, &req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		s.mu.Lock()
+		s.drainReqs = append(s.drainReqs, &req)
+		s.mu.Unlock()
+
+		drain := s.EgressDrain
+		if drain == nil {
+			drain = &gluttonpb.DrainEgressResponse{}
+		}
+		resp, _ := proto.Marshal(drain)
 		_, _ = w.Write(resp)
 
 	default:

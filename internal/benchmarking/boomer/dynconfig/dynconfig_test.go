@@ -41,6 +41,9 @@ func TestParseValid(t *testing.T) {
 		"durdir_template": "glutton-durdir-data",
 		"cpu_cores": 2,
 		"cpu_duty_cycle": 0.1,
+		"egress_url": "http://example.com/",
+		"egress_interval": 0.5,
+		"egress_connection": "new",
 		"sweperf_template": "swebench-astropy-7336",
 		"sweperf_total_steps": 21,
 		"sweperf_num_cycles": 4,
@@ -92,6 +95,15 @@ func TestParseValid(t *testing.T) {
 	}
 	if cfg.CPUDutyCycle != 0.1 {
 		t.Errorf("CPUDutyCycle: got %f, want 0.1", cfg.CPUDutyCycle)
+	}
+	if cfg.EgressURL != "http://example.com/" {
+		t.Errorf("EgressURL: got %q, want http://example.com/", cfg.EgressURL)
+	}
+	if cfg.EgressInterval != 500*time.Millisecond {
+		t.Errorf("EgressInterval: got %v, want 500ms", cfg.EgressInterval)
+	}
+	if cfg.EgressConnection != EgressConnectionNew {
+		t.Errorf("EgressConnection: got %q, want %q", cfg.EgressConnection, EgressConnectionNew)
 	}
 	if cfg.SweperfTemplate != "swebench-astropy-7336" {
 		t.Errorf("SweperfTemplate: got %q, want swebench-astropy-7336", cfg.SweperfTemplate)
@@ -214,6 +226,42 @@ func TestParseInvalidValues(t *testing.T) {
 		{
 			name: "negative actor deadline",
 			json: `{"actor_deadline": -1.0}`,
+		},
+		{
+			name: "invalid egress connection",
+			json: `{"egress_connection": "pooled"}`,
+		},
+		{
+			name: "https egress url",
+			json: `{"egress_url": "https://example.com/", "egress_interval": 1}`,
+		},
+		{
+			name: "egress url with an IP host",
+			json: `{"egress_url": "http://93.184.215.14/", "egress_interval": 1}`,
+		},
+		{
+			name: "egress url with an uppercase host",
+			json: `{"egress_url": "http://Example.com/", "egress_interval": 1}`,
+		},
+		{
+			name: "egress url with a trailing-dot host",
+			json: `{"egress_url": "http://example.com./", "egress_interval": 1}`,
+		},
+		{
+			name: "egress url with a wildcard host",
+			json: `{"egress_url": "http://*.example.com/", "egress_interval": 1}`,
+		},
+		{
+			name: "egress url with an invalid port",
+			json: `{"egress_url": "http://example.com:0/", "egress_interval": 1}`,
+		},
+		{
+			name: "egress url without an interval",
+			json: `{"egress_url": "http://example.com/"}`,
+		},
+		{
+			name: "egress interval under 1ms",
+			json: `{"egress_url": "http://example.com/", "egress_interval": 0.0005}`,
 		},
 	}
 
@@ -409,5 +457,26 @@ func TestStartPollZeroInterval(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	if hits.Load() != 0 {
 		t.Errorf("StartPoll with interval 0 made %d requests", hits.Load())
+	}
+}
+
+func TestParseEgressURL(t *testing.T) {
+	for _, tc := range []struct {
+		url      string
+		wantHost string
+		wantPort int32
+	}{
+		{url: "http://example.com/", wantHost: "example.com", wantPort: 80},
+		{url: "http://example.com", wantHost: "example.com", wantPort: 80},
+		{url: "http://echo.benchmarking.svc.cluster.local:8080/path?q=1", wantHost: "echo.benchmarking.svc.cluster.local", wantPort: 8080},
+	} {
+		host, port, err := ParseEgressURL(tc.url)
+		if err != nil {
+			t.Errorf("ParseEgressURL(%q): %v", tc.url, err)
+			continue
+		}
+		if host != tc.wantHost || port != tc.wantPort {
+			t.Errorf("ParseEgressURL(%q) = %q, %d; want %q, %d", tc.url, host, port, tc.wantHost, tc.wantPort)
+		}
 	}
 }

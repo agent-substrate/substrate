@@ -25,6 +25,7 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -56,6 +57,8 @@ const (
 	writeRAMPath     = "/writeram"
 	readRAMPath      = "/readram"
 	useCPUPath       = "/usecpu"
+	useEgressPath    = "/useegress"
+	drainEgressPath  = "/drainegress"
 	memLoadKey       = "memload"
 	memReadAll       = "all"
 
@@ -69,6 +72,10 @@ const (
 	// window (liveWait) elapses so we still suspend on schedule.
 	minPingGap = 200 * time.Millisecond
 	maxPingGap = 1 * time.Second
+
+	// egressMethod is the stats method of the egress calls an actor makes
+	// itself; their latency is measured inside the actor, not by boomer.
+	egressMethod = "egress"
 )
 
 func init() {
@@ -150,6 +157,13 @@ func (r *taskRuntime) iterate() {
 		return
 	}
 
+	// An actor with egress configured must not run before its policy
+	// exists: its first outbound connection would make the gateway cache
+	// the missing policy and deny the calls of the next wake as well.
+	if !actor.ensureEgressPolicy(ctx) {
+		return
+	}
+
 	if err := actor.resume(ctx); err != nil {
 		if actor.noteFailure(err) {
 			user.replaceActor(ctx, actor)
@@ -173,6 +187,9 @@ func (r *taskRuntime) iterate() {
 	// Rotate mode advances through the array cycle over cycle, so the dirty
 	// window moves instead of re-dirtying the same prefix.
 	actor.churnRAM(ctx)
+	// The egress loop runs for the live window and is drained before the
+	// hibernate, so no call is frozen mid-flight by the suspend.
+	actor.startEgress(ctx)
 	// Live window (--min/--max-live-time): ping, then hold the actor
 	// running until the window closes. The first ping runs immediately,
 	// then up to maxPings-1 more, each preceded by a random gap in
@@ -194,6 +211,7 @@ func (r *taskRuntime) iterate() {
 	if remaining := time.Until(deadline); remaining > 0 {
 		time.Sleep(remaining)
 	}
+	actor.drainEgress(ctx)
 	if err := actor.hibernate(ctx); err != nil && actor.noteFailure(err) {
 		user.replaceActor(ctx, actor)
 	}
@@ -338,6 +356,10 @@ type gluttonActor struct {
 	actorRunning bool
 	ramFilled    bool
 	cpuLoaded    bool
+	// egressPolicyCreated is set once the actor's EgressPolicy exists.
+	// egressStarted is set while this wake's egress loop runs.
+	egressPolicyCreated bool
+	egressStarted       bool
 	// crashed is set the first time ResumeActor reports the actor as
 	// ACTOR_STATE_CRASHED (codes.Aborted with "crashed" in the message).
 	// ateapi never rehabilitates one, so iterate() replaces it.
@@ -653,6 +675,149 @@ func (u *gluttonActor) ensureCPULoad(ctx context.Context) {
 	}
 	u.cpuLoaded = true
 	bmetrics.RecordSuccess("http", "GluttonUseCPU", userClass, clientLatency, 0)
+}
+
+// ensureEgressPolicy creates the actor's EgressPolicy, allowing cleartext
+// HTTP to the egress_url host and port, before the actor first runs. Deleting
+// the actor deletes its policy. Reports whether the actor may run: false only
+// while egress is configured and the policy has not been created, in which
+// case the next iteration retries. Reports as its own CreateEgressPolicy row.
+func (u *gluttonActor) ensureEgressPolicy(ctx context.Context) bool {
+	if u.egressPolicyCreated {
+		return true
+	}
+	egressURL := u.cfg.Dyn.Load().EgressURL
+	if egressURL == "" {
+		return true
+	}
+	host, port, err := dynconfig.ParseEgressURL(egressURL)
+	if err != nil {
+		// Config.Validate rejects such a URL before it is stored.
+		slog.Warn("glutton egress_url unusable; not running the actor", slog.String("err", err.Error()))
+		return false
+	}
+	err = u.tracedCall(ctx, "CreateEgressPolicy", func(callCtx context.Context, tr *metadata.MD) error {
+		_, err := u.cfg.APIStub.CreateActorEgressPolicy(callCtx, &ateapipb.CreateActorEgressPolicyRequest{
+			Actor: u.ref(),
+			EgressPolicy: &ateapipb.EgressPolicy{
+				Metadata: &ateapipb.ResourceMetadata{Atespace: u.cfg.Atespace, Name: "default"},
+				Rules: []*ateapipb.EgressRule{{
+					Http: &ateapipb.HTTPRule{
+						Hostnames: []string{host},
+						Ports:     &ateapipb.Ports{Numbers: []int32{port}},
+					},
+				}},
+			},
+		}, grpc.Trailer(tr))
+		// A retry after a create whose response was lost finds the policy.
+		if status.Code(err) == codes.AlreadyExists {
+			return nil
+		}
+		return err
+	})
+	if err != nil {
+		return false
+	}
+	u.egressPolicyCreated = true
+	return true
+}
+
+// startEgress starts this wake's egress loop: glutton GETs egress_url now and
+// then every egress_interval, each call timing out after one interval, until
+// drainEgress stops it. Reports as its own GluttonUseEgress row.
+func (u *gluttonActor) startEgress(ctx context.Context) {
+	dyn := u.cfg.Dyn.Load()
+	if dyn.EgressURL == "" || !u.egressPolicyCreated {
+		return
+	}
+
+	ctx, span := u.cfg.Tracer.Start(ctx, "GluttonUseEgress")
+	defer span.End()
+	start := time.Now()
+
+	err := u.postProto(ctx, useEgressPath, &gluttonpb.UseEgressRequest{
+		Url:               dyn.EgressURL,
+		IntervalMs:        int32(dyn.EgressInterval / time.Millisecond),
+		DisableKeepAlives: dyn.EgressConnection == dynconfig.EgressConnectionNew,
+	}, &gluttonpb.UseEgressResponse{})
+	clientLatency := time.Since(start)
+	boomerutil.LogSampledTrace(span, "GluttonUseEgress", clientLatency, boomerutil.SourceClient, err)
+	if err != nil {
+		bmetrics.RecordFailure("http", "GluttonUseEgress", userClass, clientLatency, err.Error())
+		return
+	}
+	u.egressStarted = true
+	bmetrics.RecordSuccess("http", "GluttonUseEgress", userClass, clientLatency, 0)
+}
+
+// drainEgress stops this wake's egress loop, waiting at most one interval for
+// the call in flight, and records every call the loop made with the latency
+// glutton measured inside the actor. The drain reports as GluttonDrainEgress.
+// If it fails, the loop is still stopped, best effort, so the hibernate does
+// not snapshot it running.
+func (u *gluttonActor) drainEgress(ctx context.Context) {
+	if !u.egressStarted {
+		return
+	}
+	u.egressStarted = false
+
+	ctx, span := u.cfg.Tracer.Start(ctx, "GluttonDrainEgress")
+	defer span.End()
+	start := time.Now()
+
+	resp := &gluttonpb.DrainEgressResponse{}
+	err := u.postProto(ctx, drainEgressPath, &gluttonpb.DrainEgressRequest{Stop: true}, resp)
+	clientLatency := time.Since(start)
+	boomerutil.LogSampledTrace(span, "GluttonDrainEgress", clientLatency, boomerutil.SourceClient, err)
+	if err != nil {
+		bmetrics.RecordFailure("http", "GluttonDrainEgress", userClass, clientLatency, err.Error())
+		_ = u.postProto(ctx, useEgressPath, &gluttonpb.UseEgressRequest{}, &gluttonpb.UseEgressResponse{})
+		return
+	}
+	bmetrics.RecordSuccess("http", "GluttonDrainEgress", userClass, clientLatency, 0)
+
+	for _, sample := range resp.GetSamples() {
+		recordEgressSample(sample)
+	}
+	if dropped := resp.GetDropped(); dropped > 0 {
+		slog.Warn("glutton dropped egress results: its buffer was full",
+			slog.String("actor", u.actorName),
+			slog.Int64("dropped", dropped))
+	}
+}
+
+// recordEgressSample books one egress call under the row for its kind:
+// GluttonEgressFirst for the wake's first call, which opens a new connection
+// through a new tunnel; GluttonEgress for a later call on a kept-alive
+// connection; GluttonEgressNewConn for a later call that opened a new one.
+func recordEgressSample(sample *gluttonpb.EgressSample) {
+	name := "GluttonEgressNewConn"
+	switch {
+	case sample.GetFirst():
+		name = "GluttonEgressFirst"
+	case sample.GetReusedConn():
+		name = "GluttonEgress"
+	}
+	latency := time.Duration(sample.GetLatencyUs()) * time.Microsecond
+	switch {
+	case sample.GetError() != "":
+		bmetrics.RecordFailure(egressMethod, name, userClass, latency, stripLocalAddr(sample.GetError()))
+	case sample.GetStatusCode() >= 400:
+		bmetrics.RecordFailure(egressMethod, name, userClass, latency, fmt.Sprintf("HTTP %d", sample.GetStatusCode()))
+	default:
+		bmetrics.RecordSuccess(egressMethod, name, userClass, latency, 0)
+	}
+}
+
+// localAddrRE matches the local endpoint of a Go net error, "ip:port->", as in
+// "read tcp 10.0.0.5:43210->93.184.215.14:80: read: connection reset by peer".
+var localAddrRE = regexp.MustCompile(`[0-9a-fA-F.:\[\]]+:\d+->`)
+
+// stripLocalAddr removes the local endpoint from an error message. Its
+// ephemeral port differs on every connection, which would give each failure
+// its own failures.csv row.
+func stripLocalAddr(msg string) string {
+	return localAddrRE.ReplaceAllString(msg, "")
 }
 
 // churnRAM re-randomizes mem_churn bytes of the working set in place

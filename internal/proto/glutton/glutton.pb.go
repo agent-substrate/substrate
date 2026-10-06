@@ -1222,6 +1222,290 @@ func (x *UseCPUResponse) GetNumCores() int32 {
 	return 0
 }
 
+type UseEgressRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The URL each call GETs.
+	Url string `protobuf:"bytes,1,opt,name=url,proto3" json:"url,omitempty"`
+	// Time between the starts of two calls, in milliseconds. It is also each
+	// call's timeout, so calls never overlap. Set to 0 to stop the loop.
+	IntervalMs int32 `protobuf:"varint,2,opt,name=interval_ms,json=intervalMs,proto3" json:"interval_ms,omitempty"`
+	// Open a new connection for every call instead of reusing one.
+	DisableKeepAlives bool `protobuf:"varint,3,opt,name=disable_keep_alives,json=disableKeepAlives,proto3" json:"disable_keep_alives,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *UseEgressRequest) Reset() {
+	*x = UseEgressRequest{}
+	mi := &file_glutton_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UseEgressRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UseEgressRequest) ProtoMessage() {}
+
+func (x *UseEgressRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_glutton_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UseEgressRequest.ProtoReflect.Descriptor instead.
+func (*UseEgressRequest) Descriptor() ([]byte, []int) {
+	return file_glutton_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *UseEgressRequest) GetUrl() string {
+	if x != nil {
+		return x.Url
+	}
+	return ""
+}
+
+func (x *UseEgressRequest) GetIntervalMs() int32 {
+	if x != nil {
+		return x.IntervalMs
+	}
+	return 0
+}
+
+func (x *UseEgressRequest) GetDisableKeepAlives() bool {
+	if x != nil {
+		return x.DisableKeepAlives
+	}
+	return false
+}
+
+type UseEgressResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UseEgressResponse) Reset() {
+	*x = UseEgressResponse{}
+	mi := &file_glutton_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UseEgressResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UseEgressResponse) ProtoMessage() {}
+
+func (x *UseEgressResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_glutton_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UseEgressResponse.ProtoReflect.Descriptor instead.
+func (*UseEgressResponse) Descriptor() ([]byte, []int) {
+	return file_glutton_proto_rawDescGZIP(), []int{22}
+}
+
+type DrainEgressRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Stop the loop before draining, waiting for the call in flight, so the
+	// response holds every call the loop made.
+	Stop          bool `protobuf:"varint,1,opt,name=stop,proto3" json:"stop,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DrainEgressRequest) Reset() {
+	*x = DrainEgressRequest{}
+	mi := &file_glutton_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DrainEgressRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DrainEgressRequest) ProtoMessage() {}
+
+func (x *DrainEgressRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_glutton_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DrainEgressRequest.ProtoReflect.Descriptor instead.
+func (*DrainEgressRequest) Descriptor() ([]byte, []int) {
+	return file_glutton_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *DrainEgressRequest) GetStop() bool {
+	if x != nil {
+		return x.Stop
+	}
+	return false
+}
+
+type DrainEgressResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The calls made since the last drain, oldest first.
+	Samples []*EgressSample `protobuf:"bytes,1,rep,name=samples,proto3" json:"samples,omitempty"`
+	// Calls whose results were discarded because the buffer was full.
+	Dropped       int64 `protobuf:"varint,2,opt,name=dropped,proto3" json:"dropped,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DrainEgressResponse) Reset() {
+	*x = DrainEgressResponse{}
+	mi := &file_glutton_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DrainEgressResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DrainEgressResponse) ProtoMessage() {}
+
+func (x *DrainEgressResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_glutton_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DrainEgressResponse.ProtoReflect.Descriptor instead.
+func (*DrainEgressResponse) Descriptor() ([]byte, []int) {
+	return file_glutton_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *DrainEgressResponse) GetSamples() []*EgressSample {
+	if x != nil {
+		return x.Samples
+	}
+	return nil
+}
+
+func (x *DrainEgressResponse) GetDropped() int64 {
+	if x != nil {
+		return x.Dropped
+	}
+	return 0
+}
+
+type EgressSample struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Time from the start of the GET until the body was fully read, in
+	// microseconds.
+	LatencyUs int64 `protobuf:"varint,1,opt,name=latency_us,json=latencyUs,proto3" json:"latency_us,omitempty"`
+	// HTTP status of the response; 0 when no response arrived.
+	StatusCode int32 `protobuf:"varint,2,opt,name=status_code,json=statusCode,proto3" json:"status_code,omitempty"`
+	// Why the call did not complete; empty when the whole response was read,
+	// whatever its status.
+	Error string `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`
+	// The first call since the loop started.
+	First bool `protobuf:"varint,4,opt,name=first,proto3" json:"first,omitempty"`
+	// The call went out on a connection kept alive from an earlier call,
+	// rather than on a new one.
+	ReusedConn    bool `protobuf:"varint,5,opt,name=reused_conn,json=reusedConn,proto3" json:"reused_conn,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EgressSample) Reset() {
+	*x = EgressSample{}
+	mi := &file_glutton_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EgressSample) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EgressSample) ProtoMessage() {}
+
+func (x *EgressSample) ProtoReflect() protoreflect.Message {
+	mi := &file_glutton_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EgressSample.ProtoReflect.Descriptor instead.
+func (*EgressSample) Descriptor() ([]byte, []int) {
+	return file_glutton_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *EgressSample) GetLatencyUs() int64 {
+	if x != nil {
+		return x.LatencyUs
+	}
+	return 0
+}
+
+func (x *EgressSample) GetStatusCode() int32 {
+	if x != nil {
+		return x.StatusCode
+	}
+	return 0
+}
+
+func (x *EgressSample) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+func (x *EgressSample) GetFirst() bool {
+	if x != nil {
+		return x.First
+	}
+	return false
+}
+
+func (x *EgressSample) GetReusedConn() bool {
+	if x != nil {
+		return x.ReusedConn
+	}
+	return false
+}
+
 var File_glutton_proto protoreflect.FileDescriptor
 
 const file_glutton_proto_rawDesc = "" +
@@ -1290,14 +1574,34 @@ const file_glutton_proto_rawDesc = "" +
 	"\x11cap_at_gomaxprocs\x18\x04 \x01(\bH\x00R\x0fcapAtGomaxprocs\x88\x01\x01B\x14\n" +
 	"\x12_cap_at_gomaxprocs\"-\n" +
 	"\x0eUseCPUResponse\x12\x1b\n" +
-	"\tnum_cores\x18\x01 \x01(\x05R\bnumCores*_\n" +
+	"\tnum_cores\x18\x01 \x01(\x05R\bnumCores\"u\n" +
+	"\x10UseEgressRequest\x12\x10\n" +
+	"\x03url\x18\x01 \x01(\tR\x03url\x12\x1f\n" +
+	"\vinterval_ms\x18\x02 \x01(\x05R\n" +
+	"intervalMs\x12.\n" +
+	"\x13disable_keep_alives\x18\x03 \x01(\bR\x11disableKeepAlives\"\x13\n" +
+	"\x11UseEgressResponse\"(\n" +
+	"\x12DrainEgressRequest\x12\x12\n" +
+	"\x04stop\x18\x01 \x01(\bR\x04stop\"`\n" +
+	"\x13DrainEgressResponse\x12/\n" +
+	"\asamples\x18\x01 \x03(\v2\x15.glutton.EgressSampleR\asamples\x12\x18\n" +
+	"\adropped\x18\x02 \x01(\x03R\adropped\"\x9b\x01\n" +
+	"\fEgressSample\x12\x1d\n" +
+	"\n" +
+	"latency_us\x18\x01 \x01(\x03R\tlatencyUs\x12\x1f\n" +
+	"\vstatus_code\x18\x02 \x01(\x05R\n" +
+	"statusCode\x12\x14\n" +
+	"\x05error\x18\x03 \x01(\tR\x05error\x12\x14\n" +
+	"\x05first\x18\x04 \x01(\bR\x05first\x12\x1f\n" +
+	"\vreused_conn\x18\x05 \x01(\bR\n" +
+	"reusedConn*_\n" +
 	"\tWriteMode\x12\x17\n" +
 	"\x13WRITE_MODE_TRUNCATE\x10\x00\x12\x18\n" +
 	"\x14WRITE_MODE_OVERWRITE\x10\x01\x12\x1f\n" +
 	"\x1bWRITE_MODE_OVERWRITE_ROTATE\x10\x02*9\n" +
 	"\bReadMode\x12\x12\n" +
 	"\x0eREAD_MODE_DATA\x10\x00\x12\x19\n" +
-	"\x15READ_MODE_DIGEST_ONLY\x10\x012\x80\x05\n" +
+	"\x15READ_MODE_DIGEST_ONLY\x10\x012\x92\x06\n" +
 	"\aGlutton\x12A\n" +
 	"\bWriteRAM\x12\x18.glutton.WriteRAMRequest\x1a\x19.glutton.WriteRAMResponse\"\x00\x12>\n" +
 	"\aReadRAM\x12\x17.glutton.ReadRAMRequest\x1a\x18.glutton.ReadRAMResponse\"\x00\x12D\n" +
@@ -1308,7 +1612,9 @@ const file_glutton_proto_rawDesc = "" +
 	"\x06Gossip\x12\x16.glutton.GossipRequest\x1a\x17.glutton.GossipResponse\"\x00\x12>\n" +
 	"\aBurnCPU\x12\x17.glutton.BurnCPURequest\x1a\x18.glutton.BurnCPUResponse\"\x00\x12;\n" +
 	"\x06Ingest\x12\x16.glutton.IngestRequest\x1a\x17.glutton.IngestResponse\"\x00\x12;\n" +
-	"\x06UseCPU\x12\x16.glutton.UseCPURequest\x1a\x17.glutton.UseCPUResponse\"\x00B=Z;github.com/agent-substrate/substrate/internal/proto/gluttonb\x06proto3"
+	"\x06UseCPU\x12\x16.glutton.UseCPURequest\x1a\x17.glutton.UseCPUResponse\"\x00\x12D\n" +
+	"\tUseEgress\x12\x19.glutton.UseEgressRequest\x1a\x1a.glutton.UseEgressResponse\"\x00\x12J\n" +
+	"\vDrainEgress\x12\x1b.glutton.DrainEgressRequest\x1a\x1c.glutton.DrainEgressResponse\"\x00B=Z;github.com/agent-substrate/substrate/internal/proto/gluttonb\x06proto3"
 
 var (
 	file_glutton_proto_rawDescOnce sync.Once
@@ -1323,62 +1629,72 @@ func file_glutton_proto_rawDescGZIP() []byte {
 }
 
 var file_glutton_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_glutton_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
+var file_glutton_proto_msgTypes = make([]protoimpl.MessageInfo, 26)
 var file_glutton_proto_goTypes = []any{
-	(WriteMode)(0),            // 0: glutton.WriteMode
-	(ReadMode)(0),             // 1: glutton.ReadMode
-	(*WriteRAMRequest)(nil),   // 2: glutton.WriteRAMRequest
-	(*WriteRAMResponse)(nil),  // 3: glutton.WriteRAMResponse
-	(*ReadRAMRequest)(nil),    // 4: glutton.ReadRAMRequest
-	(*ReadRAMResponse)(nil),   // 5: glutton.ReadRAMResponse
-	(*WriteDiskRequest)(nil),  // 6: glutton.WriteDiskRequest
-	(*WriteDiskResponse)(nil), // 7: glutton.WriteDiskResponse
-	(*ReadDiskRequest)(nil),   // 8: glutton.ReadDiskRequest
-	(*ReadDiskResponse)(nil),  // 9: glutton.ReadDiskResponse
-	(*OpenFDRequest)(nil),     // 10: glutton.OpenFDRequest
-	(*OpenFDResponse)(nil),    // 11: glutton.OpenFDResponse
-	(*PingRequest)(nil),       // 12: glutton.PingRequest
-	(*PingResponse)(nil),      // 13: glutton.PingResponse
-	(*GossipRequest)(nil),     // 14: glutton.GossipRequest
-	(*GossipResponse)(nil),    // 15: glutton.GossipResponse
-	(*Peer)(nil),              // 16: glutton.Peer
-	(*BurnCPURequest)(nil),    // 17: glutton.BurnCPURequest
-	(*BurnCPUResponse)(nil),   // 18: glutton.BurnCPUResponse
-	(*IngestRequest)(nil),     // 19: glutton.IngestRequest
-	(*IngestResponse)(nil),    // 20: glutton.IngestResponse
-	(*UseCPURequest)(nil),     // 21: glutton.UseCPURequest
-	(*UseCPUResponse)(nil),    // 22: glutton.UseCPUResponse
+	(WriteMode)(0),              // 0: glutton.WriteMode
+	(ReadMode)(0),               // 1: glutton.ReadMode
+	(*WriteRAMRequest)(nil),     // 2: glutton.WriteRAMRequest
+	(*WriteRAMResponse)(nil),    // 3: glutton.WriteRAMResponse
+	(*ReadRAMRequest)(nil),      // 4: glutton.ReadRAMRequest
+	(*ReadRAMResponse)(nil),     // 5: glutton.ReadRAMResponse
+	(*WriteDiskRequest)(nil),    // 6: glutton.WriteDiskRequest
+	(*WriteDiskResponse)(nil),   // 7: glutton.WriteDiskResponse
+	(*ReadDiskRequest)(nil),     // 8: glutton.ReadDiskRequest
+	(*ReadDiskResponse)(nil),    // 9: glutton.ReadDiskResponse
+	(*OpenFDRequest)(nil),       // 10: glutton.OpenFDRequest
+	(*OpenFDResponse)(nil),      // 11: glutton.OpenFDResponse
+	(*PingRequest)(nil),         // 12: glutton.PingRequest
+	(*PingResponse)(nil),        // 13: glutton.PingResponse
+	(*GossipRequest)(nil),       // 14: glutton.GossipRequest
+	(*GossipResponse)(nil),      // 15: glutton.GossipResponse
+	(*Peer)(nil),                // 16: glutton.Peer
+	(*BurnCPURequest)(nil),      // 17: glutton.BurnCPURequest
+	(*BurnCPUResponse)(nil),     // 18: glutton.BurnCPUResponse
+	(*IngestRequest)(nil),       // 19: glutton.IngestRequest
+	(*IngestResponse)(nil),      // 20: glutton.IngestResponse
+	(*UseCPURequest)(nil),       // 21: glutton.UseCPURequest
+	(*UseCPUResponse)(nil),      // 22: glutton.UseCPUResponse
+	(*UseEgressRequest)(nil),    // 23: glutton.UseEgressRequest
+	(*UseEgressResponse)(nil),   // 24: glutton.UseEgressResponse
+	(*DrainEgressRequest)(nil),  // 25: glutton.DrainEgressRequest
+	(*DrainEgressResponse)(nil), // 26: glutton.DrainEgressResponse
+	(*EgressSample)(nil),        // 27: glutton.EgressSample
 }
 var file_glutton_proto_depIdxs = []int32{
 	0,  // 0: glutton.WriteRAMRequest.write_mode:type_name -> glutton.WriteMode
 	0,  // 1: glutton.WriteDiskRequest.write_mode:type_name -> glutton.WriteMode
 	1,  // 2: glutton.ReadDiskRequest.read_mode:type_name -> glutton.ReadMode
 	16, // 3: glutton.GossipRequest.peers:type_name -> glutton.Peer
-	2,  // 4: glutton.Glutton.WriteRAM:input_type -> glutton.WriteRAMRequest
-	4,  // 5: glutton.Glutton.ReadRAM:input_type -> glutton.ReadRAMRequest
-	6,  // 6: glutton.Glutton.WriteDisk:input_type -> glutton.WriteDiskRequest
-	8,  // 7: glutton.Glutton.ReadDisk:input_type -> glutton.ReadDiskRequest
-	10, // 8: glutton.Glutton.OpenFD:input_type -> glutton.OpenFDRequest
-	12, // 9: glutton.Glutton.Ping:input_type -> glutton.PingRequest
-	14, // 10: glutton.Glutton.Gossip:input_type -> glutton.GossipRequest
-	17, // 11: glutton.Glutton.BurnCPU:input_type -> glutton.BurnCPURequest
-	19, // 12: glutton.Glutton.Ingest:input_type -> glutton.IngestRequest
-	21, // 13: glutton.Glutton.UseCPU:input_type -> glutton.UseCPURequest
-	3,  // 14: glutton.Glutton.WriteRAM:output_type -> glutton.WriteRAMResponse
-	5,  // 15: glutton.Glutton.ReadRAM:output_type -> glutton.ReadRAMResponse
-	7,  // 16: glutton.Glutton.WriteDisk:output_type -> glutton.WriteDiskResponse
-	9,  // 17: glutton.Glutton.ReadDisk:output_type -> glutton.ReadDiskResponse
-	11, // 18: glutton.Glutton.OpenFD:output_type -> glutton.OpenFDResponse
-	13, // 19: glutton.Glutton.Ping:output_type -> glutton.PingResponse
-	15, // 20: glutton.Glutton.Gossip:output_type -> glutton.GossipResponse
-	18, // 21: glutton.Glutton.BurnCPU:output_type -> glutton.BurnCPUResponse
-	20, // 22: glutton.Glutton.Ingest:output_type -> glutton.IngestResponse
-	22, // 23: glutton.Glutton.UseCPU:output_type -> glutton.UseCPUResponse
-	14, // [14:24] is the sub-list for method output_type
-	4,  // [4:14] is the sub-list for method input_type
-	4,  // [4:4] is the sub-list for extension type_name
-	4,  // [4:4] is the sub-list for extension extendee
-	0,  // [0:4] is the sub-list for field type_name
+	27, // 4: glutton.DrainEgressResponse.samples:type_name -> glutton.EgressSample
+	2,  // 5: glutton.Glutton.WriteRAM:input_type -> glutton.WriteRAMRequest
+	4,  // 6: glutton.Glutton.ReadRAM:input_type -> glutton.ReadRAMRequest
+	6,  // 7: glutton.Glutton.WriteDisk:input_type -> glutton.WriteDiskRequest
+	8,  // 8: glutton.Glutton.ReadDisk:input_type -> glutton.ReadDiskRequest
+	10, // 9: glutton.Glutton.OpenFD:input_type -> glutton.OpenFDRequest
+	12, // 10: glutton.Glutton.Ping:input_type -> glutton.PingRequest
+	14, // 11: glutton.Glutton.Gossip:input_type -> glutton.GossipRequest
+	17, // 12: glutton.Glutton.BurnCPU:input_type -> glutton.BurnCPURequest
+	19, // 13: glutton.Glutton.Ingest:input_type -> glutton.IngestRequest
+	21, // 14: glutton.Glutton.UseCPU:input_type -> glutton.UseCPURequest
+	23, // 15: glutton.Glutton.UseEgress:input_type -> glutton.UseEgressRequest
+	25, // 16: glutton.Glutton.DrainEgress:input_type -> glutton.DrainEgressRequest
+	3,  // 17: glutton.Glutton.WriteRAM:output_type -> glutton.WriteRAMResponse
+	5,  // 18: glutton.Glutton.ReadRAM:output_type -> glutton.ReadRAMResponse
+	7,  // 19: glutton.Glutton.WriteDisk:output_type -> glutton.WriteDiskResponse
+	9,  // 20: glutton.Glutton.ReadDisk:output_type -> glutton.ReadDiskResponse
+	11, // 21: glutton.Glutton.OpenFD:output_type -> glutton.OpenFDResponse
+	13, // 22: glutton.Glutton.Ping:output_type -> glutton.PingResponse
+	15, // 23: glutton.Glutton.Gossip:output_type -> glutton.GossipResponse
+	18, // 24: glutton.Glutton.BurnCPU:output_type -> glutton.BurnCPUResponse
+	20, // 25: glutton.Glutton.Ingest:output_type -> glutton.IngestResponse
+	22, // 26: glutton.Glutton.UseCPU:output_type -> glutton.UseCPUResponse
+	24, // 27: glutton.Glutton.UseEgress:output_type -> glutton.UseEgressResponse
+	26, // 28: glutton.Glutton.DrainEgress:output_type -> glutton.DrainEgressResponse
+	17, // [17:29] is the sub-list for method output_type
+	5,  // [5:17] is the sub-list for method input_type
+	5,  // [5:5] is the sub-list for extension type_name
+	5,  // [5:5] is the sub-list for extension extendee
+	0,  // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_glutton_proto_init() }
@@ -1393,7 +1709,7 @@ func file_glutton_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_glutton_proto_rawDesc), len(file_glutton_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   21,
+			NumMessages:   26,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

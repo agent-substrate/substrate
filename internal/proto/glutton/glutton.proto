@@ -66,6 +66,16 @@ service Glutton {
   // load; calling again replaces it, and num_cores=0 stops it. See
   // UseCPURequest for the (goroutines x duty cycle) shape.
   rpc UseCPU(UseCPURequest) returns (UseCPUResponse) {}
+
+  // Tells the glutton to send an HTTP GET to a URL on a fixed interval. The
+  // calls leave the actor through its egress path, and their results are
+  // kept until DrainEgress collects them. Calling again replaces the loop,
+  // and interval_ms=0 stops it.
+  rpc UseEgress(UseEgressRequest) returns (UseEgressResponse) {}
+
+  // Returns, and forgets, the results of the egress calls made since the
+  // last drain, optionally stopping the loop first.
+  rpc DrainEgress(DrainEgressRequest) returns (DrainEgressResponse) {}
 }
 
 enum WriteMode {
@@ -243,4 +253,53 @@ message UseCPUResponse {
   // The number of goroutines actually spun. Equals the request's
   // num_cores unless it was capped at GOMAXPROCS.
   int32 num_cores = 1;
+}
+
+message UseEgressRequest {
+  // The URL each call GETs.
+  string url = 1;
+
+  // Time between the starts of two calls, in milliseconds. It is also each
+  // call's timeout, so calls never overlap. Set to 0 to stop the loop.
+  int32 interval_ms = 2;
+
+  // Open a new connection for every call instead of reusing one.
+  bool disable_keep_alives = 3;
+}
+
+message UseEgressResponse {
+}
+
+message DrainEgressRequest {
+  // Stop the loop before draining, waiting for the call in flight, so the
+  // response holds every call the loop made.
+  bool stop = 1;
+}
+
+message DrainEgressResponse {
+  // The calls made since the last drain, oldest first.
+  repeated EgressSample samples = 1;
+
+  // Calls whose results were discarded because the buffer was full.
+  int64 dropped = 2;
+}
+
+message EgressSample {
+  // Time from the start of the GET until the body was fully read, in
+  // microseconds.
+  int64 latency_us = 1;
+
+  // HTTP status of the response; 0 when no response arrived.
+  int32 status_code = 2;
+
+  // Why the call did not complete; empty when the whole response was read,
+  // whatever its status.
+  string error = 3;
+
+  // The first call since the loop started.
+  bool first = 4;
+
+  // The call went out on a connection kept alive from an earlier call,
+  // rather than on a new one.
+  bool reused_conn = 5;
 }
