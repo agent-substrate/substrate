@@ -120,6 +120,24 @@ func TestRecordInitialAndFinal(t *testing.T) {
 	}
 }
 
+// TestRecordFinalIfEnded pins that the final record waits for the actor to be
+// unhosted, as a teardown does even when a later step fails.
+func TestRecordFinalIfEnded(t *testing.T) {
+	s := newStatsService(&fakeAgent{}, "app_ovl")
+	rec := withUsageRecorder(s)
+	h := setActivation(s, ateomstats.NewActivation(time.Now(), false))
+
+	s.recordFinalIfEnded(context.Background(), h)
+	if got := rec.Kinds(); len(got) != 0 {
+		t.Fatalf("records while hosted = %v, want none", got)
+	}
+	unhostTestActor(s, testActor.UID)
+	s.recordFinalIfEnded(context.Background(), h)
+	if got := rec.Kinds(); len(got) != 1 || got[0] != ateattr.StatsKindFinal {
+		t.Errorf("records after unhosting = %v, want one final", got)
+	}
+}
+
 func TestRecordFinalWithNoSampleIsPending(t *testing.T) {
 	s := newStatsService(&fakeAgent{}, "app_ovl")
 	rec := withUsageRecorder(s)
@@ -177,6 +195,25 @@ func TestSweepRecoversFromPanic(t *testing.T) {
 	}
 	if got := rec.Kinds(); len(got) != 0 {
 		t.Errorf("records = %v, want none", got)
+	}
+}
+
+// TestRecordInitialTakesASlot pins that an initial reading waits for a guest
+// slot, so it adds no guest reads beyond statsFanOut.
+func TestRecordInitialTakesASlot(t *testing.T) {
+	agent := &fakeAgent{stats: map[string]*agentpb.CgroupStats{"app_ovl": containerStats(1000, 2000, 100, 5_000_000)}}
+	s := newStatsService(agent, "app_ovl")
+	withUsageRecorder(s)
+	h := setActivation(s, ateomstats.NewActivation(time.Now(), false))
+	for range statsFanOut {
+		s.guestSlots <- struct{}{}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	s.recordInitial(ctx, h)
+	if len(agent.calls) != 0 {
+		t.Errorf("initial reading read the guest %d times with every slot taken, want 0", len(agent.calls))
 	}
 }
 

@@ -78,6 +78,10 @@ var (
 	usageSampleInterval    = pflag.Duration("usage-sample-interval", time.Minute, "How often the ateom samples the resource usage of its actors. Each sample writes an ate.actor.usage_sampled record per actor, and GetActiveWorkloadStats serves the latest.")
 )
 
+// minUsageSampleInterval is the floor of --usage-sample-interval, the same as
+// atelet's poll interval floor. It keeps statsSweepBudget inside one interval.
+const minUsageSampleInterval = 50 * time.Second
+
 func main() {
 	pflag.Parse()
 	if *showVersion {
@@ -108,8 +112,8 @@ func do(ctx context.Context) error {
 	if *maxActors < 0 {
 		return fmt.Errorf("--max-actors must not be negative, got %d", *maxActors)
 	}
-	if *usageSampleInterval <= 0 {
-		return fmt.Errorf("--usage-sample-interval must be positive, got %v", *usageSampleInterval)
+	if *usageSampleInterval < minUsageSampleInterval {
+		return fmt.Errorf("--usage-sample-interval must be at least %v, got %v", minUsageSampleInterval, *usageSampleInterval)
 	}
 
 	const serviceName = "ateom-microvm"
@@ -363,6 +367,9 @@ type AteomService struct {
 
 	// Guards actors, draining, and mutable hostedActor fields.
 	actorsMu sync.RWMutex
+	// guestSlots bounds the guest reads of the sweeps and initial readings
+	// together to statsFanOut at once.
+	guestSlots chan struct{}
 	// Keyed by actor UID.
 	actors map[string]*hostedActor
 	// Actors undergoing network cleanup still count against capacity.
@@ -381,6 +388,7 @@ func NewService(podUID, chBinary string, kataDebug bool, memReserveMiB, maxActor
 		locks:         actorlock.New(),
 		inFlight:      actorlock.NewInFlight(),
 		actors:        map[string]*hostedActor{},
+		guestSlots:    make(chan struct{}, statsFanOut),
 		maxActors:     maxActors,
 		podUID:        podUID,
 		chBinary:      chBinary,

@@ -169,7 +169,7 @@ func containerStats(usage, peak, inactiveFile, cpuNanos uint64) *agentpb.CgroupS
 // does, since it is a pointer with no usable zero value and
 // TestGetWorkloadStatsDoesNotTakeLock holds it.
 func newStatsService(agent containerStatsReader, workloadIDs ...string) *AteomService {
-	s := &AteomService{locks: actorlock.New(), actors: map[string]*hostedActor{}}
+	s := &AteomService{locks: actorlock.New(), actors: map[string]*hostedActor{}, guestSlots: make(chan struct{}, statsFanOut)}
 	hostTestActor(s, testActor, &guestStatsTarget{actorUID: testActor.UID, agent: agent, workloadIDs: workloadIDs})
 	return s
 }
@@ -508,7 +508,7 @@ func pendingFor(attr resources.ActorAttribution) *ateompb.WorkloadStatsSample {
 // routinely as idle workers, and the entry keeps a workload that dies during
 // boot attributable.
 func TestGetActiveWorkloadStatsBooting(t *testing.T) {
-	s := &AteomService{}
+	s := &AteomService{guestSlots: make(chan struct{}, statsFanOut)}
 	hostTestActor(s, testActor, nil) // attribution retained, target not published
 
 	got, err := sweepAndList(s)
@@ -651,7 +651,7 @@ func TestGetActiveWorkloadStatsSamplesGuestsConcurrently(t *testing.T) {
 			}
 		},
 	}
-	s := &AteomService{locks: actorlock.New(), actors: map[string]*hostedActor{}}
+	s := &AteomService{locks: actorlock.New(), actors: map[string]*hostedActor{}, guestSlots: make(chan struct{}, statsFanOut)}
 	for i := range actors {
 		attr := testActor
 		attr.UID = fmt.Sprintf("uid-%d", i)

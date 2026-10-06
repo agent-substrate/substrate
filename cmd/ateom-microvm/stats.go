@@ -41,9 +41,9 @@ import (
 // file reads inside the guest, and far short of the lifecycle calls' 20-30s.
 const statsCallTimeout = 2 * time.Second
 
-// A sweep asks up to statsFanOut guests at once and gives up on the rest after
-// statsSweepBudget, so it ends inside the default sample interval. A guest not
-// reached in time reports as pending.
+// Sweeps and initial readings ask up to statsFanOut guests at once. A sweep
+// gives up on the rest after statsSweepBudget, so it ends inside one sample
+// interval. A guest not reached in time reports as pending.
 const (
 	statsFanOut      = 32
 	statsSweepBudget = 45 * time.Second
@@ -167,7 +167,6 @@ func (s *AteomService) sweepUsage(ctx context.Context) []*ateompb.WorkloadStatsS
 	// attributable even if it dies during boot, and one of several booting
 	// does not stop the rest being reported.
 	samples := make([]*ateompb.WorkloadStatsSample, len(hosted))
-	slots := make(chan struct{}, statsFanOut)
 	var wg sync.WaitGroup
 	for i, h := range hosted {
 		wg.Add(1)
@@ -176,11 +175,11 @@ func (s *AteomService) sweepUsage(ctx context.Context) []*ateompb.WorkloadStatsS
 			// The reads run here, outside the sampler's own recover.
 			defer func() {
 				if r := recover(); r != nil {
-					slog.ErrorContext(ctx, "Usage sample panicked", slog.String("actorUID", h.attribution.UID),
+					slog.ErrorContext(ctx, "Usage sample panicked", slog.String(string(ateattr.ActorUIDKey), h.attribution.UID),
 						slog.Any("panic", r), slog.String("stack", string(debug.Stack())))
 				}
 			}()
-			samples[i] = s.sampleHostedGuest(sweepCtx, h, slots)
+			samples[i] = s.sampleHostedGuest(sweepCtx, h)
 		}()
 	}
 	wg.Wait()
@@ -191,24 +190,16 @@ func (s *AteomService) sweepUsage(ctx context.Context) []*ateompb.WorkloadStatsS
 // writes its periodic record, or returns nil when the actor is outside its
 // sampling window or no longer hosted. A guest not reached before ctx is done,
 // or that does not answer, is pending.
-func (s *AteomService) sampleHostedGuest(ctx context.Context, h *hostedActor, slots chan struct{}) *ateompb.WorkloadStatsSample {
+func (s *AteomService) sampleHostedGuest(ctx context.Context, h *hostedActor) *ateompb.WorkloadStatsSample {
 	if !h.usage.Sampling() {
 		return nil
 	}
 	sample := h.usage.WithEpoch(pendingSample(&h.attribution))
-	// The fan-out slot is taken inside the reading, so a sweep waiting for
-	// another reading of this actor holds no slot.
 	measured, err := h.usage.Measure(ctx, func() (*ateompb.WorkloadStatsSample, map[string]uint64, error) {
-		select {
-		case slots <- struct{}{}:
-		case <-ctx.Done():
-			return nil, nil, ctx.Err()
-		}
-		defer func() { <-slots }()
-		return s.sampleGuest(ctx, h)
+		return s.sampleGuestInSlot(ctx, h)
 	})
 	if errors.Is(err, errStaleGuestTarget) {
-		slog.ErrorContext(ctx, "Guest stats target belongs to another actor", slog.String("actorUID", h.attribution.UID), slog.Any("err", err))
+		slog.ErrorContext(ctx, "Guest stats target belongs to another actor", slog.String(string(ateattr.ActorUIDKey), h.attribution.UID), slog.Any("err", err))
 	}
 	// Otherwise an error is boot, restore, teardown in progress, a guest that
 	// has stopped answering, or the sweep's budget: all routine.
@@ -232,6 +223,19 @@ func (s *AteomService) measureGuest(ctx context.Context, h *hostedActor) (*ateom
 	})
 }
 
+// sampleGuestInSlot reads h's guest while holding one of s.guestSlots. The slot
+// is taken inside the reading, so a sweep waiting for another reading of the
+// same actor holds no slot.
+func (s *AteomService) sampleGuestInSlot(ctx context.Context, h *hostedActor) (*ateompb.WorkloadStatsSample, map[string]uint64, error) {
+	select {
+	case s.guestSlots <- struct{}{}:
+	case <-ctx.Done():
+		return nil, nil, ctx.Err()
+	}
+	defer func() { <-s.guestSlots }()
+	return s.sampleGuest(ctx, h)
+}
+
 // recordInitial samples a new activation and writes its initial record. It
 // runs off the resume path, since a guest read can take many seconds, and
 // bounds that read like one sweep's. It recovers from panics, as a sweep does:
@@ -241,19 +245,30 @@ func (s *AteomService) recordInitial(ctx context.Context, h *hostedActor) {
 	actorUID := h.attribution.UID
 	defer func() {
 		if r := recover(); r != nil {
-			slog.ErrorContext(ctx, "Initial usage sample panicked", slog.String("actorUID", actorUID),
+			slog.ErrorContext(ctx, "Initial usage sample panicked", slog.String(string(ateattr.ActorUIDKey), actorUID),
 				slog.Any("panic", r), slog.String("stack", string(debug.Stack())))
 			h.usage.Initial(nil, nil)
 		}
 	}()
 	ctx, cancel := context.WithTimeout(ctx, statsSweepBudget)
 	defer cancel()
-	sample, err := s.measureGuest(ctx, h)
+	sample, err := h.usage.Measure(ctx, func() (*ateompb.WorkloadStatsSample, map[string]uint64, error) {
+		return s.sampleGuestInSlot(ctx, h)
+	})
 	if err != nil {
-		slog.WarnContext(ctx, "No initial usage sample", slog.String("actorUID", actorUID), slog.Any("err", err))
+		slog.WarnContext(ctx, "No initial usage sample", slog.String(string(ateattr.ActorUIDKey), actorUID), slog.Any("err", err))
 		sample = nil
 	}
 	h.usage.Initial(sample, func() { s.usage.Emit(ctx, ateattr.StatsKindInitial, sample) })
+}
+
+// recordFinalIfEnded writes h's final record if a checkpoint or terminate tore
+// its activation down, which unhosts the actor even when a later step fails.
+// The caller holds the actor's lock.
+func (s *AteomService) recordFinalIfEnded(ctx context.Context, h *hostedActor) {
+	if h != nil && s.lookupActor(h.attribution.UID) != h {
+		s.recordFinal(ctx, h)
+	}
 }
 
 // recordFinal writes the final record of an activation that a checkpoint or a
@@ -266,7 +281,7 @@ func (s *AteomService) recordFinal(ctx context.Context, h *hostedActor) {
 		if measured == nil {
 			measured = pending
 		}
-		s.usage.EmitFinal(ctx, measured)
+		s.usage.Emit(ctx, ateattr.StatsKindFinal, measured)
 	})
 }
 
