@@ -181,7 +181,7 @@ spec:
             - /bin/sh
             - -ec
             # The image's temporary initialization server is socket-only.
-            - pg_isready -h 127.0.0.1 -U "${POSTGRES_USER}" -d atepg
+            - nc -z 127.0.0.1 5432
           initialDelaySeconds: 2
           periodSeconds: 2
         livenessProbe:

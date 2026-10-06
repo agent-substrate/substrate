@@ -31,7 +31,10 @@ import (
 	"github.com/agent-substrate/substrate/pkg/postgressetup"
 )
 
-const postgresTLSParams = "sslmode=verify-full&sslrootcert=/run/servicedns.podcert.ate.dev/trust-bundle.pem&sslcert=/run/podidentity.podcert.ate.dev/credential-bundle.pem&sslkey=/run/podidentity.podcert.ate.dev/credential-bundle.pem"
+// The serving certificate is signed with Ed25519, which pgx cannot hash for SCRAM
+// channel binding. PostgreSQL rejects pgx's fallback as a downgrade, so
+// disable channel binding while retaining TLS and client-certificate checks.
+const postgresTLSParams = "sslmode=verify-full&sslrootcert=/run/servicedns.podcert.ate.dev/trust-bundle.pem&sslcert=/run/podidentity.podcert.ate.dev/credential-bundle.pem&sslkey=/run/podidentity.podcert.ate.dev/credential-bundle.pem&channel_binding=disable"
 
 func bundledPostgresDSN(user, password string) string {
 	return fmt.Sprintf("postgresql://%s:%s@postgres.ate-system.svc:5432/atepg?%s", user, password, postgresTLSParams)
