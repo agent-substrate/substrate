@@ -101,7 +101,7 @@ run_arm() {  # $1 = stream|pull, $2 = rep dir
     --worker-namespace ate-profiling --worker-pool "profiling-$arm" \
     --env "WORKLOAD=profiling-$arm" --json "$dir/$arm-coldboot-$IM.json"
   sleep "$GAP"                                   # same spacing on both arms
-  [[ $arm == stream ]] && wait_gcfsd_idle "$start" # will need to remove this when running workload benchmarks
+  [[ $arm == stream ]] && wait_gcfsd_idle "$start" # TODO: will need to remove this when running workload benchmarks
   profiling/profile_lifecycle.py --atespace "ate-prof-$arm" --template "ate-prof-$arm/$SLUG_M" \
     --worker-namespace ate-profiling --worker-pool "profiling-$arm" \
     --step-gap "$GAP" --json "$dir/$arm-lifecycle-$IM.json"
