@@ -133,6 +133,7 @@ atelet's `Restore timing breakdown` and `Checkpoint timing breakdown` are the un
  "ate.actor.restore.duration.download":0.310,
  "ate.actor.restore.duration.oci_unpack":0.050,
  "ate.actor.restore.duration.ateom_restore":0.060,
+ "ate.actor.restore.duration.sandbox_record":0.007,
  "ate.actor.restore.duration.total":0.420,
  "trace_id":"4bf92f…","span_id":"00f067…","trace_flags":"01"}
 ```
