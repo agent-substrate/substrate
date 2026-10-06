@@ -19,12 +19,14 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/protobuf/testing/protocmp"
 
+	"github.com/agent-substrate/substrate/internal/hardware"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 )
 
@@ -54,7 +56,7 @@ func TestFromFiles(t *testing.T) {
 				t.Fatalf("writing memory limit: %v", err)
 			}
 
-			got := fromDir(dir, testActors).GetCapacity()
+			got := fromDir(dir, testActors)
 			if diff := cmp.Diff(tc.want, got, protocmp.Transform()); diff != "" {
 				t.Errorf("reported capacity mismatch (-want +got):\n%s", diff)
 			}
@@ -63,10 +65,20 @@ func TestFromFiles(t *testing.T) {
 }
 
 func TestFromFilesMissing(t *testing.T) {
-	got := fromDir(t.TempDir(), testActors).GetCapacity()
+	got := fromDir(t.TempDir(), testActors)
 	want := &ateletpb.WorkerResources{Actors: testActors}
 	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
 		t.Errorf("unset environment capacity mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestProbeHardware(t *testing.T) {
+	got := probeHardware()
+	want := &ateletpb.HardwareIdentity{
+		Attributes: map[string]string{hardware.AttrArchitecture: runtime.GOARCH},
+	}
+	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
+		t.Errorf("probeHardware() mismatch (-want +got):\n%s", diff)
 	}
 }
 

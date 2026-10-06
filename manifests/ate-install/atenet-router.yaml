@@ -248,8 +248,6 @@ spec:
         - "/usr/local/bin/envoy"
         - "-c"
         - "/etc/envoy/envoy.yaml"
-        - "--component-log-level"
-        - "upstream:debug,router:debug,ext_proc:debug"
         # Prevents Envoy from fast-exiting on SIGTERM before atenet-router finishes
         # its drain sequence. Polls for the drain-complete marker written by the
         # router on the shared emptyDir, terminating Envoy as soon as the drain

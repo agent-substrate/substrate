@@ -860,15 +860,20 @@ func TestValidateTrustBundleDataSource(t *testing.T) {
 		name: "valid",
 		obj:  valid(),
 	}, {
+		name: "valid: multiple names",
+		obj: valid(func(tb *ateapipb.TrustBundleDataSource) {
+			tb.Names = []string{"egress-mitm.ate.dev", "system-roots.ate.dev"}
+		}),
+	}, {
 		name: "no names",
 		obj:  valid(func(tb *ateapipb.TrustBundleDataSource) { tb.Names = nil }),
 		want: field.ErrorList{field.Required(field.NewPath("names"), "")},
 	}, {
 		name: "too many names",
 		obj: valid(func(tb *ateapipb.TrustBundleDataSource) {
-			tb.Names = []string{"a", "b"}
+			tb.Names = []string{"a", "b", "c", "d", "e", "f", "g", "h", "i"}
 		}),
-		want: field.ErrorList{field.TooMany(field.NewPath("names"), 2, 1).WithOrigin("maxItems")},
+		want: field.ErrorList{field.TooMany(field.NewPath("names"), 9, 8).WithOrigin("maxItems")},
 	}, {
 		name: "empty name",
 		obj:  valid(func(tb *ateapipb.TrustBundleDataSource) { tb.Names = []string{""} }),

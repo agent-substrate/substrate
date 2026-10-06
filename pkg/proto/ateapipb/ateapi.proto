@@ -1394,11 +1394,15 @@ message TrustBundleDataSource {
   // * egress-mitm.ate.dev --- The trust anchors for the Substrate egress
   //   gateway TLS man-in-the-middle interceptor.
   //
+  // * system-roots.ate.dev --- A selection of well-known public CA root certificates,
+  //   built into Substrate
+  //
   // +k8s:required
   // +k8s:minItems=1
-  // +k8s:maxItems=1
+  // +k8s:maxItems=8
   // +k8s:eachVal=+k8s:minLength=1
   // +k8s:eachVal=+k8s:maxLength=253
+  // +k8s:listType=set
   repeated string names = 3;
 
   // path must be a clean relative Unix path: at most 16 '/'-separated
@@ -2154,16 +2158,16 @@ message WorkerStatus {
   // +k8s:minimum=0
   int64 observed_epoch = 4;
 
-  // Hardware identity of the Worker's node, reported at registration.
+  // Hardware identity reported by the Worker at registration.
   //
   // +k8s:optional
   HardwareIdentity hardware = 5;
 }
 
-// HardwareIdentity identifies the host hardware of a Worker or the Worker a
+// HardwareIdentity identifies the hardware of a Worker or the Worker a
 // snapshot was captured on.
 message HardwareIdentity {
-  // Key-value pairs describing host hardware properties (currently
+  // Key-value pairs describing hardware properties (currently
   // "architecture"; TODO: add "cpu_vendor", "cpu_model", etc.).
   //
   // +k8s:optional
@@ -2238,11 +2242,12 @@ message ActorAssignment {
 // authorization: Control is the client-facing API, while these RPCs are served
 // only to an atelet, and only for the Workers on its own node.
 service WorkerService {
-  // RegisterWorker records what a Worker can hold and the hardware identity of
-  // its node in one write, so a Worker is never schedulable without hardware
-  // to match snapshots against. Capacity is the Worker's to report rather than
-  // the control plane's to infer: it is what the ateom can actually supply,
-  // only its node can observe it, and a fleet may run mixed ateom versions.
+  // RegisterWorker records what a Worker can hold and its hardware identity in
+  // one write, so a Worker is never schedulable without hardware to match
+  // snapshots against. Capacity and hardware are the Worker's to report rather
+  // than the control plane's to infer: they are what the ateom can actually
+  // supply and expose, only its node can observe them, and a fleet may run
+  // mixed ateom versions.
   //
   // atelet calls this with its own client certificate, as it does for
   // MintCert. Idempotent: re-sending the same capacity and hardware is not a
@@ -2292,8 +2297,8 @@ message RegisterWorkerRequest {
   // +k8s:required
   WorkerResources capacity = 2;
 
-  // Hardware identity of the Worker's node. Like capacity, this replaces what
-  // is recorded on the Worker.
+  // Hardware identity reported by the Worker. Like capacity, this replaces
+  // what is recorded on the Worker.
   //
   // +k8s:required
   HardwareIdentity hardware = 3;

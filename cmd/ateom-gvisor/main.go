@@ -43,7 +43,6 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateomstats"
 	"github.com/agent-substrate/substrate/internal/ateomtunnel"
 	"github.com/agent-substrate/substrate/internal/childreap"
-	"github.com/agent-substrate/substrate/internal/contextlogging"
 	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/ocispec"
@@ -108,8 +107,7 @@ func do(ctx context.Context) error {
 	defer cancel()
 
 	syncedWriter := actorlog.NewSyncedWriter(os.Stdout)
-	logger := slog.New(contextlogging.NewHandler(slog.NewJSONHandler(syncedWriter, &slog.HandlerOptions{Level: serverboot.LogLevel()})))
-	slog.SetDefault(logger)
+	serverboot.InitLoggerWithWriter(syncedWriter)
 	if err := serverboot.SetLogLevel(*logLevelFlag); err != nil {
 		return err
 	}
@@ -160,14 +158,14 @@ func do(ctx context.Context) error {
 
 	lp, err := serverboot.InitLogging(ctx, serverboot.LoggingOptions{
 		ServiceName:  serviceName,
-		Exporter:     serverboot.ResolveLogsExporter(ctx, serverboot.LogsExporterNone),
+		Exporter:     serverboot.ResolveLogsExporter(ctx),
 		ExporterConn: relayConn,
 		RelayCapable: true,
 	})
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize logging", err)
 	}
-	// Nil when the exporter is none.
+	// Nil when the exporter does not include otlp.
 	if lp != nil {
 		defer serverboot.ShutdownProvider("LoggerProvider", lp.Shutdown)
 	}
@@ -502,6 +500,14 @@ func containerNames(containers []*ateompb.Container) []string {
 }
 
 // validateActorDirs rejects a request whose actor directories are unusable.
+// validateRunscPath ensures we only execute runsc from the static files dir
+func validateRunscPath(p string) error {
+	if errs := resources.ValidateRuntimeAssetPath(nodepath.StaticFilesDir, p, field.NewPath("runsc_path")); len(errs) > 0 {
+		return resources.ToAPIError(errs)
+	}
+	return nil
+}
+
 func validateActorDirs(actorDirs *ateompb.ActorDirs) error {
 	if errs := resources.ValidateActorDirs(actorDirs, field.NewPath("actor_dirs")); len(errs) > 0 {
 		return apierror.InvalidArgument("%v", errs.ToAggregate())
@@ -511,6 +517,9 @@ func validateActorDirs(actorDirs *ateompb.ActorDirs) error {
 
 func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkloadRequest) (resp *ateompb.RunWorkloadResponse, retErr error) {
 	if err := validateActorDirs(req.GetActorDirs()); err != nil {
+		return nil, err
+	}
+	if err := validateRunscPath(req.GetRunscPath()); err != nil {
 		return nil, err
 	}
 	if !s.locks.Lock(ctx, req.GetActorUid()) {
@@ -631,6 +640,9 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 // (or the harness) to suspend on shutdown.
 func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.CheckpointWorkloadRequest) (*ateompb.CheckpointWorkloadResponse, error) {
 	if err := validateActorDirs(req.GetActorDirs()); err != nil {
+		return nil, err
+	}
+	if err := validateRunscPath(req.GetRunscPath()); err != nil {
 		return nil, err
 	}
 	if !s.locks.Lock(ctx, req.GetActorUid()) {
@@ -809,6 +821,9 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	if err := validateActorDirs(req.GetActorDirs()); err != nil {
 		return nil, err
 	}
+	if err := validateRunscPath(req.GetRunscPath()); err != nil {
+		return nil, err
+	}
 	if !s.locks.Lock(ctx, req.GetActorUid()) {
 		return nil, fmt.Errorf("gave up waiting for the actor's lock: %w", ctx.Err())
 	}
@@ -956,6 +971,9 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 
 func (s *AteomService) TerminateWorkload(ctx context.Context, req *ateompb.TerminateWorkloadRequest) (*ateompb.TerminateWorkloadResponse, error) {
 	if err := validateActorDirs(req.GetActorDirs()); err != nil {
+		return nil, err
+	}
+	if err := validateRunscPath(req.GetRunscPath()); err != nil {
 		return nil, err
 	}
 	if !s.locks.Lock(ctx, req.GetActorUid()) {

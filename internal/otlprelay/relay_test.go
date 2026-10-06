@@ -129,9 +129,14 @@ func startRelay(t *testing.T, collector string) string {
 	t.Helper()
 	t.Setenv(endpointEnv, collector)
 
-	// Short filename: a unix socket path is capped at ~104 bytes and the test
-	// temp dir already eats most of that on darwin.
-	sock := filepath.Join(t.TempDir(), "r.sock")
+	// t.TempDir() embeds the test name, which overruns the ~104 byte unix
+	// socket path limit on darwin, so the socket gets its own short dir.
+	dir, err := os.MkdirTemp("", "otlprelay")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "r.sock")
 	relay, err := NewServer(context.Background(), sock)
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)

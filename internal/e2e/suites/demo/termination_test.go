@@ -36,6 +36,7 @@ import (
 // (CRASHED). We assert the control-plane state
 // machine rather than any in-actor state saving, which is the application's responsibility.
 func TestGracefulWorkerTermination(t *testing.T) {
+	t.Parallel()
 	nsObj := e2e.CreateNamespace(t)
 
 	ctx := context.Background()
@@ -143,6 +144,7 @@ func waitForWorkerRemoved(ctx context.Context, t *testing.T, clients *e2e.Client
 // deleted (evicted), and while the container is in its SIGTERM shutdown phase,
 // we initiate a suspend. Suspend should succeed.
 func TestGracefulWorkerTerminationSuspend(t *testing.T) {
+	t.Parallel()
 	nsObj := e2e.CreateNamespace(t)
 
 	ctx := context.Background()

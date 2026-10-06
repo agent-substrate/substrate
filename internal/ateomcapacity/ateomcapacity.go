@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateletdial"
+	"github.com/agent-substrate/substrate/internal/hardware"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"k8s.io/apimachinery/pkg/api/resource"
 
@@ -48,7 +49,8 @@ const (
 	maxReportBackoff     = 30 * time.Second
 )
 
-// FromFiles combines the downward API compute limits with the ateom's actor limit.
+// FromFiles combines the downward API compute limits with the ateom's own
+// actor limit.
 //
 // A limit that is missing or unparseable is reported as zero, which the control
 // plane reads as none: better to place nothing on a worker that cannot say what
@@ -57,19 +59,25 @@ const (
 // TODO: Watch the projected files and report changes. For now we do not support
 // in-place Pod vertical scaling (IPPR); capacity is read once at startup.
 // NOTE: Please do not implement this yet. IPPR needs more general consideration.
-func FromFiles(actors int) *ateletpb.SetWorkerCapacityRequest {
+func FromFiles(actors int) *ateletpb.WorkerResources {
 	return fromDir(CapacityMountPath, actors)
 }
 
-func fromDir(dir string, actors int) *ateletpb.SetWorkerCapacityRequest {
-	return &ateletpb.SetWorkerCapacityRequest{
-		Capacity: &ateletpb.WorkerResources{
-			Actors: int32(actors),
-			Resources: cpuMemory(
-				readLimit(filepath.Join(dir, CPULimitFile)),
-				readLimit(filepath.Join(dir, MemoryLimitFile)),
-			),
-		},
+func fromDir(dir string, actors int) *ateletpb.WorkerResources {
+	return &ateletpb.WorkerResources{
+		Actors: int32(actors),
+		Resources: cpuMemory(
+			readLimit(filepath.Join(dir, CPULimitFile)),
+			readLimit(filepath.Join(dir, MemoryLimitFile)),
+		),
+	}
+}
+
+// probeHardware returns the hardware identity that actors hosted by this ateom
+// observe.
+func probeHardware() *ateletpb.HardwareIdentity {
+	return &ateletpb.HardwareIdentity{
+		Attributes: hardware.ProbeHost().GetAttributes(),
 	}
 }
 
@@ -117,8 +125,8 @@ type ReportConfig struct {
 	Actors int
 }
 
-// Report tells the node-local atelet what this ateom can supply, retrying
-// until it is accepted or ctx ends.
+// Report tells the node-local atelet what this ateom can supply and its
+// hardware identity, retrying until it is accepted or ctx ends.
 //
 // Retrying is what makes a single report durable: atelet only accepts once the
 // control plane has recorded it, and the Worker record may not exist yet when
@@ -129,14 +137,19 @@ func Report(ctx context.Context, cfg ReportConfig) error {
 	if err != nil {
 		return fmt.Errorf("capacity report: %w", err)
 	}
-	capacity := FromFiles(cfg.Actors)
+	req := &ateletpb.RegisterWorkerRequest{
+		Capacity: FromFiles(cfg.Actors),
+		Hardware: probeHardware(),
+	}
 	err = retryReport(ctx, func() error {
-		return reportOnce(ctx, cfg.SocketPath, tlsConfig, capacity)
+		return reportOnce(ctx, cfg.SocketPath, tlsConfig, req)
 	}, initialReportBackoff)
 	if err != nil {
 		return err
 	}
-	slog.InfoContext(ctx, "Reported worker capacity", slog.Any("capacity", capacity.GetCapacity()))
+	slog.InfoContext(ctx, "Registered worker capacity and hardware",
+		slog.Any("capacity", req.GetCapacity()),
+		slog.Any("hardware", req.GetHardware()))
 	return nil
 }
 
@@ -159,7 +172,7 @@ func retryReport(ctx context.Context, send func() error, backoff time.Duration) 
 	}
 }
 
-func reportOnce(ctx context.Context, socketPath string, tlsConfig *tls.Config, capacity *ateletpb.SetWorkerCapacityRequest) error {
+func reportOnce(ctx context.Context, socketPath string, tlsConfig *tls.Config, req *ateletpb.RegisterWorkerRequest) error {
 	conn, err := ateletdial.Dial(socketPath, tlsConfig)
 	if err != nil {
 		return err
@@ -167,6 +180,6 @@ func reportOnce(ctx context.Context, socketPath string, tlsConfig *tls.Config, c
 	defer conn.Close()
 	callCtx, cancel := context.WithTimeout(ctx, reportTimeout)
 	defer cancel()
-	_, err = ateletpb.NewAteomSupportClient(conn).SetWorkerCapacity(callCtx, capacity)
+	_, err = ateletpb.NewAteomSupportClient(conn).RegisterWorker(callCtx, req)
 	return err
 }

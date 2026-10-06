@@ -147,14 +147,14 @@ func do(ctx context.Context) error {
 
 	lp, err := serverboot.InitLogging(ctx, serverboot.LoggingOptions{
 		ServiceName:  serviceName,
-		Exporter:     serverboot.ResolveLogsExporter(ctx, serverboot.LogsExporterNone),
+		Exporter:     serverboot.ResolveLogsExporter(ctx),
 		ExporterConn: relayConn,
 		RelayCapable: true,
 	})
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize logging", err)
 	}
-	// Nil when the exporter is none.
+	// Nil when the exporter does not include otlp.
 	if lp != nil {
 		defer serverboot.ShutdownProvider("LoggerProvider", lp.Shutdown)
 	}
@@ -388,6 +388,18 @@ func (s *AteomService) beginRPC(actorUID, name string, cancel context.CancelFunc
 func validateActorDirs(actorDirs *ateompb.ActorDirs) error {
 	if errs := resources.ValidateActorDirs(actorDirs, field.NewPath("actor_dirs")); len(errs) > 0 {
 		return apierror.InvalidArgument("%v", errs.ToAggregate())
+	}
+	return nil
+}
+
+// validateRuntimeAssetPaths ensures we only run assets from the static files dir
+func validateRuntimeAssetPaths(paths map[string]string) error {
+	var errs field.ErrorList
+	for name, p := range paths {
+		errs = append(errs, resources.ValidateRuntimeAssetPath(nodepath.StaticFilesDir, p, field.NewPath("runtime_asset_paths").Key(name))...)
+	}
+	if len(errs) > 0 {
+		return resources.ToAPIError(errs)
 	}
 	return nil
 }

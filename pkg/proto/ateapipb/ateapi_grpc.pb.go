@@ -1839,11 +1839,12 @@ const (
 // authorization: Control is the client-facing API, while these RPCs are served
 // only to an atelet, and only for the Workers on its own node.
 type WorkerServiceClient interface {
-	// RegisterWorker records what a Worker can hold and the hardware identity of
-	// its node in one write, so a Worker is never schedulable without hardware
-	// to match snapshots against. Capacity is the Worker's to report rather than
-	// the control plane's to infer: it is what the ateom can actually supply,
-	// only its node can observe it, and a fleet may run mixed ateom versions.
+	// RegisterWorker records what a Worker can hold and its hardware identity in
+	// one write, so a Worker is never schedulable without hardware to match
+	// snapshots against. Capacity and hardware are the Worker's to report rather
+	// than the control plane's to infer: they are what the ateom can actually
+	// supply and expose, only its node can observe them, and a fleet may run
+	// mixed ateom versions.
 	//
 	// atelet calls this with its own client certificate, as it does for
 	// MintCert. Idempotent: re-sending the same capacity and hardware is not a
@@ -1923,11 +1924,12 @@ func (c *workerServiceClient) RequestActorSuspend(ctx context.Context, in *Reque
 // authorization: Control is the client-facing API, while these RPCs are served
 // only to an atelet, and only for the Workers on its own node.
 type WorkerServiceServer interface {
-	// RegisterWorker records what a Worker can hold and the hardware identity of
-	// its node in one write, so a Worker is never schedulable without hardware
-	// to match snapshots against. Capacity is the Worker's to report rather than
-	// the control plane's to infer: it is what the ateom can actually supply,
-	// only its node can observe it, and a fleet may run mixed ateom versions.
+	// RegisterWorker records what a Worker can hold and its hardware identity in
+	// one write, so a Worker is never schedulable without hardware to match
+	// snapshots against. Capacity and hardware are the Worker's to report rather
+	// than the control plane's to infer: they are what the ateom can actually
+	// supply and expose, only its node can observe them, and a fleet may run
+	// mixed ateom versions.
 	//
 	// atelet calls this with its own client certificate, as it does for
 	// MintCert. Idempotent: re-sending the same capacity and hardware is not a

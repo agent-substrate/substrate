@@ -122,6 +122,22 @@ func TestActorEgressMITMTrust(t *testing.T) {
 		t.Errorf("fetch with system roots failed, but not with a certificate-verification error: %s", neg.Error)
 	}
 
+	// A port in the Host is never dialed: no rule checked it. The gateway
+	// dials the Host's name on the port the actor dialed, and nothing answers
+	// on port 1.
+	for _, tc := range []struct{ origin, dial string }{
+		{origin: "https://" + egressOriginHost + ":1/", dial: egressOriginHost + ":443"},
+		{origin: "http://" + egressOriginHost + ":1/", dial: egressOriginHost + ":80"},
+	} {
+		res := probeFetch(t, ctx, rc, id, tc.origin, "bundle", "dial="+url.QueryEscape(tc.dial))
+		switch {
+		case res.Error != "":
+			t.Errorf("fetch of %s dialed at %s failed: %s", tc.origin, tc.dial, res.Error)
+		case res.Status != "200":
+			t.Errorf("fetch of %s dialed at %s: status %s, want 200 — the gateway dialed the port in the Host instead of the one the actor dialed", tc.origin, tc.dial, res.Status)
+		}
+	}
+
 	// The gateway relays passthrough TLS unread, so the origin's own certificate
 	// must validate with the system roots. That is also the proof it was not
 	// intercepted.
@@ -239,6 +255,7 @@ func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Client
 	// The gateway refuses every tunnel for an actor without a policy. Naming
 	// only the origin also lets the same actor show a denial.
 	e2e.EnsureEgressPolicy(t, ctx, clients, ref,
+		e2e.EgressAllowHTTP(egressOriginHost),
 		e2e.EgressAllowHTTPS(egressOriginHost),
 		e2e.EgressAllowPassthrough(egressOriginPassthroughHost),
 		e2e.EgressAllowPassthroughOnPorts([]int32{8443}, egressOriginPassthroughWrongPortHost),

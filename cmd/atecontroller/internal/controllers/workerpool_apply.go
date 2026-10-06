@@ -79,8 +79,8 @@ type ateomOTelSettings struct {
 	// default and drops the arg, which is dead config on its own.
 	TracesSampler    string
 	TracesSamplerArg string
-	// LogsExporter is the raw OTEL_LOGS_EXPORTER value. It turns on the OTLP
-	// copy of the usage records; empty keeps ateom's default, none.
+	// LogsExporter is the raw OTEL_LOGS_EXPORTER value. otlp sends the usage
+	// records over OTLP instead of stdout; empty keeps ateom's default, none.
 	LogsExporter string
 }
 

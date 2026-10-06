@@ -3827,11 +3827,15 @@ type TrustBundleDataSource struct {
 	// * egress-mitm.ate.dev --- The trust anchors for the Substrate egress
 	//   gateway TLS man-in-the-middle interceptor.
 	//
+	// * system-roots.ate.dev --- A selection of well-known public CA root certificates,
+	//   built into Substrate
+	//
 	// +k8s:required
 	// +k8s:minItems=1
-	// +k8s:maxItems=1
+	// +k8s:maxItems=8
 	// +k8s:eachVal=+k8s:minLength=1
 	// +k8s:eachVal=+k8s:maxLength=253
+	// +k8s:listType=set
 	Names []string `protobuf:"bytes,3,rep,name=names,proto3" json:"names,omitempty"`
 	// path must be a clean relative Unix path: at most 16 '/'-separated
 	// segments, none of them empty, '.' or '..', and no NUL byte.
@@ -6881,7 +6885,7 @@ type WorkerStatus struct {
 	// +k8s:optional
 	// +k8s:minimum=0
 	ObservedEpoch int64 `protobuf:"varint,4,opt,name=observed_epoch,json=observedEpoch,proto3" json:"observed_epoch,omitempty"`
-	// Hardware identity of the Worker's node, reported at registration.
+	// Hardware identity reported by the Worker at registration.
 	//
 	// +k8s:optional
 	Hardware      *HardwareIdentity `protobuf:"bytes,5,opt,name=hardware,proto3" json:"hardware,omitempty"`
@@ -6954,11 +6958,11 @@ func (x *WorkerStatus) GetHardware() *HardwareIdentity {
 	return nil
 }
 
-// HardwareIdentity identifies the host hardware of a Worker or the Worker a
+// HardwareIdentity identifies the hardware of a Worker or the Worker a
 // snapshot was captured on.
 type HardwareIdentity struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Key-value pairs describing host hardware properties (currently
+	// Key-value pairs describing hardware properties (currently
 	// "architecture"; TODO: add "cpu_vendor", "cpu_model", etc.).
 	//
 	// +k8s:optional
@@ -7197,8 +7201,8 @@ type RegisterWorkerRequest struct {
 	//
 	// +k8s:required
 	Capacity *WorkerResources `protobuf:"bytes,2,opt,name=capacity,proto3" json:"capacity,omitempty"`
-	// Hardware identity of the Worker's node. Like capacity, this replaces what
-	// is recorded on the Worker.
+	// Hardware identity reported by the Worker. Like capacity, this replaces
+	// what is recorded on the Worker.
 	//
 	// +k8s:required
 	Hardware      *HardwareIdentity `protobuf:"bytes,3,opt,name=hardware,proto3" json:"hardware,omitempty"`

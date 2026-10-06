@@ -103,6 +103,9 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	if err := validateActorDirs(req.GetActorDirs()); err != nil {
 		return nil, err
 	}
+	if err := validateRuntimeAssetPaths(req.GetRuntimeAssetPaths()); err != nil {
+		return nil, err
+	}
 	if !s.locks.Lock(ctx, req.GetActorUid()) {
 		return nil, fmt.Errorf("gave up waiting for the actor's lock: %w", ctx.Err())
 	}

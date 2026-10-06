@@ -283,9 +283,13 @@ func StageMergedRootfs(ctx context.Context, bundleRootfs, upperBase, restoreID, 
 	// snapshot and then deleted — so the durability volatile gives up is
 	// durability we do not use. It refuses to mount over a workdir left dirty by
 	// a previous volatile mount, hence the wipe above.
+	// nosuid,nodev: the upper is restored from a snapshot, and nothing on the
+	// host should honor a setuid bit or device node in it. The guest sees the
+	// tree over virtio-fs under its own mount flags, so this changes nothing
+	// for it.
 	opts := "lowerdir=" + bundleRootfs + ",upperdir=" + upper + ",workdir=" + work +
 		",metacopy=off,index=off,volatile"
-	if err := unix.Mount("overlay", dst, "overlay", 0, opts); err != nil {
+	if err := unix.Mount("overlay", dst, "overlay", unix.MS_NOSUID|unix.MS_NODEV, opts); err != nil {
 		return fmt.Errorf("mounting merged rootfs overlay at %q: %w", dst, err)
 	}
 	// Ensure the standard OCI mountpoints exist even for minimal images: the container
@@ -361,6 +365,20 @@ func BindIntoShare(ctx context.Context, src, id, rel string) error {
 	// beneath it; for the plain-directory sources it is the same operation.
 	if err := unix.Mount(src, dst, "", unix.MS_BIND|unix.MS_REC, ""); err != nil {
 		return fmt.Errorf("bind-mounting %q into the shared tree at %q: %w", src, dst, err)
+	}
+	return setNosuidNodev(dst)
+}
+
+// setNosuidNodev adds nosuid and nodev to the mount at dst and every mount
+// beneath it, keeping their other flags (a read-only image volume stays
+// read-only). Shared trees hold workload-written and snapshot-restored files
+// that nothing on the host should honor a setuid bit or device node in; the
+// guest sees them over virtio-fs under its own mount flags, so this changes
+// nothing for it.
+func setNosuidNodev(dst string) error {
+	attr := &unix.MountAttr{Attr_set: unix.MOUNT_ATTR_NOSUID | unix.MOUNT_ATTR_NODEV}
+	if err := unix.MountSetattr(unix.AT_FDCWD, dst, unix.AT_RECURSIVE, attr); err != nil {
+		return fmt.Errorf("setting nosuid,nodev on %q: %w", dst, err)
 	}
 	return nil
 }

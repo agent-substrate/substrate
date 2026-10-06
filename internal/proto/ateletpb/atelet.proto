@@ -30,8 +30,8 @@ service AteomSupport {
   // the actor filesystem, when/if we support those).
   rpc MintActorCertificate(MintActorCertificateRequest) returns (MintActorCertificateResponse) {}
 
-  // Report capacity and supply for this worker back to atelet.
-  rpc SetWorkerCapacity(SetWorkerCapacityRequest) returns (SetWorkerCapacityResponse) {}
+  // Register capacity and hardware identity for this worker with atelet.
+  rpc RegisterWorker(RegisterWorkerRequest) returns (RegisterWorkerResponse) {}
 
   // RequestActorSuspend asks that the actor this worker hosts be suspended,
   // for atelet to forward to the control plane's WorkerService, which this
@@ -45,12 +45,31 @@ service AteomSupport {
   rpc RequestActorSuspend(RequestActorSuspendRequest) returns (RequestActorSuspendResponse) {}
 }
 
-message SetWorkerCapacityRequest {
+message RegisterWorkerRequest {
   // What the worker can supply. atelet converts it to the control plane's
   // WorkerResources when forwarding.
   //
   // +k8s:required
   WorkerResources capacity = 1;
+
+  // Hardware identity of the worker. atelet converts it to the control
+  // plane's HardwareIdentity when forwarding.
+  //
+  // +k8s:required
+  HardwareIdentity hardware = 2;
+}
+
+// HardwareIdentity identifies the hardware properties of a worker. It mirrors
+// the control plane's HardwareIdentity and is validated by the same rules.
+message HardwareIdentity {
+  // Key-value pairs describing hardware properties (currently "architecture";
+  // TODO: add "cpu_vendor", "cpu_model", etc.).
+  //
+  // +k8s:optional
+  // +k8s:maxProperties=32
+  // +k8s:eachKey=+k8s:maxLength=128
+  // +k8s:eachVal=+k8s:maxLength=256
+  map<string, string> attributes = 1;
 }
 
 // WorkerResources is what a worker can supply. It mirrors the control plane's
@@ -96,7 +115,7 @@ message Limits {
   string quantity = 2;
 }
 
-message SetWorkerCapacityResponse {
+message RegisterWorkerResponse {
 }
 
 message RequestActorSuspendRequest {
@@ -277,6 +296,10 @@ message ExternalVolumeSource {
   string storage_volume_id = 1;
   string volume_type = 2;
   map<string, string> volume_context = 3;
+
+  // publish_context is the driver's attachment metadata for this node, which
+  // the node plugin needs to complete the mount.
+  map<string, string> publish_context = 4;
 }
 
 message ImageVolumeSource {

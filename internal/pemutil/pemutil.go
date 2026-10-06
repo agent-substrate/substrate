@@ -19,7 +19,7 @@ package pemutil
 import (
 	"encoding/pem"
 	"fmt"
-	"math/rand/v2"
+	"math/rand"
 	"sort"
 )
 
@@ -31,8 +31,10 @@ import (
 //
 // The anchors are deliberately shuffled, as in kubelet's clustertrustbundle
 // manager: order carries no meaning, and a scrambled order keeps consumers
-// from growing a dependence on it.
-func SanitizeCertificateBundle(in []byte) ([]byte, error) {
+// from growing a dependence on it. The shuffle is driven by seed, so the same
+// certificates and seed always yield the same output, and callers can detect
+// a change by comparing outputs.
+func SanitizeCertificateBundle(in []byte, seed int64) ([]byte, error) {
 	seen := map[string]bool{}
 	var ders []string
 	rest := in
@@ -58,7 +60,7 @@ func SanitizeCertificateBundle(in []byte) ([]byte, error) {
 
 	// Sort first so the shuffle's input is independent of source order.
 	sort.Strings(ders)
-	rand.Shuffle(len(ders), func(i, j int) {
+	rand.New(rand.NewSource(seed)).Shuffle(len(ders), func(i, j int) {
 		ders[i], ders[j] = ders[j], ders[i]
 	})
 

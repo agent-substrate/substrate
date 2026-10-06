@@ -33,6 +33,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/credentialprovider"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/sparsefile"
+	"github.com/agent-substrate/substrate/cmd/atelet/internal/trustbundle"
 	"github.com/agent-substrate/substrate/internal/actorlog"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
@@ -41,7 +42,6 @@ import (
 	"github.com/agent-substrate/substrate/internal/atelet"
 	"github.com/agent-substrate/substrate/internal/clustertrustbundle"
 	"github.com/agent-substrate/substrate/internal/credbundle"
-	"github.com/agent-substrate/substrate/internal/hardware"
 	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/ocispec"
@@ -285,13 +285,22 @@ func main() {
 	csiDriverConfigGetter := &directCSIDriverConfigGetter{client: ateClient}
 
 	trustBundles, err := clustertrustbundle.NewClient(k8sClient, func(o *metav1.ListOptions) {
-		o.FieldSelector = fields.OneTermEqualSelector("metadata.name", supportedTrustBundles[EgressTrustBundleName]).String()
+		o.FieldSelector = fields.OneTermEqualSelector("metadata.name", trustbundle.EgressCTB).String()
 	})
 	if err != nil {
 		slog.ErrorContext(ctx, "Error discovering ClusterTrustBundle API", slog.Any("err", err))
 		os.Exit(1)
 	}
-	systemInfoVolumes := newSystemInfoVolumeRefresher(trustBundles.GetCached, trustBundles.Informer())
+
+	// Read system roots from the known location in the distroless-static base image.
+	systemRootsPEM, err := os.ReadFile("/etc/ssl/certs/ca-certificates.crt")
+	if err != nil {
+		serverboot.Fatal(ctx, "Error reading system root certificates", err)
+	}
+
+	trustBundleSource := trustbundle.NewSource(trustBundles.GetCached, systemRootsPEM)
+
+	systemInfoVolumes := newSystemInfoVolumeRefresher(trustBundleSource, trustBundles.Informer())
 
 	stopCh := make(chan struct{})
 	defer close(stopCh)
@@ -380,8 +389,7 @@ func main() {
 	ateomFacingSrv := grpc.NewServer(grpc.Creds(credentials.NewTLS(ateomFacingTLS)))
 
 	ateletpb.RegisterAteomSupportServer(ateomFacingSrv, &ateomSupportServer{
-		workers:  ateapipb.NewWorkerServiceClient(ateapiConn),
-		hardware: hardware.ProbeHost(),
+		workers: ateapipb.NewWorkerServiceClient(ateapiConn),
 	})
 	go func() {
 		if err := ateomFacingSrv.Serve(ateomFacingLis); err != nil {

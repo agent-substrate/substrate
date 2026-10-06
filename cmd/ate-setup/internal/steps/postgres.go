@@ -15,17 +15,71 @@
 package steps
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/yaml"
 
+	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kube"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
+	"github.com/agent-substrate/substrate/pkg/postgressetup"
 )
+
+// The serving certificate is signed with Ed25519, which pgx cannot hash for SCRAM
+// channel binding. PostgreSQL rejects pgx's fallback as a downgrade, so
+// disable channel binding while retaining TLS and client-certificate checks.
+const postgresTLSParams = "sslmode=verify-full&sslrootcert=/run/servicedns.podcert.ate.dev/trust-bundle.pem&sslcert=/run/podidentity.podcert.ate.dev/credential-bundle.pem&sslkey=/run/podidentity.podcert.ate.dev/credential-bundle.pem&channel_binding=disable"
+
+func bundledPostgresDSN(user, password string) string {
+	return fmt.Sprintf("postgresql://%s:%s@postgres.ate-system.svc:5432/atepg?%s", user, password, postgresTLSParams)
+}
+
+func (e *Env) postgresReadWriteConnectionStrings() (string, string, error) {
+	if e.Cfg.PostgresReadWriteRole != config.DefaultPostgresReadWriteRole ||
+		e.Cfg.PostgresOwnerRole != config.DefaultPostgresOwnerRole ||
+		e.Cfg.PostgresSchemaName() != config.DefaultPostgresSchema {
+		return "", "", fmt.Errorf("bundled PostgreSQL requires roles %q and %q and schema %q",
+			config.DefaultPostgresReadWriteRole, config.DefaultPostgresOwnerRole, config.DefaultPostgresSchema)
+	}
+	readWriteDSN := bundledPostgresDSN(postgressetup.ReadWriteUser, postgressetup.ReadWritePassword)
+	if e.Cfg.Size10() {
+		readWriteDSN += config.Size10PostgresPoolParams
+	}
+	return readWriteDSN, bundledPostgresDSN(postgressetup.OwnerUser, postgressetup.OwnerPassword), nil
+}
+
+// setupBundledPostgres creates the fixed development identities before ateapi
+// starts. Administrator credentials stay inside the PostgreSQL pod.
+func (e *Env) setupBundledPostgres(ctx context.Context) error {
+	log.Step("setup_bundled_postgres")
+	var stdout, stderr bytes.Buffer
+	command := []string{
+		"psql", "--no-psqlrc", "--set=ON_ERROR_STOP=1", "--username", "postgres", "--dbname", "atepg",
+	}
+	command = append(command, postgressetup.DefaultConfig().PSQLArgs()...)
+	err := e.Kube.Exec(ctx, e.Namespace(), "postgres-0", "postgres", command,
+		strings.NewReader(postgressetup.Script()), &stdout, &stderr)
+	if err != nil {
+		if detail := strings.TrimSpace(stderr.String()); detail != "" {
+			return fmt.Errorf("setting up bundled PostgreSQL identities: %w: %s", err, detail)
+		}
+		return fmt.Errorf("setting up bundled PostgreSQL identities: %w", err)
+	}
+	return nil
+}
+
+func (e *Env) waitAndSetupBundledPostgres(ctx context.Context) error {
+	if err := e.Kube.RolloutStatus(ctx, kube.KindStatefulSet, e.Namespace(), "postgres", e.Cfg.RolloutTimeout); err != nil {
+		return err
+	}
+	return e.setupBundledPostgres(ctx)
+}
 
 // The size10 PostgreSQL container. Deliberately no CPU limit: under
 // --cordon-control-plane the dedicated ate-postgres pool keeps the pod alone
@@ -76,14 +130,17 @@ func (e *Env) planPostgres(ctx context.Context) (postgresPlan, error) {
 	return postgresPlan{bundled: true}, nil
 }
 
-// applyBundledPostgres applies the bundled PostgreSQL StatefulSet, or logs that
-// it was skipped in favor of an external database.
-func (e *Env) applyBundledPostgres(ctx context.Context, plan postgresPlan) error {
+// deployPostgres applies, waits for, and sets up bundled PostgreSQL, or logs
+// that it was skipped in favor of an external database.
+func (e *Env) deployPostgres(ctx context.Context, plan postgresPlan) error {
 	if !plan.bundled {
 		log.Stepf("Skipping bundled PostgreSQL: external database configured (%s)", plan.external)
 		return nil
 	}
-	return e.applyPostgres(ctx)
+	if err := e.applyPostgres(ctx); err != nil {
+		return err
+	}
+	return e.waitAndSetupBundledPostgres(ctx)
 }
 
 // postgresManifestPath is the bundled PostgreSQL manifest for the environment:
@@ -243,8 +300,5 @@ func (e *Env) DeployPostgres(ctx context.Context) error {
 		return err
 	}
 
-	if err := e.applyPostgres(ctx); err != nil {
-		return err
-	}
-	return e.Kube.RolloutStatus(ctx, kube.KindStatefulSet, e.Namespace(), "postgres", e.Cfg.RolloutTimeout)
+	return e.deployPostgres(ctx, postgresPlan{bundled: true})
 }

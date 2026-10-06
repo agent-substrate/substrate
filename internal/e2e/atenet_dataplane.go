@@ -61,7 +61,7 @@ func (envoyAtenetDataplane) NewParkingObserver(ctx context.Context) (ParkingObse
 }
 
 func (envoyAtenetDataplane) IsRetryableParkingBudgetExhaustion(status int, body string) bool {
-	return status == http.StatusServiceUnavailable && strings.Contains(body, "no free workers available")
+	return status == http.StatusServiceUnavailable && strings.Contains(body, "no worker has room for the actor")
 }
 
 func (envoyAtenetDataplane) ParkingBudgetStatus() int { return http.StatusServiceUnavailable }

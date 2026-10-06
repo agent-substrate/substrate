@@ -22,7 +22,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/agent-substrate/substrate/internal/volume"
 	"github.com/container-storage-interface/spec/lib/go/csi"
+	"github.com/google/go-cmp/cmp"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -221,13 +223,16 @@ func TestPlugin_CreateVolume(t *testing.T) {
 	plugin := NewPlugin(client)
 
 	ctx := context.Background()
-	volID, _, err := plugin.CreateVolume(ctx, "test-vol", "1Gi", "standard", nil)
+	resp, err := plugin.CreateVolume(ctx, volume.CreateVolumeRequest{
+		Name:     "test-vol",
+		Capacity: "1Gi",
+	})
 	if err != nil {
 		t.Fatalf("CreateVolume failed: %v", err)
 	}
 
-	if volID != "test-vol" {
-		t.Errorf("expected volume ID %q, got %q", "test-vol", volID)
+	if resp.VolumeID != "test-vol" {
+		t.Errorf("expected volume ID %q, got %q", "test-vol", resp.VolumeID)
 	}
 }
 
@@ -266,18 +271,38 @@ func TestPlugin_AttachVolume(t *testing.T) {
 
 	ctx := context.Background()
 	plugin.InitControllerCapabilities(ctx)
-	err = plugin.AttachVolume(ctx, "test-vol", "node-1")
+	resp, err := plugin.AttachVolume(ctx, volume.AttachVolumeRequest{VolumeID: "test-vol", Node: "node-1"})
 	if err != nil {
 		t.Fatalf("AttachVolume failed: %v", err)
+	}
+	if len(resp.PublishContext) != 0 {
+		t.Errorf("expected no publish context from a driver that returns none, got %v", resp.PublishContext)
+	}
+
+	driver.controllerPublishVolumeFunc = func(ctx context.Context, req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
+		return &csi.ControllerPublishVolumeResponse{
+			PublishContext: map[string]string{"devicePath": "/dev/xvdba"},
+		}, nil
+	}
+	resp, err = plugin.AttachVolume(ctx, volume.AttachVolumeRequest{VolumeID: "test-vol", Node: "node-1"})
+	if err != nil {
+		t.Fatalf("AttachVolume failed: %v", err)
+	}
+	wantPublishCtx := map[string]string{"devicePath": "/dev/xvdba"}
+	if diff := cmp.Diff(wantPublishCtx, resp.PublishContext); diff != "" {
+		t.Errorf("publish context mismatch (-want +got):\n%s", diff)
 	}
 
 	// Test Unimplemented warning bypass
 	driver.controllerPublishVolumeFunc = func(ctx context.Context, req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
 		return nil, status.Error(codes.Unimplemented, "unimplemented")
 	}
-	err = plugin.AttachVolume(ctx, "test-vol", "node-1")
+	resp, err = plugin.AttachVolume(ctx, volume.AttachVolumeRequest{VolumeID: "test-vol", Node: "node-1"})
 	if err != nil {
 		t.Errorf("AttachVolume should have ignored Unimplemented error, got: %v", err)
+	}
+	if len(resp.PublishContext) != 0 {
+		t.Errorf("expected no publish context from an unimplemented attach, got %v", resp.PublishContext)
 	}
 }
 
@@ -334,7 +359,11 @@ func TestPlugin_MountVolume(t *testing.T) {
 
 	ctx := context.Background()
 	plugin.InitNodeCapabilities(ctx)
-	err = plugin.MountVolume(ctx, "test-vol", targetPath, nil)
+	err = plugin.MountVolume(ctx, volume.MountVolumeRequest{
+		VolumeID:       "test-vol",
+		TargetPath:     targetPath,
+		PublishContext: map[string]string{"devicePath": "/dev/xvdba"},
+	})
 	if err != nil {
 		t.Fatalf("MountVolume failed: %v", err)
 	}
@@ -353,7 +382,7 @@ func TestPlugin_MountVolume(t *testing.T) {
 	os.RemoveAll(tmpDir)
 	os.MkdirAll(plugin.stagingDirPrefix, 0750)
 
-	err = plugin.MountVolume(ctx, "test-vol-2", targetPath, nil)
+	err = plugin.MountVolume(ctx, volume.MountVolumeRequest{VolumeID: "test-vol-2", TargetPath: targetPath})
 	if err != nil {
 		t.Errorf("MountVolume should have succeeded when NodeStageVolume is unimplemented, got: %v", err)
 	}
@@ -495,7 +524,7 @@ func TestPlugin_Capabilities_SkipAttachDetachWhenUnsupported(t *testing.T) {
 	}
 
 	// AttachVolume should skip calling ControllerPublishVolume entirely
-	if err := plugin.AttachVolume(ctx, "test-vol", "node-1"); err != nil {
+	if _, err := plugin.AttachVolume(ctx, volume.AttachVolumeRequest{VolumeID: "test-vol", Node: "node-1"}); err != nil {
 		t.Errorf("AttachVolume failed: %v", err)
 	}
 	if publishCalled != 0 {
@@ -562,7 +591,7 @@ func TestPlugin_Capabilities_SkipStageUnstageWhenUnsupported(t *testing.T) {
 	}
 
 	// MountVolume should skip NodeStageVolume entirely
-	if err := plugin.MountVolume(ctx, "test-vol", targetPath, nil); err != nil {
+	if err := plugin.MountVolume(ctx, volume.MountVolumeRequest{VolumeID: "test-vol", TargetPath: targetPath}); err != nil {
 		t.Errorf("MountVolume failed: %v", err)
 	}
 	if stageCalled != 0 {
@@ -653,7 +682,7 @@ func TestPlugin_Capabilities_DisableAttachDetachAfterUnimplemented(t *testing.T)
 	plugin.InitControllerCapabilities(ctx)
 
 	for range 2 {
-		if err := plugin.AttachVolume(ctx, "test-vol", "node-1"); err != nil {
+		if _, err := plugin.AttachVolume(ctx, volume.AttachVolumeRequest{VolumeID: "test-vol", Node: "node-1"}); err != nil {
 			t.Errorf("AttachVolume failed: %v", err)
 		}
 	}
@@ -707,7 +736,7 @@ func TestPlugin_Capabilities_DisableStageUnstageAfterUnimplemented(t *testing.T)
 	plugin.InitNodeCapabilities(ctx)
 
 	for range 2 {
-		if err := plugin.MountVolume(ctx, "test-vol", targetPath, nil); err != nil {
+		if err := plugin.MountVolume(ctx, volume.MountVolumeRequest{VolumeID: "test-vol", TargetPath: targetPath}); err != nil {
 			t.Errorf("MountVolume failed: %v", err)
 		}
 	}

@@ -210,12 +210,14 @@ func connectMetadata(dest egresspolicy.Destination, rules []egresspolicy.SNIRule
 	}}
 }
 
-// metadataAnswer is a one-entry answer in the egress metadata namespace.
-func metadataAnswer(key, value string) *structpb.Struct {
+// metadataAnswer is an answer in the egress metadata namespace.
+func metadataAnswer(fields map[string]string) *structpb.Struct {
+	values := make(map[string]*structpb.Value, len(fields))
+	for key, value := range fields {
+		values[key] = structpb.NewStringValue(value)
+	}
 	return &structpb.Struct{Fields: map[string]*structpb.Value{
-		extproc.EgressMetadataNamespace: structpb.NewStructValue(&structpb.Struct{Fields: map[string]*structpb.Value{
-			key: structpb.NewStringValue(value),
-		}}),
+		extproc.EgressMetadataNamespace: structpb.NewStructValue(&structpb.Struct{Fields: values}),
 	}}
 }
 

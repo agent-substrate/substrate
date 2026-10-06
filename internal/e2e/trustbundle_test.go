@@ -90,7 +90,7 @@ func TestSameCertificates(t *testing.T) {
 	b := certificatePEM(generateCA(t, "b").RootCertificate)
 	withHeader := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Headers: map[string]string{"k": "v"}, Bytes: ca.RootCertificate.Raw}))
 	key := string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: []byte("not a key")}))
-	sanitized, err := pemutil.SanitizeCertificateBundle([]byte(a + b))
+	sanitized, err := pemutil.SanitizeCertificateBundle([]byte(a+b), 1)
 	if err != nil {
 		t.Fatal(err)
 	}
