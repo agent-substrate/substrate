@@ -104,6 +104,8 @@ func (s *AteomService) GetWorkloadStats(ctx context.Context, req *ateompb.GetWor
 	if hosted == nil {
 		return nil, apierror.NotFound("ateom is not executing actor %q", req.GetActorUid())
 	}
+	// The raw reading is dropped: the dead-sandbox check runs in the usage
+	// sweep, which reads every hosted actor.
 	sample, _, err := s.measure(ctx, hosted)
 	if err != nil {
 		// The requested actor is the active one but its cgroup is not there.
@@ -165,7 +167,8 @@ func (s *AteomService) sweepUsage(ctx context.Context) {
 		sample, raw, err := s.measure(ctx, h)
 		if err != nil {
 			if !errors.Is(err, fs.ErrNotExist) {
-				slog.WarnContext(ctx, "Failed to read sandbox cgroup", slog.String("actorUID", h.attribution.UID), slog.Any("err", err))
+				attrs := append(ateattr.ActorLogAttrs(h.attribution), slog.Any("err", err))
+				slog.LogAttrs(ctx, slog.LevelWarn, "Failed to read sandbox cgroup", attrs...)
 			}
 			sample = h.usage.WithEpoch(pendingSample(&h.attribution))
 		}
@@ -176,7 +179,7 @@ func (s *AteomService) sweepUsage(ctx context.Context) {
 		if s.lookupActor(h.attribution.UID) != h {
 			continue
 		}
-		if err == nil && raw.Empty {
+		if raw.Empty { // a failed read returns a zero Sample
 			s.warnDeadSandbox(ctx, h, raw)
 		}
 		h.usage.Periodic(sample, func() { s.usage.Emit(ctx, ateattr.StatsKindPeriodic, sample) })

@@ -81,6 +81,71 @@ func TestActorLocksBusy(t *testing.T) {
 	}
 }
 
+// Busy counts waiters as well as the holder. A waiter that gives up, or that
+// takes the lock over when the holder releases it, never leaves the actor
+// looking idle while a lifecycle RPC still holds the lock.
+func TestActorLocksBusyWaiter(t *testing.T) {
+	// startWaiter blocks a second Lock behind the holder and returns once it
+	// has registered, which is when the entry holds two references.
+	startWaiter := func(t *testing.T, locks *Locks, ctx context.Context) <-chan bool {
+		t.Helper()
+		got := make(chan bool, 1)
+		go func() { got <- locks.Lock(ctx, "actor-a") }()
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			locks.mu.Lock()
+			refs := locks.held["actor-a"].refs
+			locks.mu.Unlock()
+			if refs == 2 {
+				return got
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("the second Lock never started waiting")
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+
+	t.Run("waiter gives up", func(t *testing.T) {
+		locks := New()
+		if !locks.Lock(context.Background(), "actor-a") {
+			t.Fatal("could not take actor-a's lock")
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		got := startWaiter(t, locks, ctx)
+		cancel()
+		if <-got {
+			t.Fatal("the cancelled waiter took the lock")
+		}
+		if !locks.Busy("actor-a") {
+			t.Error("Busy(actor-a) = false after the waiter gave up, while the holder still holds it")
+		}
+		locks.Unlock("actor-a")
+		if locks.Busy("actor-a") {
+			t.Error("Busy(actor-a) = true after the holder released it")
+		}
+	})
+
+	t.Run("waiter takes over", func(t *testing.T) {
+		locks := New()
+		if !locks.Lock(context.Background(), "actor-a") {
+			t.Fatal("could not take actor-a's lock")
+		}
+		got := startWaiter(t, locks, context.Background())
+		locks.Unlock("actor-a")
+		if !<-got {
+			t.Fatal("the waiter did not take the lock")
+		}
+		if !locks.Busy("actor-a") {
+			t.Error("Busy(actor-a) = false while the former waiter holds it")
+		}
+		locks.Unlock("actor-a")
+		if locks.Busy("actor-a") {
+			t.Error("Busy(actor-a) = true after the last holder released it")
+		}
+	})
+}
+
 // The map must not grow by one entry per actor the worker has ever hosted.
 func TestActorLocksForgetIdleActors(t *testing.T) {
 	locks := New()
