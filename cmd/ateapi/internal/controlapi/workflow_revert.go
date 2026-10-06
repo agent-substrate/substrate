@@ -179,7 +179,7 @@ func (w *ActorWorkflow) ensureWorkerDiscarded(ctx context.Context, actorRef reso
 			return err
 		}
 		if hosted {
-			if err := w.ensureAteletTerminated(ctx, actorRef, actor, actorTemplate, ateattr.OperationRevert); err != nil {
+			if err := w.ensureRuntimeTerminated(ctx, actorRef, actor, actorTemplate, ateattr.OperationRevert); err != nil {
 				// A failed terminate leaves the actor REVERTING with its
 				// assignment, so the next revert terminates it again. If the
 				// worker's pod goes away, worker deletion crashes the actor, and

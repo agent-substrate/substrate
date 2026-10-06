@@ -107,7 +107,7 @@ type testContext struct {
 // setupTest sets up a fully isolated test environment.
 func setupTest(t *testing.T, ns string) *testContext {
 	t.Helper()
-	return setupTestWithVolumePlugins(t, ns, nil)
+	return setupTestWithRuntimeAndVolumePlugins(t, ns, nil, nil)
 }
 
 // setupTestWithVolumePlugins is setupTest with the default mock volume plugin
@@ -115,6 +115,16 @@ func setupTest(t *testing.T, ns string) *testContext {
 // plugin pass it here rather than swapping it into the running RPCService, so each
 // test owns its own plugin set.
 func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volume.VolumePluginControlPlane) *testContext {
+	t.Helper()
+	return setupTestWithRuntimeAndVolumePlugins(t, ns, nil, plugins)
+}
+
+func setupTestWithHostRuntime(t *testing.T, ns string, hostRuntime controlapi.HostRuntime) *testContext {
+	t.Helper()
+	return setupTestWithRuntimeAndVolumePlugins(t, ns, hostRuntime, nil)
+}
+
+func setupTestWithRuntimeAndVolumePlugins(t *testing.T, ns string, hostRuntime controlapi.HostRuntime, plugins map[string]volume.VolumePluginControlPlane) *testContext {
 	t.Helper()
 	// 1. Start an isolated PostgreSQL-backed store.
 	persistence, cleanupStore := storetest.SetupTestStore(t)
@@ -219,6 +229,7 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 		csiDriverConfigLister,
 		scLister,
 		dialer,
+		hostRuntime,
 		instruments,
 		"",
 		volPlugins,

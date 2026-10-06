@@ -73,6 +73,17 @@ func TestApply(t *testing.T) {
 			}},
 		}},
 	}, {
+		name: "Mac Actor wakeup probe gets timeout and path",
+		in: &ateapipb.ActorTemplate{MacVm: &ateapipb.MacVMWorkload{
+			WakeupProbe: &ateapipb.ContainerWakeupProbe{HttpGet: &ateapipb.HTTPGetAction{Port: 8080}},
+		}},
+		want: &ateapipb.ActorTemplate{MacVm: &ateapipb.MacVMWorkload{
+			WakeupProbe: &ateapipb.ContainerWakeupProbe{
+				HttpGet:        &ateapipb.HTTPGetAction{Port: 8080, Path: "/"},
+				TimeoutSeconds: 30,
+			},
+		}},
+	}, {
 		name: "wakeup probe without http_get gets only the timeout",
 		in: &ateapipb.ActorTemplate{Containers: []*ateapipb.Container{
 			{Name: "main", WakeupProbe: &ateapipb.ContainerWakeupProbe{}},

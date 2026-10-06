@@ -66,3 +66,16 @@ func TestActorResourceLimits(t *testing.T) {
 		})
 	}
 }
+
+func TestSchedulingConstraintsAllowsMacActor(t *testing.T) {
+	got, err := schedulingConstraints(&ateapipb.Actor{}, &ateapipb.ActorTemplate{
+		MacVm:         &ateapipb.MacVMWorkload{Image: "example.com/macos/xcode@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
+		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_MACOS},
+	})
+	if err != nil {
+		t.Fatalf("schedulingConstraints() error: %v", err)
+	}
+	if got.SandboxClass != "macos-vz" {
+		t.Fatalf("SandboxClass = %q, want macos-vz", got.SandboxClass)
+	}
+}

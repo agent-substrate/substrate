@@ -28,6 +28,9 @@ const (
 	// SandboxClassMicroVM is the micro-VM runtime (cmd/ateom-microvm); needs
 	// /dev/kvm and vhost devices.
 	SandboxClassMicroVM SandboxClass = "microvm"
+	// SandboxClassMacOS is the native macOS VM runtime hosted through Apple's
+	// Virtualization.framework by an external Mac host provider.
+	SandboxClassMacOS SandboxClass = "macos-vz"
 )
 
 // AssetFile is one content-addressed file that atelet fetches for a sandbox
@@ -58,7 +61,7 @@ type SandboxConfigSpec struct {
 	// sandbox_config.sandbox_class.
 	//
 	// +required
-	// +kubebuilder:validation:Enum=gvisor;microvm
+	// +kubebuilder:validation:Enum=gvisor;microvm;macos-vz
 	// +kubebuilder:default=gvisor
 	SandboxClass SandboxClass `json:"sandboxClass"`
 

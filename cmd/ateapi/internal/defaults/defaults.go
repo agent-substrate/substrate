@@ -55,6 +55,9 @@ func applyActorTemplateDefaults(t *ateapipb.ActorTemplate) {
 	for _, c := range t.Containers {
 		applyContainerDefaults(c)
 	}
+	if t.MacVm != nil {
+		applyContainerWakeupProbeDefaults(t.MacVm.WakeupProbe)
+	}
 }
 
 func applySnapshotConfigDefaults(sc *ateapipb.SnapshotConfig) {
@@ -70,18 +73,21 @@ func applySnapshotConfigDefaults(sc *ateapipb.SnapshotConfig) {
 }
 
 func applyContainerDefaults(c *ateapipb.Container) {
-	const (
-		defaultWakeupProbeTimeoutSeconds int32 = 30
-		defaultWakeupProbePath                 = "/"
-	)
 	if c == nil || c.WakeupProbe == nil {
 		return
 	}
-	if c.WakeupProbe.TimeoutSeconds == 0 {
-		c.WakeupProbe.TimeoutSeconds = defaultWakeupProbeTimeoutSeconds
+	applyContainerWakeupProbeDefaults(c.WakeupProbe)
+}
+
+func applyContainerWakeupProbeDefaults(p *ateapipb.ContainerWakeupProbe) {
+	if p == nil {
+		return
 	}
-	if hg := c.WakeupProbe.HttpGet; hg != nil && hg.Path == "" {
-		hg.Path = defaultWakeupProbePath
+	if p.TimeoutSeconds == 0 {
+		p.TimeoutSeconds = 30
+	}
+	if hg := p.HttpGet; hg != nil && hg.Path == "" {
+		hg.Path = "/"
 	}
 }
 

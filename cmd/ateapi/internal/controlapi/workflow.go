@@ -104,6 +104,7 @@ type ActorWorkflow struct {
 	workerCache          *workercache.Cache
 	scheduler            scheduling.Scheduler
 	dialer               *AteletDialer
+	hostRuntime          HostRuntime
 	sandboxConfigLister  listersv1alpha1.SandboxConfigLister
 	storageClassLister   storagev1listers.StorageClassLister
 	instruments          *Instruments
@@ -121,6 +122,7 @@ func NewActorWorkflow(
 	store actorWorkflowStore,
 	workerCache *workercache.Cache,
 	dialer *AteletDialer,
+	hostRuntime HostRuntime,
 	sandboxConfigLister listersv1alpha1.SandboxConfigLister,
 	storageClassLister storagev1listers.StorageClassLister,
 	instruments *Instruments,
@@ -133,6 +135,7 @@ func NewActorWorkflow(
 		workerCache:          workerCache,
 		scheduler:            scheduling.New(workerCache),
 		dialer:               dialer,
+		hostRuntime:          hostRuntime,
 		sandboxConfigLister:  sandboxConfigLister,
 		storageClassLister:   storageClassLister,
 		instruments:          instruments,

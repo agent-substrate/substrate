@@ -65,6 +65,7 @@ func TestSandboxClassString(t *testing.T) {
 	}{
 		{ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR, "gvisor"},
 		{ateapipb.SandboxClass_SANDBOX_CLASS_MICROVM, "microvm"},
+		{ateapipb.SandboxClass_SANDBOX_CLASS_MACOS, "macos-vz"},
 		{ateapipb.SandboxClass_SANDBOX_CLASS_UNSPECIFIED, ""},
 	}
 	for _, tt := range tests {

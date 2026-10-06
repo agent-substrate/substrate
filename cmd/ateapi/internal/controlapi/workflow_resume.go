@@ -29,6 +29,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/agent-substrate/substrate/pkg/proto/hostruntimepb"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -119,7 +120,7 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 	if err = w.ensureVolumesAttached(leaseCtx, actor, worker, actorTemplate); err != nil {
 		return nil, false, err
 	}
-	if tele, err = w.ensureAteletRestored(leaseCtx, actorRef, actor, actorTemplate, src); err != nil {
+	if tele, err = w.ensureRuntimeRestored(leaseCtx, actorRef, actor, actorTemplate, src); err != nil {
 		return nil, false, err
 	}
 	var running *ateapipb.Actor
@@ -521,6 +522,13 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 var errWorkerFilledUp = errors.New("picked worker no longer has room")
 
 func workerAssignmentFrom(w *ateapipb.Worker) *ateapipb.WorkerAssignment {
+	if external := w.GetExternalHost(); external != nil {
+		return &ateapipb.WorkerAssignment{
+			Worker:          &ateapipb.ObjectRef{Name: w.GetMetadata().GetName()},
+			WorkerEpoch:     w.GetEpoch(),
+			RuntimeEndpoint: external.GetRuntimeEndpoint(),
+		}
+	}
 	return &ateapipb.WorkerAssignment{
 		Worker:          &ateapipb.ObjectRef{Name: w.GetMetadata().GetName()},
 		WorkerNamespace: w.GetWorkerNamespace(),
@@ -571,6 +579,72 @@ func schedulingConstraints(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate) 
 	return c, nil
 }
 
+func (w *ActorWorkflow) ensureRuntimeRestored(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate, src resumeSnapshotSource) (restoreTelemetry, error) {
+	if actorTemplate.GetMacVm() != nil {
+		return w.ensureMacActivated(ctx, actorRef, actor, actorTemplate, src)
+	}
+	return w.ensureAteletRestored(ctx, actorRef, actor, actorTemplate, src)
+}
+
+func (w *ActorWorkflow) ensureMacActivated(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate, src resumeSnapshotSource) (tele restoreTelemetry, err error) {
+	ctx, done := stepSpan(ctx, "CallHostRuntimeActivate")
+	defer func() { err = done(err) }()
+	tele.SnapshotKind = ateattr.SnapshotKindBoot
+
+	if actor.GetStatus().GetLocalSnapshot() != nil || !src.SnapshotURI.IsZero() {
+		return tele, apierror.Unimplemented("Mac Actor snapshot restore is not implemented")
+	}
+	if w.hostRuntime == nil {
+		return tele, apierror.Unimplemented("Mac Actor execution requires a configured host runtime")
+	}
+	assignment := actor.GetStatus().GetWorkerAssignment()
+	if assignment.GetRuntimeEndpoint() == "" {
+		return tele, apierror.Internal("Mac Actor assignment has no runtime endpoint")
+	}
+
+	cpuMilli, memoryBytes, err := actorResourceLimits(actorTemplate)
+	if err != nil {
+		return tele, err
+	}
+	macVM := actorTemplate.GetMacVm()
+	req := &hostruntimepb.ActivateRequest{
+		ActorUid:    actor.GetMetadata().GetUid(),
+		Image:       macVM.GetImage(),
+		CpuMilli:    cpuMilli,
+		MemoryBytes: memoryBytes,
+	}
+	if probe := macVM.GetWakeupProbe(); probe != nil {
+		req.ReadinessProbe = &hostruntimepb.HTTPReadinessProbe{
+			Port:           probe.GetHttpGet().GetPort(),
+			Path:           probe.GetHttpGet().GetPath(),
+			TimeoutSeconds: probe.GetTimeoutSeconds(),
+		}
+	}
+	resp, err := w.hostRuntime.Activate(ctx, assignment.GetRuntimeEndpoint(), req)
+	if err != nil {
+		return tele, fmt.Errorf("while activating Mac Actor: %w", err)
+	}
+	endpoint := resp.GetEndpoint()
+	if endpoint.GetHost() == "" || endpoint.GetPort() < 1 || endpoint.GetPort() > 65535 {
+		return tele, apierror.Internal("host runtime returned an invalid Actor endpoint")
+	}
+
+	_, err = w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
+		toUpdate.Status.WorkerAssignment.ActorEndpoint = &ateapipb.ActorEndpoint{
+			Host: endpoint.GetHost(),
+			Port: endpoint.GetPort(),
+		}
+		return nil
+	})
+	if errors.Is(err, store.ErrVersionConflict) {
+		return tele, apierror.Aborted("concurrent update conflict, please retry")
+	}
+	if err != nil {
+		return tele, fmt.Errorf("while recording Mac Actor endpoint: %w", err)
+	}
+	return tele, nil
+}
+
 // ensureVolumesAttached attaches the actor's mounted external volumes to the
 // assigned worker's node. Attachment is idempotent, so a re-entered workflow
 // safely runs it again.
@@ -580,12 +654,11 @@ func (w *ActorWorkflow) ensureVolumesAttached(ctx context.Context, actor *ateapi
 	defer func() { err = done(err) }()
 
 	node := worker.GetNodeName()
-	if node == "" {
-		return fmt.Errorf("assigned worker has no node name")
-	}
-
 	ref := &ateapipb.ObjectRef{Atespace: actor.GetMetadata().GetAtespace(), Name: actor.GetMetadata().GetName()}
 	for _, vol := range getMountedActorVolumes(ctx, ref, actor.GetStatus().GetActorVolumes(), actorTemplate) {
+		if node == "" {
+			return fmt.Errorf("assigned worker has no node name")
+		}
 		slog.InfoContext(ctx, "Attaching volume to node", slog.String("volume_id", vol.GetStorageVolumeId()), slog.String("node", node))
 		plugin, err := w.pluginRegistry.GetPlugin(ctx, vol.GetVolumeType())
 		if err != nil {

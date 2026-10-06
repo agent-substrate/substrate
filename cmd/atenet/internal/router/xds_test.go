@@ -185,8 +185,8 @@ func TestXdsServer_UpdateSnapshot(t *testing.T) {
 
 	// Verify clusters generated
 	clustersMap := snap.GetResources(resourcev3.ClusterType)
-	if len(clustersMap) != 2 {
-		t.Errorf("Expected 2 cluster definitions, got %d", len(clustersMap))
+	if len(clustersMap) != 3 {
+		t.Errorf("Expected 3 cluster definitions, got %d", len(clustersMap))
 	}
 
 	if raw, exists := clustersMap["ate-cluster"]; !exists {
@@ -407,8 +407,8 @@ func TestXdsServer_UpdateSnapshot_ConnectDisabledByDefault(t *testing.T) {
 	if _, exists := clustersMap[MainInternalName]; exists {
 		t.Errorf("%s cluster must not be built when CONNECT is disabled", MainInternalName)
 	}
-	if len(clustersMap) != 2 {
-		t.Errorf("Expected 2 cluster definitions with CONNECT disabled, got %d", len(clustersMap))
+	if len(clustersMap) != 3 {
+		t.Errorf("Expected 3 cluster definitions with CONNECT disabled, got %d", len(clustersMap))
 	}
 
 	listenersMap := snap.GetResources(resourcev3.ListenerType)
@@ -989,10 +989,9 @@ func TestXdsServer_RouteTimeout(t *testing.T) {
 	// routeAction digs out the one workload route buildRoutes emits, which is
 	// where Envoy actually reads its timeouts.
 	//
-	// It pins the route to OriginalDstClusterName rather than trusting position:
-	// that is the cluster carrying actor traffic to the worker's atunnel ingress.
-	// A change that moves actor traffic onto some other route would otherwise
-	// leave this passing while the timeouts govern a route nothing uses.
+	// It pins the route to the internal cluster-selection header rather than
+	// trusting position. ext_proc overwrites that header after resolving either
+	// a Kubernetes atunnel or an external workload endpoint.
 	routeAction := func(t *testing.T, x *XdsServer) *routev3.RouteAction {
 		t.Helper()
 		hosts := x.buildRoutes().GetVirtualHosts()
@@ -1000,8 +999,8 @@ func TestXdsServer_RouteTimeout(t *testing.T) {
 			t.Fatalf("buildRoutes() = %d virtual hosts, want exactly 1 with 1 route", len(hosts))
 		}
 		action := hosts[0].GetRoutes()[0].GetRoute()
-		if got := action.GetCluster(); got != OriginalDstClusterName {
-			t.Fatalf("workload route targets cluster %q, want %q", got, OriginalDstClusterName)
+		if got := action.GetClusterHeader(); got != ingress.UpstreamClusterHeader {
+			t.Fatalf("workload route cluster header = %q, want %q", got, ingress.UpstreamClusterHeader)
 		}
 		return action
 	}
@@ -1132,6 +1131,13 @@ func TestXdsServer_ActorClusterProtocolOptions(t *testing.T) {
 
 	x.SetUpstreamTls("/run/bundle.pem", "/run/trust.pem", "spiffe://ate.dev/")
 	cluster := x.buildOriginalDstCluster()
+	external := x.buildExternalOriginalDstCluster()
+	if external.GetTransportSocket() != nil {
+		t.Error("external workload cluster must not inherit the Kubernetes atunnel mTLS transport")
+	}
+	if opts := external.GetTypedExtensionProtocolOptions(); len(opts) != 0 {
+		t.Errorf("external workload cluster has protocol options %v, want implicit HTTP/1.1", opts)
+	}
 	ts := cluster.GetTransportSocket()
 	if ts == nil {
 		t.Fatal("mTLS actor cluster is missing its transport socket")

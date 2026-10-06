@@ -47,7 +47,7 @@ func TestAccessPolicy_GlobalAndAtespaceGovernance(t *testing.T) {
 	}
 	persistence.SetPolicyManager(policyManager)
 
-	svc := NewRPCService(persistence, nil, nil, nil, nil, nil, nil, "", nil, nil, "", nil, nil)
+	svc := NewRPCService(persistence, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, "", nil, nil)
 	interceptor := authz.UnaryServerInterceptor(authorizer, true)
 
 	userCtx := func(id string) context.Context {

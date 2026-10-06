@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"google.golang.org/protobuf/proto"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/api/validate"
 	"k8s.io/apimachinery/pkg/util/validation"
@@ -111,6 +112,21 @@ func ValidateActorUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVa
 		errs = append(errs, validate.RequiredPointer(ctx, op, fldPath.Child("status"), newVal.GetStatus(), nil)...)
 	}
 	return errs
+}
+
+// Assignment identity stays fixed while an external runtime publishes its endpoint.
+func ValidateCustom_ActorStatus_WorkerAssignment(_ context.Context, op operation.Operation, fldPath *field.Path, value, oldValue *ateapipb.WorkerAssignment) field.ErrorList {
+	if op.Type != operation.Update || value == nil || oldValue == nil {
+		return nil
+	}
+	current, previous := proto.Clone(value).(*ateapipb.WorkerAssignment), proto.Clone(oldValue).(*ateapipb.WorkerAssignment)
+	if current.RuntimeEndpoint != "" && previous.RuntimeEndpoint != "" {
+		current.ActorEndpoint, previous.ActorEndpoint = nil, nil
+	}
+	if !proto.Equal(current, previous) {
+		return field.ErrorList{field.Invalid(fldPath, value, "worker assignment identity may not change in place").WithOrigin("update")}
+	}
+	return nil
 }
 
 // This exists only because nested subfield tags are not supported yet.

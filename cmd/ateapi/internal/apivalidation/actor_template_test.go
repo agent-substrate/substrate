@@ -372,6 +372,63 @@ func TestValidateActorTemplate(t *testing.T) {
 		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.Containers = nil },
 		want:   field.ErrorList{field.Required(field.NewPath("containers"), "")},
 	}, {
+		name: "valid Mac Actor",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers = nil
+			tmpl.MacVm = &ateapipb.MacVMWorkload{Image: "example.com/macos/xcode@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}
+			tmpl.SandboxConfig = &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_MACOS, ConfigName: "macos-default"}
+		},
+	}, {
+		name: "containers and mac_vm are mutually exclusive",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.MacVm = &ateapipb.MacVMWorkload{Image: "example.com/macos/xcode@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}
+			tmpl.SandboxConfig = &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_MACOS, ConfigName: "macos-default"}
+		},
+		want: field.ErrorList{field.Forbidden(field.NewPath("mac_vm"), "")},
+	}, {
+		name: "Mac Actor requires macOS sandbox class",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers = nil
+			tmpl.MacVm = &ateapipb.MacVMWorkload{Image: "example.com/macos/xcode@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("sandbox_config", "sandbox_class"), nil, "")},
+	}, {
+		name: "macOS sandbox class requires Mac Actor",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.SandboxConfig = &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_MACOS, ConfigName: "macos-default"}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("sandbox_config", "sandbox_class"), nil, "")},
+	}, {
+		name: "Mac Actor image must be pinned",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers = nil
+			tmpl.MacVm = &ateapipb.MacVMWorkload{Image: "example.com/macos/xcode:latest"}
+			tmpl.SandboxConfig = &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_MACOS, ConfigName: "macos-default"}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("mac_vm", "image"), nil, "")},
+	}, {
+		name: "Mac Actor rejects template volumes",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers = nil
+			tmpl.MacVm = &ateapipb.MacVMWorkload{Image: "example.com/macos/xcode@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}
+			tmpl.SandboxConfig = &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_MACOS, ConfigName: "macos-default"}
+			tmpl.Volumes = []*ateapipb.Volume{{Name: "data", DurableDir: &ateapipb.DurableDirVolumeSource{}}}
+		},
+		want: field.ErrorList{field.Forbidden(field.NewPath("volumes"), "")},
+	}, {
+		name: "Mac Actor rejects data snapshots",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers = nil
+			tmpl.MacVm = &ateapipb.MacVMWorkload{Image: "example.com/macos/xcode@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}
+			tmpl.SandboxConfig = &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_MACOS, ConfigName: "macos-default"}
+			tmpl.SnapshotConfig.OnPause = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
+			tmpl.SnapshotConfig.OnCommit = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
+		},
+		want: field.ErrorList{
+			field.Invalid(field.NewPath("snapshot_config", "on_pause"), nil, ""),
+			field.Invalid(field.NewPath("snapshot_config", "on_commit"), nil, ""),
+		},
+	}, {
 		name: "too many containers",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
 			for i := 0; i < 10; i++ {

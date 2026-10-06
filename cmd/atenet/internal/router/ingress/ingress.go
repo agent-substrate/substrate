@@ -55,6 +55,12 @@ const (
 	OriginalDstAddressKey = "local"
 	// OriginalDstPortKey is the actor's target port.
 	OriginalDstPortKey = "port"
+	// UpstreamClusterHeader is overwritten after resolving an Actor so an
+	// untrusted client cannot choose between the Kubernetes atunnel and an
+	// external runtime's direct workload endpoint.
+	UpstreamClusterHeader = "x-ate-upstream-cluster"
+	AtunnelClusterName    = "actor_original_dst"
+	ExternalClusterName   = "external_actor_original_dst"
 )
 
 // Handler routes ingress requests to the worker hosting their actor.
@@ -120,25 +126,30 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 		Resume:           string(resumeOutcome),
 	}
 
-	// The first IP is in the cluster's primary IP family.
-	// TODO: choose the IP family that matches the dataplane's own address.
-	var workerIP string
-	if ips := actor.GetStatus().GetWorkerAssignment().GetWorkerPodIps(); len(ips) > 0 {
-		workerIP = ips[0]
+	assignment := actor.GetStatus().GetWorkerAssignment()
+	var targetAddr string
+	clusterName := AtunnelClusterName
+	if endpoint := assignment.GetActorEndpoint(); endpoint != nil {
+		if endpoint.GetHost() != "" && endpoint.GetPort() > 0 && endpoint.GetPort() <= 65535 {
+			targetAddr = net.JoinHostPort(endpoint.GetHost(), strconv.Itoa(int(endpoint.GetPort())))
+			clusterName = ExternalClusterName
+		}
+	} else if ips := assignment.GetWorkerPodIps(); len(ips) > 0 {
+		// The first IP is in the cluster's primary IP family. Kubernetes workers
+		// expose atunnel on 443; external runtimes return their endpoint above.
+		if net.ParseIP(ips[0]) != nil {
+			targetAddr = net.JoinHostPort(ips[0], "443")
+		}
 	}
 	slog.InfoContext(ctx, "ResumeActor result",
 		slog.Any("actor", actorRef),
 		slog.String("state", actor.GetStatus().GetState().String()),
-		slog.String("workerIP", workerIP))
+		slog.String("targetAddr", targetAddr))
 
-	if ip := net.ParseIP(workerIP); ip == nil {
+	if targetAddr == "" {
 		return res, extproc.NewReqError(envoy_type.StatusCode_InternalServerError,
 			"actor %s routing failed", actorRef)
 	}
-
-	// atunnel's regular HTTPS ingress listens on :443 and forwards to the
-	// actor's targetPort.
-	targetAddr := net.JoinHostPort(workerIP, "443")
 
 	slog.InfoContext(ctx, "Route ok", slog.Any("actor", actorRef), slog.String("targetAddr", targetAddr))
 
@@ -162,6 +173,12 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 		Header: &corev3.HeaderValue{
 			Key:      atenet.TargetActorHeader,
 			RawValue: []byte(actorRef.String()),
+		},
+		AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
+	}, &corev3.HeaderValueOption{
+		Header: &corev3.HeaderValue{
+			Key:      UpstreamClusterHeader,
+			RawValue: []byte(clusterName),
 		},
 		AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
 	})

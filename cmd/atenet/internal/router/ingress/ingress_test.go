@@ -154,6 +154,7 @@ func TestHandleRequestHeaders(t *testing.T) {
 		expectedStatus     envoy_type.StatusCode
 		expectedTarget     string
 		expectedTargetPort string
+		expectedCluster    string
 	}{
 		{
 			name:           "invalid actor header returns 404",
@@ -241,6 +242,21 @@ func TestHandleRequestHeaders(t *testing.T) {
 			expectedTargetPort: "80",
 		},
 		{
+			name:      "external Actor routes to provider endpoint",
+			authority: "127.0.0.1:44681",
+			resumeResp: &ateapipb.ResumeActorResponse{
+				Actor: &ateapipb.Actor{
+					Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{
+						ActorEndpoint: &ateapipb.ActorEndpoint{Host: "192.168.64.17", Port: 8123},
+					}},
+				},
+			},
+			expectErr:          false,
+			expectedTarget:     "192.168.64.17:8123",
+			expectedTargetPort: "80",
+			expectedCluster:    ExternalClusterName,
+		},
+		{
 			name:      "dual-stack resume routes to the first IP",
 			authority: "127.0.0.1:44681",
 			resumeResp: &ateapipb.ResumeActorResponse{
@@ -317,8 +333,8 @@ func TestHandleRequestHeaders(t *testing.T) {
 			}
 
 			mutation := res.Response.GetResponse().GetHeaderMutation()
-			if len(mutation.GetSetHeaders()) != 1 {
-				t.Fatalf("expected actor routing header, found: %v", mutation.GetSetHeaders())
+			if len(mutation.GetSetHeaders()) != 2 {
+				t.Fatalf("expected actor and cluster routing headers, found: %v", mutation.GetSetHeaders())
 			}
 
 			gotMutations := map[string]string{}
@@ -330,6 +346,13 @@ func TestHandleRequestHeaders(t *testing.T) {
 			}
 			if got, want := gotMutations[strings.ToLower(atenet.TargetActorHeader)], "team-a/"+testUUID; got != want {
 				t.Errorf("actor target mutation = %q, want %q", got, want)
+			}
+			wantCluster := tc.expectedCluster
+			if wantCluster == "" {
+				wantCluster = AtunnelClusterName
+			}
+			if got := gotMutations[UpstreamClusterHeader]; got != wantCluster {
+				t.Errorf("upstream cluster mutation = %q, want %q", got, wantCluster)
 			}
 			if got := dynamicMetadataTarget(res.DynamicMetadata); got != tc.expectedTarget {
 				t.Errorf("invalid destination mapping found: %s, expected: %s", got, tc.expectedTarget)

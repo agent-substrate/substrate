@@ -177,6 +177,17 @@ func TestValidateActorUpdate(t *testing.T) {
 	withActorTemplate := withActorActorTemplate
 	withSourceTag := withActorSourceTag
 	withWorkerAssignment := withActorWorkerAssignment
+	withExternalAssignment := func(endpoint *ateapipb.ActorEndpoint, mods ...func(*ateapipb.WorkerAssignment)) func(*ateapipb.ActorStatus) {
+		return func(s *ateapipb.ActorStatus) {
+			s.WorkerAssignment = &ateapipb.WorkerAssignment{
+				Worker: &ateapipb.ObjectRef{Name: "mac-worker"}, RuntimeEndpoint: "192.0.2.8:9443", ActorEndpoint: endpoint,
+			}
+			for _, mod := range mods {
+				mod(s.WorkerAssignment)
+			}
+		}
+	}
+	endpoint := &ateapipb.ActorEndpoint{Host: "192.0.2.8", Port: 49152}
 
 	tests := []struct {
 		name   string
@@ -369,6 +380,41 @@ func TestValidateActorUpdate(t *testing.T) {
 		validInput(withStatus(withWorkerAssignment())),
 		validOutput(withStatus(withWorkerAssignment(func(wa *ateapipb.WorkerAssignment) { wa.WorkerPod = "pod2" }))),
 		field.ErrorList{field.Invalid(field.NewPath("status", "worker_assignment"), nil, "").WithOrigin("update")},
+	}, {
+		"publish external actor endpoint",
+		validOutput(withStatus(withExternalAssignment(nil))),
+		validOutput(withStatus(withExternalAssignment(endpoint))),
+		nil,
+	}, {
+		"refresh external actor endpoint",
+		validOutput(withStatus(withExternalAssignment(endpoint))),
+		validOutput(withStatus(withExternalAssignment(&ateapipb.ActorEndpoint{Host: "192.0.2.9", Port: 49153}))),
+		nil,
+	}, {
+		"clear external actor endpoint",
+		validOutput(withStatus(withExternalAssignment(endpoint))),
+		validOutput(withStatus(withExternalAssignment(nil))),
+		nil,
+	}, {
+		"endpoint publication cannot change worker",
+		validOutput(withStatus(withExternalAssignment(nil))),
+		validOutput(withStatus(withExternalAssignment(endpoint, func(wa *ateapipb.WorkerAssignment) { wa.Worker.Name = "other-worker" }))),
+		field.ErrorList{field.Invalid(field.NewPath("status", "worker_assignment"), nil, "").WithOrigin("update")},
+	}, {
+		"endpoint publication cannot change runtime",
+		validOutput(withStatus(withExternalAssignment(nil))),
+		validOutput(withStatus(withExternalAssignment(endpoint, func(wa *ateapipb.WorkerAssignment) { wa.RuntimeEndpoint = "192.0.2.9:9443" }))),
+		field.ErrorList{field.Invalid(field.NewPath("status", "worker_assignment"), nil, "").WithOrigin("update")},
+	}, {
+		"endpoint publication cannot change epoch",
+		validOutput(withStatus(withExternalAssignment(nil))),
+		validOutput(withStatus(withExternalAssignment(endpoint, func(wa *ateapipb.WorkerAssignment) { wa.WorkerEpoch = 2 }))),
+		field.ErrorList{field.Invalid(field.NewPath("status", "worker_assignment"), nil, "").WithOrigin("update")},
+	}, {
+		"published endpoint is validated",
+		validOutput(withStatus(withExternalAssignment(nil))),
+		validOutput(withStatus(withExternalAssignment(&ateapipb.ActorEndpoint{Host: "192.0.2.8", Port: 65536}))),
+		field.ErrorList{field.Invalid(field.NewPath("status", "worker_assignment", "actor_endpoint", "port"), nil, "").WithOrigin("maximum")},
 	}, {
 		"empty actor.status.worker_assignment",
 		validInput(),

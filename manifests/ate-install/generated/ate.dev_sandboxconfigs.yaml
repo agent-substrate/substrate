@@ -129,6 +129,7 @@ spec:
                 enum:
                 - gvisor
                 - microvm
+                - macos-vz
                 type: string
             required:
             - sandboxClass

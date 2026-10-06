@@ -61,6 +61,40 @@ func ValidateActorTemplateUpdate(ctx context.Context, fldPath *field.Path, newVa
 	return Validate_ActorTemplate(ctx, op, fldPath, newVal, oldVal)
 }
 
+// ValidateCustom_ActorTemplate enforces the workload-kind contract.
+func ValidateCustom_ActorTemplate(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapipb.ActorTemplate) field.ErrorList {
+	var errs field.ErrorList
+	hasContainers := len(value.GetContainers()) > 0
+	hasMacVM := value.GetMacVm() != nil
+	switch {
+	case !hasContainers && !hasMacVM:
+		errs = append(errs, field.Required(fldPath.Child("containers"), "exactly one of containers and mac_vm must be set"))
+	case hasContainers && hasMacVM:
+		errs = append(errs, field.Forbidden(fldPath.Child("mac_vm"), "containers and mac_vm are mutually exclusive"))
+	}
+
+	class := value.GetSandboxConfig().GetSandboxClass()
+	if hasMacVM {
+		if class != ateapipb.SandboxClass_SANDBOX_CLASS_MACOS {
+			errs = append(errs, field.Invalid(fldPath.Child("sandbox_config", "sandbox_class"), class, "mac_vm requires SANDBOX_CLASS_MACOS"))
+		}
+		if len(value.GetVolumes()) > 0 {
+			errs = append(errs, field.Forbidden(fldPath.Child("volumes"), "Mac Actors do not support template volumes yet"))
+		}
+		if snapshot := value.GetSnapshotConfig(); snapshot != nil {
+			if snapshot.GetOnPause() == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA {
+				errs = append(errs, field.Invalid(fldPath.Child("snapshot_config", "on_pause"), snapshot.GetOnPause(), "Mac Actors support only FULL snapshots"))
+			}
+			if snapshot.GetOnCommit() == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA {
+				errs = append(errs, field.Invalid(fldPath.Child("snapshot_config", "on_commit"), snapshot.GetOnCommit(), "Mac Actors support only FULL snapshots"))
+			}
+		}
+	} else if hasContainers && class == ateapipb.SandboxClass_SANDBOX_CLASS_MACOS {
+		errs = append(errs, field.Invalid(fldPath.Child("sandbox_config", "sandbox_class"), class, "SANDBOX_CLASS_MACOS requires mac_vm"))
+	}
+	return errs
+}
+
 // ValidateCustom_CreateActorTemplateRequest_ActorTemplate rejects container
 // volume mounts that reference volumes the template does not declare.
 func ValidateCustom_CreateActorTemplateRequest_ActorTemplate(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapipb.ActorTemplate) field.ErrorList {
@@ -217,6 +251,10 @@ func ValidateCustom_ImageVolumeSource_Reference(_ context.Context, _ operation.O
 }
 
 func ValidateCustom_Container_Image(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return validatePinnedImage(fldPath, *value)
+}
+
+func ValidateCustom_MacVMWorkload_Image(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	return validatePinnedImage(fldPath, *value)
 }
 

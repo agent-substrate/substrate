@@ -58,6 +58,43 @@ func TestValidateCreateWorkerRequest(t *testing.T) {
 		name: "valid unassigned worker",
 		req:  validReq(validWorker(apiWorkerName)),
 	}, {
+		name: "valid external worker",
+		req: validReq(validWorker(apiWorkerName, func(w *ateapipb.Worker) {
+			w.WorkerNamespace = ""
+			w.WorkerPool = ""
+			w.WorkerPod = ""
+			w.WorkerPodUid = ""
+			w.NodeName = ""
+			w.Ips = nil
+			w.SandboxClass = "macos-vz"
+			w.ExternalHost = &ateapipb.ExternalWorkerHost{RuntimeEndpoint: "dns:///mac-worker.example:9443"}
+		})),
+	}, {
+		name: "external worker cannot carry Kubernetes identity",
+		req: validReq(validWorker(apiWorkerName, func(w *ateapipb.Worker) {
+			w.ExternalHost = &ateapipb.ExternalWorkerHost{RuntimeEndpoint: "dns:///mac-worker.example:9443"}
+		})),
+		want: field.ErrorList{
+			field.Forbidden(field.NewPath("worker", "worker_namespace"), ""),
+			field.Forbidden(field.NewPath("worker", "worker_pool"), ""),
+			field.Forbidden(field.NewPath("worker", "worker_pod"), ""),
+			field.Forbidden(field.NewPath("worker", "worker_pod_uid"), ""),
+			field.Forbidden(field.NewPath("worker", "node_name"), ""),
+			field.Forbidden(field.NewPath("worker", "ips"), ""),
+		},
+	}, {
+		name: "external worker missing runtime endpoint",
+		req: validReq(validWorker(apiWorkerName, func(w *ateapipb.Worker) {
+			w.WorkerNamespace = ""
+			w.WorkerPool = ""
+			w.WorkerPod = ""
+			w.WorkerPodUid = ""
+			w.NodeName = ""
+			w.Ips = nil
+			w.ExternalHost = &ateapipb.ExternalWorkerHost{}
+		})),
+		want: field.ErrorList{field.Required(field.NewPath("worker", "external_host", "runtime_endpoint"), "")},
+	}, {
 		name: "valid with status",
 		req:  validReq(validWorker(apiWorkerName, withStatus())),
 	}, {

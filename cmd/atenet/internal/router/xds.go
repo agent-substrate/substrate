@@ -102,7 +102,8 @@ const (
 	// ingress by the IP:port ext_proc reports in dynamic metadata (see
 	// ingress.OriginalDstMetadataKey). Actor identity remains in explicit
 	// request headers for atunnel to authorize.
-	OriginalDstClusterName = "actor_original_dst"
+	OriginalDstClusterName         = ingress.AtunnelClusterName
+	ExternalOriginalDstClusterName = ingress.ExternalClusterName
 
 	WildcardIP         = "0.0.0.0"
 	ConnectUpgradeType = "CONNECT"
@@ -458,6 +459,7 @@ func (x *XdsServer) UpdateSnapshot() error {
 	clusters := []types.Resource{
 		x.buildCluster(),
 		x.buildOriginalDstCluster(),
+		x.buildExternalOriginalDstCluster(),
 	}
 	if connectEnabled {
 		clusters = append(clusters, x.buildMainInternalCluster())
@@ -791,25 +793,7 @@ func (x *XdsServer) buildMainInternalCluster() *clusterv3.Cluster {
 // not derive the destination from :authority. mTLS to atunnel is applied via
 // the shared upstream transport socket (SPIFFE URI validation).
 func (x *XdsServer) buildOriginalDstCluster() *clusterv3.Cluster {
-	cluster := &clusterv3.Cluster{
-		Name:           OriginalDstClusterName,
-		ConnectTimeout: durationpb.New(5 * time.Second),
-		ClusterDiscoveryType: &clusterv3.Cluster_Type{
-			Type: clusterv3.Cluster_ORIGINAL_DST,
-		},
-		LbPolicy: clusterv3.Cluster_CLUSTER_PROVIDED,
-		LbConfig: &clusterv3.Cluster_OriginalDstLbConfig_{
-			OriginalDstLbConfig: &clusterv3.Cluster_OriginalDstLbConfig{
-				MetadataKey: &metadatav3.MetadataKey{
-					Key: ingress.OriginalDstMetadataKey,
-					Path: []*metadatav3.MetadataKey_PathSegment{
-						{Segment: &metadatav3.MetadataKey_PathSegment_Key{Key: ingress.OriginalDstAddressKey}},
-					},
-				},
-			},
-		},
-	}
-
+	cluster := x.buildOriginalDstClusterNamed(OriginalDstClusterName)
 	if ts := x.buildUpstreamTransportSocket(); ts != nil {
 		cluster.TransportSocket = ts
 		// Mirror the downstream protocol to atunnel so HTTP/2 requests stay
@@ -828,6 +812,35 @@ func (x *XdsServer) buildOriginalDstCluster() *clusterv3.Cluster {
 				},
 			}),
 		}
+	}
+	return cluster
+}
+
+// buildExternalOriginalDstCluster reaches a workload endpoint returned by an
+// external HostRuntime. Unlike the Kubernetes cluster above, this first slice
+// dials the endpoint directly and must not apply atunnel's mTLS identity.
+func (x *XdsServer) buildExternalOriginalDstCluster() *clusterv3.Cluster {
+	return x.buildOriginalDstClusterNamed(ExternalOriginalDstClusterName)
+}
+
+func (x *XdsServer) buildOriginalDstClusterNamed(name string) *clusterv3.Cluster {
+	cluster := &clusterv3.Cluster{
+		Name:           name,
+		ConnectTimeout: durationpb.New(5 * time.Second),
+		ClusterDiscoveryType: &clusterv3.Cluster_Type{
+			Type: clusterv3.Cluster_ORIGINAL_DST,
+		},
+		LbPolicy: clusterv3.Cluster_CLUSTER_PROVIDED,
+		LbConfig: &clusterv3.Cluster_OriginalDstLbConfig_{
+			OriginalDstLbConfig: &clusterv3.Cluster_OriginalDstLbConfig{
+				MetadataKey: &metadatav3.MetadataKey{
+					Key: ingress.OriginalDstMetadataKey,
+					Path: []*metadatav3.MetadataKey_PathSegment{
+						{Segment: &metadatav3.MetadataKey_PathSegment_Key{Key: ingress.OriginalDstAddressKey}},
+					},
+				},
+			},
+		},
 	}
 
 	return cluster
@@ -849,8 +862,8 @@ func (x *XdsServer) buildRoutes() *routev3.RouteConfiguration {
 						},
 						Action: &routev3.Route_Route{
 							Route: &routev3.RouteAction{
-								ClusterSpecifier: &routev3.RouteAction_Cluster{
-									Cluster: OriginalDstClusterName,
+								ClusterSpecifier: &routev3.RouteAction_ClusterHeader{
+									ClusterHeader: ingress.UpstreamClusterHeader,
 								},
 								// Two separate limits: Timeout bounds the upstream response,
 								// IdleTimeout bounds a stream with no activity on it, and

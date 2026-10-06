@@ -27,6 +27,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/agent-substrate/substrate/pkg/proto/hostruntimepb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -70,10 +71,10 @@ func (w *ActorWorkflow) DeleteActor(ctx context.Context, actorRef resources.Acto
 		errs = append(errs, fmt.Errorf("while fetching actor template: %w", err))
 	}
 
-	var atletTerminatedErr, volumesDetachedErr error
-	if err := w.ensureAteletTerminated(ctx, actorRef, actor, actorTemplate, ateattr.OperationDelete); err != nil {
-		atletTerminatedErr = fmt.Errorf("while terminating atelet: %w", err)
-		errs = append(errs, atletTerminatedErr)
+	var runtimeTerminatedErr, volumesDetachedErr error
+	if err := w.ensureRuntimeTerminated(ctx, actorRef, actor, actorTemplate, ateattr.OperationDelete); err != nil {
+		runtimeTerminatedErr = fmt.Errorf("while terminating runtime: %w", err)
+		errs = append(errs, runtimeTerminatedErr)
 	}
 	if err := w.ensureVolumesDetachedForDelete(ctx, actor, actorTemplate); err != nil {
 		volumesDetachedErr = fmt.Errorf("while detaching volumes: %w", err)
@@ -81,14 +82,14 @@ func (w *ActorWorkflow) DeleteActor(ctx context.Context, actorRef resources.Acto
 	}
 
 	// Release worker if atelet termination and volume detachment did not fail.
-	if atletTerminatedErr == nil && volumesDetachedErr == nil {
+	if runtimeTerminatedErr == nil && volumesDetachedErr == nil {
 		if actor, err = w.ensureWorkerReleased(ctx, actorRef, actor); err != nil {
 			errs = append(errs, fmt.Errorf("while releasing worker: %w", err))
 		}
 	} else {
-		slog.WarnContext(ctx, "skipping releasing worker due to atelet termination or volume detachment failure",
+		slog.WarnContext(ctx, "skipping releasing worker due to runtime termination or volume detachment failure",
 			slog.Any("actor", actorRef),
-			slog.Any("atletTerminatedErr", atletTerminatedErr),
+			slog.Any("runtimeTerminatedErr", runtimeTerminatedErr),
 			slog.Any("volumesDetachedErr", volumesDetachedErr))
 	}
 
@@ -121,14 +122,14 @@ func (w *ActorWorkflow) loadActorForDelete(ctx context.Context, actorRef resourc
 	return actor, nil
 }
 
-// ensureAteletTerminated calls atelet to terminate the workload for opName.
-func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate, opName string) (err error) {
-	ctx, done := stepSpan(ctx, "CallAteletTerminate")
+// ensureRuntimeTerminated calls the assigned provider to terminate the workload.
+func (w *ActorWorkflow) ensureRuntimeTerminated(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate, opName string) (err error) {
+	ctx, done := stepSpan(ctx, "CallRuntimeTerminate")
 	defer func() { err = done(err) }()
 
 	assignment := actor.GetStatus().GetWorkerAssignment()
 	if assignment == nil {
-		slog.InfoContext(ctx, "actor has no worker assignment, skipping atlet terminate request", slog.Any("actor", actorRef))
+		slog.InfoContext(ctx, "actor has no worker assignment, skipping runtime terminate request", slog.Any("actor", actorRef))
 		return nil
 	}
 
@@ -146,6 +147,20 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 				slog.Any("actor", actorRef))
 			return nil
 		}
+	}
+
+	if endpoint := assignment.GetRuntimeEndpoint(); endpoint != "" {
+		if w.hostRuntime == nil {
+			return apierror.Unimplemented("Mac Actor execution requires a configured host runtime")
+		}
+		err := w.hostRuntime.Terminate(ctx, endpoint, &hostruntimepb.TerminateRequest{ActorUid: actor.GetMetadata().GetUid()})
+		if status.Code(err) == codes.NotFound {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("while terminating external Actor: %w", err)
+		}
+		return nil
 	}
 
 	conn, err := w.dialer.DialForAteletOnNode(assignment.GetNodeName())

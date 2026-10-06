@@ -719,7 +719,7 @@ message ActorStatus {
   // Unset whenever the Actor has no worker (SUSPENDED, PAUSED, CRASHED).
   //
   // +k8s:optional
-  // +k8s:update=NoModify # can be set and cleared, but not changed in place
+  // +k8s:customValidation # identity is immutable; external actor_endpoint is populated after activation
   WorkerAssignment worker_assignment = 2;
 
   // in_progress_snapshot_uri is the URI in object storage of the durable
@@ -779,6 +779,7 @@ message ActorCrash {
   google.protobuf.Timestamp crash_time = 2;
 }
 
+// +k8s:customValidation # Kubernetes identity or external runtime endpoint
 // WorkerAssignment points at the Worker currently hosting an Actor.
 //
 // This is a denormalized snapshot, not merely a reference: atenet reads
@@ -801,31 +802,31 @@ message WorkerAssignment {
 
   // worker_namespace is the Kubernetes namespace of the WorkerPool and worker Pod.
   //
-  // +k8s:required
+  // +k8s:optional # required for Kubernetes workers
   // +k8s:format=k8s-short-name
   string worker_namespace = 1;
 
   // worker_pool is the name of the WorkerPool the worker belongs to.
   //
-  // +k8s:required
+  // +k8s:optional # required for Kubernetes workers
   // +k8s:format=k8s-long-name
   string worker_pool = 2;
 
   // worker_pod is the name of the Kubernetes pod hosting the Actor.
   //
-  // +k8s:required
+  // +k8s:optional # required for Kubernetes workers
   // +k8s:format=k8s-long-name
   string worker_pod = 3;
 
   // worker_pod_uid is the Kubernetes UID of worker_pod.
   //
-  // +k8s:required
+  // +k8s:optional # required for Kubernetes workers
   // +k8s:format=k8s-uuid
   string worker_pod_uid = 4;
 
   // worker_pod_ips are the IPs of worker_pod, copied from Worker.ips.
   //
-  // +k8s:required
+  // +k8s:optional # required for Kubernetes workers
   // +k8s:maxItems=2
   // +k8s:listType=atomic
   // +k8s:customValidation # until `format=k8s-ip` is supported
@@ -833,7 +834,7 @@ message WorkerAssignment {
 
   // node_name is the Kubernetes node hosting worker_pod.
   //
-  // +k8s:required
+  // +k8s:optional # required for Kubernetes workers
   // +k8s:format=k8s-long-name
   string node_name = 7;
 
@@ -843,6 +844,31 @@ message WorkerAssignment {
   // +k8s:optional
   // +k8s:minimum=0
   int64 worker_epoch = 8;
+
+  // runtime_endpoint is the HostRuntime gRPC endpoint for an external Worker.
+  // It is copied from the Worker so lifecycle recovery does not depend on a
+  // second lookup.
+  //
+  // +k8s:optional
+  // +k8s:maxLength=512
+  string runtime_endpoint = 9;
+
+  // actor_endpoint is the routable endpoint returned by the HostRuntime after
+  // activation. atenet uses it instead of worker_pod_ips for external Actors.
+  //
+  // +k8s:optional
+  ActorEndpoint actor_endpoint = 10;
+}
+
+message ActorEndpoint {
+  // +k8s:required
+  // +k8s:maxLength=253
+  string host = 1;
+
+  // +k8s:required
+  // +k8s:minimum=1
+  // +k8s:maximum=65535
+  int32 port = 2;
 }
 
 // TagStatus is the server-owned state of a Tag.
@@ -941,9 +967,12 @@ enum SandboxClass {
   SANDBOX_CLASS_UNSPECIFIED = 0;
   SANDBOX_CLASS_GVISOR = 1;
   SANDBOX_CLASS_MICROVM = 2;
+  // Native macOS virtual machines hosted through Apple's Virtualization.framework.
+  SANDBOX_CLASS_MACOS = 3;
   // Keep this in sync with SandboxConfig.sandbox_class's maximum.
 }
 
+// +k8s:customValidation # exactly one workload kind; mac_vm requires macOS/FULL
 message ActorTemplate {
   // Common resource metadata: atespace, name, uid, version, timestamps.
   //
@@ -957,7 +986,10 @@ message ActorTemplate {
   // +k8s:optional
   Selector worker_selector = 2;
 
-  // +k8s:required # at least one container
+  // containers defines a Linux OCI workload. Exactly one of containers and
+  // mac_vm must be set.
+  //
+  // +k8s:optional
   // +k8s:maxItems=10
   // +k8s:listType=map
   // +k8s:listMapKey=name
@@ -984,6 +1016,34 @@ message ActorTemplate {
 
   // +k8s:optional
   ActorTemplateStatus status = 8;
+
+  // mac_vm defines a Mac Actor: one native macOS virtual machine whose base
+  // image contains macOS, Xcode, and the guest agent. Exactly one of mac_vm
+  // and containers must be set.
+  //
+  // +k8s:optional
+  MacVMWorkload mac_vm = 9;
+}
+
+// MacVMWorkload defines the immutable base image and wakeup contract for a Mac
+// Actor. The host provider gives every Actor its own machine identifier,
+// auxiliary storage, disk overlay, and network identity; none are shared from
+// this template.
+message MacVMWorkload {
+  // image is an OCI artifact containing a powered-off macOS VM base image. It
+  // must be pinned by digest because changing it invalidates snapshots.
+  //
+  // +k8s:required
+  // +k8s:maxLength=512
+  // +k8s:customValidation # must be a well-formed image reference, pinned by digest
+  string image = 1;
+
+  // wakeup_probe gates each cold boot and resume on the guest agent becoming
+  // ready. The Mac host provider performs this probe through the Actor's
+  // isolated network path.
+  //
+  // +k8s:optional
+  ContainerWakeupProbe wakeup_probe = 2;
 }
 
 message Resources {
@@ -1044,7 +1104,7 @@ message SandboxConfig {
   //
   // +k8s:required
   // +k8s:minimum=1
-  // +k8s:maximum=2 # keep this in sync with the SandboxClass enum
+  // +k8s:maximum=3 # keep this in sync with the SandboxClass enum
   SandboxClass sandbox_class = 1;
 
   // config_name names the cluster-scoped SandboxConfig Kubernetes object
@@ -2021,7 +2081,8 @@ message ListActorsResponse {
   string next_page_token = 2;
 }
 
-// Worker is a schedulable worker pod.
+// +k8s:customValidation # exactly one of Kubernetes identity and external_host
+// Worker is a schedulable Actor host.
 //
 // Global-scoped: metadata.atespace is always empty. metadata.name is assigned
 // by the control plane and is opaque to clients — never parse it or derive it
@@ -2041,30 +2102,30 @@ message Worker {
 
   // Kubernetes coordinates. Immutable, set at creation.
   //
-  // +k8s:required
+  // +k8s:optional # required for Kubernetes workers
   // +k8s:format=k8s-short-name
   // +k8s:immutable
   string worker_namespace = 2;
-  // +k8s:required
+  // +k8s:optional # required for Kubernetes workers
   // +k8s:format=k8s-long-name
   // +k8s:immutable
   string worker_pool = 3;
-  // +k8s:required
+  // +k8s:optional # required for Kubernetes workers
   // +k8s:format=k8s-long-name
   // +k8s:immutable
   string worker_pod = 4;
-  // +k8s:required
+  // +k8s:optional # required for Kubernetes workers
   // +k8s:format=k8s-uuid
   // +k8s:immutable
   string worker_pod_uid = 5;
-  // +k8s:required
+  // +k8s:optional # required for Kubernetes workers
   // +k8s:format=k8s-long-name
   // +k8s:immutable
   string node_name = 6;
   // ips are the worker pod's IPs, at most one per IP family, in the order
   // Kubernetes reports them; the first is in the cluster's primary family.
   //
-  // +k8s:required
+  // +k8s:optional # required for Kubernetes workers
   // +k8s:maxItems=2
   // +k8s:listType=atomic
   // +k8s:customValidation # until `format=k8s-ip` is supported
@@ -2104,12 +2165,28 @@ message Worker {
   // +k8s:customValidation
   int64 epoch = 12;
 
+  // external_host identifies a non-Kubernetes Actor host and the provider API
+  // used to manage workloads on it. Immutable after registration.
+  //
+  // +k8s:optional
+  // +k8s:immutable
+  ExternalWorkerHost external_host = 13;
+
   // Output-only server-managed state. Absent from Create/Update request
   // payloads; whatever a request carries here is ignored. DrainWorker is the
   // only way a client moves state, and the assignments are the scheduler's.
   //
   // +k8s:optional
   WorkerStatus status = 11;
+}
+
+message ExternalWorkerHost {
+  // runtime_endpoint is a gRPC target understood by the control plane, for
+  // example dns:///mac-worker.example:9443.
+  //
+  // +k8s:required
+  // +k8s:maxLength=512
+  string runtime_endpoint = 1;
 }
 
 enum WorkerState {

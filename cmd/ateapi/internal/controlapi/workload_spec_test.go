@@ -342,6 +342,15 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 	}
 }
 
+func TestWorkloadSpecFromActorTemplateRejectsMacActor(t *testing.T) {
+	_, err := workloadSpecFromActorTemplate(&ateapipb.ActorTemplate{
+		MacVm: &ateapipb.MacVMWorkload{Image: "example.com/macos/xcode@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
+	}, nil)
+	if err == nil {
+		t.Fatal("workloadSpecFromActorTemplate accepted a Mac Actor")
+	}
+}
+
 func TestWorkloadSpecFromActorTemplatePropagatesWakeupProbe(t *testing.T) {
 	got, err := workloadSpecFromActorTemplate(&ateapipb.ActorTemplate{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: "agent-ns", Name: "tmpl-wakeup-probe"},

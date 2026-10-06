@@ -396,6 +396,82 @@ func Validate_ActorCrash(
 	return errs
 }
 
+// Validate_ActorEndpoint validates an instance of ActorEndpoint according
+// to declarative validation rules in the API schema.
+func Validate_ActorEndpoint(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ateapipb.ActorEndpoint) (errs field.ErrorList) {
+
+	{ // field ateapipb.ActorEndpoint.Host
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 253); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.ActorEndpoint) *string {
+				return &oldObj.Host
+			})
+		errs = append(errs, fn(fldPath.Child("host"), &obj.Host, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateapipb.ActorEndpoint.Port
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *int32,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.Maximum(ctx, op, fldPath, obj, oldObj, 65535); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			if e := validate.Minimum(ctx, op, fldPath, obj, oldObj, 1); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.ActorEndpoint) *int32 {
+				return &oldObj.Port
+			})
+		errs = append(errs, fn(fldPath.Child("port"), &obj.Port, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
 // Validate_ActorJWTSource validates an instance of ActorJWTSource according
 // to declarative validation rules in the API schema.
 func Validate_ActorJWTSource(
@@ -688,12 +764,12 @@ func Validate_ActorStatus(
 			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
 				earlyReturn = true
 			}
-			if e := validate.UpdatePointer(ctx, op, fldPath, obj, oldObj, validate.NoModify).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
-				earlyReturn = true
-			}
 			if earlyReturn {
 				return // do not proceed
+			}
+			// custom validation
+			if e := ValidateCustom_ActorStatus_WorkerAssignment(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
 			}
 			// call the type's validation function
 			errs = append(errs, Validate_WorkerAssignment(ctx, op, fldPath, obj, oldObj)...)
@@ -913,6 +989,11 @@ func Validate_ActorTemplate(
 	ctx context.Context, op operation.Operation, fldPath *field.Path,
 	obj, oldObj *ateapipb.ActorTemplate) (errs field.ErrorList) {
 
+	// custom validation
+	if e := ValidateCustom_ActorTemplate(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+		errs = append(errs, e...)
+	}
+
 	{ // field ateapipb.ActorTemplate.Metadata
 		fn := func(
 			fldPath *field.Path,
@@ -1014,8 +1095,7 @@ func Validate_ActorTemplate(
 				errs = append(errs, e...)
 				earlyReturn = true
 			}
-			if e := validate.RequiredSlice(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
+			if e := validate.OptionalSlice(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
 				earlyReturn = true
 			}
 			if earlyReturn {
@@ -1206,6 +1286,36 @@ func Validate_ActorTemplate(
 				return oldObj.Status
 			})
 		errs = append(errs, fn(fldPath.Child("status"), obj.Status, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateapipb.ActorTemplate.MacVm
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateapipb.MacVMWorkload,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_MacVMWorkload(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.ActorTemplate) *ateapipb.MacVMWorkload {
+				return oldObj.MacVm
+			})
+		errs = append(errs, fn(fldPath.Child("mac_vm"), obj.MacVm, oldVal, oldObj != nil)...)
 	}
 
 	return errs
@@ -3944,6 +4054,47 @@ func Validate_ExternalVolumeTemplate(
 	return errs
 }
 
+// Validate_ExternalWorkerHost validates an instance of ExternalWorkerHost according
+// to declarative validation rules in the API schema.
+func Validate_ExternalWorkerHost(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ateapipb.ExternalWorkerHost) (errs field.ErrorList) {
+
+	{ // field ateapipb.ExternalWorkerHost.RuntimeEndpoint
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 512); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.ExternalWorkerHost) *string {
+				return &oldObj.RuntimeEndpoint
+			})
+		errs = append(errs, fn(fldPath.Child("runtime_endpoint"), &obj.RuntimeEndpoint, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
 // Validate_GetActorEgressPolicyRequest validates an instance of GetActorEgressPolicyRequest according
 // to declarative validation rules in the API schema.
 func Validate_GetActorEgressPolicyRequest(
@@ -5619,6 +5770,81 @@ func Validate_LocalSnapshot(
 	return errs
 }
 
+// Validate_MacVMWorkload validates an instance of MacVMWorkload according
+// to declarative validation rules in the API schema.
+func Validate_MacVMWorkload(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ateapipb.MacVMWorkload) (errs field.ErrorList) {
+
+	{ // field ateapipb.MacVMWorkload.Image
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// custom validation
+			if e := ValidateCustom_MacVMWorkload_Image(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 512); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.MacVMWorkload) *string {
+				return &oldObj.Image
+			})
+		errs = append(errs, fn(fldPath.Child("image"), &obj.Image, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateapipb.MacVMWorkload.WakeupProbe
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateapipb.ContainerWakeupProbe,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_ContainerWakeupProbe(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.MacVMWorkload) *ateapipb.ContainerWakeupProbe {
+				return oldObj.WakeupProbe
+			})
+		errs = append(errs, fn(fldPath.Child("wakeup_probe"), obj.WakeupProbe, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
 // Validate_MintActorCertificateRequest validates an instance of MintActorCertificateRequest according
 // to declarative validation rules in the API schema.
 func Validate_MintActorCertificateRequest(
@@ -6741,7 +6967,7 @@ func Validate_SandboxConfig(
 			if earlyReturn {
 				return // do not proceed
 			}
-			if e := validate.Maximum(ctx, op, fldPath, obj, oldObj, 2); len(e) != 0 {
+			if e := validate.Maximum(ctx, op, fldPath, obj, oldObj, 3); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			if e := validate.Minimum(ctx, op, fldPath, obj, oldObj, 1); len(e) != 0 {
@@ -8403,6 +8629,11 @@ func Validate_Worker(
 	ctx context.Context, op operation.Operation, fldPath *field.Path,
 	obj, oldObj *ateapipb.Worker) (errs field.ErrorList) {
 
+	// custom validation
+	if e := ValidateCustom_Worker(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+		errs = append(errs, e...)
+	}
+
 	{ // field ateapipb.Worker.Metadata
 		fn := func(
 			fldPath *field.Path,
@@ -8474,8 +8705,7 @@ func Validate_Worker(
 				errs = append(errs, e...)
 				earlyReturn = true
 			}
-			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
+			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
 				earlyReturn = true
 			}
 			if earlyReturn {
@@ -8510,8 +8740,7 @@ func Validate_Worker(
 				errs = append(errs, e...)
 				earlyReturn = true
 			}
-			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
+			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
 				earlyReturn = true
 			}
 			if earlyReturn {
@@ -8546,8 +8775,7 @@ func Validate_Worker(
 				errs = append(errs, e...)
 				earlyReturn = true
 			}
-			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
+			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
 				earlyReturn = true
 			}
 			if earlyReturn {
@@ -8582,8 +8810,7 @@ func Validate_Worker(
 				errs = append(errs, e...)
 				earlyReturn = true
 			}
-			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
+			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
 				earlyReturn = true
 			}
 			if earlyReturn {
@@ -8618,8 +8845,7 @@ func Validate_Worker(
 				errs = append(errs, e...)
 				earlyReturn = true
 			}
-			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
+			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
 				earlyReturn = true
 			}
 			if earlyReturn {
@@ -8658,8 +8884,7 @@ func Validate_Worker(
 				errs = append(errs, e...)
 				earlyReturn = true
 			}
-			if e := validate.RequiredSlice(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
+			if e := validate.OptionalSlice(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
 				earlyReturn = true
 			}
 			if earlyReturn {
@@ -8791,6 +9016,40 @@ func Validate_Worker(
 		errs = append(errs, fn(fldPath.Child("epoch"), &obj.Epoch, oldVal, oldObj != nil)...)
 	}
 
+	{ // field ateapipb.Worker.ExternalHost
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateapipb.ExternalWorkerHost,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.Immutable(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_ExternalWorkerHost(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.Worker) *ateapipb.ExternalWorkerHost {
+				return oldObj.ExternalHost
+			})
+		errs = append(errs, fn(fldPath.Child("external_host"), obj.ExternalHost, oldVal, oldObj != nil)...)
+	}
+
 	{ // field ateapipb.Worker.Status
 		fn := func(
 			fldPath *field.Path,
@@ -8829,6 +9088,11 @@ func Validate_Worker(
 func Validate_WorkerAssignment(
 	ctx context.Context, op operation.Operation, fldPath *field.Path,
 	obj, oldObj *ateapipb.WorkerAssignment) (errs field.ErrorList) {
+
+	// custom validation
+	if e := ValidateCustom_WorkerAssignment(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+		errs = append(errs, e...)
+	}
 
 	{ // field ateapipb.WorkerAssignment.Worker
 		fn := func(
@@ -8893,8 +9157,7 @@ func Validate_WorkerAssignment(
 			}
 			// call field-attached validations
 			earlyReturn := false
-			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
+			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
 				earlyReturn = true
 			}
 			if earlyReturn {
@@ -8925,8 +9188,7 @@ func Validate_WorkerAssignment(
 			}
 			// call field-attached validations
 			earlyReturn := false
-			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
+			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
 				earlyReturn = true
 			}
 			if earlyReturn {
@@ -8957,8 +9219,7 @@ func Validate_WorkerAssignment(
 			}
 			// call field-attached validations
 			earlyReturn := false
-			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
+			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
 				earlyReturn = true
 			}
 			if earlyReturn {
@@ -8989,8 +9250,7 @@ func Validate_WorkerAssignment(
 			}
 			// call field-attached validations
 			earlyReturn := false
-			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
+			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
 				earlyReturn = true
 			}
 			if earlyReturn {
@@ -9025,8 +9285,7 @@ func Validate_WorkerAssignment(
 				errs = append(errs, e...)
 				earlyReturn = true
 			}
-			if e := validate.RequiredSlice(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
+			if e := validate.OptionalSlice(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
 				earlyReturn = true
 			}
 			if earlyReturn {
@@ -9058,8 +9317,7 @@ func Validate_WorkerAssignment(
 			}
 			// call field-attached validations
 			earlyReturn := false
-			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
+			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
 				earlyReturn = true
 			}
 			if earlyReturn {
@@ -9106,6 +9364,67 @@ func Validate_WorkerAssignment(
 				return &oldObj.WorkerEpoch
 			})
 		errs = append(errs, fn(fldPath.Child("worker_epoch"), &obj.WorkerEpoch, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateapipb.WorkerAssignment.RuntimeEndpoint
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 512); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.WorkerAssignment) *string {
+				return &oldObj.RuntimeEndpoint
+			})
+		errs = append(errs, fn(fldPath.Child("runtime_endpoint"), &obj.RuntimeEndpoint, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateapipb.WorkerAssignment.ActorEndpoint
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateapipb.ActorEndpoint,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_ActorEndpoint(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.WorkerAssignment) *ateapipb.ActorEndpoint {
+				return oldObj.ActorEndpoint
+			})
+		errs = append(errs, fn(fldPath.Child("actor_endpoint"), obj.ActorEndpoint, oldVal, oldObj != nil)...)
 	}
 
 	return errs

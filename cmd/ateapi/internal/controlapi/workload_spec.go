@@ -49,6 +49,9 @@ func toAteletResources(r *ateapipb.Resources) (*ateletpb.ResourceLimits, error) 
 // workloadSpecFromActorTemplate builds a WorkloadSpec from the template;
 // container env is copied verbatim.
 func workloadSpecFromActorTemplate(actorTemplate *ateapipb.ActorTemplate, actor *ateapipb.Actor) (*ateletpb.WorkloadSpec, error) {
+	if actorTemplate.GetMacVm() != nil {
+		return nil, fmt.Errorf("macOS Actor workload cannot be sent to the Linux atelet runtime")
+	}
 	workloadSpec := &ateletpb.WorkloadSpec{}
 
 	// Convert volumes to atelet's representation.  ActorTemplate validation has

@@ -94,6 +94,9 @@ var (
 	podIdentityCACerts     = pflag.String("pod-identity-ca-certs", "", "The file that contains the pod-identity CA bundle, used both for verifying client certificates presented to the gRPC server and for verifying atelet serving certificates when dialing atelet. If empty, client-cert verification is disabled and atelet dials will fail.")
 	ateletClientCredBundle = pflag.String("atelet-client-cred-bundle", "", "Credential bundle presented as the client certificate when dialing atelet.")
 	ateletServiceAccount   = pflag.String("atelet-service-account", installdefaults.AteletServiceAccount, "ServiceAccount atelet runs as. It is the service-account segment of the SPIFFE ID expected on atelet's certificate, so it has to match what the deployment actually creates; a deployment that prefixes resource names needs it set.")
+	hostRuntimeClientCert  = pflag.String("host-runtime-client-cert", "", "PEM client certificate presented to external HostRuntime providers. Must be set with --host-runtime-client-key and --host-runtime-server-ca.")
+	hostRuntimeClientKey   = pflag.String("host-runtime-client-key", "", "PEM private key for --host-runtime-client-cert.")
+	hostRuntimeServerCA    = pflag.String("host-runtime-server-ca", "", "PEM CA bundle used to verify external HostRuntime providers.")
 
 	drainDelay   = pflag.Duration("drain-delay", 13*time.Second, "How long to keep accepting new work after SIGTERM, before starting the gRPC drain.")
 	drainTimeout = pflag.Duration("drain-timeout", 15*time.Second, "Deadline for the graceful gRPC drain on shutdown. In-flight RPCs still running past it are forcefully cancelled.")
@@ -265,6 +268,18 @@ func main() {
 
 	volPlugins := make(map[string]volume.VolumePluginControlPlane)
 	ateletDialer := controlapi.NewAteletDialer(ateletPodInformer.GetIndexer(), ateletSPIFFEID, *ateletClientCredBundle, *podIdentityCACerts)
+	var hostRuntime controlapi.HostRuntime
+	if *hostRuntimeClientCert != "" || *hostRuntimeClientKey != "" || *hostRuntimeServerCA != "" {
+		if *hostRuntimeClientCert == "" || *hostRuntimeClientKey == "" || *hostRuntimeServerCA == "" {
+			serverboot.Fatal(ctx, "HostRuntime mTLS requires client certificate, client key, and server CA", nil)
+		}
+		client, err := controlapi.NewGRPCHostRuntime(*hostRuntimeClientCert, *hostRuntimeClientKey, *hostRuntimeServerCA)
+		if err != nil {
+			serverboot.Fatal(ctx, "Failed to configure HostRuntime client", err)
+		}
+		defer client.Close()
+		hostRuntime = client
+	}
 
 	actorIDCAPool, err := localca.NewRefreshingPool(*actorIDCAPoolFile)
 	if err != nil {
@@ -283,6 +298,7 @@ func main() {
 		csiDriverConfigLister,
 		storageClassLister,
 		ateletDialer,
+		hostRuntime,
 		instruments,
 		*defaultEgressGatewayAddress,
 		volPlugins,
@@ -431,6 +447,9 @@ func logFlagValues(ctx context.Context) {
 		slog.String("actor-id-ca-pool", *actorIDCAPoolFile),
 		slog.String("pod-identity-ca-certs", *podIdentityCACerts),
 		slog.String("atelet-client-cred-bundle", *ateletClientCredBundle),
+		slog.String("host-runtime-client-cert", *hostRuntimeClientCert),
+		slog.String("host-runtime-client-key", *hostRuntimeClientKey),
+		slog.String("host-runtime-server-ca", *hostRuntimeServerCA),
 		slog.Duration("drain-delay", *drainDelay),
 		slog.Duration("drain-timeout", *drainTimeout),
 	)

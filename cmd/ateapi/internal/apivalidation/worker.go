@@ -102,6 +102,63 @@ func ValidateCustom_Worker_Ips(_ context.Context, _ operation.Operation, fldPath
 	return validateDualStackIPs(fldPath, value)
 }
 
+// ValidateCustom_Worker enforces the provider-neutral Worker identity union.
+// Kubernetes workers carry the complete legacy pod identity; external workers
+// carry only external_host and are addressed through its runtime endpoint.
+func ValidateCustom_Worker(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapipb.Worker) field.ErrorList {
+	hasExternal := value.GetExternalHost() != nil
+	kubernetesFields := []struct {
+		name  string
+		empty bool
+	}{
+		{"worker_namespace", value.GetWorkerNamespace() == ""},
+		{"worker_pool", value.GetWorkerPool() == ""},
+		{"worker_pod", value.GetWorkerPod() == ""},
+		{"worker_pod_uid", value.GetWorkerPodUid() == ""},
+		{"node_name", value.GetNodeName() == ""},
+		{"ips", len(value.GetIps()) == 0},
+	}
+
+	var errs field.ErrorList
+	for _, f := range kubernetesFields {
+		if !hasExternal && f.empty {
+			errs = append(errs, field.Required(fldPath.Child(f.name), "required for Kubernetes workers"))
+		}
+		if hasExternal && !f.empty {
+			errs = append(errs, field.Forbidden(fldPath.Child(f.name), "not allowed for external workers"))
+		}
+	}
+	return errs
+}
+
+// ValidateCustom_WorkerAssignment enforces the denormalized identity shape for
+// the selected Worker provider.
+func ValidateCustom_WorkerAssignment(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapipb.WorkerAssignment) field.ErrorList {
+	hasExternal := value.GetRuntimeEndpoint() != ""
+	kubernetesFields := []struct {
+		name  string
+		empty bool
+	}{
+		{"worker_namespace", value.GetWorkerNamespace() == ""},
+		{"worker_pool", value.GetWorkerPool() == ""},
+		{"worker_pod", value.GetWorkerPod() == ""},
+		{"worker_pod_uid", value.GetWorkerPodUid() == ""},
+		{"worker_pod_ips", len(value.GetWorkerPodIps()) == 0},
+		{"node_name", value.GetNodeName() == ""},
+	}
+
+	var errs field.ErrorList
+	for _, f := range kubernetesFields {
+		if !hasExternal && f.empty {
+			errs = append(errs, field.Required(fldPath.Child(f.name), "required for Kubernetes workers"))
+		}
+		if hasExternal && !f.empty {
+			errs = append(errs, field.Forbidden(fldPath.Child(f.name), "not allowed for external workers"))
+		}
+	}
+	return errs
+}
+
 // epoch only moves forward: a lower value would make Actors placed during the
 // current run look older than it, and crash them.
 func ValidateCustom_Worker_Epoch(_ context.Context, op operation.Operation, fldPath *field.Path, value, oldValue *int64) field.ErrorList {

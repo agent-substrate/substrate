@@ -43,6 +43,40 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+func TestEnsureVolumesAttached_NodeRequiredOnlyForMountedVolumes(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		mounted bool
+	}{
+		{name: "external worker without volumes needs no Kubernetes node"},
+		{name: "mounted volume still requires a node", mounted: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			actor := &ateapipb.Actor{
+				Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "mac-actor"},
+				Status:   &ateapipb.ActorStatus{},
+			}
+			template := &ateapipb.ActorTemplate{}
+			if tc.mounted {
+				actor.Status.ActorVolumes = []*ateapipb.ExternalVolume{{VolumeName: "data", StorageVolumeId: "disk-1", VolumeType: "test"}}
+				template.Volumes = []*ateapipb.Volume{{Name: "data"}}
+				template.Containers = []*ateapipb.Container{{VolumeMounts: []*ateapipb.VolumeMount{{Name: "data"}}}}
+			}
+			worker := &ateapipb.Worker{ExternalHost: &ateapipb.ExternalWorkerHost{RuntimeEndpoint: "192.0.2.8:9443"}}
+			// A nil registry also verifies no plugin is consulted without a node.
+			w := &ActorWorkflow{}
+			err := w.ensureVolumesAttached(context.Background(), actor, worker, template)
+			if tc.mounted {
+				if err == nil || err.Error() != "workflow failed at step AttachVolumes: assigned worker has no node name" {
+					t.Fatalf("ensureVolumesAttached = %v, want missing node error", err)
+				}
+			} else if err != nil {
+				t.Fatalf("ensureVolumesAttached without volumes: %v", err)
+			}
+		})
+	}
+}
+
 // TestSchedulerRecordable guards the retry-dedup rule: the assignment loop
 // re-runs attempts on store.ErrVersionConflict, and those attempts (raw or
 // wrapped) must not be recorded, while the terminal success or real error
