@@ -165,8 +165,7 @@ func (r *systemInfoVolumeRefresher) DeregisterOwned(owner *registeredActor) {
 	owner.mu.Unlock()
 }
 
-// collectData builds the volume's contents keyed by volume-relative path,
-// plus each projected bundle's trustBundleHash.
+// collectData builds the volume's contents keyed by volume-relative path.
 func (r *systemInfoVolumeRefresher) collectData(ref resources.ActorRef, actorUID string, si *ateletpb.SystemInfoVolume) (payload map[string][]byte, err error) {
 	payload = map[string][]byte{}
 	for _, dataSourceAny := range si.GetDataSources() {

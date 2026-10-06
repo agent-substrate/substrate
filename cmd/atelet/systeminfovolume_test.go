@@ -608,7 +608,7 @@ func TestSystemInfoVolumeRefresher_RegisterTwiceSupersedes(t *testing.T) {
 func TestSystemInfoVolumeRefresher_StaleDeregisterPreservesNewerRegistration(t *testing.T) {
 	store := newCTBStore(t)
 	store.set(t, string(testCertPEM(t)))
-	r := newSystemInfoVolumeRefresher(store.lister.Get, nil)
+	r := newSystemInfoVolumeRefresher(trustbundle.NewSource(store.lister.Get, nil), nil)
 
 	firstDir := t.TempDir()
 	firstVol := &systemInfoVolume{
@@ -636,7 +636,7 @@ func TestSystemInfoVolumeRefresher_StaleDeregisterPreservesNewerRegistration(t *
 func TestSystemInfoVolumeRefresher_DeregisterOwnedNil(t *testing.T) {
 	for _, registered := range []bool{false, true} {
 		t.Run(fmt.Sprintf("registered=%v", registered), func(t *testing.T) {
-			r := newSystemInfoVolumeRefresher(ctbLister(t).Get, nil)
+			r := newSystemInfoVolumeRefresher(trustbundle.NewSource(ctbLister(t).Get, nil), nil)
 			var current *registeredActor
 			if registered {
 				var err error
@@ -661,7 +661,7 @@ func TestSystemInfoVolumeRefresher_DeregisterOwnedNil(t *testing.T) {
 func TestSystemInfoVolumeRefresher_FailedReplacementDropsRegistration(t *testing.T) {
 	store := newCTBStore(t)
 	store.set(t, string(testCertPEM(t)))
-	r := newSystemInfoVolumeRefresher(store.lister.Get, nil)
+	r := newSystemInfoVolumeRefresher(trustbundle.NewSource(store.lister.Get, nil), nil)
 	dir := t.TempDir()
 	registerTrustVolume(t, r, dir, "uid-1")
 	previous := r.actors["uid-1"]
@@ -806,7 +806,7 @@ func TestSystemInfoVolumeRegister_TrustBundle(t *testing.T) {
 	})
 
 	t.Run("failed initial write cleanup preserves a newer registration", func(t *testing.T) {
-		r := newSystemInfoVolumeRefresher(ctbLister(t).Get, nil)
+		r := newSystemInfoVolumeRefresher(trustbundle.NewSource(ctbLister(t).Get, nil), nil)
 		bad := &systemInfoVolume{Name: "trust", Root: filepath.Join(t.TempDir(), "trust"), Spec: trustVolumeSpec("ca.pem")}
 		owner, err := r.Register("uid-3", resources.ActorRef{Atespace: "team-a", Name: "actor-3"}, []*systemInfoVolume{bad})
 		if err == nil {
