@@ -126,35 +126,38 @@ The `ActorTemplate` defines the code, environment, and state-management policies
 | `snapshotConfig` | `SnapshotConfig` | **Required.** The base object-storage location snapshots are written under, plus the snapshot fidelity (`preferredFidelity`) every Pause and Suspend captures. See [Snapshot Storage Layout](#snapshot-storage-layout). |
 | `volumes` | `[]Volume` | Optional. Volumes the containers may mount, each a `durableDir`, an `externalVolumeTemplate` (see [CSI Volumes Guide](csi-volumes.md)), or a `systemInfo` volume (see [SystemInfo Volumes](#systeminfo-volumes)). Every declared volume must be mounted by at least one container. A `microvm` template may declare several `durableDir` volumes; a `gvisor` template is limited to one. |
 | `resources` | `*ResourceRequirements` | Optional. Declares each actor's compute size via `limits` — see [Sandbox Right-Sizing](#sandbox-right-sizing-resources). Immutable, like the rest of the template. |
-| `defaultEgressPolicy` | `EgressPolicyTemplate` | Optional. Initial egress policy copied when each actor is created, including the golden actor. Contains only `rules`, with the same defaults and validation as `EgressPolicy.rules`. See [Default Egress Policy](#default-egress-policy-defaultegresspolicy). |
+| `goldenEgressPolicy` | `EgressPolicyTemplate` | Optional. Egress policy for the golden actor during initialization. Contains only `rules`, with the same defaults and validation as `EgressPolicy.rules`. See [Golden Egress Policy](#golden-egress-policy-goldenegresspolicy). |
 
 The sandbox itself — the binaries (e.g. the gVisor `runsc` binary) and the `pauseImage` holding the sandbox's namespaces — comes from the cluster-scoped [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) object the template names via `sandboxConfig.configName`. An actor always resolves the config from its current template — repointing the actor at another template requires the same config.
 
 Because a snapshot is not restorable across sandbox runtimes, `sandboxClass` is a **hard scheduling gate**: an actor is only ever placed on a `WorkerPool` whose `sandboxClasses` entry matches. It is AND'd with `workerSelector` (and the actor's `worker_selector`), which can only narrow the eligible pools further. It has no default — `sandboxConfig` is required and its `sandboxClass` must be set — and, like the rest of the template, is immutable, so each template's class is fixed at creation.
 
-### Default Egress Policy (`defaultEgressPolicy`)
+### Golden Egress Policy (`goldenEgressPolicy`)
 
-Set `defaultEgressPolicy` on an ActorTemplate to give its golden actor and each
-new actor the same initial network access. For example, this template field
+Set `goldenEgressPolicy` on an ActorTemplate to give its golden actor network
+access during initialization. For example, this template field
 allows HTTPS to `api.example.com` on the default port, 443:
 
 ```yaml
-defaultEgressPolicy:
+goldenEgressPolicy:
   rules:
     - https:
         hostnames: [api.example.com]
 ```
 
-Actor creation atomically creates the actor and its `default` egress policy,
-so the policy exists before golden initialization can start. Each policy uses
-its actor's atespace (`ate-golden` for the golden actor) and receives its own
-UID, version, and timestamps. The template field contains only rules.
+The golden actor and its `default` egress policy are created atomically,
+so the policy exists before golden initialization can start. The policy lives
+in `ate-golden` and receives its own UID, version, and timestamps. The template
+field contains only rules.
 
-The rules are copied once at creation. Updating or deleting an actor's policy
-does not affect the template or other actors. Changing an actor's template
-does not replace its existing policy. Omitting `defaultEgressPolicy` creates
-no policy. Setting it to `{}` creates an explicitly empty policy that allows
-no destinations.
+Actors created from the template start without an egress policy, including
+actors restored from its golden snapshot. Configure their network access
+separately with `CreateActorEgressPolicy`.
+
+The golden policy's rules are copied once at creation. Updating or deleting
+that policy does not change the template. Omitting `goldenEgressPolicy`
+creates no golden policy. Setting it to `{}` creates an explicitly empty
+policy that allows no destinations.
 
 ### Sandbox Right-Sizing (`resources`)
 

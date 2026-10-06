@@ -2451,17 +2451,17 @@ type ActorTemplate struct {
 	Resources *Resources `protobuf:"bytes,7,opt,name=resources,proto3" json:"resources,omitempty"`
 	// +k8s:optional
 	Status *ActorTemplateStatus `protobuf:"bytes,8,opt,name=status,proto3" json:"status,omitempty"`
-	// Initial egress policy, copied atomically when an Actor is created from
-	// this template, including the golden Actor used for initialization. The
-	// policy is named "default" in the Actor's atespace, with its own metadata.
-	// Callers may update or delete the copy independently; changing the Actor's
-	// template does not update its policy. If absent, no policy is created;
-	// an empty block creates a policy with no rules.
+	// Egress policy for the golden Actor during initialization. Copied
+	// atomically when the golden Actor is created, as its "default" policy
+	// in the reserved ate-golden atespace. Actors created from this template
+	// do not inherit this policy, including when using the golden snapshot.
+	// If absent, no policy is created; an empty block creates a policy with
+	// no rules.
 	//
 	// +k8s:optional
-	DefaultEgressPolicy *EgressPolicyTemplate `protobuf:"bytes,9,opt,name=default_egress_policy,json=defaultEgressPolicy,proto3" json:"default_egress_policy,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	GoldenEgressPolicy *EgressPolicyTemplate `protobuf:"bytes,9,opt,name=golden_egress_policy,json=goldenEgressPolicy,proto3" json:"golden_egress_policy,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *ActorTemplate) Reset() {
@@ -2550,9 +2550,9 @@ func (x *ActorTemplate) GetStatus() *ActorTemplateStatus {
 	return nil
 }
 
-func (x *ActorTemplate) GetDefaultEgressPolicy() *EgressPolicyTemplate {
+func (x *ActorTemplate) GetGoldenEgressPolicy() *EgressPolicyTemplate {
 	if x != nil {
-		return x.DefaultEgressPolicy
+		return x.GoldenEgressPolicy
 	}
 	return nil
 }
@@ -8226,7 +8226,7 @@ const file_ateapi_proto_rawDesc = "" +
 	"\bmetadata\x18\x01 \x01(\v2\x18.ateapi.ResourceMetadataR\bmetadata\";\n" +
 	"\tObjectRef\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12\x12\n" +
-	"\x04name\x18\x02 \x01(\tR\x04name\"\x94\x04\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\"\x92\x04\n" +
 	"\rActorTemplate\x124\n" +
 	"\bmetadata\x18\x01 \x01(\v2\x18.ateapi.ResourceMetadataR\bmetadata\x129\n" +
 	"\x0fworker_selector\x18\x02 \x01(\v2\x10.ateapi.SelectorR\x0eworkerSelector\x121\n" +
@@ -8237,8 +8237,8 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x0fsnapshot_config\x18\x05 \x01(\v2\x16.ateapi.SnapshotConfigR\x0esnapshotConfig\x12<\n" +
 	"\x0esandbox_config\x18\x06 \x01(\v2\x15.ateapi.SandboxConfigR\rsandboxConfig\x12/\n" +
 	"\tresources\x18\a \x01(\v2\x11.ateapi.ResourcesR\tresources\x123\n" +
-	"\x06status\x18\b \x01(\v2\x1b.ateapi.ActorTemplateStatusR\x06status\x12P\n" +
-	"\x15default_egress_policy\x18\t \x01(\v2\x1c.ateapi.EgressPolicyTemplateR\x13defaultEgressPolicy\"3\n" +
+	"\x06status\x18\b \x01(\v2\x1b.ateapi.ActorTemplateStatusR\x06status\x12N\n" +
+	"\x14golden_egress_policy\x18\t \x01(\v2\x1c.ateapi.EgressPolicyTemplateR\x12goldenEgressPolicy\"3\n" +
 	"\tResources\x12&\n" +
 	"\x06limits\x18\x01 \x03(\v2\x0e.ateapi.LimitsR\x06limits\"8\n" +
 	"\x06Limits\x12\x12\n" +
@@ -8803,7 +8803,7 @@ var file_ateapi_proto_depIdxs = []int32{
 	36,  // 45: ateapi.ActorTemplate.sandbox_config:type_name -> ateapi.SandboxConfig
 	32,  // 46: ateapi.ActorTemplate.resources:type_name -> ateapi.Resources
 	35,  // 47: ateapi.ActorTemplate.status:type_name -> ateapi.ActorTemplateStatus
-	14,  // 48: ateapi.ActorTemplate.default_egress_policy:type_name -> ateapi.EgressPolicyTemplate
+	14,  // 48: ateapi.ActorTemplate.golden_egress_policy:type_name -> ateapi.EgressPolicyTemplate
 	33,  // 49: ateapi.Resources.limits:type_name -> ateapi.Limits
 	30,  // 50: ateapi.GoldenSnapshotStatus.golden_tag:type_name -> ateapi.ObjectRef
 	126, // 51: ateapi.GoldenSnapshotStatus.take_golden_snapshot_at:type_name -> google.protobuf.Timestamp

@@ -52,7 +52,7 @@ func applyActorTemplateDefaults(t *ateapipb.ActorTemplate) {
 		return
 	}
 	applySnapshotConfigDefaults(t.SnapshotConfig)
-	applyEgressRuleDefaults(t.GetDefaultEgressPolicy().GetRules())
+	applyEgressRuleDefaults(t.GetGoldenEgressPolicy().GetRules())
 	for _, c := range t.Containers {
 		applyContainerDefaults(c)
 	}

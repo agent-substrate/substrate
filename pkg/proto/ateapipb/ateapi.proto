@@ -1001,15 +1001,15 @@ message ActorTemplate {
   // +k8s:optional
   ActorTemplateStatus status = 8;
 
-  // Initial egress policy, copied atomically when an Actor is created from
-  // this template, including the golden Actor used for initialization. The
-  // policy is named "default" in the Actor's atespace, with its own metadata.
-  // Callers may update or delete the copy independently; changing the Actor's
-  // template does not update its policy. If absent, no policy is created;
-  // an empty block creates a policy with no rules.
+  // Egress policy for the golden Actor during initialization. Copied
+  // atomically when the golden Actor is created, as its "default" policy
+  // in the reserved ate-golden atespace. Actors created from this template
+  // do not inherit this policy, including when using the golden snapshot.
+  // If absent, no policy is created; an empty block creates a policy with
+  // no rules.
   //
   // +k8s:optional
-  EgressPolicyTemplate default_egress_policy = 9;
+  EgressPolicyTemplate golden_egress_policy = 9;
 }
 
 message Resources {

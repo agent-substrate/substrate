@@ -35,41 +35,41 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate()},
 		nil,
 	}, {
-		"valid default egress rules",
+		"valid golden egress rules",
 		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.DefaultEgressPolicy = &ateapipb.EgressPolicyTemplate{Rules: []*ateapipb.EgressRule{{Http: &ateapipb.HTTPRule{Hostnames: []string{"api.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{80}}}}}}
+			tmpl.GoldenEgressPolicy = &ateapipb.EgressPolicyTemplate{Rules: []*ateapipb.EgressRule{{Http: &ateapipb.HTTPRule{Hostnames: []string{"api.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{80}}}}}}
 		})},
 		nil,
 	}, {
-		"empty default egress rules",
+		"empty golden egress rules",
 		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.DefaultEgressPolicy = &ateapipb.EgressPolicyTemplate{}
+			tmpl.GoldenEgressPolicy = &ateapipb.EgressPolicyTemplate{}
 		})},
 		nil,
 	}, {
-		"invalid default egress hostname",
+		"invalid golden egress hostname",
 		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.DefaultEgressPolicy = &ateapipb.EgressPolicyTemplate{Rules: []*ateapipb.EgressRule{{Http: &ateapipb.HTTPRule{Hostnames: []string{"bad/host"}, Ports: &ateapipb.Ports{Numbers: []int32{80}}}}}}
+			tmpl.GoldenEgressPolicy = &ateapipb.EgressPolicyTemplate{Rules: []*ateapipb.EgressRule{{Http: &ateapipb.HTTPRule{Hostnames: []string{"bad/host"}, Ports: &ateapipb.Ports{Numbers: []int32{80}}}}}}
 		})},
-		field.ErrorList{field.Invalid(field.NewPath("actor_template", "default_egress_policy", "rules").Index(0).Child("http", "hostnames").Index(0), nil, "")},
+		field.ErrorList{field.Invalid(field.NewPath("actor_template", "golden_egress_policy", "rules").Index(0).Child("http", "hostnames").Index(0), nil, "")},
 	}, {
-		"default egress rules tie across protocols",
+		"golden egress rules tie across protocols",
 		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.DefaultEgressPolicy = &ateapipb.EgressPolicyTemplate{Rules: []*ateapipb.EgressRule{
+			tmpl.GoldenEgressPolicy = &ateapipb.EgressPolicyTemplate{Rules: []*ateapipb.EgressRule{
 				{Https: &ateapipb.HTTPSRule{Hostnames: []string{"api.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{443}}}},
 				{TlsPassthrough: &ateapipb.TLSPassthroughRule{Hostnames: []string{"api.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{443}}}},
 			}}
 		})},
-		field.ErrorList{field.Invalid(field.NewPath("actor_template", "default_egress_policy", "rules").Index(1).Child("tls_passthrough", "hostnames").Index(0), nil, "")},
+		field.ErrorList{field.Invalid(field.NewPath("actor_template", "golden_egress_policy", "rules").Index(1).Child("tls_passthrough", "hostnames").Index(0), nil, "")},
 	}, {
-		"too many default egress rules",
+		"too many golden egress rules",
 		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.DefaultEgressPolicy = &ateapipb.EgressPolicyTemplate{}
+			tmpl.GoldenEgressPolicy = &ateapipb.EgressPolicyTemplate{}
 			for i := range 257 {
-				tmpl.DefaultEgressPolicy.Rules = append(tmpl.DefaultEgressPolicy.Rules, &ateapipb.EgressRule{Http: &ateapipb.HTTPRule{Hostnames: []string{fmt.Sprintf("host-%d.example.com", i)}, Ports: &ateapipb.Ports{Numbers: []int32{80}}}})
+				tmpl.GoldenEgressPolicy.Rules = append(tmpl.GoldenEgressPolicy.Rules, &ateapipb.EgressRule{Http: &ateapipb.HTTPRule{Hostnames: []string{fmt.Sprintf("host-%d.example.com", i)}, Ports: &ateapipb.Ports{Numbers: []int32{80}}}})
 			}
 		})},
-		field.ErrorList{field.TooMany(field.NewPath("actor_template", "default_egress_policy", "rules"), 257, 256).WithOrigin("maxItems")},
+		field.ErrorList{field.TooMany(field.NewPath("actor_template", "golden_egress_policy", "rules"), 257, 256).WithOrigin("maxItems")},
 	}, {
 		"missing actor_template",
 		&ateapipb.CreateActorTemplateRequest{},

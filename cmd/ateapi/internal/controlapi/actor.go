@@ -149,7 +149,7 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 
 	// Save the data in the storage layer.
 	var policy *ateapipb.EgressPolicy
-	if initial := template.GetDefaultEgressPolicy(); initial != nil {
+	if initial := template.GetGoldenEgressPolicy(); initial != nil && atespace == resources.GoldenActorAtespace {
 		policy = &ateapipb.EgressPolicy{
 			Metadata: &ateapipb.ResourceMetadata{Atespace: atespace, Name: "default"},
 			Rules:    initial.GetRules(),
