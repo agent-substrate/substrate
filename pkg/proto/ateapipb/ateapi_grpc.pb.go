@@ -1839,13 +1839,14 @@ const (
 // authorization: Control is the client-facing API, while these RPCs are served
 // only to an atelet, and only for the Workers on its own node.
 type WorkerServiceClient interface {
-	// SetWorkerCapacity records what a Worker can hold. Capacity is the Worker's
-	// to report rather than the control plane's to infer: it is what the ateom
-	// can actually supply, only its node can observe it, and a fleet may run
-	// mixed ateom versions.
+	// SetWorkerCapacity records what a Worker can hold and the host hardware it
+	// runs on. Capacity is the Worker's to report rather than the control plane's
+	// to infer: it is what the ateom can actually supply, only its node can
+	// observe it, and a fleet may run mixed ateom versions.
 	//
 	// atelet calls this with its own client certificate, as it does for
-	// MintCert. Idempotent: re-sending the same capacity is not a write.
+	// MintCert. Idempotent: re-sending the same capacity and hardware is not a
+	// write.
 	SetWorkerCapacity(ctx context.Context, in *SetWorkerCapacityRequest, opts ...grpc.CallOption) (*SetWorkerCapacityResponse, error)
 	// Create a Substrate-issued SPIFFE certificate that asserts an ateom acting
 	// on behalf of a particular actor.
@@ -1921,13 +1922,14 @@ func (c *workerServiceClient) RequestActorSuspend(ctx context.Context, in *Reque
 // authorization: Control is the client-facing API, while these RPCs are served
 // only to an atelet, and only for the Workers on its own node.
 type WorkerServiceServer interface {
-	// SetWorkerCapacity records what a Worker can hold. Capacity is the Worker's
-	// to report rather than the control plane's to infer: it is what the ateom
-	// can actually supply, only its node can observe it, and a fleet may run
-	// mixed ateom versions.
+	// SetWorkerCapacity records what a Worker can hold and the host hardware it
+	// runs on. Capacity is the Worker's to report rather than the control plane's
+	// to infer: it is what the ateom can actually supply, only its node can
+	// observe it, and a fleet may run mixed ateom versions.
 	//
 	// atelet calls this with its own client certificate, as it does for
-	// MintCert. Idempotent: re-sending the same capacity is not a write.
+	// MintCert. Idempotent: re-sending the same capacity and hardware is not a
+	// write.
 	SetWorkerCapacity(context.Context, *SetWorkerCapacityRequest) (*SetWorkerCapacityResponse, error)
 	// Create a Substrate-issued SPIFFE certificate that asserts an ateom acting
 	// on behalf of a particular actor.

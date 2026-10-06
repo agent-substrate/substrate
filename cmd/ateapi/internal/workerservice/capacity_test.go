@@ -59,6 +59,42 @@ func TestSetWorkerCapacity(t *testing.T) {
 	}
 }
 
+func TestSetWorkerCapacity_RecordsHardware(t *testing.T) {
+	st, cleanup := storetest.SetupTestStore(t)
+	defer cleanup()
+	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, nil)
+	seedReportedWorker(t, st, testNode, &ateapipb.WorkerResources{Actors: 1})
+	authed := ateletauthtest.ContextWith(ateletauthtest.CertOn(t, testNode))
+
+	wantHW := &ateapipb.Hardware{
+		Attributes: map[string]string{
+			"architecture": "amd64",
+		},
+	}
+	req := &ateapipb.SetWorkerCapacityRequest{
+		Worker:   &ateapipb.ObjectRef{Name: testWorkerName},
+		Capacity: &ateapipb.WorkerResources{Actors: 4094},
+		Hardware: wantHW,
+	}
+	got, err := s.SetWorkerCapacity(authed, req)
+	if err != nil {
+		t.Fatalf("SetWorkerCapacity() failed: %v", err)
+	}
+	if diff := cmp.Diff(wantHW, got.GetWorker().GetStatus().GetHardware(), protocmp.Transform()); diff != "" {
+		t.Errorf("hardware mismatch (-want +got):\n%s", diff)
+	}
+
+	// Repeating the identical capacity and hardware must not bump version.
+	v1 := got.GetWorker().GetMetadata().GetVersion()
+	again, err := s.SetWorkerCapacity(authed, req)
+	if err != nil {
+		t.Fatalf("SetWorkerCapacity() repeat failed: %v", err)
+	}
+	if gotV := again.GetWorker().GetMetadata().GetVersion(); gotV != v1 {
+		t.Errorf("version = %d after identical capacity+hardware report, want %d unchanged", gotV, v1)
+	}
+}
+
 // An atelet speaks for the Workers it herds and no others. A Worker on another
 // node is reported as absent rather than forbidden, so a caller learns nothing
 // about what runs elsewhere.

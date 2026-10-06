@@ -33,7 +33,8 @@ import (
 
 type ateomSupportServer struct {
 	ateletpb.UnimplementedAteomSupportServer
-	workers ateapipb.WorkerServiceClient
+	workers  ateapipb.WorkerServiceClient
+	hardware *ateapipb.Hardware
 }
 
 func (b *ateomSupportServer) MintActorCertificate(ctx context.Context, req *ateletpb.MintActorCertificateRequest) (*ateletpb.MintActorCertificateResponse, error) {
@@ -101,7 +102,8 @@ func verifyClientOnSameNode(node *substratex509.PodIdentity) func(tls.Connection
 	}
 }
 
-// SetWorkerCapacity records what the calling worker says it has.
+// SetWorkerCapacity records what the calling worker says it has along with the
+// host hardware atelet observed on this node.
 //
 // It returns the control plane's error unwrapped so the caller retries: a
 // worker reports once, so an accepted call is the only thing that puts
@@ -124,6 +126,7 @@ func (s *ateomSupportServer) SetWorkerCapacity(ctx context.Context, req *ateletp
 		// Workers are global-scoped and named by their pod UID.
 		Worker:   &ateapipb.ObjectRef{Name: workerIdentity.PodUID},
 		Capacity: toWorkerResources(req.GetCapacity()),
+		Hardware: s.hardware,
 	}); err != nil {
 		return nil, err
 	}

@@ -126,6 +126,7 @@ func TestSetWorkerCapacity(t *testing.T) {
 		unauthenticated bool
 		// serviceErr is what the control plane answers with.
 		serviceErr    error
+		hardware      *ateapipb.Hardware
 		req           *ateletpb.SetWorkerCapacityRequest
 		wantCode      codes.Code
 		wantForwarded []*ateapipb.SetWorkerCapacityRequest
@@ -135,6 +136,19 @@ func TestSetWorkerCapacity(t *testing.T) {
 			Limits: []*ateletpb.Limits{{Name: "cpu", Quantity: "2"}, {Name: "memory", Quantity: "4Gi"}},
 		}}},
 		wantForwarded: forwarded(&ateapipb.WorkerResources{Actors: 4, Resources: resources.CPUMemory(2000, 4294967296)}),
+	}, {
+		name: "forwards node hardware alongside capacity",
+		hardware: &ateapipb.Hardware{Attributes: map[string]string{
+			"architecture": "amd64",
+		}},
+		req: &ateletpb.SetWorkerCapacityRequest{Capacity: &ateletpb.WorkerResources{Actors: 4}},
+		wantForwarded: []*ateapipb.SetWorkerCapacityRequest{{
+			Worker:   &ateapipb.ObjectRef{Name: "pod-a"},
+			Capacity: &ateapipb.WorkerResources{Actors: 4},
+			Hardware: &ateapipb.Hardware{Attributes: map[string]string{
+				"architecture": "amd64",
+			}},
+		}},
 	}, {
 		name:          "omits undetermined compute",
 		req:           &ateletpb.SetWorkerCapacityRequest{Capacity: &ateletpb.WorkerResources{Actors: 1}},
@@ -171,7 +185,7 @@ func TestSetWorkerCapacity(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			workers := &fakeWorkerService{err: tt.serviceErr}
-			svc := &ateomSupportServer{workers: workers}
+			svc := &ateomSupportServer{workers: workers, hardware: tt.hardware}
 			ctx := workerContext(t, "pod-a")
 			if tt.unauthenticated {
 				ctx = context.Background()

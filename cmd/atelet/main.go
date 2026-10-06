@@ -41,6 +41,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/atelet"
 	"github.com/agent-substrate/substrate/internal/clustertrustbundle"
 	"github.com/agent-substrate/substrate/internal/credbundle"
+	"github.com/agent-substrate/substrate/internal/hardware"
 	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/ocispec"
@@ -379,7 +380,8 @@ func main() {
 	ateomFacingSrv := grpc.NewServer(grpc.Creds(credentials.NewTLS(ateomFacingTLS)))
 
 	ateletpb.RegisterAteomSupportServer(ateomFacingSrv, &ateomSupportServer{
-		workers: ateapipb.NewWorkerServiceClient(ateapiConn),
+		workers:  ateapipb.NewWorkerServiceClient(ateapiConn),
+		hardware: hardware.ProbeHost(),
 	})
 	go func() {
 		if err := ateomFacingSrv.Serve(ateomFacingLis); err != nil {

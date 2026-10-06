@@ -4754,6 +4754,59 @@ func Validate_HTTPSRule(
 	return errs
 }
 
+// Validate_Hardware validates an instance of Hardware according
+// to declarative validation rules in the API schema.
+func Validate_Hardware(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ateapipb.Hardware) (errs field.ErrorList) {
+
+	{ // field ateapipb.Hardware.Attributes
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj map[string]string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.MaxProperties(ctx, op, fldPath, obj, oldObj, 32).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if e := validate.OptionalMap(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.EachMapKey(ctx, op, fldPath, obj, oldObj,
+				func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+					return validate.MaxLength(ctx, op, fldPath, obj, oldObj, 128)
+				}); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			if e := validate.EachMapVal(ctx, op, fldPath, obj, oldObj, validate.DirectEqual,
+				func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+					return validate.MaxLength(ctx, op, fldPath, obj, oldObj, 256)
+				}); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.Hardware) map[string]string {
+				return oldObj.Attributes
+			})
+		errs = append(errs, fn(fldPath.Child("attributes"), obj.Attributes, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
 // Validate_HttpRuleEffects validates an instance of HttpRuleEffects according
 // to declarative validation rules in the API schema.
 func Validate_HttpRuleEffects(
@@ -6977,6 +7030,36 @@ func Validate_SetWorkerCapacityRequest(
 				return oldObj.Capacity
 			})
 		errs = append(errs, fn(fldPath.Child("capacity"), obj.Capacity, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateapipb.SetWorkerCapacityRequest.Hardware
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateapipb.Hardware,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_Hardware(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.SetWorkerCapacityRequest) *ateapipb.Hardware {
+				return oldObj.Hardware
+			})
+		errs = append(errs, fn(fldPath.Child("hardware"), obj.Hardware, oldVal, oldObj != nil)...)
 	}
 
 	return errs
@@ -9311,6 +9394,36 @@ func Validate_WorkerStatus(
 				return &oldObj.ObservedEpoch
 			})
 		errs = append(errs, fn(fldPath.Child("observed_epoch"), &obj.ObservedEpoch, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateapipb.WorkerStatus.Hardware
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateapipb.Hardware,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_Hardware(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.WorkerStatus) *ateapipb.Hardware {
+				return oldObj.Hardware
+			})
+		errs = append(errs, fn(fldPath.Child("hardware"), obj.Hardware, oldVal, oldObj != nil)...)
 	}
 
 	return errs

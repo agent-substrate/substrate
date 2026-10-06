@@ -29,8 +29,8 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// SetWorkerCapacity records a Worker's reported capacity. As with MintCert,
-// the caller must be an atelet running on the Worker's node.
+// SetWorkerCapacity records a Worker's reported capacity and host hardware. As
+// with MintCert, the caller must be an atelet running on the Worker's node.
 func (s *Server) SetWorkerCapacity(ctx context.Context, req *ateapipb.SetWorkerCapacityRequest) (*ateapipb.SetWorkerCapacityResponse, error) {
 	// TODO(identity): This check should be handled by OpenFGA.
 	caller, err := ateletauth.Authenticate(ctx, s.ateletSPIFFEID)
@@ -41,6 +41,7 @@ func (s *Server) SetWorkerCapacity(ctx context.Context, req *ateapipb.SetWorkerC
 		return nil, resources.ToAPIError(errs)
 	}
 	reported := req.GetCapacity()
+	reportedHardware := req.GetHardware()
 	name := req.GetWorker().GetName()
 
 	// Use authoritative state to authorize the write.
@@ -61,7 +62,7 @@ func (s *Server) SetWorkerCapacity(ctx context.Context, req *ateapipb.SetWorkerC
 		return nil, apierror.NotFound("Worker %s not found", name)
 	}
 
-	if proto.Equal(worker.GetStatus().GetCapacity(), reported) {
+	if proto.Equal(worker.GetStatus().GetCapacity(), reported) && proto.Equal(worker.GetStatus().GetHardware(), reportedHardware) {
 		return &ateapipb.SetWorkerCapacityResponse{Worker: worker}, nil
 	}
 
@@ -69,6 +70,7 @@ func (s *Server) SetWorkerCapacity(ctx context.Context, req *ateapipb.SetWorkerC
 		// Replaces rather than merges: a Worker reports everything it has, so a
 		// dimension this report leaves out is one it no longer supplies.
 		toUpdate.Status.Capacity = reported
+		toUpdate.Status.Hardware = reportedHardware
 		return nil
 	})
 	switch {
@@ -83,6 +85,7 @@ func (s *Server) SetWorkerCapacity(ctx context.Context, req *ateapipb.SetWorkerC
 	slog.InfoContext(ctx, "Worker reported its capacity",
 		slog.String("worker", name),
 		slog.String("was", worker.GetStatus().GetCapacity().String()),
-		slog.String("now", updated.GetStatus().GetCapacity().String()))
+		slog.String("now", updated.GetStatus().GetCapacity().String()),
+		slog.String("hardware", updated.GetStatus().GetHardware().String()))
 	return &ateapipb.SetWorkerCapacityResponse{Worker: updated}, nil
 }

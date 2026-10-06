@@ -379,6 +379,31 @@ func TestValidateSetWorkerCapacityRequest(t *testing.T) {
 			r.Capacity.Resources.Limits = []*ateapipb.Limits{{Name: "cpu", Quantity: "lots"}}
 		}),
 		want: field.ErrorList{field.Invalid(field.NewPath("capacity", "resources", "limits").Index(0).Child("quantity"), nil, "")},
+	}, {
+		name: "valid with hardware attributes",
+		req: valid(func(r *ateapipb.SetWorkerCapacityRequest) {
+			r.Hardware = &ateapipb.Hardware{
+				Attributes: map[string]string{
+					"architecture": "amd64",
+				},
+			}
+		}),
+	}, {
+		name: "hardware attribute key too long",
+		req: valid(func(r *ateapipb.SetWorkerCapacityRequest) {
+			r.Hardware = &ateapipb.Hardware{
+				Attributes: map[string]string{strings.Repeat("k", 129): "v"},
+			}
+		}),
+		want: field.ErrorList{field.TooLong(field.NewPath("hardware", "attributes"), "", 128).WithOrigin("maxLength")},
+	}, {
+		name: "hardware attribute value too long",
+		req: valid(func(r *ateapipb.SetWorkerCapacityRequest) {
+			r.Hardware = &ateapipb.Hardware{
+				Attributes: map[string]string{"k": strings.Repeat("v", 257)},
+			}
+		}),
+		want: field.ErrorList{field.TooLong(field.NewPath("hardware", "attributes").Key("k"), "", 256).WithOrigin("maxLength")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
