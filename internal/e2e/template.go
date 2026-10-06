@@ -88,6 +88,9 @@ func CreateSubstrateTemplateFrom(ctx context.Context, t *testing.T, clients *Cli
 			Replicas:     opts.PoolReplicas,
 			WorkerImage:  existingWp.Spec.WorkerImage,
 			SandboxClass: existingWp.Spec.SandboxClass,
+			// Preserve device selection, resource sizing and version placement
+			// from the fixture; class alone cannot distinguish KVM from MSHV.
+			Template: existingWp.Spec.Template.DeepCopy(),
 		},
 	}
 	if _, err := clients.SubstrateK8s.ApiV1alpha1().WorkerPools(namespace).Create(ctx, wp, metav1.CreateOptions{}); err != nil {
