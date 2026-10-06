@@ -29,6 +29,14 @@ var (
 	// directories are visible at the same path in atelet (which writes them)
 	// and in every ateom pod (which mounts them as overlay lowerdirs).
 	ImageCacheDir = filepath.Join(nodepath.BasePath, "image-cache")
+
+	// SnapshotCacheDir is the node-local cache of shared snapshot files —
+	// golden snapshots today, tag snapshots later (see
+	// cmd/atelet/internal/filecache). It lives under BasePath because cache
+	// hits are served as hard links into the per-actor restore dirs under
+	// ActorsDir, and link(2) requires both ends on one mounted filesystem —
+	// the same mount, not merely the same disk.
+	SnapshotCacheDir = filepath.Join(nodepath.BasePath, "snapshot-cache")
 )
 
 func RunSCBinaryPath(sha256 string) string {

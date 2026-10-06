@@ -2794,6 +2794,17 @@ func TestResumeActor(t *testing.T) {
 	if !tc.fakeAtelet.RestoreCalled {
 		t.Errorf("expected Restore to be called")
 	}
+	// A new actor borrows the template's golden tag snapshot, which is
+	// immutable and read by every actor born from it, so the control plane
+	// declares it shared: atelet may serve its files from the node cache.
+	if restoreReq := tc.fakeAtelet.lastRestoreRequest(); restoreReq != nil {
+		if got := restoreReq.GetExternalConfig().GetSnapshotUri(); got != goldenSnapshotURI(t) {
+			t.Errorf("fresh resume restore uri = %q, want the template's golden %q", got, goldenSnapshotURI(t))
+		}
+		if got := restoreReq.GetExternalConfig().GetSharing(); got != ateletpb.SnapshotSharing_SNAPSHOT_SHARING_SHARED {
+			t.Errorf("fresh-from-golden restore sharing = %v, want SNAPSHOT_SHARING_SHARED", got)
+		}
+	}
 
 	getResp, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
@@ -3007,11 +3018,21 @@ func TestResumeActor_DataSnapshotIgnoresGolden(t *testing.T) {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
 
-	// First resume runs fresh from the golden; the suspend then commits a
-	// DATA snapshot per onCommit.
+	// First resume runs fresh from the golden — a shared snapshot, and the
+	// request must say so (atelet caches only declared-SHARED sources).
 	if _, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{Actor: actorRef}); err != nil {
 		t.Fatalf("ResumeActor (first) failed: %v", err)
 	}
+	golden := goldenSnapshotURI(t)
+	freshReq := tc.fakeAtelet.lastRestoreRequest()
+	if got := freshReq.GetExternalConfig().GetSnapshotUri(); got != golden {
+		t.Errorf("fresh resume restore uri = %q, want the template's golden %q", got, golden)
+	}
+	if got := freshReq.GetExternalConfig().GetSharing(); got != ateletpb.SnapshotSharing_SNAPSHOT_SHARING_SHARED {
+		t.Errorf("fresh-from-golden restore sharing = %v, want SNAPSHOT_SHARING_SHARED", got)
+	}
+
+	// The suspend then commits a DATA snapshot per onCommit.
 	suspended, err := tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{Actor: actorRef})
 	if err != nil {
 		t.Fatalf("SuspendActor failed: %v", err)
@@ -3035,6 +3056,11 @@ func TestResumeActor_DataSnapshotIgnoresGolden(t *testing.T) {
 	}
 	if got := restoreReq.GetExternalConfig().GetSnapshotUri(); got != actorSnapshotURI {
 		t.Errorf("restore config snapshot uri = %q, want the actor's data snapshot %q", got, actorSnapshotURI)
+	}
+	// The actor's own snapshot is private: nothing else ever reads it, so
+	// atelet must not cache it.
+	if got := restoreReq.GetExternalConfig().GetSharing(); got != ateletpb.SnapshotSharing_SNAPSHOT_SHARING_PRIVATE {
+		t.Errorf("own-snapshot restore sharing = %v, want SNAPSHOT_SHARING_PRIVATE", got)
 	}
 }
 
@@ -3774,6 +3800,11 @@ func TestResumeActor_RepointTemplateBeforeResume(t *testing.T) {
 			// from the tag, not the template's golden image.
 			if got := restoreReq.GetExternalConfig().GetSnapshotUri(); got != cloneActor.GetStatus().GetExternalSnapshot().GetSnapshotUri() {
 				t.Errorf("restore request to atelet had snapshot uri = %q, want the clone's borrowed %q", got, cloneActor.GetStatus().GetExternalSnapshot().GetSnapshotUri())
+			}
+			// The clone still borrows the tag's snapshot — shared and
+			// immutable — so the restore declares it cacheable.
+			if got := restoreReq.GetExternalConfig().GetSharing(); got != ateletpb.SnapshotSharing_SNAPSHOT_SHARING_SHARED {
+				t.Errorf("borrowed-tag restore sharing = %v, want SNAPSHOT_SHARING_SHARED", got)
 			}
 		})
 	}
