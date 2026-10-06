@@ -107,9 +107,7 @@ func CreateSubstrateTemplateFrom(ctx context.Context, t *testing.T, clients *Cli
 		Metadata:       &ateapipb.ResourceMetadata{Atespace: opts.Atespace, Name: opts.Name},
 		WorkerSelector: &ateapipb.Selector{MatchLabels: opts.Labels},
 		Containers:     srcTmpl.GetContainers(),
-		// The source's limits size the sandbox. Copying them matters most on
-		// micro-VM, where an ActorTemplate that declares none boots the guest
-		// at ateom's default guest size (2GiB) instead of the demo's 512Mi.
+		// The source's limits size the sandbox, and the API requires them.
 		Resources: srcTmpl.GetResources(),
 		// The source carries the sandbox_class/config_name pair for the
 		// class under test.

@@ -27,10 +27,9 @@ import (
 )
 
 // guestEnvelope is the ceiling an actor's container limits must fit inside.
-// declaredBytes is the actor-level memory limit (0 when the template declares
-// none), and reserveMiB the guest RAM held back for the VMM; together they
-// explain where memMiB came from, so the error can name the field the user can
-// actually raise.
+// declaredBytes is the actor-level memory limit and reserveMiB the guest RAM
+// held back for the VMM; together they explain where memMiB came from, so the
+// error can name the field the user can actually raise.
 //
 // memMiB is already net of reserveMiB, while vcpus is not. The asymmetry is
 // deliberate: an unreduced memory limit would push the worker pod past its own
@@ -49,11 +48,8 @@ type guestEnvelope struct {
 
 // remedy names the field that raises the memory ceiling.
 func (e guestEnvelope) remedy() string {
-	if e.declaredBytes > 0 {
-		return fmt.Sprintf("raise spec.resources.limits.memory (declared %dMiB, less the %dMiB VMM reserve) or lower the container limits",
-			e.declaredBytes/(1024*1024), e.reserveMiB)
-	}
-	return "lower the limits or use a SandboxConfig with a larger guest"
+	return fmt.Sprintf("raise spec.resources.limits.memory (declared %dMiB, less the %dMiB VMM reserve) or lower the container limits",
+		e.declaredBytes/(1024*1024), e.reserveMiB)
 }
 
 // cpuRemedy names the field that raises the vCPU ceiling. Unlike remedy, it
@@ -64,10 +60,9 @@ func (e guestEnvelope) cpuRemedy() string {
 }
 
 // checkResourceEnvelope rejects limits the guest can never satisfy. The guest is
-// sized from the actor's own declared limits, or from the pool's SandboxConfig
-// when the template declares none, so a limit above the guest can never bind:
-// the container would hit the guest's own ceiling instead, with an error
-// pointing nowhere useful.
+// sized from the actor's own declared limits, so a container limit above the
+// guest can never bind: the container would hit the guest's own ceiling
+// instead, with an error pointing nowhere useful.
 //
 // Limits are summed across the actor's containers rather than checked one at a
 // time, because they share one guest. Errors carry codes.InvalidArgument: the
