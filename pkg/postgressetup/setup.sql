@@ -12,19 +12,36 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
+SELECT
+    set_config('agent_substrate.setup_schema', :'substrate_schema', true) AS schema,
+    set_config('agent_substrate.setup_owner_role', :'substrate_owner_role', true) AS owner_role,
+    set_config('agent_substrate.setup_owner_user', :'substrate_owner_user', true) AS owner_user,
+    set_config('agent_substrate.setup_owner_password', :'substrate_owner_password', true) AS owner_password,
+    set_config('agent_substrate.setup_readwrite_role', :'substrate_readwrite_role', true) AS readwrite_role,
+    set_config('agent_substrate.setup_readwrite_user', :'substrate_readwrite_user', true) AS readwrite_user,
+    set_config('agent_substrate.setup_readwrite_password', :'substrate_readwrite_password', true) AS readwrite_password
+\gset
+
 DO $setup$
 DECLARE
+    schema_name text := current_setting('agent_substrate.setup_schema');
+    owner_role text := current_setting('agent_substrate.setup_owner_role');
+    owner_user text := current_setting('agent_substrate.setup_owner_user');
+    owner_password text := current_setting('agent_substrate.setup_owner_password');
+    readwrite_role text := current_setting('agent_substrate.setup_readwrite_role');
+    readwrite_user text := current_setting('agent_substrate.setup_readwrite_user');
+    readwrite_password text := current_setting('agent_substrate.setup_readwrite_password');
     managed record;
     role_attrs record;
     schema_owner text;
 BEGIN
-    PERFORM pg_advisory_xact_lock(hashtextextended('agent-substrate:setup:substrate', 0));
+    PERFORM pg_advisory_xact_lock(hashtextextended('agent-substrate:setup:' || schema_name, 0));
 
     FOR managed IN SELECT * FROM (VALUES
-        ('substrate_owner', false, NULL::text),
-        ('substrate_readwrite', false, NULL::text),
-        ('substrate_owner_user', true, 'substrate-owner'),
-        ('substrate_readwrite_user', true, 'substrate-readwrite')
+        (owner_role, false, NULL::text),
+        (readwrite_role, false, NULL::text),
+        (owner_user, true, owner_password),
+        (readwrite_user, true, readwrite_password)
     ) AS roles(name, can_login, password) LOOP
         SELECT rolcanlogin, rolsuper, rolcreatedb, rolcreaterole, rolreplication, rolinherit
           INTO role_attrs FROM pg_roles WHERE rolname = managed.name;
@@ -44,26 +61,22 @@ BEGIN
         END IF;
     END LOOP;
 
-    GRANT substrate_owner TO substrate_owner_user;
-    GRANT substrate_readwrite TO substrate_readwrite_user;
+    EXECUTE format('GRANT %I TO %I', owner_role, owner_user);
+    EXECUTE format('GRANT %I TO %I', readwrite_role, readwrite_user);
 
-    SELECT pg_get_userbyid(nspowner) INTO schema_owner FROM pg_namespace WHERE nspname = 'substrate';
+    SELECT pg_get_userbyid(nspowner) INTO schema_owner FROM pg_namespace WHERE nspname = schema_name;
     IF NOT FOUND THEN
-        CREATE SCHEMA substrate AUTHORIZATION substrate_owner;
-    ELSIF schema_owner <> 'substrate_owner' THEN
-        RAISE EXCEPTION 'PostgreSQL schema "substrate" is owned by "%", not "substrate_owner"', schema_owner;
+        EXECUTE format('CREATE SCHEMA %I AUTHORIZATION %I', schema_name, owner_role);
+    ELSIF schema_owner <> owner_role THEN
+        RAISE EXCEPTION 'PostgreSQL schema "%" is owned by "%", not "%"', schema_name, schema_owner, owner_role;
     END IF;
 
     REVOKE CREATE ON SCHEMA public FROM PUBLIC;
-    REVOKE ALL ON SCHEMA substrate FROM PUBLIC;
-    GRANT USAGE ON SCHEMA substrate TO substrate_readwrite;
-    ALTER DEFAULT PRIVILEGES FOR ROLE substrate_owner IN SCHEMA substrate
-      GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO substrate_readwrite;
-    ALTER DEFAULT PRIVILEGES FOR ROLE substrate_owner IN SCHEMA substrate
-      GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO substrate_readwrite;
-    ALTER DEFAULT PRIVILEGES FOR ROLE substrate_owner IN SCHEMA substrate
-      GRANT EXECUTE ON ROUTINES TO substrate_readwrite;
-    ALTER DEFAULT PRIVILEGES FOR ROLE substrate_owner IN SCHEMA substrate
-      GRANT USAGE ON TYPES TO substrate_readwrite;
+    EXECUTE format('REVOKE ALL ON SCHEMA %I FROM PUBLIC', schema_name);
+    EXECUTE format('GRANT USAGE ON SCHEMA %I TO %I', schema_name, readwrite_role);
+    EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO %I', owner_role, schema_name, readwrite_role);
+    EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO %I', owner_role, schema_name, readwrite_role);
+    EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I GRANT EXECUTE ON ROUTINES TO %I', owner_role, schema_name, readwrite_role);
+    EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I GRANT USAGE ON TYPES TO %I', owner_role, schema_name, readwrite_role);
 END
 $setup$;

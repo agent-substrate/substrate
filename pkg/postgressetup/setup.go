@@ -12,25 +12,66 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package postgressetup provides the fixed PostgreSQL identities used by
-// development installers that bundle Substrate.
+// Package postgressetup provides the PostgreSQL identity setup shared by
+// Substrate installers.
 package postgressetup
 
 import _ "embed"
 
 const (
+	Schema            = "substrate"
+	OwnerRole         = "substrate_owner"
 	OwnerUser         = "substrate_owner_user"
 	OwnerPassword     = "substrate-owner"
+	ReadWriteRole     = "substrate_readwrite"
 	ReadWriteUser     = "substrate_readwrite_user"
 	ReadWritePassword = "substrate-readwrite"
 )
 
+// Config names the schema and identities created by SQL.
+type Config struct {
+	Schema            string
+	OwnerRole         string
+	OwnerUser         string
+	OwnerPassword     string
+	ReadWriteRole     string
+	ReadWriteUser     string
+	ReadWritePassword string
+}
+
+// DefaultConfig returns the identities used by bundled development installs.
+func DefaultConfig() Config {
+	return Config{
+		Schema:            Schema,
+		OwnerRole:         OwnerRole,
+		OwnerUser:         OwnerUser,
+		OwnerPassword:     OwnerPassword,
+		ReadWriteRole:     ReadWriteRole,
+		ReadWriteUser:     ReadWriteUser,
+		ReadWritePassword: ReadWritePassword,
+	}
+}
+
+// PSQLArgs returns the psql variable arguments required by SQL.
+func (c Config) PSQLArgs() []string {
+	return []string{
+		"--set=substrate_schema=" + c.Schema,
+		"--set=substrate_owner_role=" + c.OwnerRole,
+		"--set=substrate_owner_user=" + c.OwnerUser,
+		"--set=substrate_owner_password=" + c.OwnerPassword,
+		"--set=substrate_readwrite_role=" + c.ReadWriteRole,
+		"--set=substrate_readwrite_user=" + c.ReadWriteUser,
+		"--set=substrate_readwrite_password=" + c.ReadWritePassword,
+	}
+}
+
 //go:embed setup.sql
 var sql string
 
-// SQL returns the idempotent SQL that creates Substrate's development roles,
-// users, and schema. The caller owns the surrounding transaction.
+// SQL returns the parameterized psql script that creates Substrate's roles,
+// users, and schema. The caller supplies Config.PSQLArgs and owns the
+// surrounding transaction.
 func SQL() string { return sql }
 
-// Script returns SQL as a complete transaction for direct execution.
+// Script returns the psql script as a complete transaction for direct execution.
 func Script() string { return "BEGIN;\n" + sql + "\nCOMMIT;\n" }

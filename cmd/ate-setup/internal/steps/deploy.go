@@ -288,8 +288,10 @@ func (e *Env) DeployAteAPIServer(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := e.deployPostgres(ctx, postgres); err != nil {
-		return err
+	if postgres.bundled {
+		if err := e.waitAndSetupBundledPostgres(ctx); err != nil {
+			return err
+		}
 	}
 	if err := e.renderResolveApply(ctx, e.Cfg.Manifest("ate-api-server.yaml")); err != nil {
 		return err

@@ -3,7 +3,7 @@
 ## Overview
 Substrate supports separate connections for schema ownership (DDL) and normal reads and writes (DML). Migrations and partition maintenance use the owner connection; application queries use the read/write connection. Each connection assumes its configured PostgreSQL role.
 
-The bundled development database uses fixed owner and read/write roles and separate login users. `ate-setup` creates them from [`pkg/postgressetup/setup.sql`](../pkg/postgressetup/setup.sql) before starting `ateapi`. Those fixed usernames and passwords are for development installations only.
+The bundled development database uses fixed owner and read/write roles and separate login users. `ate-setup` creates them from [`pkg/postgressetup/setup.sql`](../pkg/postgressetup/setup.sql) before starting `ateapi`. The script has no built-in identity defaults; `ate-setup` supplies the development values from `postgressetup.DefaultConfig`. Those fixed usernames and passwords are for development installations only.
 
 External databases are never provisioned by `ateapi` or `ate-setup`. Their operators must create the database identities and schema described below before deploying Substrate.
 
@@ -22,6 +22,18 @@ The external database must contain:
 - A stable `NOLOGIN` owner role. The default is `substrate_owner`.
 - A stable `NOLOGIN` read/write role. The default is `substrate_readwrite`.
 - One or two login users. The owner login must be a member of the owner role, and the runtime login must be a member of the read/write role. One login may be a member of both roles when separate credentials are unavailable.
+
+Operators using ordinary PostgreSQL login users may run [`pkg/postgressetup/setup.sql`](../pkg/postgressetup/setup.sql) with an administrator connection. It is a `psql` script and requires all of these variables:
+
+| Variable | Bundled development value |
+|---|---|
+| `substrate_schema` | `substrate` |
+| `substrate_owner_role` | `substrate_owner` |
+| `substrate_owner_user` | `substrate_owner_user` |
+| `substrate_owner_password` | `substrate-owner` |
+| `substrate_readwrite_role` | `substrate_readwrite` |
+| `substrate_readwrite_user` | `substrate_readwrite_user` |
+| `substrate_readwrite_password` | `substrate-readwrite` |
 
 The login users come from the database provider: they may be ordinary PostgreSQL users, IAM identities, or another provider-managed identity. Substrate does not create them or require specific login names.
 

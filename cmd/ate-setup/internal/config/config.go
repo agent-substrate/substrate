@@ -30,6 +30,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/images"
 	"github.com/agent-substrate/substrate/internal/installdefaults"
+	"github.com/agent-substrate/substrate/pkg/postgressetup"
 )
 
 // Enumerated values for the install-shaping flags.
@@ -57,9 +58,9 @@ const DefaultRolloutTimeout = 60 * time.Second
 const Size10PostgresPoolParams = "&pool_max_conns=64&pool_min_conns=4"
 
 const (
-	DefaultPostgresSchema        = "substrate"
-	DefaultPostgresReadWriteRole = "substrate_readwrite"
-	DefaultPostgresOwnerRole     = "substrate_owner"
+	DefaultPostgresSchema        = postgressetup.Schema
+	DefaultPostgresReadWriteRole = postgressetup.ReadWriteRole
+	DefaultPostgresOwnerRole     = postgressetup.OwnerRole
 )
 
 // Cloud SQL Auth Proxy IP types, the values ATE_API_POSTGRES_CLOUDSQL_IP_TYPE

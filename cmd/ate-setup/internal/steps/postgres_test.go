@@ -298,42 +298,18 @@ func TestBundledPostgresRequiresFixedIdentity(t *testing.T) {
 	}
 }
 
-func TestBundledPostgresAdminSecretValidation(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		data map[string][]byte
-		want bool
-	}{
-		{name: "complete", data: map[string][]byte{"POSTGRES_PASSWORD": []byte("secret")}},
-		{name: "missing password", data: map[string][]byte{}, want: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			e := &Env{Cfg: &config.Config{}, Kube: fakeKube(t, &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{Name: SecretPostgresAdmin, Namespace: NamespaceAteSystem},
-				Data:       tc.data,
-			})}
-			err := e.ensureBundledPostgresAdmin(t.Context())
-			if (err != nil) != tc.want {
-				t.Fatalf("ensureBundledPostgresAdmin() error = %v, want error %v", err, tc.want)
-			}
-		})
-	}
-}
-
-func TestBundledPostgresManifestUsesPasswordAuthentication(t *testing.T) {
+func TestBundledPostgresManifestAuthentication(t *testing.T) {
 	manifest, err := os.ReadFile(filepath.Join(repoRoot(t), "manifests", "ate-install", "postgres", "postgres.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	text := string(manifest)
-	if strings.Contains(text, "POSTGRES_HOST_AUTH_METHOD") {
-		t.Error("bundled PostgreSQL still configures trust authentication")
-	}
 	for _, want := range []string{
+		"local all all trust",
 		"hostssl all postgres all reject",
 		"hostssl atepg all all scram-sha-256 clientcert=verify-ca",
-		"name: postgres-admin",
-		"key: POSTGRES_PASSWORD",
+		"name: POSTGRES_HOST_AUTH_METHOD",
+		"value: trust",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("postgres manifest lacks %q", want)

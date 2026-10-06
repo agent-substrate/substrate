@@ -17,7 +17,6 @@ package steps
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"fmt"
 	"os"
 	"strings"
@@ -32,7 +31,7 @@ import (
 	"github.com/agent-substrate/substrate/pkg/postgressetup"
 )
 
-const postgresTLSParams = "sslmode=verify-full&sslrootcert=/run/servicedns.podcert.ate.dev/trust-bundle.pem&sslcert=/run/podidentity.podcert.ate.dev/credential-bundle.pem&sslkey=/run/podidentity.podcert.ate.dev/credential-bundle.pem&channel_binding=disable"
+const postgresTLSParams = "sslmode=verify-full&sslrootcert=/run/servicedns.podcert.ate.dev/trust-bundle.pem&sslcert=/run/podidentity.podcert.ate.dev/credential-bundle.pem&sslkey=/run/podidentity.podcert.ate.dev/credential-bundle.pem"
 
 func bundledPostgresDSN(user, password string) string {
 	return fmt.Sprintf("postgresql://%s:%s@postgres.ate-system.svc:5432/atepg?%s", user, password, postgresTLSParams)
@@ -52,30 +51,17 @@ func (e *Env) postgresReadWriteConnectionStrings() (string, string, error) {
 	return readWriteDSN, bundledPostgresDSN(postgressetup.OwnerUser, postgressetup.OwnerPassword), nil
 }
 
-func (e *Env) ensureBundledPostgresAdmin(ctx context.Context) error {
-	secret, err := e.Kube.GetSecret(ctx, e.Namespace(), SecretPostgresAdmin)
-	if err != nil {
-		return err
-	}
-	if secret == nil {
-		return e.Kube.ApplySecret(ctx, e.Namespace(), SecretPostgresAdmin, map[string]string{
-			"POSTGRES_PASSWORD": rand.Text(),
-		})
-	}
-	if len(secret.Data["POSTGRES_PASSWORD"]) == 0 {
-		return fmt.Errorf("secret %s/%s must contain a non-empty POSTGRES_PASSWORD", e.Namespace(), SecretPostgresAdmin)
-	}
-	return nil
-}
-
 // setupBundledPostgres creates the fixed development identities before ateapi
 // starts. Administrator credentials stay inside the PostgreSQL pod.
 func (e *Env) setupBundledPostgres(ctx context.Context) error {
 	log.Step("setup_bundled_postgres")
 	var stdout, stderr bytes.Buffer
-	err := e.Kube.Exec(ctx, e.Namespace(), "postgres-0", "postgres", []string{
+	command := []string{
 		"psql", "--no-psqlrc", "--set=ON_ERROR_STOP=1", "--username", "postgres", "--dbname", "atepg",
-	}, strings.NewReader(postgressetup.Script()), &stdout, &stderr)
+	}
+	command = append(command, postgressetup.DefaultConfig().PSQLArgs()...)
+	err := e.Kube.Exec(ctx, e.Namespace(), "postgres-0", "postgres", command,
+		strings.NewReader(postgressetup.Script()), &stdout, &stderr)
 	if err != nil {
 		if detail := strings.TrimSpace(stderr.String()); detail != "" {
 			return fmt.Errorf("setting up bundled PostgreSQL identities: %w: %s", err, detail)
@@ -83,6 +69,13 @@ func (e *Env) setupBundledPostgres(ctx context.Context) error {
 		return fmt.Errorf("setting up bundled PostgreSQL identities: %w", err)
 	}
 	return nil
+}
+
+func (e *Env) waitAndSetupBundledPostgres(ctx context.Context) error {
+	if err := e.Kube.RolloutStatus(ctx, kube.KindStatefulSet, e.Namespace(), "postgres", e.Cfg.RolloutTimeout); err != nil {
+		return err
+	}
+	return e.setupBundledPostgres(ctx)
 }
 
 // The size10 PostgreSQL container. Deliberately no CPU limit: under
@@ -144,10 +137,7 @@ func (e *Env) deployPostgres(ctx context.Context, plan postgresPlan) error {
 	if err := e.applyPostgres(ctx); err != nil {
 		return err
 	}
-	if err := e.Kube.RolloutStatus(ctx, kube.KindStatefulSet, e.Namespace(), "postgres", e.Cfg.RolloutTimeout); err != nil {
-		return err
-	}
-	return e.setupBundledPostgres(ctx)
+	return e.waitAndSetupBundledPostgres(ctx)
 }
 
 // postgresManifestPath is the bundled PostgreSQL manifest for the environment:
@@ -170,9 +160,6 @@ func (e *Env) postgresManifestPath() string {
 // under a different field manager would be exposed to.
 func (e *Env) applyPostgres(ctx context.Context) error {
 	if err := e.requirePostgresPool(ctx); err != nil {
-		return err
-	}
-	if err := e.ensureBundledPostgresAdmin(ctx); err != nil {
 		return err
 	}
 	manifest, err := e.render(e.postgresManifestPath())
