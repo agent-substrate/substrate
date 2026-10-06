@@ -33,28 +33,11 @@ import (
 func TestRelayCancelsUDPExchange(t *testing.T) {
 	// A resolver that receives the query and never answers, so the exchange is
 	// blocked on the read when the context is canceled.
-	silent, err := net.ListenPacket("udp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer silent.Close()
-	asked := make(chan struct{}, 1)
-	go func() {
-		buf := make([]byte, maxDNSDatagram)
-		for {
-			if _, _, err := silent.ReadFrom(buf); err != nil {
-				return
-			}
-			select {
-			case asked <- struct{}{}:
-			default:
-			}
-		}
-	}()
+	silent, asked := newSilentResolver(t)
 
 	// Two upstreams: a canceled exchange must not move on to the second.
 	second := newFakeResolver(t, func(query []byte) []byte { return query })
-	relay, err := NewRelayForUpstreams([]string{silent.LocalAddr().String(), second})
+	relay, err := NewRelayForUpstreams([]string{silent, second})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +46,7 @@ func TestRelayCancelsUDPExchange(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		_, err := relay.exchangeUDP(ctx, dnsQuery(0x1234))
+		_, err := unstartedServer(relay).exchangeUDP(ctx, dnsQuery(0x1234))
 		done <- err
 	}()
 	select {
@@ -166,18 +149,67 @@ func newFakeResolver(t *testing.T, respond func([]byte) []byte) string {
 	return pc.LocalAddr().String()
 }
 
-// serveRelayUDP runs the relay on a loopback socket and returns a connection to it.
-func serveRelayUDP(t *testing.T, relay *Relay) net.Conn {
+// newSilentResolver reads UDP queries and answers none, so each stays in
+// flight. It signals asked when a query arrives, and returns its address.
+func newSilentResolver(t *testing.T) (address string, asked <-chan struct{}) {
 	t.Helper()
 	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	go func() { _ = relay.servePacket(ctx, pc) }()
+	t.Cleanup(func() { pc.Close() })
+	seen := make(chan struct{}, 1)
+	go func() {
+		buf := make([]byte, maxDNSDatagram)
+		for {
+			if _, _, err := pc.ReadFrom(buf); err != nil {
+				return
+			}
+			select {
+			case seen <- struct{}{}:
+			default:
+			}
+		}
+	}()
+	return pc.LocalAddr().String(), seen
+}
 
-	client, err := net.Dial("udp", pc.LocalAddr().String())
+// serveLoopback runs the relay on loopback sockets and stops it on cleanup.
+func serveLoopback(t *testing.T, relay *Relay) (*Server, net.Addr, net.Addr) {
+	t.Helper()
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		pc.Close()
+		t.Fatal(err)
+	}
+	srv := relay.serveOn(context.Background(), &netConn{
+		dialer:      *relay.dialer,
+		udp:         pc,
+		tcpListener: lis,
+	})
+	t.Cleanup(func() { _ = srv.Stop(context.Background()) })
+	return srv, pc.LocalAddr(), lis.Addr()
+}
+
+// unstartedServer builds a Server for relay without serving on any socket, so
+// a test can call its methods directly.
+func unstartedServer(relay *Relay) *Server {
+	return &Server{
+		config:  &serverConfig{upstreams: relay.upstreams},
+		n:       &netConn{dialer: *relay.dialer},
+		limiter: &relay.limiter,
+	}
+}
+
+// serveRelayUDP runs the relay on loopback sockets and returns a connection to it.
+func serveRelayUDP(t *testing.T, relay *Relay) net.Conn {
+	t.Helper()
+	_, udpAddr, _ := serveLoopback(t, relay)
+	client, err := net.Dial("udp", udpAddr.String())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -313,18 +345,6 @@ func newHeldTCPResolver(t *testing.T) (address string, accepted *atomic.Int64) {
 	return lis.Addr().String(), &held
 }
 
-// serveRelayTCP runs the relay's TCP side on a loopback listener.
-func serveRelayTCP(t *testing.T, relay *Relay, ctx context.Context) net.Addr {
-	t.Helper()
-	lis, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { lis.Close() })
-	go func() { _ = relay.serveTCP(ctx, lis) }()
-	return lis.Addr()
-}
-
 // waitFor polls until cond holds, failing the test if it never does.
 func waitFor(t *testing.T, what string, cond func() bool) {
 	t.Helper()
@@ -344,9 +364,7 @@ func TestRelayRefusesTCPConnectionsBeyondItsLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	relayAddr := serveRelayTCP(t, relay, ctx)
+	_, _, relayAddr := serveLoopback(t, relay)
 
 	for range maxDNSConnections {
 		conn, err := net.Dial("tcp", relayAddr.String())
@@ -380,8 +398,7 @@ func TestRelayClosesTCPConnectionsWhenServingEnds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	relayAddr := serveRelayTCP(t, relay, ctx)
+	srv, _, relayAddr := serveLoopback(t, relay)
 
 	conn, err := net.Dial("tcp", relayAddr.String())
 	if err != nil {
@@ -389,15 +406,66 @@ func TestRelayClosesTCPConnectionsWhenServingEnds(t *testing.T) {
 	}
 	defer conn.Close()
 	waitFor(t, "the connection to reach an upstream", func() bool { return held.Load() == 1 })
+	if got := len(relay.limiter.connections); got != 1 {
+		t.Fatalf("%d connection slots held before Stop, want 1", got)
+	}
 
-	cancel()
+	stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := srv.Stop(stopCtx); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if got := len(relay.limiter.connections); got != 0 {
+		t.Errorf("%d connection slots still held after Stop, want 0", got)
+	}
 
-	// Cancellation must close the connection before dnsTCPTimeout.
+	// Stop must close the connection before dnsTCPTimeout.
 	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := conn.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
 		t.Errorf("reading after teardown = %v, want %v: the connection outlived the actor", err, io.EOF)
+	}
+	if err := srv.Stop(stopCtx); err != nil {
+		t.Errorf("second Stop: %v", err)
+	}
+}
+
+// Stop must cancel queries still being resolved rather than wait out
+// dnsExchangeTimeout, and return their slots to the worker's limiter.
+func TestStopCancelsUDPQueriesInFlight(t *testing.T) {
+	silent, asked := newSilentResolver(t)
+	relay, err := NewRelayForUpstreams([]string{silent})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, udpAddr, _ := serveLoopback(t, relay)
+	client, err := net.Dial("udp", udpAddr.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	if _, err := client.Write(dnsQuery(0x4567)); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-asked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the resolver never saw the query")
+	}
+	if got := len(relay.limiter.inFlight); got != 1 {
+		t.Fatalf("%d queries in flight before Stop, want 1", got)
+	}
+
+	// Well inside dnsExchangeTimeout, so only canceling the exchange stops in time.
+	stopCtx, cancel := context.WithTimeout(context.Background(), dnsExchangeTimeout/5)
+	defer cancel()
+	if err := srv.Stop(stopCtx); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if got := len(relay.limiter.inFlight); got != 0 {
+		t.Errorf("%d in-flight slots still held after Stop, want 0", got)
 	}
 }
 
@@ -439,7 +507,7 @@ func TestRelayFailsOverOnServerFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	answer, err := relay.exchangeUDP(context.Background(), dnsQuery(0x1234))
+	answer, err := unstartedServer(relay).exchangeUDP(context.Background(), dnsQuery(0x1234))
 	if err != nil {
 		t.Fatalf("exchange: %v", err)
 	}
@@ -461,7 +529,7 @@ func TestRelayReturnsServerFailureWhenAllFail(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	answer, err := relay.exchangeUDP(context.Background(), dnsQuery(0x2345))
+	answer, err := unstartedServer(relay).exchangeUDP(context.Background(), dnsQuery(0x2345))
 	if err != nil {
 		t.Fatalf("exchange: %v", err)
 	}
@@ -485,7 +553,7 @@ func TestRelayReturnsNXDomainWithoutFailover(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	answer, err := relay.exchangeUDP(context.Background(), dnsQuery(0x3456))
+	answer, err := unstartedServer(relay).exchangeUDP(context.Background(), dnsQuery(0x3456))
 	if err != nil {
 		t.Fatalf("exchange: %v", err)
 	}
