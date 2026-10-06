@@ -54,10 +54,13 @@ type WorkerAssignmentReconciler struct {
 	queue       workqueue.TypedRateLimitingInterface[string]
 }
 
-func NewWorkerAssignmentReconciler(persistence workerWorkflowStore, workers workerWatcher) *WorkerAssignmentReconciler {
+// NewWorkerAssignmentReconciler creates a WorkerAssignmentReconciler. dialer
+// reaches the atelet on a restarted Worker's node, which reclaims the state the
+// restart left there; nil skips that reclaim.
+func NewWorkerAssignmentReconciler(persistence workerWorkflowStore, workers workerWatcher, dialer *AteletDialer) *WorkerAssignmentReconciler {
 	return &WorkerAssignmentReconciler{
 		persistence: persistence,
-		workflow:    NewWorkerWorkflow(persistence, nil),
+		workflow:    NewWorkerWorkflow(persistence, dialer),
 		workers:     workers,
 		queue:       workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
 	}

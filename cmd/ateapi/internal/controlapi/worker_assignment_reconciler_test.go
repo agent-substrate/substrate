@@ -39,7 +39,7 @@ func epochWorker(name string, epoch, observed int64) *ateapipb.Worker {
 }
 
 func TestWorkerAssignmentReconciler_QueuesUnobservedWorkers(t *testing.T) {
-	r := NewWorkerAssignmentReconciler(nil, noWorkers{})
+	r := NewWorkerAssignmentReconciler(nil, noWorkers{}, nil)
 	defer r.queue.ShutDown()
 
 	for _, w := range []*ateapipb.Worker{
@@ -78,13 +78,39 @@ func TestWorkerAssignmentReconciler_SkipsWorkerLeasedElsewhere(t *testing.T) {
 	}
 	defer lease.Close()
 
-	r := NewWorkerAssignmentReconciler(persistence, noWorkers{})
+	r := NewWorkerAssignmentReconciler(persistence, noWorkers{}, nil)
 	defer r.queue.ShutDown()
 	if err := r.reconcileOne(ctx, apiWorkerName); !errors.Is(err, errWorkerLeased) {
 		t.Fatalf("reconcileOne() = %v, want errWorkerLeased", err)
 	}
 	if got := mustGetActor(t, ctx, persistence).GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_RUNNING {
 		t.Errorf("actor state = %v, want RUNNING: the lease holder releases it", got)
+	}
+}
+
+// ateapi reaches ReconcileAssignments only through this reconciler, so the
+// reclaim of what a restarted ateom left on the node runs only if the
+// reconciler hands its workflow the atelet dialer.
+func TestWorkerAssignmentReconciler_ReclaimsRestartedActorNodeState(t *testing.T) {
+	ctx := context.Background()
+	svc, persistence := newWorkerAPIService(t)
+	seedEpochWorker(t, ctx, persistence, 1, 1)
+	actor := seedAPIActor(t, ctx, persistence, ateapipb.ActorState_ACTOR_STATE_RUNNING)
+	assignAPIWorker(t, ctx, persistence, apiWorkerName, actor.GetMetadata().GetUid())
+	mustRaiseEpoch(t, ctx, svc, persistence, 2)
+
+	atelet := &capturingTerminator{}
+	r := NewWorkerAssignmentReconciler(persistence, noWorkers{}, newNodeAteletDialer(t, atelet))
+	defer r.queue.ShutDown()
+	if err := r.reconcileOne(ctx, apiWorkerName); err != nil {
+		t.Fatalf("reconcileOne() failed: %v", err)
+	}
+	got := atelet.requests()
+	if len(got) != 1 {
+		t.Fatalf("atelet received %d Terminate calls, want exactly 1", len(got))
+	}
+	if uid := got[0].GetActorUid(); uid != actor.GetMetadata().GetUid() {
+		t.Errorf("Terminate actor_uid = %q, want %q", uid, actor.GetMetadata().GetUid())
 	}
 }
 
@@ -108,7 +134,7 @@ func startAssignmentReconciler(t *testing.T, ctx context.Context, persistence st
 	if err := wc.Start(ctx); err != nil {
 		t.Fatalf("workercache.Start: %v", err)
 	}
-	NewWorkerAssignmentReconciler(persistence, wc).Start(ctx)
+	NewWorkerAssignmentReconciler(persistence, wc, nil).Start(ctx)
 }
 
 // End to end: the syncer's raise is all it takes for the reconciler to hear of
