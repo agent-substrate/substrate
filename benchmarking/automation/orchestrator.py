@@ -317,14 +317,14 @@ def install_microvm_deps() -> None:
     """Stage kata/cloud-hypervisor assets and apply the cluster-wide
     microvm SandboxConfig. Required before a microvm ActorTemplate can
     boot; must run after deploy_substrate() (which installs the CRDs)."""
-    run(["hack/install-microvm-deps.sh", "--install"])
+    run(["go", "run", "./cmd/ate-setup", "deploy", "microvm-deps"])
 
 
 def teardown_microvm_deps() -> None:
     """Remove the microvm SandboxConfig. Must run before
     teardown_substrate(), which deletes the SandboxConfig CRD (and would
     prevent this from succeeding via kubectl)."""
-    run_no_check(["hack/install-microvm-deps.sh", "--delete"])
+    run_no_check(["go", "run", "./cmd/ate-setup", "delete", "microvm-deps"])
 
 
 def deploy_workloads(
