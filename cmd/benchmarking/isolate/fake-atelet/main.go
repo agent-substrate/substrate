@@ -66,12 +66,13 @@ var (
 	ateapiCAFile         = pflag.String("ateapi-ca-file", "/run/servicedns.podcert.ate.dev/trust-bundle.pem", "CA bundle used to verify ate-api-server.")
 	ateapiServerName     = pflag.String("ateapi-server-name", "api.ate-system.svc", "DNS name expected on the ate-api-server certificate.")
 
-	delay                       = pflag.Duration("delay", 0, "How long each AteomHerder call takes before it succeeds.")
+	delay                       = pflag.Duration("delay", 0, "How long each AteomHerder call takes before it succeeds, not counting the actor certificate mint on Run and Restore.")
 	delayRun                    = pflag.Duration("delay-run", -1, "Override --delay for Run. Negative uses --delay.")
 	delayRestore                = pflag.Duration("delay-restore", -1, "Override --delay for Restore. Negative uses --delay.")
 	delayCheckpoint             = pflag.Duration("delay-checkpoint", -1, "Override --delay for Checkpoint. Negative uses --delay.")
 	delayUploadPausedCheckpoint = pflag.Duration("delay-upload-paused-checkpoint", -1, "Override --delay for UploadPausedCheckpoint. Negative uses --delay.")
 	delayTerminate              = pflag.Duration("delay-terminate", -1, "Override --delay for Terminate. Negative uses --delay.")
+	mintActorCertificate        = pflag.Bool("mint-actor-certificate", true, "On each Run and Restore that names an egress gateway, mint the actor's certificate from ate-api-server before the delay, as ateom does before starting the workload.")
 
 	showVersion  = pflag.Bool("version", false, "Print version and exit.")
 	logLevelFlag = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
@@ -125,6 +126,12 @@ func main() {
 	}
 	workers := ateapipb.NewWorkerServiceClient(ateapiConn)
 	h := &herder{delays: callDelays, storage: storage}
+	if *mintActorCertificate {
+		if h.csr, err = newActorCSR(); err != nil {
+			serverboot.Fatal(ctx, "Failed to create the actor CSR", err)
+		}
+		h.minter = workers
+	}
 	srv := grpc.NewServer(grpc.Creds(credentials.NewTLS(herderTLS)))
 	ateletpb.RegisterAteomHerderServer(srv, h)
 
@@ -143,7 +150,8 @@ func main() {
 	health := &http.Server{Addr: *healthListenAddr, Handler: healthHandler(), ReadHeaderTimeout: 10 * time.Second}
 
 	slog.WarnContext(ctx, "Serving the fake atelet: actor lifecycle calls succeed without running any workload",
-		slog.String("delays", fmt.Sprintf("%+v", callDelays)), slog.String("relay_allowed_id", *relayAllowedID))
+		slog.String("delays", fmt.Sprintf("%+v", callDelays)), slog.Bool("mint_actor_certificate", *mintActorCertificate),
+		slog.String("relay_allowed_id", *relayAllowedID))
 
 	go func() {
 		if err := srv.Serve(lis); err != nil {
