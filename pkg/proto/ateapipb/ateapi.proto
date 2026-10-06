@@ -1074,6 +1074,22 @@ message MacVMWorkload {
   //
   // +k8s:optional
   ContainerWakeupProbe wakeup_probe = 2;
+
+  // volume_mounts expose externally durable template volumes to the guest
+  // through Virtualization.framework directory shares. The guest agent mounts
+  // every share at mount_path before reporting ready. Only
+  // external_volume_template volumes are supported for Mac Actors: their data
+  // remains on network storage when the VM or Mac host is lost.
+  //
+  // Keyed by mount_path: each path hosts exactly one mount, while a volume
+  // may be mounted at multiple paths.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=32
+  // +k8s:listType=map
+  // +k8s:listMapKey=mount_path
+  // +k8s:customValidation # mounts must not nest
+  repeated VolumeMount volume_mounts = 3;
 }
 
 message Resources {

@@ -26,6 +26,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -99,6 +100,7 @@ type server struct {
 	runner                                commandRunner
 	pollInterval                          time.Duration
 	snapshots                             snapshotProvider
+	volumes                               volumeStager
 
 	mu       sync.Mutex
 	locks    map[string]*sync.Mutex
@@ -114,7 +116,7 @@ type snapshotProvider interface {
 func newServer(maclet, stateDir, image, sourceBundle, advertiseHost, proxyListen string) *server {
 	return &server{maclet: maclet, stateDir: stateDir, image: image, sourceBundle: sourceBundle,
 		advertiseHost: advertiseHost, proxyListen: proxyListen, runner: execRunner{}, pollInterval: 200 * time.Millisecond,
-		locks: make(map[string]*sync.Mutex), children: make(map[string]*actorProcess), proxies: make(map[string]*actorProxy)}
+		volumes: newNFSVolumeStager(stateDir), locks: make(map[string]*sync.Mutex), children: make(map[string]*actorProcess), proxies: make(map[string]*actorProxy)}
 }
 
 func (s *server) actorLock(uid string) *sync.Mutex {
@@ -159,7 +161,50 @@ func validateActivate(req *hostruntimepb.ActivateRequest, image string) error {
 	if !validProbePath(p.GetPath()) {
 		return fmt.Errorf("readiness probe path must be an absolute URL path of at most 1024 bytes")
 	}
+	if err := validateDurableVolumes(req.GetDurableVolumes()); err != nil {
+		return err
+	}
 	return nil
+}
+
+func validateDurableVolumes(volumes []*hostruntimepb.DurableVolume) error {
+	if len(volumes) > 32 {
+		return errors.New("at most 32 durable volume mounts are supported")
+	}
+	paths := make(map[string]bool, len(volumes))
+	for _, volume := range volumes {
+		if volume == nil || validateUID(volume.GetName()) != nil || volume.GetVolumeId() == "" || len(volume.GetVolumeId()) > 1024 || volume.GetDriver() == "" || len(volume.GetDriver()) > 256 {
+			return errors.New("durable volume requires a safe name, volume_id, and driver")
+		}
+		mountPath := volume.GetMountPath()
+		if !validMountPath(mountPath) || paths[mountPath] {
+			return errors.New("durable volume mount_path must be a unique clean absolute path")
+		}
+		for prior := range paths {
+			if strings.HasPrefix(mountPath, prior+"/") || strings.HasPrefix(prior, mountPath+"/") {
+				return errors.New("durable volume mount paths must not nest")
+			}
+		}
+		paths[mountPath] = true
+		if len(volume.GetVolumeContext()) > 32 {
+			return errors.New("durable volume_context has too many entries")
+		}
+		for key, value := range volume.GetVolumeContext() {
+			if key == "" || len(key) > 256 || len(value) > 4096 || strings.ContainsRune(key, 0) || strings.ContainsRune(value, 0) {
+				return errors.New("durable volume_context contains an invalid key or value")
+			}
+		}
+		if _, err := nfsRemote(volume); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validMountPath(value string) bool {
+	return len(value) > 1 && len(value) <= 4096 && strings.HasPrefix(value, "/") &&
+		!strings.HasSuffix(value, "/") && !strings.Contains(value, "//") && !strings.Contains(value, ":") &&
+		path.Clean(value) == value && !strings.ContainsAny(value, "\x00\r\n")
 }
 
 func validProbePath(path string) bool {
@@ -216,10 +261,24 @@ func (s *server) Activate(ctx context.Context, req *hostruntimepb.ActivateReques
 		}
 	}
 	st, statusErr := s.readStatus(ctx, bundle)
-	if statusErr == nil && st.ActorID != uid {
+	if statusErr != nil {
+		return nil, status.Errorf(codes.FailedPrecondition, "inspect actor bundle: %v", statusErr)
+	}
+	if st.ActorID != uid {
 		return nil, status.Error(codes.FailedPrecondition, "actor bundle belongs to a different Actor")
 	}
-	if statusErr == nil && st.Ready {
+	alreadyOwned := st.Phase == "starting" || st.Phase == "running" || st.Phase == "stopping"
+	staged, err := s.volumes.Stage(ctx, uid, req.GetDurableVolumes())
+	if err != nil {
+		return nil, status.Errorf(codes.Unavailable, "stage durable volumes: %v", err)
+	}
+	if err := writeVMVolumeConfig(bundle, staged); err != nil {
+		if !alreadyOwned {
+			_ = s.volumes.Unstage(context.WithoutCancel(ctx), uid)
+		}
+		return nil, status.Errorf(codes.Internal, "write durable volume configuration: %v", err)
+	}
+	if st.Ready {
 		return s.endpoint(uid, st, req.GetReadinessProbe().GetPort())
 	}
 
@@ -228,7 +287,6 @@ func (s *server) Activate(ctx context.Context, req *hostruntimepb.ActivateReques
 	s.mu.Unlock()
 	// After a daemon restart, the bundle lock and status are authoritative. Do
 	// not start a second owner when the original maclet is still starting/running.
-	alreadyOwned := statusErr == nil && (st.Phase == "starting" || st.Phase == "running" || st.Phase == "stopping")
 	if child == nil && !alreadyOwned {
 		logFile, err := os.OpenFile(filepath.Join(bundle, "maclet.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 		if err != nil {
@@ -238,6 +296,7 @@ func (s *server) Activate(ctx context.Context, req *hostruntimepb.ActivateReques
 		proc, err := s.runner.Start(logFile, s.maclet, "start", bundle, strconv.Itoa(int(p.GetPort())), p.GetPath(), strconv.Itoa(int(p.GetTimeoutSeconds())))
 		if err != nil {
 			_ = logFile.Close()
+			_ = s.volumes.Unstage(context.WithoutCancel(ctx), uid)
 			return nil, status.Errorf(codes.Internal, "start maclet: %v", err)
 		}
 		child = &actorProcess{done: make(chan error, 1)}
@@ -263,6 +322,17 @@ func (s *server) Activate(ctx context.Context, req *hostruntimepb.ActivateReques
 				return s.endpoint(uid, st, req.GetReadinessProbe().GetPort())
 			}
 			if st.Phase == "failed" || (st.Phase == "stopped" && child == nil) {
+				if child != nil {
+					select {
+					case <-child.done:
+						s.mu.Lock()
+						delete(s.children, uid)
+						s.mu.Unlock()
+					case <-ctx.Done():
+						return nil, status.FromContextError(ctx.Err()).Err()
+					}
+				}
+				_ = s.volumes.Unstage(context.WithoutCancel(ctx), uid)
 				return nil, status.Errorf(codes.Internal, "maclet %s: %s", st.Phase, st.Detail)
 			}
 		}
@@ -271,6 +341,7 @@ func (s *server) Activate(ctx context.Context, req *hostruntimepb.ActivateReques
 			s.mu.Lock()
 			delete(s.children, uid)
 			s.mu.Unlock()
+			_ = s.volumes.Unstage(context.WithoutCancel(ctx), uid)
 			return nil, status.Errorf(codes.Internal, "maclet exited before readiness: %v", err)
 		case <-ctx.Done():
 			return nil, status.FromContextError(ctx.Err()).Err()

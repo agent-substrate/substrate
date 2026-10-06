@@ -625,6 +625,23 @@ func (w *ActorWorkflow) ensureMacActivated(ctx context.Context, actorRef resourc
 		CpuMilli:    cpuMilli,
 		MemoryBytes: memoryBytes,
 	}
+	volumesByName := make(map[string]*ateapipb.ExternalVolume, len(actor.GetStatus().GetActorVolumes()))
+	for _, volume := range actor.GetStatus().GetActorVolumes() {
+		volumesByName[volume.GetVolumeName()] = volume
+	}
+	for _, mount := range macVM.GetVolumeMounts() {
+		volume := volumesByName[mount.GetName()]
+		if volume == nil || volume.GetStatus() != ateapipb.ExternalVolume_STATUS_CREATED || volume.GetStorageVolumeId() == "" || volume.GetVolumeType() == "" {
+			return tele, apierror.FailedPrecondition("Mac Actor volume %q is not ready", mount.GetName())
+		}
+		req.DurableVolumes = append(req.DurableVolumes, &hostruntimepb.DurableVolume{
+			Name:          mount.GetName(),
+			MountPath:     mount.GetMountPath(),
+			VolumeId:      volume.GetStorageVolumeId(),
+			Driver:        volume.GetVolumeType(),
+			VolumeContext: volume.GetVolumeContext(),
+		})
+	}
 	if local := actor.GetStatus().GetLocalSnapshot(); local != nil {
 		req.LocalSnapshotName = proto.String(local.GetSnapshotName())
 		tele.SnapshotKind = ateattr.SnapshotKindLocal
@@ -673,6 +690,12 @@ func (w *ActorWorkflow) ensureMacActivated(ctx context.Context, actorRef resourc
 func (w *ActorWorkflow) ensureVolumesAttached(ctx context.Context, actor *ateapipb.Actor, worker *ateapipb.Worker, actorTemplate *ateapipb.ActorTemplate) (err error) {
 	ctx, done := stepSpan(ctx, "AttachVolumes")
 	defer func() { err = done(err) }()
+	if actorTemplate.GetMacVm() != nil {
+		// Mac durable volumes are portable network filesystems. The external
+		// HostRuntime stages them on the selected Mac; CSI node attachment is a
+		// Kubernetes-node operation and does not apply to external Workers.
+		return nil
+	}
 
 	node := worker.GetNodeName()
 	ref := &ateapipb.ObjectRef{Atespace: actor.GetMetadata().GetAtespace(), Name: actor.GetMetadata().GetName()}

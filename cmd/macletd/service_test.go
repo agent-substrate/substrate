@@ -129,6 +129,9 @@ func (f *fakeRunner) Start(_ io.Writer, _ string, args ...string) (childProcess,
 		st := f.states[bundle]
 		if f.failReady {
 			st.Phase, st.Detail = "failed", "probe failed"
+			done <- errors.New("probe failed")
+			close(done)
+			delete(f.done, bundle)
 		} else {
 			st.Phase, st.Ready, st.IPAddress = "running", true, "127.0.0.1"
 		}
@@ -147,6 +150,26 @@ func testServer(t *testing.T, f *fakeRunner) *server {
 
 func request(uid string) *hostruntimepb.ActivateRequest {
 	return &hostruntimepb.ActivateRequest{ActorUid: uid, Image: testImage, ReadinessProbe: &hostruntimepb.HTTPReadinessProbe{Port: 8123, Path: "/ready", TimeoutSeconds: 2}}
+}
+
+type fakeVolumeStager struct {
+	path                     string
+	staged                   []*hostruntimepb.DurableVolume
+	stageCalls, unstageCalls int
+}
+
+func (f *fakeVolumeStager) Stage(_ context.Context, _ string, volumes []*hostruntimepb.DurableVolume) ([]stagedVolume, error) {
+	f.stageCalls++
+	f.staged = volumes
+	if len(volumes) == 0 {
+		return nil, nil
+	}
+	return []stagedVolume{{Name: volumes[0].GetName(), MountPath: volumes[0].GetMountPath(), Tag: "ate-data", HostPath: f.path}}, nil
+}
+
+func (f *fakeVolumeStager) Unstage(context.Context, string) error {
+	f.unstageCalls++
+	return nil
 }
 
 func TestActivateValidation(t *testing.T) {
@@ -182,6 +205,33 @@ func TestActivateReadyAndIdempotent(t *testing.T) {
 	defer f.mu.Unlock()
 	if f.creates != 1 || f.starts != 1 {
 		t.Fatalf("creates=%d starts=%d", f.creates, f.starts)
+	}
+}
+
+func TestActivateAndPauseStageDurableVolume(t *testing.T) {
+	f := newFakeRunner()
+	s := testServer(t, f)
+	stager := &fakeVolumeStager{path: t.TempDir()}
+	s.volumes = stager
+	req := request("actor-volume")
+	req.DurableVolumes = []*hostruntimepb.DurableVolume{{
+		Name: "data", MountPath: "/workspace", VolumeId: "volume-1", Driver: nfsCSIDriver,
+		VolumeContext: map[string]string{"server": "nfs.internal", "share": "/exports", "subdir": "actor-volume"},
+	}}
+	if _, err := s.Activate(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	if stager.stageCalls != 1 || len(stager.staged) != 1 {
+		t.Fatalf("Stage calls = %d, request = %v", stager.stageCalls, stager.staged)
+	}
+	if _, err := os.Stat(filepath.Join(s.bundle("actor-volume"), vmVolumeConfigName)); err != nil {
+		t.Fatalf("volume config: %v", err)
+	}
+	if _, err := s.Pause(context.Background(), &hostruntimepb.PauseRequest{ActorUid: "actor-volume", LocalSnapshotName: "pause-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if stager.unstageCalls != 1 {
+		t.Fatalf("Unstage calls = %d, want 1", stager.unstageCalls)
 	}
 }
 

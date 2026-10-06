@@ -78,8 +78,10 @@ func ValidateCustom_ActorTemplate(_ context.Context, _ operation.Operation, fldP
 		if class != ateapipb.SandboxClass_SANDBOX_CLASS_MACOS {
 			errs = append(errs, field.Invalid(fldPath.Child("sandbox_config", "sandbox_class"), class, "mac_vm requires SANDBOX_CLASS_MACOS"))
 		}
-		if len(value.GetVolumes()) > 0 {
-			errs = append(errs, field.Forbidden(fldPath.Child("volumes"), "Mac Actors do not support template volumes yet"))
+		for i, volume := range value.GetVolumes() {
+			if volume.GetExternalVolumeTemplate() == nil {
+				errs = append(errs, field.Invalid(fldPath.Child("volumes").Index(i), volume.GetName(), "Mac Actors support only external_volume_template volumes"))
+			}
 		}
 		if snapshot := value.GetSnapshotConfig(); snapshot != nil {
 			if snapshot.GetOnPause() != ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DISK {
@@ -102,7 +104,7 @@ func ValidateCustom_ActorTemplate(_ context.Context, _ operation.Operation, fldP
 	return errs
 }
 
-// ValidateCustom_CreateActorTemplateRequest_ActorTemplate rejects container
+// ValidateCustom_CreateActorTemplateRequest_ActorTemplate rejects workload
 // volume mounts that reference volumes the template does not declare.
 func ValidateCustom_CreateActorTemplateRequest_ActorTemplate(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapipb.ActorTemplate) field.ErrorList {
 	declared := make(map[string]bool, len(value.GetVolumes()))
@@ -110,18 +112,22 @@ func ValidateCustom_CreateActorTemplateRequest_ActorTemplate(_ context.Context, 
 		declared[vol.GetName()] = true
 	}
 	var errs field.ErrorList
-	for i, ctr := range value.GetContainers() {
-		for j, mount := range ctr.GetVolumeMounts() {
+	validateMounts := func(mounts []*ateapipb.VolumeMount, path *field.Path) {
+		for j, mount := range mounts {
 			name := mount.GetName()
 			if name == "" {
 				continue // required is enforced by tags
 			}
 			if !declared[name] {
-				errs = append(errs, field.Invalid(
-					fldPath.Child("containers").Index(i).Child("volume_mounts").Index(j).Child("name"),
-					name, "must reference a volume declared in the template"))
+				errs = append(errs, field.Invalid(path.Index(j).Child("name"), name, "must reference a volume declared in the template"))
 			}
 		}
+	}
+	for i, ctr := range value.GetContainers() {
+		validateMounts(ctr.GetVolumeMounts(), fldPath.Child("containers").Index(i).Child("volume_mounts"))
+	}
+	if value.GetMacVm() != nil {
+		validateMounts(value.GetMacVm().GetVolumeMounts(), fldPath.Child("mac_vm", "volume_mounts"))
 	}
 	return errs
 }
@@ -166,6 +172,16 @@ func ValidateCustom_VolumeMount_MountPath(_ context.Context, _ operation.Operati
 // ValidateCustom_Container_VolumeMounts rejects mounts that nest under one
 // another.
 func ValidateCustom_Container_VolumeMounts(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []*ateapipb.VolumeMount) field.ErrorList {
+	return validateVolumeMountNesting(fldPath, value)
+}
+
+// ValidateCustom_MacVMWorkload_VolumeMounts applies the same non-nesting
+// contract to guest filesystem mount points.
+func ValidateCustom_MacVMWorkload_VolumeMounts(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []*ateapipb.VolumeMount) field.ErrorList {
+	return validateVolumeMountNesting(fldPath, value)
+}
+
+func validateVolumeMountNesting(fldPath *field.Path, value []*ateapipb.VolumeMount) field.ErrorList {
 	var errs field.ErrorList
 	for i, m := range value {
 		path := m.GetMountPath()

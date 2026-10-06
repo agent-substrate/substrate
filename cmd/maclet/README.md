@@ -134,12 +134,20 @@ by `--snapshot-provider-endpoint`; without one external checkpoint/restore fails
 closed. The provider owns cloud credentials, compression, retries, and durable
 storage. Data files land before `manifest.json`, which is the commit marker.
 
-Durability currently begins only when `SUSPEND` commits that external DISK
+The VM root disk is durable only after `SUSPEND` commits an external DISK
 snapshot. `RUNNING` and `PAUSED` root disks remain local to one Mac and can be
-lost with that host; Mac template volumes are rejected rather than pretending
-to offer independently durable storage. Workloads needing write-through
-durability must use a network service from inside the guest until a managed
-VirtioFS or network-volume contract is implemented.
+lost with that host. Write-through data belongs on an `external_volume_template`
+mounted by `mac_vm.volume_mounts`. The beta storage path supports the upstream
+`nfs.csi.k8s.io` provisioner: `macletd` mounts its `server`, `share`, and
+`subdir` on the host with fixed `nosuid,nodev` options, exposes that mount
+through a uniquely tagged VZ VirtioFS device, and unmounts it after the guest
+stops. A replacement Mac can stage the same provisioned volume after host loss.
+
+The base image must install `cmd/macguestagent` as a root `launchd` service.
+It mounts the fixed read-only `ate-config` share, then mounts every durable
+share at its declared guest path before answering the wakeup probe. Host paths
+and storage credentials are never included in guest configuration. Mount
+points must be empty, unique, and non-nested.
 
 The control-plane lifecycle maps to the host as follows:
 
@@ -180,12 +188,14 @@ and network path, not Substrate guest-agent or workload readiness.
 
 - Fetch and verify the digest-pinned OCI VM artifact; this CLI imports only
   a local offline Lume bundle.
-- Produce a sanitized image with full Xcode and an authenticated guest agent;
-  provision unique guest credentials and a real workload readiness endpoint.
+- Produce a sanitized image with full Xcode and extend `macguestagent` with
+  authenticated workload execution and graceful shutdown; provision unique
+  guest credentials in the image pipeline.
 - Replace shared VZ NAT/DHCP discovery with the Actor-isolated network/routing
   contract. NAT here does not enforce tenant isolation or egress policy.
 - Add host-wide capacity management, service supervision, crash reconciliation,
-  and durable image lifecycle.
+  durable image lifecycle, and fencing that prevents a partitioned old host
+  from writing a durable volume after replacement on another Mac.
 
 `swift test` exercises configuration and identity validation, independent
 disk/NVRAM clones, open-source refusal, ownership/stale readiness, exact DHCP

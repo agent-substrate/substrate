@@ -210,6 +210,11 @@ func isVolumeMounted(volumeName string, template *ateapipb.ActorTemplate) bool {
 			}
 		}
 	}
+	for _, mount := range template.GetMacVm().GetVolumeMounts() {
+		if mount.GetName() == volumeName {
+			return true
+		}
+	}
 	return false
 }
 

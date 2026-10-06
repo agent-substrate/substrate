@@ -143,6 +143,19 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 		})},
 		field.ErrorList{field.Invalid(field.NewPath("actor_template", "containers").Index(0).Child("volume_mounts").Index(0).Child("name"), "ghost-vol", "")},
 	}, {
+		"Mac volume mount referencing an undeclared volume",
+		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers = nil
+			tmpl.MacVm = &ateapipb.MacVMWorkload{
+				Image:        "example.com/macos/xcode@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+				VolumeMounts: []*ateapipb.VolumeMount{{Name: "ghost-vol", MountPath: "/workspace"}},
+			}
+			tmpl.SandboxConfig = &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_MACOS, ConfigName: "macos-default"}
+			tmpl.SnapshotConfig.OnPause = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DISK
+			tmpl.SnapshotConfig.OnCommit = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DISK
+		})},
+		field.ErrorList{field.Invalid(field.NewPath("actor_template", "mac_vm", "volume_mounts").Index(0).Child("name"), "ghost-vol", "")},
+	}, {
 		"missing snapshot_config",
 		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
 			tmpl.SnapshotConfig = nil
@@ -445,7 +458,7 @@ func TestValidateActorTemplate(t *testing.T) {
 		},
 		want: field.ErrorList{field.Invalid(field.NewPath("mac_vm", "image"), nil, "")},
 	}, {
-		name: "Mac Actor rejects template volumes",
+		name: "Mac Actor rejects non-external volumes",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
 			tmpl.Containers = nil
 			tmpl.MacVm = &ateapipb.MacVMWorkload{Image: "example.com/macos/xcode@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}
@@ -454,7 +467,20 @@ func TestValidateActorTemplate(t *testing.T) {
 			tmpl.SnapshotConfig.OnCommit = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DISK
 			tmpl.Volumes = []*ateapipb.Volume{{Name: "data", DurableDir: &ateapipb.DurableDirVolumeSource{}}}
 		},
-		want: field.ErrorList{field.Forbidden(field.NewPath("volumes"), "")},
+		want: field.ErrorList{field.Invalid(field.NewPath("volumes").Index(0), nil, "")},
+	}, {
+		name: "Mac Actor accepts external durable volume",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers = nil
+			tmpl.MacVm = &ateapipb.MacVMWorkload{
+				Image:        "example.com/macos/xcode@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+				VolumeMounts: []*ateapipb.VolumeMount{{Name: "data", MountPath: "/workspace"}},
+			}
+			tmpl.SandboxConfig = &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_MACOS, ConfigName: "macos-default"}
+			tmpl.SnapshotConfig.OnPause = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DISK
+			tmpl.SnapshotConfig.OnCommit = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DISK
+			tmpl.Volumes = []*ateapipb.Volume{{Name: "data", ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{Capacity: "100Gi", StorageClassName: "mac-nfs"}}}
+		},
 	}, {
 		name: "Mac Actor rejects non-disk snapshots",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {

@@ -46,6 +46,24 @@ private func sourceBundle(in root: URL) throws -> URL {
   return source
 }
 
+@Test func durableVolumeConfigurationRequiresRealUniqueShares() throws {
+  let root = try temporaryDirectory()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let share = root.appendingPathComponent("share", isDirectory: true)
+  try FileManager.default.createDirectory(at: share, withIntermediateDirectories: false)
+  let config = root.appendingPathComponent("macletd-volumes.json")
+  let volume = VMVolume(name: "data", mountPath: "/workspace", tag: "ate-data", hostPath: share.path)
+  try writeJSON([volume], to: config)
+  #expect(try VMVolume.read(from: root) == [volume])
+
+  let duplicate = VMVolume(name: "cache", mountPath: "/cache", tag: "ate-data", hostPath: share.path)
+  try writeJSON([volume, duplicate], to: config)
+  #expect(throws: (any Error).self) { try VMVolume.read(from: root) }
+
+  try FileManager.default.removeItem(at: config)
+  #expect(try VMVolume.read(from: root).isEmpty)
+}
+
 @Test func coldSnapshotRestoreIsIndependentAndPersonalized() throws {
   let root = try temporaryDirectory()
   defer { try? FileManager.default.removeItem(at: root) }

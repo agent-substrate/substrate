@@ -132,16 +132,22 @@ func (s *server) stopRetain(ctx context.Context, uid, bundle string) error {
 		delete(s.children, uid)
 		s.mu.Unlock()
 	}
+	var errs []error
 	if proxy != nil {
 		if err := proxy.server.Shutdown(ctx); err != nil {
-			return err
+			errs = append(errs, err)
 		}
 		s.mu.Lock()
 		delete(s.proxies, uid)
 		s.mu.Unlock()
 	}
 	_ = os.Remove(filepath.Join(bundle, proxyMetadataName))
-	return nil
+	if err := s.volumes.Unstage(ctx, uid); err != nil {
+		errs = append(errs, fmt.Errorf("unstage durable volumes: %w", err))
+	} else if err := writeVMVolumeConfig(bundle, nil); err != nil {
+		errs = append(errs, fmt.Errorf("remove durable volume configuration: %w", err))
+	}
+	return errors.Join(errs...)
 }
 
 func (s *server) Pause(ctx context.Context, req *hostruntimepb.PauseRequest) (*hostruntimepb.PauseResponse, error) {
@@ -159,9 +165,8 @@ func (s *server) Pause(ctx context.Context, req *hostruntimepb.PauseRequest) (*h
 	st, statusErr := s.readStatus(ctx, bundle)
 	if old, err := readLocalReceipt(bundle); err == nil {
 		if old == req.GetLocalSnapshotName() {
-			if statusErr == nil && st.Phase == "stopped" {
-				return &hostruntimepb.PauseResponse{}, nil
-			}
+			// Continue through stopRetain even when already stopped: a previous
+			// attempt may have stopped the guest but failed to unstage storage.
 		} else if statusErr != nil || st.Phase == "stopped" {
 			return nil, status.Error(codes.FailedPrecondition, "Actor already has a different local snapshot name")
 		}
@@ -342,6 +347,8 @@ func (s *server) Discard(ctx context.Context, req *hostruntimepb.DiscardRequest)
 		if err := os.RemoveAll(bundle); err != nil {
 			return nil, status.Error(codes.Internal, err.Error())
 		}
+	} else if err := s.volumes.Unstage(ctx, uid); err != nil {
+		return nil, status.Errorf(codes.Internal, "unstage durable volumes: %v", err)
 	}
 	if err := os.Remove(s.receiptPath(uid)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, status.Error(codes.Internal, err.Error())

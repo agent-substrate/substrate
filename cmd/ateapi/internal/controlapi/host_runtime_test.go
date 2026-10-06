@@ -174,6 +174,11 @@ func TestEnsureMacActivatedDispatchesAndPersistsEndpoint(t *testing.T) {
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "mac-template"},
 		Status: &ateapipb.ActorStatus{
 			State: ateapipb.ActorState_ACTOR_STATE_RESUMING,
+			ActorVolumes: []*ateapipb.ExternalVolume{{
+				VolumeName: "data", StorageVolumeId: "nfs-volume-1", VolumeType: "nfs.csi.k8s.io",
+				Status:        ateapipb.ExternalVolume_STATUS_CREATED,
+				VolumeContext: map[string]string{"server": "nfs.internal", "share": "/exports", "subdir": "actor-1"},
+			}},
 			WorkerAssignment: &ateapipb.WorkerAssignment{
 				Worker:          &ateapipb.ObjectRef{Name: "mac-worker-1"},
 				RuntimeEndpoint: "dns:///mac-worker-1.example:9443",
@@ -182,12 +187,14 @@ func TestEnsureMacActivatedDispatchesAndPersistsEndpoint(t *testing.T) {
 	})
 	tmpl := &ateapipb.ActorTemplate{
 		MacVm: &ateapipb.MacVMWorkload{
-			Image: "registry.example/mac-base@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			Image:        "registry.example/mac-base@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			VolumeMounts: []*ateapipb.VolumeMount{{Name: "data", MountPath: "/workspace"}},
 			WakeupProbe: &ateapipb.ContainerWakeupProbe{
 				HttpGet:        &ateapipb.HTTPGetAction{Path: "/ready", Port: 8123},
 				TimeoutSeconds: 120,
 			},
 		},
+		Volumes: []*ateapipb.Volume{{Name: "data", ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{Capacity: "100Gi", StorageClassName: "mac-nfs"}}},
 		Resources: &ateapipb.Resources{Limits: []*ateapipb.Limits{
 			{Name: "cpu", Quantity: "6"},
 			{Name: "memory", Quantity: "12Gi"},
@@ -213,6 +220,10 @@ func TestEnsureMacActivatedDispatchesAndPersistsEndpoint(t *testing.T) {
 		ReadinessProbe: &hostruntimepb.HTTPReadinessProbe{
 			Port: 8123, Path: "/ready", TimeoutSeconds: 120,
 		},
+		DurableVolumes: []*hostruntimepb.DurableVolume{{
+			Name: "data", MountPath: "/workspace", VolumeId: "nfs-volume-1", Driver: "nfs.csi.k8s.io",
+			VolumeContext: map[string]string{"server": "nfs.internal", "share": "/exports", "subdir": "actor-1"},
+		}},
 	}
 	if !proto.Equal(runtime.request, wantRequest) {
 		t.Errorf("Activate request = %v, want %v", runtime.request, wantRequest)

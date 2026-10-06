@@ -196,6 +196,12 @@ func actorVolumeID(actorUID string, volumeName string) string {
 
 // detachActorVolumes detaches all mounted external volumes for an actor from its worker node.
 func detachActorVolumes(ctx context.Context, st detachActorVolumesStore, registry VolumePluginRegistry, actor *ateapipb.Actor, template *ateapipb.ActorTemplate, action string) error {
+	if template.GetMacVm() != nil {
+		// Pause, checkpoint, and discard synchronously stop the VM and unstage
+		// its network filesystems through HostRuntime. There is no Kubernetes
+		// node attachment to detach for an external Mac Worker.
+		return nil
+	}
 	assignment := actor.GetStatus().GetWorkerAssignment()
 	if assignment == nil {
 		slog.WarnContext(ctx, fmt.Sprintf("Actor has no assigned worker pod during %s, skipping detach volumes", action), slog.String("actor_id", actor.GetMetadata().GetName()))

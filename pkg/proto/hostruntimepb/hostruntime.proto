@@ -37,6 +37,19 @@ message ActivateRequest {
   HTTPReadinessProbe readiness_probe = 5;
   optional string external_snapshot_uri = 6;
   optional string local_snapshot_name = 7;
+  repeated DurableVolume durable_volumes = 8;
+}
+
+// DurableVolume is an externally provisioned filesystem that the host stages
+// and exposes to the guest. The guest agent mounts the VirtioFS share at
+// mount_path before reporting ready. Credentials remain with the host-side
+// storage driver; volume_context contains only driver-returned mount metadata.
+message DurableVolume {
+  string name = 1;
+  string mount_path = 2;
+  string volume_id = 3;
+  string driver = 4;
+  map<string, string> volume_context = 5;
 }
 
 message PauseRequest {

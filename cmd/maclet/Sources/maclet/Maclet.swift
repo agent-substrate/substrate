@@ -131,6 +131,25 @@ final class HostVM: NSObject, @preconcurrency VZVirtualMachineDelegate {
     network.macAddress = VZMACAddress(string: config.macAddress)!
     network.attachment = VZNATNetworkDeviceAttachment()
     vm.networkDevices = [network]
+
+    let volumes = try VMVolume.read(from: directory)
+    var directoryShares: [VZDirectorySharingDeviceConfiguration] = []
+    let guestConfig = directory.appendingPathComponent("macletd-guest-config", isDirectory: true)
+    if FileManager.default.fileExists(atPath: guestConfig.path) {
+      let configShare = VZVirtioFileSystemDeviceConfiguration(tag: "ate-config")
+      configShare.share = VZSingleDirectoryShare(
+        directory: VZSharedDirectory(url: guestConfig, readOnly: true))
+      directoryShares.append(configShare)
+    }
+    for volume in volumes {
+      let share = VZVirtioFileSystemDeviceConfiguration(tag: volume.tag)
+      share.share = VZSingleDirectoryShare(
+        directory: VZSharedDirectory(
+          url: URL(fileURLWithPath: volume.hostPath, isDirectory: true), readOnly: false))
+      directoryShares.append(share)
+    }
+    vm.directorySharingDevices = directoryShares
+
     let graphics = VZMacGraphicsDeviceConfiguration()
     graphics.displays = [
       VZMacGraphicsDisplayConfiguration(widthInPixels: 1024, heightInPixels: 768, pixelsPerInch: 80)
