@@ -415,7 +415,7 @@ func ateomSecurityContext(class atev1alpha1.SandboxClass) *corev1ac.SecurityCont
 			WithType(corev1.SeccompProfileTypeUnconfined))
 }
 
-// maybeApplyMicroVMPodShape adds the /dev/kvm device and node placement a
+// maybeApplyMicroVMPodShape adds the hypervisor device and node placement a
 // micro-VM (kata + cloud-hypervisor) worker pool needs, on top of any
 // pod-template settings. No-op unless sandboxClass is the micro-VM class.
 //
@@ -433,7 +433,7 @@ func maybeApplyMicroVMPodShape(
 		return
 	}
 
-	// The micro-VM runtime needs /dev/kvm to create the VM. Request it as an
+	// The micro-VM runtime needs a hypervisor device to create the VM. Request it as an
 	// extended resource served by atelet's device plugin rather than
 	// hostPath-mounting it: a container's device access is gated by the cgroup
 	// device controller, which denies /dev/kvm by default, and kubelet's device
@@ -443,7 +443,20 @@ func maybeApplyMicroVMPodShape(
 	//
 	// atelet advertises it only on nodes where the device exists, so the
 	// request also keeps the pod off nodes that cannot run a micro-VM.
-	addDeviceResourceLimits(containerAC, deviceplugin.ResourceKVM)
+	hypervisorResource := deviceplugin.ResourceKVM
+	if containerAC.Resources != nil {
+		for _, resources := range []*corev1.ResourceList{containerAC.Resources.Requests, containerAC.Resources.Limits} {
+			if resources != nil {
+				if _, ok := (*resources)[deviceplugin.ResourceMSHV]; ok {
+					hypervisorResource = deviceplugin.ResourceMSHV
+				}
+			}
+		}
+	}
+	addDeviceResourceLimits(containerAC, hypervisorResource)
+	if hypervisorResource == deviceplugin.ResourceMSHV {
+		podSpecAC.WithNodeSelector(map[string]string{corev1.LabelArchStable: "amd64"})
+	}
 
 	// The runtime also opens /dev/net/tun to build the guest's tap, but that
 	// one needs no grant: it is in the runtime's default device allow-list, so
@@ -464,7 +477,7 @@ func maybeApplyMicroVMPodShape(
 			WithPath(tunDevicePath).
 			WithType(corev1.HostPathCharDev)))
 
-	// Placement onto KVM-capable nodes comes from the device request above: the
+	// Placement onto hypervisor-capable nodes comes from the device request above: the
 	// scheduler only picks nodes advertising the resource, and atelet advertises
 	// it only where the device exists. That is derived from the node itself,
 	// unlike an ate.dev/sandboxClass label, which is a hand-applied convention
