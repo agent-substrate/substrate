@@ -1334,7 +1334,7 @@ func Validate_ActorTemplate(
 		errs = append(errs, fn(fldPath.Child("status"), obj.Status, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateapipb.ActorTemplate.DefaultEgressPolicy
+	{ // field ateapipb.ActorTemplate.GoldenEgressPolicy
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj *ateapipb.EgressPolicyTemplate,
@@ -1359,9 +1359,9 @@ func Validate_ActorTemplate(
 		}
 		oldVal := safe.Field(oldObj,
 			func(oldObj *ateapipb.ActorTemplate) *ateapipb.EgressPolicyTemplate {
-				return oldObj.DefaultEgressPolicy
+				return oldObj.GoldenEgressPolicy
 			})
-		errs = append(errs, fn(fldPath.Child("default_egress_policy"), obj.DefaultEgressPolicy, oldVal, oldObj != nil)...)
+		errs = append(errs, fn(fldPath.Child("golden_egress_policy"), obj.GoldenEgressPolicy, oldVal, oldObj != nil)...)
 	}
 
 	return errs
