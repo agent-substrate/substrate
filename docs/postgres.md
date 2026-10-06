@@ -3,9 +3,34 @@
 ## Overview
 Substrate supports separate connections for schema ownership (DDL) and normal reads and writes (DML). Migrations and partition maintenance use the owner connection; application queries use the read/write connection. Each connection assumes its configured PostgreSQL role.
 
-The bundled development database uses fixed owner and read/write roles and separate login users. `ate-setup` creates them from [`pkg/postgressetup/setup.sql`](../pkg/postgressetup/setup.sql) before starting `ateapi`. The script has no built-in identity defaults; `ate-setup` supplies the development values from `postgressetup.DefaultConfig`. Those fixed usernames and passwords are for development installations only.
+The bundled development database uses fixed owner and read/write roles and separate login users. `ate-setup` creates them from [`pkg/postgressetup/setup.sql`](../pkg/postgressetup/setup.sql) before starting `ateapi`. The script has no built-in identity defaults; `ate-setup` supplies the development values from `postgressetup.DefaultConfig`. The bundled login users have no database passwords; they authenticate with certificates.
 
 External databases are never provisioned by `ateapi` or `ate-setup`. Their operators must create the database identities and schema described below before deploying Substrate.
+
+## Bundled database authentication
+
+The API server connects without a password using two Kubernetes projected Pod
+Certificates from `postgres.podcert.ate.dev/identity`. This signer only issues
+client certificates to pods in `ate-system` using the `ate-api-server` service
+account. Each projection sets `userAnnotations.postgres.podcert.ate.dev/username`
+to either `substrate_owner_user` or `substrate_readwrite_user`; the signer rejects
+missing annotations, unknown keys, and every other username. It sets the
+certificate Common Name (CN) to that authorized login. Each connection pool
+presents its own certificate.
+
+The bundled PostgreSQL server trusts only this signer's dedicated CA for client
+certificates. Its `hostssl ... cert` rule requires the certificate CN to match
+the requested database username. The API server uses `sslmode=verify-full` to
+verify the server's service DNS certificate. Both sides reload rotated
+certificate material. Local Unix-socket access inside the database pod remains
+trusted for bootstrap, health checks, and TLS reloads.
+
+The installer stores the signer's CA pool in the `postgres-ca-pool` Secret in
+`podcertificate-controller-system`; the API pod receives its client private key
+and certificate through a projected volume rather than a username/password
+Secret. The owner and read/write logins retain their respective role grants from
+the bootstrap script. The `postgres` administrator is restricted to local
+connections inside the database pod.
 
 ## BYO DB Configuration
 A custom database can be provided to Substrate.
@@ -30,10 +55,10 @@ Operators using ordinary PostgreSQL login users may run [`pkg/postgressetup/setu
 | `substrate_schema` | `substrate` |
 | `substrate_owner_role` | `substrate_owner` |
 | `substrate_owner_user` | `substrate_owner_user` |
-| `substrate_owner_password` | `substrate-owner` |
+| `substrate_owner_password` | Empty (certificate authentication) |
 | `substrate_readwrite_role` | `substrate_readwrite` |
 | `substrate_readwrite_user` | `substrate_readwrite_user` |
-| `substrate_readwrite_password` | `substrate-readwrite` |
+| `substrate_readwrite_password` | Empty (certificate authentication) |
 
 The login users come from the database provider: they may be ordinary PostgreSQL users, IAM identities, or another provider-managed identity. Substrate does not create them or require specific login names.
 

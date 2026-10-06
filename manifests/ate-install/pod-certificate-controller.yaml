@@ -65,6 +65,7 @@ rules:
   resourceNames:
   - servicedns.podcert.ate.dev/*
   - podidentity.podcert.ate.dev/*
+  - postgres.podcert.ate.dev/*
   verbs:
   - sign
   - attest
@@ -148,6 +149,7 @@ spec:
         - --sharding-application-name=podcertificate-controller
         - --service-dns-ca-pool=/run/ca-state/service-dns-pool.json
         - --pod-identity-ca-pool=/run/ca-state/pod-identity-pool.json
+        - --postgres-ca-pool=/run/ca-state/postgres-pool.json
         - --workers-per-signer=$(WORKERS_PER_SIGNER)
         env:
         - name: POD_NAMESPACE
@@ -189,6 +191,11 @@ spec:
               items:
               - key: "pool"
                 path: "pod-identity-pool.json"
+          - secret:
+              name: "postgres-ca-pool"
+              items:
+              - key: "pool"
+                path: "postgres-pool.json"
       dnsPolicy: Default
       nodeSelector:
         kubernetes.io/os: linux

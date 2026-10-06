@@ -31,13 +31,10 @@ import (
 	"github.com/agent-substrate/substrate/pkg/postgressetup"
 )
 
-// The serving certificate is signed with Ed25519, which pgx cannot hash for SCRAM
-// channel binding. PostgreSQL rejects pgx's fallback as a downgrade, so
-// disable channel binding while retaining TLS and client-certificate checks.
-const postgresTLSParams = "sslmode=verify-full&sslrootcert=/run/servicedns.podcert.ate.dev/trust-bundle.pem&sslcert=/run/podidentity.podcert.ate.dev/credential-bundle.pem&sslkey=/run/podidentity.podcert.ate.dev/credential-bundle.pem&channel_binding=disable"
-
-func bundledPostgresDSN(user, password string) string {
-	return fmt.Sprintf("postgresql://%s:%s@postgres.ate-system.svc:5432/atepg?%s", user, password, postgresTLSParams)
+// Each bundled connection presents a certificate for its own login user.
+func bundledPostgresDSN(user string) string {
+	bundle := "/run/postgres.podcert.ate.dev/" + user + ".pem"
+	return fmt.Sprintf("postgresql://%s@postgres.ate-system.svc:5432/atepg?sslmode=verify-full&sslrootcert=/run/servicedns.podcert.ate.dev/trust-bundle.pem&sslcert=%s&sslkey=%s", user, bundle, bundle)
 }
 
 func (e *Env) postgresReadWriteConnectionStrings() (string, string, error) {
@@ -47,11 +44,11 @@ func (e *Env) postgresReadWriteConnectionStrings() (string, string, error) {
 		return "", "", fmt.Errorf("bundled PostgreSQL requires roles %q and %q and schema %q",
 			config.DefaultPostgresReadWriteRole, config.DefaultPostgresOwnerRole, config.DefaultPostgresSchema)
 	}
-	readWriteDSN := bundledPostgresDSN(postgressetup.ReadWriteUser, postgressetup.ReadWritePassword)
+	readWriteDSN := bundledPostgresDSN(postgressetup.ReadWriteUser)
 	if e.Cfg.Size10() {
 		readWriteDSN += config.Size10PostgresPoolParams
 	}
-	return readWriteDSN, bundledPostgresDSN(postgressetup.OwnerUser, postgressetup.OwnerPassword), nil
+	return readWriteDSN, bundledPostgresDSN(postgressetup.OwnerUser), nil
 }
 
 // setupBundledPostgres creates the fixed development identities before ateapi
