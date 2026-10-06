@@ -117,9 +117,11 @@ The `ActorTemplate` defines the code, environment, and state-management policies
 
 | Field | Type | Description |
 | :--- | :--- | :--- |
-| `containers` | `[]Container` | **Required.** The workload definition — see [Container Fields](#container-fields) below. Each container may also declare an optional `wakeupProbe` HTTP probe — see [Container Wakeup Probe](#container-wakeup-probe-wakeupprobe). |
-| `sandboxConfig` | `SandboxConfig` | **Required.** The sandbox runtime selection: `sandboxClass` (**required**, `SANDBOX_CLASS_GVISOR` or `SANDBOX_CLASS_MICROVM`) picks the runtime family this template's actors require — only `WorkerPool`s whose `sandboxClass` matches are eligible — and `configName` (**required**) names the cluster-scoped [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) object supplying the sandbox binaries. It must reference an existing config of the matching class; `CreateActorTemplate` rejects the template otherwise. |
+| `containers` | `[]Container` | The Linux workload definition — see [Container Fields](#container-fields) below. Exactly one of `containers` and `macVm` is required. Each container may also declare an optional `wakeupProbe` HTTP probe — see [Container Wakeup Probe](#container-wakeup-probe-wakeupprobe). |
+| `macVm` | `*MacVMWorkload` | A digest-pinned macOS VM image and readiness probe. Requires `SANDBOX_CLASS_MACOS`. Exactly one of `containers` and `macVm` is required. |
+| `sandboxConfig` | `SandboxConfig` | **Required.** The sandbox runtime selection: `sandboxClass` (**required**, `SANDBOX_CLASS_GVISOR`, `SANDBOX_CLASS_MICROVM`, or `SANDBOX_CLASS_MACOS`) picks the runtime family this template's actors require — only matching Workers are eligible — and `configName` (**required**) names the cluster-scoped [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) object supplying the sandbox configuration. |
 | `workerSelector` | `*Selector` | Optional. Gates which `WorkerPool`s actors from this template may use, by matching against each pool's labels (`matchLabels`). If unset, all pools are eligible (subject to the actor's own `worker_selector`). |
+| `workerPreferences` | `[]WorkerPreference` | Optional soft placement preferences. Each matching selector adds its weight; scheduling uses the highest-scoring tier that currently has capacity, then falls back to lower-scoring or unmatched Workers. For example, prefer `provider=local` while allowing `provider=aws`. |
 | `snapshotConfig` | `SnapshotConfig` | **Required.** The base object-storage location snapshots are written under, plus the pause/commit/resume scopes. See [Snapshot Storage Layout](#snapshot-storage-layout). |
 | `volumes` | `[]Volume` | Optional. Volumes the containers may mount, each a `durableDir`, an `externalVolumeTemplate` (see [CSI Volumes Guide](csi-volumes.md)), or a `systemInfo` volume (see [SystemInfo Volumes](#systeminfo-volumes)). Every declared volume must be mounted by at least one container. A `microvm` template may declare several `durableDir` volumes; a `gvisor` template is limited to one. |
 | `resources` | `*ResourceRequirements` | Optional. Declares each actor's compute size via `limits` — see [Sandbox Right-Sizing](#sandbox-right-sizing-resources). Immutable, like the rest of the template. |
@@ -127,6 +129,14 @@ The `ActorTemplate` defines the code, environment, and state-management policies
 The sandbox itself — the binaries (e.g. the gVisor `runsc` binary) and the `pauseImage` holding the sandbox's namespaces — comes from the cluster-scoped [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) object the template names via `sandboxConfig.configName`. An actor always resolves the config from its current template — repointing the actor at another template requires the same config.
 
 Because a snapshot is not restorable across sandbox runtimes, `sandboxClass` is a **hard scheduling gate**: an actor is only ever placed on a `WorkerPool` of the matching class. It is AND'd with `workerSelector` (and the actor's `worker_selector`), which can only narrow the eligible pools further. It has no default — `sandboxConfig` is required and its `sandboxClass` must be set — and, like the rest of the template, is immutable, so each template's class is fixed at creation.
+
+`workerPreferences` are soft. The scheduler first applies sandbox class, both
+hard worker selectors, snapshot locality, and resource capacity. It then keeps
+the available Workers with the greatest sum of matching preference weights and
+load-balances within that tier. A full preferred tier therefore falls back to
+the next tier without changing the Actor type or sandbox class. External Mac
+Workers can use this to distinguish local and EC2 capacity through labels while
+sharing the same `macos-vz` runtime contract.
 
 ### Sandbox Right-Sizing (`resources`)
 

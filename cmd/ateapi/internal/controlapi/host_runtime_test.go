@@ -128,3 +128,19 @@ func TestEnsureMacActivatedRejectsInvalidProviderEndpoint(t *testing.T) {
 		t.Errorf("persisted endpoint = %v, want nil", got)
 	}
 }
+
+func TestEnsureVolumesAttachedAllowsExternalWorkerWithoutVolumes(t *testing.T) {
+	w := &ActorWorkflow{}
+	actor := &ateapipb.Actor{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "mac-1"},
+		Status:   &ateapipb.ActorStatus{},
+	}
+	worker := &ateapipb.Worker{
+		Metadata:     &ateapipb.ResourceMetadata{Name: "mac-worker-1"},
+		ExternalHost: &ateapipb.ExternalWorkerHost{RuntimeEndpoint: "dns:///mac-worker-1.example:9443"},
+	}
+
+	if err := w.ensureVolumesAttached(context.Background(), actor, worker, &ateapipb.ActorTemplate{}); err != nil {
+		t.Fatalf("ensureVolumesAttached: %v", err)
+	}
+}

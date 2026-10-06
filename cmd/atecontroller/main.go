@@ -18,8 +18,10 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"time"
 
 	"github.com/agent-substrate/substrate/cmd/atecontroller/internal/controllers"
+	"github.com/agent-substrate/substrate/cmd/atecontroller/internal/ec2macautoscaler"
 	"github.com/agent-substrate/substrate/cmd/atecontroller/internal/workersync"
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
 	"github.com/agent-substrate/substrate/internal/installdefaults"
@@ -29,12 +31,15 @@ import (
 	"github.com/agent-substrate/substrate/pkg/client/clientset/versioned"
 	"github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/autoscaling"
 	"github.com/go-logr/logr"
 	"github.com/spf13/pflag"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/kubernetes"
@@ -82,6 +87,17 @@ var (
 	ateapiCAFile     = pflag.String("ateapi-ca-file", ateapiauth.DefaultServiceAccountCAFile, "PEM file with CAs trusted to verify the ateapi server cert.")
 	ateapiServerName = pflag.String("ateapi-server-name", "", "SNI / hostname expected on the ateapi server cert. Optional.")
 	ateapiClientCert = pflag.String("ateapi-client-cert", "", "Credential bundle presented as the client certificate when dialing ateapi. Required.")
+
+	ec2MacASG                 = pflag.String("ec2-mac-autoscaling-group", "", "EC2 Mac Auto Scaling Group to warm as local Mac capacity approaches exhaustion. Empty disables warm provisioning.")
+	ec2MacLocalSelector       = pflag.String("ec2-mac-local-selector", "provider=local", "Worker label selector identifying local Mac capacity.")
+	ec2MacCloudSelector       = pflag.String("ec2-mac-cloud-selector", "provider=aws", "Worker label selector identifying ready EC2 Mac capacity.")
+	ec2MacPollInterval        = pflag.Duration("ec2-mac-poll-interval", 30*time.Second, "How often to sample Mac Worker occupancy.")
+	ec2MacLeadTime            = pflag.Duration("ec2-mac-lead-time", 20*time.Minute, "Scale up when recent allocation growth projects local exhaustion within this duration.")
+	ec2MacScaleUpCooldown     = pflag.Duration("ec2-mac-scale-up-cooldown", 10*time.Minute, "Minimum interval between EC2 Mac scale-up requests.")
+	ec2MacStressUtilization   = pflag.Float64("ec2-mac-stress-utilization", 0.75, "Local Mac Actor-slot utilization treated as high stress.")
+	ec2MacStressSamples       = pflag.Int("ec2-mac-stress-samples", 3, "Consecutive high-stress samples required before warming an EC2 Mac.")
+	ec2MacCloudHeadroomActors = pflag.Int64("ec2-mac-cloud-headroom-actors", 1, "Do not scale while ready EC2 Mac Workers have at least this many free Actor slots.")
+	ec2MacMaxWorkers          = pflag.Int32("ec2-mac-max-workers", 10, "Maximum desired EC2 Mac Auto Scaling Group size requested by warm provisioning.")
 )
 
 func init() {
@@ -228,6 +244,48 @@ func main() {
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "EgressMITMTrust")
 		os.Exit(1)
+	}
+
+	if *ec2MacASG != "" {
+		localSelector, err := labels.Parse(*ec2MacLocalSelector)
+		if err != nil {
+			setupLog.Error(err, "invalid EC2 Mac local Worker selector")
+			os.Exit(1)
+		}
+		cloudSelector, err := labels.Parse(*ec2MacCloudSelector)
+		if err != nil {
+			setupLog.Error(err, "invalid EC2 Mac cloud Worker selector")
+			os.Exit(1)
+		}
+		awsConfig, err := awsconfig.LoadDefaultConfig(ctx)
+		if err != nil {
+			setupLog.Error(err, "loading AWS configuration for EC2 Mac warm provisioning")
+			os.Exit(1)
+		}
+		scaler, err := ec2macautoscaler.NewASGScaler(autoscaling.NewFromConfig(awsConfig), *ec2MacASG)
+		if err != nil {
+			setupLog.Error(err, "configuring EC2 Mac Auto Scaling Group")
+			os.Exit(1)
+		}
+		warmer, err := ec2macautoscaler.New(ec2macautoscaler.Config{
+			LocalSelector:       localSelector,
+			CloudSelector:       cloudSelector,
+			PollInterval:        *ec2MacPollInterval,
+			LeadTime:            *ec2MacLeadTime,
+			ScaleUpCooldown:     *ec2MacScaleUpCooldown,
+			StressUtilization:   *ec2MacStressUtilization,
+			StressSamples:       *ec2MacStressSamples,
+			CloudHeadroomActors: *ec2MacCloudHeadroomActors,
+			MaxCloudWorkers:     *ec2MacMaxWorkers,
+		}, ec2macautoscaler.ListAllWorkers(ateapiClient), scaler)
+		if err != nil {
+			setupLog.Error(err, "configuring EC2 Mac warm provisioning")
+			os.Exit(1)
+		}
+		if err := mgr.Add(warmer); err != nil {
+			setupLog.Error(err, "adding EC2 Mac warm provisioner")
+			os.Exit(1)
+		}
 	}
 
 	//+kubebuilder:scaffold:builder

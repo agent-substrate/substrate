@@ -135,3 +135,36 @@ and network path, not Substrate guest-agent or workload readiness.
 disk/NVRAM clones, open-source refusal, ownership/stale readiness, exact DHCP
 lease matching and expiry, and HTTP probe boundaries. It does not boot a VM.
 Real boot testing requires the explicitly selected disposable image above.
+
+## Local-first placement and EC2 warm capacity
+
+Mac Workers should register with the same `macos-vz` sandbox class and a
+provider label, for example `provider=local` or `provider=aws`. A Mac
+`ActorTemplate` can give `provider=local` a worker-preference weight while
+leaving AWS Workers eligible as overflow capacity. The scheduler uses EC2 only
+when no preferred Worker with room exists.
+
+`atecontroller` can optionally warm an existing EC2 Mac Auto Scaling Group:
+
+```text
+--ec2-mac-autoscaling-group=mac-workers
+--ec2-mac-local-selector=provider=local
+--ec2-mac-cloud-selector=provider=aws
+--ec2-mac-stress-utilization=0.75
+--ec2-mac-stress-samples=3
+--ec2-mac-lead-time=20m
+```
+
+Warm provisioning is disabled unless `--ec2-mac-autoscaling-group` is set. It
+scales up one Worker when local Actor-slot utilization remains above the
+threshold or recent allocation growth projects exhaustion within the lead
+time, provided ready EC2 Workers lack the configured headroom. The controller
+uses the standard AWS credential chain and needs
+`autoscaling:DescribeAutoScalingGroups` and `autoscaling:SetDesiredCapacity`.
+The Auto Scaling Group launch configuration must bootstrap `macletd` and
+register its external Worker with `provider=aws`.
+
+Automatic scale-down is intentionally absent. An EC2 Mac Worker must first be
+drained without assignments, and its Dedicated Host has a 24-hour minimum
+allocation; reducing the Auto Scaling Group blindly could terminate an active
+Actor or incur churn without saving money.

@@ -1318,6 +1318,46 @@ func Validate_ActorTemplate(
 		errs = append(errs, fn(fldPath.Child("mac_vm"), obj.MacVm, oldVal, oldObj != nil)...)
 	}
 
+	{ // field ateapipb.ActorTemplate.WorkerPreferences
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj []*ateapipb.WorkerPreference,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.PtrSliceNoNils[ateapipb.WorkerPreference](ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if e := validate.MaxItems(ctx, op, fldPath, obj, oldObj, 8).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if e := validate.OptionalSlice(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// iterate the list and call the type's validation function
+			if e := validate.EachPtrSliceVal(ctx, op, fldPath, obj, oldObj, nil, nil, Validate_WorkerPreference); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.ActorTemplate) []*ateapipb.WorkerPreference {
+				return oldObj.WorkerPreferences
+			})
+		errs = append(errs, fn(fldPath.Child("worker_preferences"), obj.WorkerPreferences, oldVal, oldObj != nil)...)
+	}
+
 	return errs
 }
 
@@ -9425,6 +9465,81 @@ func Validate_WorkerAssignment(
 				return oldObj.ActorEndpoint
 			})
 		errs = append(errs, fn(fldPath.Child("actor_endpoint"), obj.ActorEndpoint, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
+// Validate_WorkerPreference validates an instance of WorkerPreference according
+// to declarative validation rules in the API schema.
+func Validate_WorkerPreference(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ateapipb.WorkerPreference) (errs field.ErrorList) {
+
+	{ // field ateapipb.WorkerPreference.Selector
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateapipb.Selector,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_Selector(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.WorkerPreference) *ateapipb.Selector {
+				return oldObj.Selector
+			})
+		errs = append(errs, fn(fldPath.Child("selector"), obj.Selector, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateapipb.WorkerPreference.Weight
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *int32,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.Maximum(ctx, op, fldPath, obj, oldObj, 100); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			if e := validate.Minimum(ctx, op, fldPath, obj, oldObj, 1); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.WorkerPreference) *int32 {
+				return &oldObj.Weight
+			})
+		errs = append(errs, fn(fldPath.Child("weight"), &obj.Weight, oldVal, oldObj != nil)...)
 	}
 
 	return errs

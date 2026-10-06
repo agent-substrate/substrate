@@ -595,3 +595,45 @@ func TestScheduleMalformedLimitsIsNotNoCapacity(t *testing.T) {
 		t.Fatalf("Schedule() error = %v, want an error other than ErrNoCapacity", err)
 	}
 }
+
+func TestSchedulePreferencesFallBackWhenPreferredWorkersAreFull(t *testing.T) {
+	local := worker("local", "macos-vz", "mac-a", map[string]string{"provider": "local"},
+		withMaxActors(1), assigned("demo", "resident"))
+	aws := worker("aws", "macos-vz", "mac-b", map[string]string{"provider": "aws"})
+	constraints := Constraints{
+		SandboxClass: "macos-vz",
+		Preferences: []Preference{{
+			Selector: labels.SelectorFromSet(labels.Set{"provider": "local"}),
+			Weight:   100,
+		}},
+	}
+
+	got, err := New(fleet{local, aws}, WithIntn(firstIntn)).Schedule(context.Background(), constraints)
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if got.GetWorkerPod() != "aws" {
+		t.Fatalf("Schedule() = %q, want AWS fallback", got.GetWorkerPod())
+	}
+}
+
+func TestSchedulePreferenceWinsBeforeLoadBalancing(t *testing.T) {
+	local := worker("local", "macos-vz", "mac-a", map[string]string{"provider": "local"},
+		withMaxActors(2), assigned("demo", "resident"))
+	aws := worker("aws", "macos-vz", "mac-b", map[string]string{"provider": "aws"}, withMaxActors(10))
+	constraints := Constraints{
+		SandboxClass: "macos-vz",
+		Preferences: []Preference{{
+			Selector: labels.SelectorFromSet(labels.Set{"provider": "local"}),
+			Weight:   100,
+		}},
+	}
+
+	got, err := New(fleet{local, aws}, WithIntn(firstIntn)).Schedule(context.Background(), constraints)
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if got.GetWorkerPod() != "local" {
+		t.Fatalf("Schedule() = %q, want preferred local worker", got.GetWorkerPod())
+	}
+}

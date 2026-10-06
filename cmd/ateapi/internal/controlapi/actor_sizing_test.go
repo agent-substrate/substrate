@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"k8s.io/apimachinery/pkg/labels"
 )
 
 // TestActorResourceLimits covers the actor-side extraction: the CPU/memory limits
@@ -71,11 +72,18 @@ func TestSchedulingConstraintsAllowsMacActor(t *testing.T) {
 	got, err := schedulingConstraints(&ateapipb.Actor{}, &ateapipb.ActorTemplate{
 		MacVm:         &ateapipb.MacVMWorkload{Image: "example.com/macos/xcode@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
 		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_MACOS},
+		WorkerPreferences: []*ateapipb.WorkerPreference{{
+			Selector: &ateapipb.Selector{MatchLabels: map[string]string{"provider": "local"}},
+			Weight:   100,
+		}},
 	})
 	if err != nil {
 		t.Fatalf("schedulingConstraints() error: %v", err)
 	}
 	if got.SandboxClass != "macos-vz" {
 		t.Fatalf("SandboxClass = %q, want macos-vz", got.SandboxClass)
+	}
+	if len(got.Preferences) != 1 || got.Preferences[0].Weight != 100 || !got.Preferences[0].Selector.Matches(labels.Set{"provider": "local"}) {
+		t.Fatalf("Preferences = %#v, want provider=local weight 100", got.Preferences)
 	}
 }

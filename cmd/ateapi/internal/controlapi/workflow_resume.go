@@ -576,6 +576,12 @@ func schedulingConstraints(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate) 
 	if sel := tmpl.GetWorkerSelector(); sel != nil {
 		c.TemplateSelector = labels.SelectorFromSet(labels.Set(sel.GetMatchLabels()))
 	}
+	for _, preference := range tmpl.GetWorkerPreferences() {
+		c.Preferences = append(c.Preferences, scheduling.Preference{
+			Selector: labels.SelectorFromSet(labels.Set(preference.GetSelector().GetMatchLabels())),
+			Weight:   preference.GetWeight(),
+		})
+	}
 	return c, nil
 }
 

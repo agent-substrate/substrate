@@ -37,6 +37,11 @@ type Constraints struct {
 	TemplateSelector labels.Selector
 	ActorSelector    labels.Selector
 
+	// Preferences rank otherwise eligible workers. Schedule considers only
+	// candidates with the highest sum of weights for matching selectors. An
+	// unmatched preference is never a hard placement constraint.
+	Preferences []Preference
+
 	// RequiredNodes, when non-empty, restricts placement to workers running
 	// on one of these nodes. Used when the actor's latest snapshot is local
 	// to specific node VMs.
@@ -45,6 +50,12 @@ type Constraints struct {
 	// Limits are the actor's declared resource limits, named as a Worker names
 	// the capacity it reports, so the two subtract.
 	Limits *ateapipb.Resources
+}
+
+// Preference gives workers matching Selector a scheduling weight.
+type Preference struct {
+	Selector labels.Selector
+	Weight   int32
 }
 
 // ErrNoCapacity is returned by Schedule when no free worker satisfies the
@@ -112,12 +123,20 @@ func (s *scheduler) Schedule(ctx context.Context, constraints Constraints) (*ate
 	}
 
 	var candidates []candidate
+	var bestScore int32
 	for _, worker := range workers {
 		if !s.Applies(worker, constraints) {
 			continue
 		}
 		if cand, ok := checkRoom(worker, want); ok {
-			candidates = append(candidates, cand)
+			score := preferenceScore(worker, constraints.Preferences)
+			switch {
+			case len(candidates) == 0 || score > bestScore:
+				bestScore = score
+				candidates = []candidate{cand}
+			case score == bestScore:
+				candidates = append(candidates, cand)
+			}
 		}
 	}
 
@@ -137,6 +156,17 @@ func (s *scheduler) Schedule(ctx context.Context, constraints Constraints) (*ate
 		return candidates[j].worker, nil
 	}
 	return candidates[i].worker, nil
+}
+
+func preferenceScore(worker *ateapipb.Worker, preferences []Preference) int32 {
+	set := labels.Set(worker.GetLabels())
+	var score int32
+	for _, preference := range preferences {
+		if preference.Selector != nil && preference.Selector.Matches(set) {
+			score += preference.Weight
+		}
+	}
+	return score
 }
 
 // candidate pairs an eligible worker with its cached compute utilization.

@@ -258,6 +258,23 @@ message Selector {
   map<string, string> match_labels = 1;
 }
 
+// WorkerPreference gives matching Workers a scheduling advantage without
+// making non-matching Workers ineligible. The scheduler considers only Workers
+// with the highest total matching weight that currently have capacity.
+message WorkerPreference {
+  // selector identifies the preferred Workers.
+  //
+  // +k8s:required
+  Selector selector = 1;
+
+  // weight is added to a Worker's preference score when selector matches.
+  //
+  // +k8s:required
+  // +k8s:minimum=1
+  // +k8s:maximum=100
+  int32 weight = 2;
+}
+
 // ResourceMetadata holds the common fields carried by every Substrate resource.
 //
 // +k8s:customValidation # timestamps must be valid, and update_time must not precede create_time
@@ -1023,6 +1040,16 @@ message ActorTemplate {
   //
   // +k8s:optional
   MacVMWorkload mac_vm = 9;
+
+  // worker_preferences rank otherwise eligible Workers. They are evaluated
+  // after worker_selector and capacity, so a preference never prevents
+  // fallback to a non-matching Worker. For example, a Mac Actor can prefer
+  // provider=local while retaining provider=aws as overflow capacity.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=8
+  // +k8s:listType=atomic
+  repeated WorkerPreference worker_preferences = 10;
 }
 
 // MacVMWorkload defines the immutable base image and wakeup contract for a Mac

@@ -76,6 +76,26 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 		})},
 		field.ErrorList{field.Invalid(field.NewPath("actor_template", "worker_selector", "match_labels"), "bad key", "").WithOrigin("format=k8s-label-key")},
 	}, {
+		"valid worker preference",
+		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.WorkerPreferences = []*ateapipb.WorkerPreference{{
+				Selector: &ateapipb.Selector{MatchLabels: map[string]string{"provider": "local"}},
+				Weight:   100,
+			}}
+		})},
+		nil,
+	}, {
+		"too many worker preferences",
+		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
+			for range 9 {
+				tmpl.WorkerPreferences = append(tmpl.WorkerPreferences, &ateapipb.WorkerPreference{
+					Selector: &ateapipb.Selector{MatchLabels: map[string]string{"provider": "local"}},
+					Weight:   100,
+				})
+			}
+		})},
+		field.ErrorList{field.TooMany(field.NewPath("actor_template", "worker_preferences"), 9, 8).WithOrigin("maxItems")},
+	}, {
 		"no containers",
 		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
 			tmpl.Containers = nil
