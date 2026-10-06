@@ -43,9 +43,7 @@ type probeConfig struct{ trustBundle bool }
 // Only suites that ASSERT the projection ask for it. The bundle is derived
 // from a single cluster-wide Secret, so a suite that merely needs a probe must
 // not depend on it: it would then fail whenever the suite that owns the pool
-// finishes and takes the bundle with it. For the same reason two suites that
-// opt in must not run concurrently — CI runs the egress ones in their own
-// step, leaving the identity suite the only opt-in in the standard lanes.
+// finishes and takes the bundle with it.
 func WithTrustBundle() ProbeOption { return func(c *probeConfig) { c.trustBundle = true } }
 
 // DeployProbe builds the probe fixture image and installs the fixture for the

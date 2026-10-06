@@ -21,6 +21,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/agent-substrate/substrate/internal/tarutil"
 )
 
 // upperDirWith returns a rootfs upper directory laid out the way the host
@@ -52,15 +54,20 @@ func TestRootfsUpperRoundTrip(t *testing.T) {
 		"app_ovl/work/#1/tmp.bin":         "in-flight copy-up temp",
 		"sidecar_ovl/fs/var/log/s.log":    "sidecar write",
 	}
+	containers := []string{"app_ovl", "sidecar_ovl"}
 	src := upperDirWith(t, files)
+	// The upperdir's own mode is the container's /, so it must survive too.
+	if err := os.Chmod(filepath.Join(src, "app_ovl/fs"), 0o750); err != nil {
+		t.Fatal(err)
+	}
 	checkpointDir := t.TempDir()
-	if err := tarRootfsUpper(t.Context(), src, checkpointDir); err != nil {
+	if err := tarRootfsUpper(t.Context(), src, checkpointDir, containers); err != nil {
 		t.Fatalf("tarRootfsUpper: %v", err)
 	}
 	// Restore: onto a directory holding a stale previous activation's contents,
 	// which must not leak into the restored overlay state.
 	dst := upperDirWith(t, map[string]string{"app_ovl/fs/stale.txt": "stale"})
-	if err := untarRootfsUpper(dst, checkpointDir); err != nil {
+	if err := untarRootfsUpper(dst, checkpointDir, containers); err != nil {
 		t.Fatalf("untarRootfsUpper: %v", err)
 	}
 	for rel, want := range files {
@@ -76,12 +83,87 @@ func TestRootfsUpperRoundTrip(t *testing.T) {
 			t.Errorf("restored %q = %q, want %q", rel, got, want)
 		}
 	}
-	// The workdirs must NOT survive the round trip: they are excluded from the
-	// archive (dead weight; overlayfs rebuilds them at mount).
-	if _, err := os.Stat(filepath.Join(dst, "app_ovl/work")); !os.IsNotExist(err) {
-		t.Errorf("workdir survived the snapshot round trip (stat err = %v), want it excluded", err)
+	if fi, err := os.Stat(filepath.Join(dst, "app_ovl/fs")); err != nil || fi.Mode().Perm() != 0o750 {
+		t.Errorf("restored upperdir: Stat = %v, %v; want mode 0750", fi, err)
+	}
+	// The workdirs' contents must NOT survive the round trip: they are excluded
+	// from the archive (dead weight; overlayfs rebuilds them at mount).
+	if entries, err := os.ReadDir(filepath.Join(dst, "app_ovl/work")); err != nil || len(entries) != 0 {
+		t.Errorf("workdir after the snapshot round trip: ReadDir = %v, %v; want an empty directory", entries, err)
 	}
 	if _, err := os.Stat(filepath.Join(dst, "app_ovl/fs/stale.txt")); !os.IsNotExist(err) {
 		t.Errorf("stale pre-restore content survived untarRootfsUpper (stat err = %v), want it wiped", err)
+	}
+}
+
+// The snapshot is untrusted, so it must not decide any directory above the
+// upperdirs: a symlink there would point the overlay mount, or the workdir
+// wipe in kata.StageMergedRootfs, outside the actor's directory.
+func TestUntarRootfsUpperCannotPlantLayout(t *testing.T) {
+	victim := t.TempDir()
+	// A symlink at the tar's root has no name to land on, and one at "fs"
+	// would only land inside the upperdir as guest content.
+	planted := upperDirWith(t, nil)
+	for _, link := range []string{"fs", "work"} {
+		if err := os.Symlink(victim, filepath.Join(planted, link)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snapshotDir := t.TempDir()
+	if err := tarutil.Create(t.Context(), filepath.Join(snapshotDir, "rootfs-upper-app.tar"), planted); err != nil {
+		t.Fatal(err)
+	}
+
+	dst := t.TempDir()
+	if err := untarRootfsUpper(dst, snapshotDir, []string{"app"}); err != nil {
+		t.Fatalf("untarRootfsUpper: %v", err)
+	}
+	if fi, err := os.Lstat(filepath.Join(dst, "app")); err != nil || !fi.IsDir() {
+		t.Errorf("app: Lstat = %v, %v; want a real directory", fi, err)
+	}
+	if fi, err := os.Lstat(filepath.Join(dst, "app", "fs")); err != nil || !fi.IsDir() {
+		t.Errorf("app/fs: Lstat = %v, %v; want a real directory", fi, err)
+	}
+	if fi, err := os.Lstat(filepath.Join(dst, "app", "work")); err != nil || !fi.IsDir() {
+		t.Errorf("app/work: Lstat = %v, %v; want a real directory", fi, err)
+	}
+}
+
+// Only root uses the layout above the upperdir, and the workdir; the upperdir
+// is the container's / and must stay traversable.
+func TestUntarRootfsUpperModes(t *testing.T) {
+	src := upperDirWith(t, map[string]string{"f": "x"})
+	snapshotDir := t.TempDir()
+	if err := tarutil.Create(t.Context(), filepath.Join(snapshotDir, "rootfs-upper-app.tar"), src); err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(t.TempDir(), "upper")
+	if err := untarRootfsUpper(dst, snapshotDir, []string{"app"}); err != nil {
+		t.Fatalf("untarRootfsUpper: %v", err)
+	}
+	for rel, want := range map[string]os.FileMode{".": 0o700, "app": 0o700, "app/fs": 0o755, "app/work": 0o700} {
+		fi, err := os.Stat(filepath.Join(dst, rel))
+		if err != nil || fi.Mode().Perm() != want {
+			t.Errorf("%s: Stat = %v, %v; want mode %v", rel, fi, err, want)
+		}
+	}
+}
+
+func TestRootfsUpperTarFileRejectsBadNames(t *testing.T) {
+	for _, cid := range []string{"", ".", "..", "a/b", "/abs", "../x"} {
+		if _, err := rootfsUpperTarFile(cid); err == nil {
+			t.Errorf("rootfsUpperTarFile(%q) = nil error, want one", cid)
+		}
+	}
+	if err := untarRootfsUpper(t.TempDir(), t.TempDir(), []string{"../x"}); err == nil {
+		t.Error("untarRootfsUpper with container ../x = nil error, want one")
+	}
+}
+
+// A container in the request without a tar in the snapshot fails the restore
+// rather than starting it on a silently empty rootfs upper.
+func TestUntarRootfsUpperMissingTar(t *testing.T) {
+	if err := untarRootfsUpper(t.TempDir(), t.TempDir(), []string{"app"}); err == nil {
+		t.Error("untarRootfsUpper with no tar = nil error, want one")
 	}
 }

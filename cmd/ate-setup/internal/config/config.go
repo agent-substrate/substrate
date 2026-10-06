@@ -35,6 +35,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/images"
 	"github.com/agent-substrate/substrate/internal/installdefaults"
+	"github.com/agent-substrate/substrate/pkg/postgressetup"
 )
 
 // Enumerated values for the install-shaping flags.
@@ -55,21 +56,16 @@ const (
 // DefaultRolloutTimeout is the default wait timeout for workload rollouts.
 const DefaultRolloutTimeout = 60 * time.Second
 
-// DefaultPostgresConnectionString reaches bundled PostgreSQL over mTLS using the
-// podcertificate controller's projected servicedns trust bundle and its own
-// podidentity credential bundle.
-const DefaultPostgresConnectionString = "postgresql://postgres@postgres.ate-system.svc:5432/atepg?sslmode=verify-full&sslrootcert=/run/servicedns.podcert.ate.dev/trust-bundle.pem&sslcert=/run/podidentity.podcert.ate.dev/credential-bundle.pem&sslkey=/run/podidentity.podcert.ate.dev/credential-bundle.pem"
-
-// Size10PostgresPoolParams is appended to the default connection string on
+// Size10PostgresPoolParams is appended to the bundled read/write connection on
 // size10 clusters. pgxpool defaults MaxConns to max(4, runtime.NumCPU()), which
 // under-uses the size10 server's raised max_connections; pinning the pool makes
 // the client side open the sockets the server is provisioned for.
 const Size10PostgresPoolParams = "&pool_max_conns=64&pool_min_conns=4"
 
 const (
-	DefaultPostgresSchema        = "substrate"
-	DefaultPostgresReadWriteRole = "substrate_readwrite"
-	DefaultPostgresOwnerRole     = "substrate_owner"
+	DefaultPostgresSchema        = postgressetup.Schema
+	DefaultPostgresReadWriteRole = postgressetup.ReadWriteRole
+	DefaultPostgresOwnerRole     = postgressetup.OwnerRole
 )
 
 // Cloud SQL Auth Proxy IP types, the values ATE_API_POSTGRES_CLOUDSQL_IP_TYPE
@@ -133,6 +129,9 @@ type Config struct {
 	KODockerRepo string
 	// KODefaultPlatforms constrains ko's build platforms.
 	KODefaultPlatforms string
+	// DockerBuildFlags are extra docker buildx build flags for the images ko
+	// cannot build (DOCKER_BUILD_FLAGS, whitespace-separated).
+	DockerBuildFlags []string
 
 	// Images selects where container images come from. Its zero value builds
 	// them from source with ko, which is what a developer install does.
@@ -356,6 +355,7 @@ func Load(opts Options) (*Config, error) {
 		BucketName:                        env["BUCKET_NAME"],
 		KODockerRepo:                      env["KO_DOCKER_REPO"],
 		KODefaultPlatforms:                env["KO_DEFAULTPLATFORMS"],
+		DockerBuildFlags:                  strings.Fields(env["DOCKER_BUILD_FLAGS"]),
 		Images:                            loadImageSource(opts, env),
 		PostgresReadWriteConnectionString: readWriteConnectionString,
 		PostgresOwnerConnectionString:     ownerConnectionString,

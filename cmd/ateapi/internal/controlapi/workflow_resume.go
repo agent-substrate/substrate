@@ -443,7 +443,7 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 		if err != nil {
 			if errors.Is(err, scheduling.ErrNoCapacity) {
 				outcome = ateattr.SchedulerOutcomeNoCapacity
-				return nil, nil, apierror.ResourceExhausted("no free workers available")
+				return nil, nil, apierror.ResourceExhausted("no worker has room for the actor")
 			}
 			return nil, nil, err
 		}

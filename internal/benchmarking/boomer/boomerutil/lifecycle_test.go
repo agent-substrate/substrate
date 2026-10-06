@@ -40,7 +40,7 @@ func TestClassifyLifecycleFailure(t *testing.T) {
 		{"snapshot unreadable", status.Error(codes.DataLoss, "external snapshot"), ReplaceNow},
 		{"stuck state", status.Error(codes.FailedPrecondition, "MarkSuspending prerequisite not met"), ReplaceNow},
 		{"crashed", status.Error(codes.Aborted, "actor bench/sb-1 crashed"), ReplaceNow},
-		{"no capacity", status.Error(codes.ResourceExhausted, "no free workers available"), RetryLater},
+		{"no capacity", status.Error(codes.ResourceExhausted, "no worker has room for the actor"), RetryLater},
 		{"api server down", status.Error(codes.Unavailable, "connection refused"), RetryLater},
 		{"timeout", status.Error(codes.DeadlineExceeded, "context deadline exceeded"), RetryLater},
 		{"canceled", status.Error(codes.Canceled, "context canceled"), RetryLater},

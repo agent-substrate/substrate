@@ -192,7 +192,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	if scope == ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL {
 		g.Go(func() error {
 			t := time.Now()
-			err := tarRootfsUpper(gctx, rootfsUpperDir(actorDirs), checkpointDir)
+			err := tarRootfsUpper(gctx, rootfsUpperDir(actorDirs), checkpointDir, containerNames(req.GetSpec().GetContainers()))
 			dUpper = time.Since(t)
 			return err
 		})

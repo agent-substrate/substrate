@@ -421,6 +421,23 @@ func dialMatchOf(match node) string {
 	return ""
 }
 
+// requiresDialHost reports whether a route matches only when the answer
+// carries the name to dial.
+func requiresDialHost(match node) bool {
+	for _, m := range list(match, "dynamic_metadata") {
+		if str(m, "filter") != extproc.EgressMetadataNamespace {
+			continue
+		}
+		if segs := list(m, "path"); len(segs) != 1 || str(segs[0], "key") != extproc.EgressDialHostKey {
+			continue
+		}
+		if present, _ := child(m, "value")["present_match"].(bool); present {
+			return true
+		}
+	}
+	return false
+}
+
 // autoSNIAndSAN reports whether a cluster takes the SNI and the certificate
 // check from the request's Host.
 func autoSNIAndSAN(cluster node) bool {
@@ -439,10 +456,11 @@ func autoSNIAndSAN(cluster node) bool {
 
 // A request leg's answer picks its route: one route per dial and no default,
 // so a request the sidecar did not answer for has no route. dial=name goes to
-// a dynamic forward proxy cluster, which resolves the Host; dial=address to an
-// ORIGINAL_DST cluster fed by the same filter state as the passthrough chains.
-// On the MITM leg both re-originate TLS and verify the origin against the Host;
-// on the cleartext leg neither wraps the actor's plaintext.
+// a dynamic forward proxy cluster, and only with the answered name it dials;
+// dial=address to an ORIGINAL_DST cluster fed by the same filter state as the
+// passthrough chains. On the MITM leg both re-originate TLS and verify the
+// origin against the Host; on the cleartext leg neither wraps the actor's
+// plaintext.
 func TestEgressManifestsRequestLegsRouteByTheDial(t *testing.T) {
 	for _, path := range egressManifests {
 		t.Run(path, func(t *testing.T) {
@@ -468,6 +486,9 @@ func TestEgressManifestsRequestLegsRouteByTheDial(t *testing.T) {
 						case extproc.EgressDialName:
 							if got := str(child(cluster, "cluster_type"), "name"); got != dfpClusterType {
 								t.Errorf("chain %q sends dial=name to %q of type %q, want a dynamic forward proxy", name, clusterName, got)
+							}
+							if !requiresDialHost(child(r, "match")) {
+								t.Errorf("chain %q sends dial=name to %q without requiring %s:%s; an answer without the name would dial the Host's port", name, clusterName, extproc.EgressMetadataNamespace, extproc.EgressDialHostKey)
 							}
 						case extproc.EgressDialAddress:
 							if got := str(cluster, "type"); got != "ORIGINAL_DST" {
@@ -495,6 +516,57 @@ func TestEgressManifestsRequestLegsRouteByTheDial(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// Each request leg dials the name its answer carries, on the port the actor
+// dialed: a set_filter_state between ext_proc and the forward proxy filter
+// copies the answer into the dynamic host, which the forward proxy cluster
+// dials in place of the Host. Without it, the cluster dials a port in the Host
+// that no rule checked. The filter resolves that same entry ahead of the
+// cluster only with allow_dynamic_host_from_filter_state; without it, it
+// resolves the Host as sent, into the DNS cache all actors share.
+func TestEgressManifestsRequestLegsDialTheAnsweredName(t *testing.T) {
+	tree := bootstrapTree(t, egressManifest)
+	if writers := filterStateWriters(tree, extproc.UpstreamDynamicHostFilterStateKey); len(writers) != len(requestLegs) {
+		t.Errorf("%s is set by %d filters, want one per request leg", extproc.UpstreamDynamicHostFilterStateKey, len(writers))
+	}
+	for _, leg := range requestLegs {
+		chain := byName(list(mitmListener(t, tree), "filter_chains"), leg)
+		if chain == nil {
+			t.Fatalf("no %q chain on mitm_listener", leg)
+		}
+		_, extProcAt, filters := extProcOf(chain)
+		forwardProxyAt := filterIndex(filters, "envoy.filters.http.dynamic_forward_proxy")
+		if forwardProxyAt < 0 {
+			t.Errorf("chain %q has no dynamic_forward_proxy filter", leg)
+			continue
+		}
+		if allow, _ := child(filters[forwardProxyAt], "typed_config")["allow_dynamic_host_from_filter_state"].(bool); !allow {
+			t.Errorf("chain %q's dynamic_forward_proxy resolves the Host as sent, not %s, so every port and spelling of a Host takes a DNS cache slot", leg, extproc.UpstreamDynamicHostFilterStateKey)
+		}
+		var entry node
+		at := -1
+		for i, f := range filters {
+			if str(f, "name") != setFilterStateFilter {
+				continue
+			}
+			for _, v := range list(child(f, "typed_config"), "on_request_headers") {
+				if str(v, "object_key") == extproc.UpstreamDynamicHostFilterStateKey {
+					entry, at = v, i
+				}
+			}
+		}
+		if at < 0 {
+			t.Errorf("chain %q does not set %s", leg, extproc.UpstreamDynamicHostFilterStateKey)
+			continue
+		}
+		if at < extProcAt || at > forwardProxyAt {
+			t.Errorf("chain %q sets %s at http_filters[%d], want it between ext_proc at [%d] and dynamic_forward_proxy at [%d]", leg, extproc.UpstreamDynamicHostFilterStateKey, at, extProcAt, forwardProxyAt)
+		}
+		if got := str(child(child(entry, "format_string"), "text_format_source"), "inline_string"); got != extproc.EgressDialHostFormat {
+			t.Errorf("chain %q sets %s from %q, want %q", leg, extproc.UpstreamDynamicHostFilterStateKey, got, extproc.EgressDialHostFormat)
+		}
 	}
 }
 

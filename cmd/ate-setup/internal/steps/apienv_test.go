@@ -23,6 +23,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
+	"github.com/agent-substrate/substrate/pkg/postgressetup"
 )
 
 // The digest exists to turn an envFrom change into a rollout, so what matters
@@ -58,28 +59,20 @@ func TestCreateAPIServerEnvVarsPostgresIdentities(t *testing.T) {
 		ownerRole     string
 	}{
 		{
-			name:          "bundled account",
+			name:          "bundled identities",
 			cfg:           config.Config{PostgresReadWriteRole: config.DefaultPostgresReadWriteRole, PostgresOwnerRole: config.DefaultPostgresOwnerRole},
-			readWriteDSN:  config.DefaultPostgresConnectionString,
-			ownerDSN:      config.DefaultPostgresConnectionString,
-			readWriteRole: "postgres", ownerRole: "postgres",
+			readWriteDSN:  bundledPostgresDSN(postgressetup.ReadWriteUser, postgressetup.ReadWritePassword),
+			ownerDSN:      bundledPostgresDSN(postgressetup.OwnerUser, postgressetup.OwnerPassword),
+			readWriteRole: config.DefaultPostgresReadWriteRole, ownerRole: config.DefaultPostgresOwnerRole,
 		},
 		{
-			name:          "size10 bundled account",
-			cfg:           config.Config{ClusterSize: config.ClusterSizeSize10},
-			readWriteDSN:  config.DefaultPostgresConnectionString + config.Size10PostgresPoolParams,
-			ownerDSN:      config.DefaultPostgresConnectionString,
-			readWriteRole: "postgres", ownerRole: "postgres",
-		},
-		{
-			name: "explicit bundled roles",
+			name: "size10 bundled identities",
 			cfg: config.Config{
-				PostgresReadWriteRole: "tenant_readwrite", PostgresOwnerRole: "tenant_owner",
-				PostgresReadWriteRoleSet: true, PostgresOwnerRoleSet: true,
+				ClusterSize: config.ClusterSizeSize10, PostgresReadWriteRole: config.DefaultPostgresReadWriteRole, PostgresOwnerRole: config.DefaultPostgresOwnerRole,
 			},
-			readWriteDSN:  config.DefaultPostgresConnectionString,
-			ownerDSN:      config.DefaultPostgresConnectionString,
-			readWriteRole: "tenant_readwrite", ownerRole: "tenant_owner",
+			readWriteDSN:  bundledPostgresDSN(postgressetup.ReadWriteUser, postgressetup.ReadWritePassword) + config.Size10PostgresPoolParams,
+			ownerDSN:      bundledPostgresDSN(postgressetup.OwnerUser, postgressetup.OwnerPassword),
+			readWriteRole: config.DefaultPostgresReadWriteRole, ownerRole: config.DefaultPostgresOwnerRole,
 		},
 		{
 			name: "external one login",
@@ -141,6 +134,18 @@ func TestCreateAPIServerEnvVarsPostgresIdentities(t *testing.T) {
 				t.Fatalf("unexpected PostgreSQL config: %v", cm.Data)
 			}
 		})
+	}
+}
+
+func TestCreateAPIServerEnvVarsRejectsCustomBundledIdentity(t *testing.T) {
+	cfg := config.Config{PostgresReadWriteRole: "tenant_readwrite", PostgresOwnerRole: "tenant_owner"}
+	e := &Env{Cfg: &cfg, Kube: fakeKube(t,
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: NamespaceAteSystem}},
+		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: ConfigMapAPIEnvVars, Namespace: NamespaceAteSystem}},
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: SecretAPIEnvVars, Namespace: NamespaceAteSystem}},
+	)}
+	if err := e.CreateAPIServerEnvVars(t.Context()); err == nil || !strings.Contains(err.Error(), "bundled PostgreSQL requires roles") {
+		t.Fatalf("CreateAPIServerEnvVars() error = %v, want fixed-identity error", err)
 	}
 }
 

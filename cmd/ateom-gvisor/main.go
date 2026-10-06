@@ -160,14 +160,14 @@ func do(ctx context.Context) error {
 
 	lp, err := serverboot.InitLogging(ctx, serverboot.LoggingOptions{
 		ServiceName:  serviceName,
-		Exporter:     serverboot.ResolveLogsExporter(ctx, serverboot.LogsExporterNone),
+		Exporter:     serverboot.ResolveLogsExporter(ctx),
 		ExporterConn: relayConn,
 		RelayCapable: true,
 	})
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize logging", err)
 	}
-	// Nil when the exporter is none.
+	// Nil when the exporter does not include otlp.
 	if lp != nil {
 		defer serverboot.ShutdownProvider("LoggerProvider", lp.Shutdown)
 	}
@@ -667,6 +667,8 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		return nil, fmt.Errorf("while creating checkpoint directory: %w", err)
 	}
 
+	// durableFiles are the durable-dir tars written below: the DATA subset.
+	var durableFiles []string
 	// Always take durable-dir snapshot if at least one container has a durable-dir volume mount.
 	// TODO(dberkov): this is a temporary workaround until gVisor supports taking durable-dir snapshots in a single request with the process snapshot.
 	switch req.GetScope() {
@@ -677,7 +679,8 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		if err := rcmd.cmdPause(ctx, ocispec.PauseContainer); err != nil {
 			return nil, fmt.Errorf("while pausing pause container: %w", err)
 		}
-		tarErr := tarDurableVolumes(ctx, req.GetActorDirs().GetDurableDirVolumeMountsDir(), checkpointPath)
+		var tarErr error
+		durableFiles, tarErr = tarDurableVolumes(ctx, req.GetActorDirs().GetDurableDirVolumeMountsDir(), checkpointPath, durableVolumeNames(req.GetSpec()))
 		// Undoing our own pause must not depend on the caller's context:
 		// tarutil does not check ctx, so a deadline expiring mid-tar would
 		// fail the resume instantly and leave the sandbox paused forever.
@@ -696,7 +699,9 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 			return nil, fmt.Errorf("while checkpointing pause: %w", err)
 		}
 		if hasDurableVolumes(req.GetSpec().GetContainers()) {
-			if err := tarDurableVolumes(ctx, req.GetActorDirs().GetDurableDirVolumeMountsDir(), checkpointPath); err != nil {
+			var err error
+			durableFiles, err = tarDurableVolumes(ctx, req.GetActorDirs().GetDurableDirVolumeMountsDir(), checkpointPath, durableVolumeNames(req.GetSpec()))
+			if err != nil {
 				return nil, fmt.Errorf("while archiving durable-dir volumes: %w", err)
 			}
 		}
@@ -723,11 +728,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor checkpointed", attribution)
 
-	resp := &ateompb.CheckpointWorkloadResponse{SnapshotFiles: snapshotFiles}
-	if slices.Contains(snapshotFiles, durableTarFile) {
-		resp.DataSnapshotFiles = []string{durableTarFile}
-	}
-	return resp, nil
+	return &ateompb.CheckpointWorkloadResponse{SnapshotFiles: snapshotFiles, DataSnapshotFiles: durableFiles}, nil
 }
 
 // listSnapshotFiles returns the (relative) names of regular files directly under
@@ -872,7 +873,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	checkpointDir := req.GetActorDirs().GetRestoreDir()
 
 	if hasDurableVolumes(req.GetSpec().GetContainers()) {
-		if err := untarDurableVolumes(req.GetActorDirs().GetDurableDirVolumeMountsDir(), checkpointDir); err != nil {
+		if err := untarDurableVolumes(req.GetActorDirs().GetDurableDirVolumeMountsDir(), checkpointDir, durableVolumeNames(req.GetSpec())); err != nil {
 			return nil, fmt.Errorf("while restoring durable-dir volumes: %w", err)
 		}
 	}

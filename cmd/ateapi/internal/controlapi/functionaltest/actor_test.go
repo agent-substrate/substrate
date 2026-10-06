@@ -3121,7 +3121,7 @@ func TestSuspendActor_ReplacedSnapshotReleaseFailure(t *testing.T) {
 	assertSnapshotCollected(t, tc, lastURI)
 }
 
-// TestResumeActor_NoWorkers tests that resuming an actor fails when no free workers are available.
+// TestResumeActor_NoWorkers tests that resuming an actor fails when no worker has room for it.
 // Workflow:
 // 1. Creates a mock ActorTemplate.
 // 2. Creates an actor.
@@ -3147,7 +3147,7 @@ func TestResumeActor_NoWorkers(t *testing.T) {
 	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
 	})
-	assertGrpcError(t, err, codes.ResourceExhausted, "no free workers available")
+	assertGrpcError(t, err, codes.ResourceExhausted, "no worker has room for the actor")
 }
 
 // TestResumeActor_MultiPoolSelector exercises the AND-of-two-selectors path
@@ -4845,7 +4845,7 @@ func TestResumeActor_RelocatesAfterSuspendFromPaused(t *testing.T) {
 	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: pinned},
 	})
-	assertGrpcError(t, err, codes.ResourceExhausted, "no free workers available")
+	assertGrpcError(t, err, codes.ResourceExhausted, "no worker has room for the actor")
 
 	suspended, err := tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: pinned},

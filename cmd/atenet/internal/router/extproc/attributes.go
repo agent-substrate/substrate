@@ -87,12 +87,17 @@ const (
 	// has no route.
 	EgressDialKey = "dial"
 	// EgressDialName: a hostname rule matched, so the forward proxy resolves
-	// the Host and dials that.
+	// EgressDialHostKey and dials it on the port the actor dialed.
 	EgressDialName = "name"
 	// EgressDialAddress: an address or all rule matched, so the request goes
 	// to the address the actor dialed, read from the ORIGINAL_DST filter state
 	// the CONNECT leg's answer set.
 	EgressDialAddress = "address"
+	// EgressDialHostKey, under EgressMetadataNamespace, comes with
+	// EgressDialName: the name the request was decided on, without the Host's
+	// port, which was never checked. The request chains copy it into
+	// UpstreamDynamicHostFilterStateKey, and their by-name routes need it.
+	EgressDialHostKey = "host"
 
 	// directionAttribute carries the Direction outright, for dataplanes that
 	// have no Envoy filter chain to name. It is set from a dataplane expression,
@@ -123,6 +128,16 @@ const EgressDialedPortFormat = "%DYNAMIC_METADATA(" + EgressMetadataNamespace + 
 // dynamic forward proxy dials, read before it falls back to its configured
 // port. The outer CONNECT chain sets it from EgressDialedPortKey.
 const UpstreamDynamicPortFilterStateKey = "envoy.upstream.dynamic_port"
+
+// EgressDialHostFormat is the set_filter_state format string that reads
+// EgressDialHostKey back out.
+const EgressDialHostFormat = "%DYNAMIC_METADATA(" + EgressMetadataNamespace + ":" + EgressDialHostKey + ")%"
+
+// UpstreamDynamicHostFilterStateKey is Envoy's filter-state key for the name a
+// dynamic forward proxy cluster dials in place of the Host, on
+// UpstreamDynamicPortFilterStateKey's port. Without it, a port written in the
+// Host wins. The request chains set it from EgressDialHostKey.
+const UpstreamDynamicHostFilterStateKey = "envoy.upstream.dynamic_host"
 
 // EgressPolicyMetadataFormat renders EgressPolicyMetadataNamespace as JSON.
 const EgressPolicyMetadataFormat = "%DYNAMIC_METADATA(" + EgressPolicyMetadataNamespace + ")%"

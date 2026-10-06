@@ -17,11 +17,16 @@
 package kata
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
+
+	"github.com/agent-substrate/substrate/internal/roottest"
+	"golang.org/x/sys/unix"
 )
 
 // The container rootfs is untrusted (the image below, the guest's own snapshot
@@ -59,9 +64,7 @@ func TestEnsureOCIMountpoints(t *testing.T) {
 
 // The kernel requires overlay upperdir and workdir on the same filesystem and
 // rejects a workdir nested inside (or equal to) upperdir — so they must be
-// SIBLINGS under the container's subdirectory of the actor's upper base. The
-// layout is also the snapshot tar's entry layout (<cid>/fs, <cid>/work), so a
-// change here breaks every overlay mount AND every existing snapshot.
+// SIBLINGS under the container's subdirectory of the actor's upper base.
 func TestUpperWorkDirsAreSiblings(t *testing.T) {
 	const base = "/var/lib/ateom-gvisor/actors/uid/rootfs-upper"
 	upper, work := UpperWorkDirs(base, "app")
@@ -74,10 +77,6 @@ func TestUpperWorkDirsAreSiblings(t *testing.T) {
 	}
 	if strings.HasPrefix(work+"/", upper+"/") {
 		t.Errorf("UpperWorkDirs: work %q is nested inside upper %q", work, upper)
-	}
-	// Tar-layout invariant: entries are <cid>/fs and <cid>/work.
-	if upper != filepath.Join(base, "app", "fs") || work != filepath.Join(base, "app", "work") {
-		t.Errorf("UpperWorkDirs = %q, %q; want the snapshot layout <base>/app/{fs,work}", upper, work)
 	}
 }
 
@@ -98,5 +97,93 @@ func TestVirtiofsdArgs(t *testing.T) {
 	// inode, such as a live-rotated trust bundle, could never be restored.
 	if i := slices.Index(args, "--migration-on-error"); i < 0 || i+1 >= len(args) || args[i+1] != "guest-error" {
 		t.Errorf("args %v do not set --migration-on-error guest-error", args)
+	}
+}
+
+func TestRemountReadOnly_NonExistent(t *testing.T) {
+	dst := filepath.Join(t.TempDir(), "nonexistent")
+	err := RemountReadOnly(dst)
+	if err == nil {
+		t.Fatalf("RemountReadOnly(%q) = nil, want error", dst)
+	}
+	if !strings.Contains(err.Error(), "statfs") {
+		t.Errorf("RemountReadOnly(%q) error = %v, want error from statfs", dst, err)
+	}
+}
+
+func TestUnmount_NonExistent(t *testing.T) {
+	dst := filepath.Join(t.TempDir(), "nonexistent")
+	// Unmount must handle non-existent destinations cleanly without panicking.
+	Unmount(dst)
+}
+
+func TestRemountReadOnlyAndUnmount(t *testing.T) {
+	roottest.Require(t, "bind mounts")
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	dst := filepath.Join(dir, "dst")
+	if err := os.Mkdir(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(dst, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Mount(src, dst, "", unix.MS_BIND, ""); err != nil {
+		t.Fatalf("Mount(%q, %q, BIND) = %v", src, dst, err)
+	}
+	defer Unmount(dst)
+
+	testFile := filepath.Join(dst, "test.txt")
+	if err := os.WriteFile(testFile, []byte("write test"), 0o644); err != nil {
+		t.Fatalf("WriteFile before remount = %v", err)
+	}
+
+	if err := RemountReadOnly(dst); err != nil {
+		t.Fatalf("RemountReadOnly(%q) = %v", dst, err)
+	}
+
+	if err := os.WriteFile(testFile, []byte("should fail"), 0o644); !errors.Is(err, syscall.EROFS) {
+		t.Fatalf("WriteFile after remount = %v, want EROFS", err)
+	}
+
+	Unmount(dst)
+}
+
+// setNosuidNodev must add both flags to the bind and the mounts beneath it
+// without clearing read-only.
+func TestSetNosuidNodev(t *testing.T) {
+	roottest.Require(t, "mounting requires root")
+
+	src, dst := t.TempDir(), t.TempDir()
+	if err := os.Mkdir(filepath.Join(src, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Mount("tmpfs", filepath.Join(src, "sub"), "tmpfs", 0, ""); err != nil {
+		t.Fatalf("mounting nested tmpfs: %v", err)
+	}
+	t.Cleanup(func() { _ = unix.Unmount(filepath.Join(src, "sub"), unix.MNT_DETACH) })
+	if err := unix.Mount(src, dst, "", unix.MS_BIND|unix.MS_REC, ""); err != nil {
+		t.Fatalf("bind-mounting: %v", err)
+	}
+	t.Cleanup(func() { _ = unix.Unmount(dst, unix.MNT_DETACH) })
+	if err := unix.MountSetattr(unix.AT_FDCWD, dst, 0, &unix.MountAttr{Attr_set: unix.MOUNT_ATTR_RDONLY}); err != nil {
+		t.Fatalf("making bind read-only: %v", err)
+	}
+
+	if err := setNosuidNodev(dst); err != nil {
+		t.Fatalf("setNosuidNodev: %v", err)
+	}
+
+	for path, wantRO := range map[string]bool{dst: true, filepath.Join(dst, "sub"): false} {
+		var st unix.Statfs_t
+		if err := unix.Statfs(path, &st); err != nil {
+			t.Fatalf("statfs %q: %v", path, err)
+		}
+		if st.Flags&unix.ST_NOSUID == 0 || st.Flags&unix.ST_NODEV == 0 {
+			t.Errorf("%q: flags %#x, want nosuid and nodev", path, st.Flags)
+		}
+		if gotRO := st.Flags&unix.ST_RDONLY != 0; gotRO != wantRO {
+			t.Errorf("%q: read-only = %v, want %v", path, gotRO, wantRO)
+		}
 	}
 }

@@ -65,6 +65,7 @@ func loadEnv(t *testing.T) {
 		"BUCKET_NAME",
 		"CLUSTER_LOCATION",
 		"CLUSTER_NAME",
+		"DOCKER_BUILD_FLAGS",
 		"EXPECTED_JWT_ISSUER",
 		"KIND_CLUSTER_NAME",
 		"KO_DEFAULTPLATFORMS",
@@ -201,6 +202,19 @@ func TestLoadCordonControlPlane(t *testing.T) {
 				t.Errorf("ScriptEnv() exports ATE_INSTALL_CORDON_CONTROL_PLANE = %v, want %v", exported, tc.want)
 			}
 		})
+	}
+}
+
+func TestLoadDockerBuildFlags(t *testing.T) {
+	loadEnv(t)
+	t.Setenv("DOCKER_BUILD_FLAGS", " --cache-from type=gha  --cache-to type=gha,mode=max ")
+	cfg, err := Load(Options{})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	want := []string{"--cache-from", "type=gha", "--cache-to", "type=gha,mode=max"}
+	if !slices.Equal(cfg.DockerBuildFlags, want) {
+		t.Errorf("DockerBuildFlags = %q, want %q", cfg.DockerBuildFlags, want)
 	}
 }
 

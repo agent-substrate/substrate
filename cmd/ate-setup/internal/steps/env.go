@@ -170,7 +170,7 @@ func (e *Env) koRunner() (*ko.Runner, error) {
 // build-<name> target does.
 func (e *Env) dockerfileImage(ctx context.Context, name, contextDir string) (string, error) {
 	if !e.Cfg.Images.IsPrebuilt() {
-		return images.BuildDockerfileImage(ctx, e.Cfg.Root, e.Cfg.KODockerRepo, name, e.Cfg.Path(contextDir), e.Cfg.KODefaultPlatforms)
+		return images.BuildDockerfileImage(ctx, e.Cfg.Root, e.Cfg.KODockerRepo, name, e.Cfg.Path(contextDir), e.Cfg.KODefaultPlatforms, e.Cfg.DockerBuildFlags)
 	}
 	resolver, err := e.imageResolver()
 	if err != nil {

@@ -26,6 +26,7 @@ import (
 	"testing"
 
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
+	"github.com/agent-substrate/substrate/cmd/atelet/internal/trustbundle"
 	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
@@ -438,7 +439,7 @@ func TestActivationFailureBeforeRegistration(t *testing.T) {
 			store := newCTBStore(t)
 			certA := string(testCertPEM(t))
 			store.set(t, certA)
-			refresher := newSystemInfoVolumeRefresher(store.lister.Get, nil)
+			refresher := newSystemInfoVolumeRefresher(trustbundle.NewSource(store.lister.Get, nil), nil)
 			spec := &ateletpb.WorkloadSpec{Volumes: []*ateletpb.Volume{{
 				Name: "trust", Source: &ateletpb.Volume_SystemInfo{SystemInfo: trustVolumeSpec("ca.pem")},
 			}}}
@@ -526,7 +527,7 @@ func TestActivationFailureBeforeRegistration(t *testing.T) {
 			}
 			certB := string(testCertPEM(t))
 			store.set(t, certB)
-			if err := refresher.refreshBundle(ctx, EgressTrustBundleName); err != nil {
+			if err := refresher.refreshBundle(ctx, trustbundle.EgressName); err != nil {
 				t.Fatal(err)
 			}
 			if tc.wantPresent {
@@ -544,7 +545,7 @@ func TestRunFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
 	useTempNodeDirs(t)
 	store := newCTBStore(t)
 	store.set(t, string(testCertPEM(t)))
-	refresher := newSystemInfoVolumeRefresher(store.lister.Get, nil)
+	refresher := newSystemInfoVolumeRefresher(trustbundle.NewSource(store.lister.Get, nil), nil)
 	content := []byte("runsc binary")
 	assetHash := fmt.Sprintf("%x", sha256.Sum256(content))
 	s := &AteomHerder{
@@ -591,7 +592,7 @@ func TestRestoreFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
 	)
 	store := newCTBStore(t)
 	store.set(t, string(testCertPEM(t)))
-	refresher := newSystemInfoVolumeRefresher(store.lister.Get, nil)
+	refresher := newSystemInfoVolumeRefresher(trustbundle.NewSource(store.lister.Get, nil), nil)
 	content := []byte("runsc binary")
 	assetHash := fmt.Sprintf("%x", sha256.Sum256(content))
 	writeLocalSnapshot(t, ateletpath.LocalSnapshotDir(actorUID, snapshotName), sandboxAssetsRecord{

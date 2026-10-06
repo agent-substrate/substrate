@@ -22,9 +22,9 @@
 # by the ext_proc sidecar. Cleartext HTTP and the TLS this gateway terminates
 # are decided per request: the rules in policy order, over the Host and the
 # address the actor dialed, and the request goes to what the matching rule
-# checked, the Host resolved here or the dialed address. Anything else reaches
-# the dialed address only when an address rule allowed it at the CONNECT. See
-# cmd/atenet/internal/router/README.md.
+# checked: the Host's name resolved here, on the port the actor dialed, or the
+# dialed address. Anything else reaches the dialed address only when an address
+# rule allowed it at the CONNECT. See cmd/atenet/internal/router/README.md.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -480,7 +480,9 @@ data:
                   #
                   # Each of the two exists once per dial the sidecar answers
                   # with (dev.ate.egress:dial), and there is no default: a
-                  # request it did not answer for has no route.
+                  # request it did not answer for has no route. A by-name
+                  # route also needs the answered name (dev.ate.egress:host);
+                  # without it the forward proxy would dial the Host's port.
                   - match:
                       prefix: "/"
                       headers:
@@ -491,6 +493,9 @@ data:
                       - filter: dev.ate.egress
                         path: [{ key: dial }]
                         value: { string_match: { exact: name } }
+                      - filter: dev.ate.egress
+                        path: [{ key: host }]
+                        value: { present_match: true }
                     route:
                       cluster: egress_forward_proxy_grpc
                       timeout: 0s
@@ -513,6 +518,9 @@ data:
                       - filter: dev.ate.egress
                         path: [{ key: dial }]
                         value: { string_match: { exact: name } }
+                      - filter: dev.ate.egress
+                        path: [{ key: host }]
+                        value: { present_match: true }
                     route:
                       cluster: egress_forward_proxy
                       # The route timeout runs until the response completes, which
@@ -558,7 +566,7 @@ data:
                     request_trailer_mode: SKIP
                     response_trailer_mode: SKIP
                   # The sidecar may add headers but never touch routing: a rewritten
-                  # Host would dial a name other than the one policed.
+                  # Host would ask the origin for a site other than the one policed.
                   mutation_rules:
                     disallow_system: true
                     disallow_is_error: true
@@ -569,12 +577,31 @@ data:
                     receiving_namespaces:
                       untyped:
                       - dev.ate.egress
+              # Envoy dials a port written in the Host unless the name to dial
+              # comes from filter state too, so the name the request was
+              # decided on goes there. Must stay after ext_proc.
+              - name: envoy.filters.http.set_filter_state
+                typed_config:
+                  "@type": type.googleapis.com/envoy.extensions.filters.http.set_filter_state.v3.Config
+                  on_request_headers:
+                  - object_key: envoy.upstream.dynamic_host
+                    skip_if_empty: true
+                    format_string:
+                      text_format_source:
+                        inline_string: "%DYNAMIC_METADATA(dev.ate.egress:host)%"
+                      omit_empty_values: true
               #ATE_MITM_EXTPROC_FILTER -- see the mitm_listener comment above.
-              # Resolves the Host for the by-name route. It does nothing for a
+              # Resolves the by-name route's name before the cluster dials it.
+              # allow_dynamic_host_from_filter_state makes it resolve
+              # envoy.upstream.dynamic_host on the port the actor dialed, the
+              # entry the cluster dials; without it, it resolves the Host as
+              # sent, and every port or spelling an actor puts there takes a
+              # slot in the DNS cache all actors share. It does nothing for a
               # route to any other kind of cluster.
               - name: envoy.filters.http.dynamic_forward_proxy
                 typed_config:
                   "@type": type.googleapis.com/envoy.extensions.filters.http.dynamic_forward_proxy.v3.FilterConfig
+                  allow_dynamic_host_from_filter_state: true
                   dns_cache_config:
                     name: egress_dns_cache
                     # V4_ONLY resolves nothing on an IPv6-only cluster. ALL
@@ -665,7 +692,9 @@ data:
                 - name: all
                   domains: ["*"]
                   # One route per dial the sidecar answers with, and no default:
-                  # a request it did not answer for has no route.
+                  # a request it did not answer for has no route. The by-name
+                  # route also needs the answered name (dev.ate.egress:host);
+                  # without it the forward proxy would dial the Host's port.
                   routes:
                   - match:
                       prefix: "/"
@@ -673,6 +702,9 @@ data:
                       - filter: dev.ate.egress
                         path: [{ key: dial }]
                         value: { string_match: { exact: name } }
+                      - filter: dev.ate.egress
+                        path: [{ key: host }]
+                        value: { present_match: true }
                     route:
                       cluster: egress_forward_proxy_cleartext
                       timeout: 0s
@@ -716,7 +748,7 @@ data:
                     request_trailer_mode: SKIP
                     response_trailer_mode: SKIP
                   # The sidecar may add headers but never touch routing: a rewritten
-                  # Host would dial a name other than the one policed.
+                  # Host would ask the origin for a site other than the one policed.
                   mutation_rules:
                     disallow_system: true
                     disallow_is_error: true
@@ -727,12 +759,31 @@ data:
                     receiving_namespaces:
                       untyped:
                       - dev.ate.egress
+              # Envoy dials a port written in the Host unless the name to dial
+              # comes from filter state too, so the name the request was
+              # decided on goes there. Must stay after ext_proc.
+              - name: envoy.filters.http.set_filter_state
+                typed_config:
+                  "@type": type.googleapis.com/envoy.extensions.filters.http.set_filter_state.v3.Config
+                  on_request_headers:
+                  - object_key: envoy.upstream.dynamic_host
+                    skip_if_empty: true
+                    format_string:
+                      text_format_source:
+                        inline_string: "%DYNAMIC_METADATA(dev.ate.egress:host)%"
+                      omit_empty_values: true
               #ATE_MITM_EXTPROC_FILTER -- Don't modify this line.
-              # Resolves the Host for the by-name route. It does nothing for a
+              # Resolves the by-name route's name before the cluster dials it.
+              # allow_dynamic_host_from_filter_state makes it resolve
+              # envoy.upstream.dynamic_host on the port the actor dialed, the
+              # entry the cluster dials; without it, it resolves the Host as
+              # sent, and every port or spelling an actor puts there takes a
+              # slot in the DNS cache all actors share. It does nothing for a
               # route to any other kind of cluster.
               - name: envoy.filters.http.dynamic_forward_proxy
                 typed_config:
                   "@type": type.googleapis.com/envoy.extensions.filters.http.dynamic_forward_proxy.v3.FilterConfig
+                  allow_dynamic_host_from_filter_state: true
                   dns_cache_config:
                     name: egress_dns_cache
                     dns_lookup_family: ALL
@@ -885,8 +936,8 @@ data:
                     address: 127.0.0.1
                     port_value: 50051
       # The only cluster that dials the internet. Reached from the MITM leg, so
-      # the host it resolves comes from the decrypted request's own Host header
-      # rather than from the CONNECT authority.
+      # it dials the name the sidecar answered for the decrypted request, not
+      # the CONNECT authority, on the port the actor dialed.
       - name: egress_forward_proxy
         lb_policy: CLUSTER_PROVIDED
         connect_timeout: 5s
