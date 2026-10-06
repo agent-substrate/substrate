@@ -718,6 +718,15 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	})
 	dAteom = time.Since(tAteom)
 	if err != nil {
+		// An unreachable ateom took the sandbox down with it, and the crash
+		// that follows sends no Terminate. Release the actor here, or the
+		// actor GC would keep its directory for as long as atelet runs.
+		if status.Code(err) == codes.Unavailable {
+			// TODO: unmount the actor's external volumes too. Left mounted,
+			// they are detached, not unmounted, when the actor GC removes
+			// the directory.
+			s.systemInfoVolumes.Deregister(actorUID)
+		}
 		// TODO: Ateom should classify checkpoint failures, and set "should-crash"
 		// in the metadata if the error is not retriable.
 		return nil, fmt.Errorf("while calling ateom.CheckpointWorkload: %w", err)

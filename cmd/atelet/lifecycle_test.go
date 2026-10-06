@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -33,6 +34,8 @@ import (
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -69,6 +72,12 @@ type fakeAteom struct {
 	preserveRestoreDir bool
 	// terminations counts TerminateWorkload calls.
 	terminations atomic.Int32
+	// checkpointErr, when set, fails CheckpointWorkload with it.
+	checkpointErr error
+	// checkpointArrived, when set, is closed once CheckpointWorkload arrives,
+	// which then holds the call until it ends, so a test can take the ateom
+	// down mid-call.
+	checkpointArrived chan struct{}
 }
 
 func (f *fakeAteom) recordActorDirs(rpc string, actorDirs *ateompb.ActorDirs) {
@@ -83,8 +92,16 @@ func (f *fakeAteom) RunWorkload(_ context.Context, req *ateompb.RunWorkloadReque
 	return &ateompb.RunWorkloadResponse{}, nil
 }
 
-func (f *fakeAteom) CheckpointWorkload(_ context.Context, req *ateompb.CheckpointWorkloadRequest) (*ateompb.CheckpointWorkloadResponse, error) {
+func (f *fakeAteom) CheckpointWorkload(ctx context.Context, req *ateompb.CheckpointWorkloadRequest) (*ateompb.CheckpointWorkloadResponse, error) {
 	f.recordActorDirs("CheckpointWorkload", req.GetActorDirs())
+	if f.checkpointArrived != nil {
+		close(f.checkpointArrived)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	if f.checkpointErr != nil {
+		return nil, f.checkpointErr
+	}
 	dir := req.GetActorDirs().GetCheckpointDir()
 	names := make([]string, 0, len(f.snapshotFiles))
 	for name, body := range f.snapshotFiles {
@@ -119,7 +136,11 @@ func (f *fakeAteom) TerminateWorkload(_ context.Context, req *ateompb.TerminateW
 
 // serveFakeAteom serves ateom on a unix socket and points atelet's dialer at
 // it. The socket lives in its own short temp dir.
-func serveFakeAteom(t *testing.T, f *fakeAteom) {
+//
+// kill stops the server the way the ateom process dying would: every
+// connection drops at once, and the socket file stays behind, refusing
+// connections.
+func serveFakeAteom(t *testing.T, f *fakeAteom) (kill func()) {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "ateom-")
 	if err != nil {
@@ -132,6 +153,7 @@ func serveFakeAteom(t *testing.T, f *fakeAteom) {
 	if err != nil {
 		t.Fatalf("listening on %q: %v", sock, err)
 	}
+	lis.(*net.UnixListener).SetUnlinkOnClose(false)
 	srv := grpc.NewServer()
 	ateompb.RegisterAteomServer(srv, f)
 	go func() { _ = srv.Serve(lis) }()
@@ -140,6 +162,7 @@ func serveFakeAteom(t *testing.T, f *fakeAteom) {
 	orig := ateomSocketPath
 	ateomSocketPath = func(string) string { return sock }
 	t.Cleanup(func() { ateomSocketPath = orig })
+	return srv.Stop
 }
 
 // TestSuspendRemovesActorDir walks an actor through run -> suspend over atelet's
@@ -225,6 +248,134 @@ func TestSuspendRemovesActorDir(t *testing.T) {
 			names = append(names, e.Name())
 		}
 		t.Errorf("%s survived the suspend holding %v, want it removed", actorDir, names)
+	}
+}
+
+// TestCheckpointFailureRegistration checks which failed checkpoints keep the
+// actor registered as hosted here. An ateom that cannot be reached took the
+// sandbox with it, so the actor must be released for the actor GC to reclaim
+// its directory. An ateom that answers with an error may still be running the
+// sandbox. The dead ateoms are real servers taken down, so the code checked
+// is the one gRPC reports for them.
+func TestCheckpointFailureRegistration(t *testing.T) {
+	// How the ateom goes down. Zero leaves it up.
+	const (
+		// The process died, leaving its socket file to refuse connections.
+		ateomDied = iota + 1
+		// The pod's directory went, and the socket with it.
+		ateomSocketGone
+		// The process dies with the checkpoint in flight.
+		ateomDiesMidCall
+	)
+	for _, tc := range []struct {
+		name string
+		down int
+		// ateomErr is what a live ateom answers the checkpoint with.
+		ateomErr       error
+		wantCode       codes.Code
+		wantRegistered bool
+	}{
+		{name: "ateom rejects", ateomErr: status.Error(codes.Internal, "checkpoint failed"), wantCode: codes.Internal, wantRegistered: true},
+		{name: "ateom died", down: ateomDied, wantCode: codes.Unavailable},
+		{name: "ateom socket gone", down: ateomSocketGone, wantCode: codes.Unavailable},
+		{name: "ateom dies mid-call", down: ateomDiesMidCall, wantCode: codes.Unavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			useTempNodeDirs(t)
+			ctx := t.Context()
+
+			const (
+				atespace  = "ate-demo"
+				actorName = "counter"
+				actorUID  = "actor-uid-1"
+				ateomUID  = "ateom-uid-1"
+			)
+
+			ateom := &fakeAteom{checkpointErr: tc.ateomErr}
+			if tc.down == ateomDiesMidCall {
+				ateom.checkpointArrived = make(chan struct{})
+			}
+			kill := serveFakeAteom(t, ateom)
+
+			host := imageVolumeTestRegistry(t)
+			image := host + "/actor:v1"
+			pushTestImage(t, image, singleFileLayer(t, "bin/app", "app"))
+
+			runsc := []byte("runsc binary")
+			s := newPluginHerder(t, fakeObjectStorage{})
+			s.ateomDialer = newAteomDialer(1)
+			s.imageCache = newImageVolumeStore(t)
+			s.anonGCSClient = fakeObjectStorage{data: runsc}
+			s.systemInfoVolumes = newSystemInfoVolumeRefresher(nil, nil)
+			spec := &ateletpb.WorkloadSpec{
+				Containers: []*ateletpb.Container{{Name: "app", Image: image, Command: []string{"/bin/app"}}},
+			}
+			if _, err := s.Run(ctx, &ateletpb.RunRequest{
+				Atespace:              atespace,
+				ActorName:             actorName,
+				ActorUid:              actorUID,
+				ActorTemplateAtespace: "default",
+				ActorTemplateName:     "counter",
+				TargetAteomUid:        ateomUID,
+				SandboxAssets: &ateletpb.SandboxAssets{
+					SandboxClass: "gvisor",
+					PauseImage:   image,
+					Assets: map[string]*ateletpb.ArchAssets{
+						runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
+							runscAssetName: {
+								Url:    "gs://test-bucket/runsc",
+								Sha256: fmt.Sprintf("%x", sha256.Sum256(runsc)),
+							},
+						}},
+					},
+				},
+				Spec: spec,
+			}); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if !slices.Contains(s.systemInfoVolumes.RegisteredActorUIDs(), actorUID) {
+				t.Fatalf("Run did not register %s", actorUID)
+			}
+
+			switch tc.down {
+			case ateomDied:
+				kill()
+			case ateomSocketGone:
+				kill()
+				if err := os.Remove(ateomSocketPath(ateomUID)); err != nil {
+					t.Fatalf("removing the ateom socket: %v", err)
+				}
+			case ateomDiesMidCall:
+				go func() {
+					<-ateom.checkpointArrived
+					kill()
+				}()
+			}
+
+			_, err := s.Checkpoint(ctx, &ateletpb.CheckpointRequest{
+				Atespace:              atespace,
+				ActorName:             actorName,
+				ActorUid:              actorUID,
+				ActorTemplateAtespace: "default",
+				ActorTemplateName:     "counter",
+				TargetAteomUid:        ateomUID,
+				Spec:                  spec,
+				Fidelity:              ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+				Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
+				Config: &ateletpb.CheckpointRequest_ExternalConfig{
+					ExternalConfig: &ateletpb.ExternalCheckpointConfiguration{SnapshotUri: testSnapshotURI},
+				},
+			})
+			if err == nil {
+				t.Fatal("Checkpoint succeeded, want it to fail")
+			}
+			if got := status.Code(err); got != tc.wantCode {
+				t.Errorf("Checkpoint failed with %v, want %v: %v", got, tc.wantCode, err)
+			}
+			if got := slices.Contains(s.systemInfoVolumes.RegisteredActorUIDs(), actorUID); got != tc.wantRegistered {
+				t.Errorf("after a checkpoint failing with %v, registered = %v, want %v", status.Code(err), got, tc.wantRegistered)
+			}
+		})
 	}
 }
 
