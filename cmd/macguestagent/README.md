@@ -16,6 +16,12 @@ sudo install -o root -g wheel -m 0644 \
   /Library/LaunchDaemons/com.agent-substrate.macguestagent.plist
 ```
 
+The image must also grant this LaunchDaemon Full Disk Access, or an equivalent
+managed PPPC policy that permits its VirtioFS access. macOS System Policy blocks
+an unapproved background daemon from reading these shares even as root; the
+standard network- and removable-volume code-signing entitlements do not bypass
+that policy.
+
 The image's Mac Actor wakeup probe must use port `8123` and path `/ready`.
 The agent refuses malformed configuration, nested mounts, symlink mount points,
 and non-empty directories that a mount would hide. It continuously reconciles

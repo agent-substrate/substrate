@@ -34,6 +34,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/agent-substrate/substrate/internal/mountinfo"
 )
 
 const configTag = "ate-config"
@@ -51,13 +53,8 @@ type mountOperations interface {
 
 type hostMountOperations struct{}
 
-func (hostMountOperations) Mounted(ctx context.Context, target string) (bool, error) {
-	out, err := exec.CommandContext(ctx, "/usr/bin/stat", "-f", "%T\n%m", target).Output()
-	if err != nil {
-		return false, err
-	}
-	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-	return len(lines) == 2 && lines[0] == "virtiofs" && lines[1] == target, nil
+func (hostMountOperations) Mounted(_ context.Context, target string) (bool, error) {
+	return mountinfo.Mounted(target, "AppleVirtIOFS")
 }
 
 func (hostMountOperations) MountVirtioFS(ctx context.Context, tag, target string) error {

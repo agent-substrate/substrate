@@ -143,11 +143,13 @@ mounted by `mac_vm.volume_mounts`. The beta storage path supports the upstream
 through a uniquely tagged VZ VirtioFS device, and unmounts it after the guest
 stops. A replacement Mac can stage the same provisioned volume after host loss.
 
-The base image must install `cmd/macguestagent` as a root `launchd` service.
-It mounts the fixed read-only `ate-config` share, then mounts every durable
-share at its declared guest path before answering the wakeup probe. Host paths
-and storage credentials are never included in guest configuration. Mount
-points must be empty, unique, and non-nested.
+The base image must install `cmd/macguestagent` as a root `launchd` service and
+grant it Full Disk Access or an equivalent managed PPPC policy for VirtioFS.
+Installing the daemon as root alone does not satisfy macOS System Policy. It
+mounts the fixed read-only `ate-config` share, then mounts every durable share
+at its declared guest path before answering the wakeup probe. Host paths and
+storage credentials are never included in guest configuration. Mount points
+must be empty, unique, and non-nested.
 
 The control-plane lifecycle maps to the host as follows:
 

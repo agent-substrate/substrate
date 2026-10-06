@@ -29,6 +29,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/agent-substrate/substrate/internal/mountinfo"
 	"github.com/agent-substrate/substrate/pkg/proto/hostruntimepb"
 )
 
@@ -66,13 +67,8 @@ type mountOperations interface {
 
 type hostMountOperations struct{}
 
-func (hostMountOperations) Mounted(ctx context.Context, target string) (bool, error) {
-	out, err := exec.CommandContext(ctx, "/usr/bin/stat", "-f", "%T\n%m", target).Output()
-	if err != nil {
-		return false, err
-	}
-	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-	return len(lines) == 2 && (lines[0] == "nfs" || lines[0] == "nfs4") && lines[1] == target, nil
+func (hostMountOperations) Mounted(_ context.Context, target string) (bool, error) {
+	return mountinfo.Mounted(target, "nfs", "nfs4")
 }
 
 func (hostMountOperations) MountNFS(ctx context.Context, remote, target string) error {
@@ -310,24 +306,24 @@ func (s *nfsVolumeStager) Unstage(ctx context.Context, actorUID string) error {
 func writeVMVolumeConfig(bundle string, volumes []stagedVolume) error {
 	hostConfig := filepath.Join(bundle, vmVolumeConfigName)
 	guestDir := filepath.Join(bundle, guestConfigDirectory)
+	// VirtioFS preserves host permissions and presents the host owner as an
+	// unknown guest user. The guest agent therefore needs search permission on
+	// this directory even though the share itself is read-only.
+	if err := os.MkdirAll(guestDir, 0o755); err != nil {
+		return err
+	}
+	if err := os.Chmod(guestDir, 0o755); err != nil {
+		return err
+	}
 	if len(volumes) == 0 {
 		removeErr := os.Remove(hostConfig)
 		if errors.Is(removeErr, os.ErrNotExist) {
 			removeErr = nil
 		}
-		if err := os.MkdirAll(guestDir, 0o700); err != nil {
-			return errors.Join(removeErr, err)
-		}
 		if err := writeJSONAtomic(filepath.Join(guestDir, "volumes.json"), []guestVolume{}); err != nil {
 			return errors.Join(removeErr, err)
 		}
 		return removeErr
-	}
-	if err := os.MkdirAll(guestDir, 0o700); err != nil {
-		return err
-	}
-	if err := os.Chmod(guestDir, 0o700); err != nil {
-		return err
 	}
 	guest := make([]guestVolume, 0, len(volumes))
 	for _, volume := range volumes {

@@ -130,6 +130,13 @@ func TestWriteVMVolumeConfigSeparatesHostPaths(t *testing.T) {
 	if err != nil || strings.Contains(string(guest), "/private/nfs/data") || !strings.Contains(string(guest), "/workspace") {
 		t.Fatalf("guest config = %q, %v", guest, err)
 	}
+	info, err := os.Stat(filepath.Join(bundle, guestConfigDirectory))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o755 {
+		t.Fatalf("guest config directory mode = %v, want 0755", info.Mode().Perm())
+	}
 	if err := writeVMVolumeConfig(bundle, nil); err != nil {
 		t.Fatal(err)
 	}
