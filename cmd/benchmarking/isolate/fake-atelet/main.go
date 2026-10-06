@@ -29,6 +29,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"os/signal"
 	"strconv"
 	"syscall"
@@ -39,6 +40,9 @@ import (
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/version"
+	"github.com/agent-substrate/substrate/pkg/objectstorage"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/spf13/pflag"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -79,6 +83,11 @@ func main() {
 		serverboot.Fatal(ctx, "Invalid --delay", err)
 	}
 
+	storage, err := newObjectStorage(ctx)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to create the object storage client", err)
+	}
+
 	herderTLS, err := serverTLSConfig(*grpcServerCredBundle, *clientCACerts)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to build server TLS config", err)
@@ -87,7 +96,7 @@ func main() {
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to listen", err)
 	}
-	h := &herder{delays: callDelays}
+	h := &herder{delays: callDelays, storage: storage}
 	srv := grpc.NewServer(grpc.Creds(credentials.NewTLS(herderTLS)))
 	ateletpb.RegisterAteomHerderServer(srv, h)
 	health := &http.Server{Addr: *healthListenAddr, Handler: healthHandler(), ReadHeaderTimeout: 10 * time.Second}
@@ -147,4 +156,23 @@ func serverTLSConfig(servingBundlePath, clientCAPath string) (*tls.Config, error
 			}, nil
 		},
 	}, nil
+}
+
+// newObjectStorage picks the backend the way atelet does, from
+// ATE_STORAGE_BACKEND, so placeholders land where atelet would write.
+func newObjectStorage(ctx context.Context) (objectstorage.ObjectStorage, error) {
+	switch os.Getenv("ATE_STORAGE_BACKEND") {
+	case "s3":
+		cfg, err := config.LoadDefaultConfig(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("loading S3 config: %w", err)
+		}
+		return objectstorage.NewS3Client(s3.NewFromConfig(cfg, func(o *s3.Options) {
+			if os.Getenv("AWS_S3_USE_PATH_STYLE") == "true" {
+				o.UsePathStyle = true
+			}
+		})), nil
+	default:
+		return objectstorage.NewGCSClient(ctx)
+	}
 }
