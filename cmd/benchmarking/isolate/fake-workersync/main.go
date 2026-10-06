@@ -68,6 +68,7 @@ var (
 	resync        = pflag.Duration("resync", 10*time.Second, "Reconcile at least this often, besides on every WorkerPool change.")
 	concurrency   = pflag.Int("concurrency", 32, "Worker calls in flight.")
 	cleanup       = pflag.Bool("cleanup", false, "Delete this run's registered fake Workers, then exit.")
+	drainGrace    = pflag.Duration("drain-grace", time.Minute, "How long a draining fake Worker waits for its Actors to leave before it is deleted, releasing them. Stands in for the time ateom takes to stop a terminating pod's Actors.")
 	deleteTimeout = pflag.Duration("delete-timeout", 5*time.Minute, "How long shutdown spends deleting the fake Workers.")
 
 	showVersion  = pflag.Bool("version", false, "Print version and exit.")
@@ -142,7 +143,7 @@ func main() {
 		ateletLabel: *ateletLabel,
 		relayPort:   *relayPort,
 	}
-	c := newController(control, relay, cl, *run, *concurrency)
+	c := newController(control, relay, cl, *run, *concurrency, *drainGrace)
 
 	if err := c.adopt(ctx); err != nil {
 		serverboot.Fatal(ctx, "Failed to load registered fake Workers", err)
