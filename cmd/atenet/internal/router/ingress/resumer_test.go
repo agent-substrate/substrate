@@ -504,6 +504,46 @@ func TestActorResumer_Parking(t *testing.T) {
 		})
 	})
 
+	t.Run("LateNonRetryableErrorIsPreserved", func(t *testing.T) {
+		for _, tc := range []struct {
+			name string
+			err  error
+		}{
+			{"NotFound", status.Error(codes.NotFound, "actor not found")},
+			// wait.Interrupted also matches this error when it comes from the RPC.
+			{"ContextDeadlineExceeded", context.DeadlineExceeded},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				synctest.Test(t, func(t *testing.T) {
+					const budget = 300 * time.Millisecond
+					var calls atomic.Int32
+					mock := &resumerMockClient{
+						resumeFn: func(context.Context, *ateapipb.ResumeActorRequest, ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+							if calls.Add(1) == 1 {
+								return nil, status.Error(codes.ResourceExhausted, "no free workers available")
+							}
+							// This attempt starts within the budget but finishes after it.
+							time.Sleep(budget)
+							return nil, tc.err
+						},
+					}
+					resumer := NewActorResumer(mock, withParking(ParkedRequestConfig{Max: 1, Budget: budget}))
+					_, _, err := resumer.ResumeActor(t.Context(), testActorRef)
+					if !errors.Is(err, tc.err) {
+						t.Errorf("expected terminal error %v, got %v", tc.err, err)
+					}
+					var budgetErr *budgetExhaustedError
+					if errors.As(err, &budgetErr) {
+						t.Errorf("terminal RPC error was classified as budget exhaustion: %v", err)
+					}
+					if got := calls.Load(); got != 2 {
+						t.Errorf("expected 2 resume attempts, got %d", got)
+					}
+				})
+			})
+		}
+	})
+
 	t.Run("LateRetryableErrorIsBudgetExhaustion", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			// An attempt that outlives the budget and then fails with a

@@ -238,6 +238,8 @@ func (r *ActorResumer) runFlight(f *resumeActorFlight, key string, actorRef reso
 			lastRetryErr = err // remember it in case the budget elapses
 			return false, nil  // park: retry until the budget elapses
 		}
+		// Keep the final error even if the retry budget has expired.
+		lastRetryErr = nil
 		return false, err
 	})
 
