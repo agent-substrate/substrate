@@ -246,9 +246,9 @@ groups:
   - id: registry.ate.sandbox
     type: attribute_group
     brief: >
-      The class of the sandbox. The class comes from the template. Thus it adds
-      no series to the template labels. It lets a dashboard group the data by
-      class without a list of the template names.
+      The sandbox that hosts an actor. The class comes from the template. Thus
+      it adds no series to the template labels. It lets a dashboard group the
+      data by class without a list of the template names.
     attributes:
       - id: ate.sandbox.class
         stability: development
@@ -272,6 +272,18 @@ groups:
                 ateapi reports it for a Worker that CreateWorker accepted with
                 no class, and for an ActorTemplate with no sandbox config.
                 atelet reports it for a snapshot manifest with no class.
+      - id: ate.sandbox.oom_kills
+        stability: development
+        type: int
+        brief: >
+          The processes in the sandbox cgroup leaf that the kernel OOM killer
+          has killed, over the life of the leaf (memory.events oom_kill).
+        note: >
+          Logs only. It is only ever recorded beside actor identity, which no
+          metric may carry. ateom-gvisor sets it on the record it writes when a
+          hosted actor's sandbox has no process left. A leaf left behind by an
+          earlier activation of the same actor carries its count forward.
+        examples: [0, 3]
 
   - id: registry.ate.snapshot
     type: attribute_group

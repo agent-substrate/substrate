@@ -312,6 +312,6 @@ func (s *AteomService) warnDeadSandbox(ctx context.Context, h *hostedActor, raw 
 	if !h.deadReported.CompareAndSwap(false, true) {
 		return
 	}
-	attrs := append(ateattr.ActorLogAttrs(h.attribution), slog.Uint64("ate.sandbox.oom_kills", raw.OOMKills))
+	attrs := append(ateattr.ActorLogAttrs(h.attribution), slog.Uint64(string(ateattr.SandboxOOMKillsKey), raw.OOMKills))
 	slog.LogAttrs(ctx, slog.LevelWarn, "Sandbox has no processes left while the actor is hosted", attrs...)
 }

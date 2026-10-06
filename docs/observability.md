@@ -177,6 +177,17 @@ Creating an actor counts as a change. A new actor is born suspended, so it gets 
 
 The counter carries no actor identity, so this record is the only way to attribute a crash to one agent. The decision-point line that precedes it (`Setting Actor to crashed due to error`) carries only `ate.atespace` and `ate.actor.name`: it is written before the Actor is loaded, so no uid exists yet.
 
+ateom-gvisor's `Sandbox has no processes left while the actor is hosted` is a WARN written when a running actor's gVisor sandbox has died: the sentry crashed, was killed, or was OOM-killed. The ateom's usage sweep finds it, so it shows up within one sweep (`--usage-sample-interval`, a minute by default), once per activation. `ate.sandbox.oom_kills` is the cgroup's `oom_kill` count, so a non-zero value points at the kernel OOM killer:
+
+```json
+{"time":"…","level":"WARN","msg":"Sandbox has no processes left while the actor is hosted",
+ "ate.atespace":"ate-demo-counter","ate.actor.name":"counter-1","ate.actor.uid":"8f2a…",
+ "ate.template.atespace":"ate-demo-counter","ate.template.name":"counter",
+ "ate.sandbox.oom_kills":3}
+```
+
+The actor still reports `RUNNING` after this record; nothing moves it to `CRASHED` yet ([#2211](https://github.com/agent-substrate/substrate/issues/2211)). It does not fire when an application container exits while the sentry is still up, or during a checkpoint or terminate. The count covers the life of the cgroup leaf, so a leaf left behind by an earlier activation of the same actor carries its count forward.
+
 #### The same records over OTLP
 
 With `OTEL_LOGS_EXPORTER=otlp` these records go out as OTLP log events instead of stdout, so a collector reads them without knowing substrate's stdout envelope. Unset or `none`, which is what every environment but kind uses today, keeps them on stdout. `otlp,console` writes both, as kind does for debugging. `console` here is the component's own JSON log line, not the OTel SDK's console exporter format. The value is a comma-separated list: names are trimmed, lowercased, and counted once, and an unknown or empty item logs a warning and is skipped while the rest apply. `none` with an exporter, or a value that names no known exporter, logs a warning and keeps the default, `none`. ateapi is the only emitter today. The ateoms have a LoggerProvider on the same switch and export through [the ateom relay](#the-ateom-otlp-relay), which carries logs, traces, and metrics. atecontroller copies `OTEL_LOGS_EXPORTER` into each worker pod, so the kind ConfigMap sets the ateoms to `otlp,console` too.
