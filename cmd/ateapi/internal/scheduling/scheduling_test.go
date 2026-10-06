@@ -436,6 +436,19 @@ func TestApplies(t *testing.T) {
 	}
 }
 
+func TestAppliesPinsLocalSnapshotToExternalWorker(t *testing.T) {
+	w := worker("", "macos-vz", "", nil)
+	w.Metadata = &ateapipb.ResourceMetadata{Name: "mac-worker-a"}
+	w.ExternalHost = &ateapipb.ExternalWorkerHost{RuntimeEndpoint: "mac-worker-a.example:9443"}
+	s := New(fleet{w})
+	if !s.Applies(w, Constraints{SandboxClass: "macos-vz", RequiredNodes: []string{"mac-worker-a"}}) {
+		t.Fatal("external Worker did not match its host-local snapshot locality")
+	}
+	if s.Applies(w, Constraints{SandboxClass: "macos-vz", RequiredNodes: []string{"mac-worker-b"}}) {
+		t.Fatal("external Worker matched another host's local snapshot")
+	}
+}
+
 type fleet []*ateapipb.Worker
 
 func (f fleet) Workers() ([]*ateapipb.Worker, error) { return f, nil }

@@ -82,15 +82,22 @@ func ValidateCustom_ActorTemplate(_ context.Context, _ operation.Operation, fldP
 			errs = append(errs, field.Forbidden(fldPath.Child("volumes"), "Mac Actors do not support template volumes yet"))
 		}
 		if snapshot := value.GetSnapshotConfig(); snapshot != nil {
-			if snapshot.GetOnPause() == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA {
-				errs = append(errs, field.Invalid(fldPath.Child("snapshot_config", "on_pause"), snapshot.GetOnPause(), "Mac Actors support only FULL snapshots"))
+			if snapshot.GetOnPause() != ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DISK {
+				errs = append(errs, field.Invalid(fldPath.Child("snapshot_config", "on_pause"), snapshot.GetOnPause(), "Mac Actors support only DISK snapshots"))
 			}
-			if snapshot.GetOnCommit() == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA {
-				errs = append(errs, field.Invalid(fldPath.Child("snapshot_config", "on_commit"), snapshot.GetOnCommit(), "Mac Actors support only FULL snapshots"))
+			if snapshot.GetOnCommit() != ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DISK {
+				errs = append(errs, field.Invalid(fldPath.Child("snapshot_config", "on_commit"), snapshot.GetOnCommit(), "Mac Actors support only DISK snapshots"))
 			}
 		}
 	} else if hasContainers && class == ateapipb.SandboxClass_SANDBOX_CLASS_MACOS {
 		errs = append(errs, field.Invalid(fldPath.Child("sandbox_config", "sandbox_class"), class, "SANDBOX_CLASS_MACOS requires mac_vm"))
+	} else if snapshot := value.GetSnapshotConfig(); snapshot != nil {
+		if snapshot.GetOnPause() == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DISK {
+			errs = append(errs, field.Invalid(fldPath.Child("snapshot_config", "on_pause"), snapshot.GetOnPause(), "DISK snapshots are supported only for Mac Actors"))
+		}
+		if snapshot.GetOnCommit() == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DISK {
+			errs = append(errs, field.Invalid(fldPath.Child("snapshot_config", "on_commit"), snapshot.GetOnCommit(), "DISK snapshots are supported only for Mac Actors"))
+		}
 	}
 	return errs
 }
@@ -279,6 +286,10 @@ func ValidateCustom_SnapshotConfig_StorageLocation(_ context.Context, _ operatio
 func ValidateCustom_SnapshotConfig(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapipb.SnapshotConfig) field.ErrorList {
 	if value.GetOnPause() == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA &&
 		value.GetOnCommit() != ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA {
+		return field.ErrorList{field.Invalid(fldPath.Child("on_commit"), value.GetOnCommit().String(), "must be a subset of on_pause")}
+	}
+	if value.GetOnPause() == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DISK &&
+		value.GetOnCommit() == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL {
 		return field.ErrorList{field.Invalid(fldPath.Child("on_commit"), value.GetOnCommit().String(), "must be a subset of on_pause")}
 	}
 	return nil

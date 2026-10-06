@@ -81,7 +81,7 @@ public struct ActorBundle: Codable, Sendable {
     return bundle
   }
 
-  public static func create(source: URL, destination: URL, actorID: String) throws -> Self {
+  public static func create(source: URL, destination: URL, actorID: String, cpuCount: Int? = nil, memorySize: UInt64? = nil) throws -> Self {
     let source = source.resolvingSymlinksInPath().standardizedFileURL
     let destination = destination.resolvingSymlinksInPath().standardizedFileURL
     guard !actorID.isEmpty, actorID.utf8.count <= 128 else {
@@ -112,9 +112,12 @@ public struct ActorBundle: Codable, Sendable {
     }
     let base = try JSONDecoder().decode(
       LumeConfig.self, from: Data(contentsOf: source.appendingPathComponent("config.json")))
-    let config = try base.personalized(
+    var config = try base.personalized(
       machineIdentifier: VZMacMachineIdentifier().dataRepresentation,
       macAddress: VZMACAddress.randomLocallyAdministered().string)
+    config.cpuCount = cpuCount ?? config.cpuCount
+    config.memorySize = memorySize ?? config.memorySize
+    try config.validate()
     let bundle = Self(actorID: actorID, config: config)
     // mkdir is exclusive: never reuse or clean up somebody else's destination.
     guard mkdir(destination.path, 0o700) == 0 else {
@@ -124,6 +127,56 @@ public struct ActorBundle: Codable, Sendable {
       for name in ["disk.img", "nvram.bin"] {
         let target = destination.appendingPathComponent(name).path
         guard clonefile(source.appendingPathComponent(name).path, target, 0) == 0 else {
+          throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        guard chmod(target, 0o600) == 0 else { throw POSIXError(.EACCES) }
+      }
+      try writeJSON(bundle, to: destination.appendingPathComponent("actor.json"))
+      return bundle
+    } catch {
+      try? FileManager.default.removeItem(at: destination)
+      throw error
+    }
+  }
+
+  // snapshot publishes only immutable cold-boot state. The bundle must not be owned.
+  public static func snapshot(source: URL, destination: URL) throws {
+    guard !(try BundleLock.isOwned(source)) else { throw MacletError("Cannot snapshot a running bundle") }
+    let bundle = try read(source)
+    guard mkdir(destination.path, 0o700) == 0 else {
+      throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+    }
+    do {
+      for name in ["disk.img", "nvram.bin"] {
+        let target = destination.appendingPathComponent(name).path
+        guard clonefile(source.appendingPathComponent(name).path, target, 0) == 0 else {
+          throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        guard chmod(target, 0o600) == 0 else { throw POSIXError(.EACCES) }
+      }
+      try writeJSON(bundle, to: destination.appendingPathComponent("actor.json"))
+    } catch {
+      try? FileManager.default.removeItem(at: destination)
+      throw error
+    }
+  }
+
+  public static func restore(snapshot: URL, destination: URL, actorID: String, cpuCount: Int? = nil, memorySize: UInt64? = nil) throws -> Self {
+    let old = try read(snapshot)
+    var config = try old.config.personalized(
+      machineIdentifier: VZMacMachineIdentifier().dataRepresentation,
+      macAddress: VZMACAddress.randomLocallyAdministered().string)
+    config.cpuCount = cpuCount ?? config.cpuCount
+    config.memorySize = memorySize ?? config.memorySize
+    try config.validate()
+    let bundle = Self(actorID: actorID, config: config)
+    guard mkdir(destination.path, 0o700) == 0 else {
+      throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+    }
+    do {
+      for name in ["disk.img", "nvram.bin"] {
+        let target = destination.appendingPathComponent(name).path
+        guard clonefile(snapshot.appendingPathComponent(name).path, target, 0) == 0 else {
           throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
         }
         guard chmod(target, 0o600) == 0 else { throw POSIXError(.EACCES) }

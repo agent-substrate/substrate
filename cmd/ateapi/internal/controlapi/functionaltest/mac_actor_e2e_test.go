@@ -96,7 +96,7 @@ func TestMacActorE2E(t *testing.T) {
 	if _, err := tc.client.CreateActorTemplate(context.Background(), &ateapipb.CreateActorTemplateRequest{ActorTemplate: &ateapipb.ActorTemplate{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: templateName},
 		SnapshotConfig: &ateapipb.SnapshotConfig{
-			OnPause: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, OnCommit: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+			OnPause: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DISK, OnCommit: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DISK,
 			StorageLocation: testStorageLocation,
 		},
 		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_MACOS, ConfigName: sandboxConfigName},
@@ -143,6 +143,64 @@ func TestMacActorE2E(t *testing.T) {
 	_ = resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		t.Fatalf("probe status = %s", resp.Status)
+	}
+
+	paused, err := tc.client.PauseActor(ctx, &ateapipb.PauseActorRequest{Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: actorName}})
+	if err != nil {
+		t.Fatalf("pause Mac Actor: %v", err)
+	}
+	if paused.GetActor().GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_PAUSED {
+		t.Fatalf("state after pause = %v, want PAUSED", paused.GetActor().GetStatus().GetState())
+	}
+	local := paused.GetActor().GetStatus().GetLocalSnapshot()
+	if local.GetSnapshotName() == "" || len(local.GetNodeVmsWithLocalSnapshots()) != 1 || local.GetNodeVmsWithLocalSnapshots()[0] != workerName {
+		t.Fatalf("local Mac snapshot = %v, want snapshot pinned to %q", local, workerName)
+	}
+	if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: actorName}}); err != nil {
+		t.Fatalf("resume paused Mac Actor: %v", err)
+	}
+	resumedAgain, err := tc.client.GetActor(ctx, &ateapipb.GetActorRequest{Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: actorName}})
+	if err != nil {
+		t.Fatalf("get re-resumed Mac Actor: %v", err)
+	}
+	if resumedAgain.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING || resumedAgain.GetStatus().GetWorkerAssignment().GetWorker().GetName() != workerName {
+		t.Fatalf("re-resumed Actor = %v, want RUNNING on %q", resumedAgain.GetStatus(), workerName)
+	}
+	actorEndpoint = resumedAgain.GetStatus().GetWorkerAssignment().GetActorEndpoint()
+	resp, err = probeClient.Get(fmt.Sprintf("http://%s:%d/ready", actorEndpoint.GetHost(), actorEndpoint.GetPort()))
+	if err != nil {
+		t.Fatalf("probe re-resumed Actor endpoint: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		t.Fatalf("re-resumed probe status = %s", resp.Status)
+	}
+	pausedAgain, err := tc.client.PauseActor(ctx, &ateapipb.PauseActorRequest{Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: actorName}})
+	if err != nil {
+		t.Fatalf("second pause Mac Actor: %v", err)
+	}
+	secondLocal := pausedAgain.GetActor().GetStatus().GetLocalSnapshot()
+	if secondLocal.GetSnapshotName() == "" || secondLocal.GetSnapshotName() == local.GetSnapshotName() {
+		t.Fatalf("second local snapshot = %v, want a newly minted snapshot after %q", secondLocal, local.GetSnapshotName())
+	}
+	if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: actorName}}); err != nil {
+		t.Fatalf("resume twice-paused Mac Actor: %v", err)
+	}
+	resumedThird, err := tc.client.GetActor(ctx, &ateapipb.GetActorRequest{Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: actorName}})
+	if err != nil {
+		t.Fatalf("get twice-resumed Mac Actor: %v", err)
+	}
+	if resumedThird.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+		t.Fatalf("state after second local resume = %v, want RUNNING", resumedThird.GetStatus().GetState())
+	}
+	actorEndpoint = resumedThird.GetStatus().GetWorkerAssignment().GetActorEndpoint()
+	resp, err = probeClient.Get(fmt.Sprintf("http://%s:%d/ready", actorEndpoint.GetHost(), actorEndpoint.GetPort()))
+	if err != nil {
+		t.Fatalf("probe twice-resumed Actor endpoint: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		t.Fatalf("twice-resumed probe status = %s", resp.Status)
 	}
 
 	if _, err := tc.client.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: actorName}, AnyState: true}); err != nil {

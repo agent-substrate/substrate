@@ -28,6 +28,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/agent-substrate/substrate/pkg/proto/hostruntimepb"
 	"go.opentelemetry.io/otel/attribute"
 	"google.golang.org/protobuf/proto"
 )
@@ -164,11 +165,11 @@ func (w *ActorWorkflow) ensureMarkedSuspending(ctx context.Context, actorRef res
 }
 
 // commitSnapshotScope returns the scope a commit (suspend) snapshot is taken
-// with. Golden actors always commit Full regardless of the template's
-// onCommit: new actors borrow the golden snapshot and resume it Full, so it
-// must carry the guest memory and filesystem.
+// with. Golden container actors always commit Full regardless of the
+// template's onCommit: new actors borrow the golden snapshot and resume it
+// Full. Mac Actors cold-boot a Disk snapshot and never claim process memory.
 func commitSnapshotScope(atespace string, tmpl *ateapipb.ActorTemplate) ateapipb.SnapshotContentScope {
-	if atespace == resources.GoldenActorAtespace {
+	if atespace == resources.GoldenActorAtespace && tmpl.GetMacVm() == nil {
 		return ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL
 	}
 	return tmpl.GetSnapshotConfig().GetOnCommit()
@@ -215,6 +216,22 @@ func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef reso
 			slog.ErrorContext(ctx, "Failed to crash actor", slog.String("err", err.Error()))
 		}
 		return "", fmt.Errorf("actor is CRASHED because it was in SUSPENDING state but has no active worker")
+	}
+	if actorTemplate.GetMacVm() != nil {
+		if w.hostRuntime == nil {
+			return "", apierror.Unimplemented("Mac Actor execution requires a configured host runtime")
+		}
+		if assignment.GetRuntimeEndpoint() == "" {
+			return "", apierror.Internal("Mac Actor assignment has no runtime endpoint")
+		}
+		err := w.hostRuntime.Checkpoint(ctx, assignment.GetRuntimeEndpoint(), &hostruntimepb.CheckpointRequest{
+			ActorUid:            actor.GetMetadata().GetUid(),
+			ExternalSnapshotUri: actor.GetStatus().GetInProgressSnapshotUri(),
+		})
+		if err != nil {
+			return ateattr.SnapshotScopeDisk, fmt.Errorf("while checkpointing Mac Actor: %w", err)
+		}
+		return ateattr.SnapshotScopeDisk, nil
 	}
 
 	ateletConn, err := w.dialer.DialForAteletOnNode(assignment.GetNodeName())
@@ -273,6 +290,27 @@ func (w *ActorWorkflow) ensurePausedSnapshotUploaded(ctx context.Context, actorR
 			slog.ErrorContext(ctx, "Failed to crash actor", slog.String("err", err.Error()))
 		}
 		return "", fmt.Errorf("actor is CRASHED because it was suspending a paused snapshot with no node recorded")
+	}
+	if actorTemplate.GetMacVm() != nil {
+		worker, err := w.store.GetWorker(ctx, local.GetNodeVmsWithLocalSnapshots()[0])
+		if err != nil {
+			return "", fmt.Errorf("while finding Mac Worker holding local snapshot: %w", err)
+		}
+		endpoint := worker.GetExternalHost().GetRuntimeEndpoint()
+		if endpoint == "" {
+			return "", apierror.Internal("Mac Worker holding local snapshot has no runtime endpoint")
+		}
+		if w.hostRuntime == nil {
+			return "", apierror.Unimplemented("Mac Actor execution requires a configured host runtime")
+		}
+		err = w.hostRuntime.Checkpoint(ctx, endpoint, &hostruntimepb.CheckpointRequest{
+			ActorUid:            actor.GetMetadata().GetUid(),
+			ExternalSnapshotUri: actor.GetStatus().GetInProgressSnapshotUri(),
+		})
+		if err != nil {
+			return ateattr.SnapshotScopeDisk, fmt.Errorf("while uploading paused Mac Actor: %w", err)
+		}
+		return ateattr.SnapshotScopeDisk, nil
 	}
 
 	ateletConn, err := w.dialer.DialForAteletOnNode(local.GetNodeVmsWithLocalSnapshots()[0])

@@ -30,6 +30,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/agent-substrate/substrate/pkg/proto/hostruntimepb"
+	"google.golang.org/protobuf/proto"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -132,21 +133,29 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 }
 
 // validateGoldenSnapshotScope rejects a golden snapshot that does not carry
-// the guest state (memory + fs delta) a restore needs. Golden actors always
-// commit Full (commitSnapshotScope), so this only trips on golden snapshots
-// taken before that rule existed — surface a clear error instead of shipping
-// a restore request atelet would reject (or that would boot an empty guest).
-func validateGoldenSnapshotScope(snapshot *ateapipb.ExternalSnapshot) error {
+// the guest state its runtime needs. Container Actors require Full memory and
+// filesystem state; Mac Actors cold-boot a Disk snapshot.
+func validateGoldenSnapshotScope(snapshot *ateapipb.ExternalSnapshot, tmpl *ateapipb.ActorTemplate) error {
 	scope := snapshot.GetContentScope()
-	switch scope {
-	case ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED,
-		ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL:
-		return nil
-	default:
-		return apierror.FailedPrecondition(
-			"ActorTemplate golden snapshot %q was taken with scope %s, not Full; regenerate the golden snapshot",
-			snapshot.GetSnapshotUri(), scope)
+	want := ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL
+	wantName := "Full"
+	if tmpl.GetMacVm() != nil {
+		want = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DISK
+		wantName = "Disk"
 	}
+	switch scope {
+	case ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED:
+		// Rows written before content_scope existed are container Full
+		// snapshots. Mac snapshots were introduced after the field.
+		if tmpl.GetMacVm() == nil {
+			return nil
+		}
+	case want:
+		return nil
+	}
+	return apierror.FailedPrecondition(
+		"ActorTemplate golden snapshot %q was taken with scope %s, not %s; regenerate the golden snapshot",
+		snapshot.GetSnapshotUri(), scope, wantName)
 }
 
 // loadActorForResume fetches the current actor record and its template, and
@@ -597,9 +606,6 @@ func (w *ActorWorkflow) ensureMacActivated(ctx context.Context, actorRef resourc
 	defer func() { err = done(err) }()
 	tele.SnapshotKind = ateattr.SnapshotKindBoot
 
-	if actor.GetStatus().GetLocalSnapshot() != nil || !src.SnapshotURI.IsZero() {
-		return tele, apierror.Unimplemented("Mac Actor snapshot restore is not implemented")
-	}
 	if w.hostRuntime == nil {
 		return tele, apierror.Unimplemented("Mac Actor execution requires a configured host runtime")
 	}
@@ -618,6 +624,15 @@ func (w *ActorWorkflow) ensureMacActivated(ctx context.Context, actorRef resourc
 		Image:       macVM.GetImage(),
 		CpuMilli:    cpuMilli,
 		MemoryBytes: memoryBytes,
+	}
+	if local := actor.GetStatus().GetLocalSnapshot(); local != nil {
+		req.LocalSnapshotName = proto.String(local.GetSnapshotName())
+		tele.SnapshotKind = ateattr.SnapshotKindLocal
+		tele.WireSnapshotScope = ateattr.SnapshotScopeDisk
+	} else if !src.SnapshotURI.IsZero() {
+		req.ExternalSnapshotUri = proto.String(src.SnapshotURI.String())
+		tele.SnapshotKind = ateattr.SnapshotKindLatest
+		tele.WireSnapshotScope = ateattr.SnapshotScopeDisk
 	}
 	if probe := macVM.GetWakeupProbe(); probe != nil {
 		req.ReadinessProbe = &hostruntimepb.HTTPReadinessProbe{

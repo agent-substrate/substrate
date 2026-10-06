@@ -322,10 +322,12 @@ const (
 	SnapshotKindBoot   = "boot"
 )
 
-// Values for SnapshotScopeKey, mirroring ateletpb.SnapshotScope.
+// Values for SnapshotScopeKey. Full and Data mirror ateletpb.SnapshotScope;
+// Disk describes cold whole-disk snapshots implemented by Mac HostRuntime.
 const (
 	SnapshotScopeFull    = "full"
 	SnapshotScopeData    = "data"
+	SnapshotScopeDisk    = "disk"
 	SnapshotScopeUnknown = "unknown"
 )
 

@@ -106,7 +106,7 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 			return nil, err
 		}
 		if inActor.GetSourceTag() == nil {
-			if err := validateGoldenSnapshotScope(sourceTag.GetStatus().GetSnapshot()); err != nil {
+			if err := validateGoldenSnapshotScope(sourceTag.GetStatus().GetSnapshot(), template); err != nil {
 				return nil, err
 			}
 		}

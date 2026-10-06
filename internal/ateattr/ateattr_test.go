@@ -398,6 +398,7 @@ func TestMetricLabelValues(t *testing.T) {
 
 		{SnapshotScopeFull, "full"},
 		{SnapshotScopeData, "data"},
+		{SnapshotScopeDisk, "disk"},
 		{SnapshotScopeUnknown, "unknown"},
 
 		{SnapshotPhaseVolumeMount, "volume_mount"},

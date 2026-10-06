@@ -16,25 +16,150 @@ package controlapi
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"math/big"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
+	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/agent-substrate/substrate/pkg/proto/hostruntimepb"
 	"google.golang.org/protobuf/proto"
 )
 
+const macTestImage = "registry.example/mac@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+func TestHostRuntimeTLSConfigReloadsIdentityAndTrust(t *testing.T) {
+	dir := t.TempDir()
+	certPath, keyPath, caPath := filepath.Join(dir, "client.pem"), filepath.Join(dir, "client-key.pem"), filepath.Join(dir, "ca.pem")
+	ca1, ca1Key := writeTestCA(t, caPath, 1)
+	writeTestLeaf(t, certPath, keyPath, ca1, ca1Key, 11, "client")
+	cfg, err := hostRuntimeTLSConfig(certPath, keyPath, caPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := cfg.GetClientCertificate(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := certSerial(t, first); got != 11 {
+		t.Fatalf("initial client serial = %d, want 11", got)
+	}
+
+	ca2, ca2Key := writeTestCA(t, caPath, 2)
+	writeTestLeaf(t, certPath, keyPath, ca2, ca2Key, 22, "client")
+	second, err := cfg.GetClientCertificate(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := certSerial(t, second); got != 22 {
+		t.Fatalf("rotated client serial = %d, want 22", got)
+	}
+
+	serverCert, _ := writeTestLeaf(t, filepath.Join(dir, "server.pem"), filepath.Join(dir, "server-key.pem"), ca2, ca2Key, 32, "runtime.test")
+	if err := cfg.VerifyConnection(tls.ConnectionState{PeerCertificates: []*x509.Certificate{serverCert}, ServerName: "runtime.test"}); err != nil {
+		t.Fatalf("rotated server CA was not trusted: %v", err)
+	}
+	oldServer, _ := writeTestLeaf(t, filepath.Join(dir, "old.pem"), filepath.Join(dir, "old-key.pem"), ca1, ca1Key, 31, "runtime.test")
+	if err := cfg.VerifyConnection(tls.ConnectionState{PeerCertificates: []*x509.Certificate{oldServer}, ServerName: "runtime.test"}); err == nil {
+		t.Fatal("server signed by removed CA was trusted")
+	}
+}
+
+func writeTestCA(t *testing.T, path string, serial int64) (*x509.Certificate, *rsa.PrivateKey) {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(serial), Subject: pkix.Name{CommonName: "CA"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cert, key
+}
+
+func writeTestLeaf(t *testing.T, certPath, keyPath string, ca *x509.Certificate, caKey *rsa.PrivateKey, serial int64, dns string) (*x509.Certificate, *rsa.PrivateKey) {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(serial), Subject: pkix.Name{CommonName: dns}, DNSNames: []string{dns}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth}}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, ca, &key.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(certPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cert, key
+}
+
+func certSerial(t *testing.T, cert *tls.Certificate) int64 {
+	t.Helper()
+	parsed, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return parsed.SerialNumber.Int64()
+}
+
 type capturingHostRuntime struct {
-	endpoint string
-	request  *hostruntimepb.ActivateRequest
-	response *hostruntimepb.ActivateResponse
+	endpoint          string
+	request           *hostruntimepb.ActivateRequest
+	pauseRequest      *hostruntimepb.PauseRequest
+	checkpointRequest *hostruntimepb.CheckpointRequest
+	discardRequest    *hostruntimepb.DiscardRequest
+	response          *hostruntimepb.ActivateResponse
 }
 
 func (r *capturingHostRuntime) Activate(_ context.Context, endpoint string, req *hostruntimepb.ActivateRequest) (*hostruntimepb.ActivateResponse, error) {
 	r.endpoint = endpoint
 	r.request = proto.Clone(req).(*hostruntimepb.ActivateRequest)
 	return r.response, nil
+}
+
+func (r *capturingHostRuntime) Pause(_ context.Context, endpoint string, req *hostruntimepb.PauseRequest) error {
+	r.endpoint = endpoint
+	r.pauseRequest = proto.Clone(req).(*hostruntimepb.PauseRequest)
+	return nil
+}
+
+func (r *capturingHostRuntime) Checkpoint(_ context.Context, endpoint string, req *hostruntimepb.CheckpointRequest) error {
+	r.endpoint = endpoint
+	r.checkpointRequest = proto.Clone(req).(*hostruntimepb.CheckpointRequest)
+	return nil
+}
+
+func (r *capturingHostRuntime) Discard(_ context.Context, endpoint string, req *hostruntimepb.DiscardRequest) error {
+	r.endpoint = endpoint
+	r.discardRequest = proto.Clone(req).(*hostruntimepb.DiscardRequest)
+	return nil
 }
 
 func (*capturingHostRuntime) Terminate(context.Context, string, *hostruntimepb.TerminateRequest) error {
@@ -142,5 +267,78 @@ func TestEnsureVolumesAttachedAllowsExternalWorkerWithoutVolumes(t *testing.T) {
 
 	if err := w.ensureVolumesAttached(context.Background(), actor, worker, &ateapipb.ActorTemplate{}); err != nil {
 		t.Fatalf("ensureVolumesAttached: %v", err)
+	}
+}
+
+func TestMacLifecycleDispatchesPauseAndCheckpoint(t *testing.T) {
+	ctx := context.Background()
+	runtime := &capturingHostRuntime{}
+	w := &ActorWorkflow{hostRuntime: runtime}
+	tmpl := &ateapipb.ActorTemplate{MacVm: &ateapipb.MacVMWorkload{}}
+	actor := &ateapipb.Actor{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "mac-1", Uid: "actor-uid"},
+		Status: &ateapipb.ActorStatus{
+			WorkerAssignment:            &ateapipb.WorkerAssignment{RuntimeEndpoint: "mac.example:9443"},
+			InProgressLocalSnapshotName: "local-snapshot",
+			InProgressSnapshotUri:       "gs://bucket/actor/snapshot",
+		},
+	}
+
+	if scope, err := w.ensureAteletPaused(ctx, resources.ActorRefFromActor(actor), actor, tmpl); err != nil || scope != ateattr.SnapshotScopeDisk {
+		t.Fatalf("ensureAteletPaused() = %q, %v", scope, err)
+	}
+	wantPause := &hostruntimepb.PauseRequest{ActorUid: "actor-uid", LocalSnapshotName: "local-snapshot"}
+	if runtime.endpoint != "mac.example:9443" || !proto.Equal(runtime.pauseRequest, wantPause) {
+		t.Fatalf("Pause(%q, %v), want endpoint and %v", runtime.endpoint, runtime.pauseRequest, wantPause)
+	}
+
+	if scope, err := w.ensureAteletSuspended(ctx, resources.ActorRefFromActor(actor), actor, tmpl); err != nil || scope != ateattr.SnapshotScopeDisk {
+		t.Fatalf("ensureAteletSuspended() = %q, %v", scope, err)
+	}
+	wantCheckpoint := &hostruntimepb.CheckpointRequest{ActorUid: "actor-uid", ExternalSnapshotUri: "gs://bucket/actor/snapshot"}
+	if !proto.Equal(runtime.checkpointRequest, wantCheckpoint) {
+		t.Fatalf("Checkpoint request = %v, want %v", runtime.checkpointRequest, wantCheckpoint)
+	}
+}
+
+func TestEnsureMacActivatedSelectsSnapshotSource(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		local    *ateapipb.LocalSnapshot
+		external string
+		want     *hostruntimepb.ActivateRequest
+	}{
+		{name: "local", local: &ateapipb.LocalSnapshot{SnapshotName: "local-1"}, want: &hostruntimepb.ActivateRequest{LocalSnapshotName: proto.String("local-1")}},
+		{name: "external", external: "gs://bucket/actor/snapshot", want: &hostruntimepb.ActivateRequest{ExternalSnapshotUri: proto.String("gs://bucket/actor/snapshot")}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			persistence := newTestPersistence(t)
+			actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+				Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "mac-1"},
+				Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RESUMING, LocalSnapshot: tc.local,
+					WorkerAssignment: &ateapipb.WorkerAssignment{RuntimeEndpoint: "mac.example:9443"}},
+			})
+			runtime := &capturingHostRuntime{response: &hostruntimepb.ActivateResponse{Endpoint: &hostruntimepb.ActorEndpoint{Host: "mac.example", Port: 1234}}}
+			w := &ActorWorkflow{store: persistence, hostRuntime: runtime}
+			tmpl := &ateapipb.ActorTemplate{MacVm: &ateapipb.MacVMWorkload{Image: macTestImage}}
+			src := resumeSnapshotSource{}
+			if tc.external != "" {
+				var err error
+				src.SnapshotURI, err = resources.ParseSnapshotURI(tc.external)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := w.ensureMacActivated(ctx, resources.ActorRefFromActor(actor), actor, tmpl, src); err != nil {
+				t.Fatal(err)
+			}
+			if tc.want.LocalSnapshotName != nil && runtime.request.GetLocalSnapshotName() != tc.want.GetLocalSnapshotName() {
+				t.Fatalf("local source = %q", runtime.request.GetLocalSnapshotName())
+			}
+			if tc.want.ExternalSnapshotUri != nil && runtime.request.GetExternalSnapshotUri() != tc.want.GetExternalSnapshotUri() {
+				t.Fatalf("external source = %q", runtime.request.GetExternalSnapshotUri())
+			}
+		})
 	}
 }

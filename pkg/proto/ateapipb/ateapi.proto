@@ -183,7 +183,7 @@ message ExternalSnapshot {
   //
   // +k8s:optional
   // +k8s:minimum=1
-  // +k8s:maximum=2 # keep this in sync with the SnapshotContentScope enum
+  // +k8s:maximum=3 # keep this in sync with the SnapshotContentScope enum
   SnapshotContentScope content_scope = 2;
 
   // UID of the ActorTemplate whose sandbox this snapshot's guest state was
@@ -220,7 +220,7 @@ message LocalSnapshot {
   //
   // +k8s:optional
   // +k8s:minimum=1
-  // +k8s:maximum=2 # keep this in sync with the SnapshotContentScope enum
+  // +k8s:maximum=3 # keep this in sync with the SnapshotContentScope enum
   SnapshotContentScope content_scope = 3;
 }
 
@@ -231,6 +231,9 @@ enum SnapshotContentScope {
   SNAPSHOT_CONTENT_SCOPE_FULL = 1;
   // Captures durable data without process memory or root filesystem changes.
   SNAPSHOT_CONTENT_SCOPE_DATA = 2;
+  // Captures root filesystem changes and durable data without process memory.
+  // Mac Actors use this scope for cold Virtualization.framework snapshots.
+  SNAPSHOT_CONTENT_SCOPE_DISK = 3;
   // Keep this in sync with the maximums on fields of this type.
 }
 
@@ -1143,9 +1146,10 @@ message SandboxConfig {
 }
 
 // SnapshotConfig selects what actor snapshots capture and where they are
-// stored. A FULL snapshot resumes from its own content. A DATA snapshot
-// resumes by starting the containers afresh from the OCI image, with the
-// durable-dir volumes populated from the snapshot.
+// stored. A FULL snapshot resumes from its own memory and filesystem content.
+// A DISK snapshot cold-boots from its captured root filesystem and durable
+// data. A DATA snapshot starts the containers afresh from the OCI image, with
+// the durable-dir volumes populated from the snapshot.
 //
 // +k8s:customValidation # on_commit must be a subset of on_pause
 message SnapshotConfig {
@@ -1154,17 +1158,18 @@ message SnapshotConfig {
   //
   // +k8s:required
   // +k8s:minimum=1
-  // +k8s:maximum=2 # keep this in sync with the SnapshotContentScope enum
+  // +k8s:maximum=3 # keep this in sync with the SnapshotContentScope enum
   SnapshotContentScope on_pause = 1;
 
   // on_commit defines the scope of the actor snapshot captured when an actor
   // is suspended.
-  // Must be a subset of on_pause: FULL allows FULL or DATA, DATA allows DATA.
+  // Must be a subset of on_pause: FULL allows FULL, DISK, or DATA; DISK allows
+  // DISK or DATA; DATA allows DATA.
   // Defaults to FULL when unset.
   //
   // +k8s:required
   // +k8s:minimum=1
-  // +k8s:maximum=2 # keep this in sync with the SnapshotContentScope enum
+  // +k8s:maximum=3 # keep this in sync with the SnapshotContentScope enum
   SnapshotContentScope on_commit = 2;
 
   // storage_location is the base object-storage URI snapshots of actors on

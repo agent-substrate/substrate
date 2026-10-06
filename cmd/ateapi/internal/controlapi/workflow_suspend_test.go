@@ -581,31 +581,38 @@ func TestEnsureSuspendedFinalized_ReleasesOnlyOwnWorker(t *testing.T) {
 	}
 }
 
-// TestCommitSnapshotScope verifies golden actors always commit Full — new
-// actors resume the golden snapshot Full, so the template's onCommit must not
-// thin it down to a data-only capture.
+// TestCommitSnapshotScope verifies golden container actors always commit Full,
+// while Mac Actors retain their honest cold Disk scope.
 func TestCommitSnapshotScope(t *testing.T) {
-	tmpl := func(onCommit ateapipb.SnapshotContentScope) *ateapipb.ActorTemplate {
-		return &ateapipb.ActorTemplate{
+	tmpl := func(onCommit ateapipb.SnapshotContentScope, mac bool) *ateapipb.ActorTemplate {
+		t := &ateapipb.ActorTemplate{
 			SnapshotConfig: &ateapipb.SnapshotConfig{OnCommit: onCommit},
 		}
+		if mac {
+			t.MacVm = &ateapipb.MacVMWorkload{}
+		}
+		return t
 	}
 	fullScope := ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL
 	dataScope := ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
+	diskScope := ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DISK
 	tests := []struct {
 		name     string
 		atespace string
 		onCommit ateapipb.SnapshotContentScope
+		mac      bool
 		want     ateapipb.SnapshotContentScope
 	}{
-		{"golden actor ignores Data onCommit", resources.GoldenActorAtespace, dataScope, fullScope},
-		{"golden actor keeps Full onCommit", resources.GoldenActorAtespace, fullScope, fullScope},
-		{"regular actor uses Data onCommit", "team-a", dataScope, dataScope},
-		{"regular actor uses Full onCommit", "team-a", fullScope, fullScope},
+		{"golden container actor ignores Data onCommit", resources.GoldenActorAtespace, dataScope, false, fullScope},
+		{"golden container actor keeps Full onCommit", resources.GoldenActorAtespace, fullScope, false, fullScope},
+		{"golden Mac Actor keeps Disk onCommit", resources.GoldenActorAtespace, diskScope, true, diskScope},
+		{"regular actor uses Data onCommit", "team-a", dataScope, false, dataScope},
+		{"regular actor uses Full onCommit", "team-a", fullScope, false, fullScope},
+		{"regular Mac Actor uses Disk onCommit", "team-a", diskScope, true, diskScope},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := commitSnapshotScope(tc.atespace, tmpl(tc.onCommit)); got != tc.want {
+			if got := commitSnapshotScope(tc.atespace, tmpl(tc.onCommit, tc.mac)); got != tc.want {
 				t.Errorf("commitSnapshotScope(%q, onCommit=%s) = %s, want %s", tc.atespace, tc.onCommit, got, tc.want)
 			}
 		})

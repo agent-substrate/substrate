@@ -36,14 +36,16 @@ const (
 )
 
 type ActivateRequest struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	ActorUid       string                 `protobuf:"bytes,1,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
-	Image          string                 `protobuf:"bytes,2,opt,name=image,proto3" json:"image,omitempty"`
-	CpuMilli       int64                  `protobuf:"varint,3,opt,name=cpu_milli,json=cpuMilli,proto3" json:"cpu_milli,omitempty"`
-	MemoryBytes    int64                  `protobuf:"varint,4,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"`
-	ReadinessProbe *HTTPReadinessProbe    `protobuf:"bytes,5,opt,name=readiness_probe,json=readinessProbe,proto3" json:"readiness_probe,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	state               protoimpl.MessageState `protogen:"open.v1"`
+	ActorUid            string                 `protobuf:"bytes,1,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
+	Image               string                 `protobuf:"bytes,2,opt,name=image,proto3" json:"image,omitempty"`
+	CpuMilli            int64                  `protobuf:"varint,3,opt,name=cpu_milli,json=cpuMilli,proto3" json:"cpu_milli,omitempty"`
+	MemoryBytes         int64                  `protobuf:"varint,4,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"`
+	ReadinessProbe      *HTTPReadinessProbe    `protobuf:"bytes,5,opt,name=readiness_probe,json=readinessProbe,proto3" json:"readiness_probe,omitempty"`
+	ExternalSnapshotUri *string                `protobuf:"bytes,6,opt,name=external_snapshot_uri,json=externalSnapshotUri,proto3,oneof" json:"external_snapshot_uri,omitempty"`
+	LocalSnapshotName   *string                `protobuf:"bytes,7,opt,name=local_snapshot_name,json=localSnapshotName,proto3,oneof" json:"local_snapshot_name,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *ActivateRequest) Reset() {
@@ -111,6 +113,276 @@ func (x *ActivateRequest) GetReadinessProbe() *HTTPReadinessProbe {
 	return nil
 }
 
+func (x *ActivateRequest) GetExternalSnapshotUri() string {
+	if x != nil && x.ExternalSnapshotUri != nil {
+		return *x.ExternalSnapshotUri
+	}
+	return ""
+}
+
+func (x *ActivateRequest) GetLocalSnapshotName() string {
+	if x != nil && x.LocalSnapshotName != nil {
+		return *x.LocalSnapshotName
+	}
+	return ""
+}
+
+type PauseRequest struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	ActorUid          string                 `protobuf:"bytes,1,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
+	LocalSnapshotName string                 `protobuf:"bytes,2,opt,name=local_snapshot_name,json=localSnapshotName,proto3" json:"local_snapshot_name,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *PauseRequest) Reset() {
+	*x = PauseRequest{}
+	mi := &file_hostruntime_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PauseRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PauseRequest) ProtoMessage() {}
+
+func (x *PauseRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_hostruntime_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PauseRequest.ProtoReflect.Descriptor instead.
+func (*PauseRequest) Descriptor() ([]byte, []int) {
+	return file_hostruntime_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *PauseRequest) GetActorUid() string {
+	if x != nil {
+		return x.ActorUid
+	}
+	return ""
+}
+
+func (x *PauseRequest) GetLocalSnapshotName() string {
+	if x != nil {
+		return x.LocalSnapshotName
+	}
+	return ""
+}
+
+type PauseResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PauseResponse) Reset() {
+	*x = PauseResponse{}
+	mi := &file_hostruntime_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PauseResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PauseResponse) ProtoMessage() {}
+
+func (x *PauseResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_hostruntime_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PauseResponse.ProtoReflect.Descriptor instead.
+func (*PauseResponse) Descriptor() ([]byte, []int) {
+	return file_hostruntime_proto_rawDescGZIP(), []int{2}
+}
+
+type CheckpointRequest struct {
+	state               protoimpl.MessageState `protogen:"open.v1"`
+	ActorUid            string                 `protobuf:"bytes,1,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
+	ExternalSnapshotUri string                 `protobuf:"bytes,2,opt,name=external_snapshot_uri,json=externalSnapshotUri,proto3" json:"external_snapshot_uri,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
+}
+
+func (x *CheckpointRequest) Reset() {
+	*x = CheckpointRequest{}
+	mi := &file_hostruntime_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CheckpointRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CheckpointRequest) ProtoMessage() {}
+
+func (x *CheckpointRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_hostruntime_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CheckpointRequest.ProtoReflect.Descriptor instead.
+func (*CheckpointRequest) Descriptor() ([]byte, []int) {
+	return file_hostruntime_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *CheckpointRequest) GetActorUid() string {
+	if x != nil {
+		return x.ActorUid
+	}
+	return ""
+}
+
+func (x *CheckpointRequest) GetExternalSnapshotUri() string {
+	if x != nil {
+		return x.ExternalSnapshotUri
+	}
+	return ""
+}
+
+type CheckpointResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CheckpointResponse) Reset() {
+	*x = CheckpointResponse{}
+	mi := &file_hostruntime_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CheckpointResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CheckpointResponse) ProtoMessage() {}
+
+func (x *CheckpointResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_hostruntime_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CheckpointResponse.ProtoReflect.Descriptor instead.
+func (*CheckpointResponse) Descriptor() ([]byte, []int) {
+	return file_hostruntime_proto_rawDescGZIP(), []int{4}
+}
+
+type DiscardRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ActorUid      string                 `protobuf:"bytes,1,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DiscardRequest) Reset() {
+	*x = DiscardRequest{}
+	mi := &file_hostruntime_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DiscardRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DiscardRequest) ProtoMessage() {}
+
+func (x *DiscardRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_hostruntime_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DiscardRequest.ProtoReflect.Descriptor instead.
+func (*DiscardRequest) Descriptor() ([]byte, []int) {
+	return file_hostruntime_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *DiscardRequest) GetActorUid() string {
+	if x != nil {
+		return x.ActorUid
+	}
+	return ""
+}
+
+type DiscardResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DiscardResponse) Reset() {
+	*x = DiscardResponse{}
+	mi := &file_hostruntime_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DiscardResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DiscardResponse) ProtoMessage() {}
+
+func (x *DiscardResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_hostruntime_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DiscardResponse.ProtoReflect.Descriptor instead.
+func (*DiscardResponse) Descriptor() ([]byte, []int) {
+	return file_hostruntime_proto_rawDescGZIP(), []int{6}
+}
+
 type HTTPReadinessProbe struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	Port           int32                  `protobuf:"varint,1,opt,name=port,proto3" json:"port,omitempty"`
@@ -122,7 +394,7 @@ type HTTPReadinessProbe struct {
 
 func (x *HTTPReadinessProbe) Reset() {
 	*x = HTTPReadinessProbe{}
-	mi := &file_hostruntime_proto_msgTypes[1]
+	mi := &file_hostruntime_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -134,7 +406,7 @@ func (x *HTTPReadinessProbe) String() string {
 func (*HTTPReadinessProbe) ProtoMessage() {}
 
 func (x *HTTPReadinessProbe) ProtoReflect() protoreflect.Message {
-	mi := &file_hostruntime_proto_msgTypes[1]
+	mi := &file_hostruntime_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -147,7 +419,7 @@ func (x *HTTPReadinessProbe) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HTTPReadinessProbe.ProtoReflect.Descriptor instead.
 func (*HTTPReadinessProbe) Descriptor() ([]byte, []int) {
-	return file_hostruntime_proto_rawDescGZIP(), []int{1}
+	return file_hostruntime_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *HTTPReadinessProbe) GetPort() int32 {
@@ -180,7 +452,7 @@ type ActivateResponse struct {
 
 func (x *ActivateResponse) Reset() {
 	*x = ActivateResponse{}
-	mi := &file_hostruntime_proto_msgTypes[2]
+	mi := &file_hostruntime_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -192,7 +464,7 @@ func (x *ActivateResponse) String() string {
 func (*ActivateResponse) ProtoMessage() {}
 
 func (x *ActivateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_hostruntime_proto_msgTypes[2]
+	mi := &file_hostruntime_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -205,7 +477,7 @@ func (x *ActivateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ActivateResponse.ProtoReflect.Descriptor instead.
 func (*ActivateResponse) Descriptor() ([]byte, []int) {
-	return file_hostruntime_proto_rawDescGZIP(), []int{2}
+	return file_hostruntime_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *ActivateResponse) GetEndpoint() *ActorEndpoint {
@@ -225,7 +497,7 @@ type ActorEndpoint struct {
 
 func (x *ActorEndpoint) Reset() {
 	*x = ActorEndpoint{}
-	mi := &file_hostruntime_proto_msgTypes[3]
+	mi := &file_hostruntime_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -237,7 +509,7 @@ func (x *ActorEndpoint) String() string {
 func (*ActorEndpoint) ProtoMessage() {}
 
 func (x *ActorEndpoint) ProtoReflect() protoreflect.Message {
-	mi := &file_hostruntime_proto_msgTypes[3]
+	mi := &file_hostruntime_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -250,7 +522,7 @@ func (x *ActorEndpoint) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ActorEndpoint.ProtoReflect.Descriptor instead.
 func (*ActorEndpoint) Descriptor() ([]byte, []int) {
-	return file_hostruntime_proto_rawDescGZIP(), []int{3}
+	return file_hostruntime_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *ActorEndpoint) GetHost() string {
@@ -276,7 +548,7 @@ type TerminateRequest struct {
 
 func (x *TerminateRequest) Reset() {
 	*x = TerminateRequest{}
-	mi := &file_hostruntime_proto_msgTypes[4]
+	mi := &file_hostruntime_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -288,7 +560,7 @@ func (x *TerminateRequest) String() string {
 func (*TerminateRequest) ProtoMessage() {}
 
 func (x *TerminateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_hostruntime_proto_msgTypes[4]
+	mi := &file_hostruntime_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -301,7 +573,7 @@ func (x *TerminateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TerminateRequest.ProtoReflect.Descriptor instead.
 func (*TerminateRequest) Descriptor() ([]byte, []int) {
-	return file_hostruntime_proto_rawDescGZIP(), []int{4}
+	return file_hostruntime_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *TerminateRequest) GetActorUid() string {
@@ -319,7 +591,7 @@ type TerminateResponse struct {
 
 func (x *TerminateResponse) Reset() {
 	*x = TerminateResponse{}
-	mi := &file_hostruntime_proto_msgTypes[5]
+	mi := &file_hostruntime_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -331,7 +603,7 @@ func (x *TerminateResponse) String() string {
 func (*TerminateResponse) ProtoMessage() {}
 
 func (x *TerminateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_hostruntime_proto_msgTypes[5]
+	mi := &file_hostruntime_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -344,20 +616,35 @@ func (x *TerminateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TerminateResponse.ProtoReflect.Descriptor instead.
 func (*TerminateResponse) Descriptor() ([]byte, []int) {
-	return file_hostruntime_proto_rawDescGZIP(), []int{5}
+	return file_hostruntime_proto_rawDescGZIP(), []int{11}
 }
 
 var File_hostruntime_proto protoreflect.FileDescriptor
 
 const file_hostruntime_proto_rawDesc = "" +
 	"\n" +
-	"\x11hostruntime.proto\x12\vhostruntime\"\xce\x01\n" +
+	"\x11hostruntime.proto\x12\vhostruntime\"\xee\x02\n" +
 	"\x0fActivateRequest\x12\x1b\n" +
 	"\tactor_uid\x18\x01 \x01(\tR\bactorUid\x12\x14\n" +
 	"\x05image\x18\x02 \x01(\tR\x05image\x12\x1b\n" +
 	"\tcpu_milli\x18\x03 \x01(\x03R\bcpuMilli\x12!\n" +
 	"\fmemory_bytes\x18\x04 \x01(\x03R\vmemoryBytes\x12H\n" +
-	"\x0freadiness_probe\x18\x05 \x01(\v2\x1f.hostruntime.HTTPReadinessProbeR\x0ereadinessProbe\"e\n" +
+	"\x0freadiness_probe\x18\x05 \x01(\v2\x1f.hostruntime.HTTPReadinessProbeR\x0ereadinessProbe\x127\n" +
+	"\x15external_snapshot_uri\x18\x06 \x01(\tH\x00R\x13externalSnapshotUri\x88\x01\x01\x123\n" +
+	"\x13local_snapshot_name\x18\a \x01(\tH\x01R\x11localSnapshotName\x88\x01\x01B\x18\n" +
+	"\x16_external_snapshot_uriB\x16\n" +
+	"\x14_local_snapshot_name\"[\n" +
+	"\fPauseRequest\x12\x1b\n" +
+	"\tactor_uid\x18\x01 \x01(\tR\bactorUid\x12.\n" +
+	"\x13local_snapshot_name\x18\x02 \x01(\tR\x11localSnapshotName\"\x0f\n" +
+	"\rPauseResponse\"d\n" +
+	"\x11CheckpointRequest\x12\x1b\n" +
+	"\tactor_uid\x18\x01 \x01(\tR\bactorUid\x122\n" +
+	"\x15external_snapshot_uri\x18\x02 \x01(\tR\x13externalSnapshotUri\"\x14\n" +
+	"\x12CheckpointResponse\"-\n" +
+	"\x0eDiscardRequest\x12\x1b\n" +
+	"\tactor_uid\x18\x01 \x01(\tR\bactorUid\"\x11\n" +
+	"\x0fDiscardResponse\"e\n" +
 	"\x12HTTPReadinessProbe\x12\x12\n" +
 	"\x04port\x18\x01 \x01(\x05R\x04port\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\x12'\n" +
@@ -369,9 +656,13 @@ const file_hostruntime_proto_rawDesc = "" +
 	"\x04port\x18\x02 \x01(\x05R\x04port\"/\n" +
 	"\x10TerminateRequest\x12\x1b\n" +
 	"\tactor_uid\x18\x01 \x01(\tR\bactorUid\"\x13\n" +
-	"\x11TerminateResponse2\xa6\x01\n" +
+	"\x11TerminateResponse2\x81\x03\n" +
 	"\vHostRuntime\x12I\n" +
-	"\bActivate\x12\x1c.hostruntime.ActivateRequest\x1a\x1d.hostruntime.ActivateResponse\"\x00\x12L\n" +
+	"\bActivate\x12\x1c.hostruntime.ActivateRequest\x1a\x1d.hostruntime.ActivateResponse\"\x00\x12@\n" +
+	"\x05Pause\x12\x19.hostruntime.PauseRequest\x1a\x1a.hostruntime.PauseResponse\"\x00\x12O\n" +
+	"\n" +
+	"Checkpoint\x12\x1e.hostruntime.CheckpointRequest\x1a\x1f.hostruntime.CheckpointResponse\"\x00\x12F\n" +
+	"\aDiscard\x12\x1b.hostruntime.DiscardRequest\x1a\x1c.hostruntime.DiscardResponse\"\x00\x12L\n" +
 	"\tTerminate\x12\x1d.hostruntime.TerminateRequest\x1a\x1e.hostruntime.TerminateResponse\"\x00B>Z<github.com/agent-substrate/substrate/pkg/proto/hostruntimepbb\x06proto3"
 
 var (
@@ -386,27 +677,39 @@ func file_hostruntime_proto_rawDescGZIP() []byte {
 	return file_hostruntime_proto_rawDescData
 }
 
-var file_hostruntime_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_hostruntime_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
 var file_hostruntime_proto_goTypes = []any{
 	(*ActivateRequest)(nil),    // 0: hostruntime.ActivateRequest
-	(*HTTPReadinessProbe)(nil), // 1: hostruntime.HTTPReadinessProbe
-	(*ActivateResponse)(nil),   // 2: hostruntime.ActivateResponse
-	(*ActorEndpoint)(nil),      // 3: hostruntime.ActorEndpoint
-	(*TerminateRequest)(nil),   // 4: hostruntime.TerminateRequest
-	(*TerminateResponse)(nil),  // 5: hostruntime.TerminateResponse
+	(*PauseRequest)(nil),       // 1: hostruntime.PauseRequest
+	(*PauseResponse)(nil),      // 2: hostruntime.PauseResponse
+	(*CheckpointRequest)(nil),  // 3: hostruntime.CheckpointRequest
+	(*CheckpointResponse)(nil), // 4: hostruntime.CheckpointResponse
+	(*DiscardRequest)(nil),     // 5: hostruntime.DiscardRequest
+	(*DiscardResponse)(nil),    // 6: hostruntime.DiscardResponse
+	(*HTTPReadinessProbe)(nil), // 7: hostruntime.HTTPReadinessProbe
+	(*ActivateResponse)(nil),   // 8: hostruntime.ActivateResponse
+	(*ActorEndpoint)(nil),      // 9: hostruntime.ActorEndpoint
+	(*TerminateRequest)(nil),   // 10: hostruntime.TerminateRequest
+	(*TerminateResponse)(nil),  // 11: hostruntime.TerminateResponse
 }
 var file_hostruntime_proto_depIdxs = []int32{
-	1, // 0: hostruntime.ActivateRequest.readiness_probe:type_name -> hostruntime.HTTPReadinessProbe
-	3, // 1: hostruntime.ActivateResponse.endpoint:type_name -> hostruntime.ActorEndpoint
-	0, // 2: hostruntime.HostRuntime.Activate:input_type -> hostruntime.ActivateRequest
-	4, // 3: hostruntime.HostRuntime.Terminate:input_type -> hostruntime.TerminateRequest
-	2, // 4: hostruntime.HostRuntime.Activate:output_type -> hostruntime.ActivateResponse
-	5, // 5: hostruntime.HostRuntime.Terminate:output_type -> hostruntime.TerminateResponse
-	4, // [4:6] is the sub-list for method output_type
-	2, // [2:4] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	7,  // 0: hostruntime.ActivateRequest.readiness_probe:type_name -> hostruntime.HTTPReadinessProbe
+	9,  // 1: hostruntime.ActivateResponse.endpoint:type_name -> hostruntime.ActorEndpoint
+	0,  // 2: hostruntime.HostRuntime.Activate:input_type -> hostruntime.ActivateRequest
+	1,  // 3: hostruntime.HostRuntime.Pause:input_type -> hostruntime.PauseRequest
+	3,  // 4: hostruntime.HostRuntime.Checkpoint:input_type -> hostruntime.CheckpointRequest
+	5,  // 5: hostruntime.HostRuntime.Discard:input_type -> hostruntime.DiscardRequest
+	10, // 6: hostruntime.HostRuntime.Terminate:input_type -> hostruntime.TerminateRequest
+	8,  // 7: hostruntime.HostRuntime.Activate:output_type -> hostruntime.ActivateResponse
+	2,  // 8: hostruntime.HostRuntime.Pause:output_type -> hostruntime.PauseResponse
+	4,  // 9: hostruntime.HostRuntime.Checkpoint:output_type -> hostruntime.CheckpointResponse
+	6,  // 10: hostruntime.HostRuntime.Discard:output_type -> hostruntime.DiscardResponse
+	11, // 11: hostruntime.HostRuntime.Terminate:output_type -> hostruntime.TerminateResponse
+	7,  // [7:12] is the sub-list for method output_type
+	2,  // [2:7] is the sub-list for method input_type
+	2,  // [2:2] is the sub-list for extension type_name
+	2,  // [2:2] is the sub-list for extension extendee
+	0,  // [0:2] is the sub-list for field type_name
 }
 
 func init() { file_hostruntime_proto_init() }
@@ -414,13 +717,14 @@ func file_hostruntime_proto_init() {
 	if File_hostruntime_proto != nil {
 		return
 	}
+	file_hostruntime_proto_msgTypes[0].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_hostruntime_proto_rawDesc), len(file_hostruntime_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   6,
+			NumMessages:   12,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

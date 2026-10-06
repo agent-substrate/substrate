@@ -33,8 +33,11 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	HostRuntime_Activate_FullMethodName  = "/hostruntime.HostRuntime/Activate"
-	HostRuntime_Terminate_FullMethodName = "/hostruntime.HostRuntime/Terminate"
+	HostRuntime_Activate_FullMethodName   = "/hostruntime.HostRuntime/Activate"
+	HostRuntime_Pause_FullMethodName      = "/hostruntime.HostRuntime/Pause"
+	HostRuntime_Checkpoint_FullMethodName = "/hostruntime.HostRuntime/Checkpoint"
+	HostRuntime_Discard_FullMethodName    = "/hostruntime.HostRuntime/Discard"
+	HostRuntime_Terminate_FullMethodName  = "/hostruntime.HostRuntime/Terminate"
 )
 
 // HostRuntimeClient is the client API for HostRuntime service.
@@ -46,6 +49,9 @@ const (
 // Terminate after cleanup succeeds.
 type HostRuntimeClient interface {
 	Activate(ctx context.Context, in *ActivateRequest, opts ...grpc.CallOption) (*ActivateResponse, error)
+	Pause(ctx context.Context, in *PauseRequest, opts ...grpc.CallOption) (*PauseResponse, error)
+	Checkpoint(ctx context.Context, in *CheckpointRequest, opts ...grpc.CallOption) (*CheckpointResponse, error)
+	Discard(ctx context.Context, in *DiscardRequest, opts ...grpc.CallOption) (*DiscardResponse, error)
 	Terminate(ctx context.Context, in *TerminateRequest, opts ...grpc.CallOption) (*TerminateResponse, error)
 }
 
@@ -61,6 +67,36 @@ func (c *hostRuntimeClient) Activate(ctx context.Context, in *ActivateRequest, o
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ActivateResponse)
 	err := c.cc.Invoke(ctx, HostRuntime_Activate_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *hostRuntimeClient) Pause(ctx context.Context, in *PauseRequest, opts ...grpc.CallOption) (*PauseResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PauseResponse)
+	err := c.cc.Invoke(ctx, HostRuntime_Pause_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *hostRuntimeClient) Checkpoint(ctx context.Context, in *CheckpointRequest, opts ...grpc.CallOption) (*CheckpointResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CheckpointResponse)
+	err := c.cc.Invoke(ctx, HostRuntime_Checkpoint_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *hostRuntimeClient) Discard(ctx context.Context, in *DiscardRequest, opts ...grpc.CallOption) (*DiscardResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DiscardResponse)
+	err := c.cc.Invoke(ctx, HostRuntime_Discard_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -86,6 +122,9 @@ func (c *hostRuntimeClient) Terminate(ctx context.Context, in *TerminateRequest,
 // Terminate after cleanup succeeds.
 type HostRuntimeServer interface {
 	Activate(context.Context, *ActivateRequest) (*ActivateResponse, error)
+	Pause(context.Context, *PauseRequest) (*PauseResponse, error)
+	Checkpoint(context.Context, *CheckpointRequest) (*CheckpointResponse, error)
+	Discard(context.Context, *DiscardRequest) (*DiscardResponse, error)
 	Terminate(context.Context, *TerminateRequest) (*TerminateResponse, error)
 	mustEmbedUnimplementedHostRuntimeServer()
 }
@@ -99,6 +138,15 @@ type UnimplementedHostRuntimeServer struct{}
 
 func (UnimplementedHostRuntimeServer) Activate(context.Context, *ActivateRequest) (*ActivateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Activate not implemented")
+}
+func (UnimplementedHostRuntimeServer) Pause(context.Context, *PauseRequest) (*PauseResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Pause not implemented")
+}
+func (UnimplementedHostRuntimeServer) Checkpoint(context.Context, *CheckpointRequest) (*CheckpointResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Checkpoint not implemented")
+}
+func (UnimplementedHostRuntimeServer) Discard(context.Context, *DiscardRequest) (*DiscardResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Discard not implemented")
 }
 func (UnimplementedHostRuntimeServer) Terminate(context.Context, *TerminateRequest) (*TerminateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Terminate not implemented")
@@ -142,6 +190,60 @@ func _HostRuntime_Activate_Handler(srv interface{}, ctx context.Context, dec fun
 	return interceptor(ctx, in, info, handler)
 }
 
+func _HostRuntime_Pause_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PauseRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HostRuntimeServer).Pause(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HostRuntime_Pause_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HostRuntimeServer).Pause(ctx, req.(*PauseRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _HostRuntime_Checkpoint_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CheckpointRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HostRuntimeServer).Checkpoint(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HostRuntime_Checkpoint_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HostRuntimeServer).Checkpoint(ctx, req.(*CheckpointRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _HostRuntime_Discard_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DiscardRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(HostRuntimeServer).Discard(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: HostRuntime_Discard_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(HostRuntimeServer).Discard(ctx, req.(*DiscardRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _HostRuntime_Terminate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(TerminateRequest)
 	if err := dec(in); err != nil {
@@ -170,6 +272,18 @@ var HostRuntime_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Activate",
 			Handler:    _HostRuntime_Activate_Handler,
+		},
+		{
+			MethodName: "Pause",
+			Handler:    _HostRuntime_Pause_Handler,
+		},
+		{
+			MethodName: "Checkpoint",
+			Handler:    _HostRuntime_Checkpoint_Handler,
+		},
+		{
+			MethodName: "Discard",
+			Handler:    _HostRuntime_Discard_Handler,
 		},
 		{
 			MethodName: "Terminate",

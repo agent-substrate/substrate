@@ -70,6 +70,16 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 		})},
 		nil,
 	}, {
+		"container Actor rejects disk snapshots",
+		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.SnapshotConfig.OnPause = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DISK
+			tmpl.SnapshotConfig.OnCommit = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DISK
+		})},
+		field.ErrorList{
+			field.Invalid(field.NewPath("actor_template", "snapshot_config", "on_pause"), ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DISK, ""),
+			field.Invalid(field.NewPath("actor_template", "snapshot_config", "on_commit"), ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DISK, ""),
+		},
+	}, {
 		"invalid worker_selector label key",
 		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
 			tmpl.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"bad key": "v"}}
@@ -397,12 +407,16 @@ func TestValidateActorTemplate(t *testing.T) {
 			tmpl.Containers = nil
 			tmpl.MacVm = &ateapipb.MacVMWorkload{Image: "example.com/macos/xcode@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}
 			tmpl.SandboxConfig = &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_MACOS, ConfigName: "macos-default"}
+			tmpl.SnapshotConfig.OnPause = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DISK
+			tmpl.SnapshotConfig.OnCommit = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DISK
 		},
 	}, {
 		name: "containers and mac_vm are mutually exclusive",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
 			tmpl.MacVm = &ateapipb.MacVMWorkload{Image: "example.com/macos/xcode@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}
 			tmpl.SandboxConfig = &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_MACOS, ConfigName: "macos-default"}
+			tmpl.SnapshotConfig.OnPause = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DISK
+			tmpl.SnapshotConfig.OnCommit = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DISK
 		},
 		want: field.ErrorList{field.Forbidden(field.NewPath("mac_vm"), "")},
 	}, {
@@ -410,6 +424,8 @@ func TestValidateActorTemplate(t *testing.T) {
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
 			tmpl.Containers = nil
 			tmpl.MacVm = &ateapipb.MacVMWorkload{Image: "example.com/macos/xcode@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}
+			tmpl.SnapshotConfig.OnPause = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DISK
+			tmpl.SnapshotConfig.OnCommit = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DISK
 		},
 		want: field.ErrorList{field.Invalid(field.NewPath("sandbox_config", "sandbox_class"), nil, "")},
 	}, {
@@ -424,6 +440,8 @@ func TestValidateActorTemplate(t *testing.T) {
 			tmpl.Containers = nil
 			tmpl.MacVm = &ateapipb.MacVMWorkload{Image: "example.com/macos/xcode:latest"}
 			tmpl.SandboxConfig = &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_MACOS, ConfigName: "macos-default"}
+			tmpl.SnapshotConfig.OnPause = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DISK
+			tmpl.SnapshotConfig.OnCommit = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DISK
 		},
 		want: field.ErrorList{field.Invalid(field.NewPath("mac_vm", "image"), nil, "")},
 	}, {
@@ -432,17 +450,30 @@ func TestValidateActorTemplate(t *testing.T) {
 			tmpl.Containers = nil
 			tmpl.MacVm = &ateapipb.MacVMWorkload{Image: "example.com/macos/xcode@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}
 			tmpl.SandboxConfig = &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_MACOS, ConfigName: "macos-default"}
+			tmpl.SnapshotConfig.OnPause = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DISK
+			tmpl.SnapshotConfig.OnCommit = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DISK
 			tmpl.Volumes = []*ateapipb.Volume{{Name: "data", DurableDir: &ateapipb.DurableDirVolumeSource{}}}
 		},
 		want: field.ErrorList{field.Forbidden(field.NewPath("volumes"), "")},
 	}, {
-		name: "Mac Actor rejects data snapshots",
+		name: "Mac Actor rejects non-disk snapshots",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
 			tmpl.Containers = nil
 			tmpl.MacVm = &ateapipb.MacVMWorkload{Image: "example.com/macos/xcode@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}
 			tmpl.SandboxConfig = &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_MACOS, ConfigName: "macos-default"}
 			tmpl.SnapshotConfig.OnPause = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
 			tmpl.SnapshotConfig.OnCommit = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
+		},
+		want: field.ErrorList{
+			field.Invalid(field.NewPath("snapshot_config", "on_pause"), nil, ""),
+			field.Invalid(field.NewPath("snapshot_config", "on_commit"), nil, ""),
+		},
+	}, {
+		name: "Mac Actor does not claim full memory snapshots",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers = nil
+			tmpl.MacVm = &ateapipb.MacVMWorkload{Image: "example.com/macos/xcode@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}
+			tmpl.SandboxConfig = &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_MACOS, ConfigName: "macos-default"}
 		},
 		want: field.ErrorList{
 			field.Invalid(field.NewPath("snapshot_config", "on_pause"), nil, ""),

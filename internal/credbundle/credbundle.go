@@ -53,16 +53,47 @@ func ClientLoader(path string) func(*tls.CertificateRequestInfo) (*tls.Certifica
 	}
 }
 
+// KeyPairLoader reloads a conventional certificate and private-key file pair
+// when either file changes. It is the separate-file counterpart to Loader for
+// components whose public flags predate Kubernetes credential bundles.
+func KeyPairLoader(certPath, keyPath string) func() (*tls.Certificate, error) {
+	var mu sync.Mutex
+	var cert *tls.Certificate
+	var certInfo, keyInfo os.FileInfo
+	return func() (*tls.Certificate, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		ci, err := os.Stat(certPath)
+		if err != nil {
+			return nil, err
+		}
+		ki, err := os.Stat(keyPath)
+		if err != nil {
+			return nil, err
+		}
+		unchanged := func(old, current os.FileInfo) bool {
+			return old != nil && os.SameFile(old, current) && old.ModTime().Equal(current.ModTime()) && old.Size() == current.Size()
+		}
+		if cert != nil && unchanged(certInfo, ci) && unchanged(keyInfo, ki) {
+			return cert, nil
+		}
+		loaded, err := tls.LoadX509KeyPair(certPath, keyPath)
+		if err != nil {
+			return nil, err
+		}
+		cert, certInfo, keyInfo = &loaded, ci, ki
+		return cert, nil
+	}
+}
+
 // PoolLoader reads a set of trust anchors from a PEM trust-bundle file, as
 // projected from a Kubernetes ClusterTrustBundle, and returns a function that
 // yields the parsed *x509.CertPool.
 //
 // A tls.Config's ClientCAs (and RootCAs) is frozen once the config is in use,
 // so a pool built at startup never sees a CA rotation. Calling the returned
-// function per connection — from GetConfigForClient on the server side — keeps
-// verification current: the parsed pool is cached and the file re-read only
-// when it changes, mirroring Loader, so a rotation is picked up on the next
-// handshake without paying the read and parse cost when nothing changed.
+// function during certificate verification keeps trust current: the parsed
+// pool is cached and the file re-read only when it changes, mirroring Loader.
 func PoolLoader(path string) func() (*x509.CertPool, error) {
 	c := &poolCache{path: path}
 	return c.get

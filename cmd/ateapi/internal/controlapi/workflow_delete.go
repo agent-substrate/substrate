@@ -76,6 +76,11 @@ func (w *ActorWorkflow) DeleteActor(ctx context.Context, actorRef resources.Acto
 		runtimeTerminatedErr = fmt.Errorf("while terminating runtime: %w", err)
 		errs = append(errs, runtimeTerminatedErr)
 	}
+	if err := w.ensureLocalRuntimeDiscarded(ctx, actor, actorTemplate); err != nil {
+		localErr := fmt.Errorf("while discarding local runtime snapshot: %w", err)
+		runtimeTerminatedErr = errors.Join(runtimeTerminatedErr, localErr)
+		errs = append(errs, localErr)
+	}
 	if err := w.ensureVolumesDetachedForDelete(ctx, actor, actorTemplate); err != nil {
 		volumesDetachedErr = fmt.Errorf("while detaching volumes: %w", err)
 		errs = append(errs, volumesDetachedErr)
@@ -105,6 +110,40 @@ func (w *ActorWorkflow) DeleteActor(ctx context.Context, actorRef resources.Acto
 		return nil, errors.Join(errs...)
 	}
 	return w.finalizeDeleted(ctx, actor)
+}
+
+// ensureLocalRuntimeDiscarded removes host-local Mac state retained by Pause.
+// The local snapshot records the external Worker name as its locality, so this
+// remains possible after PAUSED cleared the active assignment.
+func (w *ActorWorkflow) ensureLocalRuntimeDiscarded(ctx context.Context, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) error {
+	local := actor.GetStatus().GetLocalSnapshot()
+	if local == nil || len(local.GetNodeVmsWithLocalSnapshots()) == 0 {
+		return nil
+	}
+	if actorTemplate != nil && actorTemplate.GetMacVm() == nil {
+		return nil
+	}
+	workerName := local.GetNodeVmsWithLocalSnapshots()[0]
+	worker, err := w.store.GetWorker(ctx, workerName)
+	if err != nil {
+		return fmt.Errorf("while finding Worker %q holding local snapshot: %w", workerName, err)
+	}
+	endpoint := worker.GetExternalHost().GetRuntimeEndpoint()
+	if endpoint == "" {
+		// A Kubernetes-local snapshot is owned by atelet and is cleaned through
+		// that lifecycle, not HostRuntime.
+		if actorTemplate == nil {
+			return nil
+		}
+		return fmt.Errorf("Mac Worker %q has no runtime endpoint", workerName)
+	}
+	if w.hostRuntime == nil {
+		return apierror.Unimplemented("Mac Actor execution requires a configured host runtime")
+	}
+	if err := w.hostRuntime.Discard(ctx, endpoint, &hostruntimepb.DiscardRequest{ActorUid: actor.GetMetadata().GetUid()}); err != nil && status.Code(err) != codes.NotFound {
+		return err
+	}
+	return nil
 }
 
 // loadActorForDelete fetches the current actor record.

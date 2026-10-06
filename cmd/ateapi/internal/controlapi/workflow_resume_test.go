@@ -43,6 +43,38 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+func TestValidateGoldenSnapshotScopeMatchesRuntime(t *testing.T) {
+	full := ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL
+	disk := ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DISK
+	data := ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
+	for _, tc := range []struct {
+		name  string
+		mac   bool
+		scope ateapipb.SnapshotContentScope
+		valid bool
+	}{
+		{"legacy container unspecified", false, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED, true},
+		{"container full", false, full, true},
+		{"container disk", false, disk, false},
+		{"container data", false, data, false},
+		{"Mac disk", true, disk, true},
+		{"Mac full", true, full, false},
+		{"Mac unspecified", true, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED, false},
+		{"Mac data", true, data, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tmpl := &ateapipb.ActorTemplate{}
+			if tc.mac {
+				tmpl.MacVm = &ateapipb.MacVMWorkload{}
+			}
+			err := validateGoldenSnapshotScope(&ateapipb.ExternalSnapshot{SnapshotUri: "gs://bucket/golden", ContentScope: tc.scope}, tmpl)
+			if (err == nil) != tc.valid {
+				t.Fatalf("validateGoldenSnapshotScope() error = %v, valid = %t", err, tc.valid)
+			}
+		})
+	}
+}
+
 func TestEnsureVolumesAttached_NodeRequiredOnlyForMountedVolumes(t *testing.T) {
 	for _, tc := range []struct {
 		name    string

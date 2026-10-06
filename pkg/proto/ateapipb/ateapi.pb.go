@@ -44,7 +44,10 @@ const (
 	// Captures process memory, root filesystem changes, and durable data.
 	SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL SnapshotContentScope = 1
 	// Captures durable data without process memory or root filesystem changes.
-	SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA SnapshotContentScope = 2 // Keep this in sync with the maximums on fields of this type.
+	SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA SnapshotContentScope = 2
+	// Captures root filesystem changes and durable data without process memory.
+	// Mac Actors use this scope for cold Virtualization.framework snapshots.
+	SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DISK SnapshotContentScope = 3 // Keep this in sync with the maximums on fields of this type.
 )
 
 // Enum value maps for SnapshotContentScope.
@@ -53,11 +56,13 @@ var (
 		0: "SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED",
 		1: "SNAPSHOT_CONTENT_SCOPE_FULL",
 		2: "SNAPSHOT_CONTENT_SCOPE_DATA",
+		3: "SNAPSHOT_CONTENT_SCOPE_DISK",
 	}
 	SnapshotContentScope_value = map[string]int32{
 		"SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED": 0,
 		"SNAPSHOT_CONTENT_SCOPE_FULL":        1,
 		"SNAPSHOT_CONTENT_SCOPE_DATA":        2,
+		"SNAPSHOT_CONTENT_SCOPE_DISK":        3,
 	}
 )
 
@@ -437,7 +442,7 @@ type ExternalSnapshot struct {
 	//
 	// +k8s:optional
 	// +k8s:minimum=1
-	// +k8s:maximum=2 # keep this in sync with the SnapshotContentScope enum
+	// +k8s:maximum=3 # keep this in sync with the SnapshotContentScope enum
 	ContentScope SnapshotContentScope `protobuf:"varint,2,opt,name=content_scope,json=contentScope,proto3,enum=ateapi.SnapshotContentScope" json:"content_scope,omitempty"`
 	// UID of the ActorTemplate whose sandbox this snapshot's guest state was
 	// captured from.
@@ -525,7 +530,7 @@ type LocalSnapshot struct {
 	//
 	// +k8s:optional
 	// +k8s:minimum=1
-	// +k8s:maximum=2 # keep this in sync with the SnapshotContentScope enum
+	// +k8s:maximum=3 # keep this in sync with the SnapshotContentScope enum
 	ContentScope  SnapshotContentScope `protobuf:"varint,3,opt,name=content_scope,json=contentScope,proto3,enum=ateapi.SnapshotContentScope" json:"content_scope,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -3028,9 +3033,10 @@ func (x *SandboxConfig) GetConfigName() string {
 }
 
 // SnapshotConfig selects what actor snapshots capture and where they are
-// stored. A FULL snapshot resumes from its own content. A DATA snapshot
-// resumes by starting the containers afresh from the OCI image, with the
-// durable-dir volumes populated from the snapshot.
+// stored. A FULL snapshot resumes from its own memory and filesystem content.
+// A DISK snapshot cold-boots from its captured root filesystem and durable
+// data. A DATA snapshot starts the containers afresh from the OCI image, with
+// the durable-dir volumes populated from the snapshot.
 //
 // +k8s:customValidation # on_commit must be a subset of on_pause
 type SnapshotConfig struct {
@@ -3040,16 +3046,17 @@ type SnapshotConfig struct {
 	//
 	// +k8s:required
 	// +k8s:minimum=1
-	// +k8s:maximum=2 # keep this in sync with the SnapshotContentScope enum
+	// +k8s:maximum=3 # keep this in sync with the SnapshotContentScope enum
 	OnPause SnapshotContentScope `protobuf:"varint,1,opt,name=on_pause,json=onPause,proto3,enum=ateapi.SnapshotContentScope" json:"on_pause,omitempty"`
 	// on_commit defines the scope of the actor snapshot captured when an actor
 	// is suspended.
-	// Must be a subset of on_pause: FULL allows FULL or DATA, DATA allows DATA.
+	// Must be a subset of on_pause: FULL allows FULL, DISK, or DATA; DISK allows
+	// DISK or DATA; DATA allows DATA.
 	// Defaults to FULL when unset.
 	//
 	// +k8s:required
 	// +k8s:minimum=1
-	// +k8s:maximum=2 # keep this in sync with the SnapshotContentScope enum
+	// +k8s:maximum=3 # keep this in sync with the SnapshotContentScope enum
 	OnCommit SnapshotContentScope `protobuf:"varint,2,opt,name=on_commit,json=onCommit,proto3,enum=ateapi.SnapshotContentScope" json:"on_commit,omitempty"`
 	// storage_location is the base object-storage URI snapshots of actors on
 	// this version are stored under. Required.
@@ -8720,11 +8727,12 @@ const file_ateapi_proto_rawDesc = "" +
 	"\raccess_policy\x18\x02 \x01(\v2\x14.ateapi.AccessPolicyR\faccessPolicy\"\x83\x01\n" +
 	"!DeleteAtespaceAccessPolicyRequest\x12-\n" +
 	"\batespace\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\batespace\x12/\n" +
-	"\aoptions\x18\x02 \x01(\v2\x15.ateapi.DeleteOptionsR\aoptions*\x80\x01\n" +
+	"\aoptions\x18\x02 \x01(\v2\x15.ateapi.DeleteOptionsR\aoptions*\xa1\x01\n" +
 	"\x14SnapshotContentScope\x12&\n" +
 	"\"SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED\x10\x00\x12\x1f\n" +
 	"\x1bSNAPSHOT_CONTENT_SCOPE_FULL\x10\x01\x12\x1f\n" +
-	"\x1bSNAPSHOT_CONTENT_SCOPE_DATA\x10\x02*V\n" +
+	"\x1bSNAPSHOT_CONTENT_SCOPE_DATA\x10\x02\x12\x1f\n" +
+	"\x1bSNAPSHOT_CONTENT_SCOPE_DISK\x10\x03*V\n" +
 	"\bTagScope\x12\x19\n" +
 	"\x15TAG_SCOPE_UNSPECIFIED\x10\x00\x12\x16\n" +
 	"\x12TAG_SCOPE_ATESPACE\x10\x01\x12\x17\n" +

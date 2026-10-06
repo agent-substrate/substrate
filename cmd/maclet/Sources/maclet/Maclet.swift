@@ -25,9 +25,10 @@ struct Maclet {
       let args = Array(CommandLine.arguments.dropFirst())
       guard let command = args.first else { throw usage }
       switch command {
-      case "create" where args.count == 4:
+      case "create" where args.count == 4 || args.count == 6:
+        let resources = try resources(args)
         let bundle = try ActorBundle.create(
-          source: directory(args[1]), destination: directory(args[2]), actorID: args[3])
+          source: directory(args[1]), destination: directory(args[2]), actorID: args[3], cpuCount: resources.0, memorySize: resources.1)
         try emit(bundle)
       case "start" where args.count == 5:
         guard let port = Int(args[2]), let timeout = Double(args[4]) else { throw usage }
@@ -49,6 +50,11 @@ struct Maclet {
           }
         }
         try emit(VMStatus.read(directory))
+      case "snapshot" where args.count == 3:
+        try ActorBundle.snapshot(source: directory(args[1]), destination: directory(args[2]))
+      case "restore" where args.count == 4 || args.count == 6:
+        let resources = try resources(args)
+        try emit(ActorBundle.restore(snapshot: directory(args[1]), destination: directory(args[2]), actorID: args[3], cpuCount: resources.0, memorySize: resources.1))
       default: throw usage
       }
     } catch {
@@ -58,9 +64,14 @@ struct Maclet {
   }
 
   static func directory(_ path: String) -> URL { URL(fileURLWithPath: path, isDirectory: true) }
+  static func resources(_ args: [String]) throws -> (Int?, UInt64?) {
+    if args.count == 4 { return (nil, nil) }
+    guard let cpu = Int(args[4]), let memory = UInt64(args[5]), cpu > 0, memory > 0 else { throw usage }
+    return (cpu, memory)
+  }
   static var usage: MacletError {
     MacletError(
-      "Usage: maclet create SOURCE_LUME_BUNDLE NEW_BUNDLE ACTOR_ID | start BUNDLE HTTP_PORT HTTP_PATH TIMEOUT_SECONDS | status BUNDLE | stop BUNDLE"
+      "Usage: maclet create SOURCE_LUME_BUNDLE NEW_BUNDLE ACTOR_ID | start BUNDLE HTTP_PORT HTTP_PATH TIMEOUT_SECONDS | status BUNDLE | stop BUNDLE | snapshot BUNDLE SNAPSHOT | restore SNAPSHOT NEW_BUNDLE ACTOR_ID"
     )
   }
 }

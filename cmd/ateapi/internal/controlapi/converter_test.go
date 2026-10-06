@@ -40,6 +40,11 @@ func TestSnapshotScopeToAtelet(t *testing.T) {
 			expected: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA,
 		},
 		{
+			name:     "Disk scope is not silently widened to Full",
+			in:       ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DISK,
+			expected: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED,
+		},
+		{
 			name:     "Default scope (unspecified)",
 			in:       ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED,
 			expected: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,

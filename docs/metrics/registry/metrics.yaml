@@ -313,7 +313,11 @@ groups:
             - id: data
               stability: development
               value: data
-              brief: Only the data of the actor.
+              brief: Durable data without process memory or root filesystem changes.
+            - id: disk
+              stability: development
+              value: disk
+              brief: Root filesystem changes and durable data without process memory.
             - id: unknown
               stability: development
               value: unknown

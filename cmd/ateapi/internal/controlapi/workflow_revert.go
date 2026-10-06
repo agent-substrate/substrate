@@ -194,6 +194,9 @@ func (w *ActorWorkflow) ensureWorkerDiscarded(ctx context.Context, actorRef reso
 			}
 		}
 	}
+	if err := w.ensureLocalRuntimeDiscarded(ctx, actor, actorTemplate); err != nil {
+		return err
+	}
 
 	return w.releaseAssignmentWithoutBacklink(ctx, actor)
 }

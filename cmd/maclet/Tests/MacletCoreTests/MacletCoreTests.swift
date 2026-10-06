@@ -46,6 +46,38 @@ private func sourceBundle(in root: URL) throws -> URL {
   return source
 }
 
+@Test func coldSnapshotRestoreIsIndependentAndPersonalized() throws {
+  let root = try temporaryDirectory()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let original = try ActorBundle.create(
+    source: sourceBundle(in: root), destination: root.appendingPathComponent("actor"),
+    actorID: "original")
+  let snapshot = root.appendingPathComponent("snapshot")
+  try ActorBundle.snapshot(source: root.appendingPathComponent("actor"), destination: snapshot)
+  let restored = try ActorBundle.restore(
+    snapshot: snapshot, destination: root.appendingPathComponent("restored"), actorID: "clone")
+  #expect(restored.actorID == "clone")
+  #expect(restored.config.machineIdentifier != original.config.machineIdentifier)
+  #expect(restored.config.macAddress != original.config.macAddress)
+  try Data("changed".utf8).write(to: root.appendingPathComponent("restored/disk.img"))
+  #expect(try Data(contentsOf: snapshot.appendingPathComponent("disk.img")) == Data("disk-original".utf8))
+}
+
+@Test func snapshotRejectsSymlinkAndExistingDestination() throws {
+  let root = try temporaryDirectory()
+  defer { try? FileManager.default.removeItem(at: root) }
+  let actor = root.appendingPathComponent("actor")
+  _ = try ActorBundle.create(source: sourceBundle(in: root), destination: actor, actorID: "actor")
+  let destination = root.appendingPathComponent("snapshot")
+  try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: false)
+  #expect(throws: (any Error).self) { try ActorBundle.snapshot(source: actor, destination: destination) }
+  try FileManager.default.removeItem(at: destination)
+  try FileManager.default.removeItem(at: actor.appendingPathComponent("disk.img"))
+  try FileManager.default.createSymbolicLink(
+    at: actor.appendingPathComponent("disk.img"), withDestinationURL: actor.appendingPathComponent("nvram.bin"))
+  #expect(throws: (any Error).self) { try ActorBundle.snapshot(source: actor, destination: destination) }
+}
+
 @Test func personalizedConfigPreservesBootCompatibilityAndResources() throws {
   let base = baseConfig()
   let identity = VZMacMachineIdentifier().dataRepresentation

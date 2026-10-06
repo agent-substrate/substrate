@@ -90,6 +90,8 @@ go build -o ./bin/macletd ./cmd/macletd
   --source-bundle="$OFFLINE_LUME_BUNDLE" \
   --advertise-host="$MAC_ADDRESS_REACHABLE_FROM_ATENET" \
   --proxy-listen-address=0.0.0.0:0 \
+  --snapshot-provider-endpoint=unix:///var/run/ate-snapshot/provider.sock \
+  --metrics-listen-address=:9090 \
   --tls-cert-file="$SERVER_CERT" \
   --tls-key-file="$SERVER_KEY" \
   --client-ca-file="$CONTROL_PLANE_CA"
@@ -98,10 +100,64 @@ go build -o ./bin/macletd ./cmd/macletd
 Register an external Worker with sandbox class `macos-vz` and
 `external_host.runtime_endpoint` set to the provider's TLS endpoint. The
 control plane authenticates with its configured HostRuntime client certificate,
-copies that endpoint into the Actor assignment, and calls `Activate` and
-`Terminate` idempotently. `macletd` accepts only its configured digest-pinned
+copies that endpoint into the Actor assignment. `macletd` accepts only its configured digest-pinned
 image, serializes operations per Actor while allowing different Actors to boot
 concurrently, and removes an Actor bundle only after termination succeeds.
+
+## HostRuntime lifecycle semantics
+
+- Plain `Activate` creates a personalized bundle from the offline image and
+  cold-boots it. CPU millicores are rounded up to a VZ CPU count; CPU and memory
+  are accepted together and checked by Virtualization.framework.
+- `Pause(actor_uid, local_snapshot_name)` requests a graceful shutdown, force
+  stops after the deadline if necessary, closes the proxy, retains the bundle,
+  and records the name atomically. Repeating the name succeeds. A stopped VM
+  rejects a conflicting name; after a successful local resume, the next pause
+  advances the receipt to its newly minted name. `Activate` with that local
+  name requires the matching retained bundle and cold-boots it.
+- `Checkpoint(actor_uid, external_snapshot_uri)` stops the VM and captures a
+  cold DISK snapshot (`disk.img`, `nvram.bin`, and personalized boot metadata).
+  Data objects are uploaded before the checksummed manifest commit marker. The
+  local bundle is removed only after commit. The durable URI receipt makes a
+  retry idempotent and rejects another URI.
+- `Activate` with an external URI fetches the manifest first, verifies schema,
+  image digest, regular-file sizes, and SHA-256 sums, then creates a newly
+  personalized bundle. `Discard` stops and removes bundle and receipts;
+  `Terminate` is its compatibility alias. Both are idempotent.
+
+These are filesystem/boot-state snapshots, not VZ live saves: guest memory and
+process execution are not preserved. Snapshot staging is private and transient;
+the Actor bundle is never external durable storage. The Go service exposes a
+`snapshotProvider` injection seam implementing `objectstoresnapshot.v1.NodeProvider`.
+Production startup dials that provider over the host-local Unix socket configured
+by `--snapshot-provider-endpoint`; without one external checkpoint/restore fails
+closed. The provider owns cloud credentials, compression, retries, and durable
+storage. Data files land before `manifest.json`, which is the commit marker.
+
+Durability currently begins only when `SUSPEND` commits that external DISK
+snapshot. `RUNNING` and `PAUSED` root disks remain local to one Mac and can be
+lost with that host; Mac template volumes are rejected rather than pretending
+to offer independently durable storage. Workloads needing write-through
+durability must use a network service from inside the guest until a managed
+VirtioFS or network-volume contract is implemented.
+
+The control-plane lifecycle maps to the host as follows:
+
+| Actor state | Mac host state |
+| --- | --- |
+| `RUNNING` | VZ VM running; `macletd` publishes a reconciled workload proxy. |
+| `PAUSED` | VM cold-stopped; bundle retained on, and placement pinned to, the same Mac Worker. |
+| `SUSPENDED` | DISK snapshot committed externally; no VM bundle or Worker assignment remains. |
+| `CRASHED` | Control plane records runtime loss; revert discards any local bundle and returns to the last external snapshot. |
+| `DELETING` | Host discard, volume/snapshot cleanup, and Worker release are retried before the Actor row is removed. |
+
+`macletd` persists published proxy ports and reconciles them before serving gRPC,
+so a daemon upgrade does not invalidate the control plane's Actor endpoint while
+the independent `maclet` VM-owner process remains running. New TLS handshakes reload the
+server identity and client trust bundle, and the control-plane client likewise
+reloads its identity and server trust. `/metrics`, `/healthz`, and `/readyz` are
+served on `--metrics-listen-address`; gRPC client/server metrics cover every
+HostRuntime and snapshot-provider operation.
 
 The hardware-backed public-API test is `TestMacActorE2E` under
 `cmd/ateapi/internal/controlapi/functionaltest`. Its `ATE_MAC_ACTOR_E2E_*`
@@ -129,7 +185,7 @@ and network path, not Substrate guest-agent or workload readiness.
 - Replace shared VZ NAT/DHCP discovery with the Actor-isolated network/routing
   contract. NAT here does not enforce tenant isolation or egress policy.
 - Add host-wide capacity management, service supervision, crash reconciliation,
-  FULL snapshot/resume, resource-limit enforcement, and durable image lifecycle.
+  and durable image lifecycle.
 
 `swift test` exercises configuration and identity validation, independent
 disk/NVRAM clones, open-source refusal, ownership/stale readiness, exact DHCP

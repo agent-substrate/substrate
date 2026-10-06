@@ -21,10 +21,16 @@ import (
 )
 
 func actorSnapshotContentScopeToAtelet(in ateapipb.SnapshotContentScope) ateletpb.SnapshotScope {
-	if in == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA {
+	switch in {
+	case ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA:
 		return ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA
+	case ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DISK:
+		// atelet does not implement cold whole-disk snapshots. Mac lifecycle
+		// paths bypass this conversion and call HostRuntime directly.
+		return ateletpb.SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED
+	default:
+		return ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL
 	}
-	return ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL
 }
 
 // sandboxClassString renders the proto enum in the CRD's lower-case string

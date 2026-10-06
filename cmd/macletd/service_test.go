@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -77,6 +78,33 @@ func (f *fakeRunner) Run(_ context.Context, out io.Writer, _ string, args ...str
 			close(done)
 			delete(f.done, args[1])
 		}
+	case "snapshot":
+		if err := os.Mkdir(args[2], 0o700); err != nil {
+			return err
+		}
+		for _, name := range snapshotFiles {
+			data, err := os.ReadFile(filepath.Join(args[1], name))
+			if err != nil {
+				return err
+			}
+			if err := os.WriteFile(filepath.Join(args[2], name), data, 0o600); err != nil {
+				return err
+			}
+		}
+	case "restore":
+		if err := os.Mkdir(args[2], 0o700); err != nil {
+			return err
+		}
+		for _, name := range snapshotFiles {
+			data, err := os.ReadFile(filepath.Join(args[1], name))
+			if err != nil {
+				return err
+			}
+			if err := os.WriteFile(filepath.Join(args[2], name), data, 0o600); err != nil {
+				return err
+			}
+		}
+		f.states[args[2]] = vmStatus{ActorID: args[3], Phase: "stopped"}
 	}
 	return nil
 }
@@ -175,6 +203,9 @@ func TestEndpointProxyForwardsToPrivateGuest(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := newServer("maclet", t.TempDir(), testImage, "/source", "127.0.0.1", "127.0.0.1:0")
+	if err := os.Mkdir(s.bundle("actor"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	got, err := s.endpoint("actor", &vmStatus{IPAddress: host, Ready: true}, int32(port))
 	if err != nil {
 		t.Fatal(err)
@@ -192,6 +223,113 @@ func TestEndpointProxyForwardsToPrivateGuest(t *testing.T) {
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("proxy status = %s", resp.Status)
+	}
+}
+
+func TestReconcileProxiesPreservesEndpointPort(t *testing.T) {
+	f := newFakeRunner()
+	stateDir := t.TempDir()
+	first := newServer("maclet", stateDir, testImage, "/source", "mac-worker.example", "127.0.0.1:0")
+	first.runner, first.pollInterval = f, time.Millisecond
+	activated, err := first.Activate(context.Background(), request("actor"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldPort := activated.GetEndpoint().GetPort()
+	first.mu.Lock()
+	oldProxy := first.proxies["actor"]
+	first.mu.Unlock()
+	if err := oldProxy.listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := oldProxy.server.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	restarted := newServer("maclet", stateDir, testImage, "/source", "mac-worker.example", "127.0.0.1:0")
+	restarted.runner = f
+	if err := restarted.ReconcileProxies(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		restarted.mu.Lock()
+		proxy := restarted.proxies["actor"]
+		restarted.mu.Unlock()
+		_ = proxy.server.Close()
+	})
+	got, err := restarted.Activate(context.Background(), request("actor"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.GetEndpoint().GetPort() != oldPort {
+		t.Fatalf("reconciled port = %d, want %d", got.GetEndpoint().GetPort(), oldPort)
+	}
+}
+
+func TestReconcileProxiesIgnoresPrivateProviderState(t *testing.T) {
+	s := testServer(t, newFakeRunner())
+	for _, name := range []string{".receipts", ".snapshot-abandoned", ".restore-abandoned"} {
+		if err := os.Mkdir(filepath.Join(s.stateDir, name), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.ReconcileProxies(context.Background()); err != nil {
+		t.Fatalf("ReconcileProxies: %v", err)
+	}
+}
+
+func TestReconcileProxiesFailsClosed(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		metadata string
+		occupy   bool
+		symlink  bool
+	}{
+		{name: "malformed metadata", metadata: `{"guestPort":"wrong","proxyPort":1234}`},
+		{name: "conflicting port", occupy: true},
+		{name: "metadata symlink", symlink: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeRunner()
+			stateDir := t.TempDir()
+			bundle := filepath.Join(stateDir, "actor")
+			if err := os.Mkdir(bundle, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			f.states[bundle] = vmStatus{ActorID: "actor", Phase: "running", Ready: true, IPAddress: "127.0.0.1"}
+			metadata := tc.metadata
+			var occupied net.Listener
+			if tc.occupy {
+				var err error
+				occupied, err = net.Listen("tcp", "127.0.0.1:0")
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer occupied.Close()
+				port, err := listenerPort(occupied)
+				if err != nil {
+					t.Fatal(err)
+				}
+				metadata = fmt.Sprintf(`{"guestPort":8123,"proxyPort":%d}`, port)
+			}
+			metadataPath := filepath.Join(bundle, proxyMetadataName)
+			if tc.symlink {
+				target := filepath.Join(t.TempDir(), "metadata")
+				if err := os.WriteFile(target, []byte(`{"guestPort":8123,"proxyPort":1234}`), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, metadataPath); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := os.WriteFile(metadataPath, []byte(metadata), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			s := newServer("maclet", stateDir, testImage, "/source", "host", "127.0.0.1:0")
+			s.runner = f
+			if err := s.ReconcileProxies(context.Background()); err == nil {
+				t.Fatal("ReconcileProxies succeeded")
+			}
+		})
 	}
 }
 

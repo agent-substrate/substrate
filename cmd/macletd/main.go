@@ -17,12 +17,11 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"log"
 	"net"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -30,10 +29,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/pkg/proto/hostruntimepb"
+	objectstoresnapshotv1 "github.com/agent-substrate/substrate/pkg/proto/objectstoresnapshotpb/v1"
 	"github.com/spf13/pflag"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 var digestImage = regexp.MustCompile(`^.+@sha256:[0-9a-f]{64}$`)
@@ -42,6 +45,8 @@ type options struct {
 	listen, maclet, stateDir, image, sourceBundle string
 	advertiseHost, proxyListen                    string
 	cert, key, clientCA                           string
+	snapshotProvider                              string
+	metricsListen                                 string
 	drain                                         time.Duration
 }
 
@@ -57,6 +62,8 @@ func main() {
 	pflag.StringVar(&o.cert, "tls-cert-file", "", "TLS server certificate PEM (required)")
 	pflag.StringVar(&o.key, "tls-key-file", "", "TLS server private key PEM (required)")
 	pflag.StringVar(&o.clientCA, "client-ca-file", "", "CA bundle used to verify client certificates (required)")
+	pflag.StringVar(&o.snapshotProvider, "snapshot-provider-endpoint", "", "host-local object snapshot NodeProvider unix:/// socket (required for suspend/restore)")
+	pflag.StringVar(&o.metricsListen, "metrics-listen-address", ":9090", "address for Prometheus metrics and health endpoints")
 	pflag.DurationVar(&o.drain, "drain-grace", 5*time.Second, "graceful gRPC shutdown deadline")
 	pflag.Parse()
 	if err := run(o); err != nil {
@@ -99,29 +106,56 @@ func run(o options) error {
 	if err := os.Chmod(o.stateDir, 0o700); err != nil {
 		return fmt.Errorf("make state directory private: %w", err)
 	}
-	cert, err := tls.LoadX509KeyPair(o.cert, o.key)
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+	mp, err := serverboot.InitMetrics(ctx, "macletd")
 	if err != nil {
-		return fmt.Errorf("load server certificate: %w", err)
+		return fmt.Errorf("initialize metrics: %w", err)
 	}
-	caPEM, err := os.ReadFile(o.clientCA)
+	defer serverboot.ShutdownProvider("MeterProvider", mp.Shutdown)
+	readiness := &serverboot.Readiness{}
+	go serverboot.StartMetricsServer(ctx, serverboot.MetricsServerOptions{
+		Addr:          o.metricsListen,
+		Readiness:     readiness,
+		EnableHealthz: true,
+	})
+	tlsConfig, err := macletdTLSConfig(o.cert, o.key, o.clientCA)
 	if err != nil {
-		return fmt.Errorf("read client CA: %w", err)
+		return err
 	}
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(caPEM) {
-		return errors.New("client CA contains no certificates")
+	var snapshotConn *grpc.ClientConn
+	var snapshots snapshotProvider
+	if o.snapshotProvider != "" {
+		u, err := url.Parse(o.snapshotProvider)
+		if err != nil || u.Scheme != "unix" || u.Path == "" || !filepath.IsAbs(u.Path) {
+			return errors.New("--snapshot-provider-endpoint must be an absolute unix:/// socket")
+		}
+		snapshotConn, err = grpc.NewClient(o.snapshotProvider,
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+			grpc.WithStatsHandler(otelgrpc.NewClientHandler()))
+		if err != nil {
+			return fmt.Errorf("connect snapshot provider: %w", err)
+		}
+		defer snapshotConn.Close()
+		snapshots = objectstoresnapshotv1.NewNodeProviderClient(snapshotConn)
 	}
-	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{cert}, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: pool}
 	lis, err := net.Listen("tcp", o.listen)
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}
-	g := grpc.NewServer(grpc.Creds(credentials.NewTLS(tlsConfig)))
-	hostruntimepb.RegisterHostRuntimeServer(g, newServer(o.maclet, o.stateDir, o.image, o.sourceBundle, o.advertiseHost, o.proxyListen))
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer cancel()
+	g := grpc.NewServer(
+		grpc.Creds(credentials.NewTLS(tlsConfig)),
+		grpc.StatsHandler(otelgrpc.NewServerHandler()),
+	)
+	s := newServer(o.maclet, o.stateDir, o.image, o.sourceBundle, o.advertiseHost, o.proxyListen)
+	s.snapshots = snapshots
+	if err := s.ReconcileProxies(context.Background()); err != nil {
+		return fmt.Errorf("reconcile Actor proxies: %w", err)
+	}
+	hostruntimepb.RegisterHostRuntimeServer(g, s)
 	go func() {
 		<-ctx.Done()
+		readiness.MarkNotReady()
 		done := make(chan struct{})
 		go func() { g.GracefulStop(); close(done) }()
 		select {

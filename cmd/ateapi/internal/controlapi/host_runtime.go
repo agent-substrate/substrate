@@ -18,10 +18,11 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
-	"os"
 	"sync"
 
+	"github.com/agent-substrate/substrate/internal/credbundle"
 	"github.com/agent-substrate/substrate/pkg/proto/hostruntimepb"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
@@ -33,6 +34,9 @@ import (
 // retries independent of a second Worker lookup.
 type HostRuntime interface {
 	Activate(context.Context, string, *hostruntimepb.ActivateRequest) (*hostruntimepb.ActivateResponse, error)
+	Pause(context.Context, string, *hostruntimepb.PauseRequest) error
+	Checkpoint(context.Context, string, *hostruntimepb.CheckpointRequest) error
+	Discard(context.Context, string, *hostruntimepb.DiscardRequest) error
 	Terminate(context.Context, string, *hostruntimepb.TerminateRequest) error
 }
 
@@ -48,25 +52,47 @@ type GRPCHostRuntime struct {
 // NewGRPCHostRuntime builds an mTLS HostRuntime client. The server certificate
 // must match the hostname in the Worker's runtime endpoint.
 func NewGRPCHostRuntime(clientCertPath, clientKeyPath, serverCAPath string) (*GRPCHostRuntime, error) {
-	cert, err := tls.LoadX509KeyPair(clientCertPath, clientKeyPath)
+	tlsConfig, err := hostRuntimeTLSConfig(clientCertPath, clientKeyPath, serverCAPath)
 	if err != nil {
-		return nil, fmt.Errorf("loading HostRuntime client certificate: %w", err)
-	}
-	caPEM, err := os.ReadFile(serverCAPath)
-	if err != nil {
-		return nil, fmt.Errorf("reading HostRuntime server CA: %w", err)
-	}
-	roots := x509.NewCertPool()
-	if !roots.AppendCertsFromPEM(caPEM) {
-		return nil, fmt.Errorf("HostRuntime server CA %q contains no certificates", serverCAPath)
+		return nil, err
 	}
 	return &GRPCHostRuntime{
-		credentials: credentials.NewTLS(&tls.Config{
-			MinVersion:   tls.VersionTLS13,
-			Certificates: []tls.Certificate{cert},
-			RootCAs:      roots,
-		}),
+		credentials: credentials.NewTLS(tlsConfig),
 		connections: make(map[string]*grpc.ClientConn),
+	}, nil
+}
+
+func hostRuntimeTLSConfig(clientCertPath, clientKeyPath, serverCAPath string) (*tls.Config, error) {
+	loadKeyPair := credbundle.KeyPairLoader(clientCertPath, clientKeyPath)
+	if _, err := loadKeyPair(); err != nil {
+		return nil, fmt.Errorf("loading HostRuntime client certificate: %w", err)
+	}
+	loadRoots := credbundle.PoolLoader(serverCAPath)
+	if _, err := loadRoots(); err != nil {
+		return nil, fmt.Errorf("loading HostRuntime server CA: %w", err)
+	}
+	return &tls.Config{
+		MinVersion:           tls.VersionTLS13,
+		GetClientCertificate: func(*tls.CertificateRequestInfo) (*tls.Certificate, error) { return loadKeyPair() },
+		InsecureSkipVerify:   true, // Verification below uses the reloadable trust bundle.
+		VerifyConnection: func(state tls.ConnectionState) error {
+			if len(state.PeerCertificates) == 0 {
+				return errors.New("HostRuntime server presented no certificate")
+			}
+			roots, err := loadRoots()
+			if err != nil {
+				return err
+			}
+			intermediates := x509.NewCertPool()
+			for _, cert := range state.PeerCertificates[1:] {
+				intermediates.AddCert(cert)
+			}
+			_, err = state.PeerCertificates[0].Verify(x509.VerifyOptions{
+				Roots: roots, Intermediates: intermediates, DNSName: state.ServerName,
+				KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+			})
+			return err
+		},
 	}, nil
 }
 
@@ -94,6 +120,33 @@ func (r *GRPCHostRuntime) Activate(ctx context.Context, endpoint string, req *ho
 		return nil, err
 	}
 	return client.Activate(ctx, req)
+}
+
+func (r *GRPCHostRuntime) Pause(ctx context.Context, endpoint string, req *hostruntimepb.PauseRequest) error {
+	client, err := r.client(endpoint)
+	if err != nil {
+		return err
+	}
+	_, err = client.Pause(ctx, req)
+	return err
+}
+
+func (r *GRPCHostRuntime) Checkpoint(ctx context.Context, endpoint string, req *hostruntimepb.CheckpointRequest) error {
+	client, err := r.client(endpoint)
+	if err != nil {
+		return err
+	}
+	_, err = client.Checkpoint(ctx, req)
+	return err
+}
+
+func (r *GRPCHostRuntime) Discard(ctx context.Context, endpoint string, req *hostruntimepb.DiscardRequest) error {
+	client, err := r.client(endpoint)
+	if err != nil {
+		return err
+	}
+	_, err = client.Discard(ctx, req)
+	return err
 }
 
 func (r *GRPCHostRuntime) Terminate(ctx context.Context, endpoint string, req *hostruntimepb.TerminateRequest) error {

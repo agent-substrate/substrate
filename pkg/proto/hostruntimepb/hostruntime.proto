@@ -23,6 +23,9 @@ option go_package = "github.com/agent-substrate/substrate/pkg/proto/hostruntimep
 // Terminate after cleanup succeeds.
 service HostRuntime {
   rpc Activate(ActivateRequest) returns (ActivateResponse) {}
+  rpc Pause(PauseRequest) returns (PauseResponse) {}
+  rpc Checkpoint(CheckpointRequest) returns (CheckpointResponse) {}
+  rpc Discard(DiscardRequest) returns (DiscardResponse) {}
   rpc Terminate(TerminateRequest) returns (TerminateResponse) {}
 }
 
@@ -32,7 +35,29 @@ message ActivateRequest {
   int64 cpu_milli = 3;
   int64 memory_bytes = 4;
   HTTPReadinessProbe readiness_probe = 5;
+  optional string external_snapshot_uri = 6;
+  optional string local_snapshot_name = 7;
 }
+
+message PauseRequest {
+  string actor_uid = 1;
+  string local_snapshot_name = 2;
+}
+
+message PauseResponse {}
+
+message CheckpointRequest {
+  string actor_uid = 1;
+  string external_snapshot_uri = 2;
+}
+
+message CheckpointResponse {}
+
+message DiscardRequest {
+  string actor_uid = 1;
+}
+
+message DiscardResponse {}
 
 message HTTPReadinessProbe {
   int32 port = 1;

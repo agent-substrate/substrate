@@ -27,6 +27,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/agent-substrate/substrate/pkg/proto/hostruntimepb"
 	"go.opentelemetry.io/otel/attribute"
 )
 
@@ -164,6 +165,22 @@ func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resourc
 		}
 		return "", apierror.FailedPrecondition("CallAteletPause prerequisite not met for Actor: %s. No worker assignment", actorRef)
 	}
+	if actorTemplate.GetMacVm() != nil {
+		if w.hostRuntime == nil {
+			return "", apierror.Unimplemented("Mac Actor execution requires a configured host runtime")
+		}
+		if assignment.GetRuntimeEndpoint() == "" {
+			return "", apierror.Internal("Mac Actor assignment has no runtime endpoint")
+		}
+		err := w.hostRuntime.Pause(ctx, assignment.GetRuntimeEndpoint(), &hostruntimepb.PauseRequest{
+			ActorUid:          actor.GetMetadata().GetUid(),
+			LocalSnapshotName: actor.GetStatus().GetInProgressLocalSnapshotName(),
+		})
+		if err != nil {
+			return ateattr.SnapshotScopeDisk, fmt.Errorf("while pausing Mac Actor: %w", err)
+		}
+		return ateattr.SnapshotScopeDisk, nil
+	}
 
 	ateletConn, err := w.dialer.DialForAteletOnNode(assignment.GetNodeName())
 	if err != nil {
@@ -229,7 +246,11 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 			}
 			slog.Warn("Worker already gone during finalize pause, skipping release", "worker", assignment.GetWorkerPod())
 		} else {
-			nodeName = worker.GetNodeName()
+			if worker.GetExternalHost() != nil {
+				nodeName = worker.GetMetadata().GetName()
+			} else {
+				nodeName = worker.GetNodeName()
+			}
 			// Drop just this actor's assignment; any other actors the worker
 			// hosts keep theirs.
 			_, err := w.store.ReleaseActorFromWorker(ctx, worker.GetMetadata().GetName(), latestActor.GetMetadata().GetUid())

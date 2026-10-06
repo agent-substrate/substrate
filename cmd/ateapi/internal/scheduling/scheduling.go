@@ -259,7 +259,11 @@ func (s *scheduler) Applies(worker *ateapipb.Worker, constraints Constraints) bo
 		return false
 	}
 
-	return len(constraints.RequiredNodes) == 0 || slices.Contains(constraints.RequiredNodes, worker.GetNodeName())
+	locality := worker.GetNodeName()
+	if worker.GetExternalHost() != nil {
+		locality = worker.GetMetadata().GetName()
+	}
+	return len(constraints.RequiredNodes) == 0 || slices.Contains(constraints.RequiredNodes, locality)
 }
 
 // HasRoom reports whether what the worker has left admits one more actor of
