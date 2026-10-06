@@ -27,6 +27,7 @@ import (
 	"google.golang.org/protobuf/testing/protocmp"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/volume"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	storagev1 "k8s.io/api/storage/v1"
@@ -38,6 +39,7 @@ import (
 
 type fakeStorageClassLister struct {
 	storageClasses map[string]*storagev1.StorageClass
+	getErr         error
 }
 
 func (f *fakeStorageClassLister) List(selector k8slabels.Selector) (ret []*storagev1.StorageClass, err error) {
@@ -45,6 +47,9 @@ func (f *fakeStorageClassLister) List(selector k8slabels.Selector) (ret []*stora
 }
 
 func (f *fakeStorageClassLister) Get(name string) (*storagev1.StorageClass, error) {
+	if f.getErr != nil {
+		return nil, f.getErr
+	}
 	sc, ok := f.storageClasses[name]
 	if !ok {
 		return nil, k8serrors.NewNotFound(storagev1.Resource("storageclass"), name)
@@ -53,6 +58,64 @@ func (f *fakeStorageClassLister) Get(name string) (*storagev1.StorageClass, erro
 }
 
 var _ storagev1listers.StorageClassLister = (*fakeStorageClassLister)(nil)
+
+func TestActorVolumesStorageClassErrors(t *testing.T) {
+	ctx := context.Background()
+	tmpl := &ateapipb.ActorTemplate{
+		Volumes: []*ateapipb.Volume{{
+			Name: "data-vol",
+			ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
+				StorageClassName: "standard",
+			},
+		}},
+	}
+	volumes := []*ateapipb.ExternalVolume{{
+		VolumeName: "data-vol",
+		VolumeType: "mock-standard",
+		Status:     ateapipb.ExternalVolume_STATUS_PENDING,
+	}}
+
+	for _, tt := range []struct {
+		name     string
+		getErr   error
+		wantCode codes.Code
+	}{
+		{
+			name:     "missing StorageClass",
+			wantCode: codes.FailedPrecondition,
+		},
+		{
+			name:     "StorageClass lookup fails",
+			getErr:   errors.New("storage class cache unavailable"),
+			wantCode: codes.Internal,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			lister := &fakeStorageClassLister{getErr: tt.getErr}
+			t.Run("initial", func(t *testing.T) {
+				_, err := initialActorVolumes(ctx, lister, tmpl)
+				if got := apierror.Code(err); got != tt.wantCode {
+					t.Fatalf("initialActorVolumes() code = %v, want %v; error = %v", got, tt.wantCode, err)
+				}
+				if !strings.Contains(err.Error(), `StorageClass "standard"`) {
+					t.Errorf("initialActorVolumes() error does not name the StorageClass: %v", err)
+				}
+			})
+			t.Run("create", func(t *testing.T) {
+				res, err := createActorVolumes(ctx, &mockPluginRegistry{}, lister, "actor-uid-123", tmpl, volumes)
+				if got := apierror.Code(err); got != tt.wantCode {
+					t.Fatalf("createActorVolumes() code = %v, want %v; error = %v", got, tt.wantCode, err)
+				}
+				if !strings.Contains(err.Error(), `StorageClass "standard"`) {
+					t.Errorf("createActorVolumes() error does not name the StorageClass: %v", err)
+				}
+				if diff := cmp.Diff(volumes, res, protocmp.Transform()); diff != "" {
+					t.Errorf("createActorVolumes() did not preserve pending volumes (-want +got):\n%s", diff)
+				}
+			})
+		})
+	}
+}
 
 func TestInitialActorVolumes_PendingState(t *testing.T) {
 	tmpl := &ateapipb.ActorTemplate{
