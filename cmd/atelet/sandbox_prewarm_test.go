@@ -381,9 +381,16 @@ func TestSandboxAssetPrewarmDownloads(t *testing.T) {
 	// Handler first, informer start second, mirroring main: atelet startup
 	// must never wait on this informer's sync, and the initial List replays
 	// the pre-existing config into the handler as an Add.
-	if err := startSandboxAssetPrewarm(ctx, informer, herder, store, false); err != nil {
+	p, err := startSandboxAssetPrewarm(ctx, informer, herder, store, false)
+	if err != nil {
 		t.Fatalf("startSandboxAssetPrewarm: %v", err)
 	}
+	// The worker reads the patched globals above. t.Context() is canceled
+	// before cleanups run, and cleanups run last-registered-first, so this
+	// joins the worker before the earlier cleanup restores the globals —
+	// without it the restore races the worker's tail (pause-image pull
+	// after the asset lands) and trips the race detector.
+	t.Cleanup(p.wait)
 	stopCh := make(chan struct{})
 	defer close(stopCh)
 	factory.Start(stopCh)

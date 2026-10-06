@@ -105,12 +105,11 @@ port; the address the actor dialed plays no part (see
 
 Identity on the request legs is `dev.ate.actor.identity`, the actor's SPIFFE
 ID that the outer chain set from the verified peer certificate and shares with
-the inner listener. Because Envoy keys its connection pools without string
-filter-state objects, the outer chain also sets
-`envoy.network.upstream_server_name` from the same certificate — not shared
-upstream — so the inner hop's pool is per actor and two actors dialing the same
-address never inherit each other's identity. Nothing inside the tunnel can
-write any of this; a callout without an identity is refused.
+the inner listener. Envoy builds every inner connection from the filter state
+of the tunnel that created its pool, so `mitm_internal` keeps one pool per
+downstream connection, which on the HTTP/1 egress listener is one per tunnel:
+no tunnel inherits another's identity, authority or rules. Nothing inside the
+tunnel can write any of this; a callout without an identity is refused.
 
 Policies are read through a per-actor cache (`--egress-policy-cache-ttl`, 10s
 by default; 0 disables it). The TTL is exactly how stale a decision can be: a

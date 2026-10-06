@@ -152,6 +152,8 @@ usage() {
   echo "                                         Default: derived from PROJECT_ID/CLUSTER_LOCATION/CLUSTER_NAME"
   echo "                                         (https://container.googleapis.com/v1/projects/.../clusters/...),"
   echo "                                         else the cluster's OIDC discovery document"
+  echo "  ACTOR_JWT_ALGORITHM                    Signing algorithm of a newly created actor JWT pool: ES256 (default) | RS256."
+  echo "                                         Use RS256 for relying parties that don't support ES256. Has no effect once the pool exists."
   echo ""
   echo "Benchmarks (see benchmarking/README.md for details and customization):"
   echo ""

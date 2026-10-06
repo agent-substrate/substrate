@@ -38,6 +38,7 @@ func loadEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv("NO_DEV_ENV", "1")
 	for _, name := range []string{
+		"ACTOR_JWT_ALGORITHM",
 		"ANTHROPIC_API_KEY",
 		"ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE",
 		"ATE_API_POSTGRES_CLOUDSQL_GSA",
@@ -380,6 +381,38 @@ func TestLoadExpectedJWTIssuer(t *testing.T) {
 	}
 }
 
+func TestLoadActorJWTAlgorithm(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		env     string
+		want    string
+		wantErr bool
+	}{
+		{name: "unset", env: "", want: "ES256"},
+		{name: "RS256", env: "RS256", want: "RS256"},
+		{name: "unsupported", env: "HS256", wantErr: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			loadEnv(t)
+			t.Setenv("ACTOR_JWT_ALGORITHM", tt.env)
+
+			cfg, err := Load(Options{})
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("Load() with ACTOR_JWT_ALGORITHM=%q returned nil error", tt.env)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.ActorJWTAlgorithm != tt.want {
+				t.Errorf("ActorJWTAlgorithm = %q, want %q", cfg.ActorJWTAlgorithm, tt.want)
+			}
+		})
+	}
+}
+
 // The endpoint has to reach both the Go steps and the shell scripts ate-setup
 // still delegates to, or the two halves of an install export different
 // collectors.
@@ -551,7 +584,6 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{"provider without a name", Options{CredentialProvider: `{"address":"vault.ate-system.svc:8200"}`}},
 		{"provider with an unknown key", Options{CredentialProvider: `{"name":"k8s.io","adress":"x:1"}`}},
 		{"provider with trailing data", Options{CredentialProvider: `{"enabled":false} {"name":"k8s.io"}`}},
-		{"provider agentgateway", Options{Router: RouterAgentgateway, CredentialProvider: `{"name":"k8s.io"}`}},
 		{"provider name with a scheme", Options{CredentialProvider: `{"name":"ate-secret://k8s.io"}`}},
 		{"provider name not lowercase", Options{CredentialProvider: `{"name":"Vault.example.com","address":"vault.ate-system.svc:8200"}`}},
 		{"provider name with a port", Options{CredentialProvider: `{"name":"k8s.io:443"}`}},
@@ -587,6 +619,16 @@ func TestCredentialProvider(t *testing.T) {
 		{name: "absent is an error", opts: Options{}, wantErr: true},
 		{name: "disabled", opts: Options{CredentialProvider: `{"enabled":false}`}},
 		{name: "disabled on agentgateway", opts: Options{Router: RouterAgentgateway, CredentialProvider: `{"enabled":false}`}},
+		{
+			name: "kubernetes on agentgateway",
+			opts: Options{Router: RouterAgentgateway, CredentialProvider: `{"name":"k8s.io"}`},
+			want: CredentialProvider{Name: K8sCredentialProviderName, Address: K8sCredentialProviderAddress},
+		},
+		{
+			name: "another provider on agentgateway",
+			opts: Options{Router: RouterAgentgateway, CredentialProvider: `{"name":"vault.example.com","address":"vault.ate-system.svc:50051"}`},
+			want: CredentialProvider{Name: "vault.example.com", Address: "vault.ate-system.svc:50051"},
+		},
 		{
 			name: "enabled true names a provider",
 			opts: Options{CredentialProvider: `{"enabled":true,"name":"k8s.io"}`},

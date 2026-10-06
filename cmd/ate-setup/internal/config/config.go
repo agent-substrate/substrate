@@ -122,6 +122,10 @@ type Config struct {
 	// follows neither form.
 	ExpectedJWTIssuer string
 
+	// ActorJWTAlgorithm is the signing algorithm of the key in a new actor JWT
+	// pool (ACTOR_JWT_ALGORITHM): ES256 or RS256.
+	ActorJWTAlgorithm string
+
 	// BucketName is the snapshot bucket demos are templated with.
 	BucketName string
 
@@ -348,6 +352,7 @@ func Load(opts Options) (*Config, error) {
 		ClusterName:                       env["CLUSTER_NAME"],
 		ClusterLocation:                   env["CLUSTER_LOCATION"],
 		ExpectedJWTIssuer:                 env["EXPECTED_JWT_ISSUER"],
+		ActorJWTAlgorithm:                 firstNonEmpty(env["ACTOR_JWT_ALGORITHM"], "ES256"),
 		BucketName:                        env["BUCKET_NAME"],
 		KODockerRepo:                      env["KO_DOCKER_REPO"],
 		KODefaultPlatforms:                env["KO_DEFAULTPLATFORMS"],
@@ -453,6 +458,11 @@ func validate(cfg *Config) error {
 		return fmt.Errorf("ATE_API_POSTGRES_CLOUDSQL_IP_TYPE must be %s, %s, or %s, got %q",
 			CloudSQLIPTypePrivate, CloudSQLIPTypePublic, CloudSQLIPTypePSC, cfg.CloudSQL.IPType)
 	}
+	switch cfg.ActorJWTAlgorithm {
+	case "ES256", "RS256":
+	default:
+		return fmt.Errorf("ACTOR_JWT_ALGORITHM must be ES256 or RS256, got %q", cfg.ActorJWTAlgorithm)
+	}
 	switch cfg.ClusterSize {
 	case ClusterSizeSize0, ClusterSizeSize10:
 	default:
@@ -556,9 +566,6 @@ func (c *Config) CredentialProvider() (CredentialProvider, error) {
 	// The name is the host of the credential URIs the provider serves.
 	if errs := validation.IsDNS1123Subdomain(spec.Name); len(errs) > 0 {
 		return invalid("name %q is not a valid DNS name: %s", spec.Name, strings.Join(errs, "; "))
-	}
-	if c.Router != RouterEnvoy {
-		return invalid(`a credential provider requires --atenet-dataplane=envoy; pass {"enabled":false} on the agentgateway dataplane`)
 	}
 	if spec.Address == "" {
 		if spec.Name != K8sCredentialProviderName {

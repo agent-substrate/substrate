@@ -1506,6 +1506,13 @@ type HttpRuleEffects struct {
 	// the requests that ask for it. Header names must be unique
 	// case-insensitively.
 	//
+	// Replacement is supported on HTTP and HTTPS. On HTTP, the gateway does
+	// not originate TLS to the destination. Without separate transport
+	// protection, observers can read the credential and attackers on the path
+	// can modify the request. Deployments may encrypt traffic outside the
+	// gateway; policy authors must account for any unprotected segments
+	// between credential injection and the intended destination.
+	//
 	// +k8s:optional
 	// +k8s:maxItems=16
 	// +k8s:listType=map
@@ -5379,12 +5386,6 @@ type MintActorJWTRequest struct {
 	//
 	// +k8s:required
 	Actor *ObjectRef `protobuf:"bytes,5,opt,name=actor,proto3" json:"actor,omitempty"`
-	// The UID of the actor --- used to guard against deletion and recreation of
-	// an actor with the same name.
-	//
-	// +k8s:required
-	// +k8s:format=k8s-uuid
-	ActorUid string `protobuf:"bytes,7,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
 	// The audiences the minted JWT is bound to. Tokens are only issued with
 	// audience bindings, so at least one is required.
 	//
@@ -5438,13 +5439,6 @@ func (x *MintActorJWTRequest) GetActor() *ObjectRef {
 		return x.Actor
 	}
 	return nil
-}
-
-func (x *MintActorJWTRequest) GetActorUid() string {
-	if x != nil {
-		return x.ActorUid
-	}
-	return ""
 }
 
 func (x *MintActorJWTRequest) GetAudience() []string {
@@ -8257,10 +8251,9 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x05actor\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\x12/\n" +
 	"\aoptions\x18\x02 \x01(\v2\x15.ateapi.DeleteOptionsR\aoptions\"4\n" +
 	"\rGetTagRequest\x12#\n" +
-	"\x03tag\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x03tag\"\xa6\x01\n" +
+	"\x03tag\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x03tag\"\x89\x01\n" +
 	"\x13MintActorJWTRequest\x12'\n" +
-	"\x05actor\x18\x05 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\x12\x1b\n" +
-	"\tactor_uid\x18\a \x01(\tR\bactorUid\x12\x1a\n" +
+	"\x05actor\x18\x05 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\x12\x1a\n" +
 	"\baudience\x18\x01 \x03(\tR\baudience\x12-\n" +
 	"\x12expiration_seconds\x18\b \x01(\x03R\x11expirationSeconds\"s\n" +
 	"\x14MintActorJWTResponse\x12 \n" +

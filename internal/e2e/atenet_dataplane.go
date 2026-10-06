@@ -35,10 +35,8 @@ type AtenetDataplane interface {
 	IsRetryableParkingBudgetExhaustion(status int, body string) bool
 	ParkingBudgetStatus() int
 	IsEgressPolicyDenied(status int, body string) bool
-	SupportsTLSPassthroughEgressPolicy() bool
 	PlatformMetricPrefixes([]string) []string
 	RouteDurationSeen(context.Context, string) (bool, error)
-	SupportsIngressProtocolDowngrade() bool
 	IsDataplaneConcurrencyDisabled() bool
 }
 
@@ -74,15 +72,11 @@ func (envoyAtenetDataplane) IsEgressPolicyDenied(status int, body string) bool {
 		(status == http.StatusBadGateway && strings.Contains(body, "request failed"))
 }
 
-func (envoyAtenetDataplane) SupportsTLSPassthroughEgressPolicy() bool { return true }
-
 func (envoyAtenetDataplane) PlatformMetricPrefixes(prefixes []string) []string { return prefixes }
 
 func (envoyAtenetDataplane) RouteDurationSeen(_ context.Context, collectorScrape string) (bool, error) {
 	return len(MissingPlatformMetrics(collectorScrape, []string{"atenet_router_route_duration"})) == 0, nil
 }
-
-func (envoyAtenetDataplane) SupportsIngressProtocolDowngrade() bool { return true }
 
 func (envoyAtenetDataplane) IsDataplaneConcurrencyDisabled() bool {
 	return os.Getenv("E2E_ENVOY_CONCURRENCY") == "1"
@@ -104,9 +98,6 @@ func (agentGatewayAtenetDataplane) IsEgressPolicyDenied(status int, body string)
 	return status == http.StatusForbidden && strings.Contains(body, "actor egress policy denied")
 }
 
-// TODO: Apply substrateEgress to TLS passthrough routes in AgentGateway.
-func (agentGatewayAtenetDataplane) SupportsTLSPassthroughEgressPolicy() bool { return false }
-
 func (agentGatewayAtenetDataplane) PlatformMetricPrefixes(prefixes []string) []string {
 	filtered := make([]string, 0, len(prefixes))
 	for _, prefix := range prefixes {
@@ -124,8 +115,6 @@ func (agentGatewayAtenetDataplane) RouteDurationSeen(ctx context.Context, _ stri
 	}
 	return len(MissingPlatformMetrics(scrape, []string{"agentgateway_atenet_router_route_duration_seconds"})) == 0, nil
 }
-
-func (agentGatewayAtenetDataplane) SupportsIngressProtocolDowngrade() bool { return false }
 
 func (agentGatewayAtenetDataplane) IsDataplaneConcurrencyDisabled() bool { return false }
 

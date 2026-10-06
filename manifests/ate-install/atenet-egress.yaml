@@ -103,6 +103,8 @@ data:
             typed_config:
               "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
               stat_prefix: egress_connect
+              # mitm_internal's pool per downstream connection is a pool per
+              # tunnel only while each connection carries one CONNECT.
               codec_type: HTTP1
               upgrade_configs:
               - upgrade_type: CONNECT
@@ -174,17 +176,6 @@ data:
                     format_string:
                       text_format_source:
                         inline_string: "%REQ(:AUTHORITY)%"
-                      omit_empty_values: true
-                  # Keys the inner hop's connection pool per actor. Filter state is not
-                  # part of the pool key, so without this two actors dialing the same
-                  # IP:port would share a pool and the second would arrive on the inner
-                  # listener as the first. Not shared upstream, so it never acts as an
-                  # SNI override.
-                  - object_key: envoy.network.upstream_server_name
-                    skip_if_empty: true
-                    format_string:
-                      text_format_source:
-                        inline_string: "%DOWNSTREAM_PEER_URI_SAN%"
                       omit_empty_values: true
               - name: envoy.filters.http.dynamic_modules
                 typed_config:
@@ -797,16 +788,19 @@ data:
       # the MITM leg has no listening port anywhere in the pod's netns.
       - name: mitm_internal
         connect_timeout: 1s
-        # One CONNECT per connection: the filter state internal_upstream copies
-        # belongs to the tunnel this connection was made for, and a reused
-        # connection would carry it into the next tunnel.
+        # One pool per tunnel. A pool gives every connection it opens the
+        # filter state of the tunnel that created it, so a pool shared by two
+        # tunnels would hand the second one the first one's actor, authority
+        # and rules. The egress listener speaks HTTP/1, which carries one
+        # CONNECT per downstream connection.
+        connection_pool_per_downstream_connection: true
         typed_extension_protocol_options:
-          envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
-            "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
-            common_http_protocol_options:
-              max_requests_per_connection: 1
-            explicit_http_config:
-              http_protocol_options: {}
+          envoy.extensions.upstreams.tcp.v3.TcpProtocolOptions:
+            "@type": type.googleapis.com/envoy.extensions.upstreams.tcp.v3.TcpProtocolOptions
+            # Closes a connection no tunnel holds, which its one-tunnel pool
+            # will never use again. The timer runs only while no tunnel holds
+            # the connection, so a quiet tunnel is never cut by it.
+            idle_timeout: 30s
         # Copies every filter state object shared with the upstream onto the
         # internal listener's downstream connection: dev.ate.actor.identity,
         # dev.ate.connect.authority, dev.ate.policy.egress, and

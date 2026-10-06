@@ -17,7 +17,6 @@ package main
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -325,7 +324,7 @@ func main() {
 	// binary): the reflector retries in the background and prewarm stays cold
 	// until it recovers.
 	sandboxConfigInformer := ateFactory.Api().V1alpha1().SandboxConfigs().Informer()
-	if err := startSandboxAssetPrewarm(ctx, sandboxConfigInformer, wmService, imageCache, microvmNodeCapable(hostDevRoot)); err != nil {
+	if _, err := startSandboxAssetPrewarm(ctx, sandboxConfigInformer, wmService, imageCache, microvmNodeCapable(hostDevRoot)); err != nil {
 		slog.ErrorContext(ctx, "Sandbox asset prewarm disabled", slog.Any("err", err))
 	}
 	// The factory only runs informers that exist when Start is called: the
@@ -503,6 +502,7 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *
 		return nil, err
 	}
 
+	s.systemInfoVolumes.Deregister(actorUID)
 	if err := resetActorDirs(actorUID); err != nil {
 		return nil, fmt.Errorf("while resetting actor dirs: %w", err)
 	}
@@ -518,12 +518,13 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *
 		return nil, fmt.Errorf("while recording sandbox assets: %w", err)
 	}
 
+	var registration *registeredActor
 	defer func() {
-		if err != nil {
-			s.systemInfoVolumes.Deregister(actorUID)
+		if err != nil && registration != nil {
+			s.systemInfoVolumes.DeregisterOwned(registration)
 		}
 	}()
-	if err := s.systemInfoVolumes.Register(actorUID, actorRef, systemInfoVolumesFor(actorUID, req.GetSpec())); err != nil {
+	if registration, err = s.systemInfoVolumes.Register(actorUID, actorRef, systemInfoVolumesFor(actorUID, req.GetSpec())); err != nil {
 		return nil, err
 	}
 	if err := s.prepareOCIBundles(ctx, actorUID, actorRef,
@@ -1095,6 +1096,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 
 	// Not crashing the actor, because terminal errors here indicate problems with atelet,
 	// node or the disk itself.
+	s.systemInfoVolumes.Deregister(actorUID)
 	if err := resetActorDirs(actorUID); err != nil {
 		return nil, fmt.Errorf("while resetting actor dirs: %w", err)
 	}
@@ -1159,10 +1161,12 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	// snapshot kind only becomes knowable here.
 	op.kind = restoreSnapshotKind(req, sandboxRec)
 
-	// Undo the Register if the restore fails.
+	var registration *registeredActor
+	// Undo the Register if the restore fails. The errgroup join below happens
+	// before this defer can read registration, so the handoff is synchronized.
 	defer func() {
-		if err != nil {
-			s.systemInfoVolumes.Deregister(actorUID)
+		if err != nil && registration != nil {
+			s.systemInfoVolumes.DeregisterOwned(registration)
 		}
 	}()
 
@@ -1206,7 +1210,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 			prepFailedPhase = ateattr.SnapshotPhaseSandboxAssets
 			return err
 		}
-		if err = s.systemInfoVolumes.Register(actorUID, actorRef, systemInfoVolumesFor(actorUID, req.GetSpec())); err != nil {
+		if registration, err = s.systemInfoVolumes.Register(actorUID, actorRef, systemInfoVolumesFor(actorUID, req.GetSpec())); err != nil {
 			prepFailedPhase = ateattr.SnapshotPhaseOCIUnpack
 			return err
 		}
@@ -1989,19 +1993,25 @@ func removeActorDirs(actorUID string) error {
 // credential bundle at servingBundlePath, requires a client certificate
 // chaining to a CA in clientCAPath.
 func ateletServerTLSConfig(servingBundlePath, clientCAPath string) (*tls.Config, error) {
-	caBytes, err := os.ReadFile(clientCAPath)
-	if err != nil {
-		return nil, fmt.Errorf("read CA bundle %s: %w", clientCAPath, err)
+	loadClientCAs := credbundle.PoolLoader(clientCAPath)
+	if _, err := loadClientCAs(); err != nil {
+		return nil, fmt.Errorf("load CA bundle %s: %w", clientCAPath, err)
 	}
-	clientCAs := x509.NewCertPool()
-	if !clientCAs.AppendCertsFromPEM(caBytes) {
-		return nil, fmt.Errorf("parse CA bundle from %s", clientCAPath)
-	}
+	serverCert := credbundle.Loader(servingBundlePath)
 	return &tls.Config{
-		MinVersion:     tls.VersionTLS13,
-		GetCertificate: credbundle.Loader(servingBundlePath),
-		ClientAuth:     tls.RequireAndVerifyClientCert,
-		ClientCAs:      clientCAs,
+		MinVersion: tls.VersionTLS13,
+		GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) {
+			clientCAs, err := loadClientCAs()
+			if err != nil {
+				return nil, err
+			}
+			return &tls.Config{
+				MinVersion:     tls.VersionTLS13,
+				GetCertificate: serverCert,
+				ClientAuth:     tls.RequireAndVerifyClientCert,
+				ClientCAs:      clientCAs,
+			}, nil
+		},
 	}, nil
 }
 

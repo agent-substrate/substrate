@@ -121,8 +121,9 @@ jobs:
   # One kind cluster exercises BOTH runtimes. Free x86-64 ubuntu-latest runners
   # expose /dev/kvm (with a udev rule), so create-kind-cluster.sh mounts it and the
   # micro-VM (kata + cloud-hypervisor) sandbox class works alongside gVisor.
-  e2e-test-matrix:
-    name: E2E (${{ matrix.dataplane }})
+  # The envoy entry reports the required e2e-test check.
+  e2e-test:
+    name: ${{ matrix.dataplane == 'envoy' && 'e2e-test' || format('e2e-test ({0})', matrix.dataplane) }}
     runs-on: ubuntu-latest
     # Cluster bring-up, image builds and four sequential lanes; generous, but far
     # short of the six-hour platform default a hung lane would otherwise consume.
@@ -152,11 +153,10 @@ jobs:
       E2E_ATENET_DATAPLANE: ${{ matrix.dataplane }}
       E2E_ENVOY_CONCURRENCY: "1"
       # The installer requires a credential provider selection, and deploys the
-      # bundled Kubernetes Secrets provider with the control plane. Envoy only:
-      # it has no agentgateway credential-provider configuration yet. Job-wide
+      # bundled Kubernetes Secrets provider with the control plane. Job-wide
       # because every ate-setup invocation reads it, including the control
       # plane redeploy in run-microvm-demo-kind.sh.
-      ATE_CREDENTIAL_PROVIDER: ${{ matrix.dataplane == 'envoy' && '{"name":"k8s.io"}' || '{"enabled":false}' }}
+      ATE_CREDENTIAL_PROVIDER: '{"name":"k8s.io"}'
       # E2E_JUNIT_FILE is set per step, not here: the lanes below share this
       # job, so one job-level path would have each overwrite the last.
       ARTIFACTS: ${{ github.workspace }}/_artifacts
@@ -221,9 +221,6 @@ jobs:
         hack/install-ate-kind.sh --deploy-demo-egress-microvm
     - name: Run E2E tests (gVisor)
       env:
-        # Gates the injection suite. Injection happens inside the gateway, so
-        # the sandbox class does not matter and only this lane runs it.
-        E2E_EGRESS_CREDINJECT: ${{ matrix.dataplane == 'envoy' && '1' || '' }}
         E2E_JUNIT_FILE: ${{ github.workspace }}/_artifacts/e2e-gvisor.xml
       # The identity suite runs last and alone (see below), not here.
       run: hack/run-e2e-kind.sh -skip '^TestActorIdentity' -v -args --no-color
@@ -284,15 +281,3 @@ jobs:
         kubectl --context kind-kind get pods -A -l ate.dev/worker-pool \
           -o 'custom-columns=:.metadata.namespace,:.metadata.name' --no-headers 2>/dev/null \
           | while read -r ns name; do dump "$ns" "$name"; done
-  # Preserve the required-check name while the concrete Envoy and AgentGateway
-  # executions run as entries in the shared matrix above.
-  e2e-test:
-    name: e2e-test
-    needs: e2e-test-matrix
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
-    - name: Require E2E matrix success
-      env:
-        MATRIX_RESULT: ${{ needs.e2e-test-matrix.result }}
-      run: test "$MATRIX_RESULT" = success

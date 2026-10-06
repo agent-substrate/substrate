@@ -318,14 +318,12 @@ func TestEgressManifestsOriginalDstClustersDialTheFilterStateAlone(t *testing.T)
 	}
 }
 
-// The identity crosses the inner hop as filter state, which internal_upstream
-// copies from the options the connection pool was created with. A string
-// object is not part of the pool key, so the outer HCM keys the pool per actor
-// itself, and must not share that key upstream as an SNI override.
-func TestEgressManifestsKeyTheInnerPoolPerActor(t *testing.T) {
+// The identity and the dialed authority cross the inner hop as filter state
+// shared with the upstream; nothing else carries them.
+func TestEgressManifestsShareIdentityWithTheInnerListener(t *testing.T) {
 	for _, path := range egressManifests {
 		t.Run(path, func(t *testing.T) {
-			var identity, authority, poolKey node
+			var identity, authority node
 			for _, f := range list(hcm(outerChain(t, bootstrapTree(t, path))), "http_filters") {
 				if str(f, "name") != setFilterStateFilter {
 					continue
@@ -336,8 +334,6 @@ func TestEgressManifestsKeyTheInnerPoolPerActor(t *testing.T) {
 						identity = v
 					case extproc.ConnectAuthorityFilterStateKey:
 						authority = v
-					case "envoy.network.upstream_server_name":
-						poolKey = v
 					}
 				}
 			}
@@ -354,15 +350,6 @@ func TestEgressManifestsKeyTheInnerPoolPerActor(t *testing.T) {
 			}
 			if got := str(authority, "shared_with_upstream"); got == "" {
 				t.Errorf("%s is not shared with upstream; the inner legs would see no dialed port", extproc.ConnectAuthorityFilterStateKey)
-			}
-			if poolKey == nil {
-				t.Fatal("the egress chain does not key the inner pool per actor (no envoy.network.upstream_server_name entry)")
-			}
-			if str(poolKey, "shared_with_upstream") != "" {
-				t.Error("envoy.network.upstream_server_name must not be shared with upstream; it would override the SNI of re-originated TLS")
-			}
-			if !strings.Contains(mustJSON(t, poolKey), "DOWNSTREAM_PEER_URI_SAN") {
-				t.Error("the pool key must derive from the verified peer certificate")
 			}
 		})
 	}
@@ -385,35 +372,38 @@ func TestEgressManifestsCleartextAcceptsHTTP10(t *testing.T) {
 	}
 }
 
-// One tunnel per inner connection: the filter state internal_upstream copies
-// belongs to the tunnel the connection was made for, and a reused connection
-// would carry it into the next one.
-func TestEgressManifestsNeverReuseATunnelConnection(t *testing.T) {
+// One pool per tunnel: internal_upstream copies the filter state of the tunnel
+// that created the pool, not of the tunnel asking for a connection, and a
+// string object is not part of the pool key. A pool per downstream connection
+// is a pool per tunnel only while that connection carries one CONNECT. A
+// connection its tunnel left behind keeps its pool alive until the idle
+// timeout, which must not be disabled.
+func TestEgressManifestsGiveEachTunnelItsOwnInnerPool(t *testing.T) {
 	for _, path := range egressManifests {
 		t.Run(path, func(t *testing.T) {
-			for _, cluster := range clusters(bootstrapTree(t, path)) {
+			tree := bootstrapTree(t, path)
+			internal := 0
+			for _, cluster := range clusters(tree) {
 				if !strings.Contains(mustJSON(t, cluster), `"server_listener_name"`) {
 					continue
 				}
-				if got := maxRequestsPerConnection(child(cluster, "typed_extension_protocol_options")); got != 1 {
-					t.Errorf("internal cluster %q allows %v requests per connection, want 1", str(cluster, "name"), got)
+				internal++
+				if ok, _ := cluster["connection_pool_per_downstream_connection"].(bool); !ok {
+					t.Errorf("internal cluster %q shares its pool across tunnels; want connection_pool_per_downstream_connection: true", str(cluster, "name"))
 				}
+				tcp := child(child(cluster, "typed_extension_protocol_options"), "envoy.extensions.upstreams.tcp.v3.TcpProtocolOptions")
+				if got := str(tcp, "idle_timeout"); got == "" || strings.Trim(got, "0.s") == "" {
+					t.Errorf("internal cluster %q idle_timeout is %q; want a non-zero timeout so a pool its tunnel left behind is freed", str(cluster, "name"), got)
+				}
+			}
+			if internal == 0 {
+				t.Fatal("no cluster targets an internal listener")
+			}
+			if got := str(hcm(outerChain(t, tree)), "codec_type"); got != "HTTP1" {
+				t.Errorf("egress chain codec_type is %q, want HTTP1: any other codec can carry several CONNECTs on one downstream connection, and they would share a pool", got)
 			}
 		})
 	}
-}
-
-// maxRequestsPerConnection reads the limit out of a cluster's
-// HttpProtocolOptions, or 0 when there is none.
-func maxRequestsPerConnection(opts node) float64 {
-	for _, v := range opts {
-		if m, ok := v.(node); ok {
-			if n, ok := child(m, "common_http_protocol_options")["max_requests_per_connection"].(float64); ok {
-				return n
-			}
-		}
-	}
-	return 0
 }
 
 // dialMatchOf returns the dial a route's match requires, or "" when it
