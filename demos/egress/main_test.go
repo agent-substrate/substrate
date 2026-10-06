@@ -171,15 +171,25 @@ func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) 
 // (internal/e2e/fixtures/testserver, its grpc subcommand).
 type echoServer struct {
 	grpcechopb.UnimplementedEchoServer
+	streamCount   int32
+	streamMessage string
 }
 
 func (echoServer) Echo(_ context.Context, req *grpcechopb.EchoRequest) (*grpcechopb.EchoResponse, error) {
 	return &grpcechopb.EchoResponse{Message: req.GetMessage()}, nil
 }
 
-func (echoServer) EchoStream(req *grpcechopb.EchoStreamRequest, stream grpc.ServerStreamingServer[grpcechopb.EchoResponse]) error {
-	for i := range req.GetCount() {
-		if err := stream.Send(&grpcechopb.EchoResponse{Message: req.GetMessage(), Index: i}); err != nil {
+func (s echoServer) EchoStream(req *grpcechopb.EchoStreamRequest, stream grpc.ServerStreamingServer[grpcechopb.EchoResponse]) error {
+	count := req.GetCount()
+	if s.streamCount > 0 {
+		count = s.streamCount
+	}
+	message := req.GetMessage()
+	if s.streamMessage != "" {
+		message = s.streamMessage
+	}
+	for i := range count {
+		if err := stream.Send(&grpcechopb.EchoResponse{Message: message, Index: i}); err != nil {
 			return err
 		}
 	}
@@ -206,6 +216,10 @@ func (echoServer) EchoBidi(stream grpc.BidiStreamingServer[grpcechopb.EchoReques
 
 // startEchoServer serves Echo on loopback and returns its host:port.
 func startEchoServer(t *testing.T) string {
+	return startEchoServerWith(t, echoServer{})
+}
+
+func startEchoServerWith(t *testing.T, implementation echoServer) string {
 	t.Helper()
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -213,7 +227,7 @@ func startEchoServer(t *testing.T) string {
 		t.Fatalf("listening on loopback: %v", err)
 	}
 	server := grpc.NewServer()
-	grpcechopb.RegisterEchoServer(server, echoServer{})
+	grpcechopb.RegisterEchoServer(server, implementation)
 	go func() {
 		if err := server.Serve(listener); err != nil {
 			t.Logf("serving: %v", err)
@@ -364,5 +378,65 @@ func TestGRPCInvalidRequests(t *testing.T) {
 				t.Errorf("status = %d, want %d; body = %s", recorder.Code, test.status, recorder.Body.String())
 			}
 		})
+	}
+}
+
+func TestGRPCRejectsInvalidStreamCountsBeforeDialing(t *testing.T) {
+	const target = "127.0.0.1:1"
+	for _, test := range []struct {
+		name  string
+		field string
+		count int64
+	}{
+		{name: "negative stream count", field: "streamCount", count: -1},
+		{name: "oversized stream count", field: "streamCount", count: 17},
+		{name: "maximum stream count", field: "streamCount", count: 2147483647},
+		{name: "negative bidi count", field: "bidiCount", count: -1},
+		{name: "oversized bidi count", field: "bidiCount", count: 17},
+		{name: "maximum bidi count", field: "bidiCount", count: 2147483647},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			body := fmt.Sprintf(`{"target":%q,"message":"bounded","%s":%d}`, target, test.field, test.count)
+			recorder, got := postGRPC(t, body)
+			if recorder.Code != http.StatusBadRequest || !strings.Contains(got.Error, "between 0 and 16") {
+				t.Fatalf("status = %d, error = %q; want count validation before dialing", recorder.Code, got.Error)
+			}
+		})
+	}
+}
+
+func TestGRPCStreamRejectsResponsesBeyondRequestedCount(t *testing.T) {
+	target := startEchoServerWith(t, echoServer{streamCount: 17})
+	recorder, got := postGRPC(t, fmt.Sprintf(`{"target":%q,"message":"bounded","streamCount":16}`, target))
+	if recorder.Code != http.StatusBadGateway || got.Error == "" {
+		t.Fatalf("status = %d, error = %q; want excess-stream failure", recorder.Code, got.Error)
+	}
+}
+
+func TestGRPCStreamLimitsReceivedMessageSize(t *testing.T) {
+	target := startEchoServerWith(t, echoServer{streamMessage: strings.Repeat("x", maxResponseBody+1)})
+	recorder, got := postGRPC(t, fmt.Sprintf(`{"target":%q,"message":"bounded","streamCount":1}`, target))
+	if recorder.Code != http.StatusBadGateway || got.Error == "" {
+		t.Fatalf("status = %d, error = %q; want oversized-message failure", recorder.Code, got.Error)
+	}
+}
+
+func TestGRPCStreamLimitsTotalReceivedMessageSize(t *testing.T) {
+	message := strings.Repeat("x", int(maxResponseBody/maxGRPCMessages+1))
+	target := startEchoServerWith(t, echoServer{streamCount: maxGRPCMessages, streamMessage: message})
+	recorder, got := postGRPC(t, fmt.Sprintf(`{"target":%q,"message":"bounded","streamCount":%d}`, target, maxGRPCMessages))
+	if recorder.Code != http.StatusBadGateway || got.Error == "" {
+		t.Fatalf("status = %d, error = %q; want cumulative response-size failure", recorder.Code, got.Error)
+	}
+}
+
+func TestGRPCResponseLimitsEncodedBody(t *testing.T) {
+	target := startEchoServerWith(t, echoServer{streamMessage: strings.Repeat("\x00", maxResponseBody/6+1)})
+	recorder, got := postGRPC(t, fmt.Sprintf(`{"target":%q,"message":"bounded","streamCount":1}`, target))
+	if recorder.Code != http.StatusBadGateway || got.Error == "" {
+		t.Fatalf("status = %d, error = %q; want oversized encoded-response failure", recorder.Code, got.Error)
+	}
+	if recorder.Body.Len() > maxResponseBody {
+		t.Fatalf("response body has %d bytes, exceeds %d", recorder.Body.Len(), maxResponseBody)
 	}
 }

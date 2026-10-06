@@ -40,10 +40,11 @@ import (
 )
 
 const (
-	listenAddress   = ":80"
-	maxRequestBody  = 64 << 10
-	maxResponseBody = 1 << 20
-	requestTimeout  = 15 * time.Second
+	listenAddress         = ":80"
+	maxRequestBody        = 64 << 10
+	maxResponseBody       = 1 << 20
+	requestTimeout        = 15 * time.Second
+	maxGRPCMessages int32 = 16
 )
 
 type fetchRequest struct {
@@ -174,6 +175,10 @@ func handleGRPC(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, grpcResponse{Error: fmt.Sprintf("invalid JSON payload: %v", err)})
 		return
 	}
+	if input.StreamCount < 0 || input.StreamCount > maxGRPCMessages || input.BidiCount < 0 || input.BidiCount > maxGRPCMessages {
+		writeJSON(w, http.StatusBadRequest, grpcResponse{Error: fmt.Sprintf("streamCount and bidiCount must be between 0 and %d", maxGRPCMessages)})
+		return
+	}
 	if err := validateTarget(input.Target); err != nil {
 		writeJSON(w, http.StatusBadRequest, grpcResponse{Error: err.Error()})
 		return
@@ -195,33 +200,45 @@ func handleGRPC(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close()
 
 	client := grpcechopb.NewEchoClient(conn)
-	echoed, err := client.Echo(ctx, &grpcechopb.EchoRequest{Message: input.Message})
+	echoed, err := client.Echo(ctx, &grpcechopb.EchoRequest{Message: input.Message}, grpc.MaxCallRecvMsgSize(maxResponseBody))
 	if err != nil {
 		writeGRPCFailure(w, "Echo", err)
 		return
 	}
 
 	response := grpcResponse{Message: echoed.GetMessage(), Code: codes.OK.String()}
+	responseBytes := len(echoed.GetMessage())
 	if input.StreamCount > 0 {
-		response.Stream, err = echoStream(ctx, client, input)
+		response.Stream, err = echoStream(ctx, client, input, &responseBytes)
 		if err != nil {
 			writeGRPCFailure(w, "EchoStream", err)
 			return
 		}
 	}
 	if input.BidiCount > 0 {
-		response.Bidi, err = echoBidi(ctx, client, input)
+		response.Bidi, err = echoBidi(ctx, client, input, &responseBytes)
 		if err != nil {
 			writeGRPCFailure(w, "EchoBidi", err)
 			return
 		}
 	}
-	writeJSON(w, http.StatusOK, response)
+	body, err := json.Marshal(response)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, grpcResponse{Error: fmt.Sprintf("encoding gRPC response: %v", err)})
+		return
+	}
+	if len(body) > maxResponseBody {
+		writeJSON(w, http.StatusBadGateway, grpcResponse{Error: "gRPC response exceeds size limit"})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(append(body, '\n'))
 }
 
 // echoStream drains a server-stream into the response's Stream field.
-func echoStream(ctx context.Context, client grpcechopb.EchoClient, input grpcRequest) ([]streamedMessage, error) {
-	stream, err := client.EchoStream(ctx, &grpcechopb.EchoStreamRequest{Message: input.Message, Count: input.StreamCount})
+func echoStream(ctx context.Context, client grpcechopb.EchoClient, input grpcRequest, responseBytes *int) ([]streamedMessage, error) {
+	stream, err := client.EchoStream(ctx, &grpcechopb.EchoStreamRequest{Message: input.Message, Count: input.StreamCount}, grpc.MaxCallRecvMsgSize(maxResponseBody))
 	if err != nil {
 		return nil, err
 	}
@@ -234,6 +251,13 @@ func echoStream(ctx context.Context, client grpcechopb.EchoClient, input grpcReq
 		if err != nil {
 			return nil, err
 		}
+		if len(out) >= int(input.StreamCount) {
+			return nil, fmt.Errorf("server sent more than the %d stream messages requested", input.StreamCount)
+		}
+		if len(received.GetMessage()) > maxResponseBody-*responseBytes {
+			return nil, errors.New("gRPC response exceeds size limit")
+		}
+		*responseBytes += len(received.GetMessage())
 		out = append(out, streamedMessage{Message: received.GetMessage(), Index: received.GetIndex()})
 	}
 }
@@ -243,8 +267,8 @@ func echoStream(ctx context.Context, client grpcechopb.EchoClient, input grpcReq
 // the whole point: sending everything and then reading it back would succeed
 // over a path that carries one direction at a time, which is precisely the
 // failure this endpoint exists to catch.
-func echoBidi(ctx context.Context, client grpcechopb.EchoClient, input grpcRequest) ([]streamedMessage, error) {
-	stream, err := client.EchoBidi(ctx)
+func echoBidi(ctx context.Context, client grpcechopb.EchoClient, input grpcRequest, responseBytes *int) ([]streamedMessage, error) {
+	stream, err := client.EchoBidi(ctx, grpc.MaxCallRecvMsgSize(maxResponseBody))
 	if err != nil {
 		return nil, err
 	}
@@ -266,6 +290,10 @@ func echoBidi(ctx context.Context, client grpcechopb.EchoClient, input grpcReque
 		if err != nil {
 			return nil, err
 		}
+		if len(received.GetMessage()) > maxResponseBody-*responseBytes {
+			return nil, errors.New("gRPC response exceeds size limit")
+		}
+		*responseBytes += len(received.GetMessage())
 		out = append(out, streamedMessage{Message: received.GetMessage(), Index: received.GetIndex()})
 	}
 
