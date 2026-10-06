@@ -368,24 +368,9 @@ The `glutton_storage` benchmark evaluates Substrate External Volume lifecycle pe
 The `glutton-storage` template is deployed only when a StorageClass is set,
 because it needs a CSI driver that not every cluster has.
 
-* `--volume-pool`: Filestore volume pool resource name,
-  `projects/<project>/locations/<location>/volumePools/<name>`. `deploy.sh`
-  creates the `filestore-volumepool` StorageClass for the pool and deploys
-  `glutton-storage` on it. Can also be set with the `VOLUME_POOL` env var (for
-  example in `.ate-dev-env.sh`) or `volumePool` in `tests.yaml`. The pool must
-  already exist and have available volumes, and the cluster needs the
-  Filestore CSI driver.
-* `--storage-class-name`: StorageClass for the external volume (default
-  `filestore-volumepool` when a volume pool is set; otherwise, e.g.
-  `csi-nfs-sc` on kind). Can also be set with the `STORAGE_CLASS_NAME` env var
+* `--storage-class-name`: StorageClass for the external volume, e.g.
+  `csi-nfs-sc` on kind. Can also be set with the `STORAGE_CLASS_NAME` env var
   or `storageClassName` in `tests.yaml`.
-
-Example:
-
-```bash
-benchmarking/deploy_locust.sh --deploy \
-  --volume-pool projects/my-project/locations/us-west1/volumePools/my-pool
-```
 
 #### Storage Reported Metrics
 

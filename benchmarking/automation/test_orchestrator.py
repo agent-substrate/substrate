@@ -54,6 +54,7 @@ class DeployWorkloadsTest(unittest.TestCase):
             actor_memory="1536Mi",
             wait_timeout_secs=600,
             worker_memory="5Gi",
+            storage_class_name="benchmark-storage",
         )
         run.assert_called_once_with(
             [
@@ -67,6 +68,8 @@ class DeployWorkloadsTest(unittest.TestCase):
                 "1536Mi",
                 "--worker-memory",
                 "5Gi",
+                "--storage-class-name",
+                "benchmark-storage",
                 "--wait-timeout",
                 "600",
             ]

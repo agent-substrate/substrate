@@ -44,13 +44,8 @@
 #   storageClassName
 #                  Optional (default: none). StorageClass for the
 #                  glutton-storage external volume. Setting it deploys the
-#                  glutton-storage template. Storage suites use
-#                  "filestore-volumepool", which workloads/deploy.sh creates
-#                  when VOLUME_POOL is set (from volumePool below or the
-#                  target cluster's env file).
-#   volumePool     Optional. Filestore volume pool resource name,
-#                  projects/P/locations/L/volumePools/ID. Overrides
-#                  VOLUME_POOL from the target cluster's env file.
+#                  glutton-storage template. The class must already exist
+#                  on the cluster.
 #   workerWaitTimeout
 #                  Optional (default 300, set by workloads/deploy.sh).
 #                  Whole seconds to wait after the WorkerPool deploy for
