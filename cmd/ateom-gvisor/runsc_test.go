@@ -18,6 +18,8 @@ package main
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 
@@ -34,88 +36,121 @@ var testActorDirs = &ateompb.ActorDirs{
 	OciBundleDir: "/node/actors/test-actor-123/bundle",
 }
 
-func TestKillArgs(t *testing.T) {
-	r := &runsc{
-		path:      "/usr/bin/runsc",
-		actorUID:  "test-actor-123",
-		actorDirs: testActorDirs,
+func mustFlagStore(t *testing.T) *flagStore {
+	t.Helper()
+	cfgPath := filepath.Join(t.TempDir(), "flags.json")
+	const testFlagsJSON = `{
+  "globalFlags": [
+    "-global1",
+    "-global2"
+  ],
+  "commands": {
+    "restore": {
+      "globalFlags": ["-restore-global"],
+      "subcommandFlags": ["-restore-sub1", "-restore-sub2"]
+    },
+    "start": {
+      "globalFlags": ["-start-global"]
+    },
+    "list": {
+      "subcommandFlags": ["-list-sub"]
+    }
+  }
+}`
+	if err := os.WriteFile(cfgPath, []byte(testFlagsJSON), 0o600); err != nil {
+		t.Fatalf("failed to write test flags.json: %v", err)
 	}
-
-	got := r.killArgs("my-container", "SIGTERM")
-	want := []string{
-		"-log-format", "json",
-		"--alsologtostderr",
-		"-root", "/node/actors/test-actor-123/runsc-state",
-		"kill",
-		"my-container",
-		"SIGTERM",
+	store, err := newFlagStore(t.Context(), cfgPath)
+	if err != nil {
+		t.Fatalf("newFlagStore(%s) failed: %v", cfgPath, err)
 	}
-
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("killArgs() = %v, want %v", got, want)
-	}
+	return store
 }
 
-func TestWaitArgs(t *testing.T) {
+func TestBuildArgs(t *testing.T) {
 	r := &runsc{
 		path:      "/usr/bin/runsc",
 		actorUID:  "test-actor-123",
 		actorDirs: testActorDirs,
+		flags:     mustFlagStore(t),
 	}
 
-	got := r.waitArgs("my-container")
-	want := []string{
-		"-log-format", "json",
-		"--alsologtostderr",
-		"-root", "/node/actors/test-actor-123/runsc-state",
-		"wait",
-		"my-container",
-	}
-
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("waitArgs() = %v, want %v", got, want)
-	}
-}
-
-func TestPauseArgs(t *testing.T) {
-	r := &runsc{
-		path:      "/usr/bin/runsc",
-		actorUID:  "test-actor-123",
-		actorDirs: testActorDirs,
-	}
-
-	got := r.pauseArgs(ocispec.PauseContainer)
-	want := []string{
-		"-log-format", "json",
-		"--alsologtostderr",
-		"-root", "/node/actors/test-actor-123/runsc-state",
-		"pause",
-		ocispec.PauseContainer,
-	}
-
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("pauseArgs() = %v, want %v", got, want)
-	}
-}
-
-func TestResumeArgs(t *testing.T) {
-	r := &runsc{
-		path:      "/usr/bin/runsc",
-		actorUID:  "test-actor-123",
-		actorDirs: testActorDirs,
-	}
-
-	got := r.resumeArgs(ocispec.PauseContainer)
-	want := []string{
-		"-log-format", "json",
-		"--alsologtostderr",
-		"-root", "/node/actors/test-actor-123/runsc-state",
-		"resume",
-		ocispec.PauseContainer,
-	}
-
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("resumeArgs() = %v, want %v", got, want)
+	for _, tc := range []struct {
+		name          string
+		command       string
+		containerName string
+		extraArgs     []string
+		want          []string
+	}{
+		{
+			name:          "kill",
+			command:       "kill",
+			containerName: "",
+			extraArgs:     []string{"my-container", "SIGTERM"},
+			want: []string{
+				"-global1",
+				"-global2",
+				"-root", "/node/actors/test-actor-123/runsc-state",
+				"kill",
+				"my-container",
+				"SIGTERM",
+			},
+		},
+		{
+			name:          "wait",
+			command:       "wait",
+			containerName: "my-container",
+			want: []string{
+				"-global1",
+				"-global2",
+				"-root", "/node/actors/test-actor-123/runsc-state",
+				"wait",
+				"my-container",
+			},
+		},
+		{
+			name:          "pause",
+			command:       "pause",
+			containerName: ocispec.PauseContainer,
+			want: []string{
+				"-global1",
+				"-global2",
+				"-root", "/node/actors/test-actor-123/runsc-state",
+				"pause",
+				ocispec.PauseContainer,
+			},
+		},
+		{
+			name:          "resume",
+			command:       "resume",
+			containerName: ocispec.PauseContainer,
+			want: []string{
+				"-global1",
+				"-global2",
+				"-root", "/node/actors/test-actor-123/runsc-state",
+				"resume",
+				ocispec.PauseContainer,
+			},
+		},
+		{
+			name:          "list",
+			command:       "list",
+			containerName: "",
+			want: []string{
+				"-global1",
+				"-global2",
+				"-root", "/node/actors/test-actor-123/runsc-state",
+				"list",
+				"-list-sub",
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := r.buildArgs(tc.command, tc.containerName, tc.extraArgs...)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("buildArgs(%q, %q, %v) = %v, want %v", tc.command, tc.containerName, tc.extraArgs, got, tc.want)
+			}
+		})
 	}
 }
 
@@ -124,21 +159,22 @@ func TestRestoreArgs(t *testing.T) {
 		path:      "/usr/bin/runsc",
 		actorUID:  "test-actor-123",
 		actorDirs: testActorDirs,
+		flags:     mustFlagStore(t),
 	}
 	checkpointDir := "/node/actors/test-actor-123/checkpoints/snap-1"
 
 	got := r.restoreArgs(ocispec.PauseContainer, checkpointDir)
 	want := []string{
-		"-log-format", "json",
-		"--alsologtostderr",
+		"-global1",
+		"-global2",
+		"-restore-global",
 		"-root", "/node/actors/test-actor-123/runsc-state",
-		"--cpu-num-from-quota",
 		"restore",
+		"-restore-sub1",
+		"-restore-sub2",
 		"-bundle", "/node/actors/test-actor-123/bundle/" + ocispec.PauseContainer,
 		"-image-path", checkpointDir,
 		"-pid-file", "/node/actors/test-actor-123/pidfiles/" + ocispec.PauseContainer + ".pid",
-		"-background",
-		"-detach",
 		ocispec.PauseContainer,
 	}
 
