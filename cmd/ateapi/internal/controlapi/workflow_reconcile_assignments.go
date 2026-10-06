@@ -114,6 +114,7 @@ var errActorBusy = errors.New("actor has an operation in progress")
 func (w *WorkerWorkflow) releaseAssignmentsBefore(ctx context.Context, worker *ateapipb.Worker, epoch int64) error {
 	name := worker.GetMetadata().GetName()
 	busy := 0
+	var node nodeReclaim
 	// Releasing deletes rows mid-scan, which paging tolerates: the cursor is
 	// the last actor UID listed, not an offset.
 	for token := ""; ; {
@@ -125,7 +126,7 @@ func (w *WorkerWorkflow) releaseAssignmentsBefore(ctx context.Context, worker *a
 			if assignment.GetWorkerEpoch() >= epoch {
 				continue
 			}
-			err := w.releaseEarlierAssignment(ctx, worker, assignment, epoch)
+			err := w.releaseEarlierAssignment(ctx, worker, assignment, epoch, &node)
 			if errors.Is(err, errActorBusy) {
 				busy++
 				continue
@@ -149,12 +150,12 @@ func (w *WorkerWorkflow) releaseAssignmentsBefore(ctx context.Context, worker *a
 // Worker before epoch, under its Actor's lease so no operation on the Actor is
 // midway. The Actor, read under the lease, may have been bound here again in
 // the current epoch since the list; its assignment then carries that epoch, as
-// the rebound row does, and is left alone. An Actor still running on it is
-// crashed first and its row released after, so a failure in between leaves the
-// row for a retry to find, and the Actor already CRASHED. A row whose Actor
-// does not point here is left over from an operation that failed partway, and
-// is released.
-func (w *WorkerWorkflow) releaseEarlierAssignment(ctx context.Context, worker *ateapipb.Worker, assignment *ateapipb.ActorAssignment, epoch int64) error {
+// the rebound row does, and is left alone. An Actor still running on it has
+// its node state reclaimed, is crashed, and its row released after, so a
+// failure in between leaves the row for a retry to find, and the Actor already
+// CRASHED. A row whose Actor does not point here is left over from an
+// operation that failed partway, and is released.
+func (w *WorkerWorkflow) releaseEarlierAssignment(ctx context.Context, worker *ateapipb.Worker, assignment *ateapipb.ActorAssignment, epoch int64, node *nodeReclaim) error {
 	name := worker.GetMetadata().GetName()
 	release := func() error {
 		if _, err := w.store.ReleaseActorFromWorker(ctx, name, assignment.GetActorUid()); err != nil {
@@ -195,6 +196,10 @@ func (w *WorkerWorkflow) releaseEarlierAssignment(ctx context.Context, worker *a
 		return nil
 	}
 	if actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+		// The restart took the sandbox but not the actor's directory, and no
+		// RPC told atelet, which still registers the actor, so its sweep
+		// would keep the directory until atelet restarts.
+		w.reclaimActorStateOnNode(ctx, worker, actor, node)
 		if err := w.crashBoundActor(ctx, worker, actorRef, actor, "Releasing actor from a worker whose ateom restarted", crashMessageAteomRestarted); err != nil {
 			return err
 		}

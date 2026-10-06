@@ -31,14 +31,14 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// workerReclaimTimeout bounds each Terminate a worker delete sends to reclaim a
-// released actor's node state.
+// workerReclaimTimeout bounds each Terminate sent to reclaim the node state of
+// an actor released from its worker.
 var workerReclaimTimeout = 30 * time.Second
 
-// nodeReclaim carries, across the actors one DeleteWorker releases, whether
-// their node's atelet is still worth asking. A worker lives on one node, so once
-// a reclaim there times out or cannot connect, the rest would only wait out the
-// same timeout; they are left for the orphan sweep.
+// nodeReclaim carries, across the actors one pass releases from a worker,
+// whether their node's atelet is still worth asking. A worker lives on one node,
+// so once a reclaim there times out or cannot connect, the rest would only wait
+// out the same timeout; they are left for the orphan sweep.
 type nodeReclaim struct {
 	gaveUp bool
 }
@@ -277,17 +277,18 @@ func (w *WorkerWorkflow) crashBoundActor(ctx context.Context, worker *ateapipb.W
 // (/var/lib/ate/actors/<uid>: durable dir, checkpoint and restore
 // images — gigabytes for a durdir actor) and unmounts its external volumes.
 //
-// The worker's pod, and the ateom with it, is gone by the time this runs; the
-// node's atelet is not. atelet tolerates the missing ateom and reclaims the
-// directories anyway.
+// The worker's ateom is gone by the time this runs, with its pod or by
+// restarting; the node's atelet is not. atelet tolerates a missing ateom, and a
+// restarted one tears down whatever is left of the actor, so the directories
+// are reclaimed either way.
 //
 // Best-effort by construction: a node that cannot be reached must not wedge the
-// deregistration of its workers. Nothing retries this call, but what it misses
-// is not lost: the actor's delete or revert reclaims it on its assigned node,
-// and the orphan sweep collects it once atelet no longer hosts the actor. The
-// Terminate gets workerReclaimTimeout: an unmount that hangs, such as one
-// against a dead NFS server, would otherwise run out the delete's own deadline
-// and fail the release after it.
+// release. Nothing retries this call, but what it misses is not lost: the
+// actor's delete or revert reclaims it on its assigned node, and the orphan
+// sweep collects it once atelet no longer hosts the actor. The Terminate gets
+// workerReclaimTimeout: an unmount that hangs, such as one against a dead NFS
+// server, would otherwise run out the caller's deadline and fail the release
+// after it.
 func (w *WorkerWorkflow) reclaimActorStateOnNode(ctx context.Context, worker *ateapipb.Worker, actor *ateapipb.Actor, node *nodeReclaim) {
 	ctx, done := stepSpan(ctx, "ReclaimActorStateOnNode")
 	defer func() { _ = done(nil) }()
@@ -333,7 +334,7 @@ func (w *WorkerWorkflow) reclaimActorStateOnNode(ctx context.Context, worker *at
 		return
 	}
 
-	slog.InfoContext(ctx, "Reclaiming the node state of an actor released from a worker whose pod is gone", logAttrs...)
+	slog.InfoContext(ctx, "Reclaiming the node state of an actor released from its worker", logAttrs...)
 	// The template is not resolvable from this workflow — and would be the
 	// wrong thing to block on if it were, since a delete can outlive it. The
 	// fallback spec carries what the teardown acts on: the external volumes to

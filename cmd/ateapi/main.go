@@ -309,7 +309,7 @@ func main() {
 	templateReconciler.Start(shutdownCtx)
 
 	// Crash the Actors lost when a Worker's ateom restarts.
-	workerAssignmentReconciler := controlapi.NewWorkerAssignmentReconciler(persistence, workerCache)
+	workerAssignmentReconciler := controlapi.NewWorkerAssignmentReconciler(persistence, workerCache, ateletDialer)
 	workerAssignmentReconciler.Start(shutdownCtx)
 
 	lisCfg := &net.ListenConfig{}
