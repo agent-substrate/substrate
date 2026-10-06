@@ -127,11 +127,11 @@ type ControlClient interface {
 	ListTags(ctx context.Context, in *ListTagsRequest, opts ...grpc.CallOption) (*ListTagsResponse, error)
 	// Publish or unpublish a Tag without changing its address.
 	UpdateTag(ctx context.Context, in *UpdateTagRequest, opts ...grpc.CallOption) (*Tag, error)
-	// Delete a Tag and the external snapshot it owns. Actors created from the
-	// tag that have not yet been suspended still point at that external snapshot
-	// and become unrecoverable, so do not delete a tag while such Actors exist.
-	// Fails with `FAILED_PRECONDITION`, leaving the tag unchanged, while the tag
-	// owns ExternalVolumeSnapshots.
+	// Delete a Tag, the external snapshot it owns, and the
+	// ExternalVolumeSnapshots it owns along with their storage snapshots. Actors
+	// created from the tag that have not yet been suspended still point at that
+	// external snapshot and become unrecoverable, so do not delete a tag while
+	// such Actors exist.
 	DeleteTag(ctx context.Context, in *DeleteTagRequest, opts ...grpc.CallOption) (*Tag, error)
 	// Get an ExternalVolumeSnapshot.
 	GetExternalVolumeSnapshot(ctx context.Context, in *GetExternalVolumeSnapshotRequest, opts ...grpc.CallOption) (*ExternalVolumeSnapshot, error)
@@ -701,11 +701,11 @@ type ControlServer interface {
 	ListTags(context.Context, *ListTagsRequest) (*ListTagsResponse, error)
 	// Publish or unpublish a Tag without changing its address.
 	UpdateTag(context.Context, *UpdateTagRequest) (*Tag, error)
-	// Delete a Tag and the external snapshot it owns. Actors created from the
-	// tag that have not yet been suspended still point at that external snapshot
-	// and become unrecoverable, so do not delete a tag while such Actors exist.
-	// Fails with `FAILED_PRECONDITION`, leaving the tag unchanged, while the tag
-	// owns ExternalVolumeSnapshots.
+	// Delete a Tag, the external snapshot it owns, and the
+	// ExternalVolumeSnapshots it owns along with their storage snapshots. Actors
+	// created from the tag that have not yet been suspended still point at that
+	// external snapshot and become unrecoverable, so do not delete a tag while
+	// such Actors exist.
 	DeleteTag(context.Context, *DeleteTagRequest) (*Tag, error)
 	// Get an ExternalVolumeSnapshot.
 	GetExternalVolumeSnapshot(context.Context, *GetExternalVolumeSnapshotRequest) (*ExternalVolumeSnapshot, error)
