@@ -69,3 +69,6 @@ Thumbs.db
 
 # Substrate agent workspace scratchpads
 .agents/scratch/
+
+# Amp orb portal metadata
+.amp/portals/*
