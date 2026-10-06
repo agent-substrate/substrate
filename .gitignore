@@ -69,3 +69,4 @@ Thumbs.db
 
 # Substrate agent workspace scratchpads
 .agents/scratch/
+/cmd/benchmarking/isolate/fake-atelet/fake-atelet
