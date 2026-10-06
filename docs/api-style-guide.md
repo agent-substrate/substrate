@@ -605,3 +605,26 @@ Rules:
 
 All fields of all APIs must be validated.  We use
 [validation-gen](https://github.com/kubernetes/code-generator/tree/master/cmd/validation-gen) to generate validation code for our APIs.  See [the guidelines for validation](api-validation.md) for more information.
+
+---
+
+## 11. Sensitive Fields (`debug_redact`)
+
+*Substrate-specific. No AIP covers this.*
+
+A field that holds a secret **must** carry the standard protobuf `debug_redact` option. Substrate servers mask labeled fields when they log a message, so request and response bodies can be logged without leaking the secrets in them.
+
+```proto
+message EnvVar {
+  string name = 1;
+  string value = 2 [ debug_redact = true ];
+}
+```
+
+Rules:
+- Label a field whose value grants access to something, or is secret material provided by the user: bearer tokens and JWTs (`MintActorJWTResponse.actor_jwt`), keys, passwords, secret bytes, and user-supplied values that may hold secrets (`EnvVar.value`).
+- Do not label a reference to a secret, such as an `ate-secret://` URI (`CredentialHeader.credential_uri`). It names the secret and grants nothing by itself. Do not label identifiers, names, or list cursors (`page_token`).
+- Prefer labeling the leaf field over the message that contains it, so the rest of the message stays readable in logs: a log line still shows which env var was set, but not its value. Label a message-typed field only when the whole message is secret.
+- Add the label in the same change that adds the field. A label added later does not help lines already logged.
+
+What the label does and does not cover in the Go servers is described in [Logging Best Practices](dev/best-practices/logging.md#logging-protos-that-hold-secrets).

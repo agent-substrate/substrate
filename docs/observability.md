@@ -231,6 +231,12 @@ labels."ate.actor.uid"="8f2a…" AND jsonPayload.msg="Actor usage sample"
 
 **Do not put actor identity on a log-based metric.** Aggregating these events in the log store is what they are for, but a log-based metric built over them must label only by the bounded set (template, sandbox class, source, pool) — promoting `ate.actor.uid` or `ate.actor.name` into a metric label reintroduces exactly the per-actor cardinality this split keeps out of the TSDB.
 
+### Secrets in Component Logs
+
+Component logs mask proto fields marked `debug_redact`, such as actor JWTs and env var values: a request or response body in a log line shows `[REDACTED]` in their place. An actor's own container output is not touched.
+
+> **Developer Guide:** For how to log protos that hold secrets, see [Logging Best Practices](dev/best-practices/logging.md).
+
 ---
 
 ## 2. Metrics
