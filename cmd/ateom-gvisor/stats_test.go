@@ -622,3 +622,55 @@ func TestSweepUsageDeadSandboxConcurrentSweeps(t *testing.T) {
 		t.Fatalf("got %d dead-sandbox warnings from concurrent sweeps, want 1; logs:\n%s", n, logs)
 	}
 }
+
+// drainedCgroup is the sandbox leaf after a drain has killed the app
+// containers: the sentry and gofers stay in the pause leaf, so it is still
+// populated.
+var drainedCgroup = map[string]string{
+	"memory.current": "31457280\n",
+	"memory.events":  "oom 0\noom_kill 0\n",
+	"cgroup.events":  "populated 1\nfrozen 0\n",
+}
+
+// TestDeadSandboxCheckDuringDrain pins what the check does while
+// gracefulShutdown runs. The drain kills the app containers without taking
+// actor locks or unhosting, but it never stops the sandbox, so the leaf stays
+// populated and nothing is logged. A sandbox that dies during the drain is
+// still reported.
+func TestDeadSandboxCheckDuringDrain(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		files     map[string]string
+		wantWarns int
+	}{
+		{name: "app containers killed, sentry alive", files: drainedCgroup},
+		{name: "sandbox died during the drain", files: deadCgroup, wantWarns: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logs := captureWarnings(t)
+			s := newStatsService(t, tc.files)
+			setHostedActor(s, &testActor)
+			s.shuttingDown.Store(true)
+
+			s.sweepUsage(context.Background())
+			if n := strings.Count(logs.String(), deadSandboxMsg); n != tc.wantWarns {
+				t.Fatalf("got %d dead-sandbox warnings, want %d; logs:\n%s", n, tc.wantWarns, logs)
+			}
+		})
+	}
+}
+
+// TestDrainNeverKillsPauseContainer: gracefulShutdown kills the names
+// containerNames takes from the spec. atelet rejects a spec that names the
+// pause container, so the drain cannot stop the sandbox itself.
+func TestDrainNeverKillsPauseContainer(t *testing.T) {
+	if err := resources.ValidateContainerNames([]string{ocispec.PauseContainer}); err == nil {
+		t.Fatalf("ValidateContainerNames accepted %q; a spec could then put it on the drain's kill list", ocispec.PauseContainer)
+	}
+	spec := []*ateompb.Container{{Name: "app"}, {Name: "sidecar"}}
+	for _, name := range containerNames(spec) {
+		if name == ocispec.PauseContainer {
+			t.Fatalf("containerNames(%v) includes %q", spec, ocispec.PauseContainer)
+		}
+	}
+}
