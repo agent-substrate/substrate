@@ -57,10 +57,20 @@ spec:
         envFrom:
         - configMapRef:
             name: ate-api-server-envvars
+        # The image runs as root by default. 65532 is the distroless nonroot
+        # user, so the passfile stays readable if ateapi ever runs as it too.
         securityContext:
           runAsNonRoot: true
+          runAsUser: 65532
+          runAsGroup: 65532
           allowPrivilegeEscalation: false
           readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+        env:
+        # The AWS CLI keeps its cache under $HOME.
+        - name: HOME
+          value: /tmp
         resources:
           requests:
             cpu: 10m
@@ -68,6 +78,8 @@ spec:
         volumeMounts:
         - name: rds-iam
           mountPath: /run/rds-iam
+        - name: rds-iam-tmp
+          mountPath: /tmp
         startupProbe:
           exec:
             command: ["test", "-s", "/run/rds-iam/pgpass"]
@@ -88,5 +100,8 @@ spec:
           readOnly: true
       volumes:
       - name: rds-iam
+        emptyDir:
+          medium: Memory
+      - name: rds-iam-tmp
         emptyDir:
           medium: Memory
