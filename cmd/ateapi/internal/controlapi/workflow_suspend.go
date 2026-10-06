@@ -79,11 +79,11 @@ func (w *ActorWorkflow) SuspendActor(ctx context.Context, actorRef resources.Act
 		return nil, err
 	}
 	actor = marked
-	var snapshotFiles []string
+	var files *ateletpb.CheckpointResponse
 	if fromPaused {
-		wireSnapshotScope, snapshotFiles, err = w.ensurePausedSnapshotUploaded(leaseCtx, actorRef, actor, actorTemplate)
+		wireSnapshotScope, files, err = w.ensurePausedSnapshotUploaded(leaseCtx, actorRef, actor, actorTemplate)
 	} else {
-		wireSnapshotScope, snapshotFiles, err = w.ensureAteletSuspended(leaseCtx, actorRef, actor, actorTemplate)
+		wireSnapshotScope, files, err = w.ensureAteletSuspended(leaseCtx, actorRef, actor, actorTemplate)
 	}
 	if err != nil {
 		return nil, err
@@ -95,7 +95,7 @@ func (w *ActorWorkflow) SuspendActor(ctx context.Context, actorRef resources.Act
 	// them here, as crash.go does for the crash counter.
 	finalAttrs = lifecycleOpAttrs(actor, actorTemplate, "", wireSnapshotScope)
 	var finalized *ateapipb.Actor
-	if finalized, err = w.ensureSuspendedFinalized(leaseCtx, actorRef, actorTemplate, snapshotFiles); err != nil {
+	if finalized, err = w.ensureSuspendedFinalized(leaseCtx, actorRef, actorTemplate, files); err != nil {
 		return nil, err
 	}
 	actor = finalized
@@ -204,8 +204,9 @@ func isPausedOriginSuspend(actor *ateapipb.Actor) bool {
 // the request is keyed by the actor UID, the worker pod UID, and the
 // once-minted snapshot location, so a re-entered workflow re-sends the same
 // semantic request; once atelet's Checkpoint is idempotent on those keys this
-// step becomes fully reentrant with no changes here.
-func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (wireSnapshotScope string, snapshotFiles []string, err error) {
+// step becomes fully reentrant with no changes here. It returns the files
+// atelet reports for the snapshot.
+func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (wireSnapshotScope string, files *ateletpb.CheckpointResponse, err error) {
 	ctx, done := stepSpan(ctx, "CallAteletSuspend")
 	defer func() { err = done(err) }()
 
@@ -253,7 +254,7 @@ func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef reso
 	if err != nil {
 		return wireSnapshotScope, nil, handleAteletError(ctx, w.store, actorRef, ateattr.OperationSuspend, "Checkpoint", false, err)
 	}
-	return wireSnapshotScope, resp.GetSnapshotFiles(), nil
+	return wireSnapshotScope, resp, nil
 }
 
 // ensurePausedSnapshotUploaded suspends a PAUSED actor by telling the atelet
@@ -262,8 +263,9 @@ func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef reso
 // ateom to checkpoint. Retries re-send the same semantic request: the
 // destination is minted once and the upload overwrites deterministic object
 // names. A retry after atelet pruned the local snapshot succeeds when every
-// file the upload writes is already at the destination.
-func (w *ActorWorkflow) ensurePausedSnapshotUploaded(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (wireSnapshotScope string, snapshotFiles []string, err error) {
+// file the upload writes is already at the destination. It returns the files
+// of the uploaded snapshot.
+func (w *ActorWorkflow) ensurePausedSnapshotUploaded(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (wireSnapshotScope string, files *ateletpb.CheckpointResponse, err error) {
 	ctx, done := stepSpan(ctx, "UploadPausedCheckpoint")
 	defer func() { err = done(err) }()
 
@@ -308,8 +310,13 @@ func (w *ActorWorkflow) ensurePausedSnapshotUploaded(ctx context.Context, actorR
 		return wireSnapshotScope, nil, handleAteletError(ctx, w.store, actorRef, ateattr.OperationSuspend, "UploadPausedCheckpoint", false, err)
 	}
 	// atelet uploads only the files the desired scope needs, so the uploaded
-	// snapshot can be a subset of the paused one.
-	return wireSnapshotScope, resp.GetSnapshotFiles(), nil
+	// snapshot can be a subset of the paused one. A DATA upload consists of
+	// data files only; a FULL upload carries the pause's data files.
+	dataFiles := local.GetDataSnapshotFiles()
+	if req.DesiredScope == ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA {
+		dataFiles = resp.GetSnapshotFiles()
+	}
+	return wireSnapshotScope, &ateletpb.CheckpointResponse{SnapshotFiles: resp.GetSnapshotFiles(), DataSnapshotFiles: dataFiles}, nil
 }
 
 // newInProgressSnapshotURI is where the snapshot an actor is currently taking is
@@ -341,9 +348,9 @@ func (w *ActorWorkflow) ensureVolumesDetached(ctx context.Context, actor *ateapi
 // single update, then releases the external snapshot that update replaced.
 // It re-reads the actor first so an out-of-band transition (e.g. the syncer
 // crashing the actor after its worker died) is not overwritten: with no
-// assignment left there is nothing to finalize. snapshotFiles are the
-// files the suspend checkpoint or upload wrote.
-func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef resources.ActorRef, actorTemplate *ateapipb.ActorTemplate, snapshotFiles []string) (_ *ateapipb.Actor, err error) {
+// assignment left there is nothing to finalize. files are the files the
+// suspend checkpoint or upload wrote.
+func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef resources.ActorRef, actorTemplate *ateapipb.ActorTemplate, files *ateletpb.CheckpointResponse) (_ *ateapipb.Actor, err error) {
 	ctx, done := stepSpan(ctx, "FinalizeSuspended")
 	defer func() { err = done(err) }()
 
@@ -396,10 +403,11 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 	externalSnapshot := latestActor.GetStatus().GetExternalSnapshot()
 	if inProgressSnapshotURI != "" {
 		externalSnapshot = &ateapipb.ExternalSnapshot{
-			SnapshotUri:      inProgressSnapshotURI,
-			ContentScope:     commitSnapshotScope(actorRef.Atespace, actorTemplate),
-			ActorTemplateUid: actorTemplate.GetMetadata().GetUid(),
-			SnapshotFiles:    snapshotFiles,
+			SnapshotUri:       inProgressSnapshotURI,
+			ContentScope:      commitSnapshotScope(actorRef.Atespace, actorTemplate),
+			ActorTemplateUid:  actorTemplate.GetMetadata().GetUid(),
+			SnapshotFiles:     files.GetSnapshotFiles(),
+			DataSnapshotFiles: files.GetDataSnapshotFiles(),
 		}
 	}
 

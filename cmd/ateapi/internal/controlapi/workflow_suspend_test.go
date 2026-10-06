@@ -17,6 +17,7 @@ package controlapi
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
@@ -24,6 +25,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/objectstore/objectstoretest"
+	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
@@ -781,5 +783,98 @@ func TestSuspendActor_PausedWithoutLocalSnapshotCrashes(t *testing.T) {
 	}
 	if msg, want := got.GetStatus().GetCrash().GetMessage(), "suspend failed: "+crashMessageLocalSnapshotNodeUnknown; msg != want {
 		t.Errorf("crash message = %q, want %q", msg, want)
+	}
+}
+
+// TestEnsurePausedSnapshotUploaded_Files pins the file lists a paused-origin
+// suspend hands to finalize: a FULL upload keeps the pause's data files, and
+// a DATA upload of a FULL capture consists of nothing but data files.
+func TestEnsurePausedSnapshotUploaded_Files(t *testing.T) {
+	pauseFiles := []string{"checkpoint.img", "durable-dir.tar"}
+	pauseDataFiles := []string{"durable-dir.tar"}
+
+	for _, tc := range []struct {
+		name          string
+		onCommit      ateapipb.SnapshotContentScope
+		wantFiles     []string
+		wantDataFiles []string
+	}{
+		{"full commit", ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, pauseFiles, pauseDataFiles},
+		{"data commit", ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA, pauseDataFiles, pauseDataFiles},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			persistence := newTestPersistence(t)
+			w, _ := newWireCaptureWorkflow(t, persistence)
+
+			actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+			created := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+				Metadata: &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+				Status: &ateapipb.ActorStatus{
+					State:                 ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
+					InProgressSnapshotUri: someActorSnapshotURI(t, testStorageLocation, "team-a", "snap-dest"),
+					LocalSnapshot: &ateapipb.LocalSnapshot{
+						SnapshotName:              "snap",
+						NodeVmsWithLocalSnapshots: []string{"node-1"},
+						ContentScope:              ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+						SnapshotFiles:             pauseFiles,
+						DataSnapshotFiles:         pauseDataFiles,
+					},
+				},
+			})
+			tmpl := &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{
+				StorageLocation: testStorageLocation,
+				OnPause:         ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+				OnCommit:        tc.onCommit,
+			}}
+
+			_, files, err := w.ensurePausedSnapshotUploaded(ctx, actorRef, created, tmpl)
+			if err != nil {
+				t.Fatalf("ensurePausedSnapshotUploaded: %v", err)
+			}
+			if got := files.GetSnapshotFiles(); !slices.Equal(got, tc.wantFiles) {
+				t.Errorf("snapshot files = %q, want %q", got, tc.wantFiles)
+			}
+			if got := files.GetDataSnapshotFiles(); !slices.Equal(got, tc.wantDataFiles) {
+				t.Errorf("data snapshot files = %q, want %q", got, tc.wantDataFiles)
+			}
+		})
+	}
+}
+
+// TestEnsureSuspendedFinalized_RecordsFiles pins that finalize records both
+// file lists on the actor's new external snapshot.
+func TestEnsureSuspendedFinalized_RecordsFiles(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	w := &ActorWorkflow{store: persistence}
+
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+	storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+		Status: &ateapipb.ActorStatus{
+			State:                 ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
+			InProgressSnapshotUri: someActorSnapshotURI(t, testStorageLocation, "team-a", "snap-dest"),
+		},
+	})
+	tmpl := &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{
+		StorageLocation: testStorageLocation,
+		OnCommit:        ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+	}}
+	files := &ateletpb.CheckpointResponse{
+		SnapshotFiles:     []string{"checkpoint.img", "durable-dir.tar"},
+		DataSnapshotFiles: []string{"durable-dir.tar"},
+	}
+
+	stored, err := w.ensureSuspendedFinalized(ctx, actorRef, tmpl, files)
+	if err != nil {
+		t.Fatalf("ensureSuspendedFinalized: %v", err)
+	}
+	ext := stored.GetStatus().GetExternalSnapshot()
+	if got := ext.GetSnapshotFiles(); !slices.Equal(got, files.GetSnapshotFiles()) {
+		t.Errorf("ExternalSnapshot.SnapshotFiles = %q, want %q", got, files.GetSnapshotFiles())
+	}
+	if got := ext.GetDataSnapshotFiles(); !slices.Equal(got, files.GetDataSnapshotFiles()) {
+		t.Errorf("ExternalSnapshot.DataSnapshotFiles = %q, want %q", got, files.GetDataSnapshotFiles())
 	}
 }

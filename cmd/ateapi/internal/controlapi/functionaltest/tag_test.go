@@ -219,6 +219,9 @@ func TestSnapshotFiles_SuspendTagResume(t *testing.T) {
 	if diff := cmp.Diff(checkpointFiles, actor.GetStatus().GetExternalSnapshot().GetSnapshotFiles()); diff != "" {
 		t.Errorf("ExternalSnapshot.SnapshotFiles mismatch (-want +got):\n%s", diff)
 	}
+	if diff := cmp.Diff(checkpointDataFiles, actor.GetStatus().GetExternalSnapshot().GetDataSnapshotFiles()); diff != "" {
+		t.Errorf("ExternalSnapshot.DataSnapshotFiles mismatch (-want +got):\n%s", diff)
+	}
 
 	tag, err := tc.client.CreateTag(ctx, &ateapipb.CreateTagRequest{
 		Tag: &ateapipb.Tag{
@@ -232,6 +235,9 @@ func TestSnapshotFiles_SuspendTagResume(t *testing.T) {
 	}
 	if diff := cmp.Diff(checkpointFiles, tag.GetStatus().GetSnapshot().GetSnapshotFiles()); diff != "" {
 		t.Errorf("tag snapshot files mismatch (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff(checkpointDataFiles, tag.GetStatus().GetSnapshot().GetDataSnapshotFiles()); diff != "" {
+		t.Errorf("tag data snapshot files mismatch (-want +got):\n%s", diff)
 	}
 
 	waitForWorkerAvailable(t, tc, workerName)

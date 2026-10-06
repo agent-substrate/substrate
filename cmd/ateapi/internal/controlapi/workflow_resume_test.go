@@ -1085,6 +1085,16 @@ func (f *capturingAtelet) Run(ctx context.Context, req *ateletpb.RunRequest) (*a
 	return &ateletpb.RunResponse{}, nil
 }
 
+// UploadPausedCheckpoint reports the files atelet would upload: the data
+// files when a FULL capture is uploaded as DATA, else every file.
+func (f *capturingAtelet) UploadPausedCheckpoint(ctx context.Context, req *ateletpb.UploadPausedCheckpointRequest) (*ateletpb.UploadPausedCheckpointResponse, error) {
+	files := req.GetSnapshotFiles()
+	if req.GetCapturedScope() == ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL && req.GetDesiredScope() == ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA {
+		files = req.GetDataSnapshotFiles()
+	}
+	return &ateletpb.UploadPausedCheckpointResponse{SnapshotFiles: files}, nil
+}
+
 // requests returns the recorded Restore and Run requests, nil for an RPC that
 // was never called.
 func (f *capturingAtelet) requests() (*ateletpb.RestoreRequest, *ateletpb.RunRequest) {
@@ -1186,6 +1196,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 	// list the restore carries.
 	localFiles := []string{"local.img"}
 	externalFiles := []string{"external.img", "durable-dir.tar"}
+	externalDataFiles := []string{"durable-dir.tar"}
 	goldenFiles := []string{"golden.img"}
 
 	// actorSeed is the actor status a row persists before resuming.
@@ -1225,6 +1236,9 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 		snapshotName string
 		snapshotURI  string
 		scope        ateletpb.SnapshotScope
+		// dataFiles expects the external snapshot's data files rather than
+		// all of its files.
+		dataFiles bool
 	}
 
 	tests := []struct {
@@ -1292,6 +1306,21 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			name: "08 repointed actor's Full durable snapshot drops to Data",
 			actor: actorSeed{
 				externalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: actorURI, ContentScope: fullScope},
+				tmplUID:          "mismatch",
+			},
+			want: restoreWant{
+				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
+				snapshotURI:    actorURI,
+				scope:          ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA,
+				dataFiles:      true,
+			},
+		},
+		{
+			// A Data snapshot already holds only data files; a repointed
+			// actor restores all of them.
+			name: "08b repointed actor's Data durable snapshot keeps its files",
+			actor: actorSeed{
+				externalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: actorURI, ContentScope: dataScope},
 				tmplUID:          "mismatch",
 			},
 			want: restoreWant{
@@ -1520,6 +1549,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 						ext.ActorTemplateUid = uid
 					}
 					ext.SnapshotFiles = externalFiles
+					ext.DataSnapshotFiles = externalDataFiles
 					a.Status.ExternalSnapshot = ext
 				}
 			})
@@ -1569,8 +1599,11 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			}
 			// The files follow the snapshot the config names.
 			wantFiles := externalFiles
-			if tt.want.checkpointType == ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL {
+			switch {
+			case tt.want.checkpointType == ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL:
 				wantFiles = localFiles
+			case tt.want.dataFiles:
+				wantFiles = externalDataFiles
 			}
 			if got := restore.GetSnapshotFiles(); !slices.Equal(got, wantFiles) {
 				t.Errorf("SnapshotFiles = %q, want %q", got, wantFiles)

@@ -450,8 +450,19 @@ type ExternalSnapshot struct {
 	// +k8s:eachVal=+k8s:format=k8s-path-segment-name
 	// +k8s:eachVal=+k8s:maxLength=255
 	SnapshotFiles []string `protobuf:"bytes,4,rep,name=snapshot_files,json=snapshotFiles,proto3" json:"snapshot_files,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// The subset of snapshot_files that restores the actor at DATA scope on
+	// its own, as reported by the atelet that took it. A FULL snapshot
+	// restored at DATA scope downloads only these files. Empty when the
+	// snapshot holds no durable data.
+	//
+	// +k8s:optional
+	// +k8s:maxItems=64
+	// +k8s:listType=set
+	// +k8s:eachVal=+k8s:format=k8s-path-segment-name
+	// +k8s:eachVal=+k8s:maxLength=255
+	DataSnapshotFiles []string `protobuf:"bytes,5,rep,name=data_snapshot_files,json=dataSnapshotFiles,proto3" json:"data_snapshot_files,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *ExternalSnapshot) Reset() {
@@ -508,6 +519,13 @@ func (x *ExternalSnapshot) GetActorTemplateUid() string {
 func (x *ExternalSnapshot) GetSnapshotFiles() []string {
 	if x != nil {
 		return x.SnapshotFiles
+	}
+	return nil
+}
+
+func (x *ExternalSnapshot) GetDataSnapshotFiles() []string {
+	if x != nil {
+		return x.DataSnapshotFiles
 	}
 	return nil
 }
@@ -8034,12 +8052,13 @@ var File_ateapi_proto protoreflect.FileDescriptor
 
 const file_ateapi_proto_rawDesc = "" +
 	"\n" +
-	"\fateapi.proto\x12\x06ateapi\x1a\x1fgoogle/protobuf/timestamp.proto\"\xcd\x01\n" +
+	"\fateapi.proto\x12\x06ateapi\x1a\x1fgoogle/protobuf/timestamp.proto\"\xfd\x01\n" +
 	"\x10ExternalSnapshot\x12!\n" +
 	"\fsnapshot_uri\x18\x01 \x01(\tR\vsnapshotUri\x12A\n" +
 	"\rcontent_scope\x18\x02 \x01(\x0e2\x1c.ateapi.SnapshotContentScopeR\fcontentScope\x12,\n" +
 	"\x12actor_template_uid\x18\x03 \x01(\tR\x10actorTemplateUid\x12%\n" +
-	"\x0esnapshot_files\x18\x04 \x03(\tR\rsnapshotFiles\"\x90\x02\n" +
+	"\x0esnapshot_files\x18\x04 \x03(\tR\rsnapshotFiles\x12.\n" +
+	"\x13data_snapshot_files\x18\x05 \x03(\tR\x11dataSnapshotFiles\"\x90\x02\n" +
 	"\rLocalSnapshot\x12#\n" +
 	"\rsnapshot_name\x18\x01 \x01(\tR\fsnapshotName\x12@\n" +
 	"\x1dnode_vms_with_local_snapshots\x18\x02 \x03(\tR\x19nodeVmsWithLocalSnapshots\x12A\n" +

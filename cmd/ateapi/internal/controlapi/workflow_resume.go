@@ -45,6 +45,9 @@ type resumeSnapshotSource struct {
 	Scope       ateapipb.SnapshotContentScope
 	// SnapshotFiles are the files recorded for SnapshotURI.
 	SnapshotFiles []string
+	// DataSnapshotFiles are the subset of SnapshotFiles that restores the
+	// actor at DATA scope.
+	DataSnapshotFiles []string
 	// TemplateReplaced is true when the external snapshot's recorded template
 	// UID differs from the actor's current template.
 	TemplateReplaced bool
@@ -182,6 +185,7 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 		}
 		src.Scope = actor.GetStatus().GetExternalSnapshot().GetContentScope()
 		src.SnapshotFiles = actor.GetStatus().GetExternalSnapshot().GetSnapshotFiles()
+		src.DataSnapshotFiles = actor.GetStatus().GetExternalSnapshot().GetDataSnapshotFiles()
 		capturedUnder := actor.GetStatus().GetExternalSnapshot().GetActorTemplateUid()
 		src.TemplateReplaced = capturedUnder != "" && capturedUnder != actorTemplate.GetMetadata().GetUid()
 	}
@@ -672,8 +676,13 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		slog.InfoContext(ctx, "Actor has durable snapshot; Restoring from snapshot")
 		tele.SnapshotKind = ateattr.SnapshotKindLatest
 		scope := actorSnapshotContentScopeToAtelet(src.Scope)
+		files := src.SnapshotFiles
 		if src.TemplateReplaced {
 			scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA
+			// Restored as DATA, a FULL snapshot needs only its data files.
+			if src.Scope != ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA {
+				files = src.DataSnapshotFiles
+			}
 		}
 		tele.WireSnapshotScope = ateattr.SnapshotScopeValue(scope)
 		req := &ateletpb.RestoreRequest{
@@ -689,7 +698,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 					SnapshotUri: src.SnapshotURI.String(),
 				},
 			},
-			SnapshotFiles: src.SnapshotFiles,
+			SnapshotFiles: files,
 			Scope:         scope,
 			SandboxAssets: sandboxAssets,
 			ActorUid:      actor.GetMetadata().Uid,

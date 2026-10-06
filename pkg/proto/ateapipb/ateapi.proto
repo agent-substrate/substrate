@@ -202,6 +202,18 @@ message ExternalSnapshot {
   // +k8s:eachVal=+k8s:format=k8s-path-segment-name
   // +k8s:eachVal=+k8s:maxLength=255
   repeated string snapshot_files = 4;
+
+  // The subset of snapshot_files that restores the actor at DATA scope on
+  // its own, as reported by the atelet that took it. A FULL snapshot
+  // restored at DATA scope downloads only these files. Empty when the
+  // snapshot holds no durable data.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=64
+  // +k8s:listType=set
+  // +k8s:eachVal=+k8s:format=k8s-path-segment-name
+  // +k8s:eachVal=+k8s:maxLength=255
+  repeated string data_snapshot_files = 5;
 }
 
 // LocalSnapshot records information about a node-local snapshot.

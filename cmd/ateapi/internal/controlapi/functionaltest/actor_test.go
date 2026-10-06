@@ -3514,7 +3514,7 @@ func TestSuspendActor(t *testing.T) {
 		Scope:       ateapipb.TagScope_TAG_SCOPE_ATESPACE,
 		SourceActor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
 		Status: &ateapipb.TagStatus{
-			Snapshot:         &ateapipb.ExternalSnapshot{SnapshotUri: tagSnapshotURI, ContentScope: sourceActor.GetStatus().GetExternalSnapshot().GetContentScope(), SnapshotFiles: checkpointFiles},
+			Snapshot:         &ateapipb.ExternalSnapshot{SnapshotUri: tagSnapshotURI, ContentScope: sourceActor.GetStatus().GetExternalSnapshot().GetContentScope(), SnapshotFiles: checkpointFiles, DataSnapshotFiles: checkpointDataFiles},
 			ActorTemplateUid: tmpl.GetMetadata().GetUid(),
 			StorageLocation:  tmpl.GetSnapshotConfig().GetStorageLocation(),
 		},
@@ -3619,10 +3619,11 @@ func TestSuspendActor(t *testing.T) {
 		Status: &ateapipb.ActorStatus{
 			State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
 			ExternalSnapshot: &ateapipb.ExternalSnapshot{
-				SnapshotUri:      snapshotURI,
-				ContentScope:     sourceActor.GetStatus().GetExternalSnapshot().GetContentScope(),
-				ActorTemplateUid: tmpl.GetMetadata().GetUid(),
-				SnapshotFiles:    checkpointFiles,
+				SnapshotUri:       snapshotURI,
+				ContentScope:      sourceActor.GetStatus().GetExternalSnapshot().GetContentScope(),
+				ActorTemplateUid:  tmpl.GetMetadata().GetUid(),
+				SnapshotFiles:     checkpointFiles,
+				DataSnapshotFiles: checkpointDataFiles,
 			},
 		},
 	}
@@ -4654,6 +4655,10 @@ func TestSuspendActor_FromPaused(t *testing.T) {
 	}
 	if diff := cmp.Diff(uploadedFiles, actor.GetStatus().GetExternalSnapshot().GetSnapshotFiles()); diff != "" {
 		t.Errorf("ExternalSnapshot.SnapshotFiles mismatch (-want +got):\n%s", diff)
+	}
+	// A FULL upload carries the pause's data files.
+	if diff := cmp.Diff(checkpointDataFiles, actor.GetStatus().GetExternalSnapshot().GetDataSnapshotFiles()); diff != "" {
+		t.Errorf("ExternalSnapshot.DataSnapshotFiles mismatch (-want +got):\n%s", diff)
 	}
 }
 
