@@ -15,7 +15,10 @@
 package fakeworker
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"net/netip"
+	"net/url"
 	"regexp"
 	"strings"
 	"testing"
@@ -121,5 +124,28 @@ func TestValidateRun(t *testing.T) {
 		if err := ValidateRun(run); err == nil {
 			t.Errorf("ValidateRun(%q) = nil, want an error", run)
 		}
+	}
+}
+
+func TestVerifyPeerID(t *testing.T) {
+	const want = "spiffe://cluster.local/ns/benchmark-workloads/sa/fake-workersync"
+	state := func(path string) tls.ConnectionState {
+		cert := &x509.Certificate{}
+		if path != "" {
+			cert.URIs = []*url.URL{{Scheme: "spiffe", Host: "cluster.local", Path: path}}
+		}
+		return tls.ConnectionState{PeerCertificates: []*x509.Certificate{cert}}
+	}
+	if err := VerifyPeerID(state("/ns/benchmark-workloads/sa/fake-workersync"), want); err != nil {
+		t.Errorf("VerifyPeerID(matching) = %v", err)
+	}
+	if err := VerifyPeerID(state("/ns/ate-system/sa/atelet"), want); err == nil {
+		t.Error("VerifyPeerID accepted another workload")
+	}
+	if err := VerifyPeerID(state(""), want); err == nil {
+		t.Error("VerifyPeerID accepted a certificate with no SPIFFE ID")
+	}
+	if err := VerifyPeerID(tls.ConnectionState{}, want); err == nil {
+		t.Error("VerifyPeerID accepted no certificate")
 	}
 }

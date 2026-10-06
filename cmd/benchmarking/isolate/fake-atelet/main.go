@@ -15,7 +15,9 @@
 // Command fake-atelet stands in for atelet in control-plane benchmarks. It
 // runs as atelet's DaemonSet would, on the benchmark nodes only, so
 // ate-api-server dials it as the node's atelet. It answers every AteomHerder
-// call with success after a delay, without running or saving any workload.
+// call with success after a delay, without running or saving any workload,
+// and relays fake-workersync's capacity reports for the fake Workers on its
+// node, as atelet relays ateom's.
 //
 // Actors it "runs" do not exist. Never run it on a cluster that serves real
 // actors.
@@ -35,12 +37,16 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/agent-substrate/substrate/cmd/benchmarking/isolate/internal/fakeworker"
+	"github.com/agent-substrate/substrate/internal/ateapiauth"
 	"github.com/agent-substrate/substrate/internal/atelet"
 	"github.com/agent-substrate/substrate/internal/credbundle"
+	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/agent-substrate/substrate/pkg/objectstorage"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/spf13/pflag"
@@ -50,10 +56,15 @@ import (
 
 var (
 	port             = pflag.Int("port", atelet.DefaultPort, "Port to serve AteomHerder on. ate-api-server dials atelet.DefaultPort.")
+	relayPort        = pflag.Int("relay-port", fakeworker.DefaultRelayPort, "Port to serve fake-workersync's capacity reports on.")
+	relayAllowedID   = pflag.String("relay-allowed-spiffe-id", installdefaults.SPIFFEID("benchmark-workloads", "fake-workersync"), "The only SPIFFE ID allowed to send capacity reports.")
 	healthListenAddr = pflag.String("health-listen-addr", ":9090", "Address to serve /healthz and /readyz on.")
 
-	grpcServerCredBundle = pflag.String("grpc-server-cred-bundle", "/run/podidentity.podcert.ate.dev/credential-bundle.pem", "Credential bundle presented as the serving certificate.")
+	grpcServerCredBundle = pflag.String("grpc-server-cred-bundle", "/run/podidentity.podcert.ate.dev/credential-bundle.pem", "Credential bundle presented as the serving certificate and the ate-api-server client certificate.")
 	clientCACerts        = pflag.String("client-ca-certs", "/run/podidentity.podcert.ate.dev/trust-bundle.pem", "CA bundle used to verify client certificates.")
+	ateapiAddress        = pflag.String("ateapi-address", "dns:///api.ate-system.svc:443", "ate-api-server gRPC target for capacity reports.")
+	ateapiCAFile         = pflag.String("ateapi-ca-file", "/run/servicedns.podcert.ate.dev/trust-bundle.pem", "CA bundle used to verify ate-api-server.")
+	ateapiServerName     = pflag.String("ateapi-server-name", "api.ate-system.svc", "DNS name expected on the ate-api-server certificate.")
 
 	delay                       = pflag.Duration("delay", 0, "How long each AteomHerder call takes before it succeeds.")
 	delayRun                    = pflag.Duration("delay-run", -1, "Override --delay for Run. Negative uses --delay.")
@@ -88,6 +99,22 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to create the object storage client", err)
 	}
 
+	// No Kubernetes client: fake-atelet never calls the Kubernetes API, so the
+	// ate-api-server target is resolved through DNS rather than EndpointSlices.
+	dialOpts, err := ateapiauth.DialOptions(ateapiauth.ClientConfig{
+		CAFile:           *ateapiCAFile,
+		ServerName:       *ateapiServerName,
+		ClientCredBundle: *grpcServerCredBundle,
+	})
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to build ate-api-server client credentials", err)
+	}
+	ateapiConn, err := grpc.NewClient(*ateapiAddress, dialOpts...)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to create ate-api-server client", err)
+	}
+	defer ateapiConn.Close()
+
 	herderTLS, err := serverTLSConfig(*grpcServerCredBundle, *clientCACerts)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to build server TLS config", err)
@@ -96,17 +123,36 @@ func main() {
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to listen", err)
 	}
+	workers := ateapipb.NewWorkerServiceClient(ateapiConn)
 	h := &herder{delays: callDelays, storage: storage}
 	srv := grpc.NewServer(grpc.Creds(credentials.NewTLS(herderTLS)))
 	ateletpb.RegisterAteomHerderServer(srv, h)
+
+	relayTLS, err := relayTLSConfig(*grpcServerCredBundle, *clientCACerts, *relayAllowedID)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to build relay TLS config", err)
+	}
+	relayLis, err := net.Listen("tcp", ":"+strconv.Itoa(*relayPort))
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to listen for the capacity relay", err)
+	}
+	// Its own server and listener, so each port admits only its own caller:
+	// ate-api-server on the herder's, fake-workersync on the relay's.
+	relaySrv := grpc.NewServer(grpc.Creds(credentials.NewTLS(relayTLS)))
+	ateapipb.RegisterWorkerServiceServer(relaySrv, &relay{client: workers})
 	health := &http.Server{Addr: *healthListenAddr, Handler: healthHandler(), ReadHeaderTimeout: 10 * time.Second}
 
 	slog.WarnContext(ctx, "Serving the fake atelet: actor lifecycle calls succeed without running any workload",
-		slog.String("delays", fmt.Sprintf("%+v", callDelays)))
+		slog.String("delays", fmt.Sprintf("%+v", callDelays)), slog.String("relay_allowed_id", *relayAllowedID))
 
 	go func() {
 		if err := srv.Serve(lis); err != nil {
 			serverboot.Fatal(ctx, "Failed to serve AteomHerder", err)
+		}
+	}()
+	go func() {
+		if err := relaySrv.Serve(relayLis); err != nil {
+			serverboot.Fatal(ctx, "Failed to serve the capacity relay", err)
 		}
 	}()
 	go func() {
@@ -118,6 +164,7 @@ func main() {
 	<-ctx.Done()
 	slog.InfoContext(context.Background(), "Shutting down")
 	srv.GracefulStop()
+	relaySrv.GracefulStop()
 	_ = health.Shutdown(context.Background())
 }
 
