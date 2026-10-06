@@ -313,9 +313,9 @@ kubectl ate admin make-ca-pool \
   --ca-id "1"
 
 # Generate a new JWT authority pool and push it to a Kubernetes Secret. The
-# key is ES256 (--alg RS256 for relying parties that don't support ES256) and
-# its ID defaults to the base64url SHA-256 of the public key's PKIX encoding
-# (--key-id to override).
+# key is ES256 (--alg RS256, a 4096-bit RSA key, for relying parties that don't
+# support ES256) and its ID defaults to the base64url SHA-256 of the public
+# key's PKIX encoding (--key-id to override).
 kubectl ate admin make-jwt-pool \
   --name actor-id-jwt-pool \
   --secret-namespace ate-system

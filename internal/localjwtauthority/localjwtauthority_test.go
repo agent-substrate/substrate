@@ -17,6 +17,7 @@ package localjwtauthority
 import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
@@ -325,8 +326,8 @@ func TestGenerateAuthority(t *testing.T) {
 			}
 			switch key := authority.SigningKey.(type) {
 			case *rsa.PrivateKey:
-				if alg != "RS256" || key.N.BitLen() != 2048 {
-					t.Errorf("got a %d-bit RSA key for %s, want 2048-bit for RS256", key.N.BitLen(), alg)
+				if alg != "RS256" || key.N.BitLen() != 4096 {
+					t.Errorf("got a %d-bit RSA key for %s, want 4096-bit for RS256", key.N.BitLen(), alg)
 				}
 			case *ecdsa.PrivateKey:
 				if alg != "ES256" || key.Curve != elliptic.P256() {
@@ -430,5 +431,30 @@ func TestVerificationKeysCarryAlgorithm(t *testing.T) {
 	}
 	if diff := cmp.Diff(map[string]string{"es": "ES256", "rs": "RS256"}, got); diff != "" {
 		t.Errorf("verification key algorithms (-want +got):\n%s", diff)
+	}
+}
+
+func TestRejectSmallRSAKeys(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	weak := &Authority{ID: "weak", Algorithm: "RS256", SigningKey: key}
+
+	es, err := GenerateAuthority("ES256", "es")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := &ConcretePool{Authorities: []*Authority{es}, ActiveForSigning: es.ID}
+	if err := pool.AddAuthority(weak); err == nil || !strings.Contains(err.Error(), "2048-bit RSA key") {
+		t.Errorf("AddAuthority(2048-bit RSA key) = %v, want a key size error", err)
+	}
+
+	wire, err := Marshal(&ConcretePool{Authorities: []*Authority{weak}, ActiveForSigning: weak.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Unmarshal(wire); err == nil || !strings.Contains(err.Error(), "2048-bit RSA key") {
+		t.Errorf("Unmarshal(pool with a 2048-bit RSA key) = %v, want a key size error", err)
 	}
 }

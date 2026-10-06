@@ -196,6 +196,9 @@ func (p *ConcretePool) AddAuthority(authority *Authority) error {
 	if authority.ID == "" {
 		return fmt.Errorf("authority has no ID")
 	}
+	if err := checkKeySize(authority.ID, authority.SigningKey); err != nil {
+		return err
+	}
 	if p.index(authority.ID) >= 0 {
 		return fmt.Errorf("authority %q already present", authority.ID)
 	}
@@ -382,11 +385,26 @@ func Unmarshal(wireBytes []byte) (*ConcretePool, error) {
 
 		// All key types from ParsePKCS8PrivateKey implement Signer
 		authority.SigningKey = key.(crypto.Signer)
+		if err := checkKeySize(authority.ID, authority.SigningKey); err != nil {
+			return nil, err
+		}
 
 		pool.Authorities = append(pool.Authorities, authority)
 	}
 
 	return pool, nil
+}
+
+// rsaKeyBits is the only RSA key size a pool accepts. RS256 does not fix one,
+// and smaller keys are too weak.
+const rsaKeyBits = 4096
+
+// checkKeySize refuses an RSA key of any size other than rsaKeyBits.
+func checkKeySize(id string, key crypto.Signer) error {
+	if k, ok := key.(*rsa.PrivateKey); ok && k.N.BitLen() != rsaKeyBits {
+		return fmt.Errorf("authority %q has a %d-bit RSA key; only %d-bit RSA keys are supported", id, k.N.BitLen(), rsaKeyBits)
+	}
+	return nil
 }
 
 // GenerateAuthority generates a JWT signing key for algorithm, which must be
@@ -396,7 +414,7 @@ func GenerateAuthority(algorithm, id string) (*Authority, error) {
 	var err error
 	switch algorithm {
 	case "RS256":
-		key, err = rsa.GenerateKey(rand.Reader, 2048)
+		key, err = rsa.GenerateKey(rand.Reader, rsaKeyBits)
 	case "ES256":
 		key, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	default:
