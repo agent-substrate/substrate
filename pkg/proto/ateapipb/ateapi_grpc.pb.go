@@ -1825,7 +1825,7 @@ var Control_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	WorkerService_SetWorkerCapacity_FullMethodName         = "/ateapi.WorkerService/SetWorkerCapacity"
+	WorkerService_RegisterWorker_FullMethodName            = "/ateapi.WorkerService/RegisterWorker"
 	WorkerService_MintAteomActorCertificate_FullMethodName = "/ateapi.WorkerService/MintAteomActorCertificate"
 	WorkerService_RequestActorSuspend_FullMethodName       = "/ateapi.WorkerService/RequestActorSuspend"
 )
@@ -1839,15 +1839,16 @@ const (
 // authorization: Control is the client-facing API, while these RPCs are served
 // only to an atelet, and only for the Workers on its own node.
 type WorkerServiceClient interface {
-	// SetWorkerCapacity records what a Worker can hold and the host hardware it
-	// runs on. Capacity is the Worker's to report rather than the control plane's
-	// to infer: it is what the ateom can actually supply, only its node can
-	// observe it, and a fleet may run mixed ateom versions.
+	// RegisterWorker records what a Worker can hold and the hardware identity of
+	// its node in one write, so a Worker is never schedulable without hardware
+	// to match snapshots against. Capacity is the Worker's to report rather than
+	// the control plane's to infer: it is what the ateom can actually supply,
+	// only its node can observe it, and a fleet may run mixed ateom versions.
 	//
 	// atelet calls this with its own client certificate, as it does for
 	// MintCert. Idempotent: re-sending the same capacity and hardware is not a
 	// write.
-	SetWorkerCapacity(ctx context.Context, in *SetWorkerCapacityRequest, opts ...grpc.CallOption) (*SetWorkerCapacityResponse, error)
+	RegisterWorker(ctx context.Context, in *RegisterWorkerRequest, opts ...grpc.CallOption) (*RegisterWorkerResponse, error)
 	// Create a Substrate-issued SPIFFE certificate that asserts an ateom acting
 	// on behalf of a particular actor.
 	//
@@ -1863,7 +1864,7 @@ type WorkerServiceClient interface {
 	// that races a resume, pause, or delete loses to it.
 	//
 	// atelet calls this with its own client certificate, as it does for
-	// SetWorkerCapacity, naming the Worker its caller proved itself to be. The
+	// RegisterWorker, naming the Worker its caller proved itself to be. The
 	// control plane serves it only for an Actor that is assigned to that Worker.
 	//
 	// Not idempotent, unlike Control.SuspendActor, which reports an
@@ -1883,10 +1884,10 @@ func NewWorkerServiceClient(cc grpc.ClientConnInterface) WorkerServiceClient {
 	return &workerServiceClient{cc}
 }
 
-func (c *workerServiceClient) SetWorkerCapacity(ctx context.Context, in *SetWorkerCapacityRequest, opts ...grpc.CallOption) (*SetWorkerCapacityResponse, error) {
+func (c *workerServiceClient) RegisterWorker(ctx context.Context, in *RegisterWorkerRequest, opts ...grpc.CallOption) (*RegisterWorkerResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(SetWorkerCapacityResponse)
-	err := c.cc.Invoke(ctx, WorkerService_SetWorkerCapacity_FullMethodName, in, out, cOpts...)
+	out := new(RegisterWorkerResponse)
+	err := c.cc.Invoke(ctx, WorkerService_RegisterWorker_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1922,15 +1923,16 @@ func (c *workerServiceClient) RequestActorSuspend(ctx context.Context, in *Reque
 // authorization: Control is the client-facing API, while these RPCs are served
 // only to an atelet, and only for the Workers on its own node.
 type WorkerServiceServer interface {
-	// SetWorkerCapacity records what a Worker can hold and the host hardware it
-	// runs on. Capacity is the Worker's to report rather than the control plane's
-	// to infer: it is what the ateom can actually supply, only its node can
-	// observe it, and a fleet may run mixed ateom versions.
+	// RegisterWorker records what a Worker can hold and the hardware identity of
+	// its node in one write, so a Worker is never schedulable without hardware
+	// to match snapshots against. Capacity is the Worker's to report rather than
+	// the control plane's to infer: it is what the ateom can actually supply,
+	// only its node can observe it, and a fleet may run mixed ateom versions.
 	//
 	// atelet calls this with its own client certificate, as it does for
 	// MintCert. Idempotent: re-sending the same capacity and hardware is not a
 	// write.
-	SetWorkerCapacity(context.Context, *SetWorkerCapacityRequest) (*SetWorkerCapacityResponse, error)
+	RegisterWorker(context.Context, *RegisterWorkerRequest) (*RegisterWorkerResponse, error)
 	// Create a Substrate-issued SPIFFE certificate that asserts an ateom acting
 	// on behalf of a particular actor.
 	//
@@ -1946,7 +1948,7 @@ type WorkerServiceServer interface {
 	// that races a resume, pause, or delete loses to it.
 	//
 	// atelet calls this with its own client certificate, as it does for
-	// SetWorkerCapacity, naming the Worker its caller proved itself to be. The
+	// RegisterWorker, naming the Worker its caller proved itself to be. The
 	// control plane serves it only for an Actor that is assigned to that Worker.
 	//
 	// Not idempotent, unlike Control.SuspendActor, which reports an
@@ -1966,8 +1968,8 @@ type WorkerServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedWorkerServiceServer struct{}
 
-func (UnimplementedWorkerServiceServer) SetWorkerCapacity(context.Context, *SetWorkerCapacityRequest) (*SetWorkerCapacityResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method SetWorkerCapacity not implemented")
+func (UnimplementedWorkerServiceServer) RegisterWorker(context.Context, *RegisterWorkerRequest) (*RegisterWorkerResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RegisterWorker not implemented")
 }
 func (UnimplementedWorkerServiceServer) MintAteomActorCertificate(context.Context, *MintAteomActorCertificateRequest) (*MintAteomActorCertificateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method MintAteomActorCertificate not implemented")
@@ -1996,20 +1998,20 @@ func RegisterWorkerServiceServer(s grpc.ServiceRegistrar, srv WorkerServiceServe
 	s.RegisterService(&WorkerService_ServiceDesc, srv)
 }
 
-func _WorkerService_SetWorkerCapacity_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(SetWorkerCapacityRequest)
+func _WorkerService_RegisterWorker_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RegisterWorkerRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(WorkerServiceServer).SetWorkerCapacity(ctx, in)
+		return srv.(WorkerServiceServer).RegisterWorker(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: WorkerService_SetWorkerCapacity_FullMethodName,
+		FullMethod: WorkerService_RegisterWorker_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(WorkerServiceServer).SetWorkerCapacity(ctx, req.(*SetWorkerCapacityRequest))
+		return srv.(WorkerServiceServer).RegisterWorker(ctx, req.(*RegisterWorkerRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -2058,8 +2060,8 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*WorkerServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
-			MethodName: "SetWorkerCapacity",
-			Handler:    _WorkerService_SetWorkerCapacity_Handler,
+			MethodName: "RegisterWorker",
+			Handler:    _WorkerService_RegisterWorker_Handler,
 		},
 		{
 			MethodName: "MintAteomActorCertificate",

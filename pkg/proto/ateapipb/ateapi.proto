@@ -2154,14 +2154,15 @@ message WorkerStatus {
   // +k8s:minimum=0
   int64 observed_epoch = 4;
 
-  // Hardware properties reported by the Worker's node.
+  // Hardware identity of the Worker's node, reported at registration.
   //
   // +k8s:optional
-  Hardware hardware = 5;
+  HardwareIdentity hardware = 5;
 }
 
-// Hardware describes the host hardware properties of a Worker or snapshot.
-message Hardware {
+// HardwareIdentity identifies the host hardware of a Worker or the Worker a
+// snapshot was captured on.
+message HardwareIdentity {
   // Key-value pairs describing host hardware properties (currently
   // "architecture"; TODO: add "cpu_vendor", "cpu_model", etc.).
   //
@@ -2237,15 +2238,16 @@ message ActorAssignment {
 // authorization: Control is the client-facing API, while these RPCs are served
 // only to an atelet, and only for the Workers on its own node.
 service WorkerService {
-  // SetWorkerCapacity records what a Worker can hold and the host hardware it
-  // runs on. Capacity is the Worker's to report rather than the control plane's
-  // to infer: it is what the ateom can actually supply, only its node can
-  // observe it, and a fleet may run mixed ateom versions.
+  // RegisterWorker records what a Worker can hold and the hardware identity of
+  // its node in one write, so a Worker is never schedulable without hardware
+  // to match snapshots against. Capacity is the Worker's to report rather than
+  // the control plane's to infer: it is what the ateom can actually supply,
+  // only its node can observe it, and a fleet may run mixed ateom versions.
   //
   // atelet calls this with its own client certificate, as it does for
   // MintCert. Idempotent: re-sending the same capacity and hardware is not a
   // write.
-  rpc SetWorkerCapacity(SetWorkerCapacityRequest) returns (SetWorkerCapacityResponse);
+  rpc RegisterWorker(RegisterWorkerRequest) returns (RegisterWorkerResponse);
 
   // Create a Substrate-issued SPIFFE certificate that asserts an ateom acting
   // on behalf of a particular actor.
@@ -2263,7 +2265,7 @@ service WorkerService {
   // that races a resume, pause, or delete loses to it.
   //
   // atelet calls this with its own client certificate, as it does for
-  // SetWorkerCapacity, naming the Worker its caller proved itself to be. The
+  // RegisterWorker, naming the Worker its caller proved itself to be. The
   // control plane serves it only for an Actor that is assigned to that Worker.
   //
   // Not idempotent, unlike Control.SuspendActor, which reports an
@@ -2275,8 +2277,8 @@ service WorkerService {
   rpc RequestActorSuspend(RequestActorSuspendRequest) returns (RequestActorSuspendResponse);
 }
 
-message SetWorkerCapacityRequest {
-  // The Worker being reported on. atespace is always empty; Workers are
+message RegisterWorkerRequest {
+  // The Worker being registered. atespace is always empty; Workers are
   // global-scoped.
   //
   // +k8s:required
@@ -2290,14 +2292,14 @@ message SetWorkerCapacityRequest {
   // +k8s:required
   WorkerResources capacity = 2;
 
-  // Hardware properties of the node hosting the Worker. Like capacity, this
-  // replaces what is recorded on the Worker.
+  // Hardware identity of the Worker's node. Like capacity, this replaces what
+  // is recorded on the Worker.
   //
-  // +k8s:optional
-  Hardware hardware = 3;
+  // +k8s:required
+  HardwareIdentity hardware = 3;
 }
 
-message SetWorkerCapacityResponse {
+message RegisterWorkerResponse {
   // The Worker as recorded, so a caller sees what its report resolved to.
   Worker worker = 1;
 }

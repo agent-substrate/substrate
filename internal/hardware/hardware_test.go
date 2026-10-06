@@ -29,17 +29,17 @@ func TestProbeHost(t *testing.T) {
 }
 
 func TestMatches(t *testing.T) {
-	amd64Worker := &ateapipb.Hardware{Attributes: map[string]string{AttrArchitecture: "amd64"}}
-	arm64Worker := &ateapipb.Hardware{Attributes: map[string]string{AttrArchitecture: "arm64"}}
+	amd64Worker := &ateapipb.HardwareIdentity{Attributes: map[string]string{AttrArchitecture: "amd64"}}
+	arm64Worker := &ateapipb.HardwareIdentity{Attributes: map[string]string{AttrArchitecture: "arm64"}}
 
 	tests := []struct {
 		name   string
-		worker *ateapipb.Hardware
-		snap   *ateapipb.Hardware
+		worker *ateapipb.HardwareIdentity
+		snap   *ateapipb.HardwareIdentity
 		want   bool
 	}{
 		{"nil snapshot imposes no constraint", amd64Worker, nil, true},
-		{"empty snapshot imposes no constraint", amd64Worker, &ateapipb.Hardware{}, true},
+		{"empty snapshot imposes no constraint", amd64Worker, &ateapipb.HardwareIdentity{}, true},
 		{"same architecture matches", amd64Worker, amd64Worker, true},
 		{"different architecture fails", arm64Worker, amd64Worker, false},
 		{"nil worker fails when snapshot is stamped", nil, amd64Worker, false},

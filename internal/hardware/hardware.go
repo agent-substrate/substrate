@@ -30,25 +30,25 @@ const (
 	// other hardware attributes as snapshot compatibility expands.
 )
 
-// ProbeHost inspects the current host and returns its Hardware attributes.
+// ProbeHost inspects the current host and returns its HardwareIdentity.
 //
 // TODO: Probe and populate cpu_vendor, cpu_model, and other host hardware
 // attributes (e.g. via CPUID on amd64 and MIDR_EL1 on arm64).
-func ProbeHost() *ateapipb.Hardware {
-	return &ateapipb.Hardware{
+func ProbeHost() *ateapipb.HardwareIdentity {
+	return &ateapipb.HardwareIdentity{
 		Attributes: map[string]string{
 			AttrArchitecture: runtime.GOARCH,
 		},
 	}
 }
 
-// Matches reports whether worker satisfies the hardware attributes recorded on
-// snap. A nil or empty snapshot Hardware imposes no constraint.
+// Matches reports whether worker satisfies the hardware identity recorded on
+// snap. A nil or empty snapshot HardwareIdentity imposes no constraint.
 //
 // TODO: Distinguish memory-restore matching (full CPU vendor/model) from
 // cold-boot fallback matching (architecture only) once additional hardware
 // attributes are populated.
-func Matches(worker, snap *ateapipb.Hardware) bool {
+func Matches(worker, snap *ateapipb.HardwareIdentity) bool {
 	for k, v := range snap.GetAttributes() {
 		if worker.GetAttributes()[k] != v {
 			return false

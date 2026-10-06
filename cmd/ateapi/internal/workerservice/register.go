@@ -29,15 +29,16 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// SetWorkerCapacity records a Worker's reported capacity and host hardware. As
-// with MintCert, the caller must be an atelet running on the Worker's node.
-func (s *Server) SetWorkerCapacity(ctx context.Context, req *ateapipb.SetWorkerCapacityRequest) (*ateapipb.SetWorkerCapacityResponse, error) {
+// RegisterWorker records a Worker's reported capacity and the hardware identity of
+// its node in one write. As with MintCert, the caller must be an atelet
+// running on the Worker's node.
+func (s *Server) RegisterWorker(ctx context.Context, req *ateapipb.RegisterWorkerRequest) (*ateapipb.RegisterWorkerResponse, error) {
 	// TODO(identity): This check should be handled by OpenFGA.
 	caller, err := ateletauth.Authenticate(ctx, s.ateletSPIFFEID)
 	if err != nil {
 		return nil, err
 	}
-	if errs := apivalidation.ValidateSetWorkerCapacityRequest(ctx, req); len(errs) > 0 {
+	if errs := apivalidation.ValidateRegisterWorkerRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
 	}
 	reported := req.GetCapacity()
@@ -63,7 +64,7 @@ func (s *Server) SetWorkerCapacity(ctx context.Context, req *ateapipb.SetWorkerC
 	}
 
 	if proto.Equal(worker.GetStatus().GetCapacity(), reported) && proto.Equal(worker.GetStatus().GetHardware(), reportedHardware) {
-		return &ateapipb.SetWorkerCapacityResponse{Worker: worker}, nil
+		return &ateapipb.RegisterWorkerResponse{Worker: worker}, nil
 	}
 
 	updated, err := s.store.UpdateWorker(ctx, name, store.PreconditionFrom(worker), func(toUpdate *ateapipb.Worker) error {
@@ -82,10 +83,10 @@ func (s *Server) SetWorkerCapacity(ctx context.Context, req *ateapipb.SetWorkerC
 	default:
 		return nil, fmt.Errorf("while recording capacity for worker %s: %w", name, err)
 	}
-	slog.InfoContext(ctx, "Worker reported its capacity",
+	slog.InfoContext(ctx, "Worker registered its capacity and hardware",
 		slog.String("worker", name),
 		slog.String("was", worker.GetStatus().GetCapacity().String()),
 		slog.String("now", updated.GetStatus().GetCapacity().String()),
 		slog.String("hardware", updated.GetStatus().GetHardware().String()))
-	return &ateapipb.SetWorkerCapacityResponse{Worker: updated}, nil
+	return &ateapipb.RegisterWorkerResponse{Worker: updated}, nil
 }

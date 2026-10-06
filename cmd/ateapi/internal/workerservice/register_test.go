@@ -29,24 +29,27 @@ import (
 	"google.golang.org/grpc/codes"
 )
 
-func setRequest(actors int32) *ateapipb.SetWorkerCapacityRequest {
-	return &ateapipb.SetWorkerCapacityRequest{
+var testHardware = &ateapipb.HardwareIdentity{Attributes: map[string]string{"architecture": "amd64"}}
+
+func setRequest(actors int32) *ateapipb.RegisterWorkerRequest {
+	return &ateapipb.RegisterWorkerRequest{
 		Worker:   &ateapipb.ObjectRef{Name: testWorkerName},
 		Capacity: &ateapipb.WorkerResources{Actors: actors},
+		Hardware: testHardware,
 	}
 }
 
 // The point of the whole path: a Worker moves from what it reported before to
 // what its ateom reports now.
-func TestSetWorkerCapacity(t *testing.T) {
+func TestRegisterWorker(t *testing.T) {
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
 	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, nil)
 	seedReportedWorker(t, st, testNode, &ateapipb.WorkerResources{Actors: 1, Resources: resources.CPUMemory(2000, 0)})
 
-	got, err := s.SetWorkerCapacity(ateletauthtest.ContextWith(ateletauthtest.CertOn(t, testNode)), setRequest(4094))
+	got, err := s.RegisterWorker(ateletauthtest.ContextWith(ateletauthtest.CertOn(t, testNode)), setRequest(4094))
 	if err != nil {
-		t.Fatalf("SetWorkerCapacity() failed: %v", err)
+		t.Fatalf("RegisterWorker() failed: %v", err)
 	}
 	if want := int32(4094); got.GetWorker().GetStatus().GetCapacity().GetActors() != want {
 		t.Errorf("capacity.actors = %d, want %d", got.GetWorker().GetStatus().GetCapacity().GetActors(), want)
@@ -59,26 +62,22 @@ func TestSetWorkerCapacity(t *testing.T) {
 	}
 }
 
-func TestSetWorkerCapacity_RecordsHardware(t *testing.T) {
+func TestRegisterWorker_RecordsHardware(t *testing.T) {
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
 	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, nil)
 	seedReportedWorker(t, st, testNode, &ateapipb.WorkerResources{Actors: 1})
 	authed := ateletauthtest.ContextWith(ateletauthtest.CertOn(t, testNode))
 
-	wantHW := &ateapipb.Hardware{
-		Attributes: map[string]string{
-			"architecture": "amd64",
-		},
-	}
-	req := &ateapipb.SetWorkerCapacityRequest{
+	wantHW := &ateapipb.HardwareIdentity{Attributes: map[string]string{"architecture": "arm64"}}
+	req := &ateapipb.RegisterWorkerRequest{
 		Worker:   &ateapipb.ObjectRef{Name: testWorkerName},
 		Capacity: &ateapipb.WorkerResources{Actors: 4094},
 		Hardware: wantHW,
 	}
-	got, err := s.SetWorkerCapacity(authed, req)
+	got, err := s.RegisterWorker(authed, req)
 	if err != nil {
-		t.Fatalf("SetWorkerCapacity() failed: %v", err)
+		t.Fatalf("RegisterWorker() failed: %v", err)
 	}
 	if diff := cmp.Diff(wantHW, got.GetWorker().GetStatus().GetHardware(), protocmp.Transform()); diff != "" {
 		t.Errorf("hardware mismatch (-want +got):\n%s", diff)
@@ -86,9 +85,9 @@ func TestSetWorkerCapacity_RecordsHardware(t *testing.T) {
 
 	// Repeating the identical capacity and hardware must not bump version.
 	v1 := got.GetWorker().GetMetadata().GetVersion()
-	again, err := s.SetWorkerCapacity(authed, req)
+	again, err := s.RegisterWorker(authed, req)
 	if err != nil {
-		t.Fatalf("SetWorkerCapacity() repeat failed: %v", err)
+		t.Fatalf("RegisterWorker() repeat failed: %v", err)
 	}
 	if gotV := again.GetWorker().GetMetadata().GetVersion(); gotV != v1 {
 		t.Errorf("version = %d after identical capacity+hardware report, want %d unchanged", gotV, v1)
@@ -98,13 +97,13 @@ func TestSetWorkerCapacity_RecordsHardware(t *testing.T) {
 // An atelet speaks for the Workers it herds and no others. A Worker on another
 // node is reported as absent rather than forbidden, so a caller learns nothing
 // about what runs elsewhere.
-func TestSetWorkerCapacity_OtherNodeIsNotFound(t *testing.T) {
+func TestRegisterWorker_OtherNodeIsNotFound(t *testing.T) {
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
 	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, nil)
 	seedReportedWorker(t, st, testNode, &ateapipb.WorkerResources{Actors: 1})
 
-	_, err := s.SetWorkerCapacity(ateletauthtest.ContextWith(ateletauthtest.CertOn(t, "some-other-node")), setRequest(4094))
+	_, err := s.RegisterWorker(ateletauthtest.ContextWith(ateletauthtest.CertOn(t, "some-other-node")), setRequest(4094))
 	if got := apierror.Code(err); got != codes.NotFound {
 		t.Fatalf("code = %v (err %v), want NotFound", got, err)
 	}
@@ -122,15 +121,15 @@ func TestSetWorkerCapacity_OtherNodeIsNotFound(t *testing.T) {
 // Re-sending the same capacity is not an update. An ateom reports once, but it
 // retries until accepted and reports again if it restarts, so a repeat must not
 // churn the Worker's version.
-func TestSetWorkerCapacity_UnchangedDoesNotWrite(t *testing.T) {
+func TestRegisterWorker_UnchangedDoesNotWrite(t *testing.T) {
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
 	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, nil)
 	seeded := seedReportedWorker(t, st, testNode, &ateapipb.WorkerResources{Actors: 4094})
 
 	for range 3 {
-		if _, err := s.SetWorkerCapacity(ateletauthtest.ContextWith(ateletauthtest.CertOn(t, testNode)), setRequest(4094)); err != nil {
-			t.Fatalf("SetWorkerCapacity() failed: %v", err)
+		if _, err := s.RegisterWorker(ateletauthtest.ContextWith(ateletauthtest.CertOn(t, testNode)), setRequest(4094)); err != nil {
+			t.Fatalf("RegisterWorker() failed: %v", err)
 		}
 	}
 	after, err := st.GetWorker(context.Background(), testWorkerName)
@@ -142,7 +141,7 @@ func TestSetWorkerCapacity_UnchangedDoesNotWrite(t *testing.T) {
 	}
 }
 
-func TestSetWorkerCapacity_Errors(t *testing.T) {
+func TestRegisterWorker_Errors(t *testing.T) {
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
 	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, nil)
@@ -152,24 +151,31 @@ func TestSetWorkerCapacity_Errors(t *testing.T) {
 	tests := []struct {
 		name string
 		ctx  context.Context
-		req  *ateapipb.SetWorkerCapacityRequest
+		req  *ateapipb.RegisterWorkerRequest
 		want codes.Code
 	}{
 		{"unauthenticated", ateletauthtest.ContextWith(nil), setRequest(2), codes.Unauthenticated},
-		{"no worker ref", authed, &ateapipb.SetWorkerCapacityRequest{
+		{"no worker ref", authed, &ateapipb.RegisterWorkerRequest{
+			Capacity: &ateapipb.WorkerResources{Actors: 2},
+			Hardware: testHardware,
+		}, codes.InvalidArgument},
+		{"no capacity", authed, &ateapipb.RegisterWorkerRequest{
+			Worker:   &ateapipb.ObjectRef{Name: testWorkerName},
+			Hardware: testHardware,
+		}, codes.InvalidArgument},
+		{"no hardware", authed, &ateapipb.RegisterWorkerRequest{
+			Worker:   &ateapipb.ObjectRef{Name: testWorkerName},
 			Capacity: &ateapipb.WorkerResources{Actors: 2},
 		}, codes.InvalidArgument},
-		{"no capacity", authed, &ateapipb.SetWorkerCapacityRequest{
-			Worker: &ateapipb.ObjectRef{Name: testWorkerName},
-		}, codes.InvalidArgument},
-		{"absent worker", authed, &ateapipb.SetWorkerCapacityRequest{
+		{"absent worker", authed, &ateapipb.RegisterWorkerRequest{
 			Worker:   &ateapipb.ObjectRef{Name: "3b9f1e77-2c4d-4a80-91be-6d5c8f0a7e21"},
 			Capacity: &ateapipb.WorkerResources{Actors: 2},
+			Hardware: testHardware,
 		}, codes.NotFound},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := s.SetWorkerCapacity(tc.ctx, tc.req)
+			_, err := s.RegisterWorker(tc.ctx, tc.req)
 			if got := apierror.Code(err); got != tc.want {
 				t.Errorf("code = %v (err %v), want %v", got, err, tc.want)
 			}
@@ -180,7 +186,7 @@ func TestSetWorkerCapacity_Errors(t *testing.T) {
 // A report goes straight to the store, so nothing else checks it. A negative
 // ceiling is the case that matters: placement asks whether allocated is below
 // capacity, so the Worker would take no Actor ever again.
-func TestSetWorkerCapacity_RejectsNonsense(t *testing.T) {
+func TestRegisterWorker_RejectsNonsense(t *testing.T) {
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
 	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, nil)
@@ -199,9 +205,10 @@ func TestSetWorkerCapacity_RejectsNonsense(t *testing.T) {
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := s.SetWorkerCapacity(authed, &ateapipb.SetWorkerCapacityRequest{
+			_, err := s.RegisterWorker(authed, &ateapipb.RegisterWorkerRequest{
 				Worker:   &ateapipb.ObjectRef{Name: testWorkerName},
 				Capacity: tc.capacity,
+				Hardware: testHardware,
 			})
 			if got := apierror.Code(err); got != codes.InvalidArgument {
 				t.Fatalf("code = %v (err %v), want %v", got, err, codes.InvalidArgument)

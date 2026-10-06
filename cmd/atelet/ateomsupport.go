@@ -34,7 +34,7 @@ import (
 type ateomSupportServer struct {
 	ateletpb.UnimplementedAteomSupportServer
 	workers  ateapipb.WorkerServiceClient
-	hardware *ateapipb.Hardware
+	hardware *ateapipb.HardwareIdentity
 }
 
 func (b *ateomSupportServer) MintActorCertificate(ctx context.Context, req *ateletpb.MintActorCertificateRequest) (*ateletpb.MintActorCertificateResponse, error) {
@@ -102,8 +102,10 @@ func verifyClientOnSameNode(node *substratex509.PodIdentity) func(tls.Connection
 	}
 }
 
-// SetWorkerCapacity records what the calling worker says it has along with the
-// host hardware atelet observed on this node.
+// SetWorkerCapacity registers the calling worker with the control plane:
+// what the worker says it has, along with the host hardware atelet observed
+// on this node, in one WorkerService.RegisterWorker call so capacity and hardware
+// land atomically.
 //
 // It returns the control plane's error unwrapped so the caller retries: a
 // worker reports once, so an accepted call is the only thing that puts
@@ -122,7 +124,7 @@ func (s *ateomSupportServer) SetWorkerCapacity(ctx context.Context, req *ateletp
 	if errs := apivalidation.ValidateSetWorkerCapacityRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToGRPCStatusError(errs)
 	}
-	if _, err := s.workers.SetWorkerCapacity(ctx, &ateapipb.SetWorkerCapacityRequest{
+	if _, err := s.workers.RegisterWorker(ctx, &ateapipb.RegisterWorkerRequest{
 		// Workers are global-scoped and named by their pod UID.
 		Worker:   &ateapipb.ObjectRef{Name: workerIdentity.PodUID},
 		Capacity: toWorkerResources(req.GetCapacity()),
@@ -130,8 +132,8 @@ func (s *ateomSupportServer) SetWorkerCapacity(ctx context.Context, req *ateletp
 	}); err != nil {
 		return nil, err
 	}
-	slog.InfoContext(ctx, "Recorded worker capacity",
-		slog.String("pod_uid", workerIdentity.PodUID), slog.Any("capacity", req.GetCapacity()))
+	slog.InfoContext(ctx, "Registered worker capacity and hardware",
+		slog.String("pod_uid", workerIdentity.PodUID), slog.Any("capacity", req.GetCapacity()), slog.Any("hardware", s.hardware))
 	return &ateletpb.SetWorkerCapacityResponse{}, nil
 }
 

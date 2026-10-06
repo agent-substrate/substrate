@@ -323,9 +323,9 @@ func TestValidateWorkerUpdate_RequireStatus(t *testing.T) {
 	assertValidateErr(t, ValidateWorkerUpdate(context.Background(), field.NewPath("worker"), newVal, oldVal, false), nil)
 }
 
-func TestValidateSetWorkerCapacityRequest(t *testing.T) {
-	valid := func(mutate ...func(*ateapipb.SetWorkerCapacityRequest)) *ateapipb.SetWorkerCapacityRequest {
-		r := &ateapipb.SetWorkerCapacityRequest{
+func TestValidateRegisterWorkerRequest(t *testing.T) {
+	valid := func(mutate ...func(*ateapipb.RegisterWorkerRequest)) *ateapipb.RegisterWorkerRequest {
+		r := &ateapipb.RegisterWorkerRequest{
 			Worker: workerRef(apiWorkerName),
 			Capacity: &ateapipb.WorkerResources{
 				Actors: 10,
@@ -333,6 +333,7 @@ func TestValidateSetWorkerCapacityRequest(t *testing.T) {
 					Limits: []*ateapipb.Limits{{Name: "cpu", Quantity: "2"}, {Name: "memory", Quantity: "4Gi"}},
 				},
 			},
+			Hardware: &ateapipb.HardwareIdentity{Attributes: map[string]string{"architecture": "amd64"}},
 		}
 		for _, m := range mutate {
 			m(r)
@@ -341,65 +342,63 @@ func TestValidateSetWorkerCapacityRequest(t *testing.T) {
 	}
 	tests := []struct {
 		name string
-		req  *ateapipb.SetWorkerCapacityRequest
+		req  *ateapipb.RegisterWorkerRequest
 		want field.ErrorList
 	}{{
 		name: "valid",
 		req:  valid(),
 	}, {
 		name: "valid empty capacity",
-		req:  valid(func(r *ateapipb.SetWorkerCapacityRequest) { r.Capacity = &ateapipb.WorkerResources{} }),
+		req:  valid(func(r *ateapipb.RegisterWorkerRequest) { r.Capacity = &ateapipb.WorkerResources{} }),
 	}, {
 		name: "missing worker",
-		req:  valid(func(r *ateapipb.SetWorkerCapacityRequest) { r.Worker = nil }),
+		req:  valid(func(r *ateapipb.RegisterWorkerRequest) { r.Worker = nil }),
 		want: field.ErrorList{field.Required(field.NewPath("worker"), "")},
 	}, {
 		name: "worker.atespace must be empty",
-		req:  valid(func(r *ateapipb.SetWorkerCapacityRequest) { r.Worker.Atespace = "team-a" }),
+		req:  valid(func(r *ateapipb.RegisterWorkerRequest) { r.Worker.Atespace = "team-a" }),
 		want: field.ErrorList{field.Forbidden(field.NewPath("worker", "atespace"), "")},
 	}, {
 		name: "missing worker.name",
-		req:  valid(func(r *ateapipb.SetWorkerCapacityRequest) { r.Worker.Name = "" }),
+		req:  valid(func(r *ateapipb.RegisterWorkerRequest) { r.Worker.Name = "" }),
 		want: field.ErrorList{field.Required(field.NewPath("worker", "name"), "")},
 	}, {
 		name: "invalid worker.name",
-		req:  valid(func(r *ateapipb.SetWorkerCapacityRequest) { r.Worker.Name = "UPPER" }),
+		req:  valid(func(r *ateapipb.RegisterWorkerRequest) { r.Worker.Name = "UPPER" }),
 		want: field.ErrorList{field.Invalid(field.NewPath("worker", "name"), nil, "").WithOrigin("format=k8s-short-name")},
 	}, {
 		name: "missing capacity",
-		req:  valid(func(r *ateapipb.SetWorkerCapacityRequest) { r.Capacity = nil }),
+		req:  valid(func(r *ateapipb.RegisterWorkerRequest) { r.Capacity = nil }),
 		want: field.ErrorList{field.Required(field.NewPath("capacity"), "")},
 	}, {
 		name: "negative capacity.actors",
-		req:  valid(func(r *ateapipb.SetWorkerCapacityRequest) { r.Capacity.Actors = -1 }),
+		req:  valid(func(r *ateapipb.RegisterWorkerRequest) { r.Capacity.Actors = -1 }),
 		want: field.ErrorList{field.Invalid(field.NewPath("capacity", "actors"), nil, "").WithOrigin("minimum")},
 	}, {
 		name: "invalid limit quantity",
-		req: valid(func(r *ateapipb.SetWorkerCapacityRequest) {
+		req: valid(func(r *ateapipb.RegisterWorkerRequest) {
 			r.Capacity.Resources.Limits = []*ateapipb.Limits{{Name: "cpu", Quantity: "lots"}}
 		}),
 		want: field.ErrorList{field.Invalid(field.NewPath("capacity", "resources", "limits").Index(0).Child("quantity"), nil, "")},
 	}, {
-		name: "valid with hardware attributes",
-		req: valid(func(r *ateapipb.SetWorkerCapacityRequest) {
-			r.Hardware = &ateapipb.Hardware{
-				Attributes: map[string]string{
-					"architecture": "amd64",
-				},
-			}
-		}),
+		name: "missing hardware",
+		req:  valid(func(r *ateapipb.RegisterWorkerRequest) { r.Hardware = nil }),
+		want: field.ErrorList{field.Required(field.NewPath("hardware"), "")},
+	}, {
+		name: "valid with empty hardware attributes",
+		req:  valid(func(r *ateapipb.RegisterWorkerRequest) { r.Hardware = &ateapipb.HardwareIdentity{} }),
 	}, {
 		name: "hardware attribute key too long",
-		req: valid(func(r *ateapipb.SetWorkerCapacityRequest) {
-			r.Hardware = &ateapipb.Hardware{
+		req: valid(func(r *ateapipb.RegisterWorkerRequest) {
+			r.Hardware = &ateapipb.HardwareIdentity{
 				Attributes: map[string]string{strings.Repeat("k", 129): "v"},
 			}
 		}),
 		want: field.ErrorList{field.TooLong(field.NewPath("hardware", "attributes"), "", 128).WithOrigin("maxLength")},
 	}, {
 		name: "hardware attribute value too long",
-		req: valid(func(r *ateapipb.SetWorkerCapacityRequest) {
-			r.Hardware = &ateapipb.Hardware{
+		req: valid(func(r *ateapipb.RegisterWorkerRequest) {
+			r.Hardware = &ateapipb.HardwareIdentity{
 				Attributes: map[string]string{"k": strings.Repeat("v", 257)},
 			}
 		}),
@@ -407,7 +406,7 @@ func TestValidateSetWorkerCapacityRequest(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assertValidateErr(t, ValidateSetWorkerCapacityRequest(context.Background(), tt.req), tt.want)
+			assertValidateErr(t, ValidateRegisterWorkerRequest(context.Background(), tt.req), tt.want)
 		})
 	}
 }

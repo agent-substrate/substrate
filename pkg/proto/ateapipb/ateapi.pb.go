@@ -6881,10 +6881,10 @@ type WorkerStatus struct {
 	// +k8s:optional
 	// +k8s:minimum=0
 	ObservedEpoch int64 `protobuf:"varint,4,opt,name=observed_epoch,json=observedEpoch,proto3" json:"observed_epoch,omitempty"`
-	// Hardware properties reported by the Worker's node.
+	// Hardware identity of the Worker's node, reported at registration.
 	//
 	// +k8s:optional
-	Hardware      *Hardware `protobuf:"bytes,5,opt,name=hardware,proto3" json:"hardware,omitempty"`
+	Hardware      *HardwareIdentity `protobuf:"bytes,5,opt,name=hardware,proto3" json:"hardware,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -6947,15 +6947,16 @@ func (x *WorkerStatus) GetObservedEpoch() int64 {
 	return 0
 }
 
-func (x *WorkerStatus) GetHardware() *Hardware {
+func (x *WorkerStatus) GetHardware() *HardwareIdentity {
 	if x != nil {
 		return x.Hardware
 	}
 	return nil
 }
 
-// Hardware describes the host hardware properties of a Worker or snapshot.
-type Hardware struct {
+// HardwareIdentity identifies the host hardware of a Worker or the Worker a
+// snapshot was captured on.
+type HardwareIdentity struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Key-value pairs describing host hardware properties (currently
 	// "architecture"; TODO: add "cpu_vendor", "cpu_model", etc.).
@@ -6969,20 +6970,20 @@ type Hardware struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *Hardware) Reset() {
-	*x = Hardware{}
+func (x *HardwareIdentity) Reset() {
+	*x = HardwareIdentity{}
 	mi := &file_ateapi_proto_msgTypes[96]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *Hardware) String() string {
+func (x *HardwareIdentity) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*Hardware) ProtoMessage() {}
+func (*HardwareIdentity) ProtoMessage() {}
 
-func (x *Hardware) ProtoReflect() protoreflect.Message {
+func (x *HardwareIdentity) ProtoReflect() protoreflect.Message {
 	mi := &file_ateapi_proto_msgTypes[96]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -6994,12 +6995,12 @@ func (x *Hardware) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use Hardware.ProtoReflect.Descriptor instead.
-func (*Hardware) Descriptor() ([]byte, []int) {
+// Deprecated: Use HardwareIdentity.ProtoReflect.Descriptor instead.
+func (*HardwareIdentity) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{96}
 }
 
-func (x *Hardware) GetAttributes() map[string]string {
+func (x *HardwareIdentity) GetAttributes() map[string]string {
 	if x != nil {
 		return x.Attributes
 	}
@@ -7182,9 +7183,9 @@ func (x *ActorAssignment) GetWorkerEpoch() int64 {
 	return 0
 }
 
-type SetWorkerCapacityRequest struct {
+type RegisterWorkerRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The Worker being reported on. atespace is always empty; Workers are
+	// The Worker being registered. atespace is always empty; Workers are
 	// global-scoped.
 	//
 	// +k8s:required
@@ -7196,29 +7197,29 @@ type SetWorkerCapacityRequest struct {
 	//
 	// +k8s:required
 	Capacity *WorkerResources `protobuf:"bytes,2,opt,name=capacity,proto3" json:"capacity,omitempty"`
-	// Hardware properties of the node hosting the Worker. Like capacity, this
-	// replaces what is recorded on the Worker.
+	// Hardware identity of the Worker's node. Like capacity, this replaces what
+	// is recorded on the Worker.
 	//
-	// +k8s:optional
-	Hardware      *Hardware `protobuf:"bytes,3,opt,name=hardware,proto3" json:"hardware,omitempty"`
+	// +k8s:required
+	Hardware      *HardwareIdentity `protobuf:"bytes,3,opt,name=hardware,proto3" json:"hardware,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *SetWorkerCapacityRequest) Reset() {
-	*x = SetWorkerCapacityRequest{}
+func (x *RegisterWorkerRequest) Reset() {
+	*x = RegisterWorkerRequest{}
 	mi := &file_ateapi_proto_msgTypes[99]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *SetWorkerCapacityRequest) String() string {
+func (x *RegisterWorkerRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*SetWorkerCapacityRequest) ProtoMessage() {}
+func (*RegisterWorkerRequest) ProtoMessage() {}
 
-func (x *SetWorkerCapacityRequest) ProtoReflect() protoreflect.Message {
+func (x *RegisterWorkerRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_ateapi_proto_msgTypes[99]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -7230,33 +7231,33 @@ func (x *SetWorkerCapacityRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use SetWorkerCapacityRequest.ProtoReflect.Descriptor instead.
-func (*SetWorkerCapacityRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use RegisterWorkerRequest.ProtoReflect.Descriptor instead.
+func (*RegisterWorkerRequest) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{99}
 }
 
-func (x *SetWorkerCapacityRequest) GetWorker() *ObjectRef {
+func (x *RegisterWorkerRequest) GetWorker() *ObjectRef {
 	if x != nil {
 		return x.Worker
 	}
 	return nil
 }
 
-func (x *SetWorkerCapacityRequest) GetCapacity() *WorkerResources {
+func (x *RegisterWorkerRequest) GetCapacity() *WorkerResources {
 	if x != nil {
 		return x.Capacity
 	}
 	return nil
 }
 
-func (x *SetWorkerCapacityRequest) GetHardware() *Hardware {
+func (x *RegisterWorkerRequest) GetHardware() *HardwareIdentity {
 	if x != nil {
 		return x.Hardware
 	}
 	return nil
 }
 
-type SetWorkerCapacityResponse struct {
+type RegisterWorkerResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The Worker as recorded, so a caller sees what its report resolved to.
 	Worker        *Worker `protobuf:"bytes,1,opt,name=worker,proto3" json:"worker,omitempty"`
@@ -7264,20 +7265,20 @@ type SetWorkerCapacityResponse struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *SetWorkerCapacityResponse) Reset() {
-	*x = SetWorkerCapacityResponse{}
+func (x *RegisterWorkerResponse) Reset() {
+	*x = RegisterWorkerResponse{}
 	mi := &file_ateapi_proto_msgTypes[100]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *SetWorkerCapacityResponse) String() string {
+func (x *RegisterWorkerResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*SetWorkerCapacityResponse) ProtoMessage() {}
+func (*RegisterWorkerResponse) ProtoMessage() {}
 
-func (x *SetWorkerCapacityResponse) ProtoReflect() protoreflect.Message {
+func (x *RegisterWorkerResponse) ProtoReflect() protoreflect.Message {
 	mi := &file_ateapi_proto_msgTypes[100]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -7289,12 +7290,12 @@ func (x *SetWorkerCapacityResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use SetWorkerCapacityResponse.ProtoReflect.Descriptor instead.
-func (*SetWorkerCapacityResponse) Descriptor() ([]byte, []int) {
+// Deprecated: Use RegisterWorkerResponse.ProtoReflect.Descriptor instead.
+func (*RegisterWorkerResponse) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{100}
 }
 
-func (x *SetWorkerCapacityResponse) GetWorker() *Worker {
+func (x *RegisterWorkerResponse) GetWorker() *Worker {
 	if x != nil {
 		return x.Worker
 	}
@@ -8409,16 +8410,16 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x06status\x18\v \x01(\v2\x14.ateapi.WorkerStatusR\x06status\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xfa\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x82\x02\n" +
 	"\fWorkerStatus\x12)\n" +
 	"\x05state\x18\x01 \x01(\x0e2\x13.ateapi.WorkerStateR\x05state\x123\n" +
 	"\bcapacity\x18\x02 \x01(\v2\x17.ateapi.WorkerResourcesR\bcapacity\x125\n" +
 	"\tallocated\x18\x03 \x01(\v2\x17.ateapi.WorkerResourcesR\tallocated\x12%\n" +
-	"\x0eobserved_epoch\x18\x04 \x01(\x03R\robservedEpoch\x12,\n" +
-	"\bhardware\x18\x05 \x01(\v2\x10.ateapi.HardwareR\bhardware\"\x8b\x01\n" +
-	"\bHardware\x12@\n" +
+	"\x0eobserved_epoch\x18\x04 \x01(\x03R\robservedEpoch\x124\n" +
+	"\bhardware\x18\x05 \x01(\v2\x18.ateapi.HardwareIdentityR\bhardware\"\x9b\x01\n" +
+	"\x10HardwareIdentity\x12H\n" +
 	"\n" +
-	"attributes\x18\x01 \x03(\v2 .ateapi.Hardware.AttributesEntryR\n" +
+	"attributes\x18\x01 \x03(\v2(.ateapi.HardwareIdentity.AttributesEntryR\n" +
 	"attributes\x1a=\n" +
 	"\x0fAttributesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
@@ -8432,12 +8433,12 @@ const file_ateapi_proto_rawDesc = "" +
 	"\tactor_uid\x18\x03 \x01(\tR\bactorUid\x12?\n" +
 	"\x12actor_template_ref\x18\x04 \x01(\v2\x11.ateapi.ObjectRefR\x10actorTemplateRef\x12/\n" +
 	"\tresources\x18\x05 \x01(\v2\x11.ateapi.ResourcesR\tresources\x12!\n" +
-	"\fworker_epoch\x18\a \x01(\x03R\vworkerEpoch\"\xa8\x01\n" +
-	"\x18SetWorkerCapacityRequest\x12)\n" +
+	"\fworker_epoch\x18\a \x01(\x03R\vworkerEpoch\"\xad\x01\n" +
+	"\x15RegisterWorkerRequest\x12)\n" +
 	"\x06worker\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x06worker\x123\n" +
-	"\bcapacity\x18\x02 \x01(\v2\x17.ateapi.WorkerResourcesR\bcapacity\x12,\n" +
-	"\bhardware\x18\x03 \x01(\v2\x10.ateapi.HardwareR\bhardware\"C\n" +
-	"\x19SetWorkerCapacityResponse\x12&\n" +
+	"\bcapacity\x18\x02 \x01(\v2\x17.ateapi.WorkerResourcesR\bcapacity\x124\n" +
+	"\bhardware\x18\x03 \x01(\v2\x18.ateapi.HardwareIdentityR\bhardware\"@\n" +
+	"\x16RegisterWorkerResponse\x12&\n" +
 	"\x06worker\x18\x01 \x01(\v2\x0e.ateapi.WorkerR\x06worker\"\xa8\x01\n" +
 	" MintAteomActorCertificateRequest\x12'\n" +
 	"\x05actor\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\x12\x1b\n" +
@@ -8550,9 +8551,9 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x17GetAtespaceAccessPolicy\x12&.ateapi.GetAtespaceAccessPolicyRequest\x1a\x14.ateapi.AccessPolicy\"\x00\x12_\n" +
 	"\x1aCreateAtespaceAccessPolicy\x12).ateapi.CreateAtespaceAccessPolicyRequest\x1a\x14.ateapi.AccessPolicy\"\x00\x12_\n" +
 	"\x1aUpdateAtespaceAccessPolicy\x12).ateapi.UpdateAtespaceAccessPolicyRequest\x1a\x14.ateapi.AccessPolicy\"\x00\x12_\n" +
-	"\x1aDeleteAtespaceAccessPolicy\x12).ateapi.DeleteAtespaceAccessPolicyRequest\x1a\x14.ateapi.AccessPolicy\"\x002\xbb\x02\n" +
-	"\rWorkerService\x12X\n" +
-	"\x11SetWorkerCapacity\x12 .ateapi.SetWorkerCapacityRequest\x1a!.ateapi.SetWorkerCapacityResponse\x12p\n" +
+	"\x1aDeleteAtespaceAccessPolicy\x12).ateapi.DeleteAtespaceAccessPolicyRequest\x1a\x14.ateapi.AccessPolicy\"\x002\xb2\x02\n" +
+	"\rWorkerService\x12O\n" +
+	"\x0eRegisterWorker\x12\x1d.ateapi.RegisterWorkerRequest\x1a\x1e.ateapi.RegisterWorkerResponse\x12p\n" +
 	"\x19MintAteomActorCertificate\x12(.ateapi.MintAteomActorCertificateRequest\x1a).ateapi.MintAteomActorCertificateResponse\x12^\n" +
 	"\x13RequestActorSuspend\x12\".ateapi.RequestActorSuspendRequest\x1a#.ateapi.RequestActorSuspendResponseB9Z7github.com/agent-substrate/substrate/pkg/proto/ateapipbb\x06proto3"
 
@@ -8674,11 +8675,11 @@ var file_ateapi_proto_goTypes = []any{
 	(*ListActorsResponse)(nil),                 // 100: ateapi.ListActorsResponse
 	(*Worker)(nil),                             // 101: ateapi.Worker
 	(*WorkerStatus)(nil),                       // 102: ateapi.WorkerStatus
-	(*Hardware)(nil),                           // 103: ateapi.Hardware
+	(*HardwareIdentity)(nil),                   // 103: ateapi.HardwareIdentity
 	(*WorkerResources)(nil),                    // 104: ateapi.WorkerResources
 	(*ActorAssignment)(nil),                    // 105: ateapi.ActorAssignment
-	(*SetWorkerCapacityRequest)(nil),           // 106: ateapi.SetWorkerCapacityRequest
-	(*SetWorkerCapacityResponse)(nil),          // 107: ateapi.SetWorkerCapacityResponse
+	(*RegisterWorkerRequest)(nil),              // 106: ateapi.RegisterWorkerRequest
+	(*RegisterWorkerResponse)(nil),             // 107: ateapi.RegisterWorkerResponse
 	(*MintAteomActorCertificateRequest)(nil),   // 108: ateapi.MintAteomActorCertificateRequest
 	(*MintAteomActorCertificateResponse)(nil),  // 109: ateapi.MintAteomActorCertificateResponse
 	(*RequestActorSuspendRequest)(nil),         // 110: ateapi.RequestActorSuspendRequest
@@ -8695,7 +8696,7 @@ var file_ateapi_proto_goTypes = []any{
 	nil,                           // 121: ateapi.Selector.MatchLabelsEntry
 	nil,                           // 122: ateapi.ExternalVolume.VolumeContextEntry
 	nil,                           // 123: ateapi.Worker.LabelsEntry
-	nil,                           // 124: ateapi.Hardware.AttributesEntry
+	nil,                           // 124: ateapi.HardwareIdentity.AttributesEntry
 	(*timestamppb.Timestamp)(nil), // 125: google.protobuf.Timestamp
 }
 var file_ateapi_proto_depIdxs = []int32{
@@ -8824,17 +8825,17 @@ var file_ateapi_proto_depIdxs = []int32{
 	5,   // 122: ateapi.WorkerStatus.state:type_name -> ateapi.WorkerState
 	104, // 123: ateapi.WorkerStatus.capacity:type_name -> ateapi.WorkerResources
 	104, // 124: ateapi.WorkerStatus.allocated:type_name -> ateapi.WorkerResources
-	103, // 125: ateapi.WorkerStatus.hardware:type_name -> ateapi.Hardware
-	124, // 126: ateapi.Hardware.attributes:type_name -> ateapi.Hardware.AttributesEntry
+	103, // 125: ateapi.WorkerStatus.hardware:type_name -> ateapi.HardwareIdentity
+	124, // 126: ateapi.HardwareIdentity.attributes:type_name -> ateapi.HardwareIdentity.AttributesEntry
 	31,  // 127: ateapi.WorkerResources.resources:type_name -> ateapi.Resources
 	10,  // 128: ateapi.ActorAssignment.metadata:type_name -> ateapi.ResourceMetadata
 	29,  // 129: ateapi.ActorAssignment.actor:type_name -> ateapi.ObjectRef
 	29,  // 130: ateapi.ActorAssignment.actor_template_ref:type_name -> ateapi.ObjectRef
 	31,  // 131: ateapi.ActorAssignment.resources:type_name -> ateapi.Resources
-	29,  // 132: ateapi.SetWorkerCapacityRequest.worker:type_name -> ateapi.ObjectRef
-	104, // 133: ateapi.SetWorkerCapacityRequest.capacity:type_name -> ateapi.WorkerResources
-	103, // 134: ateapi.SetWorkerCapacityRequest.hardware:type_name -> ateapi.Hardware
-	101, // 135: ateapi.SetWorkerCapacityResponse.worker:type_name -> ateapi.Worker
+	29,  // 132: ateapi.RegisterWorkerRequest.worker:type_name -> ateapi.ObjectRef
+	104, // 133: ateapi.RegisterWorkerRequest.capacity:type_name -> ateapi.WorkerResources
+	103, // 134: ateapi.RegisterWorkerRequest.hardware:type_name -> ateapi.HardwareIdentity
+	101, // 135: ateapi.RegisterWorkerResponse.worker:type_name -> ateapi.Worker
 	29,  // 136: ateapi.MintAteomActorCertificateRequest.actor:type_name -> ateapi.ObjectRef
 	29,  // 137: ateapi.RequestActorSuspendRequest.worker:type_name -> ateapi.ObjectRef
 	29,  // 138: ateapi.RequestActorSuspendRequest.actor:type_name -> ateapi.ObjectRef
@@ -8892,7 +8893,7 @@ var file_ateapi_proto_depIdxs = []int32{
 	118, // 190: ateapi.Control.CreateAtespaceAccessPolicy:input_type -> ateapi.CreateAtespaceAccessPolicyRequest
 	119, // 191: ateapi.Control.UpdateAtespaceAccessPolicy:input_type -> ateapi.UpdateAtespaceAccessPolicyRequest
 	120, // 192: ateapi.Control.DeleteAtespaceAccessPolicy:input_type -> ateapi.DeleteAtespaceAccessPolicyRequest
-	106, // 193: ateapi.WorkerService.SetWorkerCapacity:input_type -> ateapi.SetWorkerCapacityRequest
+	106, // 193: ateapi.WorkerService.RegisterWorker:input_type -> ateapi.RegisterWorkerRequest
 	108, // 194: ateapi.WorkerService.MintAteomActorCertificate:input_type -> ateapi.MintAteomActorCertificateRequest
 	110, // 195: ateapi.WorkerService.RequestActorSuspend:input_type -> ateapi.RequestActorSuspendRequest
 	12,  // 196: ateapi.Control.GetActor:output_type -> ateapi.Actor
@@ -8937,7 +8938,7 @@ var file_ateapi_proto_depIdxs = []int32{
 	112, // 235: ateapi.Control.CreateAtespaceAccessPolicy:output_type -> ateapi.AccessPolicy
 	112, // 236: ateapi.Control.UpdateAtespaceAccessPolicy:output_type -> ateapi.AccessPolicy
 	112, // 237: ateapi.Control.DeleteAtespaceAccessPolicy:output_type -> ateapi.AccessPolicy
-	107, // 238: ateapi.WorkerService.SetWorkerCapacity:output_type -> ateapi.SetWorkerCapacityResponse
+	107, // 238: ateapi.WorkerService.RegisterWorker:output_type -> ateapi.RegisterWorkerResponse
 	109, // 239: ateapi.WorkerService.MintAteomActorCertificate:output_type -> ateapi.MintAteomActorCertificateResponse
 	111, // 240: ateapi.WorkerService.RequestActorSuspend:output_type -> ateapi.RequestActorSuspendResponse
 	196, // [196:241] is the sub-list for method output_type

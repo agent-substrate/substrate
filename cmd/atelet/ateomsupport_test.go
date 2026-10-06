@@ -88,18 +88,18 @@ func workerCertificate(t *testing.T, podUID, nodeName string) *x509.Certificate 
 type fakeWorkerService struct {
 	ateapipb.WorkerServiceClient
 
-	got      []*ateapipb.SetWorkerCapacityRequest
+	got      []*ateapipb.RegisterWorkerRequest
 	mintGot  []*ateapipb.MintAteomActorCertificateRequest
 	mintResp *ateapipb.MintAteomActorCertificateResponse
 	err      error
 }
 
-func (s *fakeWorkerService) SetWorkerCapacity(_ context.Context, in *ateapipb.SetWorkerCapacityRequest, _ ...grpc.CallOption) (*ateapipb.SetWorkerCapacityResponse, error) {
+func (s *fakeWorkerService) RegisterWorker(_ context.Context, in *ateapipb.RegisterWorkerRequest, _ ...grpc.CallOption) (*ateapipb.RegisterWorkerResponse, error) {
 	if s.err != nil {
 		return nil, s.err
 	}
 	s.got = append(s.got, in)
-	return &ateapipb.SetWorkerCapacityResponse{}, nil
+	return &ateapipb.RegisterWorkerResponse{}, nil
 }
 
 func (s *fakeWorkerService) MintAteomActorCertificate(_ context.Context, in *ateapipb.MintAteomActorCertificateRequest, _ ...grpc.CallOption) (*ateapipb.MintAteomActorCertificateResponse, error) {
@@ -114,10 +114,11 @@ func (s *fakeWorkerService) MintAteomActorCertificate(_ context.Context, in *ate
 }
 
 func TestSetWorkerCapacity(t *testing.T) {
-	forwarded := func(capacity *ateapipb.WorkerResources) []*ateapipb.SetWorkerCapacityRequest {
+	hw := &ateapipb.HardwareIdentity{Attributes: map[string]string{"architecture": "amd64"}}
+	forwarded := func(capacity *ateapipb.WorkerResources) []*ateapipb.RegisterWorkerRequest {
 		// The Worker is named after the worker pod UID, taken from the
-		// certificate rather than the request.
-		return []*ateapipb.SetWorkerCapacityRequest{{Worker: &ateapipb.ObjectRef{Name: "pod-a"}, Capacity: capacity}}
+		// certificate rather than the request; the hardware is atelet's own.
+		return []*ateapipb.RegisterWorkerRequest{{Worker: &ateapipb.ObjectRef{Name: "pod-a"}, Capacity: capacity, Hardware: hw}}
 	}
 
 	tests := []struct {
@@ -126,29 +127,15 @@ func TestSetWorkerCapacity(t *testing.T) {
 		unauthenticated bool
 		// serviceErr is what the control plane answers with.
 		serviceErr    error
-		hardware      *ateapipb.Hardware
 		req           *ateletpb.SetWorkerCapacityRequest
 		wantCode      codes.Code
-		wantForwarded []*ateapipb.SetWorkerCapacityRequest
+		wantForwarded []*ateapipb.RegisterWorkerRequest
 	}{{
 		name: "records what the worker says",
 		req: &ateletpb.SetWorkerCapacityRequest{Capacity: &ateletpb.WorkerResources{Actors: 4, Resources: &ateletpb.Resources{
 			Limits: []*ateletpb.Limits{{Name: "cpu", Quantity: "2"}, {Name: "memory", Quantity: "4Gi"}},
 		}}},
 		wantForwarded: forwarded(&ateapipb.WorkerResources{Actors: 4, Resources: resources.CPUMemory(2000, 4294967296)}),
-	}, {
-		name: "forwards node hardware alongside capacity",
-		hardware: &ateapipb.Hardware{Attributes: map[string]string{
-			"architecture": "amd64",
-		}},
-		req: &ateletpb.SetWorkerCapacityRequest{Capacity: &ateletpb.WorkerResources{Actors: 4}},
-		wantForwarded: []*ateapipb.SetWorkerCapacityRequest{{
-			Worker:   &ateapipb.ObjectRef{Name: "pod-a"},
-			Capacity: &ateapipb.WorkerResources{Actors: 4},
-			Hardware: &ateapipb.Hardware{Attributes: map[string]string{
-				"architecture": "amd64",
-			}},
-		}},
 	}, {
 		name:          "omits undetermined compute",
 		req:           &ateletpb.SetWorkerCapacityRequest{Capacity: &ateletpb.WorkerResources{Actors: 1}},
@@ -185,7 +172,7 @@ func TestSetWorkerCapacity(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			workers := &fakeWorkerService{err: tt.serviceErr}
-			svc := &ateomSupportServer{workers: workers, hardware: tt.hardware}
+			svc := &ateomSupportServer{workers: workers, hardware: hw}
 			ctx := workerContext(t, "pod-a")
 			if tt.unauthenticated {
 				ctx = context.Background()
