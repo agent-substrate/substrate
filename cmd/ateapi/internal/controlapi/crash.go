@@ -93,8 +93,13 @@ func handleAteletError(ctx context.Context, st crashActorStore, actorRef resourc
 		return fmt.Errorf("actor %s crashed: %w", actorRef, err)
 	}
 
-	if status.Code(err) == codes.Unavailable {
+	switch status.Code(err) {
+	case codes.Unavailable:
 		return apierror.Unavailable("while calling atelet %s: %w", rpc, err)
+	case codes.Canceled:
+		return fmt.Errorf("while calling atelet %s: %w: %w", rpc, err, context.Canceled)
+	case codes.DeadlineExceeded:
+		return fmt.Errorf("while calling atelet %s: %w: %w", rpc, err, context.DeadlineExceeded)
 	}
 	return apierror.Internal("while calling atelet %s: %w", rpc, err)
 }

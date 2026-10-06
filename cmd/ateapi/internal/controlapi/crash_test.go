@@ -377,7 +377,7 @@ func TestHandleAteletError(t *testing.T) {
 			ctx:       context.Background(),
 			rpc:       "Restore",
 			err:       status.Error(codes.Canceled, "grpc: the client connection is closing"),
-			wantCode:  codes.Internal,
+			wantCode:  codes.Canceled,
 			wantState: ateapipb.ActorState_ACTOR_STATE_RUNNING,
 		},
 		{
@@ -385,7 +385,7 @@ func TestHandleAteletError(t *testing.T) {
 			ctx:       context.Background(),
 			rpc:       "Restore",
 			err:       status.Error(codes.DeadlineExceeded, "context deadline exceeded"),
-			wantCode:  codes.Internal,
+			wantCode:  codes.DeadlineExceeded,
 			wantState: ateapipb.ActorState_ACTOR_STATE_RUNNING,
 		},
 		{
@@ -394,6 +394,22 @@ func TestHandleAteletError(t *testing.T) {
 			rpc:       "Restore",
 			err:       fmt.Errorf("while restoring actor: %w", status.Error(codes.Unavailable, "connection refused")),
 			wantCode:  codes.Unavailable,
+			wantState: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+		},
+		{
+			name:      "wrapped Canceled leaves the actor as it was",
+			ctx:       context.Background(),
+			rpc:       "Restore",
+			err:       fmt.Errorf("while restoring actor: %w", status.Error(codes.Canceled, "connection closing")),
+			wantCode:  codes.Canceled,
+			wantState: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+		},
+		{
+			name:      "wrapped DeadlineExceeded leaves the actor as it was",
+			ctx:       context.Background(),
+			rpc:       "Restore",
+			err:       fmt.Errorf("while restoring actor: %w", status.Error(codes.DeadlineExceeded, "restore reply timed out")),
+			wantCode:  codes.DeadlineExceeded,
 			wantState: ateapipb.ActorState_ACTOR_STATE_RUNNING,
 		},
 		{
@@ -450,6 +466,16 @@ func TestHandleAteletError(t *testing.T) {
 			err := handleAteletError(tt.ctx, st, actorRef, ateattr.OperationResume, tt.rpc, tt.isTerminateRPC, tt.err)
 			if got := apierror.Code(err); got != tt.wantCode {
 				t.Errorf("apierror.Code(handleAteletError()) = %v, want %v (err: %v)", got, tt.wantCode, err)
+			}
+
+			if !errors.Is(err, tt.err) {
+				t.Errorf("original atelet error was lost: %v", err)
+			}
+			if tt.wantCode == codes.Canceled && !errors.Is(err, context.Canceled) {
+				t.Errorf("error does not wrap context.Canceled: %v", err)
+			}
+			if tt.wantCode == codes.DeadlineExceeded && !errors.Is(err, context.DeadlineExceeded) {
+				t.Errorf("error does not wrap context.DeadlineExceeded: %v", err)
 			}
 
 			actor, err := st.GetActor(ctx, actorRef)
