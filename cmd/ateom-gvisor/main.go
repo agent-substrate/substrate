@@ -79,6 +79,10 @@ var (
 	reaper = childreap.New()
 )
 
+// minUsageSampleInterval is the floor of --usage-sample-interval, the same as
+// atelet's poll interval floor.
+const minUsageSampleInterval = 50 * time.Second
+
 // workloadGracePeriod is the whole budget for draining the worker on shutdown.
 // It needs to stay significantly less than the K8s termination grace period
 // for the ateom, so the escalation to SIGKILL happens here rather than as a
@@ -117,8 +121,8 @@ func do(ctx context.Context) error {
 	if *maxActors < 0 {
 		return fmt.Errorf("--max-actors must not be negative, got %d", *maxActors)
 	}
-	if *usageSampleInterval <= 0 {
-		return fmt.Errorf("--usage-sample-interval must be positive, got %v", *usageSampleInterval)
+	if *usageSampleInterval < minUsageSampleInterval {
+		return fmt.Errorf("--usage-sample-interval must be at least %v, got %v", minUsageSampleInterval, *usageSampleInterval)
 	}
 
 	const serviceName = "ateom-gvisor"
@@ -679,7 +683,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	attribution := ateomstats.ActorAttributionFromRequest(req)
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor checkpointing", attribution)
 	// Read before the snapshot: a Full checkpoint stops the sandbox, and its
-	// cgroup with it. The final record waits for the checkpoint to succeed.
+	// cgroup with it. The final record waits for the teardown.
 	hosted := s.lookupActor(req.GetActorUid())
 	if hosted != nil {
 		s.readFinal(ctx, hosted)
@@ -753,6 +757,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 			slog.String("actorUID", attribution.UID),
 			slog.Any("err", err))
 	}
+	s.recordFinalIfEnded(ctx, hosted)
 
 	// Report exactly the files runsc wrote so atelet ships precisely this set
 	// (checkpoint.img plus any pages images), rather than a hardcoded list.
@@ -762,9 +767,6 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	}
 
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor checkpointed", attribution)
-	if hosted != nil {
-		s.recordFinal(ctx, hosted)
-	}
 
 	return &ateompb.CheckpointWorkloadResponse{SnapshotFiles: snapshotFiles, DataSnapshotFiles: durableFiles}, nil
 }
@@ -1015,14 +1017,13 @@ func (s *AteomService) TerminateWorkload(ctx context.Context, req *ateompb.Termi
 	if hosted != nil {
 		s.readFinal(ctx, hosted)
 	}
-	if err := s.terminateWorkload(ctx, attribution.Ref, attribution.UID, req.GetRunscPath(), req.GetActorDirs(), req.GetSpec().GetContainers()); err != nil {
+	err := s.terminateWorkload(ctx, attribution.Ref, attribution.UID, req.GetRunscPath(), req.GetActorDirs(), req.GetSpec().GetContainers())
+	s.recordFinalIfEnded(ctx, hosted)
+	if err != nil {
 		return nil, fmt.Errorf("failed to terminate workload: %w", err)
 	}
 
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor terminated", attribution)
-	if hosted != nil {
-		s.recordFinal(ctx, hosted)
-	}
 
 	return &ateompb.TerminateWorkloadResponse{}, nil
 }

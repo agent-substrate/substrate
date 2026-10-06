@@ -71,8 +71,8 @@ func TestSweepStampsEpochAndDiscoveryServesIt(t *testing.T) {
 	if got != swept[0] {
 		t.Error("discovery read did not serve the swept sample")
 	}
-	if got.GetEpochUnixNano() != epoch.UnixNano() || got.GetCpuUsageUsec() != 1234567 {
-		t.Errorf("served epoch %d cpu %d, want epoch %d cpu 1234567", got.GetEpochUnixNano(), got.GetCpuUsageUsec(), epoch.UnixNano())
+	if got.GetEpochUnixNano() != epoch.UnixNano() || got.GetCpuUsageUsec() != healthyCPUUsec {
+		t.Errorf("served epoch %d cpu %d, want epoch %d cpu %d", got.GetEpochUnixNano(), got.GetCpuUsageUsec(), epoch.UnixNano(), healthyCPUUsec)
 	}
 }
 
@@ -108,6 +108,24 @@ func TestRecordInitialAndFinal(t *testing.T) {
 		if src != ateattr.StatsSourceCgroup {
 			t.Errorf("record source = %q, want measured", src)
 		}
+	}
+}
+
+// TestRecordFinalIfEnded pins that the final record waits for the actor to be
+// unhosted, as a teardown does even when a later step fails.
+func TestRecordFinalIfEnded(t *testing.T) {
+	s := newStatsService(t, healthyCgroup)
+	rec := withUsageRecorder(s)
+	h := hostWithEpoch(s, time.Now(), true)
+
+	s.recordFinalIfEnded(context.Background(), h)
+	if got := rec.Kinds(); len(got) != 0 {
+		t.Fatalf("records while hosted = %v, want none", got)
+	}
+	setHostedActor(s, nil)
+	s.recordFinalIfEnded(context.Background(), h)
+	if got := rec.Kinds(); len(got) != 1 || got[0] != ateattr.StatsKindFinal {
+		t.Errorf("records after unhosting = %v, want one final", got)
 	}
 }
 

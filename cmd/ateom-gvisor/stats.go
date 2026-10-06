@@ -189,7 +189,7 @@ func (s *AteomService) sweepUsage(ctx context.Context) []*ateompb.WorkloadStatsS
 func (s *AteomService) recordInitial(ctx context.Context, h *hostedActor) {
 	sample, err := s.measure(ctx, h)
 	if err != nil {
-		slog.WarnContext(ctx, "No initial usage sample", slog.String("actorUID", h.attribution.UID), slog.Any("err", err))
+		slog.WarnContext(ctx, "No initial usage sample", slog.String(string(ateattr.ActorUIDKey), h.attribution.UID), slog.Any("err", err))
 		sample = nil
 	}
 	h.usage.Initial(sample, func() { s.usage.Emit(ctx, ateattr.StatsKindInitial, sample) })
@@ -204,6 +204,15 @@ func (s *AteomService) readFinal(ctx context.Context, h *hostedActor) {
 	}
 }
 
+// recordFinalIfEnded writes h's final record if a checkpoint or terminate tore
+// its activation down, which unhosts the actor even when a later step fails.
+// The caller holds the actor's lock.
+func (s *AteomService) recordFinalIfEnded(ctx context.Context, h *hostedActor) {
+	if h != nil && s.lookupActor(h.attribution.UID) != h {
+		s.recordFinal(ctx, h)
+	}
+}
+
 // recordFinal writes the final record of an activation that a checkpoint or a
 // terminate ended, from its newest measured sample.
 func (s *AteomService) recordFinal(ctx context.Context, h *hostedActor) {
@@ -212,7 +221,7 @@ func (s *AteomService) recordFinal(ctx context.Context, h *hostedActor) {
 		if measured == nil {
 			measured = pending
 		}
-		s.usage.EmitFinal(ctx, measured)
+		s.usage.Emit(ctx, ateattr.StatsKindFinal, measured)
 	})
 }
 

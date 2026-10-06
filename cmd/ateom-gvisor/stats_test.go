@@ -48,6 +48,9 @@ var testActor = resources.ActorAttribution{
 	TemplateName:     "template-a",
 }
 
+// healthyCPUUsec is the usage_usec in healthyCgroup.
+const healthyCPUUsec = 1234567
+
 var healthyCgroup = map[string]string{
 	"memory.current": "157286400\n",
 	"memory.peak":    "209715200\n",
