@@ -113,11 +113,11 @@ service Control {
     option (method).resource = "Tag";
   }
 
-  // Delete a Tag and the external snapshot it owns. Actors created from the
-  // tag that have not yet been suspended still point at that external snapshot
-  // and become unrecoverable, so do not delete a tag while such Actors exist.
-  // Fails with `FAILED_PRECONDITION`, leaving the tag unchanged, while the tag
-  // owns ExternalVolumeSnapshots.
+  // Delete a Tag, the external snapshot it owns, and the
+  // ExternalVolumeSnapshots it owns along with their storage snapshots. Actors
+  // created from the tag that have not yet been suspended still point at that
+  // external snapshot and become unrecoverable, so do not delete a tag while
+  // such Actors exist.
   rpc DeleteTag(DeleteTagRequest) returns (Tag) {
     option (method).resource = "Tag";
   }
@@ -1132,8 +1132,8 @@ message Tag {
 // by the storage system.
 //
 // A snapshot is owned by the tag named in `origin.tag_capture.tag`, in the
-// same atespace. DeleteTag fails with `FAILED_PRECONDITION` while the tag owns
-// snapshots. The API only reads snapshots.
+// same atespace. CreateTag records one for each volume it captures, and
+// DeleteTag deletes them with the tag. The API only reads snapshots.
 //
 // +ate:preview=ExternalVolumes
 // +k8s:validation-gen=true
@@ -2239,6 +2239,36 @@ message CreateTagRequest {
   //
   // +k8s:required
   Tag tag = 1;
+
+  // volume_selection opts the tag into capturing the source Actor's external
+  // volumes. Unset captures none: snapshotting volumes costs storage and time
+  // that a tag of the core session alone does not. Set but empty captures
+  // every external volume; names narrows the set.
+  //
+  // Capturing requires the driver of every captured volume to support
+  // snapshots, and fails the call if any does not. It also fails if the
+  // Actor has no external volumes. Each captured volume is recorded as an
+  // ExternalVolumeSnapshot the tag owns.
+  //
+  // +ate:preview=ExternalVolumes
+  // +k8s:ifDisabled(ExternalVolumes)=+k8s:forbidden
+  // +k8s:optional
+  ExternalVolumeSelection volume_selection = 2;
+}
+
+// ExternalVolumeSelection picks which of the source Actor's external volumes a
+// tag captures.
+message ExternalVolumeSelection {
+  // names limits the capture to these external volumes of the source Actor,
+  // named as in its ActorTemplate. Empty captures every external volume. A
+  // name the Actor has no external volume for fails the call. Volumes left
+  // out are not captured.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=32 # matches the template's volumes bound
+  // +k8s:listType=set
+  // +k8s:eachVal=+k8s:format=k8s-short-name
+  repeated string names = 1;
 }
 
 // Request to update mutable fields on an existing Tag.

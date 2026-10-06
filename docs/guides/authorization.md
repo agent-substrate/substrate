@@ -204,7 +204,8 @@ viewer, and a global role holds the same role in every atespace. So
 
 ### External volume snapshots
 
-The API only reads external volume snapshots.
+The API only reads external volume snapshots. `CreateTag` and `DeleteTag`
+create and delete a tag's snapshots under the tag's own permission.
 
 | RPC | Permission, on | Allowed for |
 |---|---|---|

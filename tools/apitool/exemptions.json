@@ -1,5 +1,10 @@
 [
   {
+    "rule": "create-request-shape",
+    "subject": "substrate.ateapi.v1.Control.CreateTag",
+    "message": "request field \"volume_selection\" is not allowed - want only \"tag\" substrate.ateapi.v1.Tag and optional \"options\" substrate.ateapi.v1.CreateOptions"
+  },
+  {
     "rule": "documented",
     "subject": "substrate.ateapi.v1.Actor",
     "message": "message has no doc comment"

@@ -207,6 +207,13 @@ func actorVolumeID(actorUID string, volumeName string) string {
 	return fmt.Sprintf("substrate-%s-%s", actorUID, volumeName)
 }
 
+// tagVolumeSnapshotID names the snapshot a tag takes of one volume, both in the
+// storage system and as an ExternalVolumeSnapshot. It uses the tag's UID so
+// that a second create under a reused tag name gets new snapshot names.
+func tagVolumeSnapshotID(tagUID string, volumeName string) string {
+	return fmt.Sprintf("substrate-snap-%s-%s", tagUID, volumeName)
+}
+
 // detachActorVolumes detaches all mounted external volumes for an actor from its assigned node.
 func detachActorVolumes(ctx context.Context, registry VolumePluginRegistry, actor *ateapi.Actor, template *ateapi.ActorTemplate, action string) error {
 	node := actor.GetStatus().GetAssignedNode()

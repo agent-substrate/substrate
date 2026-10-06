@@ -18,6 +18,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"strings"
+	"sync"
 
 	"go.ate.dev/substrate/api/ateapi/v1"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
@@ -25,9 +28,11 @@ import (
 	"go.ate.dev/substrate/internal/preview"
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/internal/volume"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"k8s.io/apimachinery/pkg/util/sets"
 )
 
 // TagActorSnapshot tags the external snapshot held by the suspended actor the
@@ -35,7 +40,7 @@ import (
 // The tag is given its own copy of that snapshot, so suspending the actor again
 // or deleting the actor does not garbage collect the tag's snapshot.
 //
-// The tag is built in 6 phases:
+// The tag is built in 7 phases:
 //  1. Check that the name is free and the storage location is usable.
 //  2. Make the actor's latest snapshot durable, if it is not uploaded yet: an
 //     asynchronously suspended actor's snapshot may still be uploading.
@@ -43,7 +48,8 @@ import (
 //  4. Record the snapshot's URI, under the tag's UID, before anything is
 //     copied there.
 //  5. Copy the snapshot to that URI.
-//  6. Finalize: mark the tag's snapshot COMPLETED.
+//  6. Snapshot the requested external volumes: none, the named ones, or all.
+//  7. Finalize: mark the tag's snapshot COMPLETED.
 //
 // The tag captures whichever snapshot the actor holds when the workflow runs.
 // An actor keeps no snapshot history, so a suspend that lands first moves what
@@ -53,7 +59,7 @@ import (
 // dies after it leaves a pending tag and every later create under that name is
 // AlreadyExists. To retry, delete the tag, which collects whatever the failed
 // attempt stranded, and create it again.
-func (w *ActorWorkflow) TagActorSnapshot(ctx context.Context, tag *ateapi.Tag) (*ateapi.Tag, error) {
+func (w *ActorWorkflow) TagActorSnapshot(ctx context.Context, tag *ateapi.Tag, externalVolumes *ateapi.ExternalVolumeSelection) (*ateapi.Tag, error) {
 	ctx = preview.ContextWithOptIn(ctx)
 	actorRef := resources.ActorRefFromObjectRef(tag.GetSourceActor())
 
@@ -75,6 +81,16 @@ func (w *ActorWorkflow) TagActorSnapshot(ctx context.Context, tag *ateapi.Tag) (
 	defer tagLease.Close()
 
 	actor, actorTemplate, err := w.loadActorForTag(leaseCtx, actorRef)
+	if err != nil {
+		return nil, err
+	}
+	// Resolved before anything else, so a volume the actor does not have or
+	// cannot snapshot fails the call before anything is uploaded or copied.
+	volumes, err := selectTagVolumes(actor, externalVolumes)
+	if err != nil {
+		return nil, err
+	}
+	plugins, err := w.tagVolumeSnapshotPlugins(leaseCtx, actor, volumes)
 	if err != nil {
 		return nil, err
 	}
@@ -103,22 +119,58 @@ func (w *ActorWorkflow) TagActorSnapshot(ctx context.Context, tag *ateapi.Tag) (
 	if err := w.ensureTagSnapshotCopied(leaseCtx, recorded, snapshot, dst); err != nil {
 		return nil, err
 	}
+	if err := w.ensureTagVolumesSnapshotted(leaseCtx, recorded, volumes, plugins); err != nil {
+		return nil, err
+	}
 	return w.ensureTagFinalized(leaseCtx, recorded, snapshot, dst)
 }
 
-// DeleteTag releases the external snapshot the tag owns and then removes the
-// row, in that order: the row is the only handle on that snapshot, so dropping
-// it first would leak.
+// selectTagVolumes returns the source actor's external volumes a tag captures:
+// none when sel is unset, then the ones it names, or all of them when it names
+// none. The result keeps the actor's volume order.
 //
-// The workflow is built in 3 phases:
+// All volumes means every entry in status.external_volumes, including volumes
+// no container mounts. Leaving those out would produce a tag missing a volume.
+func selectTagVolumes(actor *ateapi.Actor, sel *ateapi.ExternalVolumeSelection) ([]*ateapi.ExternalVolumeStatus, error) {
+	if sel == nil {
+		return nil, nil
+	}
+	names := sel.GetNames()
+	actorRef := resources.ActorRefFromActor(actor)
+	requested := sets.New(names...)
+	var selected []*ateapi.ExternalVolumeStatus
+	for _, vol := range actor.GetStatus().GetExternalVolumes().GetVolumes() {
+		if len(names) > 0 && !requested.Has(vol.GetName()) {
+			continue
+		}
+		selected = append(selected, vol)
+		requested.Delete(vol.GetName())
+	}
+	if requested.Len() > 0 {
+		return nil, apierror.InvalidArgument("Actor %s has no external volumes named %s", actorRef, strings.Join(sets.List(requested), ", "))
+	}
+	if len(selected) == 0 {
+		return nil, apierror.InvalidArgument("No volumes of Actor %s can be snapshotted; create the tag without a volume selection", actorRef)
+	}
+	return selected, nil
+}
+
+// DeleteTag releases the ExternalVolumeSnapshots and the external snapshot the
+// tag owns and then removes the row, in that order: the row is the only handle
+// on the external snapshot, so dropping it first would leak.
+//
+// The workflow is built in 4 phases:
 //  1. Load the tag (which names the snapshot to collect) and mark it for
-//     deletion. A tag that owns ExternalVolumeSnapshots is left unmarked.
-//  2. Release that snapshot, tolerating a previous attempt partly collected.
-//  3. Finalize: drop the row.
+//     deletion, so no new ExternalVolumeSnapshot is recorded for it.
+//  2. Release its ExternalVolumeSnapshots: delete each storage snapshot, then
+//     its row.
+//  3. Release the external snapshot, tolerating a previous attempt partly
+//     collected.
+//  4. Finalize: drop the row.
 //
-// Idempotent: a failure at any phase leaves the row in place, so the same
-// delete run again rediscovers the work from it and resumes over whatever is
-// left.
+// Idempotent: a failure at any phase leaves the tag's row in place, so the
+// same delete run again rediscovers the work from it and resumes over whatever
+// is left.
 //
 // The tag stays resolvable while its snapshot is being collected, so a
 // CreateActor racing this delete can seed an Actor from content that is going
@@ -139,6 +191,9 @@ func (w *ActorWorkflow) DeleteTag(ctx context.Context, tagRef resources.TagRef, 
 
 	tag, err := w.ensureTagMarkedForDeletion(ctx, tagRef, precondition)
 	if err != nil {
+		return nil, err
+	}
+	if err := w.ensureTagVolumeSnapshotsReleased(ctx, tag); err != nil {
 		return nil, err
 	}
 	if err := w.ensureTagSnapshotReleased(ctx, tag); err != nil {
@@ -176,12 +231,112 @@ func (w *ActorWorkflow) ensureTagMarkedForDeletion(ctx context.Context, tagRef r
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, apierror.NotFound("Tag %s not found", tagRef)
 		}
-		if errors.Is(err, store.ErrFailedPrecondition) {
-			return nil, apierror.FailedPrecondition("Tag %s still owns ExternalVolumeSnapshots", tagRef)
-		}
 		return nil, fmt.Errorf("while marking tag %s for deletion: %w", tagRef, err)
 	}
 	return marked, nil
+}
+
+// ensureTagVolumeSnapshotsReleased deletes the ExternalVolumeSnapshots the tag
+// owns, each storage snapshot first and then its row, so a partial failure
+// leaves every handle reachable for a retry.
+//
+// The rows are recorded before the storage snapshots are taken, so a failed
+// create's snapshots are collected too. The tag is marked for deletion, so no
+// new row is recorded for it, and the list is complete.
+func (w *ActorWorkflow) ensureTagVolumeSnapshotsReleased(ctx context.Context, tag *ateapi.Tag) (err error) {
+	ctx, done := stepSpan(ctx, "ReleaseTagVolumeSnapshots")
+	defer func() { err = done(err) }()
+
+	tagRef := resources.TagRefFromTag(tag)
+	snapshots, err := w.store.ListTagExternalVolumeSnapshots(ctx, tagRef, tag.GetMetadata().GetUid())
+	if err != nil {
+		return fmt.Errorf("while listing the external volume snapshots of tag %s: %w", tagRef, err)
+	}
+	if len(snapshots) == 0 {
+		markSkipped(ctx, "tag owns no external volume snapshots")
+		return nil
+	}
+	var errs []error
+	for _, snap := range snapshots {
+		if err := w.releaseTagVolumeSnapshot(ctx, snap); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if err := errors.Join(errs...); err != nil {
+		return fmt.Errorf("while releasing the external volume snapshots of tag %s: %w", tagRef, err)
+	}
+	return nil
+}
+
+// releaseTagVolumeSnapshot deletes one storage snapshot and then its row. A
+// row without a handle may still name a snapshot that was cut but never
+// recorded; its handle is recovered first (see recoverVolumeSnapshotHandle).
+// A failed recovery is written to the row's error_message, so readers see why
+// the delete is stuck.
+func (w *ActorWorkflow) releaseTagVolumeSnapshot(ctx context.Context, snap *ateapi.ExternalVolumeSnapshot) error {
+	ref := resources.ExternalVolumeSnapshotRefFromExternalVolumeSnapshot(snap)
+	handle := snap.GetStatus().GetSnapshotId()
+	if handle == "" {
+		recovered, err := w.recoverVolumeSnapshotHandle(ctx, snap)
+		if err != nil {
+			w.recordVolumeSnapshotStatus(ctx, snap, tagVolumeSnapshotFailed(err))
+			return err
+		}
+		handle = recovered.SnapshotID
+	}
+	if handle != "" {
+		plugin, err := w.pluginRegistry.GetPlugin(ctx, snap.GetDriverName())
+		if err != nil {
+			return fmt.Errorf("while getting volume plugin for driver %q: %w", snap.GetDriverName(), err)
+		}
+		if err := plugin.DeleteSnapshot(ctx, handle); err != nil {
+			return fmt.Errorf("while deleting volume snapshot %q: %w", handle, err)
+		}
+	}
+	_, err := w.store.DeleteExternalVolumeSnapshot(ctx, ref, store.DeletePreconditions{UID: snap.GetMetadata().GetUid()})
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return fmt.Errorf("while deleting ExternalVolumeSnapshot %s: %w", ref, err)
+	}
+	return nil
+}
+
+// recordVolumeSnapshotStatus writes the error that kept a recovery from
+// finishing to its row. A failed write is logged and otherwise ignored: the
+// caller goes on with what it holds.
+func (w *ActorWorkflow) recordVolumeSnapshotStatus(ctx context.Context, snap *ateapi.ExternalVolumeSnapshot, newStatus *ateapi.ExternalVolumeSnapshotStatus) {
+	ref := resources.ExternalVolumeSnapshotRefFromExternalVolumeSnapshot(snap)
+	_, err := w.store.UpdateExternalVolumeSnapshot(ctx, ref, store.PreconditionFrom(snap), func(toUpdate *ateapi.ExternalVolumeSnapshot) error {
+		toUpdate.Status = newStatus
+		return nil
+	})
+	if err != nil {
+		slog.WarnContext(ctx, "cannot record the result of recovering a volume snapshot handle",
+			slog.String("external_volume_snapshot", ref.String()), slog.Any("error", err))
+	}
+}
+
+// recoverVolumeSnapshotHandle finds the handle of a snapshot whose row records
+// none. Such a row names either a snapshot that failed or one the storage
+// system cut whose handle a failed or crashed create never wrote back.
+// CreateSnapshot is idempotent on the snapshot name and source volume, so
+// issuing the create's request again returns the handle of a snapshot that
+// exists. When none does, this cuts one that the caller then deletes. That
+// snapshot is of the volume as it is now, which may be attached if the source
+// Actor has resumed, and it counts against the storage system's quota until
+// it is deleted. Any error keeps the row for a retry.
+func (w *ActorWorkflow) recoverVolumeSnapshotHandle(ctx context.Context, snap *ateapi.ExternalVolumeSnapshot) (volume.Snapshot, error) {
+	driver := snap.GetDriverName()
+	origin := snap.GetOrigin().GetTagCapture()
+	volName := origin.GetSourceVolumeName()
+	plugin, err := w.pluginRegistry.GetPlugin(ctx, driver)
+	if err != nil {
+		return volume.Snapshot{}, fmt.Errorf("while getting volume plugin for driver %q: %w", driver, err)
+	}
+	got, err := createTagVolumeSnapshot(ctx, plugin, snap.GetMetadata().GetName(), volName, origin.GetSourceVolumeId(), driver)
+	if err != nil {
+		return volume.Snapshot{}, fmt.Errorf("while recovering the snapshot of volume %q: %w", volName, err)
+	}
+	return got, nil
 }
 
 // ensureTagSnapshotReleased deletes the objects the tag's external snapshot is
@@ -514,9 +669,183 @@ func (w *ActorWorkflow) ensureTagSnapshotCopied(ctx context.Context, tag *ateapi
 	return nil
 }
 
+// ensureTagVolumesSnapshotted captures the given external volumes of the
+// source actor, as picked by selectTagVolumes, with the plugins
+// tagVolumeSnapshotPlugins returned. Volumes left out are not recorded.
+//
+// One ExternalVolumeSnapshot per volume is recorded first, with its source
+// volume ID and an empty status. The snapshots are taken concurrently, and
+// every result is recorded in one transaction once all of them return: the
+// handle with whether it is ready to use, or the error.
+//
+// A row with an empty status names a snapshot that may have been cut but
+// whose handle was never recorded because the create died or the write
+// failed. Deleting the tag recovers it from the row's source volume ID, so
+// nothing is released here.
+//
+// Capture is all-or-nothing: a clone that silently came up with one empty disk
+// would be worse than a failed create. Any failure fails the create and leaves
+// the pending tag for DeleteTag. The handles of volumes that did succeed are
+// recorded before the failure is returned.
+//
+// It does not wait for the storage system to finish copying. A driver may
+// return a handle that is not ready to use and finish in the background, and
+// blocking here would put an unbounded storage operation inside a synchronous
+// RPC.
+//
+// No quiesce step is required. A SUSPENDED actor has already had its volumes
+// unmounted by atelet and detached by the control plane, so the filesystem is
+// cleanly unmounted with no dirty page cache, and the actor lease held by the
+// caller keeps a concurrent resume from re-attaching them mid-capture.
+func (w *ActorWorkflow) ensureTagVolumesSnapshotted(ctx context.Context, tag *ateapi.Tag, volumes []*ateapi.ExternalVolumeStatus, plugins []volume.VolumePluginControlPlane) (err error) {
+	ctx, done := stepSpan(ctx, "SnapshotVolumes")
+	defer func() { err = done(err) }()
+
+	if len(volumes) == 0 {
+		markSkipped(ctx, "no external volumes to capture")
+		return nil
+	}
+
+	tagRef := resources.TagRefFromTag(tag)
+	tagUID := tag.GetMetadata().GetUid()
+	for _, vol := range volumes {
+		if _, err := w.store.CreateExternalVolumeSnapshot(ctx, newTagVolumeSnapshot(tag, vol)); err != nil {
+			return fmt.Errorf("while recording the volumes to snapshot of tag %s: %w", tagRef, err)
+		}
+	}
+
+	// Siblings are not canceled when one fails: a canceled call may still
+	// have cut a snapshot whose handle would never come back, so each runs to
+	// completion and reports its result. Losing a lease does cancel ctx. A
+	// driver may still cut the snapshot after that, and if DeleteTag has
+	// dropped the row by then, the snapshot is leaked.
+	snaps := make([]volume.Snapshot, len(volumes))
+	snapErrs := make([]error, len(volumes))
+	var wg sync.WaitGroup
+	for i, vol := range volumes {
+		wg.Go(func() {
+			snaps[i], snapErrs[i] = createTagVolumeSnapshot(ctx, plugins[i], tagVolumeSnapshotID(tagUID, vol.GetName()), vol.GetName(), vol.GetStorageVolumeId(), vol.GetVolumeType())
+		})
+	}
+	wg.Wait()
+
+	index := make(map[string]int, len(volumes))
+	for i, vol := range volumes {
+		index[vol.GetName()] = i
+	}
+	if _, err := w.store.UpdateTagExternalVolumeSnapshots(ctx, tagRef, tagUID, func(toUpdate *ateapi.ExternalVolumeSnapshot) error {
+		volName := toUpdate.GetOrigin().GetTagCapture().GetSourceVolumeName()
+		i, ok := index[volName]
+		if !ok {
+			return fmt.Errorf("tag %s owns a snapshot of volume %q, which this create did not take", tagRef, volName)
+		}
+		if snapErrs[i] != nil {
+			toUpdate.Status = tagVolumeSnapshotFailed(snapErrs[i])
+		} else {
+			toUpdate.Status = tagVolumeSnapshotTaken(snaps[i])
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("while recording the volume snapshots of tag %s: %w", tagRef, err)
+	}
+	if err := errors.Join(snapErrs...); err != nil {
+		return apierror.Internal("%v", err)
+	}
+	return nil
+}
+
+// newTagVolumeSnapshot returns the ExternalVolumeSnapshot of vol, with an
+// empty status, that tag records before it takes the snapshot.
+func newTagVolumeSnapshot(tag *ateapi.Tag, vol *ateapi.ExternalVolumeStatus) *ateapi.ExternalVolumeSnapshot {
+	tagRef := resources.TagRefFromTag(tag)
+	return &ateapi.ExternalVolumeSnapshot{
+		Metadata: &ateapi.ResourceMetadata{
+			Atespace: tagRef.Atespace,
+			Name:     tagVolumeSnapshotID(tag.GetMetadata().GetUid(), vol.GetName()),
+		},
+		DriverName: vol.GetVolumeType(),
+		Origin: &ateapi.ExternalVolumeSnapshotOrigin{TagCapture: &ateapi.TagVolumeSnapshotOrigin{
+			Tag:              tagRef.ToObjectRef(),
+			TagUid:           tag.GetMetadata().GetUid(),
+			SourceVolumeName: vol.GetName(),
+			SourceVolumeId:   vol.GetStorageVolumeId(),
+		}},
+		Status: &ateapi.ExternalVolumeSnapshotStatus{},
+	}
+}
+
+// tagVolumeSnapshotTaken returns the status recording a snapshot the driver
+// returned a handle for. It has no error_message, so writing it clears the
+// error of an earlier failed attempt.
+func tagVolumeSnapshotTaken(snap volume.Snapshot) *ateapi.ExternalVolumeSnapshotStatus {
+	return &ateapi.ExternalVolumeSnapshotStatus{
+		SnapshotId:       snap.SnapshotID,
+		ReadyToUse:       snap.ReadyToUse,
+		RestoreSizeBytes: snap.SizeBytes,
+	}
+}
+
+// maxVolumeSnapshotErrorMessageLen is ExternalVolumeSnapshotStatus.error_message's
+// maxLength.
+const maxVolumeSnapshotErrorMessageLen = 4096
+
+// tagVolumeSnapshotFailed returns the status recording a failed snapshot,
+// with the error cut to fit error_message.
+func tagVolumeSnapshotFailed(err error) *ateapi.ExternalVolumeSnapshotStatus {
+	return &ateapi.ExternalVolumeSnapshotStatus{
+		ErrorMessage: truncateUTF8(strings.ToValidUTF8(err.Error(), "�"), maxVolumeSnapshotErrorMessageLen),
+	}
+}
+
+// createTagVolumeSnapshot snapshots one volume under name, failing if the
+// driver returns no handle.
+func createTagVolumeSnapshot(ctx context.Context, plugin volume.VolumePluginControlPlane, name, volName, sourceVolumeID, driver string) (volume.Snapshot, error) {
+	// CSI CreateSnapshot is idempotent on (name, source volume), so a retry
+	// returns the snapshot the previous attempt made; DeleteTag relies on this
+	// to recover handles that were never recorded.
+	snap, err := plugin.CreateSnapshot(ctx, volume.CreateSnapshotRequest{
+		Name:           name,
+		SourceVolumeID: sourceVolumeID,
+	})
+	if err != nil {
+		return volume.Snapshot{}, fmt.Errorf("failed to snapshot volume %q: %w", volName, err)
+	}
+	if snap.SnapshotID == "" {
+		return volume.Snapshot{}, fmt.Errorf("driver %q returned no snapshot handle for volume %q", driver, volName)
+	}
+	return snap, nil
+}
+
+// tagVolumeSnapshotPlugins checks that every volume can be snapshotted and
+// returns the plugin to snapshot each one with, indexed like volumes. It runs
+// before the tag is reserved, so a volume that cannot be captured fails the
+// call without leaving a pending tag or touching the storage system.
+func (w *ActorWorkflow) tagVolumeSnapshotPlugins(ctx context.Context, actor *ateapi.Actor, volumes []*ateapi.ExternalVolumeStatus) ([]volume.VolumePluginControlPlane, error) {
+	plugins := make([]volume.VolumePluginControlPlane, 0, len(volumes))
+	for _, vol := range volumes {
+		volName := vol.GetName()
+		if vol.GetStorageVolumeId() == "" {
+			return nil, apierror.FailedPrecondition("cannot snapshot volume %q of Actor %s: it has not been provisioned", volName, resources.ActorRefFromActor(actor))
+		}
+		plugin, err := w.pluginRegistry.GetPlugin(ctx, vol.GetVolumeType())
+		if err != nil {
+			return nil, apierror.FailedPrecondition("failed to get volume plugin for driver %q: %v", vol.GetVolumeType(), err)
+		}
+		caps, err := plugin.ControllerCapabilities(ctx)
+		if err != nil {
+			return nil, apierror.FailedPrecondition("failed to read capabilities of driver %q for volume %q: %v", vol.GetVolumeType(), volName, err)
+		}
+		if !caps.CreateDeleteSnapshot {
+			return nil, apierror.FailedPrecondition("volume %q uses driver %q, which does not support snapshots", volName, vol.GetVolumeType())
+		}
+		plugins = append(plugins, plugin)
+	}
+	return plugins, nil
+}
+
 // ensureTagFinalized publishes the copy by marking status.snapshot COMPLETED.
 // Until this lands the tag is pending and unusable; deleting it collects any
-// partial copy.
+// partial copy and volume snapshots.
 func (w *ActorWorkflow) ensureTagFinalized(ctx context.Context, tag *ateapi.Tag, snapshot *ateapi.Snapshot, dst resources.SnapshotURI) (_ *ateapi.Tag, err error) {
 	ctx, done := stepSpan(ctx, "FinalizeTag")
 	defer func() { err = done(err) }()
