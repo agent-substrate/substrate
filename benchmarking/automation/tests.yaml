@@ -44,8 +44,15 @@
 #   storageClassName
 #                  Optional (default: none). StorageClass for the
 #                  glutton-storage external volume. Setting it deploys the
-#                  glutton-storage template. The class must already exist
-#                  on the cluster.
+#                  glutton-storage template. The class must exist when the
+#                  workloads deploy: on the cluster already, or created by
+#                  additionalManifests.
+#   additionalManifests
+#                  Optional (default: none). Kubernetes manifest files the
+#                  orchestrator applies after deploying substrate and deletes
+#                  after the test, e.g. a StorageClass for storageClassName.
+#                  Relative paths resolve against the directory holding this
+#                  file. A missing file fails the test.
 #   workerWaitTimeout
 #                  Optional (default 300, set by workloads/deploy.sh).
 #                  Whole seconds to wait after the WorkerPool deploy for
