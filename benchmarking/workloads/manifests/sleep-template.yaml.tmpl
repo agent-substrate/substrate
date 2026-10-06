@@ -26,12 +26,14 @@ containers:
 - name: sleep
   image: busybox@sha256:1487d0af5f52b4ba31c7e465126ee2123fe3f2305d638e7827681e7cf6c83d5e
   command: ["/bin/sleep", "1000000"]
-# Without a limit a microvm actor gets the kata default 2 GiB guest, and
-# anything the guest kernel caches rides along in the memory snapshot —
-# bigger guest, bigger snapshot, slower suspend/resume. microvm requires at
-# least 256Mi (128Mi VMM reserve + 128Mi guest floor).
+# Keep the memory small: anything the micro-VM guest kernel caches rides
+# along in the memory snapshot, so a bigger guest means slower
+# suspend/resume. microvm requires at least 256Mi (128Mi VMM reserve +
+# 128Mi guest floor).
 resources:
   limits:
+  - name: cpu
+    quantity: "1"
   - name: memory
     quantity: ${ACTOR_MEMORY}
 snapshotConfig:

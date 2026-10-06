@@ -182,6 +182,12 @@ containers:
 sandboxConfig:
   sandboxClass: gvisor
   configName: gvisor-default
+resources:
+  limits:
+  - name: cpu
+    quantity: "1"
+  - name: memory
+    quantity: 1Gi
 snapshotConfig:
   storageLocation: gs://my-snapshots-bucket/stateful-agent
 volumes:

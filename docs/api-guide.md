@@ -334,6 +334,13 @@ workerSelector:
 sandboxConfig:
   sandboxClass: gvisor
   configName: gvisor-default
+# The actor's size, booked against worker capacity.
+resources:
+  limits:
+  - name: cpu
+    quantity: "1"
+  - name: memory
+    quantity: 1Gi
 snapshotConfig:
   storageLocation: gs://my-bucket/secret-agent
 ```
