@@ -1,0 +1,92 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Strategic-merge patch adding an RDS/Aurora IAM token-refresher sidecar to
+# ate-api-server.
+#
+# RDS has no auth proxy, so the sidecar mints an IAM auth token with the pod's
+# AWS identity (IRSA or EKS Pod Identity) and writes it to a libpq passfile on
+# a shared emptyDir. Tokens expire after 15 minutes, so it rewrites the file
+# well before that. ateapi stays free of AWS code: its connection string
+# carries TLS (RDS requires it for IAM auth), the user, and
+# passfile=/run/rds-iam/pgpass, and it re-reads the passfile for every new
+# connection.
+#
+# Applied by ate-setup when ATE_API_POSTGRES_AWS_IAM_AUTH is true. The sidecar
+# reads RDS_IAM_HOST, RDS_IAM_PORT and RDS_IAM_USER from the
+# ate-api-server-envvars ConfigMap, which ate-setup derives from
+# ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING. AWS_REGION comes from the pod, where the
+# IRSA webhook injects it; with EKS Pod Identity, add it to the sidecar's env.
+spec:
+  template:
+    spec:
+      # A native sidecar (Kubernetes 1.29+): it passes its startupProbe, so the
+      # first token exists, before ateapi starts.
+      initContainers:
+      - name: rds-iam-token-refresher
+        image: public.ecr.aws/aws-cli/aws-cli:2.27.50
+        restartPolicy: Always
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          set -eu
+          umask 077
+          while true; do
+            token="$(aws rds generate-db-auth-token \
+              --hostname "$RDS_IAM_HOST" --port "$RDS_IAM_PORT" \
+              --username "$RDS_IAM_USER" --region "$AWS_REGION")"
+            # passfile format: host:port:database:user:password. The target
+            # fields are wildcards, since ateapi has one database; \ and : are
+            # escaped in the password.
+            escaped="$(printf '%s' "$token" | sed 's/[\\:]/\\&/g')"
+            printf '*:*:*:*:%s\n' "$escaped" > /run/rds-iam/pgpass.tmp
+            mv /run/rds-iam/pgpass.tmp /run/rds-iam/pgpass
+            sleep 300
+          done
+        envFrom:
+        - configMapRef:
+            name: ate-api-server-envvars
+        securityContext:
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+        resources:
+          requests:
+            cpu: 10m
+            memory: 64Mi
+        volumeMounts:
+        - name: rds-iam
+          mountPath: /run/rds-iam
+        startupProbe:
+          exec:
+            command: ["test", "-s", "/run/rds-iam/pgpass"]
+          periodSeconds: 1
+          failureThreshold: 60
+        livenessProbe:
+          exec:
+            # Fails if the token has gone stale (the loop died or AWS calls
+            # keep failing), which restarts the sidecar.
+            command: ["sh", "-c", "test -n \"$(find /run/rds-iam/pgpass -mmin -10)\""]
+          initialDelaySeconds: 30
+          periodSeconds: 60
+      containers:
+      - name: ate-api-server
+        volumeMounts:
+        - name: rds-iam
+          mountPath: /run/rds-iam
+          readOnly: true
+      volumes:
+      - name: rds-iam
+        emptyDir:
+          medium: Memory

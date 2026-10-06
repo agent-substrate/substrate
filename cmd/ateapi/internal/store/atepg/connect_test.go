@@ -78,6 +78,58 @@ func TestPoolConfigRereadsRotatedCredentials(t *testing.T) {
 	}
 }
 
+// TestPoolConfigRereadsRotatedPassfile covers the RDS IAM token that a sidecar
+// rewrites every few minutes: pgx reads the passfile when the connection
+// string is parsed, so BeforeConnect must re-read it for a new connection to
+// authenticate with the current token.
+func TestPoolConfigRereadsRotatedPassfile(t *testing.T) {
+	dir := t.TempDir()
+	passfile := filepath.Join(dir, "pgpass")
+	write := func(password string) {
+		t.Helper()
+		line := "db.example.com:5432:atepg:ate_api:" + password + "\n"
+		if err := os.WriteFile(passfile, []byte(line), 0o600); err != nil {
+			t.Fatalf("writing passfile: %v", err)
+		}
+	}
+	write("token-1")
+
+	dsn := fmt.Sprintf(
+		"postgres://ate_api@db.example.com:5432/atepg?sslmode=require&passfile=%s", passfile)
+	cfg, err := poolConfig(dsn, "test_role")
+	if err != nil {
+		t.Fatalf("poolConfig: %v", err)
+	}
+	if got := cfg.ConnConfig.Password; got != "token-1" {
+		t.Fatalf("password at parse time = %q, want token-1", got)
+	}
+	if cfg.BeforeConnect == nil {
+		t.Fatal("BeforeConnect is nil, a rotated passfile would never be re-read")
+	}
+
+	write("token-2")
+
+	conn := cfg.ConnConfig.Copy()
+	if err := cfg.BeforeConnect(context.Background(), conn); err != nil {
+		t.Fatalf("BeforeConnect: %v", err)
+	}
+	if got := conn.Password; got != "token-2" {
+		t.Errorf("password for a new connection = %q, want token-2", got)
+	}
+
+	// pgx ignores a passfile it cannot read; the last good token must survive.
+	if err := os.Remove(passfile); err != nil {
+		t.Fatalf("removing passfile: %v", err)
+	}
+	conn = conn.Copy()
+	if err := cfg.BeforeConnect(context.Background(), conn); err != nil {
+		t.Fatalf("BeforeConnect with the passfile gone: %v", err)
+	}
+	if got := conn.Password; got != "token-2" {
+		t.Errorf("password with the passfile gone = %q, want the last token, token-2", got)
+	}
+}
+
 func TestPoolConfigRequiresRole(t *testing.T) {
 	_, err := poolConfig("postgres://runtime@postgres:5432/atepg?sslmode=disable", "")
 	if err == nil || !strings.Contains(err.Error(), "role must not be empty") {

@@ -233,6 +233,11 @@ func createSchema(ctx context.Context, pool *pgxpool.Pool, schema string) error 
 
 // poolConfig parses a DSN, assumes the configured role, and refreshes TLS
 // material from projected certificate files for each new connection.
+//
+// The same re-parse picks up a rotated password from a passfile, such as the
+// short-lived RDS IAM token the rds-iam-token-refresher sidecar keeps current.
+// The hook is installed only for TLS connection strings, which RDS IAM auth
+// requires.
 func poolConfig(dsn, role string) (*pgxpool.Config, error) {
 	if role == "" {
 		return nil, fmt.Errorf("PostgreSQL role must not be empty")
@@ -261,6 +266,11 @@ func poolConfig(dsn, role string) (*pgxpool.Config, error) {
 		}
 		cc.TLSConfig = fresh.TLSConfig
 		cc.Fallbacks = fresh.Fallbacks
+		// pgx ignores a passfile it cannot read, so an empty result keeps the
+		// last password rather than replacing it with none.
+		if fresh.Password != "" {
+			cc.Password = fresh.Password
+		}
 		return nil
 	}
 	return cfg, nil

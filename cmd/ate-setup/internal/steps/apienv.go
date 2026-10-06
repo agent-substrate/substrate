@@ -57,8 +57,17 @@ func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if readWriteDSN == "" && cloudsql.Adopted {
-		// Fill missing credentials from the adopted Cloud SQL configuration.
+	awsIAM, err := e.awsIAMEnabled(ctx)
+	if err != nil {
+		return err
+	}
+	if awsIAM && cloudsql.Instance != "" {
+		return fmt.Errorf("ATE_API_POSTGRES_AWS_IAM_AUTH and Cloud SQL are both configured; the cluster can use only one")
+	}
+	awsIAMAdopted := awsIAM && e.Cfg.AWSIAM.Auth == ""
+	adopted := cloudsql.Adopted || awsIAMAdopted
+	if readWriteDSN == "" && adopted {
+		// Fill missing credentials from the adopted configuration.
 		recordedReadWriteDSN, recordedOwnerDSN, err := e.recordedConnectionStrings(ctx)
 		if err != nil {
 			return err
@@ -73,6 +82,8 @@ func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 			if readWriteDSN, err = cloudSQLDSN(cloudsql); err != nil {
 				return err
 			}
+		} else if awsIAM {
+			return fmt.Errorf("ATE_API_POSTGRES_AWS_IAM_AUTH requires ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING")
 		} else {
 			readWriteDSN = config.DefaultPostgresConnectionString
 			ownerDSN = readWriteDSN
@@ -91,8 +102,16 @@ func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 	if ownerDSN == "" {
 		ownerDSN = readWriteDSN
 	}
+	configVars := cloudSQLEnvVars(cloudsql)
+	if awsIAM {
+		var iamVars map[string]string
+		if readWriteDSN, ownerDSN, iamVars, err = withAWSIAM(readWriteDSN, ownerDSN); err != nil {
+			return err
+		}
+		maps.Copy(configVars, iamVars)
+	}
 	schema := e.Cfg.PostgresSchemaName()
-	if cloudsql.Adopted {
+	if adopted {
 		recorded, err := e.recordedAPIServerEnvVars(ctx)
 		if err != nil {
 			return err
@@ -116,7 +135,6 @@ func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 			}
 		}
 	}
-	configVars := cloudSQLEnvVars(cloudsql)
 	configVars["ATE_API_POSTGRES_READ_WRITE_ROLE"] = readWriteRole
 	configVars["ATE_API_POSTGRES_OWNER_ROLE"] = ownerRole
 	if poolMaxConns != "" {

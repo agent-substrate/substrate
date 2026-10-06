@@ -38,7 +38,8 @@ it signs, PostgreSQL, ate-api-server, ate-controller, the atenet dataplane, and
 the atelet DaemonSet, then waits for each to roll out.
 
 The bundled PostgreSQL StatefulSet is skipped when
-ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING or the ATE_API_POSTGRES_CLOUDSQL_* variables
+ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING, the ATE_API_POSTGRES_CLOUDSQL_* variables, or
+ATE_API_POSTGRES_AWS_IAM_AUTH
 select an external database.
 
 Shape the install with the global --atenet-dataplane, --cluster-size, and
@@ -121,7 +122,8 @@ var deployPostgresCmd = &cobra.Command{
 	Long: `Deploy the experimental single-replica PostgreSQL StatefulSet on its own.
 
 "deploy ate-system" already brings PostgreSQL up, unless
-ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING or the ATE_API_POSTGRES_CLOUDSQL_* variables
+ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING, the ATE_API_POSTGRES_CLOUDSQL_* variables, or
+ATE_API_POSTGRES_AWS_IAM_AUTH
 select an external database; this subcommand is for bringing the StatefulSet up
 by itself.`,
 	Args: cobra.NoArgs,

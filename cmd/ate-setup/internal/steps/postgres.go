@@ -73,6 +73,13 @@ func (e *Env) planPostgres(ctx context.Context) (postgresPlan, error) {
 	if instance != "" {
 		return postgresPlan{external: "Cloud SQL instance " + instance}, nil
 	}
+	awsIAM, err := e.awsIAMEnabled(ctx)
+	if err != nil {
+		return postgresPlan{}, err
+	}
+	if awsIAM {
+		return postgresPlan{external: "RDS/Aurora with AWS IAM auth"}, nil
+	}
 	return postgresPlan{bundled: true}, nil
 }
 

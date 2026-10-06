@@ -168,6 +168,8 @@ type Config struct {
 	// CloudSQL points the apiserver at a Cloud SQL instance through the Auth
 	// Proxy sidecar instead of a directly reachable PostgreSQL.
 	CloudSQL CloudSQLConfig
+	// AWSIAM adds the RDS/Aurora IAM token-refresher sidecar to the apiserver.
+	AWSIAM AWSIAMConfig
 
 	// RolloutTimeout is the timeout duration for rollout status checks.
 	RolloutTimeout time.Duration
@@ -242,6 +244,18 @@ type CloudSQLConfig struct {
 	// IPType selects which instance address the proxy dials: one of the
 	// CloudSQLIPType constants. Empty defaults to private.
 	IPType string
+}
+
+// AWSIAMConfig is the operator's RDS/Aurora IAM authentication intent, as
+// expressed by ATE_API_POSTGRES_AWS_IAM_AUTH and ATE_API_POSTGRES_AWS_IAM_ROLE_ARN.
+// The database endpoint and user come from the PostgreSQL connection strings.
+type AWSIAMConfig struct {
+	// Auth is "true" to run the IAM token-refresher sidecar, "false" to remove
+	// it, and empty to adopt whatever the cluster already records.
+	Auth string
+	// RoleARN is the IAM role for service accounts (IRSA) the apiserver
+	// assumes. Empty when the cluster uses EKS Pod Identity.
+	RoleARN string
 }
 
 // Options carries the raw flag values the root command collects, before
@@ -367,6 +381,10 @@ func Load(opts Options) (*Config, error) {
 		PostgresSchema:                    env["ATE_API_POSTGRES_SCHEMA"],
 		PostgresPoolMaxConns:              env["ATE_API_POSTGRES_POOL_MAX_CONNS"],
 		PostgresServerCAFile:              env["ATE_API_POSTGRES_SERVER_CA_FILE"],
+		AWSIAM: AWSIAMConfig{
+			Auth:    env["ATE_API_POSTGRES_AWS_IAM_AUTH"],
+			RoleARN: env["ATE_API_POSTGRES_AWS_IAM_ROLE_ARN"],
+		},
 		CloudSQL: CloudSQLConfig{
 			Instance:    cloudsqlInstance,
 			InstanceSet: cloudsqlInstanceSet,
@@ -457,6 +475,14 @@ func validate(cfg *Config) error {
 	default:
 		return fmt.Errorf("ATE_API_POSTGRES_CLOUDSQL_IP_TYPE must be %s, %s, or %s, got %q",
 			CloudSQLIPTypePrivate, CloudSQLIPTypePublic, CloudSQLIPTypePSC, cfg.CloudSQL.IPType)
+	}
+	switch cfg.AWSIAM.Auth {
+	case "", "true", "false":
+	default:
+		return fmt.Errorf("ATE_API_POSTGRES_AWS_IAM_AUTH must be true or false, got %q", cfg.AWSIAM.Auth)
+	}
+	if cfg.AWSIAM.Auth == "true" && cfg.CloudSQL.Instance != "" {
+		return fmt.Errorf("ATE_API_POSTGRES_AWS_IAM_AUTH and ATE_API_POSTGRES_CLOUDSQL_INSTANCE are mutually exclusive")
 	}
 	switch cfg.ActorJWTAlgorithm {
 	case "ES256", "RS256":
