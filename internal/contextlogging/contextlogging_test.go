@@ -29,6 +29,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/protoredact"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 const (
@@ -411,5 +412,38 @@ func BenchmarkHandle(b *testing.B) {
 				}
 			})
 		}
+	}
+}
+
+// uncomparableMsg is a proto.Message whose dynamic type cannot be compared
+// with ==: a value receiver and a slice field. Comparing two of them as
+// interfaces panics at run time.
+type uncomparableMsg struct {
+	*ateapipb.MintActorJWTResponse
+	_ []int
+}
+
+func (u uncomparableMsg) ProtoReflect() protoreflect.Message {
+	return u.MintActorJWTResponse.ProtoReflect()
+}
+
+func TestHandleToleratesUncomparableMessageTypes(t *testing.T) {
+	// The handler must decide whether a message changed without comparing it
+	// to the original: a panic in Handle crashes whatever goroutine logged.
+	for _, tc := range []struct {
+		name string
+		msg  uncomparableMsg
+		want string
+	}{
+		{"nothing to mask", uncomparableMsg{MintActorJWTResponse: &ateapipb.MintActorJWTResponse{}}, `"v":{}`},
+		{"secret set", uncomparableMsg{MintActorJWTResponse: &ateapipb.MintActorJWTResponse{ActorJwt: "token"}}, protoredact.Placeholder},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			slog.New(NewHandler(slog.NewJSONHandler(&buf, nil))).Info("x", slog.Any("v", tc.msg))
+			if out := buf.String(); strings.Contains(out, "token") || !strings.Contains(out, tc.want) {
+				t.Errorf("got %s, want it to contain %s and not the secret", out, tc.want)
+			}
+		})
 	}
 }

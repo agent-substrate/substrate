@@ -49,16 +49,19 @@ func NeedsRedaction(m proto.Message) bool {
 }
 
 // Redacted returns m with every debug_redact field masked, without modifying
-// m. When NeedsRedaction(m) is false m itself is returned: there is nothing
-// to mask, so nothing to copy, and callers must treat the result as
-// read-only. Otherwise a deep copy is made and masked.
-func Redacted(m proto.Message) proto.Message {
+// m, and whether anything was masked. When NeedsRedaction(m) is false it
+// returns m itself and false: there is nothing to mask, so nothing to copy,
+// and callers must treat the result as read-only. Otherwise it returns a
+// masked deep copy and true. Use the bool rather than comparing the result
+// with m: comparing two proto.Message values panics when the dynamic type is
+// not comparable.
+func Redacted(m proto.Message) (proto.Message, bool) {
 	if !NeedsRedaction(m) {
-		return m
+		return m, false
 	}
 	clone := proto.Clone(m)
 	redact(clone.ProtoReflect())
-	return clone
+	return clone, true
 }
 
 // isNil reports whether m is a nil interface or a typed nil pointer. A typed

@@ -159,7 +159,7 @@ func redactValue(v slog.Value) (slog.Value, bool) {
 		return r, true
 	case slog.KindAny:
 		if m, ok := v.Any().(proto.Message); ok {
-			if r := protoredact.Redacted(m); r != m {
+			if r, changed := protoredact.Redacted(m); changed {
 				return slog.AnyValue(r), true
 			}
 		}

@@ -47,7 +47,8 @@ func TestRedactedRecursesIntoRealMapFields(t *testing.T) {
 			Env:  []*ateletpb.EnvEntry{{Name: "API_KEY", Value: "sk-secret"}},
 		}}},
 	}
-	got := protoredact.Redacted(run).(*ateletpb.RunRequest)
+	redacted, _ := protoredact.Redacted(run)
+	got := redacted.(*ateletpb.RunRequest)
 	if v := got.GetSpec().GetContainers()[0].GetEnv()[0].GetValue(); v != protoredact.Placeholder {
 		t.Fatalf("env value = %q, want placeholder", v)
 	}
@@ -64,7 +65,8 @@ func TestRedactedRecursesIntoRealMapFields(t *testing.T) {
 			Name: "c", Env: []*ateapipb.EnvVar{{Name: "TOKEN", Value: "t0p"}},
 		}},
 	}
-	gotTpl := protoredact.Redacted(tpl).(*ateapipb.ActorTemplate)
+	redactedTpl, _ := protoredact.Redacted(tpl)
+	gotTpl := redactedTpl.(*ateapipb.ActorTemplate)
 	if gotTpl.GetWorkerSelector().GetMatchLabels()["workload"] != "agent" {
 		t.Fatal("string map was altered")
 	}
@@ -186,7 +188,8 @@ func TestRedactedCoversEveryFieldShape(t *testing.T) {
 	outer.Mutable(f("secret_many")).List().Append(protoreflect.ValueOfMessage(newInner("s5", "n5")))
 	outer.Set(f("secret_choice"), protoreflect.ValueOfString("chosen-secret"))
 
-	outer = protoredact.Redacted(outer).(*dynamicpb.Message)
+	redacted, _ := protoredact.Redacted(outer)
+	outer = redacted.(*dynamicpb.Message)
 
 	secretOf := func(m protoreflect.Message) string { return m.Get(innerDesc.Fields().ByName("secret")).String() }
 	nameOf := func(m protoreflect.Message) string { return m.Get(innerDesc.Fields().ByName("name")).String() }
@@ -238,7 +241,8 @@ func TestRedactedLeavesUnsetFieldsUnset(t *testing.T) {
 	outer.Set(outerDesc.Fields().ByName("one"), protoreflect.ValueOfMessage(inner))
 	// A labeled oneof left unselected.
 
-	outer = protoredact.Redacted(outer).(*dynamicpb.Message)
+	redacted, _ := protoredact.Redacted(outer)
+	outer = redacted.(*dynamicpb.Message)
 
 	got := outer.Get(outerDesc.Fields().ByName("one")).Message()
 	if got.Has(innerDesc.Fields().ByName("secret")) {
@@ -260,12 +264,16 @@ func TestRedactedHandlesTypedNilWithoutPanicking(t *testing.T) {
 	// the interceptor then logs, must come back as a nil message of the same
 	// type, for a redactable type and for a clean one alike.
 	var jwt *ateapipb.MintActorJWTResponse
-	if m, ok := protoredact.Redacted(jwt).(*ateapipb.MintActorJWTResponse); !ok || m != nil {
-		t.Errorf("typed nil redactable: got %#v", protoredact.Redacted(jwt))
+	if r, changed := protoredact.Redacted(jwt); changed {
+		t.Errorf("typed nil redactable: reported changed, got %#v", r)
+	} else if m, ok := r.(*ateapipb.MintActorJWTResponse); !ok || m != nil {
+		t.Errorf("typed nil redactable: got %#v", r)
 	}
 	var ref *ateapipb.ObjectRef
-	if m, ok := protoredact.Redacted(ref).(*ateapipb.ObjectRef); !ok || m != nil {
-		t.Errorf("typed nil clean: got %#v", protoredact.Redacted(ref))
+	if r, changed := protoredact.Redacted(ref); changed {
+		t.Errorf("typed nil clean: reported changed, got %#v", r)
+	} else if m, ok := r.(*ateapipb.ObjectRef); !ok || m != nil {
+		t.Errorf("typed nil clean: got %#v", r)
 	}
 }
 
@@ -285,8 +293,8 @@ func TestRedactedReturnsMessagesWithNothingToMaskWithoutCopying(t *testing.T) {
 		if protoredact.NeedsRedaction(m) {
 			t.Errorf("%T: NeedsRedaction should be false", m)
 		}
-		if got := protoredact.Redacted(m); got != m {
-			t.Errorf("%T: expected the same message back, got a copy", m)
+		if got, changed := protoredact.Redacted(m); changed || got != m {
+			t.Errorf("%T: expected the same message back and changed=false, got changed=%v", m, changed)
 		}
 	}
 	// A populated labeled field, however deep, forces a masked copy.
@@ -299,11 +307,11 @@ func TestRedactedReturnsMessagesWithNothingToMaskWithoutCopying(t *testing.T) {
 		if !protoredact.NeedsRedaction(m) {
 			t.Errorf("%T: NeedsRedaction should be true", m)
 		}
-		if got := protoredact.Redacted(m); got == m {
-			t.Errorf("%T: expected a copy", m)
+		if got, changed := protoredact.Redacted(m); !changed || got == m {
+			t.Errorf("%T: expected a copy and changed=true, got changed=%v", m, changed)
 		}
 	}
-	if protoredact.NeedsRedaction(nil) || protoredact.Redacted(nil) != nil {
+	if r, changed := protoredact.Redacted(nil); protoredact.NeedsRedaction(nil) || changed || r != nil {
 		t.Error("nil message should be reported clean and returned as nil")
 	}
 }
@@ -318,8 +326,8 @@ func TestNeedsRedactionToleratesTypedNilOfAnyImplementation(t *testing.T) {
 		if protoredact.NeedsRedaction(m) {
 			t.Errorf("%T typed nil: NeedsRedaction should be false", m)
 		}
-		if got := protoredact.Redacted(m); got != m {
-			t.Errorf("%T typed nil: got %#v, want the same value back", m, got)
+		if got, changed := protoredact.Redacted(m); changed || got != m {
+			t.Errorf("%T typed nil: got %#v (changed=%v), want the same value back", m, got, changed)
 		}
 	}
 }

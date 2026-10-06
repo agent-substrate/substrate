@@ -78,7 +78,8 @@ func TestReachesDebugRedactIsMemoizedAndHandlesRecursiveSchemas(t *testing.T) {
 	if !hasPopulatedDebugRedact(deep) {
 		t.Error("populated secret three levels down not found")
 	}
-	got := Redacted(deep).ProtoReflect().
+	redacted, _ := Redacted(deep)
+	got := redacted.ProtoReflect().
 		Get(node.Fields().ByName("children")).List().Get(0).Message().
 		Get(node.Fields().ByName("children")).List().Get(0).Message().
 		Get(node.Fields().ByName("secret")).String()
@@ -86,7 +87,7 @@ func TestReachesDebugRedactIsMemoizedAndHandlesRecursiveSchemas(t *testing.T) {
 		t.Errorf("deep secret = %q", got)
 	}
 	unset := newNode("", newNode("", newNode("")))
-	if hasPopulatedDebugRedact(unset) || Redacted(unset) != unset {
+	if r, changed := Redacted(unset); hasPopulatedDebugRedact(unset) || changed || r != proto.Message(unset) {
 		t.Error("recursive message with no secret set should be returned unchanged")
 	}
 }
@@ -121,7 +122,7 @@ func TestExtensionFieldsAreFoundAndMasked(t *testing.T) {
 
 	plain := dynamicpb.NewMessage(open)
 	plain.Set(open.Fields().ByName("name"), protoreflect.ValueOfString("n"))
-	if NeedsRedaction(plain) || Redacted(plain) != plain {
+	if r, changed := Redacted(plain); NeedsRedaction(plain) || changed || r != proto.Message(plain) {
 		t.Error("no extension set: should be returned unchanged")
 	}
 
@@ -130,8 +131,9 @@ func TestExtensionFieldsAreFoundAndMasked(t *testing.T) {
 	if !NeedsRedaction(withToken) {
 		t.Fatal("populated labeled extension not detected")
 	}
-	got := Redacted(withToken).ProtoReflect()
-	if got == protoreflect.Message(withToken) {
+	redacted, changed := Redacted(withToken)
+	got := redacted.ProtoReflect()
+	if !changed || got == protoreflect.Message(withToken) {
 		t.Fatal("expected a copy")
 	}
 	if v := got.Get(token).String(); v != Placeholder {
