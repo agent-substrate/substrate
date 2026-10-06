@@ -47,8 +47,13 @@ const (
 )
 
 type fetchRequest struct {
-	URL              string `json:"url"`
-	DisableKeepAlive bool   `json:"disableKeepAlive,omitempty"`
+	URL string `json:"url"`
+	// This flag allows tests to send each request over a new connection,
+	// resulting in a new CONNECT tunnel from the atunnel, rather than re-using
+	// existing connections in the http dialer connection pool and corresponding CONNECT
+	// tunnels in the atunnel.
+	// This is useful when testing egress policy caching behavior in the egress gateway.
+	DisableKeepAlive bool `json:"disableKeepAlive,omitempty"`
 }
 
 type fetchResponse struct {

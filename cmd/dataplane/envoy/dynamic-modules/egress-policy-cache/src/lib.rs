@@ -36,11 +36,19 @@ pub const ATE_POLICY_EGRESS: &str = "dev.ate.policy.egress";
 
 /// Key holding the cached egress policy SNI rules JSON before it is copied to
 /// upstream-shared filter state.
-// TODO(yanavlasov): this is a temporary workaround of the Rust dynamic module API
+// TODO(yanavlasov): this is a temporary workaround for the Rust dynamic module API
 // limitation that does not allow storing filter state shared with upstream.
 // The dev.ate.policy.egress.cached filter state is later copied into
 // dev.ate.policy.egress filter state by the set_filter_state HTTP filter.
+// Once this limitation is addressed this filter can set "dev.ate.policy.egress" filter
+// state directly and share it with upstream.
 pub const ATE_POLICY_EGRESS_CACHED: &str = "dev.ate.policy.egress.cached";
+
+/// Dynamic metadata namespace for egress attributes set on CONNECT.
+pub const ATE_EGRESS_METADATA_NAMESPACE: &str = "dev.ate.egress";
+
+/// Dynamic metadata key holding the destination port dialed by the actor.
+pub const ATE_EGRESS_DIALED_PORT_KEY: &str = "dialed_port";
 
 /// Counter name for egress policy cache hits on CONNECT.
 pub const CONNECT_CACHE_HIT_COUNTER: &str = "ate_egress.connect_cache_hit";
@@ -261,10 +269,11 @@ fn read_destination_port<EHF: EnvoyHttpFilter>(envoy_filter: &EHF) -> Option<Str
   extract_destination_port(authority).map(str::to_owned)
 }
 
-fn build_cache_key<EHF: EnvoyHttpFilter>(envoy_filter: &EHF) -> Option<String> {
+fn build_cache_key<EHF: EnvoyHttpFilter>(envoy_filter: &EHF) -> Option<(String, String)> {
   let cert_digest = read_peer_cert_digest(envoy_filter)?;
   let port = read_destination_port(envoy_filter)?;
-  Some(format!("{cert_digest};{port}"))
+  let key = format!("{cert_digest};{port}");
+  Some((key, port))
 }
 
 impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for EgressPolicyCacheFilter {
@@ -273,14 +282,14 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for EgressPolicyCacheFilter {
     envoy_filter: &mut EHF,
     _end_of_stream: bool,
   ) -> envoy_dynamic_module_type_on_http_filter_request_headers_status {
-    let cached_policy = if let Some(cache_key) = build_cache_key(envoy_filter) {
+    let cached_policy = if let Some((cache_key, port)) = build_cache_key(envoy_filter) {
       let mut cache = self.local_cache().borrow_mut();
       if let Some(entry) = cache.get(&cache_key) {
         if entry.stored_at.elapsed() > self.config.cache_ttl {
           cache.pop(&cache_key);
           None
         } else {
-          Some(entry.policy.clone())
+          Some((entry.policy.clone(), port))
         }
       } else {
         None
@@ -289,9 +298,14 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for EgressPolicyCacheFilter {
       None
     };
 
-    if let Some(policy) = cached_policy {
+    if let Some((policy, port)) = cached_policy {
       self.has_cached_policy = true;
       envoy_filter.set_filter_state_bytes(ATE_POLICY_EGRESS_CACHED.as_bytes(), policy.as_bytes());
+      envoy_filter.set_dynamic_metadata_string(
+        ATE_EGRESS_METADATA_NAMESPACE,
+        ATE_EGRESS_DIALED_PORT_KEY,
+        &port,
+      );
       let _ = envoy_filter.increment_counter(self.cache_hit_counter, 1);
     } else {
       let _ = envoy_filter.increment_counter(self.cache_miss_counter, 1);
@@ -312,7 +326,7 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for EgressPolicyCacheFilter {
       && !self.has_cached_policy
       && is_http_200(envoy_filter)
       && let Some(policy) = read_egress_policy(envoy_filter)
-      && let Some(cache_key) = build_cache_key(envoy_filter)
+      && let Some((cache_key, _)) = build_cache_key(envoy_filter)
     {
       self.local_cache().borrow_mut().put(
         cache_key,
@@ -632,6 +646,15 @@ mod tests {
       .return_const(true)
       .once();
     mock_filter
+      .expect_set_dynamic_metadata_string()
+      .withf(|namespace, key, val| {
+        namespace == ATE_EGRESS_METADATA_NAMESPACE
+          && key == ATE_EGRESS_DIALED_PORT_KEY
+          && val == "443"
+      })
+      .return_const(())
+      .once();
+    mock_filter
       .expect_increment_counter()
       .withf(move |id, val| *id == hit_id && *val == 1)
       .return_const(Result::<(), envoy_dynamic_module_type_metrics_result>::Ok(()))
@@ -679,6 +702,7 @@ mod tests {
       .withf(|key| key == ":authority")
       .returning(|_| Some(EnvoyBuffer::new(b"10.0.0.1:443")));
     mock_filter.expect_set_filter_state_bytes().never();
+    mock_filter.expect_set_dynamic_metadata_string().never();
     mock_filter
       .expect_increment_counter()
       .withf(move |id, val| *id == miss_id && *val == 1)

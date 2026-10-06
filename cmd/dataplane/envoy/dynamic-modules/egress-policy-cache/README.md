@@ -2,8 +2,16 @@
 
 An Envoy dynamic module, written in Rust, that runs as an HTTP filter on the
 egress gateway's outer `CONNECT` listener and caches egress policy SNI rules
-per actor certificate in a thread-local LRU cache so repeat `CONNECT` requests
-from the same actor can bypass the `ext_proc` sidecar.
+per actor certificate and destination port in a thread-local LRU cache so
+repeat `CONNECT` requests from the same actor to the same destination can
+use locally cached policy and avoid external callout to get the policy.
+
+It is safe because external callout evaluates if there are policies that allow
+given actor to egress to specific destination port and then provides SNI and host
+matching rules to the dataplane. Since local cache is populated only when CONNECT
+was allowed and keyed by the actor ID and destination port it safe to use cached
+SNI and host matching rules. The freshness configuration `cache_ttl` determines
+responsiveness of the dataplane to policy changes.
 
 ## How it works
 
