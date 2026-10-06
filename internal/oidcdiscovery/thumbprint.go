@@ -19,14 +19,14 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rsa"
+	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
 	"fmt"
-
-	jose "github.com/go-jose/go-jose/v4"
 )
 
-// Thumbprint returns the RFC 7638 SHA-256 thumbprint of an RSA or P-256 EC
-// public key, base64url-encoded without padding.
+// Thumbprint returns the SHA-256 of an RSA or P-256 EC public key's PKIX
+// (SubjectPublicKeyInfo) DER encoding, base64url-encoded without padding.
 func Thumbprint(pub crypto.PublicKey) (string, error) {
 	switch k := pub.(type) {
 	case *rsa.PublicKey:
@@ -37,9 +37,10 @@ func Thumbprint(pub crypto.PublicKey) (string, error) {
 	default:
 		return "", fmt.Errorf("unsupported public key type %T", pub)
 	}
-	sum, err := (&jose.JSONWebKey{Key: pub}).Thumbprint(crypto.SHA256)
+	der, err := x509.MarshalPKIXPublicKey(pub)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("while encoding the public key: %w", err)
 	}
-	return base64.RawURLEncoding.EncodeToString(sum), nil
+	sum := sha256.Sum256(der)
+	return base64.RawURLEncoding.EncodeToString(sum[:]), nil
 }

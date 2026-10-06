@@ -51,7 +51,7 @@ func TestJWKS(t *testing.T) {
 	}
 }
 
-// testJWK decodes the published fields independently of go-jose.
+// testJWK decodes the published fields independently of jwk.
 type testJWK struct {
 	KeyType   string `json:"kty"`
 	KeyID     string `json:"kid"`
@@ -141,5 +141,33 @@ func TestJWKSRejects(t *testing.T) {
 		if got, err := JWKS(keys); err == nil {
 			t.Errorf("%s: JWKS = %s, want error", name, got)
 		}
+	}
+}
+
+// RFC 7518 section 6.2.1.2 requires each EC coordinate at the full curve size,
+// even when it starts with a zero byte.
+func TestJWKSPadsECCoordinates(t *testing.T) {
+	var key *ecdsa.PrivateKey
+	for key == nil {
+		k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if point, _ := k.PublicKey.Bytes(); point[1] == 0 || point[33] == 0 {
+			key = k
+		}
+	}
+	data, err := JWKS([]PublicKey{{ID: "k", Algorithm: "ES256", Key: &key.PublicKey}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var set struct {
+		Keys []testJWK `json:"keys"`
+	}
+	if err := json.Unmarshal(data, &set); err != nil {
+		t.Fatal(err)
+	}
+	if x, y := mustDecode(t, set.Keys[0].X), mustDecode(t, set.Keys[0].Y); len(x) != 32 || len(y) != 32 {
+		t.Errorf("x and y are %d and %d bytes, want 32 each", len(x), len(y))
 	}
 }

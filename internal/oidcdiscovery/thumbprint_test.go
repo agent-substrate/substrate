@@ -61,25 +61,24 @@ func rfcECKey(t *testing.T) *ecdsa.PublicKey {
 	return pub
 }
 
-func TestThumbprintRFC7638Example(t *testing.T) {
-	got, err := Thumbprint(rfcRSAKey(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := "NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs"; got != want {
-		t.Errorf("Thumbprint = %q, want %q", got, want)
-	}
-}
-
-func TestThumbprintEC(t *testing.T) {
-	// RFC 7638 has no EC example; the expected value is go-jose's thumbprint
-	// of the RFC 7517 key.
-	got, err := Thumbprint(rfcECKey(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := "cn-I_WNMClehiVp51i_0VpOENW1upEerA8sEam5hn-s"; got != want {
-		t.Errorf("Thumbprint = %q, want %q", got, want)
+// The expected values come from openssl:
+// openssl pkey -pubin -outform DER | openssl dgst -sha256 -binary | basenc --base64url
+func TestThumbprint(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		key  any
+		want string
+	}{
+		{"RSA", rfcRSAKey(t), "rTIyDPbFltiEsFOBulc6uo3dV0m03o9KI6efmondrrI"},
+		{"P-256", rfcECKey(t), "UblEzfpUTUwyc6pr81BiWn3VO7tqcXIydPU4sZogd2A"},
+	} {
+		got, err := Thumbprint(tc.key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != tc.want {
+			t.Errorf("%s: Thumbprint = %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }
 

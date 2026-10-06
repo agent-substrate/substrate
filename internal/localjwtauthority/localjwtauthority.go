@@ -340,7 +340,7 @@ func Unmarshal(wireBytes []byte) (*ConcretePool, error) {
 }
 
 // GenerateAuthority generates a JWT signing key for algorithm, which must be
-// RS256 or ES256. An empty id defaults to the RFC 7638 thumbprint of the
+// RS256 or ES256. An empty id defaults to the oidcdiscovery.Thumbprint of the
 // public key.
 func GenerateAuthority(algorithm, id string) (*Authority, error) {
 	var key crypto.Signer

@@ -181,7 +181,7 @@ func init() {
 	adminCmd.AddCommand(makeCaPoolCmd)
 
 	makeJwtPoolCmd.Flags().StringVar(&makeJwtPoolAlgFlag, "alg", "ES256", "Signing algorithm of the initial key.  One of [ES256, RS256]")
-	makeJwtPoolCmd.Flags().StringVar(&makeJwtPoolKeyIDFlag, "key-id", "", "The ID of the initial JWT signing key in the pool.  Defaults to the key's RFC 7638 thumbprint")
+	makeJwtPoolCmd.Flags().StringVar(&makeJwtPoolKeyIDFlag, "key-id", "", "The ID of the initial JWT signing key in the pool.  Defaults to the base64url SHA-256 of the key's PKIX encoding")
 	makeJwtPoolCmd.Flags().StringVar(&poolSecretNamespaceFlag, "secret-namespace", "default", "Create the secret in this namespace")
 	makeJwtPoolCmd.Flags().StringVar(&poolSecretNameFlag, "name", "", "Create the secret with this name")
 	_ = makeJwtPoolCmd.MarkFlagRequired("name")
