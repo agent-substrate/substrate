@@ -1627,6 +1627,101 @@ func runTagContractTests(t *testing.T, setup func(t *testing.T) store.Interface)
 		}
 	})
 
+	t.Run("Tag_PendingVolumeSnapshots", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		actor := seedSuspendedActor(t, s, "team-a", "actor-1")
+		tagRef := resources.TagRef{Atespace: "team-a", Name: "production"}
+		pending, err := s.CreateTag(ctx, newTestInProgressTag("production", actor))
+		if err != nil {
+			t.Fatalf("CreateTag failed: %v", err)
+		}
+		update := func(from *ateapi.Tag, mutate func(*ateapi.Tag)) (*ateapi.Tag, error) {
+			return s.UpdateTag(ctx, tagRef, store.PreconditionFrom(from), func(toUpdate *ateapi.Tag) error {
+				mutate(toUpdate)
+				return nil
+			})
+		}
+
+		// Recording the volumes to capture, each without a handle yet.
+		recorded, err := update(pending, func(toUpdate *ateapi.Tag) {
+			toUpdate.Status.Snapshot.VolumeSnapshots = []*ateapi.ExternalVolumeSnapshot{
+				{SourceVolumeName: "data", SourceVolumeId: "vol-x", VolumeType: "substrate.io/mock"},
+				{SourceVolumeName: "cache", SourceVolumeId: "vol-x", VolumeType: "substrate.io/mock"},
+			}
+		})
+		if err != nil {
+			t.Fatalf("recording volume snapshots failed: %v", err)
+		}
+
+		rejected := []struct {
+			name   string
+			mutate func(*ateapi.Tag)
+		}{
+			{
+				name: "adding a volume",
+				mutate: func(toUpdate *ateapi.Tag) {
+					toUpdate.Status.Snapshot.VolumeSnapshots = append(toUpdate.Status.Snapshot.VolumeSnapshots, &ateapi.ExternalVolumeSnapshot{SourceVolumeName: "extra"})
+				},
+			},
+			{
+				name:   "renaming a volume",
+				mutate: func(toUpdate *ateapi.Tag) { toUpdate.Status.Snapshot.VolumeSnapshots[0].SourceVolumeName = "other" },
+			},
+			{
+				name:   "changing a volume's source volume id",
+				mutate: func(toUpdate *ateapi.Tag) { toUpdate.Status.Snapshot.VolumeSnapshots[0].SourceVolumeId = "vol-other" },
+			},
+			{
+				name:   "clearing the snapshot",
+				mutate: func(toUpdate *ateapi.Tag) { toUpdate.Status.Snapshot = nil },
+			},
+			{
+				name: "completing with a changed volume",
+				mutate: func(toUpdate *ateapi.Tag) {
+					toUpdate.Status.Snapshot.DurableSnapshot.State = ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED
+					toUpdate.Status.Snapshot.VolumeSnapshots[0].StorageSnapshotId = "snap-data"
+				},
+			},
+		}
+		for _, tt := range rejected {
+			t.Run("pending "+tt.name, func(t *testing.T) {
+				if _, err := update(recorded, tt.mutate); !errors.Is(err, store.ErrImmutableField) {
+					t.Errorf("UpdateTag error = %v, want one matching store.ErrImmutableField", err)
+				}
+			})
+		}
+
+		// Filling in a handle is allowed once.
+		withHandle, err := update(recorded, func(toUpdate *ateapi.Tag) {
+			toUpdate.Status.Snapshot.VolumeSnapshots[0].StorageSnapshotId = "snap-data"
+		})
+		if err != nil {
+			t.Fatalf("recording a volume snapshot handle failed: %v", err)
+		}
+		if _, err := update(withHandle, func(toUpdate *ateapi.Tag) {
+			toUpdate.Status.Snapshot.VolumeSnapshots[0].StorageSnapshotId = "snap-other"
+		}); !errors.Is(err, store.ErrImmutableField) {
+			t.Errorf("replacing a recorded handle = %v, want one matching store.ErrImmutableField", err)
+		}
+
+		// Finalizing keeps the volume snapshots, and seals status.snapshot.
+		ready, err := update(withHandle, func(toUpdate *ateapi.Tag) {
+			toUpdate.Status.Snapshot.DurableSnapshot.State = ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED
+		})
+		if err != nil {
+			t.Fatalf("finalizing tag failed: %v", err)
+		}
+		if got := len(ready.GetStatus().GetSnapshot().GetVolumeSnapshots()); got != 2 {
+			t.Errorf("finalized tag volume snapshots = %d, want 2", got)
+		}
+		if _, err := update(ready, func(toUpdate *ateapi.Tag) {
+			toUpdate.Status.Snapshot.VolumeSnapshots[1].StorageSnapshotId = "snap-cache"
+		}); !errors.Is(err, store.ErrImmutableField) {
+			t.Errorf("filling in a handle after finalize = %v, want one matching store.ErrImmutableField", err)
+		}
+	})
+
 	t.Run("CreateTag_ReusedTagName", func(t *testing.T) {
 		s := setup(t)
 		ctx := context.Background()

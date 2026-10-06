@@ -49,7 +49,7 @@ func (s *RPCService) CreateTag(ctx context.Context, req *ateapi.CreateTagRequest
 	actorRef := resources.ActorRefFromObjectRef(req.GetTag().GetSourceActor())
 	setSpanActorRefAttributes(ctx, actorRef)
 
-	tag, err := s.actorWorkflow.TagActorSnapshot(ctx, req.GetTag())
+	tag, err := s.actorWorkflow.TagActorSnapshot(ctx, req.GetTag(), req.GetVolumeSelection())
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, apierror.FailedPrecondition("Actor %s not found", actorRef)

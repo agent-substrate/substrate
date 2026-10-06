@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/jackc/pgx/v5"
 	"go.ate.dev/substrate/api/ateapi/v1"
@@ -188,20 +189,50 @@ func (p *Persistence) CreateTag(ctx context.Context, tag *ateapi.Tag) (*ateapi.T
 	return dbTag, nil
 }
 
-func isAllowedTagSnapshotTransition(stored, mutated *ateapi.Snapshot) bool {
-	if proto.Equal(stored, mutated) || stored == nil {
-		return true
+// validateUpdateTagSnapshotMutation enforces that status.snapshot is immutable
+// once COMPLETED. While it is PENDING, durable_snapshot may move to COMPLETED,
+// volume_snapshots may be recorded once, and each recorded entry's
+// storage_snapshot_id, ready_to_use and size_bytes may be filled in once.
+// Nothing else may change.
+func validateUpdateTagSnapshotMutation(stored, mutated *ateapi.Snapshot) error {
+	if stored == nil || proto.Equal(stored, mutated) {
+		return nil
 	}
-	if mutated == nil || stored.GetDurableSnapshot() == nil || mutated.GetDurableSnapshot() == nil {
-		return false
+	pending := ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING
+	completed := ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED
+	mutatedState := mutated.GetDurableSnapshot().GetState()
+	if stored.GetDurableSnapshot().GetState() != pending || (mutatedState != pending && mutatedState != completed) {
+		return fmt.Errorf("status.snapshot is immutable once set: mutation changed it from %s to %s", stored, mutated)
 	}
-	if stored.GetDurableSnapshot().GetState() != ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_PENDING ||
-		mutated.GetDurableSnapshot().GetState() != ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED {
-		return false
+	storedRest, mutatedRest := proto.CloneOf(stored), proto.CloneOf(mutated)
+	storedRest.DurableSnapshot.State = mutatedState
+	storedRest.VolumeSnapshots, mutatedRest.VolumeSnapshots = nil, nil
+	if !proto.Equal(storedRest, mutatedRest) {
+		return fmt.Errorf("status.snapshot is immutable once set, except for its completion and volume snapshots: mutation changed it from %s to %s", stored, mutated)
 	}
-	expected := proto.CloneOf(stored)
-	expected.DurableSnapshot.State = ateapi.SnapshotStorageState_SNAPSHOT_STORAGE_STATE_COMPLETED
-	return proto.Equal(expected, mutated)
+	storedVols, mutatedVols := stored.GetVolumeSnapshots(), mutated.GetVolumeSnapshots()
+	if mutatedState == completed {
+		if !slices.EqualFunc(storedVols, mutatedVols, func(a, b *ateapi.ExternalVolumeSnapshot) bool { return proto.Equal(a, b) }) {
+			return fmt.Errorf("status.snapshot.volume_snapshots cannot change when the snapshot completes")
+		}
+		return nil
+	}
+	if len(storedVols) == 0 {
+		return nil
+	}
+	if len(storedVols) != len(mutatedVols) {
+		return fmt.Errorf("status.snapshot.volume_snapshots length is immutable once set: mutation changed it from %d to %d", len(storedVols), len(mutatedVols))
+	}
+	for i := range storedVols {
+		sv, mv := storedVols[i], mutatedVols[i]
+		if sv.GetSourceVolumeName() != mv.GetSourceVolumeName() || sv.GetSourceVolumeId() != mv.GetSourceVolumeId() || sv.GetVolumeType() != mv.GetVolumeType() {
+			return fmt.Errorf("status.snapshot.volume_snapshots[%d] identity is immutable: mutation changed it from %s to %s", i, sv, mv)
+		}
+		if sv.GetStorageSnapshotId() != "" && !proto.Equal(sv, mv) {
+			return fmt.Errorf("status.snapshot.volume_snapshots[%d] is immutable once storage_snapshot_id is set: mutation changed it from %s to %s", i, sv, mv)
+		}
+	}
+	return nil
 }
 
 func validateUpdateTagMutation(storedTag, mutatedTag *ateapi.Tag) error {
@@ -211,8 +242,8 @@ func validateUpdateTagMutation(storedTag, mutatedTag *ateapi.Tag) error {
 	if stored, mutated := storedTag.GetMetadata().GetName(), mutatedTag.GetMetadata().GetName(); stored != mutated {
 		return fmt.Errorf("metadata.name is immutable: mutation changed it from %q to %q", stored, mutated)
 	}
-	if stored, mutated := storedTag.GetStatus().GetSnapshot(), mutatedTag.GetStatus().GetSnapshot(); !isAllowedTagSnapshotTransition(stored, mutated) {
-		return fmt.Errorf("status.snapshot is immutable once set: mutation changed it from %s to %s", stored, mutated)
+	if err := validateUpdateTagSnapshotMutation(storedTag.GetStatus().GetSnapshot(), mutatedTag.GetStatus().GetSnapshot()); err != nil {
+		return err
 	}
 	if stored, mutated := storedTag.GetStatus().GetActorTemplateUid(), mutatedTag.GetStatus().GetActorTemplateUid(); stored != mutated {
 		return fmt.Errorf("status.actor_template_uid is immutable: mutation changed it from %q to %q", stored, mutated)
