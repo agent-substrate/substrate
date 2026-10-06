@@ -14,7 +14,8 @@
 
 # ActorTemplate (protojson-shaped ateapipb.ActorTemplate) for the glutton-storage
 # benchmark workload, created through the ate API by workloads/deploy.sh.
-# Attaches an external volume backed by ${STORAGE_CLASS_NAME}.
+# Attaches an external volume backed by ${STORAGE_CLASS_NAME}. The DurDir load
+# runs it with --durdir-template glutton-storage.
 metadata:
   atespace: benchmark-workloads
   name: glutton-storage
