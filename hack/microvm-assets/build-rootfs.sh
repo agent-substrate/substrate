@@ -25,13 +25,15 @@
 # rootless builder works as well, e.g. a rootless BuildKit passed as --builder, and
 # builds the same bytes.
 #
-# Writes into $OUT: rootfs.img, kata-agent.slim (the agent it holds) and
-# rootfs-packages.txt (the Debian packages it holds, with versions).
+# Writes into $OUT: rootfs.img, kata-agent.slim (the agent it holds),
+# rootfs-packages.txt (the Debian packages in the guest) and image-packages.txt
+# (the Debian packages in the image-packing stage).
 #
-# Env: ARCH (arm64|amd64, default amd64), KATA_VER (required), OUT (required),
-#      OPT_LEVEL (kata-agent's opt-level, default s),
+# Env: ARCH (arm64|amd64, default the host's), KATA_VER (required), OUT (required),
+#      OPT_LEVEL (kata-agent's opt-level, default 3),
 #      CONTAINER_CLI (default docker; another CLI needs a docker-compatible
-#      `build --output`).
+#      `build --output`),
+#      ALLOW_CROSS_ARCH_BUILD (set to true to allow building under emulation).
 # Extra arguments go to the build, e.g. --builder or --build-arg PRUNE=false.
 #
 # Build on a host of the target arch: another arch builds under emulation, and the
@@ -39,11 +41,16 @@
 
 set -o errexit -o nounset -o pipefail
 
-ARCH="${ARCH:-amd64}"
+case "$(uname -m)" in
+  x86_64)        HOST_ARCH=amd64 ;;
+  aarch64|arm64) HOST_ARCH=arm64 ;;
+  *)             HOST_ARCH="$(uname -m)" ;;
+esac
+ARCH="${ARCH:-${HOST_ARCH}}"
 # assemble.sh owns the kata pin and passes it in.
 KATA_VER="${KATA_VER:?KATA_VER is required (assemble.sh passes its KATA_VER)}"
 OUT="${OUT:?OUT (the directory to write rootfs.img into) is required}"
-OPT_LEVEL="${OPT_LEVEL:-s}"
+OPT_LEVEL="${OPT_LEVEL:-3}"
 CONTAINER_CLI="${CONTAINER_CLI:-docker}"
 CONTEXT="$(cd "$(dirname "${BASH_SOURCE[0]}")/rootfs" && pwd)"
 
@@ -51,6 +58,10 @@ case "$ARCH" in
   arm64|amd64) ;;
   *) echo "unsupported ARCH=$ARCH" >&2; exit 1 ;;
 esac
+if [[ "${ARCH}" != "${HOST_ARCH}" && "${ALLOW_CROSS_ARCH_BUILD:-false}" != "true" ]]; then
+  echo "build-rootfs.sh: host arch (${HOST_ARCH}) != target ARCH (${ARCH}); building kata-agent under emulation takes hours (set ALLOW_CROSS_ARCH_BUILD=true to override)" >&2
+  exit 1
+fi
 if ! command -v "${CONTAINER_CLI}" >/dev/null 2>&1; then
   echo "build-rootfs.sh needs ${CONTAINER_CLI} (set CONTAINER_CLI to use another builder)" >&2
   exit 1
@@ -75,6 +86,7 @@ echo ">> Building rootfs.img (${ARCH}, kata-agent ${KATA_VER}, opt-level=${OPT_L
 mv "${STAGE}/rootfs.img" "${OUT}/rootfs.img"
 mv "${STAGE}/kata-agent" "${OUT}/kata-agent.slim"
 mv "${STAGE}/rootfs-packages.txt" "${OUT}/rootfs-packages.txt"
+mv "${STAGE}/image-packages.txt" "${OUT}/image-packages.txt"
 echo ">> Wrote ${OUT}/rootfs.img ($(( $(wc -c < "${OUT}/rootfs.img") / 1048576 )) MiB," \
   "$(( $(wc -l < "${OUT}/rootfs-packages.txt") )) Debian packages," \
   "kata-agent $(( $(wc -c < "${OUT}/kata-agent.slim") )) bytes)"

@@ -50,6 +50,8 @@
 #                    false uploads assets to GCS.
 #   SLIM_ROOTFS      "true" to build a slim rootfs.img on debian:trixie-slim
 #                    (see hack/microvm-assets/assemble.sh); default false.
+#   OPT_LEVEL, ALLOW_CROSS_ARCH_BUILD
+#                    read by assemble.sh for SLIM_ROOTFS=true (see there).
 
 set -o errexit -o nounset -o pipefail
 
@@ -144,6 +146,8 @@ fi
 OUT="${OUT:-${ROOT}/bin/microvm-assets/$ARCH}"
 
 # --- 1. assets: assemble (if missing or stale) -----------------------------
+# A SLIM_ROOTFS=true assemble checks the host arch against ARCH before it downloads
+# anything, so a cross-arch install fails fast there, and only if it has to build.
 need_assemble=false
 for f in cloud-hypervisor virtiofsd vmlinux rootfs.img; do
   if [[ ! -f "${OUT}/${f}" ]]; then

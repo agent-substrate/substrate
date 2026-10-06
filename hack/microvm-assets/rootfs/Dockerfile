@@ -21,7 +21,8 @@
 #   scripts prune.sh alone, for rootfs to mount
 #   rootfs  the guest's root tree
 #   image   packs that tree into rootfs.img
-#   export  the files build-rootfs.sh takes: rootfs.img, kata-agent, rootfs-packages.txt
+#   export  the files build-rootfs.sh takes: rootfs.img, kata-agent,
+#           rootfs-packages.txt, image-packages.txt
 #
 # No step needs privileges: no --privileged, loop device or mount, and every file is
 # written as root inside the build's own containers. So a rootless builder, such as
@@ -36,13 +37,10 @@
 ARG DEBIAN_IMAGE=debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a
 ARG RUST_IMAGE=rust:trixie@sha256:a8a5f0a1e5fe7dfe1d352591e4a1c7dd2c08fd70475cae872cf3458ba0df0546
 
-# kata's release pipeline builds the agent with the OPA/regorus policy engine and
-# initdata support (kata-deploy-binaries.sh defaults AGENT_POLICY=yes). ateom never
-# sends a policy and never uses initdata, so both are dead weight in every boot and
-# every snapshot. Without them, and with fat LTO at opt-level=s, kata 4.1.0's stripped
-# amd64 agent goes from 30.8 MB to 15.5 MB. Measured with kata 4.0.0 on GKE (amd64,
-# counter demo, medians of 7-9 cold bakes), that took ~30 ms off a ~500 ms cold boot
-# and ~3.5 MiB off the compressed golden snapshot.
+# kata's release builds the agent with the OPA/regorus policy engine and initdata
+# support (kata-deploy-binaries.sh defaults AGENT_POLICY=yes). ateom uses neither, so
+# both are off here. The policy engine adds ~6 ms to every CreateContainer and 1.5 MiB
+# to every snapshot. See hack/microvm-assets/README.md for the measurements.
 FROM ${RUST_IMAGE} AS agent
 RUN apt-get update -qq \
  && apt-get install -y -qq build-essential clang pkg-config protobuf-compiler \
@@ -55,12 +53,14 @@ RUN test -n "${KATA_VER}" \
  && git clone --depth 1 --branch "${KATA_VER}" \
       https://github.com/kata-containers/kata-containers /kata
 WORKDIR /kata/src/agent
-# s by default; z measured the same within noise and is ~0.5 MB smaller, 3 is
-# upstream's default and ~2.8 MB larger. rustc is whatever kata's rust-toolchain.toml
-# pins; rustup installs it on the first cargo call.
-ARG OPT_LEVEL=s
-# SECCOMP stays on: it is what applies a container's seccomp profile inside the guest,
-# and it measured free (identical stripped size with and without).
+# Upstream's 3 by default. s builds a smaller agent that boots ~8 ms faster, but it may
+# run slower, and there is no benchmark for that yet.
+# rustc is whatever kata's rust-toolchain.toml pins; rustup installs it on the first
+# cargo call.
+ARG OPT_LEVEL=3
+# SECCOMP stays on: it is what applies a container's seccomp profile inside the guest.
+# glibc, not musl: musl boots faster, but its malloc and string routines may slow the
+# agent once it is running.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     LIBC=gnu SECCOMP=yes AGENT_POLICY=no INIT_DATA=no \
@@ -79,28 +79,29 @@ COPY prune.sh /
 FROM ${DEBIAN_IMAGE} AS rootfs
 # kata-agent is PID 1 (ateom boots init=/usr/bin/kata-agent) and the only thing that
 # runs unasked. The actor's processes run in its container rootfs, which the agent
-# pivots into from the virtio-fs share, never in this tree. So the guest needs only
-# what the agent and ateom call on:
-#   iptables     the agent's GetIPTables/SetIPTables RPCs (iptables-save/-restore)
+# pivots into from the virtio-fs share, never in this tree. ateom never calls the
+# agent's GetIPTables/SetIPTables RPCs (guest networking uses netlink), so the guest
+# needs only what the agent links and what DebugConsoleDump runs:
 #   libseccomp2  kata-agent links it (SECCOMP=yes)
 #   bash, coreutils, grep, iproute2, mount, procps
 #                the agent's debug console and the commands ateom runs in it
 #                (DebugConsoleDump in cmd/ateom-microvm/run.go: ip, ls, head, grep...)
-ARG GUEST_PACKAGES="bash coreutils grep iproute2 iptables libseccomp2 mount procps"
+ARG GUEST_PACKAGES="bash coreutils grep iproute2 libseccomp2 mount procps"
 # prune.sh then purges everything those packages do not depend on, which is most of
 # trixie-slim: apt, perl and the rest of the Essential set. PRUNE=false keeps it all,
 # for comparison; the image roughly doubles.
 ARG PRUNE=true
 # prune.sh is mounted at /mnt, which the image already has, so the mount leaves
-# nothing behind in the tree. apt-get upgrade brings the base image's own packages up
-# to date as well, so the guest carries trixie's current security fixes however old
-# the DEBIAN_IMAGE pin is, and prune.sh resolves against the installed versions.
+# nothing behind in the tree. apt-get full-upgrade brings the base image's own
+# packages up to date as well (including updates that add new dependencies), so the
+# guest carries trixie's current security fixes however old the DEBIAN_IMAGE pin is,
+# and prune.sh resolves against the installed versions.
 # kata-agent names the guest after /etc/hostname at boot, and the base image ships the
 # name of the tool that built it there (debuerreotype); without the file the agent
 # uses localhost until CreateSandbox sets the sandbox's hostname.
 RUN --mount=type=bind,from=scripts,target=/mnt \
     apt-get update \
- && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y \
+ && DEBIAN_FRONTEND=noninteractive apt-get full-upgrade -y \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ${GUEST_PACKAGES} \
  && if [ "${PRUNE}" = true ]; then bash /mnt/prune.sh ${GUEST_PACKAGES}; fi \
  && rm -rf /var/lib/apt/lists/* /var/cache/* /var/log/* /var/lib/dpkg/status-old \
@@ -112,9 +113,7 @@ RUN ln -sf ../bin/kata-agent /usr/sbin/init
 # fails the build here rather than a boot or a debug dump later.
 RUN kata-agent --version \
  && /sbin/init --version \
- && bash -c 'ip -V && ip addr show lo && iptables-save --version \
-      && iptables-restore --version && ip6tables-save --version \
-      && ip6tables-restore --version && ps -e && ls -la / && head -n1 /etc/passwd \
+ && bash -c 'ip -V && ip addr show lo && ps -e && ls -la / && head -n1 /etc/passwd \
       && grep -q "^root:" /etc/passwd && cat /etc/os-release && mount --version \
       && umount --version && sh -c true' >/dev/null
 
@@ -131,7 +130,9 @@ RUN --mount=type=bind,from=rootfs,target=/rootfs \
     mkdir -p /out \
  && SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" bash /usr/local/bin/pack-image.sh /rootfs /out/rootfs.img \
  && dpkg-query --admindir=/rootfs/var/lib/dpkg -W -f '${Package}\t${Version}\n' \
-      > /out/rootfs-packages.txt
+      > /out/rootfs-packages.txt \
+ && dpkg-query -W -f '${Package}\t${Version}\n' \
+      > /out/image-packages.txt
 
 FROM scratch AS export
 COPY --from=image /out/ /

@@ -35,7 +35,10 @@
 # Env: ARCH (arm64|amd64, default arm64), KATA_VER (4.1.0), CH_VER (v53.0),
 #      OUT (default ./bin/microvm-assets/$ARCH, under the gitignored bin/),
 #      SLIM_ROOTFS (true|false, default false; see below),
-#      CONTAINER_CLI (the builder SLIM_ROOTFS=true runs, default docker).
+#      CONTAINER_CLI (the builder SLIM_ROOTFS=true runs, default docker),
+#      OPT_LEVEL (kata-agent's opt-level for SLIM_ROOTFS=true, default 3),
+#      ALLOW_CROSS_ARCH_BUILD (true lets SLIM_ROOTFS=true build for an ARCH other
+#      than the host's, under emulation, which takes hours).
 #
 # SLIM_ROOTFS=true builds rootfs.img instead of taking kata's: build-rootfs.sh puts
 # only the packages the guest runs on debian:trixie-slim, adds kata-agent recompiled
@@ -69,10 +72,9 @@ CH_VER="${CH_VER:-v53.0}"
 VIRTIOFSD_VER="1.14.0"
 OUT="${OUT:-${ROOT}/bin/microvm-assets/$ARCH}"
 SLIM_ROOTFS="${SLIM_ROOTFS:-false}"
+OPT_LEVEL="${OPT_LEVEL:-3}"
 CONTAINER_CLI="${CONTAINER_CLI:-docker}"
 BUILD_ROOTFS="${ROOT}/hack/microvm-assets/build-rootfs.sh"
-# Everything a SLIM_ROOTFS=true build reads: the script and its whole build context.
-SLIM_INPUTS=("${BUILD_ROOTFS}" "${ROOT}/hack/microvm-assets/rootfs/"*)
 # Written only by a SLIM_ROOTFS=true run, before rootfs.img is built.
 UPSTREAM_ROOTFS_SHA_FILE=".upstream-rootfs.sha256"
 # Holds the committed per-arch pins a SLIM_ROOTFS=true run checks the download against.
@@ -104,7 +106,17 @@ asset_stamp() {
   printf 'arch=%s\nkata=%s\ncloud-hypervisor=%s\nvirtiofsd=%s\n' \
     "$ARCH" "$KATA_VER" "$CH_VER" "$VIRTIOFSD_VER"
   if [ "$SLIM_ROOTFS" = "true" ]; then
-    printf 'slim-rootfs=%s\n' "$(cat "${SLIM_INPUTS[@]}" | sha256sum | cut -c1-12)"
+    local slim_hash
+    slim_hash="$({
+      printf 'opt_level=%s\n' "$OPT_LEVEL"
+      # Paths relative to the checkout, so adding, removing or renaming an input
+      # changes the stamp but moving the checkout does not.
+      cd "${ROOT}"
+      find hack/microvm-assets/build-rootfs.sh hack/microvm-assets/rootfs -type f -print0 \
+        | LC_ALL=C sort -z \
+        | xargs -0 sha256sum
+    } | sha256sum | cut -c1-12)"
+    printf 'slim-rootfs=%s\n' "${slim_hash}"
   fi
 }
 
@@ -114,10 +126,32 @@ if [ "${1:-}" = "--print-stamp" ]; then
 fi
 
 # Fail before the ~1 GiB download rather than after it.
-if [ "$SLIM_ROOTFS" = "true" ] && ! command -v "${CONTAINER_CLI}" >/dev/null 2>&1; then
-  echo "SLIM_ROOTFS=true needs ${CONTAINER_CLI}: build-rootfs.sh builds rootfs.img in containers" >&2
-  echo "(set CONTAINER_CLI to use another builder)" >&2
-  exit 1
+if [ "$SLIM_ROOTFS" = "true" ]; then
+  if ! command -v "${CONTAINER_CLI}" >/dev/null 2>&1; then
+    echo "SLIM_ROOTFS=true needs ${CONTAINER_CLI}: build-rootfs.sh builds rootfs.img in containers" >&2
+    echo "(set CONTAINER_CLI to use another builder)" >&2
+    exit 1
+  fi
+  case "$(uname -m)" in
+    x86_64)        HOST_ARCH=amd64 ;;
+    aarch64|arm64) HOST_ARCH=arm64 ;;
+    *)             HOST_ARCH="$(uname -m)" ;;
+  esac
+  if [ "${ARCH}" != "${HOST_ARCH}" ] && [ "${ALLOW_CROSS_ARCH_BUILD:-false}" != "true" ]; then
+    echo "SLIM_ROOTFS=true requires host arch (${HOST_ARCH}) to match target ARCH (${ARCH});" >&2
+    echo "building kata-agent under emulation takes hours (set ALLOW_CROSS_ARCH_BUILD=true to override)." >&2
+    exit 1
+  fi
+  # The slim guest has no chrony, so only a VMM that advances the guest clock across
+  # a restore keeps its time right: v53 and later (clockAdvanceSince in
+  # cmd/ateom-microvm/internal/ch/guestclock.go).
+  ch_major="${CH_VER#v}"
+  ch_major="${ch_major%%.*}"
+  if ! [[ "${ch_major}" =~ ^[0-9]+$ ]] || (( ch_major < 53 )); then
+    echo "SLIM_ROOTFS=true needs CH_VER v53.0 or later, got '${CH_VER}': the slim guest has" >&2
+    echo "no chrony, so an older VMM leaves restored guests with a frozen clock." >&2
+    exit 1
+  fi
 fi
 
 WORK="$(mktemp -d)"
@@ -130,7 +164,8 @@ mkdir -p "$OUT"
 # thing a failed run can leave, whatever the pins were before.
 rm -f "${OUT}/${STAMP_FILE}"
 # Likewise a previous slim run's by-products, which a default run never rewrites.
-rm -f "${OUT}/${UPSTREAM_ROOTFS_SHA_FILE}" "${OUT}/kata-agent.slim" "${OUT}/rootfs-packages.txt"
+rm -f "${OUT}/${UPSTREAM_ROOTFS_SHA_FILE}" "${OUT}/kata-agent.slim" \
+      "${OUT}/rootfs-packages.txt" "${OUT}/image-packages.txt"
 cd "$WORK"
 
 echo ">> Downloading kata-static ${KATA_VER} (${ARCH})..."
@@ -158,7 +193,7 @@ if [ "$SLIM_ROOTFS" = "true" ]; then
     exit 1
   fi
   echo "${UPSTREAM_ROOTFS_SHA}" > "${OUT}/${UPSTREAM_ROOTFS_SHA_FILE}"
-  ARCH="$ARCH" KATA_VER="$KATA_VER" OUT="$OUT" CONTAINER_CLI="$CONTAINER_CLI" "${BUILD_ROOTFS}"
+  ARCH="$ARCH" KATA_VER="$KATA_VER" OPT_LEVEL="$OPT_LEVEL" OUT="$OUT" CONTAINER_CLI="$CONTAINER_CLI" "${BUILD_ROOTFS}"
 else
   cp "${KATA_ROOTFS}" "${OUT}/rootfs.img"
 fi

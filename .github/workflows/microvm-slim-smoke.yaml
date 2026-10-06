@@ -25,6 +25,8 @@ on:
     - 'hack/microvm-assets/*.sh'
     - 'hack/microvm-assets/rootfs/**'
     - 'hack/install-microvm-deps.sh'
+    - 'manifests/microvm/sandboxconfig-microvm.yaml.tmpl'
+    - 'cmd/ateom-microvm/**'
     - '.github/workflows/microvm-slim-smoke.yaml'
   workflow_dispatch:
 # Nothing here writes to the repository: the jobs check the tree out, build it, and
@@ -35,6 +37,11 @@ permissions:
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+# The asset directory, shared by both jobs: guest-image assembles into it and uploads
+# it, and slim-rootfs-smoke downloads it back to the same place, which is also the
+# default the micro-VM install scripts read.
+env:
+  OUT: ${{ github.workspace }}/bin/microvm-assets/amd64
 jobs:
   guest-image:
     name: Guest image (rootless build, boot test)
@@ -43,21 +50,24 @@ jobs:
     # but far short of the six-hour platform default a hung step would otherwise
     # consume.
     timeout-minutes: 60
-    env:
-      OUT: ${{ github.workspace }}/bin/microvm-assets/amd64
     steps:
     - name: Checkout
       uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       with:
         persist-credentials: false
+    - name: Setup Go
+      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+      with:
+        go-version-file: 'go.mod'
     - name: Enable KVM
       # test-rootfs.sh boots the guest with KVM when /dev/kvm is usable, and emulates
       # it, several times slower, otherwise.
       run: |
-        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0660", OPTIONS+="static_node=kvm"' \
           | sudo tee /etc/udev/rules.d/99-kvm4all.rules
         sudo udevadm control --reload-rules
         sudo udevadm trigger --name-match=kvm
+        sudo setfacl -m "u:${USER}:rw" /dev/kvm
     - name: Start a rootless BuildKit
       # The guest image has to build without privileges, so it builds on BuildKit's
       # rootless image, running as its unprivileged user with no added capabilities
@@ -99,7 +109,8 @@ jobs:
         KATA_VER="${kata_ver}" OUT="${RUNNER_TEMP}/rebuild" \
           hack/microvm-assets/build-rootfs.sh --no-cache-filter rootfs --no-cache-filter image
         if ! cmp "${OUT}/rootfs.img" "${RUNNER_TEMP}/rebuild/rootfs.img"; then
-          if ! diff "${OUT}/rootfs-packages.txt" "${RUNNER_TEMP}/rebuild/rootfs-packages.txt"; then
+          if ! diff -u "${OUT}/rootfs-packages.txt" "${RUNNER_TEMP}/rebuild/rootfs-packages.txt" || \
+             ! diff -u "${OUT}/image-packages.txt" "${RUNNER_TEMP}/rebuild/image-packages.txt"; then
             echo "::warning::Debian published package updates between the two builds, so their bytes were not compared."
             exit 0
           fi
@@ -108,15 +119,32 @@ jobs:
         fi
     - name: Boot test
       run: hack/microvm-assets/test-rootfs.sh "${OUT}/rootfs.img" "${OUT}/vmlinux"
+    - name: Upload assembled slim assets
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      with:
+        name: slim-microvm-assets-amd64
+        path: |
+          ${{ env.OUT }}/*
+          ${{ env.OUT }}/.asset-versions
+          ${{ env.OUT }}/.upstream-rootfs.sha256
+        include-hidden-files: true
+        if-no-files-found: error
+        # Only slim-rootfs-smoke, later in this run, downloads it.
+        retention-days: 1
   slim-rootfs-smoke:
     name: Micro-VM smoke (SLIM_ROOTFS)
+    needs: guest-image
     runs-on: ubuntu-latest
-    # Cluster bring-up, a from-source kata-agent build and one E2E test; generous,
-    # but far short of the six-hour platform default a hung step would otherwise
-    # consume.
+    # Cluster bring-up and one E2E test reusing the slim assets built in guest-image;
+    # generous, but far short of the six-hour platform default a hung step would
+    # otherwise consume.
     timeout-minutes: 90
     env:
       ARTIFACTS: ${{ github.workspace }}/_artifacts
+      # As in pr-workflow's e2e job: the installer requires a credential provider
+      # selection, and every ate-setup invocation reads it, including the control
+      # plane deploy in run-microvm-demo-kind.sh.
+      ATE_CREDENTIAL_PROVIDER: '{"name":"k8s.io"}'
     steps:
     - name: Checkout
       uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -126,23 +154,29 @@ jobs:
       uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
       with:
         go-version-file: 'go.mod'
+    - name: Download assembled slim assets
+      uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+      with:
+        name: slim-microvm-assets-amd64
+        path: ${{ env.OUT }}
+    - name: Restore asset executable bits
+      run: chmod +x "${OUT}/cloud-hypervisor" "${OUT}/virtiofsd"
     - name: Enable KVM
       # Grant the runner access to /dev/kvm so create-kind-cluster.sh mounts it into
       # the node and labels it for the micro-VM sandbox class.
       run: |
-        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0660", OPTIONS+="static_node=kvm"' \
           | sudo tee /etc/udev/rules.d/99-kvm4all.rules
         sudo udevadm control --reload-rules
         sudo udevadm trigger --name-match=kvm
+        sudo setfacl -m "u:${USER}:rw" /dev/kvm
     - name: Create cluster
       run: hack/create-kind-cluster.sh
     - name: Deploy micro-VM counter demo (SLIM_ROOTFS=true)
-      # Deploys the control plane, assembles the slim asset set (rootfs.img built from
-      # debian:trixie-slim with kata-agent rebuilt from source), stages it, applies
-      # the SandboxConfig with the built image's sha256 and waits for the demo's golden
-      # snapshot: a cold boot of the slim guest through to a checkpoint. There is
-      # deliberately no asset cache, since rebuilding with the changed inputs is the
-      # point.
+      # Deploys the control plane, verifies the pre-assembled slim asset stamp in
+      # bin/microvm-assets/amd64, stages it, applies the SandboxConfig with the built
+      # image's sha256 and waits for the demo's golden snapshot: a cold boot of the
+      # slim guest through to a checkpoint.
       env:
         SLIM_ROOTFS: "true"
       run: hack/run-microvm-demo-kind.sh

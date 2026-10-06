@@ -44,8 +44,11 @@ set -o errexit -o nounset -o pipefail
 SRC="${1:?usage: pack-image.sh <root-tree> <output-image>}"
 IMG="${2:?usage: pack-image.sh <root-tree> <output-image>}"
 export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-1700000000}"
-# The partition starts at 1 MiB, the usual alignment.
-PART_START_SECTOR=2048
+# Start the partition at 2 MiB (sector 4096) and pad the image to a 2 MiB multiple:
+# Cloud Hypervisor's virtio-pmem needs the file size to be a 2 MiB multiple, and a
+# 2 MiB-aligned filesystem start is a precondition for DAX huge-page (PMD) mappings.
+PART_START_SECTOR=4096
+PMEM_ALIGN=$(( 2 * 1024 * 1024 ))
 
 # Runs a command and shows its output only if it fails.
 quiet() {
@@ -86,7 +89,9 @@ quiet resize2fs -M "${PART}"
 quiet tune2fs -o journal_data_ordered "${PART}"
 
 PART_BYTES="$(stat -c %s "${PART}")"
-truncate -s "$(( PART_START_SECTOR * 512 + PART_BYTES ))" "${IMG}"
+RAW_BYTES="$(( PART_START_SECTOR * 512 + PART_BYTES ))"
+IMG_BYTES="$(( (RAW_BYTES + PMEM_ALIGN - 1) / PMEM_ALIGN * PMEM_ALIGN ))"
+truncate -s "${IMG_BYTES}" "${IMG}"
 sfdisk --quiet "${IMG}" <<EOF
 label: dos
 label-id: 0x65a39876
