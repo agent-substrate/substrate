@@ -108,30 +108,48 @@ func (b *Builder) Build(target resolver.Target, cc resolver.ClientConn, opts res
 	return r, nil
 }
 
-// ParseTarget parses resolver.Target in canonical format k8s:///<namespace>/<service>[:port] or k8s:///<service>.<namespace>[:port].
+// ParseTarget parses resolver.Target in canonical formats:
+//
+//   - k8s:///<namespace>/<service>[:port]
+//   - k8s:///<service>.<namespace>[:port]
 func ParseTarget(target resolver.Target) (ns, svc, port string, err error) {
+	if target.URL.Scheme != Scheme {
+		return "", "", "", fmt.Errorf("invalid scheme %q, expected %q", target.URL.Scheme, Scheme)
+	}
+
 	ep := target.Endpoint()
 	if target.URL.Host != "" && target.URL.Host != "localhost" {
 		ep = target.URL.Host + "/" + strings.TrimPrefix(target.URL.Path, "/")
 	}
 
+	nsExplicitlySet := false
 	if parts := strings.SplitN(ep, "/", 2); len(parts) == 2 {
 		ns, ep = parts[0], parts[1]
+		nsExplicitlySet = true
 	} else {
 		ns = "default"
 	}
 
-	svc, port, err = net.SplitHostPort(ep)
-	if err != nil {
+	if strings.Contains(ep, ":") {
+		svc, port, err = net.SplitHostPort(ep)
+		if err != nil {
+			return "", "", "", fmt.Errorf("invalid port in target %q: %w", target.String(), err)
+		}
+		if portNumber, err := strconv.Atoi(port); err != nil || portNumber < 0 || portNumber > 65535 {
+			return "", "", "", fmt.Errorf("invalid port %q in target %q, expected a number between 0 and 65535", port, target.String())
+		}
+	} else {
 		svc, port = ep, "443"
 	}
 
-	if parts := strings.Split(svc, "."); len(parts) > 1 {
-		svc, ns = parts[0], parts[1]
+	if !nsExplicitlySet {
+		if parts := strings.Split(svc, "."); len(parts) > 1 {
+			svc, ns = parts[0], parts[1]
+		}
 	}
 
 	if ns == "" || svc == "" {
-		return "", "", "", fmt.Errorf("invalid target %q, expected k8s:///<namespace>/<service>[:port]", target.String())
+		return "", "", "", fmt.Errorf("invalid target %q, expected namespace and service to be non-empty", target.String())
 	}
 	return ns, svc, port, nil
 }
