@@ -149,7 +149,7 @@ func TestBuildDeploymentApplyConfig(t *testing.T) {
 				ServiceAccountName: ptr.To("substrate-worker"),
 			}),
 			want: expectedDeploymentApplyConfig(func(podSpecAC *corev1ac.PodSpecApplyConfiguration) {
-				podSpecAC.WithServiceAccountName("substrate-worker").WithDeprecatedServiceAccount("substrate-worker")
+				podSpecAC.WithServiceAccountName("substrate-worker")
 			}),
 		},
 		{
@@ -901,7 +901,7 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 		sandboxClassTolerationAC(atev1alpha1.SandboxClassGvisor),
 	}
 	podSpecAC.WithPriorityClassName("")
-	podSpecAC.WithServiceAccountName("").WithDeprecatedServiceAccount("")
+	podSpecAC.WithServiceAccountName("default")
 	podSpecAC.WithAffinity(corev1ac.Affinity())
 	podSpecAC.WithTerminationGracePeriodSeconds(workerTerminationGracePeriodSeconds)
 	if mutatePodSpec != nil {

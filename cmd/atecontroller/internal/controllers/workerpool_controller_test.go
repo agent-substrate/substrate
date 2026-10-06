@@ -530,7 +530,7 @@ func TestWorkerPoolPodTemplateClearAll(t *testing.T) {
 			len(podSpec.Tolerations) == 1 &&
 			podSpec.Tolerations[0].Key == sandboxClassTaintKey &&
 			podSpec.PriorityClassName == "" &&
-			podSpec.ServiceAccountName == "" &&
+			podSpec.ServiceAccountName == "default" &&
 			(podSpec.Affinity == nil || podSpec.Affinity.NodeAffinity == nil) &&
 			len(container.Resources.Limits) == 0 &&
 			len(container.Resources.Requests) == 0, nil

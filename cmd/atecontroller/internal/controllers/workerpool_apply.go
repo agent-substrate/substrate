@@ -535,7 +535,7 @@ func applyWorkerPoolPodTemplate(
 	podSpecAC.NodeSelector = map[string]string{}
 	podSpecAC.Tolerations = []corev1ac.TolerationApplyConfiguration{}
 	podSpecAC.WithPriorityClassName("")
-	podSpecAC.WithServiceAccountName("").WithDeprecatedServiceAccount("")
+	podSpecAC.WithServiceAccountName("default")
 	podSpecAC.WithAffinity(corev1ac.Affinity())
 	resourcesAC := corev1ac.ResourceRequirements()
 	containerAC.WithResources(resourcesAC)
@@ -550,7 +550,7 @@ func applyWorkerPoolPodTemplate(
 	podSpecAC.Tolerations = tolerationApplyValues(tolerationsToApply(tmpl.Tolerations))
 	podSpecAC.WithPriorityClassName(tmpl.PriorityClassName)
 	if tmpl.ServiceAccountName != nil {
-		podSpecAC.WithServiceAccountName(*tmpl.ServiceAccountName).WithDeprecatedServiceAccount(*tmpl.ServiceAccountName)
+		podSpecAC.WithServiceAccountName(*tmpl.ServiceAccountName)
 	}
 
 	if tmpl.NodeAffinity != nil {
