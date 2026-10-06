@@ -223,6 +223,13 @@ func TestUnaryServerInterceptor_EnforcementDisabled(t *testing.T) {
 			wantCode:   codes.OK,
 		},
 		{
+			name:       "MintActorJWT skips the check",
+			ctx:        bobCtx,
+			fullMethod: ateapipb.Control_MintActorJWT_FullMethodName,
+			req:        &ateapipb.MintActorJWTRequest{},
+			wantCode:   codes.OK,
+		},
+		{
 			name:       "governance RPC is still denied",
 			ctx:        bobCtx,
 			fullMethod: ateapipb.Control_UpdateGlobalAccessPolicy_FullMethodName,
@@ -593,6 +600,7 @@ func TestUnaryServerInterceptor_SystemGrants(t *testing.T) {
 	suspend := rpcCall{ateapipb.Control_SuspendActor_FullMethodName, &ateapipb.SuspendActorRequest{Actor: actor}}
 	getEgress := rpcCall{ateapipb.Control_GetActorEgressPolicy_FullMethodName, &ateapipb.GetActorEgressPolicyRequest{Actor: actor}}
 	updateEgress := rpcCall{ateapipb.Control_UpdateActorEgressPolicy_FullMethodName, &ateapipb.UpdateActorEgressPolicyRequest{Actor: actor}}
+	mintJWT := rpcCall{ateapipb.Control_MintActorJWT_FullMethodName, &ateapipb.MintActorJWTRequest{Actor: actor}}
 	createWorker := rpcCall{ateapipb.Control_CreateWorker_FullMethodName, &ateapipb.CreateWorkerRequest{}}
 	listWorkers := rpcCall{ateapipb.Control_ListWorkers_FullMethodName, &ateapipb.ListWorkersRequest{}}
 	getWorker := rpcCall{ateapipb.Control_GetWorker_FullMethodName, &ateapipb.GetWorkerRequest{Worker: worker}}
@@ -627,10 +635,13 @@ func TestUnaryServerInterceptor_SystemGrants(t *testing.T) {
 		{"controller cannot get actor", mtls(controllerID), getActor, codes.PermissionDenied},
 		{"controller cannot resume actor", mtls(controllerID), resume, codes.PermissionDenied},
 		{"controller cannot list atespaces", mtls(controllerID), listAtespaces, codes.PermissionDenied},
+		{"controller cannot mint actor JWT", mtls(controllerID), mintJWT, codes.PermissionDenied},
 
-		// atenet-egress reads actors and their egress policies.
+		// atenet-egress reads actors and their egress policies, and mints
+		// actor JWTs for credential injection.
 		{"egress gateway gets actor", mtls(egressID), getActor, codes.OK},
 		{"egress gateway gets egress policy", mtls(egressID), getEgress, codes.OK},
+		{"egress gateway mints actor JWT", mtls(egressID), mintJWT, codes.OK},
 		{"egress gateway cannot update egress policy", mtls(egressID), updateEgress, codes.PermissionDenied},
 		{"egress gateway cannot delete actor", mtls(egressID), deleteActor, codes.PermissionDenied},
 		{"egress gateway cannot resume actor", mtls(egressID), resume, codes.PermissionDenied},
@@ -646,15 +657,18 @@ func TestUnaryServerInterceptor_SystemGrants(t *testing.T) {
 		{"ingress router cannot delete actor", mtls(routerID), deleteActor, codes.PermissionDenied},
 		{"ingress router cannot get egress policy", mtls(routerID), getEgress, codes.PermissionDenied},
 		{"ingress router cannot create worker", mtls(routerID), createWorker, codes.PermissionDenied},
+		{"ingress router cannot mint actor JWT", mtls(routerID), mintJWT, codes.PermissionDenied},
 
 		// A bearer token whose subject is a granted SPIFFE ID gets nothing.
 		{"jwt with controller ID cannot create worker", jwt(controllerID), createWorker, codes.PermissionDenied},
 		{"jwt with egress ID cannot get actor", jwt(egressID), getActor, codes.PermissionDenied},
+		{"jwt with egress ID cannot mint actor JWT", jwt(egressID), mintJWT, codes.PermissionDenied},
 		{"jwt with router ID cannot resume actor", jwt(routerID), resume, codes.PermissionDenied},
 
 		// Other SPIFFE IDs get nothing.
 		{"other mTLS identity cannot resume actor", mtls(otherID), resume, codes.PermissionDenied},
 		{"other mTLS identity cannot create worker", mtls(otherID), createWorker, codes.PermissionDenied},
+		{"other mTLS identity cannot mint actor JWT", mtls(otherID), mintJWT, codes.PermissionDenied},
 	}
 
 	interceptor := UnaryServerInterceptor(authorizer, true)

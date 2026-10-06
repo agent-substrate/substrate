@@ -383,6 +383,7 @@ tests:
           can_list_atespaces: false
           can_create_atespace: false
           can_get: false
+          can_mint_actor_jwt: false
           viewer: false
       - user: user:sys-controller
         object: worker:pod-1
@@ -413,6 +414,7 @@ tests:
       - user: user:sys-egress
         object: global:root
         assertions:
+          can_mint_actor_jwt: true
           can_list_actors: false
           can_create_worker: false
       - user: user:sys-egress
@@ -437,6 +439,7 @@ tests:
           can_list_actors: true
           can_list_workers: false
           can_list_atespaces: false
+          can_mint_actor_jwt: false
       - user: user:sys-router
         object: worker:pod-1
         assertions:
@@ -452,3 +455,4 @@ tests:
           controller: false
           egress_gateway: false
           ingress_router: false
+          can_mint_actor_jwt: false

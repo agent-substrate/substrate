@@ -67,6 +67,9 @@ type global
     define can_get_access_policy: viewer
     define can_update_access_policy: owner
 
+    # --- Actor Identity ---
+    define can_mint_actor_jwt: egress_gateway
+
 type atespace
   relations
     define parent_global: [global]

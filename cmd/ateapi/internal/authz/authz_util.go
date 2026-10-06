@@ -76,6 +76,7 @@ const (
 	RelationCanGetEgressPolicy      = "can_get_egress_policy"
 	RelationCanUpdateEgressPolicy   = "can_update_egress_policy"
 	RelationCanDeleteEgressPolicy   = "can_delete_egress_policy"
+	RelationCanMintActorJWT         = "can_mint_actor_jwt"
 
 	// maxTuplesPerWrite is OpenFGA's default maximum number of tuples allowed in a single Write request.
 	maxTuplesPerWrite = 100
