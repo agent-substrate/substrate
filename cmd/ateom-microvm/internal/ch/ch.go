@@ -33,9 +33,10 @@ import (
 
 // Client talks to one cloud-hypervisor VMM over its unix api-socket.
 type Client struct {
-	apiSocket string
-	api       *apiClient
-	info      VMMInfo
+	apiSocket  string
+	api        *apiClient
+	info       VMMInfo
+	hypervisor Hypervisor
 }
 
 // NewClient returns a Client bound to a cloud-hypervisor api-socket path. The
@@ -48,6 +49,9 @@ func NewClient(apiSocket string) *Client {
 // Ping or WaitReady. A Client belongs to one actor's VMM and is used from that
 // actor's goroutine, so this needs no synchronization.
 func (c *Client) Info() VMMInfo { return c.info }
+
+// Hypervisor returns the backend selected when the VMM was launched.
+func (c *Client) Hypervisor() Hypervisor { return c.hypervisor }
 
 // VMMInfo is what vmm.ping reports about the running VMM. Version is a semver
 // ("53.0.0"); BuildVersion is the release tag it was built from ("v53.0").

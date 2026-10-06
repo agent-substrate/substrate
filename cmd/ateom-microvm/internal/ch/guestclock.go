@@ -27,7 +27,12 @@ var clockAdvanceSince = [3]int{53, 0, 0}
 // It reports false when the version cannot be read or parsed, which is the safe
 // direction: a caller that wrongly believes the VMM corrects the clock leaves the
 // guest reading a stale time after every resume, with no error to show for it.
-func (i VMMInfo) AdvancesGuestClockOnRestore() bool {
+func (i VMMInfo) AdvancesGuestClockOnRestore(backend Hypervisor) bool {
+	// The v53 clock correction is KVM-specific; MSHV restores the saved
+	// partition reference time without adding the suspended interval.
+	if backend != KVM {
+		return false
+	}
 	v, ok := i.semver()
 	if !ok {
 		return false

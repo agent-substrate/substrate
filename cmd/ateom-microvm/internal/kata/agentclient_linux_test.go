@@ -34,16 +34,7 @@ import (
 // a client connected to it.
 func startFakeAgent(t *testing.T, handle func(*agentpb.ReseedRandomDevRequest) error) *AgentClient {
 	t.Helper()
-	sock := filepath.Join(t.TempDir(), "agent.sock")
-	l, err := net.Listen("unix", sock)
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	srv, err := ttrpc.NewServer()
-	if err != nil {
-		t.Fatalf("ttrpc.NewServer: %v", err)
-	}
-	srv.Register("grpc.AgentService", map[string]ttrpc.Method{
+	return startFakeAgentMethods(t, map[string]ttrpc.Method{
 		"ReseedRandomDev": func(_ context.Context, unmarshal func(interface{}) error) (interface{}, error) {
 			var req agentpb.ReseedRandomDevRequest
 			if err := unmarshal(&req); err != nil {
@@ -55,6 +46,20 @@ func startFakeAgent(t *testing.T, handle func(*agentpb.ReseedRandomDevRequest) e
 			return &emptypb.Empty{}, nil
 		},
 	})
+}
+
+func startFakeAgentMethods(t *testing.T, methods map[string]ttrpc.Method) *AgentClient {
+	t.Helper()
+	sock := filepath.Join(t.TempDir(), "agent.sock")
+	l, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	srv, err := ttrpc.NewServer()
+	if err != nil {
+		t.Fatalf("ttrpc.NewServer: %v", err)
+	}
+	srv.Register("grpc.AgentService", methods)
 	go func() { _ = srv.Serve(context.Background(), l) }()
 	t.Cleanup(func() { _ = srv.Close() })
 
@@ -101,5 +106,40 @@ func TestReseedRandomDevReturnsAgentError(t *testing.T) {
 	defer cancel()
 	if err := ac.ReseedRandomDev(ctx, []byte("nonce")); err == nil {
 		t.Fatal("ReseedRandomDev returned nil for an agent error, want the error")
+	}
+}
+
+func TestSetGuestDateTime(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		t.Run(map[bool]string{false: "success", true: "agent failure"}[fail], func(t *testing.T) {
+			got := make(chan *agentpb.SetGuestDateTimeRequest, 1)
+			ac := startFakeAgentMethods(t, map[string]ttrpc.Method{
+				"SetGuestDateTime": func(_ context.Context, unmarshal func(interface{}) error) (interface{}, error) {
+					req := new(agentpb.SetGuestDateTimeRequest)
+					if err := unmarshal(req); err != nil {
+						return nil, err
+					}
+					got <- req
+					if fail {
+						return nil, errors.New("clock update refused")
+					}
+					return &emptypb.Empty{}, nil
+				},
+			})
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			err := ac.SetGuestDateTime(ctx, time.Unix(1791235000, 123456789))
+			if (err != nil) != fail {
+				t.Fatalf("SetGuestDateTime error = %v, want failure %v", err, fail)
+			}
+			select {
+			case req := <-got:
+				if req.Sec != 1791235000 || req.Usec != 123456 {
+					t.Fatalf("wrong timestamp: %v", req)
+				}
+			default:
+				t.Fatal("agent did not receive clock update")
+			}
+		})
 	}
 }

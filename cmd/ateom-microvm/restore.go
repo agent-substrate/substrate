@@ -370,6 +370,9 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 	//     source afterwards and nothing merges against it, so it is dropped below and
 	//     the next snapshot stands on its own.
 	tLaunch := time.Now()
+	if err := validateSnapshotHypervisor(restoreDir, client.Hypervisor()); err != nil {
+		return err
+	}
 	memMode := restoreMemMode(ctx, client.Info())
 	slog.InfoContext(ctx, "restoring guest memory",
 		slog.String("mode", memMode), slog.String("vmm_version", client.Info().Version))
@@ -414,6 +417,15 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 	// race. At that point this agent-driven reseed can be dropped.
 	if err := reseedGuestCRNG(ctx, guestAC); err != nil {
 		return fmt.Errorf("while reseeding guest CRNG: %w", err)
+	}
+
+	// MSHV restores partition time without adding downtime. Correct wall time
+	// before readiness, as Kata's shim does. Guest code already runs after
+	// Resume, so this does not promise correction before its first instruction.
+	if client.Hypervisor() == ch.MSHV {
+		if err := synchronizeGuestClock(ctx, guestAC); err != nil {
+			return fmt.Errorf("while synchronizing restored guest clock: %w", err)
+		}
 	}
 
 	// Block until every wakeup-probe-enabled container reports 200.

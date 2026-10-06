@@ -1,7 +1,7 @@
 # Running the microVM runtime locally
 
 The microVM sandbox class (`ateom-microvm`: a Kata guest on Cloud Hypervisor)
-needs `/dev/kvm`, which takes some extra setup compared to the default gVisor
+needs `/dev/kvm` or `/dev/mshv`, which takes some extra setup compared to the default gVisor
 path. This guide covers just that delta: getting a KVM-capable Docker
 environment — on Linux, or on Apple Silicon macOS via
 [Lima](https://lima-vm.io/) — then running the microVM counter demo and
@@ -15,6 +15,55 @@ README first — it covers the base tooling and the default (gVisor) path this
 guide builds on. For background on the runtime, see
 [architecture.md](../architecture.md) and
 [hack/microvm-assets/README.md](../../hack/microvm-assets/README.md).
+
+## Microsoft Hypervisor (MSHV)
+
+On an AMD64 Microsoft Hypervisor root-partition node, such as an AKS
+`KataVmIsolation` node, atelet discovers `/dev/mshv` and advertises
+`ate.dev/mshv`. Select that resource in the MicroVM WorkerPool:
+
+```yaml
+spec:
+  sandboxClass: microvm
+  template:
+    resources:
+      limits:
+        ate.dev/mshv: "1"
+```
+
+The controller defaults to KVM if neither hypervisor resource is specified.
+Explicit hypervisor requests or limits must equal one; specifying both backends
+is rejected. MSHV workers select AMD64 nodes. Atelet's device plugin grants the
+device to the nonprivileged worker, so no hypervisor hostPath mount or manual
+hypervisor node label is required.
+
+Workers use the normal container runtime. Do not put the Substrate worker inside
+`kata-vm-isolation` or `kata-v2`: `ateom-microvm` launches its own Cloud Hypervisor
+VM and communicates directly with the Kata guest agent. The node's Kata handler
+and the guest assets named by Substrate's SandboxConfig are independent.
+
+The AMD64 Cloud Hypervisor v53 release includes both KVM and MSHV. It prefers KVM
+when both devices are visible; expose only the selected device to a worker.
+MSHV guests use the kernel's default clocksource and retain the guest time-sync
+service. Substrate also sets guest wall time through the Kata agent on boot and
+after restore, before readiness. Guest instructions resume before the correction
+RPC, so this does not guarantee correct time in the first instructions after
+resume or advance guest monotonic timers by the suspended interval.
+
+Use a homogeneous hypervisor deployment initially. Actor scheduling does not
+automatically distinguish KVM workers from MSHV workers. FULL snapshots record
+the backend and reject incompatible restores; that check does not route an actor
+to another compatible worker. Recreate existing FULL/golden snapshots when
+installing this snapshot format: missing backend metadata is rejected. DATA
+restores cold-boot rather than restore VM memory.
+
+The cluster must also provide Substrate's certificate APIs and installation
+dependencies; exposing MSHV alone is not a complete AKS deployment integration.
+
+Validate the exact guest kernel/image and host driver combination with cold boot,
+FULL checkpoint/restore, cross-worker restore, memory and filesystem continuity,
+guest wall time after a long suspension, and repeated restores. A working Kata-v2
+pod alone does not validate the Substrate lifecycle.
 
 ## Option A: Linux host with KVM
 

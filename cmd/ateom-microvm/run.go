@@ -513,7 +513,7 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 	// on a failed agent dial below, so keep it here.
 	consoleLog := kata.ConsoleLogPath(actorUID)
 	vmCfg := buildVMConfig(actorUID, kernel, image, kparams, consoleLog, memMiB, vcpus,
-		agentInit(ctx, client.Info()), s.kataDebug)
+		agentInit(ctx, client.Info(), client.Hypervisor()), s.kataDebug, client.Hypervisor())
 	if err := client.CreateVM(ctx, vmCfg); err != nil {
 		return fmt.Errorf("while creating VM: %w", err)
 	}
@@ -570,6 +570,11 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 	}()
 
 	// Post-boot kata-agent setup: sandbox, guest networking, start each container.
+	if client.Hypervisor() == ch.MSHV {
+		if err := synchronizeGuestClock(ctx, ac); err != nil {
+			return fmt.Errorf("while synchronizing guest clock: %w", err)
+		}
+	}
 	if err := s.startActorContainers(ctx, ac, actorUID, vsockPath, ctrs); err != nil {
 		return err
 	}
@@ -751,8 +756,8 @@ func resolveGuestMemMiB(declaredBytes int64, reserveMiB, fallbackMiB int) (int, 
 // clock after a resume — so this is only safe on a VMM that advances the guest clock
 // across a restore itself. On an older or unreadable version, boot systemd instead and
 // keep the guest correct at the cost of the memory.
-func agentInit(ctx context.Context, info ch.VMMInfo) bool {
-	if info.AdvancesGuestClockOnRestore() {
+func agentInit(ctx context.Context, info ch.VMMInfo, backend ch.Hypervisor) bool {
+	if info.AdvancesGuestClockOnRestore(backend) {
 		return true
 	}
 	slog.InfoContext(ctx, "VMM does not advance the guest clock on restore; booting systemd to keep chronyd",
@@ -788,8 +793,8 @@ func initParams(agentInit bool) string {
 //
 // Dropping systemd also drops chronyd (kata-containers.target wants it), which is what
 // used to repair the guest clock after a resume. That is safe only from cloud-hypervisor
-// v53, which advances the guest clock across a restore itself; on v52 a restored guest
-// stays frozen at the instant it was snapshotted.
+// v53 on KVM, which advances the guest clock across a restore itself. MSHV
+// retains systemd and also receives an explicit agent wall-clock update.
 //
 // The disk-backed rootfs upper share (see rootfsupper.go) is always present.
 //
@@ -801,14 +806,14 @@ func initParams(agentInit bool) string {
 // the earliest messages: hvc0 only exists once virtio-console probes, so the memory
 // map, CPU features and ACPI lines never reach the log. kataDebug adds the UART back
 // with earlycon (and pays the ~800ms) for diagnosing a guest that dies before then.
-func buildVMConfig(id, kernel, image, kparams, consoleLog string, memMiB, vcpus int, agentInit, debug bool) ch.VmConfig {
+func buildVMConfig(id, kernel, image, kparams, consoleLog string, memMiB, vcpus int, agentInit, debug bool, backend ch.Hypervisor) ch.VmConfig {
 	cmdline := "root=/dev/vda1 rootflags=data=ordered,errors=remount-ro ro rootfstype=ext4 " +
 		"panic=1 no_timer_check noreplace-smp console=hvc0 " +
 		initParams(agentInit)
 	if kparams != "" {
 		cmdline += " " + kparams
 	}
-	if runtime.GOARCH == "amd64" {
+	if runtime.GOARCH == "amd64" && backend == ch.KVM {
 		cmdline += " clocksource=kvm-clock"
 	}
 	serial := &ch.ConsoleConfig{Mode: "Off"}
