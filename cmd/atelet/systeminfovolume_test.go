@@ -586,7 +586,7 @@ func TestSystemInfoVolumeRefresher_DeregisterMarksStale(t *testing.T) {
 	}
 }
 
-func TestSystemInfoVolumeRefresher_RegisterTwiceSupersedes(t *testing.T) {
+func TestSystemInfoVolumeRefresher_RegisterTwicePanics(t *testing.T) {
 	store := newCTBStore(t)
 	store.set(t, string(testCertPEM(t)))
 	r := newSystemInfoVolumeRefresher(trustbundle.NewSource(store.lister.Get, nil), nil)
@@ -594,15 +594,28 @@ func TestSystemInfoVolumeRefresher_RegisterTwiceSupersedes(t *testing.T) {
 	registerTrustVolume(t, r, dir, "uid-1")
 	first := r.actors["uid-1"]
 
-	if _, err := r.Register("uid-1", resources.ActorRef{Atespace: "team-a", Name: "uid-1"}, nil); err != nil {
-		t.Fatalf("second Register: %v", err)
+	var panicValue any
+	func() {
+		defer func() { panicValue = recover() }()
+		_, _ = r.Register("uid-1", resources.ActorRef{Atespace: "team-a", Name: "uid-1"}, nil)
+	}()
+	if panicValue == nil {
+		t.Fatal("second Register did not panic")
 	}
-	if !first.stale {
-		t.Error("superseded entry was not marked stale")
+	if first.stale {
+		t.Error("duplicate Register marked the existing entry stale")
 	}
-	if r.actors["uid-1"] == first {
-		t.Error("superseded entry was not replaced in r.actors")
+	if r.actors["uid-1"] != first {
+		t.Error("duplicate Register changed the existing registry entry")
 	}
+	if !r.mu.TryLock() {
+		t.Fatal("duplicate Register left the registry mutex locked")
+	}
+	r.mu.Unlock()
+	if !first.mu.TryLock() {
+		t.Fatal("duplicate Register left the existing actor mutex locked")
+	}
+	first.mu.Unlock()
 }
 
 func TestSystemInfoVolumeRefresher_StaleDeregisterPreservesNewerRegistration(t *testing.T) {
@@ -618,11 +631,17 @@ func TestSystemInfoVolumeRefresher_StaleDeregisterPreservesNewerRegistration(t *
 	if err != nil {
 		t.Fatalf("first Register: %v", err)
 	}
+	r.DeregisterOwned(first)
+	if got := r.actors["uid-1"]; got != nil {
+		t.Fatalf("deregister first registration left it live: %p", got)
+	}
+	if !first.stale {
+		t.Fatal("deregistered first registration was not marked stale")
+	}
 	registerTrustVolume(t, r, t.TempDir(), "uid-1")
 	newer := r.actors["uid-1"]
 
-	// This models cleanup from the first registration after the second one has
-	// become live. It must not remove the newer registration.
+	// Delayed cleanup from the first registration must not remove the newer one.
 	r.DeregisterOwned(first)
 	if got := r.actors["uid-1"]; got != newer {
 		t.Fatalf("stale cleanup removed the newer registration: got %p, want %p", got, newer)
@@ -658,15 +677,12 @@ func TestSystemInfoVolumeRefresher_DeregisterOwnedNil(t *testing.T) {
 	}
 }
 
-func TestSystemInfoVolumeRefresher_FailedReplacementDropsRegistration(t *testing.T) {
+func TestSystemInfoVolumeRefresher_FailedRegisterDropsRegistration(t *testing.T) {
 	store := newCTBStore(t)
 	store.set(t, string(testCertPEM(t)))
 	r := newSystemInfoVolumeRefresher(trustbundle.NewSource(store.lister.Get, nil), nil)
 	dir := t.TempDir()
-	registerTrustVolume(t, r, dir, "uid-1")
-	previous := r.actors["uid-1"]
-	// A file in place of the new volume directory forces a real initial-write
-	// failure after the previous registration has been superseded.
+	// A file in place of the volume directory forces an initial-write failure.
 	blockedRoot := filepath.Join(dir, "blocked")
 	if err := os.WriteFile(blockedRoot, []byte("not a directory"), 0o600); err != nil {
 		t.Fatal(err)
@@ -680,8 +696,8 @@ func TestSystemInfoVolumeRefresher_FailedReplacementDropsRegistration(t *testing
 	if owner != nil {
 		t.Error("failed Register returned an owner; want nil after self-cleanup")
 	}
-	if r.actors["uid-1"] != nil || !previous.stale {
-		t.Error("failed replacement must drop its entry and leave the superseded registration stale")
+	if r.actors["uid-1"] != nil {
+		t.Error("failed Register left its entry in the registry")
 	}
 }
 
@@ -824,11 +840,12 @@ func TestSystemInfoVolumeRegister_TrustBundle(t *testing.T) {
 		}
 	})
 
-	t.Run("re-registration supersedes stale entry without panicking", func(t *testing.T) {
+	t.Run("re-registration after deregistration", func(t *testing.T) {
 		r := newSystemInfoVolumeRefresher(trustbundle.NewSource(store.lister.Get, nil), nil)
 		dir1 := t.TempDir()
 		dir2 := t.TempDir()
 		registerTrustVolume(t, r, dir1, "uid-rereg")
+		r.Deregister("uid-rereg")
 		registerTrustVolume(t, r, dir2, "uid-rereg")
 		if got := readProjected(t, dir2, "uid-rereg", "trust", "ca.pem"); got != string(certPEM) {
 			t.Errorf("content = %q, want the sanitized bundle", got)

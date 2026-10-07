@@ -93,10 +93,9 @@ func newSystemInfoVolumeRefresher(bundles *trustbundle.Source, informer cache.Sh
 }
 
 // Register records actorUID's system-info volumes and writes their contents
-// from current cluster state. Superseding an existing registration means
-// activations for the same actor UID overlapped. The previous registration is
-// superseded even if this registration's initial write fails, and is not
-// restored on failure.
+// from current cluster state. A duplicate actorUID panics. If an initial write
+// fails, Register removes its own entry and returns no owner, so caller cleanup
+// cannot remove a later registration.
 func (r *systemInfoVolumeRefresher) Register(actorUID string, ref resources.ActorRef, volumes []*systemInfoVolume) (*registeredActor, error) {
 	actor := &registeredActor{uid: actorUID, ref: ref, volumes: volumes}
 	// Held until the initial write finishes so a refresh cannot interleave.
@@ -104,17 +103,12 @@ func (r *systemInfoVolumeRefresher) Register(actorUID string, ref resources.Acto
 	defer actor.mu.Unlock()
 
 	r.mu.Lock()
-	prev := r.actors[actorUID]
+	if r.actors[actorUID] != nil {
+		r.mu.Unlock()
+		panic(fmt.Sprintf("system-info volumes: duplicate registration for actor UID %s, actor: %v", actorUID, ref))
+	}
 	r.actors[actorUID] = actor
 	r.mu.Unlock()
-	if prev != nil {
-		prev.mu.Lock()
-		prev.stale = true
-		prev.mu.Unlock()
-		slog.Warn("Overlapping activations registered system-info volumes for the same actor UID",
-			slog.String("actor_uid", actorUID),
-			slog.Any("actor", ref))
-	}
 
 	for _, v := range volumes {
 		if err := r.write(ref, actorUID, v); err != nil {
