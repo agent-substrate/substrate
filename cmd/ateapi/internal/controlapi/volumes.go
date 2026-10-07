@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/admission"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/volume"
@@ -29,33 +30,6 @@ import (
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	storagev1listers "k8s.io/client-go/listers/storage/v1"
 )
-
-// initialActorVolumes constructs initial volume objects in PENDING state before volume creation.
-func initialActorVolumes(ctx context.Context, scLister storagev1listers.StorageClassLister, template *ateapipb.ActorTemplate) ([]*ateapipb.ExternalVolume, error) {
-	if template == nil {
-		return nil, apierror.InvalidArgument("template is required")
-	}
-	var volumes []*ateapipb.ExternalVolume
-	for _, vol := range template.GetVolumes() {
-		if vol.GetExternalVolumeTemplate() != nil {
-			scName := vol.GetExternalVolumeTemplate().GetStorageClassName()
-			sc, err := scLister.Get(scName)
-			if err != nil {
-				if k8serrors.IsNotFound(err) {
-					return nil, apierror.FailedPrecondition("StorageClass %q not found", scName)
-				}
-				return nil, apierror.Internal("failed to get StorageClass %q: %v", scName, err)
-			}
-
-			volumes = append(volumes, &ateapipb.ExternalVolume{
-				VolumeName: vol.GetName(),
-				VolumeType: sc.Provisioner,
-				Status:     ateapipb.ExternalVolume_STATUS_PENDING,
-			})
-		}
-	}
-	return volumes, nil
-}
 
 // createActorVolumes provisions external volumes specified in volumesToCreate using the provided volume plugin.
 // It returns the list of external volumes (with updated status and storage IDs), or an error if any creation fails.
@@ -203,14 +177,14 @@ func actorVolumeID(actorUID string, volumeName string) string {
 }
 
 // detachActorVolumes detaches all mounted external volumes for an actor from its worker node.
-func detachActorVolumes(ctx context.Context, st detachActorVolumesStore, registry VolumePluginRegistry, actor *ateapipb.Actor, template *ateapipb.ActorTemplate, action string) error {
+func detachActorVolumes(ctx context.Context, admission *admission.Admission, registry VolumePluginRegistry, actor *ateapipb.Actor, template *ateapipb.ActorTemplate, action string) error {
 	assignment := actor.GetStatus().GetWorkerAssignment()
 	if assignment == nil {
 		slog.WarnContext(ctx, fmt.Sprintf("Actor has no assigned worker pod during %s, skipping detach volumes", action), slog.String("actor_id", actor.GetMetadata().GetName()))
 		return nil
 	}
 
-	worker, err := st.GetWorker(ctx, assignment.GetWorker().GetName())
+	worker, err := admission.GetWorker(ctx, assignment.GetWorker().GetName())
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			slog.WarnContext(ctx, fmt.Sprintf("Worker not found in store during %s, skipping detach volumes", action), slog.String("actor_id", actor.GetMetadata().GetName()))
@@ -258,10 +232,4 @@ func detachActorVolumes(ctx context.Context, st detachActorVolumesStore, registr
 		}
 	}
 	return errors.Join(errs...)
-}
-
-// detachActorVolumesStore enumerates the subset of store methods needed to
-// detach actor volumes.
-type detachActorVolumesStore interface {
-	GetWorker(ctx context.Context, name string) (*ateapipb.Worker, error)
 }

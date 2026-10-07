@@ -19,19 +19,15 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/admission"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
-
-type workerAssignmentReader interface {
-	GetWorkerAssignment(ctx context.Context, workerName, actorUID string) (*ateapipb.ActorAssignment, error)
-}
 
 // workerHostsActor reports whether a Worker holds an assignment for actorUID.
 // It asks the store: the Worker record does not carry its assignments, and the
 // watch-fed cache cannot see a binding committed moments ago.
-func workerHostsActor(ctx context.Context, st workerAssignmentReader, workerName, actorUID string) (bool, error) {
-	_, err := st.GetWorkerAssignment(ctx, workerName, actorUID)
+func workerHostsActor(ctx context.Context, admission *admission.Admission, workerName, actorUID string) (bool, error) {
+	_, err := admission.GetWorkerAssignment(ctx, workerName, actorUID)
 	if errors.Is(err, store.ErrNotFound) {
 		return false, nil
 	}

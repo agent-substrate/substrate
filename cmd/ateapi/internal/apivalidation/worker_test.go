@@ -188,6 +188,40 @@ func TestValidateCreateWorkerRequest(t *testing.T) {
 	}
 }
 
+func TestValidateWorkerCreate(t *testing.T) {
+	withMetadata := withWorkerMetadata
+
+	tests := []struct {
+		name   string
+		worker *ateapipb.Worker
+		want   field.ErrorList
+	}{{
+		name:   "valid unassigned worker",
+		worker: validWorker(apiWorkerName),
+	}, {
+		name:   "missing metadata",
+		worker: validWorker(apiWorkerName, func(w *ateapipb.Worker) { w.Metadata = nil }),
+		want:   field.ErrorList{field.Required(field.NewPath("worker", "metadata"), "")},
+	}, {
+		name:   "missing metadata.name",
+		worker: validWorker(apiWorkerName, withMetadata(func(m *ateapipb.ResourceMetadata) { m.Name = "" })),
+		want:   field.ErrorList{field.Required(field.NewPath("worker", "metadata", "name"), "")},
+	}, {
+		name:   "metadata.atespace set on a global-scoped Worker",
+		worker: validWorker(apiWorkerName, withMetadata(func(m *ateapipb.ResourceMetadata) { m.Atespace = "team-a" })),
+		want:   field.ErrorList{field.Forbidden(field.NewPath("worker", "metadata", "atespace"), "")},
+	}, {
+		name:   "missing ips",
+		worker: validWorker(apiWorkerName, func(w *ateapipb.Worker) { w.Ips = nil }),
+		want:   field.ErrorList{field.Required(field.NewPath("worker", "ips"), "")},
+	}}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assertValidateErr(t, ValidateWorkerCreate(context.Background(), field.NewPath("worker"), tc.worker), tc.want)
+		})
+	}
+}
+
 func TestValidateDeleteWorkerRequest(t *testing.T) {
 	tests := []struct {
 		name string

@@ -22,6 +22,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/testing/protocmp"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/admission"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/ateletauth/ateletauthtest"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
@@ -79,7 +80,7 @@ func TestRequestActorSuspend(t *testing.T) {
 		Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 	}
 	suspender := &fakeSuspender{resp: &ateapipb.SuspendActorResponse{Actor: suspended}}
-	s := New(st, suspender, testAteletSPIFFEID, nil)
+	s := New(admission.New(st, nil, nil), suspender, testAteletSPIFFEID, nil)
 
 	got, err := s.RequestActorSuspend(
 		ateletauthtest.ContextWith(ateletauthtest.CertOn(t, testNode)),
@@ -127,7 +128,7 @@ func TestRequestActorSuspend_OnlyForHostedActors(t *testing.T) {
 			seedReportedWorker(t, st, testNode, &ateapipb.WorkerResources{Actors: 1})
 			actor := seedHostedActor(t, st, tc.assignedWorker)
 			suspender := &fakeSuspender{}
-			s := New(st, suspender, testAteletSPIFFEID, nil)
+			s := New(admission.New(st, nil, nil), suspender, testAteletSPIFFEID, nil)
 
 			uid := tc.requestedUID
 			if uid == "" {
@@ -153,7 +154,7 @@ func TestRequestActorSuspend_Errors(t *testing.T) {
 	actor := seedHostedActor(t, st, testWorkerName)
 	uid := actor.GetMetadata().GetUid()
 	suspender := &fakeSuspender{}
-	s := New(st, suspender, testAteletSPIFFEID, nil)
+	s := New(admission.New(st, nil, nil), suspender, testAteletSPIFFEID, nil)
 	authed := ateletauthtest.ContextWith(ateletauthtest.CertOn(t, testNode))
 
 	tests := []struct {
@@ -232,7 +233,7 @@ func TestRequestActorSuspend_GoldenActorCannotSelfSuspend(t *testing.T) {
 		},
 	})
 	suspender := &fakeSuspender{}
-	s := New(st, suspender, testAteletSPIFFEID, nil)
+	s := New(admission.New(st, nil, nil), suspender, testAteletSPIFFEID, nil)
 
 	// Everything else about the request is in order: the Worker really does
 	// host this actor, so being golden is the only reason it is refused.
@@ -260,7 +261,7 @@ func TestRequestActorSuspend_PassesThroughTheWorkflowsRefusal(t *testing.T) {
 	seedReportedWorker(t, st, testNode, &ateapipb.WorkerResources{Actors: 1})
 	actor := seedHostedActor(t, st, testWorkerName)
 	suspender := &fakeSuspender{err: apierror.FailedPrecondition("Actor is RESUMING")}
-	s := New(st, suspender, testAteletSPIFFEID, nil)
+	s := New(admission.New(st, nil, nil), suspender, testAteletSPIFFEID, nil)
 
 	_, err := s.RequestActorSuspend(
 		ateletauthtest.ContextWith(ateletauthtest.CertOn(t, testNode)),

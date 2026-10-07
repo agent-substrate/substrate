@@ -22,6 +22,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/admission"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -56,15 +57,6 @@ const (
 // GoldenSnapshotStatus.error_message.
 const maxGoldenErrorMessageLen = 4096
 
-// templateReconcilerStore enumerates the exact storage methods needed by
-// ActorTemplateReconciler and nothing more.
-type templateReconcilerStore interface {
-	GetActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef) (*ateapipb.ActorTemplate, error)
-	ListActorTemplates(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.ActorTemplate], error)
-	UpdateActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.Precondition, mutate func(dbTemplate *ateapipb.ActorTemplate) error) (*ateapipb.ActorTemplate, error)
-	AcquireLease(ctx context.Context, key string) (*store.Lease, error)
-}
-
 // goldenActorControl is the in-process slice of the Control service the
 // reconciler drives golden actors through. *RPCService satisfies it.
 type goldenActorControl interface {
@@ -82,15 +74,15 @@ type goldenActorControl interface {
 // ActorTemplateReconciler drives stored ActorTemplates through the golden
 // actor state machine.
 type ActorTemplateReconciler struct {
-	persistence    templateReconcilerStore
+	admission      *admission.Admission
 	control        goldenActorControl
 	queue          workqueue.TypedRateLimitingInterface[resources.ActorTemplateRef]
 	resyncInterval time.Duration
 }
 
-func NewActorTemplateReconciler(persistence templateReconcilerStore, control goldenActorControl, resyncInterval time.Duration) *ActorTemplateReconciler {
+func NewActorTemplateReconciler(admission *admission.Admission, control goldenActorControl, resyncInterval time.Duration) *ActorTemplateReconciler {
 	return &ActorTemplateReconciler{
-		persistence:    persistence,
+		admission:      admission,
 		control:        control,
 		resyncInterval: resyncInterval,
 		// Create rate-limiting queue with exponential backoff
@@ -115,7 +107,7 @@ func (r *ActorTemplateReconciler) resync(ctx context.Context) {
 	pageToken := ""
 	for {
 		// TODO: need sharding
-		page, err := r.persistence.ListActorTemplates(ctx, "", store.ListOptions{PageSize: templateListPageSize, PageToken: pageToken})
+		page, err := r.admission.ListActorTemplates(ctx, "", store.ListOptions{PageSize: templateListPageSize, PageToken: pageToken})
 		if err != nil {
 			slog.ErrorContext(ctx, "Failed to list actor templates", slog.Any("err", err))
 			return
@@ -170,7 +162,7 @@ func (r *ActorTemplateReconciler) processNextWorkItem(ctx context.Context) bool 
 // reentrant. A positive requeueAfter asks the caller to revisit the template
 // once its snapshot deadline (or a transitional actor state) passes.
 func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resources.ActorTemplateRef) (requeueAfter time.Duration, err error) {
-	lease, err := r.persistence.AcquireLease(ctx, "lease:actortemplate:"+ref.Atespace+":"+ref.Name)
+	lease, err := r.admission.AcquireLease(ctx, "lease:actortemplate:"+ref.Atespace+":"+ref.Name)
 	if err != nil {
 		if errors.Is(err, store.ErrLeaseConflict) {
 			// Another replica owns this template for now.
@@ -181,7 +173,7 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 	defer lease.Close()
 	ctx = lease.Context()
 
-	tmpl, err := r.persistence.GetActorTemplate(ctx, ref)
+	tmpl, err := r.admission.GetActorTemplate(ctx, ref)
 	if err != nil {
 		// Template was deleted after we enqueued the work item.
 		if errors.Is(err, store.ErrNotFound) {
@@ -357,17 +349,14 @@ func (r *ActorTemplateReconciler) saveGoldenTag(ctx context.Context, tmpl *ateap
 // as a conflict for the workqueue to retry.
 func (r *ActorTemplateReconciler) checkpoint(ctx context.Context, observed *ateapipb.ActorTemplate, mutate func(*ateapipb.GoldenSnapshotStatus)) (*ateapipb.ActorTemplate, error) {
 	ref := resources.ActorTemplateRefFromActorTemplate(observed)
-	updated, err := r.persistence.UpdateActorTemplate(ctx, ref, store.PreconditionFrom(observed), func(dbTemplate *ateapipb.ActorTemplate) error {
-		if goldenSnapshotDone(dbTemplate.GetStatus().GetGoldenSnapshotStatus()) {
+	updated, err := r.admission.UpdateActorTemplateStatus(ctx, ref, store.PreconditionFrom(observed), func(status *ateapipb.ActorTemplateStatus) error {
+		if goldenSnapshotDone(status.GetGoldenSnapshotStatus()) {
 			return fmt.Errorf("actor template reached a terminal golden snapshot state concurrently")
 		}
-		if dbTemplate.Status == nil {
-			dbTemplate.Status = &ateapipb.ActorTemplateStatus{}
+		if status.GoldenSnapshotStatus == nil {
+			status.GoldenSnapshotStatus = &ateapipb.GoldenSnapshotStatus{}
 		}
-		if dbTemplate.Status.GoldenSnapshotStatus == nil {
-			dbTemplate.Status.GoldenSnapshotStatus = &ateapipb.GoldenSnapshotStatus{}
-		}
-		mutate(dbTemplate.Status.GoldenSnapshotStatus)
+		mutate(status.GoldenSnapshotStatus)
 		return nil
 	})
 

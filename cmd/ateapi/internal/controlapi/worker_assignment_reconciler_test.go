@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/admission"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -78,7 +79,7 @@ func TestWorkerAssignmentReconciler_SkipsWorkerLeasedElsewhere(t *testing.T) {
 	}
 	defer lease.Close()
 
-	r := NewWorkerAssignmentReconciler(persistence, noWorkers{})
+	r := NewWorkerAssignmentReconciler(admission.New(persistence, nil, nil), noWorkers{})
 	defer r.queue.ShutDown()
 	if err := r.reconcileOne(ctx, apiWorkerName); !errors.Is(err, errWorkerLeased) {
 		t.Fatalf("reconcileOne() = %v, want errWorkerLeased", err)
@@ -104,11 +105,12 @@ func waitForObservedEpoch(t *testing.T, ctx context.Context, persistence store.I
 // persistence, as ateapi does.
 func startAssignmentReconciler(t *testing.T, ctx context.Context, persistence store.Interface) {
 	t.Helper()
-	wc := workercache.New(persistence, time.Hour)
+	admission := admission.New(persistence, nil, nil)
+	wc := workercache.New(admission, time.Hour)
 	if err := wc.Start(ctx); err != nil {
 		t.Fatalf("workercache.Start: %v", err)
 	}
-	NewWorkerAssignmentReconciler(persistence, wc).Start(ctx)
+	NewWorkerAssignmentReconciler(admission, wc).Start(ctx)
 }
 
 // End to end: the syncer's raise is all it takes for the reconciler to hear of

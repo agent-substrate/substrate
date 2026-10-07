@@ -100,6 +100,11 @@ func ValidateMintAteomActorCertificateRequest(ctx context.Context, req *ateapipb
 	return Validate_MintAteomActorCertificateRequest(ctx, op, nil, req, nil)
 }
 
+func ValidateActorCreate(ctx context.Context, fldPath *field.Path, actor *ateapipb.Actor) field.ErrorList {
+	op := operation.Operation{Type: operation.Create}
+	return Validate_Actor(ctx, op, fldPath, actor, nil)
+}
+
 func ValidateActorUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVal *ateapipb.Actor, requireStatus bool) field.ErrorList {
 	// Call the generated validation.
 	op := operation.Operation{Type: operation.Update}

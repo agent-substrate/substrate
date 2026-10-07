@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/admission"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -334,7 +335,7 @@ func TestEnsureInProgressSnapshotDiscarded(t *testing.T) {
 func TestEnsureRevertedFinalized_NoObjectStore(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
-	w := &ActorWorkflow{store: persistence}
+	w := &ActorWorkflow{admission: admission.New(persistence, nil, nil)}
 
 	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
 		Metadata:      &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},

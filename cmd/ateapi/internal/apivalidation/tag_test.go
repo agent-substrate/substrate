@@ -192,6 +192,56 @@ func TestValidateCreateTagRequest(t *testing.T) {
 	}
 }
 
+func TestValidateTagCreate(t *testing.T) {
+	ctx := context.Background()
+	validTag := func(opts ...func(*ateapipb.Tag)) *ateapipb.Tag {
+		tag := &ateapipb.Tag{
+			Metadata:    &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "tag1"},
+			Scope:       ateapipb.TagScope_TAG_SCOPE_ATESPACE,
+			SourceActor: &ateapipb.ObjectRef{Atespace: "ns1", Name: "id1"},
+		}
+		for _, opt := range opts {
+			opt(tag)
+		}
+		return tag
+	}
+	tests := []struct {
+		name      string
+		tag       *ateapipb.Tag
+		wantError field.ErrorList
+	}{
+		{
+			name: "valid",
+			tag:  validTag(),
+		},
+		{
+			name:      "missing metadata",
+			tag:       validTag(func(tag *ateapipb.Tag) { tag.Metadata = nil }),
+			wantError: field.ErrorList{field.Required(field.NewPath("tag", "metadata"), "")},
+		},
+		{
+			name:      "tag.metadata.atespace is not the source actor's",
+			tag:       validTag(func(tag *ateapipb.Tag) { tag.Metadata.Atespace = "ns2" }),
+			wantError: field.ErrorList{field.Invalid(field.NewPath("tag", "metadata", "atespace"), nil, "")},
+		},
+		{
+			name:      "missing source_actor",
+			tag:       validTag(func(tag *ateapipb.Tag) { tag.SourceActor = nil }),
+			wantError: field.ErrorList{field.Required(field.NewPath("tag", "source_actor"), "")},
+		},
+		{
+			name:      "unset scope",
+			tag:       validTag(func(tag *ateapipb.Tag) { tag.Scope = ateapipb.TagScope_TAG_SCOPE_UNSPECIFIED }),
+			wantError: field.ErrorList{field.Required(field.NewPath("tag", "scope"), "")},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertValidateErr(t, ValidateTagCreate(ctx, field.NewPath("tag"), tt.tag), tt.wantError)
+		})
+	}
+}
+
 func TestValidateUpdateTagRequest(t *testing.T) {
 	ctx := context.Background()
 	// validUID is a well-formed uid to pass validation.

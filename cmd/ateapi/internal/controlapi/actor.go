@@ -22,9 +22,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
-	"slices"
 	"time"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/admission"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/apivalidation"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/defaults"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
@@ -37,9 +37,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/peer"
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
-	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
 func (s *RPCService) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequest) (created *ateapipb.Actor, err error) {
@@ -70,131 +68,29 @@ func (s *RPCService) CreateActor(ctx context.Context, req *ateapipb.CreateActorR
 	setSpanActorRefAttributes(ctx, resources.ActorRefFromActor(inActor))
 
 	// Handle the creation, including validation of the final stored object.
-	stored, err := s.impl.CreateActor(ctx, inActor)
-	setSpanActorAttributes(ctx, stored)
-
-	return stored, err
-}
-
-func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) (*ateapipb.Actor, error) {
-	// Check that the referenced ActorTemplate exists.
-	// FIXME: This is not atomic and it is not a guarantee that the template
-	// will still exist later.  Checking it here produces a nice error UX, but
-	// we still have to handle the template not existing later, which makes the
-	// UX inconsistent, at best.  Is it actually worth checking at all?
-	template, err := resolveActorTemplate(ctx, s.store, inActor)
+	stored, err := s.admission.CreateActor(ctx, inActor)
 	if err != nil {
-		return nil, err
-	}
-
-	// Resolve the explicit tag, or freeze the template's current golden default.
-	tagRef := inActor.GetSourceTag()
-	if tagRef == nil {
-		tagRef = template.GetStatus().GetGoldenSnapshotStatus().GetGoldenTag()
-	} else {
-		for _, volume := range template.GetVolumes() {
-			if volume.GetExternalVolumeTemplate() != nil {
-				// TODO: Permit cloning after CSI volume snapshots are supported.
-				return nil, apierror.FailedPrecondition("Tag cloning does not support ActorTemplates with external volumes")
-			}
+		// TODO: Centralize admission/store error-to-apierror mapping once store errors carry descriptive messages.
+		switch {
+		case errors.Is(err, store.ErrAlreadyExists):
+			return nil, apierror.AlreadyExists("Actor %s already exists", inActor.GetMetadata().GetName())
+		case errors.Is(err, store.ErrFailedPrecondition):
+			return nil, apierror.FailedPrecondition("Atespace %s not found", inActor.GetMetadata().GetAtespace())
+		case errors.Is(err, admission.ErrInvalid):
+			return nil, apierror.InvalidArgument("%w", err)
+		case errors.Is(err, admission.ErrFailedPrecondition):
+			return nil, apierror.FailedPrecondition("%w", err)
+		default:
+			return nil, fmt.Errorf("while recording actor: %w", err)
 		}
-	}
-	var sourceTag *ateapipb.Tag
-	if tagRef != nil {
-		sourceTag, err = s.resolveTagSource(ctx, inActor.GetMetadata().GetAtespace(), tagRef, template)
-		if err != nil {
-			return nil, err
-		}
-		if inActor.GetSourceTag() == nil {
-			if err := validateGoldenSnapshotScope(sourceTag.GetStatus().GetSnapshot()); err != nil {
-				return nil, err
-			}
-		}
-	}
-
-	atespace := inActor.GetMetadata().GetAtespace()
-	name := inActor.GetMetadata().GetName()
-
-	// Volume creation is completed asynchronously after the actor is recorded.
-	initVols, err := initialActorVolumes(ctx, s.storageClassLister, template)
-	if err != nil {
-		return nil, err
-	}
-
-	// Verify that the result is properly valid before storing it.
-	outActor := proto.CloneOf(inActor)
-	outActor.Status = &ateapipb.ActorStatus{
-		State:        ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
-		ActorVolumes: initVols,
-	}
-	if sourceTag != nil {
-		// The Actor starts out borrowing the tag's external snapshot rather than
-		// copying it. The snapshot URI is under the tag's prefix, not the Actor's, which
-		// is what keeps the Actor from collecting those objects. Its first
-		// suspend writes a snapshot under its own prefix and takes over from
-		// there.
-		outActor.Status.ExternalSnapshot = proto.CloneOf(sourceTag.GetStatus().GetSnapshot())
-		// The Actor is born with guest state, so stamp the template that state
-		// was built on now rather than at the first resume. The Tag records it
-		// beside its snapshot rather than on it, so the clone above does not
-		// carry it. Left empty, a repoint before that first resume reads as "no
-		// guest state" instead of "replaced template", and the resume restores
-		// the old template's memory and rootfs in full instead of the volume
-		// data alone.
-		outActor.Status.ExternalSnapshot.ActorTemplateUid = sourceTag.GetStatus().GetActorTemplateUid()
-	}
-	if errs := apivalidation.ValidateActorUpdate(ctx, field.NewPath("actor"), outActor, inActor, true); len(errs) > 0 {
-		return nil, toGRPCInternalError(errs)
-	}
-
-	// Save the data in the storage layer.
-	stored, err := s.store.CreateActor(ctx, outActor)
-	if err != nil {
-		if errors.Is(err, store.ErrAlreadyExists) {
-			return nil, apierror.AlreadyExists("Actor %s already exists", name)
-		}
-		if errors.Is(err, store.ErrFailedPrecondition) {
-			return nil, apierror.FailedPrecondition("Atespace %s not found", atespace)
-		}
-		return nil, fmt.Errorf("while recording actor: %w", err)
 	}
 
 	// Without this an actor that is created and never resumed has no record at
 	// all, at any retention.
 	logActorStateChanged(ctx, stored, ateattr.OperationCreate)
+	setSpanActorAttributes(ctx, stored)
 
 	return stored, nil
-}
-
-// resolveTagSource resolves a CreateActor request's source tag
-// and checks that the tag is usable for creating an Actor in actorAtespace
-// from template.
-func (s *ServiceImpl) resolveTagSource(ctx context.Context, actorAtespace string, tagRef *ateapipb.ObjectRef, template *ateapipb.ActorTemplate) (*ateapipb.Tag, error) {
-	tag, err := s.store.GetTag(ctx, resources.TagRefFromObjectRef(tagRef))
-	if errors.Is(err, store.ErrNotFound) {
-		return nil, apierror.FailedPrecondition("Tag not found")
-	}
-	if err != nil {
-		return nil, fmt.Errorf("while getting tag: %w", err)
-	}
-	switch tag.GetScope() {
-	case ateapipb.TagScope_TAG_SCOPE_ATESPACE:
-		if tag.GetMetadata().GetAtespace() != actorAtespace {
-			return nil, apierror.FailedPrecondition("Tag is not published outside its Atespace")
-		}
-	case ateapipb.TagScope_TAG_SCOPE_PUBLISHED:
-	default:
-		return nil, apierror.FailedPrecondition("source Tag has an invalid scope")
-	}
-	// A tag might have an empty Snapshot URI if the tag creation failed or is ongoing.
-	if tag.GetStatus().GetSnapshot().GetSnapshotUri() == "" {
-		return nil, apierror.FailedPrecondition("source Tag is still being created or failed creation")
-	}
-	// TODO: Permit compatible DATA snapshots when runtimes can extract portable data.
-	if tag.GetStatus().GetActorTemplateUid() != template.GetMetadata().GetUid() {
-		return nil, apierror.FailedPrecondition("source Tag must be taken from an actor with ActorTemplate uid %q", tag.GetStatus().GetActorTemplateUid())
-	}
-	return tag, nil
 }
 
 func (s *RPCService) GetActor(ctx context.Context, req *ateapipb.GetActorRequest) (*ateapipb.Actor, error) {
@@ -202,7 +98,8 @@ func (s *RPCService) GetActor(ctx context.Context, req *ateapipb.GetActorRequest
 		return nil, resources.ToAPIError(errs)
 	}
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
-	actor, err := s.impl.GetActor(ctx, actorRef)
+	actor, err := s.admission.GetActor(ctx, actorRef)
+	// TODO: Centralize admission/store error-to-apierror mapping once store errors carry descriptive messages.
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, apierror.NotFound("Actor %s not found", actorRef)
 	} else if err != nil {
@@ -211,16 +108,12 @@ func (s *RPCService) GetActor(ctx context.Context, req *ateapipb.GetActorRequest
 	return actor, nil
 }
 
-func (s *ServiceImpl) GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error) {
-	return s.store.GetActor(ctx, actorRef)
-}
-
 func (s *RPCService) ListActors(ctx context.Context, req *ateapipb.ListActorsRequest) (*ateapipb.ListActorsResponse, error) {
 	if errs := apivalidation.ValidateListActorsRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
 	}
 
-	page, err := s.impl.ListActors(ctx, req.GetAtespace(), store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
+	page, err := s.admission.ListActors(ctx, req.GetAtespace(), store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
 	if err != nil {
 		return nil, mapListError(fmt.Errorf("while listing actors in db: %w", err))
 	}
@@ -228,10 +121,6 @@ func (s *RPCService) ListActors(ctx context.Context, req *ateapipb.ListActorsReq
 		Actors:        page.Items,
 		NextPageToken: page.NextPageToken,
 	}, nil
-}
-
-func (s *ServiceImpl) ListActors(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.Actor], error) {
-	return s.store.ListActors(ctx, atespace, opts)
 }
 
 func (s *RPCService) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorRequest) (*ateapipb.Actor, error) {
@@ -250,177 +139,28 @@ func (s *RPCService) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorR
 	actorRef := resources.ActorRefFromActor(inActor)
 	setSpanActorRefAttributes(ctx, actorRef)
 
-	storedActor, err := s.impl.UpdateActor(ctx, actorRef, store.PreconditionFrom(inActor), func(toUpdate *ateapipb.Actor) error {
-		// Status and Metadata are server-owned fields.
-		status, metadata := toUpdate.GetStatus(), toUpdate.GetMetadata()
-		// Whole-object replace: clear first, so a field the client left unset is
-		// cleared rather than kept from the stored actor.
-		// Merge cannot smuggle in unknown fields because validation already rejected them.
-		proto.Reset(toUpdate)
-		proto.Merge(toUpdate, inActor)
-		// Restore status and metadata from the server.
-		toUpdate.Status = status
-		toUpdate.Metadata = metadata
-		defaults.Apply(toUpdate)
-		return nil
-	})
+	storedActor, err := s.admission.UpdateActorSpec(ctx, inActor)
 	if err != nil {
-		return nil, err
+		// TODO: Centralize admission/store error-to-apierror mapping once store errors carry descriptive messages.
+		switch {
+		case errors.Is(err, store.ErrVersionConflict), errors.Is(err, store.ErrUIDConflict):
+			return nil, apierror.Aborted("concurrent update conflict, please retry")
+		case errors.Is(err, store.ErrNotFound):
+			return nil, apierror.NotFound("actor %s not found", actorRef)
+		case errors.Is(err, store.ErrPreconditionRequired):
+			return nil, apierror.InvalidArgument("while updating actor %s: %v", actorRef, err)
+		case errors.Is(err, admission.ErrInvalid):
+			return nil, apierror.InvalidArgument("%w", err)
+		case errors.Is(err, admission.ErrFailedPrecondition):
+			return nil, apierror.FailedPrecondition("%w", err)
+		default:
+			return nil, fmt.Errorf("while updating actor: %w", err)
+		}
 	}
 
 	setSpanActorAttributes(ctx, storedActor)
 
-	return storedActor, err
-}
-
-func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapipb.Actor) error) (*ateapipb.Actor, error) {
-	storedActor, err := s.store.UpdateActor(ctx, actorRef, precondition, func(toUpdate *ateapipb.Actor) error {
-		// Apply the mutation function to the stored value.
-		oldVal := proto.CloneOf(toUpdate)
-		if err := mutate(toUpdate); err != nil {
-			return err
-		}
-		newVal := toUpdate
-
-		// Validate the user's input before doing any further work.
-		if errs := apivalidation.ValidateActorUpdate(ctx, field.NewPath("actor"), newVal, oldVal, false); len(errs) > 0 {
-			return resources.ToAPIError(errs)
-		}
-
-		// Do any further work on the resource.
-
-		// Update actor template is only allowed while the actor is suspended.
-		// The repointed ref must also resolve, mirroring CreateActor's
-		// check (same non-atomicity caveat; resume re-resolves and fails
-		// cleanly), and the replacement's sandbox config, volumes, and
-		// volume mounts must match the old template's. It must also store
-		// snapshots under the location the actor's own already live in.
-		if !proto.Equal(oldVal.GetActorTemplate(), newVal.GetActorTemplate()) {
-			if state := oldVal.GetStatus().GetState(); state != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
-				return apierror.FailedPrecondition(
-					"actor must be %s to change its actor template (got: %s)", ateapipb.ActorState_ACTOR_STATE_SUSPENDED, state)
-			}
-			newTemplate, err := resolveActorTemplate(ctx, s.store, newVal)
-			if err != nil {
-				return err
-			}
-			if err := validateSnapshotLocationUnchanged(oldVal, newTemplate); err != nil {
-				return err
-			}
-			oldTemplate, err := resolveActorTemplate(ctx, s.store, oldVal)
-			switch {
-			case err == nil:
-				// Snapshots are not portable across sandbox runtime
-				// families, so the replacement template must name the same
-				// SandboxConfig.
-				if !proto.Equal(oldTemplate.GetSandboxConfig(), newTemplate.GetSandboxConfig()) {
-					oldSC, newSC := oldTemplate.GetSandboxConfig(), newTemplate.GetSandboxConfig()
-					return apierror.FailedPrecondition(
-						"the current actor template names SandboxConfig %q (class %s) but the new one names %q (class %s); the sandbox config must be identical to repoint an actor",
-						oldSC.GetConfigName(), oldSC.GetSandboxClass(), newSC.GetConfigName(), newSC.GetSandboxClass())
-				}
-				if err := validateTemplateVolumesUnchanged(oldTemplate, newTemplate); err != nil {
-					return err
-				}
-			case errors.Is(err, errActorTemplateNotFound):
-				// The old template is gone, so there is nothing left to
-				// compare the sandbox config or volume layout against.
-			default:
-				return err
-			}
-		}
-
-		// Validate the final value before storing it.
-		if errs := apivalidation.ValidateActorUpdate(ctx, field.NewPath("actor"), newVal, oldVal, true); len(errs) > 0 {
-			return toGRPCInternalError(errs)
-		}
-
-		return nil
-	})
-	if err != nil {
-		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
-		}
-		if errors.Is(err, store.ErrUIDConflict) {
-			return nil, apierror.Aborted("concurrent update conflict, please retry")
-		}
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, apierror.NotFound("actor %s not found", actorRef)
-		}
-		if errors.Is(err, store.ErrPreconditionRequired) {
-			return nil, apierror.InvalidArgument("while updating actor %s: %v", actorRef, err)
-		}
-		return nil, fmt.Errorf("while updating actor: %w", err)
-	}
 	return storedActor, nil
-}
-
-// validateTemplateVolumesUnchanged rejects a template repoint that changes
-// the template's volumes or any container's volume mounts: an actor's
-// snapshot data is laid out per the volumes and mount paths it was captured
-// with, so a different layout would restore it to the wrong places. The
-// volumes list must be identical, and containers present in both templates
-// must keep identical mounts, order included; containers added or removed by
-// the new template are unconstrained.
-func validateTemplateVolumesUnchanged(oldTemplate, newTemplate *ateapipb.ActorTemplate) error {
-	if !slices.EqualFunc(oldTemplate.GetVolumes(), newTemplate.GetVolumes(), func(a, b *ateapipb.Volume) bool {
-		return proto.Equal(a, b)
-	}) {
-		return apierror.FailedPrecondition(
-			"volumes differ between the current and the new actor template; volumes must be identical to repoint an actor")
-	}
-
-	newContainers := make(map[string]*ateapipb.Container, len(newTemplate.GetContainers()))
-	for _, c := range newTemplate.GetContainers() {
-		newContainers[c.GetName()] = c
-	}
-	for _, oldC := range oldTemplate.GetContainers() {
-		newC, ok := newContainers[oldC.GetName()]
-		if !ok {
-			continue
-		}
-		if !slices.EqualFunc(oldC.GetVolumeMounts(), newC.GetVolumeMounts(), func(a, b *ateapipb.VolumeMount) bool {
-			return proto.Equal(a, b)
-		}) {
-			return apierror.FailedPrecondition(
-				"volume mounts of container %q differ between the current and the new actor template; volume mounts must be identical to repoint an actor", oldC.GetName())
-		}
-	}
-	return nil
-}
-
-// validateSnapshotLocationUnchanged rejects a template repoint that would
-// store the actor's next snapshots under a different location than the one it
-// already owns. This is needed to not leak snapshots when the actor is deleted:
-// Deleting an actor collects everything under its external snapshot prefix. If
-// the location prefix ever changes, we risk leaking the snapshots under the old prefix.
-func validateSnapshotLocationUnchanged(actor *ateapipb.Actor, newTemplate *ateapipb.ActorTemplate) error {
-	currentSnapshotURI := actor.GetStatus().GetExternalSnapshot().GetSnapshotUri()
-	if currentSnapshotURI == "" {
-		return nil
-	}
-	currentURI, err := resources.ParseSnapshotURI(currentSnapshotURI)
-	if err != nil {
-		return fmt.Errorf("while parsing the external snapshot %q: %w", currentSnapshotURI, err)
-	}
-	// Tag-owned snapshot
-	if !currentURI.OwnedBy(actorSnapshotOwner(actor)) {
-		return nil
-	}
-	// Compared as prefixes, so a newLocation spelled with and without a
-	// trailing slash counts as the same.
-	newLocation := newTemplate.GetSnapshotConfig().GetStorageLocation()
-	// Generate what the new snapshot prefix would look like for this actor.
-	nextSnapshotLocationPrefix, err := currentURI.Owner().Prefix(newLocation)
-	if err != nil {
-		return fmt.Errorf("while resolving the new actor template's storage location %q: %w", newLocation, err)
-	}
-	if nextSnapshotLocationPrefix != currentURI.OwnerPrefix() {
-		return apierror.FailedPrecondition(
-			"the actor's snapshots are stored under %q but the new actor template stores them under %q: the storage location must be identical to repoint an actor that owns a snapshot",
-			currentURI.Location(), newLocation)
-	}
-	return nil
 }
 
 func (s *RPCService) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorRequest) (deleted *ateapipb.Actor, err error) {
@@ -452,10 +192,6 @@ func (s *RPCService) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorR
 	return deleted, nil
 }
 
-func (s *ServiceImpl) DeleteActor(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions) (*ateapipb.Actor, error) {
-	return s.store.DeleteActor(ctx, actorRef, precondition)
-}
-
 func (s *RPCService) PauseActor(ctx context.Context, req *ateapipb.PauseActorRequest) (*ateapipb.PauseActorResponse, error) {
 	if errs := apivalidation.ValidatePauseActorRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
@@ -465,7 +201,8 @@ func (s *RPCService) PauseActor(ctx context.Context, req *ateapipb.PauseActorReq
 
 	actor, err := s.actorWorkflow.PauseActor(ctx, actorRef)
 	if err != nil {
-		if errors.Is(err, store.ErrVersionConflict) {
+		// TODO: Centralize admission/store error-to-apierror mapping once store errors carry descriptive messages.
+		if errors.Is(err, store.ErrVersionConflict) || errors.Is(err, store.ErrUIDConflict) {
 			return nil, apierror.Aborted("concurrent update conflict, please retry")
 		}
 		if errors.Is(err, store.ErrNotFound) {
@@ -487,7 +224,8 @@ func (s *RPCService) ResumeActor(ctx context.Context, req *ateapipb.ResumeActorR
 
 	actor, resumed, err := s.actorWorkflow.ResumeActor(ctx, actorRef)
 	if err != nil {
-		if errors.Is(err, store.ErrVersionConflict) {
+		// TODO: Centralize admission/store error-to-apierror mapping once store errors carry descriptive messages.
+		if errors.Is(err, store.ErrVersionConflict) || errors.Is(err, store.ErrUIDConflict) {
 			return nil, apierror.Aborted("concurrent update conflict, please retry")
 		}
 		if errors.Is(err, store.ErrNotFound) {
@@ -509,7 +247,8 @@ func (s *RPCService) SuspendActor(ctx context.Context, req *ateapipb.SuspendActo
 
 	actor, err := s.actorWorkflow.SuspendActor(ctx, actorRef)
 	if err != nil {
-		if errors.Is(err, store.ErrVersionConflict) {
+		// TODO: Centralize admission/store error-to-apierror mapping once store errors carry descriptive messages.
+		if errors.Is(err, store.ErrVersionConflict) || errors.Is(err, store.ErrUIDConflict) {
 			return nil, apierror.Aborted("concurrent update conflict, please retry")
 		}
 		if errors.Is(err, store.ErrNotFound) {
@@ -530,7 +269,8 @@ func (s *RPCService) RevertActor(ctx context.Context, req *ateapipb.RevertActorR
 
 	actor, err := s.actorWorkflow.RevertActor(ctx, actorRef)
 	if err != nil {
-		if errors.Is(err, store.ErrVersionConflict) {
+		// TODO: Centralize admission/store error-to-apierror mapping once store errors carry descriptive messages.
+		if errors.Is(err, store.ErrVersionConflict) || errors.Is(err, store.ErrUIDConflict) {
 			return nil, apierror.Aborted("concurrent update conflict, please retry")
 		}
 		if errors.Is(err, store.ErrNotFound) {
@@ -554,7 +294,8 @@ func (s *RPCService) MintActorJWT(ctx context.Context, req *ateapipb.MintActorJW
 
 	// Verify that this actor exists in the store.  It doesn't need to be
 	// running, since we may need to issue JWTs during actor boot / resume.
-	dbActor, err := s.impl.GetActor(ctx, resources.ActorRefFromObjectRef(req.GetActor()))
+	dbActor, err := s.admission.GetActor(ctx, resources.ActorRefFromObjectRef(req.GetActor()))
+	// TODO: Centralize admission/store error-to-apierror mapping once store errors carry descriptive messages.
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, apierror.NotFound("actor not found")
 	} else if err != nil {
@@ -627,7 +368,8 @@ func (s *RPCService) MintActorCertificate(ctx context.Context, req *ateapipb.Min
 
 	// Verify that this actor exists in the store.  It doesn't need to be
 	// running, since we may need to issue certificates during actor boot / resume.
-	dbActor, err := s.impl.GetActor(ctx, resources.ActorRefFromObjectRef(req.GetActor()))
+	dbActor, err := s.admission.GetActor(ctx, resources.ActorRefFromObjectRef(req.GetActor()))
+	// TODO: Centralize admission/store error-to-apierror mapping once store errors carry descriptive messages.
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, apierror.NotFound("actor not found")
 	} else if err != nil {

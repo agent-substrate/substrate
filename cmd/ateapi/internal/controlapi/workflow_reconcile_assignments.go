@@ -41,7 +41,7 @@ func (w *WorkerWorkflow) ReconcileAssignments(ctx context.Context, name string) 
 	ctx, done := stepSpan(ctx, "ReconcileAssignments")
 	defer func() { err = done(err) }()
 
-	worker, err := w.store.GetWorker(ctx, name)
+	worker, err := w.admission.GetWorker(ctx, name)
 	if errors.Is(err, store.ErrNotFound) {
 		markSkipped(ctx, "worker not found")
 		return nil
@@ -82,15 +82,15 @@ const recordObservedEpochAttempts = 5
 // or higher.
 func (w *WorkerWorkflow) recordObservedEpoch(ctx context.Context, name, uid string, epoch int64) error {
 	for attempt := 1; ; attempt++ {
-		worker, err := w.store.GetWorker(ctx, name)
+		worker, err := w.admission.GetWorker(ctx, name)
 		if errors.Is(err, store.ErrNotFound) {
 			return nil
 		}
 		if err != nil {
 			return fmt.Errorf("while re-fetching worker %s: %w", name, err)
 		}
-		_, err = w.store.UpdateWorker(ctx, name, store.Precondition{UID: uid, Version: worker.GetMetadata().GetVersion()}, func(toUpdate *ateapipb.Worker) error {
-			toUpdate.Status.ObservedEpoch = max(toUpdate.GetStatus().GetObservedEpoch(), epoch)
+		_, err = w.admission.UpdateWorkerStatus(ctx, name, store.Precondition{UID: uid, Version: worker.GetMetadata().GetVersion()}, func(status *ateapipb.WorkerStatus) error {
+			status.ObservedEpoch = max(status.GetObservedEpoch(), epoch)
 			return nil
 		})
 		switch {
@@ -117,7 +117,7 @@ func (w *WorkerWorkflow) releaseAssignmentsBefore(ctx context.Context, worker *a
 	// Releasing deletes rows mid-scan, which paging tolerates: the cursor is
 	// the last actor UID listed, not an offset.
 	for token := ""; ; {
-		page, err := w.store.ListWorkerAssignments(ctx, name, store.ListOptions{PageToken: token})
+		page, err := w.admission.ListWorkerAssignments(ctx, name, store.ListOptions{PageToken: token})
 		if err != nil {
 			return fmt.Errorf("while listing the assignments of worker %s: %w", name, err)
 		}
@@ -157,7 +157,7 @@ func (w *WorkerWorkflow) releaseAssignmentsBefore(ctx context.Context, worker *a
 func (w *WorkerWorkflow) releaseEarlierAssignment(ctx context.Context, worker *ateapipb.Worker, assignment *ateapipb.ActorAssignment, epoch int64) error {
 	name := worker.GetMetadata().GetName()
 	release := func() error {
-		if _, err := w.store.ReleaseActorFromWorker(ctx, name, assignment.GetActorUid()); err != nil {
+		if _, err := w.admission.ReleaseActorFromWorker(ctx, name, assignment.GetActorUid()); err != nil {
 			return fmt.Errorf("while releasing actor %s from worker %s: %w", assignment.GetActorUid(), name, err)
 		}
 		return nil
@@ -167,7 +167,7 @@ func (w *WorkerWorkflow) releaseEarlierAssignment(ctx context.Context, worker *a
 		return release()
 	}
 	actorRef := resources.ActorRefFromObjectRef(assignment.GetActor())
-	lease, err := w.store.AcquireLease(ctx, actorLeaseKey(actorRef))
+	lease, err := w.admission.AcquireLease(ctx, actorLeaseKey(actorRef))
 	if errors.Is(err, store.ErrLeaseConflict) {
 		return errActorBusy
 	}
@@ -177,7 +177,7 @@ func (w *WorkerWorkflow) releaseEarlierAssignment(ctx context.Context, worker *a
 	defer lease.Close()
 	ctx = lease.Context()
 
-	actor, err := w.store.GetActor(ctx, actorRef)
+	actor, err := w.admission.GetActor(ctx, actorRef)
 	if errors.Is(err, store.ErrNotFound) {
 		return release()
 	}

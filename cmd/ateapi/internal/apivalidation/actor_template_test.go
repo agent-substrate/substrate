@@ -273,6 +273,46 @@ func TestValidateDeleteActorTemplateRequest(t *testing.T) {
 	}
 }
 
+func TestValidateActorTemplateCreate(t *testing.T) {
+	tests := []struct {
+		name     string
+		template *ateapipb.ActorTemplate
+		want     field.ErrorList
+	}{{
+		name:     "valid",
+		template: validActorTemplate(),
+	}, {
+		name: "missing metadata",
+		template: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Metadata = nil
+		}),
+		want: field.ErrorList{field.Required(field.NewPath("actor_template", "metadata"), "")},
+	}, {
+		name: "volume mount referencing a declared volume",
+		template: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Volumes = []*ateapipb.Volume{{Name: "data", DurableDir: &ateapipb.DurableDirVolumeSource{}}}
+			tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{{Name: "data", MountPath: "/var/data"}}
+		}),
+	}, {
+		name: "volume mount referencing an undeclared volume",
+		template: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{{Name: "ghost-vol", MountPath: "/var/data"}}
+		}),
+		want: field.ErrorList{field.Invalid(field.NewPath("actor_template", "containers").Index(0).Child("volume_mounts").Index(0).Child("name"), "ghost-vol", "")},
+	}, {
+		name: "no containers",
+		template: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Containers = nil
+		}),
+		want: field.ErrorList{field.Required(field.NewPath("actor_template", "containers"), "")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertValidateErr(t, ValidateActorTemplateCreate(context.Background(), field.NewPath("actor_template"), tt.template), tt.want)
+		})
+	}
+}
+
 // TestValidateActorTemplate exercises the generated resource validation
 // directly. The request handler still runs the hand-written validator; this
 // pins each declarative rule as it is added, ahead of the conversion.

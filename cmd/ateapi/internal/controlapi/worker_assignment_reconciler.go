@@ -21,6 +21,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/admission"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -48,18 +49,18 @@ type workerWatcher interface {
 // Have a single elected leader process Workers, possibly by moving controller
 // loops like this one out of the API server into their own Deployment.
 type WorkerAssignmentReconciler struct {
-	persistence workerWorkflowStore
-	workflow    *WorkerWorkflow
-	workers     workerWatcher
-	queue       workqueue.TypedRateLimitingInterface[string]
+	admission *admission.Admission
+	workflow  *WorkerWorkflow
+	workers   workerWatcher
+	queue     workqueue.TypedRateLimitingInterface[string]
 }
 
-func NewWorkerAssignmentReconciler(persistence workerWorkflowStore, workers workerWatcher) *WorkerAssignmentReconciler {
+func NewWorkerAssignmentReconciler(admission *admission.Admission, workers workerWatcher) *WorkerAssignmentReconciler {
 	return &WorkerAssignmentReconciler{
-		persistence: persistence,
-		workflow:    NewWorkerWorkflow(persistence),
-		workers:     workers,
-		queue:       workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
+		admission: admission,
+		workflow:  NewWorkerWorkflow(admission),
+		workers:   workers,
+		queue:     workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
 	}
 }
 
@@ -115,7 +116,7 @@ func (r *WorkerAssignmentReconciler) processNextWorkItem(ctx context.Context) bo
 // reconcileOne reconciles one Worker's assignments, holding the Worker's lease
 // so concurrent replicas don't sweep it at once.
 func (r *WorkerAssignmentReconciler) reconcileOne(ctx context.Context, name string) error {
-	lease, err := r.persistence.AcquireLease(ctx, workerAssignmentLeaseKey(name))
+	lease, err := r.admission.AcquireLease(ctx, workerAssignmentLeaseKey(name))
 	if err != nil {
 		if errors.Is(err, store.ErrLeaseConflict) {
 			// Retried in case that replica does not finish; once it has, the

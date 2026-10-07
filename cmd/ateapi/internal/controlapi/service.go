@@ -18,12 +18,11 @@ import (
 	"context"
 	"sync"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/admission"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/localjwtauthority"
 	"github.com/agent-substrate/substrate/internal/objectstore"
-	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/volume"
 	"github.com/agent-substrate/substrate/internal/volume/csi"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
@@ -35,14 +34,12 @@ import (
 // the RPC service.
 //
 // Methods on this service should be as light as possible, delegating to the
-// ServiceImpl for business logic and invariants.
+// admission layer for business logic and invariants.
 type RPCService struct {
 	ateapipb.UnimplementedControlServer
-	impl                  serviceStore
-	persistence           serviceStore
+	admission             *admission.Admission
 	workerCache           *workercache.Cache
 	dialer                *AteletDialer
-	sandboxConfigLister   listersv1alpha1.SandboxConfigLister
 	csiDriverConfigLister listersv1alpha1.CSIDriverConfigLister
 	actorWorkflow         *ActorWorkflow
 	workerWorkflow        *WorkerWorkflow
@@ -74,7 +71,7 @@ type VolumePluginRegistry interface {
 //
 // actorJWTIssuer is copied verbatim into the iss claim of every actor JWT.
 func NewRPCService(
-	persistence store.Interface,
+	admission *admission.Admission,
 	workerCache *workercache.Cache,
 	sandboxConfigLister listersv1alpha1.SandboxConfigLister,
 	csiDriverConfigLister listersv1alpha1.CSIDriverConfigLister,
@@ -88,12 +85,9 @@ func NewRPCService(
 	actorIDJWTPool localjwtauthority.Pool,
 	actorIDCAPool localca.Pool,
 ) *RPCService {
-	impl := newServiceImpl(persistence, storageClassLister)
 	s := &RPCService{
-		impl:                  impl,
-		persistence:           persistence,
+		admission:             admission,
 		workerCache:           workerCache,
-		sandboxConfigLister:   sandboxConfigLister,
 		csiDriverConfigLister: csiDriverConfigLister,
 		dialer:                dialer,
 		instruments:           instruments,
@@ -103,47 +97,9 @@ func NewRPCService(
 		actorIDJWTPool:        actorIDJWTPool,
 		actorIDCAPool:         actorIDCAPool,
 	}
-	s.actorWorkflow = NewActorWorkflow(impl, workerCache, dialer, sandboxConfigLister, storageClassLister, instruments, egressGatewayAddress, s, objectStore)
-	s.workerWorkflow = NewWorkerWorkflow(impl)
+	s.actorWorkflow = NewActorWorkflow(admission, workerCache, dialer, sandboxConfigLister, storageClassLister, instruments, egressGatewayAddress, s, objectStore)
+	s.workerWorkflow = NewWorkerWorkflow(admission)
 	return s
-}
-
-// serviceStore enumerates the exact storage methods needed by
-// the control API and nothing more.
-type serviceStore interface {
-	CreateActor(ctx context.Context, actor *ateapipb.Actor) (*ateapipb.Actor, error)
-	GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error)
-	UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(toUpdate *ateapipb.Actor) error) (*ateapipb.Actor, error)
-	ListActors(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.Actor], error)
-	CreateEgressPolicy(ctx context.Context, actorRef resources.ActorRef, policy *ateapipb.EgressPolicy) (*ateapipb.EgressPolicy, error)
-	GetEgressPolicy(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.EgressPolicy, error)
-	UpdateEgressPolicy(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapipb.EgressPolicy) error) (*ateapipb.EgressPolicy, error)
-	DeleteEgressPolicy(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions) (*ateapipb.EgressPolicy, error)
-	GetTag(ctx context.Context, tagRef resources.TagRef) (*ateapipb.Tag, error)
-	ListTags(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.Tag], error)
-	UpdateTag(ctx context.Context, tagRef resources.TagRef, precondition store.Precondition, mutate func(toUpdate *ateapipb.Tag) error) (*ateapipb.Tag, error)
-	DeleteTag(ctx context.Context, tagRef resources.TagRef, precondition store.DeletePreconditions) (*ateapipb.Tag, error)
-	CreateAtespace(ctx context.Context, atespace *ateapipb.Atespace) (*ateapipb.Atespace, error)
-	GetAtespace(ctx context.Context, name string) (*ateapipb.Atespace, error)
-	ListAtespaces(ctx context.Context, opts store.ListOptions) (store.ListResponse[*ateapipb.Atespace], error)
-	DeleteAtespace(ctx context.Context, name string, precondition store.DeletePreconditions) (*ateapipb.Atespace, error)
-	CreateGlobalAccessPolicy(ctx context.Context, policy *ateapipb.AccessPolicy) (*ateapipb.AccessPolicy, error)
-	GetGlobalAccessPolicy(ctx context.Context) (*ateapipb.AccessPolicy, error)
-	UpdateGlobalAccessPolicy(ctx context.Context, precondition store.Precondition, mutate func(*ateapipb.AccessPolicy) error) (*ateapipb.AccessPolicy, error)
-	CreateAtespaceAccessPolicy(ctx context.Context, name string, policy *ateapipb.AccessPolicy) (*ateapipb.AccessPolicy, error)
-	GetAtespaceAccessPolicy(ctx context.Context, name string) (*ateapipb.AccessPolicy, error)
-	UpdateAtespaceAccessPolicy(ctx context.Context, name string, precondition store.Precondition, mutate func(*ateapipb.AccessPolicy) error) (*ateapipb.AccessPolicy, error)
-	DeleteAtespaceAccessPolicy(ctx context.Context, name string, precondition store.DeletePreconditions) (*ateapipb.AccessPolicy, error)
-	CreateActorTemplate(ctx context.Context, template *ateapipb.ActorTemplate) (*ateapipb.ActorTemplate, error)
-	GetActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef) (*ateapipb.ActorTemplate, error)
-	ListActorTemplates(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.ActorTemplate], error)
-	DeleteActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.DeletePreconditions) (*ateapipb.ActorTemplate, error)
-	ListWorkers(ctx context.Context, opts store.ListOptions) (store.ListResponse[*ateapipb.Worker], error)
-	GetWorker(ctx context.Context, name string) (*ateapipb.Worker, error)
-	ListWorkerAssignments(ctx context.Context, workerName string, opts store.ListOptions) (store.ListResponse[*ateapipb.ActorAssignment], error)
-	CreateWorker(ctx context.Context, worker *ateapipb.Worker) (*ateapipb.Worker, error)
-	UpdateWorker(ctx context.Context, name string, precondition store.Precondition, mutate func(toUpdate *ateapipb.Worker) error) (*ateapipb.Worker, error)
-	AcquireLease(ctx context.Context, key string) (*store.Lease, error)
 }
 
 // GetPlugin retrieves a CSI volume plugin by driver name, dynamically discovering it if not present.
@@ -164,37 +120,4 @@ func (s *RPCService) GetPlugin(ctx context.Context, driverName string) (volume.V
 	s.volumePlugins[driverName] = csiPlugin
 	s.mu.Unlock()
 	return csiPlugin, nil
-}
-
-// ServiceImpl implements store.Interface and provides the "middleware" layer
-// between the RPC and storage layers.  It enforces invariants and validation
-// rules, and may implement additional logic beyond the storage layer.
-//
-// Methods on this service should hold most of the logic.
-type ServiceImpl struct {
-	// This field is explicitly named to prevent accidentally satisfying
-	// methods we need to trap.
-	store store.Interface
-
-	storageClassLister storagev1listers.StorageClassLister
-}
-
-var _ store.Interface = (*ServiceImpl)(nil)
-
-// newServiceImpl creates an instance of the service's middleware
-// implementation layer.
-func newServiceImpl(
-	persistence store.Interface,
-	storageClassLister storagev1listers.StorageClassLister,
-) *ServiceImpl {
-	s := &ServiceImpl{
-		store:              persistence,
-		storageClassLister: storageClassLister,
-	}
-	return s
-}
-
-// Pass-through.
-func (s *ServiceImpl) AcquireLease(ctx context.Context, key string) (*store.Lease, error) {
-	return s.store.AcquireLease(ctx, key)
 }

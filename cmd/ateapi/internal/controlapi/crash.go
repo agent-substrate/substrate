@@ -21,6 +21,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/admission"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/actorevent"
 	"github.com/agent-substrate/substrate/internal/apierror"
@@ -83,11 +84,11 @@ func ateletErrorCrashesActor(ctx context.Context, isTerminateRPC bool, err error
 // handleAteletError handles an error from the atelet call rpc made for opName.
 // It crashes the actor if ateletErrorCrashesActor says so, and otherwise
 // returns the error for the operation to be retried.
-func handleAteletError(ctx context.Context, st crashActorStore, actorRef resources.ActorRef, opName, rpc string, isTerminateRPC bool, err error) error {
+func handleAteletError(ctx context.Context, admission *admission.Admission, actorRef resources.ActorRef, opName, rpc string, isTerminateRPC bool, err error) error {
 	if ateletErrorCrashesActor(ctx, isTerminateRPC, err) {
 		slog.LogAttrs(ctx, slog.LevelError, "Setting Actor to crashed due to Atelet error",
 			append(ateattr.ActorRefLogAttrs(actorRef), slog.Any("err", err))...)
-		if cerr := crashActor(ctx, st, actorRef, opName, ateletCrashMessage(rpc, err)); cerr != nil {
+		if cerr := crashActor(ctx, admission, actorRef, opName, ateletCrashMessage(rpc, err)); cerr != nil {
 			return cerr
 		}
 		return fmt.Errorf("actor %s crashed: %w", actorRef, err)
@@ -102,8 +103,8 @@ func handleAteletError(ctx context.Context, st crashActorStore, actorRef resourc
 // crashActor moves the actor to CRASHED state and frees the worker it was
 // assigned to, if any, so the worker can host other actors. message is
 // recorded in the actor's status.
-func crashActor(ctx context.Context, st crashActorStore, actorRef resources.ActorRef, opName, message string) error {
-	actor, err := st.GetActor(ctx, actorRef)
+func crashActor(ctx context.Context, admission *admission.Admission, actorRef resources.ActorRef, opName, message string) error {
+	actor, err := admission.GetActor(ctx, actorRef)
 	if err != nil {
 		return fmt.Errorf("while loading actor to crash: %w", err)
 	}
@@ -119,7 +120,7 @@ func crashActor(ctx context.Context, st crashActorStore, actorRef resources.Acto
 	// instead leaves the actor (and its assignment) intact so the caller retries
 	// crashActor, which re-attempts the release. releaseWorker is idempotent, so
 	// a retry after a release that already succeeded is a no-op.
-	sandboxClass, _, err := releaseWorker(ctx, st, actor)
+	sandboxClass, _, err := releaseWorker(ctx, admission, actor)
 	if err != nil {
 		return fmt.Errorf("while releasing worker to crash actor: %w", err)
 	}
@@ -128,11 +129,11 @@ func crashActor(ctx context.Context, st crashActorStore, actorRef resources.Acto
 	// the counter itself is emitted only after the transition commits.
 	crashAttrs := ateattr.ActorMetricAttributes(actor, sandboxClass, opName)
 
-	_, err = st.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
-		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_CRASHED
+	_, err = admission.UpdateActorStatus(ctx, actorRef, store.PreconditionFrom(actor), func(status *ateapipb.ActorStatus) error {
+		status.State = ateapipb.ActorState_ACTOR_STATE_CRASHED
 		// An actor crashed concurrently, e.g. by worker deletion, keeps its first crash.
 		if !wasAlreadyCrashed {
-			toUpdate.Status.Crash = newActorCrash(opName, message)
+			status.Crash = newActorCrash(opName, message)
 		}
 
 		// InProgressSnapshotUri and InProgressLocalSnapshotName are kept so a
@@ -140,7 +141,7 @@ func crashActor(ctx context.Context, st crashActorStore, actorRef resources.Acto
 		// the only pointer to it, so clearing them here would leak the objects
 		// for good; failed workflow steps must never promote either of them to an
 		// ExternalSnapshot or to LocalSnapshot.
-		toUpdate.Status.WorkerAssignment = nil
+		status.WorkerAssignment = nil
 		return nil
 	})
 	if err != nil {
@@ -163,7 +164,7 @@ func newActorCrash(opName, message string) *ateapipb.ActorCrash {
 		message = opName + " failed: " + message
 	}
 	return &ateapipb.ActorCrash{
-		Message:   truncateUTF8(strings.ToValidUTF8(message, "�"), maxCrashMessageBytes),
+		Message:   truncateUTF8(strings.ToValidUTF8(message, "\uFFFD"), maxCrashMessageBytes),
 		CrashTime: timestamppb.Now(),
 	}
 }
@@ -182,20 +183,11 @@ func logActorCrashed(ctx context.Context, actor *ateapipb.Actor, opName string) 
 	actorevent.Log(ctx, actorevent.Crashed, attrs)
 }
 
-// crashActorStore encapsulates the subset of store operations needed to crash
-// an actor.
-type crashActorStore interface {
-	GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error)
-	UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(toUpdate *ateapipb.Actor) error) (*ateapipb.Actor, error)
-	GetWorker(ctx context.Context, name string) (*ateapipb.Worker, error)
-	ReleaseActorFromWorker(ctx context.Context, workerName string, actorUID string) (*ateapipb.Worker, error)
-}
-
 // releaseWorker clears the worker's assignment if it still points at the given
 // actor. A missing worker or an already-cleared assignment is not an error.
 // It returns the worker's sandboxClass if found, and the worker as it stands
 // after the release, which callers holding a cache of workers hand to it.
-func releaseWorker(ctx context.Context, st crashActorStore, actor *ateapipb.Actor) (string, *ateapipb.Worker, error) {
+func releaseWorker(ctx context.Context, admission *admission.Admission, actor *ateapipb.Actor) (string, *ateapipb.Worker, error) {
 	assignment := actor.GetStatus().GetWorkerAssignment()
 	if assignment == nil {
 		slog.WarnContext(ctx, "Actor's worker assignment is already cleared")
@@ -203,7 +195,7 @@ func releaseWorker(ctx context.Context, st crashActorStore, actor *ateapipb.Acto
 	}
 	workerName := assignment.GetWorker().GetName()
 
-	worker, err := st.GetWorker(ctx, workerName)
+	worker, err := admission.GetWorker(ctx, workerName)
 	if errors.Is(err, store.ErrNotFound) {
 		// No need to release if the worker is not found.
 		slog.WarnContext(ctx, "Worker already gone while crashing actor, skipping release", slog.String("worker", workerName))
@@ -217,7 +209,7 @@ func releaseWorker(ctx context.Context, st crashActorStore, actor *ateapipb.Acto
 	// Release only this actor's assignment; the worker may be hosting others,
 	// and they are unaffected by this one crashing. A worker that is no longer
 	// hosting it has already been released.
-	released, err := st.ReleaseActorFromWorker(ctx, workerName, actor.GetMetadata().GetUid())
+	released, err := admission.ReleaseActorFromWorker(ctx, workerName, actor.GetMetadata().GetUid())
 	if err != nil {
 		return sandboxClass, nil, fmt.Errorf("while releasing worker: %w", err)
 	}

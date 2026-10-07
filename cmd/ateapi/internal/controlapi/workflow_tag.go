@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/admission"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/objectstore"
@@ -58,7 +59,7 @@ func (w *ActorWorkflow) TagActorSnapshot(ctx context.Context, tag *ateapipb.Tag)
 	// Serializes against a delete of the tag this creates, which would
 	// otherwise collect the copy while it is being written.
 	tagRef := resources.TagRef{Atespace: actorRef.Atespace, Name: tag.GetMetadata().GetName()}
-	leaseCtx, tagLease, err := acquireTagLease(leaseCtx, w.store, tagRef)
+	leaseCtx, tagLease, err := acquireTagLease(leaseCtx, w.admission, tagRef)
 	if err != nil {
 		return nil, err
 	}
@@ -107,7 +108,7 @@ func (w *ActorWorkflow) TagActorSnapshot(ctx context.Context, tag *ateapipb.Tag)
 func (w *ActorWorkflow) DeleteTag(ctx context.Context, tagRef resources.TagRef, precondition store.DeletePreconditions) (*ateapipb.Tag, error) {
 	// Serializes against a create of the same tag, whose copy would otherwise
 	// keep writing into the prefix this is collecting.
-	ctx, lease, err := acquireTagLease(ctx, w.store, tagRef)
+	ctx, lease, err := acquireTagLease(ctx, w.admission, tagRef)
 	if err != nil {
 		return nil, err
 	}
@@ -138,7 +139,7 @@ func (w *ActorWorkflow) loadTagForDelete(ctx context.Context, tagRef resources.T
 	ctx, done := stepSpan(ctx, "LoadTagForDelete")
 	defer func() { err = done(err) }()
 
-	tag, err := w.store.GetTag(ctx, tagRef)
+	tag, err := w.admission.GetTag(ctx, tagRef)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, apierror.NotFound("Tag %s not found", tagRef)
@@ -175,7 +176,7 @@ func (w *ActorWorkflow) finalizeTagDeleted(ctx context.Context, tagRef resources
 	ctx, done := stepSpan(ctx, "FinalizeTagDeleted")
 	defer func() { err = done(err) }()
 
-	tag, err := w.store.DeleteTag(ctx, tagRef, precondition)
+	tag, err := w.admission.DeleteTag(ctx, tagRef, precondition)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, apierror.NotFound("Tag %s not found", tagRef)
@@ -197,7 +198,7 @@ func (w *ActorWorkflow) loadActorForTag(ctx context.Context, actorRef resources.
 	ctx, done := stepSpan(ctx, "LoadActorForTag")
 	defer func() { err = done(err) }()
 
-	actor, err := w.store.GetActor(ctx, actorRef)
+	actor, err := w.admission.GetActor(ctx, actorRef)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -218,7 +219,7 @@ func (w *ActorWorkflow) loadActorForTag(ctx context.Context, actorRef resources.
 	if actor.GetStatus().GetExternalSnapshot().GetActorTemplateUid() == "" {
 		return nil, nil, apierror.Internal("Actor %s holds an external snapshot but records no template it was built under", actorRef)
 	}
-	actorTemplate, err := resolveActorTemplate(ctx, w.store, actor)
+	actorTemplate, err := resolveActorTemplate(ctx, w.admission, actor)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -255,10 +256,12 @@ func (w *ActorWorkflow) ensureTagReserved(ctx context.Context, tagRef resources.
 		},
 	}
 
-	stored, err := w.store.CreateTag(ctx, tagToCreate)
+	stored, err := w.admission.CreateTag(ctx, tagToCreate)
 	switch {
 	case err == nil:
 		return stored, nil
+	case errors.Is(err, admission.ErrInvalid):
+		return nil, apierror.InvalidArgument("%w", err)
 	case errors.Is(err, store.ErrFailedPrecondition):
 		return nil, apierror.FailedPrecondition("Atespace %s not found", tagRef.Atespace)
 	case errors.Is(err, store.ErrAlreadyExists):
@@ -301,8 +304,8 @@ func (w *ActorWorkflow) ensureTagFinalized(ctx context.Context, tag *ateapipb.Ta
 		SnapshotUri:  dst.String(),
 		ContentScope: snapshot.GetContentScope(),
 	}
-	stored, err := w.store.UpdateTag(ctx, tagRef, store.PreconditionFrom(tag), func(toUpdate *ateapipb.Tag) error {
-		toUpdate.Status.Snapshot = finalSnapshot
+	stored, err := w.admission.UpdateTagStatus(ctx, tagRef, store.PreconditionFrom(tag), func(status *ateapipb.TagStatus) error {
+		status.Snapshot = finalSnapshot
 		return nil
 	})
 	if err != nil {

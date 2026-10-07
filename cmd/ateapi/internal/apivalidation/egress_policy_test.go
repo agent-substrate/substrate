@@ -188,6 +188,58 @@ func TestValidateCreateActorEgressPolicyRequest(t *testing.T) {
 	}
 }
 
+func TestValidateEgressPolicyCreate(t *testing.T) {
+	actor := &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor"}
+	tests := []struct {
+		name   string
+		actor  *ateapipb.ObjectRef
+		policy *ateapipb.EgressPolicy
+		want   field.ErrorList
+	}{{
+		name:   "valid",
+		actor:  actor,
+		policy: validEgressPolicy(),
+	}, {
+		name:  "missing metadata",
+		actor: actor,
+		policy: func() *ateapipb.EgressPolicy {
+			p := validEgressPolicy()
+			p.Metadata = nil
+			return p
+		}(),
+		want: field.ErrorList{
+			field.Required(field.NewPath("egress_policy", "metadata"), ""),
+		},
+	}, {
+		name:  "wrong policy name",
+		actor: actor,
+		policy: func() *ateapipb.EgressPolicy {
+			p := validEgressPolicy()
+			p.Metadata.Name = "other"
+			return p
+		}(),
+		want: field.ErrorList{
+			field.Invalid(field.NewPath("egress_policy", "metadata", "name"), "other", `must be "default"`).WithOrigin("custom=default"),
+		},
+	}, {
+		name:  "mismatched policy atespace",
+		actor: actor,
+		policy: func() *ateapipb.EgressPolicy {
+			p := validEgressPolicy()
+			p.Metadata.Atespace = "other"
+			return p
+		}(),
+		want: field.ErrorList{
+			field.Invalid(field.NewPath("egress_policy", "metadata", "atespace"), "other", "must match actor.atespace"),
+		},
+	}}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assertValidateErr(t, ValidateEgressPolicyCreate(context.Background(), field.NewPath("egress_policy"), tc.actor, tc.policy), tc.want)
+		})
+	}
+}
+
 func TestValidateGetActorEgressPolicyRequest(t *testing.T) {
 	validReq := func() *ateapipb.GetActorEgressPolicyRequest {
 		return &ateapipb.GetActorEgressPolicyRequest{

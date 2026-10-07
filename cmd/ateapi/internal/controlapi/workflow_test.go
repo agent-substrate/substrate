@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/admission"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/internal/actorevent"
@@ -111,7 +112,7 @@ func TestActorStateChangeRecords(t *testing.T) {
 				t.Fatalf("get template: %v", err)
 			}
 
-			w := &ActorWorkflow{store: persistence}
+			w := &ActorWorkflow{admission: admission.New(persistence, nil, nil)}
 			tt.transition(t, w, actorRef, actor, tmpl)
 
 			// The logs exporter is on, so the record goes to OTLP only.
@@ -211,7 +212,7 @@ func TestActorDeletedRecord(t *testing.T) {
 		t.Fatalf("get actor: %v", err)
 	}
 
-	w := &ActorWorkflow{store: persistence}
+	w := &ActorWorkflow{admission: admission.New(persistence, nil, nil)}
 	if _, err := w.finalizeDeleted(ctx, actor); err != nil {
 		t.Fatalf("finalizeDeleted: %v", err)
 	}
@@ -265,7 +266,7 @@ func TestActorStateChangeRecordSkippedOnConflict(t *testing.T) {
 		t.Fatalf("bump version: %v", err)
 	}
 
-	w := &ActorWorkflow{store: persistence}
+	w := &ActorWorkflow{admission: admission.New(persistence, nil, nil)}
 	if _, err := w.ensureMarkedDeleting(ctx, actorRef, stale, false); err == nil {
 		t.Fatal("ensureMarkedDeleting on a stale actor = nil, want a conflict")
 	}

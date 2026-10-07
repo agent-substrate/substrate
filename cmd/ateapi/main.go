@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"cloud.google.com/go/storage"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/admission"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/apiauthn"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/authz"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/controlapi"
@@ -210,11 +211,6 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to build server credentials", err)
 	}
 
-	workerCache := workercache.New(persistence, 5*time.Minute)
-	if err := workerCache.Start(ctx); err != nil {
-		serverboot.Fatal(ctx, "Failed to seed worker cache", err)
-	}
-
 	ateFactory := externalversions.NewSharedInformerFactory(ateClient, 0)
 	workerPoolLister := ateFactory.Api().V1alpha1().WorkerPools().Lister()
 	sandboxConfigLister := ateFactory.Api().V1alpha1().SandboxConfigs().Lister()
@@ -245,6 +241,13 @@ func main() {
 	ateletPodInformerFactory.WaitForCacheSync(stopCh)
 	ateFactory.WaitForCacheSync(stopCh)
 	scInformerFactory.WaitForCacheSync(stopCh)
+
+	admission := admission.New(persistence, sandboxConfigLister, storageClassLister)
+
+	workerCache := workercache.New(admission, 5*time.Minute)
+	if err := workerCache.Start(ctx); err != nil {
+		serverboot.Fatal(ctx, "Failed to seed worker cache", err)
+	}
 
 	if err := controlapi.RegisterWorkerCount(otel.Meter("ateapi"), workerCache.Workers, workerPoolLister.List); err != nil {
 		serverboot.Fatal(ctx, "Failed to register worker-count metric", err)
@@ -277,7 +280,7 @@ func main() {
 	}
 
 	controlSrv := controlapi.NewRPCService(
-		persistence,
+		admission,
 		workerCache,
 		sandboxConfigLister,
 		csiDriverConfigLister,
@@ -293,11 +296,11 @@ func main() {
 	)
 
 	// Drive stored ActorTemplates through the golden actor flow.
-	templateReconciler := controlapi.NewActorTemplateReconciler(persistence, controlSrv, *templateResyncInterval)
+	templateReconciler := controlapi.NewActorTemplateReconciler(admission, controlSrv, *templateResyncInterval)
 	templateReconciler.Start(shutdownCtx)
 
 	// Crash the Actors lost when a Worker's ateom restarts.
-	workerAssignmentReconciler := controlapi.NewWorkerAssignmentReconciler(persistence, workerCache)
+	workerAssignmentReconciler := controlapi.NewWorkerAssignmentReconciler(admission, workerCache)
 	workerAssignmentReconciler.Start(shutdownCtx)
 
 	lisCfg := &net.ListenConfig{}
@@ -335,7 +338,7 @@ func main() {
 	)
 	reflection.Register(mux)
 	ateapipb.RegisterControlServer(mux, controlSrv)
-	ateapipb.RegisterWorkerServiceServer(mux, workerservice.New(persistence, controlSrv, ateletSPIFFEID, actorIDCAPool))
+	ateapipb.RegisterWorkerServiceServer(mux, workerservice.New(admission, controlSrv, ateletSPIFFEID, actorIDCAPool))
 
 	readiness := &serverboot.Readiness{}
 	go serverboot.StartMetricsServer(ctx, serverboot.MetricsServerOptions{

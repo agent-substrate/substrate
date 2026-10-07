@@ -15,14 +15,15 @@
 package controlapi
 
 import (
+	"errors"
 	"fmt"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/admission"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
 // resolveTemplateSandboxConfig resolves the SandboxConfig the ActorTemplate
@@ -32,17 +33,12 @@ func resolveTemplateSandboxConfig(
 	sandboxConfigLister listersv1alpha1.SandboxConfigLister,
 	templateSandbox *ateapipb.SandboxConfig,
 ) (*atev1alpha1.SandboxConfig, error) {
-	name := templateSandbox.GetConfigName()
-	sc, err := sandboxConfigLister.Get(name)
-	if k8serrors.IsNotFound(err) {
-		return nil, apierror.FailedPrecondition("SandboxConfig %q not found", name)
-	}
+	sc, err := admission.ResolveTemplateSandboxConfig(sandboxConfigLister, templateSandbox)
 	if err != nil {
-		return nil, fmt.Errorf("while getting SandboxConfig %q: %w", name, err)
-	}
-	if class := sandboxClassString(templateSandbox.GetSandboxClass()); string(sc.Spec.SandboxClass) != class {
-		return nil, apierror.FailedPrecondition(
-			"SandboxConfig %q has class %q but sandbox_config.sandbox_class is %q", name, sc.Spec.SandboxClass, class)
+		if errors.Is(err, admission.ErrFailedPrecondition) {
+			return nil, apierror.FailedPrecondition("%w", err)
+		}
+		return nil, err
 	}
 	return sc, nil
 }

@@ -22,6 +22,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/testing/protocmp"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/admission"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/internal/apierror"
@@ -35,7 +36,7 @@ func TestListTags(t *testing.T) {
 	ctx := context.Background()
 	persistence, cleanup := storetest.SetupTestStore(t)
 	t.Cleanup(cleanup)
-	svc := &RPCService{impl: newServiceImpl(persistence, nil)}
+	svc := &RPCService{admission: admission.New(persistence, nil, nil)}
 
 	const otherAtespace = "other-atespace"
 	seedTag := func(atespace, name string) {
@@ -222,7 +223,7 @@ func TestUpdateTag_UnsetScopeDoesNotUnpublish(t *testing.T) {
 		t.Errorf("UpdateTag error = %v (code %v), want code InvalidArgument", err, code)
 	}
 
-	current, err := svc.impl.GetTag(ctx, resources.TagRef{Atespace: testAtespace, Name: "tag1"})
+	current, err := svc.admission.GetTag(ctx, resources.TagRef{Atespace: testAtespace, Name: "tag1"})
 	if err != nil {
 		t.Fatalf("GetTag: %v", err)
 	}
@@ -301,7 +302,7 @@ func rpcServiceWithTag(t *testing.T, tag *ateapipb.Tag) (*RPCService, *ateapipb.
 	seeded := newTestTag(t, name, actor)
 	seeded.Scope = tag.GetScope()
 	created := storetest.MustCreateTag(t, ctx, persistence, seeded)
-	return &RPCService{impl: newServiceImpl(persistence, nil)}, created
+	return &RPCService{admission: admission.New(persistence, nil, nil)}, created
 }
 
 // TestUpdateTag_DeleteRecreateRace checks that an update is not
@@ -330,7 +331,7 @@ func TestUpdateTag_DeleteRecreateRace(t *testing.T) {
 			recreatedTag = storetest.MustCreateTag(t, ctx, persistence, newTestTag(t, tagName, actorTwo))
 		},
 	}
-	svc := &RPCService{impl: newServiceImpl(racing, nil)}
+	svc := &RPCService{admission: admission.New(racing, nil, nil)}
 
 	// The client asserts "only update the tag with uid A". Its version guard is
 	// satisfied by B as well, because re-tagging resets the version to 1: the
@@ -382,7 +383,7 @@ func TestUpdateTag_ConcurrentUpdate(t *testing.T) {
 			}
 		},
 	}
-	svc := &RPCService{impl: newServiceImpl(racing, nil)}
+	svc := &RPCService{admission: admission.New(racing, nil, nil)}
 
 	originalTag.Scope = ateapipb.TagScope_TAG_SCOPE_PUBLISHED
 	_, err := svc.UpdateTag(ctx, &ateapipb.UpdateTagRequest{
@@ -413,7 +414,7 @@ func TestUpdateTag_PendingTag(t *testing.T) {
 	ctx := context.Background()
 	persistence, cleanup := storetest.SetupTestStore(t)
 	t.Cleanup(cleanup)
-	svc := &RPCService{impl: newServiceImpl(persistence, nil)}
+	svc := &RPCService{admission: admission.New(persistence, nil, nil)}
 
 	actor := newTestSuspendedActor(t, ctx, persistence, testAtespace, "actor-1")
 	tag := storetest.MustCreateTag(t, ctx, persistence, newPendingTestTag(t, "v1", actor))

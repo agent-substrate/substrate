@@ -15,8 +15,8 @@
 package controlapi
 
 import (
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/admission"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
@@ -30,12 +30,5 @@ func actorSnapshotContentScopeToAtelet(in ateapipb.SnapshotContentScope) ateletp
 // sandboxClassString renders the proto enum in the CRD's lower-case string
 // form, which the scheduler and the metric labels share.
 func sandboxClassString(in ateapipb.SandboxClass) string {
-	switch in {
-	case ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR:
-		return string(atev1alpha1.SandboxClassGvisor)
-	case ateapipb.SandboxClass_SANDBOX_CLASS_MICROVM:
-		return string(atev1alpha1.SandboxClassMicroVM)
-	default:
-		return ""
-	}
+	return admission.SandboxClassString(in)
 }

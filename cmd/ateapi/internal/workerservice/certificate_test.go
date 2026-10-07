@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/admission"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/ateletauth/ateletauthtest"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/apierror"
@@ -46,7 +47,7 @@ func (f *fakeActorStore) GetActor(_ context.Context, actorRef resources.ActorRef
 	return a, nil
 }
 
-func newFakeStoreWithActor(atespace, name, uid string) (*fakeActorStore, *ateapipb.Actor) {
+func newFakeAdmissionWithActor(atespace, name, uid string) (*admission.Admission, *ateapipb.Actor) {
 	actor := &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{
 			Atespace: atespace,
@@ -61,11 +62,11 @@ func newFakeStoreWithActor(atespace, name, uid string) (*fakeActorStore, *ateapi
 			State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
 		},
 	}
-	return &fakeActorStore{
+	return admission.New(&fakeActorStore{
 		actors: map[resources.ActorRef]*ateapipb.Actor{
 			{Atespace: atespace, Name: name}: actor,
 		},
-	}, actor
+	}, nil, nil), actor
 }
 
 func generateTestCSR(t *testing.T) ([]byte, *ecdsa.PrivateKey) {
@@ -94,9 +95,9 @@ func newTestCAPool(t *testing.T) *localca.ConcretePool {
 }
 
 func TestMintAteomActorCertificate(t *testing.T) {
-	st, actor := newFakeStoreWithActor("team-a", "my-actor", "3b9f1e77-2c4d-4a80-91be-6d5c8f0a7e21")
+	admission, actor := newFakeAdmissionWithActor("team-a", "my-actor", "3b9f1e77-2c4d-4a80-91be-6d5c8f0a7e21")
 	caPool := newTestCAPool(t)
-	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, caPool)
+	s := New(admission, &fakeSuspender{}, testAteletSPIFFEID, caPool)
 
 	csr, key := generateTestCSR(t)
 
@@ -141,9 +142,9 @@ func TestMintAteomActorCertificate(t *testing.T) {
 }
 
 func TestMintAteomActorCertificate_Errors(t *testing.T) {
-	st, actor := newFakeStoreWithActor("team-a", "my-actor", "3b9f1e77-2c4d-4a80-91be-6d5c8f0a7e21")
+	admission, actor := newFakeAdmissionWithActor("team-a", "my-actor", "3b9f1e77-2c4d-4a80-91be-6d5c8f0a7e21")
 	caPool := newTestCAPool(t)
-	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, caPool)
+	s := New(admission, &fakeSuspender{}, testAteletSPIFFEID, caPool)
 
 	csr, _ := generateTestCSR(t)
 	authed := ateletauthtest.ContextWith(ateletauthtest.CertOn(t, "node-1"))

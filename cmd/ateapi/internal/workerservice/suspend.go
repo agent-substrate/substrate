@@ -54,7 +54,7 @@ func (s *Server) RequestActorSuspend(ctx context.Context, req *ateapipb.RequestA
 
 	// Use authoritative state to authorize the request, never the request
 	// itself: the caller proves which node it is on, and nothing else.
-	worker, err := s.store.GetWorker(ctx, workerName)
+	worker, err := s.admission.GetWorker(ctx, workerName)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, apierror.NotFound("Worker %s not found", workerName)
@@ -71,7 +71,7 @@ func (s *Server) RequestActorSuspend(ctx context.Context, req *ateapipb.RequestA
 		return nil, apierror.NotFound("Worker %s not found", workerName)
 	}
 
-	actor, err := s.store.GetActor(ctx, actorRef)
+	actor, err := s.admission.GetActor(ctx, actorRef)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, apierror.NotFound("Actor %s not found", actorRef)

@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/admission"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/apivalidation"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/defaults"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
@@ -42,18 +43,14 @@ func (s *RPCService) CreateAtespace(ctx context.Context, req *ateapipb.CreateAte
 		return nil, resources.ToAPIError(errs)
 	}
 
-	// Handle the creation, including validation of the final stored object.
-	return s.impl.CreateAtespace(ctx, inAtespace)
-}
-
-func (s *ServiceImpl) CreateAtespace(ctx context.Context, inAtespace *ateapipb.Atespace) (*ateapipb.Atespace, error) {
-	// no further processing or status, but if there were, we would do it here
-
-	// Save the data in the storage layer.
-	stored, err := s.store.CreateAtespace(ctx, inAtespace)
+	stored, err := s.admission.CreateAtespace(ctx, inAtespace)
 	if err != nil {
+		// TODO: Centralize admission/store error-to-apierror mapping once store errors carry descriptive messages.
 		if errors.Is(err, store.ErrAlreadyExists) {
 			return nil, apierror.AlreadyExists("Atespace %s already exists", inAtespace.Metadata.Name)
+		}
+		if errors.Is(err, admission.ErrInvalid) {
+			return nil, apierror.InvalidArgument("%w", err)
 		}
 		return nil, fmt.Errorf("while recording atespace: %w", err)
 	}
@@ -66,11 +63,9 @@ func (s *RPCService) GetAtespace(ctx context.Context, req *ateapipb.GetAtespaceR
 		return nil, resources.ToAPIError(errs)
 	}
 
-	return s.impl.GetAtespace(ctx, req.Atespace.Name)
-}
-
-func (s *ServiceImpl) GetAtespace(ctx context.Context, name string) (*ateapipb.Atespace, error) {
-	atespace, err := s.store.GetAtespace(ctx, name)
+	name := req.Atespace.Name
+	atespace, err := s.admission.GetAtespace(ctx, name)
+	// TODO: Centralize admission/store error-to-apierror mapping once store errors carry descriptive messages.
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, apierror.NotFound("Atespace %s not found", name)
 	} else if err != nil {
@@ -85,9 +80,9 @@ func (s *RPCService) ListAtespaces(ctx context.Context, req *ateapipb.ListAtespa
 		return nil, resources.ToAPIError(errs)
 	}
 
-	page, err := s.impl.ListAtespaces(ctx, store.ListOptions{PageSize: req.PageSize, PageToken: req.PageToken})
+	page, err := s.admission.ListAtespaces(ctx, store.ListOptions{PageSize: effectivePageSize(req.PageSize), PageToken: req.PageToken})
 	if err != nil {
-		return nil, err
+		return nil, mapListError(fmt.Errorf("while listing atespaces in db: %w", err))
 	}
 	return &ateapipb.ListAtespacesResponse{
 		Atespaces:     page.Items,
@@ -95,26 +90,16 @@ func (s *RPCService) ListAtespaces(ctx context.Context, req *ateapipb.ListAtespa
 	}, nil
 }
 
-func (s *ServiceImpl) ListAtespaces(ctx context.Context, opts store.ListOptions) (store.ListResponse[*ateapipb.Atespace], error) {
-	opts.PageSize = effectivePageSize(opts.PageSize)
-	page, err := s.store.ListAtespaces(ctx, opts)
-	if err != nil {
-		return page, mapListError(fmt.Errorf("while listing atespaces in db: %w", err))
-	}
-	return page, nil
-}
-
 func (s *RPCService) DeleteAtespace(ctx context.Context, req *ateapipb.DeleteAtespaceRequest) (*ateapipb.Atespace, error) {
 	if errs := apivalidation.ValidateDeleteAtespaceRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
 	}
 
-	return s.impl.DeleteAtespace(ctx, req.Atespace.Name, toDeletePreconditions(req.GetOptions()))
-}
-
-func (s *ServiceImpl) DeleteAtespace(ctx context.Context, name string, precondition store.DeletePreconditions) (*ateapipb.Atespace, error) {
-	deleted, err := s.store.DeleteAtespace(ctx, name, precondition)
+	name := req.Atespace.Name
+	precondition := toDeletePreconditions(req.GetOptions())
+	deleted, err := s.admission.DeleteAtespace(ctx, name, precondition)
 	if err != nil {
+		// TODO: Centralize admission/store error-to-apierror mapping once store errors carry descriptive messages.
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, apierror.NotFound("Atespace %s not found", name)
 		}

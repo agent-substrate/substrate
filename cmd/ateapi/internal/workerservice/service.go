@@ -19,7 +19,7 @@ package workerservice
 import (
 	"context"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/admission"
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
@@ -28,9 +28,9 @@ import (
 type Server struct {
 	ateapipb.UnimplementedWorkerServiceServer
 
-	// store is where a Worker's reports are recorded, and the authoritative
+	// admission is where a Worker's reports are recorded, and the authoritative
 	// state every request is authorized against.
-	store store.Interface
+	admission *admission.Admission
 
 	// suspender runs the suspend a Worker asks for. It is the same entry point
 	// Control.SuspendActor uses, so a Worker's request is subject to every
@@ -51,9 +51,9 @@ type actorSuspender interface {
 
 var _ ateapipb.WorkerServiceServer = (*Server)(nil)
 
-func New(store store.Interface, suspender actorSuspender, ateletSPIFFEID string, actorIDCAPool localca.Pool) *Server {
+func New(admission *admission.Admission, suspender actorSuspender, ateletSPIFFEID string, actorIDCAPool localca.Pool) *Server {
 	return &Server{
-		store:          store,
+		admission:      admission,
 		suspender:      suspender,
 		ateletSPIFFEID: ateletSPIFFEID,
 		actorIDCAPool:  actorIDCAPool,

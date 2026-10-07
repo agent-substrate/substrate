@@ -21,6 +21,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/protobuf/testing/protocmp"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/admission"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/ateletauth/ateletauthtest"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/internal/apierror"
@@ -41,7 +42,7 @@ func setRequest(actors int32) *ateapipb.SetWorkerCapacityRequest {
 func TestSetWorkerCapacity(t *testing.T) {
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
-	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, nil)
+	s := New(admission.New(st, nil, nil), &fakeSuspender{}, testAteletSPIFFEID, nil)
 	seedReportedWorker(t, st, testNode, &ateapipb.WorkerResources{Actors: 1, Resources: resources.CPUMemory(2000, 0)})
 
 	got, err := s.SetWorkerCapacity(ateletauthtest.ContextWith(ateletauthtest.CertOn(t, testNode)), setRequest(4094))
@@ -65,7 +66,7 @@ func TestSetWorkerCapacity(t *testing.T) {
 func TestSetWorkerCapacity_OtherNodeIsNotFound(t *testing.T) {
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
-	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, nil)
+	s := New(admission.New(st, nil, nil), &fakeSuspender{}, testAteletSPIFFEID, nil)
 	seedReportedWorker(t, st, testNode, &ateapipb.WorkerResources{Actors: 1})
 
 	_, err := s.SetWorkerCapacity(ateletauthtest.ContextWith(ateletauthtest.CertOn(t, "some-other-node")), setRequest(4094))
@@ -89,7 +90,7 @@ func TestSetWorkerCapacity_OtherNodeIsNotFound(t *testing.T) {
 func TestSetWorkerCapacity_UnchangedDoesNotWrite(t *testing.T) {
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
-	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, nil)
+	s := New(admission.New(st, nil, nil), &fakeSuspender{}, testAteletSPIFFEID, nil)
 	seeded := seedReportedWorker(t, st, testNode, &ateapipb.WorkerResources{Actors: 4094})
 
 	for range 3 {
@@ -109,7 +110,7 @@ func TestSetWorkerCapacity_UnchangedDoesNotWrite(t *testing.T) {
 func TestSetWorkerCapacity_Errors(t *testing.T) {
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
-	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, nil)
+	s := New(admission.New(st, nil, nil), &fakeSuspender{}, testAteletSPIFFEID, nil)
 	seedReportedWorker(t, st, testNode, &ateapipb.WorkerResources{Actors: 1})
 	authed := ateletauthtest.ContextWith(ateletauthtest.CertOn(t, testNode))
 
@@ -147,7 +148,7 @@ func TestSetWorkerCapacity_Errors(t *testing.T) {
 func TestSetWorkerCapacity_RejectsNonsense(t *testing.T) {
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
-	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, nil)
+	s := New(admission.New(st, nil, nil), &fakeSuspender{}, testAteletSPIFFEID, nil)
 	seeded := seedReportedWorker(t, st, testNode, &ateapipb.WorkerResources{Actors: 4094})
 	authed := ateletauthtest.ContextWith(ateletauthtest.CertOn(t, testNode))
 

@@ -21,6 +21,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/admission"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/internal/apierror"
@@ -75,7 +76,8 @@ func gvisorDefaultLister(t *testing.T) listersv1alpha1.SandboxConfigLister {
 // lister may briefly lag a just-created config, so the error is retryable.
 func TestCreateActorTemplate_SandboxConfigChecks(t *testing.T) {
 	persistence := newTestPersistence(t)
-	s := &RPCService{impl: newServiceImpl(persistence, nil), sandboxConfigLister: gvisorDefaultLister(t)}
+	lister := gvisorDefaultLister(t)
+	s := &RPCService{admission: admission.New(persistence, lister, nil)}
 	ctx := context.Background()
 	if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "ns1"}}); err != nil {
 		t.Fatalf("CreateAtespace failed: %v", err)
@@ -120,7 +122,8 @@ func TestCreateActorTemplate_SandboxConfigChecks(t *testing.T) {
 // while the atespace is missing, and succeeds once the atespace exists.
 func TestCreateActorTemplate(t *testing.T) {
 	persistence := newTestPersistence(t)
-	s := &RPCService{impl: newServiceImpl(persistence, nil), sandboxConfigLister: gvisorDefaultLister(t)}
+	lister := gvisorDefaultLister(t)
+	s := &RPCService{admission: admission.New(persistence, lister, nil)}
 	ctx := context.Background()
 	req := func(atespace, name string) *ateapipb.CreateActorTemplateRequest {
 		return &ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
@@ -150,7 +153,8 @@ func TestCreateActorTemplate(t *testing.T) {
 // the only guard.
 func TestCreateActorTemplateIgnoresServerOwnedFields(t *testing.T) {
 	persistence := newTestPersistence(t)
-	s := &RPCService{impl: newServiceImpl(persistence, nil), sandboxConfigLister: gvisorDefaultLister(t)}
+	lister := gvisorDefaultLister(t)
+	s := &RPCService{admission: admission.New(persistence, lister, nil)}
 	ctx := context.Background()
 
 	if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "ns1"}}); err != nil {
@@ -245,7 +249,7 @@ func TestDeleteActorTemplate(t *testing.T) {
 			tagRef := resources.TagRefFromTag(tag)
 			tagURI := mustReservedTagSnapshotURI(t, tag)
 			objects.PutSnapshot(t, tagURI, "manifest.json")
-			svc := &RPCService{impl: newServiceImpl(persistence, nil), actorWorkflow: workflow, objectStore: objects}
+			svc := &RPCService{admission: admission.New(persistence, nil, nil), actorWorkflow: workflow, objectStore: objects}
 			// The handler must request AnyState to clean up an active golden actor.
 			mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
 				s.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
@@ -358,11 +362,12 @@ func seedSubstrateTemplate(t *testing.T, ctx context.Context, persistence store.
 func TestResolveActorTemplate(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
+	admission := admission.New(persistence, nil, nil)
 	stored := seedSubstrateTemplate(t, ctx, persistence, "sub-tmpl")
 
 	t.Run("ref reads the store", func(t *testing.T) {
 		actor := &ateapipb.Actor{ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"}}
-		got, err := resolveActorTemplate(ctx, persistence, actor)
+		got, err := resolveActorTemplate(ctx, admission, actor)
 		if err != nil {
 			t.Fatalf("resolveActorTemplate: %v", err)
 		}
@@ -373,7 +378,7 @@ func TestResolveActorTemplate(t *testing.T) {
 
 	t.Run("ref to a missing template is FailedPrecondition", func(t *testing.T) {
 		actor := &ateapipb.Actor{ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "absent"}}
-		_, err := resolveActorTemplate(ctx, persistence, actor)
+		_, err := resolveActorTemplate(ctx, admission, actor)
 		if got := apierror.Code(err); got != codes.FailedPrecondition {
 			t.Fatalf("status.Code = %v, want FailedPrecondition (err: %v)", got, err)
 		}
@@ -386,6 +391,7 @@ func TestResolveActorTemplate(t *testing.T) {
 func TestResolveActorTemplate_NotFound(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
+	admission := admission.New(persistence, nil, nil)
 	stored := seedSubstrateTemplate(t, ctx, persistence, "sub-tmpl")
 
 	tests := []struct {
@@ -399,7 +405,7 @@ func TestResolveActorTemplate_NotFound(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := resolveActorTemplate(ctx, persistence, tc.actor)
+			got, err := resolveActorTemplate(ctx, admission, tc.actor)
 			if tc.wantNotFound {
 				if !errors.Is(err, errActorTemplateNotFound) {
 					t.Fatalf("resolveActorTemplate err = %v, want errActorTemplateNotFound", err)

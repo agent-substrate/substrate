@@ -72,6 +72,41 @@ func TestValidateCreateAtespaceRequest(t *testing.T) {
 	}
 }
 
+func TestValidateAtespaceCreate(t *testing.T) {
+	withMetadata := withAtespaceMetadata
+
+	tests := []struct {
+		name     string
+		atespace *ateapipb.Atespace
+		want     field.ErrorList
+	}{{
+		"valid",
+		validAtespace(),
+		nil,
+	}, {
+		"missing metadata",
+		validAtespace(func(a *ateapipb.Atespace) { a.Metadata = nil }),
+		field.ErrorList{field.Required(field.NewPath("atespace", "metadata"), "")},
+	}, {
+		"metadata.atespace must be empty",
+		validAtespace(withMetadata(func(m *ateapipb.ResourceMetadata) { m.Atespace = "as" })),
+		field.ErrorList{field.Forbidden(field.NewPath("atespace", "metadata", "atespace"), "")},
+	}, {
+		"missing metadata.name",
+		validAtespace(withMetadata(func(m *ateapipb.ResourceMetadata) { m.Name = "" })),
+		field.ErrorList{field.Required(field.NewPath("atespace", "metadata", "name"), "")},
+	}, {
+		"invalid metadata.name",
+		validAtespace(withMetadata(func(m *ateapipb.ResourceMetadata) { m.Name = "invalid value" })),
+		field.ErrorList{field.Invalid(field.NewPath("atespace", "metadata", "name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertValidateErr(t, ValidateAtespaceCreate(context.Background(), field.NewPath("atespace"), tt.atespace), tt.want)
+		})
+	}
+}
+
 func TestValidateGetAtespaceRequest(t *testing.T) {
 	// This test verifies validation of user input for get.
 	validReq := func(mods ...func(atespace *ateapipb.GetAtespaceRequest)) *ateapipb.GetAtespaceRequest {

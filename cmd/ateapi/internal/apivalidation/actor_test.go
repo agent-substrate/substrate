@@ -160,6 +160,46 @@ func TestValidateCreateActorRequest(t *testing.T) {
 	}
 }
 
+func TestValidateActorCreate(t *testing.T) {
+	withMetadata := withActorMetadata
+	withActorTemplate := withActorActorTemplate
+
+	tests := []struct {
+		name  string
+		actor *ateapipb.Actor
+		want  field.ErrorList
+	}{{
+		"valid",
+		validActor(),
+		nil,
+	}, {
+		"missing metadata",
+		validActor(func(a *ateapipb.Actor) { a.Metadata = nil }),
+		field.ErrorList{field.Required(field.NewPath("actor", "metadata"), "")},
+	}, {
+		"missing metadata.atespace",
+		validActor(withMetadata(func(m *ateapipb.ResourceMetadata) { m.Atespace = "" })),
+		field.ErrorList{field.Required(field.NewPath("actor", "metadata", "atespace"), "")},
+	}, {
+		"missing metadata.name",
+		validActor(withMetadata(func(m *ateapipb.ResourceMetadata) { m.Name = "" })),
+		field.ErrorList{field.Required(field.NewPath("actor", "metadata", "name"), "")},
+	}, {
+		"missing actor_template",
+		validActor(func(a *ateapipb.Actor) { a.ActorTemplate = nil }),
+		field.ErrorList{field.Required(field.NewPath("actor", "actor_template"), "")},
+	}, {
+		"invalid actor_template.name",
+		validActor(withActorTemplate("as", "invalid value")),
+		field.ErrorList{field.Invalid(field.NewPath("actor", "actor_template", "name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertValidateErr(t, ValidateActorCreate(context.Background(), field.NewPath("actor"), tt.actor), tt.want)
+		})
+	}
+}
+
 func TestValidateActorUpdate(t *testing.T) {
 	// This test validates input and output fields, including status.  It also
 	// tests updates to all fields.  This is where the majority of validation

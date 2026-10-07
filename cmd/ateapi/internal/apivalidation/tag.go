@@ -52,13 +52,22 @@ func ValidateDeleteTagRequest(ctx context.Context, req *ateapipb.DeleteTagReques
 	return Validate_DeleteTagRequest(ctx, op, nil, req, nil)
 }
 
+func ValidateTagCreate(ctx context.Context, fldPath *field.Path, tag *ateapipb.Tag) field.ErrorList {
+	op := operation.Operation{Type: operation.Create}
+	errs := validateTagSourceActorAtespace(fldPath, tag)
+	return append(errs, Validate_Tag(ctx, op, fldPath, tag, nil)...)
+}
+
 func ValidateTagUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVal *ateapipb.Tag) field.ErrorList {
 	op := operation.Operation{Type: operation.Update}
 	return Validate_Tag(ctx, op, fldPath, newVal, oldVal)
 }
 
 func ValidateCustom_CreateTagRequest(_ context.Context, _ operation.Operation, p *field.Path, req, _ *ateapipb.CreateTagRequest) field.ErrorList {
-	tag := req.GetTag()
+	return validateTagSourceActorAtespace(p.Child("tag"), req.GetTag())
+}
+
+func validateTagSourceActorAtespace(fldPath *field.Path, tag *ateapipb.Tag) field.ErrorList {
 	sourceActorAtespace := tag.GetSourceActor().GetAtespace()
 	tagAtespace := tag.GetMetadata().GetAtespace()
 	if sourceActorAtespace == "" || tagAtespace == "" {
@@ -66,7 +75,7 @@ func ValidateCustom_CreateTagRequest(_ context.Context, _ operation.Operation, p
 	}
 	if tagAtespace != sourceActorAtespace {
 		return field.ErrorList{
-			field.Invalid(p.Child("tag", "metadata", "atespace"), tagAtespace, "must match source_actor.atespace"),
+			field.Invalid(fldPath.Child("metadata", "atespace"), tagAtespace, "must match source_actor.atespace"),
 		}
 	}
 	return nil

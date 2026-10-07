@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/admission"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/controlapi"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
@@ -88,6 +89,7 @@ type testContext struct {
 	k8sClient           kubernetes.Interface
 	substrateClient     versioned.Interface
 	persistence         store.Interface
+	admission           *admission.Admission
 	workerCache         *workercache.Cache
 	fakeAtelet          *FakeAteletServer
 	cleanup             func()
@@ -153,7 +155,8 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 	scFactory.WaitForCacheSync(ctx.Done())
 
 	// 4. Initialize Service
-	wc := workercache.New(persistence, 5*time.Minute)
+	admission := admission.New(persistence, sandboxConfigLister, scLister)
+	wc := workercache.New(admission, 5*time.Minute)
 	if err := wc.Start(ctx); err != nil {
 		cancel()
 		cleanupStore()
@@ -213,7 +216,7 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 	objectStore := objectstoretest.New()
 
 	service := controlapi.NewRPCService(
-		persistence,
+		admission,
 		wc,
 		sandboxConfigLister,
 		csiDriverConfigLister,
@@ -299,6 +302,7 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 		k8sClient:           k8sClient,
 		substrateClient:     substrateClient,
 		persistence:         persistence,
+		admission:           admission,
 		workerCache:         wc,
 		fakeAtelet:          fakeAtelet,
 		cleanup:             cleanup,

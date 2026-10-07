@@ -19,6 +19,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/admission"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/internal/apierror"
@@ -40,7 +41,7 @@ func TestEnsureMarkedSuspending_SnapshotURI(t *testing.T) {
 	tmpl := &ateapipb.ActorTemplate{
 		SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://bucket/root/"},
 	}
-	w := &ActorWorkflow{store: persistence}
+	w := &ActorWorkflow{admission: admission.New(persistence, nil, nil)}
 	marked, err := w.ensureMarkedSuspending(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, actor, tmpl)
 	if err != nil {
 		t.Fatalf("ensureMarkedSuspending: %v", err)
@@ -71,7 +72,7 @@ func TestEnsureMarkedSuspending_ReentryKeepsPersistedSnapshotLocation(t *testing
 			InProgressSnapshotUri: firstAttempt,
 		},
 	})
-	w := &ActorWorkflow{store: persistence}
+	w := &ActorWorkflow{admission: admission.New(persistence, nil, nil)}
 	marked, err := w.ensureMarkedSuspending(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, actor, &ateapipb.ActorTemplate{})
 	if err != nil {
 		t.Fatalf("ensureMarkedSuspending: %v", err)
@@ -152,7 +153,7 @@ func TestEnsureMarkedSuspending_StateMatrix(t *testing.T) {
 	for _, seedState := range allActorStates {
 		ctx := context.Background()
 		persistence := newTestPersistence(t)
-		w := &ActorWorkflow{store: persistence}
+		w := &ActorWorkflow{admission: admission.New(persistence, nil, nil)}
 
 		actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
 		actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
@@ -251,7 +252,7 @@ func TestEnsureAteletSuspended_DialFailureLeavesActorRetryable(t *testing.T) {
 			}
 			created := storetest.MustCreateActor(t, ctx, persistence, actor)
 
-			w := &ActorWorkflow{store: persistence, dialer: newDanglingDialer()}
+			w := &ActorWorkflow{admission: admission.New(persistence, nil, nil), dialer: newDanglingDialer()}
 			if _, err := w.ensureAteletSuspended(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, created, &ateapipb.ActorTemplate{}); err == nil {
 				t.Fatal("ensureAteletSuspended: want error when atelet is unreachable, got nil")
 			}
@@ -300,9 +301,9 @@ func TestEnsureSuspendedFinalized_NoAssignment(t *testing.T) {
 	}
 	storetest.MustCreateActor(t, ctx, persistence, actor)
 
-	w := &ActorWorkflow{store: persistence}
+	w := &ActorWorkflow{admission: admission.New(persistence, nil, nil)}
 	tmpl := &ateapipb.ActorTemplate{
-		Metadata:       &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "tmpl", Uid: "tmpl-uid-1"},
+		Metadata:       &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "tmpl", Uid: testTemplateUID},
 		SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: testStorageLocation},
 	}
 	stored, err := w.ensureSuspendedFinalized(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, tmpl)
@@ -318,8 +319,8 @@ func TestEnsureSuspendedFinalized_NoAssignment(t *testing.T) {
 	}
 	// The snapshot carries the template it was captured under, so a later
 	// repoint can tell that its guest state no longer matches.
-	if got := stored.GetStatus().GetExternalSnapshot().GetActorTemplateUid(); got != "tmpl-uid-1" {
-		t.Errorf("ExternalSnapshot.ActorTemplateUid = %q, want %q", got, "tmpl-uid-1")
+	if got := stored.GetStatus().GetExternalSnapshot().GetActorTemplateUid(); got != testTemplateUID {
+		t.Errorf("ExternalSnapshot.ActorTemplateUid = %q, want %q", got, testTemplateUID)
 	}
 	if got := stored.GetStatus().GetInProgressSnapshotUri(); got != "" {
 		t.Errorf("InProgressSnapshotUri = %q, want cleared", got)
@@ -483,7 +484,7 @@ func TestEnsureSuspendedFinalized_KeepsReplacedSnapshotOnConflict(t *testing.T) 
 		s.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: previous.String()}
 	})
 
-	w := &ActorWorkflow{store: &conflictingUpdateStore{Interface: persistence}, objectStore: objects}
+	w := &ActorWorkflow{admission: admission.New(&conflictingUpdateStore{Interface: persistence}, nil, nil), objectStore: objects}
 	if _, err := w.ensureSuspendedFinalized(ctx, actorRef, template); apierror.Code(err) != codes.Aborted {
 		t.Fatalf("ensureSuspendedFinalized = %v, want code Aborted", err)
 	}
@@ -567,7 +568,7 @@ func TestEnsureSuspendedFinalized_ReleasesOnlyOwnWorker(t *testing.T) {
 				ActorUid: uid,
 			})
 
-			w := &ActorWorkflow{store: persistence}
+			w := &ActorWorkflow{admission: admission.New(persistence, nil, nil)}
 			tmpl := &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://bucket/root"}}
 			if _, err := w.ensureSuspendedFinalized(ctx, resources.ActorRef{Atespace: "team-a", Name: "shared"}, tmpl); err != nil {
 				t.Fatalf("ensureSuspendedFinalized: %v", err)
@@ -667,7 +668,7 @@ func TestEnsureMarkedSuspending_PausedScopeRejection(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 			persistence := newTestPersistence(t)
-			w := &ActorWorkflow{store: persistence}
+			w := &ActorWorkflow{admission: admission.New(persistence, nil, nil)}
 
 			actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
 			actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
@@ -699,7 +700,7 @@ func TestEnsurePausedSnapshotUploaded_Preconditions(t *testing.T) {
 	t.Run("no node recorded crashes", func(t *testing.T) {
 		ctx := context.Background()
 		persistence := newTestPersistence(t)
-		w := &ActorWorkflow{store: persistence, dialer: newDanglingDialer()}
+		w := &ActorWorkflow{admission: admission.New(persistence, nil, nil), dialer: newDanglingDialer()}
 
 		created := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
 			Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
@@ -725,7 +726,7 @@ func TestEnsurePausedSnapshotUploaded_Preconditions(t *testing.T) {
 	t.Run("no atelet on node stays retryable", func(t *testing.T) {
 		ctx := context.Background()
 		persistence := newTestPersistence(t)
-		w := &ActorWorkflow{store: persistence, dialer: newDanglingDialer()}
+		w := &ActorWorkflow{admission: admission.New(persistence, nil, nil), dialer: newDanglingDialer()}
 
 		created := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
 			Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},

@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/admission"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
@@ -60,7 +61,7 @@ func TestEnsurePausedFinalized_WorkerGone(t *testing.T) {
 	storetest.MustCreateActor(t, ctx, st, actor)
 	// Intentionally NOT creating the worker in store, simulates worker already gone.
 
-	w := &ActorWorkflow{store: st}
+	w := &ActorWorkflow{admission: admission.New(st, nil, nil)}
 	finalized, err := w.ensurePausedFinalized(ctx, actorRef, &ateapipb.ActorTemplate{})
 	if err != nil {
 		t.Fatalf("ensurePausedFinalized: %v", err)
@@ -152,7 +153,7 @@ func TestEnsurePausedFinalized_RecordsContentScope(t *testing.T) {
 				ActorUid: created.GetMetadata().GetUid(),
 			})
 
-			w := &ActorWorkflow{store: st}
+			w := &ActorWorkflow{admission: admission.New(st, nil, nil)}
 			tmpl := &ateapipb.ActorTemplate{
 				SnapshotConfig: &ateapipb.SnapshotConfig{OnPause: tc.onPause},
 			}
@@ -247,7 +248,7 @@ func TestEnsureMarkedPausing_StateMatrix(t *testing.T) {
 	for _, seedState := range allActorStates {
 		ctx := context.Background()
 		persistence := newTestPersistence(t)
-		w := &ActorWorkflow{store: persistence}
+		w := &ActorWorkflow{admission: admission.New(persistence, nil, nil)}
 
 		actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
 
@@ -300,7 +301,7 @@ func TestEnsureAteletPaused_DialFailureLeavesActorRetryable(t *testing.T) {
 			}
 			created := storetest.MustCreateActor(t, ctx, persistence, actor)
 
-			w := &ActorWorkflow{store: persistence, dialer: newDanglingDialer()}
+			w := &ActorWorkflow{admission: admission.New(persistence, nil, nil), dialer: newDanglingDialer()}
 			if _, err := w.ensureAteletPaused(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, created, &ateapipb.ActorTemplate{}); err == nil {
 				t.Fatal("ensureAteletPaused: want error when atelet is unreachable, got nil")
 			}

@@ -45,3 +45,8 @@ func ValidateDeleteAtespaceRequest(ctx context.Context, req *ateapipb.DeleteAtes
 	op := operation.Operation{Type: operation.Create}
 	return Validate_DeleteAtespaceRequest(ctx, op, nil, req, nil)
 }
+
+func ValidateAtespaceCreate(ctx context.Context, fldPath *field.Path, atespace *ateapipb.Atespace) field.ErrorList {
+	op := operation.Operation{Type: operation.Create}
+	return Validate_Atespace(ctx, op, fldPath, atespace, nil)
+}

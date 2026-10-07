@@ -19,14 +19,13 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/admission"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/apivalidation"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/defaults"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"google.golang.org/protobuf/proto"
-	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
 func (s *RPCService) CreateActorEgressPolicy(ctx context.Context, req *ateapipb.CreateActorEgressPolicyRequest) (*ateapipb.EgressPolicy, error) {
@@ -41,11 +40,7 @@ func (s *RPCService) CreateActorEgressPolicy(ctx context.Context, req *ateapipb.
 		return nil, resources.ToAPIError(errs)
 	}
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
-	return s.impl.CreateEgressPolicy(ctx, actorRef, policy)
-}
-
-func (s *ServiceImpl) CreateEgressPolicy(ctx context.Context, actorRef resources.ActorRef, policy *ateapipb.EgressPolicy) (*ateapipb.EgressPolicy, error) {
-	created, err := s.store.CreateEgressPolicy(ctx, actorRef, policy)
+	created, err := s.admission.CreateEgressPolicy(ctx, actorRef, policy)
 	return mapEgressPolicyWrite(created, err)
 }
 
@@ -54,11 +49,9 @@ func (s *RPCService) GetActorEgressPolicy(ctx context.Context, req *ateapipb.Get
 		return nil, resources.ToAPIError(errs)
 	}
 
-	return s.impl.GetEgressPolicy(ctx, resources.ActorRefFromObjectRef(req.GetActor()))
-}
-
-func (s *ServiceImpl) GetEgressPolicy(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.EgressPolicy, error) {
-	policy, err := s.store.GetEgressPolicy(ctx, actorRef)
+	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
+	policy, err := s.admission.GetEgressPolicy(ctx, actorRef)
+	// TODO: Centralize admission/store error-to-apierror mapping once store errors carry descriptive messages.
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, apierror.NotFound("EgressPolicy for actor %s not found", actorRef)
 	}
@@ -77,28 +70,7 @@ func (s *RPCService) UpdateActorEgressPolicy(ctx context.Context, req *ateapipb.
 		return nil, resources.ToAPIError(errs)
 	}
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
-	return s.impl.UpdateEgressPolicy(ctx, actorRef, store.PreconditionFrom(policy), func(toUpdate *ateapipb.EgressPolicy) error {
-		metadata := toUpdate.GetMetadata()
-		proto.Reset(toUpdate)
-		proto.Merge(toUpdate, policy)
-		toUpdate.Metadata = metadata
-		defaults.Apply(toUpdate)
-		return nil
-	})
-}
-
-func (s *ServiceImpl) UpdateEgressPolicy(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapipb.EgressPolicy) error) (*ateapipb.EgressPolicy, error) {
-	updated, err := s.store.UpdateEgressPolicy(ctx, actorRef, precondition, func(toUpdate *ateapipb.EgressPolicy) error {
-		oldVal := proto.Clone(toUpdate).(*ateapipb.EgressPolicy)
-		if err := mutate(toUpdate); err != nil {
-			return err
-		}
-		if errs := apivalidation.ValidateEgressPolicyUpdate(ctx, field.NewPath("egress_policy"), toUpdate, oldVal); len(errs) > 0 {
-			return resources.ToAPIError(errs)
-		}
-		// EgressPolicy has no status or other server-derived fields to verify.
-		return nil
-	})
+	updated, err := s.admission.UpdateEgressPolicy(ctx, actorRef, policy)
 	return mapEgressPolicyWrite(updated, err)
 }
 
@@ -107,15 +79,12 @@ func (s *RPCService) DeleteActorEgressPolicy(ctx context.Context, req *ateapipb.
 		return nil, resources.ToAPIError(errs)
 	}
 
-	return s.impl.DeleteEgressPolicy(ctx, resources.ActorRefFromObjectRef(req.GetActor()), toDeletePreconditions(req.GetOptions()))
-}
-
-func (s *ServiceImpl) DeleteEgressPolicy(ctx context.Context, actorRef resources.ActorRef, precondition store.DeletePreconditions) (*ateapipb.EgressPolicy, error) {
-	deleted, err := s.store.DeleteEgressPolicy(ctx, actorRef, precondition)
+	deleted, err := s.admission.DeleteEgressPolicy(ctx, resources.ActorRefFromObjectRef(req.GetActor()), toDeletePreconditions(req.GetOptions()))
 	return mapEgressPolicyWrite(deleted, err)
 }
 
 func mapEgressPolicyWrite(policy *ateapipb.EgressPolicy, err error) (*ateapipb.EgressPolicy, error) {
+	// TODO: Centralize admission/store error-to-apierror mapping once store errors carry descriptive messages.
 	switch {
 	case err == nil:
 		return policy, nil
@@ -131,6 +100,8 @@ func mapEgressPolicyWrite(policy *ateapipb.EgressPolicy, err error) (*ateapipb.E
 		return nil, apierror.InvalidArgument("EgressPolicy UID and version are required")
 	case errors.Is(err, store.ErrFailedPrecondition):
 		return nil, apierror.FailedPrecondition("parent Actor does not exist")
+	case errors.Is(err, admission.ErrInvalid):
+		return nil, apierror.InvalidArgument("%w", err)
 	default:
 		return nil, fmt.Errorf("while writing EgressPolicy: %w", err)
 	}

@@ -82,7 +82,7 @@ func (w *WorkerWorkflow) loadWorkerForDelete(ctx context.Context, name string) (
 	ctx, done := stepSpan(ctx, "LoadWorkerForDelete")
 	defer func() { err = done(err) }()
 
-	worker, err := w.store.GetWorker(ctx, name)
+	worker, err := w.admission.GetWorker(ctx, name)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, apierror.NotFound("Worker %s not found", name)
@@ -101,12 +101,9 @@ func (w *WorkerWorkflow) ensureDraining(ctx context.Context, worker *ateapipb.Wo
 	if worker.GetStatus().GetState() == ateapipb.WorkerState_WORKER_STATE_DRAINING {
 		return worker, nil
 	}
-	drained, err := w.store.UpdateWorker(ctx, worker.GetMetadata().GetName(), store.PreconditionFrom(worker),
-		func(toUpdate *ateapipb.Worker) error {
-			if toUpdate.Status == nil {
-				toUpdate.Status = &ateapipb.WorkerStatus{}
-			}
-			toUpdate.Status.State = ateapipb.WorkerState_WORKER_STATE_DRAINING
+	drained, err := w.admission.UpdateWorkerStatus(ctx, worker.GetMetadata().GetName(), store.PreconditionFrom(worker),
+		func(status *ateapipb.WorkerStatus) error {
+			status.State = ateapipb.WorkerState_WORKER_STATE_DRAINING
 			return nil
 		})
 	if err != nil {
@@ -128,7 +125,7 @@ func (w *WorkerWorkflow) ensureBoundActorsReleased(ctx context.Context, worker *
 	// most a thousand, so stopping at the first would leave the rest bound.
 	var released int
 	for token := ""; ; {
-		page, err := w.store.ListWorkerAssignments(ctx, worker.GetMetadata().GetName(), store.ListOptions{PageToken: token})
+		page, err := w.admission.ListWorkerAssignments(ctx, worker.GetMetadata().GetName(), store.ListOptions{PageToken: token})
 		if err != nil {
 			return fmt.Errorf("while listing the assignments of worker %s: %w", worker.GetMetadata().GetName(), err)
 		}
@@ -168,7 +165,7 @@ func (w *WorkerWorkflow) releaseBoundActor(ctx context.Context, worker *ateapipb
 	}
 	name := worker.GetMetadata().GetName()
 	actorRef := resources.ActorRefFromObjectRef(assignment.GetActor())
-	actor, err := w.store.GetActor(ctx, actorRef)
+	actor, err := w.admission.GetActor(ctx, actorRef)
 	if errors.Is(err, store.ErrNotFound) {
 		markSkipped(ctx, "assigned actor no longer exists")
 		return nil
@@ -221,16 +218,16 @@ func (w *WorkerWorkflow) crashBoundActor(ctx context.Context, worker *ateapipb.W
 	slog.LogAttrs(ctx, slog.LevelInfo, logMsg,
 		append(ateattr.ActorLogAttrs(resources.ActorAttributionFromActor(actor)),
 			slog.String("worker", name))...)
-	_, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
-		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_CRASHED
+	_, err := w.admission.UpdateActorStatus(ctx, actorRef, store.PreconditionFrom(actor), func(status *ateapipb.ActorStatus) error {
+		status.State = ateapipb.ActorState_ACTOR_STATE_CRASHED
 		if !wasAlreadyCrashed {
-			toUpdate.Status.Crash = newActorCrash(opName, crashMsg)
+			status.Crash = newActorCrash(opName, crashMsg)
 		}
-		toUpdate.Status.WorkerAssignment = nil
+		status.WorkerAssignment = nil
 		// Local in-progress checkpoint dies with the sandbox that was writing
 		// it. The external in-progress checkpoint is kept so delete or revert
 		// can delete it.
-		toUpdate.Status.InProgressLocalSnapshotName = ""
+		status.InProgressLocalSnapshotName = ""
 		return nil
 	})
 	switch {
@@ -259,7 +256,7 @@ func (w *WorkerWorkflow) finalizeDeleted(ctx context.Context, name string, preco
 	ctx, done := stepSpan(ctx, "FinalizeDeleted")
 	defer func() { err = done(err) }()
 
-	deleted, err := w.store.DeleteWorker(ctx, name, precondition)
+	deleted, err := w.admission.DeleteWorker(ctx, name, precondition)
 	if err != nil {
 		switch {
 		case errors.Is(err, store.ErrNotFound):

@@ -20,6 +20,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/admission"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/internal/apierror"
@@ -37,7 +38,7 @@ func newWorkerDeleteWorkflow(t *testing.T) (*WorkerWorkflow, store.Interface) {
 	t.Helper()
 	persistence, cleanup := storetest.SetupTestStore(t)
 	t.Cleanup(cleanup)
-	return NewWorkerWorkflow(persistence), persistence
+	return NewWorkerWorkflow(admission.New(persistence, nil, nil)), persistence
 }
 
 // apiActorRef names the Actor seedAPIActor stores.
@@ -87,7 +88,7 @@ func TestDeleteWorkerWorkflow_DrainsBeforeSweeping(t *testing.T) {
 	actor := seedAPIActor(t, ctx, persistence, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 	assignAPIWorker(t, ctx, persistence, apiWorkerName, actor.GetMetadata().GetUid())
 
-	wf := NewWorkerWorkflow(failingUpdateActorStore{Interface: persistence, err: errors.New("release failed")})
+	wf := NewWorkerWorkflow(admission.New(failingUpdateActorStore{Interface: persistence, err: errors.New("release failed")}, nil, nil))
 	if _, err := wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{}); err == nil {
 		t.Fatal("DeleteWorker() = nil error, want the release failure reported")
 	}
@@ -311,7 +312,7 @@ func TestDeleteWorkerWorkflow_FailedReleaseKeepsWorker(t *testing.T) {
 			actor := seedAPIActor(t, ctx, persistence, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 			assignAPIWorker(t, ctx, persistence, apiWorkerName, actor.GetMetadata().GetUid())
 
-			wf := NewWorkerWorkflow(failingUpdateActorStore{Interface: persistence, err: tc.updateErr})
+			wf := NewWorkerWorkflow(admission.New(failingUpdateActorStore{Interface: persistence, err: tc.updateErr}, nil, nil))
 			_, err := wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{})
 			if err == nil {
 				t.Fatal("DeleteWorker() = nil error, want the release failure reported")
@@ -344,7 +345,7 @@ func TestDeleteWorkerWorkflow_ActorDeletedDuringRelease(t *testing.T) {
 	actor := seedAPIActor(t, ctx, persistence, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 	assignAPIWorker(t, ctx, persistence, apiWorkerName, actor.GetMetadata().GetUid())
 
-	wf := NewWorkerWorkflow(failingUpdateActorStore{Interface: persistence, err: store.ErrNotFound})
+	wf := NewWorkerWorkflow(admission.New(failingUpdateActorStore{Interface: persistence, err: store.ErrNotFound}, nil, nil))
 	if _, err := wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{}); err != nil {
 		t.Fatalf("DeleteWorker() failed: %v", err)
 	}

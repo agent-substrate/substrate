@@ -55,6 +55,12 @@ func ValidateDeleteActorTemplateRequest(ctx context.Context, req *ateapipb.Delet
 	return Validate_DeleteActorTemplateRequest(ctx, op, nil, req, nil)
 }
 
+func ValidateActorTemplateCreate(ctx context.Context, fldPath *field.Path, template *ateapipb.ActorTemplate) field.ErrorList {
+	op := operation.Operation{Type: operation.Create}
+	errs := ValidateCustom_CreateActorTemplateRequest_ActorTemplate(ctx, op, fldPath, template, nil)
+	return append(errs, Validate_ActorTemplate(ctx, op, fldPath, template, nil)...)
+}
+
 func ValidateActorTemplateUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVal *ateapipb.ActorTemplate) field.ErrorList {
 	// Call the generated validation.
 	op := operation.Operation{Type: operation.Update}

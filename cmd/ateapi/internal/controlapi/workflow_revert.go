@@ -105,7 +105,7 @@ func (w *ActorWorkflow) loadActorForRevert(ctx context.Context, actorRef resourc
 	ctx, done := stepSpan(ctx, "LoadActorForRevert")
 	defer func() { err = done(err) }()
 
-	actor, err := w.store.GetActor(ctx, actorRef)
+	actor, err := w.admission.GetActor(ctx, actorRef)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, nil, apierror.NotFound("Actor %s not found", actorRef)
@@ -113,7 +113,7 @@ func (w *ActorWorkflow) loadActorForRevert(ctx context.Context, actorRef resourc
 		return nil, nil, fmt.Errorf("while fetching actor: %w", err)
 	}
 
-	actorTemplate, err := resolveActorTemplate(ctx, w.store, actor)
+	actorTemplate, err := resolveActorTemplate(ctx, w.admission, actor)
 	if errors.Is(err, errActorTemplateNotFound) {
 		slog.WarnContext(ctx, "Reverting an actor whose template no longer resolves",
 			slog.Any("actor", actorRef),
@@ -143,8 +143,8 @@ func (w *ActorWorkflow) ensureMarkedReverting(ctx context.Context, actorRef reso
 		return nil, apierror.FailedPrecondition("Actor %s is not in a revertable state (got: %v, want one of %v)", actorRef, st, revertableStates)
 	}
 
-	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
-		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_REVERTING
+	storedActor, err := w.admission.UpdateActorStatus(ctx, actorRef, store.PreconditionFrom(actor), func(status *ateapipb.ActorStatus) error {
+		status.State = ateapipb.ActorState_ACTOR_STATE_REVERTING
 		return nil
 	})
 	if err != nil {
@@ -174,7 +174,7 @@ func (w *ActorWorkflow) ensureWorkerDiscarded(ctx context.Context, actorRef reso
 	defer func() { err = done(err) }()
 
 	if assignment := actor.GetStatus().GetWorkerAssignment(); assignment != nil {
-		hosted, err := workerHostsActor(ctx, w.store, assignment.GetWorker().GetName(), actor.GetMetadata().GetUid())
+		hosted, err := workerHostsActor(ctx, w.admission, assignment.GetWorker().GetName(), actor.GetMetadata().GetUid())
 		if err != nil {
 			return err
 		}
@@ -189,7 +189,7 @@ func (w *ActorWorkflow) ensureWorkerDiscarded(ctx context.Context, actorRef reso
 			if err := w.ensureVolumesDetached(ctx, actor, actorTemplate, "DetachVolumesForRevert", ateattr.OperationRevert); err != nil {
 				return err
 			}
-			if _, _, err := releaseWorker(ctx, w.store, actor); err != nil {
+			if _, _, err := releaseWorker(ctx, w.admission, actor); err != nil {
 				return fmt.Errorf("while releasing worker: %w", err)
 			}
 		}
@@ -238,7 +238,7 @@ func (w *ActorWorkflow) ensureRevertedFinalized(ctx context.Context, actorRef re
 	ctx, done := stepSpan(ctx, "FinalizeReverted")
 	defer func() { err = done(err) }()
 
-	latestActor, err := w.store.GetActor(ctx, actorRef)
+	latestActor, err := w.admission.GetActor(ctx, actorRef)
 	if err != nil {
 		return nil, err
 	}
@@ -246,13 +246,13 @@ func (w *ActorWorkflow) ensureRevertedFinalized(ctx context.Context, actorRef re
 		return nil, apierror.FailedPrecondition("FinalizeReverted prerequisite not met for Actor: %s (got: %v, want %s)", actorRef, got, ateapipb.ActorState_ACTOR_STATE_REVERTING)
 	}
 
-	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapipb.Actor) error {
-		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
-		toUpdate.Status.WorkerAssignment = nil
-		toUpdate.Status.InProgressSnapshotUri = ""
-		toUpdate.Status.InProgressLocalSnapshotName = ""
-		toUpdate.Status.LocalSnapshot = nil
-		toUpdate.Status.Crash = nil
+	storedActor, err := w.admission.UpdateActorStatus(ctx, actorRef, store.PreconditionFrom(latestActor), func(status *ateapipb.ActorStatus) error {
+		status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
+		status.WorkerAssignment = nil
+		status.InProgressSnapshotUri = ""
+		status.InProgressLocalSnapshotName = ""
+		status.LocalSnapshot = nil
+		status.Crash = nil
 		return nil
 	})
 	if err != nil {

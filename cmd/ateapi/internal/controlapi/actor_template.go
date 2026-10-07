@@ -19,14 +19,13 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/admission"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/apivalidation"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/defaults"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"google.golang.org/protobuf/proto"
-	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
 func (s *RPCService) CreateActorTemplate(ctx context.Context, req *ateapipb.CreateActorTemplateRequest) (*ateapipb.ActorTemplate, error) {
@@ -44,39 +43,26 @@ func (s *RPCService) CreateActorTemplate(ctx context.Context, req *ateapipb.Crea
 		return nil, resources.ToAPIError(errs)
 	}
 
-	// config_name is required; the declarative validation has already
-	// rejected an empty one.
-	if _, err := resolveTemplateSandboxConfig(s.sandboxConfigLister, in.GetSandboxConfig()); err != nil {
-		return nil, err
-	}
-
 	templateRef := resources.ActorTemplateRefFromActorTemplate(in)
 
-	stored, err := s.impl.CreateActorTemplate(ctx, in)
+	stored, err := s.admission.CreateActorTemplate(ctx, in)
 	if err != nil {
-		if errors.Is(err, store.ErrAlreadyExists) {
+		// TODO: Centralize admission/store error-to-apierror mapping once store errors carry descriptive messages.
+		switch {
+		case errors.Is(err, store.ErrAlreadyExists):
 			return nil, apierror.AlreadyExists("ActorTemplate %s already exists", templateRef)
-		}
-		if errors.Is(err, store.ErrFailedPrecondition) {
+		case errors.Is(err, store.ErrFailedPrecondition):
 			return nil, apierror.FailedPrecondition("%v", err)
+		case errors.Is(err, admission.ErrInvalid):
+			return nil, apierror.InvalidArgument("%w", err)
+		case errors.Is(err, admission.ErrFailedPrecondition):
+			return nil, apierror.FailedPrecondition("%w", err)
+		default:
+			return nil, fmt.Errorf("while recording actor template: %w", err)
 		}
-		return nil, fmt.Errorf("while recording actor template: %w", err)
 	}
 
 	return stored, nil
-}
-
-func (s *ServiceImpl) CreateActorTemplate(ctx context.Context, inTemplate *ateapipb.ActorTemplate) (*ateapipb.ActorTemplate, error) {
-	// Build the stored object: status is server-owned and starts empty.
-	outTemplate := proto.Clone(inTemplate).(*ateapipb.ActorTemplate)
-	outTemplate.Status = &ateapipb.ActorTemplateStatus{}
-
-	// Validate the final value before storing it.
-	if errs := apivalidation.ValidateActorTemplateUpdate(ctx, field.NewPath("actor_template"), outTemplate, inTemplate); len(errs) > 0 {
-		return nil, toGRPCInternalError(errs)
-	}
-
-	return s.store.CreateActorTemplate(ctx, outTemplate)
 }
 
 func (s *RPCService) GetActorTemplate(ctx context.Context, req *ateapipb.GetActorTemplateRequest) (*ateapipb.ActorTemplate, error) {
@@ -85,7 +71,8 @@ func (s *RPCService) GetActorTemplate(ctx context.Context, req *ateapipb.GetActo
 	}
 
 	templateRef := resources.ActorTemplateRefFromObjectRef(req.GetActorTemplate())
-	template, err := s.impl.GetActorTemplate(ctx, templateRef)
+	template, err := s.admission.GetActorTemplate(ctx, templateRef)
+	// TODO: Centralize admission/store error-to-apierror mapping once store errors carry descriptive messages.
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, apierror.NotFound("ActorTemplate %s not found", templateRef)
 	} else if err != nil {
@@ -95,17 +82,12 @@ func (s *RPCService) GetActorTemplate(ctx context.Context, req *ateapipb.GetActo
 	return template, nil
 }
 
-func (s *ServiceImpl) GetActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef) (*ateapipb.ActorTemplate, error) {
-	// TODO: implement this
-	return s.store.GetActorTemplate(ctx, templateRef)
-}
-
 func (s *RPCService) ListActorTemplates(ctx context.Context, req *ateapipb.ListActorTemplatesRequest) (*ateapipb.ListActorTemplatesResponse, error) {
 	if errs := apivalidation.ValidateListActorTemplatesRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
 	}
 
-	page, err := s.impl.ListActorTemplates(ctx, req.GetAtespace(), store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
+	page, err := s.admission.ListActorTemplates(ctx, req.GetAtespace(), store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
 	if err != nil {
 		return nil, mapListError(fmt.Errorf("while listing actor templates in db: %w", err))
 	}
@@ -115,34 +97,11 @@ func (s *RPCService) ListActorTemplates(ctx context.Context, req *ateapipb.ListA
 	}, nil
 }
 
-func (s *ServiceImpl) ListActorTemplates(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.ActorTemplate], error) {
-	// TODO: implement this
-	return s.store.ListActorTemplates(ctx, atespace, opts)
-}
-
 func (s *RPCService) DeleteActorTemplate(ctx context.Context, req *ateapipb.DeleteActorTemplateRequest) (*ateapipb.ActorTemplate, error) {
 	if errs := apivalidation.ValidateDeleteActorTemplateRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
 	}
 	return s.actorWorkflow.DeleteActorTemplate(ctx, resources.ActorTemplateRefFromObjectRef(req.GetActorTemplate()), toDeletePreconditions(req.GetOptions()))
-}
-
-func (s *ServiceImpl) DeleteActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.DeletePreconditions) (*ateapipb.ActorTemplate, error) {
-	// TODO: implement this
-	return s.store.DeleteActorTemplate(ctx, templateRef, precondition)
-}
-
-func (s *ServiceImpl) UpdateActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, precondition store.Precondition, mutate func(dbTemplate *ateapipb.ActorTemplate) error) (*ateapipb.ActorTemplate, error) {
-	// ActorTemplates are immutable to clients: there is no update RPC, and
-	// the only writer is the template reconciler, which updates status
-	// against the store directly. The store enforces metadata immutability,
-	// so this layer has nothing to add.
-	return s.store.UpdateActorTemplate(ctx, templateRef, precondition, mutate)
-}
-
-// actorTemplateGetter is the storage subset template resolution needs.
-type actorTemplateGetter interface {
-	GetActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef) (*ateapipb.ActorTemplate, error)
 }
 
 // errActorTemplateNotFound matches (via errors.Is) resolution failures where
@@ -154,9 +113,9 @@ var errActorTemplateNotFound = apierror.FailedPrecondition("actor template not f
 // resolveActorTemplate resolves the substrate ActorTemplate the actor's
 // actor_template ref names. A missing template surfaces as
 // errActorTemplateNotFound.
-func resolveActorTemplate(ctx context.Context, st actorTemplateGetter, actor *ateapipb.Actor) (*ateapipb.ActorTemplate, error) {
+func resolveActorTemplate(ctx context.Context, admission *admission.Admission, actor *ateapipb.Actor) (*ateapipb.ActorTemplate, error) {
 	templateRef := resources.ActorTemplateRefFromObjectRef(actor.GetActorTemplate())
-	template, err := st.GetActorTemplate(ctx, templateRef)
+	template, err := admission.GetActorTemplate(ctx, templateRef)
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, fmt.Errorf("%w; ObjectRef: %s ", errActorTemplateNotFound, templateRef)
 	}

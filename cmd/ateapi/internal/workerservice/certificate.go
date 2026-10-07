@@ -50,7 +50,7 @@ func (s *Server) MintAteomActorCertificate(ctx context.Context, req *ateapipb.Mi
 
 	// Verify that this actor exists in the store. It doesn't need to be
 	// running, since we may need to issue certificates during actor boot / resume.
-	dbActor, err := s.store.GetActor(ctx, resources.ActorRefFromObjectRef(req.GetActor()))
+	dbActor, err := s.admission.GetActor(ctx, resources.ActorRefFromObjectRef(req.GetActor()))
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, apierror.NotFound("actor not found")
 	} else if err != nil {

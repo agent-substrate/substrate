@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/admission"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/authz"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
@@ -71,7 +72,7 @@ func TestAtespace_EndToEndOpenFGAScenarios(t *testing.T) {
 	storeID := storesResp.GetStores()[0].GetId()
 
 	svc := &RPCService{
-		impl: newServiceImpl(persistence, nil),
+		admission: admission.New(persistence, nil, nil),
 	}
 	interceptor := authz.UnaryServerInterceptor(authorizer, true)
 

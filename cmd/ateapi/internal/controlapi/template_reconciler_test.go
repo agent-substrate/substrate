@@ -25,6 +25,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/admission"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/apivalidation"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/apierror"
@@ -36,8 +37,9 @@ import (
 	"k8s.io/apimachinery/pkg/api/operation"
 )
 
-// fakeTemplateStore is an in-memory templateReconcilerStore.
+// fakeTemplateStore is an in-memory store.Interface for ActorTemplateReconciler tests.
 type fakeTemplateStore struct {
+	store.Interface
 	mu        sync.Mutex
 	templates map[resources.ActorTemplateRef]*ateapipb.ActorTemplate
 
@@ -298,7 +300,7 @@ func (c *fakeGoldenControl) callCounts() (creates, resumes, suspends int) {
 
 const (
 	testTemplateName = "tmpl-1"
-	testTemplateUID  = "tmpl-uid-1"
+	testTemplateUID  = "11111111-1111-1111-1111-111111111111"
 )
 
 var testTemplateRef = resources.ActorTemplateRef{Atespace: testAtespace, Name: testTemplateName}
@@ -307,8 +309,9 @@ var testTemplateRef = resources.ActorTemplateRef{Atespace: testAtespace, Name: t
 // has a wakeup probe, so goldenSnapshotWarmupFor returns 0 and reconcileOne
 // drives the golden actor to a snapshot without waiting for a warmup window.
 func testTemplate(opts ...func(*ateapipb.ActorTemplate)) *ateapipb.ActorTemplate {
+	now := timestamppb.Now()
 	tmpl := &ateapipb.ActorTemplate{
-		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testTemplateName, Uid: testTemplateUID, Version: 1},
+		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testTemplateName, Uid: testTemplateUID, Version: 1, CreateTime: now, UpdateTime: now},
 		Containers: []*ateapipb.Container{
 			{Name: "main", Image: "img", WakeupProbe: &ateapipb.ContainerWakeupProbe{}},
 		},
@@ -353,8 +356,8 @@ func withFailed(reason string) func(*ateapipb.ActorTemplate) {
 	}
 }
 
-func newTestTemplateReconciler(persistence templateReconcilerStore, control goldenActorControl) *ActorTemplateReconciler {
-	return NewActorTemplateReconciler(persistence, control, 7*time.Second)
+func newTestTemplateReconciler(persistence store.Interface, control goldenActorControl) *ActorTemplateReconciler {
+	return NewActorTemplateReconciler(admission.New(persistence, nil, nil), control, 7*time.Second)
 }
 
 func TestGoldenSnapshotWarmupFor(t *testing.T) {

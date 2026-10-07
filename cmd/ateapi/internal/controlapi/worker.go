@@ -19,14 +19,13 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/admission"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/apivalidation"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/defaults"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"google.golang.org/protobuf/proto"
-	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
 // ListWorkerActorAssignments lists the Actors a Worker hosts. The assignments are a
@@ -41,14 +40,15 @@ func (s *RPCService) ListWorkerActorAssignments(ctx context.Context, req *ateapi
 	// The Worker is read first so a listing against one that does not exist is
 	// NOT_FOUND rather than an empty page, which a caller cannot tell from a
 	// Worker hosting nothing.
-	if _, err := s.impl.GetWorker(ctx, name); err != nil {
+	if _, err := s.admission.GetWorker(ctx, name); err != nil {
+		// TODO: Centralize admission/store error-to-apierror mapping once store errors carry descriptive messages.
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, apierror.NotFound("Worker %s not found", name)
 		}
 		return nil, fmt.Errorf("while fetching worker %s: %w", name, err)
 	}
 
-	page, err := s.impl.ListWorkerAssignments(ctx, name,
+	page, err := s.admission.ListWorkerAssignments(ctx, name,
 		store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
 	if err != nil {
 		return nil, mapListError(fmt.Errorf("while listing the assignments of worker %s: %w", name, err))
@@ -64,7 +64,7 @@ func (s *RPCService) ListWorkers(ctx context.Context, req *ateapipb.ListWorkersR
 		return nil, resources.ToAPIError(errs)
 	}
 
-	page, err := s.impl.ListWorkers(ctx, store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
+	page, err := s.admission.ListWorkers(ctx, store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
 	if err != nil {
 		return nil, mapListError(fmt.Errorf("while listing workers in db: %w", err))
 	}
@@ -74,17 +74,14 @@ func (s *RPCService) ListWorkers(ctx context.Context, req *ateapipb.ListWorkersR
 	}, nil
 }
 
-func (s *ServiceImpl) ListWorkers(ctx context.Context, opts store.ListOptions) (store.ListResponse[*ateapipb.Worker], error) {
-	return s.store.ListWorkers(ctx, opts)
-}
-
 func (s *RPCService) GetWorker(ctx context.Context, req *ateapipb.GetWorkerRequest) (*ateapipb.Worker, error) {
 	if errs := apivalidation.ValidateGetWorkerRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
 	}
 	name := req.GetWorker().GetName()
 
-	worker, err := s.impl.GetWorker(ctx, name)
+	worker, err := s.admission.GetWorker(ctx, name)
+	// TODO: Centralize admission/store error-to-apierror mapping once store errors carry descriptive messages.
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, apierror.NotFound("Worker %s not found", name)
 	}
@@ -92,14 +89,6 @@ func (s *RPCService) GetWorker(ctx context.Context, req *ateapipb.GetWorkerReque
 		return nil, fmt.Errorf("while getting worker: %w", err)
 	}
 	return worker, nil
-}
-
-// GetWorker returns the Worker with the Actors it hosts, read separately since
-// the assignments are their own records. The one read that pays O(assignments).
-// A failed read is an error, not a Worker reported as hosting nothing: the
-// caller cannot tell those apart.
-func (s *ServiceImpl) GetWorker(ctx context.Context, name string) (*ateapipb.Worker, error) {
-	return s.store.GetWorker(ctx, name)
 }
 
 func (s *RPCService) CreateWorker(ctx context.Context, req *ateapipb.CreateWorkerRequest) (*ateapipb.Worker, error) {
@@ -118,37 +107,17 @@ func (s *RPCService) CreateWorker(ctx context.Context, req *ateapipb.CreateWorke
 		return nil, resources.ToAPIError(errs)
 	}
 
-	// Handle the creation, including validation of the final stored object.
-	return s.impl.CreateWorker(ctx, inWorker)
-}
-
-func (s *ServiceImpl) CreateWorker(ctx context.Context, inWorker *ateapipb.Worker) (*ateapipb.Worker, error) {
-	// A Worker is registered only once its pod is Ready and has an IP, which
-	// makes ACTIVE the only state it can be born in.
-	outWorker := proto.CloneOf(inWorker)
-	// A new Worker hosts no Actors, so none are left from an earlier epoch.
-	outWorker.Status = &ateapipb.WorkerStatus{
-		State:         ateapipb.WorkerState_WORKER_STATE_ACTIVE,
-		ObservedEpoch: inWorker.GetEpoch(),
-	}
-
-	// Capacity is left unset: a Worker holds nothing until its own ateom says
-	// what it has, through WorkerService.SetWorkerCapacity. Nothing is placed
-	// on it in the meantime, which is the point -- the alternative is guessing
-	// on the Worker's behalf and placing against the guess.
-
-	// Verify that the result is properly valid before storing it.
-	if errs := apivalidation.ValidateWorkerUpdate(ctx, field.NewPath("worker"), outWorker, inWorker, true); len(errs) > 0 {
-		return nil, toGRPCInternalError(errs)
-	}
-
-	// Save the data in the storage layer.
-	created, err := s.store.CreateWorker(ctx, outWorker)
+	created, err := s.admission.CreateWorker(ctx, inWorker)
 	if err != nil {
-		if errors.Is(err, store.ErrAlreadyExists) {
+		// TODO: Centralize admission/store error-to-apierror mapping once store errors carry descriptive messages.
+		switch {
+		case errors.Is(err, store.ErrAlreadyExists):
 			return nil, apierror.AlreadyExists("Worker %s already exists", inWorker.GetMetadata().GetName())
+		case errors.Is(err, admission.ErrInvalid):
+			return nil, apierror.InvalidArgument("%w", err)
+		default:
+			return nil, fmt.Errorf("while creating worker: %w", err)
 		}
-		return nil, fmt.Errorf("while creating worker: %w", err)
 	}
 	return created, nil
 }
@@ -157,8 +126,6 @@ func (s *ServiceImpl) CreateWorker(ctx context.Context, inWorker *ateapipb.Worke
 // Only labels and epoch are the caller's to change; a request that alters an
 // immutable field — including by leaving it unset, which would clear it — is
 // rejected.
-// The service layer enforces that with declarative validation against the
-// stored worker inside the update transaction.
 func (s *RPCService) UpdateWorker(ctx context.Context, req *ateapipb.UpdateWorkerRequest) (*ateapipb.Worker, error) {
 	// First scrub any fields that callers are not allowed to set.
 	inWorker := req.Worker
@@ -172,70 +139,8 @@ func (s *RPCService) UpdateWorker(ctx context.Context, req *ateapipb.UpdateWorke
 		return nil, resources.ToAPIError(errs)
 	}
 
-	return s.mutateWorker(ctx, inWorker.GetMetadata().GetName(), store.PreconditionFrom(inWorker), func(toUpdate *ateapipb.Worker) error {
-		// Status and metadata are server-owned fields.
-		status, metadata := toUpdate.GetStatus(), toUpdate.GetMetadata()
-		// Reset + merge from the input worker.
-		proto.Reset(toUpdate)
-		proto.Merge(toUpdate, inWorker)
-		// Restore status and metadata from the server.
-		toUpdate.Status = status
-		toUpdate.Metadata = metadata
-		// Defaults are re-applied to the merged object, so a defaulted field
-		// the request left unset is defaulted again rather than cleared.
-		defaults.Apply(toUpdate)
-		return nil
-	})
-}
-
-func (s *ServiceImpl) UpdateWorker(ctx context.Context, name string, precondition store.Precondition, mutate func(toUpdate *ateapipb.Worker) error) (*ateapipb.Worker, error) {
-	return s.store.UpdateWorker(ctx, name, precondition, func(toUpdate *ateapipb.Worker) error {
-		// Apply the mutation function to the stored value.
-		oldVal := proto.CloneOf(toUpdate)
-		if err := mutate(toUpdate); err != nil {
-			return err
-		}
-		newVal := toUpdate
-
-		// Validate the mutated value before doing any further work. This is
-		// what enforces the immutable fields, since only the stored worker
-		// gives declarative validation an old value to compare against.
-		if errs := apivalidation.ValidateWorkerUpdate(ctx, field.NewPath("worker"), newVal, oldVal, false); len(errs) > 0 {
-			return resources.ToAPIError(errs)
-		}
-
-		// Do any further work on the resource.
-
-		// Validate the final value before storing it.
-		if errs := apivalidation.ValidateWorkerUpdate(ctx, field.NewPath("worker"), newVal, oldVal, true); len(errs) > 0 {
-			return toGRPCInternalError(errs)
-		}
-
-		return nil
-	})
-}
-
-// The assignment operations are pass-throughs: an assignment is its own record,
-// so binding and releasing are single store calls rather than a read-modify-write
-// of the Worker.
-func (s *ServiceImpl) BindActorToWorker(ctx context.Context, workerName string, assignment *ateapipb.ActorAssignment, admit func(*ateapipb.Worker) error) error {
-	return s.store.BindActorToWorker(ctx, workerName, assignment, admit)
-}
-
-func (s *ServiceImpl) ReleaseActorFromWorker(ctx context.Context, workerName string, actorUID string) (*ateapipb.Worker, error) {
-	return s.store.ReleaseActorFromWorker(ctx, workerName, actorUID)
-}
-
-func (s *ServiceImpl) GetWorkerAssignment(ctx context.Context, workerName, actorUID string) (*ateapipb.ActorAssignment, error) {
-	return s.store.GetWorkerAssignment(ctx, workerName, actorUID)
-}
-
-func (s *ServiceImpl) ListWorkerAssignments(ctx context.Context, workerName string, opts store.ListOptions) (store.ListResponse[*ateapipb.ActorAssignment], error) {
-	return s.store.ListWorkerAssignments(ctx, workerName, opts)
-}
-
-func (s *ServiceImpl) FindWorkerHostingActor(ctx context.Context, actorUID string) (string, error) {
-	return s.store.FindWorkerHostingActor(ctx, actorUID)
+	worker, err := s.admission.UpdateWorkerSpec(ctx, inWorker)
+	return mapWorkerUpdate(inWorker.GetMetadata().GetName(), worker, err)
 }
 
 func (s *RPCService) DeleteWorker(ctx context.Context, req *ateapipb.DeleteWorkerRequest) (*ateapipb.Worker, error) {
@@ -245,10 +150,6 @@ func (s *RPCService) DeleteWorker(ctx context.Context, req *ateapipb.DeleteWorke
 	// The delete releases the Actor bound to this Worker before removing the
 	// record, so it is a workflow rather than a single store call.
 	return s.workerWorkflow.DeleteWorker(ctx, req.GetWorker().GetName(), toDeletePreconditions(req.GetOptions()))
-}
-
-func (s *ServiceImpl) DeleteWorker(ctx context.Context, name string, precondition store.DeletePreconditions) (*ateapipb.Worker, error) {
-	return s.store.DeleteWorker(ctx, name, precondition)
 }
 
 func (s *RPCService) DrainWorker(ctx context.Context, req *ateapipb.DrainWorkerRequest) (*ateapipb.Worker, error) {
@@ -261,7 +162,8 @@ func (s *RPCService) DrainWorker(ctx context.Context, req *ateapipb.DrainWorkerR
 	// the store requires come from a read here rather than from the client. A
 	// write that lands in between is reported as a conflict for the caller to
 	// retry, the same as any other guarded update.
-	observed, err := s.impl.GetWorker(ctx, name)
+	observed, err := s.admission.GetWorker(ctx, name)
+	// TODO: Centralize admission/store error-to-apierror mapping once store errors carry descriptive messages.
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, apierror.NotFound("Worker %s not found", name)
 	}
@@ -269,31 +171,27 @@ func (s *RPCService) DrainWorker(ctx context.Context, req *ateapipb.DrainWorkerR
 		return nil, fmt.Errorf("while getting worker to drain: %w", err)
 	}
 
-	return s.mutateWorker(ctx, name, store.PreconditionFrom(observed), func(toUpdate *ateapipb.Worker) error {
-		if toUpdate.GetStatus().GetState() == ateapipb.WorkerState_WORKER_STATE_DRAINING {
+	worker, err := s.admission.UpdateWorkerStatus(ctx, name, store.PreconditionFrom(observed), func(status *ateapipb.WorkerStatus) error {
+		if status.GetState() == ateapipb.WorkerState_WORKER_STATE_DRAINING {
 			// already draining, do nothing
-			return &workerUnchanged{worker: proto.Clone(toUpdate).(*ateapipb.Worker)}
+			return errWorkerUnchanged
 		}
-		toUpdate.Status.State = ateapipb.WorkerState_WORKER_STATE_DRAINING
+		status.State = ateapipb.WorkerState_WORKER_STATE_DRAINING
 		// The assignments are left alone: a draining Worker keeps its Actors
 		// until something releases them. Draining only stops new placements.
 		return nil
 	})
+	if errors.Is(err, errWorkerUnchanged) {
+		return observed, nil
+	}
+	return mapWorkerUpdate(name, worker, err)
 }
 
-// mutateWorker runs mutate against the named Worker and translates what comes
-// back into the RPC's result. A mutation that found nothing to do reports the
-// Worker it saw; anything else is a store error.
-func (s *RPCService) mutateWorker(ctx context.Context, name string, precondition store.Precondition, mutate func(toUpdate *ateapipb.Worker) error) (*ateapipb.Worker, error) {
-	worker, err := s.impl.UpdateWorker(ctx, name, precondition, mutate)
+func mapWorkerUpdate(name string, worker *ateapipb.Worker, err error) (*ateapipb.Worker, error) {
 	if err == nil {
 		return worker, nil
 	}
-
-	var unchanged *workerUnchanged
-	if errors.As(err, &unchanged) {
-		return unchanged.worker, nil
-	}
+	// TODO: Centralize admission/store error-to-apierror mapping once store errors carry descriptive messages.
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		return nil, apierror.NotFound("Worker %s not found", name)
@@ -303,21 +201,15 @@ func (s *RPCService) mutateWorker(ctx context.Context, name string, precondition
 		return nil, apierror.Aborted("concurrent update conflict, please retry")
 	case errors.Is(err, store.ErrPreconditionRequired):
 		return nil, apierror.InvalidArgument("while updating worker %s: %v", name, err)
+	case errors.Is(err, admission.ErrInvalid):
+		return nil, apierror.InvalidArgument("%w", err)
+	default:
+		return nil, fmt.Errorf("while updating worker: %w", err)
 	}
-	return nil, fmt.Errorf("while updating worker: %w", err)
 }
 
-// workerUnchanged ends an UpdateWorker mutation that found its work already
-// done. The store hands a mutation's error straight back and leaves the Worker —
-// and its version — untouched, which is what lets DrainWorker be idempotent: a
-// call with nothing left to do costs no version bump. worker is a copy, because
-// the store is free to reuse or discard the message once mutate returns.
-type workerUnchanged struct {
-	worker *ateapipb.Worker
-}
-
-func (u *workerUnchanged) Error() string { return "worker is already in the requested state" }
-
-func (s *ServiceImpl) WatchWorkers(ctx context.Context) (*store.WorkerWatch, error) {
-	return s.store.WatchWorkers(ctx)
-}
+// errWorkerUnchanged ends an UpdateWorkerStatus mutation that found its work
+// already done. The store hands a mutation's error straight back and leaves
+// the Worker — and its version — untouched, which is what lets DrainWorker be
+// idempotent: a call with nothing left to do costs no version bump.
+var errWorkerUnchanged = errors.New("worker is already in the requested state")

@@ -17,7 +17,7 @@ package controlapi
 import (
 	"testing"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/admission"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -29,7 +29,7 @@ import (
 func TestActorEgressPolicy(t *testing.T) {
 	persistence, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
-	service := &RPCService{impl: &ServiceImpl{store: persistence}}
+	service := &RPCService{admission: admission.New(persistence, nil, nil)}
 	if _, err := persistence.CreateAtespace(t.Context(), &ateapipb.Atespace{
 		Metadata: &ateapipb.ResourceMetadata{Name: testAtespace},
 	}); err != nil {
@@ -97,11 +97,10 @@ func TestActorEgressPolicy(t *testing.T) {
 	if err != nil || !proto.Equal(got, created) {
 		t.Fatalf("policy after create = %v, %v; want %v", got, err, created)
 	}
-	if _, err := service.impl.UpdateEgressPolicy(t.Context(), resources.ActorRefFromObjectRef(actorRef), store.PreconditionFrom(created), func(policy *ateapipb.EgressPolicy) error {
-		policy.Rules[0].Http.Hostnames = nil
-		return nil
-	}); apierror.Code(err) != codes.InvalidArgument {
-		t.Fatalf("invalid internal update status = %v, want InvalidArgument", apierror.Code(err))
+	invalidPolicy := proto.Clone(created).(*ateapipb.EgressPolicy)
+	invalidPolicy.Rules[0].Http.Hostnames = nil
+	if _, err := service.admission.UpdateEgressPolicy(t.Context(), resources.ActorRefFromObjectRef(actorRef), invalidPolicy); err == nil {
+		t.Fatal("invalid internal update succeeded, want error")
 	}
 	replacement := proto.Clone(created).(*ateapipb.EgressPolicy)
 	replacement.Rules = nil

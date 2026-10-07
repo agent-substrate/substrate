@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/admission"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/scheduling"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
@@ -67,7 +68,7 @@ func mustRaiseEpoch(t *testing.T, ctx context.Context, svc *RPCService, persiste
 
 func mustReconcileAssignments(t *testing.T, ctx context.Context, persistence store.Interface) {
 	t.Helper()
-	if err := NewWorkerWorkflow(persistence).ReconcileAssignments(ctx, apiWorkerName); err != nil {
+	if err := NewWorkerWorkflow(admission.New(persistence, nil, nil)).ReconcileAssignments(ctx, apiWorkerName); err != nil {
 		t.Fatalf("ReconcileAssignments() failed: %v", err)
 	}
 }
@@ -375,7 +376,7 @@ func TestReconcileAssignments_WaitsForBusyActor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AcquireLease() failed: %v", err)
 	}
-	err = NewWorkerWorkflow(persistence).ReconcileAssignments(ctx, apiWorkerName)
+	err = NewWorkerWorkflow(admission.New(persistence, nil, nil)).ReconcileAssignments(ctx, apiWorkerName)
 	if !errors.Is(err, errActorBusy) {
 		t.Fatalf("ReconcileAssignments() = %v, want errActorBusy", err)
 	}
@@ -452,7 +453,7 @@ func TestReconcileAssignments_KeepsActorReboundSinceList(t *testing.T) {
 			t.Fatalf("UpdateActor() failed: %v", err)
 		}
 	}}
-	if err := NewWorkerWorkflow(rebinding).ReconcileAssignments(ctx, apiWorkerName); err != nil {
+	if err := NewWorkerWorkflow(admission.New(rebinding, nil, nil)).ReconcileAssignments(ctx, apiWorkerName); err != nil {
 		t.Fatalf("ReconcileAssignments() failed: %v", err)
 	}
 
@@ -481,7 +482,7 @@ func TestReconcileAssignments_RetriesRecordAfterConcurrentBind(t *testing.T) {
 	binding := &hookedStore{Interface: persistence, beforeUpdateWorker: func() {
 		assignAPIWorker(t, ctx, persistence, apiWorkerName, boundUID)
 	}}
-	if err := NewWorkerWorkflow(binding).ReconcileAssignments(ctx, apiWorkerName); err != nil {
+	if err := NewWorkerWorkflow(admission.New(binding, nil, nil)).ReconcileAssignments(ctx, apiWorkerName); err != nil {
 		t.Fatalf("ReconcileAssignments() failed: %v", err)
 	}
 
@@ -515,7 +516,7 @@ func TestReconcileAssignments_LeavesReplacedWorker(t *testing.T) {
 		}
 		seedEpochWorker(t, ctx, persistence, 1, 1)
 	}}
-	if err := NewWorkerWorkflow(replacing).ReconcileAssignments(ctx, apiWorkerName); err != nil {
+	if err := NewWorkerWorkflow(admission.New(replacing, nil, nil)).ReconcileAssignments(ctx, apiWorkerName); err != nil {
 		t.Fatalf("ReconcileAssignments() failed: %v", err)
 	}
 
@@ -533,7 +534,7 @@ func TestReconcileAssignments_FailureKeepsObservedEpoch(t *testing.T) {
 	seedRunningActor(t, ctx, persistence)
 	mustRaiseEpoch(t, ctx, svc, persistence, 2)
 
-	failing := NewWorkerWorkflow(failingUpdateActorStore{Interface: persistence, err: errors.New("crash failed")})
+	failing := NewWorkerWorkflow(admission.New(failingUpdateActorStore{Interface: persistence, err: errors.New("crash failed")}, nil, nil))
 	if err := failing.ReconcileAssignments(ctx, apiWorkerName); err == nil {
 		t.Fatal("ReconcileAssignments() = nil error, want the crash failure reported")
 	}
@@ -571,6 +572,8 @@ func TestAssignWorkerAttempt_StampsWorkerEpoch(t *testing.T) {
 		WorkerPool:      "pool",
 		WorkerPod:       "pod-1",
 		WorkerPodUid:    name,
+		Ips:             []string{"10.0.0.1"},
+		NodeName:        "node-1",
 		SandboxClass:    "gvisor",
 		Epoch:           1,
 		Status:          &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Capacity: &ateapipb.WorkerResources{Actors: 1}},
@@ -584,7 +587,8 @@ func TestAssignWorkerAttempt_StampsWorkerEpoch(t *testing.T) {
 	})
 	cacheCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	wc := workercache.New(persistence, time.Minute)
+	admission := admission.New(persistence, nil, nil)
+	wc := workercache.New(admission, time.Minute)
 	if err := wc.Start(cacheCtx); err != nil {
 		t.Fatalf("workercache.Start: %v", err)
 	}
@@ -597,7 +601,7 @@ func TestAssignWorkerAttempt_StampsWorkerEpoch(t *testing.T) {
 		t.Fatalf("UpdateWorker: %v", err)
 	}
 
-	w := &ActorWorkflow{store: persistence, workerCache: wc, scheduler: scheduling.New(wc)}
+	w := &ActorWorkflow{admission: admission, workerCache: wc, scheduler: scheduling.New(wc)}
 	tmpl := &ateapipb.ActorTemplate{SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR}}
 	stored, _, err := w.assignWorkerAttempt(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, tmpl)
 	if err != nil {

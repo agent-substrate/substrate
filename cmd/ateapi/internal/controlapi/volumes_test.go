@@ -26,6 +26,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/testing/protocmp"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/admission"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/volume"
@@ -92,87 +93,17 @@ func TestActorVolumesStorageClassErrors(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			lister := &fakeStorageClassLister{getErr: tt.getErr}
-			t.Run("initial", func(t *testing.T) {
-				_, err := initialActorVolumes(ctx, lister, tmpl)
-				if got := apierror.Code(err); got != tt.wantCode {
-					t.Fatalf("initialActorVolumes() code = %v, want %v; error = %v", got, tt.wantCode, err)
-				}
-				if !strings.Contains(err.Error(), `StorageClass "standard"`) {
-					t.Errorf("initialActorVolumes() error does not name the StorageClass: %v", err)
-				}
-			})
-			t.Run("create", func(t *testing.T) {
-				res, err := createActorVolumes(ctx, &mockPluginRegistry{}, lister, "actor-uid-123", tmpl, volumes)
-				if got := apierror.Code(err); got != tt.wantCode {
-					t.Fatalf("createActorVolumes() code = %v, want %v; error = %v", got, tt.wantCode, err)
-				}
-				if !strings.Contains(err.Error(), `StorageClass "standard"`) {
-					t.Errorf("createActorVolumes() error does not name the StorageClass: %v", err)
-				}
-				if diff := cmp.Diff(volumes, res, protocmp.Transform()); diff != "" {
-					t.Errorf("createActorVolumes() did not preserve pending volumes (-want +got):\n%s", diff)
-				}
-			})
+			res, err := createActorVolumes(ctx, &mockPluginRegistry{}, lister, "actor-uid-123", tmpl, volumes)
+			if got := apierror.Code(err); got != tt.wantCode {
+				t.Fatalf("createActorVolumes() code = %v, want %v; error = %v", got, tt.wantCode, err)
+			}
+			if !strings.Contains(err.Error(), `StorageClass "standard"`) {
+				t.Errorf("createActorVolumes() error does not name the StorageClass: %v", err)
+			}
+			if diff := cmp.Diff(volumes, res, protocmp.Transform()); diff != "" {
+				t.Errorf("createActorVolumes() did not preserve pending volumes (-want +got):\n%s", diff)
+			}
 		})
-	}
-}
-
-func TestInitialActorVolumes_PendingState(t *testing.T) {
-	tmpl := &ateapipb.ActorTemplate{
-		Volumes: []*ateapipb.Volume{
-			{
-				Name: "data-vol-1",
-				ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
-					StorageClassName: "standard",
-				},
-			},
-			{
-				Name: "scratch-vol",
-			},
-			{
-				Name:       "durable-vol",
-				DurableDir: &ateapipb.DurableDirVolumeSource{},
-			},
-			{
-				Name: "data-vol-2",
-				ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
-					StorageClassName: "fast",
-				},
-			},
-		},
-	}
-
-	want := []*ateapipb.ExternalVolume{
-		{
-			VolumeName: "data-vol-1",
-			VolumeType: "mock-standard",
-			Status:     ateapipb.ExternalVolume_STATUS_PENDING,
-		},
-		{
-			VolumeName: "data-vol-2",
-			VolumeType: "mock-fast",
-			Status:     ateapipb.ExternalVolume_STATUS_PENDING,
-		},
-	}
-
-	scLister := &fakeStorageClassLister{
-		storageClasses: map[string]*storagev1.StorageClass{
-			"standard": {
-				ObjectMeta:  metav1.ObjectMeta{Name: "standard"},
-				Provisioner: "mock-standard",
-			},
-			"fast": {
-				ObjectMeta:  metav1.ObjectMeta{Name: "fast"},
-				Provisioner: "mock-fast",
-			},
-		},
-	}
-	initVols, err := initialActorVolumes(context.Background(), scLister, tmpl)
-	if err != nil {
-		t.Fatalf("initialActorVolumes failed: %v", err)
-	}
-	if diff := cmp.Diff(want, initVols, protocmp.Transform()); diff != "" {
-		t.Errorf("initialActorVolumes mismatch (-want +got):\n%s", diff)
 	}
 }
 
@@ -453,6 +384,7 @@ func (m *mockPluginRegistry) GetPlugin(ctx context.Context, name string) (volume
 }
 
 type mockDetachStore struct {
+	store.Interface
 	workers map[string]*ateapipb.Worker
 	err     error
 }
@@ -806,7 +738,7 @@ func TestDetachActorVolumes(t *testing.T) {
 				}
 			}
 
-			err := detachActorVolumes(ctx, tt.store, registry, tt.actor, tt.template, "test")
+			err := detachActorVolumes(ctx, admission.New(tt.store, nil, nil), registry, tt.actor, tt.template, "test")
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("detachActorVolumes() error = %v, wantErr %v", err, tt.wantErr)
 			}

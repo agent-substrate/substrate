@@ -54,6 +54,13 @@ func ValidateUpdateGlobalAccessPolicyRequest(ctx context.Context, req *ateapipb.
 	return append(errs, validateBindings(bindingsPath, req.GetAccessPolicy(), validGlobalRoles)...)
 }
 
+// ValidateGlobalAccessPolicyCreate validates a new global policy.
+func ValidateGlobalAccessPolicyCreate(ctx context.Context, fldPath *field.Path, policy *ateapipb.AccessPolicy) field.ErrorList {
+	op := operation.Operation{Type: operation.Create}
+	errs := Validate_AccessPolicy(ctx, op, fldPath, policy, nil)
+	return append(errs, validateBindings(fldPath.Child("bindings"), policy, validGlobalRoles)...)
+}
+
 // ValidateGlobalAccessPolicyUpdate validates an updated global policy against
 // the stored one.
 func ValidateGlobalAccessPolicyUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVal *ateapipb.AccessPolicy) field.ErrorList {
@@ -79,6 +86,13 @@ func ValidateUpdateAtespaceAccessPolicyRequest(ctx context.Context, req *ateapip
 	op := operation.Operation{Type: operation.Create}
 	errs := Validate_UpdateAtespaceAccessPolicyRequest(ctx, op, nil, req, nil)
 	return append(errs, validateBindings(bindingsPath, req.GetAccessPolicy(), validAtespaceRoles)...)
+}
+
+// ValidateAtespaceAccessPolicyCreate validates a new atespace policy.
+func ValidateAtespaceAccessPolicyCreate(ctx context.Context, fldPath *field.Path, policy *ateapipb.AccessPolicy) field.ErrorList {
+	op := operation.Operation{Type: operation.Create}
+	errs := Validate_AccessPolicy(ctx, op, fldPath, policy, nil)
+	return append(errs, validateBindings(fldPath.Child("bindings"), policy, validAtespaceRoles)...)
 }
 
 // ValidateAtespaceAccessPolicyUpdate validates an updated atespace policy

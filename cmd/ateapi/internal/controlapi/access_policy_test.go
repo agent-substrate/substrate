@@ -19,6 +19,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/admission"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/authz"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/internal/apierror"
@@ -47,7 +48,7 @@ func TestAccessPolicy_GlobalAndAtespaceGovernance(t *testing.T) {
 	}
 	persistence.SetPolicyManager(policyManager)
 
-	svc := NewRPCService(persistence, nil, nil, nil, nil, nil, nil, "", nil, nil, "", nil, nil)
+	svc := NewRPCService(admission.New(persistence, nil, nil), nil, nil, nil, nil, nil, nil, "", nil, nil, "", nil, nil)
 	interceptor := authz.UnaryServerInterceptor(authorizer, true)
 
 	userCtx := func(id string) context.Context {

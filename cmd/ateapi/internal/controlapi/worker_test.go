@@ -16,10 +16,12 @@ package controlapi
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"strings"
 	"testing"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/admission"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/internal/apierror"
@@ -66,16 +68,16 @@ func newAPIAssignment(actorUID string) *ateapipb.ActorAssignment {
 // newWorkerAPIService returns a service backed by a real store, which is what
 // makes the compare-and-set assertions below meaningful — a fake would decide
 // the outcome the test is trying to observe.
-// impl is a real ServiceImpl rather than the store itself, as main wires it:
-// the service layer is where a read composes the Worker with records kept
+// admission is a real Admission rather than the store itself, as main wires it:
+// the admission layer is where a read composes the Worker with records kept
 // outside it, so a test that hands RPCService the bare store silently skips
 // that and reports whatever the store row happens to hold.
 func newWorkerAPIService(t *testing.T) (*RPCService, store.Interface) {
 	t.Helper()
 	persistence, cleanup := storetest.SetupTestStore(t)
 	t.Cleanup(cleanup)
-	impl := newServiceImpl(persistence, nil)
-	return &RPCService{impl: impl, workerWorkflow: NewWorkerWorkflow(persistence)}, persistence
+	admission := admission.New(persistence, nil, nil)
+	return &RPCService{admission: admission, workerWorkflow: NewWorkerWorkflow(admission)}, persistence
 }
 
 // seedAPIWorker registers a worker directly through the store and returns it as
@@ -676,15 +678,15 @@ func TestDrainWorker_Errors(t *testing.T) {
 	}
 }
 
-// TestServiceImplUpdateWorker_ImmutableFields pins the immutable-field rule at
-// the layer that now owns it: declarative validation in ServiceImpl, which
-// every write path shares. It moved up from the store contract when the store
+// TestAdmissionUpdateWorkerSpec_ImmutableFields pins the immutable-field rule at
+// the layer that now owns it: declarative validation in Admission, which
+// every spec write path shares. It moved up from the store contract when the store
 // stopped enforcing immutability itself.
-func TestServiceImplUpdateWorker_ImmutableFields(t *testing.T) {
+func TestAdmissionUpdateWorkerSpec_ImmutableFields(t *testing.T) {
 	ctx := context.Background()
 	persistence, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
-	impl := newServiceImpl(persistence, nil)
+	adm := admission.New(persistence, nil, nil)
 
 	// Every case below is rejected, so nothing writes and this stays the
 	// current incarnation for all of them.
@@ -705,12 +707,11 @@ func TestServiceImplUpdateWorker_ImmutableFields(t *testing.T) {
 		// cannot write. See TestUpdateWorker_CannotChangeCapacity.
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := impl.UpdateWorker(ctx, apiWorkerName, store.PreconditionFrom(created), func(toUpdate *ateapipb.Worker) error {
-				tc.mutate(toUpdate)
-				return nil
-			})
-			if got := apierror.Code(err); got != codes.InvalidArgument {
-				t.Fatalf("changing %s returned %v (err %v), want %v", tc.field, got, err, codes.InvalidArgument)
+			toUpdate := proto.Clone(created).(*ateapipb.Worker)
+			tc.mutate(toUpdate)
+			_, err := adm.UpdateWorkerSpec(ctx, toUpdate)
+			if !errors.Is(err, admission.ErrInvalid) {
+				t.Fatalf("changing %s returned %v, want admission.ErrInvalid", tc.field, err)
 			}
 			if !strings.Contains(err.Error(), tc.field) {
 				t.Errorf("error %v does not name the offending field %s", err, tc.field)

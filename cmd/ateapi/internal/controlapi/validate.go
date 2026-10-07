@@ -15,14 +15,8 @@
 package controlapi
 
 import (
-	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"k8s.io/apimachinery/pkg/util/validation/field"
 )
-
-func toGRPCInternalError(errs field.ErrorList) error {
-	return apierror.Internal("%v", errs.ToAggregate())
-}
 
 // scrubResourceMetadataForCreate removes fields that should not be set by the
 // user when creating a resource.

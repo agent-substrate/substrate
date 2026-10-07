@@ -27,6 +27,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/admission"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/internal/actorevent"
@@ -280,7 +281,7 @@ func TestCrashActor(t *testing.T) {
 				tt.setup(t, ctx, st)
 			}
 
-			err := crashActor(ctx, st, actorRef, ateattr.OperationUnknown, "test crash")
+			err := crashActor(ctx, admission.New(st, nil, nil), actorRef, ateattr.OperationUnknown, "test crash")
 
 			tt.check(t, ctx, st, err)
 		})
@@ -291,11 +292,12 @@ func TestCrashActor_RecordsCrash(t *testing.T) {
 	ctx := context.Background()
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
+	admission := admission.New(st, nil, nil)
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
 	seedActor(t, ctx, st, actorRef)
 
 	before := time.Now().Truncate(time.Microsecond)
-	if err := crashActor(ctx, st, actorRef, ateattr.OperationResume, crashMessageWorkerDraining); err != nil {
+	if err := crashActor(ctx, admission, actorRef, ateattr.OperationResume, crashMessageWorkerDraining); err != nil {
 		t.Fatalf("crashActor() = %v, want nil", err)
 	}
 	first, err := st.GetActor(ctx, actorRef)
@@ -311,7 +313,7 @@ func TestCrashActor_RecordsCrash(t *testing.T) {
 	}
 
 	// Crashing an already-crashed actor, as a concurrent crash does, keeps the first crash.
-	if err := crashActor(ctx, st, actorRef, ateattr.OperationResume, crashMessageWorkerGone); err != nil {
+	if err := crashActor(ctx, admission, actorRef, ateattr.OperationResume, crashMessageWorkerGone); err != nil {
 		t.Fatalf("second crashActor() = %v, want nil", err)
 	}
 	second, err := st.GetActor(ctx, actorRef)
@@ -447,7 +449,7 @@ func TestHandleAteletError(t *testing.T) {
 			seedActor(t, ctx, st, actorRef)
 			seedWorker(t, ctx, st, actorRef)
 
-			err := handleAteletError(tt.ctx, st, actorRef, ateattr.OperationResume, tt.rpc, tt.isTerminateRPC, tt.err)
+			err := handleAteletError(tt.ctx, admission.New(st, nil, nil), actorRef, ateattr.OperationResume, tt.rpc, tt.isTerminateRPC, tt.err)
 			if got := apierror.Code(err); got != tt.wantCode {
 				t.Errorf("apierror.Code(handleAteletError()) = %v, want %v (err: %v)", got, tt.wantCode, err)
 			}
@@ -560,7 +562,7 @@ func TestCrashActor_Metrics(t *testing.T) {
 	}
 	storetest.MustCreateActor(t, ctx, st, actor)
 
-	if err := crashActor(ctx, st, actorRef, ateattr.OperationResume, "test crash"); err != nil {
+	if err := crashActor(ctx, admission.New(st, nil, nil), actorRef, ateattr.OperationResume, "test crash"); err != nil {
 		t.Fatalf("crashActor: %v", err)
 	}
 
@@ -659,7 +661,7 @@ func TestCrashActorReleaseFailureLeavesWorkerReclaimable(t *testing.T) {
 	seedWorker(t, ctx, st, actorRef)
 
 	releaseErr := errors.New("state store unavailable")
-	err := crashActor(ctx, failingReleaseStore{Interface: st, err: releaseErr}, actorRef, ateattr.OperationUnknown, "test crash")
+	err := crashActor(ctx, admission.New(failingReleaseStore{Interface: st, err: releaseErr}, nil, nil), actorRef, ateattr.OperationUnknown, "test crash")
 
 	if err == nil {
 		t.Fatal("crashActor() = nil, want error")
@@ -844,6 +846,7 @@ func TestCrashActor_RecordAndCounterAgree(t *testing.T) {
 	ctx := context.Background()
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
+	admission := admission.New(st, nil, nil)
 
 	actorRef := resources.ActorRef{Atespace: "demo-ns", Name: "counter-actor"}
 	storetest.MustCreateActor(t, ctx, st, &ateapipb.Actor{
@@ -852,7 +855,7 @@ func TestCrashActor_RecordAndCounterAgree(t *testing.T) {
 		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING},
 	})
 
-	if err := crashActor(ctx, st, actorRef, ateattr.OperationResume, "test crash"); err != nil {
+	if err := crashActor(ctx, admission, actorRef, ateattr.OperationResume, "test crash"); err != nil {
 		t.Fatalf("crashActor: %v", err)
 	}
 	// The logs exporter is on, so the record goes to OTLP only.
@@ -887,7 +890,7 @@ func TestCrashActor_RecordAndCounterAgree(t *testing.T) {
 	}
 
 	// Re-crashing an already-crashed actor must move neither signal.
-	if err := crashActor(ctx, st, actorRef, ateattr.OperationResume, "test crash"); err != nil {
+	if err := crashActor(ctx, admission, actorRef, ateattr.OperationResume, "test crash"); err != nil {
 		t.Fatalf("second crashActor: %v", err)
 	}
 	if gotEvents := events(); len(gotEvents) != 1 {

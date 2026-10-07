@@ -26,6 +26,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/admission"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/apivalidation"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
@@ -288,7 +289,7 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-a"},
 		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
 	})
-	svc := &RPCService{impl: newServiceImpl(persistence, nil)}
+	svc := &RPCService{admission: admission.New(persistence, nil, nil)}
 
 	// Repointing at a template that does not exist is rejected.
 	_, err := svc.UpdateActor(ctx, &ateapipb.UpdateActorRequest{Actor: &ateapipb.Actor{
@@ -498,7 +499,7 @@ func TestUpdateActor_RepointTemplateStorageLocation(t *testing.T) {
 			wantCode:  codes.Internal,
 		},
 	}
-	svc := &RPCService{impl: newServiceImpl(persistence, nil)}
+	svc := &RPCService{admission: admission.New(persistence, nil, nil)}
 	for i, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
@@ -523,109 +524,6 @@ func TestUpdateActor_RepointTemplateStorageLocation(t *testing.T) {
 			if err == nil {
 				if got := updated.GetActorTemplate().GetName(); got != tt.repointTo {
 					t.Errorf("updated actor_template.name = %q, want %q", got, tt.repointTo)
-				}
-			}
-		})
-	}
-}
-
-// TestValidateTemplateVolumesUnchanged exercises the volumes and
-// per-container mount comparison applied when an actor is repointed at a
-// replacement template.
-func TestValidateTemplateVolumesUnchanged(t *testing.T) {
-	dataVolume := &ateapipb.Volume{Name: "data", DurableDir: &ateapipb.DurableDirVolumeSource{}}
-	scratchVolume := &ateapipb.Volume{Name: "scratch", DurableDir: &ateapipb.DurableDirVolumeSource{}}
-	template := func(volumes []*ateapipb.Volume, containers ...*ateapipb.Container) *ateapipb.ActorTemplate {
-		return &ateapipb.ActorTemplate{Volumes: volumes, Containers: containers}
-	}
-	container := func(name string, mounts ...*ateapipb.VolumeMount) *ateapipb.Container {
-		return &ateapipb.Container{Name: name, Image: "example.com/app:v1", VolumeMounts: mounts}
-	}
-	dataMount := &ateapipb.VolumeMount{Name: "data", MountPath: "/data"}
-	scratchMount := &ateapipb.VolumeMount{Name: "scratch", MountPath: "/scratch"}
-
-	oneVolume := []*ateapipb.Volume{dataVolume}
-	twoVolumes := []*ateapipb.Volume{dataVolume, scratchVolume}
-
-	tests := []struct {
-		name             string
-		oldTmpl, newTmpl *ateapipb.ActorTemplate
-		wantErr          bool
-	}{{
-		name:    "identical volumes and mounts",
-		oldTmpl: template(oneVolume, container("main", dataMount)),
-		newTmpl: template(oneVolume, container("main", dataMount)),
-	}, {
-		name:    "no volumes or mounts on either side",
-		oldTmpl: template(nil, container("main")),
-		newTmpl: template(nil, container("other")),
-	}, {
-		name:    "volume added",
-		oldTmpl: template(oneVolume, container("main", dataMount)),
-		newTmpl: template(twoVolumes, container("main", dataMount)),
-		wantErr: true,
-	}, {
-		name:    "volume removed",
-		oldTmpl: template(twoVolumes, container("main", dataMount)),
-		newTmpl: template(oneVolume, container("main", dataMount)),
-		wantErr: true,
-	}, {
-		name:    "volume renamed",
-		oldTmpl: template(oneVolume, container("main", dataMount)),
-		newTmpl: template([]*ateapipb.Volume{{Name: "data2", DurableDir: &ateapipb.DurableDirVolumeSource{}}}, container("main", dataMount)),
-		wantErr: true,
-	}, {
-		name:    "volume source changed",
-		oldTmpl: template(oneVolume, container("main", dataMount)),
-		newTmpl: template([]*ateapipb.Volume{{Name: "data", Image: &ateapipb.ImageVolumeSource{Reference: "example.com/data@sha256:0f9c04b7387d13ba9d15ec50355f9ad533fee2e5ad25378753a30671f8f9b938"}}}, container("main", dataMount)),
-		wantErr: true,
-	}, {
-		name:    "volume order changed",
-		oldTmpl: template(twoVolumes, container("main", dataMount)),
-		newTmpl: template([]*ateapipb.Volume{scratchVolume, dataVolume}, container("main", dataMount)),
-		wantErr: true,
-	}, {
-		name:    "mount path changed",
-		oldTmpl: template(oneVolume, container("main", dataMount)),
-		newTmpl: template(oneVolume, container("main", &ateapipb.VolumeMount{Name: "data", MountPath: "/mnt/data"})),
-		wantErr: true,
-	}, {
-		name:    "mount added",
-		oldTmpl: template(twoVolumes, container("main", dataMount)),
-		newTmpl: template(twoVolumes, container("main", dataMount, scratchMount)),
-		wantErr: true,
-	}, {
-		name:    "mount removed",
-		oldTmpl: template(oneVolume, container("main", dataMount)),
-		newTmpl: template(oneVolume, container("main")),
-		wantErr: true,
-	}, {
-		name:    "mounted container renamed",
-		oldTmpl: template(oneVolume, container("main", dataMount)),
-		newTmpl: template(oneVolume, container("renamed", dataMount)),
-	}, {
-		name:    "container added with mounts",
-		oldTmpl: template(twoVolumes, container("main", dataMount)),
-		newTmpl: template(twoVolumes, container("main", dataMount), container("sidecar", scratchMount)),
-	}, {
-		name:    "mount order changed",
-		oldTmpl: template(twoVolumes, container("main", dataMount, scratchMount)),
-		newTmpl: template(twoVolumes, container("main", scratchMount, dataMount)),
-		wantErr: true,
-	}, {
-		name:    "mountless container renamed",
-		oldTmpl: template(oneVolume, container("main", dataMount), container("sidecar")),
-		newTmpl: template(oneVolume, container("main", dataMount), container("helper")),
-	}}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := validateTemplateVolumesUnchanged(tt.oldTmpl, tt.newTmpl)
-			if gotErr := err != nil; gotErr != tt.wantErr {
-				t.Fatalf("validateVolumeMountsUnchanged() error = %v, wantErr %v", err, tt.wantErr)
-			}
-			if err != nil {
-				if got := apierror.Code(err); got != codes.FailedPrecondition {
-					t.Errorf("status code = %v, want FailedPrecondition", got)
 				}
 			}
 		})
@@ -679,7 +577,7 @@ func TestUpdateActor_DeleteRecreateRace(t *testing.T) {
 			}
 		},
 	}
-	svc := &RPCService{impl: newServiceImpl(racing, nil)}
+	svc := &RPCService{admission: admission.New(racing, nil, nil)}
 
 	// The client asserts "only update the actor with uid A".
 	original.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}}
@@ -740,7 +638,7 @@ func TestUpdateActor_ConcurrentDisjointUpdates(t *testing.T) {
 			}
 		},
 	}
-	svc := &RPCService{impl: newServiceImpl(racing, nil)}
+	svc := &RPCService{admission: admission.New(racing, nil, nil)}
 
 	// Update operation is changing the worker_selector field, not the actor's state (like the concurrent op)
 	// This update must fail: the racing update bumped the version.
@@ -796,7 +694,7 @@ func rpcServiceWithActor(t *testing.T, actor *ateapipb.Actor) (*RPCService, *ate
 	t.Cleanup(cleanup)
 
 	created := storetest.MustCreateActor(t, context.Background(), persistence, actor)
-	return &RPCService{impl: newServiceImpl(persistence, nil)}, created
+	return &RPCService{admission: admission.New(persistence, nil, nil)}, created
 }
 
 func TestCreateActor_GoldenTagDefault(t *testing.T) {
@@ -851,8 +749,9 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 				}
 				actor.SourceTag = &ateapipb.ObjectRef{Atespace: ref.Atespace, Name: "explicit"}
 			}
-			svc := &ServiceImpl{store: persistence}
-			created, err := svc.CreateActor(ctx, actor)
+			admission := admission.New(persistence, nil, nil)
+			svc := &RPCService{admission: admission}
+			created, err := svc.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: actor})
 			if apierror.Code(err) != wantCode {
 				t.Fatalf("CreateActor = %v, want %v", err, wantCode)
 			}
@@ -874,7 +773,7 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			workflow := &ActorWorkflow{store: persistence}
+			workflow := &ActorWorkflow{admission: admission}
 			_, _, src, err := workflow.loadActorForResume(ctx, resources.ActorRefFromActor(created))
 			if err != nil {
 				t.Fatal(err)
@@ -887,7 +786,7 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 }
 
 type fakeActorServiceStore struct {
-	serviceStore
+	store.Interface
 	actors map[resources.ActorRef]*ateapipb.Actor
 }
 
@@ -930,7 +829,7 @@ func TestMintActorCertificate(t *testing.T) {
 	}
 
 	svc := &RPCService{
-		impl:          fakeStore,
+		admission:     admission.New(fakeStore, nil, nil),
 		actorIDCAPool: caPool,
 	}
 

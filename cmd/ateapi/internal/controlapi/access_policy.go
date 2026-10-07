@@ -19,14 +19,13 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/admission"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/apivalidation"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/defaults"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"google.golang.org/protobuf/proto"
-	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
 func (s *RPCService) CreateGlobalAccessPolicy(ctx context.Context, req *ateapipb.CreateGlobalAccessPolicyRequest) (*ateapipb.AccessPolicy, error) {
@@ -38,11 +37,7 @@ func (s *RPCService) CreateGlobalAccessPolicy(ctx context.Context, req *ateapipb
 	if errs := apivalidation.ValidateCreateGlobalAccessPolicyRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
 	}
-	return s.impl.CreateGlobalAccessPolicy(ctx, policy)
-}
-
-func (s *ServiceImpl) CreateGlobalAccessPolicy(ctx context.Context, policy *ateapipb.AccessPolicy) (*ateapipb.AccessPolicy, error) {
-	created, err := s.store.CreateGlobalAccessPolicy(ctx, policy)
+	created, err := s.admission.CreateGlobalAccessPolicy(ctx, policy)
 	return mapAccessPolicyWrite(created, err)
 }
 
@@ -50,12 +45,9 @@ func (s *RPCService) GetGlobalAccessPolicy(ctx context.Context, req *ateapipb.Ge
 	if errs := apivalidation.ValidateGetGlobalAccessPolicyRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
 	}
-	return s.impl.GetGlobalAccessPolicy(ctx)
-}
-
-func (s *ServiceImpl) GetGlobalAccessPolicy(ctx context.Context) (*ateapipb.AccessPolicy, error) {
-	policy, err := s.store.GetGlobalAccessPolicy(ctx)
+	policy, err := s.admission.GetGlobalAccessPolicy(ctx)
 	if err != nil {
+		// TODO: Centralize admission/store error-to-apierror mapping once store errors carry descriptive messages.
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, apierror.NotFound("Global AccessPolicy not found")
 		}
@@ -72,20 +64,7 @@ func (s *RPCService) UpdateGlobalAccessPolicy(ctx context.Context, req *ateapipb
 	if errs := apivalidation.ValidateUpdateGlobalAccessPolicyRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
 	}
-	return s.impl.UpdateGlobalAccessPolicy(ctx, store.PreconditionFrom(policy), replaceAccessPolicy(policy))
-}
-
-func (s *ServiceImpl) UpdateGlobalAccessPolicy(ctx context.Context, precondition store.Precondition, mutate func(*ateapipb.AccessPolicy) error) (*ateapipb.AccessPolicy, error) {
-	updated, err := s.store.UpdateGlobalAccessPolicy(ctx, precondition, func(toUpdate *ateapipb.AccessPolicy) error {
-		oldVal := proto.Clone(toUpdate).(*ateapipb.AccessPolicy)
-		if err := mutate(toUpdate); err != nil {
-			return err
-		}
-		if errs := apivalidation.ValidateGlobalAccessPolicyUpdate(ctx, field.NewPath("access_policy"), toUpdate, oldVal); len(errs) > 0 {
-			return resources.ToAPIError(errs)
-		}
-		return nil
-	})
+	updated, err := s.admission.UpdateGlobalAccessPolicy(ctx, policy)
 	return mapAccessPolicyWrite(updated, err)
 }
 
@@ -98,11 +77,7 @@ func (s *RPCService) CreateAtespaceAccessPolicy(ctx context.Context, req *ateapi
 	if errs := apivalidation.ValidateCreateAtespaceAccessPolicyRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
 	}
-	return s.impl.CreateAtespaceAccessPolicy(ctx, req.GetAtespace().GetName(), policy)
-}
-
-func (s *ServiceImpl) CreateAtespaceAccessPolicy(ctx context.Context, name string, policy *ateapipb.AccessPolicy) (*ateapipb.AccessPolicy, error) {
-	created, err := s.store.CreateAtespaceAccessPolicy(ctx, name, policy)
+	created, err := s.admission.CreateAtespaceAccessPolicy(ctx, req.GetAtespace().GetName(), policy)
 	return mapAccessPolicyWrite(created, err)
 }
 
@@ -110,12 +85,10 @@ func (s *RPCService) GetAtespaceAccessPolicy(ctx context.Context, req *ateapipb.
 	if errs := apivalidation.ValidateGetAtespaceAccessPolicyRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
 	}
-	return s.impl.GetAtespaceAccessPolicy(ctx, req.GetAtespace().GetName())
-}
-
-func (s *ServiceImpl) GetAtespaceAccessPolicy(ctx context.Context, name string) (*ateapipb.AccessPolicy, error) {
-	policy, err := s.store.GetAtespaceAccessPolicy(ctx, name)
+	name := req.GetAtespace().GetName()
+	policy, err := s.admission.GetAtespaceAccessPolicy(ctx, name)
 	if err != nil {
+		// TODO: Centralize admission/store error-to-apierror mapping once store errors carry descriptive messages.
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, apierror.NotFound("AccessPolicy for atespace %s not found", name)
 		}
@@ -132,20 +105,7 @@ func (s *RPCService) UpdateAtespaceAccessPolicy(ctx context.Context, req *ateapi
 	if errs := apivalidation.ValidateUpdateAtespaceAccessPolicyRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
 	}
-	return s.impl.UpdateAtespaceAccessPolicy(ctx, req.GetAtespace().GetName(), store.PreconditionFrom(policy), replaceAccessPolicy(policy))
-}
-
-func (s *ServiceImpl) UpdateAtespaceAccessPolicy(ctx context.Context, name string, precondition store.Precondition, mutate func(*ateapipb.AccessPolicy) error) (*ateapipb.AccessPolicy, error) {
-	updated, err := s.store.UpdateAtespaceAccessPolicy(ctx, name, precondition, func(toUpdate *ateapipb.AccessPolicy) error {
-		oldVal := proto.Clone(toUpdate).(*ateapipb.AccessPolicy)
-		if err := mutate(toUpdate); err != nil {
-			return err
-		}
-		if errs := apivalidation.ValidateAtespaceAccessPolicyUpdate(ctx, field.NewPath("access_policy"), toUpdate, oldVal); len(errs) > 0 {
-			return resources.ToAPIError(errs)
-		}
-		return nil
-	})
+	updated, err := s.admission.UpdateAtespaceAccessPolicy(ctx, req.GetAtespace().GetName(), policy)
 	return mapAccessPolicyWrite(updated, err)
 }
 
@@ -153,26 +113,12 @@ func (s *RPCService) DeleteAtespaceAccessPolicy(ctx context.Context, req *ateapi
 	if errs := apivalidation.ValidateDeleteAtespaceAccessPolicyRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
 	}
-	return s.impl.DeleteAtespaceAccessPolicy(ctx, req.GetAtespace().GetName(), toDeletePreconditions(req.GetOptions()))
-}
-
-func (s *ServiceImpl) DeleteAtespaceAccessPolicy(ctx context.Context, name string, precondition store.DeletePreconditions) (*ateapipb.AccessPolicy, error) {
-	deleted, err := s.store.DeleteAtespaceAccessPolicy(ctx, name, precondition)
+	deleted, err := s.admission.DeleteAtespaceAccessPolicy(ctx, req.GetAtespace().GetName(), toDeletePreconditions(req.GetOptions()))
 	return mapAccessPolicyWrite(deleted, err)
 }
 
-func replaceAccessPolicy(policy *ateapipb.AccessPolicy) func(*ateapipb.AccessPolicy) error {
-	return func(toUpdate *ateapipb.AccessPolicy) error {
-		metadata := toUpdate.GetMetadata()
-		proto.Reset(toUpdate)
-		proto.Merge(toUpdate, policy)
-		toUpdate.Metadata = metadata
-		defaults.Apply(toUpdate)
-		return nil
-	}
-}
-
 func mapAccessPolicyWrite(policy *ateapipb.AccessPolicy, err error) (*ateapipb.AccessPolicy, error) {
+	// TODO: Centralize admission/store error-to-apierror mapping once store errors carry descriptive messages.
 	switch {
 	case err == nil:
 		return policy, nil
@@ -188,6 +134,8 @@ func mapAccessPolicyWrite(policy *ateapipb.AccessPolicy, err error) (*ateapipb.A
 		return nil, apierror.InvalidArgument("AccessPolicy UID and version are required")
 	case errors.Is(err, store.ErrFailedPrecondition):
 		return nil, apierror.FailedPrecondition("parent Atespace does not exist")
+	case errors.Is(err, admission.ErrInvalid):
+		return nil, apierror.InvalidArgument("%w", err)
 	default:
 		return nil, fmt.Errorf("while writing AccessPolicy: %w", err)
 	}

@@ -200,6 +200,35 @@ func TestValidateUpdateGlobalAccessPolicyRequest(t *testing.T) {
 	}
 }
 
+func TestValidateGlobalAccessPolicyCreate(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name      string
+		policy    *ateapipb.AccessPolicy
+		wantError field.ErrorList
+	}{{
+		name:   "valid",
+		policy: validAccessPolicy(),
+	}, {
+		name: "missing metadata",
+		policy: validAccessPolicy(func(p *ateapipb.AccessPolicy) {
+			p.Metadata = nil
+		}),
+		wantError: field.ErrorList{field.Required(accessPolicyPath.Child("metadata"), "")},
+	}, {
+		name: "editor role",
+		policy: validAccessPolicy(func(p *ateapipb.AccessPolicy) {
+			p.Bindings[0].Role = authz.RoleEditor
+		}),
+		wantError: field.ErrorList{field.NotSupported[string](policyBindings.Index(0).Child("role"), "", nil)},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertValidateErr(t, ValidateGlobalAccessPolicyCreate(ctx, accessPolicyPath, tt.policy), tt.wantError)
+		})
+	}
+}
+
 func TestValidateGlobalAccessPolicyUpdate(t *testing.T) {
 	ctx := context.Background()
 	tests := []struct {
@@ -317,6 +346,37 @@ func TestValidateUpdateAtespaceAccessPolicyRequest(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assertValidateErr(t, ValidateUpdateAtespaceAccessPolicyRequest(ctx, tt.req), tt.wantError)
+		})
+	}
+}
+
+func TestValidateAtespaceAccessPolicyCreate(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name      string
+		policy    *ateapipb.AccessPolicy
+		wantError field.ErrorList
+	}{{
+		name: "valid with editor role",
+		policy: validAccessPolicy(func(p *ateapipb.AccessPolicy) {
+			p.Bindings[1].Role = authz.RoleEditor
+		}),
+	}, {
+		name: "missing metadata",
+		policy: validAccessPolicy(func(p *ateapipb.AccessPolicy) {
+			p.Metadata = nil
+		}),
+		wantError: field.ErrorList{field.Required(accessPolicyPath.Child("metadata"), "")},
+	}, {
+		name: "unknown role",
+		policy: validAccessPolicy(func(p *ateapipb.AccessPolicy) {
+			p.Bindings[0].Role = "admin"
+		}),
+		wantError: field.ErrorList{field.NotSupported[string](policyBindings.Index(0).Child("role"), "", nil)},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertValidateErr(t, ValidateAtespaceAccessPolicyCreate(ctx, accessPolicyPath, tt.policy), tt.wantError)
 		})
 	}
 }

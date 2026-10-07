@@ -44,7 +44,7 @@ func (s *Server) SetWorkerCapacity(ctx context.Context, req *ateapipb.SetWorkerC
 	name := req.GetWorker().GetName()
 
 	// Use authoritative state to authorize the write.
-	worker, err := s.store.GetWorker(ctx, name)
+	worker, err := s.admission.GetWorker(ctx, name)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, apierror.NotFound("Worker %s not found", name)
@@ -65,10 +65,10 @@ func (s *Server) SetWorkerCapacity(ctx context.Context, req *ateapipb.SetWorkerC
 		return &ateapipb.SetWorkerCapacityResponse{Worker: worker}, nil
 	}
 
-	updated, err := s.store.UpdateWorker(ctx, name, store.PreconditionFrom(worker), func(toUpdate *ateapipb.Worker) error {
+	updated, err := s.admission.UpdateWorkerStatus(ctx, name, store.PreconditionFrom(worker), func(status *ateapipb.WorkerStatus) error {
 		// Replaces rather than merges: a Worker reports everything it has, so a
 		// dimension this report leaves out is one it no longer supplies.
-		toUpdate.Status.Capacity = reported
+		status.Capacity = reported
 		return nil
 	})
 	switch {
@@ -77,6 +77,8 @@ func (s *Server) SetWorkerCapacity(ctx context.Context, req *ateapipb.SetWorkerC
 		return nil, apierror.NotFound("Worker %s not found", name)
 	case errors.Is(err, store.ErrUIDConflict), errors.Is(err, store.ErrVersionConflict):
 		return nil, apierror.Aborted("concurrent update conflict, please retry")
+	case errors.Is(err, store.ErrPreconditionRequired):
+		return nil, apierror.InvalidArgument("while updating worker %s: %v", name, err)
 	default:
 		return nil, fmt.Errorf("while recording capacity for worker %s: %w", name, err)
 	}
