@@ -144,6 +144,7 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 	if snapshotURI == "" {
 		t.Fatal("suspended Actor has no external snapshot")
 	}
+	validateSnapshotHardware(t, "suspended source actor", suspended.GetActor().GetStatus().GetExternalSnapshot().GetHardware())
 	// The tag is given its own copy of the snapshot the suspend just wrote, so
 	// it survives the Actor being suspended again or deleted.
 	tagToUpdate, err := clients.SubstrateAPI.CreateTag(ctx, &ateapipb.CreateTagRequest{
@@ -159,6 +160,7 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 	if got := tagToUpdate.GetStatus().GetSnapshot().GetSnapshotUri(); got == "" || got == snapshotURI {
 		t.Fatalf("Tag %s snapshot uri = %q, want a copy of its own", tagRef.GetName(), got)
 	}
+	validateSnapshotHardware(t, "created tag", tagToUpdate.GetStatus().GetSnapshot().GetHardware())
 	wantTagURI, err := resources.NewTagSnapshotURI(tagToUpdate.GetStatus().GetStorageLocation(), tagToUpdate.GetMetadata().GetAtespace(), tagToUpdate.GetMetadata().GetUid())
 	if err != nil {
 		t.Fatalf("NewTagSnapshotURI: %v", err)
@@ -188,15 +190,17 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 		t.Fatalf("failed to publish Tag: %v", err)
 	}
 
-	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{
+	clonedActor, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{
 		Actor: &ateapipb.Actor{
 			Metadata:      &ateapipb.ResourceMetadata{Atespace: demoAtespace, Name: cloneName},
 			ActorTemplate: e2e.TemplateRef(at),
 			SourceTag:     tagRef,
 		},
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("failed to create Actor from Tag: %v", err)
 	}
+	validateSnapshotHardware(t, "actor created from tag", clonedActor.GetStatus().GetExternalSnapshot().GetHardware())
 	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: cloneName}}); err != nil {
 		t.Fatalf("failed to resume cloned Actor: %v", err)
 	}
@@ -603,6 +607,7 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 			Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
 		})
 	}()
+	validateSnapshotHardware(t, "actor created from golden snapshot", createResp.GetStatus().GetExternalSnapshot().GetHardware())
 
 	// Resuming the actor
 	t.Logf("Resuming Actor %q...", actorID)
@@ -632,6 +637,13 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 		t.Fatalf("failed to pause Actor: %v", err)
 	}
 	waitForActorState(ctx, t, clients, actorID, ateapipb.ActorState_ACTOR_STATE_PAUSED)
+	pausedActor, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
+	})
+	if err != nil {
+		t.Fatalf("failed to get paused Actor: %v", err)
+	}
+	validateSnapshotHardware(t, "paused actor local snapshot", pausedActor.GetStatus().GetLocalSnapshot().GetHardware())
 
 	// Resuming the actor
 	t.Logf("Resuming Actor %q again...", actorID)
@@ -671,15 +683,16 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 	}
 	waitForActorState(ctx, t, clients, actorID, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
 
+	suspendedActor, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
+	})
+	if err != nil {
+		t.Fatalf("failed to get suspended Actor: %v", err)
+	}
+	validateSnapshotHardware(t, "suspended actor external snapshot", suspendedActor.GetStatus().GetExternalSnapshot().GetHardware())
 	if tc.suspendWhilePaused {
 		// The suspend must end the node pinning: a suspended actor's snapshot
 		// lives in object storage, not on a node.
-		suspendedActor, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
-		})
-		if err != nil {
-			t.Fatalf("failed to get suspended Actor: %v", err)
-		}
 		if suspendedActor.GetStatus().GetLocalSnapshot() != nil {
 			t.Errorf("suspended Actor still carries LocalSnapshot: %v", suspendedActor.GetStatus().GetLocalSnapshot())
 		}
@@ -705,6 +718,15 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 	validateCounterResponse(t, resp, "after suspend", tc.wantMemoryAfterSuspend, tc.wantFileAfterSuspend)
 	if tc.checkSecondFileCounter {
 		validateSecondFileCounter(t, resp, "after suspend", tc.wantFileAfterSuspend)
+	}
+}
+
+// validateSnapshotHardware asserts that a snapshot's HardwareIdentity was
+// stamped by the worker that captured it.
+func validateSnapshotHardware(t *testing.T, stage string, hw *ateapipb.HardwareIdentity) {
+	t.Helper()
+	if hw.GetAttributes()["architecture"] == "" {
+		t.Errorf("[%s] snapshot hardware = %v, want non-empty architecture attribute", stage, hw)
 	}
 }
 
