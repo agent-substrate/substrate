@@ -4200,9 +4200,8 @@ func TestResumeActor_CrashesIfAssignedWorkerIsDraining(t *testing.T) {
 		t.Fatalf("GetActor failed: %v", err)
 	}
 	if err := tc.persistence.BindActorToWorker(context.Background(), podA, &ateapipb.ActorAssignment{
-		Actor:            &ateapipb.ObjectRef{Atespace: testAtespace, Name: id},
-		ActorUid:         suspended.GetMetadata().GetUid(),
-		ActorTemplateRef: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+		Actor:    &ateapipb.ObjectRef{Atespace: testAtespace, Name: id},
+		ActorUid: suspended.GetMetadata().GetUid(),
 	}, nil); err != nil {
 		t.Fatalf("BindActorToWorker failed: %v", err)
 	}
@@ -4452,9 +4451,8 @@ func TestResumeActor_DanglingWorker(t *testing.T) {
 		t.Fatalf("GetActor failed: %v", err)
 	}
 	if err := tc.persistence.BindActorToWorker(context.Background(), podA, &ateapipb.ActorAssignment{
-		Actor:            &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
-		ActorUid:         suspended.GetMetadata().GetUid(),
-		ActorTemplateRef: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+		Actor:    &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
+		ActorUid: suspended.GetMetadata().GetUid(),
 	}, nil); err != nil {
 		t.Fatalf("BindActorToWorker failed: %v", err)
 	}
@@ -5054,9 +5052,8 @@ func TestDeleteActor_ReleasesAnAssignmentTheActorDoesNotReference(t *testing.T) 
 	// Bind straight through the store, leaving the Actor's backlink unset:
 	// exactly the state a crash between the two writes leaves behind.
 	if err := tc.persistence.BindActorToWorker(ctx, podUID, &ateapipb.ActorAssignment{
-		Actor:            &ateapipb.ObjectRef{Atespace: testAtespace, Name: "orphaned"},
-		ActorUid:         actorUID,
-		ActorTemplateRef: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+		Actor:    &ateapipb.ObjectRef{Atespace: testAtespace, Name: "orphaned"},
+		ActorUid: actorUID,
 	}, nil); err != nil {
 		t.Fatalf("BindActorToWorker failed: %v", err)
 	}

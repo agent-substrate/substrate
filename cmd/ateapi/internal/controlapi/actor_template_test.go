@@ -469,19 +469,3 @@ func TestUpdateActorTemplateMetadata(t *testing.T) {
 		t.Errorf("uid after update = %q, want %q", got, want)
 	}
 }
-
-// TestActorTemplateObjectRef pins that snapshot and assignment records get a
-// fresh copy of the reference, never the actor's own message.
-func TestActorTemplateObjectRef(t *testing.T) {
-	if got := actorTemplateObjectRef(&ateapipb.Actor{}); got != nil {
-		t.Errorf("actorTemplateObjectRef(no ref) = %v, want nil", got)
-	}
-	actor := &ateapipb.Actor{ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "tmpl1"}}
-	got := actorTemplateObjectRef(actor)
-	if got == actor.GetActorTemplate() {
-		t.Error("actorTemplateObjectRef aliases the actor's reference")
-	}
-	if got.GetAtespace() != "team-a" || got.GetName() != "tmpl1" {
-		t.Errorf("actorTemplateObjectRef = %v, want team-a/tmpl1", got)
-	}
-}

@@ -463,7 +463,6 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 		// Record what this claim reserves so release returns the same amount.
 		Resources: admittedResources(constraints),
 	}
-	assignment.ActorTemplateRef = actorTemplateObjectRef(actor)
 
 	// The candidate came from a watch-fed cache, so it may already be full or no
 	// longer eligible. The store re-asks under the Worker's row lock, where the

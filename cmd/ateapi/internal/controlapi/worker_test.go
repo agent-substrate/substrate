@@ -57,9 +57,8 @@ func validWorker(name string, mods ...func(*ateapipb.Worker)) *ateapipb.Worker {
 
 func newAPIAssignment(actorUID string) *ateapipb.ActorAssignment {
 	return &ateapipb.ActorAssignment{
-		ActorTemplateRef: &ateapipb.ObjectRef{Atespace: "ate-system", Name: "tmpl"},
-		Actor:            &ateapipb.ObjectRef{Atespace: "team-a", Name: "actor-1"},
-		ActorUid:         actorUID,
+		Actor:    &ateapipb.ObjectRef{Atespace: "team-a", Name: "actor-1"},
+		ActorUid: actorUID,
 	}
 }
 
