@@ -1,0 +1,67 @@
+# Copyright 2026 Ant Weiss
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../atelet.yaml
+
+# The atelet DaemonSet needs three EKS-specific changes:
+#
+#  - the `atelet` ServiceAccount is annotated for IRSA so the per-node agent
+#    gets its own role, scoped to the snapshot bucket;
+#  - env ATE_STORAGE_BACKEND=s3 + AWS_REGION so the AWS SDK knows where to go
+#    (IRSA injects AWS_ROLE_ARN + AWS_WEB_IDENTITY_TOKEN_FILE automatically);
+#  - the kubelet image-credential-provider hostPath mounts are relocated from
+#    the GKE layout (/home/kubernetes/bin + /etc/srv/kubernetes/cri_auth_config.yaml)
+#    to the EKS AMI layout (/etc/eks/image-credential-provider/{,config.json}).
+#    Without this, atelet cannot pull from ECR with the node's instance identity.
+#
+# volumes merges on name, so replacing hostPath.path takes an inline patch that
+# keeps the surrounding fields intact.
+patches:
+  - patch: |-
+      apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        name: atelet
+        namespace: ate-system
+        annotations:
+          eks.amazonaws.com/role-arn: ${ATELET_ROLE_ARN}
+  - patch: |-
+      apiVersion: apps/v1
+      kind: DaemonSet
+      metadata:
+        name: atelet-${SUBSTRATE_VERSION_SUFFIX}
+        namespace: ate-system
+      spec:
+        template:
+          spec:
+            containers:
+            - name: atelet
+              env:
+              - name: ATE_STORAGE_BACKEND
+                value: s3
+              - name: AWS_REGION
+                value: ${AWS_REGION}
+            volumes:
+            - name: image-credential-provider-bin
+              hostPath:
+                path: /etc/eks/image-credential-provider
+                type: DirectoryOrCreate
+            - name: image-credential-provider-config
+              hostPath:
+                path: /etc/eks/image-credential-provider/config.json
+                type: FileOrCreate

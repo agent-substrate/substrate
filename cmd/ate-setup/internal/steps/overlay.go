@@ -52,12 +52,16 @@ const cordonControlPlaneComponent = installDir + "/components/cordon-control-pla
 // steps.
 func SystemOverlay(cfg *config.Config) string {
 	switch {
-	case cfg.Router == config.RouterAgentgateway && cfg.Kind:
+	case cfg.Router == config.RouterAgentgateway && cfg.IsKind():
 		return installDir + "/kind-agentgateway"
+	case cfg.Router == config.RouterAgentgateway && cfg.IsAWS():
+		return installDir + "/aws-agentgateway"
 	case cfg.Router == config.RouterAgentgateway:
 		return installDir + "/agentgateway"
-	case cfg.Kind:
+	case cfg.IsKind():
 		return installDir + "/kind"
+	case cfg.IsAWS():
+		return installDir + "/aws"
 	default:
 		return installDir + "/base"
 	}

@@ -89,6 +89,27 @@ type Config struct {
 	// Kind selects the local Kind install profile (ATE_INSTALL_KIND).
 	Kind bool
 
+	// AWS selects the EKS install profile (ATE_INSTALL_AWS). It swaps the
+	// kustomize overlay for one that targets S3 + IRSA + the EKS kubelet
+	// credential-provider layout; see manifests/ate-install/aws/. The AWS
+	// profile is mutually exclusive with Kind.
+	AWS bool
+
+	// AWSRegion is the AWS region the control plane runs in. Substituted into
+	// the aws overlay (${AWS_REGION}) alongside the IRSA role ARNs. Required
+	// when AWS is true; ignored otherwise.
+	AWSRegion string
+	// AteAPIServerRoleARN is the IRSA role ARN annotated onto the
+	// ate-api-server ServiceAccount (${ATE_API_SERVER_ROLE_ARN}). The AWS SDK
+	// in the pod exchanges the projected service-account token for AWS creds
+	// against this role, which must have the S3 bucket permissions for
+	// snapshot copy / tag / orphan-delete.
+	AteAPIServerRoleARN string
+	// AteletRoleARN is the IRSA role ARN annotated onto the atelet
+	// ServiceAccount (${ATELET_ROLE_ARN}). It needs the S3 bucket
+	// permissions atelet uses to put / get / delete snapshots.
+	AteletRoleARN string
+
 	// Namespace is the namespace the control plane is installed into, from
 	// ATE_NAMESPACE. It defaults to the canonical installdefaults.SystemNamespace,
 	// so an install that does not set it is unaffected. The checked-in manifests
@@ -244,6 +265,7 @@ type CloudSQLConfig struct {
 // defaulting and validation.
 type Options struct {
 	Kind                           bool
+	AWS                            bool
 	Kubeconfig                     string
 	Context                        string
 	Router                         string
@@ -276,6 +298,11 @@ func Load(opts Options) (*Config, error) {
 	// ATE_INSTALL_KIND is read as well as --kind: hack/install-ate-kind.sh
 	// selects the Kind profile by exporting it.
 	kind := opts.Kind || env["ATE_INSTALL_KIND"] == "true"
+	// Mirror for AWS/EKS. The two profiles are mutually exclusive and that
+	// is enforced in validate; selecting both would ask for the kind overlay
+	// (rustfs + static creds) and the aws overlay (S3 + IRSA) at the same
+	// time, which the overlay selector cannot represent.
+	aws := opts.AWS || env["ATE_INSTALL_AWS"] == "true"
 
 	// Sourcing is skipped for Kind installs the same way the shell kind installer
 	// exports NO_DEV_ENV: the GKE-shaped variables in a developer's file would
@@ -341,6 +368,10 @@ func Load(opts Options) (*Config, error) {
 	cfg := &Config{
 		Root:                              root,
 		Kind:                              kind,
+		AWS:                               aws,
+		AWSRegion:                         env["AWS_REGION"],
+		AteAPIServerRoleARN:               env["ATE_API_SERVER_ROLE_ARN"],
+		AteletRoleARN:                     env["ATELET_ROLE_ARN"],
 		Namespace:                         firstNonEmpty(env["ATE_NAMESPACE"], installdefaults.SystemNamespace),
 		Kubeconfig:                        kubeconfig,
 		Context:                           firstNonEmpty(opts.Context, env["KUBECTL_CONTEXT"]),
@@ -436,6 +467,12 @@ func applyKindDefaults(cfg *Config) {
 func validate(cfg *Config) error {
 	if err := cfg.Images.Validate(); err != nil {
 		return err
+	}
+	// The two cloud profiles each pick a different kustomize overlay (kind/
+	// vs aws/) with incompatible storage and identity assumptions; the
+	// overlay selector in steps/overlay.go cannot represent both at once.
+	if cfg.Kind && cfg.AWS {
+		return fmt.Errorf("--kind and --aws are mutually exclusive (ATE_INSTALL_KIND and ATE_INSTALL_AWS cannot both be true)")
 	}
 	switch cfg.Router {
 	case RouterEnvoy, RouterAgentgateway:
@@ -600,6 +637,12 @@ func validateExtprocService(spec string) error {
 func (c *Config) Size10() bool {
 	return c.ClusterSize == ClusterSizeSize10
 }
+
+// IsKind reports whether the local Kind install profile is selected.
+func (c *Config) IsKind() bool { return c.Kind }
+
+// IsAWS reports whether the AWS/EKS install profile is selected.
+func (c *Config) IsAWS() bool { return c.AWS }
 
 // PostgresSchemaName returns the configured schema, falling back to the
 // shell installer's default. ate-api-server rejects an empty value.

@@ -92,6 +92,9 @@ func init() {
 	f := rootCmd.PersistentFlags()
 	f.BoolVar(&opts.Kind, "kind", false,
 		"Target a local Kind cluster: use the kind overlays, the local registry, and host-architecture builds (or ATE_INSTALL_KIND=true)")
+	f.BoolVar(&opts.AWS, "aws", false,
+		"Target an EKS cluster: use the aws overlay (S3 + IRSA + EKS kubelet credential-provider paths) rather than base. "+
+			"Requires AWS_REGION, ATE_API_SERVER_ROLE_ARN, and ATELET_ROLE_ARN in the environment (or ATE_INSTALL_AWS=true)")
 	f.StringVar(&opts.Kubeconfig, "kubeconfig", "", "Path to the kubeconfig file")
 	f.StringVar(&opts.Context, "context", "", "Name of the kubeconfig context to use (defaults to KUBECTL_CONTEXT)")
 	f.StringVar(&opts.Router, "atenet-dataplane", "", "Atenet ingress and egress dataplane: envoy or agentgateway (default envoy)")
