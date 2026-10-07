@@ -192,15 +192,28 @@ func (e *Env) patchEnvoyDataplaneImage(raw []byte, imageRef string) []byte {
 
 // patchEnvoyConcurrency replaces the - ${E2E_ENVOY_CONCURRENCY} placeholder in
 // the manifest with --concurrency <value> when concurrency is set, or removes
-// the placeholder line when empty.
+// the placeholder line when empty. It also replaces the
+// stats_flush_on_admin: ${E2E_ENVOY_STATS_FLUSH_ON_ADMIN} placeholder in the
+// Envoy bootstrap config with stats_flush_on_admin: true when concurrency is
+// "1", or removes the placeholder line otherwise.
 func (e *Env) patchEnvoyConcurrency(raw []byte, concurrency string) []byte {
-	const placeholder = "- ${E2E_ENVOY_CONCURRENCY}"
+	const (
+		concurrencyPlaceholder = "- ${E2E_ENVOY_CONCURRENCY}"
+		statsFlushPlaceholder  = "stats_flush_on_admin: ${E2E_ENVOY_STATS_FLUSH_ON_ADMIN}"
+	)
 	var out []string
 	for _, line := range strings.Split(string(raw), "\n") {
-		if strings.TrimSpace(line) == placeholder {
+		switch strings.TrimSpace(line) {
+		case concurrencyPlaceholder:
 			if concurrency != "" {
 				indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
 				out = append(out, indent+"- --concurrency", fmt.Sprintf("%s- %q", indent, concurrency))
+			}
+			continue
+		case statsFlushPlaceholder:
+			if concurrency == "1" {
+				indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+				out = append(out, indent+"stats_flush_on_admin: true")
 			}
 			continue
 		}

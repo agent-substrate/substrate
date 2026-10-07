@@ -56,6 +56,9 @@ data:
         # dialling the pod IP, which is IPv4 on an IPv4 cluster.
         socket_address: { address: "::", ipv4_compat: true, port_value: 15000 }
 
+    # E2E_ENVOY_STATS_FLUSH_ON_ADMIN is substituted in renderAtenetEgressManifest
+    stats_flush_on_admin: ${E2E_ENVOY_STATS_FLUSH_ON_ADMIN}
+
     # Required by the mitm_listener below. An internal listener has no socket,
     # so it is reachable only through a cluster with an envoy_internal_address;
     # without this extension registered, that listener silently fails to load.
