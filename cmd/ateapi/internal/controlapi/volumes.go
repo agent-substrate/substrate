@@ -104,6 +104,9 @@ func createActorVolumes(ctx context.Context, registry VolumePluginRegistry, scLi
 		scName := specVol.GetExternalVolumeTemplate().GetStorageClassName()
 		sc, err := scLister.Get(scName)
 		if err != nil {
+			if k8serrors.IsNotFound(err) {
+				return resultVolumes, apierror.FailedPrecondition("StorageClass %q not found", scName)
+			}
 			return resultVolumes, apierror.Internal("failed to get StorageClass %q: %v", scName, err)
 		}
 
