@@ -29,7 +29,6 @@ import (
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/pkg/postgressetup"
 	certsv1beta1 "k8s.io/api/certificates/v1beta1"
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
@@ -40,51 +39,54 @@ import (
 func TestMakeCert(t *testing.T) {
 	for _, tc := range []struct {
 		name                              string
-		mutate                            func(*corev1.Pod, *certsv1beta1.PodCertificateRequest)
+		mutate                            func(*certsv1beta1.PodCertificateRequest)
 		wantDenied, wantError, failUpdate bool
 		lifetime                          time.Duration
 		wantUsername                      string
 	}{
 		{name: "runtime login", lifetime: 24 * time.Hour},
-		{name: "owner login", lifetime: 24 * time.Hour, wantUsername: postgressetup.OwnerUser, mutate: func(_ *corev1.Pod, p *certsv1beta1.PodCertificateRequest) {
+		{name: "owner login", lifetime: 24 * time.Hour, wantUsername: postgressetup.OwnerUser, mutate: func(p *certsv1beta1.PodCertificateRequest) {
 			p.Spec.UnverifiedUserAnnotations[UsernameAnnotation] = postgressetup.OwnerUser
 		}},
-		{name: "missing username", wantDenied: true, mutate: func(_ *corev1.Pod, p *certsv1beta1.PodCertificateRequest) { p.Spec.UnverifiedUserAnnotations = nil }},
-		{name: "administrator username", wantDenied: true, mutate: func(_ *corev1.Pod, p *certsv1beta1.PodCertificateRequest) {
+		{name: "missing username", wantDenied: true, mutate: func(p *certsv1beta1.PodCertificateRequest) { p.Spec.UnverifiedUserAnnotations = nil }},
+		{name: "administrator username", wantDenied: true, mutate: func(p *certsv1beta1.PodCertificateRequest) {
 			p.Spec.UnverifiedUserAnnotations[UsernameAnnotation] = "postgres"
 		}},
-		{name: "unknown username", wantDenied: true, mutate: func(_ *corev1.Pod, p *certsv1beta1.PodCertificateRequest) {
+		{name: "unknown username", wantDenied: true, mutate: func(p *certsv1beta1.PodCertificateRequest) {
 			p.Spec.UnverifiedUserAnnotations[UsernameAnnotation] = "other"
 		}},
-		{name: "unknown annotation", wantDenied: true, mutate: func(_ *corev1.Pod, p *certsv1beta1.PodCertificateRequest) {
+		{name: "unknown annotation", wantDenied: true, mutate: func(p *certsv1beta1.PodCertificateRequest) {
 			p.Spec.UnverifiedUserAnnotations["other.example/username"] = postgressetup.OwnerUser
 		}},
-		{name: "denial status update error", wantError: true, failUpdate: true, mutate: func(_ *corev1.Pod, p *certsv1beta1.PodCertificateRequest) { p.Spec.UnverifiedUserAnnotations = nil }},
-		{name: "short lifetime", lifetime: time.Hour, mutate: func(_ *corev1.Pod, p *certsv1beta1.PodCertificateRequest) {
+		{name: "denial status update error", wantError: true, failUpdate: true, mutate: func(p *certsv1beta1.PodCertificateRequest) { p.Spec.UnverifiedUserAnnotations = nil }},
+		{name: "short lifetime", lifetime: time.Hour, mutate: func(p *certsv1beta1.PodCertificateRequest) {
 			p.Spec.MaxExpirationSeconds = ptr.To(int32(3600))
 		}},
-		{name: "capped lifetime", lifetime: 24 * time.Hour, mutate: func(_ *corev1.Pod, p *certsv1beta1.PodCertificateRequest) {
+		{name: "capped lifetime", lifetime: 24 * time.Hour, mutate: func(p *certsv1beta1.PodCertificateRequest) {
 			p.Spec.MaxExpirationSeconds = ptr.To(int32(7 * 86400))
 		}},
-		{name: "default lifetime", lifetime: 24 * time.Hour, mutate: func(_ *corev1.Pod, p *certsv1beta1.PodCertificateRequest) { p.Spec.MaxExpirationSeconds = nil }},
-		{name: "wrong namespace", wantDenied: true, mutate: func(pod *corev1.Pod, p *certsv1beta1.PodCertificateRequest) {
-			pod.Namespace = "other"
+		{name: "default lifetime", lifetime: 24 * time.Hour, mutate: func(p *certsv1beta1.PodCertificateRequest) { p.Spec.MaxExpirationSeconds = nil }},
+		{name: "wrong namespace", wantDenied: true, mutate: func(p *certsv1beta1.PodCertificateRequest) {
 			p.Namespace = "other"
 		}},
-		{name: "wrong service account", wantDenied: true, mutate: func(pod *corev1.Pod, p *certsv1beta1.PodCertificateRequest) {
-			pod.Spec.ServiceAccountName = "atelet"
+		{name: "wrong service account", wantDenied: true, mutate: func(p *certsv1beta1.PodCertificateRequest) {
 			p.Spec.ServiceAccountName = "atelet"
 		}},
-		{name: "replaced pod", wantError: true, mutate: func(pod *corev1.Pod, _ *certsv1beta1.PodCertificateRequest) { pod.UID = "replacement" }},
-		{name: "pod service account mismatch", wantError: true, mutate: func(pod *corev1.Pod, _ *certsv1beta1.PodCertificateRequest) { pod.Spec.ServiceAccountName = "default" }},
-		{name: "missing pod", wantError: true, mutate: func(_ *corev1.Pod, p *certsv1beta1.PodCertificateRequest) { p.Spec.PodName = "missing" }},
-		{name: "wrong signer", wantError: true, mutate: func(_ *corev1.Pod, p *certsv1beta1.PodCertificateRequest) {
+		{name: "owner from wrong namespace", wantDenied: true, mutate: func(p *certsv1beta1.PodCertificateRequest) {
+			p.Namespace = "other"
+			p.Spec.UnverifiedUserAnnotations[UsernameAnnotation] = postgressetup.OwnerUser
+		}},
+		{name: "owner from wrong service account", wantDenied: true, mutate: func(p *certsv1beta1.PodCertificateRequest) {
+			p.Spec.ServiceAccountName = "default"
+			p.Spec.UnverifiedUserAnnotations[UsernameAnnotation] = postgressetup.OwnerUser
+		}},
+		{name: "wrong signer", wantError: true, mutate: func(p *certsv1beta1.PodCertificateRequest) {
 			p.Spec.SignerName = "podidentity.podcert.ate.dev/identity"
 		}},
-		{name: "invalid key", wantError: true, mutate: func(_ *corev1.Pod, p *certsv1beta1.PodCertificateRequest) {
+		{name: "invalid key", wantError: true, mutate: func(p *certsv1beta1.PodCertificateRequest) {
 			p.Spec.StubPKCS10Request = []byte("invalid")
 		}},
-		{name: "invalid lifetime", wantError: true, mutate: func(_ *corev1.Pod, p *certsv1beta1.PodCertificateRequest) {
+		{name: "invalid lifetime", wantError: true, mutate: func(p *certsv1beta1.PodCertificateRequest) {
 			p.Spec.MaxExpirationSeconds = ptr.To(int32(0))
 		}},
 		{name: "status update error", wantError: true, failUpdate: true},
@@ -103,12 +105,11 @@ func TestMakeCert(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "ate-system", Name: "api-1", UID: "pod-1"}, Spec: corev1.PodSpec{ServiceAccountName: "ate-api-server"}}
-			pcr := &certsv1beta1.PodCertificateRequest{ObjectMeta: metav1.ObjectMeta{Namespace: pod.Namespace, Name: "req-1"}, Spec: certsv1beta1.PodCertificateRequestSpec{SignerName: Name, PodName: pod.Name, PodUID: pod.UID, ServiceAccountName: pod.Spec.ServiceAccountName, MaxExpirationSeconds: ptr.To(int32(86400)), StubPKCS10Request: csr, UnverifiedUserAnnotations: map[string]string{UsernameAnnotation: postgressetup.ReadWriteUser}}}
+			pcr := &certsv1beta1.PodCertificateRequest{ObjectMeta: metav1.ObjectMeta{Namespace: "ate-system", Name: "req-1"}, Spec: certsv1beta1.PodCertificateRequestSpec{SignerName: Name, PodName: "api-1", PodUID: "pod-1", ServiceAccountName: "ate-api-server", MaxExpirationSeconds: ptr.To(int32(86400)), StubPKCS10Request: csr, UnverifiedUserAnnotations: map[string]string{UsernameAnnotation: postgressetup.ReadWriteUser}}}
 			if tc.mutate != nil {
-				tc.mutate(pod, pcr)
+				tc.mutate(pcr)
 			}
-			kc := fake.NewSimpleClientset(pod, pcr)
+			kc := fake.NewSimpleClientset(pcr)
 			kc.Resources = []*metav1.APIResourceList{{GroupVersion: "certificates.k8s.io/v1beta1", APIResources: []metav1.APIResource{{Name: "podcertificaterequests"}}}}
 			client, err := podcertificate.NewClient(kc)
 			if err != nil {
@@ -117,8 +118,9 @@ func TestMakeCert(t *testing.T) {
 			if tc.failUpdate {
 				kc.PrependReactor("update", "podcertificaterequests", func(k8stesting.Action) (bool, runtime.Object, error) { return true, nil, errors.New("update failed") })
 			}
-			impl := NewImpl(kc, &localca.ConcretePool{CAs: []*localca.CA{ca}}, client)
+			impl := NewImpl(&localca.ConcretePool{CAs: []*localca.CA{ca}}, client)
 			err = impl.MakeCert(t.Context(), pcr)
+
 			if (err != nil) != tc.wantError {
 				t.Fatalf("MakeCert error = %v, wantError %v", err, tc.wantError)
 			}
@@ -187,7 +189,7 @@ func TestDesiredClusterTrustBundles(t *testing.T) {
 		}
 		pool.CAs = append(pool.CAs, ca)
 	}
-	impl := NewImpl(nil, pool, nil)
+	impl := NewImpl(pool, nil)
 	bundles, err := impl.DesiredClusterTrustBundles()
 	if err != nil {
 		t.Fatal(err)

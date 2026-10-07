@@ -32,7 +32,6 @@ import (
 	certsv1 "k8s.io/api/certificates/v1"
 	certsv1beta1 "k8s.io/api/certificates/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes"
 	"k8s.io/utils/ptr"
 )
 
@@ -44,14 +43,12 @@ const UsernameAnnotation = "postgres.podcert.ate.dev/username"
 const CTBPrefix = "postgres.podcert.ate.dev:identity:"
 
 type Impl struct {
-	kc        kubernetes.Interface
 	pcrClient *podcertificate.Client
 	caPool    localca.Pool
 }
 
-func NewImpl(kc kubernetes.Interface, caPool localca.Pool, pcrClient *podcertificate.Client) *Impl {
+func NewImpl(caPool localca.Pool, pcrClient *podcertificate.Client) *Impl {
 	return &Impl{
-		kc:        kc,
 		pcrClient: pcrClient,
 		caPool:    caPool,
 	}
@@ -102,6 +99,8 @@ func (h *Impl) MakeCert(ctx context.Context, pcr *certsv1beta1.PodCertificateReq
 	if pcr.Spec.SignerName != Name {
 		return fmt.Errorf("unexpected signer %q", pcr.Spec.SignerName)
 	}
+	// kube-apiserver validates the request identity. Authorization is tied to
+	// the namespace and service account, not the user-supplied annotations.
 	if pcr.Namespace != installdefaults.SystemNamespace || pcr.Spec.ServiceAccountName != "ate-api-server" {
 		return h.deny(ctx, pcr, "UnauthorizedServiceAccount", fmt.Sprintf("only %s/ate-api-server may request PostgreSQL login certificates", installdefaults.SystemNamespace))
 	}
@@ -110,18 +109,6 @@ func (h *Impl) MakeCert(ctx context.Context, pcr *certsv1beta1.PodCertificateReq
 	username := pcr.Spec.UnverifiedUserAnnotations[UsernameAnnotation]
 	if len(pcr.Spec.UnverifiedUserAnnotations) != 1 || (username != postgressetup.OwnerUser && username != postgressetup.ReadWriteUser) {
 		return h.deny(ctx, pcr, certsv1beta1.PodCertificateRequestConditionInvalidUserConfig, "request must contain only the username annotation naming a bundled application login")
-	}
-	pod, err := h.kc.CoreV1().Pods(pcr.ObjectMeta.Namespace).Get(ctx, pcr.Spec.PodName, metav1.GetOptions{})
-	if err != nil {
-		return fmt.Errorf("while getting pod %s/%s: %w", pcr.ObjectMeta.Namespace, pcr.Spec.PodName, err)
-	}
-
-	if pod.ObjectMeta.UID != pcr.Spec.PodUID {
-		return fmt.Errorf("pod UID mismatch: expected %s, got %s", pcr.Spec.PodUID, pod.ObjectMeta.UID)
-	}
-
-	if pod.Spec.ServiceAccountName != pcr.Spec.ServiceAccountName {
-		return fmt.Errorf("pod service account does not match request")
 	}
 
 	subjectPublicKey, err := podcertificate.PublicKey(pcr)

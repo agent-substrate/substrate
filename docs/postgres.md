@@ -18,12 +18,24 @@ missing annotations, unknown keys, and every other username. It sets the
 certificate Common Name (CN) to that authorized login. Each connection pool
 presents its own certificate.
 
+The namespace and service account are the authorization boundary. Kubernetes
+validates those identity fields in each PodCertificateRequest; the username
+annotation only selects between the two logins authorized for that identity.
+Anyone allowed to create pods as `ate-system/ate-api-server` can request either
+login, so operators must restrict that capability to trusted control-plane
+administrators. Both credentials are available to the API-server process;
+separate logins do not isolate the owner role from a compromised API server.
+
 The bundled PostgreSQL server trusts only this signer's dedicated CA for client
 certificates. Its `hostssl ... cert` rule requires the certificate CN to match
 the requested database username. The API server uses `sslmode=verify-full` to
-verify the server's service DNS certificate. Both sides reload rotated
-certificate material. Local Unix-socket access inside the database pod remains
-trusted for bootstrap, health checks, and TLS reloads.
+verify the server's service DNS certificate. New database connections reread the
+projected client credentials and server trust roots. The bundled PostgreSQL TLS-reloader
+checks its server credential bundle and client trust bundle every 60 seconds and
+requests a configuration reload when they change. Existing database connections
+remain open. Pod Certificates require a minimum lifetime of one hour; the
+signer's default is 24 hours. Local Unix-socket access inside the database pod
+remains trusted for bootstrap, health checks, and TLS reloads.
 
 The installer stores the signer's CA pool in the `postgres-ca-pool` Secret in
 `podcertificate-controller-system`; the API pod receives its client private key

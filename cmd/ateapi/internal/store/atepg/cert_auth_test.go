@@ -35,6 +35,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/pkg/postgressetup"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/testcontainers/testcontainers-go"
 	tcexec "github.com/testcontainers/testcontainers-go/exec"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
@@ -180,11 +181,29 @@ func TestBundledPostgresCertificateAuthentication(t *testing.T) {
 			}
 		})
 	}
+	// Match the projected volumes: each client reads its key and certificate
+	// from one credential bundle, which is replaced at the same path.
+	writeBundle := func(t *testing.T, bundle, cert, key string) {
+		t.Helper()
+		certPEM, err := os.ReadFile(cert)
+		if err != nil {
+			t.Fatal(err)
+		}
+		keyPEM, err := os.ReadFile(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeCertTestFile(t, bundle, append(keyPEM, certPEM...))
+	}
+	runtimeBundle := filepath.Join(dir, "runtime-bundle.pem")
+	ownerBundle := filepath.Join(dir, "owner-bundle.pem")
+	writeBundle(t, runtimeBundle, runtimeCert, runtimeKey)
+	writeBundle(t, ownerBundle, ownerCert, ownerKey)
 	// Both pools must work together for migrations and runtime queries, without
 	// allowing the runtime certificate to assume the owner's role.
 	persistence, err := Connect(t.Context(), ConnectConfig{
-		ReadWriteDSN:  certificateDSN(postgressetup.ReadWriteUser, runtimeCert, runtimeKey, ""),
-		OwnerDSN:      certificateDSN(postgressetup.OwnerUser, ownerCert, ownerKey, ""),
+		ReadWriteDSN:  certificateDSN(postgressetup.ReadWriteUser, runtimeBundle, runtimeBundle, ""),
+		OwnerDSN:      certificateDSN(postgressetup.OwnerUser, ownerBundle, ownerBundle, ""),
 		ReadWriteRole: postgressetup.ReadWriteRole,
 		OwnerRole:     postgressetup.OwnerRole,
 		Schema:        postgressetup.Schema,
@@ -203,6 +222,121 @@ func TestBundledPostgresCertificateAuthentication(t *testing.T) {
 	if _, err := persistence.pool.Exec(t.Context(), "SET ROLE "+pgx.Identifier{postgressetup.OwnerRole}.Sanitize()); err == nil {
 		t.Fatal("runtime certificate assumed owner role")
 	}
+	t.Run("rotate credentials and trust roots", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+		defer cancel()
+		// Keep a connection open across rotation, and retain configurations that
+		// would be used for new connections without the BeforeConnect hook.
+		existing, err := persistence.pool.Acquire(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer existing.Release()
+		staleRuntime := persistence.pool.Config().ConnConfig.Copy()
+		staleOwner := persistence.ownerPool.Config().ConnConfig.Copy()
+
+		rotatedServerCA, err := localca.GenerateCA("rotated-service-dns", localca.KeyTypeED25519, 24*time.Hour)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rotatedClientCA, err := localca.GenerateCA("rotated-postgres", localca.KeyTypeED25519, 24*time.Hour)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rotatedServerCert, rotatedServerKey := writeTestCertificate(t, dir, "rotated-server", rotatedServerCA, "postgres", true)
+		for _, login := range []struct{ user, bundle string }{
+			{postgressetup.ReadWriteUser, runtimeBundle},
+			{postgressetup.OwnerUser, ownerBundle},
+		} {
+			cert, key := writeTestCertificate(t, dir, "rotated-"+login.user, rotatedClientCA, login.user, false)
+			writeBundle(t, login.bundle, cert, key)
+		}
+		writeCertTestFile(t, serverRoot, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: rotatedServerCA.RootCertificate.Raw}))
+		writeCertTestFile(t, clientRoot, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: rotatedClientCA.RootCertificate.Raw}))
+		for _, file := range []struct{ source, target string }{
+			{rotatedServerCert, "/tmp/testcontainers-go/postgres/server.cert"},
+			{rotatedServerKey, "/tmp/testcontainers-go/postgres/server.key"},
+			{clientRoot, "/tmp/testcontainers-go/postgres/ca_cert.pem"},
+		} {
+			data, err := os.ReadFile(file.source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := container.CopyToContainer(ctx, data, file.target, 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		code, _, err := container.Exec(ctx, []string{"chown", "postgres:postgres", "/tmp/testcontainers-go/postgres/server.cert", "/tmp/testcontainers-go/postgres/server.key", "/tmp/testcontainers-go/postgres/ca_cert.pem"}, tcexec.Multiplexed())
+		if err != nil || code != 0 {
+			t.Fatalf("setting rotated TLS file ownership: exit %d, error %v", code, err)
+		}
+		// Run the shipped reloader against the real server. Only adapt paths
+		// and stop after its first successful reload instead of looping forever.
+		reloader := strings.NewReplacer(
+			"/run/servicedns.podcert.ate.dev/credential-bundle.pem", "/tmp/testcontainers-go/postgres/server.cert",
+			"/run/postgres.podcert.ate.dev/trust-bundle.pem", "/tmp/testcontainers-go/postgres/ca_cert.pem",
+			"/etc/postgresql/pg_hba.conf", "/tmp/testcontainers-go/postgres/pg_hba.conf",
+			`echo "$(date -u +%FT%TZ) reloaded TLS configuration"`, `echo "$(date -u +%FT%TZ) reloaded TLS configuration"; exit 0`,
+		).Replace(cm.Data["reload-tls.sh"])
+		if err := container.CopyToContainer(ctx, []byte(reloader), "/tmp/reload-tls.sh", 0600); err != nil {
+			t.Fatal(err)
+		}
+		code, output, err := container.Exec(ctx, []string{"sh", "/tmp/reload-tls.sh"}, tcexec.Multiplexed())
+		if err != nil {
+			t.Fatal(err)
+		}
+		detail, err := io.ReadAll(output)
+		if err != nil || code != 0 || !strings.Contains(string(detail), "reloaded TLS configuration") {
+			t.Fatalf("TLS reloader: exit %d, error %v, output %s", code, err, detail)
+		}
+
+		var user string
+		if err := existing.QueryRow(ctx, `SELECT current_user`).Scan(&user); err != nil || user != postgressetup.ReadWriteRole {
+			t.Fatalf("existing connection after rotation: user %q, error %v", user, err)
+		}
+		existing.Release()
+		for _, identity := range []struct {
+			pool *pgxpool.Pool
+			role string
+		}{
+			{persistence.pool, postgressetup.ReadWriteRole},
+			{persistence.ownerPool, postgressetup.OwnerRole},
+		} {
+			identity.pool.Reset()
+			// SIGHUP processing is asynchronous; retry until the server has
+			// loaded the replacement certificate and client trust roots.
+			for attempt := 0; attempt < 50; attempt++ {
+				err = identity.pool.QueryRow(ctx, `SELECT current_user`).Scan(&user)
+				if err == nil {
+					break
+				}
+				time.Sleep(100 * time.Millisecond)
+			}
+			if err != nil || user != identity.role {
+				t.Fatalf("fresh pooled connection after rotation: role %q, want %q, error %v", user, identity.role, err)
+			}
+		}
+		// Fresh connections using cached TLS configurations must fail. Even
+		// with refreshed server trust, the old client certificates are rejected.
+		for _, stale := range []*pgx.ConnConfig{staleRuntime, staleOwner} {
+			conn, err := pgx.ConnectConfig(ctx, stale)
+			if conn != nil {
+				_ = conn.Close(ctx)
+			}
+			if err == nil {
+				t.Fatal("cached server trust accepted the rotated server certificate")
+			}
+			stale.TLSConfig.RootCAs = rootPool(t, serverRoot)
+			conn, err = pgx.ConnectConfig(ctx, stale)
+			if conn != nil {
+				_ = conn.Close(ctx)
+			}
+			if err == nil {
+				t.Fatal("cached client certificate accepted after client CA rotation")
+			}
+		}
+	})
+
 }
 
 func writeTestCertificate(t *testing.T, dir, name string, ca *localca.CA, cn string, server bool) (string, string) {
