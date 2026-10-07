@@ -74,11 +74,16 @@ func (p *MockVolumePlugin) DeleteVolume(ctx context.Context, volumeID string) er
 	return nil
 }
 
-// AttachVolume simulates volume attachment to a node. The mock driver needs no
-// attachment metadata, so the response carries no publish context.
+// AttachVolume simulates volume attachment to a node. It returns simulated
+// publish context metadata reflecting the target node and volume.
 func (p *MockVolumePlugin) AttachVolume(ctx context.Context, req AttachVolumeRequest) (AttachVolumeResponse, error) {
 	slog.InfoContext(ctx, "MockVolumePlugin.AttachVolume", slog.String("volumeID", req.VolumeID), slog.String("node", req.Node))
-	return AttachVolumeResponse{}, nil
+	return AttachVolumeResponse{
+		PublishContext: map[string]string{
+			"mock.substrate.io/attached-node": req.Node,
+			"mock.substrate.io/device-path":   "/dev/mock-" + req.VolumeID,
+		},
+	}, nil
 }
 
 // DetachVolume simulates volume detachment from a node.

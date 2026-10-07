@@ -231,6 +231,9 @@ func (w *WorkerWorkflow) crashBoundActor(ctx context.Context, worker *ateapipb.W
 		// it. The external in-progress checkpoint is kept so delete or revert
 		// can delete it.
 		toUpdate.Status.InProgressLocalSnapshotName = ""
+		// The volumes stay published to the node after the sandbox is gone, so
+		// they keep their attached_node: it is the only record of the node a
+		// later DeleteActor or RevertActor must detach them from.
 		return nil
 	})
 	switch {

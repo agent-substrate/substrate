@@ -413,3 +413,79 @@ func TestEnsureMarkedPausing_GoldenAtespaceRejected(t *testing.T) {
 		t.Fatalf("status.Code = %v (err %v), want FailedPrecondition", got, err)
 	}
 }
+
+// TestEnsurePausedFinalized_ClearsAttachedNode verifies that pause
+// finalization clears every volume's attached_node on both outcomes: the
+// detach step has already run, so no volume is published anymore whether the
+// actor ends PAUSED or, with its worker gone, CRASHED.
+func TestEnsurePausedFinalized_ClearsAttachedNode(t *testing.T) {
+	tests := []struct {
+		name         string
+		assignedNode string
+		seedWorker   bool
+		wantState    ateapipb.ActorState
+	}{
+		{name: "paused", assignedNode: "node1", seedWorker: true, wantState: ateapipb.ActorState_ACTOR_STATE_PAUSED},
+		{name: "crashed because the worker is gone", assignedNode: "", seedWorker: false, wantState: ateapipb.ActorState_ACTOR_STATE_CRASHED},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			st, cleanup := storetest.SetupTestStore(t)
+			defer cleanup()
+			ctx := context.Background()
+			actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+
+			workerName := testWorkerUID("worker-pod-1")
+			created := storetest.MustCreateActor(t, ctx, st, &ateapipb.Actor{
+				Metadata: &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+				Status: &ateapipb.ActorStatus{
+					State:        ateapipb.ActorState_ACTOR_STATE_PAUSING,
+					AssignedNode: tt.assignedNode,
+					WorkerAssignment: &ateapipb.WorkerAssignment{
+						Worker:          &ateapipb.ObjectRef{Name: workerName},
+						WorkerNamespace: "default",
+						WorkerPool:      "pool1",
+						WorkerPod:       "worker-pod-1",
+						WorkerPodUid:    workerName,
+						NodeName:        "node1",
+					},
+					InProgressLocalSnapshotName: "snap-prefix",
+					ActorVolumes:                []*ateapipb.ExternalVolume{recordedVolume("vol1", "storage-vol-1", "mock", "node1")},
+				},
+			})
+			if tt.seedWorker {
+				if _, err := st.CreateWorker(ctx, &ateapipb.Worker{
+					Metadata:        &ateapipb.ResourceMetadata{Name: workerName},
+					WorkerNamespace: "default",
+					WorkerPool:      "pool1",
+					WorkerPod:       "worker-pod-1",
+					WorkerPodUid:    workerName,
+					NodeName:        "node1",
+					Status:          &ateapipb.WorkerStatus{},
+				}); err != nil {
+					t.Fatalf("CreateWorker: %v", err)
+				}
+				seedAssignment(t, st, workerName, &ateapipb.ActorAssignment{
+					Actor:    &ateapipb.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name},
+					ActorUid: created.GetMetadata().GetUid(),
+				})
+			}
+
+			w := &ActorWorkflow{store: st}
+			got, err := w.ensurePausedFinalized(ctx, actorRef, &ateapipb.ActorTemplate{})
+			if err != nil {
+				t.Fatalf("ensurePausedFinalized: %v", err)
+			}
+			if got.GetStatus().GetState() != tt.wantState {
+				t.Fatalf("state = %v, want %v", got.GetStatus().GetState(), tt.wantState)
+			}
+			stored, err := st.GetActor(ctx, actorRef)
+			if err != nil {
+				t.Fatalf("GetActor: %v", err)
+			}
+			if node := stored.GetStatus().GetActorVolumes()[0].GetAttachedNode(); node != "" {
+				t.Errorf("stored attached_node = %q, want it cleared", node)
+			}
+		})
+	}
+}

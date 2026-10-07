@@ -894,3 +894,34 @@ func TestCrashActor_RecordAndCounterAgree(t *testing.T) {
 		t.Errorf("got %d crash events after re-crashing, want 1", len(gotEvents))
 	}
 }
+
+// TestCrashActor_KeepsAttachedNode verifies that crashing an actor keeps its
+// volumes' attached_node: the volumes are still published, and the record is
+// the only way a later DeleteActor or RevertActor finds the node.
+func TestCrashActor_KeepsAttachedNode(t *testing.T) {
+	ctx := context.Background()
+	st, cleanup := storetest.SetupTestStore(t)
+	defer cleanup()
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+	storetest.MustCreateActor(t, ctx, st, &ateapipb.Actor{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+		Status: &ateapipb.ActorStatus{
+			State:        ateapipb.ActorState_ACTOR_STATE_RUNNING,
+			ActorVolumes: []*ateapipb.ExternalVolume{recordedVolume("vol1", "storage-vol-1", "mock", "node1")},
+		},
+	})
+
+	if err := crashActor(ctx, st, actorRef, ateattr.OperationResume, "test crash"); err != nil {
+		t.Fatalf("crashActor() = %v, want nil", err)
+	}
+	stored, err := st.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("GetActor: %v", err)
+	}
+	if got := stored.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+		t.Errorf("state = %v, want CRASHED", got)
+	}
+	if got := stored.GetStatus().GetActorVolumes()[0].GetAttachedNode(); got != "node1" {
+		t.Errorf("stored attached_node = %q, want node1 kept", got)
+	}
+}

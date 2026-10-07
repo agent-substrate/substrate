@@ -271,3 +271,12 @@ func (f *FakeAteletServer) lastRestoreRequest() *ateletpb.RestoreRequest {
 	}
 	return proto.Clone(f.RestoreRequest).(*ateletpb.RestoreRequest)
 }
+
+func (f *FakeAteletServer) lastRestoreVolumePublishContext(volumeName string) map[string]string {
+	for _, v := range f.lastRestoreRequest().GetSpec().GetVolumes() {
+		if v.GetName() == volumeName {
+			return v.GetExternal().GetPublishContext()
+		}
+	}
+	return nil
+}

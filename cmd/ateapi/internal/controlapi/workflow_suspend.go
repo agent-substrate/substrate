@@ -87,7 +87,7 @@ func (w *ActorWorkflow) SuspendActor(ctx context.Context, actorRef resources.Act
 	if err != nil {
 		return nil, err
 	}
-	if err = w.ensureVolumesDetached(leaseCtx, actor, actorTemplate, "DetachVolumes", ateattr.OperationSuspend); err != nil {
+	if err = w.ensureVolumesDetached(leaseCtx, actor, "DetachVolumes", ateattr.OperationSuspend); err != nil {
 		return nil, err
 	}
 	// FinalizeSuspended clears the WorkerAssignment the labels read, so snapshot
@@ -316,16 +316,16 @@ func newInProgressSnapshotURI(actorTemplate *ateapipb.ActorTemplate, actor *atea
 	return uri, nil
 }
 
-// ensureVolumesDetached detaches the actor's mounted external volumes from
-// its worker node. Detachment is idempotent, so a re-entered workflow safely
-// runs it again. spanName distinguishes the suspend and pause steps in
-// traces; op labels the volume metrics.
+// ensureVolumesDetached detaches the actor's external volumes from the nodes
+// their attached_node records. Detachment is idempotent, so a re-entered
+// workflow safely runs it again. spanName distinguishes the suspend, pause,
+// and revert steps in traces; op labels the detach logs.
 // TODO replace re-execution with a proper check on the volumes' attach state.
-func (w *ActorWorkflow) ensureVolumesDetached(ctx context.Context, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate, spanName, op string) (err error) {
+func (w *ActorWorkflow) ensureVolumesDetached(ctx context.Context, actor *ateapipb.Actor, spanName, op string) (err error) {
 	ctx, done := stepSpan(ctx, spanName)
 	defer func() { err = done(err) }()
 
-	return detachActorVolumes(ctx, w.pluginRegistry, actor, actorTemplate, op)
+	return detachActorVolumes(ctx, w.pluginRegistry, actor, op)
 }
 
 // ensureSuspendedFinalized releases the actor's worker (only when it is still
@@ -408,6 +408,7 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 		toUpdate.Status.WorkerAssignment = nil
 		toUpdate.Status.LocalSnapshot = nil
 		toUpdate.Status.AssignedNode = ""
+		clearVolumeAttachments(toUpdate.Status)
 		return nil
 	})
 	dUpdateActor = time.Since(t)

@@ -788,3 +788,42 @@ func TestSuspendActor_PausedWithoutLocalSnapshotCrashes(t *testing.T) {
 		t.Errorf("crash message = %q, want %q", msg, want)
 	}
 }
+
+// TestEnsureSuspendedFinalized_ClearsAttachedNode verifies that suspend
+// finalization clears every volume's attached_node in the commit: the detach
+// step has already run, so no volume is published anymore.
+func TestEnsureSuspendedFinalized_ClearsAttachedNode(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+	storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+		Status: &ateapipb.ActorStatus{
+			State:                 ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
+			InProgressSnapshotUri: someActorSnapshotURI(t, testStorageLocation, "team-a", "2026-01-01t00-00-00z-abc"),
+			ActorVolumes: []*ateapipb.ExternalVolume{
+				recordedVolume("vol1", "storage-vol-1", "mock", "node1"),
+				recordedVolume("vol2", "storage-vol-2", "mock", "node2"),
+			},
+		},
+	})
+
+	w := &ActorWorkflow{store: persistence}
+	tmpl := &ateapipb.ActorTemplate{
+		Metadata:       &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "tmpl", Uid: "tmpl-uid-1"},
+		SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: testStorageLocation},
+	}
+	if _, err := w.ensureSuspendedFinalized(ctx, actorRef, tmpl); err != nil {
+		t.Fatalf("ensureSuspendedFinalized: %v", err)
+	}
+	stored, err := persistence.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("GetActor: %v", err)
+	}
+	for _, vol := range stored.GetStatus().GetActorVolumes() {
+		if node := vol.GetAttachedNode(); node != "" {
+			t.Errorf("volume %q attached_node = %q, want it cleared", vol.GetVolumeName(), node)
+		}
+	}
+}

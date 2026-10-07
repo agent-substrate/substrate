@@ -201,33 +201,25 @@ func actorVolumeID(actorUID string, volumeName string) string {
 	return fmt.Sprintf("substrate-%s-%s", actorUID, volumeName)
 }
 
-// detachActorVolumes detaches all mounted external volumes for an actor from its assigned node.
-func detachActorVolumes(ctx context.Context, registry VolumePluginRegistry, actor *ateapipb.Actor, template *ateapipb.ActorTemplate, action string) error {
-	node := actor.GetStatus().GetAssignedNode()
-	if node == "" {
-		slog.WarnContext(ctx, fmt.Sprintf("Actor has no assigned node during %s, skipping detach volumes", action), slog.String("actor_id", actor.GetMetadata().GetName()))
-		return nil
-	}
-
-	ref := &ateapipb.ObjectRef{Atespace: actor.GetMetadata().GetAtespace(), Name: actor.GetMetadata().GetName()}
-	// If the template is available, only detach volumes that are actively mounted
-	// in the template's containers. If the template is missing/deleted, fall back to
-	// attempting detachment for all external volumes recorded on the actor so we do
-	// not orphan attached disks on the worker node.
-	volumesToDetach := actor.GetStatus().GetActorVolumes()
-	if template != nil {
-		volumesToDetach = getMountedActorVolumes(ctx, ref, actor.GetStatus().GetActorVolumes(), template)
-	}
-	// Collect errors for all volumes to detach, but continue processing so we attempt to detach all volumes.
+// detachActorVolumes unpublishes each of the actor's external volumes from the
+// node its attached_node records. The record, not the worker assignment, names
+// the node: a crash clears the assignment but keeps the record, and the worker
+// may already be gone. A volume with no recorded node, or with no storage
+// volume ID (never provisioned, so never published), is skipped. NotFound
+// counts as already detached. Every volume is attempted and the errors are
+// joined.
+func detachActorVolumes(ctx context.Context, registry VolumePluginRegistry, actor *ateapipb.Actor, action string) error {
 	var errs []error
-	for _, vol := range volumesToDetach {
-		// StorageVolumeId is only populated once the volume is provisioned.
-		// Skip volumes that were never created (e.g. failed during PENDING state).
-		if vol.GetStorageVolumeId() == "" {
-			slog.WarnContext(ctx, "Volume has no storage volume ID, skipping detach", slog.String("volume_name", vol.GetVolumeName()), slog.String("actor_id", actor.GetMetadata().GetName()))
+	for _, vol := range actor.GetStatus().GetActorVolumes() {
+		node := vol.GetAttachedNode()
+		if node == "" {
 			continue
 		}
-		slog.InfoContext(ctx, "Detaching volume from node", slog.String("volume_id", vol.GetStorageVolumeId()), slog.String("node", node))
+		if vol.GetStorageVolumeId() == "" {
+			slog.WarnContext(ctx, "Volume has no storage volume ID, skipping detach", slog.String("volume_name", vol.GetVolumeName()), slog.String("node", node), slog.String("action", action))
+			continue
+		}
+		slog.InfoContext(ctx, "Detaching volume from node", slog.String("volume_id", vol.GetStorageVolumeId()), slog.String("node", node), slog.String("action", action))
 		plugin, err := registry.GetPlugin(ctx, vol.GetVolumeType())
 		if err != nil {
 			errs = append(errs, fmt.Errorf("failed to get volume plugin for %q: %w", vol.GetVolumeType(), err))
@@ -242,4 +234,13 @@ func detachActorVolumes(ctx context.Context, registry VolumePluginRegistry, acto
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// clearVolumeAttachments clears every volume's attached_node. Call it only in
+// a write that follows a successful detachActorVolumes, so that a failed
+// detach leaves the record for the next attempt.
+func clearVolumeAttachments(actorStatus *ateapipb.ActorStatus) {
+	for _, vol := range actorStatus.GetActorVolumes() {
+		vol.AttachedNode = ""
+	}
 }

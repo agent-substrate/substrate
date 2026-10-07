@@ -78,7 +78,7 @@ func (w *ActorWorkflow) PauseActor(ctx context.Context, actorRef resources.Actor
 	// TODO: There is no difference between suspend and pause for now, but we
 	// could optimize pause by not detaching. We would need to make sure Resume
 	// is idempotent.
-	if err = w.ensureVolumesDetached(leaseCtx, actor, actorTemplate, "DetachVolumesForPause", ateattr.OperationPause); err != nil {
+	if err = w.ensureVolumesDetached(leaseCtx, actor, "DetachVolumesForPause", ateattr.OperationPause); err != nil {
 		return nil, err
 	}
 	// FinalizePaused clears the WorkerAssignment the labels read, so snapshot
@@ -281,6 +281,9 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 				toUpdate.Status.InProgressLocalSnapshotName = ""
 			}
 			toUpdate.Status.WorkerAssignment = nil
+			// DetachVolumesForPause already unpublished the volumes, so this
+			// holds for the CRASHED outcome too.
+			clearVolumeAttachments(toUpdate.Status)
 			return nil
 		})
 		if err == nil && storedActor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_CRASHED && !wasAlreadyCrashed {

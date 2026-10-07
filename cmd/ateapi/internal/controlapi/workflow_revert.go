@@ -160,10 +160,13 @@ func (w *ActorWorkflow) ensureMarkedReverting(ctx context.Context, actorRef reso
 // ensureWorkerDiscarded tears down whatever the actor is running on and frees
 // the worker it booked — including one the actor does not name.
 //
-// The assignment-backed path mirrors delete's ordering: terminate, detach, and
-// only then release, so a worker is never handed back while a sandbox or a
-// mount may still be live on it. The assignment itself is left on the record
-// for FinalizeReverted to clear, so an interrupted release is rediscoverable.
+// It mirrors delete's ordering: terminate, detach, and only then release, so a
+// worker is never handed back while a sandbox or a mount may still be live on
+// it. Terminate runs whenever an assigned node is recorded (clearing
+// TargetAteomUid when no worker hosts the actor); detach runs on every origin,
+// from the nodes the volumes record. The assignment itself is left on the
+// record for FinalizeReverted to clear, so an interrupted release is
+// rediscoverable.
 //
 // The sweep afterwards runs on every origin, not just when the record names no
 // worker. An assignment commits before the actor is updated to point at it, so
@@ -181,13 +184,13 @@ func (w *ActorWorkflow) ensureWorkerDiscarded(ctx context.Context, actorRef reso
 			// the next revert needs no live worker.
 			return err
 		}
-		if err := w.ensureVolumesDetached(ctx, actor, actorTemplate, "DetachVolumesForRevert", ateattr.OperationRevert); err != nil {
-			return err
-		}
-		if actor.GetStatus().GetWorkerAssignment() != nil {
-			if _, _, err := releaseWorker(ctx, w.store, actor); err != nil {
-				return fmt.Errorf("while releasing worker: %w", err)
-			}
+	}
+	if err := w.ensureVolumesDetached(ctx, actor, "DetachVolumesForRevert", ateattr.OperationRevert); err != nil {
+		return err
+	}
+	if actor.GetStatus().GetWorkerAssignment() != nil {
+		if _, _, err := releaseWorker(ctx, w.store, actor); err != nil {
+			return fmt.Errorf("while releasing worker: %w", err)
 		}
 	}
 
@@ -250,6 +253,7 @@ func (w *ActorWorkflow) ensureRevertedFinalized(ctx context.Context, actorRef re
 		toUpdate.Status.InProgressLocalSnapshotName = ""
 		toUpdate.Status.LocalSnapshot = nil
 		toUpdate.Status.Crash = nil
+		clearVolumeAttachments(toUpdate.Status)
 		return nil
 	})
 	if err != nil {

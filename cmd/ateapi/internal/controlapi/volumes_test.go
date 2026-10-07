@@ -472,199 +472,118 @@ func (m *mockDetachVolumePlugin) DetachVolume(ctx context.Context, volumeID, nod
 	return nil
 }
 
+// recordedVolume returns a provisioned volume whose attached_node is node.
+func recordedVolume(name, storageID, volumeType, node string) *ateapipb.ExternalVolume {
+	return &ateapipb.ExternalVolume{
+		VolumeName:      name,
+		StorageVolumeId: storageID,
+		VolumeType:      volumeType,
+		Status:          ateapipb.ExternalVolume_STATUS_CREATED,
+		AttachedNode:    node,
+	}
+}
+
 func TestDetachActorVolumes(t *testing.T) {
 	ctx := context.Background()
+
+	actorWith := func(assignment *ateapipb.WorkerAssignment, volumes ...*ateapipb.ExternalVolume) *ateapipb.Actor {
+		return &ateapipb.Actor{
+			Metadata: &ateapipb.ResourceMetadata{Name: "actor-1", Atespace: "default"},
+			Status: &ateapipb.ActorStatus{
+				WorkerAssignment: assignment,
+				ActorVolumes:     volumes,
+			},
+		}
+	}
+	assignedTo := func(node string) *ateapipb.WorkerAssignment {
+		return &ateapipb.WorkerAssignment{Worker: &ateapipb.ObjectRef{Name: "worker-1"}, NodeName: node}
+	}
 
 	tests := []struct {
 		name            string
 		actor           *ateapipb.Actor
-		template        *ateapipb.ActorTemplate
 		plugin          *mockDetachVolumePlugin
-		pluginRegistry  *mockPluginRegistry
 		wantDetachCalls []detachCall
-		wantErr         bool
 		wantErrContains string
+		wantCode        codes.Code
 	}{
 		{
-			name: "success with multiple mounted volumes",
-			actor: &ateapipb.Actor{
-				Metadata: &ateapipb.ResourceMetadata{Name: "actor-1", Atespace: "default"},
-				Status: &ateapipb.ActorStatus{
-					AssignedNode: "node-1",
-					ActorVolumes: []*ateapipb.ExternalVolume{
-						{VolumeName: "vol1", StorageVolumeId: "storage-vol-1", VolumeType: "mock"},
-						{VolumeName: "vol2", StorageVolumeId: "storage-vol-2", VolumeType: "mock"},
-					},
-				},
-			},
-			template: &ateapipb.ActorTemplate{
-				Volumes: []*ateapipb.Volume{
-					{Name: "vol1"},
-					{Name: "vol2"},
-				},
-				Containers: []*ateapipb.Container{
-					{
-						VolumeMounts: []*ateapipb.VolumeMount{
-							{Name: "vol1"},
-							{Name: "vol2"},
-						},
-					},
-				},
-			},
-			wantDetachCalls: []detachCall{
-				{VolumeID: "storage-vol-1", Node: "node-1"},
-				{VolumeID: "storage-vol-2", Node: "node-1"},
-			},
+			name:            "recorded node without a worker assignment is detached",
+			actor:           actorWith(nil, recordedVolume("vol1", "storage-vol-1", "mock", "node-1")),
+			wantDetachCalls: []detachCall{{VolumeID: "storage-vol-1", Node: "node-1"}},
 		},
 		{
-			name: "skips unmounted volume in template",
-			actor: &ateapipb.Actor{
-				Metadata: &ateapipb.ResourceMetadata{Name: "actor-1", Atespace: "default"},
-				Status: &ateapipb.ActorStatus{
-					AssignedNode: "node-1",
-					ActorVolumes: []*ateapipb.ExternalVolume{
-						{VolumeName: "mounted-vol", StorageVolumeId: "storage-vol-mounted", VolumeType: "mock"},
-						{VolumeName: "unmounted-vol", StorageVolumeId: "storage-vol-unmounted", VolumeType: "mock"},
-					},
-				},
-			},
-			template: &ateapipb.ActorTemplate{
-				Volumes: []*ateapipb.Volume{
-					{Name: "mounted-vol"},
-					{Name: "unmounted-vol"},
-				},
-				Containers: []*ateapipb.Container{
-					{
-						VolumeMounts: []*ateapipb.VolumeMount{
-							{Name: "mounted-vol"},
-						},
-					},
-				},
-			},
-			wantDetachCalls: []detachCall{
-				{VolumeID: "storage-vol-mounted", Node: "node-1"},
-			},
+			name:            "recorded node wins over the assignment's node",
+			actor:           actorWith(assignedTo("node-2"), recordedVolume("vol1", "storage-vol-1", "mock", "node-1")),
+			wantDetachCalls: []detachCall{{VolumeID: "storage-vol-1", Node: "node-1"}},
 		},
 		{
-			name: "skips volume with empty StorageVolumeId",
-			actor: &ateapipb.Actor{
-				Metadata: &ateapipb.ResourceMetadata{Name: "actor-1", Atespace: "default"},
-				Status: &ateapipb.ActorStatus{
-					AssignedNode: "node-1",
-					ActorVolumes: []*ateapipb.ExternalVolume{
-						{VolumeName: "vol1", StorageVolumeId: "", VolumeType: "mock"},
-						{VolumeName: "vol2", StorageVolumeId: "storage-vol-2", VolumeType: "mock"},
-					},
-				},
-			},
-			template: &ateapipb.ActorTemplate{
-				Volumes: []*ateapipb.Volume{
-					{Name: "vol1"},
-					{Name: "vol2"},
-				},
-				Containers: []*ateapipb.Container{
-					{
-						VolumeMounts: []*ateapipb.VolumeMount{
-							{Name: "vol1"},
-							{Name: "vol2"},
-						},
-					},
-				},
-			},
-			wantDetachCalls: []detachCall{
-				{VolumeID: "storage-vol-2", Node: "node-1"},
-			},
-		},
-		{
-			name: "nil template falls back to detaching all actor volumes",
-			actor: &ateapipb.Actor{
-				Metadata: &ateapipb.ResourceMetadata{Name: "actor-1", Atespace: "default"},
-				Status: &ateapipb.ActorStatus{
-					AssignedNode: "node-1",
-					ActorVolumes: []*ateapipb.ExternalVolume{
-						{VolumeName: "vol1", StorageVolumeId: "storage-vol-1", VolumeType: "mock"},
-						{VolumeName: "vol2", StorageVolumeId: "storage-vol-2", VolumeType: "mock"},
-					},
-				},
-			},
-			template: nil,
-			wantDetachCalls: []detachCall{
-				{VolumeID: "storage-vol-1", Node: "node-1"},
-				{VolumeID: "storage-vol-2", Node: "node-1"},
-			},
-		},
-		{
-			name: "codes.NotFound from plugin is treated as already detached",
-			actor: &ateapipb.Actor{
-				Metadata: &ateapipb.ResourceMetadata{Name: "actor-1", Atespace: "default"},
-				Status: &ateapipb.ActorStatus{
-					AssignedNode: "node-1",
-					ActorVolumes: []*ateapipb.ExternalVolume{
-						{VolumeName: "vol1", StorageVolumeId: "storage-vol-1", VolumeType: "mock"},
-					},
-				},
-			},
-			plugin: &mockDetachVolumePlugin{
-				detachErrs: map[string]error{
-					"storage-vol-1": status.Error(codes.NotFound, "volume not found"),
-				},
-			},
-			wantDetachCalls: []detachCall{
-				{VolumeID: "storage-vol-1", Node: "node-1"},
-			},
-			wantErr: false,
-		},
-		{
-			name: "partial failure attempts all volumes and joins errors",
-			actor: &ateapipb.Actor{
-				Metadata: &ateapipb.ResourceMetadata{Name: "actor-1", Atespace: "default"},
-				Status: &ateapipb.ActorStatus{
-					AssignedNode: "node-1",
-					ActorVolumes: []*ateapipb.ExternalVolume{
-						{VolumeName: "vol1", StorageVolumeId: "storage-vol-1", VolumeType: "mock"},
-						{VolumeName: "vol2", StorageVolumeId: "storage-vol-2", VolumeType: "mock"},
-					},
-				},
-			},
-			plugin: &mockDetachVolumePlugin{
-				detachErrs: map[string]error{
-					"storage-vol-1": status.Error(codes.Internal, "disk detach failed"),
-				},
-			},
-			wantDetachCalls: []detachCall{
-				{VolumeID: "storage-vol-1", Node: "node-1"},
-				{VolumeID: "storage-vol-2", Node: "node-1"},
-			},
-			wantErr:         true,
-			wantErrContains: "failed to detach volume \"storage-vol-1\"",
-		},
-		{
-			name: "unknown plugin returns error",
-			actor: &ateapipb.Actor{
-				Metadata: &ateapipb.ResourceMetadata{Name: "actor-1", Atespace: "default"},
-				Status: &ateapipb.ActorStatus{
-					AssignedNode: "node-1",
-					ActorVolumes: []*ateapipb.ExternalVolume{
-						{VolumeName: "vol1", StorageVolumeId: "storage-vol-1", VolumeType: "unknown-plugin"},
-					},
-				},
-			},
-			wantErr:         true,
-			wantErrContains: "failed to get volume plugin for \"unknown-plugin\"",
-		},
-		{
-			name: "no assigned node skips detach",
-			actor: &ateapipb.Actor{
-				Metadata: &ateapipb.ResourceMetadata{Name: "actor-1", Atespace: "default"},
-				Status: &ateapipb.ActorStatus{
-					AssignedNode: "",
-					ActorVolumes: []*ateapipb.ExternalVolume{
-						{VolumeName: "vol1", StorageVolumeId: "storage-vol-1", VolumeType: "mock"},
-					},
-				},
-			},
+			// No fallback to the assignment: a volume with no recorded node
+			// was never published.
+			name:            "empty attached_node is not detached even with an assignment",
+			actor:           actorWith(assignedTo("node-1"), recordedVolume("vol1", "storage-vol-1", "mock", "")),
 			wantDetachCalls: nil,
-			wantErr:         false,
+		},
+		{
+			name: "only volumes with a recorded node are detached",
+			actor: actorWith(assignedTo("node-1"),
+				recordedVolume("vol1", "storage-vol-1", "mock", "node-1"),
+				recordedVolume("vol2", "storage-vol-2", "mock", "")),
+			wantDetachCalls: []detachCall{{VolumeID: "storage-vol-1", Node: "node-1"}},
+		},
+		{
+			name: "each volume is detached from its own recorded node",
+			actor: actorWith(nil,
+				recordedVolume("vol1", "storage-vol-1", "mock", "node-1"),
+				recordedVolume("vol2", "storage-vol-2", "mock", "node-2")),
+			wantDetachCalls: []detachCall{
+				{VolumeID: "storage-vol-1", Node: "node-1"},
+				{VolumeID: "storage-vol-2", Node: "node-2"},
+			},
+		},
+		{
+			name: "recorded volume without a storage volume ID is skipped",
+			actor: actorWith(nil,
+				recordedVolume("vol1", "", "mock", "node-1"),
+				recordedVolume("vol2", "storage-vol-2", "mock", "node-1")),
+			wantDetachCalls: []detachCall{{VolumeID: "storage-vol-2", Node: "node-1"}},
+		},
+		{
+			name:  "codes.NotFound from the plugin counts as already detached",
+			actor: actorWith(nil, recordedVolume("vol1", "storage-vol-1", "mock", "node-1")),
+			plugin: &mockDetachVolumePlugin{detachErrs: map[string]error{
+				"storage-vol-1": status.Error(codes.NotFound, "volume not found"),
+			}},
+			wantDetachCalls: []detachCall{{VolumeID: "storage-vol-1", Node: "node-1"}},
+		},
+		{
+			name: "partial failure attempts every volume and joins the errors",
+			actor: actorWith(nil,
+				recordedVolume("vol1", "storage-vol-1", "mock", "node-1"),
+				recordedVolume("vol2", "storage-vol-2", "mock", "node-2")),
+			plugin: &mockDetachVolumePlugin{detachErrs: map[string]error{
+				"storage-vol-1": status.Error(codes.Internal, "disk detach failed"),
+			}},
+			wantDetachCalls: []detachCall{
+				{VolumeID: "storage-vol-1", Node: "node-1"},
+				{VolumeID: "storage-vol-2", Node: "node-2"},
+			},
+			wantErrContains: `failed to detach volume "storage-vol-1" from node "node-1"`,
+		},
+		{
+			name:  "plugin's API error code survives the join",
+			actor: actorWith(nil, recordedVolume("vol1", "storage-vol-1", "mock", "node-1")),
+			plugin: &mockDetachVolumePlugin{detachErrs: map[string]error{
+				"storage-vol-1": apierror.FailedPrecondition("driver cannot unpublish"),
+			}},
+			wantDetachCalls: []detachCall{{VolumeID: "storage-vol-1", Node: "node-1"}},
+			wantErrContains: "driver cannot unpublish",
+			wantCode:        codes.FailedPrecondition,
+		},
+		{
+			name:            "unknown plugin returns an error",
+			actor:           actorWith(nil, recordedVolume("vol1", "storage-vol-1", "unknown-plugin", "node-1")),
+			wantErrContains: `failed to get volume plugin for "unknown-plugin"`,
 		},
 	}
 
@@ -674,22 +593,19 @@ func TestDetachActorVolumes(t *testing.T) {
 			if plugin == nil {
 				plugin = &mockDetachVolumePlugin{}
 			}
-			registry := tt.pluginRegistry
-			if registry == nil {
-				registry = &mockPluginRegistry{
-					plugins: map[string]volume.VolumePluginControlPlane{
-						"mock": plugin,
-					},
-				}
-			}
+			registry := &mockPluginRegistry{plugins: map[string]volume.VolumePluginControlPlane{"mock": plugin}}
 
-			err := detachActorVolumes(ctx, registry, tt.actor, tt.template, "test")
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("detachActorVolumes() error = %v, wantErr %v", err, tt.wantErr)
+			err := detachActorVolumes(ctx, registry, tt.actor, "test")
+			if tt.wantErrContains == "" {
+				if err != nil {
+					t.Fatalf("detachActorVolumes() error = %v, want nil", err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), tt.wantErrContains) {
+				t.Fatalf("detachActorVolumes() error = %v, want error containing %q", err, tt.wantErrContains)
 			}
-			if tt.wantErrContains != "" {
-				if err == nil || !strings.Contains(err.Error(), tt.wantErrContains) {
-					t.Fatalf("detachActorVolumes() error = %v, want error containing %q", err, tt.wantErrContains)
+			if tt.wantCode != codes.OK {
+				if got := apierror.Code(err); got != tt.wantCode {
+					t.Errorf("apierror.Code(detachActorVolumes()) = %v, want %v", got, tt.wantCode)
 				}
 			}
 			if diff := cmp.Diff(tt.wantDetachCalls, plugin.detachCalls); diff != "" {
@@ -697,4 +613,27 @@ func TestDetachActorVolumes(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestClearVolumeAttachments(t *testing.T) {
+	got := &ateapipb.ActorStatus{ActorVolumes: []*ateapipb.ExternalVolume{
+		recordedVolume("vol1", "storage-vol-1", "mock", "node-1"),
+		recordedVolume("vol2", "storage-vol-2", "mock", "node-2"),
+		recordedVolume("vol3", "storage-vol-3", "mock", ""),
+	}}
+	clearVolumeAttachments(got)
+
+	// Only attached_node changes.
+	want := &ateapipb.ActorStatus{ActorVolumes: []*ateapipb.ExternalVolume{
+		recordedVolume("vol1", "storage-vol-1", "mock", ""),
+		recordedVolume("vol2", "storage-vol-2", "mock", ""),
+		recordedVolume("vol3", "storage-vol-3", "mock", ""),
+	}}
+	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
+		t.Errorf("status after clearVolumeAttachments mismatch (-want +got):\n%s", diff)
+	}
+
+	// A status without volumes, or none at all, is left alone.
+	clearVolumeAttachments(&ateapipb.ActorStatus{})
+	clearVolumeAttachments(nil)
 }

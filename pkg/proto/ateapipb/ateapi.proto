@@ -369,6 +369,16 @@ message ExternalVolume {
   // +k8s:eachKey=+k8s:maxLength=128
   // +k8s:eachVal=+k8s:maxLength=256
   map<string, string> volume_context = 5;
+
+  // attached_node is the Kubernetes node (the CSI node ID) the volume may be
+  // published to with ControllerPublishVolume. It is recorded before the
+  // publish call and cleared only after a successful unpublish, so it names
+  // the node a later ControllerUnpublishVolume must target. Empty when no
+  // unpublish is outstanding.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-long-name
+  string attached_node = 6;
 }
 
 message Actor {

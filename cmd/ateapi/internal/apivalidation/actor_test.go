@@ -563,6 +563,31 @@ func TestValidateActorUpdate(t *testing.T) {
 		})),
 		nil,
 	}, {
+		"change actor.status.actor_volumes[].attached_node is allowed",
+		validInput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.ActorVolumes = []*ateapipb.ExternalVolume{{VolumeName: "vol-a", VolumeType: "substrate.io/mock", AttachedNode: "node-1"}}
+		})),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.ActorVolumes = []*ateapipb.ExternalVolume{{VolumeName: "vol-a", VolumeType: "substrate.io/mock", AttachedNode: "node-2"}}
+		})),
+		nil,
+	}, {
+		"clear actor.status.actor_volumes[].attached_node is allowed",
+		validInput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.ActorVolumes = []*ateapipb.ExternalVolume{{VolumeName: "vol-a", VolumeType: "substrate.io/mock", AttachedNode: "node-1"}}
+		})),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.ActorVolumes = []*ateapipb.ExternalVolume{{VolumeName: "vol-a", VolumeType: "substrate.io/mock"}}
+		})),
+		nil,
+	}, {
+		"invalid actor.status.actor_volumes[].attached_node",
+		validInput(withStatus()),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.ActorVolumes = []*ateapipb.ExternalVolume{{VolumeName: "vol-a", VolumeType: "substrate.io/mock", AttachedNode: "NOT A NODE"}}
+		})),
+		field.ErrorList{field.Invalid(field.NewPath("status", "actor_volumes").Index(0).Child("attached_node"), nil, "").WithOrigin("format=k8s-long-name")},
+	}, {
 		"invalid actor.status.in_progress_local_snapshot_name",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) { s.InProgressLocalSnapshotName = "BAD NAME" })),
