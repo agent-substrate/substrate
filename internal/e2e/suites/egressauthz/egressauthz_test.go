@@ -22,11 +22,9 @@
 //     trusted_ca is the actor-identity CA and not merely some substrate
 //     anchor. Get that wrong and every workload in the cluster can open a
 //     tunnel.
-//   - TestGatewayRefusesAnUnknownActor presents a cryptographically perfect
-//     credential and is denied only by the control-plane lookup, so it proves
-//     Envoy actually calls ext_proc on the CONNECT and honors a deny. A
-//     gateway that authorizes on the certificate alone passes every other
-//     test in the repo.
+//   - TestGatewayRefusesAnUnknownActor presents a valid client-auth credential
+//     with an ateom-for-actor URI and is denied by actor resolution. Envoy uses
+//     ext_proc; AgentGateway uses its native actor-resolution policy.
 package egressauthz
 
 import (
@@ -72,13 +70,10 @@ func TestGatewayRefusesANonActorWorkload(t *testing.T) {
 	t.Logf("gateway refused the non-actor credential at its front door as expected: %s", result.Error)
 }
 
-// TestGatewayRefusesAnUnknownActor covers the check that only ext_proc can
-// make. The credential here is cryptographically perfect -- signed by the real
-// actor-identity CA, correct extension, correct purpose -- so Envoy completes
-// the handshake, and the CONNECT is denied only because the control plane has
-// no such actor. Without this, nothing distinguishes a gateway that authorizes
-// on the certificate alone from one that authorizes on control-plane state, and
-// the difference is whether a deleted actor's credential still works.
+// TestGatewayRefusesAnUnknownActor covers control-plane actor resolution. The
+// credential is signed by the real actor CA and carries the production
+// ateom-for-actor URI, so CONNECT is denied because the control plane has no
+// such actor. This distinguishes certificate trust from actor authorization.
 func TestGatewayRefusesAnUnknownActor(t *testing.T) {
 	ctx := context.Background()
 
@@ -87,14 +82,14 @@ func TestGatewayRefusesAnUnknownActor(t *testing.T) {
 	const sni = "unknown.example.com"
 	result := probe.handshakeAs(t, ctx, sni, unknownActorCredentialPath)
 	if result.OK {
-		t.Fatalf("the gateway tunneled for an actor the control plane has never heard of; the ext_proc identity check is not running")
+		t.Fatalf("the gateway tunneled for an actor the control plane has never heard of; actor resolution is not running")
 	}
 	// A 403 on the CONNECT, not a TLS failure: the certificate was accepted and
 	// the identity it carries was rejected. A failure at stageGatewayTLS would
-	// mean the request never reached ext_proc, and the denial would prove
+	// mean the request never reached actor resolution, and the denial would prove
 	// nothing about the control-plane lookup.
 	if result.Stage != stageConnect || result.ConnectStatus != http.StatusForbidden {
-		t.Fatalf("unknown actor was refused at stage %q with CONNECT status %d, want %q and %d -- something other than the ext_proc identity check turned it away: %s",
+		t.Fatalf("unknown actor was refused at stage %q with CONNECT status %d, want %q and %d -- something other than actor resolution turned it away: %s",
 			result.Stage, result.ConnectStatus, stageConnect, http.StatusForbidden, result.Error)
 	}
 	t.Logf("gateway denied the unknown actor at CONNECT as expected: %s", result.Error)
@@ -279,7 +274,7 @@ type handshakeResult struct {
 	OK         bool   `json:"ok"`
 	// Stage is where a failed handshake stopped. Asserting on it rather than
 	// on Error is what keeps "the front door refused the certificate" and "the
-	// door opened and ext_proc said no" from being the same test: they are
+	// door opened and actor resolution said no" from being the same test: they are
 	// different hops, and their messages are only incidentally different.
 	Stage string `json:"stage"`
 	// ConnectStatus is the status the gateway answered the CONNECT with, set

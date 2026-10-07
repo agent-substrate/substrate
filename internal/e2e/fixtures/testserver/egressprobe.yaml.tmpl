@@ -72,8 +72,6 @@ spec:
       mountPath: "/run/actor-identity-live"
     - name: "actor-identity-live-chain"
       mountPath: "/run/actor-identity-live-chain"
-    - name: "actor-identity-wrong-uid"
-      mountPath: "/run/actor-identity-wrong-uid"
     - name: "podidentity"
       mountPath: "/run/podidentity.podcert.ate.dev"
     - name: "servicedns-ca"
@@ -89,10 +87,6 @@ spec:
   - name: "actor-identity-live-chain"
     secret:
       secretName: egressprobe-live-actor-chain
-      optional: true
-  - name: "actor-identity-wrong-uid"
-    secret:
-      secretName: egressprobe-wrong-uid
       optional: true
   - name: "podidentity"
     projected:

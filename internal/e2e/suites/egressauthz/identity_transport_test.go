@@ -25,7 +25,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/e2e"
-	"github.com/agent-substrate/substrate/internal/substratex509"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -34,7 +34,7 @@ func TestGatewayCertificateMetadataTransport(t *testing.T) {
 	ctx := context.Background()
 	clients := e2e.GetClients()
 	origin := e2e.DeployServerPod(t, ctx, e2e.ServerPod{Name: "egress-origin", ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver", Args: []string{"http"}, Port: 8080})
-	var liveUID string
+	var running bool
 	var liveName = "live-" + strings.ToLower(strings.ReplaceAll(t.Name(), "/", "-"))
 	probe := startProbeWithProvision(t, ctx, func(ns string) {
 		at := e2e.CreateSubstrateCounterTemplate(ctx, t, clients, ns, e2e.SubstrateTemplateOptions{Atespace: ns, Name: "counter", PoolName: "counter", PoolReplicas: 1, Labels: map[string]string{"egressauthz": ns}})
@@ -54,15 +54,15 @@ func TestGatewayCertificateMetadataTransport(t *testing.T) {
 		for time.Now().Before(deadline) {
 			got, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{Actor: ref})
 			if err == nil && got.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_RUNNING {
-				liveUID = got.GetMetadata().GetUid()
+				running = true
 				break
 			}
 			time.Sleep(time.Second)
 		}
-		if liveUID == "" {
+		if !running {
 			t.Fatal("actor did not reach RUNNING")
 		}
-		identity := &substratex509.ActorIdentity{Atespace: ns, ActorName: liveName, ActorUid: liveUID}
+		identity := resources.ActorRef{Atespace: ns, Name: liveName}
 		ca := actorIdentityCA(t, ctx)
 		writeCredentialSecret(t, ctx, ns, "egressprobe-live-actor", mintActorCredential(t, ca, identity))
 		writeCredentialSecret(t, ctx, ns, "egressprobe-live-actor-chain", mintActorCredentialWithIntermediate(t, ca, identity))
@@ -93,7 +93,8 @@ func TestGatewayIgnoresSpoofedXFCC(t *testing.T) {
 	ctx := context.Background()
 	clients := e2e.GetClients()
 	origin := e2e.DeployServerPod(t, ctx, e2e.ServerPod{Name: "spoof-origin", ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver", Args: []string{"http"}, Port: 8080})
-	var uid, name, livePEM string
+	var running bool
+	var name, livePEM string
 	var unknownPEM string
 	probe := startProbeWithProvision(t, ctx, func(ns string) {
 		name = "spoof-live-" + strings.ToLower(strings.ReplaceAll(t.Name(), "/", "-"))
@@ -113,22 +114,18 @@ func TestGatewayIgnoresSpoofedXFCC(t *testing.T) {
 		for deadline := time.Now().Add(2 * time.Minute); time.Now().Before(deadline); {
 			got, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{Actor: ref})
 			if err == nil && got.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_RUNNING {
-				uid = got.GetMetadata().GetUid()
+				running = true
 				break
 			}
 			time.Sleep(time.Second)
 		}
-		if uid == "" {
+		if !running {
 			t.Fatal("actor did not reach RUNNING")
 		}
 		ca := actorIdentityCA(t, ctx)
-		live := &substratex509.ActorIdentity{Atespace: ns, ActorName: name, ActorUid: uid}
-		wrong := *live
-		wrong.ActorUid = "00000000-0000-0000-0000-000000000000"
-		liveBundle := mintActorCredential(t, ca, live)
+		liveBundle := mintActorCredential(t, ca, resources.ActorRef{Atespace: ns, Name: name})
 		livePEM = certificatePEM(liveBundle)
 		writeCredentialSecret(t, ctx, ns, "egressprobe-live-actor", liveBundle)
-		writeCredentialSecret(t, ctx, ns, "egressprobe-wrong-uid", mintActorCredential(t, ca, &wrong))
 		secret, err := clients.K8s.CoreV1().Secrets(ns).Get(ctx, unknownActorCredentialSecret, metav1.GetOptions{})
 		if err != nil {
 			t.Fatal(err)
@@ -142,20 +139,18 @@ func TestGatewayIgnoresSpoofedXFCC(t *testing.T) {
 		t.Fatal("live certificate PEM is empty")
 	}
 	valid := `Chain="` + url.PathEscape(livePEM) + `"`
-	if result := probe.connectAs(t, ctx, origin.Address(), "/run/actor-identity-live/credential-bundle.pem", ""); result.ConnectStatus != http.StatusOK {
+	if result := probe.connectAs(t, ctx, origin.Address(), "/run/actor-identity-live/credential-bundle.pem", ""); result.Stage != "" || result.ConnectStatus != http.StatusOK {
 		t.Fatalf("live actor got stage %q status %d: %s", result.Stage, result.ConnectStatus, result.Error)
 	}
-	if result := probe.connectAs(t, ctx, origin.Address(), "/run/actor-identity-live/credential-bundle.pem", "malformed"); result.ConnectStatus != http.StatusOK {
+	if result := probe.connectAs(t, ctx, origin.Address(), "/run/actor-identity-live/credential-bundle.pem", "malformed"); result.Stage != "" || result.ConnectStatus != http.StatusOK {
 		t.Fatalf("malformed XFCC changed live authorization: stage %q status %d: %s", result.Stage, result.ConnectStatus, result.Error)
 	}
-	if result := probe.connectAs(t, ctx, origin.Address(), "/run/actor-identity-live/credential-bundle.pem", `Chain="`+url.PathEscape(unknownPEM)+`"`); result.ConnectStatus != http.StatusOK {
+	if result := probe.connectAs(t, ctx, origin.Address(), "/run/actor-identity-live/credential-bundle.pem", `Chain="`+url.PathEscape(unknownPEM)+`"`); result.Stage != "" || result.ConnectStatus != http.StatusOK {
 		t.Fatalf("live actor with unknown valid XFCC got stage %q status %d: %s", result.Stage, result.ConnectStatus, result.Error)
 	}
-	for _, credential := range []string{"/run/actor-identity-unknown/credential-bundle.pem", "/run/actor-identity-wrong-uid/credential-bundle.pem"} {
-		result := probe.connectAs(t, ctx, origin.Address(), credential, valid)
-		if result.Stage != stageConnect || result.ConnectStatus != http.StatusForbidden {
-			t.Fatalf("spoofed identity with %s got stage %q status %d: %s", credential, result.Stage, result.ConnectStatus, result.Error)
-		}
+	result := probe.connectAs(t, ctx, origin.Address(), "/run/actor-identity-unknown/credential-bundle.pem", valid)
+	if result.Stage != stageConnect || result.ConnectStatus != http.StatusForbidden {
+		t.Fatalf("spoofed identity with unknown actor got stage %q status %d: %s", result.Stage, result.ConnectStatus, result.Error)
 	}
 }
 
