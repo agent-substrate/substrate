@@ -1,0 +1,366 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ate-system
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ate-api-authentication
+  namespace: ate-system
+data:
+  authentication.yaml: |
+    actorIdentityJWTProvider: kubernetes
+    jwtProviders:
+    - name: kubernetes
+      issuer: https://kubernetes.default.svc.cluster.local
+      audiences: [api.ate-system.svc]
+      certificateAuthorityFile: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+      discoveryTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: ate-system
+spec:
+  selector:
+    app: postgres
+  ports:
+  - name: postgres
+    port: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: ate-system
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+        env:
+        - name: POSTGRES_DB
+          value: atepg
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: substrate-lab-database
+              key: POSTGRES_PASSWORD
+        - name: PGDATA
+          value: /var/lib/postgresql/data/pgdata
+        ports:
+        - name: postgres
+          containerPort: 5432
+        readinessProbe:
+          exec:
+            command: [pg_isready, -U, postgres, -d, atepg]
+          periodSeconds: 2
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: "1"
+            memory: 1Gi
+        volumeMounts:
+        - name: data
+          mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes: [ReadWriteOnce]
+      storageClassName: local-path
+      resources:
+        requests:
+          storage: 5Gi
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ate-api-server
+  namespace: ate-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: substrate-lab-ate-api
+rules:
+- apiGroups: [""]
+  resources: [pods]
+  verbs: [get, list, watch]
+- apiGroups: [ate.dev]
+  resources: [workerpools, sandboxconfigs, csidriverconfigs]
+  verbs: [get, list, watch]
+- apiGroups: [storage.k8s.io]
+  resources: [storageclasses]
+  verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: substrate-lab-ate-api
+subjects:
+- kind: ServiceAccount
+  name: ate-api-server
+  namespace: ate-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: substrate-lab-ate-api
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+  namespace: ate-system
+spec:
+  type: NodePort
+  selector:
+    app: ate-api-server
+  ports:
+  - name: grpc
+    port: 443
+    targetPort: 443
+    nodePort: 30443
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ate-api-server
+  namespace: ate-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ate-api-server
+  template:
+    metadata:
+      labels:
+        app: ate-api-server
+    spec:
+      serviceAccountName: ate-api-server
+      containers:
+      - name: ate-api-server
+        image: alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
+        command: [/opt/substrate/ateapi]
+        args:
+        - --grpc-server-cred-bundle=/run/ate-api-tls/credential-bundle.pem
+        - --pod-identity-ca-certs=/run/ate-api-tls/ca.crt
+        - --authentication-config=/etc/ateapi/authentication.yaml
+        - --postgres-read-write-connection-string=@env
+        - --postgres-owner-connection-string=@env
+        - --postgres-read-write-role=postgres
+        - --postgres-owner-role=postgres
+        - --actor-id-jwt-pool=/run/actor-id-jwt/pool.json
+        - --actor-id-ca-pool=/run/actor-id-ca/pool.json
+        env:
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: ATE_STORAGE_BACKEND
+          value: s3
+        - name: AWS_REGION
+          value: us-east-1
+        - name: AWS_ACCESS_KEY_ID
+          value: snapshots-disabled
+        - name: AWS_SECRET_ACCESS_KEY
+          value: snapshots-disabled
+        - name: AWS_ENDPOINT_URL
+          value: http://127.0.0.1:9
+        - name: AWS_EC2_METADATA_DISABLED
+          value: "true"
+        - name: OTEL_SDK_DISABLED
+          value: "true"
+        envFrom:
+        - secretRef:
+            name: substrate-lab-database
+        ports:
+        - name: grpc
+          containerPort: 443
+        - name: health
+          containerPort: 9090
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: health
+          periodSeconds: 2
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: health
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: "1"
+            memory: 1Gi
+        volumeMounts:
+        - name: binary
+          mountPath: /opt/substrate/ateapi
+          readOnly: true
+        - name: tls
+          mountPath: /run/ate-api-tls
+          readOnly: true
+        - name: authentication
+          mountPath: /etc/ateapi
+          readOnly: true
+        - name: actor-id-jwt
+          mountPath: /run/actor-id-jwt
+          readOnly: true
+        - name: actor-id-ca
+          mountPath: /run/actor-id-ca
+          readOnly: true
+      volumes:
+      - name: binary
+        hostPath:
+          path: /home/user/workspace/app/bin/ateapi
+          type: File
+      - name: tls
+        secret:
+          secretName: ate-api-tls
+      - name: authentication
+        configMap:
+          name: ate-api-authentication
+      - name: actor-id-jwt
+        secret:
+          secretName: actor-id-jwt-pool
+          items:
+          - key: pool
+            path: pool.json
+      - name: actor-id-ca
+        secret:
+          secretName: actor-id-ca-pool
+          items:
+          - key: pool
+            path: pool.json
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ate-controller
+  namespace: ate-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ate-controller
+subjects:
+- kind: ServiceAccount
+  name: ate-controller
+  namespace: ate-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ate-controller
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ate-controller
+  namespace: ate-system
+subjects:
+- kind: ServiceAccount
+  name: ate-controller
+  namespace: ate-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ate-controller
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ate-controller
+  namespace: ate-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ate-controller
+  template:
+    metadata:
+      labels:
+        app: ate-controller
+    spec:
+      serviceAccountName: ate-controller
+      containers:
+      - name: ate-controller
+        image: alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
+        command: [/opt/substrate/atecontroller]
+        args:
+        - --ateapi-ca-file=/run/ate-controller-tls/ca.crt
+        - --ateapi-server-name=api.ate-system.svc
+        - --ateapi-client-cert=/run/ate-controller-tls/credential-bundle.pem
+        env:
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: OTEL_SDK_DISABLED
+          value: "true"
+        ports:
+        - name: health
+          containerPort: 8081
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: health
+          periodSeconds: 2
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: health
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: "1"
+            memory: 512Mi
+        volumeMounts:
+        - name: binary
+          mountPath: /opt/substrate/atecontroller
+          readOnly: true
+        - name: tls
+          mountPath: /run/ate-controller-tls
+          readOnly: true
+      volumes:
+      - name: binary
+        hostPath:
+          path: /home/user/workspace/app/bin/atecontroller
+          type: File
+      - name: tls
+        secret:
+          secretName: ate-controller-tls

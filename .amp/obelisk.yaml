@@ -1,0 +1,4 @@
+build: hack/obelisk/build.sh
+services:
+  substrate-lab:
+    command: hack/obelisk/run.sh
