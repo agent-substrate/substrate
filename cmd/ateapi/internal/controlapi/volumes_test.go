@@ -123,6 +123,7 @@ func TestInitialActorVolumes_PendingState(t *testing.T) {
 				Name: "data-vol-1",
 				ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
 					StorageClassName: "standard",
+					AccessMode:       ateapipb.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_ONLY_MANY,
 				},
 			},
 			{
@@ -146,6 +147,7 @@ func TestInitialActorVolumes_PendingState(t *testing.T) {
 			Name:       "data-vol-1",
 			VolumeType: "mock-standard",
 			Status:     ateapipb.ExternalVolume_STATUS_PENDING,
+			AccessMode: ateapipb.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_ONLY_MANY,
 		},
 		{
 			Name:       "data-vol-2",
@@ -340,6 +342,28 @@ func TestCreateActorVolumes(t *testing.T) {
 						"type":                      "pd-ssd",
 						"csi.storage.k8s.io/fstype": "ext4",
 					},
+				},
+			},
+		},
+		{
+			name: "access mode is kept on the created volume",
+			tmpl: standardTmpl,
+			inputVolumes: []*ateapipb.ExternalVolume{
+				{
+					Name:       "data-vol",
+					VolumeType: "mock-standard",
+					Status:     ateapipb.ExternalVolume_STATUS_PENDING,
+					AccessMode: ateapipb.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_MANY,
+				},
+			},
+			wantErr: false,
+			wantRes: []*ateapipb.ExternalVolume{
+				{
+					Name:            "data-vol",
+					StorageVolumeId: "mock-vol-substrate-actor-uid-123-data-vol",
+					VolumeType:      "mock-standard",
+					Status:          ateapipb.ExternalVolume_STATUS_CREATED,
+					AccessMode:      ateapipb.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_MANY,
 				},
 			},
 		},
@@ -694,6 +718,123 @@ func TestDetachActorVolumes(t *testing.T) {
 			}
 			if diff := cmp.Diff(tt.wantDetachCalls, plugin.detachCalls); diff != "" {
 				t.Errorf("detachCalls mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// createErrVolumePlugin fails every CreateVolume call with err and records the
+// request it was given.
+type createErrVolumePlugin struct {
+	volume.VolumePluginControlPlane
+	err     error
+	lastReq volume.CreateVolumeRequest
+}
+
+func (p *createErrVolumePlugin) CreateVolume(ctx context.Context, req volume.CreateVolumeRequest) (volume.CreateVolumeResponse, error) {
+	p.lastReq = req
+	return volume.CreateVolumeResponse{}, p.err
+}
+
+func TestCreateActorVolumes_ErrorCodePropagation(t *testing.T) {
+	ctx := context.Background()
+
+	tmpl := &ateapipb.ActorTemplate{
+		Volumes: []*ateapipb.Volume{
+			{
+				Name: "vol1",
+				ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
+					StorageClassName: "standard",
+					Capacity:         "10Gi",
+					AccessMode:       ateapipb.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_MANY,
+				},
+			},
+		},
+	}
+	scLister := &fakeStorageClassLister{
+		storageClasses: map[string]*storagev1.StorageClass{
+			"standard": {
+				ObjectMeta:  metav1.ObjectMeta{Name: "standard"},
+				Provisioner: "mock-standard",
+			},
+		},
+	}
+
+	tests := []struct {
+		name     string
+		err      error
+		wantCode codes.Code
+	}{
+		{
+			name:     "InvalidArgument kept",
+			err:      status.Error(codes.InvalidArgument, "driver does not support ReadWriteMany"),
+			wantCode: codes.InvalidArgument,
+		},
+		{
+			name:     "wrapped InvalidArgument kept",
+			err:      fmt.Errorf("CSI CreateVolume failed: %w", status.Error(codes.InvalidArgument, "driver does not support ReadWriteMany")),
+			wantCode: codes.InvalidArgument,
+		},
+		{
+			name:     "OutOfRange becomes InvalidArgument",
+			err:      status.Error(codes.OutOfRange, "requested capacity exceeds limit"),
+			wantCode: codes.InvalidArgument,
+		},
+		{
+			name:     "ResourceExhausted kept",
+			err:      status.Error(codes.ResourceExhausted, "quota exceeded"),
+			wantCode: codes.ResourceExhausted,
+		},
+		{
+			name:     "AlreadyExists kept",
+			err:      status.Error(codes.AlreadyExists, "volume already exists with different parameters"),
+			wantCode: codes.AlreadyExists,
+		},
+		{
+			name:     "PermissionDenied becomes Internal",
+			err:      status.Error(codes.PermissionDenied, "unauthorized to create volume"),
+			wantCode: codes.Internal,
+		},
+		{
+			name:     "Unimplemented becomes Internal",
+			err:      status.Error(codes.Unimplemented, "provisioning not supported"),
+			wantCode: codes.Internal,
+		},
+		{
+			name:     "NotFound becomes Internal",
+			err:      status.Error(codes.NotFound, "snapshot not found"),
+			wantCode: codes.Internal,
+		},
+		{
+			name:     "plain error becomes Internal",
+			err:      errors.New("generic storage error"),
+			wantCode: codes.Internal,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			inputVols := []*ateapipb.ExternalVolume{
+				{
+					Name:       "vol1",
+					VolumeType: "mock-standard",
+					Status:     ateapipb.ExternalVolume_STATUS_PENDING,
+					AccessMode: ateapipb.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_MANY,
+				},
+			}
+			plugin := &createErrVolumePlugin{err: tt.err}
+			registry := &mockPluginRegistry{
+				plugins: map[string]volume.VolumePluginControlPlane{
+					"mock-standard": plugin,
+				},
+			}
+
+			_, err := createActorVolumes(ctx, registry, scLister, "test-uid", tmpl, inputVols)
+			if got := apierror.Code(err); got != tt.wantCode {
+				t.Errorf("apierror.Code(err) = %v, want %v (err: %v)", got, tt.wantCode, err)
+			}
+			if got := plugin.lastReq.AccessMode; got != ateapipb.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_MANY {
+				t.Errorf("CreateVolumeRequest.AccessMode = %v, want VOLUME_ACCESS_MODE_READ_WRITE_MANY", got)
 			}
 		})
 	}

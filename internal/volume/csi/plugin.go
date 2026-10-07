@@ -28,6 +28,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/volume"
 	v1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -168,6 +169,11 @@ func (p *Plugin) DriverName(ctx context.Context) (string, error) {
 
 // CreateVolume maps to CSI Controller CreateVolume.
 func (p *Plugin) CreateVolume(ctx context.Context, req volume.CreateVolumeRequest) (volume.CreateVolumeResponse, error) {
+	volCap, err := VolumeCapability(req.AccessMode)
+	if err != nil {
+		return volume.CreateVolumeResponse{}, err
+	}
+
 	qty, err := resource.ParseQuantity(req.Capacity)
 	if err != nil {
 		return volume.CreateVolumeResponse{}, fmt.Errorf("failed to parse capacity %q: %w", req.Capacity, err)
@@ -179,7 +185,7 @@ func (p *Plugin) CreateVolume(ctx context.Context, req volume.CreateVolumeReques
 		CapacityRange: &csi.CapacityRange{
 			RequiredBytes: capBytes,
 		},
-		VolumeCapabilities: getStandardCapabilities(),
+		VolumeCapabilities: []*csi.VolumeCapability{volCap},
 		Parameters:         req.Parameters,
 	}
 
@@ -213,16 +219,29 @@ func (p *Plugin) DeleteVolume(ctx context.Context, volumeID string) error {
 
 // AttachVolume maps to CSI Controller ControllerPublishVolume.
 func (p *Plugin) AttachVolume(ctx context.Context, req volume.AttachVolumeRequest) (volume.AttachVolumeResponse, error) {
+	volCap, err := VolumeCapability(req.AccessMode)
+	if err != nil {
+		return volume.AttachVolumeResponse{}, err
+	}
+
 	if !p.SupportsControllerCapability(csi.ControllerServiceCapability_RPC_PUBLISH_UNPUBLISH_VOLUME) {
 		slog.DebugContext(ctx, "Driver does not support ControllerPublishVolume; skipping attach", slog.String("volume_id", req.VolumeID), slog.String("node", req.Node))
 		return volume.AttachVolumeResponse{}, nil
 	}
 
+	// A read-only attach needs PUBLISH_READONLY. Without it, attach read-write;
+	// MountVolume still mounts the volume read-only on the node.
+	readonly := req.AccessMode == ateapipb.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_ONLY_MANY
+	if readonly && !p.SupportsControllerCapability(csi.ControllerServiceCapability_RPC_PUBLISH_READONLY) {
+		slog.WarnContext(ctx, "Driver does not support read-only ControllerPublishVolume; attaching read-write and relying on the read-only node mount", slog.String("volume_id", req.VolumeID), slog.String("node", req.Node))
+		readonly = false
+	}
+
 	csiReq := &csi.ControllerPublishVolumeRequest{
 		VolumeId:         req.VolumeID,
 		NodeId:           req.Node,
-		VolumeCapability: getStandardCapabilities()[0], // Use primary capability
-		Readonly:         false,
+		VolumeCapability: volCap,
+		Readonly:         readonly,
 	}
 
 	resp, err := p.client.ControllerPublishVolume(ctx, csiReq)
@@ -265,7 +284,12 @@ func (p *Plugin) DetachVolume(ctx context.Context, volumeID string, node string)
 // MountVolume maps to CSI Node NodePublishVolume.
 // It also handles NodeStageVolume staging if required by the driver.
 func (p *Plugin) MountVolume(ctx context.Context, req volume.MountVolumeRequest) error {
-	stagingPath, err := p.stageVolume(ctx, req)
+	volCap, err := VolumeCapability(req.AccessMode)
+	if err != nil {
+		return err
+	}
+
+	stagingPath, err := p.stageVolume(ctx, req, volCap)
 	if err != nil {
 		return err
 	}
@@ -274,8 +298,8 @@ func (p *Plugin) MountVolume(ctx context.Context, req volume.MountVolumeRequest)
 		VolumeId:          req.VolumeID,
 		StagingTargetPath: stagingPath,
 		TargetPath:        req.TargetPath,
-		VolumeCapability:  getStandardCapabilities()[0],
-		Readonly:          false,
+		VolumeCapability:  volCap,
+		Readonly:          req.AccessMode == ateapipb.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_ONLY_MANY,
 		VolumeContext:     req.VolumeContext,
 		PublishContext:    req.PublishContext,
 	}
@@ -288,7 +312,7 @@ func (p *Plugin) MountVolume(ctx context.Context, req volume.MountVolumeRequest)
 
 // stageVolume calls NodeStageVolume if the driver supports it. It returns the staging
 // path, or an empty string if the volume was not staged.
-func (p *Plugin) stageVolume(ctx context.Context, req volume.MountVolumeRequest) (string, error) {
+func (p *Plugin) stageVolume(ctx context.Context, req volume.MountVolumeRequest, volCap *csi.VolumeCapability) (string, error) {
 	if !p.SupportsNodeCapability(csi.NodeServiceCapability_RPC_STAGE_UNSTAGE_VOLUME) {
 		return "", nil
 	}
@@ -301,7 +325,7 @@ func (p *Plugin) stageVolume(ctx context.Context, req volume.MountVolumeRequest)
 	csiReq := &csi.NodeStageVolumeRequest{
 		VolumeId:          req.VolumeID,
 		StagingTargetPath: stagingPath,
-		VolumeCapability:  getStandardCapabilities()[0], // Use primary capability
+		VolumeCapability:  volCap,
 		VolumeContext:     req.VolumeContext,
 		PublishContext:    req.PublishContext,
 	}
@@ -366,20 +390,28 @@ func removeStagingDir(ctx context.Context, stagingPath string) {
 	}
 }
 
-// Helper to provide standard capabilities for general volume operations.
-// TODO: Support and expose different volume access modes (e.g. ReadWriteMany, ReadOnlyMany)
-// instead of hardcoding SingleNodeWriter.
-func getStandardCapabilities() []*csi.VolumeCapability {
-	return []*csi.VolumeCapability{
-		{
-			AccessMode: &csi.VolumeCapability_AccessMode{
-				Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
-			},
-			AccessType: &csi.VolumeCapability_Mount{
-				Mount: &csi.VolumeCapability_MountVolume{},
-			},
-		},
+// VolumeCapability returns the CSI VolumeCapability for the given access mode.
+// UNSPECIFIED is treated as READ_WRITE_ONCE.
+func VolumeCapability(mode ateapipb.VolumeAccessMode) (*csi.VolumeCapability, error) {
+	var csiMode csi.VolumeCapability_AccessMode_Mode
+	switch mode {
+	case ateapipb.VolumeAccessMode_VOLUME_ACCESS_MODE_UNSPECIFIED, ateapipb.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE:
+		csiMode = csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER
+	case ateapipb.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_ONLY_MANY:
+		csiMode = csi.VolumeCapability_AccessMode_MULTI_NODE_READER_ONLY
+	case ateapipb.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_MANY:
+		csiMode = csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER
+	default:
+		return nil, status.Errorf(codes.InvalidArgument, "unsupported volume access mode: %v", mode)
 	}
+	return &csi.VolumeCapability{
+		AccessMode: &csi.VolumeCapability_AccessMode{
+			Mode: csiMode,
+		},
+		AccessType: &csi.VolumeCapability_Mount{
+			Mount: &csi.VolumeCapability_MountVolume{},
+		},
+	}, nil
 }
 
 // CSIDriverConfigGetter provides access to retrieve a CSIDriverConfig by name.

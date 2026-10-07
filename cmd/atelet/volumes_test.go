@@ -29,6 +29,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/volume"
 	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/client/clientset/versioned/fake"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -37,6 +38,7 @@ type mountCall struct {
 	volumeID   string
 	targetPath string
 	attributes map[string]string
+	accessMode ateapipb.VolumeAccessMode
 }
 
 type fakeWorkerPlugin struct {
@@ -53,6 +55,7 @@ func (f *fakeWorkerPlugin) MountVolume(ctx context.Context, req volume.MountVolu
 		volumeID:   req.VolumeID,
 		targetPath: req.TargetPath,
 		attributes: req.VolumeContext,
+		accessMode: req.AccessMode,
 	})
 	if f.mountErrs != nil {
 		if err, ok := f.mountErrs[req.VolumeID]; ok {
@@ -182,6 +185,7 @@ func TestMountExternalVolumes(t *testing.T) {
 				StorageVolumeId: "mock-vol-1",
 				VolumeType:      "mock-driver",
 				VolumeContext:   map[string]string{"key": "val1"},
+				AccessMode:      ateapipb.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_ONLY_MANY,
 			},
 		},
 	}
@@ -238,7 +242,7 @@ func TestMountExternalVolumes(t *testing.T) {
 		}
 
 		wantCalls := []mountCall{
-			{volumeID: "mock-vol-1", targetPath: expectedPath1, attributes: map[string]string{"key": "val1"}},
+			{volumeID: "mock-vol-1", targetPath: expectedPath1, attributes: map[string]string{"key": "val1"}, accessMode: ateapipb.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_ONLY_MANY},
 			{volumeID: "mock-vol-2", targetPath: expectedPath2, attributes: map[string]string{"key": "val2"}},
 		}
 		if diff := cmp.Diff(wantCalls, fake.mountCalls, cmp.AllowUnexported(mountCall{})); diff != "" {

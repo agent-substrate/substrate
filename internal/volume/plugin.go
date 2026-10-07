@@ -16,6 +16,8 @@ package volume
 
 import (
 	"context"
+
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
 // CreateVolumeRequest describes a volume to provision.
@@ -26,6 +28,9 @@ type CreateVolumeRequest struct {
 	Capacity string
 	// Parameters are the driver-specific parameters from the StorageClass.
 	Parameters map[string]string
+	// AccessMode is the requested access mode. UNSPECIFIED means
+	// READ_WRITE_ONCE.
+	AccessMode ateapipb.VolumeAccessMode
 }
 
 // CreateVolumeResponse describes a provisioned volume.
@@ -43,6 +48,8 @@ type AttachVolumeRequest struct {
 	VolumeID string
 	// Node is the node to attach the volume to.
 	Node string
+	// AccessMode is the access mode the volume was created with.
+	AccessMode ateapipb.VolumeAccessMode
 }
 
 // AttachVolumeResponse describes a completed attachment.
@@ -65,6 +72,8 @@ type MountVolumeRequest struct {
 	// PublishContext is the metadata returned when the volume was attached to
 	// this node. It is empty for drivers that do not implement attachment.
 	PublishContext map[string]string
+	// AccessMode is the access mode the volume was created with.
+	AccessMode ateapipb.VolumeAccessMode
 }
 
 // VolumePluginControlPlane abstracts storage operations performed on the control plane.
