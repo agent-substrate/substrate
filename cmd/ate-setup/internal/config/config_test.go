@@ -74,12 +74,13 @@ func loadEnv(t *testing.T) {
 		"KUBECTL_CONTEXT",
 		"MEMORYSTORE_INSTANCE",
 		"PROJECT_ID",
+		"ATE_API_POSTGRES_CLOUDSQL_INSTANCE",
 	} {
-		t.Setenv(name, "")
+		// Unset, not blanked. An exported empty variable is a value a channel
+		// supplied, which is what an operator writes to clear a setting; a
+		// test that blanked these would be configuring every one of them.
+		unsetEnv(t, name)
 	}
-	// Blanking this one would not read as unset: an exported but empty
-	// instance is the explicit "remove Cloud SQL" request.
-	unsetEnv(t, "ATE_API_POSTGRES_CLOUDSQL_INSTANCE")
 }
 
 // unsetEnv removes a variable for the duration of the test. t.Setenv first, so
@@ -408,7 +409,14 @@ func TestLoadActorJWTAlgorithm(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			loadEnv(t)
-			t.Setenv("ACTOR_JWT_ALGORITHM", tt.env)
+			// Unset rather than blanked for the case that wants the default:
+			// an exported empty value is an algorithm the operator supplied,
+			// and no empty string is a valid one.
+			if tt.env == "" {
+				unsetEnv(t, "ACTOR_JWT_ALGORITHM")
+			} else {
+				t.Setenv("ACTOR_JWT_ALGORITHM", tt.env)
+			}
 
 			cfg, err := Load(Options{})
 			if tt.wantErr {
@@ -562,7 +570,14 @@ func TestWaitTimeout(t *testing.T) {
 		{"the environment counts as asking too", Options{}, "10m", 10 * time.Minute},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv("ATE_INSTALL_ROLLOUT_TIMEOUT", tc.env)
+			// Unset rather than blanked for the cases that do not exercise
+			// the variable: an exported empty value is a duration the
+			// operator supplied, and no empty string is one.
+			if tc.env == "" {
+				unsetEnv(t, "ATE_INSTALL_ROLLOUT_TIMEOUT")
+			} else {
+				t.Setenv("ATE_INSTALL_ROLLOUT_TIMEOUT", tc.env)
+			}
 
 			cfg, err := Load(tc.opts)
 			if err != nil {
@@ -945,18 +960,20 @@ func TestLoadImageSource(t *testing.T) {
 		{
 			name:      "a repo needs a tag",
 			opts:      Options{ImageRepo: "example.com/substrate"},
-			wantError: "--image-repo (or ATE_IMAGE_REPO) requires --image-tag",
+			wantError: `images.repo="example.com/substrate" (from --image-repo) conflicts with images.tag="" (from default)`,
 		},
 		{
 			name:      "a tag needs a repo",
 			opts:      Options{ImageTag: "v1"},
-			wantError: "--image-tag (or ATE_IMAGE_TAG) requires --image-repo",
+			wantError: `images.tag="v1" (from --image-tag) conflicts with images.repo="" (from default)`,
 		},
 		{
 			// The environment reaches validation the same way the flags do.
+			// The channel is named, so a reader who exported the variable is
+			// not sent to look for a flag they never used.
 			name:      "a tag from the environment needs a repo",
 			env:       map[string]string{"ATE_IMAGE_TAG": "v1"},
-			wantError: "--image-tag (or ATE_IMAGE_TAG) requires --image-repo",
+			wantError: `images.tag="v1" (from ATE_IMAGE_TAG) conflicts with images.repo="" (from default)`,
 		},
 	}
 

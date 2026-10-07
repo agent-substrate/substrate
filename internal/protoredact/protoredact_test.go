@@ -15,13 +15,22 @@
 package protoredact_test
 
 import (
+	"io/fs"
+	"path"
+	"path/filepath"
+	"regexp"
+	"strings"
 	"sync"
 	"testing"
 
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
+	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/glutton"
+	"github.com/agent-substrate/substrate/internal/proto/grpcechopb"
 	"github.com/agent-substrate/substrate/internal/protoredact"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/agent-substrate/substrate/pkg/proto/credproviderpb"
+	objectstoresnapshotv1 "github.com/agent-substrate/substrate/pkg/proto/objectstoresnapshotpb/v1"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -358,34 +367,61 @@ func TestNeedsRedactionIsSafeUnderConcurrentFirstUse(t *testing.T) {
 	wg.Wait()
 }
 
-// TestDebugRedactFieldsArePinned lists every field across our protos that
-// carries debug_redact. It fails when a label is added or removed so the
-// change is reviewed as a deliberate decision about what the logs may show.
-func TestDebugRedactFieldsArePinned(t *testing.T) {
-	want := map[string]bool{
-		"ateapi.EnvVar.value":                           true,
-		"ateapi.MintActorJWTResponse.actor_jwt":         true,
-		"atelet.EnvEntry.value":                         true,
-		"credprovider.FetchSecretResponse.opaque_bytes": true,
-	}
-	got := map[string]bool{}
+// ourProtoFiles is every proto file in this module whose messages the log
+// handler can be handed. TestOurProtoFilesAreAllListed keeps it in step with
+// the .proto files on disk.
+var ourProtoFiles = []protoreflect.FileDescriptor{
+	ateapipb.File_ateapi_proto,
+	ateletpb.File_atelet_proto,
+	ateompb.File_ateom_proto,
+	credproviderpb.File_credprovider_proto,
+	glutton.File_glutton_proto,
+	grpcechopb.File_grpcecho_proto,
+	objectstoresnapshotv1.File_objectstoresnapshot_proto,
+}
+
+// forEachField calls fn for every field of every message in ourProtoFiles,
+// nested messages included.
+func forEachField(fn func(protoreflect.FieldDescriptor)) {
 	var walk func(protoreflect.MessageDescriptors)
 	walk = func(mds protoreflect.MessageDescriptors) {
 		for i := 0; i < mds.Len(); i++ {
 			md := mds.Get(i)
 			fds := md.Fields()
 			for j := 0; j < fds.Len(); j++ {
-				fd := fds.Get(j)
-				if opts, ok := fd.Options().(*descriptorpb.FieldOptions); ok && opts.GetDebugRedact() {
-					got[string(fd.FullName())] = true
-				}
+				fn(fds.Get(j))
 			}
 			walk(md.Messages())
 		}
 	}
-	for _, file := range []protoreflect.FileDescriptor{ateapipb.File_ateapi_proto, ateletpb.File_atelet_proto, credproviderpb.File_credprovider_proto} {
+	for _, file := range ourProtoFiles {
 		walk(file.Messages())
 	}
+}
+
+func isDebugRedact(fd protoreflect.FieldDescriptor) bool {
+	opts, ok := fd.Options().(*descriptorpb.FieldOptions)
+	return ok && opts.GetDebugRedact()
+}
+
+// TestDebugRedactFieldsArePinned lists every field across our protos that
+// carries debug_redact. It fails when a label is added or removed so the
+// change is reviewed as a deliberate decision about what the logs may show.
+func TestDebugRedactFieldsArePinned(t *testing.T) {
+	want := map[string]bool{
+		"ateapi.EnvVar.value":                                    true,
+		"ateapi.MintActorJWTResponse.actor_jwt":                  true,
+		"atelet.EnvEntry.value":                                  true,
+		"credprovider.FetchSecretResponse.opaque_bytes":          true,
+		"objectstoresnapshot.v1.FetchSnapshotRequest.actor_jwt":  true,
+		"objectstoresnapshot.v1.UploadSnapshotRequest.actor_jwt": true,
+	}
+	got := map[string]bool{}
+	forEachField(func(fd protoreflect.FieldDescriptor) {
+		if isDebugRedact(fd) {
+			got[string(fd.FullName())] = true
+		}
+	})
 	for name := range want {
 		if !got[name] {
 			t.Errorf("%s lost its debug_redact label; the log handler would write it in clear", name)
@@ -394,6 +430,70 @@ func TestDebugRedactFieldsArePinned(t *testing.T) {
 	for name := range got {
 		if !want[name] {
 			t.Errorf("%s is newly marked debug_redact; add it to this list if that is intended", name)
+		}
+	}
+}
+
+// secretLikeName matches field names that usually hold a credential.
+var secretLikeName = regexp.MustCompile(`(?i)jwt|token|secret|passw|credential|private_?key|api_?key|bearer|authorization|cookie`)
+
+// TestSecretLikeFieldsAreLabeled catches a new field that looks like it holds
+// a credential but was added without debug_redact, which the log handler
+// would then write in clear. A field that only names or configures a
+// credential goes in notSecret with the reason.
+func TestSecretLikeFieldsAreLabeled(t *testing.T) {
+	notSecret := map[string]string{
+		"page_token":                             "opaque list cursor",
+		"next_page_token":                        "opaque list cursor",
+		"ateapi.CredentialHeader.credential_uri": "ate-secret:// reference to a credential, not the value",
+		"ateapi.CredentialHeader.actor_jwt":      "ActorJWTSource: audiences and lifetime for minting, not a token",
+	}
+	forEachField(func(fd protoreflect.FieldDescriptor) {
+		if !secretLikeName.MatchString(string(fd.Name())) || isDebugRedact(fd) {
+			return
+		}
+		if _, ok := notSecret[string(fd.FullName())]; ok {
+			return
+		}
+		if _, ok := notSecret[string(fd.Name())]; ok {
+			return
+		}
+		t.Errorf("%s looks like a credential but has no debug_redact; label it, or add it to notSecret with the reason", fd.FullName())
+	})
+}
+
+// TestOurProtoFilesAreAllListed fails when a .proto file is added to the
+// module's Go source without being added to ourProtoFiles, so the two tests
+// above cover it. Only cmd, internal and pkg are walked, where every proto
+// with generated Go code lives; vendored and third-party protos are out of
+// scope, as are tool installs elsewhere in the tree (the locust codegen
+// virtualenv ships google/protobuf/*.proto).
+func TestOurProtoFilesAreAllListed(t *testing.T) {
+	listed := map[string]bool{}
+	for _, file := range ourProtoFiles {
+		listed[path.Base(file.Path())] = true
+	}
+	root := filepath.Join("..", "..")
+	for _, dir := range []string{"cmd", "internal", "pkg"} {
+		err := filepath.WalkDir(filepath.Join(root, dir), func(p string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() {
+				switch d.Name() {
+				case "testdata", "third_party", "vendor":
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if strings.HasSuffix(p, ".proto") && !listed[filepath.Base(p)] {
+				rel, _ := filepath.Rel(root, p)
+				t.Errorf("%s is not in ourProtoFiles", rel)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
 		}
 	}
 }

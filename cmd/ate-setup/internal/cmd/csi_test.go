@@ -20,6 +20,10 @@ import (
 	"testing"
 
 	"github.com/spf13/cobra"
+
+	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/steps"
+
+	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
 )
 
 // runRoot executes the command tree with args, quietly.
@@ -91,9 +95,18 @@ func TestAcceptedCSIDriversPassArgumentValidation(t *testing.T) {
 	})
 
 	t.Run("deploy ate-system", func(t *testing.T) {
-		t.Cleanup(func() { deployOpts.SetupCSI = "none" })
+		// Args reads the flag, not a package variable: it runs before the
+		// configuration is loaded, so the flag is the only channel it can see.
+		f := deployAteSystemCmd.Flags().Lookup("setup-csi")
+		t.Cleanup(func() {
+			_ = f.Value.Set("none")
+			f.Changed = false
+		})
 		for _, driver := range accepted {
-			deployOpts.SetupCSI = driver
+			if err := f.Value.Set(driver); err != nil {
+				t.Fatalf("Set(%q): %v", driver, err)
+			}
+			f.Changed = true
 			if err := deployAteSystemCmd.Args(deployAteSystemCmd, nil); err != nil {
 				t.Errorf("--setup-csi=%q: %v", driver, err)
 			}
@@ -115,6 +128,54 @@ func TestCSICommandsStillRejectStrayArguments(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if err := tc.cmd.Args(tc.cmd, tc.args); err == nil {
 				t.Errorf("Args(%v) = nil, want an error", tc.args)
+			}
+		})
+	}
+}
+
+// A driver supplied by the environment or a configuration file cannot be
+// checked in Args, which runs before the configuration is loaded. It is
+// checked in RunE instead, so the value still has to be rejected -- just after
+// the credential fetch rather than before it.
+func TestCSIDriverFromTheEnvironmentIsStillRejected(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		driver  string
+		wantErr bool
+	}{
+		{name: "accepted", driver: "nfs"},
+		{name: "rejected", driver: "hostpaht", wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, err := config.Resolve(nil, config.ResolveOptions{
+				Env: map[string]string{"SETUP_CSI": tc.driver},
+			})
+			if err != nil {
+				t.Fatalf("Resolve: %v", err)
+			}
+			cfg := &config.Config{}
+			cfg.SetResolved(r)
+
+			prev := env
+			env = &steps.Env{Cfg: cfg}
+			t.Cleanup(func() { env = prev })
+
+			_, err = deployOptions()
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("deployOptions() = nil error for driver %q, want one", tc.driver)
+				}
+				// The value came from the environment, so the message has to
+				// name the variable rather than --setup-csi.
+				for _, want := range []string{"csi.setup", tc.driver, "SETUP_CSI"} {
+					if !strings.Contains(err.Error(), want) {
+						t.Errorf("deployOptions() = %q, missing %q", err, want)
+					}
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("deployOptions() = %v, want nil", err)
 			}
 		})
 	}

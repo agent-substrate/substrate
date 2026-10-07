@@ -127,14 +127,14 @@ substitute() {
   # hack/install-ate.sh; microvm is applied by hack/install-microvm-deps.sh.
   # The protojson templates take the sandbox class as its proto enum spelling.
   local manifest="$1"
-  local sandbox_config_name sandbox_class_enum worker_template=""
+  local sandbox_config_name sandbox_class_enum worker_resources=""
   case "${SANDBOX_CLASS}" in
     gvisor)  sandbox_config_name="gvisor-default" sandbox_class_enum="SANDBOX_CLASS_GVISOR" ;;
     microvm) sandbox_config_name="microvm"        sandbox_class_enum="SANDBOX_CLASS_MICROVM" ;;
   esac
   # One flow-style line, so an unset WORKER_MEMORY leaves only a blank line.
   if [[ -n "${WORKER_MEMORY}" ]]; then
-    worker_template="template: {resources: {requests: {memory: \"${WORKER_MEMORY}\"}, limits: {memory: \"${WORKER_MEMORY}\"}}}"
+    worker_resources="resources: {requests: {memory: \"${WORKER_MEMORY}\"}, limits: {memory: \"${WORKER_MEMORY}\"}}"
   fi
   sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" \
       -e "s|\${WORKER_COUNT}|${WORKER_COUNT}|g" \
@@ -143,7 +143,7 @@ substitute() {
       -e "s|\${SANDBOX_CONFIG_NAME}|${sandbox_config_name}|g" \
       -e "s|\${OTLP_ENDPOINT}|${OTLP_ENDPOINT}|g" \
       -e "s|\${ACTOR_MEMORY}|${ACTOR_MEMORY}|g" \
-      -e "s|\${WORKER_TEMPLATE}|${worker_template}|g" \
+      -e "s|\${WORKER_RESOURCES}|${worker_resources}|g" \
       -e "s|\${SWEPERF_IMAGE}|${SWEPERF_IMAGE:-}|g" \
       "${manifest}"
 }

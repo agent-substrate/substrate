@@ -40,7 +40,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/actorlog"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
-	"github.com/agent-substrate/substrate/internal/ateomcapacity"
+	"github.com/agent-substrate/substrate/internal/ateom"
 	"github.com/agent-substrate/substrate/internal/ateomcgroup"
 	"github.com/agent-substrate/substrate/internal/ateomnet"
 	"github.com/agent-substrate/substrate/internal/ateomtunnel"
@@ -257,7 +257,7 @@ func do(ctx context.Context) error {
 	// outlast, including the window before the Worker record exists; anything
 	// that reaches here is a misconfiguration no restart-in-place will fix.
 	go func() {
-		err := ateomcapacity.Report(ctx, ateomcapacity.ReportConfig{
+		err := ateom.Report(ctx, ateom.ReportConfig{
 			SocketPath:           nodepath.AteomSupportSocket,
 			CredentialBundlePath: tunnelConfig.CredentialBundle,
 			TrustBundlePath:      tunnelConfig.TrustBundle,
@@ -388,6 +388,18 @@ func (s *AteomService) beginRPC(actorUID, name string, cancel context.CancelFunc
 func validateActorDirs(actorDirs *ateompb.ActorDirs) error {
 	if errs := resources.ValidateActorDirs(actorDirs, field.NewPath("actor_dirs")); len(errs) > 0 {
 		return apierror.InvalidArgument("%v", errs.ToAggregate())
+	}
+	return nil
+}
+
+// validateRuntimeAssetPaths ensures we only run assets from the static files dir
+func validateRuntimeAssetPaths(paths map[string]string) error {
+	var errs field.ErrorList
+	for name, p := range paths {
+		errs = append(errs, resources.ValidateRuntimeAssetPath(nodepath.StaticFilesDir, p, field.NewPath("runtime_asset_paths").Key(name))...)
+	}
+	if len(errs) > 0 {
+		return resources.ToAPIError(errs)
 	}
 	return nil
 }

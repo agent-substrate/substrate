@@ -16,18 +16,51 @@ package cmd
 
 import (
 	"github.com/spf13/cobra"
-	"github.com/spf13/pflag"
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/steps"
 )
 
-// Separate option sets: deploy and delete are distinct invocations, and a
-// shared one would let a flag from one leak into the other.
-var (
-	deployBenchmarkOpts steps.BenchmarkOptions
-	deleteBenchmarkOpts steps.BenchmarkOptions
+// The command paths the benchmark settings bind their flags to. Both accept
+// both flags: only deploy reads --worker-count, but accepting it on each keeps
+// the two invocations symmetric, as the shell flags were.
+const (
+	deployBenchmarksPath = "deploy benchmarks"
+	deleteBenchmarksPath = "delete benchmarks"
 )
+
+// benchmarkOptions reads the settings the benchmark commands own. One setting
+// serves both commands, so there is nothing to keep separate: only one command
+// runs per invocation.
+//
+// Validation happens here rather than in steps.BenchmarkOptions.Validate,
+// because only here is the channel that supplied each value known. Both
+// settings reach a flag, an environment variable and a configuration file, and
+// an error naming only the flag sends a reader who used one of the others to
+// the wrong place. The check in steps remains a precondition on its exported
+// methods.
+func benchmarkOptions() (steps.BenchmarkOptions, error) {
+	r := env.Cfg.Resolved()
+	opts := steps.BenchmarkOptions{
+		WorkerCount:  r.Int("benchmark.workerCount"),
+		SandboxClass: r.String("benchmark.sandboxClass"),
+	}
+
+	if opts.WorkerCount < 1 {
+		v, _ := r.Value("benchmark.workerCount")
+		return opts, &config.InvalidError{Value: v, Want: "at least 1"}
+	}
+	switch opts.SandboxClass {
+	case config.SandboxClassGvisor, config.SandboxClassMicrovm:
+	default:
+		v, _ := r.Value("benchmark.sandboxClass")
+		return opts, &config.InvalidError{
+			Value: v,
+			Want:  config.SandboxClassGvisor + " or " + config.SandboxClassMicrovm,
+		}
+	}
+	return opts, nil
+}
 
 var deployBenchmarksCmd = &cobra.Command{
 	Use:   "benchmarks",
@@ -37,7 +70,11 @@ var deployBenchmarksCmd = &cobra.Command{
 See benchmarking/README.md for the walkthrough and customization options.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		return env.DeployBenchmarks(cmd.Context(), deployBenchmarkOpts)
+		opts, err := benchmarkOptions()
+		if err != nil {
+			return err
+		}
+		return env.DeployBenchmarks(cmd.Context(), opts)
 	},
 }
 
@@ -50,23 +87,33 @@ Pass --sandbox-class=microvm to also remove the micro-VM SandboxConfig; it is
 cluster-wide, so it is left in place by default.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		return env.DeleteBenchmarks(cmd.Context(), deleteBenchmarkOpts)
+		opts, err := benchmarkOptions()
+		if err != nil {
+			return err
+		}
+		return env.DeleteBenchmarks(cmd.Context(), opts)
 	},
 }
 
-// registerBenchmarkFlags adds the flags shared by the deploy and delete
-// commands. Only deploy reads --worker-count, but accepting it on both keeps
-// the two invocations symmetric, as the shell flags were.
-func registerBenchmarkFlags(fs *pflag.FlagSet, opts *steps.BenchmarkOptions) {
-	fs.IntVar(&opts.WorkerCount, "worker-count", 1, "Number of WorkerPool replicas")
-	fs.StringVar(&opts.SandboxClass, "sandbox-class", config.SandboxClassGvisor,
-		"Sandbox runtime for the benchmark WorkerPool: gvisor or microvm")
-}
-
 func init() {
+	config.RegisterCommand(
+		config.Setting{
+			Key: "benchmark.workerCount", Env: "ATE_BENCHMARK_WORKER_COUNT",
+			Flag: "worker-count", Kind: config.KindInt, Default: "1",
+			Commands: []string{deployBenchmarksPath, deleteBenchmarksPath},
+			Usage:    "Number of WorkerPool replicas",
+		},
+		config.Setting{
+			Key: "benchmark.sandboxClass", Env: "ATE_BENCHMARK_SANDBOX_CLASS",
+			Flag: "sandbox-class", Kind: config.KindString, Default: config.SandboxClassGvisor,
+			Commands: []string{deployBenchmarksPath, deleteBenchmarksPath},
+			Usage:    "Sandbox runtime for the benchmark WorkerPool: gvisor or microvm",
+		},
+	)
+
 	deployCmd.AddCommand(deployBenchmarksCmd)
 	deleteCmd.AddCommand(deleteBenchmarksCmd)
 
-	registerBenchmarkFlags(deployBenchmarksCmd.Flags(), &deployBenchmarkOpts)
-	registerBenchmarkFlags(deleteBenchmarksCmd.Flags(), &deleteBenchmarkOpts)
+	config.BindCommandFlags(deployBenchmarksPath, deployBenchmarksCmd.Flags())
+	config.BindCommandFlags(deleteBenchmarksPath, deleteBenchmarksCmd.Flags())
 }

@@ -820,7 +820,7 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 			wantCode := codes.OK
 			switch scenario {
 			case "missing":
-				wantCode = codes.NotFound
+				wantCode = codes.FailedPrecondition
 			case "pending":
 				tag.Status.Snapshot = nil
 				wantCode = codes.FailedPrecondition

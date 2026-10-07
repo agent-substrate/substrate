@@ -269,15 +269,18 @@ func TestRevertActor_Crashed_DetachesRecordedNode(t *testing.T) {
 	assertDetachedNodes(t, plugin, "after revert", "node1")
 	assertPersistedAttachedNodes(t, tc, name, "after revert", "")
 	tc.fakeAtelet.Lock.Lock()
-	if tc.fakeAtelet.TerminateCalled {
-		t.Errorf("RevertActor terminated a sandbox, want no Terminate for a crashed actor with no worker")
+	if !tc.fakeAtelet.TerminateCalled {
+		t.Errorf("expected Terminate call to clean up assigned node")
+	} else if gotUID := tc.fakeAtelet.TerminateRequest.GetTargetAteomUid(); gotUID != "" {
+		t.Errorf("TerminateRequest.TargetAteomUid = %q, want empty", gotUID)
 	}
 	tc.fakeAtelet.Lock.Unlock()
 }
 
 // TestRevertActor_WorkerNoLongerHosts_Detaches verifies that reverting a
-// RUNNING actor whose worker no longer hosts it skips the terminate but still
-// unpublishes the volume from the node it records and clears the record.
+// RUNNING actor whose worker no longer hosts it skips the ateom workload
+// termination (TargetAteomUid == "") but still unpublishes the volume from the
+// node it records and clears the record.
 func TestRevertActor_WorkerNoLongerHosts_Detaches(t *testing.T) {
 	ns := namespaceForTest("ns-revert-unhosted-detach")
 	plugin := &attachFailVolumePlugin{}
@@ -314,8 +317,10 @@ func TestRevertActor_WorkerNoLongerHosts_Detaches(t *testing.T) {
 	assertDetachedNodes(t, plugin, "after revert", "node1")
 	assertPersistedAttachedNodes(t, tc, name, "after revert", "")
 	tc.fakeAtelet.Lock.Lock()
-	if tc.fakeAtelet.TerminateCalled {
-		t.Errorf("RevertActor terminated a sandbox on a worker that no longer hosts the actor")
+	if !tc.fakeAtelet.TerminateCalled {
+		t.Errorf("expected Terminate call to clean up assigned node")
+	} else if gotUID := tc.fakeAtelet.TerminateRequest.GetTargetAteomUid(); gotUID != "" {
+		t.Errorf("TerminateRequest.TargetAteomUid = %q, want empty", gotUID)
 	}
 	tc.fakeAtelet.Lock.Unlock()
 }

@@ -69,7 +69,7 @@ func TestEnsureMarkedReverting_StateMatrix(t *testing.T) {
 // accepted origin: the actor lands SUSPENDED holding the same external snapshot
 // it started with, and every pointer to the discarded execution is gone.
 //
-// None of these actors has a worker assignment, so the terminate path is not
+// None of these actors has an assigned node, so the terminate path is not
 // exercised here; it needs the atelet rig, and the unit workflow is built with
 // a nil dialer on purpose so an unexpected dial fails loudly.
 func TestRevertActor_ReturnsActorToItsSnapshot(t *testing.T) {
@@ -94,8 +94,7 @@ func TestRevertActor_ReturnsActorToItsSnapshot(t *testing.T) {
 			}
 
 			// The snapshot revert must preserve, plus the node-local state a
-			// pause left behind, which it must not. Revert drops the pointer;
-			// pruning the bytes it names is still a TODO (#641).
+			// pause left behind, which it must not.
 			const keptURI = "gs://snapshots/team-a/actors/keep/snapshot"
 			mustUpdateActorStatus(t, ctx, st, actor, func(s *ateapipb.ActorStatus) {
 				s.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: keptURI}
@@ -126,6 +125,9 @@ func TestRevertActor_ReturnsActorToItsSnapshot(t *testing.T) {
 			}
 			if got := gotStatus.GetInProgressLocalSnapshotName(); got != "" {
 				t.Errorf("in-progress local snapshot name = %q, want empty", got)
+			}
+			if got := gotStatus.GetAssignedNode(); got != "" {
+				t.Errorf("assigned node = %q, want empty", got)
 			}
 			if got := gotStatus.GetWorkerAssignment(); got != nil {
 				t.Errorf("worker assignment = %v, want nil", got)
@@ -341,6 +343,7 @@ func TestEnsureRevertedFinalized_NoObjectStore(t *testing.T) {
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"},
 		Status: &ateapipb.ActorStatus{
 			State:                 ateapipb.ActorState_ACTOR_STATE_REVERTING,
+			AssignedNode:          "node-1",
 			InProgressSnapshotUri: someActorSnapshotURI(t, testStorageLocation, "team-a", "abandoned"),
 			ActorVolumes: []*ateapipb.ExternalVolume{
 				recordedVolume("vol1", "storage-vol-1", "mock", "node-1"),
@@ -359,6 +362,9 @@ func TestEnsureRevertedFinalized_NoObjectStore(t *testing.T) {
 	}
 	if got := finalized.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
 		t.Errorf("state = %v, want SUSPENDED", got)
+	}
+	if got := finalized.GetStatus().GetAssignedNode(); got != "" {
+		t.Errorf("assigned node = %q, want empty", got)
 	}
 	if got := finalized.GetStatus().GetInProgressSnapshotUri(); got != "" {
 		t.Errorf("in-progress snapshot uri = %q, want empty", got)

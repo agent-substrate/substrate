@@ -126,31 +126,35 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 	ctx, done := stepSpan(ctx, "CallAteletTerminate")
 	defer func() { err = done(err) }()
 
-	assignment := actor.GetStatus().GetWorkerAssignment()
-	if assignment == nil {
-		slog.InfoContext(ctx, "actor has no worker assignment, skipping atlet terminate request", slog.Any("actor", actorRef))
+	nodeName := actor.GetStatus().GetAssignedNode()
+	if nodeName == "" {
+		slog.InfoContext(ctx, "actor has no assigned node, skipping atelet terminate request", slog.Any("actor", actorRef))
 		return nil
 	}
 
-	if workerName := assignment.GetWorker().GetName(); workerName != "" {
-		// Ask whether the worker still HOSTS this actor, not whether its one
-		// assignment happens to be this actor: a worker hosting several is the
-		// ordinary case, and the others are none of this delete's business.
-		hosted, err := workerHostsActor(ctx, w.store, workerName, actor.GetMetadata().GetUid())
-		if err != nil {
-			return err
-		}
-		if !hosted {
-			slog.InfoContext(ctx, "worker is no longer assigned to this actor, skipping atelet terminate request",
-				slog.String("worker", workerName),
-				slog.Any("actor", actorRef))
-			return nil
+	targetAteomUID := ""
+	if assignment := actor.GetStatus().GetWorkerAssignment(); assignment != nil {
+		targetAteomUID = assignment.GetWorkerPodUid()
+		if workerName := assignment.GetWorker().GetName(); workerName != "" {
+			// Ask whether the worker still HOSTS this actor, not whether its one
+			// assignment happens to be this actor: a worker hosting several is the
+			// ordinary case, and the others are none of this delete's business.
+			hosted, err := workerHostsActor(ctx, w.store, workerName, actor.GetMetadata().GetUid())
+			if err != nil {
+				return err
+			}
+			if !hosted {
+				slog.InfoContext(ctx, "worker is no longer assigned to this actor, skipping ateom workload termination",
+					slog.String("worker", workerName),
+					slog.Any("actor", actorRef))
+				targetAteomUID = ""
+			}
 		}
 	}
 
-	conn, err := w.dialer.DialForAteletOnNode(assignment.GetNodeName())
+	conn, err := w.dialer.DialForAteletOnNode(nodeName)
 	if err != nil {
-		return fmt.Errorf("while connecting to atelet on node %q: %w", assignment.GetNodeName(), err)
+		return fmt.Errorf("while connecting to atelet on node %q: %w", nodeName, err)
 	}
 
 	client := ateletpb.NewAteomHerderClient(conn)
@@ -189,7 +193,7 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 	}
 
 	req := &ateletpb.TerminateRequest{
-		TargetAteomUid:        assignment.GetWorkerPodUid(),
+		TargetAteomUid:        targetAteomUID,
 		Atespace:              actor.GetMetadata().GetAtespace(),
 		ActorName:             actor.GetMetadata().GetName(),
 		ActorUid:              actor.GetMetadata().GetUid(),
@@ -288,6 +292,7 @@ func (w *ActorWorkflow) ensureWorkerReleased(ctx context.Context, actorRef resou
 		updatedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(dbActor *ateapipb.Actor) error {
 			if dbActor.Status != nil {
 				dbActor.Status.LocalSnapshot = nil
+				dbActor.Status.AssignedNode = ""
 				dbActor.Status.WorkerAssignment = nil
 			}
 			return nil

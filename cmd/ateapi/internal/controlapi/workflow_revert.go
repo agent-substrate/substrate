@@ -162,10 +162,11 @@ func (w *ActorWorkflow) ensureMarkedReverting(ctx context.Context, actorRef reso
 //
 // It mirrors delete's ordering: terminate, detach, and only then release, so a
 // worker is never handed back while a sandbox or a mount may still be live on
-// it. Terminate and release run only while the assigned worker still hosts the
-// actor; detach runs on every origin, from the nodes the volumes record. The
-// assignment itself is left on the record for FinalizeReverted to clear, so an
-// interrupted release is rediscoverable.
+// it. Terminate runs whenever an assigned node is recorded (clearing
+// TargetAteomUid when no worker hosts the actor); detach runs on every origin,
+// from the nodes the volumes record. The assignment itself is left on the
+// record for FinalizeReverted to clear, so an interrupted release is
+// rediscoverable.
 //
 // The sweep afterwards runs on every origin, not just when the record names no
 // worker. An assignment commits before the actor is updated to point at it, so
@@ -175,13 +176,7 @@ func (w *ActorWorkflow) ensureWorkerDiscarded(ctx context.Context, actorRef reso
 	ctx, done := stepSpan(ctx, "DiscardWorker")
 	defer func() { err = done(err) }()
 
-	hosted := false
-	if assignment := actor.GetStatus().GetWorkerAssignment(); assignment != nil {
-		if hosted, err = workerHostsActor(ctx, w.store, assignment.GetWorker().GetName(), actor.GetMetadata().GetUid()); err != nil {
-			return err
-		}
-	}
-	if hosted {
+	if actor.GetStatus().GetAssignedNode() != "" {
 		if err := w.ensureAteletTerminated(ctx, actorRef, actor, actorTemplate, ateattr.OperationRevert); err != nil {
 			// A failed terminate leaves the actor REVERTING with its
 			// assignment, so the next revert terminates it again. If the
@@ -190,17 +185,10 @@ func (w *ActorWorkflow) ensureWorkerDiscarded(ctx context.Context, actorRef reso
 			return err
 		}
 	}
-	// Detach even when no worker hosts the actor: attached_node, not the
-	// assignment, says where each volume is published. On a crashed actor
-	// whose sandbox is still running (an atelet error crashes the actor
-	// without stopping it), this revokes the sandbox's mounts under it. That
-	// is the intended, safe direction: revert discards that execution, and a
-	// sandbox the control plane no longer tracks must not keep access to the
-	// volume.
 	if err := w.ensureVolumesDetached(ctx, actor, "DetachVolumesForRevert", ateattr.OperationRevert); err != nil {
 		return err
 	}
-	if hosted {
+	if actor.GetStatus().GetWorkerAssignment() != nil {
 		if _, _, err := releaseWorker(ctx, w.store, actor); err != nil {
 			return fmt.Errorf("while releasing worker: %w", err)
 		}
@@ -260,12 +248,12 @@ func (w *ActorWorkflow) ensureRevertedFinalized(ctx context.Context, actorRef re
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
 		toUpdate.Status.WorkerAssignment = nil
-		// DiscardWorker already unpublished the volumes.
-		clearVolumeAttachments(toUpdate.Status)
+		toUpdate.Status.AssignedNode = ""
 		toUpdate.Status.InProgressSnapshotUri = ""
 		toUpdate.Status.InProgressLocalSnapshotName = ""
 		toUpdate.Status.LocalSnapshot = nil
 		toUpdate.Status.Crash = nil
+		clearVolumeAttachments(toUpdate.Status)
 		return nil
 	})
 	if err != nil {

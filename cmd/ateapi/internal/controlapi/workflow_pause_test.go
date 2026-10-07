@@ -30,13 +30,9 @@ import (
 // pod disappears from the DB during pause finalization, so the node it ran on
 // is unknown.
 //
-// Old behavior: NodeVmsWithLocalSnapshots = []string{""}, which made the
-// scheduler's node restriction search for a worker with node name "", never
-// found, a permanent "no worker has room for the actor" on resume.
-//
-// Current behavior: NodeVmsWithLocalSnapshots is left nil, and the actor is
-// crashed instead of left PAUSED, since a local snapshot with an unknown node
-// can never be safely resumed.
+// Current behavior: AssignedNode is left empty, and the actor is crashed
+// instead of left PAUSED, since a local snapshot with an unknown node can
+// never be safely resumed.
 func TestEnsurePausedFinalized_WorkerGone(t *testing.T) {
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
@@ -77,10 +73,11 @@ func TestEnsurePausedFinalized_WorkerGone(t *testing.T) {
 	if msg, want := got.GetStatus().GetCrash().GetMessage(), "pause failed: "+crashMessageLocalSnapshotNodeUnknown; msg != want {
 		t.Errorf("crash message = %q, want %q", msg, want)
 	}
-	for _, n := range got.GetStatus().GetLocalSnapshot().GetNodeVmsWithLocalSnapshots() {
-		if n == "" {
-			t.Errorf("BUG: empty string in NodeVmsWithLocalSnapshots, the scheduler's node restriction would never match a real worker")
-		}
+	if got.GetStatus().GetAssignedNode() != "" {
+		t.Errorf("AssignedNode = %q, want empty", got.GetStatus().GetAssignedNode())
+	}
+	if gotSnap := got.GetStatus().GetInProgressLocalSnapshotName(); gotSnap != "" {
+		t.Errorf("InProgressLocalSnapshotName = %q, want cleared on crash", gotSnap)
 	}
 
 	if finalized.GetStatus().GetWorkerAssignment() != nil {
@@ -97,6 +94,53 @@ func TestEnsurePausedFinalized_WorkerGone(t *testing.T) {
 	}
 	if got := (*records)[0].attrs[string(ateattr.ActorUIDKey)]; got == "" {
 		t.Error("crash record carries no ate.actor.uid")
+	}
+}
+
+// TestEnsurePausedFinalized_AlreadyCrashed verifies that if the actor was
+// already crashed out-of-band when ensurePausedFinalized runs with no
+// AssignedNode, its existing Crash status is preserved and no duplicate crash
+// log record is emitted.
+func TestEnsurePausedFinalized_AlreadyCrashed(t *testing.T) {
+	st, cleanup := storetest.SetupTestStore(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+	records := crashRecords(t)
+
+	originalCrash := newActorCrash(ateattr.OperationPause, "original crash reason")
+	actor := &ateapipb.Actor{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+		Status: &ateapipb.ActorStatus{
+			State: ateapipb.ActorState_ACTOR_STATE_CRASHED,
+			Crash: originalCrash,
+			WorkerAssignment: &ateapipb.WorkerAssignment{
+				WorkerNamespace: "default",
+				WorkerPool:      "pool1",
+				WorkerPod:       "worker-pod-1",
+			},
+			InProgressLocalSnapshotName: "local-snap-1",
+		},
+	}
+	storetest.MustCreateActor(t, ctx, st, actor)
+
+	w := &ActorWorkflow{store: st}
+	finalized, err := w.ensurePausedFinalized(ctx, actorRef, &ateapipb.ActorTemplate{})
+	if err != nil {
+		t.Fatalf("ensurePausedFinalized: %v", err)
+	}
+	if finalized.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+		t.Errorf("state = %v, want CRASHED", finalized.GetStatus().GetState())
+	}
+	if got, want := finalized.GetStatus().GetCrash().GetMessage(), originalCrash.GetMessage(); got != want {
+		t.Errorf("crash message = %q, want original %q preserved", got, want)
+	}
+	if finalized.GetStatus().GetWorkerAssignment() != nil {
+		t.Errorf("WorkerAssignment = %v, want nil", finalized.GetStatus().GetWorkerAssignment())
+	}
+	if len(*records) != 0 {
+		t.Errorf("got %d crash records, want 0 for an actor that was already crashed", len(*records))
 	}
 }
 
@@ -125,7 +169,8 @@ func TestEnsurePausedFinalized_RecordsContentScope(t *testing.T) {
 			created := storetest.MustCreateActor(t, ctx, st, &ateapipb.Actor{
 				Metadata: &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
 				Status: &ateapipb.ActorStatus{
-					State: ateapipb.ActorState_ACTOR_STATE_PAUSING,
+					State:        ateapipb.ActorState_ACTOR_STATE_PAUSING,
+					AssignedNode: "node1",
 					WorkerAssignment: &ateapipb.WorkerAssignment{
 						Worker:          &ateapipb.ObjectRef{Name: workerName},
 						WorkerNamespace: "default",
@@ -166,6 +211,9 @@ func TestEnsurePausedFinalized_RecordsContentScope(t *testing.T) {
 			}
 			if scope := got.GetStatus().GetLocalSnapshot().GetContentScope(); scope != tc.want {
 				t.Errorf("LocalSnapshot.ContentScope = %v, want %v", scope, tc.want)
+			}
+			if got.GetStatus().GetAssignedNode() != "node1" {
+				t.Errorf("AssignedNode = %q, want %q", got.GetStatus().GetAssignedNode(), "node1")
 			}
 		})
 	}
@@ -372,12 +420,13 @@ func TestEnsureMarkedPausing_GoldenAtespaceRejected(t *testing.T) {
 // actor ends PAUSED or, with its worker gone, CRASHED.
 func TestEnsurePausedFinalized_ClearsAttachedNode(t *testing.T) {
 	tests := []struct {
-		name       string
-		seedWorker bool
-		wantState  ateapipb.ActorState
+		name         string
+		assignedNode string
+		seedWorker   bool
+		wantState    ateapipb.ActorState
 	}{
-		{name: "paused", seedWorker: true, wantState: ateapipb.ActorState_ACTOR_STATE_PAUSED},
-		{name: "crashed because the worker is gone", seedWorker: false, wantState: ateapipb.ActorState_ACTOR_STATE_CRASHED},
+		{name: "paused", assignedNode: "node1", seedWorker: true, wantState: ateapipb.ActorState_ACTOR_STATE_PAUSED},
+		{name: "crashed because the worker is gone", assignedNode: "", seedWorker: false, wantState: ateapipb.ActorState_ACTOR_STATE_CRASHED},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -390,7 +439,8 @@ func TestEnsurePausedFinalized_ClearsAttachedNode(t *testing.T) {
 			created := storetest.MustCreateActor(t, ctx, st, &ateapipb.Actor{
 				Metadata: &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
 				Status: &ateapipb.ActorStatus{
-					State: ateapipb.ActorState_ACTOR_STATE_PAUSING,
+					State:        ateapipb.ActorState_ACTOR_STATE_PAUSING,
+					AssignedNode: tt.assignedNode,
 					WorkerAssignment: &ateapipb.WorkerAssignment{
 						Worker:          &ateapipb.ObjectRef{Name: workerName},
 						WorkerNamespace: "default",

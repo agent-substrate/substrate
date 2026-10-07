@@ -24,12 +24,13 @@ import (
 	"go.opentelemetry.io/otel/metric"
 
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
+	"github.com/agent-substrate/substrate/internal/ateattr"
 )
 
 // Request-parking instruments. parking.active is the live count of parked
 // requests; parking.wait.duration is how long each request stayed parked
 // (labeled by outcome); parking.rejected counts requests shed because the
-// parking lot was full.
+// parking lot was full (labeled by route outcome).
 const (
 	parkingActiveMetricName   = "atenet.router.parking.active"
 	parkingWaitMetricName     = "atenet.router.parking.wait.duration"
@@ -97,9 +98,9 @@ func (m *ParkingMetrics) recordWait(ctx context.Context, d time.Duration, outcom
 	m.wait.Record(ctx, d.Seconds(), metric.WithAttributes(attribute.String("outcome", string(outcome))))
 }
 
-func (m *ParkingMetrics) recordRejected(ctx context.Context) {
+func (m *ParkingMetrics) recordRejected(ctx context.Context, outcome string) {
 	if m == nil || m.rejected == nil {
 		return
 	}
-	m.rejected.Add(ctx, 1)
+	m.rejected.Add(ctx, 1, metric.WithAttributes(ateattr.RouterOutcomeKey.String(outcome)))
 }

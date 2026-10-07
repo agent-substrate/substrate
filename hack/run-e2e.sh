@@ -52,12 +52,14 @@ Common Go Test Flags (passed before -args):
   -v               Verbose output
   -count n         Run tests n times
   -p n             Test package concurrency (default: \$E2E_PARALLELISM, or 4)
+  -parallel n      Parallel tests per package (default: \$E2E_TEST_PARALLELISM, or 8)
   -timeout d       Per-binary timeout (default: \$E2E_TIMEOUT, or 30m)
 
-Passing -p or -timeout explicitly overrides the default for that flag.
+Passing -p, -parallel or -timeout explicitly overrides the default for that flag.
 
 Environment Variables:
   E2E_PARALLELISM  Default for -p (default: 4)
+  E2E_TEST_PARALLELISM  Default for -parallel (default: 8)
   E2E_TIMEOUT      Default for -timeout (default: 30m)
 
 See "go help testflag" for more Go test flags.
@@ -90,6 +92,7 @@ go_test_args=()
 e2e_args=()
 found_args_sep=false
 has_p_flag=false
+has_parallel_flag=false
 has_timeout_flag=false
 
 for arg in "$@"; do
@@ -108,6 +111,7 @@ for arg in "$@"; do
         # Both spellings: go's flag package accepts -flag, --flag, and either with =value.
         case "$arg" in
             -p|-p=*|--p|--p=*) has_p_flag=true ;;
+            -parallel|-parallel=*|--parallel|--parallel=*) has_parallel_flag=true ;;
             -timeout|-timeout=*|--timeout|--timeout=*) has_timeout_flag=true ;;
         esac
         go_test_args+=("$arg")
@@ -119,12 +123,15 @@ if [[ -n "${KUBECTL_CONTEXT:-}" ]]; then
     extra_e2e_args+=("--kube-context" "${KUBECTL_CONTEXT}")
 fi
 
-# Pin the two bounds go test would otherwise infer from the machine.
+# Pin the bounds go test would otherwise infer from the machine.
 #
 # -p: the system default is GOMAXPROCS causing the suite concurrency to track the
 # runner's CPU count rather than what the cluster can absorb, in this case a single
 # node Kind cluster. Explicitly setting this to E2E_PARALLELISM (default 4) avoids
 # overshooting the cluster's capacity.
+#
+# -parallel: also defaults to GOMAXPROCS, but these tests mostly just wait on
+# the cluster.
 #
 # -timeout: Go's default, when no value is provided, is 10m. TemplateReadyTimeout
 # for the micro-VM class (internal/e2e/sandbox.go) is also 10 minutes. Any E2E
@@ -135,6 +142,9 @@ fi
 default_go_test_args=()
 if [[ "${has_p_flag}" == "false" ]]; then
     default_go_test_args+=("-p" "${E2E_PARALLELISM:-4}")
+fi
+if [[ "${has_parallel_flag}" == "false" ]]; then
+    default_go_test_args+=("-parallel" "${E2E_TEST_PARALLELISM:-8}")
 fi
 if [[ "${has_timeout_flag}" == "false" ]]; then
     default_go_test_args+=("-timeout" "${E2E_TIMEOUT:-30m}")
