@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/podcertcontroller/internal/podcertificate"
+	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/pkg/postgressetup"
 	certsv1beta1 "k8s.io/api/certificates/v1beta1"
@@ -39,6 +40,7 @@ import (
 func TestMakeCert(t *testing.T) {
 	for _, tc := range []struct {
 		name                              string
+		namespace                         string
 		mutate                            func(*certsv1beta1.PodCertificateRequest)
 		wantDenied, wantError, failUpdate bool
 		lifetime                          time.Duration
@@ -47,6 +49,18 @@ func TestMakeCert(t *testing.T) {
 		{name: "runtime login", lifetime: 24 * time.Hour},
 		{name: "owner login", lifetime: 24 * time.Hour, wantUsername: postgressetup.OwnerUser, mutate: func(p *certsv1beta1.PodCertificateRequest) {
 			p.Spec.UnverifiedUserAnnotations[UsernameAnnotation] = postgressetup.OwnerUser
+		}},
+		{name: "relocated runtime login", namespace: "team-a-substrate", lifetime: 24 * time.Hour, mutate: func(p *certsv1beta1.PodCertificateRequest) {
+			p.Namespace = "team-a-substrate"
+		}},
+		{name: "relocated owner login", namespace: "team-a-substrate", lifetime: 24 * time.Hour, wantUsername: postgressetup.OwnerUser, mutate: func(p *certsv1beta1.PodCertificateRequest) {
+			p.Namespace = "team-a-substrate"
+			p.Spec.UnverifiedUserAnnotations[UsernameAnnotation] = postgressetup.OwnerUser
+		}},
+		{name: "default namespace denied after relocation", namespace: "team-a-substrate", wantDenied: true},
+		{name: "wrong service account after relocation", namespace: "team-a-substrate", wantDenied: true, mutate: func(p *certsv1beta1.PodCertificateRequest) {
+			p.Namespace = "team-a-substrate"
+			p.Spec.ServiceAccountName = "default"
 		}},
 		{name: "missing username", wantDenied: true, mutate: func(p *certsv1beta1.PodCertificateRequest) { p.Spec.UnverifiedUserAnnotations = nil }},
 		{name: "administrator username", wantDenied: true, mutate: func(p *certsv1beta1.PodCertificateRequest) {
@@ -118,7 +132,11 @@ func TestMakeCert(t *testing.T) {
 			if tc.failUpdate {
 				kc.PrependReactor("update", "podcertificaterequests", func(k8stesting.Action) (bool, runtime.Object, error) { return true, nil, errors.New("update failed") })
 			}
-			impl := NewImpl(&localca.ConcretePool{CAs: []*localca.CA{ca}}, client)
+			namespace := tc.namespace
+			if namespace == "" {
+				namespace = installdefaults.SystemNamespace
+			}
+			impl := NewImpl(namespace, &localca.ConcretePool{CAs: []*localca.CA{ca}}, client)
 			err = impl.MakeCert(t.Context(), pcr)
 
 			if (err != nil) != tc.wantError {
@@ -189,7 +207,7 @@ func TestDesiredClusterTrustBundles(t *testing.T) {
 		}
 		pool.CAs = append(pool.CAs, ca)
 	}
-	impl := NewImpl(pool, nil)
+	impl := NewImpl(installdefaults.SystemNamespace, pool, nil)
 	bundles, err := impl.DesiredClusterTrustBundles()
 	if err != nil {
 		t.Fatal(err)

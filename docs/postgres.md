@@ -11,8 +11,11 @@ External databases are never provisioned by `ateapi` or `ate-setup`. Their opera
 
 The API server connects without a password using two Kubernetes projected Pod
 Certificates from `postgres.podcert.ate.dev/identity`. This signer only issues
-client certificates to pods in `ate-system` using the `ate-api-server` service
-account. Each projection sets `userAnnotations.postgres.podcert.ate.dev/username`
+client certificates to pods using the `ate-api-server` service account in the
+namespace configured by the controller's `--postgres-client-namespace` flag
+(default: `ate-system`). Set this flag to the API server's namespace when
+relocating an installation; the certificate controller runs in a separate
+namespace. Each projection sets `userAnnotations.postgres.podcert.ate.dev/username`
 to either `substrate_owner_user` or `substrate_readwrite_user`; the signer rejects
 missing annotations, unknown keys, and every other username. It sets the
 certificate Common Name (CN) to that authorized login. Each connection pool
@@ -21,8 +24,8 @@ presents its own certificate.
 The namespace and service account are the authorization boundary. Kubernetes
 validates those identity fields in each PodCertificateRequest; the username
 annotation only selects between the two logins authorized for that identity.
-Anyone allowed to create pods as `ate-system/ate-api-server` can request either
-login, so operators must restrict that capability to trusted control-plane
+Anyone allowed to create pods using `ate-api-server` in that namespace can
+request either login, so operators must restrict that capability to trusted control-plane
 administrators. Both credentials are available to the API-server process;
 separate logins do not isolate the owner role from a compromised API server.
 

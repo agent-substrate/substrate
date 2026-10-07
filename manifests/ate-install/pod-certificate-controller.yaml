@@ -150,6 +150,7 @@ spec:
         - --service-dns-ca-pool=/run/ca-state/service-dns-pool.json
         - --pod-identity-ca-pool=/run/ca-state/pod-identity-pool.json
         - --postgres-ca-pool=/run/ca-state/postgres-pool.json
+        - --postgres-client-namespace=ate-system
         - --workers-per-signer=$(WORKERS_PER_SIGNER)
         env:
         - name: POD_NAMESPACE

@@ -38,6 +38,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/podcertcontroller/internal/servicednssigner"
 	"github.com/agent-substrate/substrate/cmd/podcertcontroller/internal/signercontroller"
 	"github.com/agent-substrate/substrate/internal/clustertrustbundle"
+	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/spf13/pflag"
@@ -82,6 +83,12 @@ var (
 		"postgres-ca-pool",
 		"",
 		"File that contains the CA pool state for "+postgressigner.Name,
+	)
+
+	postgresClientNamespace = pflag.String(
+		"postgres-client-namespace",
+		installdefaults.SystemNamespace,
+		"Namespace whose ate-api-server service account may request PostgreSQL login certificates",
 	)
 
 	workersPerSigner = pflag.Int(
@@ -192,7 +199,7 @@ func main() {
 		slog.ErrorContext(ctx, "Error loading PostgreSQL CA pool state", slog.Any("err", err))
 		os.Exit(1)
 	}
-	postgresSignerController := signercontroller.New(clock.RealClock{}, postgressigner.NewImpl(postgresCAPool, pcrClient), hasher, pcrClient, trustBundles)
+	postgresSignerController := signercontroller.New(clock.RealClock{}, postgressigner.NewImpl(*postgresClientNamespace, postgresCAPool, pcrClient), hasher, pcrClient, trustBundles)
 	go postgresSignerController.Run(ctx, *workersPerSigner)
 	go pcrClient.Informer().Run(ctx.Done())
 	go serviceDNSSignerController.Run(ctx, *workersPerSigner)
