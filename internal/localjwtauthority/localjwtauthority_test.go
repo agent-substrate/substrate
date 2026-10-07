@@ -15,8 +15,10 @@
 package localjwtauthority
 
 import (
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
@@ -27,6 +29,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	jose "github.com/go-jose/go-jose/v4"
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/agent-substrate/substrate/internal/actoridjwt"
@@ -188,6 +191,96 @@ func TestSignJWTHeader(t *testing.T) {
 	want := map[string]string{"typ": "JWT", "alg": "ES256", "kid": "key-1"}
 	if diff := cmp.Diff(got, want); diff != "" {
 		t.Errorf("Wrong JWT header; diff (-got +want)\n%s", diff)
+	}
+}
+
+func TestSignJWTVerifies(t *testing.T) {
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ecKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		alg string
+		key crypto.Signer
+	}{
+		{"RS256", rsaKey},
+		{"RS384", rsaKey},
+		{"RS512", rsaKey},
+		{"ES256", ecKey},
+	} {
+		t.Run(tc.alg, func(t *testing.T) {
+			pool := &ConcretePool{
+				Authorities:      []*Authority{{ID: "key-1", Algorithm: tc.alg, SigningKey: tc.key}},
+				ActiveForSigning: "key-1",
+			}
+			jwt, err := pool.SignJWT(&actoridjwt.Claims{Subject: "actor/a/b", Audiences: []string{"aud"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			jws, err := jose.ParseSigned(jwt, []jose.SignatureAlgorithm{jose.SignatureAlgorithm(tc.alg)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			payload, err := jws.Verify(tc.key.Public())
+			if err != nil {
+				t.Fatalf("JWT does not verify against the authority's public key: %v", err)
+			}
+
+			header := jws.Signatures[0].Protected
+			if header.Algorithm != tc.alg || header.KeyID != "key-1" || header.ExtraHeaders[jose.HeaderType] != "JWT" {
+				t.Errorf("header = %+v, want alg %s, kid key-1, typ JWT", header, tc.alg)
+			}
+
+			var claims struct {
+				Subject   string   `json:"sub"`
+				Audiences []string `json:"aud"`
+			}
+			if err := json.Unmarshal(payload, &claims); err != nil {
+				t.Fatal(err)
+			}
+			if claims.Subject != "actor/a/b" || len(claims.Audiences) != 1 || claims.Audiences[0] != "aud" {
+				t.Errorf("claims = %+v, want sub actor/a/b and aud [aud]", claims)
+			}
+		})
+	}
+}
+
+func TestSignJWTRejectsBadAuthority(t *testing.T) {
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p384Key, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name string
+		alg  string
+		key  crypto.Signer
+	}{
+		{"unsupported algorithm", "HS256", rsaKey},
+		{"RSA-PSS is not offered", "PS256", rsaKey},
+		{"ES256 with a P-384 key", "ES256", p384Key},
+		{"ES256 with an RSA key", "ES256", rsaKey},
+		{"RS256 with an EC key", "RS256", p384Key},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pool := &ConcretePool{
+				Authorities:      []*Authority{{ID: "key-1", Algorithm: tc.alg, SigningKey: tc.key}},
+				ActiveForSigning: "key-1",
+			}
+			if _, err := pool.SignJWT(&actoridjwt.Claims{Subject: "actor/a/b"}); err == nil {
+				t.Error("SignJWT returned nil error")
+			}
+		})
 	}
 }
 

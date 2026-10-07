@@ -22,13 +22,13 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"hash"
 	"os"
 	"sync"
 	"time"
+
+	jose "github.com/go-jose/go-jose/v4"
 
 	"github.com/agent-substrate/substrate/internal/actoridjwt"
 	"github.com/agent-substrate/substrate/internal/oidcdiscovery"
@@ -188,78 +188,31 @@ func (p *ConcretePool) VerificationKeys() ([]*VerificationKey, error) {
 	return keys, nil
 }
 
-type wireHeader struct {
-	Type      string `json:"typ,omitempty"`
-	Algorithm string `json:"alg,omitempty"`
-	KeyID     string `json:"kid,omitempty"`
-}
-
-func sign(payloadBytes []byte, signingKey crypto.PrivateKey, algorithm, keyID string) (string, error) {
-	payloadB64 := base64.RawURLEncoding.EncodeToString(payloadBytes)
-
-	rawHeader := wireHeader{
-		Type:      "JWT",
-		Algorithm: algorithm,
-		KeyID:     keyID,
-	}
-	headerBytes, err := json.Marshal(rawHeader)
-	if err != nil {
-		return "", fmt.Errorf("while marshaling header: %w", err)
-	}
-	headerB64 := base64.RawURLEncoding.EncodeToString(headerBytes)
-
-	toBeSigned := headerB64 + "." + payloadB64
-
-	var sigBytes []byte
-	switch algorithm {
-	case "RS256":
-		rsaKey := signingKey.(*rsa.PrivateKey)
-		toBeSignedDigest := hashBytes(crypto.SHA256.New(), []byte(toBeSigned))
-		sigBytes, err = rsa.SignPKCS1v15(rand.Reader, rsaKey, crypto.SHA256, toBeSignedDigest)
-		if err != nil {
-			return "", fmt.Errorf("while performing RSA PKCS1v15 signature: %w", err)
-		}
-	case "RS384":
-		rsaKey := signingKey.(*rsa.PrivateKey)
-		toBeSignedDigest := hashBytes(crypto.SHA384.New(), []byte(toBeSigned))
-		sigBytes, err = rsa.SignPKCS1v15(rand.Reader, rsaKey, crypto.SHA384, toBeSignedDigest)
-		if err != nil {
-			return "", fmt.Errorf("while performing RSA PKCS1v15 signature: %w", err)
-		}
-	case "RS512":
-		rsaKey := signingKey.(*rsa.PrivateKey)
-		toBeSignedDigest := hashBytes(crypto.SHA512.New(), []byte(toBeSigned))
-		sigBytes, err = rsa.SignPKCS1v15(rand.Reader, rsaKey, crypto.SHA512, toBeSignedDigest)
-		if err != nil {
-			return "", fmt.Errorf("while performing RSA PKCS1v15 signature: %w", err)
-		}
-	case "ES256":
-		// JOSE ES256 defined at https://datatracker.ietf.org/doc/rfc7518/ section 3.4
-		ecdsaKey := signingKey.(*ecdsa.PrivateKey)
-		if ecdsaKey.Curve != elliptic.P256() {
-			return "", fmt.Errorf("ES256 requires a P256 key")
-		}
-		toBeSignedDigest := hashBytes(crypto.SHA256.New(), []byte(toBeSigned))
-		r, s, err := ecdsa.Sign(rand.Reader, ecdsaKey, toBeSignedDigest)
-		if err != nil {
-			return "", fmt.Errorf("while performing ecdsa signature: %w", err)
-		}
-		sigBytes = make([]byte, 2*32)
-		r.FillBytes(sigBytes[:32])
-		s.FillBytes(sigBytes[32:])
+// sign signs payload as a compact JWS with the typ and kid headers set.
+func sign(payload []byte, signingKey crypto.Signer, algorithm, keyID string) (string, error) {
+	alg := jose.SignatureAlgorithm(algorithm)
+	switch alg {
+	case jose.RS256, jose.RS384, jose.RS512, jose.ES256:
 	default:
 		return "", fmt.Errorf("unimplemented algorithm %q", algorithm)
 	}
 
-	sigB64 := base64.RawURLEncoding.EncodeToString(sigBytes)
+	signer, err := jose.NewSigner(
+		jose.SigningKey{
+			Algorithm: alg,
+			Key:       jose.JSONWebKey{Key: signingKey, KeyID: keyID},
+		},
+		(&jose.SignerOptions{}).WithType("JWT"),
+	)
+	if err != nil {
+		return "", fmt.Errorf("while creating signer: %w", err)
+	}
 
-	return toBeSigned + "." + sigB64, nil
-}
-
-func hashBytes(hasher hash.Hash, bytes []byte) []byte {
-	hasher.Write(bytes)
-	hash := hasher.Sum(nil)
-	return hash[:]
+	jws, err := signer.Sign(payload)
+	if err != nil {
+		return "", fmt.Errorf("while signing: %w", err)
+	}
+	return jws.CompactSerialize()
 }
 
 type Authority struct {
