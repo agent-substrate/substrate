@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package ateomcapacity reports what an ateom can supply to the actors it
-// hosts. Both ateoms answer GetCapacity from here so they answer it alike.
-package ateomcapacity
+// Package ateom registers an ateom worker with the control plane through the
+// node-local atelet, reporting its compute capacity and hardware identity.
+package ateom
 
 import (
 	"context"

@@ -40,7 +40,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/actorlog"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
-	"github.com/agent-substrate/substrate/internal/ateomcapacity"
+	"github.com/agent-substrate/substrate/internal/ateom"
 	"github.com/agent-substrate/substrate/internal/ateomcgroup"
 	"github.com/agent-substrate/substrate/internal/ateomnet"
 	"github.com/agent-substrate/substrate/internal/ateomtunnel"
@@ -257,7 +257,7 @@ func do(ctx context.Context) error {
 	// outlast, including the window before the Worker record exists; anything
 	// that reaches here is a misconfiguration no restart-in-place will fix.
 	go func() {
-		err := ateomcapacity.Report(ctx, ateomcapacity.ReportConfig{
+		err := ateom.Report(ctx, ateom.ReportConfig{
 			SocketPath:           nodepath.AteomSupportSocket,
 			CredentialBundlePath: tunnelConfig.CredentialBundle,
 			TrustBundlePath:      tunnelConfig.TrustBundle,
