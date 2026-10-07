@@ -326,22 +326,8 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.namespace
-        - name: OTEL_SDK_DISABLED
-          value: "true"
-        ports:
-        - name: health
-          containerPort: 8081
-        readinessProbe:
-          httpGet:
-            path: /readyz
-            port: health
-          periodSeconds: 2
-        livenessProbe:
-          httpGet:
-            path: /healthz
-            port: health
-          initialDelaySeconds: 10
-          periodSeconds: 10
+        - name: OTEL_METRICS_EXPORTER
+          value: none
         resources:
           requests:
             cpu: 100m
