@@ -243,6 +243,22 @@ const (
 	ImageCacheOutcomeTimeout   = "timeout"
 )
 
+// EgressActorJWTOutcomeKey is rooted at the egress gateway's token cache, not
+// under actor: the requests of every actor share it.
+const EgressActorJWTOutcomeKey = attribute.Key("ate.egress.actor_jwt.outcome")
+
+// Values for EgressActorJWTOutcomeKey. A hit is a token the gateway can reuse; a
+// miss waits for a mint, its own or one already in flight. Error is the only
+// one that carries an error.type; Cancelled and Timeout mean the caller gave
+// up, and the mint carries on.
+const (
+	EgressActorJWTOutcomeHit       = "hit"
+	EgressActorJWTOutcomeMiss      = "miss"
+	EgressActorJWTOutcomeError     = "error"
+	EgressActorJWTOutcomeCancelled = "cancelled"
+	EgressActorJWTOutcomeTimeout   = "timeout"
+)
+
 // Values for RouterOutcomeKey. RouterOutcomeNoCapacity means that no worker
 // that meets the constraints of the actor had room. scheduling.ErrNoCapacity
 // reports the same condition. It is a capacity signal, not a defect. A request

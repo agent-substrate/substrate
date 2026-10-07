@@ -104,12 +104,12 @@ type Handler struct {
 // denied. Actor JWT injections need no provider. providerName, when set, is
 // the provider this gateway serves; a credential URI naming another provider
 // is refused.
-func New(apiClient ateapipb.ControlClient, actorIdentityRoots *x509.CertPool, policyCacheTTL time.Duration, provider credproviderpb.CredentialProviderClient, providerName string) *Handler {
+func New(apiClient ateapipb.ControlClient, actorIdentityRoots *x509.CertPool, policyCacheTTL time.Duration, provider credproviderpb.CredentialProviderClient, providerName string, actorJWTMetrics *actorjwt.Instruments) *Handler {
 	return &Handler{
 		apiClient:          apiClient,
 		actorIdentityRoots: actorIdentityRoots,
 		policies:           newPolicyCache(apiClient, policyCacheTTL),
-		actorJWTs:          actorjwt.New(apiClient),
+		actorJWTs:          actorjwt.New(apiClient, actorJWTMetrics),
 		provider:           provider,
 		providerName:       providerName,
 	}

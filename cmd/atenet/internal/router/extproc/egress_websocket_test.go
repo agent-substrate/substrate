@@ -74,7 +74,7 @@ func TestProcessReturnsWebSocketDenialAsImmediateResponse(t *testing.T) {
 			}
 			stream := &websocketProcessStream{ctx: context.Background(), requests: []*extprocv3.ProcessingRequest{request}}
 			server := extproc.NewServer(0, nil, extproc.Handlers{
-				extproc.DirectionEgress: egress.New(nil, nil, 0, nil, ""),
+				extproc.DirectionEgress: egress.New(nil, nil, 0, nil, "", nil),
 			})
 
 			if err := server.Process(stream); err != nil {
