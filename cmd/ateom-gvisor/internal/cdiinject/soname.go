@@ -42,7 +42,7 @@ import (
 // symlink out of the rootfs would otherwise have the kernel resolve it in ateom's
 // mount namespace, where the shared image cache and other actors' bundles are
 // mounted. Same treatment as createExtraDirs in internal/imagecache.
-func StageSonameSymlinks(ctx context.Context, rootfs string, mounts []specs.Mount) error {
+func StageSonameSymlinks(ctx context.Context, rootfs string, mounts []specs.Mount, allowedHostDirs []string) error {
 	root, err := os.OpenRoot(rootfs)
 	if err != nil {
 		return fmt.Errorf("while opening rootfs %q: %w", rootfs, err)
@@ -55,7 +55,11 @@ func StageSonameSymlinks(ctx context.Context, rootfs string, mounts []specs.Moun
 		if !strings.Contains(base, ".so.") || m.Source == "" {
 			continue
 		}
-		soname, err := elfSonameFn(m.Source)
+		hostRoot, relSource, err := resolveAllowedHostPath(m.Source, allowedHostDirs)
+		if err != nil {
+			return err
+		}
+		soname, err := elfSonameFn(hostRoot, relSource)
 		if err != nil {
 			slog.WarnContext(ctx, "Skipping SONAME symlink for driver library",
 				slog.String("library", m.Source), slog.Any("err", err))
@@ -91,18 +95,36 @@ func StageSonameSymlinks(ctx context.Context, rootfs string, mounts []specs.Moun
 // real ELF file on disk.
 var elfSonameFn = elfSoname
 
-// elfSoname returns a shared library's DT_SONAME. It returns "" with a nil error for
-// a library that simply carries no DT_SONAME entry, and an error when the file could
-// not be opened or parsed as ELF.
-func elfSoname(path string) (string, error) {
-	f, err := elf.Open(path)
+// elfSoname returns a shared library's DT_SONAME, opening rel inside rootDir via
+// os.Root so symlinks cannot escape the allowed host directory. It returns "" with
+// a nil error for a library that simply carries no DT_SONAME entry, and an error
+// when the file could not be opened or parsed as a regular ELF file.
+func elfSoname(rootDir, rel string) (string, error) {
+	root, err := os.OpenRoot(rootDir)
 	if err != nil {
-		return "", fmt.Errorf("opening ELF %s: %w", path, err)
+		return "", fmt.Errorf("opening allowed host dir %s: %w", rootDir, err)
+	}
+	defer root.Close()
+	f, err := root.Open(rel)
+	if err != nil {
+		return "", fmt.Errorf("opening ELF %s/%s: %w", rootDir, rel, err)
 	}
 	defer f.Close()
-	names, err := f.DynString(elf.DT_SONAME)
+	fi, err := f.Stat()
 	if err != nil {
-		return "", fmt.Errorf("reading DT_SONAME from %s: %w", path, err)
+		return "", fmt.Errorf("stat ELF %s/%s: %w", rootDir, rel, err)
+	}
+	if !fi.Mode().IsRegular() {
+		return "", fmt.Errorf("ELF %s/%s is not a regular file", rootDir, rel)
+	}
+	ef, err := elf.NewFile(f)
+	if err != nil {
+		return "", fmt.Errorf("parsing ELF %s/%s: %w", rootDir, rel, err)
+	}
+	defer ef.Close()
+	names, err := ef.DynString(elf.DT_SONAME)
+	if err != nil {
+		return "", fmt.Errorf("reading DT_SONAME from %s/%s: %w", rootDir, rel, err)
 	}
 	if len(names) == 0 {
 		return "", nil
