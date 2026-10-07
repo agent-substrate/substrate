@@ -19,7 +19,7 @@ The system upgrade does not change the database engine, the CSI drivers `--setup
 
 ## Before you start
 
-Check out both releases. `ate-setup` runs from the new checkout. The old checkout is kept for rollback.
+Check out both releases. `ate-setup` runs from the new checkout. The old checkout is kept for rollback. The installed release is `cluster.substrateVersion` in this cluster's install record, described below.
 
 ```bash
 OLD_RELEASE=<installed release, for example v0.2.0>
@@ -75,6 +75,11 @@ This deploys the new podcertificate-controller and waits until it publishes its 
 
 ```bash
 go run ./cmd/ate-setup deploy atelet --config ~/ate-upgrade/new.yaml --rollout-timeout 1h
+```
+
+`ate-setup` prints nothing until the roll is done. To watch it, open a second terminal and run:
+
+```bash
 kubectl -n ate-system rollout status ds/atelet
 ```
 
@@ -112,10 +117,10 @@ Then move the pools. For each pool:
    CLASS=$(kubectl -n $NS get workerpool $WORKERPOOL -o jsonpath='{.spec.sandboxClass}')
    ```
 
-2. Set its new image. From source, copy the ref after `ateom-$CLASS: ` in `~/ate-upgrade/worker-images.txt`:
+2. Set its new image. From source, take the ref after `ateom-$CLASS: ` in `~/ate-upgrade/worker-images.txt`:
 
    ```bash
-   NEW_IMAGE=<ref>
+   NEW_IMAGE=$(sed -n "s/^ateom-$CLASS: //p" ~/ate-upgrade/worker-images.txt)
    ```
 
    With prebuilt images, set `NEW_IMAGE` to `ateom-$CLASS` from your image repo at the new tag, pinned by digest (`crane digest <image>` prints it).
@@ -129,7 +134,13 @@ Then move the pools. For each pool:
    kubectl -n $NS rollout status deployment/$WORKERPOOL
    ```
 
-5. Once the first pool of a CLASS reports `1 of N updated replicas are available`, patch the other pools of that CLASS without waiting. Then repeat on other CLASS.
+5. Once the first pool of a CLASS has one new worker running, patch the other pools of that CLASS without waiting for the roll to finish. A new worker is running when the newest ReplicaSet of the pool shows READY 1 or more:
+
+   ```bash
+   kubectl -n $NS get rs -l ate.dev/worker-pool=$WORKERPOOL
+   ```
+
+   Then repeat on the other CLASS.
 
 What to expect:
 
@@ -137,7 +148,10 @@ What to expect:
 - **Done:** Step 3 is done when every pool is done rolling with `kubectl get deploy -A -l ate.dev/worker-pool`. Go to Step 4 once done.
 - **Pace:** a WorkerPool replaces 10% of its workers per batch. New workers start wherever the scheduler finds room. With spare capacity, every batch has its `SIGTERM` within minutes and the old workers drain in parallel; without it, new workers stay Pending until old ones exit, up to 30 minutes per batch, so a large pool can take hours. 
 - **Stuck:** rollout status fails with `exceeded its progress deadline` (the roll goes on), or a worker pod stays Terminating for more than 60 minutes. Check `kubectl -n $NS get pods -l ate.dev/worker-pool=$WORKERPOOL`. A bad image stops the roll after the first batch: [roll back that pool](#roll-back-step-3).
-- **Actors:** each gets `SIGTERM` and 30 minutes to be suspended, as described under eviction in the [API guide](api-guide.md).
+- **Actors:** each gets `SIGTERM` and 30 minutes to be suspended. Substrate does not suspend them. An actor that is not suspended by then becomes `CRASHED` and loses its work since its last snapshot.
+
+> [!NOTE]
+> TODO: link to the eviction section in the [API guide](api-guide.md), which will say how an actor is expected to get suspended within the 30 minutes.
 
 ### Step 4. Upgrade the Substrate control plane
 
