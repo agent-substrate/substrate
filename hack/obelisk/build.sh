@@ -69,7 +69,7 @@ LimitCORE=infinity
 TasksMax=infinity
 Restart=always
 RestartSec=5s
-ExecStart=/bin/sh -ec 'node_ip="$(ip -4 -o address show dev eth0 | cut -d " " -f 7 | cut -d / -f 1)"; exec /usr/local/bin/k3s server --node-ip="${node_ip}" --advertise-address="${node_ip}" --flannel-iface=eth0 --disable=traefik --disable=servicelb --disable=metrics-server --write-kubeconfig-mode=600'
+ExecStart=/bin/sh -ec 'node_ip="$(hostname -I | cut -d " " -f 1)"; exec /usr/local/bin/k3s server --node-ip="${node_ip}" --advertise-address="${node_ip}" --flannel-iface=eth0 --disable=traefik --disable=servicelb --disable=metrics-server --write-kubeconfig-mode=600'
 
 [Install]
 WantedBy=multi-user.target
