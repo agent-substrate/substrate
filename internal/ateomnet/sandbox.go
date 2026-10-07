@@ -23,6 +23,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/netip"
 	"sync"
 
 	"github.com/agent-substrate/substrate/internal/ateomnet/dns"
@@ -210,13 +211,13 @@ func setupGatewaySide(ctx context.Context, ns netns.Handle, egressPort uint16) e
 	}); err != nil {
 		return err
 	}
-	return installEgressRedirect(ns, egressPort)
+	return installEgressRules(ns, egressPort)
 }
 
-// installEgressRedirect redirects TCP egress to atunnel, excluding the sandbox's
-// own /30: that keeps ingress replies and DNS over TCP to the gateway off the
-// redirect, so the relay serves them on its own listener.
-func installEgressRedirect(ns netns.Handle, egressPort uint16) error {
+// installEgressRules drops link-local traffic before it reaches the egress PEP,
+// then redirects other TCP egress to atunnel. The actor's own /30 is excluded
+// from both rules so ingress replies and DNS reach their local sockets.
+func installEgressRules(ns netns.Handle, egressPort uint16) error {
 	if egressPort == 0 {
 		return fmt.Errorf("actornet: atunnel egress port is required")
 	}
@@ -226,9 +227,53 @@ func installEgressRedirect(ns netns.Handle, egressPort uint16) error {
 	}
 	defer func() { _ = c.CloseLasting() }()
 
-	table := c.AddTable(&nftables.Table{Family: nftables.TableFamilyIPv4, Name: "ateom-actor"})
+	var ipv4Table *nftables.Table
+	for _, family := range []struct {
+		tableFamily nftables.TableFamily
+		name        string
+		addressLen  uint32
+		dstOffset   uint32
+		isPrefix    func(netip.Prefix) bool
+	}{
+		{nftables.TableFamilyIPv4, "ateom-actor", 4, 16, func(prefix netip.Prefix) bool { return prefix.Addr().Is4() }},
+		{nftables.TableFamilyIPv6, "ateom-actor-v6", 16, 24, func(prefix netip.Prefix) bool { return prefix.Addr().Is6() }},
+	} {
+		table := c.AddTable(&nftables.Table{Family: family.tableFamily, Name: family.name})
+		if family.tableFamily == nftables.TableFamilyIPv4 {
+			ipv4Table = table
+		}
+		filter := c.AddChain(&nftables.Chain{
+			Name: "disallowed-egress", Table: table, Type: nftables.ChainTypeFilter,
+			Hooknum: nftables.ChainHookPrerouting, Priority: nftables.ChainPriorityRaw,
+		})
+		if family.tableFamily == nftables.TableFamilyIPv4 {
+			c.AddRule(&nftables.Rule{Table: table, Chain: filter, Exprs: []expr.Any{
+				&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseNetworkHeader, Offset: family.dstOffset, Len: family.addressLen},
+				&expr.Bitwise{SourceRegister: 1, DestRegister: 1, Len: 4, Mask: actorSubnetMask, Xor: []byte{0, 0, 0, 0}},
+				&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: actorSubnetBase},
+				&expr.Verdict{Kind: expr.VerdictAccept},
+			}})
+		}
+		for _, prefix := range linkLocalEgressCIDRRanges {
+			if !family.isPrefix(prefix) {
+				continue
+			}
+			mask := net.CIDRMask(prefix.Bits(), int(family.addressLen*8))
+			address := prefix.Addr().AsSlice()
+			expressions := []expr.Any{
+				&expr.Payload{DestRegister: 1, Base: expr.PayloadBaseNetworkHeader, Offset: family.dstOffset, Len: family.addressLen},
+			}
+			expressions = append(expressions,
+				&expr.Bitwise{SourceRegister: 1, DestRegister: 1, Len: family.addressLen, Mask: mask, Xor: make([]byte, family.addressLen)},
+				&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: address},
+				&expr.Verdict{Kind: expr.VerdictDrop},
+			)
+			c.AddRule(&nftables.Rule{Table: table, Chain: filter, Exprs: expressions})
+		}
+	}
+
 	prerouting := c.AddChain(&nftables.Chain{
-		Name: "prerouting", Table: table, Type: nftables.ChainTypeNAT,
+		Name: "prerouting", Table: ipv4Table, Type: nftables.ChainTypeNAT,
 		Hooknum: nftables.ChainHookPrerouting, Priority: nftables.ChainPriorityNATDest,
 	})
 
@@ -247,12 +292,20 @@ func installEgressRedirect(ns netns.Handle, egressPort uint16) error {
 		&expr.Immediate{Register: 1, Data: binaryutil.BigEndian.PutUint16(egressPort)},
 		&expr.Redir{RegisterProtoMin: 1},
 	)
-	c.AddRule(&nftables.Rule{Table: table, Chain: prerouting, Exprs: exprs})
+	c.AddRule(&nftables.Rule{Table: ipv4Table, Chain: prerouting, Exprs: exprs})
 
 	if err := c.Flush(); err != nil {
 		return fmt.Errorf("while installing the actor egress redirect: %w", err)
 	}
 	return nil
+}
+
+// linkLocalEgressCIDRRanges cover all IPv4 and IPv6 link-local space. The
+// nftables chain accepts the actor's 169.254.17.0/30 first because that network
+// carries actor ingress and DNS relay traffic.
+var linkLocalEgressCIDRRanges = []netip.Prefix{
+	netip.MustParsePrefix("169.254.0.0/16"),
+	netip.MustParsePrefix("fe80::/10"),
 }
 
 // The actor subnet, in the form the nftables comparison takes.
