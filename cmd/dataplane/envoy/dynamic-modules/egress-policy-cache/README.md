@@ -36,6 +36,8 @@ When an actor opens a `CONNECT` tunnel on the outer listener:
        `dev.ate.policy.egress.cached`.
      - Sets `has_cached_policy = true` on the per-stream
        `EgressPolicyCacheFilter`.
+     - Sets `dev.ate.egress:dialed_port` in the dynamic metadata, so that inner
+       request is sent to the port in the CONNECT authority.
      - Increments the `ate_egress.connect_cache_hit` counter.
    - **Expired entry (`stored_at.elapsed() > cache_ttl`)**:
      - Removes the expired entry from the LRU cache without setting filter
