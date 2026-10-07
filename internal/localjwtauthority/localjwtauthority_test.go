@@ -30,7 +30,6 @@ import (
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/agent-substrate/substrate/internal/actoridjwt"
-	"github.com/agent-substrate/substrate/internal/oidcdiscovery"
 )
 
 func TestRefreshingPool(t *testing.T) {
@@ -201,7 +200,7 @@ func TestGenerateAuthority(t *testing.T) {
 			if authority.Algorithm != alg {
 				t.Errorf("Algorithm = %q, want %q", authority.Algorithm, alg)
 			}
-			thumbprint, err := oidcdiscovery.Thumbprint(authority.SigningKey.Public())
+			thumbprint, err := Thumbprint(authority.SigningKey.Public())
 			if err != nil {
 				t.Fatal(err)
 			}

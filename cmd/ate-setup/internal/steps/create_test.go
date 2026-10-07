@@ -26,7 +26,6 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/localjwtauthority"
-	"github.com/agent-substrate/substrate/internal/oidcdiscovery"
 )
 
 // ate-api-server requires both connection strings and its schema in the
@@ -185,7 +184,7 @@ func TestNewJWTPoolSecretData(t *testing.T) {
 			if authority.Algorithm != alg {
 				t.Errorf("Algorithm = %q, want %q", authority.Algorithm, alg)
 			}
-			thumbprint, err := oidcdiscovery.Thumbprint(authority.SigningKey.Public())
+			thumbprint, err := localjwtauthority.Thumbprint(authority.SigningKey.Public())
 			if err != nil {
 				t.Fatalf("Thumbprint() error = %v", err)
 			}

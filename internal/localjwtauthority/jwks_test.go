@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package oidcdiscovery
+package localjwtauthority
 
 import (
 	"crypto"
@@ -29,9 +29,9 @@ import (
 )
 
 func TestJWKS(t *testing.T) {
-	got, err := JWKS([]PublicKey{
-		{ID: "rsa", Algorithm: "RS256", Key: rfcRSAKey(t)},
-		{ID: "ec", Algorithm: "ES256", Key: rfcECKey(t)},
+	got, err := JWKS([]*VerificationKey{
+		{KeyID: "rsa", Algorithm: "RS256", PublicKey: rfcRSAKey(t)},
+		{KeyID: "ec", Algorithm: "ES256", PublicKey: rfcECKey(t)},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -72,9 +72,9 @@ func TestJWKSRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	keys := []PublicKey{
-		{ID: "a", Algorithm: "RS384", Key: &rsaKey.PublicKey},
-		{ID: "b", Algorithm: "ES256", Key: &ecKey.PublicKey},
+	keys := []*VerificationKey{
+		{KeyID: "a", Algorithm: "RS384", PublicKey: &rsaKey.PublicKey},
+		{KeyID: "b", Algorithm: "ES256", PublicKey: &ecKey.PublicKey},
 	}
 	data, err := JWKS(keys)
 	if err != nil {
@@ -92,8 +92,8 @@ func TestJWKSRoundTrip(t *testing.T) {
 	}
 	for i, key := range keys {
 		j := set.Keys[i]
-		if j.KeyID != key.ID || j.Algorithm != key.Algorithm || j.Use != "sig" {
-			t.Errorf("key %d: kid %q alg %q use %q, want %q %q sig", i, j.KeyID, j.Algorithm, j.Use, key.ID, key.Algorithm)
+		if j.KeyID != key.KeyID || j.Algorithm != key.Algorithm || j.Use != "sig" {
+			t.Errorf("key %d: kid %q alg %q use %q, want %q %q sig", i, j.KeyID, j.Algorithm, j.Use, key.KeyID, key.Algorithm)
 		}
 		var decoded crypto.PublicKey
 		switch j.KeyType {
@@ -109,8 +109,8 @@ func TestJWKSRoundTrip(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		if !key.Key.(interface{ Equal(crypto.PublicKey) bool }).Equal(decoded) {
-			t.Errorf("key %q did not decode back to the original public key", key.ID)
+		if !key.PublicKey.(interface{ Equal(crypto.PublicKey) bool }).Equal(decoded) {
+			t.Errorf("key %q did not decode back to the original public key", key.KeyID)
 		}
 	}
 }
@@ -126,16 +126,16 @@ func TestJWKSRejects(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tests := map[string][]PublicKey{
+	tests := map[string][]*VerificationKey{
 		"no keys":              nil,
-		"missing ID":           {{Algorithm: "RS256", Key: rsaKey}},
-		"duplicate ID":         {{ID: "k", Algorithm: "RS256", Key: rsaKey}, {ID: "k", Algorithm: "ES256", Key: ecKey}},
-		"missing algorithm":    {{ID: "k", Key: rsaKey}},
-		"ES256 with RSA key":   {{ID: "k", Algorithm: "ES256", Key: rsaKey}},
-		"RS256 with EC key":    {{ID: "k", Algorithm: "RS256", Key: ecKey}},
-		"HMAC algorithm":       {{ID: "k", Algorithm: "HS256", Key: rsaKey}},
-		"P-384 key":            {{ID: "k", Algorithm: "ES256", Key: &p384.PublicKey}},
-		"unsupported key type": {{ID: "k", Algorithm: "EdDSA", Key: edKey}},
+		"missing ID":           {{Algorithm: "RS256", PublicKey: rsaKey}},
+		"duplicate ID":         {{KeyID: "k", Algorithm: "RS256", PublicKey: rsaKey}, {KeyID: "k", Algorithm: "ES256", PublicKey: ecKey}},
+		"missing algorithm":    {{KeyID: "k", PublicKey: rsaKey}},
+		"ES256 with RSA key":   {{KeyID: "k", Algorithm: "ES256", PublicKey: rsaKey}},
+		"RS256 with EC key":    {{KeyID: "k", Algorithm: "RS256", PublicKey: ecKey}},
+		"HMAC algorithm":       {{KeyID: "k", Algorithm: "HS256", PublicKey: rsaKey}},
+		"P-384 key":            {{KeyID: "k", Algorithm: "ES256", PublicKey: &p384.PublicKey}},
+		"unsupported key type": {{KeyID: "k", Algorithm: "EdDSA", PublicKey: edKey}},
 	}
 	for name, keys := range tests {
 		if got, err := JWKS(keys); err == nil {
@@ -157,7 +157,7 @@ func TestJWKSPadsECCoordinates(t *testing.T) {
 			key = k
 		}
 	}
-	data, err := JWKS([]PublicKey{{ID: "k", Algorithm: "ES256", Key: &key.PublicKey}})
+	data, err := JWKS([]*VerificationKey{{KeyID: "k", Algorithm: "ES256", PublicKey: &key.PublicKey}})
 	if err != nil {
 		t.Fatal(err)
 	}

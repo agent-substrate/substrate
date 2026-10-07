@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package oidcdiscovery
+package localjwtauthority
 
 import (
 	"crypto"
@@ -27,13 +27,6 @@ import (
 	"slices"
 	"strings"
 )
-
-// PublicKey is a verification key to publish in a JWK set.
-type PublicKey struct {
-	ID        string
-	Algorithm string
-	Key       crypto.PublicKey
-}
 
 // jwk is one key of a JWK set (RFC 7517), with the public parameters RFC 7518
 // section 6 defines for RSA and EC keys.
@@ -52,7 +45,7 @@ type jwk struct {
 // JWKS returns the JWK set, as JSON, that publishes keys for signature
 // verification, sorted by key ID. Each key's algorithm must fit its type:
 // ES256 for a P-256 EC key, or RS256, RS384, or RS512 for an RSA key.
-func JWKS(keys []PublicKey) ([]byte, error) {
+func JWKS(keys []*VerificationKey) ([]byte, error) {
 	if len(keys) == 0 {
 		return nil, errors.New("no keys to publish")
 	}
@@ -61,19 +54,19 @@ func JWKS(keys []PublicKey) ([]byte, error) {
 	}
 	seen := make(map[string]bool, len(keys))
 	for _, key := range keys {
-		if key.ID == "" {
+		if key.KeyID == "" {
 			return nil, errors.New("key has no ID")
 		}
-		if seen[key.ID] {
-			return nil, fmt.Errorf("duplicate key ID %q", key.ID)
+		if seen[key.KeyID] {
+			return nil, fmt.Errorf("duplicate key ID %q", key.KeyID)
 		}
-		seen[key.ID] = true
-		if !algorithmFits(key.Algorithm, key.Key) {
-			return nil, fmt.Errorf("key %q: algorithm %q does not fit a %T", key.ID, key.Algorithm, key.Key)
+		seen[key.KeyID] = true
+		if !algorithmFits(key.Algorithm, key.PublicKey) {
+			return nil, fmt.Errorf("key %q: algorithm %q does not fit a %T", key.KeyID, key.Algorithm, key.PublicKey)
 		}
 		j, err := toJWK(key)
 		if err != nil {
-			return nil, fmt.Errorf("key %q: %w", key.ID, err)
+			return nil, fmt.Errorf("key %q: %w", key.KeyID, err)
 		}
 		set.Keys = append(set.Keys, j)
 	}
@@ -82,10 +75,10 @@ func JWKS(keys []PublicKey) ([]byte, error) {
 }
 
 // toJWK encodes a key that algorithmFits has accepted.
-func toJWK(key PublicKey) (jwk, error) {
+func toJWK(key *VerificationKey) (jwk, error) {
 	b64 := base64.RawURLEncoding.EncodeToString
-	j := jwk{KeyID: key.ID, Use: "sig", Algorithm: key.Algorithm}
-	switch k := key.Key.(type) {
+	j := jwk{KeyID: key.KeyID, Use: "sig", Algorithm: key.Algorithm}
+	switch k := key.PublicKey.(type) {
 	case *rsa.PublicKey:
 		j.KeyType = "RSA"
 		j.N = b64(k.N.Bytes())

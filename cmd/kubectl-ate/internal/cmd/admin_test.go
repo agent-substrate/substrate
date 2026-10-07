@@ -18,7 +18,6 @@ import (
 	"testing"
 
 	"github.com/agent-substrate/substrate/internal/localjwtauthority"
-	"github.com/agent-substrate/substrate/internal/oidcdiscovery"
 )
 
 func TestNewJWTPoolSecretWithFlagDefaults(t *testing.T) {
@@ -43,7 +42,7 @@ func TestNewJWTPoolSecretWithFlagDefaults(t *testing.T) {
 	if authority.Algorithm != "ES256" {
 		t.Errorf("Algorithm = %q, want ES256", authority.Algorithm)
 	}
-	thumbprint, err := oidcdiscovery.Thumbprint(authority.SigningKey.Public())
+	thumbprint, err := localjwtauthority.Thumbprint(authority.SigningKey.Public())
 	if err != nil {
 		t.Fatal(err)
 	}
