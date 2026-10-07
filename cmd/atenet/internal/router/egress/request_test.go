@@ -371,7 +371,7 @@ func TestRequestLegPolicyLookup(t *testing.T) {
 // could be allowed through it, and warms the cache for the requests inside.
 func TestConnectLegRequiresAPolicy(t *testing.T) {
 	ca := newTestCA(t, "actor-identity-ca")
-	leaf := ca.issueActorCert(t, "spiffe://substrate-actor.local/actor/default/my-actor", actorCertOptions{})
+	leaf := ca.issueActorCert(t, "spiffe://substrate-actor.local/ateom-for-actor/default/my-actor", actorCertOptions{})
 
 	tests := []struct {
 		name   string
