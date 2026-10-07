@@ -59,7 +59,7 @@ func injectionHandlerFor(policy *ateapipb.EgressPolicy, provider credproviderpb.
 // withAuthorization adds the placeholder authorization header the sample
 // policy replaces, as the actor would send it.
 func withAuthorization(md *extproc.RequestMetadata) *extproc.RequestMetadata {
-	md.Headers["authorization"] = "Bearer placeholder"
+	md.Headers["authorization"] = []string{"Bearer placeholder"}
 	return md
 }
 
@@ -162,7 +162,7 @@ func TestInjectionReplacesOnlyCarriedHeaders(t *testing.T) {
 	provider := &fakeProvider{resp: bearerTokenResponse("s3cr3t")}
 	h := injectionHandlerFor(policy, provider, injectionProviderName)
 	md := innerMetadata(extproc.EgressTLSMITMFilterChainName, "GET", "api.example.com", nil)
-	md.Headers["x-api-key"] = "placeholder"
+	md.Headers["x-api-key"] = []string{"placeholder"}
 
 	res, err := h.HandleRequestHeaders(context.Background(), md)
 	if err != nil {

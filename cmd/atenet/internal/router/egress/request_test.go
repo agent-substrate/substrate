@@ -414,13 +414,13 @@ func TestConnectLegRequiresAPolicy(t *testing.T) {
 func TestRequestLegRefusesAuthorityHostMismatch(t *testing.T) {
 	h := policyHandler(httpPolicy("api.example.com"))
 	md := requestMetadata("api.example.com")
-	md.Headers["host"] = "evil.example"
+	md.Headers["host"] = []string{"evil.example"}
 	_, err := h.HandleRequestHeaders(context.Background(), md)
 	wantStatus(t, err, envoy_type.StatusCode_Forbidden)
 
 	// The same name spelled differently is not a disagreement.
 	md = requestMetadata("api.example.com")
-	md.Headers["host"] = "API.example.com."
+	md.Headers["host"] = []string{"API.example.com."}
 	res, err := h.HandleRequestHeaders(context.Background(), md)
 	wantAllowed(t, res, err)
 }

@@ -28,7 +28,7 @@ func TestExtractMetadata(t *testing.T) {
 	tests := []struct {
 		name        string
 		headers     []*corev3.HeaderValue
-		wantHeaders map[string]string
+		wantHeaders map[string][]string
 		wantPath    string
 		wantHost    string
 	}{
@@ -39,10 +39,10 @@ func TestExtractMetadata(t *testing.T) {
 				{Key: ":authority", Value: "example.com"},
 				{Key: "X-Request-ID", Value: "req-123"},
 			},
-			wantHeaders: map[string]string{
-				":path":        "/api/v1/test",
-				":authority":   "example.com",
-				"x-request-id": "req-123",
+			wantHeaders: map[string][]string{
+				":path":        {"/api/v1/test"},
+				":authority":   {"example.com"},
+				"x-request-id": {"req-123"},
 			},
 			wantPath: "/api/v1/test",
 			wantHost: "example.com",
@@ -54,10 +54,10 @@ func TestExtractMetadata(t *testing.T) {
 				{Key: ":authority", Value: "authority.com"},
 				{Key: "Host", Value: "host.com"},
 			},
-			wantHeaders: map[string]string{
-				":path":      "/api/v1/test",
-				":authority": "authority.com",
-				"host":       "host.com",
+			wantHeaders: map[string][]string{
+				":path":      {"/api/v1/test"},
+				":authority": {"authority.com"},
+				"host":       {"host.com"},
 			},
 			wantPath: "/api/v1/test",
 			wantHost: "host.com",
@@ -69,10 +69,10 @@ func TestExtractMetadata(t *testing.T) {
 				{Key: "Host", Value: "host.com"},
 				{Key: ":authority", Value: "authority.com"},
 			},
-			wantHeaders: map[string]string{
-				":path":      "/api/v1/test",
-				"host":       "host.com",
-				":authority": "authority.com",
+			wantHeaders: map[string][]string{
+				":path":      {"/api/v1/test"},
+				"host":       {"host.com"},
+				":authority": {"authority.com"},
 			},
 			wantPath: "/api/v1/test",
 			wantHost: "authority.com",
@@ -83,9 +83,9 @@ func TestExtractMetadata(t *testing.T) {
 				{Key: ":path", Value: "/api/v1/test"},
 				{Key: "x-something-else", Value: "custom-value"},
 			},
-			wantHeaders: map[string]string{
-				":path":            "/api/v1/test",
-				"x-something-else": "custom-value",
+			wantHeaders: map[string][]string{
+				":path":            {"/api/v1/test"},
+				"x-something-else": {"custom-value"},
 			},
 			wantPath: "/api/v1/test",
 			wantHost: "",
@@ -96,9 +96,9 @@ func TestExtractMetadata(t *testing.T) {
 				{Key: "UPPER-KEY", Value: "UPPER-VALUE"},
 				{Key: "camelCaseKey", Value: "camelValue"},
 			},
-			wantHeaders: map[string]string{
-				"upper-key":    "UPPER-VALUE",
-				"camelcasekey": "camelValue",
+			wantHeaders: map[string][]string{
+				"upper-key":    {"UPPER-VALUE"},
+				"camelcasekey": {"camelValue"},
 			},
 			wantPath: "",
 			wantHost: "",
@@ -119,6 +119,49 @@ func TestExtractMetadata(t *testing.T) {
 				t.Errorf("NewRequestMetadata() host = %v, want %v", got.Host, tc.wantHost)
 			}
 		})
+	}
+}
+
+func TestRequestMetadataHeaderValues(t *testing.T) {
+	headers := []*corev3.HeaderValue{
+		{Key: "X-Single", Value: "single-val"},
+		{Key: "X-Multiple", Value: "val-1"},
+		{Key: "X-Multiple", Value: "val-2"},
+	}
+	md := NewRequestMetadata(headers, nil)
+
+	// Single occurrence
+	if got := md.HeaderValues("X-Single"); !reflect.DeepEqual(got, []string{"single-val"}) {
+		t.Errorf("HeaderValues(X-Single) = %v, want %v", got, []string{"single-val"})
+	}
+	if got := md.Header("X-Single"); got != "single-val" {
+		t.Errorf("Header(X-Single) = %q, want %q", got, "single-val")
+	}
+
+	// Multiple occurrences in wire order
+	if got := md.HeaderValues("X-Multiple"); !reflect.DeepEqual(got, []string{"val-1", "val-2"}) {
+		t.Errorf("HeaderValues(X-Multiple) = %v, want %v", got, []string{"val-1", "val-2"})
+	}
+	// Header returns the last value
+	if got := md.Header("X-Multiple"); got != "val-2" {
+		t.Errorf("Header(X-Multiple) = %q, want %q", got, "val-2")
+	}
+
+	// Missing header
+	if got := md.HeaderValues("X-Missing"); got != nil {
+		t.Errorf("HeaderValues(X-Missing) = %v, want nil", got)
+	}
+	if got := md.Header("X-Missing"); got != "" {
+		t.Errorf("Header(X-Missing) = %q, want empty string", got)
+	}
+
+	// Nil receiver
+	var nilMD *RequestMetadata
+	if got := nilMD.HeaderValues("X-Single"); got != nil {
+		t.Errorf("nil.HeaderValues() = %v, want nil", got)
+	}
+	if got := nilMD.Header("X-Single"); got != "" {
+		t.Errorf("nil.Header() = %q, want empty string", got)
 	}
 }
 

@@ -79,6 +79,121 @@ func TestHandleRequestHeadersAcceptsMixedCaseRoutingHeaders(t *testing.T) {
 	}
 }
 
+func TestHandleRequestHeadersRejectsDuplicateOrCommaHeaders(t *testing.T) {
+	tests := []struct {
+		name    string
+		headers []*corev3.HeaderValue
+		attrs   map[string]*structpb.Struct
+	}{
+		{
+			name: "duplicate headers with different values",
+			headers: []*corev3.HeaderValue{
+				{Key: atenet.TargetActorHeader, Value: "demo/a"},
+				{Key: atenet.TargetActorHeader, Value: "secret/x"},
+			},
+		},
+		{
+			name: "duplicate headers with identical values",
+			headers: []*corev3.HeaderValue{
+				{Key: atenet.TargetActorHeader, Value: "demo/a"},
+				{Key: atenet.TargetActorHeader, Value: "demo/a"},
+			},
+		},
+		{
+			name: "single header with comma-joined value",
+			headers: []*corev3.HeaderValue{
+				{Key: atenet.TargetActorHeader, Value: "demo/a,secret/x"},
+			},
+		},
+		{
+			name: "filter state attribute with comma-joined value",
+			attrs: map[string]*structpb.Struct{
+				"envoy.filters.http.ext_proc": {
+					Fields: map[string]*structpb.Value{
+						extproc.TargetActorFilterStateAttribute: structpb.NewStringValue("demo/a,secret/x"),
+					},
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var resumeCalls int32
+			clientMock := &mockClient{
+				resumeFn: func(_ context.Context, _ *ateapipb.ResumeActorRequest, _ ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+					atomic.AddInt32(&resumeCalls, 1)
+					return nil, errors.New("should not be called")
+				},
+			}
+			h := New(clientMock, ParkedRequestConfig{}, nil)
+			md := extproc.NewRequestMetadata(tt.headers, tt.attrs)
+
+			_, err := h.HandleRequestHeaders(context.Background(), md)
+			if err == nil {
+				t.Fatalf("HandleRequestHeaders() succeeded, want 404 error")
+			}
+			var reqErr *extproc.ReqError
+			if !errors.As(err, &reqErr) {
+				t.Fatalf("error = %v, want *extproc.ReqError", err)
+			}
+			if reqErr.StatusCode != int(envoy_type.StatusCode_NotFound) {
+				t.Errorf("StatusCode = %d, want %d", reqErr.StatusCode, envoy_type.StatusCode_NotFound)
+			}
+			if !strings.Contains(reqErr.Error(), "invalid actor reference") {
+				t.Errorf("error string = %q, want containing %q", reqErr.Error(), "invalid actor reference")
+			}
+			if calls := atomic.LoadInt32(&resumeCalls); calls != 0 {
+				t.Errorf("ResumeActor called %d times, want 0", calls)
+			}
+		})
+	}
+}
+
+func TestHandleRequestHeadersConnectAttributeOverridesInnerHeader(t *testing.T) {
+	const testUUID = "123e4567-e89b-12d3-a456-426614174000"
+	var gotActorRef string
+	clientMock := &mockClient{
+		resumeFn: func(_ context.Context, in *ateapipb.ResumeActorRequest, _ ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+			gotActorRef = in.GetActor().GetAtespace() + "/" + in.GetActor().GetName()
+			return &ateapipb.ResumeActorResponse{Actor: &ateapipb.Actor{
+				Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIps: []string{"10.0.0.52"}}},
+			}}, nil
+		},
+	}
+	h := New(clientMock, ParkedRequestConfig{}, nil)
+	md := extproc.NewRequestMetadata(
+		[]*corev3.HeaderValue{
+			{Key: atenet.TargetActorHeader, Value: "secret/x"},
+		},
+		map[string]*structpb.Struct{
+			"envoy.filters.http.ext_proc": {
+				Fields: map[string]*structpb.Value{
+					extproc.TargetActorFilterStateAttribute: structpb.NewStringValue("team-a/" + testUUID),
+				},
+			},
+		},
+	)
+
+	res, err := h.HandleRequestHeaders(context.Background(), md)
+	if err != nil {
+		t.Fatalf("HandleRequestHeaders() error = %v", err)
+	}
+
+	if got, want := gotActorRef, "team-a/"+testUUID; got != want {
+		t.Errorf("ResumeActor called with %q, want %q", got, want)
+	}
+
+	mutation := res.Response.GetResponse().GetHeaderMutation()
+	gotMutations := map[string]string{}
+	for _, headerOption := range mutation.GetSetHeaders() {
+		gotMutations[strings.ToLower(headerOption.Header.Key)] = string(headerOption.Header.RawValue)
+	}
+	if got, want := gotMutations[strings.ToLower(atenet.TargetActorHeader)], "team-a/"+testUUID; got != want {
+		t.Errorf("actor target mutation = %q, want %q", got, want)
+	}
+}
+
 // dynamicMetadataTarget extracts the resolved worker address
 // HandleRequestHeaders reports via OriginalDstMetadataKey/OriginalDstAddressKey.
 func dynamicMetadataTarget(dynamicMetadata *structpb.Struct) string {

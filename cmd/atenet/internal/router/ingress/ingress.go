@@ -34,7 +34,6 @@ import (
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type/v3"
 	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/propagation"
 	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
@@ -83,7 +82,7 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 	// stream's metadata — the per-request traceparent arrives in the
 	// HTTP headers carried inside the ProcessingRequest payload. Extract
 	// from there so our span links to the gateway's ingress span.
-	ctx = otel.GetTextMapPropagator().Extract(ctx, propagation.MapCarrier(md.Headers))
+	ctx = otel.GetTextMapPropagator().Extract(ctx, md)
 	ctx, span := otel.Tracer(extproc.ServiceName).Start(ctx, "ExtProc.RequestHeaders")
 	defer span.End()
 
@@ -177,8 +176,11 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 }
 
 func routingValue(md *extproc.RequestMetadata, header, attribute string) string {
-	if value := md.Header(header); value != "" {
+	if value := md.Attribute(attribute); value != "" {
 		return value
 	}
-	return md.Attribute(attribute)
+	if vals := md.HeaderValues(header); len(vals) == 1 {
+		return vals[0]
+	}
+	return ""
 }

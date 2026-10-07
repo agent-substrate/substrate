@@ -59,7 +59,7 @@ func mapCredentialProviderError(err error) error {
 // having no provider configured.
 //
 // This gateway cannot mint actor JWTs yet, so a request that needs one is denied.
-func (h *Handler) applyEffects(ctx context.Context, ref resources.ActorRef, dest egresspolicy.Destination, headers map[string]string, effects *ateapipb.HttpRuleEffects) ([]*corev3.HeaderValueOption, error) {
+func (h *Handler) applyEffects(ctx context.Context, ref resources.ActorRef, dest egresspolicy.Destination, headers map[string][]string, effects *ateapipb.HttpRuleEffects) ([]*corev3.HeaderValueOption, error) {
 	var injections []*ateapipb.CredentialHeader
 	for _, inj := range effects.GetReplaceHeaders() {
 		if _, ok := headers[strings.ToLower(inj.GetHeader())]; ok {
