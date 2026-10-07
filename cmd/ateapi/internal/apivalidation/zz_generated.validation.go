@@ -3690,6 +3690,36 @@ func Validate_ExternalSnapshot(
 		errs = append(errs, fn(fldPath.Child("actor_template_uid"), &obj.ActorTemplateUid, oldVal, oldObj != nil)...)
 	}
 
+	{ // field ateapipb.ExternalSnapshot.Hardware
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateapipb.HardwareIdentity,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_HardwareIdentity(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.ExternalSnapshot) *ateapipb.HardwareIdentity {
+				return oldObj.Hardware
+			})
+		errs = append(errs, fn(fldPath.Child("hardware"), obj.Hardware, oldVal, oldObj != nil)...)
+	}
+
 	return errs
 }
 
@@ -5659,6 +5689,36 @@ func Validate_LocalSnapshot(
 				return &oldObj.ContentScope
 			})
 		errs = append(errs, fn(fldPath.Child("content_scope"), &obj.ContentScope, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateapipb.LocalSnapshot.Hardware
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateapipb.HardwareIdentity,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_HardwareIdentity(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.LocalSnapshot) *ateapipb.HardwareIdentity {
+				return oldObj.Hardware
+			})
+		errs = append(errs, fn(fldPath.Child("hardware"), obj.Hardware, oldVal, oldObj != nil)...)
 	}
 
 	return errs
