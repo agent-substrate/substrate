@@ -18,7 +18,12 @@ package netns
 
 import (
 	"errors"
+	"fmt"
+	"os"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -37,5 +42,85 @@ func TestSetSysctlReportsAnUnrelatedError(t *testing.T) {
 	}
 	if st.Flags&unix.ST_RDONLY != 0 {
 		t.Error("/proc/sys was left read-only")
+	}
+}
+
+// Concurrent callers share one /proc/sys mount; none may fail because another
+// restored it read-only before its write.
+func TestSetSysctlSerializesTheRemount(t *testing.T) {
+	const callers = 16
+	fake := &fakeProcSys{readOnly: true, values: map[string]string{}}
+	start := make(chan struct{})
+	errs := make([]error, callers)
+	var wg sync.WaitGroup
+	for i := range callers {
+		wg.Go(func() {
+			<-start
+			errs[i] = fake.procSys().set(fmt.Sprintf("net/ipv4/caller_%d", i), "0")
+		})
+	}
+	close(start)
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("caller %d: %v", i, err)
+		}
+	}
+	if fake.maxRemounted != 1 {
+		t.Errorf("%d callers had /proc/sys remounted read-write at once, want 1", fake.maxRemounted)
+	}
+	if !fake.readOnly {
+		t.Error("/proc/sys was left read-write")
+	}
+}
+
+// fakeProcSys is a read-only /proc/sys mount shared by all callers. Its
+// read-write remount is slow, so unserialized callers overlap inside it.
+type fakeProcSys struct {
+	mu       sync.Mutex
+	readOnly bool
+	values   map[string]string
+	// remounted counts callers inside the read-write window; maxRemounted is
+	// its peak.
+	remounted, maxRemounted int
+}
+
+func (f *fakeProcSys) procSys() procSys {
+	return procSys{
+		readFile: func(path string) ([]byte, error) {
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			if v, ok := f.values[path]; ok {
+				return []byte(v + "\n"), nil
+			}
+			return []byte("1024\n"), nil
+		},
+		writeFile: func(path string, data []byte) error {
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			if f.readOnly {
+				return &os.PathError{Op: "open", Path: path, Err: unix.EROFS}
+			}
+			f.values[path] = strings.TrimSpace(string(data))
+			return nil
+		},
+		remount: func(readOnly bool) error {
+			if readOnly {
+				f.mu.Lock()
+				defer f.mu.Unlock()
+				f.readOnly = true
+				f.remounted--
+				return nil
+			}
+			time.Sleep(time.Millisecond)
+			f.mu.Lock()
+			f.readOnly = false
+			f.remounted++
+			f.maxRemounted = max(f.maxRemounted, f.remounted)
+			f.mu.Unlock()
+			time.Sleep(time.Millisecond)
+			return nil
+		},
 	}
 }
