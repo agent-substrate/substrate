@@ -411,11 +411,37 @@ func schedulerRecordable(err error) bool {
 	return !errors.Is(err, store.ErrVersionConflict)
 }
 
+// volumesToAttach selects the volumes a resume publishes to the assigned
+// worker's node: the actor's volumes mounted in its template. The assignment
+// write records attached_node on exactly this set and ensureVolumesAttached
+// publishes exactly this set. It returns pointers into the actor's volumes.
+func volumesToAttach(ctx context.Context, actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate) []*ateapipb.ExternalVolume {
+	ref := &ateapipb.ObjectRef{Atespace: actor.GetMetadata().GetAtespace(), Name: actor.GetMetadata().GetName()}
+	return getMountedActorVolumes(ctx, ref, actor.GetStatus().GetActorVolumes(), tmpl)
+}
+
+// recordVolumeAttachments records node as the attached node of every volume
+// the resume publishes and clears it on every other volume. It runs in the
+// assignment write, before any ControllerPublishVolume, so a crash at any
+// later point still leaves the node a later ControllerUnpublishVolume must
+// target.
+func recordVolumeAttachments(ctx context.Context, actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate, node string) {
+	attach := volumesToAttach(ctx, actor, tmpl)
+	for _, vol := range actor.GetStatus().GetActorVolumes() {
+		if slices.Contains(attach, vol) {
+			vol.AttachedNode = node
+		} else {
+			vol.AttachedNode = ""
+		}
+	}
+}
+
 // assignWorkerAttempt makes one attempt at claiming a worker for the actor
-// and persisting RESUMING with the assignment. On a version conflict it
-// re-reads the actor: if the fresh copy can still be resumed the refreshed
-// actor is returned along with the conflict so the caller retries with clean
-// inputs; any other status aborts the resume.
+// and persisting RESUMING with the assignment and the attached node of each
+// volume the resume publishes. On a version conflict it re-reads the actor: if
+// the fresh copy can still be resumed the refreshed actor is returned along
+// with the conflict so the caller retries with clean inputs; any other status
+// aborts the resume.
 func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (_ *ateapipb.Actor, _ *ateapipb.Worker, err error) {
 	start := time.Now()
 	outcome := ateattr.SchedulerOutcomeError
@@ -454,6 +480,11 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 		slog.InfoContext(ctx, "Picked worker", slog.Any("worker", pickedWorker.String()))
 	}
 
+	node := assignedWorker.GetNodeName()
+	if node == "" && len(volumesToAttach(ctx, actor, actorTemplate)) > 0 {
+		return nil, nil, apierror.FailedPrecondition("worker %s has no node name to attach the actor's volumes to", assignedWorker.GetMetadata().GetName())
+	}
+
 	assignment := &ateapipb.ActorAssignment{
 		Actor: &ateapipb.ObjectRef{
 			Atespace: actor.GetMetadata().GetAtespace(),
@@ -490,6 +521,7 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_RESUMING
 		toUpdate.Status.WorkerAssignment = newAssignment
+		recordVolumeAttachments(ctx, toUpdate, actorTemplate, node)
 		return nil
 	})
 	if err != nil {
@@ -575,8 +607,10 @@ func schedulingConstraints(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate) 
 
 // ensureVolumesAttached attaches the actor's mounted external volumes to the
 // assigned worker's node and returns each driver's attachment metadata by
-// volume name, for the Restore call that follows. Attachment is idempotent, so
-// a re-entered workflow safely runs it again.
+// volume name, for the Restore call that follows. Every volume must be
+// provisioned and record the worker's node as its attached node, as the
+// assignment write does; otherwise nothing is attached. Attachment is
+// idempotent, so a re-entered workflow safely runs it again.
 // TODO replace re-execution with a proper check on the volumes' attach state.
 func (w *ActorWorkflow) ensureVolumesAttached(ctx context.Context, actor *ateapipb.Actor, worker *ateapipb.Worker, actorTemplate *ateapipb.ActorTemplate) (_ map[string]map[string]string, err error) {
 	ctx, done := stepSpan(ctx, "AttachVolumes")
@@ -587,9 +621,14 @@ func (w *ActorWorkflow) ensureVolumesAttached(ctx context.Context, actor *ateapi
 		return nil, fmt.Errorf("assigned worker has no node name")
 	}
 
-	ref := &ateapipb.ObjectRef{Atespace: actor.GetMetadata().GetAtespace(), Name: actor.GetMetadata().GetName()}
+	volumes := volumesToAttach(ctx, actor, actorTemplate)
+	// Check every volume before attaching any, so a bad one cannot leave the
+	// ones before it published.
+	if err := checkVolumesAttachable(volumes, node); err != nil {
+		return nil, err
+	}
 	volumePublishContexts := make(map[string]map[string]string)
-	for _, vol := range getMountedActorVolumes(ctx, ref, actor.GetStatus().GetActorVolumes(), actorTemplate) {
+	for _, vol := range volumes {
 		slog.InfoContext(ctx, "Attaching volume to node", slog.String("volume_id", vol.GetStorageVolumeId()), slog.String("node", node))
 		plugin, err := w.pluginRegistry.GetPlugin(ctx, vol.GetVolumeType())
 		if err != nil {
@@ -604,6 +643,22 @@ func (w *ActorWorkflow) ensureVolumesAttached(ctx context.Context, actor *ateapi
 		}
 	}
 	return volumePublishContexts, nil
+}
+
+// checkVolumesAttachable returns FailedPrecondition unless every volume is
+// provisioned and records node as its attached node.
+func checkVolumesAttachable(volumes []*ateapipb.ExternalVolume, node string) error {
+	for _, vol := range volumes {
+		switch {
+		case vol.GetStatus() != ateapipb.ExternalVolume_STATUS_CREATED:
+			return apierror.FailedPrecondition("volume %q is %s, want %s before it is attached", vol.GetVolumeName(), vol.GetStatus(), ateapipb.ExternalVolume_STATUS_CREATED)
+		case vol.GetStorageVolumeId() == "":
+			return apierror.FailedPrecondition("volume %q has no storage volume ID to attach", vol.GetVolumeName())
+		case vol.GetAttachedNode() != node:
+			return apierror.FailedPrecondition("volume %q records attached node %q, not the assigned node %q", vol.GetVolumeName(), vol.GetAttachedNode(), node)
+		}
+	}
+	return nil
 }
 
 // ensureAteletRestored brings the workload up on the assigned worker:
