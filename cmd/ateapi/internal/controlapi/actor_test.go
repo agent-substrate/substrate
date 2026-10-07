@@ -948,7 +948,7 @@ func TestCreateActor_DoesNotInheritGoldenEgressPolicy(t *testing.T) {
 }
 
 func TestCreateActor_GoldenTagDefault(t *testing.T) {
-	for _, scenario := range []string{"default", "explicit tag", "own snapshot", "missing", "pending", "wrong template", "data scope"} {
+	for _, scenario := range []string{"default", "explicit tag", "own snapshot", "missing", "pending", "wrong template", "data scope", "rootfs", "no golden"} {
 		t.Run(scenario, func(t *testing.T) {
 			ctx := t.Context()
 			persistence := newTestPersistence(t)
@@ -976,18 +976,22 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 				wantCode = codes.FailedPrecondition
 			case "data scope":
 				tag.Status.Snapshot.Fidelity = ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
+			case "rootfs":
+				tag.Status.Snapshot.Fidelity = ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
 			}
 			if scenario != "missing" {
 				if _, err := persistence.CreateTag(ctx, tag); err != nil {
 					t.Fatal(err)
 				}
 			}
-			if _, err := persistence.UpdateActorTemplate(ctx, resources.ActorTemplateRefFromActorTemplate(tmpl), store.PreconditionFrom(tmpl), func(db *ateapi.ActorTemplate) error {
-				db.Status = &ateapi.ActorTemplateStatus{GoldenSnapshotStatus: &ateapi.GoldenSnapshotStatus{GoldenTag: ref}}
-				db.GoldenEgressPolicy = &ateapi.EgressPolicyTemplate{Rules: []*ateapi.EgressRule{{Https: &ateapi.HttpsRule{Hostnames: []string{"init.example.com"}, Ports: &ateapi.Ports{Numbers: []int32{443}}}}}}
-				return nil
-			}); err != nil {
-				t.Fatal(err)
+			if scenario != "no golden" {
+				if _, err := persistence.UpdateActorTemplate(ctx, resources.ActorTemplateRefFromActorTemplate(tmpl), store.PreconditionFrom(tmpl), func(db *ateapi.ActorTemplate) error {
+					db.Status = &ateapi.ActorTemplateStatus{GoldenSnapshotStatus: &ateapi.GoldenSnapshotStatus{GoldenTag: ref}}
+					db.GoldenEgressPolicy = &ateapi.EgressPolicyTemplate{Rules: []*ateapi.EgressRule{{Https: &ateapi.HttpsRule{Hostnames: []string{"init.example.com"}, Ports: &ateapi.Ports{Numbers: []int32{443}}}}}}
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
 			}
 			actor := &ateapi.Actor{Metadata: &ateapi.ResourceMetadata{Atespace: "team-a", Name: "actor"}, ActorTemplate: resources.ActorTemplateRefFromActorTemplate(tmpl).ToObjectRef()}
 			if scenario == "explicit tag" {
@@ -999,14 +1003,27 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 				actor.SourceTag = &ateapi.ObjectRef{Atespace: ref.Atespace, Name: "explicit"}
 			}
 			svc := &ServiceImpl{store: persistence}
+			original := proto.CloneOf(actor)
 			created, err := svc.CreateActor(ctx, actor)
+			if diff := cmp.Diff(original, actor, protocmp.Transform()); diff != "" {
+				t.Fatalf("CreateActor mutated input (-want +got):\n%s", diff)
+			}
 			if apierror.Code(err) != wantCode {
 				t.Fatalf("CreateActor = %v, want %v", err, wantCode)
 			}
 			if err != nil {
 				return
 			}
+			if scenario == "no golden" {
+				if created.GetSourceTag() != nil || len(created.GetStatus().GetSnapshots()) != 0 {
+					t.Fatalf("actor without golden snapshot has a source: %v", created)
+				}
+				return
+			}
 			gotSnap := findLatestDurableSnapshot(created.GetStatus(), ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+			if gotSnap.GetFidelity() != tag.GetStatus().GetSnapshot().GetFidelity() {
+				t.Fatalf("snapshot fidelity = %v, want %v", gotSnap.GetFidelity(), tag.GetStatus().GetSnapshot().GetFidelity())
+			}
 			if gotSnap.GetDurableSnapshot().GetObject().GetSnapshotUri() != tagDurableSnapshotURI(tag, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED) || gotSnap.GetActorTemplateUid() != tmpl.GetMetadata().GetUid() {
 				t.Fatalf("incorrect initial status: %v", created.GetStatus())
 			}

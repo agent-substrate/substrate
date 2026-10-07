@@ -4923,7 +4923,6 @@ func TestSuspendActorAsynchronous(t *testing.T) {
 			_, err := tc.client.CreateActor(context.Background(), &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
 				Metadata:      &ateapi.ResourceMetadata{Atespace: testAtespace, Name: name},
 				ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
-				SourceTag:     tmpl.GetStatus().GetGoldenSnapshotStatus().GetGoldenTag(),
 			}})
 			if err != nil {
 				t.Fatalf("CreateActor failed: %v", err)
@@ -4960,6 +4959,7 @@ func TestSuspendActorAsynchronous(t *testing.T) {
 			want := &ateapi.Actor{
 				Metadata:      &ateapi.ResourceMetadata{Name: name, Atespace: testAtespace},
 				ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+				SourceTag:     tmpl.GetStatus().GetGoldenSnapshotStatus().GetGoldenTag(),
 				Status: &ateapi.ActorStatus{
 					State:                  ateapi.ActorState_ACTOR_STATE_SUSPENDED,
 					AssignedNode:           "node1",
