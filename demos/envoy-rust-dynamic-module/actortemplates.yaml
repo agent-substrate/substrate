@@ -1,0 +1,12 @@
+# Offline ActorTemplate list, so `atenet router` runs with no Kubernetes API at
+# all (--actor-templates-file switches the store from the k8s client to a file
+# and skips creating the cluster clients entirely; see router.go NewRouterServer).
+apiVersion: api.substrate.ate.dev/v1alpha1
+kind: ActorTemplateList
+items:
+- apiVersion: api.substrate.ate.dev/v1alpha1
+  kind: ActorTemplate
+  metadata:
+    name: echo
+    namespace: demo
+  spec: {}

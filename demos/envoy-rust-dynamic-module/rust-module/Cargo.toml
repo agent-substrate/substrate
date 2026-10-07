@@ -1,0 +1,24 @@
+[package]
+name = "ate-router-module"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+
+[dependencies]
+# The SDK revision MUST match the Envoy binary it is loaded into. This rev is the
+# commit of the envoyproxy/envoy release tagged v1.39.1, which is the version
+# reported by `envoy --version` in envoyproxy/envoy:v1.39-latest.
+envoy-proxy-dynamic-modules-rust-sdk = { git = "https://github.com/envoyproxy/envoy", rev = "b579d07d3ad7ee11d32b105e91a5a39ad24718d7" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+dashmap = "6.1"
+
+[lib]
+name = "ate_router_module"
+path = "src/lib.rs"
+crate-type = ["cdylib", "rlib"]
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
