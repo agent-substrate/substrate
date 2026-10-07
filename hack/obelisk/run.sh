@@ -25,6 +25,10 @@ if [[ -z "${SUBSTRATE_LAB_POSTGRES_PASSWORD:-}" ]]; then
   echo "SUBSTRATE_LAB_POSTGRES_PASSWORD must be configured as an Amp App secret" >&2
   exit 1
 fi
+if [[ "${SUBSTRATE_LAB_POSTGRES_PASSWORD}" == *$'\n'* || "${SUBSTRATE_LAB_POSTGRES_PASSWORD}" == *$'\r'* ]]; then
+  echo "SUBSTRATE_LAB_POSTGRES_PASSWORD must not contain a newline" >&2
+  exit 1
+fi
 
 mkdir -p "${STATE}/tls"
 chmod 0700 "${STATE}" "${STATE}/tls"

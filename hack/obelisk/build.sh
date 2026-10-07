@@ -50,15 +50,10 @@ install_k3s() {
     sudo install -m 0755 "${binary}" /usr/local/bin/k3s
   fi
 
-  local node_ip unit
-  node_ip="$(hostname -I | cut -d ' ' -f 1)"
-  if [[ -z "${node_ip}" ]]; then
-    echo "could not detect the Obelisk IPv4 address" >&2
-    return 1
-  fi
+  local unit
   unit="$(mktemp)"
   trap 'rm -f "${unit}"' RETURN
-  cat >"${unit}" <<EOF
+  cat >"${unit}" <<'EOF'
 [Unit]
 Description=Experimental Substrate Lab Kubernetes
 After=network-online.target
@@ -74,7 +69,10 @@ LimitCORE=infinity
 TasksMax=infinity
 Restart=always
 RestartSec=5s
-ExecStart=/usr/local/bin/k3s server --node-ip=${node_ip} --advertise-address=${node_ip} --flannel-iface=eth0 --disable=traefik --disable=servicelb --disable=metrics-server --write-kubeconfig-mode=600
+ExecStartPre=-/usr/bin/ip link add substrate0 type dummy
+ExecStartPre=/usr/bin/ip address replace 10.254.0.1/32 dev substrate0
+ExecStartPre=/usr/bin/ip link set substrate0 up
+ExecStart=/usr/local/bin/k3s server --node-ip=10.254.0.1 --advertise-address=10.254.0.1 --flannel-iface=eth0 --disable=traefik --disable=servicelb --disable=metrics-server --write-kubeconfig-mode=600
 
 [Install]
 WantedBy=multi-user.target
