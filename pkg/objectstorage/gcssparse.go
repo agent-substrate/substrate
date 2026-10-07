@@ -73,11 +73,8 @@ func (g *gcsClient) PutSparseFile(ctx context.Context, bucket, object string, f 
 		parts[i] = bkt.Object(fmt.Sprintf("%s.part-%s-%04d", object, runID, i))
 	}
 	defer func() {
-		for _, p := range parts {
-			if delErr := p.Delete(context.WithoutCancel(ctx)); delErr != nil &&
-				!errors.Is(delErr, storage.ErrObjectNotExist) && err == nil {
-				err = fmt.Errorf("while removing upload part %q: %w", p.ObjectName(), delErr)
-			}
+		if delErr := deleteParts(ctx, parts); delErr != nil && err == nil {
+			err = delErr
 		}
 	}()
 

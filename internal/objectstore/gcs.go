@@ -25,16 +25,15 @@ import (
 	"google.golang.org/api/iterator"
 )
 
-// gcsRetry retries transient errors (408, 429, 5xx), such as the 429s GCS
-// returns while it scales a cold bucket. RetryAlways is safe: a repeated
-// delete gets a 404, which Delete treats as success, and a repeated copy
-// rewrites the same object. Every caller waits on these calls, so each
-// gives up after 5 attempts (under 4s of sleep).
-var gcsRetry = []storage.RetryOption{
-	storage.WithPolicy(storage.RetryAlways),
-	storage.WithBackoff(gax.Backoff{Initial: 250 * time.Millisecond, Max: 2 * time.Second, Multiplier: 2}),
-	storage.WithMaxAttempts(5),
-}
+// gcsBackoff and gcsMaxAttempts set how gcsStore retries transient errors
+// (408, 429, 5xx), such as the 429s GCS returns while it scales a cold
+// bucket. The first retry comes within 250ms, so one transient error adds
+// little latency. Every caller waits on these calls, and suspend holds the
+// actor's lease while it does, so each call gives up after 7 attempts (at
+// most 12.75s of sleep).
+var gcsBackoff = gax.Backoff{Initial: 250 * time.Millisecond, Max: 5 * time.Second, Multiplier: 2}
+
+const gcsMaxAttempts = 7
 
 type gcsStore struct {
 	client *storage.Client
@@ -45,10 +44,16 @@ func NewGCS(client *storage.Client) Store {
 	return &gcsStore{client: client}
 }
 
-// bucket returns a handle to the named bucket that retries with gcsRetry.
-// Objects taken from it inherit the setting.
+// bucket returns a handle to the named bucket that retries transient errors.
+// Objects taken from it inherit the setting. RetryAlways is safe: a repeated
+// delete gets a 404, which Delete treats as success, and a repeated copy
+// rewrites the same object.
 func (g *gcsStore) bucket(name string) *storage.BucketHandle {
-	return g.client.Bucket(name).Retryer(gcsRetry...)
+	return g.client.Bucket(name).Retryer(
+		storage.WithPolicy(storage.RetryAlways),
+		storage.WithBackoff(gcsBackoff),
+		storage.WithMaxAttempts(gcsMaxAttempts),
+	)
 }
 
 func (g *gcsStore) List(ctx context.Context, bucket, prefix string) ([]string, error) {

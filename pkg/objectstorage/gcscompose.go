@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"time"
 
 	"cloud.google.com/go/storage"
 	"golang.org/x/sync/errgroup"
@@ -86,11 +87,8 @@ func (g *gcsClient) putComposite(ctx context.Context, bucket, object string, hea
 	var parts []*storage.ObjectHandle
 	defer func() {
 		// Parts are scratch either way, and deleting them must not mask the real error.
-		for _, p := range parts {
-			if delErr := p.Delete(context.WithoutCancel(ctx)); delErr != nil &&
-				!errors.Is(delErr, storage.ErrObjectNotExist) && err == nil {
-				err = fmt.Errorf("while removing upload part %q: %w", p.ObjectName(), delErr)
-			}
+		if delErr := deleteParts(ctx, parts); delErr != nil && err == nil {
+			err = delErr
 		}
 	}()
 
@@ -171,9 +169,7 @@ func composeAll(ctx context.Context, bkt *storage.BucketHandle, object string, p
 			}
 			// The sources are dead once folded; the caller's deferred cleanup only
 			// knows about the leaf parts.
-			for _, s := range group {
-				_ = s.Delete(context.WithoutCancel(ctx))
-			}
+			_ = deleteParts(ctx, group)
 			next = append(next, mid)
 		}
 		parts = next
@@ -190,4 +186,23 @@ func composeAll(ctx context.Context, bkt *storage.BucketHandle, object string, p
 		return fmt.Errorf("while composing %q: %w", object, err)
 	}
 	return nil
+}
+
+// cleanupTimeout bounds deleteParts. Cleanup runs on a context detached from
+// the upload's, which may be the reason it is unwinding, and setRetry retries
+// until the context ends.
+var cleanupTimeout = 30 * time.Second
+
+// deleteParts deletes parts, all within one cleanupTimeout, and returns the
+// first error other than a part being already gone.
+func deleteParts(ctx context.Context, parts []*storage.ObjectHandle) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+	defer cancel()
+	var first error
+	for _, p := range parts {
+		if err := p.Delete(ctx); err != nil && !errors.Is(err, storage.ErrObjectNotExist) && first == nil {
+			first = fmt.Errorf("while removing upload part %q: %w", p.ObjectName(), err)
+		}
+	}
+	return first
 }

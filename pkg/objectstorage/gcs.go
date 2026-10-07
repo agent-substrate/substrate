@@ -61,15 +61,20 @@ func NewGCSClient(ctx context.Context, opts ...option.ClientOption) (ObjectStora
 // snapshot. RetryAlways is safe for this client because every write targets a
 // unique name (snapshot UUID directories, runID-suffixed part names) or is
 // idempotent (compose and copy from fixed sources, delete).
+//
+// Nothing caps the attempts: an operation retries until its context ends, so
+// every caller must bound its context. Part cleanup uses cleanupTimeout.
 func setRetry(c *storage.Client) {
 	c.SetRetry(
 		storage.WithPolicy(storage.RetryAlways),
-		// Suspend is latency-sensitive, so keep the backoff short. MaxAttempts
-		// does not cap uploads (see gcs_retry_test.go).
-		storage.WithBackoff(gax.Backoff{Initial: 250 * time.Millisecond, Max: 2 * time.Second, Multiplier: 2}),
-		storage.WithMaxAttempts(5),
+		storage.WithBackoff(retryBackoff),
 	)
 }
+
+// retryBackoff is how long setRetry waits between attempts. Suspend is
+// latency-sensitive, so the first retry comes within 250ms, and no wait is
+// longer than 5s.
+var retryBackoff = gax.Backoff{Initial: 250 * time.Millisecond, Max: 5 * time.Second, Multiplier: 2}
 
 // supportsStreamingPut is the streamingPutter marker: the GCS client's PutObject
 // accepts a non-seekable streaming body without buffering (it copies the reader

@@ -31,6 +31,7 @@ import (
 	"cloud.google.com/go/storage"
 	"github.com/agent-substrate/substrate/internal/objectstore"
 	"github.com/google/go-cmp/cmp"
+	"github.com/googleapis/gax-go/v2"
 	"google.golang.org/api/googleapi"
 )
 
@@ -48,9 +49,10 @@ type fakeGCS struct {
 }
 
 // newFakeGCS starts a fake GCS holding objects and returns it with a Store
-// built the way cmd/ateapi builds one.
+// built the way cmd/ateapi builds one, backing off 1ms between attempts.
 func newFakeGCS(t *testing.T, objects ...string) (*fakeGCS, objectstore.Store) {
 	t.Helper()
+	objectstore.SetGCSBackoffForTest(t, gax.Backoff{Initial: time.Millisecond, Max: time.Millisecond})
 	fake := &fakeGCS{t: t, objects: map[string]bool{}, script: map[string][]int{}, attempts: map[string]int{}}
 	for _, name := range objects {
 		fake.objects[name] = true
@@ -197,7 +199,7 @@ func httpCode(err error) int {
 }
 
 // TestGCSDelete covers how Delete retries: transient errors until it
-// succeeds or has made 5 attempts, permanent errors not at all.
+// succeeds or has made 7 attempts, permanent errors not at all.
 func TestGCSDelete(t *testing.T) {
 	tests := []struct {
 		name string
@@ -210,7 +212,7 @@ func TestGCSDelete(t *testing.T) {
 		// The first delete landed but its response was lost. The retry's 404
 		// still means the object is gone.
 		{name: "503, then 404", statuses: []int{503, 404}, wantAttempts: 2},
-		{name: "gives up after 5 attempts", statuses: slices.Repeat([]int{429}, 10), wantCode: 429, wantAttempts: 5},
+		{name: "gives up after 7 attempts", statuses: slices.Repeat([]int{429}, 10), wantCode: 429, wantAttempts: 7},
 		{name: "403 is not retried", statuses: []int{403}, wantCode: 403, wantAttempts: 1},
 	}
 	for _, tc := range tests {
@@ -249,8 +251,6 @@ func TestGCSDeletePrefixRetries429(t *testing.T) {
 		objects = append(objects, fmt.Sprintf("%sfile-%02d", prefix, i))
 	}
 	fake, store := newFakeGCS(t, objects...)
-	// Deletes run prefixConcurrency at a time, so a few 429s per object
-	// already add up to seconds of backoff.
 	for _, object := range objects {
 		fake.respond("DELETE "+object, 429, 429)
 	}
@@ -287,8 +287,8 @@ func TestGCSCopyRetries429(t *testing.T) {
 }
 
 // TestGCSListGivesUp covers a list that only ever gets 429s. The default
-// policy would retry it until the context ends, and SuspendActor sets no
-// deadline, so List must give up on its own.
+// policy would retry it until the context ends, so List must give up on its
+// own.
 func TestGCSListGivesUp(t *testing.T) {
 	fake, store := newFakeGCS(t, "snap/file")
 	fake.respond("LIST snap/", slices.Repeat([]int{429}, 10)...)
@@ -301,7 +301,7 @@ func TestGCSListGivesUp(t *testing.T) {
 	case ctx.Err() != nil:
 		t.Fatal("List() ran until its context ended, want it to give up on its own")
 	}
-	if got := fake.attemptsOf("LIST snap/"); got != 5 {
-		t.Errorf("List() made %d attempts, want 5", got)
+	if got := fake.attemptsOf("LIST snap/"); got != 7 {
+		t.Errorf("List() made %d attempts, want 7", got)
 	}
 }
