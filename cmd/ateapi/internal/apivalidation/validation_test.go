@@ -1036,6 +1036,27 @@ func TestValidateExternalVolume(t *testing.T) {
 			v.VolumeContext = map[string]string{"attachment": strings.Repeat("v", 257)}
 		}),
 		want: field.ErrorList{field.TooLong(field.NewPath("volume_context").Key("attachment"), nil, 256).WithOrigin("maxLength")},
+	}, {
+		name: "valid attached node",
+		obj:  valid(func(v *ateapipb.ExternalVolume) { v.AttachedNode = "node-1" }),
+	}, {
+		name: "valid attached node with dots",
+		obj:  valid(func(v *ateapipb.ExternalVolume) { v.AttachedNode = "gke-pool-1-abc.us-central1-a.c.example.internal" }),
+	}, {
+		name: "empty attached node is valid",
+		obj:  valid(func(v *ateapipb.ExternalVolume) { v.AttachedNode = "" }),
+	}, {
+		name: "invalid attached node",
+		obj:  valid(func(v *ateapipb.ExternalVolume) { v.AttachedNode = "NOT A NODE" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("attached_node"), nil, "").WithOrigin("format=k8s-long-name")},
+	}, {
+		name: "uppercase attached node is invalid",
+		obj:  valid(func(v *ateapipb.ExternalVolume) { v.AttachedNode = "Node-1" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("attached_node"), nil, "").WithOrigin("format=k8s-long-name")},
+	}, {
+		name: "attached node too long",
+		obj:  valid(func(v *ateapipb.ExternalVolume) { v.AttachedNode = strings.Repeat("a", 254) }),
+		want: field.ErrorList{field.Invalid(field.NewPath("attached_node"), nil, "").WithOrigin("format=k8s-long-name")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1091,6 +1112,23 @@ func TestValidateExternalVolume_Update(t *testing.T) {
 			v.Status = ateapipb.ExternalVolume_STATUS_CREATED
 			v.VolumeContext = map[string]string{"foo": "bar"}
 		}),
+	}, {
+		name:   "attached_node set is valid",
+		oldObj: valid(),
+		newObj: valid(func(v *ateapipb.ExternalVolume) { v.AttachedNode = "node-1" }),
+	}, {
+		name:   "attached_node changed is valid",
+		oldObj: valid(func(v *ateapipb.ExternalVolume) { v.AttachedNode = "node-1" }),
+		newObj: valid(func(v *ateapipb.ExternalVolume) { v.AttachedNode = "node-2" }),
+	}, {
+		name:   "attached_node cleared is valid",
+		oldObj: valid(func(v *ateapipb.ExternalVolume) { v.AttachedNode = "node-1" }),
+		newObj: valid(),
+	}, {
+		name:   "attached_node changed to an invalid value is invalid",
+		oldObj: valid(func(v *ateapipb.ExternalVolume) { v.AttachedNode = "node-1" }),
+		newObj: valid(func(v *ateapipb.ExternalVolume) { v.AttachedNode = "NOT A NODE" }),
+		want:   field.ErrorList{field.Invalid(field.NewPath("attached_node"), nil, "").WithOrigin("format=k8s-long-name")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
