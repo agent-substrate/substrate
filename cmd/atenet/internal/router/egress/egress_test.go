@@ -356,7 +356,7 @@ func TestProductionCertificateConnectAndInnerRequests(t *testing.T) {
 					t:                t, want: ref,
 				}
 				h := New(mock, ca.roots(), 0, nil, "", source)
-				md := egressMetadata("")
+				var md *extproc.RequestMetadata
 				if source == PeerCertificateSourceEnvoy {
 					md = egressMetadata(encodedCertificateChain(leaf))
 				} else {
