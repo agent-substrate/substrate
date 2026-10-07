@@ -52,9 +52,12 @@ data:
 
     admin:
       address:
-        # ipv4_compat is load-bearing: the probes below are the kubelet
-        # dialling the pod IP, which is IPv4 on an IPv4 cluster.
-        socket_address: { address: "::", ipv4_compat: true, port_value: 15000 }
+        # Loopback only. The admin API is unauthenticated and includes
+        # /quitquitquit, /drain_listeners, /runtime_modify and /config_dump,
+        # so it must not be reachable on the pod IP. The ext_proc sidecar's
+        # drain sequence dials it on 127.0.0.1; the kubelet probes go through
+        # the envoy_metrics listener below.
+        socket_address: { address: 127.0.0.1, port_value: 15000 }
 
     # Required by the mitm_listener below. An internal listener has no socket,
     # so it is reachable only through a cluster with an envoy_internal_address;
@@ -794,7 +797,56 @@ data:
                       upstream_failure: "%UPSTREAM_TRANSPORT_FAILURE_REASON%"
                       termination: "%CONNECTION_TERMINATION_DETAILS%"
 
+      # The only pod-IP-reachable view of the admin API: proxies GET /ready
+      # (the kubelet probes below) and GET /stats/prometheus to the
+      # loopback-only admin listener and 404s everything else. ipv4_compat
+      # because the kubelet dials the pod IP, which is IPv4 on an IPv4
+      # cluster. The stat prefixes contain "admin" so envoyDrainer excludes
+      # probe connections from the downstream count it waits on.
+      - name: envoy_metrics
+        stat_prefix: admin_metrics
+        address:
+          socket_address: { address: "::", ipv4_compat: true, port_value: 15090 }
+        filter_chains:
+        - filters:
+          - name: envoy.filters.network.http_connection_manager
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+              stat_prefix: admin_metrics
+              route_config:
+                name: envoy_metrics
+                virtual_hosts:
+                - name: envoy_metrics
+                  domains: ["*"]
+                  routes:
+                  - match:
+                      path: /ready
+                      headers:
+                      - name: ":method"
+                        string_match: { exact: GET }
+                    route: { cluster: envoy_admin }
+                  - match:
+                      path: /stats/prometheus
+                      headers:
+                      - name: ":method"
+                        string_match: { exact: GET }
+                    route: { cluster: envoy_admin }
+              http_filters:
+              - name: envoy.filters.http.router
+                typed_config:
+                  "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
       clusters:
+      - name: envoy_admin
+        connect_timeout: 0.25s
+        type: STATIC
+        load_assignment:
+          cluster_name: envoy_admin
+          endpoints:
+          - lb_endpoints:
+            - endpoint:
+                address:
+                  socket_address: { address: 127.0.0.1, port_value: 15000 }
       # The only way into mitm_listener. An internal address, not a socket, so
       # the MITM leg has no listening port anywhere in the pod's netns.
       - name: mitm_internal
@@ -1285,18 +1337,20 @@ spec:
         ports:
         - name: https
           containerPort: 443
-        - name: admin
-          containerPort: 15000
+        # Filtered admin view (GET /ready and /stats/prometheus only). The
+        # admin API itself (15000) is loopback-only and deliberately not listed.
+        - name: envoy-metrics
+          containerPort: 15090
         readinessProbe:
           httpGet:
             path: /ready
-            port: admin
+            port: envoy-metrics
           periodSeconds: 10
         startupProbe:
           failureThreshold: 60
           httpGet:
             path: /ready
-            port: admin
+            port: envoy-metrics
           periodSeconds: 1
         volumeMounts:
         - name: config
