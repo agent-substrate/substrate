@@ -41,6 +41,11 @@ import (
 // file reads inside the guest, and far short of the lifecycle calls' 20-30s.
 const statsCallTimeout = 2 * time.Second
 
+// finalReadTimeout bounds the final record's guest reading, which sits on the
+// checkpoint path. A healthy reading takes about 2ms; a slower one falls back
+// to the newest cached sample.
+const finalReadTimeout = 10 * time.Millisecond
+
 // Sweeps and initial readings ask up to statsFanOut guests at once. A sweep
 // gives up on the rest after statsSweepBudget, so it ends inside one sample
 // interval. A guest not reached in time reports as pending.
@@ -271,10 +276,20 @@ func (s *AteomService) recordFinalIfEnded(ctx context.Context, h *hostedActor) {
 	}
 }
 
+// readFinal reads h's guest for the final record, bounded by finalReadTimeout.
+// A failed read leaves the newest measured sample to stand in. If even that
+// bound is too much checkpoint latency, drop the read and the final record
+// uses the newest cached sample instead.
+func (s *AteomService) readFinal(ctx context.Context, h *hostedActor) {
+	ctx, cancel := context.WithTimeout(ctx, finalReadTimeout)
+	defer cancel()
+	if sample, err := s.measureGuest(ctx, h); err == nil {
+		h.usage.Store(sample)
+	}
+}
+
 // recordFinal writes the final record of an activation that a checkpoint or a
-// terminate ended, from its newest measured sample. A guest read here would add
-// its latency to the checkpoint, so the record marks where the epoch ends
-// rather than adding a fresher reading.
+// terminate ended, from its newest measured sample.
 func (s *AteomService) recordFinal(ctx context.Context, h *hostedActor) {
 	pending := h.usage.WithEpoch(pendingSample(&h.attribution))
 	h.usage.Final(func(measured *ateompb.WorkloadStatsSample) {

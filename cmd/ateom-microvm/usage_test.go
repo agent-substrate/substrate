@@ -138,6 +138,27 @@ func TestRecordFinalIfEnded(t *testing.T) {
 	}
 }
 
+// TestReadFinal pins that the final record carries a fresh guest reading, and
+// the newest measured sample when that reading fails.
+func TestReadFinal(t *testing.T) {
+	agent := &fakeAgent{stats: map[string]*agentpb.CgroupStats{"app_ovl": containerStats(1000, 2000, 100, 5_000_000)}}
+	s := newStatsService(agent, "app_ovl")
+	h := setActivation(s, ateomstats.NewActivation(time.Now(), false))
+	s.recordInitial(context.Background(), h)
+
+	agent.stats["app_ovl"] = containerStats(1000, 2000, 100, 9_000_000)
+	s.readFinal(context.Background(), h)
+	if got := h.usage.Latest().GetCpuUsageUsec(); got != 9000 {
+		t.Errorf("CPU after the final read = %d, want 9000", got)
+	}
+
+	agent.errs = map[string]error{"app_ovl": errors.New("guest gone")}
+	s.readFinal(context.Background(), h)
+	if got := h.usage.Latest().GetCpuUsageUsec(); got != 9000 {
+		t.Errorf("CPU after a failed final read = %d, want the last measured 9000", got)
+	}
+}
+
 func TestRecordFinalWithNoSampleIsPending(t *testing.T) {
 	s := newStatsService(&fakeAgent{}, "app_ovl")
 	rec := withUsageRecorder(s)

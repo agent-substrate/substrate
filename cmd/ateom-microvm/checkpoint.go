@@ -125,7 +125,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	}
 
 	// Captured now: the checkpoint unhosts the actor, and the final record
-	// waits for it to succeed.
+	// waits for the teardown.
 	hosted := s.lookupActor(actorUID)
 
 	// The actor's CH was booted by RunWorkload or relaunched by RestoreWorkload;
@@ -138,6 +138,10 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	client := ch.NewClient(chSocket)
 	if _, err := client.WaitReady(ctx, 10*time.Second); err != nil {
 		return nil, fmt.Errorf("while waiting for CH api-socket: %w", err)
+	}
+	// Read before the pause: a paused guest cannot answer.
+	if hosted != nil {
+		s.readFinal(ctx, hosted)
 	}
 
 	tPause := time.Now()
@@ -402,6 +406,9 @@ func (s *AteomService) TerminateWorkload(ctx context.Context, req *ateompb.Termi
 	attribution := ateomstats.ActorAttributionFromRequest(req)
 
 	hosted := s.lookupActor(attribution.UID)
+	if hosted != nil {
+		s.readFinal(ctx, hosted)
+	}
 	err := s.terminateWorkload(ctx, attribution, req.GetActorDirs())
 	s.recordFinalIfEnded(ctx, hosted)
 	if err != nil {
