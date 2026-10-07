@@ -28,6 +28,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel/attribute"
+	"google.golang.org/protobuf/proto"
 )
 
 // PauseActor executes the workflow to pause a running actor. Idempotent:
@@ -276,6 +277,7 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 				localSnapshot := &ateapipb.LocalSnapshot{
 					SnapshotName: toUpdate.GetStatus().GetInProgressLocalSnapshotName(),
 					ContentScope: contentScope,
+					Hardware:     proto.CloneOf(worker.GetStatus().GetHardware()),
 				}
 				toUpdate.Status.LocalSnapshot = localSnapshot
 				toUpdate.Status.InProgressLocalSnapshotName = ""

@@ -483,6 +483,46 @@ func TestValidateActorUpdate(t *testing.T) {
 		})),
 		field.ErrorList{field.Invalid(field.NewPath("status", "external_snapshot", "actor_template_uid"), nil, "").WithOrigin("format=k8s-uuid")},
 	}, {
+		"valid actor.status.external_snapshot.hardware",
+		validInput(),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.ExternalSnapshot = &ateapipb.ExternalSnapshot{
+				SnapshotUri: "gs://private/atespaces/as/actors/" + someActorUID + "/snapshots/snap-1",
+				Hardware:    &ateapipb.HardwareIdentity{Attributes: map[string]string{"architecture": "amd64"}},
+			}
+		})),
+		nil,
+	}, {
+		"invalid actor.status.external_snapshot.hardware attribute value",
+		validInput(),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.ExternalSnapshot = &ateapipb.ExternalSnapshot{
+				SnapshotUri: "gs://private/atespaces/as/actors/" + someActorUID + "/snapshots/snap-1",
+				Hardware:    &ateapipb.HardwareIdentity{Attributes: map[string]string{"architecture": strings.Repeat("a", 257)}},
+			}
+		})),
+		field.ErrorList{field.TooLong(field.NewPath("status", "external_snapshot", "hardware", "attributes").Key("architecture"), "", 256).WithOrigin("maxLength")},
+	}, {
+		"valid actor.status.local_snapshot.hardware",
+		validInput(),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.LocalSnapshot = &ateapipb.LocalSnapshot{
+				SnapshotName: "snap-1",
+				Hardware:     &ateapipb.HardwareIdentity{Attributes: map[string]string{"architecture": "amd64"}},
+			}
+		})),
+		nil,
+	}, {
+		"invalid actor.status.local_snapshot.hardware attribute key",
+		validInput(),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.LocalSnapshot = &ateapipb.LocalSnapshot{
+				SnapshotName: "snap-1",
+				Hardware:     &ateapipb.HardwareIdentity{Attributes: map[string]string{strings.Repeat("k", 129): "v"}},
+			}
+		})),
+		field.ErrorList{field.TooLong(field.NewPath("status", "local_snapshot", "hardware", "attributes"), "", 128).WithOrigin("maxLength")},
+	}, {
 		"valid actor.status.local_snapshot.snapshot_name",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {

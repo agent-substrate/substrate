@@ -194,7 +194,8 @@ type crashActorStore interface {
 // releaseWorker clears the worker's assignment if it still points at the given
 // actor. A missing worker or an already-cleared assignment is not an error.
 // It returns the worker's sandboxClass if found, and the worker as it stands
-// after the release, which callers holding a cache of workers hand to it.
+// after the release (or as fetched before the attempt when it was no longer
+// hosting the actor).
 func releaseWorker(ctx context.Context, st crashActorStore, actor *ateapipb.Actor) (string, *ateapipb.Worker, error) {
 	assignment := actor.GetStatus().GetWorkerAssignment()
 	if assignment == nil {
@@ -224,6 +225,7 @@ func releaseWorker(ctx context.Context, st crashActorStore, actor *ateapipb.Acto
 	if released == nil {
 		slog.WarnContext(ctx, "Worker is not hosting this Actor, skipping release",
 			slog.String("worker", workerName))
+		return sandboxClass, worker, nil
 	}
 	return sandboxClass, released, nil
 }

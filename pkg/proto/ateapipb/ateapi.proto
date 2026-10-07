@@ -192,6 +192,11 @@ message ExternalSnapshot {
   // +k8s:optional
   // +k8s:format=k8s-uuid
   string actor_template_uid = 3;
+
+  // Hardware identity of the Worker that captured the snapshot.
+  //
+  // +k8s:optional
+  HardwareIdentity hardware = 4;
 }
 
 // LocalSnapshot records information about a node-local snapshot.
@@ -210,6 +215,11 @@ message LocalSnapshot {
   // +k8s:minimum=1
   // +k8s:maximum=2 # keep this in sync with the SnapshotContentScope enum
   SnapshotContentScope content_scope = 2;
+
+  // Hardware identity of the Worker that captured the snapshot.
+  //
+  // +k8s:optional
+  HardwareIdentity hardware = 3;
 }
 
 enum SnapshotContentScope {
