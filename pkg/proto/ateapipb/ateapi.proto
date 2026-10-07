@@ -2235,6 +2235,15 @@ message ExternalWorkerHost {
   // +k8s:required
   // +k8s:maxLength=512
   string runtime_endpoint = 1;
+
+  // Capacity reserved for Substrate by the external host operator. Copied to
+  // Worker status at registration; omitted dimensions admit no workloads.
+  // External hosts do not have an atelet to report their capacity.
+  // Immutable with external_host; changing the reservation requires draining
+  // and re-registering the Worker.
+  //
+  // +k8s:optional
+  WorkerResources capacity = 2;
 }
 
 enum WorkerState {

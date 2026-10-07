@@ -86,11 +86,10 @@ func TestMacActorE2E(t *testing.T) {
 	if _, err := tc.client.CreateWorker(context.Background(), &ateapipb.CreateWorkerRequest{Worker: &ateapipb.Worker{
 		Metadata:     &ateapipb.ResourceMetadata{Name: workerName},
 		SandboxClass: string(atev1alpha1.SandboxClassMacOS),
-		ExternalHost: &ateapipb.ExternalWorkerHost{RuntimeEndpoint: endpoint},
+		ExternalHost: &ateapipb.ExternalWorkerHost{RuntimeEndpoint: endpoint, Capacity: &ateapipb.WorkerResources{Actors: 1}},
 	}}); err != nil {
 		t.Fatalf("register Mac Worker: %v", err)
 	}
-	reportWorkerCapacity(t, tc, workerName, 1)
 
 	const templateName = "mac-template-e2e"
 	if _, err := tc.client.CreateActorTemplate(context.Background(), &ateapipb.CreateActorTemplateRequest{ActorTemplate: &ateapipb.ActorTemplate{

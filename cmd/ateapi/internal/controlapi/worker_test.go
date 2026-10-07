@@ -776,3 +776,46 @@ func TestCreateWorker_HoldsNoCapacityUntilReported(t *testing.T) {
 		t.Errorf("a request carrying a ceiling set capacity to %v, want none", capacity)
 	}
 }
+
+func TestCreateWorker_ExternalCapacity(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		capacity *ateapipb.WorkerResources
+		wantCode codes.Code
+	}{
+		{name: "declared", capacity: &ateapipb.WorkerResources{Actors: 3}},
+		{name: "omitted"},
+		{name: "negative", capacity: &ateapipb.WorkerResources{Actors: -1}, wantCode: codes.InvalidArgument},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			svc, persistence := newWorkerAPIService(t)
+			got, err := svc.CreateWorker(ctx, &ateapipb.CreateWorkerRequest{Worker: &ateapipb.Worker{
+				Metadata: &ateapipb.ResourceMetadata{Name: apiWorkerName}, SandboxClass: "macos-vz",
+				ExternalHost: &ateapipb.ExternalWorkerHost{RuntimeEndpoint: "mac.example:9443", Capacity: tc.capacity},
+				Status:       &ateapipb.WorkerStatus{Capacity: &ateapipb.WorkerResources{Actors: 99}},
+			}})
+			if apierror.Code(err) != tc.wantCode {
+				t.Fatalf("CreateWorker = %v, want %v", err, tc.wantCode)
+			}
+			if err != nil {
+				return
+			}
+			stored, err := persistence.GetWorker(ctx, apiWorkerName)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, worker := range []*ateapipb.Worker{got, stored} {
+				if diff := cmp.Diff(tc.capacity, worker.GetStatus().GetCapacity(), protocmp.Transform()); diff != "" {
+					t.Fatalf("external capacity (-want +got): %s", diff)
+				}
+			}
+			_, err = svc.UpdateWorker(ctx, &ateapipb.UpdateWorkerRequest{Worker: updateFrom(got, func(w *ateapipb.Worker) {
+				w.ExternalHost.Capacity = &ateapipb.WorkerResources{Actors: 8}
+			})})
+			if apierror.Code(err) != codes.InvalidArgument {
+				t.Fatalf("changed immutable capacity: %v", err)
+			}
+		})
+	}
+}

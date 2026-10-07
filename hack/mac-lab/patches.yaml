@@ -1,0 +1,77 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# HOST_GATEWAY is rendered into the private staging copy by lab.sh.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ate-api-server
+  namespace: ate-system
+spec:
+  template:
+    spec:
+      hostAliases:
+        - ip: HOST_GATEWAY
+          hostnames: [host.container.internal]
+      containers:
+        - name: ate-api-server
+          args:
+            - --grpc-server-cred-bundle=/run/ate-api-tls/credential-bundle.pem
+            - --pod-identity-ca-certs=/run/ate-api-tls/ca.crt
+            - --authentication-config=/etc/ateapi/authentication.yaml
+            - --postgres-read-write-connection-string=@env
+            - --postgres-owner-connection-string=@env
+            - --postgres-read-write-role=postgres
+            - --postgres-owner-role=postgres
+            - --actor-id-jwt-pool=/run/actor-id-jwt/pool.json
+            - --actor-id-ca-pool=/run/actor-id-ca/pool.json
+            - --host-runtime-client-cert=/run/host-runtime/client.crt
+            - --host-runtime-client-key=/run/host-runtime/client.key
+            - --host-runtime-server-ca=/run/host-runtime/ca.crt
+          env:
+            - name: OTEL_METRICS_EXPORTER
+              value: none
+            - name: OTEL_TRACES_EXPORTER
+              value: none
+          volumeMounts:
+            - name: host-runtime
+              mountPath: /run/host-runtime
+              readOnly: true
+      volumes:
+        - name: binary
+          hostPath:
+            path: /opt/substrate/bin/ateapi
+            type: File
+        - name: host-runtime
+          secret:
+            secretName: host-runtime-client
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ate-controller
+  namespace: ate-system
+spec:
+  template:
+    spec:
+      containers:
+        - name: ate-controller
+          env:
+            - name: OTEL_TRACES_EXPORTER
+              value: none
+      volumes:
+        - name: binary
+          hostPath:
+            path: /opt/substrate/bin/atecontroller
+            type: File
