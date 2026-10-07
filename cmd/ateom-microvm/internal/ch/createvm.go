@@ -28,11 +28,18 @@ type VmConfig struct {
 	Payload  PayloadConfig   `json:"payload"`
 	Disks    []DiskConfig    `json:"disks,omitempty"`
 	Fs       []FsConfig      `json:"fs,omitempty"`
+	Balloon  *BalloonConfig  `json:"balloon,omitempty"`
 	Rng      *RngConfig      `json:"rng,omitempty"`
 	Serial   *ConsoleConfig  `json:"serial,omitempty"`
 	Console  *ConsoleConfig  `json:"console,omitempty"`
 	Vsock    *VsockConfig    `json:"vsock,omitempty"`
 	Platform *PlatformConfig `json:"platform,omitempty"`
+}
+
+// BalloonConfig configures the virtio-balloon device.
+type BalloonConfig struct {
+	Size              int64 `json:"size"`
+	FreePageReporting bool  `json:"free_page_reporting,omitempty"`
 }
 
 // FsConfig is a virtio-fs device backed by a vhost-user (virtiofsd) socket. The

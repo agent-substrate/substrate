@@ -18,6 +18,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"path/filepath"
@@ -222,5 +223,15 @@ func TestGuestConfigDebugConsole(t *testing.T) {
 		if !strings.Contains(dbgParams, want) {
 			t.Errorf("expected guestConfig() with guestDebug=true to contain %q, but got %q", want, dbgParams)
 		}
+	}
+}
+
+func TestBuildVMConfigBalloon(t *testing.T) {
+	cfg := buildVMConfig("actor-1", "/vmlinux", "/rootfs.img", "", "/console.log", 256, 1, true, false)
+	if cfg.Balloon == nil || !cfg.Balloon.FreePageReporting || cfg.Balloon.Size != 0 {
+		t.Fatalf("cfg.Balloon = %+v, want size 0 with free page reporting", cfg.Balloon)
+	}
+	if b, err := json.Marshal(cfg); err != nil || !strings.Contains(string(b), `"balloon":{"size":0,"free_page_reporting":true}`) {
+		t.Errorf("VmConfig JSON = %s, %v; want the balloon section cloud-hypervisor expects", b, err)
 	}
 }
