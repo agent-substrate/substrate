@@ -16,9 +16,11 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"maps"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -50,6 +52,8 @@ type fakeControl struct {
 	// lostReply, when set, is returned by CreateWorker after the Worker is
 	// stored, as when the server commits a create whose reply never arrives.
 	lostReply error
+	// drainErr, when set, fails every DrainWorker.
+	drainErr error
 }
 
 func newFakeControl() *fakeControl {
@@ -90,6 +94,9 @@ func (f *fakeControl) DeleteWorker(_ context.Context, in *ateapipb.DeleteWorkerR
 func (f *fakeControl) DrainWorker(_ context.Context, in *ateapipb.DrainWorkerRequest, _ ...grpc.CallOption) (*ateapipb.Worker, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.drainErr != nil {
+		return nil, f.drainErr
+	}
 	w, ok := f.workers[in.GetWorker().GetName()]
 	if !ok {
 		return nil, status.Error(codes.NotFound, "no such Worker")
@@ -149,16 +156,58 @@ func (f *fakeControl) ListWorkerActorAssignments(_ context.Context, in *ateapipb
 	return resp, nil
 }
 
+// names returns the pod names of the registered Workers, sorted, once per
+// Worker.
 func (f *fakeControl) names() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return slices.Sorted(maps.Keys(f.workers))
+	var out []string
+	for _, w := range f.workers {
+		out = append(out, w.GetWorkerPod())
+	}
+	slices.Sort(out)
+	return out
 }
 
-func (f *fakeControl) worker(name string) *ateapipb.Worker {
+// worker returns the Worker registered for pod: the one not draining, if
+// there is one.
+func (f *fakeControl) worker(pod string) *ateapipb.Worker {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.workers[name]
+	var found *ateapipb.Worker
+	for _, w := range f.workers {
+		if w.GetWorkerPod() != pod {
+			continue
+		}
+		if found == nil || w.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_DRAINING {
+			found = w
+		}
+	}
+	return found
+}
+
+// all returns every registered Worker.
+func (f *fakeControl) all() []*ateapipb.Worker {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Collect(maps.Values(f.workers))
+}
+
+// draining returns the draining Worker registered for pod, if any.
+func (f *fakeControl) draining(pod string) *ateapipb.Worker {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, w := range f.workers {
+		if w.GetWorkerPod() == pod && w.GetStatus().GetState() == ateapipb.WorkerState_WORKER_STATE_DRAINING {
+			return w
+		}
+	}
+	return nil
+}
+
+// uid returns the name of the Worker registered for pod, as worker picks it.
+func (f *fakeControl) uid(pod string) string {
+	return f.worker(pod).GetMetadata().GetName()
 }
 
 // fakeRelay records accepted reports, as ate-api-server's view of capacity,
@@ -297,6 +346,8 @@ func newTestController(pools ...*atev1alpha1.WorkerPool) (*controller, *fakeCont
 	c := newController(ctl, rel, cl, testRun, 4, testDrainGrace)
 	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	c.now = func() time.Time { return start }
+	var uids atomic.Int64
+	c.newUID = func() string { return fmt.Sprintf("worker-%d", uids.Add(1)) }
 	return c, ctl, rel, cl
 }
 
@@ -347,17 +398,17 @@ func TestReconcileHonorsReplicasAndLimits(t *testing.T) {
 		t.Errorf("SandboxClass = %q", w.GetSandboxClass())
 	case w.GetLabels()["workload"] != "bench":
 		t.Errorf("Labels = %v, want the pool's, which template selectors match", w.GetLabels())
-	case w.GetWorkerPodUid() != fakeworker.PodUID(name) || w.GetEpoch() != 0:
+	case w.GetWorkerPodUid() != w.GetMetadata().GetName() || w.GetEpoch() != 0:
 		t.Errorf("WorkerPodUid/Epoch = %q/%d", w.GetWorkerPodUid(), w.GetEpoch())
 	}
 
-	if got := rel.via[name]; got != "10.0.0.2:8086" {
+	if got := rel.via[ctl.uid(name)]; got != "10.0.0.2:8086" {
 		t.Errorf("capacity for %s sent via %q, want node-b's fake-atelet", name, got)
 	}
-	if got, want := rel.reported[name], wantCapacity(1000, "1500m", "4Gi"); !proto.Equal(got, want) {
+	if got, want := rel.reported[ctl.uid(name)], wantCapacity(1000, "1500m", "4Gi"); !proto.Equal(got, want) {
 		t.Errorf("reported %v, want %v from the pool's limits", got, want)
 	}
-	if got, want := rel.hardware[name], hardware.ProbeHost(); !proto.Equal(got, want) {
+	if got, want := rel.hardware[ctl.uid(name)], hardware.ProbeHost(); !proto.Equal(got, want) {
 		t.Errorf("hardware %v, want %v, which ate-api-server requires", got, want)
 	}
 	if got, want := cl.statuses["bench"], (atev1alpha1.WorkerPoolStatus{Replicas: 3, ReadyReplicas: 3, Selector: "ate.dev/worker-pool=bench"}); got != want {
@@ -368,15 +419,15 @@ func TestReconcileHonorsReplicasAndLimits(t *testing.T) {
 // With no limit set, a real worker reports its node's allocatable, which is
 // what the downward API projects for an unset limit.
 func TestReconcileReportsNodeAllocatableWithoutLimits(t *testing.T) {
-	c, _, rel, _ := newTestController(pool("bench", 2, nil))
+	c, ctl, rel, _ := newTestController(pool("bench", 2, nil))
 	if err := reconcile(t, c); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 	onA, onB := fakeworker.Name(testRun, "benchmark-workloads", "bench", 0), fakeworker.Name(testRun, "benchmark-workloads", "bench", 1)
-	if got, want := rel.reported[onA], wantCapacity(1000, "86", "160Gi"); !proto.Equal(got, want) {
+	if got, want := rel.reported[ctl.uid(onA)], wantCapacity(1000, "86", "160Gi"); !proto.Equal(got, want) {
 		t.Errorf("node-a Worker reported %v, want %v", got, want)
 	}
-	if got, want := rel.reported[onB], wantCapacity(1000, "44", "80Gi"); !proto.Equal(got, want) {
+	if got, want := rel.reported[ctl.uid(onB)], wantCapacity(1000, "44", "80Gi"); !proto.Equal(got, want) {
 		t.Errorf("node-b Worker reported %v, want %v", got, want)
 	}
 }
@@ -391,7 +442,7 @@ func TestReconcileHonorsMaxActorsAnnotation(t *testing.T) {
 		t.Error("reconcile succeeded with an unparseable annotation")
 	}
 	name := fakeworker.Name(testRun, "benchmark-workloads", "bench", 0)
-	if got := rel.reported[name].GetActors(); got != 5 {
+	if got := rel.reported[ctl.uid(name)].GetActors(); got != 5 {
 		t.Errorf("actors = %d, want 5 from the annotation", got)
 	}
 	if slices.Contains(ctl.names(), fakeworker.Name(testRun, "benchmark-workloads", "broken", 0)) {
@@ -442,6 +493,51 @@ func TestBadAnnotationLeavesThePoolsWorkers(t *testing.T) {
 	}
 }
 
+// A Worker whose node has left the benchmark set is replaced on a benchmark
+// node, as a pod is when its node goes away. The old one drains with the
+// capacity it last reported, rather than a report that drops its cpu and
+// memory for want of allocatable.
+func TestWorkerOnADepartedNodeIsReplaced(t *testing.T) {
+	c, ctl, rel, cl := newTestController(pool("bench", 2, nil))
+	if err := reconcile(t, c); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	pod := fakeworker.Name(testRun, "benchmark-workloads", "bench", 1)
+	old := ctl.uid(pod)
+	before := rel.reported[old]
+	ctl.assignments[old] = 1
+	cl.nodes = cl.nodes[:1]
+	if err := reconcile(t, c); err != nil {
+		t.Fatalf("reconcile after node-b left: %v", err)
+	}
+	w := ctl.worker(pod)
+	if w.GetMetadata().GetName() == old || w.GetNodeName() != "node-a" {
+		t.Errorf("Worker for %s = %s on %s, want a new one on node-a", pod, w.GetMetadata().GetName(), w.GetNodeName())
+	}
+	if got, want := rel.reported[w.GetMetadata().GetName()], wantCapacity(1000, "86", "160Gi"); !proto.Equal(got, want) {
+		t.Errorf("replacement reported %v, want node-a's %v", got, want)
+	}
+	if d := ctl.draining(pod); d.GetMetadata().GetName() != old || !proto.Equal(rel.reported[old], before) {
+		t.Errorf("old Worker = %v reporting %v, want %s draining with %v kept", d.GetMetadata().GetName(), rel.reported[old], old, before)
+	}
+	if got := cl.statuses["bench"]; got.Replicas != 2 || got.ReadyReplicas != 2 {
+		t.Errorf("status = %+v, want 2 replicas, 2 ready", got)
+	}
+}
+
+// An empty node list replaces nothing: there is nowhere to put a replacement.
+func TestNoBenchmarkNodeLeavesWorkersInPlace(t *testing.T) {
+	c, ctl, _, cl := newTestController(pool("bench", 2, nil))
+	if err := reconcile(t, c); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	cl.nodes = nil
+	_ = reconcile(t, c)
+	if got, want := ctl.names(), poolNames("bench", 2); !slices.Equal(got, want) || ctl.draining(want[0]) != nil || ctl.draining(want[1]) != nil {
+		t.Errorf("registered %v with drains, want %v left as they are", got, want)
+	}
+}
+
 // A Worker on a node whose fake-atelet is not up yet is registered but not
 // ready; the next pass reports it once the relay is there.
 func TestReconcileWaitsForTheNodesFakeAtelet(t *testing.T) {
@@ -466,17 +562,18 @@ func TestReconcileWaitsForTheNodesFakeAtelet(t *testing.T) {
 }
 
 func TestReconcileRetriesARejectedReport(t *testing.T) {
-	c, _, rel, cl := newTestController(pool("bench", 1, nil))
+	c, ctl, rel, cl := newTestController(pool("bench", 1, nil))
 	name := fakeworker.Name(testRun, "benchmark-workloads", "bench", 0)
-	rel.reject[name] = codes.NotFound
+	const first = "worker-1" // the first name newTestController's controller mints
+	rel.reject[first] = codes.NotFound
 	if err := reconcile(t, c); err == nil {
 		t.Error("reconcile succeeded with a rejected report")
 	}
-	delete(rel.reject, name)
+	delete(rel.reject, first)
 	if err := reconcile(t, c); err != nil {
 		t.Fatalf("second reconcile: %v", err)
 	}
-	if rel.reported[name] == nil || cl.statuses["bench"].ReadyReplicas != 1 {
+	if rel.reported[ctl.uid(name)] == nil || cl.statuses["bench"].ReadyReplicas != 1 {
 		t.Error("rejected report not retried")
 	}
 }
@@ -499,16 +596,16 @@ func TestReconcileIsIdempotent(t *testing.T) {
 
 // A limits edit replaces the pool's Workers, as it rolls a real pool's pods:
 // ateom reads its limits once at startup, so a Worker's capacity never
-// changes. The old Worker drains with the capacity it reported, and is not
-// reported again.
+// changes. The old Worker is not reported again.
 func TestPoolLimitsChangeReplacesWorkers(t *testing.T) {
 	limits := corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2"), corev1.ResourceMemory: resource.MustParse("4Gi")}
 	c, ctl, rel, cl := newTestController(pool("bench", 1, limits))
 	if err := reconcile(t, c); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	name := fakeworker.Name(testRun, "benchmark-workloads", "bench", 0)
-	ctl.assignments[name] = 1
+	pod := fakeworker.Name(testRun, "benchmark-workloads", "bench", 0)
+	old := ctl.uid(pod)
+	ctl.assignments[old] = 1
 	reports := rel.calls
 
 	cl.editPool("bench", func(wp *atev1alpha1.WorkerPool) {
@@ -517,25 +614,24 @@ func TestPoolLimitsChangeReplacesWorkers(t *testing.T) {
 	if err := reconcile(t, c); err != nil {
 		t.Fatalf("reconcile after the limits changed: %v", err)
 	}
-	if w := ctl.worker(name); w.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_DRAINING {
-		t.Errorf("Worker state = %v after the limits changed, want draining", w.GetStatus().GetState())
+	w := ctl.worker(pod)
+	if w.GetMetadata().GetName() == old {
+		t.Fatalf("Worker for %s kept after the limits changed, want a new one", pod)
 	}
-	if got, want := rel.reported[name], wantCapacity(1000, "2", "4Gi"); !proto.Equal(got, want) || rel.calls != reports {
-		t.Errorf("draining Worker reported %v in %d new reports, want %v kept and none", got, rel.calls-reports, want)
+	if got, want := rel.reported[w.GetMetadata().GetName()], wantCapacity(1000, "4", "8Gi"); !proto.Equal(got, want) {
+		t.Errorf("replacement reported %v, want %v", got, want)
 	}
-
-	ctl.assignments[name] = 0
-	if err := reconcile(t, c); err != nil {
-		t.Fatalf("reconcile after the Actor left: %v", err)
+	if got, want := rel.reported[old], wantCapacity(1000, "2", "4Gi"); !proto.Equal(got, want) {
+		t.Errorf("old Worker's capacity = %v, want %v kept while it drains", got, want)
 	}
-	if w := ctl.worker(name); w.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_ACTIVE {
-		t.Errorf("replaced Worker state = %v, want active", w.GetStatus().GetState())
+	if got := rel.calls - reports; got != 1 {
+		t.Errorf("%d reports after the edit, want 1, for the replacement only", got)
 	}
-	if got, want := rel.reported[name], wantCapacity(1000, "4", "8Gi"); !proto.Equal(got, want) {
-		t.Errorf("replaced Worker reported %v, want %v", got, want)
+	if d := ctl.draining(pod); d.GetMetadata().GetName() != old {
+		t.Errorf("draining Worker = %v, want the old one, %s", d.GetMetadata().GetName(), old)
 	}
 	if got := cl.statuses["bench"]; got.Replicas != 1 || got.ReadyReplicas != 1 {
-		t.Errorf("status = %+v, want 1 replica, 1 ready", got)
+		t.Errorf("status = %+v, want only the replacement counted", got)
 	}
 }
 
@@ -545,19 +641,23 @@ func TestMaxActorsAnnotationChangeReplacesWorkers(t *testing.T) {
 	if err := reconcile(t, c); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	name := fakeworker.Name(testRun, "benchmark-workloads", "bench", 0)
-	creates := ctl.creates
+	pod := fakeworker.Name(testRun, "benchmark-workloads", "bench", 0)
+	old := ctl.uid(pod)
 	cl.editPool("bench", func(wp *atev1alpha1.WorkerPool) {
 		wp.Annotations = map[string]string{fakeworker.MaxActorsAnnotation: "5"}
 	})
 	if err := reconcile(t, c); err != nil {
 		t.Fatalf("reconcile after the annotation changed: %v", err)
 	}
-	if ctl.creates != creates+1 {
-		t.Errorf("%d creates after the actor count changed, want 1", ctl.creates-creates)
+	w := ctl.worker(pod)
+	if w.GetMetadata().GetName() == old {
+		t.Fatalf("Worker for %s kept after the actor count changed, want a new one", pod)
 	}
-	if got := rel.reported[name].GetActors(); got != 5 {
-		t.Errorf("replaced Worker reported %d actors, want 5", got)
+	if got := rel.reported[w.GetMetadata().GetName()].GetActors(); got != 5 {
+		t.Errorf("replacement reported %d actors, want 5", got)
+	}
+	if got, want := ctl.names(), poolNames("bench", 1); !slices.Equal(got, want) {
+		t.Errorf("registered %v, want the idle old Worker deleted, %v", got, want)
 	}
 }
 
@@ -590,7 +690,7 @@ func TestScaleDownDrainsThenDeletes(t *testing.T) {
 	}
 	busy := fakeworker.Name(testRun, "benchmark-workloads", "bench", 3)
 	idle := fakeworker.Name(testRun, "benchmark-workloads", "bench", 2)
-	ctl.assignments[busy] = 1
+	ctl.assignments[ctl.uid(busy)] = 1
 
 	cl.setReplicas("bench", 2)
 	if err := reconcile(t, c); err != nil {
@@ -606,7 +706,7 @@ func TestScaleDownDrainsThenDeletes(t *testing.T) {
 		t.Errorf("status = %+v, want 2 replicas: a draining Worker is no replica", got)
 	}
 
-	ctl.assignments[busy] = 0
+	ctl.assignments[ctl.uid(busy)] = 0
 	if err := reconcile(t, c); err != nil {
 		t.Fatalf("reconcile after the Actor left: %v", err)
 	}
@@ -624,7 +724,8 @@ func TestDrainGraceDeletesAWorkerStillHeld(t *testing.T) {
 		t.Fatalf("reconcile: %v", err)
 	}
 	busy := fakeworker.Name(testRun, "benchmark-workloads", "bench", 1)
-	ctl.assignments[busy] = 1
+	held := ctl.uid(busy)
+	ctl.assignments[held] = 1
 	cl.setReplicas("bench", 1)
 	if err := reconcile(t, c); err != nil {
 		t.Fatalf("scale-down reconcile: %v", err)
@@ -643,20 +744,22 @@ func TestDrainGraceDeletesAWorkerStillHeld(t *testing.T) {
 	if got, want := ctl.names(), poolNames("bench", 1); !slices.Equal(got, want) {
 		t.Errorf("registered %v after the drain grace, want %v", got, want)
 	}
-	if n := ctl.assignments[busy]; n != 0 {
+	if n := ctl.assignments[held]; n != 0 {
 		t.Errorf("%d Actors still assigned to the deleted Worker", n)
 	}
 }
 
-// A Worker scaled down while an Actor holds it, then wanted again, is deleted
-// once the Actor leaves and registered afresh, rather than left draining.
+// A pod scaled down while an Actor holds its Worker, then wanted again, gets
+// a new Worker at once rather than the draining one back, and the old one is
+// deleted once the Actor leaves.
 func TestScaleDownThenUpReplacesTheDrainingWorker(t *testing.T) {
 	c, ctl, _, cl := newTestController(pool("bench", 2, nil))
 	if err := reconcile(t, c); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 	busy := fakeworker.Name(testRun, "benchmark-workloads", "bench", 1)
-	ctl.assignments[busy] = 1
+	old := ctl.uid(busy)
+	ctl.assignments[old] = 1
 	cl.setReplicas("bench", 1)
 	if err := reconcile(t, c); err != nil {
 		t.Fatalf("scale-down reconcile: %v", err)
@@ -665,19 +768,19 @@ func TestScaleDownThenUpReplacesTheDrainingWorker(t *testing.T) {
 	if err := reconcile(t, c); err != nil {
 		t.Fatalf("scale-up reconcile: %v", err)
 	}
-	if got := cl.statuses["bench"]; got.Replicas != 1 {
-		t.Errorf("status = %+v while the Worker drains, want 1 replica", got)
+	if w := ctl.worker(busy); w.GetMetadata().GetName() == old || w.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_ACTIVE {
+		t.Errorf("Worker for %s = %s/%v, want a new active one", busy, w.GetMetadata().GetName(), w.GetStatus().GetState())
+	}
+	if got := cl.statuses["bench"]; got.Replicas != 2 || got.ReadyReplicas != 2 {
+		t.Errorf("status = %+v while the old Worker drains, want 2 replicas, 2 ready", got)
 	}
 
-	ctl.assignments[busy] = 0
+	ctl.assignments[old] = 0
 	if err := reconcile(t, c); err != nil {
 		t.Fatalf("reconcile after the Actor left: %v", err)
 	}
-	if w := ctl.worker(busy); w.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_ACTIVE {
-		t.Errorf("Worker %s state = %v, want registered afresh and active", busy, w.GetStatus().GetState())
-	}
-	if got := cl.statuses["bench"]; got.Replicas != 2 || got.ReadyReplicas != 2 {
-		t.Errorf("status = %+v, want 2 replicas, 2 ready", got)
+	if got, want := ctl.names(), poolNames("bench", 2); !slices.Equal(got, want) {
+		t.Errorf("registered %v, want %v", got, want)
 	}
 }
 
@@ -762,8 +865,9 @@ func TestPoolLabelChangeUpdatesWorkers(t *testing.T) {
 }
 
 // sandbox_class is immutable on a Worker, so a sandboxClass edit replaces the
-// pool's Workers the way it replaces real worker pods: an idle Worker at once,
-// a held one once its Actors leave.
+// pool's Workers the way it replaces real worker pods: each pod gets a new
+// Worker, under a new name and pod UID, at once; an idle old Worker is deleted
+// at once, a held one once its Actors leave.
 func TestPoolSandboxClassChangeReplacesWorkers(t *testing.T) {
 	c, ctl, _, cl := newTestController(pool("bench", 2, nil))
 	if err := reconcile(t, c); err != nil {
@@ -771,34 +875,79 @@ func TestPoolSandboxClassChangeReplacesWorkers(t *testing.T) {
 	}
 	idle := fakeworker.Name(testRun, "benchmark-workloads", "bench", 0)
 	busy := fakeworker.Name(testRun, "benchmark-workloads", "bench", 1)
-	ctl.assignments[busy] = 1
+	oldBusy := ctl.uid(busy)
+	ctl.assignments[oldBusy] = 1
 
 	cl.editPool("bench", func(wp *atev1alpha1.WorkerPool) { wp.Spec.SandboxClass = "microvm" })
 	if err := reconcile(t, c); err != nil {
 		t.Fatalf("reconcile after the class change: %v", err)
 	}
-	if got := ctl.worker(idle).GetSandboxClass(); got != "microvm" {
-		t.Errorf("idle Worker sandbox class = %q, want microvm", got)
+	for _, pod := range []string{idle, busy} {
+		w := ctl.worker(pod)
+		if w.GetSandboxClass() != "microvm" || w.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_ACTIVE {
+			t.Errorf("Worker for %s = %q/%v, want microvm and active", pod, w.GetSandboxClass(), w.GetStatus().GetState())
+		}
+		if w.GetWorkerPodUid() != w.GetMetadata().GetName() {
+			t.Errorf("Worker %s has pod UID %s, want its name", w.GetMetadata().GetName(), w.GetWorkerPodUid())
+		}
 	}
-	if w := ctl.worker(busy); w.GetSandboxClass() != "gvisor" || w.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_DRAINING {
-		t.Errorf("busy Worker = %q/%v, want gvisor and draining", w.GetSandboxClass(), w.GetStatus().GetState())
+	if w := ctl.draining(busy); w.GetMetadata().GetName() != oldBusy || w.GetSandboxClass() != "gvisor" {
+		t.Errorf("draining Worker for %s = %s/%q, want the old gvisor one, %s", busy, w.GetMetadata().GetName(), w.GetSandboxClass(), oldBusy)
 	}
-	if got := cl.statuses["bench"]; got.Replicas != 1 {
-		t.Errorf("status = %+v, want 1 replica while the old Worker drains", got)
+	if got := cl.statuses["bench"]; got.Replicas != 2 || got.ReadyReplicas != 2 {
+		t.Errorf("status = %+v, want 2 replicas, 2 ready: the draining Worker is no replica", got)
 	}
 
-	ctl.assignments[busy] = 0
+	ctl.assignments[oldBusy] = 0
 	if err := reconcile(t, c); err != nil {
 		t.Fatalf("reconcile after the Actor left: %v", err)
 	}
-	if w := ctl.worker(busy); w.GetSandboxClass() != "microvm" || w.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_ACTIVE {
-		t.Errorf("replaced Worker = %q/%v, want microvm and active", w.GetSandboxClass(), w.GetStatus().GetState())
-	}
-	if got := cl.statuses["bench"]; got.Replicas != 2 || got.ReadyReplicas != 2 {
-		t.Errorf("status = %+v, want 2 replicas, 2 ready", got)
+	if got, want := ctl.names(), poolNames("bench", 2); !slices.Equal(got, want) {
+		t.Errorf("registered %v, want %v", got, want)
 	}
 }
 
+// A Worker of the old sandbox class whose drain fails is retried, and until
+// then is no replica and is left alone: no label write, no capacity report.
+func TestFailedDrainOfAReplacedWorkerIsNoReplica(t *testing.T) {
+	c, ctl, rel, cl := newTestController(pool("bench", 1, nil))
+	if err := reconcile(t, c); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	pod := fakeworker.Name(testRun, "benchmark-workloads", "bench", 0)
+	old := ctl.worker(pod)
+	ctl.drainErr = status.Error(codes.Unavailable, "connection reset")
+	cl.editPool("bench", func(wp *atev1alpha1.WorkerPool) {
+		wp.Spec.SandboxClass = "microvm"
+		wp.Labels = map[string]string{"workload": "v2"}
+	})
+	if err := reconcile(t, c); err == nil {
+		t.Error("reconcile succeeded with a failed drain")
+	}
+	var replacement *ateapipb.Worker
+	for _, w := range ctl.all() {
+		if w.GetSandboxClass() == "microvm" {
+			replacement = w
+		}
+	}
+	if replacement == nil || rel.reported[replacement.GetMetadata().GetName()] == nil {
+		t.Fatalf("no reported microvm replacement for %s", pod)
+	}
+	if got := ctl.workers[old.GetMetadata().GetName()].GetLabels()["workload"]; got != "bench" {
+		t.Errorf("old Worker's workload label = %q, want it left at bench", got)
+	}
+	if got := cl.statuses["bench"]; got.Replicas != 1 || got.ReadyReplicas != 1 {
+		t.Errorf("status = %+v, want only the replacement counted", got)
+	}
+
+	ctl.drainErr = nil
+	if err := reconcile(t, c); err != nil {
+		t.Fatalf("reconcile after the drain recovered: %v", err)
+	}
+	if _, ok := ctl.workers[old.GetMetadata().GetName()]; ok {
+		t.Error("old Worker not retired once its drain succeeded")
+	}
+}
 func TestDeletedPoolRetiresItsWorkers(t *testing.T) {
 	c, ctl, _, cl := newTestController(pool("bench", 2, nil), pool("other", 1, nil))
 	if err := reconcile(t, c); err != nil {
@@ -820,8 +969,8 @@ func TestAdoptAfterRestart(t *testing.T) {
 	if err := reconcile(t, c); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	real := &ateapipb.Worker{Metadata: &ateapipb.ResourceMetadata{Name: "0c4f6c2e-real-pod-uid"}, WorkerNamespace: "benchmark-workloads", WorkerPool: "bench", Status: &ateapipb.WorkerStatus{}}
-	otherRun := &ateapipb.Worker{Metadata: &ateapipb.ResourceMetadata{Name: fakeworker.Name("r2", "benchmark-workloads", "bench", 0)}, WorkerNamespace: "benchmark-workloads", WorkerPool: "bench", Status: &ateapipb.WorkerStatus{}}
+	real := &ateapipb.Worker{Metadata: &ateapipb.ResourceMetadata{Name: "0c4f6c2e-real-pod-uid"}, WorkerNamespace: "benchmark-workloads", WorkerPool: "bench", WorkerPod: "bench-7d9f8c-x2x4k", Status: &ateapipb.WorkerStatus{}}
+	otherRun := &ateapipb.Worker{Metadata: &ateapipb.ResourceMetadata{Name: "9a1e0d3b-other-run"}, WorkerNamespace: "benchmark-workloads", WorkerPool: "bench", WorkerPod: fakeworker.Name("r2", "benchmark-workloads", "bench", 0), Status: &ateapipb.WorkerStatus{}}
 	ctl.workers[real.Metadata.Name] = real
 	ctl.workers[otherRun.Metadata.Name] = otherRun
 
@@ -839,7 +988,7 @@ func TestAdoptAfterRestart(t *testing.T) {
 	if ctl.creates != creates || rel.calls != reports {
 		t.Errorf("after adopting: %d creates and %d reports, want none", ctl.creates-creates, rel.calls-reports)
 	}
-	if !slices.Contains(ctl.names(), real.Metadata.Name) || !slices.Contains(ctl.names(), otherRun.Metadata.Name) {
+	if ctl.workers[real.Metadata.Name] == nil || ctl.workers[otherRun.Metadata.Name] == nil {
 		t.Error("a Worker that is not this run's was retired")
 	}
 }
@@ -853,7 +1002,8 @@ func TestAdoptReplacesWorkersOfAPoolEditedWhileDown(t *testing.T) {
 	if err := reconcile(t, c); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	name := fakeworker.Name(testRun, "benchmark-workloads", "bench", 0)
+	pod := fakeworker.Name(testRun, "benchmark-workloads", "bench", 0)
+	old := ctl.uid(pod)
 	cl.editPool("bench", func(wp *atev1alpha1.WorkerPool) {
 		wp.Spec.Template.Resources.Limits = corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("4"), corev1.ResourceMemory: resource.MustParse("8Gi")}
 	})
@@ -862,15 +1012,18 @@ func TestAdoptReplacesWorkersOfAPoolEditedWhileDown(t *testing.T) {
 	if err := restarted.adopt(context.Background()); err != nil {
 		t.Fatalf("adopt: %v", err)
 	}
-	creates := ctl.creates
 	if err := reconcile(t, restarted); err != nil {
 		t.Fatalf("reconcile after restart: %v", err)
 	}
-	if ctl.creates != creates+1 {
-		t.Errorf("%d creates after a limits edit made while down, want 1", ctl.creates-creates)
+	w := ctl.worker(pod)
+	if w.GetMetadata().GetName() == old {
+		t.Fatalf("Worker for %s kept after a limits edit made while down, want a new one", pod)
 	}
-	if got, want := rel.reported[name], wantCapacity(1000, "4", "8Gi"); !proto.Equal(got, want) {
-		t.Errorf("replaced Worker reported %v, want %v", got, want)
+	if got, want := rel.reported[w.GetMetadata().GetName()], wantCapacity(1000, "4", "8Gi"); !proto.Equal(got, want) {
+		t.Errorf("replacement reported %v, want %v", got, want)
+	}
+	if got, want := ctl.names(), poolNames("bench", 1); !slices.Equal(got, want) {
+		t.Errorf("registered %v, want the idle old Worker deleted, %v", got, want)
 	}
 }
 
@@ -878,7 +1031,7 @@ func TestAdoptReplacesWorkersOfAPoolEditedWhileDown(t *testing.T) {
 // after the restart, as ateom keeps retrying its one report.
 func TestAdoptReportsAWorkerNeverAccepted(t *testing.T) {
 	c, ctl, rel, cl := newTestController(pool("bench", 1, nil))
-	first := fakeworker.Name(testRun, "benchmark-workloads", "bench", 0)
+	const first = "worker-1" // the first name newTestController's controller mints
 	rel.reject[first] = codes.Unavailable
 	if err := reconcile(t, c); err == nil {
 		t.Fatal("reconcile succeeded with a rejected report")
@@ -906,7 +1059,7 @@ func TestDeleteAll(t *testing.T) {
 		t.Fatalf("reconcile: %v", err)
 	}
 	// One already gone, as after a cut-short shutdown.
-	delete(ctl.workers, fakeworker.Name(testRun, "benchmark-workloads", "bench", 0))
+	delete(ctl.workers, ctl.uid(fakeworker.Name(testRun, "benchmark-workloads", "bench", 0)))
 	if err := c.deleteAll(context.Background()); err != nil {
 		t.Fatalf("deleteAll: %v", err)
 	}

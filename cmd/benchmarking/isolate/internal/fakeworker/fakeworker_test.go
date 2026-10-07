@@ -22,23 +22,17 @@ import (
 	"regexp"
 	"strings"
 	"testing"
-
-	"github.com/google/uuid"
 )
 
-// Names are pinned: a change renames every fake Worker, which strands the
-// ones a previous fake-workersync registered.
+// Names are pinned: a change renames every fake Worker's pod, which strands
+// the Workers a previous fake-workersync registered.
 func TestNamePinned(t *testing.T) {
 	if got, want := Name("r1", "benchmark-workloads", "benchmark-ateom", 0), "fake-r1-c52b9bd3-0"; got != want {
 		t.Errorf("Name = %q, want %q", got, want)
 	}
-	if got, want := PodUID("fake-r1-c52b9bd3-0"), "a44150bd-557f-5e1f-a1fa-7d6adbf63611"; got != want {
-		t.Errorf("PodUID = %q, want %q", got, want)
-	}
 }
 
-// k8sShortName is the k8s-short-name format Worker names are validated
-// against.
+// k8sShortName is the k8s-short-name format pod names follow.
 var k8sShortName = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
 
 func TestNameIsAShortNameAtTheBounds(t *testing.T) {
@@ -85,19 +79,6 @@ func TestNodeRoundRobin(t *testing.T) {
 	}
 	if strings.Join(got, ",") != "a,b,c,a,b" {
 		t.Errorf("Node over 5 indexes = %v", got)
-	}
-}
-
-func TestPodUIDIsAStableUUID(t *testing.T) {
-	a, b := PodUID("fake-r1-00000000-0"), PodUID("fake-r1-00000000-0")
-	if a != b {
-		t.Errorf("PodUID is not deterministic: %q then %q", a, b)
-	}
-	if _, err := uuid.Parse(a); err != nil {
-		t.Errorf("PodUID = %q, not a UUID: %v", a, err)
-	}
-	if PodUID("fake-r1-00000000-1") == a {
-		t.Error("two names share a pod UID")
 	}
 }
 

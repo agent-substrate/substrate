@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // Package fakeworker holds what the two programs of the benchmark fake data
-// plane share: how a fake Worker is named and placed, and how each checks the
+// plane share: how a fake Worker's stand-in pod is named and placed, and how each checks the
 // other's identity on the capacity relay between them.
 package fakeworker
 
@@ -26,12 +26,10 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-
-	"github.com/google/uuid"
 )
 
 // MaxRunLength bounds the run prefix so every generated name stays well inside
-// the 63-character limit on Worker names.
+// the 63-character limit on pod names.
 const MaxRunLength = 8
 
 // DefaultMaxActors is how many actors a fake Worker holds, the default of
@@ -52,10 +50,6 @@ const DefaultRelayPort = 8086
 
 var runPattern = regexp.MustCompile(`^[a-z0-9]+$`)
 
-// podUIDNamespace is the UUIDv5 namespace fake WorkerPodUids are derived in.
-// Changing it renames every fake Worker's pod UID.
-var podUIDNamespace = uuid.MustParse("6f1c2a5e-8b3d-4e7a-9c01-5d2b7e4f8a90")
-
 // ValidateRun reports whether run is usable as a run prefix.
 func ValidateRun(run string) error {
 	if len(run) == 0 || len(run) > MaxRunLength || !runPattern.MatchString(run) {
@@ -64,20 +58,21 @@ func ValidateRun(run string) error {
 	return nil
 }
 
-// Prefix is the name prefix every fake Worker of run shares.
+// Prefix is the pod name prefix every fake Worker of run shares.
 func Prefix(run string) string {
 	return "fake-" + run + "-"
 }
 
-// Name returns the name of the index-th fake Worker of a WorkerPool. The pool
-// enters as a hash because its namespace and name together can exceed the
-// 63-character limit on Worker names.
+// Name returns the pod name of the index-th fake Worker of a WorkerPool, the
+// same for every Worker that fills that index. The pool enters as a hash
+// because its namespace and name together can exceed the 63-character limit
+// on pod names.
 func Name(run, namespace, pool string, index int) string {
 	return poolPrefix(run, namespace, pool) + strconv.Itoa(index)
 }
 
-// Index returns the index of the fake Worker named name in a WorkerPool, and
-// false when the name is not one of that pool's fake Workers.
+// Index returns the index of the fake Worker whose pod is named name in a
+// WorkerPool, and false when the name is not one of that pool's fake pods.
 func Index(run, namespace, pool, name string) (int, bool) {
 	rest, ok := strings.CutPrefix(name, poolPrefix(run, namespace, pool))
 	if !ok {
@@ -99,11 +94,6 @@ func poolPrefix(run, namespace, pool string) string {
 // round robin over nodes, which the caller keeps sorted.
 func Node(index int, nodes []string) string {
 	return nodes[index%len(nodes)]
-}
-
-// PodUID returns the WorkerPodUid recorded for the Worker named name.
-func PodUID(name string) string {
-	return uuid.NewSHA1(podUIDNamespace, []byte(name)).String()
 }
 
 // IP returns the address recorded for the index-th fake Worker of a pool: a

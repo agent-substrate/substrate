@@ -57,7 +57,7 @@ import (
 
 var (
 	apiEndpoint   = pflag.String("api-endpoint", "k8s:///api.ate-system.svc.cluster.local:443", "ate-api-server gRPC dial target.")
-	run           = pflag.String("run", "bench", "Run prefix of the fake Worker names.")
+	run           = pflag.String("run", "bench", "Run prefix of the fake Worker pod names.")
 	nodeLabel     = pflag.String("node-label", "ate.dev/fake-data-plane=true", "Label selector for the benchmark nodes that run fake-atelet.")
 	ateletNS      = pflag.String("atelet-namespace", "ate-system", "Namespace of the fake-atelet pods.")
 	ateletLabel   = pflag.String("fake-atelet-label", "ate.dev/fake-atelet=true", "Label selector for the fake-atelet pods.")
