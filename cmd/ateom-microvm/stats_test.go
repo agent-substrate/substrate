@@ -152,6 +152,32 @@ func (f *fakeAgent) StatsContainer(ctx context.Context, containerID string) (*ag
 	return f.stats[containerID], nil
 }
 
+// blockingAgent answers every container but block, which it holds until ctx
+// ends.
+type blockingAgent struct {
+	fakeAgent
+	block string
+}
+
+func (b *blockingAgent) StatsContainer(ctx context.Context, containerID string) (*agentpb.CgroupStats, error) {
+	if containerID == b.block {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	return b.fakeAgent.StatsContainer(ctx, containerID)
+}
+
+// TestSumContainerStatsDeadlineMidRead pins that a deadline hitting during the
+// last container's call fails the read rather than returning a partial sum.
+func TestSumContainerStatsDeadlineMidRead(t *testing.T) {
+	agent := &blockingAgent{fakeAgent: fakeAgent{stats: map[string]*agentpb.CgroupStats{"a": containerStats(1000, 2000, 100, 5000)}}, block: "b"}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if _, _, err := sumContainerStats(ctx, &guestStatsTarget{agent: agent, workloadIDs: []string{"a", "b"}}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("sumContainerStats() error = %v, want %v", err, context.DeadlineExceeded)
+	}
+}
+
 // containerStats is one container's guest reading: usage bytes, peak bytes,
 // reclaimable page cache, and cumulative CPU nanoseconds.
 func containerStats(usage, peak, inactiveFile, cpuNanos uint64) *agentpb.CgroupStats {

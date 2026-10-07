@@ -570,7 +570,7 @@ groups:
             - id: final
               stability: development
               value: final
-              brief: The last sample of an activation, taken in the checkpoint before the workload is torn down.
+              brief: The last sample of an activation, written when a checkpoint or a terminate tears it down. It is read just before the teardown; when that read fails or times out, it repeats the newest sample.
       - id: ate.stats.memory.usage
         stability: development
         type: int

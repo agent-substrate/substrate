@@ -281,11 +281,15 @@ func (s *AteomService) recordFinalIfEnded(ctx context.Context, h *hostedActor) {
 // bound is too much checkpoint latency, drop the read and the final record
 // uses the newest cached sample instead.
 func (s *AteomService) readFinal(ctx context.Context, h *hostedActor) {
-	ctx, cancel := context.WithTimeout(ctx, finalReadTimeout)
+	readCtx, cancel := context.WithTimeout(ctx, finalReadTimeout)
 	defer cancel()
-	if sample, err := s.measureGuest(ctx, h); err == nil {
-		h.usage.Store(sample)
+	sample, err := s.measureGuest(readCtx, h)
+	if err != nil {
+		slog.LogAttrs(ctx, slog.LevelDebug, "Final usage reading failed; using the newest sample",
+			append(ateattr.ActorLogAttrs(h.attribution), slog.Any("err", err))...)
+		return
 	}
+	h.usage.Store(sample)
 }
 
 // recordFinal writes the final record of an activation that a checkpoint or a
@@ -394,9 +398,10 @@ func (s *AteomService) sampleGuest(ctx context.Context, h *hostedActor) (*ateomp
 // on. Failing the actor's telemetry because one sidecar is gone would be the
 // wrong answer.
 //
-// It fails only when no container could be read at all, which is the guest as a
+// It fails when no container could be read at all, which is the guest as a
 // whole not answering rather than one container being gone, and returns the
-// last error so the caller can say why.
+// last error so the caller can say why. It also fails when ctx ends before
+// every container answered, so a deadline never yields a partial sum.
 //
 // The loop as a whole is bounded by ctx — the caller's RPC deadline — with
 // maxActorContainers * statsCallTimeout as the ceiling when the caller set
@@ -418,6 +423,11 @@ func sumContainerStats(ctx context.Context, target *guestStatsTarget) (agentstat
 		cs, err := target.agent.StatsContainer(callCtx, id)
 		cancel()
 		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				// ctx ended during this call: report that rather than a sum
+				// missing this container.
+				return agentstats.Sample{}, nil, ctxErr
+			}
 			lastErr = err
 			continue
 		}
