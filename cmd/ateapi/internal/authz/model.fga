@@ -25,10 +25,17 @@ type user
 # Physical host node running atelet
 type node
 
-# Worker pod running ateom
+# Worker pod running ateom (global-scoped)
 type worker
   relations
+    define parent_global: [global]
     define host_node: [node]
+
+    define can_get: viewer from parent_global or controller from parent_global
+    define can_list_actor_assignments: viewer from parent_global
+    define can_update: owner from parent_global or controller from parent_global
+    define can_delete: owner from parent_global or controller from parent_global
+    define can_drain: owner from parent_global or controller from parent_global
 
 # Global Scope (singleton: there will only ever be one instance, e.g. 'global:root')
 type global
@@ -36,9 +43,24 @@ type global
     define owner: [user]
     define viewer: [user] or owner
 
+    # --- System Component Roles ---
+    # Held only by Substrate's own components, through contextual tuples that
+    # ateapi adds for their mTLS SPIFFE IDs. AccessPolicy cannot grant them.
+    # Each grants only the permissions its component calls ateapi for.
+    define controller: [user]
+    define egress_gateway: [user]
+    define ingress_router: [user]
+
     define can_create_atespace: owner
     define can_list_atespaces: viewer
+    define can_create_worker: owner or controller
+    define can_list_workers: viewer or controller
     define can_get: viewer
+
+    # Listing across all atespaces (List RPCs with an empty atespace).
+    # atenet-router lists actors as its ateapi health check.
+    define can_list_actors: viewer or ingress_router
+    define can_list_actor_templates: viewer
 
     # --- Policy Governance ---
     define can_create_access_policy: owner
@@ -55,6 +77,10 @@ type atespace
     define editor: [user] or owner
     define viewer: [user] or editor or viewer from parent_global
 
+    # System component roles, inherited from global only.
+    define egress_gateway: egress_gateway from parent_global
+    define ingress_router: ingress_router from parent_global
+
     # --- 2. Policy Governance ---
     define can_create_access_policy: owner
     define can_get_access_policy: viewer
@@ -64,6 +90,8 @@ type atespace
     # --- 3. Atespace Lifecycle & Container Operations ---
     define can_create_actor: editor
     define can_create_actor_template: editor
+    define can_list_actors: viewer
+    define can_list_actor_templates: viewer
     define can_get: viewer
     define can_delete: owner
 
@@ -73,6 +101,10 @@ type actor_template
 
     # Policy stops at atespace: No direct per-user template bindings
     define can_get: viewer from parent_atespace
+    # Run actors from this template (CreateActor, UpdateActor). Same grant as
+    # can_get for now; a separate relation so running a template can later
+    # require more than reading it.
+    define can_use_template: viewer from parent_atespace
     define can_update: editor from parent_atespace
     define can_delete: editor from parent_atespace
 
@@ -85,9 +117,16 @@ type actor
     define host_node: host_node from scheduled_worker
 
     # --- User-Facing Operations (Inherited from Atespace) ---
-    define can_get: viewer from parent_atespace
+    # atenet-egress reads the actor to resolve its egress policy.
+    define can_get: viewer from parent_atespace or egress_gateway from parent_atespace
     define can_update: editor from parent_atespace
     define can_delete: editor from parent_atespace
+
+    # Egress policy: one per actor, so its permissions live on the actor.
+    define can_get_egress_policy: viewer from parent_atespace or egress_gateway from parent_atespace
+    define can_create_egress_policy: editor from parent_atespace
+    define can_update_egress_policy: editor from parent_atespace
+    define can_delete_egress_policy: editor from parent_atespace
 
     # --- Hardened System & Infrastructure Operations ---
 
@@ -95,8 +134,9 @@ type actor
     define can_mint_ateom_actor_credential: host_node
 
     # Data Plane Ingress: Routers (or editors) can resume
-    define can_resume: [user] or editor from parent_atespace
+    define can_resume: [user] or editor from parent_atespace or ingress_router from parent_atespace
 
     # Lifecycle Operations
+    define can_pause: [user] or editor from parent_atespace
     define can_suspend: [user] or editor from parent_atespace
     define can_revert: [user] or editor from parent_atespace

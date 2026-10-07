@@ -31,6 +31,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/go-cmp/cmp"
+
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/authz"
 )
 
 func TestConnectStoreRequiresPostgresReadWriteConnectionString(t *testing.T) {
@@ -133,6 +137,30 @@ func TestResolveActorJWTIssuer(t *testing.T) {
 				t.Errorf("resolveActorJWTIssuer(%q, %q) = %q, want %q", tt.flagValue, tt.namespace, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestAuthzSystemGrants(t *testing.T) {
+	got, err := authzSystemGrants("team-a", []systemServiceAccount{
+		{role: authz.RoleController, flag: "controller-service-account", serviceAccount: "prefix-ate-controller"},
+		{role: authz.RoleIngressRouter, flag: "ingress-router-service-account", serviceAccount: "atenet-router"},
+	})
+	if err != nil {
+		t.Fatalf("authzSystemGrants failed: %v", err)
+	}
+	want := []authz.SystemGrant{
+		{SPIFFEID: "spiffe://cluster.local/ns/team-a/sa/prefix-ate-controller", Role: authz.RoleController},
+		{SPIFFEID: "spiffe://cluster.local/ns/team-a/sa/atenet-router", Role: authz.RoleIngressRouter},
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("authzSystemGrants (-want +got):\n%s", diff)
+	}
+
+	_, err = authzSystemGrants("team-a", []systemServiceAccount{
+		{role: authz.RoleEgressGateway, flag: "egress-gateway-service-account", serviceAccount: ""},
+	})
+	if err == nil || !strings.Contains(err.Error(), "--egress-gateway-service-account must not be empty") {
+		t.Fatalf("authzSystemGrants with an empty ServiceAccount error = %v, want it to name the flag", err)
 	}
 }
 

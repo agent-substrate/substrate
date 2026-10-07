@@ -109,6 +109,13 @@ func TestValidateCreateGlobalAccessPolicyRequest(t *testing.T) {
 		})},
 		wantError: field.ErrorList{field.NotSupported[string](policyBindings.Index(1).Child("role"), "", nil)},
 	}, {
+		// System component roles are granted only by ateapi's configuration.
+		name: "system component role",
+		req: &ateapipb.CreateGlobalAccessPolicyRequest{AccessPolicy: validAccessPolicy(func(p *ateapipb.AccessPolicy) {
+			p.Bindings[1].Role = authz.RoleIngressRouter
+		})},
+		wantError: field.ErrorList{field.NotSupported[string](policyBindings.Index(1).Child("role"), "", nil)},
+	}, {
 		name: "duplicate role",
 		req: &ateapipb.CreateGlobalAccessPolicyRequest{AccessPolicy: validAccessPolicy(func(p *ateapipb.AccessPolicy) {
 			p.Bindings[1].Role = authz.RoleOwner
@@ -256,6 +263,12 @@ func TestValidateCreateAtespaceAccessPolicyRequest(t *testing.T) {
 		name: "unknown role",
 		req: &ateapipb.CreateAtespaceAccessPolicyRequest{Atespace: atespace, AccessPolicy: validAccessPolicy(func(p *ateapipb.AccessPolicy) {
 			p.Bindings[0].Role = "admin"
+		})},
+		wantError: field.ErrorList{field.NotSupported[string](policyBindings.Index(0).Child("role"), "", nil)},
+	}, {
+		name: "system component role",
+		req: &ateapipb.CreateAtespaceAccessPolicyRequest{Atespace: atespace, AccessPolicy: validAccessPolicy(func(p *ateapipb.AccessPolicy) {
+			p.Bindings[0].Role = authz.RoleEgressGateway
 		})},
 		wantError: field.ErrorList{field.NotSupported[string](policyBindings.Index(0).Child("role"), "", nil)},
 	}, {

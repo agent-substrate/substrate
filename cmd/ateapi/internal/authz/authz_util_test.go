@@ -15,6 +15,8 @@
 package authz
 
 import (
+	"context"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -76,5 +78,48 @@ func TestParseBootstrapOwners(t *testing.T) {
 		if _, err := parseBootstrapOwners([]string{bad}); err == nil {
 			t.Errorf("parseBootstrapOwners(%q) succeeded, want error", bad)
 		}
+	}
+}
+
+func TestParseSystemGrants(t *testing.T) {
+	const router = "spiffe://cluster.local/ns/ate-system/sa/atenet-router"
+	got, err := parseSystemGrants([]SystemGrant{
+		{SPIFFEID: router, Role: RoleIngressRouter},
+		{SPIFFEID: router, Role: RoleIngressRouter},
+		{SPIFFEID: router, Role: RoleEgressGateway},
+		{SPIFFEID: "spiffe://cluster.local/ns/ate-system/sa/ate-controller", Role: RoleController},
+	})
+	if err != nil {
+		t.Fatalf("parseSystemGrants failed: %v", err)
+	}
+	want := map[string][]string{
+		"user:spiffe%3A//cluster.local/ns/ate-system/sa/atenet-router":  {RoleIngressRouter, RoleEgressGateway},
+		"user:spiffe%3A//cluster.local/ns/ate-system/sa/ate-controller": {RoleController},
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("parseSystemGrants (-want +got):\n%s", diff)
+	}
+}
+
+func TestNewRejectsInvalidSystemGrants(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		grant SystemGrant
+	}{
+		{"empty SPIFFE ID", SystemGrant{SPIFFEID: "", Role: RoleController}},
+		{"wildcard SPIFFE ID", SystemGrant{SPIFFEID: "*", Role: RoleController}},
+		{"empty role", SystemGrant{SPIFFEID: "spiffe://cluster.local/ns/ate-system/sa/x"}},
+		{"unknown role", SystemGrant{SPIFFEID: "spiffe://cluster.local/ns/ate-system/sa/x", Role: "admin"}},
+		// Only system component roles can be granted this way.
+		{"owner role", SystemGrant{SPIFFEID: "spiffe://cluster.local/ns/ate-system/sa/x", Role: RoleOwner}},
+		{"viewer role", SystemGrant{SPIFFEID: "spiffe://cluster.local/ns/ate-system/sa/x", Role: RoleViewer}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Grants are validated before the store is touched, so no
+			// database is needed.
+			if _, _, err := New(context.Background(), nil, nil, nil, WithSystemGrants(tc.grant)); err == nil || !strings.Contains(err.Error(), "invalid system grant") {
+				t.Fatalf("New(WithSystemGrants(%+v)) error = %v, want an invalid system grant error", tc.grant, err)
+			}
+		})
 	}
 }

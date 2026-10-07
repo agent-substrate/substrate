@@ -50,6 +50,9 @@ tuples:
   - user: node:node-2
     relation: host_node
     object: worker:pod-2
+  - user: global:root
+    relation: parent_global
+    object: worker:pod-1
 
   # Actor Instance (actor:runner-1 in atespace:space-1 scheduled on worker:pod-1)
   - user: atespace:space-1
@@ -70,6 +73,18 @@ tuples:
     relation: can_revert
     object: actor:runner-1
 
+  # System component roles (contextual tuples from ateapi's configuration at
+  # runtime)
+  - user: user:sys-controller
+    relation: controller
+    object: global:root
+  - user: user:sys-egress
+    relation: egress_gateway
+    object: global:root
+  - user: user:sys-router
+    relation: ingress_router
+    object: global:root
+
 tests:
   - name: 1. Global Superadmin & Viewer Propagation
     check:
@@ -80,6 +95,10 @@ tests:
           owner: true
           viewer: true
           can_create_atespace: true
+          can_create_worker: true
+          can_list_workers: true
+          can_list_actors: true
+          can_list_actor_templates: true
           can_create_access_policy: true
           can_get_access_policy: true
           can_update_access_policy: true
@@ -96,6 +115,8 @@ tests:
           can_delete_access_policy: true
           can_create_actor: true
           can_create_actor_template: true
+          can_list_actors: true
+          can_list_actor_templates: true
           can_get: true
           can_delete: true
 
@@ -106,6 +127,10 @@ tests:
           owner: false
           viewer: true
           can_create_atespace: false
+          can_create_worker: false
+          can_list_workers: true
+          can_list_actors: true
+          can_list_actor_templates: true
           can_create_access_policy: false
           can_get_access_policy: true
           can_update_access_policy: false
@@ -122,8 +147,17 @@ tests:
           can_delete_access_policy: false
           can_create_actor: false
           can_create_actor_template: false
+          can_list_actors: true
+          can_list_actor_templates: true
           can_get: true
           can_delete: false
+
+      # Atespace Owner (Alice) cannot list across all atespaces
+      - user: user:alice
+        object: global:root
+        assertions:
+          can_list_actors: false
+          can_list_actor_templates: false
 
   - name: 2. Atespace 3-Tier Roles & Governance Isolation
     check:
@@ -139,6 +173,8 @@ tests:
           can_delete_access_policy: true
           can_create_actor: true
           can_create_actor_template: true
+          can_list_actors: true
+          can_list_actor_templates: true
           can_get: true
           can_delete: true
       - user: user:bob # Editor
@@ -153,6 +189,8 @@ tests:
           can_delete_access_policy: false
           can_create_actor: true
           can_create_actor_template: true
+          can_list_actors: true
+          can_list_actor_templates: true
           can_get: true
           can_delete: false
       - user: user:dave # Viewer
@@ -167,6 +205,8 @@ tests:
           can_delete_access_policy: false
           can_create_actor: false
           can_create_actor_template: false
+          can_list_actors: true
+          can_list_actor_templates: true
           can_get: true
           can_delete: false
       - user: user:eve # External / Unauthenticated
@@ -175,38 +215,45 @@ tests:
           owner: false
           editor: false
           viewer: false
+          can_list_actors: false
+          can_list_actor_templates: false
           can_get: false
 
   - name: 3. Actor Template Operations (Inherited from Atespace)
     check:
-      - user: user:alice # Owner can get, update, delete private template
+      - user: user:alice # Owner can get, use, update, delete private template
         object: actor_template:private-template
         assertions:
           can_get: true
+          can_use_template: true
           can_update: true
           can_delete: true
-      - user: user:bob # Editor can get, update, delete private template
+      - user: user:bob # Editor can get, use, update, delete private template
         object: actor_template:private-template
         assertions:
           can_get: true
+          can_use_template: true
           can_update: true
           can_delete: true
-      - user: user:dave # Viewer can get, but NOT update or delete
+      - user: user:dave # Viewer can get and use, but NOT update or delete
         object: actor_template:private-template
         assertions:
           can_get: true
+          can_use_template: true
           can_update: false
           can_delete: false
-      - user: user:frank # Global viewer can get template via parent global
+      - user: user:frank # Global viewer can get and use template via parent global
         object: actor_template:private-template
         assertions:
           can_get: true
+          can_use_template: true
           can_update: false
           can_delete: false
       - user: user:eve # External cannot access private template
         object: actor_template:private-template
         assertions:
           can_get: false
+          can_use_template: false
           can_update: false
           can_delete: false
 
@@ -218,40 +265,69 @@ tests:
           can_get: true
           can_update: true
           can_delete: true
+          can_pause: true
           can_resume: true
           can_suspend: true
           can_revert: true
+          can_get_egress_policy: true
+          can_create_egress_policy: true
+          can_update_egress_policy: true
+          can_delete_egress_policy: true
       - user: user:bob # Editor
         object: actor:runner-1
         assertions:
           can_get: true
           can_update: true
           can_delete: true
+          can_pause: true
           can_resume: true
           can_suspend: true
           can_revert: true
+          can_get_egress_policy: true
+          can_create_egress_policy: true
+          can_update_egress_policy: true
+          can_delete_egress_policy: true
       - user: user:dave # Viewer
         object: actor:runner-1
         assertions:
           can_get: true
           can_update: false
           can_delete: false
+          can_pause: false
           can_resume: false
           can_suspend: false
           can_revert: false
+          can_get_egress_policy: true
+          can_create_egress_policy: false
+          can_update_egress_policy: false
+          can_delete_egress_policy: false
       - user: user:frank # Cluster Viewer
         object: actor:runner-1
         assertions:
           can_get: true
           can_update: false
           can_delete: false
+          can_pause: false
           can_resume: false
           can_suspend: false
           can_revert: false
-      - user: user:sa-router # Ingress router proxy
+          can_get_egress_policy: true
+          can_create_egress_policy: false
+          can_update_egress_policy: false
+          can_delete_egress_policy: false
+      - user: user:eve # External
+        object: actor:runner-1
+        assertions:
+          can_get: false
+          can_pause: false
+          can_get_egress_policy: false
+          can_update_egress_policy: false
+      - user: user:sa-router # Ingress router proxy can only resume
         object: actor:runner-1
         assertions:
           can_resume: true
+          can_pause: false
+          can_get_egress_policy: false
       - user: user:sa-runner-1 # Workload identity can suspend and revert
         object: actor:runner-1
         assertions:
@@ -268,3 +344,111 @@ tests:
         object: actor:runner-1
         assertions:
           can_mint_ateom_actor_credential: false
+
+  - name: 6. Worker Operations (Inherited from Global)
+    check:
+      - user: user:carol # Global owner
+        object: worker:pod-1
+        assertions:
+          can_get: true
+          can_list_actor_assignments: true
+          can_update: true
+          can_delete: true
+          can_drain: true
+      - user: user:frank # Global viewer
+        object: worker:pod-1
+        assertions:
+          can_get: true
+          can_list_actor_assignments: true
+          can_update: false
+          can_delete: false
+          can_drain: false
+      - user: user:alice # Atespace owner has no worker access
+        object: worker:pod-1
+        assertions:
+          can_get: false
+          can_list_actor_assignments: false
+          can_update: false
+          can_delete: false
+          can_drain: false
+
+  - name: 7. System Component Roles (Granted on Global)
+    check:
+      - user: user:sys-controller # ate-controller manages workers only
+        object: global:root
+        assertions:
+          can_create_worker: true
+          can_list_workers: true
+          can_list_actors: false
+          can_list_atespaces: false
+          can_create_atespace: false
+          can_get: false
+          viewer: false
+      - user: user:sys-controller
+        object: worker:pod-1
+        assertions:
+          can_get: true
+          can_update: true
+          can_delete: true
+          can_drain: true
+          can_list_actor_assignments: false
+      - user: user:sys-controller
+        object: actor:runner-1
+        assertions:
+          can_get: false
+          can_resume: false
+          can_delete: false
+      - user: user:sys-egress # atenet-egress reads actors and egress policies
+        object: actor:runner-1
+        assertions:
+          can_get: true
+          can_get_egress_policy: true
+          can_update: false
+          can_delete: false
+          can_create_egress_policy: false
+          can_update_egress_policy: false
+          can_delete_egress_policy: false
+          can_resume: false
+          can_pause: false
+      - user: user:sys-egress
+        object: global:root
+        assertions:
+          can_list_actors: false
+          can_create_worker: false
+      - user: user:sys-egress
+        object: atespace:space-1
+        assertions:
+          viewer: false
+          can_list_actors: false
+          can_get: false
+      - user: user:sys-router # atenet-router resumes actors and lists them
+        object: actor:runner-1
+        assertions:
+          can_resume: true
+          can_get: false
+          can_pause: false
+          can_suspend: false
+          can_revert: false
+          can_delete: false
+          can_get_egress_policy: false
+      - user: user:sys-router
+        object: global:root
+        assertions:
+          can_list_actors: true
+          can_list_workers: false
+          can_list_atespaces: false
+      - user: user:sys-router
+        object: worker:pod-1
+        assertions:
+          can_get: false
+      - user: user:alice # Atespace owner does not hold system roles
+        object: atespace:space-1
+        assertions:
+          egress_gateway: false
+          ingress_router: false
+      - user: user:carol # Global owner does not hold system roles
+        object: global:root
+        assertions:
+          controller: false
+          egress_gateway: false
+          ingress_router: false
