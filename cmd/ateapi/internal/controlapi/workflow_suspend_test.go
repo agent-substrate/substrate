@@ -27,6 +27,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/protobuf/proto"
 	"k8s.io/client-go/tools/cache"
 )
 
@@ -786,5 +787,120 @@ func TestSuspendActor_PausedWithoutLocalSnapshotCrashes(t *testing.T) {
 	}
 	if msg, want := got.GetStatus().GetCrash().GetMessage(), "suspend failed: "+crashMessageLocalSnapshotNodeUnknown; msg != want {
 		t.Errorf("crash message = %q, want %q", msg, want)
+	}
+}
+
+// TestEnsureSuspendedFinalized_RecordsHardware verifies suspend finalization
+// stamps ExternalSnapshot.Hardware from the assigned worker on a running-origin
+// suspend (even when a stale LocalSnapshot from an earlier pause is present, or
+// when retrying after the worker assignment was already released), and from
+// LocalSnapshot.Hardware on a paused-origin suspend.
+func TestEnsureSuspendedFinalized_RecordsHardware(t *testing.T) {
+	workerHardware := &ateapipb.HardwareIdentity{
+		Attributes: map[string]string{"architecture": "amd64"},
+	}
+	localHardware := &ateapipb.HardwareIdentity{
+		Attributes: map[string]string{"architecture": "arm64"},
+	}
+
+	tests := []struct {
+		name           string
+		hasAssignment  bool
+		workerAssigned bool
+		localSnapshot  *ateapipb.LocalSnapshot
+		wantHardware   *ateapipb.HardwareIdentity
+	}{
+		{
+			name:           "running-origin suspend uses worker hardware and ignores stale LocalSnapshot",
+			hasAssignment:  true,
+			workerAssigned: true,
+			localSnapshot: &ateapipb.LocalSnapshot{
+				SnapshotName: "stale-local-snap",
+				Hardware:     localHardware,
+			},
+			wantHardware: workerHardware,
+		},
+		{
+			name:           "running-origin suspend retry after worker already released still uses worker hardware",
+			hasAssignment:  true,
+			workerAssigned: false,
+			wantHardware:   workerHardware,
+		},
+		{
+			name:          "paused-origin suspend uses LocalSnapshot hardware",
+			hasAssignment: false,
+			localSnapshot: &ateapipb.LocalSnapshot{
+				SnapshotName: "paused-local-snap",
+				Hardware:     localHardware,
+			},
+			wantHardware: localHardware,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			persistence := newTestPersistence(t)
+			workerName := testWorkerUID("pod-1")
+
+			var assignment *ateapipb.WorkerAssignment
+			if tc.hasAssignment {
+				assignment = &ateapipb.WorkerAssignment{
+					Worker:          &ateapipb.ObjectRef{Name: workerName},
+					WorkerNamespace: "worker-ns",
+					WorkerPool:      "pool",
+					WorkerPod:       "pod-1",
+					WorkerPodUid:    workerName,
+				}
+			}
+
+			actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+			created := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+				Metadata: &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+				Status: &ateapipb.ActorStatus{
+					State:                 ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
+					AssignedNode:          "node1",
+					WorkerAssignment:      assignment,
+					LocalSnapshot:         tc.localSnapshot,
+					InProgressSnapshotUri: someActorSnapshotURI(t, testStorageLocation, "team-a", "snapshot-1"),
+				},
+			})
+
+			if tc.hasAssignment {
+				worker := &ateapipb.Worker{
+					Metadata:        &ateapipb.ResourceMetadata{Name: workerName},
+					WorkerNamespace: "worker-ns",
+					WorkerPool:      "pool",
+					WorkerPod:       "pod-1",
+					WorkerPodUid:    workerName,
+					Status: &ateapipb.WorkerStatus{
+						Hardware: workerHardware,
+					},
+				}
+				if _, err := persistence.CreateWorker(ctx, worker); err != nil {
+					t.Fatalf("CreateWorker: %v", err)
+				}
+				if tc.workerAssigned {
+					seedAssignment(t, persistence, workerName, &ateapipb.ActorAssignment{
+						Actor:    &ateapipb.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name},
+						ActorUid: created.GetMetadata().GetUid(),
+					})
+				}
+			}
+
+			w := &ActorWorkflow{store: persistence}
+			tmpl := &ateapipb.ActorTemplate{
+				Metadata:       &ateapipb.ResourceMetadata{Uid: "tmpl-uid-1"},
+				SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://bucket/root"},
+			}
+			got, err := w.ensureSuspendedFinalized(ctx, actorRef, tmpl)
+			if err != nil {
+				t.Fatalf("ensureSuspendedFinalized: %v", err)
+			}
+
+			if hw := got.GetStatus().GetExternalSnapshot().GetHardware(); !proto.Equal(hw, tc.wantHardware) {
+				t.Errorf("ExternalSnapshot.Hardware = %v, want %v", hw, tc.wantHardware)
+			}
+		})
 	}
 }

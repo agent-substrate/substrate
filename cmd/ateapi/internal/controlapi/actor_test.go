@@ -814,7 +814,13 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 				Scope:       ateapipb.TagScope_TAG_SCOPE_PUBLISHED,
 				Status: &ateapipb.TagStatus{
 					ActorTemplateUid: tmpl.GetMetadata().GetUid(),
-					Snapshot:         &ateapipb.ExternalSnapshot{SnapshotUri: "gs://bucket/atespaces/ate-golden/tags/" + someActorUID, ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
+					Snapshot: &ateapipb.ExternalSnapshot{
+						SnapshotUri:  "gs://bucket/atespaces/ate-golden/tags/" + someActorUID,
+						ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+						Hardware: &ateapipb.HardwareIdentity{
+							Attributes: map[string]string{"architecture": "amd64"},
+						},
+					},
 				},
 			}
 			wantCode := codes.OK
@@ -861,6 +867,9 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 			}
 			if got := created.GetStatus(); got.GetExternalSnapshot().GetSnapshotUri() != tag.GetStatus().GetSnapshot().GetSnapshotUri() || got.GetExternalSnapshot().GetActorTemplateUid() != tmpl.GetMetadata().GetUid() {
 				t.Fatalf("incorrect initial status: %v", got)
+			}
+			if diff := cmp.Diff(tag.GetStatus().GetSnapshot().GetHardware(), created.GetStatus().GetExternalSnapshot().GetHardware(), protocmp.Transform()); diff != "" {
+				t.Fatalf("initial ExternalSnapshot.Hardware mismatch (-want +got):\n%s", diff)
 			}
 			if scenario == "own snapshot" {
 				uri, err := resources.NewActorSnapshotURI(tmpl.GetSnapshotConfig().GetStorageLocation(), "team-a", created.GetMetadata().GetUid(), "snapshot")

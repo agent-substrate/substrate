@@ -24,6 +24,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/objectstore"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"google.golang.org/protobuf/proto"
 )
 
 // TagActorSnapshot tags the external snapshot held by the suspended actor the
@@ -300,6 +301,7 @@ func (w *ActorWorkflow) ensureTagFinalized(ctx context.Context, tag *ateapipb.Ta
 	finalSnapshot := &ateapipb.ExternalSnapshot{
 		SnapshotUri:  dst.String(),
 		ContentScope: snapshot.GetContentScope(),
+		Hardware:     proto.CloneOf(snapshot.GetHardware()),
 	}
 	stored, err := w.store.UpdateTag(ctx, tagRef, store.PreconditionFrom(tag), func(toUpdate *ateapipb.Tag) error {
 		toUpdate.Status.Snapshot = finalSnapshot

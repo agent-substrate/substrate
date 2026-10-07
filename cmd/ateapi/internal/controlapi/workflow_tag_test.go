@@ -29,6 +29,7 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/protobuf/testing/protocmp"
 )
 
 // seedTagSource stores a suspended actor whose external snapshot is made of
@@ -48,6 +49,9 @@ func seedTagSource(t *testing.T, ctx context.Context, persistence store.Interfac
 			SnapshotUri:      uri.String(),
 			ContentScope:     ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 			ActorTemplateUid: template.GetMetadata().GetUid(),
+			Hardware: &ateapipb.HardwareIdentity{
+				Attributes: map[string]string{"architecture": "amd64"},
+			},
 		}
 	})
 	return actor, uri
@@ -102,6 +106,9 @@ func TestTagActorSnapshot(t *testing.T) {
 	}
 	if got, want := tag.GetStatus().GetSnapshot().GetContentScope(), ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL; got != want {
 		t.Errorf("content scope = %v, want the source's %v", got, want)
+	}
+	if diff := cmp.Diff(actor.GetStatus().GetExternalSnapshot().GetHardware(), tag.GetStatus().GetSnapshot().GetHardware(), protocmp.Transform()); diff != "" {
+		t.Errorf("hardware mismatch (-want +got):\n%s", diff)
 	}
 
 	// Both prefixes hold the same objects: the tag copied rather than moved.

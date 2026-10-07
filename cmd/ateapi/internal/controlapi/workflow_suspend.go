@@ -364,13 +364,15 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 	}
 
 	// 1. Free the worker (if it hasn't been freed yet)
+	var snapshotHardware *ateapipb.HardwareIdentity
 	if latestActor.GetStatus().GetWorkerAssignment() != nil {
 		t = time.Now()
-		_, _, err := releaseWorker(ctx, w.store, latestActor)
+		_, worker, err := releaseWorker(ctx, w.store, latestActor)
 		dReleaseWorker = time.Since(t)
 		if err != nil {
 			return nil, err
 		}
+		snapshotHardware = worker.GetStatus().GetHardware()
 
 		// Re-fetch the actor now that the worker is freed.
 		t = time.Now()
@@ -379,6 +381,11 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 		if err != nil {
 			return nil, err
 		}
+	} else if isPausedOriginSuspend(latestActor) {
+		// Pause clears the worker assignment while a running-origin suspend
+		// keeps it until commit, so a paused-origin suspend carries forward
+		// the hardware recorded on its local snapshot.
+		snapshotHardware = latestActor.GetStatus().GetLocalSnapshot().GetHardware()
 	}
 
 	// 2. Finalize the actor: record its new external snapshot and mark it SUSPENDED. This
@@ -391,6 +398,7 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 			SnapshotUri:      inProgressSnapshotURI,
 			ContentScope:     commitSnapshotScope(actorRef.Atespace, actorTemplate),
 			ActorTemplateUid: actorTemplate.GetMetadata().GetUid(),
+			Hardware:         proto.CloneOf(snapshotHardware),
 		}
 	}
 

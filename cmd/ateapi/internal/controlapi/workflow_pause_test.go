@@ -24,6 +24,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/protobuf/proto"
 )
 
 // TestEnsurePausedFinalized_WorkerGone reproduces the scenario where the worker
@@ -145,10 +146,10 @@ func TestEnsurePausedFinalized_AlreadyCrashed(t *testing.T) {
 }
 
 // TestEnsurePausedFinalized_RecordsContentScope verifies pause finalization
-// records the scope the pause checkpoint captured (the template's onPause) in
-// LocalSnapshot, so a later suspend of the PAUSED actor knows what the
-// local snapshot contains even if the template's onPause changes while the
-// actor sits PAUSED.
+// records the scope the pause checkpoint captured (the template's onPause) and
+// the capturing worker's HardwareIdentity in LocalSnapshot, so a later resume
+// or suspend of the PAUSED actor knows what the local snapshot contains and on
+// what hardware it was captured.
 func TestEnsurePausedFinalized_RecordsContentScope(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -181,6 +182,9 @@ func TestEnsurePausedFinalized_RecordsContentScope(t *testing.T) {
 					InProgressLocalSnapshotName: "snap-prefix",
 				},
 			})
+			wantHardware := &ateapipb.HardwareIdentity{
+				Attributes: map[string]string{"architecture": "amd64"},
+			}
 			if _, err := st.CreateWorker(ctx, &ateapipb.Worker{
 				Metadata:        &ateapipb.ResourceMetadata{Name: workerName},
 				WorkerNamespace: "default",
@@ -188,7 +192,9 @@ func TestEnsurePausedFinalized_RecordsContentScope(t *testing.T) {
 				WorkerPod:       "worker-pod-1",
 				WorkerPodUid:    workerName,
 				NodeName:        "node1",
-				Status:          &ateapipb.WorkerStatus{},
+				Status: &ateapipb.WorkerStatus{
+					Hardware: wantHardware,
+				},
 			}); err != nil {
 				t.Fatalf("CreateWorker: %v", err)
 			}
@@ -214,6 +220,9 @@ func TestEnsurePausedFinalized_RecordsContentScope(t *testing.T) {
 			}
 			if got.GetStatus().GetAssignedNode() != "node1" {
 				t.Errorf("AssignedNode = %q, want %q", got.GetStatus().GetAssignedNode(), "node1")
+			}
+			if hw := got.GetStatus().GetLocalSnapshot().GetHardware(); !proto.Equal(hw, wantHardware) {
+				t.Errorf("LocalSnapshot.Hardware = %v, want %v", hw, wantHardware)
 			}
 		})
 	}
