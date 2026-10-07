@@ -25,6 +25,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"k8s.io/apimachinery/pkg/util/cache"
 
+	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
@@ -37,17 +38,22 @@ type Minter struct {
 	// tokens maps a tokenKey to a JWT until the token's refresh point.
 	tokens *cache.Expiring
 	// flight collapses concurrent mints of one token into a single call.
-	flight singleflight.Group
+	flight  singleflight.Group
+	metrics *Instruments
 }
 
-// New returns a Minter that mints through client.
-func New(client ateapipb.ControlClient) *Minter {
-	return &Minter{client: client, tokens: cache.NewExpiring()}
+// New returns a Minter that mints through client and records to metrics, which
+// may be nil.
+func New(client ateapipb.ControlClient, metrics *Instruments) *Minter {
+	return &Minter{client: client, tokens: cache.NewExpiring(), metrics: metrics}
 }
 
 // Token returns a JWT for the actor ref names, bound to src's audiences and
 // lifetime. MintActorJWT errors are returned wrapped.
-func (m *Minter) Token(ctx context.Context, ref resources.ActorRef, src *ateapipb.ActorJWTSource) (string, error) {
+func (m *Minter) Token(ctx context.Context, ref resources.ActorRef, src *ateapipb.ActorJWTSource) (jwt string, err error) {
+	outcome := ateattr.EgressActorJWTOutcomeMiss
+	defer func() { m.metrics.recordLookup(ctx, outcome, err) }()
+
 	req := &ateapipb.MintActorJWTRequest{
 		Actor:             ref.ToObjectRef(),
 		Audience:          slices.Sorted(slices.Values(src.GetAudiences())),
@@ -58,6 +64,7 @@ func (m *Minter) Token(ctx context.Context, ref resources.ActorRef, src *ateapip
 		return "", err
 	}
 	if jwt, ok := m.cached(key); ok {
+		outcome = ateattr.EgressActorJWTOutcomeHit
 		return jwt, nil
 	}
 
@@ -84,7 +91,9 @@ func (m *Minter) mint(ctx context.Context, key string, ref resources.ActorRef, r
 	if jwt, ok := m.cached(key); ok {
 		return jwt, nil
 	}
+	start := time.Now()
 	resp, err := m.client.MintActorJWT(ctx, req)
+	m.metrics.recordMint(ctx, time.Since(start), err)
 	if err != nil {
 		return "", fmt.Errorf("minting an actor JWT for %s: %w", ref, err)
 	}

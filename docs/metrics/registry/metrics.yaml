@@ -511,6 +511,42 @@ groups:
                 The resume failed for a different reason. The router has a
                 defect. This is not the same as a full fleet.
 
+  - id: registry.ate.egress
+    type: attribute_group
+    brief: >
+      The labels of the egress gateway. The key starts with the name of the
+      subsystem and not with actor. The requests of each actor use the same
+      token cache.
+    attributes:
+      - id: ate.egress.actor_jwt.outcome
+        stability: development
+        brief: >
+          The result of one actor JWT lookup in the token cache of the egress
+          gateway. Calculate the hit ratio as hit / (hit + miss). Do not put the
+          failures or the stopped lookups in the denominator.
+        type:
+          members:
+            - id: hit
+              stability: development
+              value: hit
+              brief: The gateway has a token that it can use again.
+            - id: miss
+              stability: development
+              value: miss
+              brief: The lookup waited for a mint. The mint is its own, or a mint that another request started.
+            - id: error
+              stability: development
+              value: error
+              brief: The mint failed. Only this outcome has an error.type key.
+            - id: cancelled
+              stability: development
+              value: cancelled
+              brief: The caller stopped the lookup. The mint continues and fills the cache.
+            - id: timeout
+              stability: development
+              value: timeout
+              brief: The time limit of the caller ended. The mint continues and fills the cache.
+
   - id: registry.ate.imagecache
     type: attribute_group
     brief: >
@@ -1233,6 +1269,52 @@ groups:
     attributes:
       - ref: ate.router.outcome
         requirement_level: required
+
+  - id: metric.ate.egress.actor_jwt.lookups
+    type: metric
+    metric_name: ate.egress.actor_jwt.lookups
+    instrument: counter
+    unit: "{lookup}"
+    stability: development
+    brief: The number of actor JWT lookups in the token cache of the egress gateway, by outcome.
+    note: >
+      The gateway does a lookup for each actor_jwt header that it puts in a
+      request. A miss makes a request wait for a mint. Thus a low hit ratio adds
+      the mint time to egress requests.
+    annotations:
+      substrate:
+        emitted_by: [atenet-router]
+        golden_signals: [traffic, errors]
+        code_anchor: cmd/atenet/internal/router/egress/actorjwt/metrics.go
+        cuj: Egress requests that get an actor JWT are slow. Does the token cache miss?
+    attributes:
+      - ref: ate.egress.actor_jwt.outcome
+        requirement_level: required
+      - ref: error.type
+        requirement_level:
+          conditionally_required: The outcome is error.
+
+  - id: metric.ate.egress.actor_jwt.mint.duration
+    type: metric
+    metric_name: ate.egress.actor_jwt.mint.duration
+    instrument: histogram
+    unit: s
+    stability: development
+    brief: The time of each MintActorJWT call from the egress gateway to ateapi.
+    note: >
+      The count of this histogram is the number of mints. Concurrent lookups of
+      one token share one mint, thus there can be fewer mints than misses.
+    annotations:
+      substrate:
+        emitted_by: [atenet-router]
+        golden_signals: [latency, errors]
+        code_anchor: cmd/atenet/internal/router/egress/actorjwt/metrics.go
+        buckets: [0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30]
+        cuj: Egress requests that get an actor JWT are slow or fail. Is ateapi slow to mint, or does it refuse?
+    attributes:
+      - ref: error.type
+        requirement_level:
+          conditionally_required: The MintActorJWT call failed.
 
   # ---------------------------------------------------------------------------
   # Metrics. Upstream instrumentation

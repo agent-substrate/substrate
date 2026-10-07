@@ -266,6 +266,8 @@ Agent Substrate emits foundational OpenTelemetry system and server metrics to mo
 | `ate.actor.restore.duration` | atelet | histogram | how long each phase of a restore takes on the worker node, which is where cold-start latency actually goes once ateapi hands off (labels `ate.snapshot.phase`, `ate.snapshot.kind`, `ate.snapshot.fidelity`, `ate.template.atespace`, `ate.template.name`, `ate.sandbox.class`) |
 | `ate.actor.checkpoint.duration` | atelet | histogram | the same phase breakdown for writing a snapshot, so a slow suspend can be attributed to ateom or to the upload (same labels as the restore histogram) |
 | `ate.imagecache.requests` | atelet | counter | image lookups in the node-local image cache, by outcome (`ate.imagecache.outcome`), with `error.type` on the `error` outcome. A miss pays for the pull and the unpack, so the hit ratio per node is a leading indicator of resume latency |
+| `ate.egress.actor_jwt.lookups` | atenet-router | counter | actor JWT lookups in the egress gateway's token cache, by outcome (`ate.egress.actor_jwt.outcome`), with `error.type` on the `error` outcome. A miss makes the egress request wait for a mint |
+| `ate.egress.actor_jwt.mint.duration` | atenet-router | histogram | time of each `MintActorJWT` call the egress gateway makes to ateapi, with `error.type` (the gRPC code) when it fails |
 
 The table lists the OpenTelemetry instrument names. How a name appears in a query depends on the backend (Cloud Monitoring (GMP) / Kind collector).
 

@@ -53,7 +53,7 @@ func bearerTokenResponse(token string) *credproviderpb.FetchSecretResponse {
 }
 
 func injectionHandlerFor(policy *ateapipb.EgressPolicy, provider credproviderpb.CredentialProviderClient, providerName string) *Handler {
-	return New(&egressMockClient{actor: runningActor(), policy: policy}, nil, 0, provider, providerName)
+	return New(&egressMockClient{actor: runningActor(), policy: policy}, nil, 0, provider, providerName, nil)
 }
 
 // withAuthorization adds the placeholder authorization header the sample
