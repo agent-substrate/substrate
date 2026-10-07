@@ -29,6 +29,32 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
+// ValidateCustom_WorkloadSpec rejects container volume mounts that name a
+// volume the spec does not declare, mirroring the template-side rule, so a
+// dangling mount is refused at the RPC edge rather than after atelet has
+// already reset the actor's directories and mounted its external volumes.
+func ValidateCustom_WorkloadSpec(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateletpb.WorkloadSpec) field.ErrorList {
+	declared := sets.New[string]()
+	for _, vol := range value.GetVolumes() {
+		declared.Insert(vol.GetName())
+	}
+	var errs field.ErrorList
+	for i, ctr := range value.GetContainers() {
+		for j, mount := range ctr.GetVolumeMounts() {
+			name := mount.GetName()
+			if name == "" {
+				continue // required is enforced by tags
+			}
+			if !declared.Has(name) {
+				errs = append(errs, field.Invalid(
+					fldPath.Child("containers").Index(i).Child("volume_mounts").Index(j).Child("name"),
+					name, "must reference a volume declared in the spec"))
+			}
+		}
+	}
+	return errs
+}
+
 func ValidateCustom_Container_Image(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	return resources.ValidatePinnedImage(fldPath, *value)
 }

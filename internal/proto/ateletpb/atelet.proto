@@ -268,7 +268,7 @@ message RunRequest {
   // +k8s:format=k8s-short-name
   string actor_template_name = 6;
 
-  // +k8s:optional
+  // +k8s:required
   WorkloadSpec spec = 7;
 
   // The sandbox binaries to use for booting this actor from scratch. atelet
@@ -364,6 +364,8 @@ message SandboxAssets {
 }
 
 // WorkloadSpec parallels Pod, but with far fewer configurable fields.
+//
+// +k8s:customValidation # every volume mount names a declared volume
 message WorkloadSpec {
   // +k8s:optional
   // +k8s:maxItems=10 # matches the template's containers bound
@@ -508,7 +510,6 @@ message SystemInfoVolume {
 }
 
 // Volume names one volume and selects exactly one source for it.
-// +k8s:validation-gen=true
 message Volume {
   // +k8s:required
   // +k8s:format=k8s-short-name

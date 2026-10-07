@@ -928,7 +928,7 @@ type RunRequest struct {
 	// +k8s:optional
 	// +k8s:format=k8s-short-name
 	ActorTemplateName string `protobuf:"bytes,6,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
-	// +k8s:optional
+	// +k8s:required
 	Spec *WorkloadSpec `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
 	// The sandbox binaries to use for booting this actor from scratch. atelet
 	// fetches the relevant assets and records them with the actor's on-node state
@@ -1307,6 +1307,8 @@ func (x *SandboxAssets) GetPauseImage() string {
 }
 
 // WorkloadSpec parallels Pod, but with far fewer configurable fields.
+//
+// +k8s:customValidation # every volume mount names a declared volume
 type WorkloadSpec struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// +k8s:optional
@@ -1836,7 +1838,6 @@ func (x *SystemInfoVolume) GetDataSources() []*SystemInfoDataSource {
 }
 
 // Volume names one volume and selects exactly one source for it.
-// +k8s:validation-gen=true
 type Volume struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// +k8s:required

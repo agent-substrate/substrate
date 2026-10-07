@@ -2946,7 +2946,8 @@ func Validate_RunRequest(
 			}
 			// call field-attached validations
 			earlyReturn := false
-			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+			if e := validate.RequiredPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
 				earlyReturn = true
 			}
 			if earlyReturn {
@@ -4409,6 +4410,11 @@ func Validate_WorkerResources(
 func Validate_WorkloadSpec(
 	ctx context.Context, op operation.Operation, fldPath *field.Path,
 	obj, oldObj *ateletpb.WorkloadSpec) (errs field.ErrorList) {
+
+	// custom validation
+	if e := ValidateCustom_WorkloadSpec(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+		errs = append(errs, e...)
+	}
 
 	{ // field ateletpb.WorkloadSpec.Containers
 		fn := func(

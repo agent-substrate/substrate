@@ -500,7 +500,7 @@ func NewService(
 
 func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *ateletpb.RunResponse, err error) {
 	if errs := apivalidation.ValidateRunRequest(ctx, req); len(errs) > 0 {
-		return nil, apierror.InvalidArgument("%v", errs.ToAggregate())
+		return nil, resources.ToAPIError(errs)
 	}
 
 	actorUID := req.GetActorUid()
@@ -620,7 +620,7 @@ func allocatedBytes(info os.FileInfo) int64 {
 
 func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest) (_ *ateletpb.CheckpointResponse, err error) {
 	if errs := apivalidation.ValidateCheckpointRequest(ctx, req); len(errs) > 0 {
-		return nil, apierror.InvalidArgument("%v", errs.ToAggregate())
+		return nil, resources.ToAPIError(errs)
 	}
 
 	actorUID := req.GetActorUid()
@@ -932,7 +932,7 @@ func (s *AteomHerder) uploadSnapshot(ctx context.Context, uri resources.Snapshot
 // local-checkpoints directory, written by an earlier local Checkpoint (pause).
 func (s *AteomHerder) UploadPausedCheckpoint(ctx context.Context, req *ateletpb.UploadPausedCheckpointRequest) (_ *ateletpb.UploadPausedCheckpointResponse, err error) {
 	if errs := apivalidation.ValidateUploadPausedCheckpointRequest(ctx, req); len(errs) > 0 {
-		return nil, apierror.InvalidArgument("%v", errs.ToAggregate())
+		return nil, resources.ToAPIError(errs)
 	}
 
 	tStart := time.Now()
@@ -1056,7 +1056,7 @@ func narrowFullCaptureToData(rec *sandboxAssetsRecord) error {
 
 func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (resp *ateletpb.RestoreResponse, err error) {
 	if errs := apivalidation.ValidateRestoreRequest(ctx, req); len(errs) > 0 {
-		return nil, apierror.InvalidArgument("%v", errs.ToAggregate())
+		return nil, resources.ToAPIError(errs)
 	}
 
 	actorUID := req.GetActorUid()
@@ -1301,7 +1301,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 // and resets actor directories on the node.
 func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequest) (*ateletpb.TerminateResponse, error) {
 	if errs := apivalidation.ValidateTerminateRequest(ctx, req); len(errs) > 0 {
-		return nil, apierror.InvalidArgument("%v", errs.ToAggregate())
+		return nil, resources.ToAPIError(errs)
 	}
 
 	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}

@@ -248,8 +248,9 @@ func TestValidateRunRequest(t *testing.T) {
 			r.ActorTemplateName = ""
 		}),
 	}, {
-		name: "unset spec is allowed",
+		name: "missing spec",
 		obj:  valid(func(r *ateletpb.RunRequest) { r.Spec = nil }),
+		want: field.ErrorList{field.Required(field.NewPath("spec"), "")},
 	}, {
 		name: "missing sandbox_assets",
 		obj:  valid(func(r *ateletpb.RunRequest) { r.SandboxAssets = nil }),
@@ -1115,6 +1116,17 @@ func TestValidateWorkloadSpec(t *testing.T) {
 			s.Containers[0].Resources = &ateletpb.ResourceLimits{CpuMillis: -1}
 		}),
 		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(0).Child("resources", "cpu_millis"), nil, "").WithOrigin("minimum")},
+	}, {
+		name: "mount references a declared volume",
+		obj: valid(func(s *ateletpb.WorkloadSpec) {
+			s.Containers[0].VolumeMounts = []*ateletpb.VolumeMount{{Name: "data", MountPath: "/data"}}
+		}),
+	}, {
+		name: "mount references an undeclared volume",
+		obj: valid(func(s *ateletpb.WorkloadSpec) {
+			s.Containers[1].VolumeMounts = []*ateletpb.VolumeMount{{Name: "data", MountPath: "/data"}, {Name: "ghost", MountPath: "/ghost"}}
+		}),
+		want: field.ErrorList{field.Invalid(field.NewPath("containers").Index(1).Child("volume_mounts").Index(1).Child("name"), nil, "")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
