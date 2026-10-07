@@ -322,6 +322,34 @@ func TestActorEgressPolicyCachePerPort(t *testing.T) {
 	}
 }
 
+// TestActorEgressDialedPortOverridesHostHeader sends requests to
+// https://example.com/ (default TCP port 443) with "example.com:1" in the Host
+// header and to http://example.net/ (default TCP port 80) with "example.net:2"
+// in the Host header, verifying that the egress gateway dials the TCP port the
+// actor connected to rather than the port from the Host header.
+// Sending 2 requests per target verifies that cached policy correctly sets the
+// destination port filter state.
+func TestActorEgressDialedPortOverridesHostHeader(t *testing.T) {
+	ctx := context.Background()
+	router, actorRef := hostnamePolicyActor(t, ctx)
+
+	for _, tc := range []struct {
+		url  string
+		host string
+	}{
+		{url: "https://example.com/", host: "example.com:1"},
+		{url: "http://example.net/", host: "example.net:2"},
+	} {
+		payload := []byte(fmt.Sprintf(`{"url":%q,"host":%q,"disableKeepAlive":true}`, tc.url, tc.host))
+		for i := range 2 {
+			status, body := postThroughEgressActorUntil(t, ctx, router, actorRef, "/", payload, reached)
+			if status != http.StatusOK {
+				t.Fatalf("request %d to %s with Host %s returned HTTP %d, want 200; body: %s", i+1, tc.url, tc.host, status, body)
+			}
+		}
+	}
+}
+
 // fetchThroughEgressActorUntil is fetchThroughEgressActor with the caller
 // deciding which answer is final.
 func fetchThroughEgressActorUntil(t *testing.T, ctx context.Context, router *e2e.RouterClient, actorRef resources.ActorRef, url string, done func(status int, body []byte) bool) (int, []byte) {

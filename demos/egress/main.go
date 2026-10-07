@@ -48,6 +48,9 @@ const (
 
 type fetchRequest struct {
 	URL string `json:"url"`
+	// Host, when set, overrides the outbound HTTP request's Host header
+	// without changing the dial destination or TLS SNI derived from URL.
+	Host string `json:"host,omitempty"`
 	// This flag allows tests to send each request over a new connection,
 	// resulting in a new CONNECT tunnel from the atunnel, rather than re-using
 	// existing connections in the http dialer connection pool and corresponding CONNECT
@@ -138,6 +141,9 @@ func newHandler(client *http.Client) http.Handler {
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, fetchResponse{Error: fmt.Sprintf("invalid URL: %v", err)})
 			return
+		}
+		if input.Host != "" {
+			outbound.Host = input.Host
 		}
 		if input.DisableKeepAlive {
 			outbound.Close = true
