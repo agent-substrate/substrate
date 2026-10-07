@@ -820,6 +820,7 @@ func buildVMConfig(id, kernel, image, kparams, consoleLog string, memMiB, vcpus 
 		// with DAX, so its file data stays in the host page cache instead of being copied into guest RAM.
 		Pmem:     []ch.PmemConfig{{ID: "guest-image", File: image, DiscardWrites: true}},
 		Fs:       buildFsConfigs(id),
+		Balloon:  &ch.BalloonConfig{FreePageReporting: true},
 		Platform: &ch.PlatformConfig{NumPciSegments: 2},
 		Rng:      &ch.RngConfig{Src: "/dev/urandom"},
 		Console:  &ch.ConsoleConfig{Mode: "File", File: consoleLog},
