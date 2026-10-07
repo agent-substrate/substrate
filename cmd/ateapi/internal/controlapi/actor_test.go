@@ -38,6 +38,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/peer"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -852,7 +853,11 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 				actor.SourceTag = &ateapipb.ObjectRef{Atespace: ref.Atespace, Name: "explicit"}
 			}
 			svc := &ServiceImpl{store: persistence}
+			original := proto.CloneOf(actor)
 			created, err := svc.CreateActor(ctx, actor)
+			if diff := cmp.Diff(original, actor, protocmp.Transform()); diff != "" {
+				t.Fatalf("CreateActor mutated input (-want +got):\n%s", diff)
+			}
 			if apierror.Code(err) != wantCode {
 				t.Fatalf("CreateActor = %v, want %v", err, wantCode)
 			}
