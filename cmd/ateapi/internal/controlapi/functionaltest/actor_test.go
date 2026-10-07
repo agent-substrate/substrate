@@ -2288,8 +2288,8 @@ func TestResumeActor_VolumeAttachFailureAndRetry(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected first ResumeActor to fail due to attach failure, but it succeeded")
 	}
-	if !strings.Contains(err.Error(), "simulated volume attach failure on attempt 1") {
-		t.Errorf("expected error containing simulated volume attach failure, got: %v", err)
+	if got := status.Convert(err); got.Code() != codes.Internal || got.Message() != "internal server error" {
+		t.Errorf("RPC error = %v, want Internal: internal server error", got)
 	}
 
 	// Verify actor status after failed attach: in ACTOR_STATE_RESUMING, worker assigned, volume CREATED
@@ -2549,8 +2549,8 @@ func TestResumeActor_MultiVolumePartialAttachFailure_Retry(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected ResumeActor to fail due to partial attach failure, got nil")
 	}
-	if !strings.Contains(err.Error(), "simulated volume attach failure for") {
-		t.Errorf("expected error containing simulated attach failure, got: %v", err)
+	if got := status.Convert(err); got.Code() != codes.Internal || got.Message() != "internal server error" {
+		t.Errorf("RPC error = %v, want Internal: internal server error", got)
 	}
 
 	// 4. Verify actor state is ACTOR_STATE_RESUMING, worker assignment is held, and partial attachment state.
@@ -2720,8 +2720,8 @@ func TestSuspendActor_VolumeDetachFailure_RetrySuccess(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected first SuspendActor to fail, got nil")
 	}
-	if !strings.Contains(err.Error(), "simulated volume detach failure on attempt 1") {
-		t.Errorf("expected error containing simulated detach failure, got: %v", err)
+	if got := status.Convert(err); got.Code() != codes.Internal || got.Message() != "internal server error" {
+		t.Errorf("RPC error = %v, want Internal: internal server error", got)
 	}
 
 	// 4. Verify actor state after failed detach: left in ACTOR_STATE_SUSPENDING, worker assignment preserved.
@@ -3111,8 +3111,8 @@ func TestSuspendActorAsync_VolumeDetachFailure_RetrySuccess(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected first async SuspendActor to fail, got nil")
 	}
-	if !strings.Contains(err.Error(), "simulated volume detach failure on attempt 1") {
-		t.Errorf("expected error containing simulated detach failure, got: %v", err)
+	if got := status.Convert(err); got.Code() != codes.Internal || got.Message() != "internal server error" {
+		t.Errorf("RPC error = %v, want Internal: internal server error", got)
 	}
 
 	// 4. Verify actor state is ACTOR_STATE_SUSPENDING.
