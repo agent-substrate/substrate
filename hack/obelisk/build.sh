@@ -22,6 +22,8 @@ GO_SHA256=675c26c449cbb18fc24b74650de1eabbae6e16f64326fd85a283fb3b58280685
 GO_ROOT="${HOME}/.local/go${GO_VERSION}"
 K3S_VERSION='v1.36.5+k3s1'
 K3S_SHA256=d73847bcd3c5fccef0115b372e2f9a91f3032dc84bbf71518a4617565294d313
+TAILSCALE_VERSION=1.102.5
+TAILSCALE_SHA256=65e6d7f19ad7e1c87d20c2a21e92f38a96795cb897af54b04536590e1c148d12
 
 install_go() {
   if [[ -x "${GO_ROOT}/bin/go" ]]; then
@@ -36,6 +38,54 @@ install_go() {
   rm -rf "${GO_ROOT}"
   mkdir -p "${GO_ROOT}"
   tar -C "${GO_ROOT}" --strip-components=1 -xzf "${archive}"
+}
+
+install_tailscale() {
+  if [[ "$(/usr/local/bin/tailscale version 2>/dev/null | head -1 || true)" != "${TAILSCALE_VERSION}" ]]; then
+    local archive temp_dir
+    temp_dir="$(mktemp --directory)"
+    archive="${temp_dir}/tailscale.tgz"
+    trap 'rm -rf "${temp_dir}"' RETURN
+    curl --fail --location --silent --show-error \
+      "https://pkgs.tailscale.com/stable/tailscale_${TAILSCALE_VERSION}_amd64.tgz" >"${archive}"
+    echo "${TAILSCALE_SHA256}  ${archive}" | sha256sum --check --status
+    tar -C "${temp_dir}" -xzf "${archive}"
+    sudo install -m 0755 \
+      "${temp_dir}/tailscale_${TAILSCALE_VERSION}_amd64/tailscale" \
+      "${temp_dir}/tailscale_${TAILSCALE_VERSION}_amd64/tailscaled" \
+      /usr/local/bin/
+    rm -rf "${temp_dir}"
+    trap - RETURN
+  fi
+
+  local unit
+  unit="$(mktemp)"
+  trap 'rm -f "${unit}"' RETURN
+  cat >"${unit}" <<'EOF'
+[Unit]
+Description=Tailscale node agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+Restart=on-failure
+RestartSec=5s
+StateDirectory=tailscale
+StateDirectoryMode=0700
+RuntimeDirectory=tailscale
+RuntimeDirectoryMode=0755
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  if ! sudo cmp --silent "${unit}" /etc/systemd/system/tailscaled.service 2>/dev/null; then
+    sudo install -m 0644 "${unit}" /etc/systemd/system/tailscaled.service
+    sudo systemctl daemon-reload
+  fi
+  sudo systemctl enable tailscaled.service
+  sudo systemctl restart tailscaled.service
 }
 
 install_k3s() {
@@ -88,6 +138,7 @@ EOF
 }
 
 install_go
+install_tailscale
 install_k3s
 
 export PATH="${GO_ROOT}/bin:${PATH}"
