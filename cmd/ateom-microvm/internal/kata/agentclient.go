@@ -158,6 +158,15 @@ func (a *AgentClient) ReseedRandomDev(ctx context.Context, data []byte) error {
 	return nil
 }
 
+// SetGuestDateTime corrects the guest wall clock through the Kata agent.
+func (a *AgentClient) SetGuestDateTime(ctx context.Context, now time.Time) error {
+	req := &agentpb.SetGuestDateTimeRequest{Sec: now.Unix(), Usec: int64(now.Nanosecond() / 1000)}
+	if err := a.client.Call(ctx, "grpc.AgentService", "SetGuestDateTime", req, &emptypb.Empty{}); err != nil {
+		return fmt.Errorf("agent SetGuestDateTime: %w", err)
+	}
+	return nil
+}
+
 // StartContainer execs the container's init process (pivots into the rootfs the
 // storages assembled). Mirrors grpc.AgentService/StartContainer.
 func (a *AgentClient) StartContainer(ctx context.Context, containerID string) error {

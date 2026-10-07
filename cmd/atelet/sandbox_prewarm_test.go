@@ -223,8 +223,7 @@ func TestPrewarmProcessReappliesClassGate(t *testing.T) {
 	}
 }
 
-// TestMicrovmNodeCapable covers the detectable negative cases; the positive
-// case needs a /dev/kvm character device, which a test cannot mknod.
+// Symlinks to /dev/null exercise character-device discovery without mknod.
 func TestMicrovmNodeCapable(t *testing.T) {
 	devRoot := t.TempDir()
 	if microvmNodeCapable(devRoot) {
@@ -236,6 +235,17 @@ func TestMicrovmNodeCapable(t *testing.T) {
 	}
 	if microvmNodeCapable(devRoot) {
 		t.Error("microvmNodeCapable = true for a regular file named kvm")
+	}
+	for _, device := range []string{"kvm", "mshv"} {
+		t.Run(device, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.Symlink("/dev/null", root+"/"+device); err != nil {
+				t.Fatal(err)
+			}
+			if !microvmNodeCapable(root) {
+				t.Fatal("hypervisor character device must enable prewarm")
+			}
+		})
 	}
 }
 

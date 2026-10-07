@@ -70,12 +70,19 @@ func TestDeviceCountExceedsMaxPodsPerNode(t *testing.T) {
 // Allocate must hand back exactly the one device node, read/write but not
 // mknod, once per requested container.
 func TestAllocateReturnsOnlyTheRequestedDevice(t *testing.T) {
-	p := New(HostDevice{ResourceName: "ate.dev/kvm", Path: "/dev/kvm"})
+	for _, dev := range SandboxDevices {
+		t.Run(dev.ResourceName, func(t *testing.T) { testAllocateDevice(t, dev) })
+	}
+}
+
+func testAllocateDevice(t *testing.T, dev HostDevice) {
+	t.Helper()
+	p := New(dev)
 
 	resp, err := p.Allocate(context.Background(), &pluginapi.AllocateRequest{
 		ContainerRequests: []*pluginapi.ContainerAllocateRequest{
-			{DevicesIds: []string{"kvm-0"}},
-			{DevicesIds: []string{"kvm-1"}},
+			{DevicesIds: []string{filepath.Base(dev.Path) + "-0"}},
+			{DevicesIds: []string{filepath.Base(dev.Path) + "-1"}},
 		},
 	})
 	if err != nil {
@@ -90,8 +97,8 @@ func TestAllocateReturnsOnlyTheRequestedDevice(t *testing.T) {
 			t.Fatalf("container %d: got %d devices, want 1", i, len(devs))
 		}
 		d := devs[0]
-		if d.GetHostPath() != "/dev/kvm" || d.GetContainerPath() != "/dev/kvm" {
-			t.Errorf("container %d: paths = %q -> %q, want /dev/kvm both", i, d.GetHostPath(), d.GetContainerPath())
+		if d.GetHostPath() != dev.Path || d.GetContainerPath() != dev.Path {
+			t.Errorf("container %d: paths = %q -> %q, want %s both", i, d.GetHostPath(), d.GetContainerPath(), dev.Path)
 		}
 		if d.GetPermissions() != "rw" {
 			t.Errorf("container %d: permissions = %q, want rw (no mknod)", i, d.GetPermissions())

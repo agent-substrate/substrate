@@ -237,6 +237,13 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 // (config.json + state.json + memory-ranges) plus the base-id the restore side
 // needs, and returns how long the snapshot itself took.
 func (s *AteomService) snapshotVMState(ctx context.Context, client *ch.Client, ra *runningActor, actorUID, checkpointDir string) (time.Duration, error) {
+	backend, err := client.Info().DetectHypervisor()
+	if err != nil {
+		return 0, err
+	}
+	if err := writeSnapshotHypervisor(checkpointDir, backend); err != nil {
+		return 0, fmt.Errorf("record snapshot hypervisor: %w", err)
+	}
 	// Record the FROZEN base id (the id the guest's virtio-fs find-paths are pinned
 	// to, <baseID>/rootfs). For a cold-run actor this is its own id; for a restored
 	// actor it is the golden id propagated via ra.baseID (set from the snapshot we

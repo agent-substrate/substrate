@@ -83,6 +83,13 @@ func LaunchVMM(ctx context.Context, o LaunchVMMOptions) (*exec.Cmd, *Client, err
 		_, _ = cmd.Process.Wait()
 		return nil, nil, fmt.Errorf("while waiting for VMM api-socket: %w", err)
 	}
+	backend, err := client.Info().DetectHypervisor()
+	if err != nil {
+		_ = cmd.Process.Kill()
+		_, _ = cmd.Process.Wait()
+		return nil, nil, err
+	}
+	client.hypervisor = backend
 	return cmd, client, nil
 }
 

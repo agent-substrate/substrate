@@ -27,8 +27,20 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/ch"
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
 )
+
+func TestMSHVGuestConfiguration(t *testing.T) {
+	info := ch.VMMInfo{Version: "53.0.0", Features: []string{"kvm", "mshv"}}
+	if agentInit(t.Context(), info, ch.MSHV) {
+		t.Fatal("MSHV must retain the guest time-sync service")
+	}
+	cfg := buildVMConfig("test", "/vmlinux", "/rootfs.img", "", "/console.log", 256, 1, false, false, ch.MSHV)
+	if strings.Contains(cfg.Payload.Cmdline, "clocksource=kvm-clock") || !strings.Contains(cfg.Payload.Cmdline, "systemd.unit=kata-containers.target") {
+		t.Fatalf("incorrect MSHV command line: %s", cfg.Payload.Cmdline)
+	}
+}
 
 // A vsock socket that has gone missing means cloud-hypervisor stopped the VM
 // (it unlinks the socket in the vsock device's shutdown), so the poll must give
@@ -172,7 +184,7 @@ func TestBuildVMConfigConsole(t *testing.T) {
 	const id = "actor-1"
 	consoleLog := kata.ConsoleLogPath(id)
 
-	cfg := buildVMConfig(id, "/vmlinux", "/rootfs.img", "", consoleLog, 256, 1, true, false)
+	cfg := buildVMConfig(id, "/vmlinux", "/rootfs.img", "", consoleLog, 256, 1, true, false, ch.KVM)
 	if cfg.Console == nil || cfg.Console.Mode != "File" || cfg.Console.File != consoleLog {
 		t.Errorf("Console = %+v, want File %q", cfg.Console, consoleLog)
 	}
@@ -189,7 +201,7 @@ func TestBuildVMConfigConsole(t *testing.T) {
 		t.Errorf("cmdline = %q, must not pay for earlycon outside debug mode", cfg.Payload.Cmdline)
 	}
 
-	dbg := buildVMConfig(id, "/vmlinux", "/rootfs.img", "", consoleLog, 256, 1, true, true)
+	dbg := buildVMConfig(id, "/vmlinux", "/rootfs.img", "", consoleLog, 256, 1, true, true, ch.KVM)
 	if dbg.Serial == nil || dbg.Serial.Mode != "File" || dbg.Serial.File != kata.SerialLogPath(id) {
 		t.Errorf("debug Serial = %+v, want File %q", dbg.Serial, kata.SerialLogPath(id))
 	}
