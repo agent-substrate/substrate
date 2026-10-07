@@ -121,6 +121,17 @@ func TestActorTemplateFromManifestDemos(t *testing.T) {
 	}
 }
 
+// ko resolve ends every document with a "---" separator.
+func TestActorTemplateFromManifestKoOutput(t *testing.T) {
+	template, err := ActorTemplateFromManifest([]byte("metadata: {atespace: a, name: t}\n---\n"))
+	if err != nil {
+		t.Fatalf("ActorTemplateFromManifest: %v", err)
+	}
+	if got := template.GetMetadata().GetName(); got != "t" {
+		t.Errorf("name = %q, want t", got)
+	}
+}
+
 func TestActorTemplateFromManifestErrors(t *testing.T) {
 	tests := []struct {
 		name     string

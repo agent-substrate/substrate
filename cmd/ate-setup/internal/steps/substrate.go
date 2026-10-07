@@ -49,9 +49,17 @@ func EnsureAtespace(ctx context.Context, client *ateclient.Client, atespace stri
 }
 
 // ActorTemplateFromManifest parses a manifest holding a single
-// protojson-shaped ActorTemplate, as `kubectl ate create actor-template` does.
+// protojson-shaped ActorTemplate. Empty documents are skipped, such as the
+// "---" ko resolve appends.
 func ActorTemplateFromManifest(data []byte) (*ateapipb.ActorTemplate, error) {
-	return manifest.ParseOne[ateapipb.ActorTemplate](data)
+	templates, err := manifest.Parse[ateapipb.ActorTemplate](data)
+	if err != nil {
+		return nil, err
+	}
+	if len(templates) > 1 {
+		return nil, fmt.Errorf("manifest holds %d ActorTemplates, expected one", len(templates))
+	}
+	return templates[0], nil
 }
 
 // CreateActorTemplate creates the template through the ate API. Actor
