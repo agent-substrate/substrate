@@ -1313,9 +1313,16 @@ func TestValidateVolume(t *testing.T) {
 			obj:  systemInfo(&ateletpb.SystemInfoDataSource{TrustBundle: &ateletpb.TrustBundleDataSource{Path: "trust/bundle.pem"}}),
 			want: field.ErrorList{field.Required(bundlePath.Child("names"), "")},
 		}, {
+			name: "trust bundle: several names",
+			obj:  systemInfo(&ateletpb.SystemInfoDataSource{TrustBundle: &ateletpb.TrustBundleDataSource{Names: []string{"egress-mitm.ate.dev", "system-roots.ate.dev"}, Path: "trust/bundle.pem"}}),
+		}, {
 			name: "trust bundle: too many names",
-			obj:  systemInfo(&ateletpb.SystemInfoDataSource{TrustBundle: &ateletpb.TrustBundleDataSource{Names: []string{"a", "b"}, Path: "trust/bundle.pem"}}),
-			want: field.ErrorList{field.TooMany(bundlePath.Child("names"), 2, 1).WithOrigin("maxItems")},
+			obj:  systemInfo(&ateletpb.SystemInfoDataSource{TrustBundle: &ateletpb.TrustBundleDataSource{Names: []string{"a", "b", "c", "d", "e", "f", "g", "h", "i"}, Path: "trust/bundle.pem"}}),
+			want: field.ErrorList{field.TooMany(bundlePath.Child("names"), 9, 8).WithOrigin("maxItems")},
+		}, {
+			name: "trust bundle: duplicate names",
+			obj:  systemInfo(&ateletpb.SystemInfoDataSource{TrustBundle: &ateletpb.TrustBundleDataSource{Names: []string{"a", "a"}, Path: "trust/bundle.pem"}}),
+			want: field.ErrorList{field.Duplicate(bundlePath.Child("names").Index(1), nil)},
 		}, {
 			name: "trust bundle: empty name",
 			obj:  systemInfo(bundle("", "trust/bundle.pem")),

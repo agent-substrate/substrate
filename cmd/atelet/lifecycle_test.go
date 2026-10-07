@@ -424,7 +424,7 @@ func TestActivationFailureBeforeRegistration(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			useTempNodeDirs(t)
-			const actorUID, snapshotName = "actor-uid-1", "pause-snap-1"
+			const actorUID, snapshotName = "0f6c2b0e-1b7e-4b3f-9a6a-1d2c3e4f5a61", "pause-snap-1"
 			ctx := t.Context()
 			store := newCTBStore(t)
 			certA := string(testCertPEM(t))
@@ -538,6 +538,7 @@ func TestRunFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
 	refresher := newSystemInfoVolumeRefresher(trustbundle.NewSource(store.lister.Get, nil), nil)
 	content := []byte("runsc binary")
 	assetHash := fmt.Sprintf("%x", sha256.Sum256(content))
+	const actorUID = "0f6c2b0e-1b7e-4b3f-9a6a-1d2c3e4f5a62"
 	s := &AteomHerder{
 		anonGCSClient:     fakeObjectStorage{data: content},
 		imageCache:        newImageVolumeStore(t),
@@ -552,11 +553,11 @@ func TestRunFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
 	_, err := s.Run(t.Context(), &ateletpb.RunRequest{
 		Atespace:       "team-a",
 		ActorName:      "actor-run",
-		ActorUid:       "actor-uid-run",
+		ActorUid:       actorUID,
 		TargetAteomUid: "ateom-uid-1",
 		SandboxAssets: &ateletpb.SandboxAssets{
 			SandboxClass: "gvisor",
-			PauseImage:   "://invalid-image",
+			PauseImage:   missingPauseImage(t),
 			Assets: map[string]*ateletpb.ArchAssets{runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
 				runscAssetName: {Url: "gs://test-bucket/runsc", Sha256: assetHash},
 			}}},
@@ -566,20 +567,29 @@ func TestRunFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "while creating pause OCI bundle") {
 		t.Fatalf("Run error = %v, want the post-registration OCI preparation failure", err)
 	}
-	if _, err := os.ReadFile(filepath.Join(ateletpath.SystemInfoVolumeRoot("actor-uid-run", "trust"), "ca.pem")); err != nil {
+	if _, err := os.ReadFile(filepath.Join(ateletpath.SystemInfoVolumeRoot(actorUID, "trust"), "ca.pem")); err != nil {
 		t.Fatalf("Register did not write its projection before OCI preparation failed: %v", err)
 	}
-	if got := refresher.actors["actor-uid-run"]; got != nil {
+	if got := refresher.actors[actorUID]; got != nil {
 		t.Fatalf("failed Run left its registration live: %p", got)
 	}
+}
+
+// missingPauseImage returns a digest-pinned reference that passes request
+// validation but names a manifest the local test registry does not serve, so
+// the pull fails only once OCI bundle preparation starts.
+func missingPauseImage(t *testing.T) string {
+	t.Helper()
+	return imageVolumeTestRegistry(t) + "/pause@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 }
 
 func TestRestoreFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
 	useTempNodeDirs(t)
 	const (
-		actorUID     = "actor-uid-restore-after"
+		actorUID     = "0f6c2b0e-1b7e-4b3f-9a6a-1d2c3e4f5a63"
 		snapshotName = "pause-snap-after"
 	)
+	pauseImage := missingPauseImage(t)
 	store := newCTBStore(t)
 	store.set(t, string(testCertPEM(t)))
 	refresher := newSystemInfoVolumeRefresher(trustbundle.NewSource(store.lister.Get, nil), nil)
@@ -587,7 +597,7 @@ func TestRestoreFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
 	assetHash := fmt.Sprintf("%x", sha256.Sum256(content))
 	writeLocalSnapshot(t, ateletpath.LocalSnapshotDir(actorUID, snapshotName), sandboxAssetsRecord{
 		SandboxClass:  "gvisor",
-		PauseImage:    "://invalid-image",
+		PauseImage:    pauseImage,
 		Assets:        map[string]assetEntry{"runsc": {URL: "gs://test-bucket/runsc", SHA256: assetHash}},
 		SnapshotFiles: []string{"checkpoint.img"},
 	}, map[string]string{"checkpoint.img": "guest-memory"})
@@ -608,7 +618,7 @@ func TestRestoreFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
 		TargetAteomUid: "ateom-uid-1",
 		SandboxAssets: &ateletpb.SandboxAssets{
 			SandboxClass: "gvisor",
-			PauseImage:   "://invalid-image",
+			PauseImage:   pauseImage,
 			Assets: map[string]*ateletpb.ArchAssets{runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
 				runscAssetName: {Url: "gs://test-bucket/runsc", Sha256: assetHash},
 			}}},
@@ -640,7 +650,7 @@ func TestTerminateWithoutTargetAteomUID(t *testing.T) {
 	const (
 		atespace     = "ate-demo"
 		actorName    = "counter"
-		actorUID     = "actor-uid-1"
+		actorUID     = "0f6c2b0e-1b7e-4b3f-9a6a-1d2c3e4f5a64"
 		snapshotName = "pause-snap-1"
 	)
 
@@ -664,7 +674,7 @@ func TestTerminateWithoutTargetAteomUID(t *testing.T) {
 		systemInfoVolumes: newSystemInfoVolumeRefresher(nil, nil),
 	}
 	spec := &ateletpb.WorkloadSpec{
-		Containers: []*ateletpb.Container{{Name: "app", Image: "example.com/app:v1"}},
+		Containers: []*ateletpb.Container{{Name: "app", Image: "example.com/app@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},
 	}
 
 	if _, err := s.Terminate(ctx, &ateletpb.TerminateRequest{

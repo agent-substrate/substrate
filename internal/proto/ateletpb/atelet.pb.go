@@ -1673,8 +1673,8 @@ type TrustBundleDataSource struct {
 	Path string `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
 	// +k8s:required
 	// +k8s:minItems=1
-	// +k8s:maxItems=1 # matches the template's names bound
-	// +k8s:listType=atomic
+	// +k8s:maxItems=8 # matches the template's names bound
+	// +k8s:listType=set
 	// +k8s:eachVal=+k8s:minLength=1
 	// +k8s:eachVal=+k8s:maxLength=253 # matches the template's bundle-name bound
 	Names         []string `protobuf:"bytes,3,rep,name=names,proto3" json:"names,omitempty"`

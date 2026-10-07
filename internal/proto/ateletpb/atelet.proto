@@ -475,8 +475,8 @@ message TrustBundleDataSource {
   string path = 1;
   // +k8s:required
   // +k8s:minItems=1
-  // +k8s:maxItems=1 # matches the template's names bound
-  // +k8s:listType=atomic
+  // +k8s:maxItems=8 # matches the template's names bound
+  // +k8s:listType=set
   // +k8s:eachVal=+k8s:minLength=1
   // +k8s:eachVal=+k8s:maxLength=253 # matches the template's bundle-name bound
   repeated string names = 3;
