@@ -243,6 +243,7 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		rolloutTimeoutSet:              r.Supplied("rolloutTimeout"),
 		PodcertWorkersPerSigner:        podcertWorkers,
 		ClusterSize:                    r.String("clusterSize"),
+		PostgresStorageClass:           r.String("bundledPostgres.storageClass"),
 		CordonControlPlane:             r.Bool("cordonControlPlane"),
 		AdditionalEgressExtprocService: r.String("atenet.egress.additionalExtprocService"),
 		CredentialProviderJSON:         r.String("atenet.egress.credentialProvider"),

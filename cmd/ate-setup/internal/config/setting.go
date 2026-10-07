@@ -249,6 +249,12 @@ var Registry = []Setting{
 		Usage:   "Coarse-grained sizing of Substrate: size0 or size10",
 	},
 	{
+		Key: "bundledPostgres.storageClass", Env: "ATE_INSTALL_POSTGRES_STORAGE_CLASS", Flag: "postgres-storage-class",
+		Kind: KindString,
+		Usage: "StorageClass for the bundled PostgreSQL volume, instead of the cluster default. " +
+			"An existing install must delete the postgres StatefulSet and its claim first",
+	},
+	{
 		Key: "cordonControlPlane", Env: "ATE_INSTALL_CORDON_CONTROL_PLANE", Flag: "cordon-control-plane",
 		Kind: KindBool, Default: "false",
 		Usage: "Keep the control plane off the worker nodes. Assumes a small shared pool labeled " +

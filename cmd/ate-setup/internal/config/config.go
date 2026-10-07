@@ -177,6 +177,10 @@ type Config struct {
 	// or size10.
 	ClusterSize string
 
+	// PostgresStorageClass is the StorageClass of the bundled PostgreSQL volume
+	// (ATE_INSTALL_POSTGRES_STORAGE_CLASS). Empty leaves the cluster default.
+	PostgresStorageClass string
+
 	// CordonControlPlane keeps the control plane off the worker nodes
 	// (ATE_INSTALL_CORDON_CONTROL_PLANE). It assumes a small shared pool
 	// labeled and tainted ate.dev/workloadType=ate-control-plane:NoSchedule,
