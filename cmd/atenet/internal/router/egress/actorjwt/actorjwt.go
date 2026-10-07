@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"golang.org/x/sync/singleflight"
-	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 	"k8s.io/apimachinery/pkg/util/cache"
 
@@ -30,16 +29,11 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
-// Client is the part of ateapi's Control service that a Minter calls.
-type Client interface {
-	MintActorJWT(ctx context.Context, in *ateapipb.MintActorJWTRequest, opts ...grpc.CallOption) (*ateapipb.MintActorJWTResponse, error)
-}
-
 // Minter mints actor JWTs and reuses each token until a third of its lifetime
 // remains. Tokens are cached by actor name, so an actor recreated under the
 // same name can get its predecessor's token until then.
 type Minter struct {
-	client Client
+	client ateapipb.ControlClient
 	// tokens maps a tokenKey to a JWT until the token's refresh point.
 	tokens *cache.Expiring
 	// flight collapses concurrent mints of one token into a single call.
@@ -47,7 +41,7 @@ type Minter struct {
 }
 
 // New returns a Minter that mints through client.
-func New(client Client) *Minter {
+func New(client ateapipb.ControlClient) *Minter {
 	return &Minter{client: client, tokens: cache.NewExpiring()}
 }
 

@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -26,7 +27,9 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -36,17 +39,18 @@ import (
 
 var testActor = resources.ActorRef{Atespace: "default", Name: "my-actor"}
 
-// fakeClient's nth MintActorJWT call returns "jwt-<n>", expiring
+// fakeControl's nth MintActorJWT call returns "jwt-<n>", expiring
 // expiration_seconds from now. err, when set, is returned instead, and gate,
 // when non-nil, blocks each call until it is closed.
-type fakeClient struct {
+type fakeControl struct {
+	ateapipb.UnimplementedControlServer
 	calls atomic.Int32
 	last  atomic.Pointer[ateapipb.MintActorJWTRequest]
 	err   error
 	gate  chan struct{}
 }
 
-func (f *fakeClient) MintActorJWT(ctx context.Context, req *ateapipb.MintActorJWTRequest, _ ...grpc.CallOption) (*ateapipb.MintActorJWTResponse, error) {
+func (f *fakeControl) MintActorJWT(ctx context.Context, req *ateapipb.MintActorJWTRequest) (*ateapipb.MintActorJWTResponse, error) {
 	n := f.calls.Add(1)
 	f.last.Store(req)
 	if f.gate != nil {
@@ -63,6 +67,26 @@ func (f *fakeClient) MintActorJWT(ctx context.Context, req *ateapipb.MintActorJW
 		ActorJwt:  fmt.Sprintf("jwt-%d", n),
 		ExpiresAt: timestamppb.New(time.Now().Add(time.Duration(req.GetExpirationSeconds()) * time.Second)),
 	}, nil
+}
+
+// newMinter returns a Minter whose client reaches ctl over an in-memory gRPC
+// connection.
+func newMinter(t *testing.T, ctl *fakeControl) *Minter {
+	t.Helper()
+	lis := bufconn.Listen(1 << 20)
+	srv := grpc.NewServer()
+	ateapipb.RegisterControlServer(srv, ctl)
+	go func() { _ = srv.Serve(lis) }()
+	t.Cleanup(srv.Stop)
+
+	conn, err := grpc.NewClient("passthrough:///bufconn",
+		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) { return lis.DialContext(ctx) }),
+		grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("grpc.NewClient: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	return New(ateapipb.NewControlClient(conn))
 }
 
 func jwtSource(lifetime int64, audiences ...string) *ateapipb.ActorJWTSource {
@@ -83,8 +107,8 @@ func wantToken(t *testing.T, m *Minter, ref resources.ActorRef, src *ateapipb.Ac
 
 func TestReuseTokenUntilAThirdOfItsLifetimeRemains(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		client := &fakeClient{}
-		m := New(client)
+		ctl := &fakeControl{}
+		m := newMinter(t, ctl)
 		src := jwtSource(900, "https://b.example", "https://a.example")
 
 		wantToken(t, m, testActor, src, "jwt-1")
@@ -93,7 +117,7 @@ func TestReuseTokenUntilAThirdOfItsLifetimeRemains(t *testing.T) {
 			Audience:          []string{"https://a.example", "https://b.example"},
 			ExpirationSeconds: 900,
 		}
-		if got := client.last.Load(); !proto.Equal(got, want) {
+		if got := ctl.last.Load(); !proto.Equal(got, want) {
 			t.Errorf("MintActorJWT request = %v, want %v", got, want)
 		}
 
@@ -105,7 +129,7 @@ func TestReuseTokenUntilAThirdOfItsLifetimeRemains(t *testing.T) {
 }
 
 func TestKeyOnActorAudiencesAndLifetime(t *testing.T) {
-	m := New(&fakeClient{})
+	m := newMinter(t, &fakeControl{})
 	other := resources.ActorRef{Atespace: "default", Name: "other-actor"}
 
 	wantToken(t, m, testActor, jwtSource(900, "a", "b"), "jwt-1")
@@ -117,21 +141,21 @@ func TestKeyOnActorAudiencesAndLifetime(t *testing.T) {
 }
 
 func TestDoNotCacheErrors(t *testing.T) {
-	client := &fakeClient{err: status.Error(codes.Unavailable, "ateapi is down")}
-	m := New(client)
+	ctl := &fakeControl{err: status.Error(codes.Unavailable, "ateapi is down")}
+	m := newMinter(t, ctl)
 	src := jwtSource(900, "a")
 
 	if _, err := m.Token(context.Background(), testActor, src); status.Code(err) != codes.Unavailable {
 		t.Fatalf("Token = %v, want the Unavailable MintActorJWT error", err)
 	}
-	client.err = nil
+	ctl.err = nil
 	wantToken(t, m, testActor, src, "jwt-2")
 }
 
 func TestCollapseConcurrentMints(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		client := &fakeClient{gate: make(chan struct{})}
-		m := New(client)
+		ctl := &fakeControl{gate: make(chan struct{})}
+		m := newMinter(t, ctl)
 
 		const callers = 8
 		var wg sync.WaitGroup
@@ -143,9 +167,9 @@ func TestCollapseConcurrentMints(t *testing.T) {
 			})
 		}
 		synctest.Wait()
-		close(client.gate)
+		close(ctl.gate)
 		wg.Wait()
-		if calls := client.calls.Load(); calls != 1 {
+		if calls := ctl.calls.Load(); calls != 1 {
 			t.Errorf("MintActorJWT calls = %d, want 1 for %d concurrent callers", calls, callers)
 		}
 	})
@@ -155,8 +179,8 @@ func TestCollapseConcurrentMints(t *testing.T) {
 // still lands in the cache.
 func TestMintOutlivesCanceledCaller(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		client := &fakeClient{gate: make(chan struct{})}
-		m := New(client)
+		ctl := &fakeControl{gate: make(chan struct{})}
+		m := newMinter(t, ctl)
 
 		ctx, cancel := context.WithCancel(context.Background())
 		done := make(chan error, 1)
@@ -170,10 +194,10 @@ func TestMintOutlivesCanceledCaller(t *testing.T) {
 			t.Fatalf("canceled caller got %v, want context.Canceled", err)
 		}
 
-		close(client.gate)
+		close(ctl.gate)
 		synctest.Wait()
 		wantToken(t, m, testActor, jwtSource(900, "a"), "jwt-1")
-		if calls := client.calls.Load(); calls != 1 {
+		if calls := ctl.calls.Load(); calls != 1 {
 			t.Errorf("MintActorJWT calls = %d, want 1", calls)
 		}
 	})
