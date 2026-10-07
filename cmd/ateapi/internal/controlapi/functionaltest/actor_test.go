@@ -81,6 +81,7 @@ func TestCreateActor_Success(t *testing.T) {
 	want := &ateapi.Actor{
 		Metadata:      &ateapi.ResourceMetadata{Name: "id1", Atespace: testAtespace, Version: 1},
 		ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+		SourceTag:     tmpl.GetStatus().GetGoldenSnapshotStatus().GetGoldenTag(),
 		Status: &ateapi.ActorStatus{
 			State:                  ateapi.ActorState_ACTOR_STATE_SUSPENDED,
 			LastAssignedGeneration: 1,
@@ -771,6 +772,7 @@ func TestUpdateActor_Success(t *testing.T) {
 	wantActor := &ateapi.Actor{
 		Metadata:      &ateapi.ResourceMetadata{Name: "id1", Atespace: testAtespace, Version: 2},
 		ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+		SourceTag:     tmpl.GetStatus().GetGoldenSnapshotStatus().GetGoldenTag(),
 		Status: &ateapi.ActorStatus{
 			State:                  ateapi.ActorState_ACTOR_STATE_SUSPENDED,
 			LastAssignedGeneration: 1,
@@ -914,6 +916,7 @@ func TestUpdateActor(t *testing.T) {
 	wantActor := &ateapi.Actor{
 		Metadata:      &ateapi.ResourceMetadata{Name: "id1", Atespace: testAtespace, Version: 2},
 		ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+		SourceTag:     tmpl.GetStatus().GetGoldenSnapshotStatus().GetGoldenTag(),
 		Status: &ateapi.ActorStatus{
 			State:                  ateapi.ActorState_ACTOR_STATE_SUSPENDED,
 			LastAssignedGeneration: 1,
@@ -3206,6 +3209,7 @@ func TestResumeActor(t *testing.T) {
 	want := &ateapi.Actor{
 		Metadata:      &ateapi.ResourceMetadata{Name: name, Atespace: testAtespace},
 		ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+		SourceTag:     tmpl.GetStatus().GetGoldenSnapshotStatus().GetGoldenTag(),
 		Status: &ateapi.ActorStatus{
 			State:                  ateapi.ActorState_ACTOR_STATE_RUNNING,
 			AssignedNode:           "node1",
@@ -4062,6 +4066,7 @@ func TestSuspendActor(t *testing.T) {
 	want := &ateapi.Actor{
 		Metadata:      &ateapi.ResourceMetadata{Name: name, Atespace: testAtespace},
 		ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+		SourceTag:     tmpl.GetStatus().GetGoldenSnapshotStatus().GetGoldenTag(),
 		Status: &ateapi.ActorStatus{
 			State:                  ateapi.ActorState_ACTOR_STATE_SUSPENDED,
 			LastAssignedGeneration: 2,
@@ -4918,6 +4923,7 @@ func TestSuspendActorAsynchronous(t *testing.T) {
 			_, err := tc.client.CreateActor(context.Background(), &ateapi.CreateActorRequest{Actor: &ateapi.Actor{
 				Metadata:      &ateapi.ResourceMetadata{Atespace: testAtespace, Name: name},
 				ActorTemplate: &ateapi.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+				SourceTag:     tmpl.GetStatus().GetGoldenSnapshotStatus().GetGoldenTag(),
 			}})
 			if err != nil {
 				t.Fatalf("CreateActor failed: %v", err)

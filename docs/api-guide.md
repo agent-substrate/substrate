@@ -596,7 +596,7 @@ VOLUMES preserves startup data in mounted volumes and starts new processes on
 restore. ROOTFS preserves the sandbox's root filesystem writes and also starts new
 processes.
 
-`CreateActor` uses an explicit `sourceTag` when supplied; otherwise it resolves the template's golden tag and records that snapshot on the new actor. If the golden tag is not ready yet, the actor starts without a snapshot and cold-boots even if the tag becomes ready before its first resume. The default does not populate the caller-owned `sourceTag` field.
+`CreateActor` uses an explicit `sourceTag` when supplied; otherwise it resolves the template's golden tag, records that snapshot on the new actor, and stamps the golden tag into the stored actor's `sourceTag`. The caller's request is unchanged. If the golden tag is not ready yet, the actor starts without a snapshot and cold-boots even if the tag becomes ready before its first resume.
 
 ### Resumption Lifecycle
 CreateActor fixes the Actor's initial snapshot source at creation. Resume places

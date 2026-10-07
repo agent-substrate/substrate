@@ -1013,6 +1013,13 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 			if _, err := persistence.GetEgressPolicy(ctx, resources.ActorRefFromActor(created)); !errors.Is(err, store.ErrNotFound) {
 				t.Fatalf("actor restored from a tag inherited golden policy: %v, want NotFound", err)
 			}
+			wantTag := ref
+			if scenario == "explicit tag" {
+				wantTag = actor.GetSourceTag()
+			}
+			if got := created.GetSourceTag(); got.GetAtespace() != wantTag.GetAtespace() || got.GetName() != wantTag.GetName() {
+				t.Fatalf("source tag = %v, want %v", got, wantTag)
+			}
 			if scenario == "own snapshot" {
 				uri, err := resources.NewActorSnapshotURI(tmpl.GetSnapshotConfig().GetStorageLocation(), "team-a", created.GetMetadata().GetUid(), "snapshot")
 				if err != nil {
