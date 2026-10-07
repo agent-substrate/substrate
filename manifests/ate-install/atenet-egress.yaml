@@ -187,8 +187,8 @@ data:
               # certificate (see cmd/atenet/internal/router/egress) and returns
               # the SNI rules in dev.ate.policy.egress and the dialed port in
               # dev.ate.egress. Fails closed if the router is down.
-              # Skipped when envoy_substrate_egress_policy_cache already populated
-              # dev.ate.policy.egress.cached in filter state on a cache hit.
+              # Skipped when envoy_substrate_egress_policy_cache already set
+              # dev.ate.policy.egress.skip_callout to "true" in filter state on a cache hit.
               - name: envoy.filters.http.composite
                 typed_config:
                   "@type": type.googleapis.com/envoy.extensions.filters.http.composite.v3.Composite
@@ -202,11 +202,9 @@ data:
                                 name: filter_state
                                 typed_config:
                                   "@type": type.googleapis.com/envoy.extensions.matching.common_inputs.network.v3.FilterStateInput
-                                  key: dev.ate.policy.egress.cached
+                                  key: dev.ate.policy.egress.skip_callout
                               value_match:
-                                safe_regex:
-                                  google_re2: {}
-                                  regex: ".*"
+                                exact: "true"
                         on_match:
                           action:
                             name: composite-action

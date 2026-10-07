@@ -44,6 +44,14 @@ pub const ATE_POLICY_EGRESS: &str = "dev.ate.policy.egress";
 // state directly and share it with upstream.
 pub const ATE_POLICY_EGRESS_CACHED: &str = "dev.ate.policy.egress.cached";
 
+/// Filter state key set to `"true"` on a cache hit so the composite filter can
+/// skip the `ext_proc` callout.
+pub const ATE_POLICY_EGRESS_SKIP_CALLOUT: &str = "dev.ate.policy.egress.skip_callout";
+
+/// Filter state value for [`ATE_POLICY_EGRESS_SKIP_CALLOUT`] when the `ext_proc`
+/// callout should be skipped.
+pub const SKIP_CALLOUT_TRUE: &str = "true";
+
 /// Dynamic metadata namespace for egress attributes set on CONNECT.
 pub const ATE_EGRESS_METADATA_NAMESPACE: &str = "dev.ate.egress";
 
@@ -301,6 +309,10 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for EgressPolicyCacheFilter {
     if let Some((policy, port)) = cached_policy {
       self.has_cached_policy = true;
       envoy_filter.set_filter_state_bytes(ATE_POLICY_EGRESS_CACHED.as_bytes(), policy.as_bytes());
+      envoy_filter.set_filter_state_bytes(
+        ATE_POLICY_EGRESS_SKIP_CALLOUT.as_bytes(),
+        SKIP_CALLOUT_TRUE.as_bytes(),
+      );
       envoy_filter.set_dynamic_metadata_string(
         ATE_EGRESS_METADATA_NAMESPACE,
         ATE_EGRESS_DIALED_PORT_KEY,
@@ -642,6 +654,13 @@ mod tests {
       .expect_set_filter_state_bytes()
       .withf(move |key, val| {
         key == ATE_POLICY_EGRESS_CACHED.as_bytes() && val == expected_policy.as_bytes()
+      })
+      .return_const(true)
+      .once();
+    mock_filter
+      .expect_set_filter_state_bytes()
+      .withf(|key, val| {
+        key == ATE_POLICY_EGRESS_SKIP_CALLOUT.as_bytes() && val == SKIP_CALLOUT_TRUE.as_bytes()
       })
       .return_const(true)
       .once();

@@ -34,6 +34,7 @@ When an actor opens a `CONNECT` tunnel on the outer listener:
    - **Fresh hit (`stored_at.elapsed() <= cache_ttl`)**:
      - Writes the cached policy JSON to filter state under key
        `dev.ate.policy.egress.cached`.
+     - Sets filter state key `dev.ate.policy.egress.skip_callout` to `"true"`.
      - Sets `has_cached_policy = true` on the per-stream
        `EgressPolicyCacheFilter`.
      - Sets `dev.ate.egress:dialed_port` in the dynamic metadata, so that inner
@@ -46,9 +47,9 @@ When an actor opens a `CONNECT` tunnel on the outer listener:
    - **Cache miss (or missing certificate digest / destination port)**:
      - Increments the `ate_egress.connect_cache_miss` counter.
 2. Subsequent filters in the outer HTTP filter chain act on the result:
-   - `envoy.filters.http.composite` checks for the presence of
-     `dev.ate.policy.egress.cached` in filter state and invokes
-     `envoy.filters.http.ext_proc` only when it is absent.
+   - `envoy.filters.http.composite` checks whether
+     `dev.ate.policy.egress.skip_callout` equals `"true"` in filter state and
+     invokes `envoy.filters.http.ext_proc` only when it does not.
    - `envoy.filters.http.set_filter_state` copies either
      `%DYNAMIC_METADATA(dev.ate.policy.egress)%` (on a cache miss, populated by
      `ext_proc`) or `%FILTER_STATE(dev.ate.policy.egress.cached:PLAIN)%` (on a
@@ -162,11 +163,9 @@ filter before the conditional `ext_proc` composite filter and the post-`ext_proc
                   name: filter_state
                   typed_config:
                     "@type": type.googleapis.com/envoy.extensions.matching.common_inputs.network.v3.FilterStateInput
-                    key: dev.ate.policy.egress.cached
+                    key: dev.ate.policy.egress.skip_callout
                 value_match:
-                  safe_regex:
-                    google_re2: {}
-                    regex: ".*"
+                  exact: "true"
           on_match:
             action:
               name: composite-action
