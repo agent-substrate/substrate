@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/actorlock"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/ateomstats"
 	"github.com/agent-substrate/substrate/internal/ateomstats/ateomstatstest"
@@ -52,7 +53,7 @@ func hostWithEpoch(s *AteomService, epoch time.Time, running bool) *hostedActor 
 func TestSweepStampsEpochAndDiscoveryServesIt(t *testing.T) {
 	s := newStatsService(t, healthyCgroup)
 	epoch := time.Unix(1700, 0)
-	hostWithEpoch(s, epoch, true)
+	h := hostWithEpoch(s, epoch, true)
 
 	before, err := s.GetActiveWorkloadStats(context.Background(), &ateompb.GetActiveWorkloadStatsRequest{})
 	if err != nil {
@@ -62,13 +63,13 @@ func TestSweepStampsEpochAndDiscoveryServesIt(t *testing.T) {
 		t.Errorf("before a sweep: source %v epoch %d, want pending with epoch %d", got.GetSource(), got.GetEpochUnixNano(), epoch.UnixNano())
 	}
 
-	swept := s.sweepUsage(context.Background())
+	s.sweepUsage(context.Background())
 	after, err := s.GetActiveWorkloadStats(context.Background(), &ateompb.GetActiveWorkloadStatsRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := after.GetSamples()[0]
-	if got != swept[0] {
+	if got != h.usage.Latest() {
 		t.Error("discovery read did not serve the swept sample")
 	}
 	if got.GetEpochUnixNano() != epoch.UnixNano() || got.GetCpuUsageUsec() != healthyCPUUsec {
@@ -126,6 +127,26 @@ func TestRecordFinalIfEnded(t *testing.T) {
 	s.recordFinalIfEnded(context.Background(), h)
 	if got := rec.Kinds(); len(got) != 1 || got[0] != ateattr.StatsKindFinal {
 		t.Errorf("records after unhosting = %v, want one final", got)
+	}
+}
+
+// TestGracefulShutdownWritesFinal pins that the drain ends each hosted
+// activation with a final record, read before its containers are killed.
+func TestGracefulShutdownWritesFinal(t *testing.T) {
+	s := newStatsService(t, healthyCgroup)
+	s.inFlight = actorlock.NewInFlight()
+	rec := withUsageRecorder(s)
+	h := hostWithEpoch(s, time.Now(), true)
+	s.actorsMu.Lock()
+	h.session = &workloadSession{}
+	s.actorsMu.Unlock()
+
+	s.gracefulShutdown(context.Background())
+	if got := rec.Kinds(); len(got) != 1 || got[0] != ateattr.StatsKindFinal {
+		t.Fatalf("records = %v, want one final", got)
+	}
+	if got := rec.Sources(); got[0] != ateattr.StatsSourceCgroup {
+		t.Errorf("final record source = %q, want measured", got[0])
 	}
 }
 
@@ -194,15 +215,11 @@ func TestSweepWaitsForInitialAndStopsAtFinal(t *testing.T) {
 	rec := withUsageRecorder(s)
 	h := hostWithEpoch(s, time.Now(), false)
 
-	if got := s.sweepUsage(context.Background()); len(got) != 0 {
-		t.Fatalf("sweep before the initial reading = %v, want none", got)
-	}
+	s.sweepUsage(context.Background())
 	s.recordInitial(context.Background(), h)
 	s.sweepUsage(context.Background())
 	s.recordFinal(context.Background(), h)
-	if got := s.sweepUsage(context.Background()); len(got) != 0 {
-		t.Errorf("sweep after the final record = %v, want none", got)
-	}
+	s.sweepUsage(context.Background())
 	want := []string{ateattr.StatsKindInitial, ateattr.StatsKindPeriodic, ateattr.StatsKindFinal}
 	if got := rec.Kinds(); !slices.Equal(got, want) {
 		t.Errorf("records = %v, want %v", got, want)

@@ -404,6 +404,13 @@ func (s *AteomService) gracefulShutdown(ctx context.Context) {
 		return
 	}
 
+	// The kill below ends every activation still hosted. Read each while its
+	// sandbox runs, and write its final record once the containers are gone.
+	hosted := s.hostedActors()
+	for _, h := range hosted {
+		s.readFinal(ctx, h)
+	}
+
 	var wg sync.WaitGroup
 	for _, session := range sessions {
 		for _, name := range session.containers {
@@ -417,6 +424,9 @@ func (s *AteomService) gracefulShutdown(ctx context.Context) {
 		}
 	}
 	wg.Wait()
+	for _, h := range hosted {
+		s.recordFinal(ctx, h)
+	}
 
 	slog.InfoContext(ctx, "Shutting down")
 }

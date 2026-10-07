@@ -25,7 +25,6 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
-	"github.com/google/go-cmp/cmp/cmpopts"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/testing/protocmp"
 
@@ -334,32 +333,28 @@ func TestGetActiveWorkloadStatsTransition(t *testing.T) {
 	tests := []struct {
 		name string
 		to   *resources.ActorAttribution
-		// want is the expected samples, observed_at zeroed.
-		want []*ateompb.WorkloadStatsSample
 	}{
 		// Resumed on another template under the same UID: the numbers belong
 		// to the new activation, which starts with its own initial reading.
-		{name: "re-hosted on another template", to: &otherTemplate, want: nil},
+		{name: "re-hosted on another template", to: &otherTemplate},
 		// Gone, or replaced by an actor this read did not snapshot.
-		{name: "to another actor", to: &otherActor, want: nil},
-		{name: "to available", to: nil, want: nil},
+		{name: "to another actor", to: &otherActor},
+		{name: "to available", to: nil},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newStatsService(t, healthyCgroup)
+			rec := withUsageRecorder(s)
 			setHostedActor(s, &testActor)
 			s.readSandboxCgroup = func(dir string) (cgroupstats.Sample, error) {
 				setHostedActor(s, tc.to)
 				return cgroupstats.Read(dir)
 			}
 
-			samples := s.sweepUsage(context.Background())
-			for _, sample := range samples {
-				sample.ObservedAtUnixNano = 0
-			}
-			if diff := cmp.Diff(tc.want, samples, protocmp.Transform(), cmpopts.EquateEmpty()); diff != "" {
-				t.Errorf("sweepUsage() during transition mismatch (-want +got):\n%s", diff)
+			s.sweepUsage(context.Background())
+			if got := rec.Kinds(); len(got) != 0 {
+				t.Errorf("records during transition = %v, want none", got)
 			}
 			// Nothing read for the old activation is served for the new one.
 			if tc.to != nil {

@@ -152,12 +152,10 @@ func (s *AteomService) GetActiveWorkloadStats(ctx context.Context, req *ateompb.
 }
 
 // sweepUsage samples every hosted actor between its initial reading and its
-// final record, stores each sample and writes its periodic record, and returns
-// the samples. Same lock discipline as GetWorkloadStats, for the same reasons.
-func (s *AteomService) sweepUsage(ctx context.Context) []*ateompb.WorkloadStatsSample {
-	hosted := s.hostedActors()
-	samples := make([]*ateompb.WorkloadStatsSample, 0, len(hosted))
-	for _, h := range hosted {
+// final record, and stores each sample and writes its periodic record. Same
+// lock discipline as GetWorkloadStats, for the same reasons.
+func (s *AteomService) sweepUsage(ctx context.Context) {
+	for _, h := range s.hostedActors() {
 		if !h.usage.Sampling() {
 			continue
 		}
@@ -179,9 +177,7 @@ func (s *AteomService) sweepUsage(ctx context.Context) []*ateompb.WorkloadStatsS
 			continue
 		}
 		h.usage.Periodic(sample, func() { s.usage.Emit(ctx, ateattr.StatsKindPeriodic, sample) })
-		samples = append(samples, sample)
 	}
-	return samples
 }
 
 // recordInitial samples a new activation once its sandbox is up and writes its
