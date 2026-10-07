@@ -398,9 +398,10 @@ message Actor {
   // +k8s:optional
   Selector worker_selector = 5;
 
-  // The tag specified by the caller at CreateActor to seed this Actor from an
-  // ActorSnapshot. Unset if the Actor was not created from a snapshot. Set
-  // once at creation and immutable afterward.
+  // The tag this Actor was seeded from, an ActorSnapshot's tag. Set at
+  // CreateActor: to the caller-specified tag when one is supplied, otherwise
+  // defaulted to the template's golden tag when the template has one. Unset
+  // if the Actor was not created from a snapshot. Immutable afterward.
   //
   // +k8s:optional
   // +k8s:subfield(atespace)=+k8s:required

@@ -862,6 +862,13 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 			if got := created.GetStatus(); got.GetExternalSnapshot().GetSnapshotUri() != tag.GetStatus().GetSnapshot().GetSnapshotUri() || got.GetExternalSnapshot().GetActorTemplateUid() != tmpl.GetMetadata().GetUid() {
 				t.Fatalf("incorrect initial status: %v", got)
 			}
+			wantTag := ref
+			if scenario == "explicit tag" {
+				wantTag = actor.GetSourceTag()
+			}
+			if got := created.GetSourceTag(); got.GetAtespace() != wantTag.GetAtespace() || got.GetName() != wantTag.GetName() {
+				t.Fatalf("source tag = %v, want %v", got, wantTag)
+			}
 			if scenario == "own snapshot" {
 				uri, err := resources.NewActorSnapshotURI(tmpl.GetSnapshotConfig().GetStorageLocation(), "team-a", created.GetMetadata().GetUid(), "snapshot")
 				if err != nil {
