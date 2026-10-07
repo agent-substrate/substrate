@@ -351,7 +351,3 @@ spec:
     port: 8444
     targetPort: 8444
     protocol: TCP
-  - name: status
-    port: 4040
-    targetPort: status
-    protocol: TCP
