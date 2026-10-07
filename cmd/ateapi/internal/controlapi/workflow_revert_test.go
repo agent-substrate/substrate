@@ -342,6 +342,9 @@ func TestEnsureRevertedFinalized_NoObjectStore(t *testing.T) {
 		Status: &ateapipb.ActorStatus{
 			State:                 ateapipb.ActorState_ACTOR_STATE_REVERTING,
 			InProgressSnapshotUri: someActorSnapshotURI(t, testStorageLocation, "team-a", "abandoned"),
+			ActorVolumes: []*ateapipb.ExternalVolume{
+				recordedVolume("vol1", "storage-vol-1", "mock", "node-1"),
+			},
 		},
 	})
 
@@ -359,5 +362,8 @@ func TestEnsureRevertedFinalized_NoObjectStore(t *testing.T) {
 	}
 	if got := finalized.GetStatus().GetInProgressSnapshotUri(); got != "" {
 		t.Errorf("in-progress snapshot uri = %q, want empty", got)
+	}
+	if got := finalized.GetStatus().GetActorVolumes()[0].GetAttachedNode(); got != "" {
+		t.Errorf("attached_node = %q, want empty", got)
 	}
 }

@@ -75,7 +75,7 @@ func (w *ActorWorkflow) DeleteActor(ctx context.Context, actorRef resources.Acto
 		atletTerminatedErr = fmt.Errorf("while terminating atelet: %w", err)
 		errs = append(errs, atletTerminatedErr)
 	}
-	if err := w.ensureVolumesDetachedForDelete(ctx, actor, actorTemplate); err != nil {
+	if err := w.ensureVolumesDetachedForDelete(ctx, actor); err != nil {
 		volumesDetachedErr = fmt.Errorf("while detaching volumes: %w", err)
 		errs = append(errs, volumesDetachedErr)
 	}
@@ -209,12 +209,13 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 	return nil
 }
 
-// ensureVolumesDetachedForDelete detaches external volumes.
-func (w *ActorWorkflow) ensureVolumesDetachedForDelete(ctx context.Context, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (err error) {
+// ensureVolumesDetachedForDelete detaches the actor's external volumes from
+// the nodes their attached_node records.
+func (w *ActorWorkflow) ensureVolumesDetachedForDelete(ctx context.Context, actor *ateapipb.Actor) (err error) {
 	ctx, done := stepSpan(ctx, "DetachVolumesForDelete")
 	defer func() { err = done(err) }()
 
-	return detachActorVolumes(ctx, w.store, w.pluginRegistry, actor, actorTemplate, "delete")
+	return detachActorVolumes(ctx, w.pluginRegistry, actor, "delete")
 }
 
 // ensureWorkerReleased releases the worker assigned to the actor.

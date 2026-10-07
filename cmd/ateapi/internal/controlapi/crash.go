@@ -139,7 +139,9 @@ func crashActor(ctx context.Context, st crashActorStore, actorRef resources.Acto
 		// later DeleteActor or RevertActor can delete what they name: each is
 		// the only pointer to it, so clearing them here would leak the objects
 		// for good; failed workflow steps must never promote either of them to an
-		// ExternalSnapshot or to LocalSnapshot.
+		// ExternalSnapshot or to LocalSnapshot. The volumes keep their
+		// attached_node for the same reason: it is the only record of the node
+		// a later DeleteActor or RevertActor must detach them from.
 		toUpdate.Status.WorkerAssignment = nil
 		return nil
 	})
