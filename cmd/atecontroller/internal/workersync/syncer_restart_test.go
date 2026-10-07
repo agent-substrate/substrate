@@ -16,6 +16,7 @@ package workersync
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -100,6 +101,81 @@ func TestSyncer_RaisesEpochOnAteomRestart(t *testing.T) {
 				t.Errorf("worker version = %d after an unchanged pass, want %d", v, version)
 			}
 		})
+	}
+}
+
+func TestSyncer_UpdatesChangedIP(t *testing.T) {
+	ctx := context.Background()
+	ns, podName, poolName := "ns-syncer-ip", "worker-ip-1", "pool1"
+
+	for _, tc := range []struct {
+		name  string
+		ready bool
+	}{
+		{name: "Ready", ready: true},
+		// The new IP is written before the pod is Ready again.
+		{name: "not Ready", ready: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			api := newFakeControl()
+			s, pods, _ := setupReconcileTest(t, api, workerPool(ns, poolName, "gvisor", nil))
+			pod := withAteomRestarts(workerPod(ns, podName, poolName, testPodUID, "10.0.0.1"), 0)
+			key := seedPod(t, pods, pod)
+			mustReconcile(t, ctx, s, key)
+
+			changed := withAteomRestarts(pod.DeepCopy(), 1)
+			changed.Status.PodIP = "10.0.0.9"
+			changed.Status.PodIPs = []corev1.PodIP{{IP: "10.0.0.9"}}
+			if !tc.ready {
+				changed.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionFalse}}
+			}
+			if err := pods.Update(changed); err != nil {
+				t.Fatalf("updating pod: %v", err)
+			}
+			mustReconcile(t, ctx, s, key)
+			got := api.get(testPodUID)
+			if !slices.Equal(got.GetIps(), []string{"10.0.0.9"}) {
+				t.Errorf("ips after the pod's IP changed = %v, want [10.0.0.9]", got.GetIps())
+			}
+			if got.GetEpoch() != 2 {
+				t.Errorf("epoch after the pod's IP changed = %d, want 2", got.GetEpoch())
+			}
+
+			// Unchanged on the next pass: no further write.
+			version := got.GetMetadata().GetVersion()
+			mustReconcile(t, ctx, s, key)
+			if v := api.get(testPodUID).GetMetadata().GetVersion(); v != version {
+				t.Errorf("worker version = %d after an unchanged pass, want %d", v, version)
+			}
+		})
+	}
+}
+
+func TestSyncer_NotReadyPodWithoutIPKeepsIP(t *testing.T) {
+	ctx := context.Background()
+	ns, podName, poolName := "ns-syncer-noip", "worker-noip-1", "pool1"
+
+	api := newFakeControl()
+	s, pods, _ := setupReconcileTest(t, api, workerPool(ns, poolName, "gvisor", nil))
+	pod := withAteomRestarts(workerPod(ns, podName, poolName, testPodUID, "10.0.0.1"), 0)
+	key := seedPod(t, pods, pod)
+	mustReconcile(t, ctx, s, key)
+
+	// Between sandboxes the pod reports no IP; the registered one is kept.
+	recreating := withAteomRestarts(pod.DeepCopy(), 1)
+	recreating.Status.PodIP = ""
+	recreating.Status.PodIPs = nil
+	recreating.Status.Conditions = nil
+	if err := pods.Update(recreating); err != nil {
+		t.Fatalf("updating pod: %v", err)
+	}
+	mustReconcile(t, ctx, s, key)
+	got := api.get(testPodUID)
+	if !slices.Equal(got.GetIps(), []string{"10.0.0.1"}) {
+		t.Errorf("ips while the pod reports none = %v, want [10.0.0.1] kept", got.GetIps())
+	}
+	if got.GetEpoch() != 2 {
+		t.Errorf("epoch = %d, want 2 raised regardless", got.GetEpoch())
 	}
 }
 

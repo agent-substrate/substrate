@@ -17,6 +17,7 @@ package controlapi
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -37,15 +38,40 @@ func withEpoch(epoch int64) func(*ateapipb.Worker) {
 }
 
 // seedEpochWorker stores apiWorkerName at epoch, with observed as the epoch
-// its earlier Actors were last released for.
+// its earlier Actors were last released for, and its ips observed.
 func seedEpochWorker(t *testing.T, ctx context.Context, persistence store.Interface, epoch, observed int64) {
 	t.Helper()
 	seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName, withEpoch(epoch), func(w *ateapipb.Worker) {
 		w.Status = &ateapipb.WorkerStatus{
-			State:         ateapipb.WorkerState_WORKER_STATE_ACTIVE,
-			ObservedEpoch: observed,
+			State:                 ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+			ObservedEpoch:         observed,
+			IpsGeneration:         1,
+			ObservedIpsGeneration: 1,
 		}
 	}))
+}
+
+// assertIPsObserved checks that the Worker's observed_ips_generation has
+// caught up with its ips_generation, or, if !want, that it has not.
+func assertIPsObserved(t *testing.T, ctx context.Context, persistence store.Interface, want bool) {
+	t.Helper()
+	status := mustGetWorker(t, ctx, persistence).GetStatus()
+	if got := status.GetObservedIpsGeneration() >= status.GetIpsGeneration(); got != want {
+		t.Errorf("observed_ips_generation = %d with ips_generation %d: observed = %t, want %t",
+			status.GetObservedIpsGeneration(), status.GetIpsGeneration(), got, want)
+	}
+}
+
+// changeIPs sends the UpdateWorker the syncer sends when the worker pod's IPs
+// change.
+func changeIPs(t *testing.T, ctx context.Context, svc *RPCService, persistence store.Interface, ips ...string) {
+	t.Helper()
+	_, err := svc.UpdateWorker(ctx, &ateapipb.UpdateWorkerRequest{
+		Worker: updateFrom(mustGetWorker(t, ctx, persistence), func(w *ateapipb.Worker) { w.Ips = ips }),
+	})
+	if err != nil {
+		t.Fatalf("UpdateWorker() changing ips to %v failed: %v", ips, err)
+	}
 }
 
 // raiseEpoch sends the UpdateWorker the syncer sends when the worker pod's
@@ -97,26 +123,42 @@ func seedRunningActor(t *testing.T, ctx context.Context, persistence store.Inter
 	assignAPIWorker(t, ctx, persistence, apiWorkerName, actor.GetMetadata().GetUid())
 }
 
-func TestBindActorToWorker_StampsWorkerEpoch(t *testing.T) {
+func TestBindActorToWorker_StampsWorkerEpochAndIP(t *testing.T) {
 	ctx := context.Background()
 	_, persistence := newWorkerAPIService(t)
 	seedEpochWorker(t, ctx, persistence, 4, 4)
 
 	assignment := newAPIAssignment("uid-1")
 	assignment.WorkerEpoch = 99
+	assignment.WorkerPodIps = []string{"10.9.9.9"}
+	assignment.WorkerIpsGeneration = 99
 	if err := persistence.BindActorToWorker(ctx, apiWorkerName, assignment, nil); err != nil {
 		t.Fatalf("BindActorToWorker() failed: %v", err)
 	}
 	if got := assignment.GetWorkerEpoch(); got != 4 {
 		t.Errorf("assignment worker_epoch read back = %d, want 4", got)
 	}
-	if got := firstAssignment(t, persistence, apiWorkerName).GetWorkerEpoch(); got != 4 {
+	if got := assignment.GetWorkerPodIps(); !slices.Equal(got, []string{"10.1.2.3"}) {
+		t.Errorf("assignment worker_pod_ips read back = %v, want [10.1.2.3]", got)
+	}
+	if got := assignment.GetWorkerIpsGeneration(); got != 1 {
+		t.Errorf("assignment worker_ips_generation read back = %d, want 1", got)
+	}
+	stored := firstAssignment(t, persistence, apiWorkerName)
+	if got := stored.GetWorkerEpoch(); got != 4 {
 		t.Errorf("stored worker_epoch = %d, want 4", got)
+	}
+	if got := stored.GetWorkerPodIps(); !slices.Equal(got, []string{"10.1.2.3"}) {
+		t.Errorf("stored worker_pod_ips = %v, want [10.1.2.3]", got)
+	}
+	if got := stored.GetWorkerIpsGeneration(); got != 1 {
+		t.Errorf("stored worker_ips_generation = %d, want 1", got)
 	}
 }
 
-// A new Worker hosts nothing, so its first epoch is observed from the start.
-func TestCreateWorker_ObservesInitialEpoch(t *testing.T) {
+// A new Worker hosts nothing, so its first epoch and ips are observed from the
+// start.
+func TestCreateWorker_ObservesInitialEpochAndIP(t *testing.T) {
 	ctx := context.Background()
 	svc, _ := newWorkerAPIService(t)
 
@@ -126,6 +168,31 @@ func TestCreateWorker_ObservesInitialEpoch(t *testing.T) {
 	}
 	if got.GetEpoch() != 3 || got.GetStatus().GetObservedEpoch() != 3 {
 		t.Errorf("epoch = %d, observed_epoch = %d, want both 3", got.GetEpoch(), got.GetStatus().GetObservedEpoch())
+	}
+	if needsAssignmentReconcile(got) {
+		t.Errorf("needsAssignmentReconcile(%v) = true, want a new Worker already observed", got.GetStatus())
+	}
+}
+
+// Changing the ips only records them and raises ips_generation; the rewrite is
+// the reconciler's.
+func TestUpdateWorker_IPChangeLeavesActors(t *testing.T) {
+	ctx := context.Background()
+	svc, persistence := newWorkerAPIService(t)
+	seedEpochWorker(t, ctx, persistence, 1, 1)
+	seedRunningActor(t, ctx, persistence)
+
+	changeIPs(t, ctx, svc, persistence, "10.9.9.9")
+
+	worker := mustGetWorker(t, ctx, persistence)
+	if !slices.Equal(worker.GetIps(), []string{"10.9.9.9"}) {
+		t.Errorf("ips = %v, want [10.9.9.9]", worker.GetIps())
+	}
+	if worker.GetStatus().GetIpsGeneration() != 2 || worker.GetStatus().GetObservedIpsGeneration() != 1 {
+		t.Errorf("ips_generation = %d, observed_ips_generation = %d, want 2 and 1", worker.GetStatus().GetIpsGeneration(), worker.GetStatus().GetObservedIpsGeneration())
+	}
+	if got := mustGetActor(t, ctx, persistence).GetStatus().GetWorkerAssignment().GetWorkerPodIps(); !slices.Equal(got, []string{"10.1.2.3"}) {
+		t.Errorf("actor worker_pod_ips = %v, want [10.1.2.3]", got)
 	}
 }
 
@@ -142,6 +209,9 @@ func TestUpdateWorker_RaisedEpochLeavesActors(t *testing.T) {
 	}
 	if updated.GetEpoch() != 2 || updated.GetStatus().GetObservedEpoch() != 1 {
 		t.Errorf("epoch = %d, observed_epoch = %d, want 2 and 1", updated.GetEpoch(), updated.GetStatus().GetObservedEpoch())
+	}
+	if got := updated.GetStatus().GetIpsGeneration(); got != 1 {
+		t.Errorf("ips_generation = %d, want 1: the ips did not change", got)
 	}
 	if got := mustGetActor(t, ctx, persistence).GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_RUNNING {
 		t.Errorf("actor state = %v, want RUNNING", got)
@@ -559,9 +629,422 @@ func TestReconcileAssignments_WorkerGone(t *testing.T) {
 	mustReconcileAssignments(t, ctx, persistence)
 }
 
-// The Actor's assignment carries the epoch the bind read under the Worker's
-// row lock, not the one in the scheduler's cache.
-func TestAssignWorkerAttempt_StampsWorkerEpoch(t *testing.T) {
+func TestReconcileAssignments_RewritesActorIP(t *testing.T) {
+	ctx := context.Background()
+	svc, persistence := newWorkerAPIService(t)
+	seedEpochWorker(t, ctx, persistence, 1, 1)
+	seedRunningActor(t, ctx, persistence)
+	changeIPs(t, ctx, svc, persistence, "10.9.9.9")
+
+	mustReconcileAssignments(t, ctx, persistence)
+
+	got := mustGetActor(t, ctx, persistence)
+	if ips := got.GetStatus().GetWorkerAssignment().GetWorkerPodIps(); !slices.Equal(ips, []string{"10.9.9.9"}) {
+		t.Errorf("actor worker_pod_ips = %v, want [10.9.9.9]", ips)
+	}
+	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+		t.Errorf("actor state = %v, want RUNNING: its sandbox survives an ip change", got.GetStatus().GetState())
+	}
+	if a := firstAssignment(t, persistence, apiWorkerName); a == nil {
+		t.Error("assignment released, want it kept")
+	} else if !slices.Equal(a.GetWorkerPodIps(), []string{"10.9.9.9"}) {
+		t.Errorf("assignment worker_pod_ips = %v, want [10.9.9.9]", a.GetWorkerPodIps())
+	}
+	assertIPsObserved(t, ctx, persistence, true)
+	worker := mustGetWorker(t, ctx, persistence)
+	if worker.GetStatus().GetObservedEpoch() != 1 {
+		t.Errorf("observed_epoch = %d, want 1 left alone", worker.GetStatus().GetObservedEpoch())
+	}
+
+	// Observed on the next pass: no further write.
+	version := worker.GetMetadata().GetVersion()
+	mustReconcileAssignments(t, ctx, persistence)
+	if v := mustGetWorker(t, ctx, persistence).GetMetadata().GetVersion(); v != version {
+		t.Errorf("worker version = %d after an observed pass, want %d", v, version)
+	}
+}
+
+func TestReconcileAssignments_RewritesIPChangedBack(t *testing.T) {
+	ctx := context.Background()
+	svc, persistence := newWorkerAPIService(t)
+	seedEpochWorker(t, ctx, persistence, 1, 1)
+	seedRunningActor(t, ctx, persistence)
+
+	changeIPs(t, ctx, svc, persistence, "10.9.9.9")
+	mustReconcileAssignments(t, ctx, persistence)
+	changeIPs(t, ctx, svc, persistence, "10.1.2.3")
+	mustReconcileAssignments(t, ctx, persistence)
+
+	if ips := mustGetActor(t, ctx, persistence).GetStatus().GetWorkerAssignment().GetWorkerPodIps(); !slices.Equal(ips, []string{"10.1.2.3"}) {
+		t.Errorf("actor worker_pod_ips = %v, want [10.1.2.3]", ips)
+	}
+	if ips := firstAssignment(t, persistence, apiWorkerName).GetWorkerPodIps(); !slices.Equal(ips, []string{"10.1.2.3"}) {
+		t.Errorf("assignment worker_pod_ips = %v, want [10.1.2.3]", ips)
+	}
+}
+
+// failingSetAssignmentIPsStore fails every rewrite of an assignment row's
+// worker_pod_ips.
+type failingSetAssignmentIPsStore struct {
+	store.Interface
+}
+
+func (failingSetAssignmentIPsStore) SetAssignmentWorkerPodIPs(context.Context, string, string, []string, int64) error {
+	return errors.New("row rewrite failed")
+}
+
+// A pass that rewrites the Actor but fails on its row is redone: the retry
+// skips the Actor, which already holds the ips, and rewrites the row.
+func TestReconcileAssignments_FailedRowRewriteRetried(t *testing.T) {
+	ctx := context.Background()
+	svc, persistence := newWorkerAPIService(t)
+	seedEpochWorker(t, ctx, persistence, 1, 1)
+	seedRunningActor(t, ctx, persistence)
+	changeIPs(t, ctx, svc, persistence, "10.9.9.9")
+
+	failing := NewWorkerWorkflow(failingSetAssignmentIPsStore{Interface: persistence})
+	if err := failing.ReconcileAssignments(ctx, apiWorkerName); err == nil {
+		t.Fatal("ReconcileAssignments() = nil error, want the row rewrite failure reported")
+	}
+	actor := mustGetActor(t, ctx, persistence)
+	if ips := actor.GetStatus().GetWorkerAssignment().GetWorkerPodIps(); !slices.Equal(ips, []string{"10.9.9.9"}) {
+		t.Errorf("actor worker_pod_ips = %v, want [10.9.9.9] rewritten before the row", ips)
+	}
+	assertIPsObserved(t, ctx, persistence, false)
+
+	mustReconcileAssignments(t, ctx, persistence)
+	if ips := firstAssignment(t, persistence, apiWorkerName).GetWorkerPodIps(); !slices.Equal(ips, []string{"10.9.9.9"}) {
+		t.Errorf("assignment worker_pod_ips = %v, want [10.9.9.9]", ips)
+	}
+	if got := mustGetActor(t, ctx, persistence); got.GetMetadata().GetVersion() != actor.GetMetadata().GetVersion() {
+		t.Errorf("actor version = %d, want %d: it already held the ips", got.GetMetadata().GetVersion(), actor.GetMetadata().GetVersion())
+	}
+	assertIPsObserved(t, ctx, persistence, true)
+}
+
+// A pass that fails between the Actor and its row leaves the Actor at the new
+// ips and the row at the old. If the ips then change back, the row matches them
+// but the Actor does not, and it is still rewritten.
+func TestReconcileAssignments_FailedRowRewriteThenIPChangedBack(t *testing.T) {
+	ctx := context.Background()
+	svc, persistence := newWorkerAPIService(t)
+	seedEpochWorker(t, ctx, persistence, 1, 1)
+	seedRunningActor(t, ctx, persistence)
+	changeIPs(t, ctx, svc, persistence, "10.9.9.9")
+
+	failing := NewWorkerWorkflow(failingSetAssignmentIPsStore{Interface: persistence})
+	if err := failing.ReconcileAssignments(ctx, apiWorkerName); err == nil {
+		t.Fatal("ReconcileAssignments() = nil error, want the row rewrite failure reported")
+	}
+	changeIPs(t, ctx, svc, persistence, "10.1.2.3")
+	mustReconcileAssignments(t, ctx, persistence)
+
+	if ips := mustGetActor(t, ctx, persistence).GetStatus().GetWorkerAssignment().GetWorkerPodIps(); !slices.Equal(ips, []string{"10.1.2.3"}) {
+		t.Errorf("actor worker_pod_ips = %v, want [10.1.2.3]", ips)
+	}
+	if ips := firstAssignment(t, persistence, apiWorkerName).GetWorkerPodIps(); !slices.Equal(ips, []string{"10.1.2.3"}) {
+		t.Errorf("assignment worker_pod_ips = %v, want [10.1.2.3]", ips)
+	}
+}
+
+// A dual-stack pod's second family is written to its Actors like any other
+// change of ips.
+func TestReconcileAssignments_RewritesFamilyAdded(t *testing.T) {
+	ctx := context.Background()
+	svc, persistence := newWorkerAPIService(t)
+	seedEpochWorker(t, ctx, persistence, 1, 1)
+	seedRunningActor(t, ctx, persistence)
+	changeIPs(t, ctx, svc, persistence, "10.1.2.3", "fd00::1")
+
+	mustReconcileAssignments(t, ctx, persistence)
+
+	want := []string{"10.1.2.3", "fd00::1"}
+	if ips := mustGetActor(t, ctx, persistence).GetStatus().GetWorkerAssignment().GetWorkerPodIps(); !slices.Equal(ips, want) {
+		t.Errorf("actor worker_pod_ips = %v, want %v", ips, want)
+	}
+	if ips := firstAssignment(t, persistence, apiWorkerName).GetWorkerPodIps(); !slices.Equal(ips, want) {
+		t.Errorf("assignment worker_pod_ips = %v, want %v", ips, want)
+	}
+	assertIPsObserved(t, ctx, persistence, true)
+}
+
+// An Actor bound while the ips were briefly different holds those ips after
+// they change back to the ones last observed. The raised ips_generation still
+// has it rewritten.
+func TestReconcileAssignments_RewritesActorBoundToIPsSinceChangedBack(t *testing.T) {
+	ctx := context.Background()
+	svc, persistence := newWorkerAPIService(t)
+	seedEpochWorker(t, ctx, persistence, 1, 1)
+
+	changeIPs(t, ctx, svc, persistence, "10.9.9.9")
+	actor := seedAPIActor(t, ctx, persistence, ateapipb.ActorState_ACTOR_STATE_RUNNING, func(a *ateapipb.Actor) {
+		a.Status.WorkerAssignment.WorkerPodIps = []string{"10.9.9.9"}
+		a.Status.WorkerAssignment.WorkerIpsGeneration = 2
+	})
+	assignAPIWorker(t, ctx, persistence, apiWorkerName, actor.GetMetadata().GetUid())
+	changeIPs(t, ctx, svc, persistence, "10.1.2.3")
+
+	mustReconcileAssignments(t, ctx, persistence)
+
+	if ips := mustGetActor(t, ctx, persistence).GetStatus().GetWorkerAssignment().GetWorkerPodIps(); !slices.Equal(ips, []string{"10.1.2.3"}) {
+		t.Errorf("actor worker_pod_ips = %v, want [10.1.2.3]", ips)
+	}
+	if ips := firstAssignment(t, persistence, apiWorkerName).GetWorkerPodIps(); !slices.Equal(ips, []string{"10.1.2.3"}) {
+		t.Errorf("assignment worker_pod_ips = %v, want [10.1.2.3]", ips)
+	}
+	assertIPsObserved(t, ctx, persistence, true)
+}
+
+// A raised epoch and a changed ip are reconciled in one pass: the Actor placed
+// before the restart is crashed, and the one placed after is pointed at the
+// new ip.
+func TestReconcileAssignments_EpochRaiseAndIPChange(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		placedAfter bool
+		wantState   ateapipb.ActorState
+	}{
+		{name: "placed before", placedAfter: false, wantState: ateapipb.ActorState_ACTOR_STATE_CRASHED},
+		{name: "placed after", placedAfter: true, wantState: ateapipb.ActorState_ACTOR_STATE_RUNNING},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			svc, persistence := newWorkerAPIService(t)
+			seedEpochWorker(t, ctx, persistence, 1, 1)
+			if !tc.placedAfter {
+				seedRunningActor(t, ctx, persistence)
+			}
+			mustRaiseEpoch(t, ctx, svc, persistence, 2)
+			changeIPs(t, ctx, svc, persistence, "10.9.9.9")
+			if tc.placedAfter {
+				// Seeded with the old ip, as if the placer read a stale cache.
+				seedRunningActor(t, ctx, persistence)
+			}
+
+			mustReconcileAssignments(t, ctx, persistence)
+
+			got := mustGetActor(t, ctx, persistence)
+			if got.GetStatus().GetState() != tc.wantState {
+				t.Errorf("actor state = %v, want %v", got.GetStatus().GetState(), tc.wantState)
+			}
+			if tc.placedAfter {
+				if ips := got.GetStatus().GetWorkerAssignment().GetWorkerPodIps(); !slices.Equal(ips, []string{"10.9.9.9"}) {
+					t.Errorf("actor worker_pod_ips = %v, want [10.9.9.9]", ips)
+				}
+				if ips := firstAssignment(t, persistence, apiWorkerName).GetWorkerPodIps(); !slices.Equal(ips, []string{"10.9.9.9"}) {
+					t.Errorf("assignment worker_pod_ips = %v, want [10.9.9.9]", ips)
+				}
+			}
+			if got := mustGetWorker(t, ctx, persistence).GetStatus().GetObservedEpoch(); got != 2 {
+				t.Errorf("observed_epoch = %d, want 2", got)
+			}
+			assertIPsObserved(t, ctx, persistence, true)
+		})
+	}
+}
+
+// A row whose Actor points elsewhere is left over from an operation that failed
+// partway, so the ip rewrite releases it without touching the Actor.
+func TestReconcileAssignments_IPChangeReleasesOrphanedAssignment(t *testing.T) {
+	ctx := context.Background()
+	svc, persistence := newWorkerAPIService(t)
+	seedEpochWorker(t, ctx, persistence, 1, 1)
+	actor := seedAPIActor(t, ctx, persistence, ateapipb.ActorState_ACTOR_STATE_RUNNING, func(a *ateapipb.Actor) {
+		a.Status.WorkerAssignment.Worker = workerRef("other-worker")
+	})
+	assignAPIWorker(t, ctx, persistence, apiWorkerName, actor.GetMetadata().GetUid())
+	changeIPs(t, ctx, svc, persistence, "10.9.9.9")
+
+	mustReconcileAssignments(t, ctx, persistence)
+
+	if a := firstAssignment(t, persistence, apiWorkerName); a != nil {
+		t.Errorf("worker still hosts %v, want the orphaned assignment released", a)
+	}
+	if got := mustGetActor(t, ctx, persistence); got.GetMetadata().GetVersion() != actor.GetMetadata().GetVersion() {
+		t.Errorf("actor version = %d, want %d: it runs elsewhere", got.GetMetadata().GetVersion(), actor.GetMetadata().GetVersion())
+	}
+}
+
+func TestReconcileAssignments_IPRewriteWaitsForBusyActor(t *testing.T) {
+	ctx := context.Background()
+	svc, persistence := newWorkerAPIService(t)
+	seedEpochWorker(t, ctx, persistence, 1, 1)
+	seedRunningActor(t, ctx, persistence)
+	changeIPs(t, ctx, svc, persistence, "10.9.9.9")
+
+	lease, err := persistence.AcquireLease(ctx, actorLeaseKey(apiActorRef))
+	if err != nil {
+		t.Fatalf("AcquireLease() failed: %v", err)
+	}
+	err = NewWorkerWorkflow(persistence).ReconcileAssignments(ctx, apiWorkerName)
+	if !errors.Is(err, errActorBusy) {
+		t.Fatalf("ReconcileAssignments() = %v, want errActorBusy", err)
+	}
+	assertIPsObserved(t, ctx, persistence, false)
+
+	lease.Close()
+	mustReconcileAssignments(t, ctx, persistence)
+	if ips := mustGetActor(t, ctx, persistence).GetStatus().GetWorkerAssignment().GetWorkerPodIps(); !slices.Equal(ips, []string{"10.9.9.9"}) {
+		t.Errorf("actor worker_pod_ips = %v, want [10.9.9.9] once the lease is free", ips)
+	}
+	assertIPsObserved(t, ctx, persistence, true)
+}
+
+func TestReconcileAssignments_FailureKeepsIPsUnobserved(t *testing.T) {
+	ctx := context.Background()
+	svc, persistence := newWorkerAPIService(t)
+	seedEpochWorker(t, ctx, persistence, 1, 1)
+	seedRunningActor(t, ctx, persistence)
+	changeIPs(t, ctx, svc, persistence, "10.9.9.9")
+
+	failing := NewWorkerWorkflow(failingUpdateActorStore{Interface: persistence, err: errors.New("rewrite failed")})
+	if err := failing.ReconcileAssignments(ctx, apiWorkerName); err == nil {
+		t.Fatal("ReconcileAssignments() = nil error, want the rewrite failure reported")
+	}
+	assertIPsObserved(t, ctx, persistence, false)
+}
+
+// ipChangingStore changes the Worker's ips to each of ips in turn before the
+// first Actor update goes through, as the syncer would if the pod's IPs changed
+// again mid-pass.
+type ipChangingStore struct {
+	store.Interface
+	t       *testing.T
+	ips     [][]string
+	changed *bool
+}
+
+func (s ipChangingStore) UpdateActor(ctx context.Context, actorRef resources.ActorRef, precondition store.Precondition, mutate func(*ateapipb.Actor) error) (*ateapipb.Actor, error) {
+	if !*s.changed {
+		*s.changed = true
+		svc := newServiceImpl(s.Interface, nil)
+		for _, ips := range s.ips {
+			worker := mustGetWorker(s.t, ctx, s.Interface)
+			if _, err := svc.UpdateWorker(ctx, apiWorkerName, store.PreconditionFrom(worker), func(w *ateapipb.Worker) error {
+				w.Ips = ips
+				return nil
+			}); err != nil {
+				s.t.Fatalf("UpdateWorker() failed: %v", err)
+			}
+		}
+	}
+	return s.Interface.UpdateActor(ctx, actorRef, precondition, mutate)
+}
+
+// Ips that change again mid-pass are not recorded as observed: the Actors were
+// rewritten to the ones before them.
+func TestReconcileAssignments_IPChangedMidPass(t *testing.T) {
+	ctx := context.Background()
+	svc, persistence := newWorkerAPIService(t)
+	seedEpochWorker(t, ctx, persistence, 1, 1)
+	seedRunningActor(t, ctx, persistence)
+	changeIPs(t, ctx, svc, persistence, "10.9.9.9")
+
+	var changed bool
+	racing := NewWorkerWorkflow(ipChangingStore{Interface: persistence, t: t, ips: [][]string{{"10.8.8.8"}}, changed: &changed})
+	if err := racing.ReconcileAssignments(ctx, apiWorkerName); err != nil {
+		t.Fatalf("ReconcileAssignments() failed: %v", err)
+	}
+	assertIPsObserved(t, ctx, persistence, false)
+
+	mustReconcileAssignments(t, ctx, persistence)
+	if ips := mustGetActor(t, ctx, persistence).GetStatus().GetWorkerAssignment().GetWorkerPodIps(); !slices.Equal(ips, []string{"10.8.8.8"}) {
+		t.Errorf("actor worker_pod_ips = %v, want [10.8.8.8]", ips)
+	}
+	assertIPsObserved(t, ctx, persistence, true)
+}
+
+// Ips that change and change back mid-pass are not recorded as observed
+// either, though they match the ones the pass wrote: an Actor bound in
+// between holds the ips in between.
+func TestReconcileAssignments_IPChangedBackMidPass(t *testing.T) {
+	ctx := context.Background()
+	svc, persistence := newWorkerAPIService(t)
+	seedEpochWorker(t, ctx, persistence, 1, 1)
+	seedRunningActor(t, ctx, persistence)
+	changeIPs(t, ctx, svc, persistence, "10.9.9.9")
+
+	var changed bool
+	racing := NewWorkerWorkflow(ipChangingStore{Interface: persistence, t: t, ips: [][]string{{"10.8.8.8"}, {"10.9.9.9"}}, changed: &changed})
+	if err := racing.ReconcileAssignments(ctx, apiWorkerName); err != nil {
+		t.Fatalf("ReconcileAssignments() failed: %v", err)
+	}
+	assertIPsObserved(t, ctx, persistence, false)
+}
+
+// afterWorkerReadStore runs after once, the first time the Worker is read: as
+// a pass starts, before it lists the Worker's assignments.
+type afterWorkerReadStore struct {
+	store.Interface
+	after func()
+	ran   *bool
+}
+
+func (s afterWorkerReadStore) GetWorker(ctx context.Context, name string) (*ateapipb.Worker, error) {
+	worker, err := s.Interface.GetWorker(ctx, name)
+	if !*s.ran {
+		*s.ran = true
+		s.after()
+	}
+	return worker, err
+}
+
+// An Actor bound after the pass read the Worker, while the ips changed again,
+// holds newer ips than the pass. The pass leaves it at them.
+func TestReconcileAssignments_KeepsActorBoundToNewerIPs(t *testing.T) {
+	ctx := context.Background()
+	svc, persistence := newWorkerAPIService(t)
+	seedEpochWorker(t, ctx, persistence, 1, 1)
+	changeIPs(t, ctx, svc, persistence, "10.9.9.9")
+
+	var actor *ateapipb.Actor
+	var ran bool
+	racing := NewWorkerWorkflow(afterWorkerReadStore{Interface: persistence, ran: &ran, after: func() {
+		changeIPs(t, ctx, svc, persistence, "10.8.8.8")
+		// As assignWorkerAttempt stores it: with the ips and generation the
+		// bind read under the Worker's row lock.
+		actor = seedAPIActor(t, ctx, persistence, ateapipb.ActorState_ACTOR_STATE_RUNNING, func(a *ateapipb.Actor) {
+			a.Status.WorkerAssignment.WorkerPodIps = []string{"10.8.8.8"}
+			a.Status.WorkerAssignment.WorkerIpsGeneration = 3
+		})
+		assignAPIWorker(t, ctx, persistence, apiWorkerName, actor.GetMetadata().GetUid())
+	}})
+	if err := racing.ReconcileAssignments(ctx, apiWorkerName); err != nil {
+		t.Fatalf("ReconcileAssignments() failed: %v", err)
+	}
+
+	got := mustGetActor(t, ctx, persistence)
+	if got.GetMetadata().GetVersion() != actor.GetMetadata().GetVersion() {
+		t.Errorf("actor version = %d, want %d: it already held newer ips", got.GetMetadata().GetVersion(), actor.GetMetadata().GetVersion())
+	}
+	if ips := got.GetStatus().GetWorkerAssignment().GetWorkerPodIps(); !slices.Equal(ips, []string{"10.8.8.8"}) {
+		t.Errorf("actor worker_pod_ips = %v, want [10.8.8.8]", ips)
+	}
+	if ips := firstAssignment(t, persistence, apiWorkerName).GetWorkerPodIps(); !slices.Equal(ips, []string{"10.8.8.8"}) {
+		t.Errorf("assignment worker_pod_ips = %v, want [10.8.8.8]", ips)
+	}
+	assertIPsObserved(t, ctx, persistence, false)
+
+	mustReconcileAssignments(t, ctx, persistence)
+	if got := mustGetActor(t, ctx, persistence).GetMetadata().GetVersion(); got != actor.GetMetadata().GetVersion() {
+		t.Errorf("actor version = %d after the next pass, want %d", got, actor.GetMetadata().GetVersion())
+	}
+	assertIPsObserved(t, ctx, persistence, true)
+}
+
+// silentWorkerWatch lists Workers from the store but watches none of their
+// changes.
+type silentWorkerWatch struct {
+	store.Interface
+}
+
+func (silentWorkerWatch) WatchWorkers(context.Context) (*store.WorkerWatch, error) {
+	return store.NewWorkerWatch(make(chan store.WorkerEvent), func() {}), nil
+}
+
+// The Actor's assignment carries the epoch, ips and ips_generation the bind
+// read under the Worker's row lock, not the ones in the scheduler's cache.
+func TestAssignWorkerAttempt_StampsWorkerEpochAndIP(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
 	name := testWorkerUID("pod-1")
@@ -572,6 +1055,7 @@ func TestAssignWorkerAttempt_StampsWorkerEpoch(t *testing.T) {
 		WorkerPod:       "pod-1",
 		WorkerPodUid:    name,
 		SandboxClass:    "gvisor",
+		Ips:             []string{"10.0.0.1"},
 		Epoch:           1,
 		Status:          &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Capacity: &ateapipb.WorkerResources{Actors: 1}},
 	})
@@ -584,7 +1068,9 @@ func TestAssignWorkerAttempt_StampsWorkerEpoch(t *testing.T) {
 	})
 	cacheCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	wc := workercache.New(persistence, time.Minute)
+	// The cache hears of no change, so it keeps the Worker as it was before
+	// the update.
+	wc := workercache.New(silentWorkerWatch{persistence}, time.Hour)
 	if err := wc.Start(cacheCtx); err != nil {
 		t.Fatalf("workercache.Start: %v", err)
 	}
@@ -592,6 +1078,8 @@ func TestAssignWorkerAttempt_StampsWorkerEpoch(t *testing.T) {
 	precondition := store.Precondition{UID: created.GetMetadata().GetUid(), Version: created.GetMetadata().GetVersion()}
 	if _, err := persistence.UpdateWorker(ctx, name, precondition, func(w *ateapipb.Worker) error {
 		w.Epoch = 2
+		w.Ips = []string{"10.0.0.2"}
+		w.Status.IpsGeneration = 2
 		return nil
 	}); err != nil {
 		t.Fatalf("UpdateWorker: %v", err)
@@ -606,11 +1094,20 @@ func TestAssignWorkerAttempt_StampsWorkerEpoch(t *testing.T) {
 	if got := stored.GetStatus().GetWorkerAssignment().GetWorkerEpoch(); got != 2 {
 		t.Errorf("actor worker_epoch = %d, want 2", got)
 	}
+	if got := stored.GetStatus().GetWorkerAssignment().GetWorkerPodIps(); !slices.Equal(got, []string{"10.0.0.2"}) {
+		t.Errorf("actor worker_pod_ips = %v, want [10.0.0.2]", got)
+	}
+	if got := stored.GetStatus().GetWorkerAssignment().GetWorkerIpsGeneration(); got != 2 {
+		t.Errorf("actor worker_ips_generation = %d, want 2", got)
+	}
 	assignment, err := persistence.GetWorkerAssignment(ctx, name, actor.GetMetadata().GetUid())
 	if err != nil {
 		t.Fatalf("GetWorkerAssignment: %v", err)
 	}
 	if got := assignment.GetWorkerEpoch(); got != 2 {
 		t.Errorf("assignment worker_epoch = %d, want 2", got)
+	}
+	if got := assignment.GetWorkerIpsGeneration(); got != 2 {
+		t.Errorf("assignment worker_ips_generation = %d, want 2", got)
 	}
 }

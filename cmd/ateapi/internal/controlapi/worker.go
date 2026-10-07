@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/apivalidation"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/defaults"
@@ -126,7 +127,8 @@ func (s *ServiceImpl) CreateWorker(ctx context.Context, inWorker *ateapipb.Worke
 	// A Worker is registered only once its pod is Ready and has an IP, which
 	// makes ACTIVE the only state it can be born in.
 	outWorker := proto.CloneOf(inWorker)
-	// A new Worker hosts no Actors, so none are left from an earlier epoch.
+	// A new Worker hosts no Actors, so none are left from an earlier epoch, and
+	// its ips_generation starts out observed.
 	outWorker.Status = &ateapipb.WorkerStatus{
 		State:         ateapipb.WorkerState_WORKER_STATE_ACTIVE,
 		ObservedEpoch: inWorker.GetEpoch(),
@@ -154,8 +156,8 @@ func (s *ServiceImpl) CreateWorker(ctx context.Context, inWorker *ateapipb.Worke
 }
 
 // UpdateWorker replaces the stored Worker with the one the request carries.
-// Only labels and epoch are the caller's to change; a request that alters an
-// immutable field — including by leaving it unset, which would clear it — is
+// Only labels, epoch and ips are the caller's to change; a request that alters
+// an immutable field — including by leaving it unset, which would clear it — is
 // rejected.
 // The service layer enforces that with declarative validation against the
 // stored worker inside the update transaction.
@@ -196,6 +198,11 @@ func (s *ServiceImpl) UpdateWorker(ctx context.Context, name string, preconditio
 			return err
 		}
 		newVal := toUpdate
+		// Raised in the write that changes ips, under the same row lock binds
+		// stamp them under, so no Actor is given new ips before it is raised.
+		if !slices.Equal(newVal.GetIps(), oldVal.GetIps()) {
+			newVal.Status.IpsGeneration = oldVal.GetStatus().GetIpsGeneration() + 1
+		}
 
 		// Validate the mutated value before doing any further work. This is
 		// what enforces the immutable fields, since only the stored worker
@@ -224,6 +231,10 @@ func (s *ServiceImpl) BindActorToWorker(ctx context.Context, workerName string, 
 
 func (s *ServiceImpl) ReleaseActorFromWorker(ctx context.Context, workerName string, actorUID string) (*ateapipb.Worker, error) {
 	return s.store.ReleaseActorFromWorker(ctx, workerName, actorUID)
+}
+
+func (s *ServiceImpl) SetAssignmentWorkerPodIPs(ctx context.Context, workerName, actorUID string, ips []string, ipsGeneration int64) error {
+	return s.store.SetAssignmentWorkerPodIPs(ctx, workerName, actorUID, ips, ipsGeneration)
 }
 
 func (s *ServiceImpl) GetWorkerAssignment(ctx context.Context, workerName, actorUID string) (*ateapipb.ActorAssignment, error) {

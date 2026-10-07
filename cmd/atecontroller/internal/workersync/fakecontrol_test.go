@@ -195,16 +195,20 @@ func (f *fakeControl) UpdateWorker(_ context.Context, in *ateapipb.UpdateWorkerR
 	updated.Metadata = proto.Clone(stored.GetMetadata()).(*ateapipb.ResourceMetadata)
 	updated.Status = proto.Clone(stored.GetStatus()).(*ateapipb.WorkerStatus)
 
-	// labels and epoch are the only fields an update may change, so pinning
-	// them to what is stored leaves any remaining difference on a field that is
-	// immutable after create — including one the request cleared by omitting
-	// it.
+	// labels, epoch and ips are the only fields an update may change, so
+	// pinning them to what is stored leaves any remaining difference on a field
+	// that is immutable after create — including one the request cleared by
+	// omitting it.
 	if updated.GetEpoch() < stored.GetEpoch() {
 		return nil, status.Error(codes.InvalidArgument, "update decreased epoch")
+	}
+	if len(updated.GetIps()) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "update cleared ips")
 	}
 	probe := proto.Clone(updated).(*ateapipb.Worker)
 	probe.Labels = stored.GetLabels()
 	probe.Epoch = stored.GetEpoch()
+	probe.Ips = stored.GetIps()
 	if !proto.Equal(probe, stored) {
 		return nil, status.Error(codes.InvalidArgument, "update changed a field that is immutable after create")
 	}
