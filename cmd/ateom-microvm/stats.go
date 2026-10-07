@@ -22,7 +22,6 @@ import (
 	"fmt"
 	"log/slog"
 	"runtime/debug"
-	"slices"
 	"sync"
 	"time"
 
@@ -161,19 +160,14 @@ func (s *AteomService) GetActiveWorkloadStats(ctx context.Context, req *ateompb.
 }
 
 // sweepUsage samples every hosted actor between its initial reading and its
-// final record, stores each sample and writes its periodic record, and returns
-// the samples. Same lock discipline as GetWorkloadStats, for the same reasons.
-func (s *AteomService) sweepUsage(ctx context.Context) []*ateompb.WorkloadStatsSample {
-	hosted := s.hostedActors()
+// final record, and stores each sample and writes its periodic record. Same
+// lock discipline as GetWorkloadStats, for the same reasons.
+func (s *AteomService) sweepUsage(ctx context.Context) {
 	sweepCtx, cancel := context.WithTimeout(ctx, statsSweepBudget)
 	defer cancel()
 
-	// A workload with no numbers yet is a pending entry, so it stays
-	// attributable even if it dies during boot, and one of several booting
-	// does not stop the rest being reported.
-	samples := make([]*ateompb.WorkloadStatsSample, len(hosted))
 	var wg sync.WaitGroup
-	for i, h := range hosted {
+	for _, h := range s.hostedActors() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -184,20 +178,19 @@ func (s *AteomService) sweepUsage(ctx context.Context) []*ateompb.WorkloadStatsS
 						slog.Any("panic", r), slog.String("stack", string(debug.Stack())))
 				}
 			}()
-			samples[i] = s.sampleHostedGuest(sweepCtx, h)
+			s.sampleHostedGuest(sweepCtx, h)
 		}()
 	}
 	wg.Wait()
-	return slices.DeleteFunc(samples, func(s *ateompb.WorkloadStatsSample) bool { return s == nil })
 }
 
-// sampleHostedGuest measures one actor for the sweep, stores the sample and
-// writes its periodic record, or returns nil when the actor is outside its
-// sampling window or no longer hosted. A guest not reached before ctx is done,
-// or that does not answer, is pending.
-func (s *AteomService) sampleHostedGuest(ctx context.Context, h *hostedActor) *ateompb.WorkloadStatsSample {
+// sampleHostedGuest measures one actor for the sweep, and stores the sample and
+// writes its periodic record unless the actor is outside its sampling window or
+// no longer hosted. A guest not reached before ctx is done, or that does not
+// answer, is pending, so it stays attributable.
+func (s *AteomService) sampleHostedGuest(ctx context.Context, h *hostedActor) {
 	if !h.usage.Sampling() {
-		return nil
+		return
 	}
 	sample := h.usage.WithEpoch(pendingSample(&h.attribution))
 	measured, err := h.usage.Measure(ctx, func() (*ateompb.WorkloadStatsSample, map[string]uint64, error) {
@@ -215,10 +208,9 @@ func (s *AteomService) sampleHostedGuest(ctx context.Context, h *hostedActor) *a
 	// perhaps on another template, the numbers are the new activation's: drop
 	// them, and let the new activation start with its own initial reading.
 	if s.lookupActor(h.attribution.UID) != h {
-		return nil
+		return
 	}
 	h.usage.Periodic(sample, func() { s.usage.Emit(ctx, ateattr.StatsKindPeriodic, sample) })
-	return sample
 }
 
 // measureGuest reads h's guest as a reading of its activation.

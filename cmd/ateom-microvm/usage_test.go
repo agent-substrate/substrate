@@ -211,9 +211,7 @@ func TestSweepRecoversFromPanic(t *testing.T) {
 	setActivation(s, running(ateomstats.NewActivation(time.Now(), false)))
 	agent.onCall = func() { panic("guest read") }
 
-	if got := s.sweepUsage(context.Background()); len(got) != 0 {
-		t.Errorf("sweep returned %v, want nothing", got)
-	}
+	s.sweepUsage(context.Background())
 	if got := rec.Kinds(); len(got) != 0 {
 		t.Errorf("records = %v, want none", got)
 	}
@@ -297,8 +295,9 @@ func TestSweepWaitsForInitialAndStopsAtFinal(t *testing.T) {
 	rec := withUsageRecorder(s)
 	h := setActivation(s, ateomstats.NewActivation(time.Now(), false))
 
-	if got := s.sweepUsage(context.Background()); len(got) != 0 || len(agent.calls) != 0 {
-		t.Fatalf("sweep before the initial reading returned %v and read the guest %d times, want neither", got, len(agent.calls))
+	s.sweepUsage(context.Background())
+	if len(agent.calls) != 0 {
+		t.Fatalf("sweep before the initial reading read the guest %d times, want 0", len(agent.calls))
 	}
 	s.recordInitial(context.Background(), h)
 	s.sweepUsage(context.Background())
