@@ -30,6 +30,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -382,11 +383,32 @@ func (r *runtime) startUser(ctx context.Context, loaded *loadedScript) (*session
 	return u, nil
 }
 
+// shutdownConcurrency bounds how many sessions suspendAndDelete at once.
+// Boomer gives the hook about a minute; at thousands of sessions a serial
+// sweep leaks most of the actors, while this many in flight clears them
+// without flooding ateapi.
+const shutdownConcurrency = 64
+
+// shutdown suspends and deletes every session's actor, shutdownConcurrency
+// at a time, until done or ctx expires.
 func (r *runtime) shutdown(ctx context.Context) {
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, shutdownConcurrency)
 	r.users.Range(func(_, val any) bool {
-		val.(*sessionUser).suspendAndDelete(ctx)
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			return false
+		}
+		wg.Add(1)
+		go func(u *sessionUser) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			u.suspendAndDelete(ctx)
+		}(val.(*sessionUser))
 		return true
 	})
+	wg.Wait()
 }
 
 // sessionUser is one coding-agent session: a single actor plus its progress
@@ -414,11 +436,49 @@ type sessionUser struct {
 	broken bool
 }
 
+// httpError is a router reply with a status of 400 or above. It keeps the
+// status so a failure can be classified the way a gRPC code would be: the
+// router maps ateapi's ResourceExhausted and Unavailable to 503 and its
+// deadline to 504, and in implicit resume mode the wake ping is the only
+// place those verdicts reach the driver.
+type httpError struct {
+	route  string
+	status int
+	body   string
+}
+
+func (e *httpError) Error() string {
+	return fmt.Sprintf("%s: HTTP %d: %s", e.route, e.status, e.body)
+}
+
+// classifyHTTP maps a router status onto a failure action. 503, 504, and
+// 429 are the fleet or the control plane being busy, which a replacement
+// would only add to; 404 means the actor record is gone. Anything else is
+// counted toward replacement, as a non-status error would be.
+func classifyHTTP(status int) boomerutil.FailureAction {
+	switch status {
+	case http.StatusServiceUnavailable, http.StatusGatewayTimeout, http.StatusTooManyRequests:
+		return boomerutil.RetryLater
+	case http.StatusNotFound:
+		return boomerutil.ReplaceNow
+	}
+	return boomerutil.ReplaceIfPersistent
+}
+
 // noteFailure classifies a failed step or lifecycle call and marks the actor
 // broken when a replacement is warranted. Cluster-wide errors (no capacity,
-// ate-api-server restarting) are not the actor's fault and do not count.
+// ate-api-server restarting) are not the actor's fault and do not count,
+// whether they arrive as a gRPC status or as the router's HTTP mapping of
+// one. Replacing an actor on a capacity error would be self-defeating: the
+// replacement's first activation needs the very room the error reported
+// missing, so a fleet near its slots would churn actors instead of waiting.
 func (u *sessionUser) noteFailure(err error) {
-	switch boomerutil.ClassifyLifecycleFailure(err) {
+	action := boomerutil.ClassifyLifecycleFailure(err)
+	var he *httpError
+	if errors.As(err, &he) {
+		action = classifyHTTP(he.status)
+	}
+	switch action {
 	case boomerutil.ReplaceNow:
 		u.broken = true
 	case boomerutil.RetryLater:
@@ -550,8 +610,24 @@ func (u *sessionUser) execOp(ctx context.Context, o op) error {
 		return u.postProto(ctx, glutton.PingRoute,
 			&gluttonpb.PingRequest{Message: "think"},
 			&gluttonpb.PingResponse{})
+	case opDwell:
+		// No request: the actor stays resident while the driver waits, the
+		// way a gateway sits in an LLM round trip or a typing gap.
+		return dwell(ctx, time.Duration(o.millis)*time.Millisecond)
 	default:
 		return fmt.Errorf("unknown op kind %d", o.kind)
+	}
+}
+
+// dwell idles for d or until ctx ends, whichever comes first.
+func dwell(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
@@ -598,7 +674,7 @@ func (u *sessionUser) postProto(ctx context.Context, route string, req, resp pro
 		return err
 	}
 	if httpResp.StatusCode >= 400 {
-		return fmt.Errorf("%s: HTTP %d: %s", route, httpResp.StatusCode, strings.TrimSpace(string(respBody)))
+		return &httpError{route: route, status: httpResp.StatusCode, body: strings.TrimSpace(string(respBody))}
 	}
 	return proto.Unmarshal(respBody, resp)
 }

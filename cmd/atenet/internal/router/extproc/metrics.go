@@ -76,38 +76,44 @@ func (s *Server) recordRouteDuration(ctx context.Context, d time.Duration, tmplN
 
 func classifyOutcome(err error) string {
 	if err == nil {
-		return "ok"
+		return ateattr.RouterOutcomeOK
 	}
 	if errors.Is(err, context.Canceled) || status.Code(err) == codes.Canceled {
-		return "cancelled"
+		return ateattr.RouterOutcomeCancelled
 	}
 	if errors.Is(err, context.DeadlineExceeded) || status.Code(err) == codes.DeadlineExceeded {
-		return "timeout"
+		return ateattr.RouterOutcomeTimeout
 	}
 	switch status.Code(err) {
 	case codes.ResourceExhausted:
-		return "no_capacity"
+		return ateattr.RouterOutcomeNoCapacity
 	case codes.FailedPrecondition:
-		return "failed_precondition"
+		return ateattr.RouterOutcomeFailedPrecondition
 	case codes.Aborted:
-		return "lock_conflict"
+		return ateattr.RouterOutcomeLockConflict
 	case codes.NotFound:
-		return "not_found"
+		return ateattr.RouterOutcomeNotFound
 	case codes.Unavailable:
-		return "unavailable"
+		return ateattr.RouterOutcomeUnavailable
 	}
 	var re *ReqError
 	if errors.As(err, &re) {
 		switch envoy_type.StatusCode(re.StatusCode) {
 		case envoy_type.StatusCode_NotFound:
-			return "not_found"
+			return ateattr.RouterOutcomeNotFound
 		case envoy_type.StatusCode_ServiceUnavailable:
-			return "no_capacity"
+			// The switch above already reports no_capacity for a wrapped
+			// ResourceExhausted cause, since status.Code unwraps through
+			// ReqError.Cause. A 503 that reaches here has no such cause: a
+			// shed request whose resume did not fail with ResourceExhausted,
+			// a denied egress request, or a failed policy or credential
+			// lookup. None of these mean the fleet is full.
+			return ateattr.RouterOutcomeUnavailable
 		case envoy_type.StatusCode_GatewayTimeout:
-			return "timeout"
+			return ateattr.RouterOutcomeTimeout
 		case envoy_type.StatusCode_TooManyRequests:
-			return "rate_limited"
+			return ateattr.RouterOutcomeRateLimited
 		}
 	}
-	return "resume_error"
+	return ateattr.RouterOutcomeResumeError
 }

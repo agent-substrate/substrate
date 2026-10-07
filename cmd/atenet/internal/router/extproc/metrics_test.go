@@ -73,7 +73,7 @@ func TestClassifyOutcome(t *testing.T) {
 		},
 		{
 			name:     "ResourceExhausted gRPC code maps to no_capacity",
-			err:      status.Error(codes.ResourceExhausted, "no free workers available"),
+			err:      status.Error(codes.ResourceExhausted, "no worker has room for the actor"),
 			expected: "no_capacity",
 		},
 		{
@@ -82,8 +82,18 @@ func TestClassifyOutcome(t *testing.T) {
 			expected: "not_found",
 		},
 		{
-			name:     "StatusCode_ServiceUnavailable ReqError maps to no_capacity",
-			err:      NewReqError(envoy_type.StatusCode_ServiceUnavailable, "no free workers"),
+			name:     "bare StatusCode_ServiceUnavailable ReqError maps to unavailable",
+			err:      NewReqError(envoy_type.StatusCode_ServiceUnavailable, "router at capacity"),
+			expected: "unavailable",
+		},
+		{
+			name:     "StatusCode_ServiceUnavailable ReqError with an uncoded cause maps to unavailable",
+			err:      WrapReqError(envoy_type.StatusCode_ServiceUnavailable, errors.New("policy lookup failed"), "egress unavailable"),
+			expected: "unavailable",
+		},
+		{
+			name:     "StatusCode_ServiceUnavailable ReqError wrapping ResourceExhausted maps to no_capacity",
+			err:      WrapReqError(envoy_type.StatusCode_ServiceUnavailable, status.Error(codes.ResourceExhausted, "no worker has room for the actor"), "actor unavailable"),
 			expected: "no_capacity",
 		},
 		{

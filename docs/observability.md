@@ -179,7 +179,7 @@ The counter carries no actor identity, so this record is the only way to attribu
 
 #### The same records over OTLP
 
-These records also go out as OTLP log events, so a collector reads them without knowing substrate's stdout envelope. Set `OTEL_LOGS_EXPORTER=otlp` to turn it on; unset means `none`, which is what every environment but kind uses today. ateapi is the only emitter today. The ateoms have a LoggerProvider on the same switch and export through [the ateom relay](#the-ateom-otlp-relay), which carries logs, traces, and metrics. atecontroller does not pass `OTEL_LOGS_EXPORTER` to worker pods, so the kind ConfigMap turns on ateapi only; the ateoms stay at `none` until the controller propagates it.
+With `OTEL_LOGS_EXPORTER=otlp` these records go out as OTLP log events instead of stdout, so a collector reads them without knowing substrate's stdout envelope. Unset or `none`, which is what every environment but kind uses today, keeps them on stdout. `otlp,console` writes both, as kind does for debugging. `console` here is the component's own JSON log line, not the OTel SDK's console exporter format. The value is a comma-separated list: names are trimmed, lowercased, and counted once, and an unknown or empty item logs a warning and is skipped while the rest apply. `none` with an exporter, or a value that names no known exporter, logs a warning and keeps the default, `none`. ateapi is the only emitter today. The ateoms have a LoggerProvider on the same switch and export through [the ateom relay](#the-ateom-otlp-relay), which carries logs, traces, and metrics. atecontroller copies `OTEL_LOGS_EXPORTER` into each worker pod, so the kind ConfigMap sets the ateoms to `otlp,console` too.
 
 Three `event.name` values, which is the OTLP LogRecord's own field rather than an attribute:
 
@@ -193,11 +193,13 @@ Three `event.name` values, which is the OTLP LogRecord's own field rather than a
 
 A crash is its own name because an event name promises a set of attributes and a crash has a different severity and shape. There is no name per state: `ate.actor.state` already says which transition happened, so a consumer still selects on that one attribute and needs no map from a name to a state. All three names are in [`docs/metrics/registry/events.yaml`](metrics/registry/events.yaml), which `make verify` checks.
 
-The attributes are the same flat `ate.*` keys as the stdout copy, so they arrive as real log attributes with no transform in front of them. Trace context is not among them: it goes on the record's own `TraceId` and `SpanId` fields, where the stdout copy's top-level `trace_id`/`span_id` would be mapped to anyway. The instrumentation scope is `github.com/agent-substrate/substrate/internal/actorevent` for every actor event. Select or drop a stream by `event.name`: the lifecycle events must never be sampled, the usage samples may be.
+The attributes are the same flat `ate.*` keys as the stdout record, so they arrive as real log attributes with no transform in front of them. Trace context is not among them: it goes on the record's own `TraceId` and `SpanId` fields, where the stdout record's top-level `trace_id`/`span_id` would be mapped to anyway. The instrumentation scope is `github.com/agent-substrate/substrate/internal/actorevent` for every actor event. Select or drop a stream by `event.name`: the lifecycle events must never be sampled, the usage samples may be.
 
 **Never sample or filter the lifecycle stream.** A consumer takes the last event for an actor's uid, so one dropped record reports a stale state with no sign that anything is missing. This is the one stream where a sampling policy is a correctness bug rather than a cost trade.
 
-**Both copies exist on purpose.** No substrate or enterprise collector reads pod stdout today, so nothing is duplicated: the stdout copy is what `kubectl logs` shows and what keeps the component's bootstrap and crash output readable, and the OTLP copy is what a backend queries. If a `filelog` DaemonSet is ever added, drop one of the two — drop the records by `event.name`, or exclude the `ate-api-server` and `ateom` containers by name.
+**Each record goes to one place unless asked otherwise.** With `otlp` it goes to OTLP, and otherwise to stdout, so a backend that also collects pod stdout, as GKE's logging agent does, does not store it twice. With `otlp` the records are not in `kubectl logs`. `otlp,console` writes both on purpose; on a cluster that also collects pod stdout, that stores each record twice, and the collector should drop one copy by `event.name`.
+
+**With `otlp` alone, a lifecycle record can be lost.** The OTLP processor batches, and it drops records with no signal when its queue is full, when the collector stays unreachable after retries, or when the process exits ungracefully. Records written after the component's logger provider shuts down go to stdout. That shutdown runs last, after the server drains, so records written during the drain are still queued and are lost if the final export fails. Where a lost lifecycle record is not acceptable, set `otlp,console` to keep the stdout record as well.
 
 ### Per-Actor Usage Events
 
@@ -242,14 +244,14 @@ Agent Substrate emits foundational OpenTelemetry system and server metrics to mo
 | `rpc.server.call.duration` | ateapi & atelet (gRPC servers, via `otelgrpc`) | histogram | per-method gRPC latency, request rate, and errors (labels `rpc.method`, `rpc.response.status_code`) |
 | `ate.actor.crashes` | ateapi | counter | Number of times actors transitioned to `ACTOR_STATE_CRASHED` (labels `ate.actor.operation.name`, `ate.template.atespace`, `ate.template.name`, `ate.workerpool.namespace`, `ate.workerpool.name`, `ate.sandbox.class`) |
 | `atenet.router.route.duration` | atenet-router | histogram | Substrate E2E — Envoy receiving a request to Envoy forwarding it to the resolved worker, excluding actor compute and the response (labels `ate.template.atespace`, `ate.template.name`, `ate.router.outcome`, `ate.router.resume`) |
-| `atelet.snapshot.size` | atelet | histogram | uncompressed size in bytes of each gVisor snapshot image written during checkpoint (labels `file.name`, `ate.template.atespace`, `ate.template.name`) |
+| `atelet.snapshot.size` | atelet | histogram | uncompressed allocated size in bytes of each snapshot image written during checkpoint (`st_blocks * 512`, excluding sparse holes in micro-VM `memory-ranges`) (labels `file.name`, `ate.template.atespace`, `ate.template.name`) |
 | `ate.workerpool.desired_workers` | atecontroller | up/down counter | number of worker pods requested for a WorkerPool, from `spec.replicas` (labels
 `ate.workerpool.namespace`, `ate.workerpool.name`) |
 | `ate.workerpool.ready_workers` | atecontroller | up/down counter | number of worker pods currently ready for a WorkerPool, from `status.readyReplicas` (labels
 `ate.workerpool.namespace`, `ate.workerpool.name`) |
 | `ate.workerpool.workers` | ateapi | up/down counter | live worker count per pool, split by state (`idle`/`partial`/`at_capacity`/`unschedulable`) and sandbox class to provide fleet capacity and saturation at a glance |
 | `ate.actor.lifecycle.operation.duration` | ateapi | histogram | how long each actor operation (create/resume/suspend/pause/delete/revert) takes and whether it failed (`error.type` present = failure, absent = success); labeled by operation, template, pool (`ate.workerpool.namespace` + `ate.workerpool.name`), sandbox class, and snapshot kind and scope on resume; already-running resume no-ops are not recorded so the histogram tracks actual activations, not router traffic |
-| `ate.scheduler.assignment.duration` | ateapi | histogram | time it takes for an actor to be assigned to a worker, per attempt (version-conflict retries record only the final attempt), with the outcome (`assigned` / `no_free_worker` / `error`), the assigned pool (`ate.workerpool.namespace` + `ate.workerpool.name`) and sandbox class to catch scheduling latency and capacity starvation problems |
+| `ate.scheduler.assignment.duration` | ateapi | histogram | time it takes for an actor to be assigned to a worker, per attempt (version-conflict retries record only the final attempt), with the outcome (`assigned` / `no_capacity` / `error`), the assigned pool (`ate.workerpool.namespace` + `ate.workerpool.name`) and sandbox class to catch scheduling latency and capacity starvation problems |
 | `ate.actor.restore.duration` | atelet | histogram | how long each phase of a restore takes on the worker node, which is where cold-start latency actually goes once ateapi hands off (labels `ate.snapshot.phase`, `ate.snapshot.kind`, `ate.snapshot.scope`, `ate.template.atespace`, `ate.template.name`, `ate.sandbox.class`) |
 | `ate.actor.checkpoint.duration` | atelet | histogram | the same phase breakdown for writing a snapshot, so a slow suspend can be attributed to ateom or to the upload (same labels as the restore histogram) |
 | `ate.imagecache.requests` | atelet | counter | image lookups in the node-local image cache, by outcome (`ate.imagecache.outcome`), with `error.type` on the `error` outcome. A miss pays for the pull and the unpack, so the hit ratio per node is a leading indicator of resume latency |
@@ -262,6 +264,7 @@ For `ate.workerpool.desired_workers` and `ate.workerpool.ready_workers`:
 
 For `atenet.router.route.duration`:
 * `ate.router.outcome` categorizes the route attempt result: `ok`, `cancelled`, `timeout`, `no_capacity`, `failed_precondition`, `lock_conflict`, `not_found`, `unavailable`, `rate_limited`, or `resume_error`.
+* The router and the scheduler both report `no_capacity` for one condition, but they count different events. The scheduler records one sample on `ate.scheduler.assignment.duration` for each assignment attempt. The router records one sample for each request. Many requests can join one resume, and one parked request can cause more than one attempt. Thus do not compare the two counts directly.
 * `ate.router.resume` indicates the singleflight execution state of actor resumption: `none` (the resume found the actor already running), `triggered` (this request completed a cold activation), `joined` (this request waited on another request's resume, which activated the actor), or `unknown` (the resume did not complete, so whether an activation ran is unknown). `ate.template.atespace` and `ate.template.name` hold `unknown` when the router has no template to name.
 
 For `ate.imagecache.requests`:
@@ -270,7 +273,7 @@ For `ate.imagecache.requests`:
 
 `ate.workerpool.namespace` and `ate.workerpool.name` identify a pool together, on every instrument that names one. A WorkerPool is a namespaced resource, so the name on its own merges same-named pools from different namespaces into one series. The pair means that capacity (`ate.workerpool.workers`, `ate.workerpool.desired_workers`, `ate.workerpool.ready_workers`) joins to demand (`ate.scheduler.assignment.duration`, `ate.actor.lifecycle.operation.duration`, `ate.actor.crashes`) by pool.
 
-**No keys** means the operation has no pool. The actor-centric instruments omit the pair, so a crash before the actor reached a worker, or the `no_free_worker` outcome, names no pool. No instrument sends the pair with both keys empty.
+**No keys** means the operation has no pool. The actor-centric instruments omit the pair, so a crash before the actor reached a worker, or the `no_capacity` outcome, names no pool. No instrument sends the pair with both keys empty.
 
 The three snapshot labels are orthogonal and mean the same thing on every histogram that carries them:
 * `ate.snapshot.kind`: which snapshot the operation reads or writes. `local` (node-local, written by a pause), `latest` (the actor's own durable snapshot), `golden` (the template's image), or `boot` (from scratch, so it never appears on the atelet histograms).
@@ -327,6 +330,10 @@ These can be used to answer whether the controller is keeping up, e.g. rising `w
 Note that controller-runtime enables native histograms on `controller_runtime_reconcile_time_seconds`, `workqueue_queue_duration_seconds`, and `workqueue_work_duration_seconds`, so those three arrive as OTLP exponential histograms rather than fixed-bucket ones.
 
 A queue that has never processed an item bridges as an exponential histogram with no positive buckets, which the Telemetry API (the Cloud Monitoring OTLP endpoint) rejects on ingest. atecontroller gives each such data point one positive bucket with a count of 0 before the OTLP push (`cmd/atecontroller/metrics.go`), so an idle queue no longer causes an error every tick. The padding carries no observations, so other backends are unaffected.
+
+### Scraping instead of pushing
+
+ateapi, atelet, atenet-router and the credential provider also serve every instrument on their Prometheus `/metrics` endpoint. A cluster that scrapes those endpoints sets `OTEL_METRICS_EXPORTER=none` on the components, so each series reaches the backend once. With `none` the components install no OTLP metric reader and keep the Prometheus one; traces and logs are unaffected. atecontroller then registers its instruments (`ate.workerpool.*`) on controller-runtime's registry, so the manager's `:8080` serves them next to the controller-runtime families. ateom serves no endpoint of its own, so leave the variable unset on the worker pods, or it exports no metrics at all. The variable accepts `otlp` (the default) and `none`; unlike `OTEL_LOGS_EXPORTER`, it takes no list and no `console`. Any other value logs a warning and keeps the OTLP export.
 
 ### Local Metrics with Prometheus (Kind Cluster)
 
@@ -421,6 +428,44 @@ The relay is best-effort. If the socket is absent when ateom starts — `atelet`
 For verified ateom sources, the relay forwards each request verbatim rather than decoding and re-exporting, which is what keeps every ateom its own service in Jaeger/GCP Trace instead of being absorbed into `atelet`'s. `ate-controller` injects `k8s.pod.name`, `k8s.namespace.name`, `k8s.pod.uid`, `k8s.node.name`, and `service.instance.id` directly into `OTEL_RESOURCE_ATTRIBUTES` via the Kubernetes Downward API; because the relay preserves resources verbatim, Kubernetes attributes remain intact even though the TCP connection to the collector originates from `atelet` rather than the worker pod IP (bypassing reliance on collector-side IP-based `k8sattributes` enrichment).
 
 Verbatim forwarding is restricted to known ateom sources and refuses anything else with `PermissionDenied`. Actor telemetry is what that excludes: actors share a hostname (`actor`) and an interior IP, so their series merge unless identity is injected from outside the actor ([#761](https://github.com/agent-substrate/substrate/issues/761)) — a rewrite, which will be implemented as an explicit rewriting path alongside this forwarder.
+
+### Actor telemetry needs an egress policy
+
+An actor's own OpenTelemetry SDK does not use the relay. It dials the collector over the network like any other outbound connection, and that connection is subject to the actor egress lockdown described in [Network Egress](network-egress.md): every actor TCP connection is redirected into `atunnel` and carried to the egress gateway, which refuses anything the actor's `EgressPolicy` does not allow. An actor with no policy, or a policy with no matching rule, cannot reach the collector at all. The SDK sees `Unavailable: connection reset by peer` on each export, and the gateway logs `egress denied: actor has no egress policy`.
+
+To let an actor export, give it an `http` rule naming the collector's Service and the OTLP ports. It must be an `http` rule, not `https`: the OTLP/gRPC exporter is gRPC over cleartext HTTP/2 (h2c) on `4317`, which an `http` rule admits, and the OTLP/HTTP exporter is cleartext HTTP/1.1 on `4318`. On Kind the collector is `opentelemetry-collector.otel-system.svc`; on GKE with the managed collector it is `opentelemetry-collector.gke-managed-otel.svc.cluster.local`. Whatever the name, it has to match the host the actor's `OTEL_EXPORTER_OTLP_ENDPOINT` names, because the rule is matched on the request authority.
+
+```bash
+# Kind
+kubectl ate create egress-policy <actor-name> -a <atespace> -f - <<'EOF'
+rules:
+- http:
+    hostnames: ["opentelemetry-collector.otel-system.svc"]
+    ports:
+      numbers: [4317, 4318]
+EOF
+
+# GKE, with the managed OpenTelemetry collector
+kubectl ate create egress-policy <actor-name> -a <atespace> -f - <<'EOF'
+rules:
+- http:
+    hostnames: ["opentelemetry-collector.gke-managed-otel.svc.cluster.local"]
+    ports:
+      numbers: [4317, 4318]
+EOF
+```
+
+An actor that already has a policy for other destinations keeps those rules and gains this one: `kubectl ate update egress-policy` replaces the whole rule list, so include the existing rules in the manifest. `kubectl ate get egress-policy <actor-name> -a <atespace> -o yaml` prints the current one.
+
+Three things to know when applying this:
+
+* **It is per actor.** The policy is a resource under the actor, and nothing applies one by default today. Every actor that exports telemetry needs its own, created after the actor and before, or shortly after, it is resumed. A template-level default policy is proposed in [#1558](https://github.com/agent-substrate/substrate/pull/1558); the underlying ask is [#1430](https://github.com/agent-substrate/substrate/issues/1430).
+* **A running actor recovers slowly.** If the policy is created while the actor is already exporting and failing, the SDK's gRPC client is in reconnect backoff and the gateway caches the missing policy for `--egress-policy-cache-ttl` (10s by default). Expect the first successful export 45s to two minutes after the policy appears. An actor whose policy exists before it starts has no such delay.
+* **The collector sees the gateway, not the actor.** The TCP connection to the collector comes from the egress gateway pod, so a collector that enriches by source IP (the `k8sattributes` processor, which the GKE managed collector runs) labels the actor's spans and metrics with the gateway's `k8s.pod.name`, `k8s.deployment.name=atenet-egress`, and `k8s.namespace.name`. The actor's `service.name` and anything it puts in `OTEL_RESOURCE_ATTRIBUTES` survive. Set the actor's identity there yourself if you need it on the backend; the relay-based path that will do this for actors is tracked in [#853](https://github.com/agent-substrate/substrate/issues/853) and [#761](https://github.com/agent-substrate/substrate/issues/761).
+
+**Logs written to stdout and stderr need none of this.** ateom reads a container's output stream inside the worker pod and writes it to the pod's own stdout, which is where [`kubectl ate logs`](#active-actor-inspection-via-cli) and a node log agent pick it up. That path never leaves the sandbox over the network, so it is untouched by the egress lockdown and works for an actor with no policy at all. The policy is only for telemetry an SDK inside the actor pushes itself: traces, metrics, and OTLP logs if `OTEL_LOGS_EXPORTER=otlp` is set in the actor.
+
+Substrate puts no OTLP configuration into an actor container. Set `OTEL_EXPORTER_OTLP_ENDPOINT` in the ActorTemplate's container `env`; without it the SDK defaults to `localhost:4317`, where nothing listens inside the sandbox, and every export is dropped with no error at the collector.
 
 ---
 

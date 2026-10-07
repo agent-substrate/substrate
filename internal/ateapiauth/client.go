@@ -17,8 +17,8 @@ package ateapiauth
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
-	"os"
 
 	"github.com/agent-substrate/substrate/internal/credbundle"
 	"github.com/agent-substrate/substrate/internal/k8sresolver"
@@ -62,14 +62,34 @@ func DialOptions(cfg ClientConfig) ([]grpc.DialOption, error) {
 	if cfg.ClientCredBundle == "" {
 		return nil, fmt.Errorf("ateapiauth: a client credential bundle (mTLS) is required")
 	}
-	pool, err := loadCAPool(cfg.CAFile)
-	if err != nil {
-		return nil, err
+	loadRootCAs := credbundle.PoolLoader(cfg.CAFile)
+	if _, err := loadRootCAs(); err != nil {
+		return nil, fmt.Errorf("ateapiauth: loading CA file: %w", err)
 	}
 	tlsCfg := &tls.Config{
 		MinVersion: tls.VersionTLS13,
-		RootCAs:    pool,
-		ServerName: cfg.ServerName,
+		// Chain verification happens in VerifyConnection against the
+		// reloadable pool, so a CA rotation applies without a redial.
+		InsecureSkipVerify: true, //nolint:gosec
+		VerifyConnection: func(cs tls.ConnectionState) error {
+			pool, err := loadRootCAs()
+			if err != nil {
+				return err
+			}
+			if len(cs.PeerCertificates) == 0 {
+				return errors.New("ateapiauth: server presented no certificate")
+			}
+			inter := x509.NewCertPool()
+			for _, c := range cs.PeerCertificates[1:] {
+				inter.AddCert(c)
+			}
+			_, err = cs.PeerCertificates[0].Verify(x509.VerifyOptions{
+				Roots:         pool,
+				Intermediates: inter,
+				DNSName:       cfg.ServerName,
+			})
+			return err
+		},
 	}
 
 	opts := []grpc.DialOption{
@@ -82,16 +102,4 @@ func DialOptions(cfg ClientConfig) ([]grpc.DialOption, error) {
 	tlsCfg.GetClientCertificate = credbundle.ClientLoader(cfg.ClientCredBundle)
 	opts = append(opts, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
 	return opts, nil
-}
-
-func loadCAPool(caFile string) (*x509.CertPool, error) {
-	caPEM, err := os.ReadFile(caFile)
-	if err != nil {
-		return nil, fmt.Errorf("ateapiauth: reading CA file: %w", err)
-	}
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(caPEM) {
-		return nil, fmt.Errorf("ateapiauth: no certificates found in CA file %q", caFile)
-	}
-	return pool, nil
 }

@@ -405,15 +405,71 @@ func TestEgressPolicyCommandArgs(t *testing.T) {
 	})
 }
 
-// fakeEgressPolicyGetter records the requests it received and answers with a
-// configured policy or error. actorReq stays nil unless the runner reads the
-// actor, which it only does after a NotFound.
-type fakeEgressPolicyGetter struct {
-	req      *ateapipb.GetActorEgressPolicyRequest
-	policy   *ateapipb.EgressPolicy
-	err      error
+// fakeActorReader records the actor read an egress policy runner makes after a
+// NotFound, and answers with a configured error. actorReq stays nil unless the
+// runner reads the actor.
+type fakeActorReader struct {
 	actorReq *ateapipb.GetActorRequest
 	actorErr error
+}
+
+func (f *fakeActorReader) GetActor(ctx context.Context, req *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
+	f.actorReq = req
+	if f.actorErr != nil {
+		return nil, f.actorErr
+	}
+	return &ateapipb.Actor{}, nil
+}
+
+func TestRequireActor(t *testing.T) {
+	t.Parallel()
+
+	actor := &ateapipb.ObjectRef{Atespace: "team-a", Name: "c1"}
+	tests := []struct {
+		name     string
+		actorErr error
+		wantErr  string
+	}{
+		{name: "actor exists"},
+		{
+			name:     "missing actor",
+			actorErr: status.Error(codes.NotFound, "Actor team-a/c1 not found"),
+			wantErr:  `actor "c1" in atespace "team-a" not found`,
+		},
+		{
+			name:     "lookup error wraps",
+			actorErr: status.Error(codes.PermissionDenied, "denied"),
+			wantErr:  `failed to get actor "c1" in atespace "team-a": rpc error: code = PermissionDenied desc = denied`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			getter := &fakeActorReader{actorErr: test.actorErr}
+			err := requireActor(context.Background(), getter, actor)
+			gotErr := ""
+			if err != nil {
+				gotErr = err.Error()
+			}
+			if gotErr != test.wantErr {
+				t.Errorf("requireActor() error = %q, want %q", gotErr, test.wantErr)
+			}
+			if diff := cmp.Diff(&ateapipb.GetActorRequest{Actor: actor}, getter.actorReq, protocmp.Transform()); diff != "" {
+				t.Errorf("actor request mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// fakeEgressPolicyGetter records the requests it received and answers with a
+// configured policy or error.
+type fakeEgressPolicyGetter struct {
+	fakeActorReader
+	req    *ateapipb.GetActorEgressPolicyRequest
+	policy *ateapipb.EgressPolicy
+	err    error
 }
 
 func (f *fakeEgressPolicyGetter) GetActorEgressPolicy(ctx context.Context, req *ateapipb.GetActorEgressPolicyRequest, opts ...grpc.CallOption) (*ateapipb.EgressPolicy, error) {
@@ -422,14 +478,6 @@ func (f *fakeEgressPolicyGetter) GetActorEgressPolicy(ctx context.Context, req *
 		return nil, f.err
 	}
 	return f.policy, nil
-}
-
-func (f *fakeEgressPolicyGetter) GetActor(ctx context.Context, req *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
-	f.actorReq = req
-	if f.actorErr != nil {
-		return nil, f.actorErr
-	}
-	return &ateapipb.Actor{}, nil
 }
 
 func TestGetEgressPolicyRunner_Run(t *testing.T) {
@@ -495,7 +543,7 @@ rules:
 		{
 			name:         "missing actor fails",
 			outputFmt:    "yaml",
-			getter:       &fakeEgressPolicyGetter{err: status.Error(codes.NotFound, "EgressPolicy not found"), actorErr: status.Error(codes.NotFound, "Actor team-a/c1 not found")},
+			getter:       &fakeEgressPolicyGetter{err: status.Error(codes.NotFound, "EgressPolicy not found"), fakeActorReader: fakeActorReader{actorErr: status.Error(codes.NotFound, "Actor team-a/c1 not found")}},
 			wantReq:      &ateapipb.GetActorEgressPolicyRequest{Actor: actor},
 			wantActorReq: &ateapipb.GetActorRequest{Actor: actor},
 			wantErr:      `actor "c1" in atespace "team-a" not found`,
@@ -503,7 +551,7 @@ rules:
 		{
 			name:         "actor lookup error wraps",
 			outputFmt:    "yaml",
-			getter:       &fakeEgressPolicyGetter{err: status.Error(codes.NotFound, "EgressPolicy not found"), actorErr: status.Error(codes.PermissionDenied, "denied")},
+			getter:       &fakeEgressPolicyGetter{err: status.Error(codes.NotFound, "EgressPolicy not found"), fakeActorReader: fakeActorReader{actorErr: status.Error(codes.PermissionDenied, "denied")}},
 			wantReq:      &ateapipb.GetActorEgressPolicyRequest{Actor: actor},
 			wantActorReq: &ateapipb.GetActorRequest{Actor: actor},
 			wantErr:      `failed to get actor "c1" in atespace "team-a": rpc error: code = PermissionDenied desc = denied`,
@@ -665,14 +713,12 @@ rules:
 }
 
 // fakeEgressPolicyUpdater records the requests it received and answers with a
-// configured policy or error. actorReq stays nil unless the runner reads the
-// actor, which it only does after a NotFound.
+// configured policy or error.
 type fakeEgressPolicyUpdater struct {
-	req      *ateapipb.UpdateActorEgressPolicyRequest
-	policy   *ateapipb.EgressPolicy
-	err      error
-	actorReq *ateapipb.GetActorRequest
-	actorErr error
+	fakeActorReader
+	req    *ateapipb.UpdateActorEgressPolicyRequest
+	policy *ateapipb.EgressPolicy
+	err    error
 }
 
 func (f *fakeEgressPolicyUpdater) UpdateActorEgressPolicy(ctx context.Context, req *ateapipb.UpdateActorEgressPolicyRequest, opts ...grpc.CallOption) (*ateapipb.EgressPolicy, error) {
@@ -681,14 +727,6 @@ func (f *fakeEgressPolicyUpdater) UpdateActorEgressPolicy(ctx context.Context, r
 		return nil, f.err
 	}
 	return f.policy, nil
-}
-
-func (f *fakeEgressPolicyUpdater) GetActor(ctx context.Context, req *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
-	f.actorReq = req
-	if f.actorErr != nil {
-		return nil, f.actorErr
-	}
-	return &ateapipb.Actor{}, nil
 }
 
 func TestUpdateEgressPolicyRunner_Run(t *testing.T) {
@@ -777,7 +815,7 @@ rules:
 		{
 			name:         "missing actor names the actor",
 			outputFmt:    "table",
-			updater:      &fakeEgressPolicyUpdater{err: status.Error(codes.NotFound, "EgressPolicy not found"), actorErr: status.Error(codes.NotFound, "Actor team-a/c1 not found")},
+			updater:      &fakeEgressPolicyUpdater{err: status.Error(codes.NotFound, "EgressPolicy not found"), fakeActorReader: fakeActorReader{actorErr: status.Error(codes.NotFound, "Actor team-a/c1 not found")}},
 			wantActorReq: &ateapipb.GetActorRequest{Actor: actor},
 			wantErr:      `actor "c1" in atespace "team-a" not found`,
 		},
@@ -791,7 +829,7 @@ rules:
 		{
 			name:         "actor lookup error wraps",
 			outputFmt:    "table",
-			updater:      &fakeEgressPolicyUpdater{err: status.Error(codes.NotFound, "EgressPolicy not found"), actorErr: status.Error(codes.PermissionDenied, "denied")},
+			updater:      &fakeEgressPolicyUpdater{err: status.Error(codes.NotFound, "EgressPolicy not found"), fakeActorReader: fakeActorReader{actorErr: status.Error(codes.PermissionDenied, "denied")}},
 			wantActorReq: &ateapipb.GetActorRequest{Actor: actor},
 			wantErr:      `failed to get actor "c1" in atespace "team-a": rpc error: code = PermissionDenied desc = denied`,
 		},
@@ -904,14 +942,12 @@ func TestDeleteOptionsFromFlags(t *testing.T) {
 }
 
 // fakeEgressPolicyDeleter records the requests it received and answers with a
-// configured policy or error. actorReq stays nil unless the runner reads the
-// actor, which it only does after a NotFound.
+// configured policy or error.
 type fakeEgressPolicyDeleter struct {
-	req      *ateapipb.DeleteActorEgressPolicyRequest
-	policy   *ateapipb.EgressPolicy
-	err      error
-	actorReq *ateapipb.GetActorRequest
-	actorErr error
+	fakeActorReader
+	req    *ateapipb.DeleteActorEgressPolicyRequest
+	policy *ateapipb.EgressPolicy
+	err    error
 }
 
 func (f *fakeEgressPolicyDeleter) DeleteActorEgressPolicy(ctx context.Context, req *ateapipb.DeleteActorEgressPolicyRequest, opts ...grpc.CallOption) (*ateapipb.EgressPolicy, error) {
@@ -920,14 +956,6 @@ func (f *fakeEgressPolicyDeleter) DeleteActorEgressPolicy(ctx context.Context, r
 		return nil, f.err
 	}
 	return f.policy, nil
-}
-
-func (f *fakeEgressPolicyDeleter) GetActor(ctx context.Context, req *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
-	f.actorReq = req
-	if f.actorErr != nil {
-		return nil, f.actorErr
-	}
-	return &ateapipb.Actor{}, nil
 }
 
 func TestDeleteEgressPolicyRunner_Run(t *testing.T) {
@@ -997,14 +1025,14 @@ func TestDeleteEgressPolicyRunner_Run(t *testing.T) {
 		},
 		{
 			name:         "missing actor fails",
-			deleter:      &fakeEgressPolicyDeleter{err: policyNotFound, actorErr: status.Error(codes.NotFound, "Actor team-a/c1 not found")},
+			deleter:      &fakeEgressPolicyDeleter{err: policyNotFound, fakeActorReader: fakeActorReader{actorErr: status.Error(codes.NotFound, "Actor team-a/c1 not found")}},
 			wantReq:      unguarded,
 			wantActorReq: wantActorReq,
 			wantErr:      `actor "c1" in atespace "team-a" not found`,
 		},
 		{
 			name:         "actor lookup error wraps",
-			deleter:      &fakeEgressPolicyDeleter{err: policyNotFound, actorErr: status.Error(codes.PermissionDenied, "denied")},
+			deleter:      &fakeEgressPolicyDeleter{err: policyNotFound, fakeActorReader: fakeActorReader{actorErr: status.Error(codes.PermissionDenied, "denied")}},
 			wantReq:      unguarded,
 			wantActorReq: wantActorReq,
 			wantErr:      `failed to get actor "c1" in atespace "team-a": rpc error: code = PermissionDenied desc = denied`,

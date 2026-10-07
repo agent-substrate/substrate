@@ -17,16 +17,34 @@ package cmd
 import (
 	"github.com/spf13/cobra"
 
+	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/steps"
 )
 
 var deployCmd = &cobra.Command{
-	Use:   "deploy",
-	Short: "Deploy Agent Substrate components",
+	Annotations: map[string]string{recordAnnotation: "yes"},
+	Use:         "deploy",
+	Short:       "Deploy Agent Substrate components",
 }
 
-// deployOpts holds the flags of deploy ate-system.
-var deployOpts steps.DeployOptions
+// deployAteSystemPath is the command path the ate-system settings bind to.
+const deployAteSystemPath = "deploy ate-system"
+
+// deployOptions reads the settings deploy ate-system owns.
+//
+// It validates here rather than through steps.DeployOptions.Validate because
+// only here is the channel that supplied the value known. `setup csi` takes
+// its driver as a positional argument and keeps the plain message, which is
+// correct for an argument: there is no channel to name.
+func deployOptions() (steps.DeployOptions, error) {
+	r := env.Cfg.Resolved()
+	opts := steps.DeployOptions{SetupCSI: r.String("csi.setup")}
+	if err := steps.ValidateCSIDriver(opts.SetupCSI); err != nil {
+		v, _ := r.Value("csi.setup")
+		return opts, &config.InvalidError{Value: v, Want: "nfs, hostpath, both or none"}
+	}
+	return opts, nil
+}
 
 var deployAteSystemCmd = &cobra.Command{
 	Use:   "ate-system",
@@ -38,23 +56,35 @@ it signs, PostgreSQL, ate-api-server, ate-controller, the atenet dataplane, and
 the atelet DaemonSet, then waits for each to roll out.
 
 The bundled PostgreSQL StatefulSet is skipped when
-ATE_API_POSTGRES_CONNECTION_STRING or the ATE_API_POSTGRES_CLOUDSQL_* variables
+ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING or the ATE_API_POSTGRES_CLOUDSQL_* variables
 select an external database.
 
 Shape the install with the global --atenet-dataplane, --cluster-size, and
 --cordon-control-plane flags.`,
-	// Flags are parsed by the time cobra validates arguments, and argument
-	// validation is the last thing that happens before the root command loads
-	// the configuration and connects to a cluster. Checking --setup-csi here
-	// keeps an unusable value from costing a credential fetch.
+	// Args runs before the root command loads the configuration, so only the
+	// flag is readable here. Checking it keeps an unusable value from costing
+	// a credential fetch, which is the common case; a value arriving from the
+	// environment or a configuration file is checked in RunE instead, where
+	// the resolved settings exist.
 	Args: func(cmd *cobra.Command, args []string) error {
 		if err := cobra.NoArgs(cmd, args); err != nil {
 			return err
 		}
-		return deployOpts.Validate()
+		if !cmd.Flags().Changed("setup-csi") {
+			return nil
+		}
+		driver, err := cmd.Flags().GetString("setup-csi")
+		if err != nil {
+			return err
+		}
+		return steps.ValidateCSIDriver(driver)
 	},
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		return env.DeployAteSystem(cmd.Context(), deployOpts)
+		opts, err := deployOptions()
+		if err != nil {
+			return err
+		}
+		return env.DeployAteSystem(cmd.Context(), opts)
 	},
 }
 
@@ -121,7 +151,7 @@ var deployPostgresCmd = &cobra.Command{
 	Long: `Deploy the experimental single-replica PostgreSQL StatefulSet on its own.
 
 "deploy ate-system" already brings PostgreSQL up, unless
-ATE_API_POSTGRES_CONNECTION_STRING or the ATE_API_POSTGRES_CLOUDSQL_* variables
+ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING or the ATE_API_POSTGRES_CLOUDSQL_* variables
 select an external database; this subcommand is for bringing the StatefulSet up
 by itself.`,
 	Args: cobra.NoArgs,
@@ -143,7 +173,12 @@ func init() {
 		deployPostgresCmd,
 	)
 
-	deployAteSystemCmd.Flags().StringVar(&deployOpts.SetupCSI, "setup-csi", "none",
-		"Also install CSI driver (nfs, hostpath, both, none; default: none)")
+	config.RegisterCommand(config.Setting{
+		Key: "csi.setup", Env: "SETUP_CSI", Flag: "setup-csi",
+		Kind: config.KindString, Default: "none",
+		Commands: []string{deployAteSystemPath},
+		Usage:    "Also install CSI driver (nfs, hostpath, both, none; default: none)",
+	})
+	config.BindCommandFlags(deployAteSystemPath, deployAteSystemCmd.Flags())
 	deployAteSystemCmd.Flags().Lookup("setup-csi").NoOptDefVal = "none"
 }

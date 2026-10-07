@@ -31,7 +31,6 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/go-logr/logr"
 	"github.com/spf13/pflag"
-	prombridge "go.opentelemetry.io/contrib/bridges/prometheus"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	corev1 "k8s.io/api/core/v1"
@@ -73,6 +72,9 @@ var (
 
 	otelTracesSamplerArg = pflag.String("otel-traces-sampler-arg", os.Getenv("OTEL_TRACES_SAMPLER_ARG"),
 		"Trace sampler argument set on ateom worker pods, ignored unless --otel-traces-sampler is set. Defaults to the controller's own OTEL_TRACES_SAMPLER_ARG.")
+
+	otelLogsExporter = pflag.String("otel-logs-exporter", os.Getenv("OTEL_LOGS_EXPORTER"),
+		"Logs exporter set on ateom worker pods. Empty keeps the ateom binary's default, none. Defaults to the controller's own OTEL_LOGS_EXPORTER.")
 
 	ateletServiceAccount = pflag.String("atelet-service-account", installdefaults.AteletServiceAccount, "ServiceAccount atelet runs as. It is the service-account segment of the SPIFFE ID each worker's atunnel expects on the credential broker, so it has to match what the deployment actually creates.")
 	routerServiceAccount = pflag.String("router-service-account", installdefaults.RouterServiceAccount, "ServiceAccount atenet-router runs as. It is the service-account segment of the SPIFFE ID each worker's atunnel accepts on actor ingress, so it has to match what the deployment actually creates.")
@@ -122,10 +124,9 @@ func main() {
 	defer serverboot.ShutdownProvider("TracerProvider", tp.Shutdown)
 
 	// controller-runtime records reconcile, workqueue, and runtime metrics into its
-	// own Prometheus registry, which the manager serves on a port nothing scrapes.
-	// Bridging it as a Producer puts them on the OTLP path instead.
-	mp, err := serverboot.InitMetricsPushOnly(ctx, serviceName,
-		padEmptyExponentialHistograms(prombridge.NewMetricProducer(prombridge.WithGatherer(ctrlmetrics.Registry))))
+	// own Prometheus registry, which the manager serves. On the OTLP path the
+	// bridged queue histograms are padded so the Telemetry API accepts idle ones.
+	mp, err := serverboot.InitMetricsBridged(ctx, serviceName, ctrlmetrics.Registry, padEmptyExponentialHistograms)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize metrics", err)
 	}
@@ -203,6 +204,7 @@ func main() {
 		OTelMetricExportTimeout:  *otelMetricExportTimeout,
 		OTelTracesSampler:        *otelTracesSampler,
 		OTelTracesSamplerArg:     *otelTracesSamplerArg,
+		OTelLogsExporter:         *otelLogsExporter,
 		SystemNamespace:          systemNamespace,
 		AteletServiceAccount:     *ateletServiceAccount,
 		RouterServiceAccount:     *routerServiceAccount,

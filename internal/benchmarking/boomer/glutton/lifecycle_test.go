@@ -183,7 +183,7 @@ func TestGluttonIterate_KeepsActorOnTransientResumeFailure(t *testing.T) {
 	const iterations = maxConsecutiveFailures + 2
 	errs := make([]error, iterations)
 	for i := range errs {
-		errs[i] = status.Error(codes.ResourceExhausted, "no free workers available")
+		errs[i] = status.Error(codes.ResourceExhausted, "no worker has room for the actor")
 	}
 	rt, fakeCtrl := newReplacementRuntime(t, errs...)
 

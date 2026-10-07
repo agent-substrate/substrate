@@ -25,24 +25,24 @@ import (
 	corev1 "k8s.io/api/core/v1"
 
 	"github.com/agent-substrate/substrate/internal/localca"
+	"github.com/agent-substrate/substrate/internal/localjwtauthority"
+	"github.com/agent-substrate/substrate/internal/oidcdiscovery"
 )
 
-// ate-api-server resolves --postgres-connection-string=@env and
-// --postgres-schema=@env from this ConfigMap. These are the keys the shell
-// installer writes, and an empty value for either makes the apiserver exit
-// ("--postgres-connection-string is required", "PostgreSQL schema must not be
-// empty"), so both the key set and the values are pinned here.
+// ate-api-server requires both connection strings and its schema in the
+// credential-bearing Secret.
 func TestBuildAPIServerEnvVars(t *testing.T) {
-	const dsn = "postgresql://postgres@postgres.ate-system.svc:5432/atepg?sslmode=verify-full"
+	const readWriteDSN = "postgresql://readwrite@postgres/atepg"
+	const ownerDSN = "postgresql://owner@postgres/atepg"
 
-	got := buildAPIServerEnvVars(dsn, "public")
+	got := buildAPIServerEnvVars(readWriteDSN, ownerDSN, "public")
 
-	want := []string{"ATE_API_POSTGRES_CONNECTION_STRING", "ATE_API_POSTGRES_SCHEMA"}
+	want := []string{"ATE_API_POSTGRES_OWNER_CONNECTION_STRING", "ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING", "ATE_API_POSTGRES_SCHEMA"}
 	if keys := slices.Sorted(maps.Keys(got)); !slices.Equal(keys, want) {
 		t.Errorf("keys = %v, want %v", keys, want)
 	}
-	if got["ATE_API_POSTGRES_CONNECTION_STRING"] != dsn {
-		t.Errorf("ATE_API_POSTGRES_CONNECTION_STRING = %q, want %q", got["ATE_API_POSTGRES_CONNECTION_STRING"], dsn)
+	if got["ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"] != readWriteDSN || got["ATE_API_POSTGRES_OWNER_CONNECTION_STRING"] != ownerDSN {
+		t.Errorf("unexpected PostgreSQL connections: %v", got)
 	}
 	if got["ATE_API_POSTGRES_SCHEMA"] != "public" {
 		t.Errorf("ATE_API_POSTGRES_SCHEMA = %q, want %q", got["ATE_API_POSTGRES_SCHEMA"], "public")
@@ -158,6 +158,39 @@ func TestNewCAPoolSecretData(t *testing.T) {
 			}
 			if got := root.NotAfter.Sub(root.NotBefore); got != caValidity {
 				t.Errorf("root validity = %v, want %v", got, caValidity)
+			}
+		})
+	}
+}
+
+func TestNewJWTPoolSecretData(t *testing.T) {
+	for _, alg := range []string{"ES256", "RS256"} {
+		t.Run(alg, func(t *testing.T) {
+			data, err := newJWTPoolSecretData(alg)
+			if err != nil {
+				t.Fatalf("newJWTPoolSecretData() error = %v", err)
+			}
+			if diff := cmp.Diff([]string{"pool"}, slices.Sorted(maps.Keys(data))); diff != "" {
+				t.Errorf("secret keys differ (-want +got):\n%s", diff)
+			}
+
+			pool, err := localjwtauthority.Unmarshal(data["pool"])
+			if err != nil {
+				t.Fatalf("Unmarshal() error = %v", err)
+			}
+			if len(pool.Authorities) != 1 {
+				t.Fatalf("pool has %d authorities, want 1", len(pool.Authorities))
+			}
+			authority := pool.Authorities[0]
+			if authority.Algorithm != alg {
+				t.Errorf("Algorithm = %q, want %q", authority.Algorithm, alg)
+			}
+			thumbprint, err := oidcdiscovery.Thumbprint(authority.SigningKey.Public())
+			if err != nil {
+				t.Fatalf("Thumbprint() error = %v", err)
+			}
+			if authority.ID != thumbprint || pool.ActiveForSigning != thumbprint {
+				t.Errorf("key ID %q, active %q; want both to be the thumbprint %q", authority.ID, pool.ActiveForSigning, thumbprint)
 			}
 		})
 	}

@@ -69,16 +69,29 @@ func (k *Keychain) Resolve(target authn.Resource) (authn.Authenticator, error) {
 	return k.ResolveContext(context.Background(), target)
 }
 
-// ResolveContext implements authn.ContextKeychain, returning the credentials of
-// the first provider that both claims the image and has an auth entry for it.
-// When none does it returns authn.Anonymous, which is what public registries
-// want.
+// ResolveContext implements authn.ContextKeychain. It returns the first
+// candidate, or authn.Anonymous if there are none.
 func (k *Keychain) ResolveContext(ctx context.Context, target authn.Resource) (authn.Authenticator, error) {
+	candidates, err := k.Candidates(ctx, target)
+	if err != nil {
+		return nil, err
+	}
+	if len(candidates) == 0 {
+		return authn.Anonymous, nil
+	}
+	return candidates[0], nil
+}
+
+// Candidates returns the credentials of all providers matching target, in the
+// order to try them: most specific auth key first, then config order. Failing
+// providers are logged and skipped, like the kubelet.
+func (k *Keychain) Candidates(ctx context.Context, target authn.Resource) ([]authn.Authenticator, error) {
 	// Registry and repository with no tag or digest
 	// ("us-docker.pkg.dev/proj/repo/image"), the granularity the protocol's
 	// cache keys are defined at.
 	image := target.String()
 
+	byKey := make(map[string][]credentialproviderv1.AuthConfig)
 	for _, p := range k.plugins {
 		claims, err := p.claims(image)
 		if err != nil {
@@ -87,11 +100,22 @@ func (k *Keychain) ResolveContext(ctx context.Context, target authn.Resource) (a
 		if !claims {
 			continue
 		}
-		auth, cached, err := p.provide(ctx, image)
-		if err != nil {
-			return nil, err
+		authMap, cached, err := p.provide(ctx, image)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
 		}
-		if auth == nil {
+		if err != nil {
+			slog.WarnContext(ctx, "Image credential provider failed; skipping it",
+				slog.String("provider", p.name), slog.String("image", image), slog.Any("err", err))
+			continue
+		}
+		keys, err := matchingAuthKeys(authMap, image)
+		if err != nil {
+			slog.WarnContext(ctx, "Image credential provider returned an invalid auth key; skipping it",
+				slog.String("provider", p.name), slog.String("image", image), slog.Any("err", err))
+			continue
+		}
+		if len(keys) == 0 {
 			slog.Debug("Image credential provider returned no credentials",
 				slog.String("provider", p.name), slog.String("image", image))
 			continue
@@ -102,12 +126,31 @@ func (k *Keychain) ResolveContext(ctx context.Context, target authn.Resource) (a
 		// cached distinguishes a served entry from a subprocess exec.
 		slog.InfoContext(ctx, "Resolved image credentials from credential provider",
 			slog.String("provider", p.name), slog.String("image", image), slog.Bool("cached", cached))
-		return authn.FromConfig(authn.AuthConfig{
-			Username: auth.Username,
-			Password: auth.Password,
-		}), nil
+		for _, key := range keys {
+			byKey[key] = append(byKey[key], authMap[key])
+		}
 	}
-	return authn.Anonymous, nil
+
+	keys := make([]string, 0, len(byKey))
+	for key := range byKey {
+		keys = append(keys, key)
+	}
+	sortAuthKeys(keys)
+	var candidates []authn.Authenticator
+	seen := make(map[credentialproviderv1.AuthConfig]struct{})
+	for _, key := range keys {
+		for _, auth := range byKey[key] {
+			if _, dup := seen[auth]; dup {
+				continue
+			}
+			seen[auth] = struct{}{}
+			candidates = append(candidates, authn.FromConfig(authn.AuthConfig{
+				Username: auth.Username,
+				Password: auth.Password,
+			}))
+		}
+	}
+	return candidates, nil
 }
 
 // cacheEntry is one plugin response's auth map, held until expiry. The whole
@@ -167,26 +210,18 @@ const globalCacheKey = "global"
 // stretching it could serve an expired one.
 const minCacheDuration = time.Minute
 
-// provide returns cached credentials for image, or execs the plugin and caches
-// what it returns; cached reports which. A nil AuthConfig with a nil error
-// means the plugin has no credentials for this image.
-func (p *plugin) provide(ctx context.Context, image string) (auth *credentialproviderv1.AuthConfig, cached bool, err error) {
-	authMap, cached := p.lookup(image)
-	if !cached {
-		resp, err := p.exec(ctx, image)
-		if err != nil {
-			return nil, false, err
-		}
-		authMap = resp.Auth
-		p.store(image, resp)
+// provide returns the plugin's auth map for image, from the cache if
+// possible; cached reports which.
+func (p *plugin) provide(ctx context.Context, image string) (auth map[string]credentialproviderv1.AuthConfig, cached bool, err error) {
+	if auth, ok := p.lookup(image); ok {
+		return auth, true, nil
 	}
-
-	key, err := bestAuthKey(authMap, image)
-	if err != nil || key == "" {
-		return nil, cached, err
+	resp, err := p.exec(ctx, image)
+	if err != nil {
+		return nil, false, err
 	}
-	matched := authMap[key]
-	return &matched, cached, nil
+	p.store(image, resp)
+	return resp.Auth, false, nil
 }
 
 // lookup tries every key type the plugin might have stored under, most

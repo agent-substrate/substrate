@@ -45,14 +45,12 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
-	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/reaper"
 	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"golang.org/x/sys/unix"
 )
 
 // hasSystemInfoVolumes reports whether any container mounts a system-info
@@ -76,23 +74,15 @@ func (s *AteomService) stageSystemInfoVolumes(ctx context.Context, actorUID, src
 	}
 	dst := filepath.Join(kata.SharedDir(actorUID), ocispec.ShareSystemInfo)
 	// Drop any stale mount first (lazy if busy), then ensure clean mountpoint.
-	if err := reaper.Run(exec.Command("umount", dst)); err != nil {
-		_ = reaper.Run(exec.Command("umount", "-l", dst))
-	}
+	kata.Unmount(dst)
 	if err := os.MkdirAll(dst, 0o755); err != nil {
 		return fmt.Errorf("creating %q: %w", dst, err)
 	}
-	cmd := exec.CommandContext(ctx, "mount", "--bind", src, dst)
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	if err := reaper.Run(cmd); err != nil {
-		return fmt.Errorf("bind-mounting system-info volumes at %q: %w (%s)", dst, err, strings.TrimSpace(stderr.String()))
+	if err := unix.Mount(src, dst, "", unix.MS_BIND, ""); err != nil {
+		return fmt.Errorf("bind-mounting system-info volumes at %q: %w", dst, err)
 	}
-	ro := exec.CommandContext(ctx, "mount", "-o", "remount,bind,ro", dst)
-	var roErr strings.Builder
-	ro.Stderr = &roErr
-	if err := reaper.Run(ro); err != nil {
-		return fmt.Errorf("remounting system-info volumes read-only %q: %w (%s)", dst, err, strings.TrimSpace(roErr.String()))
+	if err := kata.RemountReadOnly(dst); err != nil {
+		return fmt.Errorf("remounting system-info volumes read-only %q: %w", dst, err)
 	}
 	return nil
 }

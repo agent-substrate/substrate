@@ -18,12 +18,20 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 
+	"google.golang.org/grpc/codes"
+
+	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/ch"
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
+	"github.com/agent-substrate/substrate/internal/actorlock"
+	"github.com/agent-substrate/substrate/internal/apierror"
+	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 )
 
 // writeSnapshotConfig writes a config.json holding the given fs devices (plus the
@@ -174,6 +182,210 @@ func TestRewriteSnapshotSocketPaths(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("unchanged socket paths leave config.json untouched", func(t *testing.T) {
+		dir := t.TempDir()
+		cfgPath := filepath.Join(dir, "config.json")
+		cfg := map[string]any{
+			"vsock":   map[string]any{"cid": 3, "socket": kata.VsockSocketPath(id)},
+			"console": map[string]any{"mode": "File", "file": kata.ConsoleLogPath(id)},
+			"serial":  map[string]any{"mode": "File", "file": kata.SerialLogPath(id)},
+			"fs": []map[string]any{
+				{"tag": kata.FsTag, "socket": kata.VirtiofsdSocketPath(id)},
+			},
+		}
+		b, err := json.Marshal(cfg)
+		if err != nil {
+			t.Fatalf("marshaling config: %v", err)
+		}
+		if err := os.WriteFile(cfgPath, b, 0o600); err != nil {
+			t.Fatalf("writing config.json: %v", err)
+		}
+		fiBefore, err := os.Stat(cfgPath)
+		if err != nil {
+			t.Fatalf("stat before: %v", err)
+		}
+		inoBefore := fiBefore.Sys().(*syscall.Stat_t).Ino
+
+		if err := rewriteSnapshotSocketPaths(dir, id); err != nil {
+			t.Fatalf("rewriteSnapshotSocketPaths: %v", err)
+		}
+
+		fiAfter, err := os.Stat(cfgPath)
+		if err != nil {
+			t.Fatalf("stat after: %v", err)
+		}
+		inoAfter := fiAfter.Sys().(*syscall.Stat_t).Ino
+		if inoAfter != inoBefore {
+			t.Errorf("config.json inode changed (%d -> %d); expected no rewrite when socket paths already match", inoBefore, inoAfter)
+		}
+	})
+}
+
+func TestRestoreWorkloadRejectsEmptyRestoreDir(t *testing.T) {
+	s := &AteomService{
+		locks:    actorlock.New(),
+		inFlight: actorlock.NewInFlight(),
+	}
+
+	for _, tc := range []struct {
+		name string
+		req  *ateompb.RestoreWorkloadRequest
+	}{
+		{
+			name: "nil actor_dirs",
+			req:  &ateompb.RestoreWorkloadRequest{ActorUid: "actor-a"},
+		},
+		{
+			name: "empty restore_dir",
+			req: &ateompb.RestoreWorkloadRequest{
+				ActorUid: "actor-a",
+				ActorDirs: &ateompb.ActorDirs{
+					RootDir:                   "/node/actors/actor-a",
+					OciBundleDir:              "/node/actors/actor-a/bundle",
+					CheckpointDir:             "/node/actors/actor-a/checkpoint-state",
+					DurableDirVolumeMountsDir: "/node/actors/actor-a/durable-dirs",
+					SystemInfoVolumeRootsDir:  "/node/actors/actor-a/system-info",
+					VolumesDir:                "/node/actors/actor-a/volumes",
+				},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := s.RestoreWorkload(context.Background(), tc.req)
+			if apierror.Code(err) != codes.InvalidArgument {
+				t.Fatalf("RestoreWorkload() code = %v, want %v (err: %v)", apierror.Code(err), codes.InvalidArgument, err)
+			}
+		})
+	}
+}
+
+func TestMaybeDropStagedMemoryImage(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		memMode            string
+		preserveRestoreDir bool
+		wantRemoved        bool
+	}{
+		{
+			name:               "eager staging dir removes memory-ranges",
+			memMode:            ch.MemRestoreEager,
+			preserveRestoreDir: false,
+			wantRemoved:        true,
+		},
+		{
+			name:               "eager preserved dir keeps memory-ranges",
+			memMode:            ch.MemRestoreEager,
+			preserveRestoreDir: true,
+			wantRemoved:        false,
+		},
+		{
+			name:               "on-demand staging dir keeps memory-ranges",
+			memMode:            ch.MemRestoreOnDemand,
+			preserveRestoreDir: false,
+			wantRemoved:        false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			memPath := filepath.Join(dir, "memory-ranges")
+			if err := os.WriteFile(memPath, []byte("ram"), 0o600); err != nil {
+				t.Fatalf("writing memory-ranges: %v", err)
+			}
+
+			maybeDropStagedMemoryImage(context.Background(), dir, tc.memMode, tc.preserveRestoreDir)
+
+			_, err := os.Stat(memPath)
+			if tc.wantRemoved && !os.IsNotExist(err) {
+				t.Errorf("memory-ranges still exists (stat err = %v), want removed", err)
+			}
+			if !tc.wantRemoved && err != nil {
+				t.Errorf("memory-ranges missing (stat err = %v), want preserved", err)
+			}
+		})
+	}
+}
+
+func TestMergeOnDemandDeltaPreservesRestoreSource(t *testing.T) {
+	const pageSize = 4096
+	const fileSize = 2 * pageSize
+
+	basePage0 := bytes.Repeat([]byte{0xAA}, pageSize)
+	deltaPage1 := bytes.Repeat([]byte{0xBB}, pageSize)
+	wantMerged := append(append([]byte{}, basePage0...), deltaPage1...)
+
+	writePages := func(t *testing.T, path string, off int64, data []byte) {
+		t.Helper()
+		f, err := os.Create(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer f.Close()
+		if err := f.Truncate(fileSize); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.WriteAt(data, off); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Run("preserveRestoreSource=true keeps single-link base in restoreSourceDir", func(t *testing.T) {
+		restoreDir := t.TempDir()
+		checkpointDir := t.TempDir()
+		basePath := filepath.Join(restoreDir, "memory-ranges")
+		deltaPath := filepath.Join(checkpointDir, "memory-ranges")
+
+		writePages(t, basePath, 0, basePage0)
+		writePages(t, deltaPath, pageSize, deltaPage1)
+
+		if err := mergeOnDemandDelta(context.Background(), restoreDir, checkpointDir, true); err != nil {
+			t.Fatalf("mergeOnDemandDelta: %v", err)
+		}
+
+		// The preserved local snapshot's memory-ranges must still exist and hold
+		// its original contents.
+		gotBase, err := os.ReadFile(basePath)
+		if err != nil {
+			t.Fatalf("base memory-ranges was removed from preserved restoreDir: %v", err)
+		}
+		wantBase := append(append([]byte{}, basePage0...), make([]byte, pageSize)...)
+		if !bytes.Equal(gotBase, wantBase) {
+			t.Errorf("base memory-ranges was mutated in preserved restoreDir")
+		}
+
+		gotMerged, err := os.ReadFile(deltaPath)
+		if err != nil {
+			t.Fatalf("reading merged memory-ranges: %v", err)
+		}
+		if !bytes.Equal(gotMerged, wantMerged) {
+			t.Errorf("merged memory-ranges mismatch")
+		}
+	})
+
+	t.Run("preserveRestoreSource=false moves expendable base into checkpointDir", func(t *testing.T) {
+		restoreDir := t.TempDir()
+		checkpointDir := t.TempDir()
+		basePath := filepath.Join(restoreDir, "memory-ranges")
+		deltaPath := filepath.Join(checkpointDir, "memory-ranges")
+
+		writePages(t, basePath, 0, basePage0)
+		writePages(t, deltaPath, pageSize, deltaPage1)
+
+		if err := mergeOnDemandDelta(context.Background(), restoreDir, checkpointDir, false); err != nil {
+			t.Fatalf("mergeOnDemandDelta: %v", err)
+		}
+
+		if _, err := os.Stat(basePath); !os.IsNotExist(err) {
+			t.Errorf("expendable base memory-ranges still in restoreDir (stat err = %v), want moved", err)
+		}
+		gotMerged, err := os.ReadFile(deltaPath)
+		if err != nil {
+			t.Fatalf("reading merged memory-ranges: %v", err)
+		}
+		if !bytes.Equal(gotMerged, wantMerged) {
+			t.Errorf("merged memory-ranges mismatch")
+		}
+	})
 }
 
 func TestNewReseedNonce(t *testing.T) {
@@ -192,5 +404,34 @@ func TestNewReseedNonce(t *testing.T) {
 	}
 	if bytes.Equal(a, b) {
 		t.Fatal("two nonces are identical; reseed would not make clones diverge")
+	}
+}
+
+func TestRPCsRejectUntrustedRuntimeAssetPaths(t *testing.T) {
+	s := &AteomService{}
+	ctx := context.Background()
+	dirs := &ateompb.ActorDirs{
+		RootDir:                   "/node/actors/actor-a",
+		OciBundleDir:              "/node/actors/actor-a/bundle",
+		CheckpointDir:             "/node/actors/actor-a/checkpoint-state",
+		RestoreDir:                "/node/actors/actor-a/restore",
+		DurableDirVolumeMountsDir: "/node/actors/actor-a/durable-dirs",
+		SystemInfoVolumeRootsDir:  "/node/actors/actor-a/system-info",
+		VolumesDir:                "/node/actors/actor-a/volumes",
+	}
+	assets := map[string]string{assetCH: "/bin/sh"}
+	for name, call := range map[string]func() error{
+		"RunWorkload": func() error {
+			_, err := s.RunWorkload(ctx, &ateompb.RunWorkloadRequest{ActorDirs: dirs, RuntimeAssetPaths: assets})
+			return err
+		},
+		"RestoreWorkload": func() error {
+			_, err := s.RestoreWorkload(ctx, &ateompb.RestoreWorkloadRequest{ActorDirs: dirs, RuntimeAssetPaths: assets})
+			return err
+		},
+	} {
+		if got := apierror.Code(call()); got != codes.InvalidArgument {
+			t.Errorf("%s() code = %v, want %v", name, got, codes.InvalidArgument)
+		}
 	}
 }

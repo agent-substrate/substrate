@@ -27,6 +27,9 @@ image, then deploys the Locust workers:
 Useful flags:
 
 * `--worker-count N` — number of `WorkerPool` replicas (default 1).
+* `--worker-memory SIZE` — memory request and limit for each `WorkerPool` pod
+  (default unset, the pod is unsized). Set it above half a node's allocatable
+  memory to get one worker per node.
 * `--skip-build` — reuse the existing `:latest` locust image (skip the
   `docker build && docker push` step).
 
@@ -45,7 +48,7 @@ convenience:
 ```
 
 The installer accepts `--benchmark-worker-count N` (default `1`).
-`--skip-build` is only available when invoking
+`--skip-build` and `--worker-memory` are only available when invoking
 `benchmarking/deploy_locust.sh` directly.
 
 ## Running Tests
@@ -260,12 +263,36 @@ Sizes are Kubernetes quantities. Each op is one glutton RPC:
 | `churn_ram` | `key`, `size` | re-randomizes part of an array in place, dirtying pages |
 | `walk_ram` | `key` | touches one byte per page: demand-paging cost after a resume |
 | `ping` | none | a minimal round trip through the router |
+| `dwell` | `millis` | no request: the actor stays resident and idle, as a gateway does during a model round trip or a typing gap |
 
 Loading is strict: unknown op kinds or fields, an argument a kind does not
 take, a read of a file nothing wrote, a walk of an array nothing filled, a
 duplicate step name, or a `min_actor_memory` below the declared RAM plus
 disk all fail before any actor is created. Built-in variants are checked by
 `TestEmbeddedScriptsAreValid`, so a broken file cannot merge.
+
+#### Built-in script variants
+
+`coding-session` (default) is a coding agent working one task: 20 steps of
+build, test and edit work, each preceded by a few seconds of LLM thinking
+spent suspended; about 40 CPU-seconds of sandbox work per lap.
+
+`personal-assistant` is an always-on assistant of the OpenClaw or Hermes
+Agent kind: one lap is one day in real time, with about 30 user messages
+in 7 clusters, a heartbeat turn every 30 minutes while the user is awake,
+hourly system-event crons, a morning briefing, model-catalog refreshes,
+one context compaction and a nightly memory sweep (61 wakes, about 65
+CPU-seconds and 150 MiB written per lap, a 640Mi resident heap that grows
+to about 960Mi). Each turn reads its session store, ships a 50 to 110 KiB
+context out through the router, dwells for the model round trip, and
+appends to its store, sized from an strace profile of OpenClaw; the
+script's header comment lists the figures. Its think gaps are the real
+idle gaps, so run it with a fractional think scale:
+`--agentsession-script personal-assistant --agentsession-think-scale 0.02`
+plays a day in about 30 minutes. Because every heartbeat and cron is a
+wake, the script also shows what an always-on agent costs a system that
+suspends it between events: an internal timer cannot fire in a suspended
+sandbox, so each of those turns needs an external wake.
 
 To run a script of your own without rebuilding anything, hand it to the
 locust deploy:

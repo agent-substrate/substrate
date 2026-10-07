@@ -248,3 +248,34 @@ func TestMergeDeltaIntoBaseSizeMismatch(t *testing.T) {
 		t.Errorf("base should be intact after a refused merge: %v", err)
 	}
 }
+
+// Zero runs inside a data region come out as holes, as with cp --sparse=always.
+func TestCopySparseFileLeavesZeroBlocksAsHoles(t *testing.T) {
+	dir := t.TempDir()
+	// 1 MiB of written (allocated) zeros with one non-zero page in the middle.
+	data := make([]byte, 1<<20)
+	copy(data[512<<10:], bytes.Repeat([]byte{0xab}, 4096))
+	src := filepath.Join(dir, "src")
+	if err := os.WriteFile(src, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(dir, "dst")
+	if err := copySparseFile(context.Background(), src, dst); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, data) {
+		t.Fatal("copy differs from source")
+	}
+	var st syscall.Stat_t
+	if err := syscall.Stat(dst, &st); err != nil {
+		t.Fatal(err)
+	}
+	// st.Blocks counts 512-byte units; allow slack for the filesystem's block size.
+	if allocated := st.Blocks * 512; allocated > 64<<10 {
+		t.Errorf("dst allocates %d bytes, want the zero runs left as holes", allocated)
+	}
+}

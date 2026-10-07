@@ -25,7 +25,7 @@ import (
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 	metav1ac "k8s.io/client-go/applyconfigurations/meta/v1"
 
-	"github.com/agent-substrate/substrate/internal/ateomcapacity"
+	"github.com/agent-substrate/substrate/internal/ateom"
 	"github.com/agent-substrate/substrate/internal/deviceplugin"
 	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/nodepath"
@@ -79,7 +79,13 @@ type ateomOTelSettings struct {
 	// default and drops the arg, which is dead config on its own.
 	TracesSampler    string
 	TracesSamplerArg string
+	// LogsExporter is the raw OTEL_LOGS_EXPORTER value. otlp sends the usage
+	// records over OTLP instead of stdout; empty keeps ateom's default, none.
+	LogsExporter string
 }
+
+// workerPoolLabel names the WorkerPool on each of its worker pods.
+const workerPoolLabel = "ate.dev/worker-pool"
 
 const (
 	atunnelIdentityVolume       = "atunnel-identity"
@@ -104,7 +110,7 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettin
 			annotations[key] = value
 		}
 	}
-	labels["ate.dev/worker-pool"] = wp.Name
+	labels[workerPoolLabel] = wp.Name
 
 	args := []string{
 		"--pod-uid=$(POD_UID)",
@@ -163,7 +169,7 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettin
 		WithVolumeMounts(
 			corev1ac.VolumeMount().
 				WithName(ateomCapacityVolume).
-				WithMountPath(ateomcapacity.CapacityMountPath).
+				WithMountPath(ateom.CapacityMountPath).
 				WithReadOnly(true),
 			corev1ac.VolumeMount().
 				WithName("run-ateom").
@@ -188,8 +194,8 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettin
 				WithName(ateomCapacityVolume).
 				WithDownwardAPI(corev1ac.DownwardAPIVolumeSource().
 					WithItems(
-						resourceFieldRefFile(ateomcapacity.CPULimitFile, "limits.cpu", milliCores),
-						resourceFieldRefFile(ateomcapacity.MemoryLimitFile, "limits.memory", wholeBytes),
+						resourceFieldRefFile(ateom.CPULimitFile, "limits.cpu", milliCores),
+						resourceFieldRefFile(ateom.MemoryLimitFile, "limits.memory", wholeBytes),
 					)),
 			corev1ac.Volume().
 				WithName("run-ateom").
@@ -252,7 +258,7 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettin
 					WithMaxUnavailable(intstr.FromString(workerRolloutMaxUnavailable)))).
 			WithProgressDeadlineSeconds(workerRolloutProgressDeadlineSeconds).
 			WithSelector(metav1ac.LabelSelector().
-				WithMatchLabels(map[string]string{"ate.dev/worker-pool": wp.Name})).
+				WithMatchLabels(map[string]string{workerPoolLabel: wp.Name})).
 			WithTemplate(corev1ac.PodTemplateSpec().
 				WithLabels(labels).
 				WithAnnotations(annotations).
@@ -263,15 +269,18 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettin
 // telemetry is configured. Every ref precedes OTEL_RESOURCE_ATTRIBUTES so its
 // $(...) substitutions resolve.
 func ateomContainerEnv(otel ateomOTelSettings) []*corev1ac.EnvVarApplyConfiguration {
+	// The pool pair labels every usage record, telemetry export or not. A
+	// worker pod runs in its WorkerPool's namespace.
 	envs := []*corev1ac.EnvVarApplyConfiguration{
 		fieldRefEnv("POD_UID", "metadata.uid"),
+		fieldRefEnv("POD_NAMESPACE", "metadata.namespace"),
+		fieldRefEnv("WORKER_POOL_NAME", "metadata.labels['"+workerPoolLabel+"']"),
 	}
 	if otel.Endpoint == "" {
 		return envs
 	}
 	envs = append(envs,
 		fieldRefEnv("POD_NAME", "metadata.name"),
-		fieldRefEnv("POD_NAMESPACE", "metadata.namespace"),
 		fieldRefEnv("NODE_NAME", "spec.nodeName"),
 		corev1ac.EnvVar().WithName("OTEL_EXPORTER_OTLP_ENDPOINT").WithValue(otel.Endpoint),
 		corev1ac.EnvVar().WithName("OTEL_RESOURCE_ATTRIBUTES").WithValue(ateomOTelResourceAttributes),
@@ -285,6 +294,11 @@ func ateomContainerEnv(otel ateomOTelSettings) []*corev1ac.EnvVarApplyConfigurat
 		envs = append(envs, corev1ac.EnvVar().
 			WithName("OTEL_METRIC_EXPORT_TIMEOUT").
 			WithValue(otel.MetricExportTimeout))
+	}
+	if otel.LogsExporter != "" {
+		envs = append(envs, corev1ac.EnvVar().
+			WithName("OTEL_LOGS_EXPORTER").
+			WithValue(otel.LogsExporter))
 	}
 	if otel.TracesSampler != "" {
 		envs = append(envs, corev1ac.EnvVar().
@@ -521,6 +535,7 @@ func applyWorkerPoolPodTemplate(
 	podSpecAC.NodeSelector = map[string]string{}
 	podSpecAC.Tolerations = []corev1ac.TolerationApplyConfiguration{}
 	podSpecAC.WithPriorityClassName("")
+	podSpecAC.WithServiceAccountName("default")
 	podSpecAC.WithAffinity(corev1ac.Affinity())
 	resourcesAC := corev1ac.ResourceRequirements()
 	containerAC.WithResources(resourcesAC)
@@ -534,6 +549,9 @@ func applyWorkerPoolPodTemplate(
 	}
 	podSpecAC.Tolerations = tolerationApplyValues(tolerationsToApply(tmpl.Tolerations))
 	podSpecAC.WithPriorityClassName(tmpl.PriorityClassName)
+	if tmpl.ServiceAccountName != nil {
+		podSpecAC.WithServiceAccountName(*tmpl.ServiceAccountName)
+	}
 
 	if tmpl.NodeAffinity != nil {
 		podSpecAC.WithAffinity(corev1ac.Affinity().WithNodeAffinity(nodeAffinityToApply(tmpl.NodeAffinity)))

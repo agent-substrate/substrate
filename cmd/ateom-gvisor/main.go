@@ -37,13 +37,12 @@ import (
 	"github.com/agent-substrate/substrate/internal/actorlog"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
-	"github.com/agent-substrate/substrate/internal/ateomcapacity"
+	"github.com/agent-substrate/substrate/internal/ateom"
 	"github.com/agent-substrate/substrate/internal/ateomcgroup"
 	"github.com/agent-substrate/substrate/internal/ateomnet"
 	"github.com/agent-substrate/substrate/internal/ateomstats"
 	"github.com/agent-substrate/substrate/internal/ateomtunnel"
 	"github.com/agent-substrate/substrate/internal/childreap"
-	"github.com/agent-substrate/substrate/internal/contextlogging"
 	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/ocispec"
@@ -108,8 +107,7 @@ func do(ctx context.Context) error {
 	defer cancel()
 
 	syncedWriter := actorlog.NewSyncedWriter(os.Stdout)
-	logger := slog.New(contextlogging.NewHandler(slog.NewJSONHandler(syncedWriter, &slog.HandlerOptions{Level: serverboot.LogLevel()})))
-	slog.SetDefault(logger)
+	serverboot.InitLoggerWithWriter(syncedWriter)
 	if err := serverboot.SetLogLevel(*logLevelFlag); err != nil {
 		return err
 	}
@@ -160,14 +158,14 @@ func do(ctx context.Context) error {
 
 	lp, err := serverboot.InitLogging(ctx, serverboot.LoggingOptions{
 		ServiceName:  serviceName,
-		Exporter:     serverboot.ResolveLogsExporter(ctx, serverboot.LogsExporterNone),
+		Exporter:     serverboot.ResolveLogsExporter(ctx),
 		ExporterConn: relayConn,
 		RelayCapable: true,
 	})
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize logging", err)
 	}
-	// Nil when the exporter is none.
+	// Nil when the exporter does not include otlp.
 	if lp != nil {
 		defer serverboot.ShutdownProvider("LoggerProvider", lp.Shutdown)
 	}
@@ -244,7 +242,7 @@ func do(ctx context.Context) error {
 	// outlast, including the window before the Worker record exists; anything
 	// that reaches here is a misconfiguration no restart-in-place will fix.
 	go func() {
-		err := ateomcapacity.Report(ctx, ateomcapacity.ReportConfig{
+		err := ateom.Report(ctx, ateom.ReportConfig{
 			SocketPath:           nodepath.AteomSupportSocket,
 			CredentialBundlePath: tunnelConfig.CredentialBundle,
 			TrustBundlePath:      tunnelConfig.TrustBundle,
@@ -502,6 +500,14 @@ func containerNames(containers []*ateompb.Container) []string {
 }
 
 // validateActorDirs rejects a request whose actor directories are unusable.
+// validateRunscPath ensures we only execute runsc from the static files dir
+func validateRunscPath(p string) error {
+	if errs := resources.ValidateRuntimeAssetPath(nodepath.StaticFilesDir, p, field.NewPath("runsc_path")); len(errs) > 0 {
+		return resources.ToAPIError(errs)
+	}
+	return nil
+}
+
 func validateActorDirs(actorDirs *ateompb.ActorDirs) error {
 	if errs := resources.ValidateActorDirs(actorDirs, field.NewPath("actor_dirs")); len(errs) > 0 {
 		return apierror.InvalidArgument("%v", errs.ToAggregate())
@@ -511,6 +517,9 @@ func validateActorDirs(actorDirs *ateompb.ActorDirs) error {
 
 func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkloadRequest) (resp *ateompb.RunWorkloadResponse, retErr error) {
 	if err := validateActorDirs(req.GetActorDirs()); err != nil {
+		return nil, err
+	}
+	if err := validateRunscPath(req.GetRunscPath()); err != nil {
 		return nil, err
 	}
 	if !s.locks.Lock(ctx, req.GetActorUid()) {
@@ -633,6 +642,9 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	if err := validateActorDirs(req.GetActorDirs()); err != nil {
 		return nil, err
 	}
+	if err := validateRunscPath(req.GetRunscPath()); err != nil {
+		return nil, err
+	}
 	if !s.locks.Lock(ctx, req.GetActorUid()) {
 		return nil, fmt.Errorf("gave up waiting for the actor's lock: %w", ctx.Err())
 	}
@@ -667,6 +679,8 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		return nil, fmt.Errorf("while creating checkpoint directory: %w", err)
 	}
 
+	// durableFiles are the durable-dir tars written below: the DATA subset.
+	var durableFiles []string
 	// Always take durable-dir snapshot if at least one container has a durable-dir volume mount.
 	// TODO(dberkov): this is a temporary workaround until gVisor supports taking durable-dir snapshots in a single request with the process snapshot.
 	switch req.GetScope() {
@@ -677,7 +691,8 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		if err := rcmd.cmdPause(ctx, ocispec.PauseContainer); err != nil {
 			return nil, fmt.Errorf("while pausing pause container: %w", err)
 		}
-		tarErr := tarDurableVolumes(ctx, req.GetActorDirs().GetDurableDirVolumeMountsDir(), checkpointPath)
+		var tarErr error
+		durableFiles, tarErr = tarDurableVolumes(ctx, req.GetActorDirs().GetDurableDirVolumeMountsDir(), checkpointPath, durableVolumeNames(req.GetSpec()))
 		// Undoing our own pause must not depend on the caller's context:
 		// tarutil does not check ctx, so a deadline expiring mid-tar would
 		// fail the resume instantly and leave the sandbox paused forever.
@@ -696,7 +711,9 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 			return nil, fmt.Errorf("while checkpointing pause: %w", err)
 		}
 		if hasDurableVolumes(req.GetSpec().GetContainers()) {
-			if err := tarDurableVolumes(ctx, req.GetActorDirs().GetDurableDirVolumeMountsDir(), checkpointPath); err != nil {
+			var err error
+			durableFiles, err = tarDurableVolumes(ctx, req.GetActorDirs().GetDurableDirVolumeMountsDir(), checkpointPath, durableVolumeNames(req.GetSpec()))
+			if err != nil {
 				return nil, fmt.Errorf("while archiving durable-dir volumes: %w", err)
 			}
 		}
@@ -723,11 +740,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor checkpointed", attribution)
 
-	resp := &ateompb.CheckpointWorkloadResponse{SnapshotFiles: snapshotFiles}
-	if slices.Contains(snapshotFiles, durableTarFile) {
-		resp.DataSnapshotFiles = []string{durableTarFile}
-	}
-	return resp, nil
+	return &ateompb.CheckpointWorkloadResponse{SnapshotFiles: snapshotFiles, DataSnapshotFiles: durableFiles}, nil
 }
 
 // listSnapshotFiles returns the (relative) names of regular files directly under
@@ -808,6 +821,9 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	if err := validateActorDirs(req.GetActorDirs()); err != nil {
 		return nil, err
 	}
+	if err := validateRunscPath(req.GetRunscPath()); err != nil {
+		return nil, err
+	}
 	if !s.locks.Lock(ctx, req.GetActorUid()) {
 		return nil, fmt.Errorf("gave up waiting for the actor's lock: %w", ctx.Err())
 	}
@@ -872,7 +888,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	checkpointDir := req.GetActorDirs().GetRestoreDir()
 
 	if hasDurableVolumes(req.GetSpec().GetContainers()) {
-		if err := untarDurableVolumes(req.GetActorDirs().GetDurableDirVolumeMountsDir(), checkpointDir); err != nil {
+		if err := untarDurableVolumes(req.GetActorDirs().GetDurableDirVolumeMountsDir(), checkpointDir, durableVolumeNames(req.GetSpec())); err != nil {
 			return nil, fmt.Errorf("while restoring durable-dir volumes: %w", err)
 		}
 	}
@@ -955,6 +971,9 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 
 func (s *AteomService) TerminateWorkload(ctx context.Context, req *ateompb.TerminateWorkloadRequest) (*ateompb.TerminateWorkloadResponse, error) {
 	if err := validateActorDirs(req.GetActorDirs()); err != nil {
+		return nil, err
+	}
+	if err := validateRunscPath(req.GetRunscPath()); err != nil {
 		return nil, err
 	}
 	if !s.locks.Lock(ctx, req.GetActorUid()) {

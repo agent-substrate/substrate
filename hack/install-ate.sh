@@ -76,6 +76,17 @@ demo_usage() {
 usage() {
   echo "Usage: $0 [options]"
   echo ""
+  echo "Configuration:"
+  echo ""
+  echo "  ATE_CONFIG=PATH                        Read settings from a configuration document. Every setting below that"
+  echo "                                         names an environment variable can be set there instead, including the"
+  echo "                                         ones this script turns into flags. Settings in the document outrank"
+  echo "                                         the environment; a flag passed here outranks both."
+  echo "                                         See docs/operator-install.md."
+  echo ""
+  echo "  ATE_NO_REPORT_DEFAULTS=1               List only the settings something set in the configuration"
+  echo "                                         report, rather than every setting and where it came from."
+  echo ""
   echo "Overall infrastructure (all infrastructure components):"
   echo ""
   echo "  --deploy-ate-system                    Deploy core system (CRDs, atelet, apiserver)"
@@ -97,18 +108,17 @@ usage() {
   echo "  --experimental-additional-egress-extproc-service NS/SVC:PORT"
   echo "                                         Run an additional ext_proc authorization filter, served by that Service."
   echo "                                         Requires --atenet-dataplane=envoy."
-  echo "  --experimental-egress-credential-injection"
-  echo "                                         Point the egress gateway's MITM-leg handler at a credential provider, so a"
-  echo "                                         matching EgressPolicy rule injects its credential. A modifier applied when"
-  echo "                                         the gateway is deployed (e.g. with --deploy-atenet); the credential provider"
-  echo "                                         itself is deployed separately. Requires --atenet-dataplane=envoy."
-  echo "  --credential-provider-name NAME        Provider the injector serves, as a ate-secret:// prefix"
-  echo "                                         (default ate-secret://k8s.io). Only meaningful with"
-  echo "                                         --experimental-egress-credential-injection. (experimental)"
-  echo "  --credential-provider-address HOST:PORT"
-  echo "                                         Address the egress gateway dials the credential provider at"
-  echo "                                         (default k8s-credential-provider.ate-system.svc:50051). Only meaningful with"
-  echo "                                         --experimental-egress-credential-injection. (experimental)"
+  echo ""
+  echo "Egress credential injection (required by --deploy-ate-system and --deploy-atenet):"
+  echo ""
+  echo "  --credential-provider JSON             Credential provider the egress gateway injects credentials from, or"
+  echo "                                         ATE_CREDENTIAL_PROVIDER. One of:"
+  echo "                                           '{\"name\":\"k8s.io\"}'  deploy the bundled Kubernetes Secrets provider,"
+  echo "                                                                with a NetworkPolicy that admits only the egress gateway"
+  echo "                                           '{\"enabled\":false}'  turn injection off"
+  echo "                                           '{\"name\":\"<provider>\",\"address\":\"<host>:<port>\"}'"
+  echo "                                                                use a provider you deploy yourself"
+  echo "                                         Any provider requires --atenet-dataplane=envoy."
   echo ""
   echo "Infrastructure components:"
   echo ""
@@ -128,11 +138,14 @@ usage() {
   echo "  --create-api-server-env-vars           Create ate-api-server env vars"
   echo "  --create-api-authentication-config     Create the default ate-api-server authentication config"
   echo ""
-  echo "PostgreSQL configuration (either of the first two selects an external"
-  echo "database and skips the bundled instance):"
+  echo "PostgreSQL configuration (a connection DSN or Cloud SQL instance selects"
+  echo "an external database and skips the bundled instance):"
   echo ""
-  echo "  ATE_API_POSTGRES_CONNECTION_STRING     DSN for any external PostgreSQL (stored in a Secret;"
+  echo "  ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING  Application DSN for external PostgreSQL (stored in a Secret;"
   echo "                                         pair with ATE_API_POSTGRES_SERVER_CA_FILE for sslmode=verify-ca)"
+  echo "  ATE_API_POSTGRES_OWNER_CONNECTION_STRING       Optional owner DSN; defaults to the read/write DSN"
+  echo "  ATE_API_POSTGRES_READ_WRITE_ROLE       Role assumed by the read/write pool (default: substrate_readwrite)"
+  echo "  ATE_API_POSTGRES_OWNER_ROLE            Role assumed by the owner pool (default: substrate_owner)"
   echo "  ATE_API_POSTGRES_CLOUDSQL_INSTANCE     Cloud SQL instance connection name (project:region:instance)."
   echo "                                         Deploys the Cloud SQL Auth Proxy sidecar: connector-managed TLS"
   echo "                                         and automatic IAM database auth, no passwords (see tools/setup-gcp/cloud-sql.md)."
@@ -142,7 +155,7 @@ usage() {
   echo "  ATE_API_POSTGRES_CLOUDSQL_IAM_AUTH     true (default) | false (password-over-proxy escape hatch)"
   echo "  ATE_API_POSTGRES_POOL_MAX_CONNS        pgxpool max connections per ateapi replica (default: max(4, NumCPU))"
   echo "  ATE_API_POSTGRES_SERVER_CA_FILE        PEM file to mount for verify-ca DSNs (non-Cloud-SQL databases)"
-  echo "  ATE_API_POSTGRES_SCHEMA                Select the Substrate schema (default: public)"
+  echo "  ATE_API_POSTGRES_SCHEMA                Select the Substrate schema (default: substrate)"
   echo ""
   echo "Authentication configuration:"
   echo ""
@@ -150,6 +163,8 @@ usage() {
   echo "                                         Default: derived from PROJECT_ID/CLUSTER_LOCATION/CLUSTER_NAME"
   echo "                                         (https://container.googleapis.com/v1/projects/.../clusters/...),"
   echo "                                         else the cluster's OIDC discovery document"
+  echo "  ACTOR_JWT_ALGORITHM                    Signing algorithm of a newly created actor JWT pool: ES256 (default) | RS256."
+  echo "                                         Use RS256 for relying parties that don't support ES256. Has no effect once the pool exists."
   echo ""
   echo "Benchmarks (see benchmarking/README.md for details and customization):"
   echo ""
@@ -261,24 +276,13 @@ for ((i = 0; i < ${#prescan_args[@]}; i++)); do
       fi
       GLOBAL_FLAGS+=("--experimental-additional-egress-extproc-service=${prescan_args[$((i + 1))]}")
       ;;
-    --experimental-egress-credential-injection)
-      GLOBAL_FLAGS+=(--experimental-egress-credential-injection)
-      ;;
-    --credential-provider-name=*) GLOBAL_FLAGS+=("${prescan_args[i]}") ;;
-    --credential-provider-name)
+    --credential-provider=*) GLOBAL_FLAGS+=("${prescan_args[i]}") ;;
+    --credential-provider)
       if (( i + 1 >= ${#prescan_args[@]} )); then
-        echo "Error: --credential-provider-name requires a value" >&2
+        echo "Error: --credential-provider requires a JSON value, e.g. '{\"name\":\"k8s.io\"}'" >&2
         exit 1
       fi
-      GLOBAL_FLAGS+=("--credential-provider-name=${prescan_args[$((i + 1))]}")
-      ;;
-    --credential-provider-address=*) GLOBAL_FLAGS+=("${prescan_args[i]}") ;;
-    --credential-provider-address)
-      if (( i + 1 >= ${#prescan_args[@]} )); then
-        echo "Error: --credential-provider-address requires <host>:<port>" >&2
-        exit 1
-      fi
-      GLOBAL_FLAGS+=("--credential-provider-address=${prescan_args[$((i + 1))]}")
+      GLOBAL_FLAGS+=("--credential-provider=${prescan_args[$((i + 1))]}")
       ;;
     --podcert-workers-per-signer=*) GLOBAL_FLAGS+=("${prescan_args[i]}") ;;
     --podcert-workers-per-signer)
@@ -355,12 +359,12 @@ while [[ "$#" -gt 0 ]]; do
     --atenet-dataplane|--podcert-workers-per-signer|--rollout-timeout|--otlp-endpoint) shift ;;
     --cluster-size) shift ;;
     --experimental-additional-egress-extproc-service) shift ;;
-    --credential-provider-name|--credential-provider-address) shift ;;
+    --credential-provider) shift ;;
     --benchmark-worker-count|--benchmark-sandbox-class|--benchmark-actor-memory) shift ;;
     --atenet-dataplane=*|--podcert-workers-per-signer=*|--rollout-timeout=*|--otlp-endpoint=*) ;;
     --cluster-size=*|--cordon-control-plane|--cordon-control-plane=*) ;;
     --experimental-additional-egress-extproc-service=*) ;;
-    --experimental-egress-credential-injection|--credential-provider-name=*|--credential-provider-address=*) ;;
+    --credential-provider=*) ;;
     --benchmark-worker-count=*|--benchmark-sandbox-class=*|--benchmark-actor-memory=*) ;;
 
     --deploy-ate-system) ate_setup deploy ate-system "--setup-csi=${SETUP_CSI}" ;;

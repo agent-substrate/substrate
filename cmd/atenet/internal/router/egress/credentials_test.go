@@ -52,116 +52,152 @@ func bearerTokenResponse(token string) *credproviderpb.FetchSecretResponse {
 	return &credproviderpb.FetchSecretResponse{OpaqueBytes: []byte(token)}
 }
 
-// injectionHandler builds a handler whose actor's policy injects a credential
-// for HTTPS to api.example.com, with provider as the credential provider (nil
-// leaves injection off).
-func injectionHandler(provider credproviderpb.CredentialProviderClient, providerName string) *Handler {
-	return injectionHandlerFor(credentialInjectionPolicySample("api.example.com"), provider, providerName)
-}
-
 func injectionHandlerFor(policy *ateapipb.EgressPolicy, provider credproviderpb.CredentialProviderClient, providerName string) *Handler {
 	return New(&egressMockClient{actor: runningActor(), policy: policy}, nil, 0, provider, providerName)
 }
 
-// On the TLS-terminated MITM leg an allowed rule's credential is resolved and
-// injected as an overwriting header, and the provider is asked for the policy's
-// URI with the actor's SPIFFE identity as context.
-func TestInjectionOnTLSLeg(t *testing.T) {
-	provider := &fakeProvider{resp: bearerTokenResponse("s3cr3t\n")}
-	h := injectionHandler(provider, injectionProviderName)
-
-	res, err := h.HandleRequestHeaders(context.Background(),
-		innerMetadata(extproc.EgressTLSMITMFilterChainName, "GET", "api.example.com", nil))
-	if err != nil {
-		t.Fatalf("HandleRequestHeaders: %v", err)
-	}
-
-	setHeaders := res.Response.GetResponse().GetHeaderMutation().GetSetHeaders()
-	if len(setHeaders) != 1 {
-		t.Fatalf("got %d header mutations, want 1", len(setHeaders))
-	}
-	h0 := setHeaders[0]
-	if got := h0.GetHeader().GetKey(); got != "authorization" {
-		t.Errorf("header key = %q, want authorization", got)
-	}
-	if got := string(h0.GetHeader().GetRawValue()); got != "Bearer s3cr3t" {
-		t.Errorf("header value = %q, want %q (trailing newline trimmed)", got, "Bearer s3cr3t")
-	}
-	if h0.GetAppendAction() != corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD {
-		t.Errorf("append action = %v, want OVERWRITE_IF_EXISTS_OR_ADD", h0.GetAppendAction())
-	}
-	if got := provider.got.GetUri(); got != "ate-secret://k8s/default/token" {
-		t.Errorf("provider URI = %q", got)
-	}
-	wantActorSPIFFEID := "spiffe://substrate-actor.local/actor/default/my-actor"
-	if got := provider.got.GetActorSpiffeId(); got != wantActorSPIFFEID {
-		t.Errorf("actor identity = %q, want %q", got, wantActorSPIFFEID)
-	}
+// withAuthorization adds the placeholder authorization header the sample
+// policy replaces, as the actor would send it.
+func withAuthorization(md *extproc.RequestMetadata) *extproc.RequestMetadata {
+	md.Headers["authorization"] = "Bearer placeholder"
+	return md
 }
 
-// When injection cannot be performed — a cleartext leg, or no provider
-// configured — the request is allowed through with no header added, and any
-// provider is never dialed, because the secret must not go out over cleartext or
-// block egress the policy allowed.
-func TestInjectionSkippedAndPassedThrough(t *testing.T) {
-	tests := []struct {
-		name     string
-		policy   *ateapipb.EgressPolicy
-		provider *fakeProvider // nil means no provider configured
-		leg      string
+// Both HTTP and HTTPS resolve the credential using the actor's SPIFFE identity
+// and overwrite the header the request carries.
+func TestInjectionOnRequestLegs(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		leg    string
+		policy *ateapipb.EgressPolicy
 	}{
-		{
-			name:     "cleartext leg skips injection",
-			policy:   cleartextInjectionPolicy("api.example.com"),
-			provider: &fakeProvider{resp: bearerTokenResponse("s3cr3t")},
-			leg:      extproc.EgressCleartextFilterChainName,
-		},
-		{
-			name:     "no provider configured skips injection",
-			policy:   credentialInjectionPolicySample("api.example.com"),
-			provider: nil,
-			leg:      extproc.EgressTLSMITMFilterChainName,
-		},
-	}
-	for _, tc := range tests {
+		{name: "https", leg: extproc.EgressTLSMITMFilterChainName, policy: credentialInjectionPolicySample("api.example.com")},
+		{name: "http", leg: extproc.EgressCleartextFilterChainName, policy: cleartextInjectionPolicy("api.example.com")},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
-			var h *Handler
-			if tc.provider == nil {
-				h = injectionHandlerFor(tc.policy, nil, injectionProviderName)
-			} else {
-				h = injectionHandlerFor(tc.policy, tc.provider, injectionProviderName)
-			}
+			provider := &fakeProvider{resp: bearerTokenResponse("s3cr3t\n")}
+			h := injectionHandlerFor(tc.policy, provider, injectionProviderName)
+
 			res, err := h.HandleRequestHeaders(context.Background(),
-				innerMetadata(tc.leg, "GET", "api.example.com", nil))
+				withAuthorization(innerMetadata(tc.leg, "GET", "api.example.com", nil)))
 			if err != nil {
 				t.Fatalf("HandleRequestHeaders: %v", err)
 			}
-			if got := res.Response.GetResponse().GetHeaderMutation().GetSetHeaders(); len(got) != 0 {
-				t.Errorf("got %d injected headers, want 0 (injection should be skipped)", len(got))
+
+			setHeaders := res.Response.GetResponse().GetHeaderMutation().GetSetHeaders()
+			if len(setHeaders) != 1 {
+				t.Fatalf("got %d header mutations, want 1", len(setHeaders))
 			}
-			if tc.provider != nil && tc.provider.got != nil {
-				t.Error("provider was dialed; injection should be skipped without a callout")
+			h0 := setHeaders[0]
+			if got := h0.GetHeader().GetKey(); got != "authorization" {
+				t.Errorf("header key = %q, want authorization", got)
+			}
+			if got := string(h0.GetHeader().GetRawValue()); got != "Bearer s3cr3t" {
+				t.Errorf("header value = %q, want %q (trailing newline trimmed)", got, "Bearer s3cr3t")
+			}
+			if h0.GetAppendAction() != corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD {
+				t.Errorf("append action = %v, want OVERWRITE_IF_EXISTS_OR_ADD", h0.GetAppendAction())
+			}
+			if got := provider.got.GetUri(); got != "ate-secret://k8s/default/token" {
+				t.Errorf("provider URI = %q", got)
+			}
+			wantActorSPIFFEID := "spiffe://substrate-actor.local/actor/default/my-actor"
+			if got := provider.got.GetActorSpiffeId(); got != wantActorSPIFFEID {
+				t.Errorf("actor identity = %q, want %q", got, wantActorSPIFFEID)
 			}
 		})
 	}
 }
 
-// Once injection is attempted on the TLS leg with a provider present, a failure
-// to produce the promised credential fails closed rather than forwarding the
-// request without it.
+// A request that does not carry the header a rule replaces goes out unchanged:
+// nothing is fetched, added, or denied, even where injecting would fail.
+func TestInjectionSkippedWithoutHeader(t *testing.T) {
+	jwtPolicy := &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{{Https: &ateapipb.HTTPSRule{
+		Hostnames: []string{"api.example.com"},
+		Effects: &ateapipb.HttpRuleEffects{ReplaceHeaders: []*ateapipb.CredentialHeader{{
+			Header:   "authorization",
+			ActorJwt: &ateapipb.ActorJWTSource{Audiences: []string{"https://api.example.com"}},
+		}}},
+	}}}}
+	for _, tc := range []struct {
+		name     string
+		policy   *ateapipb.EgressPolicy
+		provider *fakeProvider // nil means no provider configured
+	}{
+		{name: "provider configured", policy: credentialInjectionPolicySample("api.example.com"), provider: &fakeProvider{resp: bearerTokenResponse("s3cr3t")}},
+		{name: "no provider configured", policy: credentialInjectionPolicySample("api.example.com")},
+		{name: "actor JWT", policy: jwtPolicy, provider: &fakeProvider{resp: bearerTokenResponse("s3cr3t")}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var provider credproviderpb.CredentialProviderClient
+			if tc.provider != nil {
+				provider = tc.provider
+			}
+			h := injectionHandlerFor(tc.policy, provider, injectionProviderName)
+			res, err := h.HandleRequestHeaders(context.Background(),
+				innerMetadata(extproc.EgressTLSMITMFilterChainName, "GET", "api.example.com", nil))
+			if err != nil {
+				t.Fatalf("HandleRequestHeaders: %v", err)
+			}
+			if got := res.Response.GetResponse().GetHeaderMutation().GetSetHeaders(); len(got) != 0 {
+				t.Errorf("got %d injected headers, want 0", len(got))
+			}
+			if tc.provider != nil && tc.provider.got != nil {
+				t.Errorf("provider was asked for %v, want no fetch", tc.provider.got)
+			}
+		})
+	}
+}
+
+// Of a rule's replacements, only those whose header the request carries are
+// applied, matching the header name case-insensitively.
+func TestInjectionReplacesOnlyCarriedHeaders(t *testing.T) {
+	policy := &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{{Https: &ateapipb.HTTPSRule{
+		Hostnames: []string{"api.example.com"},
+		Effects: &ateapipb.HttpRuleEffects{ReplaceHeaders: []*ateapipb.CredentialHeader{
+			{Header: "authorization", Prefix: "Bearer ", CredentialUri: "ate-secret://k8s/default/token"},
+			{Header: "X-Api-Key", CredentialUri: "ate-secret://k8s/default/api-key"},
+		}},
+	}}}}
+	provider := &fakeProvider{resp: bearerTokenResponse("s3cr3t")}
+	h := injectionHandlerFor(policy, provider, injectionProviderName)
+	md := innerMetadata(extproc.EgressTLSMITMFilterChainName, "GET", "api.example.com", nil)
+	md.Headers["x-api-key"] = "placeholder"
+
+	res, err := h.HandleRequestHeaders(context.Background(), md)
+	if err != nil {
+		t.Fatalf("HandleRequestHeaders: %v", err)
+	}
+	setHeaders := res.Response.GetResponse().GetHeaderMutation().GetSetHeaders()
+	if len(setHeaders) != 1 {
+		t.Fatalf("got %d header mutations, want only the carried X-Api-Key", len(setHeaders))
+	}
+	if got := setHeaders[0].GetHeader().GetKey(); got != "X-Api-Key" {
+		t.Errorf("header key = %q, want X-Api-Key", got)
+	}
+	if got := provider.got.GetUri(); got != "ate-secret://k8s/default/api-key" {
+		t.Errorf("provider URI = %q, want the X-Api-Key credential", got)
+	}
+}
+
+// A failure to produce the promised credential denies the
+// request rather than forwarding it without the credential.
 func TestInjectionDenials(t *testing.T) {
 	tests := []struct {
 		name         string
-		provider     *fakeProvider
+		provider     credproviderpb.CredentialProviderClient
 		providerName string
-		leg          string
 		want         envoy_type.StatusCode
 	}{
+		{
+			name:         "no provider configured is refused",
+			providerName: injectionProviderName,
+			want:         envoy_type.StatusCode_InternalServerError,
+		},
 		{
 			name:         "credential URI for another provider is refused",
 			provider:     &fakeProvider{resp: bearerTokenResponse("s3cr3t")},
 			providerName: "vault", // policy URI is ate-secret://k8s/...
-			leg:          extproc.EgressTLSMITMFilterChainName,
 			want:         envoy_type.StatusCode_InternalServerError,
 		},
 		{
@@ -169,7 +205,6 @@ func TestInjectionDenials(t *testing.T) {
 			name:         "provider unavailable fails closed as retryable",
 			provider:     &fakeProvider{err: status.Error(codes.Unavailable, "provider down")},
 			providerName: injectionProviderName,
-			leg:          extproc.EgressTLSMITMFilterChainName,
 			want:         envoy_type.StatusCode_ServiceUnavailable,
 		},
 		{
@@ -177,14 +212,12 @@ func TestInjectionDenials(t *testing.T) {
 			name:         "secret not found denies as non-retryable",
 			provider:     &fakeProvider{err: status.Error(codes.NotFound, "no such secret")},
 			providerName: injectionProviderName,
-			leg:          extproc.EgressTLSMITMFilterChainName,
 			want:         envoy_type.StatusCode_Forbidden,
 		},
 		{
 			name:         "provider refuses the actor denies as non-retryable",
 			provider:     &fakeProvider{err: status.Error(codes.PermissionDenied, "atespace not allowed")},
 			providerName: injectionProviderName,
-			leg:          extproc.EgressTLSMITMFilterChainName,
 			want:         envoy_type.StatusCode_Forbidden,
 		},
 		{
@@ -192,23 +225,29 @@ func TestInjectionDenials(t *testing.T) {
 			name:         "unexpected provider error denies",
 			provider:     &fakeProvider{err: errors.New("provider down")},
 			providerName: injectionProviderName,
-			leg:          extproc.EgressTLSMITMFilterChainName,
 			want:         envoy_type.StatusCode_Forbidden,
 		},
 		{
 			name:         "empty secret fails closed",
 			provider:     &fakeProvider{resp: bearerTokenResponse("")},
 			providerName: injectionProviderName,
-			leg:          extproc.EgressTLSMITMFilterChainName,
 			want:         envoy_type.StatusCode_ServiceUnavailable,
 		},
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			h := injectionHandler(tc.provider, tc.providerName)
-			_, err := h.HandleRequestHeaders(context.Background(),
-				innerMetadata(tc.leg, "GET", "api.example.com", nil))
-			wantStatus(t, err, tc.want)
+	for _, leg := range []string{extproc.EgressTLSMITMFilterChainName, extproc.EgressCleartextFilterChainName} {
+		t.Run(leg, func(t *testing.T) {
+			for _, tc := range tests {
+				t.Run(tc.name, func(t *testing.T) {
+					policy := credentialInjectionPolicySample("api.example.com")
+					if leg == extproc.EgressCleartextFilterChainName {
+						policy = cleartextInjectionPolicy("api.example.com")
+					}
+					h := injectionHandlerFor(policy, tc.provider, tc.providerName)
+					_, err := h.HandleRequestHeaders(context.Background(),
+						withAuthorization(innerMetadata(leg, "GET", "api.example.com", nil)))
+					wantStatus(t, err, tc.want)
+				})
+			}
 		})
 	}
 }
@@ -226,20 +265,17 @@ func TestActorJWTInjectionNotImplemented(t *testing.T) {
 		leg      string
 		policy   *ateapipb.EgressPolicy
 		provider *fakeProvider // nil means no provider configured
-		wantDeny bool
 	}{{
 		name:     "https rule",
 		leg:      extproc.EgressTLSMITMFilterChainName,
 		policy:   httpsPolicy,
 		provider: &fakeProvider{resp: bearerTokenResponse("s3cr3t")},
-		wantDeny: true,
 	}, {
-		name:     "https rule without a provider",
-		leg:      extproc.EgressTLSMITMFilterChainName,
-		policy:   httpsPolicy,
-		wantDeny: true,
+		name:   "https rule without a provider",
+		leg:    extproc.EgressTLSMITMFilterChainName,
+		policy: httpsPolicy,
 	}, {
-		name:     "http rule skips injection",
+		name:     "http rule",
 		leg:      extproc.EgressCleartextFilterChainName,
 		policy:   httpPolicy,
 		provider: &fakeProvider{resp: bearerTokenResponse("s3cr3t")},
@@ -252,15 +288,9 @@ func TestActorJWTInjectionNotImplemented(t *testing.T) {
 			} else {
 				h = injectionHandlerFor(tc.policy, tc.provider, injectionProviderName)
 			}
-			res, err := h.HandleRequestHeaders(context.Background(),
-				innerMetadata(tc.leg, "GET", "api.example.com", nil))
-			if tc.wantDeny {
-				wantStatus(t, err, envoy_type.StatusCode_NotImplemented)
-			} else if err != nil {
-				t.Fatalf("HandleRequestHeaders: %v", err)
-			} else if got := res.Response.GetResponse().GetHeaderMutation().GetSetHeaders(); len(got) != 0 {
-				t.Errorf("got %d injected headers, want 0", len(got))
-			}
+			_, err := h.HandleRequestHeaders(context.Background(),
+				withAuthorization(innerMetadata(tc.leg, "GET", "api.example.com", nil)))
+			wantStatus(t, err, envoy_type.StatusCode_NotImplemented)
 			if tc.provider != nil && tc.provider.got != nil {
 				t.Errorf("provider was asked for %v, want no fetch", tc.provider.got)
 			}

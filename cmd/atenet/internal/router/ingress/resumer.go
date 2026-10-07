@@ -57,7 +57,7 @@ func resumeBackoff(interval time.Duration, factor, jitter float64) wait.Backoff 
 }
 
 // budgetExhaustedError marks a resume that was still blocked on a retryable
-// condition (e.g. "no free workers available") when the parking budget elapsed.
+// condition (e.g. no worker has room) when the parking budget elapsed.
 // It wraps the last retryable error, so the HTTP boundary still maps the
 // underlying gRPC status faithfully (503 with the capacity message), while the
 // parking metrics can report budget exhaustion as its own outcome.
@@ -122,7 +122,7 @@ type ActorResumer struct {
 type resumerOption func(*ActorResumer)
 
 // withParking configures parking behavior from cfg. When parking is enabled,
-// ResourceExhausted ("no free workers available") becomes retryable and the
+// ResourceExhausted (no worker has room) becomes retryable and the
 // resume is retried, at cfg's retry cadence, for up to cfg's budget. When
 // disabled, the resumer applies fail-fast-on-capacity behavior.
 func withParking(cfg ParkedRequestConfig) resumerOption {
@@ -159,8 +159,8 @@ func NewActorResumer(apiClient ateapipb.ControlClient, opts ...resumerOption) *A
 
 // retryable reports whether err warrants another resume attempt while the
 // request remains parked. A concurrent-resume conflict (Aborted) is always
-// retried. Transient pool saturation (ResourceExhausted, "no free workers
-// available") and transient control-plane unavailability (Unavailable, e.g. an
+// retried. Transient pool saturation (ResourceExhausted, no worker has room)
+// and transient control-plane unavailability (Unavailable, e.g. an
 // ateapi rolling restart) are retried only when parking is enabled, turning a
 // momentary condition into a bounded wait instead of an immediate failure — a
 // parked request should ride out a blip, not fail on it with budget remaining.
@@ -234,10 +234,13 @@ func (r *ActorResumer) runFlight(f *resumeActorFlight, key string, actorRef reso
 		}
 
 		if r.retryable(err) {
-			f.signalRetrying()
+			// A caller that is shed reads err to pick its outcome.
+			f.signalRetrying(err)
 			lastRetryErr = err // remember it in case the budget elapses
 			return false, nil  // park: retry until the budget elapses
 		}
+		// Keep the final error even if the retry budget has expired.
+		lastRetryErr = nil
 		return false, err
 	})
 
@@ -292,9 +295,10 @@ func (r *ActorResumer) awaitFlight(ctx context.Context, f *resumeActorFlight, ac
 	default:
 	}
 
-	release, ok := r.enterLot(ctx)
+	retryErr := f.retryErr()
+	release, ok := r.enterLot(ctx, shedOutcome(retryErr))
 	if !ok {
-		return nil, ResumeOutcomeUnknown, parkingFullErr(actorRef.String())
+		return nil, ResumeOutcomeUnknown, parkingFullErr(actorRef.String(), retryErr)
 	}
 	var finalErr error
 	defer func() { release(parkOutcomeFor(finalErr)) }()
@@ -311,10 +315,11 @@ func (r *ActorResumer) awaitFlight(ctx context.Context, f *resumeActorFlight, ac
 }
 
 // enterLot admits the caller to the parking lot, treating a nil lot as
-// unbounded (no admission control).
-func (r *ActorResumer) enterLot(ctx context.Context) (func(parkOutcome), bool) {
+// unbounded (no admission control). shedOutcome labels the rejection if the
+// lot is full.
+func (r *ActorResumer) enterLot(ctx context.Context, shedOutcome string) (func(parkOutcome), bool) {
 	if r.lot == nil {
 		return func(parkOutcome) {}, true
 	}
-	return r.lot.enter(ctx)
+	return r.lot.enter(ctx, shedOutcome)
 }

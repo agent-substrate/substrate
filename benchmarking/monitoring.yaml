@@ -215,6 +215,12 @@ spec:
         app: prometheus
     spec:
       serviceAccountName: prometheus
+      # Allows scheduling on the ate.dev/benchmarking load-generator pool.
+      tolerations:
+      - key: ate.dev/benchmarking
+        operator: Equal
+        value: "true"
+        effect: NoSchedule
       containers:
       - name: prometheus
         image: prom/prometheus:v2.45.0

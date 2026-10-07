@@ -23,7 +23,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"slices"
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/apierror"
@@ -50,8 +49,8 @@ import (
 //     disk-backed upper): the upper is host-backed like the durable-dir volumes and
 //     ships alongside as its own tar (see rootfsupper.go); process memory persists
 //     via the memory snapshot. The RO lower is reconstructed from the OCI image at
-//     restore, so it never ships. Durable-dir volumes ship alongside as a tar.
-//   - DATA: the durable-dir volumes only, as that same tar. The guest is discarded, so
+//     restore, so it never ships. Durable-dir volumes ship alongside as per-volume tars.
+//   - DATA: the durable-dir volumes only, as those same tars. The guest is discarded, so
 //     the actor cold-starts on restore with its volumes re-materialized.
 //
 // Either way the guest is paused first, which is what makes the tar coherent: the
@@ -155,7 +154,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	}
 
 	// Capture the snapshot's pieces CONCURRENTLY: the CH snapshot, the
-	// durable-dir tar, and the rootfs upper tar read independent data from a
+	// durable-dir tars, and the rootfs upper tars read independent data from a
 	// quiesced guest and write distinct files into checkpointDir, so the paused
 	// window costs the slowest of them rather than their sum (the tars scale
 	// with the actor's data; suspend latency is the metric that matters).
@@ -164,11 +163,12 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	//     deliberately captures no VM state — no memory image, and no base-id,
 	//     since nothing will reattach to the frozen virtio-fs lower: at restore
 	//     the actor cold-boots from the OCI image.
-	//   - Durable-dir tar (any scope, when declared): host-backed, so pausing
-	//     the write-through share makes the tar coherent.
-	//   - Rootfs upper tar (Full only): host-backed like the durable volumes —
+	//   - Durable-dir tars (any scope, when declared): host-backed, so pausing
+	//     the write-through share makes the tars coherent.
+	//   - Rootfs upper tars (Full only): host-backed like the durable volumes —
 	//     the memory snapshot does not carry rootfs writes. Under Data the
 	//     workload cold-starts on restore, discarding rootfs state.
+	var durableFiles []string
 	g, gctx := errgroup.WithContext(ctx)
 	if scope == ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL {
 		g.Go(func() error {
@@ -184,7 +184,8 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	if durable {
 		g.Go(func() error {
 			t := time.Now()
-			err := tarDurableVolumes(gctx, actorDirs.GetDurableDirVolumeMountsDir(), checkpointDir)
+			var err error
+			durableFiles, err = tarDurableVolumes(gctx, actorDirs.GetDurableDirVolumeMountsDir(), checkpointDir, durableVolumeNames(req.GetSpec().GetContainers()))
 			dDurable = time.Since(t)
 			return err
 		})
@@ -192,7 +193,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	if scope == ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL {
 		g.Go(func() error {
 			t := time.Now()
-			err := tarRootfsUpper(gctx, rootfsUpperDir(actorDirs), checkpointDir)
+			err := tarRootfsUpper(gctx, rootfsUpperDir(actorDirs), checkpointDir, containerNames(req.GetSpec().GetContainers()))
 			dUpper = time.Since(t)
 			return err
 		})
@@ -203,7 +204,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 
 	// Report exactly the files we wrote so atelet ships precisely this snapshot: for
 	// Full, the CH snapshot (config.json + state.json + memory-ranges + base-id) plus
-	// any durable-dir tar; for Data, that tar alone.
+	// any durable-dir tars; for Data, those tars alone.
 	snapshotFiles, err := listFiles(checkpointDir)
 	if err != nil {
 		return nil, fmt.Errorf("while listing snapshot files: %w", err)
@@ -229,11 +230,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		// rootfs_upper), and the tar durations scale with the actor's data.
 		slog.Duration("durable_dir", dDurable), slog.Duration("rootfs_upper", dUpper),
 		slog.Duration("teardown", dTeardown))
-	resp := &ateompb.CheckpointWorkloadResponse{SnapshotFiles: snapshotFiles}
-	if slices.Contains(snapshotFiles, durableTarFile) {
-		resp.DataSnapshotFiles = []string{durableTarFile}
-	}
-	return resp, nil
+	return &ateompb.CheckpointWorkloadResponse{SnapshotFiles: snapshotFiles, DataSnapshotFiles: durableFiles}, nil
 }
 
 // snapshotVMState captures the paused guest into checkpointDir: the CH snapshot
@@ -275,13 +272,8 @@ func (s *AteomService) snapshotVMState(ctx context.Context, client *ch.Client, r
 		slog.InfoContext(ctx, "Snapshot is self-contained (eager restore); skipping merge",
 			slog.String("id", actorUID))
 	} else if ra != nil && ra.restoreSourceDir != "" {
-		base := filepath.Join(ra.restoreSourceDir, "memory-ranges")
-		delta := filepath.Join(checkpointDir, "memory-ranges")
 		tMerge := time.Now()
-		// Reuse base's on-disk working set (rename + overlay) instead of copying it —
-		// CH is paused and about to be torn down, and base is discarded after. See
-		// MergeDeltaIntoBase. (Falls back to the copying merge across filesystems.)
-		if err := ch.MergeDeltaIntoBase(ctx, base, delta); err != nil {
+		if err := mergeOnDemandDelta(ctx, ra.restoreSourceDir, checkpointDir, ra.preserveRestoreSource); err != nil {
 			return 0, fmt.Errorf("while merging OnDemand delta into restore source: %w", err)
 		}
 		slog.InfoContext(ctx, "Merged OnDemand delta into base (complete snapshot)",
@@ -291,6 +283,17 @@ func (s *AteomService) snapshotVMState(ctx context.Context, client *ch.Client, r
 	// The RO lower never ships (reconstructed from the OCI image at restore).
 	// The disk-backed upper ships as its own tar from CheckpointWorkload; a
 	return dSnapshot, nil
+}
+
+// mergeOnDemandDelta merges the OnDemand delta in checkpointDir with the base in
+// restoreSourceDir. A preserved base is copied, never modified in place.
+func mergeOnDemandDelta(ctx context.Context, restoreSourceDir, checkpointDir string, preserveRestoreSource bool) error {
+	base := filepath.Join(restoreSourceDir, "memory-ranges")
+	delta := filepath.Join(checkpointDir, "memory-ranges")
+	if preserveRestoreSource {
+		return ch.MergeSparseOverlay(ctx, base, delta, delta)
+	}
+	return ch.MergeDeltaIntoBase(ctx, base, delta)
 }
 
 // listFiles returns the (relative) names of regular files directly under dir.

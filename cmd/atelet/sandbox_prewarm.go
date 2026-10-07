@@ -85,6 +85,8 @@ type sandboxPrewarmer struct {
 	// (workers request the ate.dev/kvm extended resource, so they only
 	// schedule where the device exists). See microvmNodeCapable.
 	microvmCapable bool
+	// done is closed when the worker goroutine exits; wait blocks on it.
+	done chan struct{}
 }
 
 func newSandboxPrewarmer(assets sandboxAssetFetcher, images *imagecache.Store, lister listersv1alpha1.SandboxConfigLister, microvmCapable bool) *sandboxPrewarmer {
@@ -98,6 +100,7 @@ func newSandboxPrewarmer(assets sandboxAssetFetcher, images *imagecache.Store, l
 		queue: workqueue.NewTypedRateLimitingQueue(
 			workqueue.NewTypedItemExponentialFailureRateLimiter[string](time.Second, 5*time.Minute)),
 		microvmCapable: microvmCapable,
+		done:           make(chan struct{}),
 	}
 }
 
@@ -111,7 +114,7 @@ func newSandboxPrewarmer(assets sandboxAssetFetcher, images *imagecache.Store, l
 // TODO: the static-files cache is never pruned, and prewarming every config
 // revision makes stale releases accumulate faster. Add a GC that removes
 // assets referenced by no current SandboxConfig and no on-node actor record.
-func startSandboxAssetPrewarm(ctx context.Context, informer cache.SharedIndexInformer, assets sandboxAssetFetcher, images *imagecache.Store, microvmCapable bool) error {
+func startSandboxAssetPrewarm(ctx context.Context, informer cache.SharedIndexInformer, assets sandboxAssetFetcher, images *imagecache.Store, microvmCapable bool) (*sandboxPrewarmer, error) {
 	p := newSandboxPrewarmer(assets, images, listersv1alpha1.NewSandboxConfigLister(informer.GetIndexer()), microvmCapable)
 	// Atelet startup never waits for this informer to sync: prewarm is
 	// best-effort, so a failing list/watch (e.g. Forbidden while an RBAC
@@ -131,11 +134,19 @@ func startSandboxAssetPrewarm(ctx context.Context, informer cache.SharedIndexInf
 		AddFunc:    func(obj any) { p.enqueue(ctx, obj) },
 		UpdateFunc: func(_, obj any) { p.enqueue(ctx, obj) },
 	}); err != nil {
-		return fmt.Errorf("while registering sandbox config prewarm handler: %w", err)
+		return nil, fmt.Errorf("while registering sandbox config prewarm handler: %w", err)
 	}
 	go p.run(ctx)
 	slog.InfoContext(ctx, "Sandbox asset prewarm started", slog.Bool("microvmCapable", microvmCapable))
-	return nil
+	return p, nil
+}
+
+// wait blocks until the prewarm worker has exited, which happens after the
+// context given to startSandboxAssetPrewarm is canceled and the in-flight
+// item finishes. Tests that patch package globals the worker reads must wait
+// here before restoring them.
+func (p *sandboxPrewarmer) wait() {
+	<-p.done
 }
 
 // skipConfig reports whether this node has nothing to prewarm for cfg,
@@ -181,6 +192,7 @@ func (p *sandboxPrewarmer) enqueue(ctx context.Context, obj any) {
 }
 
 func (p *sandboxPrewarmer) run(ctx context.Context) {
+	defer close(p.done)
 	go func() {
 		<-ctx.Done()
 		p.queue.ShutDown()

@@ -17,7 +17,6 @@ package main
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -34,6 +33,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/credentialprovider"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/sparsefile"
+	"github.com/agent-substrate/substrate/cmd/atelet/internal/trustbundle"
 	"github.com/agent-substrate/substrate/internal/actorlog"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
@@ -53,9 +53,10 @@ import (
 	"github.com/agent-substrate/substrate/internal/substratex509"
 	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/agent-substrate/substrate/internal/volume"
+	"github.com/agent-substrate/substrate/internal/volume/csi"
+	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/client/clientset/versioned"
 	"github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
-	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/objectstorage"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -114,6 +115,8 @@ var (
 	drainDelay   = pflag.Duration("drain-delay", 0, "How long to keep accepting new RPCs after SIGTERM before starting the gRPC drain.")
 	drainTimeout = pflag.Duration("drain-timeout", 5*time.Minute, "Deadline for the graceful gRPC drain on shutdown. In-flight RPCs still running past it are forcefully cancelled.")
 )
+
+var _ imagecache.CandidateKeychain = (*credentialprovider.Keychain)(nil)
 
 func main() {
 	pflag.Parse()
@@ -279,25 +282,29 @@ func main() {
 		}
 	}
 
-	// TODO: Revisit scalability implications of using a shared informer. This lister
-	// is unlikely to be used with frequency.
-	ateFactory := externalversions.NewSharedInformerFactory(ateClient, 0)
-	csiDriverConfigLister := ateFactory.Api().V1alpha1().CSIDriverConfigs().Lister()
+	csiDriverConfigGetter := &directCSIDriverConfigGetter{client: ateClient}
 
 	trustBundles, err := clustertrustbundle.NewClient(k8sClient, func(o *metav1.ListOptions) {
-		o.FieldSelector = fields.OneTermEqualSelector("metadata.name", supportedTrustBundles[EgressTrustBundleName]).String()
+		o.FieldSelector = fields.OneTermEqualSelector("metadata.name", trustbundle.EgressCTB).String()
 	})
 	if err != nil {
 		slog.ErrorContext(ctx, "Error discovering ClusterTrustBundle API", slog.Any("err", err))
 		os.Exit(1)
 	}
-	systemInfoVolumes := newSystemInfoVolumeRefresher(trustBundles.GetCached, trustBundles.Informer())
+
+	// Read system roots from the known location in the distroless-static base image.
+	systemRootsPEM, err := os.ReadFile("/etc/ssl/certs/ca-certificates.crt")
+	if err != nil {
+		serverboot.Fatal(ctx, "Error reading system root certificates", err)
+	}
+
+	trustBundleSource := trustbundle.NewSource(trustBundles.GetCached, systemRootsPEM)
+
+	systemInfoVolumes := newSystemInfoVolumeRefresher(trustBundleSource, trustBundles.Informer())
 
 	stopCh := make(chan struct{})
 	defer close(stopCh)
-	ateFactory.Start(stopCh)
 	go trustBundles.Informer().Run(stopCh)
-	ateFactory.WaitForCacheSync(stopCh)
 	cache.WaitForCacheSync(stopCh, trustBundles.Informer().HasSynced)
 
 	wmService := NewService(
@@ -308,7 +315,7 @@ func main() {
 		imageCache,
 		instruments,
 		volPlugins,
-		csiDriverConfigLister,
+		csiDriverConfigGetter,
 		systemInfoVolumes,
 	)
 	go systemInfoVolumes.run(ctx)
@@ -317,19 +324,17 @@ func main() {
 	// Run/Restore on this node hits the cache. Best-effort: on failure the
 	// on-demand fetch in ensureSandboxAssets still covers correctness.
 	//
-	// The informer is requested only now, after the factory's blocking
-	// WaitForCacheSync above, so it cannot hold up atelet startup when its
-	// list/watch fails (e.g. Forbidden while the ClusterRole rollout lags the
-	// binary): the reflector retries in the background and prewarm stays cold
-	// until it recovers.
+	// We intentionally never WaitForCacheSync on this factory, so a failing
+	// list/watch (e.g. Forbidden while the ClusterRole rollout lags the
+	// binary) cannot hold up atelet startup: the reflector retries in the
+	// background and prewarm stays cold until it recovers.
+	ateFactory := externalversions.NewSharedInformerFactory(ateClient, 0)
 	sandboxConfigInformer := ateFactory.Api().V1alpha1().SandboxConfigs().Informer()
-	if err := startSandboxAssetPrewarm(ctx, sandboxConfigInformer, wmService, imageCache, microvmNodeCapable(hostDevRoot)); err != nil {
+	if _, err := startSandboxAssetPrewarm(ctx, sandboxConfigInformer, wmService, imageCache, microvmNodeCapable(hostDevRoot)); err != nil {
 		slog.ErrorContext(ctx, "Sandbox asset prewarm disabled", slog.Any("err", err))
 	}
-	// The factory only runs informers that exist when Start is called: the
-	// Start above predates the SandboxConfigs informer, so without this call
-	// it would never list or watch. Start is idempotent per informer — this
-	// launches the new one and leaves the already-running ones untouched.
+	// Start after the informer is registered: the factory only runs informers
+	// that exist when Start is called.
 	ateFactory.Start(stopCh)
 	dialOpts, err := ateapiauth.DialOptions(ateapiauth.ClientConfig{
 		K8sClient:        k8sClient,
@@ -441,6 +446,15 @@ func drainOnShutdown(ctx context.Context, srv *grpc.Server, readiness *serverboo
 	return done
 }
 
+// directCSIDriverConfigGetter retrieves CSIDriverConfig via direct API call rather than a cluster-wide watch informer.
+type directCSIDriverConfigGetter struct {
+	client versioned.Interface
+}
+
+func (g *directCSIDriverConfigGetter) Get(name string) (*atev1alpha1.CSIDriverConfig, error) {
+	return g.client.ApiV1alpha1().CSIDriverConfigs().Get(context.Background(), name, metav1.GetOptions{})
+}
+
 // AteomHerder is a service that allows controlling workloads on individual
 // ateoms.
 type AteomHerder struct {
@@ -453,7 +467,7 @@ type AteomHerder struct {
 	instruments           *Instruments
 	mu                    sync.RWMutex
 	volumePlugins         map[string]volume.VolumePluginWorkerPlane
-	csiDriverConfigLister listersv1alpha1.CSIDriverConfigLister
+	csiDriverConfigGetter csi.CSIDriverConfigGetter
 	systemInfoVolumes     *systemInfoVolumeRefresher
 }
 
@@ -468,7 +482,7 @@ func NewService(
 	imageCache *imagecache.Store,
 	instruments *Instruments,
 	volumePlugins map[string]volume.VolumePluginWorkerPlane,
-	csiDriverConfigLister listersv1alpha1.CSIDriverConfigLister,
+	csiDriverConfigGetter csi.CSIDriverConfigGetter,
 	systemInfoVolumes *systemInfoVolumeRefresher,
 ) *AteomHerder {
 	wms := &AteomHerder{
@@ -478,7 +492,7 @@ func NewService(
 		gcsClient:             gcsClient,
 		instruments:           instruments,
 		volumePlugins:         volumePlugins,
-		csiDriverConfigLister: csiDriverConfigLister,
+		csiDriverConfigGetter: csiDriverConfigGetter,
 		systemInfoVolumes:     systemInfoVolumes,
 	}
 	return wms
@@ -501,6 +515,7 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *
 		return nil, err
 	}
 
+	s.systemInfoVolumes.Deregister(actorUID)
 	if err := resetActorDirs(actorUID); err != nil {
 		return nil, fmt.Errorf("while resetting actor dirs: %w", err)
 	}
@@ -516,12 +531,13 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *
 		return nil, fmt.Errorf("while recording sandbox assets: %w", err)
 	}
 
+	var registration *registeredActor
 	defer func() {
-		if err != nil {
-			s.systemInfoVolumes.Deregister(actorUID)
+		if err != nil && registration != nil {
+			s.systemInfoVolumes.DeregisterOwned(registration)
 		}
 	}()
-	if err := s.systemInfoVolumes.Register(actorUID, actorRef, systemInfoVolumesFor(actorUID, req.GetSpec())); err != nil {
+	if registration, err = s.systemInfoVolumes.Register(actorUID, actorRef, systemInfoVolumesFor(actorUID, req.GetSpec())); err != nil {
 		return nil, err
 	}
 	if err := s.prepareOCIBundles(ctx, actorUID, actorRef,
@@ -569,7 +585,7 @@ func initSnapshotSizeMetric() error {
 	snapshotSizeBytes, err = otel.Meter("atelet").Int64Histogram(
 		"atelet.snapshot.size",
 		metric.WithUnit("By"),
-		metric.WithDescription("Uncompressed size in bytes of each gVisor snapshot image written during checkpoint."),
+		metric.WithDescription("Uncompressed allocated size in bytes of each snapshot image written during checkpoint."),
 
 		metric.WithExplicitBucketBoundaries(
 			1e6, 5e6, 1e7, 2.5e7, 5e7, 1e8, 2.5e8, 5e8, 1e9, 2e9, 5e9, 1e10,
@@ -590,6 +606,16 @@ func recordSnapshotSize(ctx context.Context, file string, size int64, templateAt
 		ateattr.TemplateAtespaceKey.String(templateAtespace),
 		ateattr.TemplateNameKey.String(templateName),
 	))
+}
+
+// allocatedBytes returns the disk space allocated to info (st_blocks * 512)
+// rather than its apparent size, which for sparse snapshot images reflects the
+// guest RAM ceiling; ext4/XFS/btrfs include delalloc blocks before writeback.
+func allocatedBytes(info os.FileInfo) int64 {
+	if st, ok := info.Sys().(*syscall.Stat_t); ok {
+		return int64(st.Blocks) * 512
+	}
+	return info.Size()
 }
 
 func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest) (_ *ateletpb.CheckpointResponse, err error) {
@@ -801,7 +827,7 @@ func (s *AteomHerder) moveLocalCheckpoint(ctx context.Context, req *ateletpb.Che
 		if !info.Mode().IsRegular() {
 			return fmt.Errorf("checkpoint file %s is not a regular file", fileName)
 		}
-		recordSnapshotSize(ctx, fileName, info.Size(), req.GetActorTemplateAtespace(), req.GetActorTemplateName())
+		recordSnapshotSize(ctx, fileName, allocatedBytes(info), req.GetActorTemplateAtespace(), req.GetActorTemplateName())
 
 		if err := root.Rename(src, dst); err != nil {
 			return fmt.Errorf("failed to move %s to %s: %w", src, dst, err)
@@ -870,7 +896,7 @@ func (s *AteomHerder) uploadSnapshot(ctx context.Context, uri resources.Snapshot
 			if !info.Mode().IsRegular() {
 				return fmt.Errorf("snapshot file %s is not a regular file", fileName)
 			}
-			recordSnapshotSize(ctx, fileName, info.Size(), templateAtespace, templateName)
+			recordSnapshotSize(ctx, fileName, allocatedBytes(info), templateAtespace, templateName)
 
 			objectURI, err := uri.ObjectURI(fileName + ".zstd")
 			if err != nil {
@@ -1083,6 +1109,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 
 	// Not crashing the actor, because terminal errors here indicate problems with atelet,
 	// node or the disk itself.
+	s.systemInfoVolumes.Deregister(actorUID)
 	if err := resetActorDirs(actorUID); err != nil {
 		return nil, fmt.Errorf("while resetting actor dirs: %w", err)
 	}
@@ -1095,6 +1122,10 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	}
 
 	checkpointDir := ateletpath.RestoreStateDir(actorUID)
+	directLocal := req.GetType() == ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
+	if directLocal {
+		checkpointDir = ateletpath.LocalSnapshotDir(actorUID, req.GetLocalConfig().GetSnapshotName())
+	}
 
 	// Fetch the snapshot manifest stored beside the checkpoint images
 	// first: it lists the checkpoint files to download and records the actor
@@ -1143,10 +1174,12 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	// snapshot kind only becomes knowable here.
 	op.kind = restoreSnapshotKind(req, sandboxRec)
 
-	// Undo the Register if the restore fails.
+	var registration *registeredActor
+	// Undo the Register if the restore fails. The errgroup join below happens
+	// before this defer can read registration, so the handoff is synchronized.
 	defer func() {
-		if err != nil {
-			s.systemInfoVolumes.Deregister(actorUID)
+		if err != nil && registration != nil {
+			s.systemInfoVolumes.DeregisterOwned(registration)
 		}
 	}()
 
@@ -1155,8 +1188,6 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	// needs both — so overlapping the GCS download (~0.5s warm) with the asset
 	// fetch + image unpack hides whichever leg is shorter, and on a cold node
 	// (uncached assets + image, ~2.5s unpack) that overlap is large.
-	// TODO(dberkov): the old pause checkpoint files are not deleted after they are
-	// copied to checkpointDir for the LOCAL case.
 	var assetPaths map[string]string
 	// One per leg: a single field written from both goroutines would race.
 	var downloadErr, prepErr error
@@ -1165,7 +1196,9 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	g.Go(func() (err error) {
 		t := time.Now()
 		defer func() {
-			dDownload = time.Since(t)
+			if !directLocal {
+				dDownload = time.Since(t)
+			}
 			downloadErr = err
 		}()
 		switch req.GetType() {
@@ -1174,7 +1207,8 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 				return err
 			}
 		case ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL:
-			if err := s.copyLocalCheckpoint(gctx, ateletpath.ActorPath(actorUID), req.GetLocalConfig().GetSnapshotName(), ateletpath.LocalCheckpointsDir(actorUID), checkpointDir, sandboxRec.SnapshotFiles); err != nil {
+			// Restore in place from LocalSnapshotDir; no staging.
+			if err := checkLocalSnapshotFiles(checkpointDir, sandboxRec.SnapshotFiles); err != nil {
 				return err
 			}
 		}
@@ -1189,7 +1223,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 			prepFailedPhase = ateattr.SnapshotPhaseSandboxAssets
 			return err
 		}
-		if err = s.systemInfoVolumes.Register(actorUID, actorRef, systemInfoVolumesFor(actorUID, req.GetSpec())); err != nil {
+		if registration, err = s.systemInfoVolumes.Register(actorUID, actorRef, systemInfoVolumesFor(actorUID, req.GetSpec())); err != nil {
 			prepFailedPhase = ateattr.SnapshotPhaseOCIUnpack
 			return err
 		}
@@ -1224,6 +1258,9 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		return nil, apierror.InvalidArgument("invalid workload spec: %v", err)
 	}
 
+	actorDirs := ateletpath.ActorDirs(actorUID)
+	actorDirs.RestoreDir = checkpointDir
+
 	// The ateom_restore phase is opaque from here; ateom logs its own breakdown of
 	// this call as "Actor restore phases".
 	tAteom := time.Now()
@@ -1237,7 +1274,8 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		Spec:                  spec,
 		Scope:                 toAteomSnapshotScope(req.GetScope()),
 		ActorUid:              req.GetActorUid(),
-		ActorDirs:             ateletpath.ActorDirs(actorUID),
+		ActorDirs:             actorDirs,
+		PreserveRestoreDir:    directLocal,
 		EgressGateway:         toAteomEgressGateway(req.GetEgressGateway()),
 		CpuMilli:              req.GetCpuMilli(),
 		MemoryBytes:           req.GetMemoryBytes(),
@@ -1269,40 +1307,42 @@ func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequ
 	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
 	actorUID := req.GetActorUid()
 
-	var assetPaths map[string]string
-	sandboxRec, err := readSandboxRecord(actorUID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read sandbox record during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
-	}
-	paths, err := s.ensureSandboxAssets(ctx, sandboxRec)
-	if err != nil {
-		return nil, fmt.Errorf("failed to ensure sandbox assets during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
-	}
-	assetPaths = paths
+	if req.GetTargetAteomUid() != "" {
+		var assetPaths map[string]string
+		sandboxRec, err := readSandboxRecord(actorUID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read sandbox record during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
+		}
+		paths, err := s.ensureSandboxAssets(ctx, sandboxRec)
+		if err != nil {
+			return nil, fmt.Errorf("failed to ensure sandbox assets during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
+		}
+		assetPaths = paths
 
-	client, err := s.dialAteom(ctx, req.GetTargetAteomUid())
-	if err != nil {
-		return nil, fmt.Errorf("failed to dial ateom for terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
-	}
+		client, err := s.dialAteom(ctx, req.GetTargetAteomUid())
+		if err != nil {
+			return nil, fmt.Errorf("failed to dial ateom for terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
+		}
 
-	spec, err := buildAteomWorkloadSpec(req.GetSpec())
-	if err != nil {
-		return nil, apierror.InvalidArgument("invalid workload spec: %v", err)
-	}
-	if _, err := client.TerminateWorkload(ctx, &ateompb.TerminateWorkloadRequest{
-		Atespace:              req.GetAtespace(),
-		ActorName:             req.GetActorName(),
-		ActorUid:              req.GetActorUid(),
-		ActorTemplateAtespace: req.GetActorTemplateAtespace(),
-		ActorTemplateName:     req.GetActorTemplateName(),
-		RunscPath:             runscPathFor(assetPaths),
-		Spec:                  spec,
-		ActorDirs:             ateletpath.ActorDirs(actorUID),
-	}); err != nil {
-		if status.Code(err) == codes.NotFound {
-			slog.InfoContext(ctx, "workload not found on ateom during terminate", slog.Any("actor", actorRef), slog.String("actorUID", actorUID))
-		} else {
-			return nil, fmt.Errorf("failed calling ateom.TerminateWorkload (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
+		spec, err := buildAteomWorkloadSpec(req.GetSpec())
+		if err != nil {
+			return nil, apierror.InvalidArgument("invalid workload spec: %v", err)
+		}
+		if _, err := client.TerminateWorkload(ctx, &ateompb.TerminateWorkloadRequest{
+			Atespace:              req.GetAtespace(),
+			ActorName:             req.GetActorName(),
+			ActorUid:              req.GetActorUid(),
+			ActorTemplateAtespace: req.GetActorTemplateAtespace(),
+			ActorTemplateName:     req.GetActorTemplateName(),
+			RunscPath:             runscPathFor(assetPaths),
+			Spec:                  spec,
+			ActorDirs:             ateletpath.ActorDirs(actorUID),
+		}); err != nil {
+			if status.Code(err) == codes.NotFound {
+				slog.InfoContext(ctx, "workload not found on ateom during terminate", slog.Any("actor", actorRef), slog.String("actorUID", actorUID))
+			} else {
+				return nil, fmt.Errorf("failed calling ateom.TerminateWorkload (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
+			}
 		}
 	}
 
@@ -1329,6 +1369,21 @@ func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequ
 	}
 
 	return &ateletpb.TerminateResponse{}, nil
+}
+
+// checkLocalSnapshotFiles verifies each snapshot file exists in dir as a
+// regular file. Lstat, so a symlink cannot point ateom outside the snapshot.
+func checkLocalSnapshotFiles(dir string, files []string) error {
+	for _, name := range files {
+		info, err := os.Lstat(filepath.Join(dir, name))
+		if err != nil {
+			return wrapFileSystemErr("while checking local checkpoint file", err)
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("local checkpoint file %s is not a regular file", name)
+		}
+	}
+	return nil
 }
 
 // copyLocalCheckpoint stages files from the local checkpoint snapshotName under
@@ -1458,7 +1513,8 @@ func (s *AteomHerder) downloadExternalCheckpoint(ctx context.Context, snapshotUR
 // container and every application container in spec, in parallel. pauseImage
 // comes from the sandbox record, not the workload spec: it is sandbox
 // configuration, and on a restore it must be the image the snapshot was taken
-// with.
+// with. It is empty for sandboxes without a pause container, which get no
+// pause bundle.
 func (s *AteomHerder) prepareOCIBundles(
 	ctx context.Context,
 	actorUID string,
@@ -1480,27 +1536,28 @@ func (s *AteomHerder) prepareOCIBundles(
 
 	g, gCtx := errgroup.WithContext(ctx)
 
-	// Pause container.
-	g.Go(func() error {
-		if err := prepareOCIDirectory(
-			gCtx,
-			s.imageCache,
-			actorUID,
-			ocispec.PauseContainer,
-			pauseImage,
-			[]string{"/pause"},
-			nil,
-			nil,
-			nodepath.ActorNetNSPath(actorUID),
-			nil, // pause is sandbox infra; it mounts no volumes.
-			nil,
-			nil, // pause only reaps; it needs no capabilities.
-			nil, // pause carries no user-declared limits.
-		); err != nil {
-			return wrapFileSystemErr("while creating pause OCI bundle", err)
-		}
-		return nil
-	})
+	if pauseImage != "" {
+		g.Go(func() error {
+			if err := prepareOCIDirectory(
+				gCtx,
+				s.imageCache,
+				actorUID,
+				ocispec.PauseContainer,
+				pauseImage,
+				[]string{"/pause"},
+				nil,
+				nil,
+				nodepath.ActorNetNSPath(actorUID),
+				nil, // pause is sandbox infra; it mounts no volumes.
+				nil,
+				nil, // pause only reaps; it needs no capabilities.
+				nil, // pause carries no user-declared limits.
+			); err != nil {
+				return wrapFileSystemErr("while creating pause OCI bundle", err)
+			}
+			return nil
+		})
+	}
 
 	// Application containers.
 	for _, ctr := range spec.GetContainers() {
@@ -1799,8 +1856,10 @@ func validateTerminateRequest(req *ateletpb.TerminateRequest) error {
 	if len(errs) > 0 {
 		return errs.ToAggregate()
 	}
-	if err := resources.ValidateAteomUID(req.GetTargetAteomUid()); err != nil {
-		return err
+	if req.GetTargetAteomUid() != "" {
+		if err := resources.ValidateAteomUID(req.GetTargetAteomUid()); err != nil {
+			return err
+		}
 	}
 	names := make([]string, 0, len(req.GetSpec().GetContainers()))
 	for _, ctr := range req.GetSpec().GetContainers() {
@@ -1880,46 +1939,22 @@ func resetActorDirs(actorUID string) error {
 	// making them writable. (The rootfs itself is just an empty mountpoint
 	// here: the overlay is mounted in the ateom pod's mount namespace, not
 	// atelet's, and is detached by ateom at teardown.)
-	bundleDir := ateletpath.OCIBundleDir(actorUID)
-	if err := imagecache.RemoveAllWritable(bundleDir); err != nil {
-		return wrapFileSystemErr("while deleting bundle dir: %w", err)
+	if err := resetDir("bundle dir", ateletpath.OCIBundleDir(actorUID), imagecache.RemoveAllWritable, 0o700); err != nil {
+		return err
 	}
-	if err := os.MkdirAll(bundleDir, 0o700); err != nil {
-		return wrapFileSystemErr("while creating bundle dir: %w", err)
+	if err := resetDir("checkpoint-state dir", ateletpath.CheckpointStateDir(actorUID), os.RemoveAll, 0o700); err != nil {
+		return err
 	}
-
-	checkpointDir := ateletpath.CheckpointStateDir(actorUID)
-	if err := os.RemoveAll(checkpointDir); err != nil {
-		return wrapFileSystemErr("while deleting checkpoint-state dir: %w", err)
+	if err := resetDir("restore-state dir", ateletpath.RestoreStateDir(actorUID), os.RemoveAll, 0o700); err != nil {
+		return err
 	}
-	if err := os.MkdirAll(checkpointDir, 0o700); err != nil {
-		return wrapFileSystemErr("while creating checkpoint-state dir: %w", err)
+	if err := resetDir("durable-dir volumes mount dir", ateletpath.DurableDirVolumeMountsDir(actorUID), os.RemoveAll, 0o755); err != nil {
+		return err
 	}
-
-	restoreStateDir := ateletpath.RestoreStateDir(actorUID)
-	if err := os.RemoveAll(restoreStateDir); err != nil {
-		return wrapFileSystemErr("while deleting restore-state dir: %w", err)
-	}
-	if err := os.MkdirAll(restoreStateDir, 0o700); err != nil {
-		return wrapFileSystemErr("while creating restore-state dir: %w", err)
-	}
-
-	durableDirVolumesMountDir := ateletpath.DurableDirVolumeMountsDir(actorUID)
-	if err := os.RemoveAll(durableDirVolumesMountDir); err != nil {
-		return wrapFileSystemErr("while deleting durable-dir volumes mount dir: %w", err)
-	}
-	if err := os.MkdirAll(durableDirVolumesMountDir, 0o755); err != nil {
-		return wrapFileSystemErr("while creating durable-dir volumes mount dir: %w", err)
-	}
-
 	// World-readable (0o755): bind-mounted read-only into the actor, whose
 	// workload reads it through the gofer.
-	systemInfoVolumeRootsDir := ateletpath.SystemInfoVolumeRootsDir(actorUID)
-	if err := os.RemoveAll(systemInfoVolumeRootsDir); err != nil {
-		return wrapFileSystemErr("while deleting system-info volume roots dir: %w", err)
-	}
-	if err := os.MkdirAll(systemInfoVolumeRootsDir, 0o755); err != nil {
-		return wrapFileSystemErr("while creating system-info volume roots dir: %w", err)
+	if err := resetDir("system-info volume roots dir", ateletpath.SystemInfoVolumeRootsDir(actorUID), os.RemoveAll, 0o755); err != nil {
+		return err
 	}
 
 	// Do not call RemoveAll on volume directories in case the unmount failed.
@@ -1927,18 +1962,30 @@ func resetActorDirs(actorUID string) error {
 	volumesDir := ateletpath.VolumesDir(actorUID)
 	entries, err := os.ReadDir(volumesDir)
 	if err != nil && !os.IsNotExist(err) {
-		return wrapFileSystemErr("while reading volumes dir: %w", err)
+		return wrapFileSystemErr("while reading volumes dir", err)
 	}
 	for _, entry := range entries {
 		volPath := filepath.Join(volumesDir, entry.Name())
 		if err := os.Remove(volPath); err != nil {
-			return wrapFileSystemErr("while removing volume dir: %w", err)
+			return wrapFileSystemErr("while removing volume dir", err)
 		}
 	}
 	if err := os.MkdirAll(volumesDir, 0o755); err != nil {
-		return wrapFileSystemErr("while creating volumes dir: %w", err)
+		return wrapFileSystemErr("while creating volumes dir", err)
 	}
 
+	return nil
+}
+
+// resetDir empties dir with remove and recreates it with mode. what names the
+// directory in errors.
+func resetDir(what, dir string, remove func(string) error, mode os.FileMode) error {
+	if err := remove(dir); err != nil {
+		return wrapFileSystemErr("while deleting "+what, err)
+	}
+	if err := os.MkdirAll(dir, mode); err != nil {
+		return wrapFileSystemErr("while creating "+what, err)
+	}
 	return nil
 }
 
@@ -1954,7 +2001,7 @@ func removeActorDirs(actorUID string) error {
 		return err
 	}
 	if err := os.RemoveAll(ateletpath.ActorPath(actorUID)); err != nil {
-		return wrapFileSystemErr("while deleting actor dir: %w", err)
+		return wrapFileSystemErr("while deleting actor dir", err)
 	}
 	return nil
 }
@@ -1963,19 +2010,25 @@ func removeActorDirs(actorUID string) error {
 // credential bundle at servingBundlePath, requires a client certificate
 // chaining to a CA in clientCAPath.
 func ateletServerTLSConfig(servingBundlePath, clientCAPath string) (*tls.Config, error) {
-	caBytes, err := os.ReadFile(clientCAPath)
-	if err != nil {
-		return nil, fmt.Errorf("read CA bundle %s: %w", clientCAPath, err)
+	loadClientCAs := credbundle.PoolLoader(clientCAPath)
+	if _, err := loadClientCAs(); err != nil {
+		return nil, fmt.Errorf("load CA bundle %s: %w", clientCAPath, err)
 	}
-	clientCAs := x509.NewCertPool()
-	if !clientCAs.AppendCertsFromPEM(caBytes) {
-		return nil, fmt.Errorf("parse CA bundle from %s", clientCAPath)
-	}
+	serverCert := credbundle.Loader(servingBundlePath)
 	return &tls.Config{
-		MinVersion:     tls.VersionTLS13,
-		GetCertificate: credbundle.Loader(servingBundlePath),
-		ClientAuth:     tls.RequireAndVerifyClientCert,
-		ClientCAs:      clientCAs,
+		MinVersion: tls.VersionTLS13,
+		GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) {
+			clientCAs, err := loadClientCAs()
+			if err != nil {
+				return nil, err
+			}
+			return &tls.Config{
+				MinVersion:     tls.VersionTLS13,
+				GetCertificate: serverCert,
+				ClientAuth:     tls.RequireAndVerifyClientCert,
+				ClientCAs:      clientCAs,
+			}, nil
+		},
 	}, nil
 }
 

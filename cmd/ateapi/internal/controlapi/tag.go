@@ -22,10 +22,9 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/apivalidation"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/defaults"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
@@ -45,7 +44,7 @@ func (s *RPCService) CreateTag(ctx context.Context, req *ateapipb.CreateTagReque
 	}
 
 	if errs := apivalidation.ValidateCreateTagRequest(ctx, req); len(errs) > 0 {
-		return nil, resources.ToGRPCStatusError(errs)
+		return nil, resources.ToAPIError(errs)
 	}
 	actorRef := resources.ActorRefFromObjectRef(req.GetTag().GetSourceActor())
 	setSpanActorRefAttributes(ctx, actorRef)
@@ -53,7 +52,7 @@ func (s *RPCService) CreateTag(ctx context.Context, req *ateapipb.CreateTagReque
 	tag, err := s.actorWorkflow.TagActorSnapshot(ctx, req.GetTag())
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, status.Errorf(codes.NotFound, "Actor %s not found", actorRef)
+			return nil, apierror.FailedPrecondition("Actor %s not found", actorRef)
 		}
 		return nil, err
 	}
@@ -67,12 +66,12 @@ func (s *ServiceImpl) CreateTag(ctx context.Context, tag *ateapipb.Tag) (*ateapi
 
 func (s *RPCService) GetTag(ctx context.Context, req *ateapipb.GetTagRequest) (*ateapipb.Tag, error) {
 	if errs := apivalidation.ValidateGetTagRequest(ctx, req); len(errs) > 0 {
-		return nil, resources.ToGRPCStatusError(errs)
+		return nil, resources.ToAPIError(errs)
 	}
 	tagRef := resources.TagRefFromObjectRef(req.GetTag())
 	tag, err := s.impl.GetTag(ctx, tagRef)
 	if errors.Is(err, store.ErrNotFound) {
-		return nil, status.Errorf(codes.NotFound, "Tag %s not found", tagRef)
+		return nil, apierror.NotFound("Tag %s not found", tagRef)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("while getting tag: %w", err)
@@ -87,7 +86,7 @@ func (s *ServiceImpl) GetTag(ctx context.Context, tagRef resources.TagRef) (*ate
 
 func (s *RPCService) ListTags(ctx context.Context, req *ateapipb.ListTagsRequest) (*ateapipb.ListTagsResponse, error) {
 	if errs := apivalidation.ValidateListTagsRequest(ctx, req); len(errs) > 0 {
-		return nil, resources.ToGRPCStatusError(errs)
+		return nil, resources.ToAPIError(errs)
 	}
 	page, err := s.impl.ListTags(ctx, req.GetAtespace(), store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
 	if err != nil {
@@ -115,7 +114,7 @@ func (s *RPCService) UpdateTag(ctx context.Context, req *ateapipb.UpdateTagReque
 	}
 
 	if errs := apivalidation.ValidateUpdateTagRequest(ctx, req); len(errs) > 0 {
-		return nil, resources.ToGRPCStatusError(errs)
+		return nil, resources.ToAPIError(errs)
 	}
 	in := req.GetTag()
 	tagRef := resources.TagRefFromTag(in)
@@ -145,22 +144,22 @@ func (s *RPCService) UpdateTag(ctx context.Context, req *ateapipb.UpdateTagReque
 	})
 	if err != nil {
 		if errors.Is(err, errTagPending) {
-			return nil, status.Errorf(codes.FailedPrecondition, "Tag %s/%s is still being created", tagRef.Atespace, tagRef.Name)
+			return nil, apierror.FailedPrecondition("Tag %s/%s is still being created", tagRef.Atespace, tagRef.Name)
 		}
 		if errors.Is(err, store.ErrImmutableField) {
-			return nil, status.Errorf(codes.InvalidArgument, "while updating tag %s/%s: %v", tagRef.Atespace, tagRef.Name, err)
+			return nil, apierror.InvalidArgument("while updating tag %s/%s: %v", tagRef.Atespace, tagRef.Name, err)
 		}
 		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
+			return nil, apierror.Aborted("concurrent update conflict, please retry")
 		}
 		if errors.Is(err, store.ErrUIDConflict) {
-			return nil, status.Errorf(codes.Aborted, "Tag %s/%s not found with uid %s", tagRef.Atespace, tagRef.Name, in.GetMetadata().GetUid())
+			return nil, apierror.Aborted("Tag %s/%s not found with uid %s", tagRef.Atespace, tagRef.Name, in.GetMetadata().GetUid())
 		}
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, status.Errorf(codes.NotFound, "Tag %s/%s not found", tagRef.Atespace, tagRef.Name)
+			return nil, apierror.NotFound("Tag %s/%s not found", tagRef.Atespace, tagRef.Name)
 		}
 		if errors.Is(err, store.ErrPreconditionRequired) {
-			return nil, status.Errorf(codes.InvalidArgument, "while updating tag %s/%s: %v", tagRef.Atespace, tagRef.Name, err)
+			return nil, apierror.InvalidArgument("while updating tag %s/%s: %v", tagRef.Atespace, tagRef.Name, err)
 		}
 		return nil, fmt.Errorf("while updating tag: %w", err)
 	}
@@ -179,7 +178,7 @@ func (s *ServiceImpl) UpdateTag(ctx context.Context, tagRef resources.TagRef, pr
 		// the rules the request could not be checked against land: scope, and
 		// the immutability of metadata and source_actor.
 		if errs := apivalidation.ValidateTagUpdate(ctx, field.NewPath("tag"), toUpdate, oldVal); len(errs) > 0 {
-			return resources.ToGRPCStatusError(errs)
+			return resources.ToAPIError(errs)
 		}
 		return nil
 	})
@@ -188,7 +187,7 @@ func (s *ServiceImpl) UpdateTag(ctx context.Context, tagRef resources.TagRef, pr
 // DeleteTag removes the tag and collects the external snapshot it owns.
 func (s *RPCService) DeleteTag(ctx context.Context, req *ateapipb.DeleteTagRequest) (*ateapipb.Tag, error) {
 	if errs := apivalidation.ValidateDeleteTagRequest(ctx, req); len(errs) > 0 {
-		return nil, resources.ToGRPCStatusError(errs)
+		return nil, resources.ToAPIError(errs)
 	}
 	return s.actorWorkflow.DeleteTag(ctx, resources.TagRefFromObjectRef(req.GetTag()), toDeletePreconditions(req.GetOptions()))
 }

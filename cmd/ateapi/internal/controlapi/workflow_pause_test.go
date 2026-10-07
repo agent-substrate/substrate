@@ -19,24 +19,20 @@ import (
 	"testing"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // TestEnsurePausedFinalized_WorkerGone reproduces the scenario where the worker
 // pod disappears from the DB during pause finalization, so the node it ran on
 // is unknown.
 //
-// Old behavior: NodeVmsWithLocalSnapshots = []string{""}, which made the
-// scheduler's node restriction search for a worker with node name "", never
-// found, a permanent "no free workers available" on resume.
-//
-// Current behavior: NodeVmsWithLocalSnapshots is left nil, and the actor is
-// crashed instead of left PAUSED, since a local snapshot with an unknown node
-// can never be safely resumed.
+// Current behavior: AssignedNode is left empty, and the actor is crashed
+// instead of left PAUSED, since a local snapshot with an unknown node can
+// never be safely resumed.
 func TestEnsurePausedFinalized_WorkerGone(t *testing.T) {
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
@@ -77,10 +73,11 @@ func TestEnsurePausedFinalized_WorkerGone(t *testing.T) {
 	if msg, want := got.GetStatus().GetCrash().GetMessage(), "pause failed: "+crashMessageLocalSnapshotNodeUnknown; msg != want {
 		t.Errorf("crash message = %q, want %q", msg, want)
 	}
-	for _, n := range got.GetStatus().GetLocalSnapshot().GetNodeVmsWithLocalSnapshots() {
-		if n == "" {
-			t.Errorf("BUG: empty string in NodeVmsWithLocalSnapshots, the scheduler's node restriction would never match a real worker")
-		}
+	if got.GetStatus().GetAssignedNode() != "" {
+		t.Errorf("AssignedNode = %q, want empty", got.GetStatus().GetAssignedNode())
+	}
+	if gotSnap := got.GetStatus().GetInProgressLocalSnapshotName(); gotSnap != "" {
+		t.Errorf("InProgressLocalSnapshotName = %q, want cleared on crash", gotSnap)
 	}
 
 	if finalized.GetStatus().GetWorkerAssignment() != nil {
@@ -97,6 +94,53 @@ func TestEnsurePausedFinalized_WorkerGone(t *testing.T) {
 	}
 	if got := (*records)[0].attrs[string(ateattr.ActorUIDKey)]; got == "" {
 		t.Error("crash record carries no ate.actor.uid")
+	}
+}
+
+// TestEnsurePausedFinalized_AlreadyCrashed verifies that if the actor was
+// already crashed out-of-band when ensurePausedFinalized runs with no
+// AssignedNode, its existing Crash status is preserved and no duplicate crash
+// log record is emitted.
+func TestEnsurePausedFinalized_AlreadyCrashed(t *testing.T) {
+	st, cleanup := storetest.SetupTestStore(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+	records := crashRecords(t)
+
+	originalCrash := newActorCrash(ateattr.OperationPause, "original crash reason")
+	actor := &ateapipb.Actor{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+		Status: &ateapipb.ActorStatus{
+			State: ateapipb.ActorState_ACTOR_STATE_CRASHED,
+			Crash: originalCrash,
+			WorkerAssignment: &ateapipb.WorkerAssignment{
+				WorkerNamespace: "default",
+				WorkerPool:      "pool1",
+				WorkerPod:       "worker-pod-1",
+			},
+			InProgressLocalSnapshotName: "local-snap-1",
+		},
+	}
+	storetest.MustCreateActor(t, ctx, st, actor)
+
+	w := &ActorWorkflow{store: st}
+	finalized, err := w.ensurePausedFinalized(ctx, actorRef, &ateapipb.ActorTemplate{})
+	if err != nil {
+		t.Fatalf("ensurePausedFinalized: %v", err)
+	}
+	if finalized.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+		t.Errorf("state = %v, want CRASHED", finalized.GetStatus().GetState())
+	}
+	if got, want := finalized.GetStatus().GetCrash().GetMessage(), originalCrash.GetMessage(); got != want {
+		t.Errorf("crash message = %q, want original %q preserved", got, want)
+	}
+	if finalized.GetStatus().GetWorkerAssignment() != nil {
+		t.Errorf("WorkerAssignment = %v, want nil", finalized.GetStatus().GetWorkerAssignment())
+	}
+	if len(*records) != 0 {
+		t.Errorf("got %d crash records, want 0 for an actor that was already crashed", len(*records))
 	}
 }
 
@@ -125,7 +169,8 @@ func TestEnsurePausedFinalized_RecordsContentScope(t *testing.T) {
 			created := storetest.MustCreateActor(t, ctx, st, &ateapipb.Actor{
 				Metadata: &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
 				Status: &ateapipb.ActorStatus{
-					State: ateapipb.ActorState_ACTOR_STATE_PAUSING,
+					State:        ateapipb.ActorState_ACTOR_STATE_PAUSING,
+					AssignedNode: "node1",
 					WorkerAssignment: &ateapipb.WorkerAssignment{
 						Worker:          &ateapipb.ObjectRef{Name: workerName},
 						WorkerNamespace: "default",
@@ -166,6 +211,9 @@ func TestEnsurePausedFinalized_RecordsContentScope(t *testing.T) {
 			}
 			if scope := got.GetStatus().GetLocalSnapshot().GetContentScope(); scope != tc.want {
 				t.Errorf("LocalSnapshot.ContentScope = %v, want %v", scope, tc.want)
+			}
+			if got.GetStatus().GetAssignedNode() != "node1" {
+				t.Errorf("AssignedNode = %q, want %q", got.GetStatus().GetAssignedNode(), "node1")
 			}
 		})
 	}
@@ -210,8 +258,8 @@ func TestPauseActorWorkflow_RejectedAndIdempotentPaths(t *testing.T) {
 
 			actor, err := w.PauseActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
 			if tc.wantErr {
-				if got := status.Code(err); got != codes.FailedPrecondition {
-					t.Fatalf("status.Code(err) = %v, want %v (err: %v)", got, codes.FailedPrecondition, err)
+				if got := apierror.Code(err); got != codes.FailedPrecondition {
+					t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, codes.FailedPrecondition, err)
 				}
 			} else {
 				if err != nil {
@@ -335,8 +383,8 @@ func TestPauseActor_CrashesWhenPausingActorMissingWorkerPod(t *testing.T) {
 	seedWorkflowActor(t, ctx, st, resources.ActorRef{Atespace: "team-a", Name: "id1"}, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_PAUSING)
 
 	_, err := w.PauseActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
-	if got := status.Code(err); got != codes.FailedPrecondition {
-		t.Fatalf("status.Code(err) = %v, want %v (err: %v)", got, codes.FailedPrecondition, err)
+	if got := apierror.Code(err); got != codes.FailedPrecondition {
+		t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, codes.FailedPrecondition, err)
 	}
 
 	got, err := st.GetActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
@@ -361,7 +409,7 @@ func TestEnsureMarkedPausing_GoldenAtespaceRejected(t *testing.T) {
 	_, err := w.ensureMarkedPausing(context.Background(),
 		resources.ActorRef{Atespace: resources.GoldenActorAtespace, Name: "golden-1"},
 		&ateapipb.Actor{Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING}})
-	if got := status.Code(err); got != codes.FailedPrecondition {
+	if got := apierror.Code(err); got != codes.FailedPrecondition {
 		t.Fatalf("status.Code = %v (err %v), want FailedPrecondition", got, err)
 	}
 }
