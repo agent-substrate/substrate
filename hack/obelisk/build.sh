@@ -72,7 +72,7 @@ RestartSec=5s
 ExecStartPre=-/usr/bin/ip link add substrate0 type dummy
 ExecStartPre=/usr/bin/ip address replace 10.254.0.1/32 dev substrate0
 ExecStartPre=/usr/bin/ip link set substrate0 up
-ExecStart=/usr/local/bin/k3s server --node-ip=10.254.0.1 --advertise-address=10.254.0.1 --flannel-iface=eth0 --disable=traefik --disable=servicelb --disable=metrics-server --write-kubeconfig-mode=600
+ExecStart=/usr/local/bin/k3s server --node-ip=10.254.0.1 --advertise-address=10.254.0.1 --flannel-iface=eth0 --disable=traefik --disable=servicelb --disable=metrics-server --write-kubeconfig-mode=600 --kube-apiserver-arg=feature-gates=ClusterTrustBundle=true,ClusterTrustBundleProjection=true,PodCertificateRequest=true --kube-apiserver-arg=runtime-config=certificates.k8s.io/v1beta1=true --kubelet-arg=feature-gates=ClusterTrustBundle=true,ClusterTrustBundleProjection=true,PodCertificateRequest=true
 
 [Install]
 WantedBy=multi-user.target
