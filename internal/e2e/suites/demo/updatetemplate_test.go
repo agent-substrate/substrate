@@ -192,7 +192,7 @@ func runUpdateTemplateTestCase(t *testing.T, onCommit ateapipb.SnapshotContentSc
 	// committed snapshot from template A. Resuming from PAUSED restores the
 	// local checkpoint (which was captured under template B, since templates
 	// can only be updated while SUSPENDED) and preserves the in-memory counter
-	// when onPause is FULL.
+	// when onCommit is FULL.
 	t.Logf("Pausing Actor %q under template B...", actorID)
 	if _, err := clients.SubstrateAPI.PauseActor(ctx, &ateapipb.PauseActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
@@ -316,7 +316,6 @@ func createUpdateTestTemplate(ctx context.Context, t *testing.T, clients *e2e.Cl
 		Labels:       map[string]string{"demo": nsObj.Name},
 		SnapshotConfig: &ateapipb.SnapshotConfig{
 			StorageLocation: "gs://" + bucket + "/ate-demo-" + nsObj.Name,
-			OnPause:         onCommit,
 			OnCommit:        onCommit,
 		},
 		Modify: modify,

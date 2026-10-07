@@ -47,7 +47,7 @@ func TestActorLifecycle(t *testing.T) {
 	clients := e2e.GetClients()
 
 	// Create actor template.
-	at, err := createActorTemplate(ctx, t, clients, nsObj, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL)
+	at, err := createActorTemplate(ctx, t, clients, nsObj, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL)
 	if err != nil {
 		t.Fatalf("failed to initialize ActorTemplate: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 	clients := e2e.GetClients()
 	nsObj := e2e.CreateNamespace(t)
 
-	at, err := createActorTemplate(ctx, t, clients, nsObj, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL)
+	at, err := createActorTemplate(ctx, t, clients, nsObj, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL)
 	if err != nil {
 		t.Fatalf("failed to initialize ActorTemplate: %v", err)
 	}
@@ -219,10 +219,9 @@ func TestDurableDirLifecycle(t *testing.T) {
 		tc   actorLifecycleTestCase
 	}{
 		{
-			name: "onCommit:Full, onPause:Full",
+			name: "onCommit:Full",
 			tc: actorLifecycleTestCase{
 				onCommit:               ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
-				onPause:                ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 				wantMemoryAfterPause:   2,
 				wantFileAfterPause:     2,
 				wantMemoryAfterSuspend: 3,
@@ -230,21 +229,11 @@ func TestDurableDirLifecycle(t *testing.T) {
 			},
 		},
 		{
-			name: "onCommit:Data, onPause:Full",
+			// Pause captures the same Data scope as suspend, so memory
+			// cold-boots on every resume.
+			name: "onCommit:Data",
 			tc: actorLifecycleTestCase{
 				onCommit:               ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
-				onPause:                ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
-				wantMemoryAfterPause:   2,
-				wantFileAfterPause:     2,
-				wantMemoryAfterSuspend: 1,
-				wantFileAfterSuspend:   3,
-			},
-		},
-		{
-			name: "onCommit:Data, onPause:Data",
-			tc: actorLifecycleTestCase{
-				onCommit:               ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
-				onPause:                ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
 				wantMemoryAfterPause:   1,
 				wantFileAfterPause:     2,
 				wantMemoryAfterSuspend: 1,
@@ -252,11 +241,10 @@ func TestDurableDirLifecycle(t *testing.T) {
 			},
 		},
 		{
-			// Suspend from PAUSED with matching Full scopes.
-			name: "onCommit:Full, onPause:Full, suspend from PAUSED",
+			// Suspend from PAUSED uploads the Full local snapshot.
+			name: "onCommit:Full, suspend from PAUSED",
 			tc: actorLifecycleTestCase{
 				onCommit:                 ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
-				onPause:                  ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 				wantMemoryAfterPause:     2,
 				wantFileAfterPause:       2,
 				wantMemoryAfterSuspend:   3,
@@ -266,27 +254,11 @@ func TestDurableDirLifecycle(t *testing.T) {
 			},
 		},
 		{
-			// Suspend from PAUSED with matching Data scopes.
-			name: "onCommit:Data, onPause:Data, suspend from PAUSED",
+			// Suspend from PAUSED uploads the Data local snapshot.
+			name: "onCommit:Data, suspend from PAUSED",
 			tc: actorLifecycleTestCase{
 				onCommit:                 ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
-				onPause:                  ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
 				wantMemoryAfterPause:     1,
-				wantFileAfterPause:       2,
-				wantMemoryAfterSuspend:   1,
-				wantFileAfterSuspend:     3,
-				wantSnapshotContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
-				suspendWhilePaused:       true,
-			},
-		},
-		{
-			// Suspend from PAUSED with scope conversion.
-			// mircoVM already implemnted, while gVisor is blocked by #790:
-			name: "onCommit:Data, onPause:Full, suspend from PAUSED",
-			tc: actorLifecycleTestCase{
-				onCommit:                 ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
-				onPause:                  ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
-				wantMemoryAfterPause:     2,
 				wantFileAfterPause:       2,
 				wantMemoryAfterSuspend:   1,
 				wantFileAfterSuspend:     3,
@@ -318,10 +290,9 @@ func TestMultipleDurableDirLifecycle(t *testing.T) {
 		tc   actorLifecycleTestCase
 	}{
 		{
-			name: "onCommit:Full, onPause:Full",
+			name: "onCommit:Full",
 			tc: actorLifecycleTestCase{
 				onCommit:               ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
-				onPause:                ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 				wantMemoryAfterPause:   2,
 				wantFileAfterPause:     2,
 				wantMemoryAfterSuspend: 3,
@@ -330,10 +301,9 @@ func TestMultipleDurableDirLifecycle(t *testing.T) {
 			},
 		},
 		{
-			name: "onCommit:Data, onPause:Data",
+			name: "onCommit:Data",
 			tc: actorLifecycleTestCase{
 				onCommit:               ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
-				onPause:                ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
 				wantMemoryAfterPause:   1,
 				wantFileAfterPause:     2,
 				wantMemoryAfterSuspend: 1,
@@ -362,10 +332,9 @@ func TestExternalVolumeLifecycle(t *testing.T) {
 		tc   actorLifecycleTestCase
 	}{
 		{
-			name: "onCommit:Data, onPause:Data",
+			name: "onCommit:Data",
 			tc: actorLifecycleTestCase{
 				onCommit:               ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
-				onPause:                ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
 				wantMemoryAfterPause:   1,
 				wantFileAfterPause:     2,
 				wantMemoryAfterSuspend: 1,
@@ -388,7 +357,7 @@ func TestDeleteActorAnyStateWithExternalVolume(t *testing.T) {
 	clients := e2e.GetClients()
 	nsObj := e2e.CreateNamespace(t)
 
-	at, err := createActorTemplateWithExternalVolume(ctx, t, clients, nsObj, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA)
+	at, err := createActorTemplateWithExternalVolume(ctx, t, clients, nsObj, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA)
 	if err != nil {
 		t.Fatalf("failed to initialize ActorTemplate: %v", err)
 	}
@@ -455,7 +424,7 @@ func TestExternalVolume_NodeMigration(t *testing.T) {
 	clients := e2e.GetClients()
 	nsObj := e2e.CreateNamespace(t)
 
-	at, err := createActorTemplateWithExternalVolume(ctx, t, clients, nsObj, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA)
+	at, err := createActorTemplateWithExternalVolume(ctx, t, clients, nsObj, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA)
 	if err != nil {
 		t.Fatalf("failed to initialize ActorTemplate: %v", err)
 	}
@@ -544,7 +513,6 @@ func TestExternalVolume_NodeMigration(t *testing.T) {
 //  6. Call to actor and validate memory and file counters.
 type actorLifecycleTestCase struct {
 	onCommit               ateapipb.SnapshotContentScope
-	onPause                ateapipb.SnapshotContentScope
 	wantMemoryAfterPause   int
 	wantFileAfterPause     int
 	wantMemoryAfterSuspend int
@@ -571,7 +539,7 @@ type actorLifecycleTestCase struct {
 	suspendWhilePaused bool
 }
 
-func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(context.Context, *testing.T, *e2e.Clients, *e2e.Namespace, ateapipb.SnapshotContentScope, ateapipb.SnapshotContentScope) (*ateapipb.ActorTemplate, error), tc actorLifecycleTestCase) {
+func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(context.Context, *testing.T, *e2e.Clients, *e2e.Namespace, ateapipb.SnapshotContentScope) (*ateapipb.ActorTemplate, error), tc actorLifecycleTestCase) {
 	// Create namespace
 	nsObj := e2e.CreateNamespace(t)
 
@@ -579,7 +547,7 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 	clients := e2e.GetClients()
 
 	// Create actor template.
-	at, err := createTemplate(ctx, t, clients, nsObj, tc.onCommit, tc.onPause)
+	at, err := createTemplate(ctx, t, clients, nsObj, tc.onCommit)
 	if err != nil {
 		t.Fatalf("failed to initialize ActorTemplate: %v", err)
 	}
@@ -1221,7 +1189,7 @@ func deletePausedActorAnyState(ctx context.Context, t *testing.T, clients *e2e.C
 	return nil
 }
 
-func createActorTemplateInternal(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, base string, onCommit, onPause ateapipb.SnapshotContentScope, modifyTemplate func(*ateapipb.ActorTemplate)) (*ateapipb.ActorTemplate, error) {
+func createActorTemplateInternal(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, base string, onCommit ateapipb.SnapshotContentScope, modifyTemplate func(*ateapipb.ActorTemplate)) (*ateapipb.ActorTemplate, error) {
 	env, err := e2e.CheckEnv("BUCKET_NAME")
 	if err != nil {
 		t.Fatalf("CheckEnv failed: %v", err)
@@ -1239,7 +1207,6 @@ func createActorTemplateInternal(ctx context.Context, t *testing.T, clients *e2e
 		Labels:       map[string]string{"demo": nsObj.Name},
 		SnapshotConfig: &ateapipb.SnapshotConfig{
 			StorageLocation: "gs://" + env["BUCKET_NAME"] + "/ate-demo-" + name,
-			OnPause:         onPause,
 			OnCommit:        onCommit,
 		},
 		Modify: modifyTemplate,
@@ -1247,11 +1214,11 @@ func createActorTemplateInternal(ctx context.Context, t *testing.T, clients *e2e
 	return at, nil
 }
 
-func createActorTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, onCommit, onPause ateapipb.SnapshotContentScope) (*ateapipb.ActorTemplate, error) {
-	return createActorTemplateInternal(ctx, t, clients, nsObj, "counter", onCommit, onPause, nil)
+func createActorTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, onCommit ateapipb.SnapshotContentScope) (*ateapipb.ActorTemplate, error) {
+	return createActorTemplateInternal(ctx, t, clients, nsObj, "counter", onCommit, nil)
 }
 
-func createActorTemplateWithExternalVolume(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, onCommit, onPause ateapipb.SnapshotContentScope) (*ateapipb.ActorTemplate, error) {
+func createActorTemplateWithExternalVolume(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, onCommit ateapipb.SnapshotContentScope) (*ateapipb.ActorTemplate, error) {
 	scName := e2e.StorageClass
 	if !hasStorageClass(ctx, clients, scName) {
 		t.Fatalf("StorageClass %q not found in cluster; provide a valid --storage-class or install the CSI driver via --setup-csi", scName)
@@ -1296,7 +1263,7 @@ func createActorTemplateWithExternalVolume(ctx context.Context, t *testing.T, cl
 			})
 		}
 	}
-	return createActorTemplateInternal(ctx, t, clients, nsObj, "counter-ext-vol", onCommit, onPause, modify)
+	return createActorTemplateInternal(ctx, t, clients, nsObj, "counter-ext-vol", onCommit, modify)
 }
 
 // secondDurableDirVolume is the extra durable-dir volume (and where the counter
@@ -1311,7 +1278,7 @@ const (
 // counter's second file counter at it, so both volumes are written on every
 // request. Only the micro-VM runtime accepts this: gVisor templates are still
 // capped at one durable-dir volume by the ActorTemplate CEL rules.
-func createActorTemplateWithTwoDurableDirs(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, onCommit, onPause ateapipb.SnapshotContentScope) (*ateapipb.ActorTemplate, error) {
+func createActorTemplateWithTwoDurableDirs(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, onCommit ateapipb.SnapshotContentScope) (*ateapipb.ActorTemplate, error) {
 	modify := func(at *ateapipb.ActorTemplate) {
 		for _, c := range at.GetContainers() {
 			if c.GetName() != "counter" {
@@ -1328,7 +1295,7 @@ func createActorTemplateWithTwoDurableDirs(ctx context.Context, t *testing.T, cl
 			DurableDir: &ateapipb.DurableDirVolumeSource{},
 		})
 	}
-	return createActorTemplateInternal(ctx, t, clients, nsObj, "counter-two-durabledirs", onCommit, onPause, modify)
+	return createActorTemplateInternal(ctx, t, clients, nsObj, "counter-two-durabledirs", onCommit, modify)
 }
 
 func hasStorageClass(ctx context.Context, clients *e2e.Clients, name string) bool {
@@ -1481,7 +1448,7 @@ func TestWorkerPodDeletion(t *testing.T) {
 	clients := e2e.GetClients()
 
 	// Create actor template.
-	at, err := createActorTemplate(ctx, t, clients, nsObj, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL)
+	at, err := createActorTemplate(ctx, t, clients, nsObj, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL)
 	if err != nil {
 		t.Fatalf("failed to initialize ActorTemplate: %v", err)
 	}
@@ -1611,7 +1578,7 @@ func TestRevertCrashedActor(t *testing.T) {
 	ctx := context.Background()
 	clients := e2e.GetClients()
 
-	at, err := createActorTemplate(ctx, t, clients, nsObj, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL)
+	at, err := createActorTemplate(ctx, t, clients, nsObj, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL)
 	if err != nil {
 		t.Fatalf("failed to initialize ActorTemplate: %v", err)
 	}

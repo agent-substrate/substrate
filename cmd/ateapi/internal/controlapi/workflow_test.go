@@ -94,7 +94,6 @@ func TestActorStateChangeRecords(t *testing.T) {
 				Metadata: &ateapipb.ResourceMetadata{Atespace: tmplAtespace, Name: tmplName},
 				SnapshotConfig: &ateapipb.SnapshotConfig{
 					StorageLocation: testStorageLocation,
-					OnPause:         ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 				},
 			}); err != nil {
 				t.Fatalf("create template: %v", err)

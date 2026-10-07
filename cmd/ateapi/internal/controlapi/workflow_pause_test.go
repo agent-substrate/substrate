@@ -145,15 +145,14 @@ func TestEnsurePausedFinalized_AlreadyCrashed(t *testing.T) {
 }
 
 // TestEnsurePausedFinalized_RecordsContentScope verifies pause finalization
-// records the scope the pause checkpoint captured (the template's onPause) in
-// LocalSnapshot, so a later suspend of the PAUSED actor knows what the
-// local snapshot contains even if the template's onPause changes while the
-// actor sits PAUSED.
+// records the scope the pause checkpoint captured (the template's onCommit)
+// in LocalSnapshot, so a later suspend or resume of the PAUSED actor knows
+// what the local snapshot contains.
 func TestEnsurePausedFinalized_RecordsContentScope(t *testing.T) {
 	tests := []struct {
-		name    string
-		onPause ateapipb.SnapshotContentScope
-		want    ateapipb.SnapshotContentScope
+		name     string
+		onCommit ateapipb.SnapshotContentScope
+		want     ateapipb.SnapshotContentScope
 	}{
 		{"data", ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA},
 		{"full", ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
@@ -199,7 +198,7 @@ func TestEnsurePausedFinalized_RecordsContentScope(t *testing.T) {
 
 			w := &ActorWorkflow{store: st}
 			tmpl := &ateapipb.ActorTemplate{
-				SnapshotConfig: &ateapipb.SnapshotConfig{OnPause: tc.onPause},
+				SnapshotConfig: &ateapipb.SnapshotConfig{OnCommit: tc.onCommit},
 			}
 			got, err := w.ensurePausedFinalized(ctx, actorRef, tmpl)
 			if err != nil {

@@ -203,8 +203,8 @@ message LocalSnapshot {
   // +k8s:format=k8s-short-name
   string snapshot_name = 1;
 
-  // Scope the pause checkpoint captured (the template's onPause at pause
-  // time). UNSPECIFIED is tolerated for compatibility and reads as FULL.
+  // Scope the pause checkpoint captured (the template's onCommit at pause
+  // time).
   //
   // +k8s:optional
   // +k8s:minimum=1
@@ -1055,20 +1055,9 @@ message SandboxConfig {
 // stored. A FULL snapshot resumes from its own content. A DATA snapshot
 // resumes by starting the containers afresh from the OCI image, with the
 // durable-dir volumes populated from the snapshot.
-//
-// +k8s:customValidation # on_commit must be a subset of on_pause
 message SnapshotConfig {
-  // on_pause defines the scope of the snapshot captured when an actor
-  // is paused. Defaults to FULL when unset.
-  //
-  // +k8s:required
-  // +k8s:minimum=1
-  // +k8s:maximum=2 # keep this in sync with the SnapshotContentScope enum
-  SnapshotContentScope on_pause = 1;
-
-  // on_commit defines the scope of the actor snapshot captured when an actor
-  // is suspended.
-  // Must be a subset of on_pause: FULL allows FULL or DATA, DATA allows DATA.
+  // on_commit defines the scope of every snapshot taken of an actor, both
+  // the node-local one captured on pause and the one uploaded on suspend.
   // Defaults to FULL when unset.
   //
   // +k8s:required

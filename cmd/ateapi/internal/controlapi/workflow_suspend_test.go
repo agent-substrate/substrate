@@ -641,60 +641,6 @@ func TestIsPausedOriginSuspend(t *testing.T) {
 	}
 }
 
-// TestEnsureMarkedSuspending_PausedScopeRejection verifies a paused-origin
-// suspend is rejected before the actor leaves PAUSED when the pause captured
-// Data but the template commits Full: an upload cannot fabricate memory.
-func TestEnsureMarkedSuspending_PausedScopeRejection(t *testing.T) {
-	tmpl := func(onPause, onCommit ateapipb.SnapshotContentScope) *ateapipb.ActorTemplate {
-		return &ateapipb.ActorTemplate{
-			SnapshotConfig: &ateapipb.SnapshotConfig{OnPause: onPause, OnCommit: onCommit, StorageLocation: "gs://snapshots"},
-		}
-	}
-	fullScope := ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL
-	dataScope := ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
-	tests := []struct {
-		name     string
-		captured ateapipb.SnapshotContentScope
-		tmpl     *ateapipb.ActorTemplate
-		wantErr  bool
-	}{
-		{"data capture cannot commit full", dataScope, tmpl(dataScope, fullScope), true},
-		{"data capture commits data", dataScope, tmpl(dataScope, dataScope), false},
-		{"full capture commits full", fullScope, tmpl(fullScope, fullScope), false},
-		{"full capture commits data via conversion", fullScope, tmpl(fullScope, dataScope), false},
-		// Actors paused before content_scope existed fall back to the
-		// template's onPause.
-		{"unset capture falls back to onPause", ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED, tmpl(dataScope, fullScope), true},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			ctx := context.Background()
-			persistence := newTestPersistence(t)
-			w := &ActorWorkflow{store: persistence}
-
-			actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
-			actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
-				Metadata: &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
-				Status: &ateapipb.ActorStatus{
-					State:         ateapipb.ActorState_ACTOR_STATE_PAUSED,
-					AssignedNode:  "node1",
-					LocalSnapshot: &ateapipb.LocalSnapshot{SnapshotName: "snap", ContentScope: tc.captured},
-				},
-			})
-
-			_, err := w.ensureMarkedSuspending(ctx, actorRef, actor, tc.tmpl)
-			if gotErr := err != nil; gotErr != tc.wantErr {
-				t.Fatalf("ensureMarkedSuspending = %v, wantErr %t", err, tc.wantErr)
-			}
-			if tc.wantErr {
-				if got := apierror.Code(err); got != codes.FailedPrecondition {
-					t.Errorf("status.Code = %v, want FailedPrecondition", got)
-				}
-			}
-		})
-	}
-}
-
 // TestEnsurePausedSnapshotUploaded_Preconditions covers the paused branch's
 // failure handling: a lost node record crashes the actor (the snapshot can
 // never be found), while an unreachable atelet stays retryable (the bytes

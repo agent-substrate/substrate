@@ -1199,8 +1199,6 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 	}
 	// templateSeed is the ActorTemplate configuration a row persists.
 	type templateSeed struct {
-		// onPause is the template's pause scope.
-		onPause ateapipb.SnapshotContentScope
 		// golden seeds the template's golden tag snapshot.
 		golden *ateapipb.ExternalSnapshot
 		// configName is the SandboxConfig the template names; "" means the
@@ -1336,9 +1334,8 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 		{
 			name: "13 Full pause snapshot restores locally as Full",
 			actor: actorSeed{
-				localSnapshot: &ateapipb.LocalSnapshot{SnapshotName: localSnapshotName},
+				localSnapshot: &ateapipb.LocalSnapshot{SnapshotName: localSnapshotName, ContentScope: fullScope},
 			},
-			tmpl: templateSeed{onPause: fullScope},
 			want: restoreWant{
 				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
 				snapshotName:   localSnapshotName,
@@ -1351,10 +1348,9 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			// resume-source resolution is being reworked.
 			name: "14 local snapshot built on the current template stays Full",
 			actor: actorSeed{
-				localSnapshot: &ateapipb.LocalSnapshot{SnapshotName: localSnapshotName},
+				localSnapshot: &ateapipb.LocalSnapshot{SnapshotName: localSnapshotName, ContentScope: fullScope},
 				tmplUID:       "current",
 			},
-			tmpl: templateSeed{onPause: fullScope},
 			want: restoreWant{
 				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
 				snapshotName:   localSnapshotName,
@@ -1364,9 +1360,8 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 		{
 			name: "15 Data pause snapshot restores locally as Data",
 			actor: actorSeed{
-				localSnapshot: &ateapipb.LocalSnapshot{SnapshotName: localSnapshotName},
+				localSnapshot: &ateapipb.LocalSnapshot{SnapshotName: localSnapshotName, ContentScope: dataScope},
 			},
-			tmpl: templateSeed{onPause: dataScope},
 			want: restoreWant{
 				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
 				snapshotName:   localSnapshotName,
@@ -1376,11 +1371,10 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 		{
 			name: "16 Data pause snapshot ignores the template's golden",
 			actor: actorSeed{
-				localSnapshot: &ateapipb.LocalSnapshot{SnapshotName: localSnapshotName},
+				localSnapshot: &ateapipb.LocalSnapshot{SnapshotName: localSnapshotName, ContentScope: dataScope},
 			},
 			tmpl: templateSeed{
-				onPause: dataScope,
-				golden:  &ateapipb.ExternalSnapshot{SnapshotUri: goldenURI, ContentScope: fullScope},
+				golden: &ateapipb.ExternalSnapshot{SnapshotUri: goldenURI, ContentScope: fullScope},
 			},
 			want: restoreWant{
 				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
@@ -1389,14 +1383,13 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 		},
 		{
-			// The local snapshot takes precedence at restore, and its scope
-			// comes from the pause scope, not the durable snapshot's.
+			// The local snapshot takes precedence at restore, and its recorded
+			// scope wins over the durable snapshot's.
 			name: "17 local snapshot wins over a Full durable snapshot",
 			actor: actorSeed{
-				localSnapshot:    &ateapipb.LocalSnapshot{SnapshotName: localSnapshotName},
+				localSnapshot:    &ateapipb.LocalSnapshot{SnapshotName: localSnapshotName, ContentScope: dataScope},
 				externalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: actorURI, ContentScope: fullScope},
 			},
-			tmpl: templateSeed{onPause: dataScope},
 			want: restoreWant{
 				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
 				snapshotName:   localSnapshotName,
@@ -1410,11 +1403,10 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			// template.
 			name: "18 local snapshot ignores an older external snapshot's template mismatch",
 			actor: actorSeed{
-				localSnapshot:    &ateapipb.LocalSnapshot{SnapshotName: localSnapshotName},
+				localSnapshot:    &ateapipb.LocalSnapshot{SnapshotName: localSnapshotName, ContentScope: fullScope},
 				externalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: actorURI, ContentScope: fullScope},
 				tmplUID:          "mismatch",
 			},
-			tmpl: templateSeed{onPause: fullScope},
 			want: restoreWant{
 				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
 				snapshotName:   localSnapshotName,
@@ -1432,7 +1424,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 		{
 			name:  "20 local snapshot restore with a missing SandboxConfig is rejected",
 			actor: actorSeed{localSnapshot: &ateapipb.LocalSnapshot{SnapshotName: localSnapshotName}},
-			tmpl:  templateSeed{onPause: fullScope, configName: "missing"},
+			tmpl:  templateSeed{configName: "missing"},
 			want:  restoreWant{code: codes.FailedPrecondition},
 		},
 	}
@@ -1460,7 +1452,6 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 				Metadata: &ateapipb.ResourceMetadata{Atespace: "ns", Name: "tmpl1"},
 				SnapshotConfig: &ateapipb.SnapshotConfig{
 					StorageLocation: testStorageLocation,
-					OnPause:         tt.tmpl.onPause,
 				},
 				SandboxConfig: &ateapipb.SandboxConfig{
 					SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,

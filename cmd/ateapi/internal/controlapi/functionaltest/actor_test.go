@@ -2959,7 +2959,6 @@ func createDataCommitTemplate(t *testing.T, tc *testContext, ns string) *ateapip
 			},
 			SnapshotConfig: &ateapipb.SnapshotConfig{
 				StorageLocation: testStorageLocation,
-				OnPause:         ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 				OnCommit:        ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
 			},
 			SandboxConfig: &ateapipb.SandboxConfig{

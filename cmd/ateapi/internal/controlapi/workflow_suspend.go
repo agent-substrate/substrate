@@ -133,15 +133,6 @@ func (w *ActorWorkflow) ensureMarkedSuspending(ctx context.Context, actorRef res
 	if got := actor.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_RUNNING && got != ateapipb.ActorState_ACTOR_STATE_PAUSED {
 		return nil, apierror.FailedPrecondition("MarkSuspending prerequisite not met for Actor: %s (got: %v, want %s or %s)", actorRef, got, ateapipb.ActorState_ACTOR_STATE_RUNNING, ateapipb.ActorState_ACTOR_STATE_PAUSED)
 	}
-	// A paused-origin suspend uploads what the pause captured; it cannot
-	// fabricate the memory a Full commit needs from a Data-only capture.
-	// Reject before leaving PAUSED so the actor stays resumable.
-	if actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_PAUSED &&
-		pausedContentScope(actor.GetStatus().GetLocalSnapshot(), actorTemplate) == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA &&
-		commitSnapshotScope(actorRef.Atespace, actorTemplate) == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL {
-		return nil, apierror.FailedPrecondition("actor %s paused with a Data snapshot; the template commits Full, which a paused-origin suspend cannot produce", actorRef)
-	}
-
 	// Fail here rather than at checkpoint time if the template's location
 	// cannot produce a usable URI: nothing has been written yet.
 	uri, err := newInProgressSnapshotURI(actorTemplate, actor)
@@ -172,17 +163,6 @@ func commitSnapshotScope(atespace string, tmpl *ateapipb.ActorTemplate) ateapipb
 		return ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL
 	}
 	return tmpl.GetSnapshotConfig().GetOnCommit()
-}
-
-// pausedContentScope returns the scope a paused actor's local snapshot was
-// captured with: the value recorded at pause finalization, or — for actors
-// paused before content_scope existed — the template's onPause, the same
-// derivation resume uses for local snapshots.
-func pausedContentScope(local *ateapipb.LocalSnapshot, tmpl *ateapipb.ActorTemplate) ateapipb.SnapshotContentScope {
-	if scope := local.GetContentScope(); scope != ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED {
-		return scope
-	}
-	return tmpl.GetSnapshotConfig().GetOnPause()
 }
 
 // isPausedOriginSuspend reports whether the suspend must upload a PAUSED
