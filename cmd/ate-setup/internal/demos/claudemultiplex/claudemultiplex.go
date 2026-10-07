@@ -24,8 +24,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/spf13/pflag"
-
+	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/demos"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/images"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/steps"
@@ -75,9 +74,12 @@ func agentTemplates() []demos.SubstrateTemplate {
 	return templates
 }
 
-func (d *demo) Name() string         { return d.sub.Name() }
-func (d *demo) Description() string  { return d.sub.Description() }
-func (d *demo) Flags(*pflag.FlagSet) {}
+func (d *demo) Name() string        { return d.sub.Name() }
+func (d *demo) Description() string { return d.sub.Description() }
+
+// Settings reports none: the demo reads ANTHROPIC_API_KEY, which the
+// installer already owns as demo.anthropicAPIKey.
+func (d *demo) Settings() []config.Setting { return nil }
 
 func (d *demo) Deploy(ctx context.Context, e *steps.Env) error {
 	if e.Cfg.AnthropicAPIKey == "" {

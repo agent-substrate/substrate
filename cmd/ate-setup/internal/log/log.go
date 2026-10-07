@@ -65,3 +65,7 @@ func Warnf(format string, args ...any) {
 func Elapsed(start time.Time, label string) {
 	fmt.Fprintf(out, "  (%s took %.3fs)\n", label, time.Since(start).Seconds())
 }
+
+// Writer is the destination progress output goes to, for callers that render
+// several lines themselves rather than one step at a time.
+func Writer() io.Writer { return out }

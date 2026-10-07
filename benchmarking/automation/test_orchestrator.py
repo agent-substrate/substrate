@@ -100,5 +100,36 @@ class RunnerSizingTest(unittest.TestCase):
         self.assertNotIn("${", orchestrator.render_template(self.TMPL, subs))
 
 
+class JobNameTest(unittest.TestCase):
+    COMMIT = "ac41c06deadbeef"
+
+    def test_short_name_keeps_full_test_name(self):
+        name = orchestrator.job_name("Eng Review", self.COMMIT)
+        self.assertRegex(name, r"^runner-eng-review-ac41c06-[0-9a-f]{6}$")
+
+    def test_long_name_fits_a_label_and_keeps_suffix(self):
+        test = "very-long-benchmark-name-that-overflows-the-kubernetes-label-limit"
+        name = orchestrator.job_name(test, self.COMMIT)
+        self.assertLessEqual(len(name), orchestrator.MAX_JOB_NAME_LEN)
+        self.assertRegex(name, r"-ac41c06-[0-9a-f]{6}$")
+        self.assertTrue(name.startswith("runner-very-long-benchmark-name"))
+
+    def test_truncation_never_leaves_a_double_hyphen(self):
+        # Cutting right after a hyphen must not yield "...-x--ac41c06-...".
+        for i in range(1, 80):
+            test = "-".join(["ab"] * i)
+            name = orchestrator.job_name(test, self.COMMIT)
+            self.assertLessEqual(len(name), orchestrator.MAX_JOB_NAME_LEN)
+            self.assertNotIn("--", name, test)
+            self.assertRegex(name, r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
+
+    def test_two_runs_of_the_same_long_test_differ(self):
+        test = "x" * 100
+        self.assertNotEqual(
+            orchestrator.job_name(test, self.COMMIT),
+            orchestrator.job_name(test, self.COMMIT),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

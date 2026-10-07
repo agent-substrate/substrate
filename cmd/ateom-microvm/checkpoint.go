@@ -23,7 +23,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"slices"
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/apierror"
@@ -50,8 +49,8 @@ import (
 //     disk-backed upper): the upper is host-backed like the durable-dir volumes and
 //     ships alongside as its own tar (see rootfsupper.go); process memory persists
 //     via the memory snapshot. The RO lower is reconstructed from the OCI image at
-//     restore, so it never ships. Durable-dir volumes ship alongside as a tar.
-//   - DATA: the durable-dir volumes only, as that same tar. The guest is discarded, so
+//     restore, so it never ships. Durable-dir volumes ship alongside as per-volume tars.
+//   - DATA: the durable-dir volumes only, as those same tars. The guest is discarded, so
 //     the actor cold-starts on restore with its volumes re-materialized.
 //
 // Either way the guest is paused first, which is what makes the tar coherent: the
@@ -155,7 +154,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	}
 
 	// Capture the snapshot's pieces CONCURRENTLY: the CH snapshot, the
-	// durable-dir tar, and the rootfs upper tar read independent data from a
+	// durable-dir tars, and the rootfs upper tars read independent data from a
 	// quiesced guest and write distinct files into checkpointDir, so the paused
 	// window costs the slowest of them rather than their sum (the tars scale
 	// with the actor's data; suspend latency is the metric that matters).
@@ -164,11 +163,12 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	//     deliberately captures no VM state — no memory image, and no base-id,
 	//     since nothing will reattach to the frozen virtio-fs lower: at restore
 	//     the actor cold-boots from the OCI image.
-	//   - Durable-dir tar (any scope, when declared): host-backed, so pausing
-	//     the write-through share makes the tar coherent.
-	//   - Rootfs upper tar (Full only): host-backed like the durable volumes —
+	//   - Durable-dir tars (any scope, when declared): host-backed, so pausing
+	//     the write-through share makes the tars coherent.
+	//   - Rootfs upper tars (Full only): host-backed like the durable volumes —
 	//     the memory snapshot does not carry rootfs writes. Under Data the
 	//     workload cold-starts on restore, discarding rootfs state.
+	var durableFiles []string
 	g, gctx := errgroup.WithContext(ctx)
 	if scope == ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL {
 		g.Go(func() error {
@@ -184,7 +184,8 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	if durable {
 		g.Go(func() error {
 			t := time.Now()
-			err := tarDurableVolumes(gctx, actorDirs.GetDurableDirVolumeMountsDir(), checkpointDir)
+			var err error
+			durableFiles, err = tarDurableVolumes(gctx, actorDirs.GetDurableDirVolumeMountsDir(), checkpointDir, durableVolumeNames(req.GetSpec().GetContainers()))
 			dDurable = time.Since(t)
 			return err
 		})
@@ -203,7 +204,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 
 	// Report exactly the files we wrote so atelet ships precisely this snapshot: for
 	// Full, the CH snapshot (config.json + state.json + memory-ranges + base-id) plus
-	// any durable-dir tar; for Data, that tar alone.
+	// any durable-dir tars; for Data, those tars alone.
 	snapshotFiles, err := listFiles(checkpointDir)
 	if err != nil {
 		return nil, fmt.Errorf("while listing snapshot files: %w", err)
@@ -229,11 +230,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		// rootfs_upper), and the tar durations scale with the actor's data.
 		slog.Duration("durable_dir", dDurable), slog.Duration("rootfs_upper", dUpper),
 		slog.Duration("teardown", dTeardown))
-	resp := &ateompb.CheckpointWorkloadResponse{SnapshotFiles: snapshotFiles}
-	if slices.Contains(snapshotFiles, durableTarFile) {
-		resp.DataSnapshotFiles = []string{durableTarFile}
-	}
-	return resp, nil
+	return &ateompb.CheckpointWorkloadResponse{SnapshotFiles: snapshotFiles, DataSnapshotFiles: durableFiles}, nil
 }
 
 // snapshotVMState captures the paused guest into checkpointDir: the CH snapshot

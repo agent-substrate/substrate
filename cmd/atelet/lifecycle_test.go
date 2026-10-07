@@ -640,3 +640,64 @@ func TestRestoreFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
 		t.Fatalf("failed Restore left its owned registration live: %p", got)
 	}
 }
+
+// TestTerminateWithoutTargetAteomUID verifies that Terminate with an empty
+// TargetAteomUid (used when cleaning up the assigned node for a paused or
+// crashed actor that no longer has a worker pod) skips dialing ateom while
+// still pruning local checkpoints and removing actor directories on the node.
+func TestTerminateWithoutTargetAteomUID(t *testing.T) {
+	useTempNodeDirs(t)
+	ctx := t.Context()
+
+	const (
+		atespace     = "ate-demo"
+		actorName    = "counter"
+		actorUID     = "actor-uid-1"
+		snapshotName = "pause-snap-1"
+	)
+
+	if err := resetActorDirs(actorUID); err != nil {
+		t.Fatalf("resetActorDirs: %v", err)
+	}
+	snapshotDir := ateletpath.LocalSnapshotDir(actorUID, snapshotName)
+	if err := os.MkdirAll(snapshotDir, 0o700); err != nil {
+		t.Fatalf("creating local snapshot dir: %v", err)
+	}
+	snapshotFile := filepath.Join(snapshotDir, "checkpoint.img")
+	if err := os.WriteFile(snapshotFile, []byte("guest-memory"), 0o600); err != nil {
+		t.Fatalf("writing local snapshot file: %v", err)
+	}
+
+	ateom := &fakeAteom{}
+	serveFakeAteom(t, ateom)
+
+	s := &AteomHerder{
+		ateomDialer:       newAteomDialer(1),
+		systemInfoVolumes: newSystemInfoVolumeRefresher(nil, nil),
+	}
+	spec := &ateletpb.WorkloadSpec{
+		Containers: []*ateletpb.Container{{Name: "app", Image: "example.com/app:v1"}},
+	}
+
+	if _, err := s.Terminate(ctx, &ateletpb.TerminateRequest{
+		Atespace:              atespace,
+		ActorName:             actorName,
+		ActorUid:              actorUID,
+		ActorTemplateAtespace: "default",
+		ActorTemplateName:     "counter",
+		TargetAteomUid:        "",
+		Spec:                  spec,
+	}); err != nil {
+		t.Fatalf("Terminate: %v", err)
+	}
+
+	if got := ateom.actorDirs["TerminateWorkload"]; got != nil {
+		t.Errorf("TerminateWorkload was called on ateom (%v), want skipped when TargetAteomUid is empty", got)
+	}
+	if _, err := os.Stat(ateletpath.LocalCheckpointsDir(actorUID)); !os.IsNotExist(err) {
+		t.Errorf("local checkpoint dir survived terminate: %v", err)
+	}
+	if _, err := os.Stat(ateletpath.ActorPath(actorUID)); !os.IsNotExist(err) {
+		t.Errorf("actor dir survived terminate: %v", err)
+	}
+}

@@ -139,8 +139,11 @@ func (e *Env) renderAtenetEgressManifest(ctx context.Context, provider config.Cr
 	general := e.Cfg.AdditionalEgressExtprocService != ""
 
 	if e.Cfg.Router == config.RouterAgentgateway {
+		// Rejected during configuration loading, which names the channel the
+		// value came from. This guards the invariant for a caller that built
+		// a Config directly; an operator never sees it.
 		if general {
-			return nil, fmt.Errorf("--experimental-additional-egress-extproc-service requires --atenet-dataplane=envoy")
+			return nil, fmt.Errorf("internal: additional ext_proc filter reached rendering with dataplane %s", config.RouterAgentgateway)
 		}
 		raw, err := e.render(e.Cfg.Path(installDir + "/agentgateway-egress"))
 		if err != nil {

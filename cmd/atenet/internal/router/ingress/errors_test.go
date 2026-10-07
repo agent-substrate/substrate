@@ -43,6 +43,42 @@ func TestActorNotFoundErr(t *testing.T) {
 	}
 }
 
+func TestParkingFullErr(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		retryErr error
+		wantCode codes.Code
+	}{
+		{name: "ResourceExhausted is kept", retryErr: status.Error(codes.ResourceExhausted, "no worker has room for the actor"), wantCode: codes.ResourceExhausted},
+		{name: "Aborted is dropped", retryErr: status.Error(codes.Aborted, "conflict"), wantCode: codes.Unknown},
+		{name: "FailedPrecondition is dropped", retryErr: status.Error(codes.FailedPrecondition, "suspending"), wantCode: codes.Unknown},
+		{name: "Unavailable is dropped", retryErr: status.Error(codes.Unavailable, "restarting"), wantCode: codes.Unknown},
+		{name: "nil", retryErr: nil, wantCode: codes.Unknown},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := parkingFullErr("team-a/ctr6", tc.retryErr)
+			var reqErr *extproc.ReqError
+			if !errors.As(err, &reqErr) {
+				t.Fatalf("errors.As(*extproc.ReqError) = false, want true; err type = %T", err)
+			}
+			if reqErr.StatusCode != int(envoy_type.StatusCode_ServiceUnavailable) {
+				t.Errorf("StatusCode = %d, want %d", reqErr.StatusCode, envoy_type.StatusCode_ServiceUnavailable)
+			}
+			if got, want := err.Error(), `actor "team-a/ctr6" unavailable: router at capacity`; got != want {
+				t.Errorf("Error() = %q, want %q", got, want)
+			}
+			if got := status.Code(err); got != tc.wantCode {
+				t.Errorf("status.Code(err) = %v, want %v", got, tc.wantCode)
+			}
+		})
+	}
+}
+
 func TestMapResumeError(t *testing.T) {
 	t.Parallel()
 

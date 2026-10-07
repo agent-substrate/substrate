@@ -342,9 +342,10 @@ type SandboxSession struct {
 	Network *SandboxNetwork
 
 	mu      sync.Mutex
+	dns     *dns.Server
 	sockets []io.Closer
-	// serving counts the goroutines serving this sandbox, so Close can wait
-	// for them rather than just closing their sockets.
+	// serving counts the egress goroutines, so Close can wait for them rather
+	// than just closing their sockets. dns.Server waits for its own.
 	serving sync.WaitGroup
 }
 
@@ -362,14 +363,12 @@ func ServeSandbox(ctx context.Context, cfg SandboxNetworkConfig, egress egressSe
 		}
 	}()
 
-	var serve []func()
 	if resolver != nil {
-		closers, serveDNS, err := resolver.Serve(ctx, network.GatewayNetNS)
+		dnsServer, err := resolver.Serve(ctx, network.GatewayNetNS)
 		if err != nil {
 			return nil, err
 		}
-		session.sockets = append(session.sockets, closers...)
-		serve = append(serve, serveDNS...)
+		session.dns = dnsServer
 	}
 	// Egress last: its binding is released by the serve goroutine, so nothing
 	// may fail between binding and starting it.
@@ -379,17 +378,15 @@ func ServeSandbox(ctx context.Context, cfg SandboxNetworkConfig, egress egressSe
 			return nil, err
 		}
 		session.sockets = append(session.sockets, closers...)
-		serve = append(serve, serveEgress...)
-	}
-
-	// Started here rather than inside the helpers so the session owns them and
-	// Close can report when they have stopped.
-	for _, fn := range serve {
-		session.serving.Add(1)
-		go func() {
-			defer session.serving.Done()
-			fn()
-		}()
+		// Started here rather than inside the helper so the session owns them
+		// and Close can report when they have stopped.
+		for _, fn := range serveEgress {
+			session.serving.Add(1)
+			go func() {
+				defer session.serving.Done()
+				fn()
+			}()
+		}
 	}
 	return session, nil
 }
@@ -400,8 +397,8 @@ func ServeSandbox(ctx context.Context, cfg SandboxNetworkConfig, egress egressSe
 // Idempotent, and every step's error is returned.
 func (s *SandboxSession) Close(ctx context.Context) error {
 	s.mu.Lock()
-	sockets, network := s.sockets, s.Network
-	s.sockets, s.Network = nil, nil
+	dnsServer, sockets, network := s.dns, s.sockets, s.Network
+	s.dns, s.sockets, s.Network = nil, nil, nil
 	s.mu.Unlock()
 
 	var errs error
@@ -409,6 +406,9 @@ func (s *SandboxSession) Close(ctx context.Context) error {
 		if err := c.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
 			errs = errors.Join(errs, err)
 		}
+	}
+	if dnsServer != nil {
+		errs = errors.Join(errs, dnsServer.Stop(ctx))
 	}
 
 	stopped := make(chan struct{})

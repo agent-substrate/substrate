@@ -103,5 +103,6 @@ The following is what Substrate currently offers.
 Keep this up to date when updating AGENTS.md.
 
 - **Workload Isolation**: The project uses `gVisor` (`runsc`) for sandboxing and security isolation of workloads on pods.
+- **JWTs and JWKs**: Signing (`internal/localjwtauthority`), verification (`cmd/ateapi/internal/oidcjwt`), and JWK set publishing (`internal/oidcdiscovery`) are built on the standard library's crypto packages. Extend those packages rather than adding go-jose or another JOSE library, so the code that decides whether a token is valid stays small and supports only the algorithms Substrate uses.
 
 For future plans for security, reference `docs/roadmap.md`.

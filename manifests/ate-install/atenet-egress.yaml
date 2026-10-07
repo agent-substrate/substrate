@@ -840,6 +840,15 @@ data:
       # the MITM leg has no listening port anywhere in the pod's netns.
       - name: mitm_internal
         connect_timeout: 1s
+        # Each open tunnel holds one connection and one request here, so these
+        # cap concurrent tunnels per replica (Envoy's default is 1024); past
+        # them a CONNECT gets a 503.
+        circuit_breakers:
+          thresholds:
+          - priority: DEFAULT
+            max_connections: 16384
+            max_requests: 16384
+            max_pending_requests: 16384
         # One pool per tunnel. A pool gives every connection it opens the
         # filter state of the tunnel that created it, so a pool shared by two
         # tunnels would hand the second one the first one's actor, authority

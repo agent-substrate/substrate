@@ -25,9 +25,6 @@ import (
 // Every setting must be reachable from all three channels. This is the whole
 // point of the registry: a setting that reaches one channel and misses another
 // is the defect it exists to prevent.
-//
-// TODO: vacuous until Registry declares settings; it is the check that keeps
-// a setting from reaching one channel and missing another.
 func TestRegistryCoversEveryChannel(t *testing.T) {
 	for _, s := range Registry {
 		t.Run(s.Key, func(t *testing.T) {
@@ -37,7 +34,10 @@ func TestRegistryCoversEveryChannel(t *testing.T) {
 			if s.Env == "" {
 				t.Error("Env is empty; the setting cannot be set from the environment")
 			}
-			if s.Flag == "" {
+			// Secrets are the exception: a command line is world-readable
+			// in `ps` and is kept in shell history, so a credential is
+			// supplied through the environment or a file instead.
+			if s.Flag == "" && !s.Secret {
 				t.Error("Flag is empty; the setting cannot be set from the command line")
 			}
 			if s.Usage == "" {
@@ -47,8 +47,6 @@ func TestRegistryCoversEveryChannel(t *testing.T) {
 	}
 }
 
-// TODO: vacuous until Registry declares settings. Validate covers the same
-// ground across the merged set and is exercised by the fixtures.
 func TestRegistryNamesAreUnique(t *testing.T) {
 	for _, field := range []struct {
 		name string
@@ -62,6 +60,10 @@ func TestRegistryNamesAreUnique(t *testing.T) {
 			seen := map[string]string{}
 			for _, s := range Registry {
 				v := field.get(s)
+				// Several secrets declare no flag; that is not a collision.
+				if v == "" {
+					continue
+				}
 				if prev, dup := seen[v]; dup {
 					t.Errorf("%s %q used by both %s and %s", field.name, v, prev, s.Key)
 				}
@@ -73,8 +75,6 @@ func TestRegistryNamesAreUnique(t *testing.T) {
 
 // A default must itself be valid, or the install fails before the operator has
 // done anything.
-//
-// TODO: vacuous until Registry declares settings.
 func TestRegistryDefaultsParse(t *testing.T) {
 	for _, s := range Registry {
 		t.Run(s.Key, func(t *testing.T) {
@@ -89,23 +89,21 @@ func TestRegistryDefaultsParse(t *testing.T) {
 }
 
 func TestLookup(t *testing.T) {
-	// TODO: assert against a setting the installer declares, once Registry
-	// declares any. A registered setting is covered here through a fixture,
-	// which exercises the same path.
-	useFixtures(t)
-	if _, ok := Lookup("fixture.mode"); !ok {
-		t.Error("Lookup(fixture.mode) = false, want true for a registered setting")
+	if _, ok := Lookup("atenet.dataplane"); !ok {
+		t.Error("Lookup(atenet.dataplane) = false, want true for a declared setting")
 	}
 	if _, ok := Lookup("no.such.setting"); ok {
 		t.Error("Lookup(no.such.setting) = true, want false")
 	}
 }
 
-// TODO: vacuous until Registry declares settings.
 func TestBindFlagsRegistersEverySetting(t *testing.T) {
 	fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
 	BindFlags(fs)
 	for _, s := range Registry {
+		if s.Flag == "" {
+			continue
+		}
 		if fs.Lookup(s.Flag) == nil {
 			t.Errorf("flag --%s was not registered for %s", s.Flag, s.Key)
 		}
@@ -116,8 +114,6 @@ func TestBindFlagsRegistersEverySetting(t *testing.T) {
 // gets without it. Registering it is safe because pflag sets Changed only from
 // Set: an untouched flag still reads as unsupplied, which is what Resolve keys
 // precedence off.
-//
-// TODO: vacuous until Registry declares settings with defaults.
 func TestBindFlagsRegistersDeclaredDefaults(t *testing.T) {
 	fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
 	BindFlags(fs)
@@ -139,8 +135,6 @@ func TestBindFlagsRegistersDeclaredDefaults(t *testing.T) {
 
 // The default has to reach the help text, which is the whole reason for
 // registering it.
-//
-// TODO: vacuous until Registry declares settings with defaults.
 func TestDeclaredDefaultsAppearInHelp(t *testing.T) {
 	fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
 	BindFlags(fs)
@@ -255,8 +249,6 @@ func TestSettingParse(t *testing.T) {
 	}
 }
 
-// TODO: thin until Registry declares settings; it compares an empty list
-// against an empty registry.
 func TestKeysAreSorted(t *testing.T) {
 	keys := Keys()
 	if len(keys) != len(Registry) {
@@ -272,8 +264,6 @@ func TestKeysAreSorted(t *testing.T) {
 // A setting key must not collide with the document's own header fields. A
 // top-level "kind" setting would overwrite kind: SubstrateInstall and make
 // every document fail its header check.
-//
-// TODO: vacuous until Registry declares settings.
 func TestRegistryKeysDoNotCollideWithDocumentHeader(t *testing.T) {
 	for _, reserved := range []string{"apiVersion", "kind", documentMetadataKey} {
 		for _, s := range Registry {
@@ -282,5 +272,25 @@ func TestRegistryKeysDoNotCollideWithDocumentHeader(t *testing.T) {
 				t.Errorf("setting %q uses reserved document field %q as its root", s.Key, reserved)
 			}
 		}
+	}
+}
+
+// A secret must not be settable on the command line: a flag puts the value in
+// shell history and in the process list, where the environment and the file
+// do not. These three were environment-only before the registry gave every
+// setting a flag.
+func TestSecretSettingsHaveNoFlag(t *testing.T) {
+	for _, s := range All() {
+		if !s.Secret {
+			continue
+		}
+		t.Run(s.Key, func(t *testing.T) {
+			if s.Flag != "" {
+				t.Errorf("--%s exposes a credential on the command line", s.Flag)
+			}
+			if s.Env == "" {
+				t.Errorf("%s has no environment variable, so it cannot be set at all", s.Key)
+			}
+		})
 	}
 }

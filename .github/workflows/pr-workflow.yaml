@@ -55,6 +55,9 @@ jobs:
     # this guards, and that happens on the push to main, not on the PR.
     - name: Verify immutable PostgreSQL migrations
       run: hack/verify/postgresql-migrations.sh
+    # we only test on amd64, make sure everything still builds for arm64
+    - name: build for arm64
+      run: GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build ./...
     # gotestsum wraps go test to emit JUnit; the go test arguments are unchanged.
     - name: unit tests
       run: hack/run-tool.sh gotestsum --junitfile "${ARTIFACTS}/unit.xml"
@@ -255,18 +258,22 @@ jobs:
       run: |
         hack/install-ate-kind.sh --deploy-demo-egress
         hack/install-ate-kind.sh --deploy-demo-egress-microvm
+    # scale the idle sandbox class's demo pools to zero so each lane has the node
+    - name: Focus the node on gVisor
+      run: hack/e2e-focus-sandbox-class.sh gvisor
     - name: Run E2E tests (gVisor)
       env:
+        E2E_PARALLELISM: 8
         E2E_JUNIT_FILE: ${{ github.workspace }}/_artifacts/e2e-gvisor.xml
       run: hack/run-e2e-kind.sh -v -args --no-color
+    - name: Focus the node on micro-VM
+      run: hack/e2e-focus-sandbox-class.sh microvm
     - name: Run E2E tests (micro-VM)
       # The same suites again, with every fixture repointed at its micro-VM
       # variant by the single E2E_SANDBOX_CLASS knob (see internal/e2e/sandbox.go).
-      # Sequential with the gVisor lane above, not concurrent: a suite releases
-      # its namespace — and with it its worker pods — as each test passes, so the
-      # two runs do not contend for the one kind node.
       env:
         E2E_SANDBOX_CLASS: microvm
+        E2E_PARALLELISM: 8
         E2E_JUNIT_FILE: ${{ github.workspace }}/_artifacts/e2e-microvm.xml
       run: hack/run-e2e-kind.sh -v -args --no-color
     # Every lane must have reported tests; a `-run` filter that stops matching

@@ -26,6 +26,7 @@ The `WorkerPool` defines the pool of physical "warm" compute capacity. It manage
 | `priorityClassName` | `string` | `spec.priorityClassName` |
 | `nodeAffinity` | `NodeAffinity` | `spec.affinity.nodeAffinity` |
 | `resources` | `ResourceRequirements` | `spec.containers[].resources` |
+| `serviceAccountName` | `string` | `spec.serviceAccountName` |
 
 Keys in `ate.dev/` and its subdomains (for example, `policy.ate.dev/`) are
 reserved for controllers and cannot be set in `template.labels` or
