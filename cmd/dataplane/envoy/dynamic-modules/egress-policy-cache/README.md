@@ -22,25 +22,26 @@ policy JSON string alongside the `Instant` (`stored_at`) when it was cached,
 keyed by `<peer_cert_digest>;<destination_port>`, where `<peer_cert_digest>` is
 the downstream peer certificate's SHA-256 digest
 (`connection.sha256_peer_certificate_digest`) and `<destination_port>` is the
-destination port extracted from the `:authority` request header.
+destination port extracted from the CONNECT `:authority` request header.
 
 ### Request path (`on_request_headers`)
 
 When an actor opens a `CONNECT` tunnel on the outer listener:
 
 1. The filter builds the cache key `<peer_cert_digest>;<destination_port>` from
-   `connection.sha256_peer_certificate_digest` and the `:authority` request
-   header, and looks it up in the current worker thread's LRU cache:
-   - **Fresh hit (`stored_at.elapsed() <= cache_ttl`)**:
+   `connection.sha256_peer_certificate_digest` and the port from the CONNECT `:authority`
+   header, and looks up cached policy in worker thread local LRU cache:
+   - **If unexpired entry was found.**:
      - Writes the cached policy JSON to filter state under key
        `dev.ate.policy.egress.cached`.
-     - Sets filter state key `dev.ate.policy.egress.skip_callout` to `"true"`.
+     - Sets filter state key `dev.ate.policy.egress.skip_callout` to `"true"` to skip the ext_proc
+       callout.
      - Sets `has_cached_policy = true` on the per-stream
        `EgressPolicyCacheFilter`.
      - Sets `dev.ate.egress:dialed_port` in the dynamic metadata, so that inner
        request is sent to the port in the CONNECT authority.
      - Increments the `ate_egress.connect_cache_hit` counter.
-   - **Expired entry (`stored_at.elapsed() > cache_ttl`)**:
+   - **If expired entry (`stored_at.elapsed() > cache_ttl`) was found**:
      - Removes the expired entry from the LRU cache without setting filter
        state.
      - Increments the `ate_egress.connect_cache_miss` counter.
@@ -62,13 +63,10 @@ When an actor opens a `CONNECT` tunnel on the outer listener:
 When the `CONNECT` response headers arrive:
 
 1. If `cache_enabled` is `false`, the filter returns `Continue` immediately.
-2. If `:status` is `200` and `!self.has_cached_policy`:
-   - Reads the egress policy JSON from filter state key
-     `dev.ate.policy.egress` and builds the cache key
-     `<peer_cert_digest>;<destination_port>` from
-     `connection.sha256_peer_certificate_digest` and `:authority`.
+2. If `:status` is `200` and `self.has_cached_policy` is `false`:
+   - Builds cache value from the `dev.ate.policy.egress` filer state.
    - Inserts `CachedPolicy { policy, stored_at: Instant::now() }` into the
-     current worker thread's LRU cache.
+     current worker thread's LRU cache at the the `<peer_cert_digest>;<destination_port>` key.
 3. If `self.has_cached_policy` is `true` (the policy for this stream came from
    the cache), caching is skipped so the entry's original `stored_at` timestamp
    is preserved until `cache_ttl` expires.
@@ -136,66 +134,5 @@ hack/test-dynamic-modules.sh
 > `TestActorEgressPolicyCacheExpiration`). This configures Envoy with a single
 > worker thread (`--concurrency 1`) so consecutive `CONNECT` requests are
 > routed to the same thread-local cache instance.
-
-## Envoy configuration
-
-In the outer `CONNECT` listener's `http_filters`, place the dynamic module
-filter before the conditional `ext_proc` composite filter and the post-`ext_proc`
-`set_filter_state` filter:
-
-```yaml
-- name: envoy.filters.http.dynamic_modules
-  typed_config:
-    "@type": type.googleapis.com/envoy.extensions.filters.http.dynamic_modules.v3.DynamicModuleFilter
-    dynamic_module_config:
-      name: envoy_substrate_egress_policy_cache
-    filter_name: envoy_substrate_egress_policy_cache
-- name: envoy.filters.http.composite
-  typed_config:
-    "@type": type.googleapis.com/envoy.extensions.filters.http.composite.v3.Composite
-    matcher:
-      matcher_list:
-        matchers:
-        - predicate:
-            not_matcher:
-              single_predicate:
-                input:
-                  name: filter_state
-                  typed_config:
-                    "@type": type.googleapis.com/envoy.extensions.matching.common_inputs.network.v3.FilterStateInput
-                    key: dev.ate.policy.egress.skip_callout
-                value_match:
-                  exact: "true"
-          on_match:
-            action:
-              name: composite-action
-              typed_config:
-                "@type": type.googleapis.com/envoy.extensions.filters.http.composite.v3.ExecuteFilterAction
-                typed_config:
-                  name: envoy.filters.http.ext_proc
-                  typed_config:
-                    "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor
-                    # ...
-- name: envoy.filters.http.set_filter_state
-  typed_config:
-    "@type": type.googleapis.com/envoy.extensions.filters.http.set_filter_state.v3.Config
-    on_request_headers:
-    - object_key: dev.ate.policy.egress
-      factory_key: envoy.string
-      skip_if_empty: true
-      shared_with_upstream: ONCE
-      format_string:
-        text_format_source:
-          inline_string: "%DYNAMIC_METADATA(dev.ate.policy.egress)%"
-        omit_empty_values: true
-    - object_key: dev.ate.policy.egress
-      factory_key: envoy.string
-      skip_if_empty: true
-      shared_with_upstream: ONCE
-      format_string:
-        text_format_source:
-          inline_string: "%FILTER_STATE(dev.ate.policy.egress.cached:PLAIN)%"
-        omit_empty_values: true
-```
 
 See `manifests/ate-install/atenet-egress.yaml` for the complete configuration.
