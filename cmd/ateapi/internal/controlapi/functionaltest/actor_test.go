@@ -1116,25 +1116,44 @@ func TestDeleteActor_Crashed(t *testing.T) {
 	defer tc.cleanup()
 
 	createTemplate(t, tc, ns)
+	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
 
-	created, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+	ctx := context.Background()
+	actorRef := &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id1"}
+	if _, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
 		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "id1"},
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
-	}})
-	if err != nil {
+	}}); err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
 
-	actorRef := resources.ActorRef{Atespace: testAtespace, Name: "id1"}
-	if _, err := tc.persistence.UpdateActor(context.Background(), actorRef, store.PreconditionFrom(created), func(toUpdate *ateapipb.Actor) error {
-		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_CRASHED
-		return nil
-	}); err != nil {
-		t.Fatalf("UpdateActor failed: %v", err)
+	// Resume onto worker-1 so AssignedNode is set to "node1", then delete
+	// worker-1 so the actor crashes and loses its WorkerAssignment.
+	if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: actorRef}); err != nil {
+		t.Fatalf("ResumeActor failed: %v", err)
+	}
+	deleteWorkerPod(t, tc, ns, "worker-1")
+
+	crashed, err := tc.client.GetActor(ctx, &ateapipb.GetActorRequest{Actor: actorRef})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	if got := crashed.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+		t.Fatalf("state = %v, want CRASHED", got)
+	}
+	if got := crashed.GetStatus().GetAssignedNode(); got != "node1" {
+		t.Fatalf("assigned node = %q, want node1", got)
+	}
+	if got := crashed.GetStatus().GetWorkerAssignment(); got != nil {
+		t.Fatalf("worker assignment = %v, want nil", got)
 	}
 
-	deleted, err := tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id1"},
+	tc.fakeAtelet.Lock.Lock()
+	tc.fakeAtelet.TerminateCalled = false
+	tc.fakeAtelet.Lock.Unlock()
+
+	deleted, err := tc.client.DeleteActor(ctx, &ateapipb.DeleteActorRequest{
+		Actor: actorRef,
 	})
 	if err != nil {
 		t.Fatalf("DeleteActor of crashed actor failed: %v", err)
@@ -1142,9 +1161,14 @@ func TestDeleteActor_Crashed(t *testing.T) {
 	if got := deleted.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_DELETING {
 		t.Errorf("deleted actor state = %v, want %v", got, ateapipb.ActorState_ACTOR_STATE_DELETING)
 	}
+	if !tc.fakeAtelet.TerminateCalled {
+		t.Errorf("expected Terminate call to clean up assigned node for crashed actor")
+	} else if gotUID := tc.fakeAtelet.TerminateRequest.GetTargetAteomUid(); gotUID != "" {
+		t.Errorf("TerminateRequest.TargetAteomUid = %q, want empty for crashed actor", gotUID)
+	}
 
-	_, err = tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id1"},
+	_, err = tc.client.GetActor(ctx, &ateapipb.GetActorRequest{
+		Actor: actorRef,
 	})
 	assertGrpcError(t, err, codes.NotFound, "Actor test-atespace/id1 not found")
 }
@@ -1587,15 +1611,15 @@ type partialFailVolumePlugin struct {
 	deleted []string
 }
 
-func (f *partialFailVolumePlugin) CreateVolume(ctx context.Context, name, capacity, driverName string, parameters map[string]string) (string, map[string]string, error) {
-	if strings.HasSuffix(name, "fail-vol2") {
-		return "", nil, fmt.Errorf("simulated volume creation failure")
+func (f *partialFailVolumePlugin) CreateVolume(ctx context.Context, req volume.CreateVolumeRequest) (volume.CreateVolumeResponse, error) {
+	if strings.HasSuffix(req.Name, "fail-vol2") {
+		return volume.CreateVolumeResponse{}, fmt.Errorf("simulated volume creation failure")
 	}
-	return "storage-" + name, parameters, nil
+	return volume.CreateVolumeResponse{VolumeID: "storage-" + req.Name, VolumeContext: req.Parameters}, nil
 }
 
-func (f *partialFailVolumePlugin) AttachVolume(ctx context.Context, volumeID, node string) error {
-	return nil
+func (f *partialFailVolumePlugin) AttachVolume(ctx context.Context, req volume.AttachVolumeRequest) (volume.AttachVolumeResponse, error) {
+	return volume.AttachVolumeResponse{}, nil
 }
 
 func (f *partialFailVolumePlugin) DetachVolume(ctx context.Context, volumeID, node string) error {
@@ -1723,20 +1747,20 @@ type retrySuccessVolumePlugin struct {
 	deleted  []string
 }
 
-func (r *retrySuccessVolumePlugin) CreateVolume(ctx context.Context, name, capacity, driverName string, parameters map[string]string) (string, map[string]string, error) {
+func (r *retrySuccessVolumePlugin) CreateVolume(ctx context.Context, req volume.CreateVolumeRequest) (volume.CreateVolumeResponse, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if strings.HasSuffix(name, "retry-vol2") {
+	if strings.HasSuffix(req.Name, "retry-vol2") {
 		r.attempts++
 		if r.attempts == 1 {
-			return "", nil, fmt.Errorf("simulated temporary volume creation failure")
+			return volume.CreateVolumeResponse{}, fmt.Errorf("simulated temporary volume creation failure")
 		}
 	}
-	return "storage-" + name, parameters, nil
+	return volume.CreateVolumeResponse{VolumeID: "storage-" + req.Name, VolumeContext: req.Parameters}, nil
 }
 
-func (r *retrySuccessVolumePlugin) AttachVolume(ctx context.Context, volumeID, node string) error {
-	return nil
+func (r *retrySuccessVolumePlugin) AttachVolume(ctx context.Context, req volume.AttachVolumeRequest) (volume.AttachVolumeResponse, error) {
+	return volume.AttachVolumeResponse{}, nil
 }
 
 func (r *retrySuccessVolumePlugin) DetachVolume(ctx context.Context, volumeID, node string) error {
@@ -1873,19 +1897,19 @@ type attachFailVolumePlugin struct {
 	deleted        []string
 }
 
-func (a *attachFailVolumePlugin) CreateVolume(ctx context.Context, name, capacity, driverName string, parameters map[string]string) (string, map[string]string, error) {
-	return "storage-" + name, parameters, nil
+func (a *attachFailVolumePlugin) CreateVolume(ctx context.Context, req volume.CreateVolumeRequest) (volume.CreateVolumeResponse, error) {
+	return volume.CreateVolumeResponse{VolumeID: "storage-" + req.Name, VolumeContext: req.Parameters}, nil
 }
 
-func (a *attachFailVolumePlugin) AttachVolume(ctx context.Context, volumeID, node string) error {
+func (a *attachFailVolumePlugin) AttachVolume(ctx context.Context, req volume.AttachVolumeRequest) (volume.AttachVolumeResponse, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.attachAttempts++
 	if a.attachAttempts <= a.failUntil {
-		return fmt.Errorf("simulated volume attach failure on attempt %d", a.attachAttempts)
+		return volume.AttachVolumeResponse{}, fmt.Errorf("simulated volume attach failure on attempt %d", a.attachAttempts)
 	}
-	a.attachedNodes = append(a.attachedNodes, node)
-	return nil
+	a.attachedNodes = append(a.attachedNodes, req.Node)
+	return volume.AttachVolumeResponse{}, nil
 }
 
 func (a *attachFailVolumePlugin) DetachVolume(ctx context.Context, volumeID, node string) error {
@@ -2118,19 +2142,19 @@ func newMultiVolAttachPlugin(failVol string, failUntil int) *multiVolAttachPlugi
 	}
 }
 
-func (m *multiVolAttachPlugin) CreateVolume(ctx context.Context, name, capacity, driverName string, parameters map[string]string) (string, map[string]string, error) {
-	return "storage-" + name, parameters, nil
+func (m *multiVolAttachPlugin) CreateVolume(ctx context.Context, req volume.CreateVolumeRequest) (volume.CreateVolumeResponse, error) {
+	return volume.CreateVolumeResponse{VolumeID: "storage-" + req.Name, VolumeContext: req.Parameters}, nil
 }
 
-func (m *multiVolAttachPlugin) AttachVolume(ctx context.Context, volumeID, node string) error {
+func (m *multiVolAttachPlugin) AttachVolume(ctx context.Context, req volume.AttachVolumeRequest) (volume.AttachVolumeResponse, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.attachAttempts[volumeID]++
-	if strings.Contains(volumeID, m.failVol) && m.attachAttempts[volumeID] <= m.failUntil {
-		return fmt.Errorf("simulated volume attach failure for %s on attempt %d", volumeID, m.attachAttempts[volumeID])
+	m.attachAttempts[req.VolumeID]++
+	if strings.Contains(req.VolumeID, m.failVol) && m.attachAttempts[req.VolumeID] <= m.failUntil {
+		return volume.AttachVolumeResponse{}, fmt.Errorf("simulated volume attach failure for %s on attempt %d", req.VolumeID, m.attachAttempts[req.VolumeID])
 	}
-	m.attachedNodes[volumeID] = append(m.attachedNodes[volumeID], node)
-	return nil
+	m.attachedNodes[req.VolumeID] = append(m.attachedNodes[req.VolumeID], req.Node)
+	return volume.AttachVolumeResponse{}, nil
 }
 
 func (m *multiVolAttachPlugin) DetachVolume(ctx context.Context, volumeID, node string) error {
@@ -2289,15 +2313,15 @@ type detachFailVolumePlugin struct {
 	deleted        []string
 }
 
-func (d *detachFailVolumePlugin) CreateVolume(ctx context.Context, name, capacity, driverName string, parameters map[string]string) (string, map[string]string, error) {
-	return "storage-" + name, parameters, nil
+func (d *detachFailVolumePlugin) CreateVolume(ctx context.Context, req volume.CreateVolumeRequest) (volume.CreateVolumeResponse, error) {
+	return volume.CreateVolumeResponse{VolumeID: "storage-" + req.Name, VolumeContext: req.Parameters}, nil
 }
 
-func (d *detachFailVolumePlugin) AttachVolume(ctx context.Context, volumeID, node string) error {
+func (d *detachFailVolumePlugin) AttachVolume(ctx context.Context, req volume.AttachVolumeRequest) (volume.AttachVolumeResponse, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.attachedNodes = append(d.attachedNodes, node)
-	return nil
+	d.attachedNodes = append(d.attachedNodes, req.Node)
+	return volume.AttachVolumeResponse{}, nil
 }
 
 func (d *detachFailVolumePlugin) DetachVolume(ctx context.Context, volumeID, node string) error {
@@ -2806,6 +2830,7 @@ func TestResumeActor(t *testing.T) {
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
 		Status: &ateapipb.ActorStatus{
 			State:            ateapipb.ActorState_ACTOR_STATE_RUNNING,
+			AssignedNode:     "node1",
 			ExternalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, ActorTemplateUid: tmpl.GetMetadata().GetUid()},
 			WorkerAssignment: &ateapipb.WorkerAssignment{
 				Worker:          &ateapipb.ObjectRef{Name: podUID},
@@ -3121,7 +3146,7 @@ func TestSuspendActor_ReplacedSnapshotReleaseFailure(t *testing.T) {
 	assertSnapshotCollected(t, tc, lastURI)
 }
 
-// TestResumeActor_NoWorkers tests that resuming an actor fails when no free workers are available.
+// TestResumeActor_NoWorkers tests that resuming an actor fails when no worker has room for it.
 // Workflow:
 // 1. Creates a mock ActorTemplate.
 // 2. Creates an actor.
@@ -3147,7 +3172,7 @@ func TestResumeActor_NoWorkers(t *testing.T) {
 	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
 	})
-	assertGrpcError(t, err, codes.ResourceExhausted, "no free workers available")
+	assertGrpcError(t, err, codes.ResourceExhausted, "no worker has room for the actor")
 }
 
 // TestResumeActor_MultiPoolSelector exercises the AND-of-two-selectors path
@@ -3909,10 +3934,10 @@ func TestPauseActor(t *testing.T) {
 		Metadata:      &ateapipb.ResourceMetadata{Name: name, Atespace: testAtespace},
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
 		Status: &ateapipb.ActorStatus{
-			State: ateapipb.ActorState_ACTOR_STATE_PAUSED,
+			State:        ateapipb.ActorState_ACTOR_STATE_PAUSED,
+			AssignedNode: "node1",
 			LocalSnapshot: &ateapipb.LocalSnapshot{
-				NodeVmsWithLocalSnapshots: []string{"node1"},
-				ContentScope:              ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+				ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 			},
 			ExternalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, ActorTemplateUid: tmpl.GetMetadata().GetUid()},
 		},
@@ -4826,8 +4851,8 @@ func TestResumeActor_RelocatesAfterSuspendFromPaused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetActor(%s) failed: %v", pinned, err)
 	}
-	if got := paused.GetStatus().GetLocalSnapshot().GetNodeVmsWithLocalSnapshots(); len(got) != 1 || got[0] != "node1" {
-		t.Fatalf("paused actor pinned to %v, want [node1]", got)
+	if got := paused.GetStatus().GetAssignedNode(); got != "node1" {
+		t.Fatalf("paused actor pinned to %q, want node1", got)
 	}
 	waitForWorkerAvailable(t, tc, workerName)
 
@@ -4845,7 +4870,7 @@ func TestResumeActor_RelocatesAfterSuspendFromPaused(t *testing.T) {
 	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: pinned},
 	})
-	assertGrpcError(t, err, codes.ResourceExhausted, "no free workers available")
+	assertGrpcError(t, err, codes.ResourceExhausted, "no worker has room for the actor")
 
 	suspended, err := tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: pinned},
@@ -5082,7 +5107,6 @@ func TestMintActorJWT_Success(t *testing.T) {
 			Atespace: createResp.GetMetadata().GetAtespace(),
 			Name:     createResp.GetMetadata().GetName(),
 		},
-		ActorUid:          createResp.GetMetadata().GetUid(),
 		Audience:          []string{"foo"},
 		ExpirationSeconds: 1800,
 	})
@@ -5108,6 +5132,9 @@ func TestMintActorJWT_Success(t *testing.T) {
 	}
 	if want := "actor/" + testAtespace + "/id1"; claims.Subject != want {
 		t.Errorf("sub = %q, want %q", claims.Subject, want)
+	}
+	if want := createResp.GetMetadata().GetUid(); claims.Substrate.ActorUID != want {
+		t.Errorf("ate.dev.actorUID = %q, want the stored actor's %q", claims.Substrate.ActorUID, want)
 	}
 	assertActorJWTLifetime(t, mintResp, claims, 30*time.Minute)
 }
@@ -5270,8 +5297,13 @@ func TestRevertActor_FromPaused(t *testing.T) {
 	if got.GetWorkerAssignment() != nil {
 		t.Errorf("worker assignment = %v, want nil", got.GetWorkerAssignment())
 	}
-	if tc.fakeAtelet.TerminateCalled {
-		t.Errorf("unexpected Terminate call for paused actor")
+	if got.GetAssignedNode() != "" {
+		t.Errorf("assigned node = %q, want empty", got.GetAssignedNode())
+	}
+	if !tc.fakeAtelet.TerminateCalled {
+		t.Errorf("expected Terminate call to clean up assigned node for paused actor")
+	} else if gotUID := tc.fakeAtelet.TerminateRequest.GetTargetAteomUid(); gotUID != "" {
+		t.Errorf("TerminateRequest.TargetAteomUid = %q, want empty for paused actor", gotUID)
 	}
 	if tc.fakeAtelet.CheckpointCalled {
 		t.Errorf("RevertActor checkpointed the workload, want the execution discarded")
@@ -5346,8 +5378,13 @@ func TestRevertActor_FromCrashed(t *testing.T) {
 	if got.GetWorkerAssignment() != nil {
 		t.Errorf("worker assignment = %v, want nil", got.GetWorkerAssignment())
 	}
-	if tc.fakeAtelet.TerminateCalled {
-		t.Errorf("unexpected Terminate call for crashed actor with no worker")
+	if got.GetAssignedNode() != "" {
+		t.Errorf("assigned node = %q, want empty", got.GetAssignedNode())
+	}
+	if !tc.fakeAtelet.TerminateCalled {
+		t.Errorf("expected Terminate call to clean up assigned node for crashed actor")
+	} else if gotUID := tc.fakeAtelet.TerminateRequest.GetTargetAteomUid(); gotUID != "" {
+		t.Errorf("TerminateRequest.TargetAteomUid = %q, want empty for crashed actor", gotUID)
 	}
 	if tc.fakeAtelet.CheckpointCalled {
 		t.Errorf("RevertActor checkpointed the workload, want the execution discarded")

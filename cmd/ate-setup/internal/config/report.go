@@ -20,17 +20,6 @@ import (
 	"sort"
 )
 
-// Report writes the settings a run is about to apply and where each came from.
-//
-// A value can arrive from a flag, an exported variable or a configuration
-// file, and only the first of those is visible in the command the operator
-// typed. Reporting on every run is what keeps an inherited variable or a
-// forgotten file from changing an install silently. Errors name the channel
-// too, but an install that succeeds with the wrong value never produces one.
-//
-// Only supplied settings are listed. The rest are counted: a reader scanning
-// for what is unusual about this run does not need the declared defaults
-// enumerated, and listing all of them would bury the few that matter.
 // ReportOptions selects how much of the configuration is listed.
 type ReportOptions struct {
 	// OmitDefaults lists only the settings a channel supplied.
@@ -42,6 +31,26 @@ type ReportOptions struct {
 	OmitDefaults bool
 }
 
+// Report writes the settings a run is about to apply and where each came from.
+//
+// A value can arrive from a flag, an exported variable or a configuration
+// file, and only the first of those is visible in the command the operator
+// typed. Reporting on every run is what keeps an inherited variable or a
+// forgotten file from changing an install silently. Errors name the channel
+// too, but an install that succeeds with the wrong value never produces one.
+//
+// Every setting is listed, with the channel that supplied it. A value that
+// came from a default is worth seeing for the same reason a supplied one is:
+// next release it may be a different default. ReportOptions.OmitDefaults
+// shortens it to what was set.
+//
+// A setting a channel mentions is set, whatever it is set to -- an empty
+// value is a value, and is how a setting is cleared. Only an absent setting
+// falls through to the layer below, which in the shell is the difference
+// between "export FOO=" and "unset FOO". What an empty value means then
+// depends on the kind: a string takes it literally, a bool reads it as
+// false, and an int or a duration has no empty form, so it is reported as
+// invalid rather than ignored.
 func (r *Resolved) Report(w io.Writer, opts ReportOptions) {
 	supplied := r.Origins()
 	fmt.Fprintf(w, "configuration: %d set, %d default\n", len(supplied), len(r.values)-len(supplied))

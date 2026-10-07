@@ -38,6 +38,7 @@ func loadEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv("NO_DEV_ENV", "1")
 	for _, name := range []string{
+		"ACTOR_JWT_ALGORITHM",
 		"ANTHROPIC_API_KEY",
 		"ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE",
 		"ATE_API_POSTGRES_CLOUDSQL_GSA",
@@ -64,6 +65,7 @@ func loadEnv(t *testing.T) {
 		"BUCKET_NAME",
 		"CLUSTER_LOCATION",
 		"CLUSTER_NAME",
+		"DOCKER_BUILD_FLAGS",
 		"EXPECTED_JWT_ISSUER",
 		"KIND_CLUSTER_NAME",
 		"KO_DEFAULTPLATFORMS",
@@ -72,12 +74,13 @@ func loadEnv(t *testing.T) {
 		"KUBECTL_CONTEXT",
 		"MEMORYSTORE_INSTANCE",
 		"PROJECT_ID",
+		"ATE_API_POSTGRES_CLOUDSQL_INSTANCE",
 	} {
-		t.Setenv(name, "")
+		// Unset, not blanked. An exported empty variable is a value a channel
+		// supplied, which is what an operator writes to clear a setting; a
+		// test that blanked these would be configuring every one of them.
+		unsetEnv(t, name)
 	}
-	// Blanking this one would not read as unset: an exported but empty
-	// instance is the explicit "remove Cloud SQL" request.
-	unsetEnv(t, "ATE_API_POSTGRES_CLOUDSQL_INSTANCE")
 }
 
 // unsetEnv removes a variable for the duration of the test. t.Setenv first, so
@@ -200,6 +203,19 @@ func TestLoadCordonControlPlane(t *testing.T) {
 				t.Errorf("ScriptEnv() exports ATE_INSTALL_CORDON_CONTROL_PLANE = %v, want %v", exported, tc.want)
 			}
 		})
+	}
+}
+
+func TestLoadDockerBuildFlags(t *testing.T) {
+	loadEnv(t)
+	t.Setenv("DOCKER_BUILD_FLAGS", " --cache-from type=gha  --cache-to type=gha,mode=max ")
+	cfg, err := Load(Options{})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	want := []string{"--cache-from", "type=gha", "--cache-to", "type=gha,mode=max"}
+	if !slices.Equal(cfg.DockerBuildFlags, want) {
+		t.Errorf("DockerBuildFlags = %q, want %q", cfg.DockerBuildFlags, want)
 	}
 }
 
@@ -380,6 +396,45 @@ func TestLoadExpectedJWTIssuer(t *testing.T) {
 	}
 }
 
+func TestLoadActorJWTAlgorithm(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		env     string
+		want    string
+		wantErr bool
+	}{
+		{name: "unset", env: "", want: "ES256"},
+		{name: "RS256", env: "RS256", want: "RS256"},
+		{name: "unsupported", env: "HS256", wantErr: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			loadEnv(t)
+			// Unset rather than blanked for the case that wants the default:
+			// an exported empty value is an algorithm the operator supplied,
+			// and no empty string is a valid one.
+			if tt.env == "" {
+				unsetEnv(t, "ACTOR_JWT_ALGORITHM")
+			} else {
+				t.Setenv("ACTOR_JWT_ALGORITHM", tt.env)
+			}
+
+			cfg, err := Load(Options{})
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("Load() with ACTOR_JWT_ALGORITHM=%q returned nil error", tt.env)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.ActorJWTAlgorithm != tt.want {
+				t.Errorf("ActorJWTAlgorithm = %q, want %q", cfg.ActorJWTAlgorithm, tt.want)
+			}
+		})
+	}
+}
+
 // The endpoint has to reach both the Go steps and the shell scripts ate-setup
 // still delegates to, or the two halves of an install export different
 // collectors.
@@ -515,7 +570,14 @@ func TestWaitTimeout(t *testing.T) {
 		{"the environment counts as asking too", Options{}, "10m", 10 * time.Minute},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv("ATE_INSTALL_ROLLOUT_TIMEOUT", tc.env)
+			// Unset rather than blanked for the cases that do not exercise
+			// the variable: an exported empty value is a duration the
+			// operator supplied, and no empty string is one.
+			if tc.env == "" {
+				unsetEnv(t, "ATE_INSTALL_ROLLOUT_TIMEOUT")
+			} else {
+				t.Setenv("ATE_INSTALL_ROLLOUT_TIMEOUT", tc.env)
+			}
 
 			cfg, err := Load(tc.opts)
 			if err != nil {
@@ -551,7 +613,6 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{"provider without a name", Options{CredentialProvider: `{"address":"vault.ate-system.svc:8200"}`}},
 		{"provider with an unknown key", Options{CredentialProvider: `{"name":"k8s.io","adress":"x:1"}`}},
 		{"provider with trailing data", Options{CredentialProvider: `{"enabled":false} {"name":"k8s.io"}`}},
-		{"provider agentgateway", Options{Router: RouterAgentgateway, CredentialProvider: `{"name":"k8s.io"}`}},
 		{"provider name with a scheme", Options{CredentialProvider: `{"name":"ate-secret://k8s.io"}`}},
 		{"provider name not lowercase", Options{CredentialProvider: `{"name":"Vault.example.com","address":"vault.ate-system.svc:8200"}`}},
 		{"provider name with a port", Options{CredentialProvider: `{"name":"k8s.io:443"}`}},
@@ -587,6 +648,16 @@ func TestCredentialProvider(t *testing.T) {
 		{name: "absent is an error", opts: Options{}, wantErr: true},
 		{name: "disabled", opts: Options{CredentialProvider: `{"enabled":false}`}},
 		{name: "disabled on agentgateway", opts: Options{Router: RouterAgentgateway, CredentialProvider: `{"enabled":false}`}},
+		{
+			name: "kubernetes on agentgateway",
+			opts: Options{Router: RouterAgentgateway, CredentialProvider: `{"name":"k8s.io"}`},
+			want: CredentialProvider{Name: K8sCredentialProviderName, Address: K8sCredentialProviderAddress},
+		},
+		{
+			name: "another provider on agentgateway",
+			opts: Options{Router: RouterAgentgateway, CredentialProvider: `{"name":"vault.example.com","address":"vault.ate-system.svc:50051"}`},
+			want: CredentialProvider{Name: "vault.example.com", Address: "vault.ate-system.svc:50051"},
+		},
 		{
 			name: "enabled true names a provider",
 			opts: Options{CredentialProvider: `{"enabled":true,"name":"k8s.io"}`},
@@ -889,18 +960,20 @@ func TestLoadImageSource(t *testing.T) {
 		{
 			name:      "a repo needs a tag",
 			opts:      Options{ImageRepo: "example.com/substrate"},
-			wantError: "--image-repo (or ATE_IMAGE_REPO) requires --image-tag",
+			wantError: `images.repo="example.com/substrate" (from --image-repo) conflicts with images.tag="" (from default)`,
 		},
 		{
 			name:      "a tag needs a repo",
 			opts:      Options{ImageTag: "v1"},
-			wantError: "--image-tag (or ATE_IMAGE_TAG) requires --image-repo",
+			wantError: `images.tag="v1" (from --image-tag) conflicts with images.repo="" (from default)`,
 		},
 		{
 			// The environment reaches validation the same way the flags do.
+			// The channel is named, so a reader who exported the variable is
+			// not sent to look for a flag they never used.
 			name:      "a tag from the environment needs a repo",
 			env:       map[string]string{"ATE_IMAGE_TAG": "v1"},
-			wantError: "--image-tag (or ATE_IMAGE_TAG) requires --image-repo",
+			wantError: `images.tag="v1" (from ATE_IMAGE_TAG) conflicts with images.repo="" (from default)`,
 		},
 	}
 

@@ -31,14 +31,17 @@ import (
 	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
+	"github.com/agent-substrate/substrate/internal/volume"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/google/go-cmp/cmp"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/testing/protocmp"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -260,7 +263,7 @@ func TestAssignWorkerAttempt_SkipsWorkerAssignedInOtherAtespace(t *testing.T) {
 	}
 	_, _, err := w.assignWorkerAttempt(ctx, resources.ActorRef{Atespace: "team-a", Name: "shared"}, actor, tmpl)
 	if apierror.Code(err) != codes.ResourceExhausted {
-		t.Fatalf("assignWorkerAttempt() error = %v, want ResourceExhausted (no free workers)", err)
+		t.Fatalf("assignWorkerAttempt() error = %v, want ResourceExhausted (no worker has room)", err)
 	}
 
 	stored := firstAssignment(t, persistence, testWorkerUID("pod-1"))
@@ -1333,7 +1336,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 		{
 			name: "13 Full pause snapshot restores locally as Full",
 			actor: actorSeed{
-				localSnapshot: &ateapipb.LocalSnapshot{SnapshotName: localSnapshotName, NodeVmsWithLocalSnapshots: []string{"node-1"}},
+				localSnapshot: &ateapipb.LocalSnapshot{SnapshotName: localSnapshotName},
 			},
 			tmpl: templateSeed{onPause: fullScope},
 			want: restoreWant{
@@ -1348,7 +1351,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			// resume-source resolution is being reworked.
 			name: "14 local snapshot built on the current template stays Full",
 			actor: actorSeed{
-				localSnapshot: &ateapipb.LocalSnapshot{SnapshotName: localSnapshotName, NodeVmsWithLocalSnapshots: []string{"node-1"}},
+				localSnapshot: &ateapipb.LocalSnapshot{SnapshotName: localSnapshotName},
 				tmplUID:       "current",
 			},
 			tmpl: templateSeed{onPause: fullScope},
@@ -1361,7 +1364,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 		{
 			name: "15 Data pause snapshot restores locally as Data",
 			actor: actorSeed{
-				localSnapshot: &ateapipb.LocalSnapshot{SnapshotName: localSnapshotName, NodeVmsWithLocalSnapshots: []string{"node-1"}},
+				localSnapshot: &ateapipb.LocalSnapshot{SnapshotName: localSnapshotName},
 			},
 			tmpl: templateSeed{onPause: dataScope},
 			want: restoreWant{
@@ -1373,7 +1376,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 		{
 			name: "16 Data pause snapshot ignores the template's golden",
 			actor: actorSeed{
-				localSnapshot: &ateapipb.LocalSnapshot{SnapshotName: localSnapshotName, NodeVmsWithLocalSnapshots: []string{"node-1"}},
+				localSnapshot: &ateapipb.LocalSnapshot{SnapshotName: localSnapshotName},
 			},
 			tmpl: templateSeed{
 				onPause: dataScope,
@@ -1390,7 +1393,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			// comes from the pause scope, not the durable snapshot's.
 			name: "17 local snapshot wins over a Full durable snapshot",
 			actor: actorSeed{
-				localSnapshot:    &ateapipb.LocalSnapshot{SnapshotName: localSnapshotName, NodeVmsWithLocalSnapshots: []string{"node-1"}},
+				localSnapshot:    &ateapipb.LocalSnapshot{SnapshotName: localSnapshotName},
 				externalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: actorURI, ContentScope: fullScope},
 			},
 			tmpl: templateSeed{onPause: dataScope},
@@ -1407,7 +1410,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			// template.
 			name: "18 local snapshot ignores an older external snapshot's template mismatch",
 			actor: actorSeed{
-				localSnapshot:    &ateapipb.LocalSnapshot{SnapshotName: localSnapshotName, NodeVmsWithLocalSnapshots: []string{"node-1"}},
+				localSnapshot:    &ateapipb.LocalSnapshot{SnapshotName: localSnapshotName},
 				externalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: actorURI, ContentScope: fullScope},
 				tmplUID:          "mismatch",
 			},
@@ -1497,6 +1500,9 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			seedWorkflowActor(t, ctx, persistence, actorRef, "ns", "tmpl1", actorState, func(a *ateapipb.Actor) {
 				a.Status.WorkerAssignment = wireTestAssignment()
 				a.Status.LocalSnapshot = tt.actor.localSnapshot
+				if tt.actor.localSnapshot != nil {
+					a.Status.AssignedNode = "node-1"
+				}
 				uid := tt.actor.tmplUID
 				if uid == "current" {
 					uid = createdTmpl.GetMetadata().GetUid()
@@ -1512,7 +1518,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 
 			actor, loadedTmpl, src, err := w.loadActorForResume(ctx, actorRef)
 			if err == nil {
-				_, err = w.ensureAteletRestored(ctx, actorRef, actor, loadedTmpl, src)
+				_, err = w.ensureAteletRestored(ctx, actorRef, actor, loadedTmpl, nil, src)
 			}
 			if got := apierror.Code(err); got != tt.want.code {
 				t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, tt.want.code, err)
@@ -1554,5 +1560,72 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 				t.Errorf("restore scope = %v, want %v", got, tt.want.scope)
 			}
 		})
+	}
+}
+
+// publishContextVolumePlugin hands back a fixed publish context, standing in
+// for a driver whose node plugin needs attachment metadata.
+type publishContextVolumePlugin struct {
+	volume.VolumePluginControlPlane
+	publishContext map[string]string
+}
+
+func (p *publishContextVolumePlugin) AttachVolume(ctx context.Context, req volume.AttachVolumeRequest) (volume.AttachVolumeResponse, error) {
+	return volume.AttachVolumeResponse{PublishContext: p.publishContext}, nil
+}
+
+// The attach step hands the publish context to the Restore call in memory and
+// leaves the stored actor untouched.
+func TestEnsureVolumesAttached_ReturnsPublishContext(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+	storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "id1"},
+		Status: &ateapipb.ActorStatus{
+			State: ateapipb.ActorState_ACTOR_STATE_RESUMING,
+			ActorVolumes: []*ateapipb.ExternalVolume{
+				{VolumeName: "mounted", StorageVolumeId: "storage-mounted", VolumeType: "mock", Status: ateapipb.ExternalVolume_STATUS_CREATED},
+				{VolumeName: "unmounted", StorageVolumeId: "storage-unmounted", VolumeType: "mock", Status: ateapipb.ExternalVolume_STATUS_CREATED},
+			},
+		},
+	})
+	actor, err := persistence.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("GetActor: %v", err)
+	}
+
+	w := &ActorWorkflow{
+		store: persistence,
+		pluginRegistry: &mockPluginRegistry{plugins: map[string]volume.VolumePluginControlPlane{
+			"mock": &publishContextVolumePlugin{publishContext: map[string]string{"devicePath": "/dev/xvdba"}},
+		}},
+	}
+	worker := &ateapipb.Worker{NodeName: "node-1"}
+	tmpl := &ateapipb.ActorTemplate{
+		Volumes: []*ateapipb.Volume{
+			{Name: "mounted", ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{StorageClassName: "sc"}},
+			{Name: "unmounted", ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{StorageClassName: "sc"}},
+		},
+		Containers: []*ateapipb.Container{
+			{Name: "main", Image: "img", VolumeMounts: []*ateapipb.VolumeMount{{Name: "mounted", MountPath: "/data"}}},
+		},
+	}
+
+	got, err := w.ensureVolumesAttached(ctx, actor, worker, tmpl)
+	if err != nil {
+		t.Fatalf("ensureVolumesAttached: %v", err)
+	}
+	want := map[string]map[string]string{"mounted": {"devicePath": "/dev/xvdba"}}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("publish contexts mismatch (-want +got):\n%s", diff)
+	}
+
+	stored, err := persistence.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("GetActor: %v", err)
+	}
+	if diff := cmp.Diff(actor, stored, protocmp.Transform()); diff != "" {
+		t.Errorf("attach wrote to the stored actor (-before +after):\n%s", diff)
 	}
 }

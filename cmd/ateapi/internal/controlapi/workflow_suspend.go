@@ -223,7 +223,7 @@ func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef reso
 	}
 	client := ateletpb.NewAteomHerderClient(ateletConn)
 
-	workloadSpec, err := workloadSpecFromActorTemplate(actorTemplate, actor)
+	workloadSpec, err := workloadSpecFromActorTemplate(actorTemplate, actor, nil)
 	if err != nil {
 		return "", err
 	}
@@ -264,7 +264,8 @@ func (w *ActorWorkflow) ensurePausedSnapshotUploaded(ctx context.Context, actorR
 	defer func() { err = done(err) }()
 
 	local := actor.GetStatus().GetLocalSnapshot()
-	if len(local.GetNodeVmsWithLocalSnapshots()) == 0 {
+	nodeName := actor.GetStatus().GetAssignedNode()
+	if nodeName == "" {
 		// Without the node the snapshot can never be found (mirrors
 		// FinalizePaused, which crashes rather than record an unknown node).
 		if err := crashActor(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageLocalSnapshotNodeUnknown); err != nil {
@@ -273,12 +274,12 @@ func (w *ActorWorkflow) ensurePausedSnapshotUploaded(ctx context.Context, actorR
 		return "", fmt.Errorf("actor is CRASHED because it was suspending a paused snapshot with no node recorded")
 	}
 
-	ateletConn, err := w.dialer.DialForAteletOnNode(local.GetNodeVmsWithLocalSnapshots()[0])
+	ateletConn, err := w.dialer.DialForAteletOnNode(nodeName)
 	if err != nil {
 		// No atelet on the node is indistinguishable from an atelet restart or
 		// informer lag, and the snapshot bytes may still be on its disk: stay
 		// retryable rather than crash.
-		return "", fmt.Errorf("while getting atelet conn for node %q: %w", local.GetNodeVmsWithLocalSnapshots()[0], err)
+		return "", fmt.Errorf("while getting atelet conn for node %q: %w", nodeName, err)
 	}
 	client := ateletpb.NewAteomHerderClient(ateletConn)
 
@@ -322,7 +323,7 @@ func (w *ActorWorkflow) ensureVolumesDetached(ctx context.Context, actor *ateapi
 	ctx, done := stepSpan(ctx, spanName)
 	defer func() { err = done(err) }()
 
-	return detachActorVolumes(ctx, w.store, w.pluginRegistry, actor, actorTemplate, op)
+	return detachActorVolumes(ctx, w.pluginRegistry, actor, actorTemplate, op)
 }
 
 // ensureSuspendedFinalized releases the actor's worker (only when it is still
@@ -404,6 +405,7 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 		}
 		toUpdate.Status.WorkerAssignment = nil
 		toUpdate.Status.LocalSnapshot = nil
+		toUpdate.Status.AssignedNode = ""
 		return nil
 	})
 	dUpdateActor = time.Since(t)

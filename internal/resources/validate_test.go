@@ -15,6 +15,8 @@
 package resources
 
 import (
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -340,6 +342,64 @@ func runStringRule(t *testing.T, rule func(*field.Path, string) field.ErrorList,
 			errs := rule(field.NewPath("f"), tt.value)
 			if (len(errs) > 0) != tt.wantErr {
 				t.Errorf("value %q: errs = %v, wantErr %v", tt.value, errs, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateRuntimeAssetPath(t *testing.T) {
+	// on macOS the temp dir is behind the /var symlink
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	asset := filepath.Join(root, "runsc-abc")
+	if err := os.WriteFile(asset, nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "gvisor-abc"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	nested := filepath.Join(root, "gvisor-abc", "runsc")
+	if err := os.WriteFile(nested, nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "evil")
+	if err := os.WriteFile(outside, nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "runsc-link")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatal(err)
+	}
+	linkedDir := filepath.Join(root, "gvisor-link")
+	if err := os.Symlink(filepath.Dir(outside), linkedDir); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name    string
+		path    string
+		wantErr bool
+	}{
+		{"asset", asset, false},
+		{"release dir asset", nested, false},
+		{"empty", "", true},
+		{"relative", "runsc-abc", true},
+		{"unclean", root + "/gvisor-abc/../runsc-abc", true},
+		{"outside root", outside, true},
+		{"root itself", root, true},
+		{"directory", filepath.Join(root, "gvisor-abc"), true},
+		{"sibling with root prefix", root + "-other/runsc", true},
+		{"host binary", "/bin/sh", true},
+		{"symlink out of root", link, true},
+		{"symlinked directory", filepath.Join(linkedDir, "evil"), true},
+		{"missing", filepath.Join(root, "runsc-missing"), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			errs := ValidateRuntimeAssetPath(root, tc.path, field.NewPath("runsc_path"))
+			if gotErr := len(errs) > 0; gotErr != tc.wantErr {
+				t.Errorf("ValidateRuntimeAssetPath(%q) = %v, want error: %v", tc.path, errs, tc.wantErr)
 			}
 		})
 	}

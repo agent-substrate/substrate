@@ -103,6 +103,9 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	if err := validateActorDirs(req.GetActorDirs()); err != nil {
 		return nil, err
 	}
+	if err := validateRuntimeAssetPaths(req.GetRuntimeAssetPaths()); err != nil {
+		return nil, err
+	}
 	if !s.locks.Lock(ctx, req.GetActorUid()) {
 		return nil, fmt.Errorf("gave up waiting for the actor's lock: %w", ctx.Err())
 	}
@@ -161,10 +164,9 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 
 	// Restore the durable-dir volumes before anything can observe them: for Full
 	// that means before the share's virtiofsd starts, for Data before the workload
-	// cold-starts. The snapshot must carry them — the actor declares the volume, and
-	// every scope captures it.
+	// cold-starts.
 	if hasDurableVolumes(p.containers) {
-		if err := untarDurableVolumes(durableDir, restoreDir); err != nil {
+		if err := untarDurableVolumes(durableDir, restoreDir, durableVolumeNames(p.containers)); err != nil {
 			return nil, err
 		}
 	}
@@ -201,7 +203,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 //
 // Each container's rootfs is a host-merged overlay (image lower + host upper). Steps:
 // rewrite the snapshot config's per-VMDir paths (vsock + serial + fs sockets) to this
-// actor's; re-materialize the uppers from rootfs-upper.tar (in the background,
+// actor's; re-materialize the uppers from the per-container tars (in the background,
 // overlapped with bundle preparation) and re-mount the merged trees at the frozen
 // find-paths paths; start the virtiofsd serving them; rebuild the tap (the snapshot's
 // virtio-net is fd-backed → fresh net_fds); relaunch CH with --restore (OnDemand),
@@ -234,13 +236,10 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 	}
 	tPrep := time.Now()
 
-	// Merged-rootfs snapshots carry the upper as rootfs-upper.tar (the tar's
-	// presence is what says which model the guest expects). Start
-	// re-materializing the upper contents NOW, in the background: the untar
-	// scales with the actor's data and is joined right before the host overlay
-	// mounts need it, so it hides behind the bundle preparation below. Legacy
-	// guest-tmpfs-upper snapshots have no tar: their upper rides inside the
-	// restored guest memory and the share presents the bare image instead.
+	// Full snapshots carry each container's upper as a tar (rootfsUpperTarFile).
+	// Start re-materializing the upper contents NOW, in the background: the
+	// untar scales with the actor's data and is joined right before the host
+	// overlay mounts need it, so it hides behind the bundle preparation below.
 	//
 	// An error return between here and the join MUST drain the goroutine (the
 	// deferred receive below): returning with the untar still writing would let
@@ -248,7 +247,7 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 	untarDone := make(chan error, 1)
 	untarJoined := false
 	go func() {
-		untarDone <- untarRootfsUpper(rootfsUpperDir(p.actorDirs), restoreDir)
+		untarDone <- untarRootfsUpper(rootfsUpperDir(p.actorDirs), restoreDir, containerNames(p.containers))
 	}()
 	defer func() {
 		if !untarJoined {

@@ -874,9 +874,8 @@ func TestValidateTerminateRequest(t *testing.T) {
 		name: "valid",
 		obj:  valid(),
 	}, {
-		name: "missing target_ateom_uid",
+		name: "unset target_ateom_uid is allowed: node-only cleanup",
 		obj:  valid(func(r *ateletpb.TerminateRequest) { r.TargetAteomUid = "" }),
-		want: field.ErrorList{field.Required(field.NewPath("target_ateom_uid"), "")},
 	}, {
 		name: "invalid target_ateom_uid: path escape",
 		obj:  valid(func(r *ateletpb.TerminateRequest) { r.TargetAteomUid = "../escape" }),
@@ -936,35 +935,59 @@ func TestValidateTerminateRequest(t *testing.T) {
 	}
 }
 
-func TestValidateSetWorkerCapacityRequest(t *testing.T) {
-	withLimits := func(limits ...*ateletpb.Limits) *ateletpb.SetWorkerCapacityRequest {
-		return &ateletpb.SetWorkerCapacityRequest{
+func TestValidateRegisterWorkerRequest(t *testing.T) {
+	testHW := &ateletpb.HardwareIdentity{Attributes: map[string]string{"architecture": "amd64"}}
+	withLimits := func(limits ...*ateletpb.Limits) *ateletpb.RegisterWorkerRequest {
+		return &ateletpb.RegisterWorkerRequest{
 			Capacity: &ateletpb.WorkerResources{Resources: &ateletpb.Resources{Limits: limits}},
+			Hardware: testHW,
 		}
 	}
 	limitsPath := field.NewPath("capacity", "resources", "limits")
 
 	tests := []struct {
 		name string
-		obj  *ateletpb.SetWorkerCapacityRequest
+		obj  *ateletpb.RegisterWorkerRequest
 		want field.ErrorList
 	}{{
 		name: "valid",
-		obj:  &ateletpb.SetWorkerCapacityRequest{Capacity: &ateletpb.WorkerResources{}},
+		obj:  &ateletpb.RegisterWorkerRequest{Capacity: &ateletpb.WorkerResources{}, Hardware: testHW},
 	}, {
 		name: "missing capacity",
-		obj:  &ateletpb.SetWorkerCapacityRequest{},
+		obj:  &ateletpb.RegisterWorkerRequest{Hardware: testHW},
 		want: field.ErrorList{field.Required(field.NewPath("capacity"), "")},
 	}, {
+		name: "missing hardware",
+		obj:  &ateletpb.RegisterWorkerRequest{Capacity: &ateletpb.WorkerResources{}},
+		want: field.ErrorList{field.Required(field.NewPath("hardware"), "")},
+	}, {
+		name: "valid empty hardware attributes",
+		obj:  &ateletpb.RegisterWorkerRequest{Capacity: &ateletpb.WorkerResources{}, Hardware: &ateletpb.HardwareIdentity{}},
+	}, {
+		name: "hardware attribute key too long",
+		obj: &ateletpb.RegisterWorkerRequest{
+			Capacity: &ateletpb.WorkerResources{},
+			Hardware: &ateletpb.HardwareIdentity{Attributes: map[string]string{strings.Repeat("k", 129): "v"}},
+		},
+		want: field.ErrorList{field.TooLong(field.NewPath("hardware", "attributes"), "", 128).WithOrigin("maxLength")},
+	}, {
+		name: "hardware attribute value too long",
+		obj: &ateletpb.RegisterWorkerRequest{
+			Capacity: &ateletpb.WorkerResources{},
+			Hardware: &ateletpb.HardwareIdentity{Attributes: map[string]string{"k": strings.Repeat("v", 257)}},
+		},
+		want: field.ErrorList{field.TooLong(field.NewPath("hardware", "attributes").Key("k"), "", 256).WithOrigin("maxLength")},
+	}, {
 		name: "full capacity",
-		obj: &ateletpb.SetWorkerCapacityRequest{
+		obj: &ateletpb.RegisterWorkerRequest{
 			Capacity: &ateletpb.WorkerResources{Actors: 4, Resources: &ateletpb.Resources{
 				Limits: []*ateletpb.Limits{{Name: "cpu", Quantity: "4"}, {Name: "memory", Quantity: "8Gi"}},
 			}},
+			Hardware: testHW,
 		},
 	}, {
 		name: "negative actors",
-		obj:  &ateletpb.SetWorkerCapacityRequest{Capacity: &ateletpb.WorkerResources{Actors: -1}},
+		obj:  &ateletpb.RegisterWorkerRequest{Capacity: &ateletpb.WorkerResources{Actors: -1}, Hardware: testHW},
 		want: field.ErrorList{field.Invalid(field.NewPath("capacity", "actors"), nil, "").WithOrigin("minimum")},
 	}, {
 		name: "unsupported resource name",
@@ -1015,7 +1038,7 @@ func TestValidateSetWorkerCapacityRequest(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assertValidateErr(t, ValidateSetWorkerCapacityRequest(context.Background(), tt.obj), tt.want)
+			assertValidateErr(t, ValidateRegisterWorkerRequest(context.Background(), tt.obj), tt.want)
 		})
 	}
 }

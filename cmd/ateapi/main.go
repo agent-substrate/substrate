@@ -17,7 +17,6 @@ package main
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -152,12 +151,12 @@ func main() {
 
 	lp, err := serverboot.InitLogging(ctx, serverboot.LoggingOptions{
 		ServiceName: "ateapi",
-		Exporter:    serverboot.ResolveLogsExporter(ctx, serverboot.LogsExporterNone),
+		Exporter:    serverboot.ResolveLogsExporter(ctx),
 	})
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize logging", err)
 	}
-	// Nil when the exporter is none.
+	// Nil when the exporter does not include otlp.
 	if lp != nil {
 		defer serverboot.ShutdownProvider("LoggerProvider", lp.Shutdown)
 	}
@@ -560,31 +559,55 @@ func newKubeClients() (*kubernetes.Clientset, versioned.Interface, error) {
 	return clientset, ateClient, nil
 }
 
-// buildServerCreds loads the pod-identity CA pool (if configured) and
-// composes gRPC TransportCredentials over the server bundle + optional
-// client-cert verification.
+// buildServerCreds composes gRPC TransportCredentials over the server bundle
+// and pod-identity CA pool named by flags.
 func buildServerCreds(ctx context.Context) (credentials.TransportCredentials, error) {
-	var clientCAs *x509.CertPool
-	if *podIdentityCACerts != "" {
-		// TODO: Periodically reload these to handle rotations. Consult with Tina to see how she did it for client-go.
-		ca, err := os.ReadFile(*podIdentityCACerts)
-		if err != nil {
-			return nil, fmt.Errorf("read pod-identity CA: %w", err)
-		}
-		clientCAs = x509.NewCertPool()
-		if !clientCAs.AppendCertsFromPEM(ca) {
-			return nil, fmt.Errorf("parse pod-identity CA from %s", *podIdentityCACerts)
-		}
-		slog.InfoContext(ctx, "Using pod-identity CA for client-cert verification", slog.String("path", *podIdentityCACerts))
+	cfg, err := buildServerTLSConfig(ctx, *grpcServerCredBundle, *podIdentityCACerts)
+	if err != nil {
+		return nil, err
 	}
-	return credentials.NewTLS(&tls.Config{
-		GetCertificate: credbundle.Loader(*grpcServerCredBundle),
-		// Client certs stay optional at the transport level: certless
-		// clients such as kubectl-ate authenticate with a Bearer token in the
-		// ateapiauth interceptor.
-		ClientAuth: tls.VerifyClientCertIfGiven,
-		ClientCAs:  clientCAs,
-	}), nil
+	return credentials.NewTLS(cfg), nil
+}
+
+// buildServerTLSConfig loads the server bundle and, if caCertsPath is set,
+// the pod-identity CA pool (if not, client certs stay optional), and
+// composes the TLS config for the ateapi gRPC server.
+func buildServerTLSConfig(ctx context.Context, credBundlePath, caCertsPath string) (*tls.Config, error) {
+	serverCert := credbundle.Loader(credBundlePath)
+	// Client certs stay optional at the transport level: certless clients
+	// such as kubectl-ate authenticate with a Bearer token in the
+	// ateapiauth interceptor.
+	const clientAuth = tls.VerifyClientCertIfGiven
+
+	if caCertsPath == "" {
+		return &tls.Config{
+			GetCertificate: serverCert,
+			ClientAuth:     clientAuth,
+		}, nil
+	}
+
+	// Load once so a missing or unparsable trust bundle fails the pod
+	// promptly; GetConfigForClient below reloads it for every connection, so
+	// a pod-identity CA rotation verifies without an ateapi restart.
+	loadClientCAs := credbundle.PoolLoader(caCertsPath)
+	if _, err := loadClientCAs(); err != nil {
+		return nil, fmt.Errorf("load pod-identity CA: %w", err)
+	}
+	slog.InfoContext(ctx, "Using pod-identity CA for client-cert verification", slog.String("path", caCertsPath))
+
+	return &tls.Config{
+		GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) {
+			clientCAs, err := loadClientCAs()
+			if err != nil {
+				return nil, err
+			}
+			return &tls.Config{
+				GetCertificate: serverCert,
+				ClientAuth:     clientAuth,
+				ClientCAs:      clientCAs,
+			}, nil
+		},
+	}, nil
 }
 
 func buildJWTProviders(ctx context.Context, cfg *apiauthn.AuthenticationConfig) (apiauthn.ServerConfig, error) {

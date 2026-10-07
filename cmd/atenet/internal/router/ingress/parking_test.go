@@ -19,17 +19,19 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/agent-substrate/substrate/internal/ateattr"
 )
 
 func TestParkingLot_CapacityAndRelease(t *testing.T) {
 	lot := newParkingLot(ParkedRequestConfig{Budget: time.Second, Max: 2}, nil)
 	ctx := context.Background()
 
-	r1, ok := lot.enter(ctx)
+	r1, ok := lot.enter(ctx, ateattr.RouterOutcomeUnavailable)
 	if !ok {
 		t.Fatal("first enter should be admitted")
 	}
-	r2, ok := lot.enter(ctx)
+	r2, ok := lot.enter(ctx, ateattr.RouterOutcomeUnavailable)
 	if !ok {
 		t.Fatal("second enter should be admitted")
 	}
@@ -38,7 +40,7 @@ func TestParkingLot_CapacityAndRelease(t *testing.T) {
 	}
 
 	// Lot is full; the third request must be shed.
-	if _, ok := lot.enter(ctx); ok {
+	if _, ok := lot.enter(ctx, ateattr.RouterOutcomeUnavailable); ok {
 		t.Fatal("third enter should be rejected when lot is full")
 	}
 
@@ -47,7 +49,7 @@ func TestParkingLot_CapacityAndRelease(t *testing.T) {
 	if got := lot.activeCount(); got != 1 {
 		t.Fatalf("active after release = %d, want 1", got)
 	}
-	r3, ok := lot.enter(ctx)
+	r3, ok := lot.enter(ctx, ateattr.RouterOutcomeUnavailable)
 	if !ok {
 		t.Fatal("enter should be admitted after a slot was released")
 	}
@@ -62,7 +64,7 @@ func TestParkingLot_CapacityAndRelease(t *testing.T) {
 func TestParkingLot_ReleaseIsIdempotent(t *testing.T) {
 	lot := newParkingLot(ParkedRequestConfig{Budget: time.Second, Max: 1}, nil)
 
-	release, ok := lot.enter(context.Background())
+	release, ok := lot.enter(context.Background(), ateattr.RouterOutcomeUnavailable)
 	if !ok {
 		t.Fatal("enter should be admitted")
 	}
@@ -79,7 +81,7 @@ func TestParkingLot_DisabledAlwaysAdmits(t *testing.T) {
 	lot := newParkingLot(ParkedRequestConfig{Max: 0}, nil)
 
 	for i := 0; i < 5; i++ {
-		release, ok := lot.enter(context.Background())
+		release, ok := lot.enter(context.Background(), ateattr.RouterOutcomeUnavailable)
 		if !ok {
 			t.Fatalf("disabled lot rejected request %d", i)
 		}
@@ -107,7 +109,7 @@ func TestParkingLot_ConcurrentEntryRespectsCapacity(t *testing.T) {
 	for i := 0; i < goroutines; i++ {
 		go func() {
 			defer wg.Done()
-			if release, ok := lot.enter(context.Background()); ok {
+			if release, ok := lot.enter(context.Background(), ateattr.RouterOutcomeUnavailable); ok {
 				mu.Lock()
 				admitted++
 				releases = append(releases, release)

@@ -18,6 +18,7 @@ package tarutil
 
 import (
 	"archive/tar"
+	"context"
 	"errors"
 	"net"
 	"os"
@@ -637,20 +638,226 @@ func TestExtractIntoPrecreatedVolumeDir(t *testing.T) {
 	}
 }
 
-func TestExtractSupportsDeviceEntry(t *testing.T) {
+// A crafted archive must not be able to create a usable device node: only the
+// 0:0 whiteout is allowed.
+func TestExtractRejectsDeviceNodes(t *testing.T) {
+	for _, hdr := range []tar.Header{
+		{Name: "null", Typeflag: tar.TypeChar, Devmajor: 1, Devminor: 3},
+		{Name: "mem", Typeflag: tar.TypeChar, Devmajor: 1, Devminor: 1, Mode: 0o666},
+		{Name: "sda", Typeflag: tar.TypeBlock, Devmajor: 8, Devminor: 0},
+		{Name: "blk0", Typeflag: tar.TypeBlock},
+	} {
+		t.Run(hdr.Name, func(t *testing.T) {
+			tarPath := filepath.Join(t.TempDir(), "dev.tar")
+			writeTar(t, tarPath, hdr)
+			dst := t.TempDir()
+			if err := Extract(tarPath, dst); err == nil {
+				t.Fatal("Extract succeeded, want an error")
+			}
+			if _, err := os.Lstat(filepath.Join(dst, hdr.Name)); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("device node %q exists after a refused extract (err = %v)", hdr.Name, err)
+			}
+		})
+	}
+}
+
+// Create skips devices Extract would refuse, so a stray one in the tree does
+// not make the snapshot unrestorable.
+func TestCreateSkipsNonWhiteoutDevices(t *testing.T) {
 	roottest.Require(t, "creating a device node requires root")
 
+	src := t.TempDir()
+	if err := unix.Mknod(filepath.Join(src, "null"), unix.S_IFCHR|0o666, int(unix.Mkdev(1, 3))); err != nil {
+		t.Fatalf("creating device node: %v", err)
+	}
+	if err := unix.Mknod(filepath.Join(src, "whiteout"), unix.S_IFCHR, int(unix.Mkdev(0, 0))); err != nil {
+		t.Fatalf("creating whiteout: %v", err)
+	}
 	tarPath := filepath.Join(t.TempDir(), "dev.tar")
-	writeTar(t, tarPath, tar.Header{Name: "null", Typeflag: tar.TypeChar, Devmajor: 1, Devminor: 3})
+	if err := Create(t.Context(), tarPath, src); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
 	dst := t.TempDir()
 	if err := Extract(tarPath, dst); err != nil {
-		t.Fatalf("Extract failed on a device entry: %v", err)
+		t.Fatalf("Extract: %v", err)
 	}
-	st, err := os.Lstat(filepath.Join(dst, "null"))
+	if _, err := os.Lstat(filepath.Join(dst, "null")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("non-whiteout device was archived (err = %v)", err)
+	}
+	if _, err := os.Lstat(filepath.Join(dst, "whiteout")); err != nil {
+		t.Errorf("whiteout was not archived: %v", err)
+	}
+}
+
+// Extract restores only allowlisted xattrs. security.capability would grant
+// file capabilities, and the other trusted.overlay.* attributes are trusted by
+// the kernel when the upper is mounted.
+func TestExtractDropsDisallowedXattrs(t *testing.T) {
+	roottest.Require(t, "trusted.* and security.* xattrs require root")
+
+	tarPath := filepath.Join(t.TempDir(), "xattr.tar")
+	writeTar(t, tarPath, tar.Header{
+		Name: "f", Typeflag: tar.TypeReg, Mode: 0o755, Size: 1,
+		PAXRecords: map[string]string{
+			"SCHILY.xattr.security.capability":      "\x01\x00\x00\x02\xff\xff\xff\xff\x00\x00\x00\x00\xff\xff\xff\xff\x00\x00\x00\x00",
+			"SCHILY.xattr.trusted.overlay.origin":   "x",
+			"SCHILY.xattr.trusted.overlay.metacopy": "",
+			"SCHILY.xattr.trusted.other":            "x",
+			"SCHILY.xattr.trusted.overlay.opaque":   "y",
+			"SCHILY.xattr.user.custom":              "val",
+		},
+	})
+	dst := t.TempDir()
+	if err := Extract(tarPath, dst); err != nil {
+		if errors.Is(err, unix.ENOTSUP) {
+			t.Skipf("filesystem does not support trusted xattrs: %v", err)
+		}
+		t.Fatalf("Extract: %v", err)
+	}
+	path := filepath.Join(dst, "f")
+	for _, attr := range []string{"security.capability", "trusted.overlay.origin", "trusted.overlay.metacopy", "trusted.other"} {
+		if _, err := unix.Lgetxattr(path, attr, nil); !errors.Is(err, unix.ENODATA) {
+			t.Errorf("%s: Lgetxattr err = %v, want ENODATA", attr, err)
+		}
+	}
+	for _, attr := range []string{"trusted.overlay.opaque", "user.custom"} {
+		if _, err := unix.Lgetxattr(path, attr, nil); err != nil {
+			t.Errorf("%s was not restored: %v", attr, err)
+		}
+	}
+}
+
+// CreateWithRoot carries srcDir's own metadata, applied to dstDir; Create
+// leaves dstDir's alone.
+func TestCreateWithRootRestoresRootMeta(t *testing.T) {
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "f"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Lsetxattr(src, "user.root-attr", []byte("v"), 0); err != nil {
+		t.Skipf("filesystem does not support user xattrs: %v", err)
+	}
+	if err := os.Chmod(src, 0o750|os.ModeSetgid); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name     string
+		create   func(ctx context.Context, tarPath, srcDir string) error
+		wantMode os.FileMode
+		wantAttr bool
+	}{
+		{"CreateWithRoot", CreateWithRoot, 0o750 | os.ModeSetgid, true},
+		{"Create", Create, 0o755, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tarPath := filepath.Join(t.TempDir(), "root.tar")
+			if err := tc.create(t.Context(), tarPath, src); err != nil {
+				t.Fatalf("create: %v", err)
+			}
+			dst := filepath.Join(t.TempDir(), "dst")
+			if err := os.Mkdir(dst, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(dst, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := Extract(tarPath, dst); err != nil {
+				t.Fatalf("Extract: %v", err)
+			}
+			fi, err := os.Stat(dst)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := fi.Mode() & (os.ModePerm | os.ModeSetgid); got != tc.wantMode {
+				t.Errorf("dst mode = %v, want %v", got, tc.wantMode)
+			}
+			_, err = unix.Lgetxattr(dst, "user.root-attr", make([]byte, 8))
+			if gotAttr := err == nil; gotAttr != tc.wantAttr {
+				t.Errorf("dst has user.root-attr = %v (err %v), want %v", gotAttr, err, tc.wantAttr)
+			}
+			if b, err := os.ReadFile(filepath.Join(dst, "f")); err != nil || string(b) != "x" {
+				t.Errorf("f = %q, %v; want %q", b, err, "x")
+			}
+		})
+	}
+}
+
+// Only a directory "./" entry is root metadata: anything else at the root is
+// skipped, never created in place of dstDir.
+func TestExtractIgnoresNonDirRootEntry(t *testing.T) {
+	tarPath := filepath.Join(t.TempDir(), "root-symlink.tar")
+	f, err := os.Create(tarPath)
 	if err != nil {
-		t.Fatalf("stat extracted device node: %v", err)
+		t.Fatal(err)
 	}
-	if st.Mode()&os.ModeCharDevice == 0 {
-		t.Errorf("extracted node mode = %v, want a character device", st.Mode())
+	tw := tar.NewWriter(f)
+	if err := tw.WriteHeader(&tar.Header{Name: "./", Typeflag: tar.TypeSymlink, Linkname: "/"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	dst := t.TempDir()
+	if err := Extract(tarPath, dst); err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if fi, err := os.Lstat(dst); err != nil || !fi.IsDir() {
+		t.Errorf("dst: Lstat = %v, %v; want it still a directory", fi, err)
+	}
+}
+
+// A directory swapped for a symlink out of srcDir mid-walk must not pull the
+// outside directory's contents into the archive.
+func TestCreateDoesNotFollowSwappedDir(t *testing.T) {
+	base := t.TempDir()
+	outside := filepath.Join(base, "outside")
+	if err := os.Mkdir(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outside, "secret"), []byte("host data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	src := filepath.Join(base, "src")
+	if err := os.MkdirAll(filepath.Join(src, "d"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "d", "f"), []byte("ok"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// The skip callback runs after the walk listed "d" as a directory and
+	// before it is read: swap it for a symlink to outside there.
+	swap := func(rel string) bool {
+		if rel == "d" {
+			if err := os.RemoveAll(filepath.Join(src, "d")); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(outside, filepath.Join(src, "d")); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return false
+	}
+	tarPath := filepath.Join(t.TempDir(), "swap.tar")
+	_ = CreateFiltered(t.Context(), tarPath, src, swap)
+
+	f, err := os.Open(tarPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	tr := tar.NewReader(f)
+	for {
+		hdr, err := tr.Next()
+		if err != nil {
+			break
+		}
+		if strings.HasSuffix(hdr.Name, "secret") {
+			t.Errorf("archive captured %q from outside srcDir", hdr.Name)
+		}
 	}
 }

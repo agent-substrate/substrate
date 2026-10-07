@@ -132,8 +132,8 @@ func (s *ServiceImpl) CreateWorker(ctx context.Context, inWorker *ateapipb.Worke
 		ObservedEpoch: inWorker.GetEpoch(),
 	}
 
-	// Capacity is left unset: a Worker holds nothing until its own ateom says
-	// what it has, through WorkerService.SetWorkerCapacity. Nothing is placed
+	// Capacity and hardware are left unset: a Worker holds nothing until its
+	// own ateom says what it has, through WorkerService.RegisterWorker. Nothing is placed
 	// on it in the meantime, which is the point -- the alternative is guessing
 	// on the Worker's behalf and placing against the guess.
 

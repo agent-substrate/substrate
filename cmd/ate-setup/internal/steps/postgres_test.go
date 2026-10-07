@@ -27,6 +27,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kube"
+	"github.com/agent-substrate/substrate/pkg/postgressetup"
 )
 
 // postgresObjects loads the bundled postgres manifest of the given
@@ -269,5 +270,49 @@ func TestApplyPostgresRequiresPostgresPool(t *testing.T) {
 	err := e.applyPostgres(t.Context())
 	if err == nil || !strings.Contains(err.Error(), postgresPoolSelector) {
 		t.Fatalf("applyPostgres() error = %v, want the missing %s pool", err, postgresPoolSelector)
+	}
+}
+
+func TestBundledPostgresIdentityConfiguration(t *testing.T) {
+	cfg := &config.Config{
+		PostgresReadWriteRole: config.DefaultPostgresReadWriteRole,
+		PostgresOwnerRole:     config.DefaultPostgresOwnerRole,
+	}
+	e := &Env{Cfg: cfg}
+	readWrite, owner, err := e.postgresReadWriteConnectionStrings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if readWrite != bundledPostgresDSN(postgressetup.ReadWriteUser, postgressetup.ReadWritePassword) {
+		t.Errorf("read/write DSN = %q", readWrite)
+	}
+	if owner != bundledPostgresDSN(postgressetup.OwnerUser, postgressetup.OwnerPassword) {
+		t.Errorf("owner DSN = %q", owner)
+	}
+}
+
+func TestBundledPostgresRequiresFixedIdentity(t *testing.T) {
+	e := &Env{Cfg: &config.Config{PostgresReadWriteRole: "custom", PostgresOwnerRole: config.DefaultPostgresOwnerRole}}
+	if _, _, err := e.postgresReadWriteConnectionStrings(); err == nil {
+		t.Fatal("postgresReadWriteConnectionStrings() accepted a custom bundled role")
+	}
+}
+
+func TestBundledPostgresManifestAuthentication(t *testing.T) {
+	manifest, err := os.ReadFile(filepath.Join(repoRoot(t), "manifests", "ate-install", "postgres", "postgres.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(manifest)
+	for _, want := range []string{
+		"local all all trust",
+		"hostssl all postgres all reject",
+		"hostssl atepg all all scram-sha-256 clientcert=verify-ca",
+		"name: POSTGRES_HOST_AUTH_METHOD",
+		"value: trust",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("postgres manifest lacks %q", want)
+		}
 	}
 }

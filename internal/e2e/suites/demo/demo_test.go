@@ -39,6 +39,7 @@ import (
 const demoAtespace = "demo"
 
 func TestActorLifecycle(t *testing.T) {
+	t.Parallel()
 	// Create namespace
 	nsObj := e2e.CreateNamespace(t)
 
@@ -92,6 +93,7 @@ func TestActorLifecycle(t *testing.T) {
 }
 
 func TestActorSnapshotLifecycle(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	clients := e2e.GetClients()
 	nsObj := e2e.CreateNamespace(t)
@@ -211,6 +213,7 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 }
 
 func TestDurableDirLifecycle(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		tc   actorLifecycleTestCase
@@ -309,6 +312,7 @@ func TestDurableDirLifecycle(t *testing.T) {
 // micro-VM runtime supports more than one — gVisor templates are still capped at
 // one by the ActorTemplate CEL rules, so the template would be rejected there.
 func TestMultipleDurableDirLifecycle(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		tc   actorLifecycleTestCase
@@ -351,6 +355,7 @@ func TestMultipleDurableDirLifecycle(t *testing.T) {
 }
 
 func TestExternalVolumeLifecycle(t *testing.T) {
+	t.Parallel()
 
 	tests := []struct {
 		name string
@@ -378,6 +383,7 @@ func TestExternalVolumeLifecycle(t *testing.T) {
 }
 
 func TestDeleteActorAnyStateWithExternalVolume(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	clients := e2e.GetClients()
 	nsObj := e2e.CreateNamespace(t)
@@ -440,6 +446,7 @@ func TestDeleteActorAnyStateWithExternalVolume(t *testing.T) {
 }
 
 func TestExternalVolume_NodeMigration(t *testing.T) {
+	t.Parallel()
 	if e2e.IsMicroVM() {
 		t.Skip("Skipping TestExternalVolume_NodeMigration for microVM environment")
 	}
@@ -1466,6 +1473,7 @@ func callActorPathOnce(t *testing.T, actorRef resources.ActorRef, method, path s
 }
 
 func TestWorkerPodDeletion(t *testing.T) {
+	t.Parallel()
 	// Create namespace
 	nsObj := e2e.CreateNamespace(t)
 
@@ -1515,8 +1523,12 @@ func TestWorkerPodDeletion(t *testing.T) {
 
 	podName := actor.GetStatus().GetWorkerAssignment().GetWorkerPod()
 	podNamespace := actor.GetStatus().GetWorkerAssignment().GetWorkerNamespace()
-	if podName == "" || podNamespace == "" {
-		t.Fatalf("actor is running but pod details are missing: podName=%q, podNamespace=%q", podName, podNamespace)
+	nodeName := actor.GetStatus().GetWorkerAssignment().GetNodeName()
+	if podName == "" || podNamespace == "" || nodeName == "" {
+		t.Fatalf("actor is running but pod details are missing: podName=%q, podNamespace=%q, nodeName=%q", podName, podNamespace, nodeName)
+	}
+	if got := actor.GetStatus().GetAssignedNode(); got != nodeName {
+		t.Fatalf("running actor AssignedNode = %q, want %q", got, nodeName)
 	}
 
 	// Verify worker is in ListWorkers
@@ -1552,6 +1564,9 @@ func TestWorkerPodDeletion(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("failed to get crashed actor %q: %v", actorName, err)
+	}
+	if got := crashed.GetStatus().GetAssignedNode(); got != nodeName {
+		t.Errorf("crashed actor AssignedNode = %q, want %q preserved", got, nodeName)
 	}
 	crash := crashed.GetStatus().GetCrash()
 	// The actor was RUNNING, not mid-operation, so the crash message carries no
@@ -1591,6 +1606,7 @@ func TestWorkerPodDeletion(t *testing.T) {
 }
 
 func TestRevertCrashedActor(t *testing.T) {
+	t.Parallel()
 	nsObj := e2e.CreateNamespace(t)
 	ctx := context.Background()
 	clients := e2e.GetClients()
@@ -1653,17 +1669,26 @@ func TestRevertCrashedActor(t *testing.T) {
 	}
 	podName := actor.GetStatus().GetWorkerAssignment().GetWorkerPod()
 	podNamespace := actor.GetStatus().GetWorkerAssignment().GetWorkerNamespace()
-	if podName == "" || podNamespace == "" {
+	nodeName := actor.GetStatus().GetWorkerAssignment().GetNodeName()
+	if podName == "" || podNamespace == "" || nodeName == "" {
 		t.Fatalf("running actor has no pod recorded: %v", actor.GetStatus().GetWorkerAssignment())
 	}
 
 	// Deleting the pod is how a real crash happens: releaseBoundActor marks the
-	// actor CRASHED and clears its assignment, leaving revert with no worker to
-	// terminate through.
+	// actor CRASHED and clears its assignment while keeping AssignedNode so
+	// revert can still clean up the node.
 	if err := clients.K8s.CoreV1().Pods(podNamespace).Delete(ctx, podName, metav1.DeleteOptions{}); err != nil {
 		t.Fatalf("failed to delete worker pod %s/%s: %v", podNamespace, podName, err)
 	}
 	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_CRASHED)
+
+	crashed, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{Actor: actorRef})
+	if err != nil {
+		t.Fatalf("failed to get crashed Actor: %v", err)
+	}
+	if got := crashed.GetStatus().GetAssignedNode(); got != nodeName {
+		t.Fatalf("crashed actor AssignedNode = %q, want %q", got, nodeName)
+	}
 
 	reverted, err := clients.SubstrateAPI.RevertActor(ctx, &ateapipb.RevertActorRequest{Actor: actorRef})
 	if err != nil {
@@ -1677,6 +1702,9 @@ func TestRevertCrashedActor(t *testing.T) {
 	}
 	if reverted.GetActor().GetStatus().GetWorkerAssignment() != nil {
 		t.Fatal("worker assignment survived revert")
+	}
+	if got := reverted.GetActor().GetStatus().GetAssignedNode(); got != "" {
+		t.Fatalf("assigned node after revert = %q, want empty", got)
 	}
 
 	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: actorRef}); err != nil {

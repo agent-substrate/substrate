@@ -17,7 +17,6 @@ package main
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -35,6 +34,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/credentialprovider"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/sparsefile"
+	"github.com/agent-substrate/substrate/cmd/atelet/internal/trustbundle"
 	"github.com/agent-substrate/substrate/internal/actorlog"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
@@ -54,9 +54,10 @@ import (
 	"github.com/agent-substrate/substrate/internal/substratex509"
 	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/agent-substrate/substrate/internal/volume"
+	"github.com/agent-substrate/substrate/internal/volume/csi"
+	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/client/clientset/versioned"
 	"github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
-	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/objectstorage"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -281,25 +282,29 @@ func main() {
 		}
 	}
 
-	// TODO: Revisit scalability implications of using a shared informer. This lister
-	// is unlikely to be used with frequency.
-	ateFactory := externalversions.NewSharedInformerFactory(ateClient, 0)
-	csiDriverConfigLister := ateFactory.Api().V1alpha1().CSIDriverConfigs().Lister()
+	csiDriverConfigGetter := &directCSIDriverConfigGetter{client: ateClient}
 
 	trustBundles, err := clustertrustbundle.NewClient(k8sClient, func(o *metav1.ListOptions) {
-		o.FieldSelector = fields.OneTermEqualSelector("metadata.name", supportedTrustBundles[EgressTrustBundleName]).String()
+		o.FieldSelector = fields.OneTermEqualSelector("metadata.name", trustbundle.EgressCTB).String()
 	})
 	if err != nil {
 		slog.ErrorContext(ctx, "Error discovering ClusterTrustBundle API", slog.Any("err", err))
 		os.Exit(1)
 	}
-	systemInfoVolumes := newSystemInfoVolumeRefresher(trustBundles.GetCached, trustBundles.Informer())
+
+	// Read system roots from the known location in the distroless-static base image.
+	systemRootsPEM, err := os.ReadFile("/etc/ssl/certs/ca-certificates.crt")
+	if err != nil {
+		serverboot.Fatal(ctx, "Error reading system root certificates", err)
+	}
+
+	trustBundleSource := trustbundle.NewSource(trustBundles.GetCached, systemRootsPEM)
+
+	systemInfoVolumes := newSystemInfoVolumeRefresher(trustBundleSource, trustBundles.Informer())
 
 	stopCh := make(chan struct{})
 	defer close(stopCh)
-	ateFactory.Start(stopCh)
 	go trustBundles.Informer().Run(stopCh)
-	ateFactory.WaitForCacheSync(stopCh)
 	cache.WaitForCacheSync(stopCh, trustBundles.Informer().HasSynced)
 
 	wmService := NewService(
@@ -310,7 +315,7 @@ func main() {
 		imageCache,
 		instruments,
 		volPlugins,
-		csiDriverConfigLister,
+		csiDriverConfigGetter,
 		systemInfoVolumes,
 	)
 	go systemInfoVolumes.run(ctx)
@@ -319,19 +324,17 @@ func main() {
 	// Run/Restore on this node hits the cache. Best-effort: on failure the
 	// on-demand fetch in ensureSandboxAssets still covers correctness.
 	//
-	// The informer is requested only now, after the factory's blocking
-	// WaitForCacheSync above, so it cannot hold up atelet startup when its
-	// list/watch fails (e.g. Forbidden while the ClusterRole rollout lags the
-	// binary): the reflector retries in the background and prewarm stays cold
-	// until it recovers.
+	// We intentionally never WaitForCacheSync on this factory, so a failing
+	// list/watch (e.g. Forbidden while the ClusterRole rollout lags the
+	// binary) cannot hold up atelet startup: the reflector retries in the
+	// background and prewarm stays cold until it recovers.
+	ateFactory := externalversions.NewSharedInformerFactory(ateClient, 0)
 	sandboxConfigInformer := ateFactory.Api().V1alpha1().SandboxConfigs().Informer()
-	if err := startSandboxAssetPrewarm(ctx, sandboxConfigInformer, wmService, imageCache, microvmNodeCapable(hostDevRoot)); err != nil {
+	if _, err := startSandboxAssetPrewarm(ctx, sandboxConfigInformer, wmService, imageCache, microvmNodeCapable(hostDevRoot)); err != nil {
 		slog.ErrorContext(ctx, "Sandbox asset prewarm disabled", slog.Any("err", err))
 	}
-	// The factory only runs informers that exist when Start is called: the
-	// Start above predates the SandboxConfigs informer, so without this call
-	// it would never list or watch. Start is idempotent per informer — this
-	// launches the new one and leaves the already-running ones untouched.
+	// Start after the informer is registered: the factory only runs informers
+	// that exist when Start is called.
 	ateFactory.Start(stopCh)
 	dialOpts, err := ateapiauth.DialOptions(ateapiauth.ClientConfig{
 		K8sClient:        k8sClient,
@@ -443,6 +446,15 @@ func drainOnShutdown(ctx context.Context, srv *grpc.Server, readiness *serverboo
 	return done
 }
 
+// directCSIDriverConfigGetter retrieves CSIDriverConfig via direct API call rather than a cluster-wide watch informer.
+type directCSIDriverConfigGetter struct {
+	client versioned.Interface
+}
+
+func (g *directCSIDriverConfigGetter) Get(name string) (*atev1alpha1.CSIDriverConfig, error) {
+	return g.client.ApiV1alpha1().CSIDriverConfigs().Get(context.Background(), name, metav1.GetOptions{})
+}
+
 // AteomHerder is a service that allows controlling workloads on individual
 // ateoms.
 type AteomHerder struct {
@@ -455,7 +467,7 @@ type AteomHerder struct {
 	instruments           *Instruments
 	mu                    sync.RWMutex
 	volumePlugins         map[string]volume.VolumePluginWorkerPlane
-	csiDriverConfigLister listersv1alpha1.CSIDriverConfigLister
+	csiDriverConfigGetter csi.CSIDriverConfigGetter
 	systemInfoVolumes     *systemInfoVolumeRefresher
 }
 
@@ -470,7 +482,7 @@ func NewService(
 	imageCache *imagecache.Store,
 	instruments *Instruments,
 	volumePlugins map[string]volume.VolumePluginWorkerPlane,
-	csiDriverConfigLister listersv1alpha1.CSIDriverConfigLister,
+	csiDriverConfigGetter csi.CSIDriverConfigGetter,
 	systemInfoVolumes *systemInfoVolumeRefresher,
 ) *AteomHerder {
 	wms := &AteomHerder{
@@ -480,7 +492,7 @@ func NewService(
 		gcsClient:             gcsClient,
 		instruments:           instruments,
 		volumePlugins:         volumePlugins,
-		csiDriverConfigLister: csiDriverConfigLister,
+		csiDriverConfigGetter: csiDriverConfigGetter,
 		systemInfoVolumes:     systemInfoVolumes,
 	}
 	return wms
@@ -503,6 +515,7 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *
 		return nil, err
 	}
 
+	s.systemInfoVolumes.Deregister(actorUID)
 	if err := resetActorDirs(actorUID); err != nil {
 		return nil, fmt.Errorf("while resetting actor dirs: %w", err)
 	}
@@ -518,12 +531,13 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *
 		return nil, fmt.Errorf("while recording sandbox assets: %w", err)
 	}
 
+	var registration *registeredActor
 	defer func() {
-		if err != nil {
-			s.systemInfoVolumes.Deregister(actorUID)
+		if err != nil && registration != nil {
+			s.systemInfoVolumes.DeregisterOwned(registration)
 		}
 	}()
-	if err := s.systemInfoVolumes.Register(actorUID, actorRef, systemInfoVolumesFor(actorUID, req.GetSpec())); err != nil {
+	if registration, err = s.systemInfoVolumes.Register(actorUID, actorRef, systemInfoVolumesFor(actorUID, req.GetSpec())); err != nil {
 		return nil, err
 	}
 	if err := s.prepareOCIBundles(ctx, actorUID, actorRef,
@@ -1095,6 +1109,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 
 	// Not crashing the actor, because terminal errors here indicate problems with atelet,
 	// node or the disk itself.
+	s.systemInfoVolumes.Deregister(actorUID)
 	if err := resetActorDirs(actorUID); err != nil {
 		return nil, fmt.Errorf("while resetting actor dirs: %w", err)
 	}
@@ -1159,10 +1174,12 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	// snapshot kind only becomes knowable here.
 	op.kind = restoreSnapshotKind(req, sandboxRec)
 
-	// Undo the Register if the restore fails.
+	var registration *registeredActor
+	// Undo the Register if the restore fails. The errgroup join below happens
+	// before this defer can read registration, so the handoff is synchronized.
 	defer func() {
-		if err != nil {
-			s.systemInfoVolumes.Deregister(actorUID)
+		if err != nil && registration != nil {
+			s.systemInfoVolumes.DeregisterOwned(registration)
 		}
 	}()
 
@@ -1206,7 +1223,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 			prepFailedPhase = ateattr.SnapshotPhaseSandboxAssets
 			return err
 		}
-		if err = s.systemInfoVolumes.Register(actorUID, actorRef, systemInfoVolumesFor(actorUID, req.GetSpec())); err != nil {
+		if registration, err = s.systemInfoVolumes.Register(actorUID, actorRef, systemInfoVolumesFor(actorUID, req.GetSpec())); err != nil {
 			prepFailedPhase = ateattr.SnapshotPhaseOCIUnpack
 			return err
 		}
@@ -1290,40 +1307,42 @@ func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequ
 	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
 	actorUID := req.GetActorUid()
 
-	var assetPaths map[string]string
-	sandboxRec, err := readSandboxRecord(actorUID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read sandbox record during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
-	}
-	paths, err := s.ensureSandboxAssets(ctx, sandboxRec)
-	if err != nil {
-		return nil, fmt.Errorf("failed to ensure sandbox assets during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
-	}
-	assetPaths = paths
+	if req.GetTargetAteomUid() != "" {
+		var assetPaths map[string]string
+		sandboxRec, err := readSandboxRecord(actorUID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read sandbox record during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
+		}
+		paths, err := s.ensureSandboxAssets(ctx, sandboxRec)
+		if err != nil {
+			return nil, fmt.Errorf("failed to ensure sandbox assets during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
+		}
+		assetPaths = paths
 
-	client, err := s.dialAteom(ctx, req.GetTargetAteomUid())
-	if err != nil {
-		return nil, fmt.Errorf("failed to dial ateom for terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
-	}
+		client, err := s.dialAteom(ctx, req.GetTargetAteomUid())
+		if err != nil {
+			return nil, fmt.Errorf("failed to dial ateom for terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
+		}
 
-	spec, err := buildAteomWorkloadSpec(req.GetSpec())
-	if err != nil {
-		return nil, apierror.InvalidArgument("invalid workload spec: %v", err)
-	}
-	if _, err := client.TerminateWorkload(ctx, &ateompb.TerminateWorkloadRequest{
-		Atespace:              req.GetAtespace(),
-		ActorName:             req.GetActorName(),
-		ActorUid:              req.GetActorUid(),
-		ActorTemplateAtespace: req.GetActorTemplateAtespace(),
-		ActorTemplateName:     req.GetActorTemplateName(),
-		RunscPath:             runscPathFor(assetPaths),
-		Spec:                  spec,
-		ActorDirs:             ateletpath.ActorDirs(actorUID),
-	}); err != nil {
-		if status.Code(err) == codes.NotFound {
-			slog.InfoContext(ctx, "workload not found on ateom during terminate", slog.Any("actor", actorRef), slog.String("actorUID", actorUID))
-		} else {
-			return nil, fmt.Errorf("failed calling ateom.TerminateWorkload (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
+		spec, err := buildAteomWorkloadSpec(req.GetSpec())
+		if err != nil {
+			return nil, apierror.InvalidArgument("invalid workload spec: %v", err)
+		}
+		if _, err := client.TerminateWorkload(ctx, &ateompb.TerminateWorkloadRequest{
+			Atespace:              req.GetAtespace(),
+			ActorName:             req.GetActorName(),
+			ActorUid:              req.GetActorUid(),
+			ActorTemplateAtespace: req.GetActorTemplateAtespace(),
+			ActorTemplateName:     req.GetActorTemplateName(),
+			RunscPath:             runscPathFor(assetPaths),
+			Spec:                  spec,
+			ActorDirs:             ateletpath.ActorDirs(actorUID),
+		}); err != nil {
+			if status.Code(err) == codes.NotFound {
+				slog.InfoContext(ctx, "workload not found on ateom during terminate", slog.Any("actor", actorRef), slog.String("actorUID", actorUID))
+			} else {
+				return nil, fmt.Errorf("failed calling ateom.TerminateWorkload (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
+			}
 		}
 	}
 
@@ -1825,19 +1844,25 @@ func removeActorDirs(actorUID string) error {
 // credential bundle at servingBundlePath, requires a client certificate
 // chaining to a CA in clientCAPath.
 func ateletServerTLSConfig(servingBundlePath, clientCAPath string) (*tls.Config, error) {
-	caBytes, err := os.ReadFile(clientCAPath)
-	if err != nil {
-		return nil, fmt.Errorf("read CA bundle %s: %w", clientCAPath, err)
+	loadClientCAs := credbundle.PoolLoader(clientCAPath)
+	if _, err := loadClientCAs(); err != nil {
+		return nil, fmt.Errorf("load CA bundle %s: %w", clientCAPath, err)
 	}
-	clientCAs := x509.NewCertPool()
-	if !clientCAs.AppendCertsFromPEM(caBytes) {
-		return nil, fmt.Errorf("parse CA bundle from %s", clientCAPath)
-	}
+	serverCert := credbundle.Loader(servingBundlePath)
 	return &tls.Config{
-		MinVersion:     tls.VersionTLS13,
-		GetCertificate: credbundle.Loader(servingBundlePath),
-		ClientAuth:     tls.RequireAndVerifyClientCert,
-		ClientCAs:      clientCAs,
+		MinVersion: tls.VersionTLS13,
+		GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) {
+			clientCAs, err := loadClientCAs()
+			if err != nil {
+				return nil, err
+			}
+			return &tls.Config{
+				MinVersion:     tls.VersionTLS13,
+				GetCertificate: serverCert,
+				ClientAuth:     tls.RequireAndVerifyClientCert,
+				ClientCAs:      clientCAs,
+			}, nil
+		},
 	}, nil
 }
 

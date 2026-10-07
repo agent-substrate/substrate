@@ -67,6 +67,13 @@ const (
 	opWalkRAM
 	// opPing is a minimal round-trip through the router.
 	opPing
+	// opDwell keeps the actor awake and idle for a wall-clock duration
+	// without any request: the agent is waiting on something outside the
+	// sandbox (a model response streaming in, a user typing the next
+	// message) and stays resident while it does. Nothing is suspended, so
+	// the time counts toward the step and the actor's resident time, not
+	// toward its CPU.
+	opDwell
 )
 
 func ping() op { return op{kind: opPing} }

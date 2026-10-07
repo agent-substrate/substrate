@@ -437,17 +437,17 @@ var File_objectstoresnapshot_proto protoreflect.FileDescriptor
 
 const file_objectstoresnapshot_proto_rawDesc = "" +
 	"\n" +
-	"\x19objectstoresnapshot.proto\x12\x16objectstoresnapshot.v1\"\x8b\x01\n" +
+	"\x19objectstoresnapshot.proto\x12\x16objectstoresnapshot.v1\"\x90\x01\n" +
 	"\x14FetchSnapshotRequest\x12!\n" +
-	"\fsnapshot_uri\x18\x01 \x01(\tR\vsnapshotUri\x12\x1b\n" +
-	"\tactor_jwt\x18\x02 \x01(\tR\bactorJwt\x12\x1d\n" +
+	"\fsnapshot_uri\x18\x01 \x01(\tR\vsnapshotUri\x12 \n" +
+	"\tactor_jwt\x18\x02 \x01(\tB\x03\x80\x01\x01R\bactorJwt\x12\x1d\n" +
 	"\n" +
 	"write_path\x18\x03 \x01(\tR\twritePath\x12\x14\n" +
 	"\x05files\x18\x04 \x03(\tR\x05files\"\x17\n" +
-	"\x15FetchSnapshotResponse\"\x8c\x01\n" +
+	"\x15FetchSnapshotResponse\"\x91\x01\n" +
 	"\x15UploadSnapshotRequest\x12!\n" +
-	"\fsnapshot_uri\x18\x01 \x01(\tR\vsnapshotUri\x12\x1b\n" +
-	"\tactor_jwt\x18\x02 \x01(\tR\bactorJwt\x12\x1d\n" +
+	"\fsnapshot_uri\x18\x01 \x01(\tR\vsnapshotUri\x12 \n" +
+	"\tactor_jwt\x18\x02 \x01(\tB\x03\x80\x01\x01R\bactorJwt\x12\x1d\n" +
 	"\n" +
 	"local_path\x18\x03 \x01(\tR\tlocalPath\x12\x14\n" +
 	"\x05files\x18\x04 \x03(\tR\x05files\"\x18\n" +

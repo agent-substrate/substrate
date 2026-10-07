@@ -33,6 +33,7 @@ import (
 // data-only: the durable dir survives while the guest cold-boots from
 // template B.
 func TestUpdateTemplateLifecycle(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		onCommit ateapipb.SnapshotContentScope

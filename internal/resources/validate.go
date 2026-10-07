@@ -20,6 +20,7 @@ import (
 	"net"
 	"net/netip"
 	"net/url"
+	"os"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -131,6 +132,31 @@ func validateAbsDir(dir string, fldPath *field.Path) field.ErrorList {
 	}
 	if !filepath.IsAbs(dir) || filepath.Clean(dir) != dir {
 		return field.ErrorList{field.Invalid(fldPath, dir, "must be an absolute, clean path")}
+	}
+	return nil
+}
+
+// ValidateRuntimeAssetPath ensures p is a regular file under root, with no symlinks
+// ateom runs these as root, so they must be assets atelet fetched into root
+func ValidateRuntimeAssetPath(root, p string, fldPath *field.Path) field.ErrorList {
+	if p == "" {
+		return field.ErrorList{field.Required(fldPath, "")}
+	}
+	if !filepath.IsAbs(p) || filepath.Clean(p) != p {
+		return field.ErrorList{field.Invalid(fldPath, p, "must be an absolute, clean path")}
+	}
+	if rel, err := filepath.Rel(root, p); err != nil || rel == "." || !filepath.IsLocal(rel) {
+		return field.ErrorList{field.Invalid(fldPath, p, fmt.Sprintf("must be inside %s", root))}
+	}
+	resolved, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		return field.ErrorList{field.Invalid(fldPath, p, err.Error())}
+	}
+	if resolved != p {
+		return field.ErrorList{field.Invalid(fldPath, p, "must not traverse a symlink")}
+	}
+	if fi, err := os.Stat(p); err != nil || !fi.Mode().IsRegular() {
+		return field.ErrorList{field.Invalid(fldPath, p, "must be a regular file")}
 	}
 	return nil
 }

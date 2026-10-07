@@ -962,16 +962,9 @@ func (x *XdsServer) buildConnectTerminateHCM(statPrefix string) *anypb.Any {
 		StatPrefix:        statPrefix,
 		GenerateRequestId: &wrapperspb.BoolValue{Value: true},
 		Tracing:           x.buildTracing(),
-		// TODO: Envoy's default access log format is not very useful for CONNECT requests.
+		// TODO: this format is not very useful for CONNECT requests.
 		// Need to customize it to surface useful information
-		AccessLog: []*accesslogv3.AccessLog{
-			{
-				Name: "envoy.access_loggers.stdout",
-				ConfigType: &accesslogv3.AccessLog_TypedConfig{
-					TypedConfig: newAny(&streamaccesslogv3.StdoutAccessLog{}),
-				},
-			},
-		},
+		AccessLog: stdoutAccessLog(),
 		RouteSpecifier: &hcmv3.HttpConnectionManager_RouteConfig{
 			RouteConfig: buildConnectRoutes(),
 		},
@@ -1083,8 +1076,6 @@ func (x *XdsServer) buildHcm(statPrefix string, captureActorRouting bool) *anypb
 
 	routerAny := newAny(&routerv3.Router{})
 
-	accessLogConfig := newAny(&streamaccesslogv3.StdoutAccessLog{})
-
 	httpFilters := []*hcmv3.HttpFilter{}
 	if captureActorRouting {
 		httpFilters = append(httpFilters, actorRoutingFilterStateFilter(false))
@@ -1110,15 +1101,8 @@ func (x *XdsServer) buildHcm(statPrefix string, captureActorRouting bool) *anypb
 		UpgradeConfigs: []*hcmv3.HttpConnectionManager_UpgradeConfig{
 			{UpgradeType: "websocket"},
 		},
-		Tracing: x.buildTracing(),
-		AccessLog: []*accesslogv3.AccessLog{
-			{
-				Name: "envoy.access_loggers.stdout",
-				ConfigType: &accesslogv3.AccessLog_TypedConfig{
-					TypedConfig: accessLogConfig,
-				},
-			},
-		},
+		Tracing:     x.buildTracing(),
+		AccessLog:   stdoutAccessLog(),
 		HttpFilters: httpFilters,
 		RouteSpecifier: &hcmv3.HttpConnectionManager_Rds{
 			Rds: &hcmv3.Rds{
@@ -1425,6 +1409,38 @@ func (x *XdsServer) buildUpstreamTrustSecret() *tlsv3.Secret {
 				WatchedDirectory: &corev3.WatchedDirectory{
 					Path: filepath.Dir(x.upstreamTrustBundlePath),
 				},
+			},
+		},
+	}
+}
+
+// accessLogFormat is Envoy's default access log format with the request
+// path logged without its query string. Actor traffic can carry credentials
+// in the query (API keys, signed URL tokens, OAuth codes), and these lines
+// land in the cluster log backend.
+const accessLogFormat = `[%START_TIME%] "%REQ(:METHOD)% %PATH(NQ:ORIG_OR_PATH)% %PROTOCOL%" ` +
+	`%RESPONSE_CODE% %RESPONSE_FLAGS% %BYTES_RECEIVED% %BYTES_SENT% %DURATION% ` +
+	`%RESP(X-ENVOY-UPSTREAM-SERVICE-TIME)% "%REQ(X-FORWARDED-FOR)%" "%REQ(USER-AGENT)%" ` +
+	`"%REQ(X-REQUEST-ID)%" "%REQ(:AUTHORITY)%" "%UPSTREAM_HOST%"` + "\n"
+
+// stdoutAccessLog returns the access log configuration shared by the router's
+// HTTP connection managers.
+func stdoutAccessLog() []*accesslogv3.AccessLog {
+	return []*accesslogv3.AccessLog{
+		{
+			Name: "envoy.access_loggers.stdout",
+			ConfigType: &accesslogv3.AccessLog_TypedConfig{
+				TypedConfig: newAny(&streamaccesslogv3.StdoutAccessLog{
+					AccessLogFormat: &streamaccesslogv3.StdoutAccessLog_LogFormat{
+						LogFormat: &corev3.SubstitutionFormatString{
+							Format: &corev3.SubstitutionFormatString_TextFormatSource{
+								TextFormatSource: &corev3.DataSource{
+									Specifier: &corev3.DataSource_InlineString{InlineString: accessLogFormat},
+								},
+							},
+						},
+					},
+				}),
 			},
 		},
 	}

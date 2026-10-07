@@ -46,14 +46,13 @@ type Pool struct {
 type UsageEmitter struct {
 	pool   Pool
 	events *actorevent.Emitter
-	// flush pushes queued OTLP records out after a final record; nil when the
-	// OTLP copy is off.
+	// flush pushes queued OTLP records out after a final record; nil when OTLP
+	// is off.
 	flush func(context.Context) error
 }
 
-// NewUsageEmitter writes the records' stdout copy through stdout and their OTLP
-// copy through lp, the provider InitLogging returned; nil lp means the OTLP
-// copy is off.
+// NewUsageEmitter writes the records over OTLP through lp, the provider
+// InitLogging returned, or through stdout when lp is nil; with console, both.
 func NewUsageEmitter(lp *sdklog.LoggerProvider, stdout slog.Handler, pool Pool) *UsageEmitter {
 	if lp == nil {
 		return &UsageEmitter{pool: pool, events: actorevent.NewEmitterTo(noop.NewLoggerProvider(), stdout)}
@@ -149,7 +148,7 @@ func StatsSourceLabel(s ateompb.StatsSource) string {
 // hosted actor.
 const stdoutQueue = 4096
 
-// NewStdoutHandler writes the stdout copy of the usage records to w in the
+// NewStdoutHandler writes the stdout form of the usage records to w in the
 // ateom's JSON format, at a fixed level so --log-level does not silence it, and
 // off the caller's goroutine.
 func NewStdoutHandler(w io.Writer) *actorevent.AsyncHandler {

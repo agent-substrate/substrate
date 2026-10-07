@@ -533,8 +533,8 @@ func TestMutualTLSClientAuthentication(t *testing.T) {
 
 // TestServeNegotiatesH2 checks that the ingress server negotiates h2 with a
 // client that offers it, and HTTP/1.1 with one that does not. The router's
-// HTTP/2 pool depends on the h2 side, which holds only because ServeTLS
-// enables HTTP/2 when tlsConfig.NextProtos is empty — this pins that.
+// HTTP/2 pool depends on the h2 side, which holds because the server offers
+// both protocols in NextProtos — this pins that.
 func TestServeNegotiatesH2(t *testing.T) {
 	dir := t.TempDir()
 	ca := newTestCA(t)
@@ -840,6 +840,54 @@ func writeCredentialBundle(t *testing.T, path string, cert tls.Certificate) {
 	bundle = append(bundle, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})...)
 	if err := os.WriteFile(path, bundle, 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestMutualTLSClientAuthenticationReloadsTrustBundle verifies that a client
+// certificate chaining to a CA added to the trust bundle after the server
+// started is accepted on the next handshake, without a restart.
+func TestMutualTLSClientAuthenticationReloadsTrustBundle(t *testing.T) {
+	dir := t.TempDir()
+	ca := newTestCA(t)
+	serverCert := ca.issue(t, "", []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth})
+	bundlePath := filepath.Join(dir, "server.pem")
+	trustPath := filepath.Join(dir, "trust.pem")
+	writeCredentialBundle(t, bundlePath, serverCert)
+	if err := os.WriteFile(trustPath, ca.certPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	upstream, err := url.Parse("http://actor.internal:80")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := NewServer(Config{
+		CredentialBundlePath: bundlePath,
+		TrustBundlePath:      trustPath,
+		AllowedClientID:      "spiffe://cluster.local/ns/ate-system/sa/atenet-router",
+		Upstream:             upstream,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rotatedCA := newTestCA(t)
+	rotatedClientCert := rotatedCA.issue(t, "spiffe://cluster.local/ns/ate-system/sa/atenet-router", []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth})
+
+	clientConfig := &tls.Config{
+		MinVersion:         tls.VersionTLS12,
+		InsecureSkipVerify: true, // Test only the server's client authentication here.
+		Certificates:       []tls.Certificate{rotatedClientCert},
+	}
+	if serverErr, clientErr := tlsHandshake(s.tlsConfig, clientConfig); serverErr == nil && clientErr == nil {
+		t.Fatalf("handshake with a not-yet-trusted CA succeeded, want it rejected before the rotation")
+	}
+
+	if err := os.WriteFile(trustPath, append(ca.certPEM, rotatedCA.certPEM...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if serverErr, clientErr := tlsHandshake(s.tlsConfig, clientConfig); serverErr != nil || clientErr != nil {
+		t.Fatalf("server error = %v, client error = %v, want the rotated CA accepted", serverErr, clientErr)
 	}
 }
 

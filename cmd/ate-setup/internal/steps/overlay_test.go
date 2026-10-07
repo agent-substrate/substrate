@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -25,6 +26,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	kyaml "sigs.k8s.io/kustomize/kyaml/yaml"
 	"sigs.k8s.io/yaml"
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
@@ -557,6 +559,45 @@ func TestAgentgatewayEgressOverlay(t *testing.T) {
 	if !strings.Contains(string(built), SecretEgressMITMCAPool) {
 		t.Errorf("the MITM overlay does not mount the %s Secret", SecretEgressMITMCAPool)
 	}
+	foundConfig := false
+	for _, doc := range strings.Split(string(built), "\n---\n") {
+		var cm corev1.ConfigMap
+		if err := yaml.Unmarshal([]byte(doc), &cm); err != nil || cm.Name != "atenet-egress-agentgateway-substrate-config" {
+			continue
+		}
+		foundConfig = true
+		var gateway struct {
+			Binds []struct {
+				Mode      string `json:"mode"`
+				Protocol  string `json:"protocol"`
+				Listeners []struct {
+					Protocol string `json:"protocol"`
+				} `json:"listeners"`
+			} `json:"binds"`
+		}
+		if err := yaml.Unmarshal([]byte(cm.Data["config.yaml"]), &gateway); err != nil {
+			t.Fatalf("parsing agentgateway config: %v", err)
+		}
+		var protocols []string
+		for _, bind := range gateway.Binds {
+			if bind.Mode != "internal" {
+				continue
+			}
+			if bind.Protocol != "AUTO" {
+				t.Errorf("internal bind protocol = %q, want AUTO", bind.Protocol)
+			}
+			for _, listener := range bind.Listeners {
+				protocols = append(protocols, listener.Protocol)
+			}
+		}
+		slices.Sort(protocols)
+		if !slices.Equal(protocols, []string{"HTTP", "HTTPS", "TLS"}) {
+			t.Errorf("egress listeners = %v, want HTTP, HTTPS interception, and TLS passthrough", protocols)
+		}
+	}
+	if !foundConfig {
+		t.Fatal("agentgateway egress ConfigMap is missing")
+	}
 
 	if err := e.EnsureEgressMITMCAPoolSecret(t.Context()); err != nil {
 		t.Fatalf("EnsureEgressMITMCAPoolSecret() error = %v", err)
@@ -567,6 +608,94 @@ func TestAgentgatewayEgressOverlay(t *testing.T) {
 	}
 	if !exists {
 		t.Errorf("no %s Secret was generated for the agentgateway dataplane", SecretEgressMITMCAPool)
+	}
+}
+
+func TestRenderAgentgatewayCredentialProvider(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		provider config.CredentialProvider
+	}{
+		{name: "disabled"},
+		{name: "kubernetes", provider: config.CredentialProvider{Name: config.K8sCredentialProviderName, Address: config.K8sCredentialProviderAddress}},
+		{name: "custom", provider: config.CredentialProvider{Name: "vault.example.com", Address: "vault.ate-system.svc:8200"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			src := images.Source{Repo: "example.com/substrate", Tag: "v1.2.3"}
+			e := &Env{
+				Cfg: &config.Config{Root: repoRoot(t), Router: config.RouterAgentgateway, Images: src},
+				resolver: images.NewPrebuilt(src, func(context.Context, string) (string, error) {
+					return "sha256:" + strings.Repeat("2", 64), nil
+				}),
+			}
+			built, err := e.renderAtenetEgressManifest(t.Context(), tc.provider)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(built), "#ATE_AGENTGATEWAY_CREDENTIAL_PROVIDERS") {
+				t.Fatal("unresolved credential provider marker")
+			}
+			found := false
+			for _, doc := range strings.Split(string(built), "\n---\n") {
+				var cm corev1.ConfigMap
+				if err := yaml.Unmarshal([]byte(doc), &cm); err != nil || cm.Name != "atenet-egress-agentgateway-substrate-config" {
+					continue
+				}
+				found = true
+				resolved, err := yaml.YAMLToJSON([]byte(cm.Data["config.yaml"]))
+				if err != nil {
+					t.Fatal(err)
+				}
+				gateway, err := kyaml.Parse(string(resolved))
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, protocol := range []string{"HTTP", "HTTPS"} {
+					policy, err := gateway.Pipe(kyaml.Lookup("binds", "[mode=internal]", "listeners", "[protocol="+protocol+"]", "routes", "0", "policies", "substrateEgress"))
+					if err != nil || policy == nil {
+						t.Fatalf("%s egress policy missing: %v", protocol, err)
+					}
+					var got struct {
+						Providers []map[string]any `yaml:"credentialProviders"`
+					}
+					if err := policy.YNode().Decode(&got); err != nil {
+						t.Fatal(err)
+					}
+					if !tc.provider.Enabled() {
+						if len(got.Providers) != 0 {
+							t.Errorf("%s unexpectedly has credential providers: %v", protocol, got.Providers)
+						}
+						continue
+					}
+					want := []map[string]any{{
+						"uriAuthority": tc.provider.Name,
+						"target": map[string]any{
+							"host": tc.provider.Address,
+							"policies": map[string]any{"backendTLS": map[string]any{
+								"hostname": tc.provider.ServerName(),
+								"cert":     "/run/podidentity.podcert.ate.dev/credential-bundle.pem",
+								"key":      "/run/podidentity.podcert.ate.dev/credential-bundle.pem",
+								"root":     "/run/servicedns-ca/trust-bundle.pem",
+							}},
+						},
+					}}
+					if !reflect.DeepEqual(got.Providers, want) {
+						t.Errorf("credential providers = %v, want %v", got.Providers, want)
+					}
+				}
+			}
+			if !found {
+				t.Fatal("agentgateway egress ConfigMap is missing")
+			}
+		})
+	}
+}
+
+func TestPatchAgentgatewayCredentialProviderRequiresOneMarker(t *testing.T) {
+	for _, raw := range []string{"", "#ATE_AGENTGATEWAY_CREDENTIAL_PROVIDERS\n#ATE_AGENTGATEWAY_CREDENTIAL_PROVIDERS\n"} {
+		if _, err := patchAgentgatewayEgressInject([]byte(raw), config.CredentialProvider{}); err == nil {
+			t.Errorf("accepted a manifest without exactly one marker: %q", raw)
+		}
 	}
 }
 

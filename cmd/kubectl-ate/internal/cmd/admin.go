@@ -34,6 +34,7 @@ var (
 	makeCaPoolIDFlag        string
 	makeCaPoolKeyTypeFlag   string
 	makeCaPoolValidityFlag  time.Duration
+	makeJwtPoolAlgFlag      string
 	makeJwtPoolKeyIDFlag    string
 )
 
@@ -134,29 +135,9 @@ var makeJwtPoolCmd = &cobra.Command{
 			return fmt.Errorf("while creating Kubernetes client: %w", err)
 		}
 
-		authority, err := localjwtauthority.GenerateECDSAP256Authority(makeJwtPoolKeyIDFlag)
+		secret, keyID, err := newJWTPoolSecret(poolSecretNamespaceFlag, poolSecretNameFlag, makeJwtPoolAlgFlag, makeJwtPoolKeyIDFlag)
 		if err != nil {
-			return fmt.Errorf("while generating JWT authority: %w", err)
-		}
-
-		pool := &localjwtauthority.ConcretePool{
-			Authorities:      []*localjwtauthority.Authority{authority},
-			ActiveForSigning: makeJwtPoolKeyIDFlag,
-		}
-
-		poolBytes, err := localjwtauthority.Marshal(pool)
-		if err != nil {
-			return fmt.Errorf("while marshaling pool: %w", err)
-		}
-
-		secret := &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{
-				Namespace: poolSecretNamespaceFlag,
-				Name:      poolSecretNameFlag,
-			},
-			Data: map[string][]byte{
-				"pool": poolBytes,
-			},
+			return err
 		}
 
 		_, err = kc.CoreV1().Secrets(poolSecretNamespaceFlag).Create(ctx, secret, metav1.CreateOptions{})
@@ -164,9 +145,28 @@ var makeJwtPoolCmd = &cobra.Command{
 			return fmt.Errorf("while uploading pool state to secret: %w", err)
 		}
 
-		fmt.Printf("Successfully created JWT authority pool secret %s/%s\n", poolSecretNamespaceFlag, poolSecretNameFlag)
+		fmt.Printf("Successfully created JWT authority pool secret %s/%s with %s key %s\n", poolSecretNamespaceFlag, poolSecretNameFlag, makeJwtPoolAlgFlag, keyID)
 		return nil
 	},
+}
+
+// newJWTPoolSecret builds a Secret holding a pool with one active authority,
+// and returns the authority's key ID.
+func newJWTPoolSecret(namespace, name, algorithm, keyID string) (*corev1.Secret, string, error) {
+	poolBytes, id, err := localjwtauthority.GeneratePool(algorithm, keyID)
+	if err != nil {
+		return nil, "", fmt.Errorf("while generating JWT authority pool: %w", err)
+	}
+
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: namespace,
+			Name:      name,
+		},
+		Data: map[string][]byte{
+			"pool": poolBytes,
+		},
+	}, id, nil
 }
 
 func init() {
@@ -180,7 +180,8 @@ func init() {
 	_ = makeCaPoolCmd.MarkFlagRequired("name")
 	adminCmd.AddCommand(makeCaPoolCmd)
 
-	makeJwtPoolCmd.Flags().StringVar(&makeJwtPoolKeyIDFlag, "key-id", "1", "The ID of the initial JWT signing key in the pool")
+	makeJwtPoolCmd.Flags().StringVar(&makeJwtPoolAlgFlag, "alg", "ES256", "Signing algorithm of the initial key.  One of [ES256, RS256]")
+	makeJwtPoolCmd.Flags().StringVar(&makeJwtPoolKeyIDFlag, "key-id", "", "The ID of the initial JWT signing key in the pool.  Defaults to the key's RFC 7638 thumbprint")
 	makeJwtPoolCmd.Flags().StringVar(&poolSecretNamespaceFlag, "secret-namespace", "default", "Create the secret in this namespace")
 	makeJwtPoolCmd.Flags().StringVar(&poolSecretNameFlag, "name", "", "Create the secret with this name")
 	_ = makeJwtPoolCmd.MarkFlagRequired("name")
