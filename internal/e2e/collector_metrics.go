@@ -46,6 +46,9 @@ const (
 	// EgressExtProcPolicyMITMStatPrefix is the Envoy ext_proc filter stat_prefix
 	// on the inner MITM HTTP leg in atenet-egress.
 	EgressExtProcPolicyMITMStatPrefix = "egress_policy_mitm"
+	// EgressExtProcPolicyClearTextStatPrefix is the Envoy ext_proc filter stat_prefix
+	// on the inner clear text HTTP leg in atenet-egress.
+	EgressExtProcPolicyClearTextStatPrefix = "egress_policy_cleartext"
 
 	// EgressConnectCacheHitCounter is the Envoy dynamic-module counter name for
 	// CONNECT policy cache hits in atenet-egress.

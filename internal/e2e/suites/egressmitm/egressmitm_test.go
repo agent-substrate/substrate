@@ -201,19 +201,22 @@ func TestActorEgressMITMTrust(t *testing.T) {
 	}
 	afterExtProc := e2e.EgressExtProcStreamCounts(afterScrape)
 
-	// Each of the 6 fetches opens a CONNECT tunnel (egress_identity), while
-	// only the positive MITM fetch completes the inner TLS handshake and sends
-	// an HTTP request through the MITM chain (egress_policy_mitm).
-	// Since caching is enabled only the first CONNECT request will result in ext_proc call.
+	// All connections go either to port 80 or port 443. Since policy is cached
+	// per actor per destination port, expect 2 ext_proc callouts at the CONNECT
+	// filter chain, 2 at the MITM filter chain and 1 in clear text chain.
 	const (
-		wantIdentityCalls   = 1
-		wantMITMPolicyCalls = 1
+		wantIdentityCalls        = 2
+		wantMITMPolicyCalls      = 2
+		wantClearTextPolicyCalls = 1
 	)
 	if got := afterExtProc[e2e.EgressExtProcIdentityStatPrefix] - beforeExtProc[e2e.EgressExtProcIdentityStatPrefix]; got != wantIdentityCalls {
 		t.Errorf("egress ext_proc %s streams_started delta = %d, want %d", e2e.EgressExtProcIdentityStatPrefix, got, wantIdentityCalls)
 	}
 	if got := afterExtProc[e2e.EgressExtProcPolicyMITMStatPrefix] - beforeExtProc[e2e.EgressExtProcPolicyMITMStatPrefix]; got != wantMITMPolicyCalls {
 		t.Errorf("egress ext_proc %s streams_started delta = %d, want %d", e2e.EgressExtProcPolicyMITMStatPrefix, got, wantMITMPolicyCalls)
+	}
+	if got := afterExtProc[e2e.EgressExtProcPolicyClearTextStatPrefix] - beforeExtProc[e2e.EgressExtProcPolicyClearTextStatPrefix]; got != wantClearTextPolicyCalls {
+		t.Errorf("egress ext_proc %s streams_started delta = %d, want %d", e2e.EgressExtProcPolicyClearTextStatPrefix, got, wantClearTextPolicyCalls)
 	}
 }
 
