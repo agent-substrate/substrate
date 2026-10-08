@@ -62,6 +62,17 @@ func (s *AteomService) admitActor(attribution resources.ActorAttribution) (*host
 	return hosted, stale, nil
 }
 
+// endPreviousActivation writes the final record of the activation a re-host is
+// about to replace, if the actor is still hosted, as after a checkpoint that
+// failed before its teardown or on a retried Run or Restore. Ending it also
+// stops a late reading of it from writing.
+func (s *AteomService) endPreviousActivation(ctx context.Context, uid string) {
+	if old := s.lookupActor(uid); old != nil {
+		s.readFinal(ctx, old)
+		s.recordFinal(ctx, old)
+	}
+}
+
 // hostActor sets up the actor's network, replacing any stale one.
 func (s *AteomService) hostActor(ctx context.Context, attribution resources.ActorAttribution, actorDirs *ateompb.ActorDirs) (*hostedActor, error) {
 	uid := attribution.UID
@@ -69,6 +80,7 @@ func (s *AteomService) hostActor(ctx context.Context, attribution resources.Acto
 		return nil, fmt.Errorf("actor UID is required")
 	}
 
+	s.endPreviousActivation(ctx, uid)
 	hosted, stale, err := s.admitActor(attribution)
 	if err != nil {
 		return nil, err

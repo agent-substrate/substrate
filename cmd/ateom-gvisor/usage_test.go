@@ -150,6 +150,30 @@ func TestGracefulShutdownWritesFinal(t *testing.T) {
 	}
 }
 
+// TestEndPreviousActivation pins that a re-host writes the final record of the
+// activation it replaces, from a fresh reading, and nothing for an actor that
+// is not hosted.
+func TestEndPreviousActivation(t *testing.T) {
+	s := newStatsService(t, healthyCgroup)
+	rec := withUsageRecorder(s)
+	old := hostWithEpoch(s, time.Now(), true)
+
+	s.endPreviousActivation(context.Background(), "uid-other")
+	if got := rec.Kinds(); len(got) != 0 {
+		t.Fatalf("records for an actor not hosted = %v, want none", got)
+	}
+	s.endPreviousActivation(context.Background(), testActor.UID)
+	if got := rec.Kinds(); len(got) != 1 || got[0] != ateattr.StatsKindFinal {
+		t.Fatalf("records = %v, want one final", got)
+	}
+	if got := rec.Sources(); got[0] != ateattr.StatsSourceCgroup {
+		t.Errorf("final record source = %q, want measured", got[0])
+	}
+	if old.usage.Sampling() {
+		t.Error("the replaced activation is still sampling")
+	}
+}
+
 // TestRecordFinalAfterSandboxGone pins that a final read that finds the cgroup
 // gone falls back to the latest sample, and to a pending record when there is
 // none.
