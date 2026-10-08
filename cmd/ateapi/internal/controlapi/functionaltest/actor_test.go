@@ -3297,12 +3297,25 @@ func TestResumeActor_AteletFailureCrashesActor(t *testing.T) {
 	}
 }
 
-// A transport failure leaves the actor RESUMING on its worker, preserves the
-// error code at the gRPC boundary, and lets the next resume finish.
+// A transient atelet failure, or a caller whose deadline passes during the
+// restore, leaves the actor RESUMING on its worker, and the next resume finishes.
+// Only Unavailable and the caller's own deadline reach the caller with their
+// code. Atelet's own Canceled or DeadlineExceeded reach it as Internal.
 func TestResumeActor_AteletTransportErrorLeavesActorResuming(t *testing.T) {
-	for _, code := range []codes.Code{codes.Unavailable, codes.Canceled, codes.DeadlineExceeded} {
-		t.Run(code.String(), func(t *testing.T) {
-			ns := namespaceForTest("ns-resume-atelet-" + strings.ToLower(code.String()))
+	for _, tt := range []struct {
+		name     string
+		fail     error
+		delay    time.Duration
+		deadline time.Duration
+		wantCode codes.Code
+	}{
+		{name: "Unavailable", fail: status.Error(codes.Unavailable, "restore reply lost"), wantCode: codes.Unavailable},
+		{name: "atelet Canceled", fail: status.Error(codes.Canceled, "restore reply lost"), wantCode: codes.Internal},
+		{name: "atelet DeadlineExceeded", fail: status.Error(codes.DeadlineExceeded, "restore reply lost"), wantCode: codes.Internal},
+		{name: "caller deadline", delay: time.Second, deadline: 200 * time.Millisecond, wantCode: codes.DeadlineExceeded},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ns := namespaceForTest("ns-resume-atelet-" + strings.ReplaceAll(strings.ToLower(tt.name), " ", "-"))
 			tc := setupTest(t, ns)
 			defer tc.cleanup()
 
@@ -3319,10 +3332,17 @@ func TestResumeActor_AteletTransportErrorLeavesActorResuming(t *testing.T) {
 				t.Fatalf("CreateActor failed: %v", err)
 			}
 
-			tc.fakeAtelet.FailRestore = status.Error(code, "restore reply lost")
-			_, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{Actor: ref})
-			if got := status.Code(err); got != code {
-				t.Fatalf("ResumeActor status code = %v, want %v (err: %v)", got, code, err)
+			tc.fakeAtelet.FailRestore = tt.fail
+			tc.fakeAtelet.RestoreDelay = tt.delay
+			ctx := context.Background()
+			if tt.deadline > 0 {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, tt.deadline)
+				defer cancel()
+			}
+			_, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: ref})
+			if got := status.Code(err); got != tt.wantCode {
+				t.Fatalf("ResumeActor status code = %v, want %v (err: %v)", got, tt.wantCode, err)
 			}
 
 			actor, err := tc.persistence.GetActor(context.Background(), actorRef)
@@ -3330,16 +3350,20 @@ func TestResumeActor_AteletTransportErrorLeavesActorResuming(t *testing.T) {
 				t.Fatalf("failed to get actor from store: %v", err)
 			}
 			if got := actor.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_RESUMING {
-				t.Fatalf("state after %v = %v, want RESUMING", code, got)
+				t.Fatalf("state after %s = %v, want RESUMING", tt.name, got)
 			}
 			if crash := actor.GetStatus().GetCrash(); crash != nil {
-				t.Errorf("crash recorded after %v: %v", code, crash)
+				t.Errorf("crash recorded after %s: %v", tt.name, crash)
 			}
 			if got := actor.GetStatus().GetWorkerAssignment().GetWorker().GetName(); got != podUID {
 				t.Errorf("assigned worker = %q, want %q kept for the retry", got, podUID)
 			}
 
+			// The fake still holds its lock while a delayed restore sleeps.
+			tc.fakeAtelet.Lock.Lock()
 			tc.fakeAtelet.FailRestore = nil
+			tc.fakeAtelet.RestoreDelay = 0
+			tc.fakeAtelet.Lock.Unlock()
 			if _, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{Actor: ref}); err != nil {
 				t.Fatalf("retried ResumeActor failed: %v", err)
 			}

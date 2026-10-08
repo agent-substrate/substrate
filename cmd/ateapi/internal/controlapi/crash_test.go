@@ -352,6 +352,8 @@ func TestAteletCrashMessage(t *testing.T) {
 func TestHandleAteletError(t *testing.T) {
 	ended, cancel := context.WithCancel(context.Background())
 	cancel()
+	expired, cancelExpired := context.WithDeadline(context.Background(), time.Unix(0, 0))
+	defer cancelExpired()
 
 	tests := []struct {
 		name string
@@ -377,7 +379,7 @@ func TestHandleAteletError(t *testing.T) {
 			ctx:       context.Background(),
 			rpc:       "Restore",
 			err:       status.Error(codes.Canceled, "grpc: the client connection is closing"),
-			wantCode:  codes.Canceled,
+			wantCode:  codes.Internal,
 			wantState: ateapipb.ActorState_ACTOR_STATE_RUNNING,
 		},
 		{
@@ -385,7 +387,7 @@ func TestHandleAteletError(t *testing.T) {
 			ctx:       context.Background(),
 			rpc:       "Restore",
 			err:       status.Error(codes.DeadlineExceeded, "context deadline exceeded"),
-			wantCode:  codes.DeadlineExceeded,
+			wantCode:  codes.Internal,
 			wantState: ateapipb.ActorState_ACTOR_STATE_RUNNING,
 		},
 		{
@@ -397,16 +399,16 @@ func TestHandleAteletError(t *testing.T) {
 			wantState: ateapipb.ActorState_ACTOR_STATE_RUNNING,
 		},
 		{
-			name:      "wrapped Canceled leaves the actor as it was",
-			ctx:       context.Background(),
+			name:      "cancelled caller gets Canceled and leaves the actor as it was",
+			ctx:       ended,
 			rpc:       "Restore",
 			err:       fmt.Errorf("while restoring actor: %w", status.Error(codes.Canceled, "connection closing")),
 			wantCode:  codes.Canceled,
 			wantState: ateapipb.ActorState_ACTOR_STATE_RUNNING,
 		},
 		{
-			name:      "wrapped DeadlineExceeded leaves the actor as it was",
-			ctx:       context.Background(),
+			name:      "expired caller deadline gets DeadlineExceeded and leaves the actor as it was",
+			ctx:       expired,
 			rpc:       "Restore",
 			err:       fmt.Errorf("while restoring actor: %w", status.Error(codes.DeadlineExceeded, "restore reply timed out")),
 			wantCode:  codes.DeadlineExceeded,
@@ -417,7 +419,7 @@ func TestHandleAteletError(t *testing.T) {
 			ctx:       ended,
 			rpc:       "Restore",
 			err:       status.Error(codes.Internal, "context canceled"),
-			wantCode:  codes.Internal,
+			wantCode:  codes.Canceled,
 			wantState: ateapipb.ActorState_ACTOR_STATE_RUNNING,
 		},
 		{
