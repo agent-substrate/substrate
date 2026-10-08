@@ -102,6 +102,8 @@ func valueFor(key string) string {
 		return "ES256"
 	case "actorJWT.issuer":
 		return "https://idp.example.com"
+	case "ateapi.logLevel":
+		return "debug"
 	case "csi.setup":
 		return "none"
 	case "preview":
