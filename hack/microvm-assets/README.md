@@ -48,5 +48,36 @@ it as a device, which is what places micro-VM workers there.
    (checkpoint), resume on a different worker pod, and confirm the count continues — proving the
    guest-memory snapshot round-tripped across pods.
 
+## Optional: slim guest image (`SLIM_ROOTFS=true`)
+
+Off by default. With `SLIM_ROOTFS=true`, `assemble.sh` rebuilds the downloaded `rootfs.img`
+into a much smaller guest image:
+
+- `slim-agent.sh` recompiles `kata-agent` (same `KATA_VER`) without the policy engine and
+  initdata support, which ateom never uses, and patches it into the image.
+- `slim-rootfs.sh` repacks `rootfs.img` as a journal-less ext4 image holding only that agent
+  (PID 1), the tools `DebugConsoleDump` runs, and their shared libraries.
+
+On amd64 with kata 4.1.0 this takes `kata-agent` from 30.8 MB to 15.5 MB and `rootfs.img`
+from 256 MiB to 32 MiB.
+
+```sh
+SLIM_ROOTFS=true hack/install-microvm-deps.sh --install   # assemble + stage + apply
+SLIM_ROOTFS=true ARCH=amd64 hack/microvm-assets/assemble.sh   # assemble only
+```
+
+- Needs Docker (`slim-rootfs.sh` runs `--privileged`) on a host of the target arch, and a
+  few extra minutes for the agent build.
+- The slim guest has no systemd or chrony, so it relies on Cloud Hypervisor >= v53 (the
+  default `CH_VER`) to advance the guest clock on restore.
+- `assemble.sh` only slims an upstream image whose sha256 is a `kata-image` pin in the
+  manifest, because `slim-rootfs.sh` runs that image's binaries as root. The slim
+  `rootfs.img` is then the one asset without a committed pin: `assemble.sh` saves the
+  upstream sha256 to `$OUT/.upstream-rootfs.sha256`, and `install-microvm-deps.sh` checks
+  it again and swaps in the slim image's sha256 when it applies the `SandboxConfig`. Use
+  `install-microvm-deps.sh` for this path.
+- The asset stamp covers the flag and both scripts, so toggling `SLIM_ROOTFS` or editing
+  either script re-assembles a cached `$OUT`.
+
 ## Notes
 - `assets` is single-arch (unlike runsc's amd64/arm64): stage assets matching the node arch.

@@ -30,6 +30,11 @@
 # hack/microvm-assets/assemble.sh; atelet selects the block matching the node's
 # architecture, and each cluster's bucket holds that arch's binaries at these
 # paths (staged by hack/install-microvm-deps.sh --install).
+#
+# kata-image always pins the upstream kata image. With SLIM_ROOTFS=true,
+# install-microvm-deps.sh checks that the slimmed rootfs.img was built from that
+# image and swaps the pin for the slimmed image's sha256 at apply time, so never
+# paste a locally slimmed sha here.
 
 apiVersion: ate.dev/v1alpha1
 kind: SandboxConfig

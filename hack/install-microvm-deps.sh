@@ -25,7 +25,9 @@
 # has them), stages the assets under kata-assets/ to the cluster's object
 # store bucket (rustfs on kind, GCS on GKE), and applies the cluster-wide
 # `microvm` SandboxConfig referencing those assets. Every asset sha256 is
-# pinned in the manifest, so the apply only substitutes the bucket name.
+# pinned in the manifest, so the apply only substitutes the bucket name --
+# except with SLIM_ROOTFS=true, where rootfs.img is rebuilt locally and its
+# sha256 replaces the kata-image pin (checked before step 2).
 #
 # ActorTemplates must reference the SandboxConfig explicitly via
 # sandboxConfig.configName: microvm. This avoids a dirty teardown silently
@@ -46,6 +48,8 @@
 #   OUT              asset dir (default: $PWD/bin/microvm-assets/$ARCH, gitignored).
 #   ATE_INSTALL_KIND "true" for the kind path (stage assets to rustfs); default
 #                    false uploads assets to GCS.
+#   SLIM_ROOTFS      "true" to assemble a slimmed rootfs.img (see
+#                    hack/microvm-assets/assemble.sh); default false.
 
 set -o errexit -o nounset -o pipefail
 
@@ -61,6 +65,7 @@ fi
 BUCKET_NAME="${BUCKET_NAME:-ate-snapshots}"
 KUBECTL_CONTEXT="${KUBECTL_CONTEXT:-}"
 ATE_INSTALL_KIND="${ATE_INSTALL_KIND:-false}"
+SLIM_ROOTFS="${SLIM_ROOTFS:-false}"
 
 usage() {
   cat <<EOF
@@ -154,17 +159,42 @@ done
 # would write now; a dir predating the stamp, or left by a failed assemble (which clears
 # the stamp before overwriting anything), has no file and re-assembles.
 if [[ "${need_assemble}" == "false" ]]; then
-  want_stamp="$(ARCH="${ARCH}" hack/microvm-assets/assemble.sh --print-stamp)"
+  want_stamp="$(ARCH="${ARCH}" SLIM_ROOTFS="${SLIM_ROOTFS}" hack/microvm-assets/assemble.sh --print-stamp)"
   if [[ "$(cat "${OUT}/.asset-versions" 2>/dev/null)" != "${want_stamp}" ]]; then
     log "Asset set in ${OUT} is stale (version stamp mismatch); re-assembling."
     need_assemble=true
   fi
 fi
 if [[ "${need_assemble}" == "true" ]]; then
-  log "Assembling micro-VM assets into ${OUT} (ARCH=${ARCH})..."
-  ARCH="${ARCH}" OUT="${OUT}" hack/microvm-assets/assemble.sh
+  log "Assembling micro-VM assets into ${OUT} (ARCH=${ARCH}, SLIM_ROOTFS=${SLIM_ROOTFS})..."
+  ARCH="${ARCH}" OUT="${OUT}" SLIM_ROOTFS="${SLIM_ROOTFS}" hack/microvm-assets/assemble.sh
 else
   log "Assets already present in ${OUT}; skipping assemble."
+fi
+
+# A SLIM_ROOTFS=true rootfs.img was rebuilt on this host, so unlike the other
+# assets it has no committed pin. assemble.sh saved the sha of the upstream image
+# it started from; require that to be a committed kata-image pin (a slim image
+# only ever derives from the pinned one), then swap in the sha of the image being
+# staged, which is what atelet verifies the download against. Checked before
+# staging, so a failed check leaves the bucket as it was.
+subst=(-e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g")
+if [[ "${SLIM_ROOTFS}" == "true" ]]; then
+  upstream_sha_file="${OUT}/.upstream-rootfs.sha256"
+  if [[ ! -r "${upstream_sha_file}" ]]; then
+    echo "Error: ${upstream_sha_file} is missing, so the slim rootfs.img can't be checked" >&2
+    echo "       against the kata-image pin. Remove ${OUT} and re-run to re-assemble." >&2
+    exit 1
+  fi
+  upstream_sha="$(cat "${upstream_sha_file}")"
+  if [[ "$(grep -c "sha256: \"${upstream_sha}\"" "${MANIFEST_TEMPLATE}" || true)" != "1" ]]; then
+    echo "Error: the upstream rootfs.img that SLIM_ROOTFS started from (sha256 ${upstream_sha})" >&2
+    echo "       is not a kata-image pin in ${MANIFEST_TEMPLATE}." >&2
+    exit 1
+  fi
+  slim_sha="$(sha256sum "${OUT}/rootfs.img" | awk '{print $1}')"
+  log "SLIM_ROOTFS=true: kata-image pin ${upstream_sha} -> slim rootfs.img ${slim_sha}"
+  subst+=(-e "s|\"${upstream_sha}\"|\"${slim_sha}\"|")
 fi
 
 # --- 2. stage assets to rustfs (kind) / GCS (GKE) --------------------------
@@ -179,11 +209,10 @@ else
 fi
 
 # --- 3. apply the cluster-wide microvm SandboxConfig -----------------------
-# Every asset is downloaded rather than built, so all four carry committed,
-# reproducible per-arch shas and the bucket name is the only substitution left.
+# Every downloaded asset carries a committed, reproducible per-arch sha, so the
+# bucket name is the only substitution left (plus the SLIM_ROOTFS swap above).
 log "Applying microvm SandboxConfig from ${MANIFEST_TEMPLATE}..."
-sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" \
-    "${MANIFEST_TEMPLATE}" \
+sed "${subst[@]}" "${MANIFEST_TEMPLATE}" \
   | run_kubectl apply -f -
 
 log "Done. ActorTemplates must reference this SandboxConfig by name (sandboxConfig.configName: microvm)."
