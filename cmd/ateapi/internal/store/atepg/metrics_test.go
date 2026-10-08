@@ -419,6 +419,13 @@ func (m failingPoolMeter) Float64Histogram(name string, opts ...metric.Float64Hi
 	return m.Meter.Float64Histogram(name, opts...)
 }
 
+func (m failingPoolMeter) Int64UpDownCounter(name string, opts ...metric.Int64UpDownCounterOption) (metric.Int64UpDownCounter, error) {
+	if name == m.fail {
+		return nil, errPoolMetric
+	}
+	return m.Meter.Int64UpDownCounter(name, opts...)
+}
+
 func (m failingPoolMeter) RegisterCallback(callback metric.Callback, instruments ...metric.Observable) (metric.Registration, error) {
 	if m.fail == "callback" {
 		return nil, errPoolMetric
@@ -427,7 +434,7 @@ func (m failingPoolMeter) RegisterCallback(callback metric.Callback, instruments
 }
 
 func TestPoolMetricsInstrumentErrors(t *testing.T) {
-	for _, name := range []string{connectionCountMetric, connectionMaxMetric, connectionWaitMetric} {
+	for _, name := range []string{connectionCountMetric, connectionMaxMetric, connectionWaitMetric, connectionPendingMetric} {
 		t.Run(name, func(t *testing.T) {
 			instruments, _ := newPoolMetrics(t)
 			_, err := NewInstruments(failingPoolMeter{Meter: instruments.meter, fail: name})
@@ -478,4 +485,38 @@ func TestPoolMetricsConnectRegistrationFailure(t *testing.T) {
 	defer p.pool.Close()
 	p.Close()
 	assertPoolCounts(t, reader, nil)
+}
+
+func assertPendingAcquires(t *testing.T, reader *sdkmetric.ManualReader, want map[string]int64) {
+	t.Helper()
+	m := collectPoolMetrics(t, reader)[connectionPendingMetric]
+	sum, ok := m.Data.(metricdata.Sum[int64])
+	if m.Unit != "{request}" || !ok || sum.IsMonotonic {
+		t.Fatalf("wrong pending request instrument: %+v", m)
+	}
+	got := make(map[string]int64)
+	for _, point := range sum.DataPoints {
+		if point.Attributes.Len() != 1 {
+			t.Fatalf("unexpected pending attributes: %v", point.Attributes)
+		}
+		pool, _ := point.Attributes.Value(ateattr.DBConnectionPoolNameKey)
+		got[pool.AsString()] = point.Value
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("pending requests = %v, want %v", got, want)
+	}
+}
+
+func TestPoolMetricsPendingRequests(t *testing.T) {
+	instruments, reader := newPoolMetrics(t)
+	tracer := &poolMetricsTracer{instruments: instruments, name: ateattr.DBConnectionPoolMain}
+	for _, err := range []error{nil, context.Canceled, context.DeadlineExceeded, errors.New("acquire failure")} {
+		first := tracer.TraceAcquireStart(t.Context(), nil, pgxpool.TraceAcquireStartData{})
+		second := tracer.TraceAcquireStart(t.Context(), nil, pgxpool.TraceAcquireStartData{})
+		assertPendingAcquires(t, reader, map[string]int64{ateattr.DBConnectionPoolMain: 2})
+		tracer.TraceAcquireEnd(first, nil, pgxpool.TraceAcquireEndData{Err: err})
+		assertPendingAcquires(t, reader, map[string]int64{ateattr.DBConnectionPoolMain: 1})
+		tracer.TraceAcquireEnd(second, nil, pgxpool.TraceAcquireEndData{Err: err})
+		assertPendingAcquires(t, reader, map[string]int64{ateattr.DBConnectionPoolMain: 0})
+	}
 }
