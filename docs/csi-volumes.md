@@ -33,7 +33,7 @@ spec:
   tls:
     enabled: true
     usePodIdentity: true
-    serverName: csi-nfs-controller.kube-system.svc.cluster.local
+    serverName: csi-nfs-controller.kube-system.svc
 ```
 
 ### Specification (`CSIDriverConfigSpec`)
@@ -51,7 +51,7 @@ spec:
 | :--- | :--- | :--- |
 | `enabled` | `bool` | **Required.** Enables TLS/mTLS for the gRPC connection. |
 | `usePodIdentity` | `bool` | **Optional.** When `true`, reuses Substrate's SPIFFE Pod Identity certificates for mutual TLS (mTLS) with dynamic CA trust bundle verification and rotation. Must be `true` when `enabled` is `true`. |
-| `serverName` | `string` | **Optional.** Server name override for TLS certificate verification. |
+| `serverName` | `string` | **Optional.** Server name override for TLS certificate verification. With Substrate's Service DNS signer, set this to `<service>.<namespace>.svc`, the name in the server certificate. |
 
 > [!NOTE]
 > For details on exposing CSI controller endpoints over the network and configuring CSI node DaemonSets with required mount propagations, see the [CSI Driver Deployment Guide](csi-deployment.md).
@@ -134,7 +134,7 @@ spec:
   tls:
     enabled: true
     usePodIdentity: true
-    serverName: csi-nfs-controller.kube-system.svc.cluster.local
+    serverName: csi-nfs-controller.kube-system.svc
 ```
 
 ### Step 3: Define WorkerPool and ActorTemplate
