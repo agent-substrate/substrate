@@ -15,6 +15,9 @@
 package localjwtauthority
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
 	"os"
@@ -30,7 +33,7 @@ import (
 )
 
 func TestRefreshingPool(t *testing.T) {
-	ca1, err := GenerateECDSAP256Authority("1")
+	ca1, err := GenerateAuthority("ES256", "1")
 	if err != nil {
 		t.Fatalf("Unexpected error generating CA 1: %v", err)
 	}
@@ -43,7 +46,7 @@ func TestRefreshingPool(t *testing.T) {
 		t.Fatalf("Unexpected error marshaling pool 1: %v", err)
 	}
 
-	ca2, err := GenerateECDSAP256Authority("2")
+	ca2, err := GenerateAuthority("ES256", "2")
 	if err != nil {
 		t.Fatalf("Unexpected error generating CA 2: %v", err)
 	}
@@ -154,7 +157,7 @@ func TestRefreshingPool(t *testing.T) {
 }
 
 func TestSignJWTHeader(t *testing.T) {
-	authority, err := GenerateECDSAP256Authority("key-1")
+	authority, err := GenerateAuthority("ES256", "key-1")
 	if err != nil {
 		t.Fatalf("Unexpected error generating authority: %v", err)
 	}
@@ -184,5 +187,132 @@ func TestSignJWTHeader(t *testing.T) {
 	want := map[string]string{"typ": "JWT", "alg": "ES256", "kid": "key-1"}
 	if diff := cmp.Diff(got, want); diff != "" {
 		t.Errorf("Wrong JWT header; diff (-got +want)\n%s", diff)
+	}
+}
+
+func TestGenerateAuthority(t *testing.T) {
+	for _, alg := range []string{"RS256", "ES256"} {
+		t.Run(alg, func(t *testing.T) {
+			authority, err := GenerateAuthority(alg, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if authority.Algorithm != alg {
+				t.Errorf("Algorithm = %q, want %q", authority.Algorithm, alg)
+			}
+			thumbprint, err := Thumbprint(authority.SigningKey.Public())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if authority.ID != thumbprint {
+				t.Errorf("ID = %q, want the key thumbprint %q", authority.ID, thumbprint)
+			}
+			switch key := authority.SigningKey.(type) {
+			case *rsa.PrivateKey:
+				if alg != "RS256" || key.N.BitLen() != 2048 {
+					t.Errorf("got a %d-bit RSA key for %s, want 2048-bit for RS256", key.N.BitLen(), alg)
+				}
+			case *ecdsa.PrivateKey:
+				if alg != "ES256" || key.Curve != elliptic.P256() {
+					t.Errorf("got an EC key on %s for %s, want P-256 for ES256", key.Curve.Params().Name, alg)
+				}
+			default:
+				t.Errorf("unexpected key type %T", key)
+			}
+
+			pool := &ConcretePool{Authorities: []*Authority{authority}, ActiveForSigning: authority.ID}
+			poolBytes, err := Marshal(pool)
+			if err != nil {
+				t.Fatal(err)
+			}
+			loaded, err := Unmarshal(poolBytes)
+			if err != nil {
+				t.Fatal(err)
+			}
+			jwt, err := loaded.SignJWT(&actoridjwt.Claims{Subject: "actor/a/b", Audiences: []string{"aud"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			headerB64, _, _ := strings.Cut(jwt, ".")
+			headerBytes, err := base64.RawURLEncoding.DecodeString(headerB64)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var header map[string]string
+			if err := json.Unmarshal(headerBytes, &header); err != nil {
+				t.Fatal(err)
+			}
+			if header["alg"] != alg || header["kid"] != thumbprint {
+				t.Errorf("header = %v, want alg %s and kid %s", header, alg, thumbprint)
+			}
+		})
+	}
+}
+
+func TestGenerateAuthorityExplicitID(t *testing.T) {
+	authority, err := GenerateAuthority("RS256", "my-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if authority.ID != "my-key" {
+		t.Errorf("ID = %q, want %q", authority.ID, "my-key")
+	}
+}
+
+func TestGeneratePool(t *testing.T) {
+	for _, tc := range []struct{ alg, id string }{{"ES256", ""}, {"RS256", "my-key"}} {
+		wire, id, err := GeneratePool(tc.alg, tc.id)
+		if err != nil {
+			t.Fatalf("GeneratePool(%q, %q): %v", tc.alg, tc.id, err)
+		}
+		pool, err := Unmarshal(wire)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(pool.Authorities) != 1 {
+			t.Fatalf("pool has %d authorities, want 1", len(pool.Authorities))
+		}
+		authority := pool.Authorities[0]
+		if authority.Algorithm != tc.alg {
+			t.Errorf("Algorithm = %q, want %q", authority.Algorithm, tc.alg)
+		}
+		if tc.id != "" && id != tc.id {
+			t.Errorf("returned ID %q, want %q", id, tc.id)
+		}
+		if authority.ID != id || pool.ActiveForSigning != id {
+			t.Errorf("authority %q, active %q; want both to be the returned ID %q", authority.ID, pool.ActiveForSigning, id)
+		}
+	}
+	if _, _, err := GeneratePool("HS256", ""); err == nil {
+		t.Error("GeneratePool(HS256) returned nil error")
+	}
+}
+
+func TestGenerateAuthorityRejectsUnsupportedAlgorithm(t *testing.T) {
+	if _, err := GenerateAuthority("HS256", ""); err == nil {
+		t.Error("GenerateAuthority(HS256) returned nil error")
+	}
+}
+
+func TestVerificationKeysCarryAlgorithm(t *testing.T) {
+	es, err := GenerateAuthority("ES256", "es")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rs, err := GenerateAuthority("RS256", "rs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := &ConcretePool{Authorities: []*Authority{es, rs}, ActiveForSigning: "es"}
+	keys, err := pool.VerificationKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, key := range keys {
+		got[key.KeyID] = key.Algorithm
+	}
+	if diff := cmp.Diff(map[string]string{"es": "ES256", "rs": "RS256"}, got); diff != "" {
+		t.Errorf("verification key algorithms (-want +got):\n%s", diff)
 	}
 }

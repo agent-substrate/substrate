@@ -21,7 +21,6 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/api/validate"
-	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
@@ -72,6 +71,16 @@ func ValidateDrainWorkerRequest(ctx context.Context, req *ateapipb.DrainWorkerRe
 	return Validate_DrainWorkerRequest(ctx, op, nil, req, nil)
 }
 
+func ValidateRegisterWorkerRequest(ctx context.Context, req *ateapipb.RegisterWorkerRequest) field.ErrorList {
+	op := operation.Operation{Type: operation.Create}
+	return Validate_RegisterWorkerRequest(ctx, op, nil, req, nil)
+}
+
+func ValidateRequestActorSuspendRequest(ctx context.Context, req *ateapipb.RequestActorSuspendRequest) field.ErrorList {
+	op := operation.Operation{Type: operation.Create}
+	return Validate_RequestActorSuspendRequest(ctx, op, nil, req, nil)
+}
+
 // validateWorkerUpdate validates a Worker against the previous stored value.
 // It is what enforces the immutable fields, which need an old value to compare
 // against.
@@ -89,8 +98,8 @@ func ValidateWorkerUpdate(ctx context.Context, fldPath *field.Path, newVal, oldV
 }
 
 // This is needed because DV doesn't have a standard format for IP addresses yet.
-func ValidateCustom_Worker_Ip(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
-	return validation.IsValidIP(fldPath, *value)
+func ValidateCustom_Worker_Ips(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []string) field.ErrorList {
+	return validateDualStackIPs(fldPath, value)
 }
 
 // epoch only moves forward: a lower value would make Actors placed during the

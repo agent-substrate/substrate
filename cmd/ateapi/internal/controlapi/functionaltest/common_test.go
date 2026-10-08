@@ -186,7 +186,7 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 		}
 	}
 
-	actorJWTAuthority, err := localjwtauthority.GenerateECDSAP256Authority("1")
+	actorJWTAuthority, err := localjwtauthority.GenerateAuthority("ES256", "1")
 	if err != nil {
 		t.Fatalf("Error generating actor JWT authority: %v", err)
 	}
@@ -650,7 +650,7 @@ func createWorkerPod(t *testing.T, tc *testContext, ns string, name string, node
 			WorkerPool:      poolName,
 			WorkerPod:       name,
 			WorkerPodUid:    string(createdPod.UID),
-			Ip:              "127.0.0.1",
+			Ips:             []string{"127.0.0.1"},
 			NodeName:        nodeName,
 			SandboxClass:    string(pool.Spec.SandboxClass),
 			Labels:          pool.GetLabels(),

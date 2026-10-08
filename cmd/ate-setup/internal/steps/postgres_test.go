@@ -20,10 +20,14 @@ import (
 	"strings"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kube"
+	"github.com/agent-substrate/substrate/pkg/postgressetup"
 )
 
 // postgresObjects loads the bundled postgres manifest of the given
@@ -161,7 +165,7 @@ func TestPlanPostgres(t *testing.T) {
 		{
 			name:       "explicit DSN",
 			connString: "postgresql://user@db.example.com:5432/atepg",
-			want:       postgresPlan{external: "ATE_API_POSTGRES_CONNECTION_STRING"},
+			want:       postgresPlan{external: "ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"},
 		},
 		{
 			name:     "Cloud SQL instance from the environment",
@@ -185,8 +189,8 @@ func TestPlanPostgres(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			e := &Env{
 				Cfg: &config.Config{
-					PostgresConnectionString: tc.connString,
-					CloudSQL:                 tc.cloudSQL,
+					PostgresReadWriteConnectionString: tc.connString,
+					CloudSQL:                          tc.cloudSQL,
 				},
 				Kube: fakeKube(t, apiServerEnvVarsConfigMap(tc.recorded)),
 			}
@@ -216,5 +220,99 @@ func TestBundledPostgresManifestExists(t *testing.T) {
 	stray := filepath.Join(cfg.Root, "manifests", "ate-install", "postgres.yaml")
 	if _, err := os.Stat(stray); err == nil {
 		t.Errorf("%s exists; the bundle render would apply it even for external databases", stray)
+	}
+}
+
+func labeledNode(name string, labels map[string]string) runtime.Object {
+	return &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: name, Labels: labels}}
+}
+
+// Under --cordon-control-plane the StatefulSet's rolling update deletes the
+// running postgres before its replacement schedules, so a cluster with no
+// ate-postgres node must be refused before anything is applied.
+func TestRequirePostgresPool(t *testing.T) {
+	controlPlane := labeledNode("cp-1", map[string]string{"ate.dev/workloadType": "ate-control-plane"})
+	postgres := labeledNode("pg-1", map[string]string{"ate.dev/workloadType": "ate-postgres"})
+	for _, tc := range []struct {
+		name    string
+		cordon  bool
+		nodes   []runtime.Object
+		wantErr bool
+	}{
+		{name: "not cordoned", nodes: []runtime.Object{controlPlane}},
+		{name: "cordoned with a postgres node", cordon: true, nodes: []runtime.Object{controlPlane, postgres}},
+		{name: "cordoned without a postgres node", cordon: true, nodes: []runtime.Object{controlPlane}, wantErr: true},
+		{name: "cordoned with no nodes", cordon: true, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := &Env{
+				Cfg:  &config.Config{CordonControlPlane: tc.cordon},
+				Kube: fakeKube(t, tc.nodes...),
+			}
+			err := e.requirePostgresPool(t.Context())
+			if gotErr := err != nil; gotErr != tc.wantErr {
+				t.Fatalf("requirePostgresPool() error = %v, wantErr %v", err, tc.wantErr)
+			}
+			if err != nil && !strings.Contains(err.Error(), "docs/upgrade.md") {
+				t.Errorf("requirePostgresPool() error = %q, want it to point at docs/upgrade.md", err)
+			}
+		})
+	}
+}
+
+// applyPostgres is the path both `deploy ate-system` and `deploy postgres`
+// take to the StatefulSet, so the pool check has to sit in front of it.
+func TestApplyPostgresRequiresPostgresPool(t *testing.T) {
+	e := &Env{
+		Cfg:  &config.Config{Root: repoRoot(t), CordonControlPlane: true},
+		Kube: fakeKube(t),
+	}
+	err := e.applyPostgres(t.Context())
+	if err == nil || !strings.Contains(err.Error(), postgresPoolSelector) {
+		t.Fatalf("applyPostgres() error = %v, want the missing %s pool", err, postgresPoolSelector)
+	}
+}
+
+func TestBundledPostgresIdentityConfiguration(t *testing.T) {
+	cfg := &config.Config{
+		PostgresReadWriteRole: config.DefaultPostgresReadWriteRole,
+		PostgresOwnerRole:     config.DefaultPostgresOwnerRole,
+	}
+	e := &Env{Cfg: cfg}
+	readWrite, owner, err := e.postgresReadWriteConnectionStrings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if readWrite != bundledPostgresDSN(postgressetup.ReadWriteUser, postgressetup.ReadWritePassword) {
+		t.Errorf("read/write DSN = %q", readWrite)
+	}
+	if owner != bundledPostgresDSN(postgressetup.OwnerUser, postgressetup.OwnerPassword) {
+		t.Errorf("owner DSN = %q", owner)
+	}
+}
+
+func TestBundledPostgresRequiresFixedIdentity(t *testing.T) {
+	e := &Env{Cfg: &config.Config{PostgresReadWriteRole: "custom", PostgresOwnerRole: config.DefaultPostgresOwnerRole}}
+	if _, _, err := e.postgresReadWriteConnectionStrings(); err == nil {
+		t.Fatal("postgresReadWriteConnectionStrings() accepted a custom bundled role")
+	}
+}
+
+func TestBundledPostgresManifestAuthentication(t *testing.T) {
+	manifest, err := os.ReadFile(filepath.Join(repoRoot(t), "manifests", "ate-install", "postgres", "postgres.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(manifest)
+	for _, want := range []string{
+		"local all all trust",
+		"hostssl all postgres all reject",
+		"hostssl atepg all all scram-sha-256 clientcert=verify-ca",
+		"name: POSTGRES_HOST_AUTH_METHOD",
+		"value: trust",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("postgres manifest lacks %q", want)
+		}
 	}
 }

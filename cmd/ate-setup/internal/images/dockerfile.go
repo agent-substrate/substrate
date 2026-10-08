@@ -35,22 +35,27 @@ func dockerfilePlatforms(koDefaultPlatforms string) string {
 	return koDefaultPlatforms
 }
 
+// dockerBuildArgs returns the docker arguments that build contextPath for
+// platforms and push it as tag. extraFlags go before the context.
+func dockerBuildArgs(platforms string, extraFlags []string, tag, contextPath string) []string {
+	args := []string{"buildx", "build", "--platform=" + platforms, "--push"}
+	args = append(args, extraFlags...)
+	return append(args, "-t", tag, contextPath)
+}
+
 // BuildDockerfileImage builds a Dockerfile-based image from contextPath, pushes
 // it to dockerRepo/<imageName>, and returns the digest-pinned reference.
+// extraFlags are passed to docker buildx build, e.g. --cache-from/--cache-to.
 //
 // The image is tagged with the build time only to give buildx a stable name to
 // push to; the returned reference always uses the digest, so a stale tag can
 // never be resolved by accident.
-func BuildDockerfileImage(ctx context.Context, rootDir, dockerRepo, imageName, contextPath, koDefaultPlatforms string) (string, error) {
+func BuildDockerfileImage(ctx context.Context, rootDir, dockerRepo, imageName, contextPath, koDefaultPlatforms string, extraFlags []string) (string, error) {
 	repo := strings.TrimSuffix(dockerRepo, "/") + "/" + imageName
 	stageTag := fmt.Sprintf("%s:build-%d", repo, time.Now().Unix())
 
-	build := exec.CommandContext(ctx, "docker", "buildx", "build",
-		"--platform="+dockerfilePlatforms(koDefaultPlatforms),
-		"--push",
-		"-t", stageTag,
-		contextPath,
-	)
+	build := exec.CommandContext(ctx, "docker",
+		dockerBuildArgs(dockerfilePlatforms(koDefaultPlatforms), extraFlags, stageTag, contextPath)...)
 	build.Dir = rootDir
 	// The shell version sent build output to stderr so it could capture the
 	// image reference on stdout; keeping that split makes the two behave the

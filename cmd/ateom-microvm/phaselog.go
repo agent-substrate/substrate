@@ -21,10 +21,10 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/resources"
-	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
@@ -86,8 +86,6 @@ func scopeLogValue(scope ateompb.SnapshotScope) string {
 		return ateattr.SnapshotScopeFull
 	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
 		return ateattr.SnapshotScopeData
-	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN:
-		return ateattr.SnapshotScopeDataOnGolden
 	default:
 		return ateattr.SnapshotScopeUnknown
 	}
@@ -107,9 +105,10 @@ func snapshotPhaseAttrs(a resources.ActorAttribution, scope ateompb.SnapshotScop
 	attrs := ateattr.ActorLogAttrs(a)
 	attrs = append(attrs, slog.String(string(ateattr.SnapshotScopeKey), scopeLogValue(scope)))
 	if err != nil {
-		code := status.Code(err)
-		if code == codes.Unknown {
-			code = status.FromContextError(err).Code()
+		s, ok := apierror.FromError(err)
+		code := s.Code()
+		if !ok {
+			code = status.Code(err)
 		}
 		attrs = append(attrs, slog.String(string(ateattr.ErrorTypeKey), code.String()))
 	}

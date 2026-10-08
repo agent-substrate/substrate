@@ -21,6 +21,7 @@ import (
 	"errors"
 	"net"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -181,6 +182,9 @@ func TestBuildVMConfigConsole(t *testing.T) {
 	if !strings.Contains(cfg.Payload.Cmdline, "console=hvc0") {
 		t.Errorf("cmdline = %q, want console=hvc0", cfg.Payload.Cmdline)
 	}
+	if runtime.GOARCH == "amd64" && !strings.Contains(cfg.Payload.Cmdline, "clocksource=kvm-clock") {
+		t.Errorf("amd64 cmdline = %q, want clocksource=kvm-clock", cfg.Payload.Cmdline)
+	}
 	if strings.Contains(cfg.Payload.Cmdline, "earlycon") {
 		t.Errorf("cmdline = %q, must not pay for earlycon outside debug mode", cfg.Payload.Cmdline)
 	}
@@ -202,5 +206,21 @@ func TestWorkloadIDs(t *testing.T) {
 	got := workloadIDs(ctrs)
 	if want := []string{"counter", "sidecar"}; !slices.Equal(got, want) {
 		t.Errorf("workloadIDs() = %v, want %v", got, want)
+	}
+}
+
+func TestGuestConfigDebugConsole(t *testing.T) {
+	_, _, prodParams := (&AteomService{guestDebug: false}).guestConfig()
+	for _, forbidden := range []string{"agent.debug_console", "agent.debug_console_vport", "1026"} {
+		if strings.Contains(prodParams, forbidden) {
+			t.Errorf("expected guestConfig() with guestDebug=false not to contain %q, but got %q", forbidden, prodParams)
+		}
+	}
+
+	_, _, dbgParams := (&AteomService{guestDebug: true}).guestConfig()
+	for _, want := range []string{"agent.log=debug", "agent.debug_console", "agent.debug_console_vport=1026"} {
+		if !strings.Contains(dbgParams, want) {
+			t.Errorf("expected guestConfig() with guestDebug=true to contain %q, but got %q", want, dbgParams)
+		}
 	}
 }

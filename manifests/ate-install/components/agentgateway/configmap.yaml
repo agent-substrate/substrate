@@ -45,6 +45,9 @@ data:
     - name: dynamic
       dynamic: {}
       policies:
+        # Actors use HTTP/1.1 unless the request is gRPC.
+        http:
+          version: HTTP/1.1
         # All actor traffic reaches atunnel over mTLS CONNECT.
         backendTunnel:
           proxy:
@@ -65,7 +68,7 @@ data:
       matches:
       - path:
           pathPrefix: /
-      policies:
+      policies: &substrate-ingress
         substrateIngress:
           host: api.ate-system.svc:443
           # AgentGateway only uses atunnel's CONNECT listener.
@@ -77,6 +80,22 @@ data:
               root: /run/servicedns-ca/trust-bundle.pem
       backends:
       - backend: /dynamic
+    - name: substrate-actors-grpc
+      gateways:
+      - http
+      - https
+      matches: &grpc-matches
+      - method: POST
+        headers:
+        - name: content-type
+          value:
+            regex: '(?i)^application/grpc([+;].*)?$'
+      policies: *substrate-ingress
+      backends: &grpc-backends
+      - backend: /dynamic
+        policies:
+          http:
+            version: HTTP/2.0
 
     # Terminate client CONNECT before internal HTTP routing.
     binds:
@@ -101,17 +120,13 @@ data:
           matches:
           - path:
               pathPrefix: /
-          policies:
-            substrateIngress:
-              host: api.ate-system.svc:443
-              connectTargetPort: 8443
-              policies:
-                backendTLS:
-                  cert: /run/podidentity.podcert.ate.dev/credential-bundle.pem
-                  key: /run/podidentity.podcert.ate.dev/credential-bundle.pem
-                  root: /run/servicedns-ca/trust-bundle.pem
+          policies: *substrate-ingress
           backends:
           - backend: /dynamic
+        - name: substrate-actors-tunneled-grpc
+          matches: *grpc-matches
+          policies: *substrate-ingress
+          backends: *grpc-backends
 
 ---
 apiVersion: v1
@@ -147,7 +162,7 @@ data:
         # CONNECT re-enters the internal bind below.
         routes: []
 
-    # Route tunneled HTTP and pass through opaque streams.
+    # Route tunneled HTTP and policy-authorized TLS passthrough.
     - mode: internal
       protocol: AUTO
       listeners:
@@ -170,8 +185,3 @@ data:
                   cert: /run/podidentity.podcert.ate.dev/credential-bundle.pem
                   key: /run/podidentity.podcert.ate.dev/credential-bundle.pem
                   root: /run/servicedns-ca/trust-bundle.pem
-      - protocol: TCP
-        tcpRoutes:
-        - backends:
-          - dynamic:
-              target: source.connectHeaders["host"]

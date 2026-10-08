@@ -12,12 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Scrape the Envoy sidecar's admin /stats/prometheus endpoint so its end-to-end
+# Scrape the Envoy sidecar's /stats/prometheus endpoint so its end-to-end
 # request-latency histogram (envoy_http_downstream_rq_time, milliseconds) reaches
 # Google Managed Prometheus. This is E2E *context* for the per-stage latency
 # dashboard, not an SLI we own (the SLI is the OTLP atenet.router.route.duration
-# histogram). Envoy only speaks Prometheus, so it needs an explicit scrape; the
-# admin port (9901) is already exposed by the envoy container above.
+# histogram). Envoy only speaks Prometheus, so it needs an explicit scrape. The
+# admin API is loopback-only, so the scrape goes through the envoy-metrics port
+# (9902), a listener that forwards only GET /stats/prometheus and /ready to it.
 apiVersion: monitoring.googleapis.com/v1
 kind: PodMonitoring
 metadata:
@@ -30,6 +31,6 @@ spec:
     matchLabels:
       app: atenet-router
   endpoints:
-  - port: admin
+  - port: envoy-metrics
     path: /stats/prometheus
     interval: 30s

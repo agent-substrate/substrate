@@ -22,6 +22,7 @@ Flag registration lives in the modules that own each flag:
   * --lifecycle-mode                → common.lifecycle_mode.add_lifecycle_mode_arguments
   * --durdir-*                      → common.durdir_config.add_durdir_arguments
   * --mem-target / --mem-churn / --mem-read → common.memload_config.add_memload_arguments
+  * --cpu-cores / --cpu-duty-cycle  → common.cpuload_config.add_cpuload_arguments
   * --max-pings-per-wake            → common.ping_config.add_ping_arguments
 
 This module ties them together so boomer-Go workers can pick up the values
@@ -62,12 +63,19 @@ _FLAGS = {
     "--mem-target": str,
     "--mem-churn": str,
     "--mem-read": str,
+    "--cpu-cores": int,
+    "--cpu-duty-cycle": float,
     "--max-pings-per-wake": int,
     "--sweperf-template": str,
     "--sweperf-total-steps": int,
     "--sweperf-num-cycles": int,
     "--sweperf-poll-interval-ms": int,
+    "--agentsession-script": str,
+    "--agentsession-script-file": str,
     "--agentsession-think-scale": float,
+    "--total-actors": int,
+    "--spawn-concurrency": int,
+    "--actor-deadline": float,
 }
 
 
@@ -144,11 +152,13 @@ def init_boomer_config() -> None:
     from locust.env import Environment
 
     from common.agentsession_config import add_agentsession_arguments  # noqa: F401
+    from common.cpuload_config import add_cpuload_arguments
     from common.durdir_config import add_durdir_arguments
     from common.lifecycle_mode import add_lifecycle_mode_arguments
     from common.memload_config import add_memload_arguments
     from common.ping_config import add_ping_arguments
     from common.resume_mode import add_resume_mode_arguments
+    from common.spawn_config import add_spawn_arguments
     from common.sweperf_config import add_sweperf_arguments
     from common.trace import init_tracing
     from common.wait_time import init_wait_time

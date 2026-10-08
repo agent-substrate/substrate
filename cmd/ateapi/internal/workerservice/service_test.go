@@ -49,9 +49,10 @@ func (f *fakeSuspender) SuspendActor(_ context.Context, req *ateapipb.SuspendAct
 }
 
 // seedReportedWorker registers a Worker on nodeName that has already reported
-// capacity: identity from the pod, the way the syncer writes it, plus the
-// result of an earlier report. A Worker that has never reported carries none,
-// so what a fresh report replaces is what this seeds.
+// capacity and hardware: identity from the pod, the way the syncer writes it,
+// plus the result of an earlier registration. A Worker that has never
+// registered carries none, so what a fresh registration replaces is what this
+// seeds.
 func seedReportedWorker(t *testing.T, st store.Interface, nodeName string, capacity *ateapipb.WorkerResources) *ateapipb.Worker {
 	t.Helper()
 	created, err := st.CreateWorker(context.Background(), &ateapipb.Worker{
@@ -61,9 +62,9 @@ func seedReportedWorker(t *testing.T, st store.Interface, nodeName string, capac
 		WorkerPod:       "worker-pod-1",
 		WorkerPodUid:    testWorkerName,
 		NodeName:        nodeName,
-		Ip:              "10.1.2.3",
+		Ips:             []string{"10.1.2.3"},
 		SandboxClass:    "gvisor",
-		Status:          &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Capacity: capacity},
+		Status:          &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Capacity: capacity, Hardware: testHardware},
 	})
 	if err != nil {
 		t.Fatalf("seeding worker: %v", err)

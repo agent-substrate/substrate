@@ -26,12 +26,18 @@ import (
 
 // DeleteAteSystem removes the control plane.
 //
-// PostgreSQL, the agentgateway ConfigMap, and the CRDs are deleted explicitly
-// afterwards because they are not part of every rendered bundle: which of them
-// the install created depends on the router that was selected, and teardown
-// must not depend on remembering that.
+// PostgreSQL, the agentgateway ConfigMap, the bundled credential provider, and
+// the CRDs are deleted explicitly because they are not part of every rendered
+// bundle: which of them the install created depends on the router and
+// credential provider that were selected, and teardown must not depend on
+// remembering that. The provider goes first so that a later failure cannot
+// leave its ClusterRole and binding behind.
 func (e *Env) DeleteAteSystem(ctx context.Context) error {
 	log.Step("delete_ate_system")
+
+	if err := e.Kube.DeletePath(ctx, e.k8sCredentialProviderPath(k8sCredentialProviderManifest)); err != nil {
+		return err
+	}
 
 	if e.Cfg.Kind {
 		manifest, err := e.Kustomize(installDir + "/kind")
@@ -71,19 +77,21 @@ func (e *Env) DeleteAteSystem(ctx context.Context) error {
 	return e.UnlabelNodesSubstrateVersion(ctx)
 }
 
-// DeleteAtenet removes the atenet dataplane.
+// DeleteAtenet removes the atenet dataplane and the bundled credential
+// provider, deleting the provider first so that a later failure cannot leave
+// its ClusterRole and binding behind. The provider's policy ConfigMap stays:
+// it holds the operator's allow-list.
 func (e *Env) DeleteAtenet(ctx context.Context) error {
 	log.Step("delete_atenet")
+
+	if err := e.Kube.DeletePath(ctx, e.k8sCredentialProviderPath(k8sCredentialProviderManifest)); err != nil {
+		return err
+	}
 
 	for _, path := range [][]string{
 		{"atenet-router.yaml"},
 		{"components", "agentgateway", "configmap.yaml"},
-		// Both egress variants, not the selected one: teardown has to clean up
-		// an install made with --experimental-use-sdsmint whether or not this
-		// invocation passes it, and either file may declare resources the
-		// other does not.
 		{"atenet-egress.yaml"},
-		{"atenet-egress-with-sdsmint.yaml"},
 	} {
 		if err := e.Kube.DeletePath(ctx, e.Cfg.Manifest(path...)); err != nil {
 			return err

@@ -50,6 +50,8 @@ type AssetFile struct {
 }
 
 // SandboxConfigSpec is the desired state of a SandboxConfig.
+//
+// +kubebuilder:validation:XValidation:rule="self.sandboxClass == 'gvisor' ? has(self.pauseImage) : !has(self.pauseImage)",message="pauseImage is required for gvisor and not allowed for other sandbox classes"
 type SandboxConfigSpec struct {
 	// SandboxClass is the sandbox runtime family this config applies to. An
 	// ActorTemplate only uses SandboxConfigs whose SandboxClass matches its
@@ -60,10 +62,14 @@ type SandboxConfigSpec struct {
 	// +kubebuilder:default=gvisor
 	SandboxClass SandboxClass `json:"sandboxClass"`
 
+	// TODO: drop PauseImage once gVisor can run without a pause container:
+	// https://github.com/google/gvisor/pull/13981
+
 	// PauseImage is the container image used as the root sandbox container.
 	// It holds the sandbox's namespaces and runs no workload code, so it is an
 	// implementation detail of the sandbox rather than something actor authors
-	// choose. It is captured in the snapshot manifest alongside the sandbox
+	// choose. Required for gvisor; not allowed for microvm, which runs no pause
+	// container. It is captured in the snapshot manifest alongside the sandbox
 	// binaries, so a restore always re-creates the sandbox from the same image
 	// the snapshot was taken with.
 	//
@@ -72,9 +78,9 @@ type SandboxConfigSpec struct {
 	//   - [1] gcr.io/gke-release/pause@sha256:bcbd57ba5653580ec647b16d8163cdd1112df3609129b01f912a8032e48265da
 	//   - [2] registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4
 	//
-	// +required
+	// +optional
 	// +kubebuilder:validation:XValidation:rule="self.contains('@')",message="All images must include a digest"
-	PauseImage string `json:"pauseImage"`
+	PauseImage string `json:"pauseImage,omitempty"`
 
 	// Assets is the set of files atelet fetches for this runtime, keyed first by
 	// architecture (GOARCH, e.g. "amd64", "arm64") and then by asset name. The

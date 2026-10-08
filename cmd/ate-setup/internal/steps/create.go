@@ -40,8 +40,8 @@ const (
 	SecretPostgresServerCA = "postgres-server-ca"
 	ConfigMapAPIEnvVars    = "ate-api-server-envvars"
 	ConfigMapAPIAuthn      = "ate-api-authentication"
-	// poolKeyID is the identifier given to the first CA and JWT key in a new
-	// pool, matching the --ca-id/--key-id the shell scripts passed.
+	// poolKeyID is the identifier given to the first CA in a new pool,
+	// matching the --ca-id the shell scripts passed.
 	poolKeyID = "1"
 )
 
@@ -82,13 +82,10 @@ func (e *Env) CreateEgressMITMCAPoolSecret(ctx context.Context) error {
 	return e.createPoolSecret(ctx, e.Namespace(), SecretEgressMITMCAPool, corev1.SecretTypeTLS, data)
 }
 
-// EnsureEgressMITMCAPoolSecret creates the egress MITM CA pool secret if
-// sdsmint is enabled. Both dataplanes need it: the agentgateway-egress-mitm
-// overlay mounts the same Secret the envoy egress does.
+// EnsureEgressMITMCAPoolSecret creates the egress MITM CA pool secret. Both
+// dataplanes need it: the agentgateway-egress overlay mounts the same
+// Secret the envoy egress does.
 func (e *Env) EnsureEgressMITMCAPoolSecret(ctx context.Context) error {
-	if !e.Cfg.ExperimentalUseSDSMint {
-		return nil
-	}
 	return e.ensureSecret(ctx, e.Namespace(), SecretEgressMITMCAPool, e.CreateEgressMITMCAPoolSecret)
 }
 
@@ -219,7 +216,7 @@ func (e *Env) createCAPool(ctx context.Context, namespace, name string) error {
 //
 // The certificate and key are not redundant with the pool. Consumers that speak
 // TLS rather than the pool format mount them directly — the
-// agentgateway-egress-mitm overlay mounts tls.crt and tls.key from
+// agentgateway-egress overlay mounts tls.crt and tls.key from
 // egress-mitm-ca-pool non-optionally, so a pool Secret holding only "pool"
 // leaves atenet-egress stuck in ContainerCreating.
 func newCAPoolSecretData(id string, keyType localca.KeyType) (map[string][]byte, error) {
@@ -262,18 +259,21 @@ func (e *Env) createJWTPool(ctx context.Context, namespace, name string) error {
 		return nil
 	}
 
-	authority, err := localjwtauthority.GenerateECDSAP256Authority(poolKeyID)
+	data, err := newJWTPoolSecretData(e.Cfg.ActorJWTAlgorithm)
 	if err != nil {
-		return fmt.Errorf("while generating the JWT authority for %s/%s: %w", namespace, name, err)
+		return fmt.Errorf("while building the JWT pool for %s/%s: %w", namespace, name, err)
 	}
-	poolBytes, err := localjwtauthority.Marshal(&localjwtauthority.ConcretePool{
-		Authorities:      []*localjwtauthority.Authority{authority},
-		ActiveForSigning: poolKeyID,
-	})
+	return e.createPoolSecret(ctx, namespace, name, corev1.SecretTypeOpaque, data)
+}
+
+// newJWTPoolSecretData generates a pool with one active authority for
+// algorithm, keyed by its thumbprint.
+func newJWTPoolSecretData(algorithm string) (map[string][]byte, error) {
+	poolBytes, _, err := localjwtauthority.GeneratePool(algorithm, "")
 	if err != nil {
-		return fmt.Errorf("while marshaling the JWT pool for %s/%s: %w", namespace, name, err)
+		return nil, fmt.Errorf("while generating the JWT pool: %w", err)
 	}
-	return e.createPoolSecret(ctx, namespace, name, corev1.SecretTypeOpaque, map[string][]byte{"pool": poolBytes})
+	return map[string][]byte{"pool": poolBytes}, nil
 }
 
 // createPoolSecret writes pool state.

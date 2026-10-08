@@ -80,8 +80,11 @@ tests:
           owner: true
           viewer: true
           can_create_atespace: true
-          can_set_policy: true
-          can_get_policy: true
+          can_list_actors: true
+          can_list_actor_templates: true
+          can_create_access_policy: true
+          can_get_access_policy: true
+          can_update_access_policy: true
           can_get: true
       - user: user:carol
         object: atespace:space-1
@@ -89,12 +92,15 @@ tests:
           owner: true
           editor: true
           viewer: true
-          can_set_policy: true
-          can_get_policy: true
+          can_create_access_policy: true
+          can_get_access_policy: true
+          can_update_access_policy: true
+          can_delete_access_policy: true
           can_create_actor: true
           can_create_actor_template: true
+          can_list_actors: true
+          can_list_actor_templates: true
           can_get: true
-          can_update: true
           can_delete: true
 
       # Global Viewer (Frank)
@@ -104,8 +110,11 @@ tests:
           owner: false
           viewer: true
           can_create_atespace: false
-          can_set_policy: false
-          can_get_policy: true
+          can_list_actors: true
+          can_list_actor_templates: true
+          can_create_access_policy: false
+          can_get_access_policy: true
+          can_update_access_policy: false
           can_get: true
       - user: user:frank
         object: atespace:space-1
@@ -113,13 +122,23 @@ tests:
           owner: false
           editor: false
           viewer: true
-          can_set_policy: false
-          can_get_policy: true
+          can_create_access_policy: false
+          can_get_access_policy: true
+          can_update_access_policy: false
+          can_delete_access_policy: false
           can_create_actor: false
           can_create_actor_template: false
+          can_list_actors: true
+          can_list_actor_templates: true
           can_get: true
-          can_update: false
           can_delete: false
+
+      # Atespace Owner (Alice) cannot list across all atespaces
+      - user: user:alice
+        object: global:root
+        assertions:
+          can_list_actors: false
+          can_list_actor_templates: false
 
   - name: 2. Atespace 3-Tier Roles & Governance Isolation
     check:
@@ -129,12 +148,15 @@ tests:
           owner: true
           editor: true
           viewer: true
-          can_set_policy: true
-          can_get_policy: true
+          can_create_access_policy: true
+          can_get_access_policy: true
+          can_update_access_policy: true
+          can_delete_access_policy: true
           can_create_actor: true
           can_create_actor_template: true
+          can_list_actors: true
+          can_list_actor_templates: true
           can_get: true
-          can_update: true
           can_delete: true
       - user: user:bob # Editor
         object: atespace:space-1
@@ -142,12 +164,15 @@ tests:
           owner: false
           editor: true
           viewer: true
-          can_set_policy: false
-          can_get_policy: true
+          can_create_access_policy: false
+          can_get_access_policy: true
+          can_update_access_policy: false
+          can_delete_access_policy: false
           can_create_actor: true
           can_create_actor_template: true
+          can_list_actors: true
+          can_list_actor_templates: true
           can_get: true
-          can_update: true
           can_delete: false
       - user: user:dave # Viewer
         object: atespace:space-1
@@ -155,12 +180,15 @@ tests:
           owner: false
           editor: false
           viewer: true
-          can_set_policy: false
-          can_get_policy: true
+          can_create_access_policy: false
+          can_get_access_policy: true
+          can_update_access_policy: false
+          can_delete_access_policy: false
           can_create_actor: false
           can_create_actor_template: false
+          can_list_actors: true
+          can_list_actor_templates: true
           can_get: true
-          can_update: false
           can_delete: false
       - user: user:eve # External / Unauthenticated
         object: atespace:space-1
@@ -168,38 +196,45 @@ tests:
           owner: false
           editor: false
           viewer: false
+          can_list_actors: false
+          can_list_actor_templates: false
           can_get: false
 
   - name: 3. Actor Template Operations (Inherited from Atespace)
     check:
-      - user: user:alice # Owner can get, update, delete private template
+      - user: user:alice # Owner can get, use, update, delete private template
         object: actor_template:private-template
         assertions:
           can_get: true
+          can_use_template: true
           can_update: true
           can_delete: true
-      - user: user:bob # Editor can get, update, delete private template
+      - user: user:bob # Editor can get, use, update, delete private template
         object: actor_template:private-template
         assertions:
           can_get: true
+          can_use_template: true
           can_update: true
           can_delete: true
-      - user: user:dave # Viewer can get, but NOT update or delete
+      - user: user:dave # Viewer can get and use, but NOT update or delete
         object: actor_template:private-template
         assertions:
           can_get: true
+          can_use_template: true
           can_update: false
           can_delete: false
-      - user: user:frank # Global viewer can get template via parent global
+      - user: user:frank # Global viewer can get and use template via parent global
         object: actor_template:private-template
         assertions:
           can_get: true
+          can_use_template: true
           can_update: false
           can_delete: false
       - user: user:eve # External cannot access private template
         object: actor_template:private-template
         assertions:
           can_get: false
+          can_use_template: false
           can_update: false
           can_delete: false
 

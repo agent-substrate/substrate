@@ -27,7 +27,6 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/ateomnet"
 	"github.com/agent-substrate/substrate/internal/ateomnet/dns"
-	"github.com/agent-substrate/substrate/internal/atunnel"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 )
 
@@ -56,11 +55,4 @@ func removeActorResolvConf(ctx context.Context, path string) {
 	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		slog.WarnContext(ctx, "Failed to remove the actor resolv.conf", slog.Any("err", err))
 	}
-}
-
-// attachAtunnel completes setup after atunnel receives the service's dialer.
-func (s *AteomService) attachAtunnel(ingress *atunnel.Server, egress *atunnel.Egress, egressPort uint16) {
-	s.atunnelIngress = ingress
-	s.atunnelEgress = egress
-	s.atunnelEgressPort = egressPort
 }

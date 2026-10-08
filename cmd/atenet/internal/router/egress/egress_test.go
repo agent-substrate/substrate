@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"net"
 	"net/url"
 	"path"
 	"slices"
@@ -324,21 +325,19 @@ func TestHandleRequestHeadersAllowsVerifiedActor(t *testing.T) {
 	if res.Target != "" {
 		t.Errorf("target = %q, want %q", res.Target, "")
 	}
-	// Nothing is decided at the CONNECT, so the passthrough chain is given
-	// nothing to dial.
-	if got := passthroughDestinationOf(res); got != "" {
-		t.Errorf("passthrough destination = %q, want none", got)
+	if got := dialedPortOf(res); got != "80" {
+		t.Errorf("dialed port = %q, want %q", got, "80")
 	}
 }
 
-// passthroughDestinationOf reads the address a CONNECT decision handed back
-// for the passthrough chain, or "" when it handed back none.
-func passthroughDestinationOf(res extproc.Result) string {
-	return res.DynamicMetadata.GetFields()[extproc.EgressMetadataNamespace].GetStructValue().GetFields()[extproc.EgressPassthroughDestinationKey].GetStringValue()
+// dialedPortOf reads the port a CONNECT decision handed back for the
+// passthrough chain.
+func dialedPortOf(res extproc.Result) string {
+	return res.DynamicMetadata.GetFields()[extproc.EgressMetadataNamespace].GetStructValue().GetFields()[extproc.EgressDialedPortKey].GetStringValue()
 }
 
-// The CONNECT opens for any policy with rules and returns the https SNI rules
-// for the dialed port, most specific first.
+// The CONNECT opens for any policy with rules and returns the https and
+// tls_passthrough SNI rules for the dialed port, most specific first.
 func TestConnectLegOpensForAnyRules(t *testing.T) {
 	ca := newTestCA(t, "actor-identity-ca")
 	leaf := ca.issueActorCert(t, "spiffe://substrate-actor.local/ateom-for-actor/foo/bar", actorCertOptions{})
@@ -347,6 +346,13 @@ func TestConnectLegOpensForAnyRules(t *testing.T) {
 		rules := make([]egresspolicy.SNIRule, len(patterns))
 		for i, p := range patterns {
 			rules[i] = egresspolicy.SNIRule{Pattern: p, Mode: egresspolicy.SNIModeMITM}
+		}
+		return rules
+	}
+	passthrough := func(patterns ...string) []egresspolicy.SNIRule {
+		rules := make([]egresspolicy.SNIRule, len(patterns))
+		for i, p := range patterns {
+			rules[i] = egresspolicy.SNIRule{Pattern: p, Mode: egresspolicy.SNIModePassthrough}
 		}
 		return rules
 	}
@@ -359,16 +365,20 @@ func TestConnectLegOpensForAnyRules(t *testing.T) {
 	}{
 		{name: "http", policy: httpPolicy("api.example.com")},
 		{name: "https", policy: httpsPolicy("api.example.com"), want: mitm("api.example.com")},
-		{name: "tls passthrough", policy: passthroughPolicy(ports(443), "*")},
+		{name: "tls passthrough", policy: passthroughPolicy(ports(443), "*"), want: passthrough("*")},
 		{name: "allow all", policy: allowAllPolicy(), want: mitm("*")},
 		{
-			name: "https rules only, most specific first",
+			name: "https and tls passthrough rules, most specific first",
 			policy: combined(
 				httpsPolicy("*.example.org", "api.example.com"),
 				httpPolicy("plain.example.com"),
 				passthroughPolicy(ports(443), "foo.bar.com"),
 			),
-			want: mitm("api.example.com", "*.example.org"),
+			want: []egresspolicy.SNIRule{
+				{Pattern: "api.example.com", Mode: egresspolicy.SNIModeMITM},
+				{Pattern: "foo.bar.com", Mode: egresspolicy.SNIModePassthrough},
+				{Pattern: "*.example.org", Mode: egresspolicy.SNIModeMITM},
+			},
 		},
 		{name: "https rule on another port", policy: httpsPolicy("api.example.com"), dialed: "93.184.216.34:8443"},
 		{name: "https rule on the dialed port", policy: httpsPolicyOnPorts(ports(8443), "api.example.com"), dialed: "93.184.216.34:8443", want: mitm("api.example.com")},
@@ -386,8 +396,9 @@ func TestConnectLegOpensForAnyRules(t *testing.T) {
 			if err != nil {
 				t.Fatalf("HandleRequestHeaders() error = %v, want the tunnel to open", err)
 			}
-			if got := passthroughDestinationOf(res); got != "" {
-				t.Errorf("passthrough destination = %q, want none", got)
+			_, wantPort, _ := net.SplitHostPort(md.Host)
+			if got := dialedPortOf(res); got != wantPort {
+				t.Errorf("dialed port = %q, want %q", got, wantPort)
 			}
 			if got := sniRulesOf(t, res); !slices.Equal(got, tc.want) {
 				t.Errorf("SNI rules = %v, want %v", got, tc.want)
@@ -418,8 +429,8 @@ func sniRulesOf(t *testing.T, res extproc.Result) []egresspolicy.SNIRule {
 	return out
 }
 
-// A callout with no filter chain name gets the same answer: the tunnel opens
-// with nothing to dial, and an actor without a policy is refused.
+// A callout with no filter chain name gets the same answer: the tunnel opens,
+// and an actor without a policy is refused.
 func TestConnectLegWithoutRequestLegs(t *testing.T) {
 	ca := newTestCA(t, "actor-identity-ca")
 	leaf := ca.issueActorCert(t, "spiffe://substrate-actor.local/ateom-for-actor/foo/bar", actorCertOptions{})
@@ -430,8 +441,8 @@ func TestConnectLegWithoutRequestLegs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HandleRequestHeaders() error = %v, want the tunnel to open", err)
 	}
-	if got := passthroughDestinationOf(res); got != "" {
-		t.Errorf("passthrough destination = %q, want none", got)
+	if got := dialedPortOf(res); got != "80" {
+		t.Errorf("dialed port = %q, want %q", got, "80")
 	}
 	h = New(&egressMockClient{actor: runningActor()}, ca.roots(), 0, nil, "")
 	_, err = h.HandleRequestHeaders(context.Background(), agentgatewayEgressMetadata(certificate))

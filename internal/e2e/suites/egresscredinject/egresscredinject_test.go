@@ -13,8 +13,8 @@
 // limitations under the License.
 
 // Package egresscredinject e2e-tests egress credential injection: a matching
-// EgressPolicy https rule with a replace_headers effect makes the sdsmint
-// egress gateway's MITM leg resolve the credential through the
+// EgressPolicy https rule with a replace_headers effect makes the egress
+// gateway's MITM leg resolve the credential through the
 // k8s-credential-provider and replace the actor's placeholder header with it
 // before re-originating upstream. See TestActorEgressCredentialInjection for
 // the proof structure and how to run this locally.
@@ -26,7 +26,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -74,29 +74,24 @@ var withPlaceholder = []string{"header=" + url.QueryEscape("Authorization:"+plac
 //     received — the on-the-wire proof, not an inference from a status code —
 //     and not the placeholder, so an actor cannot choose the value that
 //     leaves.
-//   - cleartext skip: the same fetch over plain HTTP, allowed by an http rule
-//     with the same effect, echoes the placeholder and not the credential —
-//     the secret never rides a cleartext wire, and the request is passed
-//     through rather than denied.
+//   - no header: the same fetch without the placeholder echoes no
+//     Authorization at all — the gateway replaces only a header the request
+//     carries, and does not add one.
+//   - cleartext: the same fetch over plain HTTP, allowed by an http rule
+//     with the same effect, echoes the injected credential too.
 //   - fail closed: a credential the policy requires but the provider will
 //     not or cannot produce denies the request — 403 for an unfetchable
 //     secret and for a namespace outside the atespace's authorization
-//     (default-deny), 500 for a URI naming a provider this gateway does not
-//     serve.
+//     (default-deny), 403 or 500 for a URI naming a provider this gateway
+//     does not serve.
 //
-// A request without the header is not covered: the API forwards it without
-// the credential, which the gateway does not implement yet.
+// This needs the install made with the bundled provider, which
+// deploys the k8s-credential-provider and points the egress gateway at it.
+// Locally:
 //
-// The gate: this needs the sdsmint egress gateway with injection enabled
-// (which replaces the passthrough gateway cluster-wide) plus the
-// k8s-credential-provider, which the suite deploys itself. Locally:
-//
-//	hack/install-ate-kind.sh --deploy-atenet --experimental-use-sdsmint --experimental-egress-credential-injection
-//	E2E_EGRESS_CREDINJECT=1 hack/run-e2e-kind.sh ./internal/e2e/suites/egresscredinject -v -args --no-color
+//	hack/install-ate-kind.sh --deploy-atenet --credential-provider='{"name":"k8s.io"}'
+//	hack/run-e2e-kind.sh ./internal/e2e/suites/egresscredinject -v -args --no-color
 func TestActorEgressCredentialInjection(t *testing.T) {
-	if os.Getenv("E2E_EGRESS_CREDINJECT") == "" {
-		t.Skip("needs the sdsmint (MITM) egress gateway with credential injection: deploy with hack/install-ate-kind.sh --deploy-atenet --experimental-use-sdsmint --experimental-egress-credential-injection, then set E2E_EGRESS_CREDINJECT=1")
-	}
 	env, err := e2e.CheckEnv("BUCKET_NAME", "KO_DOCKER_REPO")
 	if err != nil {
 		t.Fatalf("CheckEnv failed: %v", err)
@@ -104,7 +99,7 @@ func TestActorEgressCredentialInjection(t *testing.T) {
 	ctx := context.Background()
 	clients := e2e.GetClients()
 
-	e2e.DeployCredentialProvider(t)
+	e2e.ConfigureCredentialProvider(t)
 
 	probeNamespace, _ = e2e.DeployProbe(t, env["BUCKET_NAME"], "egresscredinject", e2e.WithTrustBundle())
 
@@ -118,26 +113,22 @@ func TestActorEgressCredentialInjection(t *testing.T) {
 	}
 	defer rc.Close()
 
-	// The gateway discards the placeholder and forwards the credential in its
-	// place, so the actor cannot choose the value that leaves.
-	wantHeader := "Bearer " + e2e.CredentialInjectionToken
-	replaced := fetchEcho(t, ctx, rc, id, echoOrigin, withPlaceholder)
-	if got := assertEchoedAuthorization(t, "injection fetch", replaced); got != wantHeader {
-		t.Errorf("upstream received Authorization %q, want the injected %q", got, wantHeader)
-	}
+	for _, origin := range []string{echoOrigin, echoOriginPlain} {
+		t.Run(origin, func(t *testing.T) {
+			// The upstream must receive the policy's credential instead of the
+			// actor's placeholder, on both HTTP and HTTPS.
+			wantHeader := "Bearer " + e2e.CredentialInjectionToken
+			replaced := fetchEcho(t, ctx, rc, id, origin, withPlaceholder)
+			if got := assertEchoedAuthorization(t, "injection fetch", replaced); got != wantHeader {
+				t.Errorf("upstream received Authorization %q, want the injected %q", got, wantHeader)
+			}
 
-	// The same origin over plain HTTP: the cleartext leg skips injection and
-	// passes the request through, so the fetch succeeds and the upstream sees
-	// the placeholder, not the credential. (The probe does not follow
-	// redirects, so an origin-side upgrade to HTTPS would surface as a non-200
-	// here rather than silently re-running the TLS case.)
-	cleartext := fetchEcho(t, ctx, rc, id, echoOriginPlain, withPlaceholder)
-	if cleartext.Error != "" {
-		t.Errorf("cleartext fetch of %s failed at the transport: %s", echoOriginPlain, cleartext.Error)
-	} else if cleartext.Status != "200" {
-		t.Errorf("cleartext fetch of %s: status %s, want 200 (the request should pass through without the credential)", echoOriginPlain, cleartext.Status)
-	} else if got := decodeEchoedHeaders(t, "cleartext fetch", cleartext.Body)["Authorization"]; got != placeholder {
-		t.Errorf("cleartext request arrived with Authorization %q, want the actor's placeholder %q: injection must be skipped on a cleartext wire", got, placeholder)
+			// No header is added when the actor did not send one.
+			unasked := fetchEcho(t, ctx, rc, id, origin, nil)
+			if got := assertEchoedAuthorization(t, "fetch without the header", unasked); got != "" {
+				t.Errorf("upstream received Authorization %q on a request that did not carry it, want none", got)
+			}
+		})
 	}
 
 	// Fail closed: each of these rules names a credential that cannot be
@@ -145,32 +136,35 @@ func TestActorEgressCredentialInjection(t *testing.T) {
 	// went out without the credential. No retries: the gateway answers these
 	// itself.
 	tests := []struct {
-		name       string
-		origin     string
-		wantStatus string
+		name         string
+		origin       string
+		wantStatuses []string
 	}{{
-		name:       "unfetchable secret",
-		origin:     unfetchableOrigin,
-		wantStatus: "403",
+		name:         "unfetchable secret",
+		origin:       unfetchableOrigin,
+		wantStatuses: []string{"403"},
 	}, {
-		name:       "unserved provider",
-		origin:     unservedOrigin,
-		wantStatus: "500",
+		// Agentgateway denies an unserved provider as 403; Envoy uses 500.
+		name:         "unserved provider",
+		origin:       unservedOrigin,
+		wantStatuses: []string{"403", "500"},
 	}, {
-		name:       "unauthorized namespace",
-		origin:     unauthorizedOrigin,
-		wantStatus: "403",
+		name:         "unauthorized namespace",
+		origin:       unauthorizedOrigin,
+		wantStatuses: []string{"403"},
 	}}
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := probeFetch(t, ctx, rc, id, tt.origin, withPlaceholder)
-			if got.Error != "" {
-				t.Fatalf("fetch of %s failed at the transport (%s), want an HTTP %s from the gateway", tt.origin, got.Error, tt.wantStatus)
-			}
-			if got.Status != tt.wantStatus {
-				t.Errorf("fetch of %s returned status %s, want %s", tt.origin, got.Status, tt.wantStatus)
-			}
-		})
+		for _, origin := range []string{tt.origin, strings.Replace(tt.origin, "https://", "http://", 1)} {
+			t.Run(tt.name+"/"+origin, func(t *testing.T) {
+				got := probeFetch(t, ctx, rc, id, origin, withPlaceholder)
+				if got.Error != "" {
+					t.Fatalf("fetch of %s failed at the transport (%s), want an HTTP denial %v from the gateway", origin, got.Error, tt.wantStatuses)
+				}
+				if !slices.Contains(tt.wantStatuses, got.Status) {
+					t.Errorf("fetch of %s returned status %s, want one of %v", origin, got.Status, tt.wantStatuses)
+				}
+			})
+		}
 	}
 }
 
@@ -232,7 +226,7 @@ func assertEchoedAuthorization(t *testing.T, step string, resp fetchResponse) st
 		t.Fatalf("%s: TLS through the MITM egress gateway failed: %s", step, resp.Error)
 	}
 	if resp.Status != "200" {
-		t.Fatalf("%s: status %s, want 200 (an injection failure would deny with 403/500/503; is the provider deployed and the gateway installed with --experimental-egress-credential-injection?) body %q", step, resp.Status, resp.Body)
+		t.Fatalf("%s: status %s, want 200 (an injection failure would deny with 403/500/503; is the provider deployed and the gateway installed with --credential-provider='{\"name\":\"k8s.io\"}'?) body %q", step, resp.Status, resp.Body)
 	}
 	return decodeEchoedHeaders(t, step, resp.Body)["Authorization"]
 }
@@ -309,20 +303,24 @@ func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Client
 			t.Logf("cleanup: DeleteActor %q failed, actor leaked (remove with: kubectl ate delete actor %s -a %s): %v", id, id, probeNamespace, err)
 		}
 	})
-	// One https rule per hostname, each carrying the injection whose outcome
-	// that host is used to observe, and only these hosts are allowed at all.
-	// echoHost also gets an http rule with the same injection, which the
-	// cleartext fetch uses to prove the gateway skips it there.
-	e2e.EnsureEgressPolicy(t, ctx, clients, ref,
-		e2e.EgressInjectHeader("Authorization", "Bearer ", e2e.CredentialInjectionURI, echoHost),
-		e2e.EgressInjectHeaderHTTP("Authorization", "Bearer ", e2e.CredentialInjectionURI, echoHost),
-		e2e.EgressInjectHeader("Authorization", "Bearer ",
-			"ate-secret://k8s.io/default/"+e2e.CredentialSecretsNamespace+"/no-such-secret/token", unfetchableHost),
-		e2e.EgressInjectHeader("Authorization", "Bearer ",
-			"ate-secret://other.io/default/"+e2e.CredentialSecretsNamespace+"/api-token/token", unservedHost),
-		e2e.EgressInjectHeader("Authorization", "Bearer ",
-			"ate-secret://k8s.io/default/kube-system/api-token/token", unauthorizedHost),
-	)
+	// Exercise each credential outcome on both HTTP and HTTPS.
+	var rules []*ateapipb.EgressRule
+	for _, credential := range []struct {
+		host string
+		uri  string
+	}{
+		{echoHost, e2e.CredentialInjectionURI},
+		{unfetchableHost, "ate-secret://k8s.io/default/" + e2e.CredentialSecretsNamespace + "/no-such-secret/token"},
+		{unservedHost, "ate-secret://other.io/default/" + e2e.CredentialSecretsNamespace + "/api-token/token"},
+		{unauthorizedHost, "ate-secret://k8s.io/default/kube-system/api-token/token"},
+	} {
+		rules = append(rules,
+			e2e.EgressInjectHeader("Authorization", "Bearer ", credential.uri, credential.host),
+			e2e.EgressInjectHeaderHTTP("Authorization", "Bearer ", credential.uri, credential.host),
+		)
+	}
+	e2e.EnsureEgressPolicy(t, ctx, clients, ref, rules...)
+
 	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: ref}); err != nil {
 		t.Fatalf("ResumeActor %q: %v", id, err)
 	}

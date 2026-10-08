@@ -37,11 +37,13 @@ package main
 // mounts that use it.
 //
 // Snapshots: the upper does not ride in guest memory, so a FULL snapshot
-// ships it as a tar (rootfsUpperTarFile), taken while the guest is paused
-// (the share is write-through, so a paused guest's completed writes are
-// already in the upper). Every FULL snapshot carries one; restoring anything
-// older fails at the untar. A DATA snapshot deliberately excludes rootfs state:
-// the workload cold-starts on restore.
+// ships it as one tar per container (rootfsUpperTarFile), taken while the
+// guest is paused (the share is write-through, so a paused guest's completed
+// writes are already in the upper). Each tar holds only the contents of that
+// container's upperdir: ateom creates the directory layout itself on restore,
+// so nothing in the snapshot decides a path ateom later mounts or wipes. A
+// DATA snapshot deliberately excludes rootfs state: the workload cold-starts
+// on restore.
 
 import (
 	"context"
@@ -50,17 +52,32 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/tarutil"
 )
 
-// rootfsUpperTarFile is the snapshot file holding the tar of the actor's
-// rootfs uppers. Its entries are <containerID>/fs/... relative to
-// rootfsUpperDir — the upperdir half of the layout kata.UpperWorkDirs mounts —
-// so extraction restores exactly the tree the merged overlays (and the guest's
-// find-paths) expect. The workdir half is deliberately absent (see
-// tarRootfsUpper); StageMergedRootfs recreates it at mount.
-const rootfsUpperTarFile = "rootfs-upper.tar"
+// rootfsUpperTarFile is the snapshot file holding the tar of one container's
+// rootfs upperdir (<cid>/fs under rootfsUpperDir, see kata.UpperWorkDirs).
+// Entries are relative to the upperdir, plus a root entry: overlayfs presents
+// the upperdir's own mode, ownership, and xattrs as the container's /. The workdir is never archived: with
+// index=off pinned on the mount (see kata.StageMergedRootfs) a restored
+// workdir would be inert, and StageMergedRootfs recreates it regardless.
+func rootfsUpperTarFile(containerID string) (string, error) {
+	if containerID == "" || containerID == "." || strings.Contains(containerID, "/") || !filepath.IsLocal(containerID) {
+		return "", fmt.Errorf("invalid container name %q", containerID)
+	}
+	return "rootfs-upper-" + containerID + ".tar", nil
+}
+
+// containerNames returns the names of the actor's containers.
+func containerNames(containers []*ateompb.Container) []string {
+	names := make([]string, len(containers))
+	for i, c := range containers {
+		names[i] = c.GetName()
+	}
+	return names
+}
 
 // resetRootfsUpperDir gives a cold boot a pristine upper directory: a cold
 // boot must start from the bare image, and atelet's actor-dir reset does not
@@ -72,48 +89,56 @@ func resetRootfsUpperDir(actorDirs *ateompb.ActorDirs) error {
 	if err := os.RemoveAll(dir); err != nil {
 		return fmt.Errorf("while clearing rootfs upper dir %q: %w", dir, err)
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("while creating rootfs upper dir %q: %w", dir, err)
 	}
 	return nil
 }
 
-// tarRootfsUpper archives the actor's rootfs uppers (dir) into the checkpoint
-// directory. The caller must have paused the guest first: virtiofsd is
-// write-through, so a completed guest write has reached the host overlay's
-// upper by then, but a running guest could still add more after the walk.
-//
-// Each container's overlay WORKDIR (<cid>/work) is excluded: with index=off
-// pinned on the mount (see kata.StageMergedRootfs) a restored workdir is
-// inert — overlayfs wipes and rebuilds it at mount, and StageMergedRootfs
-// recreates the directory regardless — so archiving it is dead weight on the
-// suspend path. Not always trivial weight, either: a copy-up in flight when
-// the guest paused can leave file-sized temp data there.
-func tarRootfsUpper(ctx context.Context, dir, checkpointDir string) error {
-	skipWorkdir := func(rel string) bool {
-		parts := strings.Split(rel, "/")
-		return len(parts) == 2 && parts[1] == "work"
-	}
-	if err := tarutil.CreateFiltered(ctx, filepath.Join(checkpointDir, rootfsUpperTarFile), dir, skipWorkdir); err != nil {
-		return fmt.Errorf("while archiving rootfs uppers from %q: %w", dir, err)
+// tarRootfsUpper archives each container's rootfs upperdir under dir into the
+// checkpoint directory, one tar per container. The caller must have paused the
+// guest first: virtiofsd is write-through, so a completed guest write has
+// reached the host overlay's upper by then, but a running guest could still
+// add more after the walk.
+func tarRootfsUpper(ctx context.Context, dir, checkpointDir string, containers []string) error {
+	for _, cid := range containers {
+		name, err := rootfsUpperTarFile(cid)
+		if err != nil {
+			return err
+		}
+		upper, _ := kata.UpperWorkDirs(dir, cid)
+		if err := tarutil.CreateWithRoot(ctx, filepath.Join(checkpointDir, name), upper); err != nil {
+			return fmt.Errorf("while archiving rootfs upper %q: %w", upper, err)
+		}
 	}
 	return nil
 }
 
-// untarRootfsUpper restores the rootfs uppers from a snapshot into the actor's
-// host directory. It must run before the merged overlays are mounted (the
-// mounts consume these contents). The directory is recreated from scratch:
-// nothing else owns it, and stale contents from a previous activation would
-// corrupt the overlay state the guest's find-paths re-opens.
-func untarRootfsUpper(dir, snapshotDir string) error {
+// untarRootfsUpper restores each container's rootfs upperdir from the snapshot
+// into the actor's host directory. It must run before the merged overlays are
+// mounted (the mounts consume these contents). The directory is recreated from
+// scratch: nothing else owns it, and stale contents from a previous activation
+// would corrupt the overlay state the guest's find-paths re-opens. Every
+// directory above the upperdirs is created here, never taken from the tar.
+func untarRootfsUpper(dir, snapshotDir string, containers []string) error {
 	if err := os.RemoveAll(dir); err != nil {
 		return fmt.Errorf("while clearing rootfs upper dir %q: %w", dir, err)
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("while creating rootfs upper dir %q: %w", dir, err)
 	}
-	if err := tarutil.Extract(filepath.Join(snapshotDir, rootfsUpperTarFile), dir); err != nil {
-		return fmt.Errorf("while restoring rootfs uppers into %q: %w", dir, err)
+	for _, cid := range containers {
+		name, err := rootfsUpperTarFile(cid)
+		if err != nil {
+			return err
+		}
+		upper, _, err := kata.MkdirUpperWorkDirs(dir, cid)
+		if err != nil {
+			return fmt.Errorf("while creating rootfs upper for %q: %w", cid, err)
+		}
+		if err := tarutil.Extract(filepath.Join(snapshotDir, name), upper); err != nil {
+			return fmt.Errorf("while restoring rootfs upper %q: %w", upper, err)
+		}
 	}
 	return nil
 }

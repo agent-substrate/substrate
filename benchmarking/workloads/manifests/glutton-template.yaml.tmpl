@@ -61,7 +61,6 @@ resources:
   - name: memory
     quantity: ${ACTOR_MEMORY}
 snapshotConfig:
-  onPause: SNAPSHOT_CONTENT_SCOPE_FULL
   onCommit: SNAPSHOT_CONTENT_SCOPE_FULL
   storageLocation: gs://${BUCKET_NAME}/benchmark-workloads/glutton/
 sandboxConfig:

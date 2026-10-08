@@ -22,12 +22,12 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // newWorkerDeleteWorkflow returns a workflow backed by a real store, which is
@@ -60,7 +60,7 @@ func seedAPIActor(t *testing.T, ctx context.Context, persistence store.Interface
 				WorkerPool:      "pool-1",
 				WorkerPod:       "worker-pod-1",
 				WorkerPodUid:    apiWorkerName,
-				WorkerPodIp:     "10.1.2.3",
+				WorkerPodIps:    []string{"10.1.2.3"},
 			},
 		},
 	}
@@ -289,7 +289,7 @@ func TestDeleteWorkerWorkflow_FailedReleaseKeepsWorker(t *testing.T) {
 			// both records stay as they were.
 			name:       "store unavailable",
 			updateErr:  errors.New("store is down"),
-			wantCode:   codes.Unknown,
+			wantCode:   codes.Internal,
 			wantActor:  ateapipb.ActorState_ACTOR_STATE_RUNNING,
 			wantWorker: true,
 		},
@@ -316,7 +316,7 @@ func TestDeleteWorkerWorkflow_FailedReleaseKeepsWorker(t *testing.T) {
 			if err == nil {
 				t.Fatal("DeleteWorker() = nil error, want the release failure reported")
 			}
-			if got := status.Code(err); got != tc.wantCode {
+			if got := apierror.Code(err); got != tc.wantCode {
 				t.Errorf("DeleteWorker() code = %v (err %v), want %v", got, err, tc.wantCode)
 			}
 
@@ -362,7 +362,7 @@ func TestDeleteWorkerWorkflow_AbsentReportsNotFoundThroughStepWrap(t *testing.T)
 	wf, _ := newWorkerDeleteWorkflow(t)
 
 	_, err := wf.DeleteWorker(ctx, apiWorkerName, store.DeletePreconditions{})
-	if got := status.Code(err); got != codes.NotFound {
+	if got := apierror.Code(err); got != codes.NotFound {
 		t.Fatalf("DeleteWorker() code = %v (err %v), want %v", got, err, codes.NotFound)
 	}
 	if want := "step LoadWorkerForDelete"; !strings.Contains(err.Error(), want) {

@@ -27,6 +27,9 @@ image, then deploys the Locust workers:
 Useful flags:
 
 * `--worker-count N` — number of `WorkerPool` replicas (default 1).
+* `--worker-memory SIZE` — memory request and limit for each `WorkerPool` pod
+  (default unset, the pod is unsized). Set it above half a node's allocatable
+  memory to get one worker per node.
 * `--skip-build` — reuse the existing `:latest` locust image (skip the
   `docker build && docker push` step).
 
@@ -45,7 +48,7 @@ convenience:
 ```
 
 The installer accepts `--benchmark-worker-count N` (default `1`).
-`--skip-build` is only available when invoking
+`--skip-build` and `--worker-memory` are only available when invoking
 `benchmarking/deploy_locust.sh` directly.
 
 ## Running Tests
@@ -79,12 +82,17 @@ not a local entry point. See [automation/README.md](automation/README.md).
 python3 runner.py -f tests/<user-class>.py -t 1m -u 1 --name <run-name> --dest /tmp/bench
 ```
 
-One flag controls the optional post-run measurements described in
+Three flags control the optional post-run measurements described in
 [Benchmark output files](#benchmark-output-files):
 
 * `--cluster-facts` / `--no-cluster-facts`: read node capacity and worker pod
   count from the Kubernetes API once the run ends, to derive density frontiers.
   On by default. Pass `--no-cluster-facts` to skip Kubernetes API discovery.
+* `--prometheus-url`: the Prometheus to harvest server-side telemetry from.
+  Defaults to the in-cluster service installed by
+  [Optional: Prometheus + Grafana](#optional-prometheus--grafana).
+* `--atelet-lag-s`: how long to wait after the run before reading the
+  atelet's snapshot metrics. Defaults to 70.
 
 Test-specific flags are appended to the same command; see the sections below.
 
@@ -155,12 +163,13 @@ step's think time, and the next step's first request **wakes it through the
 atenet router** (request parking). Mostly-idle sessions plus fast wake is
 exactly the oversubscription story this measures.
 
-The entire workload is the declarative script in
-[`internal/benchmarking/boomer/agentsession/script.go`](../internal/benchmarking/boomer/agentsession/script.go)
-— one table entry per step, naming what the agent is doing and the resource
-ops that act it out. To change the workload, edit the table. Each session is
-an actor from the stock `glutton` template; steps are sequences of glutton
-RPCs:
+The entire workload is a YAML script. The default,
+[`internal/benchmarking/boomer/agentsession/scripts/coding-session.yaml`](../internal/benchmarking/boomer/agentsession/scripts/coding-session.yaml),
+has one entry per step naming what the agent is doing and the resource ops
+that act it out. To change the workload, edit it or add a sibling file and
+select it with `--agentsession-script` (see [Writing a
+script](#writing-an-agent-session-script)). Each session is an actor from
+the stock `glutton` template; steps are sequences of glutton RPCs:
 
 | Step | The agent is… | Sandbox effect |
 |---|---|---|
@@ -188,9 +197,10 @@ RPCs:
 The script needs bigger actors than the 256Mi default: it holds ~96Mi of
 RAM arrays + ~110Mi of tmpfs files, and the observed guest peak with
 allocator transients is ~320Mi (512Mi OOMs). Deploy the workloads with
-`--actor-memory 1Gi`. `TestSessionBudgets` bounds the script-declared bytes
-only, so script edits that grow the working set fail the test and force this
-guidance to be revisited.
+`--actor-memory 1Gi`. Every script declares that floor as
+`min_actor_memory`; the worker reads the `glutton` template's memory limit
+at start and refuses to run a script against a smaller actor, so a too-small
+deployment fails loudly instead of showing up as OOM-flaky steps.
 
 ```sh
 ./benchmarking/deploy_locust.sh --deploy --sandbox-class gvisor --actor-memory 1Gi
@@ -199,6 +209,15 @@ guidance to be revisited.
 
 #### Agent-Session Configuration Knobs
 
+* `--agentsession-script` — built-in script variant to run, by file name
+  under `internal/benchmarking/boomer/agentsession/scripts/` (default
+  `coding-session`). Resolved when a session starts, so a change takes
+  effect for sessions started after the next swarm; sessions already
+  running finish on the script they started with.
+* `--agentsession-script-file` — path, on the boomer worker, of a script
+  YAML to run instead of a built-in variant; wins over
+  `--agentsession-script`. Normally set for you by
+  `locust/deploy.sh --agentsession-script FILE` (below).
 * `--agentsession-think-scale` — multiplier on every think gap; 0.5 makes the
   fleet twice as chatty, 4.0 models slow reasoning models (default 1.0). Each
   gap gets ±20% jitter so sessions don't move in lockstep.
@@ -206,6 +225,89 @@ guidance to be revisited.
   first request wake the actor; explicit issues ResumeActor before traffic.
 * `--lifecycle-mode suspend|pause` — durable suspend (default) or node-local
   pause between steps.
+
+#### Writing an agent-session script
+
+A script is a named step list with a memory floor:
+
+```yaml
+name: coding-session
+min_actor_memory: 1Gi
+steps:
+  - name: 01_read_task
+    agent: Boots, reads the task prompt, loads its context window
+    think: 2s
+    ops:
+      - fill_ram: {key: agent_context, size: 32Mi}
+      - ping: {}
+  - name: 02_clone_repo
+    agent: git clone of the target repository
+    think: 3s
+    ops:
+      - ingest: {key: repo_tarball, size: 16Mi}
+      - burn_cpu: {millis: 500, parallel: 1}
+```
+
+`think` is the suspended gap before the step (a Go duration, scaled by
+`--agentsession-think-scale`); `name` keys the `Step_<name>` stats row.
+Sizes are Kubernetes quantities. Each op is one glutton RPC:
+
+| Op | Arguments | Sandbox effect |
+|---|---|---|
+| `ingest` | `key`, `size` | bytes cross the network from the driver and land in a file: a download |
+| `burn_cpu` | `millis`, `parallel` (default 1) | spins `parallel` goroutines for `millis` of wall clock |
+| `write_disk` | `key`, `size` | writes locally generated bytes to a file |
+| `read_disk_digest` | `key` | reads and hashes a file; nothing ships back |
+| `read_disk_data` | `key` | reads a file and returns its bytes: disk read plus egress |
+| `fill_ram` | `key`, `size` | allocates a resident RAM array |
+| `churn_ram` | `key`, `size` | re-randomizes part of an array in place, dirtying pages |
+| `walk_ram` | `key` | touches one byte per page: demand-paging cost after a resume |
+| `ping` | none | a minimal round trip through the router |
+| `dwell` | `millis` | no request: the actor stays resident and idle, as a gateway does during a model round trip or a typing gap |
+
+Loading is strict: unknown op kinds or fields, an argument a kind does not
+take, a read of a file nothing wrote, a walk of an array nothing filled, a
+duplicate step name, or a `min_actor_memory` below the declared RAM plus
+disk all fail before any actor is created. Built-in variants are checked by
+`TestEmbeddedScriptsAreValid`, so a broken file cannot merge.
+
+#### Built-in script variants
+
+`coding-session` (default) is a coding agent working one task: 20 steps of
+build, test and edit work, each preceded by a few seconds of LLM thinking
+spent suspended; about 40 CPU-seconds of sandbox work per lap.
+
+`personal-assistant` is an always-on assistant of the OpenClaw or Hermes
+Agent kind: one lap is one day in real time, with about 30 user messages
+in 7 clusters, a heartbeat turn every 30 minutes while the user is awake,
+hourly system-event crons, a morning briefing, model-catalog refreshes,
+one context compaction and a nightly memory sweep (61 wakes, about 65
+CPU-seconds and 150 MiB written per lap, a 640Mi resident heap that grows
+to about 960Mi). Each turn reads its session store, ships a 50 to 110 KiB
+context out through the router, dwells for the model round trip, and
+appends to its store, sized from an strace profile of OpenClaw; the
+script's header comment lists the figures. Its think gaps are the real
+idle gaps, so run it with a fractional think scale:
+`--agentsession-script personal-assistant --agentsession-think-scale 0.02`
+plays a day in about 30 minutes. Because every heartbeat and cron is a
+wake, the script also shows what an always-on agent costs a system that
+suspends it between events: an internal timer cannot fire in a suspended
+sandbox, so each of those turns needs an external wake.
+
+To run a script of your own without rebuilding anything, hand it to the
+locust deploy:
+
+```sh
+./benchmarking/locust/deploy.sh --deploy --user-class agentsession --agentsession-script ./my-session.yaml
+```
+
+The script validates the file locally first (the same check the worker
+runs, via `boomer-worker --check-agentsession-script`), uploads it as the
+`agentsession-script` ConfigMap, mounts it into the boomer workers at
+`/etc/agentsession/script.yaml`, and points the master's
+`--agentsession-script-file` default at that path. Workers log the loaded
+script's name, step count, and declared budgets on their first iteration.
+To go back to a built-in variant, redeploy without the flag.
 
 #### Agent-Session Reported Metrics
 
@@ -216,6 +318,40 @@ guidance to be revisited.
   think gap excluded.
 * `SuspendActor` / `ResumeActor` / `CreateActor` / `DeleteActor`: control-plane
   lifecycle latencies.
+
+### Spawn Benchmark
+
+The Spawn benchmark creates a batch of actors once and measures how long each
+actor takes from creation to its first answered ping, and how long the whole
+batch takes. `tests.yaml` runs it as `spawn_smoke_10_actors` with
+`shapes/spawn_shape.py`, which holds one user and ends the run once
+`TimeToAllReady` is recorded.
+
+Each boomer process creates one batch; extra users in the same process do
+nothing. Actors are named `spawn-<run-id>-<n>` and deleted when boomer exits.
+
+#### Spawn Configuration Knobs
+
+* `--total-actors`: Actors in the batch (default `100`).
+* `--spawn-concurrency`: Actors created concurrently (default `1`).
+* `--actor-deadline`: Per-actor timeout in seconds, covering create, resume and
+  first ping (default `120`).
+
+The web UI shows the same fields; `0` keeps the value boomer-worker started with.
+
+#### Spawn Reported Metrics
+
+* `CreateActor`, `ResumeActor`, `GluttonPing`: Latency of each call.
+* `ActorTimeToReady`: Per actor, from its first `CreateActor` attempt to its
+  first successful ping.
+* `TimeToReady_<k>pct` (`k` = 10, 20, … 100): From batch start until `k`% of
+  the batch was ready.
+* `TimeToAllReady`: From batch start until the last ready actor answered.
+  Actors that failed show up as `ActorTimeToReady` failures instead.
+* `CrashCount`: Actors that crashed during resume.
+
+The `actors_per_*` ratios in `trial_summary` are wrong for this test: they
+count users × `--actors-per-user`, not `--total-actors`.
 
 ### Viewing Traces
 You must have enabled otel tracing for your cluster to view traces.
@@ -236,6 +372,8 @@ them are checked into the repository.
 * `stats.jsonl`: one JSON object per line, one per metric. Every row carries
   the same five keys: `timestamp`, `tag`, `test_name`, `metric`, and a flat
   `measurements` map holding that metric's numbers.
+* `server_summary.json`: server-side telemetry harvested from Prometheus,
+  including the per-sample bin-packing timeseries.
 
 ### Density frontiers
 
@@ -277,9 +415,53 @@ comparing numbers across runs:
   and deletes actors as it goes never holds them all at the same time, so its
   real density is lower than reported.
 
-The Kubernetes API is not required. If it is unreachable, or discovery was
-skipped, the affected fields are written as `null` and the run still
-succeeds. A `null` means the value was not measured. It never means zero.
+### Server ground truth
+
+With a reachable Prometheus, `server_summary.json` records what the server
+actually did, independent of what the load generator reported.
+
+* `cluster_packing`: workers holding at least one actor (`partial` or
+  `at_capacity`) over the pool size at each sample (the sum of all
+  `ate_workerpool_workers` states), as a percentile `summary` plus the
+  per-sample `timeseries` it was computed from.
+* `node_psi.cpu_stall_pct`, `mem_stall_pct`, `io_stall_pct`: kernel pressure
+  stall percentages on the nodes hosting a worker pod, with every node's
+  samples pooled. `node_psi.nodes` is how many nodes were seen.
+* `pod_psi.cpu_stall_pct`, `mem_stall_pct`, `io_stall_pct`: the same for each
+  worker pod's cgroup slice, which also holds its gVisor sandbox, with every
+  pod's samples pooled. `pod_psi.pods` is how many pods were seen.
+* `snapshots.size_p50_mb` through `size_p99_mb`: actor memory image sizes.
+* `snapshots.size_avg_mb`: mean memory image size.
+* `snapshots.restore_p50_s` through `restore_p99_s`, `restore_mean_s`, and the
+  same for `checkpoint_*`: atelet restore and checkpoint latency.
+* `snapshots.checkpoints_in_window`, `checkpoints_cumulative`: checkpoint
+  volume over the steady-state window, and since the atelet started.
+* `snapshots.checkpoint_mb_s`: bytes written per second spent checkpointing,
+  not per second of wall clock.
+
+Every distribution reports p50, p90, p95 and p99 over the steady-state window.
+The steady-state window runs from the first to the last Locust sample at 90% or
+more of the run's peak user count, so ramp-up and teardown are left out. Under
+a step-ladder load shape it covers only the top step.
+Counts, means and `checkpoint_mb_s` come from the growth of the histogram's sum
+and count across the window, and the size, restore and checkpoint percentiles
+are interpolated inside its buckets. PSI is a one-minute rolling average read
+every 10s.
+
+The atelet exports before Prometheus scrapes it, so the harvest waits
+`--atelet-lag-s` seconds (default 70, enough for the OTel SDK's 60s default
+export and a 10s scrape)
+and reads the snapshot window half that late. The window ends at the last
+full-load sample, so teardown suspends are left out.
+
+`metadata.start_ts` and `end_ts` bound the whole run, which the packing
+`timeseries` covers. `steady_start_ts` and `steady_end_ts` bound the
+steady-state window. A flat subset of the numbers also goes into a
+`server_summary` row in `stats.jsonl`.
+
+Neither the Kubernetes API nor Prometheus is required. If either is unreachable,
+or discovery was skipped, the affected fields are written as `null` and the run
+still succeeds. A `null` means the value was not measured. It never means zero.
 
 ## Optional: Prometheus + Grafana
 

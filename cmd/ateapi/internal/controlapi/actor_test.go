@@ -29,6 +29,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/apivalidation"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/substratex509"
@@ -37,7 +38,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/peer"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/testing/protocmp"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -217,7 +217,7 @@ func TestUpdateActor(t *testing.T) {
 			updated, err := svc.UpdateActor(context.Background(), &ateapipb.UpdateActorRequest{Actor: tt.req})
 
 			if tt.wantCode != codes.OK {
-				if code := status.Code(err); code != tt.wantCode {
+				if code := apierror.Code(err); code != tt.wantCode {
 					t.Errorf("UpdateActor error = %v (code %v), want code %v", err, code, tt.wantCode)
 				}
 				return
@@ -295,7 +295,7 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 		Metadata:      created.GetMetadata(),
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "absent"},
 	}})
-	if got := status.Code(err); got != codes.FailedPrecondition {
+	if got := apierror.Code(err); got != codes.FailedPrecondition {
 		t.Fatalf("UpdateActor to an absent template = %v, want FailedPrecondition (err: %v)", got, err)
 	}
 
@@ -304,7 +304,7 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 		Metadata:      created.GetMetadata(),
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-c"},
 	}})
-	if got := status.Code(err); got != codes.FailedPrecondition {
+	if got := apierror.Code(err); got != codes.FailedPrecondition {
 		t.Fatalf("UpdateActor to a template with different mounts = %v, want FailedPrecondition (err: %v)", got, err)
 	}
 
@@ -313,7 +313,7 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 		Metadata:      created.GetMetadata(),
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-d"},
 	}})
-	if got := status.Code(err); got != codes.FailedPrecondition {
+	if got := apierror.Code(err); got != codes.FailedPrecondition {
 		t.Fatalf("UpdateActor to a template with different volumes = %v, want FailedPrecondition (err: %v)", got, err)
 	}
 
@@ -322,7 +322,7 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 		Metadata:      created.GetMetadata(),
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-e"},
 	}})
-	if got := status.Code(err); got != codes.FailedPrecondition {
+	if got := apierror.Code(err); got != codes.FailedPrecondition {
 		t.Fatalf("UpdateActor to a template with a different sandbox config = %v, want FailedPrecondition (err: %v)", got, err)
 	}
 
@@ -369,7 +369,7 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 		Metadata:      running.GetMetadata(),
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-b"},
 	}})
-	if got := status.Code(err); got != codes.FailedPrecondition {
+	if got := apierror.Code(err); got != codes.FailedPrecondition {
 		t.Fatalf("UpdateActor repointing a running actor = %v, want FailedPrecondition (err: %v)", got, err)
 	}
 
@@ -385,6 +385,147 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 	}
 	if got, want := kept.GetActorTemplate().GetName(), "tmpl-a"; got != want {
 		t.Errorf("updated actor_template.name = %q, want %q", got, want)
+	}
+}
+
+// TestUpdateActor_RepointTemplateStorageLocation covers the storage location
+// check on a repoint: an actor that owns an external snapshot may only move to
+// a template storing snapshots under the same location, so deleting the actor
+// still collects everything it wrote. Stored data the check cannot parse is a
+// server fault: the error carries no status, which ServerUnaryInterceptor
+// answers with INTERNAL.
+func TestUpdateActor_RepointTemplateStorageLocation(t *testing.T) {
+	ctx := context.Background()
+	persistence, cleanup := storetest.SetupTestStore(t)
+	t.Cleanup(cleanup)
+
+	storetest.MustCreateAtespace(t, ctx, persistence, testAtespace)
+	const (
+		sameLocation      = "gs://my-bucket/snapshots"
+		differentLocation = "gs://other-bucket/snapshots"
+	)
+	// same-location-slash spells sameLocation differently but resolves to the
+	// same prefix. corrupt has no bucket, which template validation rejects, so
+	// only a write straight to the store can leave it behind.
+	for name, location := range map[string]string{
+		"same-location":       sameLocation,
+		"same-location-slash": sameLocation + "/",
+		"different-location":  differentLocation,
+		"corrupt":             "gs:///snapshots",
+	} {
+		if _, err := persistence.CreateActorTemplate(ctx, &ateapipb.ActorTemplate{
+			Metadata:       &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
+			SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: location},
+			SandboxConfig:  &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR, ConfigName: "gvisor-default"},
+		}); err != nil {
+			t.Fatalf("creating template %s: %v", name, err)
+		}
+	}
+
+	snapshotOwnedByActor := func(t *testing.T, actor *ateapipb.Actor) string {
+		t.Helper()
+		uri, err := resources.NewActorSnapshotURI(sameLocation, testAtespace, actor.GetMetadata().GetUid(), "snap")
+		if err != nil {
+			t.Fatalf("NewActorSnapshotURI: %v", err)
+		}
+		return uri.String()
+	}
+	snapshotOwnedByTag := func(t *testing.T, _ *ateapipb.Actor) string {
+		t.Helper()
+		uri, err := resources.NewTagSnapshotURI(sameLocation, testAtespace, "0c6e2f4a-8b1d-4e57-a3f9-2d7c5b8e1a60")
+		if err != nil {
+			t.Fatalf("NewTagSnapshotURI: %v", err)
+		}
+		return uri.String()
+	}
+	unparseableSnapshot := func(*testing.T, *ateapipb.Actor) string {
+		return sameLocation + "/not-a-snapshot"
+	}
+
+	tests := []struct {
+		name      string
+		template  string
+		snapshot  func(*testing.T, *ateapipb.Actor) string
+		repointTo string
+		wantCode  codes.Code
+	}{
+		{
+			name:      "no external snapshot moves freely",
+			template:  "same-location",
+			repointTo: "different-location",
+			wantCode:  codes.OK,
+		},
+		{
+			name:      "snapshot borrowed from a tag moves freely",
+			template:  "same-location",
+			snapshot:  snapshotOwnedByTag,
+			repointTo: "different-location",
+			wantCode:  codes.OK,
+		},
+		{
+			name:      "owned snapshot moves to the same location spelled differently",
+			template:  "same-location",
+			snapshot:  snapshotOwnedByActor,
+			repointTo: "same-location-slash",
+			wantCode:  codes.OK,
+		},
+		{
+			name:      "owned snapshot cannot move to another location",
+			template:  "same-location",
+			snapshot:  snapshotOwnedByActor,
+			repointTo: "different-location",
+			wantCode:  codes.FailedPrecondition,
+		},
+		{
+			name:      "snapshot location repoint is checked even when old template is gone",
+			template:  "gone",
+			snapshot:  snapshotOwnedByActor,
+			repointTo: "different-location",
+			wantCode:  codes.FailedPrecondition,
+		},
+		{
+			name:      "unparseable snapshot",
+			template:  "same-location",
+			snapshot:  unparseableSnapshot,
+			repointTo: "different-location",
+			wantCode:  codes.Internal,
+		},
+		{
+			name:      "invalid storage location on the new template",
+			template:  "same-location",
+			snapshot:  snapshotOwnedByActor,
+			repointTo: "corrupt",
+			wantCode:  codes.Internal,
+		},
+	}
+	svc := &RPCService{impl: newServiceImpl(persistence, nil)}
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+				Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: fmt.Sprintf("actor-%d", i)},
+				ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: tt.template},
+				Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+			})
+			if tt.snapshot != nil {
+				uri := tt.snapshot(t, actor)
+				actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
+					s.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: uri}
+				})
+			}
+
+			updated, err := svc.UpdateActor(ctx, &ateapipb.UpdateActorRequest{Actor: &ateapipb.Actor{
+				Metadata:      actor.GetMetadata(),
+				ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: tt.repointTo},
+			}})
+			if got := apierror.Code(err); got != tt.wantCode {
+				t.Fatalf("UpdateActor to %s = %v, want %v (err: %v)", tt.repointTo, got, tt.wantCode, err)
+			}
+			if err == nil {
+				if got := updated.GetActorTemplate().GetName(); got != tt.repointTo {
+					t.Errorf("updated actor_template.name = %q, want %q", got, tt.repointTo)
+				}
+			}
+		})
 	}
 }
 
@@ -483,7 +624,7 @@ func TestValidateTemplateVolumesUnchanged(t *testing.T) {
 				t.Fatalf("validateVolumeMountsUnchanged() error = %v, wantErr %v", err, tt.wantErr)
 			}
 			if err != nil {
-				if got := status.Code(err); got != codes.FailedPrecondition {
+				if got := apierror.Code(err); got != codes.FailedPrecondition {
 					t.Errorf("status code = %v, want FailedPrecondition", got)
 				}
 			}
@@ -543,7 +684,7 @@ func TestUpdateActor_DeleteRecreateRace(t *testing.T) {
 	// The client asserts "only update the actor with uid A".
 	original.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}}
 	_, err = svc.UpdateActor(ctx, &ateapipb.UpdateActorRequest{Actor: original})
-	if code := status.Code(err); code != codes.Aborted {
+	if code := apierror.Code(err); code != codes.Aborted {
 		t.Errorf("UpdateActor error = %v (code %v), want code Aborted: the actor holding uid %s was deleted mid-update",
 			err, code, original.GetMetadata().GetUid())
 	}
@@ -605,7 +746,7 @@ func TestUpdateActor_ConcurrentDisjointUpdates(t *testing.T) {
 	// This update must fail: the racing update bumped the version.
 	original.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}}
 	_, err := svc.UpdateActor(ctx, &ateapipb.UpdateActorRequest{Actor: original})
-	if code := status.Code(err); code != codes.Aborted {
+	if code := apierror.Code(err); code != codes.Aborted {
 		t.Errorf("UpdateActor error = %v (code %v), want code Aborted: the guarded version moved under the update", err, code)
 	}
 
@@ -679,7 +820,7 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 			wantCode := codes.OK
 			switch scenario {
 			case "missing":
-				wantCode = codes.NotFound
+				wantCode = codes.FailedPrecondition
 			case "pending":
 				tag.Status.Snapshot = nil
 				wantCode = codes.FailedPrecondition
@@ -712,7 +853,7 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 			}
 			svc := &ServiceImpl{store: persistence}
 			created, err := svc.CreateActor(ctx, actor)
-			if status.Code(err) != wantCode {
+			if apierror.Code(err) != wantCode {
 				t.Fatalf("CreateActor = %v, want %v", err, wantCode)
 			}
 			if err != nil {

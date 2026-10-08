@@ -33,15 +33,17 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/atelet/internal/ategcs"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
 	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
+	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
+	"github.com/agent-substrate/substrate/pkg/objectstorage"
 )
 
 // sandboxManifestName is the object/file name of the per-snapshot manifest that
@@ -83,8 +85,8 @@ type sandboxAssetsRecord struct {
 	Assets       map[string]assetEntry `json:"assets"`
 	// PauseImage is the root sandbox container's image. It is recorded here
 	// rather than taken from the request at Restore so a snapshot is rebuilt
-	// with the same sandbox it was captured from.
-	PauseImage string `json:"pauseImage"`
+	// with the same sandbox it was captured from. Only gVisor has one.
+	PauseImage string `json:"pauseImage,omitempty"`
 	// Actor identity makes a flat snapshot self-identifying if control-plane
 	// persistence is unavailable.
 	Atespace              string `json:"atespace,omitempty"`
@@ -98,6 +100,10 @@ type sandboxAssetsRecord struct {
 	// (gVisor's image files, cloud-hypervisor's snapshot set, ...). Empty in the
 	// on-node record written at Run/Restore; populated at Checkpoint.
 	SnapshotFiles []string `json:"snapshotFiles,omitempty"`
+	// DataSnapshotFiles is the subset of SnapshotFiles that restores the actor
+	// at DATA scope on its own, as reported by CheckpointWorkloadResponse.
+	// Empty when the capture holds no durable data.
+	DataSnapshotFiles []string `json:"dataSnapshotFiles,omitempty"`
 	// Scope is the snapshot scope the checkpoint captured, as the shared
 	// ateattr label ("full" or "data"), so a snapshot's content is knowable
 	// from the manifest alone. Empty in the on-node record written at
@@ -116,8 +122,8 @@ func recordFromRequest(sa *ateletpb.SandboxAssets) (*sandboxAssetsRecord, error)
 	if archAssets == nil || len(archAssets.GetFiles()) == 0 {
 		return nil, fmt.Errorf("sandbox_assets has no assets for architecture %q", arch)
 	}
-	if sa.GetPauseImage() == "" {
-		return nil, fmt.Errorf("sandbox_assets has no pause_image")
+	if err := checkPauseImage(sa.GetSandboxClass(), sa.GetPauseImage()); err != nil {
+		return nil, fmt.Errorf("invalid sandbox_assets: %w", err)
 	}
 	rec := &sandboxAssetsRecord{
 		SandboxClass: sa.GetSandboxClass(),
@@ -128,6 +134,15 @@ func recordFromRequest(sa *ateletpb.SandboxAssets) (*sandboxAssetsRecord, error)
 		rec.Assets[name] = assetEntry{URL: f.GetUrl(), SHA256: f.GetSha256()}
 	}
 	return rec, nil
+}
+
+// checkPauseImage requires a pause image for gVisor, the only sandbox class
+// that runs a pause container.
+func checkPauseImage(sandboxClass, pauseImage string) error {
+	if sandboxClass == string(v1alpha1.SandboxClassGvisor) && pauseImage == "" {
+		return fmt.Errorf("gvisor sandbox has no pauseImage")
+	}
+	return nil
 }
 
 // ensureSandboxAssets fetches every asset in the record content-addressed and
@@ -436,14 +451,14 @@ func writeTarFile(dest string, r io.Reader, mode fs.FileMode) error {
 // the returned reader. Streaming (rather than buffering the whole asset) keeps a
 // multi-hundred-MiB guest image off the heap.
 func (s *AteomHerder) openAsset(ctx context.Context, url string) (io.ReadCloser, error) {
-	rc, anonErr := ategcs.Open(ctx, s.anonGCSClient, url)
+	rc, anonErr := objectstorage.Open(ctx, s.anonGCSClient, url)
 	if anonErr == nil {
 		return rc, nil
 	}
 	if s.gcsClient == nil {
 		return nil, anonErr
 	}
-	rc, mainErr := ategcs.Open(ctx, s.gcsClient, url)
+	rc, mainErr := objectstorage.Open(ctx, s.gcsClient, url)
 	if mainErr != nil {
 		return nil, fmt.Errorf("anonymous open failed (%v); main client open failed: %w", anonErr, mainErr)
 	}
@@ -484,14 +499,14 @@ func unmarshalSandboxRecord(data []byte) (*sandboxAssetsRecord, error) {
 	if err := json.Unmarshal(data, rec); err != nil {
 		return nil, fmt.Errorf("while parsing sandbox record/manifest: %w", err)
 	}
-	// Fail loudly rather than let an empty image reach the image pull: a record
-	// without one predates the pause image moving into the sandbox config, and
-	// its snapshot cannot be rebuilt with a known-matching sandbox.
-	if rec.PauseImage == "" {
-		return nil, fmt.Errorf("sandbox record/manifest has no pauseImage")
+	if err := checkPauseImage(rec.SandboxClass, rec.PauseImage); err != nil {
+		return nil, fmt.Errorf("invalid sandbox record/manifest: %w", err)
 	}
 	if err := validateSnapshotFiles(rec.SnapshotFiles); err != nil {
 		return nil, fmt.Errorf("sandbox record/manifest has invalid snapshotFiles: %w", err)
+	}
+	if err := validateDataSnapshotFiles(rec.SnapshotFiles, rec.DataSnapshotFiles); err != nil {
+		return nil, fmt.Errorf("sandbox record/manifest has invalid dataSnapshotFiles: %w", err)
 	}
 	return rec, nil
 }
@@ -512,6 +527,16 @@ func validateSnapshotFiles(files []string) error {
 			return fmt.Errorf("snapshotFiles[%d] %q is duplicated", i, name)
 		}
 		seen[name] = true
+	}
+	return nil
+}
+
+// validateDataSnapshotFiles requires each data file to be one of files.
+func validateDataSnapshotFiles(files, dataFiles []string) error {
+	for _, name := range dataFiles {
+		if !slices.Contains(files, name) {
+			return fmt.Errorf("data snapshot file %q is not one of the snapshot files", name)
+		}
 	}
 	return nil
 }

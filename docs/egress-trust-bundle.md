@@ -1,38 +1,40 @@
 # Enabling man-in-the-middle (MITM) interception for Actor Egress policy
 
-Under an sdsmint install, the egress gateway terminates every TLS connection an
-actor opens and re-originates it. The certificate the actor sees is therefore
-not the origin's — it is a per-SNI leaf the gateway minted, which chains to the
-gateway's own CA and to no public root. An actor that validates against only the
-public roots rejects it, and every HTTPS request the actor makes fails with a
-certificate error.
+## Overview
 
-This guide covers how to project the gateway's CA into an actor's filesystem
-and how to point the actor's TLS client at it.
+Substrate has special handling for traffic leaving actors --- it is routed
+through the egress gateway.  Connections that use TLS (likely the vast majority
+of your traffic to external destinations, like requests to google.com) require
+special configuration inside your actor in order to successfully establish the
+TLS connection.
 
-## DNS and egress policy
+The exact needed configuration is slightly different depending on whether you
+are using `tls_passthrough` (no interception) rules, or `https` (interception)
+rules.  This doc gives you a recipe for configuring your actors that will work
+for both scenarios.
 
-Actors send DNS queries to a relay at their sandbox's default gateway. The
-relay forwards UDP and TCP DNS to the worker pod's configured resolvers,
-without passing through the external egress gateway or checking egress policy.
-There is currently no per-actor setting to disable this relay or filter queries.
+Connections allowed via a `tls_passthrough` rule are just forwarded through the
+egress gateway, with no modifications.  The TLS connections are established
+directly between the actor and the external destination, so the egress gateway
+has no visibility into the connection (beyond metadata such as the destination).
 
-DNS remains available when no egress gateway is configured. Other outbound TCP
-connections are captured by atunnel and refused in that configuration.
+Connections allowed via an `https` rule have TLS terminated at the egress
+gateway, so that the gateway can inspect the requests and inject credentials.
+The gateway then open a new TLS connection to the real destination, and sends
+the modified requests.
 
-## When you need this
+The egress gateway does the TLS termination using server certificates it mints
+on-the-fly using a built-in CA.  In order for the interception to work, the code
+you run inside the actor must be explicitly configured to trust this built-in
+CA.  Substrate can automatically inject the root certificates for this CA into
+the actor's filesystem using a SystemInfo volume with a TrustBundle data source.
 
-You need it when **all** of the following hold:
+Note: DNS traffic from the actor (both TCP and UDP) is not forwarded to the
+gateway, and thus cannot be affected by egress policies.  Instead, the DNS
+traffic is allowed to directly exit the worker pod and be answered by the host
+cluster's configured DNS server.
 
-* The cluster runs the sdsmint egress gateway (`hack/install-ate.sh
-  --deploy-atenet --experimental-use-sdsmint`).
-* The actor makes **HTTPS** (or any TLS) requests.
-
-If you configure this on a non-sdsmint install you will *break* the actor:
-the steps below make the gateway CA the actor's only trust anchor, and without
-a MITM gateway in front of it nothing the actor dials will chain to that CA.
-
-## Project the bundle
+## Configuring a workload to trust public and man-in-the-middle CAs
 
 Add a `systemInfo` volume with a `trustBundle` data source, and mount it:
 
@@ -47,124 +49,97 @@ spec:
   - name: system-info
     systemInfo:
       dataSources:
-      # The trust anchors for the per-SNI leaves the egress gateway mints.
+      # This file will contain trust anchors for both the MITM CA and standard
+      # public WebPKI CAs, meaning it will work for actors that use `https` rules,
+      # `tls_passthrough` rules, or a mix.
       - trustBundle:
-          name: egress-mitm.ate.dev
+          names:
+          - egress-mitm.ate.dev
+          - system-roots.ate.dev
           path: trust-bundle.pem
   containers:
   - name: app
     image: ...
     volumeMounts:
     - name: system-info
-      mountPath: /run/ate   # the bundle lands at /run/ate/trust-bundle.pem
+      mountPath: /run/ate/egress-trust-bundle/
 ```
 
-`trustBundle.name` selects a bundle substrate knows how to fetch.
+Substrate only offers a few built-in trust bundles with well-known names:
+* `egress-mitm.ate.dev` — the egress gateway CA.
+* `system-roots.ate.dev` — A selection of public CA root certificates provided
+  by Substrate.  In official Substrate images, this is the Mozilla Root Store as
+  shipped on Debian (consumed via the distroless-static base image).
 
-`trustBundle.path` is relative to the root of the volume, so the file's absolute path is
-`mountPath` + `path`. It must be a clean relative Unix path: no leading or
-trailing `/`, no `//`, `.`, or `..` segments, and at most 16 segments. A
-`systemInfo` volume takes at most 8 data sources and their paths must not repeat.
+You then need to configure your application to use the trust-bundle file.  In
+general, this is application specific, but many runtimes respect the
+SSL_CERT_FILE environment variables.  Here are some common scenarios and the
+configuration they support:
 
-The projected PEM contains `CERTIFICATE` blocks only, deduplicated and
-deliberately shuffled — order carries no meaning, so do not write anything that
-depends on the first block being a particular certificate.
-
-## Point the runtime at it
-
-Projecting the file is not enough; each TLS stack has to be told to use it.
-
-### Go, and anything linked against OpenSSL
-
-```yaml
-    env:
-    - name: SSL_CERT_FILE
-      value: /run/ate/trust-bundle.pem
-    - name: SSL_CERT_DIR
-      value: /run/ate
-```
-
-Set **both**. `SSL_CERT_FILE` replaces the default certificate *file* list, but
-the default certificate *directory* list is still scanned, and most base images
-keep their public roots in `/etc/ssl/certs`. With `SSL_CERT_FILE` alone the
-actor trusts the gateway CA *in addition to* every public CA. Pointing
-`SSL_CERT_DIR` at the projection as well makes the anchor set exactly the
-gateway CA — so a successful HTTPS fetch proves the projected bundle is what
-validated the minted leaf, rather than a public root happening to work.
-
-Under sdsmint the public roots are useless anyway: every TLS origin the actor
-can reach is fronted by the gateway.
-
-### Other runtimes
-
-| Runtime | Variable | Note |
+| Runtime/Library | Setting | Notes |
 |---|---|---|
-| Node.js | `NODE_EXTRA_CA_CERTS=/run/ate/trust-bundle.pem` | *Adds* to Node's bundled roots rather than replacing them; the actor keeps trusting public CAs. |
-| Python `requests` | `REQUESTS_CA_BUNDLE=/run/ate/trust-bundle.pem` | `requests` defaults to certifi and ignores `SSL_CERT_FILE`. |
-| Python `ssl` / `urllib` | `SSL_CERT_FILE`, `SSL_CERT_DIR` | Honored via OpenSSL's default verify paths. |
-| Python `httpx`, other Certifi-based clients | — | No environment variable; Certifi is pinned in code. Pass the path explicitly, e.g. `httpx.Client(verify="/run/ate/trust-bundle.pem")`. |
-| curl | `CURL_CA_BUNDLE=/run/ate/trust-bundle.pem` | |
-| git over HTTPS | `GIT_SSL_CAINFO=/run/ate/trust-bundle.pem` | |
-| Java | — | No environment variable. Convert the PEM to a PKCS#12 or JKS truststore at startup and pass `-Djavax.net.ssl.trustStore`. |
+| Go | SSL_CERT_FILE=/run/ate/egress-trust-bundle/trust-bundle.pem |  |
+| Python (most things) | SSL_CERT_FILE=/run/ate/egress-trust-bundle/trust-bundle.pem | Anything using OpenSSL's default paths: `ssl`, `urllib`, `aiohttp`, `psql` ... |
+| Python (requests) | REQUESTS_CA_BUNDLE=/run/ate/egress-trust-bundle/trust-bundle.pem | |
+| pip (uses requests) | REQUESTS_CA_BUNDLE=/run/ate/egress-trust-bundle/trust-bundle.pem | |
+| Node.js | NODE_EXTRA_CA_CERTS=/run/ate/egress-trust-bundle/trust-bundle.pem | |
+| Deno | DENO_CERT=/run/ate/egress-trust-bundle/trust-bundle.pem | |
+| curl | SSL_CERT_FILE=/run/ate/egress-trust-bundle/trust-bundle.pem ||
+| git (HTTPS remotes) | GIT_SSL_CAINFO=/run/ate/egress-trust-bundle/trust-bundle.pem ||
+
+Note: If your application relies on an additional private CA built into the
+system trust store of your base container image (for example, if your enterprise
+setup has an additional layer of TLS man-in-the-middle for traffic leaving your
+network), then you will find that whether or not it is respected depends on the
+software you are running inside your actor.  For example, Deno and Python
+requests treat their environment variable overrides as *completely replacing*
+the system trust store, where as most things that support SSL_CERT_FILE treat it
+as *additive* to the system trust store.  If you need to support this scenario,
+you will need to use an entrypoint wrapper to build a file containing the
+substrate-provided roots along with your custom roots (or directly configure
+this setup in your application's startup logic).    See the [example](#example-entrypoint-wrapper-for-custom-roots) below.
+
+## Example entrypoint wrapper for custom roots
+
+```sh
+#!/bin/sh
+set -eu
+sys=/etc/ssl/certs/ca-certificates.crt   # RHEL family: /etc/pki/tls/certs/ca-bundle.crt
+ca=/run/ate/trust-bundle.pem
+out=/tmp/ca-bundle.pem
+{ cat "$sys"; echo; cat "$ca"; } > "$out"
+export SSL_CERT_FILE="$out" REQUESTS_CA_BUNDLE="$out" CURL_CA_BUNDLE="$out" GIT_SSL_CAINFO="$out" PIP_CERT="$out"
+export NODE_EXTRA_CA_CERTS="$ca" DENO_CERT="$ca"
+exec "$@"
+```
+
+Note: Do not bake the bundle into the image at build time. It will tie the image to one cluster's CA and breaks on rotation.
 
 ## Verify
 
-`demos/egress/egress-mitm.yaml.tmpl` is a complete working template that does
-exactly this. Deploy it against an sdsmint install:
+`demos/egress/egress-template.yaml.tmpl` is a complete working template that
+does exactly this. Deploy it:
 
 ```bash
-./hack/install-ate.sh --deploy-demo-egress-mitm
+./hack/install-ate.sh --deploy-demo-egress
 ```
 
-Then drive an actor's egress at an HTTPS URL and confirm it returns a response
-rather than a certificate error. Because the demo sets `SSL_CERT_DIR` as well,
-a `200` is positive evidence that the projected bundle did the validating.
+Then drive an actor's egress at an HTTPS URL an `https` rule allows and
+confirm it returns a response rather than a certificate error. The minted leaf
+chains to no public root, so a `200` is positive evidence that the projected
+bundle did the validating.
 
 ## Operational notes
 
-**A bundle that does not resolve fails the actor start.** If the name is not on
-the allowlist, the backing ClusterTrustBundle is missing, or the bundle is empty
-or unparseable, the actor does not start — an actor that declared a trust bundle
-must not run without one.
-
-atelet logs it on the node that was going to host the actor, as the `err` field
-of the interceptor's `Handle RPC` record, at INFO, with
-`method=/atelet.AteomHerder/Run` (or `/atelet.AteomHerder/Restore` when a
-suspended actor is coming back):
-
-```
-while populating system-info volume "system-info": system-info projection "trust-bundle.pem": trust bundle "egress-mitm.ate.dev": ClusterTrustBundle "egress-mitm.ate.dev:mitm:primary-bundle" not found
-```
-
-ateapi surfaces the same text to the caller that asked for the actor, wrapped
-once by the resume step and once by gRPC:
-
-```
-while creating workload from spec: rpc error: code = Internal desc = while populating system-info volume "system-info": system-info projection "trust-bundle.pem": trust bundle "egress-mitm.ate.dev": ClusterTrustBundle "egress-mitm.ate.dev:mitm:primary-bundle" not found
-```
-
-That is the common case: projecting `egress-mitm.ate.dev` on an install without
-`--experimental-use-sdsmint`, where nothing creates the `egress-mitm-ca-pool`
-Secret the bundle derives from. `system-info` is the volume's `name` from your
-template and `trust-bundle.pem` its `path`, so those two vary with what you
-wrote. The other failure modes differ only in the innermost clause:
-
-| Cause | Innermost clause |
-|---|---|
-| Name not on the allowlist | `trust bundle "my-own-bundle" is not supported by this deployment (supported: egress-mitm.ate.dev)` |
-| Bundle present but empty or unparseable | `trust bundle "egress-mitm.ate.dev": unusable ClusterTrustBundle "egress-mitm.ate.dev:mitm:primary-bundle": …` |
-
-**Rotation is picked up on the next resume.** atelet re-resolves the bundle on
-both `Run` and `Restore`, so a suspended actor gets the current anchors when it
-comes back. A long-running actor that never suspends keeps the copy made when it
-started — and a process that has already loaded the file into memory (Go caches
-its system pool after first use) will not see a change on disk either way. Plan
-CA rotation around a resume, with an overlap window that covers the actors that
-do not suspend.
-
-**The bundle is not a substitute for authenticating the actor.** It lets the
-actor verify the *gateway*. It says nothing to an origin about which actor is
-calling; see `cmd/atenet/internal/router/README.md` for that direction.
+* Problems with trust bundles will block actor startup.  Error messages:
+  - `... unknown trust bundle "foo"`: You tried to use an unknown trust bundle name.
+  - `... trust bundle "foo": unusable contents ...`: Your substrate installation is misconfigured.
+* Certificate errors are likely problems with the actor, not the gateway: If you
+  see an error message like `... certificate signed by unknown authority ...`,
+  the most likely cause is that your actor is not configured to trust the MITM
+  CA correctly.
+* This CA configuration does not help the actor authenticate to the destination.
+  For that, refer to our documentation on egress credential injection. 
 
 ## See also
 

@@ -16,7 +16,10 @@
 # NOT the ate.dev/v1alpha1 CRD) for the micro-VM egress demo. The actor's
 # outbound TCP is redirected into atunnel by nftables in the ateom
 # (prepareActorEgress), which the micro-VM ateom implements the same way the
-# gVisor one does — this fixture is what proves it end to end.
+# gVisor one does — this fixture is what proves it end to end. Delivery of the
+# projected trust bundle into the sandbox also differs by class — a read-only
+# bind for gVisor, the unified virtio-fs share for the guest here — so the
+# projection is proven on both.
 #
 # Kept in step with egress-template.yaml.tmpl; the deltas are the
 # runtime fields and the sandbox size.
@@ -31,6 +34,17 @@ containers:
 - name: egress
   image: ko://github.com/agent-substrate/substrate/demos/egress
   command: ["/ko-app/egress"]
+  # The demo fetches with a stock net/http client. SSL_CERT_FILE adds the
+  # gateway CA, and Go still scans /etc/ssl/certs, so the image's public
+  # roots stay available for tls_passthrough origins. SSL_CERT_DIR would
+  # drop them, so it is deliberately not set.
+  env:
+  - name: SSL_CERT_FILE
+    value: /run/ate/trust-bundle.pem
+  volumeMounts:
+  # the bundle lands at /run/ate/trust-bundle.pem
+  - name: system-info
+    mountPath: /run/ate
   wakeupProbe:
     httpGet:
       path: /readyz
@@ -38,6 +52,16 @@ containers:
     # See ../counter/counter-microvm-template.yaml.tmpl: a micro-VM guest needs
     # more than the wakeup probe's 30s default once CI's single kind node is under load.
     timeoutSeconds: 120
+volumes:
+- name: system-info
+  systemInfo:
+    dataSources:
+    # The trust anchors for the per-SNI leaves the egress gateway mints.
+    # Only allowlisted bundle names resolve; this is the one supported today.
+    - trustBundle:
+        names:
+        - egress-mitm.ate.dev
+        path: trust-bundle.pem
 # Sandbox size: without these the guest boots at ateom's default size
 # (2GiB). ateom applies them to the VM (see internal/sizing). Quantities are
 # strings in the proto.
@@ -53,6 +77,5 @@ sandboxConfig:
   # explicitly makes a missing or stale install fail loudly.
   configName: microvm
 snapshotConfig:
-  onPause: SNAPSHOT_CONTENT_SCOPE_FULL
   onCommit: SNAPSHOT_CONTENT_SCOPE_FULL
   storageLocation: gs://${BUCKET_NAME}/ate-demo-egress-microvm/

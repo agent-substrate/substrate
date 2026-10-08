@@ -28,6 +28,8 @@ import (
 // Apply set default values to Substrate resource proto messages.
 func Apply(m proto.Message) {
 	switch v := m.(type) {
+	case *ateapipb.AccessPolicy:
+		applyAccessPolicyDefaults(v)
 	case *ateapipb.Actor:
 		applyActorDefaults(v)
 	case *ateapipb.ActorTemplate:
@@ -59,17 +61,8 @@ func applySnapshotConfigDefaults(sc *ateapipb.SnapshotConfig) {
 	if sc == nil {
 		return
 	}
-	if sc.OnPause == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED {
-		sc.OnPause = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL
-	}
 	if sc.OnCommit == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED {
 		sc.OnCommit = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL
-	}
-	if sc.OnResume == nil {
-		sc.OnResume = &ateapipb.OnResumeConfig{}
-	}
-	if sc.OnResume.FromData == ateapipb.ResumeSource_RESUME_SOURCE_UNSPECIFIED {
-		sc.OnResume.FromData = ateapipb.ResumeSource_RESUME_SOURCE_COLD_BOOT
 	}
 }
 
@@ -88,6 +81,8 @@ func applyContainerDefaults(c *ateapipb.Container) {
 		hg.Path = defaultWakeupProbePath
 	}
 }
+
+func applyAccessPolicyDefaults(*ateapipb.AccessPolicy) {}
 
 func applyActorDefaults(*ateapipb.Actor) {}
 

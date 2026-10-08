@@ -21,11 +21,10 @@ import (
 	"log/slog"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // DeleteWorker executes the workflow to deregister a Worker. The caller reaches
@@ -47,9 +46,9 @@ func (w *WorkerWorkflow) DeleteWorker(ctx context.Context, name string, precondi
 	if err := precondition.Check(worker.GetMetadata()); err != nil {
 		switch {
 		case errors.Is(err, store.ErrUIDConflict):
-			return nil, status.Errorf(codes.Aborted, "Worker %s does not have uid %s", name, precondition.UID)
+			return nil, apierror.Aborted("Worker %s does not have uid %s", name, precondition.UID)
 		case errors.Is(err, store.ErrVersionConflict):
-			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
+			return nil, apierror.Aborted("concurrent update conflict, please retry")
 		}
 		return nil, err
 	}
@@ -86,7 +85,7 @@ func (w *WorkerWorkflow) loadWorkerForDelete(ctx context.Context, name string) (
 	worker, err := w.store.GetWorker(ctx, name)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, status.Errorf(codes.NotFound, "Worker %s not found", name)
+			return nil, apierror.NotFound("Worker %s not found", name)
 		}
 		return nil, fmt.Errorf("while fetching worker: %w", err)
 	}
@@ -240,7 +239,7 @@ func (w *WorkerWorkflow) crashBoundActor(ctx context.Context, worker *ateapipb.W
 		// The actor was deleted out from under us; nothing points here anymore.
 		return nil
 	case errors.Is(err, store.ErrUIDConflict), errors.Is(err, store.ErrVersionConflict):
-		return status.Error(codes.Aborted, "concurrent update conflict, please retry")
+		return apierror.Aborted("concurrent update conflict, please retry")
 	default:
 		return fmt.Errorf("while releasing actor from worker %s: %w", name, err)
 	}
@@ -264,11 +263,11 @@ func (w *WorkerWorkflow) finalizeDeleted(ctx context.Context, name string, preco
 	if err != nil {
 		switch {
 		case errors.Is(err, store.ErrNotFound):
-			return nil, status.Errorf(codes.NotFound, "Worker %s not found", name)
+			return nil, apierror.NotFound("Worker %s not found", name)
 		case errors.Is(err, store.ErrUIDConflict):
-			return nil, status.Errorf(codes.Aborted, "Worker %s does not have uid %s", name, precondition.UID)
+			return nil, apierror.Aborted("Worker %s does not have uid %s", name, precondition.UID)
 		case errors.Is(err, store.ErrVersionConflict):
-			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
+			return nil, apierror.Aborted("concurrent update conflict, please retry")
 		}
 		return nil, fmt.Errorf("while deleting worker from DB: %w", err)
 	}

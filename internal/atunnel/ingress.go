@@ -18,7 +18,6 @@ package atunnel
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -34,6 +33,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/atenet"
+	"github.com/agent-substrate/substrate/internal/credbundle"
 	"github.com/agent-substrate/substrate/internal/resources"
 )
 
@@ -119,13 +119,9 @@ func NewServer(cfg Config) (*Server, error) {
 	if _, err := loadCredentialBundle(cfg.CredentialBundlePath); err != nil {
 		return nil, err
 	}
-	trustPEM, err := os.ReadFile(cfg.TrustBundlePath)
-	if err != nil {
-		return nil, fmt.Errorf("atunnel: reading trust bundle: %w", err)
-	}
-	clientCAs := x509.NewCertPool()
-	if !clientCAs.AppendCertsFromPEM(trustPEM) {
-		return nil, fmt.Errorf("atunnel: trust bundle %q contains no certificates", cfg.TrustBundlePath)
+	loadClientCAs := credbundle.PoolLoader(cfg.TrustBundlePath)
+	if _, err := loadClientCAs(); err != nil {
+		return nil, fmt.Errorf("atunnel: loading trust bundle: %w", err)
 	}
 
 	s := &Server{
@@ -136,28 +132,40 @@ func NewServer(cfg Config) (*Server, error) {
 	s.newProxy = func(dial DialFunc) *httputil.ReverseProxy {
 		return newActorProxy(cfg.Upstream, dial)
 	}
+	verifyConnection := func(cs tls.ConnectionState) error {
+		if len(cs.PeerCertificates) == 0 {
+			return fmt.Errorf("atunnel: client certificate is required")
+		}
+		for _, uri := range cs.PeerCertificates[0].URIs {
+			if uri.String() == cfg.AllowedClientID {
+				return nil
+			}
+		}
+		return fmt.Errorf("atunnel: client is not %q", cfg.AllowedClientID)
+	}
 	s.tlsConfig = &tls.Config{
 		MinVersion: tls.VersionTLS12,
-		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
-			return loadCredentialBundle(s.credentialBundlePath)
-		},
-		ClientAuth: tls.RequireAndVerifyClientCert,
-		// TODO(liorlieberman): reload the trust bundle per connection via
-		// GetConfigForClient, mirroring GetCertificate above. kubelet keeps the
-		// projected ClusterTrustBundle in sync with the signer, but this pool is
-		// frozen at process start, so after a CA rotation a long-lived worker
-		// rejects the router until its pod restarts.
-		ClientCAs: clientCAs,
-		VerifyConnection: func(cs tls.ConnectionState) error {
-			if len(cs.PeerCertificates) == 0 {
-				return fmt.Errorf("atunnel: client certificate is required")
+		// GetConfigForClient reloads the trust bundle per connection: kubelet
+		// keeps the projected ClusterTrustBundle in sync with the signer, and
+		// this is what lets a long-lived worker see a CA rotation without a
+		// pod restart. Its returned Config replaces this one entirely for the
+		// handshake, so NextProtos must be repeated here rather than left to
+		// the outer Config.
+		GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) {
+			clientCAs, err := loadClientCAs()
+			if err != nil {
+				return nil, err
 			}
-			for _, uri := range cs.PeerCertificates[0].URIs {
-				if uri.String() == cfg.AllowedClientID {
-					return nil
-				}
-			}
-			return fmt.Errorf("atunnel: client is not %q", cfg.AllowedClientID)
+			return &tls.Config{
+				MinVersion: tls.VersionTLS12,
+				NextProtos: []string{"h2", "http/1.1"},
+				GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+					return loadCredentialBundle(s.credentialBundlePath)
+				},
+				ClientAuth:       tls.RequireAndVerifyClientCert,
+				ClientCAs:        clientCAs,
+				VerifyConnection: verifyConnection,
+			}, nil
 		},
 	}
 	return s, nil
@@ -270,20 +278,16 @@ func (s *Server) Serve(ctx context.Context, lis net.Listener) error {
 
 // ServeConnect serves the mTLS CONNECT endpoint. CONNECT is deliberately on a
 // separate listener so ordinary actor ingress remains a request proxy, while
-// the router can use this listener for a bidirectional tunnel.
+// the router can use this listener for a bidirectional tunnel. The router's
+// actor cluster mirrors the downstream protocol, so either can arrive here.
+// The tunnel itself relays opaque bytes, so protocolMirrorTransport's
+// gRPC-only gate does not apply to CONNECT traffic — and that is the point:
+// this listener is the basis of the planned tunnel-based ingress, where
+// ordinary actor traffic arrives here as a spliced tunnel and all protocol
+// decisions move to the router's route config, leaving atunnel with no
+// request parsing at all.
 func (s *Server) ServeConnect(ctx context.Context, lis net.Listener) error {
-	// Offer both protocols explicitly, matching the ingress listener (whose
-	// ServeTLS advertises h2 and http/1.1 by default). The router's actor
-	// cluster mirrors the downstream protocol, so either can arrive here.
-	// The tunnel itself relays opaque bytes, so protocolMirrorTransport's
-	// gRPC-only gate does not apply to CONNECT traffic — and that is the
-	// point: this listener is the basis of the planned tunnel-based ingress,
-	// where ordinary actor traffic arrives here as a spliced tunnel and all
-	// protocol decisions move to the router's route config, leaving atunnel
-	// with no request parsing at all.
-	tlsConfig := s.tlsConfig.Clone()
-	tlsConfig.NextProtos = []string{"h2", "http/1.1"}
-	return s.serve(ctx, lis, http.HandlerFunc(s.ServeConnectHTTP), tlsConfig)
+	return s.serve(ctx, lis, http.HandlerFunc(s.ServeConnectHTTP), s.tlsConfig)
 }
 
 func (s *Server) serve(ctx context.Context, lis net.Listener, handler http.Handler, tlsConfig *tls.Config) error {

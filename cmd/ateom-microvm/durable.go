@@ -29,31 +29,41 @@ package main
 // virtio-fs share at SharedDir(actorUID)/durable, where each container's bind
 // is attached.
 //
-// Snapshots carry the contents as a tar of the whole per-actor directory, so
-// every volume rides along and the layout is reproduced verbatim on restore.
-// virtiofsd serves the share write-through (no --writeback), so once the guest
-// is paused every completed guest write is already visible on the host and the
-// tar is complete.
+// Snapshots carry each volume as its own tar (durableTarFile), so the volume
+// directories themselves are never taken from the snapshot. virtiofsd serves
+// the share write-through (no --writeback), so once the guest is paused every
+// completed guest write is already visible on the host and the tars are
+// complete.
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
 	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
-	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/tarutil"
 )
 
-// durableTarFile is the snapshot file holding the tar of the actor's durable-dir
-// volumes. Its entries are <volumeName>/... relative to
-// ActorDirs.durable_dir_volume_mounts_dir, so extraction restores the same layout.
-// The name is shared with atelet, which uses it to carve durable data out of a
-// FULL snapshot's file set when uploading a paused checkpoint as DATA.
-const durableTarFile = resources.DurableDirTarFile
+// durableTarFile is the snapshot file holding the tar of one durable-dir
+// volume: the contents of <volumeName> under
+// ActorDirs.durable_dir_volume_mounts_dir, plus a root entry for the volume
+// directory's own metadata. The volume directory itself comes from atelet,
+// never from the snapshot: kata-agent bind-mounts it by path inside the guest,
+// so a symlink planted there would expose whatever it points at in the guest
+// rootfs to the container.
+func durableTarFile(volumeName string) (string, error) {
+	if volumeName == "" || volumeName == "." || strings.Contains(volumeName, "/") || !filepath.IsLocal(volumeName) {
+		return "", fmt.Errorf("invalid durable-dir volume name %q", volumeName)
+	}
+	return "durable-dir-" + volumeName + ".tar", nil
+}
 
 // hasDurableVolumes reports whether any container mounts a durable-dir volume.
 func hasDurableVolumes(containers []*ateompb.Container) bool {
@@ -63,6 +73,19 @@ func hasDurableVolumes(containers []*ateompb.Container) bool {
 		}
 	}
 	return false
+}
+
+// durableVolumeNames returns the sorted, deduplicated durable-dir volume names
+// mounted by workload containers.
+func durableVolumeNames(containers []*ateompb.Container) []string {
+	var names []string
+	for _, c := range containers {
+		for _, m := range c.GetDurableDirVolumeMounts() {
+			names = append(names, m.GetVolumeName())
+		}
+	}
+	slices.Sort(names)
+	return slices.Compact(names)
 }
 
 // stageDurableVolumes bind-mounts src, the actor's host durable-dir directory,
@@ -77,30 +100,51 @@ func (s *AteomService) stageDurableVolumes(ctx context.Context, actorUID, src st
 	return nil
 }
 
-// tarDurableVolumes archives the actor's durable-dir volumes (dir) into the
-// checkpoint directory. The caller must have paused the guest first: virtiofsd is
-// write-through, so a completed guest write is on the host by then, but a
-// running guest could still add more after the walk.
+// tarDurableVolumes archives each durable-dir volume under dir into the
+// checkpoint directory, one tar per volume, and returns the file names. The
+// caller must have paused the guest first: virtiofsd is write-through, so a
+// completed guest write is on the host by then, but a running guest could still
+// add more after the walk.
 //
 // Sockets the workload left behind are skipped rather than archived (tarutil
 // logs them); they hold no data and the workload recreates them on start.
-func tarDurableVolumes(ctx context.Context, dir, checkpointDir string) error {
-	if err := tarutil.Create(ctx, filepath.Join(checkpointDir, durableTarFile), dir); err != nil {
-		return fmt.Errorf("while archiving durable-dir volumes from %q: %w", dir, err)
+func tarDurableVolumes(ctx context.Context, dir, checkpointDir string, volumes []string) ([]string, error) {
+	var files []string
+	for _, vol := range volumes {
+		name, err := durableTarFile(vol)
+		if err != nil {
+			return nil, err
+		}
+		if err := tarutil.CreateWithRoot(ctx, filepath.Join(checkpointDir, name), filepath.Join(dir, vol)); err != nil {
+			return nil, fmt.Errorf("while archiving durable-dir volume %q: %w", vol, err)
+		}
+		files = append(files, name)
 	}
-	return nil
+	return files, nil
 }
 
-// untarDurableVolumes restores the durable-dir volumes from a snapshot into the
-// actor's host directory (dir, which atelet has already created, empty). It must
-// run before the durable share's virtiofsd starts, so the guest never observes
-// the directory mid-restore.
-func untarDurableVolumes(dir, snapshotDir string) error {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("while creating durable-dir volumes dir %q: %w", dir, err)
-	}
-	if err := tarutil.Extract(filepath.Join(snapshotDir, durableTarFile), dir); err != nil {
-		return fmt.Errorf("while restoring durable-dir volumes into %q: %w", dir, err)
+// untarDurableVolumes restores each durable-dir volume from the snapshot into
+// its directory under dir, which atelet has already created, empty. A volume
+// with no tar in the snapshot (added to the template since) stays empty. It
+// must run before the durable share's virtiofsd starts, so the guest never
+// observes the directory mid-restore.
+func untarDurableVolumes(dir, snapshotDir string, volumes []string) error {
+	for _, vol := range volumes {
+		name, err := durableTarFile(vol)
+		if err != nil {
+			return err
+		}
+		tarPath := filepath.Join(snapshotDir, name)
+		if _, err := os.Stat(tarPath); errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		volDir := filepath.Join(dir, vol)
+		if err := os.MkdirAll(volDir, 0o700); err != nil {
+			return fmt.Errorf("while creating durable-dir volume dir %q: %w", volDir, err)
+		}
+		if err := tarutil.Extract(tarPath, volDir); err != nil {
+			return fmt.Errorf("while restoring durable-dir volume %q: %w", vol, err)
+		}
 	}
 	return nil
 }

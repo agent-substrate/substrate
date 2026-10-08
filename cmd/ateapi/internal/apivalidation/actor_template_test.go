@@ -39,12 +39,10 @@ func TestValidateCreateActorTemplateRequestDataVolumes(t *testing.T) {
 	} {
 		for _, scopes := range []struct {
 			name     string
-			onPause  ateapipb.SnapshotContentScope
 			onCommit ateapipb.SnapshotContentScope
 		}{
-			{"full", ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
-			{"data commit", ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA},
-			{"data pause and commit", ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA},
+			{"full", ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
+			{"data commit", ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA},
 		} {
 			for _, tt := range []struct {
 				name         string
@@ -62,7 +60,6 @@ func TestValidateCreateActorTemplateRequestDataVolumes(t *testing.T) {
 				t.Run(sandbox.String()+"/"+scopes.name+"/"+tt.name, func(t *testing.T) {
 					tmpl := validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
 						tmpl.SandboxConfig.SandboxClass = sandbox
-						tmpl.SnapshotConfig.OnPause = scopes.onPause
 						tmpl.SnapshotConfig.OnCommit = scopes.onCommit
 						if tt.volume != nil {
 							tmpl.Volumes = []*ateapipb.Volume{tt.volume}
@@ -72,15 +69,8 @@ func TestValidateCreateActorTemplateRequestDataVolumes(t *testing.T) {
 						}
 					})
 					var want field.ErrorList
-					if !tt.supportsData {
-						for _, scope := range []struct {
-							name  string
-							value ateapipb.SnapshotContentScope
-						}{{"on_pause", scopes.onPause}, {"on_commit", scopes.onCommit}} {
-							if scope.value == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA {
-								want = append(want, field.Invalid(field.NewPath("actor_template", "snapshot_config", scope.name), scope.value.String(), ""))
-							}
-						}
+					if !tt.supportsData && scopes.onCommit == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA {
+						want = append(want, field.Invalid(field.NewPath("actor_template", "snapshot_config", "on_commit"), scopes.onCommit.String(), ""))
 					}
 					assertValidateErr(t, ValidateCreateActorTemplateRequest(context.Background(), &ateapipb.CreateActorTemplateRequest{ActorTemplate: tmpl}), want)
 				})
@@ -129,7 +119,6 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 	}, {
 		"valid data-scoped snapshots",
 		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.SnapshotConfig.OnPause = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
 			tmpl.SnapshotConfig.OnCommit = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
 			tmpl.Volumes = []*ateapipb.Volume{{Name: "data", DurableDir: &ateapipb.DurableDirVolumeSource{}}}
 			tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{{Name: "data", MountPath: "/data"}}
@@ -203,28 +192,14 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 		})},
 		field.ErrorList{field.Invalid(field.NewPath("actor_template", "snapshot_config", "storage_location"), "gs://my-bucket/snapshots?versions=true", "")},
 	}, {
-		"on_commit broader than on_pause",
+		// on_commit has no default of its own at this layer, so leaving it
+		// unset is a required violation.
+		"on_commit unset",
 		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.SnapshotConfig.OnPause = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
-			tmpl.SnapshotConfig.OnCommit = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL
-			tmpl.Volumes = []*ateapipb.Volume{{Name: "data", DurableDir: &ateapipb.DurableDirVolumeSource{}}}
-			tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{{Name: "data", MountPath: "/data"}}
-		})},
-		field.ErrorList{field.Invalid(field.NewPath("actor_template", "snapshot_config", "on_commit"), "SNAPSHOT_CONTENT_SCOPE_FULL", "")},
-	}, {
-		// Leaving on_commit unset over a DATA on_pause is both a required
-		// violation (on_commit has no default of its own) and a subset
-		// violation (UNSPECIFIED is not DATA).
-		"on_commit unset with data on_pause",
-		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.SnapshotConfig.OnPause = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
 			tmpl.SnapshotConfig.OnCommit = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED
-			tmpl.Volumes = []*ateapipb.Volume{{Name: "data", DurableDir: &ateapipb.DurableDirVolumeSource{}}}
-			tmpl.Containers[0].VolumeMounts = []*ateapipb.VolumeMount{{Name: "data", MountPath: "/data"}}
 		})},
 		field.ErrorList{
 			field.Required(field.NewPath("actor_template", "snapshot_config", "on_commit"), ""),
-			field.Invalid(field.NewPath("actor_template", "snapshot_config", "on_commit"), "SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED", ""),
 		},
 	}, {
 		"missing sandbox_config",
@@ -416,13 +391,11 @@ func TestValidateActorTemplate(t *testing.T) {
 		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.SnapshotConfig.StorageLocation = "" },
 		want:   field.ErrorList{field.Required(field.NewPath("snapshot_config", "storage_location"), "")},
 	}, {
-		name: "unspecified snapshot scopes",
+		name: "unspecified snapshot scope",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.SnapshotConfig.OnPause = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED
 			tmpl.SnapshotConfig.OnCommit = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED
 		},
 		want: field.ErrorList{
-			field.Required(field.NewPath("snapshot_config", "on_pause"), ""),
 			field.Required(field.NewPath("snapshot_config", "on_commit"), ""),
 		},
 	}, {
@@ -432,43 +405,11 @@ func TestValidateActorTemplate(t *testing.T) {
 		},
 		want: field.ErrorList{field.Invalid(field.NewPath("snapshot_config", "on_commit"), nil, "").WithOrigin("maximum")},
 	}, {
-		name: "negative on_pause",
+		name: "negative on_commit",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.SnapshotConfig.OnPause = ateapipb.SnapshotContentScope(-1)
+			tmpl.SnapshotConfig.OnCommit = ateapipb.SnapshotContentScope(-1)
 		},
-		want: field.ErrorList{field.Invalid(field.NewPath("snapshot_config", "on_pause"), nil, "").WithOrigin("minimum")},
-	}, {
-		name:   "missing on_resume",
-		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.SnapshotConfig.OnResume = nil },
-		want:   field.ErrorList{field.Required(field.NewPath("snapshot_config", "on_resume"), "")},
-	}, {
-		name: "unspecified on_resume from_data",
-		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.SnapshotConfig.OnResume = &ateapipb.OnResumeConfig{}
-		},
-		want: field.ErrorList{field.Required(field.NewPath("snapshot_config", "on_resume", "from_data"), "")},
-	}, {
-		name: "valid on_resume",
-		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.SnapshotConfig.OnResume = &ateapipb.OnResumeConfig{FromData: ateapipb.ResumeSource_RESUME_SOURCE_COLD_BOOT}
-		},
-	}, {
-		name: "valid on_resume with golden",
-		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.SnapshotConfig.OnResume = &ateapipb.OnResumeConfig{FromData: ateapipb.ResumeSource_RESUME_SOURCE_GOLDEN}
-		},
-	}, {
-		name: "negative on_resume from_data",
-		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.SnapshotConfig.OnResume = &ateapipb.OnResumeConfig{FromData: ateapipb.ResumeSource(-1)}
-		},
-		want: field.ErrorList{field.Invalid(field.NewPath("snapshot_config", "on_resume", "from_data"), nil, "").WithOrigin("minimum")},
-	}, {
-		name: "on_resume from_data outside the enum",
-		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.SnapshotConfig.OnResume = &ateapipb.OnResumeConfig{FromData: ateapipb.ResumeSource(99)}
-		},
-		want: field.ErrorList{field.Invalid(field.NewPath("snapshot_config", "on_resume", "from_data"), nil, "").WithOrigin("maximum")},
+		want: field.ErrorList{field.Invalid(field.NewPath("snapshot_config", "on_commit"), nil, "").WithOrigin("minimum")},
 	}, {
 		name:   "no containers",
 		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.Containers = nil },
@@ -1098,9 +1039,7 @@ func validActorTemplate(mutations ...func(*ateapipb.ActorTemplate)) *ateapipb.Ac
 		Containers: []*ateapipb.Container{{Name: "main", Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},
 		SnapshotConfig: &ateapipb.SnapshotConfig{
 			StorageLocation: "gs://my-bucket/snapshots",
-			OnPause:         ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 			OnCommit:        ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
-			OnResume:        &ateapipb.OnResumeConfig{FromData: ateapipb.ResumeSource_RESUME_SOURCE_COLD_BOOT},
 		},
 		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR, ConfigName: "gvisor-default"},
 	}

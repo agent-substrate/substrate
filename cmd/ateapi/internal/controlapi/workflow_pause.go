@@ -22,13 +22,12 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel/attribute"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // PauseActor executes the workflow to pause a running actor. Idempotent:
@@ -123,12 +122,12 @@ func (w *ActorWorkflow) ensureMarkedPausing(ctx context.Context, actorRef resour
 	}
 	// The pause edge only exists from RUNNING.
 	if actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
-		return nil, status.Errorf(codes.FailedPrecondition, "MarkPausing prerequisite not met for Actor: %s (got: %v, want %s)", actorRef, actor.GetStatus().GetState(), ateapipb.ActorState_ACTOR_STATE_RUNNING)
+		return nil, apierror.FailedPrecondition("MarkPausing prerequisite not met for Actor: %s (got: %v, want %s)", actorRef, actor.GetStatus().GetState(), ateapipb.ActorState_ACTOR_STATE_RUNNING)
 	}
 	// By design a golden actor cannot be paused — it can only be suspended
 	// (committed).
 	if actorRef.Atespace == resources.GoldenActorAtespace {
-		return nil, status.Errorf(codes.FailedPrecondition, "actors in atespace %q are golden actors, which cannot be paused", actorRef.Atespace)
+		return nil, apierror.FailedPrecondition("actors in atespace %q are golden actors, which cannot be paused", actorRef.Atespace)
 	}
 
 	snapshotName := resources.NewSnapshotName()
@@ -139,7 +138,7 @@ func (w *ActorWorkflow) ensureMarkedPausing(ctx context.Context, actorRef resour
 	})
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
+			return nil, apierror.Aborted("concurrent update conflict, please retry")
 		}
 		return nil, err
 	}
@@ -163,7 +162,7 @@ func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resourc
 		if err := crashActor(ctx, w.store, actorRef, ateattr.OperationPause, crashMessageWorkerAssignmentMissing); err != nil {
 			slog.ErrorContext(ctx, "Failed to crash actor", slog.String("err", err.Error()))
 		}
-		return "", status.Errorf(codes.FailedPrecondition, "CallAteletPause prerequisite not met for Actor: %s. No worker assignment", actorRef)
+		return "", apierror.FailedPrecondition("CallAteletPause prerequisite not met for Actor: %s. No worker assignment", actorRef)
 	}
 
 	ateletConn, err := w.dialer.DialForAteletOnNode(assignment.GetNodeName())
@@ -172,7 +171,7 @@ func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resourc
 	}
 	client := ateletpb.NewAteomHerderClient(ateletConn)
 
-	workloadSpec, err := workloadSpecFromActorTemplate(actorTemplate, actor)
+	workloadSpec, err := workloadSpecFromActorTemplate(actorTemplate, actor, nil)
 	if err != nil {
 		return "", err
 	}
@@ -193,18 +192,13 @@ func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resourc
 				SnapshotName: actor.GetStatus().GetInProgressLocalSnapshotName(),
 			},
 		},
-		Scope:    actorSnapshotContentScopeToAtelet(actorTemplate.GetSnapshotConfig().GetOnPause()),
+		Scope:    actorSnapshotContentScopeToAtelet(actorTemplate.GetSnapshotConfig().GetOnCommit()),
 		ActorUid: actor.GetMetadata().Uid,
 	}
 	wireSnapshotScope = ateattr.SnapshotScopeValue(req.Scope)
 
 	if _, err = client.Checkpoint(ctx, req); err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "Setting Actor to crashed due to error",
-			append(ateattr.ActorRefLogAttrs(actorRef), slog.Any("err", err))...)
-		if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationPause, ateletCrashMessage("Checkpoint", err)); cerr != nil {
-			return wireSnapshotScope, cerr
-		}
-		return wireSnapshotScope, fmt.Errorf("actor %s crashed: %w", actorRef, err)
+		return wireSnapshotScope, handleAteletError(ctx, w.store, actorRef, ateattr.OperationPause, "Checkpoint", false, err)
 	}
 	return wireSnapshotScope, nil
 }
@@ -228,20 +222,18 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 	// 1. Free the worker (if it hasn't been freed yet)
 	if assignment := latestActor.GetStatus().GetWorkerAssignment(); assignment != nil {
 		worker, err := w.store.GetWorker(ctx, assignment.GetWorker().GetName())
-		nodeName := ""
 		if err != nil {
 			if !errors.Is(err, store.ErrNotFound) {
 				return nil, fmt.Errorf("while getting worker for release: %w", err)
 			}
 			slog.Warn("Worker already gone during finalize pause, skipping release", "worker", assignment.GetWorkerPod())
 		} else {
-			nodeName = worker.GetNodeName()
 			// Drop just this actor's assignment; any other actors the worker
 			// hosts keep theirs.
 			_, err := w.store.ReleaseActorFromWorker(ctx, worker.GetMetadata().GetName(), latestActor.GetMetadata().GetUid())
 			if err != nil {
 				if errors.Is(err, store.ErrVersionConflict) {
-					return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
+					return nil, apierror.Aborted("concurrent update conflict, please retry")
 				}
 				return nil, err
 			}
@@ -255,7 +247,7 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 		wasAlreadyCrashed := latestActor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_CRASHED
 		newState := ateapipb.ActorState_ACTOR_STATE_PAUSED
 		var crashStatus *ateapipb.ActorCrash
-		if nodeName == "" {
+		if latestActor.GetStatus().GetAssignedNode() == "" {
 			// Without a node name we cannot record where the local snapshot lives,
 			// so the actor can never be resumed (the scheduler would search for a
 			// worker on an unknown node forever). Crash it instead of leaving it
@@ -265,7 +257,7 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 			newState = ateapipb.ActorState_ACTOR_STATE_CRASHED
 			crashStatus = newActorCrash(ateattr.OperationPause, crashMessageLocalSnapshotNodeUnknown)
 		}
-		contentScope := actorTemplate.GetSnapshotConfig().GetOnPause()
+		contentScope := actorTemplate.GetSnapshotConfig().GetOnCommit()
 		sandboxClass := ""
 		if worker != nil {
 			sandboxClass = worker.GetSandboxClass()
@@ -285,9 +277,6 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 					SnapshotName: toUpdate.GetStatus().GetInProgressLocalSnapshotName(),
 					ContentScope: contentScope,
 				}
-				if newState != ateapipb.ActorState_ACTOR_STATE_CRASHED {
-					localSnapshot.NodeVmsWithLocalSnapshots = []string{nodeName}
-				}
 				toUpdate.Status.LocalSnapshot = localSnapshot
 				toUpdate.Status.InProgressLocalSnapshotName = ""
 			}
@@ -303,7 +292,7 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 		}
 		if err != nil {
 			if errors.Is(err, store.ErrVersionConflict) {
-				return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
+				return nil, apierror.Aborted("concurrent update conflict, please retry")
 			}
 			return nil, err
 		}

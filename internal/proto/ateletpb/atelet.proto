@@ -30,8 +30,8 @@ service AteomSupport {
   // the actor filesystem, when/if we support those).
   rpc MintActorCertificate(MintActorCertificateRequest) returns (MintActorCertificateResponse) {}
 
-  // Report capacity and supply for this worker back to atelet.
-  rpc SetWorkerCapacity(SetWorkerCapacityRequest) returns (SetWorkerCapacityResponse) {}
+  // Register capacity and hardware identity for this worker with atelet.
+  rpc RegisterWorker(RegisterWorkerRequest) returns (RegisterWorkerResponse) {}
 
   // RequestActorSuspend asks that the actor this worker hosts be suspended,
   // for atelet to forward to the control plane's WorkerService, which this
@@ -45,12 +45,31 @@ service AteomSupport {
   rpc RequestActorSuspend(RequestActorSuspendRequest) returns (RequestActorSuspendResponse) {}
 }
 
-message SetWorkerCapacityRequest {
+message RegisterWorkerRequest {
   // What the worker can supply. atelet converts it to the control plane's
   // WorkerResources when forwarding.
   //
   // +k8s:required
   WorkerResources capacity = 1;
+
+  // Hardware identity of the worker. atelet converts it to the control
+  // plane's HardwareIdentity when forwarding.
+  //
+  // +k8s:required
+  HardwareIdentity hardware = 2;
+}
+
+// HardwareIdentity identifies the hardware properties of a worker. It mirrors
+// the control plane's HardwareIdentity and is validated by the same rules.
+message HardwareIdentity {
+  // Key-value pairs describing hardware properties (currently "architecture";
+  // TODO: add "cpu_vendor", "cpu_model", etc.).
+  //
+  // +k8s:optional
+  // +k8s:maxProperties=32
+  // +k8s:eachKey=+k8s:maxLength=128
+  // +k8s:eachVal=+k8s:maxLength=256
+  map<string, string> attributes = 1;
 }
 
 // WorkerResources is what a worker can supply. It mirrors the control plane's
@@ -96,7 +115,7 @@ message Limits {
   string quantity = 2;
 }
 
-message SetWorkerCapacityResponse {
+message RegisterWorkerResponse {
 }
 
 message RequestActorSuspendRequest {
@@ -183,6 +202,7 @@ service AteomHerder {
 }
 
 message TerminateRequest {
+  // If unset, the atelet will just cleanup node resources for the actor.
   string target_ateom_uid = 1;
 
   string atespace = 2;
@@ -259,7 +279,8 @@ message SandboxAssets {
   // pause_image is the image for the sandbox's root container. Like the
   // binaries above it is sandbox configuration, not workload configuration,
   // and atelet pins it into the snapshot manifest so a restore rebuilds the
-  // sandbox from the same image.
+  // sandbox from the same image. Empty for sandboxes without a pause
+  // container (microvm).
   string pause_image = 3;
 }
 
@@ -276,6 +297,10 @@ message ExternalVolumeSource {
   string storage_volume_id = 1;
   string volume_type = 2;
   map<string, string> volume_context = 3;
+
+  // publish_context is the driver's attachment metadata for this node, which
+  // the node plugin needs to complete the mount.
+  map<string, string> publish_context = 4;
 }
 
 message ImageVolumeSource {
@@ -303,15 +328,12 @@ message ActorMetadataDataSource {
   repeated ActorMetadataItem items = 1;
 }
 
-// TrustBundleDataSource projects the trust anchors of a named trust bundle
-// to a file at the given path, relative to the root of the enclosing
-// system-info volume. atelet resolves the name against its supported-bundle
-// allowlist and reads the backing ClusterTrustBundle through its informer at
-// write time, sanitizing kubelet-style; an unsupported name or missing
-// bundle fails the actor start.
+// TrustBundleDataSource corresponds to TrustBundleDataSource in ateapi.proto
 message TrustBundleDataSource {
   string path = 1;
-  string name = 2;
+  repeated string names = 3;
+  reserved 2;
+  reserved "name";
 }
 
 message SystemInfoDataSource {
@@ -437,13 +459,6 @@ enum SnapshotScope {
   // (currently DurableDir-typed volumes). Memory and the rest of rootfs are
   // excluded.
   SNAPSHOT_SCOPE_DATA = 2;
-  // Restore-only: restore the ActorTemplate's golden snapshot's guest state
-  // (memory + full filesystem delta) combined with the snapshot's durable
-  // data. Never valid for Checkpoint — snapshots only ever capture FULL or
-  // DATA; whether a snapshot restores from its own content or on the golden
-  // is decided by the control plane from the template's onResume
-  // configuration.
-  SNAPSHOT_SCOPE_DATA_ON_GOLDEN = 3;
 }
 
 // ExternalRestoreConfiguration is an external snapshot a restore reads.
@@ -505,8 +520,8 @@ message UploadPausedCheckpointRequest {
   // Scope the uploaded snapshot must have (the commit scope; FULL or DATA).
   // The scope the pause checkpoint captured is not sent: atelet reads it from
   // the local snapshot's own manifest, which is authoritative. When they
-  // differ, atelet converts where possible (micro-VM FULL capture to a DATA
-  // upload by selecting the durable-dir tar) and rejects otherwise.
+  // differ, atelet converts where possible (a FULL capture to a DATA upload
+  // of the data-scope files ateom reported) and rejects otherwise.
   SnapshotScope desired_scope = 8;
 }
 
@@ -535,12 +550,6 @@ message RestoreRequest {
 
   // What content to restore from the checkpoint.
   SnapshotScope scope = 11;
-
-  // The base guest state (memory + rootfs delta) combined with `config`'s
-  // durable data when scope is SNAPSHOT_SCOPE_DATA_ON_GOLDEN. A top-level
-  // field rather than part of the `config` oneof: the actor's snapshot may
-  // be local (a pause checkpoint) while the base is always external.
-  ExternalRestoreConfiguration base_config = 12;
 
   // When absent the actor has no egress: its TCP is captured and refused.
   optional EgressGateway egress_gateway = 13;

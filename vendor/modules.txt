@@ -1778,6 +1778,7 @@ k8s.io/apimachinery/pkg/util/naming
 k8s.io/apimachinery/pkg/util/net
 k8s.io/apimachinery/pkg/util/portforward
 k8s.io/apimachinery/pkg/util/rand
+k8s.io/apimachinery/pkg/util/remotecommand
 k8s.io/apimachinery/pkg/util/runtime
 k8s.io/apimachinery/pkg/util/sets
 k8s.io/apimachinery/pkg/util/strategicpatch
@@ -2125,6 +2126,7 @@ k8s.io/client-go/tools/portforward
 k8s.io/client-go/tools/record
 k8s.io/client-go/tools/record/util
 k8s.io/client-go/tools/reference
+k8s.io/client-go/tools/remotecommand
 k8s.io/client-go/transport
 k8s.io/client-go/transport/spdy
 k8s.io/client-go/transport/websocket
@@ -2132,6 +2134,7 @@ k8s.io/client-go/util/apply
 k8s.io/client-go/util/cert
 k8s.io/client-go/util/connrotation
 k8s.io/client-go/util/consistencydetector
+k8s.io/client-go/util/exec
 k8s.io/client-go/util/flowcontrol
 k8s.io/client-go/util/homedir
 k8s.io/client-go/util/keyutil
@@ -2168,6 +2171,9 @@ k8s.io/kube-openapi/pkg/util/proto
 k8s.io/kube-openapi/pkg/validation/spec
 # k8s.io/kubelet v0.37.0
 ## explicit; go 1.26.0
+k8s.io/kubelet/config/v1
+k8s.io/kubelet/pkg/apis/credentialprovider
+k8s.io/kubelet/pkg/apis/credentialprovider/v1
 k8s.io/kubelet/pkg/apis/deviceplugin/v1beta1
 # k8s.io/metrics v0.36.1
 ## explicit; go 1.26.0

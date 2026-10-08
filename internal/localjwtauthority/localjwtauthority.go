@@ -55,6 +55,7 @@ type Pool interface {
 
 type VerificationKey struct {
 	KeyID     string
+	Algorithm string
 	PublicKey crypto.PublicKey
 }
 
@@ -167,8 +168,6 @@ func (p *ConcretePool) SignJWT(claims *actoridjwt.Claims) (string, error) {
 		selectedAuthority = p.Authorities[0]
 	}
 
-	// TODO(identity): The key IDs should probably be SHA256 of the key, to
-	// prevent user misuse.
 	jwt, err := sign(payloadBytes, selectedAuthority.SigningKey, selectedAuthority.Algorithm, selectedAuthority.ID)
 	if err != nil {
 		return "", fmt.Errorf("while signing JWT: %w", err)
@@ -182,6 +181,7 @@ func (p *ConcretePool) VerificationKeys() ([]*VerificationKey, error) {
 	for _, authority := range p.Authorities {
 		vk := &VerificationKey{
 			KeyID:     authority.ID,
+			Algorithm: authority.Algorithm,
 			PublicKey: authority.SigningKey.Public(),
 		}
 		keys = append(keys, vk)
@@ -338,16 +338,49 @@ func Unmarshal(wireBytes []byte) (*ConcretePool, error) {
 	return pool, nil
 }
 
-// GenerateECDSAP256Authority generates an ECDSA P256 JWT signing key.
-func GenerateECDSAP256Authority(id string) (*Authority, error) {
-	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+// GenerateAuthority generates a JWT signing key for algorithm, which must be
+// RS256 or ES256. An empty id defaults to the Thumbprint of the public key.
+func GenerateAuthority(algorithm, id string) (*Authority, error) {
+	var key crypto.Signer
+	var err error
+	switch algorithm {
+	case "RS256":
+		key, err = rsa.GenerateKey(rand.Reader, 2048)
+	case "ES256":
+		key, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	default:
+		return nil, fmt.Errorf("unsupported algorithm %q, want RS256 or ES256", algorithm)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("while generating key: %w", err)
 	}
-
+	if id == "" {
+		id, err = Thumbprint(key.Public())
+		if err != nil {
+			return nil, fmt.Errorf("while computing key thumbprint: %w", err)
+		}
+	}
 	return &Authority{
 		ID:         id,
-		Algorithm:  "ES256",
-		SigningKey: privKey,
+		Algorithm:  algorithm,
+		SigningKey: key,
 	}, nil
+}
+
+// GeneratePool generates a pool holding one authority, active for signing, and
+// returns the serialized pool and the authority's ID. algorithm and id are as
+// for GenerateAuthority.
+func GeneratePool(algorithm, id string) ([]byte, string, error) {
+	authority, err := GenerateAuthority(algorithm, id)
+	if err != nil {
+		return nil, "", err
+	}
+	wire, err := Marshal(&ConcretePool{
+		Authorities:      []*Authority{authority},
+		ActiveForSigning: authority.ID,
+	})
+	if err != nil {
+		return nil, "", err
+	}
+	return wire, authority.ID, nil
 }

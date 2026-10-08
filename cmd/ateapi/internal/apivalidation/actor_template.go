@@ -89,20 +89,13 @@ func ValidateCustom_CreateActorTemplateRequest_ActorTemplate(_ context.Context, 
 			}
 		}
 	}
-	if !hasDataVolume {
+	scope := value.GetSnapshotConfig().GetOnCommit()
+	if !hasDataVolume && scope == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA {
 		detail := "DATA snapshots require a mounted durable-dir volume"
 		if microVM {
 			detail = "DATA snapshots require a mounted durable-dir or CSI volume"
 		}
-		snapshot := value.GetSnapshotConfig()
-		for _, scope := range []struct {
-			name  string
-			value ateapipb.SnapshotContentScope
-		}{{"on_pause", snapshot.GetOnPause()}, {"on_commit", snapshot.GetOnCommit()}} {
-			if scope.value == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA {
-				errs = append(errs, field.Invalid(fldPath.Child("snapshot_config", scope.name), scope.value.String(), detail))
-			}
-		}
+		errs = append(errs, field.Invalid(fldPath.Child("snapshot_config", "on_commit"), scope.String(), detail))
 	}
 	return errs
 }
@@ -255,15 +248,6 @@ func ValidateCustom_ExternalVolumeTemplate_Capacity(_ context.Context, _ operati
 func ValidateCustom_SnapshotConfig_StorageLocation(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	if err := resources.ValidateSnapshotLocation(*value); err != nil {
 		return field.ErrorList{field.Invalid(fldPath, *value, err.Error())}
-	}
-	return nil
-}
-
-// ValidateCustom_SnapshotConfig requires on_commit to be a subset of on_pause.
-func ValidateCustom_SnapshotConfig(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapipb.SnapshotConfig) field.ErrorList {
-	if value.GetOnPause() == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA &&
-		value.GetOnCommit() != ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA {
-		return field.ErrorList{field.Invalid(fldPath.Child("on_commit"), value.GetOnCommit().String(), "must be a subset of on_pause")}
 	}
 	return nil
 }

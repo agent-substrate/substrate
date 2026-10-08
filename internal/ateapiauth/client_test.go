@@ -112,6 +112,75 @@ func TestDialOptionsMTLSHandshake(t *testing.T) {
 	})
 }
 
+// TestDialOptionsReloadsCAFile verifies that a rotation of the CA file on
+// disk is picked up by the next handshake, without redialing.
+func TestDialOptionsReloadsCAFile(t *testing.T) {
+	ca := newTestCA(t)
+	dir := t.TempDir()
+	caFile := filepath.Join(dir, "ca.pem")
+	writeFile(t, caFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ca.certDER}))
+
+	clientBundle := filepath.Join(dir, "client-bundle.pem")
+	writeFile(t, clientBundle, ca.issueClientBundle(t, "spiffe://cluster.local/ns/ate-system/sa/ate-controller"))
+
+	serverCert := ca.issueServerCert(t)
+	caPool := x509.NewCertPool()
+	caPool.AddCert(ca.cert)
+	srv := grpc.NewServer(grpc.Creds(credentials.NewTLS(&tls.Config{
+		Certificates: []tls.Certificate{serverCert},
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		ClientCAs:    caPool,
+		MinVersion:   tls.VersionTLS13,
+	})))
+	healthpb.RegisterHealthServer(srv, health.NewServer())
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	go srv.Serve(lis)
+	defer srv.Stop()
+
+	opts, err := DialOptions(ClientConfig{
+		K8sClient:        fake.NewSimpleClientset(),
+		CAFile:           caFile,
+		ClientCredBundle: clientBundle,
+	})
+	if err != nil {
+		t.Fatalf("DialOptions() error = %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	rotatedCA := newTestCA(t)
+	rotatedServerCert := rotatedCA.issueServerCert(t)
+	rotatedCAPool := x509.NewCertPool()
+	rotatedCAPool.AddCert(rotatedCA.cert)
+	rotatedSrv := grpc.NewServer(grpc.Creds(credentials.NewTLS(&tls.Config{
+		Certificates: []tls.Certificate{rotatedServerCert},
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		ClientCAs:    caPool,
+		MinVersion:   tls.VersionTLS13,
+	})))
+	healthpb.RegisterHealthServer(rotatedSrv, health.NewServer())
+	rotatedLis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	go rotatedSrv.Serve(rotatedLis)
+	defer rotatedSrv.Stop()
+
+	if code := healthCheckCode(ctx, t, rotatedLis.Addr().String(), opts); code == codes.OK {
+		t.Fatalf("health check against the rotated server's cert succeeded before trusting its CA, want a handshake failure")
+	}
+
+	writeFile(t, caFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: rotatedCA.certDER}))
+
+	if code := healthCheckCode(ctx, t, rotatedLis.Addr().String(), opts); code != codes.OK {
+		t.Fatalf("health check code = %v after the CA rotation, want %v", code, codes.OK)
+	}
+}
+
 func healthCheckCode(ctx context.Context, t *testing.T, target string, opts []grpc.DialOption) codes.Code {
 	t.Helper()
 	conn, err := grpc.NewClient(target, opts...)

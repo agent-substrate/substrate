@@ -16,9 +16,12 @@ package controlapi
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -246,7 +249,7 @@ func TestLifecycleOpDurationShape(t *testing.T) {
 		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR},
 	}
 	inst.recordLifecycleOp(context.Background(), ateattr.OperationResume, time.Now(), nil,
-		lifecycleOpAttrs(actor, template, ateattr.SnapshotKindLatest, ateattr.SnapshotScopeDataOnGolden)...)
+		lifecycleOpAttrs(actor, template, ateattr.SnapshotKindLatest, ateattr.SnapshotScopeData)...)
 
 	dp := singleHistogramDP(t, reader, lifecycleOpDurationMetric)
 	assertAttrKeys(t, dp,
@@ -267,10 +270,10 @@ func TestLifecycleOpDurationShape(t *testing.T) {
 	if ns, _ := attrString(dp, ateattr.WorkerPoolNamespaceKey); ns != "ate-workers" {
 		t.Errorf("worker pool namespace = %q, want %q", ns, "ate-workers")
 	}
-	// Kind and scope are independent: a data_on_golden restore of the actor's
+	// Kind and scope are independent: a data restore of the actor's
 	// own latest snapshot must stay distinguishable from one of a local snapshot.
-	if scope, _ := attrString(dp, ateattr.SnapshotScopeKey); scope != ateattr.SnapshotScopeDataOnGolden {
-		t.Errorf("snapshot scope = %q, want %q", scope, ateattr.SnapshotScopeDataOnGolden)
+	if scope, _ := attrString(dp, ateattr.SnapshotScopeKey); scope != ateattr.SnapshotScopeData {
+		t.Errorf("snapshot scope = %q, want %q", scope, ateattr.SnapshotScopeData)
 	}
 	if kind, _ := attrString(dp, ateattr.SnapshotKindKey); kind != ateattr.SnapshotKindLatest {
 		t.Errorf("snapshot kind = %q, want %q", kind, ateattr.SnapshotKindLatest)
@@ -302,9 +305,13 @@ func TestRecordLifecycleOp_OutcomeClassification(t *testing.T) {
 		wantErrorType string // empty means error.type must be absent
 	}{
 		{name: "create success", op: ateattr.OperationCreate, err: nil, wantErrorType: ""},
-		{name: "create not found", op: ateattr.OperationCreate, err: status.Error(codes.NotFound, "missing"), wantErrorType: "NotFound"},
-		{name: "resume aborted", op: ateattr.OperationResume, err: status.Error(codes.Aborted, "conflict"), wantErrorType: "Aborted"},
-		{name: "resume crash", op: ateattr.OperationResume, err: status.Error(codes.DataLoss, "crashed"), wantErrorType: "DataLoss"},
+		{name: "create not found", op: ateattr.OperationCreate, err: apierror.NotFound("missing"), wantErrorType: "NotFound"},
+		{name: "resume aborted", op: ateattr.OperationResume, err: apierror.Aborted("conflict"), wantErrorType: "Aborted"},
+		{name: "resume crash", op: ateattr.OperationResume, err: apierror.DataLoss("crashed"), wantErrorType: "DataLoss"},
+		{name: "wrapped apierror", op: ateattr.OperationResume, err: fmt.Errorf("workflow failed at step Load: %w", apierror.NotFound("missing")), wantErrorType: "NotFound"},
+		{name: "upstream status is what the caller gets", op: ateattr.OperationResume, err: fmt.Errorf("actor crashed: %w", status.Error(codes.Unavailable, "atelet down")), wantErrorType: "Internal"},
+		{name: "context deadline", op: ateattr.OperationSuspend, err: fmt.Errorf("while checkpointing: %w", context.DeadlineExceeded), wantErrorType: "DeadlineExceeded"},
+		{name: "plain error", op: ateattr.OperationPause, err: errors.New("store is down"), wantErrorType: "Internal"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -332,7 +339,7 @@ func TestRecordLifecycleOp_OutcomeClassification(t *testing.T) {
 
 // TestSchedulerAssignmentShapeAndOutcomes asserts the assignment histogram stamps
 // the pool pair only when a worker was assigned and error.type only for the error
-// outcome, so no_free_worker (a capacity signal) carries neither.
+// outcome, so no_capacity (a capacity signal) carries neither.
 func TestSchedulerAssignmentShapeAndOutcomes(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -354,11 +361,11 @@ func TestSchedulerAssignmentShapeAndOutcomes(t *testing.T) {
 			wantKeys:      []attribute.Key{ateattr.SchedulerOutcomeKey, ateattr.WorkerPoolNamespaceKey, ateattr.WorkerPoolNameKey, ateattr.SandboxClassKey},
 		},
 		{
-			name:     "no_free_worker carries class but neither pool key nor error.type",
-			outcome:  ateattr.SchedulerOutcomeNoFreeWorker,
+			name:     "no_capacity carries class but neither pool key nor error.type",
+			outcome:  ateattr.SchedulerOutcomeNoCapacity,
 			pool:     "",
 			class:    "gvisor",
-			err:      status.Error(codes.FailedPrecondition, "no free workers available"),
+			err:      apierror.FailedPrecondition("no worker has room for the actor"),
 			wantKeys: []attribute.Key{ateattr.SchedulerOutcomeKey, ateattr.SandboxClassKey},
 		},
 		{
@@ -366,7 +373,7 @@ func TestSchedulerAssignmentShapeAndOutcomes(t *testing.T) {
 			outcome:       ateattr.SchedulerOutcomeError,
 			pool:          "",
 			class:         "",
-			err:           status.Error(codes.Internal, "boom"),
+			err:           errors.New("boom"),
 			wantKeys:      []attribute.Key{ateattr.SchedulerOutcomeKey, ateattr.ErrorTypeKey},
 			wantErrorType: "Internal",
 		},

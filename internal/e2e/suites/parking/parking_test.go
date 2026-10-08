@@ -172,7 +172,7 @@ func TestRequestParking(t *testing.T) {
 		if resp.StatusCode != wantStatus {
 			t.Fatalf("status = %d (body %q), want %d", resp.StatusCode, string(body), wantStatus)
 		}
-		if wantStatus == http.StatusServiceUnavailable && !strings.Contains(string(body), "no free workers available") {
+		if wantStatus == http.StatusServiceUnavailable && !strings.Contains(string(body), "no worker has room for the actor") {
 			t.Errorf("body = %q, want the router's capacity verdict", string(body))
 		}
 		if wantStatus == http.StatusServiceUnavailable {

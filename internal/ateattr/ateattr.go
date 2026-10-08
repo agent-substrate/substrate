@@ -238,6 +238,26 @@ const (
 	ImageCacheOutcomeTimeout   = "timeout"
 )
 
+// Values for RouterOutcomeKey. RouterOutcomeNoCapacity means that no worker
+// that meets the constraints of the actor had room. scheduling.ErrNoCapacity
+// reports the same condition. It is a capacity signal, not a defect. A request
+// that the router sheds from a full parking lot is RouterOutcomeNoCapacity when
+// its resume failed with ResourceExhausted. A 503 without a gRPC cause, such as
+// a denied egress request, a failed policy lookup, or a shed request whose
+// resume failed for a different reason, is RouterOutcomeUnavailable.
+const (
+	RouterOutcomeOK                 = "ok"
+	RouterOutcomeCancelled          = "cancelled"
+	RouterOutcomeTimeout            = "timeout"
+	RouterOutcomeNoCapacity         = "no_capacity"
+	RouterOutcomeFailedPrecondition = "failed_precondition"
+	RouterOutcomeLockConflict       = "lock_conflict"
+	RouterOutcomeNotFound           = "not_found"
+	RouterOutcomeUnavailable        = "unavailable"
+	RouterOutcomeRateLimited        = "rate_limited"
+	RouterOutcomeResumeError        = "resume_error"
+)
+
 // ErrorTypeKey is the OTel registry attribute, reused verbatim (not aliased into
 // ate.*): failures are reported on the same instrument via this key, its absence
 // meaning success, never as a parallel _failures counter.
@@ -282,13 +302,13 @@ func NormalizeOperationName(op string) string {
 	return OperationUnknown
 }
 
-// Values for SchedulerOutcomeKey. NoFreeWorker is a capacity signal, not a
+// Values for SchedulerOutcomeKey. NoCapacity is a capacity signal, not a
 // failure, so it is a distinct outcome rather than an error.type value; only the
 // Error outcome carries an error.type.
 const (
-	SchedulerOutcomeAssigned     = "assigned"
-	SchedulerOutcomeNoFreeWorker = "no_free_worker"
-	SchedulerOutcomeError        = "error"
+	SchedulerOutcomeAssigned   = "assigned"
+	SchedulerOutcomeNoCapacity = "no_capacity"
+	SchedulerOutcomeError      = "error"
 )
 
 // Values for SnapshotKindKey, set by ateapi from its own resume branching, so
@@ -304,13 +324,11 @@ const (
 	SnapshotKindBoot   = "boot"
 )
 
-// Values for SnapshotScopeKey, mirroring ateletpb.SnapshotScope. Checkpoints
-// only ever capture Full or Data; DataOnGolden is restore-only.
+// Values for SnapshotScopeKey, mirroring ateletpb.SnapshotScope.
 const (
-	SnapshotScopeFull         = "full"
-	SnapshotScopeData         = "data"
-	SnapshotScopeDataOnGolden = "data_on_golden"
-	SnapshotScopeUnknown      = "unknown"
+	SnapshotScopeFull    = "full"
+	SnapshotScopeData    = "data"
+	SnapshotScopeUnknown = "unknown"
 )
 
 // SnapshotScopeValue maps the wire enum onto its label value, shared so ateapi
@@ -323,8 +341,6 @@ func SnapshotScopeValue(scope ateletpb.SnapshotScope) string {
 		return SnapshotScopeFull
 	case ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
 		return SnapshotScopeData
-	case ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN:
-		return SnapshotScopeDataOnGolden
 	default:
 		return SnapshotScopeUnknown
 	}

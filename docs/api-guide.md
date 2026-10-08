@@ -26,6 +26,7 @@ The `WorkerPool` defines the pool of physical "warm" compute capacity. It manage
 | `priorityClassName` | `string` | `spec.priorityClassName` |
 | `nodeAffinity` | `NodeAffinity` | `spec.affinity.nodeAffinity` |
 | `resources` | `ResourceRequirements` | `spec.containers[].resources` |
+| `serviceAccountName` | `string` | `spec.serviceAccountName` |
 
 Keys in `ate.dev/` and its subdomains (for example, `policy.ate.dev/`) are
 reserved for controllers and cannot be set in `template.labels` or
@@ -120,7 +121,7 @@ The `ActorTemplate` defines the code, environment, and state-management policies
 | `containers` | `[]Container` | **Required.** The workload definition — see [Container Fields](#container-fields) below. Each container may also declare an optional `wakeupProbe` HTTP probe — see [Container Wakeup Probe](#container-wakeup-probe-wakeupprobe). |
 | `sandboxConfig` | `SandboxConfig` | **Required.** The sandbox runtime selection: `sandboxClass` (**required**, `SANDBOX_CLASS_GVISOR` or `SANDBOX_CLASS_MICROVM`) picks the runtime family this template's actors require — only `WorkerPool`s whose `sandboxClass` matches are eligible — and `configName` (**required**) names the cluster-scoped [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) object supplying the sandbox binaries. It must reference an existing config of the matching class; `CreateActorTemplate` rejects the template otherwise. |
 | `workerSelector` | `*Selector` | Optional. Gates which `WorkerPool`s actors from this template may use, by matching against each pool's labels (`matchLabels`). If unset, all pools are eligible (subject to the actor's own `worker_selector`). |
-| `snapshotConfig` | `SnapshotConfig` | **Required.** The base object-storage location snapshots are written under, plus the pause/commit/resume scopes. See [Snapshot Storage Layout](#snapshot-storage-layout). |
+| `snapshotConfig` | `SnapshotConfig` | **Required.** The base object-storage location snapshots are written under, plus the snapshot scope (`onCommit`) used by both Pause and Suspend. See [Snapshot Storage Layout](#snapshot-storage-layout). |
 | `volumes` | `[]Volume` | Optional. Volumes the containers may mount, each a `durableDir`, an `externalVolumeTemplate` (see [CSI Volumes Guide](csi-volumes.md)), or a `systemInfo` volume (see [SystemInfo Volumes](#systeminfo-volumes)). Every declared volume must be mounted by at least one container. A `microvm` template may declare several `durableDir` volumes; a `gvisor` template is limited to one. |
 | `resources` | `*ResourceRequirements` | Optional. Declares each actor's compute size via `limits` — see [Sandbox Right-Sizing](#sandbox-right-sizing-resources). Immutable, like the rest of the template. |
 
@@ -182,7 +183,7 @@ To deliver identity information, including credentials, to a running actor, you 
 Available information sources:
 
 #### actorMetadata
-The actorMetadata data source projects the actor's identity fields to files, one per item, analogous to the [Kubernetes downwardAPI volume](https://kubernetes.io/docs/concepts/storage/downward-api/). Each item selects a `field` — `name` (unique within an atespace), `atespace` (together with the name, the actor's full identity), or `uid` (server-generated, distinguishes incarnations of the same name) — and the `path` the value is written to, raw with no trailing newline. `path` is a clean relative path from the root of the volume (no leading `/`, no `.` or `..` segments, at most 16 segments) and must not repeat another path projected into the same volume.
+The actorMetadata data source projects the actor's identity fields to files, one per item, analogous to the [Kubernetes downwardAPI volume](https://kubernetes.io/docs/concepts/storage/volumes/#downwardapi). Each item selects a `field` — `name` (unique within an atespace), `atespace` (together with the name, the actor's full identity), or `uid` (server-generated, distinguishes incarnations of the same name) — and the `path` the value is written to, raw with no trailing newline. `path` is a clean relative path from the root of the volume (no leading `/`, no `.` or `..` segments, at most 16 segments) and must not repeat another path projected into the same volume.
 
 ```yaml
 spec:
@@ -209,9 +210,14 @@ spec:
 The values are delivered as files on a read-only per-actor bind mount, not environment variables, precisely so they carry the correct values after a resume from a shared snapshot — an env var (or a file baked into the image) would be frozen at the snapshot-source actor's values, since it lives in the checkpointed process memory, and would therefore be identical for every actor restored from that snapshot. The metadata fields themselves are fixed for the actor's lifetime, so workloads may cache them; future data sources that rotate (identity tokens and certificates) must be re-read at time of use.
 
 #### trustBundle
-The trustBundle data source projects the trust anchors of a named trust bundle to a single PEM file — inspired by the [Kubernetes clusterTrustBundle projected volume source](https://kubernetes.io/docs/concepts/storage/projected-volumes/#clustertrustbundle), but source-neutral: the name selects a bundle substrate knows how to fetch, and where it is fetched from is a deployment concern, not part of the API.
+The trustBundle data source projects the union of the trust anchors of one or more named trust bundles (at most 8) to a single PEM file — inspired by the [Kubernetes clusterTrustBundle projected volume source](https://kubernetes.io/docs/concepts/storage/projected-volumes/#clustertrustbundle), but source-neutral: the name selects a bundle substrate knows how to fetch, and where it is fetched from is a deployment concern, not part of the API.
 
-Supported names are allowlisted. Today the only supported bundle is `egress-mitm.ate.dev` — the egress gateway CA bundle — resolved from the [ClusterTrustBundle](https://kubernetes.io/docs/reference/access-authn-authz/certificate-signing-requests/#cluster-trust-bundles) (`certificates.k8s.io/v1beta1`) that atecontroller's reconciler derives from the `egress-mitm-ca-pool` Secret in the `ate-system` namespace. A configurable backend registry may widen the allowlist later.
+Supported names are allowlisted:
+
+* `egress-mitm.ate.dev` — the egress gateway man-in-the-middle CA bundle.
+* `system-roots.ate.dev` — A selection of public CA root certificates provided
+  by Substrate.  In official Substrate images, this is the Mozilla Root Store as
+  shipped on Debian (consumed via the distroless-static base image).
 
 ```yaml
 spec:
@@ -220,7 +226,8 @@ spec:
     systemInfo:
       dataSources:
       - trustBundle:
-          name: egress-mitm.ate.dev
+          names:
+          - egress-mitm.ate.dev
           path: ca.pem
   containers:
   - name: main
@@ -230,9 +237,9 @@ spec:
       mountPath: /run/substrate/certs   # the actor reads /run/substrate/certs/ca.pem
 ```
 
-atelet resolves the bundle on the node when the actor starts, reading the backing object through a cluster-wide watch (the same informer that drives live refresh) and sanitizing it the way kubelet does for projections: only `CERTIFICATE` PEM blocks are kept, deduplicated, with block headers stripped and the anchors deliberately shuffled, so consumers must not depend on their order. The actor itself never talks to any bundle backend. Starting the actor fails, with an error naming the bundle, if the name is not on the allowlist, the bundle's backend is unavailable in this deployment, or the resolved bundle is missing, empty, or contains no certificates.
+atelet resolves the bundle on the node when the actor starts, reading the backing object through a cluster-wide watch (the same informer that drives live refresh) and sanitizing it the way kubelet does for projections: only `CERTIFICATE` PEM blocks are kept, deduplicated across all the named bundles, with block headers stripped and the anchors deliberately shuffled, so consumers must not depend on their order. The actor itself never talks to any bundle backend. Starting the actor fails, with an error naming the bundle, if any name is not on the allowlist, the bundle's backend is unavailable in this deployment, or the resolved bundle is missing, empty, or contains no certificates.
 
-Bundle contents are re-resolved on every Run/Restore and refreshed while the actor runs: when the backing bundle changes, atelet rewrites the projected file atomically at the same path. As with the Kubernetes clusterTrustBundle projection, the application must re-read the file to pick up a rotation; a runtime that loads trust anchors once at startup sees the change at its next start or resume. If a refresh fails because the backing object was deleted or is unusable, the file keeps its last good contents. Bundle publishers should rotate with overlap: add the new CA before minting leaves under it, and keep the old CA until its last leaf expires.
+Bundle contents are re-resolved on every Run/Restore and refreshed while the actor runs: when any backing bundle changes, atelet rewrites the projected file atomically at the same path. As with the Kubernetes clusterTrustBundle projection, the application must re-read the file to pick up a rotation; a runtime that loads trust anchors once at startup sees the change at its next start or resume. If a refresh fails because the backing object was deleted or is unusable, the file keeps its last good contents. Bundle publishers should rotate with overlap: add the new CA before minting leaves under it, and keep the old CA until its last leaf expires.
 
 ### Container Fields
 
@@ -398,7 +405,7 @@ This means a single, cluster-managed config pins the sandbox runtime version for
 | Field | Type | Description |
 | :--- | :--- | :--- |
 | `sandboxClass` | `string` | **Required.** Runtime family this config applies to: `gvisor` (default) or `microvm`. An `ActorTemplate` only uses `SandboxConfig`s whose `sandboxClass` matches its own. |
-| `pauseImage` | `string` | **Required.** The image for the sandbox's root container (e.g. `registry.k8s.io/pause`, or `gcr.io/gke-release/pause` on GKE). Must include a digest (`...@sha256:...`) — it is recorded in each snapshot's manifest so a restore rebuilds the sandbox from the same image. |
+| `pauseImage` | `string` | **Required for `gvisor`; not allowed for `microvm`**, which runs no pause container. The image for the sandbox's root container (e.g. `registry.k8s.io/pause`, or `gcr.io/gke-release/pause` on GKE). Must include a digest (`...@sha256:...`) — it is recorded in each snapshot's manifest so a restore rebuilds the sandbox from the same image. |
 | `assets` | `map[arch]map[name]AssetFile` | Optional. Content-addressed files atelet fetches, keyed by architecture (`amd64`, `arm64`) then asset name. gVisor expects a `gvisor` asset (the release's `gvisor.tar.zstd`), which atelet auto-extracts. A micro-VM backend expects several. Each `AssetFile` is a `{ url, sha256 }` pair. |
 
 A cluster-wide gVisor `SandboxConfig` (`gvisor-default`) is installed with the platform, so gVisor templates can name it via `sandboxConfig.configName` without any extra setup.
@@ -473,8 +480,9 @@ Registers a new logical actor in the system.
 Replaces the mutable fields of an existing actor with the ones in the request.
 *   **Request:** `UpdateActorRequest`
     *   `actor`: `Actor` — the complete replacement actor. `metadata.atespace` and `metadata.name` identify the resource; `metadata.uid` and `metadata.version` are **required** preconditions. `metadata` and `status` are server-owned and whatever the request carries in them is ignored. `source_tag` is immutable.
+    *   `actor_template` may change only while the actor is `SUSPENDED`. The new template must name the same `SandboxConfig` and declare the same volumes and volume mounts. Once the actor owns an external snapshot, the new template must also store snapshots under the same `snapshotConfig.storageLocation`.
 *   **Response:** the updated `Actor`.
-*   **Errors:** `INVALID_ARGUMENT` if `uid` or `version` is unset, or if the request changes an immutable field — including by leaving one unset; `ABORTED` if either guard no longer matches the stored resource.
+*   **Errors:** `INVALID_ARGUMENT` if `uid` or `version` is unset, or if the request changes an immutable field — including by leaving one unset; `FAILED_PRECONDITION` if a change to `actor_template` breaks one of the rules above; `ABORTED` if either guard no longer matches the stored resource.
 
 Because the guards are required and only a read supplies them, an update is always a read-modify-write. To Update an `Actor`, you must first `GetActor`/`CreateActor`, instead of building a new one — see [§7.2 of the API style guide](api-style-guide.md#72-using-version-and-uid-to-guard-writes) for why reconstructing the message can silently drop data.
 

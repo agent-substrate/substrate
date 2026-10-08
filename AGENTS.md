@@ -62,6 +62,14 @@ Agent Substrate uses a `Makefile` for its build and test tasks.
 - **Comments**: Keep them brief and to the point. Comment the final state of the code, not the path taken to it — a problem that only existed partway through writing the change is noise to the next reader, as is a pointer to a scratch or planning file that isn't in the repository.
 - **Spelling**: American English. `golangci-lint` runs `misspell` with `locale: US`, so British spellings fail lint.
 
+## Backward Compatibility
+
+<!-- TODO #2004: Remove this section at the v1.0.0 release. -->
+
+Agent Substrate makes no compatibility guarantee before v1.0.0. Do not add code to stay compatible with older clients, binaries, protos, flags, or config.
+Remove or rename fields, RPCs, flags, and types outright and update every caller in the same change.
+Do not add `reserved` statements to protos, deprecated aliases, fallbacks for old formats, or version negotiation.
+
 ## Commit Messages
 
 - **Describe the change and why it was needed**: The message is read on `main` long after the PR branch is gone, so it should stand on its own.
@@ -95,5 +103,6 @@ The following is what Substrate currently offers.
 Keep this up to date when updating AGENTS.md.
 
 - **Workload Isolation**: The project uses `gVisor` (`runsc`) for sandboxing and security isolation of workloads on pods.
+- **JWTs and JWKs**: Signing (`internal/localjwtauthority`), verification (`cmd/ateapi/internal/oidcjwt`), and JWK set publishing (`internal/oidcdiscovery`) are built on the standard library's crypto packages. Extend those packages rather than adding go-jose or another JOSE library, so the code that decides whether a token is valid stays small and supports only the algorithms Substrate uses.
 
 For future plans for security, reference `docs/roadmap.md`.
