@@ -52,10 +52,10 @@ const (
 
 	// EgressConnectCacheHitCounter is the Envoy dynamic-module counter name for
 	// CONNECT policy cache hits in atenet-egress.
-	EgressConnectCacheHitCounter = "ate_egress_connect_cache_hit"
+	EgressConnectCacheHitCounter = "ate_egress_cache_hit"
 	// EgressConnectCacheMissCounter is the Envoy dynamic-module counter name for
 	// CONNECT policy cache misses in atenet-egress.
-	EgressConnectCacheMissCounter = "ate_egress_connect_cache_miss"
+	EgressConnectCacheMissCounter = "ate_egress_cache_miss"
 )
 
 // PlatformMetricPrefixes are the Prometheus metric-name prefixes (OTLP dots

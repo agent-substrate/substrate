@@ -266,10 +266,10 @@ envoy_http_ext_proc_egress_policy_mitm_streams_started{envoy_http_conn_manager_p
 envoy_http_ext_proc_egress_policy_cleartext_streams_started{envoy_http_conn_manager_prefix="mitm_cleartext"} 0
 # TYPE envoy_http_ext_proc_egress_identity_streams_closed counter
 envoy_http_ext_proc_egress_identity_streams_closed{envoy_http_conn_manager_prefix="egress_connect"} 6
-# TYPE envoy_dynamicmodulescustom_ate_egress_connect_cache_hit counter
-envoy_dynamicmodulescustom_ate_egress_connect_cache_hit{} 4
-# TYPE envoy_dynamicmodulescustom_ate_egress_connect_cache_miss counter
-envoy_dynamicmodulescustom_ate_egress_connect_cache_miss{} 1
+# TYPE envoy_dynamicmodulescustom_ate_egress_cache_hit counter
+envoy_dynamicmodulescustom_ate_egress_cache_hit{} 4
+# TYPE envoy_dynamicmodulescustom_ate_egress_cache_miss counter
+envoy_dynamicmodulescustom_ate_egress_cache_miss{} 1
 `
 
 func TestEgressExtProcStreamCounts(t *testing.T) {

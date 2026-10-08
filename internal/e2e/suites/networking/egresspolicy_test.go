@@ -120,6 +120,12 @@ func TestActorEgressHTTPSByHostnameMITM(t *testing.T) {
 	dataplane := e2e.CurrentAtenetDataplane()
 	router, actorRef := hostnamePolicyActor(t, ctx)
 
+	beforeScrape, err := e2e.ScrapeEgressEnvoyMetrics(ctx)
+	if err != nil {
+		t.Fatalf("scraping egress Envoy metrics before requests: %v", err)
+	}
+	hitsBefore, _ := e2e.EgressPolicyCacheCounts(beforeScrape)
+
 	status, body := fetchThroughEgressActorUntil(t, ctx, router, actorRef, "https://example.com/", reached)
 	if status != http.StatusOK {
 		t.Fatalf("fetch of the allowed host returned HTTP %d, want 200; body: %s", status, body)
@@ -132,6 +138,15 @@ func TestActorEgressHTTPSByHostnameMITM(t *testing.T) {
 		t.Fatalf("fetch of a host outside the policy returned HTTP %d, want an egress-policy denial; body: %s", status, body)
 	}
 	t.Logf("denied on the decrypted request: %s", body)
+
+	afterScrape, err := e2e.ScrapeEgressEnvoyMetrics(ctx)
+	if err != nil {
+		t.Fatalf("scraping egress Envoy metrics after requests: %v", err)
+	}
+	hitsAfter, _ := e2e.EgressPolicyCacheCounts(afterScrape)
+	if got := hitsAfter - hitsBefore; got != 2 {
+		t.Fatalf("ate_egress.cache_hit incremented by %d, want 2 (before=%d, after=%d)", got, hitsBefore, hitsAfter)
+	}
 }
 
 // TestActorEgressHTTPSByHostnamePassthrough: the gateway acts as TCP proxy fetching
