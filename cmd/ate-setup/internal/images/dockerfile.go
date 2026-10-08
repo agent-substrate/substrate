@@ -51,8 +51,14 @@ func dockerBuildArgs(platforms string, extraFlags []string, tag, contextPath str
 // push to; the returned reference always uses the digest, so a stale tag can
 // never be resolved by accident.
 func BuildDockerfileImage(ctx context.Context, rootDir, dockerRepo, imageName, contextPath, koDefaultPlatforms string, extraFlags []string) (string, error) {
+	return PublishDockerfileImage(ctx, rootDir, dockerRepo, imageName, fmt.Sprintf("build-%d", time.Now().Unix()), contextPath, koDefaultPlatforms, extraFlags)
+}
+
+// PublishDockerfileImage is BuildDockerfileImage with the tag chosen by the
+// caller, for a release that publishes every image under one tag.
+func PublishDockerfileImage(ctx context.Context, rootDir, dockerRepo, imageName, tag, contextPath, koDefaultPlatforms string, extraFlags []string) (string, error) {
 	repo := strings.TrimSuffix(dockerRepo, "/") + "/" + imageName
-	stageTag := fmt.Sprintf("%s:build-%d", repo, time.Now().Unix())
+	stageTag := repo + ":" + tag
 
 	build := exec.CommandContext(ctx, "docker",
 		dockerBuildArgs(dockerfilePlatforms(koDefaultPlatforms), extraFlags, stageTag, contextPath)...)

@@ -191,7 +191,7 @@ Three `event.name` values, which is the OTLP LogRecord's own field rather than a
 
 `ate.actor.usage_sampled` is the ateoms' record: one per actor per sampling period, plus an `initial` and a `final` per activation, told apart by `ate.stats.kind`. Its timestamp is when the measurement was read. Its measurements are named after the `ate.actor.stats.*` instruments and share their units, so `ate.stats.cpu.time` is seconds. They are absent, not zero, while the actor is not measurable, which the record says with `ate.stats.source` unspecified. `ate.stats.cpu.time` restarts at zero with each `ate.actor.epoch`, the unix-nano time the activation began, so a lifetime figure is the sum over epochs of each epoch's highest value; `ate.stats.memory.usage` and `ate.stats.memory.working_set` are absolute, and `ate.stats.memory.peak` is as the source reports it. The same measurements ride `WorkloadStatsSample` on the stats RPCs, with the epoch beside them.
 
-A crash is its own name because an event name promises a set of attributes and a crash has a different severity and shape. There is no name per state: `ate.actor.state` already says which transition happened, so a consumer still selects on that one attribute and needs no map from a name to a state. All three names are in [`docs/metrics/registry/events.yaml`](metrics/registry/events.yaml), which `make verify` checks.
+A crash is its own name because an event name promises a set of attributes and a crash has a different severity and shape. There is no name per state: `ate.actor.state` already says which transition happened, so a consumer still selects on that one attribute and needs no map from a name to a state. All three names are in [`docs/metrics/registry/events.yaml`](metrics/registry/events.yaml), which `hack/verify-all.sh` checks.
 
 The attributes are the same flat `ate.*` keys as the stdout record, so they arrive as real log attributes with no transform in front of them. Trace context is not among them: it goes on the record's own `TraceId` and `SpanId` fields, where the stdout record's top-level `trace_id`/`span_id` would be mapped to anyway. The instrumentation scope is `github.com/agent-substrate/substrate/internal/actorevent` for every actor event. Select or drop a stream by `event.name`: the lifecycle events must never be sampled, the usage samples may be.
 
@@ -297,7 +297,7 @@ hack/verify/metrics.sh                           # the command that CI uses
 weaver registry check -r docs/metrics/registry   # the same command, direct
 ```
 
-`make verify` runs the script. It uses a local `weaver` binary if there is one, and the official image if there is none.
+`hack/verify-all.sh` runs the script. It uses a local `weaver` binary if there is one, and the official image if there is none.
 
 **To add or change an instrument:** follow [Metrics Best Practices](dev/best-practices/metrics.md), which covers the instrument choice, the labels, the Go, the test, and the registry entry; then change `metrics.yaml` and run the script.
 

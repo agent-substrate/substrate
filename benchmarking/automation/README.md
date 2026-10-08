@@ -23,7 +23,7 @@ the router capacity benchmark — see
    `ateArgs`) + `benchmarking/workloads/deploy.sh
    --deploy --sandbox-class <class>` (these build & push substrate / workload
    images via `ko` as part of their deploy steps — there's no separate
-   `make build-images` step). For a `microvm` test the orchestrator also
+   image build step). For a `microvm` test the orchestrator also
    runs `hack/install-microvm-deps.sh --install` between the two, which
    stages kata + cloud-hypervisor + virtiofsd assets to the cluster's object
    store bucket and applies the cluster-wide `microvm` SandboxConfig.
