@@ -83,6 +83,26 @@ jobs:
       run: |
         make verify
         ../../../hack/run-tool.sh golangci-lint run --config ../../../.golangci.yaml ./...
+    # Kept apart from the root module so it can move to its own repository.
+    - name: azure-blob object-store plugin tests
+      working-directory: internal/plugins/azure-blob
+      run: ../../../hack/run-tool.sh gotestsum --junitfile "${ARTIFACTS}/azure-blob.xml"
+        --jsonfile "${ARTIFACTS}/azure-blob.json" --format standard-verbose
+        -- -race -v ./...
+    # The same tests plus the integration-tagged ones, against Azurite.
+    - name: azure-blob object-store plugin Azurite tests
+      working-directory: internal/plugins/azure-blob
+      run: ./hack/test-azurite.sh ../../../hack/run-tool.sh gotestsum
+        --junitfile "${ARTIFACTS}/azure-blob-azurite.xml"
+        --jsonfile "${ARTIFACTS}/azure-blob-azurite.json" --format standard-verbose
+        -- -race -count=1 -tags=integration -v ./...
+    # The integration tag adds the Azurite tests and their shared-key helper, so
+    # vet (in make verify) and lint compile them without running Azurite.
+    - name: azure-blob object-store plugin verify
+      working-directory: internal/plugins/azure-blob
+      run: |
+        make verify
+        ../../../hack/run-tool.sh golangci-lint run --config ../../../.golangci.yaml --build-tags=integration ./...
     - name: Cache cargo
       uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
