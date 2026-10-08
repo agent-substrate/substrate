@@ -36,13 +36,14 @@ What it buys, concretely:
 ## The privilege split
 
 The design is shaped by an existing substrate boundary: **atelet runs as
-plain root with every Linux capability dropped** ("atelet does no mounts" —
-see `manifests/ate-install/atelet.yaml`), while the **ateom worker pods are
+root with every Linux capability dropped but `CAP_CHOWN` and
+`CAP_DAC_OVERRIDE`** ("atelet does no mounts" — see
+`manifests/ate-install/atelet.yaml`), while the **ateom worker pods are
 privileged** and own all mounts on the node. The module is split accordingly:
 
 | Half | Runs in | Files | Needs |
 |---|---|---|---|
-| Store: pull, parse, unpack, record | atelet | `imagecache.go`, `unpack.go`, `spec.go` (portable) | nothing but file I/O |
+| Store: pull, parse, unpack, record | atelet | `imagecache.go`, `unpack.go`, `spec.go` (portable) | file I/O; `CAP_CHOWN` to apply layer owners, `CAP_DAC_OVERRIDE` to hardlink, size and remove content owned by other users |
 | Consumer: finalize, mount, unmount | ateom-gvisor / ateom-microvm | `bundle_linux.go` (`//go:build linux`) | `CAP_MKNOD`, `CAP_SYS_ADMIN` |
 
 The two halves communicate through the filesystem only: the shared cache
@@ -58,7 +59,7 @@ anywhere.
 
 ```
 <cache-root>/                        default: /var/lib/ate/image-cache
-  version                            layout version marker ("1")
+  version                            layout version marker ("2")
   layers/sha256/<diffid-hex>/
       fs/                            the unpacked layer tree (an overlay lowerdir)
       whiteouts.json                 whiteout state recorded at unpack time
@@ -99,7 +100,11 @@ layer diffIDs in order — layers shared by N images exist once.
    confinement (path traversal and symlink/hardlink escapes are refused),
    "later entry wins" within a layer, read-only-dir handling that works
    without `CAP_DAC_OVERRIDE`, and creation of parent directories that the
-   layer tar omits (they may exist only in lower layers). Whiteout entries
+   layer tar omits (they may exist only in lower layers). Every entry keeps
+   the numeric owner its tar header records, as containerd and moby apply
+   it; run as root, a failed chown fails the unpack, and an unprivileged
+   process (unit tests, local tooling) leaves the tree owned by itself.
+   Whiteout entries
    (`.wh.*`) are **not** written into the tree — overlayfs whiteouts are
    char devices atelet cannot create — they are recorded in
    `whiteouts.json` for the consumer to materialize.

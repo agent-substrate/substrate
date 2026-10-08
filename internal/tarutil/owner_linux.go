@@ -16,8 +16,6 @@ package tarutil
 
 import (
 	"archive/tar"
-	"errors"
-	"fmt"
 	"os"
 	"syscall"
 )
@@ -63,23 +61,4 @@ func setOwner(hdr *tar.Header, info os.FileInfo) {
 	// not the host's, so only the numeric ids are meaningful.
 	hdr.Uname = ""
 	hdr.Gname = ""
-}
-
-// lchownEntry restores an entry's ownership without following symlinks.
-//
-// Changing a file's owner requires privilege. The production caller (ateom) is
-// root in its worker pod, so ownership is restored faithfully and any EPERM
-// there signals a real problem worth failing on. An unprivileged process cannot
-// chown at all, so rather than making the package unusable outside a root
-// context (tests, local tooling), EPERM is tolerated there and the extracted
-// files simply belong to the extracting user.
-func lchownEntry(root *os.Root, name string, hdr *tar.Header) error {
-	err := root.Lchown(name, hdr.Uid, hdr.Gid)
-	if err == nil {
-		return nil
-	}
-	if errors.Is(err, os.ErrPermission) && os.Geteuid() != 0 {
-		return nil
-	}
-	return fmt.Errorf("restoring ownership of %q to %d:%d: %w", name, hdr.Uid, hdr.Gid, err)
 }

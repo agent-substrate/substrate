@@ -17,6 +17,7 @@
 package imagecache
 
 import (
+	"archive/tar"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -356,4 +357,59 @@ func TestSetupBundleRootfs_ImageVolumes(t *testing.T) {
 			}
 		})
 	}
+}
+
+// unpackTestLayer unpacks entries into a layer dir under dir the way the
+// store's unpack does: the tree under fs/ plus its whiteouts.json.
+func unpackTestLayer(t *testing.T, dir string, entries []tarEntry) {
+	t.Helper()
+	fsDir := filepath.Join(dir, layerFSDirName)
+	if err := os.Mkdir(fsDir, 0o755); err != nil {
+		t.Fatalf("mkdir fs: %v", err)
+	}
+	wh, err := unpackInto(t, fsDir, buildTar(t, entries))
+	if err != nil {
+		t.Fatalf("unpackLayer: %v", err)
+	}
+	b, err := json.Marshal(wh)
+	if err != nil {
+		t.Fatalf("marshal whiteouts: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, layerWhiteoutsFileName), b, 0o600); err != nil {
+		t.Fatalf("write whiteouts.json: %v", err)
+	}
+}
+
+// TestSetupBundleRootfs_PresentsLayerOwnership composes a rootfs from layers
+// unpacked from tars and checks the merged view shows the owners the tars
+// record: the view runsc's gofer and virtiofsd serve to the actor. The top
+// layer adds a file under the private home directory without declaring it,
+// so the merged directory's owner also has to survive the implicit-dir
+// repair, which copies it from the base layer's unpacked tree.
+func TestSetupBundleRootfs_PresentsLayerOwnership(t *testing.T) {
+	roottest.Require(t, "chown and mount")
+	base := t.TempDir()
+	unpackTestLayer(t, base, ownershipEntries)
+	top := t.TempDir()
+	unpackTestLayer(t, top, []tarEntry{
+		{name: "home/agent/.profile", typeflag: tar.TypeReg, mode: 0o600, body: "p", uid: 1000, gid: 1000},
+	})
+
+	bundle := t.TempDir()
+	if err := WriteSpec(bundle, &OverlaySpec{Layers: []string{base, top}}); err != nil {
+		t.Fatalf("WriteSpec: %v", err)
+	}
+	if err := SetupBundleRootfs(bundle); err != nil {
+		t.Fatalf("SetupBundleRootfs: %v", err)
+	}
+	t.Cleanup(func() { _ = UnmountAllUnder(bundle) })
+
+	rootfs := filepath.Join(bundle, "rootfs")
+	assertOwner(t, filepath.Join(rootfs, "home/agent"), 1000, 1000, os.ModeDir|0o700)
+	assertOwner(t, filepath.Join(rootfs, "home/agent/.bashrc"), 1000, 1000, 0o644)
+	assertOwner(t, filepath.Join(rootfs, "home/agent/.profile"), 1000, 1000, 0o600)
+	assertOwner(t, filepath.Join(rootfs, "home/agent/rc"), 1002, 1002, os.ModeSymlink|0o777)
+	assertOwner(t, filepath.Join(rootfs, "srv/app.conf"), 1000, 2000, 0o640)
+	assertOwner(t, filepath.Join(rootfs, "opt/app"), 1001, 1001, os.ModeDir|0o555)
+	assertOwner(t, filepath.Join(rootfs, "home"), 0, 0, os.ModeDir|0o755)
 }

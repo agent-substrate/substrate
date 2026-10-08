@@ -31,6 +31,7 @@ type tarEntry struct {
 	mode     int64
 	body     string
 	linkname string
+	uid, gid int
 }
 
 func defaultMode(typeflag byte) int64 {
@@ -59,6 +60,8 @@ func buildTar(t *testing.T, entries []tarEntry) []byte {
 			Mode:     mode,
 			Size:     int64(len(e.body)),
 			Linkname: e.linkname,
+			Uid:      e.uid,
+			Gid:      e.gid,
 		}
 		if err := tw.WriteHeader(hdr); err != nil {
 			t.Fatalf("tar.WriteHeader(%+v): %v", hdr, err)

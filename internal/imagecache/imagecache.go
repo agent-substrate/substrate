@@ -19,12 +19,13 @@
 //
 // The work is split along the existing atelet/ateom privilege boundary:
 //
-//   - atelet (plain root, all capabilities dropped) pulls layers and unpacks
-//     them into the pool (Store.EnsureImage), and writes a rootfs-overlay.json
-//     into each bundle (WriteSpec). Whiteout entries are
-//     recorded in per-layer metadata rather than materialized, because
-//     overlayfs whiteouts are char devices (CAP_MKNOD) with trusted.* xattrs
-//     for opaque dirs (CAP_SYS_ADMIN).
+//   - atelet (root with only CAP_CHOWN and CAP_DAC_OVERRIDE) pulls layers
+//     and unpacks them into the pool with the owners their tars record
+//     (Store.EnsureImage), and writes a rootfs-overlay.json into each
+//     bundle (WriteSpec). Whiteout entries are recorded in per-layer
+//     metadata rather than materialized, because overlayfs whiteouts are
+//     char devices (CAP_MKNOD) with trusted.* xattrs for opaque dirs
+//     (CAP_SYS_ADMIN).
 //   - ateom (privileged; it already owns every mount on the node) finalizes
 //     layers — materializing the recorded whiteout state, once per layer —
 //     and mounts the overlay rootfs (SetupBundleRootfs) just before
@@ -74,7 +75,10 @@ import (
 )
 
 const (
-	layoutVersion   = "1"
+	// layoutVersion changes whenever trees unpacked by an older atelet would
+	// differ from what this one unpacks. "2": layer entries keep the owners
+	// their tars record (layout "1" left every entry root-owned).
+	layoutVersion   = "2"
 	versionFileName = "version"
 
 	layerFSDirName           = "fs"
@@ -330,7 +334,7 @@ func New(root string, opts ...Option) (*Store, error) {
 		if got := strings.TrimSpace(string(b)); got != layoutVersion {
 			// Fail loudly instead of silently mixing layouts; an operator can
 			// delete the cache dir to rebuild it (it holds no unique state).
-			return nil, fmt.Errorf("image cache at %q has layout version %q, this atelet supports %q", root, got, layoutVersion)
+			return nil, fmt.Errorf("image cache at %q has layout version %q, this atelet supports %q: delete the directory once no actor on this node is running, and atelet rebuilds it", root, got, layoutVersion)
 		}
 	case errors.Is(err, os.ErrNotExist):
 		if err := os.WriteFile(versionPath, []byte(layoutVersion+"\n"), 0o600); err != nil {
@@ -338,6 +342,10 @@ func New(root string, opts ...Option) (*Store, error) {
 		}
 	default:
 		return nil, fmt.Errorf("while reading image cache version marker: %w", err)
+	}
+
+	if os.Geteuid() != 0 {
+		slog.Warn("Image cache is not running as root: unpacked layers belong to this user instead of the owners the image records", slog.String("root", root))
 	}
 
 	if err := s.sweepTempDirs(); err != nil {

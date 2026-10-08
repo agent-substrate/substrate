@@ -219,10 +219,16 @@ spec:
         - --snapshot-plugin-socket=/run/snapshot-plugin/node.sock
         # atelet does no mounts, netlink, device, or namespace operations (those
         # live in the ateom worker pod) — it only reads/writes the
-        # /var/lib/ate hostPath as root. CAP_DAC_OVERRIDE is for one thing:
-        # emptying a directory a non-root actor created in its 0777 durable dir.
-        # It is owned by the actor's uid, typically 0755, so root has no write
-        # access to it and resetActorDirs fails after every checkpoint.
+        # /var/lib/ate hostPath as root. Both capabilities exist because
+        # atelet handles files that belong to other uids:
+        # - CHOWN: unpacking image layers into the image cache gives each entry
+        #   the owner its layer tar records, so image content owned by a
+        #   non-root user (a home directory, say) is theirs inside the actor.
+        # - DAC_OVERRIDE: emptying a directory a non-root actor created in its
+        #   0777 durable dir (owned by the actor's uid, typically 0755, so root
+        #   has no write access to it and resetActorDirs would fail after every
+        #   checkpoint), and removing, sizing, or hardlinking cached image
+        #   content that belongs to such a user.
         # runAsUser is pinned explicitly rather than relying on the base image's
         # default user.
         securityContext:
@@ -232,6 +238,7 @@ spec:
             drop:
             - ALL
             add:
+            - CHOWN
             - DAC_OVERRIDE
         # Keep per-node reservations small; omit limits to allow usage to grow
         # with the number of hosted actors.
@@ -333,8 +340,9 @@ spec:
           type: DirectoryOrCreate
       # Read-only view of the node's device nodes, used only to detect which
       # ones exist (atelet's own /dev is the container's, and does not show
-      # /dev/kvm). Detection is all this grants: atelet drops every capability
-      # and its own cgroup device filter still denies opening these.
+      # /dev/kvm). Detection is all this grants: atelet holds no capability
+      # beyond CHOWN and DAC_OVERRIDE, and its own cgroup device filter still
+      # denies opening these.
       - name: host-dev
         hostPath:
           path: /dev

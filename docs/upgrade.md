@@ -481,6 +481,19 @@ Wait for the new `atelet` pod on the node to be Ready before going on. Usually t
 kubectl get pods -n ate-system -l app=atelet --field-selector spec.nodeName=$NODE
 ```
 
+If it never becomes Ready and its log says the image cache `has layout
+version "1", this atelet supports "2"`, the new release unpacks image
+layers differently and will not reuse the node's cached layers. Step c
+left no actor running on the node, so delete the cache and let the new
+atelet rebuild it on demand:
+
+```bash
+kubectl debug node/$NODE -it --image=busybox -- rm -rf /host/var/lib/ate/image-cache
+kubectl delete pod -n ate-system -l app=atelet --field-selector spec.nodeName=$NODE
+# kubectl debug leaves its finished pod behind.
+kubectl get pods -o name | grep "^pod/node-debugger-$NODE-" | xargs kubectl delete
+```
+
 **e. Delete the node's old-pool worker pods.** Step c emptied them,
 but they are still Ready and hold capacity the new pool needs on this
 node. Their Deployment cannot reschedule them here anymore. Repeat
