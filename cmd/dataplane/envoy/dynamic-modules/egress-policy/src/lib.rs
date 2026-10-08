@@ -20,11 +20,10 @@ use envoy_proxy_dynamic_modules_rust_sdk::{
   declare_listener_filter_init_functions, envoy_log_trace, EnvoyListenerFilter,
   EnvoyListenerFilterConfig, ListenerFilter, ListenerFilterConfig,
 };
-use serde::Deserialize;
-
-/// Filter state holding the SNI rules as JSON. See
-/// EgressPolicyMetadataNamespace in cmd/atenet/internal/router/extproc.
-pub const ATE_POLICY_EGRESS: &[u8] = b"dev.ate.policy.egress";
+pub use substrate_envoy_common::{
+  pattern_matches, EgressPolicy, SniRule, ATE_POLICY_EGRESS, SNI_MODE_MITM,
+  SNI_MODE_PASSTHROUGH,
+};
 
 /// Filter state this filter writes the chosen chain name to.
 pub const ATE_EGRESS_FILTER_CHAIN: &[u8] = b"dev.ate.egress.filter_chain";
@@ -41,52 +40,11 @@ pub const ATE_EGRESS_FILTER_CHAIN_CLEARTEXT: &str = "cleartext";
 /// Verdict for a denied connection. No chain has this name.
 pub const ATE_EGRESS_FILTER_CHAIN_DENIED: &str = "denied";
 
-/// Mode of a rule whose match terminates the connection.
-pub const SNI_MODE_MITM: &str = "mitm";
-
-/// Mode of a rule whose match forwards the connection without decryption.
-pub const SNI_MODE_PASSTHROUGH: &str = "passthrough";
-
 /// Transport protocol tls_inspector sets for TLS.
 const TRANSPORT_TLS: &str = "tls";
 
 /// Transport protocol Envoy assumes when no inspector detected one.
 const TRANSPORT_RAW_BUFFER: &str = "raw_buffer";
-
-/// The SNI rules for a connection.
-#[derive(Debug, Deserialize, PartialEq)]
-pub struct EgressPolicy {
-  /// Most specific first; the first match wins.
-  pub rules: Vec<SniRule>,
-}
-
-/// A pattern and the mode applied when it matches.
-#[derive(Debug, Deserialize, PartialEq)]
-pub struct SniRule {
-  pub pattern: String,
-  pub mode: String,
-}
-
-/// Reports whether a normalized `hostname` matches `pattern`. Must agree with
-/// HostnamePattern.Matches in internal/egresspolicy.
-pub fn pattern_matches(pattern: &str, hostname: &str) -> bool {
-  if hostname.is_empty() {
-    return false;
-  }
-  if pattern == "*" {
-    return true;
-  }
-  if let Some(suffix) = pattern.strip_prefix("*.") {
-    return match hostname
-      .strip_suffix(suffix)
-      .and_then(|rest| rest.strip_suffix('.'))
-    {
-      Some(label) => !label.is_empty() && !label.contains('.'),
-      None => false,
-    };
-  }
-  pattern == hostname
-}
 
 /// ASCII-lowercases an SNI and strips one trailing dot, as the gateway does.
 fn normalize_sni(sni: &str) -> String {

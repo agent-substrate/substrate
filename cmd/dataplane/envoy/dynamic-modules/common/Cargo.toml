@@ -13,16 +13,10 @@
 # limitations under the License.
 
 [package]
-name = "substrate-envoy-egress-policy"
+name = "substrate-envoy-common"
 version.workspace = true
 edition.workspace = true
 
-[lib]
-name = "envoy_substrate_egress_policy"
-crate-type = ["cdylib"]
-
 [dependencies]
-envoy-proxy-dynamic-modules-rust-sdk.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-substrate-envoy-common.workspace = true

@@ -15,6 +15,7 @@
 [workspace]
 resolver = "3"
 members = [
+    "common",
     "egress-policy",
     "egress-policy-pep",
 ]
@@ -31,3 +32,4 @@ edition = "2024"
 envoy-proxy-dynamic-modules-rust-sdk = { git = "https://github.com/envoyproxy/envoy", rev = "b579d07d3ad7ee11d32b105e91a5a39ad24718d7" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+substrate-envoy-common = { path = "common" }
