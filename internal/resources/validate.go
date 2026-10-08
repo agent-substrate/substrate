@@ -220,11 +220,16 @@ func ValidateSnapshotLocation(location string) error {
 	if u.Opaque != "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return fmt.Errorf("invalid snapshot location %q: must contain only a scheme, bucket, and path", location)
 	}
-	// url.JoinPath cleans dot segments, so these would move snapshots outside
-	// of the location, e.g. into another atespace's prefix
-	for _, segment := range strings.Split(u.Path, "/") {
-		if segment == "." || segment == ".." {
-			return fmt.Errorf("invalid snapshot location %q: must not contain '.' or '..' path segments", location)
+	// url.JoinPath cleans dot segments, and some backends trim spaces from
+	// segments (or windows, trailing dots) and treat '\' as a separator, so
+	// these could move snapshots outside of the location, e.g. into another
+	// atespace's prefix
+	if strings.Contains(u.Path, `\`) {
+		return fmt.Errorf(`invalid snapshot location %q: must not contain '\'`, location)
+	}
+	for segment := range strings.SplitSeq(u.Path, "/") {
+		if segment != "" && strings.Trim(segment, ". ") == "" {
+			return fmt.Errorf("invalid snapshot location %q: must not contain path segments of only '.' and ' '", location)
 		}
 	}
 	return nil

@@ -199,7 +199,12 @@ func TestValidateSnapshotLocation(t *testing.T) {
 		{"trailing dot dot", "gs://bucket/path/..", true},
 		{"escaped dot dot", "gs://bucket/%2e%2e/path", true},
 		{"dot", "gs://bucket/./path", true},
-		{"dots in a name", "gs://bucket/a..b/...", false},
+		{"triple dot", "gs://bucket/.../path", true},
+		{"space padded dot dot", "gs://bucket/a/%20..%20/b", true},
+		{"trailing space dot dot", "gs://bucket/a/..%20/b", true},
+		{"backslash", `gs://bucket/team-a\..\team-b`, true},
+		{"escaped backslash", "gs://bucket/a%5Cb", true},
+		{"dots in a name", "gs://bucket/a..b/.c/d.", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
