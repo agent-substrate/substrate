@@ -29,9 +29,10 @@ import (
 )
 
 const (
-	connectionCountMetric = "db.client.connection.count"
-	connectionMaxMetric   = "db.client.connection.max"
-	connectionWaitMetric  = "db.client.connection.wait_time"
+	connectionCountMetric   = "db.client.connection.count"
+	connectionMaxMetric     = "db.client.connection.max"
+	connectionWaitMetric    = "db.client.connection.wait_time"
+	connectionPendingMetric = "db.client.connection.pending_requests"
 )
 
 // Acquisition buckets cover sub-millisecond reuse through prolonged contention.
@@ -39,10 +40,11 @@ var connectionWaitBuckets = []float64{0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0
 
 // Instruments holds PostgreSQL pool metrics. A nil *Instruments disables them.
 type Instruments struct {
-	meter metric.Meter
-	count metric.Int64ObservableUpDownCounter
-	max   metric.Int64ObservableUpDownCounter
-	wait  metric.Float64Histogram
+	meter   metric.Meter
+	count   metric.Int64ObservableUpDownCounter
+	max     metric.Int64ObservableUpDownCounter
+	wait    metric.Float64Histogram
+	pending metric.Int64UpDownCounter
 }
 
 func NewInstruments(meter metric.Meter) (*Instruments, error) {
@@ -65,7 +67,13 @@ func NewInstruments(meter metric.Meter) (*Instruments, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create %s instrument: %w", connectionWaitMetric, err)
 	}
-	return &Instruments{meter: meter, count: count, max: max, wait: wait}, nil
+	pending, err := meter.Int64UpDownCounter(connectionPendingMetric,
+		metric.WithUnit("{request}"),
+		metric.WithDescription("Number of PostgreSQL connection acquisition requests currently in progress by pool."))
+	if err != nil {
+		return nil, fmt.Errorf("create %s instrument: %w", connectionPendingMetric, err)
+	}
+	return &Instruments{meter: meter, count: count, max: max, wait: wait, pending: pending}, nil
 }
 
 func (i *Instruments) configurePool(cfg *pgxpool.Config, name string) {
@@ -147,11 +155,13 @@ func (*poolMetricsTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, _ pg
 
 func (*poolMetricsTracer) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
 
-func (*poolMetricsTracer) TraceAcquireStart(ctx context.Context, _ *pgxpool.Pool, _ pgxpool.TraceAcquireStartData) context.Context {
+func (t *poolMetricsTracer) TraceAcquireStart(ctx context.Context, _ *pgxpool.Pool, _ pgxpool.TraceAcquireStartData) context.Context {
+	t.instruments.pending.Add(ctx, 1, metric.WithAttributes(ateattr.DBConnectionPoolNameKey.String(t.name)))
 	return context.WithValue(ctx, acquireStartKey{}, time.Now())
 }
 
 func (t *poolMetricsTracer) TraceAcquireEnd(ctx context.Context, _ *pgxpool.Pool, data pgxpool.TraceAcquireEndData) {
+	t.instruments.pending.Add(ctx, -1, metric.WithAttributes(ateattr.DBConnectionPoolNameKey.String(t.name)))
 	start := ctx.Value(acquireStartKey{}).(time.Time)
 	t.instruments.recordAcquire(ctx, t.name, time.Since(start), data.Err)
 }
