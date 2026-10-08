@@ -211,3 +211,29 @@ func TestSetNosuidNodev(t *testing.T) {
 		}
 	}
 }
+
+// The share comes first, since the per-container rootfs binds live under it.
+// Each pmem mount follows with the virtio-fs driver and its device,
+// filesystem, and options as given.
+func TestSandboxStoragesPMEM(t *testing.T) {
+	got := sandboxStorages(CreateSandboxOpts{
+		SandboxID: "sb",
+		Pmem: []PmemMount{{
+			Device: "/dev/pmem1", Fstype: "erofs", Options: []string{"ro", "dax"}, MountPoint: "/run/kata-containers/shared-image",
+		}},
+	})
+	if len(got) != 2 {
+		t.Fatalf("sandboxStorages returned %d storages, want 2", len(got))
+	}
+	if got[0].Source != FsTag || got[0].MountPoint != guestSharedDir {
+		t.Errorf("first storage = %v, want the %s share at %s", got[0], FsTag, guestSharedDir)
+	}
+	pm := got[1]
+	if pm.Driver != virtioFSDriver || pm.Source != "/dev/pmem1" || pm.Fstype != "erofs" ||
+		!slices.Equal(pm.Options, []string{"ro", "dax"}) || pm.MountPoint != "/run/kata-containers/shared-image" {
+		t.Errorf("pmem storage = %v, want /dev/pmem1 mounted as erofs ro,dax through the %s handler", pm, virtioFSDriver)
+	}
+	if got := sandboxStorages(CreateSandboxOpts{SandboxID: "sb"}); len(got) != 1 {
+		t.Errorf("sandboxStorages without pmem returned %d storages, want only the share", len(got))
+	}
+}
