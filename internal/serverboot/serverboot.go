@@ -208,17 +208,25 @@ const (
 	tracesExporterEnv  = "OTEL_TRACES_EXPORTER"
 )
 
-// metricsPushEnabled applies OTEL_METRICS_EXPORTER with the shared exporter
-// rules: the OTLP reader is installed while otlp is selected, as it is when the
-// variable is unset. prometheus, the specification's pull exporter, is known
-// only when pullServed, i.e. the component serves its own /metrics; elsewhere
-// it is skipped as unknown, so a push-only component keeps exporting.
-func metricsPushEnabled(ctx context.Context, pullServed bool) bool {
+// metricsExporters applies OTEL_METRICS_EXPORTER with the shared exporter
+// rules. prometheus, the specification's pull exporter, is known only when
+// pullServed, i.e. the component serves its own /metrics; elsewhere it is
+// skipped as unknown, so a push-only component keeps exporting. Unset selects
+// every exporter the component has.
+func metricsExporters(ctx context.Context, pullServed bool) Exporters {
 	known := []string{ExporterOTLP}
+	def := Exporters{ExporterOTLP: true}
 	if pullServed {
 		known = append(known, exporterPrometheus)
+		def[exporterPrometheus] = true
 	}
-	return resolveExportersEnv(ctx, metricsExporterEnv, known, Exporters{ExporterOTLP: true}).Has(ExporterOTLP)
+	return resolveExportersEnv(ctx, metricsExporterEnv, known, def)
+}
+
+// metricsPushEnabled reports whether the OTLP reader is installed: while otlp
+// is selected, as it is when the variable is unset.
+func metricsPushEnabled(ctx context.Context, pullServed bool) bool {
+	return metricsExporters(ctx, pullServed).Has(ExporterOTLP)
 }
 
 // tracesPushEnabled applies OTEL_TRACES_EXPORTER with the shared exporter
@@ -247,31 +255,45 @@ func InitMetrics(ctx context.Context, serviceName string) (*sdkmetric.MeterProvi
 // it does not own (atecontroller: controller-runtime's), so every metric
 // reaches the backend exactly once on whichever path is active. With the OTLP
 // export, reg is bridged onto the push and the OTel instruments stay off it,
-// since the bridge would otherwise push them a second time. When
-// OTEL_METRICS_EXPORTER does not select otlp, nothing is pushed and the OTel
-// instruments register on reg, so its endpoint serves both.
+// since the bridge would otherwise push them a second time. With prometheus
+// alone, nothing is pushed and the OTel instruments register on reg, so its
+// endpoint serves both.
+//
+// servePull reports whether OTEL_METRICS_EXPORTER leaves the scraped endpoint
+// on, which the caller must then serve from reg: unset, prometheus, or a list
+// with it. otlp and none turn it off, and with none no reader is installed.
 //
 // wrapProducer, when non-nil, wraps the bridge producer on the OTLP path, for
 // a rewrite the push backend needs but the scraped endpoint does not.
 func InitMetricsBridged(ctx context.Context, serviceName string, reg interface {
 	promclient.Registerer
 	promclient.Gatherer
-}, wrapProducer func(sdkmetric.Producer) sdkmetric.Producer) (*sdkmetric.MeterProvider, error) {
+}, wrapProducer func(sdkmetric.Producer) sdkmetric.Producer) (mp *sdkmetric.MeterProvider, servePull bool, err error) {
 	if serviceName == "" {
-		return nil, fmt.Errorf("serviceName is required")
+		return nil, false, fmt.Errorf("serviceName is required")
 	}
-	if metricsPushEnabled(ctx, true) {
+	exporters := metricsExporters(ctx, true)
+	servePull = exporters.Has(exporterPrometheus)
+	switch {
+	case exporters.Has(ExporterOTLP):
 		producer := prombridge.NewMetricProducer(prombridge.WithGatherer(reg))
 		if wrapProducer != nil {
 			producer = wrapProducer(producer)
 		}
-		return newMeterProvider(ctx, serviceName, true, false, nil, []sdkmetric.Producer{producer})
+		mp, err = newMeterProvider(ctx, serviceName, true, false, nil, []sdkmetric.Producer{producer})
+	case servePull:
+		var promReader *prometheus.Exporter
+		if promReader, err = prometheus.New(prometheus.WithRegisterer(reg)); err != nil {
+			return nil, false, fmt.Errorf("create Prometheus metric exporter: %w", err)
+		}
+		mp, err = newMeterProvider(ctx, serviceName, false, false, nil, nil, promReader)
+	default:
+		mp, err = newMeterProvider(ctx, serviceName, false, false, nil, nil)
 	}
-	promReader, err := prometheus.New(prometheus.WithRegisterer(reg))
 	if err != nil {
-		return nil, fmt.Errorf("create Prometheus metric exporter: %w", err)
+		return nil, false, err
 	}
-	return newMeterProvider(ctx, serviceName, false, false, nil, nil, promReader)
+	return mp, servePull, nil
 }
 
 // InitMetricsPushOnlyVia is InitMetrics without the Prometheus reader, for a

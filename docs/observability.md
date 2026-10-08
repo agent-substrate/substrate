@@ -321,7 +321,7 @@ Weaver permits only `groups` and `imports` at the top level of a registry file, 
 
 ### Bridged controller-runtime metrics (atecontroller)
 
-atecontroller bridges controller-runtime's private Prometheus registry, which the manager does not serve, onto its OTLP reader. So `controller_runtime_*`, `workqueue_*`, `certwatcher_*`, `rest_client_*`, `leader_election_*`, `go_*`, and `process_*` reach the collector too, keeping their Prometheus names because they are upstream instruments and renaming them would break existing controller-runtime dashboards.
+atecontroller bridges controller-runtime's private Prometheus registry, which the manager serves on an unscraped `:8080`, onto its OTLP reader. So `controller_runtime_*`, `workqueue_*`, `certwatcher_*`, `rest_client_*`, `leader_election_*`, `go_*`, and `process_*` reach the collector too, keeping their Prometheus names because they are upstream instruments and renaming them would break existing controller-runtime dashboards.
 
 These can be used to answer whether the controller is keeping up, e.g. rising `workqueue_depth` or `workqueue_queue_duration_seconds` means reconciles are falling behind, and `controller_runtime_reconcile_errors_total` says which controller.
 
@@ -333,7 +333,9 @@ A queue that has never processed an item bridges as an exponential histogram wit
 
 ### Scraping instead of pushing
 
-ateapi, atelet, atenet-router and the credential provider also serve every instrument on their Prometheus `/metrics` endpoint. A cluster that scrapes those endpoints sets `OTEL_METRICS_EXPORTER=none` on the components, so each series reaches the backend once. With `none` the components install no OTLP metric reader and keep the Prometheus one; traces and logs are unaffected. atecontroller then registers its instruments (`ate.workerpool.*`) on controller-runtime's registry, so the manager's `:8080` serves them next to the controller-runtime families. ateom serves no endpoint of its own, so leave the variable unset on the worker pods, or it exports no metrics at all. The variable takes a comma-separated list, with the same rules as `OTEL_LOGS_EXPORTER`. `otlp` (the default) keeps the push, and `prometheus` or `none` stops it. `/metrics` stays on for each value. ateom serves no `/metrics`, so there `prometheus` is skipped as unknown with a warning, and the push stays on unless the variable is `none`.
+ateapi, atelet, atenet-router and the credential provider also serve every instrument on their Prometheus `/metrics` endpoint. A cluster that scrapes those endpoints sets `OTEL_METRICS_EXPORTER=prometheus` on the components, so each series reaches the backend once. With `prometheus` the components install no OTLP metric reader and keep the Prometheus one; traces and logs are unaffected. `none` stops the push too, and leaves their `/metrics` on. ateom serves no endpoint of its own, so leave the variable unset on the worker pods, or it exports no metrics at all. The variable takes a comma-separated list, with the same rules as `OTEL_LOGS_EXPORTER`. `otlp` (the default) keeps the push, and `prometheus` or `none` stops it. ateom serves no `/metrics`, so there `prometheus` is skipped as unknown with a warning, and the push stays on unless the variable is `none`.
+
+atecontroller's `:8080` listener follows the variable. Unset, or a list with both, it pushes and serves; `otlp` pushes and closes the listener; `prometheus` serves only, and registers its instruments (`ate.workerpool.*`) on controller-runtime's registry, so `:8080` serves them next to the controller-runtime families; `none` does neither.
 
 ### Local Metrics with Prometheus (Kind Cluster)
 

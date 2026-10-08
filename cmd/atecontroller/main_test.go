@@ -83,18 +83,24 @@ func TestBridgedRegistryProducesBeforeManagerStart(t *testing.T) {
 	}
 }
 
-// Metrics leave over OTLP, so the manager must not open its own listener.
-func TestManagerOptionsServeNoMetrics(t *testing.T) {
+// The manager opens its metrics listener only when OTEL_METRICS_EXPORTER leaves
+// the scrape endpoint on.
+func TestManagerOptionsMetricsListener(t *testing.T) {
 	t.Parallel()
 
-	opts := managerOptions(types.NamespacedName{Namespace: "ate-system", Name: "pool"})
+	for _, servePull := range []bool{true, false} {
+		opts := managerOptions(types.NamespacedName{Namespace: "ate-system", Name: "pool"}, servePull)
 
-	srv, err := metricsserver.NewServer(opts.Metrics, nil, nil)
-	if err != nil {
-		t.Fatalf("NewServer: %v", err)
-	}
-	if srv != nil {
-		t.Error("the manager would serve a metrics listener")
+		srv, err := metricsserver.NewServer(opts.Metrics, nil, nil)
+		if err != nil {
+			t.Fatalf("servePull=%t: NewServer: %v", servePull, err)
+		}
+		if served := srv != nil; served != servePull {
+			t.Errorf("servePull=%t: the manager serves a metrics listener = %t", servePull, served)
+		}
+		if servePull && opts.Metrics.BindAddress != ":8080" {
+			t.Errorf("metrics address = %q, want :8080", opts.Metrics.BindAddress)
+		}
 	}
 }
 
@@ -102,7 +108,7 @@ func TestManagerOptionsScopeSecretCache(t *testing.T) {
 	t.Parallel()
 
 	ref := types.NamespacedName{Namespace: "ate-system", Name: "pool"}
-	opts := managerOptions(ref)
+	opts := managerOptions(ref, true)
 
 	var byObject cache.ByObject
 	found := false

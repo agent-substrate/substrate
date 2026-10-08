@@ -99,12 +99,16 @@ func newControllerRuntimeLogger(h slog.Handler) logr.Logger {
 	return logr.FromSlogHandler(h)
 }
 
-// managerOptions configures the controller-runtime manager. Its metrics
-// listener is off: the registry it would serve leaves over OTLP instead.
-func managerOptions(egressMITMCAPool types.NamespacedName) ctrl.Options {
+// managerOptions configures the controller-runtime manager. servePull is
+// whether OTEL_METRICS_EXPORTER leaves its metrics listener on.
+func managerOptions(egressMITMCAPool types.NamespacedName, servePull bool) ctrl.Options {
+	metricsAddr := "0" // "0" disables the server.
+	if servePull {
+		metricsAddr = metricsserver.DefaultBindAddress
+	}
 	return ctrl.Options{
 		Scheme:  scheme,
-		Metrics: metricsserver.Options{BindAddress: "0"}, // "0" disables the server.
+		Metrics: metricsserver.Options{BindAddress: metricsAddr},
 		Cache: cache.Options{
 			ByObject: map[client.Object]cache.ByObject{
 				&corev1.Secret{}: {
@@ -146,10 +150,10 @@ func main() {
 	defer serverboot.ShutdownProvider("TracerProvider", tp.Shutdown)
 
 	// controller-runtime records reconcile, workqueue, and runtime metrics into its
-	// own Prometheus registry. The manager's own scrape listener is disabled in
-	// managerOptions, so the registry goes out over OTLP only. The bridged queue
-	// histograms are padded so the Telemetry API accepts idle ones.
-	mp, err := serverboot.InitMetricsBridged(ctx, serviceName, ctrlmetrics.Registry, padEmptyExponentialHistograms)
+	// own Prometheus registry. OTEL_METRICS_EXPORTER picks where they go: the
+	// OTLP push, which pads the bridged queue histograms so the Telemetry API
+	// accepts idle ones, and the manager's scrape listener.
+	mp, servePull, err := serverboot.InitMetricsBridged(ctx, serviceName, ctrlmetrics.Registry, padEmptyExponentialHistograms)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize metrics", err)
 	}
@@ -200,7 +204,7 @@ func main() {
 	// EgressMITMTrustReconciler watches the Secret `egress-mitm-ca-pool`.
 	systemNamespace := installdefaults.NamespaceFromPodEnv()
 	egressMITMCAPool := controllers.EgressMITMCAPoolRef(systemNamespace)
-	mgr, err := ctrl.NewManager(k8sConfig, managerOptions(egressMITMCAPool))
+	mgr, err := ctrl.NewManager(k8sConfig, managerOptions(egressMITMCAPool, servePull))
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
 		os.Exit(1)
