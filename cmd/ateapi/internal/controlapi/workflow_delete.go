@@ -206,7 +206,7 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 			slog.InfoContext(ctx, "workload already terminated on atelet", slog.Any("actor", actorRef))
 			return nil
 		}
-		return handleAteletError(ctx, w.store, actorRef, opName, "Terminate", true, err)
+		return w.handleAteletError(ctx, actorRef, actorTemplate, opName, "Terminate", true, err)
 	}
 
 	return nil
