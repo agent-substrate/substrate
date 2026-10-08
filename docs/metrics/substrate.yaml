@@ -205,7 +205,8 @@ blind_spots:
     code: cmd/ateapi/internal/store
     brief: >
       The store reports connection pool occupancy, capacity, and acquisition
-      duration and outcomes. SQL execution, end-to-end store operations, and
+      duration and outcomes, and outstanding acquisition requests. SQL execution,
+      end-to-end store operations, and
       outbox and background maintenance still have no metrics. Delays after
       obtaining a connection look like unknown time in
       ate.actor.lifecycle.operation.duration and
