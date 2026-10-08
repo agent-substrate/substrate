@@ -23,10 +23,13 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/status"
 )
 
 // Listen removes any stale socket at path and listens on a fresh one that
@@ -80,4 +83,15 @@ func WaitReady(ctx context.Context, conn *grpc.ClientConn) error {
 		return fmt.Errorf("snapshot plugin at %s is %s", conn.Target(), resp.GetStatus())
 	}
 	return nil
+}
+
+// CallError returns the error a server reports to its own caller for a failed
+// plugin call. codes.Unavailable, which a call reports when the plugin cannot
+// be reached, becomes an apierror.Unavailable so the server's caller retries
+// rather than treating it as Internal. Any other error is returned unchanged.
+func CallError(err error) error {
+	if status.Code(err) == codes.Unavailable {
+		return apierror.Unavailable("snapshot plugin: %w", err)
+	}
+	return err
 }

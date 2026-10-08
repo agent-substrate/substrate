@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/agent-substrate/substrate/internal/objectstoreplugin"
 	objectstoresnapshotv1 "github.com/agent-substrate/substrate/pkg/proto/objectstoresnapshotpb/v1"
 )
 
@@ -37,7 +38,7 @@ func (s *AteomHerder) fetchSnapshotFiles(ctx context.Context, snapshotURI, dstDi
 		WritePath:   dstDir,
 		Files:       files,
 	})
-	return err
+	return objectstoreplugin.CallError(err)
 }
 
 // uploadSnapshotFiles uploads the named files in srcDir to the snapshot.
@@ -50,7 +51,7 @@ func (s *AteomHerder) uploadSnapshotFiles(ctx context.Context, snapshotURI, srcD
 		LocalPath:   srcDir,
 		Files:       files,
 	})
-	return err
+	return objectstoreplugin.CallError(err)
 }
 
 // fetchManifest returns a snapshot's manifest. The returned error is the

@@ -25,10 +25,15 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/objectstoreplugin"
 	"github.com/agent-substrate/substrate/internal/objectstoreplugin/objectstoreplugintest"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/objectstorage"
+	objectstoresnapshotv1 "github.com/agent-substrate/substrate/pkg/proto/objectstoresnapshotpb/v1"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // newPluginHerder returns an AteomHerder whose snapshots go through the
@@ -134,5 +139,67 @@ func TestSnapshotTransferSkipsEmptyFileLists(t *testing.T) {
 	}
 	if len(store.puts) != 0 {
 		t.Errorf("objects stored = %v, want none", store.puts)
+	}
+}
+
+// failingNodePlugin fails every call with err.
+type failingNodePlugin struct {
+	err error
+}
+
+func (p failingNodePlugin) FetchSnapshot(context.Context, *objectstoresnapshotv1.FetchSnapshotRequest, ...grpc.CallOption) (*objectstoresnapshotv1.FetchSnapshotResponse, error) {
+	return nil, p.err
+}
+
+func (p failingNodePlugin) UploadSnapshot(context.Context, *objectstoresnapshotv1.UploadSnapshotRequest, ...grpc.CallOption) (*objectstoresnapshotv1.UploadSnapshotResponse, error) {
+	return nil, p.err
+}
+
+// A snapshot plugin that cannot be reached reaches ate-api-server as
+// Unavailable, which it retries, rather than Internal, which crashes the
+// actor. Other plugin errors still reach it as Internal.
+func TestSnapshotPluginErrorCodeThroughAtelet(t *testing.T) {
+	for _, tc := range []struct {
+		pluginCode codes.Code
+		want       codes.Code
+	}{
+		{codes.Unavailable, codes.Unavailable},
+		{codes.Internal, codes.Internal},
+		{codes.NotFound, codes.Internal},
+	} {
+		t.Run(tc.pluginCode.String(), func(t *testing.T) {
+			s := &AteomHerder{
+				snapshotPlugin:     failingNodePlugin{err: status.Error(tc.pluginCode, "plugin failed")},
+				snapshotScratchDir: t.TempDir(),
+			}
+			for name, transfer := range map[string]func(context.Context) error{
+				"download": func(ctx context.Context) error {
+					return s.downloadExternalCheckpoint(ctx, pausedSnapshotURI, t.TempDir(), []string{"a"})
+				},
+				"upload manifest": func(ctx context.Context) error {
+					return s.uploadManifest(ctx, pausedSnapshotURI, []byte("{}"))
+				},
+			} {
+				// atelet's server interceptor decides the code ate-api-server sees.
+				_, err := ateinterceptors.InternalServerUnaryInterceptor(context.Background(), nil, &grpc.UnaryServerInfo{FullMethod: "/test"},
+					func(ctx context.Context, _ any) (any, error) { return nil, transfer(ctx) })
+				if got := status.Code(err); got != tc.want {
+					t.Errorf("%s: code = %s (%v), want %s", name, got, err, tc.want)
+				}
+			}
+		})
+	}
+}
+
+// fetchManifest keeps the plugin's NotFound readable, which the paused
+// snapshot upload uses to tell a missing snapshot from a failed probe.
+func TestFetchManifestKeepsNotFound(t *testing.T) {
+	s := &AteomHerder{
+		snapshotPlugin:     failingNodePlugin{err: status.Error(codes.NotFound, "no manifest")},
+		snapshotScratchDir: t.TempDir(),
+	}
+	_, err := s.fetchManifest(context.Background(), pausedSnapshotURI)
+	if status.Code(err) != codes.NotFound {
+		t.Errorf("fetchManifest = %v, want %s", err, codes.NotFound)
 	}
 }
