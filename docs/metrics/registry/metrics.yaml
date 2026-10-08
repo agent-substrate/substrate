@@ -31,6 +31,62 @@ groups:
   # Attribute groups
   # ---------------------------------------------------------------------------
 
+  - id: registry.ate.store.connection
+    type: attribute_group
+    brief: Bounded PostgreSQL pool identities, states, and acquisition outcomes.
+    attributes:
+      - id: db.client.connection.pool.name
+        stability: development
+        brief: The pool's purpose, unique within ateapi; never derived from a DSN.
+        type:
+          members:
+            - id: main
+              value: main
+              stability: development
+              brief: Store and authorization read/write traffic.
+            - id: watch
+              value: watch
+              stability: development
+              brief: Worker-event polling and expired-lease cleanup.
+            - id: owner
+              value: owner
+              stability: development
+              brief: Schema migrations and outbox partition maintenance.
+      - id: db.client.connection.state
+        stability: development
+        brief: The state of an open connection; connections under construction are excluded.
+        type:
+          members:
+            - id: used
+              value: used
+              stability: development
+              brief: Acquired by a caller.
+            - id: idle
+              value: idle
+              stability: development
+              brief: Available for acquisition.
+      - id: ate.store.connection.acquire.outcome
+        stability: development
+        brief: The result of one connection acquisition attempt.
+        type:
+          members:
+            - id: success
+              value: success
+              stability: development
+              brief: A connection was acquired.
+            - id: cancelled
+              value: cancelled
+              stability: development
+              brief: The caller cancelled the acquisition.
+            - id: timeout
+              value: timeout
+              stability: development
+              brief: The caller's acquisition deadline expired.
+            - id: error
+              value: error
+              stability: development
+              brief: Acquisition failed for another reason; error.type is _OTHER.
+
   - id: registry.ate.atespace
     type: attribute_group
     brief: >
@@ -678,6 +734,82 @@ groups:
   # ---------------------------------------------------------------------------
   # Metrics. ateapi
   # ---------------------------------------------------------------------------
+
+  - id: metric.db.client.connection.count
+    type: metric
+    metric_name: db.client.connection.count
+    instrument: updowncounter
+    unit: "{connection}"
+    stability: development
+    brief: The number of used and idle PostgreSQL connections by pool.
+    note: >
+      Observable, following the upstream database pool conventions. Each
+      collection reads pgx pool statistics and reports both states, including
+      zeros. Connections under construction are not counted.
+    annotations:
+      substrate:
+        emitted_by: [ateapi]
+        golden_signals: [saturation]
+        code_anchor: cmd/ateapi/internal/store/atepg/metrics.go
+        cuj: Which pool has no idle database connections?
+    attributes:
+      - ref: db.client.connection.pool.name
+        requirement_level: required
+      - ref: db.client.connection.state
+        requirement_level: required
+
+  - id: metric.db.client.connection.max
+    type: metric
+    metric_name: db.client.connection.max
+    instrument: updowncounter
+    unit: "{connection}"
+    stability: development
+    brief: The maximum number of open PostgreSQL connections allowed by pool.
+    note: >
+      Observable, following the upstream database pool conventions. Reports
+      the effective pgx maximum, including defaults and dedicated pool limits,
+      as the denominator for saturation rather than just the startup flag.
+    annotations:
+      substrate:
+        emitted_by: [ateapi]
+        golden_signals: [saturation]
+        code_anchor: cmd/ateapi/internal/store/atepg/metrics.go
+        cuj: Is the pool's acquired connection count near its configured capacity?
+    attributes:
+      - ref: db.client.connection.pool.name
+        requirement_level: required
+
+  - id: metric.db.client.connection.wait_time
+    type: metric
+    metric_name: db.client.connection.wait_time
+    instrument: histogram
+    unit: s
+    stability: development
+    brief: The time to acquire a PostgreSQL connection by pool and outcome.
+    note: >
+      Extends the upstream pool wait-time metric to include unsuccessful
+      attempts. The histogram count gives acquisition rates by outcome,
+      without a separate failure counter. Filter outcome=success for successful
+      acquisition latency. Measures all of pgx Acquire, including connection
+      creation and validation, not just queueing; excludes SQL execution and
+      connection holding time. Recorded independently of trace sampling,
+      including startup acquisitions. On error, error.type is always _OTHER;
+      cancellation and deadlines have their own outcomes and no error.type.
+    annotations:
+      substrate:
+        emitted_by: [ateapi]
+        golden_signals: [latency, traffic, errors]
+        code_anchor: cmd/ateapi/internal/store/atepg/metrics.go
+        buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 10, 30, 60]
+        cuj: Are callers waiting for connections or giving up before obtaining one?
+    attributes:
+      - ref: db.client.connection.pool.name
+        requirement_level: required
+      - ref: ate.store.connection.acquire.outcome
+        requirement_level: required
+      - ref: error.type
+        requirement_level:
+          conditionally_required: The acquisition outcome is error.
 
   - id: metric.ate.actor.crashes
     type: metric

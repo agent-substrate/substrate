@@ -263,6 +263,22 @@ const (
 // meaning success, never as a parallel _failures counter.
 const ErrorTypeKey = attribute.Key("error.type")
 
+// Database pool attributes follow the upstream OpenTelemetry conventions.
+const (
+	DBConnectionPoolNameKey          = attribute.Key("db.client.connection.pool.name")
+	DBConnectionStateKey             = attribute.Key("db.client.connection.state")
+	StoreConnectionAcquireOutcomeKey = attribute.Key("ate.store.connection.acquire.outcome")
+	DBConnectionPoolMain             = "main"
+	DBConnectionPoolWatch            = "watch"
+	DBConnectionPoolOwner            = "owner"
+	DBConnectionStateUsed            = "used"
+	DBConnectionStateIdle            = "idle"
+	StoreConnectionAcquireSuccess    = "success"
+	StoreConnectionAcquireCancelled  = "cancelled"
+	StoreConnectionAcquireTimeout    = "timeout"
+	StoreConnectionAcquireError      = "error"
+)
+
 // Values for WorkerStateKey. Unschedulable wins over occupancy.
 const (
 	WorkerStateIdle          = "idle"

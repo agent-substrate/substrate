@@ -242,6 +242,9 @@ Agent Substrate emits foundational OpenTelemetry system and server metrics to mo
 | Metric | Emitted by | Type | Measures |
 |--------|------------|------|----------|
 | `rpc.server.call.duration` | ateapi & atelet (gRPC servers, via `otelgrpc`) | histogram | per-method gRPC latency, request rate, and errors (labels `rpc.method`, `rpc.response.status_code`) |
+| `db.client.connection.count` | ateapi | up/down counter | live acquired (`used`) and idle PostgreSQL connections per pool, including zero-valued states |
+| `db.client.connection.max` | ateapi | up/down counter | effective maximum PostgreSQL connections per pool, for comparison with acquired connections |
+| `db.client.connection.wait_time` | ateapi | histogram | connection acquisition duration and attempt counts per pool and bounded outcome (`success`, `cancelled`, `timeout`, `error`) |
 | `ate.actor.crashes` | ateapi | counter | Number of times actors transitioned to `ACTOR_STATE_CRASHED` (labels `ate.actor.operation.name`, `ate.template.atespace`, `ate.template.name`, `ate.workerpool.namespace`, `ate.workerpool.name`, `ate.sandbox.class`) |
 | `atenet.router.route.duration` | atenet-router | histogram | Substrate E2E — Envoy receiving a request to Envoy forwarding it to the resolved worker, excluding actor compute and the response (labels `ate.template.atespace`, `ate.template.name`, `ate.router.outcome`, `ate.router.resume`) |
 | `atelet.snapshot.size` | atelet | histogram | uncompressed allocated size in bytes of each snapshot image written during checkpoint (`st_blocks * 512`, excluding sparse holes in micro-VM `memory-ranges`) (labels `file.name`, `ate.template.atespace`, `ate.template.name`) |
@@ -257,6 +260,38 @@ Agent Substrate emits foundational OpenTelemetry system and server metrics to mo
 | `ate.imagecache.requests` | atelet | counter | image lookups in the node-local image cache, by outcome (`ate.imagecache.outcome`), with `error.type` on the `error` outcome. A miss pays for the pull and the unpack, so the hit ratio per node is a leading indicator of resume latency |
 
 The table lists the OpenTelemetry instrument names. How a name appears in a query depends on the backend (Cloud Monitoring (GMP) / Kind collector).
+
+For the PostgreSQL connection pool metrics:
+* `db.client.connection.pool.name` is `main` (store and authorization traffic),
+  `watch` (worker-event polling and expired-lease cleanup), or `owner` (migrations
+  and outbox partition maintenance). It never contains a connection string,
+  database hostname, or actor identity.
+* Compare `used` connections with `db.client.connection.max` and idle connections
+  within the same ateapi instance and pool. Few idle connections alone need not
+  mean saturation: pgx creates connections lazily. Connections under construction
+  are not included in `used` or `idle`.
+* `wait_time` measures the whole acquisition, including connection creation and
+  validation, not exclusively queue time. It excludes SQL execution and time
+  holding a connection. Metrics include startup acquisitions and do not depend
+  on trace sampling.
+* The histogram extends the upstream convention to record unsuccessful attempts
+  too. Filter `ate.store.connection.acquire.outcome=success` for successful
+  acquisition percentiles; use the histogram count by outcome for attempt rates
+  and unsuccessful-acquisition ratios. Cancellation and deadlines are
+  `cancelled` and `timeout`, not `error`. Only `error` carries `error.type`,
+  always `_OTHER`, never the error message.
+* Query execution, end-to-end store operations, and outbox/background maintenance
+  telemetry remain uninstrumented. Fast acquisition does not imply a fast store.
+
+The kind collector exposes these as `db_client_connection_count`,
+`db_client_connection_max`, and `db_client_connection_wait_time_seconds`
+(with `_bucket`, `_sum`, and `_count` histogram series). To validate the
+production store connection and OTLP exporter wiring against disposable
+PostgreSQL and collector containers, run
+`REQUIRE_DOCKER=true go test ./cmd/ateapi/internal/store/atepg -run '^TestPoolMetricsOTLPCollector$' -count=1 -v`.
+This checks the collector's Prometheus scrape, including saturation, successful
+contention, timeouts, cancellations, and bounded error labels; it is not a
+deployed-ateapi or live Kubernetes E2E test.
 
 For `ate.workerpool.desired_workers` and `ate.workerpool.ready_workers`:
 * **Supply-Side Saturation Golden Signal**: Measures whether commanded capacity was delivered. Dedicated instruments match Kubernetes semantic conventions (`k8s.deployment.desired_pods` / `k8s.deployment.available_pods`) because desired + ready is not a disjoint sum.
@@ -315,7 +350,7 @@ Weaver permits only `groups` and `imports` at the top level of a registry file, 
 * **`bridged_metric_families`** — the metrics that atecontroller exports but Substrate does not define, as prefixes. `controller_runtime_version` records the version of controller-runtime that the list comes from.
 * **`cardinality_rules`** — the rules that keep the number of series small. No rule is enforced at this time. Each rule says what could enforce it.
 * **`lint_exceptions`** — the known debt.
-* **`blind_spots`** — the subsystems with no metrics. Read this list before you give a cause to a fault. The store has no instruments, but each lifecycle operation uses it.
+* **`blind_spots`** — the subsystems with missing metrics. Read this list before you give a cause to a fault. The store reports connection pool metrics, but SQL execution and end-to-end store work remain uninstrumented.
 
 **What the check does not do.** Weaver reads the registry, and not the Go code. Thus the build stays correct if a person adds an instrument to the code and not to the registry, or renames one in the code only. `weaver registry generate` could make `internal/ateattr` from the registry, which would remove that difference for the attributes. `weaver registry live-check` could compare the registry with the telemetry of the end-to-end tests. Both are future work.
 

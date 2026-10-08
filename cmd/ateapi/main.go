@@ -511,6 +511,10 @@ var (
 )
 
 func connectPostgresWithRetries(ctx context.Context) (*atepg.Persistence, error) {
+	instruments, err := atepg.NewInstruments(otel.Meter("ateapi"))
+	if err != nil {
+		return nil, err
+	}
 	var connectErr error
 	for attempt := 1; attempt <= postgresConnectTries; attempt++ {
 		persistence, err := atepg.Connect(ctx, atepg.ConnectConfig{
@@ -520,6 +524,7 @@ func connectPostgresWithRetries(ctx context.Context) (*atepg.Persistence, error)
 			OwnerRole:     *postgresOwnerRole,
 			Schema:        *postgresSchema,
 			PoolMaxConns:  *postgresPoolMaxConns,
+			Instruments:   instruments,
 		})
 		if err == nil {
 			return persistence, nil

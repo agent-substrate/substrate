@@ -26,8 +26,9 @@
 registry_version: 1
 
 # The version of the upstream semantic conventions that Substrate borrows from.
-# Substrate takes error.type, file.name and the rpc.* attributes from it. This
-# is the only version that the code imports under cmd/, internal/ and pkg/.
+# Substrate takes error.type, file.name, db.client.connection.* and the rpc.*
+# attributes from it. This is the only version that the code imports under
+# cmd/, internal/ and pkg/.
 # It is not the version of this registry: manifest.yaml holds that.
 upstream_semconv_version: 1.40.0
 
@@ -195,7 +196,7 @@ lint_exceptions:
       atenet.router.route.duration had the same change before.
 
 # -----------------------------------------------------------------------------
-# The subsystems with no metrics. An agent that reads only the metrics gives the
+# The subsystems with missing metrics. An agent that reads only the metrics gives the
 # cause of a fault to a subsystem that has metrics. Thus these subsystems are
 # part of the data.
 # -----------------------------------------------------------------------------
@@ -203,11 +204,14 @@ blind_spots:
   - area: store
     code: cmd/ateapi/internal/store
     brief: >
-      The store has no metrics. Each lifecycle operation uses the store. Thus a
-      delay in the store looks like unknown time in
+      The store reports connection pool occupancy, capacity, and acquisition
+      duration and outcomes. SQL execution, end-to-end store operations, and
+      outbox and background maintenance still have no metrics. Delays after
+      obtaining a connection look like unknown time in
       ate.actor.lifecycle.operation.duration and
       ate.scheduler.assignment.duration. If these two are slow and no phase
-      gives the cause, examine the store.
+      gives the cause and pool acquisition is fast, examine the store's work
+      after acquisition.
   - area: worker cache
     code: cmd/ateapi/internal/workercache
     brief: >
