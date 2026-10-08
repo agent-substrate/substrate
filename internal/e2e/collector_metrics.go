@@ -25,7 +25,9 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/ateclient"
 	"github.com/agent-substrate/substrate/internal/portforward"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 )
 
 const (
@@ -35,6 +37,25 @@ const (
 	// AgentGateway exposes native Prometheus metrics; it does not export these
 	// instruments through the OTLP collector.
 	agentGatewayRouterStatsPort = 15020
+	// The egress Envoy exposes its Prometheus stats on the admin listener.
+	egressEnvoyAdminPort = 15000
+
+	// EgressExtProcIdentityStatPrefix is the Envoy ext_proc filter stat_prefix on
+	// the outer CONNECT leg in atenet-egress.
+	EgressExtProcIdentityStatPrefix = "egress_identity"
+	// EgressExtProcPolicyMITMStatPrefix is the Envoy ext_proc filter stat_prefix
+	// on the inner MITM HTTP leg in atenet-egress.
+	EgressExtProcPolicyMITMStatPrefix = "egress_policy_mitm"
+	// EgressExtProcPolicyClearTextStatPrefix is the Envoy ext_proc filter stat_prefix
+	// on the inner clear text HTTP leg in atenet-egress.
+	EgressExtProcPolicyClearTextStatPrefix = "egress_policy_cleartext"
+
+	// EgressConnectCacheHitCounter is the Envoy dynamic-module counter name for
+	// CONNECT policy cache hits in atenet-egress.
+	EgressConnectCacheHitCounter = "ate_egress_connect_cache_hit"
+	// EgressConnectCacheMissCounter is the Envoy dynamic-module counter name for
+	// CONNECT policy cache misses in atenet-egress.
+	EgressConnectCacheMissCounter = "ate_egress_connect_cache_miss"
 )
 
 // PlatformMetricPrefixes are the Prometheus metric-name prefixes (OTLP dots
@@ -127,6 +148,131 @@ func ScrapeCollectorMetrics(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("collector metrics returned %d: %s", resp.StatusCode, body)
 	}
 	return string(body), nil
+}
+
+// ScrapeEgressEnvoyMetrics port-forwards each ready atenet-egress pod's Envoy
+// admin port and reads its /stats/prometheus endpoint, returning the
+// concatenated exposition text.
+func ScrapeEgressEnvoyMetrics(ctx context.Context) (string, error) {
+	config, err := ateclient.LoadKubeConfig(KubeConfig, KubeContext)
+	if err != nil {
+		return "", fmt.Errorf("loading kubeconfig: %w", err)
+	}
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return "", fmt.Errorf("creating k8s client: %w", err)
+	}
+
+	ns := SystemNamespace()
+	pods, err := clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: "app=atenet-egress",
+	})
+	if err != nil {
+		return "", fmt.Errorf("listing atenet-egress pods: %w", err)
+	}
+
+	var b strings.Builder
+	ready := 0
+	for i := range pods.Items {
+		pod := &pods.Items[i]
+		if !portforward.IsPodReady(pod) {
+			continue
+		}
+		ready++
+		body, err := scrapeEgressEnvoyPod(ctx, config, clientset, ns, pod.Name)
+		if err != nil {
+			return "", err
+		}
+		b.WriteString(body)
+	}
+	if ready == 0 {
+		return "", fmt.Errorf("no ready atenet-egress pods in %s", ns)
+	}
+	return b.String(), nil
+}
+
+func scrapeEgressEnvoyPod(ctx context.Context, config *rest.Config, clientset kubernetes.Interface, namespace, podName string) (string, error) {
+	localPort, stop, err := portforward.PodPortForward(ctx, config, clientset, namespace, podName, egressEnvoyAdminPort)
+	if err != nil {
+		return "", err
+	}
+	defer stop()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/stats/prometheus", localPort), nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+	if err != nil {
+		return "", fmt.Errorf("scraping egress Envoy metrics on %s: %w", podName, err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("reading egress Envoy metrics on %s: %w", podName, err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("egress Envoy metrics on %s returned %d: %s", podName, resp.StatusCode, body)
+	}
+	return string(body), nil
+}
+
+// EgressExtProcStreamCounts returns the envoy_http_ext_proc_<prefix>_streams_started
+// count for each egress ext_proc stat_prefix in an Envoy /stats/prometheus
+// scrape, summed across instances.
+func EgressExtProcStreamCounts(scrape string) map[string]int {
+	counts := map[string]int{}
+	for _, line := range strings.Split(scrape, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		name := metricNameFromLine(line)
+		rest, ok := strings.CutPrefix(name, "envoy_http_ext_proc_")
+		if !ok {
+			continue
+		}
+		statPrefix, ok := strings.CutSuffix(rest, "_streams_started")
+		if !ok {
+			statPrefix, ok = strings.CutSuffix(rest, "_streams_started_total")
+		}
+		if !ok || statPrefix == "" {
+			continue
+		}
+		fields := strings.Fields(line)
+		v, err := strconv.ParseFloat(fields[len(fields)-1], 64)
+		if err != nil {
+			continue
+		}
+		counts[statPrefix] += int(v)
+	}
+	return counts
+}
+
+// EgressPolicyCacheCounts returns the CONNECT policy cache hit and miss counts
+// from an Envoy /stats/prometheus scrape, summed across instances.
+func EgressPolicyCacheCounts(scrape string) (hits, misses int) {
+	for _, line := range strings.Split(scrape, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		name := strings.TrimSuffix(metricNameFromLine(line), "_total")
+		fields := strings.Fields(line)
+		v, err := strconv.ParseFloat(fields[len(fields)-1], 64)
+		if err != nil {
+			continue
+		}
+		switch name {
+		case "envoy_dynamicmodulescustom_" + EgressConnectCacheHitCounter,
+			"envoy_" + EgressConnectCacheHitCounter:
+			hits += int(v)
+		case "envoy_dynamicmodulescustom_" + EgressConnectCacheMissCounter,
+			"envoy_" + EgressConnectCacheMissCounter:
+			misses += int(v)
+		}
+	}
+	return hits, misses
 }
 
 // MissingPlatformMetrics returns the prefixes with no matching series in the
