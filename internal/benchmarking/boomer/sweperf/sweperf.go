@@ -60,7 +60,7 @@ const (
 // environment supplies a value.
 const (
 	sweperfUserClass         = "SweperfUser"
-	defaultSweperfTemplate   = "swebench-astropy-7336"
+	defaultSweperfTemplate   = "sweperf-astropy-7336"
 	defaultSweperfTotalSteps = 21
 	defaultSweperfNumCycles  = 4
 	// defaultSweperfPollInterval trades CycleCEL-to-ack accuracy against
