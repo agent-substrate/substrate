@@ -46,6 +46,7 @@ type fakeControl struct {
 	workers     map[string]*ateapipb.Worker
 	assignments map[string]int // actors assigned, by Worker name
 	creates     int
+	updates     int
 	// lostReply, when set, is returned by CreateWorker after the Worker is
 	// stored, as when the server commits a create whose reply never arrives.
 	lostReply error
@@ -97,6 +98,37 @@ func (f *fakeControl) DrainWorker(_ context.Context, in *ateapipb.DrainWorkerReq
 	return w, nil
 }
 
+func (f *fakeControl) GetWorker(_ context.Context, in *ateapipb.GetWorkerRequest, _ ...grpc.CallOption) (*ateapipb.Worker, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	w, ok := f.workers[in.GetWorker().GetName()]
+	if !ok {
+		return nil, status.Error(codes.NotFound, "no such Worker")
+	}
+	return proto.CloneOf(w), nil
+}
+
+// UpdateWorker allows only the labels to change, as ate-api-server's
+// immutable-field validation does for the fields the controller sets.
+func (f *fakeControl) UpdateWorker(_ context.Context, in *ateapipb.UpdateWorkerRequest, _ ...grpc.CallOption) (*ateapipb.Worker, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.updates++
+	name := in.GetWorker().GetMetadata().GetName()
+	old, ok := f.workers[name]
+	if !ok {
+		return nil, status.Error(codes.NotFound, "no such Worker")
+	}
+	w := proto.CloneOf(in.GetWorker())
+	cmpOld, cmpNew := proto.CloneOf(old), proto.CloneOf(w)
+	cmpOld.Labels, cmpNew.Labels = nil, nil
+	if !proto.Equal(cmpOld, cmpNew) {
+		return nil, status.Errorf(codes.InvalidArgument, "Worker %s: only labels may change", name)
+	}
+	f.workers[name] = w
+	return w, nil
+}
+
 func (f *fakeControl) ListWorkers(_ context.Context, _ *ateapipb.ListWorkersRequest, _ ...grpc.CallOption) (*ateapipb.ListWorkersResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -130,8 +162,10 @@ func (f *fakeControl) worker(name string) *ateapipb.Worker {
 }
 
 // fakeRelay records accepted reports, as ate-api-server's view of capacity,
-// and refuses Workers listed in reject with their code.
+// and refuses Workers listed in reject with their code. An accepted report is
+// also written to control's Worker, as RegisterWorker records it.
 type fakeRelay struct {
+	control  *fakeControl
 	mu       sync.Mutex
 	reported map[string]*ateapipb.WorkerResources  // by Worker name
 	hardware map[string]*ateapipb.HardwareIdentity // by Worker name
@@ -156,6 +190,13 @@ func (f *fakeRelay) Report(_ context.Context, addr string, req *ateapipb.Registe
 	f.reported[name] = req.GetCapacity()
 	f.hardware[name] = req.GetHardware()
 	f.via[name] = addr
+	if f.control != nil {
+		f.control.mu.Lock()
+		if w, ok := f.control.workers[name]; ok {
+			w.Status.Capacity, w.Status.Hardware = req.GetCapacity(), req.GetHardware()
+		}
+		f.control.mu.Unlock()
+	}
 	return nil
 }
 
@@ -206,6 +247,19 @@ func (f *fakeCluster) UpdateStatus(_ context.Context, wp *atev1alpha1.WorkerPool
 	return nil
 }
 
+// editPool replaces the named pool with a copy edit has changed.
+func (f *fakeCluster) editPool(name string, edit func(*atev1alpha1.WorkerPool)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i, p := range f.pools {
+		if p.Name == name {
+			c := p.DeepCopy()
+			edit(c)
+			f.pools[i] = c
+		}
+	}
+}
+
 func (f *fakeCluster) setReplicas(pool string, n int32) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -238,6 +292,7 @@ func testNodes() []node {
 
 func newTestController(pools ...*atev1alpha1.WorkerPool) (*controller, *fakeControl, *fakeRelay, *fakeCluster) {
 	ctl, rel := newFakeControl(), newFakeRelay()
+	rel.control = ctl
 	cl := &fakeCluster{pools: pools, nodes: testNodes(), relays: map[string]string{"node-a": "10.0.0.1:8086", "node-b": "10.0.0.2:8086"}}
 	c := newController(ctl, rel, cl, testRun, 4, testDrainGrace)
 	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -387,29 +442,6 @@ func TestBadAnnotationLeavesThePoolsWorkers(t *testing.T) {
 	}
 }
 
-// A Worker whose node has left the benchmark set keeps the capacity it last
-// reported: with no allocatable to read, a report would drop its cpu and
-// memory.
-func TestReconcileKeepsCapacityWhenTheNodeLeaves(t *testing.T) {
-	c, _, rel, cl := newTestController(pool("bench", 2, nil))
-	if err := reconcile(t, c); err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
-	name := fakeworker.Name(testRun, "benchmark-workloads", "bench", 1)
-	before := rel.reported[name]
-	cl.nodes = cl.nodes[:1]
-	// Changes what the Worker would report, so it is not skipped as unchanged.
-	wp := cl.pools[0].DeepCopy()
-	wp.Annotations = map[string]string{fakeworker.MaxActorsAnnotation: "5"}
-	cl.pools[0] = wp
-	if err := reconcile(t, c); err == nil {
-		t.Error("reconcile succeeded with a Worker on a node that is not a benchmark node")
-	}
-	if got := rel.reported[name]; !proto.Equal(got, before) {
-		t.Errorf("reported %v for the Worker on the departed node, want %v kept", got, before)
-	}
-}
-
 // A Worker on a node whose fake-atelet is not up yet is registered but not
 // ready; the next pass reports it once the relay is there.
 func TestReconcileWaitsForTheNodesFakeAtelet(t *testing.T) {
@@ -465,20 +497,87 @@ func TestReconcileIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestReconcileReportsAgainWhenCapacityChanges(t *testing.T) {
+// A limits edit replaces the pool's Workers, as it rolls a real pool's pods:
+// ateom reads its limits once at startup, so a Worker's capacity never
+// changes. The old Worker drains with the capacity it reported, and is not
+// reported again.
+func TestPoolLimitsChangeReplacesWorkers(t *testing.T) {
 	limits := corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2"), corev1.ResourceMemory: resource.MustParse("4Gi")}
-	c, _, rel, cl := newTestController(pool("bench", 1, limits))
+	c, ctl, rel, cl := newTestController(pool("bench", 1, limits))
 	if err := reconcile(t, c); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	bigger := pool("bench", 1, corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("4"), corev1.ResourceMemory: resource.MustParse("8Gi")})
-	cl.pools = []*atev1alpha1.WorkerPool{bigger}
+	name := fakeworker.Name(testRun, "benchmark-workloads", "bench", 0)
+	ctl.assignments[name] = 1
+	reports := rel.calls
+
+	cl.editPool("bench", func(wp *atev1alpha1.WorkerPool) {
+		wp.Spec.Template.Resources.Limits = corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("4"), corev1.ResourceMemory: resource.MustParse("8Gi")}
+	})
 	if err := reconcile(t, c); err != nil {
-		t.Fatalf("second reconcile: %v", err)
+		t.Fatalf("reconcile after the limits changed: %v", err)
+	}
+	if w := ctl.worker(name); w.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_DRAINING {
+		t.Errorf("Worker state = %v after the limits changed, want draining", w.GetStatus().GetState())
+	}
+	if got, want := rel.reported[name], wantCapacity(1000, "2", "4Gi"); !proto.Equal(got, want) || rel.calls != reports {
+		t.Errorf("draining Worker reported %v in %d new reports, want %v kept and none", got, rel.calls-reports, want)
+	}
+
+	ctl.assignments[name] = 0
+	if err := reconcile(t, c); err != nil {
+		t.Fatalf("reconcile after the Actor left: %v", err)
+	}
+	if w := ctl.worker(name); w.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_ACTIVE {
+		t.Errorf("replaced Worker state = %v, want active", w.GetStatus().GetState())
+	}
+	if got, want := rel.reported[name], wantCapacity(1000, "4", "8Gi"); !proto.Equal(got, want) {
+		t.Errorf("replaced Worker reported %v, want %v", got, want)
+	}
+	if got := cl.statuses["bench"]; got.Replicas != 1 || got.ReadyReplicas != 1 {
+		t.Errorf("status = %+v, want 1 replica, 1 ready", got)
+	}
+}
+
+// ateom's actor count is a flag, so changing it rolls a real pool's pods too.
+func TestMaxActorsAnnotationChangeReplacesWorkers(t *testing.T) {
+	c, ctl, rel, cl := newTestController(pool("bench", 1, nil))
+	if err := reconcile(t, c); err != nil {
+		t.Fatalf("reconcile: %v", err)
 	}
 	name := fakeworker.Name(testRun, "benchmark-workloads", "bench", 0)
-	if got, want := rel.reported[name], wantCapacity(1000, "4", "8Gi"); !proto.Equal(got, want) {
-		t.Errorf("after the limits changed, reported %v, want %v", got, want)
+	creates := ctl.creates
+	cl.editPool("bench", func(wp *atev1alpha1.WorkerPool) {
+		wp.Annotations = map[string]string{fakeworker.MaxActorsAnnotation: "5"}
+	})
+	if err := reconcile(t, c); err != nil {
+		t.Fatalf("reconcile after the annotation changed: %v", err)
+	}
+	if ctl.creates != creates+1 {
+		t.Errorf("%d creates after the actor count changed, want 1", ctl.creates-creates)
+	}
+	if got := rel.reported[name].GetActors(); got != 5 {
+		t.Errorf("replaced Worker reported %d actors, want 5", got)
+	}
+}
+
+// A node's allocatable reaches ateom once, at startup, so a later change
+// leaves a pool with no limits as it is: no new Worker and no report.
+func TestAllocatableChangeKeepsWorkerCapacity(t *testing.T) {
+	c, ctl, rel, cl := newTestController(pool("bench", 2, nil))
+	if err := reconcile(t, c); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	creates, reports := ctl.creates, rel.calls
+	cl.nodes[0].allocatable = corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("64"), corev1.ResourceMemory: resource.MustParse("128Gi")}
+	if err := reconcile(t, c); err != nil {
+		t.Fatalf("reconcile after allocatable changed: %v", err)
+	}
+	if ctl.creates != creates || rel.calls != reports {
+		t.Errorf("allocatable change cost %d creates and %d reports, want none", ctl.creates-creates, rel.calls-reports)
+	}
+	if got := cl.statuses["bench"]; got.Replicas != 2 || got.ReadyReplicas != 2 {
+		t.Errorf("status = %+v, want 2 replicas, 2 ready", got)
 	}
 }
 
@@ -622,6 +721,84 @@ func TestLostCreateReplyIsRetiredOrConfirmed(t *testing.T) {
 	}
 }
 
+// A label edit on the pool reaches its Workers in place, as the worker syncer
+// applies it, including Workers adopted after a restart.
+func TestPoolLabelChangeUpdatesWorkers(t *testing.T) {
+	c, ctl, rel, cl := newTestController(pool("bench", 2, nil))
+	if err := reconcile(t, c); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	relabel := func(v string) {
+		cl.editPool("bench", func(wp *atev1alpha1.WorkerPool) { wp.Labels = map[string]string{"workload": v} })
+	}
+
+	relabel("v2")
+	creates := ctl.creates
+	if err := reconcile(t, c); err != nil {
+		t.Fatalf("reconcile after relabel: %v", err)
+	}
+	for _, name := range poolNames("bench", 2) {
+		if got := ctl.worker(name).GetLabels()["workload"]; got != "v2" {
+			t.Errorf("Worker %s workload label = %q, want v2", name, got)
+		}
+	}
+	if ctl.creates != creates || ctl.updates != 2 {
+		t.Errorf("relabel cost %d creates and %d updates, want 0 and 2", ctl.creates-creates, ctl.updates)
+	}
+
+	restarted := newController(ctl, rel, cl, testRun, 4, testDrainGrace)
+	if err := restarted.adopt(context.Background()); err != nil {
+		t.Fatalf("adopt: %v", err)
+	}
+	relabel("v3")
+	if err := reconcile(t, restarted); err != nil {
+		t.Fatalf("reconcile after restart and relabel: %v", err)
+	}
+	for _, name := range poolNames("bench", 2) {
+		if got := ctl.worker(name).GetLabels()["workload"]; got != "v3" {
+			t.Errorf("after restart, Worker %s workload label = %q, want v3", name, got)
+		}
+	}
+}
+
+// sandbox_class is immutable on a Worker, so a sandboxClass edit replaces the
+// pool's Workers the way it replaces real worker pods: an idle Worker at once,
+// a held one once its Actors leave.
+func TestPoolSandboxClassChangeReplacesWorkers(t *testing.T) {
+	c, ctl, _, cl := newTestController(pool("bench", 2, nil))
+	if err := reconcile(t, c); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	idle := fakeworker.Name(testRun, "benchmark-workloads", "bench", 0)
+	busy := fakeworker.Name(testRun, "benchmark-workloads", "bench", 1)
+	ctl.assignments[busy] = 1
+
+	cl.editPool("bench", func(wp *atev1alpha1.WorkerPool) { wp.Spec.SandboxClass = "microvm" })
+	if err := reconcile(t, c); err != nil {
+		t.Fatalf("reconcile after the class change: %v", err)
+	}
+	if got := ctl.worker(idle).GetSandboxClass(); got != "microvm" {
+		t.Errorf("idle Worker sandbox class = %q, want microvm", got)
+	}
+	if w := ctl.worker(busy); w.GetSandboxClass() != "gvisor" || w.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_DRAINING {
+		t.Errorf("busy Worker = %q/%v, want gvisor and draining", w.GetSandboxClass(), w.GetStatus().GetState())
+	}
+	if got := cl.statuses["bench"]; got.Replicas != 1 {
+		t.Errorf("status = %+v, want 1 replica while the old Worker drains", got)
+	}
+
+	ctl.assignments[busy] = 0
+	if err := reconcile(t, c); err != nil {
+		t.Fatalf("reconcile after the Actor left: %v", err)
+	}
+	if w := ctl.worker(busy); w.GetSandboxClass() != "microvm" || w.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_ACTIVE {
+		t.Errorf("replaced Worker = %q/%v, want microvm and active", w.GetSandboxClass(), w.GetStatus().GetState())
+	}
+	if got := cl.statuses["bench"]; got.Replicas != 2 || got.ReadyReplicas != 2 {
+		t.Errorf("status = %+v, want 2 replicas, 2 ready", got)
+	}
+}
+
 func TestDeletedPoolRetiresItsWorkers(t *testing.T) {
 	c, ctl, _, cl := newTestController(pool("bench", 2, nil), pool("other", 1, nil))
 	if err := reconcile(t, c); err != nil {
@@ -655,15 +832,71 @@ func TestAdoptAfterRestart(t *testing.T) {
 	if got := len(restarted.workers); got != 2 {
 		t.Fatalf("adopted %d Workers, want this run's 2", got)
 	}
+	creates, reports := ctl.creates, rel.calls
+	if err := reconcile(t, restarted); err != nil {
+		t.Fatalf("reconcile after restart: %v", err)
+	}
+	if ctl.creates != creates || rel.calls != reports {
+		t.Errorf("after adopting: %d creates and %d reports, want none", ctl.creates-creates, rel.calls-reports)
+	}
+	if !slices.Contains(ctl.names(), real.Metadata.Name) || !slices.Contains(ctl.names(), otherRun.Metadata.Name) {
+		t.Error("a Worker that is not this run's was retired")
+	}
+}
+
+// A limits edit made while fake-workersync was down still replaces the
+// pool's Workers: an adopted Worker whose reported capacity is not what the
+// pool now gives is from an older template.
+func TestAdoptReplacesWorkersOfAPoolEditedWhileDown(t *testing.T) {
+	limits := corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2"), corev1.ResourceMemory: resource.MustParse("4Gi")}
+	c, ctl, rel, cl := newTestController(pool("bench", 1, limits))
+	if err := reconcile(t, c); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	name := fakeworker.Name(testRun, "benchmark-workloads", "bench", 0)
+	cl.editPool("bench", func(wp *atev1alpha1.WorkerPool) {
+		wp.Spec.Template.Resources.Limits = corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("4"), corev1.ResourceMemory: resource.MustParse("8Gi")}
+	})
+
+	restarted := newController(ctl, rel, cl, testRun, 4, testDrainGrace)
+	if err := restarted.adopt(context.Background()); err != nil {
+		t.Fatalf("adopt: %v", err)
+	}
 	creates := ctl.creates
 	if err := reconcile(t, restarted); err != nil {
 		t.Fatalf("reconcile after restart: %v", err)
 	}
-	if ctl.creates != creates {
-		t.Errorf("created %d Workers again after adopting them", ctl.creates-creates)
+	if ctl.creates != creates+1 {
+		t.Errorf("%d creates after a limits edit made while down, want 1", ctl.creates-creates)
 	}
-	if !slices.Contains(ctl.names(), real.Metadata.Name) || !slices.Contains(ctl.names(), otherRun.Metadata.Name) {
-		t.Error("a Worker that is not this run's was retired")
+	if got, want := rel.reported[name], wantCapacity(1000, "4", "8Gi"); !proto.Equal(got, want) {
+		t.Errorf("replaced Worker reported %v, want %v", got, want)
+	}
+}
+
+// An adopted Worker whose capacity ate-api-server never accepted is reported
+// after the restart, as ateom keeps retrying its one report.
+func TestAdoptReportsAWorkerNeverAccepted(t *testing.T) {
+	c, ctl, rel, cl := newTestController(pool("bench", 1, nil))
+	first := fakeworker.Name(testRun, "benchmark-workloads", "bench", 0)
+	rel.reject[first] = codes.Unavailable
+	if err := reconcile(t, c); err == nil {
+		t.Fatal("reconcile succeeded with a rejected report")
+	}
+	delete(rel.reject, first)
+
+	restarted := newController(ctl, rel, cl, testRun, 4, testDrainGrace)
+	if err := restarted.adopt(context.Background()); err != nil {
+		t.Fatalf("adopt: %v", err)
+	}
+	if err := reconcile(t, restarted); err != nil {
+		t.Fatalf("reconcile after restart: %v", err)
+	}
+	if got, want := rel.reported[first], wantCapacity(1000, "86", "160Gi"); !proto.Equal(got, want) {
+		t.Errorf("adopted Worker reported %v, want %v", got, want)
+	}
+	if got := cl.statuses["bench"]; got.Replicas != 1 || got.ReadyReplicas != 1 {
+		t.Errorf("status = %+v, want 1 replica, 1 ready", got)
 	}
 }
 
@@ -683,17 +916,21 @@ func TestDeleteAll(t *testing.T) {
 }
 
 func TestCapacityFormatsLikeAteom(t *testing.T) {
-	got, err := capacity(pool("p", 1, corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("0.5"), corev1.ResourceMemory: resource.MustParse("1G")}), nil)
-	if err != nil {
-		t.Fatal(err)
+	capacity := func(wp *atev1alpha1.WorkerPool) *ateapipb.WorkerResources {
+		t.Helper()
+		tmpl, err := templateOf(wp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return tmpl.capacity(nil)
 	}
+	got := capacity(pool("p", 1, corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("0.5"), corev1.ResourceMemory: resource.MustParse("1G")}))
 	// ateom spells cpu as decimal milli-cores and memory as a binary-SI byte
 	// count; 1G is not a power of two, so 1e9.
 	if want := wantCapacity(1000, "500m", "1e9"); !proto.Equal(got, want) {
 		t.Errorf("capacity = %v, want %v", got, want)
 	}
-	none, err := capacity(pool("p", 1, nil), nil)
-	if err != nil || none.GetResources() != nil || none.GetActors() != 1000 {
-		t.Errorf("no limits and no allocatable: %v, %v; want 1000 actors and no resources", none, err)
+	if none := capacity(pool("p", 1, nil)); none.GetResources() != nil || none.GetActors() != 1000 {
+		t.Errorf("no limits and no allocatable: %v; want 1000 actors and no resources", none)
 	}
 }
