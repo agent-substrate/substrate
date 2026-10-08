@@ -489,3 +489,128 @@ func TestEllipticCurveForJWK(t *testing.T) {
 		t.Error("ellipticCurveForJWK(P-192) = nil, want error")
 	}
 }
+
+func TestVerifyRejectsWrongAudience(t *testing.T) {
+	ti := newTestIssuer(t)
+	key := testRSAKey(t)
+	ti.addRSA("rsa-1", &key.PublicKey)
+	claims := validClaims(ti.issuer())
+	claims["aud"] = []string{"wrong-audience"}
+	token := mintJWT(t, "RS256", "rsa-1", key, claims)
+
+	_, err := NewVerifier(ti.issuer(), []string{testAudience}, ti.server.Client()).Verify(t.Context(), token, time.Now())
+	if err == nil {
+		t.Fatal("Verify() succeeded, want audience mismatch error")
+	}
+	if !strings.Contains(err.Error(), "not issued for expected audience") {
+		t.Fatalf("Verify() error = %v, want error containing %q", err, "not issued for expected audience")
+	}
+}
+
+func TestVerifyRejectsEmptySubject(t *testing.T) {
+	ti := newTestIssuer(t)
+	key := testRSAKey(t)
+	ti.addRSA("rsa-1", &key.PublicKey)
+	claims := validClaims(ti.issuer())
+	claims["sub"] = ""
+	token := mintJWT(t, "RS256", "rsa-1", key, claims)
+
+	_, err := NewVerifier(ti.issuer(), []string{testAudience}, ti.server.Client()).Verify(t.Context(), token, time.Now())
+	if err == nil {
+		t.Fatal("Verify() succeeded, want empty subject error")
+	}
+	if !strings.Contains(err.Error(), "subject is required") {
+		t.Fatalf("Verify() error = %v, want error containing %q", err, "subject is required")
+	}
+}
+
+func TestVerifyRejectsInvalidTimeBindings(t *testing.T) {
+	cases := []struct {
+		name    string
+		modify  func(claims map[string]any, now time.Time)
+		wantErr string
+	}{
+		{
+			name: "expired",
+			modify: func(c map[string]any, now time.Time) {
+				c["exp"] = now.Add(-10 * time.Minute).Unix()
+			},
+			wantErr: "jwt has expired",
+		},
+		{
+			name: "not yet valid",
+			modify: func(c map[string]any, now time.Time) {
+				c["nbf"] = now.Add(10 * time.Minute).Unix()
+			},
+			wantErr: "jwt is not valid yet",
+		},
+		{
+			name: "issued in the future",
+			modify: func(c map[string]any, now time.Time) {
+				c["iat"] = now.Add(10 * time.Minute).Unix()
+			},
+			wantErr: "issued in the future",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			now := time.Now()
+			ti := newTestIssuer(t)
+			key := testRSAKey(t)
+			ti.addRSA("rsa-1", &key.PublicKey)
+			claims := validClaims(ti.issuer())
+			tc.modify(claims, now)
+			token := mintJWT(t, "RS256", "rsa-1", key, claims)
+
+			_, err := NewVerifier(ti.issuer(), []string{testAudience}, ti.server.Client()).Verify(t.Context(), token, now)
+			if err == nil {
+				t.Fatalf("Verify() succeeded, want error containing %q", tc.wantErr)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("Verify() error = %v, want error containing %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestDiscoverIssuerMismatch(t *testing.T) {
+	key := testRSAKey(t)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(t, w, oidcConfigT{Issuer: "https://wrong.example", JWKSURI: ""})
+	})
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	verifier := NewVerifier(server.URL, []string{testAudience}, server.Client())
+	token := mintJWT(t, "RS256", "rsa-1", key, validClaims(server.URL))
+
+	_, err := verifier.Verify(t.Context(), token, time.Now())
+	if err == nil {
+		t.Fatal("Verify() succeeded, want discovery issuer mismatch error")
+	}
+	if !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("Verify() error = %v, want error containing %q", err, "does not match")
+	}
+}
+
+func TestVerifierConcurrentAccess(t *testing.T) {
+	ti := newTestIssuer(t)
+	key := testRSAKey(t)
+	ti.addRSA("key", &key.PublicKey)
+	verifier := NewVerifier(ti.issuer(), []string{testAudience}, ti.server.Client())
+	token := mintJWT(t, "RS256", "key", key, validClaims(ti.issuer()))
+	now := time.Now()
+
+	var wg sync.WaitGroup
+	for range 50 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := verifier.Verify(context.Background(), token, now); err != nil {
+				t.Errorf("Verify() = %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+}
