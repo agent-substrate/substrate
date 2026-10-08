@@ -1,0 +1,47 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+KO       ?= go run github.com/google/ko@v0.19.1
+KO_FLAGS ?= --base-import-paths
+GOFMT := $(shell go env GOROOT)/bin/gofmt
+
+.PHONY: all
+all: verify test
+
+.PHONY: build
+build:
+	go build ./...
+
+.PHONY: test
+test:
+	go test -race ./...
+
+.PHONY: test-integration
+test-integration:
+	./hack/test-azurite.sh
+
+.PHONY: fmt
+fmt:
+	$(GOFMT) -w .
+
+.PHONY: verify
+verify:
+	@out="$$($(GOFMT) -l .)"; if [ -n "$$out" ]; then echo "gofmt needed on:"; echo "$$out"; exit 1; fi
+	go vet ./...
+	go vet -tags=integration ./...
+	go mod tidy -diff
+
+.PHONY: build-image
+build-image:
+	$(KO) build $(KO_FLAGS) ./cmd/azure-blob-objectstore-plugin
