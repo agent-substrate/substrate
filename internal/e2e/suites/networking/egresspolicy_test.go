@@ -99,7 +99,10 @@ func TestActorEgressRequiresPolicy(t *testing.T) {
 // example.com and nothing else, and waits until it is routable.
 func hostnamePolicyActor(t *testing.T, ctx context.Context) (*e2e.RouterClient, resources.ActorRef) {
 	t.Helper()
-	_, actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-sni", e2e.EgressFixture(), e2e.EgressAllowHTTPS("example.com"), e2e.EgressAllowPassthrough("example.edu"))
+	_, actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-sni", e2e.EgressFixture(),
+		e2e.EgressAllowHTTPS("example.com"),
+		e2e.EgressAllowPassthrough("example.edu"),
+		e2e.EgressAllowHTTP("example.net"))
 	router := mustRouterClient(t, ctx)
 	t.Cleanup(func() { router.Close() })
 	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
@@ -196,6 +199,42 @@ func TestActorEgressHTTPSByHostnamePassthrough(t *testing.T) {
 	status, body = fetchThroughEgressActorUntil(t, ctx, router, actorRef, "https://example.org/", notTransient)
 	if !dataplane.IsEgressPolicyDenied(status, string(body)) {
 		t.Fatalf("fetch of a host outside the policy returned HTTP %d, want an egress-policy denial; body: %s", status, body)
+	}
+}
+
+// TestActorEgressHTTPByHostnameCleartext: the gateway decides each cleartext
+// HTTP request by name: example.net 200, example.org 403.
+func TestActorEgressHTTPByHostnameCleartext(t *testing.T) {
+	ctx := context.Background()
+	dataplane := e2e.CurrentAtenetDataplane()
+	router, actorRef := hostnamePolicyActor(t, ctx)
+
+	beforeScrape, err := e2e.ScrapeEgressEnvoyMetrics(ctx)
+	if err != nil {
+		t.Fatalf("scraping egress Envoy metrics before requests: %v", err)
+	}
+	allowedBefore, rejectedBefore := e2e.EgressPolicyVerdictCounts(beforeScrape)
+
+	status, body := fetchThroughEgressActorUntil(t, ctx, router, actorRef, "http://example.net/", reached)
+	if status != http.StatusOK {
+		t.Fatalf("fetch of the allowed host returned HTTP %d, want 200; body: %s", status, body)
+	}
+	status, body = fetchThroughEgressActorUntil(t, ctx, router, actorRef, "http://example.org/", notTransient)
+	if !dataplane.IsEgressPolicyDenied(status, string(body)) {
+		t.Fatalf("fetch of a host outside the policy returned HTTP %d, want an egress-policy denial; body: %s", status, body)
+	}
+	t.Logf("denied on the cleartext request: %s", body)
+
+	afterScrape, err := e2e.ScrapeEgressEnvoyMetrics(ctx)
+	if err != nil {
+		t.Fatalf("scraping egress Envoy metrics after requests: %v", err)
+	}
+	allowedAfter, rejectedAfter := e2e.EgressPolicyVerdictCounts(afterScrape)
+	if got := allowedAfter - allowedBefore; got != 1 {
+		t.Fatalf("ate_egress.allowed incremented by %d, want 1 (before=%d, after=%d)", got, allowedBefore, allowedAfter)
+	}
+	if got := rejectedAfter - rejectedBefore; got != 1 {
+		t.Fatalf("ate_egress.rejected incremented by %d, want 1 (before=%d, after=%d)", got, rejectedBefore, rejectedAfter)
 	}
 }
 

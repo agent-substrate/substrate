@@ -27,11 +27,14 @@ use envoy_proxy_dynamic_modules_rust_sdk::{
     envoy_dynamic_module_type_on_http_filter_request_headers_status,
     envoy_dynamic_module_type_on_http_filter_response_headers_status,
   },
-  declare_init_functions, envoy_log_error, envoy_log_trace, EnvoyCounterId,
+  declare_init_functions, envoy_log_error, envoy_log_debug, envoy_log_trace, EnvoyCounterId,
   EnvoyHttpFilter, EnvoyHttpFilterConfig, HttpFilter, HttpFilterConfig,
 };
 use serde::{de, Deserialize, Deserializer};
-pub use substrate_envoy_common::{EgressPolicy, EgressRule, ATE_POLICY_EGRESS};
+pub use substrate_envoy_common::{
+  pattern_matches, EgressPolicy, EgressRule, ATE_POLICY_EGRESS,
+  EGRESS_MODE_CLEARTEXT,
+};
 
 /// Filter state key holding the cached egress policy object on the inner
 /// connection.
@@ -201,7 +204,7 @@ impl EgressPolicyPepFilter {
           match serde_json::from_slice::<EgressPolicy>(raw_policy.as_slice()) {
             Ok(policy) => Some(policy),
             Err(err) => {
-              envoy_log_error!("egress policy pep: invalid egress policy: {}", err);
+              envoy_log_debug!("egress policy pep: invalid egress policy: {}", err);
               None
             }
           }
@@ -247,7 +250,7 @@ impl EgressPolicyPepFilter {
   fn enforce_egress_policy<EHF: EnvoyHttpFilter>(
     &self,
     envoy_filter: &mut EHF,
-    _policy: &CachedEgressPolicy,
+    policy: &CachedEgressPolicy,
   ) -> envoy_dynamic_module_type_on_http_filter_request_headers_status {
     if envoy_filter
       .get_attribute_string(envoy_dynamic_module_type_attribute_id::ConnectionTlsVersion)
@@ -265,6 +268,25 @@ impl EgressPolicyPepFilter {
       };
       if !matches {
         envoy_filter.send_response(400, &[], None, None);
+        return envoy_dynamic_module_type_on_http_filter_request_headers_status::StopIteration;
+      }
+    } else {
+      let authority = envoy_filter.get_request_header_value(":authority");
+      let allowed = authority
+        .as_ref()
+        .and_then(|auth| std::str::from_utf8(authority_hostname(auth.as_slice())).ok())
+        .map(|host| {
+          let lower = host.to_ascii_lowercase();
+          let hostname = lower.strip_suffix('.').unwrap_or(&lower);
+          policy
+            .policy
+            .rules
+            .iter()
+            .any(|rule| rule.mode == EGRESS_MODE_CLEARTEXT && pattern_matches(&rule.pattern, hostname))
+        })
+        .unwrap_or(false);
+      if !allowed {
+        envoy_filter.send_response(403, &[], Some(b"egress denied"), None);
         return envoy_dynamic_module_type_on_http_filter_request_headers_status::StopIteration;
       }
     }
@@ -614,7 +636,17 @@ mod tests {
       .expect_get_attribute_string()
       .withf(|attr| *attr == envoy_dynamic_module_type_attribute_id::ConnectionTlsVersion)
       .times(1)
-      .returning(|_| None);
+      .returning(|_| Some(EnvoyBuffer::new(b"TLSv1.3")));
+    mock_filter
+      .expect_get_attribute_string()
+      .withf(|attr| *attr == envoy_dynamic_module_type_attribute_id::ConnectionRequestedServerName)
+      .times(1)
+      .returning(|_| Some(EnvoyBuffer::new(b"api.example.com")));
+    mock_filter
+      .expect_get_request_header_value()
+      .withf(|key| key == ":authority")
+      .times(1)
+      .returning(|_| Some(EnvoyBuffer::new(b"api.example.com")));
     mock_filter
       .expect_increment_counter()
       .withf(|id, value| *id == EnvoyCounterId(3) && *value == 1)
@@ -682,7 +714,12 @@ mod tests {
     let mut mock_filter = MockEnvoyHttpFilter::new();
     let mut existing = CachedEgressPolicy {
       created_at: Instant::now(),
-      policy: EgressPolicy { rules: vec![] },
+      policy: EgressPolicy {
+        rules: vec![EgressRule {
+          pattern: "api.example.com".to_string(),
+          mode: "cleartext".to_string(),
+        }],
+      },
     };
     let existing_ptr = &mut existing as *mut CachedEgressPolicy as usize;
 
@@ -703,6 +740,11 @@ mod tests {
       .withf(|attr| *attr == envoy_dynamic_module_type_attribute_id::ConnectionTlsVersion)
       .times(1)
       .returning(|_| None);
+    mock_filter
+      .expect_get_request_header_value()
+      .withf(|key| key == ":authority")
+      .times(1)
+      .returning(|_| Some(EnvoyBuffer::new(b"api.example.com")));
     mock_filter
       .expect_increment_counter()
       .withf(|id, value| *id == EnvoyCounterId(3) && *value == 1)
@@ -881,6 +923,102 @@ mod tests {
       filter.enforce_egress_policy(&mut mock_filter, &cached),
       envoy_dynamic_module_type_on_http_filter_request_headers_status::StopIteration
     );
+  }
+
+  #[test]
+  fn test_enforce_egress_policy_cleartext_matching_host_continues() {
+    let filter = test_filter();
+    let cached = CachedEgressPolicy {
+      created_at: Instant::now(),
+      policy: EgressPolicy {
+        rules: vec![
+          EgressRule {
+            pattern: "*.example.com".to_string(),
+            mode: "cleartext".to_string(),
+          },
+          EgressRule {
+            pattern: "exact.example.org".to_string(),
+            mode: "cleartext".to_string(),
+          },
+        ],
+      },
+    };
+
+    for authority in [
+      b"api.example.com".as_slice(),
+      b"API.Example.COM.:8080".as_slice(),
+      b"exact.example.org".as_slice(),
+    ] {
+      let mut mock_filter = MockEnvoyHttpFilter::new();
+      mock_filter
+        .expect_get_attribute_string()
+        .withf(|attr| *attr == envoy_dynamic_module_type_attribute_id::ConnectionTlsVersion)
+        .times(1)
+        .returning(|_| None);
+      mock_filter
+        .expect_get_request_header_value()
+        .withf(|key| key == ":authority")
+        .times(1)
+        .returning(move |_| Some(EnvoyBuffer::new(authority)));
+      mock_filter.expect_send_response().times(0);
+
+      assert_eq!(
+        filter.enforce_egress_policy(&mut mock_filter, &cached),
+        envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue
+      );
+    }
+  }
+
+  #[test]
+  fn test_enforce_egress_policy_cleartext_mismatched_host_sends_403() {
+    let filter = test_filter();
+    let cached = CachedEgressPolicy {
+      created_at: Instant::now(),
+      policy: EgressPolicy {
+        rules: vec![
+          EgressRule {
+            pattern: "api.example.com".to_string(),
+            mode: "cleartext".to_string(),
+          },
+          EgressRule {
+            pattern: "tls-only.example.com".to_string(),
+            mode: "mitm".to_string(),
+          },
+        ],
+      },
+    };
+
+    for authority in &[
+      Some(b"other.example.com".as_slice()),
+      Some(b"tls-only.example.com".as_slice()),
+      Some(b"10.96.0.1:80".as_slice()),
+      None,
+    ] {
+      let mut mock_filter = MockEnvoyHttpFilter::new();
+      let authority = *authority;
+      mock_filter
+        .expect_get_attribute_string()
+        .withf(|attr| *attr == envoy_dynamic_module_type_attribute_id::ConnectionTlsVersion)
+        .times(1)
+        .returning(|_| None);
+      mock_filter
+        .expect_get_request_header_value()
+        .withf(|key| key == ":authority")
+        .times(1)
+        .returning(move |_| authority.map(EnvoyBuffer::new));
+      mock_filter
+        .expect_send_response()
+        .withf(|status, _headers, body, _details| {
+          *status == 403 && *body == Some(b"egress denied".as_slice())
+        })
+        .times(1)
+        .returning(|_, _, _, _| ());
+
+      assert_eq!(
+        filter.enforce_egress_policy(&mut mock_filter, &cached),
+        envoy_dynamic_module_type_on_http_filter_request_headers_status::StopIteration
+      );
+    }
   }
 
   #[test]
