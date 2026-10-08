@@ -2,7 +2,10 @@
   "globalFlags": [
     "-log-format",
     "json",
-    "--alsologtostderr"
+    "--alsologtostderr",
+    "--enable-core-tags",
+    "--allow-suid",
+    "--host-settings=ignore"
   ],
   "commands": {
     "create": {
