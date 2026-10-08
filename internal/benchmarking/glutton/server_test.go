@@ -21,6 +21,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -300,4 +302,99 @@ func TestHTTPRoutes(t *testing.T) {
 		t.Errorf("POST %s bad key status: got %d, want 400", ReadDiskRoute, res.StatusCode)
 	}
 	res.Body.Close()
+}
+
+// TestReadyzDataDir checks that the wakeup probe fails until the data dir is
+// writable, so ResumeActor waits for an external volume mount.
+func TestReadyzDataDir(t *testing.T) {
+	writable := t.TempDir()
+	tests := []struct {
+		name       string
+		dataDir    string
+		wantStatus int
+		wantCanary bool
+	}{
+		{name: "no data dir", dataDir: "", wantStatus: http.StatusOK},
+		{name: "writable data dir", dataDir: writable, wantStatus: http.StatusOK, wantCanary: true},
+		{name: "missing data dir", dataDir: filepath.Join(writable, "not-mounted"), wantStatus: http.StatusServiceUnavailable},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ts := httptest.NewServer(readyzMux(tc.dataDir))
+			defer ts.Close()
+
+			res, err := http.Get(ts.URL + ReadyzRoute)
+			if err != nil {
+				t.Fatalf("GET %s: %v", ReadyzRoute, err)
+			}
+			res.Body.Close()
+			if res.StatusCode != tc.wantStatus {
+				t.Errorf("GET %s status: got %d, want %d", ReadyzRoute, res.StatusCode, tc.wantStatus)
+			}
+			if tc.wantCanary {
+				if _, err := os.Stat(filepath.Join(tc.dataDir, readyzCanary)); err != nil {
+					t.Errorf("canary file not written: %v", err)
+				}
+			}
+		})
+	}
+}
+
+// TestServiceOptions checks that the data-dir readyz check and fsync apply
+// only when opted in, so the other glutton benchmarks are unchanged.
+func TestServiceOptions(t *testing.T) {
+	tests := []struct {
+		name       string
+		opts       []Option
+		wantStatus int
+		wantSync   bool
+	}{
+		{name: "default", wantStatus: http.StatusOK},
+		{name: "writable readyz", opts: []Option{WithWritableReadyz()}, wantStatus: http.StatusServiceUnavailable},
+		{name: "sync writes", opts: []Option{WithSyncWrites()}, wantStatus: http.StatusOK, wantSync: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			// The data dir does not exist, like an external volume that is
+			// not mounted yet.
+			svc, err := New(filepath.Join(t.TempDir(), "not-mounted"), tc.opts...)
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			defer svc.Close()
+			if svc.syncWrites != tc.wantSync {
+				t.Errorf("syncWrites = %v, want %v", svc.syncWrites, tc.wantSync)
+			}
+
+			ts := httptest.NewServer(newMux(svc))
+			defer ts.Close()
+			res, err := http.Get(ts.URL + ReadyzRoute)
+			if err != nil {
+				t.Fatalf("GET %s: %v", ReadyzRoute, err)
+			}
+			res.Body.Close()
+			if res.StatusCode != tc.wantStatus {
+				t.Errorf("GET %s status: got %d, want %d", ReadyzRoute, res.StatusCode, tc.wantStatus)
+			}
+		})
+	}
+}
+
+func TestWriteDiskSyncWrites(t *testing.T) {
+	svc, err := New(t.TempDir(), WithSyncWrites())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer svc.Close()
+	resp, err := svc.WriteDisk(context.Background(), &gluttonpb.WriteDiskRequest{
+		Key:       "synced",
+		Size:      4096,
+		WriteMode: gluttonpb.WriteMode_WRITE_MODE_TRUNCATE,
+	})
+	if err != nil {
+		t.Fatalf("WriteDisk: %v", err)
+	}
+	if resp.GetSize() != 4096 {
+		t.Errorf("WriteDisk size = %d, want 4096", resp.GetSize())
+	}
 }

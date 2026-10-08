@@ -13,6 +13,12 @@ scenario ladder, read [observability.md](observability.md).
 > [!IMPORTANT]
 > Source the environment configuration file (e.g., `source .ate-dev-env.sh`)
 > first so `PROJECT_ID`, `BUCKET_NAME`, etc. are set.
+>
+> **For Local Kind Clusters**: Set `KO_DOCKER_REPO` to the local registry so images are pulled without remote cloud credentials:
+> ```bash
+> export KO_DOCKER_REPO="localhost:5001"
+> export BUCKET_NAME="ate-snapshots"
+> ```
 
 Note that deploying the benchmarks does not run them. You must visit Locust's
 web UI to start a test.
@@ -113,6 +119,11 @@ and state restoration latency when a durable directory is attached to the actor.
 * `--durdir-template`: ActorTemplate name:
   * `glutton-durdir-data` (default): Attaches a durable data directory without memory snapshot restore.
   * `glutton-durdir-full`: Attaches a durable data directory and performs a full memory snapshot restore.
+  * `glutton-storage`: Attaches an external CSI volume instead of a durable
+    directory. `deploy_locust.sh` and `workloads/deploy.sh` deploy it only
+    when `--storage-class-name` names an existing StorageClass. To run it on
+    NFS, install with `hack/install-ate.sh --setup-csi=nfs` and pass
+    `--storage-class-name csi-nfs-sc`, the class the e2e tests also use.
 
 #### DurDir Reported Metrics
 
