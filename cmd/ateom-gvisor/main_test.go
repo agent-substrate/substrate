@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -111,7 +112,7 @@ func TestStartPauseLogPipe(t *testing.T) {
 		TemplateAtespace: "tmpl-ns",
 		TemplateName:     "tmpl-1",
 	}
-	var buf bytes.Buffer
+	var buf syncLogBuffer
 	s := &AteomService{actorLogger: actorlog.NewActorLogger(&buf, false)}
 
 	pw, err := s.startPauseLogPipe(attribution)
@@ -160,10 +161,27 @@ func TestStartPauseLogPipe(t *testing.T) {
 	}
 }
 
+type syncLogBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncLogBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncLogBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 // waitRecords polls buf until want non-empty lines have been written, so the
 // test observes the pipe's asynchronous forwarder goroutine without
 // sleep-and-hope.
-func waitRecords(t *testing.T, buf *bytes.Buffer, want int) [][]byte {
+func waitRecords(t *testing.T, buf *syncLogBuffer, want int) [][]byte {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
