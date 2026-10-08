@@ -111,7 +111,7 @@ func (s *sidecar) stop() {
 // readiness check.
 func (s *sidecar) dialReady(wait time.Duration) (*grpc.ClientConn, objectstoresnapshotv1.ControlProviderClient) {
 	s.t.Helper()
-	conn, err := dial(s.path, wait)
+	conn, err := Dial(s.path, wait)
 	if err != nil {
 		s.t.Fatal(err)
 	}
@@ -246,7 +246,7 @@ func TestInFlightCallFailsWhenPluginDies(t *testing.T) {
 func TestWaitReadyOutlastsReadyWait(t *testing.T) {
 	const wait = 100 * time.Millisecond
 	s := newSidecar(t, newSlowControl(0))
-	conn, err := dial(s.path, wait)
+	conn, err := Dial(s.path, wait)
 	if err != nil {
 		t.Fatal(err)
 	}

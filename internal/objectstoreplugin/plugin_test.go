@@ -134,7 +134,7 @@ func serve(t *testing.T, backend *memObjects, root string) *grpc.ClientConn {
 	go srv.Serve(lis)
 	t.Cleanup(srv.Stop)
 
-	conn, err := Dial(filepath.Join(sockDir, "plugin.sock"))
+	conn, err := Dial(filepath.Join(sockDir, "plugin.sock"), ReadyWait)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,9 +149,9 @@ func TestWaitReady(t *testing.T) {
 		t.Errorf("WaitReady against a serving plugin = %v", err)
 	}
 
-	// A socket nobody listens on must fail when ctx ends, not hang: Dial
-	// makes every call wait for the plugin.
-	conn, err := Dial(filepath.Join(t.TempDir(), "missing.sock"))
+	// A socket nobody listens on must fail when ctx ends, not hang: WaitReady
+	// waits for the plugin as long as ctx allows.
+	conn, err := Dial(filepath.Join(t.TempDir(), "missing.sock"), ReadyWait)
 	if err != nil {
 		t.Fatal(err)
 	}

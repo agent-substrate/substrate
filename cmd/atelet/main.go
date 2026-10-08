@@ -290,7 +290,7 @@ func main() {
 	go trustBundles.Informer().Run(stopCh)
 	cache.WaitForCacheSync(stopCh, trustBundles.Informer().HasSynced)
 
-	snapshotPluginConn, err := objectstoreplugin.Dial(*snapshotPluginSocket)
+	snapshotPluginConn, err := objectstoreplugin.Dial(*snapshotPluginSocket, objectstoreplugin.ReadyWait)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to set up the snapshot plugin client", err)
 	}
@@ -753,6 +753,10 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	tPersist := time.Now()
 	switch req.GetType() {
 	case ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL:
+		// CheckpointWorkload has already deleted the workload, so a retried
+		// Checkpoint cannot redo this upload. It waits for the snapshot plugin
+		// as long as ctx allows, and a plugin error reaches the control plane as
+		// Internal, which crashes the actor.
 		// TODO(#362): Because we do not cache the external snapshot files when upload fails, we have to mark the Actor as CRASHED.
 		if err := s.uploadExternalCheckpoint(ctx, req, checkpointDir, sandboxRec); err != nil {
 			dPersist = time.Since(tPersist)
@@ -875,12 +879,16 @@ func shouldHaveSnapshots(req *ateletpb.CheckpointRequest) bool {
 	return false
 }
 
+// uploadExternalCheckpoint uploads the checkpoint CheckpointWorkload just
+// took. Its plugin calls pass grpc.WaitForReady, so they wait out a plugin
+// outage for as long as ctx allows rather than only objectstoreplugin's ready
+// wait, and their errors are not reported as retryable: see Checkpoint.
 func (s *AteomHerder) uploadExternalCheckpoint(ctx context.Context, req *ateletpb.CheckpointRequest, checkpointDir string, rec *sandboxAssetsRecord) error {
 	uri, err := resources.ParseSnapshotURI(req.GetExternalConfig().GetSnapshotUri())
 	if err != nil {
 		return err
 	}
-	return s.uploadSnapshot(ctx, uri, checkpointDir, rec, req.GetActorTemplateAtespace(), req.GetActorTemplateName())
+	return s.uploadSnapshot(ctx, uri, checkpointDir, rec, req.GetActorTemplateAtespace(), req.GetActorTemplateName(), grpc.WaitForReady(true))
 }
 
 // uploadSnapshot uploads rec's snapshot files from srcDir to uri through the
@@ -888,8 +896,9 @@ func (s *AteomHerder) uploadExternalCheckpoint(ctx context.Context, req *ateletp
 // own call: its presence is the commit marker — readers assume every file it
 // lists is already present. A crash mid-upload thus leaves only orphaned
 // files, never a manifest pointing at files that never landed; retries
-// overwrite the deterministic object names.
-func (s *AteomHerder) uploadSnapshot(ctx context.Context, uri resources.SnapshotURI, srcDir string, rec *sandboxAssetsRecord, templateAtespace, templateName string) error {
+// overwrite the deterministic object names. opts are passed to every plugin
+// call, and plugin errors are returned as uploadSnapshotFiles returns them.
+func (s *AteomHerder) uploadSnapshot(ctx context.Context, uri resources.SnapshotURI, srcDir string, rec *sandboxAssetsRecord, templateAtespace, templateName string, opts ...grpc.CallOption) error {
 	root, err := os.OpenRoot(srcDir)
 	if err != nil {
 		return fmt.Errorf("while opening snapshot directory: %w", err)
@@ -903,7 +912,7 @@ func (s *AteomHerder) uploadSnapshot(ctx context.Context, uri resources.Snapshot
 		}
 		recordSnapshotSize(ctx, fileName, allocatedBytes(info), templateAtespace, templateName)
 	}
-	if err := s.uploadSnapshotFiles(ctx, uri.String(), srcDir, rec.SnapshotFiles); err != nil {
+	if err := s.uploadSnapshotFiles(ctx, uri.String(), srcDir, rec.SnapshotFiles, opts...); err != nil {
 		return fmt.Errorf("while uploading snapshot files: %w", err)
 	}
 
@@ -911,7 +920,7 @@ func (s *AteomHerder) uploadSnapshot(ctx context.Context, uri resources.Snapshot
 	if err != nil {
 		return fmt.Errorf("while marshaling snapshot manifest: %w", err)
 	}
-	if err := s.uploadManifest(ctx, uri.String(), manifest); err != nil {
+	if err := s.uploadManifest(ctx, uri.String(), manifest, opts...); err != nil {
 		return fmt.Errorf("while uploading snapshot manifest: %w", err)
 	}
 	return nil
@@ -1015,7 +1024,9 @@ func (s *AteomHerder) uploadLocalCheckpointDir(ctx context.Context, req *ateletp
 		}
 	}
 
-	return rec.SandboxClass, s.uploadSnapshot(ctx, uri, localDir, rec, req.GetActorTemplateAtespace(), req.GetActorTemplateName())
+	// The local snapshot stays until the upload succeeds, so a retry can
+	// upload it again.
+	return rec.SandboxClass, objectstoreplugin.CallError(s.uploadSnapshot(ctx, uri, localDir, rec, req.GetActorTemplateAtespace(), req.GetActorTemplateName()))
 }
 
 func readSnapshotManifest(dir string) ([]byte, error) {

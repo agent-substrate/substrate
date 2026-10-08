@@ -261,7 +261,7 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to create metric instruments", err)
 	}
 
-	snapshotPluginConn, err := objectstoreplugin.Dial(*snapshotPluginSocket)
+	snapshotPluginConn, err := objectstoreplugin.Dial(*snapshotPluginSocket, objectstoreplugin.ReadyWait)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to set up the snapshot plugin client", err)
 	}

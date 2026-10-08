@@ -149,7 +149,7 @@ func newObjectStore(ctx context.Context) (objectstore.Store, error) {
 // healthcheck dials the plugin at socket and waits up to timeout for it to
 // report that it is serving.
 func healthcheck(ctx context.Context, socket string, timeout time.Duration) error {
-	conn, err := objectstoreplugin.Dial(socket)
+	conn, err := objectstoreplugin.Dial(socket, objectstoreplugin.ReadyWait)
 	if err != nil {
 		return err
 	}

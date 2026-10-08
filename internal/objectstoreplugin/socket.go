@@ -35,15 +35,13 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// readyWait bounds how long a call waits for the plugin connection to become
-// ready before failing with codes.Unavailable. It rides through a sidecar
+// ReadyWait is the ready wait servers pass to Dial. It rides through a sidecar
 // restart, including the first 10s step of kubelet's crash-loop back-off, and
-// fails a plugin that stays down well before a caller's deadline would. A
-// call that starts on a ready connection is not bounded by it.
-const readyWait = 30 * time.Second
+// fails a plugin that stays down well before a caller's deadline would.
+const ReadyWait = 30 * time.Second
 
 // reconnectParams keeps reconnect attempts to the local socket frequent, so a
-// plugin that comes back is reached within readyWait; gRPC's default back-off
+// plugin that comes back is reached within the ready wait; gRPC's default back-off
 // grows to two minutes.
 var reconnectParams = grpc.ConnectParams{
 	Backoff: backoff.Config{
@@ -78,23 +76,20 @@ func Listen(path string) (net.Listener, error) {
 // Dial returns a long-lived client connection to a plugin socket. A unary
 // call waits up to readyWait for the connection to become ready, then fails
 // with codes.Unavailable, so a plugin that is lost after startup fails calls
-// promptly while a brief restart does not. A call in flight when the plugin
+// promptly while a brief restart does not. A call that starts on a ready
+// connection is not bounded by readyWait, and one in flight when the plugin
 // goes fails with codes.Unavailable at once. A caller that passes
 // grpc.WaitForReady itself opts out of the bound and waits as long as its
 // context allows; WaitReady does so at startup.
 //
 // The connection is unauthenticated: the socket is reachable only from
 // inside the pod, and only by its owner.
-func Dial(path string) (*grpc.ClientConn, error) {
-	return dial(path, readyWait)
-}
-
-func dial(path string, wait time.Duration) (*grpc.ClientConn, error) {
+func Dial(path string, readyWait time.Duration) (*grpc.ClientConn, error) {
 	conn, err := grpc.NewClient("unix://"+path,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
 		grpc.WithConnectParams(reconnectParams),
-		grpc.WithUnaryInterceptor(boundedWaitForReady(wait)),
+		grpc.WithUnaryInterceptor(boundedWaitForReady(readyWait)),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("while dialing snapshot plugin at %s: %w", path, err)

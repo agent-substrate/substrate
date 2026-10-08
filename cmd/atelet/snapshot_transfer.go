@@ -22,6 +22,7 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/objectstoreplugin"
 	objectstoresnapshotv1 "github.com/agent-substrate/substrate/pkg/proto/objectstoresnapshotpb/v1"
+	"google.golang.org/grpc"
 )
 
 // External snapshots move between the node and storage only through the
@@ -41,8 +42,11 @@ func (s *AteomHerder) fetchSnapshotFiles(ctx context.Context, snapshotURI, dstDi
 	return objectstoreplugin.CallError(err)
 }
 
-// uploadSnapshotFiles uploads the named files in srcDir to the snapshot.
-func (s *AteomHerder) uploadSnapshotFiles(ctx context.Context, snapshotURI, srcDir string, files []string) error {
+// uploadSnapshotFiles uploads the named files in srcDir to the snapshot,
+// passing opts to the plugin call. It returns the plugin's error as is: an
+// upload that can be retried reports it through objectstoreplugin.CallError,
+// one that cannot does not.
+func (s *AteomHerder) uploadSnapshotFiles(ctx context.Context, snapshotURI, srcDir string, files []string, opts ...grpc.CallOption) error {
 	if len(files) == 0 {
 		return nil
 	}
@@ -50,8 +54,8 @@ func (s *AteomHerder) uploadSnapshotFiles(ctx context.Context, snapshotURI, srcD
 		SnapshotUri: snapshotURI,
 		LocalPath:   srcDir,
 		Files:       files,
-	})
-	return objectstoreplugin.CallError(err)
+	}, opts...)
+	return err
 }
 
 // fetchManifest returns a snapshot's manifest. The returned error is the
@@ -68,8 +72,9 @@ func (s *AteomHerder) fetchManifest(ctx context.Context, snapshotURI string) ([]
 	return os.ReadFile(filepath.Join(dir, sandboxManifestName))
 }
 
-// uploadManifest uploads manifest as the snapshot's manifest.
-func (s *AteomHerder) uploadManifest(ctx context.Context, snapshotURI string, manifest []byte) error {
+// uploadManifest uploads manifest as the snapshot's manifest, as
+// uploadSnapshotFiles does.
+func (s *AteomHerder) uploadManifest(ctx context.Context, snapshotURI string, manifest []byte, opts ...grpc.CallOption) error {
 	dir, err := s.snapshotScratch()
 	if err != nil {
 		return err
@@ -78,7 +83,7 @@ func (s *AteomHerder) uploadManifest(ctx context.Context, snapshotURI string, ma
 	if err := os.WriteFile(filepath.Join(dir, sandboxManifestName), manifest, 0o600); err != nil {
 		return fmt.Errorf("while staging snapshot manifest: %w", err)
 	}
-	return s.uploadSnapshotFiles(ctx, snapshotURI, dir, []string{sandboxManifestName})
+	return s.uploadSnapshotFiles(ctx, snapshotURI, dir, []string{sandboxManifestName}, opts...)
 }
 
 // snapshotScratch creates a fresh directory for one manifest transfer. The
