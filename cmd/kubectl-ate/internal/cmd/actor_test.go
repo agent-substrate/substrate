@@ -116,7 +116,6 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 		source      string
 		container   string
 		wantMatched bool
-		wantTime    string
 		wantOutput  string
 	}{
 		{
@@ -124,7 +123,6 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 			line:        `{"time":"2026-05-16T01:03:38.602878302Z","level":"info","msg":"Count","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-1"}}`,
 			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
 			wantMatched: true,
-			wantTime:    "2026-05-16T01:03:38.602878302Z",
 			wantOutput:  `{"time":"2026-05-16T01:03:38.602878302Z","level":"info","msg":"Count"}`,
 		},
 		{
@@ -132,7 +130,6 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 			line:        `{"time":"2026-05-16T01:03:38Z","message":"Hello","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-1"}}`,
 			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
 			wantMatched: true,
-			wantTime:    "2026-05-16T01:03:38Z",
 			wantOutput:  `{"time":"2026-05-16T01:03:38Z","message":"Hello"}`,
 		},
 		{
@@ -140,7 +137,6 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 			line:        `{"level":"error","msg":"Failed","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-1"}}`,
 			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
 			wantMatched: true,
-			wantTime:    "",
 			wantOutput:  `{"level":"error","msg":"Failed"}`,
 		},
 		{
@@ -148,7 +144,6 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 			line:        `{"time":"2026-05-16T01:03:38.602878302Z","level":"info","msg":"Count","labels":{"ate.atespace":"space-1","ate.actor.name":"act-1"}}`,
 			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
 			wantMatched: true,
-			wantTime:    "2026-05-16T01:03:38.602878302Z",
 			wantOutput:  `{"time":"2026-05-16T01:03:38.602878302Z","level":"info","msg":"Count"}`,
 		},
 		{
@@ -156,7 +151,6 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 			line:        `{"time":"2026-05-16T01:03:38Z","message":"Hello world","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-2"}}`,
 			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
 			wantMatched: false,
-			wantTime:    "2026-05-16T01:03:38Z", // undisplayed, but still the follow resume cursor
 			wantOutput:  "",
 		},
 		{
@@ -164,7 +158,6 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 			line:        `{"time":"2026-05-16T01:03:38Z","message":"Hello world","logging.googleapis.com/labels":{"ate.atespace":"space-2","ate.actor.name":"act-1"}}`,
 			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
 			wantMatched: false,
-			wantTime:    "2026-05-16T01:03:38Z", // undisplayed, but still the follow resume cursor
 			wantOutput:  "",
 		},
 		{
@@ -172,7 +165,6 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 			line:        `{"time":"2026-05-16T01:03:38Z","message":"Hello world","logging.googleapis.com/labels":{"ate.actor.name":"act-1"}}`,
 			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
 			wantMatched: false,
-			wantTime:    "2026-05-16T01:03:38Z", // undisplayed, but still the follow resume cursor
 			wantOutput:  "",
 		},
 		{
@@ -180,7 +172,6 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 			line:        `{"time":"2026-05-16T01:03:38Z","message":"Hello world","logging.googleapis.com/labels":{"ate.atespace":"","ate.actor.name":"act-1"}}`,
 			target:      resources.ActorRef{Atespace: "", Name: "act-1"},
 			wantMatched: false,
-			wantTime:    "2026-05-16T01:03:38Z", // undisplayed, but still the follow resume cursor
 			wantOutput:  "",
 		},
 		{
@@ -188,7 +179,6 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 			line:        `{"time":"2026-05-16T01:03:38Z","message":"Hello world","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":""}}`,
 			target:      resources.ActorRef{Atespace: "space-1", Name: ""},
 			wantMatched: false,
-			wantTime:    "2026-05-16T01:03:38Z", // undisplayed, but still the follow resume cursor
 			wantOutput:  "",
 		},
 		{
@@ -196,7 +186,6 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 			line:        "not a json line",
 			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
 			wantMatched: false,
-			wantTime:    "",
 			wantOutput:  "",
 		},
 		{
@@ -204,7 +193,6 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 			line:        `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"Hello","traceID":"abc-123","err":"timeout","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-1"}}`,
 			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
 			wantMatched: true,
-			wantTime:    "2026-05-16T01:03:38Z",
 			wantOutput:  `{"time":"2026-05-16T01:03:38Z","err":"timeout","level":"info","msg":"Hello","traceID":"abc-123"}`,
 		},
 		{
@@ -212,7 +200,6 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 			line:        `{"time":"2026-05-16T01:03:38Z","severity":"error","message":"Disk full","custom_tag":"alert","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-1"}}`,
 			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
 			wantMatched: true,
-			wantTime:    "2026-05-16T01:03:38Z",
 			wantOutput:  `{"time":"2026-05-16T01:03:38Z","custom_tag":"alert","message":"Disk full","severity":"error"}`,
 		},
 		{
@@ -220,7 +207,6 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 			line:        `{"message":"login failed","code":401,"logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-1"}}`,
 			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
 			wantMatched: true,
-			wantTime:    "",
 			wantOutput:  `{"code":401,"message":"login failed"}`,
 		},
 		{
@@ -228,7 +214,6 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 			line:        `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"Hello","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-1","app":"my-app"}}`,
 			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
 			wantMatched: true,
-			wantTime:    "2026-05-16T01:03:38Z",
 			wantOutput:  `{"time":"2026-05-16T01:03:38Z","level":"info","logging.googleapis.com/labels":{"app":"my-app"},"msg":"Hello"}`,
 		},
 		{
@@ -239,7 +224,6 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 			line:        `{"time":"2026-05-16T01:03:38Z","msg":"Hello","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-1","ate.tenant":"forged","app":"my-app"}}`,
 			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
 			wantMatched: true,
-			wantTime:    "2026-05-16T01:03:38Z",
 			wantOutput:  `{"time":"2026-05-16T01:03:38Z","logging.googleapis.com/labels":{"app":"my-app"},"msg":"Hello"}`,
 		},
 		{
@@ -247,7 +231,6 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 			line:        `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"hi","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-1","ate.actor.container.name":"counter"}}`,
 			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
 			wantMatched: true,
-			wantTime:    "2026-05-16T01:03:38Z",
 			wantOutput:  `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"hi"}`,
 		},
 		{
@@ -256,7 +239,6 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
 			container:   "counter",
 			wantMatched: true,
-			wantTime:    "2026-05-16T01:03:38Z",
 			wantOutput:  `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"hi"}`,
 		},
 		{
@@ -265,7 +247,6 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
 			container:   "counter",
 			wantMatched: false,
-			wantTime:    "2026-05-16T01:03:38Z", // undisplayed, but still the follow resume cursor
 			wantOutput:  "",
 		},
 		{
@@ -274,7 +255,6 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
 			container:   "counter",
 			wantMatched: false,
-			wantTime:    "2026-05-16T01:03:38Z", // undisplayed, but still the follow resume cursor
 			wantOutput:  "",
 		},
 		{
@@ -283,7 +263,6 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
 			source:      "all",
 			wantMatched: true,
-			wantTime:    "2026-05-16T01:03:38Z",
 			wantOutput:  `{"time":"2026-05-16T01:03:38Z","message":"Actor started"}`,
 		},
 		{
@@ -292,7 +271,6 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
 			source:      "lifecycle",
 			wantMatched: true,
-			wantTime:    "2026-05-16T01:03:38Z",
 			wantOutput:  `{"time":"2026-05-16T01:03:38Z","message":"Actor checkpointing"}`,
 		},
 		{
@@ -301,7 +279,6 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
 			source:      "lifecycle",
 			wantMatched: false,
-			wantTime:    "2026-05-16T01:03:38Z", // undisplayed, but still the follow resume cursor
 			wantOutput:  "",
 		},
 		{
@@ -310,7 +287,6 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
 			source:      "lifecycle",
 			wantMatched: false,
-			wantTime:    "2026-05-16T01:03:38Z", // undisplayed, but still the follow resume cursor
 			wantOutput:  "",
 		},
 		{
@@ -319,7 +295,6 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
 			source:      "containers",
 			wantMatched: true,
-			wantTime:    "2026-05-16T01:03:38Z",
 			wantOutput:  `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"hi"}`,
 		},
 		{
@@ -328,7 +303,6 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
 			source:      "containers",
 			wantMatched: false,
-			wantTime:    "2026-05-16T01:03:38Z", // undisplayed, but still the follow resume cursor
 			wantOutput:  "",
 		},
 		{
@@ -338,7 +312,6 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 			source:      "containers",
 			container:   "counter",
 			wantMatched: false,
-			wantTime:    "2026-05-16T01:03:38Z", // undisplayed, but still the follow resume cursor
 			wantOutput:  "",
 		},
 	}
@@ -346,24 +319,10 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			var buf bytes.Buffer
-			logTime, matched := filterAndDisplayLogLine(tc.line, logLineFilter{target: tc.target, source: logSource(tc.source), container: tc.container}, &buf)
+			matched := filterAndDisplayLogLine(tc.line, logLineFilter{target: tc.target, source: logSource(tc.source), container: tc.container}, &buf)
 
 			if matched != tc.wantMatched {
 				t.Errorf("got matched = %v, want %v", matched, tc.wantMatched)
-			}
-
-			if tc.wantTime != "" {
-				parsedTime, err := time.Parse(time.RFC3339Nano, tc.wantTime)
-				if err != nil {
-					parsedTime, _ = time.Parse(time.RFC3339, tc.wantTime)
-				}
-				if !logTime.Equal(parsedTime) {
-					t.Errorf("got logTime = %v, want %v", logTime, parsedTime)
-				}
-			} else {
-				if !logTime.IsZero() {
-					t.Errorf("got non-zero logTime = %v, want zero", logTime)
-				}
 			}
 
 			gotOutput := strings.TrimSpace(buf.String())
@@ -383,7 +342,7 @@ func TestNewLogLineFilter(t *testing.T) {
 		container string
 		wantErr   string
 	}{
-		{name: "defaults", source: "", container: ""},
+		{name: "explicit empty source", source: "", wantErr: `invalid --source ""`},
 		{name: "all", source: "all"},
 		{name: "containers", source: "containers"},
 		{name: "lifecycle", source: "lifecycle"},
@@ -695,7 +654,8 @@ func TestLogsActorRunner_Run_Follow_SuspendedToRunning(t *testing.T) {
 		},
 	}
 
-	logLine := `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"Follow hello","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-123"}}`
+	// As the kubelet streams it with Timestamps set.
+	logLine := `2026-05-16T01:03:38.500000000Z {"time":"2026-05-16T01:03:38Z","level":"info","msg":"Follow hello","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-123"}}`
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -705,8 +665,8 @@ func TestLogsActorRunner_Run_Follow_SuspendedToRunning(t *testing.T) {
 			if ns != namespace || name != podName {
 				return nil, fmt.Errorf("unexpected pod %s/%s", ns, name)
 			}
-			if !opts.Follow {
-				return nil, fmt.Errorf("expected follow to be true in follow mode")
+			if !opts.Follow || !opts.Timestamps {
+				return nil, fmt.Errorf("expected follow and timestamps to be set in follow mode")
 			}
 
 			// Cancel main context soon to break the outer infinite loop
@@ -1040,12 +1000,14 @@ func TestLogsActorRunner_Run_Follow_ActorSuspendedMidStream(t *testing.T) {
 	}
 }
 
-// The follow resume cursor (SinceTime) advances on every line the stream
-// carries, displayed or not. The stream is one pod log in write order, so
-// resuming from the last undisplayed line skips nothing; resuming only from
-// displayed lines would make a reconnect under a sparse filter, such as
-// --source=lifecycle, replay everything since the last match.
-func TestLogsActorRunner_Run_Follow_CursorAdvancesOnUndisplayedLines(t *testing.T) {
+// The follow resume cursor is the kubelet's timestamp on the last line read,
+// displayed or not. Not the last displayed line: under a sparse filter such
+// as --source=lifecycle a reconnect would replay everything since the last
+// match. Not the line's own time either: an actor's record keeps a time the
+// actor wrote, which can run ahead of the node's clock and would make a
+// reconnect skip lines. On reconnect, lines up to the cursor are dropped,
+// since SinceTime only has second precision.
+func TestLogsActorRunner_Run_Follow_CursorIsKubeletTimestampOfLastLineRead(t *testing.T) {
 	actorName := "act-123"
 
 	mockAPI := &mockAteAPIClient{
@@ -1063,13 +1025,16 @@ func TestLogsActorRunner_Run_Follow_CursorAdvancesOnUndisplayedLines(t *testing.
 		},
 	}
 
-	// Under --source=lifecycle only the first line is displayed. The two
-	// after it, a different actor's and our own container's, are not, and the
-	// last of them is where a reconnect must resume.
-	lifecycleLine := `{"time":"2026-05-16T01:03:38Z","message":"Actor started","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-123"}}`
-	foreignLine := `{"time":"2026-05-16T01:03:39Z","message":"not mine","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"other"}}`
-	counterLine := `{"time":"2026-05-16T01:03:40Z","level":"info","msg":"from counter","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-123","ate.actor.container.name":"counter"}}`
-	wantSince := time.Date(2026, 5, 16, 1, 3, 40, 0, time.UTC)
+	// Lines as the kubelet streams them with Timestamps set. Under
+	// --source=lifecycle only the first is displayed. The container line's
+	// own time is far ahead of the node's clock.
+	lifecycleLine := `2026-05-16T01:03:38.100000000Z {"time":"2026-05-16T01:03:38Z","message":"Actor started","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-123"}}`
+	foreignLine := `2026-05-16T01:03:39.200000000Z {"time":"2026-05-16T01:03:39Z","message":"not mine","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"other"}}`
+	counterLine := `2026-05-16T01:03:40.300000000Z {"time":"2099-01-01T00:00:00Z","level":"info","msg":"from counter","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-123","ate.actor.container.name":"counter"}}`
+	// After the reconnect the kubelet re-sends the cursor's second: the
+	// counter line again, then a new lifecycle event in the same second.
+	laterLine := `2026-05-16T01:03:40.900000000Z {"time":"2026-05-16T01:03:40Z","message":"Actor checkpointing","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-123"}}`
+	wantSince := time.Date(2026, 5, 16, 1, 3, 40, 300000000, time.UTC)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1077,32 +1042,34 @@ func TestLogsActorRunner_Run_Follow_CursorAdvancesOnUndisplayedLines(t *testing.
 	var mu sync.Mutex
 	var streamCalls int
 	var reconnectSince *metav1.Time
-	secondCall := make(chan struct{})
+	var reconnectTimestamps bool
+	thirdCall := make(chan struct{})
 
 	mockStreamer := &mockPodLogsStreamer{
 		StreamLogsFunc: func(streamCtx context.Context, ns, name string, opts *corev1.PodLogOptions) (io.ReadCloser, error) {
 			mu.Lock()
 			defer mu.Unlock()
 			streamCalls++
-
-			if streamCalls == 1 {
-				// First connection: one displayed line, then two undisplayed ones,
-				// then EOF to force a reconnect.
+			switch streamCalls {
+			case 1:
 				return io.NopCloser(strings.NewReader(lifecycleLine + "\n" + foreignLine + "\n" + counterLine + "\n")), nil
-			}
-			if streamCalls == 2 {
+			case 2:
 				reconnectSince = opts.SinceTime
-				close(secondCall)
+				reconnectTimestamps = opts.Timestamps
+				return io.NopCloser(strings.NewReader(counterLine + "\n" + laterLine + "\n")), nil
+			case 3:
+				close(thirdCall)
 			}
 			return io.NopCloser(strings.NewReader("")), nil
 		},
 	}
 
+	var stdout bytes.Buffer
 	runner := &LogsActorRunner{
 		apiClient:         mockAPI,
 		actorRef:          resources.ActorRef{Atespace: "space-1", Name: actorName},
 		streamer:          mockStreamer,
-		stdout:            &bytes.Buffer{},
+		stdout:            &stdout,
 		stderr:            &bytes.Buffer{},
 		follow:            true,
 		filter:            logLineFilter{target: resources.ActorRef{Atespace: "space-1", Name: actorName}, source: logSourceLifecycle},
@@ -1118,11 +1085,11 @@ func TestLogsActorRunner_Run_Follow_CursorAdvancesOnUndisplayedLines(t *testing.
 	}()
 
 	select {
-	case <-secondCall:
+	case <-thirdCall:
 	case <-time.After(2 * time.Second):
 		cancel()
 		<-done
-		t.Fatal("reconnect (second StreamLogs call) never happened")
+		t.Fatal("the third StreamLogs call never happened")
 	}
 
 	cancel()
@@ -1130,10 +1097,62 @@ func TestLogsActorRunner_Run_Follow_CursorAdvancesOnUndisplayedLines(t *testing.
 
 	mu.Lock()
 	defer mu.Unlock()
+	if !reconnectTimestamps {
+		t.Error("follow did not ask the kubelet for timestamps")
+	}
 	if reconnectSince == nil {
 		t.Fatal("reconnect carried no SinceTime cursor")
 	}
 	if !reconnectSince.Time.Equal(wantSince) {
-		t.Errorf("reconnect SinceTime = %v, want %v, the last line read, not the last line displayed", reconnectSince.Time, wantSince)
+		t.Errorf("reconnect SinceTime = %v, want %v: the kubelet's timestamp on the last line read, not the last line displayed and not the line's own time", reconnectSince.Time, wantSince)
+	}
+	want := "{\"time\":\"2026-05-16T01:03:38Z\",\"message\":\"Actor started\"}\n" +
+		"{\"time\":\"2026-05-16T01:03:40Z\",\"message\":\"Actor checkpointing\"}\n"
+	if got := stdout.String(); got != want {
+		t.Errorf("output =\n%s\nwant\n%s", got, want)
+	}
+}
+
+func TestSplitKubeletTimestamp(t *testing.T) {
+	tests := []struct {
+		name     string
+		line     string
+		wantOK   bool
+		wantTime time.Time
+		wantRest string
+	}{
+		{
+			name:     "kubelet timestamp prefix",
+			line:     `2026-05-16T01:03:40.300000000Z {"msg":"hi"}`,
+			wantOK:   true,
+			wantTime: time.Date(2026, 5, 16, 1, 3, 40, 300000000, time.UTC),
+			wantRest: `{"msg":"hi"}`,
+		},
+		{
+			name:     "no prefix",
+			line:     `{"msg":"hi there"}`,
+			wantOK:   false,
+			wantRest: `{"msg":"hi there"}`,
+		},
+		{
+			name:     "no space at all",
+			line:     `plain`,
+			wantOK:   false,
+			wantRest: `plain`,
+		},
+		{
+			name:     "a space but not a timestamp",
+			line:     `not-a-time {"msg":"hi"}`,
+			wantOK:   false,
+			wantRest: `not-a-time {"msg":"hi"}`,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			stamp, rest, ok := splitKubeletTimestamp(tc.line)
+			if ok != tc.wantOK || rest != tc.wantRest || !stamp.Equal(tc.wantTime) {
+				t.Errorf("splitKubeletTimestamp(%q) = %v, %q, %v; want %v, %q, %v", tc.line, stamp, rest, ok, tc.wantTime, tc.wantRest, tc.wantOK)
+			}
+		})
 	}
 }

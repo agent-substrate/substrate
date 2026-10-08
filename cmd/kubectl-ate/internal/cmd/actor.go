@@ -376,6 +376,8 @@ func (r *LogsActorRunner) runOneShot(ctx context.Context) error {
 
 func (r *LogsActorRunner) runFollow(ctx context.Context) error {
 	var lastWorkerPod string
+	// lastSeenTime is the kubelet's timestamp on the last line read from
+	// lastWorkerPod, the resume cursor for a reconnect to it.
 	var lastSeenTime time.Time
 
 	for {
@@ -410,14 +412,21 @@ func (r *LogsActorRunner) runFollow(ctx context.Context) error {
 			}
 		}
 
-		// actor is resumed on anther worker
-		if podName != lastWorkerPod {
+		// The actor resumed on another worker.
+		switchedPod := podName != lastWorkerPod
+		if switchedPod {
 			fmt.Fprintf(r.stderr, "Actor is currently running on pod %s/%s\n", namespace, podName)
 			lastWorkerPod = podName
 		}
 
+		// The kubelet's own timestamp on every line is the resume cursor. It
+		// is what SinceTime is compared against, and it does not depend on the
+		// line's content: an actor's record keeps a time the actor wrote, which
+		// can run ahead of the node's clock and would make a reconnect skip
+		// lines.
 		opts := &corev1.PodLogOptions{
-			Follow: true,
+			Follow:     true,
+			Timestamps: true,
 		}
 		if !lastSeenTime.IsZero() {
 			opts.SinceTime = &metav1.Time{Time: lastSeenTime}
@@ -442,11 +451,18 @@ func (r *LogsActorRunner) runFollow(ctx context.Context) error {
 		buf := make([]byte, 0, 64*1024)
 		scanner.Buffer(buf, 1024*1024) // Support up to 1MB lines
 		for scanner.Scan() {
-			line := scanner.Text()
-			logTime, _ := filterAndDisplayLogLine(line, r.filter, r.stdout)
-			if !logTime.IsZero() {
-				lastSeenTime = logTime
+			stamp, line, ok := splitKubeletTimestamp(scanner.Text())
+			if ok {
+				// SinceTime has second precision, so a reconnect to the same pod
+				// re-reads the cursor's second; lines up to the cursor were
+				// already shown. Another pod's lines are all new, and its node's
+				// clock is not this one's, so they are not compared.
+				if !switchedPod && !stamp.After(lastSeenTime) {
+					continue
+				}
+				lastSeenTime = stamp
 			}
+			filterAndDisplayLogLine(line, r.filter, r.stdout)
 		}
 		scanErr := scanner.Err()
 		stream.Close()
@@ -503,6 +519,22 @@ func (r *LogsActorRunner) startMigrationMonitor(
 			}
 		}
 	}()
+}
+
+// splitKubeletTimestamp splits the timestamp the kubelet prefixes to a log
+// line when PodLogOptions.Timestamps is set (RFC 3339 with nanoseconds, then
+// a space) from the line itself. ok is false for a line without one, which
+// is then returned whole.
+func splitKubeletTimestamp(line string) (stamp time.Time, rest string, ok bool) {
+	stampText, rest, found := strings.Cut(line, " ")
+	if !found {
+		return time.Time{}, line, false
+	}
+	stamp, err := time.Parse(time.RFC3339Nano, stampText)
+	if err != nil {
+		return time.Time{}, line, false
+	}
+	return stamp, rest, true
 }
 
 func runLogsActor(cmd *cobra.Command, args []string) error {
@@ -573,7 +605,7 @@ type logLineFilter struct {
 // --container flag values, rejecting combinations that could never match.
 func newLogLineFilter(target resources.ActorRef, source, container string) (logLineFilter, error) {
 	switch logSource(source) {
-	case "", logSourceAll, logSourceContainers:
+	case logSourceAll, logSourceContainers:
 	case logSourceLifecycle:
 		if container != "" {
 			return logLineFilter{}, fmt.Errorf("--container cannot be combined with --source=lifecycle: lifecycle events are not emitted by a container")
@@ -594,6 +626,7 @@ func (f logLineFilter) matches(emitter resources.ActorRef, containerName string)
 	}
 	switch f.source {
 	case logSourceLifecycle:
+		// f.container is empty here: newLogLineFilter rejects it with lifecycle.
 		return containerName == ""
 	case logSourceContainers:
 		if containerName == "" {
@@ -603,29 +636,27 @@ func (f logLineFilter) matches(emitter resources.ActorRef, containerName string)
 	return f.container == "" || containerName == f.container
 }
 
-// filterAndDisplayLogLine writes line to w if filter selects it. It returns
-// the line's time whenever the line parses, displayed or not, so follow mode
-// can resume from the last line it read: the stream is one pod log in write
-// order, so a later line never precedes an earlier one, and resuming from an
-// undisplayed line skips nothing. Resuming only from displayed lines would
-// make a reconnect under a sparse filter, such as --source=lifecycle, replay
-// everything since the last match. The bool reports whether line was
-// displayed.
-func filterAndDisplayLogLine(line string, filter logLineFilter, w io.Writer) (time.Time, bool) {
+// containerNameKeyQuoted is the container-name label key as it appears in a
+// JSON line. Every container line carries it (ateattr.ActorLogLabels) and
+// no lifecycle line does; an actor cannot forge it, since actorlog strips
+// the reserved keys from an actor's own labels, and the text inside a value
+// only ever makes a container line skip early.
+var containerNameKeyQuoted = `"` + string(ateattr.ActorContainerNameKey) + `"`
+
+// filterAndDisplayLogLine writes line to w if filter selects it, and
+// reports whether it did.
+func filterAndDisplayLogLine(line string, filter logLineFilter, w io.Writer) bool {
+	// Under lifecycle, nearly every line is a container's; a busy actor
+	// writes many, so skip them before decoding.
+	if filter.source == logSourceLifecycle && strings.Contains(line, containerNameKeyQuoted) {
+		return false
+	}
+
 	var m map[string]any
 	dec := json.NewDecoder(strings.NewReader(line))
 	dec.UseNumber()
 	if err := dec.Decode(&m); err != nil {
-		return time.Time{}, false
-	}
-
-	var logTime time.Time
-	if tVal, ok := m["time"].(string); ok {
-		if t, err := time.Parse(time.RFC3339Nano, tVal); err == nil {
-			logTime = t
-		} else if t, err := time.Parse(time.RFC3339, tVal); err == nil {
-			logTime = t
-		}
+		return false
 	}
 
 	var emitter resources.ActorRef
@@ -644,7 +675,7 @@ func filterAndDisplayLogLine(line string, filter logLineFilter, w io.Writer) (ti
 	}
 
 	if !filter.matches(emitter, emitterContainer) {
-		return logTime, false
+		return false
 	}
 
 	// Remove substrate's labels from CLI output. Stripping the whole reserved
@@ -674,7 +705,7 @@ func filterAndDisplayLogLine(line string, filter logLineFilter, w io.Writer) (ti
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
 	if err := enc.Encode(m); err != nil {
-		return time.Time{}, false
+		return false
 	}
 
 	encodedStr := strings.TrimSpace(buf.String())
@@ -691,7 +722,7 @@ func filterAndDisplayLogLine(line string, filter logLineFilter, w io.Writer) (ti
 		fmt.Fprintln(w, encodedStr)
 	}
 
-	return logTime, true
+	return true
 }
 
 func init() {
