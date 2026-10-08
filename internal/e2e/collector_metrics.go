@@ -46,6 +46,7 @@ var PlatformMetricPrefixes = []string{
 	"db_client_connection_count",
 	"db_client_connection_max",
 	"db_client_connection_wait_time",
+	"db_client_connection_pending_requests",
 	"ate_workerpool_workers",
 	"ate_workerpool_desired_workers",
 	"ate_workerpool_ready_workers",
