@@ -747,7 +747,7 @@ func TestRunStep_KeepsActorThroughCapacityShortage(t *testing.T) {
 	const rounds = maxConsecutiveStepFailures + 2
 	errs := make([]error, rounds)
 	for i := range errs {
-		errs[i] = status.Error(codes.ResourceExhausted, "no free workers available")
+		errs[i] = status.Error(codes.ResourceExhausted, "no worker has room for the actor")
 	}
 	ctl := &fakeControlClient{resumeErrs: errs}
 	u := newTestUser(t, &fake.Server{}, ctl, dynconfig.Config{ResumeMode: dynconfig.ResumeModeExplicit})

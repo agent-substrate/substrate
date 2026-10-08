@@ -144,6 +144,12 @@ func dialOf(res extproc.Result) string {
 	return res.DynamicMetadata.GetFields()[extproc.EgressMetadataNamespace].GetStructValue().GetFields()[extproc.EgressDialKey].GetStringValue()
 }
 
+// hostOf reads the name an allowed request is dialed by, or "" when the
+// answer said nothing.
+func hostOf(res extproc.Result) string {
+	return res.DynamicMetadata.GetFields()[extproc.EgressMetadataNamespace].GetStructValue().GetFields()[extproc.EgressDialHostKey].GetStringValue()
+}
+
 // wantDial checks an allowed request's answer: the dial the routes match on,
 // with the route cache cleared so Envoy matches again.
 func wantDial(t *testing.T, res extproc.Result, err error, want string) {
@@ -157,6 +163,39 @@ func wantDial(t *testing.T, res extproc.Result, err error, want string) {
 	}
 	if got := dialOf(res); got != want {
 		t.Errorf("dial = %q, want %q", got, want)
+	}
+	if want == extproc.EgressDialName && hostOf(res) == "" {
+		t.Error("dial=name without a host; Envoy would dial the Host, port included")
+	}
+}
+
+// An allowed request is dialed by the name it was decided on, without the
+// Host's port: Envoy dials that name on the port the actor dialed.
+func TestRequestLegAnswersTheNameToDial(t *testing.T) {
+	tests := []struct {
+		name      string
+		leg       string
+		authority string
+		want      string
+	}{
+		{name: "hostname", leg: extproc.EgressCleartextFilterChainName, authority: "api.example.com", want: "api.example.com"},
+		{name: "hostname as matched", leg: extproc.EgressCleartextFilterChainName, authority: "API.Example.com.", want: "api.example.com"},
+		{name: "port in the host", leg: extproc.EgressCleartextFilterChainName, authority: "api.example.com:8080", want: "api.example.com"},
+		{name: "port in the host on the MITM leg", leg: extproc.EgressTLSMITMFilterChainName, authority: "api.example.com:8443", want: "api.example.com"},
+		{name: "ip literal with a port", leg: extproc.EgressCleartextFilterChainName, authority: "203.0.113.9:8080", want: "203.0.113.9"},
+		{name: "ipv4-mapped literal", leg: extproc.EgressCleartextFilterChainName, authority: "[::ffff:203.0.113.9]", want: "203.0.113.9"},
+		// Envoy would read an unbracketed IPv6 literal's last group as a port.
+		{name: "ipv6 literal with a port", leg: extproc.EgressCleartextFilterChainName, authority: "[2001:db8::7]:8080", want: "[2001:db8::7]"},
+	}
+	h := policyHandler(combined(httpPolicy("*"), httpsPolicy("*")))
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := h.HandleRequestHeaders(context.Background(), innerMetadata(tc.leg, "GET", tc.authority, nil))
+			wantDial(t, res, err, extproc.EgressDialName)
+			if got := hostOf(res); got != tc.want {
+				t.Errorf("host = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 

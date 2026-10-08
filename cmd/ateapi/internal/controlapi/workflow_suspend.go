@@ -134,15 +134,6 @@ func (w *ActorWorkflow) ensureMarkedSuspending(ctx context.Context, actorRef res
 	if got := actor.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_RUNNING && got != ateapipb.ActorState_ACTOR_STATE_PAUSED {
 		return nil, apierror.FailedPrecondition("MarkSuspending prerequisite not met for Actor: %s (got: %v, want %s or %s)", actorRef, got, ateapipb.ActorState_ACTOR_STATE_RUNNING, ateapipb.ActorState_ACTOR_STATE_PAUSED)
 	}
-	// A paused-origin suspend uploads what the pause captured; it cannot
-	// fabricate the memory a Full commit needs from a Data-only capture.
-	// Reject before leaving PAUSED so the actor stays resumable.
-	if actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_PAUSED &&
-		pausedContentScope(actor.GetStatus().GetLocalSnapshot(), actorTemplate) == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA &&
-		commitSnapshotScope(actorRef.Atespace, actorTemplate) == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL {
-		return nil, apierror.FailedPrecondition("actor %s paused with a Data snapshot; the template commits Full, which a paused-origin suspend cannot produce", actorRef)
-	}
-
 	// Fail here rather than at checkpoint time if the template's location
 	// cannot produce a usable URI: nothing has been written yet.
 	uri, err := newInProgressSnapshotURI(actorTemplate, actor)
@@ -173,17 +164,6 @@ func commitSnapshotScope(atespace string, tmpl *ateapipb.ActorTemplate) ateapipb
 		return ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL
 	}
 	return tmpl.GetSnapshotConfig().GetOnCommit()
-}
-
-// pausedContentScope returns the scope a paused actor's local snapshot was
-// captured with: the value recorded at pause finalization, or — for actors
-// paused before content_scope existed — the template's onPause, the same
-// derivation resume uses for local snapshots.
-func pausedContentScope(local *ateapipb.LocalSnapshot, tmpl *ateapipb.ActorTemplate) ateapipb.SnapshotContentScope {
-	if scope := local.GetContentScope(); scope != ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED {
-		return scope
-	}
-	return tmpl.GetSnapshotConfig().GetOnPause()
 }
 
 // isPausedOriginSuspend reports whether the suspend must upload a PAUSED
@@ -240,7 +220,7 @@ func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef reso
 	}
 	client := ateletpb.NewAteomHerderClient(ateletConn)
 
-	workloadSpec, err := workloadSpecFromActorTemplate(actorTemplate, actor)
+	workloadSpec, err := workloadSpecFromActorTemplate(actorTemplate, actor, nil)
 	if err != nil {
 		return "", err
 	}
@@ -283,7 +263,8 @@ func (w *ActorWorkflow) ensurePausedSnapshotUploaded(ctx context.Context, actorR
 	defer func() { err = done(err) }()
 
 	local := actor.GetStatus().GetLocalSnapshot()
-	if len(local.GetNodeVmsWithLocalSnapshots()) == 0 {
+	nodeName := actor.GetStatus().GetAssignedNode()
+	if nodeName == "" {
 		// Without the node the snapshot can never be found (mirrors
 		// FinalizePaused, which crashes rather than record an unknown node).
 		if err := crashActor(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageLocalSnapshotNodeUnknown); err != nil {
@@ -292,7 +273,7 @@ func (w *ActorWorkflow) ensurePausedSnapshotUploaded(ctx context.Context, actorR
 		return "", fmt.Errorf("actor is CRASHED because it was suspending a paused snapshot with no node recorded")
 	}
 	if actorTemplate.GetMacVm() != nil {
-		worker, err := w.store.GetWorker(ctx, local.GetNodeVmsWithLocalSnapshots()[0])
+		worker, err := w.store.GetWorker(ctx, nodeName)
 		if err != nil {
 			return "", fmt.Errorf("while finding Mac Worker holding local snapshot: %w", err)
 		}
@@ -313,12 +294,12 @@ func (w *ActorWorkflow) ensurePausedSnapshotUploaded(ctx context.Context, actorR
 		return ateattr.SnapshotScopeDisk, nil
 	}
 
-	ateletConn, err := w.dialer.DialForAteletOnNode(local.GetNodeVmsWithLocalSnapshots()[0])
+	ateletConn, err := w.dialer.DialForAteletOnNode(nodeName)
 	if err != nil {
 		// No atelet on the node is indistinguishable from an atelet restart or
 		// informer lag, and the snapshot bytes may still be on its disk: stay
 		// retryable rather than crash.
-		return "", fmt.Errorf("while getting atelet conn for node %q: %w", local.GetNodeVmsWithLocalSnapshots()[0], err)
+		return "", fmt.Errorf("while getting atelet conn for node %q: %w", nodeName, err)
 	}
 	client := ateletpb.NewAteomHerderClient(ateletConn)
 
@@ -362,7 +343,7 @@ func (w *ActorWorkflow) ensureVolumesDetached(ctx context.Context, actor *ateapi
 	ctx, done := stepSpan(ctx, spanName)
 	defer func() { err = done(err) }()
 
-	return detachActorVolumes(ctx, w.store, w.pluginRegistry, actor, actorTemplate, op)
+	return detachActorVolumes(ctx, w.pluginRegistry, actor, actorTemplate, op)
 }
 
 // ensureSuspendedFinalized releases the actor's worker (only when it is still
@@ -444,6 +425,7 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 		}
 		toUpdate.Status.WorkerAssignment = nil
 		toUpdate.Status.LocalSnapshot = nil
+		toUpdate.Status.AssignedNode = ""
 		return nil
 	})
 	dUpdateActor = time.Since(t)

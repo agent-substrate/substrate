@@ -118,6 +118,12 @@ func connectRoutes(t *testing.T, raw string) []envoyRoute {
 // envoyConfig is the envoy.yaml the atenet-egress ConfigMap in path ships.
 func envoyConfig(t *testing.T, path string) string {
 	t.Helper()
+	return envoyConfigFrom(t, path, "atenet-egress")
+}
+
+// envoyConfigFrom is the envoy.yaml the ConfigMap named configMap in path ships.
+func envoyConfigFrom(t *testing.T, path, configMap string) string {
+	t.Helper()
 	manifest, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("reading %s: %v", path, err)
@@ -133,15 +139,15 @@ func envoyConfig(t *testing.T, path string) string {
 		if err := yaml.Unmarshal([]byte(doc), &obj); err != nil {
 			t.Fatalf("parsing a document of %s: %v", path, err)
 		}
-		if obj.Kind != "ConfigMap" || obj.Metadata.Name != "atenet-egress" {
+		if obj.Kind != "ConfigMap" || obj.Metadata.Name != configMap {
 			continue
 		}
 		envoyYaml, ok := obj.Data["envoy.yaml"]
 		if !ok {
-			t.Fatalf("the atenet-egress ConfigMap in %s has no envoy.yaml key", path)
+			t.Fatalf("the %s ConfigMap in %s has no envoy.yaml key", configMap, path)
 		}
 		return envoyYaml
 	}
-	t.Fatalf("%s has no ConfigMap named atenet-egress", path)
+	t.Fatalf("%s has no ConfigMap named %s", path, configMap)
 	return ""
 }

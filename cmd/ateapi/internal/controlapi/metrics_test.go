@@ -365,7 +365,7 @@ func TestSchedulerAssignmentShapeAndOutcomes(t *testing.T) {
 			outcome:  ateattr.SchedulerOutcomeNoCapacity,
 			pool:     "",
 			class:    "gvisor",
-			err:      apierror.FailedPrecondition("no free workers available"),
+			err:      apierror.FailedPrecondition("no worker has room for the actor"),
 			wantKeys: []attribute.Key{ateattr.SchedulerOutcomeKey, ateattr.SandboxClassKey},
 		},
 		{

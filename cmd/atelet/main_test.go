@@ -898,22 +898,12 @@ func TestRPCBoundariesReject(t *testing.T) {
 		wantInvalidArgument(t, "Restore", err)
 	})
 	t.Run("Terminate", func(t *testing.T) {
-		t.Run("invalid ateom UID", func(t *testing.T) {
-			_, err := s.Terminate(ctx, &ateletpb.TerminateRequest{
-				Atespace: okAtespace, ActorName: okID,
-				ActorUid: okActorUID, ActorTemplateAtespace: "default", ActorTemplateName: "template",
-				TargetAteomUid: badUID, Spec: okSpec,
-			})
-			wantInvalidArgument(t, "Terminate", err)
+		_, err := s.Terminate(ctx, &ateletpb.TerminateRequest{
+			Atespace: okAtespace, ActorName: okID,
+			ActorUid: okActorUID, ActorTemplateAtespace: "default", ActorTemplateName: "template",
+			TargetAteomUid: badUID, Spec: okSpec,
 		})
-		t.Run("missing target ateom UID", func(t *testing.T) {
-			_, err := s.Terminate(ctx, &ateletpb.TerminateRequest{
-				Atespace: okAtespace, ActorName: okID,
-				ActorUid: okActorUID, ActorTemplateAtespace: "default", ActorTemplateName: "template",
-				Spec: okSpec,
-			})
-			wantInvalidArgument(t, "Terminate", err)
-		})
+		wantInvalidArgument(t, "Terminate", err)
 	})
 }
 

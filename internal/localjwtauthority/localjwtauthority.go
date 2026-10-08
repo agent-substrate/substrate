@@ -31,7 +31,6 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/actoridjwt"
-	"github.com/agent-substrate/substrate/internal/oidcdiscovery"
 )
 
 // Pool is the interface for a JWT signing pool.
@@ -56,6 +55,7 @@ type Pool interface {
 
 type VerificationKey struct {
 	KeyID     string
+	Algorithm string
 	PublicKey crypto.PublicKey
 }
 
@@ -181,6 +181,7 @@ func (p *ConcretePool) VerificationKeys() ([]*VerificationKey, error) {
 	for _, authority := range p.Authorities {
 		vk := &VerificationKey{
 			KeyID:     authority.ID,
+			Algorithm: authority.Algorithm,
 			PublicKey: authority.SigningKey.Public(),
 		}
 		keys = append(keys, vk)
@@ -338,8 +339,7 @@ func Unmarshal(wireBytes []byte) (*ConcretePool, error) {
 }
 
 // GenerateAuthority generates a JWT signing key for algorithm, which must be
-// RS256 or ES256. An empty id defaults to the RFC 7638 thumbprint of the
-// public key.
+// RS256 or ES256. An empty id defaults to the Thumbprint of the public key.
 func GenerateAuthority(algorithm, id string) (*Authority, error) {
 	var key crypto.Signer
 	var err error
@@ -355,7 +355,7 @@ func GenerateAuthority(algorithm, id string) (*Authority, error) {
 		return nil, fmt.Errorf("while generating key: %w", err)
 	}
 	if id == "" {
-		id, err = oidcdiscovery.Thumbprint(key.Public())
+		id, err = Thumbprint(key.Public())
 		if err != nil {
 			return nil, fmt.Errorf("while computing key thumbprint: %w", err)
 		}

@@ -331,7 +331,7 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := workloadSpecFromActorTemplate(tt.template, nil)
+			got, err := workloadSpecFromActorTemplate(tt.template, nil, nil)
 			if err != nil {
 				t.Fatalf("workloadSpecFromActorTemplate failed: %v", err)
 			}
@@ -345,7 +345,7 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 func TestWorkloadSpecFromActorTemplateRejectsMacActor(t *testing.T) {
 	_, err := workloadSpecFromActorTemplate(&ateapipb.ActorTemplate{
 		MacVm: &ateapipb.MacVMWorkload{Image: "example.com/macos/xcode@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
-	}, nil)
+	}, nil, nil)
 	if err == nil {
 		t.Fatal("workloadSpecFromActorTemplate accepted a Mac Actor")
 	}
@@ -368,7 +368,7 @@ func TestWorkloadSpecFromActorTemplatePropagatesWakeupProbe(t *testing.T) {
 				Image: "side",
 			},
 		},
-	}, nil)
+	}, nil, nil)
 	if err != nil {
 		t.Fatalf("workloadSpecFromActorTemplate failed: %v", err)
 	}
@@ -441,28 +441,46 @@ func TestAppendExternalVolumes(t *testing.T) {
 		},
 	}
 
-	workloadSpec := &ateletpb.WorkloadSpec{}
-	if err := appendExternalVolumes(workloadSpec, template, actor); err != nil {
-		t.Fatalf("appendExternalVolumes unexpected error: %v", err)
-	}
+	for _, tt := range []struct {
+		name                  string
+		volumePublishContexts map[string]map[string]string
+		wantPublishCtx        map[string]string
+	}{
+		{
+			name:                  "with attachment metadata",
+			volumePublishContexts: map[string]map[string]string{"vol-1": {"devicePath": "/dev/xvdba"}},
+			wantPublishCtx:        map[string]string{"devicePath": "/dev/xvdba"},
+		},
+		{
+			name: "without attachment metadata",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			workloadSpec := &ateletpb.WorkloadSpec{}
+			if err := appendExternalVolumes(workloadSpec, template, actor, tt.volumePublishContexts); err != nil {
+				t.Fatalf("appendExternalVolumes unexpected error: %v", err)
+			}
 
-	want := &ateletpb.WorkloadSpec{
-		Volumes: []*ateletpb.Volume{
-			{
-				Name: "vol-1",
-				Source: &ateletpb.Volume_External{
-					External: &ateletpb.ExternalVolumeSource{
-						StorageVolumeId: "vol-gce-pd-123",
-						VolumeType:      "pd-standard",
-						VolumeContext:   map[string]string{"foo": "bar"},
+			want := &ateletpb.WorkloadSpec{
+				Volumes: []*ateletpb.Volume{
+					{
+						Name: "vol-1",
+						Source: &ateletpb.Volume_External{
+							External: &ateletpb.ExternalVolumeSource{
+								StorageVolumeId: "vol-gce-pd-123",
+								VolumeType:      "pd-standard",
+								VolumeContext:   map[string]string{"foo": "bar"},
+								PublishContext:  tt.wantPublishCtx,
+							},
+						},
 					},
 				},
-			},
-		},
-	}
+			}
 
-	if diff := cmp.Diff(want, workloadSpec, protocmp.Transform()); diff != "" {
-		t.Errorf("appendExternalVolumes mismatch (-want +got):\n%s", diff)
+			if diff := cmp.Diff(want, workloadSpec, protocmp.Transform()); diff != "" {
+				t.Errorf("appendExternalVolumes mismatch (-want +got):\n%s", diff)
+			}
+		})
 	}
 
 	// Test missing mounted volume returns an error
@@ -473,7 +491,7 @@ func TestAppendExternalVolumes(t *testing.T) {
 		},
 		Status: &ateapipb.ActorStatus{ActorVolumes: []*ateapipb.ExternalVolume{}},
 	}
-	if err := appendExternalVolumes(&ateletpb.WorkloadSpec{}, template, missingActor); err == nil {
+	if err := appendExternalVolumes(&ateletpb.WorkloadSpec{}, template, missingActor, nil); err == nil {
 		t.Errorf("appendExternalVolumes expected error for missing volume, got nil")
 	}
 }
@@ -504,7 +522,7 @@ func TestWorkloadSpecFromActorTemplatePropagatesSecurityContext(t *testing.T) {
 				SecurityContext: &ateapipb.SecurityContext{Capabilities: &ateapipb.Capabilities{}},
 			},
 		},
-	}, nil)
+	}, nil, nil)
 	if err != nil {
 		t.Fatalf("workloadSpecFromActorTemplate failed: %v", err)
 	}
@@ -621,7 +639,7 @@ func TestWorkloadSpecFromActorTemplatePropagatesResources(t *testing.T) {
 			},
 			{Name: "unlimited", Image: "main"},
 		},
-	}, nil)
+	}, nil, nil)
 	if err != nil {
 		t.Fatalf("workloadSpecFromActorTemplate failed: %v", err)
 	}

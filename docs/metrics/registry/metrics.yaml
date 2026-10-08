@@ -463,8 +463,10 @@ groups:
               value: no_capacity
               brief: >
                 No worker that meets the constraints of the actor had room. It
-                shows the pressure at the request edge. The scheduler reports
-                the same condition as no_capacity on
+                shows the pressure at the request edge. The router also reports
+                this outcome when it sheds a request from a full parking lot
+                after its resume failed with ResourceExhausted. The scheduler
+                reports the same condition as no_capacity on
                 ate.scheduler.assignment.duration.
             - id: failed_precondition
               stability: development
@@ -483,8 +485,9 @@ groups:
               value: unavailable
               brief: >
                 The request got an Unavailable status, or a 503 without a gRPC
-                cause. For example, a full parking lot, a denied egress
-                request, or a failed policy or credential lookup.
+                cause. For example, a denied egress request, a failed policy or
+                credential lookup, or a full parking lot when the resume did not
+                fail with ResourceExhausted.
             - id: rate_limited
               stability: development
               value: rate_limited
@@ -1192,16 +1195,20 @@ groups:
     stability: development
     brief: The number of requests that the router refused because the parking area was full.
     note: >
-      This instrument has no labels. A rate above zero means that the router
-      sheds load. The router fails a request quickly instead of a queue with no
-      limit.
+      A rate above zero means that the router sheds load. The router fails a
+      request quickly instead of a queue with no limit. The outcome label is the
+      route outcome of the shed request: no_capacity when its resume failed with
+      ResourceExhausted, and unavailable otherwise. It has only these two
+      values.
     annotations:
       substrate:
         emitted_by: [atenet-router]
         golden_signals: [errors, saturation]
         code_anchor: cmd/atenet/internal/router/ingress/metrics.go
         cuj: Does Substrate refuse requests at the edge?
-    attributes: []
+    attributes:
+      - ref: ate.router.outcome
+        requirement_level: required
 
   # ---------------------------------------------------------------------------
   # Metrics. Upstream instrumentation

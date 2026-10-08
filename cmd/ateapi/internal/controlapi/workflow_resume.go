@@ -28,6 +28,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
+	"github.com/agent-substrate/substrate/internal/volume"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/agent-substrate/substrate/pkg/proto/hostruntimepb"
 	"google.golang.org/protobuf/proto"
@@ -118,10 +119,11 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 		return nil, false, err
 	}
 	actor = assigned
-	if err = w.ensureVolumesAttached(leaseCtx, actor, worker, actorTemplate); err != nil {
+	volumePublishContexts, err := w.ensureVolumesAttached(leaseCtx, actor, worker, actorTemplate)
+	if err != nil {
 		return nil, false, err
 	}
-	if tele, err = w.ensureRuntimeRestored(leaseCtx, actorRef, actor, actorTemplate, src); err != nil {
+	if tele, err = w.ensureRuntimeRestored(leaseCtx, actorRef, actor, actorTemplate, volumePublishContexts, src); err != nil {
 		return nil, false, err
 	}
 	var running *ateapipb.Actor
@@ -453,7 +455,7 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 		if err != nil {
 			if errors.Is(err, scheduling.ErrNoCapacity) {
 				outcome = ateattr.SchedulerOutcomeNoCapacity
-				return nil, nil, apierror.ResourceExhausted("no free workers available")
+				return nil, nil, apierror.ResourceExhausted("no worker has room for the actor")
 			}
 			return nil, nil, err
 		}
@@ -498,6 +500,7 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_RESUMING
 		toUpdate.Status.WorkerAssignment = newAssignment
+		toUpdate.Status.AssignedNode = newAssignment.GetNodeName()
 		return nil
 	})
 	if err != nil {
@@ -535,6 +538,7 @@ func workerAssignmentFrom(w *ateapipb.Worker) *ateapipb.WorkerAssignment {
 		return &ateapipb.WorkerAssignment{
 			Worker:          &ateapipb.ObjectRef{Name: w.GetMetadata().GetName()},
 			WorkerEpoch:     w.GetEpoch(),
+			NodeName:        w.GetMetadata().GetName(),
 			RuntimeEndpoint: external.GetRuntimeEndpoint(),
 		}
 	}
@@ -576,10 +580,14 @@ func schedulingConstraints(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate) 
 	if err != nil {
 		return scheduling.Constraints{}, fmt.Errorf("invalid template resource limits: %w", err)
 	}
+	var requiredNodes []string
+	if node := actor.GetStatus().GetAssignedNode(); node != "" {
+		requiredNodes = []string{node}
+	}
 	c := scheduling.Constraints{
 		SandboxClass:  sandboxClassString(tmpl.GetSandboxConfig().GetSandboxClass()),
 		ActorSelector: labels.SelectorFromSet(labels.Set(actor.GetWorkerSelector().GetMatchLabels())),
-		RequiredNodes: actor.GetStatus().GetLocalSnapshot().GetNodeVmsWithLocalSnapshots(),
+		RequiredNodes: requiredNodes,
 		Limits:        limits.Proto(),
 	}
 	if sel := tmpl.GetWorkerSelector(); sel != nil {
@@ -594,11 +602,11 @@ func schedulingConstraints(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate) 
 	return c, nil
 }
 
-func (w *ActorWorkflow) ensureRuntimeRestored(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate, src resumeSnapshotSource) (restoreTelemetry, error) {
+func (w *ActorWorkflow) ensureRuntimeRestored(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate, volumePublishContexts map[string]map[string]string, src resumeSnapshotSource) (restoreTelemetry, error) {
 	if actorTemplate.GetMacVm() != nil {
 		return w.ensureMacActivated(ctx, actorRef, actor, actorTemplate, src)
 	}
-	return w.ensureAteletRestored(ctx, actorRef, actor, actorTemplate, src)
+	return w.ensureAteletRestored(ctx, actorRef, actor, actorTemplate, volumePublishContexts, src)
 }
 
 func (w *ActorWorkflow) ensureMacActivated(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate, src resumeSnapshotSource) (tele restoreTelemetry, err error) {
@@ -684,35 +692,41 @@ func (w *ActorWorkflow) ensureMacActivated(ctx context.Context, actorRef resourc
 }
 
 // ensureVolumesAttached attaches the actor's mounted external volumes to the
-// assigned worker's node. Attachment is idempotent, so a re-entered workflow
-// safely runs it again.
+// assigned worker's node and returns each driver's attachment metadata by
+// volume name, for the Restore call that follows. Attachment is idempotent, so
+// a re-entered workflow safely runs it again.
 // TODO replace re-execution with a proper check on the volumes' attach state.
-func (w *ActorWorkflow) ensureVolumesAttached(ctx context.Context, actor *ateapipb.Actor, worker *ateapipb.Worker, actorTemplate *ateapipb.ActorTemplate) (err error) {
+func (w *ActorWorkflow) ensureVolumesAttached(ctx context.Context, actor *ateapipb.Actor, worker *ateapipb.Worker, actorTemplate *ateapipb.ActorTemplate) (_ map[string]map[string]string, err error) {
 	ctx, done := stepSpan(ctx, "AttachVolumes")
 	defer func() { err = done(err) }()
 	if actorTemplate.GetMacVm() != nil {
 		// Mac durable volumes are portable network filesystems. The external
 		// HostRuntime stages them on the selected Mac; CSI node attachment is a
 		// Kubernetes-node operation and does not apply to external Workers.
-		return nil
+		return nil, nil
 	}
 
 	node := worker.GetNodeName()
 	ref := &ateapipb.ObjectRef{Atespace: actor.GetMetadata().GetAtespace(), Name: actor.GetMetadata().GetName()}
+	volumePublishContexts := make(map[string]map[string]string)
 	for _, vol := range getMountedActorVolumes(ctx, ref, actor.GetStatus().GetActorVolumes(), actorTemplate) {
 		if node == "" {
-			return fmt.Errorf("assigned worker has no node name")
+			return nil, fmt.Errorf("assigned worker has no node name")
 		}
 		slog.InfoContext(ctx, "Attaching volume to node", slog.String("volume_id", vol.GetStorageVolumeId()), slog.String("node", node))
 		plugin, err := w.pluginRegistry.GetPlugin(ctx, vol.GetVolumeType())
 		if err != nil {
-			return fmt.Errorf("failed to get volume plugin for %q: %w", vol.GetVolumeType(), err)
+			return nil, fmt.Errorf("failed to get volume plugin for %q: %w", vol.GetVolumeType(), err)
 		}
-		if err := plugin.AttachVolume(ctx, vol.GetStorageVolumeId(), node); err != nil {
-			return fmt.Errorf("failed to attach volume %q to node %q: %w", vol.GetStorageVolumeId(), node, err)
+		resp, err := plugin.AttachVolume(ctx, volume.AttachVolumeRequest{VolumeID: vol.GetStorageVolumeId(), Node: node})
+		if err != nil {
+			return nil, fmt.Errorf("failed to attach volume %q to node %q: %w", vol.GetStorageVolumeId(), node, err)
+		}
+		if len(resp.PublishContext) > 0 {
+			volumePublishContexts[vol.GetVolumeName()] = resp.PublishContext
 		}
 	}
-	return nil
+	return volumePublishContexts, nil
 }
 
 // ensureAteletRestored brings the workload up on the assigned worker:
@@ -722,7 +736,7 @@ func (w *ActorWorkflow) ensureVolumesAttached(ctx context.Context, actor *ateapi
 // the worker pod UID, so a re-entered workflow re-sends the same semantic
 // request; once atelet's Restore/Run are idempotent on those keys this step
 // becomes fully reentrant with no changes here.
-func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate, src resumeSnapshotSource) (tele restoreTelemetry, err error) {
+func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate, volumePublishContexts map[string]map[string]string, src resumeSnapshotSource) (tele restoreTelemetry, err error) {
 	ctx, done := stepSpan(ctx, "CallAteletRestore")
 	defer func() { err = done(err) }()
 
@@ -733,7 +747,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 	}
 	client := ateletpb.NewAteomHerderClient(ateletConn)
 
-	workloadSpec, err := workloadSpecFromActorTemplate(actorTemplate, actor)
+	workloadSpec, err := workloadSpecFromActorTemplate(actorTemplate, actor, volumePublishContexts)
 	if err != nil {
 		return tele, err
 	}
@@ -774,7 +788,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		req.Config = &ateletpb.RestoreRequest_LocalConfig{
 			LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: local.GetSnapshotName()},
 		}
-		req.Scope = actorSnapshotContentScopeToAtelet(actorTemplate.GetSnapshotConfig().GetOnPause())
+		req.Scope = actorSnapshotContentScopeToAtelet(local.GetContentScope())
 		tele.WireSnapshotScope = ateattr.SnapshotScopeValue(req.Scope)
 
 		if _, err = client.Restore(ctx, req); err != nil {

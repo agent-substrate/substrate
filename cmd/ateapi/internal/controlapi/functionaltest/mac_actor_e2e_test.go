@@ -95,7 +95,7 @@ func TestMacActorE2E(t *testing.T) {
 	if _, err := tc.client.CreateActorTemplate(context.Background(), &ateapipb.CreateActorTemplateRequest{ActorTemplate: &ateapipb.ActorTemplate{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: templateName},
 		SnapshotConfig: &ateapipb.SnapshotConfig{
-			OnPause: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DISK, OnCommit: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DISK,
+			OnCommit:        ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DISK,
 			StorageLocation: testStorageLocation,
 		},
 		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_MACOS, ConfigName: sandboxConfigName},
@@ -152,7 +152,7 @@ func TestMacActorE2E(t *testing.T) {
 		t.Fatalf("state after pause = %v, want PAUSED", paused.GetActor().GetStatus().GetState())
 	}
 	local := paused.GetActor().GetStatus().GetLocalSnapshot()
-	if local.GetSnapshotName() == "" || len(local.GetNodeVmsWithLocalSnapshots()) != 1 || local.GetNodeVmsWithLocalSnapshots()[0] != workerName {
+	if local.GetSnapshotName() == "" || paused.GetActor().GetStatus().GetAssignedNode() != workerName {
 		t.Fatalf("local Mac snapshot = %v, want snapshot pinned to %q", local, workerName)
 	}
 	if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: actorName}}); err != nil {

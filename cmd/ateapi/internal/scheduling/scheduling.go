@@ -58,14 +58,15 @@ type Preference struct {
 	Weight   int32
 }
 
-// ErrNoCapacity is returned by Schedule when no free worker satisfies the
-// constraints.
-var ErrNoCapacity = errors.New("no free workers satisfy the constraints")
+// ErrNoCapacity is returned by Schedule when no worker that meets the
+// constraints has room. The cause can be full workers, or no worker that meets
+// the constraints at all.
+var ErrNoCapacity = errors.New("no worker that meets the constraints has room")
 
 // Scheduler answers placement questions against the current worker fleet.
 type Scheduler interface {
-	// Schedule returns a free worker satisfying constraints.
-	// Returns ErrNoCapacity when no free worker satisfies the requested constraints.
+	// Schedule returns a worker that meets constraints and has room.
+	// Returns ErrNoCapacity when no worker that meets constraints has room.
 	Schedule(ctx context.Context, constraints Constraints) (*ateapipb.Worker, error)
 
 	// Applies reports whether worker satisfies non-capacity constraints. Capacity

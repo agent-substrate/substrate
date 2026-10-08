@@ -276,7 +276,7 @@ func TestEnsureVolumesAttachedAllowsExternalWorkerWithoutVolumes(t *testing.T) {
 		ExternalHost: &ateapipb.ExternalWorkerHost{RuntimeEndpoint: "dns:///mac-worker-1.example:9443"},
 	}
 
-	if err := w.ensureVolumesAttached(context.Background(), actor, worker, &ateapipb.ActorTemplate{}); err != nil {
+	if _, err := w.ensureVolumesAttached(context.Background(), actor, worker, &ateapipb.ActorTemplate{MacVm: &ateapipb.MacVMWorkload{}}); err != nil {
 		t.Fatalf("ensureVolumesAttached: %v", err)
 	}
 }

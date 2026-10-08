@@ -40,10 +40,9 @@ type probeConfig struct{ trustBundle bool }
 // WithTrustBundle projects the egress trust bundle into the probe's
 // system-info volume, ensuring the cluster-scoped bundle exists first.
 //
-// Only suites that ASSERT the projection ask for it. The bundle is derived
-// from a single cluster-wide Secret, so a suite that merely needs a probe must
-// not depend on it: it would then fail whenever the suite that owns the pool
-// finishes and takes the bundle with it.
+// Only suites that test the bundle should ask for it. An actor whose template
+// includes the bundle won't start if the bundle is missing, so a suite that
+// just needs a probe shouldn't depend on it.
 func WithTrustBundle() ProbeOption { return func(c *probeConfig) { c.trustBundle = true } }
 
 // DeployProbe builds the probe fixture image and installs the fixture for the

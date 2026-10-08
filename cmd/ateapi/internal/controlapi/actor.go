@@ -172,7 +172,7 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 func (s *ServiceImpl) resolveTagSource(ctx context.Context, actorAtespace string, tagRef *ateapipb.ObjectRef, template *ateapipb.ActorTemplate) (*ateapipb.Tag, error) {
 	tag, err := s.store.GetTag(ctx, resources.TagRefFromObjectRef(tagRef))
 	if errors.Is(err, store.ErrNotFound) {
-		return nil, apierror.NotFound("Tag not found")
+		return nil, apierror.FailedPrecondition("Tag not found")
 	}
 	if err != nil {
 		return nil, fmt.Errorf("while getting tag: %w", err)

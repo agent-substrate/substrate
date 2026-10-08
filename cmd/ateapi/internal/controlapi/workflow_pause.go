@@ -188,7 +188,7 @@ func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resourc
 	}
 	client := ateletpb.NewAteomHerderClient(ateletConn)
 
-	workloadSpec, err := workloadSpecFromActorTemplate(actorTemplate, actor)
+	workloadSpec, err := workloadSpecFromActorTemplate(actorTemplate, actor, nil)
 	if err != nil {
 		return "", err
 	}
@@ -209,7 +209,7 @@ func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resourc
 				SnapshotName: actor.GetStatus().GetInProgressLocalSnapshotName(),
 			},
 		},
-		Scope:    actorSnapshotContentScopeToAtelet(actorTemplate.GetSnapshotConfig().GetOnPause()),
+		Scope:    actorSnapshotContentScopeToAtelet(actorTemplate.GetSnapshotConfig().GetOnCommit()),
 		ActorUid: actor.GetMetadata().Uid,
 	}
 	wireSnapshotScope = ateattr.SnapshotScopeValue(req.Scope)
@@ -239,18 +239,12 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 	// 1. Free the worker (if it hasn't been freed yet)
 	if assignment := latestActor.GetStatus().GetWorkerAssignment(); assignment != nil {
 		worker, err := w.store.GetWorker(ctx, assignment.GetWorker().GetName())
-		nodeName := ""
 		if err != nil {
 			if !errors.Is(err, store.ErrNotFound) {
 				return nil, fmt.Errorf("while getting worker for release: %w", err)
 			}
 			slog.Warn("Worker already gone during finalize pause, skipping release", "worker", assignment.GetWorkerPod())
 		} else {
-			if worker.GetExternalHost() != nil {
-				nodeName = worker.GetMetadata().GetName()
-			} else {
-				nodeName = worker.GetNodeName()
-			}
 			// Drop just this actor's assignment; any other actors the worker
 			// hosts keep theirs.
 			_, err := w.store.ReleaseActorFromWorker(ctx, worker.GetMetadata().GetName(), latestActor.GetMetadata().GetUid())
@@ -270,7 +264,7 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 		wasAlreadyCrashed := latestActor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_CRASHED
 		newState := ateapipb.ActorState_ACTOR_STATE_PAUSED
 		var crashStatus *ateapipb.ActorCrash
-		if nodeName == "" {
+		if latestActor.GetStatus().GetAssignedNode() == "" {
 			// Without a node name we cannot record where the local snapshot lives,
 			// so the actor can never be resumed (the scheduler would search for a
 			// worker on an unknown node forever). Crash it instead of leaving it
@@ -280,7 +274,7 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 			newState = ateapipb.ActorState_ACTOR_STATE_CRASHED
 			crashStatus = newActorCrash(ateattr.OperationPause, crashMessageLocalSnapshotNodeUnknown)
 		}
-		contentScope := actorTemplate.GetSnapshotConfig().GetOnPause()
+		contentScope := actorTemplate.GetSnapshotConfig().GetOnCommit()
 		sandboxClass := ""
 		if worker != nil {
 			sandboxClass = worker.GetSandboxClass()
@@ -299,9 +293,6 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 				localSnapshot := &ateapipb.LocalSnapshot{
 					SnapshotName: toUpdate.GetStatus().GetInProgressLocalSnapshotName(),
 					ContentScope: contentScope,
-				}
-				if newState != ateapipb.ActorState_ACTOR_STATE_CRASHED {
-					localSnapshot.NodeVmsWithLocalSnapshots = []string{nodeName}
 				}
 				toUpdate.Status.LocalSnapshot = localSnapshot
 				toUpdate.Status.InProgressLocalSnapshotName = ""

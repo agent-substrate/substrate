@@ -56,7 +56,7 @@ message FetchSnapshotRequest {
   // The JWT of the actor that owns the snapshot, for plugins that authorize
   // storage access per actor. Substrate does not set it yet, so it is
   // currently always empty.
-  string actor_jwt = 2;
+  string actor_jwt = 2 [ debug_redact = true ];
 
   // Full local path of the directory the files are written into. It must
   // exist.
@@ -76,7 +76,7 @@ message UploadSnapshotRequest {
   // The JWT of the actor that owns the snapshot, for plugins that authorize
   // storage access per actor. Substrate does not set it yet, so it is
   // currently always empty.
-  string actor_jwt = 2;
+  string actor_jwt = 2 [ debug_redact = true ];
 
   // Full local path of the directory the files are read from.
   string local_path = 3;

@@ -42,7 +42,7 @@ func TestRecordRoundTripsThroughConfig(t *testing.T) {
 	})
 
 	dir := t.TempDir()
-	path, _, err := RecordSuccess(dir, "prod", r)
+	path, _, err := RecordSuccess(dir, "prod", "", r)
 	if err != nil {
 		t.Fatalf("RecordSuccess() error = %v", err)
 	}
@@ -77,7 +77,7 @@ func TestRecordRoundTripsAnEmptyFlag(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
-	path, _, err := RecordSuccess(t.TempDir(), "prod", r)
+	path, _, err := RecordSuccess(t.TempDir(), "prod", "", r)
 	if err != nil {
 		t.Fatalf("RecordSuccess() error = %v", err)
 	}
@@ -114,7 +114,7 @@ func TestRecordCanClearAStringThatHasADefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
-	path, _, err := RecordSuccess(t.TempDir(), "prod", r)
+	path, _, err := RecordSuccess(t.TempDir(), "prod", "", r)
 	if err != nil {
 		t.Fatalf("RecordSuccess() error = %v", err)
 	}
@@ -141,7 +141,7 @@ func TestRecordOmitsSettingsNobodySupplied(t *testing.T) {
 	r := resolvedWith(t, map[string]string{"FIXTURE_NAME": "a-name"})
 
 	dir := t.TempDir()
-	path, _, err := RecordSuccess(dir, "prod", r)
+	path, _, err := RecordSuccess(dir, "prod", "", r)
 	if err != nil {
 		t.Fatalf("RecordSuccess() error = %v", err)
 	}
@@ -174,7 +174,7 @@ func TestRecordNeverWritesASecret(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	path, omitted, err := RecordSuccess(dir, "prod", resolvedWith(t, env))
+	path, omitted, err := RecordSuccess(dir, "prod", "", resolvedWith(t, env))
 	if err != nil {
 		t.Fatalf("RecordSuccess() error = %v", err)
 	}
@@ -199,7 +199,7 @@ func TestSuccessReplacesAndFailureAccumulates(t *testing.T) {
 	dir := t.TempDir()
 
 	for range 2 {
-		if _, _, err := RecordSuccess(dir, "prod", r); err != nil {
+		if _, _, err := RecordSuccess(dir, "prod", "", r); err != nil {
 			t.Fatalf("RecordSuccess() error = %v", err)
 		}
 	}
@@ -207,11 +207,11 @@ func TestSuccessReplacesAndFailureAccumulates(t *testing.T) {
 		t.Errorf("%d success records, want 1 -- the second must replace the first", got)
 	}
 
-	first, _, err := RecordFailure(dir, "prod", r, "ate-setup deploy atenet")
+	first, _, err := RecordFailure(dir, "prod", "", r, "ate-setup deploy atenet")
 	if err != nil {
 		t.Fatalf("RecordFailure() error = %v", err)
 	}
-	second, _, err := RecordFailure(dir, "prod", r, "ate-setup deploy atenet")
+	second, _, err := RecordFailure(dir, "prod", "", r, "ate-setup deploy atenet")
 	if err != nil {
 		t.Fatalf("RecordFailure() error = %v", err)
 	}
@@ -248,7 +248,7 @@ func TestRecordNameIsPathSafe(t *testing.T) {
 
 func TestRecordFileIsNotWorldReadable(t *testing.T) {
 	dir := t.TempDir()
-	path, _, err := RecordSuccess(dir, "prod", resolvedWith(t, map[string]string{"FIXTURE_NAME": "x"}))
+	path, _, err := RecordSuccess(dir, "prod", "", resolvedWith(t, map[string]string{"FIXTURE_NAME": "x"}))
 	if err != nil {
 		t.Fatalf("RecordSuccess() error = %v", err)
 	}
@@ -266,7 +266,7 @@ func TestRecordFileIsNotWorldReadable(t *testing.T) {
 func TestRecordLeavesNoTemporaryFiles(t *testing.T) {
 	dir := t.TempDir()
 	r := resolvedWith(t, map[string]string{"FIXTURE_NAME": "x"})
-	if _, _, err := RecordSuccess(dir, "prod", r); err != nil {
+	if _, _, err := RecordSuccess(dir, "prod", "", r); err != nil {
 		t.Fatalf("RecordSuccess() error = %v", err)
 	}
 	if got := countFiles(t, filepath.Join(dir, installsDir)); got != 1 {
@@ -305,4 +305,68 @@ func countFiles(t *testing.T, dir string) int {
 		t.Fatalf("ReadDir(%s): %v", dir, err)
 	}
 	return len(entries)
+}
+
+// kubeconfigFixture names one context, so a test can assert which cluster was
+// found without depending on the developer's own kubeconfig.
+const kubeconfigFixture = `apiVersion: v1
+kind: Config
+current-context: prod-cluster
+clusters:
+- {name: c, cluster: {server: "https://127.0.0.1:1"}}
+contexts:
+- {name: prod-cluster, context: {cluster: c, user: u}}
+users:
+- {name: u, user: {}}
+`
+
+func writeKubeconfig(t *testing.T, name string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(path, []byte(kubeconfigFixture), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	return path
+}
+
+// An unset kubeconfig setting is not the empty path. It leaves client-go's
+// default rules in place, which find the file the way kubectl does -- and the
+// cluster still has to be named, or every install that does not set
+// --kubeconfig shares one record.
+func TestClusterKeyUsesTheDefaultKubeconfigRules(t *testing.T) {
+	t.Setenv("KUBECONFIG", writeKubeconfig(t, "config"))
+
+	// Env is empty, so nothing supplies the kubeconfig setting and ClusterKey
+	// takes the branch that configures no path of its own.
+	r := resolvedWith(t, nil)
+	if got := r.String("kubeconfig"); got != "" {
+		t.Fatalf("kubeconfig = %q, want it unset for this case", got)
+	}
+	if got := r.ClusterKey(); got != "prod-cluster" {
+		t.Errorf("ClusterKey() = %q, want %q", got, "prod-cluster")
+	}
+}
+
+// $KUBECONFIG holding several files is a precedence chain, not a path.
+// Handing the whole string to client-go as one file would find nothing and
+// leave the record unnamed.
+func TestClusterKeyReadsAKubeconfigList(t *testing.T) {
+	list := strings.Join([]string{
+		filepath.Join(t.TempDir(), "missing"),
+		writeKubeconfig(t, "second"),
+	}, string(os.PathListSeparator))
+
+	r := resolvedWith(t, map[string]string{"KUBECONFIG": list})
+	if got := r.ClusterKey(); got != "prod-cluster" {
+		t.Errorf("ClusterKey() = %q, want %q", got, "prod-cluster")
+	}
+}
+
+// A kubeconfig that is named but absent leaves the record unnamed rather than
+// failing a run that otherwise worked.
+func TestClusterKeyIsEmptyWithoutAReadableKubeconfig(t *testing.T) {
+	r := resolvedWith(t, map[string]string{"KUBECONFIG": "/nonexistent/kubeconfig"})
+	if got := r.ClusterKey(); got != "" {
+		t.Errorf("ClusterKey() = %q, want \"\"", got)
+	}
 }

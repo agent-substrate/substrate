@@ -83,14 +83,16 @@ and the port the actor dialed: the `http` rules on the cleartext chain, the
 describes. On the MITM chain the connection's SNI and port must fall under an
 `https` rule first, which is the half of that rule the API evaluates at the
 ClientHello. The answer (`dev.ate.egress:dial`) picks the route, and there is
-only one today: the `Host` that was policed is resolved and dialed by name
-through `dynamic_forward_proxy`, with TLS re-originated to it on the TLS
-leg. There is no route without an answer.
+only one today: the name that was policed, answered as `dev.ate.egress:host`,
+is resolved and dialed through `dynamic_forward_proxy`, with TLS
+re-originated to it on the TLS leg. There is no route without an answer, and
+no by-name route without the name.
 
-The port a rule names is the one the actor dialed, never a port in the
-request's `Host`. The outer chain shares the CONNECT authority with the inner
-listener as `dev.ate.connect.authority`, and the request legs match `ports`
-against it; a dataplane that does not share it gets no port enforcement.
+The port a rule names, and the port the gateway dials, is the one the actor
+dialed, never a port in the request's `Host`. The outer chain shares the
+CONNECT authority with the inner listener as `dev.ate.connect.authority`, and
+the request legs match `ports` against it; a dataplane that does not share it
+gets no port enforcement.
 
 The CONNECT leg decides per connection: it refuses an actor without a policy
 with rules, and for the rest hands the inner listener the port the actor

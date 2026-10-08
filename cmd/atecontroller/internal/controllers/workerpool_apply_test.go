@@ -28,8 +28,9 @@ import (
 	appsv1ac "k8s.io/client-go/applyconfigurations/apps/v1"
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 	metav1ac "k8s.io/client-go/applyconfigurations/meta/v1"
+	"k8s.io/utils/ptr"
 
-	"github.com/agent-substrate/substrate/internal/ateomcapacity"
+	"github.com/agent-substrate/substrate/internal/ateom"
 	"github.com/agent-substrate/substrate/internal/deviceplugin"
 	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/nodepath"
@@ -140,6 +141,15 @@ func TestBuildDeploymentApplyConfig(t *testing.T) {
 			}),
 			want: expectedDeploymentApplyConfig(func(podSpecAC *corev1ac.PodSpecApplyConfiguration) {
 				podSpecAC.WithPriorityClassName("interactive-workerpool")
+			}),
+		},
+		{
+			name: "with service account name",
+			wp: testWorkerPoolApplyConfig(&atev1alpha1.WorkerPoolPodTemplate{
+				ServiceAccountName: ptr.To("substrate-worker"),
+			}),
+			want: expectedDeploymentApplyConfig(func(podSpecAC *corev1ac.PodSpecApplyConfiguration) {
+				podSpecAC.WithServiceAccountName("substrate-worker")
 			}),
 		},
 		{
@@ -771,8 +781,8 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 				WithName(ateomCapacityVolume).
 				WithDownwardAPI(corev1ac.DownwardAPIVolumeSource().
 					WithItems(
-						resourceFieldRefFile(ateomcapacity.CPULimitFile, "limits.cpu", milliCores),
-						resourceFieldRefFile(ateomcapacity.MemoryLimitFile, "limits.memory", wholeBytes),
+						resourceFieldRefFile(ateom.CPULimitFile, "limits.cpu", milliCores),
+						resourceFieldRefFile(ateom.MemoryLimitFile, "limits.memory", wholeBytes),
 					)),
 			corev1ac.Volume().
 				WithName("run-ateom").
@@ -869,7 +879,7 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 			WithVolumeMounts(
 				corev1ac.VolumeMount().
 					WithName(ateomCapacityVolume).
-					WithMountPath(ateomcapacity.CapacityMountPath).
+					WithMountPath(ateom.CapacityMountPath).
 					WithReadOnly(true),
 				corev1ac.VolumeMount().
 					WithName("run-ateom").
@@ -891,6 +901,7 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 		sandboxClassTolerationAC(atev1alpha1.SandboxClassGvisor),
 	}
 	podSpecAC.WithPriorityClassName("")
+	podSpecAC.WithServiceAccountName("default")
 	podSpecAC.WithAffinity(corev1ac.Affinity())
 	podSpecAC.WithTerminationGracePeriodSeconds(workerTerminationGracePeriodSeconds)
 	if mutatePodSpec != nil {

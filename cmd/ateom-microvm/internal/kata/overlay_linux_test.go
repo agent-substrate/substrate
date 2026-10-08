@@ -148,3 +148,42 @@ func TestRemountReadOnlyAndUnmount(t *testing.T) {
 
 	Unmount(dst)
 }
+
+// setNosuidNodev must add both flags to the bind and the mounts beneath it
+// without clearing read-only.
+func TestSetNosuidNodev(t *testing.T) {
+	roottest.Require(t, "mounting requires root")
+
+	src, dst := t.TempDir(), t.TempDir()
+	if err := os.Mkdir(filepath.Join(src, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Mount("tmpfs", filepath.Join(src, "sub"), "tmpfs", 0, ""); err != nil {
+		t.Fatalf("mounting nested tmpfs: %v", err)
+	}
+	t.Cleanup(func() { _ = unix.Unmount(filepath.Join(src, "sub"), unix.MNT_DETACH) })
+	if err := unix.Mount(src, dst, "", unix.MS_BIND|unix.MS_REC, ""); err != nil {
+		t.Fatalf("bind-mounting: %v", err)
+	}
+	t.Cleanup(func() { _ = unix.Unmount(dst, unix.MNT_DETACH) })
+	if err := unix.MountSetattr(unix.AT_FDCWD, dst, 0, &unix.MountAttr{Attr_set: unix.MOUNT_ATTR_RDONLY}); err != nil {
+		t.Fatalf("making bind read-only: %v", err)
+	}
+
+	if err := setNosuidNodev(dst); err != nil {
+		t.Fatalf("setNosuidNodev: %v", err)
+	}
+
+	for path, wantRO := range map[string]bool{dst: true, filepath.Join(dst, "sub"): false} {
+		var st unix.Statfs_t
+		if err := unix.Statfs(path, &st); err != nil {
+			t.Fatalf("statfs %q: %v", path, err)
+		}
+		if st.Flags&unix.ST_NOSUID == 0 || st.Flags&unix.ST_NODEV == 0 {
+			t.Errorf("%q: flags %#x, want nosuid and nodev", path, st.Flags)
+		}
+		if gotRO := st.Flags&unix.ST_RDONLY != 0; gotRO != wantRO {
+			t.Errorf("%q: read-only = %v, want %v", path, gotRO, wantRO)
+		}
+	}
+}

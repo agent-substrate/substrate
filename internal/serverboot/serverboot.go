@@ -79,11 +79,6 @@ func SetLogLevel(level string) error {
 	return nil
 }
 
-// LogLevel exposes the level behind the serverboot loggers, for binaries
-// that build their own handler but should still honor --log-level. A
-// Leveler (not the LevelVar) so SetLogLevel stays the only mutation path.
-func LogLevel() slog.Leveler { return &logLevel }
-
 // serviceInstanceID is generated once so the tracer and meter resources share it.
 var serviceInstanceID = uuid.NewString()
 
@@ -205,8 +200,7 @@ const metricsExporterEnv = "OTEL_METRICS_EXPORTER"
 
 // metricsPushEnabled applies OTEL_METRICS_EXPORTER: otlp, the default, or none,
 // which drops the OTLP reader for a component whose metrics are scraped
-// instead. An unrecognized value keeps the OTLP export and logs, the same way
-// ResolveLogsExporter treats OTEL_LOGS_EXPORTER.
+// instead. An unrecognized value keeps the OTLP export and logs.
 func metricsPushEnabled(ctx context.Context) bool {
 	switch value := strings.ToLower(strings.TrimSpace(os.Getenv(metricsExporterEnv))); value {
 	case "", "otlp":

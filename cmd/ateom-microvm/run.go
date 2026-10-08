@@ -234,6 +234,9 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	if err := validateActorDirs(req.GetActorDirs()); err != nil {
 		return nil, err
 	}
+	if err := validateRuntimeAssetPaths(req.GetRuntimeAssetPaths()); err != nil {
+		return nil, err
+	}
 	if !s.locks.Lock(ctx, req.GetActorUid()) {
 		return nil, fmt.Errorf("gave up waiting for the actor's lock: %w", ctx.Err())
 	}
@@ -513,7 +516,7 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 	// on a failed agent dial below, so keep it here.
 	consoleLog := kata.ConsoleLogPath(actorUID)
 	vmCfg := buildVMConfig(actorUID, kernel, image, kparams, consoleLog, memMiB, vcpus,
-		agentInit(ctx, client.Info()), s.kataDebug)
+		agentInit(ctx, client.Info()), s.guestDebug)
 	if err := client.CreateVM(ctx, vmCfg); err != nil {
 		return fmt.Errorf("while creating VM: %w", err)
 	}
@@ -710,12 +713,10 @@ func (s *AteomService) stageMergedRootfs(ctx context.Context, rr resolvedRuntime
 	return vfsdCmd, nil
 }
 
-// guestConfig returns the default guest sizing and the agent kernel params, enabling
-// the debug console (vsock 1026) for in-guest diagnostics and, with kataDebug, raising
-// the agent log level.
+// guestConfig returns the default guest sizing and kernel params
 func (s *AteomService) guestConfig() (memMiB, vcpus int, kparams string) {
-	kparams = kata.WithDebugConsole()
-	if s.kataDebug {
+	kparams = kata.BaseKernelParams
+	if s.guestDebug {
 		kparams = kata.WithAgentDebug(kparams)
 	}
 	return kata.DefaultMemoryMiB, kata.DefaultVCPUs, kparams
@@ -799,7 +800,7 @@ func initParams(agentInit bool) string {
 // boot: measured host-launch to the agent's ttrpc accept, 1.24s -> 0.39s on a GKE
 // amd64 node and 21.6s -> 1.9s on a nested-virt arm64 kind node. What that costs is
 // the earliest messages: hvc0 only exists once virtio-console probes, so the memory
-// map, CPU features and ACPI lines never reach the log. kataDebug adds the UART back
+// map, CPU features and ACPI lines never reach the log. guestDebug adds the UART back
 // with earlycon (and pays the ~800ms) for diagnosing a guest that dies before then.
 func buildVMConfig(id, kernel, image, kparams, consoleLog string, memMiB, vcpus int, agentInit, debug bool) ch.VmConfig {
 	cmdline := "root=/dev/vda1 rootflags=data=ordered,errors=remount-ro ro rootfstype=ext4 " +
@@ -878,15 +879,17 @@ func (s *AteomService) startActorContainers(ctx context.Context, ac *kata.AgentC
 	err = s.configureGuestNetwork(netCtx, ac, mtu)
 	netCancel()
 	if err != nil {
-		dump := kata.DebugConsoleDump(ctx, vsockPath, "ip addr 2>&1; echo '== route =='; ip route 2>&1; echo '== neigh =='; ip neigh 2>&1")
-		slog.ErrorContext(ctx, "guest network config failed; dump", slog.String("dump", dump))
+		if s.guestDebug {
+			dump := kata.DebugConsoleDump(ctx, vsockPath, "ip addr 2>&1; echo '== route =='; ip route 2>&1; echo '== neigh =='; ip neigh 2>&1")
+			slog.ErrorContext(ctx, "guest network config failed; dump", slog.String("dump", dump))
+		}
 		return fmt.Errorf("while configuring guest network: %w", err)
 	}
 
 	tNetwork := time.Now()
 
 	for _, c := range ctrs {
-		if err := startRootfsContainer(ctx, ac, vsockPath, c); err != nil {
+		if err := s.startRootfsContainer(ctx, ac, vsockPath, c); err != nil {
 			return err
 		}
 	}
@@ -903,16 +906,18 @@ func (s *AteomService) startActorContainers(ctx context.Context, ac *kata.AgentC
 // dumps the guest's view of the shared tree.
 //
 // Its spec binds every declared volume at its mount path.
-func startRootfsContainer(ctx context.Context, ac *kata.AgentClient, vsockPath string, c actorContainer) error {
+func (s *AteomService) startRootfsContainer(ctx context.Context, ac *kata.AgentClient, vsockPath string, c actorContainer) error {
 	cCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	err := ac.StartRootfsContainer(cCtx, c.name, c.spec)
 	cancel()
 	if err != nil {
-		dump := kata.DebugConsoleDump(ctx, vsockPath,
-			"echo '== shared/containers =='; ls -la /run/kata-containers/shared/containers/ 2>&1 | head -40; "+
-				"echo '== rootfs =='; ls /run/kata-containers/shared/containers/"+c.name+"/rootfs/ 2>&1 | head; "+
-				"echo '== mounts =='; grep -E 'kata|virtiofs' /proc/mounts 2>&1")
-		slog.ErrorContext(ctx, "rootfs container failed; dump", slog.String("container", c.name), slog.String("dump", dump))
+		if s.guestDebug {
+			dump := kata.DebugConsoleDump(ctx, vsockPath,
+				"echo '== shared/containers =='; ls -la /run/kata-containers/shared/containers/ 2>&1 | head -40; "+
+					"echo '== rootfs =='; ls /run/kata-containers/shared/containers/"+c.name+"/rootfs/ 2>&1 | head; "+
+					"echo '== mounts =='; grep -E 'kata|virtiofs' /proc/mounts 2>&1")
+			slog.ErrorContext(ctx, "rootfs container failed; dump", slog.String("container", c.name), slog.String("dump", dump))
+		}
 		return fmt.Errorf("while starting rootfs container %q: %w", c.name, err)
 	}
 	return nil

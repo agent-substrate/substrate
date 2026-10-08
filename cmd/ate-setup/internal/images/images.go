@@ -90,21 +90,6 @@ type Source struct {
 // IsPrebuilt reports whether images should be pulled rather than built.
 func (s Source) IsPrebuilt() bool { return s.Repo != "" }
 
-// Validate checks a Source is usable before anything reaches the cluster.
-//
-// Both halves are checked. A tag on its own would otherwise be discarded in
-// silence, leaving a build from source that looks like the release the tag
-// names.
-func (s Source) Validate() error {
-	switch {
-	case s.IsPrebuilt() && s.Tag == "":
-		return fmt.Errorf("--image-repo (or ATE_IMAGE_REPO) requires --image-tag (or ATE_IMAGE_TAG)")
-	case !s.IsPrebuilt() && s.Tag != "":
-		return fmt.Errorf("--image-tag (or ATE_IMAGE_TAG) requires --image-repo (or ATE_IMAGE_REPO); without one, images are built from source and the tag names nothing")
-	}
-	return nil
-}
-
 // Describe renders the source for the install log.
 func (s Source) Describe() string {
 	if !s.IsPrebuilt() {

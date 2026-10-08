@@ -113,17 +113,17 @@ func (w *ActorWorkflow) DeleteActor(ctx context.Context, actorRef resources.Acto
 }
 
 // ensureLocalRuntimeDiscarded removes host-local Mac state retained by Pause.
-// The local snapshot records the external Worker name as its locality, so this
-// remains possible after PAUSED cleared the active assignment.
+// AssignedNode records the external Worker name, so this remains possible
+// after PAUSED clears the active assignment.
 func (w *ActorWorkflow) ensureLocalRuntimeDiscarded(ctx context.Context, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) error {
 	local := actor.GetStatus().GetLocalSnapshot()
-	if local == nil || len(local.GetNodeVmsWithLocalSnapshots()) == 0 {
+	if local == nil || actor.GetStatus().GetAssignedNode() == "" {
 		return nil
 	}
 	if actorTemplate != nil && actorTemplate.GetMacVm() == nil {
 		return nil
 	}
-	workerName := local.GetNodeVmsWithLocalSnapshots()[0]
+	workerName := actor.GetStatus().GetAssignedNode()
 	worker, err := w.store.GetWorker(ctx, workerName)
 	if err != nil {
 		return fmt.Errorf("while finding Worker %q holding local snapshot: %w", workerName, err)
@@ -167,32 +167,11 @@ func (w *ActorWorkflow) ensureRuntimeTerminated(ctx context.Context, actorRef re
 	defer func() { err = done(err) }()
 
 	assignment := actor.GetStatus().GetWorkerAssignment()
-	if assignment == nil {
-		slog.InfoContext(ctx, "actor has no worker assignment, skipping runtime terminate request", slog.Any("actor", actorRef))
-		return nil
-	}
-
-	if workerName := assignment.GetWorker().GetName(); workerName != "" {
-		// Ask whether the worker still HOSTS this actor, not whether its one
-		// assignment happens to be this actor: a worker hosting several is the
-		// ordinary case, and the others are none of this delete's business.
-		hosted, err := workerHostsActor(ctx, w.store, workerName, actor.GetMetadata().GetUid())
-		if err != nil {
-			return err
-		}
-		if !hosted {
-			slog.InfoContext(ctx, "worker is no longer assigned to this actor, skipping atelet terminate request",
-				slog.String("worker", workerName),
-				slog.Any("actor", actorRef))
-			return nil
-		}
-	}
-
-	if endpoint := assignment.GetRuntimeEndpoint(); endpoint != "" {
+	if assignment != nil && assignment.GetRuntimeEndpoint() != "" {
 		if w.hostRuntime == nil {
 			return apierror.Unimplemented("Mac Actor execution requires a configured host runtime")
 		}
-		err := w.hostRuntime.Terminate(ctx, endpoint, &hostruntimepb.TerminateRequest{ActorUid: actor.GetMetadata().GetUid()})
+		err := w.hostRuntime.Terminate(ctx, assignment.GetRuntimeEndpoint(), &hostruntimepb.TerminateRequest{ActorUid: actor.GetMetadata().GetUid()})
 		if status.Code(err) == codes.NotFound {
 			return nil
 		}
@@ -202,16 +181,41 @@ func (w *ActorWorkflow) ensureRuntimeTerminated(ctx context.Context, actorRef re
 		return nil
 	}
 
-	conn, err := w.dialer.DialForAteletOnNode(assignment.GetNodeName())
+	nodeName := actor.GetStatus().GetAssignedNode()
+	if nodeName == "" {
+		slog.InfoContext(ctx, "actor has no assigned node, skipping atelet terminate request", slog.Any("actor", actorRef))
+		return nil
+	}
+
+	targetAteomUID := ""
+	if assignment != nil {
+		targetAteomUID = assignment.GetWorkerPodUid()
+		if workerName := assignment.GetWorker().GetName(); workerName != "" {
+			// Ask whether the worker still HOSTS this actor, not whether its one
+			// assignment happens to be this actor: a worker hosting several is the
+			// ordinary case, and the others are none of this delete's business.
+			hosted, err := workerHostsActor(ctx, w.store, workerName, actor.GetMetadata().GetUid())
+			if err != nil {
+				return err
+			}
+			if !hosted {
+				slog.InfoContext(ctx, "worker is no longer assigned to this actor, skipping ateom workload termination",
+					slog.String("worker", workerName),
+					slog.Any("actor", actorRef))
+				targetAteomUID = ""
+			}
+		}
+	}
+	conn, err := w.dialer.DialForAteletOnNode(nodeName)
 	if err != nil {
-		return fmt.Errorf("while connecting to atelet on node %q: %w", assignment.GetNodeName(), err)
+		return fmt.Errorf("while connecting to atelet on node %q: %w", nodeName, err)
 	}
 
 	client := ateletpb.NewAteomHerderClient(conn)
 
 	var workloadSpec *ateletpb.WorkloadSpec
 	if actorTemplate != nil {
-		spec, err := workloadSpecFromActorTemplate(actorTemplate, actor)
+		spec, err := workloadSpecFromActorTemplate(actorTemplate, actor, nil)
 		if err != nil {
 			return err
 		}
@@ -243,7 +247,7 @@ func (w *ActorWorkflow) ensureRuntimeTerminated(ctx context.Context, actorRef re
 	}
 
 	req := &ateletpb.TerminateRequest{
-		TargetAteomUid:        assignment.GetWorkerPodUid(),
+		TargetAteomUid:        targetAteomUID,
 		Atespace:              actor.GetMetadata().GetAtespace(),
 		ActorName:             actor.GetMetadata().GetName(),
 		ActorUid:              actor.GetMetadata().GetUid(),
@@ -268,7 +272,7 @@ func (w *ActorWorkflow) ensureVolumesDetachedForDelete(ctx context.Context, acto
 	ctx, done := stepSpan(ctx, "DetachVolumesForDelete")
 	defer func() { err = done(err) }()
 
-	return detachActorVolumes(ctx, w.store, w.pluginRegistry, actor, actorTemplate, "delete")
+	return detachActorVolumes(ctx, w.pluginRegistry, actor, actorTemplate, "delete")
 }
 
 // ensureWorkerReleased releases the worker assigned to the actor.
@@ -341,6 +345,7 @@ func (w *ActorWorkflow) ensureWorkerReleased(ctx context.Context, actorRef resou
 		updatedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(dbActor *ateapipb.Actor) error {
 			if dbActor.Status != nil {
 				dbActor.Status.LocalSnapshot = nil
+				dbActor.Status.AssignedNode = ""
 				dbActor.Status.WorkerAssignment = nil
 			}
 			return nil

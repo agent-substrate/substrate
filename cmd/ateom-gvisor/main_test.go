@@ -53,3 +53,39 @@ func TestRPCsRejectMissingActorDirs(t *testing.T) {
 		}
 	}
 }
+
+func TestRPCsRejectUntrustedRunscPath(t *testing.T) {
+	s := &AteomService{}
+	ctx := context.Background()
+	dirs := &ateompb.ActorDirs{
+		RootDir:                   "/node/actors/actor-a",
+		OciBundleDir:              "/node/actors/actor-a/bundle",
+		CheckpointDir:             "/node/actors/actor-a/checkpoint-state",
+		RestoreDir:                "/node/actors/actor-a/restore",
+		DurableDirVolumeMountsDir: "/node/actors/actor-a/durable-dirs",
+		SystemInfoVolumeRootsDir:  "/node/actors/actor-a/system-info",
+		VolumesDir:                "/node/actors/actor-a/volumes",
+	}
+	for name, call := range map[string]func() error{
+		"RunWorkload": func() error {
+			_, err := s.RunWorkload(ctx, &ateompb.RunWorkloadRequest{ActorDirs: dirs, RunscPath: "/bin/sh"})
+			return err
+		},
+		"RestoreWorkload": func() error {
+			_, err := s.RestoreWorkload(ctx, &ateompb.RestoreWorkloadRequest{ActorDirs: dirs, RunscPath: "/bin/sh"})
+			return err
+		},
+		"CheckpointWorkload": func() error {
+			_, err := s.CheckpointWorkload(ctx, &ateompb.CheckpointWorkloadRequest{ActorDirs: dirs, RunscPath: "/bin/sh"})
+			return err
+		},
+		"TerminateWorkload": func() error {
+			_, err := s.TerminateWorkload(ctx, &ateompb.TerminateWorkloadRequest{ActorDirs: dirs, RunscPath: "/bin/sh"})
+			return err
+		},
+	} {
+		if got := apierror.Code(call()); got != codes.InvalidArgument {
+			t.Errorf("%s() code = %v, want %v", name, got, codes.InvalidArgument)
+		}
+	}
+}

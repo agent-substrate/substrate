@@ -173,22 +173,18 @@ func (w *ActorWorkflow) ensureWorkerDiscarded(ctx context.Context, actorRef reso
 	ctx, done := stepSpan(ctx, "DiscardWorker")
 	defer func() { err = done(err) }()
 
-	if assignment := actor.GetStatus().GetWorkerAssignment(); assignment != nil {
-		hosted, err := workerHostsActor(ctx, w.store, assignment.GetWorker().GetName(), actor.GetMetadata().GetUid())
-		if err != nil {
+	if actor.GetStatus().GetAssignedNode() != "" {
+		if err := w.ensureRuntimeTerminated(ctx, actorRef, actor, actorTemplate, ateattr.OperationRevert); err != nil {
+			// A failed terminate leaves the actor REVERTING with its
+			// assignment, so the next revert terminates it again. If the
+			// worker's pod goes away, worker deletion crashes the actor, and
+			// the next revert needs no live worker.
 			return err
 		}
-		if hosted {
-			if err := w.ensureRuntimeTerminated(ctx, actorRef, actor, actorTemplate, ateattr.OperationRevert); err != nil {
-				// A failed terminate leaves the actor REVERTING with its
-				// assignment, so the next revert terminates it again. If the
-				// worker's pod goes away, worker deletion crashes the actor, and
-				// the next revert needs no live worker.
-				return err
-			}
-			if err := w.ensureVolumesDetached(ctx, actor, actorTemplate, "DetachVolumesForRevert", ateattr.OperationRevert); err != nil {
-				return err
-			}
+		if err := w.ensureVolumesDetached(ctx, actor, actorTemplate, "DetachVolumesForRevert", ateattr.OperationRevert); err != nil {
+			return err
+		}
+		if actor.GetStatus().GetWorkerAssignment() != nil {
 			if _, _, err := releaseWorker(ctx, w.store, actor); err != nil {
 				return fmt.Errorf("while releasing worker: %w", err)
 			}
@@ -252,6 +248,7 @@ func (w *ActorWorkflow) ensureRevertedFinalized(ctx context.Context, actorRef re
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
 		toUpdate.Status.WorkerAssignment = nil
+		toUpdate.Status.AssignedNode = ""
 		toUpdate.Status.InProgressSnapshotUri = ""
 		toUpdate.Status.InProgressLocalSnapshotName = ""
 		toUpdate.Status.LocalSnapshot = nil

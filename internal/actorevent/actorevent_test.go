@@ -25,6 +25,7 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/log"
+	lognoop "go.opentelemetry.io/otel/log/noop"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
@@ -273,7 +274,7 @@ func (e *memExporter) Export(_ context.Context, records []sdklog.Record) error {
 func (e *memExporter) Shutdown(context.Context) error   { return nil }
 func (e *memExporter) ForceFlush(context.Context) error { return nil }
 
-// captureHandler keeps the stdout copy so a test can hold it beside the OTLP one.
+// captureHandler keeps the stdout records so a test can hold them beside the OTLP ones.
 type captureHandler struct {
 	records []slog.Record
 }
@@ -286,13 +287,14 @@ func (h *captureHandler) Handle(_ context.Context, r slog.Record) error {
 func (h *captureHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
 func (h *captureHandler) WithGroup(string) slog.Handler      { return h }
 
-// TestLogWritesBothCopies is the invariant this package exists for: one call,
-// two copies, and no field either copy can hold alone.
+// TestLogWritesOneCopy is the invariant this package exists for: one call, one
+// record, on OTLP when the exporter is on and on stdout when it is off, with the
+// same fields either way.
 //
 // It swaps the slog default, so it cannot be parallel. Go finishes every
 // non-parallel test before it resumes the parallel ones, so it does not race
 // the rest of this file.
-func TestLogWritesBothCopies(t *testing.T) {
+func TestLogWritesOneCopy(t *testing.T) {
 	tests := []struct {
 		name  string
 		event Event
@@ -310,35 +312,33 @@ func TestLogWritesBothCopies(t *testing.T) {
 			slog.SetDefault(slog.New(stdout))
 			t.Cleanup(func() { slog.SetDefault(prev) })
 
+			// Exporter on: the OTLP event only.
 			exp := &memExporter{}
 			lp := sdklog.NewLoggerProvider(sdklog.WithProcessor(sdklog.NewSimpleProcessor(exp)))
 			t.Cleanup(func() { _ = lp.Shutdown(context.Background()) })
-
 			NewEmitter(lp).Log(context.Background(), tt.event, tt.attrs)
-
-			if len(stdout.records) != 1 {
-				t.Fatalf("wrote %d stdout records, want 1", len(stdout.records))
+			if len(exp.records) != 1 || len(stdout.records) != 0 {
+				t.Fatalf("exporter on: %d OTLP and %d stdout records, want 1 and 0", len(exp.records), len(stdout.records))
 			}
-			if len(exp.records) != 1 {
-				t.Fatalf("exported %d OTLP records, want 1", len(exp.records))
-			}
-			stdoutRec, otlpRec := stdout.records[0], exp.records[0]
-
-			if stdoutRec.Message != tt.event.Body {
-				t.Errorf("stdout message = %q, want %q", stdoutRec.Message, tt.event.Body)
-			}
+			otlpRec := exp.records[0]
 			if got := otlpRec.Body().String(); got != tt.event.Body {
 				t.Errorf("OTLP body = %q, want %q", got, tt.event.Body)
-			}
-			if stdoutRec.Level != tt.event.Level() {
-				t.Errorf("stdout level = %v, want %v", stdoutRec.Level, tt.event.Level())
 			}
 			if got := otlpRec.Severity(); got != tt.event.Severity {
 				t.Errorf("OTLP severity = %v, want %v", got, tt.event.Severity)
 			}
-			// One time.Now() serves both, so a consumer can join them on it.
-			if !stdoutRec.Time.Equal(otlpRec.Timestamp()) {
-				t.Errorf("timestamps differ: stdout %v, OTLP %v", stdoutRec.Time, otlpRec.Timestamp())
+
+			// Exporter off: the stdout record only.
+			NewEmitter(lognoop.NewLoggerProvider()).Log(context.Background(), tt.event, tt.attrs)
+			if len(stdout.records) != 1 {
+				t.Fatalf("exporter off: %d stdout records, want 1", len(stdout.records))
+			}
+			stdoutRec := stdout.records[0]
+			if stdoutRec.Message != tt.event.Body {
+				t.Errorf("stdout message = %q, want %q", stdoutRec.Message, tt.event.Body)
+			}
+			if stdoutRec.Level != tt.event.Level() {
+				t.Errorf("stdout level = %v, want %v", stdoutRec.Level, tt.event.Level())
 			}
 
 			stdoutAttrs := map[string]string{}
@@ -371,7 +371,7 @@ func TestEmitCarriesTraceContext(t *testing.T) {
 	ctx, span := tp.Tracer("test").Start(context.Background(), "test")
 	defer span.End()
 
-	NewEmitter(lp).emit(ctx, StateChanged, time.Now(), stateChangedAttrs(ateattr.ActorStateRunning))
+	_ = NewEmitter(lp).emit(ctx, StateChanged, time.Now(), stateChangedAttrs(ateattr.ActorStateRunning))
 
 	if len(exp.records) != 1 {
 		t.Fatalf("exported %d records, want 1", len(exp.records))
@@ -386,8 +386,8 @@ func TestEmitCarriesTraceContext(t *testing.T) {
 		t.Errorf("SpanID() = %v, want %v", got, sc.SpanID())
 	}
 
-	// Trace context belongs on the record's own fields. The stdout copy carries
-	// it as attributes; the OTLP copy must not, or it is there twice.
+	// Trace context belongs on the record's own fields. The stdout form carries
+	// it as attributes; the OTLP form must not, or it is there twice.
 	rec.WalkAttributes(func(kv attribute.KeyValue) bool {
 		switch kv.Key {
 		case ateattr.LogTraceIDField, ateattr.LogSpanIDField, ateattr.LogTraceFlagsField:
@@ -406,7 +406,7 @@ func TestEmitIsANoOpWithoutAProvider(t *testing.T) {
 
 	// The package default resolves the global provider, which no test installs.
 	// This asserts it does not panic rather than that it drops the record.
-	defaultEmitter().emit(context.Background(), StateChanged, time.Now(), stateChangedAttrs(ateattr.ActorStateRunning))
+	_ = defaultEmitter().emit(context.Background(), StateChanged, time.Now(), stateChangedAttrs(ateattr.ActorStateRunning))
 }
 
 func TestBuildRecordKeepsValueKinds(t *testing.T) {
@@ -423,7 +423,7 @@ func TestBuildRecordKeepsValueKinds(t *testing.T) {
 		{"uint above int64 clamps", slog.Uint64("k", math.MaxUint64), attribute.Int64Value(math.MaxInt64)},
 		{"float", slog.Float64("k", 1.5), attribute.Float64Value(1.5)},
 		{"bool", slog.Bool("k", true), attribute.BoolValue(true)},
-		{"duration is nanoseconds, as in the stdout copy", slog.Duration("k", 1500*time.Millisecond), attribute.Int64Value(1_500_000_000)},
+		{"duration is nanoseconds, as in the stdout form", slog.Duration("k", 1500*time.Millisecond), attribute.Int64Value(1_500_000_000)},
 		{"anything else falls back to its string form", slog.Any("k", struct{}{}), attribute.StringValue("{}")},
 	}
 
@@ -447,9 +447,10 @@ func TestBuildRecordKeepsValueKinds(t *testing.T) {
 	}
 }
 
-// TestLogAtStampsBothCopies pins that the caller's time, not the write time, is
-// the timestamp of both copies: a usage sample is dated when it was read.
-func TestLogAtStampsBothCopies(t *testing.T) {
+// TestLogAtStampsTheRecord pins that the caller's time, not the write time, is
+// the record's timestamp on either path: a usage sample is dated when it was
+// read.
+func TestLogAtStampsTheRecord(t *testing.T) {
 	stdout := &captureHandler{}
 	prev := slog.Default()
 	slog.SetDefault(slog.New(stdout))
@@ -461,6 +462,7 @@ func TestLogAtStampsBothCopies(t *testing.T) {
 
 	at := time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
 	NewEmitter(lp).LogAt(context.Background(), UsageSampled, at, usageSampledAttrs())
+	NewEmitter(lognoop.NewLoggerProvider()).LogAt(context.Background(), UsageSampled, at, usageSampledAttrs())
 
 	if len(stdout.records) != 1 || len(exp.records) != 1 {
 		t.Fatalf("wrote %d stdout and %d OTLP records, want 1 and 1", len(stdout.records), len(exp.records))
@@ -470,5 +472,28 @@ func TestLogAtStampsBothCopies(t *testing.T) {
 	}
 	if got := exp.records[0].Timestamp(); !got.Equal(at) {
 		t.Errorf("OTLP timestamp = %v, want %v", got, at)
+	}
+}
+
+// TestSetConsoleWritesBoth pins otlp,console: the OTLP event and the stdout
+// record, from one call, with the same time.
+func TestSetConsoleWritesBoth(t *testing.T) {
+	stdout := &captureHandler{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(stdout))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	SetConsole(true)
+	t.Cleanup(func() { SetConsole(false) })
+
+	exp := &memExporter{}
+	lp := sdklog.NewLoggerProvider(sdklog.WithProcessor(sdklog.NewSimpleProcessor(exp)))
+	t.Cleanup(func() { _ = lp.Shutdown(context.Background()) })
+	NewEmitter(lp).Log(context.Background(), StateChanged, stateChangedAttrs(ateattr.ActorStateRunning))
+
+	if len(exp.records) != 1 || len(stdout.records) != 1 {
+		t.Fatalf("wrote %d OTLP and %d stdout records, want 1 and 1", len(exp.records), len(stdout.records))
+	}
+	if !stdout.records[0].Time.Equal(exp.records[0].Timestamp()) {
+		t.Errorf("timestamps differ: stdout %v, OTLP %v", stdout.records[0].Time, exp.records[0].Timestamp())
 	}
 }

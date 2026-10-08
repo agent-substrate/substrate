@@ -30,7 +30,6 @@ import (
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/agent-substrate/substrate/internal/actoridjwt"
-	"github.com/agent-substrate/substrate/internal/oidcdiscovery"
 )
 
 func TestRefreshingPool(t *testing.T) {
@@ -201,7 +200,7 @@ func TestGenerateAuthority(t *testing.T) {
 			if authority.Algorithm != alg {
 				t.Errorf("Algorithm = %q, want %q", authority.Algorithm, alg)
 			}
-			thumbprint, err := oidcdiscovery.Thumbprint(authority.SigningKey.Public())
+			thumbprint, err := Thumbprint(authority.SigningKey.Public())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -292,5 +291,28 @@ func TestGeneratePool(t *testing.T) {
 func TestGenerateAuthorityRejectsUnsupportedAlgorithm(t *testing.T) {
 	if _, err := GenerateAuthority("HS256", ""); err == nil {
 		t.Error("GenerateAuthority(HS256) returned nil error")
+	}
+}
+
+func TestVerificationKeysCarryAlgorithm(t *testing.T) {
+	es, err := GenerateAuthority("ES256", "es")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rs, err := GenerateAuthority("RS256", "rs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := &ConcretePool{Authorities: []*Authority{es, rs}, ActiveForSigning: "es"}
+	keys, err := pool.VerificationKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, key := range keys {
+		got[key.KeyID] = key.Algorithm
+	}
+	if diff := cmp.Diff(map[string]string{"es": "ES256", "rs": "RS256"}, got); diff != "" {
+		t.Errorf("verification key algorithms (-want +got):\n%s", diff)
 	}
 }

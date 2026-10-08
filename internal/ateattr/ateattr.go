@@ -240,9 +240,11 @@ const (
 
 // Values for RouterOutcomeKey. RouterOutcomeNoCapacity means that no worker
 // that meets the constraints of the actor had room. scheduling.ErrNoCapacity
-// reports the same condition. It is a capacity signal, not a defect. A 503
-// without a gRPC cause, such as a full parking lot, a denied egress request,
-// or a failed policy lookup, is RouterOutcomeUnavailable.
+// reports the same condition. It is a capacity signal, not a defect. A request
+// that the router sheds from a full parking lot is RouterOutcomeNoCapacity when
+// its resume failed with ResourceExhausted. A 503 without a gRPC cause, such as
+// a denied egress request, a failed policy lookup, or a shed request whose
+// resume failed for a different reason, is RouterOutcomeUnavailable.
 const (
 	RouterOutcomeOK                 = "ok"
 	RouterOutcomeCancelled          = "cancelled"
