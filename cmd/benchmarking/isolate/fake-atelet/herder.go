@@ -64,8 +64,12 @@ type delays struct {
 // starts a workload with tunneled egress it has atelet mint the actor's
 // certificate from ate-api-server, so in production every Run and Restore
 // that names an egress gateway costs ate-api-server a mint.
+//
+// It embeds UnsafeAteomHerderServer, not UnimplementedAteomHerderServer, so a
+// new AteomHerder RPC breaks this build rather than being answered with
+// Unimplemented, which ate-api-server treats as an actor crash.
 type herder struct {
-	ateletpb.UnimplementedAteomHerderServer
+	ateletpb.UnsafeAteomHerderServer
 
 	delays  delays
 	storage objectWriter
