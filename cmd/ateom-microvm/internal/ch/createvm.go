@@ -66,20 +66,19 @@ type MemoryConfig struct {
 }
 
 // PayloadConfig points at the guest kernel + its cmdline (initramfs/firmware
-// unused: the kata guest boots from its image on virtio-pmem, root=/dev/pmem0p1).
+// unused: the kata guest boots from its image on virtio-pmem).
 type PayloadConfig struct {
 	Kernel  string `json:"kernel"`
 	Cmdline string `json:"cmdline"`
 }
 
-// PmemConfig is one virtio-pmem device: CH maps File into guest physical memory,
-// and the guest sees it as /dev/pmem<N>. The only one is the kata guest image; the
-// actor rootfs is an overlay served over virtio-fs. DiscardWrites maps File
-// MAP_PRIVATE (and opens it read-only), so a guest write lands in a private copy of
-// the page and never reaches the image the node's other actors share.
+// PmemConfig configures a virtio-pmem device (/dev/pmem).
 type PmemConfig struct {
-	File          string `json:"file"`
-	DiscardWrites bool   `json:"discard_writes,omitempty"`
+	ID   string `json:"id,omitempty"`
+	File string `json:"file"`
+	// If true, maps File with MAP_PRIVATE so guest writes land in a private
+	// in-memory copy.
+	DiscardWrites bool `json:"discard_writes,omitempty"`
 }
 
 // RngConfig sets the entropy source (kata uses /dev/urandom).

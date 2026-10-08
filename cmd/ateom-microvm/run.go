@@ -507,10 +507,10 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 		}
 	}()
 
-	// Assemble the CH VmConfig (kata-compatible cmdline, RO kata image on virtio-pmem
-	// + the virtio-fs device; no actor disks — rootfs writes land in the host-side
-	// overlay upper through the shared mount). The console log is also read on a
-	// failed agent dial below, so keep it here.
+	// Assemble the CH VmConfig (kata-compatible cmdline, RO kata image on /dev/pmem0 +
+	// the virtio-fs device; no actor virtio-blk disks — rootfs writes land in the
+	// host-side overlay upper through the shared mount). The console log is also read
+	// on a failed agent dial below, so keep it here.
 	consoleLog := kata.ConsoleLogPath(actorUID)
 	vmCfg := buildVMConfig(actorUID, kernel, image, kparams, consoleLog, memMiB, vcpus,
 		agentInit(ctx, client.Info()), s.guestDebug)
@@ -771,39 +771,7 @@ func initParams(agentInit bool) string {
 		"systemd.mask=systemd-networkd.service systemd.mask=systemd-networkd.socket"
 }
 
-// buildVMConfig assembles the cloud-hypervisor VmConfig. The console is arch-specific:
-// ttyAMA0 on arm64, ttyS0 on amd64. The guest image is a read-only virtio-pmem device
-// (see below); the actor rootfs's RO lower is the virtio-fs device on PCI segment 1
-// (hence num_pci_segments=2), with no actor disks.
-//
-// The guest image is attached over virtio-pmem and mounted with DAX rather than as a
-// virtio-blk disk. CH maps the image file into guest physical memory, and DAX has the
-// guest kernel read and execute the image's files straight from that mapping instead
-// of copying them into its own page cache. Those copies are guest RAM, so everything
-// the guest read from its image (35.0MiB by the end of boot, see below) used to land
-// in every snapshot of every actor. Under DAX they are pages of the image file in the
-// host page cache, shared by every actor on the node, and a restore maps the file
-// again from its path (content-addressed, so the same on every node). discard_writes
-// keeps the file pristine: the mapping is private, and the root is mounted read-only
-// anyway. kata builds its image for this: the pfn info block in its first 2MiB tells
-// the guest's nvdimm driver to start /dev/pmem0 2MiB in, where a second partition
-// table puts the root filesystem at /dev/pmem0p1, and the image is a whole number of
-// the 2MiB CH requires of a pmem file.
-//
-// init=kataAgentPath boots the kata agent as PID 1 instead of systemd. The agent detects
-// that it is PID 1 and does the init work itself: it mounts /proc, /sys, devtmpfs /dev,
-// /dev/shm, /dev/pts, tmpfs /run and the cgroup hierarchy, then serves ttrpc over vsock.
-// Nothing else in the guest image is ours to run — the workload is a container the agent
-// starts — so systemd only cost us. Measured on the counter demo, dropping it took the
-// guest's boot-time reads from its image from 58.6MiB to 35.0MiB, the snapshot from 145MiB
-// to 106.6MiB at the same guest RAM, and a cold boot from 15.9s to 10.3s: the agent is
-// PID 1 rather than a unit systemd reaches several seconds in, so ateom stops waiting for
-// it (the dial phase goes 10.4s -> 4.7s).
-//
-// Dropping systemd also drops chronyd (kata-containers.target wants it), which is what
-// used to repair the guest clock after a resume. That is safe only from cloud-hypervisor
-// v53, which advances the guest clock across a restore itself; on v52 a restored guest
-// stays frozen at the instant it was snapshotted.
+// buildVMConfig assembles the cloud-hypervisor VmConfig.
 //
 // The disk-backed rootfs upper share (see rootfsupper.go) is always present.
 //
@@ -816,7 +784,8 @@ func initParams(agentInit bool) string {
 // map, CPU features and ACPI lines never reach the log. guestDebug adds the UART back
 // with earlycon (and pays the ~800ms) for diagnosing a guest that dies before then.
 func buildVMConfig(id, kernel, image, kparams, consoleLog string, memMiB, vcpus int, agentInit, debug bool) ch.VmConfig {
-	cmdline := guestRootParams + " panic=1 no_timer_check noreplace-smp console=hvc0 " +
+	cmdline := "root=/dev/pmem0p1 rootflags=dax,data=ordered,errors=remount-ro ro rootfstype=ext4 " +
+		"panic=1 no_timer_check noreplace-smp console=hvc0 " +
 		initParams(agentInit)
 	if kparams != "" {
 		cmdline += " " + kparams
@@ -830,10 +799,12 @@ func buildVMConfig(id, kernel, image, kparams, consoleLog string, memMiB, vcpus 
 		serial = &ch.ConsoleConfig{Mode: "File", File: kata.SerialLogPath(id)}
 	}
 	return ch.VmConfig{
-		Cpus:     ch.CpusConfig{BootVcpus: int32(vcpus), MaxVcpus: int32(vcpus)},
-		Memory:   ch.MemoryConfig{Size: int64(memMiB) * 1024 * 1024, Shared: true},
-		Payload:  ch.PayloadConfig{Kernel: kernel, Cmdline: cmdline},
-		Pmem:     []ch.PmemConfig{{File: image, DiscardWrites: true}},
+		Cpus:    ch.CpusConfig{BootVcpus: int32(vcpus), MaxVcpus: int32(vcpus)},
+		Memory:  ch.MemoryConfig{Size: int64(memMiB) * 1024 * 1024, Shared: true},
+		Payload: ch.PayloadConfig{Kernel: kernel, Cmdline: cmdline},
+		// The guest image is a virtio-pmem device (/dev/pmem0), mounted read-only
+		// with DAX, so its file data stays in the host page cache instead of being copied into guest RAM.
+		Pmem:     []ch.PmemConfig{{ID: "guest-image", File: image, DiscardWrites: true}},
 		Fs:       buildFsConfigs(id),
 		Platform: &ch.PlatformConfig{NumPciSegments: 2},
 		Rng:      &ch.RngConfig{Src: "/dev/urandom"},
@@ -842,12 +813,6 @@ func buildVMConfig(id, kernel, image, kparams, consoleLog string, memMiB, vcpus 
 		Vsock:    &ch.VsockConfig{Cid: 3, Socket: kata.VsockSocketPath(id)},
 	}
 }
-
-// guestRootParams mounts the root filesystem of the guest image, attached over
-// virtio-pmem (see buildVMConfig), read-only and with DAX. dax is the always-on form:
-// if the device cannot do DAX the mount fails, and the boot with it, instead of
-// quietly copying the image into guest RAM again.
-const guestRootParams = "root=/dev/pmem0p1 rootflags=dax,data=ordered,errors=remount-ro ro rootfstype=ext4"
 
 // earlyconParam points the kernel's early console at the UART cloud-hypervisor
 // emulates before virtio-console exists: an ISA port on x86, MMIO on arm64.
