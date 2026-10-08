@@ -18,6 +18,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/agent-substrate/substrate/internal/credbundle"
 )
 
 func TestAteletServerTLSConfigRejectsUnreadableCACerts(t *testing.T) {
@@ -31,6 +33,7 @@ func TestAteletServerTLSConfigRejectsUnreadableCACerts(t *testing.T) {
 // pod-identity CA rotation on disk is picked up by the next handshake, not
 // frozen at the config's construction.
 func TestAteletServerTLSConfigReloadsCACertsWithoutRestart(t *testing.T) {
+	t.Cleanup(credbundle.SetRecheckIntervalForTesting(0))
 	path := filepath.Join(t.TempDir(), "trust-bundle.pem")
 	if err := os.WriteFile(path, testCertPEM(t), 0o600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)

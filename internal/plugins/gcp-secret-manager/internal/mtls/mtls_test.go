@@ -33,6 +33,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/plugins/gcp-secret-manager/internal/credbundle"
 	"google.golang.org/grpc/credentials"
 )
 
@@ -135,6 +136,7 @@ func TestServerCredentialsRequiresConfig(t *testing.T) {
 // A rotated client trust bundle takes effect on the next connection without
 // rebuilding the credentials, and the chain and SAN checks still hold.
 func TestServerCredentialsReloadsClientCA(t *testing.T) {
+	t.Cleanup(credbundle.SetRecheckIntervalForTesting(0))
 	serverCA := newCA(t, "server-ca")
 	serverBundlePath := writeCredBundle(t, serverCA.issue(t, certOpts{dnsNames: []string{"credprovider.test"}}))
 	serverRoots := x509.NewCertPool()
