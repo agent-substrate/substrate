@@ -420,6 +420,27 @@ func (s *AteomService) TerminateWorkload(ctx context.Context, req *ateompb.Termi
 	return &ateompb.TerminateWorkloadResponse{}, nil
 }
 
+// endPreviousActivation ends the activation a re-host is about to replace. A VM
+// still running for the actor would be dropped from tracking by the re-host and
+// left running, so it is stopped, read first for the final record. This happens
+// after a checkpoint that failed before its teardown, or on a retried Run or
+// Restore. Ending the activation also stops a late recordInitial from writing.
+func (s *AteomService) endPreviousActivation(ctx context.Context, actorUID string, actorDirs *ateompb.ActorDirs) error {
+	old := s.lookupActor(actorUID)
+	if s.runningVM(actorUID) != nil {
+		if old != nil {
+			s.readFinal(ctx, old)
+		}
+		if err := s.stopActorVM(ctx, actorUID, actorDirs); err != nil {
+			return fmt.Errorf("while stopping the actor's previous micro-VM: %w", err)
+		}
+	}
+	if old != nil {
+		s.recordFinal(ctx, old)
+	}
+	return nil
+}
+
 // stopActorVM tears down the actor's micro-VM, if any, keeping it hosted.
 func (s *AteomService) stopActorVM(ctx context.Context, actorUID string, actorDirs *ateompb.ActorDirs) error {
 	ra := s.runningVM(actorUID)

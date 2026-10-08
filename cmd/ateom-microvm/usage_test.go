@@ -159,6 +159,24 @@ func TestReadFinal(t *testing.T) {
 	}
 }
 
+// TestEndPreviousActivation pins that a re-host writes the final record of the
+// activation it replaces, which also keeps that activation's late initial
+// reading from writing.
+func TestEndPreviousActivation(t *testing.T) {
+	agent := &fakeAgent{stats: map[string]*agentpb.CgroupStats{"app_ovl": containerStats(1000, 2000, 100, 5_000_000)}}
+	s := newStatsService(agent, "app_ovl")
+	rec := withUsageRecorder(s)
+	old := setActivation(s, ateomstats.NewActivation(time.Now(), false))
+
+	if err := s.endPreviousActivation(context.Background(), testActor.UID, nil); err != nil {
+		t.Fatal(err)
+	}
+	s.recordInitial(context.Background(), old)
+	if got := rec.Kinds(); len(got) != 1 || got[0] != ateattr.StatsKindFinal {
+		t.Errorf("records = %v, want only the old activation's final", got)
+	}
+}
+
 func TestRecordFinalWithNoSampleIsPending(t *testing.T) {
 	s := newStatsService(&fakeAgent{}, "app_ovl")
 	rec := withUsageRecorder(s)

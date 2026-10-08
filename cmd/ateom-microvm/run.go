@@ -269,12 +269,8 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	attribution := p.actorAttribution()
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor starting", attribution)
 
-	// A VM still running for this actor would be dropped from tracking by the
-	// re-host below and left running, so stop it first.
-	if s.runningVM(attribution.UID) != nil {
-		if err := s.stopActorVM(ctx, attribution.UID, req.GetActorDirs()); err != nil {
-			return nil, fmt.Errorf("while stopping the actor's previous micro-VM: %w", err)
-		}
+	if err := s.endPreviousActivation(ctx, attribution.UID, req.GetActorDirs()); err != nil {
+		return nil, err
 	}
 	// Publish attribution before boot so stats can include startup usage.
 	if _, err := s.hostActor(ctx, attribution, false); err != nil {

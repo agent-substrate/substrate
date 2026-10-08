@@ -142,12 +142,8 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	attribution := p.actorAttribution()
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor restoring", attribution)
 
-	// A VM still running for this actor would be dropped from tracking by the
-	// re-host below and left running, so stop it first.
-	if s.runningVM(attribution.UID) != nil {
-		if err := s.stopActorVM(ctx, attribution.UID, req.GetActorDirs()); err != nil {
-			return nil, fmt.Errorf("while stopping the actor's previous micro-VM: %w", err)
-		}
+	if err := s.endPreviousActivation(ctx, attribution.UID, req.GetActorDirs()); err != nil {
+		return nil, err
 	}
 	// Publish attribution before restore, so a stats read during it is
 	// attributed. A Data scope cold-boots, so its CPU counts from zero; the other
