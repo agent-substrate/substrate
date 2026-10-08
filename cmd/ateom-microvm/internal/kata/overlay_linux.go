@@ -417,26 +417,55 @@ func ReconstructSharedDirFromImage(ctx context.Context, bundleRootfs, restoreID,
 	return nil
 }
 
+// PmemMount describes a virtio-pmem device mounted by the agent during sandbox
+// creation.
+type PmemMount struct {
+	// Device is the guest block device (/dev/pmem<N>).
+	Device     string
+	Fstype     string
+	Options    []string
+	MountPoint string
+}
+
 type CreateSandboxOpts struct {
 	SandboxID string
 	Hostname  string
+	Pmem      []PmemMount
 }
 
 // CreateSandboxForActor creates the guest sandbox with the kataShared virtio-fs mount
-// (the merged rootfs trees, durable volumes, CSI volumes, and system-info
-// volumes every container runs on). Mirrors kata startSandbox.
+// and any pmem mounts. Mirrors kata startSandbox.
 func (a *AgentClient) CreateSandboxForActor(ctx context.Context, opts CreateSandboxOpts) error {
+	return a.CreateSandbox(ctx, &agentpb.CreateSandboxRequest{
+		Hostname:  opts.Hostname,
+		SandboxId: opts.SandboxID,
+		Storages:  sandboxStorages(opts),
+	})
+}
+
+// sandboxStorages builds the agent Storage list for the sandbox: the virtio-fs
+// share followed by each pmem mount.
+//
+// Pmem mounts use virtioFSDriver because it calls mount(2) directly on Source.
+// Block-device drivers wait for hotplug uevents and nvdimm requires ACPI NFIT,
+// whereas virtio-pmem is a cold-plugged PCI device.
+func sandboxStorages(opts CreateSandboxOpts) []*agentpb.Storage {
 	storages := []*agentpb.Storage{{
 		Driver:     virtioFSDriver,
 		Source:     FsTag,
 		Fstype:     typeVirtioFS,
 		MountPoint: guestSharedDir,
 	}}
-	return a.CreateSandbox(ctx, &agentpb.CreateSandboxRequest{
-		Hostname:  opts.Hostname,
-		SandboxId: opts.SandboxID,
-		Storages:  storages,
-	})
+	for _, m := range opts.Pmem {
+		storages = append(storages, &agentpb.Storage{
+			Driver:     virtioFSDriver,
+			Source:     m.Device,
+			Fstype:     m.Fstype,
+			Options:    m.Options,
+			MountPoint: m.MountPoint,
+		})
+	}
+	return storages
 }
 
 // StartRootfsContainer creates + starts one container on the shared merged rootfs —
