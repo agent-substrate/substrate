@@ -112,6 +112,7 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 		name        string
 		line        string
 		target      resources.ActorRef
+		source      string
 		container   string
 		wantMatched bool
 		wantTime    string
@@ -275,12 +276,76 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 			wantTime:    "",
 			wantOutput:  "",
 		},
+		{
+			name:        "source=all shows a lifecycle event",
+			line:        `{"time":"2026-05-16T01:03:38Z","message":"Actor started","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-1"}}`,
+			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
+			source:      "all",
+			wantMatched: true,
+			wantTime:    "2026-05-16T01:03:38Z",
+			wantOutput:  `{"time":"2026-05-16T01:03:38Z","message":"Actor started"}`,
+		},
+		{
+			name:        "source=lifecycle shows a lifecycle event",
+			line:        `{"time":"2026-05-16T01:03:38Z","message":"Actor checkpointing","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-1"}}`,
+			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
+			source:      "lifecycle",
+			wantMatched: true,
+			wantTime:    "2026-05-16T01:03:38Z",
+			wantOutput:  `{"time":"2026-05-16T01:03:38Z","message":"Actor checkpointing"}`,
+		},
+		{
+			name:        "source=lifecycle excludes a container line",
+			line:        `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"hi","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-1","ate.actor.container.name":"counter"}}`,
+			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
+			source:      "lifecycle",
+			wantMatched: false,
+			wantTime:    "",
+			wantOutput:  "",
+		},
+		{
+			name:        "source=lifecycle excludes another actor's lifecycle event",
+			line:        `{"time":"2026-05-16T01:03:38Z","message":"Actor started","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-2"}}`,
+			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
+			source:      "lifecycle",
+			wantMatched: false,
+			wantTime:    "",
+			wantOutput:  "",
+		},
+		{
+			name:        "source=containers shows any container's line",
+			line:        `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"hi","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-1","ate.actor.container.name":"sidecar"}}`,
+			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
+			source:      "containers",
+			wantMatched: true,
+			wantTime:    "2026-05-16T01:03:38Z",
+			wantOutput:  `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"hi"}`,
+		},
+		{
+			name:        "source=containers excludes a lifecycle event",
+			line:        `{"time":"2026-05-16T01:03:38Z","message":"Actor restored","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-1"}}`,
+			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
+			source:      "containers",
+			wantMatched: false,
+			wantTime:    "",
+			wantOutput:  "",
+		},
+		{
+			name:        "source=containers with container filter keeps only the named container",
+			line:        `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"hi","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-1","ate.actor.container.name":"sidecar"}}`,
+			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
+			source:      "containers",
+			container:   "counter",
+			wantMatched: false,
+			wantTime:    "",
+			wantOutput:  "",
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			var buf bytes.Buffer
-			logTime, matched := filterAndDisplayLogLine(tc.line, logLineFilter{target: tc.target, container: tc.container}, &buf)
+			logTime, matched := filterAndDisplayLogLine(tc.line, logLineFilter{target: tc.target, source: logSource(tc.source), container: tc.container}, &buf)
 
 			if matched != tc.wantMatched {
 				t.Errorf("got matched = %v, want %v", matched, tc.wantMatched)
@@ -303,6 +368,46 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 			gotOutput := strings.TrimSpace(buf.String())
 			if gotOutput != tc.wantOutput {
 				t.Errorf("got output %q, want %q", gotOutput, tc.wantOutput)
+			}
+		})
+	}
+}
+
+func TestNewLogLineFilter(t *testing.T) {
+	target := resources.ActorRef{Atespace: "space-1", Name: "act-1"}
+
+	tests := []struct {
+		name      string
+		source    string
+		container string
+		wantErr   string
+	}{
+		{name: "defaults", source: "", container: ""},
+		{name: "all", source: "all"},
+		{name: "containers", source: "containers"},
+		{name: "lifecycle", source: "lifecycle"},
+		{name: "all with container", source: "all", container: "counter"},
+		{name: "containers with container", source: "containers", container: "counter"},
+		{name: "lifecycle with container", source: "lifecycle", container: "counter", wantErr: "--container cannot be combined with --source=lifecycle"},
+		{name: "unknown source", source: "supervisor", wantErr: `invalid --source "supervisor"`},
+		{name: "source is case-sensitive", source: "Lifecycle", wantErr: `invalid --source "Lifecycle"`},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := newLogLineFilter(target, tc.source, tc.container)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("got err %v, want it to contain %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			want := logLineFilter{target: target, source: logSource(tc.source), container: tc.container}
+			if got != want {
+				t.Errorf("got %+v, want %+v", got, want)
 			}
 		})
 	}
@@ -397,29 +502,65 @@ func TestLogsActorRunner_Run_OneShotSuccess(t *testing.T) {
 	}
 }
 
-// TestLogsActorRunner_Run_OneShot_ContainerFilter exercises the --container
-// selection against one stream that interleaves two containers and a
-// lifecycle event.
-func TestLogsActorRunner_Run_OneShot_ContainerFilter(t *testing.T) {
+// TestLogsActorRunner_Run_OneShot_SourceFilter exercises the --source and
+// --container selection against one stream that interleaves two containers
+// and lifecycle events.
+func TestLogsActorRunner_Run_OneShot_SourceFilter(t *testing.T) {
 	actorName := "act-123"
 
+	startedLine := `{"time":"2026-05-16T01:03:37Z","message":"Actor started","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-123"}}`
 	counterLine := `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"from counter","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-123","ate.actor.container.name":"counter"}}`
 	sidecarLine := `{"time":"2026-05-16T01:03:39Z","level":"info","msg":"from sidecar","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-123","ate.actor.container.name":"sidecar"}}`
-	lifecycleLine := `{"time":"2026-05-16T01:03:40Z","message":"Actor started","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-123"}}`
+	checkpointingLine := `{"time":"2026-05-16T01:03:40Z","message":"Actor checkpointing","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-123"}}`
+	stream := strings.Join([]string{startedLine, counterLine, sidecarLine, checkpointingLine}, "\n") + "\n"
 
 	tests := []struct {
 		name       string
+		source     string
 		container  string
 		wantOutput []string
+		wantErr    string
 	}{
 		{
 			name:       "no filter shows everything",
-			wantOutput: []string{"from counter", "from sidecar", "Actor started"},
+			wantOutput: []string{"Actor started", "from counter", "from sidecar", "Actor checkpointing"},
+		},
+		{
+			name:       "source=all shows everything",
+			source:     "all",
+			wantOutput: []string{"Actor started", "from counter", "from sidecar", "Actor checkpointing"},
 		},
 		{
 			name:       "container filter",
 			container:  "counter",
 			wantOutput: []string{"from counter"},
+		},
+		{
+			name:       "source=containers drops lifecycle events",
+			source:     "containers",
+			wantOutput: []string{"from counter", "from sidecar"},
+		},
+		{
+			name:       "source=containers with container filter",
+			source:     "containers",
+			container:  "sidecar",
+			wantOutput: []string{"from sidecar"},
+		},
+		{
+			name:       "source=lifecycle keeps only lifecycle events",
+			source:     "lifecycle",
+			wantOutput: []string{"Actor started", "Actor checkpointing"},
+		},
+		{
+			name:      "source=lifecycle with container filter is rejected before streaming",
+			source:    "lifecycle",
+			container: "counter",
+			wantErr:   "--container cannot be combined with --source=lifecycle",
+		},
+		{
+			name:    "unknown source is rejected before streaming",
+			source:  "supervisor",
+			wantErr: `invalid --source "supervisor"`,
 		},
 	}
 
@@ -439,9 +580,11 @@ func TestLogsActorRunner_Run_OneShot_ContainerFilter(t *testing.T) {
 					}, nil
 				},
 			}
+			streamCalls := 0
 			mockStreamer := &mockPodLogsStreamer{
 				StreamLogsFunc: func(ctx context.Context, ns, name string, opts *corev1.PodLogOptions) (io.ReadCloser, error) {
-					return io.NopCloser(strings.NewReader(counterLine + "\n" + sidecarLine + "\n" + lifecycleLine + "\n")), nil
+					streamCalls++
+					return io.NopCloser(strings.NewReader(stream)), nil
 				},
 			}
 
@@ -452,10 +595,27 @@ func TestLogsActorRunner_Run_OneShot_ContainerFilter(t *testing.T) {
 				streamer:  mockStreamer,
 				stdout:    &stdout,
 				stderr:    &stderr,
+				source:    tc.source,
 				container: tc.container,
 			}
 
-			if err := runner.Run(context.Background()); err != nil {
+			err := runner.Run(context.Background())
+			if mockAPI.CloseCalls != 1 {
+				t.Errorf("api client Close called %d times, want 1", mockAPI.CloseCalls)
+			}
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("got err %v, want it to contain %q", err, tc.wantErr)
+				}
+				if streamCalls != 0 {
+					t.Errorf("streamed %d times, want 0: an invalid flag combination must fail before any logs are fetched", streamCalls)
+				}
+				if stdout.Len() != 0 {
+					t.Errorf("unexpected output %q", stdout.String())
+				}
+				return
+			}
+			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
 

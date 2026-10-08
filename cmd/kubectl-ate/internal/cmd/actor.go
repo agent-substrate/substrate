@@ -55,6 +55,7 @@ var (
 	logsActorAtespaceFlag    string
 	logsActorFollowFlag      bool
 	logsActorContainerFlag   string
+	logsActorSourceFlag      string
 )
 
 var getActorsCmd = &cobra.Command{
@@ -310,7 +311,9 @@ type LogsActorRunner struct {
 	stdout            io.Writer
 	stderr            io.Writer
 	follow            bool
+	source            string
 	container         string
+	filter            logLineFilter
 	pollInterval      time.Duration
 	reconnectInterval time.Duration
 	tickerInterval    time.Duration
@@ -318,6 +321,14 @@ type LogsActorRunner struct {
 
 // Run executes the logs command.
 func (r *LogsActorRunner) Run(ctx context.Context) error {
+	defer r.apiClient.Close()
+
+	filter, err := newLogLineFilter(r.actorRef, r.source, r.container)
+	if err != nil {
+		return err
+	}
+	r.filter = filter
+
 	if r.pollInterval <= 0 {
 		r.pollInterval = 2 * time.Second
 	}
@@ -328,7 +339,6 @@ func (r *LogsActorRunner) Run(ctx context.Context) error {
 		r.tickerInterval = 2 * time.Second
 	}
 
-	defer r.apiClient.Close()
 	if r.follow {
 		return r.runFollow(ctx)
 	}
@@ -358,13 +368,12 @@ func (r *LogsActorRunner) runOneShot(ctx context.Context) error {
 	}
 	defer stream.Close()
 
-	filter := logLineFilter{target: r.actorRef, container: r.container}
 	scanner := bufio.NewScanner(stream)
 	buf := make([]byte, 0, 64*1024)
 	scanner.Buffer(buf, 1024*1024) // Support up to 1MB lines
 	for scanner.Scan() {
 		line := scanner.Text()
-		filterAndDisplayLogLine(line, filter, r.stdout)
+		filterAndDisplayLogLine(line, r.filter, r.stdout)
 	}
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("error reading log stream: %w", err)
@@ -436,13 +445,12 @@ func (r *LogsActorRunner) runFollow(ctx context.Context) error {
 		var wg sync.WaitGroup
 		r.startMigrationMonitor(streamCtx, streamCancel, &wg, podName)
 
-		filter := logLineFilter{target: r.actorRef, container: r.container}
 		scanner := bufio.NewScanner(stream)
 		buf := make([]byte, 0, 64*1024)
 		scanner.Buffer(buf, 1024*1024) // Support up to 1MB lines
 		for scanner.Scan() {
 			line := scanner.Text()
-			logTime, _ := filterAndDisplayLogLine(line, filter, r.stdout)
+			logTime, _ := filterAndDisplayLogLine(line, r.filter, r.stdout)
 			if !logTime.IsZero() {
 				lastSeenTime = logTime
 			}
@@ -529,6 +537,7 @@ func runLogsActor(cmd *cobra.Command, args []string) error {
 		stdout:            os.Stdout,
 		stderr:            os.Stderr,
 		follow:            logsActorFollowFlag,
+		source:            logsActorSourceFlag,
 		container:         logsActorContainerFlag,
 		pollInterval:      2 * time.Second,
 		reconnectInterval: 1 * time.Second,
@@ -538,11 +547,40 @@ func runLogsActor(cmd *cobra.Command, args []string) error {
 	return runner.Run(ctx)
 }
 
+// logSource names a class of lines in an actor's log stream, selected with
+// --source. Container output carries the container's name; the lifecycle
+// events ateom emits around a start, checkpoint, restore, or termination
+// carry none, which is what tells the two apart.
+type logSource string
+
+const (
+	logSourceAll        logSource = "all"
+	logSourceContainers logSource = "containers"
+	logSourceLifecycle  logSource = "lifecycle"
+)
+
 // logLineFilter selects which of an actor's log lines are displayed: all of
-// them by default, or only the named container's when container is set.
+// them by default, one class of them when source is set, or only the named
+// container's when container is set.
 type logLineFilter struct {
 	target    resources.ActorRef
+	source    logSource
 	container string
+}
+
+// newLogLineFilter builds the filter for target from the --source and
+// --container flag values, rejecting combinations that could never match.
+func newLogLineFilter(target resources.ActorRef, source, container string) (logLineFilter, error) {
+	switch logSource(source) {
+	case "", logSourceAll, logSourceContainers:
+	case logSourceLifecycle:
+		if container != "" {
+			return logLineFilter{}, fmt.Errorf("--container cannot be combined with --source=lifecycle: lifecycle events are not emitted by a container")
+		}
+	default:
+		return logLineFilter{}, fmt.Errorf("invalid --source %q: must be one of %s, %s, %s", source, logSourceAll, logSourceContainers, logSourceLifecycle)
+	}
+	return logLineFilter{target: target, source: logSource(source), container: container}, nil
 }
 
 // matches reports whether a line emitted by emitter from containerName (empty
@@ -552,6 +590,14 @@ func (f logLineFilter) matches(emitter resources.ActorRef, containerName string)
 	// actors from different atespaces over time, so match on both.
 	if emitter != f.target || f.target.Atespace == "" || f.target.Name == "" {
 		return false
+	}
+	switch f.source {
+	case logSourceLifecycle:
+		return containerName == ""
+	case logSourceContainers:
+		if containerName == "" {
+			return false
+		}
 	}
 	return f.container == "" || containerName == f.container
 }
@@ -672,5 +718,6 @@ func init() {
 	logsActorsCmd.Flags().StringVarP(&logsActorAtespaceFlag, "atespace", "a", "", "Atespace the actor lives in")
 	_ = logsActorsCmd.MarkFlagRequired("atespace")
 	logsActorsCmd.Flags().StringVarP(&logsActorContainerFlag, "container", "c", "", "Show only logs from this container.")
+	logsActorsCmd.Flags().StringVar(&logsActorSourceFlag, "source", string(logSourceAll), "Which lines to show: all, containers (every container's output, no lifecycle events), or lifecycle (only the actor's lifecycle events).")
 	logsCmd.AddCommand(logsActorsCmd)
 }
