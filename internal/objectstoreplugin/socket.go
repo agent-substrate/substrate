@@ -22,15 +22,38 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/status"
 )
+
+// readyWait bounds how long a call waits for the plugin connection to become
+// ready before failing with codes.Unavailable. It rides through a sidecar
+// restart, including the first 10s step of kubelet's crash-loop back-off, and
+// fails a plugin that stays down well before a caller's deadline would. A
+// call that starts on a ready connection is not bounded by it.
+const readyWait = 30 * time.Second
+
+// reconnectParams keeps reconnect attempts to the local socket frequent, so a
+// plugin that comes back is reached within readyWait; gRPC's default back-off
+// grows to two minutes.
+var reconnectParams = grpc.ConnectParams{
+	Backoff: backoff.Config{
+		BaseDelay:  100 * time.Millisecond,
+		Multiplier: 1.6,
+		Jitter:     0.2,
+		MaxDelay:   time.Second,
+	},
+	MinConnectTimeout: 5 * time.Second,
+}
 
 // Listen removes any stale socket at path and listens on a fresh one that
 // only the socket's owner can connect to.
@@ -52,17 +75,26 @@ func Listen(path string) (net.Listener, error) {
 	return lis, nil
 }
 
-// Dial returns a long-lived client connection to a plugin socket. Calls wait
-// for the plugin to come up rather than failing while it starts, so a caller
-// that must not hang on a plugin that never comes up checks WaitReady first.
+// Dial returns a long-lived client connection to a plugin socket. A unary
+// call waits up to readyWait for the connection to become ready, then fails
+// with codes.Unavailable, so a plugin that is lost after startup fails calls
+// promptly while a brief restart does not. A call in flight when the plugin
+// goes fails with codes.Unavailable at once. A caller that passes
+// grpc.WaitForReady itself opts out of the bound and waits as long as its
+// context allows; WaitReady does so at startup.
 //
 // The connection is unauthenticated: the socket is reachable only from
 // inside the pod, and only by its owner.
 func Dial(path string) (*grpc.ClientConn, error) {
+	return dial(path, readyWait)
+}
+
+func dial(path string, wait time.Duration) (*grpc.ClientConn, error) {
 	conn, err := grpc.NewClient("unix://"+path,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
-		grpc.WithDefaultCallOptions(grpc.WaitForReady(true)),
+		grpc.WithConnectParams(reconnectParams),
+		grpc.WithUnaryInterceptor(boundedWaitForReady(wait)),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("while dialing snapshot plugin at %s: %w", path, err)
@@ -70,12 +102,51 @@ func Dial(path string) (*grpc.ClientConn, error) {
 	return conn, nil
 }
 
+// boundedWaitForReady waits up to wait for cc to become ready before issuing
+// a call that sets no grpc.WaitForReady option, then issues it fail-fast.
+func boundedWaitForReady(wait time.Duration) grpc.UnaryClientInterceptor {
+	return func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+		for _, opt := range opts {
+			if _, ok := opt.(grpc.FailFastCallOption); ok {
+				return invoker(ctx, method, req, reply, cc, opts...)
+			}
+		}
+		if err := awaitReady(ctx, cc, wait); err != nil {
+			return err
+		}
+		return invoker(ctx, method, req, reply, cc, opts...)
+	}
+}
+
+// awaitReady returns nil once cc is ready or shut down, the latter left for
+// the call itself to report. It returns codes.Unavailable if cc is not ready
+// within wait, and ctx's error as a status if ctx ends first.
+func awaitReady(ctx context.Context, cc *grpc.ClientConn, wait time.Duration) error {
+	waitCtx, cancel := context.WithTimeout(ctx, wait)
+	defer cancel()
+	for {
+		state := cc.GetState()
+		switch state {
+		case connectivity.Ready, connectivity.Shutdown:
+			return nil
+		case connectivity.Idle:
+			cc.Connect()
+		}
+		if !cc.WaitForStateChange(waitCtx, state) {
+			if ctx.Err() != nil {
+				return status.FromContextError(ctx.Err()).Err()
+			}
+			return status.Errorf(codes.Unavailable, "snapshot plugin at %s is not ready after %s (connection %s)", cc.Target(), wait, state)
+		}
+	}
+}
+
 // WaitReady blocks until the plugin behind conn reports that it is serving,
-// or ctx ends. Bounding ctx is what turns a plugin that never comes up (a
-// wrong socket path, a crash loop) into an error at startup rather than a
-// transfer that hangs.
+// or ctx ends, however long the plugin takes to come up. Bounding ctx is what
+// turns a plugin that never comes up (a wrong socket path, a crash loop) into
+// an error at startup.
 func WaitReady(ctx context.Context, conn *grpc.ClientConn) error {
-	resp, err := healthpb.NewHealthClient(conn).Check(ctx, &healthpb.HealthCheckRequest{})
+	resp, err := healthpb.NewHealthClient(conn).Check(ctx, &healthpb.HealthCheckRequest{}, grpc.WaitForReady(true))
 	if err != nil {
 		return fmt.Errorf("while waiting for the snapshot plugin at %s: %w", conn.Target(), err)
 	}
