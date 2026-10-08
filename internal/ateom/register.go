@@ -13,12 +13,14 @@
 // limitations under the License.
 
 // Package ateom registers an ateom worker with the control plane through the
-// node-local atelet, reporting its compute capacity and hardware identity.
+// node-local atelet, reporting its compute capacity and the sandbox runtime
+// its actors start under.
 package ateom
 
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -30,6 +32,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateletdial"
 	"github.com/agent-substrate/substrate/internal/hardware"
 	"github.com/agent-substrate/substrate/internal/resources"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/api/resource"
 
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
@@ -73,12 +76,28 @@ func fromDir(dir string, actors int) *ateletpb.WorkerResources {
 	}
 }
 
-// probeHardware returns the hardware identity that actors hosted by this ateom
-// observe.
-func probeHardware() *ateletpb.HardwareIdentity {
-	return &ateletpb.HardwareIdentity{
-		Attributes: hardware.ProbeHost().GetAttributes(),
+// defaultRuntime is the runtime actors hosted by this ateom start under: its
+// sandbox class on this host's hardware. The name is left empty: it names a
+// SandboxConfig version, which the ateom does not know.
+//
+// TODO: Report the pool's SandboxConfig so atelet can complete the identity
+// with the digests of the default version's assets and list its other
+// enabled versions as restorable_runtimes.
+func defaultRuntime(sandboxClass string) *ateletpb.SandboxRuntime {
+	return &ateletpb.SandboxRuntime{
+		SandboxClass: sandboxClass,
+		Version:      toCompat(hardware.ProbeHost()),
 	}
+}
+
+// toCompat converts the probe's VersionedSandboxCompat to atelet's, which it
+// mirrors field for field.
+func toCompat(in *ateapipb.VersionedSandboxCompat) *ateletpb.VersionedSandboxCompat {
+	out := &ateletpb.VersionedSandboxCompat{Version: in.GetVersion()}
+	for _, a := range in.GetAttributes() {
+		out.Attributes = append(out.Attributes, &ateletpb.AttributeEntry{Key: a.GetKey(), Value: a.GetValue()})
+	}
+	return out
 }
 
 // cpuMemory is the Resources for those two dimensions. A zero dimension is
@@ -112,7 +131,8 @@ func readLimit(path string) int64 {
 	return value
 }
 
-// ReportConfig is what an ateom needs to reach the atelet on its node.
+// ReportConfig configures how an ateom reaches the node-local atelet and what
+// capacity and sandbox runtime class it registers with.
 type ReportConfig struct {
 	SocketPath           string
 	CredentialBundlePath string
@@ -123,23 +143,30 @@ type ReportConfig struct {
 	AteletSPIFFEID string
 	// Actors is how many actors this ateom will host at once.
 	Actors int
+	// SandboxClass is the class this ateom implements ("gvisor", "microvm").
+	SandboxClass string
 }
 
-// Report tells the node-local atelet what this ateom can supply and its
-// hardware identity, retrying until it is accepted or ctx ends.
+// Report tells the node-local atelet what this ateom can supply and the
+// runtime its actors start under, retrying until it is accepted or ctx ends.
 //
 // Retrying is what makes a single report durable: atelet only accepts once the
 // control plane has recorded it, and the Worker record may not exist yet when
 // an ateom first comes up. Nothing else reports this, so giving up would leave
 // the Worker holding no capacity and hosting nothing.
 func Report(ctx context.Context, cfg ReportConfig) error {
+	if cfg.SandboxClass == "" {
+		// The control plane refuses a runtime without a class, and retrying
+		// would not change that.
+		return errors.New("capacity report: SandboxClass is required")
+	}
 	tlsConfig, err := ateletdial.TLSConfig(cfg.CredentialBundlePath, cfg.TrustBundlePath, cfg.AteletSPIFFEID)
 	if err != nil {
 		return fmt.Errorf("capacity report: %w", err)
 	}
 	req := &ateletpb.RegisterWorkerRequest{
-		Capacity: FromFiles(cfg.Actors),
-		Hardware: probeHardware(),
+		Capacity:       FromFiles(cfg.Actors),
+		DefaultRuntime: defaultRuntime(cfg.SandboxClass),
 	}
 	err = retryReport(ctx, func() error {
 		return reportOnce(ctx, cfg.SocketPath, tlsConfig, req)
@@ -147,9 +174,9 @@ func Report(ctx context.Context, cfg ReportConfig) error {
 	if err != nil {
 		return err
 	}
-	slog.InfoContext(ctx, "Registered worker capacity and hardware",
+	slog.InfoContext(ctx, "Registered worker capacity and sandbox runtime",
 		slog.Any("capacity", req.GetCapacity()),
-		slog.Any("hardware", req.GetHardware()))
+		slog.Any("default_runtime", req.GetDefaultRuntime()))
 	return nil
 }
 
