@@ -36,6 +36,7 @@ type tarEntry struct {
 	modTime  time.Time
 	devmajor int64
 	devminor int64
+	uid, gid int
 }
 
 func defaultMode(typeflag byte) int64 {
@@ -67,6 +68,8 @@ func buildTar(t *testing.T, entries []tarEntry) []byte {
 			ModTime:  e.modTime,
 			Devmajor: e.devmajor,
 			Devminor: e.devminor,
+			Uid:      e.uid,
+			Gid:      e.gid,
 		}
 		if err := tw.WriteHeader(hdr); err != nil {
 			t.Fatalf("tar.WriteHeader(%+v): %v", hdr, err)

@@ -410,7 +410,7 @@ func extractEntry(root *os.Root, tr *tar.Reader, hdr *tar.Header, name string, d
 		}
 		// Only ownership applies to a symlink itself; its mode is meaningless
 		// and its times would follow the target.
-		return lchownEntry(root, name, hdr)
+		return Lchown(root, name, hdr)
 
 	case tar.TypeFifo:
 		if err := replaceExisting(root, name); err != nil {
@@ -518,7 +518,7 @@ func restoredMode(hdr *tar.Header) os.FileMode {
 // path. Ownership is applied first because chowning a file clears its setuid
 // and setgid bits, which the chmod below then puts back.
 func restoreMeta(root *os.Root, name string, hdr *tar.Header) error {
-	if err := lchownEntry(root, name, hdr); err != nil {
+	if err := Lchown(root, name, hdr); err != nil {
 		return err
 	}
 	if err := root.Chmod(name, restoredMode(hdr)); err != nil {
