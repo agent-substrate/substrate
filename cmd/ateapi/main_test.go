@@ -31,6 +31,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/agent-substrate/substrate/internal/credbundle"
 )
 
 func TestConnectStoreRequiresPostgresReadWriteConnectionString(t *testing.T) {
@@ -262,6 +264,7 @@ func TestBuildServerTLSConfigRejectsUnreadableCACerts(t *testing.T) {
 // pod-identity CA rotation on disk is picked up by the next handshake, not
 // frozen at the config's construction.
 func TestBuildServerTLSConfigReloadsCACertsWithoutRestart(t *testing.T) {
+	t.Cleanup(credbundle.SetRecheckIntervalForTesting(0))
 	path := filepath.Join(t.TempDir(), "trust-bundle.pem")
 	writeCA(t, path, "ca-one")
 
