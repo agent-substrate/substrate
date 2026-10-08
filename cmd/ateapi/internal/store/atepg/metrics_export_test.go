@@ -238,6 +238,9 @@ service:
 		t.Fatalf("contended acquisition completed before release: %v", err)
 	case <-time.After(60 * time.Millisecond):
 	}
+	exportAndScrape("pending-main", func(families map[string]*dto.MetricFamily) error {
+		return checkExportedPendingRequests(families, map[string]int64{"main": 1, "watch": 0, "owner": 0})
+	})
 	for _, conn := range held {
 		conn.Release()
 	}
@@ -285,6 +288,9 @@ service:
 }
 
 func checkExportedPoolMetrics(families map[string]*dto.MetricFamily, maxima map[string]int64, saturated, closed bool) error {
+	if err := checkExportedPendingRequests(families, map[string]int64{"main": 0, "watch": 0, "owner": 0}); err != nil {
+		return err
+	}
 	for _, name := range []string{"db_client_connection_count", "db_client_connection_max", "db_client_connection_wait_time_seconds"} {
 		family := families[name]
 		if family == nil {
@@ -401,6 +407,35 @@ func checkExportedPoolMetrics(families map[string]*dto.MetricFamily, maxima map[
 		if len(seen) != wantSeries {
 			return fmt.Errorf("%s series count = %d, want %d", name, len(seen), wantSeries)
 		}
+	}
+	return nil
+}
+
+func checkExportedPendingRequests(families map[string]*dto.MetricFamily, want map[string]int64) error {
+	family := families["db_client_connection_pending_requests"]
+	if family == nil || family.GetType() != dto.MetricType_GAUGE {
+		return fmt.Errorf("pending_requests missing or not a gauge")
+	}
+	seen := make(map[string]bool)
+	for _, series := range family.Metric {
+		var pool string
+		for _, label := range series.Label {
+			switch label.GetName() {
+			case "db_client_connection_pool_name":
+				pool = label.GetValue()
+			case "job", "instance", "otel_scope_name", "otel_scope_version", "otel_scope_schema_url":
+			default:
+				return fmt.Errorf("pending_requests unexpected label %s", label.GetName())
+			}
+		}
+		value, ok := want[pool]
+		if !ok || seen[pool] || series.Gauge == nil || series.Gauge.GetValue() != float64(value) {
+			return fmt.Errorf("pending_requests pool=%q value=%g, want %d", pool, series.GetGauge().GetValue(), value)
+		}
+		seen[pool] = true
+	}
+	if len(seen) != len(want) {
+		return fmt.Errorf("pending_requests pools = %v, want %v", seen, want)
 	}
 	return nil
 }
