@@ -43,8 +43,12 @@ import (
 
 const labelKey = "rendezvous.ate.dev/application"
 
+// LeaseDuration is how long a replica's lease stays valid without renewal,
+// and therefore the upper bound on how long a dead replica keeps its assignments.
+const LeaseDuration = 15 * time.Second
+
 var (
-	leaseDuration      = 15 * time.Second
+	leaseDuration      = LeaseDuration
 	leaseRenewalPeriod = 10 * time.Second
 )
 
