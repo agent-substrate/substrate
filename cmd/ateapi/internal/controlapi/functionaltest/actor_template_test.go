@@ -285,7 +285,7 @@ func TestActorLifecycleWithoutGoldenSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	snapshotURI := suspended.GetStatus().GetExternalSnapshot().GetSnapshotUri()
+	snapshotURI := suspended.GetActor().GetStatus().GetExternalSnapshot().GetSnapshotUri()
 	if snapshotURI == "" {
 		t.Fatal("suspend did not produce the actor's own snapshot")
 	}
