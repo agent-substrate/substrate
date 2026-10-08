@@ -209,8 +209,7 @@ func TestActorEgressPolicyCache(t *testing.T) {
 }
 
 // TestActorEgressPolicyCacheExpiration verifies that cached egress policy
-// entries expire after the configured cache_ttl (5s default), triggering a
-// cache miss and a new ext_proc lookup on the next request.
+// entries expire after the configured cache_ttl.
 func TestActorEgressPolicyCacheExpiration(t *testing.T) {
 	ctx := context.Background()
 	router, actorRef := hostnamePolicyActor(t, ctx)
