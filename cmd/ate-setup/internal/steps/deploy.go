@@ -131,7 +131,18 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 	if err != nil {
 		return err
 	}
-	if err := e.deployPostgres(ctx, postgres); err != nil {
+	if postgres.bundled {
+		if err := e.waitAndSetupBundledPostgres(ctx); err != nil {
+			return err
+		}
+	}
+
+	manifest := e.Cfg.Manifest("ate-api-server.yaml")
+	if e.Cfg.Kind {
+		// The kind overlay points ate-api at the in-cluster rustfs.
+		manifest = e.Cfg.Manifest("kind", "ate-api-server")
+	}
+	if err := e.renderResolveApply(ctx, manifest); err != nil {
 		return err
 	}
 
@@ -302,16 +313,12 @@ func (e *Env) DeployAteAPIServer(ctx context.Context) error {
 	if err := e.applyOtelEndpointOverride(ctx); err != nil {
 		return err
 	}
-	postgres, err := e.planPostgres(ctx)
-	if err != nil {
-		return err
+	manifest := e.Cfg.Manifest("ate-api-server.yaml")
+	if e.Cfg.Kind {
+		// The kind overlay points ate-api at the in-cluster rustfs.
+		manifest = e.Cfg.Manifest("kind", "ate-api-server")
 	}
-	if postgres.bundled {
-		if err := e.waitAndSetupBundledPostgres(ctx); err != nil {
-			return err
-		}
-	}
-	if err := e.renderResolveApply(ctx, e.Cfg.Manifest("ate-api-server.yaml")); err != nil {
+	if err := e.renderResolveApply(ctx, manifest); err != nil {
 		return err
 	}
 	// After the manifest, which resets the pod template to the sidecar-free base.

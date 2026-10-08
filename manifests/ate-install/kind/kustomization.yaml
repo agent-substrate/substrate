@@ -27,7 +27,7 @@ kind: Kustomization
 # their own, and re-applying the base file from this bundle would revert the
 # WORKERS_PER_SIGNER override.
 resources:
-  - ../ate-api-server.yaml
+  - ./ate-api-server
   - ../ate-controller.yaml
   - ./atelet
   - ../atenet-router.yaml
@@ -35,43 +35,3 @@ resources:
   - rustfs.yaml
   - ./otel-collector.yaml
   - ./prometheus.yaml
-
-# OTEL_TRACES_SAMPLER pins ate-api-server to parentbased_always_on so every API
-# call it roots is traced; the other components keep their binary defaults and
-# follow its sampled flag via their ParentBased samplers. It stays an inline
-# patch rather than a key in ate-otel-config.yaml because that ConfigMap is
-# shared by every component via envFrom -- putting always_on there would pin the
-# router and the control plane to 100% too, undoing their per-component ratios.
-#
-# The storage settings point ate-api at the same rustfs the ./atelet overlay
-# points atelet at: both ends of an external snapshot's life have to agree on
-# where it lives.
-patches:
-  - patch: |-
-      apiVersion: apps/v1
-      kind: Deployment
-      metadata:
-        name: ate-api-server
-        namespace: ate-system
-      spec:
-        template:
-          spec:
-            containers:
-            - name: ate-api-server
-              env:
-              - name: OTEL_TRACES_SAMPLER
-                value: parentbased_always_on
-              - name: ATE_STORAGE_BACKEND
-                value: s3
-              - name: AWS_REGION
-                value: us-east-1
-              - name: AWS_ENDPOINT_URL
-                value: http://rustfs.ate-system.svc:9000
-              - name: AWS_S3_USE_PATH_STYLE
-                value: "true"
-              # TODO: use a secret / identity management
-              - name: AWS_ACCESS_KEY_ID
-                value: rustfsadmin
-              - name: AWS_SECRET_ACCESS_KEY
-                value: rustfsadmin
-
