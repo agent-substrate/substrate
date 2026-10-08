@@ -1,0 +1,60 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# This is its own overlay, like ../atelet, so the targeted ate-api-server
+# redeploy can build it standalone and keep these settings.
+resources:
+  - ../../ate-api-server.yaml
+
+# OTEL_TRACES_SAMPLER pins ate-api-server to parentbased_always_on so every API
+# call it roots is traced; the other components keep their binary defaults and
+# follow its sampled flag via their ParentBased samplers. It stays an inline
+# patch rather than a key in ate-otel-config.yaml because that ConfigMap is
+# shared by every component via envFrom -- putting always_on there would pin the
+# router and the control plane to 100% too, undoing their per-component ratios.
+#
+# The storage settings point ate-api at the same rustfs the ../atelet overlay
+# points atelet at: both ends of an external snapshot's life have to agree on
+# where it lives.
+patches:
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ate-api-server
+        namespace: ate-system
+      spec:
+        template:
+          spec:
+            containers:
+            - name: ate-api-server
+              env:
+              - name: OTEL_TRACES_SAMPLER
+                value: parentbased_always_on
+              - name: ATE_STORAGE_BACKEND
+                value: s3
+              - name: AWS_REGION
+                value: us-east-1
+              - name: AWS_ENDPOINT_URL
+                value: http://rustfs.ate-system.svc:9000
+              - name: AWS_S3_USE_PATH_STYLE
+                value: "true"
+              # TODO: use a secret / identity management
+              - name: AWS_ACCESS_KEY_ID
+                value: rustfsadmin
+              - name: AWS_SECRET_ACCESS_KEY
+                value: rustfsadmin
