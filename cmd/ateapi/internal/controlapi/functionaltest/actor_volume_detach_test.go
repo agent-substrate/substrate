@@ -16,7 +16,11 @@ package functionaltest
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"maps"
 	"slices"
+	"sync"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -154,11 +158,11 @@ func TestDeleteActor_CrashedWorkerGone_DetachesAssignedNode(t *testing.T) {
 	plugin.mu.Unlock()
 }
 
-// TestResumeActor_RestoreCrash_DeleteDetaches verifies that when Restore fails
-// with an error a retry cannot clear after the volume was published, the
-// crashed actor keeps assigned_node on record and a later delete unpublishes
-// the volume from it.
-func TestResumeActor_RestoreCrash_DeleteDetaches(t *testing.T) {
+// TestResumeActor_RestoreCrash_Detaches verifies that when Restore fails with
+// an error a retry cannot clear after the volume was published, the crash
+// unpublishes the volume and keeps assigned_node on record, and a later delete
+// unpublishes it from that node again.
+func TestResumeActor_RestoreCrash_Detaches(t *testing.T) {
 	ns := namespaceForTest("ns-restore-crash-detach")
 	plugin := &attachFailVolumePlugin{}
 	tc := setupTestWithVolumePlugins(t, ns, map[string]volume.VolumePluginControlPlane{
@@ -180,14 +184,135 @@ func TestResumeActor_RestoreCrash_DeleteDetaches(t *testing.T) {
 		t.Fatalf("attached nodes = %v, want [node1]: the volume must be published before Restore fails", attached)
 	}
 	assertCrashedKeepingAssignedNode(t, tc, name, "node1")
-	assertDetachedNodes(t, plugin, "after the crash")
+	assertDetachedNodes(t, plugin, "after the crash", "node1")
 
 	if _, err := tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
 	}); err != nil {
 		t.Fatalf("DeleteActor failed: %v", err)
 	}
-	assertDetachedNodes(t, plugin, "after delete", "node1")
+	assertDetachedNodes(t, plugin, "after delete", "node1", "node1")
+}
+
+// attachTrackingVolumePlugin records which node each volume is attached to,
+// like a real driver, and answers a detach of a volume that is not attached
+// to the node with notAttachedErr.
+type attachTrackingVolumePlugin struct {
+	volume.VolumePluginControlPlane
+	notAttachedErr error
+
+	mu       sync.Mutex
+	attached map[string]string
+	detaches int
+	deleted  []string
+}
+
+func (p *attachTrackingVolumePlugin) CreateVolume(ctx context.Context, req volume.CreateVolumeRequest) (volume.CreateVolumeResponse, error) {
+	return volume.CreateVolumeResponse{VolumeID: "storage-" + req.Name}, nil
+}
+
+func (p *attachTrackingVolumePlugin) AttachVolume(ctx context.Context, req volume.AttachVolumeRequest) (volume.AttachVolumeResponse, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.attached == nil {
+		p.attached = map[string]string{}
+	}
+	p.attached[req.VolumeID] = req.Node
+	return volume.AttachVolumeResponse{}, nil
+}
+
+func (p *attachTrackingVolumePlugin) DetachVolume(ctx context.Context, volumeID, node string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.detaches++
+	if p.attached[volumeID] != node {
+		return p.notAttachedErr
+	}
+	delete(p.attached, volumeID)
+	return nil
+}
+
+func (p *attachTrackingVolumePlugin) DeleteVolume(ctx context.Context, volumeID string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.deleted = append(p.deleted, volumeID)
+	return nil
+}
+
+// state returns the attached volumes, the number of detach calls, and the
+// deleted volumes.
+func (p *attachTrackingVolumePlugin) state() (attached map[string]string, detaches int, deleted []string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return maps.Clone(p.attached), p.detaches, slices.Clone(p.deleted)
+}
+
+// TestDeleteActor_AfterCrashDetach verifies that deleting an actor whose crash
+// already detached its volume repeats the detach without harm when the driver
+// answers that repeat with OK, as the CSI spec asks of ControllerUnpublishVolume,
+// or with NotFound. A driver that fails the repeat blocks the delete, which
+// shows the test exercises the repeated detach.
+func TestDeleteActor_AfterCrashDetach(t *testing.T) {
+	tests := []struct {
+		name           string
+		notAttachedErr error
+		wantDeleteErr  bool
+	}{
+		{
+			name:           "driver answers OK",
+			notAttachedErr: nil,
+		},
+		{
+			name:           "driver answers NotFound",
+			notAttachedErr: status.Error(codes.NotFound, "volume is not attached to the node"),
+		},
+		{
+			name:           "driver fails",
+			notAttachedErr: fmt.Errorf("volume is not attached to the node"),
+			wantDeleteErr:  true,
+		},
+	}
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ns := namespaceForTest(fmt.Sprintf("ns-delete-after-crash-detach-%d", i))
+			plugin := &attachTrackingVolumePlugin{notAttachedErr: tt.notAttachedErr}
+			tc := setupTestWithVolumePlugins(t, ns, map[string]volume.VolumePluginControlPlane{
+				"substrate.io/mock": plugin,
+			})
+			defer tc.cleanup()
+
+			const name = "crash-actor"
+			ref := &ateapipb.ObjectRef{Atespace: testAtespace, Name: name}
+			createSingleVolumeActor(t, tc, ns, name)
+			tc.fakeAtelet.FailRestore = status.Error(codes.Internal, "injected restore failure")
+			if _, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{Actor: ref}); status.Code(err) != codes.Internal {
+				t.Fatalf("ResumeActor code = %v, want Internal (err: %v)", status.Code(err), err)
+			}
+			assertCrashedKeepingAssignedNode(t, tc, name, "node1")
+			attached, detaches, _ := plugin.state()
+			if len(attached) != 0 || detaches != 1 {
+				t.Fatalf("after the crash: attached = %v, detaches = %d; want none attached after 1 detach", attached, detaches)
+			}
+
+			_, err := tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{Actor: ref})
+			if gotErr := err != nil; gotErr != tt.wantDeleteErr {
+				t.Fatalf("DeleteActor error = %v, want error %t", err, tt.wantDeleteErr)
+			}
+			attached, detaches, deleted := plugin.state()
+			if len(attached) != 0 || detaches != 2 {
+				t.Errorf("after delete: attached = %v, detaches = %d; want none attached after 2 detaches", attached, detaches)
+			}
+			if tt.wantDeleteErr {
+				return
+			}
+			if len(deleted) != 1 {
+				t.Errorf("deleted volumes = %v, want exactly one", deleted)
+			}
+			if _, err := tc.persistence.GetActor(context.Background(), resources.ActorRef{Atespace: testAtespace, Name: name}); !errors.Is(err, store.ErrNotFound) {
+				t.Errorf("GetActor after delete: err = %v, want ErrNotFound", err)
+			}
+		})
+	}
 }
 
 // TestSuspendActor_WorkerRowGone_StillDetaches verifies that a suspend

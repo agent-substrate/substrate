@@ -339,7 +339,7 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 		slog.ErrorContext(ctx, "expected a worker assignment on a RESUMING actor, found none")
 
 		// Crash the actor if its worker assignment is missing. We should never be in this state.
-		if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume, crashMessageWorkerAssignmentMissing); cerr != nil {
+		if cerr := w.crashActor(ctx, actorRef, actorTemplate, ateattr.OperationResume, crashMessageWorkerAssignmentMissing); cerr != nil {
 			return nil, cerr
 		}
 		return nil, apierror.Aborted("actor %s crashed", actorRef)
@@ -349,7 +349,7 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 	if err != nil {
 		// Crash the actor if it was assigned to a deleted pod.
 		if errors.Is(err, store.ErrNotFound) {
-			if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume, crashMessageWorkerGone); cerr != nil {
+			if cerr := w.crashActor(ctx, actorRef, actorTemplate, ateattr.OperationResume, crashMessageWorkerGone); cerr != nil {
 				return nil, cerr
 			}
 			return nil, apierror.Aborted("actor %s crashed", actorRef)
@@ -360,7 +360,7 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 		slog.InfoContext(ctx, "Assigned worker is draining; crashing actor",
 			slog.String("actor", actorRef.String()),
 			slog.String("worker", worker.GetWorkerNamespace()+"/"+worker.GetWorkerPod()))
-		if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume, crashMessageWorkerDraining); cerr != nil {
+		if cerr := w.crashActor(ctx, actorRef, actorTemplate, ateattr.OperationResume, crashMessageWorkerDraining); cerr != nil {
 			return nil, cerr
 		}
 		return nil, apierror.Aborted("actor %s crashed", actorRef.String())
@@ -382,7 +382,7 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 	if !hosted {
 		slog.ErrorContext(ctx, "crashing actor because its assigned worker no longer hosts it",
 			slog.String("worker", worker.GetWorkerPod()))
-		if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume, crashMessageWorkerReassigned); cerr != nil {
+		if cerr := w.crashActor(ctx, actorRef, actorTemplate, ateattr.OperationResume, crashMessageWorkerReassigned); cerr != nil {
 			return nil, fmt.Errorf("while crashing actor: %w", cerr)
 		}
 		return nil, apierror.Aborted("actor %s crashed", actorRef)
@@ -391,13 +391,11 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 	if !w.appliesWithFallback(worker, constraints, canRelaxRuntime(actor, constraints)) {
 		slog.ErrorContext(ctx, "crashing actor because previously assigned worker is not eligible anymore")
 		// If that worker's pool is no longer eligible (e.g. the actor's
-		// worker_selector was updated after the failed attempt), release it back
-		// to the free pool instead of leaving it claimed forever — nothing else
-		// reclaims a healthy worker whose actor moved on to a different pool.
-		if _, err := w.store.ReleaseActorFromWorker(ctx, worker.GetMetadata().GetName(), actor.GetMetadata().GetUid()); err != nil {
-			return nil, fmt.Errorf("while releasing stale worker assignment: %w", err)
-		}
-		if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume, crashMessageWorkerIneligible); cerr != nil {
+		// worker_selector was updated after the failed attempt), crashing
+		// releases it back to the free pool instead of leaving it claimed
+		// forever — nothing else reclaims a healthy worker whose actor moved on
+		// to a different pool.
+		if cerr := w.crashActor(ctx, actorRef, actorTemplate, ateattr.OperationResume, crashMessageWorkerIneligible); cerr != nil {
 			return nil, fmt.Errorf("while crashing actor: %w", cerr)
 		}
 		return nil, apierror.Aborted("actor %s crashed", actorRef)
@@ -803,7 +801,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		}
 		resp, err := client.Run(ctx, req)
 		if err != nil {
-			return tele, 0, handleAteletError(ctx, w.store, actorRef, ateattr.OperationResume, "Run", false, err)
+			return tele, 0, w.handleAteletError(ctx, actorRef, actorTemplate, ateattr.OperationResume, "Run", false, err)
 		}
 		return tele, resp.GetWorkerEpoch(), nil
 	}
@@ -857,7 +855,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 	}
 	resp, err := client.Restore(ctx, req)
 	if err != nil {
-		return tele, 0, handleAteletError(ctx, w.store, actorRef, ateattr.OperationResume, "Restore", false, err)
+		return tele, 0, w.handleAteletError(ctx, actorRef, actorTemplate, ateattr.OperationResume, "Restore", false, err)
 	}
 	return tele, resp.GetWorkerEpoch(), nil
 }

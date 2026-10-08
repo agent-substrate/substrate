@@ -52,7 +52,16 @@ func (w *ActorWorkflow) CrashActorReportedByWorker(ctx context.Context, actorRef
 	if state := actor.GetStatus().GetState(); state != ateapipb.ActorState_ACTOR_STATE_RUNNING {
 		return nil, apierror.FailedPrecondition("actor %s is %s, not RUNNING", actorRef, state)
 	}
-	if err := crashActor(leaseCtx, w.store, actorRef, ateattr.OperationUnknown, message); err != nil {
+	// A missing template leaves crashActor to detach every volume the actor
+	// records.
+	actorTemplate, err := resolveActorTemplate(leaseCtx, w.store, actor)
+	if errors.Is(err, errActorTemplateNotFound) {
+		actorTemplate, err = nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := w.crashActor(leaseCtx, actorRef, actorTemplate, ateattr.OperationUnknown, message); err != nil {
 		return nil, err
 	}
 	return w.store.GetActor(leaseCtx, actorRef)
