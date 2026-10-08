@@ -19,6 +19,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -29,8 +30,10 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/sizing"
 )
 
@@ -75,16 +78,170 @@ func (r *runsc) shapeSpec(containerName string) error {
 	return ocispec.Save(bundle, spec)
 }
 
-func (r *runsc) cmdCreate(ctx context.Context, out io.Writer, containerName string, additionalArgs []string) error {
-	slog.InfoContext(ctx, "About to run runsc create", slog.String("container", containerName))
+// runscLogTailBytes bounds how much of runsc's log, and of a sentry panic, an
+// error quotes. The error ends up in the actor's crash message, which is
+// capped at 4 KiB, so leave room for the context wrapped around it.
+const runscLogTailBytes = 2048
 
-	if err := r.shapeSpec(containerName); err != nil {
-		return fmt.Errorf("while shaping the OCI spec for %q: %w", containerName, err)
+// logMark is where the runsc log ended before a command ran, so a failure
+// quotes what was logged during the command and nothing older.
+type logMark int64
+
+// logMark returns the current end of the actor's runsc log.
+func (r *runsc) logMark() logMark {
+	info, err := os.Stat(runscLogPath(r.actorDirs))
+	if err != nil {
+		return 0
 	}
+	return logMark(info.Size())
+}
 
+// loggedSince returns what runsc logged after mark, on one line, bounded to
+// the last runscLogTailBytes. Every runsc command writes its log to the
+// actor's runsc log file (see runscLogPath), and the sentry it starts logs
+// there too, so this is what runsc had to say about the failure.
+func (r *runsc) loggedSince(mark logMark) string {
+	f, err := os.Open(runscLogPath(r.actorDirs))
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil || info.Size() <= int64(mark) {
+		return ""
+	}
+	offset, cut := int64(mark), false
+	if info.Size()-offset > runscLogTailBytes {
+		offset, cut = info.Size()-runscLogTailBytes, true
+	}
+	b := make([]byte, info.Size()-offset)
+	if _, err := f.ReadAt(b, offset); err != nil && !errors.Is(err, io.EOF) {
+		return ""
+	}
+	if cut {
+		// Drop the line the cut landed in.
+		if i := bytes.IndexByte(b, '\n'); i >= 0 {
+			b = b[i+1:]
+		}
+	}
+	msgs := logMessages(b)
+	if msgs != "" && cut {
+		msgs = "..." + msgs
+	}
+	return msgs
+}
+
+// logMessages joins the messages of runsc's JSON log lines with "; ". A line
+// that is not one is kept as it is.
+func logMessages(b []byte) string {
+	var out []string
+	for _, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var rec struct {
+			Msg string `json:"msg"`
+		}
+		if err := json.Unmarshal([]byte(line), &rec); err == nil && rec.Msg != "" {
+			line = strings.TrimSpace(rec.Msg)
+		}
+		out = append(out, line)
+	}
+	return strings.Join(out, "; ")
+}
+
+// oneLine joins the non-empty lines of b with "; " for an error message.
+func oneLine(b []byte) string {
+	var lines []string
+	for _, line := range strings.Split(string(b), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			lines = append(lines, line)
+		}
+	}
+	return strings.Join(lines, "; ")
+}
+
+// sentryPanic returns the start of the sentry's panic log on one line, or ""
+// when there is none. runsc gets -panic-log so a sentry panic outlives the
+// sentry; the head is kept rather than the tail because the panic message and
+// the goroutine that raised it come first.
+func (r *runsc) sentryPanic() string {
+	b, err := os.ReadFile(panicLogPath(r.actorDirs))
+	if err != nil {
+		return ""
+	}
+	cut := len(b) > runscLogTailBytes
+	if cut {
+		b = b[:runscLogTailBytes]
+	}
+	s := oneLine(b)
+	if s != "" && cut {
+		s += "..."
+	}
+	return s
+}
+
+// logSentryPanic reports the sentry's panic log, if there is one, with the
+// actor's identity, and removes it so it is not reported again or attached
+// to a later failure of a different activation. Terminate calls it as the
+// last point this ateom looks at the actor's directories.
+func (r *runsc) logSentryPanic(ctx context.Context, attribution resources.ActorAttribution) {
+	p := r.sentryPanic()
+	if p == "" {
+		_ = os.Remove(panicLogPath(r.actorDirs))
+		return
+	}
+	attrs := ateattr.ActorLogAttrs(attribution)
+	attrs = append(attrs, slog.String("panic_log", p))
+	slog.LogAttrs(ctx, slog.LevelWarn, "Sentry panic log found while terminating the actor", attrs...)
+	if err := os.Remove(panicLogPath(r.actorDirs)); err != nil {
+		slog.WarnContext(ctx, "Failed to remove the sentry panic log", slog.Any("err", err))
+	}
+}
+
+// commandError wraps err from `runsc <verb>` with what runsc logged during
+// the command and, when the sentry has panicked, the start of its panic log.
+// The result flows through atelet into the actor's crash message, so it is
+// what an operator sees.
+func (r *runsc) commandError(verb string, err error, mark logMark) error {
+	var detail string
+	if logged := r.loggedSince(mark); logged != "" {
+		detail += ": " + logged
+	}
+	if p := r.sentryPanic(); p != "" {
+		detail += "; sentry panic log: " + p
+	}
+	return fmt.Errorf("while running `runsc %s`: %w%s", verb, err, detail)
+}
+
+// run executes runsc with args, its output going to out, or to this process's
+// stdout and stderr when out is nil. out is handed to runsc as it is: for
+// create, start and restore it is the container's stdio, which the sandbox
+// inherits for its lifetime, so anything but a file there would hold the
+// command's wait open for as long as the sandbox runs. What runsc has to say
+// about a failure comes from its log file instead.
+func (r *runsc) run(ctx context.Context, verb string, out io.Writer, args ...string) error {
+	cmd := exec.CommandContext(ctx, r.path, args...)
+	if out != nil {
+		cmd.Stdout, cmd.Stderr = out, out
+	} else {
+		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	}
+	mark := r.logMark()
+	if err := reaper.RunCommand(cmd); err != nil {
+		return r.commandError(verb, err, mark)
+	}
+	return nil
+}
+
+// createArgs builds the argv for `runsc create <container>`. Factored out so
+// the argument construction can be unit-tested without executing runsc.
+func (r *runsc) createArgs(containerName string, additionalArgs []string) []string {
 	args := []string{
 		"-log-format", "json",
 		"--alsologtostderr",
+		"-log", runscLogPath(r.actorDirs),
 		// "-debug",
 		// "-debug-log", filepath.Join(r.actorDirs.GetRootDir(), "runsc-debug-logs", containerName) + "/",
 		// "-debug-to-user-log",
@@ -95,6 +252,8 @@ func (r *runsc) cmdCreate(ctx context.Context, out io.Writer, containerName stri
 		// sizing.ApplyToOCISpec, so the sandbox is sized to the pod's limit (runsc
 		// otherwise sizes to all host CPUs). Global flag: before the subcommand.
 		"--cpu-num-from-quota",
+		// Keep a sentry panic, which otherwise dies with the sentry; see sentryPanic.
+		"-panic-log", panicLogPath(r.actorDirs),
 	}
 	args = append(args,
 		"create",
@@ -104,20 +263,16 @@ func (r *runsc) cmdCreate(ctx context.Context, out io.Writer, containerName stri
 
 	args = append(args, additionalArgs...)
 	args = append(args, containerName) // Name of the container
-	cmd := exec.CommandContext(
-		ctx,
-		r.path,
-		args...,
-	)
-	cmd.Stdout = out
-	cmd.Stderr = out
+	return args
+}
 
-	err := reaper.RunCommand(cmd)
-	if err != nil {
-		return fmt.Errorf("while running `runsc create`: %w", err)
+func (r *runsc) cmdCreate(ctx context.Context, out io.Writer, containerName string, additionalArgs []string) error {
+	slog.InfoContext(ctx, "About to run runsc create", slog.String("container", containerName))
+
+	if err := r.shapeSpec(containerName); err != nil {
+		return fmt.Errorf("while shaping the OCI spec for %q: %w", containerName, err)
 	}
-
-	return nil
+	return r.run(ctx, "create", out, r.createArgs(containerName, additionalArgs)...)
 }
 
 func (r *runsc) cmdStart(ctx context.Context, out io.Writer, containerName string) error {
@@ -126,6 +281,7 @@ func (r *runsc) cmdStart(ctx context.Context, out io.Writer, containerName strin
 	startArgs := []string{
 		"-log-format", "json",
 		"--alsologtostderr",
+		"-log", runscLogPath(r.actorDirs),
 		// "-debug",
 		// "-debug-log", filepath.Join(r.actorDirs.GetRootDir(), "runsc-debug-logs", containerName) + "/",
 		// "-debug-to-user-log",
@@ -135,26 +291,16 @@ func (r *runsc) cmdStart(ctx context.Context, out io.Writer, containerName strin
 		"-root", runscStateDir(r.actorDirs),
 	}
 	startArgs = append(startArgs, "start", containerName)
-	cmd := exec.CommandContext(ctx, r.path, startArgs...)
-	cmd.Stdout = out
-	cmd.Stderr = out
-
-	err := reaper.RunCommand(cmd)
-	if err != nil {
-		return fmt.Errorf("while running `runsc start`: %w", err)
-	}
-
-	return nil
+	return r.run(ctx, "start", out, startArgs...)
 }
 
 func (r *runsc) cmdCheckpoint(ctx context.Context, containerName, checkpointPath string) error {
 	slog.InfoContext(ctx, "About to run runsc checkpoint", slog.String("container", containerName))
 
-	cmd := exec.CommandContext(
-		ctx,
-		r.path,
+	return r.run(ctx, "checkpoint", nil,
 		"-log-format", "json",
 		"--alsologtostderr",
+		"-log", runscLogPath(r.actorDirs),
 		// "-debug",
 		// "-debug-log", filepath.Join(r.actorDirs.GetRootDir(), "runsc-debug-logs", containerName) + "/",
 		// "-debug-to-user-log",
@@ -165,13 +311,6 @@ func (r *runsc) cmdCheckpoint(ctx context.Context, containerName, checkpointPath
 		"-image-path", checkpointPath,
 		containerName, // Name of the container
 	)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	err := reaper.RunCommand(cmd)
-	if err != nil {
-		return fmt.Errorf("while running `runsc checkpoint`: %w", err)
-	}
-	return nil
 }
 
 //nolint:unused
@@ -181,6 +320,7 @@ func (r *runsc) cmdFsCheckpoint(ctx context.Context, containerName, checkpointPa
 	args := []string{
 		"-log-format", "json",
 		"--alsologtostderr",
+		"-log", runscLogPath(r.actorDirs),
 		// "-debug",
 		// "-debug-log", filepath.Join(r.actorDirs.GetRootDir(), "runsc-debug-logs", containerName) + "/",
 		// "-debug-to-user-log",
@@ -196,19 +336,7 @@ func (r *runsc) cmdFsCheckpoint(ctx context.Context, containerName, checkpointPa
 
 	// name of the container must be the last parameter.
 	args = append(args, containerName)
-
-	cmd := exec.CommandContext(
-		ctx,
-		r.path,
-		args...,
-	)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	err := reaper.RunCommand(cmd)
-	if err != nil {
-		return fmt.Errorf("while running `runsc fscheckpoint`: %w", err)
-	}
-	return nil
+	return r.run(ctx, "fscheckpoint", nil, args...)
 }
 
 // pauseArgs builds the argv for `runsc pause <container>`. Factored out so the
@@ -217,6 +345,7 @@ func (r *runsc) pauseArgs(containerName string) []string {
 	return []string{
 		"-log-format", "json",
 		"--alsologtostderr",
+		"-log", runscLogPath(r.actorDirs),
 		"-root", runscStateDir(r.actorDirs),
 		"pause",
 		containerName,
@@ -227,13 +356,7 @@ func (r *runsc) pauseArgs(containerName string) []string {
 func (r *runsc) cmdPause(ctx context.Context, containerName string) error {
 	slog.InfoContext(ctx, "About to run runsc pause", slog.String("container", containerName))
 
-	cmd := exec.CommandContext(ctx, r.path, r.pauseArgs(containerName)...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := reaper.RunCommand(cmd); err != nil {
-		return fmt.Errorf("while running `runsc pause`: %w", err)
-	}
-	return nil
+	return r.run(ctx, "pause", nil, r.pauseArgs(containerName)...)
 }
 
 // resumeArgs builds the argv for `runsc resume <container>`. Factored out so the
@@ -242,6 +365,7 @@ func (r *runsc) resumeArgs(containerName string) []string {
 	return []string{
 		"-log-format", "json",
 		"--alsologtostderr",
+		"-log", runscLogPath(r.actorDirs),
 		"-root", runscStateDir(r.actorDirs),
 		"resume",
 		containerName,
@@ -252,13 +376,7 @@ func (r *runsc) resumeArgs(containerName string) []string {
 func (r *runsc) cmdResume(ctx context.Context, containerName string) error {
 	slog.InfoContext(ctx, "About to run runsc resume", slog.String("container", containerName))
 
-	cmd := exec.CommandContext(ctx, r.path, r.resumeArgs(containerName)...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := reaper.RunCommand(cmd); err != nil {
-		return fmt.Errorf("while running `runsc resume`: %w", err)
-	}
-	return nil
+	return r.run(ctx, "resume", nil, r.resumeArgs(containerName)...)
 }
 
 // restoreArgs builds the argv for `runsc restore <container>`. Factored out so
@@ -267,6 +385,7 @@ func (r *runsc) restoreArgs(containerName, checkpointPath string) []string {
 	return []string{
 		"-log-format", "json",
 		"--alsologtostderr",
+		"-log", runscLogPath(r.actorDirs),
 		// "-debug",
 		// "-debug-log", filepath.Join(r.actorDirs.GetRootDir(), "runsc-debug-logs", containerName) + "/",
 		// "-debug-to-user-log",
@@ -275,6 +394,8 @@ func (r *runsc) restoreArgs(containerName, checkpointPath string) []string {
 		"-root", runscStateDir(r.actorDirs),
 		// Match cmdCreate: size the restored sentry from the cgroup CPU quota.
 		"--cpu-num-from-quota",
+		// Match cmdCreate: keep a sentry panic; see sentryPanic.
+		"-panic-log", panicLogPath(r.actorDirs),
 		"restore",
 		"-bundle", ociBundlePath(r.actorDirs, containerName),
 		"-image-path", checkpointPath,
@@ -294,52 +415,31 @@ func (r *runsc) cmdRestore(ctx context.Context, out io.Writer, containerName, ch
 		return fmt.Errorf("while shaping the OCI spec for %q: %w", containerName, err)
 	}
 
-	cmd := exec.CommandContext(ctx, r.path, r.restoreArgs(containerName, checkpointPath)...)
-	cmd.Stdout = out
-	cmd.Stderr = out
-	if err := reaper.RunCommand(cmd); err != nil {
-		return fmt.Errorf("while running `runsc restore`: %w", err)
-	}
-	return nil
+	return r.run(ctx, "restore", out, r.restoreArgs(containerName, checkpointPath)...)
 }
 
 func (r *runsc) cmdDelete(ctx context.Context, containerName string) error {
-	cmd := exec.CommandContext(
-		ctx,
-		r.path,
+	return r.run(ctx, "delete", nil,
 		"-log-format", "json",
 		"--alsologtostderr",
+		"-log", runscLogPath(r.actorDirs),
 		// "-debug",
 		"-root", runscStateDir(r.actorDirs),
 		"delete",
 		"-force",
 		containerName,
 	)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	err := reaper.RunCommand(cmd)
-	if err != nil {
-		return fmt.Errorf("while running `runsc delete`: %w", err)
-	}
-	return nil
 }
 
 func (r *runsc) cmdState(ctx context.Context, containerName string) error {
-	cmd := exec.CommandContext(
-		ctx,
-		r.path,
+	return r.run(ctx, "state", nil,
 		"-log-format", "json",
 		"--alsologtostderr",
+		"-log", runscLogPath(r.actorDirs),
 		"-root", runscStateDir(r.actorDirs),
 		"state",
 		containerName,
 	)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := reaper.RunCommand(cmd); err != nil {
-		return fmt.Errorf("while running `runsc state`: %w", err)
-	}
-	return nil
 }
 
 // cmdList returns the container IDs runsc has a record of.
@@ -349,6 +449,7 @@ func (r *runsc) cmdList(ctx context.Context) ([]string, error) {
 		r.path,
 		"-log-format", "json",
 		"--alsologtostderr",
+		"-log", runscLogPath(r.actorDirs),
 		"-root", runscStateDir(r.actorDirs),
 		"list",
 		"-quiet",
@@ -356,8 +457,9 @@ func (r *runsc) cmdList(ctx context.Context) ([]string, error) {
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = os.Stderr
+	mark := r.logMark()
 	if err := reaper.RunCommand(cmd); err != nil {
-		return nil, fmt.Errorf("while running `runsc list`: %w", err)
+		return nil, r.commandError("list", err, mark)
 	}
 	return strings.Fields(out.String()), nil
 }
@@ -368,6 +470,7 @@ func (r *runsc) killArgs(containerName, signal string) []string {
 	return []string{
 		"-log-format", "json",
 		"--alsologtostderr",
+		"-log", runscLogPath(r.actorDirs),
 		"-root", runscStateDir(r.actorDirs),
 		"kill",
 		containerName,
@@ -380,13 +483,7 @@ func (r *runsc) killArgs(containerName, signal string) []string {
 func (r *runsc) cmdKill(ctx context.Context, containerName, signal string) error {
 	slog.InfoContext(ctx, "About to run runsc kill", slog.String("container", containerName), slog.String("signal", signal))
 
-	cmd := exec.CommandContext(ctx, r.path, r.killArgs(containerName, signal)...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := reaper.RunCommand(cmd); err != nil {
-		return fmt.Errorf("while running `runsc kill`: %w", err)
-	}
-	return nil
+	return r.run(ctx, "kill", nil, r.killArgs(containerName, signal)...)
 }
 
 // waitArgs builds the argv for `runsc wait <container>`. Factored out so the
@@ -395,6 +492,7 @@ func (r *runsc) waitArgs(containerName string) []string {
 	return []string{
 		"-log-format", "json",
 		"--alsologtostderr",
+		"-log", runscLogPath(r.actorDirs),
 		"-root", runscStateDir(r.actorDirs),
 		"wait",
 		containerName,
@@ -413,6 +511,7 @@ func (r *runsc) cmdWait(ctx context.Context, containerName string) error {
 	cmd := exec.CommandContext(ctx, r.path, r.waitArgs(containerName)...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	mark := r.logMark()
 	if err := cmd.Run(); err != nil {
 		// Running outside the reaper means the reaper can collect this process
 		// first, leaving os/exec nothing to wait for. `runsc wait` only exits
@@ -423,7 +522,7 @@ func (r *runsc) cmdWait(ctx context.Context, containerName string) error {
 			slog.DebugContext(ctx, "runsc wait was collected by the child reaper", slog.String("container", containerName))
 			return nil
 		}
-		return fmt.Errorf("while running `runsc wait`: %w", err)
+		return r.commandError("wait", err, mark)
 	}
 	return nil
 }

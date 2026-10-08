@@ -32,6 +32,13 @@ func TestResetRunscStateAndPidFileDirs(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(runscStateDir(actorDirs), "stale"), 0o700); err != nil {
 		t.Fatal(err)
 	}
+	// The previous activation's runsc log and sentry panic log go too, so a
+	// failure never quotes another activation's lines.
+	for _, file := range []string{runscLogPath(actorDirs), panicLogPath(actorDirs)} {
+		if err := os.WriteFile(file, []byte("stale\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := resetRunscStateAndPidFileDirs(actorDirs); err != nil {
 		t.Fatalf("resetRunscStateAndPidFileDirs() = %v", err)
 	}
@@ -39,6 +46,15 @@ func TestResetRunscStateAndPidFileDirs(t *testing.T) {
 		if entries, err := os.ReadDir(dir); err != nil || len(entries) != 0 {
 			t.Errorf("ReadDir(%q) = %v, %v; want an empty directory", dir, entries, err)
 		}
+	}
+	for _, file := range []string{runscLogPath(actorDirs), panicLogPath(actorDirs)} {
+		if _, err := os.Stat(file); !os.IsNotExist(err) {
+			t.Errorf("Stat(%q) err = %v, want not exist", file, err)
+		}
+	}
+	// Reset with neither file present is fine.
+	if err := resetRunscStateAndPidFileDirs(actorDirs); err != nil {
+		t.Fatalf("second resetRunscStateAndPidFileDirs() = %v", err)
 	}
 }
 

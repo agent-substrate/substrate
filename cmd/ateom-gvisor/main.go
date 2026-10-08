@@ -724,7 +724,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	// Cleanup the containers after checkpointing. This also unhosts the actor,
 	// before the snapshot listing below can fail.
 	// This is best-effort cleanup for actor containers that may have been left behind after checkpointing.
-	if err := s.terminateWorkload(ctx, attribution.Ref, attribution.UID, req.GetRunscPath(), req.GetActorDirs(), req.GetSpec().GetContainers()); err != nil {
+	if err := s.terminateWorkload(ctx, attribution, req.GetRunscPath(), req.GetActorDirs(), req.GetSpec().GetContainers()); err != nil {
 		slog.WarnContext(ctx, "failed to terminate workload after checkpoint",
 			slog.String("actor", attribution.Ref.String()),
 			slog.String("actorUID", attribution.UID),
@@ -983,7 +983,7 @@ func (s *AteomService) TerminateWorkload(ctx context.Context, req *ateompb.Termi
 
 	attribution := ateomstats.ActorAttributionFromRequest(req)
 
-	if err := s.terminateWorkload(ctx, attribution.Ref, attribution.UID, req.GetRunscPath(), req.GetActorDirs(), req.GetSpec().GetContainers()); err != nil {
+	if err := s.terminateWorkload(ctx, attribution, req.GetRunscPath(), req.GetActorDirs(), req.GetSpec().GetContainers()); err != nil {
 		return nil, fmt.Errorf("failed to terminate workload: %w", err)
 	}
 
@@ -992,9 +992,10 @@ func (s *AteomService) TerminateWorkload(ctx context.Context, req *ateompb.Termi
 	return &ateompb.TerminateWorkloadResponse{}, nil
 }
 
-func (s *AteomService) terminateWorkload(ctx context.Context, actorRef resources.ActorRef, actorUID, runscPath string, actorDirs *ateompb.ActorDirs, containers []*ateompb.Container) error {
+func (s *AteomService) terminateWorkload(ctx context.Context, attribution resources.ActorAttribution, runscPath string, actorDirs *ateompb.ActorDirs, containers []*ateompb.Container) error {
+	actorUID := attribution.UID
 	var errs []error
-	if err := s.tunnel.Deactivate(ctx, resources.ActorAttribution{Ref: actorRef, UID: actorUID}); err != nil {
+	if err := s.tunnel.Deactivate(ctx, attribution); err != nil {
 		errs = append(errs, fmt.Errorf("while deactivating actor networking: %w", err))
 	}
 
@@ -1003,6 +1004,9 @@ func (s *AteomService) terminateWorkload(ctx context.Context, actorRef resources
 		actorUID:  actorUID,
 		actorDirs: actorDirs,
 	}
+	// A sentry panic that no failed runsc command quoted is still on disk;
+	// report it before the directories are reset.
+	rcmd.logSentryPanic(ctx, attribution)
 
 	// Detached from the caller: a deadline mid-`runsc delete` would leave the
 	// container without its record and the actor unrecoverable.

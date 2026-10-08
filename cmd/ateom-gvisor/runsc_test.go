@@ -45,6 +45,7 @@ func TestKillArgs(t *testing.T) {
 	want := []string{
 		"-log-format", "json",
 		"--alsologtostderr",
+		"-log", "/node/actors/test-actor-123/runsc.log",
 		"-root", "/node/actors/test-actor-123/runsc-state",
 		"kill",
 		"my-container",
@@ -67,6 +68,7 @@ func TestWaitArgs(t *testing.T) {
 	want := []string{
 		"-log-format", "json",
 		"--alsologtostderr",
+		"-log", "/node/actors/test-actor-123/runsc.log",
 		"-root", "/node/actors/test-actor-123/runsc-state",
 		"wait",
 		"my-container",
@@ -88,6 +90,7 @@ func TestPauseArgs(t *testing.T) {
 	want := []string{
 		"-log-format", "json",
 		"--alsologtostderr",
+		"-log", "/node/actors/test-actor-123/runsc.log",
 		"-root", "/node/actors/test-actor-123/runsc-state",
 		"pause",
 		ocispec.PauseContainer,
@@ -109,6 +112,7 @@ func TestResumeArgs(t *testing.T) {
 	want := []string{
 		"-log-format", "json",
 		"--alsologtostderr",
+		"-log", "/node/actors/test-actor-123/runsc.log",
 		"-root", "/node/actors/test-actor-123/runsc-state",
 		"resume",
 		ocispec.PauseContainer,
@@ -131,8 +135,10 @@ func TestRestoreArgs(t *testing.T) {
 	want := []string{
 		"-log-format", "json",
 		"--alsologtostderr",
+		"-log", "/node/actors/test-actor-123/runsc.log",
 		"-root", "/node/actors/test-actor-123/runsc-state",
 		"--cpu-num-from-quota",
+		"-panic-log", "/node/actors/test-actor-123/sentry-panic.log",
 		"restore",
 		"-bundle", "/node/actors/test-actor-123/bundle/" + ocispec.PauseContainer,
 		"-image-path", checkpointDir,

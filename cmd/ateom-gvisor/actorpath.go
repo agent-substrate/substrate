@@ -19,6 +19,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -47,15 +48,36 @@ func pidFilePath(actorDirs *ateompb.ActorDirs, containerName string) string {
 	return filepath.Join(pidFileDir(actorDirs), containerName+".pid")
 }
 
+// runscLogPath is runsc -log for every command run for the actor, and for
+// the sentry they start: the file a failed command's error quotes from. It
+// is removed with the activation, so it holds only this activation's lines.
+func runscLogPath(actorDirs *ateompb.ActorDirs) string {
+	return filepath.Join(actorDirs.GetRootDir(), "runsc.log")
+}
+
+// panicLogPath is runsc -panic-log: where the sentry writes a panic, so it
+// outlives the sentry. One file per sandbox, since the sub-containers share
+// the pause container's sentry.
+func panicLogPath(actorDirs *ateompb.ActorDirs) string {
+	return filepath.Join(actorDirs.GetRootDir(), "sentry-panic.log")
+}
+
 // resolvConfPath is the resolver bind source outside the actor's rootfs.
 func resolvConfPath(actorDirs *ateompb.ActorDirs) string {
 	return filepath.Join(actorDirs.GetRootDir(), "resolv.conf")
 }
 
-// resetRunscStateAndPidFileDirs empties both directories for a new activation.
-// runsc can leave mounts behind in its state directory (its null-netns), which
-// must be detached in this mount namespace before they can be removed.
+// resetRunscStateAndPidFileDirs empties both directories for a new activation,
+// and removes the previous activation's runsc log and sentry panic log so a
+// failure never quotes another activation's lines. runsc can leave mounts
+// behind in its state directory (its null-netns), which must be detached in
+// this mount namespace before they can be removed.
 func resetRunscStateAndPidFileDirs(actorDirs *ateompb.ActorDirs) error {
+	for _, file := range []string{runscLogPath(actorDirs), panicLogPath(actorDirs)} {
+		if err := os.Remove(file); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("while removing %q: %w", file, err)
+		}
+	}
 	for _, dir := range []string{runscStateDir(actorDirs), pidFileDir(actorDirs)} {
 		if err := imagecache.UnmountAllUnder(dir); err != nil {
 			return fmt.Errorf("while unmounting under %q: %w", dir, err)
