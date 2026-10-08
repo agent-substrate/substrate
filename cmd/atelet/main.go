@@ -34,7 +34,6 @@ import (
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/credentialprovider"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/sparsefile"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/trustbundle"
-	"github.com/agent-substrate/substrate/internal/actorlog"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
 	"github.com/agent-substrate/substrate/internal/ateattr"
@@ -125,13 +124,7 @@ func main() {
 		return
 	}
 	ctx := context.Background()
-	// One synchronized writer in front of stdout, shared by the runtime
-	// logger and the usage-event drain (see startStatsPoller): uncoordinated
-	// writers stay tear-free only while every record fits a pipe's
-	// atomic-write size -- an accident of field sizes, not a contract. Same
-	// pattern as the ateoms' actor-log forwarders.
-	logSink := actorlog.NewSyncedWriter(os.Stdout)
-	serverboot.InitLoggerWithWriter(logSink)
+	serverboot.InitLogger()
 	if err := serverboot.SetLogLevel(*logLevelFlag); err != nil {
 		serverboot.Fatal(ctx, "Invalid --log-level", err)
 	}
@@ -278,7 +271,7 @@ func main() {
 			// crash-looping every actor operation on the node.
 			slog.ErrorContext(ctx, "Actor stats sampling disabled: failed to create instruments", slog.Any("err", err))
 		} else {
-			startStatsPoller(ctx, interval, statsInst, k8sClient, logSink)
+			startStatsPoller(ctx, interval, statsInst, k8sClient)
 		}
 	}
 

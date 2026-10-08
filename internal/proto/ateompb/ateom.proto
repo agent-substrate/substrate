@@ -78,27 +78,26 @@ service Ateom {
   // that dies during boot is attributable rather than anonymous.
   rpc GetWorkloadStats(GetWorkloadStatsRequest) returns (GetWorkloadStatsResponse) {}
 
-  // GetActiveWorkloadStats samples whatever this ateom is currently
-  // executing, without asserting an identity. It is the discovery read for a
+  // GetActiveWorkloadStats reports every actor this ateom hosts, without
+  // asserting an identity. It is the discovery read for a
   // scraper that enumerates ateoms and holds no worker-to-actor mapping;
   // GetWorkloadStats above is the verified read for a caller that must be
   // answered about a specific actor.
   //
-  // Every state a blind caller can find is a normal answer here, never an
-  // error: an "available" ateom answers an empty samples list, and a workload
-  // with nothing to measure YET (a poll landing in a boot or a restore)
-  // appears as a sample carrying its attribution with
-  // source = STATS_SOURCE_UNSPECIFIED -- "not measured", per the sample's own
-  // contract -- so even a workload that dies during boot is attributable, not
-  // anonymous. Error codes are reserved for real failures reading a sandbox
-  // that should be measurable. This is deliberately unlike GetWorkloadStats,
-  // whose caller asserts knowledge the codes then answer.
+  // It serves each actor's latest sample from the ateom's own sampling timer,
+  // so a poll reads no sandbox and has no error path: an "available" ateom
+  // answers an empty samples list, and a workload with nothing measured yet
+  // (a boot, a restore, or a guest the last sweep did not reach) appears as a
+  // sample carrying its attribution with source = STATS_SOURCE_UNSPECIFIED --
+  // "not measured", per the sample's own contract -- so even a workload that
+  // dies during boot is attributable, not anonymous. A sample is up to one
+  // sampling interval old. This is deliberately unlike GetWorkloadStats, whose
+  // caller asserts knowledge the codes then answer.
   //
   // Consumers MUST attribute each sample solely from the identity echoed
   // inside it, never from a mapping they hold: without an asserted uid, the
   // response is the only statement of who was measured. Like GetWorkloadStats
-  // it is a pure read, safe on a timer, and does not touch the lifecycle
-  // mutex.
+  // it is safe on a timer and does not touch the lifecycle mutex.
   rpc GetActiveWorkloadStats(GetActiveWorkloadStatsRequest) returns (GetActiveWorkloadStatsResponse) {}
 
   // TerminateWorkload stops and deletes container workloads and cleans up
@@ -429,17 +428,16 @@ message WorkloadStatsSample {
   // drifts upward with cache the kernel would drop for free under pressure.
   uint64 memory_working_set_bytes = 10;
   // Cumulative CPU time since the activation began (epoch_unix_nano), for
-  // every source. The cgroup source restarts on its own; the guest-agent
-  // source is rebased on its first read after a restore, since the guest's
-  // counters survive in guest RAM. An ateom that leaves epoch_unix_nano at zero
-  // also sends the raw guest counter. A lifetime figure is the sum over epochs
-  // of each epoch's highest value.
+  // every source, and never decreasing within it. The cgroup source restarts on
+  // its own; the guest-agent source counts from its first read after a restore
+  // that resumes the guest, since the guest's counters survive in guest RAM. A
+  // lifetime figure is the sum over epochs of each epoch's highest value.
   uint64 cpu_usage_usec = 11;
 
   int64 observed_at_unix_nano = 12;
 
   // The activation this sample belongs to, as the unix-nano time it began. A
-  // Run or Restore starts one. Zero from an ateom that does not set it.
+  // Run or Restore starts one.
   int64 epoch_unix_nano = 13;
 }
 
