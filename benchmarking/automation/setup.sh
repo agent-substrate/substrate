@@ -22,13 +22,14 @@
 #     .ate-dev-env.sh again if needed) to add another target cluster.
 #  2. Build & push the orchestrator image to the orchestrator GCP project's
 #     registry (the only value not derivable from .ate-dev-env.sh).
-#  3. Generate three independent manifests in scratch/ so each can be
+#  3. Generate four independent manifests in scratch/ so each can be
 #     re-applied without touching the others:
 #       - scratch/cronjob.yaml          (Namespace + ServiceAccount + CronJob)
 #       - scratch/test-list.yaml        (substrate-benchmark-tests ConfigMap)
 #       - scratch/target-clusters.yaml  (substrate-benchmark-target-clusters ConfigMap)
+#       - scratch/test-manifests.yaml   (substrate-benchmark-test-manifests ConfigMap)
 #
-# Re-running this script overwrites those three files and overwrites
+# Re-running this script overwrites those four files and overwrites
 # scratch/target-clusters/<name>.sh for the prompted name, but leaves other
 # files in scratch/target-clusters/ intact.
 #
@@ -140,6 +141,24 @@ kubectl create configmap substrate-benchmark-target-clusters \
     > "${SCRATCH_DIR}/target-clusters.yaml"
 echo "Wrote ${SCRATCH_DIR}/target-clusters.yaml"
 
+# 4. test-manifests.yaml: the files tests.yaml entries list in
+# additionalManifests (one key per test-manifests/*.yaml, if any). The
+# CronJob mounts it next to tests.yaml, so test-manifests/<file> resolves
+# the same way it does in this repo. Update + re-apply this file alone to
+# change the manifests without touching tests or the CronJob.
+manifest_args=()
+shopt -s nullglob
+for f in "${AUTOMATION_DIR}"/test-manifests/*.yaml; do
+  manifest_args+=(--from-file="$(basename "${f}")=${f}")
+done
+shopt -u nullglob
+kubectl create configmap substrate-benchmark-test-manifests \
+    --namespace=substrate-benchmark \
+    ${manifest_args[@]+"${manifest_args[@]}"} \
+    --dry-run=client -o yaml \
+    > "${SCRATCH_DIR}/test-manifests.yaml"
+echo "Wrote ${SCRATCH_DIR}/test-manifests.yaml"
+
 echo
 echo "=== Next steps ==="
 echo "1. Edit ${SCRATCH_DIR}/cronjob.yaml and fill in the --repo / --branch / --dest args."
@@ -149,7 +168,8 @@ echo "   ${TARGET_CLUSTERS_DIR}/${TARGET_CLUSTER_NAME}.sh and ${SCRATCH_DIR}/tar
 echo "3. Apply everything to the orchestration cluster:"
 echo "     kubectl --context=<orchestration-cluster> apply -f ${SCRATCH_DIR}/cronjob.yaml \\"
 echo "                                                       -f ${SCRATCH_DIR}/test-list.yaml \\"
-echo "                                                       -f ${SCRATCH_DIR}/target-clusters.yaml"
+echo "                                                       -f ${SCRATCH_DIR}/target-clusters.yaml \\"
+echo "                                                       -f ${SCRATCH_DIR}/test-manifests.yaml"
 echo
 echo "To update just the test list (no image rebuild):"
 echo "  kubectl --context=<orchestration-cluster> apply -f ${SCRATCH_DIR}/test-list.yaml"

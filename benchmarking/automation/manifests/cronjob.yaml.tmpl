@@ -73,15 +73,19 @@ spec:
             - name: DOCKER_HOST
               value: tcp://localhost:2375
             volumeMounts:
-            # tests.yaml is mounted via subPath so the target-clusters
-            # ConfigMap can own the /etc/orchestrator/target-clusters
-            # directory next to it.
+            # tests.yaml is mounted via subPath so the target-clusters and
+            # test-manifests ConfigMaps can own directories next to it.
             - name: tests-config
               mountPath: /etc/orchestrator/tests.yaml
               subPath: tests.yaml
               readOnly: true
             - name: target-clusters
               mountPath: /etc/orchestrator/target-clusters
+              readOnly: true
+            # Files that tests.yaml entries list in additionalManifests, as
+            # test-manifests/<file>.
+            - name: test-manifests
+              mountPath: /etc/orchestrator/test-manifests
               readOnly: true
             resources:
               requests:
@@ -96,3 +100,9 @@ spec:
           - name: target-clusters
             configMap:
               name: substrate-benchmark-target-clusters
+          # Optional, so the CronJob runs without it; a test that lists a
+          # missing file fails.
+          - name: test-manifests
+            configMap:
+              name: substrate-benchmark-test-manifests
+              optional: true
