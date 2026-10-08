@@ -104,6 +104,49 @@ func TestPatchAtenetEgressInject(t *testing.T) {
 	}
 }
 
+func TestPatchAtenetEgressStatsFlushOnAdmin(t *testing.T) {
+	root, err := config.RepoRoot()
+	if err != nil {
+		t.Fatalf("resolving repo root: %v", err)
+	}
+	env := &Env{Cfg: &config.Config{Root: root}}
+	raw, err := os.ReadFile(env.atenetEgressManifestPath())
+	if err != nil {
+		t.Fatalf("reading egress manifest: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name       string
+		e2eTesting bool
+		want       bool
+	}{
+		{name: "enabled", e2eTesting: true, want: true},
+		{name: "disabled", e2eTesting: false, want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := &Env{Cfg: &config.Config{Root: root, E2ETesting: tc.e2eTesting}}
+			patched, err := env.patchAtenetEgressStatsFlushOnAdmin(raw)
+			if err != nil {
+				t.Fatalf("patchAtenetEgressStatsFlushOnAdmin failed: %v", err)
+			}
+			for _, line := range strings.Split(string(patched), "\n") {
+				if strings.HasPrefix(strings.TrimSpace(line), "#ATE_EGRESS_STATS_FLUSH_ON_ADMIN") {
+					t.Errorf("patched manifest still contains an unreplaced marker: %q", line)
+				}
+			}
+			got := strings.Contains(string(patched), "stats_flush_on_admin: true")
+			if got != tc.want {
+				t.Errorf("patched manifest contains stats_flush_on_admin: true = %v, want %v", got, tc.want)
+			}
+			assertEgressManifestParses(t, patched)
+		})
+	}
+
+	if _, err := env.patchAtenetEgressStatsFlushOnAdmin([]byte("kind: ConfigMap\n")); err == nil {
+		t.Error("patchAtenetEgressStatsFlushOnAdmin accepted a manifest without the marker")
+	}
+}
+
 // assertEgressManifestParses checks that every document is still YAML and
 // that the atenet-egress ConfigMap's envoy.yaml re-parses.
 func assertEgressManifestParses(t *testing.T, manifest []byte) {

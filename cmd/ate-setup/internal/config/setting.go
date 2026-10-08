@@ -256,6 +256,11 @@ var Registry = []Setting{
 			"labeled and tainted ate.dev/workloadType=ate-postgres:NoSchedule for postgres alone",
 	},
 	{
+		Key: "e2eTesting", Env: "E2E_TESTING", Flag: "e2e-testing",
+		Kind: KindBool, Default: "false",
+		Usage: "Enable E2E testing overrides in rendered manifests",
+	},
+	{
 		Key: "otlpEndpoint", Env: "ATE_OTLP_ENDPOINT", Flag: "otlp-endpoint", Kind: KindString,
 		Usage: "Send control plane telemetry to this OTLP collector instead of the cluster default",
 	},
