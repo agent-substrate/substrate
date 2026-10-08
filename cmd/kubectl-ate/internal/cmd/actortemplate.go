@@ -120,7 +120,8 @@ Each template's atespace and name come from its metadata.
 The atespace must already exist.
 
 The templates are created independently: a failure does not stop the rest, and
-the failures are reported together at the end.
+the failures are reported together at the end. A manifest with one document
+prints the template, one with several prints a list.
 
 Actor templates are immutable: there is no update; delete and recreate to change one.`,
 	Args: cobra.NoArgs,
@@ -142,13 +143,22 @@ Actor templates are immutable: there is no update; delete and recreate to change
 		defer apiClient.Close()
 
 		created, createErr := createActorTemplates(ctx, apiClient, templates)
-		if len(created) == 1 {
-			err = printer.PrintActorTemplateTo(cmd.OutOrStdout(), created[0], outputFmt)
-		} else if len(created) > 1 {
-			err = printer.PrintActorTemplatesTo(cmd.OutOrStdout(), created, outputFmt)
-		}
+		err = printCreatedActorTemplates(cmd.OutOrStdout(), len(templates), created, outputFmt)
 		return errors.Join(createErr, err)
 	},
+}
+
+// printCreatedActorTemplates prints what was created. The shape follows the
+// number of templates requested, not created, so a caller can parse the output
+// even when some creates failed.
+func printCreatedActorTemplates(out io.Writer, requested int, created []*ateapipb.ActorTemplate, format string) error {
+	if len(created) == 0 {
+		return nil
+	}
+	if requested == 1 {
+		return printer.PrintActorTemplateTo(out, created[0], format)
+	}
+	return printer.PrintActorTemplatesTo(out, created, format)
 }
 
 // actorTemplateCreator abstracts the CreateActorTemplate RPC.

@@ -15,6 +15,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -312,6 +313,43 @@ metadata: {atespace: b, name: three}
 			}
 			if !errors.Is(err, alreadyExists) {
 				t.Errorf("error = %q does not wrap the RPC error", err)
+			}
+		})
+	}
+}
+
+func TestPrintCreatedActorTemplates(t *testing.T) {
+	one := &ateapipb.ActorTemplate{Metadata: &ateapipb.ResourceMetadata{Atespace: "a", Name: "one"}}
+	two := &ateapipb.ActorTemplate{Metadata: &ateapipb.ResourceMetadata{Atespace: "a", Name: "two"}}
+	tests := []struct {
+		name      string
+		requested int
+		created   []*ateapipb.ActorTemplate
+		want      string // substring of the JSON output, empty for none
+		wantList  bool
+	}{
+		{name: "one requested and created", requested: 1, created: []*ateapipb.ActorTemplate{one}, want: `"name": "one"`},
+		{name: "two requested and created", requested: 2, created: []*ateapipb.ActorTemplate{one, two}, wantList: true},
+		{name: "two requested, one created stays a list", requested: 2, created: []*ateapipb.ActorTemplate{two}, wantList: true},
+		{name: "none created prints nothing", requested: 2},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var out bytes.Buffer
+			if err := printCreatedActorTemplates(&out, test.requested, test.created, "json"); err != nil {
+				t.Fatalf("printCreatedActorTemplates: %v", err)
+			}
+			if len(test.created) == 0 {
+				if out.Len() != 0 {
+					t.Errorf("output = %q, want none", out.String())
+				}
+				return
+			}
+			if isList := strings.Contains(out.String(), "actorTemplates"); isList != test.wantList {
+				t.Errorf("list output = %v, want %v:\n%s", isList, test.wantList, out.String())
+			}
+			if test.want != "" && !strings.Contains(out.String(), test.want) {
+				t.Errorf("output = %q, want it to contain %q", out.String(), test.want)
 			}
 		})
 	}
