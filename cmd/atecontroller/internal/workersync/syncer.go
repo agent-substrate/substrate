@@ -37,10 +37,11 @@ import (
 	"k8s.io/client-go/util/workqueue"
 )
 
-// syncerWorkerCount is the number of goroutines draining the work queue. The
+// DefaultSyncerWorkerCount is the default number of goroutines draining the
+// work queue when NewWorkerPoolSyncer is given a non-positive workerCount. The
 // queue never hands the same key to two workers concurrently, so per-key
-// ordering is preserved.
-const syncerWorkerCount = 2
+// ordering is preserved regardless of the count.
+const DefaultSyncerWorkerCount = 2
 
 // workerPodLabel names the WorkerPool a worker pod belongs to. Its presence is
 // also what marks a pod as a worker pod at all, so it doubles as the selector
@@ -103,6 +104,7 @@ type WorkerPoolSyncer struct {
 	workerInformer     cache.SharedIndexInformer
 	workerPoolInformer cache.SharedIndexInformer
 	queue              workqueue.TypedRateLimitingInterface[workerKey]
+	workerCount        int
 
 	// Exponential backoff schedule for retrying a failed page of the startup
 	// registered-worker scan. Per-syncer rather than package-level so a test
@@ -112,14 +114,19 @@ type WorkerPoolSyncer struct {
 }
 
 // NewWorkerPoolSyncer creates a new WorkerPoolSyncer. pods is used to delete
-// worker pods that have reached a terminal phase.
-func NewWorkerPoolSyncer(client ateapipb.ControlClient, pods corev1client.PodsGetter, workerInformer, workerPoolInformer cache.SharedIndexInformer) *WorkerPoolSyncer {
+// worker pods that have reached a terminal phase. If workerCount <= 0,
+// DefaultSyncerWorkerCount is used.
+func NewWorkerPoolSyncer(client ateapipb.ControlClient, pods corev1client.PodsGetter, workerInformer, workerPoolInformer cache.SharedIndexInformer, workerCount int) *WorkerPoolSyncer {
+	if workerCount <= 0 {
+		workerCount = DefaultSyncerWorkerCount
+	}
 	return &WorkerPoolSyncer{
 		client:             client,
 		pods:               pods,
 		workerInformer:     workerInformer,
 		workerPoolInformer: workerPoolInformer,
 		queue:              workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[workerKey]()),
+		workerCount:        workerCount,
 		listBackoff:        defaultListBackoff,
 		listCap:            defaultListCap,
 	}
@@ -176,7 +183,7 @@ func (s *WorkerPoolSyncer) Start(ctx context.Context) {
 			slog.ErrorContext(ctx, "Syncer: failed to sync informer cache")
 			return
 		}
-		for range syncerWorkerCount {
+		for range s.workerCount {
 			go wait.UntilWithContext(ctx, s.runWorker, time.Second)
 		}
 

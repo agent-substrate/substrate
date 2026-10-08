@@ -82,6 +82,11 @@ var (
 	ateapiCAFile     = pflag.String("ateapi-ca-file", ateapiauth.DefaultServiceAccountCAFile, "PEM file with CAs trusted to verify the ateapi server cert.")
 	ateapiServerName = pflag.String("ateapi-server-name", "", "SNI / hostname expected on the ateapi server cert. Optional.")
 	ateapiClientCert = pflag.String("ateapi-client-cert", "", "Credential bundle presented as the client certificate when dialing ateapi. Required.")
+
+	workerSyncConcurrency = pflag.Int("worker-sync-concurrency", workersync.DefaultSyncerWorkerCount, "Number of concurrent worker goroutines reconciling worker pods into the Worker registry.")
+
+	kubeAPIQPS   = pflag.Float32("kube-api-qps", 0, "Sustained queries per second allowed against the Kubernetes API. 0 keeps the client-go default.")
+	kubeAPIBurst = pflag.Int("kube-api-burst", 0, "Burst queries allowed against the Kubernetes API. 0 keeps the client-go default.")
 )
 
 func init() {
@@ -111,6 +116,16 @@ func main() {
 	slog.InfoContext(ctx, "atecontroller starting", slog.String("version", version.Version))
 	ctrl.SetLogger(newControllerRuntimeLogger(slog.Default().Handler()))
 
+	if *workerSyncConcurrency <= 0 {
+		setupLog.Error(nil, "invalid flag", "flag", "--worker-sync-concurrency", "reason", "must be positive", "value", *workerSyncConcurrency)
+		os.Exit(1)
+	}
+	if *kubeAPIQPS < 0 || *kubeAPIBurst < 0 {
+		setupLog.Error(nil, "invalid rate limits: --kube-api-qps and --kube-api-burst must not be negative",
+			"kube-api-qps", *kubeAPIQPS, "kube-api-burst", *kubeAPIBurst)
+		os.Exit(1)
+	}
+
 	// Both providers must be registered before the ateapi client below:
 	// otelgrpc.NewClientHandler captures the global tracer and meter providers at
 	// construction, so a later init leaves it bound to the no-op ones.
@@ -133,6 +148,12 @@ func main() {
 	defer serverboot.ShutdownProvider("MeterProvider", mp.Shutdown)
 
 	k8sConfig := ctrl.GetConfigOrDie()
+	if *kubeAPIQPS > 0 {
+		k8sConfig.QPS = *kubeAPIQPS
+	}
+	if *kubeAPIBurst > 0 {
+		k8sConfig.Burst = *kubeAPIBurst
+	}
 	k8sClient, err := kubernetes.NewForConfig(k8sConfig)
 	if err != nil {
 		setupLog.Error(err, "creating kubernetes client for ateapi dialer")
@@ -255,7 +276,7 @@ func main() {
 	// Start registers the informer event handlers, so it has to run before the
 	// factory does: the initial list then synthesizes an Add for every pod that
 	// already exists, and no explicit startup re-list is needed.
-	workersync.NewWorkerPoolSyncer(ateapiClient, k8sClient.CoreV1(), workerPodInformer, workerPoolInformer.Informer()).Start(runCtx)
+	workersync.NewWorkerPoolSyncer(ateapiClient, k8sClient.CoreV1(), workerPodInformer, workerPoolInformer.Informer(), *workerSyncConcurrency).Start(runCtx)
 
 	workerPodInformerFactory.Start(runCtx.Done())
 	ateFactory.Start(runCtx.Done())
