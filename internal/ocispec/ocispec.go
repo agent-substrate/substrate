@@ -98,6 +98,8 @@ func Build(o Options) *specs.Spec {
 			Args: o.Args,
 			Env:  o.Env,
 			Cwd:  "/",
+			// Honored by runsc and by the kata agent.
+			NoNewPrivileges: true,
 			Capabilities: &specs.LinuxCapabilities{
 				Bounding:  o.Capabilities,
 				Effective: o.Capabilities,

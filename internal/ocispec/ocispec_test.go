@@ -257,3 +257,9 @@ func TestBuild_ResourcesApplied(t *testing.T) {
 		t.Errorf("Memory.Limit = %d, want 67108864", *spec.Linux.Resources.Memory.Limit)
 	}
 }
+
+func TestBuild_SetsNoNewPrivileges(t *testing.T) {
+	if !Build(Options{Args: []string{"/app"}}).Process.NoNewPrivileges {
+		t.Error("NoNewPrivileges = false, want true")
+	}
+}
