@@ -199,10 +199,7 @@ func ValidateRunscHash(sha256Hash string) error {
 // is a well-formed URI with a bucket, so a bad location fails fast instead of
 // deep inside an object-storage call. It deliberately does not restrict the
 // scheme: the storage layer only uses the host (bucket) and path, and which
-// schemes are acceptable is a storage-backend policy, not a per-RPC one. The
-// local paths used for snapshot upload/download are derived from the
-// separately validated actor ref, not from this URI, so this is a sanity check
-// rather than a path-traversal guard.
+// schemes are acceptable is a storage-backend policy, not a per-RPC one.
 //
 // This validates the base that many snapshots share, not any one snapshot's
 // URI; SnapshotURI is the type for the latter, and it applies this check when
@@ -222,6 +219,13 @@ func ValidateSnapshotLocation(location string) error {
 	// different object.
 	if u.Opaque != "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return fmt.Errorf("invalid snapshot location %q: must contain only a scheme, bucket, and path", location)
+	}
+	// url.JoinPath cleans dot segments, so these would move snapshots outside
+	// of the location, e.g. into another atespace's prefix
+	for _, segment := range strings.Split(u.Path, "/") {
+		if segment == "." || segment == ".." {
+			return fmt.Errorf("invalid snapshot location %q: must not contain '.' or '..' path segments", location)
+		}
 	}
 	return nil
 }

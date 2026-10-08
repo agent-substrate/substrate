@@ -195,6 +195,11 @@ func TestValidateSnapshotLocation(t *testing.T) {
 		// Opaque form (no //) parses with an empty host, so it is rejected
 		// on either the bucket or the opaque check.
 		{"opaque", "gs:bucket/path", true},
+		{"dot dot", "gs://bucket/team-a/../team-b", true},
+		{"trailing dot dot", "gs://bucket/path/..", true},
+		{"escaped dot dot", "gs://bucket/%2e%2e/path", true},
+		{"dot", "gs://bucket/./path", true},
+		{"dots in a name", "gs://bucket/a..b/...", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
