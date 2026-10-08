@@ -22,6 +22,7 @@ use std::{
 
 use envoy_proxy_dynamic_modules_rust_sdk::{
   abi::{
+    envoy_dynamic_module_type_attribute_id,
     envoy_dynamic_module_type_filter_state_life_span,
     envoy_dynamic_module_type_on_http_filter_request_headers_status,
     envoy_dynamic_module_type_on_http_filter_response_headers_status,
@@ -41,6 +42,12 @@ pub const CACHE_HIT_COUNTER_NAME: &str = "ate_egress.cache_hit";
 
 /// Counter name for egress policy cache misses.
 pub const CACHE_MISS_COUNTER_NAME: &str = "ate_egress.cache_miss";
+
+/// Counter name for requests allowed by egress policy enforcement.
+pub const ALLOWED_COUNTER_NAME: &str = "ate_egress.allowed";
+
+/// Counter name for requests rejected by egress policy enforcement.
+pub const REJECTED_COUNTER_NAME: &str = "ate_egress.rejected";
 
 /// Default value for `cache_enabled`.
 pub const DEFAULT_CACHE_ENABLED: bool = true;
@@ -80,6 +87,10 @@ pub struct EgressPolicyPepFilterConfig {
   pub cache_hit_counter: EnvoyCounterId,
   #[serde(skip, default = "default_counter_id")]
   pub cache_miss_counter: EnvoyCounterId,
+  #[serde(skip, default = "default_counter_id")]
+  pub allowed_counter: EnvoyCounterId,
+  #[serde(skip, default = "default_counter_id")]
+  pub rejected_counter: EnvoyCounterId,
 }
 
 impl Default for EgressPolicyPepFilterConfig {
@@ -89,6 +100,8 @@ impl Default for EgressPolicyPepFilterConfig {
       cache_ttl: DEFAULT_CACHE_TTL,
       cache_hit_counter: default_counter_id(),
       cache_miss_counter: default_counter_id(),
+      allowed_counter: default_counter_id(),
+      rejected_counter: default_counter_id(),
     }
   }
 }
@@ -138,6 +151,8 @@ impl<EHF: EnvoyHttpFilter> HttpFilterConfig<EHF> for EgressPolicyPepFilterConfig
     Box::new(EgressPolicyPepFilter {
       cache_hit_counter: self.cache_hit_counter,
       cache_miss_counter: self.cache_miss_counter,
+      allowed_counter: self.allowed_counter,
+      rejected_counter: self.rejected_counter,
     })
   }
 }
@@ -146,6 +161,17 @@ impl<EHF: EnvoyHttpFilter> HttpFilterConfig<EHF> for EgressPolicyPepFilterConfig
 pub struct EgressPolicyPepFilter {
   cache_hit_counter: EnvoyCounterId,
   cache_miss_counter: EnvoyCounterId,
+  allowed_counter: EnvoyCounterId,
+  rejected_counter: EnvoyCounterId,
+}
+
+/// Returns the hostname portion of an `:authority` header value, stripping any
+/// `:port` suffix if present.
+fn authority_hostname(authority: &[u8]) -> &[u8] {
+  match authority.iter().position(|&b| b == b':') {
+    Some(idx) => &authority[..idx],
+    None => authority,
+  }
 }
 
 impl EgressPolicyPepFilter {
@@ -218,10 +244,30 @@ impl EgressPolicyPepFilter {
   }
 
   /// Enforces the egress policy on the current HTTP request.
-  fn enforce_egress_policy(
+  fn enforce_egress_policy<EHF: EnvoyHttpFilter>(
     &self,
+    envoy_filter: &mut EHF,
     _policy: &CachedEgressPolicy,
   ) -> envoy_dynamic_module_type_on_http_filter_request_headers_status {
+    if envoy_filter
+      .get_attribute_string(envoy_dynamic_module_type_attribute_id::ConnectionTlsVersion)
+      .is_some()
+    {
+      let sni = envoy_filter.get_attribute_string(
+        envoy_dynamic_module_type_attribute_id::ConnectionRequestedServerName,
+      );
+      let authority = envoy_filter.get_request_header_value(":authority");
+      let matches = match (sni.as_ref(), authority.as_ref()) {
+        (Some(sni), Some(authority)) => {
+          sni.as_slice() == authority_hostname(authority.as_slice())
+        }
+        _ => false,
+      };
+      if !matches {
+        envoy_filter.send_response(400, &[], None, None);
+        return envoy_dynamic_module_type_on_http_filter_request_headers_status::StopIteration;
+      }
+    }
     envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue
   }
 }
@@ -237,7 +283,18 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for EgressPolicyPepFilter {
       end_of_stream
     );
     match self.get_or_create_cached_egress_policy(envoy_filter) {
-      Some(policy) => self.enforce_egress_policy(policy),
+      Some(policy) => {
+        let status = self.enforce_egress_policy(envoy_filter, policy);
+        let counter = if status
+          == envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue
+        {
+          self.allowed_counter
+        } else {
+          self.rejected_counter
+        };
+        let _ = envoy_filter.increment_counter(counter, 1);
+        status
+      }
       None => envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue,
     }
   }
@@ -280,6 +337,8 @@ fn new_http_filter_config_fn<
   };
   cfg.cache_hit_counter = envoy_filter_config.define_counter(CACHE_HIT_COUNTER_NAME).ok()?;
   cfg.cache_miss_counter = envoy_filter_config.define_counter(CACHE_MISS_COUNTER_NAME).ok()?;
+  cfg.allowed_counter = envoy_filter_config.define_counter(ALLOWED_COUNTER_NAME).ok()?;
+  cfg.rejected_counter = envoy_filter_config.define_counter(REJECTED_COUNTER_NAME).ok()?;
   Some(Box::new(cfg))
 }
 
@@ -311,6 +370,8 @@ mod tests {
   fn test_counter_names() {
     assert_eq!(CACHE_HIT_COUNTER_NAME, "ate_egress.cache_hit");
     assert_eq!(CACHE_MISS_COUNTER_NAME, "ate_egress.cache_miss");
+    assert_eq!(ALLOWED_COUNTER_NAME, "ate_egress.allowed");
+    assert_eq!(REJECTED_COUNTER_NAME, "ate_egress.rejected");
   }
 
   #[test]
@@ -350,6 +411,8 @@ mod tests {
     EgressPolicyPepFilter {
       cache_hit_counter: EnvoyCounterId(1),
       cache_miss_counter: EnvoyCounterId(2),
+      allowed_counter: EnvoyCounterId(3),
+      rejected_counter: EnvoyCounterId(4),
     }
   }
 
@@ -511,6 +574,8 @@ mod tests {
     let config = EgressPolicyPepFilterConfig {
       cache_hit_counter: EnvoyCounterId(1),
       cache_miss_counter: EnvoyCounterId(2),
+      allowed_counter: EnvoyCounterId(3),
+      rejected_counter: EnvoyCounterId(4),
       ..Default::default()
     };
     let mut mock_filter = MockEnvoyHttpFilter::new();
@@ -545,6 +610,16 @@ mod tests {
       .withf(|id, value| *id == EnvoyCounterId(1) && *value == 1)
       .times(1)
       .returning(|_, _| Ok(()));
+    mock_filter
+      .expect_get_attribute_string()
+      .withf(|attr| *attr == envoy_dynamic_module_type_attribute_id::ConnectionTlsVersion)
+      .times(1)
+      .returning(|_| None);
+    mock_filter
+      .expect_increment_counter()
+      .withf(|id, value| *id == EnvoyCounterId(3) && *value == 1)
+      .times(1)
+      .returning(|_, _| Ok(()));
 
     let mut filter = config.new_http_filter(&mut mock_filter);
     assert_eq!(
@@ -565,6 +640,8 @@ mod tests {
     let config = EgressPolicyPepFilterConfig {
       cache_hit_counter: EnvoyCounterId(1),
       cache_miss_counter: EnvoyCounterId(2),
+      allowed_counter: EnvoyCounterId(3),
+      rejected_counter: EnvoyCounterId(4),
       ..Default::default()
     };
     let mut mock_filter = MockEnvoyHttpFilter::new();
@@ -598,6 +675,8 @@ mod tests {
     let config = EgressPolicyPepFilterConfig {
       cache_hit_counter: EnvoyCounterId(1),
       cache_miss_counter: EnvoyCounterId(2),
+      allowed_counter: EnvoyCounterId(3),
+      rejected_counter: EnvoyCounterId(4),
       ..Default::default()
     };
     let mut mock_filter = MockEnvoyHttpFilter::new();
@@ -619,11 +698,188 @@ mod tests {
       .withf(|id, value| *id == EnvoyCounterId(1) && *value == 1)
       .times(1)
       .returning(|_, _| Ok(()));
+    mock_filter
+      .expect_get_attribute_string()
+      .withf(|attr| *attr == envoy_dynamic_module_type_attribute_id::ConnectionTlsVersion)
+      .times(1)
+      .returning(|_| None);
+    mock_filter
+      .expect_increment_counter()
+      .withf(|id, value| *id == EnvoyCounterId(3) && *value == 1)
+      .times(1)
+      .returning(|_, _| Ok(()));
 
     let mut filter = config.new_http_filter(&mut mock_filter);
     assert_eq!(
       filter.on_request_headers(&mut mock_filter, false),
       envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue
+    );
+  }
+
+  #[test]
+  fn test_on_request_headers_increments_rejected_when_enforce_stops() {
+    let config = EgressPolicyPepFilterConfig {
+      cache_hit_counter: EnvoyCounterId(1),
+      cache_miss_counter: EnvoyCounterId(2),
+      allowed_counter: EnvoyCounterId(3),
+      rejected_counter: EnvoyCounterId(4),
+      ..Default::default()
+    };
+    let mut mock_filter = MockEnvoyHttpFilter::new();
+    let mut existing = CachedEgressPolicy {
+      created_at: Instant::now(),
+      policy: expected_policy(),
+    };
+    let existing_ptr = &mut existing as *mut CachedEgressPolicy as usize;
+
+    mock_filter
+      .expect_get_filter_state_object()
+      .withf(|key| key == ATE_POLICY_EGRESS_INNER)
+      .times(1)
+      .returning(move |_| Some(existing_ptr as *mut c_void));
+    mock_filter
+      .expect_increment_counter()
+      .withf(|id, value| *id == EnvoyCounterId(1) && *value == 1)
+      .times(1)
+      .returning(|_, _| Ok(()));
+    mock_filter
+      .expect_get_attribute_string()
+      .withf(|attr| *attr == envoy_dynamic_module_type_attribute_id::ConnectionTlsVersion)
+      .times(1)
+      .returning(|_| Some(EnvoyBuffer::new(b"TLSv1.3")));
+    mock_filter
+      .expect_get_attribute_string()
+      .withf(|attr| *attr == envoy_dynamic_module_type_attribute_id::ConnectionRequestedServerName)
+      .times(1)
+      .returning(|_| Some(EnvoyBuffer::new(b"api.example.com")));
+    mock_filter
+      .expect_get_request_header_value()
+      .withf(|key| key == ":authority")
+      .times(1)
+      .returning(|_| Some(EnvoyBuffer::new(b"other.example.com")));
+    mock_filter
+      .expect_send_response()
+      .withf(|status, _headers, _body, _details| *status == 400)
+      .times(1)
+      .returning(|_, _, _, _| ());
+    mock_filter
+      .expect_increment_counter()
+      .withf(|id, value| *id == EnvoyCounterId(4) && *value == 1)
+      .times(1)
+      .returning(|_, _| Ok(()));
+
+    let mut filter = config.new_http_filter(&mut mock_filter);
+    assert_eq!(
+      filter.on_request_headers(&mut mock_filter, false),
+      envoy_dynamic_module_type_on_http_filter_request_headers_status::StopIteration
+    );
+  }
+
+  #[test]
+  fn test_enforce_egress_policy_tls_matching_sni_and_host_continues() {
+    let filter = test_filter();
+    let mut mock_filter = MockEnvoyHttpFilter::new();
+    let cached = CachedEgressPolicy {
+      created_at: Instant::now(),
+      policy: expected_policy(),
+    };
+
+    mock_filter
+      .expect_get_attribute_string()
+      .withf(|attr| *attr == envoy_dynamic_module_type_attribute_id::ConnectionTlsVersion)
+      .times(1)
+      .returning(|_| Some(EnvoyBuffer::new(b"TLSv1.3")));
+    mock_filter
+      .expect_get_attribute_string()
+      .withf(|attr| *attr == envoy_dynamic_module_type_attribute_id::ConnectionRequestedServerName)
+      .times(1)
+      .returning(|_| Some(EnvoyBuffer::new(b"api.example.com")));
+    mock_filter
+      .expect_get_request_header_value()
+      .withf(|key| key == ":authority")
+      .times(1)
+      .returning(|_| Some(EnvoyBuffer::new(b"api.example.com")));
+    mock_filter.expect_send_response().times(0);
+
+    assert_eq!(
+      filter.enforce_egress_policy(&mut mock_filter, &cached),
+      envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue
+    );
+  }
+
+  #[test]
+  fn test_authority_hostname() {
+    assert_eq!(authority_hostname(b"api.example.com"), b"api.example.com");
+    assert_eq!(authority_hostname(b"api.example.com:443"), b"api.example.com");
+    assert_eq!(authority_hostname(b"api.example.com:1"), b"api.example.com");
+    assert_eq!(authority_hostname(b""), b"");
+  }
+
+  #[test]
+  fn test_enforce_egress_policy_tls_matching_sni_and_host_with_port_continues() {
+    let filter = test_filter();
+    let mut mock_filter = MockEnvoyHttpFilter::new();
+    let cached = CachedEgressPolicy {
+      created_at: Instant::now(),
+      policy: expected_policy(),
+    };
+
+    mock_filter
+      .expect_get_attribute_string()
+      .withf(|attr| *attr == envoy_dynamic_module_type_attribute_id::ConnectionTlsVersion)
+      .times(1)
+      .returning(|_| Some(EnvoyBuffer::new(b"TLSv1.3")));
+    mock_filter
+      .expect_get_attribute_string()
+      .withf(|attr| *attr == envoy_dynamic_module_type_attribute_id::ConnectionRequestedServerName)
+      .times(1)
+      .returning(|_| Some(EnvoyBuffer::new(b"api.example.com")));
+    mock_filter
+      .expect_get_request_header_value()
+      .withf(|key| key == ":authority")
+      .times(1)
+      .returning(|_| Some(EnvoyBuffer::new(b"api.example.com:1")));
+    mock_filter.expect_send_response().times(0);
+
+    assert_eq!(
+      filter.enforce_egress_policy(&mut mock_filter, &cached),
+      envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue
+    );
+  }
+
+  #[test]
+  fn test_enforce_egress_policy_tls_mismatched_sni_and_host_sends_400() {
+    let filter = test_filter();
+    let mut mock_filter = MockEnvoyHttpFilter::new();
+    let cached = CachedEgressPolicy {
+      created_at: Instant::now(),
+      policy: expected_policy(),
+    };
+
+    mock_filter
+      .expect_get_attribute_string()
+      .withf(|attr| *attr == envoy_dynamic_module_type_attribute_id::ConnectionTlsVersion)
+      .times(1)
+      .returning(|_| Some(EnvoyBuffer::new(b"TLSv1.3")));
+    mock_filter
+      .expect_get_attribute_string()
+      .withf(|attr| *attr == envoy_dynamic_module_type_attribute_id::ConnectionRequestedServerName)
+      .times(1)
+      .returning(|_| Some(EnvoyBuffer::new(b"api.example.com")));
+    mock_filter
+      .expect_get_request_header_value()
+      .withf(|key| key == ":authority")
+      .times(1)
+      .returning(|_| Some(EnvoyBuffer::new(b"other.example.com")));
+    mock_filter
+      .expect_send_response()
+      .withf(|status, _headers, _body, _details| *status == 400)
+      .times(1)
+      .returning(|_, _, _, _| ());
+
+    assert_eq!(
+      filter.enforce_egress_policy(&mut mock_filter, &cached),
+      envoy_dynamic_module_type_on_http_filter_request_headers_status::StopIteration
     );
   }
 

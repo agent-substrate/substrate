@@ -144,8 +144,38 @@ func TestActorEgressHTTPSByHostnameMITM(t *testing.T) {
 		t.Fatalf("scraping egress Envoy metrics after requests: %v", err)
 	}
 	hitsAfter, _ := e2e.EgressPolicyCacheCounts(afterScrape)
-	if got := hitsAfter - hitsBefore; got != 2 {
-		t.Fatalf("ate_egress.cache_hit incremented by %d, want 2 (before=%d, after=%d)", got, hitsBefore, hitsAfter)
+	// The policy hist counter is 1 because https://example.org/ is rejected at the listener filter and never reaches
+	// egress_policy_pep filter.
+	if got := hitsAfter - hitsBefore; got != 1 {
+		t.Fatalf("ate_egress.cache_hit incremented by %d, want 1 (before=%d, after=%d)", got, hitsBefore, hitsAfter)
+	}
+}
+
+// TestActorEgressHTTPSHostMismatchMITM: the gateway rejects a MITM HTTPS
+// request whose Host header does not match the connection's TLS SNI.
+func TestActorEgressHTTPSHostMismatchMITM(t *testing.T) {
+	ctx := context.Background()
+	router, actorRef := hostnamePolicyActor(t, ctx)
+
+	beforeScrape, err := e2e.ScrapeEgressEnvoyMetrics(ctx)
+	if err != nil {
+		t.Fatalf("scraping egress Envoy metrics before request: %v", err)
+	}
+	_, rejectedBefore := e2e.EgressPolicyVerdictCounts(beforeScrape)
+
+	payload := []byte(fmt.Sprintf(`{"url":%q,"host":%q}`, "https://example.com/", "foo.bar.com"))
+	status, body := postThroughEgressActorUntil(t, ctx, router, actorRef, "/", payload, notTransient)
+	if status != http.StatusBadRequest {
+		t.Fatalf("fetch of https://example.com/ with Host foo.bar.com returned HTTP %d, want %d; body: %s", status, http.StatusBadRequest, body)
+	}
+
+	afterScrape, err := e2e.ScrapeEgressEnvoyMetrics(ctx)
+	if err != nil {
+		t.Fatalf("scraping egress Envoy metrics after request: %v", err)
+	}
+	_, rejectedAfter := e2e.EgressPolicyVerdictCounts(afterScrape)
+	if got := rejectedAfter - rejectedBefore; got != 1 {
+		t.Fatalf("ate_egress.rejected incremented by %d, want 1 (before=%d, after=%d)", got, rejectedBefore, rejectedAfter)
 	}
 }
 

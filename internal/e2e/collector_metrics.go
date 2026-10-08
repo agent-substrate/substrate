@@ -50,12 +50,18 @@ const (
 	// on the inner clear text HTTP leg in atenet-egress.
 	EgressExtProcPolicyClearTextStatPrefix = "egress_policy_cleartext"
 
-	// EgressConnectCacheHitCounter is the Envoy dynamic-module counter name for
-	// CONNECT policy cache hits in atenet-egress.
-	EgressConnectCacheHitCounter = "ate_egress_cache_hit"
-	// EgressConnectCacheMissCounter is the Envoy dynamic-module counter name for
-	// CONNECT policy cache misses in atenet-egress.
-	EgressConnectCacheMissCounter = "ate_egress_cache_miss"
+	// EgressRequestCacheHitCounter is the Envoy dynamic-module counter name for
+	// inner request policy cache hits in atenet-egress.
+	EgressRequestCacheHitCounter = "ate_egress_cache_hit"
+	// EgressRequestCacheMissCounter is the Envoy dynamic-module counter name for
+	// inner request policy cache misses in atenet-egress.
+	EgressRequestCacheMissCounter = "ate_egress_cache_miss"
+	// EgressAllowedCounter is the Envoy dynamic-module counter name for
+	// allowed requests in atenet-egress.
+	EgressAllowedCounter = "ate_egress_allowed"
+	// EgressRejectedCounter is the Envoy dynamic-module counter name for
+	// rejected requests in atenet-egress.
+	EgressRejectedCounter = "ate_egress_rejected"
 )
 
 // PlatformMetricPrefixes are the Prometheus metric-name prefixes (OTLP dots
@@ -264,15 +270,41 @@ func EgressPolicyCacheCounts(scrape string) (hits, misses int) {
 			continue
 		}
 		switch name {
-		case "envoy_dynamicmodulescustom_" + EgressConnectCacheHitCounter,
-			"envoy_" + EgressConnectCacheHitCounter:
+		case "envoy_dynamicmodulescustom_" + EgressRequestCacheHitCounter,
+			"envoy_" + EgressRequestCacheHitCounter:
 			hits += int(v)
-		case "envoy_dynamicmodulescustom_" + EgressConnectCacheMissCounter,
-			"envoy_" + EgressConnectCacheMissCounter:
+		case "envoy_dynamicmodulescustom_" + EgressRequestCacheMissCounter,
+			"envoy_" + EgressRequestCacheMissCounter:
 			misses += int(v)
 		}
 	}
 	return hits, misses
+}
+
+// EgressPolicyVerdictCounts returns the allowed and rejected request counts
+// from an Envoy /stats/prometheus scrape, summed across instances.
+func EgressPolicyVerdictCounts(scrape string) (allowed, rejected int) {
+	for _, line := range strings.Split(scrape, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		name := strings.TrimSuffix(metricNameFromLine(line), "_total")
+		fields := strings.Fields(line)
+		v, err := strconv.ParseFloat(fields[len(fields)-1], 64)
+		if err != nil {
+			continue
+		}
+		switch name {
+		case "envoy_dynamicmodulescustom_" + EgressAllowedCounter,
+			"envoy_" + EgressAllowedCounter:
+			allowed += int(v)
+		case "envoy_dynamicmodulescustom_" + EgressRejectedCounter,
+			"envoy_" + EgressRejectedCounter:
+			rejected += int(v)
+		}
+	}
+	return allowed, rejected
 }
 
 // MissingPlatformMetrics returns the prefixes with no matching series in the
