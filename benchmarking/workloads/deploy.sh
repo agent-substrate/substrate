@@ -18,8 +18,9 @@ set -o errexit -o nounset -o pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 cd "${ROOT}"
 
-# Source the environment variables if configured
-if [[ -f .ate-dev-env.sh ]]; then
+# Source the environment variables if configured, like the hack/ scripts;
+# set NO_DEV_ENV to skip this and take every setting from the caller.
+if [[ -f .ate-dev-env.sh ]] && [[ -z "${NO_DEV_ENV:-}" ]]; then
   source .ate-dev-env.sh
 fi
 
