@@ -15,7 +15,8 @@
 // Package sweperf implements the boomer-Go implementation of the
 // SweperfUser locust test. Each user creates an actor from a SWE-bench workload
 // template and drives it through a trajectory of steps that are partitioned into
-// cycles. This is workload-agnostic and can be used to benchmark any SWE-bench
+// cycles. Once the trajectory is done the actor is deleted and a fresh one is
+// created to run it again. This is workload-agnostic and can be used to benchmark any SWE-bench
 // workload by providing the appropriate template and dynamic configuration.
 
 package sweperf
@@ -32,6 +33,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
@@ -132,10 +134,14 @@ func initSweperf(cfg *userclass.Config) (taskFn func(), shutdown func(context.Co
 		cfg.Tracer = otel.Tracer("substrate-boomer/sweperf")
 	}
 
-	rt := &sweperfRuntime{
-		cfg: cfg,
-	}
+	rt := newSweperfRuntime(cfg)
 	return rt.iterate, rt.shutdown
+}
+
+// newSweperfRuntime returns a runtime whose run context lives until shutdown.
+func newSweperfRuntime(cfg *userclass.Config) *sweperfRuntime {
+	ctx, cancel := context.WithCancel(context.Background())
+	return &sweperfRuntime{cfg: cfg, runCtx: ctx, cancelRun: cancel}
 }
 
 // sweperfRuntime is the per-worker state shared by every boomer goroutine.
@@ -144,6 +150,40 @@ func initSweperf(cfg *userclass.Config) (taskFn func(), shutdown func(context.Co
 type sweperfRuntime struct {
 	cfg   *userclass.Config
 	users sync.Map // goroutineID -> *sweperfUser
+	// runCtx carries every startup and cycle; shutdown cancels it so a slow
+	// liveness poll or cycle does not hold up teardown.
+	runCtx    context.Context
+	cancelRun context.CancelFunc
+	// mu orders enter against shutdown, so no inflight.Add can race the
+	// inflight.Wait in shutdown.
+	mu sync.Mutex
+	// stopping is set once by shutdown, under mu, and never cleared.
+	stopping bool
+	// inflight counts iterate calls in progress, each of which may create or
+	// delete an actor. shutdown waits for them before sweeping users.
+	inflight sync.WaitGroup
+}
+
+// enter registers an iterate call with inflight, or reports false once
+// shutdown has begun. A true result must be paired with inflight.Done.
+func (r *sweperfRuntime) enter() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.stopping {
+		return false
+	}
+	r.inflight.Add(1)
+	return true
+}
+
+// teardownTimeout bounds deleting an actor once the run context may already
+// be canceled.
+const teardownTimeout = 30 * time.Second
+
+// teardownCtx returns a context for deleting an actor that outlives the run
+// context, so cancellation by shutdown does not strand the actor.
+func (r *sweperfRuntime) teardownCtx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(r.runCtx), teardownTimeout)
 }
 
 // resolveConfig returns the template, total step count and cycle count for a
@@ -194,44 +234,60 @@ func (r *sweperfRuntime) dynamicWait() time.Duration {
 
 // iterate is the boomer task function, one call per goroutine per iteration.
 // It binds a session to the calling goroutine on first use and runs one cycle
-// per call thereafter, looping back to the first cycle when the trace is
-// exhausted so the actor keeps serving load. A session that fails to start is
-// retried on the next iteration.
+// per call thereafter. When the trace is exhausted the session's actor is
+// deleted and the goroutine is unbound, so the next call starts a fresh actor
+// that runs the trajectory again. A session that fails to start is retried on
+// the next iteration. Once shutdown has begun no new actor is created.
 func (r *sweperfRuntime) iterate() {
+	if !r.enter() {
+		return
+	}
+	r.runCycle()
+	time.Sleep(r.dynamicWait())
+}
+
+// runCycle is the part of iterate that shutdown waits for: it may start,
+// cycle or delete an actor, but excludes the think time.
+func (r *sweperfRuntime) runCycle() {
+	defer r.inflight.Done()
 	gid := boomerutil.GoroutineID()
 	val, loaded := r.users.Load(gid)
+	user, _ := val.(*sweperfUser)
 	if !loaded {
-		u, err := r.startUser(context.Background())
-		if err != nil {
-			slog.Warn("sweperf on_start failed; goroutine will retry next iter",
-				slog.String("err", err.Error()))
-			time.Sleep(r.dynamicWait())
+		if user = r.bindUser(gid); user == nil {
 			return
 		}
-		val, _ = r.users.LoadOrStore(gid, u)
 	}
-	user := val.(*sweperfUser)
+	if r.runCtx.Err() != nil {
+		return // shutdown began; its sweep tears the actor down
+	}
 
-	ctx := context.Background()
-	user.step(ctx)
+	user.step(r.runCtx)
 
 	if user.isDone() {
 		user.recordTaskMetrics()
-		user.resetCycles()
-		slog.Info("Actor finished all cycles and reset session back to cycle 1",
-			slog.String("actor", user.actorName),
-			slog.Int("cycles", len(user.chunks)),
-		)
+		r.retireUser(gid, user)
 	}
+}
 
-	time.Sleep(r.dynamicWait())
+// bindUser starts a session and publishes it for goroutine gid. It returns
+// nil if the session failed to start. shutdown waits for the calling
+// runCycle, so it always sees a published session.
+func (r *sweperfRuntime) bindUser(gid int64) *sweperfUser {
+	u, err := r.startUser(r.runCtx)
+	if err != nil {
+		return nil // startUser logged it
+	}
+	r.users.Store(gid, u)
+	return u
 }
 
 // startUser creates an actor and blocks until its sandbox serves, so the
 // caller gets a session that is ready to take cycles. Resolves the config per
 // session, which lets a value changed mid-run apply to later sessions. On
-// failure it tears the actor down.
-func (r *sweperfRuntime) startUser(ctx context.Context) (*sweperfUser, error) {
+// failure it tears the actor down and logs the error with the actor and
+// template, so a failed start can be tied to its task.
+func (r *sweperfRuntime) startUser(ctx context.Context) (_ *sweperfUser, err error) {
 	tmpl, totalSteps, numCycles := r.resolveConfig()
 	chunks := generateDynamicChunks(totalSteps, numCycles)
 
@@ -248,6 +304,15 @@ func (r *sweperfRuntime) startUser(ctx context.Context) (*sweperfUser, error) {
 		slog.String("actor", u.actorName),
 		slog.String("template", u.templateName),
 	)
+	defer func() {
+		if err != nil {
+			slog.Warn("sweperf on_start failed; goroutine will retry next iter",
+				slog.String("actor", u.actorName),
+				slog.String("template", u.templateName),
+				slog.String("err", err.Error()),
+			)
+		}
+	}()
 
 	bmetrics.UpdateUsers(u.userClass, 1)
 
@@ -255,15 +320,23 @@ func (r *sweperfRuntime) startUser(ctx context.Context) (*sweperfUser, error) {
 		bmetrics.UpdateUsers(u.userClass, -1)
 		return nil, fmt.Errorf("ensureAtespace: %w", err)
 	}
-	if err := u.create(ctx); err != nil {
+	// CreateActor runs detached from ctx: canceled mid-call, the actor might
+	// exist without this session knowing to delete it.
+	createCtx, cancelCreate := r.teardownCtx()
+	err = u.create(createCtx)
+	cancelCreate()
+	if err != nil {
 		bmetrics.UpdateUsers(u.userClass, -1)
 		return nil, fmt.Errorf("createActor: %w", err)
 	}
 
 	// poll status for liveness
 	if err := u.pollLiveness(ctx); err != nil {
-		u.suspendAndDelete(ctx)
-		bmetrics.UpdateUsers(u.userClass, -1)
+		// ctx may be canceled by shutdown; tear down regardless.
+		tctx, cancel := r.teardownCtx()
+		defer cancel()
+		// suspendAndDelete also decrements the user gauge.
+		u.suspendAndDelete(tctx)
 		return nil, fmt.Errorf("pollLiveness: %w", err)
 	}
 
@@ -274,23 +347,93 @@ func (r *sweperfRuntime) startUser(ctx context.Context) (*sweperfUser, error) {
 	return u, nil
 }
 
-// shutdown suspends and deletes every actor this worker created. Boomer has
-// no per-VU stop hook, so a mid-run decrease in user count leaks actors until
-// this runs — acceptable for a run that ramps up, holds, then tears down.
-func (r *sweperfRuntime) shutdown(ctx context.Context) {
-	r.users.Range(func(_, val any) bool {
-		u := val.(*sweperfUser)
-		if !u.cleanedUp {
-			u.suspendAndDelete(ctx)
-			u.cleanedUp = true
+// retireUser deletes the actor of a session that finished its trajectory and
+// unbinds it from goroutine gid, so the next iterate starts a fresh actor. The
+// final cycle leaves the actor running, and DeleteActor with AnyState removes
+// it from any state, so no suspend is sent first. The delete runs detached
+// from the run context so shutdown cannot cut it short. A failed delete is
+// retried once; if that also fails the actor is left behind and logged.
+func (r *sweperfRuntime) retireUser(gid int64, u *sweperfUser) {
+	r.users.CompareAndDelete(gid, u)
+	if !u.cleanedUp.CompareAndSwap(false, true) {
+		return // shutdown already owns this actor's teardown
+	}
+	bmetrics.UpdateUsers(u.userClass, -1)
+	ctx, cancel := r.teardownCtx()
+	defer cancel()
+	if err := u.delete(ctx); err != nil {
+		if err := u.delete(ctx); err != nil {
+			slog.Error("DeleteActor failed twice for finished actor; it is leaked",
+				slog.String("actor", u.actorName),
+				slog.String("err", err.Error()),
+			)
+			return
 		}
+	}
+	slog.Info("Actor finished all cycles and was deleted; a new actor will run the trajectory next",
+		slog.String("actor", u.actorName),
+		slog.Int("cycles", len(u.chunks)),
+	)
+}
+
+// inflightWaitTimeout caps how long shutdown waits for in-flight iterations.
+// They are canceled and normally end at once; the cap leaves the rest of the
+// shutdown budget for the sweep. A var so tests can shorten it.
+var inflightWaitTimeout = 10 * time.Second
+
+// shutdownConcurrency bounds how many actors shutdown suspends and deletes at
+// once. In-cluster the pod's 30s termination grace period, not boomer-worker's
+// 60s shutdown context, is the real budget, and a serial sweep over thousands
+// of sessions would overrun it.
+const shutdownConcurrency = 64
+
+// shutdown stops new iterations, cancels in-flight startups and cycles, waits
+// up to inflightWaitTimeout for them to finish, then suspends and deletes every
+// actor still bound to a goroutine, shutdownConcurrency at a time, until done
+// or ctx expires. Boomer has no per-VU stop hook, so a mid-run decrease in user
+// count leaks actors until this runs — acceptable for a run that ramps up,
+// holds, then tears down.
+func (r *sweperfRuntime) shutdown(ctx context.Context) {
+	r.mu.Lock()
+	r.stopping = true
+	r.mu.Unlock()
+	r.cancelRun()
+
+	waitCtx, cancelWait := context.WithTimeout(ctx, inflightWaitTimeout)
+	defer cancelWait()
+	done := make(chan struct{})
+	go func() {
+		r.inflight.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-waitCtx.Done():
+		slog.Warn("shutdown timed out waiting for in-flight iterations; their actors may leak")
+	}
+
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, shutdownConcurrency)
+	r.users.Range(func(_, val any) bool {
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			return false
+		}
+		wg.Add(1)
+		go func(u *sweperfUser) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			u.suspendAndDelete(ctx)
+		}(val.(*sweperfUser))
 		return true
 	})
+	wg.Wait()
 }
 
 // sweperfUser is one benchmark session: a single actor, the cycle plan it
-// replays, and its progress through that plan. Owned by one boomer goroutine,
-// so its fields need no locking.
+// runs once, and its progress through that plan. Owned by one boomer goroutine,
+// so its fields need no locking, except cleanedUp, which shutdown also claims.
 type sweperfUser struct {
 	cfg          *userclass.Config
 	actorName    string
@@ -298,7 +441,9 @@ type sweperfUser struct {
 	userClass    string
 	chunks       []chunk
 	cycleIndex   int
-	cleanedUp    bool
+	// cleanedUp is claimed by whichever of the owning goroutine or shutdown
+	// tears the actor down first, so the actor is deleted once.
+	cleanedUp atomic.Bool
 	// awake is set while the actor is still running from pollLiveness; the
 	// next resume is then a no-op and its success samples are not recorded.
 	awake bool
@@ -390,9 +535,9 @@ func (u *sweperfUser) suspend(ctx context.Context) bool {
 }
 
 // delete removes the actor. Errors are recorded as a failed DeleteActor row
-// and otherwise ignored, since the only caller is already tearing down.
-func (u *sweperfUser) delete(ctx context.Context) {
-	_ = u.tracedCall(ctx, "DeleteActor", func(callCtx context.Context, tr *metadata.MD) error {
+// and returned so the caller can retry.
+func (u *sweperfUser) delete(ctx context.Context) error {
+	return u.tracedCall(ctx, "DeleteActor", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.DeleteActor(callCtx, &ateapipb.DeleteActorRequest{
 			Actor: u.ref(),
 			// Teardown discards the actor, so skip the SUSPENDED precondition.
@@ -403,19 +548,18 @@ func (u *sweperfUser) delete(ctx context.Context) {
 }
 
 // suspendAndDelete releases the actor and the worker it holds, and decrements
-// the user gauge. It suspends first because a worker only frees an actor it
-// can account for, and an actor still awake at delete risks being left
-// CRASHED. Safe to call more than once: it is a no-op after the first.
+// the user gauge. It suspends first so the delete has no sandbox to terminate
+// and no node to reach. Safe to call more than once and from several
+// goroutines: only the first call does anything.
 func (u *sweperfUser) suspendAndDelete(ctx context.Context) {
-	if u.cleanedUp {
+	if !u.cleanedUp.CompareAndSwap(false, true) {
 		return
 	}
 	_, _ = u.cfg.APIStub.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
 		Actor: u.ref(),
 	})
-	u.delete(ctx)
+	_ = u.delete(ctx)
 	bmetrics.UpdateUsers(u.userClass, -1)
-	u.cleanedUp = true
 }
 
 // tracedCall runs one control-plane RPC under a span named name and records
@@ -471,15 +615,20 @@ type statusResponse struct {
 	Status string `json:"status"`
 }
 
+// livenessTimeout bounds how long pollLiveness waits for a new actor.
+const livenessTimeout = time.Minute
+
 // pollLiveness waits for the actor's in-sandbox server to answer /status with
-// "up", for up to a minute. The first request through the router is also what
-// wakes a newly created actor, so this doubles as the implicit resume.
+// "up", for up to livenessTimeout. The first request through the router is
+// also what wakes a newly created actor, so this doubles as the implicit
+// resume. It polls at the job-completion interval, since every task starts
+// a fresh actor.
 func (u *sweperfUser) pollLiveness(ctx context.Context) error {
 	statusURL := u.cfg.RouterURL + "/status"
-	maxRetries := 30
-	retryInterval := 2 * time.Second
+	retryInterval := pollInterval(u.cfg)
+	deadline := time.Now().Add(livenessTimeout)
 
-	for attempt := 0; attempt < maxRetries; attempt++ {
+	for attempt := 0; time.Now().Before(deadline); attempt++ {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, statusURL, nil)
 		if err != nil {
 			return err
@@ -517,14 +666,9 @@ func (u *sweperfUser) isDone() bool {
 	return u.cycleIndex >= len(u.chunks)
 }
 
-// resetCycles rewinds to the first cycle so the same actor replays the trace
-// again, which is how one session keeps producing load for the whole run.
-func (u *sweperfUser) resetCycles() {
-	u.cycleIndex = 0
-}
-
 // step runs one cycle: resume the actor, replay that cycle's slice of the
-// trace, then suspend it again.
+// trace, then suspend it again. The final cycle skips the suspend, since the
+// actor is deleted straight after.
 func (u *sweperfUser) step(ctx context.Context) {
 	if u.cycleIndex >= len(u.chunks) {
 		return
@@ -572,8 +716,8 @@ func (u *sweperfUser) step(ctx context.Context) {
 	}
 	u.recordCycleCEL(execDur, err)
 
-	// 3. Suspend actor
-	if !u.suspend(ctx) {
+	// 3. Suspend actor, unless this was the last cycle
+	if cycleNum < len(u.chunks) && !u.suspend(ctx) {
 		u.loopFailed = true
 	}
 
