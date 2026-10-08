@@ -3610,7 +3610,8 @@ func Validate_EgressPolicyTemplate(
 				errs = append(errs, e...)
 				earlyReturn = true
 			}
-			if e := validate.OptionalSlice(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+			if e := validate.RequiredSlice(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
 				earlyReturn = true
 			}
 			if earlyReturn {
