@@ -35,6 +35,13 @@ containers:
   - "--ServerApp.disable_check_xsrf=True"
   - "--port=80"
   - "--ip=0.0.0.0"
+  # The image's $HOME, /home/jovyan, belongs to its jovyan user (1000:100)
+  # and is closed to others. The server runs as root and writes there on
+  # startup, which needs DAC_OVERRIDE; the default capability set does not
+  # include it.
+  securityContext:
+    capabilities:
+      add: ["DAC_OVERRIDE"]
   wakeupProbe:
     httpGet:
       path: /api
