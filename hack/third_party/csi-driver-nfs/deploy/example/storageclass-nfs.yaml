@@ -1,0 +1,21 @@
+# The csi-nfs-sc StorageClass, backed by the dev NFS server in
+# hack/csi/nfs-server.yaml. `ate-setup setup csi nfs` (hack/install-ate.sh
+# --setup-csi=nfs) and hack/setup-csi-nfs-kind.sh both apply this file, so the
+# e2e tests, demos and benchmarks all provision from the same class.
+#
+# Based on deploy/example/storageclass-nfs.yaml from
+# kubernetes-csi/csi-driver-nfs, renamed csi-nfs-sc. The share is "/" because
+# nfs-server.yaml exports a single directory with fsid=0, which NFSv4 presents
+# as the pseudo-root.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: csi-nfs-sc
+provisioner: nfs.csi.k8s.io
+parameters:
+  server: nfs-server.default.svc.cluster.local
+  share: /
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+mountOptions:
+  - nfsvers=4.1
