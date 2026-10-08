@@ -214,10 +214,15 @@ func setupGatewaySide(ctx context.Context, ns netns.Handle, egressPort uint16) e
 	return installEgressRules(ns, egressPort)
 }
 
-// installEgressRules drops link-local traffic before it reaches the egress PEP,
+// installEgressRules rejects link-local traffic before it reaches the egress PEP,
 // then redirects other TCP egress to atunnel. The actor's own /30 is excluded
 // from both rules so ingress replies and DNS reach their local sockets.
 func installEgressRules(ns netns.Handle, egressPort uint16) error {
+	const (
+		icmpDestinationAdministrativelyProhibited   = 13
+		icmpv6DestinationAdministrativelyProhibited = 1
+	)
+
 	if egressPort == 0 {
 		return fmt.Errorf("actornet: atunnel egress port is required")
 	}
@@ -233,10 +238,11 @@ func installEgressRules(ns netns.Handle, egressPort uint16) error {
 		name        string
 		addressLen  uint32
 		dstOffset   uint32
+		rejectCode  uint8
 		isPrefix    func(netip.Prefix) bool
 	}{
-		{nftables.TableFamilyIPv4, "ateom-actor", 4, 16, func(prefix netip.Prefix) bool { return prefix.Addr().Is4() }},
-		{nftables.TableFamilyIPv6, "ateom-actor-v6", 16, 24, func(prefix netip.Prefix) bool { return prefix.Addr().Is6() }},
+		{nftables.TableFamilyIPv4, "ateom-actor", 4, 16, icmpDestinationAdministrativelyProhibited, func(prefix netip.Prefix) bool { return prefix.Addr().Is4() }},
+		{nftables.TableFamilyIPv6, "ateom-actor-v6", 16, 24, icmpv6DestinationAdministrativelyProhibited, func(prefix netip.Prefix) bool { return prefix.Addr().Is6() }},
 	} {
 		table := c.AddTable(&nftables.Table{Family: family.tableFamily, Name: family.name})
 		if family.tableFamily == nftables.TableFamilyIPv4 {
@@ -266,7 +272,7 @@ func installEgressRules(ns netns.Handle, egressPort uint16) error {
 			expressions = append(expressions,
 				&expr.Bitwise{SourceRegister: 1, DestRegister: 1, Len: family.addressLen, Mask: mask, Xor: make([]byte, family.addressLen)},
 				&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: address},
-				&expr.Verdict{Kind: expr.VerdictDrop},
+				&expr.Reject{Type: unix.NFT_REJECT_ICMP_UNREACH, Code: family.rejectCode},
 			)
 			c.AddRule(&nftables.Rule{Table: table, Chain: filter, Exprs: expressions})
 		}

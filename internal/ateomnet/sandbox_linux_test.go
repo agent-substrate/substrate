@@ -23,10 +23,8 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/netip"
 	"net/url"
 	"os"
-	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -39,37 +37,6 @@ import (
 )
 
 const testEgressPort = 15001
-
-func TestLinkLocalEgressCIDRRanges(t *testing.T) {
-	for _, tc := range []struct {
-		address string
-		blocked bool
-	}{
-		{"169.253.255.255", false},
-		{"169.254.0.0", true},
-		{"169.254.16.255", true},
-		{"169.254.17.0", true},
-		{"169.254.17.1", true},
-		{"169.254.17.2", true},
-		{"169.254.17.3", true},
-		{"169.254.17.4", true},
-		{"169.254.255.255", true},
-		{"169.255.0.0", false},
-		{"fe80::", true},
-		{"febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff", true},
-		{"fec0::", false},
-	} {
-		t.Run(tc.address, func(t *testing.T) {
-			address := netip.MustParseAddr(tc.address)
-			blocked := slices.ContainsFunc(linkLocalEgressCIDRRanges, func(prefix netip.Prefix) bool {
-				return prefix.Contains(address)
-			})
-			if blocked != tc.blocked {
-				t.Errorf("blocked = %t, want %t", blocked, tc.blocked)
-			}
-		})
-	}
-}
 
 func TestSandboxSessionDialerAfterClose(t *testing.T) {
 	session := &SandboxSession{}

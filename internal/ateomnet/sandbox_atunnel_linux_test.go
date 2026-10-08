@@ -122,14 +122,22 @@ func TestSandboxLinkLocalDoesNotReachAtunnel(t *testing.T) {
 	if err := listener.SetDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
 		t.Fatal(err)
 	}
+	var linkLocalDialErr error
 	if err := netns.Do(ctx, n.RuntimeNetNS, func(context.Context) error {
 		conn, err := net.DialTimeout("tcp", "169.254.169.254:80", 250*time.Millisecond)
-		if err == nil {
+		linkLocalDialErr = err
+		if conn != nil {
 			conn.Close()
 		}
-		return err
-	}); err == nil {
+		return nil
+	}); err != nil {
+		t.Fatalf("dial to link-local address: %v", err)
+	}
+	if linkLocalDialErr == nil {
 		t.Fatal("dial to link-local address succeeded")
+	}
+	if timeout, ok := linkLocalDialErr.(net.Error); ok && timeout.Timeout() {
+		t.Fatalf("link-local dial timed out instead of being rejected: %v", linkLocalDialErr)
 	}
 	if conn, err := listener.Accept(); err == nil {
 		conn.Close()
