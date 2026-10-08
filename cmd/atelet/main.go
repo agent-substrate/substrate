@@ -1830,7 +1830,7 @@ func (s *Atelet) prepareOCIBundles(
 	if pauseImage != "" {
 		g.Go(func() error {
 			// pause is sandbox infra; it mounts no volumes.
-			if _, err := prepareOCIDirectory(gCtx, s.imageCache, actorUID, ocispec.PauseContainer, pauseImage, nil, nil); err != nil {
+			if _, err := prepareOCIDirectory(gCtx, s.imageCache, actorUID, ocispec.PauseContainer, pauseImage, imagecache.Form{}, nil, nil); err != nil {
 				return wrapFileSystemErr("while creating pause OCI bundle", err)
 			}
 			return nil
@@ -1845,7 +1845,7 @@ func (s *Atelet) prepareOCIBundles(
 			envs = append(envs, fmt.Sprintf("%s=%s", env.GetName(), env.GetValue()))
 		}
 		g.Go(func() error {
-			imageConfig, err := prepareOCIDirectory(gCtx, s.imageCache, actorUID, ctr.GetName(), ctr.GetImage(), spec.GetVolumes(), ctr.GetVolumeMounts())
+			imageConfig, err := prepareOCIDirectory(gCtx, s.imageCache, actorUID, ctr.GetName(), ctr.GetImage(), imagecache.Form{}, spec.GetVolumes(), ctr.GetVolumeMounts())
 			if err != nil {
 				return wrapFileSystemErr(fmt.Sprintf("while creating %q OCI bundle", ctr.GetName()), err)
 			}

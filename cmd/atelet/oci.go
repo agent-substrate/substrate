@@ -74,7 +74,7 @@ func resolveCapabilities(caps *ateletpb.Capabilities) []string {
 	return out
 }
 
-func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, actorUID, containerName, ref string, volumes []*ateletpb.Volume, volumeMounts []*ateletpb.VolumeMount) (*v1.Config, error) {
+func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, actorUID, containerName, ref string, form imagecache.Form, volumes []*ateletpb.Volume, volumeMounts []*ateletpb.VolumeMount) (*v1.Config, error) {
 	tracer := otel.Tracer("prepareOCIDirectory")
 
 	ctx, span := tracer.Start(ctx, "prepareOCIDirectory")
@@ -108,8 +108,8 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, acto
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
 		var err error
-		if img, err = imageCache.EnsureImage(gctx, ref); err != nil {
-			return fmt.Errorf("in imageCache.EnsureImage(%q): %w", ref, err)
+		if img, err = imageCache.EnsureImageAs(gctx, ref, form); err != nil {
+			return fmt.Errorf("in imageCache.EnsureImageAs(%q): %w", ref, err)
 		}
 		return nil
 	})
@@ -132,6 +132,7 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, acto
 	if err := imagecache.WriteSpec(bundlePath, &imagecache.OverlaySpec{
 		ImageDigest:  img.Digest.String(),
 		Layers:       img.LayerDirs,
+		EROFS:        img.EROFS,
 		ExtraDirs:    extraDirs,
 		ImageVolumes: imageVolumes,
 	}); err != nil {
