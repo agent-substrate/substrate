@@ -257,18 +257,27 @@ func (p *sandboxPrewarmer) prewarm(ctx context.Context, cfg *v1alpha1.SandboxCon
 	defer cancel()
 	t := time.Now()
 
+	// TODO: prewarm every Enabled version, not just the default.
+	ver, ok := cfg.Spec.DefaultVersionConfig()
+	if !ok {
+		// The CRD rejects this shape, so this should not be reachable.
+		slog.WarnContext(ctx, "Skipping sandbox asset prewarm: config has no default version",
+			slog.String("config", cfg.Name), slog.String("defaultVersion", cfg.Spec.DefaultVersion))
+		return nil
+	}
+
 	var imageErr error
 	var wg sync.WaitGroup
 	// schedule prewarm pause image if provided
-	if cfg.Spec.PauseImage != "" {
+	if ver.PauseImage != "" {
 		wg.Go(func() {
-			if _, err := p.images.EnsureImage(ctx, cfg.Spec.PauseImage); err != nil {
-				imageErr = fmt.Errorf("while prewarming pause image %q: %w", cfg.Spec.PauseImage, err)
+			if _, err := p.images.EnsureImage(ctx, ver.PauseImage); err != nil {
+				imageErr = fmt.Errorf("while prewarming pause image %q: %w", ver.PauseImage, err)
 			}
 		})
 	}
 	// schedule prewarm sandbox assets if provided
-	rec, assetErr := recordFromSandboxConfig(cfg)
+	rec, assetErr := recordFromSandboxConfig(cfg, ver)
 	switch {
 	case errors.Is(assetErr, errNoAssetsForArch):
 		// Permanent until the config changes, and a change re-enqueues:
@@ -292,8 +301,9 @@ func (p *sandboxPrewarmer) prewarm(ctx context.Context, cfg *v1alpha1.SandboxCon
 	}
 	slog.InfoContext(ctx, "Sandbox assets prewarmed",
 		slog.String("config", cfg.Name),
+		slog.String("version", ver.Name),
 		slog.Int("assets", assets),
-		slog.String("pauseImage", cfg.Spec.PauseImage),
+		slog.String("pauseImage", ver.PauseImage),
 		slog.Duration("duration", time.Since(t)))
 	return nil
 }
@@ -303,17 +313,18 @@ func (p *sandboxPrewarmer) prewarm(ctx context.Context, cfg *v1alpha1.SandboxCon
 // config changes, so prewarm treats it as nothing-to-do rather than retrying.
 var errNoAssetsForArch = errors.New("no sandbox assets for this architecture")
 
-// recordFromSandboxConfig projects a SandboxConfig's per-architecture assets
-// onto the local node's architecture, mirroring recordFromRequest.
-func recordFromSandboxConfig(cfg *v1alpha1.SandboxConfig) (*sandboxAssetsRecord, error) {
+// recordFromSandboxConfig projects the per-architecture assets of one version
+// of a SandboxConfig onto the local node's architecture, mirroring
+// recordFromRequest.
+func recordFromSandboxConfig(cfg *v1alpha1.SandboxConfig, ver *v1alpha1.SandboxVersionConfig) (*sandboxAssetsRecord, error) {
 	arch := runtime.GOARCH
-	files := cfg.Spec.Assets[arch]
+	files := ver.Assets[arch]
 	if len(files) == 0 {
-		return nil, fmt.Errorf("sandbox config %q, architecture %q: %w", cfg.Name, arch, errNoAssetsForArch)
+		return nil, fmt.Errorf("sandbox config %q, version %q, architecture %q: %w", cfg.Name, ver.Name, arch, errNoAssetsForArch)
 	}
 	rec := &sandboxAssetsRecord{
 		SandboxClass: string(cfg.Spec.SandboxClass),
-		PauseImage:   cfg.Spec.PauseImage,
+		PauseImage:   ver.PauseImage,
 		Assets:       make(map[string]assetEntry, len(files)),
 	}
 	for name, f := range files {

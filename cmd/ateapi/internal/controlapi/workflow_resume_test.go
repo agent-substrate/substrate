@@ -1110,9 +1110,13 @@ func newWireCaptureWorkflow(t *testing.T, persistence store.Interface) (*ActorWo
 	lister := sandboxConfigListerFor(t, []*atev1alpha1.SandboxConfig{{
 		ObjectMeta: metav1.ObjectMeta{Name: "gvisor"},
 		Spec: atev1alpha1.SandboxConfigSpec{
-			SandboxClass: atev1alpha1.SandboxClassGvisor,
-			PauseImage:   "pause@sha256:abc",
-			Assets:       testAssets(),
+			SandboxClass:   atev1alpha1.SandboxClassGvisor,
+			DefaultVersion: "v1",
+			Versions: []atev1alpha1.SandboxVersionConfig{{
+				Name:       "v1",
+				PauseImage: "pause@sha256:abc",
+				Assets:     testAssets(),
+			}},
 		},
 	}})
 
@@ -1385,11 +1389,10 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 
 	// Every request atelet receives, Run or Restore, carries the sandbox the
 	// template's SandboxConfig resolves to.
-	wantSandboxAssets := sandboxAssetsProto(&atev1alpha1.SandboxConfig{Spec: atev1alpha1.SandboxConfigSpec{
-		SandboxClass: atev1alpha1.SandboxClassGvisor,
-		PauseImage:   "pause@sha256:abc",
-		Assets:       testAssets(),
-	}})
+	wantSandboxAssets := sandboxAssetsProto(
+		&atev1alpha1.SandboxConfig{Spec: atev1alpha1.SandboxConfigSpec{SandboxClass: atev1alpha1.SandboxClassGvisor}},
+		&atev1alpha1.SandboxVersionConfig{Name: "v1", PauseImage: "pause@sha256:abc", Assets: testAssets()},
+	)
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

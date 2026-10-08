@@ -61,9 +61,13 @@ func gvisorDefaultLister(t *testing.T) listersv1alpha1.SandboxConfigLister {
 	return sandboxConfigListerFor(t, []*atev1alpha1.SandboxConfig{{
 		ObjectMeta: metav1.ObjectMeta{Name: "gvisor-default"},
 		Spec: atev1alpha1.SandboxConfigSpec{
-			SandboxClass: atev1alpha1.SandboxClassGvisor,
-			PauseImage:   "registry.k8s.io/pause@sha256:x",
-			Assets:       testAssets(),
+			SandboxClass:   atev1alpha1.SandboxClassGvisor,
+			DefaultVersion: "v1",
+			Versions: []atev1alpha1.SandboxVersionConfig{{
+				Name:       "v1",
+				PauseImage: "registry.k8s.io/pause@sha256:x",
+				Assets:     testAssets(),
+			}},
 		},
 	}})
 }

@@ -49,18 +49,42 @@ type AssetFile struct {
 	SHA256 string `json:"sha256"`
 }
 
-// SandboxConfigSpec is the desired state of a SandboxConfig.
+// SandboxConfigClassDefaultAnnotation marks a SandboxConfig as a default for its
+// sandboxClass when set to "true". More than one SandboxConfig of the same
+// class may carry it; the newest one wins.
+const SandboxConfigClassDefaultAnnotation = "sandboxconfig.ate.dev/is-class-default"
+
+// SandboxVersionState is whether a SandboxConfig version may be used.
 //
-// +kubebuilder:validation:XValidation:rule="self.sandboxClass == 'gvisor' ? has(self.pauseImage) : !has(self.pauseImage)",message="pauseImage is required for gvisor and not allowed for other sandbox classes"
-type SandboxConfigSpec struct {
-	// SandboxClass is the sandbox runtime family this config applies to. An
-	// ActorTemplate only uses SandboxConfigs whose SandboxClass matches its
-	// sandbox_config.sandbox_class.
+// +kubebuilder:validation:Enum=Enabled;Disabled
+type SandboxVersionState string
+
+const (
+	// SandboxVersionStateEnabled marks a version as usable. Default.
+	SandboxVersionStateEnabled SandboxVersionState = "Enabled"
+	// SandboxVersionStateDisabled marks a version as unusable. The version
+	// named by defaultVersion cannot be disabled.
+	SandboxVersionStateDisabled SandboxVersionState = "Disabled"
+)
+
+// SandboxVersionConfig is one version of a SandboxConfig: the exact pause image
+// and asset set a sandbox boots with.
+type SandboxVersionConfig struct {
+	// name identifies this version within its SandboxConfig. It is a DNS label
+	// (lower-case alphanumerics and '-').
 	//
 	// +required
-	// +kubebuilder:validation:Enum=gvisor;microvm
-	// +kubebuilder:default=gvisor
-	SandboxClass SandboxClass `json:"sandboxClass"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	Name string `json:"name,omitempty"`
+
+	// state is whether this version may be used: Enabled (default) or
+	// Disabled.
+	//
+	// +optional
+	// +kubebuilder:default=Enabled
+	State *SandboxVersionState `json:"state,omitempty"`
 
 	// TODO: drop PauseImage once gVisor can run without a pause container:
 	// https://github.com/google/gvisor/pull/13981
@@ -79,6 +103,8 @@ type SandboxConfigSpec struct {
 	//   - [2] registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4
 	//
 	// +optional
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=512
 	// +kubebuilder:validation:XValidation:rule="self.contains('@')",message="All images must include a digest"
 	PauseImage string `json:"pauseImage,omitempty"`
 
@@ -96,10 +122,54 @@ type SandboxConfigSpec struct {
 	Assets map[string]map[string]AssetFile `json:"assets,omitempty"`
 }
 
-// SandboxConfig is cluster-scoped configuration describing the sandbox binaries
-// for a sandbox runtime family. It is referenced by an ActorTemplate's
-// sandbox_config.config_name (required) and decouples
-// sandbox binary selection from the workload definition.
+// SandboxConfigSpec is the desired state of a SandboxConfig.
+//
+// +kubebuilder:validation:XValidation:rule="self.versions.exists(v, v.name == self.defaultVersion)",message="defaultVersion must name an entry in versions"
+// +kubebuilder:validation:XValidation:rule="!self.versions.exists(v, v.name == self.defaultVersion && has(v.state) && v.state == 'Disabled')",message="the version named by defaultVersion must not be Disabled"
+// +kubebuilder:validation:XValidation:rule="self.sandboxClass == 'gvisor' ? self.versions.all(v, has(v.pauseImage) && size(v.pauseImage) > 0) : self.versions.all(v, !has(v.pauseImage) || size(v.pauseImage) == 0)",message="pauseImage is required on every version for gvisor and not allowed for other sandbox classes"
+type SandboxConfigSpec struct {
+	// SandboxClass is the sandbox runtime family this config applies to. An
+	// ActorTemplate only uses SandboxConfigs whose SandboxClass matches its
+	// sandbox_config.sandbox_class.
+	//
+	// +required
+	// +kubebuilder:validation:Enum=gvisor;microvm
+	// +kubebuilder:default=gvisor
+	SandboxClass SandboxClass `json:"sandboxClass"`
+
+	// defaultVersion names the entry in versions that new sandboxes boot with.
+	// It must name an existing, non-Disabled version.
+	//
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	DefaultVersion string `json:"defaultVersion,omitempty"`
+
+	// versions are the sandbox versions this config offers, keyed by name.
+	//
+	// +required
+	// +listType=map
+	// +listMapKey=name
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=16
+	Versions []SandboxVersionConfig `json:"versions,omitempty"`
+}
+
+// DefaultVersionConfig returns the entry of Versions named by DefaultVersion,
+// and whether one exists.
+func (s *SandboxConfigSpec) DefaultVersionConfig() (*SandboxVersionConfig, bool) {
+	for i := range s.Versions {
+		if s.Versions[i].Name == s.DefaultVersion {
+			return &s.Versions[i], true
+		}
+	}
+	return nil, false
+}
+
+// SandboxConfig is cluster-scoped configuration describing the versions of the
+// sandbox binaries for a sandbox runtime family. It is referenced by an
+// ActorTemplate's sandbox_config.config_name (required) and decouples sandbox
+// binary selection from the workload definition.
 //
 // +genclient
 // +genclient:nonNamespaced
@@ -107,6 +177,7 @@ type SandboxConfigSpec struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:scope=Cluster,shortName=sandboxconfig
 // +kubebuilder:printcolumn:name="Class",type=string,JSONPath=`.spec.sandboxClass`
+// +kubebuilder:printcolumn:name="Default",type=string,JSONPath=`.spec.defaultVersion`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 type SandboxConfig struct {
 	metav1.TypeMeta `json:",inline"`

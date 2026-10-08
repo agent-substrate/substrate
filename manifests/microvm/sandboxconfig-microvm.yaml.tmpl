@@ -35,34 +35,40 @@ apiVersion: ate.dev/v1alpha1
 kind: SandboxConfig
 metadata:
   name: microvm
+  annotations:
+    sandboxconfig.ate.dev/is-class-default: "true"
 spec:
   sandboxClass: microvm
-  assets:
-    arm64:
-      cloud-hypervisor:
-        url: "gs://${BUCKET_NAME}/kata-assets/cloud-hypervisor"
-        sha256: "f192b510eea1c710cbc439d716bb0573c223fc463dbe3e6523788a2b7ef62850"
-      # virtiofsd serves the overlay RO lower (virtio-fs).
-      virtiofsd:
-        url: "gs://${BUCKET_NAME}/kata-assets/virtiofsd"
-        sha256: "3aa9240045d2261930ef04138fe05cf288f94c867e63e5d0845758bac5e3d458"
-      kata-kernel:
-        url: "gs://${BUCKET_NAME}/kata-assets/vmlinux"
-        sha256: "4960f6cf781274eaa445fc9f88bb8c5ce951649278bc9caa13afb1e99cfe80e6"
-      kata-image:
-        url: "gs://${BUCKET_NAME}/kata-assets/rootfs.img"
-        sha256: "7e3bdd500eb92de17c377bd84f8ed57e50d6bb68c7ec08c88f5e1916cd49f30d"
-    # amd64 assets are kata 4.1.0 (assemble.sh ARCH=amd64).
-    amd64:
-      cloud-hypervisor:
-        url: "gs://${BUCKET_NAME}/kata-assets/cloud-hypervisor"
-        sha256: "448af3d4e59b22c2987f7df94c213ad40fb53a10d437e42b5ee6c4fce7c29ecc"
-      virtiofsd:
-        url: "gs://${BUCKET_NAME}/kata-assets/virtiofsd"
-        sha256: "15b2e72a78cc08a9bd8a6943e89fb69c88cb3cbeb63069efceade835342ac7d4"
-      kata-kernel:
-        url: "gs://${BUCKET_NAME}/kata-assets/vmlinux"
-        sha256: "8e9dbc3a6e4c26adb089d23d31201edebce905c7f3e31aa67b32bdd41df1b86f"
-      kata-image:
-        url: "gs://${BUCKET_NAME}/kata-assets/rootfs.img"
-        sha256: "96497f64da1de9c7473fef46c3d29ddd0805d334731cf9d903a21a5b2c33cefb"
+  defaultVersion: v1
+  versions:
+  - name: v1
+    state: Enabled
+    assets:
+      arm64:
+        cloud-hypervisor:
+          url: "gs://${BUCKET_NAME}/kata-assets/cloud-hypervisor"
+          sha256: "f192b510eea1c710cbc439d716bb0573c223fc463dbe3e6523788a2b7ef62850"
+        # virtiofsd serves the overlay RO lower (virtio-fs).
+        virtiofsd:
+          url: "gs://${BUCKET_NAME}/kata-assets/virtiofsd"
+          sha256: "3aa9240045d2261930ef04138fe05cf288f94c867e63e5d0845758bac5e3d458"
+        kata-kernel:
+          url: "gs://${BUCKET_NAME}/kata-assets/vmlinux"
+          sha256: "4960f6cf781274eaa445fc9f88bb8c5ce951649278bc9caa13afb1e99cfe80e6"
+        kata-image:
+          url: "gs://${BUCKET_NAME}/kata-assets/rootfs.img"
+          sha256: "7e3bdd500eb92de17c377bd84f8ed57e50d6bb68c7ec08c88f5e1916cd49f30d"
+      # amd64 assets are kata 4.1.0 (assemble.sh ARCH=amd64).
+      amd64:
+        cloud-hypervisor:
+          url: "gs://${BUCKET_NAME}/kata-assets/cloud-hypervisor"
+          sha256: "448af3d4e59b22c2987f7df94c213ad40fb53a10d437e42b5ee6c4fce7c29ecc"
+        virtiofsd:
+          url: "gs://${BUCKET_NAME}/kata-assets/virtiofsd"
+          sha256: "15b2e72a78cc08a9bd8a6943e89fb69c88cb3cbeb63069efceade835342ac7d4"
+        kata-kernel:
+          url: "gs://${BUCKET_NAME}/kata-assets/vmlinux"
+          sha256: "8e9dbc3a6e4c26adb089d23d31201edebce905c7f3e31aa67b32bdd41df1b86f"
+        kata-image:
+          url: "gs://${BUCKET_NAME}/kata-assets/rootfs.img"
+          sha256: "96497f64da1de9c7473fef46c3d29ddd0805d334731cf9d903a21a5b2c33cefb"
