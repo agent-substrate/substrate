@@ -643,7 +643,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 		templateNamespace: req.GetActorTemplateAtespace(),
 		templateName:      req.GetActorTemplateName(),
 		kind:              checkpointSnapshotKind(req),
-		scope:             ateattr.SnapshotScopeValue(req.GetScope()),
+		fidelity:          ateattr.SnapshotFidelityValue(req.GetFidelity()),
 	}
 	attribution := resources.ActorAttribution{
 		Ref:              actorRef,
@@ -707,7 +707,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 		RunscPath:             runscPathFor(assetPaths),
 		RuntimeAssetPaths:     assetPaths,
 		Spec:                  spec,
-		Scope:                 toAteomSnapshotScope(req.GetScope()),
+		Fidelity:              toAteomFidelity(req.GetFidelity()),
 		ActorUid:              actorUID,
 		ActorDirs:             ateletpath.ActorDirs(actorUID),
 	})
@@ -729,7 +729,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	sandboxRec.ActorUID = req.GetActorUid()
 	sandboxRec.ActorTemplateAtespace = req.GetActorTemplateAtespace()
 	sandboxRec.ActorTemplateName = req.GetActorTemplateName()
-	sandboxRec.Scope = ateattr.SnapshotScopeValue(req.GetScope())
+	sandboxRec.Fidelity = ateattr.SnapshotFidelityValue(req.GetFidelity())
 
 	// No earlier pause snapshot can ever be restored again, so remove them
 	// all: the actor's current state was just captured by CheckpointWorkload,
@@ -795,13 +795,19 @@ func checkpointSnapshotFiles(resp *ateompb.CheckpointWorkloadResponse, required 
 	return files, dataFiles, nil
 }
 
-func toAteomSnapshotScope(scope ateletpb.SnapshotScope) ateompb.SnapshotScope {
-	// assumption the request already been validated and scope is in the valid values set
-	switch scope {
-	case ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
-		return ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA
+// toAteomFidelity maps the atelet enum onto the identical ateom one, level by
+// level; the request was validated already, so anything else is a bug and
+// goes out as UNSPECIFIED for ateom to reject.
+func toAteomFidelity(fidelity ateletpb.SnapshotFidelity) ateompb.SnapshotFidelity {
+	switch fidelity {
+	case ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
+		return ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
+	case ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS:
+		return ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
+	case ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
+		return ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
 	default:
-		return ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL
+		return ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
 	}
 }
 
@@ -857,7 +863,7 @@ func (s *AteomHerder) moveLocalCheckpoint(ctx context.Context, req *ateletpb.Che
 
 // shouldHaveSnapshots returns true if the checkpoint request is expected to produce snapshot files.
 func shouldHaveSnapshots(req *ateletpb.CheckpointRequest) bool {
-	if req.GetScope() != ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA {
+	if req.GetFidelity() != ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES {
 		return true
 	}
 
@@ -927,8 +933,8 @@ func (s *AteomHerder) UploadPausedCheckpoint(ctx context.Context, req *ateletpb.
 		templateName:      req.GetActorTemplateName(),
 		// Always the actor's durable latest: golden actors are never paused
 		// (validation above rejects the golden atespace).
-		kind:  ateattr.SnapshotKindLatest,
-		scope: ateattr.SnapshotScopeValue(req.GetDesiredScope()),
+		kind:     ateattr.SnapshotKindLatest,
+		fidelity: ateattr.SnapshotFidelityValue(req.GetDesiredFidelity()),
 	}
 	defer func() {
 		s.instruments.recordCheckpoint(ctx, op,
@@ -991,20 +997,20 @@ func (s *AteomHerder) uploadLocalCheckpointDir(ctx context.Context, req *ateletp
 		return "", err
 	}
 
-	capturedScope := rec.Scope
-	if capturedScope == "" {
-		return rec.SandboxClass, apierror.FailedPrecondition("local snapshot %q has no scope recorded in its manifest (written by an older atelet); resume and pause the actor again before suspending it", req.GetLocalSnapshotName())
+	capturedFidelity := rec.Fidelity
+	if capturedFidelity == "" {
+		return rec.SandboxClass, apierror.FailedPrecondition("local snapshot %q has no fidelity recorded in its manifest; resume and pause the actor again before suspending it", req.GetLocalSnapshotName())
 	}
-	desiredScope := ateattr.SnapshotScopeValue(req.GetDesiredScope())
+	desiredFidelity := ateattr.SnapshotFidelityValue(req.GetDesiredFidelity())
 
 	switch {
-	case capturedScope == desiredScope:
-	case capturedScope == ateattr.SnapshotScopeData && desiredScope == ateattr.SnapshotScopeFull:
+	case capturedFidelity == desiredFidelity:
+	case capturedFidelity == ateattr.SnapshotFidelityVolumes && desiredFidelity == ateattr.SnapshotFidelityMemory:
 		// The control plane rejects this before marking SUSPENDING; reaching
 		// it here means the template changed mid-flight or store state drifted.
-		return rec.SandboxClass, apierror.FailedPrecondition("pause snapshot captured %s; cannot upload it as %s (memory was never captured)", capturedScope, desiredScope)
-	default: // captured FULL, DATA wanted
-		if err := narrowFullCaptureToData(rec); err != nil {
+		return rec.SandboxClass, apierror.FailedPrecondition("pause snapshot captured %s; cannot upload it as %s (memory was never captured)", capturedFidelity, desiredFidelity)
+	default: // captured MEMORY, VOLUMES wanted
+		if err := narrowMemoryCaptureToVolumes(rec); err != nil {
 			return rec.SandboxClass, err
 		}
 	}
@@ -1021,16 +1027,16 @@ func readSnapshotManifest(dir string) ([]byte, error) {
 	return root.ReadFile(sandboxManifestName)
 }
 
-// narrowFullCaptureToData rewrites rec so a FULL capture uploads as a DATA
-// snapshot holding only the data-scope files ateom reported at checkpoint.
-func narrowFullCaptureToData(rec *sandboxAssetsRecord) error {
+// narrowMemoryCaptureToVolumes rewrites rec so a MEMORY capture uploads as a
+// VOLUMES snapshot holding only the volume files ateom reported at checkpoint.
+func narrowMemoryCaptureToVolumes(rec *sandboxAssetsRecord) error {
 	if len(rec.DataSnapshotFiles) == 0 {
 		// Either no durable-dir volumes were attached at pause, or the
 		// manifest predates the list. Neither is retryable.
-		return apierror.FailedPrecondition("full capture lists no data-scope files; the actor has no durable data to upload as %s", ateattr.SnapshotScopeData)
+		return apierror.FailedPrecondition("memory capture lists no volume files; the actor has no durable data to upload as %s", ateattr.SnapshotFidelityVolumes)
 	}
 	rec.SnapshotFiles = rec.DataSnapshotFiles
-	rec.Scope = ateattr.SnapshotScopeData
+	rec.Fidelity = ateattr.SnapshotFidelityVolumes
 	return nil
 }
 
@@ -1061,7 +1067,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	op := snapshotOp{
 		templateNamespace: req.GetActorTemplateAtespace(),
 		templateName:      req.GetActorTemplateName(),
-		scope:             ateattr.SnapshotScopeValue(req.GetScope()),
+		fidelity:          ateattr.SnapshotFidelityValue(req.GetFidelity()),
 		sandboxClass:      req.GetSandboxAssets().GetSandboxClass(),
 	}
 	attribution := resources.ActorAttribution{
@@ -1245,7 +1251,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		RunscPath:             runscPathFor(assetPaths),
 		RuntimeAssetPaths:     assetPaths,
 		Spec:                  spec,
-		Scope:                 toAteomSnapshotScope(req.GetScope()),
+		Fidelity:              toAteomFidelity(req.GetFidelity()),
 		ActorUid:              req.GetActorUid(),
 		ActorDirs:             actorDirs,
 		PreserveRestoreDir:    directLocal,
@@ -1728,7 +1734,7 @@ func validateCheckpointRequest(req *ateletpb.CheckpointRequest) error {
 		return err
 	}
 
-	if err := validateSnapshotScope(req.GetScope()); err != nil {
+	if err := validateFidelity(req.GetFidelity()); err != nil {
 		return err
 	}
 
@@ -1767,7 +1773,7 @@ func validateRestoreRequest(req *ateletpb.RestoreRequest) error {
 		return err
 	}
 
-	if err := validateSnapshotScope(req.GetScope()); err != nil {
+	if err := validateFidelity(req.GetFidelity()); err != nil {
 		return err
 	}
 
@@ -1810,15 +1816,20 @@ func validateTerminateRequest(req *ateletpb.TerminateRequest) error {
 	return resources.ValidateContainerNames(names)
 }
 
-func validateSnapshotScope(scope ateletpb.SnapshotScope) error {
-	switch scope {
-	case ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
-		ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
+// validateFidelity rejects a fidelity no runtime can serve. ROOTFS is in the
+// enum but not captured by any sandbox runtime yet, so it is refused here as
+// well as at template admission.
+func validateFidelity(fidelity ateletpb.SnapshotFidelity) error {
+	switch fidelity {
+	case ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+		ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
 		return nil
-	case ateletpb.SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED:
-		return fmt.Errorf("snapshot scope must be non-zero")
+	case ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED:
+		return fmt.Errorf("snapshot fidelity must be non-zero")
+	case ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS:
+		return fmt.Errorf("ROOTFS fidelity is not supported yet")
 	default:
-		return fmt.Errorf("invalid snapshot scope: %v", scope)
+		return fmt.Errorf("invalid snapshot fidelity: %v", fidelity)
 	}
 }
 
@@ -1836,12 +1847,14 @@ func validateUploadPausedCheckpointRequest(req *ateletpb.UploadPausedCheckpointR
 	if _, err := resources.ParseSnapshotURI(req.GetDestinationSnapshotUri()); err != nil {
 		errs = append(errs, field.Invalid(field.NewPath("destination_snapshot_uri"), req.GetDestinationSnapshotUri(), err.Error()))
 	}
-	// Uploads only ever produce FULL or DATA snapshots.
-	switch req.GetDesiredScope() {
-	case ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL, ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
+	// Uploads only ever produce MEMORY or VOLUMES snapshots.
+	switch req.GetDesiredFidelity() {
+	case ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
+	case ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS:
+		errs = append(errs, field.Invalid(field.NewPath("desired_fidelity"), req.GetDesiredFidelity().String(), "ROOTFS fidelity is not supported yet"))
 	default:
-		errs = append(errs, field.NotSupported(field.NewPath("desired_scope"), req.GetDesiredScope(),
-			[]string{ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL.String(), ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA.String()}))
+		errs = append(errs, field.NotSupported(field.NewPath("desired_fidelity"), req.GetDesiredFidelity(),
+			[]string{ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY.String(), ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES.String()}))
 	}
 	return errs.ToAggregate()
 }

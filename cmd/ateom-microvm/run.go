@@ -295,7 +295,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 }
 
 // actorBootParams is what a cold boot needs about an actor. It comes from a Run
-// request, or from a Restore request whose snapshot scope covers only the
+// request, or from a Restore request whose snapshot fidelity covers only the
 // durable-dir volumes (the workload itself cold-starts).
 type actorBootParams struct {
 	actorRef         resources.ActorRef
@@ -424,8 +424,8 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 	// vCPUs round up; VM RAM reserves a fixed margin for the VMM + virtiofsd, which
 	// share the pod cgroup with the guest RAM. A declared memory limit the reserve
 	// leaves too small to boot is rejected (resolveGuestMemMiB) rather than silently
-	// falling back to the larger kata default. NB: a FULL-scope snapshot restore
-	// reuses the size baked into the snapshot (restoreFullScope), so resizing an
+	// falling back to the larger kata default. NB: a MEMORY snapshot restore
+	// reuses the size baked into the snapshot (restoreMemoryFidelity), so resizing an
 	// existing actor takes effect on its next cold boot.
 	sz := p.size
 	if v := sz.VCPUs(); v > 0 {

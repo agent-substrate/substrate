@@ -50,12 +50,12 @@ type resumeSnapshotSource struct {
 }
 
 // restoreTelemetry labels the restore operation for the resume lifecycle
-// metric. WireSnapshotScope describes the restore requested, not the stored
+// metric. WireFidelity describes the restore requested, not the stored
 // snapshot's scope: a full snapshot restored under a replaced template goes
 // out as data.
 type restoreTelemetry struct {
-	SnapshotKind      string
-	WireSnapshotScope string
+	SnapshotKind string
+	WireFidelity string
 }
 
 // ResumeActor executes the workflow to resume a suspended actor. Idempotent:
@@ -77,7 +77,7 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 			return
 		}
 		w.instruments.recordLifecycleOp(ctx, ateattr.OperationResume, start, err,
-			lifecycleOpAttrs(actor, actorTemplate, tele.SnapshotKind, tele.WireSnapshotScope)...)
+			lifecycleOpAttrs(actor, actorTemplate, tele.SnapshotKind, tele.WireFidelity)...)
 	}()
 
 	// Routed requests call ResumeActor even when the actor is already running.
@@ -132,22 +132,18 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 	return actor, true, nil
 }
 
-// validateGoldenSnapshotScope rejects a golden snapshot that does not carry
+// validateGoldenSnapshotFidelity rejects a golden snapshot that does not carry
 // the guest state (memory + fs delta) a restore needs. Golden actors always
-// commit MEMORY (preferredFidelity), so this only trips on golden snapshots
-// taken before that rule existed — surface a clear error instead of shipping
-// a restore request atelet would reject (or that would boot an empty guest).
-func validateGoldenSnapshotScope(snapshot *ateapipb.ExternalSnapshot) error {
-	scope := snapshot.GetFidelity()
-	switch scope {
-	case ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED,
-		ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
-		return nil
-	default:
+// commit MEMORY (preferredFidelity), so this only trips on a golden snapshot
+// whose record drifted — surface a clear error instead of shipping a restore
+// request atelet would reject (or that would boot an empty guest).
+func validateGoldenSnapshotFidelity(snapshot *ateapipb.ExternalSnapshot) error {
+	if fidelity := snapshot.GetFidelity(); fidelity != ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
 		return apierror.FailedPrecondition(
 			"ActorTemplate golden snapshot %q was taken with fidelity %s, not MEMORY; regenerate the golden snapshot",
-			snapshot.GetSnapshotUri(), scope)
+			snapshot.GetSnapshotUri(), fidelity)
 	}
+	return nil
 }
 
 // loadActorForResume fetches the current actor record and its template, and
@@ -719,8 +715,8 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		req.Config = &ateletpb.RestoreRequest_LocalConfig{
 			LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: local.GetSnapshotName()},
 		}
-		req.Scope = fidelityToAtelet(local.GetFidelity())
-		tele.WireSnapshotScope = ateattr.SnapshotScopeValue(req.Scope)
+		req.Fidelity = fidelityToAtelet(local.GetFidelity())
+		tele.WireFidelity = ateattr.SnapshotFidelityValue(req.Fidelity)
 
 		if _, err = client.Restore(ctx, req); err != nil {
 			return tele, handleAteletError(ctx, w.store, actorRef, ateattr.OperationResume, "Restore", false, err)
@@ -731,9 +727,9 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		tele.SnapshotKind = ateattr.SnapshotKindLatest
 		scope := fidelityToAtelet(src.Fidelity)
 		if src.TemplateReplaced {
-			scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA
+			scope = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
 		}
-		tele.WireSnapshotScope = ateattr.SnapshotScopeValue(scope)
+		tele.WireFidelity = ateattr.SnapshotFidelityValue(scope)
 		req := &ateletpb.RestoreRequest{
 			TargetAteomUid:        assignment.GetWorkerPodUid(),
 			Atespace:              actor.GetMetadata().GetAtespace(),
@@ -747,7 +743,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 					SnapshotUri: src.SnapshotURI.String(),
 				},
 			},
-			Scope:         scope,
+			Fidelity:      scope,
 			SandboxAssets: sandboxAssets,
 			ActorUid:      actor.GetMetadata().Uid,
 			EgressGateway: egressGateway,

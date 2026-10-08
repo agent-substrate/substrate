@@ -3133,8 +3133,8 @@ func TestResumeActor_DataSnapshotIgnoresGolden(t *testing.T) {
 	if restoreReq == nil {
 		t.Fatal("second resume sent no Restore request to atelet")
 	}
-	if got := restoreReq.GetScope(); got != ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA {
-		t.Fatalf("restore scope = %v, want SNAPSHOT_SCOPE_DATA", got)
+	if got := restoreReq.GetFidelity(); got != ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES {
+		t.Fatalf("restore scope = %v, want SNAPSHOT_FIDELITY_VOLUMES", got)
 	}
 	if got := restoreReq.GetExternalConfig().GetSnapshotUri(); got != actorSnapshotURI {
 		t.Errorf("restore config snapshot uri = %q, want the actor's data snapshot %q", got, actorSnapshotURI)
@@ -3802,19 +3802,19 @@ func TestResumeActor_RepointTemplateBeforeResume(t *testing.T) {
 		// after it is created but before its first resume.
 		moveActorToAnotherTemplate bool
 		wantTemplate               string
-		wantScope                  ateletpb.SnapshotScope
+		wantScope                  ateletpb.SnapshotFidelity
 	}{
 		{
 			name:                       "clone left on the tag's template",
 			moveActorToAnotherTemplate: false,
 			wantTemplate:               "tmpl1",
-			wantScope:                  ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
+			wantScope:                  ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 		},
 		{
 			name:                       "clone repointed before its first resume",
 			moveActorToAnotherTemplate: true,
 			wantTemplate:               "tmpl2",
-			wantScope:                  ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA,
+			wantScope:                  ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 		},
 	}
 	for _, tt := range tests {
@@ -3897,7 +3897,7 @@ func TestResumeActor_RepointTemplateBeforeResume(t *testing.T) {
 			if got := restoreReq.GetActorTemplateName(); got != tt.wantTemplate {
 				t.Errorf("restore request to atelet had actor template = %q, want %q", got, tt.wantTemplate)
 			}
-			if got := restoreReq.GetScope(); got != tt.wantScope {
+			if got := restoreReq.GetFidelity(); got != tt.wantScope {
 				t.Errorf("restore request to atelet had scope = %v, want %v", got, tt.wantScope)
 			}
 			// Either way the restore reads the snapshot the clone borrowed
@@ -3959,7 +3959,7 @@ func TestResumeActor_PausedAfterRepointUsesLocalProvenance(t *testing.T) {
 	if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: actorRef}); err != nil {
 		t.Fatalf("ResumeActor(v2 from v1 snapshot) failed: %v", err)
 	}
-	if got := tc.fakeAtelet.lastRestoreRequest().GetScope(); got != ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA {
+	if got := tc.fakeAtelet.lastRestoreRequest().GetFidelity(); got != ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES {
 		t.Fatalf("first resume on v2 had scope = %v, want DATA", got)
 	}
 	if _, err := tc.client.PauseActor(ctx, &ateapipb.PauseActorRequest{Actor: actorRef}); err != nil {
@@ -3976,7 +3976,7 @@ func TestResumeActor_PausedAfterRepointUsesLocalProvenance(t *testing.T) {
 	if got := restoreReq.GetType(); got != ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL {
 		t.Errorf("restore request type = %v, want LOCAL", got)
 	}
-	if got := restoreReq.GetScope(); got != ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL {
+	if got := restoreReq.GetFidelity(); got != ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
 		t.Errorf("restore request scope = %v, want FULL (local checkpoint was captured on v2)", got)
 	}
 }
@@ -4737,8 +4737,8 @@ func TestSuspendActor_FromPaused(t *testing.T) {
 	if got, want := upload.GetAtespace(), testAtespace; got != want {
 		t.Errorf("upload atespace = %q, want %q", got, want)
 	}
-	if got := upload.GetDesiredScope(); got != ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL {
-		t.Errorf("upload desired_scope = %v, want FULL (template default)", got)
+	if got := upload.GetDesiredFidelity(); got != ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
+		t.Errorf("upload desired_fidelity = %v, want MEMORY (template default)", got)
 	}
 
 	actor := suspended.GetActor()

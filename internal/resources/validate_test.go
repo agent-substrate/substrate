@@ -324,6 +324,32 @@ func testActorDirs() *ateompb.ActorDirs {
 	}
 }
 
+func TestValidateSnapshotFidelity(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		fidelity ateompb.SnapshotFidelity
+		wantErr  bool
+	}{
+		{"volumes", ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, false},
+		{"memory", ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, false},
+		{"unspecified", ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED, true},
+		{"rootfs not supported yet", ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, true},
+		{"outside the enum", ateompb.SnapshotFidelity(99), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			errs := ValidateSnapshotFidelity(tc.fidelity, field.NewPath("fidelity"))
+			if gotErr := len(errs) != 0; gotErr != tc.wantErr {
+				t.Fatalf("ValidateSnapshotFidelity(%v) = %v, wantErr %t", tc.fidelity, errs, tc.wantErr)
+			}
+			for _, e := range errs {
+				if e.Field != "fidelity" {
+					t.Errorf("error names field %q, want %q", e.Field, "fidelity")
+				}
+			}
+		})
+	}
+}
+
 func TestValidateActorDirs(t *testing.T) {
 	for _, tc := range []struct {
 		name   string

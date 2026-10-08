@@ -65,7 +65,7 @@ func TestRestoreTimingPhases(t *testing.T) {
 		total:        2 * time.Second,
 	}
 	attrs := ateomphaselog.SnapshotPhaseAttrs(resources.ActorAttribution{UID: "uid-abc"},
-		ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL, ateomphaselog.RestoreDurationKey, nil, timing.phases())
+		ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, ateomphaselog.RestoreDurationKey, nil, timing.phases())
 	attrs = append(attrs, slog.Int(containerCountKey, 2))
 
 	seen := make(map[string]bool, len(attrs))
@@ -105,8 +105,8 @@ func TestRestoreTimingPhases(t *testing.T) {
 	if rec["ate.actor.uid"] != "uid-abc" {
 		t.Errorf("ate.actor.uid = %v, want uid-abc", rec["ate.actor.uid"])
 	}
-	if rec["ate.snapshot.scope"] != "full" {
-		t.Errorf("ate.snapshot.scope = %v, want full", rec["ate.snapshot.scope"])
+	if rec["ate.snapshot.fidelity"] != "memory" {
+		t.Errorf("ate.snapshot.fidelity = %v, want memory", rec["ate.snapshot.fidelity"])
 	}
 }
 
@@ -124,7 +124,7 @@ func TestCheckpointTimingPhases(t *testing.T) {
 		total:      500 * time.Millisecond,
 	}
 	rec := renderPhaseRecord(t, ateomphaselog.SnapshotPhaseAttrs(resources.ActorAttribution{UID: "uid-abc"},
-		ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA, ateomphaselog.CheckpointDurationKey, nil, timing.phases()))
+		ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, ateomphaselog.CheckpointDurationKey, nil, timing.phases()))
 
 	for k, want := range map[string]float64{
 		"ateom.actor.checkpoint.duration.prep":        0.02,
@@ -144,8 +144,8 @@ func TestCheckpointTimingPhases(t *testing.T) {
 	if v, ok := rec["ateom.actor.checkpoint.duration.checkpoint"]; ok {
 		t.Errorf("checkpoint present with %v, want absent", v)
 	}
-	if rec["ate.snapshot.scope"] != "data" {
-		t.Errorf("ate.snapshot.scope = %v, want data", rec["ate.snapshot.scope"])
+	if rec["ate.snapshot.fidelity"] != "volumes" {
+		t.Errorf("ate.snapshot.fidelity = %v, want volumes", rec["ate.snapshot.fidelity"])
 	}
 }
 

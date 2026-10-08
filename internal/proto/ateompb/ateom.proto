@@ -286,16 +286,21 @@ message HTTPGetAction {
 message RunWorkloadResponse {
 }
 
-enum SnapshotScope {
+// SnapshotFidelity mirrors the public ateapi enum: the state layers a
+// snapshot holds, lowest to highest, each including the ones below it.
+enum SnapshotFidelity {
   // Not valid option; should never happen.
-  SNAPSHOT_SCOPE_UNSPECIFIED = 0;
-  // Capture process memory plus the full filesystem delta on top of the OCI
-  // image (including any attached DurableDir volumes).
-  SNAPSHOT_SCOPE_FULL = 1;
+  SNAPSHOT_FIDELITY_UNSPECIFIED = 0;
   // Capture only the contents of attached volumes that support snapshots
   // (currently DurableDir-typed volumes). Memory and the rest of rootfs are
   // excluded.
-  SNAPSHOT_SCOPE_DATA = 2;
+  SNAPSHOT_FIDELITY_VOLUMES = 1;
+  // Volumes plus the root filesystem changes made since boot. No runtime
+  // captures this yet; requests carrying it are rejected.
+  SNAPSHOT_FIDELITY_ROOTFS = 2;
+  // Capture process memory plus the full filesystem delta on top of the OCI
+  // image (including any attached DurableDir volumes).
+  SNAPSHOT_FIDELITY_MEMORY = 3;
 }
 
 message CheckpointWorkloadRequest {
@@ -325,8 +330,8 @@ message CheckpointWorkloadRequest {
   // atelet fetched it to (see RunWorkloadRequest). Empty for gVisor.
   map<string, string> runtime_asset_paths = 9;
 
-  // What content to include in the checkpoint.
-  SnapshotScope scope = 10;
+  // Fidelity the checkpoint captures.
+  SnapshotFidelity fidelity = 10;
   ActorDirs actor_dirs = 11;
 }
 
@@ -337,7 +342,7 @@ message CheckpointWorkloadResponse {
   repeated string snapshot_files = 1;
 
   // data_snapshot_files is the subset of snapshot_files that restores the
-  // actor at DATA scope on its own. Empty when the capture holds no durable data.
+  // actor at VOLUMES fidelity on its own. Empty when the capture holds no durable data.
   repeated string data_snapshot_files = 2;
 }
 
@@ -360,15 +365,15 @@ message RestoreWorkloadRequest {
   // atelet fetched it to (see RunWorkloadRequest). Empty for gVisor.
   map<string, string> runtime_asset_paths = 9;
 
-  // What content to restore from the snapshot.
-  SnapshotScope scope = 10;
+  // Fidelity to restore from the snapshot.
+  SnapshotFidelity fidelity = 10;
 
   // When absent the actor has no egress: its TCP is captured and refused.
   optional EgressGateway egress_gateway = 12;
 
   // The actor's declared size, from the ActorTemplate's resource limits. Used to
-  // (re)size the sandbox on a DATA-scope restore (fresh guest container). On a
-  // FULL micro-VM restore the size baked into the snapshot is authoritative and
+  // (re)size the sandbox on a VOLUMES restore (fresh guest container). On a
+  // MEMORY micro-VM restore the size baked into the snapshot is authoritative and
   // these are ignored. Zero means "unset": keep the runtime default.
   int64 cpu_milli = 14;    // CPU limit in millicores (1000 = one core).
   int64 memory_bytes = 15; // Memory limit in bytes.

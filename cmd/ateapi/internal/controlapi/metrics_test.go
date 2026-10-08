@@ -249,7 +249,7 @@ func TestLifecycleOpDurationShape(t *testing.T) {
 		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR},
 	}
 	inst.recordLifecycleOp(context.Background(), ateattr.OperationResume, time.Now(), nil,
-		lifecycleOpAttrs(actor, template, ateattr.SnapshotKindLatest, ateattr.SnapshotScopeData)...)
+		lifecycleOpAttrs(actor, template, ateattr.SnapshotKindLatest, ateattr.SnapshotFidelityVolumes)...)
 
 	dp := singleHistogramDP(t, reader, lifecycleOpDurationMetric)
 	assertAttrKeys(t, dp,
@@ -260,7 +260,7 @@ func TestLifecycleOpDurationShape(t *testing.T) {
 		ateattr.WorkerPoolNameKey,
 		ateattr.SandboxClassKey,
 		ateattr.SnapshotKindKey,
-		ateattr.SnapshotScopeKey,
+		ateattr.SnapshotFidelityKey,
 	)
 	if op, _ := attrString(dp, ateattr.ActorOperationNameKey); op != ateattr.OperationResume {
 		t.Errorf("operation = %q, want %q", op, ateattr.OperationResume)
@@ -272,8 +272,8 @@ func TestLifecycleOpDurationShape(t *testing.T) {
 	}
 	// Kind and scope are independent: a data restore of the actor's
 	// own latest snapshot must stay distinguishable from one of a local snapshot.
-	if scope, _ := attrString(dp, ateattr.SnapshotScopeKey); scope != ateattr.SnapshotScopeData {
-		t.Errorf("snapshot scope = %q, want %q", scope, ateattr.SnapshotScopeData)
+	if scope, _ := attrString(dp, ateattr.SnapshotFidelityKey); scope != ateattr.SnapshotFidelityVolumes {
+		t.Errorf("snapshot fidelity = %q, want %q", scope, ateattr.SnapshotFidelityVolumes)
 	}
 	if kind, _ := attrString(dp, ateattr.SnapshotKindKey); kind != ateattr.SnapshotKindLatest {
 		t.Errorf("snapshot kind = %q, want %q", kind, ateattr.SnapshotKindLatest)
@@ -288,7 +288,7 @@ func TestLifecycleOpAttrsOmitsUnknownScope(t *testing.T) {
 	actor := &ateapipb.Actor{ActorTemplate: &ateapipb.ObjectRef{Atespace: "ate-agents", Name: "support-agent"}}
 	for _, kv := range lifecycleOpAttrs(actor, nil, "", "") {
 		switch kv.Key {
-		case ateattr.SnapshotScopeKey, ateattr.SnapshotKindKey, ateattr.WorkerPoolNamespaceKey, ateattr.WorkerPoolNameKey:
+		case ateattr.SnapshotFidelityKey, ateattr.SnapshotKindKey, ateattr.WorkerPoolNamespaceKey, ateattr.WorkerPoolNameKey:
 			t.Errorf("attribute %s must be omitted while unknown, got %q", kv.Key, kv.Value.AsString())
 		}
 	}

@@ -174,38 +174,38 @@ func TestSnapshotManifestActorMetadata(t *testing.T) {
 		ActorUID:              "actor-uid",
 		ActorTemplateAtespace: "templates",
 		ActorTemplateName:     "agent",
-		Scope:                 ateattr.SnapshotScopeFull,
+		Fidelity:              ateattr.SnapshotFidelityMemory,
 	}
 	got, err := json.Marshal(rec)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`"atespace":"team-a"`, `"actorName":"actor-1"`, `"actorUid":"actor-uid"`, `"actorTemplateAtespace":"templates"`, `"actorTemplateName":"agent"`, `"scope":"full"`} {
+	for _, want := range []string{`"atespace":"team-a"`, `"actorName":"actor-1"`, `"actorUid":"actor-uid"`, `"actorTemplateAtespace":"templates"`, `"actorTemplateName":"agent"`, `"fidelity":"memory"`} {
 		if !bytes.Contains(got, []byte(want)) {
 			t.Errorf("manifest %s missing %s", got, want)
 		}
 	}
 }
 
-// TestSnapshotManifestScopeAbsent pins backward compatibility: manifests
-// written before the scope field existed must still parse, reporting an empty
-// scope, and a scope-less record must not serialize a scope key at all.
-func TestSnapshotManifestScopeAbsent(t *testing.T) {
+// TestSnapshotManifestFidelityAbsent pins that the on-node record written at
+// Run/Restore, which has no fidelity, parses back with an empty fidelity and
+// does not serialize a fidelity key at all.
+func TestSnapshotManifestFidelityAbsent(t *testing.T) {
 	legacy := []byte(`{"sandboxClass":"gvisor","pauseImage":"` + testPauseImage + `","snapshotFiles":["checkpoint.img"]}`)
 	rec, err := unmarshalSandboxRecord(legacy)
 	if err != nil {
 		t.Fatalf("unmarshalSandboxRecord(legacy manifest): %v", err)
 	}
-	if rec.Scope != "" {
-		t.Errorf("legacy manifest scope = %q, want empty", rec.Scope)
+	if rec.Fidelity != "" {
+		t.Errorf("manifest fidelity = %q, want empty", rec.Fidelity)
 	}
 
 	got, err := json.Marshal(sandboxAssetsRecord{SandboxClass: "gvisor"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bytes.Contains(got, []byte(`"scope"`)) {
-		t.Errorf("scope-less record serialized a scope key: %s", got)
+	if bytes.Contains(got, []byte(`"fidelity"`)) {
+		t.Errorf("fidelity-less record serialized a fidelity key: %s", got)
 	}
 }
 
@@ -567,7 +567,7 @@ func validCheckpointRequest() *ateletpb.CheckpointRequest {
 				SnapshotUri: testSnapshotURI,
 			},
 		},
-		Scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
+		Fidelity: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 	}
 }
 
@@ -586,7 +586,7 @@ func validRestoreRequest() *ateletpb.RestoreRequest {
 				SnapshotUri: testSnapshotURI,
 			},
 		},
-		Scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
+		Fidelity: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 		SandboxAssets: &ateletpb.SandboxAssets{
 			SandboxClass: "gvisor",
 			PauseImage:   testPauseImage,
@@ -669,8 +669,13 @@ func TestValidateCheckpointRequest(t *testing.T) {
 			r.Config = &ateletpb.CheckpointRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: ".."}}
 		}), true},
 		{"unspecified snapshot type", makeReq(func(r *ateletpb.CheckpointRequest) { r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_UNSPECIFIED }), true},
-		{"unspecified snapshot scope", makeReq(func(r *ateletpb.CheckpointRequest) { r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED }), true},
-		{"invalid snapshot scope", makeReq(func(r *ateletpb.CheckpointRequest) { r.Scope = ateletpb.SnapshotScope(23) }), true},
+		{"unspecified snapshot fidelity", makeReq(func(r *ateletpb.CheckpointRequest) {
+			r.Fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
+		}), true},
+		{"invalid snapshot fidelity", makeReq(func(r *ateletpb.CheckpointRequest) { r.Fidelity = ateletpb.SnapshotFidelity(23) }), true},
+		{"rootfs fidelity not supported yet", makeReq(func(r *ateletpb.CheckpointRequest) {
+			r.Fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
+		}), true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -727,8 +732,11 @@ func TestValidateRestoreRequest(t *testing.T) {
 			r.Config = &ateletpb.RestoreRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: ".."}}
 		}), true},
 		{"unspecified snapshot type", makeReq(func(r *ateletpb.RestoreRequest) { r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_UNSPECIFIED }), true},
-		{"unspecified snapshot scope", makeReq(func(r *ateletpb.RestoreRequest) { r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED }), true},
-		{"invalid snapshot scope", makeReq(func(r *ateletpb.RestoreRequest) { r.Scope = ateletpb.SnapshotScope(23) }), true},
+		{"unspecified snapshot fidelity", makeReq(func(r *ateletpb.RestoreRequest) { r.Fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED }), true},
+		{"invalid snapshot fidelity", makeReq(func(r *ateletpb.RestoreRequest) { r.Fidelity = ateletpb.SnapshotFidelity(23) }), true},
+		{"rootfs fidelity not supported yet", makeReq(func(r *ateletpb.RestoreRequest) {
+			r.Fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
+		}), true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -740,17 +748,20 @@ func TestValidateRestoreRequest(t *testing.T) {
 }
 
 // Every valid atelet scope must map to its ateom counterpart.
-func TestToAteomSnapshotScope(t *testing.T) {
+func TestToAteomFidelity(t *testing.T) {
 	tests := []struct {
-		in   ateletpb.SnapshotScope
-		want ateompb.SnapshotScope
+		in   ateletpb.SnapshotFidelity
+		want ateompb.SnapshotFidelity
 	}{
-		{ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL, ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL},
-		{ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA, ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA},
+		{ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY},
+		{ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES},
+		{ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS},
+		{ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED, ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED},
+		{ateletpb.SnapshotFidelity(99), ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED},
 	}
 	for _, tc := range tests {
-		if got := toAteomSnapshotScope(tc.in); got != tc.want {
-			t.Errorf("toAteomSnapshotScope(%v) = %v, want %v", tc.in, got, tc.want)
+		if got := toAteomFidelity(tc.in); got != tc.want {
+			t.Errorf("toAteomFidelity(%v) = %v, want %v", tc.in, got, tc.want)
 		}
 	}
 }
@@ -1505,7 +1516,7 @@ func validUploadPausedCheckpointRequest() *ateletpb.UploadPausedCheckpointReques
 		ActorTemplateName:      "counter",
 		LocalSnapshotName:      "pause-snap-1",
 		DestinationSnapshotUri: pausedSnapshotURI,
-		DesiredScope:           ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
+		DesiredFidelity:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 	}
 }
 
@@ -1521,7 +1532,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 			PauseImage:        testPauseImage,
 			SnapshotFiles:     []string{"config.json", "memory-ranges", "data.tar"},
 			DataSnapshotFiles: []string{"data.tar"},
-			Scope:             ateattr.SnapshotScopeFull,
+			Fidelity:          ateattr.SnapshotFidelityMemory,
 		}
 	}
 
@@ -1558,8 +1569,8 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 		if got := store.keys(); !slices.Equal(got, want) {
 			t.Errorf("uploaded objects = %v, want %v", got, want)
 		}
-		if rec := remoteManifest(t, store); rec.Scope != ateattr.SnapshotScopeFull {
-			t.Errorf("uploaded manifest scope = %q, want %q", rec.Scope, ateattr.SnapshotScopeFull)
+		if rec := remoteManifest(t, store); rec.Fidelity != ateattr.SnapshotFidelityMemory {
+			t.Errorf("uploaded manifest fidelity = %q, want %q", rec.Fidelity, ateattr.SnapshotFidelityMemory)
 		}
 	})
 
@@ -1572,7 +1583,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 		})
 
 		req := validUploadPausedCheckpointRequest()
-		req.DesiredScope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA
+		req.DesiredFidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
 		if _, err := s.uploadLocalCheckpointDir(ctx, req, dir, uri); err != nil {
 			t.Fatalf("uploadLocalCheckpointDir: %v", err)
 		}
@@ -1584,8 +1595,8 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 			t.Errorf("uploaded objects = %v, want %v", got, want)
 		}
 		rec := remoteManifest(t, store)
-		if rec.Scope != ateattr.SnapshotScopeData {
-			t.Errorf("uploaded manifest scope = %q, want %q", rec.Scope, ateattr.SnapshotScopeData)
+		if rec.Fidelity != ateattr.SnapshotFidelityVolumes {
+			t.Errorf("uploaded manifest fidelity = %q, want %q", rec.Fidelity, ateattr.SnapshotFidelityVolumes)
 		}
 		if want := []string{"data.tar"}; !slices.Equal(rec.SnapshotFiles, want) {
 			t.Errorf("uploaded manifest files = %v, want %v", rec.SnapshotFiles, want)
@@ -1603,7 +1614,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 		})
 
 		req := validUploadPausedCheckpointRequest()
-		req.DesiredScope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA
+		req.DesiredFidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
 		_, err := s.uploadLocalCheckpointDir(ctx, req, dir, uri)
 		if got := apierror.Code(err); got != codes.FailedPrecondition {
 			t.Fatalf("status.Code = %v (err %v), want FailedPrecondition", got, err)
@@ -1620,7 +1631,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 			SandboxClass:  "microvm",
 			PauseImage:    testPauseImage,
 			SnapshotFiles: []string{"data.tar"},
-			Scope:         ateattr.SnapshotScopeData,
+			Fidelity:      ateattr.SnapshotFidelityVolumes,
 		}, map[string]string{"data.tar": "data"})
 
 		_, err := s.uploadLocalCheckpointDir(ctx, validUploadPausedCheckpointRequest(), dir, uri)
@@ -1640,7 +1651,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 		}, map[string]string{"data.tar": "data"})
 
 		req := validUploadPausedCheckpointRequest()
-		req.DesiredScope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA
+		req.DesiredFidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
 		_, err := s.uploadLocalCheckpointDir(ctx, req, dir, uri)
 		if got := apierror.Code(err); got != codes.FailedPrecondition {
 			t.Fatalf("status.Code = %v (err %v), want FailedPrecondition for a scope-less manifest", got, err)
@@ -1694,8 +1705,8 @@ func TestValidateUploadPausedCheckpointRequest(t *testing.T) {
 		wantErr bool
 	}{
 		{"valid", func(*ateletpb.UploadPausedCheckpointRequest) {}, false},
-		{"valid data scope", func(r *ateletpb.UploadPausedCheckpointRequest) {
-			r.DesiredScope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA
+		{"valid volumes fidelity", func(r *ateletpb.UploadPausedCheckpointRequest) {
+			r.DesiredFidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
 		}, false},
 		{"invalid atespace", func(r *ateletpb.UploadPausedCheckpointRequest) { r.Atespace = "../escape" }, true},
 		{"golden atespace rejected", func(r *ateletpb.UploadPausedCheckpointRequest) { r.Atespace = resources.GoldenActorAtespace }, true},
@@ -1707,8 +1718,11 @@ func TestValidateUploadPausedCheckpointRequest(t *testing.T) {
 		}, false},
 		{"invalid snapshot name", func(r *ateletpb.UploadPausedCheckpointRequest) { r.LocalSnapshotName = "../escape" }, true},
 		{"invalid snapshot uri", func(r *ateletpb.UploadPausedCheckpointRequest) { r.DestinationSnapshotUri = "not-a-uri" }, true},
-		{"unspecified scope", func(r *ateletpb.UploadPausedCheckpointRequest) {
-			r.DesiredScope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED
+		{"unspecified fidelity", func(r *ateletpb.UploadPausedCheckpointRequest) {
+			r.DesiredFidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
+		}, true},
+		{"rootfs fidelity not supported yet", func(r *ateletpb.UploadPausedCheckpointRequest) {
+			r.DesiredFidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
 		}, true},
 	}
 	for _, tc := range tests {
@@ -1731,14 +1745,14 @@ func TestShouldHaveSnapshots(t *testing.T) {
 		{
 			name: "full scope always expects snapshots",
 			req: &ateletpb.CheckpointRequest{
-				Scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
+				Fidelity: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			},
 			want: true,
 		},
 		{
 			name: "data scope with durable volumes expects snapshots",
 			req: &ateletpb.CheckpointRequest{
-				Scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA,
+				Fidelity: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 				Spec: &ateletpb.WorkloadSpec{
 					Volumes: []*ateletpb.Volume{
 						{Name: "durable", Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}}},
@@ -1750,7 +1764,7 @@ func TestShouldHaveSnapshots(t *testing.T) {
 		{
 			name: "data scope with only CSI volumes does not expect snapshots",
 			req: &ateletpb.CheckpointRequest{
-				Scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA,
+				Fidelity: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 				Spec: &ateletpb.WorkloadSpec{
 					Volumes: []*ateletpb.Volume{
 						{Name: "csi", Source: &ateletpb.Volume_External{External: &ateletpb.ExternalVolumeSource{}}},
@@ -1762,7 +1776,7 @@ func TestShouldHaveSnapshots(t *testing.T) {
 		{
 			name: "data scope with both durable and CSI volumes expects snapshots",
 			req: &ateletpb.CheckpointRequest{
-				Scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA,
+				Fidelity: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 				Spec: &ateletpb.WorkloadSpec{
 					Volumes: []*ateletpb.Volume{
 						{Name: "durable", Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}}},
@@ -1775,8 +1789,8 @@ func TestShouldHaveSnapshots(t *testing.T) {
 		{
 			name: "data scope with no volumes does not expect snapshots",
 			req: &ateletpb.CheckpointRequest{
-				Scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA,
-				Spec:  &ateletpb.WorkloadSpec{},
+				Fidelity: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
+				Spec:     &ateletpb.WorkloadSpec{},
 			},
 			want: false,
 		},

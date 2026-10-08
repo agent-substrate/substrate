@@ -35,58 +35,65 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-type SnapshotScope int32
+// SnapshotFidelity mirrors the public ateapi enum: the state layers a
+// snapshot holds, lowest to highest, each including the ones below it.
+type SnapshotFidelity int32
 
 const (
 	// Not valid option; should never happen.
-	SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED SnapshotScope = 0
-	// Capture process memory plus the full filesystem delta on top of the OCI
-	// image (including any attached DurableDir volumes).
-	SnapshotScope_SNAPSHOT_SCOPE_FULL SnapshotScope = 1
+	SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED SnapshotFidelity = 0
 	// Capture only the contents of attached volumes that support snapshots
 	// (currently DurableDir-typed volumes). Memory and the rest of rootfs are
 	// excluded.
-	SnapshotScope_SNAPSHOT_SCOPE_DATA SnapshotScope = 2
+	SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES SnapshotFidelity = 1
+	// Volumes plus the root filesystem changes made since boot. No runtime
+	// captures this yet; requests carrying it are rejected.
+	SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS SnapshotFidelity = 2
+	// Capture process memory plus the full filesystem delta on top of the OCI
+	// image (including any attached DurableDir volumes).
+	SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY SnapshotFidelity = 3
 )
 
-// Enum value maps for SnapshotScope.
+// Enum value maps for SnapshotFidelity.
 var (
-	SnapshotScope_name = map[int32]string{
-		0: "SNAPSHOT_SCOPE_UNSPECIFIED",
-		1: "SNAPSHOT_SCOPE_FULL",
-		2: "SNAPSHOT_SCOPE_DATA",
+	SnapshotFidelity_name = map[int32]string{
+		0: "SNAPSHOT_FIDELITY_UNSPECIFIED",
+		1: "SNAPSHOT_FIDELITY_VOLUMES",
+		2: "SNAPSHOT_FIDELITY_ROOTFS",
+		3: "SNAPSHOT_FIDELITY_MEMORY",
 	}
-	SnapshotScope_value = map[string]int32{
-		"SNAPSHOT_SCOPE_UNSPECIFIED": 0,
-		"SNAPSHOT_SCOPE_FULL":        1,
-		"SNAPSHOT_SCOPE_DATA":        2,
+	SnapshotFidelity_value = map[string]int32{
+		"SNAPSHOT_FIDELITY_UNSPECIFIED": 0,
+		"SNAPSHOT_FIDELITY_VOLUMES":     1,
+		"SNAPSHOT_FIDELITY_ROOTFS":      2,
+		"SNAPSHOT_FIDELITY_MEMORY":      3,
 	}
 )
 
-func (x SnapshotScope) Enum() *SnapshotScope {
-	p := new(SnapshotScope)
+func (x SnapshotFidelity) Enum() *SnapshotFidelity {
+	p := new(SnapshotFidelity)
 	*p = x
 	return p
 }
 
-func (x SnapshotScope) String() string {
+func (x SnapshotFidelity) String() string {
 	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
 }
 
-func (SnapshotScope) Descriptor() protoreflect.EnumDescriptor {
+func (SnapshotFidelity) Descriptor() protoreflect.EnumDescriptor {
 	return file_ateom_proto_enumTypes[0].Descriptor()
 }
 
-func (SnapshotScope) Type() protoreflect.EnumType {
+func (SnapshotFidelity) Type() protoreflect.EnumType {
 	return &file_ateom_proto_enumTypes[0]
 }
 
-func (x SnapshotScope) Number() protoreflect.EnumNumber {
+func (x SnapshotFidelity) Number() protoreflect.EnumNumber {
 	return protoreflect.EnumNumber(x)
 }
 
-// Deprecated: Use SnapshotScope.Descriptor instead.
-func (SnapshotScope) EnumDescriptor() ([]byte, []int) {
+// Deprecated: Use SnapshotFidelity.Descriptor instead.
+func (SnapshotFidelity) EnumDescriptor() ([]byte, []int) {
 	return file_ateom_proto_rawDescGZIP(), []int{0}
 }
 
@@ -1300,9 +1307,9 @@ type CheckpointWorkloadRequest struct {
 	// runtime_asset_paths maps a runtime asset name to the local on-disk path
 	// atelet fetched it to (see RunWorkloadRequest). Empty for gVisor.
 	RuntimeAssetPaths map[string]string `protobuf:"bytes,9,rep,name=runtime_asset_paths,json=runtimeAssetPaths,proto3" json:"runtime_asset_paths,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	// What content to include in the checkpoint.
-	Scope         SnapshotScope `protobuf:"varint,10,opt,name=scope,proto3,enum=ateom.SnapshotScope" json:"scope,omitempty"`
-	ActorDirs     *ActorDirs    `protobuf:"bytes,11,opt,name=actor_dirs,json=actorDirs,proto3" json:"actor_dirs,omitempty"`
+	// Fidelity the checkpoint captures.
+	Fidelity      SnapshotFidelity `protobuf:"varint,10,opt,name=fidelity,proto3,enum=ateom.SnapshotFidelity" json:"fidelity,omitempty"`
+	ActorDirs     *ActorDirs       `protobuf:"bytes,11,opt,name=actor_dirs,json=actorDirs,proto3" json:"actor_dirs,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1400,11 +1407,11 @@ func (x *CheckpointWorkloadRequest) GetRuntimeAssetPaths() map[string]string {
 	return nil
 }
 
-func (x *CheckpointWorkloadRequest) GetScope() SnapshotScope {
+func (x *CheckpointWorkloadRequest) GetFidelity() SnapshotFidelity {
 	if x != nil {
-		return x.Scope
+		return x.Fidelity
 	}
-	return SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED
+	return SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
 }
 
 func (x *CheckpointWorkloadRequest) GetActorDirs() *ActorDirs {
@@ -1421,7 +1428,7 @@ type CheckpointWorkloadResponse struct {
 	// its own set (gVisor's image files, cloud-hypervisor's snapshot set, ...).
 	SnapshotFiles []string `protobuf:"bytes,1,rep,name=snapshot_files,json=snapshotFiles,proto3" json:"snapshot_files,omitempty"`
 	// data_snapshot_files is the subset of snapshot_files that restores the
-	// actor at DATA scope on its own. Empty when the capture holds no durable data.
+	// actor at VOLUMES fidelity on its own. Empty when the capture holds no durable data.
 	DataSnapshotFiles []string `protobuf:"bytes,2,rep,name=data_snapshot_files,json=dataSnapshotFiles,proto3" json:"data_snapshot_files,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
@@ -1486,13 +1493,13 @@ type RestoreWorkloadRequest struct {
 	// runtime_asset_paths maps a runtime asset name to the local on-disk path
 	// atelet fetched it to (see RunWorkloadRequest). Empty for gVisor.
 	RuntimeAssetPaths map[string]string `protobuf:"bytes,9,rep,name=runtime_asset_paths,json=runtimeAssetPaths,proto3" json:"runtime_asset_paths,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	// What content to restore from the snapshot.
-	Scope SnapshotScope `protobuf:"varint,10,opt,name=scope,proto3,enum=ateom.SnapshotScope" json:"scope,omitempty"`
+	// Fidelity to restore from the snapshot.
+	Fidelity SnapshotFidelity `protobuf:"varint,10,opt,name=fidelity,proto3,enum=ateom.SnapshotFidelity" json:"fidelity,omitempty"`
 	// When absent the actor has no egress: its TCP is captured and refused.
 	EgressGateway *EgressGateway `protobuf:"bytes,12,opt,name=egress_gateway,json=egressGateway,proto3,oneof" json:"egress_gateway,omitempty"`
 	// The actor's declared size, from the ActorTemplate's resource limits. Used to
-	// (re)size the sandbox on a DATA-scope restore (fresh guest container). On a
-	// FULL micro-VM restore the size baked into the snapshot is authoritative and
+	// (re)size the sandbox on a VOLUMES restore (fresh guest container). On a
+	// MEMORY micro-VM restore the size baked into the snapshot is authoritative and
 	// these are ignored. Zero means "unset": keep the runtime default.
 	CpuMilli    int64      `protobuf:"varint,14,opt,name=cpu_milli,json=cpuMilli,proto3" json:"cpu_milli,omitempty"`          // CPU limit in millicores (1000 = one core).
 	MemoryBytes int64      `protobuf:"varint,15,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"` // Memory limit in bytes.
@@ -1597,11 +1604,11 @@ func (x *RestoreWorkloadRequest) GetRuntimeAssetPaths() map[string]string {
 	return nil
 }
 
-func (x *RestoreWorkloadRequest) GetScope() SnapshotScope {
+func (x *RestoreWorkloadRequest) GetFidelity() SnapshotFidelity {
 	if x != nil {
-		return x.Scope
+		return x.Fidelity
 	}
-	return SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED
+	return SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
 }
 
 func (x *RestoreWorkloadRequest) GetEgressGateway() *EgressGateway {
@@ -2126,7 +2133,7 @@ const file_ateom_proto_rawDesc = "" +
 	"\rHTTPGetAction\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x12\n" +
 	"\x04port\x18\x02 \x01(\x05R\x04port\"\x15\n" +
-	"\x13RunWorkloadResponse\"\xd2\x04\n" +
+	"\x13RunWorkloadResponse\"\xdb\x04\n" +
 	"\x19CheckpointWorkloadRequest\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +
@@ -2138,9 +2145,9 @@ const file_ateom_proto_rawDesc = "" +
 	"runsc_path\x18\x06 \x01(\tR\trunscPath\x12'\n" +
 	"\x04spec\x18\a \x01(\v2\x13.ateom.WorkloadSpecR\x04spec\x12!\n" +
 	"\fsnapshot_uri\x18\b \x01(\tR\vsnapshotUri\x12g\n" +
-	"\x13runtime_asset_paths\x18\t \x03(\v27.ateom.CheckpointWorkloadRequest.RuntimeAssetPathsEntryR\x11runtimeAssetPaths\x12*\n" +
-	"\x05scope\x18\n" +
-	" \x01(\x0e2\x14.ateom.SnapshotScopeR\x05scope\x12/\n" +
+	"\x13runtime_asset_paths\x18\t \x03(\v27.ateom.CheckpointWorkloadRequest.RuntimeAssetPathsEntryR\x11runtimeAssetPaths\x123\n" +
+	"\bfidelity\x18\n" +
+	" \x01(\x0e2\x17.ateom.SnapshotFidelityR\bfidelity\x12/\n" +
 	"\n" +
 	"actor_dirs\x18\v \x01(\v2\x10.ateom.ActorDirsR\tactorDirs\x1aD\n" +
 	"\x16RuntimeAssetPathsEntry\x12\x10\n" +
@@ -2148,7 +2155,7 @@ const file_ateom_proto_rawDesc = "" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"s\n" +
 	"\x1aCheckpointWorkloadResponse\x12%\n" +
 	"\x0esnapshot_files\x18\x01 \x03(\tR\rsnapshotFiles\x12.\n" +
-	"\x13data_snapshot_files\x18\x02 \x03(\tR\x11dataSnapshotFiles\"\x93\x06\n" +
+	"\x13data_snapshot_files\x18\x02 \x03(\tR\x11dataSnapshotFiles\"\x9c\x06\n" +
 	"\x16RestoreWorkloadRequest\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +
@@ -2160,9 +2167,9 @@ const file_ateom_proto_rawDesc = "" +
 	"runsc_path\x18\x06 \x01(\tR\trunscPath\x12'\n" +
 	"\x04spec\x18\a \x01(\v2\x13.ateom.WorkloadSpecR\x04spec\x12!\n" +
 	"\fsnapshot_uri\x18\b \x01(\tR\vsnapshotUri\x12d\n" +
-	"\x13runtime_asset_paths\x18\t \x03(\v24.ateom.RestoreWorkloadRequest.RuntimeAssetPathsEntryR\x11runtimeAssetPaths\x12*\n" +
-	"\x05scope\x18\n" +
-	" \x01(\x0e2\x14.ateom.SnapshotScopeR\x05scope\x12@\n" +
+	"\x13runtime_asset_paths\x18\t \x03(\v24.ateom.RestoreWorkloadRequest.RuntimeAssetPathsEntryR\x11runtimeAssetPaths\x123\n" +
+	"\bfidelity\x18\n" +
+	" \x01(\x0e2\x17.ateom.SnapshotFidelityR\bfidelity\x12@\n" +
 	"\x0eegress_gateway\x18\f \x01(\v2\x14.ateom.EgressGatewayH\x00R\regressGateway\x88\x01\x01\x12\x1b\n" +
 	"\tcpu_milli\x18\x0e \x01(\x03R\bcpuMilli\x12!\n" +
 	"\fmemory_bytes\x18\x0f \x01(\x03R\vmemoryBytes\x12/\n" +
@@ -2196,11 +2203,12 @@ const file_ateom_proto_rawDesc = "" +
 	"\x06sample\x18\x01 \x01(\v2\x1a.ateom.WorkloadStatsSampleR\x06sample\"\x1f\n" +
 	"\x1dGetActiveWorkloadStatsRequest\"V\n" +
 	"\x1eGetActiveWorkloadStatsResponse\x124\n" +
-	"\asamples\x18\x01 \x03(\v2\x1a.ateom.WorkloadStatsSampleR\asamples*a\n" +
-	"\rSnapshotScope\x12\x1e\n" +
-	"\x1aSNAPSHOT_SCOPE_UNSPECIFIED\x10\x00\x12\x17\n" +
-	"\x13SNAPSHOT_SCOPE_FULL\x10\x01\x12\x17\n" +
-	"\x13SNAPSHOT_SCOPE_DATA\x10\x02*b\n" +
+	"\asamples\x18\x01 \x03(\v2\x1a.ateom.WorkloadStatsSampleR\asamples*\x90\x01\n" +
+	"\x10SnapshotFidelity\x12!\n" +
+	"\x1dSNAPSHOT_FIDELITY_UNSPECIFIED\x10\x00\x12\x1d\n" +
+	"\x19SNAPSHOT_FIDELITY_VOLUMES\x10\x01\x12\x1c\n" +
+	"\x18SNAPSHOT_FIDELITY_ROOTFS\x10\x02\x12\x1c\n" +
+	"\x18SNAPSHOT_FIDELITY_MEMORY\x10\x03*b\n" +
 	"\fSandboxClass\x12\x1d\n" +
 	"\x19SANDBOX_CLASS_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14SANDBOX_CLASS_GVISOR\x10\x01\x12\x19\n" +
@@ -2232,7 +2240,7 @@ func file_ateom_proto_rawDescGZIP() []byte {
 var file_ateom_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
 var file_ateom_proto_msgTypes = make([]protoimpl.MessageInfo, 28)
 var file_ateom_proto_goTypes = []any{
-	(SnapshotScope)(0),                     // 0: ateom.SnapshotScope
+	(SnapshotFidelity)(0),                  // 0: ateom.SnapshotFidelity
 	(SandboxClass)(0),                      // 1: ateom.SandboxClass
 	(StatsSource)(0),                       // 2: ateom.StatsSource
 	(*ActorDirs)(nil),                      // 3: ateom.ActorDirs
@@ -2282,11 +2290,11 @@ var file_ateom_proto_depIdxs = []int32{
 	17, // 14: ateom.WakeupProbe.http_get:type_name -> ateom.HTTPGetAction
 	8,  // 15: ateom.CheckpointWorkloadRequest.spec:type_name -> ateom.WorkloadSpec
 	29, // 16: ateom.CheckpointWorkloadRequest.runtime_asset_paths:type_name -> ateom.CheckpointWorkloadRequest.RuntimeAssetPathsEntry
-	0,  // 17: ateom.CheckpointWorkloadRequest.scope:type_name -> ateom.SnapshotScope
+	0,  // 17: ateom.CheckpointWorkloadRequest.fidelity:type_name -> ateom.SnapshotFidelity
 	3,  // 18: ateom.CheckpointWorkloadRequest.actor_dirs:type_name -> ateom.ActorDirs
 	8,  // 19: ateom.RestoreWorkloadRequest.spec:type_name -> ateom.WorkloadSpec
 	30, // 20: ateom.RestoreWorkloadRequest.runtime_asset_paths:type_name -> ateom.RestoreWorkloadRequest.RuntimeAssetPathsEntry
-	0,  // 21: ateom.RestoreWorkloadRequest.scope:type_name -> ateom.SnapshotScope
+	0,  // 21: ateom.RestoreWorkloadRequest.fidelity:type_name -> ateom.SnapshotFidelity
 	7,  // 22: ateom.RestoreWorkloadRequest.egress_gateway:type_name -> ateom.EgressGateway
 	3,  // 23: ateom.RestoreWorkloadRequest.actor_dirs:type_name -> ateom.ActorDirs
 	1,  // 24: ateom.WorkloadStatsSample.sandbox_class:type_name -> ateom.SandboxClass

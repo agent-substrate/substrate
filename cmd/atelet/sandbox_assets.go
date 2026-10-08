@@ -101,14 +101,14 @@ type sandboxAssetsRecord struct {
 	// on-node record written at Run/Restore; populated at Checkpoint.
 	SnapshotFiles []string `json:"snapshotFiles,omitempty"`
 	// DataSnapshotFiles is the subset of SnapshotFiles that restores the actor
-	// at DATA scope on its own, as reported by CheckpointWorkloadResponse.
+	// at VOLUMES fidelity on its own, as reported by CheckpointWorkloadResponse.
 	// Empty when the capture holds no durable data.
 	DataSnapshotFiles []string `json:"dataSnapshotFiles,omitempty"`
-	// Scope is the snapshot scope the checkpoint captured, as the shared
-	// ateattr label ("full" or "data"), so a snapshot's content is knowable
-	// from the manifest alone. Empty in the on-node record written at
-	// Run/Restore and in snapshot manifests written before this field existed.
-	Scope string `json:"scope,omitempty"`
+	// Fidelity is the snapshot fidelity the checkpoint captured, as the shared
+	// ateattr label ("memory" or "volumes"), so a snapshot's content is
+	// knowable from the manifest alone. Empty in the on-node record written at
+	// Run/Restore.
+	Fidelity string `json:"fidelity,omitempty"`
 }
 
 // recordFromRequest projects a request's per-architecture SandboxAssets onto the

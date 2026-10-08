@@ -21,28 +21,38 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
-// TestSnapshotScopeToAtelet covers the wire scope derivation for template
-// content scopes: an unset scope falls back to Full.
-func TestSnapshotScopeToAtelet(t *testing.T) {
+// TestFidelityToAtelet pins the level-by-level mapping onto the atelet enum:
+// nothing is promoted, and an unset fidelity stays unset so atelet rejects it.
+func TestFidelityToAtelet(t *testing.T) {
 	tests := []struct {
 		name     string
 		in       ateapipb.SnapshotFidelity
-		expected ateletpb.SnapshotScope
+		expected ateletpb.SnapshotFidelity
 	}{
 		{
-			name:     "Full scope",
+			name:     "memory",
 			in:       ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
-			expected: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
+			expected: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 		},
 		{
-			name:     "Data scope",
+			name:     "rootfs",
+			in:       ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+			expected: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+		},
+		{
+			name:     "volumes",
 			in:       ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
-			expected: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA,
+			expected: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 		},
 		{
-			name:     "Default scope (unspecified)",
+			name:     "unspecified stays unspecified",
 			in:       ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED,
-			expected: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
+			expected: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED,
+		},
+		{
+			name:     "value outside the enum",
+			in:       ateapipb.SnapshotFidelity(99),
+			expected: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED,
 		},
 	}
 

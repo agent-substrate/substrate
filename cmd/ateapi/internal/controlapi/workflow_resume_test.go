@@ -1126,7 +1126,7 @@ func newWireCaptureWorkflow(t *testing.T, persistence store.Interface) (*ActorWo
 // TestResumeActor_AteletWireRequest is the characteristic test for the
 // loadActorForResume + ensureAteletRestored seam: for every combination of
 // boot-source inputs it pins the exact request atelet receives — which RPC,
-// req.Scope, and the snapshot the config names — and that a source-resolution
+// req.Fidelity, and the snapshot the config names — and that a source-resolution
 // error never produces an atelet RPC.
 //
 // The rows are ordered strictly by input columns (local → external → tmplUID →
@@ -1176,7 +1176,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 		// a row also pins that the other config is absent.
 		snapshotName string
 		snapshotURI  string
-		scope        ateletpb.SnapshotScope
+		scope        ateletpb.SnapshotFidelity
 	}
 
 	tests := []struct {
@@ -1196,7 +1196,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			want: restoreWant{
 				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
 				snapshotURI:    goldenURI,
-				scope:          ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
+				scope:          ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			},
 		},
 		{
@@ -1222,7 +1222,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			want: restoreWant{
 				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
 				snapshotURI:    actorURI,
-				scope:          ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
+				scope:          ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			},
 		},
 		{
@@ -1234,7 +1234,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			want: restoreWant{
 				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
 				snapshotURI:    actorURI,
-				scope:          ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
+				scope:          ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			},
 		},
 		{
@@ -1249,7 +1249,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			want: restoreWant{
 				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
 				snapshotURI:    actorURI,
-				scope:          ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA,
+				scope:          ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			},
 		},
 		{
@@ -1258,7 +1258,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			want: restoreWant{
 				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
 				snapshotURI:    actorURI,
-				scope:          ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA,
+				scope:          ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			},
 		},
 		{
@@ -1270,18 +1270,21 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			want: restoreWant{
 				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
 				snapshotURI:    actorURI,
-				scope:          ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA,
+				scope:          ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			},
 		},
 		{
 			// Snapshots recorded before fidelity existed carry
 			// UNSPECIFIED; the conversion sends them out as Full.
-			name:  "11 unspecified durable scope goes out as Full",
+			// A stored snapshot always records its fidelity; one without is a
+			// drifted record, and ateapi forwards it unchanged for atelet's
+			// validation to reject rather than guessing MEMORY.
+			name:  "11 unspecified durable fidelity goes out unspecified",
 			actor: actorSeed{externalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: actorURI, Fidelity: unspecScope}},
 			want: restoreWant{
 				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
 				snapshotURI:    actorURI,
-				scope:          ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
+				scope:          ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED,
 			},
 		},
 		{
@@ -1297,7 +1300,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			want: restoreWant{
 				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
 				snapshotName:   localSnapshotName,
-				scope:          ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
+				scope:          ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			},
 		},
 		{
@@ -1312,7 +1315,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			want: restoreWant{
 				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
 				snapshotName:   localSnapshotName,
-				scope:          ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
+				scope:          ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			},
 		},
 		{
@@ -1323,7 +1326,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			want: restoreWant{
 				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
 				snapshotName:   localSnapshotName,
-				scope:          ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA,
+				scope:          ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			},
 		},
 		{
@@ -1337,7 +1340,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			want: restoreWant{
 				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
 				snapshotName:   localSnapshotName,
-				scope:          ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA,
+				scope:          ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			},
 		},
 		{
@@ -1351,7 +1354,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			want: restoreWant{
 				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
 				snapshotName:   localSnapshotName,
-				scope:          ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA,
+				scope:          ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			},
 		},
 		{
@@ -1368,7 +1371,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			want: restoreWant{
 				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
 				snapshotName:   localSnapshotName,
-				scope:          ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
+				scope:          ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			},
 		},
 		{
@@ -1504,7 +1507,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			if got := restore.GetExternalConfig().GetSnapshotUri(); got != tt.want.snapshotURI {
 				t.Errorf("ExternalConfig.SnapshotUri = %q, want %q", got, tt.want.snapshotURI)
 			}
-			if got := restore.GetScope(); got != tt.want.scope {
+			if got := restore.GetFidelity(); got != tt.want.scope {
 				t.Errorf("restore scope = %v, want %v", got, tt.want.scope)
 			}
 		})

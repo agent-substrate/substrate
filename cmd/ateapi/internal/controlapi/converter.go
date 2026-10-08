@@ -20,15 +20,20 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
-// fidelityToAtelet maps the public fidelity ladder onto the atelet wire
-// scopes: VOLUMES is a DATA capture, MEMORY a FULL one. ROOTFS is rejected
-// at admission; should one ever arrive it degrades to FULL, which captures a
-// superset, rather than dropping state.
-func fidelityToAtelet(in ateapipb.SnapshotFidelity) ateletpb.SnapshotScope {
-	if in == ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES {
-		return ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA
+// fidelityToAtelet maps the public fidelity ladder onto the identical atelet
+// wire enum, level by level. Anything else, including UNSPECIFIED, goes out
+// as UNSPECIFIED, which atelet rejects, rather than being silently promoted.
+func fidelityToAtelet(in ateapipb.SnapshotFidelity) ateletpb.SnapshotFidelity {
+	switch in {
+	case ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
+		return ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
+	case ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS:
+		return ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
+	case ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
+		return ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
+	default:
+		return ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
 	}
-	return ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL
 }
 
 // sandboxClassString renders the proto enum in the CRD's lower-case string

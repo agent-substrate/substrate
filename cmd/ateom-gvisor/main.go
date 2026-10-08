@@ -545,6 +545,15 @@ func validateActorDirs(actorDirs *ateompb.ActorDirs) error {
 	return nil
 }
 
+// validateFidelity rejects a checkpoint or restore request whose fidelity
+// this runtime cannot serve.
+func validateFidelity(fidelity ateompb.SnapshotFidelity) error {
+	if errs := resources.ValidateSnapshotFidelity(fidelity, field.NewPath("fidelity")); len(errs) > 0 {
+		return apierror.InvalidArgument("%v", errs.ToAggregate())
+	}
+	return nil
+}
+
 func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkloadRequest) (resp *ateompb.RunWorkloadResponse, retErr error) {
 	if err := validateActorDirs(req.GetActorDirs()); err != nil {
 		return nil, err
@@ -677,6 +686,9 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	if err := validateActorDirs(req.GetActorDirs()); err != nil {
 		return nil, err
 	}
+	if err := validateFidelity(req.GetFidelity()); err != nil {
+		return nil, err
+	}
 	if err := validateRunscPath(req.GetRunscPath()); err != nil {
 		return nil, err
 	}
@@ -693,12 +705,12 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	// Per-phase timing, recorded on the way out so a failed checkpoint still
 	// reports the phases it completed, and the failing step its elapsed time.
 	attribution := ateomstats.ActorAttributionFromRequest(req)
-	scope := req.GetScope()
+	fidelity := req.GetFidelity()
 	var timing checkpointTiming
 	tLast := tStart
 	defer func() {
 		timing.total = time.Since(tStart)
-		ateomphaselog.LogSnapshotPhases(ctx, "Checkpoint timing breakdown", attribution, scope,
+		ateomphaselog.LogSnapshotPhases(ctx, "Checkpoint timing breakdown", attribution, fidelity,
 			ateomphaselog.CheckpointDurationKey, err, timing.phases())
 	}()
 
@@ -707,7 +719,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	}
 
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor checkpointing", attribution)
-	// Read before the snapshot: a Full checkpoint stops the sandbox, and its
+	// Read before the snapshot: a MEMORY checkpoint stops the sandbox, and its
 	// cgroup with it. The final record waits for the teardown.
 	hosted := s.lookupActor(req.GetActorUid())
 	if hosted != nil {
@@ -733,14 +745,14 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		return nil, fmt.Errorf("while creating checkpoint directory: %w", err)
 	}
 
-	// durableFiles are the durable-dir tars written below: the DATA subset.
+	// durableFiles are the durable-dir tars written below: the VOLUMES subset.
 	var durableFiles []string
 	// Always take durable-dir snapshot if at least one container has a durable-dir volume mount.
 	// TODO(dberkov): this is a temporary workaround until gVisor supports taking durable-dir snapshots in a single request with the process snapshot.
-	switch scope {
-	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
+	switch fidelity {
+	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
 		if !hasDurableVolumes(req.GetSpec().GetContainers()) {
-			return nil, fmt.Errorf("no durable-dir volumes found for DATA snapshot")
+			return nil, fmt.Errorf("no durable-dir volumes found for VOLUMES snapshot")
 		}
 		err := rcmd.cmdPause(ctx, ocispec.PauseContainer)
 		timing.pause = lap(&tLast)
@@ -763,7 +775,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		if tarErr != nil {
 			return nil, fmt.Errorf("while archiving durable-dir volumes: %w", tarErr)
 		}
-	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL:
+	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
 		// Checkpoint pause container (root of the sandbox)
 		// TODO: Consider pause -> tar -> resume -> checkpoint order for better failure handling.
 		err := rcmd.cmdCheckpoint(ctx, ocispec.PauseContainer, checkpointPath)
@@ -780,7 +792,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 			}
 		}
 	default:
-		return nil, fmt.Errorf("unsupported snapshot scope: %v", scope)
+		return nil, fmt.Errorf("unsupported snapshot fidelity: %v", fidelity)
 	}
 
 	// Cleanup the containers after checkpointing. This also unhosts the actor,
@@ -887,6 +899,9 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	if err := validateActorDirs(req.GetActorDirs()); err != nil {
 		return nil, err
 	}
+	if err := validateFidelity(req.GetFidelity()); err != nil {
+		return nil, err
+	}
 	if err := validateRunscPath(req.GetRunscPath()); err != nil {
 		return nil, err
 	}
@@ -902,13 +917,13 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	// Registered ahead of the failure cleanup below, so on failure the total
 	// includes that cleanup; the record is marked by error.type either way.
 	attribution := ateomstats.ActorAttributionFromRequest(req)
-	scope := req.GetScope()
+	fidelity := req.GetFidelity()
 	containers := req.GetSpec().GetContainers()
 	var timing restoreTiming
 	tLast := tStart
 	defer func() {
 		timing.total = time.Since(tStart)
-		attrs := ateomphaselog.SnapshotPhaseAttrs(attribution, scope, ateomphaselog.RestoreDurationKey, retErr, timing.phases())
+		attrs := ateomphaselog.SnapshotPhaseAttrs(attribution, fidelity, ateomphaselog.RestoreDurationKey, retErr, timing.phases())
 		attrs = append(attrs, slog.Int(containerCountKey, len(containers)))
 		slog.LogAttrs(ctx, slog.LevelInfo, "Restore timing breakdown", attrs...)
 	}()
@@ -991,8 +1006,8 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		return nil, fmt.Errorf("while composing pause rootfs: %w", err)
 	}
 
-	switch scope {
-	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
+	switch fidelity {
+	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
 		// Create and start pause container (cold boot with durable-dir volumes restored)
 		containersToDelete = append(containersToDelete, ocispec.PauseContainer)
 		err := rcmd.cmdCreate(ctx, os.Stdout, ocispec.PauseContainer, nil)
@@ -1005,7 +1020,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		if err != nil {
 			return nil, fmt.Errorf("while starting pause container: %w", err)
 		}
-	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL:
+	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
 		// Create and restore pause container
 		containersToDelete = append(containersToDelete, ocispec.PauseContainer)
 		err := rcmd.cmdCreate(ctx, os.Stdout, ocispec.PauseContainer, nil)
@@ -1019,7 +1034,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 			return nil, fmt.Errorf("while restoring pause container: %w", err)
 		}
 	default:
-		return nil, fmt.Errorf("unexpected snapshot scope: %v", scope)
+		return nil, fmt.Errorf("unexpected snapshot fidelity: %v", fidelity)
 	}
 
 	// Create and restore each application container, each with its own log pipe so
@@ -1043,21 +1058,21 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		if err != nil {
 			return nil, fmt.Errorf("while creating %q application container: %w", ac.GetName(), err)
 		}
-		switch scope {
-		case ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
+		switch fidelity {
+		case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
 			err = rcmd.cmdStart(ctx, pw, ac.GetName())
 			timing.appRestore += lap(&tLast)
 			if err != nil {
 				return nil, fmt.Errorf("while starting %q application container: %w", ac.GetName(), err)
 			}
-		case ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL:
+		case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
 			err = rcmd.cmdRestore(ctx, pw, ac.GetName(), checkpointDir)
 			timing.appRestore += lap(&tLast)
 			if err != nil {
 				return nil, fmt.Errorf("while restoring %q application container: %w", ac.GetName(), err)
 			}
 		default:
-			return nil, fmt.Errorf("unexpected snapshot scope: %v", scope)
+			return nil, fmt.Errorf("unexpected snapshot fidelity: %v", fidelity)
 		}
 	}
 

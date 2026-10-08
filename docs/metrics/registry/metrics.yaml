@@ -301,19 +301,23 @@ groups:
               stability: development
               value: boot
               brief: A start from nothing. This is not a restore. It does not occur on the atelet histograms.
-      - id: ate.snapshot.scope
+      - id: ate.snapshot.fidelity
         stability: development
-        brief: The content of the snapshot.
+        brief: The state layers the snapshot holds.
         type:
           members:
-            - id: full
+            - id: memory
               stability: development
-              value: full
-              brief: All the guest state and all the data.
-            - id: data
+              value: memory
+              brief: Process memory, root filesystem changes, and volumes.
+            - id: volumes
               stability: development
-              value: data
-              brief: Only the data of the actor.
+              value: volumes
+              brief: Only the volumes of the actor.
+            - id: rootfs
+              stability: development
+              value: rootfs
+              brief: Volumes and root filesystem changes, without process memory.
             - id: unknown
               stability: development
               value: unknown
@@ -793,9 +797,9 @@ groups:
       - ref: ate.snapshot.kind
         requirement_level:
           conditionally_required: The operation is a resume. A suspend and a pause do not restore, thus this key is absent.
-      - ref: ate.snapshot.scope
+      - ref: ate.snapshot.fidelity
         requirement_level:
-          conditionally_required: The scope is known.
+          conditionally_required: The fidelity is known.
       - ref: error.type
         requirement_level:
           conditionally_required: The operation failed. If this key is absent, the operation was correct.
@@ -867,7 +871,7 @@ groups:
         requirement_level: required
       - ref: ate.template.name
         requirement_level: required
-      - ref: ate.snapshot.scope
+      - ref: ate.snapshot.fidelity
         requirement_level: required
       - ref: ate.snapshot.phase
         requirement_level: required
@@ -901,7 +905,7 @@ groups:
         requirement_level: required
       - ref: ate.template.name
         requirement_level: required
-      - ref: ate.snapshot.scope
+      - ref: ate.snapshot.fidelity
         requirement_level: required
       - ref: ate.snapshot.phase
         requirement_level: required

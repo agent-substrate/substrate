@@ -129,8 +129,8 @@ func DurableDirVolumeMountPoint(actorUID, volumeName string) string {
 //     DurableDirVolumeMountsDir (see ateom-microvm's tarDurableVolumes), so
 //     system-info roots are excluded by living in this separate directory.
 //   - gVisor captures by declaration: durable mounts are registered with
-//     the sandbox (mount-hint annotations for FULL checkpoints, the
-//     enumerated durable mount paths for DATA fscheckpoints); system-info
+//     the sandbox (mount-hint annotations for MEMORY checkpoints, the
+//     enumerated durable mount paths for VOLUMES fscheckpoints); system-info
 //     mounts are plain undeclared binds, never captured regardless of host
 //     layout.
 //
