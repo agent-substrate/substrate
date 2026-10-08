@@ -31,7 +31,7 @@ use envoy_proxy_dynamic_modules_rust_sdk::{
   EnvoyHttpFilter, EnvoyHttpFilterConfig, HttpFilter, HttpFilterConfig,
 };
 use serde::{de, Deserialize, Deserializer};
-pub use substrate_envoy_common::{EgressPolicy, SniRule, ATE_POLICY_EGRESS};
+pub use substrate_envoy_common::{EgressPolicy, EgressRule, ATE_POLICY_EGRESS};
 
 /// Filter state key holding the cached egress policy object on the inner
 /// connection.
@@ -354,7 +354,7 @@ mod tests {
 
   fn expected_policy() -> EgressPolicy {
     EgressPolicy {
-      rules: vec![SniRule {
+      rules: vec![EgressRule {
         pattern: "api.example.com".to_string(),
         mode: "mitm".to_string(),
       }],

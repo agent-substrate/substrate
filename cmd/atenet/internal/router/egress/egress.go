@@ -181,23 +181,23 @@ func (h *Handler) handleConnect(ctx context.Context, md *extproc.RequestMetadata
 	if err != nil {
 		return extproc.Result{}, err
 	}
-	rules := policy.SNIRules(dest.Port)
+	rules := policy.EgressRules(dest.Port)
 	slog.InfoContext(ctx, "egress tunnel opened: requests inside it are decided one by one",
-		slog.Any("actor", ref), slog.String("leg", leg), slog.String("destination", md.Host), slog.Int("sniRules", len(rules)))
+		slog.Any("actor", ref), slog.String("leg", leg), slog.String("destination", md.Host), slog.Int("egressRules", len(rules)))
 	res := allow()
 	res.DynamicMetadata = connectMetadata(dest, rules)
 	return res, nil
 }
 
-// connectMetadata encodes the SNI rules for EgressPolicyMetadataNamespace and
+// connectMetadata encodes the egress rules for EgressPolicyMetadataNamespace and
 // the dialed port for EgressMetadataNamespace. The port is always set: without
 // it the passthrough chain falls back to its configured port instead of closing.
-func connectMetadata(dest egresspolicy.Destination, rules []egresspolicy.SNIRule) *structpb.Struct {
+func connectMetadata(dest egresspolicy.Destination, rules []egresspolicy.EgressRule) *structpb.Struct {
 	values := make([]*structpb.Value, len(rules))
 	for i, rule := range rules {
 		values[i] = structpb.NewStructValue(&structpb.Struct{Fields: map[string]*structpb.Value{
-			extproc.EgressSNIRulePatternKey: structpb.NewStringValue(rule.Pattern),
-			extproc.EgressSNIRuleModeKey:    structpb.NewStringValue(string(rule.Mode)),
+			extproc.EgressRulePatternKey: structpb.NewStringValue(rule.Pattern),
+			extproc.EgressRuleModeKey:    structpb.NewStringValue(string(rule.Mode)),
 		}})
 	}
 	return &structpb.Struct{Fields: map[string]*structpb.Value{
@@ -205,7 +205,7 @@ func connectMetadata(dest egresspolicy.Destination, rules []egresspolicy.SNIRule
 			extproc.EgressDialedPortKey: structpb.NewStringValue(strconv.Itoa(int(dest.Port))),
 		}}),
 		extproc.EgressPolicyMetadataNamespace: structpb.NewStructValue(&structpb.Struct{Fields: map[string]*structpb.Value{
-			extproc.EgressSNIRulesKey: structpb.NewListValue(&structpb.ListValue{Values: values}),
+			extproc.EgressRulesKey: structpb.NewListValue(&structpb.ListValue{Values: values}),
 		}}),
 	}}
 }

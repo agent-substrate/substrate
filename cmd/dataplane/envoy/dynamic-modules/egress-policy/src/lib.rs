@@ -21,8 +21,8 @@ use envoy_proxy_dynamic_modules_rust_sdk::{
   EnvoyListenerFilterConfig, ListenerFilter, ListenerFilterConfig,
 };
 pub use substrate_envoy_common::{
-  pattern_matches, EgressPolicy, SniRule, ATE_POLICY_EGRESS, SNI_MODE_MITM,
-  SNI_MODE_PASSTHROUGH,
+  pattern_matches, EgressPolicy, EgressRule, ATE_POLICY_EGRESS,
+  EGRESS_MODE_CLEARTEXT, EGRESS_MODE_MITM, EGRESS_MODE_PASSTHROUGH,
 };
 
 /// Filter state this filter writes the chosen chain name to.
@@ -60,12 +60,14 @@ fn normalize_sni(sni: &str) -> String {
 pub fn transport_verdict(transport: Option<&str>) -> Option<&'static str> {
   match transport {
     Some(TRANSPORT_TLS) => None,
+    // TODO(yanavlasov): this can be optimized and rejected earlier if there are no policies
+    // for clear text requests.
     None | Some(TRANSPORT_RAW_BUFFER) => Some(ATE_EGRESS_FILTER_CHAIN_CLEARTEXT),
     Some(_) => Some(ATE_EGRESS_FILTER_CHAIN_DENIED),
   }
 }
 
-/// Returns the mode of the first rule matching the SNI, or denied.
+/// Returns the mode of the first TLS rule matching the SNI, or denied.
 pub fn tls_verdict(policy: Option<&EgressPolicy>, sni: Option<&str>) -> &'static str {
   let (Some(policy), Some(sni)) = (policy, sni) else {
     return ATE_EGRESS_FILTER_CHAIN_DENIED;
@@ -74,10 +76,11 @@ pub fn tls_verdict(policy: Option<&EgressPolicy>, sni: Option<&str>) -> &'static
   match policy
     .rules
     .iter()
+    .filter(|rule| rule.mode != EGRESS_MODE_CLEARTEXT)
     .find(|rule| pattern_matches(&rule.pattern, &hostname))
   {
-    Some(rule) if rule.mode == SNI_MODE_MITM => ATE_EGRESS_FILTER_CHAIN_MITM,
-    Some(rule) if rule.mode == SNI_MODE_PASSTHROUGH => ATE_EGRESS_FILTER_CHAIN_PASSTHROUGH,
+    Some(rule) if rule.mode == EGRESS_MODE_MITM => ATE_EGRESS_FILTER_CHAIN_MITM,
+    Some(rule) if rule.mode == EGRESS_MODE_PASSTHROUGH => ATE_EGRESS_FILTER_CHAIN_PASSTHROUGH,
     _ => ATE_EGRESS_FILTER_CHAIN_DENIED,
   }
 }
@@ -159,7 +162,7 @@ mod tests {
     EgressPolicy {
       rules: rules
         .iter()
-        .map(|(pattern, mode)| SniRule {
+        .map(|(pattern, mode)| EgressRule {
           pattern: pattern.to_string(),
           mode: mode.to_string(),
         })
@@ -224,7 +227,7 @@ mod tests {
 
   #[test]
   fn test_tls_verdict_denies_without_inputs() {
-    let p = policy(&[("*", SNI_MODE_MITM)]);
+    let p = policy(&[("*", EGRESS_MODE_MITM)]);
     assert_eq!(tls_verdict(None, Some("api.example.com")), ATE_EGRESS_FILTER_CHAIN_DENIED);
     assert_eq!(tls_verdict(Some(&p), None), ATE_EGRESS_FILTER_CHAIN_DENIED);
     assert_eq!(tls_verdict(Some(&p), Some("")), ATE_EGRESS_FILTER_CHAIN_DENIED);
@@ -236,7 +239,7 @@ mod tests {
 
   #[test]
   fn test_tls_verdict_matches_wildcards() {
-    let p = policy(&[("api.example.com", SNI_MODE_MITM), ("*.example.org", SNI_MODE_MITM)]);
+    let p = policy(&[("api.example.com", EGRESS_MODE_MITM), ("*.example.org", EGRESS_MODE_MITM)]);
     assert_eq!(tls_verdict(Some(&p), Some("api.example.com")), ATE_EGRESS_FILTER_CHAIN_MITM);
     assert_eq!(tls_verdict(Some(&p), Some("API.EXAMPLE.COM.")), ATE_EGRESS_FILTER_CHAIN_MITM);
     assert_eq!(tls_verdict(Some(&p), Some("www.example.org")), ATE_EGRESS_FILTER_CHAIN_MITM);
@@ -244,21 +247,21 @@ mod tests {
     assert_eq!(tls_verdict(Some(&p), Some("a.b.example.org")), ATE_EGRESS_FILTER_CHAIN_DENIED);
     assert_eq!(tls_verdict(Some(&p), Some("www.example.com")), ATE_EGRESS_FILTER_CHAIN_DENIED);
 
-    let any = policy(&[("*", SNI_MODE_MITM)]);
+    let any = policy(&[("*", EGRESS_MODE_MITM)]);
     assert_eq!(tls_verdict(Some(&any), Some("whatever.test")), ATE_EGRESS_FILTER_CHAIN_MITM);
   }
 
   #[test]
   fn test_tls_verdict_first_match_decides() {
     // The first match is final, even with an unknown mode.
-    let unknown_first = policy(&[("*.example.com", "not-a-mode"), ("api.example.com", SNI_MODE_MITM)]);
+    let unknown_first = policy(&[("*.example.com", "not-a-mode"), ("api.example.com", EGRESS_MODE_MITM)]);
     assert_eq!(
       tls_verdict(Some(&unknown_first), Some("api.example.com")),
       ATE_EGRESS_FILTER_CHAIN_DENIED
     );
     let known_first = policy(&[
-      ("api.example.com", SNI_MODE_MITM),
-      ("pinned.example.com", SNI_MODE_PASSTHROUGH),
+      ("api.example.com", EGRESS_MODE_MITM),
+      ("pinned.example.com", EGRESS_MODE_PASSTHROUGH),
       ("*.example.com", "not-a-mode"),
     ]);
     assert_eq!(
@@ -271,6 +274,21 @@ mod tests {
     );
     assert_eq!(
       tls_verdict(Some(&known_first), Some("www.example.com")),
+      ATE_EGRESS_FILTER_CHAIN_DENIED
+    );
+
+    // Cleartext HTTP rules do not shadow TLS rules when evaluating SNI.
+    let cleartext_first = policy(&[
+      ("api.example.com", EGRESS_MODE_CLEARTEXT),
+      ("*.example.com", EGRESS_MODE_MITM),
+      ("only-http.example.org", EGRESS_MODE_CLEARTEXT),
+    ]);
+    assert_eq!(
+      tls_verdict(Some(&cleartext_first), Some("api.example.com")),
+      ATE_EGRESS_FILTER_CHAIN_MITM
+    );
+    assert_eq!(
+      tls_verdict(Some(&cleartext_first), Some("only-http.example.org")),
       ATE_EGRESS_FILTER_CHAIN_DENIED
     );
   }

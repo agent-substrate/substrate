@@ -641,7 +641,7 @@ func TestEgressManifestsInnerListenerSelectsOnTheModuleVerdict(t *testing.T) {
 
 // The outer ext_proc must accept dev.ate.policy.egress, and the outer chain
 // must copy it after ext_proc into shared filter state for the module.
-func TestEgressManifestsConnectLegHandsTheSNIRulesToTheInnerListener(t *testing.T) {
+func TestEgressManifestsConnectLegHandsTheEgressRulesToTheInnerListener(t *testing.T) {
 	tree := bootstrapTree(t, egressManifest)
 	outer := outerChain(t, tree)
 	cfg, extProcAt, filters := extProcOf(outer)
@@ -650,7 +650,7 @@ func TestEgressManifestsConnectLegHandsTheSNIRulesToTheInnerListener(t *testing.
 	}
 	admitted := strs(child(child(cfg, "metadata_options"), "receiving_namespaces"), "untyped")
 	if !slices.Contains(admitted, extproc.EgressPolicyMetadataNamespace) {
-		t.Errorf("the CONNECT leg's ext_proc does not admit dynamic metadata in %q; the SNI rules would be dropped and every ClientHello denied", extproc.EgressPolicyMetadataNamespace)
+		t.Errorf("the CONNECT leg's ext_proc does not admit dynamic metadata in %q; the egress rules would be dropped and every ClientHello denied", extproc.EgressPolicyMetadataNamespace)
 	}
 
 	writers := filterStateWriters(tree, extproc.EgressPolicyMetadataNamespace)

@@ -16,26 +16,29 @@
 
 use serde::Deserialize;
 
-/// Filter state holding the SNI rules as JSON. See
+/// Filter state holding the egress rules as JSON. See
 /// EgressPolicyMetadataNamespace in cmd/atenet/internal/router/extproc.
 pub const ATE_POLICY_EGRESS: &[u8] = b"dev.ate.policy.egress";
 
+/// Mode of a rule for plain HTTP requests.
+pub const EGRESS_MODE_CLEARTEXT: &str = "cleartext";
+
 /// Mode of a rule whose match terminates the connection.
-pub const SNI_MODE_MITM: &str = "mitm";
+pub const EGRESS_MODE_MITM: &str = "mitm";
 
 /// Mode of a rule whose match forwards the connection without decryption.
-pub const SNI_MODE_PASSTHROUGH: &str = "passthrough";
+pub const EGRESS_MODE_PASSTHROUGH: &str = "passthrough";
 
-/// The SNI rules for a connection.
+/// The egress rules for a connection.
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct EgressPolicy {
   /// Most specific first; the first match wins.
-  pub rules: Vec<SniRule>,
+  pub rules: Vec<EgressRule>,
 }
 
 /// A pattern and the mode applied when it matches.
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-pub struct SniRule {
+pub struct EgressRule {
   pub pattern: String,
   pub mode: String,
 }
@@ -69,7 +72,7 @@ mod tests {
     EgressPolicy {
       rules: rules
         .iter()
-        .map(|(pattern, mode)| SniRule {
+        .map(|(pattern, mode)| EgressRule {
           pattern: pattern.to_string(),
           mode: mode.to_string(),
         })
