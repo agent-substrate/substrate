@@ -2143,23 +2143,78 @@ message WorkerStatus {
   // +k8s:minimum=0
   int64 observed_epoch = 4;
 
-  // Hardware identity reported by the Worker at registration.
+  // Runtime that new and cold-booted actors start under, as reported by the
+  // Worker at registration. Snapshots matching default_runtime can also
+  // warm-boot on this worker.
   //
   // +k8s:optional
-  HardwareIdentity hardware = 5;
+  SandboxRuntime default_runtime = 5;
+
+  // Additional runtimes (excluding default_runtime) that this worker can
+  // restore snapshots from right now.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=32
+  // +k8s:listType=atomic
+  repeated SandboxRuntime restorable_runtimes = 6;
 }
 
-// HardwareIdentity identifies the hardware of a Worker or the Worker a
-// snapshot was captured on.
-message HardwareIdentity {
-  // Key-value pairs describing hardware properties (currently
-  // "architecture"; TODO: add "cpu_vendor", "cpu_model", etc.).
+// SandboxRuntime describes a sandbox runtime and its compatibility identity as
+// reported by a Worker or recorded on a snapshot.
+message SandboxRuntime {
+  // e.g. "gvisor", "microvm"
+  //
+  // +k8s:required
+  // +k8s:maxLength=63
+  string sandbox_class = 1;
+
+  // SandboxConfig or version name (e.g. "gvisor-2"), informational only,
+  // never used during scheduling.
   //
   // +k8s:optional
-  // +k8s:maxProperties=32
-  // +k8s:eachKey=+k8s:maxLength=128
-  // +k8s:eachVal=+k8s:maxLength=256
-  map<string, string> attributes = 1;
+  // +k8s:maxLength=253
+  string name = 2;
+
+  // Primary compatibility version stamped onto an actor's snapshot when a
+  // checkpoint is taken on this runtime. Snapshots matching `version` can
+  // warm-boot on this runtime.
+  // TODO: Add support for additional compatibility versions.
+  //
+  // +k8s:required
+  VersionedSandboxCompat version = 3;
+}
+
+// VersionedSandboxCompat holds the compatibility schema version and the
+// key-value compatibility attributes for a SandboxRuntime.
+message VersionedSandboxCompat {
+  // Compatibility schema version (e.g. "v1") defining which runtime and
+  // hardware attributes are recorded and how they are computed.
+  //
+  // +k8s:required
+  // +k8s:maxLength=64
+  string version = 1;
+
+  // Key-value compatibility attributes defined by this schema version, covering
+  // both runtime assets (e.g. "gvisor_asset_hash") and effective guest hardware
+  // features after masking (e.g. "architecture", "cpu_features").
+  // Matched by exact equality of all keys and values within the same version.
+  //
+  // +k8s:required
+  // +k8s:maxItems=32
+  // +k8s:listType=map
+  // +k8s:listMapKey=key
+  repeated AttributeEntry attributes = 2;
+}
+
+// AttributeEntry is a single key-value compatibility attribute.
+message AttributeEntry {
+  // +k8s:required
+  // +k8s:maxLength=128
+  string key = 1;
+
+  // +k8s:required
+  // +k8s:maxLength=256
+  string value = 2;
 }
 
 // WorkerResources represents a set of resources.
@@ -2220,15 +2275,15 @@ message ActorAssignment {
 // authorization: Control is the client-facing API, while these RPCs are served
 // only to an atelet, and only for the Workers on its own node.
 service WorkerService {
-  // RegisterWorker records what a Worker can hold and its hardware identity in
-  // one write, so a Worker is never schedulable without hardware to match
-  // snapshots against. Capacity and hardware are the Worker's to report rather
-  // than the control plane's to infer: they are what the ateom can actually
-  // supply and expose, only its node can observe them, and a fleet may run
-  // mixed ateom versions.
+  // RegisterWorker records what a Worker can hold and its supported sandbox
+  // runtimes in one write, so a Worker is never schedulable without runtime
+  // compatibility information to match snapshots against. Capacity and
+  // runtimes are the Worker's to report rather than the control plane's to
+  // infer: they are what the worker can actually supply and expose, only its
+  // node can observe them, and a fleet may run mixed versions.
   //
   // atelet calls this with its own client certificate, as it does for
-  // MintCert. Idempotent: re-sending the same capacity and hardware is not a
+  // MintCert. Idempotent: re-sending the same capacity and runtimes is not a
   // write.
   rpc RegisterWorker(RegisterWorkerRequest) returns (RegisterWorkerResponse);
 
@@ -2275,11 +2330,20 @@ message RegisterWorkerRequest {
   // +k8s:required
   WorkerResources capacity = 2;
 
-  // Hardware identity reported by the Worker. Like capacity, this replaces
-  // what is recorded on the Worker.
+  // Runtime that new and cold-booted actors start under.
+  // Snapshots matching default_runtime can also warm-boot on this worker.
+  // Like capacity, this replaces what is recorded on the Worker.
   //
   // +k8s:required
-  HardwareIdentity hardware = 3;
+  SandboxRuntime default_runtime = 3;
+
+  // Additional runtimes (excluding default_runtime) that this worker can
+  // restore snapshots from right now.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=32
+  // +k8s:listType=atomic
+  repeated SandboxRuntime restorable_runtimes = 4;
 }
 
 message RegisterWorkerResponse {
