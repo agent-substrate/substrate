@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/apiauthn"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/apiconfig"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/authz"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/controlapi"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/oidcjwt"
@@ -67,6 +68,8 @@ const maxRPCDeadline = 10 * time.Minute
 const minResyncInterval = 250 * time.Millisecond
 
 var (
+	configFile = pflag.String("config-file", "", "API server config file")
+
 	listenAddr           = pflag.String("grpc-listen-addr", ":443", "Address and port the gRPC server should listen on.")
 	metricsListenAddr    = pflag.String("metrics-listen-addr", ":9090", "Address and port the prometheus metrics server should listen on.")
 	grpcServerCredBundle = pflag.String("grpc-server-cred-bundle", "", "File with the server TLS credential bundle.")
@@ -100,27 +103,52 @@ var (
 
 	templateResyncInterval = pflag.Duration("template-resync-interval", 20*time.Second, fmt.Sprintf("Interval between actor template resyncs. Must be at least %s.", minResyncInterval))
 
-	showVersion  = pflag.Bool("version", false, "Print version and exit.")
-	logLevelFlag = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
+	showVersion = pflag.Bool("version", false, "Print version and exit.")
 )
 
 func main() {
 	pflag.Parse()
+
 	if *showVersion {
 		fmt.Println(version.String())
 		return
 	}
+
 	ctx := context.Background()
+
 	serverboot.InitLogger()
-	if err := serverboot.SetLogLevel(*logLevelFlag); err != nil {
-		serverboot.Fatal(ctx, "Invalid --log-level", err)
+
+	// Load unified config.
+	if *configFile == "" {
+		serverboot.Fatal(ctx, "--config-file must be specified", nil)
 	}
+
+	configLoader, err := apiconfig.NewLoader(*configFile)
+	if err != nil {
+		serverboot.Fatal(ctx, "Error while initially loading config file", err)
+	}
+	initialConfig, _ := configLoader.Config(ctx)
+
+	// Allow dynamically changing the log level on a running process by editing
+	// the config file.
+	if err := serverboot.SetLogLevel(initialConfig.GetLogging().GetLevel()); err != nil {
+		serverboot.Fatal(ctx, "Invalid log level in config file", err)
+	}
+	go func() {
+		for range time.Tick(10 * time.Second) {
+			cfg, _ := configLoader.Config(ctx)
+			_ = serverboot.SetLogLevel(cfg.GetLogging().GetLevel())
+		}
+	}()
+
 	if err := loadFlagsFromEnv(); err != nil {
 		serverboot.Fatal(ctx, "Invalid PostgreSQL configuration", err)
 	}
+
 	if err := rejectStorageEnv(); err != nil {
 		serverboot.Fatal(ctx, "Storage settings moved to the snapshot-plugin sidecar", err)
 	}
+
 	slog.InfoContext(ctx, "ateapi starting", slog.String("version", version.Version))
 	if *templateResyncInterval < minResyncInterval {
 		serverboot.Fatal(ctx, "Invalid --template-resync-interval", fmt.Errorf("must be at least %s", minResyncInterval))
