@@ -16,6 +16,7 @@ package egress
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"strings"
 
@@ -96,11 +97,14 @@ func (h *Handler) applyEffects(ctx context.Context, ref resources.ActorRef, dest
 		var err error
 		if src := inj.GetActorJwt(); src != nil {
 			secret, err = h.actorJWT(ctx, ref, dest, src)
+			if err != nil {
+				return nil, fmt.Errorf("minting an actor JWT for header %s: %w", inj.GetHeader(), err)
+			}
 		} else {
 			secret, err = h.providerCredential(ctx, ref, dest, inj.GetCredentialUri())
-		}
-		if err != nil {
-			return nil, err
+			if err != nil {
+				return nil, fmt.Errorf("fetching credential %s for header %s: %w", inj.GetCredentialUri(), inj.GetHeader(), err)
+			}
 		}
 
 		// Overwrite any header the actor set itself, so a client cannot pre-seed a
@@ -122,13 +126,7 @@ func (h *Handler) actorJWT(ctx context.Context, ref resources.ActorRef, dest egr
 			slog.Any("actor", ref), slog.String("host", dest.Hostname), slog.Any("audiences", src.GetAudiences()), slog.Any("err", err))
 		return nil, mapActorJWTError(err)
 	}
-	secret, err := sanitizeSecret([]byte(jwt))
-	if err != nil {
-		slog.ErrorContext(ctx, "egress denied: unusable actor JWT",
-			slog.Any("actor", ref), slog.String("host", dest.Hostname), slog.Any("err", err))
-		return nil, extproc.WrapReqError(envoy_type.StatusCode_InternalServerError, err, deniedBody)
-	}
-	return secret, nil
+	return []byte(jwt), nil
 }
 
 // providerCredential fetches the secret uri names from the credential

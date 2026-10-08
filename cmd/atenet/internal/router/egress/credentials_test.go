@@ -277,16 +277,6 @@ func replaceHeadersPolicy(leg string, entries ...*ateapipb.CredentialHeader) *at
 
 var requestLegs = []string{extproc.EgressTLSMITMFilterChainName, extproc.EgressCleartextFilterChainName}
 
-// fixedJWTClient answers every MintActorJWT with jwt.
-type fixedJWTClient struct {
-	*egressMockClient
-	jwt string
-}
-
-func (c fixedJWTClient) MintActorJWT(context.Context, *ateapipb.MintActorJWTRequest, ...grpc.CallOption) (*ateapipb.MintActorJWTResponse, error) {
-	return &ateapipb.MintActorJWTResponse{ActorJwt: c.jwt}, nil
-}
-
 // An actor JWT is injected with no credential provider configured. The
 // rule's credential_uri entry is for a header the request does not carry, so
 // the missing provider does not deny it.
@@ -351,7 +341,6 @@ func TestActorJWTInjectionDenials(t *testing.T) {
 		name    string
 		header  string // authorization unless set
 		mintErr error
-		jwt     string // when set, every mint returns it
 		want    envoy_type.StatusCode
 	}{
 		{name: "actor deleted", mintErr: status.Error(codes.NotFound, "actor not found"), want: envoy_type.StatusCode_Forbidden},
@@ -359,7 +348,6 @@ func TestActorJWTInjectionDenials(t *testing.T) {
 		{name: "mint timed out", mintErr: status.Error(codes.DeadlineExceeded, "deadline exceeded"), want: envoy_type.StatusCode_ServiceUnavailable},
 		{name: "gateway may not mint", mintErr: status.Error(codes.PermissionDenied, "denied"), want: envoy_type.StatusCode_InternalServerError},
 		{name: "mint request rejected", mintErr: status.Error(codes.InvalidArgument, "bad lifetime"), want: envoy_type.StatusCode_InternalServerError},
-		{name: "unusable JWT", jwt: "a\nb", want: envoy_type.StatusCode_InternalServerError},
 		{name: "system header", header: ":path", want: envoy_type.StatusCode_InternalServerError},
 	}
 	for _, leg := range requestLegs {
@@ -372,11 +360,7 @@ func TestActorJWTInjectionDenials(t *testing.T) {
 						policy:  replaceHeadersPolicy(leg, actorJWTHeader(header)),
 						mintErr: tc.mintErr,
 					}
-					var client ateapipb.ControlClient = mock
-					if tc.jwt != "" {
-						client = fixedJWTClient{mock, tc.jwt}
-					}
-					h := New(client, nil, 0, nil, "")
+					h := New(mock, nil, 0, nil, "")
 					md := innerMetadata(leg, "GET", "api.example.com", nil)
 					md.Headers[header] = "placeholder"
 					_, err := h.HandleRequestHeaders(context.Background(), md)
