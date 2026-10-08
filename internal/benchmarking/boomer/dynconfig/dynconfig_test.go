@@ -41,7 +41,7 @@ func TestParseValid(t *testing.T) {
 		"durdir_template": "glutton-durdir-data",
 		"cpu_cores": 2,
 		"cpu_duty_cycle": 0.1,
-		"sweperf_template": "swebench-astropy-7336",
+		"sweperf_template": "sweperf-astropy-7336",
 		"sweperf_total_steps": 21,
 		"sweperf_num_cycles": 4,
 		"sweperf_poll_interval_ms": 100,
@@ -93,8 +93,8 @@ func TestParseValid(t *testing.T) {
 	if cfg.CPUDutyCycle != 0.1 {
 		t.Errorf("CPUDutyCycle: got %f, want 0.1", cfg.CPUDutyCycle)
 	}
-	if cfg.SweperfTemplate != "swebench-astropy-7336" {
-		t.Errorf("SweperfTemplate: got %q, want swebench-astropy-7336", cfg.SweperfTemplate)
+	if cfg.SweperfTemplate != "sweperf-astropy-7336" {
+		t.Errorf("SweperfTemplate: got %q, want sweperf-astropy-7336", cfg.SweperfTemplate)
 	}
 	if cfg.SweperfTotalSteps != 21 {
 		t.Errorf("SweperfTotalSteps: got %d, want 21", cfg.SweperfTotalSteps)

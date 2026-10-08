@@ -31,11 +31,22 @@ fi
 
 MANIFEST_DIR="benchmarking/workloads/manifests"
 POOL_MANIFEST="${MANIFEST_DIR}/workloads.yaml.tmpl"
+# Generated sweperf ActorTemplates; see manifests/sweperf/generate_sweperf_templates.py.
+SWEPERF_TEMPLATE_DIR="${MANIFEST_DIR}/sweperf/generated"
 # The benchmark ActorTemplates: <name>-template.yaml.tmpl each, created
-# through the ate API in the benchmark-workloads atespace. WORKLOAD_TEMPLATES
+# through the ate API in the benchmark-workloads atespace. sweperf-* names are
+# read from SWEPERF_TEMPLATE_DIR, the rest from MANIFEST_DIR. WORKLOAD_TEMPLATES
 # overrides the default set — the usermem and kernelmem templates (for the
 # matching locust tests) are not deployed by default.
 read -r -a TEMPLATES <<<"${WORKLOAD_TEMPLATES:-sleep glutton glutton-durdir-data glutton-durdir-full}"
+
+# template_manifest prints the manifest path for ActorTemplate NAME.
+template_manifest() {
+  case "$1" in
+    sweperf-*) echo "${SWEPERF_TEMPLATE_DIR}/$1-template.yaml.tmpl" ;;
+    *)         echo "${MANIFEST_DIR}/$1-template.yaml.tmpl" ;;
+  esac
+}
 
 if [[ ! -f "${POOL_MANIFEST}" ]]; then
   echo "Error: ${POOL_MANIFEST} not found in $(pwd)" >&2
@@ -144,7 +155,6 @@ substitute() {
       -e "s|\${OTLP_ENDPOINT}|${OTLP_ENDPOINT}|g" \
       -e "s|\${ACTOR_MEMORY}|${ACTOR_MEMORY}|g" \
       -e "s|\${WORKER_RESOURCES}|${worker_resources}|g" \
-      -e "s|\${SWEPERF_IMAGE}|${SWEPERF_IMAGE:-}|g" \
       "${manifest}"
 }
 
@@ -194,6 +204,21 @@ wait_templates_ready() {
 }
 
 deploy() {
+  # Check every requested template has a manifest before anything on the
+  # cluster is deleted or created.
+  local template manifest
+  for template in "${TEMPLATES[@]}"; do
+    manifest="$(template_manifest "${template}")"
+    if [[ ! -f "${manifest}" ]]; then
+      echo "Error: no manifest for template ${template}: ${manifest} not found" >&2
+      if [[ "${template}" == sweperf-* ]]; then
+        echo "sweperf templates come from ${MANIFEST_DIR}/sweperf/sweperf-images.json; add the task" >&2
+        echo "there and run generate_sweperf_templates.py (see \"Sweperf Tasks\" in benchmarking/README.md)" >&2
+      fi
+      exit 1
+    fi
+  done
+
   resolve_otlp_endpoint
   echo "Deploying workloads (worker_count=${WORKER_COUNT}, actor_memory=${ACTOR_MEMORY}, worker_memory=${WORKER_MEMORY:-unset}, otlp_endpoint=${OTLP_ENDPOINT})..."
   substitute "${POOL_MANIFEST}" | hack/run-tool.sh ko apply -f -
@@ -212,13 +237,12 @@ deploy() {
   # the old template first. This removal is safe, because the benchmark
   # automation deletes the actors between the tests; it also removes the old
   # golden actor and snapshot server-side.
-  local template
   for template in "${TEMPLATES[@]}"; do
     run_kubectl_ate delete actor-template "${template}" -a benchmark-workloads \
       >/dev/null 2>&1 || true
     # ko resolve builds the ko:// image references and replaces them with
     # pushed digests before the manifest reaches kubectl-ate.
-    substitute "${MANIFEST_DIR}/${template}-template.yaml.tmpl" \
+    substitute "$(template_manifest "${template}")" \
       | hack/run-tool.sh ko resolve -f - \
       | run_kubectl_ate create actor-template -f -
   done
