@@ -17,13 +17,22 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc/codes"
 
+	"github.com/agent-substrate/substrate/internal/actorlog"
 	"github.com/agent-substrate/substrate/internal/apierror"
+	"github.com/agent-substrate/substrate/internal/ateattr"
+	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/resources"
 )
 
 // Every RPC rejects a request without ActorDirs before touching any state.
@@ -88,4 +97,99 @@ func TestRPCsRejectUntrustedRunscPath(t *testing.T) {
 			t.Errorf("%s() code = %v, want %v", name, got, codes.InvalidArgument)
 		}
 	}
+}
+
+// TestStartPauseLogPipe pins the pause container's envelope contract: sentry
+// and gofer output reaches the pod log tagged with the actor and the pause
+// container's runsc container name, runsc JSON diagnostics pass their fields
+// through, and subprocess-originated records cannot forge platform
+// attribution.
+func TestStartPauseLogPipe(t *testing.T) {
+	attribution := resources.ActorAttribution{
+		Ref:              resources.ActorRef{Atespace: "default", Name: "act-1"},
+		UID:              "uid-1",
+		TemplateAtespace: "tmpl-ns",
+		TemplateName:     "tmpl-1",
+	}
+	var buf bytes.Buffer
+	s := &AteomService{actorLogger: actorlog.NewActorLogger(&buf, false)}
+
+	pw, err := s.startPauseLogPipe(attribution)
+	if err != nil {
+		t.Fatalf("startPauseLogPipe: %v", err)
+	}
+	const jsonLine = `{"severity":"warning","message":"gofer: I/O error","ate.actor.name":"forged"}`
+	if _, err := fmt.Fprintln(pw, jsonLine); err != nil {
+		t.Fatalf("write json line: %v", err)
+	}
+	if _, err := fmt.Fprintln(pw, "plain sentry line"); err != nil {
+		t.Fatalf("write plain line: %v", err)
+	}
+	pw.Close()
+
+	records := waitRecords(t, &buf, 2)
+
+	jsonRecord := decodeRecord(t, records[0])
+	if got := jsonRecord["severity"]; got != "warning" {
+		t.Errorf("json passthrough severity = %v, want warning", got)
+	}
+	if got := jsonRecord["message"]; got != "gofer: I/O error" {
+		t.Errorf("json passthrough message = %v, want %q", got, "gofer: I/O error")
+	}
+	if _, ok := jsonRecord["ate.actor.name"]; ok {
+		t.Error("reserved top-level key ate.actor.name survived the envelope")
+	}
+	plainRecord := decodeRecord(t, records[1])
+	if got := plainRecord["message"]; got != "plain sentry line" {
+		t.Errorf("plain message = %v, want %q", got, "plain sentry line")
+	}
+
+	actorName := string(ateattr.ActorNameKey)
+	containerName := string(ateattr.ActorContainerNameKey)
+	for name, record := range map[string]map[string]any{"json": jsonRecord, "plain": plainRecord} {
+		labels, ok := record[actorlog.LabelsKey(false)].(map[string]any)
+		if !ok {
+			t.Fatalf("%s record has no labels group: %v", name, record)
+		}
+		if got := labels[actorName]; got != "act-1" {
+			t.Errorf("%s label %s = %v, want act-1 (the forged value must not survive)", name, actorName, got)
+		}
+		if got := labels[containerName]; got != ocispec.PauseContainer {
+			t.Errorf("%s label %s = %v, want %q", name, containerName, got, ocispec.PauseContainer)
+		}
+	}
+}
+
+// waitRecords polls buf until want non-empty lines have been written, so the
+// test observes the pipe's asynchronous forwarder goroutine without
+// sleep-and-hope.
+func waitRecords(t *testing.T, buf *bytes.Buffer, want int) [][]byte {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var records [][]byte
+		for _, line := range strings.Split(buf.String(), "\n") {
+			if line != "" {
+				records = append(records, []byte(line))
+			}
+		}
+		if len(records) >= want {
+			return records
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %d records; buffer: %q", want, buf.String())
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
+func decodeRecord(t *testing.T, b []byte) map[string]any {
+	t.Helper()
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.UseNumber()
+	var m map[string]any
+	if err := dec.Decode(&m); err != nil {
+		t.Fatalf("parse record %q: %v", b, err)
+	}
+	return m
 }
