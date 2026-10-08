@@ -510,11 +510,11 @@ func TestHandleRequestHeadersUsesRetainedConnectAuthorityForPort(t *testing.T) {
 		"envoy.filters.http.ext_proc": {
 			Fields: map[string]*structpb.Value{
 				extproc.ConnectAuthorityFilterStateAttribute: structpb.NewStringValue("unrelated.example:9090"),
+				extproc.TargetActorFilterStateAttribute:      structpb.NewStringValue("team-a/" + testUUID),
 			},
 		},
 	}
 	md := extproc.NewRequestMetadata([]*corev3.HeaderValue{
-		{Key: atenet.TargetActorHeader, Value: "team-a/" + testUUID},
 		{Key: ":authority", Value: "inner.example"},
 	}, attrs)
 
@@ -524,6 +524,177 @@ func TestHandleRequestHeadersUsesRetainedConnectAuthorityForPort(t *testing.T) {
 	}
 	if got, want := dynamicMetadataPort(res.DynamicMetadata), "9090"; got != want {
 		t.Errorf("target port = %q, want %q", got, want)
+	}
+
+	mutation := res.Response.GetResponse().GetHeaderMutation()
+	gotMutations := map[string]string{}
+	for _, headerOption := range mutation.GetSetHeaders() {
+		gotMutations[strings.ToLower(headerOption.Header.Key)] = string(headerOption.Header.RawValue)
+	}
+	if got, want := gotMutations[strings.ToLower(atenet.TargetActorHeader)], "team-a/"+testUUID; got != want {
+		t.Errorf("actor target mutation = %q, want %q", got, want)
+	}
+}
+
+func TestHandleRequestHeadersConnectRequiresOuterTargetActor(t *testing.T) {
+	const testUUID = "123e4567-e89b-12d3-a456-426614174000"
+	tests := []struct {
+		name           string
+		headers        []*corev3.HeaderValue
+		attrs          map[string]*structpb.Struct
+		expectErr      bool
+		wantStatusCode int
+		wantActorRef   string
+	}{
+		{
+			name: "connect request with no outer target actor and inner header is rejected",
+			headers: []*corev3.HeaderValue{
+				{Key: atenet.TargetActorHeader, Value: "team-a/" + testUUID},
+				{Key: ":authority", Value: "inner.example"},
+			},
+			attrs: map[string]*structpb.Struct{
+				"envoy.filters.http.ext_proc": {
+					Fields: map[string]*structpb.Value{
+						extproc.ConnectAuthorityFilterStateAttribute: structpb.NewStringValue("unrelated.example:9090"),
+					},
+				},
+			},
+			expectErr:      true,
+			wantStatusCode: int(envoy_type.StatusCode_NotFound),
+		},
+		{
+			name: "connect request with empty outer target actor and inner header is rejected",
+			headers: []*corev3.HeaderValue{
+				{Key: atenet.TargetActorHeader, Value: "team-a/" + testUUID},
+				{Key: ":authority", Value: "inner.example"},
+			},
+			attrs: map[string]*structpb.Struct{
+				"envoy.filters.http.ext_proc": {
+					Fields: map[string]*structpb.Value{
+						extproc.ConnectAuthorityFilterStateAttribute: structpb.NewStringValue("unrelated.example:9090"),
+						extproc.TargetActorFilterStateAttribute:      structpb.NewStringValue(""),
+					},
+				},
+			},
+			expectErr:      true,
+			wantStatusCode: int(envoy_type.StatusCode_NotFound),
+		},
+		{
+			name: "connect request with no outer target actor and no inner header is rejected",
+			headers: []*corev3.HeaderValue{
+				{Key: ":authority", Value: "inner.example"},
+			},
+			attrs: map[string]*structpb.Struct{
+				"envoy.filters.http.ext_proc": {
+					Fields: map[string]*structpb.Value{
+						extproc.ConnectAuthorityFilterStateAttribute: structpb.NewStringValue("unrelated.example:9090"),
+					},
+				},
+			},
+			expectErr:      true,
+			wantStatusCode: int(envoy_type.StatusCode_NotFound),
+		},
+		{
+			name: "connect request with comma-separated outer target actor is rejected",
+			headers: []*corev3.HeaderValue{
+				{Key: ":authority", Value: "inner.example"},
+			},
+			attrs: map[string]*structpb.Struct{
+				"envoy.filters.http.ext_proc": {
+					Fields: map[string]*structpb.Value{
+						extproc.ConnectAuthorityFilterStateAttribute: structpb.NewStringValue("unrelated.example:9090"),
+						extproc.TargetActorFilterStateAttribute:      structpb.NewStringValue("team-a/a,team-b/b"),
+					},
+				},
+			},
+			expectErr:      true,
+			wantStatusCode: int(envoy_type.StatusCode_NotFound),
+		},
+		{
+			name: "connect request with outer target actor resolves even if inner header is omitted",
+			headers: []*corev3.HeaderValue{
+				{Key: ":authority", Value: "inner.example"},
+			},
+			attrs: map[string]*structpb.Struct{
+				"envoy.filters.http.ext_proc": {
+					Fields: map[string]*structpb.Value{
+						extproc.ConnectAuthorityFilterStateAttribute: structpb.NewStringValue("unrelated.example:9090"),
+						extproc.TargetActorFilterStateAttribute:      structpb.NewStringValue("team-a/" + testUUID),
+					},
+				},
+			},
+			expectErr:    false,
+			wantActorRef: "team-a/" + testUUID,
+		},
+		{
+			name: "connect request with outer target actor X overrides inner header Y",
+			headers: []*corev3.HeaderValue{
+				{Key: atenet.TargetActorHeader, Value: "team-b/untrusted-actor"},
+				{Key: ":authority", Value: "inner.example"},
+			},
+			attrs: map[string]*structpb.Struct{
+				"envoy.filters.http.ext_proc": {
+					Fields: map[string]*structpb.Value{
+						extproc.ConnectAuthorityFilterStateAttribute: structpb.NewStringValue("unrelated.example:9090"),
+						extproc.TargetActorFilterStateAttribute:      structpb.NewStringValue("team-a/" + testUUID),
+					},
+				},
+			},
+			expectErr:    false,
+			wantActorRef: "team-a/" + testUUID,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var gotActorRef string
+			var resumeCalls int32
+			clientMock := &mockClient{
+				resumeFn: func(_ context.Context, in *ateapipb.ResumeActorRequest, _ ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+					atomic.AddInt32(&resumeCalls, 1)
+					gotActorRef = in.GetActor().GetAtespace() + "/" + in.GetActor().GetName()
+					return &ateapipb.ResumeActorResponse{Actor: &ateapipb.Actor{
+						Status: &ateapipb.ActorStatus{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIps: []string{"10.0.0.52"}}},
+					}}, nil
+				},
+			}
+
+			h := New(clientMock, ParkedRequestConfig{}, nil)
+			md := extproc.NewRequestMetadata(tt.headers, tt.attrs)
+
+			res, err := h.HandleRequestHeaders(context.Background(), md)
+			if tt.expectErr {
+				if err == nil {
+					t.Fatalf("HandleRequestHeaders() succeeded, want error")
+				}
+				var reqErr *extproc.ReqError
+				if !errors.As(err, &reqErr) {
+					t.Fatalf("error = %v, want *extproc.ReqError", err)
+				}
+				if reqErr.StatusCode != tt.wantStatusCode {
+					t.Errorf("StatusCode = %d, want %d", reqErr.StatusCode, tt.wantStatusCode)
+				}
+				if calls := atomic.LoadInt32(&resumeCalls); calls != 0 {
+					t.Errorf("ResumeActor called %d times, want 0", calls)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("HandleRequestHeaders() error = %v", err)
+			}
+			if got, want := gotActorRef, tt.wantActorRef; got != want {
+				t.Errorf("ResumeActor called with %q, want %q", got, want)
+			}
+			mutation := res.Response.GetResponse().GetHeaderMutation()
+			gotMutations := map[string]string{}
+			for _, headerOption := range mutation.GetSetHeaders() {
+				gotMutations[strings.ToLower(headerOption.Header.Key)] = string(headerOption.Header.RawValue)
+			}
+			if got, want := gotMutations[strings.ToLower(atenet.TargetActorHeader)], tt.wantActorRef; got != want {
+				t.Errorf("actor target mutation = %q, want %q", got, want)
+			}
+		})
 	}
 }
 

@@ -179,6 +179,13 @@ func routingValue(md *extproc.RequestMetadata, header, attribute string) string 
 	if value := md.Attribute(attribute); value != "" {
 		return value
 	}
+	// Requests reaching main_internal via a terminated CONNECT tunnel retain
+	// the tunnel's authority in ConnectAuthorityFilterStateAttribute. For such
+	// requests, the actor header must have arrived on the outer CONNECT request;
+	// inner tunneled headers are untrusted and must never be used for routing.
+	if md.Attribute(extproc.ConnectAuthorityFilterStateAttribute) != "" {
+		return ""
+	}
 	if vals := md.HeaderValues(header); len(vals) == 1 {
 		return vals[0]
 	}
