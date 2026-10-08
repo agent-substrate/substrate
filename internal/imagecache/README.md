@@ -103,11 +103,13 @@ layer diffIDs in order — layers shared by N images exist once.
    layer tar omits (they may exist only in lower layers). Every entry keeps
    the numeric owner its tar header records, as containerd and moby apply
    it; run as root, a failed chown fails the unpack, and an unprivileged
-   process (unit tests, local tooling) leaves the tree owned by itself.
-   Whiteout entries
-   (`.wh.*`) are **not** written into the tree — overlayfs whiteouts are
-   char devices atelet cannot create — they are recorded in
-   `whiteouts.json` for the consumer to materialize.
+   process (unit tests, local tooling) leaves the tree owned by itself. A
+   root atelet inside a user namespace (rootless or userns-remapped nodes)
+   can only give files to uids and gids the namespace maps, so a layer
+   with an owner outside that range fails to unpack, as it does under
+   rootless Docker. Whiteout entries (`.wh.*`) are **not** written into
+   the tree — overlayfs whiteouts are char devices atelet cannot create —
+   they are recorded in `whiteouts.json` for the consumer to materialize.
 5. **Record**: the image config + diffID list is written under the
    requested digest (and the per-platform child digest for multi-arch refs).
 
