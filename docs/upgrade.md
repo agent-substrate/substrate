@@ -610,7 +610,12 @@ the install, `VERSION` included if the install pinned it.
 - Past step 5: roll each flipped node back by running step 5 with the
   sides swapped: drain, get every actor off the node as in b and c,
   flip the label back to `$OLD_VERSION`, and delete the node's
-  new-pool pods.
+  new-pool pods. If the old atelet then never becomes Ready and its log
+  says the image cache `has layout version "2", this atelet supports
+  "1"`, the new atelet rebuilt the node's cache in a layout the old one
+  does not read. No actor is running on the node, so delete the cache
+  with the commands in [step 5d](#5-roll-each-node) and the
+  old atelet rebuilds it.
 - Past step 4: once no actor is assigned to a new-pool worker, delete
   each clone: `kubectl -n $NS delete workerpool $NEW_WORKERPOOL`.
 - Past step 3: once no node carries `$NEW_VERSION`, delete the new
