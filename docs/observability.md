@@ -245,6 +245,7 @@ Agent Substrate emits foundational OpenTelemetry system and server metrics to mo
 | `db.client.connection.count` | ateapi | up/down counter | live acquired (`used`) and idle PostgreSQL connections per pool, including zero-valued states |
 | `db.client.connection.max` | ateapi | up/down counter | effective maximum PostgreSQL connections per pool, for comparison with acquired connections |
 | `db.client.connection.wait_time` | ateapi | histogram | connection acquisition duration and attempt counts per pool and bounded outcome (`success`, `cancelled`, `timeout`, `error`) |
+| `db.client.connection.pending_requests` | ateapi | up/down counter | connection acquisitions currently in progress per pool, visible before attempts complete |
 | `ate.actor.crashes` | ateapi | counter | Number of times actors transitioned to `ACTOR_STATE_CRASHED` (labels `ate.actor.operation.name`, `ate.template.atespace`, `ate.template.name`, `ate.workerpool.namespace`, `ate.workerpool.name`, `ate.sandbox.class`) |
 | `atenet.router.route.duration` | atenet-router | histogram | Substrate E2E — Envoy receiving a request to Envoy forwarding it to the resolved worker, excluding actor compute and the response (labels `ate.template.atespace`, `ate.template.name`, `ate.router.outcome`, `ate.router.resume`) |
 | `atelet.snapshot.size` | atelet | histogram | uncompressed allocated size in bytes of each snapshot image written during checkpoint (`st_blocks * 512`, excluding sparse holes in micro-VM `memory-ranges`) (labels `file.name`, `ate.template.atespace`, `ate.template.name`) |
@@ -282,15 +283,23 @@ For the PostgreSQL connection pool metrics:
   always `_OTHER`, never the error message.
 * Query execution, end-to-end store operations, and outbox/background maintenance
   telemetry remain uninstrumented. Fast acquisition does not imply a fast store.
+* `pending_requests` counts acquisitions in progress, including connection
+  creation and validation, not just callers queued behind a full pool. It
+  complements `wait_time`, which records only completed attempts. The series
+  begins with the first acquisition and returns to zero after success,
+  cancellation, timeout, or error; unlike occupancy callbacks, this synchronous
+  counter retains its zero-valued series after pool shutdown.
 
 The kind collector exposes these as `db_client_connection_count`,
-`db_client_connection_max`, and `db_client_connection_wait_time_seconds`
+`db_client_connection_max`, `db_client_connection_pending_requests`, and
+`db_client_connection_wait_time_seconds`
 (with `_bucket`, `_sum`, and `_count` histogram series). To validate the
 production store connection and OTLP exporter wiring against disposable
 PostgreSQL and collector containers, run
 `REQUIRE_DOCKER=true go test ./cmd/ateapi/internal/store/atepg -run '^TestPoolMetricsOTLPCollector$' -count=1 -v`.
-This checks the collector's Prometheus scrape, including saturation, successful
-contention, timeouts, cancellations, and bounded error labels; it is not a
+This checks the collector's Prometheus scrape, including saturation, outstanding
+requests during contention, successful contention, timeouts, cancellations,
+and bounded error labels; it is not a
 deployed-ateapi or live Kubernetes E2E test.
 
 For `ate.workerpool.desired_workers` and `ate.workerpool.ready_workers`:

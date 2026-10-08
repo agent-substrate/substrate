@@ -811,6 +811,31 @@ groups:
         requirement_level:
           conditionally_required: The acquisition outcome is error.
 
+  - id: metric.db.client.connection.pending_requests
+    type: metric
+    metric_name: db.client.connection.pending_requests
+    instrument: updowncounter
+    unit: "{request}"
+    stability: development
+    brief: The number of PostgreSQL connection acquisitions currently in progress by pool.
+    note: >
+      Follows the upstream database pool convention. Incremented at the start
+      of pgx Acquire and decremented on every return, including cancellation,
+      timeout, and error. Includes connection creation and validation, not
+      exclusively callers queued behind a saturated pool. Unlike wait_time,
+      exposes outstanding acquisitions before they complete. A pool's series
+      begins with its first acquisition and remains at zero when none are
+      pending, including after shutdown.
+    annotations:
+      substrate:
+        emitted_by: [ateapi]
+        golden_signals: [saturation]
+        code_anchor: cmd/ateapi/internal/store/atepg/metrics.go
+        cuj: Are connection acquisitions backing up before they complete?
+    attributes:
+      - ref: db.client.connection.pool.name
+        requirement_level: required
+
   - id: metric.ate.actor.crashes
     type: metric
     metric_name: ate.actor.crashes
