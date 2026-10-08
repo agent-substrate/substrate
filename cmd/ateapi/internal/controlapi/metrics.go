@@ -87,7 +87,7 @@ func RegisterWorkerCount(meter metric.Meter, workers func() ([]*ateapipb.Worker,
 		// list just means no seeding this cycle, not a broken observation.
 		if pools, err := listPools(labels.Everything()); err == nil {
 			for _, p := range pools {
-				class := string(p.Spec.SandboxClass)
+				class := string(p.Spec.DefaultSandboxClass())
 				if class == "" {
 					class = string(atev1alpha1.SandboxClassGvisor)
 				}

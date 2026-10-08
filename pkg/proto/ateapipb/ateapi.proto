@@ -2060,8 +2060,7 @@ message Worker {
   // +k8s:immutable
   repeated string ips = 7;
 
-  // sandbox_class mirrors the WorkerPool's sandboxClass; its values are the
-  // CRD's own vocabulary, so it is only bounded, not validated.
+  // sandbox_class mirrors the WorkerPool's default sandbox class
   //
   // +k8s:optional
   // +k8s:maxLength=63

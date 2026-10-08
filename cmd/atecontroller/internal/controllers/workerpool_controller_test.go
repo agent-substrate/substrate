@@ -590,8 +590,9 @@ func makeWorkerPool(name, ns string, replicas int32, image string) *atev1alpha1.
 	return &atev1alpha1.WorkerPool{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
 		Spec: atev1alpha1.WorkerPoolSpec{
-			Replicas:    replicas,
-			WorkerImage: image,
+			Replicas:       replicas,
+			WorkerImage:    image,
+			SandboxClasses: []atev1alpha1.WorkerPoolSandboxClass{{Name: atev1alpha1.SandboxClassGvisor}},
 		},
 	}
 }

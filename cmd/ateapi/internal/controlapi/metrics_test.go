@@ -400,7 +400,7 @@ func TestSchedulerAssignmentShapeAndOutcomes(t *testing.T) {
 func workerPool(namespace, name string, class atev1alpha1.SandboxClass) *atev1alpha1.WorkerPool {
 	return &atev1alpha1.WorkerPool{
 		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name},
-		Spec:       atev1alpha1.WorkerPoolSpec{SandboxClass: class},
+		Spec:       atev1alpha1.WorkerPoolSpec{SandboxClasses: []atev1alpha1.WorkerPoolSandboxClass{{Name: class}}},
 	}
 }
 
