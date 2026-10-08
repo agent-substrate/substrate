@@ -21,6 +21,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -31,6 +33,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/actorlog"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
+	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -100,12 +103,42 @@ func TestRPCsRejectUntrustedRunscPath(t *testing.T) {
 	}
 }
 
-// TestStartPauseLogPipe pins the pause container's envelope contract: sentry
-// and gofer output reaches the pod log tagged with the actor and the pause
-// container's runsc container name, runsc JSON diagnostics pass their fields
-// through, and subprocess-originated records cannot forge platform
-// attribution.
-func TestStartPauseLogPipe(t *testing.T) {
+func TestRestoreWorkloadRejectsUnsupportedFidelity(t *testing.T) {
+	staticFilesDir := nodepath.StaticFilesDir
+	nodepath.StaticFilesDir = t.TempDir()
+	t.Cleanup(func() { nodepath.StaticFilesDir = staticFilesDir })
+	runscPath := filepath.Join(nodepath.StaticFilesDir, "runsc")
+	if err := os.WriteFile(runscPath, nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dirs := &ateompb.ActorDirs{
+		RootDir:                   "/node/actors/actor-a",
+		OciBundleDir:              "/node/actors/actor-a/bundle",
+		CheckpointDir:             "/node/actors/actor-a/checkpoint-state",
+		RestoreDir:                "/node/actors/actor-a/restore",
+		DurableDirVolumeMountsDir: "/node/actors/actor-a/durable-dirs",
+		SystemInfoVolumeRootsDir:  "/node/actors/actor-a/system-info",
+		VolumesDir:                "/node/actors/actor-a/volumes",
+	}
+	// A zero service cannot acquire locks, configure networking, or open log pipes.
+	s := &AteomService{}
+	for _, fidelity := range []ateompb.SnapshotFidelity{0, ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, 99} {
+		t.Run(fidelity.String(), func(t *testing.T) {
+			resp, err := s.RestoreWorkload(context.Background(), &ateompb.RestoreWorkloadRequest{
+				ActorDirs: dirs,
+				RunscPath: runscPath,
+				Fidelity:  fidelity,
+			})
+			if resp != nil || err == nil || apierror.Code(err) != codes.InvalidArgument {
+				t.Errorf("RestoreWorkload() = (%v, %v), want InvalidArgument for unsupported fidelity", resp, err)
+			}
+		})
+	}
+}
+
+// TestPauseContainerLogAttribution covers the actor and _pause labels on runsc
+// CLI output, JSON field preservation, and rejection of forged attribution.
+func TestPauseContainerLogAttribution(t *testing.T) {
 	attribution := resources.ActorAttribution{
 		Ref:              resources.ActorRef{Atespace: "default", Name: "act-1"},
 		UID:              "uid-1",
@@ -113,17 +146,20 @@ func TestStartPauseLogPipe(t *testing.T) {
 		TemplateName:     "tmpl-1",
 	}
 	var buf syncLogBuffer
-	s := &AteomService{actorLogger: actorlog.NewActorLogger(&buf, false)}
+	logger := actorlog.NewActorLogger(&buf, false)
 
-	pw, err := s.startPauseLogPipe(attribution)
+	pw, err := logger.StartJSONLogPipe(attribution, ocispec.PauseContainer)
 	if err != nil {
-		t.Fatalf("startPauseLogPipe: %v", err)
+		t.Fatalf("StartJSONLogPipe: %v", err)
 	}
-	const jsonLine = `{"severity":"warning","message":"gofer: I/O error","ate.actor.name":"forged"}`
+	const logTime = "2026-10-08T03:40:00Z"
+	const jsonMessage = "container.go:123] cannot start container"
+	const jsonLine = `{"msg":"container.go:123] cannot start container","level":"warning","time":"2026-10-08T03:40:00Z","ate.actor.name":"forged"}`
 	if _, err := fmt.Fprintln(pw, jsonLine); err != nil {
 		t.Fatalf("write json line: %v", err)
 	}
-	if _, err := fmt.Fprintln(pw, "plain sentry line"); err != nil {
+	const plainLine = "I1008 03:40:00.000000 1234 main.go:123] Args: [runsc --alsologtostderr create _pause]"
+	if _, err := fmt.Fprintln(pw, plainLine); err != nil {
 		t.Fatalf("write plain line: %v", err)
 	}
 	pw.Close()
@@ -131,18 +167,21 @@ func TestStartPauseLogPipe(t *testing.T) {
 	records := waitRecords(t, &buf, 2)
 
 	jsonRecord := decodeRecord(t, records[0])
-	if got := jsonRecord["severity"]; got != "warning" {
-		t.Errorf("json passthrough severity = %v, want warning", got)
+	if got := jsonRecord["level"]; got != "warning" {
+		t.Errorf("json passthrough level = %v, want warning", got)
 	}
-	if got := jsonRecord["message"]; got != "gofer: I/O error" {
-		t.Errorf("json passthrough message = %v, want %q", got, "gofer: I/O error")
+	if got := jsonRecord["msg"]; got != jsonMessage {
+		t.Errorf("json passthrough msg = %v, want %q", got, jsonMessage)
+	}
+	if got := jsonRecord["time"]; got != logTime {
+		t.Errorf("json passthrough time = %v, want %q", got, logTime)
 	}
 	if _, ok := jsonRecord["ate.actor.name"]; ok {
 		t.Error("reserved top-level key ate.actor.name survived the envelope")
 	}
 	plainRecord := decodeRecord(t, records[1])
-	if got := plainRecord["message"]; got != "plain sentry line" {
-		t.Errorf("plain message = %v, want %q", got, "plain sentry line")
+	if got := plainRecord["message"]; got != plainLine {
+		t.Errorf("plain message = %v, want %q", got, plainLine)
 	}
 
 	actorName := string(ateattr.ActorNameKey)

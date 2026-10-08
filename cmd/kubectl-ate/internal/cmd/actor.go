@@ -30,6 +30,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/kubectl-ate/internal/printer"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/ateclient"
+	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/spf13/cobra"
@@ -553,7 +554,10 @@ func (f logLineFilter) matches(emitter resources.ActorRef, containerName string)
 	if emitter != f.target || f.target.Atespace == "" || f.target.Name == "" {
 		return false
 	}
-	return f.container == "" || containerName == f.container
+	if f.container == "" {
+		return containerName != ocispec.PauseContainer
+	}
+	return containerName == f.container
 }
 
 func filterAndDisplayLogLine(line string, filter logLineFilter, w io.Writer) (time.Time, bool) {
@@ -671,6 +675,6 @@ func init() {
 	logsActorsCmd.Flags().BoolVarP(&logsActorFollowFlag, "follow", "f", false, "Specify if the logs should be streamed.")
 	logsActorsCmd.Flags().StringVarP(&logsActorAtespaceFlag, "atespace", "a", "", "Atespace the actor lives in")
 	_ = logsActorsCmd.MarkFlagRequired("atespace")
-	logsActorsCmd.Flags().StringVarP(&logsActorContainerFlag, "container", "c", "", "Show only logs from this container.")
+	logsActorsCmd.Flags().StringVarP(&logsActorContainerFlag, "container", "c", "", "Show only logs from this container; use _pause for runsc diagnostics.")
 	logsCmd.AddCommand(logsActorsCmd)
 }

@@ -258,6 +258,36 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 			wantOutput:  `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"hi"}`,
 		},
 		{
+			name:        "no filter excludes pause container diagnostics",
+			line:        `{"time":"2026-05-16T01:03:38Z","message":"Args: [runsc create _pause]","labels":{"ate.atespace":"space-1","ate.actor.name":"act-1","ate.actor.container.name":"_pause"}}`,
+			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
+			wantMatched: false,
+		},
+		{
+			name:        "explicit pause filter shows runsc diagnostics",
+			line:        `{"time":"2026-05-16T01:03:38Z","message":"Args: [runsc create _pause]","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-1","ate.actor.container.name":"_pause"}}`,
+			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
+			container:   "_pause",
+			wantMatched: true,
+			wantTime:    "2026-05-16T01:03:38Z",
+			wantOutput:  `{"time":"2026-05-16T01:03:38Z","message":"Args: [runsc create _pause]"}`,
+		},
+		{
+			name:        "application filter excludes pause container diagnostics",
+			line:        `{"time":"2026-05-16T01:03:38Z","message":"Args: [runsc create _pause]","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-1","ate.actor.container.name":"_pause"}}`,
+			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
+			container:   "counter",
+			wantMatched: false,
+		},
+		{
+			name:        "no filter shows lifecycle events",
+			line:        `{"time":"2026-05-16T01:03:38Z","message":"Actor started","labels":{"ate.atespace":"space-1","ate.actor.name":"act-1"}}`,
+			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
+			wantMatched: true,
+			wantTime:    "2026-05-16T01:03:38Z",
+			wantOutput:  `{"time":"2026-05-16T01:03:38Z","message":"Actor started"}`,
+		},
+		{
 			name:        "container filter excludes a different container",
 			line:        `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"hi","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-1","ate.actor.container.name":"sidecar"}}`,
 			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
@@ -405,6 +435,7 @@ func TestLogsActorRunner_Run_OneShot_ContainerFilter(t *testing.T) {
 
 	counterLine := `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"from counter","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-123","ate.actor.container.name":"counter"}}`
 	sidecarLine := `{"time":"2026-05-16T01:03:39Z","level":"info","msg":"from sidecar","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-123","ate.actor.container.name":"sidecar"}}`
+	pauseLine := `{"time":"2026-05-16T01:03:39Z","message":"Args: [runsc create _pause]","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-123","ate.actor.container.name":"_pause"}}`
 	lifecycleLine := `{"time":"2026-05-16T01:03:40Z","message":"Actor started","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-123"}}`
 
 	tests := []struct {
@@ -413,13 +444,18 @@ func TestLogsActorRunner_Run_OneShot_ContainerFilter(t *testing.T) {
 		wantOutput []string
 	}{
 		{
-			name:       "no filter shows everything",
+			name:       "no filter shows application and lifecycle logs",
 			wantOutput: []string{"from counter", "from sidecar", "Actor started"},
 		},
 		{
 			name:       "container filter",
 			container:  "counter",
 			wantOutput: []string{"from counter"},
+		},
+		{
+			name:       "explicit pause container filter",
+			container:  "_pause",
+			wantOutput: []string{"Args: [runsc create _pause]"},
 		},
 	}
 
@@ -441,7 +477,7 @@ func TestLogsActorRunner_Run_OneShot_ContainerFilter(t *testing.T) {
 			}
 			mockStreamer := &mockPodLogsStreamer{
 				StreamLogsFunc: func(ctx context.Context, ns, name string, opts *corev1.PodLogOptions) (io.ReadCloser, error) {
-					return io.NopCloser(strings.NewReader(counterLine + "\n" + sidecarLine + "\n" + lifecycleLine + "\n")), nil
+					return io.NopCloser(strings.NewReader(counterLine + "\n" + sidecarLine + "\n" + pauseLine + "\n" + lifecycleLine + "\n")), nil
 				},
 			}
 
