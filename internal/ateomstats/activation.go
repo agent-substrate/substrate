@@ -21,11 +21,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 )
 
 // Activation is the usage state of one activation of an actor: one Run or
-// Restore. An ateom creates one each time it hosts an actor, so a re-hosted
+// Restore. A worker creates one each time it hosts an actor, so a re-hosted
 // actor starts a new one.
 //
 // It is safe for concurrent use: the stats reads, the sampler, and the
@@ -49,8 +49,8 @@ type Activation struct {
 	last map[string]uint64
 	// latest is what the discovery read serves, pending included; measured
 	// is the newest sample with numbers, for the final record.
-	latest   *ateompb.WorkloadStatsSample
-	measured *ateompb.WorkloadStatsSample
+	latest   *ateworkerpb.WorkloadStatsSample
+	measured *ateworkerpb.WorkloadStatsSample
 	// initialDone is set once the initial reading is taken or has failed, and
 	// ended by the final record. Periodic records are written only between the
 	// two, so the initial record comes first and the final one last.
@@ -70,7 +70,7 @@ func NewActivation(now time.Time, resumesCounters bool) *Activation {
 func (a *Activation) Epoch() int64 { return a.epoch }
 
 // WithEpoch sets the epoch on s, a sample with no CPU reading, and returns it.
-func (a *Activation) WithEpoch(s *ateompb.WorkloadStatsSample) *ateompb.WorkloadStatsSample {
+func (a *Activation) WithEpoch(s *ateworkerpb.WorkloadStatsSample) *ateworkerpb.WorkloadStatsSample {
 	s.EpochUnixNano = a.epoch
 	return s
 }
@@ -88,7 +88,7 @@ var errNoSample = errors.New("usage reading returned no sample")
 // not seen before, in the first reading or a later one, counts in full only
 // when the activation's counters start at zero. Waiting for another reading to
 // finish ends with ctx.
-func (a *Activation) Measure(ctx context.Context, read func() (*ateompb.WorkloadStatsSample, map[string]uint64, error)) (*ateompb.WorkloadStatsSample, error) {
+func (a *Activation) Measure(ctx context.Context, read func() (*ateworkerpb.WorkloadStatsSample, map[string]uint64, error)) (*ateworkerpb.WorkloadStatsSample, error) {
 	select {
 	case a.readLock <- struct{}{}:
 	case <-ctx.Done():
@@ -144,19 +144,19 @@ func addSat(a, b uint64) uint64 {
 
 // Store records s as the latest sample, and as the newest measured one when it
 // has numbers, each unless a newer one is already there.
-func (a *Activation) Store(s *ateompb.WorkloadStatsSample) {
+func (a *Activation) Store(s *ateworkerpb.WorkloadStatsSample) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.store(s)
 }
 
-func (a *Activation) store(s *ateompb.WorkloadStatsSample) {
+func (a *Activation) store(s *ateworkerpb.WorkloadStatsSample) {
 	if a.latest == nil || s.GetObservedAtUnixNano() >= a.latest.GetObservedAtUnixNano() {
 		a.latest = s
 	}
 	// Compared on its own: a pending sample stored first must not discard a
 	// measured one read earlier.
-	if s.GetSource() != ateompb.StatsSource_STATS_SOURCE_UNSPECIFIED &&
+	if s.GetSource() != ateworkerpb.StatsSource_STATS_SOURCE_UNSPECIFIED &&
 		(a.measured == nil || s.GetObservedAtUnixNano() >= a.measured.GetObservedAtUnixNano()) {
 		a.measured = s
 	}
@@ -167,7 +167,7 @@ func (a *Activation) store(s *ateompb.WorkloadStatsSample) {
 // was written first; nil s means the reading failed, and periodic records start
 // without an initial one. write runs under the activation's lock and must not
 // block or call into a.
-func (a *Activation) Initial(s *ateompb.WorkloadStatsSample, write func()) {
+func (a *Activation) Initial(s *ateworkerpb.WorkloadStatsSample, write func()) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.initialDone {
@@ -193,7 +193,7 @@ func (a *Activation) Sampling() bool {
 // initial reading and its final record, which a sweep that read s may have
 // raced. write runs under the activation's lock and must not block or call
 // into a.
-func (a *Activation) Periodic(s *ateompb.WorkloadStatsSample, write func()) {
+func (a *Activation) Periodic(s *ateworkerpb.WorkloadStatsSample, write func()) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if !a.initialDone || a.ended {
@@ -206,7 +206,7 @@ func (a *Activation) Periodic(s *ateompb.WorkloadStatsSample, write func()) {
 // Final marks the activation ended and runs write with the newest measured
 // sample, or nil when there is none, once: a later call does nothing. write
 // runs under the activation's lock and must not block or call into a.
-func (a *Activation) Final(write func(measured *ateompb.WorkloadStatsSample)) {
+func (a *Activation) Final(write func(measured *ateworkerpb.WorkloadStatsSample)) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.ended {
@@ -218,7 +218,7 @@ func (a *Activation) Final(write func(measured *ateompb.WorkloadStatsSample)) {
 
 // Latest is the last stored sample, or nil before the first. Callers must not
 // modify it.
-func (a *Activation) Latest() *ateompb.WorkloadStatsSample {
+func (a *Activation) Latest() *ateworkerpb.WorkloadStatsSample {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.latest

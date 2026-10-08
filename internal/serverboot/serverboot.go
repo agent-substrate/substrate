@@ -13,8 +13,8 @@
 // limitations under the License.
 
 // Package serverboot collects the startup boilerplate shared by the
-// long-running substrate server binaries (ateapi, atelet, ateom-gvisor,
-// ateom-microvm): slog wiring, OTel tracer + meter providers, a Prometheus +
+// long-running substrate server binaries (ateapi, atelet, ateworker-gvisor,
+// ateworker-microvm): slog wiring, OTel tracer + meter providers, a Prometheus +
 // /readyz HTTP surface, and a couple of small helpers for startup fail-fast.
 package serverboot
 
@@ -56,7 +56,7 @@ func InitLogger() {
 
 // InitLoggerWithWriter is InitLogger with an explicit destination. Use it to share
 // one synchronized writer between the runtime logger and a separate writer (e.g.
-// ateom's actor-log forwarder) so their lines don't interleave.
+// worker's actor-log forwarder) so their lines don't interleave.
 func InitLoggerWithWriter(w io.Writer) {
 	slog.SetDefault(slog.New(contextlogging.NewHandler(slog.NewJSONHandler(w, &slog.HandlerOptions{Level: &logLevel}))))
 }
@@ -111,7 +111,7 @@ func newResource(ctx context.Context, serviceName string, extraAttrs ...attribut
 // gets no attribute at all; true means it did, and conn says whether it got it.
 //
 // The distinction matters because a nil conn on a relay-capable component is
-// exactly the degraded case worth alerting on: the ateom asked for the relay,
+// exactly the degraded case worth alerting on: the worker asked for the relay,
 // could not dial it, and is now exporting over the worker pod's own network.
 // Collapsing that into the same "no attribute" bucket as atecontroller would
 // hide it.
@@ -135,7 +135,7 @@ type TracingOptions struct {
 	// default.
 	Sampling TraceSampling
 	// ExporterConn, when non-nil, is the connection the OTLP exporter sends
-	// over, instead of dialing OTEL_EXPORTER_OTLP_ENDPOINT itself. ateom passes
+	// over, instead of dialing OTEL_EXPORTER_OTLP_ENDPOINT itself. worker passes
 	// the unix socket to atelet's relay (internal/otlprelay) so a worker pod
 	// exports without a network path of its own; nil keeps the direct dial.
 	//
@@ -143,9 +143,9 @@ type TracingOptions struct {
 	// connection it did not create.
 	ExporterConn *grpc.ClientConn
 	// RelayCapable marks a component that is meant to export through the relay,
-	// whether or not it managed to (see relayAttrs). Only the ateoms set it. It
+	// whether or not it managed to (see relayAttrs). Only the workers set it. It
 	// is separate from ExporterConn because a nil conn on its own cannot tell
-	// "the ateom tried and fell back" from "this component never had a relay".
+	// "the worker tried and fell back" from "this component never had a relay".
 	RelayCapable bool
 }
 
@@ -262,9 +262,9 @@ func InitMetricsBridged(ctx context.Context, serviceName string, reg interface {
 }
 
 // InitMetricsPushOnlyVia is InitMetrics without the Prometheus reader, for a
-// binary that runs no metrics HTTP server of its own (ateom): a pull reader
+// binary that runs no metrics HTTP server of its own (worker): a pull reader
 // would collect into a registry nothing serves. conn is the metrics counterpart
-// of TracingOptions.ExporterConn: ateom passes atelet's relay socket
+// of TracingOptions.ExporterConn: worker passes atelet's relay socket
 // (internal/otlprelay) so the worker pod needs no network path of its own; a
 // nil conn keeps the direct dial to OTEL_EXPORTER_OTLP_ENDPOINT.
 //

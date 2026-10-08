@@ -348,14 +348,14 @@ groups:
               stability: development
               value: oci_unpack
               brief: Restore. atelet unpacks the layers of the OCI image.
-            - id: ateom_restore
+            - id: worker_restore
               stability: development
-              value: ateom_restore
-              brief: Restore. This is the ateom restore call.
-            - id: ateom_checkpoint
+              value: worker_restore
+              brief: Restore. This is the worker restore call.
+            - id: worker_checkpoint
               stability: development
-              value: ateom_checkpoint
-              brief: Checkpoint. This is the ateom checkpoint call.
+              value: worker_checkpoint
+              brief: Checkpoint. This is the worker checkpoint call.
             - id: persist
               stability: development
               value: persist
@@ -565,7 +565,7 @@ groups:
             - id: periodic
               stability: development
               value: periodic
-              brief: The timer of the ateom took the sample.
+              brief: The timer of the ateworker took the sample.
             - id: initial
               stability: development
               value: initial
@@ -859,7 +859,7 @@ groups:
         golden_signals: [latency]
         code_anchor: cmd/atelet/metrics.go
         buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60]
-        cuj: Cold starts are slow. Is the cause the download, the unpack, or ateom?
+        cuj: Cold starts are slow. Is the cause the download, the unpack, or ateworker?
     attributes:
       - ref: ate.template.atespace
         requirement_level: required
@@ -885,7 +885,7 @@ groups:
     brief: The time of one phase of an actor checkpoint on the worker node.
     note: >
       The phases are the same as the phases of the restore histogram. Thus you
-      can find the cause of a slow suspend in ateom or in the upload. The phases
+      can find the cause of a slow suspend in ateworker or in the upload. The phases
       occur at the same time. They do not add up to the total.
     annotations:
       substrate:
@@ -893,7 +893,7 @@ groups:
         golden_signals: [latency]
         code_anchor: cmd/atelet/metrics.go
         buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60]
-        cuj: Suspends are slow. Is the cause ateom or the upload?
+        cuj: Suspends are slow. Is the cause ateworker or the upload?
     attributes:
       - ref: ate.template.atespace
         requirement_level: required
@@ -1219,11 +1219,11 @@ groups:
     brief: The time, the rate and the errors of each gRPC method on the server.
     note: >
       The otelgrpc interceptor sends this instrument. The code of Substrate does
-      not make it. This instrument is the only instrumentation of ateom. ateom
+      not make it. This instrument is the only instrumentation of ateworker. ateworker
       has it on the gRPC interface that atelet calls.
     annotations:
       substrate:
-        emitted_by: [ateapi, atelet, atenet-router, ateom-gvisor, ateom-microvm]
+        emitted_by: [ateapi, atelet, atenet-router, ateworker-gvisor, ateworker-microvm]
         golden_signals: [latency, traffic, errors]
         source: external
         instrumentation: go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc

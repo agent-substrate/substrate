@@ -105,8 +105,8 @@ a running cluster.
 |---|---|
 | `publish worker-images` | (no shell equivalent) |
 
-Builds and pushes the ateom worker images for the checked-out build and prints
-their refs; a WorkerPool points `spec.workerImage` to a build to use the ateom.
+Builds and pushes the worker images for the checked-out build and prints
+their refs; a WorkerPool points `spec.workerImage` to a build to use the ateworker.
 
 ## Delete
 

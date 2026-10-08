@@ -43,7 +43,7 @@ func TestWorkerPoolValidation(t *testing.T) {
 		},
 		Spec: WorkerPoolSpec{
 			Replicas:    1,
-			WorkerImage: "ateom:latest",
+			WorkerImage: "worker:latest",
 		},
 	}
 
@@ -228,7 +228,7 @@ func TestWorkerPoolReservedMetadataUpdate(t *testing.T) {
 		},
 		Spec: WorkerPoolSpec{
 			Replicas:    1,
-			WorkerImage: "example.com/ateom:latest",
+			WorkerImage: "example.com/worker:latest",
 		},
 	}
 	if err := k8sClient.Create(ctx, wp); err != nil {

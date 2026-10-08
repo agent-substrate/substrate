@@ -59,7 +59,7 @@ const (
 	// value.
 	//
 	// This is the only channel that can carry a whole certificate to ext_proc
-	// so the gateway can verify the chain, key usages, and ateom SPIFFE URI.
+	// so the gateway can verify the chain, key usages, and worker SPIFFE URI.
 	//
 	// TODO(identity): Audit that this cannot be stomped by a header sent by the
 	// actor.
@@ -298,7 +298,7 @@ func (h *Handler) authenticateActorCertificate(md *extproc.RequestMetadata) (res
 }
 
 // verifyActorCertificate checks that chain[0] is a live, non-CA, client-auth
-// ateom actor certificate issued by the actor-identity CA, and returns the
+// worker actor certificate issued by the actor-identity CA, and returns the
 // ActorRef from its SPIFFE URI.
 //
 // The chain is verified here even though Envoy already did it at the handshake
@@ -307,7 +307,7 @@ func (h *Handler) authenticateActorCertificate(md *extproc.RequestMetadata) (res
 // trusting a parsed-but-unverified certificate is a well-worn source of CVEs.
 // It also keeps the handler safe if the Envoy config is ever loosened, and costs
 // one signature check per CONNECT rather than per request. The IsCA, ClientAuth-EKU,
-// and ateom SPIFFE URI checks below have no Envoy-side equivalent at all.
+// and worker SPIFFE URI checks below have no Envoy-side equivalent at all.
 func (h *Handler) verifyActorCertificate(chain []*x509.Certificate) (resources.ActorRef, error) {
 	leaf := chain[0]
 	intermediates := x509.NewCertPool()
@@ -336,12 +336,12 @@ func (h *Handler) verifyActorCertificate(chain []*x509.Certificate) (resources.A
 		return resources.ActorRef{}, fmt.Errorf("actor certificate is not signed by the actor-identity CA: %w", err)
 	}
 
-	// Check that this is an ateom certificate --- the SPIFFE URI should be of
-	// the form `spiffe://${trustdomain}/ateom-for-actor/${atespace}/${actor}`.
+	// Check that this is a worker certificate --- the SPIFFE URI should be of
+	// the form `spiffe://${trustdomain}/worker-for-actor/${atespace}/${actor}`.
 	if len(leaf.URIs) != 1 {
 		return resources.ActorRef{}, fmt.Errorf("actor certificate has %d URI SANs, want 1", len(leaf.URIs))
 	}
-	ref, err := resources.ActorRefFromAteomForActorSPIFFEURL(leaf.URIs[0])
+	ref, err := resources.ActorRefFromWorkerForActorSPIFFEURL(leaf.URIs[0])
 	if err != nil {
 		return resources.ActorRef{}, fmt.Errorf("while parsing actor from SPIFFE ID: %w", err)
 	}

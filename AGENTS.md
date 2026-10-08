@@ -31,7 +31,7 @@ tools/        # Standalone Go tools (go run ./tools/<name>) for Dev/CI
 | Shared across binaries, not for external import | `internal/<pkg>` |
 | Public API for external consumers | `pkg/<pkg>` |
 | Public proto (control-plane gRPC API) | `pkg/proto/<name>` |
-| Internal proto (atelet / ateom) | `internal/proto/<name>` |
+| Internal proto (atelet / ateworker) | `internal/proto/<name>` |
 | Dev/CI scripts | `hack/` |
 | Standalone Go dev/CI tools | `tools/<name>` with its own `go.mod` |
 | Self-contained plugin that nothing in the repo depends on | `internal/plugins/<name>` with its own `go.mod`, importing only `pkg/`; see `internal/plugins/README.md` |

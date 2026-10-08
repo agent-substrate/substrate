@@ -18,11 +18,11 @@ package atelet;
 
 option go_package = "github.com/agent-substrate/substrate/internal/proto/ateletpb";
 
-// AteomSupport provides callouts for ateom.
+// WorkerSupport provides callouts for worker implementations.
 //
-// Called by individual ateom pods over a local connection, authenticated with
-// ateom's k8s pod identity mTLS certificate.
-service AteomSupport {
+// Called by individual worker pods over a local connection, authenticated with
+// the worker's k8s pod identity mTLS certificate.
+service WorkerSupport {
   // Request an atunnel certificate for the given actor.
   //
   // TODO(identity): Rename to MintAtunnelCertificate, as distinct from
@@ -41,7 +41,7 @@ service AteomSupport {
   // passed through as it was given, so a worker can tell a decision from a
   // failure to ask. Callers must not hold a lock the resulting Checkpoint
   // would need: the control plane answers this by driving a suspend back
-  // through atelet into the calling ateom.
+  // through atelet into the calling worker.
   rpc RequestActorSuspend(RequestActorSuspendRequest) returns (RequestActorSuspendResponse) {}
 }
 
@@ -173,25 +173,25 @@ message MintActorCertificateResponse {
   repeated bytes actor_certificates = 1;
 }
 
-// AteomHerder allows ate-apiserver to issue control calls to the atelet.
+// Atelet allows ate-apiserver to issue control calls to the atelet.
 //
 // Called by ate-api-server over cluster networking.  ate-api-server
 // authenticates with its k8s pod identity mTLS certificate.
-service AteomHerder {
-  // Run tells atelet to create a new containerized workload from scratch on an
-  // ateom.
+service Atelet {
+  // Run tells atelet to create a new containerized workload from scratch on a
+  // worker.
   rpc Run(RunRequest) returns (RunResponse) {}
 
-  // Checkpoint tells atelet to save the current state of the workload on an
-  // ateom to object storage, and then completely the ateom to a blank state
+  // Checkpoint tells atelet to save the current state of the workload on a
+  // worker to object storage, and then completely the worker to a blank state
   // (back to "available" state.)
   rpc Checkpoint(CheckpointRequest) returns (CheckpointResponse) {}
 
-  // Restore restores a workload from checkpoint onto an ateom.
+  // Restore restores a workload from checkpoint onto a worker.
   rpc Restore(RestoreRequest) returns (RestoreResponse) {}
 
   // UploadPausedCheckpoint copies a local (pause) checkpoint from this node's
-  // disk to object storage. Unlike Checkpoint it drives no ateom: the actor is
+  // disk to object storage. Unlike Checkpoint it drives no worker: the actor is
   // paused, its sandbox is gone; the checkpoint files plus their manifest
   // already sit under the actor's local-checkpoints directory.
   rpc UploadPausedCheckpoint(UploadPausedCheckpointRequest) returns (UploadPausedCheckpointResponse) {}
@@ -203,7 +203,7 @@ service AteomHerder {
 
 message TerminateRequest {
   // If unset, the atelet will just cleanup node resources for the actor.
-  string target_ateom_uid = 1;
+  string target_worker_pod_uid = 1;
 
   string atespace = 2;
   string actor_name = 3;
@@ -219,7 +219,7 @@ message TerminateResponse {
 }
 
 message RunRequest {
-  string target_ateom_uid = 1;
+  string target_worker_pod_uid = 1;
 
   string atespace = 2;
   string actor_name = 3;
@@ -472,7 +472,7 @@ message ExternalRestoreConfiguration {
 }
 
 message CheckpointRequest {
-  string target_ateom_uid = 1;
+  string target_worker_pod_uid = 1;
 
   string atespace = 2;
   string actor_name = 3;
@@ -521,7 +521,7 @@ message UploadPausedCheckpointRequest {
   // The scope the pause checkpoint captured is not sent: atelet reads it from
   // the local snapshot's own manifest, which is authoritative. When they
   // differ, atelet converts where possible (a FULL capture to a DATA upload
-  // of the data-scope files ateom reported) and rejects otherwise.
+  // of the data-scope files the worker reported) and rejects otherwise.
   SnapshotScope desired_scope = 8;
 }
 
@@ -529,7 +529,7 @@ message UploadPausedCheckpointResponse {
 }
 
 message RestoreRequest {
-  string target_ateom_uid = 1;
+  string target_worker_pod_uid = 1;
 
   string atespace = 2;
   string actor_name = 3;

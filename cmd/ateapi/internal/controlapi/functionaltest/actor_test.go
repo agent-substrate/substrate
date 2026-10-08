@@ -1163,8 +1163,8 @@ func TestDeleteActor_Crashed(t *testing.T) {
 	}
 	if !tc.fakeAtelet.TerminateCalled {
 		t.Errorf("expected Terminate call to clean up assigned node for crashed actor")
-	} else if gotUID := tc.fakeAtelet.TerminateRequest.GetTargetAteomUid(); gotUID != "" {
-		t.Errorf("TerminateRequest.TargetAteomUid = %q, want empty for crashed actor", gotUID)
+	} else if gotUID := tc.fakeAtelet.TerminateRequest.GetTargetWorkerPodUid(); gotUID != "" {
+		t.Errorf("TerminateRequest.TargetWorkerPodUid = %q, want empty for crashed actor", gotUID)
 	}
 
 	_, err = tc.client.GetActor(ctx, &ateapipb.GetActorRequest{
@@ -5301,8 +5301,8 @@ func TestRevertActor_FromPaused(t *testing.T) {
 	}
 	if !tc.fakeAtelet.TerminateCalled {
 		t.Errorf("expected Terminate call to clean up assigned node for paused actor")
-	} else if gotUID := tc.fakeAtelet.TerminateRequest.GetTargetAteomUid(); gotUID != "" {
-		t.Errorf("TerminateRequest.TargetAteomUid = %q, want empty for paused actor", gotUID)
+	} else if gotUID := tc.fakeAtelet.TerminateRequest.GetTargetWorkerPodUid(); gotUID != "" {
+		t.Errorf("TerminateRequest.TargetWorkerPodUid = %q, want empty for paused actor", gotUID)
 	}
 	if tc.fakeAtelet.CheckpointCalled {
 		t.Errorf("RevertActor checkpointed the workload, want the execution discarded")
@@ -5382,8 +5382,8 @@ func TestRevertActor_FromCrashed(t *testing.T) {
 	}
 	if !tc.fakeAtelet.TerminateCalled {
 		t.Errorf("expected Terminate call to clean up assigned node for crashed actor")
-	} else if gotUID := tc.fakeAtelet.TerminateRequest.GetTargetAteomUid(); gotUID != "" {
-		t.Errorf("TerminateRequest.TargetAteomUid = %q, want empty for crashed actor", gotUID)
+	} else if gotUID := tc.fakeAtelet.TerminateRequest.GetTargetWorkerPodUid(); gotUID != "" {
+		t.Errorf("TerminateRequest.TargetWorkerPodUid = %q, want empty for crashed actor", gotUID)
 	}
 	if tc.fakeAtelet.CheckpointCalled {
 		t.Errorf("RevertActor checkpointed the workload, want the execution discarded")

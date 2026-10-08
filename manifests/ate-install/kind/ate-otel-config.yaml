@@ -27,7 +27,7 @@
 # the shorter interval. Matching it to the interval keeps every tick an attempt.
 #
 # On ate-controller both do double duty: the controller also propagates them to
-# the ateom worker pods it creates, which have no other way to receive them.
+# the worker pods it creates, which have no other way to receive them.
 # Kind only; production keeps the SDK defaults.
 #
 # OTEL_LOGS_EXPORTER=otlp sends the actor events over OTLP instead of stdout;

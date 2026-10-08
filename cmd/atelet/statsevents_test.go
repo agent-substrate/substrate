@@ -23,21 +23,21 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/actorlog"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 )
 
 // eventSample is the fully-populated sample the event tests emit; distinct
 // values per field so a crossed wire is visible in the JSON.
-func eventSample() *ateompb.WorkloadStatsSample {
-	return &ateompb.WorkloadStatsSample{
+func eventSample() *ateworkerpb.WorkloadStatsSample {
+	return &ateworkerpb.WorkloadStatsSample{
 		Atespace:              "space-a",
 		ActorName:             "actor-a",
 		ActorUid:              "uid-a",
 		ActorTemplateAtespace: "ns-a",
 		ActorTemplateName:     "template-a",
-		SandboxClass:          ateompb.SandboxClass_SANDBOX_CLASS_MICROVM,
-		Source:                ateompb.StatsSource_STATS_SOURCE_GUEST_AGENT,
+		SandboxClass:          ateworkerpb.SandboxClass_SANDBOX_CLASS_MICROVM,
+		Source:                ateworkerpb.StatsSource_STATS_SOURCE_GUEST_AGENT,
 		MemoryCurrentBytes:    1000,
 		MemoryPeakBytes:       2000,
 		MemoryWorkingSetBytes: 700,

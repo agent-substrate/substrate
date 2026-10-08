@@ -298,7 +298,7 @@ spec:
       # A node with no collector pod silently blackholes telemetry under
       # internalTrafficPolicy: Local, so tolerate everything. Any tainted pool
       # that runs Substrate workloads -- a dedicated sandbox pool, for
-      # instance -- would otherwise lose its actor and ateom spans.
+      # instance -- would otherwise lose its actor and ateworker spans.
       tolerations:
       - operator: Exists
       containers:
@@ -424,7 +424,7 @@ these manifests:
 Setting the variable is sufficient for every component. Two also expose a flag
 that defaults to it, so you should not normally need either:
 `ate-controller`'s `--otel-exporter-otlp-endpoint`, which it also propagates to
-the `ateom` worker pods it creates, and `atenet-router`'s
+the worker pods it creates, and `atenet-router`'s
 `--otlp-collector-address`, which is what its Envoy is given over xDS.
 
 Rather than editing the base manifests, prefer a kustomize overlay that
@@ -434,15 +434,15 @@ for a worked example.
 ### A Note on Logs
 
 **Substrate exports one thing over OTLP: the actor events**, ateapi's
-lifecycle records and the ateoms' usage samples, through
+lifecycle records and the ateworkers' usage samples, through
 `serverboot.InitLogging`. `OTEL_LOGS_EXPORTER=otlp` sends them over OTLP
 instead of stdout, and `otlp,console` to both; only the kind overlay sets it, to
 `otlp,console`. See
 [the same records over OTLP](../../observability.md#the-same-records-over-otlp).
 
 Everything else is stdout. `serverboot.InitLogger` writes structured JSON there,
-and `ateom` wraps actor container output with the `ate.*` metadata labels
-described in [Actor Observability](../../observability.md). The ateom relay
+and `ateworker` wraps actor container output with the `ate.*` metadata labels
+described in [Actor Observability](../../observability.md). The ateworker relay
 carries logs, traces, and metrics; worker pods do not emit log records yet.
 
 Those labels sit in a nested group (`labels`, or `logging.googleapis.com/labels`
@@ -545,7 +545,7 @@ quantity of work that they do:
 datapoints/min ≈  nodes                  × atelet_dp
                 + ateapi_replicas        × ateapi_dp
                 + router_replicas        × router_dp
-                + worker_pods            × ateom_dp
+                + worker_pods            × worker_dp
                 + instrumented_actors    × actor_dp
 ```
 
@@ -583,7 +583,7 @@ it from the meter for the scenario you run.
 > [!IMPORTANT]
 > **With `ParentBased`, the caller makes the root decision.** Since
 > [#711](https://github.com/agent-substrate/substrate/pull/711) the defaults are
-> `ParentBased(TraceIDRatioBased)` at 0.1 for `ateapi`, `atelet`, and `ateom-*`,
+> `ParentBased(TraceIDRatioBased)` at 0.1 for `ateapi`, `atelet`, and `ateworker-*`,
 > and 0.01 for `atenet-router` and Envoy. These rates apply only to an operation
 > that arrives with no `traceparent`. A client that sends a `traceparent` makes
 > the decision for the full chain, and the defaults of substrate do not apply.

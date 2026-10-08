@@ -27,14 +27,14 @@ metadata:
 apiVersion: ate.dev/v1alpha1
 kind: WorkerPool
 metadata:
-  name: benchmark-ateom
+  name: benchmark-worker
   namespace: benchmark-workloads
   labels:
-    workload: benchmark-ateom
+    workload: benchmark-worker
 spec:
   replicas: ${WORKER_COUNT}
   sandboxClass: ${SANDBOX_CLASS}
-  workerImage: ko://github.com/agent-substrate/substrate/cmd/ateom-${SANDBOX_CLASS}
+  workerImage: ko://github.com/agent-substrate/substrate/cmd/ateworker-${SANDBOX_CLASS}
   template:
     # Lets gvisor and microvm workers share a node tainted ate.dev/sandboxClass=shared.
     tolerations:

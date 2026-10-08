@@ -14,8 +14,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package ateomtunnel wires atunnel into an ateom: its flags, listeners, DNS
-// relay, and per-actor ingress and egress. Both ateoms build their tunnel here
+// Package ateomtunnel wires atunnel into a worker: its flags, listeners, DNS
+// relay, and per-actor ingress and egress. Both workers build their tunnel here
 // so they cannot drift.
 package ateomtunnel
 
@@ -32,7 +32,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/atunnel"
 	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/nodepath"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 )
@@ -45,7 +45,7 @@ type FlagSet interface {
 	StringVar(p *string, name, value, usage string)
 }
 
-// Config is the atunnel setup an ateom takes from its flags.
+// Config is the atunnel setup a worker takes from its flags.
 type Config struct {
 	// ListenAddress serves actor ingress HTTPS.
 	ListenAddress string
@@ -85,7 +85,7 @@ func RegisterFlags(fs FlagSet) *Config {
 	return c
 }
 
-// Tunnel is the atunnel state one ateom shares across its actors.
+// Tunnel is the atunnel state one worker shares across its actors.
 type Tunnel struct {
 	// Ingress proxies router traffic to the active actors.
 	Ingress *atunnel.Server
@@ -177,7 +177,7 @@ type ActorEgress struct {
 
 // PrepareEgress mints the actor's certificate and builds its gateway client. A
 // nil gateway means the actor has no tunneled egress and yields a nil result.
-func (t *Tunnel) PrepareEgress(ctx context.Context, actor resources.ActorAttribution, gateway *ateompb.EgressGateway) (*ActorEgress, error) {
+func (t *Tunnel) PrepareEgress(ctx context.Context, actor resources.ActorAttribution, gateway *ateworkerpb.EgressGateway) (*ActorEgress, error) {
 	if gateway == nil {
 		return nil, nil
 	}
@@ -189,7 +189,7 @@ func (t *Tunnel) PrepareEgress(ctx context.Context, actor resources.ActorAttribu
 		return nil, fmt.Errorf("invalid egress gateway address %q: %w", gateway.GetAddress(), err)
 	}
 	certificateSource, err := atunnel.NewBrokerCertificateSource(atunnel.BrokerConfig{
-		SocketPath:           nodepath.AteomSupportSocket,
+		SocketPath:           nodepath.WorkerSupportSocket,
 		CredentialBundlePath: t.cfg.CredentialBundle,
 		TrustBundlePath:      t.cfg.TrustBundle,
 		ActorAtespace:        actor.Ref.Atespace,
@@ -202,7 +202,7 @@ func (t *Tunnel) PrepareEgress(ctx context.Context, actor resources.ActorAttribu
 	}
 	// Mint before starting the workload so configured tunneled egress fails
 	// closed. The source retains the private key for mTLS and renewal.
-	expiresAt, err := certificateSource.MintAteomCertificate(ctx)
+	expiresAt, err := certificateSource.MintWorkerCertificate(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("while obtaining actor certificate: %w", err)
 	}

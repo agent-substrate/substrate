@@ -46,7 +46,7 @@ the router capacity benchmark — see
 
 Each entry in `tests.yaml` may set `sandboxClass: gvisor | microvm` (default
 `gvisor`). This controls both `spec.sandboxClass` on the benchmark WorkerPool
-and its `workerImage` (`ateom-gvisor` vs `ateom-microvm`).
+and its `workerImage` (`ateworker-gvisor` vs `ateworker-microvm`).
 
 For `microvm` tests the target cluster must have KVM-capable nodes and the
 object store bucket named in its `.ate-dev-env.sh` must be writable by the

@@ -14,7 +14,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package ateomcgroup delegates the worker pod's cgroup to the ateom so each
+// Package ateomcgroup delegates the worker pod's cgroup to the worker so each
 // actor can get a leaf of its own.
 package ateomcgroup
 
@@ -31,9 +31,9 @@ import (
 // Root is the worker pod's cgroup scope inside its private cgroup namespace.
 const Root = "/sys/fs/cgroup"
 
-// workerLeaf holds the ateom's own processes, since a cgroup that delegates
+// workerLeaf holds the worker's own processes, since a cgroup that delegates
 // controllers may not hold processes itself.
-const workerLeaf = "ateom"
+const workerLeaf = "worker"
 
 // Delegate prepares the worker pod's cgroup so the runtime can create per-actor
 // leaves under it with real cpu/memory/pids accounting. It reports whether it
@@ -46,7 +46,7 @@ const workerLeaf = "ateom"
 //   - The cgroup v2 "no internal processes" rule forbids a cgroup from holding
 //     processes directly while also delegating controllers to children. The pod
 //     scope is not the true cgroup root, so the exemption does not apply: we move
-//     the worker's own processes into a dedicated "ateom" leaf.
+//     the worker's own processes into a dedicated "worker" leaf.
 //   - Controllers are only available to children if enabled in the scope's
 //     cgroup.subtree_control. We enable everything the parent delegated to us.
 //

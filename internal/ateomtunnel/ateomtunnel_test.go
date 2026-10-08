@@ -33,7 +33,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/spf13/pflag"
 )
@@ -261,7 +261,7 @@ func TestPrepareEgress(t *testing.T) {
 		"unbalanced port": "[::1",
 	} {
 		t.Run(name, func(t *testing.T) {
-			got, err := tunnel.PrepareEgress(context.Background(), actor, &ateompb.EgressGateway{Address: address})
+			got, err := tunnel.PrepareEgress(context.Background(), actor, &ateworkerpb.EgressGateway{Address: address})
 			if err == nil || got != nil {
 				t.Errorf("PrepareEgress(%q) = %v, %v; want an error", address, got, err)
 			}

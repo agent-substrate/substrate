@@ -29,7 +29,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/trustbundle"
 	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
@@ -49,12 +49,12 @@ func useTempNodeDirs(t *testing.T) {
 	})
 }
 
-// fakeAteom is a fake ateom in a worker pod. It writes the files a
+// fakeWorker is a fake worker in a worker pod. It writes the files a
 // real checkpoint would leave in the checkpoint dir, and reads back what a
-// restore was handed. Like a real ateom it takes every actor directory from
+// restore was handed. Like a real worker it takes every actor directory from
 // the request, never derived from the actor UID.
-type fakeAteom struct {
-	ateompb.UnimplementedAteomServer
+type fakeWorker struct {
+	ateworkerpb.UnimplementedWorkerServer
 	// snapshotFiles are written at checkpoint and reported back to atelet as
 	// the exact set the snapshot consists of.
 	snapshotFiles map[string]string
@@ -62,25 +62,25 @@ type fakeAteom struct {
 	// most recent RestoreWorkload.
 	restored map[string]string
 	// actorDirs records the ActorDirs each RPC arrived with, by RPC name.
-	actorDirs map[string]*ateompb.ActorDirs
+	actorDirs map[string]*ateworkerpb.ActorDirs
 	// preserveRestoreDir records the PreserveRestoreDir flag from the most
 	// recent RestoreWorkload request.
 	preserveRestoreDir bool
 }
 
-func (f *fakeAteom) recordActorDirs(rpc string, actorDirs *ateompb.ActorDirs) {
+func (f *fakeWorker) recordActorDirs(rpc string, actorDirs *ateworkerpb.ActorDirs) {
 	if f.actorDirs == nil {
-		f.actorDirs = map[string]*ateompb.ActorDirs{}
+		f.actorDirs = map[string]*ateworkerpb.ActorDirs{}
 	}
 	f.actorDirs[rpc] = actorDirs
 }
 
-func (f *fakeAteom) RunWorkload(_ context.Context, req *ateompb.RunWorkloadRequest) (*ateompb.RunWorkloadResponse, error) {
+func (f *fakeWorker) RunWorkload(_ context.Context, req *ateworkerpb.RunWorkloadRequest) (*ateworkerpb.RunWorkloadResponse, error) {
 	f.recordActorDirs("RunWorkload", req.GetActorDirs())
-	return &ateompb.RunWorkloadResponse{}, nil
+	return &ateworkerpb.RunWorkloadResponse{}, nil
 }
 
-func (f *fakeAteom) CheckpointWorkload(_ context.Context, req *ateompb.CheckpointWorkloadRequest) (*ateompb.CheckpointWorkloadResponse, error) {
+func (f *fakeWorker) CheckpointWorkload(_ context.Context, req *ateworkerpb.CheckpointWorkloadRequest) (*ateworkerpb.CheckpointWorkloadResponse, error) {
 	f.recordActorDirs("CheckpointWorkload", req.GetActorDirs())
 	dir := req.GetActorDirs().GetCheckpointDir()
 	names := make([]string, 0, len(f.snapshotFiles))
@@ -90,10 +90,10 @@ func (f *fakeAteom) CheckpointWorkload(_ context.Context, req *ateompb.Checkpoin
 		}
 		names = append(names, name)
 	}
-	return &ateompb.CheckpointWorkloadResponse{SnapshotFiles: names}, nil
+	return &ateworkerpb.CheckpointWorkloadResponse{SnapshotFiles: names}, nil
 }
 
-func (f *fakeAteom) RestoreWorkload(_ context.Context, req *ateompb.RestoreWorkloadRequest) (*ateompb.RestoreWorkloadResponse, error) {
+func (f *fakeWorker) RestoreWorkload(_ context.Context, req *ateworkerpb.RestoreWorkloadRequest) (*ateworkerpb.RestoreWorkloadResponse, error) {
 	f.recordActorDirs("RestoreWorkload", req.GetActorDirs())
 	f.preserveRestoreDir = req.GetPreserveRestoreDir()
 	dir := req.GetActorDirs().GetRestoreDir()
@@ -105,37 +105,37 @@ func (f *fakeAteom) RestoreWorkload(_ context.Context, req *ateompb.RestoreWorkl
 		}
 		f.restored[name] = string(body)
 	}
-	return &ateompb.RestoreWorkloadResponse{}, nil
+	return &ateworkerpb.RestoreWorkloadResponse{}, nil
 }
 
-func (f *fakeAteom) TerminateWorkload(_ context.Context, req *ateompb.TerminateWorkloadRequest) (*ateompb.TerminateWorkloadResponse, error) {
+func (f *fakeWorker) TerminateWorkload(_ context.Context, req *ateworkerpb.TerminateWorkloadRequest) (*ateworkerpb.TerminateWorkloadResponse, error) {
 	f.recordActorDirs("TerminateWorkload", req.GetActorDirs())
-	return &ateompb.TerminateWorkloadResponse{}, nil
+	return &ateworkerpb.TerminateWorkloadResponse{}, nil
 }
 
-// serveFakeAteom serves ateom on a unix socket and points atelet's dialer at
+// serveFakeWorker serves worker on a unix socket and points atelet's dialer at
 // it. The socket lives in its own short temp dir.
-func serveFakeAteom(t *testing.T, f *fakeAteom) {
+func serveFakeWorker(t *testing.T, f *fakeWorker) {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "ateom-")
+	dir, err := os.MkdirTemp("", "worker-")
 	if err != nil {
 		t.Fatalf("creating socket dir: %v", err)
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
 
-	sock := filepath.Join(dir, "ateom.sock")
+	sock := filepath.Join(dir, "worker.sock")
 	lis, err := net.Listen("unix", sock)
 	if err != nil {
 		t.Fatalf("listening on %q: %v", sock, err)
 	}
 	srv := grpc.NewServer()
-	ateompb.RegisterAteomServer(srv, f)
+	ateworkerpb.RegisterWorkerServer(srv, f)
 	go func() { _ = srv.Serve(lis) }()
 	t.Cleanup(srv.Stop)
 
-	orig := ateomSocketPath
-	ateomSocketPath = func(string) string { return sock }
-	t.Cleanup(func() { ateomSocketPath = orig })
+	orig := workerSocketPath
+	workerSocketPath = func(string) string { return sock }
+	t.Cleanup(func() { workerSocketPath = orig })
 }
 
 // TestLocalSnapshotGC walks an actor through
@@ -149,12 +149,12 @@ func TestLocalSnapshotGC(t *testing.T) {
 		atespace     = "ate-demo"
 		actorName    = "counter"
 		actorUID     = "actor-uid-1"
-		ateomUID     = "ateom-uid-1"
+		workerUID    = "worker-uid-1"
 		snapshotName = "pause-snap-1"
 	)
 
-	ateom := &fakeAteom{snapshotFiles: map[string]string{"checkpoint.img": "guest-memory"}}
-	serveFakeAteom(t, ateom)
+	worker := &fakeWorker{snapshotFiles: map[string]string{"checkpoint.img": "guest-memory"}}
+	serveFakeWorker(t, worker)
 
 	host := imageVolumeTestRegistry(t)
 	image := host + "/actor:v1"
@@ -163,8 +163,8 @@ func TestLocalSnapshotGC(t *testing.T) {
 	// A single "runsc" asset served from a fake bucket: enough to exercise the
 	// content-addressed asset fetch without a gVisor release tarball.
 	runsc := []byte("runsc binary")
-	s := &AteomHerder{
-		ateomDialer:       newAteomDialer(1),
+	s := &Atelet{
+		workerDialer:      newWorkerDialer(1),
 		imageCache:        newImageVolumeStore(t),
 		anonGCSClient:     fakeObjectStorage{data: runsc},
 		systemInfoVolumes: newSystemInfoVolumeRefresher(nil, nil),
@@ -191,7 +191,7 @@ func TestLocalSnapshotGC(t *testing.T) {
 		ActorUid:              actorUID,
 		ActorTemplateAtespace: "default",
 		ActorTemplateName:     "counter",
-		TargetAteomUid:        ateomUID,
+		TargetWorkerPodUid:    workerUID,
 		SandboxAssets:         sandboxAssets,
 		Spec:                  spec,
 	}); err != nil {
@@ -205,7 +205,7 @@ func TestLocalSnapshotGC(t *testing.T) {
 		ActorUid:              actorUID,
 		ActorTemplateAtespace: "default",
 		ActorTemplateName:     "counter",
-		TargetAteomUid:        ateomUID,
+		TargetWorkerPodUid:    workerUID,
 		Spec:                  spec,
 		Scope:                 ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
 		Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
@@ -227,7 +227,7 @@ func TestLocalSnapshotGC(t *testing.T) {
 		ActorUid:              actorUID,
 		ActorTemplateAtespace: "default",
 		ActorTemplateName:     "counter",
-		TargetAteomUid:        ateomUID,
+		TargetWorkerPodUid:    workerUID,
 		SandboxAssets:         sandboxAssets,
 		Spec:                  spec,
 		Scope:                 ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
@@ -238,10 +238,10 @@ func TestLocalSnapshotGC(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
-	if got := ateom.restored["checkpoint.img"]; got != "guest-memory" {
-		t.Fatalf("restore staged %q for ateom, want the pause snapshot's %q", got, "guest-memory")
+	if got := worker.restored["checkpoint.img"]; got != "guest-memory" {
+		t.Fatalf("restore staged %q for worker, want the pause snapshot's %q", got, "guest-memory")
 	}
-	if !ateom.preserveRestoreDir {
+	if !worker.preserveRestoreDir {
 		t.Errorf("RestoreWorkload preserve_restore_dir = false, want true for pure-local restore")
 	}
 	if entries, err := os.ReadDir(ateletpath.RestoreStateDir(actorUID)); err != nil || len(entries) != 0 {
@@ -255,13 +255,13 @@ func TestLocalSnapshotGC(t *testing.T) {
 		ActorUid:              actorUID,
 		ActorTemplateAtespace: "default",
 		ActorTemplateName:     "counter",
-		TargetAteomUid:        ateomUID,
+		TargetWorkerPodUid:    workerUID,
 		Spec:                  spec,
 	}); err != nil {
 		t.Fatalf("Terminate: %v", err)
 	}
 
-	// Every RPC hands ateom the same directory set, except that a local
+	// Every RPC hands worker the same directory set, except that a local
 	// restore points restore_dir at the pause snapshot; the fake already
 	// relied on checkpoint_dir and restore_dir above to place and find it.
 	for _, rpc := range []string{"RunWorkload", "CheckpointWorkload", "RestoreWorkload", "TerminateWorkload"} {
@@ -269,7 +269,7 @@ func TestLocalSnapshotGC(t *testing.T) {
 		if rpc == "RestoreWorkload" {
 			want.RestoreDir = ateletpath.LocalSnapshotDir(actorUID, snapshotName)
 		}
-		if got := ateom.actorDirs[rpc]; !proto.Equal(got, want) {
+		if got := worker.actorDirs[rpc]; !proto.Equal(got, want) {
 			t.Errorf("%s carried actor actorDirs %v, want %v", rpc, got, want)
 		}
 	}
@@ -305,12 +305,12 @@ func TestRestoreUsesRequestSandboxAssets(t *testing.T) {
 		atespace     = "ate-demo"
 		actorName    = "counter"
 		actorUID     = "actor-uid-1"
-		ateomUID     = "ateom-uid-1"
+		workerUID    = "worker-uid-1"
 		snapshotName = "pause-snap-1"
 	)
 
-	ateom := &fakeAteom{snapshotFiles: map[string]string{"checkpoint.img": "guest-memory"}}
-	serveFakeAteom(t, ateom)
+	worker := &fakeWorker{snapshotFiles: map[string]string{"checkpoint.img": "guest-memory"}}
+	serveFakeWorker(t, worker)
 
 	host := imageVolumeTestRegistry(t)
 	image := host + "/actor:v1"
@@ -321,8 +321,8 @@ func TestRestoreUsesRequestSandboxAssets(t *testing.T) {
 	pushTestImage(t, restorePause, singleFileLayer(t, "pause", "pause-v2"))
 
 	runsc := []byte("runsc binary")
-	s := &AteomHerder{
-		ateomDialer:       newAteomDialer(1),
+	s := &Atelet{
+		workerDialer:      newWorkerDialer(1),
 		imageCache:        newImageVolumeStore(t),
 		anonGCSClient:     fakeObjectStorage{data: runsc},
 		systemInfoVolumes: newSystemInfoVolumeRefresher(nil, nil),
@@ -351,7 +351,7 @@ func TestRestoreUsesRequestSandboxAssets(t *testing.T) {
 		ActorUid:              actorUID,
 		ActorTemplateAtespace: "default",
 		ActorTemplateName:     "counter",
-		TargetAteomUid:        ateomUID,
+		TargetWorkerPodUid:    workerUID,
 		SandboxAssets:         assetsWithPause(checkpointPause),
 		Spec:                  spec,
 	}); err != nil {
@@ -364,7 +364,7 @@ func TestRestoreUsesRequestSandboxAssets(t *testing.T) {
 		ActorUid:              actorUID,
 		ActorTemplateAtespace: "default",
 		ActorTemplateName:     "counter",
-		TargetAteomUid:        ateomUID,
+		TargetWorkerPodUid:    workerUID,
 		Spec:                  spec,
 		Scope:                 ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
 		Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
@@ -393,7 +393,7 @@ func TestRestoreUsesRequestSandboxAssets(t *testing.T) {
 		ActorUid:              actorUID,
 		ActorTemplateAtespace: "default",
 		ActorTemplateName:     "counter",
-		TargetAteomUid:        ateomUID,
+		TargetWorkerPodUid:    workerUID,
 		SandboxAssets:         assetsWithPause(restorePause),
 		Spec:                  spec,
 		Scope:                 ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
@@ -481,7 +481,7 @@ func TestActivationFailureBeforeRegistration(t *testing.T) {
 			if tc.failure == "asset" {
 				storage.err = fmt.Errorf("asset unavailable")
 			}
-			s := &AteomHerder{anonGCSClient: storage, systemInfoVolumes: refresher}
+			s := &Atelet{anonGCSClient: storage, systemInfoVolumes: refresher}
 			assets := &ateletpb.SandboxAssets{
 				SandboxClass: "gvisor", PauseImage: testPauseImage,
 				Assets: map[string]*ateletpb.ArchAssets{runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
@@ -490,14 +490,14 @@ func TestActivationFailureBeforeRegistration(t *testing.T) {
 			}
 			if tc.restore {
 				_, err = s.Restore(ctx, &ateletpb.RestoreRequest{
-					Atespace: "team-a", ActorName: "actor-1", ActorUid: actorUID, TargetAteomUid: "ateom-uid-1",
+					Atespace: "team-a", ActorName: "actor-1", ActorUid: actorUID, TargetWorkerPodUid: "worker-uid-1",
 					SandboxAssets: assets, Spec: spec,
 					Scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL, Type: ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
 					Config: &ateletpb.RestoreRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: snapshotName}},
 				})
 			} else {
 				_, err = s.Run(ctx, &ateletpb.RunRequest{
-					Atespace: "team-a", ActorName: "actor-1", ActorUid: actorUID, TargetAteomUid: "ateom-uid-1",
+					Atespace: "team-a", ActorName: "actor-1", ActorUid: actorUID, TargetWorkerPodUid: "worker-uid-1",
 					SandboxAssets: assets, Spec: spec,
 				})
 			}
@@ -548,7 +548,7 @@ func TestRunFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
 	refresher := newSystemInfoVolumeRefresher(trustbundle.NewSource(store.lister.Get, nil), nil)
 	content := []byte("runsc binary")
 	assetHash := fmt.Sprintf("%x", sha256.Sum256(content))
-	s := &AteomHerder{
+	s := &Atelet{
 		anonGCSClient:     fakeObjectStorage{data: content},
 		imageCache:        newImageVolumeStore(t),
 		systemInfoVolumes: refresher,
@@ -560,10 +560,10 @@ func TestRunFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
 		}},
 	}
 	_, err := s.Run(t.Context(), &ateletpb.RunRequest{
-		Atespace:       "team-a",
-		ActorName:      "actor-run",
-		ActorUid:       "actor-uid-run",
-		TargetAteomUid: "ateom-uid-1",
+		Atespace:           "team-a",
+		ActorName:          "actor-run",
+		ActorUid:           "actor-uid-run",
+		TargetWorkerPodUid: "worker-uid-1",
 		SandboxAssets: &ateletpb.SandboxAssets{
 			SandboxClass: "gvisor",
 			PauseImage:   "://invalid-image",
@@ -606,16 +606,16 @@ func TestRestoreFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
 		Name:   "trust",
 		Source: &ateletpb.Volume_SystemInfo{SystemInfo: trustVolumeSpec("ca.pem")},
 	}}}
-	s := &AteomHerder{
+	s := &Atelet{
 		anonGCSClient:     fakeObjectStorage{data: content},
 		imageCache:        newImageVolumeStore(t),
 		systemInfoVolumes: refresher,
 	}
 	_, err := s.Restore(t.Context(), &ateletpb.RestoreRequest{
-		Atespace:       "team-a",
-		ActorName:      "actor-restore-after",
-		ActorUid:       actorUID,
-		TargetAteomUid: "ateom-uid-1",
+		Atespace:           "team-a",
+		ActorName:          "actor-restore-after",
+		ActorUid:           actorUID,
+		TargetWorkerPodUid: "worker-uid-1",
 		SandboxAssets: &ateletpb.SandboxAssets{
 			SandboxClass: "gvisor",
 			PauseImage:   "://invalid-image",
@@ -641,11 +641,11 @@ func TestRestoreFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
 	}
 }
 
-// TestTerminateWithoutTargetAteomUID verifies that Terminate with an empty
-// TargetAteomUid (used when cleaning up the assigned node for a paused or
-// crashed actor that no longer has a worker pod) skips dialing ateom while
+// TestTerminateWithoutTargetWorkerUID verifies that Terminate with an empty
+// TargetWorkerPodUid (used when cleaning up the assigned node for a paused or
+// crashed actor that no longer has a worker pod) skips dialing worker while
 // still pruning local checkpoints and removing actor directories on the node.
-func TestTerminateWithoutTargetAteomUID(t *testing.T) {
+func TestTerminateWithoutTargetWorkerUID(t *testing.T) {
 	useTempNodeDirs(t)
 	ctx := t.Context()
 
@@ -668,11 +668,11 @@ func TestTerminateWithoutTargetAteomUID(t *testing.T) {
 		t.Fatalf("writing local snapshot file: %v", err)
 	}
 
-	ateom := &fakeAteom{}
-	serveFakeAteom(t, ateom)
+	worker := &fakeWorker{}
+	serveFakeWorker(t, worker)
 
-	s := &AteomHerder{
-		ateomDialer:       newAteomDialer(1),
+	s := &Atelet{
+		workerDialer:      newWorkerDialer(1),
 		systemInfoVolumes: newSystemInfoVolumeRefresher(nil, nil),
 	}
 	spec := &ateletpb.WorkloadSpec{
@@ -685,14 +685,14 @@ func TestTerminateWithoutTargetAteomUID(t *testing.T) {
 		ActorUid:              actorUID,
 		ActorTemplateAtespace: "default",
 		ActorTemplateName:     "counter",
-		TargetAteomUid:        "",
+		TargetWorkerPodUid:    "",
 		Spec:                  spec,
 	}); err != nil {
 		t.Fatalf("Terminate: %v", err)
 	}
 
-	if got := ateom.actorDirs["TerminateWorkload"]; got != nil {
-		t.Errorf("TerminateWorkload was called on ateom (%v), want skipped when TargetAteomUid is empty", got)
+	if got := worker.actorDirs["TerminateWorkload"]; got != nil {
+		t.Errorf("TerminateWorkload was called on worker (%v), want skipped when TargetWorkerPodUid is empty", got)
 	}
 	if _, err := os.Stat(ateletpath.LocalCheckpointsDir(actorUID)); !os.IsNotExist(err) {
 		t.Errorf("local checkpoint dir survived terminate: %v", err)

@@ -94,7 +94,7 @@ type sandboxAssetsRecord struct {
 	ActorUID              string `json:"actorUid,omitempty"`
 	ActorTemplateAtespace string `json:"actorTemplateAtespace,omitempty"`
 	ActorTemplateName     string `json:"actorTemplateName,omitempty"`
-	// SnapshotFiles are the (relative) names of the files ateom wrote into the
+	// SnapshotFiles are the (relative) names of the files worker wrote into the
 	// checkpoint directory, as reported by CheckpointWorkloadResponse. Recorded
 	// in the snapshot manifest so Restore ships/downloads exactly this set
 	// (gVisor's image files, cloud-hypervisor's snapshot set, ...). Empty in the
@@ -151,7 +151,7 @@ func checkPauseImage(sandboxClass, pauseImage string) error {
 // several (kata-shim, cloud-hypervisor, ...).
 // Assets are cached, so re-fetching at Checkpoint/Restore is a no-op once
 // present.
-func (s *AteomHerder) ensureSandboxAssets(ctx context.Context, rec *sandboxAssetsRecord) (map[string]string, error) {
+func (s *Atelet) ensureSandboxAssets(ctx context.Context, rec *sandboxAssetsRecord) (map[string]string, error) {
 	if err := os.MkdirAll(nodepath.StaticFilesDir, 0o700); err != nil {
 		return nil, fmt.Errorf("while creating static files dir: %w", err)
 	}
@@ -184,7 +184,7 @@ func runscPathFor(paths map[string]string) string {
 // fetchAsset downloads one content-addressed asset (verifying its sha256) into
 // the shared static-files cache and returns its local path. On a cache hit it
 // returns immediately.
-func (s *AteomHerder) fetchAsset(ctx context.Context, entry assetEntry) (string, error) {
+func (s *Atelet) fetchAsset(ctx context.Context, entry assetEntry) (string, error) {
 	if err := resources.ValidateRunscHash(entry.SHA256); err != nil {
 		return "", wrapFileSystemErr("while validating asset hash", err)
 	}
@@ -221,7 +221,7 @@ func (s *AteomHerder) fetchAsset(ctx context.Context, entry assetEntry) (string,
 // verifying its sha256) and extracts it into a content-addressed directory in
 // the shared static-files cache, returning the local path of the extracted
 // `runsc` binary.
-func (s *AteomHerder) fetchGVisorRelease(ctx context.Context, entry assetEntry) (string, error) {
+func (s *Atelet) fetchGVisorRelease(ctx context.Context, entry assetEntry) (string, error) {
 	if err := resources.ValidateRunscHash(entry.SHA256); err != nil {
 		return "", wrapFileSystemErr("while validating asset hash", err)
 	}
@@ -277,7 +277,7 @@ func (s *AteomHerder) fetchGVisorRelease(ctx context.Context, entry assetEntry) 
 // cache, hashing as it goes, and returns the temp path once the size cap and
 // sha256 both check out. On error the temp file is removed; on success the
 // caller owns it (rename it into place or extract from it, then remove it).
-func (s *AteomHerder) downloadVerified(ctx context.Context, entry assetEntry, tmpPrefix string) (string, error) {
+func (s *Atelet) downloadVerified(ctx context.Context, entry assetEntry, tmpPrefix string) (string, error) {
 	// Assets live in one of two places: public buckets (gVisor's releases in
 	// gs://gvisor — read anonymously) or the cluster's own object store (micro-VM
 	// kata/CH assets staged into the snapshot bucket — read with the main client,
@@ -450,7 +450,7 @@ func writeTarFile(dest string, r io.Reader, mode fs.FileMode) error {
 // micro-VM assets in rustfs/S3 or an authenticated GCS bucket). The caller closes
 // the returned reader. Streaming (rather than buffering the whole asset) keeps a
 // multi-hundred-MiB guest image off the heap.
-func (s *AteomHerder) openAsset(ctx context.Context, url string) (io.ReadCloser, error) {
+func (s *Atelet) openAsset(ctx context.Context, url string) (io.ReadCloser, error) {
 	rc, anonErr := objectstorage.Open(ctx, s.anonGCSClient, url)
 	if anonErr == nil {
 		return rc, nil

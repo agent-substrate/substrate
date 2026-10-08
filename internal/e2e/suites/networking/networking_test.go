@@ -255,7 +255,7 @@ func assertEgressGatewayConnect(t *testing.T, ctx context.Context, since metav1.
 				if !strings.HasSuffix(authority, ":"+port) {
 					continue
 				}
-				spiffeSlug := "/ateom-for-actor/" + atespace + "/" + actorName
+				spiffeSlug := "/worker-for-actor/" + atespace + "/" + actorName
 				if !strings.Contains(line.text, spiffeSlug) {
 					continue
 				}

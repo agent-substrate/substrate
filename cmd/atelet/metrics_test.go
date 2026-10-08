@@ -177,11 +177,11 @@ func TestRecordPhasesSkipsZeroPhases(t *testing.T) {
 		snapshotOp{scope: ateattr.SnapshotScopeFull},
 		phase{ateattr.SnapshotPhaseManifestFetch, 50 * time.Millisecond},
 		phase{ateattr.SnapshotPhaseDownload, 2 * time.Second},
-		phase{ateattr.SnapshotPhaseAteomRestore, 0},
+		phase{ateattr.SnapshotPhaseWorkerRestore, 0},
 		phase{ateattr.SnapshotPhaseTotal, 2 * time.Second})
 
 	byPhase := phaseValues(t, collectHistogram(t, reader, restoreDurationMetric))
-	if _, ok := byPhase[ateattr.SnapshotPhaseAteomRestore]; ok {
+	if _, ok := byPhase[ateattr.SnapshotPhaseWorkerRestore]; ok {
 		t.Error("a phase that never started was recorded as a zero observation")
 	}
 	if len(byPhase) != 3 {

@@ -112,7 +112,7 @@ func TestRelayAttrs(t *testing.T) {
 			if tc.conn {
 				conn = lazyConn(t)
 			}
-			res, err := newResource(context.Background(), "ateom-gvisor", relayAttrs(tc.relayCapable, conn)...)
+			res, err := newResource(context.Background(), "ateworker-gvisor", relayAttrs(tc.relayCapable, conn)...)
 			if err != nil {
 				t.Fatalf("newResource: %v", err)
 			}
@@ -137,7 +137,7 @@ func TestRelayAttrs(t *testing.T) {
 func collectedResource(t *testing.T, relayCapable bool, conn *grpc.ClientConn) map[string]string {
 	t.Helper()
 	reader := sdkmetric.NewManualReader()
-	mp, err := newMeterProvider(context.Background(), "ateom-gvisor", true, relayCapable, conn, nil, reader)
+	mp, err := newMeterProvider(context.Background(), "ateworker-gvisor", true, relayCapable, conn, nil, reader)
 	if err != nil {
 		t.Fatalf("newMeterProvider: %v", err)
 	}

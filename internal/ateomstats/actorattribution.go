@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package ateomstats holds the usage telemetry both ateom runtimes share: the
-// attribution an ateom retains for each actor, the per-activation state behind
+// Package ateomstats holds the usage telemetry both worker runtimes share: the
+// attribution a worker retains for each actor, the per-activation state behind
 // every sample, the sampler, and the ate.actor.usage_sampled records. The
 // per-runtime measurement reads live with their runtimes (the cgroup read is
 // only meaningful inside the gVisor worker's cgroup namespace, the guest-agent
@@ -21,11 +21,11 @@
 package ateomstats
 
 import (
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 )
 
-// attributionSource is the attribution-bearing subset of the ateom requests
+// attributionSource is the attribution-bearing subset of the worker requests
 // that name the actor they act on.
 type attributionSource interface {
 	GetAtespace() string
@@ -36,13 +36,13 @@ type attributionSource interface {
 }
 
 var (
-	_ attributionSource = (*ateompb.RunWorkloadRequest)(nil)
-	_ attributionSource = (*ateompb.RestoreWorkloadRequest)(nil)
-	_ attributionSource = (*ateompb.CheckpointWorkloadRequest)(nil)
-	_ attributionSource = (*ateompb.TerminateWorkloadRequest)(nil)
+	_ attributionSource = (*ateworkerpb.RunWorkloadRequest)(nil)
+	_ attributionSource = (*ateworkerpb.RestoreWorkloadRequest)(nil)
+	_ attributionSource = (*ateworkerpb.CheckpointWorkloadRequest)(nil)
+	_ attributionSource = (*ateworkerpb.TerminateWorkloadRequest)(nil)
 )
 
-// ActorAttributionFromRequest extracts the attribution an ateom should retain
+// ActorAttributionFromRequest extracts the attribution a worker should retain
 // for the workload req starts: nothing later in the run, checkpoint, or restore
 // paths carries it, and GetWorkloadStats needs it.
 func ActorAttributionFromRequest(req attributionSource) resources.ActorAttribution {

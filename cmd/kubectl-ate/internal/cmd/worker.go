@@ -319,7 +319,7 @@ func (r *TopWorkersRunner) Run(ctx context.Context) error {
 func extractContainerUsage(pm metricsv1beta1.PodMetrics) (string, string) {
 	var cpuQuant, memQuant *resource.Quantity
 	for _, c := range pm.Containers {
-		if c.Name == "ateom" {
+		if c.Name == "worker" {
 			cpu := c.Usage[corev1.ResourceCPU]
 			mem := c.Usage[corev1.ResourceMemory]
 			cpuQuant = &cpu

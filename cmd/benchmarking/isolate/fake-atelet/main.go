@@ -14,7 +14,7 @@
 
 // Command fake-atelet stands in for atelet in control-plane benchmarks. It
 // runs as atelet's DaemonSet would, on the benchmark nodes only, so
-// ate-api-server dials it as the node's atelet. It answers every AteomHerder
+// ate-api-server dials it as the node's atelet. It answers every Atelet
 // call with success after a delay, without running or saving any workload.
 //
 // Actors it "runs" do not exist. Never run it on a cluster that serves real
@@ -45,13 +45,13 @@ import (
 )
 
 var (
-	port             = pflag.Int("port", atelet.DefaultPort, "Port to serve AteomHerder on. ate-api-server dials atelet.DefaultPort.")
+	port             = pflag.Int("port", atelet.DefaultPort, "Port to serve Atelet on. ate-api-server dials atelet.DefaultPort.")
 	healthListenAddr = pflag.String("health-listen-addr", ":9090", "Address to serve /healthz and /readyz on.")
 
 	grpcServerCredBundle = pflag.String("grpc-server-cred-bundle", "/run/podidentity.podcert.ate.dev/credential-bundle.pem", "Credential bundle presented as the serving certificate.")
 	clientCACerts        = pflag.String("client-ca-certs", "/run/podidentity.podcert.ate.dev/trust-bundle.pem", "CA bundle used to verify client certificates.")
 
-	delay                       = pflag.Duration("delay", 0, "How long each AteomHerder call takes before it succeeds.")
+	delay                       = pflag.Duration("delay", 0, "How long each Atelet call takes before it succeeds.")
 	delayRun                    = pflag.Duration("delay-run", -1, "Override --delay for Run. Negative uses --delay.")
 	delayRestore                = pflag.Duration("delay-restore", -1, "Override --delay for Restore. Negative uses --delay.")
 	delayCheckpoint             = pflag.Duration("delay-checkpoint", -1, "Override --delay for Checkpoint. Negative uses --delay.")
@@ -89,7 +89,7 @@ func main() {
 	}
 	h := &herder{delays: callDelays}
 	srv := grpc.NewServer(grpc.Creds(credentials.NewTLS(herderTLS)))
-	ateletpb.RegisterAteomHerderServer(srv, h)
+	ateletpb.RegisterAteletServer(srv, h)
 	health := &http.Server{Addr: *healthListenAddr, Handler: healthHandler(), ReadHeaderTimeout: 10 * time.Second}
 
 	slog.WarnContext(ctx, "Serving the fake atelet: actor lifecycle calls succeed without running any workload",
@@ -97,7 +97,7 @@ func main() {
 
 	go func() {
 		if err := srv.Serve(lis); err != nil {
-			serverboot.Fatal(ctx, "Failed to serve AteomHerder", err)
+			serverboot.Fatal(ctx, "Failed to serve Atelet", err)
 		}
 	}()
 	go func() {

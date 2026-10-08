@@ -31,7 +31,7 @@ func needsAssignmentReconcile(worker *ateapipb.Worker) bool {
 }
 
 // ReconcileAssignments brings a Worker's status.observed_epoch up to its epoch.
-// A raised epoch means its ateom restarted, taking with it the sandboxes of the
+// A raised epoch means its worker restarted, taking with it the sandboxes of the
 // Actors placed during an earlier epoch, so those Actors are crashed and their
 // assignments released before observed_epoch records it. A failure leaves
 // observed_epoch where it was, so the next pass redoes the release.
@@ -195,7 +195,7 @@ func (w *WorkerWorkflow) releaseEarlierAssignment(ctx context.Context, worker *a
 		return nil
 	}
 	if actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
-		if err := w.crashBoundActor(ctx, worker, actorRef, actor, "Releasing actor from a worker whose ateom restarted", crashMessageAteomRestarted); err != nil {
+		if err := w.crashBoundActor(ctx, worker, actorRef, actor, "Releasing actor from a restarted worker", crashMessageWorkerRestarted); err != nil {
 			return err
 		}
 	}

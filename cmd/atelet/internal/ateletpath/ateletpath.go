@@ -13,21 +13,21 @@
 // limitations under the License.
 
 // Package ateletpath is atelet's on-node layout: the per-actor directories
-// it passes to ateom as ActorDirs, and the directories only atelet uses.
+// it passes to worker as ActorDirs, and the directories only atelet uses.
 package ateletpath
 
 import (
 	"path/filepath"
 
 	"github.com/agent-substrate/substrate/internal/nodepath"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 )
 
 var (
 	// ImageCacheDir is the node-local OCI image layer cache (see
 	// internal/imagecache). It lives under BasePath so the cached layer
 	// directories are visible at the same path in atelet (which writes them)
-	// and in every ateom pod (which mounts them as overlay lowerdirs).
+	// and in every worker pod (which mounts them as overlay lowerdirs).
 	ImageCacheDir = filepath.Join(nodepath.BasePath, "image-cache")
 )
 
@@ -121,7 +121,7 @@ func DurableDirVolumeMountPoint(actorUID, volumeName string) string {
 // Run/Restore; each sandbox class excludes them differently:
 //
 //   - micro-VM captures by location: its checkpoint tars all of
-//     DurableDirVolumeMountsDir (see ateom-microvm's tarDurableVolumes), so
+//     DurableDirVolumeMountsDir (see ateworker-microvm's tarDurableVolumes), so
 //     system-info roots are excluded by living in this separate directory.
 //   - gVisor captures by declaration: durable mounts are registered with
 //     the sandbox (mount-hint annotations for FULL checkpoints, the
@@ -178,10 +178,10 @@ func VolumeHostPath(actorUID, volumeName string) string {
 	)
 }
 
-// ActorDirs is the directory set atelet passes to ateom for an actor. ateom
+// ActorDirs is the directory set atelet passes to worker for an actor. worker
 // takes these from the request rather than deriving them from the actor UID.
-func ActorDirs(actorUID string) *ateompb.ActorDirs {
-	return &ateompb.ActorDirs{
+func ActorDirs(actorUID string) *ateworkerpb.ActorDirs {
+	return &ateworkerpb.ActorDirs{
 		RootDir:                   ActorPath(actorUID),
 		OciBundleDir:              OCIBundleDir(actorUID),
 		CheckpointDir:             CheckpointStateDir(actorUID),

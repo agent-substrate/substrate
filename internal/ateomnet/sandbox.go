@@ -226,7 +226,7 @@ func installEgressRedirect(ns netns.Handle, egressPort uint16) error {
 	}
 	defer func() { _ = c.CloseLasting() }()
 
-	table := c.AddTable(&nftables.Table{Family: nftables.TableFamilyIPv4, Name: "ateom-actor"})
+	table := c.AddTable(&nftables.Table{Family: nftables.TableFamilyIPv4, Name: "worker-actor"})
 	prerouting := c.AddChain(&nftables.Chain{
 		Name: "prerouting", Table: table, Type: nftables.ChainTypeNAT,
 		Hooknum: nftables.ChainHookPrerouting, Priority: nftables.ChainPriorityNATDest,
@@ -428,7 +428,7 @@ func (s *SandboxSession) Close(ctx context.Context) error {
 	return errs
 }
 
-// SessionHolder is the one sandbox session a worker is serving, for the ateoms
+// SessionHolder is the one sandbox session a worker is serving, for the workers
 // to share what is otherwise the same locking, replacement and dialing in both.
 type SessionHolder struct {
 	mu      sync.Mutex

@@ -296,7 +296,7 @@ func main() {
 	templateReconciler := controlapi.NewActorTemplateReconciler(persistence, controlSrv, *templateResyncInterval)
 	templateReconciler.Start(shutdownCtx)
 
-	// Crash the Actors lost when a Worker's ateom restarts.
+	// Crash the Actors lost when a Worker's worker restarts.
 	workerAssignmentReconciler := controlapi.NewWorkerAssignmentReconciler(persistence, workerCache)
 	workerAssignmentReconciler.Start(shutdownCtx)
 

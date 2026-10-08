@@ -95,9 +95,9 @@ func ValidateMintActorCertificateRequest(ctx context.Context, req *ateapipb.Mint
 	return Validate_MintActorCertificateRequest(ctx, op, nil, req, nil)
 }
 
-func ValidateMintAteomActorCertificateRequest(ctx context.Context, req *ateapipb.MintAteomActorCertificateRequest) field.ErrorList {
+func ValidateMintWorkerActorCertificateRequest(ctx context.Context, req *ateapipb.MintWorkerActorCertificateRequest) field.ErrorList {
 	op := operation.Operation{Type: operation.Create}
-	return Validate_MintAteomActorCertificateRequest(ctx, op, nil, req, nil)
+	return Validate_MintWorkerActorCertificateRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateActorUpdate(ctx context.Context, fldPath *field.Path, newVal, oldVal *ateapipb.Actor, requireStatus bool) field.ErrorList {

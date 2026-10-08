@@ -22,7 +22,7 @@ import (
 	"strings"
 
 	"github.com/agent-substrate/substrate/internal/imagecache"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
@@ -43,7 +43,7 @@ const (
 type MicroVMOptions struct {
 	// ActorDirs are the actor's directories; volume bind sources under them are
 	// staged into the share.
-	ActorDirs   *ateompb.ActorDirs
+	ActorDirs   *ateworkerpb.ActorDirs
 	ContainerID string
 }
 
@@ -112,7 +112,7 @@ func mergeKataResources(from *specs.LinuxResources) *specs.LinuxResources {
 }
 
 // guestVolumeSource maps a volume's host directory to its guest path.
-func guestVolumeSource(hostPath string, actorDirs *ateompb.ActorDirs, containerID string) (string, error) {
+func guestVolumeSource(hostPath string, actorDirs *ateworkerpb.ActorDirs, containerID string) (string, error) {
 	for _, staged := range []struct{ host, guest string }{
 		{actorDirs.GetDurableDirVolumeMountsDir(), path.Join(GuestSharedDir, ShareDurable)},
 		{actorDirs.GetVolumesDir(), path.Join(GuestSharedDir, ShareCSI)},

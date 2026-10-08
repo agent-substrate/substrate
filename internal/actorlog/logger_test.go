@@ -150,7 +150,7 @@ func TestWrapContainerLogs_JSONInput(t *testing.T) {
 }
 
 // TestWrapContainerLogs_ActorTraceContextPassthrough covers the only way an actor
-// log line can join a trace: the actor emitting the spec fields itself. ateom
+// log line can join a trace: the actor emitting the spec fields itself. worker
 // cannot supply them, because one forwarder covers a whole stream.
 func TestWrapContainerLogs_ActorTraceContextPassthrough(t *testing.T) {
 	const (

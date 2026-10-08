@@ -147,7 +147,7 @@ func TestSnapshotLogAttrs(t *testing.T) {
 				{ateattr.SnapshotPhaseSandboxAssets, 10 * time.Millisecond},
 				{ateattr.SnapshotPhaseDownload, 310 * time.Millisecond},
 				{ateattr.SnapshotPhaseOCIUnpack, 50 * time.Millisecond},
-				{ateattr.SnapshotPhaseAteomRestore, 60 * time.Millisecond},
+				{ateattr.SnapshotPhaseWorkerRestore, 60 * time.Millisecond},
 				{ateattr.SnapshotPhaseTotal, 420 * time.Millisecond},
 			},
 			wantStrings: map[string]string{

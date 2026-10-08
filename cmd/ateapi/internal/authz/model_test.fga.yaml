@@ -286,13 +286,13 @@ tests:
           can_suspend: true
           can_revert: true
 
-  - name: 5. Node Restriction (can_mint_ateom_actor_credential)
+  - name: 5. Node Restriction (can_mint_worker_actor_credential)
     check:
       - user: node:node-1 # Active host node
         object: actor:runner-1
         assertions:
-          can_mint_ateom_actor_credential: true
+          can_mint_worker_actor_credential: true
       - user: node:node-2 # Other node
         object: actor:runner-1
         assertions:
-          can_mint_ateom_actor_credential: false
+          can_mint_worker_actor_credential: false

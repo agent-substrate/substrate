@@ -31,13 +31,13 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-type ateomSupportServer struct {
-	ateletpb.UnimplementedAteomSupportServer
+type workerSupportServer struct {
+	ateletpb.UnimplementedWorkerSupportServer
 	workers ateapipb.WorkerServiceClient
 }
 
-func (b *ateomSupportServer) MintActorCertificate(ctx context.Context, req *ateletpb.MintActorCertificateRequest) (*ateletpb.MintActorCertificateResponse, error) {
-	// Check which ateom is calling.
+func (b *workerSupportServer) MintActorCertificate(ctx context.Context, req *ateletpb.MintActorCertificateRequest) (*ateletpb.MintActorCertificateResponse, error) {
+	// Check which worker is calling.
 	_, err := authenticatedWorkerIdentity(ctx)
 	if err != nil {
 		return nil, err
@@ -49,11 +49,11 @@ func (b *ateomSupportServer) MintActorCertificate(ctx context.Context, req *atel
 		return nil, resources.ToGRPCStatusError(errs)
 	}
 
-	// TODO(identity): Check that we believe that this ateom is running the
+	// TODO(identity): Check that we believe that this worker is running the
 	// requested actor?  ate-api-server will further check that we (the atelet)
 	// are allowed to request a certificate for the actor.
 
-	resp, err := b.workers.MintAteomActorCertificate(ctx, &ateapipb.MintAteomActorCertificateRequest{
+	resp, err := b.workers.MintWorkerActorCertificate(ctx, &ateapipb.MintWorkerActorCertificateRequest{
 		Actor: &ateapipb.ObjectRef{
 			Atespace: req.GetActorAtespace(),
 			Name:     req.GetActorName(),
@@ -109,7 +109,7 @@ func verifyClientOnSameNode(node *substratex509.PodIdentity) func(tls.Connection
 // worker reports once, so an accepted call is the only thing that puts
 // capacity and hardware on the Worker, and a Worker record the syncer has not
 // created yet is the ordinary reason for a first attempt to fail.
-func (s *ateomSupportServer) RegisterWorker(ctx context.Context, req *ateletpb.RegisterWorkerRequest) (*ateletpb.RegisterWorkerResponse, error) {
+func (s *workerSupportServer) RegisterWorker(ctx context.Context, req *ateletpb.RegisterWorkerRequest) (*ateletpb.RegisterWorkerResponse, error) {
 	// Identity comes only from the mTLS certificate, never from the request:
 	// a worker can report its own capacity and hardware and no one else's.
 	workerIdentity, err := authenticatedWorkerIdentity(ctx)
@@ -175,7 +175,7 @@ func toHardwareIdentity(in *ateletpb.HardwareIdentity) *ateapipb.HardwareIdentit
 // here -- the actor is no longer assigned to this worker, or the suspend lost a
 // race to a resume, pause, or delete -- and the worker needs to tell those from
 // a transport failure it should retry.
-func (s *ateomSupportServer) RequestActorSuspend(ctx context.Context, req *ateletpb.RequestActorSuspendRequest) (*ateletpb.RequestActorSuspendResponse, error) {
+func (s *workerSupportServer) RequestActorSuspend(ctx context.Context, req *ateletpb.RequestActorSuspendRequest) (*ateletpb.RequestActorSuspendResponse, error) {
 	// Identity comes only from the mTLS certificate, never from the request: a
 	// worker can speak for the actors it hosts and no others. Which those are
 	// is the control plane's to know, so it is checked there against the

@@ -6704,10 +6704,10 @@ type Worker struct {
 	// +k8s:eachKey=+k8s:format=k8s-label-key
 	// +k8s:eachVal=+k8s:format=k8s-label-value
 	Labels map[string]string `protobuf:"bytes,9,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	// epoch counts the runs of the worker pod's ateom container: 1 for its first
+	// epoch counts the runs of the worker pod's worker container: 1 for its first
 	// run and one more for each restart. 0 means it has not been reported.
 	//
-	// A restarted ateom has lost the sandboxes of the Actors it was hosting, so
+	// A restarted worker has lost the sandboxes of the Actors it was hosting, so
 	// once epoch rises the control plane crashes every Actor placed during an
 	// earlier epoch; status.observed_epoch reports when that is done. It may only
 	// increase.
@@ -6859,7 +6859,7 @@ type WorkerStatus struct {
 	Allocated *WorkerResources `protobuf:"bytes,3,opt,name=allocated,proto3" json:"allocated,omitempty"`
 	// observed_epoch is the latest epoch whose earlier Actors the control plane
 	// has crashed and released. While it is below epoch, Actors placed before
-	// the ateom's last restart may still be reported as running.
+	// the worker's last restart may still be reported as running.
 	//
 	// +k8s:optional
 	// +k8s:minimum=0
@@ -7285,8 +7285,8 @@ func (x *RegisterWorkerResponse) GetWorker() *Worker {
 	return nil
 }
 
-// Request message for MintAteomActorCertificate.
-type MintAteomActorCertificateRequest struct {
+// Request message for MintWorkerActorCertificate.
+type MintWorkerActorCertificateRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The actor for which the certificate should be issued.
 	//
@@ -7312,20 +7312,20 @@ type MintAteomActorCertificateRequest struct {
 	sizeCache                 protoimpl.SizeCache
 }
 
-func (x *MintAteomActorCertificateRequest) Reset() {
-	*x = MintAteomActorCertificateRequest{}
+func (x *MintWorkerActorCertificateRequest) Reset() {
+	*x = MintWorkerActorCertificateRequest{}
 	mi := &file_ateapi_proto_msgTypes[101]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *MintAteomActorCertificateRequest) String() string {
+func (x *MintWorkerActorCertificateRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*MintAteomActorCertificateRequest) ProtoMessage() {}
+func (*MintWorkerActorCertificateRequest) ProtoMessage() {}
 
-func (x *MintAteomActorCertificateRequest) ProtoReflect() protoreflect.Message {
+func (x *MintWorkerActorCertificateRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_ateapi_proto_msgTypes[101]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -7337,34 +7337,34 @@ func (x *MintAteomActorCertificateRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use MintAteomActorCertificateRequest.ProtoReflect.Descriptor instead.
-func (*MintAteomActorCertificateRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use MintWorkerActorCertificateRequest.ProtoReflect.Descriptor instead.
+func (*MintWorkerActorCertificateRequest) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{101}
 }
 
-func (x *MintAteomActorCertificateRequest) GetActor() *ObjectRef {
+func (x *MintWorkerActorCertificateRequest) GetActor() *ObjectRef {
 	if x != nil {
 		return x.Actor
 	}
 	return nil
 }
 
-func (x *MintAteomActorCertificateRequest) GetActorUid() string {
+func (x *MintWorkerActorCertificateRequest) GetActorUid() string {
 	if x != nil {
 		return x.ActorUid
 	}
 	return ""
 }
 
-func (x *MintAteomActorCertificateRequest) GetCertificateSigningRequest() []byte {
+func (x *MintWorkerActorCertificateRequest) GetCertificateSigningRequest() []byte {
 	if x != nil {
 		return x.CertificateSigningRequest
 	}
 	return nil
 }
 
-// Response message for MintAteomActorCertificate.
-type MintAteomActorCertificateResponse struct {
+// Response message for MintWorkerActorCertificate.
+type MintWorkerActorCertificateResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Response contains a list of DER encoded certificates. The first entry is the
 	// leaf certificate, and any remaining entries are intermediates in
@@ -7374,20 +7374,20 @@ type MintAteomActorCertificateResponse struct {
 	sizeCache         protoimpl.SizeCache
 }
 
-func (x *MintAteomActorCertificateResponse) Reset() {
-	*x = MintAteomActorCertificateResponse{}
+func (x *MintWorkerActorCertificateResponse) Reset() {
+	*x = MintWorkerActorCertificateResponse{}
 	mi := &file_ateapi_proto_msgTypes[102]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *MintAteomActorCertificateResponse) String() string {
+func (x *MintWorkerActorCertificateResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*MintAteomActorCertificateResponse) ProtoMessage() {}
+func (*MintWorkerActorCertificateResponse) ProtoMessage() {}
 
-func (x *MintAteomActorCertificateResponse) ProtoReflect() protoreflect.Message {
+func (x *MintWorkerActorCertificateResponse) ProtoReflect() protoreflect.Message {
 	mi := &file_ateapi_proto_msgTypes[102]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -7399,12 +7399,12 @@ func (x *MintAteomActorCertificateResponse) ProtoReflect() protoreflect.Message 
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use MintAteomActorCertificateResponse.ProtoReflect.Descriptor instead.
-func (*MintAteomActorCertificateResponse) Descriptor() ([]byte, []int) {
+// Deprecated: Use MintWorkerActorCertificateResponse.ProtoReflect.Descriptor instead.
+func (*MintWorkerActorCertificateResponse) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{102}
 }
 
-func (x *MintAteomActorCertificateResponse) GetActorCertificates() [][]byte {
+func (x *MintWorkerActorCertificateResponse) GetActorCertificates() [][]byte {
 	if x != nil {
 		return x.ActorCertificates
 	}
@@ -8422,12 +8422,12 @@ const file_ateapi_proto_rawDesc = "" +
 	"\bcapacity\x18\x02 \x01(\v2\x17.ateapi.WorkerResourcesR\bcapacity\x124\n" +
 	"\bhardware\x18\x03 \x01(\v2\x18.ateapi.HardwareIdentityR\bhardware\"@\n" +
 	"\x16RegisterWorkerResponse\x12&\n" +
-	"\x06worker\x18\x01 \x01(\v2\x0e.ateapi.WorkerR\x06worker\"\xa8\x01\n" +
-	" MintAteomActorCertificateRequest\x12'\n" +
+	"\x06worker\x18\x01 \x01(\v2\x0e.ateapi.WorkerR\x06worker\"\xa9\x01\n" +
+	"!MintWorkerActorCertificateRequest\x12'\n" +
 	"\x05actor\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\x12\x1b\n" +
 	"\tactor_uid\x18\x02 \x01(\tR\bactorUid\x12>\n" +
-	"\x1bcertificate_signing_request\x18\x03 \x01(\fR\x19certificateSigningRequest\"R\n" +
-	"!MintAteomActorCertificateResponse\x12-\n" +
+	"\x1bcertificate_signing_request\x18\x03 \x01(\fR\x19certificateSigningRequest\"S\n" +
+	"\"MintWorkerActorCertificateResponse\x12-\n" +
 	"\x12actor_certificates\x18\x01 \x03(\fR\x11actorCertificates\"\x8d\x01\n" +
 	"\x1aRequestActorSuspendRequest\x12)\n" +
 	"\x06worker\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x06worker\x12'\n" +
@@ -8534,10 +8534,10 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x17GetAtespaceAccessPolicy\x12&.ateapi.GetAtespaceAccessPolicyRequest\x1a\x14.ateapi.AccessPolicy\"\x00\x12_\n" +
 	"\x1aCreateAtespaceAccessPolicy\x12).ateapi.CreateAtespaceAccessPolicyRequest\x1a\x14.ateapi.AccessPolicy\"\x00\x12_\n" +
 	"\x1aUpdateAtespaceAccessPolicy\x12).ateapi.UpdateAtespaceAccessPolicyRequest\x1a\x14.ateapi.AccessPolicy\"\x00\x12_\n" +
-	"\x1aDeleteAtespaceAccessPolicy\x12).ateapi.DeleteAtespaceAccessPolicyRequest\x1a\x14.ateapi.AccessPolicy\"\x002\xb2\x02\n" +
+	"\x1aDeleteAtespaceAccessPolicy\x12).ateapi.DeleteAtespaceAccessPolicyRequest\x1a\x14.ateapi.AccessPolicy\"\x002\xb5\x02\n" +
 	"\rWorkerService\x12O\n" +
-	"\x0eRegisterWorker\x12\x1d.ateapi.RegisterWorkerRequest\x1a\x1e.ateapi.RegisterWorkerResponse\x12p\n" +
-	"\x19MintAteomActorCertificate\x12(.ateapi.MintAteomActorCertificateRequest\x1a).ateapi.MintAteomActorCertificateResponse\x12^\n" +
+	"\x0eRegisterWorker\x12\x1d.ateapi.RegisterWorkerRequest\x1a\x1e.ateapi.RegisterWorkerResponse\x12s\n" +
+	"\x1aMintWorkerActorCertificate\x12).ateapi.MintWorkerActorCertificateRequest\x1a*.ateapi.MintWorkerActorCertificateResponse\x12^\n" +
 	"\x13RequestActorSuspend\x12\".ateapi.RequestActorSuspendRequest\x1a#.ateapi.RequestActorSuspendResponseB9Z7github.com/agent-substrate/substrate/pkg/proto/ateapipbb\x06proto3"
 
 var (
@@ -8663,8 +8663,8 @@ var file_ateapi_proto_goTypes = []any{
 	(*ActorAssignment)(nil),                    // 105: ateapi.ActorAssignment
 	(*RegisterWorkerRequest)(nil),              // 106: ateapi.RegisterWorkerRequest
 	(*RegisterWorkerResponse)(nil),             // 107: ateapi.RegisterWorkerResponse
-	(*MintAteomActorCertificateRequest)(nil),   // 108: ateapi.MintAteomActorCertificateRequest
-	(*MintAteomActorCertificateResponse)(nil),  // 109: ateapi.MintAteomActorCertificateResponse
+	(*MintWorkerActorCertificateRequest)(nil),  // 108: ateapi.MintWorkerActorCertificateRequest
+	(*MintWorkerActorCertificateResponse)(nil), // 109: ateapi.MintWorkerActorCertificateResponse
 	(*RequestActorSuspendRequest)(nil),         // 110: ateapi.RequestActorSuspendRequest
 	(*RequestActorSuspendResponse)(nil),        // 111: ateapi.RequestActorSuspendResponse
 	(*AccessPolicy)(nil),                       // 112: ateapi.AccessPolicy
@@ -8818,7 +8818,7 @@ var file_ateapi_proto_depIdxs = []int32{
 	104, // 132: ateapi.RegisterWorkerRequest.capacity:type_name -> ateapi.WorkerResources
 	103, // 133: ateapi.RegisterWorkerRequest.hardware:type_name -> ateapi.HardwareIdentity
 	101, // 134: ateapi.RegisterWorkerResponse.worker:type_name -> ateapi.Worker
-	29,  // 135: ateapi.MintAteomActorCertificateRequest.actor:type_name -> ateapi.ObjectRef
+	29,  // 135: ateapi.MintWorkerActorCertificateRequest.actor:type_name -> ateapi.ObjectRef
 	29,  // 136: ateapi.RequestActorSuspendRequest.worker:type_name -> ateapi.ObjectRef
 	29,  // 137: ateapi.RequestActorSuspendRequest.actor:type_name -> ateapi.ObjectRef
 	12,  // 138: ateapi.RequestActorSuspendResponse.actor:type_name -> ateapi.Actor
@@ -8876,7 +8876,7 @@ var file_ateapi_proto_depIdxs = []int32{
 	119, // 190: ateapi.Control.UpdateAtespaceAccessPolicy:input_type -> ateapi.UpdateAtespaceAccessPolicyRequest
 	120, // 191: ateapi.Control.DeleteAtespaceAccessPolicy:input_type -> ateapi.DeleteAtespaceAccessPolicyRequest
 	106, // 192: ateapi.WorkerService.RegisterWorker:input_type -> ateapi.RegisterWorkerRequest
-	108, // 193: ateapi.WorkerService.MintAteomActorCertificate:input_type -> ateapi.MintAteomActorCertificateRequest
+	108, // 193: ateapi.WorkerService.MintWorkerActorCertificate:input_type -> ateapi.MintWorkerActorCertificateRequest
 	110, // 194: ateapi.WorkerService.RequestActorSuspend:input_type -> ateapi.RequestActorSuspendRequest
 	12,  // 195: ateapi.Control.GetActor:output_type -> ateapi.Actor
 	12,  // 196: ateapi.Control.CreateActor:output_type -> ateapi.Actor
@@ -8921,7 +8921,7 @@ var file_ateapi_proto_depIdxs = []int32{
 	112, // 235: ateapi.Control.UpdateAtespaceAccessPolicy:output_type -> ateapi.AccessPolicy
 	112, // 236: ateapi.Control.DeleteAtespaceAccessPolicy:output_type -> ateapi.AccessPolicy
 	107, // 237: ateapi.WorkerService.RegisterWorker:output_type -> ateapi.RegisterWorkerResponse
-	109, // 238: ateapi.WorkerService.MintAteomActorCertificate:output_type -> ateapi.MintAteomActorCertificateResponse
+	109, // 238: ateapi.WorkerService.MintWorkerActorCertificate:output_type -> ateapi.MintWorkerActorCertificateResponse
 	111, // 239: ateapi.WorkerService.RequestActorSuspend:output_type -> ateapi.RequestActorSuspendResponse
 	195, // [195:240] is the sub-list for method output_type
 	150, // [150:195] is the sub-list for method input_type

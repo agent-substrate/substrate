@@ -30,7 +30,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 )
 
-// testActors stands in for the ateom's own ceiling, which is a flag in
+// testActors stands in for the worker's own ceiling, which is a flag in
 // production rather than a constant here.
 const testActors = 7
 

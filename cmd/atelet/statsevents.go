@@ -26,7 +26,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/actorlog"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/contextlogging"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 )
 
@@ -155,7 +155,7 @@ func (aw *asyncWriter) Write(p []byte) (int, error) {
 // pool-level metric spike can pivot to the actors behind it. A zero-valued
 // pool omits the label pair rather than emitting empty strings, following the
 // metric channel's rule.
-func (e *statsEventEmitter) emit(ctx context.Context, kind string, s *ateompb.WorkloadStatsSample, pool workerPoolRef) {
+func (e *statsEventEmitter) emit(ctx context.Context, kind string, s *ateworkerpb.WorkloadStatsSample, pool workerPoolRef) {
 	if e == nil || s == nil {
 		return
 	}

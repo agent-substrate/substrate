@@ -93,7 +93,7 @@ func TestRequestActorSuspend(t *testing.T) {
 	if diff := cmp.Diff(want, suspender.calls, protocmp.Transform()); diff != "" {
 		t.Errorf("suspend calls mismatch (-want +got):\n%s", diff)
 	}
-	// The caller gets the actor as the workflow left it, so an ateom can see
+	// The caller gets the actor as the workflow left it, so a worker can see
 	// whether the suspend it asked for actually happened.
 	if diff := cmp.Diff(suspended, got.GetActor(), protocmp.Transform()); diff != "" {
 		t.Errorf("returned actor mismatch (-want +got):\n%s", diff)

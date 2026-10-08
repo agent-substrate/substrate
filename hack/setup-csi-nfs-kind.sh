@@ -47,11 +47,11 @@ spec:
       containers:
       - name: nfs
         volumeMounts:
-        - name: ateom-dir
+        - name: ate-base
           mountPath: /var/lib/ate
           mountPropagation: Bidirectional
       volumes:
-      - name: ateom-dir
+      - name: ate-base
         hostPath:
           path: /var/lib/ate
           type: DirectoryOrCreate

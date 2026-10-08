@@ -176,5 +176,5 @@ func actorFromFilterState(md *extproc.RequestMetadata) (resources.ActorRef, erro
 	if id == "" {
 		return resources.ActorRef{}, errors.New("no actor identity in filter state")
 	}
-	return resources.ActorRefFromAteomForActorSPIFFEID(id)
+	return resources.ActorRefFromWorkerForActorSPIFFEID(id)
 }

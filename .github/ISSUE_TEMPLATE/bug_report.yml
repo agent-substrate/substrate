@@ -98,7 +98,7 @@ body:
     id: logs
     attributes:
       label: Relevant Logs and Diagnostic Output
-      description: Please provide relevant logs from atelet, ateom, ate apiserver, or kubectl describe.
+      description: Please provide relevant logs from atelet, ateworker, ate apiserver, or kubectl describe.
       render: shell
       placeholder: |
         # Paste relevant logs or command output here

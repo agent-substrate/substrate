@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // Package wakeupprobe polls a container's HTTP wakeup endpoint from inside an
-// ateom. The intent is to detect the moment a container's HTTP server
+// worker. The intent is to detect the moment a container's HTTP server
 // starts accepting connections with single-millisecond latency: while the
 // server is still booting the kernel returns RST in microseconds, so a
 // sub-millisecond poll loop spends almost no time blocked, and once the
@@ -31,7 +31,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -70,7 +70,7 @@ func newClient(dial DialFunc) *http.Client {
 // WaitAll blocks until every container with a wakeup probe set reports 200 through dial,
 // or returns the first error. Containers without a probe are skipped (their
 // absence means "no wakeup gate").
-func WaitAll(ctx context.Context, containers []*ateompb.Container, actorIP string, dial DialFunc) error {
+func WaitAll(ctx context.Context, containers []*ateworkerpb.Container, actorIP string, dial DialFunc) error {
 	g, gctx := errgroup.WithContext(ctx)
 	for _, ac := range containers {
 		if ac.GetWakeupProbe() == nil {
@@ -86,7 +86,7 @@ func WaitAll(ctx context.Context, containers []*ateompb.Container, actorIP strin
 
 // Wait polls the configured HTTP endpoint through dial until it returns 200,
 // the context is cancelled, or the overall deadline is exceeded.
-func Wait(ctx context.Context, containerName string, probe *ateompb.WakeupProbe, actorIP string, dial DialFunc) error {
+func Wait(ctx context.Context, containerName string, probe *ateworkerpb.WakeupProbe, actorIP string, dial DialFunc) error {
 	url, err := URL(probe, actorIP)
 	if err != nil {
 		return fmt.Errorf("invalid wakeup probe config for %q: %w", containerName, err)
@@ -141,7 +141,7 @@ func Wait(ctx context.Context, containerName string, probe *ateompb.WakeupProbe,
 	}
 }
 
-func pollTimeout(probe *ateompb.WakeupProbe) (time.Duration, error) {
+func pollTimeout(probe *ateworkerpb.WakeupProbe) (time.Duration, error) {
 	s := probe.GetTimeoutSeconds()
 	if s <= 0 {
 		return 0, fmt.Errorf("timeout_seconds must be positive, got %d", s)
@@ -169,7 +169,7 @@ func tryOnce(ctx context.Context, client *http.Client, url string) (bool, error)
 
 // URL builds the probe endpoint URL. Exported so callers and tests can
 // validate a probe spec before kicking off a Wait.
-func URL(probe *ateompb.WakeupProbe, actorIP string) (string, error) {
+func URL(probe *ateworkerpb.WakeupProbe, actorIP string) (string, error) {
 	hg := probe.GetHttpGet()
 	if hg == nil {
 		return "", fmt.Errorf("httpGet is required")

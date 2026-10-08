@@ -222,9 +222,9 @@ def _query_window_quantile(
     )
 
 
-# Each ateom pod's whole cgroup, systemd or cgroupfs; drops the pause container.
+# Each worker pod's whole cgroup, systemd or cgroupfs; drops the pause container.
 POD_PSI_SELECTOR = (
-    'pod=~"benchmark-ateom.*", container="", '
+    'pod=~"benchmark-worker.*", container="", '
     'id=~".*[/-]pod[^/]+(\\\\.slice)?"'
 )
 
@@ -275,10 +275,10 @@ def _steady_values(
 
 
 def _rpc_buckets(method: str) -> str:
-    """The duration bucket selector for one AteomHerder RPC."""
+    """The duration bucket selector for one Atelet RPC."""
     return (
         'rpc_server_call_duration_seconds_bucket'
-        f'{{rpc_method="atelet.AteomHerder/{method}"}}'
+        f'{{rpc_method="atelet.Atelet/{method}"}}'
     )
 
 
@@ -291,7 +291,7 @@ def _harvest_cluster_packing(
 ) -> dict[str, Any]:
     """Workers with an actor over all workers, per sample and as percentiles."""
     packing_query = (
-        'ate_workerpool_workers{ate_workerpool_name="benchmark-ateom"}'
+        'ate_workerpool_workers{ate_workerpool_name="benchmark-worker"}'
     )
     packing_series = query_prometheus_range(
         prom_url, packing_query, start_ts, end_ts, step="10s"
@@ -437,7 +437,7 @@ def _harvest_snapshots(
     snap_avg = _ratio(delta(snap_selector % "_sum"), count, scale=mb)
 
     def rpc_mean(method: str) -> float | None:
-        sel = f'{{rpc_method="atelet.AteomHerder/{method}"}}'
+        sel = f'{{rpc_method="atelet.Atelet/{method}"}}'
         return _ratio(
             delta(f"rpc_server_call_duration_seconds_sum{sel}"),
             delta(f"rpc_server_call_duration_seconds_count{sel}"),

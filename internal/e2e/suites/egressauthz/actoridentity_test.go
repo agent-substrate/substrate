@@ -101,7 +101,7 @@ func mintActorCredential(t *testing.T, ca *localca.CA, atespace, actorName strin
 		URIs: []*url.URL{{
 			Scheme: "spiffe",
 			Host:   "substrate-actor.local",
-			Path:   path.Join("ateom-for-actor", atespace, actorName),
+			Path:   path.Join("worker-for-actor", atespace, actorName),
 		}},
 		NotBefore:             time.Now().Add(-5 * time.Minute),
 		NotAfter:              time.Now().Add(actorCertificateLifetime),

@@ -29,7 +29,7 @@ The PEP MUST require and verify the client certificate before accepting a CONNEC
 ```text
 CURRENT CONNECT EGRESS PATH (one tunnel per actor TCP connection except destination port 53)
 
-  Actor sandbox                 Worker pod / ateom                  Egress PEP                     Authorized upstream
+  Actor sandbox                 Worker pod / ateworker                  Egress PEP                     Authorized upstream
   +------------------+          +--------------------------+        +-------------------------+    +------------------+
   | Actor process    |          | nftables                 |        | mTLS listener           |    | Target selected  |
   | (untrusted)      |          | TCP REDIRECT             |        | + CONNECT terminator    |    | under policy     |

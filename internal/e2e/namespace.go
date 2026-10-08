@@ -109,7 +109,7 @@ func CreateNamespace(t *testing.T) *Namespace {
 	// single-node kind cluster shows up as worker pods that never get scheduled.
 	//
 	// A failed test keeps its namespace, for the same reason RetainNamespaces does:
-	// the worker pods are where the ateom (and micro-VM guest console) logs live,
+	// the worker pods are where the worker (and micro-VM guest console) logs live,
 	// and they are gone the moment the namespace is.
 	t.Cleanup(func() {
 		if t.Failed() {
@@ -165,7 +165,7 @@ func deleteNamespace(name string) {
 
 // RetainNamespaces leaves the registered namespaces in the cluster and reports
 // them, instead of deleting them. Used when the suite failed: the namespaces'
-// worker pods hold the ateom (and, for micro-VM workers, guest) logs a
+// worker pods hold the worker (and, for micro-VM workers, guest) logs a
 // post-mortem needs, and they are deleted long before anyone can read them.
 //
 // Passing tests have already released theirs, so what is left is the failures'

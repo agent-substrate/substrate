@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package atunnel carries actor ingress and egress through an ateom worker pod.
+// Package atunnel carries actor ingress and egress through a worker pod.
 package atunnel
 
 import (

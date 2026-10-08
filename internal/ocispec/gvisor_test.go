@@ -63,8 +63,8 @@ func TestShapeGVisorBindsTheNamedResolvConf(t *testing.T) {
 		{name: "default is the worker pod's", wantSource: "/etc/resolv.conf"},
 		{
 			name:       "a sandbox may name its own",
-			resolvConf: "/var/lib/ateom-gvisor/actors/a/resolv.conf",
-			wantSource: "/var/lib/ateom-gvisor/actors/a/resolv.conf",
+			resolvConf: "/var/lib/ateworker-gvisor/actors/a/resolv.conf",
+			wantSource: "/var/lib/ateworker-gvisor/actors/a/resolv.conf",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

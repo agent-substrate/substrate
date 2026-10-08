@@ -1,6 +1,6 @@
 # Running the microVM runtime locally
 
-The microVM sandbox class (`ateom-microvm`: a Kata guest on Cloud Hypervisor)
+The microVM sandbox class (`ateworker-microvm`: a Kata guest on Cloud Hypervisor)
 needs `/dev/kvm`, which takes some extra setup compared to the default gVisor
 path. This guide covers just that delta: getting a KVM-capable Docker
 environment — on Linux, or on Apple Silicon macOS via

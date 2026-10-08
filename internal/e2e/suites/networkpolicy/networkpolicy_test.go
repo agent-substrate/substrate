@@ -52,7 +52,7 @@ func TestNetworkPolicyLifecycleAndReconciliation(t *testing.T) {
 		},
 		Spec: v1alpha1.WorkerPoolSpec{
 			Replicas:    1,
-			WorkerImage: "ateom:v1",
+			WorkerImage: "worker:v1",
 		},
 	}
 

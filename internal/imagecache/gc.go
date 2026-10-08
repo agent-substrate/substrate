@@ -23,7 +23,7 @@ package imagecache
 // is evictable unless vetoed by, in order:
 //
 //  1. the root set — bundle overlay specs under the actors dir, the same
-//     authority that hands out mounts (atelet cannot see the ateoms' mount
+//     authority that hands out mounts (atelet cannot see the workers' mount
 //     namespaces);
 //  2. min-age — records and layers younger than minAge are never touched,
 //     covering the pull → spec-write → mount window;

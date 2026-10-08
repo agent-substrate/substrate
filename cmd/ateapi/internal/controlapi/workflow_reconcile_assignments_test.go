@@ -49,7 +49,7 @@ func seedEpochWorker(t *testing.T, ctx context.Context, persistence store.Interf
 }
 
 // raiseEpoch sends the UpdateWorker the syncer sends when the worker pod's
-// ateom restarts.
+// worker restarts.
 func raiseEpoch(t *testing.T, ctx context.Context, svc *RPCService, persistence store.Interface, epoch int64) (*ateapipb.Worker, error) {
 	t.Helper()
 	return svc.UpdateWorker(ctx, &ateapipb.UpdateWorkerRequest{
@@ -196,10 +196,10 @@ func TestReconcileAssignments_CrashesEarlierActors(t *testing.T) {
 	}
 	got := mustGetActor(t, ctx, persistence)
 	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
-		t.Errorf("actor state = %v, want CRASHED: its sandbox died with the ateom", got.GetStatus().GetState())
+		t.Errorf("actor state = %v, want CRASHED: its sandbox died with the worker", got.GetStatus().GetState())
 	}
-	if msg := got.GetStatus().GetCrash().GetMessage(); msg != crashMessageAteomRestarted {
-		t.Errorf("crash message = %q, want %q", msg, crashMessageAteomRestarted)
+	if msg := got.GetStatus().GetCrash().GetMessage(); msg != crashMessageWorkerRestarted {
+		t.Errorf("crash message = %q, want %q", msg, crashMessageWorkerRestarted)
 	}
 	if got.GetStatus().GetWorkerAssignment() != nil {
 		t.Errorf("actor worker assignment = %v, want it cleared", got.GetStatus().GetWorkerAssignment())
@@ -213,7 +213,7 @@ func TestReconcileAssignments_CrashesEarlierActors(t *testing.T) {
 }
 
 // An Actor placed after the raise was stamped with the new epoch, so it runs on
-// the restarted ateom and is kept.
+// the restarted worker and is kept.
 func TestReconcileAssignments_KeepsActorsPlacedAfterRaise(t *testing.T) {
 	ctx := context.Background()
 	svc, persistence := newWorkerAPIService(t)
@@ -428,7 +428,7 @@ func (s *hookedStore) UpdateWorker(ctx context.Context, name string, preconditio
 }
 
 // An Actor bound again in the current epoch after the pass listed its earlier
-// assignment runs on the restarted ateom, so it is kept.
+// assignment runs on the restarted worker, so it is kept.
 func TestReconcileAssignments_KeepsActorReboundSinceList(t *testing.T) {
 	ctx := context.Background()
 	svc, persistence := newWorkerAPIService(t)

@@ -283,7 +283,7 @@ The CSI Node plugin runs as a DaemonSet on each worker node and handles `NodeSta
 
 ### Mount Propagation Requirements
 
-When the CSI Node plugin mounts an external volume (such as an NFS share or a formatted block device), the filesystem mount is created inside the plugin container. For Substrate's node supervisor (`atelet`) and worker sandboxes (`ateom-gvisor`) on the host to see this filesystem mount, the following requirements must be met:
+When the CSI Node plugin mounts an external volume (such as an NFS share or a formatted block device), the filesystem mount is created inside the plugin container. For Substrate's node supervisor (`atelet`) and worker sandboxes (`ateworker-gvisor`) on the host to see this filesystem mount, the following requirements must be met:
 
 1. **Bidirectional Mount Propagation (`mountPropagation: Bidirectional`):** The volume mount on the host Substrate target directory (e.g. `/var/lib/ate`) in the CSI Node plugin container must have `mountPropagation: Bidirectional`. This ensures that any mounts made by the CSI plugin inside the container propagate back to the host filesystem.
 2. **Unix Domain Socket Accessibility:** The CSI Node plugin must place its Unix domain socket under `/var/lib/kubelet/plugins/<driverName>/` (or the path defined in `CSIDriverConfig.spec.nodeSocketOverride`), which is shared with `atelet`.
@@ -333,7 +333,7 @@ spec:
         - name: socket-dir
           mountPath: /csi
         # Target directory with bidirectional mount propagation
-        - name: ateom-dir
+        - name: ate-base
           mountPath: /var/lib/ate
           mountPropagation: Bidirectional
       volumes:
@@ -341,7 +341,7 @@ spec:
         hostPath:
           path: /var/lib/kubelet/plugins/csi-nfsplugin
           type: DirectoryOrCreate
-      - name: ateom-dir
+      - name: ate-base
         hostPath:
           path: /var/lib/ate
           type: DirectoryOrCreate

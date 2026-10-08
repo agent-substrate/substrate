@@ -180,7 +180,7 @@ func TestSchedule(t *testing.T) {
 		},
 		{
 			// A worker that has not said it can hold more admits one, so this is
-			// the behavior every worker has until an ateom reports otherwise.
+			// the behavior every worker has until a worker reports otherwise.
 			name: "unset actor capacity admits one actor",
 			fleet: fleet{
 				worker("w-busy", "gvisor", "node-a", tierTwo, assigned("demo", "other")),

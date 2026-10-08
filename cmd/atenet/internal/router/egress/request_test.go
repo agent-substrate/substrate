@@ -31,7 +31,7 @@ import (
 )
 
 // testActorSPIFFEID is the identity filter state the CONNECT chain shares.
-const testActorSPIFFEID = "spiffe://substrate-actor.local/ateom-for-actor/default/my-actor"
+const testActorSPIFFEID = "spiffe://substrate-actor.local/worker-for-actor/default/my-actor"
 
 // testDialed is the IP:port the test actor's kernel dialed for a callout on
 // leg: the default port of the protocol that leg carries.
@@ -371,7 +371,7 @@ func TestRequestLegPolicyLookup(t *testing.T) {
 // could be allowed through it, and warms the cache for the requests inside.
 func TestConnectLegRequiresAPolicy(t *testing.T) {
 	ca := newTestCA(t, "actor-identity-ca")
-	leaf := ca.issueActorCert(t, "spiffe://substrate-actor.local/ateom-for-actor/default/my-actor", actorCertOptions{})
+	leaf := ca.issueActorCert(t, "spiffe://substrate-actor.local/worker-for-actor/default/my-actor", actorCertOptions{})
 
 	tests := []struct {
 		name   string

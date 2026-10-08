@@ -201,7 +201,7 @@ func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef reso
 	if err != nil {
 		return "", fmt.Errorf("while getting atelet conn for node %q: %w", assignment.GetNodeName(), err)
 	}
-	client := ateletpb.NewAteomHerderClient(ateletConn)
+	client := ateletpb.NewAteletClient(ateletConn)
 
 	workloadSpec, err := workloadSpecFromActorTemplate(actorTemplate, actor, nil)
 	if err != nil {
@@ -212,7 +212,7 @@ func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef reso
 	// actor is currently running (recorded on-node at Run/Restore) and pins it
 	// into the snapshot manifest.
 	req := &ateletpb.CheckpointRequest{
-		TargetAteomUid:        assignment.GetWorkerPodUid(),
+		TargetWorkerPodUid:    assignment.GetWorkerPodUid(),
 		Atespace:              actor.GetMetadata().GetAtespace(),
 		ActorName:             actor.GetMetadata().GetName(),
 		ActorTemplateAtespace: actor.GetActorTemplate().GetAtespace(),
@@ -238,7 +238,7 @@ func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef reso
 // ensurePausedSnapshotUploaded suspends a PAUSED actor by telling the atelet
 // on the node holding the local pause snapshot to upload it to the actor's
 // persisted in-progress snapshot location; no workload runs, so there is no
-// ateom to checkpoint. Retries re-send the same semantic request: the
+// worker to checkpoint. Retries re-send the same semantic request: the
 // destination is minted once and the upload overwrites deterministic object
 // names, with the remote manifest as the commit marker.
 func (w *ActorWorkflow) ensurePausedSnapshotUploaded(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (wireSnapshotScope string, err error) {
@@ -263,7 +263,7 @@ func (w *ActorWorkflow) ensurePausedSnapshotUploaded(ctx context.Context, actorR
 		// retryable rather than crash.
 		return "", fmt.Errorf("while getting atelet conn for node %q: %w", nodeName, err)
 	}
-	client := ateletpb.NewAteomHerderClient(ateletConn)
+	client := ateletpb.NewAteletClient(ateletConn)
 
 	req := &ateletpb.UploadPausedCheckpointRequest{
 		Atespace:               actor.GetMetadata().GetAtespace(),

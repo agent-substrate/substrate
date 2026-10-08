@@ -1066,7 +1066,7 @@ func TestLoadActorForResume_RunningActorShortCircuits(t *testing.T) {
 // capturingAtelet records the last Restore and Run request it receives, so a
 // test can assert on the exact wire request the resume workflow sends.
 type capturingAtelet struct {
-	ateletpb.UnimplementedAteomHerderServer
+	ateletpb.UnimplementedAteletServer
 
 	mu      sync.Mutex
 	restore *ateletpb.RestoreRequest
@@ -1125,7 +1125,7 @@ func newWireCaptureWorkflow(t *testing.T, persistence store.Interface) (*ActorWo
 
 	fake := &capturingAtelet{}
 	srv := grpc.NewServer()
-	ateletpb.RegisterAteomHerderServer(srv, fake)
+	ateletpb.RegisterAteletServer(srv, fake)
 	lis := bufconn.Listen(1 << 20)
 	go func() {
 		if err := srv.Serve(lis); err != nil {

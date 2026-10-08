@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package ateom registers an ateom worker with the control plane through the
+// Package ateom registers a worker with the control plane through the
 // node-local atelet, reporting its compute capacity and hardware identity.
 package ateom
 
@@ -35,10 +35,10 @@ import (
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 )
 
-// Files the atecontroller projects into the ateom container from the downward
+// Files the atecontroller projects into the worker container from the downward
 // API, in milli-cores and bytes.
 const (
-	CapacityMountPath = "/run/ateom-capacity"
+	CapacityMountPath = "/run/worker-capacity"
 	CPULimitFile      = "cpu_milli"
 	MemoryLimitFile   = "memory_bytes"
 )
@@ -49,7 +49,7 @@ const (
 	maxReportBackoff     = 30 * time.Second
 )
 
-// FromFiles combines the downward API compute limits with the ateom's own
+// FromFiles combines the downward API compute limits with the worker's own
 // actor limit.
 //
 // A limit that is missing or unparseable is reported as zero, which the control
@@ -73,7 +73,7 @@ func fromDir(dir string, actors int) *ateletpb.WorkerResources {
 	}
 }
 
-// probeHardware returns the hardware identity that actors hosted by this ateom
+// probeHardware returns the hardware identity that actors hosted by this worker
 // observe.
 func probeHardware() *ateletpb.HardwareIdentity {
 	return &ateletpb.HardwareIdentity{
@@ -112,7 +112,7 @@ func readLimit(path string) int64 {
 	return value
 }
 
-// ReportConfig is what an ateom needs to reach the atelet on its node.
+// ReportConfig is what a worker needs to reach the atelet on its node.
 type ReportConfig struct {
 	SocketPath           string
 	CredentialBundlePath string
@@ -121,16 +121,16 @@ type ReportConfig struct {
 	// names atelet's namespace, not this worker's, so it is configured rather
 	// than derived from the downward API.
 	AteletSPIFFEID string
-	// Actors is how many actors this ateom will host at once.
+	// Actors is how many actors this worker will host at once.
 	Actors int
 }
 
-// Report tells the node-local atelet what this ateom can supply and its
+// Report tells the node-local atelet what this worker can supply and its
 // hardware identity, retrying until it is accepted or ctx ends.
 //
 // Retrying is what makes a single report durable: atelet only accepts once the
 // control plane has recorded it, and the Worker record may not exist yet when
-// an ateom first comes up. Nothing else reports this, so giving up would leave
+// a worker first comes up. Nothing else reports this, so giving up would leave
 // the Worker holding no capacity and hosting nothing.
 func Report(ctx context.Context, cfg ReportConfig) error {
 	tlsConfig, err := ateletdial.TLSConfig(cfg.CredentialBundlePath, cfg.TrustBundlePath, cfg.AteletSPIFFEID)
@@ -180,6 +180,6 @@ func reportOnce(ctx context.Context, socketPath string, tlsConfig *tls.Config, r
 	defer conn.Close()
 	callCtx, cancel := context.WithTimeout(ctx, reportTimeout)
 	defer cancel()
-	_, err = ateletpb.NewAteomSupportClient(conn).RegisterWorker(callCtx, req)
+	_, err = ateletpb.NewWorkerSupportClient(conn).RegisterWorker(callCtx, req)
 	return err
 }

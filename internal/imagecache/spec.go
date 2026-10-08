@@ -25,7 +25,7 @@ import (
 )
 
 // ImageVolumeMountPath is where one image volume is composed inside a
-// bundle. atelet writes it into config.json as the bind source; the ateom
+// bundle. atelet writes it into config.json as the bind source; the worker
 // mounts the volume there (see setupImageVolumes).
 func ImageVolumeMountPath(bundlePath, volumeName string) string {
 	return filepath.Join(bundlePath, "volumes", volumeName)
@@ -38,7 +38,7 @@ func ImageVolumeMountPath(bundlePath, volumeName string) string {
 const OverlaySpecFileName = "rootfs-overlay.json"
 
 // OverlaySpec is the contract between atelet (which cannot mount) and the
-// ateom runtimes (which mount the rootfs overlay just before running the
+// worker runtimes (which mount the rootfs overlay just before running the
 // workload). The overlay's mountpoint, upperdir, and workdir are always the
 // bundle-local rootfs/, upper/, and work/ directories — derived from the
 // bundle path by the consumer rather than trusted from the file.

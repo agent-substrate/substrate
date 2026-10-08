@@ -25,7 +25,7 @@ import (
 	"strings"
 
 	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -37,7 +37,7 @@ import (
 // ToGRPCStatusError turns validation errors into the InvalidArgument error an
 // RPC handler responds with. Callers check len(errs) > 0 first.
 //
-// TODO: Delete once atelet's AteomSupport server returns apierrors, and use
+// TODO: Delete once atelet's WorkerSupport server returns apierrors, and use
 // ToAPIError instead.
 func ToGRPCStatusError(errs field.ErrorList) error {
 	return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
@@ -88,20 +88,20 @@ func IsValidResourceName(name string) bool {
 	return len(content.IsDNS1123Label(name)) == 0
 }
 
-// ValidateAteomUID rejects a target ateom pod UID that could escape the host
-// path built from it: the ateom control socket (.../ateoms/<uid>/ateom.sock).
+// ValidateWorkerPodUID rejects a target worker pod UID that could escape the host
+// path built from it: the worker control socket (.../workers/<uid>/worker.sock).
 // Kubernetes pod UIDs are UUIDs, which are valid DNS-1123 labels, so a label
 // check accepts every legitimate value while rejecting separators and "..".
-func ValidateAteomUID(targetAteomUID string) error {
-	if errs := content.IsDNS1123Label(targetAteomUID); len(errs) > 0 {
-		return fmt.Errorf("invalid target ateom UID %q: %s", targetAteomUID, strings.Join(errs, "; "))
+func ValidateWorkerPodUID(targetWorkerUID string) error {
+	if errs := content.IsDNS1123Label(targetWorkerUID); len(errs) > 0 {
+		return fmt.Errorf("invalid target worker pod UID %q: %s", targetWorkerUID, strings.Join(errs, "; "))
 	}
 	return nil
 }
 
-// ValidateActorDirs checks that every directory atelet passes to ateom is
+// ValidateActorDirs checks that every directory atelet passes to worker is
 // set, absolute and clean.
-func ValidateActorDirs(actorDirs *ateompb.ActorDirs, fldPath *field.Path) field.ErrorList {
+func ValidateActorDirs(actorDirs *ateworkerpb.ActorDirs, fldPath *field.Path) field.ErrorList {
 	if actorDirs == nil {
 		return field.ErrorList{field.Required(fldPath, "")}
 	}
@@ -131,7 +131,7 @@ func validateAbsDir(dir string, fldPath *field.Path) field.ErrorList {
 }
 
 // ValidateRuntimeAssetPath ensures p is a regular file under root, with no symlinks
-// ateom runs these as root, so they must be assets atelet fetched into root
+// worker runs these as root, so they must be assets atelet fetched into root
 func ValidateRuntimeAssetPath(root, p string, fldPath *field.Path) field.ErrorList {
 	if p == "" {
 		return field.ErrorList{field.Required(fldPath, "")}
@@ -180,7 +180,7 @@ func ValidateContainerNames(names []string) error {
 
 // ValidateRunscHash ensures the runsc SHA-256 hash is exactly 64 hex
 // characters before it is used to build the on-disk binary path
-// (static-files/runsc-<hash>) and, on a cache hit, returned for ateom to
+// (static-files/runsc-<hash>) and, on a cache hit, returned for worker to
 // execute. Without this, a hash containing path separators or ".." could
 // point the cache-hit early return (and the download target) at an arbitrary
 // binary outside the static-files dir.

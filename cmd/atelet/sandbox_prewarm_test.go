@@ -176,7 +176,7 @@ func TestPrewarmProcessRetries(t *testing.T) {
 	if err := indexer.Add(cfg); err != nil {
 		t.Fatalf("indexer.Add: %v", err)
 	}
-	herder := &AteomHerder{anonGCSClient: fakeObjectStorage{err: errors.New("bucket unavailable")}}
+	herder := &Atelet{anonGCSClient: fakeObjectStorage{err: errors.New("bucket unavailable")}}
 	p := newSandboxPrewarmer(herder, nil, listersv1alpha1.NewSandboxConfigLister(indexer), false)
 
 	p.queue.Add(cfg.Name)
@@ -212,7 +212,7 @@ func TestPrewarmProcessReappliesClassGate(t *testing.T) {
 	}
 	// Any fetch would fail and requeue, so NumRequeues distinguishes
 	// "skipped" from "attempted and failed".
-	herder := &AteomHerder{anonGCSClient: fakeObjectStorage{err: errors.New("bucket unavailable")}}
+	herder := &Atelet{anonGCSClient: fakeObjectStorage{err: errors.New("bucket unavailable")}}
 	p := newSandboxPrewarmer(herder, nil, listersv1alpha1.NewSandboxConfigLister(indexer), false)
 
 	p.queue.Add(cfg.Name)
@@ -271,7 +271,7 @@ func TestPrewarmPauseImage(t *testing.T) {
 	cfg.Spec.PauseImage = pauseRef
 
 	p := &sandboxPrewarmer{
-		assets: &AteomHerder{anonGCSClient: fakeObjectStorage{data: content}},
+		assets: &Atelet{anonGCSClient: fakeObjectStorage{data: content}},
 		images: okStore,
 	}
 	if err := p.prewarm(ctx, cfg); err != nil {
@@ -284,7 +284,7 @@ func TestPrewarmPauseImage(t *testing.T) {
 	failCfg := gvisorConfig("gvisor-default", "gs://bucket/runsc", fmt.Sprintf("%x", sha256.Sum256([]byte("other runsc"))))
 	failCfg.Spec.PauseImage = pauseRef
 	p = &sandboxPrewarmer{
-		assets: &AteomHerder{anonGCSClient: fakeObjectStorage{err: errors.New("bucket unavailable")}},
+		assets: &Atelet{anonGCSClient: fakeObjectStorage{err: errors.New("bucket unavailable")}},
 		images: failStore,
 	}
 	if err := p.prewarm(ctx, failCfg); err == nil {
@@ -336,7 +336,7 @@ func TestPrewarmTimeout(t *testing.T) {
 
 	cfg := gvisorConfig("gvisor-default", "gs://bucket/runsc", fmt.Sprintf("%x", sha256.Sum256([]byte("hung runsc"))))
 	cfg.Spec.PauseImage = ""
-	p := &sandboxPrewarmer{assets: &AteomHerder{anonGCSClient: hangingObjectStorage{}}}
+	p := &sandboxPrewarmer{assets: &Atelet{anonGCSClient: hangingObjectStorage{}}}
 
 	done := make(chan error, 1)
 	go func() { done <- p.prewarm(context.Background(), cfg) }()
@@ -377,7 +377,7 @@ func TestSandboxAssetPrewarmDownloads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("imagecache.New: %v", err)
 	}
-	herder := &AteomHerder{anonGCSClient: fakeObjectStorage{data: content}}
+	herder := &Atelet{anonGCSClient: fakeObjectStorage{data: content}}
 	// Handler first, informer start second, mirroring main: atelet startup
 	// must never wait on this informer's sync, and the initial List replays
 	// the pre-existing config into the handler as an Add.

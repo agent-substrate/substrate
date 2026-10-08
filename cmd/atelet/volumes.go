@@ -29,7 +29,7 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-func (s *AteomHerder) mountExternalVolumes(ctx context.Context, actorUID string, volumes []*ateletpb.Volume) error {
+func (s *Atelet) mountExternalVolumes(ctx context.Context, actorUID string, volumes []*ateletpb.Volume) error {
 	for _, vol := range volumes {
 		ext := vol.GetExternal()
 		if ext == nil {
@@ -56,7 +56,7 @@ func (s *AteomHerder) mountExternalVolumes(ctx context.Context, actorUID string,
 	return nil
 }
 
-func (s *AteomHerder) unmountExternalVolumes(ctx context.Context, actorUID string, volumes []*ateletpb.Volume) error {
+func (s *Atelet) unmountExternalVolumes(ctx context.Context, actorUID string, volumes []*ateletpb.Volume) error {
 	var errs []error
 	for _, vol := range volumes {
 		ext := vol.GetExternal()
@@ -83,7 +83,7 @@ func (s *AteomHerder) unmountExternalVolumes(ctx context.Context, actorUID strin
 	return errors.Join(errs...)
 }
 
-func (s *AteomHerder) getPlugin(ctx context.Context, driverName string) (volume.VolumePluginWorkerPlane, error) {
+func (s *Atelet) getPlugin(ctx context.Context, driverName string) (volume.VolumePluginWorkerPlane, error) {
 	s.mu.RLock()
 	plugin, ok := s.volumePlugins[driverName]
 	s.mu.RUnlock()

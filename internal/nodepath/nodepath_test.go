@@ -19,20 +19,20 @@ import (
 	"testing"
 )
 
-func TestAteomPath(t *testing.T) {
+func TestWorkerPath(t *testing.T) {
 	podUID := "123e4567-e89b-12d3-a456-426614174000"
 
-	path := AteomPath(podUID)
-	expectedSuffix := "/ateoms/" + podUID
+	path := WorkerPath(podUID)
+	expectedSuffix := "/workers/" + podUID
 	if !strings.HasSuffix(path, expectedSuffix) {
 		t.Errorf("expected path to end with %s, got %s", expectedSuffix, path)
 	}
 }
 
-func TestAteomSocketPathLimits(t *testing.T) {
+func TestWorkerSocketPathLimits(t *testing.T) {
 	podUID := "123e4567-e89b-12d3-a456-426614174000"
 
-	sockPath := AteomSocketPath(podUID)
+	sockPath := WorkerSocketPath(podUID)
 
 	// Unix domain socket path limit is 107 bytes (108 with NUL terminator)
 	const maxUnixSocketLen = 107
@@ -41,7 +41,7 @@ func TestAteomSocketPathLimits(t *testing.T) {
 	}
 
 	// Verify it is deterministic
-	sockPath2 := AteomSocketPath(podUID)
+	sockPath2 := WorkerSocketPath(podUID)
 	if sockPath != sockPath2 {
 		t.Errorf("expected deterministic socket paths, got %q and %q", sockPath, sockPath2)
 	}
@@ -57,24 +57,24 @@ func TestAteletOTLPSocketPath(t *testing.T) {
 	}
 
 	// It must sit under BasePath: that is the host directory already mounted at
-	// the same path into atelet and into every ateom pod, which is the whole
+	// the same path into atelet and into every worker pod, which is the whole
 	// reason the relay needs no new volume.
 	if !strings.HasPrefix(sockPath, BasePath+"/") {
-		t.Errorf("AteletOTLPSocketPath() = %q, want it under %q so ateom and atelet see the same file", sockPath, BasePath)
+		t.Errorf("AteletOTLPSocketPath() = %q, want it under %q so worker and atelet see the same file", sockPath, BasePath)
 	}
 
-	// Node-scoped, so it must not collide with any per-pod ateom socket.
-	if other := AteomSocketPath("123e4567-e89b-12d3-a456-426614174000"); sockPath == other {
-		t.Errorf("AteletOTLPSocketPath() collides with AteomSocketPath: %q", sockPath)
+	// Node-scoped, so it must not collide with any per-pod worker socket.
+	if other := WorkerSocketPath("123e4567-e89b-12d3-a456-426614174000"); sockPath == other {
+		t.Errorf("AteletOTLPSocketPath() collides with WorkerSocketPath: %q", sockPath)
 	}
 }
 
-func TestAteomPathUniqueness(t *testing.T) {
+func TestWorkerPathUniqueness(t *testing.T) {
 	uid1 := "123e4567-e89b-12d3-a456-426614174000"
 	uid2 := "987f6543-e21b-32d1-b654-246614174111"
 
-	path1 := AteomPath(uid1)
-	path2 := AteomPath(uid2)
+	path1 := WorkerPath(uid1)
+	path2 := WorkerPath(uid2)
 
 	if path1 == path2 {
 		t.Errorf("expected different paths for different pod UIDs, got %q", path1)

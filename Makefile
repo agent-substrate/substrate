@@ -59,8 +59,8 @@ CONTROL_PLANE_IMAGES := ./cmd/ateapi \
                         ./cmd/atenet \
                         ./cmd/credential-provider/kubernetes-secrets \
                         ./cmd/podcertcontroller
-WORKER_IMAGES        := ./cmd/ateom-gvisor \
-                        ./cmd/ateom-microvm
+WORKER_IMAGES        := ./cmd/ateworker-gvisor \
+                        ./cmd/ateworker-microvm
 DEMO_IMAGES          := ./demos/counter \
                         ./demos/egress \
                         ./demos/multi-template/fspersist \
@@ -69,7 +69,7 @@ ALL_IMAGES           := $(CONTROL_PLANE_IMAGES) $(WORKER_IMAGES)
 
 # Developer builds may leave components out, e.g. the microvm image, the one
 # image built from a debian base rather than distroless static:
-#   make build-images SKIP_IMAGES=./cmd/ateom-microvm
+#   make build-images SKIP_IMAGES=./cmd/ateworker-microvm
 # Overriding IMAGES or DEMOS on the command line builds exactly that set.
 SKIP_IMAGES ?=
 IMAGES      := $(filter-out $(SKIP_IMAGES),$(ALL_IMAGES))

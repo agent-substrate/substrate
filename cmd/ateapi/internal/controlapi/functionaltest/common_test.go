@@ -539,7 +539,7 @@ func createWorkerPool(t *testing.T, tc *testContext, ns string, name string, lab
 		},
 		Spec: atev1alpha1.WorkerPoolSpec{
 			Replicas:    1,
-			WorkerImage: "ateom@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+			WorkerImage: "worker@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
 		},
 	}
 	_, err := tc.substrateClient.ApiV1alpha1().WorkerPools(ns).Create(context.Background(), wp, metav1.CreateOptions{})
@@ -655,7 +655,7 @@ func createWorkerPod(t *testing.T, tc *testContext, ns string, name string, node
 			SandboxClass:    string(pool.Spec.SandboxClass),
 			Labels:          pool.GetLabels(),
 			// Capacity is not settable here: a Worker gets it from its own
-			// ateom's report, which the reportWorkerCapacity below stands in
+			// worker's report, which the reportWorkerCapacity below stands in
 			// for. These pods declare no limits, so only the actor ceiling is
 			// reported; see setWorkerActorCapacity for tests needing more.
 		},

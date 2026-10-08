@@ -19,7 +19,7 @@ import "github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 // ActorAttribution is what telemetry about an actor is attributed to: an
 // ActorRef plus the two things a ref does not carry, the server-assigned uid and
 // the template the actor was built from. Shared by ateattr, actorlog, and
-// ateom's usage sampling so those producers cannot drift apart.
+// worker's usage sampling so those producers cannot drift apart.
 //
 // Unrelated to the credential sense of "actor identity" elsewhere in the repo
 // (ateapi's ActorIdentity service, substratex509)

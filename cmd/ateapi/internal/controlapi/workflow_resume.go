@@ -627,7 +627,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 	if err != nil {
 		return tele, err
 	}
-	client := ateletpb.NewAteomHerderClient(ateletConn)
+	client := ateletpb.NewAteletClient(ateletConn)
 
 	workloadSpec, err := workloadSpecFromActorTemplate(actorTemplate, actor, volumePublishContexts)
 	if err != nil {
@@ -654,7 +654,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		tele.SnapshotKind = ateattr.SnapshotKindLocal
 
 		req := &ateletpb.RestoreRequest{
-			TargetAteomUid:        assignment.GetWorkerPodUid(),
+			TargetWorkerPodUid:    assignment.GetWorkerPodUid(),
 			Atespace:              actor.GetMetadata().GetAtespace(),
 			ActorName:             actor.GetMetadata().GetName(),
 			ActorTemplateAtespace: actor.GetActorTemplate().GetAtespace(),
@@ -686,7 +686,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		}
 		tele.WireSnapshotScope = ateattr.SnapshotScopeValue(scope)
 		req := &ateletpb.RestoreRequest{
-			TargetAteomUid:        assignment.GetWorkerPodUid(),
+			TargetWorkerPodUid:    assignment.GetWorkerPodUid(),
 			Atespace:              actor.GetMetadata().GetAtespace(),
 			ActorName:             actor.GetMetadata().GetName(),
 			ActorTemplateAtespace: actor.GetActorTemplate().GetAtespace(),
@@ -714,7 +714,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		tele.SnapshotKind = ateattr.SnapshotKindBoot
 
 		req := &ateletpb.RunRequest{
-			TargetAteomUid:        assignment.GetWorkerPodUid(),
+			TargetWorkerPodUid:    assignment.GetWorkerPodUid(),
 			Atespace:              actor.GetMetadata().GetAtespace(),
 			ActorName:             actor.GetMetadata().GetName(),
 			ActorTemplateAtespace: actor.GetActorTemplate().GetAtespace(),

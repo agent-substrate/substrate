@@ -21,16 +21,16 @@ import (
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 )
 
-// delays is how long each AteomHerder call takes before it succeeds: the
+// delays is how long each Atelet call takes before it succeeds: the
 // data plane's share of it.
 type delays struct {
 	run, restore, checkpoint, uploadPausedCheckpoint, terminate time.Duration
 }
 
-// herder answers every AteomHerder call with success after its delay, without
+// herder answers every Atelet call with success after its delay, without
 // running or saving any workload. Actors it "runs" do not exist.
 type herder struct {
-	ateletpb.UnimplementedAteomHerderServer
+	ateletpb.UnimplementedAteletServer
 
 	delays delays
 }

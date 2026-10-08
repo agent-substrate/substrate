@@ -44,7 +44,7 @@
 #   workerWaitTimeout
 #                  Optional (default 300, set by workloads/deploy.sh).
 #                  Whole seconds to wait after the WorkerPool deploy for
-#                  the ateom worker pods to become ready. Raise it for
+#                  the worker pods to become ready. Raise it for
 #                  large workerCount fleets whose image pulls or scheduling
 #                  outrun the default.
 #   ateArgs        Optional. List of strings appended verbatim to

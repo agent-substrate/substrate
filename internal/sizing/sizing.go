@@ -13,10 +13,10 @@
 // limitations under the License.
 
 // Package sizing right-sizes a sandbox to the actor's declared resource limits.
-// The actor's limits arrive over the ateom RPCs (RunWorkload / RestoreWorkload)
-// as a SandboxSize. ateom-gvisor calls ApplyToOCISpec to write them into the
+// The actor's limits arrive over the worker RPCs (RunWorkload / RestoreWorkload)
+// as a SandboxSize. ateworker-gvisor calls ApplyToOCISpec to write them into the
 // sandbox container's OCI spec, which runsc then applies to the host cgroup
-// leaf. ateom-microvm does not call ApplyToOCISpec: it uses SandboxSize only to
+// leaf. ateworker-microvm does not call ApplyToOCISpec: it uses SandboxSize only to
 // size the VM itself (VCPUs, and MemoryBytes via resolveGuestMemMiB). A
 // micro-VM container's own cgroup limit comes instead from that container's
 // declared `spec.containers[].resources`, written into its OCI spec by atelet.
@@ -43,8 +43,8 @@ type SandboxSize struct {
 }
 
 // FromLimits builds a SandboxSize from an actor's declared limits (millicores and
-// bytes) as carried on the ateom RPCs. It is runtime-agnostic; both ateom-gvisor
-// and ateom-microvm call it. Negative values are clamped to zero ("unset").
+// bytes) as carried on the worker RPCs. It is runtime-agnostic; both ateworker-gvisor
+// and ateworker-microvm call it. Negative values are clamped to zero ("unset").
 func FromLimits(milliCPU, memoryBytes int64) SandboxSize {
 	if milliCPU < 0 {
 		milliCPU = 0
@@ -72,7 +72,7 @@ func (s SandboxSize) VCPUs() int {
 
 // ApplyToOCISpec writes the pod's CPU/memory limits into the container OCI spec's
 // linux.resources so the sandbox cgroup is created with the right values. This is
-// the gVisor sandbox-cgroup path: only ateom-gvisor calls it, so runsc applies the
+// the gVisor sandbox-cgroup path: only ateworker-gvisor calls it, so runsc applies the
 // result to the host cgroup leaf. Fields that are unset in SandboxSize are left
 // untouched, preserving any existing values on the spec.
 func (s SandboxSize) ApplyToOCISpec(spec *specs.Spec) {

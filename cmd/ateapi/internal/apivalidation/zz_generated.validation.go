@@ -5886,13 +5886,13 @@ func Validate_MintActorJWTRequest(
 	return errs
 }
 
-// Validate_MintAteomActorCertificateRequest validates an instance of MintAteomActorCertificateRequest according
+// Validate_MintWorkerActorCertificateRequest validates an instance of MintWorkerActorCertificateRequest according
 // to declarative validation rules in the API schema.
-func Validate_MintAteomActorCertificateRequest(
+func Validate_MintWorkerActorCertificateRequest(
 	ctx context.Context, op operation.Operation, fldPath *field.Path,
-	obj, oldObj *ateapipb.MintAteomActorCertificateRequest) (errs field.ErrorList) {
+	obj, oldObj *ateapipb.MintWorkerActorCertificateRequest) (errs field.ErrorList) {
 
-	{ // field ateapipb.MintAteomActorCertificateRequest.Actor
+	{ // field ateapipb.MintWorkerActorCertificateRequest.Actor
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj *ateapipb.ObjectRef,
@@ -5932,13 +5932,13 @@ func Validate_MintAteomActorCertificateRequest(
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.MintAteomActorCertificateRequest) *ateapipb.ObjectRef {
+			func(oldObj *ateapipb.MintWorkerActorCertificateRequest) *ateapipb.ObjectRef {
 				return oldObj.Actor
 			})
 		errs = append(errs, fn(fldPath.Child("actor"), obj.Actor, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateapipb.MintAteomActorCertificateRequest.ActorUid
+	{ // field ateapipb.MintWorkerActorCertificateRequest.ActorUid
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj *string,
@@ -5964,13 +5964,13 @@ func Validate_MintAteomActorCertificateRequest(
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.MintAteomActorCertificateRequest) *string {
+			func(oldObj *ateapipb.MintWorkerActorCertificateRequest) *string {
 				return &oldObj.ActorUid
 			})
 		errs = append(errs, fn(fldPath.Child("actor_uid"), &obj.ActorUid, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateapipb.MintAteomActorCertificateRequest.CertificateSigningRequest
+	{ // field ateapipb.MintWorkerActorCertificateRequest.CertificateSigningRequest
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj []byte,
@@ -5996,7 +5996,7 @@ func Validate_MintAteomActorCertificateRequest(
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateapipb.MintAteomActorCertificateRequest) []byte {
+			func(oldObj *ateapipb.MintWorkerActorCertificateRequest) []byte {
 				return oldObj.CertificateSigningRequest
 			})
 		errs = append(errs, fn(fldPath.Child("certificate_signing_request"), obj.CertificateSigningRequest, oldVal, oldObj != nil)...)

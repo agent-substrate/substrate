@@ -315,7 +315,7 @@ worker eviction path, loses no state, and resumes on demand. If they
 roll, wait for `READY` to equal `DESIRED` again on every serving pool
 (`kubectl get workerpools -A`) before step 4.
 
-The move of the node state root from `/var/lib/ateom-gvisor` to
+The move of the node state root from `/var/lib/ateworker-gvisor` to
 `/var/lib/ate` is such a release. A worker that lands on a node whose
 atelet still uses the old path reaches it only once step 5 moves that node.
 The old directory can be deleted afterwards.
@@ -354,11 +354,11 @@ go run ./cmd/ate-setup publish worker-images
 ```
 
 If you are using prebuilt images there is nothing to publish. The new worker image
-is the release's `ateom-<sandboxClass>` image under the same repo and
+is the release's `ateworker-<sandboxClass>` image under the same repo and
 tag as the control plane, pinned by digest:
 
 ```bash
-NEW_IMAGE=$IMAGE_REPO/ateom-gvisor:$IMAGE_TAG@$(crane digest $IMAGE_REPO/ateom-gvisor:$IMAGE_TAG)
+NEW_IMAGE=$IMAGE_REPO/ateworker-gvisor:$IMAGE_TAG@$(crane digest $IMAGE_REPO/ateworker-gvisor:$IMAGE_TAG)
 ```
 
 ### 4. Create the new pool
@@ -376,7 +376,7 @@ else, including the `metadata.labels` the scheduler matches actors
 by, carries over as is.
 
 ```bash
-NEW_IMAGE=<the ateom ref from step 3, for this pool's sandboxClass>
+NEW_IMAGE=<the ateworker ref from step 3, for this pool's sandboxClass>
 
 kubectl -n $NS get workerpool $OLD_WORKERPOOL -o json \
   | jq --arg name "$NEW_WORKERPOOL" --arg image "$NEW_IMAGE" --arg version "$NEW_VERSION" '

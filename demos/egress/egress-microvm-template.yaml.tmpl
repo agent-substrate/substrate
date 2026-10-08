@@ -14,8 +14,8 @@
 
 # Substrate ActorTemplate resource (protojson-shaped ateapipb.ActorTemplate,
 # NOT the ate.dev/v1alpha1 CRD) for the micro-VM egress demo. The actor's
-# outbound TCP is redirected into atunnel by nftables in the ateom
-# (prepareActorEgress), which the micro-VM ateom implements the same way the
+# outbound TCP is redirected into atunnel by nftables in the ateworker
+# (prepareActorEgress), which the micro-VM ateworker implements the same way the
 # gVisor one does — this fixture is what proves it end to end. Delivery of the
 # projected trust bundle into the sandbox also differs by class — a read-only
 # bind for gVisor, the unified virtio-fs share for the guest here — so the
@@ -62,8 +62,8 @@ volumes:
         names:
         - egress-mitm.ate.dev
         path: trust-bundle.pem
-# Sandbox size: without these the guest boots at ateom's default size
-# (2GiB). ateom applies them to the VM (see internal/sizing). Quantities are
+# Sandbox size: without these the guest boots at ateworker's default size
+# (2GiB). ateworker applies them to the VM (see internal/sizing). Quantities are
 # strings in the proto.
 resources:
   limits:

@@ -27,7 +27,7 @@ func uniformDelays(d time.Duration) delays {
 	return delays{run: d, restore: d, checkpoint: d, uploadPausedCheckpoint: d, terminate: d}
 }
 
-// herderCalls invokes every AteomHerder method the herder implements.
+// herderCalls invokes every Atelet method the herder implements.
 func herderCalls(h *herder) map[string]func(context.Context) error {
 	return map[string]func(context.Context) error{
 		"Run": func(ctx context.Context) error {

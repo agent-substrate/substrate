@@ -102,7 +102,7 @@ func runAndCleanup(m *testing.M) int {
 	}
 
 	// Namespaces are deleted only on success. A failed run keeps them: the actor
-	// lives in a worker pod there, and its ateom logs (for a micro-VM worker, the
+	// lives in a worker pod there, and its worker logs (for a micro-VM worker, the
 	// guest's console tail too) are the only record of why it failed. Deleting the
 	// namespace takes those pods with it before anyone — a developer or CI's
 	// post-failure log dump — can read them.

@@ -57,7 +57,7 @@ WORKER_MEMORY=""
 # --otlp-endpoint sets it. Without the flag, resolve_otlp_endpoint reads the
 # address that the control plane uses.
 OTLP_ENDPOINT=""
-# The timeout, in whole seconds, for waiting for the ateom worker pods to be
+# The timeout, in whole seconds, for waiting for the worker pods to be
 # ready.
 WAIT_TIMEOUT_SECS=300
 
@@ -77,7 +77,7 @@ usage() {
   echo "  --otlp-endpoint URL         The address to which an instrumented actor container"
   echo "                              sends telemetry (default: the endpoint in the"
   echo "                              ate-otel-config ConfigMap)"
-  echo "  --wait-timeout SECONDS      The timeout in seconds for waiting for the ateom workers to be ready (default: 300)"
+  echo "  --wait-timeout SECONDS      The timeout in seconds for waiting for the workers to be ready (default: 300)"
   echo "  -h, --help                  Show this help message"
 }
 
@@ -198,9 +198,9 @@ deploy() {
   echo "Deploying workloads (worker_count=${WORKER_COUNT}, actor_memory=${ACTOR_MEMORY}, worker_memory=${WORKER_MEMORY:-unset}, otlp_endpoint=${OTLP_ENDPOINT})..."
   substitute "${POOL_MANIFEST}" | hack/run-tool.sh ko apply -f -
   echo "Waiting for worker pool to be ready (timeout: ${WAIT_TIMEOUT_SECS}s)..."
-  kubectl wait --for=create deployment/benchmark-ateom \
+  kubectl wait --for=create deployment/benchmark-worker \
     --namespace=benchmark-workloads --timeout="${WAIT_TIMEOUT_SECS}s"
-  kubectl rollout status deployment/benchmark-ateom \
+  kubectl rollout status deployment/benchmark-worker \
     --namespace=benchmark-workloads --timeout="${WAIT_TIMEOUT_SECS}s"
 
   # The store enforces that a template's atespace exists at create time.

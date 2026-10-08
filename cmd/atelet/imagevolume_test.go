@@ -96,7 +96,7 @@ func newImageVolumeStore(t *testing.T) *imagecache.Store {
 	return s
 }
 
-// A mounted image volume records its layers for ateom to compose, and its
+// A mounted image volume records its layers for worker to compose, and its
 // digest so the cache GC can protect them.
 func TestResolveImageVolumes_RecordsLayersAndDigest(t *testing.T) {
 	host := imageVolumeTestRegistry(t)

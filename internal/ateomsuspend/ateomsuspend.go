@@ -13,11 +13,11 @@
 // limitations under the License.
 
 // Package ateomsuspend asks the control plane, through the node-local atelet,
-// to suspend an actor an ateom hosts.
+// to suspend an actor a worker hosts.
 //
-// This is the upward half of a suspend: the request travels ateom -> atelet ->
+// This is the upward half of a suspend: the request travels worker -> atelet ->
 // ateapi, and the suspend the control plane decides to run travels back down
-// the ordinary path as a Checkpoint into the ateom that asked. A caller must
+// the ordinary path as a Checkpoint into the worker that asked. A caller must
 // therefore hold no lock that Checkpoint needs while a request is in flight.
 package ateomsuspend
 
@@ -66,7 +66,7 @@ func retryBackoff() wait.Backoff {
 	}
 }
 
-// Config is what an ateom needs to reach the atelet on its node.
+// Config is what a worker needs to reach the atelet on its node.
 type Config struct {
 	SocketPath           string
 	CredentialBundlePath string
@@ -77,13 +77,13 @@ type Config struct {
 	AteletSPIFFEID string
 }
 
-// Requester asks for suspends of the actors one ateom hosts.
+// Requester asks for suspends of the actors one worker hosts.
 type Requester struct {
 	socketPath string
 	tlsConfig  *tls.Config
 }
 
-// NewRequester loads the ateom's credentials once, at startup, so a
+// NewRequester loads the worker's credentials once, at startup, so a
 // misconfiguration surfaces there rather than at the first request.
 func NewRequester(cfg Config) (*Requester, error) {
 	tlsConfig, err := ateletdial.TLSConfig(cfg.CredentialBundlePath, cfg.TrustBundlePath, cfg.AteletSPIFFEID)
@@ -94,7 +94,7 @@ func NewRequester(cfg Config) (*Requester, error) {
 }
 
 // Actor names the actor to suspend. The UID pins the request to the
-// incarnation the ateom is hosting, so a request cannot outlive its actor and
+// incarnation the worker is hosting, so a request cannot outlive its actor and
 // suspend a recreation that took the same name.
 type Actor struct {
 	Atespace string
@@ -188,7 +188,7 @@ func retryable(err error) bool {
 func requestOnce(ctx context.Context, conn grpc.ClientConnInterface, actor Actor) error {
 	callCtx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
-	_, err := ateletpb.NewAteomSupportClient(conn).RequestActorSuspend(callCtx, &ateletpb.RequestActorSuspendRequest{
+	_, err := ateletpb.NewWorkerSupportClient(conn).RequestActorSuspend(callCtx, &ateletpb.RequestActorSuspendRequest{
 		ActorAtespace: actor.Atespace,
 		ActorName:     actor.Name,
 		ActorUid:      actor.UID,

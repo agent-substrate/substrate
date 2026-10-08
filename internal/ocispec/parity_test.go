@@ -22,14 +22,14 @@ import (
 	"testing"
 
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 	"github.com/agent-substrate/substrate/internal/sizing"
 	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
 const testActorUID = "actor_uid"
 
-var parityActorDirs = &ateompb.ActorDirs{
+var parityActorDirs = &ateworkerpb.ActorDirs{
 	RootDir:                   "/node/actors/a",
 	OciBundleDir:              "/node/actors/a/bundles",
 	DurableDirVolumeMountsDir: "/node/actors/a/durable-dir",

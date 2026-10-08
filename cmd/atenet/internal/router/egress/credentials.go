@@ -84,7 +84,7 @@ func (h *Handler) applyEffects(ctx context.Context, ref resources.ActorRef, dest
 		return nil, extproc.NewReqError(envoy_type.StatusCode_InternalServerError, deniedBody)
 	}
 
-	// Atunnel connected to us with an ateom-for-actor SPIFFE ID; translate it
+	// Atunnel connected to us with a worker-for-actor SPIFFE ID; translate it
 	// to a pure actor SPIFFE ID for plugins to make decisions on.
 	actorSpiffeID := resources.ActorSPIFFEID(ref).String()
 

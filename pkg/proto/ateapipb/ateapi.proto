@@ -2079,10 +2079,10 @@ message Worker {
   // +k8s:eachVal=+k8s:format=k8s-label-value
   map<string, string> labels = 9;
 
-  // epoch counts the runs of the worker pod's ateom container: 1 for its first
+  // epoch counts the runs of the worker pod's worker container: 1 for its first
   // run and one more for each restart. 0 means it has not been reported.
   //
-  // A restarted ateom has lost the sandboxes of the Actors it was hosting, so
+  // A restarted worker has lost the sandboxes of the Actors it was hosting, so
   // once epoch rises the control plane crashes every Actor placed during an
   // earlier epoch; status.observed_epoch reports when that is done. It may only
   // increase.
@@ -2137,7 +2137,7 @@ message WorkerStatus {
 
   // observed_epoch is the latest epoch whose earlier Actors the control plane
   // has crashed and released. While it is below epoch, Actors placed before
-  // the ateom's last restart may still be reported as running.
+  // the worker's last restart may still be reported as running.
   //
   // +k8s:optional
   // +k8s:minimum=0
@@ -2230,20 +2230,20 @@ service WorkerService {
   // RegisterWorker records what a Worker can hold and its hardware identity in
   // one write, so a Worker is never schedulable without hardware to match
   // snapshots against. Capacity and hardware are the Worker's to report rather
-  // than the control plane's to infer: they are what the ateom can actually
+  // than the control plane's to infer: they are what the worker can actually
   // supply and expose, only its node can observe them, and a fleet may run
-  // mixed ateom versions.
+  // mixed worker versions.
   //
   // atelet calls this with its own client certificate, as it does for
   // MintCert. Idempotent: re-sending the same capacity and hardware is not a
   // write.
   rpc RegisterWorker(RegisterWorkerRequest) returns (RegisterWorkerResponse);
 
-  // Create a Substrate-issued SPIFFE certificate that asserts an ateom acting
+  // Create a Substrate-issued SPIFFE certificate that asserts a worker acting
   // on behalf of a particular actor.
   //
-  // SPIFFE URI: spiffe://${trustdomain}/ateom-for-actor/${atespace}/${actor}
-  rpc MintAteomActorCertificate(MintAteomActorCertificateRequest) returns (MintAteomActorCertificateResponse);
+  // SPIFFE URI: spiffe://${trustdomain}/worker-for-actor/${atespace}/${actor}
+  rpc MintWorkerActorCertificate(MintWorkerActorCertificateRequest) returns (MintWorkerActorCertificateResponse);
 
   // RequestActorSuspend asks the control plane to suspend an Actor that the
   // calling Worker hosts. Only the Worker can observe what makes an Actor
@@ -2294,8 +2294,8 @@ message RegisterWorkerResponse {
   Worker worker = 1;
 }
 
-// Request message for MintAteomActorCertificate.
-message MintAteomActorCertificateRequest {
+// Request message for MintWorkerActorCertificate.
+message MintWorkerActorCertificateRequest {
   // The actor for which the certificate should be issued.
   //
   // Must be a valid actor that currently exists according to the actor store.
@@ -2320,8 +2320,8 @@ message MintAteomActorCertificateRequest {
   bytes certificate_signing_request = 3;
 }
 
-// Response message for MintAteomActorCertificate.
-message MintAteomActorCertificateResponse {
+// Response message for MintWorkerActorCertificate.
+message MintWorkerActorCertificateResponse {
   // Response contains a list of DER encoded certificates. The first entry is the
   // leaf certificate, and any remaining entries are intermediates in
   // leaf-to-root order.

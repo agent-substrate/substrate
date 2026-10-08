@@ -89,8 +89,8 @@ type fakeWorkerService struct {
 	ateapipb.WorkerServiceClient
 
 	got      []*ateapipb.RegisterWorkerRequest
-	mintGot  []*ateapipb.MintAteomActorCertificateRequest
-	mintResp *ateapipb.MintAteomActorCertificateResponse
+	mintGot  []*ateapipb.MintWorkerActorCertificateRequest
+	mintResp *ateapipb.MintWorkerActorCertificateResponse
 	err      error
 }
 
@@ -102,7 +102,7 @@ func (s *fakeWorkerService) RegisterWorker(_ context.Context, in *ateapipb.Regis
 	return &ateapipb.RegisterWorkerResponse{}, nil
 }
 
-func (s *fakeWorkerService) MintAteomActorCertificate(_ context.Context, in *ateapipb.MintAteomActorCertificateRequest, _ ...grpc.CallOption) (*ateapipb.MintAteomActorCertificateResponse, error) {
+func (s *fakeWorkerService) MintWorkerActorCertificate(_ context.Context, in *ateapipb.MintWorkerActorCertificateRequest, _ ...grpc.CallOption) (*ateapipb.MintWorkerActorCertificateResponse, error) {
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -110,7 +110,7 @@ func (s *fakeWorkerService) MintAteomActorCertificate(_ context.Context, in *ate
 	if s.mintResp != nil {
 		return s.mintResp, nil
 	}
-	return &ateapipb.MintAteomActorCertificateResponse{}, nil
+	return &ateapipb.MintWorkerActorCertificateResponse{}, nil
 }
 
 func TestRegisterWorker(t *testing.T) {
@@ -184,7 +184,7 @@ func TestRegisterWorker(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			workers := &fakeWorkerService{err: tt.serviceErr}
-			svc := &ateomSupportServer{workers: workers}
+			svc := &workerSupportServer{workers: workers}
 			ctx := workerContext(t, "pod-a")
 			if tt.unauthenticated {
 				ctx = context.Background()
@@ -218,7 +218,7 @@ func (s *fakeSuspendService) RequestActorSuspend(_ context.Context, in *ateapipb
 
 func TestRequestActorSuspendNamesTheCallingWorker(t *testing.T) {
 	workers := &fakeSuspendService{}
-	svc := &ateomSupportServer{workers: workers}
+	svc := &workerSupportServer{workers: workers}
 
 	ctx := workerContext(t, "pod-a")
 	if _, err := svc.RequestActorSuspend(ctx, &ateletpb.RequestActorSuspendRequest{
@@ -244,7 +244,7 @@ func TestRequestActorSuspendNamesTheCallingWorker(t *testing.T) {
 
 func TestRequestActorSuspendRequiresACertificate(t *testing.T) {
 	workers := &fakeSuspendService{}
-	svc := &ateomSupportServer{workers: workers}
+	svc := &workerSupportServer{workers: workers}
 
 	// No peer identity: there is no worker to attribute this to, and the
 	// request names no other way to find one.
@@ -265,7 +265,7 @@ func TestRequestActorSuspendRequiresACertificate(t *testing.T) {
 // that the control plane declined so it does not treat the actor as suspended.
 func TestRequestActorSuspendSurfacesRefusal(t *testing.T) {
 	workers := &fakeSuspendService{err: status.Error(codes.FailedPrecondition, "Actor is RESUMING")}
-	svc := &ateomSupportServer{workers: workers}
+	svc := &workerSupportServer{workers: workers}
 
 	_, err := svc.RequestActorSuspend(workerContext(t, "pod-a"), &ateletpb.RequestActorSuspendRequest{
 		ActorAtespace: "team-a",
@@ -279,11 +279,11 @@ func TestRequestActorSuspendSurfacesRefusal(t *testing.T) {
 func TestMintActorCertificateForwardsToWorkerService(t *testing.T) {
 	wantCerts := [][]byte{[]byte("cert-der-bytes")}
 	workers := &fakeWorkerService{
-		mintResp: &ateapipb.MintAteomActorCertificateResponse{
+		mintResp: &ateapipb.MintWorkerActorCertificateResponse{
 			ActorCertificates: wantCerts,
 		},
 	}
-	svc := &ateomSupportServer{workers: workers}
+	svc := &workerSupportServer{workers: workers}
 
 	ctx := workerContext(t, "pod-a")
 	resp, err := svc.MintActorCertificate(ctx, &ateletpb.MintActorCertificateRequest{
@@ -296,7 +296,7 @@ func TestMintActorCertificateForwardsToWorkerService(t *testing.T) {
 		t.Fatalf("MintActorCertificate() failed: %v", err)
 	}
 
-	want := []*ateapipb.MintAteomActorCertificateRequest{{
+	want := []*ateapipb.MintWorkerActorCertificateRequest{{
 		Actor: &ateapipb.ObjectRef{
 			Atespace: "team-a",
 			Name:     "actor-1",
@@ -314,7 +314,7 @@ func TestMintActorCertificateForwardsToWorkerService(t *testing.T) {
 
 func TestMintActorCertificateRequiresCertificate(t *testing.T) {
 	workers := &fakeWorkerService{}
-	svc := &ateomSupportServer{workers: workers}
+	svc := &workerSupportServer{workers: workers}
 
 	_, err := svc.MintActorCertificate(context.Background(), &ateletpb.MintActorCertificateRequest{
 		ActorAtespace:             "team-a",

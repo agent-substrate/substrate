@@ -11,7 +11,7 @@ The `WorkerPool` defines the pool of physical "warm" compute capacity. It manage
 | Field | Type | Description |
 | :--- | :--- | :--- |
 | `replicas` | `int32` | **Required.** Number of physical standby pods to maintain in the cluster. |
-| `workerImage` | `string` | **Required.** The container image for the `ateom` herder process (e.g. `ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor`). |
+| `workerImage` | `string` | **Required.** The container image for the `ateworker` herder process (e.g. `ko://github.com/agent-substrate/substrate/cmd/ateworker-gvisor`). |
 | `sandboxClass` | `string` | Optional. The sandbox runtime family for the pool: `gvisor` (default) or `microvm`. Drives the worker pod shape (e.g. KVM device mounts, node placement). The sandbox binaries themselves come from the [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) each `ActorTemplate` selects. |
 | `template` | `WorkerPoolPodTemplate` | **Optional.** Metadata, scheduling, and resource settings for worker workloads. |
 
@@ -62,10 +62,10 @@ moves. A pinned pool cannot put those pods back on a moved node, so the old
 version drains away node by node. An unpinned pool breaks this constraints.
 #### Worker Capacity (`spec.template.resources`)
 
-Setting `resources.limits` (CPU and Memory) on a `WorkerPool` establishes each worker pod's **capacity** — the envelope its actor sandboxes share, taken from the `ateom` container's limits. The scheduler only places an actor on a worker whose remaining capacity is `>=` the actor's declared resource limits (see [Sandbox Right-Sizing](#sandbox-right-sizing-resources) on the `ActorTemplate`).
+Setting `resources.limits` (CPU and Memory) on a `WorkerPool` establishes each worker pod's **capacity** — the envelope its actor sandboxes share, taken from the `ateworker` container's limits. The scheduler only places an actor on a worker whose remaining capacity is `>=` the actor's declared resource limits (see [Sandbox Right-Sizing](#sandbox-right-sizing-resources) on the `ActorTemplate`).
 
 - Worker capacity is a shared budget: each actor placed on a worker subtracts its declared limits from what is left. Size a pool's `limits` for the actors it should host together.
-- A worker also has an actor limit, set by the ateom's `--max-actors` flag (default 1000). Placement stops at whichever runs out first.
+- A worker also has an actor limit, set by the ateworker's `--max-actors` flag (default 1000). Placement stops at whichever runs out first.
 - Capacity is advisory for placement only: a worker that declares no CPU/memory limit reports zero capacity for that dimension, which the scheduler treats as **unconstrained** (placement is never blocked by missing data). The actual sandbox size still comes from the `ActorTemplate`.
 
 ### Example
@@ -80,7 +80,7 @@ metadata:
     workload: secret-agent
 spec:
   replicas: 10
-  workerImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
+  workerImage: ko://github.com/agent-substrate/substrate/cmd/ateworker-gvisor
   template:
     labels:
       project: agent-platform
@@ -133,9 +133,9 @@ Because a snapshot is not restorable across sandbox runtimes, `sandboxClass` is 
 
 Unlike a Pod, an actor is sized by its **`limits`** (CPU and Memory): the size is a property of the template, baked into snapshots, so it lives on the immutable `ActorTemplate`. Declared limits do three things:
 
-1. **Size the sandbox.** The limits are supplied to the sandbox over the actor RPCs (control plane → atelet → ateom):
-   - **gVisor (`ateom-gvisor`)** — applied to the container OCI spec: `limits.cpu` sets the cgroup v2 CPU quota (`cpu.max`) and the Sentry vCPU count (`--cpu-num-from-quota`); `limits.memory` sets the cgroup v2 memory limit (`memory.max`) and bounds the virtual total memory the sandbox reports (so JVM/Go do not over-allocate from host RAM).
-   - **Micro-VM (`ateom-microvm`)** — `limits.cpu` sets Cloud Hypervisor `BootVcpus` / `MaxVcpus` (rounded up to whole vCPUs); `limits.memory` sets guest RAM, reserving a small configurable margin (default 256 MiB, `--vmm-mem-reserve-mib`) for the VMM and virtiofsd so the pod cgroup does not OOM.
+1. **Size the sandbox.** The limits are supplied to the sandbox over the actor RPCs (control plane → atelet → ateworker):
+   - **gVisor (`ateworker-gvisor`)** — applied to the container OCI spec: `limits.cpu` sets the cgroup v2 CPU quota (`cpu.max`) and the Sentry vCPU count (`--cpu-num-from-quota`); `limits.memory` sets the cgroup v2 memory limit (`memory.max`) and bounds the virtual total memory the sandbox reports (so JVM/Go do not over-allocate from host RAM).
+   - **Micro-VM (`ateworker-microvm`)** — `limits.cpu` sets Cloud Hypervisor `BootVcpus` / `MaxVcpus` (rounded up to whole vCPUs); `limits.memory` sets guest RAM, reserving a small configurable margin (default 256 MiB, `--vmm-mem-reserve-mib`) for the VMM and virtiofsd so the pod cgroup does not OOM.
 2. **Gate scheduling.** An actor is only placed on a `WorkerPool` whose [worker capacity](#worker-capacity-spectemplateresources) is `>=` these limits.
 3. **Fall back to runtime defaults.** A zero or absent limit leaves that dimension at the runtime default: unlimited for gVisor, and 2 GiB / 1 vCPU for the micro-VM.
 

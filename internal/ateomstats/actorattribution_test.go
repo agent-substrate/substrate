@@ -19,7 +19,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 )
 
@@ -42,7 +42,7 @@ func TestActorAttributionFromRequest(t *testing.T) {
 	}{
 		{
 			name: "run request",
-			req: &ateompb.RunWorkloadRequest{
+			req: &ateworkerpb.RunWorkloadRequest{
 				Atespace:              "atespace-a",
 				ActorName:             "actor-b",
 				ActorUid:              "uid-c",
@@ -56,7 +56,7 @@ func TestActorAttributionFromRequest(t *testing.T) {
 			// a sample taken after a restore must be attributable to the actor
 			// it was taken before the checkpoint.
 			name: "restore request",
-			req: &ateompb.RestoreWorkloadRequest{
+			req: &ateworkerpb.RestoreWorkloadRequest{
 				Atespace:              "atespace-a",
 				ActorName:             "actor-b",
 				ActorUid:              "uid-c",
@@ -67,7 +67,7 @@ func TestActorAttributionFromRequest(t *testing.T) {
 		},
 		{
 			name: "checkpoint request",
-			req: &ateompb.CheckpointWorkloadRequest{
+			req: &ateworkerpb.CheckpointWorkloadRequest{
 				Atespace:              "atespace-a",
 				ActorName:             "actor-b",
 				ActorUid:              "uid-c",
@@ -78,7 +78,7 @@ func TestActorAttributionFromRequest(t *testing.T) {
 		},
 		{
 			name: "terminate request",
-			req: &ateompb.TerminateWorkloadRequest{
+			req: &ateworkerpb.TerminateWorkloadRequest{
 				Atespace:              "atespace-a",
 				ActorName:             "actor-b",
 				ActorUid:              "uid-c",
@@ -89,12 +89,12 @@ func TestActorAttributionFromRequest(t *testing.T) {
 		},
 		{
 			name: "empty run request",
-			req:  &ateompb.RunWorkloadRequest{},
+			req:  &ateworkerpb.RunWorkloadRequest{},
 			want: resources.ActorAttribution{},
 		},
 		{
 			name: "empty terminate request",
-			req:  &ateompb.TerminateWorkloadRequest{},
+			req:  &ateworkerpb.TerminateWorkloadRequest{},
 			want: resources.ActorAttribution{},
 		},
 		{
@@ -103,22 +103,22 @@ func TestActorAttributionFromRequest(t *testing.T) {
 			// is the honest answer. Pinned so a hand-written getter or a switch
 			// to direct field access does not turn this into a panic.
 			name: "nil run request",
-			req:  (*ateompb.RunWorkloadRequest)(nil),
+			req:  (*ateworkerpb.RunWorkloadRequest)(nil),
 			want: resources.ActorAttribution{},
 		},
 		{
 			name: "nil restore request",
-			req:  (*ateompb.RestoreWorkloadRequest)(nil),
+			req:  (*ateworkerpb.RestoreWorkloadRequest)(nil),
 			want: resources.ActorAttribution{},
 		},
 		{
 			name: "nil checkpoint request",
-			req:  (*ateompb.CheckpointWorkloadRequest)(nil),
+			req:  (*ateworkerpb.CheckpointWorkloadRequest)(nil),
 			want: resources.ActorAttribution{},
 		},
 		{
 			name: "nil terminate request",
-			req:  (*ateompb.TerminateWorkloadRequest)(nil),
+			req:  (*ateworkerpb.TerminateWorkloadRequest)(nil),
 			want: resources.ActorAttribution{},
 		},
 	}

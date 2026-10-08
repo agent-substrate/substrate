@@ -42,7 +42,7 @@ const (
 	crashMessageWorkerReassigned         = "assigned worker no longer hosts the actor"
 	crashMessageWorkerIneligible         = "assigned worker no longer satisfies the actor's placement constraints"
 	crashMessageWorkerPodGone            = "worker pod went away while hosting the actor"
-	crashMessageAteomRestarted           = "ateom restarted while hosting the actor"
+	crashMessageWorkerRestarted          = "worker restarted while hosting the actor"
 )
 
 // maxCrashMessageBytes matches the maxLength on ActorCrash.message.
@@ -172,8 +172,8 @@ func newActorCrash(opName, message string) *ateapipb.ActorCrash {
 // is barred from metric labels, so this record is the only way to attribute a
 // crash to one agent. Call it beside recordActorCrash, under the same guard.
 //
-// It names ate.actor.state for the same reason ateom's lifecycle records do: a
-// crash is the one transition ateom never observes, so a consumer taking the
+// It names ate.actor.state for the same reason worker's lifecycle records do: a
+// crash is the one transition worker never observes, so a consumer taking the
 // last state an actor reached has to see this record to reach "crashed" at all.
 func logActorCrashed(ctx context.Context, actor *ateapipb.Actor, opName string) {
 	attrs := ateattr.ActorLogAttrs(resources.ActorAttributionFromActor(actor))

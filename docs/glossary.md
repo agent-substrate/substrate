@@ -59,13 +59,16 @@ for etcd.
   example, it turns a `WorkerPool` into a `Deployment`).
 
 - **atelet**: the node-level supervisor, run as a DaemonSet. It pulls images,
-  assembles OCI bundles, drives the sandbox lifecycle on the node via ateom,
+  assembles OCI bundles, drives the sandbox lifecycle on the node via ateworker,
   and streams snapshots to and from snapshot storage.
 
-- **ateom**: the coordinator that runs inside each worker pod and drives the
+- **ateworker**: the coordinator that runs inside each worker pod and drives the
   sandbox runtime on behalf of atelet. This decouples the physical pod
   lifecycle from the sandboxed agent process. It embeds a networking service
   called `atunnel` that handles network traffic for the sandboxed Actor.
+  ateworker is Substrate's worker implementation, one binary per sandbox class
+  (`ateworker-gvisor`, `ateworker-microvm`). Some internal Go packages still
+  use its former name, ateom.
 
 - **atenet**: the networking stack. Its router resumes suspended Actors on
   demand and routes traffic to the right worker pod.

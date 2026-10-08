@@ -24,7 +24,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/nodepath"
 )
 
-// Use a directory that is shared between atelet and ateom but not cleaned up by atelet
+// Use a directory that is shared between atelet and worker but not cleaned up by atelet
 var mockVolumeDirectories string = filepath.Join(nodepath.BasePath, "mockvolumes")
 
 var (

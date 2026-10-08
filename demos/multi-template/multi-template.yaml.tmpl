@@ -14,7 +14,7 @@
 
 # This demo shows that two ActorTemplates running two different binaries can
 # share a single WorkerPool, even from different atespaces. A WorkerPool is
-# image-agnostic capacity (its pods only run the ateom supervisor); each
+# image-agnostic capacity (its pods only run the ateworker supervisor); each
 # ActorTemplate carries its own workload image and gates on the pool via
 # workerSelector, a label selector matched against the pool's labels (no
 # atespace or namespace scoping involved: pool selection is cluster-wide).
@@ -36,4 +36,4 @@ metadata:
     workload: multi-template-shared
 spec:
   replicas: 3
-  workerImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
+  workerImage: ko://github.com/agent-substrate/substrate/cmd/ateworker-gvisor

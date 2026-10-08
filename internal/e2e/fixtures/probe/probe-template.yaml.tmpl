@@ -34,8 +34,8 @@ containers:
     mountPath: /run/ate
   # The probe binary binds :80 immediately, so this gates actor start on a
   # readiness signal rather than a guess, and carries a non-default
-  # timeoutSeconds so e2e covers the value crossing ateapi -> atelet -> ateom
-  # instead of only the ateom's built-in default.
+  # timeoutSeconds so e2e covers the value crossing ateapi -> atelet -> ateworker
+  # instead of only the ateworker's built-in default.
   wakeupProbe:
     httpGet:
       path: /healthz

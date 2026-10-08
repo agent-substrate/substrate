@@ -23,9 +23,9 @@ import (
 type SandboxClass string
 
 const (
-	// SandboxClassGvisor is the gVisor/runsc runtime (cmd/ateom-gvisor). Default.
+	// SandboxClassGvisor is the gVisor/runsc runtime (cmd/ateworker-gvisor). Default.
 	SandboxClassGvisor SandboxClass = "gvisor"
-	// SandboxClassMicroVM is the micro-VM runtime (cmd/ateom-microvm); needs
+	// SandboxClassMicroVM is the micro-VM runtime (cmd/ateworker-microvm); needs
 	// /dev/kvm and vhost devices.
 	SandboxClassMicroVM SandboxClass = "microvm"
 )

@@ -199,7 +199,7 @@ const (
 	StatsKindFinal    = "final"
 )
 
-// Values for StatsSourceKey, mirroring ateompb.StatsSource. The two sources do
+// Values for StatsSourceKey, mirroring ateworkerpb.StatsSource. The two sources do
 // not measure the same thing (the cgroup source charges the sandbox runtime's
 // overhead along with the workload, the guest-agent source sees only the
 // workload's containers), so rollups must group by this key rather than sum
@@ -350,13 +350,13 @@ func SnapshotScopeValue(scope ateletpb.SnapshotScope) string {
 // with the asset fetch and OCI unpack), so they are independent observations,
 // not a partition of Total: summing across them is meaningless.
 const (
-	SnapshotPhaseVolumeMount     = "volume_mount"
-	SnapshotPhaseManifestFetch   = "manifest_fetch"
-	SnapshotPhaseSandboxAssets   = "sandbox_assets"
-	SnapshotPhaseDownload        = "download"
-	SnapshotPhaseOCIUnpack       = "oci_unpack"
-	SnapshotPhaseAteomRestore    = "ateom_restore"
-	SnapshotPhaseAteomCheckpoint = "ateom_checkpoint"
+	SnapshotPhaseVolumeMount      = "volume_mount"
+	SnapshotPhaseManifestFetch    = "manifest_fetch"
+	SnapshotPhaseSandboxAssets    = "sandbox_assets"
+	SnapshotPhaseDownload         = "download"
+	SnapshotPhaseOCIUnpack        = "oci_unpack"
+	SnapshotPhaseWorkerRestore    = "worker_restore"
+	SnapshotPhaseWorkerCheckpoint = "worker_checkpoint"
 	// Persist is one step with two destinations (upload for external, rename
 	// for local); SnapshotKindKey already says which.
 	SnapshotPhasePersist = "persist"

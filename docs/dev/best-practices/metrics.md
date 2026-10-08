@@ -280,7 +280,7 @@ The meter provider itself is set up once per binary by
 `serverboot.InitMetricsBridged` (OTLP push with a foreign Prometheus registry
 bridged onto it, or that registry alone under `OTEL_METRICS_EXPORTER=none`;
 atecontroller), or `serverboot.InitMetricsPushOnlyVia` (OTLP push only, over
-the atelet relay when given one; ateom).
+the atelet relay when given one; ateworker).
 A new component calls one of these and defers `ShutdownProvider`; a new package
 inside an existing component adds nothing there.
 

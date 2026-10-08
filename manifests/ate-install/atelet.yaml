@@ -165,7 +165,7 @@ spec:
         - --drain-delay=0s
         - --drain-timeout=5m
         # atelet does no mounts, netlink, device, or namespace operations (those
-        # live in the ateom worker pod) — it only reads/writes the
+        # live in the worker pod) — it only reads/writes the
         # /var/lib/ate hostPath as root. CAP_DAC_OVERRIDE is for one thing:
         # emptying a directory a non-root actor created in its 0777 durable dir.
         # It is owned by the actor's uid, typically 0755, so root has no write
@@ -236,7 +236,7 @@ spec:
           initialDelaySeconds: 10
           periodSeconds: 10
         volumeMounts:
-        - name: run-ateom
+        - name: ate-base
           mountPath: /var/lib/ate
         - name: podidentity
           mountPath: /run/podidentity.podcert.ate.dev
@@ -257,7 +257,7 @@ spec:
           mountPath: /run/image-credential-provider/config.yaml
           readOnly: true
       volumes:
-      - name: run-ateom
+      - name: ate-base
         hostPath:
           path: /var/lib/ate
           type: DirectoryOrCreate

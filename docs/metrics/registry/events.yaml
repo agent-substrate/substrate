@@ -106,7 +106,7 @@ groups:
     stability: development
     brief: A measurement of the CPU and the memory of one actor.
     note: >
-      The ateom that runs the actor writes one record per actor on a timer,
+      The ateworker that runs the actor writes one record per actor on a timer,
       plus an initial and a final record per activation. ate.stats.kind tells
       them apart.
 
@@ -124,7 +124,7 @@ groups:
       consumer can sample or drop it without touching the lifecycle events.
     annotations:
       substrate:
-        emitted_by: [ateom-gvisor, ateom-microvm]
+        emitted_by: [ateworker-gvisor, ateworker-microvm]
         code_anchor: internal/actorevent/actorevent.go
         cuj: How much CPU and memory does this actor use, and since when?
     attributes:

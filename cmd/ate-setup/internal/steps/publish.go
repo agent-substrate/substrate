@@ -22,12 +22,12 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
 )
 
-// workerImages are the ateom images a WorkerPool points at through
+// workerImages are the worker images a WorkerPool points at through
 // workerImage, one per sandbox class. No manifest references them, so the
 // install never publishes them as a side effect.
-var workerImages = []string{"ateom-gvisor", "ateom-microvm"}
+var workerImages = []string{"ateworker-gvisor", "ateworker-microvm"}
 
-// PublishWorkerImages builds and pushes the ateom images for this build and
+// PublishWorkerImages builds and pushes the worker images for this build and
 // writes their pushed references to w, one "<binary>: <ref>" line per image,
 // after every build has finished so the refs sit together below ko's build
 // output. A WorkerPool moves to this build by pointing its workerImage at

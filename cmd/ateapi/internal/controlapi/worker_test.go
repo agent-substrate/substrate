@@ -761,7 +761,7 @@ func TestCreateWorker_HoldsNoCapacityUntilReported(t *testing.T) {
 		t.Fatalf("CreateWorker() failed: %v", err)
 	}
 	if capacity := got.GetStatus().GetCapacity(); capacity != nil {
-		t.Errorf("created worker capacity = %v, want none until its ateom reports", capacity)
+		t.Errorf("created worker capacity = %v, want none until its worker reports", capacity)
 	}
 
 	// Capacity is status, so a request cannot bring its own: a Worker only

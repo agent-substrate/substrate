@@ -23,25 +23,25 @@ import (
 func TestMountPointsIn(t *testing.T) {
 	mountinfo := strings.Join([]string{
 		`22 26 0:20 / /sys rw,nosuid,nodev shared:7 - sysfs sysfs rw`,
-		`40 21 8:1 / /var/lib/ateom-gvisor/actors/a1/bundles/task/rootfs rw shared:1 - overlay overlay rw,lowerdir=/x`,
-		`41 21 8:1 / /var/lib/ateom-gvisor/actors/a1/bundles/pause/rootfs rw - overlay overlay rw`,
-		`42 21 8:1 / /var/lib/ateom-gvisor/actors/a2/bundles/task/rootfs rw - overlay overlay rw`,
+		`40 21 8:1 / /var/lib/ateworker-gvisor/actors/a1/bundles/task/rootfs rw shared:1 - overlay overlay rw,lowerdir=/x`,
+		`41 21 8:1 / /var/lib/ateworker-gvisor/actors/a1/bundles/pause/rootfs rw - overlay overlay rw`,
+		`42 21 8:1 / /var/lib/ateworker-gvisor/actors/a2/bundles/task/rootfs rw - overlay overlay rw`,
 		// Path with an escaped space; mountinfo octal-escapes it.
-		`43 21 8:1 / /var/lib/ateom-gvisor/actors/a1/bundles/odd\040name/rootfs rw - overlay overlay rw`,
+		`43 21 8:1 / /var/lib/ateworker-gvisor/actors/a1/bundles/odd\040name/rootfs rw - overlay overlay rw`,
 		// Prefix-sibling directory that must NOT match a1's subtree.
-		`44 21 8:1 / /var/lib/ateom-gvisor/actors/a1-sibling/bundles/x/rootfs rw - overlay overlay rw`,
+		`44 21 8:1 / /var/lib/ateworker-gvisor/actors/a1-sibling/bundles/x/rootfs rw - overlay overlay rw`,
 		`malformed line`,
 		``,
 	}, "\n")
 
-	got, err := mountPointsIn(strings.NewReader(mountinfo), "/var/lib/ateom-gvisor/actors/a1/bundles")
+	got, err := mountPointsIn(strings.NewReader(mountinfo), "/var/lib/ateworker-gvisor/actors/a1/bundles")
 	if err != nil {
 		t.Fatalf("mountPointsIn: %v", err)
 	}
 	want := []string{
-		"/var/lib/ateom-gvisor/actors/a1/bundles/task/rootfs",
-		"/var/lib/ateom-gvisor/actors/a1/bundles/pause/rootfs",
-		"/var/lib/ateom-gvisor/actors/a1/bundles/odd name/rootfs",
+		"/var/lib/ateworker-gvisor/actors/a1/bundles/task/rootfs",
+		"/var/lib/ateworker-gvisor/actors/a1/bundles/pause/rootfs",
+		"/var/lib/ateworker-gvisor/actors/a1/bundles/odd name/rootfs",
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("mount points = %v, want %v", got, want)

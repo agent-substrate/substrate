@@ -760,7 +760,7 @@ func (x *MintActorCertificateResponse) GetActorCertificates() [][]byte {
 type TerminateRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// If unset, the atelet will just cleanup node resources for the actor.
-	TargetAteomUid        string        `protobuf:"bytes,1,opt,name=target_ateom_uid,json=targetAteomUid,proto3" json:"target_ateom_uid,omitempty"`
+	TargetWorkerPodUid    string        `protobuf:"bytes,1,opt,name=target_worker_pod_uid,json=targetWorkerPodUid,proto3" json:"target_worker_pod_uid,omitempty"`
 	Atespace              string        `protobuf:"bytes,2,opt,name=atespace,proto3" json:"atespace,omitempty"`
 	ActorName             string        `protobuf:"bytes,3,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
 	ActorUid              string        `protobuf:"bytes,4,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
@@ -801,9 +801,9 @@ func (*TerminateRequest) Descriptor() ([]byte, []int) {
 	return file_atelet_proto_rawDescGZIP(), []int{10}
 }
 
-func (x *TerminateRequest) GetTargetAteomUid() string {
+func (x *TerminateRequest) GetTargetWorkerPodUid() string {
 	if x != nil {
-		return x.TargetAteomUid
+		return x.TargetWorkerPodUid
 	}
 	return ""
 }
@@ -888,7 +888,7 @@ func (*TerminateResponse) Descriptor() ([]byte, []int) {
 
 type RunRequest struct {
 	state                 protoimpl.MessageState `protogen:"open.v1"`
-	TargetAteomUid        string                 `protobuf:"bytes,1,opt,name=target_ateom_uid,json=targetAteomUid,proto3" json:"target_ateom_uid,omitempty"`
+	TargetWorkerPodUid    string                 `protobuf:"bytes,1,opt,name=target_worker_pod_uid,json=targetWorkerPodUid,proto3" json:"target_worker_pod_uid,omitempty"`
 	Atespace              string                 `protobuf:"bytes,2,opt,name=atespace,proto3" json:"atespace,omitempty"`
 	ActorName             string                 `protobuf:"bytes,3,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
 	ActorUid              string                 `protobuf:"bytes,4,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
@@ -940,9 +940,9 @@ func (*RunRequest) Descriptor() ([]byte, []int) {
 	return file_atelet_proto_rawDescGZIP(), []int{12}
 }
 
-func (x *RunRequest) GetTargetAteomUid() string {
+func (x *RunRequest) GetTargetWorkerPodUid() string {
 	if x != nil {
-		return x.TargetAteomUid
+		return x.TargetWorkerPodUid
 	}
 	return ""
 }
@@ -2504,7 +2504,7 @@ func (x *ExternalRestoreConfiguration) GetSnapshotUri() string {
 
 type CheckpointRequest struct {
 	state                 protoimpl.MessageState `protogen:"open.v1"`
-	TargetAteomUid        string                 `protobuf:"bytes,1,opt,name=target_ateom_uid,json=targetAteomUid,proto3" json:"target_ateom_uid,omitempty"`
+	TargetWorkerPodUid    string                 `protobuf:"bytes,1,opt,name=target_worker_pod_uid,json=targetWorkerPodUid,proto3" json:"target_worker_pod_uid,omitempty"`
 	Atespace              string                 `protobuf:"bytes,2,opt,name=atespace,proto3" json:"atespace,omitempty"`
 	ActorName             string                 `protobuf:"bytes,3,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
 	ActorUid              string                 `protobuf:"bytes,4,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
@@ -2558,9 +2558,9 @@ func (*CheckpointRequest) Descriptor() ([]byte, []int) {
 	return file_atelet_proto_rawDescGZIP(), []int{39}
 }
 
-func (x *CheckpointRequest) GetTargetAteomUid() string {
+func (x *CheckpointRequest) GetTargetWorkerPodUid() string {
 	if x != nil {
-		return x.TargetAteomUid
+		return x.TargetWorkerPodUid
 	}
 	return ""
 }
@@ -2715,7 +2715,7 @@ type UploadPausedCheckpointRequest struct {
 	// The scope the pause checkpoint captured is not sent: atelet reads it from
 	// the local snapshot's own manifest, which is authoritative. When they
 	// differ, atelet converts where possible (a FULL capture to a DATA upload
-	// of the data-scope files ateom reported) and rejects otherwise.
+	// of the data-scope files the worker reported) and rejects otherwise.
 	DesiredScope  SnapshotScope `protobuf:"varint,8,opt,name=desired_scope,json=desiredScope,proto3,enum=atelet.SnapshotScope" json:"desired_scope,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2845,7 +2845,7 @@ func (*UploadPausedCheckpointResponse) Descriptor() ([]byte, []int) {
 
 type RestoreRequest struct {
 	state                 protoimpl.MessageState `protogen:"open.v1"`
-	TargetAteomUid        string                 `protobuf:"bytes,1,opt,name=target_ateom_uid,json=targetAteomUid,proto3" json:"target_ateom_uid,omitempty"`
+	TargetWorkerPodUid    string                 `protobuf:"bytes,1,opt,name=target_worker_pod_uid,json=targetWorkerPodUid,proto3" json:"target_worker_pod_uid,omitempty"`
 	Atespace              string                 `protobuf:"bytes,2,opt,name=atespace,proto3" json:"atespace,omitempty"`
 	ActorName             string                 `protobuf:"bytes,3,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
 	ActorUid              string                 `protobuf:"bytes,4,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
@@ -2907,9 +2907,9 @@ func (*RestoreRequest) Descriptor() ([]byte, []int) {
 	return file_atelet_proto_rawDescGZIP(), []int{43}
 }
 
-func (x *RestoreRequest) GetTargetAteomUid() string {
+func (x *RestoreRequest) GetTargetWorkerPodUid() string {
 	if x != nil {
-		return x.TargetAteomUid
+		return x.TargetWorkerPodUid
 	}
 	return ""
 }
@@ -3112,9 +3112,9 @@ const file_atelet_proto_rawDesc = "" +
 	"\tactor_uid\x18\x05 \x01(\tR\bactorUid\x12>\n" +
 	"\x1bcertificate_signing_request\x18\x01 \x01(\fR\x19certificateSigningRequest\"M\n" +
 	"\x1cMintActorCertificateResponse\x12-\n" +
-	"\x12actor_certificates\x18\x01 \x03(\fR\x11actorCertificates\"\xa6\x02\n" +
-	"\x10TerminateRequest\x12(\n" +
-	"\x10target_ateom_uid\x18\x01 \x01(\tR\x0etargetAteomUid\x12\x1a\n" +
+	"\x12actor_certificates\x18\x01 \x03(\fR\x11actorCertificates\"\xaf\x02\n" +
+	"\x10TerminateRequest\x121\n" +
+	"\x15target_worker_pod_uid\x18\x01 \x01(\tR\x12targetWorkerPodUid\x12\x1a\n" +
 	"\batespace\x18\x02 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +
 	"actor_name\x18\x03 \x01(\tR\tactorName\x12\x1b\n" +
@@ -3122,10 +3122,10 @@ const file_atelet_proto_rawDesc = "" +
 	"\x17actor_template_atespace\x18\x05 \x01(\tR\x15actorTemplateAtespace\x12.\n" +
 	"\x13actor_template_name\x18\x06 \x01(\tR\x11actorTemplateName\x12(\n" +
 	"\x04spec\x18\a \x01(\v2\x14.atelet.WorkloadSpecR\x04spec\"\x13\n" +
-	"\x11TerminateResponse\"\xf4\x03\n" +
+	"\x11TerminateResponse\"\xfd\x03\n" +
 	"\n" +
-	"RunRequest\x12(\n" +
-	"\x10target_ateom_uid\x18\x01 \x01(\tR\x0etargetAteomUid\x12\x1a\n" +
+	"RunRequest\x121\n" +
+	"\x15target_worker_pod_uid\x18\x01 \x01(\tR\x12targetWorkerPodUid\x12\x1a\n" +
 	"\batespace\x18\x02 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +
 	"actor_name\x18\x03 \x01(\tR\tactorName\x12\x1b\n" +
@@ -3240,9 +3240,9 @@ const file_atelet_proto_rawDesc = "" +
 	"\x1fExternalCheckpointConfiguration\x12!\n" +
 	"\fsnapshot_uri\x18\x01 \x01(\tR\vsnapshotUri\"A\n" +
 	"\x1cExternalRestoreConfiguration\x12!\n" +
-	"\fsnapshot_uri\x18\x01 \x01(\tR\vsnapshotUri\"\xa9\x04\n" +
-	"\x11CheckpointRequest\x12(\n" +
-	"\x10target_ateom_uid\x18\x01 \x01(\tR\x0etargetAteomUid\x12\x1a\n" +
+	"\fsnapshot_uri\x18\x01 \x01(\tR\vsnapshotUri\"\xb2\x04\n" +
+	"\x11CheckpointRequest\x121\n" +
+	"\x15target_worker_pod_uid\x18\x01 \x01(\tR\x12targetWorkerPodUid\x12\x1a\n" +
 	"\batespace\x18\x02 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +
 	"actor_name\x18\x03 \x01(\tR\tactorName\x12\x1b\n" +
@@ -3267,9 +3267,9 @@ const file_atelet_proto_rawDesc = "" +
 	"\x13local_snapshot_name\x18\x06 \x01(\tR\x11localSnapshotName\x128\n" +
 	"\x18destination_snapshot_uri\x18\a \x01(\tR\x16destinationSnapshotUri\x12:\n" +
 	"\rdesired_scope\x18\b \x01(\x0e2\x15.atelet.SnapshotScopeR\fdesiredScope\" \n" +
-	"\x1eUploadPausedCheckpointResponse\"\xf7\x05\n" +
-	"\x0eRestoreRequest\x12(\n" +
-	"\x10target_ateom_uid\x18\x01 \x01(\tR\x0etargetAteomUid\x12\x1a\n" +
+	"\x1eUploadPausedCheckpointResponse\"\x80\x06\n" +
+	"\x0eRestoreRequest\x121\n" +
+	"\x15target_worker_pod_uid\x18\x01 \x01(\tR\x12targetWorkerPodUid\x12\x1a\n" +
 	"\batespace\x18\x02 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +
 	"actor_name\x18\x03 \x01(\tR\tactorName\x12\x1b\n" +
@@ -3301,12 +3301,12 @@ const file_atelet_proto_rawDesc = "" +
 	"\rSnapshotScope\x12\x1e\n" +
 	"\x1aSNAPSHOT_SCOPE_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13SNAPSHOT_SCOPE_FULL\x10\x01\x12\x17\n" +
-	"\x13SNAPSHOT_SCOPE_DATA\x10\x022\xa8\x02\n" +
-	"\fAteomSupport\x12c\n" +
+	"\x13SNAPSHOT_SCOPE_DATA\x10\x022\xa9\x02\n" +
+	"\rWorkerSupport\x12c\n" +
 	"\x14MintActorCertificate\x12#.atelet.MintActorCertificateRequest\x1a$.atelet.MintActorCertificateResponse\"\x00\x12Q\n" +
 	"\x0eRegisterWorker\x12\x1d.atelet.RegisterWorkerRequest\x1a\x1e.atelet.RegisterWorkerResponse\"\x00\x12`\n" +
-	"\x13RequestActorSuspend\x12\".atelet.RequestActorSuspendRequest\x1a#.atelet.RequestActorSuspendResponse\"\x002\xf3\x02\n" +
-	"\vAteomHerder\x120\n" +
+	"\x13RequestActorSuspend\x12\".atelet.RequestActorSuspendRequest\x1a#.atelet.RequestActorSuspendResponse\"\x002\xee\x02\n" +
+	"\x06Atelet\x120\n" +
 	"\x03Run\x12\x12.atelet.RunRequest\x1a\x13.atelet.RunResponse\"\x00\x12E\n" +
 	"\n" +
 	"Checkpoint\x12\x19.atelet.CheckpointRequest\x1a\x1a.atelet.CheckpointResponse\"\x00\x12<\n" +
@@ -3430,22 +3430,22 @@ var file_atelet_proto_depIdxs = []int32{
 	19, // 43: atelet.RestoreRequest.sandbox_assets:type_name -> atelet.SandboxAssets
 	17, // 44: atelet.ArchAssets.FilesEntry.value:type_name -> atelet.AssetFile
 	18, // 45: atelet.SandboxAssets.AssetsEntry.value:type_name -> atelet.ArchAssets
-	11, // 46: atelet.AteomSupport.MintActorCertificate:input_type -> atelet.MintActorCertificateRequest
-	3,  // 47: atelet.AteomSupport.RegisterWorker:input_type -> atelet.RegisterWorkerRequest
-	9,  // 48: atelet.AteomSupport.RequestActorSuspend:input_type -> atelet.RequestActorSuspendRequest
-	15, // 49: atelet.AteomHerder.Run:input_type -> atelet.RunRequest
-	42, // 50: atelet.AteomHerder.Checkpoint:input_type -> atelet.CheckpointRequest
-	46, // 51: atelet.AteomHerder.Restore:input_type -> atelet.RestoreRequest
-	44, // 52: atelet.AteomHerder.UploadPausedCheckpoint:input_type -> atelet.UploadPausedCheckpointRequest
-	13, // 53: atelet.AteomHerder.Terminate:input_type -> atelet.TerminateRequest
-	12, // 54: atelet.AteomSupport.MintActorCertificate:output_type -> atelet.MintActorCertificateResponse
-	8,  // 55: atelet.AteomSupport.RegisterWorker:output_type -> atelet.RegisterWorkerResponse
-	10, // 56: atelet.AteomSupport.RequestActorSuspend:output_type -> atelet.RequestActorSuspendResponse
-	38, // 57: atelet.AteomHerder.Run:output_type -> atelet.RunResponse
-	43, // 58: atelet.AteomHerder.Checkpoint:output_type -> atelet.CheckpointResponse
-	47, // 59: atelet.AteomHerder.Restore:output_type -> atelet.RestoreResponse
-	45, // 60: atelet.AteomHerder.UploadPausedCheckpoint:output_type -> atelet.UploadPausedCheckpointResponse
-	14, // 61: atelet.AteomHerder.Terminate:output_type -> atelet.TerminateResponse
+	11, // 46: atelet.WorkerSupport.MintActorCertificate:input_type -> atelet.MintActorCertificateRequest
+	3,  // 47: atelet.WorkerSupport.RegisterWorker:input_type -> atelet.RegisterWorkerRequest
+	9,  // 48: atelet.WorkerSupport.RequestActorSuspend:input_type -> atelet.RequestActorSuspendRequest
+	15, // 49: atelet.Atelet.Run:input_type -> atelet.RunRequest
+	42, // 50: atelet.Atelet.Checkpoint:input_type -> atelet.CheckpointRequest
+	46, // 51: atelet.Atelet.Restore:input_type -> atelet.RestoreRequest
+	44, // 52: atelet.Atelet.UploadPausedCheckpoint:input_type -> atelet.UploadPausedCheckpointRequest
+	13, // 53: atelet.Atelet.Terminate:input_type -> atelet.TerminateRequest
+	12, // 54: atelet.WorkerSupport.MintActorCertificate:output_type -> atelet.MintActorCertificateResponse
+	8,  // 55: atelet.WorkerSupport.RegisterWorker:output_type -> atelet.RegisterWorkerResponse
+	10, // 56: atelet.WorkerSupport.RequestActorSuspend:output_type -> atelet.RequestActorSuspendResponse
+	38, // 57: atelet.Atelet.Run:output_type -> atelet.RunResponse
+	43, // 58: atelet.Atelet.Checkpoint:output_type -> atelet.CheckpointResponse
+	47, // 59: atelet.Atelet.Restore:output_type -> atelet.RestoreResponse
+	45, // 60: atelet.Atelet.UploadPausedCheckpoint:output_type -> atelet.UploadPausedCheckpointResponse
+	14, // 61: atelet.Atelet.Terminate:output_type -> atelet.TerminateResponse
 	54, // [54:62] is the sub-list for method output_type
 	46, // [46:54] is the sub-list for method input_type
 	46, // [46:46] is the sub-list for extension type_name

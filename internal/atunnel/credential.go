@@ -101,9 +101,9 @@ func NewBrokerCertificateSource(cfg BrokerConfig) (*BrokerCertificateSource, err
 	}, nil
 }
 
-// MintAteomCertificate requests and installs a fresh certificate for the source's existing
+// MintWorkerCertificate requests and installs a fresh certificate for the source's existing
 // actor key. It returns the new expiry for renewal scheduling.
-func (s *BrokerCertificateSource) MintAteomCertificate(ctx context.Context) (time.Time, error) {
+func (s *BrokerCertificateSource) MintWorkerCertificate(ctx context.Context) (time.Time, error) {
 	csr, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{}, s.privateKey)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("atunnel: create actor CSR: %w", err)
@@ -119,7 +119,7 @@ func (s *BrokerCertificateSource) MintAteomCertificate(ctx context.Context) (tim
 		return time.Time{}, err
 	}
 	defer conn.Close()
-	resp, err := ateletpb.NewAteomSupportClient(conn).MintActorCertificate(ctx, &ateletpb.MintActorCertificateRequest{
+	resp, err := ateletpb.NewWorkerSupportClient(conn).MintActorCertificate(ctx, &ateletpb.MintActorCertificateRequest{
 		ActorAtespace:             s.actorAtespace,
 		ActorName:                 s.actorName,
 		ActorUid:                  s.actorUID,

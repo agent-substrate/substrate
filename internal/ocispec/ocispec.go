@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // Package ocispec builds the runtime-neutral OCI spec for actor bundles, which
-// each ateom shapes for its runtime.
+// each worker shapes for its runtime.
 package ocispec
 
 import (
@@ -39,7 +39,7 @@ const hostname = "actor"
 type Options struct {
 	Args []string
 	Env  []string
-	// NetNSPath is the network namespace the ateom runs the actor in.
+	// NetNSPath is the network namespace the worker runs the actor in.
 	NetNSPath    string
 	Volumes      []*ateletpb.Volume
 	VolumeMounts []*ateletpb.VolumeMount
@@ -152,7 +152,7 @@ func Build(o Options) *specs.Spec {
 				},
 				{
 					Type: "network",
-					Path: o.NetNSPath, // Will be created by ateom
+					Path: o.NetNSPath, // Will be created by worker
 				},
 				{
 					Type: "ipc",

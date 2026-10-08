@@ -311,7 +311,7 @@ jobs:
         done
         # Every worker pod in any namespace: the demo pools plus the e2e suites'
         # randomly-named per-test namespaces, which the suites keep on failure.
-        # The failing actor runs in one of these, so this is where its ateom logs
+        # The failing actor runs in one of these, so this is where its worker logs
         # (and, for a micro-VM worker, the guest console tail) live.
         kubectl --context kind-kind get pods -A -l ate.dev/worker-pool \
           -o 'custom-columns=:.metadata.namespace,:.metadata.name' --no-headers 2>/dev/null \

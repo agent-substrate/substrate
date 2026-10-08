@@ -140,7 +140,7 @@ prioritizing it, not a fundamental limitation of the design.
 ## Micro-VM variant
 
 The same in-RAM-counter suspend/resume-continuity demo also runs on the micro-VM
-sandbox class (`ateom-microvm`: a Kata guest on Cloud Hypervisor), proving that
+sandbox class (`ateworker-microvm`: a Kata guest on Cloud Hypervisor), proving that
 the guest-memory snapshot round-trips just as gVisor's process snapshot does.
 
 - [`demos/counter/counter-microvm.yaml.tmpl`](counter-microvm.yaml.tmpl) —

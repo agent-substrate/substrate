@@ -22,7 +22,7 @@ import (
 	"testing"
 
 	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -101,7 +101,7 @@ func TestIsValidResourceName(t *testing.T) {
 	}
 }
 
-func TestValidateAteomUID(t *testing.T) {
+func TestValidateWorkerPodUID(t *testing.T) {
 	tests := []struct {
 		name    string
 		uid     string
@@ -116,8 +116,8 @@ func TestValidateAteomUID(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if err := ValidateAteomUID(tt.uid); (err != nil) != tt.wantErr {
-				t.Errorf("ValidateAteomUID(%q) err = %v, wantErr %v", tt.uid, err, tt.wantErr)
+			if err := ValidateWorkerPodUID(tt.uid); (err != nil) != tt.wantErr {
+				t.Errorf("ValidateWorkerPodUID(%q) err = %v, wantErr %v", tt.uid, err, tt.wantErr)
 			}
 		})
 	}
@@ -302,8 +302,8 @@ func TestValidateLimit(t *testing.T) {
 	}
 }
 
-func testActorDirs() *ateompb.ActorDirs {
-	return &ateompb.ActorDirs{
+func testActorDirs() *ateworkerpb.ActorDirs {
+	return &ateworkerpb.ActorDirs{
 		RootDir:                   "/node/actors/a",
 		OciBundleDir:              "/node/actors/a/bundles",
 		CheckpointDir:             "/node/actors/a/checkpoint-state",
@@ -317,22 +317,25 @@ func testActorDirs() *ateompb.ActorDirs {
 func TestValidateActorDirs(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
-		mutate func(*ateompb.ActorDirs) *ateompb.ActorDirs
+		mutate func(*ateworkerpb.ActorDirs) *ateworkerpb.ActorDirs
 		// wantField is the field the one expected error names; empty means valid.
 		wantField string
 	}{
-		{"valid", func(actorDirs *ateompb.ActorDirs) *ateompb.ActorDirs { return actorDirs }, ""},
-		{"nil", func(*ateompb.ActorDirs) *ateompb.ActorDirs { return nil }, "actor_dirs"},
-		{"missing dir", func(actorDirs *ateompb.ActorDirs) *ateompb.ActorDirs { actorDirs.RestoreDir = ""; return actorDirs }, "actor_dirs.restore_dir"},
-		{"relative dir", func(actorDirs *ateompb.ActorDirs) *ateompb.ActorDirs {
+		{"valid", func(actorDirs *ateworkerpb.ActorDirs) *ateworkerpb.ActorDirs { return actorDirs }, ""},
+		{"nil", func(*ateworkerpb.ActorDirs) *ateworkerpb.ActorDirs { return nil }, "actor_dirs"},
+		{"missing dir", func(actorDirs *ateworkerpb.ActorDirs) *ateworkerpb.ActorDirs {
+			actorDirs.RestoreDir = ""
+			return actorDirs
+		}, "actor_dirs.restore_dir"},
+		{"relative dir", func(actorDirs *ateworkerpb.ActorDirs) *ateworkerpb.ActorDirs {
 			actorDirs.OciBundleDir = "bundles"
 			return actorDirs
 		}, "actor_dirs.oci_bundle_dir"},
-		{"unclean dir", func(actorDirs *ateompb.ActorDirs) *ateompb.ActorDirs {
+		{"unclean dir", func(actorDirs *ateworkerpb.ActorDirs) *ateworkerpb.ActorDirs {
 			actorDirs.CheckpointDir = "/node/actors/a/../b/checkpoint-state"
 			return actorDirs
 		}, "actor_dirs.checkpoint_dir"},
-		{"relative root", func(actorDirs *ateompb.ActorDirs) *ateompb.ActorDirs {
+		{"relative root", func(actorDirs *ateworkerpb.ActorDirs) *ateworkerpb.ActorDirs {
 			actorDirs.RootDir = "node/actors/a"
 			return actorDirs
 		}, "actor_dirs.root_dir"},

@@ -90,8 +90,8 @@ func TestPrebuiltResolveBytes(t *testing.T) {
 			// The reference is a plain CRD field here, not a pod spec, which is
 			// why the rewrite cannot be driven off a Kubernetes schema.
 			name: "CRD field",
-			in:   "spec:\n  workerImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor\n",
-			want: "spec:\n  workerImage: example.com/substrate/ateom-gvisor:v1.2.3" + digestSuffix + "\n",
+			in:   "spec:\n  workerImage: ko://github.com/agent-substrate/substrate/cmd/ateworker-gvisor\n",
+			want: "spec:\n  workerImage: example.com/substrate/ateworker-gvisor:v1.2.3" + digestSuffix + "\n",
 		},
 		{
 			// A tag can carry its own digest, and then there is nothing to look
@@ -133,8 +133,8 @@ func TestPrebuiltResolveBytes(t *testing.T) {
 			// message and nothing else: the truncation cannot collide with a
 			// listed package, because every one of those ends before the "$".
 			name:  "unexpanded placeholder",
-			in:    "image: ko://github.com/agent-substrate/substrate/cmd/ateom-${SANDBOX_CLASS}\n",
-			error: "cmd/ateom-${SANDBOX_CLASS has no published image",
+			in:    "image: ko://github.com/agent-substrate/substrate/cmd/ateworker-${SANDBOX_CLASS}\n",
+			error: "cmd/ateworker-${SANDBOX_CLASS has no published image",
 		},
 		{
 			// A reference extending a known one must not inherit its image. A
@@ -217,7 +217,7 @@ func TestPrebuiltResolveBytes(t *testing.T) {
 // Every unmappable reference is reported at once, so a manifest with several
 // problems takes one install attempt to diagnose rather than several.
 func TestPrebuiltReportsEveryFailure(t *testing.T) {
-	in := "a: ko://github.com/agent-substrate/substrate/cmd/ateom-${SANDBOX_CLASS}\n" +
+	in := "a: ko://github.com/agent-substrate/substrate/cmd/ateworker-${SANDBOX_CLASS}\n" +
 		"b: ko://github.com/example/other/cmd/thing\n" +
 		"c: ko://github.com/agent-substrate/substrate/cmd/nope\n"
 

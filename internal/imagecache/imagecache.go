@@ -14,10 +14,10 @@
 
 // Package imagecache implements the node-local OCI image cache: a
 // content-addressed pool of unpacked image layers shared by every actor on
-// the node, plus the per-bundle overlay spec that tells the ateom runtimes
+// the node, plus the per-bundle overlay spec that tells the worker runtimes
 // how to compose an actor rootfs from cached layers.
 //
-// The work is split along the existing atelet/ateom privilege boundary:
+// The work is split along the existing atelet/worker privilege boundary:
 //
 //   - atelet (plain root, all capabilities dropped) pulls layers and unpacks
 //     them into the pool (Store.EnsureImage), and writes a rootfs-overlay.json
@@ -25,19 +25,19 @@
 //     recorded in per-layer metadata rather than materialized, because
 //     overlayfs whiteouts are char devices (CAP_MKNOD) with trusted.* xattrs
 //     for opaque dirs (CAP_SYS_ADMIN).
-//   - ateom (privileged; it already owns every mount on the node) finalizes
+//   - worker (privileged; it already owns every mount on the node) finalizes
 //     layers — materializing the recorded whiteout state, once per layer —
 //     and mounts the overlay rootfs (SetupBundleRootfs) just before
 //     `runsc create` / staging the micro-VM virtio-fs lower.
 //
 // On-disk layout under the cache root (a directory on the BasePath hostPath,
-// so the same absolute paths resolve in atelet and every ateom pod):
+// so the same absolute paths resolve in atelet and every worker pod):
 //
 //	version                          layout version marker
 //	layers/sha256/<diffid-hex>/
 //	    fs/                          the unpacked layer tree (overlay lowerdir)
 //	    whiteouts.json               whiteout state recorded at unpack time
-//	    finalized                    marker written by FinalizeLayer (ateom)
+//	    finalized                    marker written by FinalizeLayer (worker)
 //	manifests/sha256/<digest-hex>.json
 //	                                 image config + ordered diffID list
 //
@@ -197,7 +197,7 @@ type Store struct {
 
 	// minAge vetoes eviction of any layer or image record younger than this,
 	// covering the window between a pull (or cache-hit stat) and the bundle
-	// spec write / ateom mount that roots it.
+	// spec write / worker mount that roots it.
 	minAge time.Duration
 
 	// pullTimeout bounds each pull. Pulls run detached from the contexts of
@@ -495,7 +495,7 @@ func (s *Store) EnsureImage(ctx context.Context, ref string) (_ *Image, err erro
 // with respect to eviction's record removal (removeStaleRecord holds
 // hitMu exclusive). Refreshing the mtime also renews the min-age veto, so
 // an image in active use cannot age into eviction between this stat and
-// the ateom's mount.
+// the worker's mount.
 func (s *Store) cachedImageHit(digest v1.Hash) (*Image, error) {
 	s.hitMu.RLock()
 	defer s.hitMu.RUnlock()

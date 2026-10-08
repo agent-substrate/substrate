@@ -169,7 +169,7 @@ func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resourc
 	if err != nil {
 		return "", fmt.Errorf("while getting atelet conn for node %q: %w", assignment.GetNodeName(), err)
 	}
-	client := ateletpb.NewAteomHerderClient(ateletConn)
+	client := ateletpb.NewAteletClient(ateletConn)
 
 	workloadSpec, err := workloadSpecFromActorTemplate(actorTemplate, actor, nil)
 	if err != nil {
@@ -180,7 +180,7 @@ func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resourc
 	// actor is currently running (recorded on-node at Run/Restore) and pins it
 	// into the snapshot manifest.
 	req := &ateletpb.CheckpointRequest{
-		TargetAteomUid:        assignment.GetWorkerPodUid(),
+		TargetWorkerPodUid:    assignment.GetWorkerPodUid(),
 		Atespace:              actor.GetMetadata().GetAtespace(),
 		ActorName:             actor.GetMetadata().GetName(),
 		ActorTemplateAtespace: actor.GetActorTemplate().GetAtespace(),
