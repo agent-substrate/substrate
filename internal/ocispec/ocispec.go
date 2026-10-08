@@ -110,8 +110,10 @@ func Build(o Options) *specs.Spec {
 			Rlimits: []specs.POSIXRlimit{
 				{
 					Type: "RLIMIT_NOFILE",
-					Hard: 1024,
-					Soft: 1024,
+					// NOTE: raised from 1024 because proxy-heavy actors ran out
+					// of sockets; 1048576 is the kernel's default fs.nr_open.
+					Hard: 1048576,
+					Soft: 1048576,
 				},
 			},
 		},

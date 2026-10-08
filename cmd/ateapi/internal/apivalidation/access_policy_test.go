@@ -90,6 +90,12 @@ func TestValidateCreateGlobalAccessPolicyRequest(t *testing.T) {
 		})},
 		wantError: field.ErrorList{field.Forbidden(accessPolicyPath.Child("metadata", "atespace"), "")},
 	}, {
+		name: "missing name",
+		req: &ateapipb.CreateGlobalAccessPolicyRequest{AccessPolicy: validAccessPolicy(func(p *ateapipb.AccessPolicy) {
+			p.Metadata.Name = ""
+		})},
+		wantError: field.ErrorList{field.Required(accessPolicyPath.Child("metadata", "name"), "")},
+	}, {
 		name: "name not default",
 		req: &ateapipb.CreateGlobalAccessPolicyRequest{AccessPolicy: validAccessPolicy(func(p *ateapipb.AccessPolicy) {
 			p.Metadata.Name = "other"
@@ -252,6 +258,18 @@ func TestValidateCreateAtespaceAccessPolicyRequest(t *testing.T) {
 		name:      "missing access_policy",
 		req:       &ateapipb.CreateAtespaceAccessPolicyRequest{Atespace: atespace},
 		wantError: field.ErrorList{field.Required(accessPolicyPath, "")},
+	}, {
+		name: "missing name",
+		req: &ateapipb.CreateAtespaceAccessPolicyRequest{Atespace: atespace, AccessPolicy: validAccessPolicy(func(p *ateapipb.AccessPolicy) {
+			p.Metadata.Name = ""
+		})},
+		wantError: field.ErrorList{field.Required(accessPolicyPath.Child("metadata", "name"), "")},
+	}, {
+		name: "name not default",
+		req: &ateapipb.CreateAtespaceAccessPolicyRequest{Atespace: atespace, AccessPolicy: validAccessPolicy(func(p *ateapipb.AccessPolicy) {
+			p.Metadata.Name = "other"
+		})},
+		wantError: field.ErrorList{field.Invalid(accessPolicyPath.Child("metadata", "name"), nil, "").WithOrigin("custom=default")},
 	}, {
 		name: "unknown role",
 		req: &ateapipb.CreateAtespaceAccessPolicyRequest{Atespace: atespace, AccessPolicy: validAccessPolicy(func(p *ateapipb.AccessPolicy) {

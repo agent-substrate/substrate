@@ -15,13 +15,18 @@
 package objectstore_test
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 
+	"cloud.google.com/go/storage"
 	"github.com/agent-substrate/substrate/internal/objectstore"
 	"github.com/agent-substrate/substrate/internal/objectstore/objectstoretest"
 	"github.com/agent-substrate/substrate/internal/resources"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 )
@@ -140,6 +145,49 @@ func TestDeletePrefix(t *testing.T) {
 				t.Errorf("objects after DeletePrefix(%s) differ (-want +got):\n%s", tt.target, diff)
 			}
 		})
+	}
+}
+
+func TestDeletePrefix_MissingBucketWarning(t *testing.T) {
+	for _, provider := range []struct {
+		name string
+		err  error
+	}{
+		{name: "S3", err: &types.NoSuchBucket{}},
+		{name: "GCS", err: storage.ErrBucketNotExist},
+	} {
+		for _, phase := range []string{"list", "delete"} {
+			t.Run(provider.name+"/"+phase, func(t *testing.T) {
+				var logs bytes.Buffer
+				previous := slog.Default()
+				slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+				t.Cleanup(func() { slog.SetDefault(previous) })
+
+				fake := objectstoretest.New()
+				uri := mustActorSnapshotURI(t, testLocation, "team-a", "actor-1", "snap-1")
+				fake.PutSnapshot(t, uri, "manifest.json")
+				fail := func(string, string) error { return provider.err }
+				if phase == "list" {
+					fake.OnList = fail
+				} else {
+					fake.OnDelete = fail
+				}
+				if err := objectstore.DeletePrefix(t.Context(), fake, uri.Prefix()); err != nil {
+					t.Fatalf("DeletePrefix: %v", err)
+				}
+				var record struct {
+					Level  string `json:"level"`
+					Bucket string `json:"bucket"`
+					Error  string `json:"error"`
+				}
+				if err := json.Unmarshal(logs.Bytes(), &record); err != nil {
+					t.Fatalf("expected a warning for the missing bucket, got %q: %v", logs.String(), err)
+				}
+				if record.Level != "WARN" || record.Bucket != "bucket" || record.Error != provider.err.Error() {
+					t.Errorf("missing-bucket warning = %+v, want WARN with bucket and provider error", record)
+				}
+			})
+		}
 	}
 }
 

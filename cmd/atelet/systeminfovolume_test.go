@@ -16,8 +16,14 @@ package main
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/pem"
 	"fmt"
+	"math/big"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,6 +32,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
+	"github.com/agent-substrate/substrate/cmd/atelet/internal/trustbundle"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	certsv1 "k8s.io/api/certificates/v1"
@@ -34,6 +41,36 @@ import (
 	certlisters "k8s.io/client-go/listers/certificates/v1"
 	"k8s.io/client-go/tools/cache"
 )
+
+// testCertPEM mints a throwaway self-signed certificate, PEM-encoded.
+func testCertPEM(t *testing.T) []byte {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.CreateCertificate(rand.Reader, &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "test"},
+		NotBefore:    time.Now(),
+		NotAfter:     time.Now().Add(time.Hour),
+	}, &x509.Certificate{SerialNumber: big.NewInt(1)}, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+}
+
+func ctbLister(t *testing.T, bundles ...*certsv1beta1.ClusterTrustBundle) certlisters.ClusterTrustBundleLister {
+	t.Helper()
+	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
+	for _, b := range bundles {
+		if err := indexer.Add(b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return certlisters.NewClusterTrustBundleLister(indexer)
+}
 
 // ctbStore stands in for the informer cache; set replaces the backing
 // ClusterTrustBundle the way a watch event would.
@@ -50,7 +87,7 @@ func newCTBStore(t *testing.T) *ctbStore {
 
 func (s *ctbStore) object(raw string) *certsv1.ClusterTrustBundle {
 	return &certsv1.ClusterTrustBundle{
-		ObjectMeta: metav1.ObjectMeta{Name: egressTrustBundleObjectName},
+		ObjectMeta: metav1.ObjectMeta{Name: trustbundle.EgressCTB},
 		Spec:       certsv1.ClusterTrustBundleSpec{TrustBundle: raw},
 	}
 }
@@ -75,7 +112,7 @@ func trustVolumeSpec(relPath string) *ateletpb.SystemInfoVolume {
 	return &ateletpb.SystemInfoVolume{
 		DataSources: []*ateletpb.SystemInfoDataSource{
 			{DataSource: &ateletpb.SystemInfoDataSource_TrustBundle{
-				TrustBundle: &ateletpb.TrustBundleDataSource{Names: []string{EgressTrustBundleName}, Path: relPath},
+				TrustBundle: &ateletpb.TrustBundleDataSource{Names: []string{trustbundle.EgressName}, Path: relPath},
 			}},
 		},
 	}
@@ -106,7 +143,7 @@ func registerTrustVolume(t *testing.T, r *systemInfoVolumeRefresher, dir, actorU
 		Root: filepath.Join(dir, actorUID, "system-info", "trust"),
 		Spec: trustVolumeSpec("ca.pem"),
 	}
-	if err := r.Register(actorUID, resources.ActorRef{Atespace: "team-a", Name: actorUID}, []*systemInfoVolume{vol}); err != nil {
+	if _, err := r.Register(actorUID, resources.ActorRef{Atespace: "team-a", Name: actorUID}, []*systemInfoVolume{vol}); err != nil {
 		t.Fatalf("Register(%s): %v", actorUID, err)
 	}
 }
@@ -125,7 +162,7 @@ func TestSystemInfoVolumeRefresher_RefreshesRunningActorsOnChange(t *testing.T) 
 	certA, certB := string(testCertPEM(t)), string(testCertPEM(t))
 	store := newCTBStore(t)
 	store.set(t, certA)
-	r := newSystemInfoVolumeRefresher(store.lister.Get, nil)
+	r := newSystemInfoVolumeRefresher(trustbundle.NewSource(store.lister.Get, nil), nil)
 	dir := t.TempDir()
 
 	// Two running actors project the same bundle; a rotation must rewrite
@@ -138,7 +175,7 @@ func TestSystemInfoVolumeRefresher_RefreshesRunningActorsOnChange(t *testing.T) 
 	}
 
 	store.set(t, certB)
-	if err := r.refreshBundle(ctx, EgressTrustBundleName); err != nil {
+	if err := r.refreshBundle(ctx, trustbundle.EgressName); err != nil {
 		t.Fatalf("refreshBundle: %v", err)
 	}
 	for _, uid := range []string{"uid-1", "uid-2"} {
@@ -148,17 +185,21 @@ func TestSystemInfoVolumeRefresher_RefreshesRunningActorsOnChange(t *testing.T) 
 	}
 
 	// A replayed event for unchanged contents (relist, resync) must not
-	// rewrite the file, since a rewrite replaces the inode. The sentinel
-	// stands in for the inode.
-	sentinelPath := filepath.Join(dir, "uid-1", "system-info", "trust", "ca.pem")
-	if err := os.WriteFile(sentinelPath, []byte("sentinel"), 0o644); err != nil {
+	// rewrite the file, since a rewrite replaces the inode.
+	projectedPath := filepath.Join(dir, "uid-1", "system-info", "trust", "ca.pem")
+	before, err := os.Stat(projectedPath)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := r.refreshBundle(ctx, EgressTrustBundleName); err != nil {
+	if err := r.refreshBundle(ctx, trustbundle.EgressName); err != nil {
 		t.Fatalf("refreshBundle (replay): %v", err)
 	}
-	if got := readProjected(t, dir, "uid-1", "trust", "ca.pem"); got != "sentinel" {
-		t.Errorf("projected file rewritten on a no-change event (got %q)", got)
+	after, err := os.Stat(projectedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(before, after) {
+		t.Error("projected file replaced on a no-change event")
 	}
 }
 
@@ -167,13 +208,13 @@ func TestSystemInfoVolumeRefresher_KeepsLastGoodOnFailure(t *testing.T) {
 	certA, certB := string(testCertPEM(t)), string(testCertPEM(t))
 	store := newCTBStore(t)
 	store.set(t, certA)
-	r := newSystemInfoVolumeRefresher(store.lister.Get, nil)
+	r := newSystemInfoVolumeRefresher(trustbundle.NewSource(store.lister.Get, nil), nil)
 	dir := t.TempDir()
 	registerTrustVolume(t, r, dir, "uid-1")
 
 	t.Run("backing object deleted", func(t *testing.T) {
 		store.remove(t)
-		if err := r.refreshBundle(ctx, EgressTrustBundleName); err != nil {
+		if err := r.refreshBundle(ctx, trustbundle.EgressName); err != nil {
 			t.Errorf("refreshBundle = %v, want nil: resolution failures wait for the next event, not the queue", err)
 		}
 		if got := readProjected(t, dir, "uid-1", "trust", "ca.pem"); got != certA {
@@ -183,7 +224,7 @@ func TestSystemInfoVolumeRefresher_KeepsLastGoodOnFailure(t *testing.T) {
 
 	t.Run("backing object unusable", func(t *testing.T) {
 		store.set(t, "no certificates here")
-		r.refreshBundle(ctx, EgressTrustBundleName)
+		r.refreshBundle(ctx, trustbundle.EgressName)
 		if got := readProjected(t, dir, "uid-1", "trust", "ca.pem"); got != certA {
 			t.Errorf("projected file = %q, want the last good bundle to survive junk contents", got)
 		}
@@ -191,7 +232,7 @@ func TestSystemInfoVolumeRefresher_KeepsLastGoodOnFailure(t *testing.T) {
 
 	t.Run("recovers when the bundle heals", func(t *testing.T) {
 		store.set(t, certB)
-		if err := r.refreshBundle(ctx, EgressTrustBundleName); err != nil {
+		if err := r.refreshBundle(ctx, trustbundle.EgressName); err != nil {
 			t.Fatalf("refreshBundle: %v", err)
 		}
 		if got := readProjected(t, dir, "uid-1", "trust", "ca.pem"); got != certB {
@@ -205,13 +246,13 @@ func TestSystemInfoVolumeRefresher_Deregister(t *testing.T) {
 	certA, certB := string(testCertPEM(t)), string(testCertPEM(t))
 	store := newCTBStore(t)
 	store.set(t, certA)
-	r := newSystemInfoVolumeRefresher(store.lister.Get, nil)
+	r := newSystemInfoVolumeRefresher(trustbundle.NewSource(store.lister.Get, nil), nil)
 	dir := t.TempDir()
 	registerTrustVolume(t, r, dir, "uid-1")
 
 	r.Deregister("uid-1")
 	store.set(t, certB)
-	r.refreshBundle(ctx, EgressTrustBundleName)
+	r.refreshBundle(ctx, trustbundle.EgressName)
 	if got := readProjected(t, dir, "uid-1", "trust", "ca.pem"); got != certA {
 		t.Errorf("projected file = %q, refreshed after deregistration", got)
 	}
@@ -222,21 +263,21 @@ func TestSystemInfoVolumeRefresher_RegisterEmptyStopsRefreshing(t *testing.T) {
 	certA, certB := string(testCertPEM(t)), string(testCertPEM(t))
 	store := newCTBStore(t)
 	store.set(t, certA)
-	r := newSystemInfoVolumeRefresher(store.lister.Get, nil)
+	r := newSystemInfoVolumeRefresher(trustbundle.NewSource(store.lister.Get, nil), nil)
 	dir := t.TempDir()
 	registerTrustVolume(t, r, dir, "uid-1")
 
 	// The actor comes back under a spec with no system-info volumes: it stays
 	// tracked, but its former volumes stop refreshing.
 	r.Deregister("uid-1")
-	if err := r.Register("uid-1", resources.ActorRef{Atespace: "team-a", Name: "uid-1"}, nil); err != nil {
+	if _, err := r.Register("uid-1", resources.ActorRef{Atespace: "team-a", Name: "uid-1"}, nil); err != nil {
 		t.Fatalf("Register(empty): %v", err)
 	}
 	if r.actors["uid-1"] == nil {
 		t.Error("actor dropped from the registry by a volume-less registration; every running actor stays tracked")
 	}
 	store.set(t, certB)
-	r.refreshBundle(ctx, EgressTrustBundleName)
+	r.refreshBundle(ctx, trustbundle.EgressName)
 	if got := readProjected(t, dir, "uid-1", "trust", "ca.pem"); got != certA {
 		t.Errorf("projected file = %q, refreshed after an empty registration", got)
 	}
@@ -249,10 +290,10 @@ func TestSystemInfoVolumeRefresher_RegisterRewritesFromCurrentState(t *testing.T
 	store := newCTBStore(t)
 	store.set(t, certA)
 	dir := t.TempDir()
-	registerTrustVolume(t, newSystemInfoVolumeRefresher(store.lister.Get, nil), dir, "uid-1")
+	registerTrustVolume(t, newSystemInfoVolumeRefresher(trustbundle.NewSource(store.lister.Get, nil), nil), dir, "uid-1")
 
 	store.set(t, certB)
-	registerTrustVolume(t, newSystemInfoVolumeRefresher(store.lister.Get, nil), dir, "uid-1")
+	registerTrustVolume(t, newSystemInfoVolumeRefresher(trustbundle.NewSource(store.lister.Get, nil), nil), dir, "uid-1")
 	if got := readProjected(t, dir, "uid-1", "trust", "ca.pem"); got != certB {
 		t.Errorf("projected file = %q, want the rotation missed while down applied at registration", got)
 	}
@@ -266,7 +307,7 @@ func TestSystemInfoVolumeRefresher_WriteFailureIsolatedAndRetried(t *testing.T) 
 	certA, certB := string(testCertPEM(t)), string(testCertPEM(t))
 	store := newCTBStore(t)
 	store.set(t, certA)
-	r := newSystemInfoVolumeRefresher(store.lister.Get, nil)
+	r := newSystemInfoVolumeRefresher(trustbundle.NewSource(store.lister.Get, nil), nil)
 	dir := t.TempDir()
 	for _, uid := range []string{"uid-1", "uid-2"} {
 		registerTrustVolume(t, r, dir, uid)
@@ -280,7 +321,7 @@ func TestSystemInfoVolumeRefresher_WriteFailureIsolatedAndRetried(t *testing.T) 
 	}
 	t.Cleanup(func() { _ = os.Chmod(blocked, 0o755) })
 	store.set(t, certB)
-	if err := r.refreshBundle(ctx, EgressTrustBundleName); err == nil {
+	if err := r.refreshBundle(ctx, trustbundle.EgressName); err == nil {
 		t.Error("refreshBundle = nil, want the write failure surfaced for requeue")
 	}
 	if got := readProjected(t, dir, "uid-2", "trust", "ca.pem"); got != certB {
@@ -295,7 +336,7 @@ func TestSystemInfoVolumeRefresher_WriteFailureIsolatedAndRetried(t *testing.T) 
 	if err := os.Chmod(blocked, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.refreshBundle(ctx, EgressTrustBundleName); err != nil {
+	if err := r.refreshBundle(ctx, trustbundle.EgressName); err != nil {
 		t.Fatalf("refreshBundle (retry): %v", err)
 	}
 	if got := readProjected(t, dir, "uid-1", "trust", "ca.pem"); got != certB {
@@ -314,7 +355,7 @@ func TestSystemInfoVolumeRefresher_EventPipelineRetriesFailedWrites(t *testing.T
 	certA, certB := string(testCertPEM(t)), string(testCertPEM(t))
 	store := newCTBStore(t)
 	store.set(t, certA)
-	r := newSystemInfoVolumeRefresher(store.lister.Get, nil)
+	r := newSystemInfoVolumeRefresher(trustbundle.NewSource(store.lister.Get, nil), nil)
 	dir := t.TempDir()
 	registerTrustVolume(t, r, dir, "uid-1")
 
@@ -356,12 +397,12 @@ func TestSystemInfoVolumeRefresher_RotationLeavesUnchangedFilesAlone(t *testing.
 	certA, certB := string(testCertPEM(t)), string(testCertPEM(t))
 	store := newCTBStore(t)
 	store.set(t, certA)
-	r := newSystemInfoVolumeRefresher(store.lister.Get, nil)
+	r := newSystemInfoVolumeRefresher(trustbundle.NewSource(store.lister.Get, nil), nil)
 	root := filepath.Join(t.TempDir(), "system-info", "vol1")
 	spec := &ateletpb.SystemInfoVolume{
 		DataSources: append(metadataVolumeSpec().GetDataSources(), trustVolumeSpec("trust/ca.pem").GetDataSources()...),
 	}
-	if err := r.Register("uid-1", resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, []*systemInfoVolume{{Name: "vol1", Root: root, Spec: spec}}); err != nil {
+	if _, err := r.Register("uid-1", resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, []*systemInfoVolume{{Name: "vol1", Root: root, Spec: spec}}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -371,7 +412,7 @@ func TestSystemInfoVolumeRefresher_RotationLeavesUnchangedFilesAlone(t *testing.
 		t.Fatal(err)
 	}
 	store.set(t, certB)
-	if err := r.refreshBundle(ctx, EgressTrustBundleName); err != nil {
+	if err := r.refreshBundle(ctx, trustbundle.EgressName); err != nil {
 		t.Fatalf("refreshBundle: %v", err)
 	}
 	if got, err := os.ReadFile(filepath.Join(root, "trust", "ca.pem")); err != nil || string(got) != certB {
@@ -388,20 +429,20 @@ func TestSystemInfoVolumeRefresher_RotationLeavesUnchangedFilesAlone(t *testing.
 
 func TestSystemInfoVolumeRegister_WritesActorMetadata(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "system-info", "vol1")
-	r := newSystemInfoVolumeRefresher(nil, nil)
+	r := newSystemInfoVolumeRefresher(trustbundle.NewSource(nil, nil), nil)
 	vol := func() *systemInfoVolume {
 		return &systemInfoVolume{Name: "vol1", Root: root, Spec: metadataVolumeSpec()}
 	}
 
 	golden := resources.ActorRef{Atespace: "ate-e2e-probe", Name: "golden-actor"}
-	if err := r.Register("uid-golden", golden, []*systemInfoVolume{vol()}); err != nil {
+	if _, err := r.Register("uid-golden", golden, []*systemInfoVolume{vol()}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
 	// Overwrite with a different actor, as happens when a snapshot taken from
 	// one actor seeds another on resume: files must carry the new values.
 	alpha := resources.ActorRef{Atespace: "ate-e2e-probe", Name: "probe-alpha"}
-	if err := r.Register("uid-alpha", alpha, []*systemInfoVolume{vol()}); err != nil {
+	if _, err := r.Register("uid-alpha", alpha, []*systemInfoVolume{vol()}); err != nil {
 		t.Fatalf("Register (rewrite): %v", err)
 	}
 
@@ -435,13 +476,13 @@ func TestSystemInfoVolumeRegister_WritesActorMetadata(t *testing.T) {
 // regeneration must not move or drop real paths.
 func TestSystemInfoVolumeRegister_StableRealPaths(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "system-info", "vol1")
-	r := newSystemInfoVolumeRefresher(nil, nil)
+	r := newSystemInfoVolumeRefresher(trustbundle.NewSource(nil, nil), nil)
 	vol := func() *systemInfoVolume {
 		return &systemInfoVolume{Name: "vol1", Root: root, Spec: metadataVolumeSpec()}
 	}
 
 	golden := resources.ActorRef{Atespace: "ate-e2e-probe", Name: "golden-actor"}
-	if err := r.Register("uid-golden", golden, []*systemInfoVolume{vol()}); err != nil {
+	if _, err := r.Register("uid-golden", golden, []*systemInfoVolume{vol()}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 
@@ -466,7 +507,7 @@ func TestSystemInfoVolumeRegister_StableRealPaths(t *testing.T) {
 	// Regenerate for a different actor, as a restore from a shared golden
 	// snapshot does.
 	alpha := resources.ActorRef{Atespace: "ate-e2e-probe", Name: "probe-alpha"}
-	if err := r.Register("uid-alpha", alpha, []*systemInfoVolume{vol()}); err != nil {
+	if _, err := r.Register("uid-alpha", alpha, []*systemInfoVolume{vol()}); err != nil {
 		t.Fatalf("Register (rewrite): %v", err)
 	}
 
@@ -491,7 +532,7 @@ func TestSystemInfoVolumeRefresher_LifecycleUnblockedDuringRefresh(t *testing.T)
 	certA, certB := string(testCertPEM(t)), string(testCertPEM(t))
 	store := newCTBStore(t)
 	store.set(t, certA)
-	r := newSystemInfoVolumeRefresher(store.lister.Get, nil)
+	r := newSystemInfoVolumeRefresher(trustbundle.NewSource(store.lister.Get, nil), nil)
 	dir := t.TempDir()
 	registerTrustVolume(t, r, dir, "uid-a")
 	registerTrustVolume(t, r, dir, "uid-b")
@@ -501,7 +542,7 @@ func TestSystemInfoVolumeRefresher_LifecycleUnblockedDuringRefresh(t *testing.T)
 	stuck.mu.Lock()
 	store.set(t, certB)
 	refreshDone := make(chan error, 1)
-	go func() { refreshDone <- r.refreshBundle(ctx, EgressTrustBundleName) }()
+	go func() { refreshDone <- r.refreshBundle(ctx, trustbundle.EgressName) }()
 
 	lifecycleDone := make(chan struct{})
 	go func() {
@@ -534,7 +575,7 @@ func TestSystemInfoVolumeRefresher_LifecycleUnblockedDuringRefresh(t *testing.T)
 func TestSystemInfoVolumeRefresher_DeregisterMarksStale(t *testing.T) {
 	store := newCTBStore(t)
 	store.set(t, string(testCertPEM(t)))
-	r := newSystemInfoVolumeRefresher(store.lister.Get, nil)
+	r := newSystemInfoVolumeRefresher(trustbundle.NewSource(store.lister.Get, nil), nil)
 	dir := t.TempDir()
 
 	registerTrustVolume(t, r, dir, "uid-1")
@@ -548,12 +589,12 @@ func TestSystemInfoVolumeRefresher_DeregisterMarksStale(t *testing.T) {
 func TestSystemInfoVolumeRefresher_RegisterTwiceSupersedes(t *testing.T) {
 	store := newCTBStore(t)
 	store.set(t, string(testCertPEM(t)))
-	r := newSystemInfoVolumeRefresher(store.lister.Get, nil)
+	r := newSystemInfoVolumeRefresher(trustbundle.NewSource(store.lister.Get, nil), nil)
 	dir := t.TempDir()
 	registerTrustVolume(t, r, dir, "uid-1")
 	first := r.actors["uid-1"]
 
-	if err := r.Register("uid-1", resources.ActorRef{Atespace: "team-a", Name: "uid-1"}, nil); err != nil {
+	if _, err := r.Register("uid-1", resources.ActorRef{Atespace: "team-a", Name: "uid-1"}, nil); err != nil {
 		t.Fatalf("second Register: %v", err)
 	}
 	if !first.stale {
@@ -561,6 +602,86 @@ func TestSystemInfoVolumeRefresher_RegisterTwiceSupersedes(t *testing.T) {
 	}
 	if r.actors["uid-1"] == first {
 		t.Error("superseded entry was not replaced in r.actors")
+	}
+}
+
+func TestSystemInfoVolumeRefresher_StaleDeregisterPreservesNewerRegistration(t *testing.T) {
+	store := newCTBStore(t)
+	store.set(t, string(testCertPEM(t)))
+	r := newSystemInfoVolumeRefresher(trustbundle.NewSource(store.lister.Get, nil), nil)
+
+	firstDir := t.TempDir()
+	firstVol := &systemInfoVolume{
+		Name: "trust", Root: filepath.Join(firstDir, "uid-1", "system-info", "trust"), Spec: trustVolumeSpec("ca.pem"),
+	}
+	first, err := r.Register("uid-1", resources.ActorRef{Atespace: "team-a", Name: "uid-1"}, []*systemInfoVolume{firstVol})
+	if err != nil {
+		t.Fatalf("first Register: %v", err)
+	}
+	registerTrustVolume(t, r, t.TempDir(), "uid-1")
+	newer := r.actors["uid-1"]
+
+	// This models cleanup from the first registration after the second one has
+	// become live. It must not remove the newer registration.
+	r.DeregisterOwned(first)
+	if got := r.actors["uid-1"]; got != newer {
+		t.Fatalf("stale cleanup removed the newer registration: got %p, want %p", got, newer)
+	}
+	r.DeregisterOwned(newer)
+	if got := r.actors["uid-1"]; got != nil {
+		t.Fatalf("owned cleanup left registration B live: got %p", got)
+	}
+}
+
+func TestSystemInfoVolumeRefresher_DeregisterOwnedNil(t *testing.T) {
+	for _, registered := range []bool{false, true} {
+		t.Run(fmt.Sprintf("registered=%v", registered), func(t *testing.T) {
+			r := newSystemInfoVolumeRefresher(trustbundle.NewSource(ctbLister(t).Get, nil), nil)
+			var current *registeredActor
+			if registered {
+				var err error
+				current, err = r.Register("uid-1", resources.ActorRef{}, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			defer func() {
+				if p := recover(); p != nil {
+					t.Errorf("nil owner cleanup panicked: %v", p)
+				}
+			}()
+			r.DeregisterOwned(nil)
+			if r.actors["uid-1"] != current {
+				t.Error("nil owner cleanup removed an existing registration")
+			}
+		})
+	}
+}
+
+func TestSystemInfoVolumeRefresher_FailedReplacementDropsRegistration(t *testing.T) {
+	store := newCTBStore(t)
+	store.set(t, string(testCertPEM(t)))
+	r := newSystemInfoVolumeRefresher(trustbundle.NewSource(store.lister.Get, nil), nil)
+	dir := t.TempDir()
+	registerTrustVolume(t, r, dir, "uid-1")
+	previous := r.actors["uid-1"]
+	// A file in place of the new volume directory forces a real initial-write
+	// failure after the previous registration has been superseded.
+	blockedRoot := filepath.Join(dir, "blocked")
+	if err := os.WriteFile(blockedRoot, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	owner, err := r.Register("uid-1", resources.ActorRef{}, []*systemInfoVolume{{
+		Name: "trust", Root: blockedRoot, Spec: trustVolumeSpec("ca.pem"),
+	}})
+	if err == nil || !strings.Contains(err.Error(), "while creating") {
+		t.Fatalf("Register error = %v, want initial filesystem write failure", err)
+	}
+	if owner != nil {
+		t.Error("failed Register returned an owner; want nil after self-cleanup")
+	}
+	if r.actors["uid-1"] != nil || !previous.stale {
+		t.Error("failed replacement must drop its entry and leave the superseded registration stale")
 	}
 }
 
@@ -590,7 +711,7 @@ func TestSystemInfoVolumeRefresher_ConcurrentLifecycle(t *testing.T) {
 	certA, certB := string(testCertPEM(t)), string(testCertPEM(t))
 	store := newCTBStore(t)
 	store.set(t, certA)
-	r := newSystemInfoVolumeRefresher(store.lister.Get, nil)
+	r := newSystemInfoVolumeRefresher(trustbundle.NewSource(store.lister.Get, nil), nil)
 	dir := t.TempDir()
 
 	var wg sync.WaitGroup
@@ -605,7 +726,7 @@ func TestSystemInfoVolumeRefresher_ConcurrentLifecycle(t *testing.T) {
 					Root: filepath.Join(dir, uid, "system-info", "trust"),
 					Spec: trustVolumeSpec("ca.pem"),
 				}
-				if err := r.Register(uid, resources.ActorRef{Atespace: "team-a", Name: uid}, []*systemInfoVolume{vol}); err != nil {
+				if _, err := r.Register(uid, resources.ActorRef{Atespace: "team-a", Name: uid}, []*systemInfoVolume{vol}); err != nil {
 					t.Errorf("Register(%s): %v", uid, err)
 					return
 				}
@@ -622,7 +743,7 @@ func TestSystemInfoVolumeRefresher_ConcurrentLifecycle(t *testing.T) {
 				cert = certB
 			}
 			_ = store.indexer.Add(store.object(cert))
-			_ = r.refreshBundle(ctx, EgressTrustBundleName)
+			_ = r.refreshBundle(ctx, trustbundle.EgressName)
 		}
 	}()
 	wg.Wait()
@@ -648,7 +769,7 @@ func TestWriteSystemInfoFile_ConfinedToRoot(t *testing.T) {
 	}
 	defer root.Close()
 
-	if err := writeSystemInfoFile(root, "escape/ca.pem", []byte("x")); err == nil {
+	if _, err := writeSystemInfoFile(root, "escape/ca.pem", []byte("x")); err == nil {
 		t.Error("writeSystemInfoFile = nil, want refusal to write through a symlink leaving the volume root")
 	}
 	if _, err := os.Stat(filepath.Join(outside, "ca.pem")); !os.IsNotExist(err) {
@@ -664,22 +785,47 @@ func TestSystemInfoVolumeRegister_TrustBundle(t *testing.T) {
 	store := newCTBStore(t)
 	store.set(t, junk+string(certPEM)+string(certPEM))
 	dir := t.TempDir()
-	registerTrustVolume(t, newSystemInfoVolumeRefresher(store.lister.Get, nil), dir, "uid-1")
+	registerTrustVolume(t, newSystemInfoVolumeRefresher(trustbundle.NewSource(store.lister.Get, nil), nil), dir, "uid-1")
 	if got := readProjected(t, dir, "uid-1", "trust", "ca.pem"); got != string(certPEM) {
 		t.Errorf("content = %q, want the sanitized bundle", got)
 	}
 
 	t.Run("resolution failure fails the start rather than produce an empty trust file", func(t *testing.T) {
-		r := newSystemInfoVolumeRefresher(ctbLister(t).Get, nil)
+		r := newSystemInfoVolumeRefresher(trustbundle.NewSource(ctbLister(t).Get, nil), nil)
 		vol := &systemInfoVolume{Name: "trust", Root: filepath.Join(t.TempDir(), "trust"), Spec: trustVolumeSpec("ca.pem")}
-		err := r.Register("uid-2", resources.ActorRef{Atespace: "team-a", Name: "actor-2"}, []*systemInfoVolume{vol})
+		owner, err := r.Register("uid-2", resources.ActorRef{Atespace: "team-a", Name: "actor-2"}, []*systemInfoVolume{vol})
 		if err == nil || !strings.Contains(err.Error(), "not found") || !strings.Contains(err.Error(), `"trust"`) {
 			t.Errorf("Register = %v, want not-found error naming the volume", err)
+		}
+		if owner != nil {
+			t.Error("failed Register returned an owner; want nil after self-cleanup")
+		}
+		if got := r.actors["uid-2"]; got != nil {
+			t.Errorf("failed initial Register left an entry without caller cleanup: %p", got)
+		}
+	})
+
+	t.Run("failed initial write cleanup preserves a newer registration", func(t *testing.T) {
+		r := newSystemInfoVolumeRefresher(trustbundle.NewSource(ctbLister(t).Get, nil), nil)
+		bad := &systemInfoVolume{Name: "trust", Root: filepath.Join(t.TempDir(), "trust"), Spec: trustVolumeSpec("ca.pem")}
+		owner, err := r.Register("uid-3", resources.ActorRef{Atespace: "team-a", Name: "actor-3"}, []*systemInfoVolume{bad})
+		if err == nil {
+			t.Fatal("Register succeeded without the projected trust bundle")
+		}
+		newer, err := r.Register("uid-3", resources.ActorRef{Atespace: "team-a", Name: "actor-3"}, []*systemInfoVolume{{
+			Name: "metadata", Root: filepath.Join(t.TempDir(), "metadata"), Spec: metadataVolumeSpec(),
+		}})
+		if err != nil {
+			t.Fatalf("newer Register: %v", err)
+		}
+		r.DeregisterOwned(owner)
+		if got := r.actors["uid-3"]; got != newer {
+			t.Errorf("failed initial write cleanup removed newer registration: got %p, want %p", got, newer)
 		}
 	})
 
 	t.Run("re-registration supersedes stale entry without panicking", func(t *testing.T) {
-		r := newSystemInfoVolumeRefresher(store.lister.Get, nil)
+		r := newSystemInfoVolumeRefresher(trustbundle.NewSource(store.lister.Get, nil), nil)
 		dir1 := t.TempDir()
 		dir2 := t.TempDir()
 		registerTrustVolume(t, r, dir1, "uid-rereg")
@@ -695,8 +841,8 @@ func TestSystemInfoVolumeRefresher_APIVersionEvents(t *testing.T) {
 		version string
 		bundle  metav1.Object
 	}{
-		{"v1", &certsv1.ClusterTrustBundle{ObjectMeta: metav1.ObjectMeta{Name: egressTrustBundleObjectName}}},
-		{"v1beta1", &certsv1beta1.ClusterTrustBundle{ObjectMeta: metav1.ObjectMeta{Name: egressTrustBundleObjectName}}},
+		{"v1", &certsv1.ClusterTrustBundle{ObjectMeta: metav1.ObjectMeta{Name: trustbundle.EgressCTB}}},
+		{"v1beta1", &certsv1beta1.ClusterTrustBundle{ObjectMeta: metav1.ObjectMeta{Name: trustbundle.EgressCTB}}},
 	} {
 		for _, event := range []string{"add", "update", "delete", "tombstone"} {
 			t.Run(tc.version+"/"+event, func(t *testing.T) {
@@ -718,7 +864,7 @@ func TestSystemInfoVolumeRefresher_APIVersionEvents(t *testing.T) {
 				}
 				key, _ := r.queue.Get()
 				r.queue.Done(key)
-				if key != EgressTrustBundleName {
+				if key != trustbundle.EgressName {
 					t.Fatalf("queued %q", key)
 				}
 			})

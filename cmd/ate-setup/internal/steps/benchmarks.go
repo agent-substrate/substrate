@@ -42,17 +42,19 @@ type BenchmarkOptions struct {
 	SandboxClass string
 }
 
-// Validate checks the options the shell script would otherwise reject after
-// having already started work.
+// Validate is a precondition on the exported benchmark methods. The commands
+// check the same two settings first and report which channel supplied a bad
+// value; these messages name the field, because a caller that reaches them
+// built the options itself and has no channel to be sent to.
 func (o BenchmarkOptions) Validate() error {
 	if o.WorkerCount < 1 {
-		return fmt.Errorf("--worker-count must be at least 1, got %d", o.WorkerCount)
+		return fmt.Errorf("BenchmarkOptions.WorkerCount must be at least 1, got %d", o.WorkerCount)
 	}
 	switch o.SandboxClass {
 	case config.SandboxClassGvisor, config.SandboxClassMicrovm:
 		return nil
 	default:
-		return fmt.Errorf("--sandbox-class must be %s or %s, got %q",
+		return fmt.Errorf("BenchmarkOptions.SandboxClass must be %s or %s, got %q",
 			config.SandboxClassGvisor, config.SandboxClassMicrovm, o.SandboxClass)
 	}
 }

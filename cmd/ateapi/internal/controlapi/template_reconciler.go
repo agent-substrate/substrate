@@ -23,10 +23,10 @@ import (
 	"unicode/utf8"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/util/workqueue"
@@ -217,7 +217,7 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 
 		// A completed tag survives a crash during actor deletion or checkpointing.
 		tag, err := r.control.GetTag(ctx, &ateapipb.GetTagRequest{Tag: goldenActorRef})
-		if err != nil && status.Code(err) != codes.NotFound {
+		if err != nil && apierror.Code(err) != codes.NotFound {
 			return 0, fmt.Errorf("while getting golden tag: %w", err)
 		}
 		if err == nil {
@@ -228,14 +228,14 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 				return 0, r.saveGoldenTag(ctx, tmpl, goldenActorRef)
 			}
 			// CreateTag cannot resume an incomplete copy. Delete it before retrying.
-			if _, err := r.control.DeleteTag(ctx, &ateapipb.DeleteTagRequest{Tag: goldenActorRef}); err != nil && status.Code(err) != codes.NotFound {
+			if _, err := r.control.DeleteTag(ctx, &ateapipb.DeleteTagRequest{Tag: goldenActorRef}); err != nil && apierror.Code(err) != codes.NotFound {
 				return 0, fmt.Errorf("while deleting incomplete golden tag: %w", err)
 			}
 		}
 
 		actor, err := r.ensureActorExists(ctx, tmpl, goldenActorRef)
 		if err != nil {
-			if status.Code(err) == codes.InvalidArgument {
+			if apierror.Code(err) == codes.InvalidArgument {
 				// Invalid template spec; retrying can't help.
 				return 0, r.fail(ctx, tmpl, reasonGoldenActorInvalid, err.Error())
 			}
@@ -342,7 +342,7 @@ func (r *ActorTemplateReconciler) tagGoldenActor(ctx context.Context, tmpl *atea
 // saveGoldenTag finishes cleanup before recording terminal success, so retries
 // can rediscover the tag even if deletion or the status write fails.
 func (r *ActorTemplateReconciler) saveGoldenTag(ctx context.Context, tmpl *ateapipb.ActorTemplate, ref *ateapipb.ObjectRef) error {
-	if _, err := r.control.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref}); err != nil && status.Code(err) != codes.NotFound {
+	if _, err := r.control.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref}); err != nil && apierror.Code(err) != codes.NotFound {
 		return fmt.Errorf("while deleting golden actor: %w", err)
 	}
 	_, err := r.checkpoint(ctx, tmpl, func(snapshotStatus *ateapipb.GoldenSnapshotStatus) {
@@ -423,14 +423,14 @@ func (r *ActorTemplateReconciler) ensureActorExists(ctx context.Context, tmpl *a
 	if err == nil {
 		return actor, nil
 	}
-	if status.Code(err) != codes.NotFound {
+	if apierror.Code(err) != codes.NotFound {
 		return nil, fmt.Errorf("while getting golden actor: %w", err)
 	}
 	// Golden actor has not yet been created. Its reserved atespace is
 	// system-owned, so ensure it exists rather than assuming bootstrap did.
 	if _, err := r.control.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{
 		Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: goldenActorRef.GetAtespace()}},
-	}); err != nil && status.Code(err) != codes.AlreadyExists {
+	}); err != nil && apierror.Code(err) != codes.AlreadyExists {
 		return nil, fmt.Errorf("while ensuring atespace %q: %w", goldenActorRef.GetAtespace(), err)
 	}
 	actor, err = r.control.CreateActor(ctx, &ateapipb.CreateActorRequest{

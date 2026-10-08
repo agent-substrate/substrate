@@ -49,14 +49,19 @@ import (
 const (
 	watchPoolMaxConns = 3
 	watchPoolMinConns = 1
+	// Migrations need one connection for Goose's session lock and one for
+	// migration work. Outbox maintenance is serial after startup.
+	ownerPoolMaxConns = 2
 )
 
 type Persistence struct {
 	pool *pgxpool.Pool
-	// watchPool serves the WatchWorkers pollers and the maintenance loop
-	// (outbox partitions, expired leases), keeping them off the request path's pool.
+	// watchPool serves WatchWorkers pollers and expired-lease cleanup.
+	// ownerPool applies migrations and maintains outbox partitions.
 	watchPool             *pgxpool.Pool
+	ownerPool             *pgxpool.Pool
 	ownsWatchPool         bool
+	ownsOwnerPool         bool
 	policyManager         *authz.PolicyManager
 	leaseTTL              time.Duration
 	pollFailureCloseAfter time.Duration
@@ -110,19 +115,51 @@ var _ store.Interface = (*Persistence)(nil)
 // PostgreSQL connection. Callers can retry this error before startup.
 var ErrUnavailable = errors.New("PostgreSQL is unavailable")
 
-// Connect opens a pgxpool against dsn, creates schema if necessary, and
-// applies pending schema migrations. A dedicated watch pool isolates outbox
-// polling and maintenance from writes.
-func Connect(ctx context.Context, dsn, schema string) (*Persistence, error) {
-	if schema == "" {
+// ConnectConfig configures the PostgreSQL pools used by Persistence.
+type ConnectConfig struct {
+	ReadWriteDSN  string
+	OwnerDSN      string
+	ReadWriteRole string
+	OwnerRole     string
+	Schema        string
+	PoolMaxConns  int32
+}
+
+// Connect opens read/write and owner pools. It creates the schema and applies migrations.
+func Connect(ctx context.Context, config ConnectConfig) (*Persistence, error) {
+	if config.Schema == "" {
 		return nil, fmt.Errorf("PostgreSQL schema must not be empty")
 	}
-	cfg, err := poolConfig(dsn)
+	if config.ReadWriteRole == "" {
+		return nil, fmt.Errorf("PostgreSQL read/write role must not be empty")
+	}
+	if config.OwnerRole == "" {
+		return nil, fmt.Errorf("PostgreSQL owner role must not be empty")
+	}
+	if config.PoolMaxConns < 0 {
+		return nil, fmt.Errorf("PostgreSQL pool maximum connections must not be negative")
+	}
+	if config.OwnerDSN == "" {
+		return nil, fmt.Errorf("PostgreSQL owner connection string must not be empty")
+	}
+	readWriteConfig, err := poolConfig(config.ReadWriteDSN, config.ReadWriteRole)
 	if err != nil {
 		return nil, err
 	}
-	cfg.ConnConfig.RuntimeParams["search_path"] = pgx.Identifier{schema}.Sanitize()
-	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	if config.PoolMaxConns > 0 {
+		readWriteConfig.MaxConns = config.PoolMaxConns
+	}
+	readWriteConfig.ConnConfig.RuntimeParams["search_path"] = pgx.Identifier{config.Schema}.Sanitize()
+	ownerConfig, err := poolConfig(config.OwnerDSN, config.OwnerRole)
+	if err != nil {
+		return nil, fmt.Errorf("parse PostgreSQL owner connection string: %w", err)
+	}
+	ownerConfig.ConnConfig.RuntimeParams["search_path"] = pgx.Identifier{config.Schema}.Sanitize()
+	ownerConfig.MaxConns = ownerPoolMaxConns
+	ownerConfig.MinConns = 0
+	ownerConfig.MinIdleConns = 0
+
+	pool, err := pgxpool.NewWithConfig(ctx, readWriteConfig)
 	if err != nil {
 		return nil, fmt.Errorf("opening PostgreSQL pool: %w", err)
 	}
@@ -130,27 +167,42 @@ func Connect(ctx context.Context, dsn, schema string) (*Persistence, error) {
 		pool.Close()
 		return nil, fmt.Errorf("%w: pinging PostgreSQL: %w", ErrUnavailable, err)
 	}
-	if err := createSchema(ctx, pool, schema); err != nil {
+
+	ownerPool, err := pgxpool.NewWithConfig(ctx, ownerConfig)
+	if err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("open PostgreSQL owner pool: %w", err)
+	}
+	if err := ownerPool.Ping(ctx); err != nil {
+		ownerPool.Close()
+		pool.Close()
+		return nil, fmt.Errorf("%w: ping PostgreSQL owner connection: %w", ErrUnavailable, err)
+	}
+	if err := createSchema(ctx, ownerPool, config.Schema); err != nil {
+		ownerPool.Close()
 		pool.Close()
 		return nil, err
 	}
 
-	watchCfg := cfg.Copy()
+	watchCfg := readWriteConfig.Copy()
 	watchCfg.MaxConns = watchPoolMaxConns
 	watchCfg.MinConns = watchPoolMinConns
 	watchPool, err := pgxpool.NewWithConfig(ctx, watchCfg)
 	if err != nil {
+		ownerPool.Close()
 		pool.Close()
 		return nil, fmt.Errorf("opening PostgreSQL watch pool: %w", err)
 	}
 
-	p, err := newPersistence(ctx, pool, watchPool)
+	p, err := newPersistence(ctx, pool, watchPool, ownerPool)
 	if err != nil {
 		watchPool.Close()
+		ownerPool.Close()
 		pool.Close()
 		return nil, err
 	}
 	p.ownsWatchPool = true
+	p.ownsOwnerPool = true
 	return p, nil
 }
 
@@ -164,8 +216,14 @@ func createSchema(ctx context.Context, pool *pgxpool.Pool, schema string) error 
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "agent-substrate:create-schema:"+schema); err != nil {
 		return fmt.Errorf("locking PostgreSQL schema %q: %w", schema, err)
 	}
-	if _, err := tx.Exec(ctx, `CREATE SCHEMA IF NOT EXISTS `+pgx.Identifier{schema}.Sanitize()); err != nil {
-		return fmt.Errorf("creating PostgreSQL schema %q: %w", schema, err)
+	var exists bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = $1)`, schema).Scan(&exists); err != nil {
+		return fmt.Errorf("checking PostgreSQL schema %q: %w", schema, err)
+	}
+	if !exists {
+		if _, err := tx.Exec(ctx, `CREATE SCHEMA IF NOT EXISTS `+pgx.Identifier{schema}.Sanitize()); err != nil {
+			return fmt.Errorf("creating PostgreSQL schema %q: %w", schema, err)
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("committing PostgreSQL schema %q: %w", schema, err)
@@ -173,20 +231,21 @@ func createSchema(ctx context.Context, pool *pgxpool.Pool, schema string) error 
 	return nil
 }
 
-// poolConfig parses dsn into a pool configuration whose TLS material is read
-// from disk again for every new connection.
-//
-// pgx resolves sslcert, sslkey and sslrootcert once, when the connection
-// string is parsed, and pins the result for the life of the pool. The paths in
-// use here are projected pod certificates that the kubelet replaces about
-// every day, so a long-lived process would keep presenting the client
-// certificate it started with, and keep trusting only the CAs it started with,
-// until connections started failing. Re-parsing in BeforeConnect costs one
-// small file read per new connection and picks up every rotation.
-func poolConfig(dsn string) (*pgxpool.Config, error) {
+// poolConfig parses a DSN, assumes the configured role, and refreshes TLS
+// material from projected certificate files for each new connection.
+func poolConfig(dsn, role string) (*pgxpool.Config, error) {
+	if role == "" {
+		return nil, fmt.Errorf("PostgreSQL role must not be empty")
+	}
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
-		return nil, fmt.Errorf("parsing PostgreSQL connection string: %w", err)
+		return nil, fmt.Errorf("parsing PostgreSQL connection string: invalid value")
+	}
+	cfg.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
+		if _, err := conn.Exec(ctx, "SET ROLE "+pgx.Identifier{role}.Sanitize()); err != nil {
+			return fmt.Errorf("assuming PostgreSQL role %q: %w", role, err)
+		}
+		return nil
 	}
 	usesTLS := cfg.ConnConfig.TLSConfig != nil
 	for _, fallback := range cfg.ConnConfig.Fallbacks {
@@ -198,7 +257,7 @@ func poolConfig(dsn string) (*pgxpool.Config, error) {
 	cfg.BeforeConnect = func(_ context.Context, cc *pgx.ConnConfig) error {
 		fresh, err := pgx.ParseConfig(dsn)
 		if err != nil {
-			return fmt.Errorf("re-reading PostgreSQL TLS material: %w", err)
+			return fmt.Errorf("re-reading PostgreSQL TLS material: invalid value")
 		}
 		cc.TLSConfig = fresh.TLSConfig
 		cc.Fallbacks = fresh.Fallbacks
@@ -211,17 +270,18 @@ func poolConfig(dsn string) (*pgxpool.Config, error) {
 // Callers that already hold a pool (e.g. tests using testcontainers) use
 // this directly instead of Connect; outbox watch traffic shares the given pool.
 func NewPersistence(ctx context.Context, pool *pgxpool.Pool) (*Persistence, error) {
-	return newPersistence(ctx, pool, pool)
+	return newPersistence(ctx, pool, pool, pool)
 }
 
-func newPersistence(ctx context.Context, pool, watchPool *pgxpool.Pool) (*Persistence, error) {
-	if err := applyMigrations(ctx, pool); err != nil {
+func newPersistence(ctx context.Context, pool, watchPool, ownerPool *pgxpool.Pool) (*Persistence, error) {
+	if err := applyMigrations(ctx, ownerPool); err != nil {
 		return nil, err
 	}
 	maintenanceCtx, stopMaintenance := context.WithCancel(context.Background())
 	p := &Persistence{
 		pool:                  pool,
 		watchPool:             watchPool,
+		ownerPool:             ownerPool,
 		leaseTTL:              defaultLeaseTTL,
 		pollFailureCloseAfter: outboxPollFailureCloseAfter,
 		stopMaintenance:       stopMaintenance,
@@ -248,13 +308,16 @@ func newPersistence(ctx context.Context, pool, watchPool *pgxpool.Pool) (*Persis
 }
 
 // Close stops the maintenance loop and waits for it to exit,
-// then closes the watch pool if Connect created one. It does not close the
+// then closes the auxiliary pools if Connect created them. It does not close the
 // main pool, which the caller owns.
 func (p *Persistence) Close() {
 	p.stopMaintenance()
 	<-p.maintenanceDone
 	if p.ownsWatchPool {
 		p.watchPool.Close()
+	}
+	if p.ownsOwnerPool {
+		p.ownerPool.Close()
 	}
 }
 

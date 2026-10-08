@@ -89,7 +89,10 @@ spec:
         args:
           - "--grpc-server-cred-bundle=/run/servicedns.podcert.ate.dev/credential-bundle.pem"
           - --authentication-config=/etc/ateapi/authentication/authentication.yaml
-          - --postgres-connection-string=@env
+          - --postgres-read-write-connection-string=@env
+          - --postgres-owner-connection-string=@env
+          - --postgres-read-write-role=@env
+          - --postgres-owner-role=@env
           - --postgres-schema=@env
           - --actor-id-jwt-pool=/run/actor-id-jwt-pool/pool.json
           - --actor-id-ca-pool=/run/actor-id-ca-pool/pool.json
@@ -148,10 +151,14 @@ spec:
         - name: "servicedns"
           mountPath: "/run/servicedns.podcert.ate.dev"
         # podidentity: the apiserver's client identity (SPIFFE) when it dials
-        # the selected store and atelet, plus the trust bundle for verifying
+        # atelet, plus the trust bundle for verifying
         # atelet's serving certificate.
         - name: "podidentity"
           mountPath: "/run/podidentity.podcert.ate.dev"
+        # postgres: separate owner and read/write certificates, with each login as its CN.
+        - name: "postgres"
+          mountPath: "/run/postgres.podcert.ate.dev"
+          readOnly: true
         - name: "actor-id-jwt-pool"
           mountPath: "/run/actor-id-jwt-pool"
         - name: "actor-id-ca-pool"
@@ -232,6 +239,21 @@ spec:
                 matchLabels:
                   podcert.ate.dev/canarying: live
               path: trust-bundle.pem
+      - name: "postgres"
+        projected:
+          sources:
+          - podCertificate:
+              signerName: postgres.podcert.ate.dev/identity
+              keyType: ECDSAP256
+              credentialBundlePath: substrate_owner_user.pem
+              userAnnotations:
+                postgres.podcert.ate.dev/username: substrate_owner_user
+          - podCertificate:
+              signerName: postgres.podcert.ate.dev/identity
+              keyType: ECDSAP256
+              credentialBundlePath: substrate_readwrite_user.pem
+              userAnnotations:
+                postgres.podcert.ate.dev/username: substrate_readwrite_user
       - name: "actor-id-jwt-pool"
         projected:
           sources:

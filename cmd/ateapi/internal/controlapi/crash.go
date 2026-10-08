@@ -23,6 +23,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/actorevent"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -92,7 +93,15 @@ func handleAteletError(ctx context.Context, st crashActorStore, actorRef resourc
 		return fmt.Errorf("actor %s crashed: %w", actorRef, err)
 	}
 
-	return fmt.Errorf("while calling atelet %s: %w", rpc, err)
+	// The caller went away or its deadline passed: report that, not atelet's
+	// error. The actor keeps its assignment, so a retry can finish the operation.
+	if ctx.Err() != nil {
+		return fmt.Errorf("while calling atelet %s: %w: %w", rpc, err, ctx.Err())
+	}
+	if status.Code(err) == codes.Unavailable {
+		return apierror.Unavailable("while calling atelet %s: %w", rpc, err)
+	}
+	return apierror.Internal("while calling atelet %s: %w", rpc, err)
 }
 
 // crashActor moves the actor to CRASHED state and frees the worker it was

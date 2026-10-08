@@ -27,7 +27,6 @@ import (
 	"net/http"
 	"os"
 	"slices"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -81,11 +80,6 @@ func SetLogLevel(level string) error {
 	}
 	return nil
 }
-
-// LogLevel exposes the level behind the serverboot loggers, for binaries
-// that build their own handler but should still honor --log-level. A
-// Leveler (not the LevelVar) so SetLogLevel stays the only mutation path.
-func LogLevel() slog.Leveler { return &logLevel }
 
 // serviceInstanceID is generated once so the tracer and meter resources share it.
 var serviceInstanceID = uuid.NewString()
@@ -182,51 +176,64 @@ func InitTracing(ctx context.Context, opts TracingOptions) (*sdktrace.TracerProv
 		sdktrace.WithResource(res),
 		sdktrace.WithSampler(opts.Sampling.Sampler()),
 	}
-	expOpts := []otlptracegrpc.Option{
-		// GKE managed traces doesn't support validating the TLS certs of the collector.
-		otlptracegrpc.WithInsecure(),
+	// Without an exporter the provider still samples and propagates trace
+	// context, so a component that exports nothing keeps the traces of the
+	// components around it whole.
+	export := tracesPushEnabled(ctx)
+	if export {
+		expOpts := []otlptracegrpc.Option{
+			// GKE managed traces doesn't support validating the TLS certs of the collector.
+			otlptracegrpc.WithInsecure(),
+		}
+		if opts.ExporterConn != nil {
+			// WithGRPCConn takes precedence over endpoint/credential options, so
+			// WithInsecure above is inert on this path.
+			expOpts = append(expOpts, otlptracegrpc.WithGRPCConn(opts.ExporterConn))
+		}
+		exporter, err := otlptracegrpc.New(ctx, expOpts...)
+		if err != nil {
+			return nil, fmt.Errorf("create OTLP exporter: %w", err)
+		}
+		tpOpts = append(tpOpts, sdktrace.WithBatcher(exporter))
 	}
-	if opts.ExporterConn != nil {
-		// WithGRPCConn takes precedence over endpoint/credential options, so
-		// WithInsecure above is inert on this path.
-		expOpts = append(expOpts, otlptracegrpc.WithGRPCConn(opts.ExporterConn))
-	}
-	exporter, err := otlptracegrpc.New(ctx, expOpts...)
-	if err != nil {
-		return nil, fmt.Errorf("create OTLP exporter: %w", err)
-	}
-	tpOpts = append(tpOpts, sdktrace.WithBatcher(exporter))
 
 	tp := sdktrace.NewTracerProvider(tpOpts...)
 	otel.SetTracerProvider(tp)
 	otel.SetTextMapPropagator(propagation.TraceContext{})
-	slog.InfoContext(ctx, "Tracing initialized", slog.String("sampler", opts.Sampling.Sampler().Description()))
+	slog.InfoContext(ctx, "Tracing initialized",
+		slog.String("sampler", opts.Sampling.Sampler().Description()),
+		slog.Bool("export", export))
 	return tp, nil
 }
 
-const metricsExporterEnv = "OTEL_METRICS_EXPORTER"
+const (
+	metricsExporterEnv = "OTEL_METRICS_EXPORTER"
+	tracesExporterEnv  = "OTEL_TRACES_EXPORTER"
+)
 
-// metricsPushEnabled applies OTEL_METRICS_EXPORTER: otlp, the default, or none,
-// which drops the OTLP reader for a component whose metrics are scraped
-// instead. An unrecognized value keeps the OTLP export and logs, the same way
-// ResolveLogsExporter treats OTEL_LOGS_EXPORTER.
-func metricsPushEnabled(ctx context.Context) bool {
-	switch value := strings.ToLower(strings.TrimSpace(os.Getenv(metricsExporterEnv))); value {
-	case "", "otlp":
-		return true
-	case "none":
-		return false
-	default:
-		slog.WarnContext(ctx, "Unsupported metrics exporter, keeping the OTLP export",
-			slog.String("env", metricsExporterEnv),
-			slog.String("exporter", value))
-		return true
+// metricsPushEnabled applies OTEL_METRICS_EXPORTER with the shared exporter
+// rules: the OTLP reader is installed while otlp is selected, as it is when the
+// variable is unset. prometheus, the specification's pull exporter, is known
+// only when pullServed, i.e. the component serves its own /metrics; elsewhere
+// it is skipped as unknown, so a push-only component keeps exporting.
+func metricsPushEnabled(ctx context.Context, pullServed bool) bool {
+	known := []string{ExporterOTLP}
+	if pullServed {
+		known = append(known, exporterPrometheus)
 	}
+	return resolveExportersEnv(ctx, metricsExporterEnv, known, Exporters{ExporterOTLP: true}).Has(ExporterOTLP)
+}
+
+// tracesPushEnabled applies OTEL_TRACES_EXPORTER with the shared exporter
+// rules: the OTLP span exporter is installed while otlp, the default, is
+// selected.
+func tracesPushEnabled(ctx context.Context) bool {
+	return resolveExportersEnv(ctx, tracesExporterEnv, []string{ExporterOTLP}, Exporters{ExporterOTLP: true}).Has(ExporterOTLP)
 }
 
 // InitMetrics registers a global MeterProvider with both a Prometheus
 // reader (exposed via StartMetricsServer's /metrics handler) and an
-// OTLP periodic reader, the latter unless OTEL_METRICS_EXPORTER is "none".
+// OTLP periodic reader, the latter while OTEL_METRICS_EXPORTER selects otlp.
 // The Prometheus reader registers on the default registry.
 func InitMetrics(ctx context.Context, serviceName string) (*sdkmetric.MeterProvider, error) {
 	if serviceName == "" {
@@ -236,16 +243,16 @@ func InitMetrics(ctx context.Context, serviceName string) (*sdkmetric.MeterProvi
 	if err != nil {
 		return nil, fmt.Errorf("create Prometheus metric exporter: %w", err)
 	}
-	return newMeterProvider(ctx, serviceName, metricsPushEnabled(ctx), false, nil, nil, promReader)
+	return newMeterProvider(ctx, serviceName, metricsPushEnabled(ctx, true), false, nil, nil, promReader)
 }
 
 // InitMetricsBridged is for a binary whose scraped endpoint serves a registry
 // it does not own (atecontroller: controller-runtime's), so every metric
 // reaches the backend exactly once on whichever path is active. With the OTLP
 // export, reg is bridged onto the push and the OTel instruments stay off it,
-// since the bridge would otherwise push them a second time. With
-// OTEL_METRICS_EXPORTER=none nothing is pushed and the OTel instruments
-// register on reg, so its endpoint serves both.
+// since the bridge would otherwise push them a second time. When
+// OTEL_METRICS_EXPORTER does not select otlp, nothing is pushed and the OTel
+// instruments register on reg, so its endpoint serves both.
 //
 // wrapProducer, when non-nil, wraps the bridge producer on the OTLP path, for
 // a rewrite the push backend needs but the scraped endpoint does not.
@@ -256,7 +263,7 @@ func InitMetricsBridged(ctx context.Context, serviceName string, reg interface {
 	if serviceName == "" {
 		return nil, fmt.Errorf("serviceName is required")
 	}
-	if metricsPushEnabled(ctx) {
+	if metricsPushEnabled(ctx, true) {
 		producer := prombridge.NewMetricProducer(prombridge.WithGatherer(reg))
 		if wrapProducer != nil {
 			producer = wrapProducer(producer)
@@ -286,7 +293,7 @@ func InitMetricsBridged(ctx context.Context, serviceName string, reg interface {
 // TracingOptions.RelayCapable, implied rather than a parameter because only a
 // caller that has a relay to pass reaches for this function in the first place.
 func InitMetricsPushOnlyVia(ctx context.Context, serviceName string, conn *grpc.ClientConn) (*sdkmetric.MeterProvider, error) {
-	return newMeterProvider(ctx, serviceName, metricsPushEnabled(ctx), true, conn, nil)
+	return newMeterProvider(ctx, serviceName, metricsPushEnabled(ctx, false), true, conn, nil)
 }
 
 func newMeterProvider(ctx context.Context, serviceName string, push, relayCapable bool, conn *grpc.ClientConn, producers []sdkmetric.Producer, extraReaders ...sdkmetric.Reader) (*sdkmetric.MeterProvider, error) {

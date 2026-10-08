@@ -48,8 +48,8 @@ intercepted and carried over mTLS to a gateway that verifies who is making the r
   `EgressPolicy`. A request the gateway can read (cleartext HTTP, or TLS it terminates) is
   decided per request: the rules in order, over its `Host` and the address the Actor dialed,
   first match wins, and the request is sent to what that rule checked. TLS to a name no `https`
-  rule covers is closed at the ClientHello (`tls_passthrough` rules are not supported yet). An
-  Actor with no policy gets no tunnel at all.
+  rule covers is allowed only by a matching `tls_passthrough` rule. An Actor with no policy
+  gets no tunnel at all.
 
 ## Choose a dataplane
 
@@ -58,10 +58,10 @@ ActorTemplate, worker pool, test, and manual walkthrough are otherwise the same.
 
 ```bash
 # Envoy (default)
-./hack/install-ate-kind.sh --deploy-ate-system
+./hack/install-ate-kind.sh --deploy-ate-system --credential-provider='{"name":"k8s.io"}'
 
 # agentgateway
-./hack/install-ate-kind.sh --deploy-ate-system --atenet-dataplane=agentgateway
+./hack/install-ate-kind.sh --deploy-ate-system --atenet-dataplane=agentgateway --credential-provider='{"name":"k8s.io"}'
 ```
 
 | | Envoy | agentgateway |

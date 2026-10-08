@@ -237,15 +237,6 @@ func ValidateCustom_SnapshotConfig_StorageLocation(_ context.Context, _ operatio
 	return nil
 }
 
-// ValidateCustom_SnapshotConfig requires on_commit to be a subset of on_pause.
-func ValidateCustom_SnapshotConfig(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapipb.SnapshotConfig) field.ErrorList {
-	if value.GetOnPause() == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA &&
-		value.GetOnCommit() != ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA {
-		return field.ErrorList{field.Invalid(fldPath.Child("on_commit"), value.GetOnCommit().String(), "must be a subset of on_pause")}
-	}
-	return nil
-}
-
 // envVarNameRE constrains env var names to any printable ASCII character
 // except '='.
 var envVarNameRE = regexp.MustCompile(`^[ -<>-~]+$`)

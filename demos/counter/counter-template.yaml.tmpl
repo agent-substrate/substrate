@@ -54,7 +54,6 @@ resources:
   - name: memory
     quantity: 512Mi
 snapshotConfig:
-  onPause: SNAPSHOT_CONTENT_SCOPE_FULL
   # FULL, so a suspend captures process memory as well as the durable
   # volumes and the tutorial's in-memory counter really does continue
   # across suspend/resume. DATA-scope behavior (durable volumes only,

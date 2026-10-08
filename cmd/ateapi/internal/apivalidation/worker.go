@@ -71,9 +71,9 @@ func ValidateDrainWorkerRequest(ctx context.Context, req *ateapipb.DrainWorkerRe
 	return Validate_DrainWorkerRequest(ctx, op, nil, req, nil)
 }
 
-func ValidateSetWorkerCapacityRequest(ctx context.Context, req *ateapipb.SetWorkerCapacityRequest) field.ErrorList {
+func ValidateRegisterWorkerRequest(ctx context.Context, req *ateapipb.RegisterWorkerRequest) field.ErrorList {
 	op := operation.Operation{Type: operation.Create}
-	return Validate_SetWorkerCapacityRequest(ctx, op, nil, req, nil)
+	return Validate_RegisterWorkerRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateRequestActorSuspendRequest(ctx context.Context, req *ateapipb.RequestActorSuspendRequest) field.ErrorList {

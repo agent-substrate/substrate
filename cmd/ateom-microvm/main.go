@@ -33,6 +33,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	"cloud.google.com/go/compute/metadata"
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/reaper"
@@ -40,9 +41,10 @@ import (
 	"github.com/agent-substrate/substrate/internal/actorlog"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
-	"github.com/agent-substrate/substrate/internal/ateomcapacity"
+	"github.com/agent-substrate/substrate/internal/ateom"
 	"github.com/agent-substrate/substrate/internal/ateomcgroup"
 	"github.com/agent-substrate/substrate/internal/ateomnet"
+	"github.com/agent-substrate/substrate/internal/ateomstats"
 	"github.com/agent-substrate/substrate/internal/ateomtunnel"
 	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/otlprelay"
@@ -61,7 +63,7 @@ import (
 var (
 	podUID        = pflag.String("pod-uid", "", "The UID of the current pod")
 	chBinary      = pflag.String("cloud-hypervisor-binary", "cloud-hypervisor", "Path to the cloud-hypervisor binary (used to relaunch on restore).")
-	kataDebug     = pflag.Bool("kata-debug", false, "Verbose kata-agent debugging: raise the guest agent log level and forward the guest console (incl. agent logs) into the pod logs.")
+	guestDebug    = pflag.Bool("guest-debug", false, "enable guest debugging (agent debug logs, debug console, and early serial console)")
 	vmmMemReserve = pflag.Int("vmm-mem-reserve-mib", vmmMemReserveMiB, "Guest RAM (MiB) held back from the pod's memory limit for the cloud-hypervisor VMM + virtiofsd, which run as host processes in the pod cgroup alongside the guest RAM. Prevents the pod OOMing when the VM is sized to the pod's memory limit.")
 	showVersion   = pflag.Bool("version", false, "Print version and exit.")
 	logLevelFlag  = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
@@ -73,7 +75,12 @@ var (
 
 	readinessListenAddress = pflag.String("readiness-listen-address", "0.0.0.0:8080", "Address for HTTP readiness checks")
 	maxActors              = pflag.Int("max-actors", 1000, "How many actors this worker will host at once")
+	usageSampleInterval    = pflag.Duration("usage-sample-interval", time.Minute, "How often the ateom samples the resource usage of its actors. Each sample writes an ate.actor.usage_sampled record per actor, and GetActiveWorkloadStats serves the latest.")
 )
+
+// minUsageSampleInterval is the floor of --usage-sample-interval, the same as
+// atelet's poll interval floor. It keeps statsSweepBudget inside one interval.
+const minUsageSampleInterval = 50 * time.Second
 
 func main() {
 	pflag.Parse()
@@ -104,6 +111,9 @@ func do(ctx context.Context) error {
 	slog.InfoContext(ctx, "ateom-microvm booting", slog.String("version", version.Version))
 	if *maxActors < 0 {
 		return fmt.Errorf("--max-actors must not be negative, got %d", *maxActors)
+	}
+	if *usageSampleInterval < minUsageSampleInterval {
+		return fmt.Errorf("--usage-sample-interval must be at least %v, got %v", minUsageSampleInterval, *usageSampleInterval)
 	}
 
 	const serviceName = "ateom-microvm"
@@ -147,14 +157,14 @@ func do(ctx context.Context) error {
 
 	lp, err := serverboot.InitLogging(ctx, serverboot.LoggingOptions{
 		ServiceName:  serviceName,
-		Exporter:     serverboot.ResolveLogsExporter(ctx, serverboot.LogsExporterNone),
+		Exporter:     serverboot.ResolveLogsExporter(ctx),
 		ExporterConn: relayConn,
 		RelayCapable: true,
 	})
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize logging", err)
 	}
-	// Nil when the exporter is none.
+	// Nil when the exporter does not include otlp.
 	if lp != nil {
 		defer serverboot.ShutdownProvider("LoggerProvider", lp.Shutdown)
 	}
@@ -220,8 +230,17 @@ func do(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	ateomService := NewService(*podUID, *chBinary, *kataDebug, *vmmMemReserve, *maxActors, tunnel, actorLogger)
+	ateomService := NewService(*podUID, *chBinary, *guestDebug, *vmmMemReserve, *maxActors, tunnel, actorLogger)
 	ateomService.actorCgroups = actorCgroups
+	// The controller sets both from the downward API.
+	pool := ateomstats.Pool{Namespace: os.Getenv("POD_NAMESPACE"), Name: os.Getenv("WORKER_POOL_NAME")}
+	if pool.Namespace == "" || pool.Name == "" {
+		slog.WarnContext(ctx, "Worker pool unknown; usage records will name no pool", slog.Any("pool", pool))
+	}
+	usageStdout := ateomstats.NewStdoutHandler(logWriter)
+	defer usageStdout.Close()
+	ateomService.usage = ateomstats.NewUsageEmitter(lp, usageStdout, pool)
+	defer ateomstats.StartSampler(ctx, *usageSampleInterval, func(ctx context.Context) { ateomService.sweepUsage(ctx) })()
 
 	svr := grpc.NewServer(
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
@@ -257,7 +276,7 @@ func do(ctx context.Context) error {
 	// outlast, including the window before the Worker record exists; anything
 	// that reaches here is a misconfiguration no restart-in-place will fix.
 	go func() {
-		err := ateomcapacity.Report(ctx, ateomcapacity.ReportConfig{
+		err := ateom.Report(ctx, ateom.ReportConfig{
 			SocketPath:           nodepath.AteomSupportSocket,
 			CredentialBundlePath: tunnelConfig.CredentialBundle,
 			TrustBundlePath:      tunnelConfig.TrustBundle,
@@ -329,9 +348,9 @@ type AteomService struct {
 	// turned away instead of queueing behind it.
 	shuttingDown atomic.Bool
 
-	podUID    string
-	chBinary  string
-	kataDebug bool
+	podUID     string
+	chBinary   string
+	guestDebug bool
 
 	// memReserveMiB is guest RAM (MiB) held back from the pod's memory limit for
 	// the cloud-hypervisor VMM + virtiofsd (host processes sharing the pod cgroup
@@ -343,9 +362,14 @@ type AteomService struct {
 	// with ateom-gvisor).
 	actorLogger *actorlog.ActorLogger
 	tunnel      *ateomtunnel.Tunnel
+	// usage writes the usage records. Nil writes none.
+	usage *ateomstats.UsageEmitter
 
 	// Guards actors, draining, and mutable hostedActor fields.
 	actorsMu sync.RWMutex
+	// guestSlots bounds the guest reads of the sweeps and initial readings
+	// together to statsFanOut at once.
+	guestSlots chan struct{}
 	// Keyed by actor UID.
 	actors map[string]*hostedActor
 	// Actors undergoing network cleanup still count against capacity.
@@ -359,15 +383,16 @@ type AteomService struct {
 var _ ateompb.AteomServer = (*AteomService)(nil)
 
 // NewService creates a new AteomService.
-func NewService(podUID, chBinary string, kataDebug bool, memReserveMiB, maxActors int, tunnel *ateomtunnel.Tunnel, actorLogger *actorlog.ActorLogger) *AteomService {
+func NewService(podUID, chBinary string, guestDebug bool, memReserveMiB, maxActors int, tunnel *ateomtunnel.Tunnel, actorLogger *actorlog.ActorLogger) *AteomService {
 	return &AteomService{
 		locks:         actorlock.New(),
 		inFlight:      actorlock.NewInFlight(),
 		actors:        map[string]*hostedActor{},
+		guestSlots:    make(chan struct{}, statsFanOut),
 		maxActors:     maxActors,
 		podUID:        podUID,
 		chBinary:      chBinary,
-		kataDebug:     kataDebug,
+		guestDebug:    guestDebug,
 		memReserveMiB: memReserveMiB,
 		tunnel:        tunnel,
 		actorLogger:   actorLogger,
@@ -388,6 +413,18 @@ func (s *AteomService) beginRPC(actorUID, name string, cancel context.CancelFunc
 func validateActorDirs(actorDirs *ateompb.ActorDirs) error {
 	if errs := resources.ValidateActorDirs(actorDirs, field.NewPath("actor_dirs")); len(errs) > 0 {
 		return apierror.InvalidArgument("%v", errs.ToAggregate())
+	}
+	return nil
+}
+
+// validateRuntimeAssetPaths ensures we only run assets from the static files dir
+func validateRuntimeAssetPaths(paths map[string]string) error {
+	var errs field.ErrorList
+	for name, p := range paths {
+		errs = append(errs, resources.ValidateRuntimeAssetPath(nodepath.StaticFilesDir, p, field.NewPath("runtime_asset_paths").Key(name))...)
+	}
+	if len(errs) > 0 {
+		return resources.ToAPIError(errs)
 	}
 	return nil
 }

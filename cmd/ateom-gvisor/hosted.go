@@ -21,9 +21,11 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"time"
 
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateomnet"
+	"github.com/agent-substrate/substrate/internal/ateomstats"
 	"github.com/agent-substrate/substrate/internal/atunnel"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -38,6 +40,8 @@ type hostedActor struct {
 	resolvConf string
 	// Set once the containers exist.
 	session *workloadSession
+	// usage is this activation's epoch, CPU baseline, and latest sample.
+	usage *ateomstats.Activation
 }
 
 // admitActor reserves capacity before network setup. An actor that is already
@@ -51,7 +55,9 @@ func (s *AteomService) admitActor(attribution resources.ActorAttribution) (*host
 	} else if len(s.actors)+s.draining >= s.maxActors {
 		return nil, nil, apierror.ResourceExhausted("worker is full: %d actors", s.maxActors)
 	}
-	hosted := &hostedActor{attribution: attribution}
+	// The sandbox cgroup is new with every activation, so its counters start
+	// at zero.
+	hosted := &hostedActor{attribution: attribution, usage: ateomstats.NewActivation(time.Now(), false)}
 	s.actors[attribution.UID] = hosted
 	return hosted, stale, nil
 }
@@ -80,7 +86,6 @@ func (s *AteomService) hostActor(ctx context.Context, attribution resources.Acto
 		ActorUID:   uid,
 		Veth:       true,
 		EgressPort: s.tunnel.EgressPort,
-		DNSPort:    atunnel.DNSPort,
 	}, s.tunnel.Egress, s.tunnel.DNSRelay)
 	if err != nil {
 		s.actorsMu.Lock()

@@ -152,6 +152,32 @@ func (f *fakeAgent) StatsContainer(ctx context.Context, containerID string) (*ag
 	return f.stats[containerID], nil
 }
 
+// blockingAgent answers every container but block, which it holds until ctx
+// ends.
+type blockingAgent struct {
+	fakeAgent
+	block string
+}
+
+func (b *blockingAgent) StatsContainer(ctx context.Context, containerID string) (*agentpb.CgroupStats, error) {
+	if containerID == b.block {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	return b.fakeAgent.StatsContainer(ctx, containerID)
+}
+
+// TestSumContainerStatsDeadlineMidRead pins that a deadline hitting during the
+// last container's call fails the read rather than returning a partial sum.
+func TestSumContainerStatsDeadlineMidRead(t *testing.T) {
+	agent := &blockingAgent{fakeAgent: fakeAgent{stats: map[string]*agentpb.CgroupStats{"a": containerStats(1000, 2000, 100, 5000)}}, block: "b"}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if _, _, err := sumContainerStats(ctx, &guestStatsTarget{agent: agent, workloadIDs: []string{"a", "b"}}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("sumContainerStats() error = %v, want %v", err, context.DeadlineExceeded)
+	}
+}
+
 // containerStats is one container's guest reading: usage bytes, peak bytes,
 // reclaimable page cache, and cumulative CPU nanoseconds.
 func containerStats(usage, peak, inactiveFile, cpuNanos uint64) *agentpb.CgroupStats {
@@ -169,7 +195,7 @@ func containerStats(usage, peak, inactiveFile, cpuNanos uint64) *agentpb.CgroupS
 // does, since it is a pointer with no usable zero value and
 // TestGetWorkloadStatsDoesNotTakeLock holds it.
 func newStatsService(agent containerStatsReader, workloadIDs ...string) *AteomService {
-	s := &AteomService{locks: actorlock.New(), actors: map[string]*hostedActor{}}
+	s := &AteomService{locks: actorlock.New(), actors: map[string]*hostedActor{}, guestSlots: make(chan struct{}, statsFanOut)}
 	hostTestActor(s, testActor, &guestStatsTarget{actorUID: testActor.UID, agent: agent, workloadIDs: workloadIDs})
 	return s
 }
@@ -181,7 +207,7 @@ func hostTestActor(s *AteomService, attribution resources.ActorAttribution, targ
 	if s.actors == nil {
 		s.actors = map[string]*hostedActor{}
 	}
-	hosted := &hostedActor{attribution: attribution, guest: target}
+	hosted := &hostedActor{attribution: attribution, guest: target, usage: testActivation()}
 	s.actors[attribution.UID] = hosted
 	return hosted
 }
@@ -451,7 +477,7 @@ func TestGetActiveWorkloadStats(t *testing.T) {
 	}}
 	s := newStatsService(agent, "app_ovl")
 
-	got, err := s.GetActiveWorkloadStats(context.Background(), &ateompb.GetActiveWorkloadStatsRequest{})
+	got, err := sweepAndList(s)
 	if err != nil {
 		t.Fatalf("GetActiveWorkloadStats() error = %v, want nil", err)
 	}
@@ -479,7 +505,7 @@ func TestGetActiveWorkloadStats(t *testing.T) {
 func TestGetActiveWorkloadStatsAvailable(t *testing.T) {
 	s := &AteomService{}
 
-	got, err := s.GetActiveWorkloadStats(context.Background(), &ateompb.GetActiveWorkloadStatsRequest{})
+	got, err := sweepAndList(s)
 	if err != nil {
 		t.Fatalf("GetActiveWorkloadStats() on an available ateom: error = %v, want nil", err)
 	}
@@ -508,10 +534,10 @@ func pendingFor(attr resources.ActorAttribution) *ateompb.WorkloadStatsSample {
 // routinely as idle workers, and the entry keeps a workload that dies during
 // boot attributable.
 func TestGetActiveWorkloadStatsBooting(t *testing.T) {
-	s := &AteomService{}
+	s := &AteomService{guestSlots: make(chan struct{}, statsFanOut)}
 	hostTestActor(s, testActor, nil) // attribution retained, target not published
 
-	got, err := s.GetActiveWorkloadStats(context.Background(), &ateompb.GetActiveWorkloadStatsRequest{})
+	got, err := sweepAndList(s)
 	if err != nil {
 		t.Fatalf("GetActiveWorkloadStats() mid-boot: error = %v, want nil", err)
 	}
@@ -540,7 +566,7 @@ func TestGetActiveWorkloadStatsSeveralActors(t *testing.T) {
 	s := newStatsService(agent, "app_ovl")
 	hostTestActor(s, second, &guestStatsTarget{actorUID: second.UID, agent: agent, workloadIDs: []string{"b_ovl"}})
 
-	got, err := s.GetActiveWorkloadStats(context.Background(), &ateompb.GetActiveWorkloadStatsRequest{})
+	got, err := sweepAndList(s)
 	if err != nil {
 		t.Fatalf("GetActiveWorkloadStats() error = %v, want nil", err)
 	}
@@ -573,7 +599,7 @@ func TestGetActiveWorkloadStatsOneBooting(t *testing.T) {
 	s := newStatsService(agent, "app_ovl")
 	hostTestActor(s, booting, nil) // accepted, no guest to ask yet
 
-	got, err := s.GetActiveWorkloadStats(context.Background(), &ateompb.GetActiveWorkloadStatsRequest{})
+	got, err := sweepAndList(s)
 	if err != nil {
 		t.Fatalf("GetActiveWorkloadStats() error = %v, want nil", err)
 	}
@@ -604,9 +630,9 @@ func TestGetWorkloadStatsTransition(t *testing.T) {
 	}
 }
 
-// TestGetActiveWorkloadStatsStaleTarget pins that the one bug-shaped failure
-// stays an error on the discovery read too: a target/attribution disagreement
-// is an invariant violation, not a NOT_MEASURABLE_YET to skip past silently.
+// TestGetActiveWorkloadStatsStaleTarget pins that a target/attribution
+// disagreement never files one actor's numbers under another's name: the sweep
+// logs it as an error and the actor reports pending.
 func TestGetActiveWorkloadStatsStaleTarget(t *testing.T) {
 	agent := &fakeAgent{stats: map[string]*agentpb.CgroupStats{
 		"app_ovl": containerStats(1000, 2000, 100, 5000),
@@ -614,14 +640,20 @@ func TestGetActiveWorkloadStatsStaleTarget(t *testing.T) {
 	s := newStatsService(agent, "app_ovl")
 	hostTestActor(s, testActor, &guestStatsTarget{actorUID: "uid-b", agent: agent, workloadIDs: []string{"app_ovl"}})
 
-	_, err := s.GetActiveWorkloadStats(context.Background(), &ateompb.GetActiveWorkloadStatsRequest{})
-	if got := apierror.Code(err); got != codes.Internal {
-		t.Errorf("GetActiveWorkloadStats() with stale target: code = %v, want %v (err: %v)", got, codes.Internal, err)
+	got, err := sweepAndList(s)
+	if err != nil {
+		t.Fatalf("GetActiveWorkloadStats() with stale target: error = %v, want nil", err)
+	}
+	if n := len(got.GetSamples()); n != 1 {
+		t.Fatalf("GetActiveWorkloadStats() with stale target returned %d samples, want 1", n)
+	}
+	if src := got.GetSamples()[0].GetSource(); src != ateompb.StatsSource_STATS_SOURCE_UNSPECIFIED {
+		t.Errorf("sample source = %v, want pending", src)
 	}
 }
 
-// The discovery read asks the guests concurrently, so a worker full of slow
-// guests still answers within the caller's deadline.
+// A sweep asks the guests concurrently, so a worker full of slow guests is
+// still swept inside the sample interval.
 func TestGetActiveWorkloadStatsSamplesGuestsConcurrently(t *testing.T) {
 	const actors = 4
 	var inFlight, peak atomic.Int32
@@ -645,14 +677,14 @@ func TestGetActiveWorkloadStatsSamplesGuestsConcurrently(t *testing.T) {
 			}
 		},
 	}
-	s := &AteomService{locks: actorlock.New(), actors: map[string]*hostedActor{}}
+	s := &AteomService{locks: actorlock.New(), actors: map[string]*hostedActor{}, guestSlots: make(chan struct{}, statsFanOut)}
 	for i := range actors {
 		attr := testActor
 		attr.UID = fmt.Sprintf("uid-%d", i)
 		hostTestActor(s, attr, &guestStatsTarget{actorUID: attr.UID, agent: agent, workloadIDs: []string{"app_ovl"}})
 	}
 
-	got, err := s.GetActiveWorkloadStats(context.Background(), &ateompb.GetActiveWorkloadStatsRequest{})
+	got, err := sweepAndList(s)
 	if err != nil {
 		t.Fatalf("GetActiveWorkloadStats() error = %v, want nil", err)
 	}
@@ -703,7 +735,7 @@ func TestGetActiveWorkloadStatsTransition(t *testing.T) {
 			var once sync.Once
 			agent.onCall = func() { once.Do(func() { tc.during(s) }) }
 
-			got, err := s.GetActiveWorkloadStats(context.Background(), &ateompb.GetActiveWorkloadStatsRequest{})
+			got, err := sweepAndList(s)
 			if err != nil {
 				t.Fatalf("GetActiveWorkloadStats() during transition: error = %v, want nil", err)
 			}
@@ -721,4 +753,20 @@ func TestGetActiveWorkloadStatsTransition(t *testing.T) {
 			}
 		})
 	}
+}
+
+// testActivation is a running actor's activation: its initial reading is done,
+// so the sweep samples it. It starts at the unix epoch, so a sample's epoch is
+// zero and the expected samples here need not name it; the epoch has tests of
+// its own.
+func testActivation() *ateomstats.Activation {
+	a := ateomstats.NewActivation(time.Unix(0, 0), false)
+	a.Initial(nil, nil)
+	return a
+}
+
+// sweepAndList runs one sampler sweep, then the discovery read that serves it.
+func sweepAndList(s *AteomService) (*ateompb.GetActiveWorkloadStatsResponse, error) {
+	s.sweepUsage(context.Background())
+	return s.GetActiveWorkloadStats(context.Background(), &ateompb.GetActiveWorkloadStatsRequest{})
 }

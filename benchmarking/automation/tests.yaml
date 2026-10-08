@@ -50,6 +50,10 @@
 #   ateArgs        Optional. List of strings appended verbatim to
 #                  `hack/install-ate.sh --deploy-ate-system` when this
 #                  test's substrate is deployed (e.g. ["--atenet-dataplane=agentgateway"]).
+#                  The deploy requires --credential-provider; set it here
+#                  as one YAML string, '--credential-provider={"name":"k8s.io"}'
+#                  (no shell quoting: the args are passed without a shell),
+#                  or as ATE_CREDENTIAL_PROVIDER in .ate-dev-env.sh.
 #
 # ---- type: locust -----------------------------------------------------------
 #
@@ -58,6 +62,13 @@
 # orchestrator's --dest flag. `file`, `duration` and `users` are required.
 # Optional `flags` is a list of arbitrary strings appended to runner.py's
 # argv; runner.py forwards them to locust verbatim.
+#
+# Optional `runnerCpu` (default "500m") and `runnerMemory` (default "512Mi")
+# are the runner pod's requests. They are requests only, no limits, so the
+# pod lands on a node with that much free and may burst beyond it. Raise
+# them for boomer-driven classes at thousands of users: agentsession holds
+# one goroutine per session and marshals up to 32Mi per in-flight ingest,
+# so 1000+ sessions want on the order of 4 CPU and 8Gi on a node that has it.
 #
 # `file` is one path, or a comma-separated list of paths that locust reads as
 # one test. Give the test first, then each load shape. A shape changes the

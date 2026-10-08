@@ -35,7 +35,8 @@ import (
 // The request is decided on the Host it named and the port the actor dialed,
 // by the http rules on the cleartext leg and the https rules on the MITM leg,
 // where the connection's SNI must fall under an https rule too. An allowed
-// request is dialed by the name it was decided on.
+// request is dialed by the name it was decided on, on the port the actor
+// dialed.
 func (h *Handler) handleRequest(ctx context.Context, md *extproc.RequestMetadata, leg string) (extproc.Result, error) {
 	ref, err := actorFromFilterState(md)
 	if err != nil {
@@ -85,7 +86,7 @@ func (h *Handler) handleRequest(ctx context.Context, md *extproc.RequestMetadata
 		slog.WarnContext(ctx, "egress denied: no rule allows the destination", attrs(decision)...)
 		return extproc.Result{}, extproc.NewReqError(envoy_type.StatusCode_Forbidden, deniedBody)
 	}
-	injected, err := h.applyEffects(ctx, ref, dest, leg, decision.Effects)
+	injected, err := h.applyEffects(ctx, ref, dest, md.Headers, decision.Effects)
 	if err != nil {
 		return extproc.Result{}, err
 	}
@@ -98,8 +99,26 @@ func (h *Handler) handleRequest(ctx context.Context, md *extproc.RequestMetadata
 	// empty one goes along — carrying any injected credential headers.
 	res.Response.Response.ClearRouteCache = true
 	res.Response.Response.HeaderMutation = &extprocv3.HeaderMutation{SetHeaders: injected}
-	res.DynamicMetadata = metadataAnswer(extproc.EgressDialKey, extproc.EgressDialName)
+	res.DynamicMetadata = metadataAnswer(map[string]string{
+		extproc.EgressDialKey:     extproc.EgressDialName,
+		extproc.EgressDialHostKey: dialHost(dest),
+	})
 	return res, nil
+}
+
+// dialHost is the name dest was decided on, for Envoy's forward proxy to dial
+// on the port the actor dialed. Envoy would dial a port written in the name
+// instead, so it carries none, and it would read an unbracketed IPv6
+// literal's last group as a port.
+func dialHost(dest egresspolicy.Destination) string {
+	switch {
+	case dest.Hostname != "":
+		return dest.Hostname
+	case dest.IP.Is6():
+		return "[" + dest.IP.String() + "]"
+	default:
+		return dest.IP.String()
+	}
 }
 
 // connectionDestination is the SNI a decrypted connection presented, on the

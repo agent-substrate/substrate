@@ -14,10 +14,14 @@
 
 """Unit tests for orchestrator.py: python3 benchmarking/automation/test_orchestrator.py"""
 
+import os
 import unittest
 from unittest import mock
 
+import yaml
+
 import orchestrator
+from testtypes import locust
 
 
 class DeployWorkloadsTest(unittest.TestCase):
@@ -66,6 +70,64 @@ class DeployWorkloadsTest(unittest.TestCase):
                 "--wait-timeout",
                 "600",
             ]
+        )
+
+
+class RunnerSizingTest(unittest.TestCase):
+    TMPL = os.path.join(os.path.dirname(__file__), "manifests", "runner-job.yaml.tmpl")
+
+    def render(self, test):
+        subs = {"JOB_NAME": "j", "IMAGE": "i", "TAG": "t", "NAME": "n", "DEST": "d"}
+        subs.update(locust.job_subs(test))
+        text = orchestrator.render_template(self.TMPL, subs)
+        job = next(d for d in yaml.safe_load_all(text) if d and d.get("kind") == "Job")
+        return job["spec"]["template"]["spec"]["containers"][0]["resources"]
+
+    def test_defaults(self):
+        res = self.render({"file": "f", "duration": "1m", "users": 1})
+        self.assertEqual(res, {"requests": {"cpu": "500m", "memory": "512Mi"}})
+
+    def test_runner_cpu_and_memory(self):
+        res = self.render(
+            {"file": "f", "duration": "1m", "users": 1000, "runnerCpu": "4", "runnerMemory": "8Gi"}
+        )
+        self.assertEqual(res["requests"], {"cpu": "4", "memory": "8Gi"})
+        self.assertNotIn("limits", res)
+
+    def test_no_placeholder_survives(self):
+        subs = {"JOB_NAME": "j", "IMAGE": "i", "TAG": "t", "NAME": "n", "DEST": "d"}
+        subs.update(locust.job_subs({"file": "f", "duration": "1m", "users": 1}))
+        self.assertNotIn("${", orchestrator.render_template(self.TMPL, subs))
+
+
+class JobNameTest(unittest.TestCase):
+    COMMIT = "ac41c06deadbeef"
+
+    def test_short_name_keeps_full_test_name(self):
+        name = orchestrator.job_name("Eng Review", self.COMMIT)
+        self.assertRegex(name, r"^runner-eng-review-ac41c06-[0-9a-f]{6}$")
+
+    def test_long_name_fits_a_label_and_keeps_suffix(self):
+        test = "very-long-benchmark-name-that-overflows-the-kubernetes-label-limit"
+        name = orchestrator.job_name(test, self.COMMIT)
+        self.assertLessEqual(len(name), orchestrator.MAX_JOB_NAME_LEN)
+        self.assertRegex(name, r"-ac41c06-[0-9a-f]{6}$")
+        self.assertTrue(name.startswith("runner-very-long-benchmark-name"))
+
+    def test_truncation_never_leaves_a_double_hyphen(self):
+        # Cutting right after a hyphen must not yield "...-x--ac41c06-...".
+        for i in range(1, 80):
+            test = "-".join(["ab"] * i)
+            name = orchestrator.job_name(test, self.COMMIT)
+            self.assertLessEqual(len(name), orchestrator.MAX_JOB_NAME_LEN)
+            self.assertNotIn("--", name, test)
+            self.assertRegex(name, r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
+
+    def test_two_runs_of_the_same_long_test_differ(self):
+        test = "x" * 100
+        self.assertNotEqual(
+            orchestrator.job_name(test, self.COMMIT),
+            orchestrator.job_name(test, self.COMMIT),
         )
 
 

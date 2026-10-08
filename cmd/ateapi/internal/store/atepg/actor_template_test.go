@@ -97,7 +97,6 @@ func TestGetActorTemplate_BackfillsDefaults(t *testing.T) {
 		t.Fatalf("GetActorTemplate failed: %v", err)
 	}
 	want := &ateapipb.SnapshotConfig{
-		OnPause:  ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 		OnCommit: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 	}
 	if diff := cmp.Diff(want, got.GetSnapshotConfig(), protocmp.Transform()); diff != "" {

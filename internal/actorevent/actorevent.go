@@ -13,9 +13,10 @@
 // limitations under the License.
 
 // Package actorevent emits the actor events: the lifecycle events and the usage
-// samples. Log writes both copies of a record, the stdout one and the OTLP one,
-// from a single call, so nothing about a record is kept in step by hand.
-// Ordinary component logs stay on stdout.
+// samples. Log writes each record as an OTLP event when the logs exporter is on,
+// and on stdout otherwise, or in both places when asked to. Both forms are built
+// from the same call, so they cannot drift. Ordinary component logs stay on
+// stdout.
 //
 // This is not an slog bridge. A bridge would put every component record on the
 // wire, cannot set EventName, and would loop, because serverboot routes OTel SDK
@@ -31,6 +32,7 @@ import (
 	"log/slog"
 	"math"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -46,7 +48,7 @@ const ScopeName = "github.com/agent-substrate/substrate/internal/actorevent"
 
 // Event is one name in the closed vocabulary. Name is the LogRecord's own event
 // name field, not an attribute. Body and Severity live here rather than at a
-// call site, so the two copies of a record cannot differ.
+// call site, so the stdout and OTLP forms of a record cannot differ.
 //
 // Keys is the attribute set the name promises on every record. Conditional
 // holds the keys that are present exactly when the registry's condition holds,
@@ -153,7 +155,7 @@ func BuildRecord(ev Event, t time.Time, attrs []slog.Attr) log.Record {
 	return rec
 }
 
-// logValue keeps the kind slog's JSON handler writes, so the two copies match.
+// logValue keeps the kind slog's JSON handler writes, so the two forms match.
 func logValue(v slog.Value) attribute.Value {
 	switch v.Kind() {
 	case slog.KindString:
@@ -180,33 +182,45 @@ func logValue(v slog.Value) attribute.Value {
 	}
 }
 
-// Emitter writes the OTLP copy through one log.Logger. Tests construct one
+// Emitter writes the OTLP event through one log.Logger. Tests construct one
 // directly, so emit needs no global provider and can run in parallel.
 type Emitter struct {
 	logger log.Logger
+	// stdout writes the stdout record. Nil means slog.Default() at call time.
+	stdout slog.Handler
 }
 
-// NewEmitter writes under ScopeName.
+// NewEmitter writes under ScopeName, with the stdout record through
+// slog.Default().
 func NewEmitter(lp log.LoggerProvider) *Emitter {
 	return &Emitter{logger: lp.Logger(ScopeName)}
 }
 
-// LogAt writes both copies of ev with t as their timestamp, so a consumer can
-// join them on an exact time. t is when the thing happened: for a usage sample
-// the read time, not the write time. That is why the stdout record is built
+// NewEmitterTo is NewEmitter with the stdout record through stdout, for a
+// stream whose stdout record must not follow --log-level or block the caller.
+func NewEmitterTo(lp log.LoggerProvider, stdout slog.Handler) *Emitter {
+	return &Emitter{logger: lp.Logger(ScopeName), stdout: stdout}
+}
+
+// LogAt writes ev as an OTLP event when the logs exporter takes it, and on
+// stdout otherwise, or both with SetConsole(true). t is when the thing
+// happened, such as a usage sample's read time, so the stdout record is built
 // here rather than through slog.LogAttrs, which would take its own reading.
-//
-// --log-level=warn silences the stdout copy of an info event while the OTLP copy
-// still ships.
+// With slog.Default() as the stdout handler, it follows --log-level.
 func (e *Emitter) LogAt(ctx context.Context, ev Event, t time.Time, attrs []slog.Attr) {
+	if e.emit(ctx, ev, t, attrs) && !console.Load() {
+		return
+	}
 	level := ev.Level()
-	if l := slog.Default(); l.Enabled(ctx, level) {
+	h := e.stdout
+	if h == nil {
+		h = slog.Default().Handler()
+	}
+	if h.Enabled(ctx, level) {
 		rec := slog.NewRecord(t, level, ev.Body, 0)
 		rec.AddAttrs(attrs...)
-		_ = l.Handler().Handle(ctx, rec)
+		_ = h.Handle(ctx, rec)
 	}
-
-	e.emit(ctx, ev, t, attrs)
 }
 
 // Log is LogAt with time.Now(), for an event that happens as it is written.
@@ -214,15 +228,23 @@ func (e *Emitter) Log(ctx context.Context, ev Event, attrs []slog.Attr) {
 	e.LogAt(ctx, ev, time.Now(), attrs)
 }
 
-// emit writes the OTLP copy. It is a no-op, and cheap, until InitLogging
-// installs a provider.
-func (e *Emitter) emit(ctx context.Context, ev Event, t time.Time, attrs []slog.Attr) {
+// emit writes the OTLP event and reports whether it did. It does nothing, and
+// cheaply, until InitLogging installs a provider.
+func (e *Emitter) emit(ctx context.Context, ev Event, t time.Time, attrs []slog.Attr) bool {
 	params := log.EnabledParameters{Severity: ev.Severity, EventName: ev.Name}
 	if !e.logger.Enabled(ctx, params) {
-		return
+		return false
 	}
 	e.logger.Emit(ctx, BuildRecord(ev, t, attrs))
+	return true
 }
+
+// console makes LogAt write the stdout record beside the OTLP event.
+var console atomic.Bool
+
+// SetConsole sets whether an actor event's stdout record is also written when
+// its OTLP event is: OTEL_LOGS_EXPORTER=otlp,console. Call it once at startup.
+func SetConsole(on bool) { console.Store(on) }
 
 // The global provider delegates, so a Logger taken before InitLogging still
 // reaches the one it installs.
