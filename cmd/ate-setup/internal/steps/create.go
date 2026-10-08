@@ -20,12 +20,14 @@ import (
 	"strings"
 	"time"
 
+	"google.golang.org/protobuf/encoding/prototext"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/localjwtauthority"
+	"github.com/agent-substrate/substrate/pkg/proto/ateconfigpb"
 )
 
 // Secret and ConfigMap names the control plane reads.
@@ -41,6 +43,7 @@ const (
 	SecretPostgresServerCA = "postgres-server-ca"
 	ConfigMapAPIEnvVars    = "ate-api-server-envvars"
 	ConfigMapAPIAuthn      = "ate-api-authentication"
+	ConfigMapAPIConfig     = "ate-api-config"
 	// poolKeyID is the identifier given to the first CA in a new pool,
 	// matching the --ca-id the shell scripts passed.
 	poolKeyID = "1"
@@ -121,6 +124,47 @@ func (e *Env) CreateActorIDCACertsSecret(ctx context.Context) error {
 	return e.Kube.ApplySecret(ctx, e.Namespace(), SecretActorIDCACerts, map[string]string{
 		"ca.crt": string(root),
 	})
+}
+
+// defaultAPILogLevel is the ate-api-server log level a new install gets when
+// none is asked for.
+const defaultAPILogLevel = "info"
+
+// CreateAPIConfig writes the ate-api-server config file. ate-api-server
+// re-reads it while running, so a changed log level takes effect without a
+// restart.
+func (e *Env) CreateAPIConfig(ctx context.Context) error {
+	log.Step("create_api_config")
+	if err := e.Kube.EnsureNamespace(ctx, e.Namespace()); err != nil {
+		return err
+	}
+
+	logLevel := e.Cfg.APILogLevel
+	if logLevel == "" {
+		logLevel = defaultAPILogLevel
+	}
+	apiConfig, err := buildAPIConfig(logLevel)
+	if err != nil {
+		return err
+	}
+	log.Infof("%s apiconfig.textproto:", ConfigMapAPIConfig)
+	for _, line := range strings.Split(strings.TrimRight(apiConfig, "\n"), "\n") {
+		log.Infof("  | %s", line)
+	}
+	return e.Kube.ApplyConfigMap(ctx, e.Namespace(), ConfigMapAPIConfig, map[string]string{
+		"apiconfig.textproto": apiConfig,
+	})
+}
+
+// buildAPIConfig renders apiconfig.textproto.
+func buildAPIConfig(logLevel string) (string, error) {
+	b, err := prototext.MarshalOptions{Multiline: true}.Marshal(&ateconfigpb.APIConfig{
+		Logging: &ateconfigpb.APILogging{Level: logLevel},
+	})
+	if err != nil {
+		return "", fmt.Errorf("while marshaling the ate-api-server config: %w", err)
+	}
+	return string(b), nil
 }
 
 // CreateAPIAuthenticationConfig writes the default ate-api-server

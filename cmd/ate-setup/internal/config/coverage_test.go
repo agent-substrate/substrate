@@ -98,6 +98,8 @@ func valueFor(key string) string {
 		return `{"name":"k8s.io"}`
 	case "actorJWT.algorithm":
 		return "ES256"
+	case "ateapi.logLevel":
+		return "debug"
 	case "csi.setup":
 		return "none"
 	}

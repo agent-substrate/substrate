@@ -249,6 +249,7 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		CredentialProviderJSON:         r.String("atenet.egress.credentialProvider"),
 		AnthropicAPIKey:                r.String("demo.anthropicAPIKey"),
 		OtlpEndpoint:                   r.String("otlpEndpoint"),
+		APILogLevel:                    r.String("ateapi.logLevel"),
 		BenchmarkActorMemory:           r.String("benchmark.actorMemory"),
 		kubeconfigEnv:                  kubeconfigEnv,
 		shellEnv:                       env,
@@ -359,6 +360,13 @@ func validateResolved(cfg *Config, r *Resolved) error {
 
 	if size, _ := r.Value("clusterSize"); cfg.ClusterSize != ClusterSizeSize0 && cfg.ClusterSize != ClusterSizeSize10 {
 		return &InvalidError{Value: size, Want: ClusterSizeSize0 + " or " + ClusterSizeSize10}
+	}
+
+	switch cfg.APILogLevel {
+	case "", "debug", "info", "warn", "error":
+	default:
+		level, _ := r.Value("ateapi.logLevel")
+		return &InvalidError{Value: level, Want: "debug, info, warn, or error"}
 	}
 
 	switch cfg.ActorJWTAlgorithm {

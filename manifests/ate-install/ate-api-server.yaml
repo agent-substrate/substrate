@@ -129,6 +129,7 @@ spec:
         image: ko://github.com/agent-substrate/substrate/cmd/ateapi
         args:
           - "--grpc-server-cred-bundle=/run/servicedns.podcert.ate.dev/credential-bundle.pem"
+          - --config-file=/run/apiconfig.ate.dev/apiconfig.textproto
           - --authentication-config=/etc/ateapi/authentication/authentication.yaml
           - --postgres-read-write-connection-string=@env
           - --postgres-owner-connection-string=@env
@@ -202,6 +203,11 @@ spec:
           mountPath: "/run/actor-id-jwt-pool"
         - name: "actor-id-ca-pool"
           mountPath: "/run/actor-id-ca-pool"
+          readOnly: true
+        # Mounted as a directory, not with subPath, so that edits to the
+        # ConfigMap reach the running server, which re-reads the file.
+        - name: "api-config"
+          mountPath: "/run/apiconfig.ate.dev"
           readOnly: true
         - name: "authentication-config"
           mountPath: "/etc/ateapi/authentication"
@@ -310,6 +316,9 @@ spec:
               items:
               - key: "pool"
                 path: "pool.json"
+      - name: "api-config"
+        configMap:
+          name: "ate-api-config"
       - name: "authentication-config"
         configMap:
           name: "ate-api-authentication"
