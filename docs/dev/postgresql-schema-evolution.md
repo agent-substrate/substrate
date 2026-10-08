@@ -35,6 +35,8 @@ To preserve the option to partition the `actors` table by `atespace` or by `name
 - A foreign key that references one of these tables by columns that omit `atespace`, or `actors` by anything other than `(atespace, name)`.
 - A query on one of these tables that does not filter on `atespace`, or a query on `actors` that does not also filter on `name`. A statement whose result spans every partition by definition, such as a global list, must be listed in `TestActorsTablePartitionable`. Anything else that reads more than one partition needs an exemption there, agreed with the community.
 
+To preserve the option to move each atespace's tables (those above, plus `atespaces`) to a database of their own, do not add a foreign key between them and the global tables (`workers`, `worker_assignments`, `worker_outbox`, `worker_outbox_trim`, `leases`). `TestAtespaceTablesShardable` fails on such a key, and on a new table until it is classified as one or the other: a table with an `atespace` column is an atespace's, and a global one must be listed in the test.
+
 ## Expand and contract
 
 Use an expand and contract sequence for a schema replacement or removal:
