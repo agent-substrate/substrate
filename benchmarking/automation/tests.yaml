@@ -41,6 +41,11 @@
 #                  node needs more than half the node's allocatable memory.
 #                  The limit is also the memory the worker reports as its
 #                  actor capacity.
+#   storageClassName
+#                  Optional (default: none). StorageClass for the
+#                  glutton-storage external volume. Setting it deploys the
+#                  glutton-storage template. The class must already exist
+#                  on the cluster.
 #   workerWaitTimeout
 #                  Optional (default 300, set by workloads/deploy.sh).
 #                  Whole seconds to wait after the WorkerPool deploy for

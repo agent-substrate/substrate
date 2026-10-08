@@ -349,6 +349,7 @@ def deploy_workloads(
     actor_memory: str = "",
     wait_timeout_secs: int | str = "",
     worker_memory: str = "",
+    storage_class_name: str = "",
 ) -> None:
     cmd = [
         "benchmarking/workloads/deploy.sh",
@@ -366,6 +367,11 @@ def deploy_workloads(
     # control how many workers the scheduler packs onto a node.
     if worker_memory:
         cmd += ["--worker-memory", worker_memory]
+    # Storage suites set storageClassName in tests.yaml, which makes deploy.sh
+    # add the glutton-storage template; without it, the template is not
+    # deployed.
+    if storage_class_name:
+        cmd += ["--storage-class-name", storage_class_name]
     # Empty keeps deploy.sh's own default; large fleets set workerWaitTimeout
     # (whole seconds).
     if wait_timeout_secs != "":
@@ -546,6 +552,7 @@ def main() -> None:
                     test.get("actorMemory", ""),
                     test.get("workerWaitTimeout", ""),
                     test.get("workerMemory", ""),
+                    storage_class_name=test.get("storageClassName", ""),
                 )
                 try:
                     status = run_test(
