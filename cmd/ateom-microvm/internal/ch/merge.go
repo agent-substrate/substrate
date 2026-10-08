@@ -17,15 +17,14 @@
 package ch
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"syscall"
 
-	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/reaper"
 	"golang.org/x/sys/unix"
 )
 
@@ -51,8 +50,8 @@ func MergeSparseOverlay(ctx context.Context, baseFile, deltaFile, outFile string
 	// outFile := sparse copy of baseFile (preserves holes so it stays sparse).
 	tmp := outFile + ".merge.tmp"
 	_ = os.Remove(tmp)
-	if o, err := reaper.RunCombined(exec.CommandContext(ctx, "cp", "--sparse=always", baseFile, tmp)); err != nil {
-		return fmt.Errorf("cp base->tmp: %w: %s", err, o)
+	if err := copySparseFile(ctx, baseFile, tmp); err != nil {
+		return fmt.Errorf("sparse copy base->tmp: %w", err)
 	}
 
 	d, err := os.Open(deltaFile)
@@ -232,4 +231,107 @@ func copySparseRegions(src, dst *os.File) (copied int64, err error) {
 		off = de
 	}
 	return copied, nil
+}
+
+// copySparseFile creates dstPath as a sparse copy of srcPath, like
+// cp --sparse=always: holes in srcPath stay holes, and so does any all-zero
+// block inside its data regions.
+func copySparseFile(ctx context.Context, srcPath, dstPath string) error {
+	s, err := os.Open(srcPath)
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+	si, err := s.Stat()
+	if err != nil {
+		return err
+	}
+	d, err := os.OpenFile(dstPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	// A fresh file of the full size reads as zeros, so a skipped block needs no write.
+	if err := d.Truncate(si.Size()); err != nil {
+		return err
+	}
+	if err := copyNonZeroRegions(ctx, s, d, si.Size()); err != nil {
+		return err
+	}
+	return d.Close()
+}
+
+// sparseBlock is the granularity at which copyNonZeroRegions leaves zeros as holes.
+const sparseBlock = 4096
+
+// copyNonZeroRegions writes every block of src's data regions that is not all
+// zeros to the same offset in dst. dst must read as zeros wherever nothing is
+// written, as a freshly truncated file does, so unlike copySparseRegions this
+// cannot overlay onto existing data: a skipped zero block would leave the old
+// bytes in place.
+func copyNonZeroRegions(ctx context.Context, src, dst *os.File, size int64) error {
+	sfd := int(src.Fd())
+	buf := make([]byte, 1<<20)
+	for off := int64(0); off < size; {
+		ds, err := unix.Seek(sfd, off, unix.SEEK_DATA)
+		if errors.Is(err, unix.ENXIO) {
+			return nil // no more data
+		}
+		if err != nil {
+			return fmt.Errorf("SEEK_DATA: %w", err)
+		}
+		de, err := unix.Seek(sfd, ds, unix.SEEK_HOLE)
+		if err != nil {
+			return fmt.Errorf("SEEK_HOLE: %w", err)
+		}
+		for pos := ds; pos < de; {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			n := min(int64(len(buf)), de-pos)
+			if _, err := src.ReadAt(buf[:n], pos); err != nil {
+				return fmt.Errorf("reading data region: %w", err)
+			}
+			if err := writeNonZero(dst, buf[:n], pos); err != nil {
+				return err
+			}
+			pos += n
+		}
+		off = de
+	}
+	return nil
+}
+
+// writeNonZero writes p to dst at off, skipping all-zero blocks and coalescing
+// the rest into as few writes as possible.
+func writeNonZero(dst *os.File, p []byte, off int64) error {
+	start := -1 // start of the current run of non-zero blocks
+	for i := 0; i < len(p); i += sparseBlock {
+		if !allZero(p[i:min(i+sparseBlock, len(p))]) {
+			if start < 0 {
+				start = i
+			}
+			continue
+		}
+		if start >= 0 {
+			if _, err := dst.WriteAt(p[start:i], off+int64(start)); err != nil {
+				return err
+			}
+			start = -1
+		}
+	}
+	if start >= 0 {
+		if _, err := dst.WriteAt(p[start:], off+int64(start)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// zeroBlock is what allZero compares against: bytes.Equal is vectorized, so it
+// beats checking byte by byte.
+var zeroBlock = make([]byte, sparseBlock)
+
+func allZero(b []byte) bool {
+	return bytes.Equal(b, zeroBlock[:len(b)])
 }

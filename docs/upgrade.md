@@ -445,7 +445,7 @@ kubectl ate get workers -o json | jq -r --arg node "$NODE" '
 kubectl ate get actors -A -o json | jq -r --arg node "$NODE" '
   ["PAUSED_ACTOR", "STATE"],
   (.actors[]
-   | select(.status.localSnapshot.nodeVmsWithLocalSnapshots // [] | index($node))
+   | select(.status.assignedNode == $node and (.status.workerAssignment == null))
    | [.metadata.atespace + "/" + .metadata.name, .status.state])
   | @tsv' | column -t -s $'\t'
 ```

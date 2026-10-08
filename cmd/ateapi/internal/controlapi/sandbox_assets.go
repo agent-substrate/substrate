@@ -17,12 +17,11 @@ package controlapi
 import (
 	"fmt"
 
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
@@ -36,13 +35,13 @@ func resolveTemplateSandboxConfig(
 	name := templateSandbox.GetConfigName()
 	sc, err := sandboxConfigLister.Get(name)
 	if k8serrors.IsNotFound(err) {
-		return nil, status.Errorf(codes.FailedPrecondition, "SandboxConfig %q not found", name)
+		return nil, apierror.FailedPrecondition("SandboxConfig %q not found", name)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("while getting SandboxConfig %q: %w", name, err)
 	}
 	if class := sandboxClassString(templateSandbox.GetSandboxClass()); string(sc.Spec.SandboxClass) != class {
-		return nil, status.Errorf(codes.FailedPrecondition,
+		return nil, apierror.FailedPrecondition(
 			"SandboxConfig %q has class %q but sandbox_config.sandbox_class is %q", name, sc.Spec.SandboxClass, class)
 	}
 	return sc, nil

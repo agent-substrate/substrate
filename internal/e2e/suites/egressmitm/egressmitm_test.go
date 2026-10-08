@@ -122,6 +122,22 @@ func TestActorEgressMITMTrust(t *testing.T) {
 		t.Errorf("fetch with system roots failed, but not with a certificate-verification error: %s", neg.Error)
 	}
 
+	// A port in the Host is never dialed: no rule checked it. The gateway
+	// dials the Host's name on the port the actor dialed, and nothing answers
+	// on port 1.
+	for _, tc := range []struct{ origin, dial string }{
+		{origin: "https://" + egressOriginHost + ":1/", dial: egressOriginHost + ":443"},
+		{origin: "http://" + egressOriginHost + ":1/", dial: egressOriginHost + ":80"},
+	} {
+		res := probeFetch(t, ctx, rc, id, tc.origin, "bundle", "dial="+url.QueryEscape(tc.dial))
+		switch {
+		case res.Error != "":
+			t.Errorf("fetch of %s dialed at %s failed: %s", tc.origin, tc.dial, res.Error)
+		case res.Status != "200":
+			t.Errorf("fetch of %s dialed at %s: status %s, want 200 — the gateway dialed the port in the Host instead of the one the actor dialed", tc.origin, tc.dial, res.Status)
+		}
+	}
+
 	// The gateway relays passthrough TLS unread, so the origin's own certificate
 	// must validate with the system roots. That is also the proof it was not
 	// intercepted.
@@ -143,30 +159,26 @@ func TestActorEgressMITMTrust(t *testing.T) {
 		t.Errorf("passthrough fetch %s dialed at %s: status %s, want 200", passthroughOrigin, unreachableAddress, bySNI.Status)
 	}
 
-	// The rule for this name covers 8443 only, so the ClientHello on 443 is
-	// closed.
-	const wrongPortOrigin = "https://" + egressOriginPassthroughWrongPortHost + "/"
-	wrongPort := probeFetch(t, ctx, rc, id, wrongPortOrigin, "system")
-	switch {
-	case wrongPort.Error == "":
-		t.Errorf("fetch of %s succeeded with status %s, want the connection closed at the ClientHello: its passthrough rule names port 8443, not 443", wrongPortOrigin, wrongPort.Status)
-	case strings.Contains(wrongPort.Error, "certificate") || strings.Contains(wrongPort.Error, "x509"):
-		t.Errorf("fetch of %s was intercepted (certificate error %q), want the connection closed at the ClientHello", wrongPortOrigin, wrongPort.Error)
-	case wrongPort.Status != "":
-		t.Errorf("fetch of %s got status %s with error %q, want no HTTP exchange at all", wrongPortOrigin, wrongPort.Status, wrongPort.Error)
-	}
-
-	// A host outside the policy is closed at the ClientHello: expect a
-	// transport error, not a certificate error or an HTTP status. The error
-	// text varies, so only its presence is checked.
-	denied := probeFetch(t, ctx, rc, id, "https://example.org/", "bundle")
-	switch {
-	case denied.Error == "":
-		t.Errorf("fetch of a host outside the policy succeeded with status %s, want the connection closed at the ClientHello", denied.Status)
-	case strings.Contains(denied.Error, "certificate") || strings.Contains(denied.Error, "x509"):
-		t.Errorf("fetch of a host outside the policy was intercepted (certificate error %q), want the connection closed at the ClientHello", denied.Error)
-	case denied.Status != "":
-		t.Errorf("fetch of a host outside the policy got status %s with error %q, want no HTTP exchange at all", denied.Status, denied.Error)
+	// Envoy closes denied connections at the ClientHello; agentgateway
+	// terminates TLS to return 403. Trust the gateway's CA so a certificate
+	// failure cannot masquerade as either policy-denial response.
+	for _, tc := range []struct{ name, origin string }{
+		{"passthrough rule excludes port 443", "https://" + egressOriginPassthroughWrongPortHost + "/"},
+		{"host outside the policy", "https://example.org/"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			denied := probeFetch(t, ctx, rc, id, tc.origin, "bundle")
+			switch {
+			case denied.Status == "403" && denied.Error == "":
+				// An explicit denial after completing TLS with the actor.
+			case denied.Error == "":
+				t.Errorf("fetch of %s returned status %s, want 403 or a connection closed at the ClientHello", tc.origin, denied.Status)
+			case strings.Contains(denied.Error, "certificate") || strings.Contains(denied.Error, "x509"):
+				t.Errorf("fetch of %s failed certificate verification instead of returning a policy denial: %s", tc.origin, denied.Error)
+			case denied.Status != "":
+				t.Errorf("fetch of %s got status %s with error %q, want no HTTP exchange after a TLS failure", tc.origin, denied.Status, denied.Error)
+			}
+		})
 	}
 }
 
@@ -243,6 +255,7 @@ func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Client
 	// The gateway refuses every tunnel for an actor without a policy. Naming
 	// only the origin also lets the same actor show a denial.
 	e2e.EnsureEgressPolicy(t, ctx, clients, ref,
+		e2e.EgressAllowHTTP(egressOriginHost),
 		e2e.EgressAllowHTTPS(egressOriginHost),
 		e2e.EgressAllowPassthrough(egressOriginPassthroughHost),
 		e2e.EgressAllowPassthroughOnPorts([]int32{8443}, egressOriginPassthroughWrongPortHost),

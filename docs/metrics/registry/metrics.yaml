@@ -381,12 +381,15 @@ groups:
               stability: development
               value: assigned
               brief: The scheduler assigned a worker.
-            - id: no_free_worker
+            - id: no_capacity
               stability: development
-              value: no_free_worker
+              value: no_capacity
               brief: >
-                No free worker was available. This shows the capacity. It is not
-                a failure. Thus it has no error.type key.
+                No worker that meets the constraints of the actor had room. It is
+                not a failure. Thus it has no error.type key. The cause can be
+                full workers, or no worker that meets the constraints, such as a
+                wrong sandbox class or a required node that is gone. Only the
+                first cause needs more workers.
             - id: error
               stability: development
               value: error
@@ -455,8 +458,12 @@ groups:
               stability: development
               value: no_capacity
               brief: >
-                The fleet had no free worker. This is a capacity problem and not
-                a defect. It shows the capacity pressure at the request edge.
+                No worker that meets the constraints of the actor had room. It
+                shows the pressure at the request edge. The router also reports
+                this outcome when it sheds a request from a full parking lot
+                after its resume failed with ResourceExhausted. The scheduler
+                reports the same condition as no_capacity on
+                ate.scheduler.assignment.duration.
             - id: failed_precondition
               stability: development
               value: failed_precondition
@@ -474,8 +481,9 @@ groups:
               value: unavailable
               brief: >
                 The request got an Unavailable status, or a 503 without a gRPC
-                cause. For example, a full parking lot, a denied egress
-                request, or a failed policy or credential lookup.
+                cause. For example, a denied egress request, a failed policy or
+                credential lookup, or a full parking lot when the resume did not
+                fail with ResourceExhausted.
             - id: rate_limited
               stability: development
               value: rate_limited
@@ -565,7 +573,7 @@ groups:
             - id: final
               stability: development
               value: final
-              brief: The last sample of an activation, taken in the checkpoint before the workload is torn down.
+              brief: The last sample of an activation, written when a checkpoint or a terminate tears it down. It is read just before the teardown; when that read fails or times out, it repeats the newest sample.
       - id: ate.stats.memory.usage
         stability: development
         type: int
@@ -800,11 +808,13 @@ groups:
     stability: development
     brief: The time of one attempt of the scheduler to assign a worker during a resume.
     note: >
-      If a version conflict causes a second attempt, ateapi records only the
-      last attempt. The buckets are smaller than the buckets of the lifecycle
-      histogram. This step is a read of the cache and some writes to the store.
-      It is not a restore of some seconds. But the buckets go to 5 s. Thus you
-      can see a large delay in the store.
+      One resume gives one record. ateapi retries an attempt that loses a race
+      for a worker, and records only the last attempt. If the retries run out,
+      the outcome is error, and error.type is the code that the caller gets.
+      The buckets are smaller than the buckets of the lifecycle histogram.
+      This step is a read of the cache and some writes to the store. It is not
+      a restore of some seconds. But the buckets go to 5 s. Thus you can see a
+      large delay in the store.
     annotations:
       substrate:
         emitted_by: [ateapi]
@@ -817,14 +827,14 @@ groups:
         requirement_level: required
       - ref: ate.workerpool.namespace
         requirement_level:
-          conditionally_required: The scheduler assigned a worker. The no_free_worker outcome names no pool.
+          conditionally_required: The scheduler assigned a worker. The no_capacity outcome names no pool.
       - ref: ate.workerpool.name
         requirement_level:
           conditionally_required: The scheduler assigned a worker.
       - ref: ate.sandbox.class
         requirement_level:
           conditionally_required: >
-            The class is known. ateapi sets this key also on the no_free_worker
+            The class is known. ateapi sets this key also on the no_capacity
             outcome. Thus the outcome names the capacity that ended.
       - ref: error.type
         requirement_level:
@@ -1183,16 +1193,20 @@ groups:
     stability: development
     brief: The number of requests that the router refused because the parking area was full.
     note: >
-      This instrument has no labels. A rate above zero means that the router
-      sheds load. The router fails a request quickly instead of a queue with no
-      limit.
+      A rate above zero means that the router sheds load. The router fails a
+      request quickly instead of a queue with no limit. The outcome label is the
+      route outcome of the shed request: no_capacity when its resume failed with
+      ResourceExhausted, and unavailable otherwise. It has only these two
+      values.
     annotations:
       substrate:
         emitted_by: [atenet-router]
         golden_signals: [errors, saturation]
         code_anchor: cmd/atenet/internal/router/ingress/metrics.go
         cuj: Does Substrate refuse requests at the edge?
-    attributes: []
+    attributes:
+      - ref: ate.router.outcome
+        requirement_level: required
 
   # ---------------------------------------------------------------------------
   # Metrics. Upstream instrumentation

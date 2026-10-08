@@ -23,7 +23,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"slices"
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/apierror"
@@ -31,6 +30,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/ch"
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
+	"github.com/agent-substrate/substrate/internal/ateomphaselog"
 	"github.com/agent-substrate/substrate/internal/ateomstats"
 	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
@@ -50,8 +50,8 @@ import (
 //     disk-backed upper): the upper is host-backed like the durable-dir volumes and
 //     ships alongside as its own tar (see rootfsupper.go); process memory persists
 //     via the memory snapshot. The RO lower is reconstructed from the OCI image at
-//     restore, so it never ships. Durable-dir volumes ship alongside as a tar.
-//   - DATA: the durable-dir volumes only, as that same tar. The guest is discarded, so
+//     restore, so it never ships. Durable-dir volumes ship alongside as per-volume tars.
+//   - DATA: the durable-dir volumes only, as those same tars. The guest is discarded, so
 //     the actor cold-starts on restore with its volumes re-materialized.
 //
 // Either way the guest is paused first, which is what makes the tar coherent: the
@@ -83,15 +83,15 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	attribution := ateomstats.ActorAttributionFromRequest(req)
 	scope := req.GetScope()
 	defer func() {
-		logSnapshotPhases(ctx, "Checkpoint timing breakdown", attribution, scope,
-			checkpointDurationKey, err, []phase{
-				{phasePrep, dPrep},
-				{phasePause, dPause},
-				{phaseSnapshot, dSnapshot},
-				{phaseDurableDir, dDurable},
-				{phaseRootfsUpper, dUpper},
-				{phaseTeardown, dTeardown},
-				{phaseTotal, time.Since(tStart)},
+		ateomphaselog.LogSnapshotPhases(ctx, "Checkpoint timing breakdown", attribution, scope,
+			ateomphaselog.CheckpointDurationKey, err, []ateomphaselog.Phase{
+				{Name: phasePrep, D: dPrep},
+				{Name: phasePause, D: dPause},
+				{Name: phaseSnapshot, D: dSnapshot},
+				{Name: phaseDurableDir, D: dDurable},
+				{Name: phaseRootfsUpper, D: dUpper},
+				{Name: phaseTeardown, D: dTeardown},
+				{Name: phaseTotal, D: time.Since(tStart)},
 			})
 	}()
 
@@ -125,6 +125,10 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		return nil, apierror.InvalidArgument("unsupported snapshot scope: %v", scope)
 	}
 
+	// Captured now: the checkpoint unhosts the actor, and the final record
+	// waits for the teardown.
+	hosted := s.lookupActor(actorUID)
+
 	// The actor's CH was booted by RunWorkload or relaunched by RestoreWorkload;
 	// either way ateom owns it and tracks its api-socket.
 	ra := s.runningVM(actorUID)
@@ -135,6 +139,10 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	client := ch.NewClient(chSocket)
 	if _, err := client.WaitReady(ctx, 10*time.Second); err != nil {
 		return nil, fmt.Errorf("while waiting for CH api-socket: %w", err)
+	}
+	// Read before the pause: a paused guest cannot answer.
+	if hosted != nil {
+		s.readFinal(ctx, hosted)
 	}
 
 	tPause := time.Now()
@@ -155,7 +163,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	}
 
 	// Capture the snapshot's pieces CONCURRENTLY: the CH snapshot, the
-	// durable-dir tar, and the rootfs upper tar read independent data from a
+	// durable-dir tars, and the rootfs upper tars read independent data from a
 	// quiesced guest and write distinct files into checkpointDir, so the paused
 	// window costs the slowest of them rather than their sum (the tars scale
 	// with the actor's data; suspend latency is the metric that matters).
@@ -164,11 +172,12 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	//     deliberately captures no VM state — no memory image, and no base-id,
 	//     since nothing will reattach to the frozen virtio-fs lower: at restore
 	//     the actor cold-boots from the OCI image.
-	//   - Durable-dir tar (any scope, when declared): host-backed, so pausing
-	//     the write-through share makes the tar coherent.
-	//   - Rootfs upper tar (Full only): host-backed like the durable volumes —
+	//   - Durable-dir tars (any scope, when declared): host-backed, so pausing
+	//     the write-through share makes the tars coherent.
+	//   - Rootfs upper tars (Full only): host-backed like the durable volumes —
 	//     the memory snapshot does not carry rootfs writes. Under Data the
 	//     workload cold-starts on restore, discarding rootfs state.
+	var durableFiles []string
 	g, gctx := errgroup.WithContext(ctx)
 	if scope == ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL {
 		g.Go(func() error {
@@ -184,7 +193,8 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	if durable {
 		g.Go(func() error {
 			t := time.Now()
-			err := tarDurableVolumes(gctx, actorDirs.GetDurableDirVolumeMountsDir(), checkpointDir)
+			var err error
+			durableFiles, err = tarDurableVolumes(gctx, actorDirs.GetDurableDirVolumeMountsDir(), checkpointDir, durableVolumeNames(req.GetSpec().GetContainers()))
 			dDurable = time.Since(t)
 			return err
 		})
@@ -192,7 +202,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	if scope == ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL {
 		g.Go(func() error {
 			t := time.Now()
-			err := tarRootfsUpper(gctx, rootfsUpperDir(actorDirs), checkpointDir)
+			err := tarRootfsUpper(gctx, rootfsUpperDir(actorDirs), checkpointDir, containerNames(req.GetSpec().GetContainers()))
 			dUpper = time.Since(t)
 			return err
 		})
@@ -203,7 +213,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 
 	// Report exactly the files we wrote so atelet ships precisely this snapshot: for
 	// Full, the CH snapshot (config.json + state.json + memory-ranges + base-id) plus
-	// any durable-dir tar; for Data, that tar alone.
+	// any durable-dir tars; for Data, those tars alone.
 	snapshotFiles, err := listFiles(checkpointDir)
 	if err != nil {
 		return nil, fmt.Errorf("while listing snapshot files: %w", err)
@@ -229,11 +239,8 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		// rootfs_upper), and the tar durations scale with the actor's data.
 		slog.Duration("durable_dir", dDurable), slog.Duration("rootfs_upper", dUpper),
 		slog.Duration("teardown", dTeardown))
-	resp := &ateompb.CheckpointWorkloadResponse{SnapshotFiles: snapshotFiles}
-	if slices.Contains(snapshotFiles, durableTarFile) {
-		resp.DataSnapshotFiles = []string{durableTarFile}
-	}
-	return resp, nil
+	s.recordFinalIfEnded(ctx, hosted)
+	return &ateompb.CheckpointWorkloadResponse{SnapshotFiles: snapshotFiles, DataSnapshotFiles: durableFiles}, nil
 }
 
 // snapshotVMState captures the paused guest into checkpointDir: the CH snapshot
@@ -399,13 +406,40 @@ func (s *AteomService) TerminateWorkload(ctx context.Context, req *ateompb.Termi
 
 	attribution := ateomstats.ActorAttributionFromRequest(req)
 
-	if err := s.terminateWorkload(ctx, attribution, req.GetActorDirs()); err != nil {
+	hosted := s.lookupActor(attribution.UID)
+	if hosted != nil {
+		s.readFinal(ctx, hosted)
+	}
+	err := s.terminateWorkload(ctx, attribution, req.GetActorDirs())
+	s.recordFinalIfEnded(ctx, hosted)
+	if err != nil {
 		return nil, fmt.Errorf("failed to terminate workload: %w", err)
 	}
 
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor terminated", attribution)
 
 	return &ateompb.TerminateWorkloadResponse{}, nil
+}
+
+// endPreviousActivation ends the activation a re-host is about to replace. A VM
+// still running for the actor would be dropped from tracking by the re-host and
+// left running, so it is stopped, read first for the final record. This happens
+// after a checkpoint that failed before its teardown, or on a retried Run or
+// Restore. Ending the activation also stops a late recordInitial from writing.
+func (s *AteomService) endPreviousActivation(ctx context.Context, actorUID string, actorDirs *ateompb.ActorDirs) error {
+	old := s.lookupActor(actorUID)
+	if s.runningVM(actorUID) != nil {
+		if old != nil {
+			s.readFinal(ctx, old)
+		}
+		if err := s.stopActorVM(ctx, actorUID, actorDirs); err != nil {
+			return fmt.Errorf("while stopping the actor's previous micro-VM: %w", err)
+		}
+	}
+	if old != nil {
+		s.recordFinal(ctx, old)
+	}
+	return nil
 }
 
 // stopActorVM tears down the actor's micro-VM, if any, keeping it hosted.

@@ -44,17 +44,14 @@ func TestApply(t *testing.T) {
 		name: "empty snapshot_config gets every default",
 		in:   &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{}},
 		want: &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{
-			OnPause:  scopeFull,
 			OnCommit: scopeFull,
 		}},
 	}, {
 		name: "set scopes are kept",
 		in: &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{
-			OnPause:  scopeFull,
 			OnCommit: scopeData,
 		}},
 		want: &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{
-			OnPause:  scopeFull,
 			OnCommit: scopeData,
 		}},
 	}, {

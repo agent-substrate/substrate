@@ -120,12 +120,10 @@ for etcd.
     containers start afresh from the OCI image with the `DurableDir`
     contents restored.
 
-  Scopes describe only what a snapshot *captures*. They are configured
-  per-trigger via `onPause` and `onCommit`: `onPause` selects what is
-  captured during a [Pause](#lifecycle) (kept on the node), and
-  `onCommit` selects what is captured during a [Suspend](#lifecycle)
-  (uploaded to snapshot storage). `onCommit` must be a subset of
-  `onPause`.
+  Scopes describe only what a snapshot *captures*. A template sets one
+  scope, `onCommit`, and every snapshot of its actors uses it: the
+  node-local checkpoint a [Pause](#lifecycle) keeps on the node and the
+  snapshot a [Suspend](#lifecycle) uploads to snapshot storage.
 
 - **Golden Snapshot**: the initial checkpoint captured once, when an
   `ActorTemplate` is created, from a temporary "golden" boot of the workload.

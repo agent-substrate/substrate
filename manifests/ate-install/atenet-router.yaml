@@ -59,10 +59,14 @@ data:
     admin:
       address:
         socket_address:
-          # ipv4_compat keeps `kubectl port-forward` to the admin port working;
-          # in-pod callers dial localhost and need no help.
-          address: "::"
-          ipv4_compat: true
+          # Loopback only. The admin API is unauthenticated and includes
+          # /quitquitquit, /drain_listeners, /runtime_modify and /config_dump,
+          # so it must not be reachable on the pod IP. In-pod callers (the
+          # router's drain sequence and dataplane health check) dial localhost,
+          # and `kubectl port-forward` dials loopback inside the pod's network
+          # namespace, so both keep working. Prometheus scrapes the
+          # envoy_metrics listener below instead.
+          address: 127.0.0.1
           port_value: 9901
 
     node:
@@ -92,7 +96,62 @@ data:
             cluster_name: xds_cluster
 
     static_resources:
+      # envoy_metrics is the only pod-IP-reachable view of the admin API: it
+      # proxies GET /stats/prometheus (the PodMonitoring in
+      # atenet-router-monitoring.yaml) and GET /ready (the envoy container's
+      # readiness probe) to the loopback-only admin listener and 404s
+      # everything else. The stat prefixes contain "admin" so
+      # envoyDrainer.activeConnections excludes probes and scrapes from the
+      # downstream connection count it waits on to reach zero.
+      listeners:
+      - name: envoy_metrics
+        stat_prefix: admin_metrics
+        address:
+          socket_address:
+            address: "::"
+            ipv4_compat: true
+            port_value: 9902
+        filter_chains:
+        - filters:
+          - name: envoy.filters.network.http_connection_manager
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+              stat_prefix: admin_metrics
+              route_config:
+                name: envoy_metrics
+                virtual_hosts:
+                - name: envoy_metrics
+                  domains: ["*"]
+                  routes:
+                  - match:
+                      path: /stats/prometheus
+                      headers:
+                      - name: ":method"
+                        string_match: { exact: GET }
+                    route: { cluster: envoy_admin }
+                  - match:
+                      path: /ready
+                      headers:
+                      - name: ":method"
+                        string_match: { exact: GET }
+                    route: { cluster: envoy_admin }
+              http_filters:
+              - name: envoy.filters.http.router
+                typed_config:
+                  "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
       clusters:
+      - name: envoy_admin
+        connect_timeout: 0.25s
+        type: STATIC
+        load_assignment:
+          cluster_name: envoy_admin
+          endpoints:
+          - lb_endpoints:
+            - endpoint:
+                address:
+                  socket_address:
+                    address: 127.0.0.1
+                    port_value: 9901
       - name: xds_cluster
         connect_timeout: 0.25s
         type: STRICT_DNS
@@ -248,8 +307,6 @@ spec:
         - "/usr/local/bin/envoy"
         - "-c"
         - "/etc/envoy/envoy.yaml"
-        - "--component-log-level"
-        - "upstream:debug,router:debug,ext_proc:debug"
         # Prevents Envoy from fast-exiting on SIGTERM before atenet-router finishes
         # its drain sequence. Polls for the drain-complete marker written by the
         # router on the shared emptyDir, terminating Envoy as soon as the drain
@@ -267,8 +324,16 @@ spec:
           containerPort: 8081
         - name: connect-tls
           containerPort: 8444
-        - name: admin
-          containerPort: 9901
+        # Filtered admin view (GET /stats/prometheus and /ready only). The
+        # admin API itself (9901) is loopback-only and deliberately not listed.
+        - name: envoy-metrics
+          containerPort: 9902
+        # Keeps the pod out of the Service until Envoy is ready.
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: envoy-metrics
+          periodSeconds: 2
         volumeMounts:
         - name: envoy-config
           mountPath: /etc/envoy

@@ -38,6 +38,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/atelet"
 	"github.com/agent-substrate/substrate/internal/nodepath"
+	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -207,15 +208,67 @@ func TestSnapshotManifestScopeAbsent(t *testing.T) {
 	}
 }
 
-// TestSnapshotManifestRequiresPauseImage pins that a manifest without a pause
-// image is rejected outright rather than yielding an empty image that would
-// fail later, deep in the image pull.
-func TestSnapshotManifestRequiresPauseImage(t *testing.T) {
-	noPause := []byte(`{"sandboxClass":"gvisor","snapshotFiles":["checkpoint.img"]}`)
-	if _, err := unmarshalSandboxRecord(noPause); err == nil {
-		t.Fatal("unmarshalSandboxRecord accepted a manifest with no pauseImage")
-	} else if !strings.Contains(err.Error(), "pauseImage") {
-		t.Errorf("error = %v, want it to name pauseImage", err)
+// TestSnapshotManifestPauseImage pins that only a gVisor manifest needs a
+// pause image: micro-VM sandboxes run no pause container.
+func TestSnapshotManifestPauseImage(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		manifest string
+		wantErr  bool
+	}{
+		{"gvisor without pause image", `{"sandboxClass":"gvisor","snapshotFiles":["checkpoint.img"]}`, true},
+		{"gvisor with pause image", `{"sandboxClass":"gvisor","pauseImage":"` + testPauseImage + `","snapshotFiles":["checkpoint.img"]}`, false},
+		{"microvm without pause image", `{"sandboxClass":"microvm","snapshotFiles":["checkpoint.img"]}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := unmarshalSandboxRecord([]byte(tc.manifest))
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("unmarshalSandboxRecord succeeded, want an error")
+				}
+				if !strings.Contains(err.Error(), "pauseImage") {
+					t.Errorf("error = %v, want it to name pauseImage", err)
+				}
+			} else if err != nil {
+				t.Fatalf("unmarshalSandboxRecord: %v", err)
+			}
+		})
+	}
+}
+
+// TestPrepareOCIBundlesPause pins that the pause bundle is built only when the
+// sandbox has a pause image.
+func TestPrepareOCIBundlesPause(t *testing.T) {
+	host := imageVolumeTestRegistry(t)
+	image := host + "/actor:v1"
+	pushTestImage(t, image, singleFileLayer(t, "bin/app", "app"))
+	spec := &ateletpb.WorkloadSpec{
+		Containers: []*ateletpb.Container{{Name: "app", Image: image, Command: []string{"/bin/app"}}},
+	}
+
+	for _, tc := range []struct {
+		name       string
+		pauseImage string
+		wantPause  bool
+	}{
+		{"with pause image", image, true},
+		{"without pause image", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			useTempNodeDirs(t)
+			const actorUID = "actor-uid-1"
+			s := &AteomHerder{imageCache: newImageVolumeStore(t)}
+			if err := s.prepareOCIBundles(t.Context(), actorUID, resources.ActorRef{}, spec, tc.pauseImage, "ateom-uid-1"); err != nil {
+				t.Fatalf("prepareOCIBundles: %v", err)
+			}
+			if _, err := os.Stat(filepath.Join(ateletpath.OCIBundlePath(actorUID, "app"), "config.json")); err != nil {
+				t.Errorf("app bundle: %v", err)
+			}
+			_, err := os.Stat(ateletpath.OCIBundlePath(actorUID, ocispec.PauseContainer))
+			if gotPause := err == nil; gotPause != tc.wantPause {
+				t.Errorf("pause bundle exists = %v, want %v (stat: %v)", gotPause, tc.wantPause, err)
+			}
+		})
 	}
 }
 
@@ -845,22 +898,12 @@ func TestRPCBoundariesReject(t *testing.T) {
 		wantInvalidArgument(t, "Restore", err)
 	})
 	t.Run("Terminate", func(t *testing.T) {
-		t.Run("invalid ateom UID", func(t *testing.T) {
-			_, err := s.Terminate(ctx, &ateletpb.TerminateRequest{
-				Atespace: okAtespace, ActorName: okID,
-				ActorUid: okActorUID, ActorTemplateAtespace: "default", ActorTemplateName: "template",
-				TargetAteomUid: badUID, Spec: okSpec,
-			})
-			wantInvalidArgument(t, "Terminate", err)
+		_, err := s.Terminate(ctx, &ateletpb.TerminateRequest{
+			Atespace: okAtespace, ActorName: okID,
+			ActorUid: okActorUID, ActorTemplateAtespace: "default", ActorTemplateName: "template",
+			TargetAteomUid: badUID, Spec: okSpec,
 		})
-		t.Run("missing target ateom UID", func(t *testing.T) {
-			_, err := s.Terminate(ctx, &ateletpb.TerminateRequest{
-				Atespace: okAtespace, ActorName: okID,
-				ActorUid: okActorUID, ActorTemplateAtespace: "default", ActorTemplateName: "template",
-				Spec: okSpec,
-			})
-			wantInvalidArgument(t, "Terminate", err)
-		})
+		wantInvalidArgument(t, "Terminate", err)
 	})
 }
 
@@ -1091,12 +1134,60 @@ func TestRemoveActorDirsKeepsPopulatedVolume(t *testing.T) {
 		t.Fatalf("writing volume contents: %v", err)
 	}
 
-	if err := removeActorDirs(actorUID); err == nil {
+	err := removeActorDirs(actorUID)
+	if err == nil {
 		t.Fatal("removeActorDirs succeeded with a populated volume dir, want an error")
+	}
+	if strings.Contains(err.Error(), "%w") {
+		t.Errorf("removeActorDirs error %q has a literal %%w", err)
 	}
 	if _, err := os.Stat(stillMounted); err != nil {
 		t.Errorf("removeActorDirs deleted the contents of a volume that was still populated: %v", err)
 	}
+}
+
+func TestResetDir(t *testing.T) {
+	t.Run("empties and recreates the directory", func(t *testing.T) {
+		dir := filepath.Join(t.TempDir(), "state")
+		if err := os.MkdirAll(filepath.Join(dir, "sub"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := resetDir("state dir", dir, os.RemoveAll, 0o750); err != nil {
+			t.Fatalf("resetDir: %v", err)
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil || len(entries) != 0 {
+			t.Errorf("ReadDir = %v, %v, want an empty directory", entries, err)
+		}
+		if info, err := os.Stat(dir); err != nil || info.Mode().Perm() != 0o750 {
+			t.Errorf("Stat = %v, %v, want mode 0750", info, err)
+		}
+	})
+
+	t.Run("names the directory when the remove fails", func(t *testing.T) {
+		boom := errors.New("boom")
+		err := resetDir("state dir", t.TempDir(), func(string) error { return boom }, 0o700)
+		if !errors.Is(err, boom) {
+			t.Fatalf("resetDir = %v, want it to wrap %v", err, boom)
+		}
+		if got, want := err.Error(), "while deleting state dir: boom"; got != want {
+			t.Errorf("error = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("names the directory when the create fails", func(t *testing.T) {
+		file := filepath.Join(t.TempDir(), "file")
+		if err := os.WriteFile(file, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		err := resetDir("state dir", filepath.Join(file, "child"), func(string) error { return nil }, 0o700)
+		if err == nil || !strings.HasPrefix(err.Error(), "while creating state dir: ") {
+			t.Errorf("resetDir = %v, want an error starting %q", err, "while creating state dir: ")
+		}
+		if err != nil && strings.Contains(err.Error(), "%w") {
+			t.Errorf("error %q has a literal %%w", err)
+		}
+	})
 }
 
 // blockerDesc registers a single unary method whose handler blocks until block

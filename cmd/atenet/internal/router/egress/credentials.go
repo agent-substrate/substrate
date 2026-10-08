@@ -55,14 +55,11 @@ func mapCredentialProviderError(err error) error {
 // name); a request without it goes out unchanged, and its credential is not
 // fetched.
 //
-// A credential is only ever injected on the TLS-terminated MITM leg. On a
-// cleartext leg injection is skipped and the request goes out without the
-// credential. On the MITM leg any failure to produce a credential the request
-// needs denies it, including having no provider configured.
+// Any failure to produce a credential the request needs denies it, including
+// having no provider configured.
 //
-// This gateway cannot mint actor JWTs yet, so on the MITM leg a request that
-// needs one is denied.
-func (h *Handler) applyEffects(ctx context.Context, ref resources.ActorRef, dest egresspolicy.Destination, leg string, headers map[string]string, effects *ateapipb.HttpRuleEffects) ([]*corev3.HeaderValueOption, error) {
+// This gateway cannot mint actor JWTs yet, so a request that needs one is denied.
+func (h *Handler) applyEffects(ctx context.Context, ref resources.ActorRef, dest egresspolicy.Destination, headers map[string]string, effects *ateapipb.HttpRuleEffects) ([]*corev3.HeaderValueOption, error) {
 	var injections []*ateapipb.CredentialHeader
 	for _, inj := range effects.GetReplaceHeaders() {
 		if _, ok := headers[strings.ToLower(inj.GetHeader())]; ok {
@@ -73,11 +70,6 @@ func (h *Handler) applyEffects(ctx context.Context, ref resources.ActorRef, dest
 		return nil, nil
 	}
 
-	if leg != extproc.EgressTLSMITMFilterChainName {
-		slog.WarnContext(ctx, "egress: skipping credential injection on a non-TLS leg; the request proceeds without the credential",
-			slog.Any("actor", ref), slog.String("host", dest.Hostname), slog.String("leg", leg))
-		return nil, nil
-	}
 	// TODO(identity): mint actor JWTs through Control.MintActorJWT.
 	for _, inj := range injections {
 		if inj.GetActorJwt() != nil {

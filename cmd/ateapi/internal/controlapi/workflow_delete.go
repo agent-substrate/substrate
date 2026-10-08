@@ -21,6 +21,7 @@ import (
 	"log/slog"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/objectstore"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
@@ -45,9 +46,9 @@ func (w *ActorWorkflow) DeleteActor(ctx context.Context, actorRef resources.Acto
 
 	if err := precondition.Check(actor.GetMetadata()); err != nil {
 		if errors.Is(err, store.ErrUIDConflict) {
-			return nil, status.Errorf(codes.Aborted, "Actor %s does not have uid %s", actorRef, precondition.UID)
+			return nil, apierror.Aborted("Actor %s does not have uid %s", actorRef, precondition.UID)
 		}
-		return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
+		return nil, apierror.Aborted("concurrent update conflict, please retry")
 	}
 
 	if actor, err = w.ensureMarkedDeleting(ctx, actorRef, actor, anyState); err != nil {
@@ -113,7 +114,7 @@ func (w *ActorWorkflow) loadActorForDelete(ctx context.Context, actorRef resourc
 	actor, err := w.store.GetActor(ctx, actorRef)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, status.Errorf(codes.NotFound, "Actor %s not found", actorRef)
+			return nil, apierror.NotFound("Actor %s not found", actorRef)
 		}
 		return nil, fmt.Errorf("while fetching actor: %w", err)
 	}
@@ -125,38 +126,42 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 	ctx, done := stepSpan(ctx, "CallAteletTerminate")
 	defer func() { err = done(err) }()
 
-	assignment := actor.GetStatus().GetWorkerAssignment()
-	if assignment == nil {
-		slog.InfoContext(ctx, "actor has no worker assignment, skipping atlet terminate request", slog.Any("actor", actorRef))
+	nodeName := actor.GetStatus().GetAssignedNode()
+	if nodeName == "" {
+		slog.InfoContext(ctx, "actor has no assigned node, skipping atelet terminate request", slog.Any("actor", actorRef))
 		return nil
 	}
 
-	if workerName := assignment.GetWorker().GetName(); workerName != "" {
-		// Ask whether the worker still HOSTS this actor, not whether its one
-		// assignment happens to be this actor: a worker hosting several is the
-		// ordinary case, and the others are none of this delete's business.
-		hosted, err := workerHostsActor(ctx, w.store, workerName, actor.GetMetadata().GetUid())
-		if err != nil {
-			return err
-		}
-		if !hosted {
-			slog.InfoContext(ctx, "worker is no longer assigned to this actor, skipping atelet terminate request",
-				slog.String("worker", workerName),
-				slog.Any("actor", actorRef))
-			return nil
+	targetAteomUID := ""
+	if assignment := actor.GetStatus().GetWorkerAssignment(); assignment != nil {
+		targetAteomUID = assignment.GetWorkerPodUid()
+		if workerName := assignment.GetWorker().GetName(); workerName != "" {
+			// Ask whether the worker still HOSTS this actor, not whether its one
+			// assignment happens to be this actor: a worker hosting several is the
+			// ordinary case, and the others are none of this delete's business.
+			hosted, err := workerHostsActor(ctx, w.store, workerName, actor.GetMetadata().GetUid())
+			if err != nil {
+				return err
+			}
+			if !hosted {
+				slog.InfoContext(ctx, "worker is no longer assigned to this actor, skipping ateom workload termination",
+					slog.String("worker", workerName),
+					slog.Any("actor", actorRef))
+				targetAteomUID = ""
+			}
 		}
 	}
 
-	conn, err := w.dialer.DialForAteletOnNode(assignment.GetNodeName())
+	conn, err := w.dialer.DialForAteletOnNode(nodeName)
 	if err != nil {
-		return fmt.Errorf("while connecting to atelet on node %q: %w", assignment.GetNodeName(), err)
+		return fmt.Errorf("while connecting to atelet on node %q: %w", nodeName, err)
 	}
 
 	client := ateletpb.NewAteomHerderClient(conn)
 
 	var workloadSpec *ateletpb.WorkloadSpec
 	if actorTemplate != nil {
-		spec, err := workloadSpecFromActorTemplate(actorTemplate, actor)
+		spec, err := workloadSpecFromActorTemplate(actorTemplate, actor, nil)
 		if err != nil {
 			return err
 		}
@@ -188,7 +193,7 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 	}
 
 	req := &ateletpb.TerminateRequest{
-		TargetAteomUid:        assignment.GetWorkerPodUid(),
+		TargetAteomUid:        targetAteomUID,
 		Atespace:              actor.GetMetadata().GetAtespace(),
 		ActorName:             actor.GetMetadata().GetName(),
 		ActorUid:              actor.GetMetadata().GetUid(),
@@ -213,7 +218,7 @@ func (w *ActorWorkflow) ensureVolumesDetachedForDelete(ctx context.Context, acto
 	ctx, done := stepSpan(ctx, "DetachVolumesForDelete")
 	defer func() { err = done(err) }()
 
-	return detachActorVolumes(ctx, w.store, w.pluginRegistry, actor, actorTemplate, "delete")
+	return detachActorVolumes(ctx, w.pluginRegistry, actor, actorTemplate, "delete")
 }
 
 // ensureWorkerReleased releases the worker assigned to the actor.
@@ -286,13 +291,14 @@ func (w *ActorWorkflow) ensureWorkerReleased(ctx context.Context, actorRef resou
 		updatedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(dbActor *ateapipb.Actor) error {
 			if dbActor.Status != nil {
 				dbActor.Status.LocalSnapshot = nil
+				dbActor.Status.AssignedNode = ""
 				dbActor.Status.WorkerAssignment = nil
 			}
 			return nil
 		})
 		if err != nil {
 			if errors.Is(err, store.ErrVersionConflict) {
-				return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
+				return nil, apierror.Aborted("concurrent update conflict, please retry")
 			}
 			return nil, err
 		}
@@ -323,7 +329,7 @@ func (w *ActorWorkflow) ensureMarkedDeleting(ctx context.Context, actorRef resou
 		shouldDelete = anyState
 	}
 	if !shouldDelete {
-		return nil, status.Errorf(codes.FailedPrecondition, "Actor %s is not in a deletable state (state: %v)", actorRef, st)
+		return nil, apierror.FailedPrecondition("Actor %s is not in a deletable state (state: %v)", actorRef, st)
 	}
 
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
@@ -335,7 +341,7 @@ func (w *ActorWorkflow) ensureMarkedDeleting(ctx context.Context, actorRef resou
 	})
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
+			return nil, apierror.Aborted("concurrent update conflict, please retry")
 		}
 		return nil, fmt.Errorf("while setting actor state to DELETING: %w", err)
 	}
@@ -351,11 +357,11 @@ func (w *ActorWorkflow) ensureVolumesDeleted(ctx context.Context, actor *ateapip
 
 	st := actor.GetStatus().GetState()
 	if st != ateapipb.ActorState_ACTOR_STATE_DELETING {
-		return status.Errorf(codes.FailedPrecondition, "DeleteVolumes prerequisite not met for Actor: %s (got: %v, want %s)", actor.GetMetadata().GetName(), st, ateapipb.ActorState_ACTOR_STATE_DELETING)
+		return apierror.FailedPrecondition("DeleteVolumes prerequisite not met for Actor: %s (got: %v, want %s)", actor.GetMetadata().GetName(), st, ateapipb.ActorState_ACTOR_STATE_DELETING)
 	}
 
 	if err := deleteActorVolumes(ctx, w.pluginRegistry, actor.GetMetadata().GetUid(), actor.GetStatus().GetActorVolumes()); err != nil {
-		return status.Errorf(codes.Internal, "while deleting actor volumes: %v", err)
+		return apierror.Internal("while deleting actor volumes: %v", err)
 	}
 	return nil
 }
@@ -434,13 +440,13 @@ func (w *ActorWorkflow) finalizeDeleted(ctx context.Context, actor *ateapipb.Act
 	deleted, err := w.store.DeleteActor(ctx, actorRef, precondition)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, status.Errorf(codes.NotFound, "Actor %s not found", actorRef)
+			return nil, apierror.NotFound("Actor %s not found", actorRef)
 		}
 		if errors.Is(err, store.ErrUIDConflict) {
-			return nil, status.Errorf(codes.Aborted, "Actor %s does not have uid %s", actorRef, precondition.UID)
+			return nil, apierror.Aborted("Actor %s does not have uid %s", actorRef, precondition.UID)
 		}
 		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
+			return nil, apierror.Aborted("concurrent update conflict, please retry")
 		}
 		return nil, fmt.Errorf("while deleting actor from DB: %w", err)
 	}

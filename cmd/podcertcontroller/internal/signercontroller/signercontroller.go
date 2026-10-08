@@ -240,6 +240,7 @@ func (c *Controller) ensureBundles(ctx context.Context) {
 			slog.InfoContext(ctx, "ClusterTrustBundle already in correct state",
 				slog.String("key", wantCTB.ObjectMeta.Name),
 			)
+			continue
 		}
 
 		ctb = ctb.DeepCopy()

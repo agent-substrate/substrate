@@ -84,8 +84,7 @@ func EgressInjectHeader(header, prefix, credentialURI string, patterns ...string
 }
 
 // EgressInjectHeaderHTTP is an http rule (see EgressAllowHTTP) carrying the
-// same effect as EgressInjectHeader. The gateway never puts a credential on
-// cleartext, so a test uses it to prove the effect is skipped there.
+// same credential replacement effect as EgressInjectHeader.
 func EgressInjectHeaderHTTP(header, prefix, credentialURI string, patterns ...string) *ateapipb.EgressRule {
 	rule := EgressAllowHTTP(patterns...)
 	rule.Http.Effects = replaceHeaderEffects(header, prefix, credentialURI)

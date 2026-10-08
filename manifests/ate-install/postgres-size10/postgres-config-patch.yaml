@@ -32,7 +32,7 @@ data:
     ssl = on
     ssl_cert_file = '/run/servicedns.podcert.ate.dev/credential-bundle.pem'
     ssl_key_file = '/run/servicedns.podcert.ate.dev/credential-bundle.pem'
-    ssl_ca_file = '/run/podidentity.podcert.ate.dev/trust-bundle.pem'
+    ssl_ca_file = '/run/postgres.podcert.ate.dev/trust-bundle.pem'
     hba_file = '/etc/postgresql/pg_hba.conf'
 
     # Memory: container holds 140 GiB. shared_buffers at 25 % is the standard

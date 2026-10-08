@@ -19,10 +19,12 @@ import (
 	"fmt"
 	"net/netip"
 	"net/url"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -34,8 +36,17 @@ import (
 
 // ToGRPCStatusError turns validation errors into the InvalidArgument error an
 // RPC handler responds with. Callers check len(errs) > 0 first.
+//
+// TODO: Delete once atelet's AteomSupport server returns apierrors, and use
+// ToAPIError instead.
 func ToGRPCStatusError(errs field.ErrorList) error {
 	return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
+}
+
+// ToAPIError turns validation errors into the InvalidArgument error an RPC
+// handler responds with. Callers check len(errs) > 0 first.
+func ToAPIError(errs field.ErrorList) error {
+	return apierror.InvalidArgument("%v", errs.ToAggregate())
 }
 
 // DeepEqual compares two values of any type, using proto.Equal if both are
@@ -115,6 +126,31 @@ func validateAbsDir(dir string, fldPath *field.Path) field.ErrorList {
 	}
 	if !filepath.IsAbs(dir) || filepath.Clean(dir) != dir {
 		return field.ErrorList{field.Invalid(fldPath, dir, "must be an absolute, clean path")}
+	}
+	return nil
+}
+
+// ValidateRuntimeAssetPath ensures p is a regular file under root, with no symlinks
+// ateom runs these as root, so they must be assets atelet fetched into root
+func ValidateRuntimeAssetPath(root, p string, fldPath *field.Path) field.ErrorList {
+	if p == "" {
+		return field.ErrorList{field.Required(fldPath, "")}
+	}
+	if !filepath.IsAbs(p) || filepath.Clean(p) != p {
+		return field.ErrorList{field.Invalid(fldPath, p, "must be an absolute, clean path")}
+	}
+	if rel, err := filepath.Rel(root, p); err != nil || rel == "." || !filepath.IsLocal(rel) {
+		return field.ErrorList{field.Invalid(fldPath, p, fmt.Sprintf("must be inside %s", root))}
+	}
+	resolved, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		return field.ErrorList{field.Invalid(fldPath, p, err.Error())}
+	}
+	if resolved != p {
+		return field.ErrorList{field.Invalid(fldPath, p, "must not traverse a symlink")}
+	}
+	if fi, err := os.Stat(p); err != nil || !fi.Mode().IsRegular() {
+		return field.ErrorList{field.Invalid(fldPath, p, "must be a regular file")}
 	}
 	return nil
 }

@@ -2077,10 +2077,9 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 	// over several of them is unambiguous about which were counted.
 	newTestAssignment := func(actorUID string, cpuMilli, memoryBytes int64) *ateapipb.ActorAssignment {
 		return &ateapipb.ActorAssignment{
-			ActorTemplateRef: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "test-template"},
-			Actor:            &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor-" + actorUID},
-			ActorUid:         actorUID,
-			Resources:        resources.CPUMemory(cpuMilli, memoryBytes),
+			Actor:     &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor-" + actorUID},
+			ActorUid:  actorUID,
+			Resources: resources.CPUMemory(cpuMilli, memoryBytes),
 		}
 	}
 

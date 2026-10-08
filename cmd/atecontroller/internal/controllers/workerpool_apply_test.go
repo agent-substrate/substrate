@@ -28,8 +28,9 @@ import (
 	appsv1ac "k8s.io/client-go/applyconfigurations/apps/v1"
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 	metav1ac "k8s.io/client-go/applyconfigurations/meta/v1"
+	"k8s.io/utils/ptr"
 
-	"github.com/agent-substrate/substrate/internal/ateomcapacity"
+	"github.com/agent-substrate/substrate/internal/ateom"
 	"github.com/agent-substrate/substrate/internal/deviceplugin"
 	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/nodepath"
@@ -140,6 +141,15 @@ func TestBuildDeploymentApplyConfig(t *testing.T) {
 			}),
 			want: expectedDeploymentApplyConfig(func(podSpecAC *corev1ac.PodSpecApplyConfiguration) {
 				podSpecAC.WithPriorityClassName("interactive-workerpool")
+			}),
+		},
+		{
+			name: "with service account name",
+			wp: testWorkerPoolApplyConfig(&atev1alpha1.WorkerPoolPodTemplate{
+				ServiceAccountName: ptr.To("substrate-worker"),
+			}),
+			want: expectedDeploymentApplyConfig(func(podSpecAC *corev1ac.PodSpecApplyConfiguration) {
+				podSpecAC.WithServiceAccountName("substrate-worker")
 			}),
 		},
 		{
@@ -542,12 +552,14 @@ func TestBuildDeploymentApplyConfigOTelEndpoint(t *testing.T) {
 				Spec.Template.Spec.Containers[0]
 			env := envByName(c.Env)
 
-			if _, ok := env["POD_UID"]; !ok {
-				t.Error("POD_UID must always be set")
+			for _, k := range []string{"POD_UID", "POD_NAMESPACE", "WORKER_POOL_NAME"} {
+				if _, ok := env[k]; !ok {
+					t.Errorf("%s must always be set", k)
+				}
 			}
 
 			if !tt.wantTelemetry {
-				for _, k := range []string{"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_RESOURCE_ATTRIBUTES", "OTEL_METRIC_EXPORT_INTERVAL", "OTEL_METRIC_EXPORT_TIMEOUT", "POD_NAME", "POD_NAMESPACE", "NODE_NAME"} {
+				for _, k := range []string{"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_RESOURCE_ATTRIBUTES", "OTEL_METRIC_EXPORT_INTERVAL", "OTEL_METRIC_EXPORT_TIMEOUT", "OTEL_LOGS_EXPORTER", "POD_NAME", "NODE_NAME"} {
 					if _, ok := env[k]; ok {
 						t.Errorf("%s must be absent without an OTLP endpoint", k)
 					}
@@ -769,8 +781,8 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 				WithName(ateomCapacityVolume).
 				WithDownwardAPI(corev1ac.DownwardAPIVolumeSource().
 					WithItems(
-						resourceFieldRefFile(ateomcapacity.CPULimitFile, "limits.cpu", milliCores),
-						resourceFieldRefFile(ateomcapacity.MemoryLimitFile, "limits.memory", wholeBytes),
+						resourceFieldRefFile(ateom.CPULimitFile, "limits.cpu", milliCores),
+						resourceFieldRefFile(ateom.MemoryLimitFile, "limits.memory", wholeBytes),
 					)),
 			corev1ac.Volume().
 				WithName("run-ateom").
@@ -853,11 +865,21 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 					WithValueFrom(corev1ac.EnvVarSource().
 						WithFieldRef(corev1ac.ObjectFieldSelector().
 							WithFieldPath("metadata.uid"))),
+				corev1ac.EnvVar().
+					WithName("POD_NAMESPACE").
+					WithValueFrom(corev1ac.EnvVarSource().
+						WithFieldRef(corev1ac.ObjectFieldSelector().
+							WithFieldPath("metadata.namespace"))),
+				corev1ac.EnvVar().
+					WithName("WORKER_POOL_NAME").
+					WithValueFrom(corev1ac.EnvVarSource().
+						WithFieldRef(corev1ac.ObjectFieldSelector().
+							WithFieldPath("metadata.labels['ate.dev/worker-pool']"))),
 			).
 			WithVolumeMounts(
 				corev1ac.VolumeMount().
 					WithName(ateomCapacityVolume).
-					WithMountPath(ateomcapacity.CapacityMountPath).
+					WithMountPath(ateom.CapacityMountPath).
 					WithReadOnly(true),
 				corev1ac.VolumeMount().
 					WithName("run-ateom").
@@ -879,6 +901,7 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 		sandboxClassTolerationAC(atev1alpha1.SandboxClassGvisor),
 	}
 	podSpecAC.WithPriorityClassName("")
+	podSpecAC.WithServiceAccountName("default")
 	podSpecAC.WithAffinity(corev1ac.Affinity())
 	podSpecAC.WithTerminationGracePeriodSeconds(workerTerminationGracePeriodSeconds)
 	if mutatePodSpec != nil {
@@ -1001,5 +1024,49 @@ func TestBuildDeploymentOmitsBrokerIdentityForCanonicalInstall(t *testing.T) {
 	}
 	if want := installdefaults.RouterSPIFFEID(installdefaults.SystemNamespace); clientIdentity != want {
 		t.Errorf("--atunnel-client-identity=%s, want %s", clientIdentity, want)
+	}
+}
+
+// TestBuildDeploymentApplyConfigWorkerPoolEnv asserts the ateom reads its
+// pool from the label the controller puts on the pod, so the usage records
+// name the pool the pod belongs to.
+func TestBuildDeploymentApplyConfigWorkerPoolEnv(t *testing.T) {
+	d := buildDeploymentApplyConfig(testWorkerPoolApplyConfig(nil), ateomOTelSettings{}, installdefaults.SystemNamespace, installdefaults.AteletServiceAccount, installdefaults.RouterServiceAccount)
+	c := d.Spec.Template.Spec.Containers[0]
+	var path string
+	for _, e := range c.Env {
+		if e.Name != nil && *e.Name == "WORKER_POOL_NAME" {
+			path = *e.ValueFrom.FieldRef.FieldPath
+		}
+	}
+	if want := "metadata.labels['" + workerPoolLabel + "']"; path != want {
+		t.Errorf("WORKER_POOL_NAME field path = %q, want %q", path, want)
+	}
+	if _, ok := d.Spec.Template.Labels[workerPoolLabel]; !ok {
+		t.Errorf("pod template has no %s label for WORKER_POOL_NAME to read", workerPoolLabel)
+	}
+}
+
+// TestBuildDeploymentApplyConfigLogsExporter asserts OTEL_LOGS_EXPORTER
+// reaches the ateom container only alongside an endpoint.
+func TestBuildDeploymentApplyConfigLogsExporter(t *testing.T) {
+	const endpoint = "http://collector.otel-system.svc:4317"
+	for _, tt := range []struct {
+		name string
+		otel ateomOTelSettings
+		want string // "" means must not be set
+	}{
+		{"set with endpoint", ateomOTelSettings{Endpoint: endpoint, LogsExporter: "otlp"}, "otlp"},
+		{"unset keeps binary default", ateomOTelSettings{Endpoint: endpoint}, ""},
+		{"ignored without endpoint", ateomOTelSettings{LogsExporter: "otlp"}, ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			c := buildDeploymentApplyConfig(testWorkerPoolApplyConfig(nil), tt.otel, installdefaults.SystemNamespace, installdefaults.AteletServiceAccount, installdefaults.RouterServiceAccount).
+				Spec.Template.Spec.Containers[0]
+			got, ok := envByName(c.Env)["OTEL_LOGS_EXPORTER"]
+			if ok != (tt.want != "") || (ok && got.value != tt.want) {
+				t.Errorf("OTEL_LOGS_EXPORTER = %q (present %v), want %q", got.value, ok, tt.want)
+			}
+		})
 	}
 }

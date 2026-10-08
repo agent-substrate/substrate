@@ -46,6 +46,7 @@ type fetchRangeFunc func(ctx context.Context, i int, off, n int64, buf []byte) e
 // set, is the already-open body of the first range, so the size probe is not wasted.
 type rangedReader struct {
 	cancel  context.CancelFunc
+	head    io.ReadCloser
 	ordered chan chan rangeResult
 	free    chan []byte
 	cur     []byte
@@ -59,11 +60,13 @@ type rangeResult struct {
 }
 
 // newRangedReader starts fetching size bytes as chunks, at most downloadConcurrency
-// of them in flight. head supplies the first chunk when the caller already opened it.
-func newRangedReader(ctx context.Context, size int64, head io.Reader, fetch fetchRangeFunc) *rangedReader {
+// of them in flight. head supplies the first chunk when the caller already opened it
+// and is closed with the returned reader.
+func newRangedReader(ctx context.Context, size int64, head io.ReadCloser, fetch fetchRangeFunc) *rangedReader {
 	ctx, cancel := context.WithCancel(ctx)
 	r := &rangedReader{
 		cancel:  cancel,
+		head:    head,
 		ordered: make(chan chan rangeResult, downloadConcurrency),
 		free:    make(chan []byte, downloadConcurrency),
 	}
@@ -143,5 +146,8 @@ func (r *rangedReader) Read(p []byte) (int, error) {
 
 func (r *rangedReader) Close() error {
 	r.cancel()
+	if r.head != nil {
+		return r.head.Close()
+	}
 	return nil
 }

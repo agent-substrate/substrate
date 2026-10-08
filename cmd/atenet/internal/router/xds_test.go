@@ -38,6 +38,7 @@ import (
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
+	streamaccesslogv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/access_loggers/stream/v3"
 	setfilterstatev3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/set_filter_state/v3"
 	hcmv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
 	tlsv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3"
@@ -482,6 +483,57 @@ func TestXdsServer_UpdateSnapshot_WithConnect(t *testing.T) {
 	secretsMap := snap.GetResources(resourcev3.SecretType)
 	if _, exists := secretsMap[HTTPSCertSecretName]; !exists {
 		t.Error("cert secret missing even though connect_terminate_tls needs it")
+	}
+}
+
+// Actor traffic can carry credentials in the query string, so no HCM may log
+// the request path with its query.
+func TestXdsServer_AccessLogsOmitQueryString(t *testing.T) {
+	server := NewXdsServer(18000)
+	server.SetConfig(8085, 50053, "127.0.0.1")
+	server.SetConnectPorts(8081, 8444)
+	server.SetTlsConfig(8443, "/run/servicedns.podcert.ate.dev/credential-bundle.pem")
+
+	if err := server.UpdateSnapshot(); err != nil {
+		t.Fatalf("UpdateSnapshot failed: %v", err)
+	}
+	res, err := server.snapshot.GetSnapshot(NodeID)
+	if err != nil {
+		t.Fatalf("Failed to get snapshot: %v", err)
+	}
+	snap := res.(*cachev3.Snapshot)
+
+	hcms := 0
+	for name, raw := range snap.GetResources(resourcev3.ListenerType) {
+		for _, fc := range raw.(*listenerv3.Listener).GetFilterChains() {
+			for _, f := range fc.GetFilters() {
+				if f.GetName() != "envoy.filters.network.http_connection_manager" {
+					continue
+				}
+				hcms++
+				hcm := &hcmv3.HttpConnectionManager{}
+				if err := f.GetTypedConfig().UnmarshalTo(hcm); err != nil {
+					t.Fatalf("listener %s: unmarshal HCM: %v", name, err)
+				}
+				if len(hcm.GetAccessLog()) == 0 {
+					t.Errorf("listener %s: HCM has no access log", name)
+				}
+				for _, al := range hcm.GetAccessLog() {
+					stdout := &streamaccesslogv3.StdoutAccessLog{}
+					if err := al.GetTypedConfig().UnmarshalTo(stdout); err != nil {
+						t.Fatalf("listener %s: unmarshal access log: %v", name, err)
+					}
+					// An unset format means Envoy's default, which logs the query.
+					format := stdout.GetLogFormat().GetTextFormatSource().GetInlineString()
+					if !strings.Contains(format, "%PATH(NQ:") {
+						t.Errorf("listener %s: access log format %q does not strip the query string", name, format)
+					}
+				}
+			}
+		}
+	}
+	if hcms == 0 {
+		t.Fatal("snapshot has no HTTP connection managers")
 	}
 }
 
