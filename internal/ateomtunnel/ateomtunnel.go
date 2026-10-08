@@ -21,6 +21,7 @@ package ateomtunnel
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -28,6 +29,7 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/ateletdial"
 	"github.com/agent-substrate/substrate/internal/ateomnet/dns"
 	"github.com/agent-substrate/substrate/internal/atunnel"
 	"github.com/agent-substrate/substrate/internal/installdefaults"
@@ -98,6 +100,8 @@ type Tunnel struct {
 	DNSRelay *dns.Relay
 
 	cfg Config
+	// ateletTLS is used to authenticate to atelet to fetch egress policies.
+	ateletTLS *tls.Config
 }
 
 // Start builds the DNS relay and starts serving actor ingress, which proxies
@@ -112,6 +116,10 @@ func Start(ctx context.Context, cfg Config, upstream string) (*Tunnel, error) {
 	dnsRelay, err := dns.NewRelay(resolvConfPath)
 	if err != nil {
 		return nil, fmt.Errorf("configuring DNS relay: %w", err)
+	}
+	ateletTLS, err := ateletdial.TLSConfig(cfg.CredentialBundle, cfg.TrustBundle, cfg.BrokerIdentity)
+	if err != nil {
+		return nil, fmt.Errorf("configuring the atelet connection: %w", err)
 	}
 
 	// Ingress
@@ -146,7 +154,8 @@ func Start(ctx context.Context, cfg Config, upstream string) (*Tunnel, error) {
 			Egress:     egress,
 			EgressPort: egressPort,
 			DNSRelay:   dnsRelay,
-			cfg:        cfg},
+			cfg:        cfg,
+			ateletTLS:  ateletTLS},
 		nil
 }
 
