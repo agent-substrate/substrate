@@ -499,6 +499,12 @@ data:
                       cluster: egress_original_dst_tls
                       timeout: 0s
               http_filters:
+              - name: envoy.filters.http.dynamic_modules
+                typed_config:
+                  "@type": type.googleapis.com/envoy.extensions.filters.http.dynamic_modules.v3.DynamicModuleFilter
+                  dynamic_module_config:
+                    name: envoy_substrate_egress_policy_pep
+                  filter_name: envoy_substrate_egress_policy_pep
               # Every request on this chain is authorized against the actor's
               # EgressPolicy by the same sidecar; the actor comes from the filter
               # state the CONNECT leg set, never from a header.
@@ -681,6 +687,12 @@ data:
                       cluster: egress_original_dst_cleartext
                       timeout: 0s
               http_filters:
+              - name: envoy.filters.http.dynamic_modules
+                typed_config:
+                  "@type": type.googleapis.com/envoy.extensions.filters.http.dynamic_modules.v3.DynamicModuleFilter
+                  dynamic_module_config:
+                    name: envoy_substrate_egress_policy_pep
+                  filter_name: envoy_substrate_egress_policy_pep
               # Every request on this chain is authorized against the actor's
               # EgressPolicy by the same sidecar; the actor comes from the filter
               # state the CONNECT leg set, never from a header.

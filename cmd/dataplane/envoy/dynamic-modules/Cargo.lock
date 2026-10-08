@@ -344,6 +344,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "substrate-envoy-egress-policy-pep"
+version = "0.1.0"
+dependencies = [
+ "envoy-proxy-dynamic-modules-rust-sdk",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "syn"
 version = "2.0.119"
 source = "registry+https://github.com/rust-lang/crates.io-index"

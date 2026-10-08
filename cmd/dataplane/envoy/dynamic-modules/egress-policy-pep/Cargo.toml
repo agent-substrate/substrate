@@ -13,12 +13,12 @@
 # limitations under the License.
 
 [package]
-name = "substrate-envoy-egress-policy"
+name = "substrate-envoy-egress-policy-pep"
 version.workspace = true
 edition.workspace = true
 
 [lib]
-name = "envoy_substrate_egress_policy"
+name = "envoy_substrate_egress_policy_pep"
 crate-type = ["cdylib"]
 
 [dependencies]
