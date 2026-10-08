@@ -83,10 +83,7 @@ var (
 	ateapiServerName = pflag.String("ateapi-server-name", "", "SNI / hostname expected on the ateapi server cert. Optional.")
 	ateapiClientCert = pflag.String("ateapi-client-cert", "", "Credential bundle presented as the client certificate when dialing ateapi. Required.")
 
-	workerSyncConcurrency = pflag.Int("worker-sync-concurrency", workersync.DefaultSyncerWorkerCount, "Number of concurrent worker goroutines reconciling worker pods into the Worker registry.")
-
-	kubeAPIQPS   = pflag.Float32("kube-api-qps", 0, "Sustained queries per second allowed against the Kubernetes API. 0 keeps the client-go default.")
-	kubeAPIBurst = pflag.Int("kube-api-burst", 0, "Burst queries allowed against the Kubernetes API. 0 keeps the client-go default.")
+	workerSyncConcurrency = pflag.Int("worker-sync-concurrency", 2, "Number of concurrent worker goroutines reconciling worker pods into the Worker registry.")
 )
 
 func init() {
@@ -120,11 +117,6 @@ func main() {
 		setupLog.Error(nil, "invalid flag", "flag", "--worker-sync-concurrency", "reason", "must be positive", "value", *workerSyncConcurrency)
 		os.Exit(1)
 	}
-	if *kubeAPIQPS < 0 || *kubeAPIBurst < 0 {
-		setupLog.Error(nil, "invalid rate limits: --kube-api-qps and --kube-api-burst must not be negative",
-			"kube-api-qps", *kubeAPIQPS, "kube-api-burst", *kubeAPIBurst)
-		os.Exit(1)
-	}
 
 	// Both providers must be registered before the ateapi client below:
 	// otelgrpc.NewClientHandler captures the global tracer and meter providers at
@@ -148,12 +140,6 @@ func main() {
 	defer serverboot.ShutdownProvider("MeterProvider", mp.Shutdown)
 
 	k8sConfig := ctrl.GetConfigOrDie()
-	if *kubeAPIQPS > 0 {
-		k8sConfig.QPS = *kubeAPIQPS
-	}
-	if *kubeAPIBurst > 0 {
-		k8sConfig.Burst = *kubeAPIBurst
-	}
 	k8sClient, err := kubernetes.NewForConfig(k8sConfig)
 	if err != nil {
 		setupLog.Error(err, "creating kubernetes client for ateapi dialer")
