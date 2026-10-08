@@ -33,6 +33,7 @@ jobs:
         work-dir:
           - .
           - internal/plugins/gcp-secret-manager
+          - internal/plugins/azure-blob
     steps:
       - id: govulncheck
         uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1.1.0
