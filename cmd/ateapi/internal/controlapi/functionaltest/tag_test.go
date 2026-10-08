@@ -47,7 +47,7 @@ func seedTag(t *testing.T, tc *testContext, actorName, tagName string, opts ...f
 		t.Fatalf("NewActorSnapshotURI: %v", err)
 	}
 	actor, err = tc.persistence.UpdateActor(ctx, resources.ActorRefFromActor(actor), store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
-		toUpdate.Status.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: actorSnapshotURI.String(), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL}
+		toUpdate.Status.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: actorSnapshotURI.String(), Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY}
 		return nil
 	})
 	if err != nil {
@@ -58,7 +58,7 @@ func seedTag(t *testing.T, tc *testContext, actorName, tagName string, opts ...f
 		Scope:       ateapipb.TagScope_TAG_SCOPE_ATESPACE,
 		SourceActor: resources.ActorRefFromActor(actor).ToObjectRef(),
 		Status: &ateapipb.TagStatus{
-			Snapshot:        &ateapipb.ExternalSnapshot{ContentScope: actor.GetStatus().GetExternalSnapshot().GetContentScope()},
+			Snapshot:        &ateapipb.ExternalSnapshot{Fidelity: actor.GetStatus().GetExternalSnapshot().GetFidelity()},
 			StorageLocation: testStorageLocation,
 		},
 	}

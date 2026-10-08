@@ -593,32 +593,32 @@ func TestEnsureSuspendedFinalized_ReleasesOnlyOwnWorker(t *testing.T) {
 	}
 }
 
-// TestCommitSnapshotScope verifies golden actors always commit Full — new
-// actors resume the golden snapshot Full, so the template's onCommit must not
+// TestPreferredFidelity verifies golden actors always commit Full — new
+// actors resume the golden snapshot Full, so the template's preferredFidelity must not
 // thin it down to a data-only capture.
-func TestCommitSnapshotScope(t *testing.T) {
-	tmpl := func(onCommit ateapipb.SnapshotContentScope) *ateapipb.ActorTemplate {
+func TestPreferredFidelity(t *testing.T) {
+	tmpl := func(fidelity ateapipb.SnapshotFidelity) *ateapipb.ActorTemplate {
 		return &ateapipb.ActorTemplate{
-			SnapshotConfig: &ateapipb.SnapshotConfig{OnCommit: onCommit},
+			SnapshotConfig: &ateapipb.SnapshotConfig{PreferredFidelity: fidelity},
 		}
 	}
-	fullScope := ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL
-	dataScope := ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
+	fullScope := ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
+	dataScope := ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
 	tests := []struct {
 		name     string
 		atespace string
-		onCommit ateapipb.SnapshotContentScope
-		want     ateapipb.SnapshotContentScope
+		fidelity ateapipb.SnapshotFidelity
+		want     ateapipb.SnapshotFidelity
 	}{
-		{"golden actor ignores Data onCommit", resources.GoldenActorAtespace, dataScope, fullScope},
-		{"golden actor keeps Full onCommit", resources.GoldenActorAtespace, fullScope, fullScope},
-		{"regular actor uses Data onCommit", "team-a", dataScope, dataScope},
-		{"regular actor uses Full onCommit", "team-a", fullScope, fullScope},
+		{"golden actor ignores Data fidelity", resources.GoldenActorAtespace, dataScope, fullScope},
+		{"golden actor keeps Full fidelity", resources.GoldenActorAtespace, fullScope, fullScope},
+		{"regular actor uses Data fidelity", "team-a", dataScope, dataScope},
+		{"regular actor uses Full fidelity", "team-a", fullScope, fullScope},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := commitSnapshotScope(tc.atespace, tmpl(tc.onCommit)); got != tc.want {
-				t.Errorf("commitSnapshotScope(%q, onCommit=%s) = %s, want %s", tc.atespace, tc.onCommit, got, tc.want)
+			if got := preferredFidelity(tc.atespace, tmpl(tc.fidelity)); got != tc.want {
+				t.Errorf("preferredFidelity(%q, fidelity=%s) = %s, want %s", tc.atespace, tc.fidelity, got, tc.want)
 			}
 		})
 	}

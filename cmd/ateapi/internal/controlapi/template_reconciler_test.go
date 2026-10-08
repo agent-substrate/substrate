@@ -606,7 +606,7 @@ func TestReconcileOne(t *testing.T) {
 // requests the happy path issues: the golden actor is named after the
 // template UID so recreated templates with the same name never collide, and
 // lives in the reserved ate-golden atespace so the suspend workflow commits
-// it Full regardless of the template's onCommit scope.
+// it Full regardless of the template's preferredFidelity scope.
 func TestReconcileOne_GoldenActorRequests(t *testing.T) {
 	ctx := context.Background()
 	st := newFakeTemplateStore(testTemplate())

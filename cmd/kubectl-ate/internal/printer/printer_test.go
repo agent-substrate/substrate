@@ -599,7 +599,7 @@ func TestPrintTagsTo_Table(t *testing.T) {
 			},
 			Scope: ateapipb.TagScope_TAG_SCOPE_PUBLISHED,
 			Status: &ateapipb.TagStatus{
-				Snapshot: &ateapipb.ExternalSnapshot{SnapshotUri: "gs://private/atespaces/team-a/tags/v2", ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
+				Snapshot: &ateapipb.ExternalSnapshot{SnapshotUri: "gs://private/atespaces/team-a/tags/v2", Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY},
 			},
 		},
 		{
@@ -610,7 +610,7 @@ func TestPrintTagsTo_Table(t *testing.T) {
 			},
 			Scope: ateapipb.TagScope_TAG_SCOPE_ATESPACE,
 			Status: &ateapipb.TagStatus{
-				Snapshot: &ateapipb.ExternalSnapshot{SnapshotUri: "gs://private/atespaces/team-a/tags/v1", ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
+				Snapshot: &ateapipb.ExternalSnapshot{SnapshotUri: "gs://private/atespaces/team-a/tags/v1", Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY},
 			},
 		},
 		{
@@ -633,10 +633,10 @@ func TestPrintTagsTo_Table(t *testing.T) {
 	}
 
 	// Sorted by atespace, then name.
-	expected := `ATESPACE   NAME   SCOPE                 STATE     SNAPSHOT                                CONTENT SCOPE                 AGE
-team-a     v1     TAG_SCOPE_ATESPACE    Ready     gs://private/atespaces/team-a/tags/v1   SNAPSHOT_CONTENT_SCOPE_FULL   5h
-team-a     v2     TAG_SCOPE_PUBLISHED   Ready     gs://private/atespaces/team-a/tags/v2   SNAPSHOT_CONTENT_SCOPE_FULL   5m
-team-a     v3     TAG_SCOPE_ATESPACE    Pending   <none>                                  <none>                        30s
+	expected := `ATESPACE   NAME   SCOPE                 STATE     SNAPSHOT                                FIDELITY                   AGE
+team-a     v1     TAG_SCOPE_ATESPACE    Ready     gs://private/atespaces/team-a/tags/v1   SNAPSHOT_FIDELITY_MEMORY   5h
+team-a     v2     TAG_SCOPE_PUBLISHED   Ready     gs://private/atespaces/team-a/tags/v2   SNAPSHOT_FIDELITY_MEMORY   5m
+team-a     v3     TAG_SCOPE_ATESPACE    Pending   <none>                                  <none>                     30s
 `
 	if diff := cmp.Diff(expected, buf.String()); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)

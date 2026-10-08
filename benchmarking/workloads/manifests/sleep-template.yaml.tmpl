@@ -35,7 +35,7 @@ resources:
   - name: memory
     quantity: ${ACTOR_MEMORY}
 snapshotConfig:
-  onCommit: SNAPSHOT_CONTENT_SCOPE_FULL
+  preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
   storageLocation: gs://${BUCKET_NAME}/benchmark-workloads/sleep/
 sandboxConfig:
   sandboxClass: ${SANDBOX_CLASS_ENUM}

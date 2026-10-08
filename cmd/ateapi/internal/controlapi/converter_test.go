@@ -26,31 +26,31 @@ import (
 func TestSnapshotScopeToAtelet(t *testing.T) {
 	tests := []struct {
 		name     string
-		in       ateapipb.SnapshotContentScope
+		in       ateapipb.SnapshotFidelity
 		expected ateletpb.SnapshotScope
 	}{
 		{
 			name:     "Full scope",
-			in:       ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+			in:       ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			expected: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
 		},
 		{
 			name:     "Data scope",
-			in:       ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
+			in:       ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			expected: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA,
 		},
 		{
 			name:     "Default scope (unspecified)",
-			in:       ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED,
+			in:       ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED,
 			expected: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := actorSnapshotContentScopeToAtelet(tt.in)
+			result := fidelityToAtelet(tt.in)
 			if result != tt.expected {
-				t.Errorf("actorSnapshotContentScopeToAtelet(%v) = %v, want %v", tt.in, result, tt.expected)
+				t.Errorf("fidelityToAtelet(%v) = %v, want %v", tt.in, result, tt.expected)
 			}
 		})
 	}

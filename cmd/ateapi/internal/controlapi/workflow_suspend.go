@@ -153,15 +153,15 @@ func (w *ActorWorkflow) ensureMarkedSuspending(ctx context.Context, actorRef res
 	return storedActor, nil
 }
 
-// commitSnapshotScope returns the scope a commit (suspend) snapshot is taken
-// with. Golden actors always commit Full regardless of the template's
-// onCommit: new actors borrow the golden snapshot and resume it Full, so it
-// must carry the guest memory and filesystem.
-func commitSnapshotScope(atespace string, tmpl *ateapipb.ActorTemplate) ateapipb.SnapshotContentScope {
+// preferredFidelity returns the fidelity a suspend snapshot is taken with.
+// Golden actors always commit MEMORY regardless of the template's
+// preferredFidelity: new actors borrow the golden snapshot and resume it
+// with memory, so it must carry the guest memory and filesystem.
+func preferredFidelity(atespace string, tmpl *ateapipb.ActorTemplate) ateapipb.SnapshotFidelity {
 	if atespace == resources.GoldenActorAtespace {
-		return ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL
+		return ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
 	}
-	return tmpl.GetSnapshotConfig().GetOnCommit()
+	return tmpl.GetSnapshotConfig().GetPreferredFidelity()
 }
 
 // isPausedOriginSuspend reports whether the suspend must upload a PAUSED
@@ -223,7 +223,7 @@ func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef reso
 				SnapshotUri: actor.GetStatus().GetInProgressSnapshotUri(),
 			},
 		},
-		Scope:    actorSnapshotContentScopeToAtelet(commitSnapshotScope(actor.GetMetadata().GetAtespace(), actorTemplate)),
+		Scope:    fidelityToAtelet(preferredFidelity(actor.GetMetadata().GetAtespace(), actorTemplate)),
 		ActorUid: actor.GetMetadata().Uid,
 	}
 	wireSnapshotScope = ateattr.SnapshotScopeValue(req.Scope)
@@ -274,7 +274,7 @@ func (w *ActorWorkflow) ensurePausedSnapshotUploaded(ctx context.Context, actorR
 		DestinationSnapshotUri: actor.GetStatus().GetInProgressSnapshotUri(),
 		// The commit scope, like a running-origin suspend; atelet converts
 		// from the captured scope in the snapshot's manifest where possible.
-		DesiredScope: actorSnapshotContentScopeToAtelet(commitSnapshotScope(actor.GetMetadata().GetAtespace(), actorTemplate)),
+		DesiredScope: fidelityToAtelet(preferredFidelity(actor.GetMetadata().GetAtespace(), actorTemplate)),
 	}
 	wireSnapshotScope = ateattr.SnapshotScopeValue(req.DesiredScope)
 
@@ -368,7 +368,7 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 	if inProgressSnapshotURI != "" {
 		externalSnapshot = &ateapipb.ExternalSnapshot{
 			SnapshotUri:      inProgressSnapshotURI,
-			ContentScope:     commitSnapshotScope(actorRef.Atespace, actorTemplate),
+			Fidelity:         preferredFidelity(actorRef.Atespace, actorTemplate),
 			ActorTemplateUid: actorTemplate.GetMetadata().GetUid(),
 		}
 	}

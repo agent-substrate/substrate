@@ -335,18 +335,18 @@ func PrintTagsTo(out io.Writer, tags []*ateapipb.Tag, format string) error {
 		return printProto(out, &ateapipb.ListTagsResponse{Tags: tags}, format)
 	case "table":
 		w := tabwriter.NewWriter(out, 0, 0, 3, ' ', 0)
-		fmt.Fprintln(w, "ATESPACE\tNAME\tSCOPE\tSTATE\tSNAPSHOT\tCONTENT SCOPE\tAGE")
+		fmt.Fprintln(w, "ATESPACE\tNAME\tSCOPE\tSTATE\tSNAPSHOT\tFIDELITY\tAGE")
 		for _, tag := range tags {
 			// A pending tag has no snapshot yet, so neither its URI nor its
 			// content scope says anything.
-			snapshotURI, contentScope := "<none>", "<none>"
+			snapshotURI, fidelity := "<none>", "<none>"
 			if snapshot := tag.GetStatus().GetSnapshot(); snapshot.GetSnapshotUri() != "" {
 				snapshotURI = snapshot.GetSnapshotUri()
-				contentScope = snapshot.GetContentScope().String()
+				fidelity = snapshot.GetFidelity().String()
 			}
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				tag.GetMetadata().GetAtespace(), tag.GetMetadata().GetName(), tag.GetScope(),
-				tagState(tag), snapshotURI, contentScope,
+				tagState(tag), snapshotURI, fidelity,
 				formatAge(tag.GetMetadata().GetCreateTime()))
 		}
 		return w.Flush()
