@@ -63,7 +63,6 @@ func ServerCredentials(cfg Config) (credentials.TransportCredentials, error) {
 		ClientCAPath:   cfg.ClientCAFile,
 		ClientAuth:     tls.RequireAndVerifyClientCert,
 		VerifyPeer:     verifyCallerSAN(cfg.CallerIdentity),
-		MinVersion:     tls.VersionTLS13,
 	})
 	if err != nil {
 		return nil, err

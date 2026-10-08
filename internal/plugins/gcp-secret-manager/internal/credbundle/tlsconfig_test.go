@@ -70,7 +70,6 @@ func TestPrepareServerTLSConfigHandshakeAndCARotation(t *testing.T) {
 		ClientCAPath:   clientCAPath,
 		ClientAuth:     tls.RequireAndVerifyClientCert,
 		VerifyPeer:     verifyPeerURI(testCallerID),
-		MinVersion:     tls.VersionTLS13,
 	})
 	if err != nil {
 		t.Fatalf("PrepareServerTLSConfig() error = %v", err)

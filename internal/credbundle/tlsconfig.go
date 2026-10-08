@@ -40,12 +40,11 @@ type ClientConfig struct {
 	// — a SPIFFE URI SAN, for example. Returning an error fails the handshake.
 	VerifyPeer func(tls.ConnectionState) error
 
-	MinVersion uint16
 	NextProtos []string
 }
 
 // PrepareClientTLSConfig builds a *tls.Config for dialing a server whose trust
-// root can rotate during the process's lifetime.
+// root can rotate during the process's lifetime. It always requires TLS 1.3.
 //
 // tls.Config.RootCAs is frozen once a Config is in use, and a client has no
 // per-dial hook to rebuild it the way a server's GetConfigForClient does. So
@@ -67,7 +66,7 @@ func PrepareClientTLSConfig(cfg ClientConfig) (*tls.Config, error) {
 	}
 
 	return &tls.Config{
-		MinVersion: cfg.MinVersion,
+		MinVersion: tls.VersionTLS13,
 		NextProtos: cfg.NextProtos,
 		// ServerName still drives SNI; only default verification is replaced below.
 		ServerName:           cfg.ServerName,
@@ -125,12 +124,12 @@ type ServerConfig struct {
 	// matching where ClientCAs-based chain verification itself runs.
 	VerifyPeer func(tls.ConnectionState) error
 
-	MinVersion uint16
 	NextProtos []string
 }
 
 // PrepareServerTLSConfig builds a *tls.Config for serving TLS whose client
-// trust root can rotate during the process's lifetime.
+// trust root can rotate during the process's lifetime. It always requires
+// TLS 1.3.
 //
 // Unlike a client, a server can rebuild its config per connection via
 // GetConfigForClient, so when ClientCAPath is set this reloads the pool (via
@@ -144,7 +143,7 @@ func PrepareServerTLSConfig(cfg ServerConfig) (*tls.Config, error) {
 
 	if cfg.ClientCAPath == "" {
 		return &tls.Config{
-			MinVersion:     cfg.MinVersion,
+			MinVersion:     tls.VersionTLS13,
 			NextProtos:     cfg.NextProtos,
 			GetCertificate: cfg.GetCertificate,
 			ClientAuth:     cfg.ClientAuth,
@@ -157,7 +156,7 @@ func PrepareServerTLSConfig(cfg ServerConfig) (*tls.Config, error) {
 	}
 
 	return &tls.Config{
-		MinVersion: cfg.MinVersion,
+		MinVersion: tls.VersionTLS13,
 		// GetConfigForClient's returned Config replaces this one entirely for
 		// the handshake, so every field the handshake needs — including
 		// NextProtos — must be repeated inside it rather than left here.
@@ -178,7 +177,7 @@ func PrepareServerTLSConfig(cfg ServerConfig) (*tls.Config, error) {
 				}
 			}
 			return &tls.Config{
-				MinVersion:       cfg.MinVersion,
+				MinVersion:       tls.VersionTLS13,
 				NextProtos:       cfg.NextProtos,
 				GetCertificate:   cfg.GetCertificate,
 				ClientAuth:       cfg.ClientAuth,

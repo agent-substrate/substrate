@@ -2112,7 +2112,6 @@ func ateletServerTLSConfig(servingBundlePath, clientCAPath string) (*tls.Config,
 		GetCertificate: credbundle.Loader(servingBundlePath),
 		ClientCAPath:   clientCAPath,
 		ClientAuth:     tls.RequireAndVerifyClientCert,
-		MinVersion:     tls.VersionTLS13,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("load CA bundle %s: %w", clientCAPath, err)
