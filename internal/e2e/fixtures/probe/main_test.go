@@ -19,6 +19,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -293,5 +295,50 @@ func TestCapabilityNamesTable(t *testing.T) {
 		if name == "" {
 			t.Errorf("capabilityNames[%d] is empty", i)
 		}
+	}
+}
+
+func doStat(t *testing.T, path string) statResponse {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/stat?"+url.Values{"path": {path}}.Encode(), nil)
+	rec := httptest.NewRecorder()
+	stat(rec, req)
+	var resp statResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decoding /stat response %q: %v", rec.Body.String(), err)
+	}
+	return resp
+}
+
+// The imagefs e2e suite asserts on /stat's owner and mode, so this pins both
+// against files whose owner and mode the test sets itself.
+func TestStatReportsOwnerAndMode(t *testing.T) {
+	dir := t.TempDir()
+	priv := filepath.Join(dir, "private")
+	if err := os.Mkdir(priv, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// Mkdir's mode is clipped by the umask; set it exactly.
+	if err := os.Chmod(priv, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink("private", link); err != nil {
+		t.Fatal(err)
+	}
+
+	got := doStat(t, priv)
+	want := statResponse{Path: priv, UID: uint32(os.Getuid()), GID: got.GID, Mode: "drwx------"}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("/stat %s mismatch (-want +got):\n%s", priv, diff)
+	}
+
+	// The symlink itself, not its target.
+	if got := doStat(t, link); !strings.HasPrefix(got.Mode, "L") || got.Error != "" {
+		t.Errorf("/stat %s = %+v, want the symlink's own mode", link, got)
+	}
+
+	if got := doStat(t, filepath.Join(dir, "missing")); got.Error == "" {
+		t.Errorf("/stat of a missing path reported no error: %+v", got)
 	}
 }
