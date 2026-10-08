@@ -80,9 +80,9 @@ func TestDefaultRuntime(t *testing.T) {
 	// ateom does not know, so it stays empty.
 	want := &ateletpb.SandboxRuntime{
 		SandboxClass: "gvisor",
-		Version: &ateletpb.VersionedSandboxCompat{
-			Version:    hardware.SchemaVersionV1,
-			Attributes: []*ateletpb.AttributeEntry{{Key: hardware.AttrArchitecture, Value: runtime.GOARCH}},
+		CompatVersion: &ateletpb.VersionedSandboxCompat{
+			SchemaVersion: hardware.SchemaVersionV1,
+			Attributes:    []*ateletpb.AttributeEntry{{Key: hardware.AttrArchitecture, Value: runtime.GOARCH}},
 		},
 	}
 	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {

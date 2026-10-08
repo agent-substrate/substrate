@@ -23,8 +23,8 @@ import (
 
 func TestProbeHost(t *testing.T) {
 	compat := ProbeHost()
-	if got := compat.GetVersion(); got != SchemaVersionV1 {
-		t.Errorf("ProbeHost() version = %q, want %q", got, SchemaVersionV1)
+	if got := compat.GetSchemaVersion(); got != SchemaVersionV1 {
+		t.Errorf("ProbeHost() schema_version = %q, want %q", got, SchemaVersionV1)
 	}
 	if len(compat.GetAttributes()) != 1 || compat.GetAttributes()[0].GetKey() != AttrArchitecture || compat.GetAttributes()[0].GetValue() != runtime.GOARCH {
 		t.Errorf("ProbeHost() attributes = %v, want [{%s: %s}]", compat.GetAttributes(), AttrArchitecture, runtime.GOARCH)
@@ -36,9 +36,9 @@ func TestMatches(t *testing.T) {
 		return &ateapipb.SandboxRuntime{
 			SandboxClass: class,
 			Name:         name,
-			Version: &ateapipb.VersionedSandboxCompat{
-				Version:    ver,
-				Attributes: attrs,
+			CompatVersion: &ateapipb.VersionedSandboxCompat{
+				SchemaVersion: ver,
+				Attributes:    attrs,
 			},
 		}
 	}
@@ -83,7 +83,7 @@ func TestMatches(t *testing.T) {
 		{"extra attribute on worker fails 1-to-1 match", amd64GVisorExtraAttr, amd64GVisor, false},
 		{"extra attribute on snapshot fails 1-to-1 match", amd64GVisor, amd64GVisorExtraAttr, false},
 		{"nil worker fails when snapshot is stamped", nil, amd64GVisor, false},
-		{"nil version fails", &ateapipb.SandboxRuntime{SandboxClass: "gvisor"}, amd64GVisor, false},
+		{"nil compat_version fails", &ateapipb.SandboxRuntime{SandboxClass: "gvisor"}, amd64GVisor, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

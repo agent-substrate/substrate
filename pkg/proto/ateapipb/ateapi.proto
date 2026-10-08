@@ -2176,12 +2176,12 @@ message SandboxRuntime {
   string name = 2;
 
   // Primary compatibility version stamped onto an actor's snapshot when a
-  // checkpoint is taken on this runtime. Snapshots matching `version` can
-  // warm-boot on this runtime.
+  // checkpoint is taken on this runtime. Snapshots matching `compat_version`
+  // can warm-boot on this runtime.
   // TODO: Add support for additional compatibility versions.
   //
   // +k8s:required
-  VersionedSandboxCompat version = 3;
+  VersionedSandboxCompat compat_version = 3;
 }
 
 // VersionedSandboxCompat holds the compatibility schema version and the
@@ -2192,12 +2192,13 @@ message VersionedSandboxCompat {
   //
   // +k8s:required
   // +k8s:maxLength=64
-  string version = 1;
+  string schema_version = 1;
 
   // Key-value compatibility attributes defined by this schema version, covering
   // both runtime assets (e.g. "gvisor_asset_hash") and effective guest hardware
   // features after masking (e.g. "architecture", "cpu_features").
-  // Matched by exact equality of all keys and values within the same version.
+  // Matched by exact equality of all keys and values within the same schema
+  // version.
   //
   // +k8s:required
   // +k8s:maxItems=32

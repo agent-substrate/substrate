@@ -657,7 +657,7 @@ func Validate_SandboxRuntime(
 		errs = append(errs, fn(fldPath.Child("name"), &obj.Name, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateletpb.SandboxRuntime.Version
+	{ // field ateletpb.SandboxRuntime.CompatVersion
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj *ateletpb.VersionedSandboxCompat,
@@ -683,9 +683,9 @@ func Validate_SandboxRuntime(
 		}
 		oldVal := safe.Field(oldObj,
 			func(oldObj *ateletpb.SandboxRuntime) *ateletpb.VersionedSandboxCompat {
-				return oldObj.Version
+				return oldObj.CompatVersion
 			})
-		errs = append(errs, fn(fldPath.Child("version"), obj.Version, oldVal, oldObj != nil)...)
+		errs = append(errs, fn(fldPath.Child("compat_version"), obj.CompatVersion, oldVal, oldObj != nil)...)
 	}
 
 	return errs
@@ -697,7 +697,7 @@ func Validate_VersionedSandboxCompat(
 	ctx context.Context, op operation.Operation, fldPath *field.Path,
 	obj, oldObj *ateletpb.VersionedSandboxCompat) (errs field.ErrorList) {
 
-	{ // field ateletpb.VersionedSandboxCompat.Version
+	{ // field ateletpb.VersionedSandboxCompat.SchemaVersion
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj *string,
@@ -724,9 +724,9 @@ func Validate_VersionedSandboxCompat(
 		}
 		oldVal := safe.Field(oldObj,
 			func(oldObj *ateletpb.VersionedSandboxCompat) *string {
-				return &oldObj.Version
+				return &oldObj.SchemaVersion
 			})
-		errs = append(errs, fn(fldPath.Child("version"), &obj.Version, oldVal, oldObj != nil)...)
+		errs = append(errs, fn(fldPath.Child("schema_version"), &obj.SchemaVersion, oldVal, oldObj != nil)...)
 	}
 
 	{ // field ateletpb.VersionedSandboxCompat.Attributes

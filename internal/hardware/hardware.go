@@ -40,7 +40,7 @@ const (
 // (e.g. via CPUID on amd64 and MIDR_EL1 on arm64).
 func ProbeHost() *ateapipb.VersionedSandboxCompat {
 	return &ateapipb.VersionedSandboxCompat{
-		Version: SchemaVersionV1,
+		SchemaVersion: SchemaVersionV1,
 		Attributes: []*ateapipb.AttributeEntry{
 			{
 				Key:   AttrArchitecture,
@@ -52,8 +52,8 @@ func ProbeHost() *ateapipb.VersionedSandboxCompat {
 
 // Matches reports whether a worker's SandboxRuntime satisfies the SandboxRuntime
 // recorded on snap. A nil snapshot SandboxRuntime imposes no constraint.
-// Otherwise, sandbox_class, version.version, and all version.attributes must
-// match 1-to-1.
+// Otherwise, sandbox_class, compat_version.schema_version, and all
+// compat_version.attributes must match 1-to-1.
 func Matches(worker, snap *ateapipb.SandboxRuntime) bool {
 	if snap == nil {
 		return true
@@ -61,7 +61,7 @@ func Matches(worker, snap *ateapipb.SandboxRuntime) bool {
 	if worker == nil || worker.GetSandboxClass() != snap.GetSandboxClass() {
 		return false
 	}
-	return MatchesCompat(worker.GetVersion(), snap.GetVersion())
+	return MatchesCompat(worker.GetCompatVersion(), snap.GetCompatVersion())
 }
 
 // MatchesCompat reports whether two VersionedSandboxCompat values have the same
@@ -70,7 +70,7 @@ func MatchesCompat(worker, snap *ateapipb.VersionedSandboxCompat) bool {
 	if worker == nil || snap == nil {
 		return false
 	}
-	if worker.GetVersion() == "" || worker.GetVersion() != snap.GetVersion() {
+	if worker.GetSchemaVersion() == "" || worker.GetSchemaVersion() != snap.GetSchemaVersion() {
 		return false
 	}
 	wAttrs := worker.GetAttributes()

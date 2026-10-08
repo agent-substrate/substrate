@@ -85,15 +85,15 @@ func fromDir(dir string, actors int) *ateletpb.WorkerResources {
 // enabled versions as restorable_runtimes.
 func defaultRuntime(sandboxClass string) *ateletpb.SandboxRuntime {
 	return &ateletpb.SandboxRuntime{
-		SandboxClass: sandboxClass,
-		Version:      toCompat(hardware.ProbeHost()),
+		SandboxClass:  sandboxClass,
+		CompatVersion: toCompat(hardware.ProbeHost()),
 	}
 }
 
 // toCompat converts the probe's VersionedSandboxCompat to atelet's, which it
 // mirrors field for field.
 func toCompat(in *ateapipb.VersionedSandboxCompat) *ateletpb.VersionedSandboxCompat {
-	out := &ateletpb.VersionedSandboxCompat{Version: in.GetVersion()}
+	out := &ateletpb.VersionedSandboxCompat{SchemaVersion: in.GetSchemaVersion()}
 	for _, a := range in.GetAttributes() {
 		out.Attributes = append(out.Attributes, &ateletpb.AttributeEntry{Key: a.GetKey(), Value: a.GetValue()})
 	}

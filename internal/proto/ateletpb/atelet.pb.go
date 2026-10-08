@@ -287,11 +287,12 @@ type SandboxRuntime struct {
 	// +k8s:maxLength=253
 	Name string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	// Primary compatibility version stamped onto an actor's snapshot when a
-	// checkpoint is taken on this runtime. Snapshots matching `version` can
-	// warm-boot on this runtime.
+	// checkpoint is taken on this runtime. Snapshots matching `compat_version`
+	// can warm-boot on this runtime.
+	// TODO: Add support for additional compatibility versions.
 	//
 	// +k8s:required
-	Version       *VersionedSandboxCompat `protobuf:"bytes,3,opt,name=version,proto3" json:"version,omitempty"`
+	CompatVersion *VersionedSandboxCompat `protobuf:"bytes,3,opt,name=compat_version,json=compatVersion,proto3" json:"compat_version,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -340,9 +341,9 @@ func (x *SandboxRuntime) GetName() string {
 	return ""
 }
 
-func (x *SandboxRuntime) GetVersion() *VersionedSandboxCompat {
+func (x *SandboxRuntime) GetCompatVersion() *VersionedSandboxCompat {
 	if x != nil {
-		return x.Version
+		return x.CompatVersion
 	}
 	return nil
 }
@@ -356,11 +357,12 @@ type VersionedSandboxCompat struct {
 	//
 	// +k8s:required
 	// +k8s:maxLength=64
-	Version string `protobuf:"bytes,1,opt,name=version,proto3" json:"version,omitempty"`
+	SchemaVersion string `protobuf:"bytes,1,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
 	// Key-value compatibility attributes defined by this schema version, covering
 	// both runtime assets (e.g. "gvisor_asset_hash") and effective guest hardware
 	// features after masking (e.g. "architecture", "cpu_features").
-	// Matched by exact equality of all keys and values within the same version.
+	// Matched by exact equality of all keys and values within the same schema
+	// version.
 	//
 	// +k8s:required
 	// +k8s:maxItems=32
@@ -401,9 +403,9 @@ func (*VersionedSandboxCompat) Descriptor() ([]byte, []int) {
 	return file_atelet_proto_rawDescGZIP(), []int{2}
 }
 
-func (x *VersionedSandboxCompat) GetVersion() string {
+func (x *VersionedSandboxCompat) GetSchemaVersion() string {
 	if x != nil {
-		return x.Version
+		return x.SchemaVersion
 	}
 	return ""
 }
@@ -3247,13 +3249,13 @@ const file_atelet_proto_rawDesc = "" +
 	"\x15RegisterWorkerRequest\x123\n" +
 	"\bcapacity\x18\x01 \x01(\v2\x17.atelet.WorkerResourcesR\bcapacity\x12?\n" +
 	"\x0fdefault_runtime\x18\x02 \x01(\v2\x16.atelet.SandboxRuntimeR\x0edefaultRuntime\x12G\n" +
-	"\x13restorable_runtimes\x18\x03 \x03(\v2\x16.atelet.SandboxRuntimeR\x12restorableRuntimes\"\x83\x01\n" +
+	"\x13restorable_runtimes\x18\x03 \x03(\v2\x16.atelet.SandboxRuntimeR\x12restorableRuntimes\"\x90\x01\n" +
 	"\x0eSandboxRuntime\x12#\n" +
 	"\rsandbox_class\x18\x01 \x01(\tR\fsandboxClass\x12\x12\n" +
-	"\x04name\x18\x02 \x01(\tR\x04name\x128\n" +
-	"\aversion\x18\x03 \x01(\v2\x1e.atelet.VersionedSandboxCompatR\aversion\"j\n" +
-	"\x16VersionedSandboxCompat\x12\x18\n" +
-	"\aversion\x18\x01 \x01(\tR\aversion\x126\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12E\n" +
+	"\x0ecompat_version\x18\x03 \x01(\v2\x1e.atelet.VersionedSandboxCompatR\rcompatVersion\"w\n" +
+	"\x16VersionedSandboxCompat\x12%\n" +
+	"\x0eschema_version\x18\x01 \x01(\tR\rschemaVersion\x126\n" +
 	"\n" +
 	"attributes\x18\x02 \x03(\v2\x16.atelet.AttributeEntryR\n" +
 	"attributes\"8\n" +
@@ -3558,7 +3560,7 @@ var file_atelet_proto_depIdxs = []int32{
 	7,  // 0: atelet.RegisterWorkerRequest.capacity:type_name -> atelet.WorkerResources
 	4,  // 1: atelet.RegisterWorkerRequest.default_runtime:type_name -> atelet.SandboxRuntime
 	4,  // 2: atelet.RegisterWorkerRequest.restorable_runtimes:type_name -> atelet.SandboxRuntime
-	5,  // 3: atelet.SandboxRuntime.version:type_name -> atelet.VersionedSandboxCompat
+	5,  // 3: atelet.SandboxRuntime.compat_version:type_name -> atelet.VersionedSandboxCompat
 	6,  // 4: atelet.VersionedSandboxCompat.attributes:type_name -> atelet.AttributeEntry
 	8,  // 5: atelet.WorkerResources.resources:type_name -> atelet.Resources
 	9,  // 6: atelet.Resources.limits:type_name -> atelet.Limits
