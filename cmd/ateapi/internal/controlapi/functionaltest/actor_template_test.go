@@ -27,6 +27,7 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
 )
 
@@ -62,8 +63,9 @@ func TestActorTemplateCRUD(t *testing.T) {
 		Metadata:   &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "tmpl-a", Version: 1},
 		Containers: []*ateapipb.Container{{Name: "main", Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},
 		SnapshotConfig: &ateapipb.SnapshotConfig{
-			StorageLocation:   "gs://my-bucket/snapshots",
-			PreferredFidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+			StorageLocation:      "gs://my-bucket/snapshots",
+			PreferredFidelity:    ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+			GoldenSnapshotConfig: &ateapipb.GoldenSnapshotConfig{Enabled: proto.Bool(true)},
 		},
 		SandboxConfig: &ateapipb.SandboxConfig{
 			SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
@@ -232,6 +234,74 @@ func TestGoldenTagLifecycle(t *testing.T) {
 	_, err = tc.client.GetTag(ctx, &ateapipb.GetTagRequest{Tag: goldenRef})
 	if status.Code(err) != codes.NotFound {
 		t.Fatalf("golden tag was not deleted: %v", err)
+	}
+}
+
+func TestActorLifecycleWithoutGoldenSnapshot(t *testing.T) {
+	ns := namespaceForTest("no-golden")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+	ctx := t.Context()
+	ensureDefaultGvisorSandboxConfig(t, tc)
+	createWorkerPool(t, tc, ns, "pool1", map[string]string{poolLabelKey: ns})
+	tmpl, err := tc.client.CreateActorTemplate(ctx, &ateapipb.CreateActorTemplateRequest{ActorTemplate: &ateapipb.ActorTemplate{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "no-golden"},
+		SnapshotConfig: &ateapipb.SnapshotConfig{
+			StorageLocation:      testStorageLocation,
+			GoldenSnapshotConfig: &ateapipb.GoldenSnapshotConfig{Enabled: proto.Bool(false)},
+		},
+		SandboxConfig:  &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR, ConfigName: "gvisor-default"},
+		Containers:     []*ateapipb.Container{{Name: "main", Image: "main@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", Command: []string{"/main"}}},
+		WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{poolLabelKey: ns}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tmpl.GetSnapshotConfig().GetGoldenSnapshotConfig().GetEnabled() {
+		t.Fatal("CreateActorTemplate did not preserve the golden snapshot opt-out")
+	}
+	workerName := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+	actor, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "actor"},
+		ActorTemplate: resources.ActorTemplateRefFromActorTemplate(tmpl).ToObjectRef(),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if actor.GetStatus().GetExternalSnapshot() != nil {
+		t.Fatal("new actor unexpectedly inherited a snapshot")
+	}
+	ref := resources.ActorRefFromActor(actor).ToObjectRef()
+	if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: ref}); err != nil {
+		t.Fatal(err)
+	}
+	tc.fakeAtelet.Lock.Lock()
+	ran, restored := tc.fakeAtelet.RunCalled, tc.fakeAtelet.RestoreCalled
+	tc.fakeAtelet.Lock.Unlock()
+	if !ran || restored {
+		t.Fatal("first resume did not cold boot")
+	}
+	suspended, err := tc.client.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: ref})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshotURI := suspended.GetStatus().GetExternalSnapshot().GetSnapshotUri()
+	if snapshotURI == "" {
+		t.Fatal("suspend did not produce the actor's own snapshot")
+	}
+	assertSnapshotPresent(t, tc, snapshotURI)
+	waitForWorkerAvailable(t, tc, workerName)
+	if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: ref}); err != nil {
+		t.Fatal(err)
+	}
+	if got := tc.fakeAtelet.lastRestoreRequest().GetExternalConfig().GetSnapshotUri(); got != snapshotURI {
+		t.Fatalf("restored snapshot = %q, want actor's snapshot %q", got, snapshotURI)
+	}
+	if _, err := tc.client.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref, AnyState: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tc.client.DeleteActorTemplate(ctx, &ateapipb.DeleteActorTemplateRequest{ActorTemplate: resources.ActorTemplateRefFromActorTemplate(tmpl).ToObjectRef()}); err != nil {
+		t.Fatal(err)
 	}
 }
 

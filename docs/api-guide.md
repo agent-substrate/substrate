@@ -114,7 +114,7 @@ worker pod on a GPU node and reserves the device, and nothing else reads it.
 
 ## 2. ActorTemplate: The Workload Blueprint
 
-The `ActorTemplate` defines the code, environment, and state-management policies for a specific type of agent. It is used to generate the "Golden Snapshot" from which all actors of this type are derived.
+The `ActorTemplate` defines the code, environment, and state-management policies for a specific type of agent. By default, it is used to generate a "Golden Snapshot" that new actors can start from.
 
 ### Specification (`ActorTemplate`)
 
@@ -457,7 +457,14 @@ See [`hack/microvm-assets/`](../hack/microvm-assets/) for scripts that assemble 
 ## 4. Operational Workflow
 
 ### The Golden Snapshot
-When an `ActorTemplate` is created:
+
+Golden snapshot creation is enabled by default. To disable it, set
+`snapshotConfig.goldenSnapshotConfig.enabled: false` on the template. Omitting
+the config or its `enabled` field enables it. A disabled template creates no
+golden actor or tag. Actors created without a `sourceTag` cold-boot and can still
+pause, suspend, and resume using their own snapshots.
+
+When an `ActorTemplate` is created with golden snapshots enabled:
 1. Substrate creates and resumes a temporary golden actor in `ate-golden`.
 2. It waits for readiness (or the warm-up interval), then suspends the actor.
 3. It creates a published tag named after the template UID, copying the snapshot into tag-owned storage.

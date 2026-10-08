@@ -64,6 +64,12 @@ func applySnapshotConfigDefaults(sc *ateapipb.SnapshotConfig) {
 	if sc.PreferredFidelity == ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED {
 		sc.PreferredFidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
 	}
+	if sc.GoldenSnapshotConfig == nil {
+		sc.GoldenSnapshotConfig = &ateapipb.GoldenSnapshotConfig{}
+	}
+	if sc.GoldenSnapshotConfig.Enabled == nil {
+		sc.GoldenSnapshotConfig.Enabled = proto.Bool(true)
+	}
 }
 
 func applyContainerDefaults(c *ateapipb.Container) {

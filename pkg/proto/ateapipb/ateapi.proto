@@ -1153,6 +1153,21 @@ message SnapshotConfig {
   // +k8s:maximum=3 # keep this in sync with the SnapshotFidelity enum
   // +k8s:customValidation # ROOTFS is not supported yet
   SnapshotFidelity preferred_fidelity = 2;
+
+  // golden_snapshot_config configures automated golden snapshot creation.
+  // Golden snapshots are enabled when this config is omitted.
+  //
+  // +k8s:optional
+  GoldenSnapshotConfig golden_snapshot_config = 5;
+}
+
+// GoldenSnapshotConfig controls automated golden snapshot creation for a template.
+message GoldenSnapshotConfig {
+  // enabled defaults to true when unset. Set false to skip creating the
+  // template's golden actor and tag.
+  //
+  // +k8s:optional
+  optional bool enabled = 1;
 }
 
 // Container is a single application container of an ActorTemplate.

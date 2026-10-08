@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"google.golang.org/protobuf/proto"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
@@ -280,6 +281,21 @@ func TestValidateActorTemplate(t *testing.T) {
 		want   field.ErrorList
 	}{{
 		name: "valid",
+	}, {
+		name: "golden snapshot enabled without wakeup probe",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.SnapshotConfig.GoldenSnapshotConfig = &ateapipb.GoldenSnapshotConfig{Enabled: proto.Bool(true)}
+		},
+	}, {
+		name: "golden snapshot disabled",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.SnapshotConfig.GoldenSnapshotConfig = &ateapipb.GoldenSnapshotConfig{Enabled: proto.Bool(false)}
+		},
+	}, {
+		name: "golden snapshot enabled omitted",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.SnapshotConfig.GoldenSnapshotConfig = &ateapipb.GoldenSnapshotConfig{}
+		},
 	}, {
 		name:   "missing metadata",
 		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.Metadata = nil },

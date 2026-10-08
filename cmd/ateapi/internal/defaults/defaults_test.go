@@ -19,6 +19,7 @@ import (
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
 )
@@ -44,7 +45,8 @@ func TestApply(t *testing.T) {
 		name: "empty snapshot_config gets every default",
 		in:   &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{}},
 		want: &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{
-			PreferredFidelity: scopeFull,
+			PreferredFidelity:    scopeFull,
+			GoldenSnapshotConfig: &ateapipb.GoldenSnapshotConfig{Enabled: proto.Bool(true)},
 		}},
 	}, {
 		name: "set scopes are kept",
@@ -52,7 +54,8 @@ func TestApply(t *testing.T) {
 			PreferredFidelity: scopeData,
 		}},
 		want: &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{
-			PreferredFidelity: scopeData,
+			PreferredFidelity:    scopeData,
+			GoldenSnapshotConfig: &ateapipb.GoldenSnapshotConfig{Enabled: proto.Bool(true)},
 		}},
 	}, {
 		name: "container without wakeup probe stays without one",
@@ -147,6 +150,44 @@ func TestApply(t *testing.T) {
 			Apply(again)
 			if diff := cmp.Diff(got, again, protocmp.Transform()); diff != "" {
 				t.Errorf("Apply is not idempotent (-once +twice):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestGoldenSnapshotDefaults(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		config  string
+		enabled bool
+	}{
+		{"omitted config", `{}`, true},
+		{"omitted enabled", `{"goldenSnapshotConfig": {}}`, true},
+		{"enabled", `{"goldenSnapshotConfig": {"enabled": true}}`, true},
+		{"disabled", `{"goldenSnapshotConfig": {"enabled": false}}`, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpl := &ateapipb.ActorTemplate{}
+			if err := protojson.Unmarshal([]byte(`{"snapshotConfig": `+tt.config+`}`), tmpl); err != nil {
+				t.Fatal(err)
+			}
+			// Both JSON and gRPC must preserve an explicit false through defaulting.
+			data, err := proto.Marshal(tmpl)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := proto.Unmarshal(data, tmpl); err != nil {
+				t.Fatal(err)
+			}
+			Apply(tmpl)
+			want := &ateapipb.GoldenSnapshotConfig{Enabled: proto.Bool(tt.enabled)}
+			if diff := cmp.Diff(want, tmpl.GetSnapshotConfig().GetGoldenSnapshotConfig(), protocmp.Transform()); diff != "" {
+				t.Fatalf("golden snapshot default mismatch (-want +got):\n%s", diff)
+			}
+			again := proto.Clone(tmpl)
+			Apply(again)
+			if !proto.Equal(tmpl, again) {
+				t.Fatal("golden snapshot defaulting is not idempotent")
 			}
 		})
 	}

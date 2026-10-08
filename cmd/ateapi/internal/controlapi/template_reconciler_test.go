@@ -326,6 +326,9 @@ func testTemplate(opts ...func(*ateapipb.ActorTemplate)) *ateapipb.ActorTemplate
 		Containers: []*ateapipb.Container{
 			{Name: "main", Image: "img", WakeupProbe: &ateapipb.ContainerWakeupProbe{}},
 		},
+		SnapshotConfig: &ateapipb.SnapshotConfig{
+			GoldenSnapshotConfig: &ateapipb.GoldenSnapshotConfig{Enabled: proto.Bool(true)},
+		},
 		Status: &ateapipb.ActorTemplateStatus{},
 	}
 	for _, opt := range opts {
@@ -338,6 +341,10 @@ func withoutWakeupProbe(tmpl *ateapipb.ActorTemplate) {
 	for _, container := range tmpl.Containers {
 		container.WakeupProbe = nil
 	}
+}
+
+func withoutGoldenSnapshot(tmpl *ateapipb.ActorTemplate) {
+	tmpl.SnapshotConfig.GoldenSnapshotConfig.Enabled = proto.Bool(false)
 }
 
 // seededGoldenStatus returns the template's golden snapshot status, allocating
@@ -616,6 +623,24 @@ func TestReconcileOne(t *testing.T) {
 	}
 }
 
+func TestReconcileOne_GoldenSnapshotDisabled(t *testing.T) {
+	tmpl := testTemplate(withoutGoldenSnapshot)
+	st := newFakeTemplateStore(tmpl)
+	// A disabled template must not make any control-plane calls.
+	r := newTestTemplateReconciler(st, nil)
+	requeueAfter, err := r.reconcileOne(t.Context(), testTemplateRef)
+	if err != nil || requeueAfter != 0 {
+		t.Fatalf("reconcileOne() = (%v, %v), want (0, nil)", requeueAfter, err)
+	}
+	got, err := st.GetActorTemplate(t.Context(), testTemplateRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !proto.Equal(tmpl, got) {
+		t.Fatalf("disabled template was modified: %v", got)
+	}
+}
+
 // TestReconcileOne_GoldenActorRequests pins the shape of the control-plane
 // requests the happy path issues: the golden actor is named after the
 // template UID so recreated templates with the same name never collide, and
@@ -815,6 +840,7 @@ func TestResync_QueuesOnlyActionableTemplates(t *testing.T) {
 		wantQueued bool
 	}{
 		{"empty status", nil, true},
+		{"golden snapshot disabled", []func(*ateapipb.ActorTemplate){withoutGoldenSnapshot}, false},
 		{"mid warmup", []func(*ateapipb.ActorTemplate){withSnapshotDeadline(time.Now().Add(time.Hour))}, true},
 		{"golden snapshot taken", []func(*ateapipb.ActorTemplate){withGoldenTag()}, false},
 		{"failed", []func(*ateapipb.ActorTemplate){withFailed(reasonGoldenActorCrashed)}, false},
