@@ -1054,14 +1054,15 @@ func (x *EgressPolicy) GetRules() []*EgressRule {
 }
 
 // EgressPolicyTemplate defines an initial Actor egress policy without resource
-// metadata. Rules have the same defaults, validation, and semantics as
+// metadata. Each rule has the same defaults, validation, and semantics as
 // EgressPolicy.rules.
 type EgressPolicyTemplate struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Rules are an unordered set of allows, with the same precedence and effects
-	// as EgressPolicy.rules. Traffic is denied when no rule matches.
+	// as EgressPolicy.rules. At least one rule is required. Traffic is denied
+	// when no rule matches.
 	//
-	// +k8s:optional
+	// +k8s:required
 	// +k8s:maxItems=256
 	// +k8s:listType=atomic
 	// +k8s:customValidation # no two rules tie on a name and port
@@ -2455,8 +2456,7 @@ type ActorTemplate struct {
 	// atomically when the golden Actor is created, as its "default" policy
 	// in the reserved ate-golden atespace. Actors created from this template
 	// do not inherit this policy, including when using the golden snapshot.
-	// If absent, no policy is created; an empty block creates a policy with
-	// no rules.
+	// If absent, no policy is created. When set, at least one rule is required.
 	//
 	// +k8s:optional
 	GoldenEgressPolicy *EgressPolicyTemplate `protobuf:"bytes,9,opt,name=golden_egress_policy,json=goldenEgressPolicy,proto3" json:"golden_egress_policy,omitempty"`

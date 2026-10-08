@@ -41,11 +41,17 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 		})},
 		nil,
 	}, {
-		"empty golden egress rules",
+		"missing golden egress rules",
 		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
 			tmpl.GoldenEgressPolicy = &ateapipb.EgressPolicyTemplate{}
 		})},
-		nil,
+		field.ErrorList{field.Required(field.NewPath("actor_template", "golden_egress_policy", "rules"), "")},
+	}, {
+		"empty golden egress rules",
+		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.GoldenEgressPolicy = &ateapipb.EgressPolicyTemplate{Rules: []*ateapipb.EgressRule{}}
+		})},
+		field.ErrorList{field.Required(field.NewPath("actor_template", "golden_egress_policy", "rules"), "")},
 	}, {
 		"invalid golden egress hostname",
 		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {

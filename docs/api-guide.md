@@ -126,7 +126,7 @@ The `ActorTemplate` defines the code, environment, and state-management policies
 | `snapshotConfig` | `SnapshotConfig` | **Required.** The base object-storage location snapshots are written under, plus the snapshot fidelity (`preferredFidelity`) every Pause and Suspend captures. See [Snapshot Storage Layout](#snapshot-storage-layout). |
 | `volumes` | `[]Volume` | Optional. Volumes the containers may mount, each a `durableDir`, an `externalVolumeTemplate` (see [CSI Volumes Guide](csi-volumes.md)), or a `systemInfo` volume (see [SystemInfo Volumes](#systeminfo-volumes)). Every declared volume must be mounted by at least one container. A `microvm` template may declare several `durableDir` volumes; a `gvisor` template is limited to one. |
 | `resources` | `*ResourceRequirements` | Optional. Declares each actor's compute size via `limits` — see [Sandbox Right-Sizing](#sandbox-right-sizing-resources). Immutable, like the rest of the template. |
-| `goldenEgressPolicy` | `EgressPolicyTemplate` | Optional. Egress policy for the golden actor during initialization. Contains only `rules`, with the same defaults and validation as `EgressPolicy.rules`. See [Golden Egress Policy](#golden-egress-policy-goldenegresspolicy). |
+| `goldenEgressPolicy` | `EgressPolicyTemplate` | Optional. Egress policy for the golden actor during initialization. Requires at least one rule, using the same rule defaults and validation as `EgressPolicy`. See [Golden Egress Policy](#golden-egress-policy-goldenegresspolicy). |
 
 The sandbox itself — the binaries (e.g. the gVisor `runsc` binary) and the `pauseImage` holding the sandbox's namespaces — comes from the cluster-scoped [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) object the template names via `sandboxConfig.configName`. An actor always resolves the config from its current template — repointing the actor at another template requires the same config.
 
@@ -156,8 +156,7 @@ separately with `CreateActorEgressPolicy`.
 
 The golden policy's rules are copied once at creation. Updating or deleting
 that policy does not change the template. Omitting `goldenEgressPolicy`
-creates no golden policy. Setting it to `{}` creates an explicitly empty
-policy that allows no destinations.
+creates no golden policy. When set, it must contain at least one rule.
 
 ### Sandbox Right-Sizing (`resources`)
 
