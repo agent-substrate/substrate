@@ -156,12 +156,18 @@ type SandboxConfigSpec struct {
 }
 
 // DefaultVersionConfig returns the entry of Versions named by DefaultVersion,
-// and whether one exists.
+// and whether one exists. A Disabled entry is never returned: the CRD rejects
+// a Disabled default, so a spec that reads back that way is treated as having
+// no default version.
 func (s *SandboxConfigSpec) DefaultVersionConfig() (*SandboxVersionConfig, bool) {
 	for i := range s.Versions {
-		if s.Versions[i].Name == s.DefaultVersion {
-			return &s.Versions[i], true
+		if s.Versions[i].Name != s.DefaultVersion {
+			continue
 		}
+		if st := s.Versions[i].State; st != nil && *st == SandboxVersionStateDisabled {
+			return nil, false
+		}
+		return &s.Versions[i], true
 	}
 	return nil, false
 }

@@ -30,6 +30,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/utils/ptr"
 
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
 	"github.com/agent-substrate/substrate/internal/imagecache"
@@ -355,8 +356,9 @@ func TestPrewarmTimeout(t *testing.T) {
 }
 
 // TestPrewarmDefaultVersionOnly verifies prewarm fetches only the version
-// defaultVersion names, and that a config without its default version is
-// nothing to do rather than a retryable failure.
+// defaultVersion names, and that a config without its default version, or
+// whose default version is Disabled, is nothing to do rather than a retryable
+// failure.
 func TestPrewarmDefaultVersionOnly(t *testing.T) {
 	origDir := nodepath.StaticFilesDir
 	nodepath.StaticFilesDir = t.TempDir()
@@ -387,6 +389,12 @@ func TestPrewarmDefaultVersionOnly(t *testing.T) {
 	p = &sandboxPrewarmer{assets: &AteomHerder{anonGCSClient: fakeObjectStorage{err: errors.New("bucket unavailable")}}}
 	if err := p.prewarm(ctx, cfg); err != nil {
 		t.Errorf("prewarm of a config without its default version: %v", err)
+	}
+
+	cfg.Spec.DefaultVersion = "v0"
+	cfg.Spec.Versions[0].State = ptr.To(v1alpha1.SandboxVersionStateDisabled)
+	if err := p.prewarm(ctx, cfg); err != nil {
+		t.Errorf("prewarm of a config whose default version is Disabled: %v", err)
 	}
 }
 

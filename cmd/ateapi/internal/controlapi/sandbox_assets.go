@@ -70,7 +70,7 @@ func resolveSandboxAssets(
 	ver, ok := sc.Spec.DefaultVersionConfig()
 	if !ok {
 		return nil, apierror.FailedPrecondition(
-			"SandboxConfig %q has no version %q named by its defaultVersion", sc.Name, sc.Spec.DefaultVersion)
+			"SandboxConfig %q has no enabled version %q named by its defaultVersion", sc.Name, sc.Spec.DefaultVersion)
 	}
 	return sandboxAssetsProto(sc, ver), nil
 }

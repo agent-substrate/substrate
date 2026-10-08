@@ -261,7 +261,7 @@ func (p *sandboxPrewarmer) prewarm(ctx context.Context, cfg *v1alpha1.SandboxCon
 	ver, ok := cfg.Spec.DefaultVersionConfig()
 	if !ok {
 		// The CRD rejects this shape, so this should not be reachable.
-		slog.WarnContext(ctx, "Skipping sandbox asset prewarm: config has no default version",
+		slog.WarnContext(ctx, "Skipping sandbox asset prewarm: config has no enabled default version",
 			slog.String("config", cfg.Name), slog.String("defaultVersion", cfg.Spec.DefaultVersion))
 		return nil
 	}
