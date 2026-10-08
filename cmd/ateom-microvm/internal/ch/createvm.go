@@ -27,12 +27,23 @@ type VmConfig struct {
 	Memory   MemoryConfig    `json:"memory"`
 	Payload  PayloadConfig   `json:"payload"`
 	Disks    []DiskConfig    `json:"disks,omitempty"`
+	Pmem     []PmemConfig    `json:"pmem,omitempty"`
 	Fs       []FsConfig      `json:"fs,omitempty"`
 	Rng      *RngConfig      `json:"rng,omitempty"`
 	Serial   *ConsoleConfig  `json:"serial,omitempty"`
 	Console  *ConsoleConfig  `json:"console,omitempty"`
 	Vsock    *VsockConfig    `json:"vsock,omitempty"`
 	Platform *PlatformConfig `json:"platform,omitempty"`
+}
+
+// PmemConfig is a virtio-pmem device. Cloud Hypervisor maps File into guest
+// physical memory as /dev/pmem<N> (by index in Pmem) for DAX filesystems. File
+// size must be a multiple of 2 MiB. DiscardWrites opens File read-only with
+// MAP_PRIVATE so guests share the host page cache without modifying the file.
+type PmemConfig struct {
+	File          string `json:"file"`
+	DiscardWrites bool   `json:"discard_writes,omitempty"`
+	Id            string `json:"id,omitempty"`
 }
 
 // FsConfig is a virtio-fs device backed by a vhost-user (virtiofsd) socket. The
