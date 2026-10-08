@@ -15,24 +15,21 @@
 // Package egressauthz e2e-tests the egress gateway's front door: the two ways
 // it refuses a caller that is not a running actor.
 //
-// Both tests are negative, and that is the whole of the package on purpose.
+// The suite covers front-door denial, live certificate transport, and XFCC spoof resistance.
 //   - TestGatewayRefusesANonActorWorkload needs a credential no test process
 //     can mint. The probe's podidentity certificate is issued by kubelet from
 //     a real signer, so presenting it proves the gateway's downstream
 //     trusted_ca is the actor-identity CA and not merely some substrate
 //     anchor. Get that wrong and every workload in the cluster can open a
 //     tunnel.
-//   - TestGatewayRefusesAnUnknownActor presents a cryptographically perfect
-//     credential and is denied only by the control-plane lookup, so it proves
-//     Envoy actually calls ext_proc on the CONNECT and honors a deny. A
-//     gateway that authorizes on the certificate alone passes every other
-//     test in the repo.
+//   - TestGatewayRefusesAnUnknownActor presents a valid client-auth credential
+//     with an ateom-for-actor URI and is denied by actor resolution. Envoy uses
+//     ext_proc; AgentGateway uses its native actor-resolution policy.
 package egressauthz
 
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -40,7 +37,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -60,7 +56,7 @@ const (
 func TestGatewayRefusesANonActorWorkload(t *testing.T) {
 	ctx := context.Background()
 
-	probe := sharedProbe(t, ctx)
+	probe := startProbe(t, ctx)
 
 	const sni = "podidentity.example.com"
 	result := probe.handshakeAs(t, ctx, sni, podIdentityCredentialPath)
@@ -74,29 +70,26 @@ func TestGatewayRefusesANonActorWorkload(t *testing.T) {
 	t.Logf("gateway refused the non-actor credential at its front door as expected: %s", result.Error)
 }
 
-// TestGatewayRefusesAnUnknownActor covers the check that only ext_proc can
-// make. The credential here is cryptographically perfect -- signed by the real
-// actor-identity CA, correct extension, correct purpose -- so Envoy completes
-// the handshake, and the CONNECT is denied only because the control plane has
-// no such actor. Without this, nothing distinguishes a gateway that authorizes
-// on the certificate alone from one that authorizes on control-plane state, and
-// the difference is whether a deleted actor's credential still works.
+// TestGatewayRefusesAnUnknownActor covers control-plane actor resolution. The
+// credential is signed by the real actor CA and carries the production
+// ateom-for-actor URI, so CONNECT is denied because the control plane has no
+// such actor. This distinguishes certificate trust from actor authorization.
 func TestGatewayRefusesAnUnknownActor(t *testing.T) {
 	ctx := context.Background()
 
-	probe := sharedProbe(t, ctx)
+	probe := startProbe(t, ctx)
 
 	const sni = "unknown.example.com"
 	result := probe.handshakeAs(t, ctx, sni, unknownActorCredentialPath)
 	if result.OK {
-		t.Fatalf("the gateway tunneled for an actor the control plane has never heard of; the ext_proc identity check is not running")
+		t.Fatalf("the gateway tunneled for an actor the control plane has never heard of; actor resolution is not running")
 	}
 	// A 403 on the CONNECT, not a TLS failure: the certificate was accepted and
 	// the identity it carries was rejected. A failure at stageGatewayTLS would
-	// mean the request never reached ext_proc, and the denial would prove
+	// mean the request never reached actor resolution, and the denial would prove
 	// nothing about the control-plane lookup.
 	if result.Stage != stageConnect || result.ConnectStatus != http.StatusForbidden {
-		t.Fatalf("unknown actor was refused at stage %q with CONNECT status %d, want %q and %d -- something other than the ext_proc identity check turned it away: %s",
+		t.Fatalf("unknown actor was refused at stage %q with CONNECT status %d, want %q and %d -- something other than actor resolution turned it away: %s",
 			result.Stage, result.ConnectStatus, stageConnect, http.StatusForbidden, result.Error)
 	}
 	t.Logf("gateway denied the unknown actor at CONNECT as expected: %s", result.Error)
@@ -112,36 +105,39 @@ type probeClient struct {
 	http    *http.Client
 }
 
-var (
-	probeOnce sync.Once
-	probeVal  *probeClient
-	probeErr  error
-)
-
-// sharedProbe returns the one probe pod the whole suite uses.
-func sharedProbe(t *testing.T, ctx context.Context) *probeClient {
+func (c *probeClient) connectAs(t *testing.T, ctx context.Context, destination, credential, xfcc string) connectResult {
 	t.Helper()
-	probeOnce.Do(func() {
-		// startProbe reports failures through t, which unwinds this goroutine
-		// without returning. Leave something behind so the tests that run
-		// afterwards fail pointing at the first one instead of dereferencing
-		// nil.
-		defer func() {
-			if probeVal == nil && probeErr == nil {
-				probeErr = errors.New("setup did not complete; see the failure reported by the first test that needed the probe")
-			}
-		}()
-		probeVal = startProbe(t, ctx)
-	})
-	if probeErr != nil {
-		t.Fatalf("starting the shared egress probe: %v", probeErr)
+	endpoint := c.baseURL + "/connect?destination=" + url.QueryEscape(destination) + "&credential-bundle=" + url.QueryEscape(credential) + "&xfcc=" + url.QueryEscape(xfcc)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-	return probeVal
+	resp, err := c.http.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var out connectResult
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+type connectResult struct {
+	Credential    string `json:"credential"`
+	Stage         string `json:"stage"`
+	ConnectStatus int    `json:"connect_status"`
+	Error         string `json:"error"`
 }
 
 // startProbe creates the probe's namespace, mints its credentials there, builds
 // and deploys the probe, waits for it to be ready, and returns a client for it.
 func startProbe(t *testing.T, ctx context.Context) *probeClient {
+	return startProbeWithProvision(t, ctx, nil)
+}
+
+func startProbeWithProvision(t *testing.T, ctx context.Context, provision func(string)) *probeClient {
 	t.Helper()
 	if _, err := e2e.CheckEnv("KO_DOCKER_REPO"); err != nil {
 		t.Fatalf("CheckEnv failed: %v", err)
@@ -149,6 +145,9 @@ func startProbe(t *testing.T, ctx context.Context) *probeClient {
 	ns := e2e.CreateNamespace(t).Name
 
 	provisionProbeCredentials(t, ctx, ns)
+	if provision != nil {
+		provision(ns)
+	}
 	root, err := e2e.FindRepoRoot()
 	if err != nil {
 		t.Fatalf("FindRepoRoot: %v", err)
@@ -186,7 +185,7 @@ func startProbe(t *testing.T, ctx context.Context) *probeClient {
 	if err != nil {
 		t.Fatalf("port-forwarding %s/%s: %v", ns, probeName, err)
 	}
-	e2e.RegisterSuiteCleanup(stop)
+	t.Cleanup(stop)
 
 	return &probeClient{
 		baseURL: fmt.Sprintf("http://127.0.0.1:%d", localPort),
@@ -275,7 +274,7 @@ type handshakeResult struct {
 	OK         bool   `json:"ok"`
 	// Stage is where a failed handshake stopped. Asserting on it rather than
 	// on Error is what keeps "the front door refused the certificate" and "the
-	// door opened and ext_proc said no" from being the same test: they are
+	// door opened and actor resolution said no" from being the same test: they are
 	// different hops, and their messages are only incidentally different.
 	Stage string `json:"stage"`
 	// ConnectStatus is the status the gateway answered the CONNECT with, set

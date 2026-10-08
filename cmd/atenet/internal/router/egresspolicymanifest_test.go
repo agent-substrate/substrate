@@ -31,12 +31,15 @@ import (
 const (
 	extProcFilter                  = "envoy.filters.http.ext_proc"
 	setFilterStateFilter           = "envoy.filters.http.set_filter_state"
+	luaFilter                      = "envoy.filters.http.lua"
 	extProcServerCluster           = "ext_proc_server"
 	passthroughCluster             = "egress_tcp_passthrough"
 	passthroughForwardProxyCluster = "egress_forward_proxy_passthrough"
 	originalDstKey                 = "envoy.network.transport_socket.original_dst_address"
 	dfpClusterType                 = "envoy.clusters.dynamic_forward_proxy"
 )
+
+const peerCertificateNamespace = extproc.EgressPeerCertificateMetadataNamespace
 
 // requestLegs are the chains that decide per request and answer with a dial.
 var requestLegs = []string{extproc.EgressCleartextFilterChainName, extproc.EgressTLSMITMFilterChainName}
@@ -160,6 +163,59 @@ func outerChain(t *testing.T, tree node) node {
 		t.Fatalf("no %q chain on the egress listener", extproc.EgressFilterChainName)
 	}
 	return outer
+}
+
+func TestEgressManifestForwardsTrustedPeerCertificate(t *testing.T) {
+	tree := bootstrapTree(t, egressManifest)
+	outer := outerChain(t, tree)
+	tls := child(child(outer, "transport_socket"), "typed_config")
+	if required, _ := tls["require_client_certificate"].(bool); !required {
+		t.Error("outer TLS no longer requires an actor client certificate")
+	}
+	if _, ok := child(child(tls, "common_tls_context"), "validation_context")["trusted_ca"]; !ok {
+		t.Error("outer TLS has no actor identity trusted_ca")
+	}
+
+	h := hcm(outer)
+	if got := str(h, "forward_client_cert_details"); got != "SANITIZE" {
+		t.Errorf("forward_client_cert_details = %q, want SANITIZE", got)
+	}
+	if _, ok := h["set_current_client_cert_details"]; ok {
+		t.Error("outer HCM still generates certificate headers")
+	}
+
+	filters := list(h, "http_filters")
+	luaAt, extAt := filterIndex(filters, luaFilter), filterIndex(filters, extProcFilter)
+	if luaAt != 1 || extAt <= luaAt {
+		t.Fatalf("outer HCM Lua/ext_proc order = %d/%d, want Lua after actor filter state and before ext_proc", luaAt, extAt)
+	}
+	script := str(child(child(filters[luaAt], "typed_config"), "default_source_code"), "inline_string")
+	for _, want := range []string{"downstreamSslConnection", "urlEncodedPemEncodedPeerCertificateChain", peerCertificateNamespace, "chain = \"\""} {
+		if !strings.Contains(script, want) {
+			t.Errorf("Lua producer does not contain %q", want)
+		}
+	}
+
+	metadata := child(child(child(filters[extAt], "typed_config"), "metadata_options"), "forwarding_namespaces")
+	if got := strs(metadata, "untyped"); !slices.Equal(got, []string{peerCertificateNamespace}) {
+		t.Errorf("CONNECT ext_proc forwarding namespaces = %v, want only %q", got, peerCertificateNamespace)
+	}
+	for _, lc := range allChains(tree) {
+		if str(lc.chain, "name") == extproc.EgressFilterChainName {
+			continue
+		}
+		for _, filter := range list(hcm(lc.chain), "http_filters") {
+			if str(filter, "name") == luaFilter {
+				t.Errorf("peer certificate Lua producer appears on inner chain %q", str(lc.chain, "name"))
+			}
+			if str(filter, "name") == extProcFilter {
+				forward := strs(child(child(child(filter, "typed_config"), "metadata_options"), "forwarding_namespaces"), "untyped")
+				if slices.Contains(forward, peerCertificateNamespace) {
+					t.Errorf("peer certificate metadata namespace is forwarded on inner chain %q", str(lc.chain, "name"))
+				}
+			}
+		}
+	}
 }
 
 // Every chain that calls ext_proc must be one the handler knows as an egress

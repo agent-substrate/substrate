@@ -44,6 +44,8 @@ type RequestMetadata struct {
 	// connect_terminate -> main_internal internal-listener hop that CONNECT
 	// requests take.
 	Attributes map[string]*structpb.Struct
+	// DynamicMetadata contains the dataplane's forwarded filter metadata.
+	DynamicMetadata map[string]*structpb.Struct
 }
 
 func NewRequestMetadata(headers []*corev3.HeaderValue, attributes map[string]*structpb.Struct) *RequestMetadata {

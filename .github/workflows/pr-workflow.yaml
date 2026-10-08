@@ -272,6 +272,36 @@ jobs:
         E2E_PARALLELISM: 8
         E2E_JUNIT_FILE: ${{ github.workspace }}/_artifacts/e2e-microvm.xml
       run: hack/run-e2e-kind.sh -v -args --no-color
+    - name: Verify egress certificate chain producer mutation (Envoy)
+      if: matrix.dataplane == 'envoy'
+      env:
+        E2E_JUNIT_FILE: ${{ github.workspace }}/_artifacts/egress-certificate-leaf-only.xml
+      run: |
+        set -euo pipefail
+        kube=(kubectl --context kind-kind)
+        original_data="$(mktemp)"
+        leaf_data="$(mktemp)"
+        "${kube[@]}" -n ate-system get configmap atenet-egress -o json | jq '{data:.data}' > "$original_data"
+        jq -e '.data["envoy.yaml"] | contains("urlEncodedPemEncodedPeerCertificateChain()")' "$original_data" >/dev/null
+        jq '.data["envoy.yaml"] |= sub("urlEncodedPemEncodedPeerCertificateChain"; "urlEncodedPemEncodedPeerCertificate") | {data:.data}' "$original_data" > "$leaf_data"
+        restore() {
+          "${kube[@]}" -n ate-system patch configmap atenet-egress --type merge --patch-file "$original_data" >/dev/null
+          "${kube[@]}" -n ate-system rollout restart deployment/atenet-egress >/dev/null
+          "${kube[@]}" -n ate-system rollout status deployment/atenet-egress --timeout=180s
+          rm -f "$original_data" "$leaf_data"
+        }
+        trap restore EXIT
+        "${kube[@]}" -n ate-system patch configmap atenet-egress --type merge --patch-file "$leaf_data" >/dev/null
+        "${kube[@]}" -n ate-system rollout restart deployment/atenet-egress >/dev/null
+        "${kube[@]}" -n ate-system rollout status deployment/atenet-egress --timeout=180s
+        E2E_EGRESS_CERTIFICATE_LEAF_ONLY=1 hack/run-e2e-kind.sh ./internal/e2e/suites/egressauthz -run '^TestGatewayCertificateMetadataTransport$' -count=1 -v -args --no-color
+        restore
+        trap - EXIT
+    - name: Verify restored egress certificate chain transport (Envoy)
+      if: matrix.dataplane == 'envoy'
+      env:
+        E2E_JUNIT_FILE: ${{ github.workspace }}/_artifacts/egress-certificate-chain.xml
+      run: hack/run-e2e-kind.sh ./internal/e2e/suites/egressauthz -run '^TestGatewayCertificateMetadataTransport$' -count=1 -v -args --no-color
     # Every lane must have reported tests; a `-run` filter that stops matching
     # otherwise leaves its lane green and empty. The set comes from the manifest
     # each lane registers itself in, so adding a lane needs no change here, and
