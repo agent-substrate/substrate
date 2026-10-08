@@ -27,9 +27,12 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/actorlock"
 	"github.com/agent-substrate/substrate/internal/actorlog"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateomtunnel"
 	"github.com/agent-substrate/substrate/internal/atunnel"
+	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
+	"google.golang.org/grpc/codes"
 )
 
 // Exercise the RPC with a runsc executable: a successful state command can
@@ -43,6 +46,9 @@ func TestCheckpointWorkloadRejectsExitedApplication(t *testing.T) {
 			resp, err := s.CheckpointWorkload(t.Context(), req)
 			if err == nil || !strings.Contains(err.Error(), `container "sidecar"`) || !strings.Contains(err.Error(), "exit code "+code) {
 				t.Fatalf("CheckpointWorkload = %v, %v; want the exited container and its code", resp, err)
+			}
+			if got := apierror.Code(err); got != codes.FailedPrecondition {
+				t.Fatalf("checkpoint error code = %v, want FailedPrecondition", got)
 			}
 			assertCheckpointCommands(t, dir, false, true)
 		})
@@ -124,6 +130,8 @@ func TestCheckpointWorkloadUnknownExitStatus(t *testing.T) {
 			writeCheckpointFixture(t, dir, "app.wait", result)
 			if _, err := s.CheckpointWorkload(t.Context(), req); err == nil || !strings.Contains(err.Error(), "exit code unknown") {
 				t.Fatalf("CheckpointWorkload error = %v, want unknown exit code", err)
+			} else if got := apierror.Code(err); got != codes.FailedPrecondition {
+				t.Fatalf("checkpoint error code = %v, want FailedPrecondition", got)
 			}
 			assertCheckpointCommands(t, dir, false, true)
 		})
@@ -136,31 +144,46 @@ func TestCheckpointWorkloadResumeFailure(t *testing.T) {
 	writeCheckpointFixture(t, dir, "resume.error", "resume failed")
 	if _, err := s.CheckpointWorkload(t.Context(), req); err == nil || !strings.Contains(err.Error(), "exited before checkpoint") || !strings.Contains(err.Error(), "while resuming sandbox") {
 		t.Fatalf("CheckpointWorkload error = %v, want both inspection and resume errors", err)
+	} else if got := apierror.Code(err); got != codes.FailedPrecondition {
+		t.Fatalf("joined checkpoint error code = %v, want FailedPrecondition", got)
 	}
 	assertCheckpointCommands(t, dir, false, true)
 }
 
-func TestCheckpointWorkloadDataDoesNotRequireLiveApplications(t *testing.T) {
+func TestCheckpointWorkloadResumeFailureAfterSave(t *testing.T) {
 	s, req, dir := checkpointFixture(t)
-	req.Scope = ateworkerpb.SnapshotScope_SNAPSHOT_SCOPE_DATA
-	req.Spec.Containers[0].DurableDirVolumeMounts = []*ateworkerpb.DurableDirVolumeMount{{VolumeName: "data"}}
-	if err := os.MkdirAll(req.ActorDirs.DurableDirVolumeMountsDir, 0o700); err != nil {
-		t.Fatal(err)
+	writeCheckpointFixture(t, dir, "resume.error", "resume failed")
+	resp, err := s.CheckpointWorkload(t.Context(), req)
+	if resp != nil || err == nil || !strings.Contains(err.Error(), "while resuming sandbox after checkpoint") {
+		t.Fatalf("CheckpointWorkload = %v, %v; want failure to unwind the sandbox pause", resp, err)
 	}
+	if _, err := os.Stat(filepath.Join(req.ActorDirs.CheckpointDir, "checkpoint.img")); err != nil {
+		t.Fatalf("checkpoint was not saved before the resume failure: %v", err)
+	}
+	assertCheckpointCommands(t, dir, true, true)
+}
+
+func TestCheckpointWorkloadVolumesDoesNotRequireLiveApplications(t *testing.T) {
+	s, req, dir := checkpointFixture(t)
+	req.Fidelity = ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
+	req.Spec.Containers[0].DurableDirVolumeMounts = []*ateworkerpb.DurableDirVolumeMount{{VolumeName: "data", MountPath: "/data"}}
 	writeCheckpointFixture(t, dir, "app.state", `{"id":"app","status":"stopped"}`)
 	resp, err := s.CheckpointWorkload(t.Context(), req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(resp.GetSnapshotFiles()) != 1 || resp.GetSnapshotFiles()[0] != durableTarFile {
+	if len(resp.GetSnapshotFiles()) != 1 || resp.GetSnapshotFiles()[0] != "fs/fscheckpoint.pb" || len(resp.GetDataSnapshotFiles()) != 1 {
 		t.Fatalf("snapshot files = %v, want durable data", resp.GetSnapshotFiles())
 	}
-	assertCheckpointCommands(t, dir, false, true)
+	assertCheckpointCommands(t, dir, false, false)
 }
 
 func checkpointFixture(t *testing.T) (*AteWorkerService, *ateworkerpb.CheckpointWorkloadRequest, string) {
 	t.Helper()
 	dir := t.TempDir()
+	previousStaticFilesDir := nodepath.StaticFilesDir
+	nodepath.StaticFilesDir = dir
+	t.Cleanup(func() { nodepath.StaticFilesDir = previousStaticFilesDir })
 	writeCheckpointFixture(t, dir, "runsc", `#!/bin/sh
 set -eu
 dir=$(dirname "$0")
@@ -178,6 +201,7 @@ state)
   cat "$dir/$2.state" ;;
 wait) cat "$dir/$2.wait" ;;
 checkpoint) mkdir -p "$3"; touch "$3/checkpoint.img" ;;
+fscheckpoint) mkdir -p "$3"; touch "$3/fscheckpoint.pb" ;;
 esac
 `)
 	if err := os.Chmod(filepath.Join(dir, "runsc"), 0o700); err != nil {
@@ -197,10 +221,11 @@ esac
 		locks: actorlock.New(), inFlight: actorlock.NewInFlight(),
 		actorLogger: actorlog.NewActorLogger(io.Discard, false),
 		tunnel:      &ateomtunnel.Tunnel{Ingress: &atunnel.Server{}, Egress: &atunnel.Egress{}},
+		flags:       mustFlagStore(t),
 	}
 	req := &ateworkerpb.CheckpointWorkloadRequest{
 		ActorUid: "test-uid", ActorDirs: dirs, RunscPath: filepath.Join(dir, "runsc"),
-		Scope: ateworkerpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
+		Fidelity: ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 		Spec:  &ateworkerpb.WorkloadSpec{Containers: []*ateworkerpb.Container{{Name: "app"}, {Name: "sidecar"}}},
 	}
 	return s, req, dir

@@ -22,10 +22,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
 	"github.com/opencontainers/runtime-spec/specs-go"
@@ -34,6 +37,35 @@ import (
 // Bound inspection, including a stopped container's diagnostic wait, so a
 // broken sandbox cannot leave the checkpoint frozen indefinitely.
 const checkpointInspectionTimeout = 10 * time.Second
+
+// resumeTimeout bounds undoing the liveness check's sandbox pause.
+const resumeTimeout = 30 * time.Second
+
+// cmdPause pauses all processes in the container (or sandbox, if pause).
+func (r *runsc) cmdPause(ctx context.Context, containerName string) error {
+	slog.InfoContext(ctx, "About to run runsc pause", slog.String("container", containerName))
+
+	cmd := exec.CommandContext(ctx, r.path, r.buildArgs("pause", containerName)...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("while running `runsc pause`: %w", err)
+	}
+	return nil
+}
+
+// cmdResume unpauses a paused container (or sandbox, if pause).
+func (r *runsc) cmdResume(ctx context.Context, containerName string) error {
+	slog.InfoContext(ctx, "About to run runsc resume", slog.String("container", containerName))
+
+	cmd := exec.CommandContext(ctx, r.path, r.buildArgs("resume", containerName)...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("while running `runsc resume`: %w", err)
+	}
+	return nil
+}
 
 // checkpointRunningWorkload freezes the sandbox before checking its application
 // containers, so none can exit between inspection and saving. The pause
@@ -44,6 +76,8 @@ func (r *runsc) checkpointRunningWorkload(ctx context.Context, containers []*ate
 	}
 	// Balance our pause even after a successful save: runsc queues the sandbox's
 	// exit, but its tasks cannot finish exiting until this outer pause is undone.
+	// A saved checkpoint is not yet a completed RPC: returning success here
+	// would let atelet publish it while sandbox teardown can still block.
 	defer func() {
 		resumeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), resumeTimeout)
 		defer cancel()
@@ -69,12 +103,12 @@ func (r *runsc) checkpointRunningWorkload(ctx context.Context, containers []*ate
 				ExitStatus *int   `json:"exitStatus"`
 			}
 			if err := r.containerJSON(inspectCtx, "wait", name, &result); err != nil {
-				return fmt.Errorf("application container %q exited before checkpoint (exit code unknown: %w)", name, err)
+				return apierror.FailedPrecondition("application container %q exited before checkpoint (exit code unknown: %w)", name, err)
 			}
 			if result.ID != name || result.ExitStatus == nil {
-				return fmt.Errorf("application container %q exited before checkpoint (exit code unknown: invalid wait result)", name)
+				return apierror.FailedPrecondition("application container %q exited before checkpoint (exit code unknown: invalid wait result)", name)
 			}
-			return fmt.Errorf("application container %q exited before checkpoint (exit code %d)", name, *result.ExitStatus)
+			return apierror.FailedPrecondition("application container %q exited before checkpoint (exit code %d)", name, *result.ExitStatus)
 		}
 		if state.Status != specs.StateRunning {
 			return fmt.Errorf("cannot checkpoint application container %q: state is %q, want running", name, state.Status)
@@ -89,12 +123,10 @@ func (r *runsc) checkpointRunningWorkload(ctx context.Context, containers []*ate
 // containerJSON keeps stdout separate from runsc's stderr logs. These commands
 // run only during bounded checkpoint inspection, including wait after stopped.
 func (r *runsc) containerJSON(ctx context.Context, command, name string, dst any) error {
-	cmd := exec.CommandContext(ctx, r.path,
-		"-log-format", "json", "--alsologtostderr",
-		"-root", runscStateDir(r.actorDirs), command, name)
+	cmd := exec.CommandContext(ctx, r.path, r.buildArgs(command, name)...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	if err := reaper.RunCommand(cmd); err != nil {
+	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("runsc %s: %w: %s", command, err, strings.TrimSpace(stderr.String()))
 	}
 	if err := json.Unmarshal(stdout.Bytes(), dst); err != nil {

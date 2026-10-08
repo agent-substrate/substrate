@@ -19,11 +19,13 @@ package main
 
 import (
 	"crypto/rand"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"sync/atomic"
 	"time"
 )
 
@@ -36,7 +38,31 @@ func main() {
 	}
 
 	bootID := rand.Text()
+	var counter atomic.Int64
 	mux := http.NewServeMux()
+	writeState := func(w http.ResponseWriter, count int64) {
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(struct {
+			BootID  string `json:"bootID"`
+			Counter int64  `json:"counter"`
+		}{bootID, count}); err != nil {
+			log.Printf("write application state: %v", err)
+		}
+	}
+	mux.HandleFunc("GET /state", func(w http.ResponseWriter, _ *http.Request) {
+		writeState(w, counter.Load())
+	})
+	mux.HandleFunc("POST /increment", func(w http.ResponseWriter, _ *http.Request) {
+		writeState(w, counter.Add(1))
+	})
+	mux.HandleFunc("POST /exit", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", "0")
+		w.WriteHeader(http.StatusAccepted)
+		if err := http.NewResponseController(w).Flush(); err != nil {
+			log.Printf("flush exit response: %v", err)
+		}
+		os.Exit(1)
+	})
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
