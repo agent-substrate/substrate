@@ -106,10 +106,10 @@ func (qr *QueryRecorder) AddRouterRequest(
 ) {
 	qr.Add(RecordedQuery{
 		Timestamp: start,
-		Client:    m.Header(AuthorityHeader),
+		Client:    m.Headers[AuthorityHeader],
 		Host:      m.Host,
 		Path:      redactPath(m.Path),
-		Method:    m.Header(":method"),
+		Method:    m.Headers[":method"],
 		Action:    action,
 		Target:    target,
 		Duration:  duration,

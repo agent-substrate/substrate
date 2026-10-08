@@ -391,7 +391,7 @@ func TestConnectLegOpensForAnyRules(t *testing.T) {
 			if tc.dialed != "" {
 				md.Host = tc.dialed
 			}
-			md.Headers[":authority"] = []string{md.Host}
+			md.Headers[":authority"] = md.Host
 			res, err := h.HandleRequestHeaders(context.Background(), md)
 			if err != nil {
 				t.Fatalf("HandleRequestHeaders() error = %v, want the tunnel to open", err)
@@ -743,7 +743,7 @@ func TestHandleRequestHeadersRejectsNonAddressAuthority(t *testing.T) {
 	for _, authority := range []string{"example.com:443", "93.184.216.34", ""} {
 		md := egressMetadata(xfccHeader(leaf))
 		md.Host = authority
-		md.Headers[":authority"] = []string{authority}
+		md.Headers[":authority"] = authority
 		_, err := h.HandleRequestHeaders(context.Background(), md)
 		wantStatus(t, err, envoy_type.StatusCode_Forbidden)
 	}
@@ -756,7 +756,7 @@ func TestHandleRequestHeadersRejectsNonConnect(t *testing.T) {
 
 	md := egressMetadata(xfccHeader(leaf))
 	md.Method = "GET"
-	md.Headers[":method"] = []string{"GET"}
+	md.Headers[":method"] = "GET"
 
 	_, err := h.HandleRequestHeaders(context.Background(), md)
 	wantStatus(t, err, envoy_type.StatusCode_MethodNotAllowed)

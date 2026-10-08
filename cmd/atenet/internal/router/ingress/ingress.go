@@ -176,7 +176,7 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 }
 
 func routingValue(md *extproc.RequestMetadata, header, attribute string) string {
-	if value := md.Attribute(attribute); value != "" {
+	if value := md.Attribute(attribute); value != "" && value != "-" {
 		return value
 	}
 	// Requests reaching main_internal via a terminated CONNECT tunnel retain
@@ -186,8 +186,5 @@ func routingValue(md *extproc.RequestMetadata, header, attribute string) string 
 	if md.Attribute(extproc.ConnectAuthorityFilterStateAttribute) != "" {
 		return ""
 	}
-	if vals := md.HeaderValues(header); len(vals) == 1 {
-		return vals[0]
-	}
-	return ""
+	return md.Header(header)
 }
