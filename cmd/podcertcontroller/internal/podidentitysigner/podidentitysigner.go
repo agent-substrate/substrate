@@ -96,7 +96,7 @@ func (h *Impl) DesiredClusterTrustBundles() ([]*certsv1.ClusterTrustBundle, erro
 }
 
 func (h *Impl) MakeCert(ctx context.Context, pcr *certsv1beta1.PodCertificateRequest) error {
-	// Fetch the pod to get its ServiceAccount
+	// Fetch the pod to check the request against it.
 	pod, err := h.kc.CoreV1().Pods(pcr.ObjectMeta.Namespace).Get(ctx, pcr.Spec.PodName, metav1.GetOptions{})
 	if err != nil {
 		return fmt.Errorf("while getting pod %s/%s: %w", pcr.ObjectMeta.Namespace, pcr.Spec.PodName, err)
@@ -104,6 +104,12 @@ func (h *Impl) MakeCert(ctx context.Context, pcr *certsv1beta1.PodCertificateReq
 
 	if pod.ObjectMeta.UID != pcr.Spec.PodUID {
 		return fmt.Errorf("pod UID mismatch: expected %s, got %s", pcr.Spec.PodUID, pod.ObjectMeta.UID)
+	}
+	if pod.Spec.ServiceAccountName != pcr.Spec.ServiceAccountName {
+		return fmt.Errorf("pod ServiceAccount mismatch: expected %q, got %q", pcr.Spec.ServiceAccountName, pod.Spec.ServiceAccountName)
+	}
+	if pod.Spec.NodeName != string(pcr.Spec.NodeName) {
+		return fmt.Errorf("pod node mismatch: expected %q, got %q", pcr.Spec.NodeName, pod.Spec.NodeName)
 	}
 
 	subjectPublicKey, err := podcertificate.PublicKey(pcr)
