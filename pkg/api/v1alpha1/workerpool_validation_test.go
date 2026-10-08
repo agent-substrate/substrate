@@ -79,6 +79,20 @@ func TestWorkerPoolValidation(t *testing.T) {
 		wantErr: true,
 		errMsg:  "spec.sandboxClasses: Required value",
 	}, {
+		name: "empty sandboxClasses",
+		mutate: func(wp *WorkerPool) {
+			wp.Spec.SandboxClasses = []WorkerPoolSandboxClass{}
+		},
+		wantErr: true,
+		errMsg:  "spec.sandboxClasses",
+	}, {
+		name: "sandboxClass with empty name",
+		mutate: func(wp *WorkerPool) {
+			wp.Spec.SandboxClasses = []WorkerPoolSandboxClass{{}}
+		},
+		wantErr: true,
+		errMsg:  "spec.sandboxClasses[0].name",
+	}, {
 		name: "more than one sandboxClass",
 		mutate: func(wp *WorkerPool) {
 			wp.Spec.SandboxClasses = []WorkerPoolSandboxClass{{Name: SandboxClassGvisor}, {Name: SandboxClassMicroVM}}
