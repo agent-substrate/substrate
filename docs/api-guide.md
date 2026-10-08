@@ -183,28 +183,27 @@ To deliver identity information, including credentials, to a running actor, you 
 Available information sources:
 
 #### actorMetadata
-The actorMetadata data source projects the actor's identity fields to files, one per item, analogous to the [Kubernetes downwardAPI volume](https://kubernetes.io/docs/concepts/storage/volumes/#downwardapi). Each item selects a `field` — `name` (unique within an atespace), `atespace` (together with the name, the actor's full identity), or `uid` (server-generated, distinguishes incarnations of the same name) — and the `path` the value is written to, raw with no trailing newline. `path` is a clean relative path from the root of the volume (no leading `/`, no `.` or `..` segments, at most 16 segments) and must not repeat another path projected into the same volume.
+The actorMetadata data source projects the actor's identity fields to files, one per item, analogous to the [Kubernetes downwardAPI volume](https://kubernetes.io/docs/concepts/storage/volumes/#downwardapi). Each item selects a `field` — `ACTOR_METADATA_FIELD_NAME` (unique within an atespace), `ACTOR_METADATA_FIELD_ATESPACE` (together with the name, the actor's full identity), or `ACTOR_METADATA_FIELD_UID` (server-generated, distinguishes incarnations of the same name) — and the `path` the value is written to, raw with no trailing newline. `path` is a clean relative path from the root of the volume (no leading `/`, no `.` or `..` segments, at most 16 segments) and must not repeat another path projected into the same volume.
 
 ```yaml
-spec:
-  volumes:
+volumes:
+- name: system-info
+  systemInfo:
+    dataSources:
+    - actorMetadata:
+        items:
+        - field: ACTOR_METADATA_FIELD_NAME
+          path: actor-name
+        - field: ACTOR_METADATA_FIELD_ATESPACE
+          path: atespace
+        - field: ACTOR_METADATA_FIELD_UID
+          path: actor-uid
+containers:
+- name: main
+  # ...
+  volumeMounts:
   - name: system-info
-    systemInfo:
-      dataSources:
-      - actorMetadata:
-          items:
-          - field: name
-            path: actor-name
-          - field: atespace
-            path: atespace
-          - field: uid
-            path: actor-uid
-  containers:
-  - name: main
-    # ...
-    volumeMounts:
-    - name: system-info
-      mountPath: /run/ate   # the actor reads e.g. /run/ate/actor-name
+    mountPath: /run/ate   # the actor reads e.g. /run/ate/actor-name
 ```
 
 The values are delivered as files on a read-only per-actor bind mount, not environment variables, precisely so they carry the correct values after a resume from a shared snapshot — an env var (or a file baked into the image) would be frozen at the snapshot-source actor's values, since it lives in the checkpointed process memory, and would therefore be identical for every actor restored from that snapshot. The metadata fields themselves are fixed for the actor's lifetime, so workloads may cache them; future data sources that rotate (identity tokens and certificates) must be re-read at time of use.
@@ -220,21 +219,20 @@ Supported names are allowlisted:
   shipped on Debian (consumed via the distroless-static base image).
 
 ```yaml
-spec:
-  volumes:
+volumes:
+- name: trust
+  systemInfo:
+    dataSources:
+    - trustBundle:
+        names:
+        - egress-mitm.ate.dev
+        path: ca.pem
+containers:
+- name: main
+  # ...
+  volumeMounts:
   - name: trust
-    systemInfo:
-      dataSources:
-      - trustBundle:
-          names:
-          - egress-mitm.ate.dev
-          path: ca.pem
-  containers:
-  - name: main
-    # ...
-    volumeMounts:
-    - name: trust
-      mountPath: /run/substrate/certs   # the actor reads /run/substrate/certs/ca.pem
+    mountPath: /run/substrate/certs   # the actor reads /run/substrate/certs/ca.pem
 ```
 
 atelet resolves the bundle on the node when the actor starts, reading the backing object through a cluster-wide watch (the same informer that drives live refresh) and sanitizing it the way kubelet does for projections: only `CERTIFICATE` PEM blocks are kept, deduplicated across all the named bundles, with block headers stripped and the anchors deliberately shuffled, so consumers must not depend on their order. The actor itself never talks to any bundle backend. Starting the actor fails, with an error naming the bundle, if any name is not on the allowlist, the bundle's backend is unavailable in this deployment, or the resolved bundle is missing, empty, or contains no certificates.
