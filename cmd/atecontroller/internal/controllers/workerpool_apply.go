@@ -126,15 +126,13 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettin
 		"--atunnel-client-identity=" + installdefaults.SPIFFEID(systemNamespace, routerServiceAccount),
 	}
 
-	// --atunnel-broker-identity is newer than the oldest ateom a rolling
-	// upgrade still has running. docs/upgrade.md keeps the outgoing worker pool
-	// serving alongside the new one, and that pool's Deployment is reconciled
-	// by this controller while still pinned to its old image, which exits on an
-	// unrecognized flag. An ateom without the flag hardcodes the canonical
-	// identity, and an ateom with it defaults to the same, so omitting the flag
-	// when it carries that value is equivalent for both and keeps the upgrade
-	// intact. A relocated or renamed install passes something else and needs an
-	// image new enough to accept it, which it necessarily has.
+	// --atunnel-broker-identity is newer than the oldest ateom a WorkerPool
+	// may still pin, and an ateom exits on an unrecognized flag. An ateom
+	// without the flag hardcodes the canonical identity, and an ateom with it
+	// defaults to the same, so omitting the flag when it carries that value is
+	// equivalent for both. A relocated or renamed install passes something
+	// else and needs an image new enough to accept it, which it necessarily
+	// has.
 	if brokerIdentity := installdefaults.SPIFFEID(systemNamespace, ateletServiceAccount); brokerIdentity != installdefaults.AteletSPIFFEID(installdefaults.SystemNamespace) {
 		args = append(args, "--atunnel-broker-identity="+brokerIdentity)
 	}
