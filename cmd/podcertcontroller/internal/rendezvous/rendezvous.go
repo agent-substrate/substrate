@@ -48,7 +48,6 @@ const labelKey = "rendezvous.ate.dev/application"
 const LeaseDuration = 15 * time.Second
 
 var (
-	leaseDuration      = LeaseDuration
 	leaseRenewalPeriod = 10 * time.Second
 )
 
@@ -174,7 +173,7 @@ func (h *Hasher) ensureLease(ctx context.Context) error {
 		},
 		Spec: coordinationv1.LeaseSpec{
 			HolderIdentity:       &h.replicaName,
-			LeaseDurationSeconds: ptr.To(int32(int64(leaseDuration) / 1_000_000_000)),
+			LeaseDurationSeconds: ptr.To(int32(int64(LeaseDuration) / 1_000_000_000)),
 			AcquireTime:          ptr.To(metav1.NewMicroTime(now)),
 			RenewTime:            ptr.To(metav1.NewMicroTime(now)),
 			LeaseTransitions:     ptr.To[int32](1),

@@ -58,11 +58,6 @@ type Controller struct {
 	handler SignerImpl
 }
 
-// notAssignedRecheck is how often a PCR assigned to another replica is
-// re-examined. Assignments only change when a replica joins or its lease
-// expires, so checking more often than the lease duration gains nothing.
-const notAssignedRecheck = rendezvous.LeaseDuration
-
 // New creates a new Controller.
 func New(clock clock.PassiveClock, handler SignerImpl, hasher Hasher, pcrClient *podcertificate.Client, trustBundles *clustertrustbundle.Client) *Controller {
 	sc := &Controller{
@@ -155,8 +150,9 @@ func (c *Controller) processNextWorkItem(ctx context.Context) bool {
 	err = c.handlePCR(ctx, pcr)
 	if errors.Is(err, rendezvous.ErrNotAssigned) {
 		// Not an error: don't consume the failure rate limiter or inflate
-		// this item's backoff, just look again later.
-		c.pcrQueue.AddAfter(key, notAssignedRecheck)
+		// this item's backoff. Assignments only change when a replica joins
+		// or its lease expires, so re-examine after the lease duration.
+		c.pcrQueue.AddAfter(key, rendezvous.LeaseDuration)
 		return true
 	}
 	if err != nil {
