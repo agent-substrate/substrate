@@ -27,9 +27,12 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/actorlock"
 	"github.com/agent-substrate/substrate/internal/actorlog"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateomtunnel"
 	"github.com/agent-substrate/substrate/internal/atunnel"
+	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"google.golang.org/grpc/codes"
 )
 
 // Exercise the RPC with a runsc executable: a successful state command can
@@ -43,6 +46,9 @@ func TestCheckpointWorkloadRejectsExitedApplication(t *testing.T) {
 			resp, err := s.CheckpointWorkload(t.Context(), req)
 			if err == nil || !strings.Contains(err.Error(), `container "sidecar"`) || !strings.Contains(err.Error(), "exit code "+code) {
 				t.Fatalf("CheckpointWorkload = %v, %v; want the exited container and its code", resp, err)
+			}
+			if got := apierror.Code(err); got != codes.FailedPrecondition {
+				t.Fatalf("checkpoint error code = %v, want FailedPrecondition", got)
 			}
 			assertCheckpointCommands(t, dir, false, true)
 		})
@@ -124,6 +130,8 @@ func TestCheckpointWorkloadUnknownExitStatus(t *testing.T) {
 			writeCheckpointFixture(t, dir, "app.wait", result)
 			if _, err := s.CheckpointWorkload(t.Context(), req); err == nil || !strings.Contains(err.Error(), "exit code unknown") {
 				t.Fatalf("CheckpointWorkload error = %v, want unknown exit code", err)
+			} else if got := apierror.Code(err); got != codes.FailedPrecondition {
+				t.Fatalf("checkpoint error code = %v, want FailedPrecondition", got)
 			}
 			assertCheckpointCommands(t, dir, false, true)
 		})
@@ -136,15 +144,30 @@ func TestCheckpointWorkloadResumeFailure(t *testing.T) {
 	writeCheckpointFixture(t, dir, "resume.error", "resume failed")
 	if _, err := s.CheckpointWorkload(t.Context(), req); err == nil || !strings.Contains(err.Error(), "exited before checkpoint") || !strings.Contains(err.Error(), "while resuming sandbox") {
 		t.Fatalf("CheckpointWorkload error = %v, want both inspection and resume errors", err)
+	} else if got := apierror.Code(err); got != codes.FailedPrecondition {
+		t.Fatalf("joined checkpoint error code = %v, want FailedPrecondition", got)
 	}
 	assertCheckpointCommands(t, dir, false, true)
+}
+
+func TestCheckpointWorkloadResumeFailureAfterSave(t *testing.T) {
+	s, req, dir := checkpointFixture(t)
+	writeCheckpointFixture(t, dir, "resume.error", "resume failed")
+	resp, err := s.CheckpointWorkload(t.Context(), req)
+	if resp != nil || err == nil || !strings.Contains(err.Error(), "while resuming sandbox after checkpoint") {
+		t.Fatalf("CheckpointWorkload = %v, %v; want failure to unwind the sandbox pause", resp, err)
+	}
+	if _, err := os.Stat(filepath.Join(req.ActorDirs.CheckpointDir, "checkpoint.img")); err != nil {
+		t.Fatalf("checkpoint was not saved before the resume failure: %v", err)
+	}
+	assertCheckpointCommands(t, dir, true, true)
 }
 
 func TestCheckpointWorkloadDataDoesNotRequireLiveApplications(t *testing.T) {
 	s, req, dir := checkpointFixture(t)
 	req.Scope = ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA
 	req.Spec.Containers[0].DurableDirVolumeMounts = []*ateompb.DurableDirVolumeMount{{VolumeName: "data"}}
-	if err := os.MkdirAll(req.ActorDirs.DurableDirVolumeMountsDir, 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Join(req.ActorDirs.DurableDirVolumeMountsDir, "data"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	writeCheckpointFixture(t, dir, "app.state", `{"id":"app","status":"stopped"}`)
@@ -152,7 +175,11 @@ func TestCheckpointWorkloadDataDoesNotRequireLiveApplications(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(resp.GetSnapshotFiles()) != 1 || resp.GetSnapshotFiles()[0] != durableTarFile {
+	name, err := durableTarFile("data")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.GetSnapshotFiles()) != 1 || resp.GetSnapshotFiles()[0] != name {
 		t.Fatalf("snapshot files = %v, want durable data", resp.GetSnapshotFiles())
 	}
 	assertCheckpointCommands(t, dir, false, true)
@@ -161,6 +188,9 @@ func TestCheckpointWorkloadDataDoesNotRequireLiveApplications(t *testing.T) {
 func checkpointFixture(t *testing.T) (*AteomService, *ateompb.CheckpointWorkloadRequest, string) {
 	t.Helper()
 	dir := t.TempDir()
+	previousStaticFilesDir := nodepath.StaticFilesDir
+	nodepath.StaticFilesDir = dir
+	t.Cleanup(func() { nodepath.StaticFilesDir = previousStaticFilesDir })
 	writeCheckpointFixture(t, dir, "runsc", `#!/bin/sh
 set -eu
 dir=$(dirname "$0")

@@ -240,7 +240,7 @@ func (c *fakeGoldenControl) SuspendActor(_ context.Context, req *ateapipb.Suspen
 	if c.suspendCrash != "" {
 		c.goldenState = ateapipb.ActorState_ACTOR_STATE_CRASHED
 		c.crashMessage = c.suspendCrash
-		return nil, status.Error(codes.FailedPrecondition, c.suspendCrash)
+		return nil, apierror.FailedPrecondition("%s", c.suspendCrash)
 	}
 	if c.suspendErr != nil {
 		return nil, c.suspendErr

@@ -15,17 +15,14 @@
 package golden
 
 import (
-	"bufio"
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/atenet"
 	"github.com/agent-substrate/substrate/internal/e2e"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
@@ -188,7 +185,6 @@ func setup(t *testing.T) (*ateapipb.ActorTemplate, string) {
 		Resources:      srcTemplate.GetResources(),
 		SnapshotConfig: &ateapipb.SnapshotConfig{
 			StorageLocation: "gs://" + env["BUCKET_NAME"] + "/golden-regression/" + ns + "/",
-			OnPause:         ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 			OnCommit:        ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 		},
 	}, image
@@ -265,34 +261,12 @@ func waitForBootID(t *testing.T, ctx context.Context, router *e2e.RouterClient, 
 }
 
 func readBootID(ctx context.Context, router *e2e.RouterClient, actor resources.ActorRef, port int) (string, error) {
-	conn, err := router.Connect(ctx, actor, port)
+	body, code, err := requestActor(ctx, router, actor, port, http.MethodGet, "/")
 	if err != nil {
 		return "", err
 	}
-	defer conn.Close()
-	if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
-		return "", err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+actor.Name+"/", nil)
-	if err != nil {
-		return "", err
-	}
-	req.Close = true
-	req.Header.Set(atenet.TargetActorHeader, actor.String())
-	if err := req.Write(conn); err != nil {
-		return "", err
-	}
-	resp, err := http.ReadResponse(bufio.NewReader(conn), req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1024))
-	if err != nil {
-		return "", err
-	}
-	if resp.StatusCode != http.StatusOK || strings.TrimSpace(string(body)) == "" {
-		return "", fmt.Errorf("HTTP %d: %q", resp.StatusCode, body)
+	if code != http.StatusOK || strings.TrimSpace(string(body)) == "" {
+		return "", fmt.Errorf("HTTP %d: %q", code, body)
 	}
 	return strings.TrimSpace(string(body)), nil
 }
