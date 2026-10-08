@@ -212,6 +212,12 @@ var Registry = []Setting{
 		Usage: "Local PEM file holding an external PostgreSQL server CA",
 	},
 	{
+		Key: "ateapi.postgres.storageClass", Env: "ATE_API_POSTGRES_STORAGE_CLASS",
+		Flag: "ateapi-postgres-storage-class", Kind: KindString,
+		Usage: "StorageClass for the bundled PostgreSQL volume, instead of the cluster default. " +
+			"An existing install must delete the postgres StatefulSet and its claim first",
+	},
+	{
 		Key: "ateapi.postgres.cloudsql.instance", Env: "ATE_API_POSTGRES_CLOUDSQL_INSTANCE",
 		Flag: "ateapi-postgres-cloudsql-instance", Kind: KindString,
 		Usage: "Cloud SQL instance connection name, PROJECT:REGION:INSTANCE",
@@ -247,12 +253,6 @@ var Registry = []Setting{
 		Key: "clusterSize", Env: "ATE_INSTALL_CLUSTER_SIZE", Flag: "cluster-size", Kind: KindString,
 		Default: ClusterSizeSize0,
 		Usage:   "Coarse-grained sizing of Substrate: size0 or size10",
-	},
-	{
-		Key: "bundledPostgres.storageClass", Env: "ATE_INSTALL_POSTGRES_STORAGE_CLASS", Flag: "postgres-storage-class",
-		Kind: KindString,
-		Usage: "StorageClass for the bundled PostgreSQL volume, instead of the cluster default. " +
-			"An existing install must delete the postgres StatefulSet and its claim first",
 	},
 	{
 		Key: "cordonControlPlane", Env: "ATE_INSTALL_CORDON_CONTROL_PLANE", Flag: "cordon-control-plane",

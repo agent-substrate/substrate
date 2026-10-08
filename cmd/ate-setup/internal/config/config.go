@@ -160,6 +160,9 @@ type Config struct {
 	// published as the postgres-server-ca Secret, which ate-api-server mounts
 	// at /run/postgres-server-ca/server-ca.pem for sslmode=verify-ca DSNs.
 	PostgresServerCAFile string
+	// PostgresStorageClass is the StorageClass of the bundled PostgreSQL volume
+	// (ATE_API_POSTGRES_STORAGE_CLASS). Empty leaves the cluster default.
+	PostgresStorageClass string
 	// CloudSQL points the apiserver at a Cloud SQL instance through the Auth
 	// Proxy sidecar instead of a directly reachable PostgreSQL.
 	CloudSQL CloudSQLConfig
@@ -176,10 +179,6 @@ type Config struct {
 	// ClusterSize is the footprint profile (ATE_INSTALL_CLUSTER_SIZE): size0
 	// or size10.
 	ClusterSize string
-
-	// PostgresStorageClass is the StorageClass of the bundled PostgreSQL volume
-	// (ATE_INSTALL_POSTGRES_STORAGE_CLASS). Empty leaves the cluster default.
-	PostgresStorageClass string
 
 	// CordonControlPlane keeps the control plane off the worker nodes
 	// (ATE_INSTALL_CORDON_CONTROL_PLANE). It assumes a small shared pool

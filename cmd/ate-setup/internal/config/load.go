@@ -220,6 +220,7 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		PostgresSchema:       r.String("ateapi.postgres.schema"),
 		PostgresPoolMaxConns: r.String("ateapi.postgres.poolMaxConns"),
 		PostgresServerCAFile: r.String("ateapi.postgres.serverCAFile"),
+		PostgresStorageClass: r.String("ateapi.postgres.storageClass"),
 
 		PostgresReadWriteConnectionString: readWriteConnectionString,
 		PostgresOwnerConnectionString:     ownerConnectionString,
@@ -243,7 +244,6 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		rolloutTimeoutSet:              r.Supplied("rolloutTimeout"),
 		PodcertWorkersPerSigner:        podcertWorkers,
 		ClusterSize:                    r.String("clusterSize"),
-		PostgresStorageClass:           r.String("bundledPostgres.storageClass"),
 		CordonControlPlane:             r.Bool("cordonControlPlane"),
 		AdditionalEgressExtprocService: r.String("atenet.egress.additionalExtprocService"),
 		CredentialProviderJSON:         r.String("atenet.egress.credentialProvider"),
