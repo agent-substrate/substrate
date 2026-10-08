@@ -305,14 +305,13 @@ func (s *k8sPodLogsStreamer) StreamLogs(ctx context.Context, namespace, podName 
 
 // LogsActorRunner executes the log printing or streaming.
 type LogsActorRunner struct {
-	apiClient         AteAPIClient
-	streamer          PodLogsStreamer
-	actorRef          resources.ActorRef
-	stdout            io.Writer
-	stderr            io.Writer
-	follow            bool
-	source            string
-	container         string
+	apiClient AteAPIClient
+	streamer  PodLogsStreamer
+	actorRef  resources.ActorRef
+	stdout    io.Writer
+	stderr    io.Writer
+	follow    bool
+	// filter selects the lines to display; see newLogLineFilter.
 	filter            logLineFilter
 	pollInterval      time.Duration
 	reconnectInterval time.Duration
@@ -322,12 +321,6 @@ type LogsActorRunner struct {
 // Run executes the logs command.
 func (r *LogsActorRunner) Run(ctx context.Context) error {
 	defer r.apiClient.Close()
-
-	filter, err := newLogLineFilter(r.actorRef, r.source, r.container)
-	if err != nil {
-		return err
-	}
-	r.filter = filter
 
 	if r.pollInterval <= 0 {
 		r.pollInterval = 2 * time.Second
@@ -515,6 +508,14 @@ func (r *LogsActorRunner) startMigrationMonitor(
 func runLogsActor(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
 
+	// Before any connection: a bad flag combination is answered as such, not
+	// as an unreachable server.
+	actorRef := resources.ActorRef{Atespace: logsActorAtespaceFlag, Name: args[0]}
+	filter, err := newLogLineFilter(actorRef, logsActorSourceFlag, logsActorContainerFlag)
+	if err != nil {
+		return err
+	}
+
 	apiClient, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
 	if err != nil {
 		return fmt.Errorf("failed to connect to ate-api-server: %w", err)
@@ -522,6 +523,7 @@ func runLogsActor(cmd *cobra.Command, args []string) error {
 
 	config, err := ateclient.LoadKubeConfig(kubeconfig, k8sContext)
 	if err != nil {
+		apiClient.Close()
 		return fmt.Errorf("while loading kubeconfig: %w", err)
 	}
 	k8sClient, err := kubernetes.NewForConfig(config)
@@ -533,12 +535,11 @@ func runLogsActor(cmd *cobra.Command, args []string) error {
 	runner := &LogsActorRunner{
 		apiClient:         apiClient,
 		streamer:          &k8sPodLogsStreamer{clientset: k8sClient},
-		actorRef:          resources.ActorRef{Atespace: logsActorAtespaceFlag, Name: args[0]},
+		actorRef:          actorRef,
 		stdout:            os.Stdout,
 		stderr:            os.Stderr,
 		follow:            logsActorFollowFlag,
-		source:            logsActorSourceFlag,
-		container:         logsActorContainerFlag,
+		filter:            filter,
 		pollInterval:      2 * time.Second,
 		reconnectInterval: 1 * time.Second,
 		tickerInterval:    2 * time.Second,
@@ -602,6 +603,14 @@ func (f logLineFilter) matches(emitter resources.ActorRef, containerName string)
 	return f.container == "" || containerName == f.container
 }
 
+// filterAndDisplayLogLine writes line to w if filter selects it. It returns
+// the line's time whenever the line parses, displayed or not, so follow mode
+// can resume from the last line it read: the stream is one pod log in write
+// order, so a later line never precedes an earlier one, and resuming from an
+// undisplayed line skips nothing. Resuming only from displayed lines would
+// make a reconnect under a sparse filter, such as --source=lifecycle, replay
+// everything since the last match. The bool reports whether line was
+// displayed.
 func filterAndDisplayLogLine(line string, filter logLineFilter, w io.Writer) (time.Time, bool) {
 	var m map[string]any
 	dec := json.NewDecoder(strings.NewReader(line))
@@ -635,7 +644,7 @@ func filterAndDisplayLogLine(line string, filter logLineFilter, w io.Writer) (ti
 	}
 
 	if !filter.matches(emitter, emitterContainer) {
-		return time.Time{}, false
+		return logTime, false
 	}
 
 	// Remove substrate's labels from CLI output. Stripping the whole reserved

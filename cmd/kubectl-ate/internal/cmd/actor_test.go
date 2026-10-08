@@ -32,6 +32,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/testing/protocmp"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 func TestActorCommandArgs(t *testing.T) {
@@ -155,7 +156,7 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 			line:        `{"time":"2026-05-16T01:03:38Z","message":"Hello world","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-2"}}`,
 			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
 			wantMatched: false,
-			wantTime:    "", // zero: another actor's line must not advance follow's resume cursor
+			wantTime:    "2026-05-16T01:03:38Z", // undisplayed, but still the follow resume cursor
 			wantOutput:  "",
 		},
 		{
@@ -163,7 +164,7 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 			line:        `{"time":"2026-05-16T01:03:38Z","message":"Hello world","logging.googleapis.com/labels":{"ate.atespace":"space-2","ate.actor.name":"act-1"}}`,
 			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
 			wantMatched: false,
-			wantTime:    "",
+			wantTime:    "2026-05-16T01:03:38Z", // undisplayed, but still the follow resume cursor
 			wantOutput:  "",
 		},
 		{
@@ -171,7 +172,7 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 			line:        `{"time":"2026-05-16T01:03:38Z","message":"Hello world","logging.googleapis.com/labels":{"ate.actor.name":"act-1"}}`,
 			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
 			wantMatched: false,
-			wantTime:    "",
+			wantTime:    "2026-05-16T01:03:38Z", // undisplayed, but still the follow resume cursor
 			wantOutput:  "",
 		},
 		{
@@ -179,7 +180,7 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 			line:        `{"time":"2026-05-16T01:03:38Z","message":"Hello world","logging.googleapis.com/labels":{"ate.atespace":"","ate.actor.name":"act-1"}}`,
 			target:      resources.ActorRef{Atespace: "", Name: "act-1"},
 			wantMatched: false,
-			wantTime:    "",
+			wantTime:    "2026-05-16T01:03:38Z", // undisplayed, but still the follow resume cursor
 			wantOutput:  "",
 		},
 		{
@@ -187,7 +188,7 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 			line:        `{"time":"2026-05-16T01:03:38Z","message":"Hello world","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":""}}`,
 			target:      resources.ActorRef{Atespace: "space-1", Name: ""},
 			wantMatched: false,
-			wantTime:    "",
+			wantTime:    "2026-05-16T01:03:38Z", // undisplayed, but still the follow resume cursor
 			wantOutput:  "",
 		},
 		{
@@ -264,7 +265,7 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
 			container:   "counter",
 			wantMatched: false,
-			wantTime:    "", // filtered out: only displayed lines may advance follow's resume cursor
+			wantTime:    "2026-05-16T01:03:38Z", // undisplayed, but still the follow resume cursor
 			wantOutput:  "",
 		},
 		{
@@ -273,7 +274,7 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
 			container:   "counter",
 			wantMatched: false,
-			wantTime:    "",
+			wantTime:    "2026-05-16T01:03:38Z", // undisplayed, but still the follow resume cursor
 			wantOutput:  "",
 		},
 		{
@@ -300,7 +301,7 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
 			source:      "lifecycle",
 			wantMatched: false,
-			wantTime:    "",
+			wantTime:    "2026-05-16T01:03:38Z", // undisplayed, but still the follow resume cursor
 			wantOutput:  "",
 		},
 		{
@@ -309,7 +310,7 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
 			source:      "lifecycle",
 			wantMatched: false,
-			wantTime:    "",
+			wantTime:    "2026-05-16T01:03:38Z", // undisplayed, but still the follow resume cursor
 			wantOutput:  "",
 		},
 		{
@@ -327,7 +328,7 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
 			source:      "containers",
 			wantMatched: false,
-			wantTime:    "",
+			wantTime:    "2026-05-16T01:03:38Z", // undisplayed, but still the follow resume cursor
 			wantOutput:  "",
 		},
 		{
@@ -337,7 +338,7 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 			source:      "containers",
 			container:   "counter",
 			wantMatched: false,
-			wantTime:    "",
+			wantTime:    "2026-05-16T01:03:38Z", // undisplayed, but still the follow resume cursor
 			wantOutput:  "",
 		},
 	}
@@ -480,6 +481,7 @@ func TestLogsActorRunner_Run_OneShotSuccess(t *testing.T) {
 	runner := &LogsActorRunner{
 		apiClient: mockAPI,
 		actorRef:  resources.ActorRef{Atespace: "space-1", Name: actorName},
+		filter:    logLineFilter{target: resources.ActorRef{Atespace: "space-1", Name: actorName}},
 		streamer:  mockStreamer,
 		stdout:    &stdout,
 		stderr:    &stderr,
@@ -519,7 +521,6 @@ func TestLogsActorRunner_Run_OneShot_SourceFilter(t *testing.T) {
 		source     string
 		container  string
 		wantOutput []string
-		wantErr    string
 	}{
 		{
 			name:       "no filter shows everything",
@@ -550,17 +551,6 @@ func TestLogsActorRunner_Run_OneShot_SourceFilter(t *testing.T) {
 			name:       "source=lifecycle keeps only lifecycle events",
 			source:     "lifecycle",
 			wantOutput: []string{"Actor started", "Actor checkpointing"},
-		},
-		{
-			name:      "source=lifecycle with container filter is rejected before streaming",
-			source:    "lifecycle",
-			container: "counter",
-			wantErr:   "--container cannot be combined with --source=lifecycle",
-		},
-		{
-			name:    "unknown source is rejected before streaming",
-			source:  "supervisor",
-			wantErr: `invalid --source "supervisor"`,
 		},
 	}
 
@@ -595,28 +585,18 @@ func TestLogsActorRunner_Run_OneShot_SourceFilter(t *testing.T) {
 				streamer:  mockStreamer,
 				stdout:    &stdout,
 				stderr:    &stderr,
-				source:    tc.source,
-				container: tc.container,
+				filter:    logLineFilter{target: resources.ActorRef{Atespace: "space-1", Name: actorName}, source: logSource(tc.source), container: tc.container},
 			}
 
 			err := runner.Run(context.Background())
 			if mockAPI.CloseCalls != 1 {
 				t.Errorf("api client Close called %d times, want 1", mockAPI.CloseCalls)
 			}
-			if tc.wantErr != "" {
-				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
-					t.Fatalf("got err %v, want it to contain %q", err, tc.wantErr)
-				}
-				if streamCalls != 0 {
-					t.Errorf("streamed %d times, want 0: an invalid flag combination must fail before any logs are fetched", streamCalls)
-				}
-				if stdout.Len() != 0 {
-					t.Errorf("unexpected output %q", stdout.String())
-				}
-				return
-			}
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
+			}
+			if streamCalls != 1 {
+				t.Errorf("streamed %d times, want 1", streamCalls)
 			}
 
 			var gotLines []string
@@ -657,6 +637,7 @@ func TestLogsActorRunner_Run_OneShot_ActorNotRunning(t *testing.T) {
 	runner := &LogsActorRunner{
 		apiClient: mockAPI,
 		actorRef:  resources.ActorRef{Atespace: "space-1", Name: actorName},
+		filter:    logLineFilter{target: resources.ActorRef{Atespace: "space-1", Name: actorName}},
 		streamer:  mockStreamer,
 		stdout:    &stdout,
 		stderr:    &stderr,
@@ -746,6 +727,7 @@ func TestLogsActorRunner_Run_Follow_SuspendedToRunning(t *testing.T) {
 	runner := &LogsActorRunner{
 		apiClient:         mockAPI,
 		actorRef:          resources.ActorRef{Atespace: "space-1", Name: actorName},
+		filter:            logLineFilter{target: resources.ActorRef{Atespace: "space-1", Name: actorName}},
 		streamer:          mockStreamer,
 		stdout:            &stdout,
 		stderr:            &stderr,
@@ -796,6 +778,7 @@ func TestLogsActorRunner_Run_Follow_NotFoundActor(t *testing.T) {
 	runner := &LogsActorRunner{
 		apiClient:         mockAPI,
 		actorRef:          resources.ActorRef{Atespace: "space-1", Name: actorName},
+		filter:            logLineFilter{target: resources.ActorRef{Atespace: "space-1", Name: actorName}},
 		streamer:          mockStreamer,
 		stdout:            &stdout,
 		stderr:            &stderr,
@@ -911,6 +894,7 @@ func TestLogsActorRunner_Run_Follow_ActorMigration(t *testing.T) {
 	runner := &LogsActorRunner{
 		apiClient:         mockAPI,
 		actorRef:          resources.ActorRef{Atespace: "space-1", Name: actorName},
+		filter:            logLineFilter{target: resources.ActorRef{Atespace: "space-1", Name: actorName}},
 		streamer:          mockStreamer,
 		stdout:            &stdout,
 		stderr:            &stderr,
@@ -1032,6 +1016,7 @@ func TestLogsActorRunner_Run_Follow_ActorSuspendedMidStream(t *testing.T) {
 	runner := &LogsActorRunner{
 		apiClient:         mockAPI,
 		actorRef:          resources.ActorRef{Atespace: "space-1", Name: actorName},
+		filter:            logLineFilter{target: resources.ActorRef{Atespace: "space-1", Name: actorName}},
 		streamer:          mockStreamer,
 		stdout:            &stdout,
 		stderr:            &stderr,
@@ -1055,10 +1040,12 @@ func TestLogsActorRunner_Run_Follow_ActorSuspendedMidStream(t *testing.T) {
 	}
 }
 
-// A worker pod's stream carries lines that are not displayed (other actors,
-// filtered-out containers). Those must not advance the follow resume cursor
-// (SinceTime), or a reconnect could skip the lines the user asked for.
-func TestLogsActorRunner_Run_Follow_UndisplayedLineDoesNotAdvanceCursor(t *testing.T) {
+// The follow resume cursor (SinceTime) advances on every line the stream
+// carries, displayed or not. The stream is one pod log in write order, so
+// resuming from the last undisplayed line skips nothing; resuming only from
+// displayed lines would make a reconnect under a sparse filter, such as
+// --source=lifecycle, replay everything since the last match.
+func TestLogsActorRunner_Run_Follow_CursorAdvancesOnUndisplayedLines(t *testing.T) {
 	actorName := "act-123"
 
 	mockAPI := &mockAteAPIClient{
@@ -1076,17 +1063,20 @@ func TestLogsActorRunner_Run_Follow_UndisplayedLineDoesNotAdvanceCursor(t *testi
 		},
 	}
 
-	// A different actor's line and a filtered-out sidecar line of our own actor:
-	// both carry parseable timestamps but neither is displayed.
-	foreignLine := `{"time":"2026-05-16T01:03:38Z","message":"not mine","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"other"}}`
-	sidecarLine := `{"time":"2026-05-16T01:03:39Z","level":"info","msg":"from sidecar","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-123","ate.actor.container.name":"sidecar"}}`
+	// Under --source=lifecycle only the first line is displayed. The two
+	// after it, a different actor's and our own container's, are not, and the
+	// last of them is where a reconnect must resume.
+	lifecycleLine := `{"time":"2026-05-16T01:03:38Z","message":"Actor started","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-123"}}`
+	foreignLine := `{"time":"2026-05-16T01:03:39Z","message":"not mine","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"other"}}`
+	counterLine := `{"time":"2026-05-16T01:03:40Z","level":"info","msg":"from counter","logging.googleapis.com/labels":{"ate.atespace":"space-1","ate.actor.name":"act-123","ate.actor.container.name":"counter"}}`
+	wantSince := time.Date(2026, 5, 16, 1, 3, 40, 0, time.UTC)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	var mu sync.Mutex
 	var streamCalls int
-	var reconnectHadSinceTime bool
+	var reconnectSince *metav1.Time
 	secondCall := make(chan struct{})
 
 	mockStreamer := &mockPodLogsStreamer{
@@ -1096,11 +1086,12 @@ func TestLogsActorRunner_Run_Follow_UndisplayedLineDoesNotAdvanceCursor(t *testi
 			streamCalls++
 
 			if streamCalls == 1 {
-				// First connection: only undisplayed lines, then EOF to force a reconnect.
-				return io.NopCloser(strings.NewReader(foreignLine + "\n" + sidecarLine + "\n")), nil
+				// First connection: one displayed line, then two undisplayed ones,
+				// then EOF to force a reconnect.
+				return io.NopCloser(strings.NewReader(lifecycleLine + "\n" + foreignLine + "\n" + counterLine + "\n")), nil
 			}
 			if streamCalls == 2 {
-				reconnectHadSinceTime = opts.SinceTime != nil
+				reconnectSince = opts.SinceTime
 				close(secondCall)
 			}
 			return io.NopCloser(strings.NewReader("")), nil
@@ -1114,7 +1105,7 @@ func TestLogsActorRunner_Run_Follow_UndisplayedLineDoesNotAdvanceCursor(t *testi
 		stdout:            &bytes.Buffer{},
 		stderr:            &bytes.Buffer{},
 		follow:            true,
-		container:         "counter",
+		filter:            logLineFilter{target: resources.ActorRef{Atespace: "space-1", Name: actorName}, source: logSourceLifecycle},
 		pollInterval:      1 * time.Millisecond,
 		reconnectInterval: 1 * time.Millisecond,
 		tickerInterval:    time.Hour, // keep the migration monitor out of the way
@@ -1139,7 +1130,10 @@ func TestLogsActorRunner_Run_Follow_UndisplayedLineDoesNotAdvanceCursor(t *testi
 
 	mu.Lock()
 	defer mu.Unlock()
-	if reconnectHadSinceTime {
-		t.Error("reconnect carried a SinceTime cursor; undisplayed lines must not advance it")
+	if reconnectSince == nil {
+		t.Fatal("reconnect carried no SinceTime cursor")
+	}
+	if !reconnectSince.Time.Equal(wantSince) {
+		t.Errorf("reconnect SinceTime = %v, want %v, the last line read, not the last line displayed", reconnectSince.Time, wantSince)
 	}
 }

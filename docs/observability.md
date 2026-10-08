@@ -74,7 +74,7 @@ An actor can run several containers. By default every line is shown, including t
 kubectl ate logs actors <actor-name> -a <atespace> -c <container-name>
 ```
 
-`--source` selects a class of lines instead of a container. `containers` shows every container's output with the lifecycle events removed; `lifecycle` shows only the lifecycle events, which is the quickest way to see how often an actor has been suspended, restored, or migrated on its current worker:
+`--source` selects a class of lines instead of a container. `containers` shows every container's output with the lifecycle events removed; `lifecycle` shows only the lifecycle events, which is the quickest way to see how often an actor has been suspended and restored on its current worker (a migration moves the actor to another pod, whose log holds none of the earlier workers' events):
 
 ```bash
 $ kubectl ate logs actors test -a demo --source=lifecycle
