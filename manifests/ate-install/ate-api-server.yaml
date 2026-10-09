@@ -130,11 +130,8 @@ spec:
         args:
           - "--grpc-server-cred-bundle=/run/servicedns.podcert.ate.dev/credential-bundle.pem"
           - --authentication-config=/etc/ateapi/authentication/authentication.yaml
-          - --postgres-read-write-connection-string=@env
-          - --postgres-owner-connection-string=@env
-          - --postgres-read-write-role=@env
-          - --postgres-owner-role=@env
-          - --postgres-schema=@env
+          # ate-setup appends the --postgres-* flags, resolved from its own
+          # configuration.
           - --actor-id-jwt-pool=/run/actor-id-jwt-pool/pool.json
           - --actor-id-ca-pool=/run/actor-id-ca-pool/pool.json
           - --atelet-client-cred-bundle=/run/podidentity.podcert.ate.dev/credential-bundle.pem
@@ -165,24 +162,10 @@ spec:
         - name: OTEL_RESOURCE_ATTRIBUTES
           value: k8s.namespace.name=$(POD_NAMESPACE),k8s.pod.name=$(POD_NAME),k8s.pod.uid=$(POD_UID),service.instance.id=$(POD_UID)
         # OTLP exporter settings are shared by every control plane component;
-        # see manifests/ate-install/ate-otel-config.yaml. Listed first so the
-        # per-developer ConfigMap below can still override a key.
+        # see manifests/ate-install/ate-otel-config.yaml.
         envFrom:
         - configMapRef:
             name: ate-otel-config
-        # Inject env vars from a ConfigMap created by each developer.  This lets
-        # each developer customize their own PostgreSQL connection settings without having
-        # to edit this manifest, which can remain constant across all
-        # developers.
-        - configMapRef:
-            name: ate-api-server-envvars
-            optional: true
-        # Sensitive env vars (e.g. a Postgres DSN carrying a password) live in
-        # a Secret rather than the ConfigMap above. Listed last so a key
-        # present in both takes its value from the Secret.
-        - secretRef:
-            name: ate-api-server-secret-envvars
-            optional: true
         volumeMounts:
         - name: snapshot-plugin
           mountPath: /run/snapshot-plugin

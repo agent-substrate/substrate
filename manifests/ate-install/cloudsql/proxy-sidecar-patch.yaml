@@ -23,10 +23,11 @@
 # so no database password exists anywhere. ateapi connects to
 # 127.0.0.1:5432 in plaintext that never leaves the pod's network namespace.
 #
-# All CSQL_PROXY_* configuration comes from the ate-api-server-envvars
-# ConfigMap (written by install-ate.sh); the instance connection name is the
-# proxy's single positional argument, expanded by Kubernetes from the same
-# ConfigMap.
+# ate-setup fills in the container's env with the CSQL_PROXY_* configuration
+# it also records in the ate-api-server-envvars ConfigMap, so a changed
+# setting changes the pod template and rolls the pod. The instance connection
+# name is the proxy's single positional argument, expanded by Kubernetes from
+# that env.
 spec:
   template:
     spec:
@@ -39,9 +40,6 @@ spec:
         restartPolicy: Always
         args:
         - "$(ATE_API_POSTGRES_CLOUDSQL_INSTANCE)"
-        envFrom:
-        - configMapRef:
-            name: ate-api-server-envvars
         securityContext:
           runAsNonRoot: true
           allowPrivilegeEscalation: false

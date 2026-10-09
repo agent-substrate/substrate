@@ -30,26 +30,6 @@ import (
 	"github.com/agent-substrate/substrate/internal/localjwtauthority"
 )
 
-// ate-api-server requires both connection strings and its schema in the
-// credential-bearing Secret.
-func TestBuildAPIServerEnvVars(t *testing.T) {
-	const readWriteDSN = "postgresql://readwrite@postgres/atepg"
-	const ownerDSN = "postgresql://owner@postgres/atepg"
-
-	got := buildAPIServerEnvVars(readWriteDSN, ownerDSN, "public")
-
-	want := []string{"ATE_API_POSTGRES_OWNER_CONNECTION_STRING", "ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING", "ATE_API_POSTGRES_SCHEMA"}
-	if keys := slices.Sorted(maps.Keys(got)); !slices.Equal(keys, want) {
-		t.Errorf("keys = %v, want %v", keys, want)
-	}
-	if got["ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"] != readWriteDSN || got["ATE_API_POSTGRES_OWNER_CONNECTION_STRING"] != ownerDSN {
-		t.Errorf("unexpected PostgreSQL connections: %v", got)
-	}
-	if got["ATE_API_POSTGRES_SCHEMA"] != "public" {
-		t.Errorf("ATE_API_POSTGRES_SCHEMA = %q, want %q", got["ATE_API_POSTGRES_SCHEMA"], "public")
-	}
-}
-
 // The expected strings here are what the shell installer's
 // create_api_authentication_config produced, so a regression shows up as a
 // diff rather than as an apiserver that silently trusts the wrong issuer.

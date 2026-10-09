@@ -249,27 +249,68 @@ func TestLoadPostgresConnectionStrings(t *testing.T) {
 		t.Errorf("PostgreSQL connections = %q, %q, want %q for both", cfg.PostgresReadWriteConnectionString, cfg.PostgresOwnerConnectionString, dsn)
 	}
 
-	t.Setenv("ATE_API_POSTGRES_OWNER_CONNECTION_STRING", "owner-dsn")
+	t.Setenv("ATE_API_POSTGRES_OWNER_CONNECTION_STRING", "host=db user=owner")
 	cfg, err = Load(Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.PostgresReadWriteConnectionString != dsn || cfg.PostgresOwnerConnectionString != "owner-dsn" {
-		t.Errorf("separate PostgreSQL connections = %q, %q, want %q and owner-dsn", cfg.PostgresReadWriteConnectionString, cfg.PostgresOwnerConnectionString, dsn)
+	if cfg.PostgresReadWriteConnectionString != dsn || cfg.PostgresOwnerConnectionString != "host=db user=owner" {
+		t.Errorf("separate PostgreSQL connections = %q, %q, want %q and the owner DSN", cfg.PostgresReadWriteConnectionString, cfg.PostgresOwnerConnectionString, dsn)
+	}
+}
+
+// The DSNs are stamped onto ate-api-server as flags, so a password has to
+// come from a passfile. Load rejects one inline, from either channel, without
+// echoing it.
+func TestLoadRejectsInlinePostgresSecrets(t *testing.T) {
+	for _, tc := range []struct {
+		name, env, dsn, want string
+	}{
+		{"read-write password", "ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING", "postgresql://someone:s3cret@db/atepg", `"password"`},
+		{"owner password", "ATE_API_POSTGRES_OWNER_CONNECTION_STRING", "host=db user=owner password=s3cret", `"password"`},
+		{"key passphrase", "ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING", "host=db sslkey=/k.pem sslpassword=s3cret", `"sslpassword"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			loadEnv(t)
+			t.Setenv(tc.env, tc.dsn)
+			_, err := Load(Options{})
+			if err == nil || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), tc.env) {
+				t.Fatalf("Load() error = %v, want %s rejected naming %s", err, tc.want, tc.env)
+			}
+			if strings.Contains(err.Error(), "s3cret") {
+				t.Errorf("Load() error %q echoes the secret", err)
+			}
+		})
+	}
+
+	loadEnv(t)
+	t.Setenv("ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING", "postgresql://someone@db/atepg?passfile=/run/pg/pgpass")
+	if _, err := Load(Options{}); err != nil {
+		t.Errorf("Load() with a passfile error = %v, want nil", err)
+	}
+}
+
+func TestLoadRejectsInvalidPoolMaxConns(t *testing.T) {
+	for _, v := range []string{"0", "-1", "many"} {
+		loadEnv(t)
+		t.Setenv("ATE_API_POSTGRES_POOL_MAX_CONNS", v)
+		if _, err := Load(Options{}); err == nil || !strings.Contains(err.Error(), "positive integer") {
+			t.Errorf("Load() with pool size %q error = %v, want a positive-integer error", v, err)
+		}
 	}
 }
 
 func TestLoadPostgresIdentityOverrides(t *testing.T) {
 	loadEnv(t)
-	t.Setenv("ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING", "readwrite-dsn")
-	t.Setenv("ATE_API_POSTGRES_OWNER_CONNECTION_STRING", "owner-dsn")
+	t.Setenv("ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING", "host=db user=readwrite")
+	t.Setenv("ATE_API_POSTGRES_OWNER_CONNECTION_STRING", "host=db user=owner")
 	t.Setenv("ATE_API_POSTGRES_READ_WRITE_ROLE", "tenant_readwrite")
 	t.Setenv("ATE_API_POSTGRES_OWNER_ROLE", "tenant_owner")
 	cfg, err := Load(Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.PostgresReadWriteConnectionString != "readwrite-dsn" || cfg.PostgresOwnerConnectionString != "owner-dsn" || cfg.PostgresReadWriteRole != "tenant_readwrite" || cfg.PostgresOwnerRole != "tenant_owner" {
+	if cfg.PostgresReadWriteConnectionString != "host=db user=readwrite" || cfg.PostgresOwnerConnectionString != "host=db user=owner" || cfg.PostgresReadWriteRole != "tenant_readwrite" || cfg.PostgresOwnerRole != "tenant_owner" {
 		t.Fatalf("PostgreSQL identity overrides not loaded: %+v", cfg)
 	}
 	if !cfg.PostgresReadWriteRoleSet || !cfg.PostgresOwnerRoleSet {

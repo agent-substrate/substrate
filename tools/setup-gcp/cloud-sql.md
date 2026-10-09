@@ -130,10 +130,11 @@ What this does differently from a plain install:
 - Skips the bundled PostgreSQL StatefulSet (a configured Cloud SQL instance
   counts as an external database); the install logs the skip and the database
   it deferred to.
-- Writes the proxy's configuration (`CSQL_PROXY_*`) into the
+- Records the proxy's configuration (`CSQL_PROXY_*`) in the
   `ate-api-server-envvars` ConfigMap and synthesizes a passwordless DSN
-  (`user=<gsa-user> host=127.0.0.1 ... sslmode=disable`) into the
-  `ate-api-server-secret-envvars` Secret for both database connection pools.
+  (`user=<gsa-user> host=127.0.0.1 ... sslmode=disable`), which it passes to
+  ateapi as the `--postgres-*-connection-string` flags for both database
+  connection pools.
 - Annotates the `ate-api-server` KSA with the GSA and patches the
   `cloud-sql-proxy` native sidecar (initContainer with
   `restartPolicy: Always`; requires Kubernetes 1.29+) into the deployment.
@@ -162,9 +163,9 @@ Optional environment variables:
   (default: `max(4, NumCPU)`). It does not affect the owner and watch pools, which are
   capped at 2 and 3 connections.
 
-Changing the installed configuration rolls ate-api-server: the install script
-stamps a hash of the rendered configuration into the pod template
-(`ate.dev/env-hash`).
+Changing the installed configuration rolls ate-api-server: the settings are
+written into the pod template, as ateapi flags and as the proxy container's
+environment.
 
 ## 4. Verify
 
@@ -174,9 +175,9 @@ kubectl logs deployment/ate-api-server -n ate-system -c cloud-sql-proxy | head
 # expect: "The proxy has started successfully and is ready for new connections"
 kubectl logs deployment/ate-api-server -n ate-system | head -5
 # expect the startup flag dump and no store connection errors
-kubectl get secret ate-api-server-secret-envvars -n ate-system \
-  -o jsonpath='{.data.ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING}' | base64 -d
-# expect: no password in the DSN
+kubectl get deployment ate-api-server -n ate-system \
+  -o jsonpath='{.spec.template.spec.containers[?(@.name=="ate-api-server")].args}'
+# expect: --postgres-read-write-connection-string=user=<gsa-user> host=127.0.0.1 ...
 ```
 
 Common failure modes:

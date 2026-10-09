@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -167,12 +168,17 @@ func resetPostgresSetup(t *testing.T, admin *pgxpool.Pool, config postgressetup.
 
 func setupRolePool(t *testing.T, user, password, role, schema string) *pgxpool.Pool {
 	t.Helper()
-	cfg, err := poolConfig(containerDSN, role)
+	// The login goes in the DSN: poolConfig re-reads credentials from it for
+	// every connection, so a password set on the parsed config would not last.
+	dsn, err := url.Parse(containerDSN)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg.ConnConfig.User = user
-	cfg.ConnConfig.Password = password
+	dsn.User = url.UserPassword(user, password)
+	cfg, err := poolConfig(dsn.String(), role)
+	if err != nil {
+		t.Fatal(err)
+	}
 	cfg.ConnConfig.RuntimeParams["search_path"] = pgx.Identifier{schema}.Sanitize()
 	pool, err := pgxpool.NewWithConfig(t.Context(), cfg)
 	if err != nil {

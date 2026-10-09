@@ -83,11 +83,19 @@ Apply these grants before the first `ateapi` startup. The owner connection creat
 
 Set `ATE_API_POSTGRES_OWNER_ROLE` and `ATE_API_POSTGRES_READ_WRITE_ROLE` to the roles you created, and leave role settings out of the connection strings: `ateapi` runs `SET ROLE` after connecting.
 
-User credentials are passed as connection strings through `ATE_API_POSTGRES_OWNER_CONNECTION_STRING` and `ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING`. When running `ateapi` directly, pass the DSNs as flags or use `@env` flags to read these environment variables; the installer manifest already uses `@env`.
+The connection strings are set through `ATE_API_POSTGRES_OWNER_CONNECTION_STRING` and `ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING` (or `--ateapi-postgres-owner-connection-string` and `--ateapi-postgres-read-write-connection-string`). `ate-setup` writes them, along with the roles, schema, and pool size, onto the `ate-api-server` Deployment as `ateapi` flags (`--postgres-owner-connection-string`, `--postgres-read-write-connection-string`, and so on), so changing any of them and redeploying rolls the API server.
+
+Because the connection strings end up in the pod spec, they must not contain secrets. Both `ate-setup` and `ateapi` reject a connection string that sets a password (`password=...`, or `user:password@` in a URI) or a client key passphrase (`sslpassword`); see the [libpq parameter keywords](https://www.postgresql.org/docs/current/libpq-connect.html#LIBPQ-PARAMKEYWORDS). Supply a password through a [password file](https://www.postgresql.org/docs/current/libpq-pgpass.html) named by the `passfile` parameter instead:
+
+```sh
+kubectl -n ate-system create secret generic ate-api-server-pgpass \
+  --from-literal=pgpass='db.example.internal:5432:atepg:substrate_app:<password>'
+export ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING='postgresql://substrate_app@db.example.internal:5432/atepg?sslmode=verify-full&passfile=/run/pgpass/pgpass'
+```
+
+Mount the Secret into the `ate-api-server` container at `/run/pgpass`, for example with `kubectl patch`. `ate-setup` applies the Deployment server-side, so a later redeploy leaves alone the volume and mount it does not manage. `ateapi` re-reads the passfile, and the certificate files the DSN names, every time it opens a connection. After you update the Secret and the kubelet refreshes the mounted file, new connections use the new password and existing connections stay open. A `subPath` mount never refreshes, so mount the whole volume.
 
 `ATE_API_POSTGRES_POOL_MAX_CONNS` (or `--postgres-pool-max-conns` when running `ateapi` directly) sets the read/write pool limit after the connection string is loaded. When unset, a `pool_max_conns` value in the DSN or the pgxpool default applies. This setting does not affect the owner or watch pools; they are capped at 2 and 3 connections, respectively.
-
-`ateapi` uses the same `@env` flag pattern for role names and schema.
 
 ### CloudSQL Configuration
 CloudSQL setup information can be found in the dedicated guide [here](../tools/setup-gcp/cloud-sql.md).

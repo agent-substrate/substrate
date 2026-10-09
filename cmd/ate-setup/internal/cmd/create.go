@@ -67,15 +67,8 @@ func init() {
 		},
 		{
 			use:   "api-server-env-vars",
-			short: "Create the ate-api-server environment ConfigMap and Secret",
-			run: func(e *steps.Env, ctx context.Context) error {
-				// The full deploy needs no guard: it updates the Deployment in
-				// the same run.
-				if err := e.EnsureEnvVarsSafeStandalone(ctx); err != nil {
-					return err
-				}
-				return e.CreateAPIServerEnvVars(ctx)
-			},
+			short: "Create the Cloud SQL proxy ConfigMap and the external PostgreSQL server CA Secret",
+			run:   (*steps.Env).CreateAPIServerEnvVars,
 		},
 		{
 			use:   "api-authentication-config",
