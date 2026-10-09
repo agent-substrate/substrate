@@ -556,7 +556,7 @@ func TestSweperfPollJobCompletion(t *testing.T) {
 	})
 }
 
-func TestSweperfUserLifecycleAndReset(t *testing.T) {
+func TestSweperfUserIsDone(t *testing.T) {
 	u := &sweperfUser{
 		chunks:     []chunk{{0, 5}, {5, 10}},
 		cycleIndex: 0,
@@ -569,11 +569,6 @@ func TestSweperfUserLifecycleAndReset(t *testing.T) {
 	u.cycleIndex = 2
 	if !u.isDone() {
 		t.Errorf("isDone = false, want true")
-	}
-
-	u.resetCycles()
-	if u.cycleIndex != 0 || u.isDone() {
-		t.Errorf("resetCycles failed: cycleIndex = %d, isDone = %v", u.cycleIndex, u.isDone())
 	}
 }
 
@@ -688,16 +683,6 @@ func TestNoopFirstResumeNotRecorded(t *testing.T) {
 	for _, name := range resumeRows {
 		if got := recordedSince(t, before, name, "success"); got.count != 1 {
 			t.Errorf("cycle 2: %s recorded %d samples, want 1", name, got.count)
-		}
-	}
-
-	// The next pass starts from a real suspend, so its first resume counts.
-	u.resetCycles()
-	before = readStats(t)
-	u.step(context.Background())
-	for _, name := range resumeRows {
-		if got := recordedSince(t, before, name, "success"); got.count != 1 {
-			t.Errorf("next pass cycle 1: %s recorded %d samples, want 1", name, got.count)
 		}
 	}
 }
@@ -903,9 +888,228 @@ func TestTaskCELOnlyOnFullTrajectory(t *testing.T) {
 	if gotWall := recordedSince(t, before, "TaskWallClock", "success"); gotWall.count != 1 {
 		t.Errorf("TaskWallClock recorded %d samples, want 1", gotWall.count)
 	}
-	if u.loopCEL != 0 || u.loopWall != 0 || u.loopFailed || u.cycleIndex != 0 {
-		t.Errorf("after the task loopCEL=%v loopWall=%v loopFailed=%v cycleIndex=%d, want all rearmed",
-			u.loopCEL, u.loopWall, u.loopFailed, u.cycleIndex)
+	if u.loopCEL != 0 || u.loopWall != 0 || u.loopFailed {
+		t.Errorf("after the task loopCEL=%v loopWall=%v loopFailed=%v, want all rearmed",
+			u.loopCEL, u.loopWall, u.loopFailed)
+	}
+}
+
+func TestFinishedTrajectoryDeletesActorAndStartsFresh(t *testing.T) {
+	cfg, _, fakeCtrl := newTestConfig(t, asyncJobHandler())
+	r := &sweperfRuntime{cfg: cfg}
+	gid := boomerutil.GoroutineID()
+	u := &sweperfUser{
+		cfg:       cfg,
+		actorName: "act-1",
+		userClass: sweperfUserClass,
+		chunks:    []chunk{{0, 5}},
+	}
+	r.users.Store(gid, u)
+
+	// The single cycle finishes the trajectory, so the actor must go.
+	r.iterate()
+	if !u.cleanedUp.Load() {
+		t.Errorf("cleanedUp = false after the trajectory finished; the actor was not deleted")
+	}
+	// The cycle's own suspend is followed straight by the delete; no second suspend.
+	if got, want := fakeCtrl.recordedCalls(), []string{"ResumeActor", "SuspendActor", "DeleteActor"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("recordedCalls = %v, want %v", got, want)
+	}
+	if _, ok := r.users.Load(gid); ok {
+		t.Fatalf("finished session still bound to its goroutine; the next iterate would reuse it")
+	}
+
+	// The next iterate creates a brand-new actor for the next trajectory. The
+	// worker already made the atespace, so only CreateActor is sent.
+	r.atespaceReady.Store(true)
+	before := len(fakeCtrl.recordedCalls())
+	beforeStats := readStats(t)
+	r.iterate()
+	val, ok := r.users.Load(gid)
+	if !ok {
+		t.Fatalf("no session bound after the next iterate; want a fresh actor")
+	}
+	next := val.(*sweperfUser)
+	if next == u || next.actorName == u.actorName {
+		t.Errorf("next session reuses actor %q, want a new one", u.actorName)
+	}
+	newCalls := fakeCtrl.recordedCalls()[before:]
+	if len(newCalls) == 0 || newCalls[0] != "CreateActor" {
+		t.Errorf("next iterate calls = %v, want to start with CreateActor and no CreateAtespace", newCalls)
+	}
+	if got := recordedSince(t, beforeStats, "ActorStartup", "success"); got.count != 1 {
+		t.Errorf("ActorStartup recorded %d samples for the new actor, want 1", got.count)
+	}
+	r.shutdown(context.Background())
+}
+
+func TestAtespaceCreatedOncePerWorker(t *testing.T) {
+	cfg, _, fakeCtrl := newTestConfig(t, asyncJobHandler())
+	r := &sweperfRuntime{cfg: cfg}
+
+	for i := 0; i < 3; i++ {
+		u, err := r.startUser(context.Background())
+		if err != nil {
+			t.Fatalf("startUser %d: %v", i, err)
+		}
+		u.suspendAndDelete(context.Background())
+	}
+
+	n := 0
+	for _, c := range fakeCtrl.recordedCalls() {
+		if c == "CreateAtespace" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("CreateAtespace sent %d times across 3 sessions, want 1", n)
+	}
+}
+
+func TestAtespaceRetriedAfterFailure(t *testing.T) {
+	cfg, _, fakeCtrl := newTestConfig(t, asyncJobHandler())
+	fakeCtrl.createSpaceErr = errors.New("unavailable")
+	r := &sweperfRuntime{cfg: cfg}
+
+	if _, err := r.startUser(context.Background()); err == nil {
+		t.Fatalf("startUser succeeded despite CreateAtespace failing")
+	}
+	fakeCtrl.mu.Lock()
+	fakeCtrl.createSpaceErr = nil
+	fakeCtrl.mu.Unlock()
+
+	u, err := r.startUser(context.Background())
+	if err != nil {
+		t.Fatalf("startUser after recovery: %v", err)
+	}
+	defer u.suspendAndDelete(context.Background())
+
+	n := 0
+	for _, c := range fakeCtrl.recordedCalls() {
+		if c == "CreateAtespace" {
+			n++
+		}
+	}
+	if n != 2 {
+		t.Errorf("CreateAtespace sent %d times, want 2 (failed attempt, then retry)", n)
+	}
+}
+
+func TestActorStartupFailureRecorded(t *testing.T) {
+	t.Run("liveness failure is recorded", func(t *testing.T) {
+		handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusServiceUnavailable)
+		})
+		cfg, _, _ := newTestConfig(t, handler)
+		r := &sweperfRuntime{cfg: cfg}
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+
+		before := readStats(t)
+		if _, err := r.startUser(ctx); err == nil {
+			t.Fatalf("startUser succeeded despite the sandbox never coming up")
+		}
+		if got := recordedSince(t, before, "ActorStartup", "failure"); got.count != 1 {
+			t.Errorf("ActorStartup recorded %d failures, want 1", got.count)
+		}
+		if got := recordedSince(t, before, "ActorStartup", "success"); got.count != 0 {
+			t.Errorf("ActorStartup recorded %d successes on a failed start, want 0", got.count)
+		}
+	})
+
+	t.Run("CreateActor failure is recorded only on its own row", func(t *testing.T) {
+		cfg, _, fakeCtrl := newTestConfig(t, asyncJobHandler())
+		fakeCtrl.createActorErr = errors.New("quota exceeded")
+		r := &sweperfRuntime{cfg: cfg}
+
+		before := readStats(t)
+		if _, err := r.startUser(context.Background()); err == nil {
+			t.Fatalf("startUser succeeded despite CreateActor failing")
+		}
+		if got := recordedSince(t, before, "CreateActor", "failure"); got.count != 1 {
+			t.Errorf("CreateActor recorded %d failures, want 1", got.count)
+		}
+		if got := recordedSince(t, before, "ActorStartup", "failure"); got.count != 0 {
+			t.Errorf("ActorStartup recorded %d failures for a failed CreateActor, want 0", got.count)
+		}
+	})
+}
+
+func TestRetireDeleteFailureKeptForShutdown(t *testing.T) {
+	cfg, _, fakeCtrl := newTestConfig(t, asyncJobHandler())
+	fakeCtrl.deleteErr = errors.New("unavailable")
+	r := &sweperfRuntime{cfg: cfg}
+	u := &sweperfUser{cfg: cfg, actorName: "act-1", userClass: sweperfUserClass, chunks: []chunk{{0, 5}}}
+	r.users.Store(boomerutil.GoroutineID(), u)
+
+	r.iterate()
+	if _, ok := r.orphans.Load("act-1"); !ok {
+		t.Fatalf("actor whose delete failed was dropped; it would leak past shutdown")
+	}
+
+	fakeCtrl.mu.Lock()
+	fakeCtrl.deleteErr = nil
+	fakeCtrl.mu.Unlock()
+	before := len(fakeCtrl.recordedCalls())
+	r.shutdown(context.Background())
+
+	if got, want := fakeCtrl.recordedCalls()[before:], []string{"DeleteActor"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("shutdown calls = %v, want %v", got, want)
+	}
+	if _, ok := r.orphans.Load("act-1"); ok {
+		t.Errorf("orphan still tracked after a successful delete at shutdown")
+	}
+}
+
+func TestRetireResuspendsAfterFailedSuspend(t *testing.T) {
+	cfg, _, fakeCtrl := newTestConfig(t, asyncJobHandler())
+	fakeCtrl.suspendErr = errors.New("suspend failed")
+	r := &sweperfRuntime{cfg: cfg}
+	u := &sweperfUser{cfg: cfg, actorName: "act-1", userClass: sweperfUserClass, chunks: []chunk{{0, 5}}}
+	r.users.Store(boomerutil.GoroutineID(), u)
+
+	r.iterate()
+
+	// The cycle's suspend failed, so the actor may be awake: suspend again before deleting.
+	want := []string{"ResumeActor", "SuspendActor", "SuspendActor", "DeleteActor"}
+	if got := fakeCtrl.recordedCalls(); !reflect.DeepEqual(got, want) {
+		t.Errorf("recordedCalls = %v, want %v", got, want)
+	}
+}
+
+func TestShutdownAndRetireDeleteOnce(t *testing.T) {
+	cfg, _, fakeCtrl := newTestConfig(t, asyncJobHandler())
+	r := &sweperfRuntime{cfg: cfg}
+	gid := boomerutil.GoroutineID()
+	u := &sweperfUser{cfg: cfg, actorName: "act-1", userClass: sweperfUserClass, chunks: []chunk{{0, 5}}}
+	r.users.Store(gid, u)
+
+	// Shutdown claims the actor first; a late retire must not delete it again.
+	r.shutdown(context.Background())
+	r.retireUser(context.Background(), gid, u)
+
+	n := 0
+	for _, c := range fakeCtrl.recordedCalls() {
+		if c == "DeleteActor" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("DeleteActor sent %d times, want 1", n)
+	}
+}
+
+func TestCreateActorFailedPreconditionResetsAtespace(t *testing.T) {
+	cfg, _, fakeCtrl := newTestConfig(t, asyncJobHandler())
+	fakeCtrl.createActorErr = status.Error(codes.FailedPrecondition, "atespace not found")
+	r := &sweperfRuntime{cfg: cfg}
+	r.atespaceReady.Store(true)
+
+	if _, err := r.startUser(context.Background()); err == nil {
+		t.Fatalf("startUser succeeded despite CreateActor failing")
+	}
+	if r.atespaceReady.Load() {
+		t.Errorf("atespaceReady still set after CreateActor returned FailedPrecondition; the atespace would never be re-created")
 	}
 }
 
@@ -989,5 +1193,148 @@ func TestStepSyncExitSkipsResumeToFirstExec(t *testing.T) {
 	}
 	if !u.loopFailed {
 		t.Errorf("loopFailed = false after the command exited non-zero")
+	}
+}
+
+// usersGauge reads the locust_users gauge for the sweperf user class. The
+// registry is global to the test binary, so tests using it must not run in
+// parallel.
+func usersGauge(t *testing.T) float64 {
+	t.Helper()
+	families, err := prometheus.DefaultGatherer.Gather()
+	if err != nil {
+		t.Fatalf("gather metrics: %v", err)
+	}
+	for _, mf := range families {
+		if mf.GetName() != "locust_users" {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			for _, lp := range m.GetLabel() {
+				if lp.GetName() == "user_class" && lp.GetValue() == sweperfUserClass {
+					return m.GetGauge().GetValue()
+				}
+			}
+		}
+	}
+	return 0
+}
+
+func TestPollLivenessFailureDecrementsUsersOnce(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "server not ready", http.StatusInternalServerError)
+	})
+	cfg, _, _ := newTestConfig(t, handler)
+	r := &sweperfRuntime{cfg: cfg}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	before := usersGauge(t)
+	if _, err := r.startUser(ctx); err == nil {
+		t.Fatalf("startUser expected error on liveness failure, got nil")
+	}
+	if got := usersGauge(t); got != before {
+		t.Errorf("locust_users = %v after a failed start, want %v unchanged", got, before)
+	}
+}
+
+func TestNoNewActorAfterShutdown(t *testing.T) {
+	cfg, _, fakeCtrl := newTestConfig(t, asyncJobHandler())
+	r := &sweperfRuntime{cfg: cfg}
+
+	r.shutdown(context.Background())
+	r.iterate()
+
+	if calls := fakeCtrl.recordedCalls(); len(calls) != 0 {
+		t.Errorf("iterate after shutdown sent %v, want no calls", calls)
+	}
+	if _, ok := r.users.Load(boomerutil.GoroutineID()); ok {
+		t.Errorf("iterate after shutdown bound a session")
+	}
+}
+
+func TestStopDuringStartupTearsActorDown(t *testing.T) {
+	var r *sweperfRuntime
+	handler := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		// Shutdown begins while the actor is still starting.
+		r.stopping.Store(true)
+		json.NewEncoder(w).Encode(statusResponse{Status: "up"})
+	})
+	cfg, _, fakeCtrl := newTestConfig(t, handler)
+	r = &sweperfRuntime{cfg: cfg}
+
+	before := usersGauge(t)
+	r.iterate()
+
+	want := []string{"CreateAtespace", "CreateActor", "SuspendActor", "DeleteActor"}
+	if got := fakeCtrl.recordedCalls(); !reflect.DeepEqual(got, want) {
+		t.Errorf("recordedCalls = %v, want %v", got, want)
+	}
+	if got := usersGauge(t); got != before {
+		t.Errorf("locust_users = %v after self-teardown, want %v unchanged", got, before)
+	}
+}
+
+func TestShutdownWaitsForStartingActor(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	handler := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		once.Do(func() { close(entered) })
+		<-release
+		json.NewEncoder(w).Encode(statusResponse{Status: "up"})
+	})
+	cfg, _, fakeCtrl := newTestConfig(t, handler)
+	unblock := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(unblock) // runs before the server closes, should the test fail early
+	r := &sweperfRuntime{cfg: cfg}
+
+	go r.iterate()
+	<-entered
+
+	done := make(chan struct{})
+	go func() {
+		r.shutdown(context.Background())
+		close(done)
+	}()
+	select {
+	case <-done:
+		t.Fatalf("shutdown returned while an actor was still starting; the process would exit and leak it")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	unblock()
+	<-done
+	calls := fakeCtrl.recordedCalls()
+	if n := len(calls); n < 2 || calls[n-2] != "SuspendActor" || calls[n-1] != "DeleteActor" {
+		t.Errorf("recordedCalls = %v, want the starting actor suspended and deleted before shutdown returns", calls)
+	}
+}
+
+func TestSuspendAndDeleteClaimsTeardownOnce(t *testing.T) {
+	cfg, _, fakeCtrl := newTestConfig(t, http.HandlerFunc(nil))
+	u := &sweperfUser{cfg: cfg, actorName: "act", userClass: sweperfUserClass}
+
+	// Shutdown and a goroutine that published its session late both try to
+	// tear the actor down; only one may.
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			u.suspendAndDelete(context.Background())
+		}()
+	}
+	wg.Wait()
+
+	n := 0
+	for _, c := range fakeCtrl.recordedCalls() {
+		if c == "DeleteActor" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("DeleteActor sent %d times, want 1", n)
 	}
 }

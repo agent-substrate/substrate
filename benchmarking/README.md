@@ -128,7 +128,9 @@ and state restoration latency when a durable directory is attached to the actor.
 
 The sweperf benchmark replays a recorded SWE-Perf task inside an actor, suspending and
 resuming between cycles to measure the cost of actor state transitions under a realistic
-agent workload. One task is four cycles by default.
+agent workload. One task is four cycles by default. Each task runs on a fresh actor: once
+the last cycle finishes, the actor is deleted and the user creates a new one for the next
+task. The atespace is created once per worker.
 
 #### Sweperf Reported Metrics
 
@@ -138,7 +140,11 @@ ran inside the sandbox, as reported by `replay.py`.
 * `ResumeToFirstExec`: Resume RPC start until the sandbox accepts the cycle's `/execute`.
 * `CycleCEL`: CEL for one cycle.
 * `TaskCEL`: CEL summed over one task.
-* `TaskWallClock`: Client wall clock for one task, excluding inter-cycle think time.
+* `TaskWallClock`: Client wall clock for one task, excluding inter-cycle think time and actor
+  startup.
+* `ActorStartup`: Client time from `CreateActor` until the new actor's sandbox answers
+  `/status`, once per task. Liveness is polled every 2s, so this row is coarse. A failed
+  `CreateActor` is counted on its own row only; failures here are actors that never came up.
 * `CreateAtespace`, `CreateActor`, `ResumeActor`, `SuspendActor`, `DeleteActor`: Server-side
   elapsed time for each control-plane RPC from the response trailer, or client time without one.
 * `<rpc>_rtt`: Client round trip for the RPC of the same name, recorded only when the trailer is
@@ -147,9 +153,9 @@ ran inside the sandbox, as reported by `replay.py`.
   the job finishes. Polled every `--sweperf-poll-interval-ms` (default 100), so this row sits
   up to one interval above the job's actual end.
 
-The liveness check at session start already has the actor running, so the first cycle's
-resume is a no-op. Its successful `ResumeActor`, `ResumeActor_rtt` and `ResumeToFirstExec`
-samples are not recorded; failures still are.
+The liveness check on a new actor already has it running, so the first cycle of every task
+runs on a freshly started actor and its resume is a no-op. Its successful `ResumeActor`,
+`ResumeActor_rtt` and `ResumeToFirstExec` samples are not recorded; failures still are.
 
 ### Agent-Session Benchmark
 
