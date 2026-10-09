@@ -89,6 +89,7 @@ type Client struct {
 	dialContext    DialFunc
 
 	mu      sync.Mutex
+	closed  bool
 	h2Conns []*h2ClientConn
 	dialing *dialCall
 }
@@ -136,7 +137,28 @@ func NewClient(cfg ClientConfig, opts ...ClientOption) (*Client, error) {
 	return client, nil
 }
 
-// DialContext opens a CONNECT tunnel to destination. destination becomes the
+// Close any pooled HTTP/2 connections to the egress gateway and cancels
+// any in-flight connection dial.
+func (c *Client) Close() error {
+	c.mu.Lock()
+	c.closed = true
+	conns := c.h2Conns
+	c.h2Conns = nil
+	call := c.dialing
+	c.dialing = nil
+	c.mu.Unlock()
+
+	if call != nil {
+		call.cancel()
+	}
+	var err error
+	for _, h2Conn := range conns {
+		err = errors.Join(err, h2Conn.cc.Close())
+	}
+	return err
+}
+
+// Open a CONNECT tunnel to destination. destination becomes the
 // request authority, so it must include an explicit port.
 func (c *Client) DialContext(ctx context.Context, destination string) (net.Conn, error) {
 	if err := validateDestination(destination); err != nil {
@@ -177,6 +199,10 @@ func (c *Client) acquireConn(ctx context.Context) (*h2ClientConn, bool, *tls.Con
 
 		// First check if there is an existing H/2 connection with available stream capacity.
 		c.mu.Lock()
+		if c.closed {
+			c.mu.Unlock()
+			return nil, false, nil, fmt.Errorf("atunnel: connecting to egress gateway: %w", net.ErrClosed)
+		}
 		keep := c.h2Conns[:0]
 		var reserved *h2ClientConn
 		var wasVerified bool
@@ -307,7 +333,12 @@ func (c *Client) runDial(dialCtx context.Context, call *dialCall) {
 	if c.dialing == call {
 		c.dialing = nil
 	}
-	if call.waiters == 0 {
+	if c.closed || call.waiters == 0 {
+		if c.closed && err == nil {
+			call.err = fmt.Errorf("atunnel: connecting to egress gateway: %w", net.ErrClosed)
+		} else {
+			call.err = err
+		}
 		call.mu.Unlock()
 		c.mu.Unlock()
 		if h2Conn != nil {

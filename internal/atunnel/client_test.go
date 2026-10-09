@@ -589,6 +589,43 @@ func TestClientDialContextValidatesInput(t *testing.T) {
 	}
 }
 
+func TestClientClose(t *testing.T) {
+	ca := newTestCA(t)
+	gatewayAddr, _ := serveTestH2ConnectGateway(t, ca, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		_, _ = io.Copy(io.Discard, r.Body)
+	}))
+
+	connClosed := make(chan struct{})
+	client := newTestClient(t, ca, WithDialer(func(ctx context.Context, network, _ string) (net.Conn, error) {
+		c, err := (&net.Dialer{}).DialContext(ctx, network, gatewayAddr)
+		if err != nil {
+			return nil, err
+		}
+		return &closeNotifyingConn{Conn: c, closed: connClosed}, nil
+	}))
+
+	stream, err := client.DialContext(context.Background(), "192.0.2.10:443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := client.Close(); err != nil {
+		t.Fatalf("Close() = %v", err)
+	}
+	receiveWithin(t, connClosed, "idle HTTP/2 connection closed on Client.Close")
+
+	if _, err := client.DialContext(context.Background(), "192.0.2.10:443"); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("DialContext after Close = %v, want net.ErrClosed", err)
+	}
+}
+
 // dialFixedAddress ignores the requested address and connects to address, so
 // tests can point a client at a listener on an ephemeral port.
 func dialFixedAddress(address string) DialFunc {
