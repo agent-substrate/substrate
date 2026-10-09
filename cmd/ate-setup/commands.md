@@ -43,6 +43,19 @@ a pre-scan pass, so they may appear anywhere on its command line.
 Both have an environment equivalent, read when the flag is absent:
 `ATE_IMAGE_REPO` and `ATE_IMAGE_TAG`.
 
+Kind deployments check that Docker is available and the resolved kubeconfig
+context exists before doing any install work. If the context is missing, the
+error explains how to export kubeconfig for an existing cluster or create the
+cluster and local registry with `hack/create-kind-cluster.sh`. That script
+replaces an existing cluster with the same name.
+
+Deploy the control plane before deploying demos or benchmarks. These commands
+check for `deployment/ate-controller` in the configured system namespace before
+creating workload resources. An existing Deployment passes this check; normal
+rollout waits still diagnose workloads that cannot become ready. The shell shim
+runs actions in argument order, so put `--deploy-ate-system` before demo or
+benchmark deployment flags when combining them on one command line.
+
 ## Installing a release
 
 Without `--image-repo`, `ate-setup` builds every image from the checkout with
