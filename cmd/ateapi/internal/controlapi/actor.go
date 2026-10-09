@@ -148,7 +148,14 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 	}
 
 	// Save the data in the storage layer.
-	stored, err := s.store.CreateActor(ctx, outActor)
+	var policy *ateapipb.EgressPolicy
+	if initial := template.GetGoldenEgressPolicy(); initial != nil && atespace == resources.GoldenActorAtespace {
+		policy = &ateapipb.EgressPolicy{
+			Metadata: &ateapipb.ResourceMetadata{Atespace: atespace, Name: "default"},
+			Rules:    initial.GetRules(),
+		}
+	}
+	stored, err := s.store.CreateActor(ctx, outActor, policy)
 	if err != nil {
 		if errors.Is(err, store.ErrAlreadyExists) {
 			return nil, apierror.AlreadyExists("Actor %s already exists", name)
