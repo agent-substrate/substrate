@@ -145,9 +145,10 @@ func TestCheckpointPreservesApplicationExitCode(t *testing.T) {
 	s := &Atelet{
 		workerDialer:      newWorkerDialer(1),
 		imageCache:        newImageVolumeStore(t),
+		sandboxAssetCache: newTestAssetCache(t),
 		anonGCSClient:     fakeObjectStorage{data: runsc},
 		systemInfoVolumes: newSystemInfoVolumeRefresher(nil, nil),
-		snapshots:         snapshottracker.New(t.Context(), clock.RealClock{}),
+		snapshots:         snapshottracker.New(t.Context(), nil, clock.RealClock{}),
 	}
 	resp, err := s.Checkpoint(t.Context(), req)
 	if resp != nil || apierror.Code(err) != codes.FailedPrecondition {

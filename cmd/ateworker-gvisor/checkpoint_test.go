@@ -25,13 +25,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/actorlock"
-	"github.com/agent-substrate/substrate/internal/actorlog"
-	"github.com/agent-substrate/substrate/internal/apierror"
-	"github.com/agent-substrate/substrate/internal/ateomtunnel"
-	"github.com/agent-substrate/substrate/internal/atunnel"
-	"github.com/agent-substrate/substrate/internal/nodepath"
-	"github.com/agent-substrate/substrate/internal/proto/ateworkerpb"
+	"go.ate.dev/substrate/internal/actorlock"
+	"go.ate.dev/substrate/internal/actorlog"
+	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/atunnel/egress"
+	"go.ate.dev/substrate/internal/atunnel/ingress"
+	"go.ate.dev/substrate/internal/ateworker/tunnel"
+	"go.ate.dev/substrate/internal/nodepath"
+	"go.ate.dev/substrate/internal/proto/ateworkerpb"
 	"google.golang.org/grpc/codes"
 )
 
@@ -166,7 +167,7 @@ func TestCheckpointWorkloadResumeFailureAfterSave(t *testing.T) {
 func TestCheckpointWorkloadVolumesDoesNotRequireLiveApplications(t *testing.T) {
 	s, req, dir := checkpointFixture(t)
 	req.Fidelity = ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
-	req.Spec.Containers[0].DurableDirVolumeMounts = []*ateworkerpb.DurableDirVolumeMount{{VolumeName: "data", MountPath: "/data"}}
+	req.Spec.Containers[0].DurableDirVolumeMounts = []*ateworkerpb.VolumeMount{{Name: "data", MountPath: "/data"}}
 	writeCheckpointFixture(t, dir, "app.state", `{"id":"app","status":"stopped"}`)
 	resp, err := s.CheckpointWorkload(t.Context(), req)
 	if err != nil {
@@ -180,10 +181,13 @@ func TestCheckpointWorkloadVolumesDoesNotRequireLiveApplications(t *testing.T) {
 
 func checkpointFixture(t *testing.T) (*AteWorkerService, *ateworkerpb.CheckpointWorkloadRequest, string) {
 	t.Helper()
-	dir := t.TempDir()
-	previousStaticFilesDir := nodepath.StaticFilesDir
-	nodepath.StaticFilesDir = dir
-	t.Cleanup(func() { nodepath.StaticFilesDir = previousStaticFilesDir })
+	origActorsDir := nodepath.ActorsDir
+	nodepath.ActorsDir = t.TempDir()
+	t.Cleanup(func() { nodepath.ActorsDir = origActorsDir })
+	dir := nodepath.ActorSandboxAssetsDir("test-uid")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	writeCheckpointFixture(t, dir, "runsc", `#!/bin/sh
 set -eu
 dir=$(dirname "$0")
@@ -215,18 +219,19 @@ esac
 		RootDir: dir, OciBundleDir: filepath.Join(dir, "bundles"),
 		CheckpointDir: filepath.Join(dir, "checkpoint"), RestoreDir: filepath.Join(dir, "restore"),
 		DurableDirVolumeMountsDir: filepath.Join(dir, "durable"),
-		SystemInfoVolumeRootsDir:  filepath.Join(dir, "system-info"), VolumesDir: filepath.Join(dir, "volumes"),
+		SystemInfoVolumeRootsDir:  filepath.Join(dir, "system-info"), ExternalVolumeMountsDir: filepath.Join(dir, "volumes"),
+		SandboxAssetsDir:          dir,
 	}
 	s := &AteWorkerService{
 		locks: actorlock.New(), inFlight: actorlock.NewInFlight(),
 		actorLogger: actorlog.NewActorLogger(io.Discard, false),
-		tunnel:      &ateomtunnel.Tunnel{Ingress: &atunnel.Server{}, Egress: &atunnel.Egress{}},
+		tunnel:      &tunnel.Tunnel{Ingress: &ingress.Server{}, Egress: &egress.Proxy{}},
 		flags:       mustFlagStore(t),
 	}
 	req := &ateworkerpb.CheckpointWorkloadRequest{
 		ActorUid: "test-uid", ActorDirs: dirs, RunscPath: filepath.Join(dir, "runsc"),
 		Fidelity: ateworkerpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
-		Spec:  &ateworkerpb.WorkloadSpec{Containers: []*ateworkerpb.Container{{Name: "app"}, {Name: "sidecar"}}},
+		Spec:     &ateworkerpb.WorkloadSpec{Containers: []*ateworkerpb.Container{{Name: "app"}, {Name: "sidecar"}}},
 	}
 	return s, req, dir
 }
@@ -245,7 +250,9 @@ func assertCheckpointCommands(t *testing.T, dir string, checkpoint, resume bool)
 		t.Fatal(err)
 	}
 	calls := string(b)
-	if got := strings.Contains(calls, "checkpoint -image-path"); got != checkpoint {
+	// The leading newline pins the match to a command boundary: fscheckpoint
+	// lines must not count as memory checkpoints.
+	if got := strings.Contains(calls, "\ncheckpoint -image-path"); got != checkpoint {
 		t.Errorf("checkpoint called = %v, want %v; commands:\n%s", got, checkpoint, calls)
 	}
 	if got := strings.Contains(calls, "resume _pause"); got != resume {

@@ -23,10 +23,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/e2e"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/internal/e2e"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/api/v1alpha1"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -80,7 +80,7 @@ func TestGoldenApplications(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		goldenURI := tag.GetStatus().GetSnapshot().GetSnapshotUri()
+		goldenURI := tagSnapshotURI(tag)
 		if goldenURI == "" {
 			t.Fatal("published golden tag has no snapshot")
 		}
@@ -105,7 +105,7 @@ func TestGoldenApplications(t *testing.T) {
 					t.Errorf("cleanup actor %v: %v", ref, err)
 				}
 			})
-			if got := actor.GetStatus().GetExternalSnapshot().GetSnapshotUri(); got != goldenURI {
+			if got := durableSnapshotURI(actor.GetStatus()); got != goldenURI {
 				t.Fatalf("actor %s snapshot = %q, want golden %q", name, got, goldenURI)
 			}
 			if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, e2e.GetClients(), &ateapipb.ResumeActorRequest{Actor: ref}); err != nil {
@@ -138,7 +138,7 @@ func setup(t *testing.T) (*ateapipb.ActorTemplate, string) {
 	}
 	image := strings.TrimSpace(string(e2e.RunCmdOutput(t, []string{"KO_CONFIG_PATH=" + root},
 		filepath.Join(root, "hack/run-tool.sh"), "ko", "build", "--base-import-paths",
-		"github.com/agent-substrate/substrate/internal/e2e/fixtures/golden")))
+		"go.ate.dev/substrate/internal/e2e/fixtures/golden")))
 	clients := e2e.GetClients()
 	ctx := t.Context()
 	src := e2e.SubstrateCounterFixture()
@@ -152,17 +152,16 @@ func setup(t *testing.T) (*ateapipb.ActorTemplate, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if srcTemplate.GetSandboxConfig().GetSandboxClass() != ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR {
+	if srcTemplate.GetSandboxConfig().GetSandboxClass() != "gvisor" {
 		t.Fatal("golden regression requires a gVisor fixture")
 	}
 	ns := e2e.CreateNamespace(t).Name
 	labels := map[string]string{"golden-regression": ns}
+	poolSpec := wp.Spec.DeepCopy()
+	poolSpec.Replicas = 2
 	if _, err := clients.SubstrateK8s.ApiV1alpha1().WorkerPools(ns).Create(ctx, &v1alpha1.WorkerPool{
 		ObjectMeta: metav1.ObjectMeta{Name: "golden", Namespace: ns, Labels: labels},
-		Spec: v1alpha1.WorkerPoolSpec{
-			Replicas: 2, WorkerImage: wp.Spec.WorkerImage, SandboxClass: wp.Spec.SandboxClass,
-			Template: wp.Spec.Template.DeepCopy(),
-		},
+		Spec:       *poolSpec,
 	}, metav1.CreateOptions{}); err != nil {
 		t.Fatal(err)
 	}
@@ -184,8 +183,8 @@ func setup(t *testing.T) (*ateapipb.ActorTemplate, string) {
 		SandboxConfig:  srcTemplate.GetSandboxConfig(),
 		Resources:      srcTemplate.GetResources(),
 		SnapshotConfig: &ateapipb.SnapshotConfig{
-			StorageLocation: "gs://" + env["BUCKET_NAME"] + "/golden-regression/" + ns + "/",
-			OnCommit:        ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+			StorageLocation:   "gs://" + env["BUCKET_NAME"] + "/golden-regression/" + ns + "/",
+			PreferredFidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 		},
 	}, image
 }
@@ -194,8 +193,8 @@ func servingContainer(image, name string, port int32) *ateapipb.Container {
 	return &ateapipb.Container{
 		Name: name, Image: image,
 		Command: []string{"/ko-app/golden", fmt.Sprintf("--port=%d", port)},
-		WakeupProbe: &ateapipb.ContainerWakeupProbe{
-			HttpGet: &ateapipb.HTTPGetAction{Path: "/healthz", Port: port}, TimeoutSeconds: 60,
+		WakeupProbe: &ateapipb.WakeupProbe{
+			HttpGet: &ateapipb.HttpGetAction{Path: "/healthz", Port: port}, TimeoutSeconds: 60,
 		},
 	}
 }

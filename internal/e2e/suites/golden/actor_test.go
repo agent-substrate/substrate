@@ -24,15 +24,44 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/atenet"
-	"github.com/agent-substrate/substrate/internal/e2e"
-	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.ate.dev/substrate/internal/atenet"
+	"go.ate.dev/substrate/internal/e2e"
+	"go.ate.dev/substrate/internal/resources"
+	"go.ate.dev/substrate/pkg/proto/ateapipb"
 )
 
 type applicationState struct {
 	BootID  string `json:"bootID"`
 	Counter int64  `json:"counter"`
+}
+
+// durableSnapshot returns the highest-generation completed durable snapshot in
+// status, mirroring the demo suite's helper.
+func durableSnapshot(status *ateapipb.ActorStatus) *ateapipb.Snapshot {
+	var best *ateapipb.Snapshot
+	for _, snap := range status.GetSnapshots() {
+		st := snap.GetDurableSnapshot()
+		if st.GetStatus() == ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED &&
+			st.GetObject().GetSnapshotUri() != "" {
+			if best == nil || snap.GetGeneration() > best.GetGeneration() {
+				best = snap
+			}
+		}
+	}
+	return best
+}
+
+func durableSnapshotStorage(status *ateapipb.ActorStatus) *ateapipb.SnapshotStorage {
+	return durableSnapshot(status).GetDurableSnapshot()
+}
+
+func durableSnapshotURI(status *ateapipb.ActorStatus) string {
+	return durableSnapshotStorage(status).GetObject().GetSnapshotUri()
+}
+
+// tagSnapshotURI returns the durable object a published tag points at.
+func tagSnapshotURI(tag *ateapipb.Tag) string {
+	return tag.GetStatus().GetSnapshot().GetDurableSnapshot().GetObject().GetSnapshotUri()
 }
 
 func TestActorSuspendRejectsExitedApplication(t *testing.T) {
@@ -97,8 +126,8 @@ func TestActorSuspendRejectsExitedApplication(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	snapshotURI := suspended.GetActor().GetStatus().GetExternalSnapshot().GetSnapshotUri()
-	if snapshotURI == "" || snapshotURI == created.GetStatus().GetExternalSnapshot().GetSnapshotUri() {
+	snapshotURI := durableSnapshotURI(suspended.GetActor().GetStatus())
+	if snapshotURI == "" || snapshotURI == durableSnapshotURI(created.GetStatus()) {
 		t.Fatalf("ordinary suspend did not create its own snapshot: %q", snapshotURI)
 	}
 	assertSnapshot := func(actor *ateapipb.Actor, state ateapipb.ActorState) {
@@ -106,7 +135,7 @@ func TestActorSuspendRejectsExitedApplication(t *testing.T) {
 		if got := actor.GetStatus().GetState(); got != state {
 			t.Fatalf("actor state = %v, want %v", got, state)
 		}
-		if got := actor.GetStatus().GetExternalSnapshot().GetSnapshotUri(); got != snapshotURI {
+		if got := durableSnapshotURI(actor.GetStatus()); got != snapshotURI {
 			t.Fatalf("external snapshot = %q, want last good snapshot %q", got, snapshotURI)
 		}
 	}
