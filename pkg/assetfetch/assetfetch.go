@@ -17,9 +17,9 @@
 //
 //   - CheckObjectName refuses an object stored under a snapshot or tag
 //     location, before anything is read.
-//   - Stager.Fetch downloads into a directory private to the plugin, enforces
-//     max_bytes while copying, verifies the sha256, and only then writes the
-//     caller's file.
+//   - Stager.Fetch downloads into a directory private to the plugin, within
+//     its capacity, enforces max_bytes while copying, verifies the sha256, and
+//     only then replaces the caller's file.
 //
 // A plugin parses its own URI scheme into an object name and an opener, and
 // leaves the rest to this package. Errors are gRPC statuses with the codes
@@ -29,11 +29,13 @@ package assetfetch
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -41,6 +43,7 @@ import (
 	"strings"
 
 	objectstorev1 "github.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1"
+	"golang.org/x/sync/semaphore"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/api/validate/content"
@@ -141,27 +144,56 @@ func isResourceName(name string) bool {
 // copies each to the caller's file only once its size and sha256 check out.
 // The caller can therefore never read bytes it did not pin, such as a
 // snapshot's.
+//
+// Downloads in flight never hold more than the staging capacity: each reserves
+// up to its max_bytes of it before reading and waits until that much is free.
 type Stager struct {
 	// root confines every local path a caller names.
 	root string
 	// stagingDir holds downloads until they are verified.
 	stagingDir string
+	// capacity is the most the downloads in stagingDir may hold together.
+	capacity int64
+	// reserved counts the capacity downloads in flight have reserved.
+	reserved *semaphore.Weighted
 }
 
+// stagingPrefix starts the name of every download in the staging directory.
+const stagingPrefix = "asset-"
+
 // NewStager returns a Stager that writes caller files only below root and
-// stages downloads in stagingDir, which must not be below root.
-func NewStager(root, stagingDir string) (*Stager, error) {
+// stages downloads in stagingDir, which must not be below root, holding at
+// most capacity bytes there at once.
+//
+// stagingDir is private to the plugin, so NewStager removes the downloads a
+// previous run of the plugin left there; they would otherwise use up its
+// capacity.
+func NewStager(root, stagingDir string, capacity int64) (*Stager, error) {
 	if !filepath.IsAbs(root) {
 		return nil, fmt.Errorf("root %q is not an absolute path", root)
 	}
 	if !filepath.IsAbs(stagingDir) {
 		return nil, fmt.Errorf("asset staging directory %q is not an absolute path", stagingDir)
 	}
+	if capacity <= 0 {
+		return nil, fmt.Errorf("asset staging capacity %d is not positive", capacity)
+	}
 	root, stagingDir = filepath.Clean(root), filepath.Clean(stagingDir)
 	if rel, err := filepath.Rel(root, stagingDir); err == nil && (rel == "." || filepath.IsLocal(rel)) {
 		return nil, fmt.Errorf("asset staging directory %q is inside root %q, where the caller could read unverified downloads", stagingDir, root)
 	}
-	return &Stager{root: root, stagingDir: stagingDir}, nil
+	entries, err := os.ReadDir(stagingDir)
+	if err != nil {
+		return nil, fmt.Errorf("while reading asset staging directory: %w", err)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), stagingPrefix) {
+			if err := os.Remove(filepath.Join(stagingDir, e.Name())); err != nil {
+				return nil, fmt.Errorf("while removing a previous download from the asset staging directory: %w", err)
+			}
+		}
+	}
+	return &Stager{root: root, stagingDir: stagingDir, capacity: capacity, reserved: semaphore.NewWeighted(capacity)}, nil
 }
 
 // OpenFunc opens the asset for reading.
@@ -169,10 +201,15 @@ type OpenFunc func(ctx context.Context) (io.ReadCloser, error)
 
 // Fetch checks req's sha256, max_bytes and write_path, downloads the asset
 // open returns into the staging directory and, if it is at most max_bytes
-// long and hashes to sha256, copies it into the existing file at write_path.
+// long and hashes to sha256, replaces the existing file at write_path with it.
 // uri is req's asset URI once it is safe to quote (see ParseURI). toStatus
 // maps every other error, from open, the download or a local file, to a gRPC
 // status; it must keep a context error's code.
+//
+// The file at write_path keeps its old content on any error: the asset is
+// written to a new file in the same directory, which is then swapped into
+// place. Callers must therefore open write_path after Fetch returns; a
+// descriptor opened before reads the old file.
 //
 // The caller checks the URI (ParseURI, CheckObjectName) first, so a refused
 // request reads nothing.
@@ -195,12 +232,21 @@ func (s *Stager) Fetch(ctx context.Context, req *objectstorev1.FetchAssetRequest
 	defer root.Close()
 	// Checked before downloading so a bad request costs no transfer. Lstat:
 	// a symlink is never the file the caller created, a directory cannot be
-	// opened for writing, and opening a FIFO would block.
-	if err := checkWriteFile(root, rel, req.GetWritePath(), toStatus); err != nil {
+	// replaced by a file, and a FIFO is not where an asset belongs.
+	info, err := checkWriteFile(root, rel, req.GetWritePath(), toStatus)
+	if err != nil {
 		return err
 	}
 
-	staged, err := s.stage(ctx, open, uri, req.GetMaxBytes(), wantSum, toStatus)
+	// An object larger than the capacity cannot be staged whatever max_bytes
+	// allows, so a request never reserves more than all of it.
+	reserve := min(req.GetMaxBytes(), s.capacity)
+	if err := s.reserved.Acquire(ctx, reserve); err != nil {
+		return toStatus(fmt.Errorf("while waiting for asset staging space: %w", err))
+	}
+	defer s.reserved.Release(reserve)
+
+	staged, err := s.stage(ctx, open, uri, req.GetMaxBytes(), reserve, wantSum, toStatus)
 	if err != nil {
 		return err
 	}
@@ -208,31 +254,15 @@ func (s *Stager) Fetch(ctx context.Context, req *objectstorev1.FetchAssetRequest
 		staged.Close()
 		os.Remove(staged.Name())
 	}()
-
-	// No O_CREATE: the caller owns the file's lifetime, so a request that
-	// outlives its caller cannot recreate a file the caller already removed.
-	dst, err := root.OpenFile(rel, os.O_WRONLY|os.O_TRUNC, 0)
-	if errors.Is(err, os.ErrNotExist) {
-		return status.Errorf(codes.FailedPrecondition, "write path %q does not exist", req.GetWritePath())
-	}
-	if err != nil {
-		return toStatus(fmt.Errorf("while opening write path %q: %w", req.GetWritePath(), err))
-	}
-	defer dst.Close()
-	if _, err := io.Copy(dst, staged); err != nil {
-		return toStatus(fmt.Errorf("while writing asset %s to %q: %w", uri, req.GetWritePath(), err))
-	}
-	if err := dst.Close(); err != nil {
-		return toStatus(fmt.Errorf("while closing write path %q: %w", req.GetWritePath(), err))
-	}
-	return nil
+	return replace(root, rel, info.Mode().Perm(), staged, uri, req.GetWritePath(), toStatus)
 }
 
 // stage downloads the asset into a new file in the staging directory and
 // returns it, positioned at its start, once its size and sha256 check out.
-// The file is removed on error; on success the caller removes it.
-func (s *Stager) stage(ctx context.Context, open OpenFunc, uri string, maxBytes int64, wantSum []byte, toStatus func(error) error) (_ *os.File, retErr error) {
-	f, err := os.CreateTemp(s.stagingDir, "asset-")
+// It writes at most limit bytes there, limit being at most maxBytes. The file
+// is removed on error; on success the caller removes it.
+func (s *Stager) stage(ctx context.Context, open OpenFunc, uri string, maxBytes, limit int64, wantSum []byte, toStatus func(error) error) (_ *os.File, retErr error) {
+	f, err := os.CreateTemp(s.stagingDir, stagingPrefix)
 	if err != nil {
 		return nil, toStatus(fmt.Errorf("while creating staging file: %w", err))
 	}
@@ -249,13 +279,22 @@ func (s *Stager) stage(ctx context.Context, open OpenFunc, uri string, maxBytes 
 	}
 	defer rc.Close()
 	hasher := sha256.New()
-	// +1 lets an over-cap object trip n > maxBytes without staging all of it.
-	n, err := io.Copy(io.MultiWriter(f, hasher), io.LimitReader(rc, maxBytes+1))
+	n, err := io.Copy(io.MultiWriter(f, hasher), io.LimitReader(rc, limit))
 	if err != nil {
 		return nil, toStatus(fmt.Errorf("while downloading asset %s: %w", uri, err))
 	}
-	if n > maxBytes {
-		return nil, status.Errorf(codes.FailedPrecondition, "asset %s is larger than max_bytes %d", uri, maxBytes)
+	if n == limit {
+		// One more byte, read but not staged, tells a full-length object
+		// from an over-long one.
+		var probe [1]byte
+		switch _, err := io.ReadFull(rc, probe[:]); {
+		case err == nil && limit < maxBytes:
+			return nil, status.Errorf(codes.FailedPrecondition, "asset %s is larger than the plugin's asset staging capacity of %d bytes", uri, limit)
+		case err == nil:
+			return nil, status.Errorf(codes.FailedPrecondition, "asset %s is larger than max_bytes %d", uri, maxBytes)
+		case err != io.EOF:
+			return nil, toStatus(fmt.Errorf("while downloading asset %s: %w", uri, err))
+		}
 	}
 	if got := hasher.Sum(nil); !bytes.Equal(got, wantSum) {
 		return nil, status.Errorf(codes.FailedPrecondition, "asset %s has sha256 %x, want %x", uri, got, wantSum)
@@ -264,6 +303,62 @@ func (s *Stager) stage(ctx context.Context, open OpenFunc, uri string, maxBytes 
 		return nil, toStatus(fmt.Errorf("while rewinding staging file: %w", err))
 	}
 	return f, nil
+}
+
+// copyToTemp copies a verified asset into the file that replaces the caller's.
+// Tests replace it to fail the copy.
+var copyToTemp = io.Copy
+
+// replace writes staged to a new file with mode perm next to rel, below root,
+// and swaps it into rel's place, so the file at rel holds either its old
+// content or all of staged. It never creates rel: if the caller removed it
+// meanwhile, replace fails and leaves nothing behind.
+func replace(root *os.Root, rel string, perm fs.FileMode, staged io.Reader, uri, shown string, toStatus func(error) error) error {
+	dir, base := filepath.Split(rel)
+	if dir == "" {
+		dir = "."
+	}
+	name, err := tempName()
+	if err != nil {
+		return toStatus(err)
+	}
+	tmpRel := filepath.Join(dir, name)
+	tmp, err := root.OpenFile(tmpRel, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return toStatus(fmt.Errorf("while creating a file next to write path %q: %w", shown, err))
+	}
+	// After a swap, tmpRel names the caller's old file; either way it goes.
+	defer func() {
+		tmp.Close()
+		_ = root.Remove(tmpRel)
+	}()
+	if err := tmp.Chmod(perm); err != nil {
+		return toStatus(fmt.Errorf("while setting the mode of a file next to write path %q: %w", shown, err))
+	}
+	if _, err := copyToTemp(tmp, staged); err != nil {
+		return toStatus(fmt.Errorf("while writing asset %s next to write path %q: %w", uri, shown, err))
+	}
+	if err := tmp.Close(); err != nil {
+		return toStatus(fmt.Errorf("while closing a file next to write path %q: %w", shown, err))
+	}
+	err = exchange(root, dir, name, base)
+	if errors.Is(err, os.ErrNotExist) {
+		return status.Errorf(codes.FailedPrecondition, "write path %q does not exist", shown)
+	}
+	if err != nil {
+		return toStatus(fmt.Errorf("while replacing write path %q: %w", shown, err))
+	}
+	return nil
+}
+
+// tempName returns a fixed-length random file name, so the caller's file name
+// may be as long as the filesystem allows.
+func tempName() (string, error) {
+	var b [12]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("while naming a temporary file: %w", err)
+	}
+	return ".assetfetch-" + hex.EncodeToString(b[:]), nil
 }
 
 // writePath checks that path is absolute and below s.root, and returns it
@@ -279,17 +374,18 @@ func (s *Stager) writePath(path string) (string, error) {
 	return rel, nil
 }
 
-// checkWriteFile requires rel, below root, to be an existing regular file.
-func checkWriteFile(root *os.Root, rel, shown string, toStatus func(error) error) error {
+// checkWriteFile requires rel, below root, to be an existing regular file and
+// returns its FileInfo.
+func checkWriteFile(root *os.Root, rel, shown string, toStatus func(error) error) (fs.FileInfo, error) {
 	info, err := root.Lstat(rel)
 	if errors.Is(err, os.ErrNotExist) {
-		return status.Errorf(codes.FailedPrecondition, "write path %q does not exist", shown)
+		return nil, status.Errorf(codes.FailedPrecondition, "write path %q does not exist", shown)
 	}
 	if err != nil {
-		return toStatus(fmt.Errorf("while inspecting write path %q: %w", shown, err))
+		return nil, toStatus(fmt.Errorf("while inspecting write path %q: %w", shown, err))
 	}
 	if !info.Mode().IsRegular() {
-		return status.Errorf(codes.FailedPrecondition, "write path %q is not a regular file (mode %v)", shown, info.Mode().Type())
+		return nil, status.Errorf(codes.FailedPrecondition, "write path %q is not a regular file (mode %v)", shown, info.Mode().Type())
 	}
-	return nil
+	return info, nil
 }

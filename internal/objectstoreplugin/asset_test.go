@@ -61,7 +61,7 @@ func newAssetFixture(t *testing.T) *assetFixture {
 		root:    t.TempDir(),
 		staging: t.TempDir(),
 	}
-	plugin, err := NewAssetPlugin(f.backend, f.root, f.staging)
+	plugin, err := NewAssetPlugin(f.backend, f.root, f.staging, 1<<30)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -409,16 +409,16 @@ func TestFetchAssetManySegmentURIs(t *testing.T) {
 func TestNewAssetPluginRejectsStagingBelowRoot(t *testing.T) {
 	root := t.TempDir()
 	for _, staging := range []string{root, filepath.Join(root, "staging")} {
-		if _, err := NewAssetPlugin(newMemObjects(), root, staging); err == nil {
+		if _, err := NewAssetPlugin(newMemObjects(), root, staging, 1<<30); err == nil {
 			t.Errorf("NewAssetPlugin(root=%s, staging=%s) succeeded, want an error", root, staging)
 		}
 	}
 	for _, tc := range []struct{ root, staging string }{{"relative", t.TempDir()}, {root, "relative"}} {
-		if _, err := NewAssetPlugin(newMemObjects(), tc.root, tc.staging); err == nil {
+		if _, err := NewAssetPlugin(newMemObjects(), tc.root, tc.staging, 1<<30); err == nil {
 			t.Errorf("NewAssetPlugin(root=%s, staging=%s) succeeded, want an error", tc.root, tc.staging)
 		}
 	}
-	if _, err := NewAssetPlugin(newMemObjects(), root, t.TempDir()); err != nil {
+	if _, err := NewAssetPlugin(newMemObjects(), root, t.TempDir(), 1<<30); err != nil {
 		t.Errorf("NewAssetPlugin with a separate staging directory: %v", err)
 	}
 }

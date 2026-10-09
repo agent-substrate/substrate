@@ -42,6 +42,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 const usage = `usage: snapshot-plugin <node|control|healthcheck> [flags]`
@@ -56,6 +57,7 @@ func main() {
 	socket := flags.String("socket", "", "Unix socket to serve on, or to check in healthcheck mode")
 	root := flags.String("root", nodepath.BasePath, "node mode: the only directory tree local snapshot and asset files may be read from or written to")
 	assetStagingDir := flags.String("asset-staging-dir", "/var/lib/snapshot-plugin/asset-staging", "node mode: directory sandbox assets are downloaded into and verified before they are copied below --root; must not be below --root or readable by the caller")
+	assetStagingCapacity := flags.String("asset-staging-capacity", "8Gi", "node mode: the most sandbox asset downloads in --asset-staging-dir may hold at once, as a Kubernetes quantity; downloads wait for space, and an asset larger than this is refused")
 	timeout := flags.Duration("timeout", 5*time.Second, "healthcheck mode: how long to wait for the plugin to report that it is serving")
 	_ = flags.Parse(os.Args[2:])
 
@@ -95,10 +97,14 @@ func main() {
 			serverboot.Fatal(ctx, "Invalid --root", err)
 		}
 		objectstorev1.RegisterNodeProviderServer(srv, plugin)
+		capacity, err := parseCapacity(*assetStagingCapacity)
+		if err != nil {
+			serverboot.Fatal(ctx, "Invalid --asset-staging-capacity", err)
+		}
 		if err := os.MkdirAll(*assetStagingDir, 0o700); err != nil {
 			serverboot.Fatal(ctx, "Failed to create --asset-staging-dir", err)
 		}
-		assets, err := objectstoreplugin.NewAssetPlugin(objects, *root, *assetStagingDir)
+		assets, err := objectstoreplugin.NewAssetPlugin(objects, *root, *assetStagingDir, capacity)
 		if err != nil {
 			serverboot.Fatal(ctx, "Invalid --asset-staging-dir", err)
 		}
@@ -167,4 +173,18 @@ func healthcheck(ctx context.Context, socket string, timeout time.Duration) erro
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	return objectstoreplugin.WaitReady(ctx, conn)
+}
+
+// parseCapacity parses a positive byte count written as a Kubernetes quantity,
+// such as 8Gi.
+func parseCapacity(s string) (int64, error) {
+	q, err := resource.ParseQuantity(s)
+	if err != nil {
+		return 0, err
+	}
+	n, ok := q.AsInt64()
+	if !ok || n <= 0 {
+		return 0, fmt.Errorf("%q is not a positive whole number of bytes", s)
+	}
+	return n, nil
 }

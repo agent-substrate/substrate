@@ -20,11 +20,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/agent-substrate/substrate/internal/resources"
 	objectstorev1 "github.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1"
@@ -163,7 +165,7 @@ const untouched = "the caller's original bytes"
 func newStagerFixture(t *testing.T) *stagerFixture {
 	t.Helper()
 	root, staging := t.TempDir(), t.TempDir()
-	stager, err := NewStager(root, staging)
+	stager, err := NewStager(root, staging, 1<<30)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,6 +187,22 @@ func (f *stagerFixture) assertDst(t *testing.T, want string) {
 	}
 	if string(got) != want {
 		t.Errorf("write path holds %q, want %q", got, want)
+	}
+	f.assertNoTempFiles(t)
+}
+
+// assertNoTempFiles checks that no file written next to the write path is
+// left behind.
+func (f *stagerFixture) assertNoTempFiles(t *testing.T) {
+	t.Helper()
+	entries, err := os.ReadDir(filepath.Dir(f.dst))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".assetfetch-") {
+			t.Errorf("write path's directory holds %s after the call", e.Name())
+		}
 	}
 }
 
@@ -381,16 +399,322 @@ func req(sha string, writePath string, maxBytes int64) *objectstorev1.FetchAsset
 func TestNewStagerRejectsStagingBelowRoot(t *testing.T) {
 	root := t.TempDir()
 	for _, staging := range []string{root, filepath.Join(root, "staging"), root + "/./staging/.."} {
-		if _, err := NewStager(root, staging); err == nil {
+		if _, err := NewStager(root, staging, 1<<30); err == nil {
 			t.Errorf("NewStager(root=%s, staging=%s) succeeded, want an error", root, staging)
 		}
 	}
 	for _, tc := range []struct{ root, staging string }{{"relative", t.TempDir()}, {root, "relative"}} {
-		if _, err := NewStager(tc.root, tc.staging); err == nil {
+		if _, err := NewStager(tc.root, tc.staging, 1<<30); err == nil {
 			t.Errorf("NewStager(root=%s, staging=%s) succeeded, want an error", tc.root, tc.staging)
 		}
 	}
-	if _, err := NewStager(root, t.TempDir()); err != nil {
+	if _, err := NewStager(root, t.TempDir(), 1<<30); err != nil {
 		t.Errorf("NewStager with a separate staging directory: %v", err)
 	}
+}
+
+func TestNewStagerRejectsNonPositiveCapacity(t *testing.T) {
+	for _, capacity := range []int64{0, -1} {
+		if _, err := NewStager(t.TempDir(), t.TempDir(), capacity); err == nil {
+			t.Errorf("NewStager(capacity=%d) succeeded, want an error", capacity)
+		}
+	}
+}
+
+func TestNewStagerRemovesPreviousDownloads(t *testing.T) {
+	staging := t.TempDir()
+	for _, name := range []string{"asset-123", "asset-456", "unrelated"} {
+		if err := os.WriteFile(filepath.Join(staging, name), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := NewStager(t.TempDir(), staging, 1<<30); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(staging)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "unrelated" {
+		t.Errorf("staging directory holds %v after NewStager, want only unrelated", entries)
+	}
+}
+
+// failingCopy writes half of src and then fails, as a full disk would.
+func failingCopy(dst io.Writer, src io.Reader) (int64, error) {
+	b, err := io.ReadAll(src)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := dst.Write(b[:len(b)/2])
+	return int64(n), errors.New("no space left on device")
+}
+
+func setCopyToTemp(t *testing.T, fn func(io.Writer, io.Reader) (int64, error)) {
+	t.Helper()
+	orig := copyToTemp
+	copyToTemp = fn
+	t.Cleanup(func() { copyToTemp = orig })
+}
+
+func TestStagerFetchReplacesWritePathAtomically(t *testing.T) {
+	const kernel = "kernel bytes"
+
+	t.Run("failed copy leaves the write path untouched", func(t *testing.T) {
+		setCopyToTemp(t, failingCopy)
+		f := newStagerFixture(t)
+		o := &opener{content: kernel}
+		err := f.stager.Fetch(t.Context(), req(sum(kernel), f.dst, 1<<20), "gs://bucket/vmlinux", o.open, testStatus)
+		if got := status.Code(err); got != codes.Internal {
+			t.Fatalf("Fetch = %v, want %s", err, codes.Internal)
+		}
+		f.assertDst(t, untouched)
+		f.assertStagingEmpty(t)
+	})
+
+	t.Run("write path removed during the copy is not recreated", func(t *testing.T) {
+		f := newStagerFixture(t)
+		setCopyToTemp(t, func(dst io.Writer, src io.Reader) (int64, error) {
+			if err := os.Remove(f.dst); err != nil {
+				return 0, err
+			}
+			return io.Copy(dst, src)
+		})
+		o := &opener{content: kernel}
+		err := f.stager.Fetch(t.Context(), req(sum(kernel), f.dst, 1<<20), "gs://bucket/vmlinux", o.open, testStatus)
+		if got := status.Code(err); got != codes.FailedPrecondition {
+			t.Fatalf("Fetch = %v, want %s", err, codes.FailedPrecondition)
+		}
+		if _, err := os.Lstat(f.dst); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("write path exists after the call (%v), want it left removed", err)
+		}
+		f.assertNoTempFiles(t)
+		f.assertStagingEmpty(t)
+	})
+
+	t.Run("keeps the write path's mode", func(t *testing.T) {
+		f := newStagerFixture(t)
+		if err := os.Chmod(f.dst, 0o640); err != nil {
+			t.Fatal(err)
+		}
+		o := &opener{content: kernel}
+		if err := f.stager.Fetch(t.Context(), req(sum(kernel), f.dst, 1<<20), "gs://bucket/vmlinux", o.open, testStatus); err != nil {
+			t.Fatalf("Fetch = %v, want success", err)
+		}
+		f.assertDst(t, kernel)
+		info, err := os.Stat(f.dst)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode().Perm(); got != 0o640 {
+			t.Errorf("write path mode = %v, want %v", got, fs.FileMode(0o640))
+		}
+	})
+
+	t.Run("longest file name", func(t *testing.T) {
+		f := newStagerFixture(t)
+		f.dst = filepath.Join(filepath.Dir(f.dst), strings.Repeat("a", 255))
+		if err := os.WriteFile(f.dst, []byte(untouched), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		o := &opener{content: kernel}
+		if err := f.stager.Fetch(t.Context(), req(sum(kernel), f.dst, 1<<20), "gs://bucket/vmlinux", o.open, testStatus); err != nil {
+			t.Fatalf("Fetch = %v, want success", err)
+		}
+		f.assertDst(t, kernel)
+	})
+}
+
+// gatedOpener serves content once release is closed, after reporting each
+// open on opened.
+type gatedOpener struct {
+	content string
+	opened  chan struct{}
+	release chan struct{}
+}
+
+func newGatedOpener(content string) *gatedOpener {
+	return &gatedOpener{content: content, opened: make(chan struct{}, 2), release: make(chan struct{})}
+}
+
+func (o *gatedOpener) open(ctx context.Context) (io.ReadCloser, error) {
+	o.opened <- struct{}{}
+	select {
+	case <-o.release:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return io.NopCloser(strings.NewReader(o.content)), nil
+}
+
+func newStagerFixtureWithCapacity(t *testing.T, capacity int64) *stagerFixture {
+	t.Helper()
+	f := newStagerFixture(t)
+	stager, err := NewStager(f.stager.root, f.staging, capacity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.stager = stager
+	return f
+}
+
+// newCallerFile creates another existing caller file next to f.dst.
+func (f *stagerFixture) newCallerFile(t *testing.T, name string) string {
+	t.Helper()
+	p := filepath.Join(filepath.Dir(f.dst), name)
+	if err := os.WriteFile(p, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func TestStagerFetchStagingCapacity(t *testing.T) {
+	const kernel = "kernel bytes"
+	const maxBytes = 60
+
+	t.Run("a download waits while the capacity is reserved", func(t *testing.T) {
+		f := newStagerFixtureWithCapacity(t, 100)
+		first, second := newGatedOpener(kernel), newGatedOpener(kernel)
+		firstDone := make(chan error, 1)
+		go func() {
+			firstDone <- f.stager.Fetch(t.Context(), req(sum(kernel), f.dst, maxBytes), "gs://bucket/a", first.open, testStatus)
+		}()
+		<-first.opened
+		secondDone := make(chan error, 1)
+		go func() {
+			secondDone <- f.stager.Fetch(t.Context(), req(sum(kernel), f.newCallerFile(t, "b"), maxBytes), "gs://bucket/b", second.open, testStatus)
+		}()
+		close(second.release)
+		select {
+		case <-second.opened:
+			t.Fatal("second download started while the first held more than the remaining capacity")
+		case <-time.After(200 * time.Millisecond):
+		}
+		close(first.release)
+		if err := <-firstDone; err != nil {
+			t.Fatalf("first Fetch = %v", err)
+		}
+		if err := <-secondDone; err != nil {
+			t.Fatalf("second Fetch = %v", err)
+		}
+		f.assertStagingEmpty(t)
+	})
+
+	t.Run("downloads that fit run together", func(t *testing.T) {
+		f := newStagerFixtureWithCapacity(t, 2*maxBytes)
+		o := newGatedOpener(kernel)
+		done := make(chan error, 2)
+		for _, name := range []string{"a", "b"} {
+			p := f.newCallerFile(t, name)
+			go func() {
+				done <- f.stager.Fetch(t.Context(), req(sum(kernel), p, maxBytes), "gs://bucket/"+name, o.open, testStatus)
+			}()
+		}
+		for range 2 {
+			select {
+			case <-o.opened:
+			case <-time.After(10 * time.Second):
+				t.Fatal("two downloads within the capacity did not run together")
+			}
+		}
+		close(o.release)
+		for range 2 {
+			if err := <-done; err != nil {
+				t.Fatalf("Fetch = %v", err)
+			}
+		}
+	})
+
+	t.Run("canceled while waiting", func(t *testing.T) {
+		f := newStagerFixtureWithCapacity(t, maxBytes)
+		first := newGatedOpener(kernel)
+		firstDone := make(chan error, 1)
+		go func() {
+			firstDone <- f.stager.Fetch(t.Context(), req(sum(kernel), f.newCallerFile(t, "a"), maxBytes), "gs://bucket/a", first.open, testStatus)
+		}()
+		<-first.opened
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		o := &opener{content: kernel}
+		err := f.stager.Fetch(ctx, req(sum(kernel), f.dst, maxBytes), "gs://bucket/vmlinux", o.open, testStatus)
+		if got := status.Code(err); got != codes.Canceled {
+			t.Fatalf("Fetch = %v, want %s", err, codes.Canceled)
+		}
+		if o.opens != 0 {
+			t.Errorf("Fetch opened the asset %d times while waiting, want 0", o.opens)
+		}
+		f.assertDst(t, untouched)
+		close(first.release)
+		if err := <-firstDone; err != nil {
+			t.Fatalf("first Fetch = %v", err)
+		}
+	})
+
+	t.Run("max_bytes above the capacity", func(t *testing.T) {
+		const capacity = 16
+		for _, tc := range []struct {
+			name    string
+			content string
+			want    codes.Code
+		}{
+			{"asset fits", strings.Repeat("k", capacity), codes.OK},
+			{"asset larger than the capacity", strings.Repeat("k", capacity+10), codes.FailedPrecondition},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				f := newStagerFixtureWithCapacity(t, capacity)
+				o := &stagingWatcher{content: tc.content, staging: f.staging}
+				err := f.stager.Fetch(t.Context(), req(sum(tc.content), f.dst, 1<<20), "gs://bucket/vmlinux", o.open, testStatus)
+				if got := status.Code(err); got != tc.want {
+					t.Fatalf("Fetch = %v, want %s", err, tc.want)
+				}
+				if o.maxStaged > capacity {
+					t.Errorf("staging directory held %d bytes, more than the capacity of %d", o.maxStaged, capacity)
+				}
+				if tc.want == codes.OK {
+					f.assertDst(t, tc.content)
+				} else {
+					f.assertDst(t, untouched)
+					if !strings.Contains(err.Error(), "staging capacity") {
+						t.Errorf("Fetch error %q does not name the staging capacity", err)
+					}
+				}
+				f.assertStagingEmpty(t)
+			})
+		}
+	})
+}
+
+// stagingWatcher serves content a byte at a time and records the most bytes
+// the staging directory held before each read.
+type stagingWatcher struct {
+	content   string
+	staging   string
+	read      int
+	maxStaged int64
+}
+
+func (w *stagingWatcher) open(context.Context) (io.ReadCloser, error) {
+	return io.NopCloser(w), nil
+}
+
+func (w *stagingWatcher) Read(p []byte) (int, error) {
+	entries, err := os.ReadDir(w.staging)
+	if err != nil {
+		return 0, err
+	}
+	var staged int64
+	for _, e := range entries {
+		info, err := e.Info()
+		if err != nil {
+			return 0, err
+		}
+		staged += info.Size()
+	}
+	w.maxStaged = max(w.maxStaged, staged)
+	if w.read == len(w.content) || len(p) == 0 {
+		return 0, io.EOF
+	}
+	p[0] = w.content[w.read]
+	w.read++
+	return 1, nil
 }

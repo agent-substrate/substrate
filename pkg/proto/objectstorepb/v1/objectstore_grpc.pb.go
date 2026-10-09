@@ -403,7 +403,8 @@ type AssetProviderClient interface {
 	// It returns PERMISSION_DENIED if asset_uri, or any prefix of it, is a
 	// snapshot or tag URI, before reading anything; NOT_FOUND if the object does
 	// not exist; and FAILED_PRECONDITION if the object is larger than max_bytes
-	// or its sha256 does not match.
+	// or than the plugin can hold while verifying it, or its sha256 does not
+	// match.
 	FetchAsset(ctx context.Context, in *FetchAssetRequest, opts ...grpc.CallOption) (*FetchAssetResponse, error)
 }
 
@@ -444,7 +445,8 @@ type AssetProviderServer interface {
 	// It returns PERMISSION_DENIED if asset_uri, or any prefix of it, is a
 	// snapshot or tag URI, before reading anything; NOT_FOUND if the object does
 	// not exist; and FAILED_PRECONDITION if the object is larger than max_bytes
-	// or its sha256 does not match.
+	// or than the plugin can hold while verifying it, or its sha256 does not
+	// match.
 	FetchAsset(context.Context, *FetchAssetRequest) (*FetchAssetResponse, error)
 	mustEmbedUnimplementedAssetProviderServer()
 }

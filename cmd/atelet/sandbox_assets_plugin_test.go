@@ -116,7 +116,7 @@ func newAssetHerderFixture(t *testing.T) *assetHerderFixture {
 		anon:    &bucketStorage{objects: map[string][]byte{}},
 		staging: t.TempDir(),
 	}
-	plugin, err := objectstoreplugin.NewAssetPlugin(f.bucket, root, f.staging)
+	plugin, err := objectstoreplugin.NewAssetPlugin(f.bucket, root, f.staging, maxAssetBytes)
 	if err != nil {
 		t.Fatal(err)
 	}

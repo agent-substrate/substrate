@@ -445,8 +445,10 @@ type FetchAssetRequest struct {
 	// characters.
 	Sha256 string `protobuf:"bytes,2,opt,name=sha256,proto3" json:"sha256,omitempty"`
 	// Full local path of an existing regular file the asset is written to. The
-	// plugin truncates and writes it only once the content has been verified,
-	// and never creates it.
+	// plugin replaces the file, keeping its mode, only once the content has been
+	// verified, never creates it, and leaves it unchanged on any error. The
+	// caller opens it after the call: a descriptor opened before still reads
+	// the old content.
 	WritePath string `protobuf:"bytes,3,opt,name=write_path,json=writePath,proto3" json:"write_path,omitempty"`
 	// The largest object, in bytes, the caller accepts. Must be positive.
 	MaxBytes      int64 `protobuf:"varint,4,opt,name=max_bytes,json=maxBytes,proto3" json:"max_bytes,omitempty"`

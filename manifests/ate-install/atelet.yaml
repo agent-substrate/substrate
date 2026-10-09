@@ -161,6 +161,9 @@ spec:
         - --socket=/run/snapshot-plugin/node.sock
         - --root=/var/lib/ate
         - --asset-staging-dir=/var/lib/snapshot-plugin/asset-staging
+        # atelet's 8 GiB per-asset cap; downloads past it wait their turn, so
+        # the asset-staging volume below never fills up.
+        - --asset-staging-capacity=8Gi
         # The plugin listens on a Unix socket, which a gRPC probe cannot
         # reach, and the image has no shell, so the binary checks itself.
         startupProbe:
@@ -319,12 +322,12 @@ spec:
       volumes:
       - name: snapshot-plugin
         emptyDir: {}
-      # Holds asset downloads until they are verified. The limit matches
-      # atelet's 8 GiB per-asset cap; kubelet evicts the pod if in-flight
-      # downloads exceed it.
+      # Holds asset downloads until they are verified. The plugin keeps them
+      # within --asset-staging-capacity; the limit adds 1Gi for filesystem
+      # overhead, since kubelet evicts the pod if the volume exceeds it.
       - name: asset-staging
         emptyDir:
-          sizeLimit: 8Gi
+          sizeLimit: 9Gi
       - name: run-ateom
         hostPath:
           path: /var/lib/ate
