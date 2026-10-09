@@ -192,6 +192,14 @@ actors receiving rotated actor-reference header traffic. Everything else lives i
 | `measuringPeriod` | 10s | Length of each adjusting step. |
 | `convergenceDeadline` | 600s | The session errors if the search hasn't converged by then. |
 | `testingStageDuration` | 60s | Final confirmation run at the converged rate. |
+| `fixedRps` | `[]` (adaptive) | Total rates to hold, one `nighthawk_client` stage each, in place of the adaptive search. Measures router cost at known loads; the thresholds above don't apply. |
+| `fixedStageDuration` | 90s | Length of each fixed-rate stage. |
+
+In fixed-rate mode, `capacity.json` has `"mode": "fixed"` and one digest per
+stage: attempted and achieved rps, success rate, latency percentiles, and
+the stage's `start_time`/`end_time`, which line up with router CPU samples.
+Each stage's raw `nighthawk_client` output is uploaded as `fixed_NNN.json`,
+including stages that failed.
 
 ### Sizing the rig: hit the router's ceiling, not the harness's
 

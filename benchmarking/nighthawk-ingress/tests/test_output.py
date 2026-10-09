@@ -196,6 +196,69 @@ def test_capacity_summary_no_testing_stage():
     assert "max_total_rps" not in summary
 
 
+def client_output(per_worker_rps: int, http_2xx: int, http_5xx: int = 0) -> dict:
+    """nighthawk_client JSON output as parse_client_output_json returns it."""
+    return benchmark_result(per_worker_rps, http_2xx, http_5xx)[
+        "nighthawk_service_output"
+    ]
+
+
+def test_fixed_stage_row_uses_counter_fallbacks():
+    row = output_mod.fixed_stage_row(
+        2,
+        1000,
+        client_output(per_worker_rps=250, http_2xx=9990, http_5xx=10),
+        "2026-09-29T00:00:00Z",
+        "2026-09-29T00:00:10Z",
+    )
+    assert row["stage"] == "fixed_002"
+    assert row["target_rps"] == 1000
+    assert row["start_time"] == "2026-09-29T00:00:00Z"
+    assert row["end_time"] == "2026-09-29T00:00:10Z"
+    # No metric_evaluations: rates come from options and counters.
+    assert row["metric_nighthawk.builtin_attempted_rps"] == 1000
+    assert row["metric_nighthawk.builtin_achieved_rps"] == 1000.0
+    assert row["metric_nighthawk.builtin_send_rate"] == 1.0
+    assert row["metric_nighthawk.builtin_success_rate"] == 0.999
+    assert row["failed_thresholds"] == []
+    assert row["p95_ms"] == 8.0
+
+
+def test_fixed_rps_summary():
+    rows = [
+        output_mod.fixed_stage_row(
+            i, rps * 4, client_output(rps, rps * 40), f"t{i}", f"t{i}+10s"
+        )
+        for i, rps in enumerate((250, 500))
+    ]
+    summary = output_mod.fixed_rps_summary(
+        rows, envoy_cpu=4, actors=200, client_concurrency=4, stage_duration_s=90
+    )
+    assert summary["mode"] == "fixed"
+    assert summary["stage_duration_s"] == 90
+    assert [s["stage"] for s in summary["stages"]] == ["fixed_000", "fixed_001"]
+    first = summary["stages"][0]
+    assert first["target_rps"] == 1000
+    assert first["attempted_rps"] == 1000
+    assert first["achieved_rps"] == 1000.0
+    assert first["success_rate"] == 1.0
+    assert first["start_time"] == "t0"
+    assert first["end_time"] == "t0+10s"
+    assert first["p50_ms"] == 3.0
+
+
+def test_fixed_stage_records():
+    rows = [
+        output_mod.fixed_stage_row(
+            0, 1000, client_output(250, 10000), "t0", "t1"
+        )
+    ]
+    [record] = output_mod.stats_records(rows, "tag", "name")
+    assert record["metric"] == "nighthawk_fixed_000"
+    assert record["timestamp"] == "t0"
+    assert record["measurements"]["end_time"] == "t1"
+
+
 if __name__ == "__main__":
     for fn_name, fn in sorted(dict(globals()).items()):
         if fn_name.startswith("test_") and callable(fn):
