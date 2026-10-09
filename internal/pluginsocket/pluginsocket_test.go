@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package objectstoreplugin
+package pluginsocket
 
 import (
 	"context"
@@ -138,7 +138,7 @@ func (s *sidecar) lose(conn *grpc.ClientConn) {
 	}
 }
 
-var cleanupReq = &objectstoresnapshotv1.CleanupSnapshotRequest{SnapshotUri: testURI}
+var cleanupReq = &objectstoresnapshotv1.CleanupSnapshotRequest{SnapshotUri: "gs://bucket/root/snap1"}
 
 // A plugin lost after startup fails a call with Unavailable once the ready
 // wait runs out, not when the caller's deadline does.
@@ -264,5 +264,21 @@ func TestWaitReadyOutlastsReadyWait(t *testing.T) {
 	defer cancel()
 	if err := WaitReady(ctx, conn); err != nil {
 		t.Errorf("WaitReady for a plugin that starts after the ready wait = %v, want success", err)
+	}
+}
+
+// A socket nobody listens on must fail when ctx ends, not hang: WaitReady
+// waits for the plugin as long as ctx allows.
+func TestWaitReadyEndsWithContext(t *testing.T) {
+	conn, err := Dial(filepath.Join(t.TempDir(), "missing.sock"), ReadyWait)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	err = WaitReady(ctx, conn)
+	if status.Code(err) != codes.DeadlineExceeded {
+		t.Errorf("WaitReady against a missing socket = %v, want %s", err, codes.DeadlineExceeded)
 	}
 }

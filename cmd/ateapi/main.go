@@ -39,8 +39,8 @@ import (
 	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/localjwtauthority"
-	"github.com/agent-substrate/substrate/internal/objectstoreplugin"
 	"github.com/agent-substrate/substrate/internal/oidcdiscovery"
+	"github.com/agent-substrate/substrate/internal/pluginsocket"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/agent-substrate/substrate/internal/volume"
@@ -261,7 +261,7 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to create metric instruments", err)
 	}
 
-	snapshotPluginConn, err := objectstoreplugin.Dial(*snapshotPluginSocket, objectstoreplugin.ReadyWait)
+	snapshotPluginConn, err := pluginsocket.Dial(*snapshotPluginSocket, pluginsocket.ReadyWait)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to set up the snapshot plugin client", err)
 	}
@@ -269,7 +269,7 @@ func main() {
 	// A plugin that never serves would fail every call. Fail at startup
 	// instead, giving the sidecar time to come up.
 	readyCtx, cancelReady := context.WithTimeout(ctx, time.Minute)
-	err = objectstoreplugin.WaitReady(readyCtx, snapshotPluginConn)
+	err = pluginsocket.WaitReady(readyCtx, snapshotPluginConn)
 	cancelReady()
 	if err != nil {
 		serverboot.Fatal(ctx, "Snapshot plugin is not serving", err)

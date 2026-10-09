@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package objectstoreplugin
+// Package pluginsocket connects a server to its plugin sidecar over a Unix
+// socket. It depends on no plugin implementation, so a server that only calls
+// a plugin does not link the plugin's storage SDKs.
+package pluginsocket
 
 import (
 	"context"
@@ -97,7 +100,7 @@ func Dial(path string, readyWait time.Duration) (*grpc.ClientConn, error) {
 		grpc.WithUnaryInterceptor(boundedWaitForReady(readyWait)),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("while dialing snapshot plugin at %s: %w", path, err)
+		return nil, fmt.Errorf("while dialing plugin at %s: %w", path, err)
 	}
 	return conn, nil
 }
@@ -136,7 +139,7 @@ func awaitReady(ctx context.Context, cc *grpc.ClientConn, wait time.Duration) er
 			if ctx.Err() != nil {
 				return status.FromContextError(ctx.Err()).Err()
 			}
-			return status.Errorf(codes.Unavailable, "snapshot plugin at %s is not ready after %s (connection %s)", cc.Target(), wait, state)
+			return status.Errorf(codes.Unavailable, "plugin at %s is not ready after %s (connection %s)", cc.Target(), wait, state)
 		}
 	}
 }
@@ -148,10 +151,10 @@ func awaitReady(ctx context.Context, cc *grpc.ClientConn, wait time.Duration) er
 func WaitReady(ctx context.Context, conn *grpc.ClientConn) error {
 	resp, err := healthpb.NewHealthClient(conn).Check(ctx, &healthpb.HealthCheckRequest{}, grpc.WaitForReady(true))
 	if err != nil {
-		return fmt.Errorf("while waiting for the snapshot plugin at %s: %w", conn.Target(), err)
+		return fmt.Errorf("while waiting for the plugin at %s: %w", conn.Target(), err)
 	}
 	if resp.GetStatus() != healthpb.HealthCheckResponse_SERVING {
-		return fmt.Errorf("snapshot plugin at %s is %s", conn.Target(), resp.GetStatus())
+		return fmt.Errorf("plugin at %s is %s", conn.Target(), resp.GetStatus())
 	}
 	return nil
 }
@@ -162,7 +165,7 @@ func WaitReady(ctx context.Context, conn *grpc.ClientConn) error {
 // rather than treating it as Internal. Any other error is returned unchanged.
 func CallError(err error) error {
 	if status.Code(err) == codes.Unavailable {
-		return apierror.Unavailable("snapshot plugin: %w", err)
+		return apierror.Unavailable("plugin: %w", err)
 	}
 	return err
 }

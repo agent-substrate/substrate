@@ -26,7 +26,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/actorevent"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/objectstoreplugin"
+	"github.com/agent-substrate/substrate/internal/pluginsocket"
 	"github.com/agent-substrate/substrate/internal/resources"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -147,14 +147,14 @@ func NewActorWorkflow(
 // snapshot plugin.
 func (w *ActorWorkflow) cleanupSnapshot(ctx context.Context, prefix resources.StoragePrefix) error {
 	_, err := w.snapshotPlugin.CleanupSnapshot(ctx, &objectstoresnapshotv1.CleanupSnapshotRequest{SnapshotUri: prefix.String()})
-	return objectstoreplugin.CallError(err)
+	return pluginsocket.CallError(err)
 }
 
 // copySnapshot copies every object under src to dst through the control
 // snapshot plugin.
 func (w *ActorWorkflow) copySnapshot(ctx context.Context, src, dst resources.StoragePrefix) error {
 	_, err := w.snapshotPlugin.CopySnapshot(ctx, &objectstoresnapshotv1.CopySnapshotRequest{SrcUri: src.String(), DstUri: dst.String()})
-	return objectstoreplugin.CallError(err)
+	return pluginsocket.CallError(err)
 }
 
 // actorWorkflowStore enumerates the exact storage methods needed by

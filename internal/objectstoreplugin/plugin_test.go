@@ -27,6 +27,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/pluginsocket"
 	"github.com/agent-substrate/substrate/pkg/objectstorage"
 	objectstoresnapshotv1 "github.com/agent-substrate/substrate/pkg/proto/objectstoresnapshotpb/v1"
 	"google.golang.org/grpc"
@@ -119,7 +120,7 @@ func serve(t *testing.T, backend *memObjects, root string) *grpc.ClientConn {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(sockDir) })
-	lis, err := Listen(filepath.Join(sockDir, "plugin.sock"))
+	lis, err := pluginsocket.Listen(filepath.Join(sockDir, "plugin.sock"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +135,7 @@ func serve(t *testing.T, backend *memObjects, root string) *grpc.ClientConn {
 	go srv.Serve(lis)
 	t.Cleanup(srv.Stop)
 
-	conn, err := Dial(filepath.Join(sockDir, "plugin.sock"), ReadyWait)
+	conn, err := pluginsocket.Dial(filepath.Join(sockDir, "plugin.sock"), pluginsocket.ReadyWait)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,22 +146,8 @@ func serve(t *testing.T, backend *memObjects, root string) *grpc.ClientConn {
 func TestWaitReady(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := WaitReady(ctx, serve(t, newMemObjects(), t.TempDir())); err != nil {
+	if err := pluginsocket.WaitReady(ctx, serve(t, newMemObjects(), t.TempDir())); err != nil {
 		t.Errorf("WaitReady against a serving plugin = %v", err)
-	}
-
-	// A socket nobody listens on must fail when ctx ends, not hang: WaitReady
-	// waits for the plugin as long as ctx allows.
-	conn, err := Dial(filepath.Join(t.TempDir(), "missing.sock"), ReadyWait)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close()
-	short, cancelShort := context.WithTimeout(context.Background(), 200*time.Millisecond)
-	defer cancelShort()
-	err = WaitReady(short, conn)
-	if status.Code(err) != codes.DeadlineExceeded {
-		t.Errorf("WaitReady against a missing socket = %v, want %s", err, codes.DeadlineExceeded)
 	}
 }
 
