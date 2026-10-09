@@ -640,42 +640,42 @@ func TestValidateActorUpdate(t *testing.T) {
 		})),
 		field.ErrorList{field.Invalid(field.NewPath("status", "snapshots").Index(0).Child("storage").Index(0).Child("fidelity"), nil, "").WithOrigin("maximum")},
 	}, {
-		"too many actor_volumes",
+		"too many external_volumes",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
 			vols := make([]*ateapipb.ExternalVolume, 33)
 			for i := range vols {
 				vols[i] = &ateapipb.ExternalVolume{Name: fmt.Sprintf("vol-%d", i), VolumeType: "substrate.io/mock"}
 			}
-			s.ActorVolumes = vols
+			s.ExternalVolumes = vols
 		})),
-		field.ErrorList{field.TooMany(field.NewPath("status", "actor_volumes"), 33, 32).WithOrigin("maxItems")},
+		field.ErrorList{field.TooMany(field.NewPath("status", "external_volumes"), 33, 32).WithOrigin("maxItems")},
 	}, {
 		// Set-once fields permit the nil->set transition, so a volume added
 		// in an update validates like one added at creation.
 		"adding a volume on update is allowed",
 		validInput(withStatus()),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.ActorVolumes = []*ateapipb.ExternalVolume{{Name: "vol-a", VolumeType: "substrate.io/mock"}}
+			s.ExternalVolumes = []*ateapipb.ExternalVolume{{Name: "vol-a", VolumeType: "substrate.io/mock"}}
 		})),
 		nil,
 	}, {
-		"duplicate actor_volumes name",
+		"duplicate external_volumes name",
 		validInput(withStatus()),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.ActorVolumes = []*ateapipb.ExternalVolume{
+			s.ExternalVolumes = []*ateapipb.ExternalVolume{
 				{Name: "vol-a", VolumeType: "substrate.io/mock"},
 				{Name: "vol-a", VolumeType: "substrate.io/mock"},
 			}
 		})),
-		field.ErrorList{field.Duplicate(field.NewPath("status", "actor_volumes").Index(1), nil)},
+		field.ErrorList{field.Duplicate(field.NewPath("status", "external_volumes").Index(1), nil)},
 	}, {
 		"provisioning transition on an existing volume is valid",
 		validInput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.ActorVolumes = []*ateapipb.ExternalVolume{{Name: "vol-a", VolumeType: "substrate.io/mock", Status: ateapipb.ExternalVolume_STATUS_PENDING}}
+			s.ExternalVolumes = []*ateapipb.ExternalVolume{{Name: "vol-a", VolumeType: "substrate.io/mock", Status: ateapipb.ExternalVolume_STATUS_PENDING}}
 		})),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.ActorVolumes = []*ateapipb.ExternalVolume{{
+			s.ExternalVolumes = []*ateapipb.ExternalVolume{{
 				Name:            "vol-a",
 				VolumeType:      "substrate.io/mock",
 				StorageVolumeId: "csi-426d29b7",

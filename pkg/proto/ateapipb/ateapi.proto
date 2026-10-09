@@ -809,7 +809,7 @@ message ActorStatus {
   // +k8s:maxItems=32 # matches the template's volumes bound
   // +k8s:listType=map
   // +k8s:listMapKey=name
-  repeated ExternalVolume actor_volumes = 7;
+  repeated ExternalVolume external_volumes = 7;
 
   // crash records why and when the Actor entered CRASHED. It is set with the
   // CRASHED state and cleared when a revert returns the Actor to SUSPENDED.

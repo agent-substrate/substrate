@@ -173,7 +173,7 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 			slog.String("templateAtespace", actor.GetActorTemplate().GetAtespace()),
 			slog.String("templateName", actor.GetActorTemplate().GetName()))
 		workloadSpec = &ateletpb.WorkloadSpec{}
-		for _, vol := range actor.GetStatus().GetActorVolumes() {
+		for _, vol := range actor.GetStatus().GetExternalVolumes() {
 			// StorageVolumeId is only populated once the volume is provisioned.
 			// Skip volumes that were never created (e.g. failed during PENDING state).
 			if vol.GetStorageVolumeId() != "" {
@@ -333,7 +333,7 @@ func (w *ActorWorkflow) ensureMarkedDeleting(ctx context.Context, actorRef resou
 
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_DELETING
-		for _, vol := range toUpdate.GetStatus().GetActorVolumes() {
+		for _, vol := range toUpdate.GetStatus().GetExternalVolumes() {
 			vol.Status = ateapipb.ExternalVolume_STATUS_DELETING
 		}
 		return nil
@@ -359,7 +359,7 @@ func (w *ActorWorkflow) ensureVolumesDeleted(ctx context.Context, actor *ateapip
 		return apierror.FailedPrecondition("DeleteVolumes prerequisite not met for Actor: %s (got: %v, want %s)", actor.GetMetadata().GetName(), st, ateapipb.ActorState_ACTOR_STATE_DELETING)
 	}
 
-	if err := deleteActorVolumes(ctx, w.pluginRegistry, actor.GetMetadata().GetUid(), actor.GetStatus().GetActorVolumes()); err != nil {
+	if err := deleteActorVolumes(ctx, w.pluginRegistry, actor.GetMetadata().GetUid(), actor.GetStatus().GetExternalVolumes()); err != nil {
 		return apierror.Internal("while deleting actor volumes: %v", err)
 	}
 	return nil

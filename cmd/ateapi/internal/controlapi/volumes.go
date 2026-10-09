@@ -214,9 +214,9 @@ func detachActorVolumes(ctx context.Context, registry VolumePluginRegistry, acto
 	// in the template's containers. If the template is missing/deleted, fall back to
 	// attempting detachment for all external volumes recorded on the actor so we do
 	// not orphan attached disks on the worker node.
-	volumesToDetach := actor.GetStatus().GetActorVolumes()
+	volumesToDetach := actor.GetStatus().GetExternalVolumes()
 	if template != nil {
-		volumesToDetach = getMountedActorVolumes(ctx, ref, actor.GetStatus().GetActorVolumes(), template)
+		volumesToDetach = getMountedActorVolumes(ctx, ref, actor.GetStatus().GetExternalVolumes(), template)
 	}
 	// Collect errors for all volumes to detach, but continue processing so we attempt to detach all volumes.
 	var errs []error

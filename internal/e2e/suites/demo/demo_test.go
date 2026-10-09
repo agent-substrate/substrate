@@ -384,10 +384,10 @@ func TestDeleteActorAnyStateWithExternalVolume(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to get actor: %v", err)
 	}
-	if len(actor.GetStatus().GetActorVolumes()) == 0 {
+	if len(actor.GetStatus().GetExternalVolumes()) == 0 {
 		t.Fatalf("expected actor to have volumes, got 0")
 	}
-	for _, vol := range actor.GetStatus().GetActorVolumes() {
+	for _, vol := range actor.GetStatus().GetExternalVolumes() {
 		if vol.Status != ateapipb.ExternalVolume_STATUS_CREATED {
 			t.Fatalf("expected volume %q to be CREATED, got %s", vol.Name, vol.Status)
 		}

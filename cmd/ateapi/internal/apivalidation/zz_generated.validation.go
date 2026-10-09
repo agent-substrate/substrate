@@ -706,7 +706,7 @@ func Validate_ActorStatus(
 		errs = append(errs, fn(fldPath.Child("worker_assignment"), obj.WorkerAssignment, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateapipb.ActorStatus.ActorVolumes
+	{ // field ateapipb.ActorStatus.ExternalVolumes
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj []*ateapipb.ExternalVolume,
@@ -747,9 +747,9 @@ func Validate_ActorStatus(
 		}
 		oldVal := safe.Field(oldObj,
 			func(oldObj *ateapipb.ActorStatus) []*ateapipb.ExternalVolume {
-				return oldObj.ActorVolumes
+				return oldObj.ExternalVolumes
 			})
-		errs = append(errs, fn(fldPath.Child("actor_volumes"), obj.ActorVolumes, oldVal, oldObj != nil)...)
+		errs = append(errs, fn(fldPath.Child("external_volumes"), obj.ExternalVolumes, oldVal, oldObj != nil)...)
 	}
 
 	{ // field ateapipb.ActorStatus.Crash

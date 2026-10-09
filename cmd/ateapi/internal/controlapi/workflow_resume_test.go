@@ -1549,7 +1549,7 @@ func TestEnsureVolumesAttached_ReturnsPublishContext(t *testing.T) {
 		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "id1"},
 		Status: &ateapipb.ActorStatus{
 			State: ateapipb.ActorState_ACTOR_STATE_RESUMING,
-			ActorVolumes: []*ateapipb.ExternalVolume{
+			ExternalVolumes: []*ateapipb.ExternalVolume{
 				{Name: "mounted", StorageVolumeId: "storage-mounted", VolumeType: "mock", Status: ateapipb.ExternalVolume_STATUS_CREATED},
 				{Name: "unmounted", StorageVolumeId: "storage-unmounted", VolumeType: "mock", Status: ateapipb.ExternalVolume_STATUS_CREATED},
 			},
