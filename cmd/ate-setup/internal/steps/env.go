@@ -118,6 +118,13 @@ func NewEnv(cfg *config.Config) (*Env, error) {
 	return &Env{Cfg: cfg, Kube: client}, nil
 }
 
+// NewLocalEnv returns an Env with no Kubernetes client, for commands that only
+// build and push images. Kube is nil, so a step that uses it must not run
+// under such an Env.
+func NewLocalEnv(cfg *config.Config) *Env {
+	return &Env{Cfg: cfg}
+}
+
 // imageResolver returns the image resolver, creating it on first use.
 func (e *Env) imageResolver() (imageResolver, error) {
 	if e.resolver != nil {

@@ -18,6 +18,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"slices"
+	"strings"
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/images"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
@@ -62,12 +64,36 @@ func (e *Env) PublishWorkerImages(ctx context.Context, w io.Writer) error {
 	return nil
 }
 
+// PublishReleaseOptions are the publish release-images settings.
+type PublishReleaseOptions struct {
+	// Force rebuilds and replaces images the registry already holds for the
+	// tag. Without it, a complete set is left alone.
+	Force bool
+}
+
+// releaseImageRefs returns the tagged reference of every image a release
+// publishes to repo: one per images.Components entry, plus envoy-dataplane.
+func releaseImageRefs(repo, tag string) []string {
+	repo = strings.TrimSuffix(repo, "/")
+	refs := make([]string, 0, len(images.Components)+1)
+	for _, pkg := range images.Components {
+		refs = append(refs, repo+"/"+images.ImageName(pkg)+":"+tag)
+	}
+	return append(refs, repo+"/"+envoyDataplaneImage+":"+tag)
+}
+
 // PublishReleaseImages builds and pushes every image a pre-built install
 // needs, all tagged with the build version, and writes their pushed references
 // to w. That is what `deploy --image-repo KO_DOCKER_REPO --image-tag VERSION`
 // installs: the ko images in images.Components, plus envoy-dataplane, which is
 // built from a Dockerfile.
-func (e *Env) PublishReleaseImages(ctx context.Context, w io.Writer) error {
+//
+// If the registry already holds every image for the tag on every platform,
+// nothing is built unless opts.Force is set, so rerunning a release never
+// replaces published digests by accident. An incomplete set, left by a failed
+// run, is rebuilt in full. After pushing, every image is checked for every
+// platform.
+func (e *Env) PublishReleaseImages(ctx context.Context, w io.Writer, opts PublishReleaseOptions) error {
 	if e.Cfg.KODockerRepo == "" {
 		return fmt.Errorf("publishing release images needs a registry to push to; set KO_DOCKER_REPO or --ko-docker-repo")
 	}
@@ -76,6 +102,26 @@ func (e *Env) PublishReleaseImages(ctx context.Context, w io.Writer) error {
 		return err
 	}
 	log.Stepf("publish_release_images (%s)", tag)
+	platforms, err := images.Platforms(e.Cfg.Root, e.Cfg.KODefaultPlatforms)
+	if err != nil {
+		return err
+	}
+	tagged := releaseImageRefs(e.Cfg.KODockerRepo, tag)
+	if !opts.Force {
+		incomplete, err := images.CheckPublished(ctx, tagged, platforms)
+		if err != nil {
+			return err
+		}
+		if len(incomplete) == 0 {
+			log.Infof("%s already holds every image for %s; nothing built. Pass --force to rebuild and replace them.",
+				e.Cfg.KODockerRepo, tag)
+			return nil
+		}
+		for _, i := range incomplete {
+			log.Infof("to build: %s", i)
+		}
+	}
+
 	runner, err := e.koRunner()
 	if err != nil {
 		return err
@@ -84,16 +130,30 @@ func (e *Env) PublishReleaseImages(ctx context.Context, w io.Writer) error {
 	for _, pkg := range images.Components {
 		pkgs = append(pkgs, "./"+pkg)
 	}
-	refs, err := runner.BuildTagged(ctx, tag, pkgs...)
+	source := images.SourceLabel + "=" + images.SourceURL
+	refs, err := runner.BuildTagged(ctx, tag, []string{source}, pkgs...)
 	if err != nil {
 		return err
 	}
+	dockerFlags := append(slices.Clone(e.Cfg.DockerBuildFlags), "--label="+source)
 	envoy, err := images.PublishDockerfileImage(ctx, e.Cfg.Root, e.Cfg.KODockerRepo, envoyDataplaneImage, tag,
-		e.Cfg.Path(envoyDataplaneDockefile), e.Cfg.KODefaultPlatforms, e.Cfg.DockerBuildFlags)
+		e.Cfg.Path(envoyDataplaneDockefile), e.Cfg.KODefaultPlatforms, dockerFlags)
 	if err != nil {
 		return err
 	}
 	refs = append(refs, envoy)
+
+	incomplete, err := images.CheckPublished(ctx, tagged, platforms)
+	if err != nil {
+		return err
+	}
+	if len(incomplete) > 0 {
+		lines := make([]string, 0, len(incomplete))
+		for _, i := range incomplete {
+			lines = append(lines, i.String())
+		}
+		return fmt.Errorf("after publishing, %d image(s) are incomplete:\n  %s", len(incomplete), strings.Join(lines, "\n  "))
+	}
 	if _, err := fmt.Fprintf(w, "\nRelease images for %s:\n", tag); err != nil {
 		return err
 	}

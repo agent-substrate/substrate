@@ -52,13 +52,13 @@ unchanged.
 ```
 ate-setup deploy ate-system \
   --credential-provider='{"name":"k8s.io"}' \
-  --image-repo registry.example.com/substrate \
+  --image-repo ghcr.io/agent-substrate/substrate \
   --image-tag vX.Y.Z
 ```
 
 installs published images instead, and never invokes `ko`. The release workflow
 publishes every release's images to `ghcr.io/agent-substrate/substrate`, which
-needs no credentials to read; see `docs/dev/release-notes.md`. The manifests still
+needs no credentials to read; see `docs/dev/releasing.md`. The manifests still
 come from the checkout, so this needs one; what it removes is the build, the Go
 toolchain, and write access to a registry.
 
