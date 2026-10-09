@@ -121,18 +121,23 @@ jobs:
       with:
         go-version-file: 'go.mod'
     - name: Verify
-      run: hack/verify-all.sh
-    # The root verifiers stop at the module's go.mod, so it gets its own run:
-    # gofmt, go vet and the tidy check, then golangci-lint with the root config.
-    - name: gcp-secret-manager credential provider verify
-      working-directory: internal/plugins/gcp-secret-manager
-      run: |
-        make verify
-        ../../../hack/run-tool.sh golangci-lint run --config ../../../.golangci.yaml ./...
-  # Preserve the required-check name while unit tests and verification run in
-  # parallel as separate jobs.
+      run: make verify-checks
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+    - name: Checkout
+      uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+    - name: Setup Go
+      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+      with:
+        go-version-file: 'go.mod'
+    - name: Lint
+      run: make lint
+  # Preserve the required-check name while unit tests, verification and linting
+  # run in parallel as separate jobs.
   run-tests:
-    needs: [unit-tests, verify]
+    needs: [unit-tests, verify, lint]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -140,9 +145,11 @@ jobs:
       env:
         UNIT_TESTS_RESULT: ${{ needs.unit-tests.result }}
         VERIFY_RESULT: ${{ needs.verify.result }}
+        LINT_RESULT: ${{ needs.lint.result }}
       run: |
         test "${UNIT_TESTS_RESULT}" = success
         test "${VERIFY_RESULT}" = success
+        test "${LINT_RESULT}" = success
   # One kind cluster exercises BOTH runtimes. Free x86-64 ubuntu-latest runners
   # expose /dev/kvm (with a udev rule), so create-kind-cluster.sh mounts it and the
   # micro-VM (kata + cloud-hypervisor) sandbox class works alongside gVisor.

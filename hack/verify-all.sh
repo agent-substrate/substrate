@@ -21,8 +21,21 @@ cd "${ROOT}"
 
 export LC_ALL=C # for sorting to be consistent across locales
 
+SKIP_LINT=false
+if [[ "${1:-}" == "--skip-lint" ]]; then
+  SKIP_LINT=true
+  shift
+fi
+
 # shellcheck disable=2044 # for-loop over find output is intentional
 for F in $(find ./hack/verify -name '*.sh' | sort); do
+  if [[ "${SKIP_LINT}" == true ]]; then
+    case "${F}" in
+      ./hack/verify/golangci-lint.sh | ./hack/verify/kube-api-linter.sh)
+        continue
+        ;;
+    esac
+  fi
   echo "Running ${F}"
   "${F}" "$@"
 done

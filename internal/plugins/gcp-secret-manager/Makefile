@@ -35,6 +35,10 @@ test:
 fmt:
 	$(GOFMT) -w .
 
+.PHONY: lint
+lint:
+	../../../hack/run-tool.sh golangci-lint run --config ../../../.golangci.yaml ./...
+
 .PHONY: verify
 verify:
 	@out="$$($(GOFMT) -l .)"; if [ -n "$$out" ]; then echo "gofmt needed on:"; echo "$$out"; exit 1; fi
