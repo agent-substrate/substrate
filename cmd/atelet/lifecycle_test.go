@@ -22,7 +22,9 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
@@ -32,6 +34,8 @@ import (
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -66,6 +70,14 @@ type fakeAteom struct {
 	// preserveRestoreDir records the PreserveRestoreDir flag from the most
 	// recent RestoreWorkload request.
 	preserveRestoreDir bool
+	// terminations counts TerminateWorkload calls.
+	terminations atomic.Int32
+	// checkpointErr, when set, fails CheckpointWorkload with it.
+	checkpointErr error
+	// checkpointArrived, when set, is closed once CheckpointWorkload arrives,
+	// which then holds the call until it ends, so a test can take the ateom
+	// down mid-call.
+	checkpointArrived chan struct{}
 }
 
 func (f *fakeAteom) recordActorDirs(rpc string, actorDirs *ateompb.ActorDirs) {
@@ -80,8 +92,16 @@ func (f *fakeAteom) RunWorkload(_ context.Context, req *ateompb.RunWorkloadReque
 	return &ateompb.RunWorkloadResponse{}, nil
 }
 
-func (f *fakeAteom) CheckpointWorkload(_ context.Context, req *ateompb.CheckpointWorkloadRequest) (*ateompb.CheckpointWorkloadResponse, error) {
+func (f *fakeAteom) CheckpointWorkload(ctx context.Context, req *ateompb.CheckpointWorkloadRequest) (*ateompb.CheckpointWorkloadResponse, error) {
 	f.recordActorDirs("CheckpointWorkload", req.GetActorDirs())
+	if f.checkpointArrived != nil {
+		close(f.checkpointArrived)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	if f.checkpointErr != nil {
+		return nil, f.checkpointErr
+	}
 	dir := req.GetActorDirs().GetCheckpointDir()
 	names := make([]string, 0, len(f.snapshotFiles))
 	for name, body := range f.snapshotFiles {
@@ -109,13 +129,18 @@ func (f *fakeAteom) RestoreWorkload(_ context.Context, req *ateompb.RestoreWorkl
 }
 
 func (f *fakeAteom) TerminateWorkload(_ context.Context, req *ateompb.TerminateWorkloadRequest) (*ateompb.TerminateWorkloadResponse, error) {
+	f.terminations.Add(1)
 	f.recordActorDirs("TerminateWorkload", req.GetActorDirs())
 	return &ateompb.TerminateWorkloadResponse{}, nil
 }
 
 // serveFakeAteom serves ateom on a unix socket and points atelet's dialer at
 // it. The socket lives in its own short temp dir.
-func serveFakeAteom(t *testing.T, f *fakeAteom) {
+//
+// kill stops the server the way the ateom process dying would: every
+// connection drops at once, and the socket file stays behind, refusing
+// connections.
+func serveFakeAteom(t *testing.T, f *fakeAteom) (kill func()) {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "ateom-")
 	if err != nil {
@@ -128,6 +153,7 @@ func serveFakeAteom(t *testing.T, f *fakeAteom) {
 	if err != nil {
 		t.Fatalf("listening on %q: %v", sock, err)
 	}
+	lis.(*net.UnixListener).SetUnlinkOnClose(false)
 	srv := grpc.NewServer()
 	ateompb.RegisterAteomServer(srv, f)
 	go func() { _ = srv.Serve(lis) }()
@@ -136,6 +162,221 @@ func serveFakeAteom(t *testing.T, f *fakeAteom) {
 	orig := ateomSocketPath
 	ateomSocketPath = func(string) string { return sock }
 	t.Cleanup(func() { ateomSocketPath = orig })
+	return srv.Stop
+}
+
+// TestSuspendRemovesActorDir walks an actor through run -> suspend over atelet's
+// RPC surface: an external checkpoint moves the actor off the node, so nothing
+// of it should stay behind. A pause keeps its directory for the local snapshot,
+// which TestLocalSnapshotGC restores from.
+func TestSuspendRemovesActorDir(t *testing.T) {
+	useTempNodeDirs(t)
+	ctx := t.Context()
+
+	const (
+		atespace  = "ate-demo"
+		actorName = "counter"
+		actorUID  = "actor-uid-1"
+		ateomUID  = "ateom-uid-1"
+	)
+
+	serveFakeAteom(t, &fakeAteom{snapshotFiles: map[string]string{"checkpoint.img": "guest-memory"}})
+
+	host := imageVolumeTestRegistry(t)
+	image := host + "/actor:v1"
+	pushTestImage(t, image, singleFileLayer(t, "bin/app", "app"))
+
+	runsc := []byte("runsc binary")
+	// External snapshots upload through the object-store plugin, into a store
+	// that accepts and discards them.
+	s := newPluginHerder(t, fakeObjectStorage{})
+	s.ateomDialer = newAteomDialer(1)
+	s.imageCache = newImageVolumeStore(t)
+	s.anonGCSClient = fakeObjectStorage{data: runsc}
+	s.systemInfoVolumes = newSystemInfoVolumeRefresher(nil, nil)
+	spec := &ateletpb.WorkloadSpec{
+		Containers: []*ateletpb.Container{{Name: "app", Image: image, Command: []string{"/bin/app"}}},
+	}
+	if _, err := s.Run(ctx, &ateletpb.RunRequest{
+		Atespace:              atespace,
+		ActorName:             actorName,
+		ActorUid:              actorUID,
+		ActorTemplateAtespace: "default",
+		ActorTemplateName:     "counter",
+		TargetAteomUid:        ateomUID,
+		SandboxAssets: &ateletpb.SandboxAssets{
+			SandboxClass: "gvisor",
+			PauseImage:   image,
+			Assets: map[string]*ateletpb.ArchAssets{
+				runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
+					runscAssetName: {
+						Url:    "gs://test-bucket/runsc",
+						Sha256: fmt.Sprintf("%x", sha256.Sum256(runsc)),
+					},
+				}},
+			},
+		},
+		Spec: spec,
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if _, err := os.Stat(ateletpath.ActorPath(actorUID)); err != nil {
+		t.Fatalf("run did not create the actor directory: %v", err)
+	}
+
+	if _, err := s.Checkpoint(ctx, &ateletpb.CheckpointRequest{
+		Atespace:              atespace,
+		ActorName:             actorName,
+		ActorUid:              actorUID,
+		ActorTemplateAtespace: "default",
+		ActorTemplateName:     "counter",
+		TargetAteomUid:        ateomUID,
+		Spec:                  spec,
+		Fidelity:              ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+		Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
+		Config: &ateletpb.CheckpointRequest_ExternalConfig{
+			ExternalConfig: &ateletpb.ExternalCheckpointConfiguration{SnapshotUri: testSnapshotURI},
+		},
+	}); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+
+	if actorDir := ateletpath.ActorPath(actorUID); !isGone(actorDir) {
+		entries, _ := os.ReadDir(actorDir)
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Errorf("%s survived the suspend holding %v, want it removed", actorDir, names)
+	}
+}
+
+// TestCheckpointFailureRegistration checks which failed checkpoints keep the
+// actor registered as hosted here. An ateom that cannot be reached took the
+// sandbox with it, so the actor must be released for the actor GC to reclaim
+// its directory. An ateom that answers with an error may still be running the
+// sandbox. The dead ateoms are real servers taken down, so the code checked
+// is the one gRPC reports for them.
+func TestCheckpointFailureRegistration(t *testing.T) {
+	// How the ateom goes down. Zero leaves it up.
+	const (
+		// The process died, leaving its socket file to refuse connections.
+		ateomDied = iota + 1
+		// The pod's directory went, and the socket with it.
+		ateomSocketGone
+		// The process dies with the checkpoint in flight.
+		ateomDiesMidCall
+	)
+	for _, tc := range []struct {
+		name string
+		down int
+		// ateomErr is what a live ateom answers the checkpoint with.
+		ateomErr       error
+		wantCode       codes.Code
+		wantRegistered bool
+	}{
+		{name: "ateom rejects", ateomErr: status.Error(codes.Internal, "checkpoint failed"), wantCode: codes.Internal, wantRegistered: true},
+		{name: "ateom died", down: ateomDied, wantCode: codes.Unavailable},
+		{name: "ateom socket gone", down: ateomSocketGone, wantCode: codes.Unavailable},
+		{name: "ateom dies mid-call", down: ateomDiesMidCall, wantCode: codes.Unavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			useTempNodeDirs(t)
+			ctx := t.Context()
+
+			const (
+				atespace  = "ate-demo"
+				actorName = "counter"
+				actorUID  = "actor-uid-1"
+				ateomUID  = "ateom-uid-1"
+			)
+
+			ateom := &fakeAteom{checkpointErr: tc.ateomErr}
+			if tc.down == ateomDiesMidCall {
+				ateom.checkpointArrived = make(chan struct{})
+			}
+			kill := serveFakeAteom(t, ateom)
+
+			host := imageVolumeTestRegistry(t)
+			image := host + "/actor:v1"
+			pushTestImage(t, image, singleFileLayer(t, "bin/app", "app"))
+
+			runsc := []byte("runsc binary")
+			s := newPluginHerder(t, fakeObjectStorage{})
+			s.ateomDialer = newAteomDialer(1)
+			s.imageCache = newImageVolumeStore(t)
+			s.anonGCSClient = fakeObjectStorage{data: runsc}
+			s.systemInfoVolumes = newSystemInfoVolumeRefresher(nil, nil)
+			spec := &ateletpb.WorkloadSpec{
+				Containers: []*ateletpb.Container{{Name: "app", Image: image, Command: []string{"/bin/app"}}},
+			}
+			if _, err := s.Run(ctx, &ateletpb.RunRequest{
+				Atespace:              atespace,
+				ActorName:             actorName,
+				ActorUid:              actorUID,
+				ActorTemplateAtespace: "default",
+				ActorTemplateName:     "counter",
+				TargetAteomUid:        ateomUID,
+				SandboxAssets: &ateletpb.SandboxAssets{
+					SandboxClass: "gvisor",
+					PauseImage:   image,
+					Assets: map[string]*ateletpb.ArchAssets{
+						runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
+							runscAssetName: {
+								Url:    "gs://test-bucket/runsc",
+								Sha256: fmt.Sprintf("%x", sha256.Sum256(runsc)),
+							},
+						}},
+					},
+				},
+				Spec: spec,
+			}); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if !slices.Contains(s.systemInfoVolumes.RegisteredActorUIDs(), actorUID) {
+				t.Fatalf("Run did not register %s", actorUID)
+			}
+
+			switch tc.down {
+			case ateomDied:
+				kill()
+			case ateomSocketGone:
+				kill()
+				if err := os.Remove(ateomSocketPath(ateomUID)); err != nil {
+					t.Fatalf("removing the ateom socket: %v", err)
+				}
+			case ateomDiesMidCall:
+				go func() {
+					<-ateom.checkpointArrived
+					kill()
+				}()
+			}
+
+			_, err := s.Checkpoint(ctx, &ateletpb.CheckpointRequest{
+				Atespace:              atespace,
+				ActorName:             actorName,
+				ActorUid:              actorUID,
+				ActorTemplateAtespace: "default",
+				ActorTemplateName:     "counter",
+				TargetAteomUid:        ateomUID,
+				Spec:                  spec,
+				Fidelity:              ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+				Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
+				Config: &ateletpb.CheckpointRequest_ExternalConfig{
+					ExternalConfig: &ateletpb.ExternalCheckpointConfiguration{SnapshotUri: testSnapshotURI},
+				},
+			})
+			if err == nil {
+				t.Fatal("Checkpoint succeeded, want it to fail")
+			}
+			if got := status.Code(err); got != tc.wantCode {
+				t.Errorf("Checkpoint failed with %v, want %v: %v", got, tc.wantCode, err)
+			}
+			if got := slices.Contains(s.systemInfoVolumes.RegisteredActorUIDs(), actorUID); got != tc.wantRegistered {
+				t.Errorf("after a checkpoint failing with %v, registered = %v, want %v", status.Code(err), got, tc.wantRegistered)
+			}
+		})
+	}
 }
 
 // TestLocalSnapshotGC walks an actor through
@@ -700,4 +941,220 @@ func TestTerminateWithoutTargetAteomUID(t *testing.T) {
 	if _, err := os.Stat(ateletpath.ActorPath(actorUID)); !os.IsNotExist(err) {
 		t.Errorf("actor dir survived terminate: %v", err)
 	}
+}
+
+// A deleted worker pod takes its ateom with it and leaves the actor's state on
+// the node — gigabytes of it for a durdir actor. The worker delete reclaims it
+// with a Terminate that still names that ateom, so one that refuses to run
+// without a live ateom leaves the state until the actor is deleted or
+// reverted. Both ways the sandbox can be absent are covered: the pod's socket
+// gone with it, and an actor that never started one.
+func TestTerminateReclaimsStateWithoutALiveSandbox(t *testing.T) {
+	const (
+		atespace  = "ate-demo"
+		actorName = "counter"
+		actorUID  = "actor-uid-1"
+		ateomUID  = "ateom-uid-1"
+	)
+
+	tests := []struct {
+		name string
+		// setup arranges the absence under test and reports it.
+		setup func(t *testing.T)
+	}{
+		{
+			name: "ateom socket gone with its pod",
+			setup: func(t *testing.T) {
+				orig := ateomSocketPath
+				missing := filepath.Join(t.TempDir(), "ateom.sock")
+				ateomSocketPath = func(string) string { return missing }
+				t.Cleanup(func() { ateomSocketPath = orig })
+			},
+		},
+		{
+			// The record is written at Run/Restore: without one, no sandbox
+			// was ever started for this actor here, so there is nothing to
+			// tear down and no runsc to tear it down with.
+			name: "ateom reachable but the actor has no sandbox record",
+			setup: func(t *testing.T) {
+				serveFakeAteom(t, &fakeAteom{})
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			useTempNodeDirs(t)
+			ctx := t.Context()
+			tt.setup(t)
+
+			// The three directories that each hold a full copy of a durdir
+			// actor's payload, which is what makes one actor cost 3 GiB.
+			stateDirs := []string{
+				ateletpath.DurableDirVolumeMountsDir(actorUID),
+				ateletpath.CheckpointStateDir(actorUID),
+				ateletpath.RestoreStateDir(actorUID),
+			}
+			for _, dir := range stateDirs {
+				if err := os.MkdirAll(dir, 0o755); err != nil {
+					t.Fatalf("seeding %s: %v", dir, err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, "payload"), []byte("actor state"), 0o600); err != nil {
+					t.Fatalf("seeding %s: %v", dir, err)
+				}
+			}
+			snapshotDir := ateletpath.LocalSnapshotDir(actorUID, "pause-snap-1")
+			if err := os.MkdirAll(snapshotDir, 0o755); err != nil {
+				t.Fatalf("seeding %s: %v", snapshotDir, err)
+			}
+
+			s := &AteomHerder{
+				ateomDialer:       newAteomDialer(1),
+				systemInfoVolumes: newSystemInfoVolumeRefresher(nil, nil),
+			}
+			if _, err := s.Terminate(ctx, &ateletpb.TerminateRequest{
+				Atespace:              atespace,
+				ActorName:             actorName,
+				ActorUid:              actorUID,
+				ActorTemplateAtespace: "default",
+				ActorTemplateName:     "counter",
+				TargetAteomUid:        ateomUID,
+				Spec:                  &ateletpb.WorkloadSpec{},
+			}); err != nil {
+				t.Fatalf("Terminate: %v", err)
+			}
+
+			// #1654 made Terminate remove the actor's directory outright
+			// rather than emptying the state dirs in place, so the seeded
+			// payloads go with it and the whole tree is the assertion.
+			if actorDir := ateletpath.ActorPath(actorUID); !isGone(actorDir) {
+				entries, _ := os.ReadDir(actorDir)
+				t.Errorf("%s survived terminate with %d entries, want the actor's state reclaimed", actorDir, len(entries))
+			}
+			if localDir := ateletpath.LocalCheckpointsDir(actorUID); !isGone(localDir) {
+				t.Errorf("%s survived terminate, want the local snapshots pruned", localDir)
+			}
+		})
+	}
+}
+
+// TestTerminateCanBeRetried pins that a repeated Terminate succeeds. The control
+// plane retries a Terminate until one does, so a Terminate that cannot succeed
+// twice strands the actor in DELETING with its state on the node.
+func TestTerminateCanBeRetried(t *testing.T) {
+	const (
+		atespace  = "ate-demo"
+		actorName = "counter"
+		actorUID  = "actor-uid-1"
+		ateomUID  = "ateom-uid-1"
+	)
+
+	for _, tt := range []struct {
+		name string
+		// failFirst fails the first Terminate after its ateom teardown, the way
+		// a volume that has not finished unmounting does.
+		failFirst bool
+		// wantTeardowns is how many TerminateWorkload calls ateom sees. A retry
+		// tears down again only while the sandbox record survives.
+		wantTeardowns int32
+	}{
+		{name: "after a terminate that succeeded", wantTeardowns: 1},
+		{name: "after a terminate that failed past the teardown", failFirst: true, wantTeardowns: 2},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			useTempNodeDirs(t)
+			ctx := t.Context()
+
+			ateom := &fakeAteom{}
+			serveFakeAteom(t, ateom)
+
+			host := imageVolumeTestRegistry(t)
+			image := host + "/actor:v1"
+			pushTestImage(t, image, singleFileLayer(t, "bin/app", "app"))
+
+			runsc := []byte("runsc binary")
+			s := &AteomHerder{
+				ateomDialer:       newAteomDialer(1),
+				imageCache:        newImageVolumeStore(t),
+				anonGCSClient:     fakeObjectStorage{data: runsc},
+				systemInfoVolumes: newSystemInfoVolumeRefresher(nil, nil),
+			}
+			spec := &ateletpb.WorkloadSpec{
+				Containers: []*ateletpb.Container{{Name: "app", Image: image, Command: []string{"/bin/app"}}},
+			}
+			if _, err := s.Run(ctx, &ateletpb.RunRequest{
+				Atespace:              atespace,
+				ActorName:             actorName,
+				ActorUid:              actorUID,
+				ActorTemplateAtespace: "default",
+				ActorTemplateName:     "counter",
+				TargetAteomUid:        ateomUID,
+				SandboxAssets: &ateletpb.SandboxAssets{
+					SandboxClass: "gvisor",
+					PauseImage:   image,
+					Assets: map[string]*ateletpb.ArchAssets{
+						runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
+							runscAssetName: {
+								Url:    "gs://test-bucket/runsc",
+								Sha256: fmt.Sprintf("%x", sha256.Sum256(runsc)),
+							},
+						}},
+					},
+				},
+				Spec: spec,
+			}); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+
+			// A populated volume directory, which resetActorDirs refuses to
+			// delete through.
+			straggler := filepath.Join(ateletpath.VolumeHostPath(actorUID, "data"), "file")
+			if tt.failFirst {
+				if err := os.MkdirAll(filepath.Dir(straggler), 0o755); err != nil {
+					t.Fatalf("seeding %s: %v", straggler, err)
+				}
+				if err := os.WriteFile(straggler, []byte("still mounted"), 0o600); err != nil {
+					t.Fatalf("seeding %s: %v", straggler, err)
+				}
+			}
+
+			req := &ateletpb.TerminateRequest{
+				Atespace:              atespace,
+				ActorName:             actorName,
+				ActorUid:              actorUID,
+				ActorTemplateAtespace: "default",
+				ActorTemplateName:     "counter",
+				TargetAteomUid:        ateomUID,
+				Spec:                  spec,
+			}
+			_, err := s.Terminate(ctx, req)
+			if tt.failFirst {
+				if err == nil {
+					t.Fatal("first Terminate succeeded through a populated volume directory")
+				}
+				// The unmount finishes before the retry.
+				if err := os.Remove(straggler); err != nil {
+					t.Fatalf("removing %s: %v", straggler, err)
+				}
+			} else if err != nil {
+				t.Fatalf("first Terminate: %v", err)
+			}
+
+			if _, err := s.Terminate(ctx, req); err != nil {
+				t.Fatalf("retried Terminate: %v", err)
+			}
+			if got := ateom.terminations.Load(); got != tt.wantTeardowns {
+				t.Errorf("ateom saw %d TerminateWorkload calls, want %d", got, tt.wantTeardowns)
+			}
+			if actorDir := ateletpath.ActorPath(actorUID); !isGone(actorDir) {
+				t.Errorf("%s survived the retried terminate, want it removed", actorDir)
+			}
+		})
+	}
+}
+
+// isGone reports whether path does not exist.
+func isGone(path string) bool {
+	_, err := os.Stat(path)
+	return os.IsNotExist(err)
 }

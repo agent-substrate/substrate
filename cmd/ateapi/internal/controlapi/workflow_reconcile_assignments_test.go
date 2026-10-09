@@ -67,7 +67,7 @@ func mustRaiseEpoch(t *testing.T, ctx context.Context, svc *RPCService, persiste
 
 func mustReconcileAssignments(t *testing.T, ctx context.Context, persistence store.Interface) {
 	t.Helper()
-	if err := NewWorkerWorkflow(persistence).ReconcileAssignments(ctx, apiWorkerName); err != nil {
+	if err := NewWorkerWorkflow(persistence, nil).ReconcileAssignments(ctx, apiWorkerName); err != nil {
 		t.Fatalf("ReconcileAssignments() failed: %v", err)
 	}
 }
@@ -212,6 +212,104 @@ func TestReconcileAssignments_CrashesEarlierActors(t *testing.T) {
 	}
 	if a := firstAssignment(t, persistence, apiWorkerName); a != nil {
 		t.Errorf("worker still hosts %v, want the assignment released", a)
+	}
+}
+
+// An ateom restart takes an actor's sandbox but not its state directory, and
+// atelet, which no RPC told, still registers the actor, so its sweep keeps the
+// directory. The release is the earliest point to reclaim it, so atelet is
+// asked to terminate the actor before it is crashed.
+func TestReconcileAssignments_ReclaimsCrashedActorNodeState(t *testing.T) {
+	tests := []struct {
+		name          string
+		state         ateapipb.ActorState
+		wantTerminate bool
+	}{
+		{name: "running actor is reclaimed", state: ateapipb.ActorState_ACTOR_STATE_RUNNING, wantTerminate: true},
+		{name: "resuming actor is reclaimed", state: ateapipb.ActorState_ACTOR_STATE_RESUMING, wantTerminate: true},
+		// Its checkpoint released it on the node and removed its directory.
+		{name: "suspended actor is left alone", state: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			svc, persistence := newWorkerAPIService(t)
+			seedEpochWorker(t, ctx, persistence, 1, 1)
+			actor := seedAPIActor(t, ctx, persistence, tc.state)
+			assignAPIWorker(t, ctx, persistence, apiWorkerName, actor.GetMetadata().GetUid())
+			mustRaiseEpoch(t, ctx, svc, persistence, 2)
+
+			atelet := &capturingTerminator{}
+			if err := NewWorkerWorkflow(persistence, newNodeAteletDialer(t, atelet)).ReconcileAssignments(ctx, apiWorkerName); err != nil {
+				t.Fatalf("ReconcileAssignments() failed: %v", err)
+			}
+
+			got := atelet.requests()
+			if !tc.wantTerminate {
+				if len(got) != 0 {
+					t.Errorf("atelet received %d Terminate calls, want none: %v", len(got), got)
+				}
+				return
+			}
+			if len(got) != 1 {
+				t.Fatalf("atelet received %d Terminate calls, want exactly 1", len(got))
+			}
+			if req := got[0]; req.GetActorUid() != actor.GetMetadata().GetUid() {
+				t.Errorf("Terminate actor_uid = %q, want %q", req.GetActorUid(), actor.GetMetadata().GetUid())
+			}
+			// The restarted ateom serves the same pod.
+			if want := validWorker(apiWorkerName).GetWorkerPodUid(); got[0].GetTargetAteomUid() != want {
+				t.Errorf("Terminate target_ateom_uid = %q, want the worker's pod uid %q", got[0].GetTargetAteomUid(), want)
+			}
+			if s := mustGetActor(t, ctx, persistence).GetStatus().GetState(); s != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+				t.Errorf("actor state = %v, want CRASHED", s)
+			}
+		})
+	}
+}
+
+// A worker lives on one node, so once one reclaim there times out, the rest of
+// the pass leaves its actors' state to the sweep rather than wait out the same
+// timeout for each.
+func TestReconcileAssignments_HungReclaimGivesUpOnTheNode(t *testing.T) {
+	orig := workerReclaimTimeout
+	workerReclaimTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { workerReclaimTimeout = orig })
+
+	ctx := context.Background()
+	svc, persistence := newWorkerAPIService(t)
+	seedEpochWorker(t, ctx, persistence, 1, 1)
+	var refs []resources.ActorRef
+	for _, name := range []string{"actor-1", "actor-2", "actor-3"} {
+		actor := seedAPIActor(t, ctx, persistence, ateapipb.ActorState_ACTOR_STATE_RUNNING, func(a *ateapipb.Actor) {
+			a.Metadata.Name = name
+		})
+		ref := resources.ActorRefFromActor(actor)
+		if err := persistence.BindActorToWorker(ctx, apiWorkerName, &ateapipb.ActorAssignment{
+			Actor:    &ateapipb.ObjectRef{Atespace: ref.Atespace, Name: ref.Name},
+			ActorUid: actor.GetMetadata().GetUid(),
+		}, nil); err != nil {
+			t.Fatalf("assigning %s to worker %s: %v", ref, apiWorkerName, err)
+		}
+		refs = append(refs, ref)
+	}
+	mustRaiseEpoch(t, ctx, svc, persistence, 2)
+
+	atelet := &capturingTerminator{hang: true}
+	if err := NewWorkerWorkflow(persistence, newNodeAteletDialer(t, atelet)).ReconcileAssignments(ctx, apiWorkerName); err != nil {
+		t.Fatalf("ReconcileAssignments() failed: %v", err)
+	}
+	if got := len(atelet.requests()); got != 1 {
+		t.Errorf("atelet received %d Terminate calls, want 1: the first timeout gives up on the node", got)
+	}
+	for _, ref := range refs {
+		got, err := persistence.GetActor(ctx, ref)
+		if err != nil {
+			t.Fatalf("GetActor(%s) failed: %v", ref, err)
+		}
+		if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+			t.Errorf("actor %s state = %v, want CRASHED", ref, got.GetStatus().GetState())
+		}
 	}
 }
 
@@ -378,7 +476,7 @@ func TestReconcileAssignments_WaitsForBusyActor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AcquireLease() failed: %v", err)
 	}
-	err = NewWorkerWorkflow(persistence).ReconcileAssignments(ctx, apiWorkerName)
+	err = NewWorkerWorkflow(persistence, nil).ReconcileAssignments(ctx, apiWorkerName)
 	if !errors.Is(err, errActorBusy) {
 		t.Fatalf("ReconcileAssignments() = %v, want errActorBusy", err)
 	}
@@ -455,7 +553,7 @@ func TestReconcileAssignments_KeepsActorReboundSinceList(t *testing.T) {
 			t.Fatalf("UpdateActor() failed: %v", err)
 		}
 	}}
-	if err := NewWorkerWorkflow(rebinding).ReconcileAssignments(ctx, apiWorkerName); err != nil {
+	if err := NewWorkerWorkflow(rebinding, nil).ReconcileAssignments(ctx, apiWorkerName); err != nil {
 		t.Fatalf("ReconcileAssignments() failed: %v", err)
 	}
 
@@ -484,7 +582,7 @@ func TestReconcileAssignments_RetriesRecordAfterConcurrentBind(t *testing.T) {
 	binding := &hookedStore{Interface: persistence, beforeUpdateWorker: func() {
 		assignAPIWorker(t, ctx, persistence, apiWorkerName, boundUID)
 	}}
-	if err := NewWorkerWorkflow(binding).ReconcileAssignments(ctx, apiWorkerName); err != nil {
+	if err := NewWorkerWorkflow(binding, nil).ReconcileAssignments(ctx, apiWorkerName); err != nil {
 		t.Fatalf("ReconcileAssignments() failed: %v", err)
 	}
 
@@ -518,7 +616,7 @@ func TestReconcileAssignments_LeavesReplacedWorker(t *testing.T) {
 		}
 		seedEpochWorker(t, ctx, persistence, 1, 1)
 	}}
-	if err := NewWorkerWorkflow(replacing).ReconcileAssignments(ctx, apiWorkerName); err != nil {
+	if err := NewWorkerWorkflow(replacing, nil).ReconcileAssignments(ctx, apiWorkerName); err != nil {
 		t.Fatalf("ReconcileAssignments() failed: %v", err)
 	}
 
@@ -536,7 +634,7 @@ func TestReconcileAssignments_FailureKeepsObservedEpoch(t *testing.T) {
 	seedRunningActor(t, ctx, persistence)
 	mustRaiseEpoch(t, ctx, svc, persistence, 2)
 
-	failing := NewWorkerWorkflow(failingUpdateActorStore{Interface: persistence, err: errors.New("crash failed")})
+	failing := NewWorkerWorkflow(failingUpdateActorStore{Interface: persistence, err: errors.New("crash failed")}, nil)
 	if err := failing.ReconcileAssignments(ctx, apiWorkerName); err == nil {
 		t.Fatal("ReconcileAssignments() = nil error, want the crash failure reported")
 	}

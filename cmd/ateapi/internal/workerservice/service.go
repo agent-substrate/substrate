@@ -37,6 +37,11 @@ type Server struct {
 	// precondition a client's would be.
 	suspender actorSuspender
 
+	// workers lists every Worker the control plane knows, for the answers
+	// scoped to the caller's node. It is the watch-fed worker cache rather
+	// than the store, so serving a node does not read every Worker row.
+	workers workerLister
+
 	// ateletSPIFFEID is the identity the calling atelet must present.
 	ateletSPIFFEID string
 
@@ -49,12 +54,19 @@ type actorSuspender interface {
 	SuspendActor(ctx context.Context, req *ateapipb.SuspendActorRequest) (*ateapipb.SuspendActorResponse, error)
 }
 
+// workerLister is the slice of the worker cache this package reads.
+// *workercache.Cache satisfies it.
+type workerLister interface {
+	Workers() ([]*ateapipb.Worker, error)
+}
+
 var _ ateapipb.WorkerServiceServer = (*Server)(nil)
 
-func New(store store.Interface, suspender actorSuspender, ateletSPIFFEID string, actorIDCAPool localca.Pool) *Server {
+func New(store store.Interface, suspender actorSuspender, workers workerLister, ateletSPIFFEID string, actorIDCAPool localca.Pool) *Server {
 	return &Server{
 		store:          store,
 		suspender:      suspender,
+		workers:        workers,
 		ateletSPIFFEID: ateletSPIFFEID,
 		actorIDCAPool:  actorIDCAPool,
 	}

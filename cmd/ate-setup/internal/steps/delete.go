@@ -24,7 +24,8 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
 )
 
-// DeleteAteSystem removes the control plane.
+// DeleteAteSystem removes the control plane and, unless opts or an external
+// database say otherwise, the state it left on the nodes.
 //
 // PostgreSQL, the agentgateway ConfigMap, the bundled credential provider, and
 // the CRDs are deleted explicitly because they are not part of every rendered
@@ -32,12 +33,14 @@ import (
 // credential provider that were selected, and teardown must not depend on
 // remembering that. The provider goes first so that a later failure cannot
 // leave its ClusterRole and binding behind.
-func (e *Env) DeleteAteSystem(ctx context.Context) error {
+func (e *Env) DeleteAteSystem(ctx context.Context, opts DeleteOptions) error {
 	log.Step("delete_ate_system")
 
 	if err := e.Kube.DeletePath(ctx, e.k8sCredentialProviderPath(k8sCredentialProviderManifest)); err != nil {
 		return err
 	}
+
+	wipe := e.shouldWipeNodeState(ctx, opts)
 
 	if e.Cfg.Kind {
 		manifest, err := e.Kustomize(installDir + "/kind")
@@ -74,6 +77,11 @@ func (e *Env) DeleteAteSystem(ctx context.Context) error {
 	if err := e.Kube.WaitDeleted(ctx, schema.GroupVersionKind{Version: "v1", Kind: "Namespace"}, "", e.Namespace(), e.Cfg.WaitTimeout(BootstrapTimeout)); err != nil {
 		return err
 	}
+	if wipe {
+		if err := e.wipeNodeState(ctx, nodeStateWipeKeep(opts)); err != nil {
+			return err
+		}
+	}
 	return e.UnlabelNodesSubstrateVersion(ctx)
 }
 
@@ -109,7 +117,7 @@ type Deleter interface {
 }
 
 // DeleteAll removes every registered demo and then the control plane.
-func (e *Env) DeleteAll(ctx context.Context, demos []Deleter) error {
+func (e *Env) DeleteAll(ctx context.Context, demos []Deleter, opts DeleteOptions) error {
 	log.Step("delete_all")
 
 	for _, demo := range demos {
@@ -117,5 +125,5 @@ func (e *Env) DeleteAll(ctx context.Context, demos []Deleter) error {
 			return err
 		}
 	}
-	return e.DeleteAteSystem(ctx)
+	return e.DeleteAteSystem(ctx, opts)
 }
