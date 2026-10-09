@@ -17,10 +17,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"github.com/agent-substrate/substrate/internal/actorlock"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -496,4 +500,125 @@ func testActivation() *ateomstats.Activation {
 func sweepAndList(s *AteomService) (*ateompb.GetActiveWorkloadStatsResponse, error) {
 	s.sweepUsage(context.Background())
 	return s.GetActiveWorkloadStats(context.Background(), &ateompb.GetActiveWorkloadStatsRequest{})
+}
+
+// deadCgroup is a sandbox leaf after the kernel OOM-killed the sentry: the leaf
+// and its counters remain, the processes do not.
+var deadCgroup = map[string]string{
+	"memory.current": "16384\n",
+	"memory.events":  "oom 5334\noom_kill 3\n",
+	"cgroup.events":  "populated 0\nfrozen 0\n",
+}
+
+// captureWarnings routes the default logger to a buffer for the test.
+func captureWarnings(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return &buf
+}
+
+const deadSandboxMsg = "Sandbox has no processes left while the actor is hosted"
+
+// TestSweepUsageDeadSandbox: a hosted actor whose sandbox cgroup
+// is empty is warned about once per activation, and not at all while a
+// lifecycle RPC is tearing it down.
+func TestSweepUsageDeadSandbox(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		files     map[string]string
+		busy      bool
+		wantWarns int
+	}{
+		{name: "dead sandbox warns once", files: deadCgroup, wantWarns: 1},
+		{name: "teardown in progress is skipped", files: deadCgroup, busy: true},
+		{name: "live sandbox does not warn", files: healthyCgroup},
+		{name: "booting sandbox with no cgroup yet does not warn", files: nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logs := captureWarnings(t)
+			s := newStatsService(t, tc.files)
+			setHostedActor(s, &testActor)
+			if tc.busy {
+				if !s.locks.Lock(context.Background(), testActor.UID) {
+					t.Fatal("could not take the actor lock")
+				}
+				defer s.locks.Unlock(testActor.UID)
+			}
+
+			// Two sweeps: the second must not repeat the warning.
+			for range 2 {
+				got, err := sweepAndList(s)
+				if err != nil {
+					t.Fatalf("sweepAndList() error = %v, want nil", err)
+				}
+				if len(got.GetSamples()) != 1 {
+					t.Fatalf("sweepAndList() = %v, want one sample", got)
+				}
+			}
+
+			if n := strings.Count(logs.String(), deadSandboxMsg); n != tc.wantWarns {
+				t.Fatalf("got %d dead-sandbox warnings, want %d; logs:\n%s", n, tc.wantWarns, logs)
+			}
+			if tc.wantWarns > 0 {
+				for _, want := range []string{`"ate.actor.uid":"uid-a"`, `"ate.actor.name":"actor-a"`, `"ate.atespace":"space-a"`, `"ate.template.name":"template-a"`, `"ate.sandbox.oom_kills":3`} {
+					if !strings.Contains(logs.String(), want) {
+						t.Errorf("warning missing %s; logs:\n%s", want, logs)
+					}
+				}
+			}
+		})
+	}
+}
+
+// A record that is no longer the hosted one -- the actor was unhosted or
+// re-hosted after the cgroup was read -- is never reported.
+func TestWarnDeadSandboxStaleRecord(t *testing.T) {
+	logs := captureWarnings(t)
+	s := newStatsService(t, deadCgroup)
+	setHostedActor(s, &testActor)
+	stale := &hostedActor{attribution: testActor}
+
+	s.warnDeadSandbox(context.Background(), stale, cgroupstats.Sample{Empty: true})
+
+	if strings.Contains(logs.String(), deadSandboxMsg) {
+		t.Fatalf("warned about a stale record; logs:\n%s", logs)
+	}
+	if stale.deadReported.Load() {
+		t.Error("stale record marked as reported")
+	}
+}
+
+// The once-per-activation guarantee is per hostedActor: a new activation of
+// the same actor that dies again is reported again.
+func TestSweepUsageDeadSandboxNewActivation(t *testing.T) {
+	logs := captureWarnings(t)
+	s := newStatsService(t, deadCgroup)
+	for range 2 {
+		setHostedActor(s, &testActor) // a fresh hostedActor, as hostActor makes
+		s.sweepUsage(context.Background())
+	}
+	if n := strings.Count(logs.String(), deadSandboxMsg); n != 2 {
+		t.Fatalf("got %d dead-sandbox warnings over two activations, want 2; logs:\n%s", n, logs)
+	}
+}
+
+// Concurrent sweeps of one dead sandbox still warn once.
+func TestSweepUsageDeadSandboxConcurrentSweeps(t *testing.T) {
+	logs := captureWarnings(t)
+	s := newStatsService(t, deadCgroup)
+	setHostedActor(s, &testActor)
+
+	var wg sync.WaitGroup
+	for range 16 {
+		wg.Go(func() {
+			s.sweepUsage(context.Background())
+		})
+	}
+	wg.Wait()
+	if n := strings.Count(logs.String(), deadSandboxMsg); n != 1 {
+		t.Fatalf("got %d dead-sandbox warnings from concurrent sweeps, want 1; logs:\n%s", n, logs)
+	}
 }

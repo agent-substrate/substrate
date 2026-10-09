@@ -60,6 +60,27 @@ func TestActorLocksSerializeTheSameActor(t *testing.T) {
 	locks.Unlock("actor-a")
 }
 
+// Busy is true from Lock to Unlock and only for the actor that holds it.
+func TestActorLocksBusy(t *testing.T) {
+	locks := New()
+	if locks.Busy("actor-a") {
+		t.Fatal("Busy(actor-a) = true before any Lock")
+	}
+	if !locks.Lock(context.Background(), "actor-a") {
+		t.Fatal("could not take actor-a's lock")
+	}
+	if !locks.Busy("actor-a") {
+		t.Error("Busy(actor-a) = false while held")
+	}
+	if locks.Busy("actor-b") {
+		t.Error("Busy(actor-b) = true while only actor-a is held")
+	}
+	locks.Unlock("actor-a")
+	if locks.Busy("actor-a") {
+		t.Error("Busy(actor-a) = true after Unlock")
+	}
+}
+
 // The map must not grow by one entry per actor the worker has ever hosted.
 func TestActorLocksForgetIdleActors(t *testing.T) {
 	locks := New()
