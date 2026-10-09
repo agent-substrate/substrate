@@ -15,6 +15,7 @@
 package resources
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -270,14 +271,20 @@ func TestValidateLimit(t *testing.T) {
 		want     field.ErrorList
 	}{
 		{name: "cpu below the bound", limit: "cpu", quantity: "999"},
+		{name: "cpu at the millicore bound", limit: "cpu", quantity: "999.999"},
 		{name: "memory", limit: "memory", quantity: "1Gi"},
-		{name: "memory has no upper bound", limit: "memory", quantity: "1000"},
+		{name: "memory at the int64 bound", limit: "memory", quantity: "9223372036854775807"},
 		{name: "missing quantity left to tags", limit: "cpu"},
 		{name: "unsupported name", limit: "gpu", quantity: "1", want: field.ErrorList{field.NotSupported[string](path.Child("name"), nil, nil)}},
 		{name: "malformed quantity", limit: "cpu", quantity: "x", want: field.ErrorList{field.Invalid(quantityPath, nil, "")}},
 		{name: "zero quantity", limit: "memory", quantity: "0", want: field.ErrorList{field.Invalid(quantityPath, nil, "")}},
 		{name: "negative quantity", limit: "memory", quantity: "-1", want: field.ErrorList{field.Invalid(quantityPath, nil, "")}},
-		{name: "cpu at the bound", limit: "cpu", quantity: "1000", want: field.ErrorList{field.Invalid(quantityPath, nil, "")}},
+		{name: "cpu at 1000 cores", limit: "cpu", quantity: "1000", want: field.ErrorList{field.Invalid(quantityPath, nil, "")}},
+		{name: "cpu rounds up to 1000 cores in millicores", limit: "cpu", quantity: "999.9995", want: field.ErrorList{field.Invalid(quantityPath, nil, "")}},
+		{name: "cpu far beyond int64 millicores", limit: "cpu", quantity: "1e30", want: field.ErrorList{field.Invalid(quantityPath, nil, "")}},
+		{name: "memory past the int64 bound", limit: "memory", quantity: "9223372036854775808", want: field.ErrorList{field.Invalid(quantityPath, nil, "")}},
+		{name: "memory rounds up past the int64 bound", limit: "memory", quantity: "9223372036854775807.5", want: field.ErrorList{field.Invalid(quantityPath, nil, "")}},
+		{name: "memory far beyond int64 bytes", limit: "memory", quantity: "1e30", want: field.ErrorList{field.Invalid(quantityPath, nil, "")}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -571,14 +578,41 @@ func TestValidateNestedMountPaths(t *testing.T) {
 	}
 }
 
+func TestValidateCSIMap(t *testing.T) {
+	path := field.NewPath("publish_context")
+	many := make(map[string]string, 100)
+	for i := range 100 {
+		many[fmt.Sprintf("key-%03d", i)] = "v"
+	}
+	tests := []struct {
+		name string
+		m    map[string]string
+		want field.ErrorList
+	}{
+		{name: "nil"},
+		{name: "one long value", m: map[string]string{"token": strings.Repeat("x", 4000)}},
+		{name: "many small entries", m: many},
+		{name: "exactly the limit", m: map[string]string{"k": strings.Repeat("x", 4095)}},
+		{name: "one byte over", m: map[string]string{"k": strings.Repeat("x", 4096)}, want: field.ErrorList{field.TooLong(path, nil, 4096)}},
+		{name: "over across entries", m: map[string]string{"a": strings.Repeat("x", 2048), "b": strings.Repeat("y", 2048)}, want: field.ErrorList{field.TooLong(path, nil, 4096)}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			field.ErrorMatcher{}.ByType().ByField().Test(t, tt.want, ValidateCSIMap(path, tt.m))
+		})
+	}
+}
+
 func TestValidateHostPort(t *testing.T) {
 	runStringRule(t, ValidateHostPort, []stringRuleCase{
 		{name: "empty is left to presence tags", value: ""},
 		{name: "dns name", value: "atenet-egress.ate-system.svc:443"},
+		{name: "fully qualified dns name", value: "atenet-egress.ate-system.svc.cluster.local.:443"},
 		{name: "ipv4", value: "10.0.0.1:8080"},
 		{name: "ipv6", value: "[fd00::1]:443"},
 		{name: "missing port", value: "atenet-egress.ate-system.svc", wantErr: true},
 		{name: "empty host", value: ":443", wantErr: true},
+		{name: "bare dot host", value: ".:443", wantErr: true},
 		{name: "uppercase host", value: "Egress.Example:443", wantErr: true},
 		{name: "host with a path", value: "egress/../x:443", wantErr: true},
 		{name: "port zero", value: "egress.example:0", wantErr: true},

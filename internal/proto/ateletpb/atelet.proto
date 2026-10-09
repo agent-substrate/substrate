@@ -202,11 +202,11 @@ service AteomHerder {
 }
 
 message TerminateRequest {
-  // If unset, atelet only cleans up the actor's node resources; it does not
-  // reach an ateom.
+  // The UID of the worker pod whose ateom hosts the actor. If unset, atelet
+  // only cleans up the actor's node resources; it does not reach an ateom.
   //
   // +k8s:optional
-  // +k8s:format=k8s-short-name
+  // +k8s:format=k8s-uuid
   string target_ateom_uid = 1;
 
   // +k8s:required
@@ -242,8 +242,10 @@ message TerminateResponse {
 }
 
 message RunRequest {
+  // The UID of the worker pod whose ateom hosts the actor.
+  //
   // +k8s:required
-  // +k8s:format=k8s-short-name
+  // +k8s:format=k8s-uuid
   string target_ateom_uid = 1;
 
   // +k8s:required
@@ -320,6 +322,7 @@ message AssetFile {
   // Lower-case hex SHA256; names the cached file and verifies its integrity.
   //
   // +k8s:required
+  // +k8s:maxLength=64
   // +k8s:customValidation # 64 hex characters
   string sha256 = 2;
 }
@@ -343,6 +346,7 @@ message SandboxAssets {
   // the tags can bound it and the custom validation goes away.
   //
   // +k8s:required
+  // +k8s:maxLength=63 # guardrail; the class names are a few characters
   // +k8s:customValidation # gvisor or microvm
   string sandbox_class = 1; // e.g. "gvisor"
 
@@ -397,19 +401,18 @@ message ExternalVolumeSource {
   // +k8s:customValidation # optional "substrate.io/" prefix + DNS subdomain
   string volume_type = 2;
 
+  // volume_context is the driver's provisioning metadata. Its entries are the
+  // driver's own, so the map is only held to the CSI size limit.
+  //
   // +k8s:optional
-  // +k8s:maxProperties=32
-  // +k8s:eachKey=+k8s:maxLength=128
-  // +k8s:eachVal=+k8s:maxLength=256
+  // +k8s:customValidation # at most 4 KiB in total, the CSI limit for map fields
   map<string, string> volume_context = 3;
 
   // publish_context is the driver's attachment metadata for this node, which
-  // the node plugin needs to complete the mount.
+  // the node plugin needs to complete the mount. Bounded like volume_context.
   //
   // +k8s:optional
-  // +k8s:maxProperties=32
-  // +k8s:eachKey=+k8s:maxLength=128
-  // +k8s:eachVal=+k8s:maxLength=256
+  // +k8s:customValidation # at most 4 KiB in total, the CSI limit for map fields
   map<string, string> publish_context = 4;
 }
 
@@ -751,8 +754,10 @@ message ExternalRestoreConfiguration {
 
 // +k8s:customValidation # the set config matches type
 message CheckpointRequest {
+  // The UID of the worker pod whose ateom hosts the actor.
+  //
   // +k8s:required
-  // +k8s:format=k8s-short-name
+  // +k8s:format=k8s-uuid
   string target_ateom_uid = 1;
 
   // +k8s:required
@@ -870,8 +875,10 @@ message UploadPausedCheckpointResponse {
 
 // +k8s:customValidation # the set config matches type
 message RestoreRequest {
+  // The UID of the worker pod whose ateom hosts the actor.
+  //
   // +k8s:required
-  // +k8s:format=k8s-short-name
+  // +k8s:format=k8s-uuid
   string target_ateom_uid = 1;
 
   // +k8s:required

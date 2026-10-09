@@ -97,6 +97,14 @@ func ValidateCustom_ExternalVolumeSource_VolumeType(_ context.Context, _ operati
 	return resources.ValidateVolumeType(fldPath, *value)
 }
 
+func ValidateCustom_ExternalVolumeSource_VolumeContext(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ map[string]string) field.ErrorList {
+	return resources.ValidateCSIMap(fldPath, value)
+}
+
+func ValidateCustom_ExternalVolumeSource_PublishContext(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ map[string]string) field.ErrorList {
+	return resources.ValidateCSIMap(fldPath, value)
+}
+
 func ValidateCustom_ImageVolumeSource_Reference(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	return resources.ValidatePinnedImage(fldPath, *value)
 }

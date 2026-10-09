@@ -149,7 +149,7 @@ func TestLocalSnapshotGC(t *testing.T) {
 		atespace     = "ate-demo"
 		actorName    = "counter"
 		actorUID     = "01234567-89ab-cdef-0123-456789abcdef"
-		ateomUID     = "ateom-uid-1"
+		ateomUID     = "5f1c0d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f"
 		snapshotName = "pause-snap-1"
 	)
 
@@ -301,7 +301,7 @@ func TestRestoreUsesRequestSandboxAssets(t *testing.T) {
 		atespace     = "ate-demo"
 		actorName    = "counter"
 		actorUID     = "01234567-89ab-cdef-0123-456789abcdef"
-		ateomUID     = "ateom-uid-1"
+		ateomUID     = "5f1c0d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f"
 		snapshotName = "pause-snap-1"
 	)
 
@@ -480,14 +480,14 @@ func TestActivationFailureBeforeRegistration(t *testing.T) {
 			}
 			if tc.restore {
 				_, err = s.Restore(ctx, &ateletpb.RestoreRequest{
-					Atespace: "team-a", ActorName: "actor-1", ActorUid: actorUID, TargetAteomUid: "ateom-uid-1",
+					Atespace: "team-a", ActorName: "actor-1", ActorUid: actorUID, TargetAteomUid: "5f1c0d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f",
 					SandboxAssets: assets, Spec: spec,
 					Fidelity: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, Type: ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
 					LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: snapshotName},
 				})
 			} else {
 				_, err = s.Run(ctx, &ateletpb.RunRequest{
-					Atespace: "team-a", ActorName: "actor-1", ActorUid: actorUID, TargetAteomUid: "ateom-uid-1",
+					Atespace: "team-a", ActorName: "actor-1", ActorUid: actorUID, TargetAteomUid: "5f1c0d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f",
 					SandboxAssets: assets, Spec: spec,
 				})
 			}
@@ -554,7 +554,7 @@ func TestRunFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
 		Atespace:       "team-a",
 		ActorName:      "actor-run",
 		ActorUid:       actorUID,
-		TargetAteomUid: "ateom-uid-1",
+		TargetAteomUid: "5f1c0d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f",
 		SandboxAssets: &ateletpb.SandboxAssets{
 			SandboxClass: "gvisor",
 			PauseImage:   missingPauseImage(t),
@@ -615,7 +615,7 @@ func TestRestoreFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
 		Atespace:       "team-a",
 		ActorName:      "actor-restore-after",
 		ActorUid:       actorUID,
-		TargetAteomUid: "ateom-uid-1",
+		TargetAteomUid: "5f1c0d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f",
 		SandboxAssets: &ateletpb.SandboxAssets{
 			SandboxClass: "gvisor",
 			PauseImage:   pauseImage,

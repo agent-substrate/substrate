@@ -766,11 +766,11 @@ func (x *MintActorCertificateResponse) GetActorCertificates() [][]byte {
 
 type TerminateRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// If unset, atelet only cleans up the actor's node resources; it does not
-	// reach an ateom.
+	// The UID of the worker pod whose ateom hosts the actor. If unset, atelet
+	// only cleans up the actor's node resources; it does not reach an ateom.
 	//
 	// +k8s:optional
-	// +k8s:format=k8s-short-name
+	// +k8s:format=k8s-uuid
 	TargetAteomUid string `protobuf:"bytes,1,opt,name=target_ateom_uid,json=targetAteomUid,proto3" json:"target_ateom_uid,omitempty"`
 	// +k8s:required
 	// +k8s:format=k8s-short-name
@@ -915,8 +915,10 @@ func (*TerminateResponse) Descriptor() ([]byte, []int) {
 
 type RunRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
+	// The UID of the worker pod whose ateom hosts the actor.
+	//
 	// +k8s:required
-	// +k8s:format=k8s-short-name
+	// +k8s:format=k8s-uuid
 	TargetAteomUid string `protobuf:"bytes,1,opt,name=target_ateom_uid,json=targetAteomUid,proto3" json:"target_ateom_uid,omitempty"`
 	// +k8s:required
 	// +k8s:format=k8s-short-name
@@ -1132,6 +1134,7 @@ type AssetFile struct {
 	// Lower-case hex SHA256; names the cached file and verifies its integrity.
 	//
 	// +k8s:required
+	// +k8s:maxLength=64
 	// +k8s:customValidation # 64 hex characters
 	Sha256        string `protobuf:"bytes,2,opt,name=sha256,proto3" json:"sha256,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -1242,6 +1245,7 @@ type SandboxAssets struct {
 	// the tags can bound it and the custom validation goes away.
 	//
 	// +k8s:required
+	// +k8s:maxLength=63 # guardrail; the class names are a few characters
 	// +k8s:customValidation # gvisor or microvm
 	SandboxClass string `protobuf:"bytes,1,opt,name=sandbox_class,json=sandboxClass,proto3" json:"sandbox_class,omitempty"` // e.g. "gvisor"
 	// +k8s:required
@@ -1425,18 +1429,17 @@ type ExternalVolumeSource struct {
 	// +k8s:maxLength=253 # matches ExternalVolume.volume_type's bound
 	// +k8s:customValidation # optional "substrate.io/" prefix + DNS subdomain
 	VolumeType string `protobuf:"bytes,2,opt,name=volume_type,json=volumeType,proto3" json:"volume_type,omitempty"`
-	// +k8s:optional
-	// +k8s:maxProperties=32
-	// +k8s:eachKey=+k8s:maxLength=128
-	// +k8s:eachVal=+k8s:maxLength=256
-	VolumeContext map[string]string `protobuf:"bytes,3,rep,name=volume_context,json=volumeContext,proto3" json:"volume_context,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	// publish_context is the driver's attachment metadata for this node, which
-	// the node plugin needs to complete the mount.
+	// volume_context is the driver's provisioning metadata. Its entries are the
+	// driver's own, so the map is only held to the CSI size limit.
 	//
 	// +k8s:optional
-	// +k8s:maxProperties=32
-	// +k8s:eachKey=+k8s:maxLength=128
-	// +k8s:eachVal=+k8s:maxLength=256
+	// +k8s:customValidation # at most 4 KiB in total, the CSI limit for map fields
+	VolumeContext map[string]string `protobuf:"bytes,3,rep,name=volume_context,json=volumeContext,proto3" json:"volume_context,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// publish_context is the driver's attachment metadata for this node, which
+	// the node plugin needs to complete the mount. Bounded like volume_context.
+	//
+	// +k8s:optional
+	// +k8s:customValidation # at most 4 KiB in total, the CSI limit for map fields
 	PublishContext map[string]string `protobuf:"bytes,4,rep,name=publish_context,json=publishContext,proto3" json:"publish_context,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
@@ -2680,8 +2683,10 @@ func (x *ExternalRestoreConfiguration) GetSnapshotUri() string {
 // +k8s:customValidation # the set config matches type
 type CheckpointRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
+	// The UID of the worker pod whose ateom hosts the actor.
+	//
 	// +k8s:required
-	// +k8s:format=k8s-short-name
+	// +k8s:format=k8s-uuid
 	TargetAteomUid string `protobuf:"bytes,1,opt,name=target_ateom_uid,json=targetAteomUid,proto3" json:"target_ateom_uid,omitempty"`
 	// +k8s:required
 	// +k8s:format=k8s-short-name
@@ -3047,8 +3052,10 @@ func (*UploadPausedCheckpointResponse) Descriptor() ([]byte, []int) {
 // +k8s:customValidation # the set config matches type
 type RestoreRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
+	// The UID of the worker pod whose ateom hosts the actor.
+	//
 	// +k8s:required
-	// +k8s:format=k8s-short-name
+	// +k8s:format=k8s-uuid
 	TargetAteomUid string `protobuf:"bytes,1,opt,name=target_ateom_uid,json=targetAteomUid,proto3" json:"target_ateom_uid,omitempty"`
 	// +k8s:required
 	// +k8s:format=k8s-short-name

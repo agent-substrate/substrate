@@ -285,13 +285,21 @@ func ValidateUUID(uuid string, fldPath *field.Path) field.ErrorList {
 	return nil
 }
 
-// cpuLimitMax bounds cpu limits: they must be less than 1000 cores.
-var cpuLimitMax = resource.MustParse("1k")
+// cpuLimitMax bounds cpu limits. The wire carries ceil(cores × 1000)
+// millicores and caps it at 999999 (strictly below 1000 cores), so a limit
+// above 999.999 cores rounds up out of range.
+var cpuLimitMax = resource.MustParse("999.999")
+
+// memoryLimitMax bounds memory limits at what the wire's int64 byte count
+// holds; resource.Quantity.Value wraps silently past it.
+var memoryLimitMax = resource.MustParse("9223372036854775807")
 
 // ValidateLimit validates one resource limit entry at fldPath: only cpu and
-// memory are supported, the quantity must be greater than zero, and the cpu
-// limit must be less than 1000 cores. An empty quantity is left to the
-// required tag.
+// memory are supported, the quantity must be greater than zero, and it must
+// fit the scalars the control plane converts it to (cpuLimitMax and
+// memoryLimitMax). The bounds compare Quantities rather than the converted
+// integers, which wrap for very large values. An empty quantity is left to
+// the required tag.
 func ValidateLimit(fldPath *field.Path, name, quantity string) field.ErrorList {
 	if name != ResourceCPU && name != ResourceMemory {
 		return field.ErrorList{field.NotSupported(fldPath.Child("name"), name, []string{ResourceCPU, ResourceMemory})}
@@ -307,8 +315,11 @@ func ValidateLimit(fldPath *field.Path, name, quantity string) field.ErrorList {
 	if q.Sign() <= 0 {
 		errs = append(errs, field.Invalid(fldPath.Child("quantity"), quantity, "must be greater than zero"))
 	}
-	if name == ResourceCPU && q.Cmp(cpuLimitMax) >= 0 {
-		errs = append(errs, field.Invalid(fldPath.Child("quantity"), quantity, "cpu limit must be less than 1000 cores"))
+	switch {
+	case name == ResourceCPU && q.Cmp(cpuLimitMax) > 0:
+		errs = append(errs, field.Invalid(fldPath.Child("quantity"), quantity, "cpu limit must be at most 999.999 cores"))
+	case name == ResourceMemory && q.Cmp(memoryLimitMax) > 0:
+		errs = append(errs, field.Invalid(fldPath.Child("quantity"), quantity, "memory limit must be at most 9223372036854775807 bytes"))
 	}
 	return errs
 }
@@ -480,8 +491,28 @@ func ValidateVolumeType(fldPath *field.Path, volumeType string) field.ErrorList 
 	return errs
 }
 
+// csiMapMaxBytes is the CSI size limit for map<string, string> fields. A
+// compliant driver never produces a larger volume or publish context, and a
+// tighter bound would refuse one that is within its rights.
+const csiMapMaxBytes = 4096
+
+// ValidateCSIMap bounds a map a CSI driver produced (a volume or publish
+// context) at the CSI size limit, counting keys and values. The entries are
+// the driver's own and are not validated further.
+func ValidateCSIMap(fldPath *field.Path, m map[string]string) field.ErrorList {
+	size := 0
+	for k, v := range m {
+		size += len(k) + len(v)
+	}
+	if size > csiMapMaxBytes {
+		return field.ErrorList{field.TooLong(fldPath, nil, csiMapMaxBytes)}
+	}
+	return nil
+}
+
 // ValidateHostPort requires "host:port", where host is an IP address or a DNS
-// subdomain name and port is a number in 1..65535.
+// subdomain name (a trailing dot, marking it fully qualified, is allowed) and
+// port is a number in 1..65535.
 func ValidateHostPort(fldPath *field.Path, value string) field.ErrorList {
 	if value == "" {
 		return nil
@@ -492,7 +523,7 @@ func ValidateHostPort(fldPath *field.Path, value string) field.ErrorList {
 	}
 	var errs field.ErrorList
 	if _, err := netip.ParseAddr(host); err != nil {
-		for _, msg := range content.IsDNS1123Subdomain(host) {
+		for _, msg := range content.IsDNS1123Subdomain(strings.TrimSuffix(host, ".")) {
 			errs = append(errs, field.Invalid(fldPath, value, "host: "+msg))
 		}
 	}

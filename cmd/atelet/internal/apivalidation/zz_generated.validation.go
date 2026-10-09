@@ -289,6 +289,9 @@ func Validate_AssetFile(
 			if e := ValidateCustom_AssetFile_Sha256(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
 				errs = append(errs, e...)
 			}
+			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 64); len(e) != 0 {
+				errs = append(errs, e...)
+			}
 			return
 		}
 		oldVal := safe.Field(oldObj,
@@ -438,7 +441,7 @@ func Validate_CheckpointRequest(
 			if earlyReturn {
 				return // do not proceed
 			}
-			if e := validate.ShortName(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+			if e := validate.UUID(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
@@ -1416,26 +1419,14 @@ func Validate_ExternalVolumeSource(
 			}
 			// call field-attached validations
 			earlyReturn := false
-			if e := validate.MaxProperties(ctx, op, fldPath, obj, oldObj, 32).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
-				earlyReturn = true
-			}
 			if e := validate.OptionalMap(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
 				earlyReturn = true
 			}
 			if earlyReturn {
 				return // do not proceed
 			}
-			if e := validate.EachMapKey(ctx, op, fldPath, obj, oldObj,
-				func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
-					return validate.MaxLength(ctx, op, fldPath, obj, oldObj, 128)
-				}); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			if e := validate.EachMapVal(ctx, op, fldPath, obj, oldObj, validate.DirectEqual,
-				func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
-					return validate.MaxLength(ctx, op, fldPath, obj, oldObj, 256)
-				}); len(e) != 0 {
+			// custom validation
+			if e := ValidateCustom_ExternalVolumeSource_VolumeContext(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
@@ -1460,26 +1451,14 @@ func Validate_ExternalVolumeSource(
 			}
 			// call field-attached validations
 			earlyReturn := false
-			if e := validate.MaxProperties(ctx, op, fldPath, obj, oldObj, 32).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
-				earlyReturn = true
-			}
 			if e := validate.OptionalMap(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
 				earlyReturn = true
 			}
 			if earlyReturn {
 				return // do not proceed
 			}
-			if e := validate.EachMapKey(ctx, op, fldPath, obj, oldObj,
-				func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
-					return validate.MaxLength(ctx, op, fldPath, obj, oldObj, 128)
-				}); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			if e := validate.EachMapVal(ctx, op, fldPath, obj, oldObj, validate.DirectEqual,
-				func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
-					return validate.MaxLength(ctx, op, fldPath, obj, oldObj, 256)
-				}); len(e) != 0 {
+			// custom validation
+			if e := ValidateCustom_ExternalVolumeSource_PublishContext(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
@@ -2281,7 +2260,7 @@ func Validate_RestoreRequest(
 			if earlyReturn {
 				return // do not proceed
 			}
-			if e := validate.ShortName(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+			if e := validate.UUID(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
@@ -2771,7 +2750,7 @@ func Validate_RunRequest(
 			if earlyReturn {
 				return // do not proceed
 			}
-			if e := validate.ShortName(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+			if e := validate.UUID(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
@@ -3131,6 +3110,9 @@ func Validate_SandboxAssets(
 			if e := ValidateCustom_SandboxAssets_SandboxClass(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
 				errs = append(errs, e...)
 			}
+			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 63); len(e) != 0 {
+				errs = append(errs, e...)
+			}
 			return
 		}
 		oldVal := safe.Field(oldObj,
@@ -3429,7 +3411,7 @@ func Validate_TerminateRequest(
 			if earlyReturn {
 				return // do not proceed
 			}
-			if e := validate.ShortName(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+			if e := validate.UUID(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return

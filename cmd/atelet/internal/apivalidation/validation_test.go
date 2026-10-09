@@ -208,7 +208,11 @@ func TestValidateRunRequest(t *testing.T) {
 	}, {
 		name: "invalid target_ateom_uid: path escape",
 		obj:  valid(func(r *ateletpb.RunRequest) { r.TargetAteomUid = "../escape" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("target_ateom_uid"), nil, "").WithOrigin("format=k8s-short-name")},
+		want: field.ErrorList{field.Invalid(field.NewPath("target_ateom_uid"), nil, "").WithOrigin("format=k8s-uuid")},
+	}, {
+		name: "invalid target_ateom_uid: not a pod UID",
+		obj:  valid(func(r *ateletpb.RunRequest) { r.TargetAteomUid = "ateom-1" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("target_ateom_uid"), nil, "").WithOrigin("format=k8s-uuid")},
 	}, {
 		name: "missing atespace",
 		obj:  valid(func(r *ateletpb.RunRequest) { r.Atespace = "" }),
@@ -362,6 +366,13 @@ func TestValidateSandboxAssets(t *testing.T) {
 		obj:  validSandboxAssets(func(a *ateletpb.SandboxAssets) { a.SandboxClass = "GVISOR" }),
 		want: field.ErrorList{field.NotSupported[string](field.NewPath("sandbox_class"), nil, nil)},
 	}, {
+		name: "sandbox_class too long",
+		obj:  validSandboxAssets(func(a *ateletpb.SandboxAssets) { a.SandboxClass = strings.Repeat("g", 64) }),
+		want: field.ErrorList{
+			field.TooLong(field.NewPath("sandbox_class"), nil, 63).WithOrigin("maxLength"),
+			field.NotSupported[string](field.NewPath("sandbox_class"), nil, nil),
+		},
+	}, {
 		name: "valid: no pause_image (microvm has no pause container)",
 		obj:  validSandboxAssets(func(a *ateletpb.SandboxAssets) { a.PauseImage = "" }),
 	}, {
@@ -396,6 +407,15 @@ func TestValidateSandboxAssets(t *testing.T) {
 		name: "sha256 too short",
 		obj:  validSandboxAssets(func(a *ateletpb.SandboxAssets) { a.Assets["amd64"] = file("gs://bucket/gvisor.tar.zstd", "deadbeef") }),
 		want: field.ErrorList{field.Invalid(amd64File.Child("sha256"), nil, "")},
+	}, {
+		name: "sha256 too long",
+		obj: validSandboxAssets(func(a *ateletpb.SandboxAssets) {
+			a.Assets["amd64"] = file("gs://bucket/gvisor.tar.zstd", testSHA256+"0")
+		}),
+		want: field.ErrorList{
+			field.TooLong(amd64File.Child("sha256"), nil, 64).WithOrigin("maxLength"),
+			field.Invalid(amd64File.Child("sha256"), nil, ""),
+		},
 	}, {
 		name: "sha256 with a path escape",
 		obj: validSandboxAssets(func(a *ateletpb.SandboxAssets) {
@@ -458,7 +478,11 @@ func TestValidateCheckpointRequest(t *testing.T) {
 	}, {
 		name: "invalid target_ateom_uid: path escape",
 		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.TargetAteomUid = "../escape" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("target_ateom_uid"), nil, "").WithOrigin("format=k8s-short-name")},
+		want: field.ErrorList{field.Invalid(field.NewPath("target_ateom_uid"), nil, "").WithOrigin("format=k8s-uuid")},
+	}, {
+		name: "invalid target_ateom_uid: not a pod UID",
+		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.TargetAteomUid = "ateom-1" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("target_ateom_uid"), nil, "").WithOrigin("format=k8s-uuid")},
 	}, {
 		name: "invalid atespace: path escape",
 		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.Atespace = "../escape" }),
@@ -629,7 +653,11 @@ func TestValidateRestoreRequest(t *testing.T) {
 	}, {
 		name: "invalid target_ateom_uid: path escape",
 		obj:  valid(func(r *ateletpb.RestoreRequest) { r.TargetAteomUid = "../escape" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("target_ateom_uid"), nil, "").WithOrigin("format=k8s-short-name")},
+		want: field.ErrorList{field.Invalid(field.NewPath("target_ateom_uid"), nil, "").WithOrigin("format=k8s-uuid")},
+	}, {
+		name: "invalid target_ateom_uid: not a pod UID",
+		obj:  valid(func(r *ateletpb.RestoreRequest) { r.TargetAteomUid = "ateom-1" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("target_ateom_uid"), nil, "").WithOrigin("format=k8s-uuid")},
 	}, {
 		name: "invalid atespace: path escape",
 		obj:  valid(func(r *ateletpb.RestoreRequest) { r.Atespace = "../escape" }),
@@ -896,7 +924,11 @@ func TestValidateTerminateRequest(t *testing.T) {
 	}, {
 		name: "invalid target_ateom_uid: path escape",
 		obj:  valid(func(r *ateletpb.TerminateRequest) { r.TargetAteomUid = "../escape" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("target_ateom_uid"), nil, "").WithOrigin("format=k8s-short-name")},
+		want: field.ErrorList{field.Invalid(field.NewPath("target_ateom_uid"), nil, "").WithOrigin("format=k8s-uuid")},
+	}, {
+		name: "invalid target_ateom_uid: not a pod UID",
+		obj:  valid(func(r *ateletpb.TerminateRequest) { r.TargetAteomUid = "ateom-1" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("target_ateom_uid"), nil, "").WithOrigin("format=k8s-uuid")},
 	}, {
 		name: "missing atespace",
 		obj:  valid(func(r *ateletpb.TerminateRequest) { r.Atespace = "" }),
@@ -1026,7 +1058,7 @@ func TestValidateRegisterWorkerRequest(t *testing.T) {
 		},
 	}, {
 		name: "quantity too long",
-		obj:  withLimits(&ateletpb.Limits{Name: "memory", Quantity: strings.Repeat("1", 33)}),
+		obj:  withLimits(&ateletpb.Limits{Name: "memory", Quantity: "1." + strings.Repeat("0", 31)}),
 		want: field.ErrorList{field.TooLong(limitsPath.Index(0).Child("quantity"), nil, 32).WithOrigin("maxLength")},
 	}, {
 		name: "duplicate resource name",
@@ -1247,17 +1279,30 @@ func TestValidateVolume(t *testing.T) {
 			obj:  external(func(e *ateletpb.ExternalVolumeSource) { e.VolumeType = "substrate.io/Mock" }),
 			want: field.ErrorList{field.Invalid(extPath.Child("volume_type"), nil, "")},
 		}, {
-			name: "external: volume_context key too long",
+			name: "external: volume_context with one long value, as a CSI driver may return",
 			obj: external(func(e *ateletpb.ExternalVolumeSource) {
-				e.VolumeContext = map[string]string{strings.Repeat("k", 129): "v"}
+				e.VolumeContext = map[string]string{"k": strings.Repeat("v", 4000)}
 			}),
-			want: field.ErrorList{field.TooLong(extPath.Child("volume_context"), nil, 128).WithOrigin("maxLength")},
 		}, {
-			name: "external: volume_context value too long",
+			name: "external: volume_context over the CSI size limit",
 			obj: external(func(e *ateletpb.ExternalVolumeSource) {
-				e.VolumeContext = map[string]string{"k": strings.Repeat("v", 257)}
+				e.VolumeContext = map[string]string{"k": strings.Repeat("v", 4096)}
 			}),
-			want: field.ErrorList{field.TooLong(extPath.Child("volume_context").Key("k"), nil, 256).WithOrigin("maxLength")},
+			want: field.ErrorList{field.TooLong(extPath.Child("volume_context"), nil, 4096)},
+		}, {
+			name: "external: publish_context with many entries, as a CSI driver may return",
+			obj: external(func(e *ateletpb.ExternalVolumeSource) {
+				e.PublishContext = make(map[string]string)
+				for i := range 100 {
+					e.PublishContext[fmt.Sprintf("key-%03d", i)] = "v"
+				}
+			}),
+		}, {
+			name: "external: publish_context over the CSI size limit",
+			obj: external(func(e *ateletpb.ExternalVolumeSource) {
+				e.PublishContext = map[string]string{"a": strings.Repeat("v", 2048), "b": strings.Repeat("v", 2048)}
+			}),
+			want: field.ErrorList{field.TooLong(extPath.Child("publish_context"), nil, 4096)},
 		},
 
 		// ImageVolumeSource.
