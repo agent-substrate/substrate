@@ -398,7 +398,7 @@ One consequence worth planning for: **a published snapshot is read from the ates
 
 `SandboxConfig` is a **cluster-scoped** resource that decouples the sandbox — its binaries (the gVisor `runsc` binary, or a micro-VM kernel/firmware/config) and the `pauseImage` that holds the sandbox's namespaces — from the workload definition in the `ActorTemplate`. An actor's cold boot resolves the sandbox binaries from the default version of the config its `ActorTemplate` names via `sandboxConfig.configName`.
 
-This means a single, cluster-managed config pins the sandbox runtime version for many templates: snapshots stay restorable because the version is recorded in each snapshot's manifest, and operators upgrade the runtime in one place.
+This means a single, cluster-managed config pins the sandbox runtime version for many templates, and operators upgrade the runtime in one place. A resume also resolves the default version at restore time: the snapshot manifest records the assets it was captured with, but a restore runs the current default, so changing `defaultVersion` applies to every existing snapshot on its next resume. gVisor does not promise that a checkpoint restores under a different release, so after a version change recut the golden snapshots and expect snapshots captured under the old version to fail on their next resume.
 
 ### Specification (`SandboxConfigSpec`)
 
@@ -430,20 +430,20 @@ metadata:
     sandboxconfig.ate.dev/is-class-default: "true"
 spec:
   sandboxClass: gvisor
-  defaultVersion: v1
+  defaultVersion: v2
   versions:
-  - name: v1
+  - name: v2
     state: Enabled
     pauseImage: "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
     assets:
       amd64:
         gvisor:
-          url: "gs://gvisor/releases/nightly/2026-09-02/x86_64/gvisor.tar.zstd"
-          sha256: "d547d81401461fd1c679c5c4fa0a6c2b8ef7dc3c22ce23c9e25dcc4c69cfd06f"
+          url: "gs://gvisor/releases/release/20260907.0/x86_64/gvisor.tar.zstd"
+          sha256: "e32ed48a2ddc7c0ef5e922ff5d52e33b6fccc75b61fd4c40a0bd9bdfe90032e6"
       arm64:
         gvisor:
-          url: "gs://gvisor/releases/nightly/2026-09-02/aarch64/gvisor.tar.zstd"
-          sha256: "a64916f9813ce7e4841a30480a599337f7dda07b421c6bf0123db2212aa7d1df"
+          url: "gs://gvisor/releases/release/20260907.0/aarch64/gvisor.tar.zstd"
+          sha256: "f3ba93a1a83dd4b6a322237030cdf81a278d9ef4e01ae6218ba69fbc479fdfb2"
 ```
 
 ### Micro-VM SandboxConfig
