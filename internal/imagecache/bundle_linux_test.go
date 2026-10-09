@@ -169,6 +169,52 @@ func TestSetupBundleRootfs_ZeroLayers(t *testing.T) {
 	}
 }
 
+// overlayfs presents the upperdir's mode as the container's /, so the upperdir
+// is 0755 (a non-root workload needs to traverse /) while the dirs only root
+// uses stay 0700. Needs no privileges.
+func TestSetupBundleRootfs_DirModes(t *testing.T) {
+	// A restrictive umask must not narrow the upperdir.
+	old := unix.Umask(0o077)
+	t.Cleanup(func() { unix.Umask(old) })
+
+	bundle := t.TempDir()
+	if err := WriteSpec(bundle, &OverlaySpec{}); err != nil {
+		t.Fatalf("WriteSpec: %v", err)
+	}
+	if err := SetupBundleRootfs(bundle); err != nil {
+		t.Fatalf("SetupBundleRootfs: %v", err)
+	}
+	for d, want := range map[string]os.FileMode{"rootfs": 0o700, "upper": 0o755, "work": 0o700} {
+		fi, err := os.Stat(filepath.Join(bundle, d))
+		if err != nil {
+			t.Fatalf("stat %s: %v", d, err)
+		}
+		if fi.Mode().Perm() != want {
+			t.Errorf("%s mode = %v, want %v", d, fi.Mode().Perm(), want)
+		}
+	}
+}
+
+// An upperdir that already exists keeps its mode.
+func TestSetupBundleRootfs_ExistingUpperKeepsMode(t *testing.T) {
+	bundle := t.TempDir()
+	if err := WriteSpec(bundle, &OverlaySpec{}); err != nil {
+		t.Fatalf("WriteSpec: %v", err)
+	}
+	upper := filepath.Join(bundle, "upper")
+	if err := os.Mkdir(upper, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetupBundleRootfs(bundle); err != nil {
+		t.Fatalf("SetupBundleRootfs: %v", err)
+	}
+	if fi, err := os.Stat(upper); err != nil {
+		t.Errorf("stat upper: %v", err)
+	} else if fi.Mode().Perm() != 0o700 {
+		t.Errorf("existing upper mode = %v, want 0700 untouched", fi.Mode().Perm())
+	}
+}
+
 // Implicit-parent metadata repair through a real overlay: the base declares
 // a 0700 dir, the top layer created it implicitly (0755 in its tree), and
 // after compose the merged view must show 0700 — copied up into the
@@ -225,6 +271,11 @@ func TestSetupBundleRootfs_MountAndUnmount(t *testing.T) {
 
 	if got, err := os.ReadFile(filepath.Join(bundle, "rootfs", "from-layer.txt")); err != nil || string(got) != "hello" {
 		t.Errorf("layer content not visible through overlay: %q (%v)", got, err)
+	}
+	if fi, err := os.Stat(filepath.Join(bundle, "rootfs")); err != nil {
+		t.Errorf("stat merged /: %v", err)
+	} else if fi.Mode().Perm() != 0o755 {
+		t.Errorf("merged / mode = %v, want 0755 so non-root users can traverse it", fi.Mode().Perm())
 	}
 	if fi, err := os.Stat(filepath.Join(bundle, "rootfs", "run", "ate")); err != nil || !fi.IsDir() {
 		t.Errorf("ExtraDir missing in overlay: %v", err)

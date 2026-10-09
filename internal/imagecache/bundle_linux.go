@@ -22,6 +22,7 @@ package imagecache
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -59,10 +60,13 @@ func SetupBundleRootfs(bundlePath string) error {
 	rootfs := filepath.Join(bundlePath, "rootfs")
 	upper := filepath.Join(bundlePath, "upper")
 	work := filepath.Join(bundlePath, "work")
-	for _, d := range []string{rootfs, upper, work} {
+	for _, d := range []string{rootfs, work} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
 			return fmt.Errorf("while creating %q: %w", d, err)
 		}
+	}
+	if err := mkdirUpper(upper); err != nil {
+		return fmt.Errorf("while creating %q: %w", upper, err)
 	}
 
 	// Detach any stale mount left by a previous incarnation of this bundle
@@ -99,6 +103,22 @@ func SetupBundleRootfs(bundlePath string) error {
 		return fmt.Errorf("while setting up image volumes: %w", err)
 	}
 	return nil
+}
+
+// upperDirMode is the mode of a new upperdir. overlayfs presents it as the
+// container's /, so 0700 would keep every non-root user out of the rootfs.
+const upperDirMode = 0o755
+
+// mkdirUpper creates the upperdir with exactly upperDirMode, whatever the
+// umask, and leaves an existing one as it is.
+func mkdirUpper(dir string) error {
+	if err := os.Mkdir(dir, upperDirMode); err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			return nil
+		}
+		return err
+	}
+	return os.Chmod(dir, upperDirMode)
 }
 
 // setupImageVolumes exposes each image volume's contents read-only at its
