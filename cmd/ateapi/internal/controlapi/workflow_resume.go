@@ -651,7 +651,7 @@ func (w *ActorWorkflow) ensureVolumesAttached(ctx context.Context, actor *ateapi
 			return nil, fmt.Errorf("failed to attach volume %q to node %q: %w", vol.GetStorageVolumeId(), node, err)
 		}
 		if len(resp.PublishContext) > 0 {
-			volumePublishContexts[vol.GetVolumeName()] = resp.PublishContext
+			volumePublishContexts[vol.GetName()] = resp.PublishContext
 		}
 	}
 	return volumePublishContexts, nil

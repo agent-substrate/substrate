@@ -1078,7 +1078,7 @@ type ExternalVolume struct {
 	// +k8s:update=NoModify
 	// +k8s:update=NoUnset # set-once; immutable would reject the create
 	// ratchet's nil->set when the final object is validated as an update
-	VolumeName string `protobuf:"bytes,1,opt,name=volume_name,json=volumeName,proto3" json:"volume_name,omitempty"`
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	// The globally unique volume_id returned from the storage system.
 	// This will be initially empty during volume creation. Its format is the
 	// storage system's own, so it is only bounded and checked for control
@@ -1099,7 +1099,7 @@ type ExternalVolume struct {
 	// +k8s:required
 	// +k8s:maxLength=253
 	// +k8s:update=NoModify
-	// +k8s:update=NoUnset # set-once, like volume_name above
+	// +k8s:update=NoUnset # set-once, like name above
 	// +k8s:customValidation
 	VolumeType string `protobuf:"bytes,3,opt,name=volume_type,json=volumeType,proto3" json:"volume_type,omitempty"`
 	// +k8s:optional
@@ -1150,9 +1150,9 @@ func (*ExternalVolume) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{6}
 }
 
-func (x *ExternalVolume) GetVolumeName() string {
+func (x *ExternalVolume) GetName() string {
 	if x != nil {
-		return x.VolumeName
+		return x.Name
 	}
 	return ""
 }
@@ -2051,7 +2051,7 @@ type ActorStatus struct {
 	// +k8s:optional
 	// +k8s:maxItems=32 # matches the template's volumes bound
 	// +k8s:listType=map
-	// +k8s:listMapKey=volume_name
+	// +k8s:listMapKey=name
 	ActorVolumes []*ExternalVolume `protobuf:"bytes,7,rep,name=actor_volumes,json=actorVolumes,proto3" json:"actor_volumes,omitempty"`
 	// crash records why and when the Actor entered CRASHED. It is set with the
 	// CRASHED state and cleared when a revert returns the Actor to SUSPENDED.
@@ -8351,10 +8351,9 @@ const file_ateapi_proto_rawDesc = "" +
 	"\vcreate_time\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"createTime\x12;\n" +
 	"\vupdate_time\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"updateTime\"\xa8\x03\n" +
-	"\x0eExternalVolume\x12\x1f\n" +
-	"\vvolume_name\x18\x01 \x01(\tR\n" +
-	"volumeName\x12*\n" +
+	"updateTime\"\x9b\x03\n" +
+	"\x0eExternalVolume\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12*\n" +
 	"\x11storage_volume_id\x18\x02 \x01(\tR\x0fstorageVolumeId\x12\x1f\n" +
 	"\vvolume_type\x18\x03 \x01(\tR\n" +
 	"volumeType\x125\n" +

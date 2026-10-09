@@ -178,7 +178,7 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 			// Skip volumes that were never created (e.g. failed during PENDING state).
 			if vol.GetStorageVolumeId() != "" {
 				workloadSpec.Volumes = append(workloadSpec.Volumes, &ateletpb.Volume{
-					Name: vol.GetVolumeName(),
+					Name: vol.GetName(),
 					Source: &ateletpb.Volume_External{
 						External: &ateletpb.ExternalVolumeSource{
 							StorageVolumeId: vol.GetStorageVolumeId(),

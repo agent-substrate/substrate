@@ -423,7 +423,7 @@ func TestAppendExternalVolumes(t *testing.T) {
 		Status: &ateapipb.ActorStatus{
 			ActorVolumes: []*ateapipb.ExternalVolume{
 				{
-					VolumeName:      "vol-1",
+					Name:            "vol-1",
 					StorageVolumeId: "vol-gce-pd-123",
 					VolumeType:      "pd-standard",
 					VolumeContext:   map[string]string{"foo": "bar"},
