@@ -23,6 +23,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/pflag"
+
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/images"
 )
 
@@ -41,6 +43,7 @@ func loadEnv(t *testing.T) {
 		"ACTOR_JWT_ALGORITHM",
 		"ANTHROPIC_API_KEY",
 		"ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE",
+		"ATE_API_LOG_LEVEL",
 		"ATE_API_POSTGRES_CLOUDSQL_GSA",
 		"ATE_API_POSTGRES_CLOUDSQL_IAM_AUTH",
 		"ATE_API_POSTGRES_CLOUDSQL_IP_TYPE",
@@ -393,6 +396,49 @@ func TestLoadExpectedJWTIssuer(t *testing.T) {
 	}
 	if cfg.ExpectedJWTIssuer != issuer {
 		t.Errorf("ExpectedJWTIssuer = %q, want %q", cfg.ExpectedJWTIssuer, issuer)
+	}
+}
+
+// An unset level stays empty, so that a deploy keeps the level an existing
+// install has rather than resetting it to the default.
+func TestLoadAPILogLevel(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		env     string
+		flag    string
+		want    string
+		wantErr bool
+	}{
+		{name: "unset", want: ""},
+		{name: "environment", env: "debug", want: "debug"},
+		{name: "flag beats environment", env: "debug", flag: "warn", want: "warn"},
+		{name: "unsupported", env: "verbose", wantErr: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			loadEnv(t)
+			t.Setenv("ATE_API_LOG_LEVEL", tt.env)
+			fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
+			BindFlags(fs)
+			if tt.flag != "" {
+				if err := fs.Set("ateapi-log-level", tt.flag); err != nil {
+					t.Fatalf("Set(--ateapi-log-level) error = %v", err)
+				}
+			}
+
+			cfg, err := LoadFlags(fs, LoadOptions{NoDevEnv: true})
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("LoadFlags() with ATE_API_LOG_LEVEL=%q returned nil error", tt.env)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("LoadFlags() error = %v", err)
+			}
+			if cfg.APILogLevel != tt.want {
+				t.Errorf("APILogLevel = %q, want %q", cfg.APILogLevel, tt.want)
+			}
+		})
 	}
 }
 

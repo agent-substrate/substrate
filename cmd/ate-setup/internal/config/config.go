@@ -200,6 +200,10 @@ type Config struct {
 	// OtlpEndpoint is where the control plane ships telemetry
 	// (ATE_OTLP_ENDPOINT). Benchmark actors are pointed at it too.
 	OtlpEndpoint string
+	// APILogLevel is the ate-api-server log level: debug, info, warn, or
+	// error. Empty means none was asked for, which keeps the level an
+	// existing install already has.
+	APILogLevel string
 	// BenchmarkActorMemory is the memory limit for benchmark actors
 	// (BENCHMARK_ACTOR_MEMORY). Empty leaves the workload default in place.
 	BenchmarkActorMemory string

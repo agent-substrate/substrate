@@ -157,6 +157,12 @@ var Registry = []Setting{
 	},
 
 	{
+		// No default: an unset level keeps the one an existing install has,
+		// and a new install gets ate-setup's default.
+		Key: "ateapi.logLevel", Env: "ATE_API_LOG_LEVEL", Flag: "ateapi-log-level", Kind: KindString,
+		Usage: "ate-api-server log level: debug, info, warn, or error (default: keep the installed level, else info)",
+	},
+	{
 		Key: "ateapi.expectedJWTIssuer", Env: "EXPECTED_JWT_ISSUER", Flag: "ateapi-expected-jwt-issuer",
 		Kind:  KindString,
 		Usage: "Service account token issuer ate-api-server trusts, overriding derivation and discovery",

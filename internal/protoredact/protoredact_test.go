@@ -29,6 +29,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/proto/grpcechopb"
 	"github.com/agent-substrate/substrate/internal/protoredact"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/agent-substrate/substrate/pkg/proto/ateconfigpb"
 	"github.com/agent-substrate/substrate/pkg/proto/credproviderpb"
 	objectstoresnapshotv1 "github.com/agent-substrate/substrate/pkg/proto/objectstoresnapshotpb/v1"
 	"google.golang.org/protobuf/proto"
@@ -373,6 +374,7 @@ func TestNeedsRedactionIsSafeUnderConcurrentFirstUse(t *testing.T) {
 var ourProtoFiles = []protoreflect.FileDescriptor{
 	ateapipb.File_ateapi_proto,
 	ateletpb.File_atelet_proto,
+	ateconfigpb.File_apiconfig_proto,
 	ateompb.File_ateom_proto,
 	credproviderpb.File_credprovider_proto,
 	glutton.File_glutton_proto,

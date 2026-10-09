@@ -102,6 +102,8 @@ usage() {
   echo "                                         labeled and tainted ate.dev/workloadType=ate-postgres:NoSchedule for postgres alone"
   echo "  --rollout-timeout DURATION             Per-workload readiness wait timeout, kubectl-style Go duration (default: 60s)"
   echo "  --otlp-endpoint URL                    Send all control plane telemetry to URL, not to the cluster default (see benchmarking/telemetry/README.md)"
+  echo "  --ateapi-log-level LEVEL               ate-api-server log level: debug, info, warn, or error"
+  echo "                                         (default: keep the installed level, else info)"
   echo ""
   echo "Experiments:"
   echo ""
@@ -137,6 +139,7 @@ usage() {
   echo "  --create-podcertificate-controller-cas Create podcertificate controller CAs"
   echo "  --create-api-server-env-vars           Create ate-api-server env vars"
   echo "  --create-api-authentication-config     Create the default ate-api-server authentication config"
+  echo "  --create-api-config                    Create the ate-api-server config file (log level from --ateapi-log-level)"
   echo ""
   echo "PostgreSQL configuration (a connection DSN or Cloud SQL instance selects"
   echo "an external database and skips the bundled instance):"
@@ -317,6 +320,14 @@ for ((i = 0; i < ${#prescan_args[@]}; i++)); do
       fi
       GLOBAL_FLAGS+=("--otlp-endpoint=${prescan_args[$((i + 1))]}")
       ;;
+    --ateapi-log-level=*) GLOBAL_FLAGS+=("${prescan_args[i]}") ;;
+    --ateapi-log-level)
+      if (( i + 1 >= ${#prescan_args[@]} )); then
+        echo "Error: --ateapi-log-level requires debug, info, warn, or error" >&2
+        exit 1
+      fi
+      GLOBAL_FLAGS+=("--ateapi-log-level=${prescan_args[$((i + 1))]}")
+      ;;
     --benchmark-worker-count=*) BENCHMARK_FLAGS+=("--worker-count=${prescan_args[i]#*=}") ;;
     --benchmark-worker-count)
       BENCHMARK_FLAGS+=("--worker-count=${prescan_args[i+1]:-1}")
@@ -357,11 +368,13 @@ while [[ "$#" -gt 0 ]]; do
     # Captured in the pre-scan above; matched here only so the `*)` branch does
     # not reject them, and so a separated value is consumed with its flag.
     --atenet-dataplane|--podcert-workers-per-signer|--rollout-timeout|--otlp-endpoint) shift ;;
+    --ateapi-log-level) shift ;;
     --cluster-size) shift ;;
     --experimental-additional-egress-extproc-service) shift ;;
     --credential-provider) shift ;;
     --benchmark-worker-count|--benchmark-sandbox-class|--benchmark-actor-memory) shift ;;
     --atenet-dataplane=*|--podcert-workers-per-signer=*|--rollout-timeout=*|--otlp-endpoint=*) ;;
+    --ateapi-log-level=*) ;;
     --cluster-size=*|--cordon-control-plane|--cordon-control-plane=*) ;;
     --experimental-additional-egress-extproc-service=*) ;;
     --credential-provider=*) ;;
@@ -394,6 +407,7 @@ while [[ "$#" -gt 0 ]]; do
     --create-podcertificate-controller-cas) ate_setup create podcertificate-controller-cas ;;
     --create-api-server-env-vars) ate_setup create api-server-env-vars ;;
     --create-api-authentication-config) ate_setup create api-authentication-config ;;
+    --create-api-config) ate_setup create api-config ;;
 
     # The one demo flag that is not just a demo name.
     --deploy-demo-counter-with-external-volume)

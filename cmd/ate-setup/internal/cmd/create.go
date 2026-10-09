@@ -82,6 +82,11 @@ func init() {
 			short: "Create the default ate-api-server authentication config",
 			run:   (*steps.Env).CreateAPIAuthenticationConfig,
 		},
+		{
+			use:   "api-config",
+			short: "Create the ate-api-server config file, including its log level",
+			run:   (*steps.Env).CreateAPIConfig,
+		},
 	} {
 		run := sub.run
 		createCmd.AddCommand(&cobra.Command{
