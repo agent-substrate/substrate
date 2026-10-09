@@ -99,7 +99,10 @@ func TestActorEgressRequiresPolicy(t *testing.T) {
 // example.com and nothing else, and waits until it is routable.
 func hostnamePolicyActor(t *testing.T, ctx context.Context) (*e2e.RouterClient, resources.ActorRef) {
 	t.Helper()
-	_, actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-sni", e2e.EgressFixture(), e2e.EgressAllowHTTPS("example.com"), e2e.EgressAllowPassthrough("example.edu"))
+	_, actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-sni", e2e.EgressFixture(),
+		e2e.EgressAllowHTTPS("example.com"),
+		e2e.EgressAllowPassthrough("example.edu"),
+		e2e.EgressAllowHTTP("example.net"))
 	router := mustRouterClient(t, ctx)
 	t.Cleanup(func() { router.Close() })
 	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
@@ -151,6 +154,198 @@ func TestActorEgressHTTPSByHostnamePassthrough(t *testing.T) {
 	status, body = fetchThroughEgressActorUntil(t, ctx, router, actorRef, "https://example.org/", notTransient)
 	if !dataplane.IsEgressPolicyDenied(status, string(body)) {
 		t.Fatalf("fetch of a host outside the policy returned HTTP %d, want an egress-policy denial; body: %s", status, body)
+	}
+}
+
+// TestActorEgressPolicyCache sends 5 requests to example.com and checks that
+// the egress policy cache counters record 4 hits and 1 miss, and that the
+// outer CONNECT ext_proc filter is invoked only once.
+func TestActorEgressPolicyCache(t *testing.T) {
+	ctx := context.Background()
+	router, actorRef := hostnamePolicyActor(t, ctx)
+
+	beforeScrape, err := e2e.ScrapeEgressEnvoyMetrics(ctx)
+	if err != nil {
+		t.Fatalf("ScrapeEgressEnvoyMetrics before fetches: %v", err)
+	}
+	beforeHits, beforeMisses := e2e.EgressPolicyCacheCounts(beforeScrape)
+	beforeExtProc := e2e.EgressExtProcStreamCounts(beforeScrape)
+
+	const numRequests = 5
+	payload := []byte(`{"url":"https://example.com/","disableKeepAlive":true}`)
+	for i := range numRequests {
+		status, body := postThroughEgressActorUntil(t, ctx, router, actorRef, "/", payload, reached)
+		if status != http.StatusOK {
+			t.Fatalf("request %d to example.com returned HTTP %d, want 200; body: %s", i+1, status, body)
+		}
+	}
+
+	if !e2e.CurrentAtenetDataplane().IsDataplaneConcurrencyDisabled() {
+		t.Log("skipping counter verification: dataplane concurrency is not disabled")
+		return
+	}
+
+	afterScrape, err := e2e.ScrapeEgressEnvoyMetrics(ctx)
+	if err != nil {
+		t.Fatalf("ScrapeEgressEnvoyMetrics after fetches: %v", err)
+	}
+	afterHits, afterMisses := e2e.EgressPolicyCacheCounts(afterScrape)
+	afterExtProc := e2e.EgressExtProcStreamCounts(afterScrape)
+
+	const (
+		wantHits         = 4
+		wantMisses       = 1
+		wantExtProcCalls = 1
+	)
+	if got := afterHits - beforeHits; got != wantHits {
+		t.Errorf("egress policy cache hits delta = %d, want %d", got, wantHits)
+	}
+	if got := afterMisses - beforeMisses; got != wantMisses {
+		t.Errorf("egress policy cache misses delta = %d, want %d", got, wantMisses)
+	}
+	if got := afterExtProc[e2e.EgressExtProcIdentityStatPrefix] - beforeExtProc[e2e.EgressExtProcIdentityStatPrefix]; got != wantExtProcCalls {
+		t.Errorf("egress_identity ext_proc streams_started delta = %d, want %d", got, wantExtProcCalls)
+	}
+}
+
+// TestActorEgressPolicyCacheExpiration verifies that cached egress policy
+// entries expire after the configured cache_ttl.
+func TestActorEgressPolicyCacheExpiration(t *testing.T) {
+	ctx := context.Background()
+	router, actorRef := hostnamePolicyActor(t, ctx)
+
+	beforeScrape, err := e2e.ScrapeEgressEnvoyMetrics(ctx)
+	if err != nil {
+		t.Fatalf("ScrapeEgressEnvoyMetrics before fetches: %v", err)
+	}
+	beforeHits, beforeMisses := e2e.EgressPolicyCacheCounts(beforeScrape)
+	beforeExtProc := e2e.EgressExtProcStreamCounts(beforeScrape)
+
+	payload := []byte(`{"url":"https://example.com/","disableKeepAlive":true}`)
+	for i := range 2 {
+		status, body := postThroughEgressActorUntil(t, ctx, router, actorRef, "/", payload, reached)
+		if status != http.StatusOK {
+			t.Fatalf("pre-expiration request %d to example.com returned HTTP %d, want 200; body: %s", i+1, status, body)
+		}
+	}
+
+	// Wait longer than the 5s default cache_ttl so the cached policy expires.
+	time.Sleep(6 * time.Second)
+
+	for i := range 2 {
+		status, body := postThroughEgressActorUntil(t, ctx, router, actorRef, "/", payload, reached)
+		if status != http.StatusOK {
+			t.Fatalf("post-expiration request %d to example.com returned HTTP %d, want 200; body: %s", i+1, status, body)
+		}
+	}
+
+	if !e2e.CurrentAtenetDataplane().IsDataplaneConcurrencyDisabled() {
+		t.Log("skipping counter verification: dataplane concurrency is not disabled")
+		return
+	}
+
+	afterScrape, err := e2e.ScrapeEgressEnvoyMetrics(ctx)
+	if err != nil {
+		t.Fatalf("ScrapeEgressEnvoyMetrics after fetches: %v", err)
+	}
+	afterHits, afterMisses := e2e.EgressPolicyCacheCounts(afterScrape)
+	afterExtProc := e2e.EgressExtProcStreamCounts(afterScrape)
+
+	const (
+		wantHits         = 2
+		wantMisses       = 2
+		wantExtProcCalls = 2
+	)
+	if got := afterHits - beforeHits; got != wantHits {
+		t.Errorf("egress policy cache hits delta = %d, want %d", got, wantHits)
+	}
+	if got := afterMisses - beforeMisses; got != wantMisses {
+		t.Errorf("egress policy cache misses delta = %d, want %d", got, wantMisses)
+	}
+	if got := afterExtProc[e2e.EgressExtProcIdentityStatPrefix] - beforeExtProc[e2e.EgressExtProcIdentityStatPrefix]; got != wantExtProcCalls {
+		t.Errorf("egress_identity ext_proc streams_started delta = %d, want %d", got, wantExtProcCalls)
+	}
+}
+
+// TestActorEgressPolicyCachePerPort sends 5 requests to http://example.net and
+// then 5 requests to https://example.com, verifying that per-port policy
+// caching records 2 cache misses, 8 cache hits, and 2 outer CONNECT ext_proc
+// callouts.
+func TestActorEgressPolicyCachePerPort(t *testing.T) {
+	ctx := context.Background()
+	router, actorRef := hostnamePolicyActor(t, ctx)
+
+	beforeScrape, err := e2e.ScrapeEgressEnvoyMetrics(ctx)
+	if err != nil {
+		t.Fatalf("ScrapeEgressEnvoyMetrics before fetches: %v", err)
+	}
+	beforeHits, beforeMisses := e2e.EgressPolicyCacheCounts(beforeScrape)
+	beforeExtProc := e2e.EgressExtProcStreamCounts(beforeScrape)
+
+	const numRequests = 5
+	for _, targetURL := range []string{"http://example.net/", "https://example.com/"} {
+		payload := []byte(fmt.Sprintf(`{"url":%q,"disableKeepAlive":true}`, targetURL))
+		for i := range numRequests {
+			status, body := postThroughEgressActorUntil(t, ctx, router, actorRef, "/", payload, reached)
+			if status != http.StatusOK {
+				t.Fatalf("request %d to %s returned HTTP %d, want 200; body: %s", i+1, targetURL, status, body)
+			}
+		}
+	}
+
+	if !e2e.CurrentAtenetDataplane().IsDataplaneConcurrencyDisabled() {
+		t.Log("skipping counter verification: dataplane concurrency is not disabled")
+		return
+	}
+
+	afterScrape, err := e2e.ScrapeEgressEnvoyMetrics(ctx)
+	if err != nil {
+		t.Fatalf("ScrapeEgressEnvoyMetrics after fetches: %v", err)
+	}
+	afterHits, afterMisses := e2e.EgressPolicyCacheCounts(afterScrape)
+	afterExtProc := e2e.EgressExtProcStreamCounts(afterScrape)
+
+	const (
+		wantHits         = 8
+		wantMisses       = 2
+		wantExtProcCalls = 2
+	)
+	if got := afterHits - beforeHits; got != wantHits {
+		t.Errorf("egress policy cache hits delta = %d, want %d", got, wantHits)
+	}
+	if got := afterMisses - beforeMisses; got != wantMisses {
+		t.Errorf("egress policy cache misses delta = %d, want %d", got, wantMisses)
+	}
+	if got := afterExtProc[e2e.EgressExtProcIdentityStatPrefix] - beforeExtProc[e2e.EgressExtProcIdentityStatPrefix]; got != wantExtProcCalls {
+		t.Errorf("egress_identity ext_proc streams_started delta = %d, want %d", got, wantExtProcCalls)
+	}
+}
+
+// TestActorEgressDialedPortOverridesHostHeader sends requests to
+// https://example.com/ (default TCP port 443) with "example.com:1" in the Host
+// header and to http://example.net/ (default TCP port 80) with "example.net:2"
+// in the Host header, verifying that the egress gateway dials the TCP port the
+// actor connected to rather than the port from the Host header.
+// Sending 2 requests per target verifies that cached policy correctly sets the
+// destination port filter state.
+func TestActorEgressDialedPortOverridesHostHeader(t *testing.T) {
+	ctx := context.Background()
+	router, actorRef := hostnamePolicyActor(t, ctx)
+
+	for _, tc := range []struct {
+		url  string
+		host string
+	}{
+		{url: "https://example.com/", host: "example.com:1"},
+		{url: "http://example.net/", host: "example.net:2"},
+	} {
+		payload := []byte(fmt.Sprintf(`{"url":%q,"host":%q,"disableKeepAlive":true}`, tc.url, tc.host))
+		for i := range 2 {
+			status, body := postThroughEgressActorUntil(t, ctx, router, actorRef, "/", payload, reached)
+			if status != http.StatusOK {
+				t.Fatalf("request %d to %s with Host %s returned HTTP %d, want 200; body: %s", i+1, tc.url, tc.host, status, body)
+			}
+		}
 	}
 }
 

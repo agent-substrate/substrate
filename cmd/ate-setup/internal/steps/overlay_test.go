@@ -817,7 +817,7 @@ func TestRenderAtenetEgressManifestPrebuilt(t *testing.T) {
 	if !strings.Contains(string(out), "image: "+want) {
 		t.Errorf("rendered manifest does not install %s:\n%s", want, out)
 	}
-	for _, leftover := range []string{"${ENVOY_DATAPLANE_IMAGE}", "ko://"} {
+	for _, leftover := range []string{"${ENVOY_DATAPLANE_IMAGE}", "${E2E_ENVOY_CONCURRENCY}", "${E2E_ENVOY_STATS_FLUSH_ON_ADMIN}", "ko://"} {
 		if strings.Contains(string(out), leftover) {
 			t.Errorf("rendered manifest still contains %q", leftover)
 		}
@@ -861,4 +861,30 @@ func TestPatchEnvoyDataplaneImage(t *testing.T) {
 	if got != want {
 		t.Errorf("patchEnvoyDataplaneImage() = %q, want %q", got, want)
 	}
+}
+
+func TestPatchEnvoyConcurrency(t *testing.T) {
+	e := &Env{}
+	raw := []byte("data:\n  envoy.yaml: |\n    stats_flush_on_admin: ${E2E_ENVOY_STATS_FLUSH_ON_ADMIN}\ncontainers:\n- name: envoy\n  args:\n  - -c\n  - /etc/envoy/envoy.yaml\n  - ${E2E_ENVOY_CONCURRENCY}\n")
+
+	t.Run("set to 1", func(t *testing.T) {
+		want := "data:\n  envoy.yaml: |\n    stats_flush_on_admin: true\ncontainers:\n- name: envoy\n  args:\n  - -c\n  - /etc/envoy/envoy.yaml\n  - --concurrency\n  - \"1\"\n"
+		if got := string(e.patchEnvoyConcurrency(raw, "1")); got != want {
+			t.Errorf("patchEnvoyConcurrency(1) = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("set to other value", func(t *testing.T) {
+		want := "data:\n  envoy.yaml: |\ncontainers:\n- name: envoy\n  args:\n  - -c\n  - /etc/envoy/envoy.yaml\n  - --concurrency\n  - \"2\"\n"
+		if got := string(e.patchEnvoyConcurrency(raw, "2")); got != want {
+			t.Errorf("patchEnvoyConcurrency(2) = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("unset", func(t *testing.T) {
+		want := "data:\n  envoy.yaml: |\ncontainers:\n- name: envoy\n  args:\n  - -c\n  - /etc/envoy/envoy.yaml\n"
+		if got := string(e.patchEnvoyConcurrency(raw, "")); got != want {
+			t.Errorf("patchEnvoyConcurrency(\"\") = %q, want %q", got, want)
+		}
+	})
 }

@@ -142,6 +142,13 @@ const UpstreamDynamicHostFilterStateKey = "envoy.upstream.dynamic_host"
 // EgressPolicyMetadataFormat renders EgressPolicyMetadataNamespace as JSON.
 const EgressPolicyMetadataFormat = "%DYNAMIC_METADATA(" + EgressPolicyMetadataNamespace + ")%"
 
+// EgressPolicyCachedFilterStateKey holds the cached SNI rules written by the
+// egress-policy-cache module before set_filter_state shares them upstream.
+const EgressPolicyCachedFilterStateKey = EgressPolicyMetadataNamespace + ".cached"
+
+// EgressPolicyCachedFormat reads EgressPolicyCachedFilterStateKey as a plain string.
+const EgressPolicyCachedFormat = "%FILTER_STATE(" + EgressPolicyCachedFilterStateKey + ":PLAIN)%"
+
 // OriginalDstFilterStateKey is Envoy's filter-state key for the address an
 // ORIGINAL_DST cluster dials. The gateway never writes it and dials only by
 // name; the request legs read it as an attribute.

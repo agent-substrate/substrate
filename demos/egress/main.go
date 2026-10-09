@@ -48,6 +48,15 @@ const (
 
 type fetchRequest struct {
 	URL string `json:"url"`
+	// Host, when set, overrides the outbound HTTP request's Host header
+	// without changing the dial destination or TLS SNI derived from URL.
+	Host string `json:"host,omitempty"`
+	// This flag allows tests to send each request over a new connection,
+	// resulting in a new CONNECT tunnel from the atunnel, rather than re-using
+	// existing connections in the http dialer connection pool and corresponding CONNECT
+	// tunnels in the atunnel.
+	// This is useful when testing egress policy caching behavior in the egress gateway.
+	DisableKeepAlive bool `json:"disableKeepAlive,omitempty"`
 }
 
 type fetchResponse struct {
@@ -133,6 +142,13 @@ func newHandler(client *http.Client) http.Handler {
 			writeJSON(w, http.StatusBadRequest, fetchResponse{Error: fmt.Sprintf("invalid URL: %v", err)})
 			return
 		}
+		if input.Host != "" {
+			outbound.Host = input.Host
+		}
+		if input.DisableKeepAlive {
+			outbound.Close = true
+			client.CloseIdleConnections()
+		}
 		if traceparent := r.Header.Get("traceparent"); traceparent != "" {
 			outbound.Header.Set("traceparent", traceparent)
 		}
@@ -144,6 +160,7 @@ func newHandler(client *http.Client) http.Handler {
 		defer response.Body.Close()
 
 		body, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBody))
+		_ = response.Body.Close()
 		if err != nil {
 			writeJSON(w, http.StatusBadGateway, fetchResponse{Error: fmt.Sprintf("reading response: %v", err)})
 			return

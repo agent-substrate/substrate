@@ -37,6 +37,7 @@ type AtenetDataplane interface {
 	IsEgressPolicyDenied(status int, body string) bool
 	PlatformMetricPrefixes([]string) []string
 	RouteDurationSeen(context.Context, string) (bool, error)
+	IsDataplaneConcurrencyDisabled() bool
 }
 
 // CurrentAtenetDataplane returns the implementation selected for this test
@@ -77,6 +78,10 @@ func (envoyAtenetDataplane) RouteDurationSeen(_ context.Context, collectorScrape
 	return len(MissingPlatformMetrics(collectorScrape, []string{"atenet_router_route_duration"})) == 0, nil
 }
 
+func (envoyAtenetDataplane) IsDataplaneConcurrencyDisabled() bool {
+	return os.Getenv("E2E_ENVOY_CONCURRENCY") == "1"
+}
+
 type agentGatewayAtenetDataplane struct{}
 
 func (agentGatewayAtenetDataplane) NewParkingObserver(context.Context) (ParkingObserver, error) {
@@ -110,6 +115,8 @@ func (agentGatewayAtenetDataplane) RouteDurationSeen(ctx context.Context, _ stri
 	}
 	return len(MissingPlatformMetrics(scrape, []string{"agentgateway_atenet_router_route_duration_seconds"})) == 0, nil
 }
+
+func (agentGatewayAtenetDataplane) IsDataplaneConcurrencyDisabled() bool { return false }
 
 type agentGatewayParkingObserver struct{}
 

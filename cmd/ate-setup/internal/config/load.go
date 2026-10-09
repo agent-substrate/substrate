@@ -250,6 +250,7 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		AnthropicAPIKey:                r.String("demo.anthropicAPIKey"),
 		OtlpEndpoint:                   r.String("otlpEndpoint"),
 		BenchmarkActorMemory:           r.String("benchmark.actorMemory"),
+		EnvoyConcurrency:               r.String("e2e.envoyConcurrency"),
 		kubeconfigEnv:                  kubeconfigEnv,
 		shellEnv:                       env,
 		resolved:                       r,

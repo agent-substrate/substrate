@@ -90,8 +90,8 @@ jobs:
           ~/.cargo/registry/index
           ~/.cargo/registry/cache
           ~/.cargo/git/db
-          cmd/dataplane/envoy/dynamic-modules/*/target
-        key: cargo-${{ runner.os }}-${{ hashFiles('cmd/dataplane/envoy/dynamic-modules/*/Cargo.lock') }}
+          cmd/dataplane/envoy/dynamic-modules/target
+        key: cargo-${{ runner.os }}-${{ hashFiles('cmd/dataplane/envoy/dynamic-modules/Cargo.lock') }}
         restore-keys: cargo-${{ runner.os }}-
     - name: dynamic module tests
       run: |
@@ -154,6 +154,7 @@ jobs:
           ) }}
     env:
       E2E_ATENET_DATAPLANE: ${{ matrix.dataplane }}
+      E2E_ENVOY_CONCURRENCY: "1"
       # The installer requires a credential provider selection, and deploys the
       # bundled Kubernetes Secrets provider with the control plane. Job-wide
       # because every ate-setup invocation reads it, including the control
@@ -229,6 +230,8 @@ jobs:
     - name: Install Agent Substrate (${{ matrix.dataplane }})
       # The dataplane selection applies to both the ingress router and egress
       # gateway.
+      env:
+        E2E_ENVOY_CONCURRENCY: "1"
       run: hack/install-ate-kind.sh --deploy-ate-system --atenet-dataplane=${{ matrix.dataplane }}
     - name: Enable NFS
       # Load NFS kernel modules so in-cluster NFS server and CSI driver can run.
@@ -243,6 +246,7 @@ jobs:
       # redeploys the control plane, so retain the selected dataplane.
       env:
         ATE_ATENET_DATAPLANE: ${{ matrix.dataplane }}
+        E2E_ENVOY_CONCURRENCY: "1"
       run: hack/run-microvm-demo-kind.sh
     - name: Deploy gVisor counter demo
       run: hack/install-ate-kind.sh --deploy-demo-counter

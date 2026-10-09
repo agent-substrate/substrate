@@ -69,6 +69,59 @@ func TestFetch(t *testing.T) {
 	}
 }
 
+func TestFetchDisableKeepAlive(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if !r.Close {
+			t.Errorf("upstream request Close = false, want true when disableKeepAlive is set")
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("ok")),
+			Header:     make(http.Header),
+		}, nil
+	})}
+
+	payload, err := json.Marshal(fetchRequest{URL: "https://allowed.example/", DisableKeepAlive: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(string(payload)))
+	newHandler(client).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+}
+
+func TestFetchHostOverride(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Host != "allowed.example" {
+			t.Errorf("upstream URL.Host = %q, want %q", r.URL.Host, "allowed.example")
+		}
+		if r.Host != "allowed.example:1" {
+			t.Errorf("upstream Host = %q, want %q", r.Host, "allowed.example:1")
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("ok")),
+			Header:     make(http.Header),
+		}, nil
+	})}
+
+	payload, err := json.Marshal(fetchRequest{URL: "https://allowed.example/", Host: "allowed.example:1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(string(payload)))
+	newHandler(client).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+}
+
 func TestFetchHTTPAndHTTPS(t *testing.T) {
 	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, "from http")

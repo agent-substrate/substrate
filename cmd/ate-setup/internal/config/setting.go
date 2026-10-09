@@ -272,6 +272,11 @@ var Registry = []Setting{
 		Usage: "Memory limit for benchmark actors",
 	},
 	{
+		Key: "e2e.envoyConcurrency", Env: "E2E_ENVOY_CONCURRENCY", Flag: "e2e-envoy-concurrency",
+		Kind:  KindString,
+		Usage: "Number of worker threads for Envoy dataplane",
+	},
+	{
 		Key: "record.dir", Env: "ATE_RECORD_DIR", Flag: "record-dir", Kind: KindString,
 		Usage: "Directory install records are written to (default: the user cache directory)",
 	},
