@@ -255,8 +255,11 @@ message EgressGateway {
 // AssetFile is one content-addressed file atelet fetches for a sandbox runtime
 // (e.g. the gVisor release tarball).
 message AssetFile {
-  // gs:// URL to download the asset from.
-  string url = 1;
+  // URL to download the asset from. atelet reads a gs:// URL anonymously
+  // first and fetches every other URL through the node's object-store plugin.
+  // Masked in logged requests, since a signed URL carries its credential in
+  // the query.
+  string url = 1 [ debug_redact = true ];
   // Lower-case hex SHA256; names the cached file and verifies its integrity.
   string sha256 = 2;
 }
