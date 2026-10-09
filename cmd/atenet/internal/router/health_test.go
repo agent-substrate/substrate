@@ -94,7 +94,7 @@ func TestCheckDataplane(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			rh := newRouterHealth(time.Second, nil, nil, routerConfig{AtenetRouter: string(tc.router)})
+			rh := newRouterHealth(time.Second, nil, nil, routerConfig{Mode: ModeIngress, AtenetRouter: string(tc.router)})
 			rh.dataplaneClient = &http.Client{Transport: healthRoundTripFunc(func(req *http.Request) (*http.Response, error) {
 				if req.URL.String() != tc.wantURL {
 					t.Errorf("health URL = %q, want %q", req.URL.String(), tc.wantURL)
@@ -138,7 +138,7 @@ func TestCheckK8sTimesOut(t *testing.T) {
 	}))
 	defer server.Close()
 
-	rh := newRouterHealth(time.Second, newHealthTestClientset(t, server), nil, routerConfig{})
+	rh := newRouterHealth(time.Second, newHealthTestClientset(t, server), nil, routerConfig{Mode: ModeIngress})
 	startedAt := time.Now()
 	healthy, msg := rh.checkK8s(context.Background())
 	elapsed := time.Since(startedAt)
@@ -155,7 +155,7 @@ func TestCheckK8sTimesOut(t *testing.T) {
 }
 
 func TestCheckK8sWithoutRESTClient(t *testing.T) {
-	rh := newRouterHealth(time.Second, kubernetesfake.NewSimpleClientset(), nil, routerConfig{})
+	rh := newRouterHealth(time.Second, kubernetesfake.NewSimpleClientset(), nil, routerConfig{Mode: ModeIngress})
 	healthy, msg := rh.checkK8s(context.Background())
 	if healthy {
 		t.Fatal("checkK8s returned healthy without a discovery REST client")
@@ -183,7 +183,7 @@ func TestHealthCheckDoesNotBlockReportOrStatusz(t *testing.T) {
 	}))
 	defer server.Close()
 
-	rh := newRouterHealth(time.Second, newHealthTestClientset(t, server), nil, routerConfig{})
+	rh := newRouterHealth(time.Second, newHealthTestClientset(t, server), nil, routerConfig{Mode: ModeIngress})
 	setHealthyDataplaneClient(rh)
 	checkDone := make(chan struct{})
 	go func() {
@@ -208,7 +208,7 @@ func TestHealthCheckDoesNotBlockReportOrStatusz(t *testing.T) {
 	}
 
 	statusServer := httptest.NewServer(http.HandlerFunc((&RouterServer{
-		cfg:    routerConfig{},
+		cfg:    routerConfig{Mode: ModeIngress},
 		health: rh,
 	}).handleStatusz))
 	defer statusServer.Close()
@@ -272,7 +272,7 @@ func TestHealthChecksRunConcurrently(t *testing.T) {
 			}
 		},
 	}
-	rh := newRouterHealth(time.Second, newHealthTestClientset(t, server), apiClient, routerConfig{})
+	rh := newRouterHealth(time.Second, newHealthTestClientset(t, server), apiClient, routerConfig{Mode: ModeIngress})
 	rh.dataplaneClient = &http.Client{Transport: healthRoundTripFunc(func(*http.Request) (*http.Response, error) {
 		started <- "dataplane"
 		<-release
@@ -325,7 +325,7 @@ func TestHealthStartStopsWhenK8sCheckIsCanceled(t *testing.T) {
 	}))
 	defer server.Close()
 
-	rh := newRouterHealth(time.Hour, newHealthTestClientset(t, server), nil, routerConfig{})
+	rh := newRouterHealth(time.Hour, newHealthTestClientset(t, server), nil, routerConfig{Mode: ModeIngress})
 	setHealthyDataplaneClient(rh)
 	ctx, cancel := context.WithCancel(context.Background())
 	startDone := make(chan struct{})

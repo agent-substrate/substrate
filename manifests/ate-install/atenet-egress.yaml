@@ -1377,8 +1377,7 @@ spec:
       # authenticate actor identity against the ate API on every CONNECT.
       #
       # Ingress and egress are separate Deployments because they scale
-      # independently, not because they need separate binaries: one instance can
-      # serve both directions with --mode=all.
+      # independently, not because they need separate binaries.
       - name: ext-proc
         image: ko://github.com/agent-substrate/substrate/cmd/atenet
         args:

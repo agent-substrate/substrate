@@ -34,38 +34,38 @@ func TestRouterConfigValidate(t *testing.T) {
 	}{
 		{
 			name: "defaults are valid (auto breaker, atenet-router defaults to envoy)",
-			cfg:  routerConfig{ExtProcMaxRequests: 0, ParkedRequest: ingress.ParkedRequestConfig{Max: ingress.DefaultParkedRequestMax}},
+			cfg:  routerConfig{Mode: ModeIngress, ExtProcMaxRequests: 0, ParkedRequest: ingress.ParkedRequestConfig{Max: ingress.DefaultParkedRequestMax}},
 		},
 		{
 			name: "atenet-router set to envoy is valid",
-			cfg:  routerConfig{AtenetRouter: string(atenetRouterEnvoy), ParkedRequest: ingress.ParkedRequestConfig{Max: ingress.DefaultParkedRequestMax}},
+			cfg:  routerConfig{Mode: ModeIngress, AtenetRouter: string(atenetRouterEnvoy), ParkedRequest: ingress.ParkedRequestConfig{Max: ingress.DefaultParkedRequestMax}},
 		},
 		{
 			name: "atenet-router set to agentgateway is valid",
-			cfg:  routerConfig{AtenetRouter: string(atenetRouterAgentgateway), ParkedRequest: ingress.ParkedRequestConfig{Max: ingress.DefaultParkedRequestMax}},
+			cfg:  routerConfig{Mode: ModeIngress, AtenetRouter: string(atenetRouterAgentgateway), ParkedRequest: ingress.ParkedRequestConfig{Max: ingress.DefaultParkedRequestMax}},
 		},
 		{
 			name:    "unknown router rejected",
-			cfg:     routerConfig{AtenetRouter: "blah"},
+			cfg:     routerConfig{Mode: ModeIngress, AtenetRouter: "blah"},
 			wantErr: "--atenet-dataplane must be",
 		},
 		{
 			name:    "negative extproc-max-requests rejected",
-			cfg:     routerConfig{ExtProcMaxRequests: -1, ParkedRequest: ingress.ParkedRequestConfig{Max: 0}},
+			cfg:     routerConfig{Mode: ModeIngress, ExtProcMaxRequests: -1, ParkedRequest: ingress.ParkedRequestConfig{Max: 0}},
 			wantErr: "must not be negative",
 		},
 		{
 			name:    "explicit breaker below the lot rejected",
-			cfg:     routerConfig{ExtProcMaxRequests: 512, ParkedRequest: ingress.ParkedRequestConfig{Max: 1024}},
+			cfg:     routerConfig{Mode: ModeIngress, ExtProcMaxRequests: 512, ParkedRequest: ingress.ParkedRequestConfig{Max: 1024}},
 			wantErr: "must be >= --parked-request-max",
 		},
 		{
 			name: "explicit breaker equal to the lot accepted",
-			cfg:  routerConfig{ExtProcMaxRequests: 1024, ParkedRequest: ingress.ParkedRequestConfig{Max: 1024}},
+			cfg:  routerConfig{Mode: ModeIngress, ExtProcMaxRequests: 1024, ParkedRequest: ingress.ParkedRequestConfig{Max: 1024}},
 		},
 		{
 			name: "parking disabled ignores the relation",
-			cfg:  routerConfig{ExtProcMaxRequests: 8, ParkedRequest: ingress.ParkedRequestConfig{Max: 0}},
+			cfg:  routerConfig{Mode: ModeIngress, ExtProcMaxRequests: 8, ParkedRequest: ingress.ParkedRequestConfig{Max: 0}},
 		},
 		{
 			name: "explicit ingress mode accepted",
@@ -76,39 +76,40 @@ func TestRouterConfigValidate(t *testing.T) {
 			cfg:  routerConfig{Mode: ModeEgress},
 		},
 		{
-			name: "explicit all mode accepted",
-			cfg:  routerConfig{Mode: ModeAll},
+			name:    "missing mode rejected",
+			cfg:     routerConfig{},
+			wantErr: `--mode must be "ingress" or "egress"`,
 		},
 		{
-			name:    "unknown mode rejected",
-			cfg:     routerConfig{Mode: "both"},
-			wantErr: `--mode must be one of`,
+			name:    "all mode rejected",
+			cfg:     routerConfig{Mode: "all"},
+			wantErr: `--mode must be "ingress" or "egress"`,
 		},
 		{
 			name:    "drain-timeout below the parking budget rejected",
-			cfg:     routerConfig{ParkedRequest: ingress.ParkedRequestConfig{Budget: 5 * time.Second, Max: 1024}, DrainTimeout: 2 * time.Second},
+			cfg:     routerConfig{Mode: ModeIngress, ParkedRequest: ingress.ParkedRequestConfig{Budget: 5 * time.Second, Max: 1024}, DrainTimeout: 2 * time.Second},
 			wantErr: "must be >= --parked-request-budget",
 		},
 		{
 			name: "drain-timeout equal to the parking budget accepted",
-			cfg:  routerConfig{ParkedRequest: ingress.ParkedRequestConfig{Budget: 5 * time.Second, Max: 1024}, DrainTimeout: 5 * time.Second},
+			cfg:  routerConfig{Mode: ModeIngress, ParkedRequest: ingress.ParkedRequestConfig{Budget: 5 * time.Second, Max: 1024}, DrainTimeout: 5 * time.Second},
 		},
 		{
 			name: "drain-timeout above the parking budget accepted",
-			cfg:  routerConfig{ParkedRequest: ingress.ParkedRequestConfig{Budget: 5 * time.Second, Max: 1024}, DrainTimeout: 30 * time.Second},
+			cfg:  routerConfig{Mode: ModeIngress, ParkedRequest: ingress.ParkedRequestConfig{Budget: 5 * time.Second, Max: 1024}, DrainTimeout: 30 * time.Second},
 		},
 		{
 			name: "short drain-timeout with parking disabled accepted",
-			cfg:  routerConfig{ParkedRequest: ingress.ParkedRequestConfig{Max: 0}, DrainTimeout: time.Second},
+			cfg:  routerConfig{Mode: ModeIngress, ParkedRequest: ingress.ParkedRequestConfig{Max: 0}, DrainTimeout: time.Second},
 		},
 		{
 			name:    "negative drain-timeout rejected",
-			cfg:     routerConfig{ParkedRequest: ingress.ParkedRequestConfig{Max: ingress.DefaultParkedRequestMax}, DrainTimeout: -time.Second},
+			cfg:     routerConfig{Mode: ModeIngress, ParkedRequest: ingress.ParkedRequestConfig{Max: ingress.DefaultParkedRequestMax}, DrainTimeout: -time.Second},
 			wantErr: "--drain-timeout must not be negative",
 		},
 		{
 			name:    "negative drain-delay rejected",
-			cfg:     routerConfig{ParkedRequest: ingress.ParkedRequestConfig{Max: ingress.DefaultParkedRequestMax}, DrainDelay: -time.Second},
+			cfg:     routerConfig{Mode: ModeIngress, ParkedRequest: ingress.ParkedRequestConfig{Max: ingress.DefaultParkedRequestMax}, DrainDelay: -time.Second},
 			wantErr: "--drain-delay must not be negative",
 		},
 	}
@@ -147,16 +148,14 @@ func TestRouterConfigAtenetRouter(t *testing.T) {
 	}
 }
 
-// The empty mode is what a routerConfig built in code (rather than from flags)
-// carries, and it must behave as ModeAll so nothing silently stops serving.
+// Each mode serves exactly one direction, and an unset mode serves neither.
 func TestModeServes(t *testing.T) {
 	tests := []struct {
 		mode        Mode
 		wantIngress bool
 		wantEgress  bool
 	}{
-		{mode: "", wantIngress: true, wantEgress: true},
-		{mode: ModeAll, wantIngress: true, wantEgress: true},
+		{mode: "", wantIngress: false, wantEgress: false},
 		{mode: ModeIngress, wantIngress: true, wantEgress: false},
 		{mode: ModeEgress, wantIngress: false, wantEgress: true},
 	}

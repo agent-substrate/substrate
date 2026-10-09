@@ -175,19 +175,19 @@ state rather than a client header.
 
 ## modes
 
-One binary serves both directions. `--mode` selects which:
+One binary serves both directions, one per instance. `--mode` (required)
+selects which:
 
 | `--mode` | ext_proc handlers | xDS server | Kubernetes access |
 | --- | --- | --- | --- |
 | `ingress` | ingress | yes | yes |
 | `egress` | egress | no | none |
-| `all` (default) | both | yes | yes |
 
 The mux refuses a direction this instance was not started to serve (404) rather
 than falling back to the other handler, which would run the request through the
 wrong trust model.
 
-Ingress and egress are deployed separately today — `atenet-router` fronts the
+Ingress and egress are deployed separately — `atenet-router` fronts the
 ingress dataplane, `atenet-egress` the egress gateway — because the two scale
 independently, not because they need separate binaries.
 

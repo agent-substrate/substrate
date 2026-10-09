@@ -131,10 +131,9 @@ func (s *Server) processRequestHeaders(
 	md := NewRequestMetadata(reqHeaders.GetHeaders().GetHeaders(), req.GetAttributes())
 
 	// One atenet binary serves both directions, as two ext_proc handlers
-	// selected here. They are deployed separately today — atenet-router fronts
-	// the ingress dataplane, atenet-egress the egress gateway — because the two
-	// scale independently, and --mode restricts an instance to the direction
-	// its deployment fronts. Nothing stops a single instance from serving both.
+	// selected here. Each instance serves one: atenet-router fronts the ingress
+	// dataplane, atenet-egress the egress gateway, because the two scale
+	// independently, and --mode selects the direction its deployment fronts.
 	//
 	// Which handler runs is decided by the filter chain the dataplane says
 	// accepted the request, never by anything in the request itself (see

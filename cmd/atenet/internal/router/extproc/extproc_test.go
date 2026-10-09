@@ -49,14 +49,14 @@ func TestProcessRequestHeadersDispatchesByMode(t *testing.T) {
 		wantStatus envoy_type.StatusCode // 0 means "expect success"
 	}{
 		{
-			name:       "both directions served, egress chain",
-			registered: []Direction{DirectionIngress, DirectionEgress},
+			name:       "egress-only instance serves egress traffic",
+			registered: []Direction{DirectionEgress},
 			chain:      EgressFilterChainName,
 			wantRan:    DirectionEgress,
 		},
 		{
-			name:       "both directions served, ingress chain",
-			registered: []Direction{DirectionIngress, DirectionEgress},
+			name:       "ingress-only instance serves ingress traffic",
+			registered: []Direction{DirectionIngress},
 			chain:      ingressHTTPListener,
 			wantRan:    DirectionIngress,
 		},
