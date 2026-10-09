@@ -26,6 +26,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"go.ate.dev/substrate/internal/tarutil"
@@ -346,13 +347,20 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 	}
 	sort.Slice(dirs, func(i, j int) bool { return len(dirs[i]) > len(dirs[j]) })
 	for _, name := range dirs {
-		// A later entry may have replaced the directory (with a file or a
-		// symlink, taking its declared children with it); that entry's own
-		// metadata already applies, and Chmod would follow a symlink.
-		if fi, err := root.Lstat(name); errors.Is(err, os.ErrNotExist) || (err == nil && !fi.IsDir()) {
+		// Directories a later entry replaced were dropped from dirHdrs as it
+		// was written, so name resolves to the directory its entry created,
+		// through any symlink that already stood on its path then. A path
+		// that no longer resolves to a directory (a replacement reached
+		// through a symlink, or a declared dir whose Mkdir found a
+		// non-directory there) carries the replacing entry's metadata.
+		fi, err := root.Lstat(name)
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
 			continue
 		} else if err != nil {
 			return nil, fmt.Errorf("while checking directory %q: %w", name, err)
+		}
+		if !fi.IsDir() {
+			continue
 		}
 		hdr := dirHdrs[name]
 		mode := hdr.FileInfo().Mode().Perm()
