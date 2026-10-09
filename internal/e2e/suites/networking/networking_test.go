@@ -115,6 +115,7 @@ func TestActorEgress(t *testing.T) {
 
 func TestActorEgressMultiplexing(t *testing.T) {
 	ctx := context.Background()
+	dataplane := e2e.CurrentAtenetDataplane()
 
 	origin := egressHTTPTarget()
 	target := e2e.DeployServerPod(t, ctx, origin)
@@ -125,6 +126,13 @@ func TestActorEgressMultiplexing(t *testing.T) {
 	defer router.Close()
 
 	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
+	waitForActorRoute(t, ctx, router, actorRef)
+
+	beforeScrape, err := dataplane.ScrapeMetrics(ctx)
+	if err != nil {
+		t.Fatalf("ScrapeMetrics before /mux: %v", err)
+	}
+
 	url := fmt.Sprintf("http://%s/fetch", target.Address())
 	payload, err := json.Marshal(map[string]string{"url": url})
 	if err != nil {
@@ -139,6 +147,23 @@ func TestActorEgressMultiplexing(t *testing.T) {
 	t.Logf("Actor egress mux of %s succeeded; body: %s", url, body)
 
 	assertEgressGatewayConnect(t, ctx, since, actorAtespace, actorName, strconv.Itoa(origin.Port))
+
+	afterScrape, err := dataplane.ScrapeMetrics(ctx)
+	if err != nil {
+		t.Fatalf("ScrapeMetrics after /mux: %v", err)
+	}
+
+	const (
+		wantConnections = 3
+		wantRequests    = 250
+	)
+	stats := dataplane.EgressConnectStats(beforeScrape, afterScrape)
+	if stats.Connections != -1 && stats.Connections != wantConnections {
+		t.Errorf("egress connect connections = %d, want %d", stats.Connections, wantConnections)
+	}
+	if stats.Requests != -1 && stats.Requests != wantRequests {
+		t.Errorf("egress connect requests = %d, want %d", stats.Requests, wantRequests)
+	}
 }
 
 // TestActorEgressHTTPS covers the same path as TestActorEgress with a TLS
