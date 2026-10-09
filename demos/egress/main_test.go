@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"google.golang.org/grpc"
@@ -359,6 +360,95 @@ func TestGRPCInvalidRequests(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			recorder := httptest.NewRecorder()
 			request := httptest.NewRequest(test.method, "/grpc", strings.NewReader(test.body))
+			handler.ServeHTTP(recorder, request)
+			if recorder.Code != test.status {
+				t.Errorf("status = %d, want %d; body = %s", recorder.Code, test.status, recorder.Body.String())
+			}
+		})
+	}
+}
+
+func TestMux(t *testing.T) {
+	var completed atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("method = %s, want POST", r.Method)
+		}
+		if r.URL.Path != "/fetch" {
+			t.Errorf("path = %s, want /fetch", r.URL.Path)
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if len(body) != muxBodySize {
+			t.Errorf("len(body) = %d, want %d", len(body), muxBodySize)
+		}
+		completed.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	payload, err := json.Marshal(fetchRequest{URL: srv.URL + "/fetch"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/mux", strings.NewReader(string(payload)))
+	newHandler(http.DefaultClient).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	if got := int(completed.Load()); got != muxRequestCount {
+		t.Errorf("completed = %d, want %d", got, muxRequestCount)
+	}
+}
+
+func TestMuxNon200Fails(t *testing.T) {
+	var seen atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		if int(seen.Add(1)) == muxRequestCount {
+			http.Error(w, "boom", http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	payload, err := json.Marshal(fetchRequest{URL: srv.URL + "/fetch"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/mux", strings.NewReader(string(payload)))
+	newHandler(http.DefaultClient).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusInternalServerError, recorder.Body.String())
+	}
+}
+
+func TestMuxInvalidRequests(t *testing.T) {
+	tests := []struct {
+		name   string
+		method string
+		body   string
+		status int
+	}{
+		{name: "method", method: http.MethodGet, body: `{}`, status: http.StatusMethodNotAllowed},
+		{name: "malformed JSON", method: http.MethodPost, body: `{`, status: http.StatusBadRequest},
+		{name: "missing hostname", method: http.MethodPost, body: `{"url":"http:///path"}`, status: http.StatusBadRequest},
+		{name: "https scheme", method: http.MethodPost, body: `{"url":"https://example.com/fetch"}`, status: http.StatusBadRequest},
+	}
+
+	handler := newHandler(http.DefaultClient)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(test.method, "/mux", strings.NewReader(test.body))
 			handler.ServeHTTP(recorder, request)
 			if recorder.Code != test.status {
 				t.Errorf("status = %d, want %d; body = %s", recorder.Code, test.status, recorder.Body.String())

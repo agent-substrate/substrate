@@ -18,6 +18,8 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -29,6 +31,7 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"sync"
 	"time"
 
 	"google.golang.org/grpc"
@@ -44,6 +47,8 @@ const (
 	maxRequestBody  = 64 << 10
 	maxResponseBody = 1 << 20
 	requestTimeout  = 15 * time.Second
+	muxRequestCount = 250
+	muxBodySize     = 64
 )
 
 type fetchRequest struct {
@@ -154,8 +159,158 @@ func newHandler(client *http.Client) http.Handler {
 		}
 		writeJSON(w, response.StatusCode, fetchResponse{StatusCode: response.StatusCode, Body: string(body), ServerCert: serverCert})
 	})
+	mux.HandleFunc("/mux", handleMux)
 	mux.HandleFunc("/grpc", handleGRPC)
 	return mux
+}
+
+// This handler is for testing mutiplexing of actor `muxRequestCount` connections over H/2
+// CONNECT tunnels between an atunnel and egress gateway. This handler:
+// 1. opens `muxRequestCount` connections to the origin
+// 2. sends POST request with headers, but not bodies on all of them.
+// 3. once headers were sent, it sends bodies
+// 4. waits for all 200 responses.
+// Tests can then validate the expected number of H/2 connections on egress gateways.
+func handleMux(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		writeJSON(w, http.StatusMethodNotAllowed, fetchResponse{Error: "method must be POST"})
+		return
+	}
+
+	var input fetchRequest
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBody))
+	if err := decoder.Decode(&input); err != nil {
+		writeJSON(w, http.StatusBadRequest, fetchResponse{Error: fmt.Sprintf("invalid JSON payload: %v", err)})
+		return
+	}
+	if err := validateURL(input.URL); err != nil {
+		writeJSON(w, http.StatusBadRequest, fetchResponse{Error: err.Error()})
+		return
+	}
+	parsed, err := url.Parse(input.URL)
+	if err != nil || parsed.Scheme != "http" {
+		writeJSON(w, http.StatusBadRequest, fetchResponse{Error: "URL scheme must be http"})
+		return
+	}
+
+	targetAddr := parsed.Host
+	if parsed.Port() == "" {
+		targetAddr = net.JoinHostPort(parsed.Hostname(), "80")
+	}
+	requestURI := parsed.RequestURI()
+
+	ctx, cancel := context.WithTimeout(r.Context(), requestTimeout)
+	defer cancel()
+
+	var headersWg sync.WaitGroup
+	headersWg.Add(muxRequestCount)
+	allHeadersSent := make(chan struct{})
+	go func() {
+		headersWg.Wait()
+		close(allHeadersSent)
+	}()
+
+	type muxOutcome struct {
+		status int
+		body   string
+		err    error
+	}
+	outcomes := make([]muxOutcome, muxRequestCount)
+
+	var doneWg sync.WaitGroup
+	doneWg.Add(muxRequestCount)
+	for i := range muxRequestCount {
+		go func(idx int) {
+			defer doneWg.Done()
+			status, body, reqErr := sendMuxRequest(ctx, cancel, targetAddr, parsed.Host, requestURI, &headersWg, allHeadersSent)
+			outcomes[idx] = muxOutcome{status: status, body: body, err: reqErr}
+		}(i)
+	}
+	doneWg.Wait()
+
+	for i, out := range outcomes {
+		if out.err != nil && !errors.Is(out.err, context.Canceled) {
+			writeJSON(w, http.StatusBadGateway, fetchResponse{Error: fmt.Sprintf("request %d failed: %v", i, out.err)})
+			return
+		}
+		if out.err == nil && out.status != http.StatusOK {
+			writeJSON(w, out.status, fetchResponse{
+				StatusCode: out.status,
+				Body:       out.body,
+				Error:      fmt.Sprintf("request %d returned status %d, want 200", i, out.status),
+			})
+			return
+		}
+	}
+	for i, out := range outcomes {
+		if out.err != nil {
+			writeJSON(w, http.StatusBadGateway, fetchResponse{Error: fmt.Sprintf("request %d failed: %v", i, out.err)})
+			return
+		}
+	}
+
+	writeJSON(w, http.StatusOK, fetchResponse{StatusCode: http.StatusOK})
+}
+
+func sendMuxRequest(ctx context.Context, cancel context.CancelFunc, targetAddr, host, requestURI string, headersWg *sync.WaitGroup, allHeadersSent <-chan struct{}) (int, string, error) {
+	headerDone := false
+	defer func() {
+		if !headerDone {
+			cancel()
+			headersWg.Done()
+		}
+	}()
+
+	var dialer net.Dialer
+	conn, err := dialer.DialContext(ctx, "tcp", targetAddr)
+	if err != nil {
+		return 0, "", fmt.Errorf("dialing %s: %w", targetAddr, err)
+	}
+	defer conn.Close()
+
+	if deadline, ok := ctx.Deadline(); ok {
+		if err := conn.SetDeadline(deadline); err != nil {
+			return 0, "", fmt.Errorf("setting deadline: %w", err)
+		}
+	}
+
+	reqHeader := fmt.Sprintf(
+		"POST %s HTTP/1.1\r\nHost: %s\r\nContent-Length: %d\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n",
+		requestURI, host, muxBodySize,
+	)
+	if _, err := io.WriteString(conn, reqHeader); err != nil {
+		return 0, "", fmt.Errorf("writing request headers: %w", err)
+	}
+
+	headerDone = true
+	headersWg.Done()
+
+	select {
+	case <-allHeadersSent:
+	case <-ctx.Done():
+		return 0, "", ctx.Err()
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, "", err
+	}
+
+	body := bytes.Repeat([]byte("a"), muxBodySize)
+	if _, err := conn.Write(body); err != nil {
+		return 0, "", fmt.Errorf("writing request body: %w", err)
+	}
+
+	resp, err := http.ReadResponse(bufio.NewReader(conn), &http.Request{Method: http.MethodPost})
+	if err != nil {
+		return 0, "", fmt.Errorf("reading response: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
+	if err != nil {
+		return 0, "", fmt.Errorf("reading response body: %w", err)
+	}
+	return resp.StatusCode, string(respBody), nil
 }
 
 // handleGRPC dials the requested target and echoes back what the RPCs returned.

@@ -15,6 +15,8 @@
 package main
 
 import (
+	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"time"
@@ -22,27 +24,34 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// newHTTPCmd is a plain HTTP/1.1 origin an Actor's egress lands on. It exists so
-// a test can assert the destination port is recovered from SO_ORIGINAL_DST
-// rather than defaulted from the URL scheme: the actor fetches its /healthz on a
-// non-standard port, and the gateway's access log is expected to carry that
-// port. There is nothing to serve beyond readiness, so /healthz is all it
-// answers.
+func newHTTPHandler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("POST /fetch", func(w http.ResponseWriter, r *http.Request) {
+		if _, err := io.Copy(io.Discard, r.Body); err != nil {
+			http.Error(w, fmt.Sprintf("reading request body: %v", err), http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	return mux
+}
+
+// newHTTPCmd is a plain HTTP/1.1 origin an Actor's egress lands on. It serves
+// /healthz for readiness and GET probes, and POST /fetch for e2e tests that need
+// test requests with bodies.
 func newHTTPCmd() *cobra.Command {
 	var listenAddress string
 	cmd := &cobra.Command{
 		Use:   "http",
-		Short: "Serve a plain HTTP/1.1 origin answering /healthz.",
+		Short: "Serve a plain HTTP/1.1 origin answering /healthz and POST /fetch.",
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			mux := http.NewServeMux()
-			mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-				w.WriteHeader(http.StatusOK)
-			})
-
 			server := &http.Server{
 				Addr:              listenAddress,
-				Handler:           mux,
+				Handler:           newHTTPHandler(),
 				ReadHeaderTimeout: 10 * time.Second,
 				WriteTimeout:      2 * time.Minute,
 			}

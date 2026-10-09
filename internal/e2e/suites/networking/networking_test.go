@@ -113,6 +113,34 @@ func TestActorEgress(t *testing.T) {
 	})
 }
 
+func TestActorEgressMultiplexing(t *testing.T) {
+	ctx := context.Background()
+
+	origin := egressHTTPTarget()
+	target := e2e.DeployServerPod(t, ctx, origin)
+
+	fixture := e2e.EgressFixture()
+	actorAtespace, actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-mux", fixture, e2e.EgressAllowAll()...)
+	router := mustRouterClient(t, ctx)
+	defer router.Close()
+
+	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
+	url := fmt.Sprintf("http://%s/fetch", target.Address())
+	payload, err := json.Marshal(map[string]string{"url": url})
+	if err != nil {
+		t.Fatalf("marshaling the mux request for %s: %v", url, err)
+	}
+
+	since := metav1.NewTime(time.Now().Add(-1 * time.Minute))
+	status, body := postThroughEgressActor(t, ctx, router, actorRef, "/mux", payload)
+	if status != http.StatusOK {
+		t.Fatalf("Actor egress mux of %s returned HTTP %d, want 200; body: %s", url, status, body)
+	}
+	t.Logf("Actor egress mux of %s succeeded; body: %s", url, body)
+
+	assertEgressGatewayConnect(t, ctx, since, actorAtespace, actorName, strconv.Itoa(origin.Port))
+}
+
 // TestActorEgressHTTPS covers the same path as TestActorEgress with a TLS
 // origin, through the gateway's TLS interception.
 func TestActorEgressHTTPS(t *testing.T) {
