@@ -2013,3 +2013,54 @@ func TestEnsureWorkerAssigned_ContextEndsInsideAttemptRecordsOne(t *testing.T) {
 		t.Errorf("recorded outcome %q, want %q", outcomes[0], want)
 	}
 }
+
+// attachRecordingVolumePlugin records every AttachVolume request.
+type attachRecordingVolumePlugin struct {
+	volume.VolumePluginControlPlane
+	reqs []volume.AttachVolumeRequest
+}
+
+func (p *attachRecordingVolumePlugin) AttachVolume(ctx context.Context, req volume.AttachVolumeRequest) (volume.AttachVolumeResponse, error) {
+	p.reqs = append(p.reqs, req)
+	return volume.AttachVolumeResponse{}, nil
+}
+
+// The attach step passes each volume's recorded access mode to the plugin.
+func TestEnsureVolumesAttached_PassesAccessMode(t *testing.T) {
+	ctx := context.Background()
+	actor := &ateapipb.Actor{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "id1"},
+		Status: &ateapipb.ActorStatus{
+			ExternalVolumes: []*ateapipb.ExternalVolume{
+				{Name: "ro", StorageVolumeId: "storage-ro", VolumeType: "mock", Status: ateapipb.ExternalVolume_STATUS_CREATED, AccessMode: ateapipb.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_ONLY_MANY},
+				{Name: "rw", StorageVolumeId: "storage-rw", VolumeType: "mock", Status: ateapipb.ExternalVolume_STATUS_CREATED},
+			},
+		},
+	}
+	plugin := &attachRecordingVolumePlugin{}
+	w := &ActorWorkflow{
+		pluginRegistry: &mockPluginRegistry{plugins: map[string]volume.VolumePluginControlPlane{
+			"mock": plugin,
+		}},
+	}
+	tmpl := &ateapipb.ActorTemplate{
+		Volumes: []*ateapipb.Volume{
+			{Name: "ro", ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{StorageClassName: "sc", AccessMode: ateapipb.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_ONLY_MANY}},
+			{Name: "rw", ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{StorageClassName: "sc"}},
+		},
+		Containers: []*ateapipb.Container{
+			{Name: "main", Image: "img", VolumeMounts: []*ateapipb.VolumeMount{{Name: "ro", MountPath: "/ro"}, {Name: "rw", MountPath: "/rw"}}},
+		},
+	}
+
+	if _, err := w.ensureVolumesAttached(ctx, actor, &ateapipb.Worker{NodeName: "node-1"}, tmpl); err != nil {
+		t.Fatalf("ensureVolumesAttached: %v", err)
+	}
+	want := []volume.AttachVolumeRequest{
+		{VolumeID: "storage-ro", Node: "node-1", AccessMode: ateapipb.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_ONLY_MANY},
+		{VolumeID: "storage-rw", Node: "node-1"},
+	}
+	if diff := cmp.Diff(want, plugin.reqs); diff != "" {
+		t.Errorf("AttachVolume requests mismatch (-want +got):\n%s", diff)
+	}
+}

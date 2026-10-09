@@ -50,6 +50,7 @@ func initialActorVolumes(ctx context.Context, scLister storagev1listers.StorageC
 				Name:       vol.GetName(),
 				VolumeType: sc.Provisioner,
 				Status:     ateapipb.ExternalVolume_STATUS_PENDING,
+				AccessMode: vol.GetExternalVolumeTemplate().GetAccessMode(),
 			})
 		}
 	}
@@ -122,9 +123,10 @@ func createActorVolumes(ctx context.Context, registry VolumePluginRegistry, scLi
 			Name:       actVolID,
 			Capacity:   specVol.GetExternalVolumeTemplate().GetCapacity(),
 			Parameters: sc.Parameters,
+			AccessMode: vol.GetAccessMode(),
 		})
 		if volErr != nil {
-			return resultVolumes, apierror.Internal("failed to create volume %q: %v", specVol.GetName(), volErr)
+			return resultVolumes, createVolumeError(specVol.GetName(), volErr)
 		}
 
 		resultVolumes = append(resultVolumes, &ateapipb.ExternalVolume{
@@ -133,9 +135,25 @@ func createActorVolumes(ctx context.Context, registry VolumePluginRegistry, scLi
 			VolumeType:      sc.Provisioner,
 			Status:          ateapipb.ExternalVolume_STATUS_CREATED,
 			VolumeContext:   resp.VolumeContext,
+			AccessMode:      vol.GetAccessMode(),
 		})
 	}
 	return resultVolumes, nil
+}
+
+// createVolumeError keeps a driver error's code when it describes the request
+// (e.g. an access mode the driver cannot provide). Anything else is Internal.
+func createVolumeError(volName string, err error) error {
+	switch status.Code(err) {
+	case codes.InvalidArgument, codes.OutOfRange:
+		return apierror.InvalidArgument("failed to create volume %q: %v", volName, err)
+	case codes.ResourceExhausted:
+		return apierror.ResourceExhausted("failed to create volume %q: %v", volName, err)
+	case codes.AlreadyExists:
+		return apierror.AlreadyExists("failed to create volume %q: %v", volName, err)
+	default:
+		return apierror.Internal("failed to create volume %q: %v", volName, err)
+	}
 }
 
 // deleteActorVolumes deletes all external volumes in the list.

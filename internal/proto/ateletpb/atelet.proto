@@ -18,6 +18,8 @@ package atelet;
 
 option go_package = "github.com/agent-substrate/substrate/internal/proto/ateletpb";
 
+import "pkg/proto/ateapipb/ateapi.proto";
+
 // AteomSupport provides callouts for ateom.
 //
 // Called by individual ateom pods over a local connection, authenticated with
@@ -301,6 +303,9 @@ message ExternalVolumeSource {
   // publish_context is the driver's attachment metadata for this node, which
   // the node plugin needs to complete the mount.
   map<string, string> publish_context = 4;
+
+  // access_mode is the mode the volume was created with.
+  ateapi.VolumeAccessMode access_mode = 5;
 }
 
 message ImageVolumeSource {

@@ -64,7 +64,7 @@ func (p *MockVolumePlugin) DriverName(ctx context.Context) (string, error) {
 // CreateVolume simulates volume provisioning.
 func (p *MockVolumePlugin) CreateVolume(ctx context.Context, req CreateVolumeRequest) (CreateVolumeResponse, error) {
 	volumeID := "mock-vol-" + req.Name
-	slog.InfoContext(ctx, "MockVolumePlugin.CreateVolume", slog.String("name", req.Name), slog.String("capacity", req.Capacity), slog.String("volumeID", volumeID))
+	slog.InfoContext(ctx, "MockVolumePlugin.CreateVolume", slog.String("name", req.Name), slog.String("capacity", req.Capacity), slog.String("volumeID", volumeID), slog.String("accessMode", req.AccessMode.String()))
 	return CreateVolumeResponse{VolumeID: volumeID, VolumeContext: req.Parameters}, nil
 }
 
@@ -77,7 +77,7 @@ func (p *MockVolumePlugin) DeleteVolume(ctx context.Context, volumeID string) er
 // AttachVolume simulates volume attachment to a node. The mock driver needs no
 // attachment metadata, so the response carries no publish context.
 func (p *MockVolumePlugin) AttachVolume(ctx context.Context, req AttachVolumeRequest) (AttachVolumeResponse, error) {
-	slog.InfoContext(ctx, "MockVolumePlugin.AttachVolume", slog.String("volumeID", req.VolumeID), slog.String("node", req.Node))
+	slog.InfoContext(ctx, "MockVolumePlugin.AttachVolume", slog.String("volumeID", req.VolumeID), slog.String("node", req.Node), slog.String("accessMode", req.AccessMode.String()))
 	return AttachVolumeResponse{}, nil
 }
 

@@ -77,11 +77,17 @@ volumes:
   externalVolumeTemplate:
     capacity: 10Gi
     storageClassName: standard-rwx
+    accessMode: VOLUME_ACCESS_MODE_READ_WRITE_ONCE
 ```
 
 * `name`: Unique DNS-label-compliant volume name.
 * `externalVolumeTemplate.capacity`: Quantity string representing the requested volume size (e.g. `1Gi`, `50Gi`).
 * `externalVolumeTemplate.storageClassName`: Name of a Kubernetes `StorageClass` present in the cluster whose `provisioner` matches a registered `CSIDriverConfig`.
+* `externalVolumeTemplate.accessMode`: Optional volume access mode enum. Defaults to `VOLUME_ACCESS_MODE_READ_WRITE_ONCE`. Supported values:
+  * `VOLUME_ACCESS_MODE_READ_WRITE_ONCE` (or `VOLUME_ACCESS_MODE_UNSPECIFIED`): Single-node read-write.
+  * `VOLUME_ACCESS_MODE_READ_ONLY_MANY`: Multi-node read-only. The node mount is always read-only. If the driver lacks the `PUBLISH_READONLY` controller capability, the volume is attached read-write.
+  * `VOLUME_ACCESS_MODE_READ_WRITE_MANY`: Multi-node multi-writer.
+  * *Note*: The access mode can't be changed after the volume is created.
 
 #### `containers[].volumeMounts[]`
 
@@ -189,4 +195,5 @@ volumes:
   externalVolumeTemplate:
     capacity: 5Gi
     storageClassName: csi-nfs-sc
+    accessMode: VOLUME_ACCESS_MODE_READ_WRITE_MANY
 ```

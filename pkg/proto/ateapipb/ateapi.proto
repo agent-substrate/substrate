@@ -323,6 +323,19 @@ enum TagScope {
   TAG_SCOPE_PUBLISHED = 2;
 }
 
+// VolumeAccessMode defines the access modes for external volumes.
+enum VolumeAccessMode {
+  // Unspecified; treated as VOLUME_ACCESS_MODE_READ_WRITE_ONCE.
+  VOLUME_ACCESS_MODE_UNSPECIFIED = 0;
+  // ReadWriteOnce can be mounted as read-write by a single node.
+  VOLUME_ACCESS_MODE_READ_WRITE_ONCE = 1;
+  // ReadOnlyMany can be mounted as read-only by many nodes simultaneously.
+  VOLUME_ACCESS_MODE_READ_ONLY_MANY = 2;
+  // ReadWriteMany can be mounted as read-write by many nodes simultaneously.
+  VOLUME_ACCESS_MODE_READ_WRITE_MANY = 3;
+  // Keep this in sync with the maximums on fields of this type.
+}
+
 // Selector matches worker pools by label.
 // Only equality-based matching is supported.
 message Selector {
@@ -460,6 +473,18 @@ message ExternalVolume {
   // +k8s:eachKey=+k8s:maxLength=128
   // +k8s:eachVal=+k8s:maxLength=256
   map<string, string> volume_context = 5;
+
+  // access_mode specifies how the volume should be accessed, copied from the
+  // template when the volume is created. If unspecified, defaults to
+  // VOLUME_ACCESS_MODE_READ_WRITE_ONCE.
+  // Note: This value is stored raw and must never be normalized in write paths,
+  // as +k8s:update=NoModify compares raw stored values.
+  //
+  // +k8s:optional
+  // +k8s:update=NoModify
+  // +k8s:minimum=0
+  // +k8s:maximum=3 # keep this in sync with the VolumeAccessMode enum
+  VolumeAccessMode access_mode = 6;
 }
 
 message Actor {
@@ -1379,6 +1404,14 @@ message ExternalVolumeTemplate {
   // +k8s:required
   // +k8s:format=k8s-long-name
   string storage_class_name = 2;
+
+  // access_mode specifies the access mode for the volume.
+  // If unspecified, defaults to VOLUME_ACCESS_MODE_READ_WRITE_ONCE.
+  //
+  // +k8s:optional
+  // +k8s:minimum=0
+  // +k8s:maximum=3 # keep this in sync with the VolumeAccessMode enum
+  VolumeAccessMode access_mode = 3;
 }
 
 // SystemInfoVolumeSource is a read-only volume of substrate-generated
