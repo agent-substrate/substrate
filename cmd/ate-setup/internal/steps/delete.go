@@ -16,12 +16,15 @@ package steps
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
+	"github.com/agent-substrate/substrate/internal/clustertrustbundle"
 )
 
 // DeleteAteSystem removes the control plane.
@@ -31,7 +34,8 @@ import (
 // bundle: which of them the install created depends on the router and
 // credential provider that were selected, and teardown must not depend on
 // remembering that. The provider goes first so that a later failure cannot
-// leave its ClusterRole and binding behind.
+// leave its ClusterRole and binding behind. The cluster-scoped trust bundles
+// go last, once the controllers that publish them are gone.
 func (e *Env) DeleteAteSystem(ctx context.Context) error {
 	log.Step("delete_ate_system")
 
@@ -71,10 +75,66 @@ func (e *Env) DeleteAteSystem(ctx context.Context) error {
 			return err
 		}
 	}
-	if err := e.Kube.WaitDeleted(ctx, schema.GroupVersionKind{Version: "v1", Kind: "Namespace"}, "", e.Namespace(), e.Cfg.WaitTimeout(BootstrapTimeout)); err != nil {
+	namespace := schema.GroupVersionKind{Version: "v1", Kind: "Namespace"}
+	if err := e.Kube.WaitDeleted(ctx, namespace, "", e.Namespace(), e.Cfg.WaitTimeout(BootstrapTimeout)); err != nil {
+		return err
+	}
+	// The podcertificate controller republishes its bundles every few
+	// seconds, so they can only be deleted once it is gone.
+	if err := e.Kube.WaitDeleted(ctx, namespace, "", NamespacePodCert, e.Cfg.WaitTimeout(BootstrapTimeout)); err != nil {
+		return err
+	}
+	if err := e.DeleteTrustBundles(ctx); err != nil {
 		return err
 	}
 	return e.UnlabelNodesSubstrateVersion(ctx)
+}
+
+// substrateTrustBundles maps the name of each ClusterTrustBundle Substrate
+// publishes to its signer: the podcertificate controller's (see
+// trustBundleNames) and atecontroller's egress MITM bundle
+// (egressMITMTrustBundleName and egressMITMSignerName in
+// cmd/atecontroller/internal/controllers, which ate-setup cannot import).
+var substrateTrustBundles = map[string]string{
+	"podidentity.podcert.ate.dev:identity:primary-bundle": "podidentity.podcert.ate.dev/identity",
+	"servicedns.podcert.ate.dev:identity:primary-bundle":  "servicedns.podcert.ate.dev/identity",
+	"postgres.podcert.ate.dev:identity:primary-bundle":    "postgres.podcert.ate.dev/identity",
+	"egress-mitm.ate.dev:mitm:primary-bundle":             "egress-mitm.ate.dev/mitm",
+}
+
+// DeleteTrustBundles deletes the ClusterTrustBundles in substrateTrustBundles.
+// They are cluster-scoped, so deleting the namespaces of the controllers that
+// publish them leaves them behind.
+//
+// A bundle is deleted only when both its name and its signer match. Anyone
+// allowed to attest for one of these signers may publish a bundle under a
+// different name, so the signer alone does not show that Substrate created it.
+func (e *Env) DeleteTrustBundles(ctx context.Context) error {
+	bundles, err := clustertrustbundle.NewClient(e.Kube.Typed, nil)
+	if errors.Is(err, clustertrustbundle.ErrNotServed) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("while discovering the ClusterTrustBundle API: %w", err)
+	}
+	list, err := bundles.List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return fmt.Errorf("while listing ClusterTrustBundles: %w", err)
+	}
+	for _, bundle := range list.Items {
+		if signer, ok := substrateTrustBundles[bundle.Name]; !ok || bundle.Spec.SignerName != signer {
+			continue
+		}
+		opts := metav1.DeleteOptions{Preconditions: metav1.NewUIDPreconditions(string(bundle.UID))}
+		if err := bundles.Delete(ctx, bundle.Name, opts); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			return fmt.Errorf("while deleting ClusterTrustBundle %s: %w", bundle.Name, err)
+		}
+		log.Infof("Deleted ClusterTrustBundle %s", bundle.Name)
+	}
+	return nil
 }
 
 // DeleteAtenet removes the atenet dataplane and the bundled credential
