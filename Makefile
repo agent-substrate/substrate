@@ -174,8 +174,11 @@ verify-fmt:
 
 # Runs all linters and fails on any reported issues.
 lint:
+	@./hack/verify/gofmt.sh
 	@./hack/verify/golangci-lint.sh
 	@./hack/verify/kube-api-linter.sh
+	@./hack/verify/proto-fmt.sh
+	@./hack/verify/shellcheck.sh
 	@$(MAKE) -C internal/plugins/gcp-secret-manager lint
 
 .PHONY: verify verify-checks

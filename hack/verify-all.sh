@@ -31,7 +31,11 @@ fi
 for F in $(find ./hack/verify -name '*.sh' | sort); do
   if [[ "${SKIP_LINT}" == true ]]; then
     case "${F}" in
-      ./hack/verify/golangci-lint.sh | ./hack/verify/kube-api-linter.sh)
+      ./hack/verify/gofmt.sh | \
+        ./hack/verify/golangci-lint.sh | \
+        ./hack/verify/kube-api-linter.sh | \
+        ./hack/verify/proto-fmt.sh | \
+        ./hack/verify/shellcheck.sh)
         continue
         ;;
     esac
