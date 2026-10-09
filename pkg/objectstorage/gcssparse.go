@@ -72,14 +72,7 @@ func (g *gcsClient) PutSparseFile(ctx context.Context, bucket, object string, f 
 	for i := range groups {
 		parts[i] = bkt.Object(fmt.Sprintf("%s.part-%s-%04d", object, runID, i))
 	}
-	defer func() {
-		for _, p := range parts {
-			if delErr := p.Delete(context.WithoutCancel(ctx)); delErr != nil &&
-				!errors.Is(delErr, storage.ErrObjectNotExist) && err == nil {
-				err = fmt.Errorf("while removing upload part %q: %w", p.ObjectName(), delErr)
-			}
-		}
-	}()
+	defer deleteParts(ctx, parts)
 
 	grp, gctx := errgroup.WithContext(ctx)
 	for i, ranges := range groups {
