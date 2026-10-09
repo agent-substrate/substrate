@@ -402,17 +402,17 @@ message ExternalVolumeSource {
   string volume_type = 2;
 
   // volume_context is the driver's provisioning metadata. Its entries are the
-  // driver's own, so the map is only held to the CSI size limit.
+  // driver's own, so the map is only bounded, not validated.
   //
   // +k8s:optional
-  // +k8s:customValidation # at most 4 KiB in total, the CSI limit for map fields
+  // +k8s:customValidation # at most 40 KiB in total, ten times the CSI limit for map fields
   map<string, string> volume_context = 3;
 
   // publish_context is the driver's attachment metadata for this node, which
   // the node plugin needs to complete the mount. Bounded like volume_context.
   //
   // +k8s:optional
-  // +k8s:customValidation # at most 4 KiB in total, the CSI limit for map fields
+  // +k8s:customValidation # at most 40 KiB in total, ten times the CSI limit for map fields
   map<string, string> publish_context = 4;
 }
 

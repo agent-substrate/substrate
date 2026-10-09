@@ -1430,16 +1430,16 @@ type ExternalVolumeSource struct {
 	// +k8s:customValidation # optional "substrate.io/" prefix + DNS subdomain
 	VolumeType string `protobuf:"bytes,2,opt,name=volume_type,json=volumeType,proto3" json:"volume_type,omitempty"`
 	// volume_context is the driver's provisioning metadata. Its entries are the
-	// driver's own, so the map is only held to the CSI size limit.
+	// driver's own, so the map is only bounded, not validated.
 	//
 	// +k8s:optional
-	// +k8s:customValidation # at most 4 KiB in total, the CSI limit for map fields
+	// +k8s:customValidation # at most 40 KiB in total, ten times the CSI limit for map fields
 	VolumeContext map[string]string `protobuf:"bytes,3,rep,name=volume_context,json=volumeContext,proto3" json:"volume_context,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	// publish_context is the driver's attachment metadata for this node, which
 	// the node plugin needs to complete the mount. Bounded like volume_context.
 	//
 	// +k8s:optional
-	// +k8s:customValidation # at most 4 KiB in total, the CSI limit for map fields
+	// +k8s:customValidation # at most 40 KiB in total, ten times the CSI limit for map fields
 	PublishContext map[string]string `protobuf:"bytes,4,rep,name=publish_context,json=publishContext,proto3" json:"publish_context,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache

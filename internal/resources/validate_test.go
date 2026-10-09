@@ -592,9 +592,10 @@ func TestValidateCSIMap(t *testing.T) {
 		{name: "nil"},
 		{name: "one long value", m: map[string]string{"token": strings.Repeat("x", 4000)}},
 		{name: "many small entries", m: many},
-		{name: "exactly the limit", m: map[string]string{"k": strings.Repeat("x", 4095)}},
-		{name: "one byte over", m: map[string]string{"k": strings.Repeat("x", 4096)}, want: field.ErrorList{field.TooLong(path, nil, 4096)}},
-		{name: "over across entries", m: map[string]string{"a": strings.Repeat("x", 2048), "b": strings.Repeat("y", 2048)}, want: field.ErrorList{field.TooLong(path, nil, 4096)}},
+		{name: "over the CSI spec limit, within the headroom", m: map[string]string{"k": strings.Repeat("x", 8*1024)}},
+		{name: "exactly the bound", m: map[string]string{"k": strings.Repeat("x", 40*1024-1)}},
+		{name: "one byte over", m: map[string]string{"k": strings.Repeat("x", 40*1024)}, want: field.ErrorList{field.TooLong(path, nil, 40*1024)}},
+		{name: "over across entries", m: map[string]string{"a": strings.Repeat("x", 20*1024), "b": strings.Repeat("y", 20*1024)}, want: field.ErrorList{field.TooLong(path, nil, 40*1024)}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -491,14 +491,15 @@ func ValidateVolumeType(fldPath *field.Path, volumeType string) field.ErrorList 
 	return errs
 }
 
-// csiMapMaxBytes is the CSI size limit for map<string, string> fields. A
-// compliant driver never produces a larger volume or publish context, and a
-// tighter bound would refuse one that is within its rights.
-const csiMapMaxBytes = 4096
+// csiMapMaxBytes bounds a map a CSI driver produced. The CSI spec caps
+// map<string, string> fields at 4 KiB; this allows ten times that so a future
+// revision of the limit does not turn compliant drivers away. It is a
+// guardrail against unbounded input, not a contract drivers are held to.
+const csiMapMaxBytes = 40 * 1024
 
 // ValidateCSIMap bounds a map a CSI driver produced (a volume or publish
-// context) at the CSI size limit, counting keys and values. The entries are
-// the driver's own and are not validated further.
+// context) at csiMapMaxBytes, counting keys and values. The entries are the
+// driver's own and are not validated further.
 func ValidateCSIMap(fldPath *field.Path, m map[string]string) field.ErrorList {
 	size := 0
 	for k, v := range m {

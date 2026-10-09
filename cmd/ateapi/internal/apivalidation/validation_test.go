@@ -946,25 +946,25 @@ func TestValidateExternalVolume(t *testing.T) {
 		name: "storage volume id at the bound",
 		obj:  valid(func(v *ateapipb.ExternalVolume) { v.StorageVolumeId = strings.Repeat("x", 256) }),
 	}, {
-		name: "too many volume_context entries",
+		name: "volume_context with many entries, as a CSI driver may return",
 		obj: valid(func(v *ateapipb.ExternalVolume) {
-			ctxMap := make(map[string]string, 33)
-			for i := 0; i < 33; i++ {
-				ctxMap[fmt.Sprintf("key-%d", i)] = "v"
+			ctxMap := make(map[string]string, 100)
+			for i := range 100 {
+				ctxMap[fmt.Sprintf("key-%03d", i)] = "v"
 			}
 			v.VolumeContext = ctxMap
 		}),
-		want: field.ErrorList{field.TooMany(field.NewPath("volume_context"), 33, 32).WithOrigin("maxProperties")},
 	}, {
-		name: "volume_context key too long",
-		obj:  valid(func(v *ateapipb.ExternalVolume) { v.VolumeContext = map[string]string{strings.Repeat("k", 129): "v"} }),
-		want: field.ErrorList{field.TooLong(field.NewPath("volume_context"), nil, 128).WithOrigin("maxLength")},
-	}, {
-		name: "volume_context value too long",
+		name: "volume_context with one long value, as a CSI driver may return",
 		obj: valid(func(v *ateapipb.ExternalVolume) {
-			v.VolumeContext = map[string]string{"attachment": strings.Repeat("v", 257)}
+			v.VolumeContext = map[string]string{"attachment": strings.Repeat("v", 4000)}
 		}),
-		want: field.ErrorList{field.TooLong(field.NewPath("volume_context").Key("attachment"), nil, 256).WithOrigin("maxLength")},
+	}, {
+		name: "volume_context over the size bound",
+		obj: valid(func(v *ateapipb.ExternalVolume) {
+			v.VolumeContext = map[string]string{"attachment": strings.Repeat("v", 40*1024)}
+		}),
+		want: field.ErrorList{field.TooLong(field.NewPath("volume_context"), nil, 40*1024)},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

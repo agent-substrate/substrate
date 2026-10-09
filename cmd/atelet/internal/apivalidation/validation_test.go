@@ -1284,11 +1284,11 @@ func TestValidateVolume(t *testing.T) {
 				e.VolumeContext = map[string]string{"k": strings.Repeat("v", 4000)}
 			}),
 		}, {
-			name: "external: volume_context over the CSI size limit",
+			name: "external: volume_context over the size bound",
 			obj: external(func(e *ateletpb.ExternalVolumeSource) {
-				e.VolumeContext = map[string]string{"k": strings.Repeat("v", 4096)}
+				e.VolumeContext = map[string]string{"k": strings.Repeat("v", 40*1024)}
 			}),
-			want: field.ErrorList{field.TooLong(extPath.Child("volume_context"), nil, 4096)},
+			want: field.ErrorList{field.TooLong(extPath.Child("volume_context"), nil, 40*1024)},
 		}, {
 			name: "external: publish_context with many entries, as a CSI driver may return",
 			obj: external(func(e *ateletpb.ExternalVolumeSource) {
@@ -1298,11 +1298,11 @@ func TestValidateVolume(t *testing.T) {
 				}
 			}),
 		}, {
-			name: "external: publish_context over the CSI size limit",
+			name: "external: publish_context over the size bound",
 			obj: external(func(e *ateletpb.ExternalVolumeSource) {
-				e.PublishContext = map[string]string{"a": strings.Repeat("v", 2048), "b": strings.Repeat("v", 2048)}
+				e.PublishContext = map[string]string{"a": strings.Repeat("v", 20*1024), "b": strings.Repeat("v", 20*1024)}
 			}),
-			want: field.ErrorList{field.TooLong(extPath.Child("publish_context"), nil, 4096)},
+			want: field.ErrorList{field.TooLong(extPath.Child("publish_context"), nil, 40*1024)},
 		},
 
 		// ImageVolumeSource.
