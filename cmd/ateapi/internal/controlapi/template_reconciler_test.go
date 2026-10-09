@@ -27,10 +27,10 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/apivalidation"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/apimachinery/pkg/api/operation"
@@ -187,7 +187,7 @@ func (c *fakeGoldenControl) CreateActor(_ context.Context, req *ateapipb.CreateA
 	defer c.mu.Unlock()
 	c.createReqs = append(c.createReqs, req)
 	// AlreadyExists means the actor does exist (e.g. a racing creation).
-	if c.createErr == nil || status.Code(c.createErr) == codes.AlreadyExists {
+	if c.createErr == nil || apierror.Code(c.createErr) == codes.AlreadyExists {
 		c.exists = true
 		c.goldenState = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
 	}
@@ -209,7 +209,7 @@ func (c *fakeGoldenControl) GetActor(_ context.Context, req *ateapipb.GetActorRe
 		return nil, c.getErr
 	}
 	if !c.exists {
-		return nil, status.Error(codes.NotFound, "no such actor")
+		return nil, apierror.NotFound("no such actor")
 	}
 	return &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: req.GetActor().GetAtespace(), Name: req.GetActor().GetName()},
@@ -248,7 +248,7 @@ func (c *fakeGoldenControl) GetTag(_ context.Context, _ *ateapipb.GetTagRequest)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.tag == nil {
-		return nil, status.Error(codes.NotFound, "no tag")
+		return nil, apierror.NotFound("no tag")
 	}
 	return proto.CloneOf(c.tag), nil
 }
@@ -284,7 +284,7 @@ func (c *fakeGoldenControl) DeleteActor(_ context.Context, req *ateapipb.DeleteA
 		return nil, c.deleteErr
 	}
 	if !c.exists {
-		return nil, status.Error(codes.NotFound, "no actor")
+		return nil, apierror.NotFound("no actor")
 	}
 	c.exists = false
 	return &ateapipb.Actor{}, nil
@@ -471,14 +471,14 @@ func TestReconcileOne(t *testing.T) {
 		{
 			name:        "create AlreadyExists requeues for the retry to observe",
 			template:    testTemplate(),
-			control:     &fakeGoldenControl{createErr: status.Error(codes.AlreadyExists, "golden actor exists")},
+			control:     &fakeGoldenControl{createErr: apierror.AlreadyExists("golden actor exists")},
 			wantErr:     true,
 			wantCreates: 1,
 		},
 		{
 			name:             "create InvalidArgument fails the template",
 			template:         testTemplate(),
-			control:          &fakeGoldenControl{createErr: status.Error(codes.InvalidArgument, "bad spec")},
+			control:          &fakeGoldenControl{createErr: apierror.InvalidArgument("bad spec")},
 			wantFailedReason: reasonGoldenActorInvalid,
 			wantMessage:      "creating golden actor",
 			wantCreates:      1,
@@ -486,7 +486,7 @@ func TestReconcileOne(t *testing.T) {
 		{
 			name:        "create retriable error requeues",
 			template:    testTemplate(),
-			control:     &fakeGoldenControl{createErr: status.Error(codes.Unavailable, "workers busy")},
+			control:     &fakeGoldenControl{createErr: apierror.Unavailable("workers busy")},
 			wantErr:     true,
 			wantCreates: 1,
 		},
@@ -500,14 +500,14 @@ func TestReconcileOne(t *testing.T) {
 		{
 			name:        "resume failure requeues without failing",
 			template:    testTemplate(),
-			control:     &fakeGoldenControl{exists: true, goldenState: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, resumeErr: status.Error(codes.Unavailable, "no workers")},
+			control:     &fakeGoldenControl{exists: true, goldenState: ateapipb.ActorState_ACTOR_STATE_SUSPENDED, resumeErr: apierror.Unavailable("no workers")},
 			wantErr:     true,
 			wantResumes: 1,
 		},
 		{
 			name:     "get failure requeues",
 			template: testTemplate(),
-			control:  &fakeGoldenControl{getErr: status.Error(codes.Unavailable, "control plane down")},
+			control:  &fakeGoldenControl{getErr: apierror.Unavailable("control plane down")},
 			wantErr:  true,
 		},
 		{
@@ -606,7 +606,7 @@ func TestReconcileOne(t *testing.T) {
 // requests the happy path issues: the golden actor is named after the
 // template UID so recreated templates with the same name never collide, and
 // lives in the reserved ate-golden atespace so the suspend workflow commits
-// it Full regardless of the template's onCommit scope.
+// it Full regardless of the template's preferredFidelity scope.
 func TestReconcileOne_GoldenActorRequests(t *testing.T) {
 	ctx := context.Background()
 	st := newFakeTemplateStore(testTemplate())

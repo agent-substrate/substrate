@@ -60,11 +60,10 @@ resources:
   - name: memory
     quantity: 512Mi
 snapshotConfig:
-  # FULL on both triggers, matching the gVisor variant: a suspend captures
+  # MEMORY, matching the gVisor variant: a suspend captures
   # guest memory, so the in-RAM count continues from where it left off — the
   # round-trip this demo promises.
-  onPause: SNAPSHOT_CONTENT_SCOPE_FULL
-  onCommit: SNAPSHOT_CONTENT_SCOPE_FULL
+  preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
   storageLocation: gs://${BUCKET_NAME}/ate-demo-counter-microvm/
 sandboxConfig:
   sandboxClass: SANDBOX_CLASS_MICROVM

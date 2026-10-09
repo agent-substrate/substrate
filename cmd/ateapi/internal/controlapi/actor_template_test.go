@@ -23,13 +23,14 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
+	"github.com/agent-substrate/substrate/internal/apierror"
+	"github.com/agent-substrate/substrate/internal/objectstoreplugin/objectstoreplugintest"
 	"github.com/agent-substrate/substrate/internal/resources"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/testing/protocmp"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -43,9 +44,8 @@ func validActorTemplate(mutations ...func(*ateapipb.ActorTemplate)) *ateapipb.Ac
 		Metadata:   &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "tmpl-a"},
 		Containers: []*ateapipb.Container{{Name: "main", Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},
 		SnapshotConfig: &ateapipb.SnapshotConfig{
-			StorageLocation: "gs://my-bucket/snapshots",
-			OnPause:         ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
-			OnCommit:        ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+			StorageLocation:   "gs://my-bucket/snapshots",
+			PreferredFidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 		},
 		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR, ConfigName: "gvisor-default"},
 	}
@@ -62,9 +62,13 @@ func gvisorDefaultLister(t *testing.T) listersv1alpha1.SandboxConfigLister {
 	return sandboxConfigListerFor(t, []*atev1alpha1.SandboxConfig{{
 		ObjectMeta: metav1.ObjectMeta{Name: "gvisor-default"},
 		Spec: atev1alpha1.SandboxConfigSpec{
-			SandboxClass: atev1alpha1.SandboxClassGvisor,
-			PauseImage:   "registry.k8s.io/pause@sha256:x",
-			Assets:       testAssets(),
+			SandboxClass:   atev1alpha1.SandboxClassGvisor,
+			DefaultVersion: "v1",
+			Versions: []atev1alpha1.SandboxVersionConfig{{
+				Name:       "v1",
+				PauseImage: "registry.k8s.io/pause@sha256:x",
+				Assets:     testAssets(),
+			}},
 		},
 	}})
 }
@@ -109,7 +113,7 @@ func TestCreateActorTemplate_SandboxConfigChecks(t *testing.T) {
 				tmpl.SandboxConfig = tt.sandbox
 			})}
 			_, err := s.CreateActorTemplate(ctx, req)
-			if status.Code(err) != tt.wantCode {
+			if apierror.Code(err) != tt.wantCode {
 				t.Errorf("CreateActorTemplate error = %v, want code %v", err, tt.wantCode)
 			}
 		})
@@ -128,7 +132,7 @@ func TestCreateActorTemplate(t *testing.T) {
 		})}
 	}
 
-	if _, err := s.CreateActorTemplate(ctx, req("ns-missing", "tmpl-a")); status.Code(err) != codes.FailedPrecondition {
+	if _, err := s.CreateActorTemplate(ctx, req("ns-missing", "tmpl-a")); apierror.Code(err) != codes.FailedPrecondition {
 		t.Errorf("CreateActorTemplate in missing atespace = %v, want FailedPrecondition", err)
 	}
 
@@ -228,7 +232,7 @@ func TestDeleteActorTemplate(t *testing.T) {
 			actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
 				s.ExternalSnapshot = &ateapipb.ExternalSnapshot{
 					SnapshotUri:      actorURI.String(),
-					ContentScope:     ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+					Fidelity:         ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 					ActorTemplateUid: tmpl.GetMetadata().GetUid(),
 				}
 			})
@@ -245,7 +249,7 @@ func TestDeleteActorTemplate(t *testing.T) {
 			tagRef := resources.TagRefFromTag(tag)
 			tagURI := mustReservedTagSnapshotURI(t, tag)
 			objects.PutSnapshot(t, tagURI, "manifest.json")
-			svc := &RPCService{impl: newServiceImpl(persistence, nil), actorWorkflow: workflow, objectStore: objects}
+			svc := &RPCService{impl: newServiceImpl(persistence, nil), actorWorkflow: workflow, snapshotPlugin: objectstoreplugintest.ControlClient(objects)}
 			// The handler must request AnyState to clean up an active golden actor.
 			mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
 				s.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
@@ -274,7 +278,7 @@ func TestDeleteActorTemplate(t *testing.T) {
 					t.Fatal(err)
 				}
 				stale := store.DeletePreconditions{UID: current.GetMetadata().GetUid(), Version: current.GetMetadata().GetVersion() + 1}
-				if _, err := workflow.DeleteActorTemplate(ctx, templateRef, stale); status.Code(err) != codes.Aborted {
+				if _, err := workflow.DeleteActorTemplate(ctx, templateRef, stale); apierror.Code(err) != codes.Aborted {
 					t.Fatalf("DeleteActorTemplate with a stale version = %v, want code Aborted", err)
 				}
 				if _, err := persistence.GetActor(ctx, goldenRef); err != nil {
@@ -287,7 +291,7 @@ func TestDeleteActorTemplate(t *testing.T) {
 			req := &ateapipb.DeleteActorTemplateRequest{ActorTemplate: templateRef.ToObjectRef()}
 			deleted, err := svc.DeleteActorTemplate(ctx, req)
 			if tt.failPrefix != "" {
-				if !errors.Is(err, errObjectStore) {
+				if !isObjectStoreErr(err) {
 					t.Fatalf("DeleteActorTemplate = %v, want object storage error", err)
 				}
 				if _, err := persistence.GetActorTemplate(ctx, templateRef); err != nil {
@@ -323,7 +327,7 @@ func TestDeleteActorTemplate(t *testing.T) {
 					t.Errorf("snapshot %s still holds %v", uri, got)
 				}
 			}
-			if _, err := svc.DeleteActorTemplate(ctx, req); status.Code(err) != codes.NotFound {
+			if _, err := svc.DeleteActorTemplate(ctx, req); apierror.Code(err) != codes.NotFound {
 				t.Fatalf("delete missing template = %v, want NotFound", err)
 			}
 		})
@@ -374,7 +378,7 @@ func TestResolveActorTemplate(t *testing.T) {
 	t.Run("ref to a missing template is FailedPrecondition", func(t *testing.T) {
 		actor := &ateapipb.Actor{ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "absent"}}
 		_, err := resolveActorTemplate(ctx, persistence, actor)
-		if got := status.Code(err); got != codes.FailedPrecondition {
+		if got := apierror.Code(err); got != codes.FailedPrecondition {
 			t.Fatalf("status.Code = %v, want FailedPrecondition (err: %v)", got, err)
 		}
 	})
@@ -468,21 +472,5 @@ func TestUpdateActorTemplateMetadata(t *testing.T) {
 	}
 	if got, want := reverted.GetMetadata().GetUid(), created.GetMetadata().GetUid(); got != want {
 		t.Errorf("uid after update = %q, want %q", got, want)
-	}
-}
-
-// TestActorTemplateObjectRef pins that snapshot and assignment records get a
-// fresh copy of the reference, never the actor's own message.
-func TestActorTemplateObjectRef(t *testing.T) {
-	if got := actorTemplateObjectRef(&ateapipb.Actor{}); got != nil {
-		t.Errorf("actorTemplateObjectRef(no ref) = %v, want nil", got)
-	}
-	actor := &ateapipb.Actor{ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "tmpl1"}}
-	got := actorTemplateObjectRef(actor)
-	if got == actor.GetActorTemplate() {
-		t.Error("actorTemplateObjectRef aliases the actor's reference")
-	}
-	if got.GetAtespace() != "team-a" || got.GetName() != "tmpl1" {
-		t.Errorf("actorTemplateObjectRef = %v, want team-a/tmpl1", got)
 	}
 }

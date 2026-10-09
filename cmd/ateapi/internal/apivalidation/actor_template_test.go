@@ -63,12 +63,19 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 		})},
 		field.ErrorList{field.Invalid(field.NewPath("actor_template", "metadata", "name"), "Tmpl_A", "").WithOrigin("format=k8s-short-name")},
 	}, {
-		"valid data-scoped snapshots",
+		"valid volumes fidelity",
 		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.SnapshotConfig.OnPause = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
-			tmpl.SnapshotConfig.OnCommit = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
+			tmpl.SnapshotConfig.PreferredFidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
 		})},
 		nil,
+	}, {
+		// ROOTFS is in the enum for the API's sake but no runtime captures it
+		// yet, so templates may not ask for it.
+		"rootfs fidelity not supported",
+		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.SnapshotConfig.PreferredFidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
+		})},
+		field.ErrorList{field.Invalid(field.NewPath("actor_template", "snapshot_config", "preferred_fidelity"), "SNAPSHOT_FIDELITY_ROOTFS", "")},
 	}, {
 		"invalid worker_selector label key",
 		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
@@ -137,24 +144,14 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 		})},
 		field.ErrorList{field.Invalid(field.NewPath("actor_template", "snapshot_config", "storage_location"), "gs://my-bucket/snapshots?versions=true", "")},
 	}, {
-		"on_commit broader than on_pause",
+		// preferred_fidelity has no default of its own at this layer, so leaving it
+		// unset is a required violation.
+		"preferred_fidelity unset",
 		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.SnapshotConfig.OnPause = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
-			tmpl.SnapshotConfig.OnCommit = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL
-		})},
-		field.ErrorList{field.Invalid(field.NewPath("actor_template", "snapshot_config", "on_commit"), "SNAPSHOT_CONTENT_SCOPE_FULL", "")},
-	}, {
-		// Leaving on_commit unset over a DATA on_pause is both a required
-		// violation (on_commit has no default of its own) and a subset
-		// violation (UNSPECIFIED is not DATA).
-		"on_commit unset with data on_pause",
-		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.SnapshotConfig.OnPause = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
-			tmpl.SnapshotConfig.OnCommit = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED
+			tmpl.SnapshotConfig.PreferredFidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
 		})},
 		field.ErrorList{
-			field.Required(field.NewPath("actor_template", "snapshot_config", "on_commit"), ""),
-			field.Invalid(field.NewPath("actor_template", "snapshot_config", "on_commit"), "SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED", ""),
+			field.Required(field.NewPath("actor_template", "snapshot_config", "preferred_fidelity"), ""),
 		},
 	}, {
 		"missing sandbox_config",
@@ -346,27 +343,25 @@ func TestValidateActorTemplate(t *testing.T) {
 		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.SnapshotConfig.StorageLocation = "" },
 		want:   field.ErrorList{field.Required(field.NewPath("snapshot_config", "storage_location"), "")},
 	}, {
-		name: "unspecified snapshot scopes",
+		name: "unspecified snapshot scope",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.SnapshotConfig.OnPause = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED
-			tmpl.SnapshotConfig.OnCommit = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED
+			tmpl.SnapshotConfig.PreferredFidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
 		},
 		want: field.ErrorList{
-			field.Required(field.NewPath("snapshot_config", "on_pause"), ""),
-			field.Required(field.NewPath("snapshot_config", "on_commit"), ""),
+			field.Required(field.NewPath("snapshot_config", "preferred_fidelity"), ""),
 		},
 	}, {
-		name: "on_commit outside the enum",
+		name: "preferred_fidelity outside the enum",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.SnapshotConfig.OnCommit = ateapipb.SnapshotContentScope(99)
+			tmpl.SnapshotConfig.PreferredFidelity = ateapipb.SnapshotFidelity(99)
 		},
-		want: field.ErrorList{field.Invalid(field.NewPath("snapshot_config", "on_commit"), nil, "").WithOrigin("maximum")},
+		want: field.ErrorList{field.Invalid(field.NewPath("snapshot_config", "preferred_fidelity"), nil, "").WithOrigin("maximum")},
 	}, {
-		name: "negative on_pause",
+		name: "negative preferred_fidelity",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.SnapshotConfig.OnPause = ateapipb.SnapshotContentScope(-1)
+			tmpl.SnapshotConfig.PreferredFidelity = ateapipb.SnapshotFidelity(-1)
 		},
-		want: field.ErrorList{field.Invalid(field.NewPath("snapshot_config", "on_pause"), nil, "").WithOrigin("minimum")},
+		want: field.ErrorList{field.Invalid(field.NewPath("snapshot_config", "preferred_fidelity"), nil, "").WithOrigin("minimum")},
 	}, {
 		name:   "no containers",
 		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.Containers = nil },
@@ -995,9 +990,8 @@ func validActorTemplate(mutations ...func(*ateapipb.ActorTemplate)) *ateapipb.Ac
 		Metadata:   &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "tmpl-a"},
 		Containers: []*ateapipb.Container{{Name: "main", Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},
 		SnapshotConfig: &ateapipb.SnapshotConfig{
-			StorageLocation: "gs://my-bucket/snapshots",
-			OnPause:         ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
-			OnCommit:        ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+			StorageLocation:   "gs://my-bucket/snapshots",
+			PreferredFidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 		},
 		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR, ConfigName: "gvisor-default"},
 	}

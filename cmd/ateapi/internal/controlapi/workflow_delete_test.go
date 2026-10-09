@@ -17,15 +17,17 @@ package controlapi
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/objectstore/objectstoretest"
+	"github.com/agent-substrate/substrate/internal/objectstoreplugin/objectstoreplugintest"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 func TestDeleteActorWorkflow_ExecutionPaths(t *testing.T) {
@@ -125,8 +127,8 @@ func TestDeleteActorWorkflow_ExecutionPaths(t *testing.T) {
 
 			deleted, err := w.DeleteActor(ctx, actorRef, tc.anyState, store.DeletePreconditions{})
 			if tc.wantErr {
-				if got := status.Code(err); got != tc.wantCode {
-					t.Fatalf("status.Code(err) = %v, want %v (err: %v)", got, tc.wantCode, err)
+				if got := apierror.Code(err); got != tc.wantCode {
+					t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, tc.wantCode, err)
 				}
 			} else {
 				if err != nil {
@@ -337,7 +339,7 @@ func TestDeleteActor_CollectsInFlightSnapshotWithoutTemplate(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
 	objects := objectstoretest.New()
-	w := NewActorWorkflow(persistence, nil, nil, nil, nil, nil, "", nil, objects)
+	w := NewActorWorkflow(persistence, nil, nil, nil, nil, nil, "", nil, objectstoreplugintest.ControlClient(objects))
 
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
 	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
@@ -392,8 +394,8 @@ func TestEnsureExternalSnapshotsReleased_DeletePrefixFailure(t *testing.T) {
 	}
 
 	err := w.ensureExternalSnapshotsReleased(ctx, actor)
-	if !errors.Is(err, errTransient) {
-		t.Fatalf("ensureExternalSnapshotsReleased error = %v, want error wrapping %v", err, errTransient)
+	if err == nil || !strings.Contains(err.Error(), errTransient.Error()) {
+		t.Fatalf("ensureExternalSnapshotsReleased error = %v, want it to report %v", err, errTransient)
 	}
 
 	// Objects should not have been deleted
@@ -481,7 +483,7 @@ func TestDeleteActor_CollectsSnapshotsAfterWorkerDelete(t *testing.T) {
 				})
 			}
 
-			actorWorkflow := NewActorWorkflow(persistence, nil, nil, nil, nil, nil, "", nil, objects)
+			actorWorkflow := NewActorWorkflow(persistence, nil, nil, nil, nil, nil, "", nil, objectstoreplugintest.ControlClient(objects))
 			// Suspend the actor as far as it gets: MarkSuspending mints the
 			// in-progress URI, and the checkpoint writes under it
 			actor, err := actorWorkflow.ensureMarkedSuspending(ctx, actorRef, actor, template)

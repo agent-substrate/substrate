@@ -421,6 +421,20 @@ func TestValidateActorUpdate(t *testing.T) {
 			field.Invalid(field.NewPath("status", "worker_assignment", "worker_pod_ips").Index(0), nil, "").WithOrigin("format=ip-strict"),
 		},
 	}, {
+		"valid actor.status.assigned_node",
+		validInput(),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.AssignedNode = "node-1"
+		})),
+		nil,
+	}, {
+		"invalid actor.status.assigned_node",
+		validInput(),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.AssignedNode = "NOT A NODE"
+		})),
+		field.ErrorList{field.Invalid(field.NewPath("status", "assigned_node"), nil, "").WithOrigin("format=k8s-long-name")},
+	}, {
 		"valid actor.status.in_progress_snapshot_uri",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
@@ -439,8 +453,8 @@ func TestValidateActorUpdate(t *testing.T) {
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
 			s.ExternalSnapshot = &ateapipb.ExternalSnapshot{
-				SnapshotUri:  "gs://private/atespaces/as/actors/" + someActorUID + "/snapshots/snap-1",
-				ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+				SnapshotUri: "gs://private/atespaces/as/actors/" + someActorUID + "/snapshots/snap-1",
+				Fidelity:    ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			}
 		})),
 		nil,
@@ -483,51 +497,26 @@ func TestValidateActorUpdate(t *testing.T) {
 		})),
 		field.ErrorList{field.Invalid(field.NewPath("status", "local_snapshot", "snapshot_name"), nil, "").WithOrigin("format=k8s-short-name")},
 	}, {
-		"invalid actor.status.local_snapshot.node_vms entry",
+		"valid actor.status.local_snapshot.fidelity",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.LocalSnapshot = &ateapipb.LocalSnapshot{NodeVmsWithLocalSnapshots: []string{"node-1", "NOT A NODE"}}
-		})),
-		field.ErrorList{field.Invalid(field.NewPath("status", "local_snapshot", "node_vms_with_local_snapshots").Index(1), nil, "").WithOrigin("format=k8s-long-name")},
-	}, {
-		"too many actor.status.local_snapshot.node_vms entries",
-		validInput(),
-		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			nodes := make([]string, 257)
-			for i := range nodes {
-				nodes[i] = fmt.Sprintf("node-%d", i)
-			}
-			s.LocalSnapshot = &ateapipb.LocalSnapshot{NodeVmsWithLocalSnapshots: nodes}
-		})),
-		field.ErrorList{field.TooMany(field.NewPath("status", "local_snapshot", "node_vms_with_local_snapshots"), 257, 256).WithOrigin("maxItems")},
-	}, {
-		"duplicate actor.status.local_snapshot.node_vms entry",
-		validInput(),
-		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.LocalSnapshot = &ateapipb.LocalSnapshot{NodeVmsWithLocalSnapshots: []string{"node-1", "node-1"}}
-		})),
-		field.ErrorList{field.Duplicate(field.NewPath("status", "local_snapshot", "node_vms_with_local_snapshots").Index(1), nil)},
-	}, {
-		"valid actor.status.local_snapshot.content_scope",
-		validInput(),
-		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.LocalSnapshot = &ateapipb.LocalSnapshot{ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA}
+			s.LocalSnapshot = &ateapipb.LocalSnapshot{Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES}
 		})),
 		nil,
 	}, {
-		"negative actor.status.local_snapshot.content_scope",
+		"negative actor.status.local_snapshot.fidelity",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.LocalSnapshot = &ateapipb.LocalSnapshot{ContentScope: ateapipb.SnapshotContentScope(-1)}
+			s.LocalSnapshot = &ateapipb.LocalSnapshot{Fidelity: ateapipb.SnapshotFidelity(-1)}
 		})),
-		field.ErrorList{field.Invalid(field.NewPath("status", "local_snapshot", "content_scope"), nil, "").WithOrigin("minimum")},
+		field.ErrorList{field.Invalid(field.NewPath("status", "local_snapshot", "fidelity"), nil, "").WithOrigin("minimum")},
 	}, {
-		"invalid actor.status.local_snapshot.content_scope",
+		"invalid actor.status.local_snapshot.fidelity",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.LocalSnapshot = &ateapipb.LocalSnapshot{ContentScope: ateapipb.SnapshotContentScope(3)}
+			s.LocalSnapshot = &ateapipb.LocalSnapshot{Fidelity: ateapipb.SnapshotFidelity(4)}
 		})),
-		field.ErrorList{field.Invalid(field.NewPath("status", "local_snapshot", "content_scope"), nil, "").WithOrigin("maximum")},
+		field.ErrorList{field.Invalid(field.NewPath("status", "local_snapshot", "fidelity"), nil, "").WithOrigin("maximum")},
 	}, {
 		"too many actor_volumes",
 		validInput(),
@@ -1027,7 +1016,6 @@ func TestValidateMintActorJWTRequest(t *testing.T) {
 	withExpiration := func(seconds int64) *ateapipb.MintActorJWTRequest {
 		return &ateapipb.MintActorJWTRequest{
 			Actor:             &ateapipb.ObjectRef{Atespace: "ns1", Name: "id1"},
-			ActorUid:          "0f8fad5b-d9cb-469f-a165-70867728950e",
 			Audience:          []string{"https://example.com"},
 			ExpirationSeconds: seconds,
 		}

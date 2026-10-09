@@ -20,11 +20,9 @@ import (
 	"fmt"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/internal/objectstore"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // TagActorSnapshot tags the external snapshot held by the suspended actor the
@@ -122,9 +120,9 @@ func (w *ActorWorkflow) DeleteTag(ctx context.Context, tagRef resources.TagRef, 
 	// reach that step.
 	if err := precondition.Check(tag.GetMetadata()); err != nil {
 		if errors.Is(err, store.ErrUIDConflict) {
-			return nil, status.Errorf(codes.Aborted, "Tag %s does not have uid %s", tagRef, precondition.UID)
+			return nil, apierror.Aborted("Tag %s does not have uid %s", tagRef, precondition.UID)
 		}
-		return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
+		return nil, apierror.Aborted("concurrent update conflict, please retry")
 	}
 	if err := w.ensureTagSnapshotReleased(ctx, tag); err != nil {
 		return nil, err
@@ -142,7 +140,7 @@ func (w *ActorWorkflow) loadTagForDelete(ctx context.Context, tagRef resources.T
 	tag, err := w.store.GetTag(ctx, tagRef)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, status.Errorf(codes.NotFound, "Tag %s not found", tagRef)
+			return nil, apierror.NotFound("Tag %s not found", tagRef)
 		}
 		return nil, fmt.Errorf("while getting tag %s: %w", tagRef, err)
 	}
@@ -156,7 +154,7 @@ func (w *ActorWorkflow) ensureTagSnapshotReleased(ctx context.Context, tag *atea
 	ctx, done := stepSpan(ctx, "ReleaseTagSnapshot")
 	defer func() { err = done(err) }()
 
-	if w.objectStore == nil {
+	if w.snapshotPlugin == nil {
 		markSkipped(ctx, "no object store configured")
 		return nil
 	}
@@ -165,7 +163,7 @@ func (w *ActorWorkflow) ensureTagSnapshotReleased(ctx context.Context, tag *atea
 	if err != nil {
 		return fmt.Errorf("while resolving the external snapshot of tag %s: %w", tagRef, err)
 	}
-	if err := objectstore.DeletePrefix(ctx, w.objectStore, uri.Prefix()); err != nil {
+	if err := w.cleanupSnapshot(ctx, uri.Prefix()); err != nil {
 		return fmt.Errorf("while releasing the external snapshot %q of tag %s: %w", uri, tagRef, err)
 	}
 	return nil
@@ -179,13 +177,13 @@ func (w *ActorWorkflow) finalizeTagDeleted(ctx context.Context, tagRef resources
 	tag, err := w.store.DeleteTag(ctx, tagRef, precondition)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, status.Errorf(codes.NotFound, "Tag %s not found", tagRef)
+			return nil, apierror.NotFound("Tag %s not found", tagRef)
 		}
 		if errors.Is(err, store.ErrUIDConflict) {
-			return nil, status.Errorf(codes.Aborted, "Tag %s does not have uid %s", tagRef, precondition.UID)
+			return nil, apierror.Aborted("Tag %s does not have uid %s", tagRef, precondition.UID)
 		}
 		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
+			return nil, apierror.Aborted("concurrent update conflict, please retry")
 		}
 		return nil, fmt.Errorf("while deleting tag %s: %w", tagRef, err)
 	}
@@ -205,11 +203,11 @@ func (w *ActorWorkflow) loadActorForTag(ctx context.Context, actorRef resources.
 	// Only a suspended actor's snapshot is complete. A running or
 	// suspending actor's is either stale or still being written.
 	if got := actor.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
-		return nil, nil, status.Errorf(codes.FailedPrecondition, "Actor %s must be %s to be tagged (got: %v)", actorRef, ateapipb.ActorState_ACTOR_STATE_SUSPENDED, got)
+		return nil, nil, apierror.FailedPrecondition("Actor %s must be %s to be tagged (got: %v)", actorRef, ateapipb.ActorState_ACTOR_STATE_SUSPENDED, got)
 	}
 	snapshotURI := actor.GetStatus().GetExternalSnapshot().GetSnapshotUri()
 	if snapshotURI == "" {
-		return nil, nil, status.Errorf(codes.FailedPrecondition, "Actor %s holds no external snapshot to tag", actorRef)
+		return nil, nil, apierror.FailedPrecondition("Actor %s holds no external snapshot to tag", actorRef)
 	}
 	// Every way an Actor comes to hold an external snapshot records the
 	// template its guest state was built under: a suspend through
@@ -217,7 +215,7 @@ func (w *ActorWorkflow) loadActorForTag(ctx context.Context, actorRef resources.
 	// A snapshot without one is a broken row, and tagging it would mint a tag
 	// that names no template.
 	if actor.GetStatus().GetExternalSnapshot().GetActorTemplateUid() == "" {
-		return nil, nil, status.Errorf(codes.Internal, "Actor %s holds an external snapshot but records no template it was built under", actorRef)
+		return nil, nil, apierror.Internal("Actor %s holds an external snapshot but records no template it was built under", actorRef)
 	}
 	actorTemplate, err := resolveActorTemplate(ctx, w.store, actor)
 	if err != nil {
@@ -261,9 +259,9 @@ func (w *ActorWorkflow) ensureTagReserved(ctx context.Context, tagRef resources.
 	case err == nil:
 		return stored, nil
 	case errors.Is(err, store.ErrFailedPrecondition):
-		return nil, status.Errorf(codes.FailedPrecondition, "Atespace %s not found", tagRef.Atespace)
+		return nil, apierror.FailedPrecondition("Atespace %s not found", tagRef.Atespace)
 	case errors.Is(err, store.ErrAlreadyExists):
-		return nil, status.Errorf(codes.AlreadyExists, "Tag %s already exists; delete it and create it again to retry", tagRef)
+		return nil, apierror.AlreadyExists("Tag %s already exists; delete it and create it again to retry", tagRef)
 	}
 	return nil, fmt.Errorf("while reserving tag %s: %w", tagRef, err)
 }
@@ -275,7 +273,7 @@ func (w *ActorWorkflow) ensureTagSnapshotCopied(ctx context.Context, tag *ateapi
 	ctx, done := stepSpan(ctx, "CopyTagSnapshot")
 	defer func() { err = done(err) }()
 
-	if w.objectStore == nil {
+	if w.snapshotPlugin == nil {
 		markSkipped(ctx, "no object store configured")
 		return nil
 	}
@@ -284,7 +282,7 @@ func (w *ActorWorkflow) ensureTagSnapshotCopied(ctx context.Context, tag *ateapi
 	if err != nil {
 		return fmt.Errorf("while parsing the external snapshot %q of the source actor: %w", snapshot.GetSnapshotUri(), err)
 	}
-	if err := objectstore.CopyPrefix(ctx, w.objectStore, src.Prefix(), dst.Prefix()); err != nil {
+	if err := w.copySnapshot(ctx, src.Prefix(), dst.Prefix()); err != nil {
 		return fmt.Errorf("while copying the external snapshot for tag %s: %w", tagRef, err)
 	}
 	return nil
@@ -299,8 +297,8 @@ func (w *ActorWorkflow) ensureTagFinalized(ctx context.Context, tag *ateapipb.Ta
 	tagRef := resources.TagRefFromTag(tag)
 	// The copy is byte-identical to the source, so it carries the same content.
 	finalSnapshot := &ateapipb.ExternalSnapshot{
-		SnapshotUri:  dst.String(),
-		ContentScope: snapshot.GetContentScope(),
+		SnapshotUri: dst.String(),
+		Fidelity:    snapshot.GetFidelity(),
 	}
 	stored, err := w.store.UpdateTag(ctx, tagRef, store.PreconditionFrom(tag), func(toUpdate *ateapipb.Tag) error {
 		toUpdate.Status.Snapshot = finalSnapshot
@@ -308,10 +306,10 @@ func (w *ActorWorkflow) ensureTagFinalized(ctx context.Context, tag *ateapipb.Ta
 	})
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
+			return nil, apierror.Aborted("concurrent update conflict, please retry")
 		}
 		if errors.Is(err, store.ErrNotFound) || errors.Is(err, store.ErrUIDConflict) {
-			return nil, status.Errorf(codes.Aborted, "Tag %s was deleted while it was being created, please retry", tagRef)
+			return nil, apierror.Aborted("Tag %s was deleted while it was being created, please retry", tagRef)
 		}
 		return nil, fmt.Errorf("while finalizing tag %s: %w", tagRef, err)
 	}

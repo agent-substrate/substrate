@@ -16,7 +16,6 @@ package controlapi
 
 import (
 	"context"
-	"maps"
 	"testing"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
@@ -95,7 +94,6 @@ func TestActorStateChangeRecords(t *testing.T) {
 				Metadata: &ateapipb.ResourceMetadata{Atespace: tmplAtespace, Name: tmplName},
 				SnapshotConfig: &ateapipb.SnapshotConfig{
 					StorageLocation: testStorageLocation,
-					OnPause:         ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 				},
 			}); err != nil {
 				t.Fatalf("create template: %v", err)
@@ -115,10 +113,16 @@ func TestActorStateChangeRecords(t *testing.T) {
 			w := &ActorWorkflow{store: persistence}
 			tt.transition(t, w, actorRef, actor, tmpl)
 
-			if len(*records) != 1 {
-				t.Fatalf("got %d state records, want 1: %v", len(*records), *records)
+			// The logs exporter is on, so the record goes to OTLP only.
+			if len(*records) != 0 {
+				t.Errorf("got %d stdout state records with the exporter on, want 0: %v", len(*records), *records)
 			}
-			got := (*records)[0].attrs
+			gotEvents := events()
+			if len(gotEvents) != 1 {
+				t.Fatalf("got %d state events, want 1: %v", len(gotEvents), gotEvents)
+			}
+			assertEvent(t, gotEvents[0], actorevent.StateChanged)
+			got := gotEvents[0].attrs
 			want := map[string]string{
 				string(ateattr.AtespaceKey):           actorRef.Atespace,
 				string(ateattr.ActorNameKey):          actorRef.Name,
@@ -136,20 +140,6 @@ func TestActorStateChangeRecords(t *testing.T) {
 			if len(got) != len(want) {
 				t.Errorf("got %d attributes, want %d: %v", len(got), len(want), got)
 			}
-
-			// The OTLP copy is the same record under an event name. One call writes
-			// both, so anything either copy holds alone is a bug in actorevent.Log.
-			gotEvents := events()
-			if len(gotEvents) != 1 {
-				t.Fatalf("got %d state events, want 1: %v", len(gotEvents), gotEvents)
-			}
-			if gotEvents[0].name != actorevent.StateChanged.Name {
-				t.Errorf("event name = %q, want %q", gotEvents[0].name, actorevent.StateChanged.Name)
-			}
-			if !maps.Equal(gotEvents[0].attrs, got) {
-				t.Errorf("state event attributes = %v, want the stdout record's %v", gotEvents[0].attrs, got)
-			}
-			assertCopiesAgree(t, (*records)[0], gotEvents[0], actorevent.StateChanged)
 
 			stored, err := persistence.GetActor(ctx, actorRef)
 			if err != nil {

@@ -23,6 +23,7 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/utils/ptr"
 )
 
 // sandboxConfigListerFor builds a lister over the given SandboxConfigs, using
@@ -45,17 +46,46 @@ func testAssets() map[string]map[string]atev1alpha1.AssetFile {
 }
 
 // TestResolveSandboxAssets pins the template-side resolution: the config the
-// template names is resolved (with its class checked), an empty name or an
-// unrecognized class is an error, and the pause image travels with the
-// sandbox binaries.
+// template names is resolved (with its class checked) to its default version,
+// a missing default version, an empty name or an unrecognized class is an
+// error, and the pause image travels with the sandbox binaries.
 func TestResolveSandboxAssets(t *testing.T) {
 	const namedPause = "gcr.io/gke-release/pause@sha256:named"
 	namedConfig := &atev1alpha1.SandboxConfig{
 		ObjectMeta: metav1.ObjectMeta{Name: "gvisor-custom"},
 		Spec: atev1alpha1.SandboxConfigSpec{
-			SandboxClass: atev1alpha1.SandboxClassGvisor,
-			PauseImage:   namedPause,
-			Assets:       testAssets(),
+			SandboxClass:   atev1alpha1.SandboxClassGvisor,
+			DefaultVersion: "v2",
+			Versions: []atev1alpha1.SandboxVersionConfig{{
+				Name:       "v1",
+				PauseImage: "gcr.io/gke-release/pause@sha256:old",
+				Assets:     testAssets(),
+			}, {
+				Name:       "v2",
+				PauseImage: namedPause,
+				Assets:     testAssets(),
+			}},
+		},
+	}
+	// A config whose defaultVersion names no entry; the CRD rejects this, but
+	// an object stored before the versions schema reads back this way.
+	noDefaultConfig := &atev1alpha1.SandboxConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "gvisor-no-default"},
+		Spec:       atev1alpha1.SandboxConfigSpec{SandboxClass: atev1alpha1.SandboxClassGvisor},
+	}
+	// A config whose defaultVersion names a Disabled entry; the CRD rejects
+	// this too, and it must not resolve to the disabled version.
+	disabledDefaultConfig := &atev1alpha1.SandboxConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "gvisor-disabled-default"},
+		Spec: atev1alpha1.SandboxConfigSpec{
+			SandboxClass:   atev1alpha1.SandboxClassGvisor,
+			DefaultVersion: "v1",
+			Versions: []atev1alpha1.SandboxVersionConfig{{
+				Name:       "v1",
+				State:      ptr.To(atev1alpha1.SandboxVersionStateDisabled),
+				PauseImage: namedPause,
+				Assets:     testAssets(),
+			}},
 		},
 	}
 
@@ -71,6 +101,20 @@ func TestResolveSandboxAssets(t *testing.T) {
 			ConfigName:   "gvisor-custom",
 		},
 		wantPauseImage: namedPause,
+	}, {
+		name: "named config without its default version",
+		sandbox: &ateapipb.SandboxConfig{
+			SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
+			ConfigName:   "gvisor-no-default",
+		},
+		wantErr: `SandboxConfig "gvisor-no-default" has no enabled version ""`,
+	}, {
+		name: "named config whose default version is disabled",
+		sandbox: &ateapipb.SandboxConfig{
+			SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
+			ConfigName:   "gvisor-disabled-default",
+		},
+		wantErr: `SandboxConfig "gvisor-disabled-default" has no enabled version "v1"`,
 	}, {
 		name: "named config class mismatch",
 		sandbox: &ateapipb.SandboxConfig{
@@ -99,7 +143,7 @@ func TestResolveSandboxAssets(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			configLister := sandboxConfigListerFor(t, []*atev1alpha1.SandboxConfig{namedConfig})
+			configLister := sandboxConfigListerFor(t, []*atev1alpha1.SandboxConfig{namedConfig, noDefaultConfig, disabledDefaultConfig})
 
 			got, err := resolveSandboxAssets(configLister, tt.sandbox)
 			if tt.wantErr != "" {

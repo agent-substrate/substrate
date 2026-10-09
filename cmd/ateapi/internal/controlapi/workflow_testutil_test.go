@@ -22,12 +22,13 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/objectstore/objectstoretest"
+	"github.com/agent-substrate/substrate/internal/objectstoreplugin/objectstoreplugintest"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // testWorkerUID derives a stable pod UID from a pod name, for Workers seeded
@@ -40,8 +41,8 @@ func testWorkerUID(podName string) string {
 // with one minimal ActorTemplate stored in tmplAtespace. Dependencies the
 // unit tests never reach (worker cache, atelet dialer, k8s clients) are nil,
 // so a step that unexpectedly executes against them fails the test loudly.
-// External snapshots go to an in-memory object store, reachable from a test as
-// w.objectStore.(*objectstoretest.Fake).
+// External snapshots go to an in-memory object store through the control
+// snapshot plugin.
 func newTestActorWorkflow(t *testing.T, st store.Interface, tmplAtespace, tmplName string) *ActorWorkflow {
 	t.Helper()
 	storetest.MustCreateAtespace(t, context.Background(), st, tmplAtespace)
@@ -57,7 +58,7 @@ func newTestActorWorkflow(t *testing.T, st store.Interface, tmplAtespace, tmplNa
 	}); err != nil && !errors.Is(err, store.ErrAlreadyExists) {
 		t.Fatalf("create test ActorTemplate: %v", err)
 	}
-	return NewActorWorkflow(st, nil, nil, nil, nil, nil, "", nil, objectstoretest.New())
+	return NewActorWorkflow(st, nil, nil, nil, nil, nil, "", nil, objectstoreplugintest.ControlClient(objectstoretest.New()))
 }
 
 // newFinalizeWorkflow builds an ActorWorkflow over persistence with an
@@ -65,7 +66,7 @@ func newTestActorWorkflow(t *testing.T, st store.Interface, tmplAtespace, tmplNa
 // directly rather than going through newTestActorWorkflow.
 func newFinalizeWorkflow(persistence store.Interface) (*ActorWorkflow, *objectstoretest.Fake) {
 	objects := objectstoretest.New()
-	return &ActorWorkflow{store: persistence, objectStore: objects}, objects
+	return &ActorWorkflow{store: persistence, snapshotPlugin: objectstoreplugintest.ControlClient(objects)}, objects
 }
 
 // mustActorSnapshotURI builds the URI of a snapshot the actor took under
@@ -176,7 +177,7 @@ func assertPrerequisiteResult(t *testing.T, st ateapipb.ActorState, err error, w
 		t.Errorf("state %v: CheckPrerequisite = nil, want FailedPrecondition", st)
 		return
 	}
-	if got := status.Code(err); got != codes.FailedPrecondition {
+	if got := apierror.Code(err); got != codes.FailedPrecondition {
 		t.Errorf("state %v: status.Code = %v, want %v", st, got, codes.FailedPrecondition)
 	}
 }

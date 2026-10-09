@@ -12,7 +12,7 @@ The `WorkerPool` defines the pool of physical "warm" compute capacity. It manage
 | :--- | :--- | :--- |
 | `replicas` | `int32` | **Required.** Number of physical standby pods to maintain in the cluster. |
 | `workerImage` | `string` | **Required.** The container image for the `ateom` herder process (e.g. `ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor`). |
-| `sandboxClass` | `string` | Optional. The sandbox runtime family for the pool: `gvisor` (default) or `microvm`. Drives the worker pod shape (e.g. KVM device mounts, node placement). The sandbox binaries themselves come from the [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) each `ActorTemplate` selects. |
+| `sandboxClasses` | `[]WorkerPoolSandboxClass` | **Required.** The sandbox runtime families the pool runs; exactly one entry today. Each entry has `name` (**required**, `gvisor` or `microvm`), which drives the worker pod shape (e.g. KVM device mounts, node placement), and `configRef.name` (optional), which names a cluster-scoped [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) of the same class. `configRef` is not consumed yet: the sandbox binaries still come from the `SandboxConfig` each `ActorTemplate` selects. |
 | `template` | `WorkerPoolPodTemplate` | **Optional.** Metadata, scheduling, and resource settings for worker workloads. |
 
 #### `WorkerPoolPodTemplate` (`spec.template`)
@@ -26,6 +26,7 @@ The `WorkerPool` defines the pool of physical "warm" compute capacity. It manage
 | `priorityClassName` | `string` | `spec.priorityClassName` |
 | `nodeAffinity` | `NodeAffinity` | `spec.affinity.nodeAffinity` |
 | `resources` | `ResourceRequirements` | `spec.containers[].resources` |
+| `serviceAccountName` | `string` | `spec.serviceAccountName` |
 
 Keys in `ate.dev/` and its subdomains (for example, `policy.ate.dev/`) are
 reserved for controllers and cannot be set in `template.labels` or
@@ -80,13 +81,15 @@ metadata:
 spec:
   replicas: 10
   workerImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
+  sandboxClasses:
+  - name: gvisor
+    configRef:
+      name: gvisor-default
   template:
     labels:
       project: agent-platform
     annotations:
       policy.example.com/exemption: sandbox-host
-  # sandboxClass defaults to gvisor. The sandbox binaries come from the
-  # SandboxConfig each ActorTemplate selects, not from the pool.
 ```
 
 ### Devices (GPUs) — temporarily unsupported
@@ -118,15 +121,15 @@ The `ActorTemplate` defines the code, environment, and state-management policies
 | Field | Type | Description |
 | :--- | :--- | :--- |
 | `containers` | `[]Container` | **Required.** The workload definition — see [Container Fields](#container-fields) below. Each container may also declare an optional `wakeupProbe` HTTP probe — see [Container Wakeup Probe](#container-wakeup-probe-wakeupprobe). |
-| `sandboxConfig` | `SandboxConfig` | **Required.** The sandbox runtime selection: `sandboxClass` (**required**, `SANDBOX_CLASS_GVISOR` or `SANDBOX_CLASS_MICROVM`) picks the runtime family this template's actors require — only `WorkerPool`s whose `sandboxClass` matches are eligible — and `configName` (**required**) names the cluster-scoped [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) object supplying the sandbox binaries. It must reference an existing config of the matching class; `CreateActorTemplate` rejects the template otherwise. |
+| `sandboxConfig` | `SandboxConfig` | **Required.** The sandbox runtime selection: `sandboxClass` (**required**, `SANDBOX_CLASS_GVISOR` or `SANDBOX_CLASS_MICROVM`) picks the runtime family this template's actors require — only `WorkerPool`s whose `sandboxClasses` entry matches are eligible — and `configName` (**required**) names the cluster-scoped [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) object supplying the sandbox binaries. It must reference an existing config of the matching class; `CreateActorTemplate` rejects the template otherwise. |
 | `workerSelector` | `*Selector` | Optional. Gates which `WorkerPool`s actors from this template may use, by matching against each pool's labels (`matchLabels`). If unset, all pools are eligible (subject to the actor's own `worker_selector`). |
-| `snapshotConfig` | `SnapshotConfig` | **Required.** The base object-storage location snapshots are written under, plus the pause/commit/resume scopes. See [Snapshot Storage Layout](#snapshot-storage-layout). |
+| `snapshotConfig` | `SnapshotConfig` | **Required.** The base object-storage location snapshots are written under, plus the snapshot fidelity (`preferredFidelity`) every Pause and Suspend captures. See [Snapshot Storage Layout](#snapshot-storage-layout). |
 | `volumes` | `[]Volume` | Optional. Volumes the containers may mount, each a `durableDir`, an `externalVolumeTemplate` (see [CSI Volumes Guide](csi-volumes.md)), or a `systemInfo` volume (see [SystemInfo Volumes](#systeminfo-volumes)). Every declared volume must be mounted by at least one container. A `microvm` template may declare several `durableDir` volumes; a `gvisor` template is limited to one. |
 | `resources` | `*Resources` | Optional. Declares each actor's compute size via `limits` — see [Sandbox Right-Sizing](#sandbox-right-sizing-resources). Immutable, like the rest of the template. |
 
 The sandbox itself — the binaries (e.g. the gVisor `runsc` binary) and the `pauseImage` holding the sandbox's namespaces — comes from the cluster-scoped [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) object the template names via `sandboxConfig.configName`. An actor always resolves the config from its current template — repointing the actor at another template requires the same config.
 
-Because a snapshot is not restorable across sandbox runtimes, `sandboxClass` is a **hard scheduling gate**: an actor is only ever placed on a `WorkerPool` of the matching class. It is AND'd with `workerSelector` (and the actor's `worker_selector`), which can only narrow the eligible pools further. It has no default — `sandboxConfig` is required and its `sandboxClass` must be set — and, like the rest of the template, is immutable, so each template's class is fixed at creation.
+Because a snapshot is not restorable across sandbox runtimes, `sandboxClass` is a **hard scheduling gate**: an actor is only ever placed on a `WorkerPool` whose `sandboxClasses` entry matches. It is AND'd with `workerSelector` (and the actor's `worker_selector`), which can only narrow the eligible pools further. It has no default — `sandboxConfig` is required and its `sandboxClass` must be set — and, like the rest of the template, is immutable, so each template's class is fixed at creation.
 
 ### Sandbox Right-Sizing (`resources`)
 
@@ -138,7 +141,7 @@ Unlike a Pod, an actor is sized by its **`limits`** (CPU and Memory): the size i
 2. **Gate scheduling.** An actor is only placed on a `WorkerPool` whose [worker capacity](#worker-capacity-spectemplateresources) is `>=` these limits.
 3. **Fall back to runtime defaults.** A zero or absent limit leaves that dimension at the runtime default: unlimited for gVisor, and 2 GiB / 1 vCPU for the micro-VM.
 
-The size is baked into snapshots, so a **micro-VM FULL-scope restore reuses the size in the snapshot**; changing an actor's limits takes effect on its next cold boot.
+The size is baked into snapshots, so a **micro-VM MEMORY-fidelity restore reuses the size in the snapshot**; changing an actor's limits takes effect on its next cold boot.
 
 Container environment variables support literal `value` entries only. Values are not interpolated (`$(VAR)` references are not expanded), and Kubernetes `envFrom`/`valueFrom` sources are not supported.
 
@@ -182,7 +185,7 @@ To deliver identity information, including credentials, to a running actor, you 
 Available information sources:
 
 #### actorMetadata
-The actorMetadata data source projects the actor's identity fields to files, one per item, analogous to the [Kubernetes downwardAPI volume](https://kubernetes.io/docs/concepts/storage/downward-api/). Each item selects a `field` — `name` (unique within an atespace), `atespace` (together with the name, the actor's full identity), or `uid` (server-generated, distinguishes incarnations of the same name) — and the `path` the value is written to, raw with no trailing newline. `path` is a clean relative path from the root of the volume (no leading `/`, no `.` or `..` segments, at most 16 segments) and must not repeat another path projected into the same volume.
+The actorMetadata data source projects the actor's identity fields to files, one per item, analogous to the [Kubernetes downwardAPI volume](https://kubernetes.io/docs/concepts/storage/volumes/#downwardapi). Each item selects a `field` — `name` (unique within an atespace), `atespace` (together with the name, the actor's full identity), or `uid` (server-generated, distinguishes incarnations of the same name) — and the `path` the value is written to, raw with no trailing newline. `path` is a clean relative path from the root of the volume (no leading `/`, no `.` or `..` segments, at most 16 segments) and must not repeat another path projected into the same volume.
 
 ```yaml
 spec:
@@ -209,9 +212,14 @@ spec:
 The values are delivered as files on a read-only per-actor bind mount, not environment variables, precisely so they carry the correct values after a resume from a shared snapshot — an env var (or a file baked into the image) would be frozen at the snapshot-source actor's values, since it lives in the checkpointed process memory, and would therefore be identical for every actor restored from that snapshot. The metadata fields themselves are fixed for the actor's lifetime, so workloads may cache them; future data sources that rotate (identity tokens and certificates) must be re-read at time of use.
 
 #### trustBundle
-The trustBundle data source projects the trust anchors of a named trust bundle to a single PEM file — inspired by the [Kubernetes clusterTrustBundle projected volume source](https://kubernetes.io/docs/concepts/storage/projected-volumes/#clustertrustbundle), but source-neutral: the name selects a bundle substrate knows how to fetch, and where it is fetched from is a deployment concern, not part of the API.
+The trustBundle data source projects the union of the trust anchors of one or more named trust bundles (at most 8) to a single PEM file — inspired by the [Kubernetes clusterTrustBundle projected volume source](https://kubernetes.io/docs/concepts/storage/projected-volumes/#clustertrustbundle), but source-neutral: the name selects a bundle substrate knows how to fetch, and where it is fetched from is a deployment concern, not part of the API.
 
-Supported names are allowlisted. Today the only supported bundle is `egress-mitm.ate.dev` — the egress gateway CA bundle — resolved from the [ClusterTrustBundle](https://kubernetes.io/docs/reference/access-authn-authz/certificate-signing-requests/#cluster-trust-bundles) (`certificates.k8s.io/v1`, or `v1beta1` when the stable API is not served) that atecontroller's reconciler derives from the `egress-mitm-ca-pool` Secret in the `ate-system` namespace. A configurable backend registry may widen the allowlist later.
+Supported names are allowlisted:
+
+* `egress-mitm.ate.dev` — the egress gateway man-in-the-middle CA bundle.
+* `system-roots.ate.dev` — A selection of public CA root certificates provided
+  by Substrate.  In official Substrate images, this is the Mozilla Root Store as
+  shipped on Debian (consumed via the distroless-static base image).
 
 ```yaml
 spec:
@@ -231,9 +239,9 @@ spec:
       mountPath: /run/substrate/certs   # the actor reads /run/substrate/certs/ca.pem
 ```
 
-atelet resolves the bundle on the node when the actor starts, reading the backing object through a cluster-wide watch (the same informer that drives live refresh) and sanitizing it the way kubelet does for projections: only `CERTIFICATE` PEM blocks are kept, deduplicated, with block headers stripped and the anchors deliberately shuffled, so consumers must not depend on their order. The actor itself never talks to any bundle backend. Starting the actor fails, with an error naming the bundle, if the name is not on the allowlist, the bundle's backend is unavailable in this deployment, or the resolved bundle is missing, empty, or contains no certificates.
+atelet resolves the bundle on the node when the actor starts, reading the backing object through a cluster-wide watch (the same informer that drives live refresh) and sanitizing it the way kubelet does for projections: only `CERTIFICATE` PEM blocks are kept, deduplicated across all the named bundles, with block headers stripped and the anchors deliberately shuffled, so consumers must not depend on their order. The actor itself never talks to any bundle backend. Starting the actor fails, with an error naming the bundle, if any name is not on the allowlist, the bundle's backend is unavailable in this deployment, or the resolved bundle is missing, empty, or contains no certificates.
 
-Bundle contents are re-resolved on every Run/Restore and refreshed while the actor runs: when the backing bundle changes, atelet rewrites the projected file atomically at the same path. As with the Kubernetes clusterTrustBundle projection, the application must re-read the file to pick up a rotation; a runtime that loads trust anchors once at startup sees the change at its next start or resume. If a refresh fails because the backing object was deleted or is unusable, the file keeps its last good contents. Bundle publishers should rotate with overlap: add the new CA before minting leaves under it, and keep the old CA until its last leaf expires.
+Bundle contents are re-resolved on every Run/Restore and refreshed while the actor runs: when any backing bundle changes, atelet rewrites the projected file atomically at the same path. As with the Kubernetes clusterTrustBundle projection, the application must re-read the file to pick up a rotation; a runtime that loads trust anchors once at startup sees the change at its next start or resume. If a refresh fails because the backing object was deleted or is unusable, the file keeps its last good contents. Bundle publishers should rotate with overlap: add the new CA before minting leaves under it, and keep the old CA until its last leaf expires.
 
 ### Container Fields
 
@@ -369,7 +377,7 @@ An actor takes a series of snapshots over its life, so it gets a prefix of its o
 
 An owner is collected by deleting everything under its prefix, and it can delete nothing else. That is what makes a borrowed snapshot safe: an actor created from a tag points at a URI under `tags/`, which its own prefix does not cover. See [Snapshot lifetime](#snapshot-lifetime).
 
-An `Actor` reports its current snapshot in the server-managed `status.externalSnapshot` and a `Tag` in `status.snapshot`, each an `ExternalSnapshot` carrying `snapshotUri`, `contentScope`, and `actorTemplateUid`. The URI is recorded when the snapshot is written. `actorTemplateUid` records the `ActorTemplate` whose sandbox the guest state was captured from, which is not always the template the actor points at now: an actor may be repointed while `SUSPENDED`, and the snapshot on disk still came from the old one. A resume that finds the two disagree restores the durable data only and boots the guest fresh, because memory captured under one sandbox image cannot be resumed under another. An `ActorTemplate` references its golden tag with the `ObjectRef` in `status.goldenSnapshotStatus.goldenTag`. These status fields are server-owned and ignored on input. Parse a URI only against the scheme above.
+An `Actor` reports its current snapshot in the server-managed `status.externalSnapshot` and a `Tag` in `status.snapshot`, each an `ExternalSnapshot` carrying `snapshotUri`, `fidelity`, and `actorTemplateUid`. The URI is recorded when the snapshot is written. `actorTemplateUid` records the `ActorTemplate` whose sandbox the guest state was captured from, which is not always the template the actor points at now: an actor may be repointed while `SUSPENDED`, and the snapshot on disk still came from the old one. A resume that finds the two disagree restores the durable data only and boots the guest fresh, because memory captured under one sandbox image cannot be resumed under another. An `ActorTemplate` references its golden tag with the `ObjectRef` in `status.goldenSnapshotStatus.goldenTag`. These status fields are server-owned and ignored on input. Parse a URI only against the scheme above.
 
 An `ActorTemplate` belongs to one atespace, but one `storageLocation` still holds snapshots for many atespaces: the golden actor lives in the reserved `ate-golden` atespace, and a `PUBLISHED` snapshot may be cloned from other atespaces. The `<atespace>` level exists so that access can be granted per tenant: an object-storage policy can only condition on an **object-name prefix**, and cannot read the identity recorded inside a snapshot's manifest. Binding a per-atespace grant on GCS looks like:
 
@@ -390,7 +398,7 @@ One consequence worth planning for: **a published snapshot is read from the ates
 
 ## 3. SandboxConfig: The Sandbox Itself
 
-`SandboxConfig` is a **cluster-scoped** resource that decouples the sandbox — its binaries (the gVisor `runsc` binary, or a micro-VM kernel/firmware/config) and the `pauseImage` that holds the sandbox's namespaces — from the workload definition in the `ActorTemplate`. An actor's cold boot resolves the sandbox binaries from the config its `ActorTemplate` names via `sandboxConfig.configName`.
+`SandboxConfig` is a **cluster-scoped** resource that decouples the sandbox — its binaries (the gVisor `runsc` binary, or a micro-VM kernel/firmware/config) and the `pauseImage` that holds the sandbox's namespaces — from the workload definition in the `ActorTemplate`. An actor's cold boot resolves the sandbox binaries from the default version of the config its `ActorTemplate` names via `sandboxConfig.configName`.
 
 This means a single, cluster-managed config pins the sandbox runtime version for many templates: snapshots stay restorable because the version is recorded in each snapshot's manifest, and operators upgrade the runtime in one place.
 
@@ -399,8 +407,17 @@ This means a single, cluster-managed config pins the sandbox runtime version for
 | Field | Type | Description |
 | :--- | :--- | :--- |
 | `sandboxClass` | `string` | **Required.** Runtime family this config applies to: `gvisor` (default) or `microvm`. An `ActorTemplate` only uses `SandboxConfig`s whose `sandboxClass` matches its own. |
-| `pauseImage` | `string` | **Required.** The image for the sandbox's root container (e.g. `registry.k8s.io/pause`, or `gcr.io/gke-release/pause` on GKE). Must include a digest (`...@sha256:...`) — it is recorded in each snapshot's manifest so a restore rebuilds the sandbox from the same image. |
-| `assets` | `map[arch]map[name]AssetFile` | Optional. Content-addressed files atelet fetches, keyed by architecture (`amd64`, `arm64`) then asset name. gVisor expects a `gvisor` asset (the release's `gvisor.tar.zstd`), which atelet auto-extracts. A micro-VM backend expects several. Each `AssetFile` is a `{ url, sha256 }` pair. |
+| `defaultVersion` | `string` | **Required.** Name of the entry in `versions` that actors boot with. It must name an existing version that is not `Disabled`. |
+| `versions` | `[]SandboxVersionConfig` | **Required.** 1–16 sandbox versions, unique by `name`. |
+
+Each entry of `versions` (`SandboxVersionConfig`):
+
+| Field | Type | Description |
+| :--- | :--- | :--- |
+| `name` | `string` | **Required.** Identifies the version within the config. A DNS label (lower-case alphanumerics and `-`, at most 63 characters). |
+| `state` | `string` | Optional. `Enabled` (default) or `Disabled`. The version named by `defaultVersion` cannot be `Disabled`. |
+| `pauseImage` | `string` | **Required for `gvisor`; not allowed for `microvm`**, which runs no pause container. The image for the sandbox's root container (e.g. `registry.k8s.io/pause`, or `gcr.io/gke-release/pause` on GKE). Must include a digest (`...@sha256:...`) — it is recorded in each snapshot's manifest so a restore rebuilds the sandbox from the same image. |
+| `assets` | `map[arch]map[name]AssetFile` | Content-addressed files atelet fetches, keyed by architecture (`amd64`, `arm64`) then asset name. gVisor expects a `gvisor` asset (the release's `gvisor.tar.zstd`), which atelet auto-extracts. A micro-VM backend expects several. Each `AssetFile` is a `{ url, sha256 }` pair. A `ValidatingAdmissionPolicy` enforces each class's required assets on every version. |
 
 A cluster-wide gVisor `SandboxConfig` (`gvisor-default`) is installed with the platform, so gVisor templates can name it via `sandboxConfig.configName` without any extra setup.
 
@@ -411,23 +428,29 @@ apiVersion: ate.dev/v1alpha1
 kind: SandboxConfig
 metadata:
   name: gvisor-default
+  annotations:
+    sandboxconfig.ate.dev/is-class-default: "true"
 spec:
   sandboxClass: gvisor
-  pauseImage: "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
-  assets:
-    amd64:
-      gvisor:
-        url: "gs://gvisor/releases/nightly/2026-09-02/x86_64/gvisor.tar.zstd"
-        sha256: "d547d81401461fd1c679c5c4fa0a6c2b8ef7dc3c22ce23c9e25dcc4c69cfd06f"
-    arm64:
-      gvisor:
-        url: "gs://gvisor/releases/nightly/2026-09-02/aarch64/gvisor.tar.zstd"
-        sha256: "a64916f9813ce7e4841a30480a599337f7dda07b421c6bf0123db2212aa7d1df"
+  defaultVersion: v1
+  versions:
+  - name: v1
+    state: Enabled
+    pauseImage: "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
+    assets:
+      amd64:
+        gvisor:
+          url: "gs://gvisor/releases/nightly/2026-09-02/x86_64/gvisor.tar.zstd"
+          sha256: "d547d81401461fd1c679c5c4fa0a6c2b8ef7dc3c22ce23c9e25dcc4c69cfd06f"
+      arm64:
+        gvisor:
+          url: "gs://gvisor/releases/nightly/2026-09-02/aarch64/gvisor.tar.zstd"
+          sha256: "a64916f9813ce7e4841a30480a599337f7dda07b421c6bf0123db2212aa7d1df"
 ```
 
 ### Micro-VM SandboxConfig
 
-A `microvm` `SandboxConfig` supplies the [Kata Containers](https://katacontainers.io/) + [Cloud Hypervisor](https://www.cloudhypervisor.org/) toolchain instead of `runsc`. Each architecture must define the full asset set — `cloud-hypervisor`, `virtiofsd`, `kata-kernel`, and `kata-image` — which a `ValidatingAdmissionPolicy` enforces at apply time. Worker pods for a micro-VM pool require `/dev/kvm` and nested-virtualization-capable nodes. The controller requests those devices on the pod automatically, and atelet advertises them only where they exist, so placement follows the hardware rather than a node label. Clusters that reserve nested-virt nodes with an `ate.dev/sandboxClass=microvm` taint are still tolerated: advertising a device attracts these pods to capable nodes but repels nothing else from them. The same convention applies to every class: worker pods of a pool tolerate `ate.dev/sandboxClass=<its class>:NoSchedule`, so a cluster can reserve a node pool per sandbox class with that taint, and the atelet DaemonSet tolerates the key for any value.
+A `microvm` `SandboxConfig` supplies the [Kata Containers](https://katacontainers.io/) + [Cloud Hypervisor](https://www.cloudhypervisor.org/) toolchain instead of `runsc`. Each architecture of each version must define the full asset set — `cloud-hypervisor`, `virtiofsd`, `kata-kernel`, and `kata-image` — which a `ValidatingAdmissionPolicy` enforces at apply time. Worker pods for a micro-VM pool require `/dev/kvm` and nested-virtualization-capable nodes. The controller requests those devices on the pod automatically, and atelet advertises them only where they exist, so placement follows the hardware rather than a node label. Clusters that reserve nested-virt nodes with an `ate.dev/sandboxClass=microvm` taint are still tolerated: advertising a device attracts these pods to capable nodes but repels nothing else from them. The same convention applies to every class: worker pods of a pool tolerate `ate.dev/sandboxClass=<its class>:NoSchedule`, so a cluster can reserve a node pool per sandbox class with that taint, and the atelet DaemonSet tolerates the key for any value.
 
 See [`hack/microvm-assets/`](../hack/microvm-assets/) for scripts that assemble and stage these assets, plus a worked counter demo (`demos/counter/counter-microvm.yaml.tmpl`) that suspends and resumes an in-RAM counter across worker pods.
 
@@ -451,7 +474,7 @@ Once a template is `Ready`, creating an actor logically (via `kubectl ate create
 
 ## 5. Best Practices
 *   **Startup Logic:** Place expensive initialization (loading large models, establishing baseline connections) in your application's entry point. These will be captured in the Golden Snapshot and won't need to be repeated on every resumption.
-*   **Placement:** Ensure your `ActorTemplate`'s `sandboxClass` matches your `WorkerPool`'s, and use the template's `workerSelector` to target specific pools — pool selection is by label match, not by namespace or RBAC.
+*   **Placement:** Ensure your `ActorTemplate`'s `sandboxClass` matches your `WorkerPool`'s `sandboxClasses[].name`, and use the template's `workerSelector` to target specific pools — pool selection is by label match, not by namespace or RBAC.
 *   **Version Management:** When updating code, create a new `ActorTemplate` (e.g. `v2`). Substrate treats each template as an immutable state root.
 *   **Eviction:** When its worker pod is evicted, an actor gets `SIGTERM` and 30 minutes to be suspended. After that it is killed and moves to `ACTOR_STATE_CRASHED`, and everything since its last snapshot is lost. So an actor that runs for more than 30 minutes without a suspend can lose data. A `CRASHED` actor can be recovered back to `ACTOR_STATE_SUSPENDED` at its last external snapshot using `RevertActor` (`kubectl ate revert`).
 

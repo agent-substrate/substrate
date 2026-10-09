@@ -21,7 +21,7 @@
 //
 //   - atelet (plain root, all capabilities dropped) pulls layers and unpacks
 //     them into the pool (Store.EnsureImage), and writes a rootfs-overlay.json
-//     next to each bundle's config.json (WriteSpec). Whiteout entries are
+//     into each bundle (WriteSpec). Whiteout entries are
 //     recorded in per-layer metadata rather than materialized, because
 //     overlayfs whiteouts are char devices (CAP_MKNOD) with trusted.* xattrs
 //     for opaque dirs (CAP_SYS_ADMIN).

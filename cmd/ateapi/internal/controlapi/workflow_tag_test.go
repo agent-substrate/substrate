@@ -23,12 +23,12 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/objectstore/objectstoretest"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // seedTagSource stores a suspended actor whose external snapshot is made of
@@ -46,7 +46,7 @@ func seedTagSource(t *testing.T, ctx context.Context, persistence store.Interfac
 	actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
 		s.ExternalSnapshot = &ateapipb.ExternalSnapshot{
 			SnapshotUri:      uri.String(),
-			ContentScope:     ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+			Fidelity:         ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			ActorTemplateUid: template.GetMetadata().GetUid(),
 		}
 	})
@@ -100,7 +100,7 @@ func TestTagActorSnapshot(t *testing.T) {
 	if got, want := tag.GetStatus().GetActorTemplateUid(), template.GetMetadata().GetUid(); got != want {
 		t.Errorf("actor template uid = %q, want %q", got, want)
 	}
-	if got, want := tag.GetStatus().GetSnapshot().GetContentScope(), ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL; got != want {
+	if got, want := tag.GetStatus().GetSnapshot().GetFidelity(), ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY; got != want {
 		t.Errorf("content scope = %v, want the source's %v", got, want)
 	}
 
@@ -206,7 +206,7 @@ func TestTagActorSnapshot_Preconditions(t *testing.T) {
 			}
 
 			_, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"))
-			if code := status.Code(err); code != tt.wantCode {
+			if code := apierror.Code(err); code != tt.wantCode {
 				t.Fatalf("TagActorSnapshot error = %v (code %v), want code %v", err, code, tt.wantCode)
 			}
 			// A rejected create takes the name with it.
@@ -239,7 +239,7 @@ func TestTagActorSnapshot_RecreateAfterCopyFailure(t *testing.T) {
 		}
 		return nil
 	}
-	if _, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1")); !errors.Is(err, errObjectStore) {
+	if _, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1")); !isObjectStoreErr(err) {
 		t.Fatalf("TagActorSnapshot = %v, want an error wrapping %v", err, errObjectStore)
 	}
 	objects.OnCopy = nil
@@ -260,7 +260,7 @@ func TestTagActorSnapshot_RecreateAfterCopyFailure(t *testing.T) {
 	// Creating under the same name again is refused, even for the actor the
 	// pending row was reserved for, and leaves that row exactly as it was.
 	_, err = w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"))
-	if code := status.Code(err); code != codes.AlreadyExists {
+	if code := apierror.Code(err); code != codes.AlreadyExists {
 		t.Fatalf("TagActorSnapshot over the pending tag = %v (code %v), want code AlreadyExists", err, code)
 	}
 	stillPending, err := persistence.GetTag(ctx, tagRef)
@@ -300,7 +300,7 @@ func TestTagActorSnapshot_RecreateAfterCopyFailure(t *testing.T) {
 
 	// A create over the finished tag is refused the same way.
 	_, err = w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"))
-	if code := status.Code(err); code != codes.AlreadyExists {
+	if code := apierror.Code(err); code != codes.AlreadyExists {
 		t.Errorf("TagActorSnapshot over the finished tag = %v (code %v), want code AlreadyExists", err, code)
 	}
 }
@@ -344,7 +344,7 @@ func TestTagActorSnapshot_RacesDelete(t *testing.T) {
 	}
 	// The delete is refused rather than queued behind the copy: the create
 	// holds the tag's lease until it has finished writing.
-	if code := status.Code(deleteErr); code != codes.Aborted {
+	if code := apierror.Code(deleteErr); code != codes.Aborted {
 		t.Errorf("DeleteTag during the copy = %v (code %v), want code Aborted", deleteErr, code)
 	}
 
@@ -382,7 +382,7 @@ func TestTagActorSnapshot_NameTakenByAnotherActor(t *testing.T) {
 		}
 		return nil
 	}
-	if _, err := w.TagActorSnapshot(ctx, tagToCreate(resources.ActorRefFromActor(first), "v1")); !errors.Is(err, errObjectStore) {
+	if _, err := w.TagActorSnapshot(ctx, tagToCreate(resources.ActorRefFromActor(first), "v1")); !isObjectStoreErr(err) {
 		t.Fatalf("TagActorSnapshot(actor-1) = %v, want an error wrapping %v", err, errObjectStore)
 	}
 	pending, err := persistence.GetTag(ctx, tagRef)
@@ -395,7 +395,7 @@ func TestTagActorSnapshot_NameTakenByAnotherActor(t *testing.T) {
 	// must not inherit the first actor's prefix.
 	objects.OnCopy = nil
 	_, err = w.TagActorSnapshot(ctx, tagToCreate(resources.ActorRefFromActor(second), "v1"))
-	if code := status.Code(err); code != codes.AlreadyExists {
+	if code := apierror.Code(err); code != codes.AlreadyExists {
 		t.Fatalf("TagActorSnapshot(actor-2) = %v (code %v), want code AlreadyExists", err, code)
 	}
 	if diff := cmp.Diff([]string{"manifest.json"}, objects.Snapshot(t, strandedURI)); diff != "" {
@@ -433,7 +433,7 @@ func TestDeleteTag_ReleasesExternalSnapshot(t *testing.T) {
 	// A delete that cannot reach object storage must not drop the row: it is
 	// the only handle left on the snapshot.
 	objects.OnDelete = func(string, string) error { return errObjectStore }
-	if _, err := w.DeleteTag(ctx, tagRef, store.DeletePreconditions{}); !errors.Is(err, errObjectStore) {
+	if _, err := w.DeleteTag(ctx, tagRef, store.DeletePreconditions{}); !isObjectStoreErr(err) {
 		t.Fatalf("DeleteTag = %v, want an error wrapping %v", err, errObjectStore)
 	}
 	if _, err := persistence.GetTag(ctx, tagRef); err != nil {
@@ -480,7 +480,7 @@ func TestDeleteTag_ReleasesPendingSnapshot(t *testing.T) {
 		t.Fatalf("DeleteActor: %v", err)
 	}
 	objects.OnDelete = func(string, string) error { return errObjectStore }
-	if _, err := w.DeleteTag(ctx, tagRef, store.DeletePreconditions{}); !errors.Is(err, errObjectStore) {
+	if _, err := w.DeleteTag(ctx, tagRef, store.DeletePreconditions{}); !isObjectStoreErr(err) {
 		t.Fatalf("DeleteTag = %v, want an error wrapping %v", err, errObjectStore)
 	}
 	if _, err := persistence.GetTag(ctx, tagRef); err != nil {
@@ -509,7 +509,7 @@ func TestDeleteTag_NotFound(t *testing.T) {
 	w, _ := newFinalizeWorkflow(persistence)
 
 	_, err := w.DeleteTag(ctx, resources.TagRef{Atespace: testAtespace, Name: "missing"}, store.DeletePreconditions{})
-	if code := status.Code(err); code != codes.NotFound {
+	if code := apierror.Code(err); code != codes.NotFound {
 		t.Errorf("DeleteTag = %v (code %v), want code NotFound", err, code)
 	}
 }
@@ -545,7 +545,7 @@ func TestDeleteTag_Preconditions(t *testing.T) {
 		"stale version": {UID: uid, Version: version + 1},
 		"foreign uid":   {UID: "0f0e0d0c-0b0a-4908-8706-050403020100", Version: version},
 	} {
-		if _, err := w.DeleteTag(ctx, tagRef, precondition); status.Code(err) != codes.Aborted {
+		if _, err := w.DeleteTag(ctx, tagRef, precondition); apierror.Code(err) != codes.Aborted {
 			t.Fatalf("DeleteTag with a %s = %v, want code Aborted", name, err)
 		}
 	}

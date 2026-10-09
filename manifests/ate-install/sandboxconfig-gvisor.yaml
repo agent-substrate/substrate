@@ -17,23 +17,29 @@
 # sandboxConfig.configName. atelet fetches the gVisor release tarball
 # (gvisor.tar.zstd: runsc plus the gvisor-bin/ helpers runsc requires next to
 # it) matching the worker node's architecture and extracts it locally. To pin a
-# different release, edit the assets below or create another SandboxConfig and
-# name it from the ActorTemplate.
+# different release, add a version below and point defaultVersion at it, or
+# create another SandboxConfig and name it from the ActorTemplate.
 apiVersion: ate.dev/v1alpha1
 kind: SandboxConfig
 metadata:
   name: gvisor-default
+  annotations:
+    sandboxconfig.ate.dev/is-class-default: "true"
 spec:
   sandboxClass: gvisor
-  # The root sandbox container's image. On GCP, prefer the in-project mirror
-  # gcr.io/gke-release/pause@sha256:bcbd57ba5653580ec647b16d8163cdd1112df3609129b01f912a8032e48265da.
-  pauseImage: "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
-  assets:
-    amd64:
-      gvisor:
-        url: "gs://gvisor/releases/nightly/2026-09-02/x86_64/gvisor.tar.zstd"
-        sha256: "d547d81401461fd1c679c5c4fa0a6c2b8ef7dc3c22ce23c9e25dcc4c69cfd06f"
-    arm64:
-      gvisor:
-        url: "gs://gvisor/releases/nightly/2026-09-02/aarch64/gvisor.tar.zstd"
-        sha256: "a64916f9813ce7e4841a30480a599337f7dda07b421c6bf0123db2212aa7d1df"
+  defaultVersion: v1
+  versions:
+  - name: v1
+    state: Enabled
+    # The root sandbox container's image. On GCP, prefer the in-project mirror
+    # gcr.io/gke-release/pause@sha256:bcbd57ba5653580ec647b16d8163cdd1112df3609129b01f912a8032e48265da.
+    pauseImage: "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
+    assets:
+      amd64:
+        gvisor:
+          url: "gs://gvisor/releases/nightly/2026-09-02/x86_64/gvisor.tar.zstd"
+          sha256: "d547d81401461fd1c679c5c4fa0a6c2b8ef7dc3c22ce23c9e25dcc4c69cfd06f"
+      arm64:
+        gvisor:
+          url: "gs://gvisor/releases/nightly/2026-09-02/aarch64/gvisor.tar.zstd"
+          sha256: "a64916f9813ce7e4841a30480a599337f7dda07b421c6bf0123db2212aa7d1df"

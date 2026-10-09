@@ -85,6 +85,8 @@ type sandboxPrewarmer struct {
 	// (workers request the ate.dev/kvm extended resource, so they only
 	// schedule where the device exists). See microvmNodeCapable.
 	microvmCapable bool
+	// done is closed when the worker goroutine exits; wait blocks on it.
+	done chan struct{}
 }
 
 func newSandboxPrewarmer(assets sandboxAssetFetcher, images *imagecache.Store, lister listersv1alpha1.SandboxConfigLister, microvmCapable bool) *sandboxPrewarmer {
@@ -98,6 +100,7 @@ func newSandboxPrewarmer(assets sandboxAssetFetcher, images *imagecache.Store, l
 		queue: workqueue.NewTypedRateLimitingQueue(
 			workqueue.NewTypedItemExponentialFailureRateLimiter[string](time.Second, 5*time.Minute)),
 		microvmCapable: microvmCapable,
+		done:           make(chan struct{}),
 	}
 }
 
@@ -111,7 +114,7 @@ func newSandboxPrewarmer(assets sandboxAssetFetcher, images *imagecache.Store, l
 // TODO: the static-files cache is never pruned, and prewarming every config
 // revision makes stale releases accumulate faster. Add a GC that removes
 // assets referenced by no current SandboxConfig and no on-node actor record.
-func startSandboxAssetPrewarm(ctx context.Context, informer cache.SharedIndexInformer, assets sandboxAssetFetcher, images *imagecache.Store, microvmCapable bool) error {
+func startSandboxAssetPrewarm(ctx context.Context, informer cache.SharedIndexInformer, assets sandboxAssetFetcher, images *imagecache.Store, microvmCapable bool) (*sandboxPrewarmer, error) {
 	p := newSandboxPrewarmer(assets, images, listersv1alpha1.NewSandboxConfigLister(informer.GetIndexer()), microvmCapable)
 	// Atelet startup never waits for this informer to sync: prewarm is
 	// best-effort, so a failing list/watch (e.g. Forbidden while an RBAC
@@ -131,11 +134,19 @@ func startSandboxAssetPrewarm(ctx context.Context, informer cache.SharedIndexInf
 		AddFunc:    func(obj any) { p.enqueue(ctx, obj) },
 		UpdateFunc: func(_, obj any) { p.enqueue(ctx, obj) },
 	}); err != nil {
-		return fmt.Errorf("while registering sandbox config prewarm handler: %w", err)
+		return nil, fmt.Errorf("while registering sandbox config prewarm handler: %w", err)
 	}
 	go p.run(ctx)
 	slog.InfoContext(ctx, "Sandbox asset prewarm started", slog.Bool("microvmCapable", microvmCapable))
-	return nil
+	return p, nil
+}
+
+// wait blocks until the prewarm worker has exited, which happens after the
+// context given to startSandboxAssetPrewarm is canceled and the in-flight
+// item finishes. Tests that patch package globals the worker reads must wait
+// here before restoring them.
+func (p *sandboxPrewarmer) wait() {
+	<-p.done
 }
 
 // skipConfig reports whether this node has nothing to prewarm for cfg,
@@ -181,6 +192,7 @@ func (p *sandboxPrewarmer) enqueue(ctx context.Context, obj any) {
 }
 
 func (p *sandboxPrewarmer) run(ctx context.Context) {
+	defer close(p.done)
 	go func() {
 		<-ctx.Done()
 		p.queue.ShutDown()
@@ -245,18 +257,27 @@ func (p *sandboxPrewarmer) prewarm(ctx context.Context, cfg *v1alpha1.SandboxCon
 	defer cancel()
 	t := time.Now()
 
+	// TODO: prewarm every Enabled version, not just the default.
+	ver, ok := cfg.Spec.DefaultVersionConfig()
+	if !ok {
+		// The CRD rejects this shape, so this should not be reachable.
+		slog.WarnContext(ctx, "Skipping sandbox asset prewarm: config has no enabled default version",
+			slog.String("config", cfg.Name), slog.String("defaultVersion", cfg.Spec.DefaultVersion))
+		return nil
+	}
+
 	var imageErr error
 	var wg sync.WaitGroup
 	// schedule prewarm pause image if provided
-	if cfg.Spec.PauseImage != "" {
+	if ver.PauseImage != "" {
 		wg.Go(func() {
-			if _, err := p.images.EnsureImage(ctx, cfg.Spec.PauseImage); err != nil {
-				imageErr = fmt.Errorf("while prewarming pause image %q: %w", cfg.Spec.PauseImage, err)
+			if _, err := p.images.EnsureImage(ctx, ver.PauseImage); err != nil {
+				imageErr = fmt.Errorf("while prewarming pause image %q: %w", ver.PauseImage, err)
 			}
 		})
 	}
 	// schedule prewarm sandbox assets if provided
-	rec, assetErr := recordFromSandboxConfig(cfg)
+	rec, assetErr := recordFromSandboxConfig(cfg, ver)
 	switch {
 	case errors.Is(assetErr, errNoAssetsForArch):
 		// Permanent until the config changes, and a change re-enqueues:
@@ -280,8 +301,9 @@ func (p *sandboxPrewarmer) prewarm(ctx context.Context, cfg *v1alpha1.SandboxCon
 	}
 	slog.InfoContext(ctx, "Sandbox assets prewarmed",
 		slog.String("config", cfg.Name),
+		slog.String("version", ver.Name),
 		slog.Int("assets", assets),
-		slog.String("pauseImage", cfg.Spec.PauseImage),
+		slog.String("pauseImage", ver.PauseImage),
 		slog.Duration("duration", time.Since(t)))
 	return nil
 }
@@ -291,17 +313,18 @@ func (p *sandboxPrewarmer) prewarm(ctx context.Context, cfg *v1alpha1.SandboxCon
 // config changes, so prewarm treats it as nothing-to-do rather than retrying.
 var errNoAssetsForArch = errors.New("no sandbox assets for this architecture")
 
-// recordFromSandboxConfig projects a SandboxConfig's per-architecture assets
-// onto the local node's architecture, mirroring recordFromRequest.
-func recordFromSandboxConfig(cfg *v1alpha1.SandboxConfig) (*sandboxAssetsRecord, error) {
+// recordFromSandboxConfig projects the per-architecture assets of one version
+// of a SandboxConfig onto the local node's architecture, mirroring
+// recordFromRequest.
+func recordFromSandboxConfig(cfg *v1alpha1.SandboxConfig, ver *v1alpha1.SandboxVersionConfig) (*sandboxAssetsRecord, error) {
 	arch := runtime.GOARCH
-	files := cfg.Spec.Assets[arch]
+	files := ver.Assets[arch]
 	if len(files) == 0 {
-		return nil, fmt.Errorf("sandbox config %q, architecture %q: %w", cfg.Name, arch, errNoAssetsForArch)
+		return nil, fmt.Errorf("sandbox config %q, version %q, architecture %q: %w", cfg.Name, ver.Name, arch, errNoAssetsForArch)
 	}
 	rec := &sandboxAssetsRecord{
 		SandboxClass: string(cfg.Spec.SandboxClass),
-		PauseImage:   cfg.Spec.PauseImage,
+		PauseImage:   ver.PauseImage,
 		Assets:       make(map[string]assetEntry, len(files)),
 	}
 	for name, f := range files {

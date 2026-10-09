@@ -41,26 +41,13 @@ func TestClosingSandboxDNSStopsServing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	closers, serve, err := relay.Serve(context.Background(), ns)
+	srv, err := relay.Serve(context.Background(), ns)
 	if err != nil {
 		t.Fatal(err)
 	}
-	stopped := make(chan struct{}, len(serve))
-	for _, fn := range serve {
-		go func() {
-			fn()
-			stopped <- struct{}{}
-		}()
-	}
-	for _, c := range closers {
-		_ = c.Close()
-	}
-
-	for range serve {
-		select {
-		case <-stopped:
-		case <-time.After(5 * time.Second):
-			t.Fatal("DNS serving outlived the sandbox's sockets")
-		}
+	stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := srv.Stop(stopCtx); err != nil {
+		t.Fatalf("DNS serving did not stop cleanly: %v", err)
 	}
 }

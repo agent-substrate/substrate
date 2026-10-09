@@ -25,6 +25,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
 )
@@ -37,21 +38,49 @@ const vapManifestPath = "../../../manifests/ate-install/sandboxconfig-validation
 
 const validPauseImage = "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
 
+// sandboxVersion returns a version with a pause image iff the class needs one.
+func sandboxVersion(name string, class SandboxClass, assets map[string]map[string]AssetFile) SandboxVersionConfig {
+	v := SandboxVersionConfig{Name: name, Assets: assets}
+	if class == SandboxClassGvisor {
+		v.PauseImage = validPauseImage
+	}
+	return v
+}
+
+// sandboxConfig returns a config with a single default version "v1".
 func sandboxConfig(name string, class SandboxClass, assets map[string]map[string]AssetFile) *SandboxConfig {
 	return &SandboxConfig{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
 		Spec: SandboxConfigSpec{
-			SandboxClass: class,
-			PauseImage:   validPauseImage,
-			Assets:       assets,
+			SandboxClass:   class,
+			DefaultVersion: "v1",
+			Versions:       []SandboxVersionConfig{sandboxVersion("v1", class, assets)},
 		},
 	}
 }
 
-// withPauseImage overrides the pause image on an otherwise-valid config.
+// withPauseImage overrides the pause image of the first version on an
+// otherwise-valid config.
 func withPauseImage(sc *SandboxConfig, image string) *SandboxConfig {
-	sc.Spec.PauseImage = image
+	sc.Spec.Versions[0].PauseImage = image
 	return sc
+}
+
+// withVersions appends versions to a config.
+func withVersions(sc *SandboxConfig, versions ...SandboxVersionConfig) *SandboxConfig {
+	sc.Spec.Versions = append(sc.Spec.Versions, versions...)
+	return sc
+}
+
+// withDefaultVersion overrides the default version of a config.
+func withDefaultVersion(sc *SandboxConfig, name string) *SandboxConfig {
+	sc.Spec.DefaultVersion = name
+	return sc
+}
+
+// gvisorAssets returns a valid gVisor asset set for amd64.
+func gvisorAssets() map[string]map[string]AssetFile {
+	return map[string]map[string]AssetFile{"amd64": {"gvisor": gvisorAsset()}}
 }
 
 func runscAsset() AssetFile { return AssetFile{URL: "gs://bucket/runsc", SHA256: validSHA256} }
@@ -193,15 +222,109 @@ func TestSandboxConfigValidation(t *testing.T) {
 		wantErr: true,
 		errMsg:  "sha256",
 	}, {
-		name:    "missing pauseImage",
+		name:    "gvisor missing pauseImage",
 		sc:      withPauseImage(sandboxConfig("bad-no-pause", SandboxClassGvisor, map[string]map[string]AssetFile{"amd64": {"gvisor": gvisorAsset()}}), ""),
 		wantErr: true,
-		errMsg:  "pauseImage",
+		errMsg:  "pauseImage is required on every version for gvisor",
+	}, {
+		name:    "microvm with pauseImage",
+		sc:      withPauseImage(sandboxConfig("bad-microvm-pause", SandboxClassMicroVM, map[string]map[string]AssetFile{"amd64": microVMAssets()}), validPauseImage),
+		wantErr: true,
+		errMsg:  "pauseImage is required on every version for gvisor",
 	}, {
 		name:    "unpinned pauseImage",
 		sc:      withPauseImage(sandboxConfig("bad-unpinned-pause", SandboxClassGvisor, map[string]map[string]AssetFile{"amd64": {"gvisor": gvisorAsset()}}), "registry.k8s.io/pause:3.10.2"),
 		wantErr: true,
 		errMsg:  "All images must include a digest",
+	}, {
+		name:    "valid gvisor with two versions",
+		sc:      withVersions(sandboxConfig("ok-two-versions", SandboxClassGvisor, gvisorAssets()), sandboxVersion("v2", SandboxClassGvisor, gvisorAssets())),
+		wantErr: false,
+	}, {
+		name: "valid non-default disabled version",
+		sc: withVersions(sandboxConfig("ok-disabled-old", SandboxClassGvisor, gvisorAssets()), func() SandboxVersionConfig {
+			v := sandboxVersion("v0", SandboxClassGvisor, gvisorAssets())
+			v.State = ptr.To(SandboxVersionStateDisabled)
+			return v
+		}()),
+		wantErr: false,
+	}, {
+		name:    "defaultVersion not in versions",
+		sc:      withDefaultVersion(sandboxConfig("bad-default-missing", SandboxClassGvisor, gvisorAssets()), "v9"),
+		wantErr: true,
+		errMsg:  "defaultVersion must name an entry in versions",
+	}, {
+		name: "defaultVersion disabled",
+		sc: func() *SandboxConfig {
+			sc := sandboxConfig("bad-default-disabled", SandboxClassGvisor, gvisorAssets())
+			sc.Spec.Versions[0].State = ptr.To(SandboxVersionStateDisabled)
+			return sc
+		}(),
+		wantErr: true,
+		errMsg:  "must not be Disabled",
+	}, {
+		name:    "no versions",
+		sc:      &SandboxConfig{ObjectMeta: metav1.ObjectMeta{Name: "bad-no-versions"}, Spec: SandboxConfigSpec{SandboxClass: SandboxClassGvisor, DefaultVersion: "v1", Versions: []SandboxVersionConfig{}}},
+		wantErr: true,
+		errMsg:  "spec.versions",
+	}, {
+		name:    "duplicate version names",
+		sc:      withVersions(sandboxConfig("bad-dup-versions", SandboxClassGvisor, gvisorAssets()), sandboxVersion("v1", SandboxClassGvisor, gvisorAssets())),
+		wantErr: true,
+		errMsg:  "Duplicate value",
+	}, {
+		name: "too many versions",
+		sc: func() *SandboxConfig {
+			sc := sandboxConfig("bad-many-versions", SandboxClassGvisor, gvisorAssets())
+			for i := range 16 {
+				sc.Spec.Versions = append(sc.Spec.Versions, sandboxVersion(fmt.Sprintf("extra-%d", i), SandboxClassGvisor, gvisorAssets()))
+			}
+			return sc
+		}(),
+		wantErr: true,
+		errMsg:  "spec.versions",
+	}, {
+		name: "version name not a DNS label",
+		sc: func() *SandboxConfig {
+			sc := sandboxConfig("bad-version-name", SandboxClassGvisor, gvisorAssets())
+			sc.Spec.Versions[0].Name = "V_1"
+			sc.Spec.DefaultVersion = "V_1"
+			return sc
+		}(),
+		wantErr: true,
+		errMsg:  "spec.versions[0].name",
+	}, {
+		name: "gvisor second version missing pauseImage",
+		sc: withVersions(sandboxConfig("bad-v2-no-pause", SandboxClassGvisor, gvisorAssets()), func() SandboxVersionConfig {
+			v := sandboxVersion("v2", SandboxClassGvisor, gvisorAssets())
+			v.PauseImage = ""
+			return v
+		}()),
+		wantErr: true,
+		errMsg:  "pauseImage is required on every version for gvisor",
+	}, {
+		name: "microvm second version with pauseImage",
+		sc: withVersions(sandboxConfig("bad-microvm-v2-pause", SandboxClassMicroVM, map[string]map[string]AssetFile{"amd64": microVMAssets()}), func() SandboxVersionConfig {
+			v := sandboxVersion("v2", SandboxClassMicroVM, map[string]map[string]AssetFile{"amd64": microVMAssets()})
+			v.PauseImage = validPauseImage
+			return v
+		}()),
+		wantErr: true,
+		errMsg:  "pauseImage is required on every version for gvisor",
+	}, {
+		name:    "gvisor second version missing gvisor and runsc",
+		sc:      withVersions(sandboxConfig("bad-v2-no-runsc", SandboxClassGvisor, gvisorAssets()), sandboxVersion("v2", SandboxClassGvisor, map[string]map[string]AssetFile{"amd64": {"notrunsc": runscAsset()}})),
+		wantErr: true,
+		errMsg:  "runsc",
+	}, {
+		name: "microvm second version missing an asset",
+		sc: withVersions(sandboxConfig("bad-microvm-v2", SandboxClassMicroVM, map[string]map[string]AssetFile{"amd64": microVMAssets()}), sandboxVersion("v2", SandboxClassMicroVM, map[string]map[string]AssetFile{"amd64": func() map[string]AssetFile {
+			m := microVMAssets()
+			delete(m, "kata-kernel")
+			return m
+		}()})),
+		wantErr: true,
+		errMsg:  "microvm SandboxConfig must define",
 	}}
 
 	for _, tt := range tests {
@@ -221,6 +344,62 @@ func TestSandboxConfigValidation(t *testing.T) {
 			if tt.errMsg != "" && !strings.Contains(err.Error(), tt.errMsg) {
 				t.Errorf("Create() error = %q, want it to contain %q", err.Error(), tt.errMsg)
 			}
+		})
+	}
+}
+
+func TestSandboxConfigUpdateRemovingDefaultVersion(t *testing.T) {
+	ctx := t.Context()
+	sc := withVersions(sandboxConfig("update-remove-default", SandboxClassGvisor, gvisorAssets()), sandboxVersion("v2", SandboxClassGvisor, gvisorAssets()))
+	if err := k8sClient.Create(ctx, sc); err != nil {
+		t.Fatalf("Create() unexpected error: %v", err)
+	}
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, sc) })
+
+	// Dropping the version defaultVersion names must be denied.
+	sc.Spec.Versions = sc.Spec.Versions[1:]
+	err := k8sClient.Update(ctx, sc)
+	if err == nil {
+		t.Fatalf("Update() removing the default version succeeded, want denied")
+	}
+	if !strings.Contains(err.Error(), "defaultVersion must name an entry in versions") {
+		t.Errorf("Update() error = %q, want it to mention defaultVersion", err.Error())
+	}
+
+	// Repointing defaultVersion in the same update is allowed.
+	sc.Spec.DefaultVersion = "v2"
+	if err := k8sClient.Update(ctx, sc); err != nil {
+		t.Fatalf("Update() repointing defaultVersion: %v", err)
+	}
+}
+
+// TestShippedSandboxConfigManifests guards the SandboxConfigs the install ships
+// against the CRD schema and the shipped ValidatingAdmissionPolicy.
+func TestShippedSandboxConfigManifests(t *testing.T) {
+	ctx := t.Context()
+	applyVAP(t, ctx)
+
+	for _, path := range []string{
+		"../../../manifests/ate-install/sandboxconfig-gvisor.yaml",
+		"../../../manifests/microvm/sandboxconfig-microvm.yaml.tmpl",
+	} {
+		t.Run(path, func(t *testing.T) {
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read manifest: %v", err)
+			}
+			raw = []byte(strings.ReplaceAll(string(raw), "${BUCKET_NAME}", "test-bucket"))
+			sc := &SandboxConfig{}
+			if err := yaml.UnmarshalStrict(raw, sc); err != nil {
+				t.Fatalf("decode manifest: %v", err)
+			}
+			if sc.Annotations[SandboxConfigClassDefaultAnnotation] != "true" {
+				t.Errorf("manifest is not annotated %s=true", SandboxConfigClassDefaultAnnotation)
+			}
+			if err := k8sClient.Create(ctx, sc); err != nil {
+				t.Fatalf("Create() unexpected error: %v", err)
+			}
+			t.Cleanup(func() { _ = k8sClient.Delete(ctx, sc) })
 		})
 	}
 }

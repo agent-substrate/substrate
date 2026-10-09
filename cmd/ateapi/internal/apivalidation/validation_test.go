@@ -860,15 +860,20 @@ func TestValidateTrustBundleDataSource(t *testing.T) {
 		name: "valid",
 		obj:  valid(),
 	}, {
+		name: "valid: multiple names",
+		obj: valid(func(tb *ateapipb.TrustBundleDataSource) {
+			tb.Names = []string{"egress-mitm.ate.dev", "system-roots.ate.dev"}
+		}),
+	}, {
 		name: "no names",
 		obj:  valid(func(tb *ateapipb.TrustBundleDataSource) { tb.Names = nil }),
 		want: field.ErrorList{field.Required(field.NewPath("names"), "")},
 	}, {
 		name: "too many names",
 		obj: valid(func(tb *ateapipb.TrustBundleDataSource) {
-			tb.Names = []string{"a", "b"}
+			tb.Names = []string{"a", "b", "c", "d", "e", "f", "g", "h", "i"}
 		}),
-		want: field.ErrorList{field.TooMany(field.NewPath("names"), 2, 1).WithOrigin("maxItems")},
+		want: field.ErrorList{field.TooMany(field.NewPath("names"), 9, 8).WithOrigin("maxItems")},
 	}, {
 		name: "empty name",
 		obj:  valid(func(tb *ateapipb.TrustBundleDataSource) { tb.Names = []string{""} }),
@@ -1139,8 +1144,8 @@ func TestValidateDeleteOptions(t *testing.T) {
 
 func validExternalSnapshot(mutate ...func(*ateapipb.ExternalSnapshot)) *ateapipb.ExternalSnapshot {
 	s := &ateapipb.ExternalSnapshot{
-		SnapshotUri:  "gs://private/atespaces/as/actors/" + someActorUID + "/snapshots/snap-1",
-		ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+		SnapshotUri: "gs://private/atespaces/as/actors/" + someActorUID + "/snapshots/snap-1",
+		Fidelity:    ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 	}
 	for _, m := range mutate {
 		m(s)
@@ -1153,7 +1158,7 @@ func validExternalSnapshot(mutate ...func(*ateapipb.ExternalSnapshot)) *ateapipb
 func badExternalSnapshot(mutate ...func(*ateapipb.ExternalSnapshot)) *ateapipb.ExternalSnapshot {
 	breakIt := func(s *ateapipb.ExternalSnapshot) {
 		s.SnapshotUri = ""
-		s.ContentScope = ateapipb.SnapshotContentScope(3)
+		s.Fidelity = ateapipb.SnapshotFidelity(4)
 	}
 	return validExternalSnapshot(append([]func(*ateapipb.ExternalSnapshot){breakIt}, mutate...)...)
 }
@@ -1161,7 +1166,7 @@ func badExternalSnapshot(mutate ...func(*ateapipb.ExternalSnapshot)) *ateapipb.E
 func TestValidateExternalSnapshot(t *testing.T) {
 	valid := validExternalSnapshot
 	uriPath := field.NewPath("snapshot_uri")
-	scopePath := field.NewPath("content_scope")
+	scopePath := field.NewPath("fidelity")
 
 	tests := []struct {
 		name string
@@ -1173,17 +1178,17 @@ func TestValidateExternalSnapshot(t *testing.T) {
 			obj:  valid(),
 		},
 		{
-			name: "valid content_scope: data",
+			name: "valid fidelity: data",
 			obj: valid(func(s *ateapipb.ExternalSnapshot) {
-				s.ContentScope = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
+				s.Fidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
 			}),
 		},
 		{
 			// UNSPECIFIED reads as FULL, so optional lets the zero value skip
 			// the bounds rather than failing the minimum.
-			name: "valid content_scope: unspecified",
+			name: "valid fidelity: unspecified",
 			obj: valid(func(s *ateapipb.ExternalSnapshot) {
-				s.ContentScope = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED
+				s.Fidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
 			}),
 		},
 		{
@@ -1199,13 +1204,13 @@ func TestValidateExternalSnapshot(t *testing.T) {
 			want: field.ErrorList{field.TooLong(uriPath, nil, 2048).WithOrigin("maxLength")},
 		},
 		{
-			name: "content_scope above the enum",
-			obj:  valid(func(s *ateapipb.ExternalSnapshot) { s.ContentScope = ateapipb.SnapshotContentScope(3) }),
+			name: "fidelity above the enum",
+			obj:  valid(func(s *ateapipb.ExternalSnapshot) { s.Fidelity = ateapipb.SnapshotFidelity(4) }),
 			want: field.ErrorList{field.Invalid(scopePath, nil, "").WithOrigin("maximum")},
 		},
 		{
-			name: "negative content_scope",
-			obj:  valid(func(s *ateapipb.ExternalSnapshot) { s.ContentScope = ateapipb.SnapshotContentScope(-1) }),
+			name: "negative fidelity",
+			obj:  valid(func(s *ateapipb.ExternalSnapshot) { s.Fidelity = ateapipb.SnapshotFidelity(-1) }),
 			want: field.ErrorList{field.Invalid(scopePath, nil, "").WithOrigin("minimum")},
 		},
 		{
@@ -1228,7 +1233,7 @@ func TestValidateExternalSnapshot(t *testing.T) {
 func TestValidateExternalSnapshotUpdate(t *testing.T) {
 	valid := validExternalSnapshot
 	uriPath := field.NewPath("snapshot_uri")
-	scopePath := field.NewPath("content_scope")
+	scopePath := field.NewPath("fidelity")
 
 	tests := []struct {
 		name   string
@@ -1250,16 +1255,16 @@ func TestValidateExternalSnapshotUpdate(t *testing.T) {
 			newObj: badExternalSnapshot(),
 		},
 		{
-			name:   "content_scope changed to a valid value",
+			name:   "fidelity changed to a valid value",
 			oldObj: valid(),
 			newObj: valid(func(s *ateapipb.ExternalSnapshot) {
-				s.ContentScope = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
+				s.Fidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
 			}),
 		},
 		{
-			name:   "content_scope changed to a value outside the enum",
+			name:   "fidelity changed to a value outside the enum",
 			oldObj: valid(),
-			newObj: valid(func(s *ateapipb.ExternalSnapshot) { s.ContentScope = ateapipb.SnapshotContentScope(3) }),
+			newObj: valid(func(s *ateapipb.ExternalSnapshot) { s.Fidelity = ateapipb.SnapshotFidelity(4) }),
 			want:   field.ErrorList{field.Invalid(scopePath, nil, "").WithOrigin("maximum")},
 		},
 		{
@@ -1271,10 +1276,10 @@ func TestValidateExternalSnapshotUpdate(t *testing.T) {
 		{
 			// The other side of the ratchet: a row that predates these rules
 			// can still be repaired, one field at a time.
-			name:   "content_scope repaired",
+			name:   "fidelity repaired",
 			oldObj: badExternalSnapshot(),
 			newObj: badExternalSnapshot(func(s *ateapipb.ExternalSnapshot) {
-				s.ContentScope = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL
+				s.Fidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
 			}),
 		},
 		{
@@ -1344,7 +1349,7 @@ func TestValidateNestedExternalSnapshot(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			want := field.ErrorList{
 				field.Required(tt.path.Child("snapshot_uri"), ""),
-				field.Invalid(tt.path.Child("content_scope"), nil, "").WithOrigin("maximum"),
+				field.Invalid(tt.path.Child("fidelity"), nil, "").WithOrigin("maximum"),
 			}
 			assertValidateErr(t, tt.validate(context.Background()), want)
 		})
@@ -1552,7 +1557,7 @@ func TestValidateTagRequestPayloads(t *testing.T) {
 			},
 			want: field.ErrorList{
 				field.Required(tagPath.Child("status", "snapshot", "snapshot_uri"), ""),
-				field.Invalid(tagPath.Child("status", "snapshot", "content_scope"), nil, "").WithOrigin("maximum"),
+				field.Invalid(tagPath.Child("status", "snapshot", "fidelity"), nil, "").WithOrigin("maximum"),
 			},
 		},
 		{

@@ -14,8 +14,8 @@
 
 # This demo exercises request parking in the atenet router. The WorkerPool is
 # deliberately small (2 workers) so that creating and requesting more than two
-# actors at once oversubscribes the pool. When AssignWorker can't find a free
-# worker it returns FailedPrecondition ("no free workers available"); with
+# actors at once oversubscribes the pool. When AssignWorker finds no worker with
+# room it returns ResourceExhausted ("no worker has room for the actor"); with
 # parking enabled (the default) the router holds such requests and retries the
 # resume until a worker frees up (e.g. another actor suspends), instead of
 # failing fast with 503. The workload is the same counter binary used by the
@@ -44,3 +44,5 @@ spec:
   # the pool and exercise the parking path.
   replicas: 2
   workerImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
+  sandboxClasses:
+  - name: gvisor

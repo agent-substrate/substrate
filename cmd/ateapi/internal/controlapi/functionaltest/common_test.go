@@ -31,6 +31,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/localjwtauthority"
 	"github.com/agent-substrate/substrate/internal/objectstore/objectstoretest"
+	"github.com/agent-substrate/substrate/internal/objectstoreplugin/objectstoreplugintest"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/volume"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
@@ -186,7 +187,7 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 		}
 	}
 
-	actorJWTAuthority, err := localjwtauthority.GenerateECDSAP256Authority("1")
+	actorJWTAuthority, err := localjwtauthority.GenerateAuthority("ES256", "1")
 	if err != nil {
 		t.Fatalf("Error generating actor JWT authority: %v", err)
 	}
@@ -222,7 +223,7 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 		instruments,
 		"",
 		volPlugins,
-		objectStore,
+		objectstoreplugintest.ControlClient(objectStore),
 		testActorJWTIssuer,
 		actorJWTAuthorityPool,
 		actorCAPool,
@@ -458,7 +459,7 @@ func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns st
 		SourceActor: &ateapipb.ObjectRef{Atespace: resources.GoldenActorAtespace, Name: created.GetMetadata().GetUid()},
 		Scope:       ateapipb.TagScope_TAG_SCOPE_PUBLISHED,
 		Status: &ateapipb.TagStatus{
-			Snapshot:         &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
+			Snapshot:         &ateapipb.ExternalSnapshot{SnapshotUri: goldenSnapshotURI(t), Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY},
 			StorageLocation:  testStorageLocation,
 			ActorTemplateUid: created.GetMetadata().GetUid(),
 		},
@@ -504,18 +505,22 @@ func ensureGvisorSandboxConfig(t *testing.T, tc *testContext, name string) {
 	sc := &atev1alpha1.SandboxConfig{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
 		Spec: atev1alpha1.SandboxConfigSpec{
-			SandboxClass: atev1alpha1.SandboxClassGvisor,
-			PauseImage:   testPauseImage,
-			Assets: map[string]map[string]atev1alpha1.AssetFile{
-				"amd64": {"runsc": {
-					URL:    "gs://gvisor/releases/nightly/2026-05-19/x86_64/runsc",
-					SHA256: "a397be1abc2420d26bce6c70e6e2ff96c73aaaab929756c56f5e2089ea842b63",
-				}},
-				"arm64": {"runsc": {
-					URL:    "gs://gvisor/releases/nightly/2026-05-19/aarch64/runsc",
-					SHA256: "1ba2366ae2efceba166046f51a4104f9261c9cb72c6db8f5b3fe2dc57dea86b9",
-				}},
-			},
+			SandboxClass:   atev1alpha1.SandboxClassGvisor,
+			DefaultVersion: "v1",
+			Versions: []atev1alpha1.SandboxVersionConfig{{
+				Name:       "v1",
+				PauseImage: testPauseImage,
+				Assets: map[string]map[string]atev1alpha1.AssetFile{
+					"amd64": {"runsc": {
+						URL:    "gs://gvisor/releases/nightly/2026-05-19/x86_64/runsc",
+						SHA256: "a397be1abc2420d26bce6c70e6e2ff96c73aaaab929756c56f5e2089ea842b63",
+					}},
+					"arm64": {"runsc": {
+						URL:    "gs://gvisor/releases/nightly/2026-05-19/aarch64/runsc",
+						SHA256: "1ba2366ae2efceba166046f51a4104f9261c9cb72c6db8f5b3fe2dc57dea86b9",
+					}},
+				},
+			}},
 		},
 	}
 	if _, err := tc.substrateClient.ApiV1alpha1().SandboxConfigs().Create(context.Background(), sc, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
@@ -538,8 +543,9 @@ func createWorkerPool(t *testing.T, tc *testContext, ns string, name string, lab
 			Labels:    labels,
 		},
 		Spec: atev1alpha1.WorkerPoolSpec{
-			Replicas:    1,
-			WorkerImage: "ateom@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+			Replicas:       1,
+			WorkerImage:    "ateom@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+			SandboxClasses: []atev1alpha1.WorkerPoolSandboxClass{{Name: atev1alpha1.SandboxClassGvisor}},
 		},
 	}
 	_, err := tc.substrateClient.ApiV1alpha1().WorkerPools(ns).Create(context.Background(), wp, metav1.CreateOptions{})
@@ -652,7 +658,7 @@ func createWorkerPod(t *testing.T, tc *testContext, ns string, name string, node
 			WorkerPodUid:    string(createdPod.UID),
 			Ips:             []string{"127.0.0.1"},
 			NodeName:        nodeName,
-			SandboxClass:    string(pool.Spec.SandboxClass),
+			SandboxClass:    string(pool.Spec.DefaultSandboxClass()),
 			Labels:          pool.GetLabels(),
 			// Capacity is not settable here: a Worker gets it from its own
 			// ateom's report, which the reportWorkerCapacity below stands in

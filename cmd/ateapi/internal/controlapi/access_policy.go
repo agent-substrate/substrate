@@ -22,10 +22,9 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/apivalidation"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/defaults"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
@@ -37,7 +36,7 @@ func (s *RPCService) CreateGlobalAccessPolicy(ctx context.Context, req *ateapipb
 		defaults.Apply(policy)
 	}
 	if errs := apivalidation.ValidateCreateGlobalAccessPolicyRequest(ctx, req); len(errs) > 0 {
-		return nil, resources.ToGRPCStatusError(errs)
+		return nil, resources.ToAPIError(errs)
 	}
 	return s.impl.CreateGlobalAccessPolicy(ctx, policy)
 }
@@ -49,7 +48,7 @@ func (s *ServiceImpl) CreateGlobalAccessPolicy(ctx context.Context, policy *atea
 
 func (s *RPCService) GetGlobalAccessPolicy(ctx context.Context, req *ateapipb.GetGlobalAccessPolicyRequest) (*ateapipb.AccessPolicy, error) {
 	if errs := apivalidation.ValidateGetGlobalAccessPolicyRequest(ctx, req); len(errs) > 0 {
-		return nil, resources.ToGRPCStatusError(errs)
+		return nil, resources.ToAPIError(errs)
 	}
 	return s.impl.GetGlobalAccessPolicy(ctx)
 }
@@ -58,7 +57,7 @@ func (s *ServiceImpl) GetGlobalAccessPolicy(ctx context.Context) (*ateapipb.Acce
 	policy, err := s.store.GetGlobalAccessPolicy(ctx)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, status.Error(codes.NotFound, "Global AccessPolicy not found")
+			return nil, apierror.NotFound("Global AccessPolicy not found")
 		}
 		return nil, fmt.Errorf("while getting Global access policy: %w", err)
 	}
@@ -71,7 +70,7 @@ func (s *RPCService) UpdateGlobalAccessPolicy(ctx context.Context, req *ateapipb
 		scrubResourceMetadataForUpdate(policy.Metadata)
 	}
 	if errs := apivalidation.ValidateUpdateGlobalAccessPolicyRequest(ctx, req); len(errs) > 0 {
-		return nil, resources.ToGRPCStatusError(errs)
+		return nil, resources.ToAPIError(errs)
 	}
 	return s.impl.UpdateGlobalAccessPolicy(ctx, store.PreconditionFrom(policy), replaceAccessPolicy(policy))
 }
@@ -83,7 +82,7 @@ func (s *ServiceImpl) UpdateGlobalAccessPolicy(ctx context.Context, precondition
 			return err
 		}
 		if errs := apivalidation.ValidateGlobalAccessPolicyUpdate(ctx, field.NewPath("access_policy"), toUpdate, oldVal); len(errs) > 0 {
-			return resources.ToGRPCStatusError(errs)
+			return resources.ToAPIError(errs)
 		}
 		return nil
 	})
@@ -97,7 +96,7 @@ func (s *RPCService) CreateAtespaceAccessPolicy(ctx context.Context, req *ateapi
 		defaults.Apply(policy)
 	}
 	if errs := apivalidation.ValidateCreateAtespaceAccessPolicyRequest(ctx, req); len(errs) > 0 {
-		return nil, resources.ToGRPCStatusError(errs)
+		return nil, resources.ToAPIError(errs)
 	}
 	return s.impl.CreateAtespaceAccessPolicy(ctx, req.GetAtespace().GetName(), policy)
 }
@@ -109,7 +108,7 @@ func (s *ServiceImpl) CreateAtespaceAccessPolicy(ctx context.Context, name strin
 
 func (s *RPCService) GetAtespaceAccessPolicy(ctx context.Context, req *ateapipb.GetAtespaceAccessPolicyRequest) (*ateapipb.AccessPolicy, error) {
 	if errs := apivalidation.ValidateGetAtespaceAccessPolicyRequest(ctx, req); len(errs) > 0 {
-		return nil, resources.ToGRPCStatusError(errs)
+		return nil, resources.ToAPIError(errs)
 	}
 	return s.impl.GetAtespaceAccessPolicy(ctx, req.GetAtespace().GetName())
 }
@@ -118,7 +117,7 @@ func (s *ServiceImpl) GetAtespaceAccessPolicy(ctx context.Context, name string) 
 	policy, err := s.store.GetAtespaceAccessPolicy(ctx, name)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, status.Errorf(codes.NotFound, "AccessPolicy for atespace %s not found", name)
+			return nil, apierror.NotFound("AccessPolicy for atespace %s not found", name)
 		}
 		return nil, fmt.Errorf("while getting Atespace access policy: %w", err)
 	}
@@ -131,7 +130,7 @@ func (s *RPCService) UpdateAtespaceAccessPolicy(ctx context.Context, req *ateapi
 		scrubResourceMetadataForUpdate(policy.Metadata)
 	}
 	if errs := apivalidation.ValidateUpdateAtespaceAccessPolicyRequest(ctx, req); len(errs) > 0 {
-		return nil, resources.ToGRPCStatusError(errs)
+		return nil, resources.ToAPIError(errs)
 	}
 	return s.impl.UpdateAtespaceAccessPolicy(ctx, req.GetAtespace().GetName(), store.PreconditionFrom(policy), replaceAccessPolicy(policy))
 }
@@ -143,7 +142,7 @@ func (s *ServiceImpl) UpdateAtespaceAccessPolicy(ctx context.Context, name strin
 			return err
 		}
 		if errs := apivalidation.ValidateAtespaceAccessPolicyUpdate(ctx, field.NewPath("access_policy"), toUpdate, oldVal); len(errs) > 0 {
-			return resources.ToGRPCStatusError(errs)
+			return resources.ToAPIError(errs)
 		}
 		return nil
 	})
@@ -152,7 +151,7 @@ func (s *ServiceImpl) UpdateAtespaceAccessPolicy(ctx context.Context, name strin
 
 func (s *RPCService) DeleteAtespaceAccessPolicy(ctx context.Context, req *ateapipb.DeleteAtespaceAccessPolicyRequest) (*ateapipb.AccessPolicy, error) {
 	if errs := apivalidation.ValidateDeleteAtespaceAccessPolicyRequest(ctx, req); len(errs) > 0 {
-		return nil, resources.ToGRPCStatusError(errs)
+		return nil, resources.ToAPIError(errs)
 	}
 	return s.impl.DeleteAtespaceAccessPolicy(ctx, req.GetAtespace().GetName(), toDeletePreconditions(req.GetOptions()))
 }
@@ -178,30 +177,18 @@ func mapAccessPolicyWrite(policy *ateapipb.AccessPolicy, err error) (*ateapipb.A
 	case err == nil:
 		return policy, nil
 	case errors.Is(err, store.ErrNotFound):
-		return nil, status.Error(codes.NotFound, "AccessPolicy not found")
+		return nil, apierror.NotFound("AccessPolicy not found")
 	case errors.Is(err, store.ErrAlreadyExists):
-		return nil, status.Error(codes.AlreadyExists, "AccessPolicy already exists")
+		return nil, apierror.AlreadyExists("AccessPolicy already exists")
 	case errors.Is(err, store.ErrVersionConflict):
-		return nil, status.Error(codes.Aborted, "AccessPolicy version conflict")
+		return nil, apierror.Aborted("AccessPolicy version conflict")
 	case errors.Is(err, store.ErrUIDConflict):
-		return nil, status.Error(codes.Aborted, "AccessPolicy UID conflict")
+		return nil, apierror.Aborted("AccessPolicy UID conflict")
 	case errors.Is(err, store.ErrPreconditionRequired):
-		return nil, status.Error(codes.InvalidArgument, "AccessPolicy UID and version are required")
+		return nil, apierror.InvalidArgument("AccessPolicy UID and version are required")
 	case errors.Is(err, store.ErrFailedPrecondition):
-		return nil, status.Error(codes.FailedPrecondition, "parent Atespace does not exist")
+		return nil, apierror.FailedPrecondition("parent Atespace does not exist")
 	default:
-		return nil, toCanonicalStatus(fmt.Errorf("while writing AccessPolicy: %w", err))
+		return nil, fmt.Errorf("while writing AccessPolicy: %w", err)
 	}
-}
-
-// toCanonicalStatus passes err through when it carries a canonical gRPC code
-// (including a plain error, which gRPC reports as Unknown), and reports
-// anything else as Internal. Backends such as OpenFGA return statuses with
-// nonstandard codes (for example Code(2000)) that clients cannot interpret.
-func toCanonicalStatus(err error) error {
-	st, ok := status.FromError(err)
-	if !ok || st.Code() <= codes.Unauthenticated {
-		return err
-	}
-	return status.Error(codes.Internal, err.Error())
 }

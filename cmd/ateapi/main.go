@@ -17,7 +17,6 @@ package main
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -28,7 +27,6 @@ import (
 	"syscall"
 	"time"
 
-	"cloud.google.com/go/storage"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/apiauthn"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/authz"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/controlapi"
@@ -41,7 +39,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/localjwtauthority"
-	"github.com/agent-substrate/substrate/internal/objectstore"
+	"github.com/agent-substrate/substrate/internal/objectstoreplugin"
 	"github.com/agent-substrate/substrate/internal/oidcdiscovery"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/version"
@@ -49,8 +47,7 @@ import (
 	"github.com/agent-substrate/substrate/pkg/client/clientset/versioned"
 	"github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
+	objectstoresnapshotv1 "github.com/agent-substrate/substrate/pkg/proto/objectstoresnapshotpb/v1"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/spf13/pflag"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
@@ -99,6 +96,8 @@ var (
 	drainDelay   = pflag.Duration("drain-delay", 13*time.Second, "How long to keep accepting new work after SIGTERM, before starting the gRPC drain.")
 	drainTimeout = pflag.Duration("drain-timeout", 15*time.Second, "Deadline for the graceful gRPC drain on shutdown. In-flight RPCs still running past it are forcefully cancelled.")
 
+	snapshotPluginSocket = pflag.String("snapshot-plugin-socket", "/run/snapshot-plugin/control.sock", "Unix socket of the control snapshot plugin that external snapshots are deleted and copied through.")
+
 	templateResyncInterval = pflag.Duration("template-resync-interval", 20*time.Second, fmt.Sprintf("Interval between actor template resyncs. Must be at least %s.", minResyncInterval))
 
 	showVersion  = pflag.Bool("version", false, "Print version and exit.")
@@ -118,6 +117,9 @@ func main() {
 	}
 	if err := loadFlagsFromEnv(); err != nil {
 		serverboot.Fatal(ctx, "Invalid PostgreSQL configuration", err)
+	}
+	if err := rejectStorageEnv(); err != nil {
+		serverboot.Fatal(ctx, "Storage settings moved to the snapshot-plugin sidecar", err)
 	}
 	slog.InfoContext(ctx, "ateapi starting", slog.String("version", version.Version))
 	if *templateResyncInterval < minResyncInterval {
@@ -152,12 +154,12 @@ func main() {
 
 	lp, err := serverboot.InitLogging(ctx, serverboot.LoggingOptions{
 		ServiceName: "ateapi",
-		Exporter:    serverboot.ResolveLogsExporter(ctx, serverboot.LogsExporterNone),
+		Exporter:    serverboot.ResolveLogsExporter(ctx),
 	})
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize logging", err)
 	}
-	// Nil when the exporter is none.
+	// Nil when the exporter does not include otlp.
 	if lp != nil {
 		defer serverboot.ShutdownProvider("LoggerProvider", lp.Shutdown)
 	}
@@ -259,9 +261,18 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to create metric instruments", err)
 	}
 
-	objectStore, err := newObjectStore(ctx)
+	snapshotPluginConn, err := objectstoreplugin.Dial(*snapshotPluginSocket, objectstoreplugin.ReadyWait)
 	if err != nil {
-		serverboot.Fatal(ctx, "Failed to set up the object storage backend", err)
+		serverboot.Fatal(ctx, "Failed to set up the snapshot plugin client", err)
+	}
+	defer snapshotPluginConn.Close()
+	// A plugin that never serves would fail every call. Fail at startup
+	// instead, giving the sidecar time to come up.
+	readyCtx, cancelReady := context.WithTimeout(ctx, time.Minute)
+	err = objectstoreplugin.WaitReady(readyCtx, snapshotPluginConn)
+	cancelReady()
+	if err != nil {
+		serverboot.Fatal(ctx, "Snapshot plugin is not serving", err)
 	}
 
 	volPlugins := make(map[string]volume.VolumePluginControlPlane)
@@ -287,7 +298,7 @@ func main() {
 		instruments,
 		*defaultEgressGatewayAddress,
 		volPlugins,
-		objectStore,
+		objectstoresnapshotv1.NewControlProviderClient(snapshotPluginConn),
 		resolvedActorJWTIssuer,
 		actorIDJWTAuthorityPool,
 		actorIDCAPool,
@@ -414,6 +425,19 @@ func loadFlagsFromEnv() error {
 	return nil
 }
 
+// rejectStorageEnv fails if ATE_STORAGE_BACKEND is set on ate-api-server,
+// which no longer reads it; objectstorage.UsesS3 reads it in the sidecar. An
+// install that still patches it onto this container would otherwise come up
+// healthy with a sidecar on the default backend, and fail at the first
+// snapshot cleanup or copy. Only this variable is a signal: EKS pod identity
+// sets AWS_* in every container.
+func rejectStorageEnv() error {
+	if v, ok := os.LookupEnv("ATE_STORAGE_BACKEND"); ok {
+		return fmt.Errorf("ATE_STORAGE_BACKEND=%q is set on ate-api-server, which no longer reads it; set the storage backend on its snapshot-plugin sidecar", v)
+	}
+	return nil
+}
+
 func logFlagValues(ctx context.Context) {
 	slog.InfoContext(ctx, "Final flag values",
 		slog.String("grpc-listen-addr", *listenAddr),
@@ -435,35 +459,6 @@ func logFlagValues(ctx context.Context) {
 		slog.Duration("drain-delay", *drainDelay),
 		slog.Duration("drain-timeout", *drainTimeout),
 	)
-}
-
-// newObjectStore builds the client ate-api manages external snapshots with.
-// The backend is selected the same way atelet selects the one it reads and
-// writes snapshots through, so both ends of a snapshot's life agree on where
-// it lives.
-func newObjectStore(ctx context.Context) (objectstore.Store, error) {
-	switch backend := os.Getenv("ATE_STORAGE_BACKEND"); backend {
-	case "s3":
-		slog.InfoContext(ctx, "Using S3 storage backend")
-		// Depends on the standard AWS environment variables, which have to be
-		// set on the ate-api pod.
-		cfg, err := config.LoadDefaultConfig(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("loading S3 config: %w", err)
-		}
-		return objectstore.NewS3(s3.NewFromConfig(cfg, func(o *s3.Options) {
-			if os.Getenv("AWS_S3_USE_PATH_STYLE") == "true" {
-				o.UsePathStyle = true
-			}
-		})), nil
-	// GCS is currently the default, TODO: we assume workload identity / ADC
-	default:
-		client, err := storage.NewClient(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("creating GCS client: %w", err)
-		}
-		return objectstore.NewGCS(client), nil
-	}
 }
 
 // postgresConnectionAttr describes the connection string for the startup log
@@ -560,31 +555,55 @@ func newKubeClients() (*kubernetes.Clientset, versioned.Interface, error) {
 	return clientset, ateClient, nil
 }
 
-// buildServerCreds loads the pod-identity CA pool (if configured) and
-// composes gRPC TransportCredentials over the server bundle + optional
-// client-cert verification.
+// buildServerCreds composes gRPC TransportCredentials over the server bundle
+// and pod-identity CA pool named by flags.
 func buildServerCreds(ctx context.Context) (credentials.TransportCredentials, error) {
-	var clientCAs *x509.CertPool
-	if *podIdentityCACerts != "" {
-		// TODO: Periodically reload these to handle rotations. Consult with Tina to see how she did it for client-go.
-		ca, err := os.ReadFile(*podIdentityCACerts)
-		if err != nil {
-			return nil, fmt.Errorf("read pod-identity CA: %w", err)
-		}
-		clientCAs = x509.NewCertPool()
-		if !clientCAs.AppendCertsFromPEM(ca) {
-			return nil, fmt.Errorf("parse pod-identity CA from %s", *podIdentityCACerts)
-		}
-		slog.InfoContext(ctx, "Using pod-identity CA for client-cert verification", slog.String("path", *podIdentityCACerts))
+	cfg, err := buildServerTLSConfig(ctx, *grpcServerCredBundle, *podIdentityCACerts)
+	if err != nil {
+		return nil, err
 	}
-	return credentials.NewTLS(&tls.Config{
-		GetCertificate: credbundle.Loader(*grpcServerCredBundle),
-		// Client certs stay optional at the transport level: certless
-		// clients such as kubectl-ate authenticate with a Bearer token in the
-		// ateapiauth interceptor.
-		ClientAuth: tls.VerifyClientCertIfGiven,
-		ClientCAs:  clientCAs,
-	}), nil
+	return credentials.NewTLS(cfg), nil
+}
+
+// buildServerTLSConfig loads the server bundle and, if caCertsPath is set,
+// the pod-identity CA pool (if not, client certs stay optional), and
+// composes the TLS config for the ateapi gRPC server.
+func buildServerTLSConfig(ctx context.Context, credBundlePath, caCertsPath string) (*tls.Config, error) {
+	serverCert := credbundle.Loader(credBundlePath)
+	// Client certs stay optional at the transport level: certless clients
+	// such as kubectl-ate authenticate with a Bearer token in the
+	// ateapiauth interceptor.
+	const clientAuth = tls.VerifyClientCertIfGiven
+
+	if caCertsPath == "" {
+		return &tls.Config{
+			GetCertificate: serverCert,
+			ClientAuth:     clientAuth,
+		}, nil
+	}
+
+	// Load once so a missing or unparsable trust bundle fails the pod
+	// promptly; GetConfigForClient below reloads it for every connection, so
+	// a pod-identity CA rotation verifies without an ateapi restart.
+	loadClientCAs := credbundle.PoolLoader(caCertsPath)
+	if _, err := loadClientCAs(); err != nil {
+		return nil, fmt.Errorf("load pod-identity CA: %w", err)
+	}
+	slog.InfoContext(ctx, "Using pod-identity CA for client-cert verification", slog.String("path", caCertsPath))
+
+	return &tls.Config{
+		GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) {
+			clientCAs, err := loadClientCAs()
+			if err != nil {
+				return nil, err
+			}
+			return &tls.Config{
+				GetCertificate: serverCert,
+				ClientAuth:     clientAuth,
+				ClientCAs:      clientCAs,
+			}, nil
+		},
+	}, nil
 }
 
 func buildJWTProviders(ctx context.Context, cfg *apiauthn.AuthenticationConfig) (apiauthn.ServerConfig, error) {

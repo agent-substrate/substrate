@@ -131,7 +131,7 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 	if err != nil {
 		return err
 	}
-	if err := e.applyBundledPostgres(ctx, postgres); err != nil {
+	if err := e.deployPostgres(ctx, postgres); err != nil {
 		return err
 	}
 
@@ -179,9 +179,6 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 	log.Step("Waiting for ATE system components to be ready...")
 	type rollout struct{ kind, name string }
 	var waits []rollout
-	if postgres.bundled {
-		waits = append(waits, rollout{kube.KindStatefulSet, "postgres"})
-	}
 	waits = append(waits,
 		rollout{kube.KindDeployment, "ate-api-server"},
 		rollout{kube.KindDeployment, "ate-controller"},
@@ -304,6 +301,15 @@ func (e *Env) DeployAteAPIServer(ctx context.Context) error {
 	}
 	if err := e.applyOtelEndpointOverride(ctx); err != nil {
 		return err
+	}
+	postgres, err := e.planPostgres(ctx)
+	if err != nil {
+		return err
+	}
+	if postgres.bundled {
+		if err := e.waitAndSetupBundledPostgres(ctx); err != nil {
+			return err
+		}
 	}
 	if err := e.renderResolveApply(ctx, e.Cfg.Manifest("ate-api-server.yaml")); err != nil {
 		return err

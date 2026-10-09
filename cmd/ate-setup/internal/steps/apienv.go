@@ -23,7 +23,6 @@ import (
 	"os"
 	"slices"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
 )
 
@@ -74,17 +73,8 @@ func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 				return err
 			}
 		} else {
-			readWriteDSN = config.DefaultPostgresConnectionString
-			ownerDSN = readWriteDSN
-			if e.Cfg.Size10() {
-				readWriteDSN += config.Size10PostgresPoolParams
-			}
-			// Bundled PostgreSQL uses its existing account for both pools.
-			if !e.Cfg.PostgresReadWriteRoleSet {
-				readWriteRole = "postgres"
-			}
-			if !e.Cfg.PostgresOwnerRoleSet {
-				ownerRole = "postgres"
+			if readWriteDSN, ownerDSN, err = e.postgresReadWriteConnectionStrings(); err != nil {
+				return err
 			}
 		}
 	}

@@ -84,7 +84,7 @@ func workerPod(ns, name, poolName, uid, ip string) *corev1.Pod {
 func workerPool(ns, name, sandboxClass string, labels map[string]string) *atev1alpha1.WorkerPool {
 	return &atev1alpha1.WorkerPool{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: labels},
-		Spec:       atev1alpha1.WorkerPoolSpec{SandboxClass: atev1alpha1.SandboxClass(sandboxClass)},
+		Spec:       atev1alpha1.WorkerPoolSpec{SandboxClasses: []atev1alpha1.WorkerPoolSandboxClass{{Name: atev1alpha1.SandboxClass(sandboxClass)}}},
 	}
 }
 

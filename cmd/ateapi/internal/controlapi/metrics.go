@@ -19,12 +19,12 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
-	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/labels"
 )
 
@@ -87,7 +87,7 @@ func RegisterWorkerCount(meter metric.Meter, workers func() ([]*ateapipb.Worker,
 		// list just means no seeding this cycle, not a broken observation.
 		if pools, err := listPools(labels.Everything()); err == nil {
 			for _, p := range pools {
-				class := string(p.Spec.SandboxClass)
+				class := string(p.Spec.DefaultSandboxClass())
 				if class == "" {
 					class = string(atev1alpha1.SandboxClassGvisor)
 				}
@@ -185,7 +185,7 @@ func NewInstruments(meter metric.Meter) (*Instruments, error) {
 }
 
 // recordLifecycleOp records op's duration. A non-nil err is classified onto
-// error.type via its gRPC status code; error.type's absence marks success, so
+// error.type as the code the caller gets; error.type's absence marks success, so
 // there is no parallel failure counter. extraAttrs carries the per-operation
 // dimensions (template, pool, class, snapshot kind).
 func (i *Instruments) recordLifecycleOp(ctx context.Context, op string, start time.Time, err error, extraAttrs ...attribute.KeyValue) {
@@ -196,13 +196,13 @@ func (i *Instruments) recordLifecycleOp(ctx context.Context, op string, start ti
 	attrs = append(attrs, ateattr.ActorOperationNameKey.String(op))
 	attrs = append(attrs, extraAttrs...)
 	if err != nil {
-		attrs = append(attrs, ateattr.ErrorTypeKey.String(status.Code(err).String()))
+		attrs = append(attrs, ateattr.ErrorTypeKey.String(apierror.Code(err).String()))
 	}
 	i.lifecycleOpDuration.Record(ctx, time.Since(start).Seconds(), metric.WithAttributes(attrs...))
 }
 
 // lifecycleOpAttrs builds the resume/suspend/pause dimensions from workflow
-// state. Nil-safe, and omits the pool, snapshot-kind and snapshot-scope labels
+// state. Nil-safe, and omits the pool, snapshot-kind and snapshot-fidelity labels
 // until they are known so a failure before the assign/restore steps never emits
 // an empty-string series. snapshotKind is empty for suspend/pause, which do not
 // restore; snapshotScope applies to all three and separates a full restore
@@ -222,18 +222,19 @@ func lifecycleOpAttrs(actor *ateapipb.Actor, template *ateapipb.ActorTemplate, s
 		attrs = append(attrs, ateattr.SnapshotKindKey.String(snapshotKind))
 	}
 	if snapshotScope != "" {
-		attrs = append(attrs, ateattr.SnapshotScopeKey.String(snapshotScope))
+		attrs = append(attrs, ateattr.SnapshotFidelityKey.String(snapshotScope))
 	}
 	return attrs
 }
 
 // recordSchedulerAssignment records one assignment attempt. pool is set only
 // when a worker was assigned and error.type only for the Error outcome, so
-// no_free_worker (a capacity signal, not a failure) carries neither. class is
-// set on every outcome it is known for, so no_free_worker names the capacity
+// no_capacity (a capacity signal, not a failure) carries neither. class is
+// set on every outcome it is known for, so no_capacity names the capacity
 // that ran out and stays comparable with assigned.
 // The pool keys are set together or not at all; see ateattr.WorkerPoolAttributes.
-func (i *Instruments) recordSchedulerAssignment(ctx context.Context, start time.Time, outcome, poolNamespace, pool, class string, err error) {
+// elapsed is the time that the attempt took.
+func (i *Instruments) recordSchedulerAssignment(ctx context.Context, elapsed time.Duration, outcome, poolNamespace, pool, class string, err error) {
 	if i == nil || i.schedulerAssignmentDuration == nil {
 		return
 	}
@@ -244,7 +245,7 @@ func (i *Instruments) recordSchedulerAssignment(ctx context.Context, start time.
 		attrs = append(attrs, ateattr.SandboxClassKey.String(class))
 	}
 	if outcome == ateattr.SchedulerOutcomeError && err != nil {
-		attrs = append(attrs, ateattr.ErrorTypeKey.String(status.Code(err).String()))
+		attrs = append(attrs, ateattr.ErrorTypeKey.String(apierror.Code(err).String()))
 	}
-	i.schedulerAssignmentDuration.Record(ctx, time.Since(start).Seconds(), metric.WithAttributes(attrs...))
+	i.schedulerAssignmentDuration.Record(ctx, elapsed.Seconds(), metric.WithAttributes(attrs...))
 }

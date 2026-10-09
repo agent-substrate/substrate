@@ -237,11 +237,11 @@ func ValidateCustom_SnapshotConfig_StorageLocation(_ context.Context, _ operatio
 	return nil
 }
 
-// ValidateCustom_SnapshotConfig requires on_commit to be a subset of on_pause.
-func ValidateCustom_SnapshotConfig(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapipb.SnapshotConfig) field.ErrorList {
-	if value.GetOnPause() == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA &&
-		value.GetOnCommit() != ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA {
-		return field.ErrorList{field.Invalid(fldPath.Child("on_commit"), value.GetOnCommit().String(), "must be a subset of on_pause")}
+// ValidateCustom_SnapshotConfig_PreferredFidelity rejects ROOTFS until a
+// sandbox runtime can capture root filesystem changes without memory.
+func ValidateCustom_SnapshotConfig_PreferredFidelity(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapipb.SnapshotFidelity) field.ErrorList {
+	if *value == ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS {
+		return field.ErrorList{field.Invalid(fldPath, value.String(), "ROOTFS fidelity is not supported yet")}
 	}
 	return nil
 }

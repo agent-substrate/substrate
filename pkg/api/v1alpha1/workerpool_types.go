@@ -75,6 +75,14 @@ type WorkerPoolPodTemplate struct {
 	//
 	// +optional
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
+
+	// ServiceAccountName for the worker pods. The ServiceAccount must exist
+	// in the WorkerPool's namespace. When omitted, the pods use the
+	// namespace's default ServiceAccount.
+	//
+	// +optional
+	// +kubebuilder:validation:MinLength=1
+	ServiceAccountName *string `json:"serviceAccountName,omitempty"`
 }
 
 type WorkerPoolSpec struct {
@@ -93,18 +101,54 @@ type WorkerPoolSpec struct {
 	// +optional
 	Template *WorkerPoolPodTemplate `json:"template,omitempty"`
 
-	// SandboxClass selects the sandbox runtime family for this pool, which drives
-	// the worker pod shape (KVM/vhost device mounts and node placement). The
-	// concrete binary is still selected by WorkerImage. Defaults to gvisor.
-	// The sandbox binaries themselves come from the SandboxConfig each
-	// ActorTemplate names (required).
+	// SandboxClasses lists the sandbox runtime families this pool runs. Exactly
+	// one entry is allowed today.
+	//
+	// +required
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=1
+	// +listType=map
+	// +listMapKey=name
+	SandboxClasses []WorkerPoolSandboxClass `json:"sandboxClasses,omitempty"`
+}
+
+// WorkerPoolSandboxClass is one sandbox runtime family a WorkerPool runs.
+type WorkerPoolSandboxClass struct {
+	// Name selects the sandbox runtime family, which drives the worker pod
+	// shape (KVM/vhost device mounts and node placement). The concrete binary
+	// is still selected by WorkerImage. The sandbox binaries themselves come
+	// from the SandboxConfig each ActorTemplate names (required).
 	//
 	// See Also: TODOs in ActorTemplate SandboxClass
 	//
-	// +optional
+	// +required
 	// +kubebuilder:validation:Enum=gvisor;microvm
-	// +kubebuilder:default=gvisor
-	SandboxClass SandboxClass `json:"sandboxClass,omitempty"`
+	Name SandboxClass `json:"name,omitempty"`
+
+	// ConfigRef names a cluster-scoped SandboxConfig for this sandbox class.
+	// The referenced config's SandboxClass must match Name. Not consumed yet.
+	//
+	// +optional
+	ConfigRef *SandboxConfigReference `json:"configRef,omitempty"`
+}
+
+// SandboxConfigReference names a cluster-scoped SandboxConfig.
+type SandboxConfigReference struct {
+	// Name is the SandboxConfig's metadata.name.
+	//
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name,omitempty"`
+}
+
+// DefaultSandboxClass returns the sandbox class of the pool's first
+// SandboxClasses entry, or "" if there is none.
+// Currently SandboxClasses is always a list of length 1.
+func (s *WorkerPoolSpec) DefaultSandboxClass() SandboxClass {
+	if len(s.SandboxClasses) == 0 {
+		return ""
+	}
+	return s.SandboxClasses[0].Name
 }
 
 type WorkerPoolStatus struct {

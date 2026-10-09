@@ -164,7 +164,7 @@ const (
 	WorkerStateKey         = attribute.Key("ate.worker.state")
 	SandboxClassKey        = attribute.Key("ate.sandbox.class")
 	SnapshotKindKey        = attribute.Key("ate.snapshot.kind")
-	SnapshotScopeKey       = attribute.Key("ate.snapshot.scope")
+	SnapshotFidelityKey    = attribute.Key("ate.snapshot.fidelity")
 	SnapshotPhaseKey       = attribute.Key("ate.snapshot.phase")
 	ImageCacheOutcomeKey   = attribute.Key("ate.imagecache.outcome")
 	SchedulerOutcomeKey    = attribute.Key("ate.scheduler.outcome")
@@ -240,9 +240,11 @@ const (
 
 // Values for RouterOutcomeKey. RouterOutcomeNoCapacity means that no worker
 // that meets the constraints of the actor had room. scheduling.ErrNoCapacity
-// reports the same condition. It is a capacity signal, not a defect. A 503
-// without a gRPC cause, such as a full parking lot, a denied egress request,
-// or a failed policy lookup, is RouterOutcomeUnavailable.
+// reports the same condition. It is a capacity signal, not a defect. A request
+// that the router sheds from a full parking lot is RouterOutcomeNoCapacity when
+// its resume failed with ResourceExhausted. A 503 without a gRPC cause, such as
+// a denied egress request, a failed policy lookup, or a shed request whose
+// resume failed for a different reason, is RouterOutcomeUnavailable.
 const (
 	RouterOutcomeOK                 = "ok"
 	RouterOutcomeCancelled          = "cancelled"
@@ -300,13 +302,13 @@ func NormalizeOperationName(op string) string {
 	return OperationUnknown
 }
 
-// Values for SchedulerOutcomeKey. NoFreeWorker is a capacity signal, not a
+// Values for SchedulerOutcomeKey. NoCapacity is a capacity signal, not a
 // failure, so it is a distinct outcome rather than an error.type value; only the
 // Error outcome carries an error.type.
 const (
-	SchedulerOutcomeAssigned     = "assigned"
-	SchedulerOutcomeNoFreeWorker = "no_free_worker"
-	SchedulerOutcomeError        = "error"
+	SchedulerOutcomeAssigned   = "assigned"
+	SchedulerOutcomeNoCapacity = "no_capacity"
+	SchedulerOutcomeError      = "error"
 )
 
 // Values for SnapshotKindKey, set by ateapi from its own resume branching, so
@@ -322,25 +324,28 @@ const (
 	SnapshotKindBoot   = "boot"
 )
 
-// Values for SnapshotScopeKey, mirroring ateletpb.SnapshotScope.
+// Values for SnapshotFidelityKey, mirroring ateletpb.SnapshotFidelity.
 const (
-	SnapshotScopeFull    = "full"
-	SnapshotScopeData    = "data"
-	SnapshotScopeUnknown = "unknown"
+	SnapshotFidelityVolumes = "volumes"
+	SnapshotFidelityRootfs  = "rootfs"
+	SnapshotFidelityMemory  = "memory"
+	SnapshotFidelityUnknown = "unknown"
 )
 
-// SnapshotScopeValue maps the wire enum onto its label value, shared so ateapi
-// (which sets the scope) and atelet (which receives it) cannot drift. An
-// unrecognized scope reports as unknown rather than stringified, so no wire
-// value can widen the label set.
-func SnapshotScopeValue(scope ateletpb.SnapshotScope) string {
-	switch scope {
-	case ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL:
-		return SnapshotScopeFull
-	case ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
-		return SnapshotScopeData
+// SnapshotFidelityValue maps the wire enum onto its label value, shared so
+// ateapi (which sets the fidelity) and atelet (which receives it) cannot
+// drift. An unrecognized fidelity reports as unknown rather than stringified,
+// so no wire value can widen the label set.
+func SnapshotFidelityValue(fidelity ateletpb.SnapshotFidelity) string {
+	switch fidelity {
+	case ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
+		return SnapshotFidelityVolumes
+	case ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS:
+		return SnapshotFidelityRootfs
+	case ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
+		return SnapshotFidelityMemory
 	default:
-		return SnapshotScopeUnknown
+		return SnapshotFidelityUnknown
 	}
 }
 

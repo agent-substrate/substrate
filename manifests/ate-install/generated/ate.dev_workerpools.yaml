@@ -73,20 +73,47 @@ spec:
                 format: int32
                 minimum: 0
                 type: integer
-              sandboxClass:
-                default: gvisor
+              sandboxClasses:
                 description: |-
-                  SandboxClass selects the sandbox runtime family for this pool, which drives
-                  the worker pod shape (KVM/vhost device mounts and node placement). The
-                  concrete binary is still selected by WorkerImage. Defaults to gvisor.
-                  The sandbox binaries themselves come from the SandboxConfig each
-                  ActorTemplate names (required).
+                  SandboxClasses lists the sandbox runtime families this pool runs. Exactly
+                  one entry is allowed today.
+                items:
+                  description: WorkerPoolSandboxClass is one sandbox runtime family
+                    a WorkerPool runs.
+                  properties:
+                    configRef:
+                      description: |-
+                        ConfigRef names a cluster-scoped SandboxConfig for this sandbox class.
+                        The referenced config's SandboxClass must match Name. Not consumed yet.
+                      properties:
+                        name:
+                          description: Name is the SandboxConfig's metadata.name.
+                          minLength: 1
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    name:
+                      description: |-
+                        Name selects the sandbox runtime family, which drives the worker pod
+                        shape (KVM/vhost device mounts and node placement). The concrete binary
+                        is still selected by WorkerImage. The sandbox binaries themselves come
+                        from the SandboxConfig each ActorTemplate names (required).
 
-                  See Also: TODOs in ActorTemplate SandboxClass
-                enum:
-                - gvisor
-                - microvm
-                type: string
+                        See Also: TODOs in ActorTemplate SandboxClass
+                      enum:
+                      - gvisor
+                      - microvm
+                      type: string
+                  required:
+                  - name
+                  type: object
+                maxItems: 1
+                minItems: 1
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
               template:
                 description: Template holds optional metadata, scheduling, and resource
                   settings for worker workloads.
@@ -392,6 +419,13 @@ spec:
                           More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                         type: object
                     type: object
+                  serviceAccountName:
+                    description: |-
+                      ServiceAccountName for the worker pods. The ServiceAccount must exist
+                      in the WorkerPool's namespace. When omitted, the pods use the
+                      namespace's default ServiceAccount.
+                    minLength: 1
+                    type: string
                   tolerations:
                     description: Tolerations for the worker pods.
                     items:
@@ -442,6 +476,7 @@ spec:
                 type: string
             required:
             - replicas
+            - sandboxClasses
             - workerImage
             type: object
           status:

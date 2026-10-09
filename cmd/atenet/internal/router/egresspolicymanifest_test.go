@@ -310,14 +310,12 @@ func TestEgressManifestsOriginalDstClustersDialTheFilterStateAlone(t *testing.T)
 	}
 }
 
-// The identity crosses the inner hop as filter state, which internal_upstream
-// copies from the options the connection pool was created with. A string
-// object is not part of the pool key, so the outer HCM keys the pool per actor
-// itself, and must not share that key upstream as an SNI override.
-func TestEgressManifestsKeyTheInnerPoolPerActor(t *testing.T) {
+// The identity and the dialed authority cross the inner hop as filter state
+// shared with the upstream; nothing else carries them.
+func TestEgressManifestsShareIdentityWithTheInnerListener(t *testing.T) {
 	for _, path := range egressManifests {
 		t.Run(path, func(t *testing.T) {
-			var identity, authority, poolKey node
+			var identity, authority node
 			for _, f := range list(hcm(outerChain(t, bootstrapTree(t, path))), "http_filters") {
 				if str(f, "name") != setFilterStateFilter {
 					continue
@@ -328,8 +326,6 @@ func TestEgressManifestsKeyTheInnerPoolPerActor(t *testing.T) {
 						identity = v
 					case extproc.ConnectAuthorityFilterStateKey:
 						authority = v
-					case "envoy.network.upstream_server_name":
-						poolKey = v
 					}
 				}
 			}
@@ -346,15 +342,6 @@ func TestEgressManifestsKeyTheInnerPoolPerActor(t *testing.T) {
 			}
 			if got := str(authority, "shared_with_upstream"); got == "" {
 				t.Errorf("%s is not shared with upstream; the inner legs would see no dialed port", extproc.ConnectAuthorityFilterStateKey)
-			}
-			if poolKey == nil {
-				t.Fatal("the egress chain does not key the inner pool per actor (no envoy.network.upstream_server_name entry)")
-			}
-			if str(poolKey, "shared_with_upstream") != "" {
-				t.Error("envoy.network.upstream_server_name must not be shared with upstream; it would override the SNI of re-originated TLS")
-			}
-			if !strings.Contains(mustJSON(t, poolKey), "DOWNSTREAM_PEER_URI_SAN") {
-				t.Error("the pool key must derive from the verified peer certificate")
 			}
 		})
 	}
@@ -377,35 +364,38 @@ func TestEgressManifestsCleartextAcceptsHTTP10(t *testing.T) {
 	}
 }
 
-// One tunnel per inner connection: the filter state internal_upstream copies
-// belongs to the tunnel the connection was made for, and a reused connection
-// would carry it into the next one.
-func TestEgressManifestsNeverReuseATunnelConnection(t *testing.T) {
+// One pool per tunnel: internal_upstream copies the filter state of the tunnel
+// that created the pool, not of the tunnel asking for a connection, and a
+// string object is not part of the pool key. A pool per downstream connection
+// is a pool per tunnel only while that connection carries one CONNECT. A
+// connection its tunnel left behind keeps its pool alive until the idle
+// timeout, which must not be disabled.
+func TestEgressManifestsGiveEachTunnelItsOwnInnerPool(t *testing.T) {
 	for _, path := range egressManifests {
 		t.Run(path, func(t *testing.T) {
-			for _, cluster := range clusters(bootstrapTree(t, path)) {
+			tree := bootstrapTree(t, path)
+			internal := 0
+			for _, cluster := range clusters(tree) {
 				if !strings.Contains(mustJSON(t, cluster), `"server_listener_name"`) {
 					continue
 				}
-				if got := maxRequestsPerConnection(child(cluster, "typed_extension_protocol_options")); got != 1 {
-					t.Errorf("internal cluster %q allows %v requests per connection, want 1", str(cluster, "name"), got)
+				internal++
+				if ok, _ := cluster["connection_pool_per_downstream_connection"].(bool); !ok {
+					t.Errorf("internal cluster %q shares its pool across tunnels; want connection_pool_per_downstream_connection: true", str(cluster, "name"))
 				}
+				tcp := child(child(cluster, "typed_extension_protocol_options"), "envoy.extensions.upstreams.tcp.v3.TcpProtocolOptions")
+				if got := str(tcp, "idle_timeout"); got == "" || strings.Trim(got, "0.s") == "" {
+					t.Errorf("internal cluster %q idle_timeout is %q; want a non-zero timeout so a pool its tunnel left behind is freed", str(cluster, "name"), got)
+				}
+			}
+			if internal == 0 {
+				t.Fatal("no cluster targets an internal listener")
+			}
+			if got := str(hcm(outerChain(t, tree)), "codec_type"); got != "HTTP1" {
+				t.Errorf("egress chain codec_type is %q, want HTTP1: any other codec can carry several CONNECTs on one downstream connection, and they would share a pool", got)
 			}
 		})
 	}
-}
-
-// maxRequestsPerConnection reads the limit out of a cluster's
-// HttpProtocolOptions, or 0 when there is none.
-func maxRequestsPerConnection(opts node) float64 {
-	for _, v := range opts {
-		if m, ok := v.(node); ok {
-			if n, ok := child(m, "common_http_protocol_options")["max_requests_per_connection"].(float64); ok {
-				return n
-			}
-		}
-	}
-	return 0
 }
 
 // dialMatchOf returns the dial a route's match requires, or "" when it
@@ -421,6 +411,23 @@ func dialMatchOf(match node) string {
 		return str(child(child(m, "value"), "string_match"), "exact")
 	}
 	return ""
+}
+
+// requiresDialHost reports whether a route matches only when the answer
+// carries the name to dial.
+func requiresDialHost(match node) bool {
+	for _, m := range list(match, "dynamic_metadata") {
+		if str(m, "filter") != extproc.EgressMetadataNamespace {
+			continue
+		}
+		if segs := list(m, "path"); len(segs) != 1 || str(segs[0], "key") != extproc.EgressDialHostKey {
+			continue
+		}
+		if present, _ := child(m, "value")["present_match"].(bool); present {
+			return true
+		}
+	}
+	return false
 }
 
 // autoSNIAndSAN reports whether a cluster takes the SNI and the certificate
@@ -441,10 +448,11 @@ func autoSNIAndSAN(cluster node) bool {
 
 // A request leg's answer picks its route: one route per dial and no default,
 // so a request the sidecar did not answer for has no route. dial=name goes to
-// a dynamic forward proxy cluster, which resolves the Host; dial=address to an
-// ORIGINAL_DST cluster fed by the same filter state as the passthrough chains.
-// On the MITM leg both re-originate TLS and verify the origin against the Host;
-// on the cleartext leg neither wraps the actor's plaintext.
+// a dynamic forward proxy cluster, and only with the answered name it dials;
+// dial=address to an ORIGINAL_DST cluster fed by the same filter state as the
+// passthrough chains. On the MITM leg both re-originate TLS and verify the
+// origin against the Host; on the cleartext leg neither wraps the actor's
+// plaintext.
 func TestEgressManifestsRequestLegsRouteByTheDial(t *testing.T) {
 	for _, path := range egressManifests {
 		t.Run(path, func(t *testing.T) {
@@ -470,6 +478,9 @@ func TestEgressManifestsRequestLegsRouteByTheDial(t *testing.T) {
 						case extproc.EgressDialName:
 							if got := str(child(cluster, "cluster_type"), "name"); got != dfpClusterType {
 								t.Errorf("chain %q sends dial=name to %q of type %q, want a dynamic forward proxy", name, clusterName, got)
+							}
+							if !requiresDialHost(child(r, "match")) {
+								t.Errorf("chain %q sends dial=name to %q without requiring %s:%s; an answer without the name would dial the Host's port", name, clusterName, extproc.EgressMetadataNamespace, extproc.EgressDialHostKey)
 							}
 						case extproc.EgressDialAddress:
 							if got := str(cluster, "type"); got != "ORIGINAL_DST" {
@@ -497,6 +508,57 @@ func TestEgressManifestsRequestLegsRouteByTheDial(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// Each request leg dials the name its answer carries, on the port the actor
+// dialed: a set_filter_state between ext_proc and the forward proxy filter
+// copies the answer into the dynamic host, which the forward proxy cluster
+// dials in place of the Host. Without it, the cluster dials a port in the Host
+// that no rule checked. The filter resolves that same entry ahead of the
+// cluster only with allow_dynamic_host_from_filter_state; without it, it
+// resolves the Host as sent, into the DNS cache all actors share.
+func TestEgressManifestsRequestLegsDialTheAnsweredName(t *testing.T) {
+	tree := bootstrapTree(t, egressManifest)
+	if writers := filterStateWriters(tree, extproc.UpstreamDynamicHostFilterStateKey); len(writers) != len(requestLegs) {
+		t.Errorf("%s is set by %d filters, want one per request leg", extproc.UpstreamDynamicHostFilterStateKey, len(writers))
+	}
+	for _, leg := range requestLegs {
+		chain := byName(list(mitmListener(t, tree), "filter_chains"), leg)
+		if chain == nil {
+			t.Fatalf("no %q chain on mitm_listener", leg)
+		}
+		_, extProcAt, filters := extProcOf(chain)
+		forwardProxyAt := filterIndex(filters, "envoy.filters.http.dynamic_forward_proxy")
+		if forwardProxyAt < 0 {
+			t.Errorf("chain %q has no dynamic_forward_proxy filter", leg)
+			continue
+		}
+		if allow, _ := child(filters[forwardProxyAt], "typed_config")["allow_dynamic_host_from_filter_state"].(bool); !allow {
+			t.Errorf("chain %q's dynamic_forward_proxy resolves the Host as sent, not %s, so every port and spelling of a Host takes a DNS cache slot", leg, extproc.UpstreamDynamicHostFilterStateKey)
+		}
+		var entry node
+		at := -1
+		for i, f := range filters {
+			if str(f, "name") != setFilterStateFilter {
+				continue
+			}
+			for _, v := range list(child(f, "typed_config"), "on_request_headers") {
+				if str(v, "object_key") == extproc.UpstreamDynamicHostFilterStateKey {
+					entry, at = v, i
+				}
+			}
+		}
+		if at < 0 {
+			t.Errorf("chain %q does not set %s", leg, extproc.UpstreamDynamicHostFilterStateKey)
+			continue
+		}
+		if at < extProcAt || at > forwardProxyAt {
+			t.Errorf("chain %q sets %s at http_filters[%d], want it between ext_proc at [%d] and dynamic_forward_proxy at [%d]", leg, extproc.UpstreamDynamicHostFilterStateKey, at, extProcAt, forwardProxyAt)
+		}
+		if got := str(child(child(entry, "format_string"), "text_format_source"), "inline_string"); got != extproc.EgressDialHostFormat {
+			t.Errorf("chain %q sets %s from %q, want %q", leg, extproc.UpstreamDynamicHostFilterStateKey, got, extproc.EgressDialHostFormat)
+		}
 	}
 }
 

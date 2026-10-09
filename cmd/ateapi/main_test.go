@@ -17,10 +17,20 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"log/slog"
+	"math/big"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestConnectStoreRequiresPostgresReadWriteConnectionString(t *testing.T) {
@@ -220,3 +230,108 @@ func TestLogFlagValuesDoesNotLogThePostgresPassword(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildServerTLSConfigWithoutCACertsAllowsCertlessClients(t *testing.T) {
+	cfg, err := buildServerTLSConfig(context.Background(), "/nonexistent-cred-bundle.pem", "")
+	if err != nil {
+		t.Fatalf("buildServerTLSConfig() error = %v", err)
+	}
+	if cfg.GetConfigForClient != nil {
+		t.Fatalf("buildServerTLSConfig() with no CA path set GetConfigForClient, want nil (no client-cert verification configured)")
+	}
+}
+
+func TestBuildServerTLSConfigRejectsUnreadableCACerts(t *testing.T) {
+	_, err := buildServerTLSConfig(context.Background(), "/nonexistent-cred-bundle.pem", filepath.Join(t.TempDir(), "absent.pem"))
+	if err == nil {
+		t.Fatalf("buildServerTLSConfig() error = nil, want an error for a missing CA file")
+	}
+}
+
+// TestBuildServerTLSConfigReloadsCACertsWithoutRestart verifies that a
+// pod-identity CA rotation on disk is picked up by the next handshake, not
+// frozen at the config's construction.
+func TestBuildServerTLSConfigReloadsCACertsWithoutRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "trust-bundle.pem")
+	writeCA(t, path, "ca-one")
+
+	cfg, err := buildServerTLSConfig(context.Background(), "/nonexistent-cred-bundle.pem", path)
+	if err != nil {
+		t.Fatalf("buildServerTLSConfig() error = %v", err)
+	}
+	if cfg.GetConfigForClient == nil {
+		t.Fatalf("buildServerTLSConfig() with a CA path did not set GetConfigForClient")
+	}
+
+	before, err := cfg.GetConfigForClient(nil)
+	if err != nil {
+		t.Fatalf("GetConfigForClient() first call error = %v", err)
+	}
+
+	writeCA(t, path, "ca-two")
+
+	after, err := cfg.GetConfigForClient(nil)
+	if err != nil {
+		t.Fatalf("GetConfigForClient() second call error = %v", err)
+	}
+
+	if before.ClientCAs.Equal(after.ClientCAs) {
+		t.Fatalf("GetConfigForClient() returned the same trust pool after the CA file changed, want the rotated one")
+	}
+}
+
+// writeCA writes a fresh self-signed certificate (distinguished by cn) to
+// path, suitable for AppendCertsFromPEM.
+func writeCA(t *testing.T, path, cn string) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey() error = %v", err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: cn},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		IsCA:         true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("CreateCertificate() error = %v", err)
+	}
+	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	if err := os.WriteFile(path, pemBytes, 0o600); err != nil {
+		t.Fatalf("WriteFile(%s) error = %v", path, err)
+	}
+}
+
+func TestRejectStorageEnv(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		value *string // nil leaves the variable unset
+		want  bool    // an error naming the sidecar
+	}{
+		{name: "unset", value: nil, want: false},
+		{name: "s3", value: ptr("s3"), want: true},
+		// The old manifests set the default explicitly, so a stale patch
+		// can carry it.
+		{name: "gcs", value: ptr("gcs"), want: true},
+		{name: "empty", value: ptr(""), want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// t.Setenv restores the variable after the subtest, which also
+			// undoes the Unsetenv.
+			t.Setenv("ATE_STORAGE_BACKEND", "")
+			os.Unsetenv("ATE_STORAGE_BACKEND")
+			if tc.value != nil {
+				os.Setenv("ATE_STORAGE_BACKEND", *tc.value)
+			}
+			err := rejectStorageEnv()
+			if got := err != nil && strings.Contains(err.Error(), "snapshot-plugin sidecar"); got != tc.want {
+				t.Errorf("rejectStorageEnv() = %v, want error naming the sidecar: %t", err, tc.want)
+			}
+		})
+	}
+}
+
+func ptr(s string) *string { return &s }

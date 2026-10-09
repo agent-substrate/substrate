@@ -33,28 +33,29 @@ import (
 // data-only: the durable dir survives while the guest cold-boots from
 // template B.
 func TestUpdateTemplateLifecycle(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
-		onCommit ateapipb.SnapshotContentScope
+		fidelity ateapipb.SnapshotFidelity
 	}{
 		{
-			name:     "onCommit:Data",
-			onCommit: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
+			name:     "preferredFidelity:VOLUMES",
+			fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 		},
 		{
-			name:     "onCommit:Full",
-			onCommit: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+			name:     "preferredFidelity:MEMORY",
+			fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			runUpdateTemplateTestCase(t, test.onCommit)
+			runUpdateTemplateTestCase(t, test.fidelity)
 		})
 	}
 }
 
-func runUpdateTemplateTestCase(t *testing.T, onCommit ateapipb.SnapshotContentScope) {
+func runUpdateTemplateTestCase(t *testing.T, fidelity ateapipb.SnapshotFidelity) {
 	nsObj := e2e.CreateNamespace(t)
 	ctx := context.Background()
 	clients := e2e.GetClients()
@@ -69,8 +70,8 @@ func runUpdateTemplateTestCase(t *testing.T, onCommit ateapipb.SnapshotContentSc
 	// in the durable dir is readable — the response's "file content" both
 	// proves B's spec took effect and re-reads the preserved data.
 	nameA, nameB := "update-a-"+nsObj.Name, "update-b-"+nsObj.Name
-	createdA := createUpdateTestTemplate(ctx, t, clients, nsObj, nameA, "update-a", env["BUCKET_NAME"], onCommit, nil)
-	createdB := createUpdateTestTemplate(ctx, t, clients, nsObj, nameB, "update-b", env["BUCKET_NAME"], onCommit, func(tmpl *ateapipb.ActorTemplate) {
+	createdA := createUpdateTestTemplate(ctx, t, clients, nsObj, nameA, "update-a", env["BUCKET_NAME"], fidelity, nil)
+	createdB := createUpdateTestTemplate(ctx, t, clients, nsObj, nameB, "update-b", env["BUCKET_NAME"], fidelity, func(tmpl *ateapipb.ActorTemplate) {
 		ctr := tmpl.Containers[0]
 		ctr.Command = append(ctr.Command, "--validate-existing-file-path=/home/counter/a.txt")
 	})
@@ -191,7 +192,7 @@ func runUpdateTemplateTestCase(t *testing.T, onCommit ateapipb.SnapshotContentSc
 	// committed snapshot from template A. Resuming from PAUSED restores the
 	// local checkpoint (which was captured under template B, since templates
 	// can only be updated while SUSPENDED) and preserves the in-memory counter
-	// when onPause is FULL.
+	// when preferredFidelity is FULL.
 	t.Logf("Pausing Actor %q under template B...", actorID)
 	if _, err := clients.SubstrateAPI.PauseActor(ctx, &ateapipb.PauseActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
@@ -223,7 +224,7 @@ func runUpdateTemplateTestCase(t *testing.T, onCommit ateapipb.SnapshotContentSc
 		t.Fatalf("failed to call actor after pause/resume under template B: %v", err)
 	}
 	wantMemAfterPause := 2
-	if onCommit == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA {
+	if fidelity == ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES {
 		wantMemAfterPause = 1
 	}
 	validateCounterResponse(t, resp, "after pause/resume under template B", wantMemAfterPause, 4)
@@ -305,7 +306,7 @@ func runUpdateTemplateTestCase(t *testing.T, onCommit ateapipb.SnapshotContentSc
 // createUpdateTestTemplate creates a per-test WorkerPool plus a substrate
 // ActorTemplate copying the deployed counter fixture's resolved runtime,
 // capturing at the scope under test on both pause and commit.
-func createUpdateTestTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, name, poolName, bucket string, onCommit ateapipb.SnapshotContentScope, modify func(*ateapipb.ActorTemplate)) *ateapipb.ActorTemplate {
+func createUpdateTestTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, name, poolName, bucket string, fidelity ateapipb.SnapshotFidelity, modify func(*ateapipb.ActorTemplate)) *ateapipb.ActorTemplate {
 	t.Helper()
 	return e2e.CreateSubstrateCounterTemplate(ctx, t, clients, nsObj.Name, e2e.SubstrateTemplateOptions{
 		Atespace:     demoAtespace,
@@ -314,9 +315,8 @@ func createUpdateTestTemplate(ctx context.Context, t *testing.T, clients *e2e.Cl
 		PoolReplicas: 2,
 		Labels:       map[string]string{"demo": nsObj.Name},
 		SnapshotConfig: &ateapipb.SnapshotConfig{
-			StorageLocation: "gs://" + bucket + "/ate-demo-" + nsObj.Name,
-			OnPause:         onCommit,
-			OnCommit:        onCommit,
+			StorageLocation:   "gs://" + bucket + "/ate-demo-" + nsObj.Name,
+			PreferredFidelity: fidelity,
 		},
 		Modify: modify,
 	})

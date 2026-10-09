@@ -41,6 +41,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
 
+	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/egress/actorjwt"
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
 	"github.com/agent-substrate/substrate/internal/egresspolicy"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -83,6 +84,8 @@ type Handler struct {
 	actorIdentityRoots *x509.CertPool
 	// policies is the per-actor EgressPolicy cache every leg reads through.
 	policies *policyCache
+	// actorJWTs mints the actor JWTs that credential injections ask for.
+	actorJWTs *actorjwt.Minter
 	// provider resolves an egress policy's credential injections. Nil means
 	// credential injection is not configured, and a request that needs one is
 	// denied.
@@ -107,6 +110,7 @@ func New(apiClient ateapipb.ControlClient, actorIdentityRoots *x509.CertPool, po
 		apiClient:          apiClient,
 		actorIdentityRoots: actorIdentityRoots,
 		policies:           newPolicyCache(apiClient, policyCacheTTL),
+		actorJWTs:          actorjwt.New(apiClient),
 		provider:           provider,
 		providerName:       providerName,
 	}
@@ -210,12 +214,14 @@ func connectMetadata(dest egresspolicy.Destination, rules []egresspolicy.SNIRule
 	}}
 }
 
-// metadataAnswer is a one-entry answer in the egress metadata namespace.
-func metadataAnswer(key, value string) *structpb.Struct {
+// metadataAnswer is an answer in the egress metadata namespace.
+func metadataAnswer(fields map[string]string) *structpb.Struct {
+	values := make(map[string]*structpb.Value, len(fields))
+	for key, value := range fields {
+		values[key] = structpb.NewStringValue(value)
+	}
 	return &structpb.Struct{Fields: map[string]*structpb.Value{
-		extproc.EgressMetadataNamespace: structpb.NewStructValue(&structpb.Struct{Fields: map[string]*structpb.Value{
-			key: structpb.NewStringValue(value),
-		}}),
+		extproc.EgressMetadataNamespace: structpb.NewStructValue(&structpb.Struct{Fields: values}),
 	}}
 }
 

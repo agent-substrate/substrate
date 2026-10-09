@@ -1146,8 +1146,8 @@ func newTestSuspendedActor(atespace, name string) *ateapipb.Actor {
 		Status: &ateapipb.ActorStatus{
 			State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
 			ExternalSnapshot: &ateapipb.ExternalSnapshot{
-				SnapshotUri:  testActorSnapshotURI("gs://private", atespace, name),
-				ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+				SnapshotUri: testActorSnapshotURI("gs://private", atespace, name),
+				Fidelity:    ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			},
 		},
 	}
@@ -1338,7 +1338,7 @@ func runTagContractTests(t *testing.T, setup func(t *testing.T) store.Interface)
 			{
 				name: "snapshot content scope",
 				mutate: func(toUpdate *ateapipb.Tag) {
-					toUpdate.Status.Snapshot.ContentScope = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
+					toUpdate.Status.Snapshot.Fidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
 				},
 			},
 			{
@@ -1497,8 +1497,8 @@ func runTagContractTests(t *testing.T, setup func(t *testing.T) store.Interface)
 // transaction does: it names the copy that landed under the tag UID.
 func finalizeTag(toUpdate *ateapipb.Tag) error {
 	toUpdate.Status.Snapshot = &ateapipb.ExternalSnapshot{
-		SnapshotUri:  testTagSnapshotURI(toUpdate.GetStatus().GetStorageLocation(), toUpdate.GetMetadata().GetAtespace(), toUpdate.GetMetadata().GetUid()),
-		ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+		SnapshotUri: testTagSnapshotURI(toUpdate.GetStatus().GetStorageLocation(), toUpdate.GetMetadata().GetAtespace(), toUpdate.GetMetadata().GetUid()),
+		Fidelity:    ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 	}
 	return nil
 }
@@ -2077,10 +2077,9 @@ func runWorkerAssignmentContractTests(t *testing.T, setup func(t *testing.T) sto
 	// over several of them is unambiguous about which were counted.
 	newTestAssignment := func(actorUID string, cpuMilli, memoryBytes int64) *ateapipb.ActorAssignment {
 		return &ateapipb.ActorAssignment{
-			ActorTemplateRef: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "test-template"},
-			Actor:            &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor-" + actorUID},
-			ActorUid:         actorUID,
-			Resources:        resources.CPUMemory(cpuMilli, memoryBytes),
+			Actor:     &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor-" + actorUID},
+			ActorUid:  actorUID,
+			Resources: resources.CPUMemory(cpuMilli, memoryBytes),
 		}
 	}
 

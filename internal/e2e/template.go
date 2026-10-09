@@ -85,9 +85,9 @@ func CreateSubstrateTemplateFrom(ctx context.Context, t *testing.T, clients *Cli
 			Labels:    opts.Labels,
 		},
 		Spec: v1alpha1.WorkerPoolSpec{
-			Replicas:     opts.PoolReplicas,
-			WorkerImage:  existingWp.Spec.WorkerImage,
-			SandboxClass: existingWp.Spec.SandboxClass,
+			Replicas:       opts.PoolReplicas,
+			WorkerImage:    existingWp.Spec.WorkerImage,
+			SandboxClasses: existingWp.Spec.SandboxClasses,
 		},
 	}
 	if _, err := clients.SubstrateK8s.ApiV1alpha1().WorkerPools(namespace).Create(ctx, wp, metav1.CreateOptions{}); err != nil {

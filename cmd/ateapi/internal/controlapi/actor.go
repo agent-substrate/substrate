@@ -29,15 +29,14 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/defaults"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/actoridjwt"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/substratex509"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel/attribute"
-	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/peer"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -55,7 +54,7 @@ func (s *RPCService) CreateActor(ctx context.Context, req *ateapipb.CreateActorR
 
 	// Validate the request, including the object within it.
 	if errs := apivalidation.ValidateCreateActorRequest(ctx, req); len(errs) > 0 {
-		return nil, resources.ToGRPCStatusError(errs)
+		return nil, resources.ToAPIError(errs)
 	}
 
 	start := time.Now()
@@ -96,7 +95,7 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 		for _, volume := range template.GetVolumes() {
 			if volume.GetExternalVolumeTemplate() != nil {
 				// TODO: Permit cloning after CSI volume snapshots are supported.
-				return nil, status.Error(codes.FailedPrecondition, "Tag cloning does not support ActorTemplates with external volumes")
+				return nil, apierror.FailedPrecondition("Tag cloning does not support ActorTemplates with external volumes")
 			}
 		}
 	}
@@ -107,7 +106,7 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 			return nil, err
 		}
 		if inActor.GetSourceTag() == nil {
-			if err := validateGoldenSnapshotScope(sourceTag.GetStatus().GetSnapshot()); err != nil {
+			if err := validateGoldenSnapshotFidelity(sourceTag.GetStatus().GetSnapshot()); err != nil {
 				return nil, err
 			}
 		}
@@ -152,10 +151,10 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 	stored, err := s.store.CreateActor(ctx, outActor)
 	if err != nil {
 		if errors.Is(err, store.ErrAlreadyExists) {
-			return nil, status.Errorf(codes.AlreadyExists, "Actor %s already exists", name)
+			return nil, apierror.AlreadyExists("Actor %s already exists", name)
 		}
 		if errors.Is(err, store.ErrFailedPrecondition) {
-			return nil, status.Errorf(codes.FailedPrecondition, "Atespace %s not found", atespace)
+			return nil, apierror.FailedPrecondition("Atespace %s not found", atespace)
 		}
 		return nil, fmt.Errorf("while recording actor: %w", err)
 	}
@@ -173,7 +172,7 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 func (s *ServiceImpl) resolveTagSource(ctx context.Context, actorAtespace string, tagRef *ateapipb.ObjectRef, template *ateapipb.ActorTemplate) (*ateapipb.Tag, error) {
 	tag, err := s.store.GetTag(ctx, resources.TagRefFromObjectRef(tagRef))
 	if errors.Is(err, store.ErrNotFound) {
-		return nil, status.Error(codes.NotFound, "Tag not found")
+		return nil, apierror.FailedPrecondition("Tag not found")
 	}
 	if err != nil {
 		return nil, fmt.Errorf("while getting tag: %w", err)
@@ -181,31 +180,31 @@ func (s *ServiceImpl) resolveTagSource(ctx context.Context, actorAtespace string
 	switch tag.GetScope() {
 	case ateapipb.TagScope_TAG_SCOPE_ATESPACE:
 		if tag.GetMetadata().GetAtespace() != actorAtespace {
-			return nil, status.Error(codes.FailedPrecondition, "Tag is not published outside its Atespace")
+			return nil, apierror.FailedPrecondition("Tag is not published outside its Atespace")
 		}
 	case ateapipb.TagScope_TAG_SCOPE_PUBLISHED:
 	default:
-		return nil, status.Error(codes.FailedPrecondition, "source Tag has an invalid scope")
+		return nil, apierror.FailedPrecondition("source Tag has an invalid scope")
 	}
 	// A tag might have an empty Snapshot URI if the tag creation failed or is ongoing.
 	if tag.GetStatus().GetSnapshot().GetSnapshotUri() == "" {
-		return nil, status.Error(codes.FailedPrecondition, "source Tag is still being created or failed creation")
+		return nil, apierror.FailedPrecondition("source Tag is still being created or failed creation")
 	}
-	// TODO: Permit compatible DATA snapshots when runtimes can extract portable data.
+	// TODO: Permit compatible VOLUMES snapshots when runtimes can extract portable data.
 	if tag.GetStatus().GetActorTemplateUid() != template.GetMetadata().GetUid() {
-		return nil, status.Errorf(codes.FailedPrecondition, "source Tag must be taken from an actor with ActorTemplate uid %q", tag.GetStatus().GetActorTemplateUid())
+		return nil, apierror.FailedPrecondition("source Tag must be taken from an actor with ActorTemplate uid %q", tag.GetStatus().GetActorTemplateUid())
 	}
 	return tag, nil
 }
 
 func (s *RPCService) GetActor(ctx context.Context, req *ateapipb.GetActorRequest) (*ateapipb.Actor, error) {
 	if errs := apivalidation.ValidateGetActorRequest(ctx, req); len(errs) > 0 {
-		return nil, resources.ToGRPCStatusError(errs)
+		return nil, resources.ToAPIError(errs)
 	}
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	actor, err := s.impl.GetActor(ctx, actorRef)
 	if errors.Is(err, store.ErrNotFound) {
-		return nil, status.Errorf(codes.NotFound, "Actor %s not found", actorRef)
+		return nil, apierror.NotFound("Actor %s not found", actorRef)
 	} else if err != nil {
 		return nil, fmt.Errorf("while getting actor from DB: %w", err)
 	}
@@ -218,7 +217,7 @@ func (s *ServiceImpl) GetActor(ctx context.Context, actorRef resources.ActorRef)
 
 func (s *RPCService) ListActors(ctx context.Context, req *ateapipb.ListActorsRequest) (*ateapipb.ListActorsResponse, error) {
 	if errs := apivalidation.ValidateListActorsRequest(ctx, req); len(errs) > 0 {
-		return nil, resources.ToGRPCStatusError(errs)
+		return nil, resources.ToAPIError(errs)
 	}
 
 	page, err := s.impl.ListActors(ctx, req.GetAtespace(), store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
@@ -245,7 +244,7 @@ func (s *RPCService) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorR
 
 	// Validate the request.
 	if errs := apivalidation.ValidateUpdateActorRequest(ctx, req); len(errs) > 0 {
-		return nil, resources.ToGRPCStatusError(errs)
+		return nil, resources.ToAPIError(errs)
 	}
 
 	actorRef := resources.ActorRefFromActor(inActor)
@@ -285,7 +284,7 @@ func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorR
 
 		// Validate the user's input before doing any further work.
 		if errs := apivalidation.ValidateActorUpdate(ctx, field.NewPath("actor"), newVal, oldVal, false); len(errs) > 0 {
-			return resources.ToGRPCStatusError(errs)
+			return resources.ToAPIError(errs)
 		}
 
 		// Do any further work on the resource.
@@ -298,7 +297,7 @@ func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorR
 		// snapshots under the location the actor's own already live in.
 		if !proto.Equal(oldVal.GetActorTemplate(), newVal.GetActorTemplate()) {
 			if state := oldVal.GetStatus().GetState(); state != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
-				return status.Errorf(codes.FailedPrecondition,
+				return apierror.FailedPrecondition(
 					"actor must be %s to change its actor template (got: %s)", ateapipb.ActorState_ACTOR_STATE_SUSPENDED, state)
 			}
 			newTemplate, err := resolveActorTemplate(ctx, s.store, newVal)
@@ -316,7 +315,7 @@ func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorR
 				// SandboxConfig.
 				if !proto.Equal(oldTemplate.GetSandboxConfig(), newTemplate.GetSandboxConfig()) {
 					oldSC, newSC := oldTemplate.GetSandboxConfig(), newTemplate.GetSandboxConfig()
-					return status.Errorf(codes.FailedPrecondition,
+					return apierror.FailedPrecondition(
 						"the current actor template names SandboxConfig %q (class %s) but the new one names %q (class %s); the sandbox config must be identical to repoint an actor",
 						oldSC.GetConfigName(), oldSC.GetSandboxClass(), newSC.GetConfigName(), newSC.GetSandboxClass())
 				}
@@ -340,16 +339,16 @@ func (s *ServiceImpl) UpdateActor(ctx context.Context, actorRef resources.ActorR
 	})
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
+			return nil, apierror.Aborted("concurrent update conflict, please retry")
 		}
 		if errors.Is(err, store.ErrUIDConflict) {
-			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
+			return nil, apierror.Aborted("concurrent update conflict, please retry")
 		}
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, status.Errorf(codes.NotFound, "actor %s not found", actorRef)
+			return nil, apierror.NotFound("actor %s not found", actorRef)
 		}
 		if errors.Is(err, store.ErrPreconditionRequired) {
-			return nil, status.Errorf(codes.InvalidArgument, "while updating actor %s: %v", actorRef, err)
+			return nil, apierror.InvalidArgument("while updating actor %s: %v", actorRef, err)
 		}
 		return nil, fmt.Errorf("while updating actor: %w", err)
 	}
@@ -367,7 +366,7 @@ func validateTemplateVolumesUnchanged(oldTemplate, newTemplate *ateapipb.ActorTe
 	if !slices.EqualFunc(oldTemplate.GetVolumes(), newTemplate.GetVolumes(), func(a, b *ateapipb.Volume) bool {
 		return proto.Equal(a, b)
 	}) {
-		return status.Error(codes.FailedPrecondition,
+		return apierror.FailedPrecondition(
 			"volumes differ between the current and the new actor template; volumes must be identical to repoint an actor")
 	}
 
@@ -383,7 +382,7 @@ func validateTemplateVolumesUnchanged(oldTemplate, newTemplate *ateapipb.ActorTe
 		if !slices.EqualFunc(oldC.GetVolumeMounts(), newC.GetVolumeMounts(), func(a, b *ateapipb.VolumeMount) bool {
 			return proto.Equal(a, b)
 		}) {
-			return status.Errorf(codes.FailedPrecondition,
+			return apierror.FailedPrecondition(
 				"volume mounts of container %q differ between the current and the new actor template; volume mounts must be identical to repoint an actor", oldC.GetName())
 		}
 	}
@@ -417,7 +416,7 @@ func validateSnapshotLocationUnchanged(actor *ateapipb.Actor, newTemplate *ateap
 		return fmt.Errorf("while resolving the new actor template's storage location %q: %w", newLocation, err)
 	}
 	if nextSnapshotLocationPrefix != currentURI.OwnerPrefix() {
-		return status.Errorf(codes.FailedPrecondition,
+		return apierror.FailedPrecondition(
 			"the actor's snapshots are stored under %q but the new actor template stores them under %q: the storage location must be identical to repoint an actor that owns a snapshot",
 			currentURI.Location(), newLocation)
 	}
@@ -426,7 +425,7 @@ func validateSnapshotLocationUnchanged(actor *ateapipb.Actor, newTemplate *ateap
 
 func (s *RPCService) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorRequest) (deleted *ateapipb.Actor, err error) {
 	if errs := apivalidation.ValidateDeleteActorRequest(ctx, req); len(errs) > 0 {
-		return nil, resources.ToGRPCStatusError(errs)
+		return nil, resources.ToAPIError(errs)
 	}
 	start := time.Now()
 	// Template dims only once the record resolved: the request names only the
@@ -459,7 +458,7 @@ func (s *ServiceImpl) DeleteActor(ctx context.Context, actorRef resources.ActorR
 
 func (s *RPCService) PauseActor(ctx context.Context, req *ateapipb.PauseActorRequest) (*ateapipb.PauseActorResponse, error) {
 	if errs := apivalidation.ValidatePauseActorRequest(ctx, req); len(errs) > 0 {
-		return nil, resources.ToGRPCStatusError(errs)
+		return nil, resources.ToAPIError(errs)
 	}
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	setSpanActorRefAttributes(ctx, actorRef)
@@ -467,10 +466,10 @@ func (s *RPCService) PauseActor(ctx context.Context, req *ateapipb.PauseActorReq
 	actor, err := s.actorWorkflow.PauseActor(ctx, actorRef)
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
+			return nil, apierror.Aborted("concurrent update conflict, please retry")
 		}
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, status.Errorf(codes.NotFound, "Actor %s not found", actorRef)
+			return nil, apierror.NotFound("Actor %s not found", actorRef)
 		}
 		return nil, err
 	}
@@ -481,7 +480,7 @@ func (s *RPCService) PauseActor(ctx context.Context, req *ateapipb.PauseActorReq
 
 func (s *RPCService) ResumeActor(ctx context.Context, req *ateapipb.ResumeActorRequest) (*ateapipb.ResumeActorResponse, error) {
 	if errs := apivalidation.ValidateResumeActorRequest(ctx, req); len(errs) > 0 {
-		return nil, resources.ToGRPCStatusError(errs)
+		return nil, resources.ToAPIError(errs)
 	}
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	setSpanActorRefAttributes(ctx, actorRef)
@@ -489,10 +488,10 @@ func (s *RPCService) ResumeActor(ctx context.Context, req *ateapipb.ResumeActorR
 	actor, resumed, err := s.actorWorkflow.ResumeActor(ctx, actorRef)
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
+			return nil, apierror.Aborted("concurrent update conflict, please retry")
 		}
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, status.Errorf(codes.NotFound, "Actor %s not found", actorRef)
+			return nil, apierror.NotFound("Actor %s not found", actorRef)
 		}
 		return nil, err
 	}
@@ -503,7 +502,7 @@ func (s *RPCService) ResumeActor(ctx context.Context, req *ateapipb.ResumeActorR
 
 func (s *RPCService) SuspendActor(ctx context.Context, req *ateapipb.SuspendActorRequest) (*ateapipb.SuspendActorResponse, error) {
 	if errs := apivalidation.ValidateSuspendActorRequest(ctx, req); len(errs) > 0 {
-		return nil, resources.ToGRPCStatusError(errs)
+		return nil, resources.ToAPIError(errs)
 	}
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	setSpanActorRefAttributes(ctx, actorRef)
@@ -511,10 +510,10 @@ func (s *RPCService) SuspendActor(ctx context.Context, req *ateapipb.SuspendActo
 	actor, err := s.actorWorkflow.SuspendActor(ctx, actorRef)
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
+			return nil, apierror.Aborted("concurrent update conflict, please retry")
 		}
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, status.Errorf(codes.NotFound, "Actor %s not found", actorRef)
+			return nil, apierror.NotFound("Actor %s not found", actorRef)
 		}
 		return nil, err
 	}
@@ -524,7 +523,7 @@ func (s *RPCService) SuspendActor(ctx context.Context, req *ateapipb.SuspendActo
 
 func (s *RPCService) RevertActor(ctx context.Context, req *ateapipb.RevertActorRequest) (*ateapipb.RevertActorResponse, error) {
 	if errs := apivalidation.ValidateRevertActorRequest(ctx, req); len(errs) > 0 {
-		return nil, resources.ToGRPCStatusError(errs)
+		return nil, resources.ToAPIError(errs)
 	}
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	setSpanActorRefAttributes(ctx, actorRef)
@@ -532,10 +531,10 @@ func (s *RPCService) RevertActor(ctx context.Context, req *ateapipb.RevertActorR
 	actor, err := s.actorWorkflow.RevertActor(ctx, actorRef)
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
+			return nil, apierror.Aborted("concurrent update conflict, please retry")
 		}
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, status.Errorf(codes.NotFound, "Actor %s not found", actorRef)
+			return nil, apierror.NotFound("Actor %s not found", actorRef)
 		}
 		return nil, err
 	}
@@ -545,7 +544,7 @@ func (s *RPCService) RevertActor(ctx context.Context, req *ateapipb.RevertActorR
 
 func (s *RPCService) MintActorJWT(ctx context.Context, req *ateapipb.MintActorJWTRequest) (*ateapipb.MintActorJWTResponse, error) {
 	if errs := apivalidation.ValidateMintActorJWTRequest(ctx, req); len(errs) > 0 {
-		return nil, status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
+		return nil, apierror.InvalidArgument("%v", errs.ToAggregate())
 	}
 
 	// TODO(authz): Authorization layer needs to check whether the caller has
@@ -557,12 +556,9 @@ func (s *RPCService) MintActorJWT(ctx context.Context, req *ateapipb.MintActorJW
 	// running, since we may need to issue JWTs during actor boot / resume.
 	dbActor, err := s.impl.GetActor(ctx, resources.ActorRefFromObjectRef(req.GetActor()))
 	if errors.Is(err, store.ErrNotFound) {
-		return nil, status.Error(codes.NotFound, "actor not found")
+		return nil, apierror.NotFound("actor not found")
 	} else if err != nil {
 		return nil, fmt.Errorf("while retrieving actor: %w", err)
-	}
-	if dbActor.GetMetadata().GetUid() != req.GetActorUid() {
-		return nil, status.Error(codes.Aborted, "conflict; actor has been deleted and recreated")
 	}
 
 	// We only issue tokens with audience bindings.
@@ -603,7 +599,7 @@ func (s *RPCService) MintActorJWT(ctx context.Context, req *ateapipb.MintActorJW
 
 func (s *RPCService) MintActorCertificate(ctx context.Context, req *ateapipb.MintActorCertificateRequest) (*ateapipb.MintActorCertificateResponse, error) {
 	if errs := apivalidation.ValidateMintActorCertificateRequest(ctx, req); len(errs) > 0 {
-		return nil, status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
+		return nil, apierror.InvalidArgument("%v", errs.ToAggregate())
 	}
 
 	// TODO(authz): Authorization layer needs to check whether the caller has
@@ -619,26 +615,26 @@ func (s *RPCService) MintActorCertificate(ctx context.Context, req *ateapipb.Min
 	// TODO(authz): Perhaps this can be handled with an OpenFGA condition.
 	p, ok := peer.FromContext(ctx)
 	if !ok {
-		return nil, status.Errorf(codes.Unauthenticated, "no peer transport information found")
+		return nil, apierror.Unauthenticated("no peer transport information found")
 	}
 	tlsInfo, ok := p.AuthInfo.(credentials.TLSInfo)
 	if !ok {
-		return nil, status.Errorf(codes.Unauthenticated, "unexpected peer transport credentials")
+		return nil, apierror.Unauthenticated("unexpected peer transport credentials")
 	}
 	if len(tlsInfo.State.PeerCertificates) == 0 {
-		return nil, status.Errorf(codes.Unauthenticated, "could not verify peer certificate")
+		return nil, apierror.Unauthenticated("could not verify peer certificate")
 	}
 
 	// Verify that this actor exists in the store.  It doesn't need to be
 	// running, since we may need to issue certificates during actor boot / resume.
 	dbActor, err := s.impl.GetActor(ctx, resources.ActorRefFromObjectRef(req.GetActor()))
 	if errors.Is(err, store.ErrNotFound) {
-		return nil, status.Error(codes.NotFound, "actor not found")
+		return nil, apierror.NotFound("actor not found")
 	} else if err != nil {
 		return nil, fmt.Errorf("while retrieving actor: %w", err)
 	}
 	if dbActor.GetMetadata().GetUid() != req.GetActorUid() {
-		return nil, status.Error(codes.Aborted, "conflict; actor has been deleted and recreated")
+		return nil, apierror.Aborted("conflict; actor has been deleted and recreated")
 	}
 
 	// Parse the CSR
@@ -648,7 +644,7 @@ func (s *RPCService) MintActorCertificate(ctx context.Context, req *ateapipb.Min
 	}
 	if err := csr.CheckSignature(); err != nil {
 		slog.ErrorContext(ctx, "Failed to verify CSR signature", slog.Any("err", err))
-		return nil, status.Errorf(codes.InvalidArgument, "Failed to verify CSR signature")
+		return nil, apierror.InvalidArgument("Failed to verify CSR signature")
 	}
 
 	template := &x509.Certificate{
