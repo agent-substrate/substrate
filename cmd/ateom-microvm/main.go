@@ -46,6 +46,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateomnet"
 	"github.com/agent-substrate/substrate/internal/ateomstats"
 	"github.com/agent-substrate/substrate/internal/ateomtunnel"
+	"github.com/agent-substrate/substrate/internal/hardware"
 	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/otlprelay"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
@@ -282,9 +283,10 @@ func do(ctx context.Context) error {
 			TrustBundlePath:      tunnelConfig.TrustBundle,
 			AteletSPIFFEID:       tunnelConfig.BrokerIdentity,
 			Actors:               *maxActors,
+			Hardware:             hardware.Probe(hardware.MicroVM),
 		})
 		if err != nil && ctx.Err() == nil {
-			serverboot.Fatal(ctx, "Failed to report worker capacity", err)
+			serverboot.Fatal(ctx, "Failed to register worker", err)
 		}
 	}()
 

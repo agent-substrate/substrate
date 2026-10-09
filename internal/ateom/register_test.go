@@ -19,14 +19,12 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/protobuf/testing/protocmp"
 
-	"github.com/agent-substrate/substrate/internal/hardware"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 )
 
@@ -72,13 +70,26 @@ func TestFromFilesMissing(t *testing.T) {
 	}
 }
 
-func TestProbeHardware(t *testing.T) {
-	got := probeHardware()
-	want := &ateletpb.HardwareIdentity{
-		Attributes: map[string]string{hardware.AttrArchitecture: runtime.GOARCH},
+// TestBuildRequest checks what buildRequest itself contributes: the actor
+// ceiling and the caller's hardware identity. Capacity limits come from the
+// production mount path, which may or may not exist where the test runs, so
+// their parsing is covered by TestFromFiles instead.
+func TestBuildRequest(t *testing.T) {
+	hw := &ateletpb.HardwareIdentity{
+		Attributes: map[string]string{
+			"architecture": "amd64",
+			"cpu_features": "e2f3bc8848800ca6",
+		},
 	}
-	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
-		t.Errorf("probeHardware() mismatch (-want +got):\n%s", diff)
+	got := buildRequest(ReportConfig{
+		Actors:   testActors,
+		Hardware: hw,
+	})
+	if got.GetCapacity().GetActors() != testActors {
+		t.Errorf("buildRequest() actors = %d, want %d", got.GetCapacity().GetActors(), testActors)
+	}
+	if diff := cmp.Diff(hw, got.GetHardware(), protocmp.Transform()); diff != "" {
+		t.Errorf("buildRequest() hardware mismatch (-want +got):\n%s", diff)
 	}
 }
 
@@ -127,11 +138,21 @@ func TestReportFailsFastOnBadCredentials(t *testing.T) {
 		SocketPath:           filepath.Join(t.TempDir(), "atelet.sock"),
 		CredentialBundlePath: filepath.Join(t.TempDir(), "does-not-exist.pem"),
 		TrustBundlePath:      filepath.Join(t.TempDir(), "also-missing.pem"),
+		Hardware:             &ateletpb.HardwareIdentity{Attributes: map[string]string{"architecture": "amd64"}},
 	})
 	if err == nil {
 		t.Fatal("Report() with unreadable credentials succeeded, want an error the caller can exit on")
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("Report() retried a permanent failure until the deadline: %v", err)
+	}
+}
+
+func TestReportFailsFastOnNilHardware(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := Report(ctx, ReportConfig{}); err == nil {
+		t.Fatal("Report() with nil Hardware succeeded, want an error the caller can exit on")
 	}
 }

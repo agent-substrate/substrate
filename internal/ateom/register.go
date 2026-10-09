@@ -19,6 +19,7 @@ package ateom
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -28,7 +29,6 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateletdial"
-	"github.com/agent-substrate/substrate/internal/hardware"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"k8s.io/apimachinery/pkg/api/resource"
 
@@ -73,14 +73,6 @@ func fromDir(dir string, actors int) *ateletpb.WorkerResources {
 	}
 }
 
-// probeHardware returns the hardware identity that actors hosted by this ateom
-// observe.
-func probeHardware() *ateletpb.HardwareIdentity {
-	return &ateletpb.HardwareIdentity{
-		Attributes: hardware.ProbeHost().GetAttributes(),
-	}
-}
-
 // cpuMemory is the Resources for those two dimensions. A zero dimension is
 // left out, which the control plane reads as none of it; nil when both are.
 func cpuMemory(cpuMilli, memoryBytes int64) *ateletpb.Resources {
@@ -112,7 +104,8 @@ func readLimit(path string) int64 {
 	return value
 }
 
-// ReportConfig is what an ateom needs to reach the atelet on its node.
+// ReportConfig configures how an ateom connects to and registers with the
+// node-local atelet.
 type ReportConfig struct {
 	SocketPath           string
 	CredentialBundlePath string
@@ -123,6 +116,16 @@ type ReportConfig struct {
 	AteletSPIFFEID string
 	// Actors is how many actors this ateom will host at once.
 	Actors int
+	// Hardware is the required hardware identity that actors hosted by this
+	// ateom observe.
+	Hardware *ateletpb.HardwareIdentity
+}
+
+func buildRequest(cfg ReportConfig) *ateletpb.RegisterWorkerRequest {
+	return &ateletpb.RegisterWorkerRequest{
+		Capacity: FromFiles(cfg.Actors),
+		Hardware: cfg.Hardware,
+	}
 }
 
 // Report tells the node-local atelet what this ateom can supply and its
@@ -133,14 +136,14 @@ type ReportConfig struct {
 // an ateom first comes up. Nothing else reports this, so giving up would leave
 // the Worker holding no capacity and hosting nothing.
 func Report(ctx context.Context, cfg ReportConfig) error {
+	if cfg.Hardware == nil {
+		return errors.New("worker registration: hardware identity is required")
+	}
 	tlsConfig, err := ateletdial.TLSConfig(cfg.CredentialBundlePath, cfg.TrustBundlePath, cfg.AteletSPIFFEID)
 	if err != nil {
-		return fmt.Errorf("capacity report: %w", err)
+		return fmt.Errorf("worker registration: %w", err)
 	}
-	req := &ateletpb.RegisterWorkerRequest{
-		Capacity: FromFiles(cfg.Actors),
-		Hardware: probeHardware(),
-	}
+	req := buildRequest(cfg)
 	err = retryReport(ctx, func() error {
 		return reportOnce(ctx, cfg.SocketPath, tlsConfig, req)
 	}, initialReportBackoff)
@@ -162,7 +165,7 @@ func retryReport(ctx context.Context, send func() error, backoff time.Duration) 
 		if err == nil {
 			return nil
 		}
-		slog.WarnContext(ctx, "Retrying worker capacity report", slog.Duration("in", backoff), slog.Any("err", err))
+		slog.WarnContext(ctx, "Retrying worker registration", slog.Duration("in", backoff), slog.Any("err", err))
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
