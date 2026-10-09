@@ -48,8 +48,9 @@ func (e *Env) EnsureAPIServerPrerequisites(ctx context.Context) error {
 	if err := e.EnsurePodCertificateCAs(ctx); err != nil {
 		return err
 	}
-	// Always reconcile the PostgreSQL connection settings, so that a changed
-	// ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING reaches an existing install.
+	// Always reconcile the Cloud SQL proxy settings and server CA, so that a
+	// change reaches an existing install. The connection flags are stamped
+	// when the ate-api-server Deployment is applied.
 	if err := e.CreateAPIServerEnvVars(ctx); err != nil {
 		return err
 	}

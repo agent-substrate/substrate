@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/pflag"
@@ -26,6 +27,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/images"
 	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/oidcdiscovery"
+	"github.com/agent-substrate/substrate/internal/pgdsn"
 )
 
 // ConfigPathEnv names the configuration document when --config is not given.
@@ -209,6 +211,16 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		actorJWTIssuer = installdefaults.ActorJWTIssuer(r.String("namespace"))
 	}
 
+	postgresMaxConns, err := strconv.ParseInt(r.String("ateapi.postgres.poolMaxConns"), 10, 32)
+	if err != nil {
+		v, _ := r.Value("ateapi.postgres.poolMaxConns")
+		return nil, &InvalidError{Value: v, Want: "a valid, positive integer"}
+	}
+	if postgresMaxConns < 1 {
+		v, _ := r.Value("ateapi.postgres.poolMaxConns")
+		return nil, &InvalidError{Value: v, Want: "a valid, positive integer"}
+	}
+
 	cfg := &Config{
 		Root:               root,
 		Kind:               r.Bool("kindCluster.enabled"),
@@ -231,7 +243,7 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		},
 		Router:               r.String("atenet.dataplane"),
 		PostgresSchema:       r.String("ateapi.postgres.schema"),
-		PostgresPoolMaxConns: r.String("ateapi.postgres.poolMaxConns"),
+		PostgresPoolMaxConns: int(postgresMaxConns),
 		PostgresServerCAFile: r.String("ateapi.postgres.serverCAFile"),
 		PostgresStorageClass: r.String("ateapi.postgres.storageClass"),
 
@@ -368,6 +380,14 @@ func validateResolved(cfg *Config, r *Resolved) error {
 		default:
 			return &InvalidError{Value: ipType, Want: strings.Join(
 				[]string{CloudSQLIPTypePrivate, CloudSQLIPTypePublic, CloudSQLIPTypePSC}, ", ")}
+		}
+	}
+
+	for _, key := range []string{"ateapi.postgres.readWrite.connectionString", "ateapi.postgres.owner.connectionString"} {
+		v, _ := r.Value(key)
+		if err := pgdsn.RejectInlineSecrets(v.Raw); err != nil {
+			// The error never quotes the value, which may hold the secret.
+			return fmt.Errorf("%s (from %s): %w", key, v.From.Describe(v.Setting), err)
 		}
 	}
 

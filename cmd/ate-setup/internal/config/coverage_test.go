@@ -102,6 +102,10 @@ func valueFor(key string) string {
 		return "https://idp.example.com"
 	case "csi.setup":
 		return "none"
+	case "ateapi.postgres.readWrite.connectionString", "ateapi.postgres.owner.connectionString":
+		return "host=db"
+	case "ateapi.postgres.poolMaxConns":
+		return "7"
 	}
 	return "set"
 }

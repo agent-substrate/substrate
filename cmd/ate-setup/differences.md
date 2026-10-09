@@ -288,14 +288,6 @@ stdout/stderr split matches under CI log capture.
 `hostpath` and `both` are a hard error there rather than the shell's old
 warn-and-continue.
 
-**The env-hash digest does not agree with the shell's.** Both stamp
-`ate.dev/env-hash` on the `ate-api-server` pod template so that a changed
-environment rolls the Deployment, but the shell computed it with `openssl
-dgst -sha256` over jsonpath output and `ate-setup` digests the ConfigMap and
-Secret contents directly. The value is opaque — only changes to it matter — so
-the only consequence is that the first `ate-setup` install over a
-shell-installed cluster rolls `ate-api-server` once.
-
 **Cloud SQL DSNs are synthesized, not adopted verbatim.** With
 `ATE_API_POSTGRES_CLOUDSQL_INSTANCE` set and no explicit
 `ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING`, the DSN is built passwordless
@@ -306,7 +298,8 @@ DSN that cannot authenticate. The owner connection uses the same IAM login
 unless `ATE_API_POSTGRES_OWNER_CONNECTION_STRING` is set. An *unset* instance variable is distinct from an
 exported empty one: unset adopts whatever the cluster already records in
 `ate-api-server-envvars`, including the IP type and the GSA from the
-`iam.gke.io/gcp-service-account` annotation, so a redeploy from a shell that
+`iam.gke.io/gcp-service-account` annotation, and the connection strings,
+roles, schema, and pool size from the `ate-api-server` Deployment's flags, so a redeploy from a shell that
 never exported the variables leaves a working proxy alone. Exporting it empty
 removes the sidecar and the annotation and falls back to the bundled
 StatefulSet.

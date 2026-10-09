@@ -133,12 +133,16 @@ installed by the shell script show both managers in `managedFields` until the
 next apply reconciles them. `last-applied-configuration` stops growing on the
 generated CRDs.
 
-### The first install after this change rolls `ate-api-server` once
+### ate-api-server takes its PostgreSQL settings as flags
 
-Both installers stamp `ate.dev/env-hash` on the pod template so a changed
-environment starts a rollout, but they compute the digest differently. The
-value is opaque, so the only consequence is one extra rollout the first time
-`ate-setup` installs over a shell-installed cluster.
+The shell installer put the connection strings in the
+`ate-api-server-secret-envvars` Secret and stamped `ate.dev/env-hash` on the
+pod template to roll the Deployment when they changed. `ate-setup` writes the
+connection strings, roles, schema, and pool size onto the Deployment as
+`--postgres-*` flags instead, and rejects a connection string that carries a
+password or `sslpassword`; a password comes from a `passfile`. The Secret is no
+longer read, and the first `ate-setup` install over a shell-installed cluster
+rolls `ate-api-server` once.
 
 ### `--create-*-ca-pool-secret` is idempotent
 

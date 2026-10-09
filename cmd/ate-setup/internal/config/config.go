@@ -158,7 +158,7 @@ type Config struct {
 	PostgresSchema string
 	// PostgresPoolMaxConns sizes the apiserver's read/write pool
 	// (ATE_API_POSTGRES_POOL_MAX_CONNS). Empty leaves the DSN or pgxpool default.
-	PostgresPoolMaxConns string
+	PostgresPoolMaxConns int
 	// PostgresServerCAFile is a local PEM file holding the server CA of an
 	// external PostgreSQL (ATE_API_POSTGRES_SERVER_CA_FILE). Its contents are
 	// published as the postgres-server-ca Secret, which ate-api-server mounts

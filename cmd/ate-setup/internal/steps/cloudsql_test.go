@@ -21,6 +21,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -258,5 +259,52 @@ func TestProxySidecarPatchNamesTheContainer(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("the patch declares no %q initContainer; reconcileCloudSQLProxySidecar keys its removal branch on that name", cloudSQLProxyContainer)
+	}
+}
+
+// The proxy's settings sit in the pod template, so a changed setting rolls the
+// pod; the env list replaces the old one, so a dropped key leaves the pod too.
+func TestCloudSQLProxyPatchInlinesEnv(t *testing.T) {
+	cfg := &config.Config{Root: repoRoot(t)}
+	raw, err := os.ReadFile(cfg.Manifest("cloudsql", "proxy-sidecar-patch.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := cloudSQLEnvVars(cloudSQLSettings{Instance: "p:r:i", IAMAuth: "true", IPType: config.CloudSQLIPTypePSC})
+	patch, err := cloudSQLProxyPatch(raw, env)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var parsed struct {
+		Spec struct {
+			Template struct {
+				Spec struct {
+					InitContainers []map[string]any `json:"initContainers"`
+				} `json:"spec"`
+			} `json:"template"`
+		} `json:"spec"`
+	}
+	if err := yaml.Unmarshal(patch, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	containers := parsed.Spec.Template.Spec.InitContainers
+	if len(containers) != 1 || containers[0]["name"] != cloudSQLProxyContainer {
+		t.Fatalf("initContainers = %v, want only %s", containers, cloudSQLProxyContainer)
+	}
+	if _, ok := containers[0]["envFrom"]; ok {
+		t.Error("the proxy still reads envFrom, so a changed setting would not roll the pod")
+	}
+	vars, _ := containers[0]["env"].([]any)
+	if len(vars) == 0 || vars[0].(map[string]any)["$patch"] != "replace" {
+		t.Fatalf("env = %v, want a leading $patch: replace directive", vars)
+	}
+	got := map[string]string{}
+	for _, v := range vars[1:] {
+		m := v.(map[string]any)
+		got[m["name"].(string)] = m["value"].(string)
+	}
+	if diff := cmp.Diff(env, got); diff != "" {
+		t.Errorf("proxy env mismatch (-want +got):\n%s", diff)
 	}
 }

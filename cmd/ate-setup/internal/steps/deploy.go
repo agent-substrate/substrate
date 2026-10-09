@@ -145,7 +145,7 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 	if err != nil {
 		return err
 	}
-	if err := e.applyWithAPIServerEnvHash(ctx, manifests); err != nil {
+	if err := e.applyAPIServerManifest(ctx, manifests); err != nil {
 		return err
 	}
 
@@ -315,7 +315,7 @@ func (e *Env) DeployAteAPIServer(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := e.applyWithAPIServerEnvHash(ctx, manifest); err != nil {
+	if err := e.applyAPIServerManifest(ctx, manifest); err != nil {
 		return err
 	}
 	// After the manifest, which resets the pod template to the sidecar-free base.
