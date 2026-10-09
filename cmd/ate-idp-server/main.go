@@ -77,8 +77,10 @@ func run(ctx context.Context) error {
 	}
 	srv, err := server.New(*issuer, pool)
 	if err != nil {
-		return fmt.Errorf("invalid --issuer: %w", err)
+		return err
 	}
+	mux := http.NewServeMux()
+	srv.Register(mux)
 	slog.InfoContext(ctx, "serving issuer", slog.String("issuer", *issuer))
 
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
@@ -86,7 +88,7 @@ func run(ctx context.Context) error {
 
 	httpSrv := &http.Server{
 		Addr:              *listenAddr,
-		Handler:           srv,
+		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
