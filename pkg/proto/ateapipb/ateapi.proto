@@ -1323,8 +1323,7 @@ message Volume {
   // +k8s:format=k8s-short-name
   string name = 1;
 
-  // Exactly one of durable_dir / external_volume_template / image /
-  // system_info must be set.
+  // Exactly one of durable_dir / external / image / system_info must be set.
   //
   // +k8s:optional
   // +k8s:unionMember
@@ -1332,7 +1331,7 @@ message Volume {
 
   // +k8s:optional
   // +k8s:unionMember
-  ExternalVolumeTemplate external_volume_template = 3;
+  ExternalVolumeSource external = 3;
 
   // +k8s:optional
   // +k8s:unionMember
@@ -1362,9 +1361,9 @@ message ImageVolumeSource {
 // across resumes and participates in snapshots.
 message DurableDirVolumeSource {}
 
-// ExternalVolumeTemplate provisions an external volume per actor; the volume
+// ExternalVolumeSource provisions an external volume per actor; the volume
 // lives only as long as the actor.
-message ExternalVolumeTemplate {
+message ExternalVolumeSource {
   // capacity of the volume to create, in Kubernetes resource.Quantity string
   // form (e.g. "10Gi"). Required.
   //

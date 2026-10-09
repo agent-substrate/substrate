@@ -220,7 +220,7 @@ func ValidateCustom_Container_Image(_ context.Context, _ operation.Operation, fl
 	return validatePinnedImage(fldPath, *value)
 }
 
-func ValidateCustom_ExternalVolumeTemplate_Capacity(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+func ValidateCustom_ExternalVolumeSource_Capacity(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	if _, err := resource.ParseQuantity(*value); err != nil {
 		return field.ErrorList{field.Invalid(fldPath, *value, fmt.Sprintf("must be a Kubernetes resource quantity: %v", err))}
 	}
