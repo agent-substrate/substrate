@@ -5671,7 +5671,7 @@ type MintActorJWTRequest struct {
 	// +k8s:maxItems=16 # guardrail; tokens realistically bind a handful of audiences
 	// +k8s:listType=set
 	// +k8s:eachVal=+k8s:maxLength=512 # audiences are caller-defined URIs; bound only
-	Audience []string `protobuf:"bytes,1,rep,name=audience,proto3" json:"audience,omitempty"`
+	Audiences []string `protobuf:"bytes,1,rep,name=audiences,proto3" json:"audiences,omitempty"`
 	// Lifetime of the JWT, in seconds.
 	//
 	// +k8s:required
@@ -5719,9 +5719,9 @@ func (x *MintActorJWTRequest) GetActor() *ObjectRef {
 	return nil
 }
 
-func (x *MintActorJWTRequest) GetAudience() []string {
+func (x *MintActorJWTRequest) GetAudiences() []string {
 	if x != nil {
-		return x.Audience
+		return x.Audiences
 	}
 	return nil
 }
@@ -8599,10 +8599,10 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x05actor\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\x12/\n" +
 	"\aoptions\x18\x02 \x01(\v2\x15.ateapi.DeleteOptionsR\aoptions\"4\n" +
 	"\rGetTagRequest\x12#\n" +
-	"\x03tag\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x03tag\"\x89\x01\n" +
+	"\x03tag\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x03tag\"\x8b\x01\n" +
 	"\x13MintActorJWTRequest\x12'\n" +
-	"\x05actor\x18\x05 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\x12\x1a\n" +
-	"\baudience\x18\x01 \x03(\tR\baudience\x12-\n" +
+	"\x05actor\x18\x05 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\x12\x1c\n" +
+	"\taudiences\x18\x01 \x03(\tR\taudiences\x12-\n" +
 	"\x12expiration_seconds\x18\b \x01(\x03R\x11expirationSeconds\"s\n" +
 	"\x14MintActorJWTResponse\x12 \n" +
 	"\tactor_jwt\x18\x01 \x01(\tB\x03\x80\x01\x01R\bactorJwt\x129\n" +

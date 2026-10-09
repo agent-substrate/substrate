@@ -5629,7 +5629,7 @@ func Validate_MintActorJWTRequest(
 		errs = append(errs, fn(fldPath.Child("actor"), obj.Actor, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateapipb.MintActorJWTRequest.Audience
+	{ // field ateapipb.MintActorJWTRequest.Audiences
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj []string,
@@ -5667,9 +5667,9 @@ func Validate_MintActorJWTRequest(
 		}
 		oldVal := safe.Field(oldObj,
 			func(oldObj *ateapipb.MintActorJWTRequest) []string {
-				return oldObj.Audience
+				return oldObj.Audiences
 			})
-		errs = append(errs, fn(fldPath.Child("audience"), obj.Audience, oldVal, oldObj != nil)...)
+		errs = append(errs, fn(fldPath.Child("audiences"), obj.Audiences, oldVal, oldObj != nil)...)
 	}
 
 	{ // field ateapipb.MintActorJWTRequest.ExpirationSeconds

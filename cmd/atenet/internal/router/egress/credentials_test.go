@@ -310,7 +310,7 @@ func TestActorJWTInjection(t *testing.T) {
 			}
 			want := &ateapipb.MintActorJWTRequest{
 				Actor:             &ateapipb.ObjectRef{Atespace: testEgressAtespace, Name: testEgressActor},
-				Audience:          []string{"https://api.example.com"},
+				Audiences:         []string{"https://api.example.com"},
 				ExpirationSeconds: 900,
 			}
 			if got := client.lastMint.Load(); !proto.Equal(got, want) {

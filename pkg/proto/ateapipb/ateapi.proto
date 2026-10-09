@@ -1784,7 +1784,7 @@ message MintActorJWTRequest {
   // +k8s:maxItems=16 # guardrail; tokens realistically bind a handful of audiences
   // +k8s:listType=set
   // +k8s:eachVal=+k8s:maxLength=512 # audiences are caller-defined URIs; bound only
-  repeated string audience = 1;
+  repeated string audiences = 1;
 
   // Lifetime of the JWT, in seconds.
   //
