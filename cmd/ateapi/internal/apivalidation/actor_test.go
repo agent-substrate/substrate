@@ -87,7 +87,7 @@ func TestValidateCreateActorRequest(t *testing.T) {
 	}, {
 		"actor.metadata.name too short",
 		validReq(validActor(withMetadata(func(m *ateapipb.ResourceMetadata) { m.Name = "ox3wgmjvk2b6yfq4zr7ae5ncl" }))),
-		field.ErrorList{field.TooShort(field.NewPath("actor", "metadata", "name"), "", 26)},
+		field.ErrorList{field.TooShort(field.NewPath("actor", "metadata", "name"), "", 26).WithOrigin("minLength")},
 	}, {
 		"actor.metadata.name UUID",
 		validReq(validActor(withMetadata(func(m *ateapipb.ResourceMetadata) { m.Name = "0c6e2f4a-8b1d-4e57-a3f9-2d7c5b8e1a60" }))),
@@ -200,6 +200,11 @@ func TestValidateActorUpdate(t *testing.T) {
 		validInput(),
 		validOutput(),
 		nil,
+	}, {
+		"short actor.metadata.name is allowed",
+		validInput(withMetadata(func(m *ateapipb.ResourceMetadata) { m.Name = "id1" })),
+		validOutput(withMetadata(func(m *ateapipb.ResourceMetadata) { m.Name = "id1" })),
+		nil, // the minimum length applies only on create
 	}, {
 		"missing actor.metadata",
 		validInput(),

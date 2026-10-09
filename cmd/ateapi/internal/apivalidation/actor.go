@@ -18,7 +18,6 @@ import (
 	"context"
 	"strings"
 
-	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/api/validate"
@@ -128,16 +127,6 @@ func ValidateCustom_UpdateActorRequest_Actor(ctx context.Context, op operation.O
 	errs := Validate_ResourceMetadata(ctx, op, fldPath.Child("metadata"), actor.Metadata, nil)
 	errs = append(errs, validate.RequiredValue(ctx, op, fldPath.Child("metadata", "atespace"), &actor.Metadata.Atespace, nil)...)
 	return errs
-}
-
-// ValidateCustom_CreateActorRequest_Actor requires a new actor's name to be
-// long enough to be random. It applies only on create, so actors with shorter
-// names can still be read, updated, and deleted.
-func ValidateCustom_CreateActorRequest_Actor(_ context.Context, _ operation.Operation, fldPath *field.Path, actor, _ *ateapipb.Actor) field.ErrorList {
-	if actor.GetMetadata().GetName() == "" {
-		return nil // handled by DV
-	}
-	return resources.ValidateRandomName(actor.Metadata.Name, fldPath.Child("metadata", "name"))
 }
 
 // This is needed because DV doesn't have a standard format for IP addresses yet.

@@ -873,9 +873,13 @@ func (x *ExternalVolume) GetVolumeContext() map[string]string {
 type Actor struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Common resource metadata: atespace, name, uid, version, timestamps.
+	// The name must be at least 26 bytes long when the actor is created; the
+	// check ratchets, so existing actors with shorter names can still be
+	// updated.
 	//
 	// +k8s:required
 	// +k8s:subfield(atespace)=+k8s:required
+	// +k8s:subfield(name)=+k8s:minLength=26
 	Metadata *ResourceMetadata `protobuf:"bytes,1,opt,name=metadata,proto3" json:"metadata,omitempty"`
 	// TODO: replace with full actor_template spec if we decide to make each Actor self-contained.
 	// +k8s:required
@@ -4554,7 +4558,6 @@ type CreateActorRequest struct {
 	// hold 128 random bits in base-32, so that names are hard to guess or reuse.
 	//
 	// +k8s:required
-	// +k8s:customValidation # name must be at least 26 bytes long
 	Actor         *Actor `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

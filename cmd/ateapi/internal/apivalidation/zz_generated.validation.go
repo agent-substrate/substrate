@@ -159,6 +159,27 @@ func Validate_Actor(
 					return // do not proceed
 				}
 			}()
+			func() { // cohort = "name"
+				earlyReturn := false
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "name",
+					func(o *ateapipb.ResourceMetadata) *string { return &o.Name }, validate.DirectEqual, validate.Immutable).MarkShortCircuit(); len(e) != 0 {
+					earlyReturn = true
+				}
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "name",
+					func(o *ateapipb.ResourceMetadata) *string { return &o.Name }, validate.DirectEqual, validate.RequiredValue).MarkShortCircuit(); len(e) != 0 {
+					earlyReturn = true
+				}
+				if earlyReturn {
+					return // do not proceed
+				}
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "name",
+					func(o *ateapipb.ResourceMetadata) *string { return &o.Name }, validate.DirectEqual,
+					func(ctx context.Context, op operation.Operation, fldPath *field.Path, obj, oldObj *string) field.ErrorList {
+						return validate.MinLength(ctx, op, fldPath, obj, oldObj, 26)
+					}); len(e) != 0 {
+					errs = append(errs, e...)
+				}
+			}()
 			// call the type's validation function
 			errs = append(errs, Validate_ResourceMetadata(ctx, op, fldPath, obj, oldObj)...)
 			return
@@ -2047,10 +2068,6 @@ func Validate_CreateActorRequest(
 			}
 			if earlyReturn {
 				return // do not proceed
-			}
-			// custom validation
-			if e := ValidateCustom_CreateActorRequest_Actor(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
-				errs = append(errs, e...)
 			}
 			// call the type's validation function
 			errs = append(errs, Validate_Actor(ctx, op, fldPath, obj, oldObj)...)
