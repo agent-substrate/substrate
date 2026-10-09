@@ -274,10 +274,12 @@ spec:
           containerPort: 4040
         - name: metrics
           containerPort: 9090
+        - name: health
+          containerPort: 9091
         readinessProbe:
           httpGet:
             path: /readyz
-            port: 9090
+            port: health
           initialDelaySeconds: 5
           periodSeconds: 2
           failureThreshold: 3
@@ -286,7 +288,7 @@ spec:
         livenessProbe:
           httpGet:
             path: /healthz
-            port: 9090
+            port: health
           initialDelaySeconds: 10
           periodSeconds: 10
         volumeMounts:

@@ -151,6 +151,7 @@ type routerConfig struct {
 
 	LogLevel    string
 	MetricsAddr string
+	HealthAddr  string
 	// OtlpCollectorAddress is the OTLP gRPC collector that Envoy reports
 	// tracing spans to, as host:port or an http:// URL. It defaults to
 	// OTEL_EXPORTER_OTLP_ENDPOINT — Envoy gets its whole configuration over

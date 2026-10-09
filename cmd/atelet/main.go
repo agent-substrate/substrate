@@ -87,6 +87,7 @@ import (
 var (
 	port              = pflag.Int("port", atelet.DefaultPort, "The port to listen on")
 	metricsListenAddr = pflag.String("metrics-listen-addr", ":9090", "Address and port the prometheus metrics server should listen on.")
+	healthListenAddr  = pflag.String("health-listen-addr", ":9091", "Address and port the /readyz and /healthz probe server should listen on.")
 
 	grpcServerCredBundle = pflag.String("grpc-server-cred-bundle", "/run/podidentity.podcert.ate.dev/credential-bundle.pem", "Credential bundle atelet presents as its gRPC serving certificate.")
 	clientCACerts        = pflag.String("client-ca-certs", "/run/podidentity.podcert.ate.dev/trust-bundle.pem", "CA bundle used to verify gRPC client certificates.")
@@ -165,11 +166,8 @@ func main() {
 	// readiness flips to not-ready on SIGTERM so /readyz reports 503 while the
 	// pod drains, while /healthz stays 200 for liveness.
 	readiness := &serverboot.Readiness{}
-	go serverboot.StartMetricsServer(ctx, serverboot.MetricsServerOptions{
-		Addr:          *metricsListenAddr,
-		Readiness:     readiness,
-		EnableHealthz: true,
-	})
+	go serverboot.StartMetricsServer(ctx, *metricsListenAddr)
+	go serverboot.StartHealthServer(ctx, *healthListenAddr, readiness)
 
 	// The OTLP relay lets the ateom pods on this node export telemetry over a
 	// unix socket instead of their own network (see internal/otlprelay). Started

@@ -179,10 +179,7 @@ func TestMeterProviderRelayAttribute(t *testing.T) {
 
 func TestReadyzDrainsWhileHealthzStaysUp(t *testing.T) {
 	readiness := &Readiness{}
-	mux := metricsMux(MetricsServerOptions{
-		Readiness:     readiness,
-		EnableHealthz: true,
-	})
+	mux := healthMux(readiness)
 
 	if got := getCode(t, mux, "/readyz"); got != http.StatusOK {
 		t.Errorf("/readyz before drain = %d, want %d", got, http.StatusOK)
@@ -202,7 +199,7 @@ func TestReadyzDrainsWhileHealthzStaysUp(t *testing.T) {
 }
 
 func TestReadyzStaticWithZeroValueReadiness(t *testing.T) {
-	mux := metricsMux(MetricsServerOptions{Readiness: &Readiness{}})
+	mux := healthMux(&Readiness{})
 	if got := getCode(t, mux, "/readyz"); got != http.StatusOK {
 		t.Errorf("/readyz with zero-value Readiness = %d, want %d", got, http.StatusOK)
 	}
@@ -225,17 +222,29 @@ func TestReadinessMux(t *testing.T) {
 	}
 }
 
-func TestReadyzAbsentWithoutReadiness(t *testing.T) {
-	mux := metricsMux(MetricsServerOptions{})
-	if got := getCode(t, mux, "/readyz"); got != http.StatusNotFound {
-		t.Errorf("/readyz with nil Readiness = %d, want %d", got, http.StatusNotFound)
+// The probes and /metrics live on separate servers, so turning one off can
+// never take the other with it.
+func TestMetricsAndHealthServeSeparateEndpoints(t *testing.T) {
+	metrics := metricsMux()
+	for path, want := range map[string]int{
+		"/metrics": http.StatusOK,
+		"/readyz":  http.StatusNotFound,
+		"/healthz": http.StatusNotFound,
+	} {
+		if got := getCode(t, metrics, path); got != want {
+			t.Errorf("metrics server %s = %d, want %d", path, got, want)
+		}
 	}
-}
 
-func TestHealthzAbsentUnlessEnabled(t *testing.T) {
-	mux := metricsMux(MetricsServerOptions{Readiness: &Readiness{}})
-	if got := getCode(t, mux, "/healthz"); got != http.StatusNotFound {
-		t.Errorf("/healthz without EnableHealthz = %d, want %d", got, http.StatusNotFound)
+	health := healthMux(&Readiness{})
+	for path, want := range map[string]int{
+		"/metrics": http.StatusNotFound,
+		"/readyz":  http.StatusOK,
+		"/healthz": http.StatusOK,
+	} {
+		if got := getCode(t, health, path); got != want {
+			t.Errorf("health server %s = %d, want %d", path, got, want)
+		}
 	}
 }
 

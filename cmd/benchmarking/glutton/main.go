@@ -84,10 +84,7 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to start listener", fmt.Errorf("%s: %w", *listenAddr, err))
 	}
 
-	go serverboot.StartMetricsServer(ctx, serverboot.MetricsServerOptions{
-		Addr:      *metricsListenAddr,
-		Readiness: &serverboot.Readiness{},
-	})
+	go serverboot.StartMetricsServer(ctx, *metricsListenAddr)
 
 	slog.InfoContext(ctx, "glutton starting",
 		slog.String("listen-addr", *listenAddr),

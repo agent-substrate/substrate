@@ -14,8 +14,9 @@
 
 // Package serverboot collects the startup boilerplate shared by the
 // long-running substrate server binaries (ateapi, atelet, ateom-gvisor,
-// ateom-microvm): slog wiring, OTel tracer + meter providers, a Prometheus +
-// /readyz HTTP surface, and a couple of small helpers for startup fail-fast.
+// ateom-microvm): slog wiring, OTel tracer + meter providers, a Prometheus
+// /metrics server, a /readyz and /healthz server for the kubelet probes, and a
+// couple of small helpers for startup fail-fast.
 package serverboot
 
 import (
@@ -362,27 +363,28 @@ func (r *Readiness) MarkNotReady() { r.notReady.Store(true) }
 // Ready reports whether /readyz returns 200.
 func (r *Readiness) Ready() bool { return !r.notReady.Load() }
 
-// MetricsServerOptions configures StartMetricsServer.
-type MetricsServerOptions struct {
-	// Addr is the TCP listen address (e.g. ":9090").
-	Addr string
-	// Readiness, if non-nil, enables a /readyz handler: 200 while
-	// Ready, 503 after MarkNotReady. A zero-value Readiness never
-	// flips, giving a static 200 for binaries with no drain sequence.
-	// Nil serves no /readyz at all.
-	Readiness *Readiness
-	// EnableHealthz adds an always-200 /healthz for liveness probes,
-	// which must keep succeeding while a draining server fails /readyz.
-	EnableHealthz bool
+// StartMetricsServer runs an HTTP server exposing only /metrics
+// (Prometheus). Blocks until http.ListenAndServe returns; designed to be
+// `go`-launched. The kubelet probes use StartHealthServer, so a change to the
+// metrics endpoint does not change the health checks.
+func StartMetricsServer(ctx context.Context, addr string) {
+	slog.InfoContext(ctx, "Starting metrics HTTP server", slog.String("addr", addr))
+	if err := http.ListenAndServe(addr, metricsMux()); err != nil {
+		slog.Error("Failed to start prometheus metrics server", slog.Any("err", err))
+	}
 }
 
-// StartMetricsServer runs an HTTP server exposing /metrics (Prometheus)
-// and optionally /readyz and /healthz. Blocks until http.ListenAndServe
-// returns; designed to be `go`-launched.
-func StartMetricsServer(ctx context.Context, opts MetricsServerOptions) {
-	slog.InfoContext(ctx, "Starting metrics HTTP server", slog.String("addr", opts.Addr))
-	if err := http.ListenAndServe(opts.Addr, metricsMux(opts)); err != nil {
-		slog.Error("Failed to start prometheus metrics server", slog.Any("err", err))
+// StartHealthServer runs an HTTP server exposing /readyz and /healthz for the
+// kubelet probes. /readyz returns 200 while readiness is Ready and 503 after
+// MarkNotReady. /healthz always returns 200, so liveness keeps succeeding
+// while a draining server fails readiness. Blocks until http.ListenAndServe
+// returns; designed to be `go`-launched. A serve failure exits the process:
+// the probes can never succeed, so dying loudly lets the kubelet restart it.
+func StartHealthServer(ctx context.Context, addr string, readiness *Readiness) {
+	slog.InfoContext(ctx, "Starting health HTTP server", slog.String("addr", addr))
+	if err := http.ListenAndServe(addr, healthMux(readiness)); err != nil {
+		slog.Error("Health HTTP server failed", slog.Any("err", err))
+		os.Exit(1)
 	}
 }
 
@@ -401,18 +403,20 @@ func StartReadinessServer(ctx context.Context, addr string, readiness *Readiness
 
 // metricsMux builds the handler for StartMetricsServer; split out so
 // tests can exercise the endpoints without binding a port.
-func metricsMux(opts MetricsServerOptions) *http.ServeMux {
+func metricsMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
-	if opts.Readiness != nil {
-		mux.Handle("/readyz", readinessHandler(opts.Readiness))
-	}
-	if opts.EnableHealthz {
-		mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte("ok"))
-		})
-	}
+	return mux
+}
+
+// healthMux builds the handler for StartHealthServer.
+func healthMux(readiness *Readiness) *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.Handle("/readyz", readinessHandler(readiness))
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
 	return mux
 }
 

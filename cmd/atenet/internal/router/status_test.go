@@ -66,6 +66,7 @@ func TestStatuszEndpoint(t *testing.T) {
 		ExtprocPort:        50051,
 		ExtProcMaxRequests: defaultExtProcMaxRequests,
 		MetricsAddr:        "127.0.0.1:0",
+		HealthAddr:         "127.0.0.1:0",
 		ParkedRequest:      ingress.DefaultParkedRequestConfig(),
 		Auth: authConfig{
 			AteapiCAFile:         caPath,
