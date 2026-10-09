@@ -18,21 +18,54 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
+
+	"sigs.k8s.io/yaml"
 )
 
-// dockerfilePlatforms is the buildx --platform value: the install's
-// KO_DEFAULTPLATFORMS, so the image lands on the same nodes as the ko images,
-// or linux/amd64 when unset.
-func dockerfilePlatforms(koDefaultPlatforms string) string {
-	if koDefaultPlatforms == "" {
-		return "linux/amd64"
+// dockerfilePlatforms is the buildx --platform value, chosen the way ko
+// chooses its own so the image runs on the same nodes as the ko images:
+// KO_DEFAULTPLATFORMS, else defaultPlatforms from the ko config, else
+// linux/amd64.
+func dockerfilePlatforms(rootDir, koDefaultPlatforms string) (string, error) {
+	if koDefaultPlatforms != "" {
+		return koDefaultPlatforms, nil
 	}
-	return koDefaultPlatforms
+	path := filepath.Join(rootDir, ".ko.yaml")
+	// ko runs from rootDir, so a relative KO_CONFIG_PATH is relative to it.
+	if p := os.Getenv("KO_CONFIG_PATH"); p != "" {
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(rootDir, p)
+		}
+		path = p
+		if info, err := os.Stat(p); err == nil && info.IsDir() {
+			path = filepath.Join(p, ".ko.yaml")
+		}
+	}
+	raw, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return "linux/amd64", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("while reading the ko config: %w", err)
+	}
+	var koConfig struct {
+		DefaultPlatforms []string `json:"defaultPlatforms"`
+	}
+	if err := yaml.Unmarshal(raw, &koConfig); err != nil {
+		return "", fmt.Errorf("while parsing %s: %w", path, err)
+	}
+	if len(koConfig.DefaultPlatforms) == 0 {
+		return "linux/amd64", nil
+	}
+	return strings.Join(koConfig.DefaultPlatforms, ","), nil
 }
 
 // dockerBuildArgs returns the docker arguments that build contextPath for
@@ -60,8 +93,12 @@ func PublishDockerfileImage(ctx context.Context, rootDir, dockerRepo, imageName,
 	repo := strings.TrimSuffix(dockerRepo, "/") + "/" + imageName
 	stageTag := repo + ":" + tag
 
+	platforms, err := dockerfilePlatforms(rootDir, koDefaultPlatforms)
+	if err != nil {
+		return "", err
+	}
 	build := exec.CommandContext(ctx, "docker",
-		dockerBuildArgs(dockerfilePlatforms(koDefaultPlatforms), extraFlags, stageTag, contextPath)...)
+		dockerBuildArgs(platforms, extraFlags, stageTag, contextPath)...)
 	build.Dir = rootDir
 	// The shell version sent build output to stderr so it could capture the
 	// image reference on stdout; keeping that split makes the two behave the
