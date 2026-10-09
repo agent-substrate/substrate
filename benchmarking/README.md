@@ -387,6 +387,20 @@ map holds the raw facts and the derived numbers side by side.
   whole cluster, so a separate infrastructure pool is not counted. They are
   recorded so the ratios below can be re-derived later, or recomputed against
   a different denominator.
+* `gke_version`: the worker nodes' GKE version (kubelet version).
+* `worker_actor_capacity`, `worker_memory_limit_gb` (GiB): the capacity each
+  worker pod declares, its ateom `--max-actors` (1000 when unset) and its
+  container memory limit (null when unset, as the node bounds it instead).
+  `sandbox_class`: `gvisor` or `microvm`, from the worker image. A mixed pool
+  gives a sorted comma-joined list for each.
+* `multi_actor_worker`: `true` when `actors_per_pod_p50` is above 1.
+* `run_start`, `run_end`: Unix seconds bracketing the run, for finding its
+  server-side metrics after the cluster is deleted.
+* `metadata_<key>`: one per key of the free-form `--metadata '<json>'` object,
+  for facts only the caller knows. Non-string values are stored as JSON, and
+  null values are skipped. The orchestrator passes `cluster_name`,
+  `cluster_location` and `project_id` from the target cluster, plus any keys in
+  the `BENCHMARK_METADATA` environment variable (a JSON object).
 * `actors_per_node`, `actors_per_vcpu`, `actors_per_gb_ram`: the most actors
   Locust reported running, over the matching capacity. The `-u` flag only
   stands in when no sample was read.
@@ -410,7 +424,9 @@ comparing numbers across runs:
   actor without a live resource measurement, so suspended ones fall out.
 * **The denominators are read once, after the run.** A cluster that autoscaled
   mid-run is measured at its final size, so the ratio pairs a peak from one
-  moment with a capacity from another.
+  moment with a capacity from another. The same holds for every worker and
+  node fact above, including `gke_version` and the worker capacity, and so for
+  `multi_actor_worker`, which is derived from `actors_per_pod`.
 * **The peak assumes every actor is alive at once.** A workload that creates
   and deletes actors as it goes never holds them all at the same time, so its
   real density is lower than reported.

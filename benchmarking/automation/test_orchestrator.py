@@ -14,6 +14,7 @@
 
 """Unit tests for orchestrator.py: python3 benchmarking/automation/test_orchestrator.py"""
 
+import json
 import os
 import unittest
 from unittest import mock
@@ -129,6 +130,61 @@ class JobNameTest(unittest.TestCase):
             orchestrator.job_name(test, self.COMMIT),
             orchestrator.job_name(test, self.COMMIT),
         )
+
+
+CLUSTER_ENV = {"CLUSTER_NAME": "c", "CLUSTER_LOCATION": "l", "PROJECT_ID": "p"}
+
+
+class RunMetadataTest(unittest.TestCase):
+    def test_cluster_env(self):
+        with mock.patch.dict(os.environ, CLUSTER_ENV, clear=True):
+            self.assertEqual(
+                orchestrator.run_metadata(),
+                {"cluster_name": "c", "cluster_location": "l", "project_id": "p"},
+            )
+
+    def test_benchmark_metadata_is_merged(self):
+        env = {**CLUSTER_ENV, "BENCHMARK_METADATA": '{"build_id": "1"}'}
+        with mock.patch.dict(os.environ, env, clear=True):
+            self.assertEqual(orchestrator.run_metadata()["build_id"], "1")
+
+    def test_bad_benchmark_metadata(self):
+        for bad in ("not json", "[1]", '"text"'):
+            env = {**CLUSTER_ENV, "BENCHMARK_METADATA": bad}
+            with self.subTest(bad=bad), mock.patch.dict(os.environ, env, clear=True), \
+                 self.assertRaisesRegex(ValueError, "BENCHMARK_METADATA"):
+                orchestrator.run_metadata()
+
+    def submitted_args(self, ttype):
+        """The extra args run_test hands to render_template for a test type."""
+
+        class Rendered(Exception):
+            pass
+
+        fake = mock.Mock(job_tmpl=mock.Mock(return_value="t"), job_subs=mock.Mock(return_value={}))
+        test = {"name": "n", "type": ttype, "duration": "1m", "flags": ["--x"]}
+        with mock.patch.dict(orchestrator.TYPES, {ttype: fake}), \
+             mock.patch.dict(os.environ, CLUSTER_ENV, clear=True), \
+             mock.patch.object(orchestrator, "render_template", side_effect=Rendered) as render, \
+             self.assertRaises(Rendered):
+            orchestrator.run_test(test, "img", "dest", "abcdef0123")
+        return render.call_args.args[2]
+
+    def test_locust_job_gets_metadata(self):
+        args = self.submitted_args("locust")
+        self.assertEqual(args[:2], ["--x", "--metadata"])
+        self.assertEqual(json.loads(args[2])["cluster_name"], "c")
+
+    def test_other_types_do_not(self):
+        self.assertEqual(self.submitted_args("nighthawk-ingress"), ["--x"])
+
+    def test_metadata_survives_yaml(self):
+        md = json.dumps({"cluster_name": "c: d", "q": "\"'"})
+        subs = {"JOB_NAME": "j", "IMAGE": "i", "TAG": "t", "NAME": "n", "DEST": "d"}
+        subs.update(locust.job_subs({"file": "f", "duration": "1m", "users": 1}))
+        text = orchestrator.render_template(RunnerSizingTest.TMPL, subs, ["--metadata", md])
+        job = next(d for d in yaml.safe_load_all(text) if d and d.get("kind") == "Job")
+        self.assertEqual(job["spec"]["template"]["spec"]["containers"][0]["args"][-1], md)
 
 
 if __name__ == "__main__":

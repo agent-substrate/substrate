@@ -51,17 +51,30 @@ ARGV = ["runner.py", "-f", "tests/glutton.py", "-t", "1m", "-u", "10",
         "--tag", "unit", "--name", "unit-run", "--dest", "/tmp/unit"]
 
 
+GKE_VERSION = "v1.33.5-gke.1080000"
+
+
 def node(machine_type="c3-standard-4", name="node-a"):
     labels = {} if machine_type is None else {
         cluster_facts.MACHINE_TYPE_LABEL: machine_type}
     return SimpleNamespace(
         metadata=SimpleNamespace(labels=labels, name=name),
-        status=SimpleNamespace(allocatable={"cpu": NODE_CPU, "memory": NODE_MEMORY}))
+        status=SimpleNamespace(
+            allocatable={"cpu": NODE_CPU, "memory": NODE_MEMORY},
+            node_info=SimpleNamespace(kubelet_version=GKE_VERSION)))
 
 
-def pod(phase="Running", node_name="node-a"):
-    return SimpleNamespace(spec=SimpleNamespace(node_name=node_name),
-                           status=SimpleNamespace(phase=phase))
+def container(name="ateom", args=(), memory=None,
+              image="registry/ateom-gvisor-0123abcd@sha256:00"):
+    limits = None if memory is None else {"memory": memory}
+    return SimpleNamespace(name=name, args=list(args), image=image,
+                           resources=SimpleNamespace(limits=limits))
+
+
+def pod(phase="Running", node_name="node-a", containers=()):
+    return SimpleNamespace(
+        spec=SimpleNamespace(node_name=node_name, containers=list(containers)),
+        status=SimpleNamespace(phase=phase))
 
 
 def fake_api(nodes=None, ns_pods=None):
@@ -86,7 +99,8 @@ def discover(api):
 
 
 def summarize(facts, directory, stats=STATS_HEADER + ",Aggregated,100,25\n",
-              users=10, user_counts=None, actors_per_user=None):
+              users=10, user_counts=None, actors_per_user=None,
+              run_start=None, run_end=None, metadata=None):
     """Writes CSV inputs and returns the emitted trial_summary row."""
     d = Path(directory)
     if stats is not None:
@@ -102,8 +116,9 @@ def summarize(facts, directory, stats=STATS_HEADER + ",Aggregated,100,25\n",
         cluster_facts.append_trial_summary(
             out, d / "stats.csv", d / "stats_history.csv",
             argparse.Namespace(users=users, tag="unit", name="unit-run",
-                               actors_per_user=actors_per_user),
-            "2026-01-01", facts)
+                               actors_per_user=actors_per_user,
+                               metadata=metadata),
+            "2026-01-01", facts, run_start=run_start, run_end=run_end)
     return json.loads(out.read_text().splitlines()[0])
 
 
@@ -195,8 +210,93 @@ class ClusterFactsTest(unittest.TestCase):
         with mock.patch.object(runner, "get_cluster_hardware_facts",
                                return_value={"node_count": 1}) as discovery, \
              contextlib.redirect_stdout(io.StringIO()):
-            runner.collect_cluster_facts(parse(), io.StringIO())
+            facts = runner.collect_cluster_facts(parse(), io.StringIO())
         discovery.assert_called_once()
+        self.assertEqual(facts, {"node_count": 1})
+
+    def test_worker_container_facts(self):
+        facts = discover(fake_api(nodes=[node()], ns_pods=[
+            pod(containers=[container(args=["--pod-uid=x", "--max-actors=50"],
+                                      memory="16Gi"),
+                            container(name="sidecar", args=["--max-actors=7"])]),
+            pod(containers=[container(args=["--max-actors", "50"],
+                                      memory="17179869184")]),
+        ]))
+        self.assertEqual(facts["worker_actor_capacity"], "50")
+        self.assertEqual(facts["worker_memory_limit_gb"], "16.0")  # GiB
+        self.assertEqual(facts["sandbox_class"], "gvisor")
+        self.assertEqual(facts["gke_version"], GKE_VERSION)
+
+        # Unset flag is ateom's default; no memory limit is unmeasured; a mixed
+        # pool lists every value.
+        facts = discover(fake_api(nodes=[node()], ns_pods=[
+            pod(containers=[container()]),
+            pod(containers=[container(
+                args=["--max-actors=1"],
+                image="registry/ateom-microvm-4567@sha256:00")]),
+        ]))
+        self.assertEqual(facts["worker_actor_capacity"], "1,1000")
+        self.assertIsNone(facts["worker_memory_limit_gb"])
+        self.assertEqual(facts["sandbox_class"], "gvisor,microvm")
+
+        # No worker pods -> nothing to read.
+        facts = discover(fake_api(nodes=[node()], ns_pods=[]))
+        self.assertIsNone(facts["worker_actor_capacity"])
+        self.assertIsNone(facts["sandbox_class"])
+
+        # A malformed flag loses only these facts, not the node capacity.
+        facts = discover(fake_api(nodes=[node()], ns_pods=[
+            pod(containers=[container(args=["--max-actors=lots"])])]))
+        self.assertIsNone(facts["worker_actor_capacity"])
+        self.assertEqual(facts["node_count"], 1)
+
+    def test_metadata_flag(self):
+        self.assertEqual(parse().metadata, {})
+        got = parse("--metadata", '{"cluster_name": "c", "nodes": 3}')
+        self.assertEqual(got.metadata, {"cluster_name": "c", "nodes": 3})
+        self.assertNotIn("--metadata", got.locust_extra)
+
+        # Rejected before the run starts, not after it.
+        for bad in ("not json", "[1, 2]", '"text"'):
+            with self.subTest(bad=bad), \
+                 contextlib.redirect_stderr(io.StringIO()), \
+                 self.assertRaises(SystemExit):
+                parse("--metadata", bad)
+
+    def test_metadata_in_trial_summary(self):
+        md = {"cluster_name": "sweperf-c3hm176nested", "nodes": 3,
+              "labels": {"a": 1}, "unset": None}
+        with tempfile.TemporaryDirectory() as td:
+            m = summarize(FACTS, td, metadata=md)["measurements"]
+        self.assertEqual(m["metadata_cluster_name"], "sweperf-c3hm176nested")
+        # Non-strings are stored as JSON so BigQuery can parse them.
+        self.assertEqual(m["metadata_nodes"], "3")
+        self.assertEqual(json.loads(m["metadata_labels"]), {"a": 1})
+        self.assertNotIn("metadata_unset", m)
+
+        # No metadata, no metadata_* keys.
+        with tempfile.TemporaryDirectory() as td:
+            m = summarize(FACTS, td)["measurements"]
+        self.assertFalse([k for k in m if k.startswith("metadata_")])
+
+    def test_run_window_and_multi_actor_worker(self):
+        facts = {**FACTS, "worker_actor_capacity": 1000}
+        with tempfile.TemporaryDirectory() as td:
+            m = summarize(facts, td, run_start=1788914580,
+                          run_end=1788915180)["measurements"]
+        self.assertEqual(m["run_start"], "1788914580")
+        self.assertEqual(m["run_end"], "1788915180")
+        self.assertEqual(m["worker_actor_capacity"], "1000")
+        self.assertEqual(m["multi_actor_worker"], "true")   # 2 actors per pod
+
+        # One actor per pod is not multi-actor; no pod count is unknown.
+        with tempfile.TemporaryDirectory() as td:
+            m = summarize({**FACTS, "worker_pod_count": 10}, td)["measurements"]
+        self.assertEqual(m["multi_actor_worker"], "false")  # 10 users / 10 pods
+        self.assertIsNone(m["run_start"])
+        with tempfile.TemporaryDirectory() as td:
+            m = summarize(dict(cluster_facts.EMPTY_FACTS), td)["measurements"]
+        self.assertIsNone(m["multi_actor_worker"])
 
     def test_trial_summary(self):
         with tempfile.TemporaryDirectory() as td:

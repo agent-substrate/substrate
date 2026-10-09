@@ -17,7 +17,8 @@
 
 Reads allocatable CPU/RAM, node count and worker pod count from the Kubernetes
 API, then derives the actor-density frontiers (actors per node / vCPU / GB RAM
-and the actors-per-pod percentiles) for a completed trial.
+and the actors-per-pod percentiles) for a completed trial. Also records the
+worker pods' declared capacity, plus any caller-supplied --metadata.
 """
 
 import argparse
@@ -36,15 +37,26 @@ WORKER_POOL_LABEL = "ate.dev/worker-pool"
 LIVE_POD_PHASES = ("Running", "Pending")
 MACHINE_TYPE_LABEL = "node.kubernetes.io/instance-type"
 
+# The worker pod's container, as named by the atecontroller.
+WORKER_CONTAINER = "ateom"
+# ateom's own --max-actors default (cmd/ateom-gvisor, cmd/ateom-microvm).
+ATEOM_DEFAULT_MAX_ACTORS = 1000
+# The worker image is ateom-<sandbox class> (benchmarking/automation/README.md).
+SANDBOX_CLASS_IMAGE = re.compile(r"ateom-(gvisor|microvm)")
+
 # Shape returned when the cluster cannot be read, or when discovery is skipped
 # with --no-cluster-facts. Keeping one definition means a trial_summary row has
-# the same hardware keys either way, so consumers never have to special-case it.
+# the same fact keys either way, so consumers never have to special-case it.
 EMPTY_FACTS: dict[str, Any] = {
     "machine_type": None,
     "node_count": None,
     "allocatable_cores": None,
     "allocatable_ram_gb": None,
     "worker_pod_count": None,
+    "gke_version": None,
+    "worker_actor_capacity": None,
+    "worker_memory_limit_gb": None,
+    "sandbox_class": None,
 }
 
 
@@ -101,6 +113,51 @@ def _list_worker_pods(
         return None
 
 
+def _joined(values: set[Any]) -> str | None:
+    """A single value, or a mixed pool's values sorted and comma-joined."""
+    return ",".join(str(v) for v in sorted(values)) or None
+
+
+def _max_actors(args: list[str]) -> int:
+    """The --max-actors value on an ateom command line, or ateom's default."""
+    for i, arg in enumerate(args):
+        if arg.startswith("--max-actors="):
+            return int(arg.split("=", 1)[1])
+        if arg == "--max-actors" and i + 1 < len(args):
+            return int(args[i + 1])
+    return ATEOM_DEFAULT_MAX_ACTORS
+
+
+def _worker_container_facts(pods: list[Any]) -> dict[str, str | None]:
+    """Reads the capacity and sandbox class each worker pod declares.
+
+    A worker reports its capacity as --max-actors and its container memory
+    limit. With no memory limit set the worker is bounded by its node instead,
+    so the limit stays None.
+    """
+    capacities: set[int] = set()
+    memory_gb: set[float] = set()
+    sandbox_classes: set[str] = set()
+    for p in pods:
+        for c in p.spec.containers or []:
+            if c.name != WORKER_CONTAINER:
+                continue
+            capacities.add(_max_actors(c.args or []))
+            limits = (c.resources.limits if c.resources else None) or {}
+            if "memory" in limits:
+                # GiB, the same as allocatable_ram_gb.
+                memory_gb.add(
+                    round(int(parse_quantity(limits["memory"])) / (1024**3), 2))
+            match = SANDBOX_CLASS_IMAGE.search(c.image or "")
+            if match:
+                sandbox_classes.add(match.group(1))
+    return {
+        "worker_actor_capacity": _joined(capacities),
+        "worker_memory_limit_gb": _joined(memory_gb),
+        "sandbox_class": _joined(sandbox_classes),
+    }
+
+
 def get_cluster_hardware_facts(logs: TextIO | None = None) -> dict[str, Any]:
     """Reads the worker pool size and the capacity of the nodes it runs on.
 
@@ -127,6 +184,11 @@ def get_cluster_hardware_facts(logs: TextIO | None = None) -> dict[str, Any]:
     facts["worker_pod_count"] = len(pods)
 
     try:
+        facts.update(_worker_container_facts(pods))
+    except Exception as e:
+        _log(logs, f"Notice: could not read worker container specs: {e}")
+
+    try:
         # A Pending pod may not be scheduled yet, so it counts toward the pool
         # size without contributing a node.
         worker_nodes = {p.spec.node_name for p in pods if p.spec.node_name}
@@ -139,6 +201,7 @@ def get_cluster_hardware_facts(logs: TextIO | None = None) -> dict[str, Any]:
         total_cores = 0.0
         total_ram_bytes = 0
         machine_types = set()
+        versions = set()
         for node in nodes:
             metadata = node.metadata
             if metadata is None or metadata.name not in worker_nodes:
@@ -150,6 +213,8 @@ def get_cluster_hardware_facts(logs: TextIO | None = None) -> dict[str, Any]:
             machine_type = (metadata.labels or {}).get(MACHINE_TYPE_LABEL)
             if machine_type:
                 machine_types.add(machine_type)
+            if node.status.node_info and node.status.node_info.kubelet_version:
+                versions.add(node.status.node_info.kubelet_version)
         facts["node_count"] = node_count
         facts["allocatable_cores"] = round(total_cores, 2)
         # GiB, as the apiserver and kubectl quote it.
@@ -157,6 +222,8 @@ def get_cluster_hardware_facts(logs: TextIO | None = None) -> dict[str, Any]:
         # Kept so results stay comparable across hardware changes. A mixed pool
         # is a sorted comma-joined list rather than one node picked at random.
         facts["machine_type"] = ",".join(sorted(machine_types)) or None
+        # The worker nodes' GKE version, e.g. v1.33.5-gke.1080000.
+        facts["gke_version"] = _joined(versions)
     except Exception as e:
         reason = getattr(e, "reason", e)
         _log(logs, f"Notice: could not read node capacity: {reason}")
@@ -172,6 +239,8 @@ def append_trial_summary(
     data_ts: str,
     facts: dict[str, Any],
     logs: TextIO | None = None,
+    run_start: int | None = None,
+    run_end: int | None = None,
 ) -> None:
     # Locust's own User Count samples. The -u flag is a request; under a custom
     # load shape what actually ran is whatever the shape asked for.
@@ -249,8 +318,26 @@ def append_trial_summary(
     else:
         _log(logs, f"Notice: {stats_csv} not found; failure ratios unknown")
 
+    # Whether workers hosted more than one actor at once (a multi-actor
+    # worker), going by the median actors per pod.
+    multi_actor_worker = (
+        None if actors_per_pod_p50 is None
+        else str(actors_per_pod_p50 > 1).lower()
+    )
+
     measurements = {
         **{k: facts.get(k) for k in EMPTY_FACTS},
+        # Unix seconds bracketing the run, for finding its server-side metrics
+        # in Cloud Monitoring.
+        "run_start": run_start,
+        "run_end": run_end,
+        # Caller-supplied --metadata, one key each so values stay plain strings.
+        **{
+            f"metadata_{k}": v if isinstance(v, str) else json.dumps(v)
+            for k, v in (getattr(args, "metadata", None) or {}).items()
+            if v is not None
+        },
+        "multi_actor_worker": multi_actor_worker,
         "actors_per_node": actors_per_node,
         "actors_per_vcpu": actors_per_vcpu,
         "actors_per_gb_ram": actors_per_gb_ram,

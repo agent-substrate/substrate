@@ -178,6 +178,30 @@ def test_type(test: dict[str, Any]) -> str:
     return test["type"]
 
 
+def run_metadata() -> dict[str, Any]:
+    """Free-form run facts handed to the runner as --metadata.
+
+    Read per test, after apply_target_cluster has reset os.environ;
+    BENCHMARK_METADATA survives that reset because it is part of the startup
+    env (_ORIG_ENV).
+    """
+    md: dict[str, Any] = {
+        k.lower(): os.environ[k]
+        for k in ("CLUSTER_NAME", "CLUSTER_LOCATION", "PROJECT_ID")
+        if os.environ.get(k)
+    }
+    raw = os.environ.get("BENCHMARK_METADATA")
+    if raw:
+        try:
+            extra = json.loads(raw)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"BENCHMARK_METADATA is not valid JSON: {e}") from e
+        if not isinstance(extra, dict):
+            raise ValueError("BENCHMARK_METADATA must be a JSON object")
+        md.update(extra)
+    return md
+
+
 def wait_for_docker(timeout: int = 120) -> None:
     print("Waiting for DIND sidecar...", flush=True)
     start = time.time()
@@ -397,7 +421,11 @@ def run_test(
     mod = TYPES[test_type(test)]
     tmpl = mod.job_tmpl(manifests_dir)
     subs.update(mod.job_subs(test))
-    manifest = render_template(tmpl, subs, test.get("flags", []))
+    flags = list(test.get("flags", []))
+    # Only the locust runner knows --metadata.
+    if test_type(test) == "locust":
+        flags += ["--metadata", json.dumps(run_metadata())]
+    manifest = render_template(tmpl, subs, flags)
     wait_for_no_active_runners()
     print(f"Submitting Job {job}", flush=True)
     subprocess.run(
@@ -479,6 +507,8 @@ def main() -> None:
     print(f"Running {len(tests)} test(s)", flush=True)
     try:
         validate_and_normalize_tests(tests)
+        # Checks BENCHMARK_METADATA only; cluster vars may not be set yet.
+        run_metadata()
     except ValueError as e:
         sys.exit(str(e))
 
