@@ -231,8 +231,10 @@ func createSchema(ctx context.Context, pool *pgxpool.Pool, schema string) error 
 	return nil
 }
 
-// poolConfig parses a DSN, assumes the configured role, and refreshes TLS
-// material from projected certificate files for each new connection.
+// poolConfig parses a DSN, assumes the configured role, and re-reads the
+// files the DSN names for each new connection: projected TLS certificates
+// rotate, and an operator can change the password in the passfile (say, by
+// updating the ConfigMap or Secret it is mounted from) without a restart.
 func poolConfig(dsn, role string) (*pgxpool.Config, error) {
 	if role == "" {
 		return nil, fmt.Errorf("PostgreSQL role must not be empty")
@@ -247,18 +249,12 @@ func poolConfig(dsn, role string) (*pgxpool.Config, error) {
 		}
 		return nil
 	}
-	usesTLS := cfg.ConnConfig.TLSConfig != nil
-	for _, fallback := range cfg.ConnConfig.Fallbacks {
-		usesTLS = usesTLS || fallback.TLSConfig != nil
-	}
-	if !usesTLS {
-		return cfg, nil
-	}
 	cfg.BeforeConnect = func(_ context.Context, cc *pgx.ConnConfig) error {
 		fresh, err := pgx.ParseConfig(dsn)
 		if err != nil {
-			return fmt.Errorf("re-reading PostgreSQL TLS material: invalid value")
+			return fmt.Errorf("re-reading PostgreSQL credentials: invalid value")
 		}
+		cc.Password = fresh.Password
 		cc.TLSConfig = fresh.TLSConfig
 		cc.Fallbacks = fresh.Fallbacks
 		return nil

@@ -16,9 +16,15 @@ package steps
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
+	"slices"
 	"strings"
+
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"sigs.k8s.io/yaml"
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
@@ -225,9 +231,13 @@ func (e *Env) reconcileCloudSQLProxySidecar(ctx context.Context) error {
 				return err
 			}
 		}
-		patch, err := os.ReadFile(e.Cfg.Manifest("cloudsql", "proxy-sidecar-patch.yaml"))
+		raw, err := os.ReadFile(e.Cfg.Manifest("cloudsql", "proxy-sidecar-patch.yaml"))
 		if err != nil {
 			return fmt.Errorf("reading the Cloud SQL proxy sidecar patch: %w", err)
+		}
+		patch, err := cloudSQLProxyPatch(raw, cloudSQLEnvVars(s))
+		if err != nil {
+			return err
 		}
 		return e.Kube.PatchDeployment(ctx, e.Namespace(), "ate-api-server", patch)
 	}
@@ -259,4 +269,35 @@ func (e *Env) cloudSQLProxyInstalled(ctx context.Context) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+// cloudSQLProxyPatch sets the proxy container's env in the sidecar patch raw
+// to env. The list replaces whatever env the container had, so a key dropped
+// from env, such as the private IP switch, is dropped from the pod too.
+func cloudSQLProxyPatch(raw []byte, env map[string]string) ([]byte, error) {
+	var patch map[string]any
+	if err := yaml.Unmarshal(raw, &patch); err != nil {
+		return nil, fmt.Errorf("parsing the Cloud SQL proxy sidecar patch: %w", err)
+	}
+	containers, _, err := unstructured.NestedSlice(patch, "spec", "template", "spec", "initContainers")
+	if err != nil {
+		return nil, fmt.Errorf("the Cloud SQL proxy sidecar patch: %w", err)
+	}
+	for i, c := range containers {
+		container, ok := c.(map[string]any)
+		if !ok || container["name"] != cloudSQLProxyContainer {
+			continue
+		}
+		vars := []any{map[string]any{"$patch": "replace"}}
+		for _, name := range slices.Sorted(maps.Keys(env)) {
+			vars = append(vars, map[string]any{"name": name, "value": env[name]})
+		}
+		container["env"] = vars
+		containers[i] = container
+		if err := unstructured.SetNestedSlice(patch, containers, "spec", "template", "spec", "initContainers"); err != nil {
+			return nil, err
+		}
+		return json.Marshal(patch)
+	}
+	return nil, fmt.Errorf("the Cloud SQL proxy sidecar patch declares no %q initContainer", cloudSQLProxyContainer)
 }

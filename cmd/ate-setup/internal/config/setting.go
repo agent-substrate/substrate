@@ -174,15 +174,18 @@ var Registry = []Setting{
 	{
 		// Both pools use the read-write connection when only it is set; both
 		// empty selects the bundled PostgreSQL.
+		// Not secret: a password must come from a passfile, which is
+		// enforced when the configuration loads.
 		Key: "ateapi.postgres.readWrite.connectionString", Env: "ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING",
-		Kind: KindString, Secret: true,
-		Usage: "PostgreSQL connection string ate-api-server uses for normal application access",
+		Flag: "ateapi-postgres-read-write-connection-string", Kind: KindString,
+		Usage: "PostgreSQL connection string ate-api-server uses for normal application access. " +
+			"It must not contain a password or sslpassword; name a password file with passfile",
 	},
 	{
 		Key: "ateapi.postgres.owner.connectionString", Env: "ATE_API_POSTGRES_OWNER_CONNECTION_STRING",
-		Kind: KindString, Secret: true,
+		Flag: "ateapi-postgres-owner-connection-string", Kind: KindString,
 		Usage: "PostgreSQL connection string ate-api-server uses for schema changes, " +
-			"defaulting to the read-write one",
+			"defaulting to the read-write one. Same rules as the read-write one",
 	},
 	{
 		Key: "ateapi.postgres.readWrite.role", Env: "ATE_API_POSTGRES_READ_WRITE_ROLE",

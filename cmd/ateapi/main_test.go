@@ -46,61 +46,46 @@ func TestConnectStoreRequiresPostgresReadWriteConnectionString(t *testing.T) {
 	}
 }
 
-func TestLoadFlagsFromEnvResolvesPostgresSourcesOnce(t *testing.T) {
-	oldRuntime, oldDDL := *postgresReadWriteConnectionString, *postgresOwnerConnectionString
-	oldRuntimeRole, oldDDLRole := *postgresReadWriteRole, *postgresOwnerRole
-	oldAuthz := *experimentalEnableAuthz
-	t.Cleanup(func() {
-		*postgresReadWriteConnectionString = oldRuntime
-		*postgresOwnerConnectionString = oldDDL
-		*postgresReadWriteRole = oldRuntimeRole
-		*postgresOwnerRole = oldDDLRole
-		*experimentalEnableAuthz = oldAuthz
-	})
-	*postgresReadWriteConnectionString = "@env"
-	*postgresOwnerConnectionString = "@env"
-	*postgresReadWriteRole = "@env"
-	*postgresOwnerRole = "@env"
+func TestLoadFlagsFromEnvEnablesAuthz(t *testing.T) {
+	old := *experimentalEnableAuthz
+	t.Cleanup(func() { *experimentalEnableAuthz = old })
 	*experimentalEnableAuthz = false
-	t.Setenv("ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING", "runtime-a")
-	t.Setenv("ATE_API_POSTGRES_OWNER_CONNECTION_STRING", "ddl-a")
-	t.Setenv("ATE_API_POSTGRES_READ_WRITE_ROLE", "runtime-role")
-	t.Setenv("ATE_API_POSTGRES_OWNER_ROLE", "ddl-role")
 	t.Setenv("ATE_API_EXPERIMENTAL_ENABLE_AUTHZ", "true")
 
-	if err := loadFlagsFromEnv(); err != nil {
-		t.Fatal(err)
-	}
-	if *postgresReadWriteConnectionString != "runtime-a" || *postgresOwnerConnectionString != "ddl-a" ||
-		*postgresReadWriteRole != "runtime-role" || *postgresOwnerRole != "ddl-role" {
-		t.Fatalf("resolved values = %q, %q, %q, %q", *postgresReadWriteConnectionString, *postgresOwnerConnectionString, *postgresReadWriteRole, *postgresOwnerRole)
-	}
+	loadFlagsFromEnv()
 	if !*experimentalEnableAuthz {
-		t.Fatal("authorization environment flag was not resolved alongside PostgreSQL settings")
-	}
-	t.Setenv("ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING", "runtime-b")
-	t.Setenv("ATE_API_POSTGRES_OWNER_CONNECTION_STRING", "ddl-b")
-	if err := loadFlagsFromEnv(); err != nil {
-		t.Fatal(err)
-	}
-	if *postgresReadWriteConnectionString != "runtime-a" || *postgresOwnerConnectionString != "ddl-a" {
-		t.Fatal("environment-backed connection strings changed after startup resolution")
+		t.Fatal("ATE_API_EXPERIMENTAL_ENABLE_AUTHZ=true did not enable authorization")
 	}
 }
 
-func TestLoadFlagsFromEnvPoolMaxConns(t *testing.T) {
-	old := *postgresPoolMaxConns
-	t.Cleanup(func() { *postgresPoolMaxConns = old })
-	t.Setenv("ATE_API_POSTGRES_POOL_MAX_CONNS", "20")
-	if err := loadFlagsFromEnv(); err != nil {
-		t.Fatal(err)
-	}
-	if *postgresPoolMaxConns != 20 {
-		t.Fatalf("pool max connections = %d, want 20", *postgresPoolMaxConns)
-	}
-	t.Setenv("ATE_API_POSTGRES_POOL_MAX_CONNS", "invalid")
-	if err := loadFlagsFromEnv(); err == nil || !strings.Contains(err.Error(), "ATE_API_POSTGRES_POOL_MAX_CONNS must be a positive integer") {
-		t.Fatalf("loadFlagsFromEnv() error = %v, want pool-size validation", err)
+// The connection strings are flags, visible in the pod spec and the process
+// table, so a password has to come from a passfile. Startup refuses one inline
+// before it dials anything.
+func TestConnectStoreRejectsInlineSecrets(t *testing.T) {
+	oldReadWrite, oldOwner := *postgresReadWriteConnectionString, *postgresOwnerConnectionString
+	t.Cleanup(func() {
+		*postgresReadWriteConnectionString = oldReadWrite
+		*postgresOwnerConnectionString = oldOwner
+	})
+	const clean = "postgresql://runtime@db.example.internal/atepg?passfile=/run/pg/pgpass"
+	for _, tc := range []struct {
+		name, readWrite, owner, wantFlag string
+	}{
+		{"read-write password", "postgresql://runtime:s3cret@db.example.internal/atepg", clean, "--postgres-read-write-connection-string"},
+		{"owner password", clean, "host=db.example.internal user=owner password=s3cret", "--postgres-owner-connection-string"},
+		{"key passphrase", "host=db.example.internal sslkey=/k.pem sslpassword=s3cret", clean, "--postgres-read-write-connection-string"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			*postgresReadWriteConnectionString = tc.readWrite
+			*postgresOwnerConnectionString = tc.owner
+			_, err := connectStore(t.Context())
+			if err == nil || !strings.Contains(err.Error(), tc.wantFlag) || !strings.Contains(err.Error(), "passfile") {
+				t.Fatalf("connectStore() error = %v, want %s rejected", err, tc.wantFlag)
+			}
+			if strings.Contains(err.Error(), "s3cret") {
+				t.Errorf("connectStore() error %q echoes the secret", err)
+			}
+		})
 	}
 }
 

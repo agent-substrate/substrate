@@ -19,11 +19,13 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/pflag"
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/images"
+	"github.com/agent-substrate/substrate/internal/pgdsn"
 )
 
 // ConfigPathEnv names the configuration document when --config is not given.
@@ -354,6 +356,19 @@ func validateResolved(cfg *Config, r *Resolved) error {
 		default:
 			return &InvalidError{Value: ipType, Want: strings.Join(
 				[]string{CloudSQLIPTypePrivate, CloudSQLIPTypePublic, CloudSQLIPTypePSC}, ", ")}
+		}
+	}
+
+	for _, key := range []string{"ateapi.postgres.readWrite.connectionString", "ateapi.postgres.owner.connectionString"} {
+		v, _ := r.Value(key)
+		if err := pgdsn.RejectInlineSecrets(v.Raw); err != nil {
+			// The error never quotes the value, which may hold the secret.
+			return fmt.Errorf("%s (from %s): %w", key, v.From.Describe(v.Setting), err)
+		}
+	}
+	if v, _ := r.Value("ateapi.postgres.poolMaxConns"); v.Raw != "" {
+		if n, err := strconv.ParseInt(v.Raw, 10, 32); err != nil || n <= 0 {
+			return &InvalidError{Value: v, Want: "a positive integer"}
 		}
 	}
 

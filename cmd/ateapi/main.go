@@ -23,7 +23,6 @@ import (
 	"net"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
 
@@ -41,6 +40,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/localjwtauthority"
 	"github.com/agent-substrate/substrate/internal/objectstoreplugin"
 	"github.com/agent-substrate/substrate/internal/oidcdiscovery"
+	"github.com/agent-substrate/substrate/internal/pgdsn"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/agent-substrate/substrate/internal/volume"
@@ -72,8 +72,8 @@ var (
 	grpcServerCredBundle = pflag.String("grpc-server-cred-bundle", "", "File with the server TLS credential bundle.")
 
 	authenticationConfigFile          = pflag.String("authentication-config", "", "YAML file configuring trusted JWT providers.")
-	postgresReadWriteConnectionString = pflag.String("postgres-read-write-connection-string", "", "PostgreSQL connection string (libpq DSN or URI).")
-	postgresOwnerConnectionString     = pflag.String("postgres-owner-connection-string", "", "PostgreSQL owner connection string (libpq DSN or URI).")
+	postgresReadWriteConnectionString = pflag.String("postgres-read-write-connection-string", "", "PostgreSQL connection string (libpq DSN or URI). It must not contain a password or sslpassword; name a password file with the passfile parameter, which is re-read for every new connection.")
+	postgresOwnerConnectionString     = pflag.String("postgres-owner-connection-string", "", "PostgreSQL owner connection string (libpq DSN or URI), with the same rules as --postgres-read-write-connection-string.")
 	postgresReadWriteRole             = pflag.String("postgres-read-write-role", "", "Required PostgreSQL role assumed by read/write connections.")
 	postgresOwnerRole                 = pflag.String("postgres-owner-role", "", "Required PostgreSQL role assumed by owner connections.")
 	postgresSchema                    = pflag.String("postgres-schema", "substrate", "PostgreSQL schema for Substrate tables. This overrides a search_path connection parameter.")
@@ -115,9 +115,7 @@ func main() {
 	if err := serverboot.SetLogLevel(*logLevelFlag); err != nil {
 		serverboot.Fatal(ctx, "Invalid --log-level", err)
 	}
-	if err := loadFlagsFromEnv(); err != nil {
-		serverboot.Fatal(ctx, "Invalid PostgreSQL configuration", err)
-	}
+	loadFlagsFromEnv()
 	if err := rejectStorageEnv(); err != nil {
 		serverboot.Fatal(ctx, "Storage settings moved to the snapshot-plugin sidecar", err)
 	}
@@ -390,39 +388,12 @@ func drainOnShutdown(ctx context.Context, srv *grpc.Server, readiness *serverboo
 	return done
 }
 
-// loadFlagsFromEnv resolves any flag whose value is the sentinel `@env`
-// against a known environment variable. Lets one set of Kubernetes
-// manifests source per-developer config from a ConfigMap without
-// editing the manifests for each branch.
-func loadFlagsFromEnv() error {
-	overrides := []struct {
-		flag *string
-		env  string
-	}{
-		{postgresReadWriteConnectionString, "ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"},
-		{postgresOwnerConnectionString, "ATE_API_POSTGRES_OWNER_CONNECTION_STRING"},
-		{postgresReadWriteRole, "ATE_API_POSTGRES_READ_WRITE_ROLE"},
-		{postgresOwnerRole, "ATE_API_POSTGRES_OWNER_ROLE"},
-		{postgresSchema, "ATE_API_POSTGRES_SCHEMA"},
-	}
-	for _, o := range overrides {
-		if *o.flag == "@env" {
-			*o.flag = os.Getenv(o.env)
-		}
-	}
-	if !pflag.CommandLine.Changed("postgres-pool-max-conns") {
-		if raw, ok := os.LookupEnv("ATE_API_POSTGRES_POOL_MAX_CONNS"); ok && raw != "" {
-			value, err := strconv.ParseInt(raw, 10, 32)
-			if err != nil || value <= 0 {
-				return fmt.Errorf("ATE_API_POSTGRES_POOL_MAX_CONNS must be a positive integer")
-			}
-			*postgresPoolMaxConns = int32(value)
-		}
-	}
+// loadFlagsFromEnv lets ATE_API_EXPERIMENTAL_ENABLE_AUTHZ turn on
+// authorization when --experimental-enable-authz is not given.
+func loadFlagsFromEnv() {
 	if v := os.Getenv("ATE_API_EXPERIMENTAL_ENABLE_AUTHZ"); v != "" && !pflag.CommandLine.Changed("experimental-enable-authz") {
 		*experimentalEnableAuthz = (v == "true" || v == "1")
 	}
-	return nil
 }
 
 // rejectStorageEnv fails if ATE_STORAGE_BACKEND is set on ate-api-server,
@@ -493,6 +464,14 @@ func connectStore(ctx context.Context) (*atepg.Persistence, error) {
 	}
 	if *postgresPoolMaxConns < 0 {
 		return nil, fmt.Errorf("--postgres-pool-max-conns must not be negative")
+	}
+	for _, f := range []struct{ name, dsn string }{
+		{"--postgres-read-write-connection-string", *postgresReadWriteConnectionString},
+		{"--postgres-owner-connection-string", *postgresOwnerConnectionString},
+	} {
+		if err := pgdsn.RejectInlineSecrets(f.dsn); err != nil {
+			return nil, fmt.Errorf("%s: %w", f.name, err)
+		}
 	}
 	persistence, err := connectPostgresWithRetries(ctx)
 	if err != nil {
