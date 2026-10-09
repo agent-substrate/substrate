@@ -542,13 +542,13 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *
 		return nil, err
 	}
 	containerSpecs, err := s.prepareOCIBundles(ctx, actorUID, actorRef,
-		req.GetSpec(), sandboxRec.PauseImage, req.GetTargetAteomUid(),
+		req.GetSpec(), sandboxRec.PauseImage,
 	)
 	if err != nil {
 		return nil, err
 	}
 
-	client, err := s.dialAteom(ctx, req.GetTargetAteomUid())
+	client, err := s.dialAteom(ctx, req.GetWorkerPodUid())
 	if err != nil {
 		return nil, err
 	}
@@ -678,7 +678,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 
 	checkpointDir := ateletpath.CheckpointStateDir(actorUID)
 
-	client, err := s.dialAteom(ctx, req.GetTargetAteomUid())
+	client, err := s.dialAteom(ctx, req.GetWorkerPodUid())
 	if err != nil {
 		return nil, err
 	}
@@ -1211,7 +1211,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 			return err
 		}
 		t := time.Now()
-		containerSpecs, err = s.prepareOCIBundles(gctx, actorUID, actorRef, req.GetSpec(), runtimeRec.PauseImage, req.GetTargetAteomUid())
+		containerSpecs, err = s.prepareOCIBundles(gctx, actorUID, actorRef, req.GetSpec(), runtimeRec.PauseImage)
 		dBundles = time.Since(t)
 		if err != nil {
 			prepFailedPhase = ateattr.SnapshotPhaseOCIUnpack
@@ -1229,7 +1229,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		return nil, err
 	}
 
-	client, err := s.dialAteom(ctx, req.GetTargetAteomUid())
+	client, err := s.dialAteom(ctx, req.GetWorkerPodUid())
 	if err != nil {
 		return nil, err
 	}
@@ -1290,7 +1290,7 @@ func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequ
 	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
 	actorUID := req.GetActorUid()
 
-	if req.GetTargetAteomUid() != "" {
+	if req.GetWorkerPodUid() != "" {
 		var assetPaths map[string]string
 		sandboxRec, err := readSandboxRecord(actorUID)
 		if err != nil {
@@ -1302,7 +1302,7 @@ func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequ
 		}
 		assetPaths = paths
 
-		client, err := s.dialAteom(ctx, req.GetTargetAteomUid())
+		client, err := s.dialAteom(ctx, req.GetWorkerPodUid())
 		if err != nil {
 			return nil, fmt.Errorf("failed to dial ateom for terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
 		}
@@ -1474,7 +1474,6 @@ func (s *AteomHerder) prepareOCIBundles(
 	actorRef resources.ActorRef,
 	spec *ateletpb.WorkloadSpec,
 	pauseImage string,
-	targetAteomUid string,
 ) ([]*ateompb.ContainerSpec, error) {
 	// Prepare host folders for volume types that need them.
 	for _, vol := range spec.GetVolumes() {
@@ -1532,10 +1531,10 @@ func (s *AteomHerder) prepareOCIBundles(
 
 // dialAteom opens (or reuses) the gRPC connection to the target ateom
 // pod and returns an ateom client.
-func (s *AteomHerder) dialAteom(ctx context.Context, targetAteomUid string) (ateompb.AteomClient, error) {
-	conn, err := s.ateomDialer.DialAteomPod(ctx, targetAteomUid)
+func (s *AteomHerder) dialAteom(ctx context.Context, workerPodUID string) (ateompb.AteomClient, error) {
+	conn, err := s.ateomDialer.DialAteomPod(ctx, workerPodUID)
 	if err != nil {
-		return nil, fmt.Errorf("while getting ateom conn for %s: %w", targetAteomUid, err)
+		return nil, fmt.Errorf("while getting ateom conn for %s: %w", workerPodUID, err)
 	}
 	return ateompb.NewAteomClient(conn), nil
 }
@@ -1708,7 +1707,7 @@ func validateRunRequest(req *ateletpb.RunRequest) error {
 		return errs.ToAggregate()
 	}
 	// TODO: Migrate all validations below to the validation framework.
-	if err := resources.ValidateAteomUID(req.GetTargetAteomUid()); err != nil {
+	if err := resources.ValidateWorkerPodUID(req.GetWorkerPodUid()); err != nil {
 		return err
 	}
 	names := make([]string, 0, len(req.GetSpec().GetContainers()))
@@ -1727,7 +1726,7 @@ func validateCheckpointRequest(req *ateletpb.CheckpointRequest) error {
 		return errs.ToAggregate()
 	}
 	// TODO: Migrate all validations below to the validation framework.
-	if err := resources.ValidateAteomUID(req.GetTargetAteomUid()); err != nil {
+	if err := resources.ValidateWorkerPodUID(req.GetWorkerPodUid()); err != nil {
 		return err
 	}
 	names := make([]string, 0, len(req.GetSpec().GetContainers()))
@@ -1766,7 +1765,7 @@ func validateRestoreRequest(req *ateletpb.RestoreRequest) error {
 		return errs.ToAggregate()
 	}
 	// TODO: Migrate all validations below to the validation framework.
-	if err := resources.ValidateAteomUID(req.GetTargetAteomUid()); err != nil {
+	if err := resources.ValidateWorkerPodUID(req.GetWorkerPodUid()); err != nil {
 		return err
 	}
 	names := make([]string, 0, len(req.GetSpec().GetContainers()))
@@ -1808,8 +1807,8 @@ func validateTerminateRequest(req *ateletpb.TerminateRequest) error {
 	if len(errs) > 0 {
 		return errs.ToAggregate()
 	}
-	if req.GetTargetAteomUid() != "" {
-		if err := resources.ValidateAteomUID(req.GetTargetAteomUid()); err != nil {
+	if req.GetWorkerPodUid() != "" {
+		if err := resources.ValidateWorkerPodUID(req.GetWorkerPodUid()); err != nil {
 			return err
 		}
 	}

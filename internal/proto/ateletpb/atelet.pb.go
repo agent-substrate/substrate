@@ -767,7 +767,7 @@ func (x *MintActorCertificateResponse) GetActorCertificates() [][]byte {
 type TerminateRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// If unset, the atelet will just cleanup node resources for the actor.
-	TargetAteomUid        string        `protobuf:"bytes,1,opt,name=target_ateom_uid,json=targetAteomUid,proto3" json:"target_ateom_uid,omitempty"`
+	WorkerPodUid          string        `protobuf:"bytes,1,opt,name=worker_pod_uid,json=workerPodUid,proto3" json:"worker_pod_uid,omitempty"`
 	Atespace              string        `protobuf:"bytes,2,opt,name=atespace,proto3" json:"atespace,omitempty"`
 	ActorName             string        `protobuf:"bytes,3,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
 	ActorUid              string        `protobuf:"bytes,4,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
@@ -808,9 +808,9 @@ func (*TerminateRequest) Descriptor() ([]byte, []int) {
 	return file_atelet_proto_rawDescGZIP(), []int{10}
 }
 
-func (x *TerminateRequest) GetTargetAteomUid() string {
+func (x *TerminateRequest) GetWorkerPodUid() string {
 	if x != nil {
-		return x.TargetAteomUid
+		return x.WorkerPodUid
 	}
 	return ""
 }
@@ -895,7 +895,7 @@ func (*TerminateResponse) Descriptor() ([]byte, []int) {
 
 type RunRequest struct {
 	state                 protoimpl.MessageState `protogen:"open.v1"`
-	TargetAteomUid        string                 `protobuf:"bytes,1,opt,name=target_ateom_uid,json=targetAteomUid,proto3" json:"target_ateom_uid,omitempty"`
+	WorkerPodUid          string                 `protobuf:"bytes,1,opt,name=worker_pod_uid,json=workerPodUid,proto3" json:"worker_pod_uid,omitempty"`
 	Atespace              string                 `protobuf:"bytes,2,opt,name=atespace,proto3" json:"atespace,omitempty"`
 	ActorName             string                 `protobuf:"bytes,3,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
 	ActorUid              string                 `protobuf:"bytes,4,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
@@ -947,9 +947,9 @@ func (*RunRequest) Descriptor() ([]byte, []int) {
 	return file_atelet_proto_rawDescGZIP(), []int{12}
 }
 
-func (x *RunRequest) GetTargetAteomUid() string {
+func (x *RunRequest) GetWorkerPodUid() string {
 	if x != nil {
-		return x.TargetAteomUid
+		return x.WorkerPodUid
 	}
 	return ""
 }
@@ -2511,7 +2511,7 @@ func (x *ExternalRestoreConfiguration) GetSnapshotUri() string {
 
 type CheckpointRequest struct {
 	state                 protoimpl.MessageState `protogen:"open.v1"`
-	TargetAteomUid        string                 `protobuf:"bytes,1,opt,name=target_ateom_uid,json=targetAteomUid,proto3" json:"target_ateom_uid,omitempty"`
+	WorkerPodUid          string                 `protobuf:"bytes,1,opt,name=worker_pod_uid,json=workerPodUid,proto3" json:"worker_pod_uid,omitempty"`
 	Atespace              string                 `protobuf:"bytes,2,opt,name=atespace,proto3" json:"atespace,omitempty"`
 	ActorName             string                 `protobuf:"bytes,3,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
 	ActorUid              string                 `protobuf:"bytes,4,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
@@ -2565,9 +2565,9 @@ func (*CheckpointRequest) Descriptor() ([]byte, []int) {
 	return file_atelet_proto_rawDescGZIP(), []int{39}
 }
 
-func (x *CheckpointRequest) GetTargetAteomUid() string {
+func (x *CheckpointRequest) GetWorkerPodUid() string {
 	if x != nil {
-		return x.TargetAteomUid
+		return x.WorkerPodUid
 	}
 	return ""
 }
@@ -2852,7 +2852,7 @@ func (*UploadPausedCheckpointResponse) Descriptor() ([]byte, []int) {
 
 type RestoreRequest struct {
 	state                 protoimpl.MessageState `protogen:"open.v1"`
-	TargetAteomUid        string                 `protobuf:"bytes,1,opt,name=target_ateom_uid,json=targetAteomUid,proto3" json:"target_ateom_uid,omitempty"`
+	WorkerPodUid          string                 `protobuf:"bytes,1,opt,name=worker_pod_uid,json=workerPodUid,proto3" json:"worker_pod_uid,omitempty"`
 	Atespace              string                 `protobuf:"bytes,2,opt,name=atespace,proto3" json:"atespace,omitempty"`
 	ActorName             string                 `protobuf:"bytes,3,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
 	ActorUid              string                 `protobuf:"bytes,4,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
@@ -2914,9 +2914,9 @@ func (*RestoreRequest) Descriptor() ([]byte, []int) {
 	return file_atelet_proto_rawDescGZIP(), []int{43}
 }
 
-func (x *RestoreRequest) GetTargetAteomUid() string {
+func (x *RestoreRequest) GetWorkerPodUid() string {
 	if x != nil {
-		return x.TargetAteomUid
+		return x.WorkerPodUid
 	}
 	return ""
 }
@@ -3119,9 +3119,9 @@ const file_atelet_proto_rawDesc = "" +
 	"\tactor_uid\x18\x05 \x01(\tR\bactorUid\x12>\n" +
 	"\x1bcertificate_signing_request\x18\x01 \x01(\fR\x19certificateSigningRequest\"M\n" +
 	"\x1cMintActorCertificateResponse\x12-\n" +
-	"\x12actor_certificates\x18\x01 \x03(\fR\x11actorCertificates\"\xa6\x02\n" +
-	"\x10TerminateRequest\x12(\n" +
-	"\x10target_ateom_uid\x18\x01 \x01(\tR\x0etargetAteomUid\x12\x1a\n" +
+	"\x12actor_certificates\x18\x01 \x03(\fR\x11actorCertificates\"\xa2\x02\n" +
+	"\x10TerminateRequest\x12$\n" +
+	"\x0eworker_pod_uid\x18\x01 \x01(\tR\fworkerPodUid\x12\x1a\n" +
 	"\batespace\x18\x02 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +
 	"actor_name\x18\x03 \x01(\tR\tactorName\x12\x1b\n" +
@@ -3129,10 +3129,10 @@ const file_atelet_proto_rawDesc = "" +
 	"\x17actor_template_atespace\x18\x05 \x01(\tR\x15actorTemplateAtespace\x12.\n" +
 	"\x13actor_template_name\x18\x06 \x01(\tR\x11actorTemplateName\x12(\n" +
 	"\x04spec\x18\a \x01(\v2\x14.atelet.WorkloadSpecR\x04spec\"\x13\n" +
-	"\x11TerminateResponse\"\xf4\x03\n" +
+	"\x11TerminateResponse\"\xf0\x03\n" +
 	"\n" +
-	"RunRequest\x12(\n" +
-	"\x10target_ateom_uid\x18\x01 \x01(\tR\x0etargetAteomUid\x12\x1a\n" +
+	"RunRequest\x12$\n" +
+	"\x0eworker_pod_uid\x18\x01 \x01(\tR\fworkerPodUid\x12\x1a\n" +
 	"\batespace\x18\x02 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +
 	"actor_name\x18\x03 \x01(\tR\tactorName\x12\x1b\n" +
@@ -3247,9 +3247,9 @@ const file_atelet_proto_rawDesc = "" +
 	"\x1fExternalCheckpointConfiguration\x12!\n" +
 	"\fsnapshot_uri\x18\x01 \x01(\tR\vsnapshotUri\"A\n" +
 	"\x1cExternalRestoreConfiguration\x12!\n" +
-	"\fsnapshot_uri\x18\x01 \x01(\tR\vsnapshotUri\"\xb2\x04\n" +
-	"\x11CheckpointRequest\x12(\n" +
-	"\x10target_ateom_uid\x18\x01 \x01(\tR\x0etargetAteomUid\x12\x1a\n" +
+	"\fsnapshot_uri\x18\x01 \x01(\tR\vsnapshotUri\"\xae\x04\n" +
+	"\x11CheckpointRequest\x12$\n" +
+	"\x0eworker_pod_uid\x18\x01 \x01(\tR\fworkerPodUid\x12\x1a\n" +
 	"\batespace\x18\x02 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +
 	"actor_name\x18\x03 \x01(\tR\tactorName\x12\x1b\n" +
@@ -3274,9 +3274,9 @@ const file_atelet_proto_rawDesc = "" +
 	"\x13local_snapshot_name\x18\x06 \x01(\tR\x11localSnapshotName\x128\n" +
 	"\x18destination_snapshot_uri\x18\a \x01(\tR\x16destinationSnapshotUri\x12C\n" +
 	"\x10desired_fidelity\x18\b \x01(\x0e2\x18.atelet.SnapshotFidelityR\x0fdesiredFidelity\" \n" +
-	"\x1eUploadPausedCheckpointResponse\"\x80\x06\n" +
-	"\x0eRestoreRequest\x12(\n" +
-	"\x10target_ateom_uid\x18\x01 \x01(\tR\x0etargetAteomUid\x12\x1a\n" +
+	"\x1eUploadPausedCheckpointResponse\"\xfc\x05\n" +
+	"\x0eRestoreRequest\x12$\n" +
+	"\x0eworker_pod_uid\x18\x01 \x01(\tR\fworkerPodUid\x12\x1a\n" +
 	"\batespace\x18\x02 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +
 	"actor_name\x18\x03 \x01(\tR\tactorName\x12\x1b\n" +
