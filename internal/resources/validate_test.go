@@ -331,9 +331,9 @@ func TestValidateSnapshotFidelity(t *testing.T) {
 		wantErr  bool
 	}{
 		{"volumes", ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, false},
+		{"rootfs", ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, false},
 		{"memory", ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, false},
 		{"unspecified", ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED, true},
-		{"rootfs not supported yet", ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, true},
 		{"outside the enum", ateompb.SnapshotFidelity(99), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

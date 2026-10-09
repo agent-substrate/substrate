@@ -90,9 +90,6 @@ const minUsageSampleInterval = 50 * time.Second
 // kubelet SIGKILL of ateom itself.
 const workloadGracePeriod = 30 * time.Minute
 
-// resumeTimeout is the conservative ceiling for unpausing a paused sandbox.
-const resumeTimeout = 30 * time.Second
-
 func main() {
 	pflag.Parse()
 	if *showVersion {
@@ -745,51 +742,34 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		return nil, fmt.Errorf("while creating checkpoint directory: %w", err)
 	}
 
-	// durableFiles are the durable-dir tars written below: the VOLUMES subset.
-	var durableFiles []string
-	// Always take durable-dir snapshot if at least one container has a durable-dir volume mount.
-	// TODO(dberkov): this is a temporary workaround until gVisor supports taking durable-dir snapshots in a single request with the process snapshot.
+	containers := req.GetSpec().GetContainers()
+	durablePaths := durableFSCheckpointPaths(containers)
+	rootfsAndDurablePaths := append(rootfsFSCheckpointPaths(containers), durablePaths...)
 	switch fidelity {
 	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
-		if !hasDurableVolumes(req.GetSpec().GetContainers()) {
+		if len(durablePaths) == 0 {
 			return nil, fmt.Errorf("no durable-dir volumes found for VOLUMES snapshot")
 		}
-		err := rcmd.cmdPause(ctx, ocispec.PauseContainer)
-		timing.pause = lap(&tLast)
-		if err != nil {
-			return nil, fmt.Errorf("while pausing pause container: %w", err)
-		}
-		var tarErr error
-		durableFiles, tarErr = tarDurableVolumes(ctx, req.GetActorDirs().GetDurableDirVolumeMountsDir(), checkpointPath, durableVolumeNames(req.GetSpec()))
+		err := rcmd.cmdFsCheckpoint(ctx, ocispec.PauseContainer, checkpointPath, durablePaths)
 		timing.durableDir = lap(&tLast)
-		// Undoing our own pause must not depend on the caller's context:
-		// tarutil does not check ctx, so a deadline expiring mid-tar would
-		// fail the resume instantly and leave the sandbox paused forever.
-		resumeCtx, cancelResume := context.WithTimeout(context.WithoutCancel(ctx), resumeTimeout)
-		defer cancelResume()
-		err = rcmd.cmdResume(resumeCtx, ocispec.PauseContainer)
-		timing.resume = lap(&tLast)
 		if err != nil {
-			return nil, fmt.Errorf("while resuming pause container: %w", err)
+			return nil, fmt.Errorf("while checkpointing durable-dir volumes: %w", err)
 		}
-		if tarErr != nil {
-			return nil, fmt.Errorf("while archiving durable-dir volumes: %w", tarErr)
+	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS:
+		if len(rootfsAndDurablePaths) == 0 {
+			return nil, fmt.Errorf("no containers or durable-dir volumes found for ROOTFS snapshot")
+		}
+		err := rcmd.cmdFsCheckpoint(ctx, ocispec.PauseContainer, checkpointPath, rootfsAndDurablePaths)
+		timing.durableDir = lap(&tLast)
+		if err != nil {
+			return nil, fmt.Errorf("while checkpointing rootfs and durable-dir volumes: %w", err)
 		}
 	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
 		// Checkpoint pause container (root of the sandbox)
-		// TODO: Consider pause -> tar -> resume -> checkpoint order for better failure handling.
-		err := rcmd.cmdCheckpoint(ctx, ocispec.PauseContainer, checkpointPath)
+		err := rcmd.cmdCheckpoint(ctx, ocispec.PauseContainer, checkpointPath, rootfsAndDurablePaths)
 		timing.checkpoint = lap(&tLast)
 		if err != nil {
 			return nil, fmt.Errorf("while checkpointing pause: %w", err)
-		}
-		if hasDurableVolumes(req.GetSpec().GetContainers()) {
-			var err error
-			durableFiles, err = tarDurableVolumes(ctx, req.GetActorDirs().GetDurableDirVolumeMountsDir(), checkpointPath, durableVolumeNames(req.GetSpec()))
-			timing.durableDir = lap(&tLast)
-			if err != nil {
-				return nil, fmt.Errorf("while archiving durable-dir volumes: %w", err)
-			}
 		}
 	default:
 		return nil, fmt.Errorf("unsupported snapshot fidelity: %v", fidelity)
@@ -813,6 +793,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	if err != nil {
 		return nil, fmt.Errorf("while listing checkpoint files: %w", err)
 	}
+	durableFiles := durableSnapshotFiles(snapshotFiles, durableVolumeNames(req.GetSpec()))
 
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor checkpointed", attribution)
 
@@ -989,14 +970,11 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		}
 	}()
 	checkpointDir := req.GetActorDirs().GetRestoreDir()
-
-	if hasDurableVolumes(containers) {
-		err := untarDurableVolumes(req.GetActorDirs().GetDurableDirVolumeMountsDir(), checkpointDir, durableVolumeNames(req.GetSpec()))
-		timing.durableDir = lap(&tLast)
-		if err != nil {
-			return nil, fmt.Errorf("while restoring durable-dir volumes: %w", err)
-		}
+	restoreArgs, err := fsRestoreArgs(checkpointDir, fsRestorePrefixes(fidelity, containers, rcmd.durableVolumes))
+	if err != nil {
+		return nil, err
 	}
+
 	// Compose the pause rootfs before create (see RunWorkload). runsc restore
 	// only needs the rootfs to hold the correct content; whether it came from
 	// an untar or an overlay of cached layers is transparent to it.
@@ -1007,10 +985,10 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	}
 
 	switch fidelity {
-	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
-		// Create and start pause container (cold boot with durable-dir volumes restored)
+	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS:
+		// Create and start pause container (cold boot with filesystem bundles restored)
 		containersToDelete = append(containersToDelete, ocispec.PauseContainer)
-		err := rcmd.cmdCreate(ctx, os.Stdout, ocispec.PauseContainer, nil)
+		err := rcmd.cmdCreate(ctx, os.Stdout, ocispec.PauseContainer, restoreArgs)
 		timing.pauseCreate = lap(&tLast)
 		if err != nil {
 			return nil, fmt.Errorf("while creating pause container: %w", err)
@@ -1023,7 +1001,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
 		// Create and restore pause container
 		containersToDelete = append(containersToDelete, ocispec.PauseContainer)
-		err := rcmd.cmdCreate(ctx, os.Stdout, ocispec.PauseContainer, nil)
+		err := rcmd.cmdCreate(ctx, os.Stdout, ocispec.PauseContainer, restoreArgs)
 		timing.pauseCreate = lap(&tLast)
 		if err != nil {
 			return nil, fmt.Errorf("while creating pause container: %w", err)
@@ -1059,7 +1037,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 			return nil, fmt.Errorf("while creating %q application container: %w", ac.GetName(), err)
 		}
 		switch fidelity {
-		case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
+		case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS:
 			err = rcmd.cmdStart(ctx, pw, ac.GetName())
 			timing.appRestore += lap(&tLast)
 			if err != nil {

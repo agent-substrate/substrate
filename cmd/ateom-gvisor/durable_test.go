@@ -22,108 +22,183 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/tarutil"
+	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 )
 
-// mkVolumeDirs creates the per-volume directories atelet prepares.
-func mkVolumeDirs(t *testing.T, dir string, vols ...string) {
-	t.Helper()
-	for _, v := range vols {
-		if err := os.MkdirAll(filepath.Join(dir, v), 0o700); err != nil {
-			t.Fatal(err)
-		}
+func TestRootfsFSCheckpointPaths(t *testing.T) {
+	containers := []*ateompb.Container{
+		{Name: "app"},
+		{Name: "sidecar"},
+	}
+
+	got := rootfsFSCheckpointPaths(containers)
+	want := []string{
+		"app_rootfs=app:/",
+		"sidecar_rootfs=sidecar:/",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("rootfsFSCheckpointPaths() = %v, want %v", got, want)
 	}
 }
 
-func TestDurableVolumesRoundTrip(t *testing.T) {
-	src := t.TempDir()
-	mkVolumeDirs(t, src, "data", "cache")
-	for rel, content := range map[string]string{
-		"data/notes.txt":        "kept",
-		"data/.gvisor.filestat": "internal",
-		"cache/c.bin":           "cached",
-	} {
-		if err := os.WriteFile(filepath.Join(src, rel), []byte(content), 0o644); err != nil {
-			t.Fatal(err)
-		}
+func TestDurableFSCheckpointPaths(t *testing.T) {
+	containers := []*ateompb.Container{
+		{
+			Name: "app",
+			DurableDirVolumeMounts: []*ateompb.DurableDirVolumeMount{
+				{VolumeName: "data", MountPath: "/var/data"},
+				{VolumeName: "cache", MountPath: "/var/cache"},
+			},
+		},
+		{
+			Name: "sidecar",
+			DurableDirVolumeMounts: []*ateompb.DurableDirVolumeMount{
+				{VolumeName: "logs", MountPath: "/var/log/app"},
+			},
+		},
 	}
-	// The volume root's own mode is the mount point's, so it must survive.
-	if err := os.Chmod(filepath.Join(src, "data"), 0o750); err != nil {
-		t.Fatal(err)
+
+	got := durableFSCheckpointPaths(containers)
+	want := []string{
+		"data=app:/var/data",
+		"cache=app:/var/cache",
+		"logs=sidecar:/var/log/app",
 	}
+	if !slices.Equal(got, want) {
+		t.Errorf("durableFSCheckpointPaths() = %v, want %v", got, want)
+	}
+}
+
+func TestDurableSnapshotFiles(t *testing.T) {
+	snapshotFiles := []string{
+		"app_rootfs_fscheckpoint.pb",
+		"app_rootfs_multitar.img",
+		"app_rootfs_pages.img",
+		"app_rootfs_pages_meta.img",
+		"cache_fscheckpoint.pb",
+		"cache_multitar.img",
+		"cache_pages.img",
+		"cache_pages_meta.img",
+		"checkpoint.img",
+		"data_fscheckpoint.pb",
+		"data_multitar.img",
+		"data_pages.img",
+		"data_pages_meta.img",
+		"pages.img",
+		"pages_meta.img",
+	}
+
+	got := durableSnapshotFiles(snapshotFiles, []string{"cache", "data"})
+	want := []string{
+		"cache_fscheckpoint.pb",
+		"cache_multitar.img",
+		"cache_pages.img",
+		"cache_pages_meta.img",
+		"data_fscheckpoint.pb",
+		"data_multitar.img",
+		"data_pages.img",
+		"data_pages_meta.img",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("durableSnapshotFiles() = %v, want %v", got, want)
+	}
+}
+
+func TestFSRestoreArgs(t *testing.T) {
 	checkpointDir := t.TempDir()
-	files, err := tarDurableVolumes(t.Context(), src, checkpointDir, []string{"cache", "data"})
+	for _, name := range []string{"cache_fscheckpoint.pb", "data_fscheckpoint.pb"} {
+		if err := os.WriteFile(filepath.Join(checkpointDir, name), []byte("manifest"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// "new" has no manifest in checkpointDir (added to template after snapshot),
+	// so it is skipped and starts empty.
+	got, err := fsRestoreArgs(checkpointDir, []string{"cache", "data", "new"})
 	if err != nil {
-		t.Fatalf("tarDurableVolumes: %v", err)
+		t.Fatalf("fsRestoreArgs() = %v", err)
 	}
-	if want := []string{"durable-dir-cache.tar", "durable-dir-data.tar"}; !slices.Equal(files, want) {
-		t.Errorf("tarDurableVolumes files = %v, want %v", files, want)
+	want := []string{
+		"--fs-restore-image-path", filepath.Join(checkpointDir, "cache"),
+		"--fs-restore-image-path", filepath.Join(checkpointDir, "data"),
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("fsRestoreArgs() = %v, want %v", got, want)
+	}
+}
+
+func TestSplitRootfsAndDurableDirsRestoreModes(t *testing.T) {
+	checkpointDir := t.TempDir()
+	containers := []*ateompb.Container{
+		{
+			Name: "app",
+			DurableDirVolumeMounts: []*ateompb.DurableDirVolumeMount{
+				{VolumeName: "data", MountPath: "/var/data"},
+				{VolumeName: "cache", MountPath: "/var/cache"},
+			},
+		},
+	}
+	durableVolumes := []string{"cache", "data"}
+
+	// Verify checkpoint paths split rootfs and each durable-dir volume into its own bundle.
+	gotCheckpointPaths := append(rootfsFSCheckpointPaths(containers), durableFSCheckpointPaths(containers)...)
+	wantCheckpointPaths := []string{
+		"app_rootfs=app:/",
+		"data=app:/var/data",
+		"cache=app:/var/cache",
+	}
+	if !slices.Equal(gotCheckpointPaths, wantCheckpointPaths) {
+		t.Fatalf("split checkpoint paths = %v, want %v", gotCheckpointPaths, wantCheckpointPaths)
 	}
 
-	dst := t.TempDir()
-	mkVolumeDirs(t, dst, "data", "cache")
-	if err := untarDurableVolumes(dst, checkpointDir, []string{"cache", "data"}); err != nil {
-		t.Fatalf("untarDurableVolumes: %v", err)
-	}
-	for rel, want := range map[string]string{"data/notes.txt": "kept", "cache/c.bin": "cached"} {
-		if got, err := os.ReadFile(filepath.Join(dst, rel)); err != nil || string(got) != want {
-			t.Errorf("restored %q = %q, %v; want %q", rel, got, err, want)
+	// Populate checkpointDir with manifests for both rootfs and durable-dir bundles.
+	for _, prefix := range []string{"app_rootfs", "cache", "data"} {
+		if err := os.WriteFile(filepath.Join(checkpointDir, prefix+"_fscheckpoint.pb"), []byte("manifest"), 0o600); err != nil {
+			t.Fatal(err)
 		}
 	}
-	if _, err := os.Lstat(filepath.Join(dst, "data/.gvisor.filestat")); !os.IsNotExist(err) {
-		t.Errorf(".gvisor.filestat: Lstat = %v; want it skipped", err)
-	}
-	if fi, err := os.Stat(filepath.Join(dst, "data")); err != nil || fi.Mode().Perm() != 0o750 {
-		t.Errorf("restored volume dir: Stat = %v, %v; want mode 0750", fi, err)
-	}
-}
 
-// runsc bind-mounts <dir>/<volume> by path, so the snapshot must not be able
-// to replace that directory with a symlink out of the actor's tree.
-func TestUntarDurableVolumesCannotPlantVolumeDir(t *testing.T) {
-	victim := t.TempDir()
-	planted := t.TempDir()
-	if err := os.Symlink(victim, filepath.Join(planted, "data")); err != nil {
-		t.Fatal(err)
-	}
-	snapshotDir := t.TempDir()
-	// An entry named after the volume, as the old single-tar layout had.
-	if err := tarutil.Create(t.Context(), filepath.Join(snapshotDir, "durable-dir-data.tar"), planted); err != nil {
-		t.Fatal(err)
-	}
-
-	dst := t.TempDir()
-	mkVolumeDirs(t, dst, "data")
-	if err := untarDurableVolumes(dst, snapshotDir, []string{"data"}); err != nil {
-		t.Fatalf("untarDurableVolumes: %v", err)
-	}
-	if fi, err := os.Lstat(filepath.Join(dst, "data")); err != nil || !fi.IsDir() {
-		t.Errorf("data: Lstat = %v, %v; want a real directory", fi, err)
-	}
-	entries, err := os.ReadDir(victim)
-	if err != nil || len(entries) != 0 {
-		t.Errorf("victim: ReadDir = %v, %v; want it untouched", entries, err)
-	}
-}
-
-// A volume added to the template after the snapshot has no tar: it restores
-// empty rather than failing.
-func TestUntarDurableVolumesMissingTarIsEmpty(t *testing.T) {
-	dst := t.TempDir()
-	mkVolumeDirs(t, dst, "new")
-	if err := untarDurableVolumes(dst, t.TempDir(), []string{"new"}); err != nil {
-		t.Fatalf("untarDurableVolumes: %v", err)
-	}
-	entries, err := os.ReadDir(filepath.Join(dst, "new"))
-	if err != nil || len(entries) != 0 {
-		t.Errorf("new: ReadDir = %v, %v; want an empty directory", entries, err)
-	}
-}
-
-func TestDurableTarFileRejectsBadNames(t *testing.T) {
-	for _, v := range []string{"", ".", "..", "a/b", "/abs", "../x"} {
-		if _, err := durableTarFile(v); err == nil {
-			t.Errorf("durableTarFile(%q) = nil error, want one", v)
-		}
+	for _, tc := range []struct {
+		name     string
+		fidelity ateompb.SnapshotFidelity
+		wantArgs []string
+	}{
+		{
+			name:     "Full (MEMORY): restores rootfs and durable dirs",
+			fidelity: ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+			wantArgs: []string{
+				"--fs-restore-image-path", filepath.Join(checkpointDir, "app_rootfs"),
+				"--fs-restore-image-path", filepath.Join(checkpointDir, "cache"),
+				"--fs-restore-image-path", filepath.Join(checkpointDir, "data"),
+			},
+		},
+		{
+			name:     "Rootfs+DurDir (ROOTFS): restores rootfs and durable dirs",
+			fidelity: ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+			wantArgs: []string{
+				"--fs-restore-image-path", filepath.Join(checkpointDir, "app_rootfs"),
+				"--fs-restore-image-path", filepath.Join(checkpointDir, "cache"),
+				"--fs-restore-image-path", filepath.Join(checkpointDir, "data"),
+			},
+		},
+		{
+			name:     "Only DurDir (VOLUMES): restores only durable dirs, skipping rootfs",
+			fidelity: ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
+			wantArgs: []string{
+				"--fs-restore-image-path", filepath.Join(checkpointDir, "cache"),
+				"--fs-restore-image-path", filepath.Join(checkpointDir, "data"),
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prefixes := fsRestorePrefixes(tc.fidelity, containers, durableVolumes)
+			gotArgs, err := fsRestoreArgs(checkpointDir, prefixes)
+			if err != nil {
+				t.Fatalf("fsRestoreArgs() = %v", err)
+			}
+			if !slices.Equal(gotArgs, tc.wantArgs) {
+				t.Errorf("fsRestoreArgs(%v) = %v, want %v", tc.fidelity, gotArgs, tc.wantArgs)
+			}
+		})
 	}
 }
