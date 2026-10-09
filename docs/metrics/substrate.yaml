@@ -124,9 +124,9 @@ bridged_metric_families:
 # -----------------------------------------------------------------------------
 # The rules that keep the number of series small
 #
-# No rule is enforced at this time. This PR adds the registry only. Each rule
-# says what could enforce it, so that a reader knows the difference between a
-# rule that a machine holds and a rule that a person holds.
+# No rule is enforced at this time. Each rule says what could enforce it, so
+# that a reader knows the difference between a rule that a machine holds and a
+# rule that a person holds.
 # -----------------------------------------------------------------------------
 cardinality_rules:
   - id: no-actor-identity
@@ -228,6 +228,11 @@ blind_spots:
   - area: podcertcontroller
     code: cmd/podcertcontroller
     brief: This component has no metrics.
+  - area: GCP Secret Manager credential provider
+    code: internal/plugins/gcp-secret-manager
+    brief: >
+      This plugin has no metrics. It does not install the otelgrpc server
+      handler. Thus rpc.server.call.duration has no credprovider series for it.
   - area: golden snapshot pipeline
     code: cmd/ateapi/internal/controlapi/template_reconciler.go
     brief: The template reconciler in ate-api has no instruments. Thus nothing measures a build of a golden image.

@@ -429,8 +429,8 @@ func (s *RPCService) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorR
 	}
 	start := time.Now()
 	// Template dims only once the record resolved: the request names only the
-	// actor, so failures before the load carry none. No pool pair: delete only
-	// runs from SUSPENDED or CRASHED, which already released the worker.
+	// actor, so failures before the load carry none. No pool pair, even when
+	// any_state deletes an actor that still holds a worker.
 	defer func() {
 		var attrs []attribute.KeyValue
 		if deleted != nil {

@@ -211,6 +211,8 @@ func (w *WorkerWorkflow) crashBoundActor(ctx context.Context, worker *ateapipb.W
 		opName = ateattr.OperationPause
 	case ateapipb.ActorState_ACTOR_STATE_REVERTING:
 		opName = ateattr.OperationRevert
+	case ateapipb.ActorState_ACTOR_STATE_DELETING:
+		opName = ateattr.OperationDelete
 	}
 
 	wasAlreadyCrashed := actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_CRASHED

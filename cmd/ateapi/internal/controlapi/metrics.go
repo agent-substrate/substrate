@@ -201,17 +201,20 @@ func (i *Instruments) recordLifecycleOp(ctx context.Context, op string, start ti
 	i.lifecycleOpDuration.Record(ctx, time.Since(start).Seconds(), metric.WithAttributes(attrs...))
 }
 
-// lifecycleOpAttrs builds the resume/suspend/pause dimensions from workflow
-// state. Nil-safe, and omits the pool, snapshot-kind and snapshot-fidelity labels
-// until they are known so a failure before the assign/restore steps never emits
-// an empty-string series. snapshotKind is empty for suspend/pause, which do not
+// lifecycleOpAttrs builds the resume/suspend/pause/revert dimensions from
+// workflow state. Nil-safe, and omits the template, pool, snapshot-kind and
+// snapshot-fidelity labels until they are known so a failure before the
+// load/assign/restore steps never emits an empty-string series. snapshotKind is empty for suspend/pause, which do not
 // restore; snapshotScope applies to all three and separates a full restore
 // from a data-only one of the same kind.
 // The pool keys are set together or not at all; see ateattr.WorkerPoolAttributes.
 func lifecycleOpAttrs(actor *ateapipb.Actor, template *ateapipb.ActorTemplate, snapshotKind, snapshotScope string) []attribute.KeyValue {
-	attrs := []attribute.KeyValue{
-		ateattr.TemplateNameKey.String(actor.GetActorTemplate().GetName()),
-		ateattr.TemplateAtespaceKey.String(actor.GetActorTemplate().GetAtespace()),
+	var attrs []attribute.KeyValue
+	if actor != nil {
+		attrs = append(attrs,
+			ateattr.TemplateNameKey.String(actor.GetActorTemplate().GetName()),
+			ateattr.TemplateAtespaceKey.String(actor.GetActorTemplate().GetAtespace()),
+		)
 	}
 	ass := actor.GetStatus().GetWorkerAssignment()
 	attrs = append(attrs, ateattr.WorkerPoolAttributes(ass.GetWorkerNamespace(), ass.GetWorkerPool())...)
