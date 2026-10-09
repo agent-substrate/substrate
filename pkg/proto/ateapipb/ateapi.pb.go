@@ -7102,9 +7102,13 @@ func (x *VersionedSandboxCompat) GetAttributes() []*AttributeEntry {
 // AttributeEntry is a single key-value compatibility attribute.
 type AttributeEntry struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
+	// Attribute name (e.g. "architecture", "cpu_features", "gvisor_asset_hash").
+	//
 	// +k8s:required
 	// +k8s:maxLength=128
 	Key string `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
+	// Attribute value corresponding to key.
+	//
 	// +k8s:required
 	// +k8s:maxLength=256
 	Value         string `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`

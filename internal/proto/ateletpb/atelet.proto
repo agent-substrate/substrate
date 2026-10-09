@@ -119,10 +119,14 @@ message VersionedSandboxCompat {
 
 // AttributeEntry is a single key-value compatibility attribute.
 message AttributeEntry {
+  // Attribute name (e.g. "architecture", "cpu_features", "gvisor_asset_hash").
+  //
   // +k8s:required
   // +k8s:maxLength=128
   string key = 1;
 
+  // Attribute value corresponding to key.
+  //
   // +k8s:required
   // +k8s:maxLength=256
   string value = 2;
