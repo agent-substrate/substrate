@@ -255,12 +255,7 @@ func (r *spawnRuntime) runOneActor(ctx context.Context, batchStart time.Time, ac
 }
 
 func (r *spawnRuntime) createActorWithRetry(ctx context.Context, actorName string) error {
-	delay := spawnInitialRetryBackoff
-	for attempt := 0; ; attempt++ {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-
+	return retryWithBackoff(ctx, func(attempt int) error {
 		err := r.tracedCall(ctx, "CreateActor", func(callCtx context.Context, tr *metadata.MD) error {
 			_, callErr := r.cfg.APIStub.CreateActor(callCtx, &ateapipb.CreateActorRequest{
 				Actor: &ateapipb.Actor{
@@ -270,24 +265,45 @@ func (r *spawnRuntime) createActorWithRetry(ctx context.Context, actorName strin
 			}, grpc.Trailer(tr))
 			return callErr
 		})
-
-		if err == nil {
+		if createLanded(attempt, err) {
 			return nil
 		}
+		return err
+	})
+}
 
-		// A create retry can receive AlreadyExists if an earlier attempt landed on the server
-		// before failing with e.g. Unavailable on the network. Since names carry a random
-		// per-run prefix, AlreadyExists on a retry means our own attempt succeeded.
-		if attempt > 0 {
-			if s, ok := status.FromError(err); ok && s.Code() == codes.AlreadyExists {
-				return nil
-			}
+func (r *spawnRuntime) resumeActorWithRetry(ctx context.Context, actorName string) error {
+	actorRef := &ateapipb.ObjectRef{Atespace: r.cfg.Atespace, Name: actorName}
+	return retryWithBackoff(ctx, func(int) error {
+		err := r.tracedCall(ctx, "ResumeActor", func(callCtx context.Context, tr *metadata.MD) error {
+			return boomerutil.RetryOnConflict(callCtx, func() error {
+				_, err := r.cfg.APIStub.ResumeActor(callCtx, &ateapipb.ResumeActorRequest{
+					Actor: actorRef,
+				}, grpc.Trailer(tr))
+				return err
+			})
+		})
+		if isSpawnCrashed(err) {
+			r.recordFailure("actor", "CrashCount", 0, "actor entered ACTOR_STATE_CRASHED")
 		}
+		return err
+	})
+}
 
-		if isSpawnTerminalError(err) {
+// retryWithBackoff runs call until it succeeds, fails with an error retrying
+// cannot help (isSpawnTerminalError), or ctx is done. The gap between
+// attempts doubles from spawnInitialRetryBackoff up to spawnMaxRetryBackoff,
+// plus jitter. call gets the attempt number, starting at 0.
+func retryWithBackoff(ctx context.Context, call func(attempt int) error) error {
+	delay := spawnInitialRetryBackoff
+	for attempt := 0; ; attempt++ {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		err := call(attempt)
+		if err == nil || isSpawnTerminalError(err) {
 			return err
 		}
-
 		jitter := time.Duration(rand.Float64() * float64(spawnRetryBackoffJitter))
 		select {
 		case <-time.After(delay + jitter):
@@ -298,45 +314,13 @@ func (r *spawnRuntime) createActorWithRetry(ctx context.Context, actorName strin
 	}
 }
 
-func (r *spawnRuntime) resumeActorWithRetry(ctx context.Context, actorName string) error {
-	actorRef := &ateapipb.ObjectRef{Atespace: r.cfg.Atespace, Name: actorName}
-	delay := spawnInitialRetryBackoff
-
-	for {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-
-		err := r.tracedCall(ctx, "ResumeActor", func(callCtx context.Context, tr *metadata.MD) error {
-			return boomerutil.RetryOnConflict(callCtx, func() error {
-				_, err := r.cfg.APIStub.ResumeActor(callCtx, &ateapipb.ResumeActorRequest{
-					Actor: actorRef,
-				}, grpc.Trailer(tr))
-				return err
-			})
-		})
-
-		if err == nil {
-			return nil
-		}
-
-		if isSpawnCrashed(err) {
-			r.recordFailure("actor", "CrashCount", 0, "actor entered ACTOR_STATE_CRASHED")
-			return err
-		}
-
-		if isSpawnTerminalError(err) {
-			return err
-		}
-
-		jitter := time.Duration(rand.Float64() * float64(spawnRetryBackoffJitter))
-		select {
-		case <-time.After(delay + jitter):
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-		delay = min(delay*2, spawnMaxRetryBackoff)
-	}
+// createLanded reports whether a failed CreateActor attempt means the actor
+// exists anyway. A retry can receive AlreadyExists if an earlier attempt
+// landed on the server before failing with e.g. Unavailable on the network.
+// Since names carry a random per-run prefix, AlreadyExists on a retry means
+// our own attempt succeeded.
+func createLanded(attempt int, err error) bool {
+	return attempt > 0 && status.Code(err) == codes.AlreadyExists
 }
 
 func (r *spawnRuntime) pingUntilReady(ctx context.Context, actorName string) error {
