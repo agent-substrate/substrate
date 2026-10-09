@@ -311,6 +311,7 @@ func TestEnsureSuspendedFinalized_NoAssignment(t *testing.T) {
 	snap.Storage = append(snap.Storage, &ateapipb.SnapshotStorage{
 		Durability: ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE,
 		Status:     ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS,
+		Fidelity:   ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 		Object:     &ateapipb.ObjectSnapshot{SnapshotUri: snapshotURI},
 	})
 	actor := &ateapipb.Actor{
@@ -729,6 +730,7 @@ func TestEnsurePausedSnapshotUploaded_Preconditions(t *testing.T) {
 		snap.Storage = append(snap.Storage, &ateapipb.SnapshotStorage{
 			Durability: ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE,
 			Status:     ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS,
+			Fidelity:   ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			Object:     &ateapipb.ObjectSnapshot{SnapshotUri: someActorSnapshotURI(t, testStorageLocation, "team-a", "snap-dest")},
 		})
 		created := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{

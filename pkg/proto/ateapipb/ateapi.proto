@@ -244,7 +244,7 @@ message SnapshotStorage {
 
   // fidelity is what the snapshot holds.
   //
-  // +k8s:optional
+  // +k8s:required
   // +k8s:minimum=1
   // +k8s:maximum=3 # keep this in sync with the SnapshotFidelity enum
   SnapshotFidelity fidelity = 3;

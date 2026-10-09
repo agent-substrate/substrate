@@ -1235,12 +1235,11 @@ func TestValidateSnapshot(t *testing.T) {
 			}),
 		},
 		{
-			// Optional lets the zero value skip the bounds rather than failing
-			// the minimum.
-			name: "valid fidelity: unspecified",
+			name: "missing fidelity",
 			obj: valid(func(s *ateapipb.Snapshot) {
 				s.Storage[0].Fidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
 			}),
+			want: field.ErrorList{field.Required(fidelityPath, "")},
 		},
 		{
 			name: "missing storage",
@@ -1371,6 +1370,14 @@ func TestValidateSnapshotUpdate(t *testing.T) {
 			newObj: valid(func(s *ateapipb.Snapshot) {
 				s.Storage[0].Fidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
 			}),
+		},
+		{
+			name:   "fidelity cleared",
+			oldObj: valid(),
+			newObj: valid(func(s *ateapipb.Snapshot) {
+				s.Storage[0].Fidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
+			}),
+			want: field.ErrorList{field.Required(fidelityPath, "")},
 		},
 		{
 			name:   "fidelity changed to a value outside the enum",

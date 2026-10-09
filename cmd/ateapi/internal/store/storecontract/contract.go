@@ -873,6 +873,7 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 					Storage: []*ateapipb.SnapshotStorage{{
 						Durability: ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE,
 						Status:     ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+						Fidelity:   ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 						Object:     &ateapipb.ObjectSnapshot{SnapshotUri: testActorSnapshotURI("gs://bucket", testAtespace, "snapshot-1")},
 					}},
 				}},
@@ -890,6 +891,7 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 					Storage: []*ateapipb.SnapshotStorage{{
 						Durability: ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE,
 						Status:     ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+						Fidelity:   ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 						Object:     &ateapipb.ObjectSnapshot{SnapshotUri: testActorSnapshotURI("gs://bucket", testAtespace, "snapshot-2")},
 					}},
 				}},

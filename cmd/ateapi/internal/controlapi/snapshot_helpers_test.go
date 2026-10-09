@@ -61,6 +61,7 @@ func TestSnapshotStorageAccessors(t *testing.T) {
 	completedLocal := &ateapipb.SnapshotStorage{
 		Durability: ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_LOCAL,
 		Status:     ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+		Fidelity:   ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 		Local:      &ateapipb.LocalSnapshot{SnapshotName: "local-completed"},
 	}
 	setSnapshotStorage(snap, completedLocal)
@@ -75,6 +76,7 @@ func TestSnapshotStorageAccessors(t *testing.T) {
 	durableEntry := &ateapipb.SnapshotStorage{
 		Durability: ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE,
 		Status:     ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+		Fidelity:   ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 		Object:     &ateapipb.ObjectSnapshot{SnapshotUri: "gs://b/snap-1"},
 	}
 	setSnapshotStorage(snap, durableEntry)
@@ -141,6 +143,7 @@ func TestRemoveSnapshotStorageEntries(t *testing.T) {
 		setSnapshotStorage(bothGen1, &ateapipb.SnapshotStorage{
 			Durability: ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_LOCAL,
 			Status:     ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+			Fidelity:   ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			Local:      &ateapipb.LocalSnapshot{SnapshotName: "local-1"},
 		})
 		localGen2 := newLocalSnapshot(2, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "tmpl-1", "local-2", ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)

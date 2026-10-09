@@ -531,6 +531,7 @@ func TestValidateActorUpdate(t *testing.T) {
 				snap.Storage = []*ateapipb.SnapshotStorage{{
 					Durability: ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_LOCAL,
 					Status:     ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+					Fidelity:   ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 					Local:      &ateapipb.LocalSnapshot{SnapshotName: "snap-1"},
 				}}
 			})}
@@ -544,6 +545,7 @@ func TestValidateActorUpdate(t *testing.T) {
 				snap.Storage = []*ateapipb.SnapshotStorage{{
 					Durability: ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_LOCAL,
 					Status:     ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+					Fidelity:   ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 					Local:      &ateapipb.LocalSnapshot{SnapshotName: "SNAP 1"},
 				}}
 			})}
@@ -610,6 +612,15 @@ func TestValidateActorUpdate(t *testing.T) {
 			})}
 		})),
 		nil,
+	}, {
+		"missing actor.status.snapshots.storage.fidelity",
+		validInput(),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.Snapshots = []*ateapipb.Snapshot{validSnapshot(func(snap *ateapipb.Snapshot) {
+				snap.Storage[0].Fidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
+			})}
+		})),
+		field.ErrorList{field.Required(field.NewPath("status", "snapshots").Index(0).Child("storage").Index(0).Child("fidelity"), "")},
 	}, {
 		"negative actor.status.snapshots.storage.fidelity",
 		validInput(),

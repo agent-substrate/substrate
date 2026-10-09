@@ -707,7 +707,7 @@ type SnapshotStorage struct {
 	Status SnapshotStorageStatus `protobuf:"varint,2,opt,name=status,proto3,enum=ateapi.SnapshotStorageStatus" json:"status,omitempty"`
 	// fidelity is what the snapshot holds.
 	//
-	// +k8s:optional
+	// +k8s:required
 	// +k8s:minimum=1
 	// +k8s:maximum=3 # keep this in sync with the SnapshotFidelity enum
 	Fidelity SnapshotFidelity `protobuf:"varint,3,opt,name=fidelity,proto3,enum=ateapi.SnapshotFidelity" json:"fidelity,omitempty"`
