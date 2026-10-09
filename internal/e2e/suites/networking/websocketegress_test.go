@@ -25,11 +25,12 @@ import (
 // egressWebSocketResponse mirrors observations returned by the actor. The
 // outer HTTP status is already checked before these protocol assertions run.
 type egressWebSocketResponse struct {
-	StatusCode int                      `json:"statusCode"`
-	Protocol   string                   `json:"protocol"`
-	TLS        bool                     `json:"tls"`
-	Messages   []egressWebSocketMessage `json:"messages"`
-	Error      string                   `json:"error"`
+	StatusCode    int                      `json:"statusCode"`
+	Protocol      string                   `json:"protocol"`
+	HandshakeBody string                   `json:"handshakeBody"`
+	TLS           bool                     `json:"tls"`
+	Messages      []egressWebSocketMessage `json:"messages"`
+	Error         string                   `json:"error"`
 }
 
 type egressWebSocketMessage struct {
@@ -53,6 +54,9 @@ func TestActorEgressWebSocket(t *testing.T) {
 	}
 	if got.StatusCode != http.StatusForbidden {
 		t.Errorf("WebSocket handshake status = %d, want %d", got.StatusCode, http.StatusForbidden)
+	}
+	if got.HandshakeBody != "WebSocket egress is not supported" {
+		t.Errorf("WebSocket handshake body = %q, want %q", got.HandshakeBody, "WebSocket egress is not supported")
 	}
 	if got.Error == "" {
 		t.Error("WebSocket handshake error is empty")
@@ -78,6 +82,9 @@ func TestActorEgressSecureWebSocket(t *testing.T) {
 	}
 	if got.StatusCode != http.StatusForbidden {
 		t.Errorf("secure WebSocket handshake status = %d, want %d", got.StatusCode, http.StatusForbidden)
+	}
+	if got.HandshakeBody != "WebSocket egress is not supported" {
+		t.Errorf("secure WebSocket handshake body = %q, want %q", got.HandshakeBody, "WebSocket egress is not supported")
 	}
 	if got.Error == "" {
 		t.Error("secure WebSocket handshake error is empty")

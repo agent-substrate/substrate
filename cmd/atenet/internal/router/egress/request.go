@@ -29,6 +29,8 @@ import (
 	"github.com/agent-substrate/substrate/internal/resources"
 )
 
+const websocketDeniedBody = "WebSocket egress is not supported"
+
 // handleRequest authorizes one request the gateway can read: cleartext HTTP,
 // or HTTPS the gateway terminated. It runs per request, because the
 // Host can change between requests on one connection.
@@ -41,7 +43,7 @@ import (
 func (h *Handler) handleRequest(ctx context.Context, md *extproc.RequestMetadata, leg string) (extproc.Result, error) {
 	if isWebSocketUpgrade(md) {
 		slog.WarnContext(ctx, "egress denied: WebSocket upgrades are not supported", slog.String("leg", leg), slog.String("host", md.Host))
-		return extproc.Result{}, extproc.NewReqError(envoy_type.StatusCode_Forbidden, deniedBody)
+		return extproc.Result{}, extproc.NewReqError(envoy_type.StatusCode_Forbidden, websocketDeniedBody)
 	}
 
 	ref, err := actorFromFilterState(md)

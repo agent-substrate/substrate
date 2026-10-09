@@ -212,6 +212,10 @@ func TestEgressManifestsDisableWebSocketUpgrades(t *testing.T) {
 					t.Errorf("expected request-leg chain %q is absent", name)
 					continue
 				}
+				filters := list(hcm(chain), "http_filters")
+				if extProcIndex, routerIndex := filterIndex(filters, extProcFilter), filterIndex(filters, "envoy.filters.http.router"); extProcIndex < 0 || routerIndex < 0 || extProcIndex >= routerIndex {
+					t.Errorf("chain %q must run ext_proc before the router", name)
+				}
 				var disabled bool
 				for _, upgrade := range list(hcm(chain), "upgrade_configs") {
 					if str(upgrade, "upgrade_type") == "websocket" {
@@ -231,6 +235,20 @@ func TestEgressManifestsDisableWebSocketUpgrades(t *testing.T) {
 					t.Errorf("chain %q has no routes", name)
 				}
 				for i, route := range routes {
+					var requiresDial bool
+					for _, metadata := range list(child(route, "match"), "dynamic_metadata") {
+						path, _ := metadata["path"].([]any)
+						if str(metadata, "filter") == "dev.ate.egress" && len(path) > 0 {
+							first, _ := path[0].(map[string]any)
+							requiresDial = first["key"] == "dial"
+							if requiresDial {
+								break
+							}
+						}
+					}
+					if !requiresDial {
+						t.Errorf("chain %q route %d can match before ext_proc supplies dev.ate.egress:dial", name, i)
+					}
 					action := child(route, "route")
 					if action == nil {
 						t.Errorf("chain %q route %d has no route action", name, i)

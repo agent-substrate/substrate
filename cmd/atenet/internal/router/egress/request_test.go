@@ -337,6 +337,9 @@ func TestRequestLegDeniesHTTP1WebSocketUpgrade(t *testing.T) {
 			md.Headers["upgrade"] = "WebSocket"
 			_, err := h.HandleRequestHeaders(context.Background(), md)
 			wantStatus(t, err, envoy_type.StatusCode_Forbidden)
+			if err.Error() != websocketDeniedBody {
+				t.Errorf("denial body = %q, want %q", err, websocketDeniedBody)
+			}
 		})
 	}
 }

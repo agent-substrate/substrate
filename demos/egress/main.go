@@ -43,12 +43,13 @@ import (
 )
 
 const (
-	listenAddress           = ":80"
-	maxRequestBody          = 64 << 10
-	maxResponseBody         = 1 << 20
-	requestTimeout          = 15 * time.Second
-	maxWebSocketMessages    = 16
-	maxWebSocketMessageSize = 64 << 10
+	listenAddress             = ":80"
+	maxRequestBody            = 64 << 10
+	maxResponseBody           = 1 << 20
+	requestTimeout            = 15 * time.Second
+	maxWebSocketMessages      = 16
+	maxWebSocketMessageSize   = 64 << 10
+	maxWebSocketHandshakeBody = 4 << 10
 )
 
 type fetchRequest struct {
@@ -78,11 +79,12 @@ type websocketMessage struct {
 }
 
 type websocketResponse struct {
-	StatusCode int                `json:"statusCode,omitempty"`
-	Protocol   string             `json:"protocol,omitempty"`
-	TLS        bool               `json:"tls"`
-	Messages   []websocketMessage `json:"messages"`
-	Error      string             `json:"error,omitempty"`
+	StatusCode    int                `json:"statusCode,omitempty"`
+	Protocol      string             `json:"protocol,omitempty"`
+	HandshakeBody string             `json:"handshakeBody,omitempty"`
+	TLS           bool               `json:"tls"`
+	Messages      []websocketMessage `json:"messages"`
+	Error         string             `json:"error,omitempty"`
 }
 
 // grpcRequest asks for one unary Echo against target, and additionally for a
@@ -306,6 +308,11 @@ func performWebSocket(ctx context.Context, input websocketRequest) (websocketRes
 	if handshakeResponse != nil {
 		response.StatusCode = handshakeResponse.StatusCode
 		response.Protocol = handshakeResponse.Proto
+		if handshakeResponse.Body != nil {
+			body, _ := io.ReadAll(io.LimitReader(handshakeResponse.Body, maxWebSocketHandshakeBody))
+			_ = handshakeResponse.Body.Close()
+			response.HandshakeBody = string(body)
+		}
 	}
 	if err != nil {
 		return response, fmt.Errorf("WebSocket handshake failed: %w", err)
