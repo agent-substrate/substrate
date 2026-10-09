@@ -96,8 +96,34 @@ func init() {
 		Name:       "agentsession",
 		LocustFile: "agentsession.py",
 		UserClass:  agentSessionUserClass,
+		Config:     knobsCodec,
 		Init:       initAgentSession,
 	})
+}
+
+// knobs is the AgentSessionUser slice of the runtime config. The master
+// populates the keys from the --agentsession-* locust flags
+// (common/agentsession_config.py).
+type knobs struct {
+	dynconfig.Lifecycle
+	// Script is the built-in script variant; "" falls back to the default.
+	Script string `json:"agentsession_script"`
+	// ScriptFile is a script YAML on the worker; wins over Script when set.
+	ScriptFile string `json:"agentsession_script_file"`
+	// ThinkScale multiplies the script's per-step think times; 0 reads as 1.
+	ThinkScale float64 `json:"agentsession_think_scale"`
+}
+
+var knobsCodec = dynconfig.Typed[knobs]{
+	Validate: func(k knobs) error {
+		if err := k.Lifecycle.Validate(); err != nil {
+			return err
+		}
+		if k.ThinkScale < 0 {
+			return fmt.Errorf("agentsession_think_scale cannot be negative: %f", k.ThinkScale)
+		}
+		return nil
+	},
 }
 
 func initAgentSession(cfg *userclass.Config) (taskFn func(), shutdown func(context.Context)) {
@@ -177,12 +203,12 @@ type loadedScript struct {
 // scriptSource is what the knobs select: a file named by
 // --agentsession-script-file wins, else the built-in variant named by
 // --agentsession-script, else the default.
-func scriptSource(dyn dynconfig.Config) (source string, fromFile bool) {
-	if dyn.AgentSessionScriptFile != "" {
-		return dyn.AgentSessionScriptFile, true
+func scriptSource(dyn knobs) (source string, fromFile bool) {
+	if dyn.ScriptFile != "" {
+		return dyn.ScriptFile, true
 	}
-	if dyn.AgentSessionScript != "" {
-		return dyn.AgentSessionScript, false
+	if dyn.Script != "" {
+		return dyn.Script, false
 	}
 	return DefaultScript, false
 }
@@ -198,7 +224,7 @@ func scriptSource(dyn dynconfig.Config) (source string, fromFile bool) {
 func (r *runtime) loadScript() (*loadedScript, error) {
 	r.scriptMu.Lock()
 	defer r.scriptMu.Unlock()
-	source, fromFile := scriptSource(r.cfg.Dyn.Load())
+	source, fromFile := scriptSource(dynconfig.Get[knobs](r.cfg.Dyn))
 	data, err := readScript(source, fromFile)
 	if err != nil {
 		return nil, err
@@ -292,7 +318,7 @@ func memoryLimit(tmpl *ateapipb.ActorTemplate) (limit int64, found bool, err err
 // script's think time scaled by --agentsession-think-scale (0 reads as 1.0),
 // with ±20% jitter so a fleet of sessions doesn't move in lockstep.
 func (r *runtime) think(s Step) time.Duration {
-	scale := r.cfg.Dyn.Load().AgentSessionThinkScale
+	scale := dynconfig.Get[knobs](r.cfg.Dyn).ThinkScale
 	if scale <= 0 {
 		scale = 1.0
 	}
@@ -517,7 +543,7 @@ func (u *sessionUser) runStep(ctx context.Context, step Step) bool {
 		return false
 	}
 
-	if u.cfg.Dyn.Load().ResumeMode == dynconfig.ResumeModeExplicit {
+	if dynconfig.Get[knobs](u.cfg.Dyn).ResumeMode == dynconfig.ResumeModeExplicit {
 		if err := u.resume(ctx); err != nil {
 			u.noteFailure(err)
 			return false
@@ -752,7 +778,7 @@ func (u *sessionUser) resume(ctx context.Context) error {
 // it instead of waking a stranded actor.
 func (u *sessionUser) hibernate(ctx context.Context) {
 	var err error
-	if u.cfg.Dyn.Load().LifecycleMode == dynconfig.LifecycleModePause {
+	if dynconfig.Get[knobs](u.cfg.Dyn).LifecycleMode == dynconfig.LifecycleModePause {
 		err = u.tracedCall(ctx, "PauseActor", func(callCtx context.Context, tr *metadata.MD) error {
 			_, err := u.cfg.APIStub.PauseActor(callCtx, &ateapipb.PauseActorRequest{Actor: u.ref()}, grpc.Trailer(tr))
 			return err

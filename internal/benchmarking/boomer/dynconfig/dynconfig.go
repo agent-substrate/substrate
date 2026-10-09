@@ -13,95 +13,280 @@
 // limitations under the License.
 
 // Package dynconfig fetches and holds the boomer worker's runtime-mutable
-// settings — the subset of locust flags the operator can change in the web
-// UI form. The boomer wire protocol only carries num_users + spawn_rate, so
-// these come over an HTTP side channel from the master's /boomer-config
-// endpoint (common/boomer_config.py).
+// settings: the locust flags the operator can change in the web UI form.
+// The boomer wire protocol only carries num_users + spawn_rate, so these
+// come over an HTTP side channel from the master's /boomer-config endpoint
+// (common/boomer_config.py).
+//
+// The payload is a JSON object keyed by locust flag name in snake_case.
+// This package does not know what the keys mean. A worker runs exactly one
+// user class, known at launch, so the class hands the Holder its Codec at
+// construction: the typed struct it reads its knobs from, with the
+// defaults a key left unset falls back to and the rules a fetched value
+// must pass. The Holder then stores that typed value, decodes each payload
+// over those defaults so a payload stands on its own, refuses one the class
+// cannot run on in favor of the last good config, and hands the class its
+// config back through Get. Keys the class does not name are ignored.
 package dynconfig
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
-	"math"
+	"math/rand/v2"
 	"net/http"
+	"reflect"
 	"sync/atomic"
 	"time"
 
 	"github.com/myzhan/boomer"
 )
 
-// Resume modes. Explicit issues a ResumeActor RPC before sending traffic.
-// Implicit issues no wake request at all: the actor stays suspended until a
-// request reaches the atenet router, which wakes it while the request is
-// parked.
+// Codec is how a user class's config comes to be: the value a worker
+// starts from, and the value a payload puts in force. Typed is the
+// implementation a class declares over its knobs struct.
+type Codec interface {
+	// Initial is the config before any payload: the class's defaults.
+	Initial() any
+	// Decode is the config payload, a JSON object, puts in force, validated.
+	// Each payload stands on its own: a key absent from it, or null in it,
+	// is at the class's default, not at the value before. The master serves
+	// every flag it knows, null for the ones the operator left blank, so a
+	// field cleared in the form takes the knob back to its default. A body
+	// that is not a JSON object, an empty one included, is refused.
+	Decode(payload []byte) (any, error)
+}
+
+// Typed is the Codec over a class's knobs struct T, whose json tags name
+// the keys it reads. Decode lays the payload over Defaults and runs
+// Validate on the result.
+type Typed[T any] struct {
+	Defaults T
+	Validate func(T) error
+}
+
+func (c Typed[T]) Initial() any { return c.Defaults }
+
+func (c Typed[T]) Decode(payload []byte) (any, error) {
+	next := c.Defaults
+	if err := json.Unmarshal(payload, &next); err != nil {
+		return nil, fmt.Errorf("decode config: %w", err)
+	}
+	if c.Validate != nil {
+		if err := c.Validate(next); err != nil {
+			return nil, err
+		}
+	}
+	return next, nil
+}
+
+// Common is the slice of the payload the worker itself reads, whatever the
+// user class. Every Holder decodes it alongside the class's config.
+type Common struct {
+	TraceProbability float64 `json:"trace_probability"`
+}
+
+var commonCodec = Typed[Common]{
+	Validate: func(c Common) error {
+		if c.TraceProbability < 0 || c.TraceProbability > 1 {
+			return fmt.Errorf("trace_probability must be between 0.0 and 1.0, got: %f", c.TraceProbability)
+		}
+		return nil
+	},
+}
+
+// Holder holds the running class's config and the worker's Common slice,
+// swapped together atomically so task goroutines read a consistent pair.
+type Holder struct {
+	codec Codec
+	v     atomic.Pointer[Snapshot]
+}
+
+// Snapshot is the pair the holder holds at one instant: the class's config,
+// of the codec's type, and the worker's Common slice.
+type Snapshot struct {
+	Class  any
+	Common Common
+}
+
+// NewHolder returns a holder at codec's defaults. A nil codec is a class
+// that reads no runtime config.
+func NewHolder(codec Codec) *Holder {
+	if codec == nil {
+		codec = Typed[struct{}]{}
+	}
+	h := &Holder{codec: codec}
+	h.v.Store(&Snapshot{Class: codec.Initial()})
+	return h
+}
+
+// Static is for tests: a holder fixed at cfg, with no validation.
+func Static[T any](cfg T) *Holder {
+	return NewHolder(Typed[T]{Defaults: cfg})
+}
+
+// Apply puts a payload in force, decoded over the defaults, and returns the
+// snapshot that payload left in the holder, so a caller reports the value
+// this payload put in force and not one a concurrent Apply stored since. A
+// payload the class's codec or Common refuses leaves the holder as it was
+// and comes back as the error, naming the key. changed is false when the
+// payload left every value as it was, so a caller can keep an unchanged
+// poll out of the log.
+func (h *Holder) Apply(payload []byte) (applied Snapshot, changed bool, err error) {
+	class, err := h.codec.Decode(payload)
+	if err != nil {
+		return Snapshot{}, false, err
+	}
+	common, err := commonCodec.Decode(payload)
+	if err != nil {
+		return Snapshot{}, false, err
+	}
+	prev := h.v.Load()
+	next := &Snapshot{Class: class, Common: common.(Common)}
+	if next.Common == prev.Common && reflect.DeepEqual(next.Class, prev.Class) {
+		return *prev, false, nil
+	}
+	h.v.Store(next)
+	return *next, true, nil
+}
+
+// Load returns the class's current config as the codec's type; Get is the
+// typed form.
+func (h *Holder) Load() any { return h.v.Load().Class }
+
+// Common returns the worker's current Common slice.
+func (h *Holder) Common() Common { return h.v.Load().Common }
+
+// Get is the class's current config. A nil holder reads as T's zero
+// value; a holder built for another type is a programming error and
+// panics with both types named.
+func Get[T any](h *Holder) T {
+	var zero T
+	if h == nil {
+		return zero
+	}
+	cfg, ok := h.Load().(T)
+	if !ok {
+		panic(fmt.Sprintf("dynconfig: holder carries %T, Get asked for %T", h.Load(), zero))
+	}
+	return cfg
+}
+
+// Seconds is a duration carried in the payload as a JSON number of seconds,
+// which is how the locust flags spell every time value.
+type Seconds time.Duration
+
+// Duration converts to the time package's unit.
+func (s Seconds) Duration() time.Duration { return time.Duration(s) }
+
+// String prints the duration the way time.Duration does, so a config in a
+// log line reads 500ms rather than a count of nanoseconds.
+func (s Seconds) String() string { return s.Duration().String() }
+
+func (s Seconds) MarshalJSON() ([]byte, error) {
+	return json.Marshal(time.Duration(s).Seconds())
+}
+
+func (s *Seconds) UnmarshalJSON(data []byte) error {
+	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+		return nil
+	}
+	var secs float64
+	if err := json.Unmarshal(data, &secs); err != nil {
+		return fmt.Errorf("seconds: %w", err)
+	}
+	*s = Seconds(secs * float64(time.Second))
+	return nil
+}
+
+// WaitTime is the gap between one iteration of a user and the next, drawn
+// uniformly from [MinWait, MaxWait]. Embed it in a class's knobs struct
+// and call its Validate from the class's.
+type WaitTime struct {
+	MinWait Seconds `json:"min_wait_time"`
+	MaxWait Seconds `json:"max_wait_time"`
+}
+
+func (w WaitTime) Validate() error {
+	if w.MinWait < 0 {
+		return fmt.Errorf("min_wait_time cannot be negative: %v", w.MinWait.Duration())
+	}
+	if w.MaxWait < 0 {
+		return fmt.Errorf("max_wait_time cannot be negative: %v", w.MaxWait.Duration())
+	}
+	if w.MaxWait < w.MinWait {
+		return fmt.Errorf("max_wait_time (%v) cannot be less than min_wait_time (%v)", w.MaxWait.Duration(), w.MinWait.Duration())
+	}
+	return nil
+}
+
+// Draw returns a wait from [MinWait, MaxWait]; an inverted or empty range
+// yields MinWait.
+func (w WaitTime) Draw() time.Duration {
+	return Uniform(w.MinWait.Duration(), w.MaxWait.Duration())
+}
+
+// Uniform draws from [lo, hi]; an inverted or empty range yields lo.
+func Uniform(lo, hi time.Duration) time.Duration {
+	if hi <= lo {
+		return lo
+	}
+	return lo + time.Duration(rand.Float64()*float64(hi-lo))
+}
+
+// Resume and lifecycle modes. Explicit issues a ResumeActor RPC before
+// sending traffic; implicit issues no wake request at all: the actor stays
+// suspended until a request reaches the atenet router, which wakes it
+// while the request is parked. Suspend writes the snapshot to durable
+// storage; pause keeps it on the node.
 const (
 	ResumeModeExplicit = "explicit"
 	ResumeModeImplicit = "implicit"
-
-	ReadModeData   = "data"
-	ReadModeDigest = "digest"
 
 	LifecycleModeSuspend = "suspend"
 	LifecycleModePause   = "pause"
 )
 
-// Config is the dynamic-mutable subset of boomer's behavior. Holder swaps
-// it atomically so task goroutines read a consistent snapshot.
-type Config struct {
-	MinWait time.Duration // gap between one actor's suspend and the VU's next resume, lower bound
-	MaxWait time.Duration // upper bound of the same gap
-
-	MinLive time.Duration // time a GluttonUser actor stays resumed between its first ping and suspend, lower bound
-	MaxLive time.Duration // upper bound of the live window; zero (the default) suspends right after the ping
-
-	TraceProbability float64
-
-	ResumeMode    string // ResumeModeExplicit | ResumeModeImplicit
-	LifecycleMode string // LifecycleModeSuspend | LifecycleModePause
-
-	DurDirFileSize int64  // bytes
-	DurDirReadMode string // ReadModeData | ReadModeDigest
-	DurDirTemplate string // ActorTemplate name
-
-	MemTarget       string // resident RAM the GluttonUser fills via WriteRAM, suffixed (e.g. "2Gi"); "" disables
-	MemChurn        string // RAM re-randomized in place each cycle via WriteRAM rotate, suffixed (e.g. "64Mi"); "" disables
-	MemRead         string // RAM walked (one byte per page) via ReadRAM after each resume, suffixed (e.g. "1Gi") or "all"; "" disables
-	MaxPingsPerWake int    // cap on pings a GluttonUser sends during one resume/suspend cycle; values < 1 read as 1
-
-	SweperfTemplate       string // ActorTemplate name for the sweperf workload; "" falls back to default
-	SweperfTotalSteps     int    // total steps in trace; 0 falls back to default
-	SweperfNumCycles      int    // number of cycles to partition steps into; 0 falls back to default
-	SweperfPollIntervalMs int    // /status poll interval in ms; 0 falls back to default
-
-	CPUCores     int     // goroutines each GluttonUser's actor spins via UseCPU; 0 disables
-	CPUDutyCycle float64 // fraction of one core each of those goroutines consumes, in [0, 1]
-
-	AgentSessionScript     string  // built-in agent-session script variant; "" falls back to the default
-	AgentSessionScriptFile string  // path to a script YAML on the worker; wins over AgentSessionScript when set
-	AgentSessionThinkScale float64 // multiplier on the script's per-step think times; 0 reads as 1.0
-
-	TotalActors      int           // spawn batch size; 0 keeps --total-actors
-	SpawnConcurrency int           // actors the spawn batch creates concurrently; 0 keeps --spawn-concurrency
-	ActorDeadline    time.Duration // per-actor timeout in the spawn batch; 0 keeps --actor-deadline
+// Lifecycle is how a class takes its actors off a worker and brings them
+// back. The empty string is each class's own default; see the class.
+type Lifecycle struct {
+	ResumeMode    string `json:"resume_mode"`
+	LifecycleMode string `json:"lifecycle_mode"`
 }
 
-// Holder lets readers Load() the current Config and writers Store() a new
-// one. Backed by atomic.Pointer for lock-free reads on the hot path.
-type Holder struct {
-	v atomic.Pointer[Config]
+func (l Lifecycle) Validate() error {
+	if l.ResumeMode != "" && l.ResumeMode != ResumeModeExplicit && l.ResumeMode != ResumeModeImplicit {
+		return fmt.Errorf("invalid resume_mode %q: must be %q or %q", l.ResumeMode, ResumeModeExplicit, ResumeModeImplicit)
+	}
+	if l.LifecycleMode != "" && l.LifecycleMode != LifecycleModeSuspend && l.LifecycleMode != LifecycleModePause {
+		return fmt.Errorf("invalid lifecycle_mode %q: must be %q or %q", l.LifecycleMode, LifecycleModeSuspend, LifecycleModePause)
+	}
+	return nil
 }
 
-func NewHolder(initial Config) *Holder {
-	h := &Holder{}
-	h.v.Store(&initial)
-	return h
+// Fetch GETs url and returns the payload it serves.
+func Fetch(ctx context.Context, url string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("GET %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("GET %s: status %d", url, resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", url, err)
+	}
+	return body, nil
 }
-
-func (h *Holder) Load() Config { return *h.v.Load() }
-
-func (h *Holder) Store(c Config) { h.v.Store(&c) }
 
 // ProbabilityUpdater is the subset of trace.UpdatableSampler we touch here;
 // kept as an interface so this package doesn't depend on the trace package.
@@ -109,245 +294,27 @@ type ProbabilityUpdater interface {
 	UpdateProbability(p float64)
 }
 
-// payload mirrors the master's /boomer-config JSON. Fields are pointers so
-// we can distinguish "absent" (leave current value) from "explicitly zero".
-// The same shape is used for static --config-json input and the live
-// /boomer-config endpoint, so master + Python runner + Go worker share one
-// vocabulary for the boomer's runtime-tunable knobs.
-type payload struct {
-	TraceProbability      *float64 `json:"trace_probability"`
-	MinWaitTime           *float64 `json:"min_wait_time"`
-	MaxWaitTime           *float64 `json:"max_wait_time"`
-	MinLiveTime           *float64 `json:"min_live_time"`
-	MaxLiveTime           *float64 `json:"max_live_time"`
-	DurDirFileSize        *float64 `json:"durdir_file_size_bytes"`
-	ResumeMode            *string  `json:"resume_mode"`
-	LifecycleMode         *string  `json:"lifecycle_mode"`
-	DurDirReadMode        *string  `json:"durdir_read_mode"`
-	DurDirTemplate        *string  `json:"durdir_template"`
-	MemTarget             *string  `json:"mem_target"`
-	MemChurn              *string  `json:"mem_churn"`
-	MemRead               *string  `json:"mem_read"`
-	CPUCores              *float64 `json:"cpu_cores"`
-	CPUDutyCycle          *float64 `json:"cpu_duty_cycle"`
-	MaxPingsPerWake       *float64 `json:"max_pings_per_wake"`
-	SweperfTemplate       *string  `json:"sweperf_template"`
-	SweperfTotalSteps     *float64 `json:"sweperf_total_steps"`
-	SweperfNumCycles      *float64 `json:"sweperf_num_cycles"`
-	SweperfPollIntervalMs *float64 `json:"sweperf_poll_interval_ms"`
-
-	AgentSessionScript     *string  `json:"agentsession_script"`
-	AgentSessionScriptFile *string  `json:"agentsession_script_file"`
-	AgentSessionThinkScale *float64 `json:"agentsession_think_scale"`
-
-	TotalActors      *float64 `json:"total_actors"`
-	SpawnConcurrency *float64 `json:"spawn_concurrency"`
-	ActorDeadline    *float64 `json:"actor_deadline"`
-}
-
-// Parse decodes a JSON blob (typically from a CLI flag) and merges its
-// fields into `current`. Returns the merged Config — unset fields preserve
-// `current`'s existing values, matching Fetch's behavior.
-func Parse(jsonBytes []byte, current Config) (Config, error) {
-	if len(jsonBytes) == 0 {
-		return current, nil
-	}
-	var p payload
-	if err := json.Unmarshal(jsonBytes, &p); err != nil {
-		return current, fmt.Errorf("decode config json: %w", err)
-	}
-	merged := p.merge(current)
-	if err := merged.Validate(); err != nil {
-		return current, fmt.Errorf("validate config: %w", err)
-	}
-	return merged, nil
-}
-
-// Fetch GETs `url` and merges any returned fields into `current`. Returns
-// the merged Config (or current unchanged on a soft no-op response).
-func Fetch(ctx context.Context, url string, current Config) (Config, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+// fetchAndApply fetches url into holder and, on a change, pushes the trace
+// probability to the sampler and logs the config now in force. The error
+// is a failed fetch or the holder's refusal, with the key it names.
+func fetchAndApply(ctx context.Context, trigger, url string, holder *Holder, sampler ProbabilityUpdater) error {
+	body, err := Fetch(ctx, url)
 	if err != nil {
-		return current, err
+		return err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	applied, changed, err := holder.Apply(body)
 	if err != nil {
-		return current, fmt.Errorf("GET %s: %w", url, err)
+		return fmt.Errorf("%s: %w", url, err)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return current, fmt.Errorf("GET %s: status %d", url, resp.StatusCode)
+	if !changed {
+		return nil
 	}
-	var p payload
-	if err := json.NewDecoder(resp.Body).Decode(&p); err != nil {
-		return current, fmt.Errorf("decode %s: %w", url, err)
-	}
-	merged := p.merge(current)
-	if err := merged.Validate(); err != nil {
-		return current, fmt.Errorf("validate %s: %w", url, err)
-	}
-	return merged, nil
-}
-
-// Validate checks that the config values are within legal ranges.
-func (c Config) Validate() error {
-	if c.MinWait < 0 {
-		return fmt.Errorf("min_wait_time cannot be negative: %v", c.MinWait)
-	}
-	if c.MaxWait < 0 {
-		return fmt.Errorf("max_wait_time cannot be negative: %v", c.MaxWait)
-	}
-	if c.MaxWait < c.MinWait {
-		return fmt.Errorf("max_wait_time (%v) cannot be less than min_wait_time (%v)", c.MaxWait, c.MinWait)
-	}
-	if c.MinLive < 0 {
-		return fmt.Errorf("min_live_time cannot be negative: %v", c.MinLive)
-	}
-	if c.MaxLive < 0 {
-		return fmt.Errorf("max_live_time cannot be negative: %v", c.MaxLive)
-	}
-	if c.MaxLive < c.MinLive {
-		return fmt.Errorf("max_live_time (%v) cannot be less than min_live_time (%v)", c.MaxLive, c.MinLive)
-	}
-	if c.TraceProbability < 0 || c.TraceProbability > 1 {
-		return fmt.Errorf("trace_probability must be between 0.0 and 1.0, got: %f", c.TraceProbability)
-	}
-	if c.DurDirFileSize < 0 {
-		return fmt.Errorf("durdir_file_size_bytes cannot be negative: %d", c.DurDirFileSize)
-	}
-	if c.DurDirFileSize > math.MaxInt32 {
-		return fmt.Errorf("durdir_file_size_bytes cannot exceed %d (2 GiB), got: %d", math.MaxInt32, c.DurDirFileSize)
-	}
-	if c.ResumeMode != "" && c.ResumeMode != ResumeModeExplicit && c.ResumeMode != ResumeModeImplicit {
-		return fmt.Errorf("invalid resume_mode %q: must be %q or %q", c.ResumeMode, ResumeModeExplicit, ResumeModeImplicit)
-	}
-	if c.LifecycleMode != "" && c.LifecycleMode != LifecycleModeSuspend && c.LifecycleMode != LifecycleModePause {
-		return fmt.Errorf("invalid lifecycle_mode %q: must be %q or %q", c.LifecycleMode, LifecycleModeSuspend, LifecycleModePause)
-	}
-	if c.DurDirReadMode != "" && c.DurDirReadMode != ReadModeData && c.DurDirReadMode != ReadModeDigest {
-		return fmt.Errorf("invalid durdir_read_mode %q: must be %q or %q", c.DurDirReadMode, ReadModeData, ReadModeDigest)
-	}
-	if c.CPUCores < 0 {
-		return fmt.Errorf("cpu_cores cannot be negative: %d", c.CPUCores)
-	}
-	if c.CPUDutyCycle < 0 || c.CPUDutyCycle > 1 {
-		return fmt.Errorf("cpu_duty_cycle must be between 0.0 and 1.0, got: %f", c.CPUDutyCycle)
-	}
-	if c.SweperfTotalSteps < 0 {
-		return fmt.Errorf("sweperf_total_steps cannot be negative: %d", c.SweperfTotalSteps)
-	}
-	if c.SweperfNumCycles < 0 {
-		return fmt.Errorf("sweperf_num_cycles cannot be negative: %d", c.SweperfNumCycles)
-	}
-	if c.SweperfPollIntervalMs < 0 {
-		return fmt.Errorf("sweperf_poll_interval_ms cannot be negative: %d", c.SweperfPollIntervalMs)
-	}
-	if c.AgentSessionThinkScale < 0 {
-		return fmt.Errorf("agentsession_think_scale cannot be negative: %f", c.AgentSessionThinkScale)
-	}
-	if c.TotalActors < 0 {
-		return fmt.Errorf("total_actors cannot be negative: %d", c.TotalActors)
-	}
-	if c.SpawnConcurrency < 0 {
-		return fmt.Errorf("spawn_concurrency cannot be negative: %d", c.SpawnConcurrency)
-	}
-	if c.ActorDeadline < 0 {
-		return fmt.Errorf("actor_deadline cannot be negative: %v", c.ActorDeadline)
-	}
-	// MaxPingsPerWake < 1 is treated as 1 at read time (see iterate() in
-	// glutton/lifecycle.go), so Config's zero value stays usable — no
-	// validate rejection here.
-	// MemTarget, MemChurn, and MemRead are passed to glutton verbatim
-	// (MemRead's "all" excepted, which the driver maps to an empty
-	// whole-array walk), which owns the parse; invalid values fail loudly
-	// there as GluttonFillRAM / GluttonChurnRAM / GluttonReadRAM errors.
+	sampler.UpdateProbability(applied.Common.TraceProbability)
+	slog.Info("dynconfig applied",
+		slog.String("trigger", trigger),
+		slog.Float64("trace_probability", applied.Common.TraceProbability),
+		slog.String("config", fmt.Sprintf("%+v", applied.Class)))
 	return nil
-}
-
-// merge folds the payload's set fields into `current`, leaving unset fields
-// at their existing values. Used by both Parse (CLI input) and Fetch (HTTP
-// pull) so the merge semantics are identical.
-func (p payload) merge(current Config) Config {
-	out := current
-	if p.TraceProbability != nil {
-		out.TraceProbability = *p.TraceProbability
-	}
-	if p.MinWaitTime != nil {
-		out.MinWait = time.Duration(*p.MinWaitTime * float64(time.Second))
-	}
-	if p.MaxWaitTime != nil {
-		out.MaxWait = time.Duration(*p.MaxWaitTime * float64(time.Second))
-	}
-	if p.MinLiveTime != nil {
-		out.MinLive = time.Duration(*p.MinLiveTime * float64(time.Second))
-	}
-	if p.MaxLiveTime != nil {
-		out.MaxLive = time.Duration(*p.MaxLiveTime * float64(time.Second))
-	}
-	if p.DurDirFileSize != nil {
-		out.DurDirFileSize = int64(*p.DurDirFileSize)
-	}
-	if p.ResumeMode != nil {
-		out.ResumeMode = *p.ResumeMode
-	}
-	if p.LifecycleMode != nil {
-		out.LifecycleMode = *p.LifecycleMode
-	}
-	if p.DurDirReadMode != nil {
-		out.DurDirReadMode = *p.DurDirReadMode
-	}
-	if p.DurDirTemplate != nil {
-		out.DurDirTemplate = *p.DurDirTemplate
-	}
-	if p.MemTarget != nil {
-		out.MemTarget = *p.MemTarget
-	}
-	if p.MemChurn != nil {
-		out.MemChurn = *p.MemChurn
-	}
-	if p.MemRead != nil {
-		out.MemRead = *p.MemRead
-	}
-	if p.CPUCores != nil {
-		out.CPUCores = int(*p.CPUCores)
-	}
-	if p.CPUDutyCycle != nil {
-		out.CPUDutyCycle = *p.CPUDutyCycle
-	}
-	if p.MaxPingsPerWake != nil {
-		out.MaxPingsPerWake = int(*p.MaxPingsPerWake)
-	}
-	if p.SweperfTemplate != nil {
-		out.SweperfTemplate = *p.SweperfTemplate
-	}
-	if p.SweperfTotalSteps != nil {
-		out.SweperfTotalSteps = int(*p.SweperfTotalSteps)
-	}
-	if p.SweperfNumCycles != nil {
-		out.SweperfNumCycles = int(*p.SweperfNumCycles)
-	}
-	if p.SweperfPollIntervalMs != nil {
-		out.SweperfPollIntervalMs = int(*p.SweperfPollIntervalMs)
-	}
-	if p.AgentSessionScript != nil {
-		out.AgentSessionScript = *p.AgentSessionScript
-	}
-	if p.AgentSessionScriptFile != nil {
-		out.AgentSessionScriptFile = *p.AgentSessionScriptFile
-	}
-	if p.AgentSessionThinkScale != nil {
-		out.AgentSessionThinkScale = *p.AgentSessionThinkScale
-	}
-	if p.TotalActors != nil {
-		out.TotalActors = int(*p.TotalActors)
-	}
-	if p.SpawnConcurrency != nil {
-		out.SpawnConcurrency = int(*p.SpawnConcurrency)
-	}
-	if p.ActorDeadline != nil {
-		out.ActorDeadline = time.Duration(*p.ActorDeadline * float64(time.Second))
-	}
-	return out
 }
 
 // StartPoll fetches `url` every `interval` until `ctx` is done, and applies
@@ -361,9 +328,11 @@ func (p payload) merge(current Config) Config {
 // it. The sample-rate sweep of benchmarking/observability.md is one such
 // shape: each of its steps holds 10 users.
 //
-// `onError` gets each failed fetch. A caller must not exit the process there,
-// as it does for a spawn: the worker holds the last good value, and one
-// failed poll of a long run is not a reason to lose the run.
+// `onError` gets each failed fetch and each refused payload. A caller must
+// not exit the process there, as it does for a spawn: the worker holds the
+// last good value, and one failed poll of a long run is not a reason to
+// lose the run. Only a change goes to the log: a poll of each few seconds
+// for the length of a soak would otherwise make a log that hides the run.
 func StartPoll(
 	ctx context.Context,
 	url string,
@@ -384,7 +353,7 @@ func StartPoll(
 				return
 			case <-ticker.C:
 				fetchCtx, cancel := context.WithTimeout(ctx, fetchTimeout)
-				next, err := Fetch(fetchCtx, url, holder.Load())
+				err := fetchAndApply(fetchCtx, "poll", url, holder, sampler)
 				cancel()
 				if err != nil {
 					// The end of the run stops a fetch that is in
@@ -394,44 +363,7 @@ func StartPoll(
 						return
 					}
 					onError(err)
-					continue
 				}
-				// Only a change goes to the log. A poll of each few seconds
-				// for the length of a soak makes a log that hides the run.
-				if next == holder.Load() {
-					continue
-				}
-				holder.Store(next)
-				sampler.UpdateProbability(next.TraceProbability)
-				slog.Info("dynconfig applied",
-					slog.String("trigger", "poll"),
-					slog.Float64("trace_probability", next.TraceProbability),
-					slog.Duration("min_wait", next.MinWait),
-					slog.Duration("max_wait", next.MaxWait),
-					slog.Duration("min_live", next.MinLive),
-					slog.Duration("max_live", next.MaxLive),
-					slog.Int64("durdir_file_size_bytes", next.DurDirFileSize),
-					slog.String("resume_mode", next.ResumeMode),
-					slog.String("lifecycle_mode", next.LifecycleMode),
-					slog.String("durdir_read_mode", next.DurDirReadMode),
-					slog.String("durdir_template", next.DurDirTemplate),
-					slog.String("mem_target", next.MemTarget),
-					slog.String("mem_churn", next.MemChurn),
-					slog.String("mem_read", next.MemRead),
-					slog.Int("cpu_cores", next.CPUCores),
-					slog.Float64("cpu_duty_cycle", next.CPUDutyCycle),
-					slog.Int("max_pings_per_wake", next.MaxPingsPerWake),
-					slog.String("sweperf_template", next.SweperfTemplate),
-					slog.Int("sweperf_total_steps", next.SweperfTotalSteps),
-					slog.Int("sweperf_num_cycles", next.SweperfNumCycles),
-					slog.Int("sweperf_poll_interval_ms", next.SweperfPollIntervalMs),
-					slog.String("agentsession_script", next.AgentSessionScript),
-					slog.String("agentsession_script_file", next.AgentSessionScriptFile),
-					slog.Float64("agentsession_think_scale", next.AgentSessionThinkScale),
-					slog.Int("total_actors", next.TotalActors),
-					slog.Int("spawn_concurrency", next.SpawnConcurrency),
-					slog.Duration("actor_deadline", next.ActorDeadline),
-				)
 			}
 		}
 	}()
@@ -440,52 +372,22 @@ func StartPoll(
 // SubscribeSpawn registers a boomer Events handler that fetches `url` on
 // each spawn message and applies the result to `holder` + `sampler`. Locust
 // sends a spawn message for every ramp step, so a long ramp fetches once per
-// second. `onError` is invoked when a fetch fails, with `fetched` true if an
-// earlier spawn fetch succeeded: the holder then still has a value from the
-// master, and the caller can keep running on it. With `fetched` false the
-// worker has only its command-line defaults, and callers typically exit.
-// Returns an error if the event subscription itself fails (handler signature
-// mismatch), which is a programmer error and should be treated as fatal too.
+// second. `onError` is invoked when a fetch fails or the holder refuses the
+// payload, with `fetched` true if an earlier spawn fetch was applied: the
+// holder then still has a value from the master, and the caller can keep
+// running on it. With `fetched` false the worker has only its command-line
+// values, and callers typically exit. Returns an error if the event
+// subscription itself fails (handler signature mismatch), which is a
+// programmer error and should be treated as fatal too.
 func SubscribeSpawn(url string, holder *Holder, sampler ProbabilityUpdater, fetchTimeout time.Duration, onError func(err error, fetched bool)) error {
 	var fetched atomic.Bool
 	return boomer.Events.Subscribe("boomer:spawn", func(spawnCount int, spawnRate float64) {
 		ctx, cancel := context.WithTimeout(context.Background(), fetchTimeout)
 		defer cancel()
-		next, err := Fetch(ctx, url, holder.Load())
-		if err != nil {
+		if err := fetchAndApply(ctx, "spawn", url, holder, sampler); err != nil {
 			onError(err, fetched.Load())
 			return
 		}
 		fetched.Store(true)
-		holder.Store(next)
-		sampler.UpdateProbability(next.TraceProbability)
-		slog.Info("dynconfig applied",
-			slog.Float64("trace_probability", next.TraceProbability),
-			slog.Duration("min_wait", next.MinWait),
-			slog.Duration("max_wait", next.MaxWait),
-			slog.Duration("min_live", next.MinLive),
-			slog.Duration("max_live", next.MaxLive),
-			slog.Int64("durdir_file_size_bytes", next.DurDirFileSize),
-			slog.String("resume_mode", next.ResumeMode),
-			slog.String("lifecycle_mode", next.LifecycleMode),
-			slog.String("durdir_read_mode", next.DurDirReadMode),
-			slog.String("durdir_template", next.DurDirTemplate),
-			slog.String("mem_target", next.MemTarget),
-			slog.String("mem_churn", next.MemChurn),
-			slog.String("mem_read", next.MemRead),
-			slog.Int("cpu_cores", next.CPUCores),
-			slog.Float64("cpu_duty_cycle", next.CPUDutyCycle),
-			slog.Int("max_pings_per_wake", next.MaxPingsPerWake),
-			slog.String("sweperf_template", next.SweperfTemplate),
-			slog.Int("sweperf_total_steps", next.SweperfTotalSteps),
-			slog.Int("sweperf_num_cycles", next.SweperfNumCycles),
-			slog.Int("sweperf_poll_interval_ms", next.SweperfPollIntervalMs),
-			slog.String("agentsession_script", next.AgentSessionScript),
-			slog.String("agentsession_script_file", next.AgentSessionScriptFile),
-			slog.Float64("agentsession_think_scale", next.AgentSessionThinkScale),
-			slog.Int("total_actors", next.TotalActors),
-			slog.Int("spawn_concurrency", next.SpawnConcurrency),
-			slog.Duration("actor_deadline", next.ActorDeadline),
-		)
 	})
 }

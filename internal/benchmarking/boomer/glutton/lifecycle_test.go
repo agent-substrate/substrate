@@ -33,8 +33,8 @@ func TestGluttonIterate_SuspendMode(t *testing.T) {
 	cfg := newTestConfig(t, srv, &userclass.Config{
 		APIStub:  fakeCtrl,
 		Atespace: "bench-test",
-		Dyn: dynconfig.NewHolder(dynconfig.Config{
-			LifecycleMode: dynconfig.LifecycleModeSuspend,
+		Dyn: dynconfig.Static(gluttonKnobs{
+			Lifecycle: dynconfig.Lifecycle{LifecycleMode: dynconfig.LifecycleModeSuspend},
 		}),
 	})
 
@@ -56,8 +56,8 @@ func TestGluttonIterate_PauseMode(t *testing.T) {
 	cfg := newTestConfig(t, srv, &userclass.Config{
 		APIStub:  fakeCtrl,
 		Atespace: "bench-test",
-		Dyn: dynconfig.NewHolder(dynconfig.Config{
-			LifecycleMode: dynconfig.LifecycleModePause,
+		Dyn: dynconfig.Static(gluttonKnobs{
+			Lifecycle: dynconfig.Lifecycle{LifecycleMode: dynconfig.LifecycleModePause},
 		}),
 	})
 
@@ -79,8 +79,8 @@ func TestGluttonShutdown_PauseModeRunningActor(t *testing.T) {
 	cfg := newTestConfig(t, srv, &userclass.Config{
 		APIStub:  fakeCtrl,
 		Atespace: "bench-test",
-		Dyn: dynconfig.NewHolder(dynconfig.Config{
-			LifecycleMode: dynconfig.LifecycleModePause,
+		Dyn: dynconfig.Static(gluttonKnobs{
+			Lifecycle: dynconfig.Lifecycle{LifecycleMode: dynconfig.LifecycleModePause},
 		}),
 	})
 
@@ -110,8 +110,8 @@ func TestGluttonShutdown_DeleteSetsAnyState(t *testing.T) {
 	cfg := newTestConfig(t, srv, &userclass.Config{
 		APIStub:  fakeCtrl,
 		Atespace: "bench-test",
-		Dyn: dynconfig.NewHolder(dynconfig.Config{
-			LifecycleMode: dynconfig.LifecycleModeSuspend,
+		Dyn: dynconfig.Static(gluttonKnobs{
+			Lifecycle: dynconfig.Lifecycle{LifecycleMode: dynconfig.LifecycleModeSuspend},
 		}),
 	})
 
@@ -143,8 +143,8 @@ func newReplacementRuntime(t *testing.T, resumeErrs ...error) (*taskRuntime, *fa
 	cfg := newTestConfig(t, &fake.Server{}, &userclass.Config{
 		APIStub:  fakeCtrl,
 		Atespace: "bench-test",
-		Dyn: dynconfig.NewHolder(dynconfig.Config{
-			LifecycleMode: dynconfig.LifecycleModeSuspend,
+		Dyn: dynconfig.Static(gluttonKnobs{
+			Lifecycle: dynconfig.Lifecycle{LifecycleMode: dynconfig.LifecycleModeSuspend},
 		}),
 	})
 	return &taskRuntime{cfg: cfg}, fakeCtrl
@@ -231,8 +231,8 @@ func TestGluttonIterate_RetriesStrandedHibernate(t *testing.T) {
 	cfg := newTestConfig(t, &fake.Server{}, &userclass.Config{
 		APIStub:  fakeCtrl,
 		Atespace: "bench-test",
-		Dyn: dynconfig.NewHolder(dynconfig.Config{
-			LifecycleMode: dynconfig.LifecycleModeSuspend,
+		Dyn: dynconfig.Static(gluttonKnobs{
+			Lifecycle: dynconfig.Lifecycle{LifecycleMode: dynconfig.LifecycleModeSuspend},
 		}),
 	})
 	rt := &taskRuntime{cfg: cfg}

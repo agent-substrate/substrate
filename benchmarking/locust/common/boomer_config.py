@@ -35,7 +35,11 @@ the operator set in the web UI form:
   * serve_config_headless(): the same /boomer-config payload from a plain
     HTTP server, for a headless run whose values change while it runs.
 
-Keep _FLAGS aligned with internal/benchmarking/boomer/dynconfig.payload.
+_FLAGS is the set of keys the payload carries. The Go side takes the payload
+as an arbitrary JSON object, and the user class a worker runs reads and
+validates the keys it documents (the dynconfig.Typed codec it registers with
+its userclass.Entry), so a flag added here needs a matching field in the
+class that consumes it.
 """
 
 import argparse

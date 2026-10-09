@@ -140,7 +140,7 @@ func newTestConfig(t *testing.T, srv *fake.Server, cfg *userclass.Config) *userc
 		cfg.Tracer = otel.Tracer("test")
 	}
 	if cfg.Dyn == nil {
-		cfg.Dyn = dynconfig.NewHolder(dynconfig.Config{})
+		cfg.Dyn = dynconfig.Static(gluttonKnobs{})
 	}
 	cfg.HTTPClient = ts.Client()
 	cfg.RouterURL = ts.URL
