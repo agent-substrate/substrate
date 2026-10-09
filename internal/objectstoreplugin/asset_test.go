@@ -26,7 +26,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/resources"
+	"github.com/agent-substrate/substrate/pkg/assetfetch"
 	objectstorev1 "github.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -276,7 +276,7 @@ func TestFetchAsset(t *testing.T) {
 			{"upper-case sha256", "gs://" + testBucket + "/kata-assets/vmlinux", strings.ToUpper(sum), 1 << 20},
 			{"short sha256", "gs://" + testBucket + "/kata-assets/vmlinux", sum[:63], 1 << 20},
 			{"zero max_bytes", "gs://" + testBucket + "/kata-assets/vmlinux", sum, 0},
-			{"over-long URI", "gs://" + testBucket + "/" + strings.Repeat("x/", maxAssetURIBytes/2) + "vmlinux", sum, 1 << 20},
+			{"over-long URI", "gs://" + testBucket + "/" + strings.Repeat("x/", assetfetch.MaxURIBytes/2) + "vmlinux", sum, 1 << 20},
 		} {
 			_, err := f.client.FetchAsset(t.Context(), &objectstorev1.FetchAssetRequest{
 				AssetUri: tc.uri, Sha256: tc.sum, WritePath: dst, MaxBytes: tc.max,
@@ -357,20 +357,20 @@ func TestFetchAssetRefusesSnapshots(t *testing.T) {
 	}
 }
 
-// TestFetchAssetManySegmentURIs sends URIs of up to maxAssetURIBytes made of
+// TestFetchAssetManySegmentURIs sends URIs of up to assetfetch.MaxURIBytes made of
 // as many path segments as fit, which the snapshot check reads in one pass.
 func TestFetchAssetManySegmentURIs(t *testing.T) {
 	f := newAssetFixture(t)
 	dst := f.writeFile(t, untouched)
 	// pad returns "s3://<bucket>/" + repeated unit + a non-empty filler
-	// segment + suffix, exactly maxAssetURIBytes long.
+	// segment + suffix, exactly assetfetch.MaxURIBytes long.
 	pad := func(unit, suffix string) string {
 		head := "s3://" + testBucket + "/"
-		avail := maxAssetURIBytes - len(head) - len(suffix)
+		avail := assetfetch.MaxURIBytes - len(head) - len(suffix)
 		n := (avail - 1) / len(unit)
 		uri := head + strings.Repeat(unit, n) + strings.Repeat("y", avail-n*len(unit)) + suffix
-		if len(uri) != maxAssetURIBytes {
-			t.Fatalf("pad built a %d byte URI, want %d", len(uri), maxAssetURIBytes)
+		if len(uri) != assetfetch.MaxURIBytes {
+			t.Fatalf("pad built a %d byte URI, want %d", len(uri), assetfetch.MaxURIBytes)
 		}
 		return uri
 	}
@@ -403,59 +403,6 @@ func TestFetchAssetManySegmentURIs(t *testing.T) {
 	}
 	if n := f.backend.gets.Load() - gets; n != 0 {
 		t.Errorf("refused requests read %d objects, want 0", n)
-	}
-}
-
-// TestSnapshotPrefixLenMatchesParseSnapshotURI checks snapshotPrefixLen
-// against resources.ParseSnapshotURI run on every prefix, for every path of
-// up to 7 segments drawn from the snapshot layout's keywords and an invalid
-// resource name.
-func TestSnapshotPrefixLenMatchesParseSnapshotURI(t *testing.T) {
-	alphabet := []string{"atespaces", "actors", "tags", "snapshots", "Not_A_Name"}
-	parsesAt := func(segments []string) int {
-		for i := 1; i <= len(segments); i++ {
-			if _, err := resources.ParseSnapshotURI("gs://" + testBucket + "/" + strings.Join(segments[:i], "/")); err == nil {
-				return i
-			}
-		}
-		return 0
-	}
-	var walk func(segments []string)
-	walk = func(segments []string) {
-		if len(segments) > 0 {
-			got, want := snapshotPrefixLen(segments), parsesAt(segments)
-			if (got > 0) != (want > 0) {
-				t.Errorf("snapshotPrefixLen(%q) = %d, but ParseSnapshotURI accepts a prefix of length %d", segments, got, want)
-			} else if got > 0 {
-				if _, err := resources.ParseSnapshotURI("gs://" + testBucket + "/" + strings.Join(segments[:got], "/")); err != nil {
-					t.Errorf("snapshotPrefixLen(%q) = %d, but ParseSnapshotURI rejects that prefix: %v", segments, got, err)
-				}
-			}
-		}
-		if len(segments) == 7 {
-			return
-		}
-		for _, seg := range alphabet {
-			walk(append(segments[:len(segments):len(segments)], seg))
-		}
-	}
-	walk(nil)
-}
-
-// TestSnapshotPrefixLenIsLinear runs the check on far more segments than a
-// URI can hold. A check that re-reads every prefix would not finish.
-func TestSnapshotPrefixLenIsLinear(t *testing.T) {
-	unit := []string{"atespaces", "team-a", "actors", "uid1", "snapshots", "Not_A_Name", "atespaces", "team-a", "atespaces"}
-	segments := make([]string, 0, 1<<20+6)
-	for len(segments) < 1<<20 {
-		segments = append(segments, unit...)
-	}
-	if n := snapshotPrefixLen(segments); n != 0 {
-		t.Fatalf("snapshotPrefixLen = %d, want 0", n)
-	}
-	segments = append(segments, "atespaces", "team-a", "tags", "tag1")
-	if n, want := snapshotPrefixLen(segments), len(segments); n != want {
-		t.Fatalf("snapshotPrefixLen = %d, want %d", n, want)
 	}
 }
 
