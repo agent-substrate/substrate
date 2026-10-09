@@ -121,3 +121,44 @@ message CopySnapshotRequest {
 }
 
 message CopySnapshotResponse {}
+
+// AssetProvider is the plugin API an object storage platform implements on
+// every node, next to NodeProvider, to serve sandbox runtime assets (the files
+// a SandboxConfig names, such as a micro-VM kernel and guest image). atelet
+// calls it for every asset it does not download anonymously.
+//
+// An asset is pinned by its sha256, so the plugin hands back an object only if
+// the caller already knows its content. The plugin must also refuse to read
+// anything stored under a snapshot location: an asset URI never names a
+// snapshot, a snapshot's file, or a tag.
+service AssetProvider {
+  // FetchAsset writes the object at asset_uri to write_path if, and only if,
+  // its content hashes to sha256. Nothing is written to write_path otherwise.
+  // It returns PERMISSION_DENIED if asset_uri, or any prefix of it, is a
+  // snapshot or tag URI, before reading anything; NOT_FOUND if the object does
+  // not exist; and FAILED_PRECONDITION if the object is larger than max_bytes
+  // or its sha256 does not match.
+  rpc FetchAsset(FetchAssetRequest) returns (FetchAssetResponse) {}
+}
+
+// FetchAssetRequest asks the plugin to fetch one content-addressed asset.
+message FetchAssetRequest {
+  // The object to read, e.g. gs://<bucket>/kata-assets/vmlinux. Which schemes
+  // a plugin serves is up to the plugin. Masked in logged requests, like the
+  // SandboxConfig URL it comes from.
+  string asset_uri = 1 [ debug_redact = true ];
+
+  // The expected SHA-256 of the object's content, as 64 lower-case hex
+  // characters.
+  string sha256 = 2;
+
+  // Full local path of an existing regular file the asset is written to. The
+  // plugin truncates and writes it only once the content has been verified,
+  // and never creates it.
+  string write_path = 3;
+
+  // The largest object, in bytes, the caller accepts. Must be positive.
+  int64 max_bytes = 4;
+}
+
+message FetchAssetResponse {}

@@ -12,10 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Command snapshot-plugin serves the snapshot plugin API on GCS or S3 over a
-// Unix socket. It runs as a sidecar: "node" next to atelet, "control" next to
-// ate-api-server. The backend is chosen by ATE_STORAGE_BACKEND ("s3", or GCS
-// by default) with the ambient credentials, as atelet and ate-api-server do.
+// Command snapshot-plugin serves the object-store plugin API on GCS or S3 over
+// a Unix socket. It runs as a sidecar: "node" next to atelet, serving snapshot
+// transfers and sandbox assets, and "control" next to ate-api-server. The
+// backend is chosen by ATE_STORAGE_BACKEND ("s3", or GCS by default) with the
+// ambient credentials.
 // "healthcheck" reports whether a running plugin is serving, for the sidecar's
 // startup probe.
 package main
@@ -53,7 +54,8 @@ func main() {
 	mode := os.Args[1]
 	flags := pflag.NewFlagSet(mode, pflag.ExitOnError)
 	socket := flags.String("socket", "", "Unix socket to serve on, or to check in healthcheck mode")
-	root := flags.String("root", nodepath.BasePath, "node mode: the only directory tree local snapshot files may be read from or written to")
+	root := flags.String("root", nodepath.BasePath, "node mode: the only directory tree local snapshot and asset files may be read from or written to")
+	assetStagingDir := flags.String("asset-staging-dir", "/var/lib/snapshot-plugin/asset-staging", "node mode: directory sandbox assets are downloaded into and verified before they are copied below --root; must not be below --root or readable by the caller")
 	timeout := flags.Duration("timeout", 5*time.Second, "healthcheck mode: how long to wait for the plugin to report that it is serving")
 	_ = flags.Parse(os.Args[2:])
 
@@ -93,6 +95,14 @@ func main() {
 			serverboot.Fatal(ctx, "Invalid --root", err)
 		}
 		objectstorev1.RegisterNodeProviderServer(srv, plugin)
+		if err := os.MkdirAll(*assetStagingDir, 0o700); err != nil {
+			serverboot.Fatal(ctx, "Failed to create --asset-staging-dir", err)
+		}
+		assets, err := objectstoreplugin.NewAssetPlugin(objects, *root, *assetStagingDir)
+		if err != nil {
+			serverboot.Fatal(ctx, "Invalid --asset-staging-dir", err)
+		}
+		objectstorev1.RegisterAssetProviderServer(srv, assets)
 	case "control":
 		store, err := newObjectStore(ctx)
 		if err != nil {
