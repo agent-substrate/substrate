@@ -630,8 +630,9 @@ func (c *traceCollector) Export(_ context.Context, req *coltracepb.ExportTraceSe
 }
 
 // startTraceCollector serves a traceCollector on a loopback port, points
-// OTEL_EXPORTER_OTLP_ENDPOINT at it, and sets OTEL_TRACES_EXPORTER.
-func startTraceCollector(t *testing.T, exporter string) *traceCollector {
+// OTEL_EXPORTER_OTLP_ENDPOINT at it, and sets OTEL_TRACES_EXPORTER. It returns
+// the collector and its address.
+func startTraceCollector(t *testing.T, exporter string) (*traceCollector, string) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -644,14 +645,16 @@ func startTraceCollector(t *testing.T, exporter string) *traceCollector {
 	t.Cleanup(srv.Stop)
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://"+ln.Addr().String())
 	t.Setenv(tracesExporterEnv, exporter)
-	return collector
+	return collector, ln.Addr().String()
 }
 
 // endOneSpan ends a sampled span, then flushes and shuts the provider down, so
-// a span exporter, if there is one, has exported it.
-func endOneSpan(t *testing.T, serviceName string) {
+// a span exporter, if there is one, has exported it. opts.Sampling is set to
+// sample every span.
+func endOneSpan(t *testing.T, opts TracingOptions) {
 	t.Helper()
-	tp, err := InitTracing(t.Context(), TracingOptions{ServiceName: serviceName, Sampling: ParentRatioSampling(1)})
+	opts.Sampling = ParentRatioSampling(1)
+	tp, err := InitTracing(t.Context(), opts)
 	if err != nil {
 		t.Fatalf("InitTracing: %v", err)
 	}
@@ -667,8 +670,8 @@ func endOneSpan(t *testing.T, serviceName string) {
 }
 
 func TestInitTracingExportsOverOTLPByDefault(t *testing.T) {
-	collector := startTraceCollector(t, "")
-	endOneSpan(t, "test-traces-default")
+	collector, _ := startTraceCollector(t, "")
+	endOneSpan(t, TracingOptions{ServiceName: "test-traces-default"})
 	if got := collector.spans.Load(); got != 1 {
 		t.Errorf("the collector received %d span(s), want 1", got)
 	}
@@ -677,9 +680,66 @@ func TestInitTracingExportsOverOTLPByDefault(t *testing.T) {
 // With OTEL_TRACES_EXPORTER=none the span is still sampled, so the context a
 // component propagates keeps its sampled flag, and nothing is exported.
 func TestInitTracingExporterNoneExportsNothing(t *testing.T) {
-	collector := startTraceCollector(t, "none")
-	endOneSpan(t, "test-traces-none")
+	collector, _ := startTraceCollector(t, "none")
+	endOneSpan(t, TracingOptions{ServiceName: "test-traces-none"})
 	if got := collector.spans.Load(); got != 0 {
 		t.Errorf("OTEL_TRACES_EXPORTER=none still exported %d span(s)", got)
+	}
+}
+
+// ateom exports through the relay without an OTLP endpoint of its own: the
+// connection is the destination.
+func TestInitTracingRelayCapableExportsThroughConnWithoutEndpoint(t *testing.T) {
+	collector, addr := startTraceCollector(t, "")
+	t.Setenv(otlpEndpointEnv, "")
+	conn, err := grpc.NewClient("passthrough:///"+addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("grpc.NewClient: %v", err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	endOneSpan(t, TracingOptions{ServiceName: "test-traces-relay", ExporterConn: conn, RelayCapable: true})
+	if got := collector.spans.Load(); got != 1 {
+		t.Errorf("the collector received %d span(s) through the connection, want 1", got)
+	}
+}
+
+func TestHasOTLPDestination(t *testing.T) {
+	conn := lazyConn(t)
+	tests := []struct {
+		name            string
+		relayCapable    bool
+		conn            *grpc.ClientConn
+		generic, signal string
+		want            bool
+	}{
+		{name: "not relay capable", want: true},
+		{name: "relay connection", relayCapable: true, conn: conn, want: true},
+		{name: "generic endpoint", relayCapable: true, generic: "http://collector:4317", want: true},
+		{name: "signal endpoint", relayCapable: true, signal: "http://collector:4317", want: true},
+		{name: "neither", relayCapable: true, want: false},
+		{name: "blank endpoints", relayCapable: true, generic: " ", signal: " ", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv(otlpEndpointEnv, tt.generic)
+			t.Setenv(tracesEndpointEnv, tt.signal)
+			if got := hasOTLPDestination(tracesEndpointEnv, tt.relayCapable, tt.conn); got != tt.want {
+				t.Errorf("hasOTLPDestination = %t, want %t", got, tt.want)
+			}
+		})
+	}
+}
+
+// Without a relay or an endpoint, InitLogging returns no provider for ateom
+// rather than one that dials localhost:4317.
+func TestInitLoggingRelayCapableWithoutDestinationReturnsNil(t *testing.T) {
+	t.Setenv(otlpEndpointEnv, "")
+	t.Setenv(logsEndpointEnv, "")
+	lp, err := InitLogging(t.Context(), LoggingOptions{ServiceName: "test-logs-nowhere", Exporter: Exporters{ExporterOTLP: true}, RelayCapable: true})
+	if err != nil {
+		t.Fatalf("InitLogging: %v", err)
+	}
+	if lp != nil {
+		t.Error("InitLogging returned a provider with nowhere to export")
 	}
 }

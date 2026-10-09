@@ -119,7 +119,8 @@ func do(ctx context.Context) error {
 	const serviceName = "ateom-microvm"
 	// Export through atelet's node-local relay when it is there, so telemetry
 	// never touches the worker pod's network. A nil conn means it is not, and
-	// the providers fall back to dialing the collector directly.
+	// the providers fall back to OTEL_EXPORTER_OTLP_ENDPOINT, and export
+	// nothing without one.
 	//
 	// A relay that cannot be dialed is logged rather than fatal, matching both
 	// ends of the same decision: Dial already treats an absent socket as a
@@ -129,7 +130,7 @@ func do(ctx context.Context) error {
 	// over its telemetry route would turn a misconfigured flag into an outage.
 	relayConn, err := otlprelay.Dial(ctx, *otlpRelaySocket)
 	if err != nil {
-		slog.ErrorContext(ctx, "Failed to connect to the OTLP relay; exporting telemetry directly over the pod network",
+		slog.ErrorContext(ctx, "Failed to connect to the OTLP relay; falling back to the OTLP endpoint, if one is set",
 			slog.String("socket", *otlpRelaySocket), slog.Any("err", err))
 	}
 	if relayConn != nil {
@@ -141,7 +142,7 @@ func do(ctx context.Context) error {
 		Sampling:     serverboot.ResolveTraceSampling(ctx, serverboot.ParentRatioSampling(serverboot.ControlPlaneTraceRatio)),
 		ExporterConn: relayConn,
 		// So the spans say which path they took, including when relayConn is nil
-		// because the dial above failed and this ateom is exporting directly.
+		// because the dial above failed and this ateom exports directly or not at all.
 		RelayCapable: true,
 	})
 	if err != nil {
@@ -164,7 +165,7 @@ func do(ctx context.Context) error {
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize logging", err)
 	}
-	// Nil when the exporter does not include otlp.
+	// Nil when there is nothing to export.
 	if lp != nil {
 		defer serverboot.ShutdownProvider("LoggerProvider", lp.Shutdown)
 	}

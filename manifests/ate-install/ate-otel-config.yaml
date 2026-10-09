@@ -17,7 +17,9 @@
 # atenet-egress), which consume it via `envFrom`. ate-controller additionally propagates these values
 # to the ateom worker pods it creates, which have no other way to receive them,
 # and atenet-router's --otlp-collector-address defaults to the endpoint below,
-# so Envoy's own spans follow it too.
+# so Envoy's own spans follow it too. The exporter selection is the exception:
+# ateom takes ATEOM_OTEL_LOGS_EXPORTER, ATEOM_OTEL_TRACES_EXPORTER and
+# ATEOM_OTEL_METRICS_EXPORTER, not the control plane's OTEL_*_EXPORTER values.
 #
 # This file holds the GKE values. The kind overlay supplies a ConfigMap of the
 # same name with the in-cluster collector address; see

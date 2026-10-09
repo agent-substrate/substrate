@@ -33,7 +33,8 @@
 # OTEL_LOGS_EXPORTER=otlp sends the actor events over OTLP instead of stdout;
 # kind adds console to keep them in kubectl logs too. serverboot defaults it to
 # none, so the base ConfigMap leaves it unset and every other environment keeps
-# them on stdout.
+# them on stdout. ATEOM_OTEL_LOGS_EXPORTER is the same setting for the ateom
+# worker pods, which ate-controller sets from it.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -44,3 +45,4 @@ data:
   OTEL_METRIC_EXPORT_INTERVAL: "10000"
   OTEL_METRIC_EXPORT_TIMEOUT: "10000"
   OTEL_LOGS_EXPORTER: otlp,console
+  ATEOM_OTEL_LOGS_EXPORTER: otlp,console

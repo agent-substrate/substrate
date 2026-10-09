@@ -56,10 +56,11 @@ const (
 )
 
 // ateomOTelSettings is the telemetry configuration propagated to ateom worker
-// pods. A zero value leaves the pods without telemetry env.
+// pods. A zero value sets only ateom's resource identity.
 type ateomOTelSettings struct {
-	// Endpoint is the OTLP collector address. Empty disables ateom telemetry
-	// entirely, so the other fields are ignored.
+	// Endpoint is the OTLP collector address ateom exports to directly, when it
+	// finds no atelet relay. Empty leaves ateom exporting through the relay
+	// only, and exporting nothing without one.
 	Endpoint string
 	// MetricExportInterval overrides the SDK's 60s PeriodicReader interval. It is
 	// the raw OTEL_METRIC_EXPORT_INTERVAL value, i.e. whole milliseconds; the SDK
@@ -79,9 +80,15 @@ type ateomOTelSettings struct {
 	// default and drops the arg, which is dead config on its own.
 	TracesSampler    string
 	TracesSamplerArg string
-	// LogsExporter is the raw OTEL_LOGS_EXPORTER value. otlp sends the usage
-	// records over OTLP instead of stdout; empty keeps ateom's default, none.
-	LogsExporter string
+	// LogsExporter, TracesExporter and MetricsExporter are the
+	// OTEL_LOGS_EXPORTER, OTEL_TRACES_EXPORTER and OTEL_METRICS_EXPORTER set on
+	// ateom, passed through untouched. They are worker-only values rather than
+	// the controller's own: on the control plane, metrics none means scraped
+	// instead of pushed, and ateom serves no /metrics. Empty keeps ateom's
+	// defaults: none for logs, otlp for traces and metrics.
+	LogsExporter    string
+	TracesExporter  string
+	MetricsExporter string
 }
 
 // workerPoolLabel names the WorkerPool on each of its worker pods.
@@ -97,8 +104,8 @@ const (
 
 // buildDeploymentApplyConfig constructs the SSA apply configuration for the
 // Deployment managed by a WorkerPool. Only fields owned by this controller
-// are declared here. otel, when it carries an endpoint, is propagated to the
-// ateom container so it pushes telemetry to that collector.
+// are declared here. otel is propagated to the ateom container (see
+// ateomContainerEnv).
 func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettings, systemNamespace, ateletServiceAccount, routerServiceAccount string) *appsv1ac.DeploymentApplyConfiguration {
 	labels := map[string]string{}
 	annotations := map[string]string{}
@@ -265,26 +272,24 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettin
 				WithSpec(podSpecAC)))
 }
 
-// ateomContainerEnv adds the OTLP endpoint and resource identity only when
-// telemetry is configured. Every ref precedes OTEL_RESOURCE_ATTRIBUTES so its
-// $(...) substitutions resolve.
+// ateomContainerEnv always sets the resource identity, since ateom exports
+// through atelet's relay whenever atelet has a collector, and adds the OTLP
+// endpoint only when one is configured. Every ref precedes
+// OTEL_RESOURCE_ATTRIBUTES so its $(...) substitutions resolve.
 func ateomContainerEnv(otel ateomOTelSettings) []*corev1ac.EnvVarApplyConfiguration {
-	// The pool pair labels every usage record, telemetry export or not. A
-	// worker pod runs in its WorkerPool's namespace.
+	// The pool pair also labels every usage record. A worker pod runs in its
+	// WorkerPool's namespace.
 	envs := []*corev1ac.EnvVarApplyConfiguration{
 		fieldRefEnv("POD_UID", "metadata.uid"),
 		fieldRefEnv("POD_NAMESPACE", "metadata.namespace"),
 		fieldRefEnv("WORKER_POOL_NAME", "metadata.labels['"+workerPoolLabel+"']"),
-	}
-	if otel.Endpoint == "" {
-		return envs
-	}
-	envs = append(envs,
 		fieldRefEnv("POD_NAME", "metadata.name"),
 		fieldRefEnv("NODE_NAME", "spec.nodeName"),
-		corev1ac.EnvVar().WithName("OTEL_EXPORTER_OTLP_ENDPOINT").WithValue(otel.Endpoint),
-		corev1ac.EnvVar().WithName("OTEL_RESOURCE_ATTRIBUTES").WithValue(ateomOTelResourceAttributes),
-	)
+	}
+	if otel.Endpoint != "" {
+		envs = append(envs, corev1ac.EnvVar().WithName("OTEL_EXPORTER_OTLP_ENDPOINT").WithValue(otel.Endpoint))
+	}
+	envs = append(envs, corev1ac.EnvVar().WithName("OTEL_RESOURCE_ATTRIBUTES").WithValue(ateomOTelResourceAttributes))
 	if otel.MetricExportInterval != "" {
 		envs = append(envs, corev1ac.EnvVar().
 			WithName("OTEL_METRIC_EXPORT_INTERVAL").
@@ -309,6 +314,16 @@ func ateomContainerEnv(otel ateomOTelSettings) []*corev1ac.EnvVarApplyConfigurat
 				WithName("OTEL_TRACES_SAMPLER_ARG").
 				WithValue(otel.TracesSamplerArg))
 		}
+	}
+	if otel.TracesExporter != "" {
+		envs = append(envs, corev1ac.EnvVar().
+			WithName("OTEL_TRACES_EXPORTER").
+			WithValue(otel.TracesExporter))
+	}
+	if otel.MetricsExporter != "" {
+		envs = append(envs, corev1ac.EnvVar().
+			WithName("OTEL_METRICS_EXPORTER").
+			WithValue(otel.MetricsExporter))
 	}
 	return envs
 }

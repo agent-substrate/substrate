@@ -30,11 +30,11 @@ import (
 // socket, to be handed to the OTLP exporters via serverboot's ExporterConn.
 //
 // It returns (nil, nil) when sockPath is empty or absent, which the caller reads
-// as "export directly instead". The existence check is what makes the fallback
-// deterministic at startup: grpc.NewClient is lazy, so a connection to a missing
-// socket would be created happily and only fail later, per export, with the
-// telemetry already lost. Losing spans is not worth failing ateom over either,
-// hence a fallback rather than an error.
+// as "fall back to the OTLP endpoint". The existence check is what makes the
+// fallback deterministic at startup: grpc.NewClient is lazy, so a connection to
+// a missing socket would be created happily and only fail later, per export,
+// with the telemetry already lost. Losing spans is not worth failing ateom over
+// either, hence a fallback rather than an error.
 //
 // The connection is plaintext by design. A unix socket cannot leave the node, so
 // there is no transport to protect; access is controlled by the socket's file
@@ -48,7 +48,7 @@ func Dial(ctx context.Context, sockPath string) (*grpc.ClientConn, error) {
 	}
 	if _, err := os.Stat(sockPath); err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			slog.WarnContext(ctx, "OTLP relay socket absent, exporting telemetry directly over the pod network",
+			slog.WarnContext(ctx, "OTLP relay socket absent, falling back to the OTLP endpoint, if one is set",
 				slog.String("socket", sockPath))
 			return nil, nil
 		}
