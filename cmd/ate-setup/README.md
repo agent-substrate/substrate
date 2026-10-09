@@ -22,13 +22,15 @@ credentials:
 ```
 ate-setup deploy ate-system \
   --credential-provider='{"name":"k8s.io"}' \
-  --image-repo registry.example.com/substrate \
+  --image-repo ghcr.io/agent-substrate/substrate \
   --image-tag vX.Y.Z
 ```
 
-Nothing is built and no registry is pushed to; the manifests still come from the
-checkout, which should be the tag being installed. Each reference is pinned to the digest its tag names, so the registry
-has to be readable from here as well as from the cluster.
+A registry you published to yourself with `ate-setup publish release-images`
+works the same way. Nothing is built and no registry is pushed to; the
+manifests still come from the checkout, which should be the tag being
+installed. Each reference is pinned to the digest its tag names, so the
+registry has to be readable from here as well as from the cluster.
 
 - [`commands.md`](commands.md) — every command with its `hack/install-ate.sh`
   equivalent.

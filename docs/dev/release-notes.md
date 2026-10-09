@@ -1,6 +1,6 @@
 # Release notes
 
-GitHub generates the release notes for each Substrate release from the labels and titles of the merged pull requests. [`.github/release.yml`](../../.github/release.yml) defines the sections. Pushing a release tag creates a draft release with the generated notes. A maintainer edits the draft and publishes it.
+GitHub generates the release notes for each Substrate release from the labels and titles of the merged pull requests. [`.github/release.yml`](../../.github/release.yml) defines the sections. Pushing a release tag creates a draft release with the generated notes. A maintainer edits the draft and publishes it; see [Releasing Substrate](releasing.md).
 
 The notes are only as good as the labels. You can fetch the current labels and their descriptions using `gh`.
 
