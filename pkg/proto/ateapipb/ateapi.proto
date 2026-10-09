@@ -2338,6 +2338,22 @@ service WorkerService {
   // retries a suspend it had already been granted therefore sees a failure
   // rather than a repeat of its success.
   rpc RequestActorSuspend(RequestActorSuspendRequest) returns (RequestActorSuspendResponse);
+
+  // ListNodeActorUIDs returns the UIDs of the Actors assigned to the Workers
+  // on the calling atelet's node. atelet uses it to tell an orphaned actor
+  // directory from a live one without reading every Worker in the cluster.
+  //
+  // atelet calls this with its own client certificate, as it does for
+  // RegisterWorker. The node is the one that certificate names, so a caller
+  // cannot ask about another node.
+  //
+  // The Workers on the node come from the control plane's worker cache, which
+  // a watch keeps current, so a Worker registered in the last moments may be
+  // missing, and its Actors with it. A caller must not treat absence as proof
+  // that an Actor is gone for state younger than that. While the cache is
+  // resyncing, the call fails with UNAVAILABLE rather than answer from a
+  // partial view.
+  rpc ListNodeActorUIDs(ListNodeActorUIDsRequest) returns (ListNodeActorUIDsResponse);
 }
 
 message RegisterWorkerRequest {
@@ -2429,6 +2445,16 @@ message RequestActorSuspendRequest {
 message RequestActorSuspendResponse {
   // The Actor as the suspend workflow left it.
   Actor actor = 1;
+}
+
+// Request message for ListNodeActorUIDs. It is empty: the node is the one the
+// caller's certificate names.
+message ListNodeActorUIDsRequest {}
+
+message ListNodeActorUIDsResponse {
+  // The UIDs of the Actors assigned to the Workers on the caller's node, in
+  // no particular order. Unpaged: the set is bounded by what one node can run.
+  repeated string actor_uids = 1;
 }
 
 // AccessPolicy is an access policy resource nested under a parent resource (or
