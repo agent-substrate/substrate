@@ -12,14 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# ActorTemplate (protojson-shaped ateapipb.ActorTemplate) for the fspersist
-# half of the multi-template demo. It lives in its own atespace but selects
-# the same shared-pool as counter-template.yaml.tmpl. Applied with
-# `kubectl ate create actor-template -f -` after `ko resolve` replaces the
-# ko:// image reference; the ate-demo-multi-template-fspersist atespace must
+# ActorTemplate (protojson-shaped ateapipb.ActorTemplate) for the fspersist half
+# of the multi-template demo. It lives in its own atespace but selects the same
+# shared-pool as counter-template.yaml.tmpl. Applied with
+# `kubectl ate create actor-template -f -` after `ko resolve` replaces the ko://
+# image reference; the
+# ate-demo-multi-template-fspersist-odgg7rv2waza4e6jvrq7tg6xoq atespace must
 # exist.
 metadata:
-  atespace: ate-demo-multi-template-fspersist
+  atespace: ate-demo-multi-template-fspersist-odgg7rv2waza4e6jvrq7tg6xoq
   name: fspersist
 workerSelector:
   matchLabels:

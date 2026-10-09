@@ -69,6 +69,7 @@ import (
 const (
 	defaultPort      = "8080"
 	defaultNamespace = "claude-multiplex-demo"
+	defaultAtespace  = "claude-multiplex-demo-edy4s473cc3yzlbcx7kjig4rhy"
 	maxAssignments   = 50
 	rpcTimeout       = 10 * time.Second
 	logTailLines     = int64(25)
@@ -132,6 +133,7 @@ type actorSummary struct {
 
 var (
 	namespace   = envOr("DEMO_NAMESPACE", defaultNamespace)
+	atespace    = envOr("DEMO_ATESPACE", defaultAtespace)
 	ateapiAddr  = os.Getenv("ATEAPI_ADDR") // empty → auto port-forward to svc/api in ate-system
 	rootDir     = mustRootDir()
 	mu          sync.Mutex
@@ -350,6 +352,7 @@ func handleHealthz(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"ok":          true,
 		"namespace":   namespace,
+		"atespace":    atespace,
 		"ateapi_addr": ateapiAddr,
 		"logs":        kubeClient != nil,
 	})
@@ -404,9 +407,8 @@ func handleActors(w http.ResponseWriter, r *http.Request) {
 	}
 	actors := make([]actorSummary, 0, len(resp.GetActors()))
 	for _, a := range resp.GetActors() {
-		// The demo's templates live in the atespace named after the demo
-		// namespace, so the template ref's atespace filters foreign actors.
-		if namespace != "" && a.GetActorTemplate().GetAtespace() != "" && a.GetActorTemplate().GetAtespace() != namespace {
+		// The template ref's atespace filters out actors of other demos.
+		if atespace != "" && a.GetActorTemplate().GetAtespace() != "" && a.GetActorTemplate().GetAtespace() != atespace {
 			continue
 		}
 		// Carry the template name as the meta message so the UI's
@@ -524,7 +526,7 @@ func main() {
 	mux.HandleFunc("/api/give-task", handleGiveTask)
 
 	addr := "0.0.0.0:" + port
-	log.Printf("[ui] serving %s (namespace=%s ateapi=%s logs=%t)", addr, namespace, ateapiAddr, kubeClient != nil)
+	log.Printf("[ui] serving %s (namespace=%s atespace=%s ateapi=%s logs=%t)", addr, namespace, atespace, ateapiAddr, kubeClient != nil)
 
 	srv := &http.Server{
 		Addr:              addr,

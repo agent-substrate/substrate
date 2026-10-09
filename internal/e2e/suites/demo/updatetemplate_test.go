@@ -79,7 +79,7 @@ func runUpdateTemplateTestCase(t *testing.T, fidelity ateapipb.SnapshotFidelity)
 	//
 	// Create an Actor from template A; a fresh actor sits SUSPENDED.
 	//
-	actorID := "update-" + nsObj.Name
+	actorID := resources.NewRandomName("update-")
 	refA := &ateapipb.ObjectRef{Atespace: demoAtespace, Name: nameA}
 	refB := &ateapipb.ObjectRef{Atespace: demoAtespace, Name: nameB}
 

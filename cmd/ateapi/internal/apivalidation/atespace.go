@@ -17,6 +17,7 @@ package apivalidation
 import (
 	"context"
 
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -44,4 +45,16 @@ func ValidateDeleteAtespaceRequest(ctx context.Context, req *ateapipb.DeleteAtes
 	// Call the generated validation.
 	op := operation.Operation{Type: operation.Create}
 	return Validate_DeleteAtespaceRequest(ctx, op, nil, req, nil)
+}
+
+// ValidateCustom_CreateAtespaceRequest_Atespace requires a new atespace's name
+// to be long enough to be random. It applies only on create, so atespaces with
+// shorter names can still be read and deleted. The reserved golden actor
+// atespace is exempt: it is a fixed system name, not one a caller picks.
+func ValidateCustom_CreateAtespaceRequest_Atespace(_ context.Context, _ operation.Operation, fldPath *field.Path, atespace, _ *ateapipb.Atespace) field.ErrorList {
+	name := atespace.GetMetadata().GetName()
+	if name == "" || name == resources.GoldenActorAtespace {
+		return nil // empty is handled by DV
+	}
+	return resources.ValidateRandomName(name, fldPath.Child("metadata", "name"))
 }

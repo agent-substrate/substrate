@@ -113,7 +113,7 @@ func TestCrossAtespaceIsolation(t *testing.T) {
 	// Victim: the actor in atespace B runs first. Its UID and worker are recorded while it is
 	// RUNNING: the attacker probes host paths keyed by that UID and must land
 	// on that worker.
-	const victim = "victim"
+	victim := resources.NewRandomName("victim-")
 	createAndResumeActor(t, ctx, clients, ns.b, victim)
 	victimActor := resources.ActorRef{Atespace: ns.b, Name: victim}
 	victimUID := actorUID(t, ctx, clients, ns.b, victim)
@@ -138,7 +138,7 @@ func TestCrossAtespaceIsolation(t *testing.T) {
 	waitForActorState(t, ctx, clients, ns.b, victim, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
 
 	// Attacker: the actor in atespace A takes the freed worker.
-	const attacker = "attacker"
+	attacker := resources.NewRandomName("attacker-")
 	createAndResumeActor(t, ctx, clients, ns.a, attacker)
 	attackerActor := resources.ActorRef{Atespace: ns.a, Name: attacker}
 	requireReusedWorker(t, ctx, clients, ns.a, attacker, victimWorker)
@@ -277,7 +277,7 @@ func testTagScopeBoundary(t *testing.T, ctx context.Context, clients *e2e.Client
 	// Positive control: the same tag seeds an Actor in its own atespace and the
 	// clone carries the source's durable data. Otherwise an unusable tag would
 	// make the rejection above look like enforcement.
-	const clone = "same-atespace-clone"
+	clone := resources.NewRandomName("same-atespace-clone-")
 	cloneRef := &ateapipb.ObjectRef{Atespace: ns.a, Name: clone}
 	t.Cleanup(func() {
 		cleanupCtx := context.Background()

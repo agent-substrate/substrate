@@ -197,13 +197,13 @@ func TestListWorkerActorAssignments(t *testing.T) {
 	}
 
 	if _, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "id1"},
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testActorID},
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
 	}}); err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
 	if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id1"},
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: testActorID},
 	}); err != nil {
 		t.Fatalf("ResumeActor failed: %v", err)
 	}
@@ -215,7 +215,7 @@ func TestListWorkerActorAssignments(t *testing.T) {
 	if len(listed.GetActorAssignments()) != 1 {
 		t.Fatalf("worker hosting one actor lists %d assignments, want 1", len(listed.GetActorAssignments()))
 	}
-	want := &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id1"}
+	want := &ateapipb.ObjectRef{Atespace: testAtespace, Name: testActorID}
 	if diff := cmp.Diff(want, listed.GetActorAssignments()[0].GetActor(), protocmp.Transform()); diff != "" {
 		t.Errorf("assignment names the wrong actor (-want +got):\n%s", diff)
 	}

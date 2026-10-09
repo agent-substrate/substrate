@@ -3950,9 +3950,12 @@ func (x *VolumeMount) GetMountPath() string {
 
 type CreateAtespaceRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The atespace to create.
+	// The atespace to create. Its name must be at least 26 bytes long, enough
+	// to hold 128 random bits in base-32, so that names are hard to guess or
+	// reuse.
 	//
 	// +k8s:required
+	// +k8s:customValidation # name must be at least 26 bytes long
 	Atespace      *Atespace `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -4547,9 +4550,11 @@ func (x *GetActorRequest) GetActor() *ObjectRef {
 // Request to create a new Actor.
 type CreateActorRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The actor to create.
+	// The actor to create. Its name must be at least 26 bytes long, enough to
+	// hold 128 random bits in base-32, so that names are hard to guess or reuse.
 	//
 	// +k8s:required
+	// +k8s:customValidation # name must be at least 26 bytes long
 	Actor         *Actor `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

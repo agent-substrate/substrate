@@ -27,17 +27,20 @@ import (
 
 // namespace is the pool's k8s namespace; it doubles as the atespace holding
 // the demo's ActorTemplate.
-const namespace = "ate-demo-counter-microvm"
+const (
+	namespace = "ate-demo-counter-microvm"
+	atespace  = "ate-demo-counter-microvm-3iaw7q5v4p4xxtudd6aisu3biu"
+)
 
 func init() {
 	demos.Register(&demos.Substrate{
 		DemoName:           "demo-counter-microvm",
 		Short:              "The counter demo on micro-VM workers (needs hack/install-microvm-deps.sh --install)",
 		WorkerPoolManifest: "demos/counter/counter-microvm.yaml.tmpl",
-		Deployments:        []steps.TemplateRef{{Atespace: namespace, Name: "counter-microvm"}},
+		Deployments:        []steps.DeploymentRef{{Namespace: namespace, Name: "counter-microvm"}},
 		Templates: []demos.SubstrateTemplate{{
 			Manifest: "demos/counter/counter-microvm-template.yaml.tmpl",
-			Ref:      resources.ActorTemplateRef{Atespace: namespace, Name: "counter-microvm"},
+			Ref:      resources.ActorTemplateRef{Atespace: atespace, Name: "counter-microvm"},
 		}},
 		GoldenTimeout: demos.MicroVMGoldenTimeout,
 	})

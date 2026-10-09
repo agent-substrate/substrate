@@ -35,9 +35,8 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
-// parkingAtespace is where deployParkingFixture applies the fixture, and the
-// k8s namespace holding its pool.
-var parkingAtespace = e2e.FixtureName("ate-e2e") + "-parking"
+// parkingAtespace is the atespace of the fixture deployParkingFixture applies.
+var parkingAtespace = e2e.FixtureAtespace(e2e.FixtureName("ate-e2e") + "-parking")
 
 // The park budget the deployed router runs with (its flag default). The
 // timing assertions below are windows around it, wide enough for scheduling
@@ -52,8 +51,8 @@ func TestRequestParking(t *testing.T) {
 	// One worker, two actors: the minimal deterministic oversubscription.
 	at := deployParkingFixture(t, ctx, clients)
 
-	actorA := "parked-a"
-	actorB := "parked-b"
+	actorA := resources.NewRandomName("parked-a-")
+	actorB := resources.NewRandomName("parked-b-")
 	for _, name := range []string{actorA, actorB} {
 		createActor(ctx, t, clients, at, name)
 	}

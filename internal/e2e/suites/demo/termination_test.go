@@ -47,7 +47,7 @@ func TestGracefulWorkerTermination(t *testing.T) {
 		t.Fatalf("failed to initialize ActorTemplate: %v", err)
 	}
 
-	actorID := "graceful-term-" + nsObj.Name
+	actorID := resources.NewRandomName("graceful-term-")
 	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{
 		Actor: &ateapipb.Actor{
 			Metadata:      &ateapipb.ResourceMetadata{Atespace: demoAtespace, Name: actorID},
@@ -155,7 +155,7 @@ func TestGracefulWorkerTerminationSuspend(t *testing.T) {
 		t.Fatalf("failed to initialize ActorTemplate: %v", err)
 	}
 
-	actorID := "graceful-term-suspend-" + nsObj.Name
+	actorID := resources.NewRandomName("graceful-term-suspend-")
 	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{
 		Actor: &ateapipb.Actor{
 			Metadata:      &ateapipb.ResourceMetadata{Atespace: demoAtespace, Name: actorID},

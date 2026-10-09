@@ -15,6 +15,7 @@
 package resources
 
 import (
+	"crypto/rand"
 	"encoding/hex"
 	"fmt"
 	"net/netip"
@@ -77,6 +78,31 @@ func ValidateResourceName(name string, fldPath *field.Path) field.ErrorList {
 		errs = append(errs, field.Invalid(fldPath, name, msg))
 	}
 	return errs
+}
+
+// MinRandomNameLength is the minimum length of an atespace or actor name: 26
+// bytes holds 128 bits in base-32. Requiring it pushes callers toward random
+// names, which are hard to squat on and are not reused when a resource is
+// deleted and another is created later. Callers may still put a readable
+// prefix in front of the random part.
+const MinRandomNameLength = 26
+
+// NewRandomName returns prefix followed by 128 random bits in lowercase
+// base-32, which always satisfies ValidateRandomName. The result is a valid
+// resource name if prefix is empty or a valid resource name ending in "-",
+// and the whole name stays within the 63-byte limit.
+func NewRandomName(prefix string) string {
+	return prefix + strings.ToLower(rand.Text())
+}
+
+// ValidateRandomName checks that name is at least MinRandomNameLength bytes
+// long. It does not check the resource name format; use ValidateResourceName
+// for that.
+func ValidateRandomName(name string, fldPath *field.Path) field.ErrorList {
+	if len(name) < MinRandomNameLength {
+		return field.ErrorList{field.TooShort(fldPath, name, MinRandomNameLength)}
+	}
+	return nil
 }
 
 // IsValidResourceName reports whether name is a valid Substrate resource name

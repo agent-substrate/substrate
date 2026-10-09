@@ -146,32 +146,33 @@ func TestNetworkPolicyDataPlaneEnforcement(t *testing.T) {
 	// Setup WorkerPool and ActorTemplate from the substrate counter demo (the
 	// template's atespace, named after the test namespace, is created there).
 	poolName, at := setupDemoCounterTemplate(ctx, t, clients, nsObj.Name)
+	atespace := at.GetMetadata().GetAtespace()
 
 	// Create and Resume Actor
-	actorName := "netpol-dataplane-" + nsObj.Name
-	t.Logf("Creating Actor %q in Atespace %q...", actorName, nsObj.Name)
+	actorName := resources.NewRandomName("netpol-dataplane-")
+	t.Logf("Creating Actor %q in Atespace %q...", actorName, atespace)
 	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: nsObj.Name, Name: actorName},
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: atespace, Name: actorName},
 		ActorTemplate: e2e.TemplateRef(at),
 	}}); err != nil {
 		t.Fatalf("failed to create Actor: %v", err)
 	}
 	defer func() {
 		_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: nsObj.Name, Name: actorName},
+			Actor: &ateapipb.ObjectRef{Atespace: atespace, Name: actorName},
 		})
 		_, _ = clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: nsObj.Name, Name: actorName},
+			Actor: &ateapipb.ObjectRef{Atespace: atespace, Name: actorName},
 		})
 	}()
 
 	t.Logf("Resuming Actor %q...", actorName)
 	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: nsObj.Name, Name: actorName},
+		Actor: &ateapipb.ObjectRef{Atespace: atespace, Name: actorName},
 	}); err != nil {
 		t.Fatalf("failed to resume Actor: %v", err)
 	}
-	waitForActorRunning(ctx, t, clients, nsObj.Name, actorName)
+	waitForActorRunning(ctx, t, clients, atespace, actorName)
 
 	// === Positive Data Plane Verification (Authorized Ingress) ===
 	t.Log("=== Verifying authorized ingress via atenet-router ===")
@@ -184,7 +185,7 @@ func TestNetworkPolicyDataPlaneEnforcement(t *testing.T) {
 	var resp *http.Response
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
-		resp, err = rc.Get(ctx, resources.ActorRef{Atespace: nsObj.Name, Name: actorName}, "/")
+		resp, err = rc.Get(ctx, resources.ActorRef{Atespace: atespace, Name: actorName}, "/")
 		if err == nil && resp.StatusCode == http.StatusOK {
 			break
 		}
@@ -272,14 +273,14 @@ func TestNetworkPolicyDataPlaneEnforcement(t *testing.T) {
 
 // setupDemoCounterTemplate provisions the per-test WorkerPool and substrate
 // ActorTemplate from the substrate counter demo, returning the pool name and
-// the template. The template lives in an atespace named after the test's k8s
-// namespace, so its name needs no per-test suffix. SnapshotConfig is copied
+// the template. The template lives in the atespace e2e.FixtureAtespace names
+// after the test's k8s namespace, so its name needs no per-test suffix. SnapshotConfig is copied
 // from the source, as the CRD-era setup did.
 func setupDemoCounterTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, ns string) (string, *ateapipb.ActorTemplate) {
 	t.Helper()
 	const poolName = "counter"
 	at := e2e.CreateSubstrateCounterTemplate(ctx, t, clients, ns, e2e.SubstrateTemplateOptions{
-		Atespace:     ns,
+		Atespace:     e2e.FixtureAtespace(ns),
 		Name:         "counter",
 		PoolName:     poolName,
 		PoolReplicas: 1,

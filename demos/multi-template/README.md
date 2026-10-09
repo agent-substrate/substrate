@@ -30,8 +30,9 @@ This command will:
 - Build the `counter` and `fspersist` images using `ko`.
 - Create one `WorkerPool` (`shared-pool`) in the `ate-demo-multi-template-pool`
   namespace (`multi-template.yaml.tmpl`).
-- Create 2 atespaces — `ate-demo-multi-template-counter` and
-  `ate-demo-multi-template-fspersist` — and an actor template in each:
+- Create 2 atespaces — `ate-demo-multi-template-counter-62sw34mwgreryiyvyknh72iruy`
+  and `ate-demo-multi-template-fspersist-odgg7rv2waza4e6jvrq7tg6xoq` — and an
+  actor template in each:
   `counter` (`counter-template.yaml.tmpl`) and `fspersist`
   (`fspersist-template.yaml.tmpl`), both selecting the pool via the same
   `workerSelector` label and applied with `kubectl ate create actor-template`.
@@ -47,8 +48,10 @@ resolved in the actor's atespace — and their DNS names embed that atespace:
 go install ./cmd/kubectl-ate
 
 # Create two actors from different templates, one per atespace.
-kubectl ate create actor c1 -a ate-demo-multi-template-counter --template counter
-kubectl ate create actor f1 -a ate-demo-multi-template-fspersist --template fspersist
+COUNTER_ACTOR="c1-$(uuidgen | tr '[:upper:]' '[:lower:]')"
+kubectl ate create actor "${COUNTER_ACTOR}" -a ate-demo-multi-template-counter-62sw34mwgreryiyvyknh72iruy --template counter
+FSPERSIST_ACTOR="f1-$(uuidgen | tr '[:upper:]' '[:lower:]')"
+kubectl ate create actor "${FSPERSIST_ACTOR}" -a ate-demo-multi-template-fspersist-odgg7rv2waza4e6jvrq7tg6xoq --template fspersist
 ```
 
 ### 3. Port-forward the atenet router
@@ -68,11 +71,11 @@ created.
 
 ```bash
 # counter binary
-curl -s -H "ate-target-actor: ate-demo-multi-template-counter/c1" http://localhost:8000
+curl -s -H "ate-target-actor: ate-demo-multi-template-counter-62sw34mwgreryiyvyknh72iruy/${COUNTER_ACTOR}" http://localhost:8000
 # -> hello from: <ip> | preserved memory count: 1
 
 # fspersist binary
-curl -s -H "ate-target-actor: ate-demo-multi-template-fspersist/f1" http://localhost:8000
+curl -s -H "ate-target-actor: ate-demo-multi-template-fspersist-odgg7rv2waza4e6jvrq7tg6xoq/${FSPERSIST_ACTOR}" http://localhost:8000
 # -> pod: <ip>
 #    --- history ---
 #    pod=<ip> | count=0 | time=<timestamp>
@@ -89,8 +92,8 @@ a line to its history file on each request. Suspending and re-requesting an acto
 preserves that state across the snapshot/restore cycle:
 
 ```bash
-kubectl ate suspend actor f1 -a ate-demo-multi-template-fspersist
-curl -s -H "ate-target-actor: ate-demo-multi-template-fspersist/f1" http://localhost:8000  # history persists; count keeps climbing
+kubectl ate suspend actor "${FSPERSIST_ACTOR}" -a ate-demo-multi-template-fspersist-odgg7rv2waza4e6jvrq7tg6xoq
+curl -s -H "ate-target-actor: ate-demo-multi-template-fspersist-odgg7rv2waza4e6jvrq7tg6xoq/${FSPERSIST_ACTOR}" http://localhost:8000  # history persists; count keeps climbing
 ```
 
 ## How to Uninstall

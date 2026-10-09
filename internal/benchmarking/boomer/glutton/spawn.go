@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"io"
 	"log/slog"
 	"math/rand/v2"
@@ -178,7 +179,8 @@ func (r *spawnRuntime) runBatch(ctx context.Context) {
 		spawnConcurrency = 1
 	}
 
-	runID := uuid.NewString()[:8]
+	// Long enough that every actor name meets the 26-byte minimum.
+	runID := resources.NewRandomName("")
 	var nextIdx atomic.Int64
 
 	r.wg.Add(spawnConcurrency)

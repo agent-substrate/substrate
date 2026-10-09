@@ -27,6 +27,26 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
+// fixtureAtespaceSuffix is appended to a fixture's k8s namespace name to name
+// its atespace, carrying the name past the 26-byte minimum CreateAtespace
+// enforces. It is fixed rather than random because the credinject fixture's
+// policy names the probe atespaces. 20 characters keep the shortest fixture
+// atespace (ate-e2e-sec-a) above the minimum and the longest
+// (ate-e2e-probe-microvm-egresscredinject) under the 63-byte limit.
+const fixtureAtespaceSuffix = "-mxy6vj23u335ddio2dev"
+
+// FixtureAtespace returns the atespace of the fixture whose pool lives in the
+// k8s namespace named namespace.
+func FixtureAtespace(namespace string) string {
+	return namespace + fixtureAtespaceSuffix
+}
+
+// FixtureNamespace returns the k8s namespace holding the pool of the fixture
+// whose atespace is atespace. It is the inverse of FixtureAtespace.
+func FixtureNamespace(atespace string) string {
+	return strings.TrimSuffix(atespace, fixtureAtespaceSuffix)
+}
+
 // substrateTemplateSubstitutions is the placeholder set the protojson-shaped
 // ActorTemplate fixture templates carry: the substrate counterpart of
 // fixtureSubstitutions, whose block fragments are CRD-shaped and now serve
@@ -34,8 +54,9 @@ import (
 // values so one (bucket, name) pair renders both halves of a fixture.
 func substrateTemplateSubstitutions(bucket, name string, trustBundle bool) (inline, blocks map[string]string) {
 	inline = map[string]string{
-		"${BUCKET_NAME}":    bucket,
-		"${FIXTURE_SUFFIX}": "-" + name,
+		"${BUCKET_NAME}":     bucket,
+		"${FIXTURE_SUFFIX}":  "-" + name,
+		"${ATESPACE_SUFFIX}": fixtureAtespaceSuffix,
 	}
 	blocks = map[string]string{
 		// gvisor-default is the cluster-wide SandboxConfig
@@ -118,8 +139,8 @@ type SubstrateFixtureManifests struct {
 // the k8s namespace GC — and a template leaked by an interrupted earlier run
 // is cleared before creating its replacement, since templates are immutable.
 //
-// Returns the fixture's atespace (the same string that names the k8s
-// namespace holding the pool) and the created templates.
+// Returns the fixture's atespace (FixtureAtespace of the k8s namespace
+// holding the pool) and the created templates.
 func DeploySubstrateFixture(t *testing.T, ctx context.Context, clients *Clients, manifests SubstrateFixtureManifests, bucket, name string, trustBundle bool) (string, []*ateapipb.ActorTemplate) {
 	t.Helper()
 

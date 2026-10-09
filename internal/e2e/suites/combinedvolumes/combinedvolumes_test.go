@@ -44,7 +44,7 @@ import (
 )
 
 const (
-	atespace = "combinedvolumes"
+	atespace = "combinedvolumes-oqxdmdxal5gumnxcokmqewmjia"
 
 	// mountPath must not collide with anything the probe's own image ships.
 	mountPath = "/mnt/ate-image-volume"
@@ -186,7 +186,7 @@ func createTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, ns 
 	src := e2e.SubstrateFixture{
 		Atespace:      probeAtespace,
 		Name:          probeName,
-		PoolNamespace: probeAtespace,
+		PoolNamespace: e2e.FixtureNamespace(probeAtespace),
 		PoolName:      probeName,
 		DeployWith:    "the combinedvolumes suite's own DeployProbe",
 	}
@@ -333,7 +333,7 @@ func TestCombinedVolumes(t *testing.T) {
 	storageClass := storageClassOrEmpty(ctx, t, clients)
 	tmpl := createTemplate(ctx, t, clients, ns, fixtureImage, storageClass)
 
-	actorRef := resources.ActorRef{Atespace: atespace, Name: "cv-" + ns.Name}
+	actorRef := resources.ActorRef{Atespace: atespace, Name: resources.NewRandomName("cv-")}
 	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{
 		Actor: &ateapipb.Actor{
 			Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},

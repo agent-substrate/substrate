@@ -32,7 +32,10 @@ import (
 
 // namespace holds the demo workload, its prometheus-adapter, and the HPA;
 // it doubles as the atespace holding the demo's ActorTemplate.
-const namespace = "ate-demo-autoscaled-workerpool"
+const (
+	namespace = "ate-demo-autoscaled-workerpool"
+	atespace  = "ate-demo-autoscaled-workerpool-l2bsc77v2kcyams4m7uvwz26dj"
+)
 
 // Add-ons that only make sense on Kind.
 const (
@@ -49,10 +52,10 @@ func init() {
 		DemoName:           "demo-autoscaled-workerpool",
 		Short:              "A WorkerPool scaled by an HPA over custom metrics (Kind only)",
 		WorkerPoolManifest: "demos/autoscaled-workerpool/autoscaled-workerpool.yaml.tmpl",
-		Deployments:        []steps.TemplateRef{{Atespace: namespace, Name: "counter"}},
+		Deployments:        []steps.DeploymentRef{{Namespace: namespace, Name: "counter"}},
 		Templates: []demos.SubstrateTemplate{{
 			Manifest: "demos/autoscaled-workerpool/autoscaled-workerpool-template.yaml.tmpl",
-			Ref:      resources.ActorTemplateRef{Atespace: namespace, Name: "counter"},
+			Ref:      resources.ActorTemplateRef{Atespace: atespace, Name: "counter"},
 		}},
 	}})
 }

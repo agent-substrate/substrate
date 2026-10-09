@@ -25,17 +25,20 @@ import (
 
 // namespace is the pool's k8s namespace; it doubles as the atespace holding
 // the demo's ActorTemplate.
-const namespace = "ate-demo-jupyter"
+const (
+	namespace = "ate-demo-jupyter"
+	atespace  = "ate-demo-jupyter-eatkenhmjpki5xxhkfpl7bnlsg"
+)
 
 func init() {
 	demos.Register(&demos.Substrate{
 		DemoName:           "demo-jupyter",
 		Short:              "An unmodified Jupyter notebook image as a suspending actor",
 		WorkerPoolManifest: "demos/jupyter/jupyter.yaml.tmpl",
-		Deployments:        []steps.TemplateRef{{Atespace: namespace, Name: "jupyter"}},
+		Deployments:        []steps.DeploymentRef{{Namespace: namespace, Name: "jupyter"}},
 		Templates: []demos.SubstrateTemplate{{
 			Manifest: "demos/jupyter/jupyter-template.yaml.tmpl",
-			Ref:      resources.ActorTemplateRef{Atespace: namespace, Name: "jupyter"},
+			Ref:      resources.ActorTemplateRef{Atespace: atespace, Name: "jupyter"},
 		}},
 	})
 }

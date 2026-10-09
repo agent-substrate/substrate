@@ -56,45 +56,45 @@ func TestActorTemplateFromManifestDemos(t *testing.T) {
 	}{
 		{
 			relPath: "demos/counter/counter-microvm-csi-test-template.yaml",
-			want:    resources.ActorTemplateRef{Atespace: "ate-demo-counter-microvm-csi", Name: "counter-microvm-csi"},
+			want:    resources.ActorTemplateRef{Atespace: "ate-demo-counter-microvm-csi-lmk5yc5zmymyuiojsfv74pmpjt", Name: "counter-microvm-csi"},
 		},
 		{
 			relPath: "demos/jupyter/jupyter-template.yaml.tmpl",
-			want:    resources.ActorTemplateRef{Atespace: "ate-demo-jupyter", Name: "jupyter"},
+			want:    resources.ActorTemplateRef{Atespace: "ate-demo-jupyter-eatkenhmjpki5xxhkfpl7bnlsg", Name: "jupyter"},
 		},
 		{
 			relPath: "demos/sandbox/manual-test-multi-template.yaml",
-			want:    resources.ActorTemplateRef{Atespace: "ate-manual-test-multi", Name: "sandbox-template"},
+			want:    resources.ActorTemplateRef{Atespace: "ate-manual-test-multi-6xgxrzrg4xdl3izfsa5f7x23pt", Name: "sandbox-template"},
 		},
 		{
 			relPath: "benchmarking/workloads/manifests/sleep-template.yaml.tmpl",
 			values:  benchmarkValues,
-			want:    resources.ActorTemplateRef{Atespace: "benchmark-workloads", Name: "sleep"},
+			want:    resources.ActorTemplateRef{Atespace: "benchmark-workloads-y6nzpn6xatdflqhibhytuut4d5", Name: "sleep"},
 		},
 		{
 			relPath: "benchmarking/workloads/manifests/glutton-template.yaml.tmpl",
 			values:  benchmarkValues,
-			want:    resources.ActorTemplateRef{Atespace: "benchmark-workloads", Name: "glutton"},
+			want:    resources.ActorTemplateRef{Atespace: "benchmark-workloads-y6nzpn6xatdflqhibhytuut4d5", Name: "glutton"},
 		},
 		{
 			relPath: "benchmarking/workloads/manifests/glutton-durdir-data-template.yaml.tmpl",
 			values:  benchmarkValues,
-			want:    resources.ActorTemplateRef{Atespace: "benchmark-workloads", Name: "glutton-durdir-data"},
+			want:    resources.ActorTemplateRef{Atespace: "benchmark-workloads-y6nzpn6xatdflqhibhytuut4d5", Name: "glutton-durdir-data"},
 		},
 		{
 			relPath: "benchmarking/workloads/manifests/glutton-durdir-full-template.yaml.tmpl",
 			values:  benchmarkValues,
-			want:    resources.ActorTemplateRef{Atespace: "benchmark-workloads", Name: "glutton-durdir-full"},
+			want:    resources.ActorTemplateRef{Atespace: "benchmark-workloads-y6nzpn6xatdflqhibhytuut4d5", Name: "glutton-durdir-full"},
 		},
 		{
 			relPath: "benchmarking/workloads/manifests/usermem-template.yaml.tmpl",
 			values:  benchmarkValues,
-			want:    resources.ActorTemplateRef{Atespace: "benchmark-workloads", Name: "usermem"},
+			want:    resources.ActorTemplateRef{Atespace: "benchmark-workloads-y6nzpn6xatdflqhibhytuut4d5", Name: "usermem"},
 		},
 		{
 			relPath: "benchmarking/workloads/manifests/kernelmem-template.yaml.tmpl",
 			values:  benchmarkValues,
-			want:    resources.ActorTemplateRef{Atespace: "benchmark-workloads", Name: "kernelmem"},
+			want:    resources.ActorTemplateRef{Atespace: "benchmark-workloads-y6nzpn6xatdflqhibhytuut4d5", Name: "kernelmem"},
 		},
 	}
 	for _, tc := range tests {

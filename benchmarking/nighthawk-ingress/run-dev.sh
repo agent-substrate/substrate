@@ -27,7 +27,7 @@ set -euo pipefail
 ENVOY_CPU=2
 ACTORS=100
 TAIL_LATENCY_SLO_MS=25
-ATESPACE="ingress-benchmark"
+ATESPACE="ingress-benchmark-gwi4eosnu5zbp5jqdg3dnufo3t"
 DEST=""
 VENV="${HOME}/.venvs/substrate-bench"
 NAMESPACE="benchmarking"

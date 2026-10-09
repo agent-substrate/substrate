@@ -91,7 +91,7 @@ This command will:
 
 - Create the `ate-demo-autoscaled-workerpool` namespace and one `WorkerPool`
   (`counter`, starting with 5 replicas).
-- Create the `ate-demo-autoscaled-workerpool` atespace and the `counter` actor
+- Create the `ate-demo-autoscaled-workerpool-l2bsc77v2kcyams4m7uvwz26dj` atespace and the `counter` actor
   template in it (`autoscaled-workerpool-template.yaml.tmpl`, applied with
   `kubectl ate create actor-template`), waiting until the pool is rolled out
   and the template's golden snapshot is built.
@@ -111,7 +111,7 @@ kubectl get --raw "/apis/external.metrics.k8s.io/v1beta1/namespaces/ate-demo-aut
 
 ## How to Use
 
-We can trigger autoscaling by spawning multiple actors and sending traffic to assign workers in the pool. The actors go in the demo's atespace (`ate-demo-autoscaled-workerpool`) — `--template` names the template, resolved in the actor's atespace:
+We can trigger autoscaling by spawning multiple actors and sending traffic to assign workers in the pool. The actors go in the demo's atespace (`ate-demo-autoscaled-workerpool-l2bsc77v2kcyams4m7uvwz26dj`) — `--template` names the template, resolved in the actor's atespace:
 
 ### 1. Spawn load actors
 
@@ -120,8 +120,10 @@ We can trigger autoscaling by spawning multiple actors and sending traffic to as
 go install ./cmd/kubectl-ate
 
 # Create 15 actors to generate load
+# Actor names must be at least 26 characters long; a random suffix makes them so.
+SUFFIX="$(uuidgen | tr '[:upper:]' '[:lower:]')"
 for i in {001..015}; do
-  kubectl ate create actor c$i -a ate-demo-autoscaled-workerpool --template counter
+  kubectl ate create actor "c$i-$SUFFIX" -a ate-demo-autoscaled-workerpool-l2bsc77v2kcyams4m7uvwz26dj --template counter
 done
 ```
 
@@ -138,7 +140,7 @@ for that loop iteration and the demo's Atespace in the routing header:
 ```sh
 for attempt in {1..10}; do
   for i in {001..015}; do
-  curl -s -H "ate-target-actor: ate-demo-autoscaled-workerpool/c$i" http://localhost:8000 >/dev/null
+  curl -s -H "ate-target-actor: ate-demo-autoscaled-workerpool-l2bsc77v2kcyams4m7uvwz26dj/c$i-$SUFFIX" http://localhost:8000 >/dev/null
   done
   sleep 2
 done
@@ -159,7 +161,7 @@ Suspend the actors to drop the count of full workers. After the 300s stabilizati
 
 ```sh
 for i in {001..015}; do
-  kubectl ate suspend actor c$i -a ate-demo-autoscaled-workerpool
+  kubectl ate suspend actor "c$i-$SUFFIX" -a ate-demo-autoscaled-workerpool-l2bsc77v2kcyams4m7uvwz26dj
 done
 ```
 

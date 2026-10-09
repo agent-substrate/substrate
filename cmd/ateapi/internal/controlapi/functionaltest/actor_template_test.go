@@ -155,7 +155,7 @@ func TestGoldenTagLifecycle(t *testing.T) {
 	templateRef := resources.ActorTemplateRefFromActorTemplate(tmpl)
 	// Created before readiness: a later golden tag must not change its source.
 	early, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "early"}, ActorTemplate: templateRef.ToObjectRef(),
+		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: resources.NewRandomName("early-")}, ActorTemplate: templateRef.ToObjectRef(),
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -188,7 +188,7 @@ func TestGoldenTagLifecycle(t *testing.T) {
 		t.Fatalf("golden actor was not deleted: %v", err)
 	}
 	late, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "late"}, ActorTemplate: templateRef.ToObjectRef(),
+		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: resources.NewRandomName("late-")}, ActorTemplate: templateRef.ToObjectRef(),
 	}})
 	if err != nil {
 		t.Fatal(err)

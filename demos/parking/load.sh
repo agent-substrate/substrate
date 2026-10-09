@@ -45,7 +45,10 @@ DURATION=30
 ROUTER="http://localhost:8000"
 # The template name, resolved in the actors' atespace (--template).
 TEMPLATE="parking"
-ATESPACE="ate-demo-parking"
+ATESPACE="ate-demo-parking-rlryr7otxprtr7ipwolqmu4obd"
+# Appended to each actor ID to form the actor's name, which must be at least 26
+# characters long. Fixed, so reruns reuse the same actors.
+ACTOR_SUFFIX="5d3jurem34uwyq33hexc3vqjz2"
 
 usage() {
   cat <<'EOF'
@@ -54,8 +57,9 @@ load.sh -- oversubscription load generator for the request-parking demo.
 Usage: ./load.sh [-d duration_secs] [-r router_url] [-a atespace] [actor_id ...]
   -d   load duration in seconds (default 30)
   -r   router base URL          (default http://localhost:8000)
-  -a   atespace for the actors  (default ate-demo-parking)
-  args actor IDs                (default: p1 p2 p3 p4)
+  -a   atespace for the actors  (default ate-demo-parking-rlryr7otxprtr7ipwolqmu4obd)
+  args actor IDs                (default: p1 p2 p3 p4; each actor is named
+                                <id>-ACTOR_SUFFIX, see the script)
 
 Prereqs: `kubectl ate` installed and the router port-forwarded
          (kubectl port-forward -n ate-system svc/atenet-router 8000:80).
@@ -73,10 +77,14 @@ while getopts ":d:r:a:h" opt; do
 done
 shift $((OPTIND - 1))
 
-ACTORS=("$@")
-if [[ ${#ACTORS[@]} -eq 0 ]]; then
-  ACTORS=(p1 p2 p3 p4)
+IDS=("$@")
+if [[ ${#IDS[@]} -eq 0 ]]; then
+  IDS=(p1 p2 p3 p4)
 fi
+ACTORS=()
+for id in "${IDS[@]}"; do
+  ACTORS+=("${id}-${ACTOR_SUFFIX}")
+done
 
 TMP="$(mktemp -d)"
 pids=()

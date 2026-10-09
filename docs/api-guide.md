@@ -166,7 +166,7 @@ authority. With curl, use `--proxy-header` instead of `-H`:
 
 ```bash
 curl --proxytunnel --proxy http://localhost:8001 \
-  --proxy-header "ate-target-actor: my-atespace/my-actor" \
+  --proxy-header "ate-target-actor: <atespace>/<actor-name>" \
   http://actor-upstream:9090/
 ```
 
@@ -332,12 +332,12 @@ If `wakeupProbe` is omitted from a container, `ResumeActor` returns as soon as t
 ### Example
 
 A protojson-shaped `ateapipb.ActorTemplate`, created through the ate API with
-`kubectl ate create actor-template -f secret-agent.yaml` (the `ate-demo`
+`kubectl ate create actor-template -f secret-agent.yaml` (the `ate-demo-bdsdjzlhrbcyjlfoc4sthot3wo`
 atespace must exist):
 
 ```yaml
 metadata:
-  atespace: ate-demo
+  atespace: ate-demo-bdsdjzlhrbcyjlfoc4sthot3wo
   name: secret-agent
 containers:
 - name: agent
@@ -371,7 +371,7 @@ snapshotConfig:
 <location>/atespaces/<atespace>/tags/<tag uid>
 ```
 
-The objects of a snapshot (its manifest, memory image, durable-data tar) are named below it. So for the template above, a snapshot of an actor in atespace `team-a` is stored at `gs://my-bucket/secret-agent/atespaces/team-a/actors/3f8b…/snapshots/f47ac10b-…`, and the template's golden snapshot — the golden tag lives in the reserved `ate-golden` atespace — under `gs://my-bucket/secret-agent/atespaces/ate-golden/tags/<tag uid>`.
+The objects of a snapshot (its manifest, memory image, durable-data tar) are named below it. So for the template above, a snapshot of an actor in atespace `team-a-3f3k6jbmrda5xubuzwq2szb7hr` is stored at `gs://my-bucket/secret-agent/atespaces/team-a-3f3k6jbmrda5xubuzwq2szb7hr/actors/3f8b…/snapshots/f47ac10b-…`, and the template's golden snapshot — the golden tag lives in the reserved `ate-golden` atespace — under `gs://my-bucket/secret-agent/atespaces/ate-golden/tags/<tag uid>`.
 
 An actor takes a series of snapshots over its life, so it gets a prefix of its own and each snapshot sits below it. A tag holds exactly one, so the tag's prefix *is* its snapshot's. Both owners are keyed on their UID, so recreating an actor or tag under the same name never inherits its predecessor's objects. A pending tag records its base location in `status.storageLocation`; together with its atespace and UID, this identifies any partial copy to collect if creation fails.
 
@@ -382,14 +382,14 @@ An `Actor` reports its current snapshot in the server-managed `status.externalSn
 An `ActorTemplate` belongs to one atespace, but one `storageLocation` still holds snapshots for many atespaces: the golden actor lives in the reserved `ate-golden` atespace, and a `PUBLISHED` snapshot may be cloned from other atespaces. The `<atespace>` level exists so that access can be granted per tenant: an object-storage policy can only condition on an **object-name prefix**, and cannot read the identity recorded inside a snapshot's manifest. Binding a per-atespace grant on GCS looks like:
 
 ```yaml
-# Read-only on team-a's snapshots for this template, and nothing else.
+# Read-only on team-a-3f3k6jbmrda5xubuzwq2szb7hr's snapshots for this template, and nothing else.
 - members: ["serviceAccount:node-runtime@my-project.iam.gserviceaccount.com"]
   role: roles/storage.objectViewer
   condition:
     title: team-a-snapshots
     expression: >
       resource.name.startsWith(
-        "projects/_/buckets/my-bucket/objects/secret-agent/atespaces/team-a/")
+        "projects/_/buckets/my-bucket/objects/secret-agent/atespaces/team-a-3f3k6jbmrda5xubuzwq2szb7hr/")
 ```
 
 One consequence worth planning for: **a published snapshot is read from the atespace that took it.** Cloning across atespaces via a `PUBLISHED` tag reads the source atespace's prefix, so the reader needs a grant covering it — the target atespace's grant is not enough.
@@ -489,7 +489,7 @@ The Substrate Control Plane (`ate-api-server`) exposes a gRPC interface for mana
 #### `CreateActor`
 Registers a new logical actor in the system.
 *   **Request:** `CreateActorRequest`
-    *   `actor`: `Actor` — the actor to create. Its `metadata` carries the atespace and name (name must be a DNS-1123 label); the `actor_template` ref (atespace + name) selects the `ActorTemplate`.
+    *   `actor`: `Actor` — the actor to create. Its `metadata` carries the atespace and name (name must be a DNS-1123 label at least 26 characters long); the `actor_template` ref (atespace + name) selects the `ActorTemplate`.
     *   `actor.source_tag`: (Optional) `ObjectRef` of a `Tag` to seed the actor from. The tag must be taken under the same `ActorTemplate`, and either in the actor's own atespace or `PUBLISHED`. Nothing is copied: the new actor's `status.externalSnapshot` points at the tag's snapshot, under the tag's prefix, until its own first suspend.
 *   **Response:** the initialized `Actor`.
 

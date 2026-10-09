@@ -19,6 +19,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"sigs.k8s.io/yaml"
@@ -39,6 +40,14 @@ var substrateFixtures = []struct {
 	{SubstrateFixtureManifests{
 		Pool:     "internal/e2e/fixtures/probe/probe-sized.yaml.tmpl",
 		Template: "internal/e2e/fixtures/probe/probe-sized-template.yaml.tmpl",
+	}, 1},
+	{SubstrateFixtureManifests{
+		Pool:     "internal/e2e/fixtures/probe/probe-multiactor.yaml.tmpl",
+		Template: "internal/e2e/fixtures/probe/probe-multiactor-template.yaml.tmpl",
+	}, 1},
+	{SubstrateFixtureManifests{
+		Pool:     "internal/e2e/fixtures/probe/probe-parking.yaml.tmpl",
+		Template: "internal/e2e/fixtures/probe/probe-parking-template.yaml.tmpl",
 	}, 1},
 	{SubstrateFixtureManifests{
 		Pool:     "internal/e2e/fixtures/security/atespace-a-pool.yaml.tmpl",
@@ -110,6 +119,22 @@ func renderTemplates(t *testing.T, relPath string) []*ateapipb.ActorTemplate {
 	return decodeSubstrateTemplates(t, rendered)
 }
 
+// checkFixtureAtespace checks that the template's atespace is one
+// CreateAtespace accepts and that it names the fixture whose pool is pool.
+func checkFixtureAtespace(t *testing.T, tmpl *ateapipb.ActorTemplate, pool *v1alpha1.WorkerPool) {
+	t.Helper()
+	atespace := tmpl.GetMetadata().GetAtespace()
+	if errs := resources.ValidateResourceName(atespace, nil); len(errs) > 0 {
+		t.Errorf("template %s atespace %q: %v", tmpl.GetMetadata().GetName(), atespace, errs)
+	}
+	if errs := resources.ValidateRandomName(atespace, nil); len(errs) > 0 {
+		t.Errorf("template %s atespace %q: %v", tmpl.GetMetadata().GetName(), atespace, errs)
+	}
+	if got := FixtureNamespace(atespace); got != pool.Namespace {
+		t.Errorf("template %s atespace %q maps to namespace %q, want the pool's %q", tmpl.GetMetadata().GetName(), atespace, got, pool.Namespace)
+	}
+}
+
 // memoryLimit returns the template's spec-level memory limit quantity, "" if
 // none is declared.
 func memoryLimit(tmpl *ateapipb.ActorTemplate) string {
@@ -159,6 +184,7 @@ func TestRenderSubstrateFixtures_GVisor(t *testing.T) {
 				if strings.Contains(location, "-microvm") {
 					t.Errorf("template %s snapshot location = %q, want no micro-VM suffix", name, location)
 				}
+				checkFixtureAtespace(t, tmpl, pool)
 				// The selector is what ties the template to its fixture's pool.
 				for k, v := range tmpl.GetWorkerSelector().GetMatchLabels() {
 					if pool.Labels[k] != v {
@@ -191,6 +217,7 @@ func TestRenderSubstrateFixtures_MicroVM(t *testing.T) {
 			}
 			for _, tmpl := range templates {
 				name := tmpl.GetMetadata().GetName()
+				checkFixtureAtespace(t, tmpl, pool)
 				if got := tmpl.GetSandboxConfig().GetSandboxClass(); got != ateapipb.SandboxClass_SANDBOX_CLASS_MICROVM {
 					t.Errorf("template %s sandboxClass = %v, want MICROVM — it must match the pool's or no worker is eligible", name, got)
 				}
@@ -219,13 +246,13 @@ func TestRenderSubstrateFixtures_MicroVM(t *testing.T) {
 func TestEgressFixture(t *testing.T) {
 	t.Run("gvisor", func(t *testing.T) {
 		t.Setenv(sandboxClassEnv, "")
-		if got := EgressFixture(); got.Namespace != "ate-demo-egress" || got.Name != "egress" {
+		if got := EgressFixture(); got.Atespace != "ate-demo-egress-a326zwu4ineuokl2mgd5enlptt" || got.Name != "egress" || got.PoolNamespace != "ate-demo-egress" {
 			t.Errorf("EgressFixture() = %+v, want the gVisor egress demo", got)
 		}
 	})
 	t.Run("microvm", func(t *testing.T) {
 		t.Setenv(sandboxClassEnv, SandboxClassMicroVM)
-		if got := EgressFixture(); got.Namespace != "ate-demo-egress-microvm" || got.Name != "egress-microvm" {
+		if got := EgressFixture(); got.Atespace != "ate-demo-egress-microvm-7mz3rgntgxuitty3bpdjo7fns4" || got.Name != "egress-microvm" || got.PoolNamespace != "ate-demo-egress-microvm" {
 			t.Errorf("EgressFixture() = %+v, want the micro-VM egress demo", got)
 		}
 	})
@@ -239,7 +266,7 @@ func TestSubstrateCounterFixture(t *testing.T) {
 		t.Setenv(sandboxClassEnv, "")
 		got := SubstrateCounterFixture()
 		want := SubstrateFixture{
-			Atespace:      "ate-demo-counter",
+			Atespace:      "ate-demo-counter-msdynmfc666czthmw3s7uwia5w",
 			Name:          "counter",
 			PoolNamespace: "ate-demo-counter",
 			PoolName:      "counter",
@@ -253,7 +280,7 @@ func TestSubstrateCounterFixture(t *testing.T) {
 		t.Setenv(sandboxClassEnv, SandboxClassMicroVM)
 		got := SubstrateCounterFixture()
 		want := SubstrateFixture{
-			Atespace:      "ate-demo-counter-microvm",
+			Atespace:      "ate-demo-counter-microvm-3iaw7q5v4p4xxtudd6aisu3biu",
 			Name:          "counter-microvm",
 			PoolNamespace: "ate-demo-counter-microvm",
 			PoolName:      "counter-microvm",

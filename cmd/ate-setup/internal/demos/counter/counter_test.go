@@ -64,7 +64,7 @@ func TestExternalVolumeRenders(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Render: %v", err)
 			}
-			demotest.AssertRenderedActorTemplate(t, manifest, resources.ActorTemplateRef{Atespace: namespace, Name: "counter"})
+			demotest.AssertRenderedActorTemplate(t, manifest, resources.ActorTemplateRef{Atespace: atespace, Name: "counter"})
 
 			for _, want := range []string{
 				"--validate-existing-file-path=/external-data/test.txt",

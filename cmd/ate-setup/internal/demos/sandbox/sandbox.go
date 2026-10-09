@@ -24,17 +24,20 @@ import (
 
 // namespace is the pool's k8s namespace; it doubles as the atespace holding
 // the demo's ActorTemplate.
-const namespace = "ate-demo-sandbox"
+const (
+	namespace = "ate-demo-sandbox"
+	atespace  = "ate-demo-sandbox-exrym6sxyqbjznq2l33mcptjuc"
+)
 
 func init() {
 	demos.Register(&demos.Substrate{
 		DemoName:           "demo-sandbox",
 		Short:              "An on-demand sandbox actor driven by the sandbox client",
 		WorkerPoolManifest: "demos/sandbox/sandbox.yaml.tmpl",
-		Deployments:        []steps.TemplateRef{{Atespace: namespace, Name: "sandbox-workerpool"}},
+		Deployments:        []steps.DeploymentRef{{Namespace: namespace, Name: "sandbox-workerpool"}},
 		Templates: []demos.SubstrateTemplate{{
 			Manifest: "demos/sandbox/sandbox-template.yaml.tmpl",
-			Ref:      resources.ActorTemplateRef{Atespace: namespace, Name: "sandbox-template"},
+			Ref:      resources.ActorTemplateRef{Atespace: atespace, Name: "sandbox-template"},
 		}},
 	})
 }

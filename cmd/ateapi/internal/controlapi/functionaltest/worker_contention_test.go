@@ -57,7 +57,7 @@ func TestResumeActor_ConcurrentOntoOneWorker(t *testing.T) {
 
 	for i := range actors {
 		if _, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-			Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: fmt.Sprintf("id%d", i)},
+			Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: fmt.Sprintf("%s-%d", testActorID, i)},
 			ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
 		}}); err != nil {
 			t.Fatalf("CreateActor %d: %v", i, err)
@@ -75,7 +75,7 @@ func TestResumeActor_ConcurrentOntoOneWorker(t *testing.T) {
 		wg.Go(func() {
 			start.Wait()
 			_, errs[i] = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: fmt.Sprintf("id%d", i)},
+				Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: fmt.Sprintf("%s-%d", testActorID, i)},
 			})
 		})
 	}

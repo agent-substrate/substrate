@@ -93,7 +93,7 @@ Actors aren't in k8s, so use the plugin. This is where you see victim B run, sus
 
 
 # Actor state + worker assignment, atespace B (victim) then A (attacker)
-watch -n1 'kubectl ate get actors -a ate-e2e-sec-b; echo ---; kubectl ate get actors -a ate-e2e-sec-a'
+watch -n1 'kubectl ate get actors -a ate-e2e-sec-b-mxy6vj23u335ddio2dev; echo ---; kubectl ate get actors -a ate-e2e-sec-a-mxy6vj23u335ddio2dev'
 
 # Which worker each actor is on — the name should match across the two atespaces
 kubectl ate get workers
@@ -114,6 +114,6 @@ POD=$(kubectl get pods -n ate-e2e-sec-a -l app=ateom -o name | head -1)
 kubectl exec -n ate-e2e-sec-a "$POD" -c ateom -- ls -la /var/lib/ateom-gvisor/actors
 Control plane / snapshots (for the tag-scope subtest)
 
-kubectl ate get tags -a ate-e2e-sec-a          # atespace-a-tag appears during the last subtest
+kubectl ate get tags -a ate-e2e-sec-a-mxy6vj23u335ddio2dev          # atespace-a-tag appears during the last subtest
 kubectl ate get atespaces                       # ate-e2e-sec-a / -b listed while live
 kubectl logs -n ate-system -l app=ateapi -f     # Create

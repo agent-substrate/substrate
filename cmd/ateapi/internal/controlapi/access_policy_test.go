@@ -16,6 +16,7 @@ package controlapi
 
 import (
 	"context"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"strings"
 	"testing"
 
@@ -29,6 +30,7 @@ import (
 )
 
 func TestAccessPolicy_GlobalAndAtespaceGovernance(t *testing.T) {
+	teamAlpha := resources.NewRandomName("team-alpha-")
 	persistence := storetest.SetupPostgresPersistence(t)
 	ctx := context.Background()
 
@@ -227,7 +229,7 @@ func TestAccessPolicy_GlobalAndAtespaceGovernance(t *testing.T) {
 	// until CreateAtespaceAccessPolicy is called.
 	createSpaceReq := &ateapipb.CreateAtespaceRequest{
 		Atespace: &ateapipb.Atespace{
-			Metadata: &ateapipb.ResourceMetadata{Name: "team-alpha"},
+			Metadata: &ateapipb.ResourceMetadata{Name: teamAlpha},
 		},
 	}
 	if _, err := invoke(aliceCtx, ateapipb.Control_CreateAtespace_FullMethodName, createSpaceReq, func(c context.Context, r any) (any, error) {
@@ -237,7 +239,7 @@ func TestAccessPolicy_GlobalAndAtespaceGovernance(t *testing.T) {
 	}
 
 	getSpacePolReq := &ateapipb.GetAtespaceAccessPolicyRequest{
-		Atespace: &ateapipb.ObjectRef{Name: "team-alpha"},
+		Atespace: &ateapipb.ObjectRef{Name: teamAlpha},
 	}
 	if _, err := invoke(aliceCtx, ateapipb.Control_GetAtespaceAccessPolicy_FullMethodName, getSpacePolReq, func(c context.Context, r any) (any, error) {
 		return svc.GetAtespaceAccessPolicy(c, r.(*ateapipb.GetAtespaceAccessPolicyRequest))
@@ -247,7 +249,7 @@ func TestAccessPolicy_GlobalAndAtespaceGovernance(t *testing.T) {
 
 	// 8. CreateAtespaceAccessPolicy: Alice creates team-alpha's policy granting Charlie editor.
 	createSpacePolReq := &ateapipb.CreateAtespaceAccessPolicyRequest{
-		Atespace: &ateapipb.ObjectRef{Name: "team-alpha"},
+		Atespace: &ateapipb.ObjectRef{Name: teamAlpha},
 		AccessPolicy: &ateapipb.AccessPolicy{
 			Metadata: &ateapipb.ResourceMetadata{Name: "default"},
 			Bindings: []*ateapipb.Binding{
@@ -276,7 +278,7 @@ func TestAccessPolicy_GlobalAndAtespaceGovernance(t *testing.T) {
 		t.Fatalf("expected Charlie (atespace editor) allowed GetAtespaceAccessPolicy, got %v", err)
 	}
 	updateSpacePolReq := &ateapipb.UpdateAtespaceAccessPolicyRequest{
-		Atespace: &ateapipb.ObjectRef{Name: "team-alpha"},
+		Atespace: &ateapipb.ObjectRef{Name: teamAlpha},
 		AccessPolicy: &ateapipb.AccessPolicy{
 			Metadata: createdSpacePol.GetMetadata(),
 			Bindings: []*ateapipb.Binding{
@@ -291,7 +293,7 @@ func TestAccessPolicy_GlobalAndAtespaceGovernance(t *testing.T) {
 		t.Fatalf("expected Charlie (atespace editor) denied UpdateAtespaceAccessPolicy, got %v", err)
 	}
 	deleteSpacePolReq := &ateapipb.DeleteAtespaceAccessPolicyRequest{
-		Atespace: &ateapipb.ObjectRef{Name: "team-alpha"},
+		Atespace: &ateapipb.ObjectRef{Name: teamAlpha},
 	}
 	if _, err := invoke(charlieCtx, ateapipb.Control_DeleteAtespaceAccessPolicy_FullMethodName, deleteSpacePolReq, func(c context.Context, r any) (any, error) {
 		return svc.DeleteAtespaceAccessPolicy(c, r.(*ateapipb.DeleteAtespaceAccessPolicyRequest))

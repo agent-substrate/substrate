@@ -51,7 +51,7 @@ import (
 const (
 	userClass        = "GluttonUser"
 	templateName     = "glutton"
-	templateAtespace = "benchmark-workloads"
+	templateAtespace = "benchmark-workloads-y6nzpn6xatdflqhibhytuut4d5"
 	pingPath         = "/ping"
 	writeRAMPath     = "/writeram"
 	readRAMPath      = "/readram"

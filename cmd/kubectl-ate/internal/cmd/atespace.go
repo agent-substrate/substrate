@@ -74,6 +74,7 @@ var getAtespacesCmd = &cobra.Command{
 var createAtespaceCmd = &cobra.Command{
 	Use:   "atespace [name]",
 	Short: "Create an atespace",
+	Long:  "Create an atespace. The name must be at least 26 characters long; use a random name, optionally after a readable prefix.",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()

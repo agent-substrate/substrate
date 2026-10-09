@@ -180,7 +180,7 @@ actors receiving rotated actor-reference header traffic. Everything else lives i
 | Knob | Default | Meaning |
 |---|---|---|
 | `envoyCpu` | required | cpu `requests=limits` on both router containers, and Envoy's `--concurrency`. The benchmark's independent variable. |
-| `atespace` | `ingress-benchmark` | Actor namespace; name it per *experiment*, never per run (atespaces are never auto-deleted). |
+| `atespace` | `ingress-benchmark-gwi4eosnu5zbp5jqdg3dnufo3t` | Actor namespace; name it per *experiment*, never per run (atespaces are never auto-deleted). Must be at least 26 characters long. |
 | `tailLatencySloMs` | 0 (disabled) | The SLO: upper bound on latency mean+2σ (~p95 proxy), in ms. |
 | `successRateThreshold` | 0.999 | Minimum 2xx fraction of sent requests. |
 | `sendRateThreshold` | 0.9 | Minimum sent fraction of the paced schedule (open-loop backstop). |

@@ -35,7 +35,7 @@ TEST_TYPE = "nighthawk-ingress"
 DEFAULTS = {
     # Actor namespace: one atespace per experiment, never per run —
     # nothing deletes atespaces automatically.
-    "atespace": "ingress-benchmark",
+    "atespace": "ingress-benchmark-gwi4eosnu5zbp5jqdg3dnufo3t",
     # Client sizing decoupled from envoyCpu so the harness never binds.
     "clientConcurrency": 16,
     "connections": 1000,

@@ -114,18 +114,19 @@ log "Demo applied. Next steps:"
 cat <<EOF
 
   1. Inspect the actor template (its golden snapshot is already Ready):
-       kubectl ate${KCTX_FLAG} get actor-templates -a ate-demo-counter-microvm
+       kubectl ate${KCTX_FLAG} get actor-templates -a ate-demo-counter-microvm-3iaw7q5v4p4xxtudd6aisu3biu
 
   2. Create an actor in the template's atespace (kubectl-ate; install with: go install ./cmd/kubectl-ate):
-       kubectl ate${KCTX_FLAG} create actor my-counter-1 -a ate-demo-counter-microvm \\
+       ACTOR="counter-\$(uuidgen | tr '[:upper:]' '[:lower:]')"
+       kubectl ate${KCTX_FLAG} create actor "\${ACTOR}" -a ate-demo-counter-microvm-3iaw7q5v4p4xxtudd6aisu3biu \\
          --template counter-microvm
 
   3. Port-forward the atenet-router and curl the in-RAM counter:
        kubectl${KCTX_FLAG} port-forward -n ate-system svc/atenet-router 8000:80 &
        curl -X POST \\
-         -H "ate-target-actor: ate-demo-counter-microvm/my-counter-1" \
+         -H "ate-target-actor: ate-demo-counter-microvm-3iaw7q5v4p4xxtudd6aisu3biu/\${ACTOR}" \
          http://localhost:8000
 
-     Increment, suspend (kubectl ate suspend actor my-counter-1 -a ate-demo-counter-microvm),
+     Increment, suspend (kubectl ate suspend actor "\${ACTOR}" -a ate-demo-counter-microvm-3iaw7q5v4p4xxtudd6aisu3biu),
      resume on another worker, and confirm the count continues — the guest memory snapshot round-tripped.
 EOF

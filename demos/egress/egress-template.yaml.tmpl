@@ -12,10 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Substrate ActorTemplate resource (protojson-shaped ateapipb.ActorTemplate,
-# NOT the ate.dev/v1alpha1 CRD) for the egress demo. Applied with
-# `kubectl ate create actor-template -f -` after `ko resolve` replaces the
-# ko:// image reference; the ate-demo-egress atespace must exist.
+# Substrate ActorTemplate resource (protojson-shaped ateapipb.ActorTemplate, NOT
+# the ate.dev/v1alpha1 CRD) for the egress demo. Applied with
+# `kubectl ate create actor-template -f -` after `ko resolve` replaces the ko://
+# image reference; the ate-demo-egress-a326zwu4ineuokl2mgd5enlptt atespace must
+# exist.
 #
 # The actor also trusts the egress gateway CA: the gateway terminates the TLS
 # its `https` rules allow and mints the per-SNI leaf the actor sees, which
@@ -23,7 +24,7 @@
 # from this fixture.
 
 metadata:
-  atespace: ate-demo-egress
+  atespace: ate-demo-egress-a326zwu4ineuokl2mgd5enlptt
   name: egress
 workerSelector:
   matchLabels:

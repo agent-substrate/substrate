@@ -38,27 +38,28 @@ To enable validation of reading from an external volume (e.g.
 This command will:
 - Build the counter server image using `ko`.
 - Apply [`counter.yaml.tmpl`](counter.yaml.tmpl): the `ate-demo-counter` namespace and the `counter` `WorkerPool`, then wait for the worker rollout.
-- Create the `ate-demo-counter` atespace.
+- Create the `ate-demo-counter-msdynmfc666czthmw3s7uwia5w` atespace.
 - Create the `counter` actor template through the ate API (`kubectl ate create actor-template`) from [`counter-template.yaml.tmpl`](counter-template.yaml.tmpl). The manifest is the message's protojson form — the same shape `kubectl ate get actor-template -o yaml` prints inside its `actorTemplates` list.
 - Wait until the template's golden snapshot is ready.
 
 Inspect the deployed template with:
 
 ```bash
-kubectl ate get actor-templates -a ate-demo-counter
-kubectl ate get actor-template counter -a ate-demo-counter -o yaml
+kubectl ate get actor-templates -a ate-demo-counter-msdynmfc666czthmw3s7uwia5w
+kubectl ate get actor-template counter -a ate-demo-counter-msdynmfc666czthmw3s7uwia5w -o yaml
 ```
 
 ### 2. Create a Counter Actor
 
-Create the counter actor with a chosen ID (e.g., `my-counter-1`) using `--template` (the template's name, resolved in the actor's atespace — so the actor lives in the demo's atespace, which the deploy step already created):
+Create the counter actor with a random name (actor names must be at least 26 characters long) using `--template` (the template's name, resolved in the actor's atespace — so the actor lives in the demo's atespace, which the deploy step already created):
 
 ```bash
 # Install the CLI as a kubectl plugin if not already installed
 go install ./cmd/kubectl-ate
 
 # Create the actor from the counter template.
-kubectl ate create actor my-counter-1 -a ate-demo-counter --template counter
+ACTOR="counter-$(uuidgen | tr '[:upper:]' '[:lower:]')"
+kubectl ate create actor "${ACTOR}" -a ate-demo-counter-msdynmfc666czthmw3s7uwia5w --template counter
 ```
 
 ### 3. Port-Forward Services
@@ -83,18 +84,18 @@ ordinary application metadata.
 1. Send an HTTP POST request to increment the counter:
 ```bash
 curl -X POST \
-  -H "ate-target-actor: ate-demo-counter/my-counter-1" \
+  -H "ate-target-actor: ate-demo-counter-msdynmfc666czthmw3s7uwia5w/${ACTOR}" \
   http://localhost:8000
 ```
 
 2. Verify that the actor is now in a `RUNNING` state and assigned to a worker pod:
 ```bash
-kubectl ate get actor my-counter-1 -a ate-demo-counter
+kubectl ate get actor "${ACTOR}" -a ate-demo-counter-msdynmfc666czthmw3s7uwia5w
 ```
 
 3. When finished, you can manually suspend the actor back to snapshot storage:
 ```bash
-kubectl ate suspend actor my-counter-1 -a ate-demo-counter
+kubectl ate suspend actor "${ACTOR}" -a ate-demo-counter-msdynmfc666czthmw3s7uwia5w
 ```
 
 Repeat the `curl` from step 1 and the actor resumes from its snapshot —
@@ -104,7 +105,7 @@ memory, the file counter from the durable volume.
 
 4. To permanently delete the suspended actor:
 ```bash
-kubectl ate delete actor my-counter-1 -a ate-demo-counter
+kubectl ate delete actor "${ACTOR}" -a ate-demo-counter-msdynmfc666czthmw3s7uwia5w
 ```
 
 ## Reaching a non-default port
@@ -122,8 +123,8 @@ proxy behavior wouldn't do:
 
 ```bash
 curl -p -x http://localhost:8001 \
-  --proxy-header "ate-target-actor: ate-demo-counter/my-counter-1" \
-  http://my-counter-1:9090/
+  --proxy-header "ate-target-actor: ate-demo-counter-msdynmfc666czthmw3s7uwia5w/${ACTOR}" \
+  http://${ACTOR}:9090/
 ```
 
 This reaches the same actor's second listener and resumes it exactly like any
@@ -147,7 +148,7 @@ the guest-memory snapshot round-trips just as gVisor's process snapshot does.
   the `WorkerPool` for the micro-VM sandbox class.
 - [`demos/counter/counter-microvm-template.yaml.tmpl`](counter-microvm-template.yaml.tmpl) —
   the `counter-microvm` actor template, created through the ate API in the
-  `ate-demo-counter-microvm` atespace.
+  `ate-demo-counter-microvm-3iaw7q5v4p4xxtudd6aisu3biu` atespace.
 - [`hack/run-microvm-demo.sh`](../../hack/run-microvm-demo.sh) — one-shot bring-up
   that builds the micro-VM worker image, stages the guest assets, deploys the
   control plane, and applies the manifests above. Like the other hack scripts it
@@ -171,7 +172,7 @@ deploy directly instead:
 ```
 
 Then create an actor (`--template counter-microvm`, in the
-`ate-demo-counter-microvm` atespace), increment the counter, suspend
+`ate-demo-counter-microvm-3iaw7q5v4p4xxtudd6aisu3biu` atespace), increment the counter, suspend
 it, resume it (even on a different worker), and confirm the count continues —
 the actor's counter lives in guest RAM, so a continuing count proves the
 guest-memory snapshot survived the round trip.

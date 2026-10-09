@@ -31,8 +31,8 @@ CTX="${KUBECTL_CONTEXT:-kind-kind}"
 K="kubectl --context ${CTX}"
 # The actor lives in the demo's atespace: --template resolves the
 # template by name within the actor's own atespace.
-ATESPACE="${ATESPACE:-ate-demo-egress}"
-ACTOR="${ACTOR:-egress-demo}"
+ATESPACE="${ATESPACE:-ate-demo-egress-a326zwu4ineuokl2mgd5enlptt}"
+ACTOR="${ACTOR:-egress-demo-dflmd2qshx453zk4hssrmvcih6}"
 TARGET_URL="${TARGET_URL:-http://example.com/}"
 
 echo "== gateway should be running =="

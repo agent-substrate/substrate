@@ -43,12 +43,14 @@ First, ensure you have the `kubectl-ate` CLI installed:
 go install ./cmd/kubectl-ate
 ```
 
-The deploy created the `jupyter` actor template in the `ate-demo-jupyter`
-atespace. Create your `jupyter` actor there — `--template` names the
+The deploy created the `jupyter` actor template in the
+`ate-demo-jupyter-eatkenhmjpki5xxhkfpl7bnlsg` atespace. Create your `jupyter` actor there — `--template` names the
 template, resolved in the actor's atespace:
 
 ```bash
-kubectl ate create actor jupyter-notebook -a ate-demo-jupyter --template jupyter
+# jupyter-proxy routes to this actor name.
+ACTOR="jupyter-notebook-o4iky7o3b45wt3ixhh4f4xi4nl"
+kubectl ate create actor "${ACTOR}" -a ate-demo-jupyter-eatkenhmjpki5xxhkfpl7bnlsg --template jupyter
 ```
 
 ### 2. Access Jupyter via the Proxy!
@@ -63,7 +65,7 @@ metadata, and preserves Jupyter's WebSocket upgrade:
 ```nginx
 proxy_pass http://atenet-router.ate-system.svc.cluster.local;
 proxy_set_header Host $http_host;
-proxy_set_header ate-target-actor ate-demo-jupyter/jupyter-notebook;
+proxy_set_header ate-target-actor ate-demo-jupyter-eatkenhmjpki5xxhkfpl7bnlsg/jupyter-notebook-o4iky7o3b45wt3ixhh4f4xi4nl;
 proxy_set_header Upgrade $http_upgrade;
 proxy_set_header Connection "upgrade";
 ```
@@ -95,19 +97,19 @@ print("hello world")
 When you're not using the notebook, instead of leaving the container running, Substrate can checkpoint and suspend it to disk.
 
 ```bash
-kubectl ate suspend actor jupyter-notebook -a ate-demo-jupyter
+kubectl ate suspend actor "${ACTOR}" -a ate-demo-jupyter-eatkenhmjpki5xxhkfpl7bnlsg
 ```
 
 Check the actor status to confirm it's suspended:
 ```bash
-kubectl ate get actor jupyter-notebook -a ate-demo-jupyter
+kubectl ate get actor "${ACTOR}" -a ate-demo-jupyter-eatkenhmjpki5xxhkfpl7bnlsg
 ```
 Notice how it shows `STATUS_SUSPENDED`.
 
 To **resume** the notebook, you can either explicitly resume it via CLI:
 
 ```bash
-kubectl ate resume actor jupyter-notebook -a ate-demo-jupyter
+kubectl ate resume actor "${ACTOR}" -a ate-demo-jupyter-eatkenhmjpki5xxhkfpl7bnlsg
 ```
 
 Or, even easier, you can rely on "transparent resume" — just refresh the page in your browser or make another request to the URL while it's suspended. Substrate will automatically restore its state and serve your request without any downtime.
@@ -115,7 +117,7 @@ Or, even easier, you can rely on "transparent resume" — just refresh the page 
 ### Clean up
 
 Uninstall the demo deployment — this deletes the demo's actors, the actor
-template, and the `ate-demo-jupyter` atespace:
+template, and the `ate-demo-jupyter-eatkenhmjpki5xxhkfpl7bnlsg` atespace:
 ```bash
 ./hack/install-ate-kind.sh --delete-demo-jupyter
 ```

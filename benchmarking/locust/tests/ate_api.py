@@ -68,7 +68,7 @@ class AteAPIUser(User):
                             atespace=ATESPACE, name=self.actor_name
                         ),
                         actor_template=ateapi_pb2.ObjectRef(
-                            atespace="ate-demo-counter",
+                            atespace="ate-demo-counter-msdynmfc666czthmw3s7uwia5w",
                             name="counter",
                         ),
                     )

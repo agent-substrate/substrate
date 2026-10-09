@@ -122,7 +122,8 @@ go install ./cmd/kubectl-ate
 
 # create a counter actor in the demo's atespace (--template names the
 # actor template, resolved in the actor's atespace)
-kubectl ate create actor my-counter-1 -a ate-demo-counter --template counter
+ACTOR="counter-$(uuidgen | tr '[:upper:]' '[:lower:]')"
+kubectl ate create actor "${ACTOR}" -a ate-demo-counter-msdynmfc666czthmw3s7uwia5w --template counter
 
 # port-forward the network router to bind to local port `8000`
 kubectl port-forward -n ate-system svc/atenet-router 8000:80
@@ -137,7 +138,7 @@ kubectl port-forward -n ate-system svc/atenet-router 8000:80
 3. In a **separate terminal**, send an HTTP request to increment the counter:
 ```shell
 curl -X POST \
-   -H "ate-target-actor: ate-demo-counter/my-counter-1" \
+   -H "ate-target-actor: ate-demo-counter-msdynmfc666czthmw3s7uwia5w/${ACTOR}" \
    -i http://localhost:8000/
 ```
 

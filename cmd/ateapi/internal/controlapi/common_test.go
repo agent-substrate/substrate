@@ -19,15 +19,16 @@ import (
 	"testing"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/protobuf/testing/protocmp"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
 // Helpers shared by the unit tests in this package.
-const (
-	testAtespace = "test-atespace"
-	testActorID  = "id1"
+var (
+	testAtespace = resources.NewRandomName("test-atespace-")
+	testActorID  = resources.NewRandomName("id1-")
 )
 
 var (

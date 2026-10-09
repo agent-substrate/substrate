@@ -36,10 +36,10 @@ const (
 	wantMemBytes = 512 * 1024 * 1024 // 512Mi
 )
 
-// sizingNamespace is where deploySizedProbe applies the fixture, and the
-// atespace its actor lives in. Suffixed per sandbox class (see
+// sizingAtespace is the atespace of the fixture deploySizedProbe applies, and
+// the atespace its actor lives in. Suffixed per sandbox class (see
 // e2e.FixtureName) so the two lanes' fixtures never collide.
-var sizingNamespace = e2e.FixtureName("ate-e2e") + "-sizing"
+var sizingAtespace = e2e.FixtureAtespace(e2e.FixtureName("ate-e2e") + "-sizing")
 
 // resourcesResponse mirrors the /resources endpoint of the probe fixture.
 type resourcesResponse struct {
@@ -71,7 +71,7 @@ func TestActorSizing_SandboxObservesDeclaredLimits(t *testing.T) {
 
 	deploySizedProbe(t, ctx, clients, env["BUCKET_NAME"])
 
-	const id = "sized-actor"
+	id := resources.NewRandomName("sized-actor-")
 	createAndResumeActor(t, ctx, clients, id)
 
 	rc, err := e2e.NewRouterClient(ctx)
@@ -120,26 +120,26 @@ func deploySizedProbe(t *testing.T, ctx context.Context, clients *e2e.Clients, b
 func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Clients, id string) {
 	t.Helper()
 	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: sizingNamespace, Name: id},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: sizingNamespace, Name: sizingTemplate},
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: sizingAtespace, Name: id},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: sizingAtespace, Name: sizingTemplate},
 	}}); err != nil {
 		t.Fatalf("CreateActor %q: %v", id, err)
 	}
 	t.Cleanup(func() {
 		// DeleteActor requires the actor to be suspended.
-		_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: &ateapipb.ObjectRef{Atespace: sizingNamespace, Name: id}})
-		_, _ = clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: &ateapipb.ObjectRef{Atespace: sizingNamespace, Name: id}})
+		_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: &ateapipb.ObjectRef{Atespace: sizingAtespace, Name: id}})
+		_, _ = clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: &ateapipb.ObjectRef{Atespace: sizingAtespace, Name: id}})
 	})
 
 	// Resume from the golden snapshot (the restore path).
-	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: sizingNamespace, Name: id}}); err != nil {
+	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: sizingAtespace, Name: id}}); err != nil {
 		t.Fatalf("ResumeActor %q: %v", id, err)
 	}
 }
 
 func getResources(t *testing.T, ctx context.Context, rc *e2e.RouterClient, id string) resourcesResponse {
 	t.Helper()
-	resp, err := rc.Get(ctx, resources.ActorRef{Atespace: sizingNamespace, Name: id}, "/resources")
+	resp, err := rc.Get(ctx, resources.ActorRef{Atespace: sizingAtespace, Name: id}, "/resources")
 	if err != nil {
 		t.Fatalf("GET /resources for %q: %v", id, err)
 	}

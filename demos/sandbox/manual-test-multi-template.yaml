@@ -15,9 +15,9 @@
 # ActorTemplate (protojson-shaped ateapipb.ActorTemplate) for the manual
 # multi-volume test. Applied with `kubectl ate create actor-template -f -`
 # after `ko resolve` replaces the ko:// image reference; the
-# ate-manual-test-multi atespace must exist.
+# ate-manual-test-multi-6xgxrzrg4xdl3izfsa5f7x23pt atespace must exist.
 metadata:
-  atespace: ate-manual-test-multi
+  atespace: ate-manual-test-multi-6xgxrzrg4xdl3izfsa5f7x23pt
   name: sandbox-template
 workerSelector:
   matchLabels:

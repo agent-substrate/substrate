@@ -40,7 +40,7 @@ import (
 
 const probeTemplate = "probe"
 
-var probeNamespace string
+var probeAtespace string
 
 // The suite's hostnames, one per injection outcome: each is covered by exactly
 // one https rule, so each selects exactly one CredentialHeader. echoHost is the
@@ -101,9 +101,9 @@ func TestActorEgressCredentialInjection(t *testing.T) {
 
 	e2e.ConfigureCredentialProvider(t)
 
-	probeNamespace, _ = e2e.DeployProbe(t, env["BUCKET_NAME"], "egresscredinject", e2e.WithTrustBundle())
+	probeAtespace, _ = e2e.DeployProbe(t, env["BUCKET_NAME"], "egresscredinject", e2e.WithTrustBundle())
 
-	const id = "probe-credinject"
+	id := resources.NewRandomName("probe-credinject-")
 	createAndResumeActor(t, ctx, clients, id)
 	waitForActorState(t, ctx, clients, id, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 
@@ -248,7 +248,7 @@ func probeFetch(t *testing.T, ctx context.Context, rc *e2e.RouterClient, id, ori
 	for _, p := range extraParams {
 		path += "&" + p
 	}
-	ref := resources.ActorRef{Atespace: probeNamespace, Name: id}
+	ref := resources.ActorRef{Atespace: probeAtespace, Name: id}
 
 	deadline := time.Now().Add(30 * time.Second)
 	for attempt := 1; ; attempt++ {
@@ -280,7 +280,7 @@ func probeFetch(t *testing.T, ctx context.Context, rc *e2e.RouterClient, id, ori
 // actor records outlive the fixture namespace.
 func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Clients, id string) {
 	t.Helper()
-	ref := &ateapipb.ObjectRef{Atespace: probeNamespace, Name: id}
+	ref := &ateapipb.ObjectRef{Atespace: probeAtespace, Name: id}
 	// NotFound is the normal case on a fresh run. Other errors don't stop the
 	// test, but they are logged in case CreateActor then fails.
 	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: ref}); err != nil && status.Code(err) != codes.NotFound {
@@ -290,8 +290,8 @@ func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Client
 		t.Logf("removing leftover actor %q: DeleteActor: %v", id, err)
 	}
 	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: probeNamespace, Name: id},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: probeNamespace, Name: probeTemplate},
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: probeAtespace, Name: id},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: probeAtespace, Name: probeTemplate},
 	}}); err != nil {
 		t.Fatalf("CreateActor %q: %v", id, err)
 	}
@@ -300,7 +300,7 @@ func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Client
 			t.Logf("cleanup: SuspendActor %q: %v", id, err)
 		}
 		if _, err := clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref}); err != nil {
-			t.Logf("cleanup: DeleteActor %q failed, actor leaked (remove with: kubectl ate delete actor %s -a %s): %v", id, id, probeNamespace, err)
+			t.Logf("cleanup: DeleteActor %q failed, actor leaked (remove with: kubectl ate delete actor %s -a %s): %v", id, id, probeAtespace, err)
 		}
 	})
 	// Exercise each credential outcome on both HTTP and HTTPS.
@@ -331,7 +331,7 @@ func waitForActorState(t *testing.T, ctx context.Context, clients *e2e.Clients, 
 	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
 		resp, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: probeNamespace, Name: actorName},
+			Actor: &ateapipb.ObjectRef{Atespace: probeAtespace, Name: actorName},
 		})
 		if err == nil && resp.GetStatus().GetState() == want {
 			return

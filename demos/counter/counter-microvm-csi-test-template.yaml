@@ -15,9 +15,9 @@
 # ActorTemplate (protojson-shaped ateapipb.ActorTemplate) for the manual
 # micro-VM CSI test. Applied with `kubectl ate create actor-template -f -`
 # after `ko resolve` replaces the ko:// image reference; the
-# ate-demo-counter-microvm-csi atespace must exist.
+# ate-demo-counter-microvm-csi-lmk5yc5zmymyuiojsfv74pmpjt atespace must exist.
 metadata:
-  atespace: ate-demo-counter-microvm-csi
+  atespace: ate-demo-counter-microvm-csi-lmk5yc5zmymyuiojsfv74pmpjt
   name: counter-microvm-csi
 workerSelector:
   matchLabels:

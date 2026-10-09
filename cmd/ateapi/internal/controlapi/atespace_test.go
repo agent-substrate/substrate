@@ -48,6 +48,7 @@ func withAtespaceMetadata(mutate func(*ateapipb.ResourceMetadata)) func(*ateapip
 }
 
 func TestAtespace_EndToEndOpenFGAScenarios(t *testing.T) {
+	team1 := resources.NewRandomName("team-1-")
 	ctx := context.Background()
 	persistence := storetest.SetupPostgresPersistence(t)
 	pool := persistence.Pool()
@@ -151,49 +152,49 @@ func TestAtespace_EndToEndOpenFGAScenarios(t *testing.T) {
 	grantObjectRole("root-admin", "owner", authz.GlobalRootObject)
 
 	// --- Scenario 1: Duplicate CreateAtespace on live team-1 preserves alice and bob's permissions ---
-	if _, err := callCreate(rootCtx, "team-1"); err != nil {
+	if _, err := callCreate(rootCtx, team1); err != nil {
 		t.Fatalf("CreateAtespace(team-1) failed: %v", err)
 	}
-	grantRole("alice", "owner", "team-1")
-	grantRole("bob", "editor", "team-1")
+	grantRole("alice", "owner", team1)
+	grantRole("bob", "editor", team1)
 
 	// Verify both alice and bob can GetAtespace(team-1), and bob cannot DeleteAtespace(team-1).
-	if _, err := callGet(aliceCtx, "team-1"); err != nil {
+	if _, err := callGet(aliceCtx, team1); err != nil {
 		t.Fatalf("expected alice to GetAtespace(team-1), got %v", err)
 	}
-	if _, err := callGet(bobCtx, "team-1"); err != nil {
+	if _, err := callGet(bobCtx, team1); err != nil {
 		t.Fatalf("expected bob to GetAtespace(team-1), got %v", err)
 	}
-	if _, err := callDelete(bobCtx, "team-1"); apierror.Code(err) != codes.PermissionDenied {
+	if _, err := callDelete(bobCtx, team1); apierror.Code(err) != codes.PermissionDenied {
 		t.Fatalf("expected bob denied DeleteAtespace(team-1), got %v", err)
 	}
 
 	// Attempt duplicate CreateAtespace(team-1) -> AlreadyExists, and alice & bob keep permissions.
-	if _, err := callCreate(rootCtx, "team-1"); apierror.Code(err) != codes.AlreadyExists {
+	if _, err := callCreate(rootCtx, team1); apierror.Code(err) != codes.AlreadyExists {
 		t.Fatalf("expected AlreadyExists on duplicate CreateAtespace(team-1), got %v", err)
 	}
-	if _, err := callGet(aliceCtx, "team-1"); err != nil {
+	if _, err := callGet(aliceCtx, team1); err != nil {
 		t.Fatalf("expected alice to still have access after duplicate CreateAtespace, got %v", err)
 	}
-	if _, err := callGet(bobCtx, "team-1"); err != nil {
+	if _, err := callGet(bobCtx, team1); err != nil {
 		t.Fatalf("expected bob to still have access after duplicate CreateAtespace, got %v", err)
 	}
 
 	// --- Scenario 2: Non-empty DeleteAtespace fails with FailedPrecondition and preserves permissions ---
 	tmpl, err := persistence.CreateActorTemplate(ctx, &ateapipb.ActorTemplate{
-		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-1", Name: "tmpl-1"},
+		Metadata: &ateapipb.ResourceMetadata{Atespace: team1, Name: "tmpl-1"},
 	})
 	if err != nil {
 		t.Fatalf("CreateActorTemplate failed: %v", err)
 	}
-	if _, err := callDelete(aliceCtx, "team-1"); apierror.Code(err) != codes.FailedPrecondition {
+	if _, err := callDelete(aliceCtx, team1); apierror.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("expected FailedPrecondition when deleting non-empty team-1, got %v", err)
 	}
 	// Verify alice and bob still have their permissions on team-1.
-	if _, err := callGet(aliceCtx, "team-1"); err != nil {
+	if _, err := callGet(aliceCtx, team1); err != nil {
 		t.Fatalf("expected alice to retain access after FailedPrecondition delete, got %v", err)
 	}
-	if _, err := callGet(bobCtx, "team-1"); err != nil {
+	if _, err := callGet(bobCtx, team1); err != nil {
 		t.Fatalf("expected bob to retain access after FailedPrecondition delete, got %v", err)
 	}
 
@@ -214,7 +215,7 @@ func TestAtespace_EndToEndOpenFGAScenarios(t *testing.T) {
 	`); err != nil {
 		t.Fatalf("installing fail_tuple_delete trigger failed: %v", err)
 	}
-	if _, err := callDelete(aliceCtx, "team-1"); err == nil {
+	if _, err := callDelete(aliceCtx, team1); err == nil {
 		t.Fatalf("expected DeleteAtespace(team-1) to fail when DeleteAtespacePolicies fails")
 	}
 	if _, err := pool.Exec(ctx, `DROP TRIGGER trg_fail_tuple_delete ON tuple; DROP FUNCTION fail_tuple_delete();`); err != nil {
@@ -223,21 +224,21 @@ func TestAtespace_EndToEndOpenFGAScenarios(t *testing.T) {
 	// Because `DELETE FROM atespaces` and `DeleteAtespacePolicies` share a single pgx.Tx,
 	// rolling back on DeleteAtespacePolicies failure must restore the `team-1` row in `atespaces`
 	// as well as alice and bob's tuples.
-	if _, err := callGet(aliceCtx, "team-1"); err != nil {
+	if _, err := callGet(aliceCtx, team1); err != nil {
 		t.Fatalf("expected atespace team-1 and alice's access to be rolled back and intact after DeleteAtespacePolicies failure, got %v", err)
 	}
 
 	// --- Scenario 4: Delete team-1 and recreate team-1 -> alice and bob have zero access to new team-1 ---
-	if _, err := callDelete(aliceCtx, "team-1"); err != nil {
+	if _, err := callDelete(aliceCtx, team1); err != nil {
 		t.Fatalf("expected alice (owner) to DeleteAtespace(team-1), got %v", err)
 	}
-	if _, err := callCreate(rootCtx, "team-1"); err != nil {
+	if _, err := callCreate(rootCtx, team1); err != nil {
 		t.Fatalf("recreating team-1 failed: %v", err)
 	}
-	if _, err := callGet(aliceCtx, "team-1"); apierror.Code(err) != codes.PermissionDenied {
+	if _, err := callGet(aliceCtx, team1); apierror.Code(err) != codes.PermissionDenied {
 		t.Fatalf("expected alice denied on recreated team-1, got %v", err)
 	}
-	if _, err := callGet(bobCtx, "team-1"); apierror.Code(err) != codes.PermissionDenied {
+	if _, err := callGet(bobCtx, team1); apierror.Code(err) != codes.PermissionDenied {
 		t.Fatalf("expected bob denied on recreated team-1, got %v", err)
 	}
 }
