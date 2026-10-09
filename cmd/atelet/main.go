@@ -389,11 +389,7 @@ func main() {
 		}
 	}()
 
-	svr := grpc.NewServer(
-		grpc.Creds(credentials.NewTLS(tlsCfg)),
-		grpc.StatsHandler(otelgrpc.NewServerHandler()),
-		grpc.UnaryInterceptor(ateinterceptors.InternalServerUnaryInterceptor),
-	)
+	svr := grpc.NewServer(ateomHerderServerOptions(credentials.NewTLS(tlsCfg))...)
 	ateletpb.RegisterAteomHerderServer(svr, wmService)
 	reflection.Register(svr)
 	slog.InfoContext(ctx, "WorkersManagerService listening", slog.Any("address", lis.Addr()))
@@ -404,6 +400,17 @@ func main() {
 	}
 	<-drainDone
 	slog.InfoContext(ctx, "Shutdown complete")
+}
+
+// ateomHerderServerOptions are the options of the gRPC server that serves
+// AteomHerder to ate-api-server. Its interceptor logs every request; fields
+// marked debug_redact (env values, asset URLs) are masked in that log.
+func ateomHerderServerOptions(creds credentials.TransportCredentials) []grpc.ServerOption {
+	return []grpc.ServerOption{
+		grpc.Creds(creds),
+		grpc.StatsHandler(otelgrpc.NewServerHandler()),
+		grpc.UnaryInterceptor(ateinterceptors.InternalServerUnaryInterceptor),
+	}
 }
 
 // rejectStorageEnv fails if ATE_STORAGE_BACKEND is set on atelet, which no
