@@ -50,6 +50,9 @@ tuples:
   - user: node:node-2
     relation: host_node
     object: worker:pod-2
+  - user: global:root
+    relation: parent_global
+    object: worker:pod-1
 
   # Actor Instance (actor:runner-1 in atespace:space-1 scheduled on worker:pod-1)
   - user: atespace:space-1
@@ -80,6 +83,8 @@ tests:
           owner: true
           viewer: true
           can_create_atespace: true
+          can_create_worker: true
+          can_list_workers: true
           can_list_actors: true
           can_list_actor_templates: true
           can_create_access_policy: true
@@ -110,6 +115,8 @@ tests:
           owner: false
           viewer: true
           can_create_atespace: false
+          can_create_worker: false
+          can_list_workers: true
           can_list_actors: true
           can_list_actor_templates: true
           can_create_access_policy: false
@@ -246,40 +253,69 @@ tests:
           can_get: true
           can_update: true
           can_delete: true
+          can_pause: true
           can_resume: true
           can_suspend: true
           can_revert: true
+          can_get_egress_policy: true
+          can_create_egress_policy: true
+          can_update_egress_policy: true
+          can_delete_egress_policy: true
       - user: user:bob # Editor
         object: actor:runner-1
         assertions:
           can_get: true
           can_update: true
           can_delete: true
+          can_pause: true
           can_resume: true
           can_suspend: true
           can_revert: true
+          can_get_egress_policy: true
+          can_create_egress_policy: true
+          can_update_egress_policy: true
+          can_delete_egress_policy: true
       - user: user:dave # Viewer
         object: actor:runner-1
         assertions:
           can_get: true
           can_update: false
           can_delete: false
+          can_pause: false
           can_resume: false
           can_suspend: false
           can_revert: false
+          can_get_egress_policy: true
+          can_create_egress_policy: false
+          can_update_egress_policy: false
+          can_delete_egress_policy: false
       - user: user:frank # Cluster Viewer
         object: actor:runner-1
         assertions:
           can_get: true
           can_update: false
           can_delete: false
+          can_pause: false
           can_resume: false
           can_suspend: false
           can_revert: false
-      - user: user:sa-router # Ingress router proxy
+          can_get_egress_policy: true
+          can_create_egress_policy: false
+          can_update_egress_policy: false
+          can_delete_egress_policy: false
+      - user: user:eve # External
+        object: actor:runner-1
+        assertions:
+          can_get: false
+          can_pause: false
+          can_get_egress_policy: false
+          can_update_egress_policy: false
+      - user: user:sa-router # Ingress router proxy can only resume
         object: actor:runner-1
         assertions:
           can_resume: true
+          can_pause: false
+          can_get_egress_policy: false
       - user: user:sa-runner-1 # Workload identity can suspend and revert
         object: actor:runner-1
         assertions:
@@ -296,3 +332,30 @@ tests:
         object: actor:runner-1
         assertions:
           can_mint_ateom_actor_credential: false
+
+  - name: 6. Worker Operations (Inherited from Global)
+    check:
+      - user: user:carol # Global owner
+        object: worker:pod-1
+        assertions:
+          can_get: true
+          can_list_actor_assignments: true
+          can_update: true
+          can_delete: true
+          can_drain: true
+      - user: user:frank # Global viewer
+        object: worker:pod-1
+        assertions:
+          can_get: true
+          can_list_actor_assignments: true
+          can_update: false
+          can_delete: false
+          can_drain: false
+      - user: user:alice # Atespace owner has no worker access
+        object: worker:pod-1
+        assertions:
+          can_get: false
+          can_list_actor_assignments: false
+          can_update: false
+          can_delete: false
+          can_drain: false

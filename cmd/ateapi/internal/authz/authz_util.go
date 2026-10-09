@@ -43,20 +43,32 @@ const (
 	RoleEditor = "editor"
 	RoleViewer = "viewer"
 
-	RelationCanCreateAtespace      = "can_create_atespace"
-	RelationCanListAtespaces       = "can_list_atespaces"
-	RelationCanCreateActor         = "can_create_actor"
-	RelationCanListActors          = "can_list_actors"
-	RelationCanCreateActorTemplate = "can_create_actor_template"
-	RelationCanListActorTemplates  = "can_list_actor_templates"
-	RelationCanGet                 = "can_get"
-	RelationCanUseTemplate         = "can_use_template"
-	RelationCanUpdate              = "can_update"
-	RelationCanDelete              = "can_delete"
-	RelationCanCreateAccessPolicy  = "can_create_access_policy"
-	RelationCanGetAccessPolicy     = "can_get_access_policy"
-	RelationCanUpdateAccessPolicy  = "can_update_access_policy"
-	RelationCanDeleteAccessPolicy  = "can_delete_access_policy"
+	RelationCanCreateAtespace       = "can_create_atespace"
+	RelationCanListAtespaces        = "can_list_atespaces"
+	RelationCanCreateActor          = "can_create_actor"
+	RelationCanListActors           = "can_list_actors"
+	RelationCanCreateActorTemplate  = "can_create_actor_template"
+	RelationCanListActorTemplates   = "can_list_actor_templates"
+	RelationCanCreateWorker         = "can_create_worker"
+	RelationCanListWorkers          = "can_list_workers"
+	RelationCanGet                  = "can_get"
+	RelationCanUseTemplate          = "can_use_template"
+	RelationCanUpdate               = "can_update"
+	RelationCanDelete               = "can_delete"
+	RelationCanPause                = "can_pause"
+	RelationCanResume               = "can_resume"
+	RelationCanSuspend              = "can_suspend"
+	RelationCanRevert               = "can_revert"
+	RelationCanDrain                = "can_drain"
+	RelationCanListActorAssignments = "can_list_actor_assignments"
+	RelationCanCreateAccessPolicy   = "can_create_access_policy"
+	RelationCanGetAccessPolicy      = "can_get_access_policy"
+	RelationCanUpdateAccessPolicy   = "can_update_access_policy"
+	RelationCanDeleteAccessPolicy   = "can_delete_access_policy"
+	RelationCanCreateEgressPolicy   = "can_create_egress_policy"
+	RelationCanGetEgressPolicy      = "can_get_egress_policy"
+	RelationCanUpdateEgressPolicy   = "can_update_egress_policy"
+	RelationCanDeleteEgressPolicy   = "can_delete_egress_policy"
 
 	// maxTuplesPerWrite is OpenFGA's default maximum number of tuples allowed in a single Write request.
 	maxTuplesPerWrite = 100
@@ -98,6 +110,12 @@ var objectIDReplacer = strings.NewReplacer(
 // AtespaceObject formats an atespace name as an OpenFGA object string.
 func AtespaceObject(name string) string {
 	return "atespace:" + objectIDReplacer.Replace(name)
+}
+
+// WorkerObject formats a worker name as an OpenFGA object string. Workers are
+// global-scoped.
+func WorkerObject(name string) string {
+	return "worker:" + objectIDReplacer.Replace(name)
 }
 
 // ActorObject formats an actor as an OpenFGA object string.
