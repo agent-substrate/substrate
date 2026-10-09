@@ -492,20 +492,20 @@ metadata:
     sandboxconfig.ate.dev/is-class-default: "true"
 spec:
   sandboxClass: gvisor
-  defaultVersion: v2
+  defaultVersion: v3
   versions:
-  - name: v2
+  - name: v3
     state: Enabled
     pauseImage: "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
     assets:
       amd64:
         gvisor:
-          url: "gs://gvisor/releases/release/20260907.0/x86_64/gvisor.tar.zstd"
-          sha256: "e32ed48a2ddc7c0ef5e922ff5d52e33b6fccc75b61fd4c40a0bd9bdfe90032e6"
+          url: "gs://gvisor/releases/nightly/2026-10-10/x86_64/gvisor.tar.zstd"
+          sha256: "4ae7fab988c3647d2a835d6c3c70c6a99021c562db97827592562b6c51c3e88c"
       arm64:
         gvisor:
-          url: "gs://gvisor/releases/release/20260907.0/aarch64/gvisor.tar.zstd"
-          sha256: "f3ba93a1a83dd4b6a322237030cdf81a278d9ef4e01ae6218ba69fbc479fdfb2"
+          url: "gs://gvisor/releases/nightly/2026-10-10/aarch64/gvisor.tar.zstd"
+          sha256: "aaf414f06eea7960238e43165c691f0a36cefc0593fb141e011e96211c7b6f57"
 ```
 
 ### Micro-VM SandboxConfig
