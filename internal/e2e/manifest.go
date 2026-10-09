@@ -94,7 +94,7 @@ func yamlListBlock[T any](t *testing.T, key string, items []T, indent int) strin
 	return strings.Join(out, "\n")
 }
 
-// koApply builds and pushes the ko:// images named in manifest and applies it.
+// KoApply builds and pushes the ko:// images named in manifest and applies it.
 //
 // Through the repo's pinned ko (hack/run-tool.sh), because CI does not install
 // ko on PATH and every other deploy in this repo goes through that wrapper. The
@@ -103,7 +103,7 @@ func yamlListBlock[T any](t *testing.T, key string, items []T, indent int) strin
 // because ko resolves .ko.yaml from its working directory, which is the test's
 // package dir rather than the repo root; without it the build silently loses
 // defaultPlatforms and produces images that cannot run on the cluster's nodes.
-func koApply(t *testing.T, manifest string) {
+func KoApply(t *testing.T, manifest string) {
 	t.Helper()
 	root, err := FindRepoRoot()
 	if err != nil {
@@ -118,7 +118,7 @@ func koApply(t *testing.T, manifest string) {
 
 // koResolve builds and pushes the ko:// images named in manifest and returns
 // the manifest with those references replaced by pushed digests. Same pinned
-// ko and KO_CONFIG_PATH rules as koApply; resolve is how a manifest that is
+// ko and KO_CONFIG_PATH rules as KoApply; resolve is how a manifest that is
 // not destined for kubectl (a protojson ActorTemplate document) still gets
 // its image built.
 func koResolve(t *testing.T, manifest string) []byte {
