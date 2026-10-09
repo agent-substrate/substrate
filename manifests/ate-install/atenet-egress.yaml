@@ -425,6 +425,9 @@ data:
                   # response before route-level upgrade rejection. A by-name
                   # route also needs the answered name (dev.ate.egress:host);
                   # without it the forward proxy would dial the Host's port.
+                  # Native gRPC uses upstream ALPN to negotiate h2 and carry
+                  # status in trailers. Other requests stay on HTTP/1.1; the
+                  # content-type match keeps those protocol choices separate.
                   - match:
                       prefix: "/"
                       headers:

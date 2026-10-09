@@ -301,6 +301,43 @@ func TestWebSocketRejectsNonUpgrade(t *testing.T) {
 	}
 }
 
+func TestWebSocketPreservesBoundedHandshakeBody(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		body       string
+		want       string
+		wantPrefix bool
+	}{
+		{name: "exact denial body", body: "WebSocket egress is not supported", want: "WebSocket egress is not supported"},
+		{name: "oversized body", body: strings.Repeat("x", maxWebSocketHandshakeBody+1), wantPrefix: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = io.WriteString(w, tc.body)
+			}))
+			t.Cleanup(server.Close)
+
+			recorder := postHandler(t, newHandler(http.DefaultClient), "/websocket", websocketRequest{URL: toWebSocketURL(server.URL), Messages: []string{"probe"}})
+			if recorder.Code != http.StatusBadGateway {
+				t.Fatalf("status = %d, want %d; body = %s", recorder.Code, http.StatusBadGateway, recorder.Body.String())
+			}
+			var got websocketResponse
+			decodeRecorder(t, recorder, &got)
+			if got.StatusCode != http.StatusForbidden {
+				t.Errorf("handshake status = %d, want %d", got.StatusCode, http.StatusForbidden)
+			}
+			if tc.wantPrefix {
+				if len(got.HandshakeBody) == 0 || len(got.HandshakeBody) > maxWebSocketHandshakeBody || !strings.HasPrefix(tc.body, got.HandshakeBody) {
+					t.Errorf("handshake body length = %d, want a prefix no longer than %d bytes", len(got.HandshakeBody), maxWebSocketHandshakeBody)
+				}
+			} else if got.HandshakeBody != tc.want {
+				t.Errorf("handshake body = %q, want %q", got.HandshakeBody, tc.want)
+			}
+		})
+	}
+}
+
 func TestWebSocketPreservesPartialObservationsOnBadResponse(t *testing.T) {
 	server := startWebSocketServer(t, true)
 	recorder := postHandler(t, newHandler(http.DefaultClient), "/websocket", websocketRequest{URL: toWebSocketURL(server), Messages: []string{"one", "two", "three"}})
