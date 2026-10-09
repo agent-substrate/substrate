@@ -99,6 +99,12 @@ tar --zstd -xf kata-static.tar.zst -C kata
 KROOT="kata/opt/kata"
 
 cp "$(readlink -f "${KROOT}/share/kata-containers/vmlinux.container")" "${OUT}/vmlinux"
+# rootfs.img is attached over virtio-pmem and mounted with DAX (cmd/ateom-microvm/run.go).
+# The image must meet the following requirements:
+#   - a size that is a multiple of 2 MiB
+#   - partition 1 starting on a 4 KiB boundary
+#   - ext4 with 4 KiB blocks
+# kata's image is built for this (tools/osbuilder/image-builder/image_builder.sh).
 cp "$(readlink -f "${KROOT}/share/kata-containers/kata-containers.img")" "${OUT}/rootfs.img"
 # Statically linked, so it runs as-is outside the kata layout it is packaged for.
 cp "${KROOT}/libexec/virtiofsd" "${OUT}/virtiofsd"
