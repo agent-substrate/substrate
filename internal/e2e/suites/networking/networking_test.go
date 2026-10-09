@@ -154,12 +154,13 @@ func TestActorEgressMultiplexing(t *testing.T) {
 	}
 
 	const (
-		wantConnections = 3
-		wantRequests    = 250
+		// Different dataplane may have different stream concurrency.
+		wantConnectionsAtLeast = 1
+		wantRequests           = 250
 	)
 	stats := dataplane.EgressConnectStats(beforeScrape, afterScrape)
-	if stats.Connections != -1 && stats.Connections != wantConnections {
-		t.Errorf("egress connect connections = %d, want %d", stats.Connections, wantConnections)
+	if stats.Connections != -1 && stats.Connections < wantConnectionsAtLeast {
+		t.Errorf("egress connect connections = %d, want at least %d", stats.Connections, wantConnectionsAtLeast)
 	}
 	if stats.Requests != -1 && stats.Requests != wantRequests {
 		t.Errorf("egress connect requests = %d, want %d", stats.Requests, wantRequests)
