@@ -91,6 +91,8 @@ func seedTag(t *testing.T, tc *testContext, actorName, tagName string, opts ...f
 // as taken, and the objects the existing tag names must be exactly what its own
 // creator wrote, because the rejected create reserves the name before it copies anything.
 func TestCreateTag_ReusedTagName(t *testing.T) {
+	actorAName := resources.NewRandomName("actor-a-")
+	actorBName := resources.NewRandomName("actor-b-")
 	ns := namespaceForTest("ns-tag-reused-name")
 	tc := setupTest(t, ns)
 	defer tc.cleanup()
@@ -100,12 +102,12 @@ func TestCreateTag_ReusedTagName(t *testing.T) {
 
 	// Actor A is suspended and tagged, the ordinary way.
 	const tagName = "before-upgrade"
-	actorFirstSnapshotURI := suspendActorForTest(t, tc, workerName, "actor-a")
+	actorFirstSnapshotURI := suspendActorForTest(t, tc, workerName, actorAName)
 	first, err := tc.client.CreateTag(context.Background(), &ateapipb.CreateTagRequest{
 		Tag: &ateapipb.Tag{
 			Metadata:    &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: tagName},
 			Scope:       ateapipb.TagScope_TAG_SCOPE_ATESPACE,
-			SourceActor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor-a"},
+			SourceActor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: actorAName},
 		},
 	})
 	if err != nil {
@@ -120,7 +122,7 @@ func TestCreateTag_ReusedTagName(t *testing.T) {
 
 	// Create & Suspend actor B. Then, try to tag its snapshot with the same name
 	// that was already tagged by actor A.
-	secondSnapshotURI := suspendActorForTest(t, tc, workerName, "actor-b")
+	secondSnapshotURI := suspendActorForTest(t, tc, workerName, actorBName)
 	if secondSnapshotURI == actorFirstSnapshotURI {
 		t.Fatalf("both actors suspended to %s, want distinct external snapshots", secondSnapshotURI)
 	}
@@ -129,7 +131,7 @@ func TestCreateTag_ReusedTagName(t *testing.T) {
 			// Same tagName that was written before.
 			Metadata:    &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: tagName},
 			Scope:       ateapipb.TagScope_TAG_SCOPE_ATESPACE,
-			SourceActor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor-b"},
+			SourceActor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: actorBName},
 		},
 	})
 	assertGrpcError(t, err, codes.AlreadyExists, fmt.Sprintf("Tag %s/%s already exists; delete it and create it again to retry", testAtespace, tagName))
@@ -156,7 +158,7 @@ func TestCreateTag_ReusedTagName(t *testing.T) {
 		Tag: &ateapipb.Tag{
 			Metadata:    &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "after-upgrade"},
 			Scope:       ateapipb.TagScope_TAG_SCOPE_ATESPACE,
-			SourceActor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor-b"},
+			SourceActor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: actorBName},
 		},
 	}); err != nil {
 		t.Fatalf("CreateTag under a free name failed: %v", err)
@@ -302,7 +304,7 @@ func TestUpdateTag_NotFound(t *testing.T) {
 			SourceActor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor-1"},
 		},
 	})
-	assertGrpcError(t, err, codes.NotFound, "Tag test-atespace/does-not-exist not found")
+	assertGrpcError(t, err, codes.NotFound, "Tag "+testAtespace+"/does-not-exist not found")
 }
 
 func TestDeleteTag_NotFound(t *testing.T) {

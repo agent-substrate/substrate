@@ -50,7 +50,7 @@ func WithTrustBundle() ProbeOption { return func(c *probeConfig) { c.trustBundle
 // distinguishes the caller (by convention its suite name): each suite gets
 // its own copy of the fixture, so no suite's cleanup can delete the fixture
 // out from under another running concurrently. It returns the fixture's
-// atespace (which also names the k8s namespace holding the pool) and the
+// atespace (e2e.FixtureAtespace of the k8s namespace holding the pool) and the
 // created ActorTemplate, already golden-snapshotted.
 func DeployProbe(t *testing.T, bucket, name string, opts ...ProbeOption) (string, *ateapipb.ActorTemplate) {
 	t.Helper()

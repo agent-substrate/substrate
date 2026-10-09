@@ -70,6 +70,14 @@ A valid resource name must comply with the following rules:
 
 Resource names are valid RFC-1123 DNS labels.
 
+Atespace and Actor names must also be at least 26 characters long when they
+are created, enough to hold 128 random bits in base-32. This steers callers
+toward random names, which are hard to squat on and are not reused after a
+delete. A readable prefix is allowed, for example
+`counter-ocfqyl6tska7ulfcmj2mes7af5`. Existing resources with shorter names
+can still be read, updated, and deleted. The reserved `ate-golden` atespace is
+exempt.
+
 ### 2.3 `ObjectRef` — reference type
 
 The `ObjectRef` message represents a *pointer* to a Substrate resource.

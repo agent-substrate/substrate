@@ -7,11 +7,11 @@ This guide explains how Agent Substrate achieves observability across these susp
 ## The Observability Model
 
 To make underlying infrastructure transitions transparent, Agent Substrate establishes a standardized metadata model to identify actors across worker pods. These are the same `ate.*` keys the spans and metrics below use, defined once in [`internal/ateattr`](../internal/ateattr):
-* `ate.actor.name`: The name of the actor (e.g., `my-counter-1` or `test`).
-* `ate.atespace`: The atespace the actor lives in (e.g., `ate-demo-counter`).
+* `ate.actor.name`: The name of the actor (e.g., `counter-0b7e2c5e-9a43-4f7b-8d21-5c3f6a9e1d47`).
+* `ate.atespace`: The atespace the actor lives in (e.g., `ate-demo-counter-msdynmfc666czthmw3s7uwia5w`).
 * `ate.actor.uid`: Server-assigned UID of the actor, unique to the lifetime of an actor.
 * `ate.template.name`: The name of the actor's ActorTemplate (e.g., `counter`).
-* `ate.template.atespace`: The atespace of the actor's ActorTemplate (e.g., `ate-demo-counter`).
+* `ate.template.atespace`: The atespace of the actor's ActorTemplate (e.g., `ate-demo-counter-msdynmfc666czthmw3s7uwia5w`).
 * `ate.actor.container.name`: The name of the container within the actor that produced the log line (e.g., `counter`), so a multi-container actor's logs can be demultiplexed by container. Absent on the synthetic lifecycle records (`Actor starting`, `Actor restored`, …): those are about the actor, so no container produced them.
 
 Currently, Agent Substrate automatically wraps container output and injects these metadata labels into **container logs**. For metrics and distributed tracing, Agent Substrate provides foundational system telemetry and on-demand request tracing, with roadmap plans to fully integrate actor-level correlation.
@@ -40,15 +40,15 @@ an atespace, so an actor is always addressed by `(atespace, name)`.
 If an actor is suspended or not assigned to a worker pod, the CLI informs you immediately:
 
 ```bash
-$ kubectl ate logs actors test -a demo
-Error: actor test is not currently running on any worker pod
+$ kubectl ate logs actors counter-0b7e2c5e-9a43-4f7b-8d21-5c3f6a9e1d47 -a ate-demo-counter-msdynmfc666czthmw3s7uwia5w
+Error: actor counter-0b7e2c5e-9a43-4f7b-8d21-5c3f6a9e1d47 is not currently running on any worker pod
 ```
 
 #### Example 2: Default Clean JSON Lines Output
 When an active actor is assigned to a worker pod, the CLI outputs clean, uniform JSON lines stripped of Substrate metadata, perfectly matching standard `kubectl logs` behavior:
 
 ```bash
-$ kubectl ate logs actors test -a demo
+$ kubectl ate logs actors counter-0b7e2c5e-9a43-4f7b-8d21-5c3f6a9e1d47 -a ate-demo-counter-msdynmfc666czthmw3s7uwia5w
 {"time":"2026-05-22T21:49:15.23700774Z","message":"Actor started"}
 {"time":"2026-05-22T21:49:15.23700774Z","level":"INFO","msg":"Starting counter server on port 80"}
 {"time":"2026-05-22T21:49:15.255765354Z","count":0,"fshash":"mCY7G4S318ztOUojPTF2NA/W+ZSmWyr+T5K3udFuP50","level":"INFO","msg":"Count"}
@@ -59,7 +59,7 @@ $ kubectl ate logs actors test -a demo
 To stream actor logs in real-time, append the `--follow` (or `-f`) flag. The CLI is fully actor-aware, automatically resuming the stream if the actor is suspended or migrates to a different worker pod:
 
 ```bash
-$ kubectl ate logs actors test -a demo -f
+$ kubectl ate logs actors counter-0b7e2c5e-9a43-4f7b-8d21-5c3f6a9e1d47 -a ate-demo-counter-msdynmfc666czthmw3s7uwia5w -f
 Actor is currently running on pod ate-demo-counter/counter-d8f99-m7d96
 {"time":"2026-05-22T21:49:15.255765354Z","count":0,"fshash":"mCY7...","level":"INFO","msg":"Count"}
 {"time":"2026-05-22T21:49:25.263744806Z","count":1,"fshash":"mCY7...","level":"INFO","msg":"Count"}
@@ -92,7 +92,7 @@ labels."ate.actor.name"="test"
 To monitor or debug all actor instances in a specific atespace (e.g., analyzing the collective behavior or error rates of all actors belonging to one tenant):
 
 ```text
-labels."ate.atespace"="ate-demo-counter"
+labels."ate.atespace"="ate-demo-counter-msdynmfc666czthmw3s7uwia5w"
 ```
 
 #### 3. Template-Centric View
@@ -127,8 +127,8 @@ atelet's `Restore timing breakdown` and `Checkpoint timing breakdown` are the un
 
 ```json
 {"time":"…","level":"INFO","msg":"Restore timing breakdown",
- "ate.atespace":"ate-demo-counter","ate.actor.name":"counter-1","ate.actor.uid":"8f2a…",
- "ate.template.atespace":"ate-demo-counter","ate.template.name":"counter",
+ "ate.atespace":"ate-demo-counter-msdynmfc666czthmw3s7uwia5w","ate.actor.name":"counter-0b7e2c5e-9a43-4f7b-8d21-5c3f6a9e1d47","ate.actor.uid":"8f2a…",
+ "ate.template.atespace":"ate-demo-counter-msdynmfc666czthmw3s7uwia5w","ate.template.name":"counter",
  "ate.snapshot.fidelity":"memory","ate.snapshot.kind":"latest","ate.sandbox.class":"gvisor",
  "ate.actor.restore.duration.download":0.310,
  "ate.actor.restore.duration.oci_unpack":0.050,
@@ -147,8 +147,8 @@ ateapi's `Actor state changed` is written once per committed actor state transit
 
 ```json
 {"time":"…","level":"INFO","msg":"Actor state changed",
- "ate.atespace":"ate-demo-counter","ate.actor.name":"counter-1","ate.actor.uid":"8f2a…",
- "ate.template.atespace":"ate-demo-counter","ate.template.name":"counter",
+ "ate.atespace":"ate-demo-counter-msdynmfc666czthmw3s7uwia5w","ate.actor.name":"counter-0b7e2c5e-9a43-4f7b-8d21-5c3f6a9e1d47","ate.actor.uid":"8f2a…",
+ "ate.template.atespace":"ate-demo-counter-msdynmfc666czthmw3s7uwia5w","ate.template.name":"counter",
  "ate.actor.operation.name":"suspend","ate.actor.state":"suspended",
  "trace_id":"4bf92f…","span_id":"00f067…","trace_flags":"01"}
 ```
@@ -169,8 +169,8 @@ Creating an actor counts as a change. A new actor is born suspended, so it gets 
 
 ```json
 {"time":"…","level":"ERROR","msg":"Actor crashed",
- "ate.atespace":"ate-demo-counter","ate.actor.name":"counter-1","ate.actor.uid":"8f2a…",
- "ate.template.atespace":"ate-demo-counter","ate.template.name":"counter",
+ "ate.atespace":"ate-demo-counter-msdynmfc666czthmw3s7uwia5w","ate.actor.name":"counter-0b7e2c5e-9a43-4f7b-8d21-5c3f6a9e1d47","ate.actor.uid":"8f2a…",
+ "ate.template.atespace":"ate-demo-counter-msdynmfc666czthmw3s7uwia5w","ate.template.name":"counter",
  "ate.actor.operation.name":"resume","ate.actor.state":"crashed",
  "trace_id":"4bf92f…","span_id":"00f067…","trace_flags":"01"}
 ```
@@ -208,8 +208,8 @@ atelet emits one usage record per **executing** actor per sampling tick, from th
 ```json
 {"time":"…","level":"INFO","msg":"Actor usage sample",
  "logging.googleapis.com/labels":{
-   "ate.atespace":"ate-demo-counter","ate.actor.name":"counter-1","ate.actor.uid":"8f2a…",
-   "ate.template.atespace":"ate-demo-counter","ate.template.name":"counter",
+   "ate.atespace":"ate-demo-counter-msdynmfc666czthmw3s7uwia5w","ate.actor.name":"counter-0b7e2c5e-9a43-4f7b-8d21-5c3f6a9e1d47","ate.actor.uid":"8f2a…",
+   "ate.template.atespace":"ate-demo-counter-msdynmfc666czthmw3s7uwia5w","ate.template.name":"counter",
    "ate.workerpool.namespace":"ate-demo-counter","ate.workerpool.name":"counter-pool"},
  "kind":"periodic","sandbox_class":"gvisor","source":"cgroup",
  "memory_current_bytes":39845888,"memory_peak_bytes":52428800,

@@ -35,8 +35,8 @@ set -o errexit -o nounset -o pipefail
 CTX="${KUBECTL_CONTEXT:-kind-kind}"
 # The actor lives in the demo's atespace: --template resolves the
 # template by name within the actor's own atespace.
-ATESPACE="${ATESPACE:-ate-demo-egress}"
-ACTOR="${ACTOR:-egress-demo}"
+ATESPACE="${ATESPACE:-ate-demo-egress-a326zwu4ineuokl2mgd5enlptt}"
+ACTOR="${ACTOR:-egress-demo-vw4o64ubkjslune5zwy4nv4bto}"
 TEMPLATE="${TEMPLATE:-egress}"
 TARGET_NS="${TARGET_NS:-egress-target}"
 TARGET_PORT="${TARGET_PORT:-80}"

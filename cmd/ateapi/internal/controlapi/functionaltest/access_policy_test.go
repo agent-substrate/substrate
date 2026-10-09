@@ -95,8 +95,8 @@ func TestAtespaceAccessPolicy_CRUD(t *testing.T) {
 	tc := setupTest(t, namespaceForTest("ns-atespace-access-policy"))
 	defer tc.cleanup()
 	ctx := context.Background()
-	createAtespace(t, tc, "team-a")
-	ref := &ateapipb.ObjectRef{Name: "team-a"}
+	createAtespace(t, tc, teamA)
+	ref := &ateapipb.ObjectRef{Name: teamA}
 	policy := &ateapipb.AccessPolicy{
 		Metadata: &ateapipb.ResourceMetadata{Name: "default"},
 		Bindings: []*ateapipb.Binding{{Role: "editor", Members: []string{"user:alice"}}},

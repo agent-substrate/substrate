@@ -20,7 +20,9 @@ exercises. Actors stay resumed for the whole session; cleanup is
 best-effort suspend+delete.
 """
 
+import base64
 import concurrent.futures
+import secrets
 import time
 
 import grpc
@@ -36,12 +38,12 @@ ATEAPI_HOST = "api.ate-system.svc.cluster.local:443"
 TOKEN_FILE = "/run/ateapi-token/token"
 
 # Default --atespace (see the knob docs in the README). Actors are named
-# nh-<idx>.
-ATESPACE = "ingress-benchmark"
+# nh-<idx>-<run suffix>.
+ATESPACE = "ingress-benchmark-gwi4eosnu5zbp5jqdg3dnufo3t"
 
 # The glutton template reference; see
 # benchmarking/workloads/manifests/glutton-template.yaml.tmpl.
-TEMPLATE_ATESPACE = "benchmark-workloads"
+TEMPLATE_ATESPACE = "benchmark-workloads-y6nzpn6xatdflqhibhytuut4d5"
 TEMPLATE_NAME = "glutton"
 
 
@@ -155,7 +157,10 @@ def create_and_warm(
     cleanup() a partial fleet when this raises.
     """
     ensure_atespace(stub, atespace)
-    names = [f"nh-{i:03d}" for i in range(count)]
+    # 128 random bits in lowercase base-32, like Go's crypto/rand.Text, so
+    # the names meet the 26-byte minimum and do not collide across runs.
+    suffix = base64.b32encode(secrets.token_bytes(16)).decode().rstrip("=").lower()
+    names = [f"nh-{i:03d}-{suffix}" for i in range(count)]
     for name in names:
         create_actor(stub, name, atespace)
         created.append(name)

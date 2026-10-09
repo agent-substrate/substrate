@@ -47,8 +47,9 @@ stringData:
 # (default-deny). The name and namespace are dictated by the configMap volume
 # in manifests/egress-credential-injection/k8s-credential-provider.yaml. Both
 # probe-fixture atespaces are listed — the suffixes are deterministic per
-# sandbox class (see e2e.DeployProbe and probe-template.yaml.tmpl) — so one
-# policy serves the gVisor and micro-VM variants.
+# sandbox class (see e2e.DeployProbe, e2e.FixtureAtespace and
+# probe-template.yaml.tmpl) — so one policy serves the gVisor and micro-VM
+# variants.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -57,9 +58,9 @@ metadata:
 data:
   namespace-policy.yaml: |
     policies:
-    - atespace: ate-e2e-probe-egresscredinject
+    - atespace: ate-e2e-probe-egresscredinject-mxy6vj23u335ddio2dev
       allowedNamespaces:
       - ate-e2e-credinject-secrets
-    - atespace: ate-e2e-probe-microvm-egresscredinject
+    - atespace: ate-e2e-probe-microvm-egresscredinject-mxy6vj23u335ddio2dev
       allowedNamespaces:
       - ate-e2e-credinject-secrets

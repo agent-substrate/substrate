@@ -24,17 +24,20 @@ import (
 
 // namespace is the pool's k8s namespace; it doubles as the atespace holding
 // the demo's ActorTemplate.
-const namespace = "ate-demo-parking"
+const (
+	namespace = "ate-demo-parking"
+	atespace  = "ate-demo-parking-rlryr7otxprtr7ipwolqmu4obd"
+)
 
 func init() {
 	demos.Register(&demos.Substrate{
 		DemoName:           "demo-parking",
 		Short:              "Actor parking and unparking on a small WorkerPool",
 		WorkerPoolManifest: "demos/parking/parking.yaml.tmpl",
-		Deployments:        []steps.TemplateRef{{Atespace: namespace, Name: "parking"}},
+		Deployments:        []steps.DeploymentRef{{Namespace: namespace, Name: "parking"}},
 		Templates: []demos.SubstrateTemplate{{
 			Manifest: "demos/parking/parking-template.yaml.tmpl",
-			Ref:      resources.ActorTemplateRef{Atespace: namespace, Name: "parking"},
+			Ref:      resources.ActorTemplateRef{Atespace: atespace, Name: "parking"},
 		}},
 	})
 }

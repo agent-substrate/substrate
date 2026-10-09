@@ -161,13 +161,13 @@ func TestActorTemplateFromManifest_DemoManifests(t *testing.T) {
 	}{
 		{
 			manifest: "counter-template.yaml.tmpl",
-			atespace: "ate-demo-counter",
+			atespace: "ate-demo-counter-msdynmfc666czthmw3s7uwia5w",
 			name:     "counter",
 			class:    ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
 		},
 		{
 			manifest: "counter-microvm-template.yaml.tmpl",
-			atespace: "ate-demo-counter-microvm",
+			atespace: "ate-demo-counter-microvm-3iaw7q5v4p4xxtudd6aisu3biu",
 			name:     "counter-microvm",
 			class:    ateapipb.SandboxClass_SANDBOX_CLASS_MICROVM,
 		},

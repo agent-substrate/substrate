@@ -12,15 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# ActorTemplate (protojson-shaped ateapipb.ActorTemplate) for the counter
-# demo. Applied with `kubectl ate create actor-template -f -` after
-# `ko resolve` replaces the ko:// image reference; the ate-demo-counter
-# atespace must exist.
+# ActorTemplate (protojson-shaped ateapipb.ActorTemplate) for the counter demo.
+# Applied with `kubectl ate create actor-template -f -` after `ko resolve`
+# replaces the ko:// image reference; the
+# ate-demo-counter-msdynmfc666czthmw3s7uwia5w atespace must exist.
 #
 # The ${...}_ARG/MOUNTS/VOLUMES placeholder lines are dropped on a plain
 # deploy and filled in by --deploy-demo-counter-with-external-volume.
 metadata:
-  atespace: ate-demo-counter
+  atespace: ate-demo-counter-msdynmfc666czthmw3s7uwia5w
   name: counter
 workerSelector:
   matchLabels:

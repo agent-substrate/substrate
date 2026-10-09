@@ -60,7 +60,7 @@ BUCKET_NAME=your-substrate-bucket \
   ./hack/install-ate.sh --deploy-demo-claude-code-multiplex
 ```
 
-This creates the `claude-multiplex-demo` namespace and its 2-pod `WorkerPool`, then the `claude-multiplex-demo` atespace and three actor templates in it named `agent-luna`, `agent-mars`, `agent-orion`, and waits for each template's golden snapshot. Under the hood, the deploy function builds the workload image with `docker buildx`, pushes it to `${KO_DOCKER_REPO}/claude-multiplex-demo-workload`, resolves the pushed sha256 digest, and substitutes the digest-pinned reference plus `ANTHROPIC_API_KEY` and `BUCKET_NAME` into the agent templates at apply time.
+This creates the `claude-multiplex-demo` namespace and its 2-pod `WorkerPool`, then the `claude-multiplex-demo-edy4s473cc3yzlbcx7kjig4rhy` atespace and three actor templates in it named `agent-luna`, `agent-mars`, `agent-orion`, and waits for each template's golden snapshot. Under the hood, the deploy function builds the workload image with `docker buildx`, pushes it to `${KO_DOCKER_REPO}/claude-multiplex-demo-workload`, resolves the pushed sha256 digest, and substitutes the digest-pinned reference plus `ANTHROPIC_API_KEY` and `BUCKET_NAME` into the agent templates at apply time.
 
 ### 2. Start the dashboard
 
@@ -89,7 +89,8 @@ Env vars:
 |---|---|---|
 | `PORT` | `8080` | TCP port the dashboard binds (pick `≠ ATEAPI_ADDR`'s port when both run on the same host). |
 | `ATEAPI_ADDR` | `localhost:8080` | Address of the substrate ateapi gRPC service. |
-| `DEMO_NAMESPACE` | `claude-multiplex-demo` | Kubernetes namespace the dashboard filters to and reads pod logs from. |
+| `DEMO_NAMESPACE` | `claude-multiplex-demo` | Kubernetes namespace the dashboard reads pod logs from. |
+| `DEMO_ATESPACE` | `claude-multiplex-demo-edy4s473cc3yzlbcx7kjig4rhy` | Atespace the dashboard filters actors to. |
 
 `GET /healthz` reports whether the kube client picked up a cluster context (`logs:true|false`) — useful for quick smoke-tests after starting the server.
 

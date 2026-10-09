@@ -78,8 +78,20 @@ func TestValidateCreateActorRequest(t *testing.T) {
 		field.ErrorList{field.Required(field.NewPath("actor", "metadata", "name"), "")},
 	}, {
 		"invalid actor.metadata.name",
-		validReq(validActor(withMetadata(func(m *ateapipb.ResourceMetadata) { m.Name = "ID1" }))),
+		validReq(validActor(withMetadata(func(m *ateapipb.ResourceMetadata) { m.Name = "ID1-OX3WGMJVK2B6YFQ4ZR7AE5NCL4" }))),
 		field.ErrorList{field.Invalid(field.NewPath("actor", "metadata", "name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		"actor.metadata.name of min length",
+		validReq(validActor(withMetadata(func(m *ateapipb.ResourceMetadata) { m.Name = "ox3wgmjvk2b6yfq4zr7ae5ncl4" }))),
+		nil,
+	}, {
+		"actor.metadata.name too short",
+		validReq(validActor(withMetadata(func(m *ateapipb.ResourceMetadata) { m.Name = "ox3wgmjvk2b6yfq4zr7ae5ncl" }))),
+		field.ErrorList{field.TooShort(field.NewPath("actor", "metadata", "name"), "", 26)},
+	}, {
+		"actor.metadata.name UUID",
+		validReq(validActor(withMetadata(func(m *ateapipb.ResourceMetadata) { m.Name = "0c6e2f4a-8b1d-4e57-a3f9-2d7c5b8e1a60" }))),
+		nil,
 	}, {
 		"valid actor.actor_template",
 		validReq(validActor(withActorTemplate("as", "tmpl"))),
@@ -716,8 +728,12 @@ func TestValidateUpdateActorRequest(t *testing.T) {
 		field.ErrorList{field.Required(field.NewPath("actor", "metadata", "name"), "")},
 	}, {
 		"invalid actor.metadata.name",
-		validReq(validActor(withMetadata(func(m *ateapipb.ResourceMetadata) { m.Name = "ID1" }))),
+		validReq(validActor(withMetadata(func(m *ateapipb.ResourceMetadata) { m.Name = "ID1-OX3WGMJVK2B6YFQ4ZR7AE5NCL4" }))),
 		field.ErrorList{field.Invalid(field.NewPath("actor", "metadata", "name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		"short actor.metadata.name is allowed",
+		validReq(validActor(withMetadata(func(m *ateapipb.ResourceMetadata) { m.Name = "id1" }))),
+		nil, // the minimum length applies only on create
 	}, {
 		"missing actor.metadata.uid precondition",
 		validReq(validActor(withMetadata(func(m *ateapipb.ResourceMetadata) { m.Uid = "" }))),
@@ -943,7 +959,7 @@ func TestValidateMintActorCertificateRequest(t *testing.T) {
 // validActor returns a minimal Actor which should pass input validation.
 func validActor(mods ...func(*ateapipb.Actor)) *ateapipb.Actor {
 	a := &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1"},
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1-ox3wgmjvk2b6yfq4zr7ae5ncl4"},
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: "ns1", Name: "tmpl1"},
 	}
 	for _, m := range mods {

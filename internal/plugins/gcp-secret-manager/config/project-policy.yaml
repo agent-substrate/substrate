@@ -27,9 +27,10 @@ metadata:
   namespace: ate-system
 data:
   project-policy.yaml: |
-    # Actors in atespace "team-a" may use secrets in project "my-project", e.g.
+    # Actors in atespace "team-a-3f3k6jbmrda5xubuzwq2szb7hr" may use secrets in
+    # project "my-project", e.g.
     # ate-secret://secretmanager.googleapis.com/projects/my-project/secrets/example-api-token/versions/1.
     policies:
-    - atespace: team-a
+    - atespace: team-a-3f3k6jbmrda5xubuzwq2szb7hr
       allowedProjects:
       - my-project

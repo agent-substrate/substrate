@@ -22,7 +22,7 @@
 # No securityContext: pins the default capability set, so a change to the
 # default is caught here and not only in atelet's unit tests.
 metadata:
-  atespace: ate-e2e${FIXTURE_SUFFIX}
+  atespace: ate-e2e${FIXTURE_SUFFIX}${ATESPACE_SUFFIX}
   name: caps-default
 workerSelector:
   matchLabels:
@@ -47,7 +47,7 @@ snapshotConfig:
 # it proves both halves at once — everything default was dropped, and only the
 # named capability was granted back.
 metadata:
-  atespace: ate-e2e${FIXTURE_SUFFIX}
+  atespace: ate-e2e${FIXTURE_SUFFIX}${ATESPACE_SUFFIX}
   name: caps-exact
 workerSelector:
   matchLabels:

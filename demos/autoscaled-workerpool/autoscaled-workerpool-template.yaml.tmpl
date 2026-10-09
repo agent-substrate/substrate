@@ -14,11 +14,11 @@
 
 # ActorTemplate (protojson-shaped ateapipb.ActorTemplate) for the
 # autoscaled-workerpool demo. Applied with
-# `kubectl ate create actor-template -f -` after `ko resolve` replaces the
-# ko:// image reference; the ate-demo-autoscaled-workerpool atespace must
-# exist.
+# `kubectl ate create actor-template -f -` after `ko resolve` replaces the ko://
+# image reference; the ate-demo-autoscaled-workerpool-l2bsc77v2kcyams4m7uvwz26dj
+# atespace must exist.
 metadata:
-  atespace: ate-demo-autoscaled-workerpool
+  atespace: ate-demo-autoscaled-workerpool-l2bsc77v2kcyams4m7uvwz26dj
   name: counter
 workerSelector:
   matchLabels:

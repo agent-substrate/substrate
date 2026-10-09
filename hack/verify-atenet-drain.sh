@@ -49,9 +49,9 @@ DEMO_NS="ate-demo-counter"
 DEMO_POOL="counter"
 # The demo's atespace: a template reference resolves in the actor's
 # atespace, so the check's actors live next to the demo's. Their names are
-# timestamped, so they cannot collide with anything already there.
-ATESPACE="ate-demo-counter"
-SUFFIX="$(date +%s)"
+# random, so they cannot collide with anything already there.
+ATESPACE="ate-demo-counter-msdynmfc666czthmw3s7uwia5w"
+SUFFIX="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
 ACTOR_BUSY="busy-${SUFFIX}"    # occupies the only worker
 ACTOR_PARKED="parked-${SUFFIX}" # its request parks, then survives the drain
 LOCAL_HTTP_PORT="${LOCAL_HTTP_PORT:-18080}"

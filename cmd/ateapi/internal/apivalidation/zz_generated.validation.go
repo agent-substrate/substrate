@@ -2048,6 +2048,10 @@ func Validate_CreateActorRequest(
 			if earlyReturn {
 				return // do not proceed
 			}
+			// custom validation
+			if e := ValidateCustom_CreateActorRequest_Actor(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
 			// call the type's validation function
 			errs = append(errs, Validate_Actor(ctx, op, fldPath, obj, oldObj)...)
 			return
@@ -2221,6 +2225,10 @@ func Validate_CreateAtespaceRequest(
 			}
 			if earlyReturn {
 				return // do not proceed
+			}
+			// custom validation
+			if e := ValidateCustom_CreateAtespaceRequest_Atespace(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
 			}
 			// call the type's validation function
 			errs = append(errs, Validate_Atespace(ctx, op, fldPath, obj, oldObj)...)

@@ -32,9 +32,11 @@ fi
 MANIFEST_DIR="benchmarking/workloads/manifests"
 POOL_MANIFEST="${MANIFEST_DIR}/workloads.yaml.tmpl"
 # The benchmark ActorTemplates: <name>-template.yaml.tmpl each, created
-# through the ate API in the benchmark-workloads atespace. WORKLOAD_TEMPLATES
+# through the ate API in the atespace ATESPACE names. WORKLOAD_TEMPLATES
 # overrides the default set — the usermem and kernelmem templates (for the
 # matching locust tests) are not deployed by default.
+# The atespace of the benchmark ActorTemplates; it must match their manifests.
+ATESPACE="benchmark-workloads-y6nzpn6xatdflqhibhytuut4d5"
 read -r -a TEMPLATES <<<"${WORKLOAD_TEMPLATES:-sleep glutton glutton-durdir-data glutton-durdir-full}"
 
 if [[ ! -f "${POOL_MANIFEST}" ]]; then
@@ -188,8 +190,8 @@ wait_templates_ready() {
   fi
   local template
   for template in "${TEMPLATES[@]}"; do
-    echo "Waiting for the benchmark-workloads/${template} golden snapshot..."
-    wait_actortemplate_ready benchmark-workloads "${template}" "${WAIT_TIMEOUT_SECS}"
+    echo "Waiting for the ${ATESPACE}/${template} golden snapshot..."
+    wait_actortemplate_ready "${ATESPACE}" "${template}" "${WAIT_TIMEOUT_SECS}"
   done
 }
 
@@ -204,8 +206,8 @@ deploy() {
     --namespace=benchmark-workloads --timeout="${WAIT_TIMEOUT_SECS}s"
 
   # The store enforces that a template's atespace exists at create time.
-  run_kubectl_ate create atespace benchmark-workloads >/dev/null 2>&1 \
-    || run_kubectl_ate get atespace benchmark-workloads >/dev/null
+  run_kubectl_ate create atespace "${ATESPACE}" >/dev/null 2>&1 \
+    || run_kubectl_ate get atespace "${ATESPACE}" >/dev/null
 
   # Actor templates are immutable (no update RPC). A value that changes for
   # each run — the OTLP endpoint or the sandbox class — needs the removal of
@@ -214,7 +216,7 @@ deploy() {
   # golden actor and snapshot server-side.
   local template
   for template in "${TEMPLATES[@]}"; do
-    run_kubectl_ate delete actor-template "${template}" -a benchmark-workloads \
+    run_kubectl_ate delete actor-template "${template}" -a "${ATESPACE}" \
       >/dev/null 2>&1 || true
     # ko resolve builds the ko:// image references and replaces them with
     # pushed digests before the manifest reaches kubectl-ate.
@@ -230,11 +232,11 @@ delete() {
   echo "Deleting workloads..."
   local template
   for template in "${TEMPLATES[@]}"; do
-    run_kubectl_ate delete actor-template "${template}" -a benchmark-workloads \
+    run_kubectl_ate delete actor-template "${template}" -a "${ATESPACE}" \
       >/dev/null 2>&1 || true
   done
-  run_kubectl_ate delete atespace benchmark-workloads >/dev/null 2>&1 \
-    || echo "atespace benchmark-workloads not deleted (may not exist or is not empty)"
+  run_kubectl_ate delete atespace "${ATESPACE}" >/dev/null 2>&1 \
+    || echo "atespace ${ATESPACE} not deleted (may not exist or is not empty)"
   # The pool manifest contains ko:// image references; route through
   # `ko delete` so they get resolved before kubectl sees them.
   substitute "${POOL_MANIFEST}" | hack/run-tool.sh ko delete --ignore-not-found -f -

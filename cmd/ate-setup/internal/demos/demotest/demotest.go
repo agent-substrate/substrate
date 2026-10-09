@@ -75,8 +75,9 @@ func AssertRendered(t *testing.T, manifest []byte) {
 // AssertRenderedActorTemplate checks that a rendered protojson ActorTemplate
 // manifest has every placeholder resolved and strictly parses into the
 // ateapipb.ActorTemplate it will be created as, and that it names the given
-// (atespace, name). ko:// image references are left as written: they are
-// plain strings to the proto, resolved only at deploy time.
+// (atespace, name), whose atespace is long enough to create. ko:// image
+// references are left as written: they are plain strings to the proto,
+// resolved only at deploy time.
 func AssertRenderedActorTemplate(t *testing.T, manifest []byte, want resources.ActorTemplateRef) {
 	t.Helper()
 
@@ -87,6 +88,10 @@ func AssertRenderedActorTemplate(t *testing.T, manifest []byte, want resources.A
 	}
 	if got := resources.ActorTemplateRefFromActorTemplate(template); got != want {
 		t.Errorf("manifest names template %s, want %s", got, want)
+	}
+	// The demo creates the atespace, so it must be a name CreateAtespace accepts.
+	if errs := resources.ValidateRandomName(want.Atespace, nil); len(errs) > 0 {
+		t.Errorf("template %s atespace: %v", want, errs)
 	}
 }
 

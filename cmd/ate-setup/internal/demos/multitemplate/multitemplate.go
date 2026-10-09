@@ -27,15 +27,15 @@ func init() {
 		DemoName:           "demo-multi-template",
 		Short:              "Two ActorTemplates sharing one WorkerPool",
 		WorkerPoolManifest: "demos/multi-template/multi-template.yaml.tmpl",
-		Deployments:        []steps.TemplateRef{{Atespace: "ate-demo-multi-template-pool", Name: "shared-pool"}},
+		Deployments:        []steps.DeploymentRef{{Namespace: "ate-demo-multi-template-pool", Name: "shared-pool"}},
 		Templates: []demos.SubstrateTemplate{
 			{
 				Manifest: "demos/multi-template/counter-template.yaml.tmpl",
-				Ref:      resources.ActorTemplateRef{Atespace: "ate-demo-multi-template-counter", Name: "counter"},
+				Ref:      resources.ActorTemplateRef{Atespace: "ate-demo-multi-template-counter-62sw34mwgreryiyvyknh72iruy", Name: "counter"},
 			},
 			{
 				Manifest: "demos/multi-template/fspersist-template.yaml.tmpl",
-				Ref:      resources.ActorTemplateRef{Atespace: "ate-demo-multi-template-fspersist", Name: "fspersist"},
+				Ref:      resources.ActorTemplateRef{Atespace: "ate-demo-multi-template-fspersist-odgg7rv2waza4e6jvrq7tg6xoq", Name: "fspersist"},
 			},
 		},
 	})

@@ -30,7 +30,7 @@ data:
     # No atespace may resolve any Secret until it is listed here, for example:
     #
     #   policies:
-    #   - atespace: team-a
+    #   - atespace: team-a-3f3k6jbmrda5xubuzwq2szb7hr
     #     allowedNamespaces:
     #     - ns1
     policies: []

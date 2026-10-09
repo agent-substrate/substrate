@@ -37,11 +37,12 @@ for etcd.
   of its identity: an Actor is addressed by `(atespace, name)`, so the same
   name can exist in two atespaces. Atespaces are global-scoped, not Kubernetes
   namespaces — an `ActorTemplate` also lives in an atespace, while
-  `WorkerPool`s live in Kubernetes namespaces. One must exist before any
-  Actor can be created in it, and it can only be deleted once empty.
+  `WorkerPool`s live in Kubernetes namespaces. Its name is at least 26
+  characters long. One must exist before any Actor can be created in it, and
+  it can only be deleted once empty.
 
 - **Actor**: a single instance derived from an `ActorTemplate`, identified by a
-  DNS-1123 name. It is the unit that is suspended and resumed, and it moves
+  DNS-1123 name at least 26 characters long. It is the unit that is suspended and resumed, and it moves
   between workers over its lifetime. An Actor record tracks its lifecycle
   status and snapshot references.
 

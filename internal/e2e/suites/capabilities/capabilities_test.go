@@ -80,7 +80,7 @@ func TestActorCapabilities(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			actor := tt.template + "-actor"
+			actor := resources.NewRandomName(tt.template + "-actor-")
 			createAndResumeActor(t, ctx, clients, namespace, tt.template, actor)
 
 			rc, err := e2e.NewRouterClient(ctx)
@@ -127,8 +127,8 @@ func assertSameCapabilities(t *testing.T, set string, got, want []string) {
 }
 
 // deployFixture installs the fixture for the sandbox class under test and
-// returns its atespace (which also names the namespace it created, carrying
-// the class suffix so the gVisor and micro-VM lanes never share one). Both
+// returns its atespace (e2e.FixtureAtespace of the namespace it created, which
+// carries the class suffix so the gVisor and micro-VM lanes never share one). Both
 // templates are golden-snapshotted when this returns; a template whose
 // container cannot start — for example because a needed capability was
 // dropped — fails the deploy with the template's error message rather than

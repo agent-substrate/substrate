@@ -83,7 +83,7 @@ curl -H 'Authorization: placeholder' https://api.example.com/v1/items
 ```
 
 This URI names the sample Secret deployed under [Enable it](#enable-it). The
-sample namespace policy lets only actors in atespace `team-a` resolve it; an
+sample namespace policy lets only actors in atespace `team-a-3f3k6jbmrda5xubuzwq2szb7hr` resolve it; an
 actor in any other atespace gets a 403 until a cluster admin grants its
 atespace access.
 
@@ -185,7 +185,7 @@ kubectl -n ate-system edit configmap k8s-credential-provider-namespace-policy
 ```yaml
   namespace-policy.yaml: |
     policies:
-    - atespace: team-a
+    - atespace: team-a-3f3k6jbmrda5xubuzwq2szb7hr
       allowedNamespaces:
       - ns1
 ```

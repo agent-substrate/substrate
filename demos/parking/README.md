@@ -34,22 +34,26 @@ This command will:
 - Build the `counter` workload image using `ko`.
 - Create the `ate-demo-parking` namespace and a **2-replica** `WorkerPool`
   (`parking`, from `parking.yaml.tmpl`).
-- Create the `ate-demo-parking` atespace and the `parking` actor template in it
+- Create the `ate-demo-parking-rlryr7otxprtr7ipwolqmu4obd` atespace and the `parking`
+  actor template in it
   (`parking-template.yaml.tmpl`, applied with `kubectl ate create actor-template`).
 - Wait until the pool is rolled out and the template's golden snapshot is built.
 
 ### 2. Create more actors than workers
 
-Actors live in the demo's **atespace** (`ate-demo-parking`). `--template`
-names the template, resolved in the actor's atespace:
+Actors live in the demo's **atespace**
+(`ate-demo-parking-rlryr7otxprtr7ipwolqmu4obd`). `--template` names the
+template, resolved in the actor's atespace:
 
 ```bash
 # Install the CLI as a kubectl plugin if not already installed
 go install ./cmd/kubectl-ate
 
 # 4 actors share a 2-worker pool -> oversubscribed.
+# Actor names must be at least 26 characters long; a random suffix makes them so.
+SUFFIX="$(uuidgen | tr '[:upper:]' '[:lower:]')"
 for id in p1 p2 p3 p4; do
-  kubectl ate create actor "$id" --atespace ate-demo-parking --template parking
+  kubectl ate create actor "$id-$SUFFIX" --atespace ate-demo-parking-rlryr7otxprtr7ipwolqmu4obd --template parking
 done
 ```
 
@@ -71,8 +75,8 @@ the URL or `Host` does not select another Actor.
 Fill both workers by requesting two actors, leaving them `RUNNING`:
 
 ```bash
-curl -s -H "ate-target-actor: ate-demo-parking/p1" http://localhost:8000
-curl -s -H "ate-target-actor: ate-demo-parking/p2" http://localhost:8000
+curl -s -H "ate-target-actor: ate-demo-parking-rlryr7otxprtr7ipwolqmu4obd/p1-$SUFFIX" http://localhost:8000
+curl -s -H "ate-target-actor: ate-demo-parking-rlryr7otxprtr7ipwolqmu4obd/p2-$SUFFIX" http://localhost:8000
 
 kubectl ate get workers   # both workers are now bound to p1 and p2
 kubectl ate get actors    # p1,p2 RUNNING; p3,p4 SUSPENDED
@@ -83,14 +87,14 @@ the `curl` hangs while the router retries the resume:
 
 ```bash
 curl -s -w '\n-> HTTP %{http_code} in %{time_total}s\n' \
-  -H "ate-target-actor: ate-demo-parking/p3" http://localhost:8000
+  -H "ate-target-actor: ate-demo-parking-rlryr7otxprtr7ipwolqmu4obd/p3-$SUFFIX" http://localhost:8000
 ```
 
 While that is hanging, in a **second terminal** free a worker by suspending p1
 (within the 5s park budget):
 
 ```bash
-kubectl ate suspend actor p1 --atespace ate-demo-parking
+kubectl ate suspend actor "p1-$SUFFIX" --atespace ate-demo-parking-rlryr7otxprtr7ipwolqmu4obd
 ```
 
 Back in the first terminal, the parked request now completes with **`HTTP 200`**,
@@ -105,7 +109,7 @@ loop frees a worker for a competitor (standing in for an actor going idle). The
 tally shows parking absorbing the contention:
 
 ```bash
-./demos/parking/load.sh                 # 30s, actors p1 p2 p3 p4
+./demos/parking/load.sh                 # 30s, actors p1 p2 p3 p4 (load.sh suffixes the names)
 # ==> results
 #     total requests : 142
 #     200 OK         : 142

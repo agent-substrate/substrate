@@ -32,7 +32,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-const networkingAtespace = "networking-e2e"
+const networkingAtespace = "networking-e2e-vb4z4hujv5zdb6fkior6mmnmzd"
 
 func TestActorDirectAccess(t *testing.T) {
 	ctx := context.Background()
@@ -355,10 +355,10 @@ func accessLogField(line, key string) (string, bool) {
 
 // createAndResumeActorWithEgress creates an actor from template, gives it an
 // EgressPolicy of exactly rules (none leaves it without one) and resumes it.
-func createAndResumeActorWithEgress(t *testing.T, ctx context.Context, prefix string, template e2e.Fixture, rules ...*ateapipb.EgressRule) (string, string, *ateapipb.Actor) {
+func createAndResumeActorWithEgress(t *testing.T, ctx context.Context, prefix string, template e2e.SubstrateFixture, rules ...*ateapipb.EgressRule) (string, string, *ateapipb.Actor) {
 	t.Helper()
-	actor := &ateapipb.Actor{ActorTemplate: &ateapipb.ObjectRef{Atespace: template.Namespace, Name: template.Name}}
-	return createAndResume(t, ctx, prefix, actor, template.Namespace+"/"+template.Name, template.DeployWith, rules)
+	actor := &ateapipb.Actor{ActorTemplate: &ateapipb.ObjectRef{Atespace: template.Atespace, Name: template.Name}}
+	return createAndResume(t, ctx, prefix, actor, template.Atespace+"/"+template.Name, template.DeployWith, rules)
 }
 
 // createAndResumeSubstrateActor is createAndResumeActor for a substrate
@@ -375,7 +375,7 @@ func createAndResumeSubstrateActor(t *testing.T, ctx context.Context, prefix str
 func createAndResume(t *testing.T, ctx context.Context, prefix string, actor *ateapipb.Actor, source, deployWith string, rules []*ateapipb.EgressRule) (string, string, *ateapipb.Actor) {
 	t.Helper()
 	clients := e2e.GetClients()
-	actorName := fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano())
+	actorName := resources.NewRandomName(prefix + "-")
 	actorRef := &ateapipb.ObjectRef{Atespace: networkingAtespace, Name: actorName}
 
 	t.Logf("creating actor %s/%s", networkingAtespace, actorName)

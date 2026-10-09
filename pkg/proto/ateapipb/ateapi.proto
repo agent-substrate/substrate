@@ -1432,9 +1432,12 @@ message VolumeMount {
 }
 
 message CreateAtespaceRequest {
-  // The atespace to create.
+  // The atespace to create. Its name must be at least 26 bytes long, enough
+  // to hold 128 random bits in base-32, so that names are hard to guess or
+  // reuse.
   //
   // +k8s:required
+  // +k8s:customValidation # name must be at least 26 bytes long
   Atespace atespace = 1;
 }
 
@@ -1547,9 +1550,11 @@ message GetActorRequest {
 
 // Request to create a new Actor.
 message CreateActorRequest {
-  // The actor to create.
+  // The actor to create. Its name must be at least 26 bytes long, enough to
+  // hold 128 random bits in base-32, so that names are hard to guess or reuse.
   //
   // +k8s:required
+  // +k8s:customValidation # name must be at least 26 bytes long
   Actor actor = 1;
 }
 

@@ -160,11 +160,11 @@ spec:
 
 The `ActorTemplate` is a protojson-shaped `ateapipb.ActorTemplate`, created
 through the ate API with `kubectl ate create actor-template -f -` (the
-`ate-demo` atespace must exist):
+`ate-demo-bdsdjzlhrbcyjlfoc4sthot3wo` atespace must exist):
 
 ```yaml
 metadata:
-  atespace: ate-demo
+  atespace: ate-demo-bdsdjzlhrbcyjlfoc4sthot3wo
   name: stateful-agent-template
 workerSelector:
   matchLabels:

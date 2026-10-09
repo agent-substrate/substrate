@@ -34,8 +34,9 @@ import (
 const (
 	poolManifest = "demos/claude-code-multiplex/claude-code-multiplex.yaml.tmpl"
 	workload     = "demos/claude-code-multiplex/workload"
-	// atespace doubles as the pool's k8s namespace.
-	atespace = "claude-multiplex-demo"
+	// namespace holds the pool.
+	namespace = "claude-multiplex-demo"
+	atespace  = "claude-multiplex-demo-edy4s473cc3yzlbcx7kjig4rhy"
 	// imageName is appended to KO_DOCKER_REPO to form the workload image
 	// repository.
 	imageName = "claude-multiplex-demo-workload"
@@ -55,7 +56,7 @@ func init() {
 		DemoName:           "demo-claude-code-multiplex",
 		Short:              "Several Claude Code agents multiplexed onto one WorkerPool (requires ANTHROPIC_API_KEY, BUCKET_NAME, KO_DOCKER_REPO)",
 		WorkerPoolManifest: poolManifest,
-		Deployments:        []steps.TemplateRef{{Atespace: atespace, Name: "claude-workerpool"}},
+		Deployments:        []steps.DeploymentRef{{Namespace: namespace, Name: "claude-workerpool"}},
 		Templates:          agentTemplates(),
 		RenderValues:       d.renderValues,
 	}

@@ -28,6 +28,7 @@ import (
 
 const (
 	namespace = "ate-demo-counter"
+	atespace  = "ate-demo-counter-msdynmfc666czthmw3s7uwia5w"
 	template  = "demos/counter/counter-template.yaml.tmpl"
 
 	defaultStorageClass = "standard"
@@ -58,10 +59,10 @@ func init() {
 		DemoName:           "demo-counter",
 		Short:              "A counter actor exercising snapshot, resume, and atenet ingress",
 		WorkerPoolManifest: "demos/counter/counter.yaml.tmpl",
-		Deployments:        []steps.TemplateRef{{Atespace: namespace, Name: "counter"}},
+		Deployments:        []steps.DeploymentRef{{Namespace: namespace, Name: "counter"}},
 		Templates: []demos.SubstrateTemplate{{
 			Manifest: "demos/counter/counter-template.yaml.tmpl",
-			Ref:      resources.ActorTemplateRef{Atespace: namespace, Name: "counter"},
+			Ref:      resources.ActorTemplateRef{Atespace: atespace, Name: "counter"},
 		}},
 		RenderValues: d.renderValues,
 	}

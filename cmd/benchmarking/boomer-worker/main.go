@@ -45,7 +45,7 @@ func main() {
 	var (
 		apiEndpoint             = flag.String("api-endpoint", "k8s:///api.ate-system.svc.cluster.local:443", "ateapi gRPC dial target.")
 		routerURL               = flag.String("router-url", "http://atenet-router.ate-system.svc.cluster.local", "atenet HTTP router base URL (no trailing slash).")
-		atespace                = flag.String("atespace", "benchmark", "Atespace every actor this worker creates lives in. Ensured (CreateAtespace, AlreadyExists is ok) at startup.")
+		atespace                = flag.String("atespace", "benchmark-wbzam34qrbhekxb3ea253jmmur", "Atespace every actor this worker creates lives in. Ensured (CreateAtespace, AlreadyExists is ok) at startup.")
 		promAddr                = flag.String("prometheus-addr", ":8001", "Address for the Prometheus /metrics endpoint.")
 		configJSON              = flag.String("config-json", "", "Initial dynconfig as a JSON object (keys: trace_probability, min_wait_time, max_wait_time, min_live_time, max_live_time in seconds, durdir_file_size_bytes, resume_mode, lifecycle_mode, durdir_read_mode, durdir_template, mem_target, mem_churn, mem_read, cpu_cores, cpu_duty_cycle, max_pings_per_wake). Unset fields keep their built-in defaults.")
 		masterWebPort           = flag.Int("master-web-port", 0, "If non-zero, fetch dynconfig from http://{master-host}:{master-web-port}/boomer-config on each spawn message. Exits if the first fetch fails; later failures keep the last fetched values. {master-host} comes from boomer's existing --master-host flag.")

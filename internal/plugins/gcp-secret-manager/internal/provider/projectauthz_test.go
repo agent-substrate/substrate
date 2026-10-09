@@ -109,8 +109,8 @@ func TestShippedProjectPolicyLoads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadProjectAuthorizer: %v", err)
 	}
-	if !a.Allowed("team-a", "my-project") {
-		t.Error("the shipped policy does not grant team-a my-project, as its comment says")
+	if !a.Allowed("team-a-3f3k6jbmrda5xubuzwq2szb7hr", "my-project") {
+		t.Error("the shipped policy does not grant team-a-3f3k6jbmrda5xubuzwq2szb7hr my-project, as its comment says")
 	}
 }
 

@@ -54,7 +54,7 @@ The kind overlay installed by `hack/install-ate-kind.sh --deploy-ate-system` alr
 Port-forward the Jaeger UI and invoke any command with `--trace`:
 ```bash
 kubectl port-forward -n otel-system svc/jaeger 16686:16686 &
-kubectl ate get actor my-counter-1 --trace
+kubectl ate get actor <actor-name> -a <atespace> --trace
 # open http://localhost:16686 and search for the most recent trace
 ```
 
@@ -128,10 +128,12 @@ kubectl ate get workers -l <label-selector>
 ### Atespaces
 
 An **atespace** is the isolation boundary an actor belongs to. It must exist before you can create actors in it.
+An atespace name must be at least 26 characters long, so that it can hold 128 random bits in base-32; use a random name, optionally after a readable prefix.
 
 ```bash
 # Create an atespace
-kubectl ate create atespace <atespace>
+ATESPACE="team-$(uuidgen | tr '[:upper:]' '[:lower:]')"
+kubectl ate create atespace "${ATESPACE}"
 
 # List all atespaces
 kubectl ate get atespaces
@@ -190,26 +192,27 @@ for a complete manifest example.
 
 ### Actor Lifecycle
 Manage the execution state of your workloads.
-*(Note: Actors are identified by a user-provided name, which must be a valid DNS-1123 label)*
+*(Note: Actors are identified by a user-provided name, which must be a valid DNS-1123 label at least 26 characters long; use a random name, optionally after a readable prefix)*
 
 ```bash
 # Create a new actor from an ActorTemplate.
-kubectl ate create actor my-actor --template=<template-name> -a <atespace>
+ACTOR="my-actor-$(uuidgen | tr '[:upper:]' '[:lower:]')"
+kubectl ate create actor "${ACTOR}" --template=<template-name> -a <atespace>
 
 # Resume an actor (assigns it to a free worker and restores its state)
-kubectl ate resume actor my-actor -a <atespace>
+kubectl ate resume actor "${ACTOR}" -a <atespace>
 
 # Suspend an actor (snapshots its state to storage and frees the worker)
-kubectl ate suspend actor my-actor -a <atespace>
+kubectl ate suspend actor "${ACTOR}" -a <atespace>
 
 # Revert an actor to its last external snapshot (discards live, paused, or crashed state and returns to SUSPENDED)
-kubectl ate revert actor my-actor -a <atespace>
+kubectl ate revert actor "${ACTOR}" -a <atespace>
 
 # Delete an actor (by default, requires the actor to be SUSPENDED or CRASHED).
-kubectl ate delete actor my-actor -a <atespace>
+kubectl ate delete actor "${ACTOR}" -a <atespace>
 
 # Delete an actor from any state (e.g. RUNNING, PAUSED), terminating workloads and detaching volumes.
-kubectl ate delete actor my-actor -a <atespace> --any-state
+kubectl ate delete actor "${ACTOR}" -a <atespace> --any-state
 ```
 
 ### Actor Snapshots

@@ -130,6 +130,7 @@ var getActorsCmd = &cobra.Command{
 var createActorCmd = &cobra.Command{
 	Use:   "actor <actor-name>",
 	Short: "Create an actor",
+	Long:  "Create an actor. The name must be at least 26 characters long; use a random name, optionally after a readable prefix.",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		request, err := buildCreateActorRequest(args[0], createActorAtespaceFlag, createActorTemplateFlag, createActorTagFlag)

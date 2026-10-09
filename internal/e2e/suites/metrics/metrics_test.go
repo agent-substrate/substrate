@@ -34,13 +34,13 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-const metricsAtespace = "ate-metrics-e2e"
+const metricsAtespace = "ate-metrics-e2e-gjpkyzhxqncx3fsqvhe7qtryts"
 
 func TestPlatformMetricsEmitted(t *testing.T) {
 	ctx := context.Background()
 	clients := e2e.GetClients()
 	tmpl := e2e.SubstrateCounterFixture()
-	actorID := fmt.Sprintf("metrics-probe-%d", time.Now().UnixNano())
+	actorID := resources.NewRandomName("metrics-probe-")
 
 	// The lifecycle event counters are cumulative and the collector outlives this
 	// test, so take a baseline before driving anything. Asserting the states are

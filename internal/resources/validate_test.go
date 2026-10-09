@@ -101,6 +101,51 @@ func TestIsValidResourceName(t *testing.T) {
 	}
 }
 
+func TestValidateRandomName(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		valid bool
+	}{
+		{"missing name", "", false},
+		{"one short of min length", strings.Repeat("a", MinRandomNameLength-1), false},
+		{"min length", strings.Repeat("a", MinRandomNameLength), true},
+		{"UUID", "0c6e2f4a-8b1d-4e57-a3f9-2d7c5b8e1a60", true},
+		{"prefixed", "counter-ox3wgmjvk2b6yfq4zr7ae5ncl4", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errs := ValidateRandomName(tt.value, field.NewPath("name"))
+			if got := len(errs) == 0; got != tt.valid {
+				t.Errorf("ValidateRandomName(%q) = %v, want valid=%v", tt.value, errs, tt.valid)
+			}
+			for _, err := range errs {
+				if err.Type != field.ErrorTypeTooShort {
+					t.Errorf("ValidateRandomName(%q) error type = %v, want %v", tt.value, err.Type, field.ErrorTypeTooShort)
+				}
+			}
+		})
+	}
+}
+
+func TestNewRandomName(t *testing.T) {
+	for _, prefix := range []string{"", "counter-"} {
+		got := NewRandomName(prefix)
+		if !strings.HasPrefix(got, prefix) {
+			t.Errorf("NewRandomName(%q) = %q, want prefix %q", prefix, got, prefix)
+		}
+		if !IsValidResourceName(got) {
+			t.Errorf("NewRandomName(%q) = %q, not a valid resource name", prefix, got)
+		}
+		if errs := ValidateRandomName(got, field.NewPath("name")); len(errs) > 0 {
+			t.Errorf("NewRandomName(%q) = %q, ValidateRandomName: %v", prefix, got, errs)
+		}
+	}
+	if a, b := NewRandomName(""), NewRandomName(""); a == b {
+		t.Errorf("NewRandomName returned %q twice", a)
+	}
+}
+
 func TestValidateAteomUID(t *testing.T) {
 	tests := []struct {
 		name    string

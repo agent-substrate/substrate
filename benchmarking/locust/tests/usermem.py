@@ -64,7 +64,7 @@ class UserMemUser(User):
                             atespace=ATESPACE, name=self.actor_name
                         ),
                         actor_template=ateapi_pb2.ObjectRef(
-                            atespace="benchmark-workloads",
+                            atespace="benchmark-workloads-y6nzpn6xatdflqhibhytuut4d5",
                             name=self.template_name,
                         ),
                     )

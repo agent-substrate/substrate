@@ -36,7 +36,7 @@ import (
 
 const probeTemplate = "probe"
 
-var probeNamespace string
+var probeAtespace string
 
 // TestActorEgressMITMTrust proves an actor can do TLS through the MITM
 // egress gateway using only the projected trust bundle:
@@ -78,9 +78,9 @@ func TestActorEgressMITMTrust(t *testing.T) {
 	// missing.)
 	e2e.EnsureEgressTrustBundle(t, ctx, clients)
 
-	probeNamespace, _ = e2e.DeployProbe(t, env["BUCKET_NAME"], "egressmitm", e2e.WithTrustBundle())
+	probeAtespace, _ = e2e.DeployProbe(t, env["BUCKET_NAME"], "egressmitm", e2e.WithTrustBundle())
 
-	const id = "probe-mitm"
+	id := resources.NewRandomName("probe-mitm-")
 	createAndResumeActor(t, ctx, clients, id)
 	waitForActorState(t, ctx, clients, id, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 
@@ -210,7 +210,7 @@ func probeFetch(t *testing.T, ctx context.Context, rc *e2e.RouterClient, id, ori
 	for _, p := range extraParams {
 		path += "&" + p
 	}
-	ref := resources.ActorRef{Atespace: probeNamespace, Name: id}
+	ref := resources.ActorRef{Atespace: probeAtespace, Name: id}
 
 	deadline := time.Now().Add(30 * time.Second)
 	for {
@@ -243,12 +243,12 @@ func probeFetch(t *testing.T, ctx context.Context, rc *e2e.RouterClient, id, ori
 
 func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Clients, id string) {
 	t.Helper()
-	ref := &ateapipb.ObjectRef{Atespace: probeNamespace, Name: id}
+	ref := &ateapipb.ObjectRef{Atespace: probeAtespace, Name: id}
 	_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: ref})
 	_, _ = clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref})
 	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: probeNamespace, Name: id},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: probeNamespace, Name: probeTemplate},
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: probeAtespace, Name: id},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: probeAtespace, Name: probeTemplate},
 	}}); err != nil {
 		t.Fatalf("CreateActor %q: %v", id, err)
 	}
@@ -263,7 +263,7 @@ func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Client
 	t.Cleanup(func() {
 		_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: ref})
 		if _, err := clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref}); err != nil {
-			t.Logf("cleanup: DeleteActor %q failed, actor leaked (remove with: kubectl ate delete actor %s -a %s): %v", id, id, probeNamespace, err)
+			t.Logf("cleanup: DeleteActor %q failed, actor leaked (remove with: kubectl ate delete actor %s -a %s): %v", id, id, probeAtespace, err)
 		}
 	})
 	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: ref}); err != nil {
@@ -276,7 +276,7 @@ func waitForActorState(t *testing.T, ctx context.Context, clients *e2e.Clients, 
 	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
 		resp, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: probeNamespace, Name: actorName},
+			Actor: &ateapipb.ObjectRef{Atespace: probeAtespace, Name: actorName},
 		})
 		if err == nil && resp.GetStatus().GetState() == want {
 			return

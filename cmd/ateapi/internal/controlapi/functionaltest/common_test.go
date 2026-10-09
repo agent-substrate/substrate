@@ -60,9 +60,19 @@ import (
 	"k8s.io/utils/ptr"
 )
 
+var (
+	testAtespace = resources.NewRandomName("test-atespace-")
+	testActorID  = resources.NewRandomName("id1-")
+	testActorID2 = resources.NewRandomName("id2-")
+	testActorID3 = resources.NewRandomName("id3-")
+
+	// Extra atespaces for tests that need more than one.
+	teamA         = resources.NewRandomName("team-a-")
+	teamB         = resources.NewRandomName("team-b-")
+	otherAtespace = resources.NewRandomName("other-")
+)
+
 const (
-	testAtespace = "test-atespace"
-	testActorID  = "id1"
 	// testStorageLocation is the snapshot_config.storage_location the test
 	// templates hand out. No object store is wired up behind it.
 	testStorageLocation = "gs://fake-fake-fake"

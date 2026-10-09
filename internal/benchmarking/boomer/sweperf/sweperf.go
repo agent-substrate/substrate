@@ -53,7 +53,7 @@ import (
 // templateNS is the namespace holding the actor templates this workload
 // instantiates from.
 const (
-	templateNS = "benchmark-workloads"
+	templateNS = "benchmark-workloads-y6nzpn6xatdflqhibhytuut4d5"
 )
 
 // Defaults for a sweperf session, used when neither the dynamic config nor the

@@ -58,7 +58,7 @@ type Substrate struct {
 	// Deployments are the pool Deployments to wait for at deploy time, in
 	// order. The WorkerPool controller names each Deployment after its
 	// WorkerPool.
-	Deployments []steps.TemplateRef
+	Deployments []steps.DeploymentRef
 
 	// Templates are the demo's ActorTemplates, created in order.
 	Templates []SubstrateTemplate
@@ -131,7 +131,7 @@ func (d *Substrate) Deploy(ctx context.Context, e *steps.Env) error {
 		return err
 	}
 	for _, ref := range d.Deployments {
-		if err := e.Kube.RolloutStatus(ctx, kube.KindDeployment, ref.Atespace, ref.Name, steps.DemoTimeout); err != nil {
+		if err := e.Kube.RolloutStatus(ctx, kube.KindDeployment, ref.Namespace, ref.Name, steps.DemoTimeout); err != nil {
 			return err
 		}
 	}

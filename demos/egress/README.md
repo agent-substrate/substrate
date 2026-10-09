@@ -106,12 +106,12 @@ rejects that option with agentgateway rather than silently omitting it.
 ./hack/install-ate.sh --deploy-demo-egress
 ```
 
-The install applies the worker pool, creates the `ate-demo-egress` atespace and
+The install applies the worker pool, creates the `ate-demo-egress-a326zwu4ineuokl2mgd5enlptt` atespace and
 the `egress` ActorTemplate (a substrate resource, not a CRD) through the ate
 API, and blocks until the template's golden snapshot is built:
 
 ```bash
-kubectl ate get actor-template egress -a ate-demo-egress
+kubectl ate get actor-template egress -a ate-demo-egress-a326zwu4ineuokl2mgd5enlptt
 ```
 
 ## Run the automated test (easiest)
@@ -143,13 +143,14 @@ TARGET_IP=$(kubectl -n egress-target get svc whoami -o jsonpath='{.spec.clusterI
 
 # 2. Create and resume an Actor in the demo's atespace: --template
 #    resolves the template by name within the actor's own atespace.
-kubectl ate create actor egress-demo -a ate-demo-egress --template egress
-kubectl ate resume actor egress-demo -a ate-demo-egress   # wait for ACTOR_STATE_RUNNING
+ACTOR="egress-demo-$(uuidgen | tr '[:upper:]' '[:lower:]')"
+kubectl ate create actor "${ACTOR}" -a ate-demo-egress-a326zwu4ineuokl2mgd5enlptt --template egress
+kubectl ate resume actor "${ACTOR}" -a ate-demo-egress-a326zwu4ineuokl2mgd5enlptt   # wait for ACTOR_STATE_RUNNING
 
 # 3. Allow the Actor's egress; without a policy the gateway denies everything.
 #    Any host or address: cleartext HTTP on any port, and HTTPS on 443,
 #    intercepted by the gateway.
-kubectl ate create egress-policy egress-demo -a ate-demo-egress -f - <<'EOF'
+kubectl ate create egress-policy "${ACTOR}" -a ate-demo-egress-a326zwu4ineuokl2mgd5enlptt -f - <<'EOF'
 rules:
 - http: {hostnames: ["*"], ports: {all: {}}}
 - https: {hostnames: ["*"]}
@@ -160,7 +161,7 @@ EOF
 #    before step 3 keeps failing for up to that long after the policy appears.
 kubectl -n ate-system port-forward service/atenet-router 8000:80 &
 curl -s -X POST http://localhost:8000/ \
-  -H 'ate-target-actor: ate-demo-egress/egress-demo' \
+  -H "ate-target-actor: ate-demo-egress-a326zwu4ineuokl2mgd5enlptt/${ACTOR}" \
   -H 'Content-Type: application/json' \
   -d "{\"url\":\"http://${TARGET_IP}:80/\"}"
 ```
@@ -176,11 +177,11 @@ With Envoy:
 ```bash
 # The egress gateway logs each tunneled CONNECT against the verified peer certificate:
 kubectl -n ate-system logs deploy/atenet-egress -c envoy | grep '\[egress\]'
-#   [egress] authority=<TARGET_IP>:80 peer_san=spiffe://substrate-actor.local/atespace/ate-demo-egress/actor/egress-demo … code=200 …
+#   [egress] authority=<TARGET_IP>:80 peer_san=spiffe://substrate-actor.local/atespace/ate-demo-egress-a326zwu4ineuokl2mgd5enlptt/actor/<ACTOR> … code=200 …
 
 # The co-located ext_proc sidecar logs the identity decision, including the UID it authorized on:
 kubectl -n ate-system logs deploy/atenet-egress -c ext-proc | grep -i 'egress tunnel opened\|egress denied'
-#   egress tunnel opened: an address rule allows the destination  leg=egress actor=ate-demo-egress/egress-demo actorUid=… destination=<TARGET_IP>:80 rule=0
+#   egress tunnel opened: an address rule allows the destination  leg=egress actor=ate-demo-egress-a326zwu4ineuokl2mgd5enlptt/<ACTOR> actorUid=… destination=<TARGET_IP>:80 rule=0
 ```
 
 With agentgateway:

@@ -19,6 +19,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
@@ -62,8 +63,24 @@ func TestValidateCreateAtespaceRequest(t *testing.T) {
 		field.ErrorList{field.Required(field.NewPath("atespace", "metadata", "name"), "")},
 	}, {
 		"invalid metadata.name",
-		validReq(validAtespace(withMetadata(func(m *ateapipb.ResourceMetadata) { m.Name = "invalid value" }))),
+		validReq(validAtespace(withMetadata(func(m *ateapipb.ResourceMetadata) { m.Name = "invalid value ox3wgmjvk2b6yfq4zr7ae5ncl4" }))),
 		field.ErrorList{field.Invalid(field.NewPath("atespace", "metadata", "name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		"metadata.name of min length",
+		validReq(validAtespace(withMetadata(func(m *ateapipb.ResourceMetadata) { m.Name = "ox3wgmjvk2b6yfq4zr7ae5ncl4" }))),
+		nil,
+	}, {
+		"metadata.name too short",
+		validReq(validAtespace(withMetadata(func(m *ateapipb.ResourceMetadata) { m.Name = "ox3wgmjvk2b6yfq4zr7ae5ncl" }))),
+		field.ErrorList{field.TooShort(field.NewPath("atespace", "metadata", "name"), "", 26)},
+	}, {
+		"metadata.name UUID",
+		validReq(validAtespace(withMetadata(func(m *ateapipb.ResourceMetadata) { m.Name = "0c6e2f4a-8b1d-4e57-a3f9-2d7c5b8e1a60" }))),
+		nil,
+	}, {
+		"reserved golden actor atespace is exempt",
+		validReq(validAtespace(withMetadata(func(m *ateapipb.ResourceMetadata) { m.Name = resources.GoldenActorAtespace }))),
+		nil,
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -205,7 +222,7 @@ func TestValidateDeleteAtespaceRequest(t *testing.T) {
 // validAtespace returns a minimal Atespace which should pass input validation.
 func validAtespace(mods ...func(*ateapipb.Atespace)) *ateapipb.Atespace {
 	a := &ateapipb.Atespace{
-		Metadata: &ateapipb.ResourceMetadata{Name: "team1"},
+		Metadata: &ateapipb.ResourceMetadata{Name: "team1-ox3wgmjvk2b6yfq4zr7ae5ncl4"},
 	}
 	for _, m := range mods {
 		m(a)

@@ -38,17 +38,6 @@ func SandboxClass() string { return os.Getenv(sandboxClassEnv) }
 // Assertions that only hold for one runtime gate on this.
 func IsMicroVM() bool { return SandboxClass() == SandboxClassMicroVM }
 
-// Fixture identifies an installed WorkerPool + ActorTemplate pair (both carry
-// the same name) that suites either create Actors from directly or copy the
-// resolved runtime — sandbox class, ateom image, container images — out of.
-type Fixture struct {
-	Namespace string
-	Name      string
-	// DeployWith is the install flag or script that creates the fixture, so a
-	// missing one reports how to fix it rather than just failing.
-	DeployWith string
-}
-
 // SubstrateFixture identifies an installed substrate ActorTemplate (the proto
 // resource created through the ate API, not the CRD) plus the CRD WorkerPool
 // backing it. Suites copy the resolved runtime — container images, sandbox
@@ -73,7 +62,7 @@ type SubstrateFixture struct {
 // fixture somewhere else.
 func SubstrateCounterFixture() SubstrateFixture {
 	f := SubstrateFixture{
-		Atespace:      "ate-demo-counter",
+		Atespace:      "ate-demo-counter-msdynmfc666czthmw3s7uwia5w",
 		Name:          "counter",
 		PoolNamespace: "ate-demo-counter",
 		PoolName:      "counter",
@@ -81,7 +70,7 @@ func SubstrateCounterFixture() SubstrateFixture {
 	}
 	if IsMicroVM() {
 		f = SubstrateFixture{
-			Atespace:      "ate-demo-counter-microvm",
+			Atespace:      "ate-demo-counter-microvm-3iaw7q5v4p4xxtudd6aisu3biu",
 			Name:          "counter-microvm",
 			PoolNamespace: "ate-demo-counter-microvm",
 			PoolName:      "counter-microvm",
@@ -105,18 +94,22 @@ func SubstrateCounterFixture() SubstrateFixture {
 
 // EgressFixture returns the egress demo for the sandbox class under test. Its
 // actors trust the CA the egress gateway mints its leaves from.
-func EgressFixture() Fixture {
+func EgressFixture() SubstrateFixture {
 	if IsMicroVM() {
-		return Fixture{
-			Namespace:  "ate-demo-egress-microvm",
-			Name:       "egress-microvm",
-			DeployWith: "hack/install-ate-kind.sh --deploy-demo-egress-microvm",
+		return SubstrateFixture{
+			Atespace:      "ate-demo-egress-microvm-7mz3rgntgxuitty3bpdjo7fns4",
+			Name:          "egress-microvm",
+			PoolNamespace: "ate-demo-egress-microvm",
+			PoolName:      "egress-microvm",
+			DeployWith:    "hack/install-ate-kind.sh --deploy-demo-egress-microvm",
 		}
 	}
-	return Fixture{
-		Namespace:  "ate-demo-egress",
-		Name:       "egress",
-		DeployWith: "hack/install-ate-kind.sh --deploy-demo-egress",
+	return SubstrateFixture{
+		Atespace:      "ate-demo-egress-a326zwu4ineuokl2mgd5enlptt",
+		Name:          "egress",
+		PoolNamespace: "ate-demo-egress",
+		PoolName:      "egress",
+		DeployWith:    "hack/install-ate-kind.sh --deploy-demo-egress",
 	}
 }
 

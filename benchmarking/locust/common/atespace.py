@@ -28,7 +28,7 @@ from common.grpc_tracing import traced_grpc
 # Single atespace for all benchmark runs. Actor names within an atespace
 # must be unique, and every user picks an `sb-<uuid>` actor name, so a
 # shared atespace doesn't introduce collisions.
-ATESPACE = "benchmark"
+ATESPACE = "benchmark-wbzam34qrbhekxb3ea253jmmur"
 
 
 def ensure_atespace(stub, user_class: str, name: str = ATESPACE) -> None:

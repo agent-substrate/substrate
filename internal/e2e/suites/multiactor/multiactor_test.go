@@ -29,8 +29,8 @@ import (
 
 const multiactorTemplate = "probe-multiactor"
 
-// Separate fixture namespaces for each sandbox class.
-var multiactorNamespace = e2e.FixtureName("ate-e2e") + "-multiactor"
+// Separate fixture atespaces for each sandbox class.
+var multiactorAtespace = e2e.FixtureAtespace(e2e.FixtureName("ate-e2e") + "-multiactor")
 
 // whoamiResponse identifies the actor that served the request.
 type whoamiResponse struct {
@@ -54,7 +54,7 @@ func TestTwoActorsShareOneWorker(t *testing.T) {
 		Template: "internal/e2e/fixtures/probe/probe-multiactor-template.yaml.tmpl",
 	}, env["BUCKET_NAME"], "multiactor", false)
 
-	names := []string{"ma-first", "ma-second"}
+	names := []string{resources.NewRandomName("ma-first-"), resources.NewRandomName("ma-second-")}
 	pods := map[string]string{}
 	for _, name := range names {
 		createActor(t, ctx, clients, name)
@@ -75,7 +75,7 @@ func TestTwoActorsShareOneWorker(t *testing.T) {
 
 	for _, name := range names {
 		got := whoami(t, ctx, rc, name)
-		if got.Atespace != multiactorNamespace || got.File != name {
+		if got.Atespace != multiactorAtespace || got.File != name {
 			t.Errorf("request for %s was served by atespace=%q actor=%q; each actor must be reached in its own sandbox",
 				name, got.Atespace, got.File)
 		}
@@ -92,8 +92,8 @@ func TestTwoActorsShareOneWorker(t *testing.T) {
 func createActor(t *testing.T, ctx context.Context, clients *e2e.Clients, name string) {
 	t.Helper()
 	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: multiactorNamespace, Name: name},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: multiactorNamespace, Name: multiactorTemplate},
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: multiactorAtespace, Name: name},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: multiactorAtespace, Name: multiactorTemplate},
 	}}); err != nil {
 		t.Fatalf("CreateActor %q: %v", name, err)
 	}
@@ -102,16 +102,16 @@ func createActor(t *testing.T, ctx context.Context, clients *e2e.Clients, name s
 		defer cancel()
 		// DeleteActor requires the actor to be suspended.
 		_, _ = clients.SubstrateAPI.SuspendActor(cctx, &ateapipb.SuspendActorRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: multiactorNamespace, Name: name}})
+			Actor: &ateapipb.ObjectRef{Atespace: multiactorAtespace, Name: name}})
 		_, _ = clients.SubstrateAPI.DeleteActor(cctx, &ateapipb.DeleteActorRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: multiactorNamespace, Name: name}})
+			Actor: &ateapipb.ObjectRef{Atespace: multiactorAtespace, Name: name}})
 	})
 }
 
 func resumeActor(t *testing.T, ctx context.Context, clients *e2e.Clients, name string) {
 	t.Helper()
 	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: multiactorNamespace, Name: name}}); err != nil {
+		Actor: &ateapipb.ObjectRef{Atespace: multiactorAtespace, Name: name}}); err != nil {
 		t.Fatalf("ResumeActor %q: %v", name, err)
 	}
 }
@@ -119,7 +119,7 @@ func resumeActor(t *testing.T, ctx context.Context, clients *e2e.Clients, name s
 func suspendActor(t *testing.T, ctx context.Context, clients *e2e.Clients, name string) {
 	t.Helper()
 	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: multiactorNamespace, Name: name}}); err != nil {
+		Actor: &ateapipb.ObjectRef{Atespace: multiactorAtespace, Name: name}}); err != nil {
 		t.Fatalf("SuspendActor %q: %v", name, err)
 	}
 }
@@ -128,7 +128,7 @@ func suspendActor(t *testing.T, ctx context.Context, clients *e2e.Clients, name 
 func workerPodOf(t *testing.T, ctx context.Context, clients *e2e.Clients, name string) string {
 	t.Helper()
 	actor, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: multiactorNamespace, Name: name}})
+		Actor: &ateapipb.ObjectRef{Atespace: multiactorAtespace, Name: name}})
 	if err != nil {
 		t.Fatalf("GetActor %q: %v", name, err)
 	}
@@ -144,7 +144,7 @@ func workerPodOf(t *testing.T, ctx context.Context, clients *e2e.Clients, name s
 
 func whoami(t *testing.T, ctx context.Context, rc *e2e.RouterClient, name string) whoamiResponse {
 	t.Helper()
-	resp, err := rc.Get(ctx, resources.ActorRef{Atespace: multiactorNamespace, Name: name}, "/whoami")
+	resp, err := rc.Get(ctx, resources.ActorRef{Atespace: multiactorAtespace, Name: name}, "/whoami")
 	if err != nil {
 		t.Fatalf("GET /whoami for %q: %v", name, err)
 	}

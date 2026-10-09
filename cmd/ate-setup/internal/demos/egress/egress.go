@@ -29,17 +29,20 @@ import (
 
 // namespace is the pool's k8s namespace; it doubles as the atespace holding
 // the demo's ActorTemplate.
-const namespace = "ate-demo-egress"
+const (
+	namespace = "ate-demo-egress"
+	atespace  = "ate-demo-egress-a326zwu4ineuokl2mgd5enlptt"
+)
 
 func init() {
 	demos.Register(&demos.Substrate{
 		DemoName:           "demo-egress",
 		Short:              "Egress policy enforcement through atenet",
 		WorkerPoolManifest: "demos/egress/egress.yaml.tmpl",
-		Deployments:        []steps.TemplateRef{{Atespace: namespace, Name: "egress"}},
+		Deployments:        []steps.DeploymentRef{{Namespace: namespace, Name: "egress"}},
 		Templates: []demos.SubstrateTemplate{{
 			Manifest: "demos/egress/egress-template.yaml.tmpl",
-			Ref:      resources.ActorTemplateRef{Atespace: namespace, Name: "egress"},
+			Ref:      resources.ActorTemplateRef{Atespace: atespace, Name: "egress"},
 		}},
 	})
 }

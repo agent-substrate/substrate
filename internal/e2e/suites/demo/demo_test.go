@@ -36,7 +36,7 @@ import (
 	"k8s.io/client-go/transport/spdy"
 )
 
-const demoAtespace = "demo"
+const demoAtespace = "demo-w3fa5kqmxtcpuz4ivmy7j6dcge"
 
 func TestActorLifecycle(t *testing.T) {
 	t.Parallel()
@@ -103,8 +103,8 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 		t.Fatalf("failed to initialize ActorTemplate: %v", err)
 	}
 
-	sourceName := "snapshot-source-" + nsObj.Name
-	cloneName := "snapshot-clone-" + nsObj.Name
+	sourceName := resources.NewRandomName("snapshot-source-")
+	cloneName := resources.NewRandomName("snapshot-clone-")
 	for _, name := range []string{sourceName, cloneName} {
 		t.Cleanup(func() {
 			cleanupCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -362,7 +362,7 @@ func TestDeleteActorAnyStateWithExternalVolume(t *testing.T) {
 		t.Fatalf("failed to initialize ActorTemplate: %v", err)
 	}
 
-	actorName := "anystate-delete-extvol-" + nsObj.Name
+	actorName := resources.NewRandomName("anystate-delete-extvol-")
 
 	t.Logf("Creating Actor %q...", actorName)
 	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
@@ -429,7 +429,7 @@ func TestExternalVolume_NodeMigration(t *testing.T) {
 		t.Fatalf("failed to initialize ActorTemplate: %v", err)
 	}
 
-	actorName := "extvol-migration-" + nsObj.Name
+	actorName := resources.NewRandomName("extvol-migration-")
 
 	t.Logf("Creating Actor %q...", actorName)
 	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
@@ -555,7 +555,7 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 	//
 	// Create an Actor.
 	//
-	actorID := prefix + "-" + nsObj.Name
+	actorID := resources.NewRandomName(prefix + "-")
 
 	t.Logf("Creating Actor %q using Substrate API...", actorID)
 	createResp, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
@@ -718,7 +718,7 @@ func validateCounterResponse(t *testing.T, resp string, stage string, wantMemory
 
 func createActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, at *ateapipb.ActorTemplate) error {
 	// Create an Actor using the ATE API.
-	actorName := "demo-actor-1-" + nsObj.Name
+	actorName := resources.NewRandomName("demo-actor-1-")
 
 	t.Logf("Creating Actor %q using Substrate API...", actorName)
 	createResp, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
@@ -770,7 +770,7 @@ func createActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj 
 }
 
 func pauseActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, at *ateapipb.ActorTemplate) error {
-	actorName := "pause-actor-" + nsObj.Name
+	actorName := resources.NewRandomName("pause-actor-")
 
 	// Creating an actor
 	t.Logf("Creating Actor %q...", actorName)
@@ -849,7 +849,7 @@ func pauseActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *
 }
 
 func suspendActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, at *ateapipb.ActorTemplate) error {
-	actorName := "suspend-actor-" + nsObj.Name
+	actorName := resources.NewRandomName("suspend-actor-")
 
 	// Creating an actor
 	t.Logf("Creating Actor %q...", actorName)
@@ -927,7 +927,7 @@ func suspendActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj
 }
 
 func revertActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, at *ateapipb.ActorTemplate) error {
-	actorName := "revert-actor-" + nsObj.Name
+	actorName := resources.NewRandomName("revert-actor-")
 	actorRef := &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName}
 	t.Cleanup(func() {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -1050,7 +1050,7 @@ func revertActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj 
 }
 
 func deleteActorAnyState(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, at *ateapipb.ActorTemplate) error {
-	actorName := "anystate-delete-actor-" + nsObj.Name
+	actorName := resources.NewRandomName("anystate-delete-actor-")
 
 	// 1. Creating an actor
 	t.Logf("Creating Actor %q...", actorName)
@@ -1140,7 +1140,7 @@ func deleteActorAnyState(ctx context.Context, t *testing.T, clients *e2e.Clients
 }
 
 func deletePausedActorAnyState(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, at *ateapipb.ActorTemplate) error {
-	actorName := "anystate-delete-paused-actor-" + nsObj.Name
+	actorName := resources.NewRandomName("anystate-delete-paused-actor-")
 
 	// 1. Creating an actor
 	t.Logf("Creating Actor %q...", actorName)
@@ -1453,7 +1453,7 @@ func TestWorkerPodDeletion(t *testing.T) {
 		t.Fatalf("failed to initialize ActorTemplate: %v", err)
 	}
 
-	actorName := "crash-actor-" + nsObj.Name
+	actorName := resources.NewRandomName("crash-actor-")
 
 	// Creating an actor
 	t.Logf("Creating Actor %q...", actorName)
@@ -1583,7 +1583,7 @@ func TestRevertCrashedActor(t *testing.T) {
 		t.Fatalf("failed to initialize ActorTemplate: %v", err)
 	}
 
-	actorName := "revert-crash-actor-" + nsObj.Name
+	actorName := resources.NewRandomName("revert-crash-actor-")
 	actorRef := &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName}
 	t.Cleanup(func() {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)

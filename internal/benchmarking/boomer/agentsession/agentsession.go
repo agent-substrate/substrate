@@ -64,7 +64,7 @@ import (
 const (
 	agentSessionUserClass = "AgentSessionUser"
 	// templateNS is the atespace holding the benchmark ActorTemplates.
-	templateNS = "benchmark-workloads"
+	templateNS = "benchmark-workloads-y6nzpn6xatdflqhibhytuut4d5"
 	// templateName is the ActorTemplate instantiated per session: the stock
 	// glutton actor. The script needs it deployed with --actor-memory 1Gi
 	// (see benchmarking/README.md).

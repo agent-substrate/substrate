@@ -15,15 +15,15 @@
 # ActorTemplate (protojson-shaped ateapipb.ActorTemplate) for the luna agent
 # of the claude-code-multiplex demo; one of three agents sharing the 2-pod
 # pool in claude-code-multiplex.yaml.tmpl. Applied with
-# `kubectl ate create actor-template -f -`; the claude-multiplex-demo
-# atespace must exist.
+# `kubectl ate create actor-template -f -`; the
+# claude-multiplex-demo-edy4s473cc3yzlbcx7kjig4rhy atespace must exist.
 #
 # ANTHROPIC_API_KEY is substituted into the container env as a plain value
 # at apply time. WORKLOAD_IMAGE is the resolved sha256-digest reference for
 # the claude-multiplex-demo-workload image — built and pushed to
 # ${KO_DOCKER_REPO} by the deploy step, substituted at apply time.
 metadata:
-  atespace: claude-multiplex-demo
+  atespace: claude-multiplex-demo-edy4s473cc3yzlbcx7kjig4rhy
   name: agent-luna
 workerSelector:
   matchLabels:

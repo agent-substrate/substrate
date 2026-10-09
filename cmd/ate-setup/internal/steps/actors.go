@@ -21,15 +21,10 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
-// TemplateRef identifies a demo's ActorTemplate. Actors are deleted by matching
-// against it because the demo manifests own the template, not the actors that
-// were created from it.
-type TemplateRef struct {
-	// Atespace the object lives in. The demos name each atespace after the
-	// k8s namespace holding its worker pool, so this field also addresses
-	// the namespaced objects a demo waits on, such as pool Deployments.
-	Atespace string
-	Name     string
+// DeploymentRef identifies a pool Deployment a demo waits on.
+type DeploymentRef struct {
+	Namespace string
+	Name      string
 }
 
 // listAllActors pages through every actor in every atespace.

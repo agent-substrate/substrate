@@ -30,17 +30,20 @@ import (
 
 // namespace is the pool's k8s namespace; it doubles as the atespace holding
 // the demo's ActorTemplate.
-const namespace = "ate-demo-egress-microvm"
+const (
+	namespace = "ate-demo-egress-microvm"
+	atespace  = "ate-demo-egress-microvm-7mz3rgntgxuitty3bpdjo7fns4"
+)
 
 func init() {
 	demos.Register(&demos.Substrate{
 		DemoName:           "demo-egress-microvm",
 		Short:              "Egress policy enforcement on micro-VM workers (needs hack/install-microvm-deps.sh --install)",
 		WorkerPoolManifest: "demos/egress/egress-microvm.yaml.tmpl",
-		Deployments:        []steps.TemplateRef{{Atespace: namespace, Name: "egress-microvm"}},
+		Deployments:        []steps.DeploymentRef{{Namespace: namespace, Name: "egress-microvm"}},
 		Templates: []demos.SubstrateTemplate{{
 			Manifest: "demos/egress/egress-microvm-template.yaml.tmpl",
-			Ref:      resources.ActorTemplateRef{Atespace: namespace, Name: "egress-microvm"},
+			Ref:      resources.ActorTemplateRef{Atespace: atespace, Name: "egress-microvm"},
 		}},
 		GoldenTimeout: demos.MicroVMGoldenTimeout,
 	})
