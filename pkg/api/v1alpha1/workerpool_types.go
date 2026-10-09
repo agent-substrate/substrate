@@ -101,7 +101,7 @@ type WorkerPoolSpec struct {
 	// +optional
 	Template *WorkerPoolPodTemplate `json:"template,omitempty"`
 
-	// SandboxClasses lists the sandbox runtime families this pool runs. Exactly
+	// sandboxClasses lists the sandbox runtime families this pool runs. Exactly
 	// one entry is allowed today.
 	//
 	// +required
@@ -114,7 +114,7 @@ type WorkerPoolSpec struct {
 
 // WorkerPoolSandboxClass is one sandbox runtime family a WorkerPool runs.
 type WorkerPoolSandboxClass struct {
-	// Name selects the sandbox runtime family, which drives the worker pod
+	// name selects the sandbox runtime family, which drives the worker pod
 	// shape (KVM/vhost device mounts and node placement). The concrete binary
 	// is still selected by WorkerImage. The sandbox binaries themselves come
 	// from the SandboxConfig each ActorTemplate names (required).
@@ -125,8 +125,11 @@ type WorkerPoolSandboxClass struct {
 	// +kubebuilder:validation:Enum=gvisor;microvm
 	Name SandboxClass `json:"name,omitempty"`
 
-	// ConfigRef names a cluster-scoped SandboxConfig for this sandbox class.
-	// The referenced config's SandboxClass must match Name. Not consumed yet.
+	// configRef names a cluster-scoped SandboxConfig for this sandbox class.
+	// The referenced config's sandboxClass must match name. When omitted, the
+	// pool uses the newest SandboxConfig of this class annotated
+	// sandboxconfig.ate.dev/is-class-default: "true". The controller reports
+	// the resolved config in status.sandboxClasses.
 	//
 	// +optional
 	ConfigRef *SandboxConfigReference `json:"configRef,omitempty"`
@@ -134,10 +137,11 @@ type WorkerPoolSandboxClass struct {
 
 // SandboxConfigReference names a cluster-scoped SandboxConfig.
 type SandboxConfigReference struct {
-	// Name is the SandboxConfig's metadata.name.
+	// name is the SandboxConfig's metadata.name.
 	//
 	// +required
 	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
 	Name string `json:"name,omitempty"`
 }
 
@@ -165,7 +169,63 @@ type WorkerPoolStatus struct {
 	// Selector is the label selector for the worker pods.
 	// +optional
 	Selector string `json:"selector,omitempty"`
+
+	// sandboxClasses reports the SandboxConfig each sandbox class of the pool
+	// uses. An entry keeps its last resolved config while spec.sandboxClasses
+	// cannot be resolved; see the SandboxConfigResolved condition.
+	//
+	// +optional
+	// +kubebuilder:validation:MaxItems=1
+	// +listType=map
+	// +listMapKey=name
+	SandboxClasses []WorkerPoolSandboxClassStatus `json:"sandboxClasses,omitempty"`
+
+	// conditions describe the current state of the WorkerPool.
+	//
+	// +optional
+	// +listType=map
+	// +listMapKey=type
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
+
+// WorkerPoolSandboxClassStatus is the SandboxConfig one sandbox class of a
+// WorkerPool uses.
+type WorkerPoolSandboxClassStatus struct {
+	// name is the sandbox runtime family.
+	//
+	// +required
+	// +kubebuilder:validation:Enum=gvisor;microvm
+	Name SandboxClass `json:"name,omitempty"`
+
+	// configRef names the cluster-scoped SandboxConfig in use: either
+	// spec.sandboxClasses[].configRef or the class default.
+	//
+	// +required
+	ConfigRef SandboxConfigReference `json:"configRef,omitzero"`
+}
+
+const (
+	// WorkerPoolConditionSandboxConfigResolved is True when every entry of
+	// spec.sandboxClasses resolves to a usable SandboxConfig. While it is
+	// False, the controller does not create or update the worker Deployment.
+	WorkerPoolConditionSandboxConfigResolved = "SandboxConfigResolved"
+
+	// WorkerPoolReasonResolved: every sandbox class resolved.
+	WorkerPoolReasonResolved = "Resolved"
+	// WorkerPoolReasonSandboxConfigNotFound: configRef names a SandboxConfig
+	// that does not exist.
+	WorkerPoolReasonSandboxConfigNotFound = "SandboxConfigNotFound"
+	// WorkerPoolReasonSandboxConfigDeleting: configRef names a SandboxConfig
+	// that is being deleted and that the pool does not already use.
+	WorkerPoolReasonSandboxConfigDeleting = "SandboxConfigDeleting"
+	// WorkerPoolReasonSandboxClassMismatch: configRef names a SandboxConfig
+	// of another sandbox class.
+	WorkerPoolReasonSandboxClassMismatch = "SandboxClassMismatch"
+	// WorkerPoolReasonDefaultConfigNotFound: configRef is omitted, no
+	// SandboxConfig of the class is annotated as the class default, and the
+	// pool is not already using one that still exists.
+	WorkerPoolReasonDefaultConfigNotFound = "DefaultConfigNotFound"
+)
 
 // WorkerPool is the Schema for the workerpools API
 // +genclient
@@ -177,6 +237,8 @@ type WorkerPoolStatus struct {
 // +kubebuilder:printcolumn:name="Desired",type=integer,JSONPath=`.spec.replicas`
 // +kubebuilder:printcolumn:name="Replicas",type=integer,JSONPath=`.status.replicas`
 // +kubebuilder:printcolumn:name="Ready",type=integer,JSONPath=`.status.readyReplicas`
+// +kubebuilder:printcolumn:name="SandboxConfig",type=string,JSONPath=`.status.sandboxClasses[*].configRef.name`
+// +kubebuilder:printcolumn:name="Resolved",type=string,JSONPath=`.status.conditions[?(@.type=="SandboxConfigResolved")].status`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 type WorkerPool struct {
 	metav1.TypeMeta `json:",inline"`

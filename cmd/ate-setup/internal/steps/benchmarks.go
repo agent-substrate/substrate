@@ -110,8 +110,10 @@ func (e *Env) DeleteBenchmarks(ctx context.Context, opts BenchmarkOptions) error
 	if err := e.runScript(ctx, deployLocustScript, "--delete"); err != nil {
 		return err
 	}
-	// Only tear down the microvm SandboxConfig if the caller opted into
-	// microvm: it is cluster-wide and may be in use by something else.
+	// The microvm SandboxConfig is cluster-wide, so it is only torn down when
+	// the caller opted into microvm, and only after the benchmark pool is
+	// gone. The script leaves it in place if another pool still uses it;
+	// `delete all` tries again once every demo is gone.
 	if opts.SandboxClass == config.SandboxClassMicrovm {
 		return e.runScript(ctx, installMicrovmDepScript, "--delete")
 	}

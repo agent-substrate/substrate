@@ -31,9 +31,13 @@
 # sandboxConfig.configName: microvm. This avoids a dirty teardown silently
 # binding new templates to a stale config.
 #
-# On --delete: removes the SandboxConfig from the cluster. Bucket contents
-# are left alone (they're inert until a SandboxConfig points at them, and
-# re-staging is cheap on next install).
+# On --delete: removes the SandboxConfig from the cluster. A SandboxConfig a
+# WorkerPool uses carries a protection finalizer that atecontroller releases
+# only once no pool's status names it, so the delete is best effort: it
+# leaves the config in place if any WorkerPool still uses it, and otherwise
+# waits a bounded time for the finalizer to go. Bucket contents are left
+# alone (they're inert until a SandboxConfig points at them, and re-staging
+# is cheap on next install).
 #
 # Like the other hack scripts, this sources .ate-dev-env.sh for the cluster /
 # registry / bucket settings unless NO_DEV_ENV is set.
@@ -117,10 +121,34 @@ run_kubectl() {
 MANIFEST_TEMPLATE="manifests/microvm/sandboxconfig-microvm.yaml.tmpl"
 
 if [[ "${action}" == "delete" ]]; then
+  # A WorkerPool that uses the config holds it: the delete would only mark
+  # the config Terminating and `kubectl delete` would wait for it without
+  # end. Leave it in place and name the pools instead; a Terminating config
+  # cannot be recreated under its name, so no delete is issued at all. A
+  # cluster without the WorkerPool CRD has no users.
+  users="$(run_kubectl get workerpools --all-namespaces \
+    -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name} {.status.sandboxClasses[*].configRef.name}{"\n"}{end}' 2>/dev/null \
+    | awk '{ for (i = 2; i <= NF; i++) if ($i == "microvm") { print $1; break } }' || true)"
+  if [[ -n "${users}" ]]; then
+    echo "Warning: the microvm SandboxConfig is left in place; these WorkerPools" >&2
+    echo "         still use it:" >&2
+    while IFS= read -r pool; do echo "           ${pool}" >&2; done <<<"${users}"
+    echo "         Delete them, or point their spec.sandboxClasses[].configRef at" >&2
+    echo "         another microvm SandboxConfig, and run this again." >&2
+    exit 0
+  fi
   log "Deleting microvm SandboxConfig..."
   # Delete by name rather than by manifest so a missing/edited template file
-  # doesn't block cleanup on an older cluster.
-  run_kubectl delete --ignore-not-found sandboxconfig microvm
+  # doesn't block cleanup on an older cluster. atecontroller releases the
+  # protection finalizer within a reconcile; the timeout turns a missing
+  # atecontroller into an error instead of a hang.
+  if ! run_kubectl delete --ignore-not-found --timeout=60s sandboxconfig microvm; then
+    echo "Error: the microvm SandboxConfig did not finish deleting. It stays" >&2
+    echo "       Terminating until atecontroller releases its protection" >&2
+    echo "       finalizer; check that atecontroller is running, then run this" >&2
+    echo "       again." >&2
+    exit 1
+  fi
   log "Done. (Bucket assets at gs://${BUCKET_NAME}/kata-assets/ left in place.)"
   exit 0
 fi
