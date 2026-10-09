@@ -74,7 +74,7 @@ func init() {
 				if err := e.EnsureEnvVarsSafeStandalone(ctx); err != nil {
 					return err
 				}
-				return e.CreateAPIServerEnvVars(ctx)
+				return e.UpdateAPIServerEnvVars(ctx)
 			},
 		},
 		{

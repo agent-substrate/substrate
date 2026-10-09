@@ -145,7 +145,7 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 	if err != nil {
 		return err
 	}
-	if err := e.Kube.ApplyBytes(ctx, manifests); err != nil {
+	if err := e.applyWithAPIServerEnvHash(ctx, manifests); err != nil {
 		return err
 	}
 
@@ -311,7 +311,11 @@ func (e *Env) DeployAteAPIServer(ctx context.Context) error {
 			return err
 		}
 	}
-	if err := e.renderResolveApply(ctx, e.Cfg.Manifest("ate-api-server.yaml")); err != nil {
+	manifest, err := e.renderResolve(ctx, e.Cfg.Manifest("ate-api-server.yaml"))
+	if err != nil {
+		return err
+	}
+	if err := e.applyWithAPIServerEnvHash(ctx, manifest); err != nil {
 		return err
 	}
 	// After the manifest, which resets the pod template to the sidecar-free base.

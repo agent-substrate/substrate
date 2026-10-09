@@ -23,6 +23,9 @@ import (
 	"os"
 	"slices"
 
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kube"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
 )
 
@@ -40,6 +43,10 @@ const envHashAnnotation = "ate.dev/env-hash"
 // resolves the PostgreSQL connection, role, and schema flags from
 // the result. It lists the secretRef last, so the Secret wins over a DSN a
 // previous installer left in the ConfigMap.
+//
+// It does not restart ate-api-server. A deploy stamps the new digest into the
+// Deployment it applies; UpdateAPIServerEnvVars patches it for a run that
+// applies no Deployment.
 func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 	log.Step("create_api_server_env_vars")
 	if err := e.Kube.EnsureNamespace(ctx, e.Namespace()); err != nil {
@@ -119,7 +126,14 @@ func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 		buildAPIServerEnvVars(readWriteDSN, ownerDSN, schema)); err != nil {
 		return err
 	}
-	if err := e.applyPostgresServerCA(ctx); err != nil {
+	return e.applyPostgresServerCA(ctx)
+}
+
+// UpdateAPIServerEnvVars is CreateAPIServerEnvVars for an install that is not
+// being redeployed: it also stamps the new digest on the running Deployment,
+// which rolls ate-api-server onto the new values.
+func (e *Env) UpdateAPIServerEnvVars(ctx context.Context) error {
+	if err := e.CreateAPIServerEnvVars(ctx); err != nil {
 		return err
 	}
 	return e.annotateAPIServerEnvHash(ctx)
@@ -201,26 +215,70 @@ func (e *Env) EnsureEnvVarsSafeStandalone(ctx context.Context) error {
 		"Run `ate-setup deploy ate-apiserver` instead, which also updates the Deployment", SecretAPIEnvVars)
 }
 
-// annotateAPIServerEnvHash stamps the pod template with a digest of the
-// apiserver's environment, so that a changed DSN starts a rollout. Kubernetes
-// does not restart pods when an envFrom ConfigMap or Secret changes.
+// annotateAPIServerEnvHash stamps the running Deployment's pod template with
+// the digest, so that a changed DSN starts a rollout. Kubernetes does not
+// restart pods when an envFrom ConfigMap or Secret changes.
 func (e *Env) annotateAPIServerEnvHash(ctx context.Context) error {
 	dep, err := e.Kube.GetDeployment(ctx, e.Namespace(), "ate-api-server")
 	if err != nil {
 		return err
 	}
 	if dep == nil {
-		// Fresh install: the first rollout starts with the new values.
+		// Nothing runs yet; the deploy that creates it stamps the digest.
 		return nil
 	}
-
-	cm, err := e.Kube.GetConfigMap(ctx, e.Namespace(), ConfigMapAPIEnvVars)
+	hash, err := e.apiServerEnvHash(ctx)
 	if err != nil {
 		return err
+	}
+	patch := fmt.Sprintf(`{"spec":{"template":{"metadata":{"annotations":{%q:%q}}}}}`,
+		envHashAnnotation, hash)
+	return e.Kube.PatchDeployment(ctx, e.Namespace(), "ate-api-server", []byte(patch))
+}
+
+// applyWithAPIServerEnvHash applies a manifest that carries the ate-api-server
+// Deployment, with the digest of its current environment on the pod template.
+// A new image and a new environment are then one rollout, and a fresh install
+// starts out stamped.
+func (e *Env) applyWithAPIServerEnvHash(ctx context.Context, manifest []byte) error {
+	objs, err := kube.DecodeManifestBytes(manifest)
+	if err != nil {
+		return err
+	}
+	hash, err := e.apiServerEnvHash(ctx)
+	if err != nil {
+		return err
+	}
+	if err := stampAPIServerEnvHash(objs, hash); err != nil {
+		return err
+	}
+	return e.Kube.Apply(ctx, objs)
+}
+
+// stampAPIServerEnvHash sets the digest on the ate-api-server Deployment's pod
+// template and leaves every other object alone. A manifest without that
+// Deployment is an error: applying it unstamped would stop a changed
+// environment from rolling.
+func stampAPIServerEnvHash(objs []*unstructured.Unstructured, hash string) error {
+	for _, obj := range objs {
+		if obj.GetKind() != "Deployment" || obj.GetName() != "ate-api-server" {
+			continue
+		}
+		return unstructured.SetNestedField(obj.Object, hash,
+			"spec", "template", "metadata", "annotations", envHashAnnotation)
+	}
+	return fmt.Errorf("the manifest has no deployment/ate-api-server to stamp with %s", envHashAnnotation)
+}
+
+// apiServerEnvHash digests the apiserver's environment as it is in the cluster.
+func (e *Env) apiServerEnvHash(ctx context.Context) (string, error) {
+	cm, err := e.Kube.GetConfigMap(ctx, e.Namespace(), ConfigMapAPIEnvVars)
+	if err != nil {
+		return "", err
 	}
 	secret, err := e.Kube.GetSecret(ctx, e.Namespace(), SecretAPIEnvVars)
 	if err != nil {
-		return err
+		return "", err
 	}
 	var cmData map[string]string
 	if cm != nil {
@@ -230,10 +288,7 @@ func (e *Env) annotateAPIServerEnvHash(ctx context.Context) error {
 	if secret != nil {
 		secretData = secret.Data
 	}
-
-	patch := fmt.Sprintf(`{"spec":{"template":{"metadata":{"annotations":{%q:%q}}}}}`,
-		envHashAnnotation, envHash(cmData, secretData))
-	return e.Kube.PatchDeployment(ctx, e.Namespace(), "ate-api-server", []byte(patch))
+	return envHash(cmData, secretData), nil
 }
 
 // envHash digests the apiserver's environment sources. Only changes matter, so
