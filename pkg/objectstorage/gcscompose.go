@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"sync"
 	"time"
 
 	"cloud.google.com/go/storage"
@@ -74,7 +75,7 @@ const (
 
 // putComposite uploads head followed by rest as concurrent parts, then composes them
 // into object. Only for objects past uploadCompositeMin; putSingle handles the rest.
-func (g *gcsClient) putComposite(ctx context.Context, bucket, object string, head io.Reader, rest io.Reader) (err error) {
+func (g *gcsClient) putComposite(ctx context.Context, bucket, object string, head io.Reader, rest io.Reader) error {
 	bkt := g.client.Bucket(bucket)
 	// A run id keeps concurrent or retried uploads of the same object from colliding on
 	// part names, and makes leftovers from a crash identifiable.
@@ -85,12 +86,8 @@ func (g *gcsClient) putComposite(ctx context.Context, bucket, object string, hea
 	runID := hex.EncodeToString(idBytes[:])
 
 	var parts []*storage.ObjectHandle
-	defer func() {
-		// Parts are scratch either way, and deleting them must not mask the real error.
-		if delErr := deleteParts(ctx, parts); delErr != nil && err == nil {
-			err = delErr
-		}
-	}()
+	// Parts are scratch either way. A closure, because parts grows below.
+	defer func() { deleteParts(ctx, parts) }()
 
 	// The stream is read in order here and whole parts handed to the uploaders; buffers
 	// cycle through free so the peak stays at uploadConcurrency of them.
@@ -169,7 +166,7 @@ func composeAll(ctx context.Context, bkt *storage.BucketHandle, object string, p
 			}
 			// The sources are dead once folded; the caller's deferred cleanup only
 			// knows about the leaf parts.
-			_ = deleteParts(ctx, group)
+			deleteParts(ctx, group)
 			next = append(next, mid)
 		}
 		parts = next
@@ -193,16 +190,41 @@ func composeAll(ctx context.Context, bkt *storage.BucketHandle, object string, p
 // until the context ends.
 var cleanupTimeout = 30 * time.Second
 
-// deleteParts deletes parts, all within one cleanupTimeout, and returns the
-// first error other than a part being already gone.
-func deleteParts(ctx context.Context, parts []*storage.ObjectHandle) error {
+// cleanupConcurrency is how many parts deleteParts deletes at once, as
+// internal/objectstore's DeletePrefix does. Deleting a large upload's parts one
+// at a time would leave little of cleanupTimeout for retries.
+const cleanupConcurrency = 8
+
+// deleteParts deletes parts, cleanupConcurrency at a time and all within one
+// cleanupTimeout. It is best-effort and never fails the upload: parts it cannot
+// delete are left behind, and how many, with the first error, is logged.
+func deleteParts(ctx context.Context, parts []*storage.ObjectHandle) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
 	defer cancel()
-	var first error
+	var (
+		mu    sync.Mutex
+		left  int
+		first error
+		g     errgroup.Group
+	)
+	g.SetLimit(cleanupConcurrency)
 	for _, p := range parts {
-		if err := p.Delete(ctx); err != nil && !errors.Is(err, storage.ErrObjectNotExist) && first == nil {
-			first = fmt.Errorf("while removing upload part %q: %w", p.ObjectName(), err)
-		}
+		g.Go(func() error {
+			err := p.Delete(ctx)
+			if err == nil || errors.Is(err, storage.ErrObjectNotExist) {
+				return nil
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			left++
+			if first == nil {
+				first = fmt.Errorf("while removing upload part %q: %w", p.ObjectName(), err)
+			}
+			return nil
+		})
 	}
-	return first
+	_ = g.Wait()
+	if left > 0 {
+		slog.WarnContext(ctx, "Leaving upload parts behind", slog.Int("count", left), slog.Any("err", first))
+	}
 }

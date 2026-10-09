@@ -72,11 +72,7 @@ func (g *gcsClient) PutSparseFile(ctx context.Context, bucket, object string, f 
 	for i := range groups {
 		parts[i] = bkt.Object(fmt.Sprintf("%s.part-%s-%04d", object, runID, i))
 	}
-	defer func() {
-		if delErr := deleteParts(ctx, parts); delErr != nil && err == nil {
-			err = delErr
-		}
-	}()
+	defer deleteParts(ctx, parts)
 
 	grp, gctx := errgroup.WithContext(ctx)
 	for i, ranges := range groups {

@@ -16,7 +16,6 @@ package objectstorage
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -32,9 +31,9 @@ import (
 )
 
 // serveGCS points the storage client at a fake GCS that serves uploads,
-// composes and deletes. It answers the first fail[kind] requests of each kind
-// ("upload", "compose" or "delete") with 429 and serves the rest. It returns a
-// func that reports how many requests of a kind the fake has seen.
+// composes, copies and deletes. It answers the first fail[kind] requests of
+// each kind ("upload", "compose", "copy" or "delete") with 429 and serves the
+// rest. It returns a func that reports how many requests of a kind it has seen.
 func serveGCS(t *testing.T, fail map[string]int) (attempts func(kind string) int) {
 	t.Helper()
 	var (
@@ -49,6 +48,8 @@ func serveGCS(t *testing.T, fail map[string]int) (attempts func(kind string) int
 			kind = "upload"
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/compose"):
 			kind = "compose"
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/rewriteTo/"):
+			kind = "copy"
 		case r.Method == http.MethodDelete:
 			kind = "delete"
 		}
@@ -68,6 +69,10 @@ func serveGCS(t *testing.T, fail map[string]int) (attempts func(kind string) int
 		switch {
 		case kind == "delete":
 			w.WriteHeader(http.StatusNoContent)
+		case kind == "copy":
+			// The whole copy in one rewrite call.
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"done":true,"resource":{"name":"snap/pages.img.zstd","bucket":"snapshots"}}`)
 		case kind == "upload" && r.URL.Query().Get("uploadType") == "resumable":
 			// Resumable initiation: hand back a session for the chunk PUTs.
 			w.Header().Set("Location", srvURL+"/upload-session")
@@ -144,7 +149,7 @@ func TestPutObjectRetriesTransient429(t *testing.T) {
 }
 
 // An upload that only ever gets 429s keeps retrying until its context ends,
-// as setRetry's comment says, and then fails with the context's error.
+// as setRetry's comment says, and then fails.
 func TestPutObjectRetriesUntilDeadline(t *testing.T) {
 	serveGCS(t, map[string]int{"upload": math.MaxInt})
 	store := newTestGCSClient(t)
@@ -152,8 +157,8 @@ func TestPutObjectRetriesUntilDeadline(t *testing.T) {
 	defer cancel()
 
 	err := store.PutObject(ctx, "snapshots", "snap/pages.img.zstd", strings.NewReader("payload"))
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("PutObject() = %v, want context.DeadlineExceeded", err)
+	if err == nil || ctx.Err() == nil {
+		t.Fatalf("PutObject() = %v before its context ended, want it to retry until then", err)
 	}
 }
 
@@ -187,15 +192,91 @@ func TestDeletePartsStopsAtCleanupTimeout(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	done := make(chan error, 1)
-	go func() { done <- deleteParts(ctx, parts) }()
+	start := time.Now()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		deleteParts(ctx, parts)
+	}()
 	select {
-	case err := <-done:
-		// Canceled would mean the deletes ran on the upload's context.
-		if !errors.Is(err, context.DeadlineExceeded) {
-			t.Fatalf("deleteParts() = %v, want context.DeadlineExceeded", err)
+	case <-done:
+		// Returning sooner would mean the deletes ran on the upload's context.
+		if elapsed := time.Since(start); elapsed < 200*time.Millisecond {
+			t.Fatalf("deleteParts() returned after %v, want it to retry for cleanupTimeout", elapsed)
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("deleteParts() still running after 10s, want it to stop at cleanupTimeout")
+	}
+}
+
+// A part cleanup that fails does not fail an upload whose object is already
+// in place.
+func TestPutCompositeSucceedsWhenCleanupFails(t *testing.T) {
+	fastRetries(t)
+	old := cleanupTimeout
+	cleanupTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { cleanupTimeout = old })
+	attempts := serveGCS(t, map[string]int{"delete": math.MaxInt})
+	g := newTestGCSClient(t).(*gcsClient)
+	t.Cleanup(func() {
+		for _, c := range g.pool {
+			c.Close()
+		}
+	})
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+
+	// One small part: composeAll copies it into place, then every delete of
+	// it fails.
+	if err := g.putComposite(ctx, "snapshots", "snap/pages.img.zstd", strings.NewReader("payload"), strings.NewReader("")); err != nil {
+		t.Fatalf("putComposite() = %v, want nil although its part cleanup failed", err)
+	}
+	if attempts("copy") == 0 || attempts("delete") == 0 {
+		t.Fatalf("copies = %d, deletes = %d, want both to have run", attempts("copy"), attempts("delete"))
+	}
+}
+
+// deleteParts deletes parts in parallel, at most cleanupConcurrency at once.
+// One at a time, a large upload's parts would leave little of cleanupTimeout
+// for retries.
+func TestDeletePartsRunsInParallel(t *testing.T) {
+	var (
+		mu                        sync.Mutex
+		inFlight, peak, deletions int
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			http.NotFound(w, r)
+			return
+		}
+		mu.Lock()
+		inFlight++
+		peak = max(peak, inFlight)
+		mu.Unlock()
+		// Long enough for parallel deletes to overlap.
+		time.Sleep(20 * time.Millisecond)
+		mu.Lock()
+		inFlight--
+		deletions++
+		mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("STORAGE_EMULATOR_HOST", srv.URL)
+	bkt := newTestGCSClient(t).(*gcsClient).client.Bucket("snapshots")
+	var parts []*storage.ObjectHandle
+	for i := range 4 * cleanupConcurrency {
+		parts = append(parts, bkt.Object(fmt.Sprintf("snap/part-%02d", i)))
+	}
+
+	deleteParts(t.Context(), parts)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if deletions != len(parts) {
+		t.Errorf("deleteParts() made %d deletes, want %d", deletions, len(parts))
+	}
+	if peak < 2 || peak > cleanupConcurrency {
+		t.Errorf("deleteParts() ran %d deletes at once, want 2 to %d", peak, cleanupConcurrency)
 	}
 }

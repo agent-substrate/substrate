@@ -63,7 +63,10 @@ func NewGCSClient(ctx context.Context, opts ...option.ClientOption) (ObjectStora
 // idempotent (compose and copy from fixed sources, delete).
 //
 // Nothing caps the attempts: an operation retries until its context ends, so
-// every caller must bound its context. Part cleanup uses cleanupTimeout.
+// every caller must bound its context. Part cleanup uses cleanupTimeout. One
+// exception: an upload the SDK sends as resumable (one at least as large as its
+// Writer's ChunkSize, rounded up to 256 KiB) also gives up once a chunk has
+// been retrying for the Writer's ChunkRetryDeadline, 32s by default.
 func setRetry(c *storage.Client) {
 	c.SetRetry(
 		storage.WithPolicy(storage.RetryAlways),
