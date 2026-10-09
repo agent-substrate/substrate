@@ -69,9 +69,16 @@ func (f *fakeControl) MintActorJWT(ctx context.Context, req *ateapipb.MintActorJ
 	}, nil
 }
 
-// newMinter returns a Minter whose client reaches ctl over an in-memory gRPC
-// connection.
+// newMinter returns a Minter, without metrics, whose client reaches ctl over an
+// in-memory gRPC connection.
 func newMinter(t *testing.T, ctl *fakeControl) *Minter {
+	t.Helper()
+	return New(newClient(t, ctl), nil)
+}
+
+// newClient returns a client that reaches ctl over an in-memory gRPC
+// connection.
+func newClient(t *testing.T, ctl *fakeControl) ateapipb.ControlClient {
 	t.Helper()
 	lis := bufconn.Listen(1 << 20)
 	srv := grpc.NewServer()
@@ -86,7 +93,7 @@ func newMinter(t *testing.T, ctl *fakeControl) *Minter {
 		t.Fatalf("grpc.NewClient: %v", err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
-	return New(ateapipb.NewControlClient(conn))
+	return ateapipb.NewControlClient(conn)
 }
 
 func jwtSource(lifetime int64, audiences ...string) *ateapipb.ActorJWTSource {

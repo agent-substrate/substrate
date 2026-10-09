@@ -30,6 +30,7 @@ import (
 	"github.com/spf13/cobra"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	"k8s.io/client-go/kubernetes"
@@ -37,6 +38,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/egress"
+	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/egress/actorjwt"
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/ingress"
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
@@ -246,7 +248,11 @@ func (s *RouterServer) Run(ctx context.Context) error {
 				slog.String("provider_name", s.cfg.CredentialProvider.Name))
 		}
 
-		egressHandler := egress.New(s.apiClient, actorIdentityRoots, s.cfg.EgressPolicyCacheTTL, provider, providerName)
+		actorJWTMetrics, err := actorjwt.NewInstruments(otel.Meter(extproc.ServiceName))
+		if err != nil {
+			return fmt.Errorf("failed to create actor JWT metrics: %w", err)
+		}
+		egressHandler := egress.New(s.apiClient, actorIdentityRoots, s.cfg.EgressPolicyCacheTTL, provider, providerName, actorJWTMetrics)
 		handlers[egressHandler.Direction()] = egressHandler
 	}
 
