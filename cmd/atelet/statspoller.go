@@ -51,6 +51,8 @@ const workerPoolLabel = "ate.dev/worker-pool"
 // minActorStatsPollInterval is the floor a configured poll interval is clamped
 // to. The ateoms serve GetActiveWorkloadStats from their own sampling timer, so
 // a poll faster than their sample interval only reads the same sample again.
+// The floor also bounds the worker pod list each sweep sends the apiserver
+// (resolveWorkerPools), so do not lower it to cut lag.
 const minActorStatsPollInterval = 50 * time.Second
 
 // statsRPCTimeout bounds one ateom's GetActiveWorkloadStats call. The ateom
@@ -342,7 +344,8 @@ func (p *statsPoller) collect(ctx context.Context) map[templateKey]*templateAggr
 				// activation with no baseline that began after this atelet
 				// started was never charged, so its value counts in full. One
 				// that began earlier may have been charged by the atelet before
-				// this one, so it only sets the baseline.
+				// this one, so it only sets the baseline. Both times come from
+				// this node's clock: atelet reads only the ateoms on its node.
 				cpu := sample.GetCpuUsageUsec()
 				seenCPU[cpuAt] = cpuBaseline{usec: cpu, podUID: podUID}
 				if last, ok := p.lastCPU[cpuAt]; ok {
