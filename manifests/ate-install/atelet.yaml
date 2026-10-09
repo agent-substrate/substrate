@@ -171,8 +171,8 @@ spec:
             - --socket=/run/snapshot-plugin/node.sock
           periodSeconds: 2
           failureThreshold: 30
-        # Reads and writes snapshot files under the /var/lib/ate hostPath as
-        # root, like atelet; needs no capabilities.
+        # Reads and writes snapshot and asset files under the /var/lib/ate
+        # hostPath as root, like atelet; needs no capabilities.
         securityContext:
           runAsUser: 0
           runAsGroup: 0
@@ -186,10 +186,11 @@ spec:
             cpu: 50m
             memory: 128Mi
         env:
-        # Object storage settings for snapshot transfers. Unset or "gcs"
-        # selects GCS with ambient credentials; "s3" with the AWS_* variables
-        # selects S3 (see the kind overlay). atelet keeps its own copy below
-        # for sandbox asset downloads, which do not go through the plugin.
+        # Object storage settings for snapshot transfers and sandbox assets.
+        # Unset or "gcs" selects GCS with ambient credentials; "s3" with the
+        # AWS_* variables selects S3 (see the kind overlay). atelet has no
+        # storage settings of its own and exits if ATE_STORAGE_BACKEND is set
+        # on it.
         - name: ATE_STORAGE_BACKEND
           value: "gcs"
         envFrom:
@@ -264,8 +265,6 @@ spec:
               fieldPath: metadata.uid
         - name: OTEL_RESOURCE_ATTRIBUTES
           value: k8s.namespace.name=$(POD_NAMESPACE),k8s.pod.name=$(POD_NAME),k8s.pod.uid=$(POD_UID),k8s.node.name=$(NODE_NAME),service.instance.id=$(POD_UID)
-        - name: ATE_STORAGE_BACKEND
-          value: "gcs"
         # OTLP exporter settings are shared by every control plane component;
         # see manifests/ate-install/ate-otel-config.yaml.
         envFrom:

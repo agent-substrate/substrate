@@ -30,6 +30,7 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -39,11 +40,15 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/objectstorage"
+	objectstorev1 "github.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // sandboxManifestName is the object/file name of the per-snapshot manifest that
@@ -70,6 +75,12 @@ const (
 type assetEntry struct {
 	URL    string `json:"url"`
 	SHA256 string `json:"sha256"`
+}
+
+// displayURL returns the asset URL as scheme://host/path, for logs and
+// errors.
+func (e assetEntry) displayURL() string {
+	return redactURLString(e.URL)
 }
 
 // sandboxAssetsRecord is the sandbox runtime an actor is running, projected onto
@@ -198,7 +209,7 @@ func (s *AteomHerder) fetchAsset(ctx context.Context, entry assetEntry) (string,
 		return "", wrapFileSystemErr("while stat-ing local file", err)
 	}
 
-	slog.InfoContext(ctx, "Sandbox asset cache miss; downloading", slog.String("url", entry.URL), slog.String("sha256", entry.SHA256))
+	slog.InfoContext(ctx, "Sandbox asset cache miss; downloading", slog.String("url", entry.displayURL()), slog.String("sha256", entry.SHA256))
 	t := time.Now()
 	tmpName, err := s.downloadVerified(ctx, entry, filepath.Base(localPath)+"-download-")
 	if err != nil {
@@ -236,14 +247,14 @@ func (s *AteomHerder) fetchGVisorRelease(ctx context.Context, entry assetEntry) 
 		return "", wrapFileSystemErr("while stat-ing extracted release dir", err)
 	}
 
-	slog.InfoContext(ctx, "gVisor release cache miss; downloading", slog.String("url", entry.URL), slog.String("sha256", entry.SHA256))
+	slog.InfoContext(ctx, "gVisor release cache miss; downloading", slog.String("url", entry.displayURL()), slog.String("sha256", entry.SHA256))
 	tDownload := time.Now()
 	tarball, err := s.downloadVerified(ctx, entry, filepath.Base(releaseDir)+"-download-")
 	if err != nil {
 		return "", err
 	}
 	defer os.Remove(tarball)
-	slog.InfoContext(ctx, "gVisor release download complete", slog.String("url", entry.URL), slog.Duration("duration", time.Since(tDownload)))
+	slog.InfoContext(ctx, "gVisor release download complete", slog.String("url", entry.displayURL()), slog.Duration("duration", time.Since(tDownload)))
 
 	tmpDir, err := os.MkdirTemp(nodepath.StaticFilesDir, filepath.Base(releaseDir)+"-extract-")
 	if err != nil {
@@ -251,14 +262,16 @@ func (s *AteomHerder) fetchGVisorRelease(ctx context.Context, entry assetEntry) 
 	}
 	defer func() { _ = os.RemoveAll(tmpDir) }() // no-op after rename
 
-	slog.InfoContext(ctx, "Extracting gVisor archive", slog.String("path", tarball), slog.String("url", entry.URL))
+	slog.InfoContext(ctx, "Extracting gVisor archive", slog.String("path", tarball), slog.String("url", entry.displayURL()))
 	tExtract := time.Now()
-	if err := extractTarArchive(ctx, tarball, entry.URL, tmpDir); err != nil {
+	// The redacted form ends in the URL path, so a query does not hide the
+	// archive suffix.
+	if err := extractTarArchive(ctx, tarball, entry.displayURL(), tmpDir); err != nil {
 		return "", err
 	}
-	slog.InfoContext(ctx, "gVisor archive extraction complete", slog.String("url", entry.URL), slog.Duration("duration", time.Since(tExtract)))
+	slog.InfoContext(ctx, "gVisor archive extraction complete", slog.String("url", entry.displayURL()), slog.Duration("duration", time.Since(tExtract)))
 	if fi, err := os.Stat(filepath.Join(tmpDir, "runsc")); err != nil || !fi.Mode().IsRegular() {
-		return "", fmt.Errorf("gvisor tarball %v contains no runsc binary (stat: %v)", entry.URL, err)
+		return "", fmt.Errorf("gvisor tarball %v contains no runsc binary (stat: %v)", entry.displayURL(), err)
 	}
 	if err := os.Chmod(tmpDir, 0o755); err != nil { // MkdirTemp created it 0700
 		return "", wrapFileSystemErr("while setting extraction dir mode", err)
@@ -273,29 +286,26 @@ func (s *AteomHerder) fetchGVisorRelease(ctx context.Context, entry assetEntry) 
 	return runscPath, nil
 }
 
-// downloadVerified streams entry.URL into a temp file in the static-files
-// cache, hashing as it goes, and returns the temp path once the size cap and
-// sha256 both check out. On error the temp file is removed; on success the
-// caller owns it (rename it into place or extract from it, then remove it).
+// downloadVerified fetches entry.URL into a temp file in the static-files
+// cache and returns the temp path once the size cap and sha256 both check out.
+// On error the temp file is removed; on success the caller owns it (rename it
+// into place or extract from it, then remove it).
+//
+// A gs:// asset is first read anonymously, which serves public buckets such
+// as gs://gvisor without credentials. Every other asset, and a gs:// asset the
+// anonymous read cannot serve, is fetched through the object-store plugin's
+// AssetProvider. atelet holds no storage credentials of its own, and verifies
+// the bytes it caches whichever path fetched them, since it executes them.
 func (s *AteomHerder) downloadVerified(ctx context.Context, entry assetEntry, tmpPrefix string) (string, error) {
-	// Assets live in one of two places: public buckets (gVisor's releases in
-	// gs://gvisor — read anonymously) or the cluster's own object store (micro-VM
-	// kata/CH assets staged into the snapshot bucket — read with the main client,
-	// which is rustfs/S3 in kind and authenticated GCS on GKE). Auth is an
-	// atelet-level decision, not per-asset: try the anonymous client first so the
-	// common public-gVisor path stays fast, then fall back to the main client. The
-	// asset is streamed (not buffered) to disk below.
-	slog.DebugContext(ctx, "Streaming download from storage", slog.String("url", entry.URL))
-	rc, err := s.openAsset(ctx, entry.URL)
-	if err != nil {
-		return "", fmt.Errorf("while fetching %v: %w", entry.URL, err)
-	}
-	defer rc.Close()
-
 	wantSum, err := hex.DecodeString(entry.SHA256)
 	if err != nil {
 		return "", fmt.Errorf("while parsing sha256 hash: %w", err)
 	}
+	u, err := url.Parse(entry.URL)
+	if err != nil {
+		return "", apierror.InvalidArgument("sandbox asset URL is not a valid URL: %v", urlErrorCause(err))
+	}
+	shown := redactURL(u)
 
 	tmpFile, err := os.CreateTemp(nodepath.StaticFilesDir, tmpPrefix)
 	if err != nil {
@@ -310,26 +320,158 @@ func (s *AteomHerder) downloadVerified(ctx context.Context, entry assetEntry, tm
 		}
 	}()
 
-	// Stream to disk, hashing as we go; +1 lets an over-cap asset trip n > cap.
-	// Verify-after-copy keeps a bad download at the temp path, never the cache.
-	hasher := sha256.New()
-	n, err := io.Copy(io.MultiWriter(tmpFile, hasher), io.LimitReader(rc, maxAssetBytes+1))
-	if err != nil {
-		return "", wrapFileSystemErr(fmt.Sprintf("while downloading %v", entry.URL), err)
+	var anonErr error
+	if u.Scheme == "gs" {
+		anonErr = s.downloadAnonymous(ctx, entry, shown, tmpFile, wantSum)
+		if anonErr == nil {
+			if err := tmpFile.Close(); err != nil { // flush before the caller reads/renames
+				return "", wrapFileSystemErr("while closing temp file", err)
+			}
+			ok = true
+			return tmpName, nil
+		}
+		if s.assetPlugin == nil {
+			return "", anonErr
+		}
+		slog.InfoContext(ctx, "Anonymous sandbox asset download failed; fetching through the object-store plugin",
+			slog.String("url", shown), slog.Any("err", anonErr))
 	}
-	if n > maxAssetBytes {
-		return "", fmt.Errorf("asset %v exceeds %d-byte cap", entry.URL, maxAssetBytes)
-	}
-	if got := hasher.Sum(nil); !bytes.Equal(got, wantSum) {
-		return "", fmt.Errorf("sha256 mismatch; got=%x want=%s", got, entry.SHA256)
-	}
-
-	if err := tmpFile.Close(); err != nil { // flush before the caller reads/renames
+	if err := tmpFile.Close(); err != nil {
 		return "", wrapFileSystemErr("while closing temp file", err)
 	}
-
+	if err := s.fetchFromPlugin(ctx, entry, shown, tmpName, anonErr); err != nil {
+		return "", err
+	}
+	if err := verifyAssetFile(tmpName, shown, wantSum); err != nil {
+		return "", err
+	}
 	ok = true
 	return tmpName, nil
+}
+
+// downloadAnonymous streams the gs:// asset entry.URL into out with no
+// credentials, hashing as it goes, and checks the size cap and sha256.
+func (s *AteomHerder) downloadAnonymous(ctx context.Context, entry assetEntry, shown string, out io.Writer, wantSum []byte) error {
+	slog.DebugContext(ctx, "Streaming anonymous download from storage", slog.String("url", shown))
+	rc, err := objectstorage.Open(ctx, s.anonGCSClient, entry.URL)
+	if err != nil {
+		return fmt.Errorf("while fetching %v: %w", shown, err)
+	}
+	defer rc.Close()
+	// +1 lets an over-cap asset trip n > cap. Verify-after-copy keeps a bad
+	// download at the temp path, never the cache.
+	hasher := sha256.New()
+	n, err := io.Copy(io.MultiWriter(out, hasher), io.LimitReader(rc, maxAssetBytes+1))
+	if err != nil {
+		return wrapFileSystemErr(fmt.Sprintf("while downloading %v", shown), err)
+	}
+	if n > maxAssetBytes {
+		return fmt.Errorf("asset %v exceeds %d-byte cap", shown, maxAssetBytes)
+	}
+	if got := hasher.Sum(nil); !bytes.Equal(got, wantSum) {
+		return fmt.Errorf("asset %v sha256 mismatch; got=%x want=%x", shown, got, wantSum)
+	}
+	return nil
+}
+
+// fetchFromPlugin asks the object-store plugin to write entry into the
+// existing file at path. anonErr, if set, is why the anonymous read failed;
+// it is atelet's own text and is kept in the returned error.
+//
+// The plugin's status message is neither logged nor returned: atelet's errors
+// become actor crash messages, and a plugin's text may quote a signed URL or
+// other credential in a form no scrubber can recognize. Both the log and the
+// returned error carry the plugin's code and atelet's own description of it.
+func (s *AteomHerder) fetchFromPlugin(ctx context.Context, entry assetEntry, shown, path string, anonErr error) error {
+	if s.assetPlugin == nil {
+		return apierror.FailedPrecondition("sandbox asset %s: no object-store plugin is configured to fetch it", shown)
+	}
+	slog.DebugContext(ctx, "Fetching sandbox asset through the object-store plugin", slog.String("url", shown))
+	_, err := s.assetPlugin.FetchAsset(ctx, &objectstorev1.FetchAssetRequest{
+		AssetUri:  entry.URL,
+		Sha256:    entry.SHA256,
+		WritePath: path,
+		MaxBytes:  maxAssetBytes,
+	})
+	if err == nil {
+		return nil
+	}
+	code := status.Code(err)
+	slog.WarnContext(ctx, "Object-store plugin failed to fetch sandbox asset",
+		slog.String("url", shown), slog.String("code", code.String()))
+
+	prefix := fmt.Sprintf("sandbox asset %s", shown)
+	if anonErr != nil {
+		prefix = fmt.Sprintf("%s (anonymous download failed: %v)", prefix, anonErr)
+	}
+	switch code {
+	case codes.Unimplemented:
+		return apierror.FailedPrecondition("%s: the object-store plugin at %s does not serve %s; private sandbox assets need a plugin that implements it",
+			prefix, s.pluginSocket, objectstorev1.AssetProvider_ServiceDesc.ServiceName)
+	case codes.Unavailable:
+		return apierror.Unavailable("%s: the object-store plugin at %s is unavailable", prefix, s.pluginSocket)
+	case codes.Canceled, codes.DeadlineExceeded:
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return fmt.Errorf("%s: %w", prefix, ctxErr)
+		}
+		return apierror.Unavailable("%s: the object-store plugin returned %s", prefix, code)
+	case codes.PermissionDenied:
+		return apierror.FailedPrecondition("%s: the object-store plugin refused it (%s); assets must not live under a snapshot location", prefix, code)
+	case codes.NotFound:
+		return apierror.FailedPrecondition("%s: the object-store plugin did not find it (%s)", prefix, code)
+	case codes.FailedPrecondition:
+		return apierror.FailedPrecondition("%s: the object-store plugin rejected its content (%s): larger than %d bytes or sha256 is not %s", prefix, code, maxAssetBytes, entry.SHA256)
+	case codes.InvalidArgument:
+		return apierror.FailedPrecondition("%s: the object-store plugin cannot serve this URL (%s)", prefix, code)
+	}
+	return apierror.Internal("%s: the object-store plugin failed (%s)", prefix, code)
+}
+
+// verifyAssetFile checks the size cap and sha256 of the file at path.
+func verifyAssetFile(path, shown string, wantSum []byte) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return wrapFileSystemErr("while opening fetched asset", err)
+	}
+	defer f.Close()
+	hasher := sha256.New()
+	n, err := io.Copy(hasher, io.LimitReader(f, maxAssetBytes+1))
+	if err != nil {
+		return wrapFileSystemErr("while hashing fetched asset", err)
+	}
+	if n > maxAssetBytes {
+		return fmt.Errorf("asset %v exceeds %d-byte cap", shown, maxAssetBytes)
+	}
+	if got := hasher.Sum(nil); !bytes.Equal(got, wantSum) {
+		return fmt.Errorf("asset %v sha256 mismatch; got=%x want=%x", shown, got, wantSum)
+	}
+	return nil
+}
+
+// redactURL returns scheme://host/path of u, for logs and errors: user info
+// or a query may carry credentials, and atelet errors become actor crash
+// messages.
+func redactURL(u *url.URL) string {
+	return (&url.URL{Scheme: u.Scheme, Host: u.Host, Path: u.Path}).String()
+}
+
+// redactURLString is redactURL for a URL that has not been parsed yet.
+func redactURLString(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "<invalid URL>"
+	}
+	return redactURL(u)
+}
+
+// urlErrorCause strips the *url.Error wrapper, whose message repeats the full
+// URL, query included.
+func urlErrorCause(err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		return ue.Err
+	}
+	return err
 }
 
 // extractTarArchive decompresses and extracts the tarball file at tarPath into
@@ -443,26 +585,6 @@ func writeTarFile(dest string, r io.Reader, mode fs.FileMode) error {
 		return wrapFileSystemErr("while closing tarball file", err)
 	}
 	return nil
-}
-
-// openAsset streams url, trying the anonymous client first (public buckets like
-// gs://gvisor) then the main object-storage client (the cluster's own bucket, e.g.
-// micro-VM assets in rustfs/S3 or an authenticated GCS bucket). The caller closes
-// the returned reader. Streaming (rather than buffering the whole asset) keeps a
-// multi-hundred-MiB guest image off the heap.
-func (s *AteomHerder) openAsset(ctx context.Context, url string) (io.ReadCloser, error) {
-	rc, anonErr := objectstorage.Open(ctx, s.anonGCSClient, url)
-	if anonErr == nil {
-		return rc, nil
-	}
-	if s.gcsClient == nil {
-		return nil, anonErr
-	}
-	rc, mainErr := objectstorage.Open(ctx, s.gcsClient, url)
-	if mainErr != nil {
-		return nil, fmt.Errorf("anonymous open failed (%v); main client open failed: %w", anonErr, mainErr)
-	}
-	return rc, nil
 }
 
 // writeSandboxRecord persists the actor's running sandbox assets on-node so a
