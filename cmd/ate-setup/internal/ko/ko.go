@@ -138,10 +138,15 @@ func (r *Runner) Build(ctx context.Context, importPath string) (string, error) {
 }
 
 // BuildTagged builds and publishes the images for importPaths in one ko
-// invocation, tagging each with tag, and returns their pushed references.
-func (r *Runner) BuildTagged(ctx context.Context, tag string, importPaths ...string) ([]string, error) {
+// invocation, tagging each with tag and setting each "key=value" in labels as
+// an image label, and returns their pushed references.
+func (r *Runner) BuildTagged(ctx context.Context, tag string, labels []string, importPaths ...string) ([]string, error) {
 	defer log.Elapsed(time.Now(), "ko build --tags="+tag)
-	cmd := exec.CommandContext(ctx, r.binary, append(r.args("build", importPaths...), "--tags="+tag)...)
+	args := append(r.args("build", importPaths...), "--tags="+tag)
+	for _, label := range labels {
+		args = append(args, "--image-label="+label)
+	}
+	cmd := exec.CommandContext(ctx, r.binary, args...)
 	cmd.Dir = r.Root
 	cmd.Env = append(os.Environ(), r.Env...)
 	var stdout bytes.Buffer

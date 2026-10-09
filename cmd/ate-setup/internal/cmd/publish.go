@@ -16,11 +16,19 @@ package cmd
 
 import (
 	"github.com/spf13/cobra"
+
+	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
+	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/steps"
 )
+
+const publishReleaseImagesPath = "publish release-images"
 
 var publishCmd = &cobra.Command{
 	Use:   "publish",
 	Short: "Build and push images that no manifest references",
+	// Publishing builds and pushes images and never contacts a cluster, so it
+	// runs where there is no kubeconfig, such as a release job.
+	Annotations: map[string]string{clusterAnnotation: "no"},
 }
 
 var publishWorkerImagesCmd = &cobra.Command{
@@ -47,10 +55,15 @@ else git describe), and print their pushed references.
 
 The result is what "deploy --image-repo REPO --image-tag TAG" installs:
 
-  VERSION=TAG ate-setup publish release-images --ko-docker-repo REPO`,
+  VERSION=TAG ate-setup publish release-images --ko-docker-repo REPO
+
+If REPO already holds every image for the tag on every platform, nothing is
+built unless --force is set. After pushing, every image is checked for every
+platform, and a missing one fails the command.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
-		return env.PublishReleaseImages(cmd.Context(), cmd.OutOrStdout())
+		opts := steps.PublishReleaseOptions{Force: env.Cfg.Resolved().Bool("publish.force")}
+		return env.PublishReleaseImages(cmd.Context(), cmd.OutOrStdout(), opts)
 	},
 }
 
@@ -58,4 +71,12 @@ func init() {
 	rootCmd.AddCommand(publishCmd)
 	publishCmd.AddCommand(publishWorkerImagesCmd)
 	publishCmd.AddCommand(publishReleaseImagesCmd)
+
+	config.RegisterCommand(config.Setting{
+		Key: "publish.force", Env: "ATE_PUBLISH_FORCE", Flag: "force",
+		Kind: config.KindBool, Default: "false",
+		Commands: []string{publishReleaseImagesPath},
+		Usage:    "Rebuild and replace images the registry already holds for the tag",
+	})
+	config.BindCommandFlags(publishReleaseImagesPath, publishReleaseImagesCmd.Flags())
 }

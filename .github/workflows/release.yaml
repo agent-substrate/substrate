@@ -14,7 +14,7 @@
 
 # Pushing a vX.Y.Z[-PRERELEASE] tag publishes the release images and then
 # creates a DRAFT release with generated notes (.github/release.yml). A
-# maintainer edits and publishes it; see docs/dev/release-notes.md.
+# maintainer edits and publishes it; see docs/dev/releasing.md.
 #
 # Images are published only from agent-substrate/substrate, to
 # ghcr.io/agent-substrate/substrate. In any other repository (a fork) the
@@ -55,10 +55,13 @@ jobs:
     permissions:
       contents: read
       packages: write
+    # Read by ate-setup publish release-images.
     env:
-      REPO: ghcr.io/agent-substrate/substrate
-      TAG: ${{ inputs.tag || github.ref_name }}
-      FORCE: ${{ inputs.force }}
+      VERSION: ${{ inputs.tag || github.ref_name }}
+      KO_DOCKER_REPO: ghcr.io/agent-substrate/substrate
+      KO_DEFAULTPLATFORMS: linux/amd64,linux/arm64
+      # inputs.force is empty on a tag push, and ate-setup rejects an empty bool.
+      ATE_PUBLISH_FORCE: ${{ inputs.force == true }}
     steps:
     - name: Checkout
       uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -69,17 +72,28 @@ jobs:
       uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
       with:
         go-version-file: 'go.mod'
-    - name: Set up QEMU and a multi-platform builder
-      run: hack/release/setup-ci-builder.sh
-    # ko and docker buildx both read the credentials docker login stores.
+    # ko cross-compiles Go and needs no emulation. The envoy-dataplane
+    # Dockerfile compiles Rust inside an arm64 container, which runs under QEMU.
+    # The handler needs the F (fix-binary) flag: without it the kernel looks for
+    # the interpreter inside each container, where it does not exist.
+    - name: Set up QEMU
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq --no-install-recommends qemu-user-static
+        grep -E '^flags:.*F' /proc/sys/fs/binfmt_misc/qemu-aarch64
+    # The default docker driver cannot push a multi-platform image.
+    - name: Set up buildx
+      uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+    # ko, docker buildx, and ate-setup's registry checks all read the
+    # credentials docker login stores.
     - name: Log in to ghcr.io
       env:
         TOKEN: ${{ github.token }}
       run: docker login ghcr.io --username "${GITHUB_ACTOR}" --password-stdin <<<"${TOKEN}"
+    # Builds nothing if every image already exists for the tag, unless forced,
+    # and checks every image for every platform after pushing.
     - name: Publish images
-      run: hack/release/publish-images.sh "${TAG}"
-    - name: Verify images
-      run: hack/release/verify-images.sh "${TAG}"
+      run: go run ./cmd/ate-setup publish release-images
   # The same build and checks against a registry that exists only for the
   # duration of this job. Runs only when started manually with dry_run_images.
   images-dry-run:
@@ -91,9 +105,10 @@ jobs:
         image: registry:3
         ports: ['5000:5000']
     env:
-      REPO: localhost:5000/substrate
-      TAG: ${{ inputs.tag }}
-      FORCE: ${{ inputs.force }}
+      VERSION: ${{ inputs.tag }}
+      KO_DOCKER_REPO: localhost:5000/substrate
+      KO_DEFAULTPLATFORMS: linux/amd64,linux/arm64
+      ATE_PUBLISH_FORCE: ${{ inputs.force == true }}
     steps:
     - name: Checkout
       uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -104,12 +119,19 @@ jobs:
       uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
       with:
         go-version-file: 'go.mod'
-    - name: Set up QEMU and a multi-platform builder
-      run: hack/release/setup-ci-builder.sh
+    - name: Set up QEMU
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq --no-install-recommends qemu-user-static
+        grep -E '^flags:.*F' /proc/sys/fs/binfmt_misc/qemu-aarch64
+    - name: Set up buildx
+      uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      with:
+        # Lets the builder container reach the registry on the runner's
+        # localhost.
+        driver-opts: network=host
     - name: Publish images
-      run: hack/release/publish-images.sh "${TAG}"
-    - name: Verify images
-      run: hack/release/verify-images.sh "${TAG}"
+      run: go run ./cmd/ate-setup publish release-images
   draft:
     needs: images
     # Runs after images succeeded, or when images was skipped (any repository
