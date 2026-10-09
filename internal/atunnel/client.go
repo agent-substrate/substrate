@@ -175,6 +175,7 @@ func (c *Client) acquireConn(ctx context.Context) (*h2ClientConn, bool, *tls.Con
 			return nil, false, nil, fmt.Errorf("atunnel: connecting to egress gateway: %w", err)
 		}
 
+		// First check if there is an existing H/2 connection with available stream capacity.
 		c.mu.Lock()
 		keep := c.h2Conns[:0]
 		var reserved *h2ClientConn
@@ -202,6 +203,8 @@ func (c *Client) acquireConn(ctx context.Context) (*h2ClientConn, bool, *tls.Con
 			return reserved, wasVerified, nil, nil
 		}
 
+		// If there are no H/2 connections with idle capacity, start a new connection.
+		// Dial new connection if there are no in progress connections already .
 		call := c.dialing
 		if call == nil {
 			dialCtx, cancel := context.WithCancel(context.Background())
@@ -275,6 +278,7 @@ func (c *Client) acquireConn(ctx context.Context) (*h2ClientConn, bool, *tls.Con
 	}
 }
 
+// Dial egress gateway and see what protocol was offered by egress gateway.
 func (c *Client) runDial(dialCtx context.Context, call *dialCall) {
 	defer call.cancel()
 
