@@ -434,7 +434,9 @@ func TestValidateRegisterWorkerRequest(t *testing.T) {
 		want: field.ErrorList{field.Required(defaultRuntimePath.Child("compat_version", "schema_version"), "")},
 	}, {
 		name: "default_runtime.compat_version.schema_version too long",
-		req:  valid(func(r *ateapipb.RegisterWorkerRequest) { r.DefaultRuntime.CompatVersion.SchemaVersion = strings.Repeat("v", 65) }),
+		req: valid(func(r *ateapipb.RegisterWorkerRequest) {
+			r.DefaultRuntime.CompatVersion.SchemaVersion = strings.Repeat("v", 65)
+		}),
 		want: field.ErrorList{field.TooLong(defaultRuntimePath.Child("compat_version", "schema_version"), "", 64).WithOrigin("maxLength")},
 	}, {
 		name: "missing default_runtime.compat_version.attributes",

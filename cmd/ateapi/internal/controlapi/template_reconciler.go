@@ -224,7 +224,7 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 			if tag.GetStatus().GetActorTemplateUid() != tmpl.GetMetadata().GetUid() || resources.ActorRefFromObjectRef(tag.GetSourceActor()) != resources.ActorRefFromObjectRef(goldenActorRef) {
 				return 0, r.fail(ctx, tmpl, reasonGoldenTagConflict, "golden tag belongs to another actor or template")
 			}
-			if tag.GetStatus().GetSnapshot().GetSnapshotUri() != "" {
+			if tagDurableSnapshotURI(tag, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED) != "" {
 				return 0, r.saveGoldenTag(ctx, tmpl, goldenActorRef)
 			}
 			// CreateTag cannot resume an incomplete copy. Delete it before retrying.
@@ -284,7 +284,7 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 			ateapipb.ActorState_ACTOR_STATE_SUSPENDED:
 			// The golden actor was never resumed, or a previous resume didn't
 			// finish; ResumeActor is reentrant from both.
-			if actor.GetStatus().GetExternalSnapshot().GetSnapshotUri() != "" {
+			if _, st := findLatestSnapshotStorage(actor.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED); st != nil {
 				// Golden actors never start from a source snapshot, so an
 				// existing snapshot means an earlier suspend completed
 				// without being recorded.
@@ -319,8 +319,7 @@ func (r *ActorTemplateReconciler) suspendActor(ctx context.Context, goldenRef *a
 		// A crash during suspend is observed as CRASHED on the retry.
 		return fmt.Errorf("while suspending golden actor: %w", err)
 	}
-	suspended := resp.GetActor().GetStatus().GetExternalSnapshot()
-	if suspended.GetSnapshotUri() == "" {
+	if _, st := findLatestSnapshotStorage(resp.GetActor().GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED); st == nil {
 		return fmt.Errorf("suspending golden actor produced no external snapshot")
 	}
 	return nil

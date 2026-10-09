@@ -419,6 +419,15 @@ func validateActorDirs(actorDirs *ateompb.ActorDirs) error {
 	return nil
 }
 
+// validateFidelity rejects a checkpoint or restore request whose fidelity
+// this runtime cannot serve.
+func validateFidelity(fidelity ateompb.SnapshotFidelity) error {
+	if errs := resources.ValidateSnapshotFidelity(fidelity, field.NewPath("fidelity")); len(errs) > 0 {
+		return apierror.InvalidArgument("%v", errs.ToAggregate())
+	}
+	return nil
+}
+
 // validateRuntimeAssetPaths ensures we only run assets from the static files dir
 func validateRuntimeAssetPaths(paths map[string]string) error {
 	var errs field.ErrorList

@@ -33,7 +33,8 @@ metadata:
     workload: benchmark-ateom
 spec:
   replicas: ${WORKER_COUNT}
-  sandboxClass: ${SANDBOX_CLASS}
+  sandboxClasses:
+  - name: ${SANDBOX_CLASS}
   workerImage: ko://github.com/agent-substrate/substrate/cmd/ateom-${SANDBOX_CLASS}
   template:
     # Lets gvisor and microvm workers share a node tainted ate.dev/sandboxClass=shared.

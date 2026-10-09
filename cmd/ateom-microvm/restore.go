@@ -67,7 +67,7 @@ func restoreMemMode(ctx context.Context, info ch.VMMInfo) string {
 }
 
 // reseedGuestCRNG mixes fresh, per-restore entropy into the restored guest's kernel
-// CRNG through the kata-agent (see the call site in restoreFullScope for why a restore
+// CRNG through the kata-agent (see the call site in restoreMemoryFidelity for why a restore
 // needs this). The nonce is a throwaway; its only job is to differ between restores so
 // that clones of one snapshot diverge instead of producing identical randomness. The
 // caller owns ac: it stays open for log forwarding and guest stats.
@@ -91,17 +91,21 @@ func newReseedNonce() ([]byte, error) {
 }
 
 // RestoreWorkload brings the actor back from a snapshot, on a possibly different
-// pod. What that means depends on the scope the snapshot was taken with:
+// pod. What that means depends on the fidelity the snapshot was taken with:
 //
-//   - FULL: relaunch cloud-hypervisor from the snapshot and resume the guest
-//     (restoreFullScope).
-//   - DATA: there is no guest to resume — re-materialize the durable-dir volumes and
-//     cold-boot the actor, which starts its containers afresh from the OCI image.
+//   - MEMORY: relaunch cloud-hypervisor from the snapshot and resume the guest
+//     (restoreMemoryFidelity).
+//   - VOLUMES: there is no guest to resume — re-materialize the durable-dir
+//     volumes and cold-boot the actor, which starts its containers afresh from
+//     the OCI image.
 //
 // Contract with atelet: the snapshot's files are in ActorDirs.restore_dir,
 // and the durable-dir volume directories re-created (empty).
 func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.RestoreWorkloadRequest) (resp *ateompb.RestoreWorkloadResponse, retErr error) {
 	if err := validateActorDirs(req.GetActorDirs()); err != nil {
+		return nil, err
+	}
+	if err := validateFidelity(req.GetFidelity()); err != nil {
 		return nil, err
 	}
 	if err := validateRuntimeAssetPaths(req.GetRuntimeAssetPaths()); err != nil {
@@ -147,10 +151,10 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		return nil, err
 	}
 	// Publish attribution before restore, so a stats read during it is
-	// attributed. A Data scope cold-boots, so its CPU counts from zero; the other
+	// attributed. A VOLUMES restore cold-boots, so its CPU counts from zero; the other
 	// scopes resume the guest's counters, so theirs counts from the first
 	// reading.
-	resumesGuest := req.GetScope() != ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA
+	resumesGuest := req.GetFidelity() != ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
 	if _, err := s.hostActor(ctx, attribution, resumesGuest); err != nil {
 		return nil, err
 	}
@@ -163,8 +167,8 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		}
 	}()
 
-	// Restore the durable-dir volumes before anything can observe them: for Full
-	// that means before the share's virtiofsd starts, for Data before the workload
+	// Restore the durable-dir volumes before anything can observe them: for MEMORY
+	// that means before the share's virtiofsd starts, for VOLUMES before the workload
 	// cold-starts.
 	if hasDurableVolumes(p.containers) {
 		if err := untarDurableVolumes(durableDir, restoreDir, durableVolumeNames(p.containers)); err != nil {
@@ -172,13 +176,13 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		}
 	}
 
-	switch scope := req.GetScope(); scope {
-	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL:
-		if err := s.restoreFullScope(ctx, p, scope, restoreDir, req.GetPreserveRestoreDir(), tStart); err != nil {
+	switch scope := req.GetFidelity(); scope {
+	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
+		if err := s.restoreMemoryFidelity(ctx, p, scope, restoreDir, req.GetPreserveRestoreDir(), tStart); err != nil {
 			return nil, err
 		}
-	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
-		// A Data snapshot holds no guest state, so this is a cold boot that
+	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
+		// A VOLUMES snapshot holds no guest state, so this is a cold boot that
 		// happens to start with the volumes already populated. wakeup probe gating comes
 		// with the cold-boot path, so the actor is serving when we return.
 		if err := s.coldBootActorRetrying(ctx, p); err != nil {
@@ -187,19 +191,19 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		dTotal := time.Since(tStart)
 		slog.InfoContext(ctx, "Actor restored (durable-dir volumes, cold boot)",
 			slog.String("id", p.actorUID), slog.Duration("total", dTotal))
-		// A cold boot has none of the full-scope phases, so the total is the
+		// A cold boot has none of the memory-restore phases, so the total is the
 		// only observation on its record.
 		ateomphaselog.LogSnapshotPhases(ctx, "Restore timing breakdown", attribution, scope,
 			ateomphaselog.RestoreDurationKey, nil, []ateomphaselog.Phase{{Name: phaseTotal, D: dTotal}})
 	default:
-		return nil, apierror.InvalidArgument("unsupported snapshot scope: %v", scope)
+		return nil, apierror.InvalidArgument("unsupported snapshot fidelity: %v", scope)
 	}
 
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor restored", attribution)
 	return &ateompb.RestoreWorkloadResponse{}, nil
 }
 
-// restoreFullScope restores a whole-guest snapshot: relaunch cloud-hypervisor
+// restoreMemoryFidelity restores a whole-guest snapshot: relaunch cloud-hypervisor
 // directly from it and resume.
 //
 // Each container's rootfs is a host-merged overlay (image lower + host upper). Steps:
@@ -211,7 +215,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 // and resume. Guest RAM — the actor's in-memory state and the frozen network config —
 // comes back from the memory snapshot; the durable-dir volumes were restored by the
 // caller from their tar.
-func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, scope ateompb.SnapshotScope, restoreDir string, preserveRestoreDir bool, tStart time.Time) (retErr error) {
+func (s *AteomService) restoreMemoryFidelity(ctx context.Context, p actorBootParams, scope ateompb.SnapshotFidelity, restoreDir string, preserveRestoreDir bool, tStart time.Time) (retErr error) {
 	actorUID := p.actorUID
 
 	rr := s.resolveRuntime(p.assetPaths)
@@ -237,7 +241,7 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 	}
 	tPrep := time.Now()
 
-	// Full snapshots carry each container's upper as a tar (rootfsUpperTarFile).
+	// MEMORY snapshots carry each container's upper as a tar (rootfsUpperTarFile).
 	// Start re-materializing the upper contents NOW, in the background: the
 	// untar scales with the actor's data and is joined right before the host
 	// overlay mounts need it, so it hides behind the bundle preparation below.
@@ -270,7 +274,7 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 	if len(containers) > maxActorContainers {
 		return apierror.Unimplemented("ateom-microvm supports at most %d containers, got %d", maxActorContainers, len(containers))
 	}
-	ctrs, err := s.buildActorContainers(p.actorDirs, containers)
+	ctrs, err := s.buildActorContainers(p.actorUID, p.actorDirs, containers)
 	if err != nil {
 		return err
 	}

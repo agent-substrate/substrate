@@ -24,6 +24,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/internal/apierror"
+	"github.com/agent-substrate/substrate/internal/objectstoreplugin/objectstoreplugintest"
 	"github.com/agent-substrate/substrate/internal/resources"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
@@ -43,8 +44,8 @@ func validActorTemplate(mutations ...func(*ateapipb.ActorTemplate)) *ateapipb.Ac
 		Metadata:   &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "tmpl-a"},
 		Containers: []*ateapipb.Container{{Name: "main", Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},
 		SnapshotConfig: &ateapipb.SnapshotConfig{
-			StorageLocation: "gs://my-bucket/snapshots",
-			OnCommit:        ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+			StorageLocation:   "gs://my-bucket/snapshots",
+			PreferredFidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 		},
 		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR, ConfigName: "gvisor-default"},
 	}
@@ -61,9 +62,13 @@ func gvisorDefaultLister(t *testing.T) listersv1alpha1.SandboxConfigLister {
 	return sandboxConfigListerFor(t, []*atev1alpha1.SandboxConfig{{
 		ObjectMeta: metav1.ObjectMeta{Name: "gvisor-default"},
 		Spec: atev1alpha1.SandboxConfigSpec{
-			SandboxClass: atev1alpha1.SandboxClassGvisor,
-			PauseImage:   "registry.k8s.io/pause@sha256:x",
-			Assets:       testAssets(),
+			SandboxClass:   atev1alpha1.SandboxClassGvisor,
+			DefaultVersion: "v1",
+			Versions: []atev1alpha1.SandboxVersionConfig{{
+				Name:       "v1",
+				PauseImage: "registry.k8s.io/pause@sha256:x",
+				Assets:     testAssets(),
+			}},
 		},
 	}})
 }
@@ -225,10 +230,9 @@ func TestDeleteActorTemplate(t *testing.T) {
 			actorURI := mustActorSnapshotURI(t, tmpl, actor, "snapshot")
 			objects.PutSnapshot(t, actorURI, "manifest.json")
 			actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
-				s.ExternalSnapshot = &ateapipb.ExternalSnapshot{
-					SnapshotUri:      actorURI.String(),
-					ContentScope:     ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
-					ActorTemplateUid: tmpl.GetMetadata().GetUid(),
+				s.LastAssignedGeneration = 1
+				s.Snapshots = []*ateapipb.Snapshot{
+					newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), actorURI.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
 				}
 			})
 			var tag *ateapipb.Tag
@@ -244,7 +248,7 @@ func TestDeleteActorTemplate(t *testing.T) {
 			tagRef := resources.TagRefFromTag(tag)
 			tagURI := mustReservedTagSnapshotURI(t, tag)
 			objects.PutSnapshot(t, tagURI, "manifest.json")
-			svc := &RPCService{impl: newServiceImpl(persistence, nil), actorWorkflow: workflow, objectStore: objects}
+			svc := &RPCService{impl: newServiceImpl(persistence, nil), actorWorkflow: workflow, snapshotPlugin: objectstoreplugintest.ControlClient(objects)}
 			// The handler must request AnyState to clean up an active golden actor.
 			mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
 				s.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
@@ -286,7 +290,7 @@ func TestDeleteActorTemplate(t *testing.T) {
 			req := &ateapipb.DeleteActorTemplateRequest{ActorTemplate: templateRef.ToObjectRef()}
 			deleted, err := svc.DeleteActorTemplate(ctx, req)
 			if tt.failPrefix != "" {
-				if !errors.Is(err, errObjectStore) {
+				if !isObjectStoreErr(err) {
 					t.Fatalf("DeleteActorTemplate = %v, want object storage error", err)
 				}
 				if _, err := persistence.GetActorTemplate(ctx, templateRef); err != nil {

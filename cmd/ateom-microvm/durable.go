@@ -19,7 +19,7 @@ package main
 // Durable-dir volumes for the micro-VM runtime.
 //
 // A durable-dir volume is a directory whose contents outlive the actor's process
-// state: it survives suspend/resume and, under the Data snapshot scope, is the
+// state: it survives suspend/resume and, under the VOLUMES snapshot fidelity, is the
 // ONLY thing captured (the workload cold-starts on restore). The host side is
 // owned by atelet, which creates one directory per volume under
 // ActorDirs.durable_dir_volume_mounts_dir and wipes them when the actor's

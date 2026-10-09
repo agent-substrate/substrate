@@ -171,27 +171,13 @@ service Control {
   rpc DeleteAtespaceAccessPolicy(DeleteAtespaceAccessPolicyRequest) returns (AccessPolicy) {}
 }
 
-// ExternalSnapshot addresses a snapshot held in object storage.
-message ExternalSnapshot {
+// ObjectSnapshot addresses a snapshot held in object storage.
+message ObjectSnapshot {
   // snapshot_uri addresses the snapshot's prefix in object storage.
   //
   // +k8s:required
   // +k8s:maxLength=2048 # the template's storage_location bound plus the owner prefix and snapshot name
   string snapshot_uri = 1;
-
-  // content_scope is what the snapshot captured.
-  //
-  // +k8s:optional
-  // +k8s:minimum=1
-  // +k8s:maximum=2 # keep this in sync with the SnapshotContentScope enum
-  SnapshotContentScope content_scope = 2;
-
-  // UID of the ActorTemplate whose sandbox this snapshot's guest state was
-  // captured from.
-  //
-  // +k8s:optional
-  // +k8s:format=k8s-uuid
-  string actor_template_uid = 3;
 }
 
 // LocalSnapshot records information about a node-local snapshot.
@@ -199,26 +185,131 @@ message LocalSnapshot {
   // The name of the local checkpoint on the node. Checkpoint names are
   // server-generated UUIDs, but any resource name is valid here.
   //
-  // +k8s:optional
+  // TODO: consider removing this since it's the same as the snapshot_id
+  //
+  // +k8s:required
   // +k8s:format=k8s-short-name
   string snapshot_name = 1;
-
-  // Scope the pause checkpoint captured (the template's onCommit at pause
-  // time).
-  //
-  // +k8s:optional
-  // +k8s:minimum=1
-  // +k8s:maximum=2 # keep this in sync with the SnapshotContentScope enum
-  SnapshotContentScope content_scope = 2;
 }
 
-enum SnapshotContentScope {
-  // Unspecified snapshot content scope.
-  SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED = 0;
-  // Captures process memory, root filesystem changes, and durable data.
-  SNAPSHOT_CONTENT_SCOPE_FULL = 1;
-  // Captures durable data without process memory or root filesystem changes.
-  SNAPSHOT_CONTENT_SCOPE_DATA = 2;
+// SnapshotOwner indicates the owner of a snapshot.
+enum SnapshotOwner {
+  SNAPSHOT_OWNER_UNSPECIFIED = 0;
+  // Snapshot captured directly from this Actor.
+  SNAPSHOT_OWNER_ACTOR = 1;
+  // Snapshot owned by a Tag (also includes Golden Snapshot)
+  SNAPSHOT_OWNER_TAG = 2;
+  // Keep this in sync with Snapshot.owner's maximum.
+}
+
+// SnapshotDurability indicates the durability level of the snapshot.
+// TODO: potentially rename this to survivability level. Is it at the actor or snapshot level?
+enum SnapshotDurability {
+  SNAPSHOT_DURABILITY_UNSPECIFIED = 0;
+  // Node-local checkpoint on the worker node
+  // Survives node reboot.
+  SNAPSHOT_DURABILITY_LOCAL = 1;
+  // Durable snapshot in external storage.
+  // Survives node crash and deletion.
+  SNAPSHOT_DURABILITY_DURABLE = 2;
+  // Keep this in sync with SnapshotStorage.durability's maximum.
+}
+
+// SnapshotStorageStatus indicates the lifecycle stage of a snapshot storage entry.
+enum SnapshotStorageStatus {
+  SNAPSHOT_STORAGE_STATUS_UNSPECIFIED = 0;
+  // Snapshot creation or promotion is in progress.
+  SNAPSHOT_STORAGE_STATUS_IN_PROGRESS = 1;
+  // Snapshot is complete and ready for use.
+  SNAPSHOT_STORAGE_STATUS_COMPLETED = 2;
+  // Keep this in sync with SnapshotStorage.status's maximum.
+}
+
+// SnapshotStorage records the physical storage representation of a Snapshot.
+message SnapshotStorage {
+  // durability is the durability tier of this storage entry. Only
+  // SNAPSHOT_DURABILITY_LOCAL and SNAPSHOT_DURABILITY_DURABLE are allowed.
+  //
+  // +k8s:required
+  // +k8s:minimum=1
+  // +k8s:maximum=2 # keep this in sync with the SnapshotDurability enum
+  SnapshotDurability durability = 1;
+
+  // status is the lifecycle status of this storage representation.
+  //
+  // +k8s:required
+  // +k8s:minimum=1
+  // +k8s:maximum=2 # keep this in sync with the SnapshotStorageStatus enum
+  SnapshotStorageStatus status = 2;
+
+  // fidelity is what the snapshot holds.
+  //
+  // +k8s:required
+  // +k8s:minimum=1
+  // +k8s:maximum=3 # keep this in sync with the SnapshotFidelity enum
+  SnapshotFidelity fidelity = 3;
+
+  // Exactly one of local or object must be set.
+  //
+  // local snapshot is stored on the node where the actor was suspended.
+  //
+  // +k8s:optional
+  // +k8s:unionMember
+  LocalSnapshot local = 4;
+
+  // object snapshot is stored in object storage.
+  //
+  // +k8s:optional
+  // +k8s:unionMember
+  ObjectSnapshot object = 5;
+}
+
+// Snapshot represents one generation of an Actor's or Tag's snapshot state.
+message Snapshot {
+  // generation is the monotonically increasing generation number of this
+  // snapshot, starting at 1.
+  //
+  // +k8s:required
+  // +k8s:minimum=1
+  int32 generation = 1;
+
+  // owner identifies the origin and ownership of this snapshot.
+  //
+  // +k8s:required
+  // +k8s:minimum=1
+  // +k8s:maximum=2 # keep this in sync with the SnapshotOwner enum
+  SnapshotOwner owner = 2;
+
+  // UID of the ActorTemplate whose sandbox this snapshot's guest state was
+  // captured from.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-uuid
+  string actor_template_uid = 3;
+
+  // storage lists the storage representations of this snapshot by durability.
+  // Only SNAPSHOT_DURABILITY_LOCAL and SNAPSHOT_DURABILITY_DURABLE are allowed.
+  //
+  // +k8s:required
+  // +k8s:maxItems=2
+  // +k8s:listType=map
+  // +k8s:listMapKey=durability
+  repeated SnapshotStorage storage = 4;
+}
+
+// SnapshotFidelity orders the state layers a snapshot can hold, lowest to
+// highest. Each level includes the ones below it.
+enum SnapshotFidelity {
+  SNAPSHOT_FIDELITY_UNSPECIFIED = 0;
+  // Durable volumes only. The actor resumes by cold-booting its containers
+  // from the OCI image with the volumes restored.
+  SNAPSHOT_FIDELITY_VOLUMES = 1;
+  // Volumes plus the root filesystem changes made since boot. Not yet
+  // supported by any sandbox runtime; templates may not request it.
+  SNAPSHOT_FIDELITY_ROOTFS = 2;
+  // Volumes, root filesystem changes, and process memory. The actor resumes
+  // where it left off.
+  SNAPSHOT_FIDELITY_MEMORY = 3;
   // Keep this in sync with the maximums on fields of this type.
 }
 
@@ -710,25 +801,6 @@ message ActorStatus {
   // +k8s:update=NoModify # can be set and cleared, but not changed in place
   WorkerAssignment worker_assignment = 2;
 
-  // in_progress_snapshot_uri is the URI in object storage of the durable
-  // snapshot the Actor is currently taking.
-  //
-  // +k8s:optional
-  // +k8s:maxLength=2048 # the template's storage_location bound plus the owner prefix and snapshot name
-  string in_progress_snapshot_uri = 3;
-
-  // external_snapshot is the Actor's current external snapshot.
-  // If the Actor was created from a Tag this is the tag's snapshot, borrowed
-  // until the Actor's first suspend writes one of its own. Otherwise it is
-  // unset until the Actor is first suspended.
-  // +k8s:optional
-  ExternalSnapshot external_snapshot = 4;
-
-  // Node-local state used only while the Actor is paused.
-  //
-  // +k8s:optional
-  LocalSnapshot local_snapshot = 5;
-
   // Volumes attached to the actor. These volumes only live as long as the actor.
   // They are deleted when the actor is deleted. Each template volume
   // appears at most once.
@@ -738,13 +810,6 @@ message ActorStatus {
   // +k8s:listType=map
   // +k8s:listMapKey=volume_name
   repeated ExternalVolume actor_volumes = 7;
-
-  // The name of the in-progress node-local checkpoint. Like durable snapshot
-  // names, these are server-generated UUIDs.
-  //
-  // +k8s:optional
-  // +k8s:format=k8s-short-name
-  string in_progress_local_snapshot_name = 8;
 
   // crash records why and when the Actor entered CRASHED. It is set with the
   // CRASHED state and cleared when a revert returns the Actor to SUSPENDED.
@@ -759,6 +824,26 @@ message ActorStatus {
   // +k8s:optional
   // +k8s:format=k8s-long-name
   string assigned_node = 10;
+
+  // snapshots holds the Actor's active and in-progress snapshot generations.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=16
+  // +k8s:listType=atomic
+  // +k8s:unique=map
+  // +k8s:listMapKey=generation
+  repeated Snapshot snapshots = 11;
+
+  // last_assigned_generation tracks the last snapshot generation assigned for
+  // this Actor during a Suspend or Pause request.
+  // Even during Revert, the generation is not decreased to keep track of snapshots
+  // that have become stale and need to be cleaned up.
+  //
+  // +k8s:optional
+  // +k8s:alpha(since: "0.0")=+k8s:monotonic # TODO: get rid of alpha prefix
+  // +k8s:minimum=0
+  // +k8s:update=NoUnset
+  int32 last_assigned_generation = 12;
 }
 
 // ActorCrash describes the failure that moved an Actor to CRASHED.
@@ -845,12 +930,13 @@ message WorkerAssignment {
 // The tag is fixed to one external snapshot once its creation completes, so
 // the rest is immutable provenance.
 message TagStatus {
-  // snapshot is the external snapshot this tag points at. Unset while the tag
-  // is still being created, and immutable once set: a tag never moves between
-  // snapshots. A tag is usable only once this is set.
+  // snapshot is the external snapshot this tag points at. Its storage entry is
+  // IN_PROGRESS while the tag is being created and transitions to COMPLETED
+  // once the copy finishes: a tag never moves between snapshots and is usable
+  // only once COMPLETED.
   //
-  // +k8s:optional
-  ExternalSnapshot snapshot = 1;
+  // +k8s:required
+  Snapshot snapshot = 1;
 
   // UID of the ActorTemplate the snapshot was taken under. Actors can only be
   // seeded from a tag under the same template.
@@ -858,15 +944,6 @@ message TagStatus {
   // +k8s:required
   // +k8s:format=k8s-uuid
   string actor_template_uid = 2;
-
-  // storage_location is the base object-storage URI for this tag's snapshot.
-  // Set by the server from the source actor's template when the tag is created
-  // and immutable thereafter. The full snapshot URI is available in
-  // snapshot.snapshot_uri once tag creation completes.
-  //
-  // +k8s:required
-  // +k8s:maxLength=1024
-  string storage_location = 3;
 }
 
 // Tag is an Atespace-owned, stable name for one external snapshot. The
@@ -1052,26 +1129,30 @@ message SandboxConfig {
 }
 
 // SnapshotConfig selects what actor snapshots capture and where they are
-// stored. A FULL snapshot resumes from its own content. A DATA snapshot
-// resumes by starting the containers afresh from the OCI image, with the
-// durable-dir volumes populated from the snapshot.
+// stored.
 message SnapshotConfig {
-  // on_commit defines the scope of every snapshot taken of an actor, both
-  // the node-local one captured on pause and the one uploaded on suspend.
-  // Defaults to FULL when unset.
-  //
-  // +k8s:required
-  // +k8s:minimum=1
-  // +k8s:maximum=2 # keep this in sync with the SnapshotContentScope enum
-  SnapshotContentScope on_commit = 2;
-
   // storage_location is the base object-storage URI snapshots of actors on
   // this version are stored under. Required.
   //
   // +k8s:required
   // +k8s:maxLength=1024
   // +k8s:customValidation # Validate URI
-  string storage_location = 4;
+  string storage_location = 1;
+
+  // preferred_fidelity is the highest fidelity the system packages when it
+  // snapshots the actor, on pause (node-local) and on suspend (uploaded).
+  // It is a best-effort ceiling, not a guarantee: the system never packages
+  // more than this level, and it may package less when a layer cannot be
+  // captured or is too expensive to capture at the time, for example memory
+  // under host pressure. A process resumed in place on its worker keeps its
+  // memory regardless of this setting. ROOTFS is not supported yet and is
+  // rejected. Defaults to MEMORY when unset.
+  //
+  // +k8s:required
+  // +k8s:minimum=1
+  // +k8s:maximum=3 # keep this in sync with the SnapshotFidelity enum
+  // +k8s:customValidation # ROOTFS is not supported yet
+  SnapshotFidelity preferred_fidelity = 2;
 }
 
 // Container is a single application container of an ActorTemplate.
@@ -2060,8 +2141,7 @@ message Worker {
   // +k8s:immutable
   repeated string ips = 7;
 
-  // sandbox_class mirrors the WorkerPool's sandboxClass; its values are the
-  // CRD's own vocabulary, so it is only bounded, not validated.
+  // sandbox_class mirrors the WorkerPool's default sandbox class
   //
   // +k8s:optional
   // +k8s:maxLength=63

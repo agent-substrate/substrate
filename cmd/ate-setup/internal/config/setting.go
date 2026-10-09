@@ -212,6 +212,12 @@ var Registry = []Setting{
 		Usage: "Local PEM file holding an external PostgreSQL server CA",
 	},
 	{
+		Key: "ateapi.postgres.storageClass", Env: "ATE_API_POSTGRES_STORAGE_CLASS",
+		Flag: "ateapi-postgres-storage-class", Kind: KindString,
+		Usage: "StorageClass for the bundled PostgreSQL volume, instead of the cluster default. " +
+			"An existing install must delete the postgres StatefulSet and its claim first",
+	},
+	{
 		Key: "ateapi.postgres.cloudsql.instance", Env: "ATE_API_POSTGRES_CLOUDSQL_INSTANCE",
 		Flag: "ateapi-postgres-cloudsql-instance", Kind: KindString,
 		Usage: "Cloud SQL instance connection name, PROJECT:REGION:INSTANCE",

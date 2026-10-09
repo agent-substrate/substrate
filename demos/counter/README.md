@@ -2,7 +2,7 @@
 
 This directory contains a demo of a stateful counter application running on Agent Substrate.
 
-It deploys a simple Go HTTP server (`counter.go`) that increments two counters on every request — one in process memory, one in a file on a durable volume — and preserves both across suspends and resumes: the template's `Full`-scope `onCommit` snapshot captures process memory alongside the durable volumes, so the in-memory count continues from where it left off. (With a `Data`-scope snapshot policy, only the durable-volume counter would survive and the in-memory counter would restart from a cold boot.)
+It deploys a simple Go HTTP server (`counter.go`) that increments two counters on every request — one in process memory, one in a file on a durable volume — and preserves both across suspends and resumes: the template's `MEMORY` `preferredFidelity` snapshot captures process memory alongside the durable volumes, so the in-memory count continues from where it left off. (With a `VOLUMES` fidelity, only the durable-volume counter would survive and the in-memory counter would restart from a cold boot.)
 
 The demo uses two kinds of resources: the `WorkerPool` is a Kubernetes CRD, while the actor template is a Substrate `ActorTemplate` resource — an `ateapipb.ActorTemplate` living in an **atespace** rather than a Kubernetes namespace, managed through the ate API with `kubectl ate`.
 
@@ -99,7 +99,7 @@ kubectl ate suspend actor my-counter-1 -a ate-demo-counter
 
 Repeat the `curl` from step 1 and the actor resumes from its snapshot —
 possibly on a different worker — with **both** counters continuing from where
-they left off: the memory count comes back from the `Full` snapshot's process
+they left off: the memory count comes back from the `MEMORY` snapshot's process
 memory, the file counter from the durable volume.
 
 4. To permanently delete the suspended actor:

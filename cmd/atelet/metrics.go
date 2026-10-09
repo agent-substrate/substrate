@@ -77,7 +77,7 @@ type snapshotOp struct {
 	templateNamespace string
 	templateName      string
 	kind              string
-	scope             string
+	fidelity          string
 	sandboxClass      string
 }
 
@@ -89,7 +89,7 @@ func (o snapshotOp) attrs() []attribute.KeyValue {
 	attrs = append(attrs,
 		ateattr.TemplateAtespaceKey.String(o.templateNamespace),
 		ateattr.TemplateNameKey.String(o.templateName),
-		ateattr.SnapshotScopeKey.String(o.scope),
+		ateattr.SnapshotFidelityKey.String(o.fidelity),
 	)
 	if o.kind != "" {
 		attrs = append(attrs, ateattr.SnapshotKindKey.String(o.kind))

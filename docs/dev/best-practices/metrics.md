@@ -159,7 +159,7 @@ ones every new metric meets:
 * **Normalize at the producer.** When a value arrives from the wire or from a
   file nothing validated, map it onto the bounded set before recording:
   `ateattr.NormalizeSandboxClass`, `ateattr.NormalizeOperationName`,
-  `ateattr.SnapshotScopeValue`. An unrecognized value reports `unknown`, never
+  `ateattr.SnapshotFidelityValue`. An unrecognized value reports `unknown`, never
   the raw string.
 * **Omit a label you do not know rather than emit it empty.** A resume that
   failed before a worker was picked has no pool; the pool keys are absent, not

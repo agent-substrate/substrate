@@ -323,7 +323,7 @@ func (f *fakeCluster) setReplicas(pool string, n int32) {
 func pool(name string, replicas int32, limits corev1.ResourceList) *atev1alpha1.WorkerPool {
 	wp := &atev1alpha1.WorkerPool{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "benchmark-workloads", Name: name, Labels: map[string]string{"workload": name}},
-		Spec:       atev1alpha1.WorkerPoolSpec{Replicas: replicas, SandboxClass: atev1alpha1.SandboxClass("gvisor")},
+		Spec:       atev1alpha1.WorkerPoolSpec{Replicas: replicas, SandboxClasses: []atev1alpha1.WorkerPoolSandboxClass{{Name: atev1alpha1.SandboxClassGvisor}}},
 	}
 	if limits != nil {
 		wp.Spec.Template = &atev1alpha1.WorkerPoolPodTemplate{Resources: &corev1.ResourceRequirements{Limits: limits}}
@@ -878,7 +878,9 @@ func TestPoolSandboxClassChangeReplacesWorkers(t *testing.T) {
 	oldBusy := ctl.uid(busy)
 	ctl.assignments[oldBusy] = 1
 
-	cl.editPool("bench", func(wp *atev1alpha1.WorkerPool) { wp.Spec.SandboxClass = "microvm" })
+	cl.editPool("bench", func(wp *atev1alpha1.WorkerPool) {
+		wp.Spec.SandboxClasses = []atev1alpha1.WorkerPoolSandboxClass{{Name: atev1alpha1.SandboxClassMicroVM}}
+	})
 	if err := reconcile(t, c); err != nil {
 		t.Fatalf("reconcile after the class change: %v", err)
 	}
@@ -918,7 +920,7 @@ func TestFailedDrainOfAReplacedWorkerIsNoReplica(t *testing.T) {
 	old := ctl.worker(pod)
 	ctl.drainErr = status.Error(codes.Unavailable, "connection reset")
 	cl.editPool("bench", func(wp *atev1alpha1.WorkerPool) {
-		wp.Spec.SandboxClass = "microvm"
+		wp.Spec.SandboxClasses = []atev1alpha1.WorkerPoolSandboxClass{{Name: atev1alpha1.SandboxClassMicroVM}}
 		wp.Labels = map[string]string{"workload": "v2"}
 	})
 	if err := reconcile(t, c); err == nil {

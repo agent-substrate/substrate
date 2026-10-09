@@ -42,7 +42,7 @@ func TestGracefulWorkerTermination(t *testing.T) {
 	ctx := context.Background()
 	clients := e2e.GetClients()
 
-	at, err := createActorTemplate(ctx, t, clients, nsObj, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL)
+	at, err := createActorTemplate(ctx, t, clients, nsObj, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY)
 	if err != nil {
 		t.Fatalf("failed to initialize ActorTemplate: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestGracefulWorkerTerminationSuspend(t *testing.T) {
 	ctx := context.Background()
 	clients := e2e.GetClients()
 
-	at, err := createActorTemplate(ctx, t, clients, nsObj, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL)
+	at, err := createActorTemplate(ctx, t, clients, nsObj, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY)
 	if err != nil {
 		t.Fatalf("failed to initialize ActorTemplate: %v", err)
 	}
