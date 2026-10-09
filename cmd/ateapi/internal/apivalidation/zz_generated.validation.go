@@ -4280,7 +4280,7 @@ func Validate_GoldenSnapshotStatus(
 		errs = append(errs, fn(fldPath.Child("golden_tag"), obj.GoldenTag, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateapipb.GoldenSnapshotStatus.TakeGoldenSnapshotAt
+	{ // field ateapipb.GoldenSnapshotStatus.SnapshotTime
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj *timestamppb.Timestamp,
@@ -4303,9 +4303,9 @@ func Validate_GoldenSnapshotStatus(
 		}
 		oldVal := safe.Field(oldObj,
 			func(oldObj *ateapipb.GoldenSnapshotStatus) *timestamppb.Timestamp {
-				return oldObj.TakeGoldenSnapshotAt
+				return oldObj.SnapshotTime
 			})
-		errs = append(errs, fn(fldPath.Child("take_golden_snapshot_at"), obj.TakeGoldenSnapshotAt, oldVal, oldObj != nil)...)
+		errs = append(errs, fn(fldPath.Child("snapshot_time"), obj.SnapshotTime, oldVal, oldObj != nil)...)
 	}
 
 	{ // field ateapipb.GoldenSnapshotStatus.ErrorMessage

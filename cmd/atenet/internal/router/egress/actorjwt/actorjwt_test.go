@@ -64,8 +64,8 @@ func (f *fakeControl) MintActorJWT(ctx context.Context, req *ateapipb.MintActorJ
 		return nil, f.err
 	}
 	return &ateapipb.MintActorJWTResponse{
-		ActorJwt:  fmt.Sprintf("jwt-%d", n),
-		ExpiresAt: timestamppb.New(time.Now().Add(time.Duration(req.GetExpirationSeconds()) * time.Second)),
+		ActorJwt:   fmt.Sprintf("jwt-%d", n),
+		ExpireTime: timestamppb.New(time.Now().Add(time.Duration(req.GetExpirationSeconds()) * time.Second)),
 	}, nil
 }
 
