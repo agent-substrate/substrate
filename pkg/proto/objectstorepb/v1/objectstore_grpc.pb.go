@@ -379,3 +379,137 @@ var ControlProvider_ServiceDesc = grpc.ServiceDesc{
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "objectstore.proto",
 }
+
+const (
+	AssetProvider_FetchAsset_FullMethodName = "/objectstore.v1.AssetProvider/FetchAsset"
+)
+
+// AssetProviderClient is the client API for AssetProvider service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// AssetProvider is the plugin API an object storage platform implements on
+// every node, next to NodeProvider, to serve sandbox runtime assets (the files
+// a SandboxConfig names, such as a micro-VM kernel and guest image). atelet
+// calls it for every asset it does not download anonymously.
+//
+// An asset is pinned by its sha256, so the plugin hands back an object only if
+// the caller already knows its content. The plugin must also refuse to read
+// anything stored under a snapshot location: an asset URI never names a
+// snapshot, a snapshot's file, or a tag.
+type AssetProviderClient interface {
+	// FetchAsset writes the object at asset_uri to write_path if, and only if,
+	// its content hashes to sha256. Nothing is written to write_path otherwise.
+	// It returns PERMISSION_DENIED if asset_uri, or any prefix of it, is a
+	// snapshot or tag URI, before reading anything; NOT_FOUND if the object does
+	// not exist; and FAILED_PRECONDITION if the object is larger than max_bytes
+	// or its sha256 does not match.
+	FetchAsset(ctx context.Context, in *FetchAssetRequest, opts ...grpc.CallOption) (*FetchAssetResponse, error)
+}
+
+type assetProviderClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewAssetProviderClient(cc grpc.ClientConnInterface) AssetProviderClient {
+	return &assetProviderClient{cc}
+}
+
+func (c *assetProviderClient) FetchAsset(ctx context.Context, in *FetchAssetRequest, opts ...grpc.CallOption) (*FetchAssetResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(FetchAssetResponse)
+	err := c.cc.Invoke(ctx, AssetProvider_FetchAsset_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// AssetProviderServer is the server API for AssetProvider service.
+// All implementations must embed UnimplementedAssetProviderServer
+// for forward compatibility.
+//
+// AssetProvider is the plugin API an object storage platform implements on
+// every node, next to NodeProvider, to serve sandbox runtime assets (the files
+// a SandboxConfig names, such as a micro-VM kernel and guest image). atelet
+// calls it for every asset it does not download anonymously.
+//
+// An asset is pinned by its sha256, so the plugin hands back an object only if
+// the caller already knows its content. The plugin must also refuse to read
+// anything stored under a snapshot location: an asset URI never names a
+// snapshot, a snapshot's file, or a tag.
+type AssetProviderServer interface {
+	// FetchAsset writes the object at asset_uri to write_path if, and only if,
+	// its content hashes to sha256. Nothing is written to write_path otherwise.
+	// It returns PERMISSION_DENIED if asset_uri, or any prefix of it, is a
+	// snapshot or tag URI, before reading anything; NOT_FOUND if the object does
+	// not exist; and FAILED_PRECONDITION if the object is larger than max_bytes
+	// or its sha256 does not match.
+	FetchAsset(context.Context, *FetchAssetRequest) (*FetchAssetResponse, error)
+	mustEmbedUnimplementedAssetProviderServer()
+}
+
+// UnimplementedAssetProviderServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedAssetProviderServer struct{}
+
+func (UnimplementedAssetProviderServer) FetchAsset(context.Context, *FetchAssetRequest) (*FetchAssetResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method FetchAsset not implemented")
+}
+func (UnimplementedAssetProviderServer) mustEmbedUnimplementedAssetProviderServer() {}
+func (UnimplementedAssetProviderServer) testEmbeddedByValue()                       {}
+
+// UnsafeAssetProviderServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to AssetProviderServer will
+// result in compilation errors.
+type UnsafeAssetProviderServer interface {
+	mustEmbedUnimplementedAssetProviderServer()
+}
+
+func RegisterAssetProviderServer(s grpc.ServiceRegistrar, srv AssetProviderServer) {
+	// If the following call panics, it indicates UnimplementedAssetProviderServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&AssetProvider_ServiceDesc, srv)
+}
+
+func _AssetProvider_FetchAsset_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(FetchAssetRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AssetProviderServer).FetchAsset(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AssetProvider_FetchAsset_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AssetProviderServer).FetchAsset(ctx, req.(*FetchAssetRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// AssetProvider_ServiceDesc is the grpc.ServiceDesc for AssetProvider service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var AssetProvider_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "objectstore.v1.AssetProvider",
+	HandlerType: (*AssetProviderServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "FetchAsset",
+			Handler:    _AssetProvider_FetchAsset_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "objectstore.proto",
+}

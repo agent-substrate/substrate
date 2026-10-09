@@ -414,6 +414,7 @@ func TestDebugRedactFieldsArePinned(t *testing.T) {
 		"atelet.EnvEntry.value":                          true,
 		"ateom.ContainerSpec.env":                        true,
 		"credprovider.FetchSecretResponse.opaque_bytes":  true,
+		"objectstore.v1.FetchAssetRequest.asset_uri":     true,
 		"objectstore.v1.FetchSnapshotRequest.actor_jwt":  true,
 		"objectstore.v1.UploadSnapshotRequest.actor_jwt": true,
 	}
