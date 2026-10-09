@@ -713,7 +713,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	})
 	dAteom = time.Since(tAteom)
 	if err != nil {
-		// An exited application cannot produce a restorable FULL checkpoint.
+		// An exited application cannot produce a restorable MEMORY checkpoint.
 		// Deliberately preserve this contract across our server's error mapping.
 		if status.Code(err) == codes.FailedPrecondition {
 			return nil, apierror.FailedPrecondition("while calling ateom.CheckpointWorkload: %v", err)

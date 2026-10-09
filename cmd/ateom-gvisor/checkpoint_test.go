@@ -163,9 +163,9 @@ func TestCheckpointWorkloadResumeFailureAfterSave(t *testing.T) {
 	assertCheckpointCommands(t, dir, true, true)
 }
 
-func TestCheckpointWorkloadDataDoesNotRequireLiveApplications(t *testing.T) {
+func TestCheckpointWorkloadVolumesDoesNotRequireLiveApplications(t *testing.T) {
 	s, req, dir := checkpointFixture(t)
-	req.Scope = ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA
+	req.Fidelity = ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
 	req.Spec.Containers[0].DurableDirVolumeMounts = []*ateompb.DurableDirVolumeMount{{VolumeName: "data"}}
 	if err := os.MkdirAll(filepath.Join(req.ActorDirs.DurableDirVolumeMountsDir, "data"), 0o700); err != nil {
 		t.Fatal(err)
@@ -230,8 +230,8 @@ esac
 	}
 	req := &ateompb.CheckpointWorkloadRequest{
 		ActorUid: "test-uid", ActorDirs: dirs, RunscPath: filepath.Join(dir, "runsc"),
-		Scope: ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
-		Spec:  &ateompb.WorkloadSpec{Containers: []*ateompb.Container{{Name: "app"}, {Name: "sidecar"}}},
+		Fidelity: ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+		Spec:     &ateompb.WorkloadSpec{Containers: []*ateompb.Container{{Name: "app"}, {Name: "sidecar"}}},
 	}
 	return s, req, dir
 }

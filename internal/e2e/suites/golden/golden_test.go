@@ -157,12 +157,11 @@ func setup(t *testing.T) (*ateapipb.ActorTemplate, string) {
 	}
 	ns := e2e.CreateNamespace(t).Name
 	labels := map[string]string{"golden-regression": ns}
+	poolSpec := wp.Spec.DeepCopy()
+	poolSpec.Replicas = 2
 	if _, err := clients.SubstrateK8s.ApiV1alpha1().WorkerPools(ns).Create(ctx, &v1alpha1.WorkerPool{
 		ObjectMeta: metav1.ObjectMeta{Name: "golden", Namespace: ns, Labels: labels},
-		Spec: v1alpha1.WorkerPoolSpec{
-			Replicas: 2, WorkerImage: wp.Spec.WorkerImage, SandboxClass: wp.Spec.SandboxClass,
-			Template: wp.Spec.Template.DeepCopy(),
-		},
+		Spec:       *poolSpec,
 	}, metav1.CreateOptions{}); err != nil {
 		t.Fatal(err)
 	}
@@ -184,8 +183,8 @@ func setup(t *testing.T) (*ateapipb.ActorTemplate, string) {
 		SandboxConfig:  srcTemplate.GetSandboxConfig(),
 		Resources:      srcTemplate.GetResources(),
 		SnapshotConfig: &ateapipb.SnapshotConfig{
-			StorageLocation: "gs://" + env["BUCKET_NAME"] + "/golden-regression/" + ns + "/",
-			OnCommit:        ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+			StorageLocation:   "gs://" + env["BUCKET_NAME"] + "/golden-regression/" + ns + "/",
+			PreferredFidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 		},
 	}, image
 }
