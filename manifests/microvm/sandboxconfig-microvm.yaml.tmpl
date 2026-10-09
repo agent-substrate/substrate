@@ -22,8 +22,9 @@
 #
 # The sandbox binaries (cloud-hypervisor, virtiofsd, guest kernel, guest rootfs)
 # are FETCHED at runtime from the cluster object store bucket ${BUCKET_NAME}
-# under kata-assets/ (rustfs on kind, GCS on GKE) - NOT baked into the worker
-# image. ateom boots cloud-hypervisor itself and gives the actor an overlay
+# under kata-assets/ (rustfs on kind, GCS on GKE), through the node's
+# object-store plugin - NOT baked into the worker image. They must stay outside
+# any snapshot location, which the plugin refuses to serve as assets. ateom boots cloud-hypervisor itself and gives the actor an overlay
 # rootfs (virtio-fs RO lower + guest-tmpfs upper), so it fetches virtiofsd too.
 #
 # The per-arch sha256 values below are the asset sets produced by
