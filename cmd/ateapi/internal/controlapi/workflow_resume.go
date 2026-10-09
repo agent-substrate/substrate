@@ -700,7 +700,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		tele.SnapshotKind = ateattr.SnapshotKindLocal
 
 		req := &ateletpb.RestoreRequest{
-			TargetAteomUid:        assignment.GetWorkerPodUid(),
+			WorkerPodUid:          assignment.GetWorkerPodUid(),
 			Atespace:              actor.GetMetadata().GetAtespace(),
 			ActorName:             actor.GetMetadata().GetName(),
 			ActorTemplateAtespace: actor.GetActorTemplate().GetAtespace(),
@@ -730,7 +730,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		}
 		tele.WireFidelity = ateattr.SnapshotFidelityValue(scope)
 		req := &ateletpb.RestoreRequest{
-			TargetAteomUid:        assignment.GetWorkerPodUid(),
+			WorkerPodUid:          assignment.GetWorkerPodUid(),
 			Atespace:              actor.GetMetadata().GetAtespace(),
 			ActorName:             actor.GetMetadata().GetName(),
 			ActorTemplateAtespace: actor.GetActorTemplate().GetAtespace(),
@@ -756,7 +756,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		tele.SnapshotKind = ateattr.SnapshotKindBoot
 
 		req := &ateletpb.RunRequest{
-			TargetAteomUid:        assignment.GetWorkerPodUid(),
+			WorkerPodUid:          assignment.GetWorkerPodUid(),
 			Atespace:              actor.GetMetadata().GetAtespace(),
 			ActorName:             actor.GetMetadata().GetName(),
 			ActorTemplateAtespace: actor.GetActorTemplate().GetAtespace(),

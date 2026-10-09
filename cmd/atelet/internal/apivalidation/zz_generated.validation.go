@@ -421,7 +421,7 @@ func Validate_CheckpointRequest(
 		errs = append(errs, e...)
 	}
 
-	{ // field ateletpb.CheckpointRequest.TargetAteomUid
+	{ // field ateletpb.CheckpointRequest.WorkerPodUid
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj *string,
@@ -448,9 +448,9 @@ func Validate_CheckpointRequest(
 		}
 		oldVal := safe.Field(oldObj,
 			func(oldObj *ateletpb.CheckpointRequest) *string {
-				return &oldObj.TargetAteomUid
+				return &oldObj.WorkerPodUid
 			})
-		errs = append(errs, fn(fldPath.Child("target_ateom_uid"), &obj.TargetAteomUid, oldVal, oldObj != nil)...)
+		errs = append(errs, fn(fldPath.Child("worker_pod_uid"), &obj.WorkerPodUid, oldVal, oldObj != nil)...)
 	}
 
 	{ // field ateletpb.CheckpointRequest.Atespace
@@ -2240,7 +2240,7 @@ func Validate_RestoreRequest(
 		errs = append(errs, e...)
 	}
 
-	{ // field ateletpb.RestoreRequest.TargetAteomUid
+	{ // field ateletpb.RestoreRequest.WorkerPodUid
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj *string,
@@ -2267,9 +2267,9 @@ func Validate_RestoreRequest(
 		}
 		oldVal := safe.Field(oldObj,
 			func(oldObj *ateletpb.RestoreRequest) *string {
-				return &oldObj.TargetAteomUid
+				return &oldObj.WorkerPodUid
 			})
-		errs = append(errs, fn(fldPath.Child("target_ateom_uid"), &obj.TargetAteomUid, oldVal, oldObj != nil)...)
+		errs = append(errs, fn(fldPath.Child("worker_pod_uid"), &obj.WorkerPodUid, oldVal, oldObj != nil)...)
 	}
 
 	{ // field ateletpb.RestoreRequest.Atespace
@@ -2730,7 +2730,7 @@ func Validate_RunRequest(
 	ctx context.Context, op operation.Operation, fldPath *field.Path,
 	obj, oldObj *ateletpb.RunRequest) (errs field.ErrorList) {
 
-	{ // field ateletpb.RunRequest.TargetAteomUid
+	{ // field ateletpb.RunRequest.WorkerPodUid
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj *string,
@@ -2757,9 +2757,9 @@ func Validate_RunRequest(
 		}
 		oldVal := safe.Field(oldObj,
 			func(oldObj *ateletpb.RunRequest) *string {
-				return &oldObj.TargetAteomUid
+				return &oldObj.WorkerPodUid
 			})
-		errs = append(errs, fn(fldPath.Child("target_ateom_uid"), &obj.TargetAteomUid, oldVal, oldObj != nil)...)
+		errs = append(errs, fn(fldPath.Child("worker_pod_uid"), &obj.WorkerPodUid, oldVal, oldObj != nil)...)
 	}
 
 	{ // field ateletpb.RunRequest.Atespace
@@ -3392,7 +3392,7 @@ func Validate_TerminateRequest(
 	ctx context.Context, op operation.Operation, fldPath *field.Path,
 	obj, oldObj *ateletpb.TerminateRequest) (errs field.ErrorList) {
 
-	{ // field ateletpb.TerminateRequest.TargetAteomUid
+	{ // field ateletpb.TerminateRequest.WorkerPodUid
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj *string,
@@ -3418,9 +3418,9 @@ func Validate_TerminateRequest(
 		}
 		oldVal := safe.Field(oldObj,
 			func(oldObj *ateletpb.TerminateRequest) *string {
-				return &oldObj.TargetAteomUid
+				return &oldObj.WorkerPodUid
 			})
-		errs = append(errs, fn(fldPath.Child("target_ateom_uid"), &obj.TargetAteomUid, oldVal, oldObj != nil)...)
+		errs = append(errs, fn(fldPath.Child("worker_pod_uid"), &obj.WorkerPodUid, oldVal, oldObj != nil)...)
 	}
 
 	{ // field ateletpb.TerminateRequest.Atespace

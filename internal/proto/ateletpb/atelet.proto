@@ -207,7 +207,7 @@ message TerminateRequest {
   //
   // +k8s:optional
   // +k8s:format=k8s-uuid
-  string target_ateom_uid = 1;
+  string worker_pod_uid = 1;
 
   // +k8s:required
   // +k8s:format=k8s-short-name
@@ -246,7 +246,7 @@ message RunRequest {
   //
   // +k8s:required
   // +k8s:format=k8s-uuid
-  string target_ateom_uid = 1;
+  string worker_pod_uid = 1;
 
   // +k8s:required
   // +k8s:format=k8s-short-name
@@ -758,7 +758,7 @@ message CheckpointRequest {
   //
   // +k8s:required
   // +k8s:format=k8s-uuid
-  string target_ateom_uid = 1;
+  string worker_pod_uid = 1;
 
   // +k8s:required
   // +k8s:format=k8s-short-name
@@ -879,7 +879,7 @@ message RestoreRequest {
   //
   // +k8s:required
   // +k8s:format=k8s-uuid
-  string target_ateom_uid = 1;
+  string worker_pod_uid = 1;
 
   // +k8s:required
   // +k8s:format=k8s-short-name

@@ -191,7 +191,7 @@ func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resourc
 	// into the snapshot manifest.
 	_, inProgressLocal := findLatestSnapshotStorage(actor.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_LOCAL, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS)
 	req := &ateletpb.CheckpointRequest{
-		TargetAteomUid:        assignment.GetWorkerPodUid(),
+		WorkerPodUid:          assignment.GetWorkerPodUid(),
 		Atespace:              actor.GetMetadata().GetAtespace(),
 		ActorName:             actor.GetMetadata().GetName(),
 		ActorTemplateAtespace: actor.GetActorTemplate().GetAtespace(),

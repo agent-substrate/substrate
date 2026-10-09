@@ -131,9 +131,9 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 		return nil
 	}
 
-	targetAteomUID := ""
+	workerPodUID := ""
 	if assignment := actor.GetStatus().GetWorkerAssignment(); assignment != nil {
-		targetAteomUID = assignment.GetWorkerPodUid()
+		workerPodUID = assignment.GetWorkerPodUid()
 		if workerName := assignment.GetWorker().GetName(); workerName != "" {
 			// Ask whether the worker still HOSTS this actor, not whether its one
 			// assignment happens to be this actor: a worker hosting several is the
@@ -146,7 +146,7 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 				slog.InfoContext(ctx, "worker is no longer assigned to this actor, skipping ateom workload termination",
 					slog.String("worker", workerName),
 					slog.Any("actor", actorRef))
-				targetAteomUID = ""
+				workerPodUID = ""
 			}
 		}
 	}
@@ -190,7 +190,7 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 	}
 
 	req := &ateletpb.TerminateRequest{
-		TargetAteomUid:        targetAteomUID,
+		WorkerPodUid:          workerPodUID,
 		Atespace:              actor.GetMetadata().GetAtespace(),
 		ActorName:             actor.GetMetadata().GetName(),
 		ActorUid:              actor.GetMetadata().GetUid(),

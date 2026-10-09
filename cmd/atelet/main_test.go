@@ -259,7 +259,7 @@ func TestPrepareOCIBundlesPause(t *testing.T) {
 			useTempNodeDirs(t)
 			const actorUID = "actor-uid-1"
 			s := &AteomHerder{imageCache: newImageVolumeStore(t)}
-			if _, err := s.prepareOCIBundles(t.Context(), actorUID, resources.ActorRef{}, spec, tc.pauseImage, "ateom-uid-1"); err != nil {
+			if _, err := s.prepareOCIBundles(t.Context(), actorUID, resources.ActorRef{}, spec, tc.pauseImage); err != nil {
 				t.Fatalf("prepareOCIBundles: %v", err)
 			}
 			if _, err := os.Stat(filepath.Join(ateletpath.OCIBundlePath(actorUID, "app"), imagecache.OverlaySpecFileName)); err != nil {
@@ -295,7 +295,7 @@ func TestPrepareOCIBundlesFillsContainerSpec(t *testing.T) {
 	}
 
 	s := &AteomHerder{imageCache: newImageVolumeStore(t)}
-	got, err := s.prepareOCIBundles(t.Context(), "actor-uid-1", resources.ActorRef{}, spec, "", "ateom-uid-1")
+	got, err := s.prepareOCIBundles(t.Context(), "actor-uid-1", resources.ActorRef{}, spec, "")
 	if err != nil {
 		t.Fatalf("prepareOCIBundles: %v", err)
 	}
@@ -700,7 +700,7 @@ func TestFetchAssetStreaming(t *testing.T) {
 func TestRPCBoundariesReject(t *testing.T) {
 	s := &AteomHerder{}
 	ctx := context.Background()
-	badUID := "../escape" // valid actor ref, invalid ateom UID
+	badUID := "../escape" // valid actor ref, invalid worker pod UID
 	const okAtespace, okID, okActorUID = "ate-demo", "counter-1", "123e4567-e89b-12d3-a456-426614174000"
 	okSpec := &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{
 		Name:  "worker",
@@ -710,7 +710,7 @@ func TestRPCBoundariesReject(t *testing.T) {
 	wantInvalidArgument := func(t *testing.T, rpc string, err error) {
 		t.Helper()
 		if err == nil {
-			t.Errorf("%s accepted an invalid target ateom UID", rpc)
+			t.Errorf("%s accepted an invalid worker pod UID", rpc)
 			return
 		}
 		if code := apierror.Code(err); code != codes.InvalidArgument {
@@ -721,21 +721,21 @@ func TestRPCBoundariesReject(t *testing.T) {
 	t.Run("Run", func(t *testing.T) {
 		_, err := s.Run(ctx, &ateletpb.RunRequest{
 			Atespace: okAtespace, ActorName: okID,
-			ActorUid: okActorUID, TargetAteomUid: badUID, Spec: okSpec,
+			ActorUid: okActorUID, WorkerPodUid: badUID, Spec: okSpec,
 		})
 		wantInvalidArgument(t, "Run", err)
 	})
 	t.Run("Checkpoint", func(t *testing.T) {
 		_, err := s.Checkpoint(ctx, &ateletpb.CheckpointRequest{
 			Atespace: okAtespace, ActorName: okID,
-			ActorUid: okActorUID, TargetAteomUid: badUID, Spec: okSpec,
+			ActorUid: okActorUID, WorkerPodUid: badUID, Spec: okSpec,
 		})
 		wantInvalidArgument(t, "Checkpoint", err)
 	})
 	t.Run("Restore", func(t *testing.T) {
 		_, err := s.Restore(ctx, &ateletpb.RestoreRequest{
 			Atespace: okAtespace, ActorName: okID,
-			ActorUid: okActorUID, TargetAteomUid: badUID, Spec: okSpec,
+			ActorUid: okActorUID, WorkerPodUid: badUID, Spec: okSpec,
 		})
 		wantInvalidArgument(t, "Restore", err)
 	})
@@ -743,7 +743,7 @@ func TestRPCBoundariesReject(t *testing.T) {
 		_, err := s.Terminate(ctx, &ateletpb.TerminateRequest{
 			Atespace: okAtespace, ActorName: okID,
 			ActorUid: okActorUID, ActorTemplateAtespace: "default", ActorTemplateName: "template",
-			TargetAteomUid: badUID, Spec: okSpec,
+			WorkerPodUid: badUID, Spec: okSpec,
 		})
 		wantInvalidArgument(t, "Terminate", err)
 	})
@@ -1306,7 +1306,7 @@ func validCheckpointRequest() *ateletpb.CheckpointRequest {
 		ActorName:             "counter-1",
 		ActorTemplateAtespace: "ate-demo",
 		ActorTemplateName:     "counter",
-		TargetAteomUid:        "422938ba-8860-4983-a25d-d6bcb0a69d4e",
+		WorkerPodUid:          "422938ba-8860-4983-a25d-d6bcb0a69d4e",
 		ActorUid:              "123e4567-e89b-12d3-a456-426614174000",
 		Spec:                  &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "worker"}}},
 		Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,

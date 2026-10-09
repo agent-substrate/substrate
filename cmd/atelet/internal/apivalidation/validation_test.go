@@ -176,7 +176,7 @@ func TestValidateMintActorCertificateRequest(t *testing.T) {
 func TestValidateRunRequest(t *testing.T) {
 	valid := func(mutate ...func(*ateletpb.RunRequest)) *ateletpb.RunRequest {
 		r := &ateletpb.RunRequest{
-			TargetAteomUid:        "0f9a3b1c-2d4e-5f60-7182-93a4b5c6d7e8",
+			WorkerPodUid:          "0f9a3b1c-2d4e-5f60-7182-93a4b5c6d7e8",
 			Atespace:              "team-a",
 			ActorName:             "actor-1",
 			ActorUid:              "01234567-89ab-cdef-0123-456789abcdef",
@@ -202,17 +202,17 @@ func TestValidateRunRequest(t *testing.T) {
 		name: "valid",
 		obj:  valid(),
 	}, {
-		name: "missing target_ateom_uid",
-		obj:  valid(func(r *ateletpb.RunRequest) { r.TargetAteomUid = "" }),
-		want: field.ErrorList{field.Required(field.NewPath("target_ateom_uid"), "")},
+		name: "missing worker_pod_uid",
+		obj:  valid(func(r *ateletpb.RunRequest) { r.WorkerPodUid = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("worker_pod_uid"), "")},
 	}, {
-		name: "invalid target_ateom_uid: path escape",
-		obj:  valid(func(r *ateletpb.RunRequest) { r.TargetAteomUid = "../escape" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("target_ateom_uid"), nil, "").WithOrigin("format=k8s-uuid")},
+		name: "invalid worker_pod_uid: path escape",
+		obj:  valid(func(r *ateletpb.RunRequest) { r.WorkerPodUid = "../escape" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("worker_pod_uid"), nil, "").WithOrigin("format=k8s-uuid")},
 	}, {
-		name: "invalid target_ateom_uid: not a pod UID",
-		obj:  valid(func(r *ateletpb.RunRequest) { r.TargetAteomUid = "ateom-1" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("target_ateom_uid"), nil, "").WithOrigin("format=k8s-uuid")},
+		name: "invalid worker_pod_uid: not a pod UID",
+		obj:  valid(func(r *ateletpb.RunRequest) { r.WorkerPodUid = "ateom-1" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("worker_pod_uid"), nil, "").WithOrigin("format=k8s-uuid")},
 	}, {
 		name: "missing atespace",
 		obj:  valid(func(r *ateletpb.RunRequest) { r.Atespace = "" }),
@@ -434,7 +434,7 @@ func TestValidateCheckpointRequest(t *testing.T) {
 	const snapshotURI = "gs://bucket/root/atespaces/team-a/actors/01234567-89ab-cdef-0123-456789abcdef/snapshots/snap-1"
 	valid := func(mutate ...func(*ateletpb.CheckpointRequest)) *ateletpb.CheckpointRequest {
 		r := &ateletpb.CheckpointRequest{
-			TargetAteomUid:        "0f9a3b1c-2d4e-5f60-7182-93a4b5c6d7e8",
+			WorkerPodUid:          "0f9a3b1c-2d4e-5f60-7182-93a4b5c6d7e8",
 			Atespace:              "team-a",
 			ActorName:             "actor-1",
 			ActorUid:              "01234567-89ab-cdef-0123-456789abcdef",
@@ -472,17 +472,17 @@ func TestValidateCheckpointRequest(t *testing.T) {
 		name: "valid volumes fidelity",
 		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.Fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES }),
 	}, {
-		name: "missing target_ateom_uid",
-		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.TargetAteomUid = "" }),
-		want: field.ErrorList{field.Required(field.NewPath("target_ateom_uid"), "")},
+		name: "missing worker_pod_uid",
+		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.WorkerPodUid = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("worker_pod_uid"), "")},
 	}, {
-		name: "invalid target_ateom_uid: path escape",
-		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.TargetAteomUid = "../escape" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("target_ateom_uid"), nil, "").WithOrigin("format=k8s-uuid")},
+		name: "invalid worker_pod_uid: path escape",
+		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.WorkerPodUid = "../escape" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("worker_pod_uid"), nil, "").WithOrigin("format=k8s-uuid")},
 	}, {
-		name: "invalid target_ateom_uid: not a pod UID",
-		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.TargetAteomUid = "ateom-1" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("target_ateom_uid"), nil, "").WithOrigin("format=k8s-uuid")},
+		name: "invalid worker_pod_uid: not a pod UID",
+		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.WorkerPodUid = "ateom-1" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("worker_pod_uid"), nil, "").WithOrigin("format=k8s-uuid")},
 	}, {
 		name: "invalid atespace: path escape",
 		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.Atespace = "../escape" }),
@@ -601,7 +601,7 @@ func TestValidateRestoreRequest(t *testing.T) {
 	const snapshotURI = "gs://bucket/root/atespaces/team-a/actors/01234567-89ab-cdef-0123-456789abcdef/snapshots/snap-1"
 	valid := func(mutate ...func(*ateletpb.RestoreRequest)) *ateletpb.RestoreRequest {
 		r := &ateletpb.RestoreRequest{
-			TargetAteomUid:        "0f9a3b1c-2d4e-5f60-7182-93a4b5c6d7e8",
+			WorkerPodUid:          "0f9a3b1c-2d4e-5f60-7182-93a4b5c6d7e8",
 			Atespace:              "team-a",
 			ActorName:             "actor-1",
 			ActorUid:              "01234567-89ab-cdef-0123-456789abcdef",
@@ -647,17 +647,17 @@ func TestValidateRestoreRequest(t *testing.T) {
 			r.EgressGateway = &ateletpb.EgressGateway{Address: "10.0.0.1:15001"}
 		}),
 	}, {
-		name: "missing target_ateom_uid",
-		obj:  valid(func(r *ateletpb.RestoreRequest) { r.TargetAteomUid = "" }),
-		want: field.ErrorList{field.Required(field.NewPath("target_ateom_uid"), "")},
+		name: "missing worker_pod_uid",
+		obj:  valid(func(r *ateletpb.RestoreRequest) { r.WorkerPodUid = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("worker_pod_uid"), "")},
 	}, {
-		name: "invalid target_ateom_uid: path escape",
-		obj:  valid(func(r *ateletpb.RestoreRequest) { r.TargetAteomUid = "../escape" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("target_ateom_uid"), nil, "").WithOrigin("format=k8s-uuid")},
+		name: "invalid worker_pod_uid: path escape",
+		obj:  valid(func(r *ateletpb.RestoreRequest) { r.WorkerPodUid = "../escape" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("worker_pod_uid"), nil, "").WithOrigin("format=k8s-uuid")},
 	}, {
-		name: "invalid target_ateom_uid: not a pod UID",
-		obj:  valid(func(r *ateletpb.RestoreRequest) { r.TargetAteomUid = "ateom-1" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("target_ateom_uid"), nil, "").WithOrigin("format=k8s-uuid")},
+		name: "invalid worker_pod_uid: not a pod UID",
+		obj:  valid(func(r *ateletpb.RestoreRequest) { r.WorkerPodUid = "ateom-1" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("worker_pod_uid"), nil, "").WithOrigin("format=k8s-uuid")},
 	}, {
 		name: "invalid atespace: path escape",
 		obj:  valid(func(r *ateletpb.RestoreRequest) { r.Atespace = "../escape" }),
@@ -897,7 +897,7 @@ func TestValidateUploadPausedCheckpointRequest(t *testing.T) {
 func TestValidateTerminateRequest(t *testing.T) {
 	valid := func(mutate ...func(*ateletpb.TerminateRequest)) *ateletpb.TerminateRequest {
 		r := &ateletpb.TerminateRequest{
-			TargetAteomUid:        "0f9a3b1c-2d4e-5f60-7182-93a4b5c6d7e8",
+			WorkerPodUid:          "0f9a3b1c-2d4e-5f60-7182-93a4b5c6d7e8",
 			Atespace:              "team-a",
 			ActorName:             "actor-1",
 			ActorUid:              "01234567-89ab-cdef-0123-456789abcdef",
@@ -919,16 +919,16 @@ func TestValidateTerminateRequest(t *testing.T) {
 		name: "valid",
 		obj:  valid(),
 	}, {
-		name: "unset target_ateom_uid is allowed: node-only cleanup",
-		obj:  valid(func(r *ateletpb.TerminateRequest) { r.TargetAteomUid = "" }),
+		name: "unset worker_pod_uid is allowed: node-only cleanup",
+		obj:  valid(func(r *ateletpb.TerminateRequest) { r.WorkerPodUid = "" }),
 	}, {
-		name: "invalid target_ateom_uid: path escape",
-		obj:  valid(func(r *ateletpb.TerminateRequest) { r.TargetAteomUid = "../escape" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("target_ateom_uid"), nil, "").WithOrigin("format=k8s-uuid")},
+		name: "invalid worker_pod_uid: path escape",
+		obj:  valid(func(r *ateletpb.TerminateRequest) { r.WorkerPodUid = "../escape" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("worker_pod_uid"), nil, "").WithOrigin("format=k8s-uuid")},
 	}, {
-		name: "invalid target_ateom_uid: not a pod UID",
-		obj:  valid(func(r *ateletpb.TerminateRequest) { r.TargetAteomUid = "ateom-1" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("target_ateom_uid"), nil, "").WithOrigin("format=k8s-uuid")},
+		name: "invalid worker_pod_uid: not a pod UID",
+		obj:  valid(func(r *ateletpb.TerminateRequest) { r.WorkerPodUid = "ateom-1" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("worker_pod_uid"), nil, "").WithOrigin("format=k8s-uuid")},
 	}, {
 		name: "missing atespace",
 		obj:  valid(func(r *ateletpb.TerminateRequest) { r.Atespace = "" }),
