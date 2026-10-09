@@ -92,7 +92,9 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 	tagRef := inActor.GetSourceTag()
 	if tagRef == nil {
 		tagRef = template.GetStatus().GetGoldenSnapshotStatus().GetGoldenTag()
-	} else if preview.IsEnabled(preview.GateExternalVolumes) {
+	} else {
+		// NOTE: whether the ExternalVolumes gate is enabled or not, we do not
+		// support cloning from a tag that has external volumes.
 		for _, volume := range template.GetVolumes() {
 			if volume.GetExternalVolumeTemplate() != nil {
 				// TODO: Permit cloning after CSI volume snapshots are supported.
@@ -118,11 +120,18 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 
 	// Volume creation is completed asynchronously after the actor is recorded.
 	var initVols []*ateapipb.ExternalVolume
-	if preview.IsEnabled(preview.GateExternalVolumes) {
-		initVols, err = initialActorVolumes(ctx, s.storageClassLister, template)
+	if iv, err := initialExternalVolumes(ctx, s.storageClassLister, template); err != nil {
 		if err != nil {
 			return nil, err
 		}
+	} else if preview.IsEnabled(preview.GateExternalVolumes) {
+		initVols = iv
+	} else if len(iv) > 0 {
+		errs := field.ErrorList{
+			field.Forbidden(field.NewPath("actor", "actor_template"),
+				"ActorTemplates with external volumes are not supported unless the ExternalVolumes preview gate is enabled"),
+		}
+		return nil, resources.ToAPIError(errs)
 	}
 
 	// Verify that the result is properly valid before storing it.

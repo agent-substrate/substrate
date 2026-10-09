@@ -24,7 +24,6 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/preview"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -350,11 +349,11 @@ func (w *ActorWorkflow) ensureVolumesDetached(ctx context.Context, actor *ateapi
 	ctx, done := stepSpan(ctx, spanName)
 	defer func() { err = done(err) }()
 
-	if !preview.IsEnabled(preview.GateExternalVolumes) {
-		markSkipped(ctx, "external volumes are disabled")
-		return nil
-	}
-
+	// Given that external volumes has been in the codebase for a while and
+	// its preview-ness is solely around the API, and that the impact of
+	// disabling the gate while in use would be an orphaned volume
+	// attachment, we are NOT checking the ExternalVolumes gate in the
+	// delete/suspend path.
 	return detachActorVolumes(ctx, w.pluginRegistry, actor, actorTemplate, op)
 }
 

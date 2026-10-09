@@ -29,8 +29,8 @@ import (
 	storagev1listers "k8s.io/client-go/listers/storage/v1"
 )
 
-// initialActorVolumes constructs initial volume objects in PENDING state before volume creation.
-func initialActorVolumes(ctx context.Context, scLister storagev1listers.StorageClassLister, template *ateapipb.ActorTemplate) ([]*ateapipb.ExternalVolume, error) {
+// initialExternalVolumes constructs initial volume objects in PENDING state before volume creation.
+func initialExternalVolumes(ctx context.Context, scLister storagev1listers.StorageClassLister, template *ateapipb.ActorTemplate) ([]*ateapipb.ExternalVolume, error) {
 	if template == nil {
 		return nil, apierror.InvalidArgument("template is required")
 	}

@@ -193,13 +193,11 @@ func (w *ActorWorkflow) ensureVolumesCreated(ctx context.Context, actorRef resou
 	ctx, done := stepSpan(ctx, "CreateVolumes")
 	defer func() { err = done(err) }()
 
-	if !preview.IsEnabled(preview.GateExternalVolumes) {
-		markSkipped(ctx, "external volumes are disabled")
-		return actor, nil
-	}
-
 	pending := false
 	for _, vol := range actor.GetStatus().GetExternalVolumes() {
+		if !preview.IsEnabled(preview.GateExternalVolumes) {
+			return nil, fmt.Errorf("external volumes are not supported unless the ExternalVolumes preview gate is enabled")
+		}
 		if vol.GetStatus() == ateapipb.ExternalVolume_STATUS_PENDING {
 			pending = true
 			break
@@ -639,9 +637,8 @@ func (w *ActorWorkflow) ensureVolumesAttached(ctx context.Context, actor *ateapi
 	ctx, done := stepSpan(ctx, "AttachVolumes")
 	defer func() { err = done(err) }()
 
-	if !preview.IsEnabled(preview.GateExternalVolumes) {
-		markSkipped(ctx, "external volumes are disabled")
-		return nil, nil
+	if len(actor.GetStatus().GetExternalVolumes()) > 0 && !preview.IsEnabled(preview.GateExternalVolumes) {
+		return nil, fmt.Errorf("external volumes are not supported unless the ExternalVolumes preview gate is enabled")
 	}
 
 	node := worker.GetNodeName()

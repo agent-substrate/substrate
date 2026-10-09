@@ -22,7 +22,6 @@ import (
 	"os"
 
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
-	"github.com/agent-substrate/substrate/internal/preview"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/volume"
 	"github.com/agent-substrate/substrate/internal/volume/csi"
@@ -31,10 +30,12 @@ import (
 )
 
 func (s *AteomHerder) mountExternalVolumes(ctx context.Context, actorUID string, volumes []*ateletpb.Volume) error {
-	if !preview.IsEnabled(preview.GateExternalVolumes) {
-		return nil
-	}
 	for _, vol := range volumes {
+		// Given that external volumes has been in the codebase for a while and
+		// its preview-ness is solely around the API, and that the impact of
+		// disabling the gate while in use would be an orphaned volume
+		// attachment, we are NOT checking the ExternalVolumes gate in the
+		// mount/unmount logic.
 		ext := vol.GetExternal()
 		if ext == nil {
 			continue
@@ -61,11 +62,13 @@ func (s *AteomHerder) mountExternalVolumes(ctx context.Context, actorUID string,
 }
 
 func (s *AteomHerder) unmountExternalVolumes(ctx context.Context, actorUID string, volumes []*ateletpb.Volume) error {
-	if !preview.IsEnabled(preview.GateExternalVolumes) {
-		return nil
-	}
 	var errs []error
 	for _, vol := range volumes {
+		// Given that external volumes has been in the codebase for a while and
+		// its preview-ness is solely around the API, and that the impact of
+		// disabling the gate while in use would be an orphaned volume
+		// attachment, we are NOT checking the ExternalVolumes gate in the
+		// mount/unmount logic.
 		ext := vol.GetExternal()
 		if ext == nil {
 			continue

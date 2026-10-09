@@ -23,7 +23,6 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/preview"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -167,29 +166,32 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 		}
 		workloadSpec = spec
 	} else {
+		// When the template is missing/deleted, build a fallback workload spec with
+		// all external volumes recorded on the actor so atelet can unmount them on the node.
+		slog.WarnContext(ctx, "actor template not found, constructing fallback workload spec for atelet terminate",
+			slog.String("actor", actorRef.Name),
+			slog.String("templateAtespace", actor.GetActorTemplate().GetAtespace()),
+			slog.String("templateName", actor.GetActorTemplate().GetName()))
+		// Given that external volumes has been in the codebase for a while and
+		// its preview-ness is solely around the API, and that the impact of
+		// disabling the gate while in use would be an orphaned volume
+		// attachment, we are NOT checking the ExternalVolumes gate in the
+		// delete/suspend path.
 		workloadSpec = &ateletpb.WorkloadSpec{}
-		if preview.IsEnabled(preview.GateExternalVolumes) {
-			// When the template is missing/deleted, build a fallback workload spec with
-			// all external volumes recorded on the actor so atelet can unmount them on the node.
-			slog.WarnContext(ctx, "actor template not found, constructing fallback workload spec for atelet terminate",
-				slog.String("actor", actorRef.Name),
-				slog.String("templateAtespace", actor.GetActorTemplate().GetAtespace()),
-				slog.String("templateName", actor.GetActorTemplate().GetName()))
-			for _, vol := range actor.GetStatus().GetExternalVolumes() {
-				// StorageVolumeId is only populated once the volume is provisioned.
-				// Skip volumes that were never created (e.g. failed during PENDING state).
-				if vol.GetStorageVolumeId() != "" {
-					workloadSpec.Volumes = append(workloadSpec.Volumes, &ateletpb.Volume{
-						Name: vol.GetName(),
-						Source: &ateletpb.Volume_External{
-							External: &ateletpb.ExternalVolumeSource{
-								StorageVolumeId: vol.GetStorageVolumeId(),
-								VolumeType:      vol.GetVolumeType(),
-								VolumeContext:   vol.GetVolumeContext(),
-							},
+		for _, vol := range actor.GetStatus().GetExternalVolumes() {
+			// StorageVolumeId is only populated once the volume is provisioned.
+			// Skip volumes that were never created (e.g. failed during PENDING state).
+			if vol.GetStorageVolumeId() != "" {
+				workloadSpec.Volumes = append(workloadSpec.Volumes, &ateletpb.Volume{
+					Name: vol.GetName(),
+					Source: &ateletpb.Volume_External{
+						External: &ateletpb.ExternalVolumeSource{
+							StorageVolumeId: vol.GetStorageVolumeId(),
+							VolumeType:      vol.GetVolumeType(),
+							VolumeContext:   vol.GetVolumeContext(),
 						},
-					})
-				}
+					},
+				})
 			}
 		}
 	}
@@ -220,11 +222,11 @@ func (w *ActorWorkflow) ensureVolumesDetachedForDelete(ctx context.Context, acto
 	ctx, done := stepSpan(ctx, "DetachVolumesForDelete")
 	defer func() { err = done(err) }()
 
-	if !preview.IsEnabled(preview.GateExternalVolumes) {
-		markSkipped(ctx, "external volumes are disabled")
-		return nil
-	}
-
+	// Given that external volumes has been in the codebase for a while and
+	// its preview-ness is solely around the API, and that the impact of
+	// disabling the gate while in use would be an orphaned volume
+	// attachment, we are NOT checking the ExternalVolumes gate in the
+	// delete/suspend path.
 	return detachActorVolumes(ctx, w.pluginRegistry, actor, actorTemplate, "delete")
 }
 
@@ -341,10 +343,13 @@ func (w *ActorWorkflow) ensureMarkedDeleting(ctx context.Context, actorRef resou
 
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_DELETING
-		if preview.IsEnabled(preview.GateExternalVolumes) {
-			for _, vol := range toUpdate.GetStatus().GetExternalVolumes() {
-				vol.Status = ateapipb.ExternalVolume_STATUS_DELETING
-			}
+		// Given that external volumes has been in the codebase for a while and
+		// its preview-ness is solely around the API, and that the impact of
+		// disabling the gate while in use would be an orphaned volume
+		// attachment, we are NOT checking the ExternalVolumes gate in the
+		// delete/suspend path.
+		for _, vol := range toUpdate.GetStatus().GetExternalVolumes() {
+			vol.Status = ateapipb.ExternalVolume_STATUS_DELETING
 		}
 		return nil
 	})
@@ -369,11 +374,11 @@ func (w *ActorWorkflow) ensureVolumesDeleted(ctx context.Context, actor *ateapip
 		return apierror.FailedPrecondition("DeleteVolumes prerequisite not met for Actor: %s (got: %v, want %s)", actor.GetMetadata().GetName(), st, ateapipb.ActorState_ACTOR_STATE_DELETING)
 	}
 
-	if !preview.IsEnabled(preview.GateExternalVolumes) {
-		markSkipped(ctx, "external volumes are disabled")
-		return nil
-	}
-
+	// Given that external volumes has been in the codebase for a while and
+	// its preview-ness is solely around the API, and that the impact of
+	// disabling the gate while in use would be an orphaned volume
+	// attachment, we are NOT checking the ExternalVolumes gate in the
+	// delete/suspend path.
 	if err := deleteActorVolumes(ctx, w.pluginRegistry, actor.GetMetadata().GetUid(), actor.GetStatus().GetExternalVolumes()); err != nil {
 		return apierror.Internal("while deleting actor volumes: %v", err)
 	}
