@@ -137,7 +137,8 @@ service AssetProvider {
   // It returns PERMISSION_DENIED if asset_uri, or any prefix of it, is a
   // snapshot or tag URI, before reading anything; NOT_FOUND if the object does
   // not exist; and FAILED_PRECONDITION if the object is larger than max_bytes
-  // or its sha256 does not match.
+  // or than the plugin can hold while verifying it, or its sha256 does not
+  // match.
   rpc FetchAsset(FetchAssetRequest) returns (FetchAssetResponse) {}
 }
 
@@ -154,8 +155,10 @@ message FetchAssetRequest {
   string sha256 = 2;
 
   // Full local path of an existing regular file the asset is written to. The
-  // plugin truncates and writes it only once the content has been verified,
-  // and never creates it.
+  // plugin replaces the file, keeping its mode, only once the content has been
+  // verified, never creates it, and leaves it unchanged on any error. The
+  // caller opens it after the call: a descriptor opened before still reads
+  // the old content.
   string write_path = 3;
 
   // The largest object, in bytes, the caller accepts. Must be positive.

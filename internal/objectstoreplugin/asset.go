@@ -42,9 +42,10 @@ type AssetPlugin struct {
 }
 
 // NewAssetPlugin returns an AssetPlugin that writes caller files only below
-// root and stages downloads in stagingDir, which must not be below root.
-func NewAssetPlugin(client objectstorage.ObjectStorage, root, stagingDir string) (*AssetPlugin, error) {
-	stager, err := assetfetch.NewStager(root, stagingDir)
+// root and stages downloads in stagingDir, which must not be below root,
+// holding at most stagingCapacity bytes there at once.
+func NewAssetPlugin(client objectstorage.ObjectStorage, root, stagingDir string, stagingCapacity int64) (*AssetPlugin, error) {
+	stager, err := assetfetch.NewStager(root, stagingDir, stagingCapacity)
 	if err != nil {
 		return nil, err
 	}
@@ -53,7 +54,7 @@ func NewAssetPlugin(client objectstorage.ObjectStorage, root, stagingDir string)
 
 // FetchAsset downloads the object at asset_uri into the staging directory and,
 // if it is at most max_bytes long and hashes to sha256, copies it into the
-// existing file at write_path.
+// existing file at write_path (see assetfetch.Stager.Fetch).
 func (p *AssetPlugin) FetchAsset(ctx context.Context, req *objectstorev1.FetchAssetRequest) (*objectstorev1.FetchAssetResponse, error) {
 	bucket, object, err := parseAssetURI(req.GetAssetUri())
 	if err != nil {
