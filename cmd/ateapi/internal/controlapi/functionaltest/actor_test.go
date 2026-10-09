@@ -5242,12 +5242,12 @@ func TestMintActorJWT_Success(t *testing.T) {
 	assertActorJWTLifetime(t, mintResp, claims, 30*time.Minute)
 }
 
-// assertActorJWTLifetime checks that expires_at matches the exp claim and that
+// assertActorJWTLifetime checks that expire_time matches the exp claim and that
 // the token is valid for want after it was issued.
 func assertActorJWTLifetime(t *testing.T, resp *ateapipb.MintActorJWTResponse, claims actoridjwt.WireClaims, want time.Duration) {
 	t.Helper()
-	if got, exp := resp.GetExpiresAt().AsTime(), time.Unix(int64(claims.Expiration), 0); !got.Equal(exp) {
-		t.Errorf("expires_at = %v, want the exp claim %v", got, exp)
+	if got, exp := resp.GetExpireTime().AsTime(), time.Unix(int64(claims.Expiration), 0); !got.Equal(exp) {
+		t.Errorf("expire_time = %v, want the exp claim %v", got, exp)
 	}
 	if got := time.Duration(claims.Expiration-claims.IssuedAt) * time.Second; got != want {
 		t.Errorf("exp - iat = %v, want %v", got, want)

@@ -355,6 +355,7 @@ Rules:
 - Use standard abbreviations where well-established: `config`, `spec`, `id`, `info`, `stats`.
 - Adjectives come before the noun: `suspended_actors`, not `actors_suspended`.
 - Avoid prepositions in field names: `error_reason`, not `reason_for_error`.
+- `google.protobuf.Timestamp` fields **must** end in `_time`, following [AIP-142](https://google.aip.dev/142): use `create_time`, `expire_time`, or `crash_time`, not `created_at` or `expires_at`.
 
 ### 5.1 Enum naming
 

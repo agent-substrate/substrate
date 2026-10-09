@@ -1092,11 +1092,11 @@ message GoldenSnapshotStatus {
   // +k8s:subfield(atespace)=+k8s:required
   ObjectRef golden_tag = 1;
 
-  // take_golden_snapshot_at is when the golden-actor warmup ends and the
+  // snapshot_time is when the golden-actor warmup ends and the
   // golden snapshot may be taken.
   //
   // +k8s:optional
-  google.protobuf.Timestamp take_golden_snapshot_at = 2;
+  google.protobuf.Timestamp snapshot_time = 2;
 
   // error_message is set when the golden snapshot build fails and will not be
   // retried, formatted as "<Reason>: <detail>". A nonempty value is terminal.
@@ -1812,8 +1812,8 @@ message MintActorJWTResponse {
   //   `actorUID`.
   string actor_jwt = 1 [ debug_redact = true ];
 
-  // When actor_jwt expires. Equal to its exp claim.
-  google.protobuf.Timestamp expires_at = 2;
+  // expire_time is when actor_jwt expires. Equal to its exp claim.
+  google.protobuf.Timestamp expire_time = 2;
 }
 
 // Request message for MintActorCertificate.
