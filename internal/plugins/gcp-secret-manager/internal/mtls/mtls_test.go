@@ -33,7 +33,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/plugins/gcp-secret-manager/internal/credbundle"
+	"go.ate.dev/substrate/internal/plugins/gcp-secret-manager/internal/credbundle"
 	"google.golang.org/grpc/credentials"
 )
 

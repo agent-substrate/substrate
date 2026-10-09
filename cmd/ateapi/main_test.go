@@ -32,7 +32,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/credbundle"
+	"go.ate.dev/substrate/internal/credbundle"
 )
 
 func TestConnectStoreRequiresPostgresReadWriteConnectionString(t *testing.T) {

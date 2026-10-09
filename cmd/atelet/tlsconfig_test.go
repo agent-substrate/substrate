@@ -27,7 +27,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/credbundle"
+	"go.ate.dev/substrate/internal/credbundle"
 )
 
 // testCredentialBundlePath writes a self-signed cert and PKCS8 key, in the
