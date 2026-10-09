@@ -91,7 +91,14 @@ func init() {
 	utilruntime.Must(clientv1alpha1.AddToScheme(scheme)) // Register our CRD
 }
 
-const serviceName = "atecontroller"
+const (
+	serviceName = "atecontroller"
+
+	// metricsPullAddr is the manager's metrics listener, and metricsOffAddr
+	// turns it off.
+	metricsPullAddr = ":8080"
+	metricsOffAddr  = "0"
+)
 
 // logr verbosity V(n) maps to slog level -n, so V(1) stays below Info until
 // --log-level=debug. logr carries no context, so these records have no trace IDs.
@@ -102,9 +109,9 @@ func newControllerRuntimeLogger(h slog.Handler) logr.Logger {
 // managerOptions configures the controller-runtime manager. servePull is
 // whether OTEL_METRICS_EXPORTER leaves its metrics listener on.
 func managerOptions(egressMITMCAPool types.NamespacedName, servePull bool) ctrl.Options {
-	metricsAddr := "0" // "0" disables the server.
+	metricsAddr := metricsOffAddr
 	if servePull {
-		metricsAddr = metricsserver.DefaultBindAddress
+		metricsAddr = metricsPullAddr
 	}
 	return ctrl.Options{
 		Scheme:  scheme,
@@ -158,6 +165,7 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to initialize metrics", err)
 	}
 	defer serverboot.ShutdownProvider("MeterProvider", mp.Shutdown)
+	slog.InfoContext(ctx, "Metrics listener", slog.Bool("enabled", servePull), slog.String("addr", metricsPullAddr))
 
 	k8sConfig := ctrl.GetConfigOrDie()
 	k8sClient, err := kubernetes.NewForConfig(k8sConfig)

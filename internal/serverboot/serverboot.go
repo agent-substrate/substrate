@@ -273,6 +273,7 @@ func InitMetricsBridged(ctx context.Context, serviceName string, reg interface {
 		return nil, false, fmt.Errorf("serviceName is required")
 	}
 	exporters := metricsExporters(ctx, true)
+	slog.InfoContext(ctx, "Metrics exporters resolved", slog.String("exporters", exporters.String()))
 	servePull = exporters.Has(exporterPrometheus)
 	switch {
 	case exporters.Has(ExporterOTLP):

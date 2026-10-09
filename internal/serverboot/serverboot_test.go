@@ -535,18 +535,19 @@ func TestInitMetricsBridgedExporterNoneExportsNothing(t *testing.T) {
 // servePull follows the policy table: unset and the list keep both paths.
 func TestInitMetricsBridgedServePull(t *testing.T) {
 	tests := []struct {
+		name     string
 		value    string
 		wantPush bool
 		wantPull bool
 	}{
-		{"", true, true},
-		{"otlp", true, false},
-		{"prometheus", false, true},
-		{"otlp,prometheus", true, true},
-		{"none", false, false},
+		{"unset", "", true, true},
+		{"otlp", "otlp", true, false},
+		{"prometheus", "prometheus", false, true},
+		{"list", "otlp,prometheus", true, true},
+		{"none", "none", false, false},
 	}
 	for _, tt := range tests {
-		t.Run(tt.value, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			collector := startMetricsCollector(t, tt.value)
 			mp, servePull, err := InitMetricsBridged(t.Context(), "test-bridged-table", bridgedRegistry(t), nil)
 			if err != nil {

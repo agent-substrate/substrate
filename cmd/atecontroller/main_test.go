@@ -88,19 +88,31 @@ func TestBridgedRegistryProducesBeforeManagerStart(t *testing.T) {
 func TestManagerOptionsMetricsListener(t *testing.T) {
 	t.Parallel()
 
-	for _, servePull := range []bool{true, false} {
-		opts := managerOptions(types.NamespacedName{Namespace: "ate-system", Name: "pool"}, servePull)
+	tests := []struct {
+		name       string
+		servePull  bool
+		wantAddr   string
+		wantServed bool
+	}{
+		{"serving", true, metricsPullAddr, true},
+		{"disabled", false, metricsOffAddr, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			opts := managerOptions(types.NamespacedName{Namespace: "ate-system", Name: "pool"}, tt.servePull)
 
-		srv, err := metricsserver.NewServer(opts.Metrics, nil, nil)
-		if err != nil {
-			t.Fatalf("servePull=%t: NewServer: %v", servePull, err)
-		}
-		if served := srv != nil; served != servePull {
-			t.Errorf("servePull=%t: the manager serves a metrics listener = %t", servePull, served)
-		}
-		if servePull && opts.Metrics.BindAddress != ":8080" {
-			t.Errorf("metrics address = %q, want :8080", opts.Metrics.BindAddress)
-		}
+			if opts.Metrics.BindAddress != tt.wantAddr {
+				t.Errorf("metrics address = %q, want %q", opts.Metrics.BindAddress, tt.wantAddr)
+			}
+			srv, err := metricsserver.NewServer(opts.Metrics, nil, nil)
+			if err != nil {
+				t.Fatalf("NewServer: %v", err)
+			}
+			if served := srv != nil; served != tt.wantServed {
+				t.Errorf("serves a metrics listener = %t, want %t", served, tt.wantServed)
+			}
+		})
 	}
 }
 
