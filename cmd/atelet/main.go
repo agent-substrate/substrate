@@ -59,7 +59,7 @@ import (
 	"github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
 	"github.com/agent-substrate/substrate/pkg/objectstorage"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	objectstoresnapshotv1 "github.com/agent-substrate/substrate/pkg/proto/objectstoresnapshotpb/v1"
+	objectstorev1 "github.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1"
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/spf13/pflag"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
@@ -302,7 +302,7 @@ func main() {
 		ateomDialer,
 		wrappedAnonGCS,
 		wrappedGCS,
-		objectstoresnapshotv1.NewNodeProviderClient(snapshotPluginConn),
+		objectstorev1.NewNodeProviderClient(snapshotPluginConn),
 		imageCache,
 		instruments,
 		volPlugins,
@@ -458,7 +458,7 @@ type AteomHerder struct {
 	// through snapshotPlugin.
 	gcsClient objectstorage.ObjectStorage
 	// snapshotPlugin moves external snapshot files between the node and storage.
-	snapshotPlugin objectstoresnapshotv1.NodeProviderClient
+	snapshotPlugin objectstorev1.NodeProviderClient
 	// snapshotScratchDir holds short-lived manifest directories; it must be
 	// inside the node plugin's root.
 	snapshotScratchDir    string
@@ -477,7 +477,7 @@ func NewService(
 	ateomDialer *AteomDialer,
 	anonGCSClient objectstorage.ObjectStorage,
 	gcsClient objectstorage.ObjectStorage,
-	snapshotPlugin objectstoresnapshotv1.NodeProviderClient,
+	snapshotPlugin objectstorev1.NodeProviderClient,
 	imageCache *imagecache.Store,
 	instruments *Instruments,
 	volumePlugins map[string]volume.VolumePluginWorkerPlane,

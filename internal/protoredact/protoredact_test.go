@@ -30,7 +30,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/protoredact"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/agent-substrate/substrate/pkg/proto/credproviderpb"
-	objectstoresnapshotv1 "github.com/agent-substrate/substrate/pkg/proto/objectstoresnapshotpb/v1"
+	objectstorev1 "github.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -377,7 +377,7 @@ var ourProtoFiles = []protoreflect.FileDescriptor{
 	credproviderpb.File_credprovider_proto,
 	glutton.File_glutton_proto,
 	grpcechopb.File_grpcecho_proto,
-	objectstoresnapshotv1.File_objectstoresnapshot_proto,
+	objectstorev1.File_objectstore_proto,
 }
 
 // forEachField calls fn for every field of every message in ourProtoFiles,
@@ -409,13 +409,13 @@ func isDebugRedact(fd protoreflect.FieldDescriptor) bool {
 // change is reviewed as a deliberate decision about what the logs may show.
 func TestDebugRedactFieldsArePinned(t *testing.T) {
 	want := map[string]bool{
-		"ateapi.EnvVar.value":                                    true,
-		"ateapi.MintActorJWTResponse.actor_jwt":                  true,
-		"atelet.EnvEntry.value":                                  true,
-		"ateom.ContainerSpec.env":                                true,
-		"credprovider.FetchSecretResponse.opaque_bytes":          true,
-		"objectstoresnapshot.v1.FetchSnapshotRequest.actor_jwt":  true,
-		"objectstoresnapshot.v1.UploadSnapshotRequest.actor_jwt": true,
+		"ateapi.EnvVar.value":                            true,
+		"ateapi.MintActorJWTResponse.actor_jwt":          true,
+		"atelet.EnvEntry.value":                          true,
+		"ateom.ContainerSpec.env":                        true,
+		"credprovider.FetchSecretResponse.opaque_bytes":  true,
+		"objectstore.v1.FetchSnapshotRequest.actor_jwt":  true,
+		"objectstore.v1.UploadSnapshotRequest.actor_jwt": true,
 	}
 	got := map[string]bool{}
 	forEachField(func(fd protoreflect.FieldDescriptor) {

@@ -22,12 +22,12 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/objectstore"
 	"github.com/agent-substrate/substrate/internal/objectstoreplugin"
-	objectstoresnapshotv1 "github.com/agent-substrate/substrate/pkg/proto/objectstoresnapshotpb/v1"
+	objectstorev1 "github.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1"
 	"google.golang.org/grpc"
 )
 
 // NodeClient returns a client that calls p directly.
-func NodeClient(p *objectstoreplugin.NodePlugin) objectstoresnapshotv1.NodeProviderClient {
+func NodeClient(p *objectstoreplugin.NodePlugin) objectstorev1.NodeProviderClient {
 	return nodeClient{p}
 }
 
@@ -35,16 +35,16 @@ type nodeClient struct {
 	p *objectstoreplugin.NodePlugin
 }
 
-func (c nodeClient) FetchSnapshot(ctx context.Context, in *objectstoresnapshotv1.FetchSnapshotRequest, _ ...grpc.CallOption) (*objectstoresnapshotv1.FetchSnapshotResponse, error) {
+func (c nodeClient) FetchSnapshot(ctx context.Context, in *objectstorev1.FetchSnapshotRequest, _ ...grpc.CallOption) (*objectstorev1.FetchSnapshotResponse, error) {
 	return c.p.FetchSnapshot(ctx, in)
 }
 
-func (c nodeClient) UploadSnapshot(ctx context.Context, in *objectstoresnapshotv1.UploadSnapshotRequest, _ ...grpc.CallOption) (*objectstoresnapshotv1.UploadSnapshotResponse, error) {
+func (c nodeClient) UploadSnapshot(ctx context.Context, in *objectstorev1.UploadSnapshotRequest, _ ...grpc.CallOption) (*objectstorev1.UploadSnapshotResponse, error) {
 	return c.p.UploadSnapshot(ctx, in)
 }
 
 // ControlClient returns a client that calls a ControlPlugin on store directly.
-func ControlClient(store objectstore.Store) objectstoresnapshotv1.ControlProviderClient {
+func ControlClient(store objectstore.Store) objectstorev1.ControlProviderClient {
 	return controlClient{objectstoreplugin.NewControlPlugin(store)}
 }
 
@@ -52,10 +52,10 @@ type controlClient struct {
 	p *objectstoreplugin.ControlPlugin
 }
 
-func (c controlClient) CleanupSnapshot(ctx context.Context, in *objectstoresnapshotv1.CleanupSnapshotRequest, _ ...grpc.CallOption) (*objectstoresnapshotv1.CleanupSnapshotResponse, error) {
+func (c controlClient) CleanupSnapshot(ctx context.Context, in *objectstorev1.CleanupSnapshotRequest, _ ...grpc.CallOption) (*objectstorev1.CleanupSnapshotResponse, error) {
 	return c.p.CleanupSnapshot(ctx, in)
 }
 
-func (c controlClient) CopySnapshot(ctx context.Context, in *objectstoresnapshotv1.CopySnapshotRequest, _ ...grpc.CallOption) (*objectstoresnapshotv1.CopySnapshotResponse, error) {
+func (c controlClient) CopySnapshot(ctx context.Context, in *objectstorev1.CopySnapshotRequest, _ ...grpc.CallOption) (*objectstorev1.CopySnapshotResponse, error) {
 	return c.p.CopySnapshot(ctx, in)
 }
