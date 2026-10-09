@@ -324,18 +324,7 @@ func TestValidateWorkerUpdate_RequireStatus(t *testing.T) {
 }
 
 func TestValidateRegisterWorkerRequest(t *testing.T) {
-	validRuntime := func() *ateapipb.SandboxRuntime {
-		return &ateapipb.SandboxRuntime{
-			SandboxClass: "gvisor",
-			Name:         "gvisor-2",
-			CompatVersion: &ateapipb.VersionedSandboxCompat{
-				SchemaVersion: "v1",
-				Attributes: []*ateapipb.AttributeEntry{
-					{Key: "architecture", Value: "amd64"},
-				},
-			},
-		}
-	}
+	validRuntime := validSandboxRuntime
 	valid := func(mutate ...func(*ateapipb.RegisterWorkerRequest)) *ateapipb.RegisterWorkerRequest {
 		r := &ateapipb.RegisterWorkerRequest{
 			Worker: workerRef(apiWorkerName),
@@ -366,8 +355,7 @@ func TestValidateRegisterWorkerRequest(t *testing.T) {
 		req: valid(func(r *ateapipb.RegisterWorkerRequest) {
 			r.RestorableRuntimes = []*ateapipb.SandboxRuntime{{
 				SandboxClass: "gvisor",
-				Name:         "gvisor-1",
-				CompatVersion: &ateapipb.VersionedSandboxCompat{
+				Version: &ateapipb.VersionedSandboxCompat{
 					SchemaVersion: "v1",
 					Attributes: []*ateapipb.AttributeEntry{
 						{Key: "architecture", Value: "amd64"},
@@ -421,60 +409,67 @@ func TestValidateRegisterWorkerRequest(t *testing.T) {
 		req:  valid(func(r *ateapipb.RegisterWorkerRequest) { r.DefaultRuntime.SandboxClass = strings.Repeat("c", 64) }),
 		want: field.ErrorList{field.TooLong(defaultRuntimePath.Child("sandbox_class"), "", 63).WithOrigin("maxLength")},
 	}, {
-		name: "default_runtime.name too long",
-		req:  valid(func(r *ateapipb.RegisterWorkerRequest) { r.DefaultRuntime.Name = strings.Repeat("n", 254) }),
-		want: field.ErrorList{field.TooLong(defaultRuntimePath.Child("name"), "", 253).WithOrigin("maxLength")},
+		name: "missing default_runtime.version",
+		req:  valid(func(r *ateapipb.RegisterWorkerRequest) { r.DefaultRuntime.Version = nil }),
+		want: field.ErrorList{field.Required(defaultRuntimePath.Child("version"), "")},
 	}, {
-		name: "missing default_runtime.compat_version",
-		req:  valid(func(r *ateapipb.RegisterWorkerRequest) { r.DefaultRuntime.CompatVersion = nil }),
-		want: field.ErrorList{field.Required(defaultRuntimePath.Child("compat_version"), "")},
+		name: "missing default_runtime.version.schema_version",
+		req:  valid(func(r *ateapipb.RegisterWorkerRequest) { r.DefaultRuntime.Version.SchemaVersion = "" }),
+		want: field.ErrorList{field.Required(defaultRuntimePath.Child("version", "schema_version"), "")},
 	}, {
-		name: "missing default_runtime.compat_version.schema_version",
-		req:  valid(func(r *ateapipb.RegisterWorkerRequest) { r.DefaultRuntime.CompatVersion.SchemaVersion = "" }),
-		want: field.ErrorList{field.Required(defaultRuntimePath.Child("compat_version", "schema_version"), "")},
-	}, {
-		name: "default_runtime.compat_version.schema_version too long",
+		name: "default_runtime.version.schema_version too long",
 		req: valid(func(r *ateapipb.RegisterWorkerRequest) {
-			r.DefaultRuntime.CompatVersion.SchemaVersion = strings.Repeat("v", 65)
+			r.DefaultRuntime.Version.SchemaVersion = strings.Repeat("v", 65)
 		}),
-		want: field.ErrorList{field.TooLong(defaultRuntimePath.Child("compat_version", "schema_version"), "", 64).WithOrigin("maxLength")},
+		want: field.ErrorList{field.TooLong(defaultRuntimePath.Child("version", "schema_version"), "", 64).WithOrigin("maxLength")},
 	}, {
-		name: "missing default_runtime.compat_version.attributes",
-		req:  valid(func(r *ateapipb.RegisterWorkerRequest) { r.DefaultRuntime.CompatVersion.Attributes = nil }),
-		want: field.ErrorList{field.Required(defaultRuntimePath.Child("compat_version", "attributes"), "")},
+		name: "missing default_runtime.version.attributes",
+		req:  valid(func(r *ateapipb.RegisterWorkerRequest) { r.DefaultRuntime.Version.Attributes = nil }),
+		want: field.ErrorList{field.Required(defaultRuntimePath.Child("version", "attributes"), "")},
 	}, {
 		name: "duplicate attribute key",
 		req: valid(func(r *ateapipb.RegisterWorkerRequest) {
-			r.DefaultRuntime.CompatVersion.Attributes = []*ateapipb.AttributeEntry{
+			r.DefaultRuntime.Version.Attributes = []*ateapipb.AttributeEntry{
 				{Key: "architecture", Value: "amd64"},
 				{Key: "architecture", Value: "arm64"},
 			}
 		}),
-		want: field.ErrorList{field.Duplicate(defaultRuntimePath.Child("compat_version", "attributes").Index(1), nil)},
+		want: field.ErrorList{field.Duplicate(defaultRuntimePath.Child("version", "attributes").Index(1), nil)},
 	}, {
 		name: "missing attribute key",
 		req: valid(func(r *ateapipb.RegisterWorkerRequest) {
-			r.DefaultRuntime.CompatVersion.Attributes = []*ateapipb.AttributeEntry{{Value: "amd64"}}
+			r.DefaultRuntime.Version.Attributes = []*ateapipb.AttributeEntry{{Value: "amd64"}}
 		}),
-		want: field.ErrorList{field.Required(defaultRuntimePath.Child("compat_version", "attributes").Index(0).Child("key"), "")},
+		want: field.ErrorList{field.Required(defaultRuntimePath.Child("version", "attributes").Index(0).Child("key"), "")},
 	}, {
 		name: "attribute key too long",
 		req: valid(func(r *ateapipb.RegisterWorkerRequest) {
-			r.DefaultRuntime.CompatVersion.Attributes = []*ateapipb.AttributeEntry{{Key: strings.Repeat("k", 129), Value: "v"}}
+			r.DefaultRuntime.Version.Attributes = []*ateapipb.AttributeEntry{{Key: strings.Repeat("k", 129), Value: "v"}}
 		}),
-		want: field.ErrorList{field.TooLong(defaultRuntimePath.Child("compat_version", "attributes").Index(0).Child("key"), "", 128).WithOrigin("maxLength")},
+		want: field.ErrorList{field.TooLong(defaultRuntimePath.Child("version", "attributes").Index(0).Child("key"), "", 128).WithOrigin("maxLength")},
 	}, {
 		name: "missing attribute value",
 		req: valid(func(r *ateapipb.RegisterWorkerRequest) {
-			r.DefaultRuntime.CompatVersion.Attributes = []*ateapipb.AttributeEntry{{Key: "k"}}
+			r.DefaultRuntime.Version.Attributes = []*ateapipb.AttributeEntry{{Key: "k"}}
 		}),
-		want: field.ErrorList{field.Required(defaultRuntimePath.Child("compat_version", "attributes").Index(0).Child("value"), "")},
+		want: field.ErrorList{field.Required(defaultRuntimePath.Child("version", "attributes").Index(0).Child("value"), "")},
 	}, {
 		name: "attribute value too long",
 		req: valid(func(r *ateapipb.RegisterWorkerRequest) {
-			r.DefaultRuntime.CompatVersion.Attributes = []*ateapipb.AttributeEntry{{Key: "k", Value: strings.Repeat("v", 257)}}
+			r.DefaultRuntime.Version.Attributes = []*ateapipb.AttributeEntry{{Key: "k", Value: strings.Repeat("v", 257)}}
 		}),
-		want: field.ErrorList{field.TooLong(defaultRuntimePath.Child("compat_version", "attributes").Index(0).Child("value"), "", 256).WithOrigin("maxLength")},
+		want: field.ErrorList{field.TooLong(defaultRuntimePath.Child("version", "attributes").Index(0).Child("value"), "", 256).WithOrigin("maxLength")},
+	}, {
+		name: "attributes at the bound",
+		req: valid(func(r *ateapipb.RegisterWorkerRequest) {
+			r.DefaultRuntime.Version.Attributes = attributeEntries(32)
+		}),
+	}, {
+		name: "too many attributes",
+		req: valid(func(r *ateapipb.RegisterWorkerRequest) {
+			r.DefaultRuntime.Version.Attributes = attributeEntries(33)
+		}),
+		want: field.ErrorList{field.TooMany(defaultRuntimePath.Child("version", "attributes"), 33, 32).WithOrigin("maxItems")},
 	}, {
 		name: "nil restorable_runtimes entry",
 		req:  valid(func(r *ateapipb.RegisterWorkerRequest) { r.RestorableRuntimes = []*ateapipb.SandboxRuntime{nil} }),
@@ -484,11 +479,76 @@ func TestValidateRegisterWorkerRequest(t *testing.T) {
 		req: valid(func(r *ateapipb.RegisterWorkerRequest) {
 			r.RestorableRuntimes = []*ateapipb.SandboxRuntime{{SandboxClass: "gvisor"}}
 		}),
-		want: field.ErrorList{field.Required(restorablePath.Index(0).Child("compat_version"), "")},
+		want: field.ErrorList{field.Required(restorablePath.Index(0).Child("version"), "")},
+	}, {
+		name: "restorable_runtimes at the bound",
+		req:  valid(func(r *ateapipb.RegisterWorkerRequest) { r.RestorableRuntimes = sandboxRuntimes(32) }),
+	}, {
+		name: "too many restorable_runtimes",
+		req:  valid(func(r *ateapipb.RegisterWorkerRequest) { r.RestorableRuntimes = sandboxRuntimes(33) }),
+		want: field.ErrorList{field.TooMany(restorablePath, 33, 32).WithOrigin("maxItems")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assertValidateErr(t, ValidateRegisterWorkerRequest(context.Background(), tt.req), tt.want)
+		})
+	}
+}
+
+// TestValidateWorkerUpdate_SandboxRuntimes pins the status-side checks on the
+// runtimes RegisterWorker records. They reach the store as status, which no
+// request validator sees, so ValidateWorkerUpdate is the only check on them.
+func TestValidateWorkerUpdate_SandboxRuntimes(t *testing.T) {
+	statusPath := field.NewPath("worker", "status")
+	oldVal := validWorker(apiWorkerName, withWorkerStatus())
+	tests := []struct {
+		name   string
+		mutate func(s *ateapipb.WorkerStatus)
+		want   field.ErrorList
+	}{{
+		name: "valid runtimes",
+		mutate: func(s *ateapipb.WorkerStatus) {
+			s.DefaultRuntime = validSandboxRuntime()
+			s.RestorableRuntimes = sandboxRuntimes(32)
+		},
+	}, {
+		name: "missing default_runtime.sandbox_class",
+		mutate: func(s *ateapipb.WorkerStatus) {
+			s.DefaultRuntime = validSandboxRuntime()
+			s.DefaultRuntime.SandboxClass = ""
+		},
+		want: field.ErrorList{field.Required(statusPath.Child("default_runtime", "sandbox_class"), "")},
+	}, {
+		name: "missing default_runtime.version",
+		mutate: func(s *ateapipb.WorkerStatus) {
+			s.DefaultRuntime = &ateapipb.SandboxRuntime{SandboxClass: "gvisor"}
+		},
+		want: field.ErrorList{field.Required(statusPath.Child("default_runtime", "version"), "")},
+	}, {
+		name: "too many default_runtime attributes",
+		mutate: func(s *ateapipb.WorkerStatus) {
+			s.DefaultRuntime = validSandboxRuntime()
+			s.DefaultRuntime.Version.Attributes = attributeEntries(33)
+		},
+		want: field.ErrorList{field.TooMany(statusPath.Child("default_runtime", "version", "attributes"), 33, 32).WithOrigin("maxItems")},
+	}, {
+		name: "invalid restorable_runtimes entry",
+		mutate: func(s *ateapipb.WorkerStatus) {
+			s.RestorableRuntimes = []*ateapipb.SandboxRuntime{{SandboxClass: "gvisor"}}
+		},
+		want: field.ErrorList{field.Required(statusPath.Child("restorable_runtimes").Index(0).Child("version"), "")},
+	}, {
+		name: "too many restorable_runtimes",
+		mutate: func(s *ateapipb.WorkerStatus) {
+			s.RestorableRuntimes = sandboxRuntimes(33)
+		},
+		want: field.ErrorList{field.TooMany(statusPath.Child("restorable_runtimes"), 33, 32).WithOrigin("maxItems")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			newVal := proto.Clone(oldVal).(*ateapipb.Worker)
+			tt.mutate(newVal.Status)
+			assertValidateErr(t, ValidateWorkerUpdate(context.Background(), field.NewPath("worker"), newVal, oldVal, true), tt.want)
 		})
 	}
 }
@@ -604,4 +664,34 @@ func withWorkerStatus(mods ...func(*ateapipb.WorkerStatus)) func(*ateapipb.Worke
 
 func workerRef(name string) *ateapipb.ObjectRef {
 	return &ateapipb.ObjectRef{Name: name}
+}
+
+// validSandboxRuntime returns a SandboxRuntime in the shape RegisterWorker
+// accepts: a class and a v1 identity with one attribute.
+func validSandboxRuntime() *ateapipb.SandboxRuntime {
+	return &ateapipb.SandboxRuntime{
+		SandboxClass: "gvisor",
+		Version: &ateapipb.VersionedSandboxCompat{
+			SchemaVersion: "v1",
+			Attributes:    []*ateapipb.AttributeEntry{{Key: "architecture", Value: "amd64"}},
+		},
+	}
+}
+
+// attributeEntries returns n valid attributes with distinct keys.
+func attributeEntries(n int) []*ateapipb.AttributeEntry {
+	attrs := make([]*ateapipb.AttributeEntry, n)
+	for i := range attrs {
+		attrs[i] = &ateapipb.AttributeEntry{Key: fmt.Sprintf("k%d", i), Value: "v"}
+	}
+	return attrs
+}
+
+// sandboxRuntimes returns n valid runtimes.
+func sandboxRuntimes(n int) []*ateapipb.SandboxRuntime {
+	rts := make([]*ateapipb.SandboxRuntime, n)
+	for i := range rts {
+		rts[i] = validSandboxRuntime()
+	}
+	return rts
 }

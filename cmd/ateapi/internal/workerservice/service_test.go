@@ -55,19 +55,29 @@ func (f *fakeSuspender) SuspendActor(_ context.Context, req *ateapipb.SuspendAct
 // this seeds.
 func seedReportedWorker(t *testing.T, st store.Interface, nodeName string, capacity *ateapipb.WorkerResources) *ateapipb.Worker {
 	t.Helper()
+	return seedWorker(t, st, testWorkerName, nodeName, testDefaultRuntime.GetSandboxClass(), &ateapipb.WorkerStatus{
+		State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Capacity: capacity, DefaultRuntime: testDefaultRuntime,
+	})
+}
+
+// seedWorker registers a Worker named name, of sandbox class class, on
+// nodeName, with status already recorded. name doubles as the pod UID, so it
+// must be UUID-shaped. class "" is a Worker recorded without one.
+func seedWorker(t *testing.T, st store.Interface, name, nodeName, class string, status *ateapipb.WorkerStatus) *ateapipb.Worker {
+	t.Helper()
 	created, err := st.CreateWorker(context.Background(), &ateapipb.Worker{
-		Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerName},
+		Metadata:        &ateapipb.ResourceMetadata{Name: name},
 		WorkerNamespace: "ate-system",
 		WorkerPool:      "pool-1",
 		WorkerPod:       "worker-pod-1",
-		WorkerPodUid:    testWorkerName,
+		WorkerPodUid:    name,
 		NodeName:        nodeName,
 		Ips:             []string{"10.1.2.3"},
-		SandboxClass:    testDefaultRuntime.GetSandboxClass(),
-		Status:          &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Capacity: capacity, DefaultRuntime: testDefaultRuntime},
+		SandboxClass:    class,
+		Status:          status,
 	})
 	if err != nil {
-		t.Fatalf("seeding worker: %v", err)
+		t.Fatalf("seeding worker %s: %v", name, err)
 	}
 	return created
 }

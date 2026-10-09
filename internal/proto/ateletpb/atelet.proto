@@ -78,20 +78,16 @@ message SandboxRuntime {
   // +k8s:maxLength=63
   string sandbox_class = 1;
 
-  // SandboxConfig or version name (e.g. "gvisor-2"), informational only,
-  // never used during scheduling.
-  //
-  // +k8s:optional
-  // +k8s:maxLength=253
-  string name = 2;
-
   // Primary compatibility version stamped onto an actor's snapshot when a
-  // checkpoint is taken on this runtime. Snapshots matching `compat_version`
+  // checkpoint is taken on this runtime. Snapshots matching `version`
   // can warm-boot on this runtime.
   // TODO: Add support for additional compatibility versions.
   //
   // +k8s:required
-  VersionedSandboxCompat compat_version = 3;
+  VersionedSandboxCompat version = 2;
+
+  // TODO: Add an informational SandboxConfig version name (e.g. "gvisor-2")
+  // once workers report one.
 }
 
 // VersionedSandboxCompat holds the compatibility schema version and the
@@ -107,9 +103,12 @@ message VersionedSandboxCompat {
   // Key-value compatibility attributes defined by this schema version, covering
   // both runtime assets (e.g. "gvisor_asset_hash") and effective guest hardware
   // features after masking (e.g. "architecture", "cpu_features").
-  // Matched by exact equality of all keys and values within the same schema
-  // version. Producers must emit attributes sorted by key so repeated
-  // registrations of the same runtime compare equal without spurious writes.
+  // Matched against a snapshot under the same schema_version: every attribute
+  // on the snapshot must be present on the worker with an equal value; keys
+  // only the worker has are ignored. Bump schema_version when a key's meaning
+  // changes or older snapshots must no longer match.
+  // Order as sent does not matter: ate-api-server sorts attributes by key
+  // before recording them.
   //
   // +k8s:required
   // +k8s:maxItems=32

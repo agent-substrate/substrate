@@ -17,9 +17,7 @@
 package hardware
 
 import (
-	"cmp"
 	"runtime"
-	"slices"
 
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -40,32 +38,23 @@ const (
 // ProbeHost inspects the current host and returns its v1 VersionedSandboxCompat
 // in atelet wire format.
 //
-// Attributes are emitted sorted by key so that repeated registrations of the
-// same runtime compare equal under proto.Equal without triggering spurious
-// store writes.
-//
 // TODO: Probe and populate cpu_features and other host hardware attributes
 // (e.g. via CPUID on amd64 and MIDR_EL1 on arm64).
 func ProbeHost() *ateletpb.VersionedSandboxCompat {
-	attrs := []*ateletpb.AttributeEntry{
-		{
-			Key:   AttrArchitecture,
-			Value: runtime.GOARCH,
-		},
-	}
-	slices.SortFunc(attrs, func(a, b *ateletpb.AttributeEntry) int {
-		return cmp.Compare(a.GetKey(), b.GetKey())
-	})
 	return &ateletpb.VersionedSandboxCompat{
 		SchemaVersion: SchemaVersionV1,
-		Attributes:    attrs,
+		Attributes: []*ateletpb.AttributeEntry{
+			{
+				Key:   AttrArchitecture,
+				Value: runtime.GOARCH,
+			},
+		},
 	}
 }
 
-// Matches reports whether a worker's SandboxRuntime satisfies the SandboxRuntime
-// recorded on snap. A nil snapshot SandboxRuntime imposes no constraint.
-// Otherwise, sandbox_class, compat_version.schema_version, and all
-// compat_version.attributes must match 1-to-1.
+// Matches reports whether a worker's SandboxRuntime can restore a snapshot
+// stamped with snap. A nil snapshot SandboxRuntime imposes no constraint.
+// Otherwise the sandbox classes must be equal and MatchesCompat must hold.
 func Matches(worker, snap *ateapipb.SandboxRuntime) bool {
 	if snap == nil {
 		return true
@@ -73,11 +62,13 @@ func Matches(worker, snap *ateapipb.SandboxRuntime) bool {
 	if worker == nil || worker.GetSandboxClass() != snap.GetSandboxClass() {
 		return false
 	}
-	return MatchesCompat(worker.GetCompatVersion(), snap.GetCompatVersion())
+	return MatchesCompat(worker.GetVersion(), snap.GetVersion())
 }
 
-// MatchesCompat reports whether two VersionedSandboxCompat values have the same
-// non-empty schema version and an exact 1-to-1 match on all attributes.
+// MatchesCompat reports whether worker can restore a snapshot stamped with
+// snap: same non-empty schema version, and every attribute on snap present on
+// worker with an equal value. Keys only the worker has are ignored; a new
+// schema version is how older snapshots are excluded.
 func MatchesCompat(worker, snap *ateapipb.VersionedSandboxCompat) bool {
 	if worker == nil || snap == nil {
 		return false
@@ -87,9 +78,6 @@ func MatchesCompat(worker, snap *ateapipb.VersionedSandboxCompat) bool {
 	}
 	wAttrs := worker.GetAttributes()
 	sAttrs := snap.GetAttributes()
-	if len(wAttrs) != len(sAttrs) {
-		return false
-	}
 	// API validation bounds attributes to at most 32 entries with unique keys,
 	// so the nested scan is small and avoids map allocation on the hot path.
 	for _, sa := range sAttrs {

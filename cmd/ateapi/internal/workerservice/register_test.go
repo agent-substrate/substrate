@@ -16,9 +16,11 @@ package workerservice
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	"google.golang.org/protobuf/testing/protocmp"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/ateletauth/ateletauthtest"
@@ -35,7 +37,7 @@ import (
 func testRuntime(class, arch string) *ateapipb.SandboxRuntime {
 	return &ateapipb.SandboxRuntime{
 		SandboxClass: class,
-		CompatVersion: &ateapipb.VersionedSandboxCompat{
+		Version: &ateapipb.VersionedSandboxCompat{
 			SchemaVersion: "v1",
 			Attributes:    []*ateapipb.AttributeEntry{{Key: "architecture", Value: arch}},
 		},
@@ -77,131 +79,138 @@ func TestRegisterWorker(t *testing.T) {
 	}
 }
 
-func TestRegisterWorker_RecordsRuntimes(t *testing.T) {
+// A report's runtimes are checked against the Worker's class and recorded only
+// when they differ from what is stored. Capacity is held at what was seeded,
+// so a write here is one the runtimes alone caused.
+func TestRegisterWorker_Runtimes(t *testing.T) {
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
 	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, nil)
-	seedReportedWorker(t, st, testNode, &ateapipb.WorkerResources{Actors: 1})
 	authed := ateletauthtest.ContextWith(ateletauthtest.CertOn(t, testNode))
 
-	wantDefault := testRuntime("gvisor", "arm64")
-	wantRestorable := []*ateapipb.SandboxRuntime{testRuntime("gvisor", "arm64-v8"), testRuntime("gvisor", "arm64-v9")}
-	req := &ateapipb.RegisterWorkerRequest{
-		Worker:             &ateapipb.ObjectRef{Name: testWorkerName},
-		Capacity:           &ateapipb.WorkerResources{Actors: 4094},
-		DefaultRuntime:     wantDefault,
-		RestorableRuntimes: wantRestorable,
-	}
-	got, err := s.RegisterWorker(authed, req)
-	if err != nil {
-		t.Fatalf("RegisterWorker() failed: %v", err)
-	}
-	if diff := cmp.Diff(wantDefault, got.GetWorker().GetStatus().GetDefaultRuntime(), protocmp.Transform()); diff != "" {
-		t.Errorf("default_runtime mismatch (-want +got):\n%s", diff)
-	}
-	if diff := cmp.Diff(wantRestorable, got.GetWorker().GetStatus().GetRestorableRuntimes(), protocmp.Transform()); diff != "" {
-		t.Errorf("restorable_runtimes mismatch (-want +got):\n%s", diff)
+	gvisorAMD64, gvisorARM64 := testRuntime("gvisor", "amd64"), testRuntime("gvisor", "arm64")
+	gvisorV8, gvisorV9 := testRuntime("gvisor", "arm64-v8"), testRuntime("gvisor", "arm64-v9")
+	microvm := testRuntime("microvm", "amd64")
+	// Every Worker here has already reported gvisorAMD64 with gvisorV8 and
+	// gvisorV9 restorable, in that order, at a capacity of one actor.
+	seeded := func() *ateapipb.WorkerStatus {
+		return &ateapipb.WorkerStatus{
+			State:              ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+			Capacity:           &ateapipb.WorkerResources{Actors: 1},
+			DefaultRuntime:     gvisorAMD64,
+			RestorableRuntimes: []*ateapipb.SandboxRuntime{gvisorV8, gvisorV9},
+		}
 	}
 
-	// Repeating the identical capacity and runtimes must not bump version.
-	v1 := got.GetWorker().GetMetadata().GetVersion()
-	again, err := s.RegisterWorker(authed, req)
-	if err != nil {
-		t.Fatalf("RegisterWorker() repeat failed: %v", err)
-	}
-	if gotV := again.GetWorker().GetMetadata().GetVersion(); gotV != v1 {
-		t.Errorf("version = %d after identical capacity+runtimes report, want %d unchanged", gotV, v1)
-	}
-
-	// Runtimes are replaced like capacity: a report that lists no restorable
-	// runtimes is a Worker that can restore from none but its default, as when
-	// a version is disabled, and the record must not keep advertising it.
-	req.RestorableRuntimes = nil
-	got, err = s.RegisterWorker(authed, req)
-	if err != nil {
-		t.Fatalf("RegisterWorker() without restorable runtimes failed: %v", err)
-	}
-	if got := got.GetWorker().GetStatus().GetRestorableRuntimes(); len(got) != 0 {
-		t.Errorf("restorable_runtimes = %v after a report without any, want none", got)
-	}
-}
-
-// A Worker's sandbox class is fixed by the pool that created it. A runtime of
-// another class is one the Worker cannot run, so the report is refused rather
-// than recorded for the scheduler to act on.
-func TestRegisterWorker_RejectsRuntimeOfAnotherClass(t *testing.T) {
-	st, cleanup := storetest.SetupTestStore(t)
-	defer cleanup()
-	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, nil)
-	seeded := seedReportedWorker(t, st, testNode, &ateapipb.WorkerResources{Actors: 1})
-	authed := ateletauthtest.ContextWith(ateletauthtest.CertOn(t, testNode))
-
-	for _, tc := range []struct {
+	tests := []struct {
 		name string
-		req  *ateapipb.RegisterWorkerRequest
+		// workerClass is the class the pool created the Worker with; "" is
+		// a Worker recorded without one.
+		workerClass string
+		def         *ateapipb.SandboxRuntime
+		restorable  []*ateapipb.SandboxRuntime
+		wantCode    codes.Code
+		// wantWrite is whether the report changes the record.
+		wantWrite bool
 	}{{
-		name: "default runtime",
-		req: &ateapipb.RegisterWorkerRequest{
-			Worker:         &ateapipb.ObjectRef{Name: testWorkerName},
-			Capacity:       &ateapipb.WorkerResources{Actors: 2},
-			DefaultRuntime: testRuntime("microvm", "amd64"),
-		},
+		name:        "identical report writes nothing",
+		workerClass: "gvisor",
+		def:         gvisorAMD64,
+		restorable:  []*ateapipb.SandboxRuntime{gvisorV8, gvisorV9},
 	}, {
-		name: "restorable runtime",
-		req: &ateapipb.RegisterWorkerRequest{
-			Worker:             &ateapipb.ObjectRef{Name: testWorkerName},
-			Capacity:           &ateapipb.WorkerResources{Actors: 2},
-			DefaultRuntime:     testDefaultRuntime,
-			RestorableRuntimes: []*ateapipb.SandboxRuntime{testRuntime("gvisor", "arm64"), testRuntime("microvm", "amd64")},
-		},
-	}} {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := s.RegisterWorker(authed, tc.req)
-			if got := apierror.Code(err); got != codes.FailedPrecondition {
-				t.Fatalf("code = %v (err %v), want %v", got, err, codes.FailedPrecondition)
+		name:        "changed default runtime writes",
+		workerClass: "gvisor",
+		def:         gvisorARM64,
+		restorable:  []*ateapipb.SandboxRuntime{gvisorV8, gvisorV9},
+		wantWrite:   true,
+	}, {
+		name:        "changed restorable runtime writes",
+		workerClass: "gvisor",
+		def:         gvisorAMD64,
+		restorable:  []*ateapipb.SandboxRuntime{gvisorV8, gvisorARM64},
+		wantWrite:   true,
+	}, {
+		// A report is compared as sent: the list is atomic, so a new order
+		// is a new report.
+		name:        "reordered restorable runtimes write",
+		workerClass: "gvisor",
+		def:         gvisorAMD64,
+		restorable:  []*ateapipb.SandboxRuntime{gvisorV9, gvisorV8},
+		wantWrite:   true,
+	}, {
+		// Runtimes are replaced like capacity: a report that lists no
+		// restorable runtimes is a Worker that can restore from none but its
+		// default, as when a version is disabled, and the record must not
+		// keep advertising them.
+		name:        "dropped restorable runtimes write",
+		workerClass: "gvisor",
+		def:         gvisorAMD64,
+		wantWrite:   true,
+	}, {
+		// The class is fixed by the pool that created the Worker. A runtime
+		// of another class is one it cannot run, so the report is refused
+		// rather than recorded for the scheduler to act on.
+		name:        "default runtime of another class is refused",
+		workerClass: "gvisor",
+		def:         microvm,
+		restorable:  []*ateapipb.SandboxRuntime{gvisorV8, gvisorV9},
+		wantCode:    codes.FailedPrecondition,
+	}, {
+		name:        "restorable runtime of another class is refused",
+		workerClass: "gvisor",
+		def:         gvisorAMD64,
+		restorable:  []*ateapipb.SandboxRuntime{gvisorV8, microvm},
+		wantCode:    codes.FailedPrecondition,
+	}, {
+		// A Worker recorded without a class has nothing for a report to
+		// contradict.
+		name:       "unclassed Worker takes a default runtime of any class",
+		def:        microvm,
+		restorable: []*ateapipb.SandboxRuntime{gvisorV8, gvisorV9},
+		wantWrite:  true,
+	}, {
+		name:       "unclassed Worker takes restorable runtimes of mixed classes",
+		def:        gvisorAMD64,
+		restorable: []*ateapipb.SandboxRuntime{gvisorV8, microvm},
+		wantWrite:  true,
+	}}
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			name := fmt.Sprintf("1a7e4c83-6d20-4f95-b3c8-%012d", i)
+			before := seedWorker(t, st, name, testNode, tt.workerClass, seeded())
+
+			got, err := s.RegisterWorker(authed, &ateapipb.RegisterWorkerRequest{
+				Worker:             &ateapipb.ObjectRef{Name: name},
+				Capacity:           &ateapipb.WorkerResources{Actors: 1},
+				DefaultRuntime:     tt.def,
+				RestorableRuntimes: tt.restorable,
+			})
+			if code := apierror.Code(err); code != tt.wantCode {
+				t.Fatalf("code = %v (err %v), want %v", code, err, tt.wantCode)
+			}
+			after, err := st.GetWorker(context.Background(), name)
+			if err != nil {
+				t.Fatalf("GetWorker: %v", err)
+			}
+			if wrote := after.GetMetadata().GetVersion() != before.GetMetadata().GetVersion(); wrote != tt.wantWrite {
+				t.Fatalf("version %d -> %d, want a write: %v", before.GetMetadata().GetVersion(), after.GetMetadata().GetVersion(), tt.wantWrite)
+			}
+			if !tt.wantWrite {
+				if diff := cmp.Diff(before.GetStatus(), after.GetStatus(), protocmp.Transform()); diff != "" {
+					t.Errorf("status changed without a write (-want +got):\n%s", diff)
+				}
+				return
+			}
+			if diff := cmp.Diff(tt.def, after.GetStatus().GetDefaultRuntime(), protocmp.Transform()); diff != "" {
+				t.Errorf("default_runtime mismatch (-want +got):\n%s", diff)
+			}
+			if diff := cmp.Diff(tt.restorable, after.GetStatus().GetRestorableRuntimes(), protocmp.Transform(), cmpopts.EquateEmpty()); diff != "" {
+				t.Errorf("restorable_runtimes mismatch (-want +got):\n%s", diff)
+			}
+			if diff := cmp.Diff(after, got.GetWorker(), protocmp.Transform()); diff != "" {
+				t.Errorf("response is not the stored Worker (-want +got):\n%s", diff)
 			}
 		})
-	}
-
-	after, err := st.GetWorker(context.Background(), testWorkerName)
-	if err != nil {
-		t.Fatalf("GetWorker: %v", err)
-	}
-	if diff := cmp.Diff(seeded.GetStatus(), after.GetStatus(), protocmp.Transform()); diff != "" {
-		t.Errorf("status changed despite every report being refused (-want +got):\n%s", diff)
-	}
-}
-
-// A Worker recorded without a sandbox class has nothing for a report to
-// contradict, so any class is accepted.
-func TestRegisterWorker_UnclassedWorkerAcceptsAnyClass(t *testing.T) {
-	st, cleanup := storetest.SetupTestStore(t)
-	defer cleanup()
-	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, nil)
-	if _, err := st.CreateWorker(context.Background(), &ateapipb.Worker{
-		Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerName},
-		WorkerNamespace: "ate-system",
-		WorkerPool:      "pool-1",
-		WorkerPod:       "worker-pod-1",
-		WorkerPodUid:    testWorkerName,
-		NodeName:        testNode,
-		Ips:             []string{"10.1.2.3"},
-		Status:          &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE},
-	}); err != nil {
-		t.Fatalf("seeding worker: %v", err)
-	}
-
-	want := testRuntime("microvm", "amd64")
-	got, err := s.RegisterWorker(ateletauthtest.ContextWith(ateletauthtest.CertOn(t, testNode)), &ateapipb.RegisterWorkerRequest{
-		Worker:         &ateapipb.ObjectRef{Name: testWorkerName},
-		Capacity:       &ateapipb.WorkerResources{Actors: 2},
-		DefaultRuntime: want,
-	})
-	if err != nil {
-		t.Fatalf("RegisterWorker() failed: %v", err)
-	}
-	if diff := cmp.Diff(want, got.GetWorker().GetStatus().GetDefaultRuntime(), protocmp.Transform()); diff != "" {
-		t.Errorf("default_runtime mismatch (-want +got):\n%s", diff)
 	}
 }
 
@@ -249,6 +258,52 @@ func TestRegisterWorker_UnchangedDoesNotWrite(t *testing.T) {
 	}
 	if got, want := after.GetMetadata().GetVersion(), seeded.GetMetadata().GetVersion(); got != want {
 		t.Errorf("version = %d after three identical reports, want %d unchanged", got, want)
+	}
+}
+
+// Attribute order is the producer's business, not the record's: the same
+// attributes in another order are the same runtime, so they are stored sorted
+// by key and a reordered repeat writes nothing.
+func TestRegisterWorker_SortsAttributes(t *testing.T) {
+	st, cleanup := storetest.SetupTestStore(t)
+	defer cleanup()
+	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, nil)
+	seedReportedWorker(t, st, testNode, &ateapipb.WorkerResources{Actors: 1})
+	authed := ateletauthtest.ContextWith(ateletauthtest.CertOn(t, testNode))
+
+	runtimeWith := func(keys ...string) *ateapipb.SandboxRuntime {
+		rt := testRuntime("gvisor", "amd64")
+		rt.Version.Attributes = nil
+		for _, k := range keys {
+			rt.Version.Attributes = append(rt.Version.Attributes, &ateapipb.AttributeEntry{Key: k, Value: "v"})
+		}
+		return rt
+	}
+	register := func(def, restorable *ateapipb.SandboxRuntime) *ateapipb.Worker {
+		t.Helper()
+		got, err := s.RegisterWorker(authed, &ateapipb.RegisterWorkerRequest{
+			Worker:             &ateapipb.ObjectRef{Name: testWorkerName},
+			Capacity:           &ateapipb.WorkerResources{Actors: 1},
+			DefaultRuntime:     def,
+			RestorableRuntimes: []*ateapipb.SandboxRuntime{restorable},
+		})
+		if err != nil {
+			t.Fatalf("RegisterWorker() failed: %v", err)
+		}
+		return got.GetWorker()
+	}
+
+	first := register(runtimeWith("cpu_features", "architecture"), runtimeWith("gvisor_asset_hash", "architecture"))
+	if diff := cmp.Diff(runtimeWith("architecture", "cpu_features"), first.GetStatus().GetDefaultRuntime(), protocmp.Transform()); diff != "" {
+		t.Errorf("default_runtime not stored sorted by key (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff([]*ateapipb.SandboxRuntime{runtimeWith("architecture", "gvisor_asset_hash")}, first.GetStatus().GetRestorableRuntimes(), protocmp.Transform()); diff != "" {
+		t.Errorf("restorable_runtimes not stored sorted by key (-want +got):\n%s", diff)
+	}
+
+	again := register(runtimeWith("architecture", "cpu_features"), runtimeWith("architecture", "gvisor_asset_hash"))
+	if got, want := again.GetMetadata().GetVersion(), first.GetMetadata().GetVersion(); got != want {
+		t.Errorf("version = %d after a reordered repeat, want %d unchanged", got, want)
 	}
 }
 

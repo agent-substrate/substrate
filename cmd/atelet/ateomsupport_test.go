@@ -114,11 +114,10 @@ func (s *fakeWorkerService) MintAteomActorCertificate(_ context.Context, in *ate
 }
 
 func TestRegisterWorker(t *testing.T) {
-	reqRuntime := func(name, hash string) *ateletpb.SandboxRuntime {
+	reqRuntime := func(hash string) *ateletpb.SandboxRuntime {
 		return &ateletpb.SandboxRuntime{
 			SandboxClass: "gvisor",
-			Name:         name,
-			CompatVersion: &ateletpb.VersionedSandboxCompat{
+			Version: &ateletpb.VersionedSandboxCompat{
 				SchemaVersion: "v1",
 				Attributes: []*ateletpb.AttributeEntry{
 					{Key: "architecture", Value: "amd64"},
@@ -127,11 +126,10 @@ func TestRegisterWorker(t *testing.T) {
 			},
 		}
 	}
-	wantRuntime := func(name, hash string) *ateapipb.SandboxRuntime {
+	wantRuntime := func(hash string) *ateapipb.SandboxRuntime {
 		return &ateapipb.SandboxRuntime{
 			SandboxClass: "gvisor",
-			Name:         name,
-			CompatVersion: &ateapipb.VersionedSandboxCompat{
+			Version: &ateapipb.VersionedSandboxCompat{
 				SchemaVersion: "v1",
 				Attributes: []*ateapipb.AttributeEntry{
 					{Key: "architecture", Value: "amd64"},
@@ -140,7 +138,7 @@ func TestRegisterWorker(t *testing.T) {
 			},
 		}
 	}
-	reqDefault, wantDefault := reqRuntime("gvisor-2", "9988"), wantRuntime("gvisor-2", "9988")
+	reqDefault, wantDefault := reqRuntime("9988"), wantRuntime("9988")
 	forwarded := func(capacity *ateapipb.WorkerResources, restorable ...*ateapipb.SandboxRuntime) []*ateapipb.RegisterWorkerRequest {
 		// The Worker is named after the worker pod UID, taken from the
 		// certificate rather than the request; capacity and runtimes come
@@ -176,9 +174,9 @@ func TestRegisterWorker(t *testing.T) {
 		req: &ateletpb.RegisterWorkerRequest{
 			Capacity:           &ateletpb.WorkerResources{Actors: 1},
 			DefaultRuntime:     reqDefault,
-			RestorableRuntimes: []*ateletpb.SandboxRuntime{reqRuntime("gvisor-1", "d547")},
+			RestorableRuntimes: []*ateletpb.SandboxRuntime{reqRuntime("d547")},
 		},
-		wantForwarded: forwarded(&ateapipb.WorkerResources{Actors: 1}, wantRuntime("gvisor-1", "d547")),
+		wantForwarded: forwarded(&ateapipb.WorkerResources{Actors: 1}, wantRuntime("d547")),
 	}, {
 		name:          "omits undetermined compute",
 		req:           &ateletpb.RegisterWorkerRequest{Capacity: &ateletpb.WorkerResources{Actors: 1}, DefaultRuntime: reqDefault},

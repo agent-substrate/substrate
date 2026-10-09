@@ -15,6 +15,7 @@
 package workerservice
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -46,6 +47,10 @@ func (s *Server) RegisterWorker(ctx context.Context, req *ateapipb.RegisterWorke
 	defaultRuntime := req.GetDefaultRuntime()
 	restorable := req.GetRestorableRuntimes()
 	name := req.GetWorker().GetName()
+	sortAttributes(defaultRuntime)
+	for _, rt := range restorable {
+		sortAttributes(rt)
+	}
 
 	// Use authoritative state to authorize the write.
 	worker, err := s.store.GetWorker(ctx, name)
@@ -127,4 +132,14 @@ func validateRuntimeClasses(class string, req *ateapipb.RegisterWorkerRequest) e
 // runtimes between reports is recorded again.
 func sameRuntimes(a, b []*ateapipb.SandboxRuntime) bool {
 	return slices.EqualFunc(a, b, func(x, y *ateapipb.SandboxRuntime) bool { return proto.Equal(x, y) })
+}
+
+// sortAttributes orders a runtime's compatibility attributes by key, in place.
+// Attribute order carries no meaning, but proto equality is order-sensitive, so
+// a report is canonicalized before it is compared with what is stored: the same
+// attributes in another order are the same runtime and write nothing.
+func sortAttributes(rt *ateapipb.SandboxRuntime) {
+	slices.SortFunc(rt.GetVersion().GetAttributes(), func(a, b *ateapipb.AttributeEntry) int {
+		return cmp.Compare(a.GetKey(), b.GetKey())
+	})
 }

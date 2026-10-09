@@ -407,7 +407,7 @@ func TestReconcileHonorsReplicasAndLimits(t *testing.T) {
 	if got, want := rel.reported[ctl.uid(name)], wantCapacity(1000, "1500m", "4Gi"); !proto.Equal(got, want) {
 		t.Errorf("reported %v, want %v from the pool's limits", got, want)
 	}
-	wantRuntime := &ateapipb.SandboxRuntime{SandboxClass: "gvisor", CompatVersion: hostCompat()}
+	wantRuntime := &ateapipb.SandboxRuntime{SandboxClass: "gvisor", Version: hostCompat()}
 	if got := rel.runtimes[ctl.uid(name)]; !proto.Equal(got, wantRuntime) {
 		t.Errorf("default runtime %v, want %v: the pool's class on this host, which ate-api-server requires", got, wantRuntime)
 	}

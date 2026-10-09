@@ -16,6 +16,7 @@ package apivalidation
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -26,6 +27,28 @@ import (
 func assertValidateErr(t *testing.T, got field.ErrorList, want field.ErrorList) {
 	t.Helper()
 	field.ErrorMatcher{}.ByType().ByField().ByOrigin().Test(t, want, got)
+}
+
+// runtimeWithAttributes returns a valid gVisor runtime carrying n attributes
+// with distinct keys.
+func runtimeWithAttributes(n int) *ateletpb.SandboxRuntime {
+	attrs := make([]*ateletpb.AttributeEntry, n)
+	for i := range attrs {
+		attrs[i] = &ateletpb.AttributeEntry{Key: fmt.Sprintf("k%d", i), Value: "v"}
+	}
+	return &ateletpb.SandboxRuntime{
+		SandboxClass: "gvisor",
+		Version:      &ateletpb.VersionedSandboxCompat{SchemaVersion: "v1", Attributes: attrs},
+	}
+}
+
+// sandboxRuntimes returns n runtimes built by mk.
+func sandboxRuntimes(n int, mk func() *ateletpb.SandboxRuntime) []*ateletpb.SandboxRuntime {
+	rts := make([]*ateletpb.SandboxRuntime, n)
+	for i := range rts {
+		rts[i] = mk()
+	}
+	return rts
 }
 
 func TestValidateRequestActorSuspendRequest(t *testing.T) {
@@ -152,8 +175,7 @@ func TestValidateRegisterWorkerRequest(t *testing.T) {
 	testRuntime := func() *ateletpb.SandboxRuntime {
 		return &ateletpb.SandboxRuntime{
 			SandboxClass: "gvisor",
-			Name:         "gvisor-2",
-			CompatVersion: &ateletpb.VersionedSandboxCompat{
+			Version: &ateletpb.VersionedSandboxCompat{
 				SchemaVersion: "v1",
 				Attributes: []*ateletpb.AttributeEntry{
 					{Key: "architecture", Value: "amd64"},
@@ -198,7 +220,7 @@ func TestValidateRegisterWorkerRequest(t *testing.T) {
 		obj: &ateletpb.RegisterWorkerRequest{
 			Capacity: &ateletpb.WorkerResources{},
 			DefaultRuntime: &ateletpb.SandboxRuntime{
-				CompatVersion: testRuntime().CompatVersion,
+				Version: testRuntime().Version,
 			},
 		},
 		want: field.ErrorList{field.Required(defaultRuntimePath.Child("sandbox_class"), "")},
@@ -207,71 +229,60 @@ func TestValidateRegisterWorkerRequest(t *testing.T) {
 		obj: &ateletpb.RegisterWorkerRequest{
 			Capacity: &ateletpb.WorkerResources{},
 			DefaultRuntime: &ateletpb.SandboxRuntime{
-				SandboxClass:  strings.Repeat("c", 64),
-				CompatVersion: testRuntime().CompatVersion,
+				SandboxClass: strings.Repeat("c", 64),
+				Version:      testRuntime().Version,
 			},
 		},
 		want: field.ErrorList{field.TooLong(defaultRuntimePath.Child("sandbox_class"), "", 63).WithOrigin("maxLength")},
 	}, {
-		name: "default_runtime.name too long",
-		obj: &ateletpb.RegisterWorkerRequest{
-			Capacity: &ateletpb.WorkerResources{},
-			DefaultRuntime: &ateletpb.SandboxRuntime{
-				SandboxClass:  "gvisor",
-				Name:          strings.Repeat("n", 254),
-				CompatVersion: testRuntime().CompatVersion,
-			},
-		},
-		want: field.ErrorList{field.TooLong(defaultRuntimePath.Child("name"), "", 253).WithOrigin("maxLength")},
-	}, {
-		name: "missing default_runtime.compat_version",
+		name: "missing default_runtime.version",
 		obj: &ateletpb.RegisterWorkerRequest{
 			Capacity:       &ateletpb.WorkerResources{},
 			DefaultRuntime: &ateletpb.SandboxRuntime{SandboxClass: "gvisor"},
 		},
-		want: field.ErrorList{field.Required(defaultRuntimePath.Child("compat_version"), "")},
+		want: field.ErrorList{field.Required(defaultRuntimePath.Child("version"), "")},
 	}, {
-		name: "missing default_runtime.compat_version.schema_version",
+		name: "missing default_runtime.version.schema_version",
 		obj: &ateletpb.RegisterWorkerRequest{
 			Capacity: &ateletpb.WorkerResources{},
 			DefaultRuntime: &ateletpb.SandboxRuntime{
 				SandboxClass: "gvisor",
-				CompatVersion: &ateletpb.VersionedSandboxCompat{
+				Version: &ateletpb.VersionedSandboxCompat{
 					Attributes: []*ateletpb.AttributeEntry{{Key: "architecture", Value: "amd64"}},
 				},
 			},
 		},
-		want: field.ErrorList{field.Required(defaultRuntimePath.Child("compat_version", "schema_version"), "")},
+		want: field.ErrorList{field.Required(defaultRuntimePath.Child("version", "schema_version"), "")},
 	}, {
-		name: "default_runtime.compat_version.schema_version too long",
+		name: "default_runtime.version.schema_version too long",
 		obj: &ateletpb.RegisterWorkerRequest{
 			Capacity: &ateletpb.WorkerResources{},
 			DefaultRuntime: &ateletpb.SandboxRuntime{
 				SandboxClass: "gvisor",
-				CompatVersion: &ateletpb.VersionedSandboxCompat{
+				Version: &ateletpb.VersionedSandboxCompat{
 					SchemaVersion: strings.Repeat("v", 65),
 					Attributes:    []*ateletpb.AttributeEntry{{Key: "architecture", Value: "amd64"}},
 				},
 			},
 		},
-		want: field.ErrorList{field.TooLong(defaultRuntimePath.Child("compat_version", "schema_version"), "", 64).WithOrigin("maxLength")},
+		want: field.ErrorList{field.TooLong(defaultRuntimePath.Child("version", "schema_version"), "", 64).WithOrigin("maxLength")},
 	}, {
-		name: "missing default_runtime.compat_version.attributes",
+		name: "missing default_runtime.version.attributes",
 		obj: &ateletpb.RegisterWorkerRequest{
 			Capacity: &ateletpb.WorkerResources{},
 			DefaultRuntime: &ateletpb.SandboxRuntime{
-				SandboxClass:  "gvisor",
-				CompatVersion: &ateletpb.VersionedSandboxCompat{SchemaVersion: "v1"},
+				SandboxClass: "gvisor",
+				Version:      &ateletpb.VersionedSandboxCompat{SchemaVersion: "v1"},
 			},
 		},
-		want: field.ErrorList{field.Required(defaultRuntimePath.Child("compat_version", "attributes"), "")},
+		want: field.ErrorList{field.Required(defaultRuntimePath.Child("version", "attributes"), "")},
 	}, {
 		name: "duplicate attribute key",
 		obj: &ateletpb.RegisterWorkerRequest{
 			Capacity: &ateletpb.WorkerResources{},
 			DefaultRuntime: &ateletpb.SandboxRuntime{
 				SandboxClass: "gvisor",
-				CompatVersion: &ateletpb.VersionedSandboxCompat{
+				Version: &ateletpb.VersionedSandboxCompat{
 					SchemaVersion: "v1",
 					Attributes: []*ateletpb.AttributeEntry{
 						{Key: "architecture", Value: "amd64"},
@@ -280,59 +291,72 @@ func TestValidateRegisterWorkerRequest(t *testing.T) {
 				},
 			},
 		},
-		want: field.ErrorList{field.Duplicate(defaultRuntimePath.Child("compat_version", "attributes").Index(1), nil)},
+		want: field.ErrorList{field.Duplicate(defaultRuntimePath.Child("version", "attributes").Index(1), nil)},
 	}, {
 		name: "missing attribute key",
 		obj: &ateletpb.RegisterWorkerRequest{
 			Capacity: &ateletpb.WorkerResources{},
 			DefaultRuntime: &ateletpb.SandboxRuntime{
 				SandboxClass: "gvisor",
-				CompatVersion: &ateletpb.VersionedSandboxCompat{
+				Version: &ateletpb.VersionedSandboxCompat{
 					SchemaVersion: "v1",
 					Attributes:    []*ateletpb.AttributeEntry{{Value: "v"}},
 				},
 			},
 		},
-		want: field.ErrorList{field.Required(defaultRuntimePath.Child("compat_version", "attributes").Index(0).Child("key"), "")},
+		want: field.ErrorList{field.Required(defaultRuntimePath.Child("version", "attributes").Index(0).Child("key"), "")},
 	}, {
 		name: "attribute key too long",
 		obj: &ateletpb.RegisterWorkerRequest{
 			Capacity: &ateletpb.WorkerResources{},
 			DefaultRuntime: &ateletpb.SandboxRuntime{
 				SandboxClass: "gvisor",
-				CompatVersion: &ateletpb.VersionedSandboxCompat{
+				Version: &ateletpb.VersionedSandboxCompat{
 					SchemaVersion: "v1",
 					Attributes:    []*ateletpb.AttributeEntry{{Key: strings.Repeat("k", 129), Value: "v"}},
 				},
 			},
 		},
-		want: field.ErrorList{field.TooLong(defaultRuntimePath.Child("compat_version", "attributes").Index(0).Child("key"), "", 128).WithOrigin("maxLength")},
+		want: field.ErrorList{field.TooLong(defaultRuntimePath.Child("version", "attributes").Index(0).Child("key"), "", 128).WithOrigin("maxLength")},
 	}, {
 		name: "missing attribute value",
 		obj: &ateletpb.RegisterWorkerRequest{
 			Capacity: &ateletpb.WorkerResources{},
 			DefaultRuntime: &ateletpb.SandboxRuntime{
 				SandboxClass: "gvisor",
-				CompatVersion: &ateletpb.VersionedSandboxCompat{
+				Version: &ateletpb.VersionedSandboxCompat{
 					SchemaVersion: "v1",
 					Attributes:    []*ateletpb.AttributeEntry{{Key: "k"}},
 				},
 			},
 		},
-		want: field.ErrorList{field.Required(defaultRuntimePath.Child("compat_version", "attributes").Index(0).Child("value"), "")},
+		want: field.ErrorList{field.Required(defaultRuntimePath.Child("version", "attributes").Index(0).Child("value"), "")},
 	}, {
 		name: "attribute value too long",
 		obj: &ateletpb.RegisterWorkerRequest{
 			Capacity: &ateletpb.WorkerResources{},
 			DefaultRuntime: &ateletpb.SandboxRuntime{
 				SandboxClass: "gvisor",
-				CompatVersion: &ateletpb.VersionedSandboxCompat{
+				Version: &ateletpb.VersionedSandboxCompat{
 					SchemaVersion: "v1",
 					Attributes:    []*ateletpb.AttributeEntry{{Key: "k", Value: strings.Repeat("v", 257)}},
 				},
 			},
 		},
-		want: field.ErrorList{field.TooLong(defaultRuntimePath.Child("compat_version", "attributes").Index(0).Child("value"), "", 256).WithOrigin("maxLength")},
+		want: field.ErrorList{field.TooLong(defaultRuntimePath.Child("version", "attributes").Index(0).Child("value"), "", 256).WithOrigin("maxLength")},
+	}, {
+		name: "attributes at the bound",
+		obj: &ateletpb.RegisterWorkerRequest{
+			Capacity:       &ateletpb.WorkerResources{},
+			DefaultRuntime: runtimeWithAttributes(32),
+		},
+	}, {
+		name: "too many attributes",
+		obj: &ateletpb.RegisterWorkerRequest{
+			Capacity:       &ateletpb.WorkerResources{},
+			DefaultRuntime: runtimeWithAttributes(33),
+		},
+		want: field.ErrorList{field.TooMany(defaultRuntimePath.Child("version", "attributes"), 33, 32).WithOrigin("maxItems")},
 	}, {
 		name: "nil restorable_runtimes entry",
 		obj: &ateletpb.RegisterWorkerRequest{
@@ -341,6 +365,29 @@ func TestValidateRegisterWorkerRequest(t *testing.T) {
 			RestorableRuntimes: []*ateletpb.SandboxRuntime{nil},
 		},
 		want: field.ErrorList{field.Required(restorablePath.Index(0), "")},
+	}, {
+		name: "invalid restorable_runtimes entry",
+		obj: &ateletpb.RegisterWorkerRequest{
+			Capacity:           &ateletpb.WorkerResources{},
+			DefaultRuntime:     testRuntime(),
+			RestorableRuntimes: []*ateletpb.SandboxRuntime{{SandboxClass: "gvisor"}},
+		},
+		want: field.ErrorList{field.Required(restorablePath.Index(0).Child("version"), "")},
+	}, {
+		name: "restorable_runtimes at the bound",
+		obj: &ateletpb.RegisterWorkerRequest{
+			Capacity:           &ateletpb.WorkerResources{},
+			DefaultRuntime:     testRuntime(),
+			RestorableRuntimes: sandboxRuntimes(32, testRuntime),
+		},
+	}, {
+		name: "too many restorable_runtimes",
+		obj: &ateletpb.RegisterWorkerRequest{
+			Capacity:           &ateletpb.WorkerResources{},
+			DefaultRuntime:     testRuntime(),
+			RestorableRuntimes: sandboxRuntimes(33, testRuntime),
+		},
+		want: field.ErrorList{field.TooMany(restorablePath, 33, 32).WithOrigin("maxItems")},
 	}, {
 		name: "full capacity",
 		obj: &ateletpb.RegisterWorkerRequest{

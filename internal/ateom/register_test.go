@@ -75,11 +75,10 @@ func TestFromFilesMissing(t *testing.T) {
 func TestDefaultRuntime(t *testing.T) {
 	got := defaultRuntime("gvisor")
 	// The class is the ateom's own; the compat identity is the host's, under
-	// the probe's schema version; the name belongs to a SandboxConfig the
-	// ateom does not know, so it stays empty.
+	// the probe's schema version.
 	want := &ateletpb.SandboxRuntime{
 		SandboxClass: "gvisor",
-		CompatVersion: &ateletpb.VersionedSandboxCompat{
+		Version: &ateletpb.VersionedSandboxCompat{
 			SchemaVersion: hardware.SchemaVersionV1,
 			Attributes:    []*ateletpb.AttributeEntry{{Key: hardware.AttrArchitecture, Value: runtime.GOARCH}},
 		},

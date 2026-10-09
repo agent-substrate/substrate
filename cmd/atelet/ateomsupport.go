@@ -126,8 +126,8 @@ func (s *ateomSupportServer) RegisterWorker(ctx context.Context, req *ateletpb.R
 		// Workers are global-scoped and named by their pod UID.
 		Worker:             &ateapipb.ObjectRef{Name: workerIdentity.PodUID},
 		Capacity:           toWorkerResources(req.GetCapacity()),
-		DefaultRuntime:     toSandboxRuntime(req.GetDefaultRuntime()),
-		RestorableRuntimes: toSandboxRuntimes(req.GetRestorableRuntimes()),
+		DefaultRuntime:     toAteAPISandboxRuntime(req.GetDefaultRuntime()),
+		RestorableRuntimes: toAteAPISandboxRuntimes(req.GetRestorableRuntimes()),
 	}); err != nil {
 		return nil, err
 	}
@@ -155,29 +155,29 @@ func toWorkerResources(in *ateletpb.WorkerResources) *ateapipb.WorkerResources {
 	return out
 }
 
-// toSandboxRuntime converts atelet's SandboxRuntime to the control plane's,
-// which it mirrors field for field.
-func toSandboxRuntime(in *ateletpb.SandboxRuntime) *ateapipb.SandboxRuntime {
+// toAteAPISandboxRuntime converts atelet's SandboxRuntime to the control
+// plane's, which it mirrors field for field.
+func toAteAPISandboxRuntime(in *ateletpb.SandboxRuntime) *ateapipb.SandboxRuntime {
 	if in == nil {
 		return nil
 	}
-	out := &ateapipb.SandboxRuntime{SandboxClass: in.GetSandboxClass(), Name: in.GetName()}
-	if v := in.GetCompatVersion(); v != nil {
-		out.CompatVersion = &ateapipb.VersionedSandboxCompat{SchemaVersion: v.GetSchemaVersion()}
+	out := &ateapipb.SandboxRuntime{SandboxClass: in.GetSandboxClass()}
+	if v := in.GetVersion(); v != nil {
+		out.Version = &ateapipb.VersionedSandboxCompat{SchemaVersion: v.GetSchemaVersion()}
 		for _, a := range v.GetAttributes() {
-			out.CompatVersion.Attributes = append(out.CompatVersion.Attributes, &ateapipb.AttributeEntry{Key: a.GetKey(), Value: a.GetValue()})
+			out.Version.Attributes = append(out.Version.Attributes, &ateapipb.AttributeEntry{Key: a.GetKey(), Value: a.GetValue()})
 		}
 	}
 	return out
 }
 
-func toSandboxRuntimes(in []*ateletpb.SandboxRuntime) []*ateapipb.SandboxRuntime {
+func toAteAPISandboxRuntimes(in []*ateletpb.SandboxRuntime) []*ateapipb.SandboxRuntime {
 	if in == nil {
 		return nil
 	}
 	out := make([]*ateapipb.SandboxRuntime, 0, len(in))
 	for _, r := range in {
-		out = append(out, toSandboxRuntime(r))
+		out = append(out, toAteAPISandboxRuntime(r))
 	}
 	return out
 }

@@ -379,8 +379,8 @@ func (c *controller) ensure(ctx context.Context, pod string, d desiredWorker, w 
 		Worker:   &ateapipb.ObjectRef{Name: name},
 		Capacity: fixed,
 		DefaultRuntime: &ateapipb.SandboxRuntime{
-			SandboxClass:  string(d.pool.Spec.DefaultSandboxClass()),
-			CompatVersion: hostCompat(),
+			SandboxClass: string(d.pool.Spec.DefaultSandboxClass()),
+			Version:      hostCompat(),
 		},
 	}); err != nil {
 		return fmt.Errorf("while reporting capacity for Worker %s: %w", name, err)

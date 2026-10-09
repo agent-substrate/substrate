@@ -7256,19 +7256,13 @@ type SandboxRuntime struct {
 	// +k8s:required
 	// +k8s:maxLength=63
 	SandboxClass string `protobuf:"bytes,1,opt,name=sandbox_class,json=sandboxClass,proto3" json:"sandbox_class,omitempty"`
-	// SandboxConfig or version name (e.g. "gvisor-2"), informational only,
-	// never used during scheduling.
-	//
-	// +k8s:optional
-	// +k8s:maxLength=253
-	Name string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	// Primary compatibility version stamped onto an actor's snapshot when a
-	// checkpoint is taken on this runtime. Snapshots matching `compat_version`
+	// checkpoint is taken on this runtime. Snapshots matching `version`
 	// can warm-boot on this runtime.
 	// TODO: Add support for additional compatibility versions.
 	//
 	// +k8s:required
-	CompatVersion *VersionedSandboxCompat `protobuf:"bytes,3,opt,name=compat_version,json=compatVersion,proto3" json:"compat_version,omitempty"`
+	Version       *VersionedSandboxCompat `protobuf:"bytes,2,opt,name=version,proto3" json:"version,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -7310,16 +7304,9 @@ func (x *SandboxRuntime) GetSandboxClass() string {
 	return ""
 }
 
-func (x *SandboxRuntime) GetName() string {
+func (x *SandboxRuntime) GetVersion() *VersionedSandboxCompat {
 	if x != nil {
-		return x.Name
-	}
-	return ""
-}
-
-func (x *SandboxRuntime) GetCompatVersion() *VersionedSandboxCompat {
-	if x != nil {
-		return x.CompatVersion
+		return x.Version
 	}
 	return nil
 }
@@ -7337,9 +7324,12 @@ type VersionedSandboxCompat struct {
 	// Key-value compatibility attributes defined by this schema version, covering
 	// both runtime assets (e.g. "gvisor_asset_hash") and effective guest hardware
 	// features after masking (e.g. "architecture", "cpu_features").
-	// Matched by exact equality of all keys and values within the same schema
-	// version. Producers must emit attributes sorted by key so repeated
-	// registrations of the same runtime compare equal without spurious writes.
+	// Matched against a snapshot under the same schema_version: every attribute
+	// on the snapshot must be present on the worker with an equal value; keys
+	// only the worker has are ignored. Bump schema_version when a key's meaning
+	// changes or older snapshots must no longer match.
+	// Order as sent does not matter: ate-api-server sorts attributes by key
+	// before recording them.
 	//
 	// +k8s:required
 	// +k8s:maxItems=32
@@ -8876,11 +8866,10 @@ const file_ateapi_proto_rawDesc = "" +
 	"\tallocated\x18\x03 \x01(\v2\x17.ateapi.WorkerResourcesR\tallocated\x12%\n" +
 	"\x0eobserved_epoch\x18\x04 \x01(\x03R\robservedEpoch\x12?\n" +
 	"\x0fdefault_runtime\x18\x05 \x01(\v2\x16.ateapi.SandboxRuntimeR\x0edefaultRuntime\x12G\n" +
-	"\x13restorable_runtimes\x18\x06 \x03(\v2\x16.ateapi.SandboxRuntimeR\x12restorableRuntimes\"\x90\x01\n" +
+	"\x13restorable_runtimes\x18\x06 \x03(\v2\x16.ateapi.SandboxRuntimeR\x12restorableRuntimes\"o\n" +
 	"\x0eSandboxRuntime\x12#\n" +
-	"\rsandbox_class\x18\x01 \x01(\tR\fsandboxClass\x12\x12\n" +
-	"\x04name\x18\x02 \x01(\tR\x04name\x12E\n" +
-	"\x0ecompat_version\x18\x03 \x01(\v2\x1e.ateapi.VersionedSandboxCompatR\rcompatVersion\"w\n" +
+	"\rsandbox_class\x18\x01 \x01(\tR\fsandboxClass\x128\n" +
+	"\aversion\x18\x02 \x01(\v2\x1e.ateapi.VersionedSandboxCompatR\aversion\"w\n" +
 	"\x16VersionedSandboxCompat\x12%\n" +
 	"\x0eschema_version\x18\x01 \x01(\tR\rschemaVersion\x126\n" +
 	"\n" +
@@ -9314,7 +9303,7 @@ var file_ateapi_proto_depIdxs = []int32{
 	111, // 127: ateapi.WorkerStatus.allocated:type_name -> ateapi.WorkerResources
 	108, // 128: ateapi.WorkerStatus.default_runtime:type_name -> ateapi.SandboxRuntime
 	108, // 129: ateapi.WorkerStatus.restorable_runtimes:type_name -> ateapi.SandboxRuntime
-	109, // 130: ateapi.SandboxRuntime.compat_version:type_name -> ateapi.VersionedSandboxCompat
+	109, // 130: ateapi.SandboxRuntime.version:type_name -> ateapi.VersionedSandboxCompat
 	110, // 131: ateapi.VersionedSandboxCompat.attributes:type_name -> ateapi.AttributeEntry
 	36,  // 132: ateapi.WorkerResources.resources:type_name -> ateapi.Resources
 	15,  // 133: ateapi.ActorAssignment.metadata:type_name -> ateapi.ResourceMetadata

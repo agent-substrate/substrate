@@ -626,38 +626,7 @@ func Validate_SandboxRuntime(
 		errs = append(errs, fn(fldPath.Child("sandbox_class"), &obj.SandboxClass, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateletpb.SandboxRuntime.Name
-		fn := func(
-			fldPath *field.Path,
-			obj, oldObj *string,
-			oldValueCorrelated bool) (errs field.ErrorList) {
-			// don't revalidate unchanged data
-			if oldValueCorrelated && op.Type == operation.Update {
-				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
-					return nil
-				}
-			}
-			// call field-attached validations
-			earlyReturn := false
-			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				earlyReturn = true
-			}
-			if earlyReturn {
-				return // do not proceed
-			}
-			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 253); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			return
-		}
-		oldVal := safe.Field(oldObj,
-			func(oldObj *ateletpb.SandboxRuntime) *string {
-				return &oldObj.Name
-			})
-		errs = append(errs, fn(fldPath.Child("name"), &obj.Name, oldVal, oldObj != nil)...)
-	}
-
-	{ // field ateletpb.SandboxRuntime.CompatVersion
+	{ // field ateletpb.SandboxRuntime.Version
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj *ateletpb.VersionedSandboxCompat,
@@ -683,9 +652,9 @@ func Validate_SandboxRuntime(
 		}
 		oldVal := safe.Field(oldObj,
 			func(oldObj *ateletpb.SandboxRuntime) *ateletpb.VersionedSandboxCompat {
-				return oldObj.CompatVersion
+				return oldObj.Version
 			})
-		errs = append(errs, fn(fldPath.Child("compat_version"), obj.CompatVersion, oldVal, oldObj != nil)...)
+		errs = append(errs, fn(fldPath.Child("version"), obj.Version, oldVal, oldObj != nil)...)
 	}
 
 	return errs
