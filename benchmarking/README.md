@@ -353,6 +353,83 @@ The web UI shows the same fields; `0` keeps the value boomer-worker started with
 The `actors_per_*` ratios in `trial_summary` are wrong for this test: they
 count users × `--actors-per-user`, not `--total-actors`.
 
+### Burst Benchmark
+
+The Burst benchmark measures how fast Substrate resumes and suspends many
+actors at the same moment. Setup creates `--total-actors` actors from the
+`glutton` template, all suspended. Each batch then resumes every actor at
+once, keeps them running for the live window, and suspends every actor at
+once. Batches repeat, with the wait window between them, until the run
+stops. Batch 1 resumes from the template's golden snapshot and later batches
+from each actor's own snapshot, so batch 1 has its own rows.
+
+Run it with `-u 1`: one user drives the whole cohort from one boomer worker.
+Like spawn, each worker runs one burst, so a restart needs new workers. It
+needs no load shape (`shapes/burst_shape.py` is an older, unrelated shape).
+`tests.yaml` runs it as `burst_smoke_10_actors`.
+
+An actor that fails a resume, a suspend, or batch 1's workload setup, or
+whose workload step in a later batch runs past the deadline, is deleted at
+once and left out of later batches. Failures never stop the run: at the
+density ceiling they are the result. A run whose every actor is retired ends
+on its own. Actors are named `burst-<run-id>-<n>` and deleted when the run
+stops.
+
+#### Burst Configuration Knobs
+
+Burst reads these flags, or the same fields in the web UI:
+
+* `--total-actors`, `--actor-deadline`: The deadline applies to each phase
+  of each actor.
+* `--lifecycle-mode`, `--mem-target`, `--mem-read`, `--mem-churn`,
+  `--cpu-cores`, `--cpu-duty-cycle`: Batch 1 fills RAM and starts the CPU
+  load. Later batches read RAM, then churn it. A step whose flag is unset
+  is skipped.
+* `--min-wait-time` / `--max-wait-time`, `--min-live-time` /
+  `--max-live-time`, `--max-pings-per-wake`: One wait and one live window
+  are drawn per batch. The defaults are GluttonUser's; `tests.yaml` sets
+  5s windows.
+
+The wait and live windows and `--max-pings-per-wake` are read again before
+each batch. The other flags are fixed when the run starts. Burst ignores
+`--spawn-concurrency`, since every phase covers the whole cohort, and
+`--resume-mode`, since every resume is an explicit `ResumeActor`. Keep
+`--mem-target` under the `glutton` template's memory limit (`256Mi` unless
+the workloads were deployed with `--actor-memory`).
+
+#### Burst Reported Metrics
+
+Batch 1 rows have `First` in the name. Later batches share the rows without
+it. Every row counts successes and failures.
+
+* `ActorTimeToFirstResume` / `ActorTimeToResume`: Per actor, from its
+  `ResumeActor` until it answers a ping (`GluttonReadyPing`).
+* `TimeToFirstResume_<k>pct` / `TimeToResume_<k>pct` (`k` = 10, 20, … 100):
+  From the burst start until `k`% of the actors that entered it were ready.
+* `TimeToAllFirstResumed` / `TimeToAllResumed`: From the burst start until
+  the last ready actor; a failure when none was ready.
+* `ActorTimeToFirstSuspend` / `ActorTimeToSuspend`,
+  `TimeToFirstSuspend_<k>pct` / `TimeToSuspend_<k>pct`,
+  `TimeToAllFirstSuspended` / `TimeToAllSuspended`: The same for the suspend
+  burst.
+* `GluttonReadyPing`: The readiness pings after each resume.
+* `RetiredSetup`: Actors that failed batch 1's RAM fill or CPU load.
+* `RetiredChurn`: Actors whose workload step in a later batch ran past the
+  deadline.
+* `CreateAtespace`, `CreateActor`, `ResumeActorFirstResume`, `ResumeActor`,
+  `SuspendActor` / `PauseActor`, `DeleteActor`, `CrashCount`, and the
+  workload rows `GluttonPing`, `GluttonFillRAM`, `GluttonUseCPU`,
+  `GluttonReadRAM`, `GluttonChurnRAM`: Booked by the GluttonUser code that
+  burst reuses, so in Prometheus they carry `user_class="GluttonUser"`, and
+  calls a stop cuts off show up as their failures.
+
+After a stop, burst books none of its own rows, so a cut-short burst books
+no percentile or TimeToAll rows. Because Locust merges all later batches
+into one row, the worker also logs a `burst: batch done` line per batch with
+the counts and the p50, p90 and max resume and suspend times.
+
+The `actors_per_*` ratios in `trial_summary` are wrong for this test too.
+
 ### Viewing Traces
 You must have enabled otel tracing for your cluster to view traces.
 

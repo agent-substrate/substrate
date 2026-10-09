@@ -53,9 +53,9 @@ func main() {
 		userClass               = flag.String("user-class", "glutton", fmt.Sprintf("Locust user class to run, lowercase; one of %s.", strings.Join(userclass.Names(), "|")))
 		actorsPerUser           = flag.Int("actors-per-user", 1, "Number of actors each user (VU) creates and cycles through in round-robin: on iteration i, the user targets actor i%actors-per-user. Startup creates all actors; shutdown hibernates+deletes them.")
 		checkAgentSessionScript = flag.String("check-agentsession-script", "", "Validate this agent-session script YAML and exit; nothing else runs. Used by benchmarking/locust/deploy.sh before uploading a script.")
-		totalActors             = flag.Int("total-actors", 100, "Total actors to create in the batch (spawn benchmark).")
+		totalActors             = flag.Int("total-actors", 100, "Total actors in the cohort (spawn and burst benchmarks).")
 		spawnConcurrency        = flag.Int("spawn-concurrency", 1, "Number of actors created concurrently (spawn benchmark).")
-		actorDeadline           = flag.Float64("actor-deadline", 120, "Per-actor timeout in seconds covering CreateActor + ResumeActor + Ping (spawn benchmark).")
+		actorDeadline           = flag.Float64("actor-deadline", 120, "Per-actor timeout in seconds: CreateActor + ResumeActor + Ping for spawn, each phase for burst.")
 		httpMaxIdleConnsPerHost = flag.Int("http-max-idle-conns-per-host", 10000, "Idle HTTP connections the router client keeps per host. Set it to at least the number of users this worker runs, so each VU reuses its connection to the router across wakes instead of opening a new one per request.")
 	)
 	// boomer.Run will call flag.Parse() if we haven't yet; calling here so
