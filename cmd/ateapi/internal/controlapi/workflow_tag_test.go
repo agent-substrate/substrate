@@ -46,7 +46,7 @@ func seedTagSource(t *testing.T, ctx context.Context, persistence store.Interfac
 	actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
 		s.ExternalSnapshot = &ateapipb.ExternalSnapshot{
 			SnapshotUri:      uri.String(),
-			ContentScope:     ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+			Fidelity:         ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			ActorTemplateUid: template.GetMetadata().GetUid(),
 		}
 	})
@@ -100,7 +100,7 @@ func TestTagActorSnapshot(t *testing.T) {
 	if got, want := tag.GetStatus().GetActorTemplateUid(), template.GetMetadata().GetUid(); got != want {
 		t.Errorf("actor template uid = %q, want %q", got, want)
 	}
-	if got, want := tag.GetStatus().GetSnapshot().GetContentScope(), ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL; got != want {
+	if got, want := tag.GetStatus().GetSnapshot().GetFidelity(), ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY; got != want {
 		t.Errorf("content scope = %v, want the source's %v", got, want)
 	}
 
@@ -239,7 +239,7 @@ func TestTagActorSnapshot_RecreateAfterCopyFailure(t *testing.T) {
 		}
 		return nil
 	}
-	if _, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1")); !errors.Is(err, errObjectStore) {
+	if _, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1")); !isObjectStoreErr(err) {
 		t.Fatalf("TagActorSnapshot = %v, want an error wrapping %v", err, errObjectStore)
 	}
 	objects.OnCopy = nil
@@ -382,7 +382,7 @@ func TestTagActorSnapshot_NameTakenByAnotherActor(t *testing.T) {
 		}
 		return nil
 	}
-	if _, err := w.TagActorSnapshot(ctx, tagToCreate(resources.ActorRefFromActor(first), "v1")); !errors.Is(err, errObjectStore) {
+	if _, err := w.TagActorSnapshot(ctx, tagToCreate(resources.ActorRefFromActor(first), "v1")); !isObjectStoreErr(err) {
 		t.Fatalf("TagActorSnapshot(actor-1) = %v, want an error wrapping %v", err, errObjectStore)
 	}
 	pending, err := persistence.GetTag(ctx, tagRef)
@@ -433,7 +433,7 @@ func TestDeleteTag_ReleasesExternalSnapshot(t *testing.T) {
 	// A delete that cannot reach object storage must not drop the row: it is
 	// the only handle left on the snapshot.
 	objects.OnDelete = func(string, string) error { return errObjectStore }
-	if _, err := w.DeleteTag(ctx, tagRef, store.DeletePreconditions{}); !errors.Is(err, errObjectStore) {
+	if _, err := w.DeleteTag(ctx, tagRef, store.DeletePreconditions{}); !isObjectStoreErr(err) {
 		t.Fatalf("DeleteTag = %v, want an error wrapping %v", err, errObjectStore)
 	}
 	if _, err := persistence.GetTag(ctx, tagRef); err != nil {
@@ -480,7 +480,7 @@ func TestDeleteTag_ReleasesPendingSnapshot(t *testing.T) {
 		t.Fatalf("DeleteActor: %v", err)
 	}
 	objects.OnDelete = func(string, string) error { return errObjectStore }
-	if _, err := w.DeleteTag(ctx, tagRef, store.DeletePreconditions{}); !errors.Is(err, errObjectStore) {
+	if _, err := w.DeleteTag(ctx, tagRef, store.DeletePreconditions{}); !isObjectStoreErr(err) {
 		t.Fatalf("DeleteTag = %v, want an error wrapping %v", err, errObjectStore)
 	}
 	if _, err := persistence.GetTag(ctx, tagRef); err != nil {

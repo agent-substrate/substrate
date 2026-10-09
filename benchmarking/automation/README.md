@@ -45,7 +45,7 @@ the router capacity benchmark — see
 ## Choosing a sandbox class
 
 Each entry in `tests.yaml` may set `sandboxClass: gvisor | microvm` (default
-`gvisor`). This controls both `spec.sandboxClass` on the benchmark WorkerPool
+`gvisor`). This controls both `spec.sandboxClasses[0].name` on the benchmark WorkerPool
 and its `workerImage` (`ateom-gvisor` vs `ateom-microvm`).
 
 For `microvm` tests the target cluster must have KVM-capable nodes and the

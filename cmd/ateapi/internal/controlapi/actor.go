@@ -106,7 +106,7 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 			return nil, err
 		}
 		if inActor.GetSourceTag() == nil {
-			if err := validateGoldenSnapshotScope(sourceTag.GetStatus().GetSnapshot()); err != nil {
+			if err := validateGoldenSnapshotFidelity(sourceTag.GetStatus().GetSnapshot()); err != nil {
 				return nil, err
 			}
 		}
@@ -190,7 +190,7 @@ func (s *ServiceImpl) resolveTagSource(ctx context.Context, actorAtespace string
 	if tag.GetStatus().GetSnapshot().GetSnapshotUri() == "" {
 		return nil, apierror.FailedPrecondition("source Tag is still being created or failed creation")
 	}
-	// TODO: Permit compatible DATA snapshots when runtimes can extract portable data.
+	// TODO: Permit compatible VOLUMES snapshots when runtimes can extract portable data.
 	if tag.GetStatus().GetActorTemplateUid() != template.GetMetadata().GetUid() {
 		return nil, apierror.FailedPrecondition("source Tag must be taken from an actor with ActorTemplate uid %q", tag.GetStatus().GetActorTemplateUid())
 	}

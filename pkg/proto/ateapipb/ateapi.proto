@@ -182,12 +182,12 @@ message ExternalSnapshot {
   // +k8s:maxLength=2048 # the template's storage_location bound plus the owner prefix and snapshot name
   string snapshot_uri = 1;
 
-  // content_scope is what the snapshot captured.
+  // fidelity is what the snapshot holds.
   //
   // +k8s:optional
   // +k8s:minimum=1
-  // +k8s:maximum=2 # keep this in sync with the SnapshotContentScope enum
-  SnapshotContentScope content_scope = 2;
+  // +k8s:maximum=3 # keep this in sync with the SnapshotFidelity enum
+  SnapshotFidelity fidelity = 2;
 
   // UID of the ActorTemplate whose sandbox this snapshot's guest state was
   // captured from.
@@ -206,22 +206,28 @@ message LocalSnapshot {
   // +k8s:format=k8s-short-name
   string snapshot_name = 1;
 
-  // Scope the pause checkpoint captured (the template's onCommit at pause
-  // time).
+  // Fidelity the pause checkpoint captured: the template's preferredFidelity
+  // at pause time.
   //
   // +k8s:optional
   // +k8s:minimum=1
-  // +k8s:maximum=2 # keep this in sync with the SnapshotContentScope enum
-  SnapshotContentScope content_scope = 2;
+  // +k8s:maximum=3 # keep this in sync with the SnapshotFidelity enum
+  SnapshotFidelity fidelity = 2;
 }
 
-enum SnapshotContentScope {
-  // Unspecified snapshot content scope.
-  SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED = 0;
-  // Captures process memory, root filesystem changes, and durable data.
-  SNAPSHOT_CONTENT_SCOPE_FULL = 1;
-  // Captures durable data without process memory or root filesystem changes.
-  SNAPSHOT_CONTENT_SCOPE_DATA = 2;
+// SnapshotFidelity orders the state layers a snapshot can hold, lowest to
+// highest. Each level includes the ones below it.
+enum SnapshotFidelity {
+  SNAPSHOT_FIDELITY_UNSPECIFIED = 0;
+  // Durable volumes only. The actor resumes by cold-booting its containers
+  // from the OCI image with the volumes restored.
+  SNAPSHOT_FIDELITY_VOLUMES = 1;
+  // Volumes plus the root filesystem changes made since boot. Not yet
+  // supported by any sandbox runtime; templates may not request it.
+  SNAPSHOT_FIDELITY_ROOTFS = 2;
+  // Volumes, root filesystem changes, and process memory. The actor resumes
+  // where it left off.
+  SNAPSHOT_FIDELITY_MEMORY = 3;
   // Keep this in sync with the maximums on fields of this type.
 }
 
@@ -1057,26 +1063,30 @@ message SandboxConfig {
 }
 
 // SnapshotConfig selects what actor snapshots capture and where they are
-// stored. A FULL snapshot resumes from its own content. A DATA snapshot
-// resumes by starting the containers afresh from the OCI image, with the
-// durable-dir volumes populated from the snapshot.
+// stored.
 message SnapshotConfig {
-  // on_commit defines the scope of every snapshot taken of an actor, both
-  // the node-local one captured on pause and the one uploaded on suspend.
-  // Defaults to FULL when unset.
-  //
-  // +k8s:required
-  // +k8s:minimum=1
-  // +k8s:maximum=2 # keep this in sync with the SnapshotContentScope enum
-  SnapshotContentScope on_commit = 2;
-
   // storage_location is the base object-storage URI snapshots of actors on
   // this version are stored under. Required.
   //
   // +k8s:required
   // +k8s:maxLength=1024
   // +k8s:customValidation # Validate URI
-  string storage_location = 4;
+  string storage_location = 1;
+
+  // preferred_fidelity is the highest fidelity the system packages when it
+  // snapshots the actor, on pause (node-local) and on suspend (uploaded).
+  // It is a best-effort ceiling, not a guarantee: the system never packages
+  // more than this level, and it may package less when a layer cannot be
+  // captured or is too expensive to capture at the time, for example memory
+  // under host pressure. A process resumed in place on its worker keeps its
+  // memory regardless of this setting. ROOTFS is not supported yet and is
+  // rejected. Defaults to MEMORY when unset.
+  //
+  // +k8s:required
+  // +k8s:minimum=1
+  // +k8s:maximum=3 # keep this in sync with the SnapshotFidelity enum
+  // +k8s:customValidation # ROOTFS is not supported yet
+  SnapshotFidelity preferred_fidelity = 2;
 }
 
 // Container is a single application container of an ActorTemplate.
@@ -2139,8 +2149,7 @@ message Worker {
   // +k8s:immutable
   repeated string ips = 7;
 
-  // sandbox_class mirrors the WorkerPool's sandboxClass; its values are the
-  // CRD's own vocabulary, so it is only bounded, not validated.
+  // sandbox_class mirrors the WorkerPool's default sandbox class
   //
   // +k8s:optional
   // +k8s:maxLength=63

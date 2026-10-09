@@ -120,6 +120,24 @@ func ValidateActorDirs(actorDirs *ateompb.ActorDirs, fldPath *field.Path) field.
 	return errs
 }
 
+// ValidateSnapshotFidelity rejects a checkpoint or restore request whose
+// fidelity no runtime can serve. ROOTFS is defined in the enum but no sandbox
+// runtime captures rootfs changes without memory yet, so it is refused here
+// as well as at template admission.
+func ValidateSnapshotFidelity(fidelity ateompb.SnapshotFidelity, fldPath *field.Path) field.ErrorList {
+	switch fidelity {
+	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
+		return nil
+	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED:
+		return field.ErrorList{field.Required(fldPath, "")}
+	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS:
+		return field.ErrorList{field.Invalid(fldPath, fidelity.String(), "ROOTFS fidelity is not supported yet")}
+	default:
+		return field.ErrorList{field.NotSupported(fldPath, fidelity,
+			[]string{ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES.String(), ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY.String()})}
+	}
+}
+
 func validateAbsDir(dir string, fldPath *field.Path) field.ErrorList {
 	if dir == "" {
 		return field.ErrorList{field.Required(fldPath, "")}
@@ -199,10 +217,7 @@ func ValidateRunscHash(sha256Hash string) error {
 // is a well-formed URI with a bucket, so a bad location fails fast instead of
 // deep inside an object-storage call. It deliberately does not restrict the
 // scheme: the storage layer only uses the host (bucket) and path, and which
-// schemes are acceptable is a storage-backend policy, not a per-RPC one. The
-// local paths used for snapshot upload/download are derived from the
-// separately validated actor ref, not from this URI, so this is a sanity check
-// rather than a path-traversal guard.
+// schemes are acceptable is a storage-backend policy, not a per-RPC one.
 //
 // This validates the base that many snapshots share, not any one snapshot's
 // URI; SnapshotURI is the type for the latter, and it applies this check when
@@ -222,6 +237,18 @@ func ValidateSnapshotLocation(location string) error {
 	// different object.
 	if u.Opaque != "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return fmt.Errorf("invalid snapshot location %q: must contain only a scheme, bucket, and path", location)
+	}
+	// url.JoinPath cleans dot segments, and some backends trim spaces from
+	// segments (or windows, trailing dots) and treat '\' as a separator, so
+	// these could move snapshots outside of the location, e.g. into another
+	// atespace's prefix
+	if strings.Contains(u.Path, `\`) {
+		return fmt.Errorf(`invalid snapshot location %q: must not contain '\'`, location)
+	}
+	for segment := range strings.SplitSeq(u.Path, "/") {
+		if segment != "" && strings.Trim(segment, ". ") == "" {
+			return fmt.Errorf("invalid snapshot location %q: must not contain path segments of only '.' and ' '", location)
+		}
 	}
 	return nil
 }

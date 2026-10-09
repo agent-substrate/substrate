@@ -160,7 +160,7 @@ func TestKeySpellings(t *testing.T) {
 		{WorkerStateKey, "ate.worker.state"},
 		{SandboxClassKey, "ate.sandbox.class"},
 		{SnapshotKindKey, "ate.snapshot.kind"},
-		{SnapshotScopeKey, "ate.snapshot.scope"},
+		{SnapshotFidelityKey, "ate.snapshot.fidelity"},
 		{SnapshotPhaseKey, "ate.snapshot.phase"},
 		{ImageCacheOutcomeKey, "ate.imagecache.outcome"},
 		{SchedulerOutcomeKey, "ate.scheduler.outcome"},
@@ -396,9 +396,10 @@ func TestMetricLabelValues(t *testing.T) {
 		{SnapshotKindLocal, "local"},
 		{SnapshotKindBoot, "boot"},
 
-		{SnapshotScopeFull, "full"},
-		{SnapshotScopeData, "data"},
-		{SnapshotScopeUnknown, "unknown"},
+		{SnapshotFidelityMemory, "memory"},
+		{SnapshotFidelityVolumes, "volumes"},
+		{SnapshotFidelityRootfs, "rootfs"},
+		{SnapshotFidelityUnknown, "unknown"},
 
 		{SnapshotPhaseVolumeMount, "volume_mount"},
 		{SnapshotPhaseManifestFetch, "manifest_fetch"},
@@ -568,24 +569,25 @@ func TestWorkerPoolAttributes(t *testing.T) {
 	})
 }
 
-// TestSnapshotScopeValue pins the enum-to-label mapping ateapi and atelet share.
+// TestSnapshotFidelityValue pins the enum-to-label mapping ateapi and atelet share.
 // An unmapped enum value must report unknown rather than its stringified form,
 // which would let a wire value widen the label set.
-func TestSnapshotScopeValue(t *testing.T) {
+func TestSnapshotFidelityValue(t *testing.T) {
 	tests := []struct {
 		name  string
-		scope ateletpb.SnapshotScope
+		scope ateletpb.SnapshotFidelity
 		want  string
 	}{
-		{name: "full", scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL, want: SnapshotScopeFull},
-		{name: "data", scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA, want: SnapshotScopeData},
-		{name: "unspecified", scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED, want: SnapshotScopeUnknown},
-		{name: "value outside the enum", scope: ateletpb.SnapshotScope(9999), want: SnapshotScopeUnknown},
+		{name: "memory", scope: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, want: SnapshotFidelityMemory},
+		{name: "volumes", scope: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, want: SnapshotFidelityVolumes},
+		{name: "rootfs", scope: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, want: SnapshotFidelityRootfs},
+		{name: "unspecified", scope: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED, want: SnapshotFidelityUnknown},
+		{name: "value outside the enum", scope: ateletpb.SnapshotFidelity(9999), want: SnapshotFidelityUnknown},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := SnapshotScopeValue(tt.scope); got != tt.want {
-				t.Errorf("SnapshotScopeValue(%v) = %q, want %q", tt.scope, got, tt.want)
+			if got := SnapshotFidelityValue(tt.scope); got != tt.want {
+				t.Errorf("SnapshotFidelityValue(%v) = %q, want %q", tt.scope, got, tt.want)
 			}
 		})
 	}

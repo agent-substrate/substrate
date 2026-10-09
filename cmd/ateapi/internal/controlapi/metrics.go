@@ -87,7 +87,7 @@ func RegisterWorkerCount(meter metric.Meter, workers func() ([]*ateapipb.Worker,
 		// list just means no seeding this cycle, not a broken observation.
 		if pools, err := listPools(labels.Everything()); err == nil {
 			for _, p := range pools {
-				class := string(p.Spec.SandboxClass)
+				class := string(p.Spec.DefaultSandboxClass())
 				if class == "" {
 					class = string(atev1alpha1.SandboxClassGvisor)
 				}
@@ -202,7 +202,7 @@ func (i *Instruments) recordLifecycleOp(ctx context.Context, op string, start ti
 }
 
 // lifecycleOpAttrs builds the resume/suspend/pause dimensions from workflow
-// state. Nil-safe, and omits the pool, snapshot-kind and snapshot-scope labels
+// state. Nil-safe, and omits the pool, snapshot-kind and snapshot-fidelity labels
 // until they are known so a failure before the assign/restore steps never emits
 // an empty-string series. snapshotKind is empty for suspend/pause, which do not
 // restore; snapshotScope applies to all three and separates a full restore
@@ -222,7 +222,7 @@ func lifecycleOpAttrs(actor *ateapipb.Actor, template *ateapipb.ActorTemplate, s
 		attrs = append(attrs, ateattr.SnapshotKindKey.String(snapshotKind))
 	}
 	if snapshotScope != "" {
-		attrs = append(attrs, ateattr.SnapshotScopeKey.String(snapshotScope))
+		attrs = append(attrs, ateattr.SnapshotFidelityKey.String(snapshotScope))
 	}
 	return attrs
 }

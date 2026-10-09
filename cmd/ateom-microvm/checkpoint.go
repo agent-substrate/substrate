@@ -44,14 +44,14 @@ import (
 //
 // What the snapshot holds depends on the requested scope:
 //
-//   - FULL: the whole guest. ateom drives the CH REST api-socket: pause -> snapshot
+//   - MEMORY: the whole guest. ateom drives the CH REST api-socket: pause -> snapshot
 //     file://<checkpoint_dir> (config.json + state.json + sparse memory-ranges)
 //     -> tear the VMM down. Each container's rootfs is overlay(virtio-fs RO lower +
 //     disk-backed upper): the upper is host-backed like the durable-dir volumes and
 //     ships alongside as its own tar (see rootfsupper.go); process memory persists
 //     via the memory snapshot. The RO lower is reconstructed from the OCI image at
 //     restore, so it never ships. Durable-dir volumes ship alongside as per-volume tars.
-//   - DATA: the durable-dir volumes only, as those same tars. The guest is discarded, so
+//   - VOLUMES: the durable-dir volumes only, as those same tars. The guest is discarded, so
 //     the actor cold-starts on restore with its volumes re-materialized.
 //
 // Either way the guest is paused first, which is what makes the tar coherent: the
@@ -62,6 +62,9 @@ import (
 // (or the harness) to suspend on shutdown.
 func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.CheckpointWorkloadRequest) (_ *ateompb.CheckpointWorkloadResponse, err error) {
 	if err := validateActorDirs(req.GetActorDirs()); err != nil {
+		return nil, err
+	}
+	if err := validateFidelity(req.GetFidelity()); err != nil {
 		return nil, err
 	}
 	if !s.locks.Lock(ctx, req.GetActorUid()) {
@@ -81,7 +84,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	tStart := time.Now()
 	var dPrep, dPause, dSnapshot, dDurable, dUpper, dTeardown time.Duration
 	attribution := ateomstats.ActorAttributionFromRequest(req)
-	scope := req.GetScope()
+	scope := req.GetFidelity()
 	defer func() {
 		ateomphaselog.LogSnapshotPhases(ctx, "Checkpoint timing breakdown", attribution, scope,
 			ateomphaselog.CheckpointDurationKey, err, []ateomphaselog.Phase{
@@ -109,20 +112,20 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	// suspended mid-flight for a call that could never have succeeded.
 	//
 	// Durable-dir volumes are host-backed, so they are captured the same way
-	// under either scope — and are the ONLY thing a Data-scope snapshot
+	// under either fidelity — and are the ONLY thing a VOLUMES snapshot
 	// captures.
 	durable := hasDurableVolumes(req.GetSpec().GetContainers())
 	csi := hasCsiVolumes(req.GetSpec().GetContainers())
 	switch scope {
-	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL:
-	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
+	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
+	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
 		// TODO: Revisit handling for CSI volumes since snapshots are currently quietly ignored.
 		if !durable && !csi {
 			return nil, apierror.FailedPrecondition(
-				"no durable-dir or CSI volumes found for a Data-scope snapshot")
+				"no durable-dir or CSI volumes found for a VOLUMES snapshot")
 		}
 	default:
-		return nil, apierror.InvalidArgument("unsupported snapshot scope: %v", scope)
+		return nil, apierror.InvalidArgument("unsupported snapshot fidelity: %v", scope)
 	}
 
 	// Captured now: the checkpoint unhosts the actor, and the final record
@@ -168,18 +171,18 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	// window costs the slowest of them rather than their sum (the tars scale
 	// with the actor's data; suspend latency is the metric that matters).
 	//
-	//   - CH snapshot (Full only): the guest memory + VM state. A Data snapshot
+	//   - CH snapshot (MEMORY only): the guest memory + VM state. A VOLUMES snapshot
 	//     deliberately captures no VM state — no memory image, and no base-id,
 	//     since nothing will reattach to the frozen virtio-fs lower: at restore
 	//     the actor cold-boots from the OCI image.
 	//   - Durable-dir tars (any scope, when declared): host-backed, so pausing
 	//     the write-through share makes the tars coherent.
-	//   - Rootfs upper tars (Full only): host-backed like the durable volumes —
-	//     the memory snapshot does not carry rootfs writes. Under Data the
+	//   - Rootfs upper tars (MEMORY only): host-backed like the durable volumes —
+	//     the memory snapshot does not carry rootfs writes. Under VOLUMES the
 	//     workload cold-starts on restore, discarding rootfs state.
 	var durableFiles []string
 	g, gctx := errgroup.WithContext(ctx)
-	if scope == ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL {
+	if scope == ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
 		g.Go(func() error {
 			t := time.Now()
 			d, err := s.snapshotVMState(gctx, client, ra, actorUID, checkpointDir)
@@ -199,7 +202,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 			return err
 		})
 	}
-	if scope == ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL {
+	if scope == ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
 		g.Go(func() error {
 			t := time.Now()
 			err := tarRootfsUpper(gctx, rootfsUpperDir(actorDirs), checkpointDir, containerNames(req.GetSpec().GetContainers()))
@@ -212,8 +215,8 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	}
 
 	// Report exactly the files we wrote so atelet ships precisely this snapshot: for
-	// Full, the CH snapshot (config.json + state.json + memory-ranges + base-id) plus
-	// any durable-dir tars; for Data, those tars alone.
+	// MEMORY, the CH snapshot (config.json + state.json + memory-ranges + base-id)
+	// plus any durable-dir tars; for VOLUMES, those tars alone.
 	snapshotFiles, err := listFiles(checkpointDir)
 	if err != nil {
 		return nil, fmt.Errorf("while listing snapshot files: %w", err)

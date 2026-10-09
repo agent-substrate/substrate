@@ -24,7 +24,6 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
 	"github.com/agent-substrate/substrate/internal/imagecache"
-	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"go.opentelemetry.io/otel"
@@ -75,7 +74,7 @@ func resolveCapabilities(caps *ateletpb.Capabilities) []string {
 	return out
 }
 
-func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, actorUID, containerName, ref string, command, args []string, env []string, netns string, volumes []*ateletpb.Volume, volumeMounts []*ateletpb.VolumeMount, capabilities []string, resources *ateletpb.ResourceLimits) error {
+func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, actorUID, containerName, ref string, volumes []*ateletpb.Volume, volumeMounts []*ateletpb.VolumeMount) (*v1.Config, error) {
 	tracer := otel.Tracer("prepareOCIDirectory")
 
 	ctx, span := tracer.Start(ctx, "prepareOCIDirectory")
@@ -87,7 +86,7 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, acto
 	// Clear any previous bundle contents (belt and suspenders: resetActorDirs
 	// already wiped the bundle dir on the Run/Restore path).
 	if err := imagecache.RemoveAllWritable(bundlePath); err != nil {
-		return fmt.Errorf("while clearing bundle %q: %w", bundlePath, err)
+		return nil, fmt.Errorf("while clearing bundle %q: %w", bundlePath, err)
 	}
 
 	// The bundle's rootfs is composed by ateom as an overlay mount just before
@@ -98,7 +97,7 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, acto
 	// it deliberately runs with no capabilities, so it cannot mount.
 	for _, d := range []string{"rootfs", "upper", "work"} {
 		if err := os.MkdirAll(path.Join(bundlePath, d), 0o700); err != nil {
-			return fmt.Errorf("in os.MkdirAll for container bundle dir: %w", err)
+			return nil, fmt.Errorf("in os.MkdirAll for container bundle dir: %w", err)
 		}
 	}
 
@@ -120,16 +119,8 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, acto
 		return err
 	})
 	if err := g.Wait(); err != nil {
-		return err
+		return nil, err
 	}
-
-	// Argv and env need only the image config; resolve them before writing
-	// any spec so an invalid container config fails fast.
-	resolvedArgs, err := resolveProcessArgs(&img.Config, command, args)
-	if err != nil {
-		return fmt.Errorf("while resolving process args for container %q: %w", containerName, err)
-	}
-	resolvedEnv := resolveActorEnv(&img.Config, env)
 
 	// Every bind target must exist in the rootfs for the mount to attach;
 	// ateom creates them through the mounted overlay (they land in the
@@ -144,27 +135,10 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, acto
 		ExtraDirs:    extraDirs,
 		ImageVolumes: imageVolumes,
 	}); err != nil {
-		return fmt.Errorf("while writing overlay spec: %w", err)
+		return nil, fmt.Errorf("while writing overlay spec: %w", err)
 	}
 
-	// Write the runtime-neutral OCI spec to config.json.
-	if err := ocispec.Save(bundlePath, ocispec.Build(ocispec.Options{
-		Args:                      resolvedArgs,
-		Env:                       resolvedEnv,
-		NetNSPath:                 netns,
-		Volumes:                   volumes,
-		VolumeMounts:              volumeMounts,
-		Capabilities:              capabilities,
-		Resources:                 resources,
-		DurableDirVolumeMountsDir: ateletpath.DurableDirVolumeMountsDir(actorUID),
-		VolumesDir:                ateletpath.VolumesDir(actorUID),
-		SystemInfoVolumeRootsDir:  ateletpath.SystemInfoVolumeRootsDir(actorUID),
-		BundlePath:                bundlePath,
-	})); err != nil {
-		return fmt.Errorf("while writing OCI spec: %w", err)
-	}
-
-	return nil
+	return &img.Config, nil
 }
 
 // resolveImageVolumes pulls the image behind every image-typed volume this

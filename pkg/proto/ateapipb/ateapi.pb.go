@@ -36,55 +36,63 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-type SnapshotContentScope int32
+// SnapshotFidelity orders the state layers a snapshot can hold, lowest to
+// highest. Each level includes the ones below it.
+type SnapshotFidelity int32
 
 const (
-	// Unspecified snapshot content scope.
-	SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED SnapshotContentScope = 0
-	// Captures process memory, root filesystem changes, and durable data.
-	SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL SnapshotContentScope = 1
-	// Captures durable data without process memory or root filesystem changes.
-	SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA SnapshotContentScope = 2 // Keep this in sync with the maximums on fields of this type.
+	SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED SnapshotFidelity = 0
+	// Durable volumes only. The actor resumes by cold-booting its containers
+	// from the OCI image with the volumes restored.
+	SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES SnapshotFidelity = 1
+	// Volumes plus the root filesystem changes made since boot. Not yet
+	// supported by any sandbox runtime; templates may not request it.
+	SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS SnapshotFidelity = 2
+	// Volumes, root filesystem changes, and process memory. The actor resumes
+	// where it left off.
+	SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY SnapshotFidelity = 3 // Keep this in sync with the maximums on fields of this type.
 )
 
-// Enum value maps for SnapshotContentScope.
+// Enum value maps for SnapshotFidelity.
 var (
-	SnapshotContentScope_name = map[int32]string{
-		0: "SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED",
-		1: "SNAPSHOT_CONTENT_SCOPE_FULL",
-		2: "SNAPSHOT_CONTENT_SCOPE_DATA",
+	SnapshotFidelity_name = map[int32]string{
+		0: "SNAPSHOT_FIDELITY_UNSPECIFIED",
+		1: "SNAPSHOT_FIDELITY_VOLUMES",
+		2: "SNAPSHOT_FIDELITY_ROOTFS",
+		3: "SNAPSHOT_FIDELITY_MEMORY",
 	}
-	SnapshotContentScope_value = map[string]int32{
-		"SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED": 0,
-		"SNAPSHOT_CONTENT_SCOPE_FULL":        1,
-		"SNAPSHOT_CONTENT_SCOPE_DATA":        2,
+	SnapshotFidelity_value = map[string]int32{
+		"SNAPSHOT_FIDELITY_UNSPECIFIED": 0,
+		"SNAPSHOT_FIDELITY_VOLUMES":     1,
+		"SNAPSHOT_FIDELITY_ROOTFS":      2,
+		"SNAPSHOT_FIDELITY_MEMORY":      3,
 	}
 )
 
-func (x SnapshotContentScope) Enum() *SnapshotContentScope {
-	p := new(SnapshotContentScope)
+func (x SnapshotFidelity) Enum() *SnapshotFidelity {
+	p := new(SnapshotFidelity)
 	*p = x
 	return p
 }
 
-func (x SnapshotContentScope) String() string {
+func (x SnapshotFidelity) String() string {
 	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
 }
 
-func (SnapshotContentScope) Descriptor() protoreflect.EnumDescriptor {
+func (SnapshotFidelity) Descriptor() protoreflect.EnumDescriptor {
 	return file_ateapi_proto_enumTypes[0].Descriptor()
 }
 
-func (SnapshotContentScope) Type() protoreflect.EnumType {
+func (SnapshotFidelity) Type() protoreflect.EnumType {
 	return &file_ateapi_proto_enumTypes[0]
 }
 
-func (x SnapshotContentScope) Number() protoreflect.EnumNumber {
+func (x SnapshotFidelity) Number() protoreflect.EnumNumber {
 	return protoreflect.EnumNumber(x)
 }
 
-// Deprecated: Use SnapshotContentScope.Descriptor instead.
-func (SnapshotContentScope) EnumDescriptor() ([]byte, []int) {
+// Deprecated: Use SnapshotFidelity.Descriptor instead.
+func (SnapshotFidelity) EnumDescriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{0}
 }
 
@@ -432,12 +440,12 @@ type ExternalSnapshot struct {
 	// +k8s:required
 	// +k8s:maxLength=2048 # the template's storage_location bound plus the owner prefix and snapshot name
 	SnapshotUri string `protobuf:"bytes,1,opt,name=snapshot_uri,json=snapshotUri,proto3" json:"snapshot_uri,omitempty"`
-	// content_scope is what the snapshot captured.
+	// fidelity is what the snapshot holds.
 	//
 	// +k8s:optional
 	// +k8s:minimum=1
-	// +k8s:maximum=2 # keep this in sync with the SnapshotContentScope enum
-	ContentScope SnapshotContentScope `protobuf:"varint,2,opt,name=content_scope,json=contentScope,proto3,enum=ateapi.SnapshotContentScope" json:"content_scope,omitempty"`
+	// +k8s:maximum=3 # keep this in sync with the SnapshotFidelity enum
+	Fidelity SnapshotFidelity `protobuf:"varint,2,opt,name=fidelity,proto3,enum=ateapi.SnapshotFidelity" json:"fidelity,omitempty"`
 	// UID of the ActorTemplate whose sandbox this snapshot's guest state was
 	// captured from.
 	//
@@ -485,11 +493,11 @@ func (x *ExternalSnapshot) GetSnapshotUri() string {
 	return ""
 }
 
-func (x *ExternalSnapshot) GetContentScope() SnapshotContentScope {
+func (x *ExternalSnapshot) GetFidelity() SnapshotFidelity {
 	if x != nil {
-		return x.ContentScope
+		return x.Fidelity
 	}
-	return SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED
+	return SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
 }
 
 func (x *ExternalSnapshot) GetActorTemplateUid() string {
@@ -508,13 +516,13 @@ type LocalSnapshot struct {
 	// +k8s:optional
 	// +k8s:format=k8s-short-name
 	SnapshotName string `protobuf:"bytes,1,opt,name=snapshot_name,json=snapshotName,proto3" json:"snapshot_name,omitempty"`
-	// Scope the pause checkpoint captured (the template's onCommit at pause
-	// time).
+	// Fidelity the pause checkpoint captured: the template's preferredFidelity
+	// at pause time.
 	//
 	// +k8s:optional
 	// +k8s:minimum=1
-	// +k8s:maximum=2 # keep this in sync with the SnapshotContentScope enum
-	ContentScope  SnapshotContentScope `protobuf:"varint,2,opt,name=content_scope,json=contentScope,proto3,enum=ateapi.SnapshotContentScope" json:"content_scope,omitempty"`
+	// +k8s:maximum=3 # keep this in sync with the SnapshotFidelity enum
+	Fidelity      SnapshotFidelity `protobuf:"varint,2,opt,name=fidelity,proto3,enum=ateapi.SnapshotFidelity" json:"fidelity,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -556,11 +564,11 @@ func (x *LocalSnapshot) GetSnapshotName() string {
 	return ""
 }
 
-func (x *LocalSnapshot) GetContentScope() SnapshotContentScope {
+func (x *LocalSnapshot) GetFidelity() SnapshotFidelity {
 	if x != nil {
-		return x.ContentScope
+		return x.Fidelity
 	}
-	return SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED
+	return SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
 }
 
 // Selector matches worker pools by label.
@@ -2776,28 +2784,32 @@ func (x *SandboxConfig) GetConfigName() string {
 }
 
 // SnapshotConfig selects what actor snapshots capture and where they are
-// stored. A FULL snapshot resumes from its own content. A DATA snapshot
-// resumes by starting the containers afresh from the OCI image, with the
-// durable-dir volumes populated from the snapshot.
+// stored.
 type SnapshotConfig struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// on_commit defines the scope of every snapshot taken of an actor, both
-	// the node-local one captured on pause and the one uploaded on suspend.
-	// Defaults to FULL when unset.
-	//
-	// +k8s:required
-	// +k8s:minimum=1
-	// +k8s:maximum=2 # keep this in sync with the SnapshotContentScope enum
-	OnCommit SnapshotContentScope `protobuf:"varint,2,opt,name=on_commit,json=onCommit,proto3,enum=ateapi.SnapshotContentScope" json:"on_commit,omitempty"`
 	// storage_location is the base object-storage URI snapshots of actors on
 	// this version are stored under. Required.
 	//
 	// +k8s:required
 	// +k8s:maxLength=1024
 	// +k8s:customValidation # Validate URI
-	StorageLocation string `protobuf:"bytes,4,opt,name=storage_location,json=storageLocation,proto3" json:"storage_location,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	StorageLocation string `protobuf:"bytes,1,opt,name=storage_location,json=storageLocation,proto3" json:"storage_location,omitempty"`
+	// preferred_fidelity is the highest fidelity the system packages when it
+	// snapshots the actor, on pause (node-local) and on suspend (uploaded).
+	// It is a best-effort ceiling, not a guarantee: the system never packages
+	// more than this level, and it may package less when a layer cannot be
+	// captured or is too expensive to capture at the time, for example memory
+	// under host pressure. A process resumed in place on its worker keeps its
+	// memory regardless of this setting. ROOTFS is not supported yet and is
+	// rejected. Defaults to MEMORY when unset.
+	//
+	// +k8s:required
+	// +k8s:minimum=1
+	// +k8s:maximum=3 # keep this in sync with the SnapshotFidelity enum
+	// +k8s:customValidation # ROOTFS is not supported yet
+	PreferredFidelity SnapshotFidelity `protobuf:"varint,2,opt,name=preferred_fidelity,json=preferredFidelity,proto3,enum=ateapi.SnapshotFidelity" json:"preferred_fidelity,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *SnapshotConfig) Reset() {
@@ -2830,18 +2842,18 @@ func (*SnapshotConfig) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{29}
 }
 
-func (x *SnapshotConfig) GetOnCommit() SnapshotContentScope {
-	if x != nil {
-		return x.OnCommit
-	}
-	return SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED
-}
-
 func (x *SnapshotConfig) GetStorageLocation() string {
 	if x != nil {
 		return x.StorageLocation
 	}
 	return ""
+}
+
+func (x *SnapshotConfig) GetPreferredFidelity() SnapshotFidelity {
+	if x != nil {
+		return x.PreferredFidelity
+	}
+	return SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
 }
 
 // Container is a single application container of an ActorTemplate.
@@ -6759,8 +6771,7 @@ type Worker struct {
 	// +k8s:customValidation # until `format=k8s-ip` is supported
 	// +k8s:immutable
 	Ips []string `protobuf:"bytes,7,rep,name=ips,proto3" json:"ips,omitempty"`
-	// sandbox_class mirrors the WorkerPool's sandboxClass; its values are the
-	// CRD's own vocabulary, so it is only bounded, not validated.
+	// sandbox_class mirrors the WorkerPool's default sandbox class
 	//
 	// +k8s:optional
 	// +k8s:maxLength=63
@@ -8101,14 +8112,14 @@ var File_ateapi_proto protoreflect.FileDescriptor
 
 const file_ateapi_proto_rawDesc = "" +
 	"\n" +
-	"\fateapi.proto\x12\x06ateapi\x1a\x1fgoogle/protobuf/timestamp.proto\"\xa6\x01\n" +
+	"\fateapi.proto\x12\x06ateapi\x1a\x1fgoogle/protobuf/timestamp.proto\"\x99\x01\n" +
 	"\x10ExternalSnapshot\x12!\n" +
-	"\fsnapshot_uri\x18\x01 \x01(\tR\vsnapshotUri\x12A\n" +
-	"\rcontent_scope\x18\x02 \x01(\x0e2\x1c.ateapi.SnapshotContentScopeR\fcontentScope\x12,\n" +
-	"\x12actor_template_uid\x18\x03 \x01(\tR\x10actorTemplateUid\"w\n" +
+	"\fsnapshot_uri\x18\x01 \x01(\tR\vsnapshotUri\x124\n" +
+	"\bfidelity\x18\x02 \x01(\x0e2\x18.ateapi.SnapshotFidelityR\bfidelity\x12,\n" +
+	"\x12actor_template_uid\x18\x03 \x01(\tR\x10actorTemplateUid\"j\n" +
 	"\rLocalSnapshot\x12#\n" +
-	"\rsnapshot_name\x18\x01 \x01(\tR\fsnapshotName\x12A\n" +
-	"\rcontent_scope\x18\x02 \x01(\x0e2\x1c.ateapi.SnapshotContentScopeR\fcontentScope\"\x90\x01\n" +
+	"\rsnapshot_name\x18\x01 \x01(\tR\fsnapshotName\x124\n" +
+	"\bfidelity\x18\x02 \x01(\x0e2\x18.ateapi.SnapshotFidelityR\bfidelity\"\x90\x01\n" +
 	"\bSelector\x12D\n" +
 	"\fmatch_labels\x18\x01 \x03(\v2!.ateapi.Selector.MatchLabelsEntryR\vmatchLabels\x1a>\n" +
 	"\x10MatchLabelsEntry\x12\x10\n" +
@@ -8247,10 +8258,10 @@ const file_ateapi_proto_rawDesc = "" +
 	"\rSandboxConfig\x129\n" +
 	"\rsandbox_class\x18\x01 \x01(\x0e2\x14.ateapi.SandboxClassR\fsandboxClass\x12\x1f\n" +
 	"\vconfig_name\x18\x02 \x01(\tR\n" +
-	"configName\"v\n" +
-	"\x0eSnapshotConfig\x129\n" +
-	"\ton_commit\x18\x02 \x01(\x0e2\x1c.ateapi.SnapshotContentScopeR\bonCommit\x12)\n" +
-	"\x10storage_location\x18\x04 \x01(\tR\x0fstorageLocation\"\xf5\x02\n" +
+	"configName\"\x84\x01\n" +
+	"\x0eSnapshotConfig\x12)\n" +
+	"\x10storage_location\x18\x01 \x01(\tR\x0fstorageLocation\x12G\n" +
+	"\x12preferred_fidelity\x18\x02 \x01(\x0e2\x18.ateapi.SnapshotFidelityR\x11preferredFidelity\"\xf5\x02\n" +
 	"\tContainer\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05image\x18\x02 \x01(\tR\x05image\x12\x18\n" +
@@ -8519,11 +8530,12 @@ const file_ateapi_proto_rawDesc = "" +
 	"\raccess_policy\x18\x02 \x01(\v2\x14.ateapi.AccessPolicyR\faccessPolicy\"\x83\x01\n" +
 	"!DeleteAtespaceAccessPolicyRequest\x12-\n" +
 	"\batespace\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\batespace\x12/\n" +
-	"\aoptions\x18\x02 \x01(\v2\x15.ateapi.DeleteOptionsR\aoptions*\x80\x01\n" +
-	"\x14SnapshotContentScope\x12&\n" +
-	"\"SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED\x10\x00\x12\x1f\n" +
-	"\x1bSNAPSHOT_CONTENT_SCOPE_FULL\x10\x01\x12\x1f\n" +
-	"\x1bSNAPSHOT_CONTENT_SCOPE_DATA\x10\x02*V\n" +
+	"\aoptions\x18\x02 \x01(\v2\x15.ateapi.DeleteOptionsR\aoptions*\x90\x01\n" +
+	"\x10SnapshotFidelity\x12!\n" +
+	"\x1dSNAPSHOT_FIDELITY_UNSPECIFIED\x10\x00\x12\x1d\n" +
+	"\x19SNAPSHOT_FIDELITY_VOLUMES\x10\x01\x12\x1c\n" +
+	"\x18SNAPSHOT_FIDELITY_ROOTFS\x10\x02\x12\x1c\n" +
+	"\x18SNAPSHOT_FIDELITY_MEMORY\x10\x03*V\n" +
 	"\bTagScope\x12\x19\n" +
 	"\x15TAG_SCOPE_UNSPECIFIED\x10\x00\x12\x16\n" +
 	"\x12TAG_SCOPE_ATESPACE\x10\x01\x12\x17\n" +
@@ -8618,7 +8630,7 @@ func file_ateapi_proto_rawDescGZIP() []byte {
 var file_ateapi_proto_enumTypes = make([]protoimpl.EnumInfo, 7)
 var file_ateapi_proto_msgTypes = make([]protoimpl.MessageInfo, 118)
 var file_ateapi_proto_goTypes = []any{
-	(SnapshotContentScope)(0),                  // 0: ateapi.SnapshotContentScope
+	(SnapshotFidelity)(0),                      // 0: ateapi.SnapshotFidelity
 	(TagScope)(0),                              // 1: ateapi.TagScope
 	(ActorState)(0),                            // 2: ateapi.ActorState
 	(SandboxClass)(0),                          // 3: ateapi.SandboxClass
@@ -8746,8 +8758,8 @@ var file_ateapi_proto_goTypes = []any{
 	(*timestamppb.Timestamp)(nil), // 125: google.protobuf.Timestamp
 }
 var file_ateapi_proto_depIdxs = []int32{
-	0,   // 0: ateapi.ExternalSnapshot.content_scope:type_name -> ateapi.SnapshotContentScope
-	0,   // 1: ateapi.LocalSnapshot.content_scope:type_name -> ateapi.SnapshotContentScope
+	0,   // 0: ateapi.ExternalSnapshot.fidelity:type_name -> ateapi.SnapshotFidelity
+	0,   // 1: ateapi.LocalSnapshot.fidelity:type_name -> ateapi.SnapshotFidelity
 	121, // 2: ateapi.Selector.match_labels:type_name -> ateapi.Selector.MatchLabelsEntry
 	125, // 3: ateapi.ResourceMetadata.create_time:type_name -> google.protobuf.Timestamp
 	125, // 4: ateapi.ResourceMetadata.update_time:type_name -> google.protobuf.Timestamp
@@ -8798,7 +8810,7 @@ var file_ateapi_proto_depIdxs = []int32{
 	125, // 49: ateapi.GoldenSnapshotStatus.take_golden_snapshot_at:type_name -> google.protobuf.Timestamp
 	33,  // 50: ateapi.ActorTemplateStatus.golden_snapshot_status:type_name -> ateapi.GoldenSnapshotStatus
 	3,   // 51: ateapi.SandboxConfig.sandbox_class:type_name -> ateapi.SandboxClass
-	0,   // 52: ateapi.SnapshotConfig.on_commit:type_name -> ateapi.SnapshotContentScope
+	0,   // 52: ateapi.SnapshotConfig.preferred_fidelity:type_name -> ateapi.SnapshotFidelity
 	40,  // 53: ateapi.Container.env:type_name -> ateapi.EnvVar
 	41,  // 54: ateapi.Container.wakeup_probe:type_name -> ateapi.ContainerWakeupProbe
 	52,  // 55: ateapi.Container.volume_mounts:type_name -> ateapi.VolumeMount

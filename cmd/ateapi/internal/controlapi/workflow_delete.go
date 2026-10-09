@@ -23,7 +23,6 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/objectstore"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -376,7 +375,7 @@ func (w *ActorWorkflow) ensureExternalSnapshotsReleased(ctx context.Context, act
 	ctx, done := stepSpan(ctx, "ReleaseExternalSnapshots")
 	defer func() { err = done(err) }()
 
-	if w.objectStore == nil {
+	if w.snapshotPlugin == nil {
 		markSkipped(ctx, "no object store configured")
 		return nil
 	}
@@ -389,7 +388,7 @@ func (w *ActorWorkflow) ensureExternalSnapshotsReleased(ctx context.Context, act
 		markSkipped(ctx, "the actor owns no external snapshot")
 		return nil
 	}
-	return objectstore.DeletePrefix(ctx, w.objectStore, prefix)
+	return w.cleanupSnapshot(ctx, prefix)
 }
 
 // actorSnapshotStoragePrefix returns the prefix holding every object the actor wrote:

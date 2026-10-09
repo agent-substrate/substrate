@@ -43,19 +43,19 @@ type resumeSnapshotSource struct {
 	// Zero means cold boot from the spec (unless the actor holds a local
 	// snapshot, which takes precedence at restore).
 	SnapshotURI resources.SnapshotURI
-	Scope       ateapipb.SnapshotContentScope
+	Fidelity    ateapipb.SnapshotFidelity
 	// TemplateReplaced is true when the external snapshot's recorded template
 	// UID differs from the actor's current template.
 	TemplateReplaced bool
 }
 
 // restoreTelemetry labels the restore operation for the resume lifecycle
-// metric. WireSnapshotScope describes the restore requested, not the stored
-// snapshot's scope: a full snapshot restored under a replaced template goes
+// metric. WireFidelity describes the restore requested, not the stored
+// snapshot's scope: a MEMORY snapshot restored under a replaced template goes
 // out as data.
 type restoreTelemetry struct {
-	SnapshotKind      string
-	WireSnapshotScope string
+	SnapshotKind string
+	WireFidelity string
 }
 
 // ResumeActor executes the workflow to resume a suspended actor. Idempotent:
@@ -77,7 +77,7 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 			return
 		}
 		w.instruments.recordLifecycleOp(ctx, ateattr.OperationResume, start, err,
-			lifecycleOpAttrs(actor, actorTemplate, tele.SnapshotKind, tele.WireSnapshotScope)...)
+			lifecycleOpAttrs(actor, actorTemplate, tele.SnapshotKind, tele.WireFidelity)...)
 	}()
 
 	// Routed requests call ResumeActor even when the actor is already running.
@@ -132,22 +132,18 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 	return actor, true, nil
 }
 
-// validateGoldenSnapshotScope rejects a golden snapshot that does not carry
+// validateGoldenSnapshotFidelity rejects a golden snapshot that does not carry
 // the guest state (memory + fs delta) a restore needs. Golden actors always
-// commit Full (commitSnapshotScope), so this only trips on golden snapshots
-// taken before that rule existed — surface a clear error instead of shipping
-// a restore request atelet would reject (or that would boot an empty guest).
-func validateGoldenSnapshotScope(snapshot *ateapipb.ExternalSnapshot) error {
-	scope := snapshot.GetContentScope()
-	switch scope {
-	case ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED,
-		ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL:
-		return nil
-	default:
+// commit MEMORY (preferredFidelity), so this only trips on a golden snapshot
+// whose record drifted — surface a clear error instead of shipping a restore
+// request atelet would reject (or that would boot an empty guest).
+func validateGoldenSnapshotFidelity(snapshot *ateapipb.ExternalSnapshot) error {
+	if fidelity := snapshot.GetFidelity(); fidelity != ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
 		return apierror.FailedPrecondition(
-			"ActorTemplate golden snapshot %q was taken with scope %s, not Full; regenerate the golden snapshot",
-			snapshot.GetSnapshotUri(), scope)
+			"ActorTemplate golden snapshot %q was taken with fidelity %s, not MEMORY; regenerate the golden snapshot",
+			snapshot.GetSnapshotUri(), fidelity)
 	}
+	return nil
 }
 
 // loadActorForResume fetches the current actor record and its template, and
@@ -180,7 +176,7 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 		if src.SnapshotURI, err = resources.ParseSnapshotURI(uri); err != nil {
 			return nil, nil, src, apierror.DataLoss("Actor %s external snapshot: %v", actorRef, err)
 		}
-		src.Scope = actor.GetStatus().GetExternalSnapshot().GetContentScope()
+		src.Fidelity = actor.GetStatus().GetExternalSnapshot().GetFidelity()
 		capturedUnder := actor.GetStatus().GetExternalSnapshot().GetActorTemplateUid()
 		src.TemplateReplaced = capturedUnder != "" && capturedUnder != actorTemplate.GetMetadata().GetUid()
 	}
@@ -719,8 +715,8 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		req.Config = &ateletpb.RestoreRequest_LocalConfig{
 			LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: local.GetSnapshotName()},
 		}
-		req.Scope = actorSnapshotContentScopeToAtelet(local.GetContentScope())
-		tele.WireSnapshotScope = ateattr.SnapshotScopeValue(req.Scope)
+		req.Fidelity = fidelityToAtelet(local.GetFidelity())
+		tele.WireFidelity = ateattr.SnapshotFidelityValue(req.Fidelity)
 
 		if _, err = client.Restore(ctx, req); err != nil {
 			return tele, handleAteletError(ctx, w.store, actorRef, ateattr.OperationResume, "Restore", false, err)
@@ -729,11 +725,11 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 	} else if !src.SnapshotURI.IsZero() {
 		slog.InfoContext(ctx, "Actor has durable snapshot; Restoring from snapshot")
 		tele.SnapshotKind = ateattr.SnapshotKindLatest
-		scope := actorSnapshotContentScopeToAtelet(src.Scope)
+		scope := fidelityToAtelet(src.Fidelity)
 		if src.TemplateReplaced {
-			scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA
+			scope = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
 		}
-		tele.WireSnapshotScope = ateattr.SnapshotScopeValue(scope)
+		tele.WireFidelity = ateattr.SnapshotFidelityValue(scope)
 		req := &ateletpb.RestoreRequest{
 			TargetAteomUid:        assignment.GetWorkerPodUid(),
 			Atespace:              actor.GetMetadata().GetAtespace(),
@@ -747,7 +743,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 					SnapshotUri: src.SnapshotURI.String(),
 				},
 			},
-			Scope:         scope,
+			Fidelity:      scope,
 			SandboxAssets: sandboxAssets,
 			ActorUid:      actor.GetMetadata().Uid,
 			EgressGateway: egressGateway,

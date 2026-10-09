@@ -144,18 +144,18 @@ func TestEnsurePausedFinalized_AlreadyCrashed(t *testing.T) {
 	}
 }
 
-// TestEnsurePausedFinalized_RecordsContentScope verifies pause finalization
-// records the scope the pause checkpoint captured (the template's onCommit)
+// TestEnsurePausedFinalized_RecordsFidelity verifies pause finalization
+// records the scope the pause checkpoint captured (the template's preferredFidelity)
 // in LocalSnapshot, so a later suspend or resume of the PAUSED actor knows
 // what the local snapshot contains.
-func TestEnsurePausedFinalized_RecordsContentScope(t *testing.T) {
+func TestEnsurePausedFinalized_RecordsFidelity(t *testing.T) {
 	tests := []struct {
 		name     string
-		onCommit ateapipb.SnapshotContentScope
-		want     ateapipb.SnapshotContentScope
+		fidelity ateapipb.SnapshotFidelity
+		want     ateapipb.SnapshotFidelity
 	}{
-		{"data", ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA},
-		{"full", ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
+		{"data", ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES},
+		{"full", ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -198,7 +198,7 @@ func TestEnsurePausedFinalized_RecordsContentScope(t *testing.T) {
 
 			w := &ActorWorkflow{store: st}
 			tmpl := &ateapipb.ActorTemplate{
-				SnapshotConfig: &ateapipb.SnapshotConfig{OnCommit: tc.onCommit},
+				SnapshotConfig: &ateapipb.SnapshotConfig{PreferredFidelity: tc.fidelity},
 			}
 			got, err := w.ensurePausedFinalized(ctx, actorRef, tmpl)
 			if err != nil {
@@ -208,8 +208,8 @@ func TestEnsurePausedFinalized_RecordsContentScope(t *testing.T) {
 			if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_PAUSED {
 				t.Fatalf("state = %v, want PAUSED", got.GetStatus().GetState())
 			}
-			if scope := got.GetStatus().GetLocalSnapshot().GetContentScope(); scope != tc.want {
-				t.Errorf("LocalSnapshot.ContentScope = %v, want %v", scope, tc.want)
+			if scope := got.GetStatus().GetLocalSnapshot().GetFidelity(); scope != tc.want {
+				t.Errorf("LocalSnapshot.Fidelity = %v, want %v", scope, tc.want)
 			}
 			if got.GetStatus().GetAssignedNode() != "node1" {
 				t.Errorf("AssignedNode = %q, want %q", got.GetStatus().GetAssignedNode(), "node1")

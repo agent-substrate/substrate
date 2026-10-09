@@ -135,7 +135,7 @@ func TestUpdateTag(t *testing.T) {
 			req: &ateapipb.Tag{
 				Scope: ateapipb.TagScope_TAG_SCOPE_PUBLISHED,
 				Status: &ateapipb.TagStatus{
-					Snapshot:         &ateapipb.ExternalSnapshot{SnapshotUri: "gs://attacker/elsewhere", ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA},
+					Snapshot:         &ateapipb.ExternalSnapshot{SnapshotUri: "gs://attacker/elsewhere", Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES},
 					ActorTemplateUid: "other-template-uid",
 				},
 			},
@@ -249,7 +249,7 @@ func newTestSuspendedActor(t *testing.T, ctx context.Context, st store.Interface
 		t.Fatalf("NewActorSnapshotURI: %v", err)
 	}
 	return mustUpdateActorStatus(t, ctx, st, actor, func(status *ateapipb.ActorStatus) {
-		status.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: uri.String(), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL}
+		status.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: uri.String(), Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY}
 	})
 }
 
@@ -269,8 +269,8 @@ func newTestTag(t *testing.T, name string, actor *ateapipb.Actor) *ateapipb.Tag 
 		SourceActor: resources.ActorRefFromActor(actor).ToObjectRef(),
 		Status: &ateapipb.TagStatus{
 			Snapshot: &ateapipb.ExternalSnapshot{
-				SnapshotUri:  uri.String(),
-				ContentScope: actor.GetStatus().GetExternalSnapshot().GetContentScope(),
+				SnapshotUri: uri.String(),
+				Fidelity:    actor.GetStatus().GetExternalSnapshot().GetFidelity(),
 			},
 		},
 	}

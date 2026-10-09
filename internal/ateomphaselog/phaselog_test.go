@@ -53,7 +53,7 @@ func renderPhaseRecord(t *testing.T, attrs []slog.Attr) map[string]any {
 func TestSnapshotPhaseAttrs(t *testing.T) {
 	t.Parallel()
 
-	attrs := SnapshotPhaseAttrs(phaseLogAttribution(), ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
+	attrs := SnapshotPhaseAttrs(phaseLogAttribution(), ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 		CheckpointDurationKey, nil, []Phase{
 			{Name: "prep", D: 40 * time.Millisecond},
 			{Name: "pause", D: 3 * time.Millisecond},
@@ -81,7 +81,7 @@ func TestSnapshotPhaseAttrs(t *testing.T) {
 		"ate.actor.uid":         "uid-abc",
 		"ate.template.atespace": "templates",
 		"ate.template.name":     "support-agent",
-		"ate.snapshot.scope":    ateattr.SnapshotScopeFull,
+		"ate.snapshot.fidelity": ateattr.SnapshotFidelityMemory,
 	} {
 		if got, ok := rec[k]; !ok {
 			t.Errorf("missing %s", k)
@@ -140,7 +140,7 @@ func TestSnapshotPhaseAttrsFailure(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			rec := renderPhaseRecord(t, SnapshotPhaseAttrs(phaseLogAttribution(),
-				ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL, CheckpointDurationKey, tt.err,
+				ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, CheckpointDurationKey, tt.err,
 				[]Phase{
 					{Name: "prep", D: 40 * time.Millisecond},
 					{Name: "pause", D: 3 * time.Millisecond},
@@ -161,23 +161,24 @@ func TestSnapshotPhaseAttrsFailure(t *testing.T) {
 	}
 }
 
-// TestScopeLogValue pins the mapping onto the shared scope values, so the
-// ateom and atelet records of one operation agree on the scope they carry.
-func TestScopeLogValue(t *testing.T) {
+// TestFidelityLogValue pins the mapping onto the shared fidelity values, so the
+// ateom and atelet records of one operation agree on the fidelity they carry.
+func TestFidelityLogValue(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		scope ateompb.SnapshotScope
+		scope ateompb.SnapshotFidelity
 		want  string
 	}{
-		{ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL, ateattr.SnapshotScopeFull},
-		{ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA, ateattr.SnapshotScopeData},
-		{ateompb.SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED, ateattr.SnapshotScopeUnknown},
-		{ateompb.SnapshotScope(99), ateattr.SnapshotScopeUnknown},
+		{ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, ateattr.SnapshotFidelityMemory},
+		{ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, ateattr.SnapshotFidelityVolumes},
+		{ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, ateattr.SnapshotFidelityRootfs},
+		{ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED, ateattr.SnapshotFidelityUnknown},
+		{ateompb.SnapshotFidelity(99), ateattr.SnapshotFidelityUnknown},
 	}
 	for _, tt := range tests {
-		if got := ScopeLogValue(tt.scope); got != tt.want {
-			t.Errorf("ScopeLogValue(%v) = %q, want %q", tt.scope, got, tt.want)
+		if got := FidelityLogValue(tt.scope); got != tt.want {
+			t.Errorf("FidelityLogValue(%v) = %q, want %q", tt.scope, got, tt.want)
 		}
 	}
 }
@@ -191,7 +192,7 @@ func TestLogSnapshotPhases(t *testing.T) {
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
 	LogSnapshotPhases(context.Background(), "Restore timing breakdown", phaseLogAttribution(),
-		ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA, RestoreDurationKey, nil,
+		ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, RestoreDurationKey, nil,
 		[]Phase{{Name: ateattr.SnapshotPhaseTotal, D: 2 * time.Second}})
 
 	var rec map[string]any
@@ -204,8 +205,8 @@ func TestLogSnapshotPhases(t *testing.T) {
 	if rec["level"] != "INFO" {
 		t.Errorf("level = %v, want INFO", rec["level"])
 	}
-	if rec["ate.snapshot.scope"] != ateattr.SnapshotScopeData {
-		t.Errorf("ate.snapshot.scope = %v, want %q", rec["ate.snapshot.scope"], ateattr.SnapshotScopeData)
+	if rec["ate.snapshot.fidelity"] != ateattr.SnapshotFidelityVolumes {
+		t.Errorf("ate.snapshot.fidelity = %v, want %q", rec["ate.snapshot.fidelity"], ateattr.SnapshotFidelityVolumes)
 	}
 	if got := rec["ateom.actor.restore.duration.total"]; got != 2.0 {
 		t.Errorf("ateom.actor.restore.duration.total = %v, want 2", got)

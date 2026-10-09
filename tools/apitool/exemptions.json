@@ -91,11 +91,6 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.SnapshotContentScope",
-    "message": "enum has no doc comment"
-  },
-  {
-    "rule": "documented",
     "subject": "ateapi.SystemInfoDataSource",
     "message": "message has no doc comment"
   },

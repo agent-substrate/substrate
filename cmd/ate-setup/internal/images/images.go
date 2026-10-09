@@ -48,6 +48,7 @@ var Components = []string{
 	"cmd/ateom-microvm",
 	"cmd/credential-provider/kubernetes-secrets",
 	"cmd/podcertcontroller",
+	"cmd/snapshot-plugin",
 	"demos/counter",
 	"demos/egress",
 	"demos/multi-template/fspersist",

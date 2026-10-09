@@ -453,8 +453,8 @@ func TestValidateActorUpdate(t *testing.T) {
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
 			s.ExternalSnapshot = &ateapipb.ExternalSnapshot{
-				SnapshotUri:  "gs://private/atespaces/as/actors/" + someActorUID + "/snapshots/snap-1",
-				ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+				SnapshotUri: "gs://private/atespaces/as/actors/" + someActorUID + "/snapshots/snap-1",
+				Fidelity:    ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			}
 		})),
 		nil,
@@ -497,26 +497,26 @@ func TestValidateActorUpdate(t *testing.T) {
 		})),
 		field.ErrorList{field.Invalid(field.NewPath("status", "local_snapshot", "snapshot_name"), nil, "").WithOrigin("format=k8s-short-name")},
 	}, {
-		"valid actor.status.local_snapshot.content_scope",
+		"valid actor.status.local_snapshot.fidelity",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.LocalSnapshot = &ateapipb.LocalSnapshot{ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA}
+			s.LocalSnapshot = &ateapipb.LocalSnapshot{Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES}
 		})),
 		nil,
 	}, {
-		"negative actor.status.local_snapshot.content_scope",
+		"negative actor.status.local_snapshot.fidelity",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.LocalSnapshot = &ateapipb.LocalSnapshot{ContentScope: ateapipb.SnapshotContentScope(-1)}
+			s.LocalSnapshot = &ateapipb.LocalSnapshot{Fidelity: ateapipb.SnapshotFidelity(-1)}
 		})),
-		field.ErrorList{field.Invalid(field.NewPath("status", "local_snapshot", "content_scope"), nil, "").WithOrigin("minimum")},
+		field.ErrorList{field.Invalid(field.NewPath("status", "local_snapshot", "fidelity"), nil, "").WithOrigin("minimum")},
 	}, {
-		"invalid actor.status.local_snapshot.content_scope",
+		"invalid actor.status.local_snapshot.fidelity",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.LocalSnapshot = &ateapipb.LocalSnapshot{ContentScope: ateapipb.SnapshotContentScope(3)}
+			s.LocalSnapshot = &ateapipb.LocalSnapshot{Fidelity: ateapipb.SnapshotFidelity(4)}
 		})),
-		field.ErrorList{field.Invalid(field.NewPath("status", "local_snapshot", "content_scope"), nil, "").WithOrigin("maximum")},
+		field.ErrorList{field.Invalid(field.NewPath("status", "local_snapshot", "fidelity"), nil, "").WithOrigin("maximum")},
 	}, {
 		"too many actor_volumes",
 		validInput(),

@@ -140,58 +140,65 @@ func (CheckpointType) EnumDescriptor() ([]byte, []int) {
 	return file_atelet_proto_rawDescGZIP(), []int{1}
 }
 
-type SnapshotScope int32
+// SnapshotFidelity mirrors the public ateapi enum: the state layers a
+// snapshot holds, lowest to highest, each including the ones below it.
+type SnapshotFidelity int32
 
 const (
 	// Not valid option; should never happen.
-	SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED SnapshotScope = 0
-	// Capture process memory plus the full filesystem delta on top of the OCI
-	// image (including any attached DurableDir volumes).
-	SnapshotScope_SNAPSHOT_SCOPE_FULL SnapshotScope = 1
+	SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED SnapshotFidelity = 0
 	// Capture only the contents of attached volumes that support snapshots
 	// (currently DurableDir-typed volumes). Memory and the rest of rootfs are
 	// excluded.
-	SnapshotScope_SNAPSHOT_SCOPE_DATA SnapshotScope = 2
+	SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES SnapshotFidelity = 1
+	// Volumes plus the root filesystem changes made since boot. No runtime
+	// captures this yet; requests carrying it are rejected.
+	SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS SnapshotFidelity = 2
+	// Capture process memory plus the full filesystem delta on top of the OCI
+	// image (including any attached DurableDir volumes).
+	SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY SnapshotFidelity = 3
 )
 
-// Enum value maps for SnapshotScope.
+// Enum value maps for SnapshotFidelity.
 var (
-	SnapshotScope_name = map[int32]string{
-		0: "SNAPSHOT_SCOPE_UNSPECIFIED",
-		1: "SNAPSHOT_SCOPE_FULL",
-		2: "SNAPSHOT_SCOPE_DATA",
+	SnapshotFidelity_name = map[int32]string{
+		0: "SNAPSHOT_FIDELITY_UNSPECIFIED",
+		1: "SNAPSHOT_FIDELITY_VOLUMES",
+		2: "SNAPSHOT_FIDELITY_ROOTFS",
+		3: "SNAPSHOT_FIDELITY_MEMORY",
 	}
-	SnapshotScope_value = map[string]int32{
-		"SNAPSHOT_SCOPE_UNSPECIFIED": 0,
-		"SNAPSHOT_SCOPE_FULL":        1,
-		"SNAPSHOT_SCOPE_DATA":        2,
+	SnapshotFidelity_value = map[string]int32{
+		"SNAPSHOT_FIDELITY_UNSPECIFIED": 0,
+		"SNAPSHOT_FIDELITY_VOLUMES":     1,
+		"SNAPSHOT_FIDELITY_ROOTFS":      2,
+		"SNAPSHOT_FIDELITY_MEMORY":      3,
 	}
 )
 
-func (x SnapshotScope) Enum() *SnapshotScope {
-	p := new(SnapshotScope)
+func (x SnapshotFidelity) Enum() *SnapshotFidelity {
+	p := new(SnapshotFidelity)
 	*p = x
 	return p
 }
 
-func (x SnapshotScope) String() string {
+func (x SnapshotFidelity) String() string {
 	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
 }
 
-func (SnapshotScope) Descriptor() protoreflect.EnumDescriptor {
+func (SnapshotFidelity) Descriptor() protoreflect.EnumDescriptor {
 	return file_atelet_proto_enumTypes[2].Descriptor()
 }
 
-func (SnapshotScope) Type() protoreflect.EnumType {
+func (SnapshotFidelity) Type() protoreflect.EnumType {
 	return &file_atelet_proto_enumTypes[2]
 }
 
-func (x SnapshotScope) Number() protoreflect.EnumNumber {
+func (x SnapshotFidelity) Number() protoreflect.EnumNumber {
 	return protoreflect.EnumNumber(x)
 }
 
-// Deprecated: Use SnapshotScope.Descriptor instead.
-func (SnapshotScope) EnumDescriptor() ([]byte, []int) {
+// Deprecated: Use SnapshotFidelity.Descriptor instead.
+func (SnapshotFidelity) EnumDescriptor() ([]byte, []int) {
 	return file_atelet_proto_rawDescGZIP(), []int{2}
 }
 
@@ -2522,8 +2529,8 @@ type CheckpointRequest struct {
 	//	*CheckpointRequest_LocalConfig
 	//	*CheckpointRequest_ExternalConfig
 	Config isCheckpointRequest_Config `protobuf_oneof:"config"`
-	// What should be included in the checkpoint.
-	Scope         SnapshotScope `protobuf:"varint,11,opt,name=scope,proto3,enum=atelet.SnapshotScope" json:"scope,omitempty"`
+	// Fidelity the checkpoint captures.
+	Fidelity      SnapshotFidelity `protobuf:"varint,11,opt,name=fidelity,proto3,enum=atelet.SnapshotFidelity" json:"fidelity,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2639,11 +2646,11 @@ func (x *CheckpointRequest) GetExternalConfig() *ExternalCheckpointConfiguration
 	return nil
 }
 
-func (x *CheckpointRequest) GetScope() SnapshotScope {
+func (x *CheckpointRequest) GetFidelity() SnapshotFidelity {
 	if x != nil {
-		return x.Scope
+		return x.Fidelity
 	}
-	return SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED
+	return SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
 }
 
 type isCheckpointRequest_Config interface {
@@ -2711,14 +2718,14 @@ type UploadPausedCheckpointRequest struct {
 	LocalSnapshotName string `protobuf:"bytes,6,opt,name=local_snapshot_name,json=localSnapshotName,proto3" json:"local_snapshot_name,omitempty"`
 	// Destination object-storage URI (the actor's in-progress snapshot URI).
 	DestinationSnapshotUri string `protobuf:"bytes,7,opt,name=destination_snapshot_uri,json=destinationSnapshotUri,proto3" json:"destination_snapshot_uri,omitempty"`
-	// Scope the uploaded snapshot must have (the commit scope; FULL or DATA).
-	// The scope the pause checkpoint captured is not sent: atelet reads it from
+	// Fidelity the uploaded snapshot must have (MEMORY or VOLUMES). The
+	// fidelity the pause checkpoint captured is not sent: atelet reads it from
 	// the local snapshot's own manifest, which is authoritative. When they
-	// differ, atelet converts where possible (a FULL capture to a DATA upload
-	// of the data-scope files ateom reported) and rejects otherwise.
-	DesiredScope  SnapshotScope `protobuf:"varint,8,opt,name=desired_scope,json=desiredScope,proto3,enum=atelet.SnapshotScope" json:"desired_scope,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// differ, atelet converts where possible (a MEMORY capture to a VOLUMES
+	// upload of the volume files ateom reported) and rejects otherwise.
+	DesiredFidelity SnapshotFidelity `protobuf:"varint,8,opt,name=desired_fidelity,json=desiredFidelity,proto3,enum=atelet.SnapshotFidelity" json:"desired_fidelity,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *UploadPausedCheckpointRequest) Reset() {
@@ -2800,11 +2807,11 @@ func (x *UploadPausedCheckpointRequest) GetDestinationSnapshotUri() string {
 	return ""
 }
 
-func (x *UploadPausedCheckpointRequest) GetDesiredScope() SnapshotScope {
+func (x *UploadPausedCheckpointRequest) GetDesiredFidelity() SnapshotFidelity {
 	if x != nil {
-		return x.DesiredScope
+		return x.DesiredFidelity
 	}
-	return SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED
+	return SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
 }
 
 type UploadPausedCheckpointResponse struct {
@@ -2860,13 +2867,13 @@ type RestoreRequest struct {
 	//	*RestoreRequest_LocalConfig
 	//	*RestoreRequest_ExternalConfig
 	Config isRestoreRequest_Config `protobuf_oneof:"config"`
-	// What content to restore from the checkpoint.
-	Scope SnapshotScope `protobuf:"varint,11,opt,name=scope,proto3,enum=atelet.SnapshotScope" json:"scope,omitempty"`
+	// Fidelity to restore from the checkpoint.
+	Fidelity SnapshotFidelity `protobuf:"varint,11,opt,name=fidelity,proto3,enum=atelet.SnapshotFidelity" json:"fidelity,omitempty"`
 	// When absent the actor has no egress: its TCP is captured and refused.
 	EgressGateway *EgressGateway `protobuf:"bytes,13,opt,name=egress_gateway,json=egressGateway,proto3,oneof" json:"egress_gateway,omitempty"`
 	// The actor's declared size, from the ActorTemplate's resource limits. For
-	// gVisor and micro-VM DATA-scope restores the sandbox is (re)sized to these;
-	// for a FULL micro-VM restore the size baked into the snapshot wins. Zero
+	// gVisor and micro-VM VOLUMES restores the sandbox is (re)sized to these;
+	// for a MEMORY micro-VM restore the size baked into the snapshot wins. Zero
 	// means "unset": keep the runtime default.
 	CpuMilli    int64 `protobuf:"varint,14,opt,name=cpu_milli,json=cpuMilli,proto3" json:"cpu_milli,omitempty"`          // CPU limit in millicores (1000 = one core).
 	MemoryBytes int64 `protobuf:"varint,15,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"` // Memory limit in bytes.
@@ -2988,11 +2995,11 @@ func (x *RestoreRequest) GetExternalConfig() *ExternalRestoreConfiguration {
 	return nil
 }
 
-func (x *RestoreRequest) GetScope() SnapshotScope {
+func (x *RestoreRequest) GetFidelity() SnapshotFidelity {
 	if x != nil {
-		return x.Scope
+		return x.Fidelity
 	}
-	return SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED
+	return SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
 }
 
 func (x *RestoreRequest) GetEgressGateway() *EgressGateway {
@@ -3240,7 +3247,7 @@ const file_atelet_proto_rawDesc = "" +
 	"\x1fExternalCheckpointConfiguration\x12!\n" +
 	"\fsnapshot_uri\x18\x01 \x01(\tR\vsnapshotUri\"A\n" +
 	"\x1cExternalRestoreConfiguration\x12!\n" +
-	"\fsnapshot_uri\x18\x01 \x01(\tR\vsnapshotUri\"\xa9\x04\n" +
+	"\fsnapshot_uri\x18\x01 \x01(\tR\vsnapshotUri\"\xb2\x04\n" +
 	"\x11CheckpointRequest\x12(\n" +
 	"\x10target_ateom_uid\x18\x01 \x01(\tR\x0etargetAteomUid\x12\x1a\n" +
 	"\batespace\x18\x02 \x01(\tR\batespace\x12\x1d\n" +
@@ -3253,10 +3260,10 @@ const file_atelet_proto_rawDesc = "" +
 	"\x04type\x18\b \x01(\x0e2\x16.atelet.CheckpointTypeR\x04type\x12I\n" +
 	"\flocal_config\x18\t \x01(\v2$.atelet.LocalCheckpointConfigurationH\x00R\vlocalConfig\x12R\n" +
 	"\x0fexternal_config\x18\n" +
-	" \x01(\v2'.atelet.ExternalCheckpointConfigurationH\x00R\x0eexternalConfig\x12+\n" +
-	"\x05scope\x18\v \x01(\x0e2\x15.atelet.SnapshotScopeR\x05scopeB\b\n" +
+	" \x01(\v2'.atelet.ExternalCheckpointConfigurationH\x00R\x0eexternalConfig\x124\n" +
+	"\bfidelity\x18\v \x01(\x0e2\x18.atelet.SnapshotFidelityR\bfidelityB\b\n" +
 	"\x06config\"\x14\n" +
-	"\x12CheckpointResponse\"\x85\x03\n" +
+	"\x12CheckpointResponse\"\x8e\x03\n" +
 	"\x1dUploadPausedCheckpointRequest\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +
@@ -3265,9 +3272,9 @@ const file_atelet_proto_rawDesc = "" +
 	"\x17actor_template_atespace\x18\x04 \x01(\tR\x15actorTemplateAtespace\x12.\n" +
 	"\x13actor_template_name\x18\x05 \x01(\tR\x11actorTemplateName\x12.\n" +
 	"\x13local_snapshot_name\x18\x06 \x01(\tR\x11localSnapshotName\x128\n" +
-	"\x18destination_snapshot_uri\x18\a \x01(\tR\x16destinationSnapshotUri\x12:\n" +
-	"\rdesired_scope\x18\b \x01(\x0e2\x15.atelet.SnapshotScopeR\fdesiredScope\" \n" +
-	"\x1eUploadPausedCheckpointResponse\"\xf7\x05\n" +
+	"\x18destination_snapshot_uri\x18\a \x01(\tR\x16destinationSnapshotUri\x12C\n" +
+	"\x10desired_fidelity\x18\b \x01(\x0e2\x18.atelet.SnapshotFidelityR\x0fdesiredFidelity\" \n" +
+	"\x1eUploadPausedCheckpointResponse\"\x80\x06\n" +
 	"\x0eRestoreRequest\x12(\n" +
 	"\x10target_ateom_uid\x18\x01 \x01(\tR\x0etargetAteomUid\x12\x1a\n" +
 	"\batespace\x18\x02 \x01(\tR\batespace\x12\x1d\n" +
@@ -3280,8 +3287,8 @@ const file_atelet_proto_rawDesc = "" +
 	"\x04type\x18\b \x01(\x0e2\x16.atelet.CheckpointTypeR\x04type\x12I\n" +
 	"\flocal_config\x18\t \x01(\v2$.atelet.LocalCheckpointConfigurationH\x00R\vlocalConfig\x12O\n" +
 	"\x0fexternal_config\x18\n" +
-	" \x01(\v2$.atelet.ExternalRestoreConfigurationH\x00R\x0eexternalConfig\x12+\n" +
-	"\x05scope\x18\v \x01(\x0e2\x15.atelet.SnapshotScopeR\x05scope\x12A\n" +
+	" \x01(\v2$.atelet.ExternalRestoreConfigurationH\x00R\x0eexternalConfig\x124\n" +
+	"\bfidelity\x18\v \x01(\x0e2\x18.atelet.SnapshotFidelityR\bfidelity\x12A\n" +
 	"\x0eegress_gateway\x18\r \x01(\v2\x15.atelet.EgressGatewayH\x01R\regressGateway\x88\x01\x01\x12\x1b\n" +
 	"\tcpu_milli\x18\x0e \x01(\x03R\bcpuMilli\x12!\n" +
 	"\fmemory_bytes\x18\x0f \x01(\x03R\vmemoryBytes\x12<\n" +
@@ -3297,11 +3304,12 @@ const file_atelet_proto_rawDesc = "" +
 	"\x0eCheckpointType\x12\x1f\n" +
 	"\x1bCHECKPOINT_TYPE_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15CHECKPOINT_TYPE_LOCAL\x10\x01\x12\x1c\n" +
-	"\x18CHECKPOINT_TYPE_EXTERNAL\x10\x02*a\n" +
-	"\rSnapshotScope\x12\x1e\n" +
-	"\x1aSNAPSHOT_SCOPE_UNSPECIFIED\x10\x00\x12\x17\n" +
-	"\x13SNAPSHOT_SCOPE_FULL\x10\x01\x12\x17\n" +
-	"\x13SNAPSHOT_SCOPE_DATA\x10\x022\xa8\x02\n" +
+	"\x18CHECKPOINT_TYPE_EXTERNAL\x10\x02*\x90\x01\n" +
+	"\x10SnapshotFidelity\x12!\n" +
+	"\x1dSNAPSHOT_FIDELITY_UNSPECIFIED\x10\x00\x12\x1d\n" +
+	"\x19SNAPSHOT_FIDELITY_VOLUMES\x10\x01\x12\x1c\n" +
+	"\x18SNAPSHOT_FIDELITY_ROOTFS\x10\x02\x12\x1c\n" +
+	"\x18SNAPSHOT_FIDELITY_MEMORY\x10\x032\xa8\x02\n" +
 	"\fAteomSupport\x12c\n" +
 	"\x14MintActorCertificate\x12#.atelet.MintActorCertificateRequest\x1a$.atelet.MintActorCertificateResponse\"\x00\x12Q\n" +
 	"\x0eRegisterWorker\x12\x1d.atelet.RegisterWorkerRequest\x1a\x1e.atelet.RegisterWorkerResponse\"\x00\x12`\n" +
@@ -3331,7 +3339,7 @@ var file_atelet_proto_msgTypes = make([]protoimpl.MessageInfo, 50)
 var file_atelet_proto_goTypes = []any{
 	(ActorMetadataField)(0),                 // 0: atelet.ActorMetadataField
 	(CheckpointType)(0),                     // 1: atelet.CheckpointType
-	(SnapshotScope)(0),                      // 2: atelet.SnapshotScope
+	(SnapshotFidelity)(0),                   // 2: atelet.SnapshotFidelity
 	(*RegisterWorkerRequest)(nil),           // 3: atelet.RegisterWorkerRequest
 	(*HardwareIdentity)(nil),                // 4: atelet.HardwareIdentity
 	(*WorkerResources)(nil),                 // 5: atelet.WorkerResources
@@ -3419,13 +3427,13 @@ var file_atelet_proto_depIdxs = []int32{
 	1,  // 32: atelet.CheckpointRequest.type:type_name -> atelet.CheckpointType
 	39, // 33: atelet.CheckpointRequest.local_config:type_name -> atelet.LocalCheckpointConfiguration
 	40, // 34: atelet.CheckpointRequest.external_config:type_name -> atelet.ExternalCheckpointConfiguration
-	2,  // 35: atelet.CheckpointRequest.scope:type_name -> atelet.SnapshotScope
-	2,  // 36: atelet.UploadPausedCheckpointRequest.desired_scope:type_name -> atelet.SnapshotScope
+	2,  // 35: atelet.CheckpointRequest.fidelity:type_name -> atelet.SnapshotFidelity
+	2,  // 36: atelet.UploadPausedCheckpointRequest.desired_fidelity:type_name -> atelet.SnapshotFidelity
 	20, // 37: atelet.RestoreRequest.spec:type_name -> atelet.WorkloadSpec
 	1,  // 38: atelet.RestoreRequest.type:type_name -> atelet.CheckpointType
 	39, // 39: atelet.RestoreRequest.local_config:type_name -> atelet.LocalCheckpointConfiguration
 	41, // 40: atelet.RestoreRequest.external_config:type_name -> atelet.ExternalRestoreConfiguration
-	2,  // 41: atelet.RestoreRequest.scope:type_name -> atelet.SnapshotScope
+	2,  // 41: atelet.RestoreRequest.fidelity:type_name -> atelet.SnapshotFidelity
 	16, // 42: atelet.RestoreRequest.egress_gateway:type_name -> atelet.EgressGateway
 	19, // 43: atelet.RestoreRequest.sandbox_assets:type_name -> atelet.SandboxAssets
 	17, // 44: atelet.ArchAssets.FilesEntry.value:type_name -> atelet.AssetFile
