@@ -627,6 +627,11 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 			}
 		}
 	}()
+	// Egress before the first container starts, ingress after the wakeup
+	// probe (see ateomtunnel.Tunnel.ActivateEgress).
+	if err := s.tunnel.ActivateEgress(attribution, egress); err != nil {
+		return nil, err
+	}
 	// Create and start pause container. The bundle rootfs is composed here —
 	// an overlay of the node's cached image layers plus the bundle's private
 	// upper — because mounting is ateom's job (atelet runs with no
@@ -667,7 +672,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	if err := wakeupprobe.WaitAll(ctx, req.GetSpec().GetContainers(), ateomnet.ActorVethIP, wakeupprobe.DialFunc(s.sandboxDialer(req.GetActorUid()))); err != nil {
 		return nil, fmt.Errorf("while waiting for container wakeup probe: %w", err)
 	}
-	if err := s.tunnel.Activate(ateomstats.ActorAttributionFromRequest(req), s.sandboxDialer(req.GetActorUid()), egress); err != nil {
+	if err := s.tunnel.ActivateIngress(attribution, s.sandboxDialer(req.GetActorUid())); err != nil {
 		return nil, err
 	}
 
@@ -988,6 +993,13 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 			}
 		}
 	}()
+	// As in RunWorkload: egress before the containers restore, ingress after
+	// the wakeup probe.
+	err = s.tunnel.ActivateEgress(attribution, egress)
+	timing.activate = lap(&tLast)
+	if err != nil {
+		return nil, err
+	}
 	checkpointDir := req.GetActorDirs().GetRestoreDir()
 
 	if hasDurableVolumes(containers) {
@@ -1082,8 +1094,8 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	if err != nil {
 		return nil, fmt.Errorf("while waiting for container wakeup probe: %w", err)
 	}
-	err = s.tunnel.Activate(attribution, s.sandboxDialer(req.GetActorUid()), egress)
-	timing.activate = lap(&tLast)
+	err = s.tunnel.ActivateIngress(attribution, s.sandboxDialer(req.GetActorUid()))
+	timing.activate += lap(&tLast)
 	if err != nil {
 		return nil, err
 	}

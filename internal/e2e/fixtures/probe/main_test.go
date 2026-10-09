@@ -16,12 +16,17 @@ package main
 
 import (
 	"encoding/json"
+	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 )
@@ -293,5 +298,51 @@ func TestCapabilityNamesTable(t *testing.T) {
 		if name == "" {
 			t.Errorf("capabilityNames[%d] is empty", i)
 		}
+	}
+}
+
+// writeServerTrustBundle writes the TLS test server's certificate as the only
+// anchor of a trust bundle and returns its path.
+func writeServerTrustBundle(t *testing.T, server *httptest.Server) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "trust-bundle.pem")
+	block := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+	if err := os.WriteFile(path, block, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// A golden actor's EgressPolicy can land after its boot started, and the
+// gateway caches the missing policy for a while, so the boot fetch retries
+// until the origin answers.
+func TestBootFetchRetriesUntilOK(t *testing.T) {
+	var calls atomic.Int32
+	origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if calls.Add(1) < 3 {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer origin.Close()
+
+	if err := bootFetch(t.Context(), origin.URL, writeServerTrustBundle(t, origin), 30*time.Second); err != nil {
+		t.Fatalf("bootFetch() error = %v, want nil", err)
+	}
+	if got := calls.Load(); got != 3 {
+		t.Errorf("origin saw %d requests, want 3", got)
+	}
+}
+
+func TestBootFetchFailsAfterBudget(t *testing.T) {
+	origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer origin.Close()
+
+	err := bootFetch(t.Context(), origin.URL, writeServerTrustBundle(t, origin), 1500*time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "status 403") {
+		t.Fatalf("bootFetch() error = %v, want the last status", err)
 	}
 }

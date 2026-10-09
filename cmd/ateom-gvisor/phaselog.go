@@ -60,7 +60,9 @@ const containerCountKey = "ate.actor.container.count"
 
 // restoreTiming is the elapsed time of each RestoreWorkload phase. A phase
 // left at zero never ran. Under a Data scope pauseRestore and appRestore time
-// the cold start that stands in for the restore.
+// the cold start that stands in for the restore. activate sums the tunnel's
+// egress half, armed before the containers restore, and its ingress half,
+// after the wakeup probe.
 type restoreTiming struct {
 	prep, egressPrepare, netSetup, durableDir time.Duration
 	pauseRootfs, pauseCreate, pauseRestore    time.Duration

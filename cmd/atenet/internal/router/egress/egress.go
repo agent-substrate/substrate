@@ -165,7 +165,7 @@ func (h *Handler) handleConnect(ctx context.Context, md *extproc.RequestMetadata
 			"egress denied: invalid actor certificate")
 	}
 
-	if err := h.validateActor(ctx, actorRef); err != nil {
+	if err := h.validateActor(ctx, actorRef, md.Host); err != nil {
 		return extproc.Result{}, err
 	}
 
@@ -259,9 +259,10 @@ func (h *Handler) lookupPolicy(ctx context.Context, leg string, ref resources.Ac
 }
 
 // validateActor checks the actor certified by the certificate against the control
-// plane's current view of that actor: it still exists and it is running. Every
-// error it returns is already a client-facing ext_proc denial.
-func (h *Handler) validateActor(ctx context.Context, actorRef resources.ActorRef) error {
+// plane's current view of that actor: it still exists and it is placed on a
+// worker. A refusal is logged with destination. Every error it returns is
+// already a client-facing ext_proc denial.
+func (h *Handler) validateActor(ctx context.Context, actorRef resources.ActorRef, destination string) error {
 	// Confirm the certified actor still exists.
 	// TODO: this can cause heavy load on ate api server. Change it based on https://github.com/agent-substrate/substrate/issues/592.
 	actor, err := h.apiClient.GetActor(ctx, &ateapipb.GetActorRequest{
@@ -271,12 +272,19 @@ func (h *Handler) validateActor(ctx context.Context, actorRef resources.ActorRef
 		return mapEgressIdentityError(actorRef.Atespace, actorRef.Name, err)
 	}
 
-	// The actor performing egress must actually be running.
-	if actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+	// The actor performing egress must be placed on a worker. RESUMING is
+	// saved together with the worker assignment, so a booting workload can
+	// reach the network before it answers its wakeup probe. Every other state
+	// has left its worker or is leaving it.
+	switch state := actor.GetStatus().GetState(); state {
+	case ateapipb.ActorState_ACTOR_STATE_RUNNING, ateapipb.ActorState_ACTOR_STATE_RESUMING:
+		return nil
+	default:
+		slog.WarnContext(ctx, "egress denied: actor is not placed on a worker",
+			slog.Any("actor", actorRef), slog.String("state", state.String()), slog.String("destination", destination))
 		return extproc.NewReqError(envoy_type.StatusCode_Forbidden,
-			"egress denied: actor %q/%q is %s, not running", actorRef.Atespace, actorRef.Name, actor.GetStatus().GetState())
+			"egress denied: actor %q/%q is %s, not placed on a worker", actorRef.Atespace, actorRef.Name, state)
 	}
-	return nil
 }
 
 // authenticateActorCertificate turns the mTLS peer certificate Envoy recorded

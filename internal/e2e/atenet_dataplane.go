@@ -37,6 +37,7 @@ type AtenetDataplane interface {
 	IsEgressPolicyDenied(status int, body string) bool
 	PlatformMetricPrefixes([]string) []string
 	RouteDurationSeen(context.Context, string) (bool, error)
+	SupportsEgressWhileResuming() bool
 }
 
 // CurrentAtenetDataplane returns the implementation selected for this test
@@ -71,6 +72,8 @@ func (envoyAtenetDataplane) IsEgressPolicyDenied(status int, body string) bool {
 		(status == http.StatusBadGateway && strings.Contains(body, "request failed"))
 }
 
+func (envoyAtenetDataplane) SupportsEgressWhileResuming() bool { return true }
+
 func (envoyAtenetDataplane) PlatformMetricPrefixes(prefixes []string) []string { return prefixes }
 
 func (envoyAtenetDataplane) RouteDurationSeen(_ context.Context, collectorScrape string) (bool, error) {
@@ -92,6 +95,9 @@ func (agentGatewayAtenetDataplane) ParkingBudgetStatus() int { return http.Statu
 func (agentGatewayAtenetDataplane) IsEgressPolicyDenied(status int, body string) bool {
 	return status == http.StatusForbidden && strings.Contains(body, "actor egress policy denied")
 }
+
+// AgentGateway's substrate egress actor resolution admits RUNNING actors only.
+func (agentGatewayAtenetDataplane) SupportsEgressWhileResuming() bool { return false }
 
 func (agentGatewayAtenetDataplane) PlatformMetricPrefixes(prefixes []string) []string {
 	filtered := make([]string, 0, len(prefixes))

@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -95,6 +96,45 @@ func decodeSubstrateTemplates(t *testing.T, rendered []byte) []*ateapipb.ActorTe
 	return templates
 }
 
+// FixtureOption adjusts what DeploySubstrateFixture installs.
+type FixtureOption func(*fixtureConfig)
+
+type fixtureConfig struct {
+	goldenEgress []*ateapipb.EgressRule
+}
+
+// WithGoldenEgressPolicy gives each template's golden actor an EgressPolicy
+// with rules, for a fixture whose workload reaches the network before it is
+// ready. The gateway denies an actor with no policy, and the golden actor
+// exists only once its template does, so the policy lands after the golden
+// boot has started: the workload must retry what it fetches.
+func WithGoldenEgressPolicy(rules ...*ateapipb.EgressRule) FixtureOption {
+	return func(c *fixtureConfig) { c.goldenEgress = rules }
+}
+
+// ensureGoldenEgressPolicy waits for tmpl's golden actor to exist and gives it
+// an EgressPolicy with rules. Deleting the template deletes the golden actor
+// and its policy with it.
+func ensureGoldenEgressPolicy(t *testing.T, ctx context.Context, clients *Clients, tmpl *ateapipb.ActorTemplate, rules []*ateapipb.EgressRule) {
+	t.Helper()
+	golden := &ateapipb.ObjectRef{Atespace: resources.GoldenActorAtespace, Name: tmpl.GetMetadata().GetUid()}
+	deadline := time.Now().Add(2 * time.Minute)
+	for {
+		_, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{Actor: golden})
+		if err == nil {
+			break
+		}
+		if status.Code(err) != codes.NotFound {
+			t.Fatalf("GetActor for the golden actor of %s/%s: %v", tmpl.GetMetadata().GetAtespace(), tmpl.GetMetadata().GetName(), err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("golden actor of %s/%s was not created within 2m", tmpl.GetMetadata().GetAtespace(), tmpl.GetMetadata().GetName())
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	EnsureEgressPolicy(t, ctx, clients, golden, rules...)
+}
+
 // SubstrateFixtureManifests names the two manifest templates a substrate
 // fixture is built from (both repo-relative, under internal/e2e/fixtures).
 type SubstrateFixtureManifests struct {
@@ -120,8 +160,13 @@ type SubstrateFixtureManifests struct {
 //
 // Returns the fixture's atespace (the same string that names the k8s
 // namespace holding the pool) and the created templates.
-func DeploySubstrateFixture(t *testing.T, ctx context.Context, clients *Clients, manifests SubstrateFixtureManifests, bucket, name string, trustBundle bool) (string, []*ateapipb.ActorTemplate) {
+func DeploySubstrateFixture(t *testing.T, ctx context.Context, clients *Clients, manifests SubstrateFixtureManifests, bucket, name string, trustBundle bool, opts ...FixtureOption) (string, []*ateapipb.ActorTemplate) {
 	t.Helper()
+
+	var cfg fixtureConfig
+	for _, opt := range opts {
+		opt(&cfg)
+	}
 
 	// The pool manifest also carries the namespace. Its cleanup is registered
 	// first so it runs last (t.Cleanup is LIFO), after the templates that
@@ -181,6 +226,12 @@ func DeploySubstrateFixture(t *testing.T, ctx context.Context, clients *Clients,
 			}
 		})
 		created = append(created, c)
+	}
+
+	if cfg.goldenEgress != nil {
+		for _, tmpl := range created {
+			ensureGoldenEgressPolicy(t, ctx, clients, tmpl, cfg.goldenEgress)
+		}
 	}
 
 	for _, tmpl := range created {

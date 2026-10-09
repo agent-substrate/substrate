@@ -218,17 +218,24 @@ func (t *Tunnel) PrepareEgress(ctx context.Context, actor resources.ActorAttribu
 	return &ActorEgress{client: gatewayClient, certificateSource: certificateSource, expiresAt: expiresAt}, nil
 }
 
-// Activate starts admitting the actor's traffic. Ingress reaches the actor
-// through dial; egress is activated only when it was prepared.
-func (t *Tunnel) Activate(actor resources.ActorAttribution, dial atunnel.DialFunc, egress *ActorEgress) error {
-	if err := t.Ingress.Activate(actor.Ref.Atespace, actor.Ref.Name, actor.UID, dial); err != nil {
-		return fmt.Errorf("while activating actor ingress: %w", err)
-	}
+// ActivateEgress starts tunneling the actor's outbound traffic. Call it before
+// the workload starts, since a workload may need the network to become ready.
+// A nil egress is a no-op.
+func (t *Tunnel) ActivateEgress(actor resources.ActorAttribution, egress *ActorEgress) error {
 	if egress == nil {
 		return nil
 	}
 	if err := t.Egress.Activate(actor.UID, egress.client, egress.certificateSource, egress.expiresAt); err != nil {
 		return fmt.Errorf("while activating actor egress: %w", err)
+	}
+	return nil
+}
+
+// ActivateIngress starts admitting the actor's inbound traffic through dial.
+// Call it once the workload is ready to serve.
+func (t *Tunnel) ActivateIngress(actor resources.ActorAttribution, dial atunnel.DialFunc) error {
+	if err := t.Ingress.Activate(actor.Ref.Atespace, actor.Ref.Name, actor.UID, dial); err != nil {
+		return fmt.Errorf("while activating actor ingress: %w", err)
 	}
 	return nil
 }
