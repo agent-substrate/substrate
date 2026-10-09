@@ -18,12 +18,24 @@ package main
 
 import (
 	"context"
+	"errors"
+	"io"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"testing"
 
+	"golang.org/x/sys/unix"
 	"google.golang.org/grpc/codes"
 
+	"github.com/agent-substrate/substrate/internal/actorlock"
+	"github.com/agent-substrate/substrate/internal/actorlog"
 	"github.com/agent-substrate/substrate/internal/apierror"
+	"github.com/agent-substrate/substrate/internal/ateomtunnel"
+	"github.com/agent-substrate/substrate/internal/atunnel"
+	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/roottest"
 )
 
 // Every RPC rejects a request without ActorDirs before touching any state.
@@ -87,5 +99,125 @@ func TestRPCsRejectUntrustedRunscPath(t *testing.T) {
 		if got := apierror.Code(call()); got != codes.InvalidArgument {
 			t.Errorf("%s() code = %v, want %v", name, got, codes.InvalidArgument)
 		}
+	}
+}
+
+// newTestService returns an AteomService that hosts no actors, with a tunnel
+// no actor is active on.
+func newTestService(t *testing.T) *AteomService {
+	t.Helper()
+	egress, err := atunnel.NewEgress(atunnel.TCPOriginalDestination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &AteomService{
+		locks:       actorlock.New(),
+		actors:      map[string]*hostedActor{},
+		tunnel:      &ateomtunnel.Tunnel{Ingress: &atunnel.Server{}, Egress: egress},
+		actorLogger: actorlog.NewActorLogger(io.Discard, false),
+	}
+}
+
+// newTerminateRequest returns a TerminateWorkload request for an actor
+// rooted in a temp dir. Its runsc is a script that creates the returned path.
+func newTerminateRequest(t *testing.T) (req *ateompb.TerminateWorkloadRequest, runscInvoked string) {
+	t.Helper()
+	tmp := t.TempDir()
+	root := filepath.Join(tmp, "actor")
+	actorDirs := &ateompb.ActorDirs{
+		RootDir:                   root,
+		OciBundleDir:              filepath.Join(root, "bundles"),
+		CheckpointDir:             filepath.Join(root, "checkpoint"),
+		RestoreDir:                filepath.Join(root, "restore"),
+		DurableDirVolumeMountsDir: filepath.Join(root, "durable"),
+		SystemInfoVolumeRootsDir:  filepath.Join(root, "systeminfo"),
+		VolumesDir:                filepath.Join(root, "volumes"),
+	}
+	runscInvoked = filepath.Join(tmp, "runsc-invoked")
+	origStatic := nodepath.StaticFilesDir
+	nodepath.StaticFilesDir = filepath.Join(tmp, "static-files")
+	t.Cleanup(func() { nodepath.StaticFilesDir = origStatic })
+	if err := os.MkdirAll(nodepath.StaticFilesDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runscPath := filepath.Join(nodepath.StaticFilesDir, "runsc")
+	if err := os.WriteFile(runscPath, []byte("#!/bin/sh\ntouch "+runscInvoked+"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return &ateompb.TerminateWorkloadRequest{
+		Atespace:  "default",
+		ActorName: "actor",
+		ActorUid:  "actor-uid",
+		RunscPath: runscPath,
+		ActorDirs: actorDirs,
+		Spec:      &ateompb.WorkloadSpec{Containers: []*ateompb.Container{{Name: "app"}}},
+	}, runscInvoked
+}
+
+// An actor this ateom does not host, as after an ateom restart, terminates
+// without runsc: the PIDs in the runsc state it left are not its sandbox's.
+// Repeating the call succeeds too.
+func TestTerminateWorkloadOfUnhostedActorSkipsRunsc(t *testing.T) {
+	req, invoked := newTerminateRequest(t)
+	actorDirs := req.GetActorDirs()
+	// What a dead ateom leaves behind for the actor.
+	for _, f := range []string{
+		filepath.Join(runscStateDir(actorDirs), "pause.state"),
+		filepath.Join(pidFileDir(actorDirs), "pause.pid"),
+	} {
+		if err := os.MkdirAll(filepath.Dir(f), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(f, []byte("stale"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	s := newTestService(t)
+	for attempt := 0; attempt < 2; attempt++ {
+		if _, err := s.TerminateWorkload(context.Background(), req); err != nil {
+			t.Fatalf("TerminateWorkload() attempt %d error = %v, want nil", attempt, err)
+		}
+	}
+
+	if _, err := os.Stat(invoked); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("runsc was invoked (stat err = %v), want no runsc calls", err)
+	}
+	for _, dir := range []string{runscStateDir(actorDirs), pidFileDir(actorDirs)} {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Errorf("ReadDir(%q) error = %v, want an empty dir", dir, err)
+			continue
+		}
+		if len(entries) != 0 {
+			t.Errorf("%q holds %d entries, want none", dir, len(entries))
+		}
+	}
+}
+
+// An earlier TerminateWorkload can unhost an actor after failing to unmount
+// its bundle rootfs overlays. Retrying it unmounts them, though it skips runsc.
+func TestTerminateWorkloadOfUnhostedActorUnmountsBundles(t *testing.T) {
+	roottest.Require(t, "mount/unmount")
+	req, _ := newTerminateRequest(t)
+	target := filepath.Join(req.GetActorDirs().GetOciBundleDir(), "app", "rootfs")
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "marker"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Mount(src, target, "", unix.MS_BIND, ""); err != nil {
+		t.Fatalf("bind mount: %v", err)
+	}
+	t.Cleanup(func() { _ = unix.Unmount(target, unix.MNT_DETACH) })
+
+	if _, err := newTestService(t).TerminateWorkload(context.Background(), req); err != nil {
+		t.Fatalf("TerminateWorkload() error = %v, want nil", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(target, "marker")); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("%q is still mounted (stat err = %v), want it unmounted", target, err)
 	}
 }
