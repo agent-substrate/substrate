@@ -107,6 +107,9 @@ data:
             typed_config:
               "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
               stat_prefix: egress_connect
+              common_http_protocol_options:
+                # Set low idle timeout for connections, as atunnel does close tunnels from deleted actors.
+                idle_timeout: 30s
               http2_protocol_options:
                 # 100 streams per connection provides good balance between connection sharing and worker load.
                 max_concurrent_streams: 100
