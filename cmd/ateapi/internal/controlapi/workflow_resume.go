@@ -51,7 +51,7 @@ type resumeSnapshotSource struct {
 
 // restoreTelemetry labels the restore operation for the resume lifecycle
 // metric. WireFidelity describes the restore requested, not the stored
-// snapshot's scope: a full snapshot restored under a replaced template goes
+// snapshot's scope: a MEMORY snapshot restored under a replaced template goes
 // out as data.
 type restoreTelemetry struct {
 	SnapshotKind string
