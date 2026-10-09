@@ -141,12 +141,12 @@ func TestCreateActor_WithExternalVolumes(t *testing.T) {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
 
-	if len(createResp.GetStatus().GetActorVolumes()) != 1 {
-		t.Fatalf("expected 1 volume in CreateActor response, got %d", len(createResp.GetStatus().GetActorVolumes()))
+	if len(createResp.GetStatus().GetExternalVolumes()) != 1 {
+		t.Fatalf("expected 1 volume in CreateActor response, got %d", len(createResp.GetStatus().GetExternalVolumes()))
 	}
-	vol := createResp.GetStatus().GetActorVolumes()[0]
-	if vol.GetVolumeName() != "ext-vol-1" {
-		t.Errorf("volume name = %q, want %q", vol.GetVolumeName(), "ext-vol-1")
+	vol := createResp.GetStatus().GetExternalVolumes()[0]
+	if vol.GetName() != "ext-vol-1" {
+		t.Errorf("volume name = %q, want %q", vol.GetName(), "ext-vol-1")
 	}
 	if vol.GetStatus() != ateapipb.ExternalVolume_STATUS_PENDING {
 		t.Errorf("volume status = %v, want %v", vol.GetStatus(), ateapipb.ExternalVolume_STATUS_PENDING)
@@ -162,11 +162,11 @@ func TestCreateActor_WithExternalVolumes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetActor failed: %v", err)
 	}
-	if len(getResp.GetStatus().GetActorVolumes()) != 1 {
-		t.Fatalf("expected 1 volume in GetActor response, got %d", len(getResp.GetStatus().GetActorVolumes()))
+	if len(getResp.GetStatus().GetExternalVolumes()) != 1 {
+		t.Fatalf("expected 1 volume in GetActor response, got %d", len(getResp.GetStatus().GetExternalVolumes()))
 	}
-	if getResp.GetStatus().GetActorVolumes()[0].GetStatus() != ateapipb.ExternalVolume_STATUS_PENDING {
-		t.Errorf("GetActor status = %v, want %v", getResp.GetStatus().GetActorVolumes()[0].GetStatus(), ateapipb.ExternalVolume_STATUS_PENDING)
+	if getResp.GetStatus().GetExternalVolumes()[0].GetStatus() != ateapipb.ExternalVolume_STATUS_PENDING {
+		t.Errorf("GetActor status = %v, want %v", getResp.GetStatus().GetExternalVolumes()[0].GetStatus(), ateapipb.ExternalVolume_STATUS_PENDING)
 	}
 }
 
@@ -1372,9 +1372,9 @@ func TestDeleteActor_MultipleVolumeDeletionFailures(t *testing.T) {
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
 		Status: &ateapipb.ActorStatus{
 			State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
-			ActorVolumes: []*ateapipb.ExternalVolume{
-				{VolumeName: "vol1", StorageVolumeId: "storage-vol-1", Status: ateapipb.ExternalVolume_STATUS_CREATED, VolumeType: "substrate.io/mock"},
-				{VolumeName: "vol2", StorageVolumeId: "storage-vol-2", Status: ateapipb.ExternalVolume_STATUS_CREATED, VolumeType: "substrate.io/mock"},
+			ExternalVolumes: []*ateapipb.ExternalVolume{
+				{Name: "vol1", StorageVolumeId: "storage-vol-1", Status: ateapipb.ExternalVolume_STATUS_CREATED, VolumeType: "substrate.io/mock"},
+				{Name: "vol2", StorageVolumeId: "storage-vol-2", Status: ateapipb.ExternalVolume_STATUS_CREATED, VolumeType: "substrate.io/mock"},
 			},
 		},
 	}
@@ -1448,8 +1448,8 @@ func TestDeleteActor_VolumeDeletionFailure_RetrySuccess(t *testing.T) {
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
 		Status: &ateapipb.ActorStatus{
 			State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
-			ActorVolumes: []*ateapipb.ExternalVolume{
-				{VolumeName: "vol1", StorageVolumeId: "storage-vol-1", Status: ateapipb.ExternalVolume_STATUS_CREATED, VolumeType: "substrate.io/mock"},
+			ExternalVolumes: []*ateapipb.ExternalVolume{
+				{Name: "vol1", StorageVolumeId: "storage-vol-1", Status: ateapipb.ExternalVolume_STATUS_CREATED, VolumeType: "substrate.io/mock"},
 			},
 		},
 	}
@@ -1475,8 +1475,8 @@ func TestDeleteActor_VolumeDeletionFailure_RetrySuccess(t *testing.T) {
 	if getResp.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_DELETING {
 		t.Errorf("actor state = %v, want ACTOR_STATE_DELETING", getResp.GetStatus().GetState())
 	}
-	if len(getResp.GetStatus().GetActorVolumes()) != 1 || getResp.GetStatus().GetActorVolumes()[0].GetStatus() != ateapipb.ExternalVolume_STATUS_DELETING {
-		t.Errorf("actor volume status = %v, want STATUS_DELETING", getResp.GetStatus().GetActorVolumes())
+	if len(getResp.GetStatus().GetExternalVolumes()) != 1 || getResp.GetStatus().GetExternalVolumes()[0].GetStatus() != ateapipb.ExternalVolume_STATUS_DELETING {
+		t.Errorf("actor volume status = %v, want STATUS_DELETING", getResp.GetStatus().GetExternalVolumes())
 	}
 
 	// 4. Recover the CSI plugin to simulate backend recovery.
@@ -1608,8 +1608,8 @@ func TestActorLifecycle_WithExternalVolumes(t *testing.T) {
 	if createResp.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
 		t.Fatalf("expected initial state ACTOR_STATE_SUSPENDED, got %v", createResp.GetStatus().GetState())
 	}
-	if len(createResp.GetStatus().GetActorVolumes()) != 1 || createResp.GetStatus().GetActorVolumes()[0].GetStatus() != ateapipb.ExternalVolume_STATUS_PENDING {
-		t.Fatalf("expected 1 pending volume after CreateActor, got %v", createResp.GetStatus().GetActorVolumes())
+	if len(createResp.GetStatus().GetExternalVolumes()) != 1 || createResp.GetStatus().GetExternalVolumes()[0].GetStatus() != ateapipb.ExternalVolume_STATUS_PENDING {
+		t.Fatalf("expected 1 pending volume after CreateActor, got %v", createResp.GetStatus().GetExternalVolumes())
 	}
 
 	// 2. ResumeActor
@@ -1622,10 +1622,10 @@ func TestActorLifecycle_WithExternalVolumes(t *testing.T) {
 	if resumeResp.GetActor().GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
 		t.Fatalf("expected state ACTOR_STATE_RUNNING after resume, got %v", resumeResp.GetActor().GetStatus().GetState())
 	}
-	if len(resumeResp.GetActor().GetStatus().GetActorVolumes()) != 1 || resumeResp.GetActor().GetStatus().GetActorVolumes()[0].GetStatus() != ateapipb.ExternalVolume_STATUS_CREATED {
-		t.Fatalf("expected 1 created volume after ResumeActor, got %v", resumeResp.GetActor().GetStatus().GetActorVolumes())
+	if len(resumeResp.GetActor().GetStatus().GetExternalVolumes()) != 1 || resumeResp.GetActor().GetStatus().GetExternalVolumes()[0].GetStatus() != ateapipb.ExternalVolume_STATUS_CREATED {
+		t.Fatalf("expected 1 created volume after ResumeActor, got %v", resumeResp.GetActor().GetStatus().GetExternalVolumes())
 	}
-	if resumeResp.GetActor().GetStatus().GetActorVolumes()[0].GetStorageVolumeId() == "" {
+	if resumeResp.GetActor().GetStatus().GetExternalVolumes()[0].GetStorageVolumeId() == "" {
 		t.Fatalf("expected non-empty storageVolumeId after ResumeActor")
 	}
 
@@ -1778,12 +1778,12 @@ func TestResumeActor_VolumeCreationFailure(t *testing.T) {
 	}
 
 	// Verify that succ-vol1 was updated to CREATED with a storageVolumeId, and fail-vol2 is still PENDING
-	if len(getResp.GetStatus().GetActorVolumes()) != 2 {
-		t.Fatalf("expected 2 volumes on actor, got %d", len(getResp.GetStatus().GetActorVolumes()))
+	if len(getResp.GetStatus().GetExternalVolumes()) != 2 {
+		t.Fatalf("expected 2 volumes on actor, got %d", len(getResp.GetStatus().GetExternalVolumes()))
 	}
 	volsByName := make(map[string]*ateapipb.ExternalVolume)
-	for _, v := range getResp.GetStatus().GetActorVolumes() {
-		volsByName[v.GetVolumeName()] = v
+	for _, v := range getResp.GetStatus().GetExternalVolumes() {
+		volsByName[v.GetName()] = v
 	}
 	if v1, ok := volsByName["succ-vol1"]; !ok || v1.GetStatus() != ateapipb.ExternalVolume_STATUS_CREATED || v1.GetStorageVolumeId() == "" {
 		t.Errorf("succ-vol1 unexpected state: %v", v1)
@@ -1916,8 +1916,8 @@ func TestResumeActor_VolumeCreationRetrySuccess(t *testing.T) {
 	}
 
 	volsByName := make(map[string]*ateapipb.ExternalVolume)
-	for _, v := range getResp.GetStatus().GetActorVolumes() {
-		volsByName[v.GetVolumeName()] = v
+	for _, v := range getResp.GetStatus().GetExternalVolumes() {
+		volsByName[v.GetName()] = v
 	}
 	if v1, ok := volsByName["succ-vol1"]; !ok || v1.GetStatus() != ateapipb.ExternalVolume_STATUS_CREATED || v1.GetStorageVolumeId() == "" {
 		t.Errorf("succ-vol1 unexpected state after first resume: %v", v1)
@@ -1944,9 +1944,9 @@ func TestResumeActor_VolumeCreationRetrySuccess(t *testing.T) {
 	if getResp.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
 		t.Errorf("actor state after second resume = %v, want %v", getResp.GetStatus().GetState(), ateapipb.ActorState_ACTOR_STATE_RUNNING)
 	}
-	for _, v := range getResp.GetStatus().GetActorVolumes() {
+	for _, v := range getResp.GetStatus().GetExternalVolumes() {
 		if v.GetStatus() != ateapipb.ExternalVolume_STATUS_CREATED || v.GetStorageVolumeId() == "" {
-			t.Errorf("volume %s unexpected state after second resume: %v", v.GetVolumeName(), v)
+			t.Errorf("volume %s unexpected state after second resume: %v", v.GetName(), v)
 		}
 	}
 
@@ -2066,10 +2066,10 @@ func TestResumeActor_VolumeAttachFailureAndRetry(t *testing.T) {
 	if getResp.GetStatus().GetWorkerAssignment() == nil || getResp.GetStatus().GetWorkerAssignment().GetWorkerPod() != "worker-1" {
 		t.Errorf("worker assignment = %v, want worker-1", getResp.GetStatus().GetWorkerAssignment())
 	}
-	if len(getResp.GetStatus().GetActorVolumes()) != 1 {
-		t.Fatalf("expected 1 volume on actor, got %d", len(getResp.GetStatus().GetActorVolumes()))
+	if len(getResp.GetStatus().GetExternalVolumes()) != 1 {
+		t.Fatalf("expected 1 volume on actor, got %d", len(getResp.GetStatus().GetExternalVolumes()))
 	}
-	vol := getResp.GetStatus().GetActorVolumes()[0]
+	vol := getResp.GetStatus().GetExternalVolumes()[0]
 	if vol.GetStatus() != ateapipb.ExternalVolume_STATUS_CREATED || vol.GetStorageVolumeId() == "" {
 		t.Errorf("vol1 unexpected state after failed attach: %v", vol)
 	}

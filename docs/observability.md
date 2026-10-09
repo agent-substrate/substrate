@@ -67,12 +67,24 @@ Actor is currently running on pod ate-demo-counter/counter-ab123-x4y5z
 {"time":"2026-05-22T21:50:02.123456789Z","count":2,"fshash":"mCY7...","level":"INFO","msg":"Count"}
 ```
 
-#### Example 4: Filtering by Container
-An actor can run several containers. By default every line is shown, including the synthetic lifecycle events (`Actor started`, `Actor checkpointing`, ...). `--container` (short form `-c`) restricts the output to the named container's logs:
+#### Example 4: Filtering by Container or Source
+An actor can run several containers. By default every line is shown, including the synthetic lifecycle events (`Actor starting`, `Actor started`, `Actor checkpointing`, `Actor checkpointed`, `Actor restoring`, `Actor restored`, `Actor terminated`). `--container` (short form `-c`) restricts the output to the named container's logs:
 
 ```bash
 kubectl ate logs actors <actor-name> -a <atespace> -c <container-name>
 ```
+
+`--source` selects a class of lines instead of a container. `containers` shows every container's output with the lifecycle events removed; `lifecycle` shows only the lifecycle events, which is the quickest way to see how often an actor has been suspended and restored on its current worker (a migration moves the actor to another pod, whose log holds none of the earlier workers' events):
+
+```bash
+$ kubectl ate logs actors test -a demo --source=lifecycle
+{"time":"2026-10-07T21:31:48.648599369Z","message":"Actor checkpointing","span_id":"c475...","trace_flags":"01","trace_id":"e617..."}
+{"time":"2026-10-07T21:31:48.791435032Z","message":"Actor checkpointed","span_id":"c475...","trace_flags":"01","trace_id":"e617..."}
+{"time":"2026-10-07T21:31:59.772566601Z","message":"Actor restoring","span_id":"a68c...","trace_flags":"01","trace_id":"b387..."}
+{"time":"2026-10-07T21:31:59.96129419Z","message":"Actor restored","span_id":"a68c...","trace_flags":"01","trace_id":"b387..."}
+```
+
+`--container` already implies container output, so it can be combined with `--source=containers` but not with `--source=lifecycle`: lifecycle events are not emitted by a container, and the CLI rejects that combination.
 
 ---
 

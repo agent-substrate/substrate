@@ -87,7 +87,7 @@ var (
 	authzBootstrapOwners = pflag.StringSlice("authz-bootstrap-owners", nil, "Principal IDs that are always global owners while listed, independent of the stored global AccessPolicy. Removing an ID revokes its access on restart. At least one is required when --experimental-enable-authz is set.")
 
 	actorIDJWTPoolFile          = pflag.String("actor-id-jwt-pool", "", "The file that contains the serialized JWT authority pool for signing actor JWTs")
-	actorJWTIssuer              = pflag.String("actor-jwt-issuer", "", "Issuer URL placed in the iss claim of actor JWTs. Relying parties fetch <issuer>/.well-known/openid-configuration to verify them. Must be https with no query or fragment. Empty means https://"+installdefaults.IDPServiceName+".<pod namespace>.svc.")
+	actorJWTIssuer              = pflag.String("actor-jwt-issuer", "", "Issuer URL placed in the iss claim of actor JWTs. Relying parties fetch <issuer>/.well-known/openid-configuration to verify them. Must be https with no query or fragment. Required.")
 	defaultEgressGatewayAddress = pflag.String("default-egress-gateway-address", "", "Default address (host:port) of the egress PEP that each actor's atunnel dials. Sent on every atelet Run and Restore, so it takes effect at the actor's next activation. Empty leaves actors with no TCP egress.")
 
 	actorIDCAPoolFile      = pflag.String("actor-id-ca-pool", "", "The file that contains the CA pool for signing actor JWTs")
@@ -127,11 +127,9 @@ func main() {
 	if *templateResyncInterval < minResyncInterval {
 		serverboot.Fatal(ctx, "Invalid --template-resync-interval", fmt.Errorf("must be at least %s", minResyncInterval))
 	}
-	resolvedActorJWTIssuer, err := resolveActorJWTIssuer(*actorJWTIssuer, installdefaults.NamespaceFromPodEnv())
-	if err != nil {
+	if err := validateActorJWTIssuer(*actorJWTIssuer); err != nil {
 		serverboot.Fatal(ctx, "Invalid --actor-jwt-issuer", err)
 	}
-	slog.InfoContext(ctx, "Resolved actor JWT issuer", slog.String("actor-jwt-issuer", resolvedActorJWTIssuer))
 	// atelet applies the same rule to EgressGateway.address on every Run and
 	// Restore; a value it would refuse must fail the rollout, not the actors.
 	if errs := resources.ValidateHostPort(field.NewPath("default-egress-gateway-address"), *defaultEgressGatewayAddress); len(errs) > 0 {
@@ -306,7 +304,7 @@ func main() {
 		*defaultEgressGatewayAddress,
 		volPlugins,
 		objectstoresnapshotv1.NewControlProviderClient(snapshotPluginConn),
-		resolvedActorJWTIssuer,
+		*actorJWTIssuer,
 		actorIDJWTAuthorityPool,
 		actorIDCAPool,
 	)
@@ -411,6 +409,7 @@ func loadFlagsFromEnv() error {
 		{postgresReadWriteRole, "ATE_API_POSTGRES_READ_WRITE_ROLE"},
 		{postgresOwnerRole, "ATE_API_POSTGRES_OWNER_ROLE"},
 		{postgresSchema, "ATE_API_POSTGRES_SCHEMA"},
+		{actorJWTIssuer, "ATE_API_ACTOR_JWT_ISSUER"},
 	}
 	for _, o := range overrides {
 		if *o.flag == "@env" {
@@ -637,15 +636,9 @@ func buildJWTProviders(ctx context.Context, cfg *apiauthn.AuthenticationConfig) 
 	return serverCfg, nil
 }
 
-// resolveActorJWTIssuer applies the install default to an empty
-// --actor-jwt-issuer and validates the result.
-func resolveActorJWTIssuer(flagValue, namespace string) (string, error) {
-	issuer := flagValue
+func validateActorJWTIssuer(issuer string) error {
 	if issuer == "" {
-		issuer = installdefaults.ActorJWTIssuer(namespace)
+		return errors.New("required")
 	}
-	if err := oidcdiscovery.ValidateIssuer(issuer); err != nil {
-		return "", err
-	}
-	return issuer, nil
+	return oidcdiscovery.ValidateIssuer(issuer)
 }

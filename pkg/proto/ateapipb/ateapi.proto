@@ -407,7 +407,7 @@ message ExternalVolume {
   // +k8s:update=NoModify
   // +k8s:update=NoUnset # set-once; immutable would reject the create
   // ratchet's nil->set when the final object is validated as an update
-  string volume_name = 1;
+  string name = 1;
 
   // The globally unique volume_id returned from the storage system.
   // This will be initially empty during volume creation. Its format is the
@@ -430,7 +430,7 @@ message ExternalVolume {
   // +k8s:required
   // +k8s:maxLength=253
   // +k8s:update=NoModify
-  // +k8s:update=NoUnset # set-once, like volume_name above
+  // +k8s:update=NoUnset # set-once, like name above
   // +k8s:customValidation
   string volume_type = 3;
 
@@ -808,8 +808,8 @@ message ActorStatus {
   // +k8s:optional
   // +k8s:maxItems=32 # matches the template's volumes bound
   // +k8s:listType=map
-  // +k8s:listMapKey=volume_name
-  repeated ExternalVolume actor_volumes = 7;
+  // +k8s:listMapKey=name
+  repeated ExternalVolume external_volumes = 7;
 
   // crash records why and when the Actor entered CRASHED. It is set with the
   // CRASHED state and cleared when a revert returns the Actor to SUSPENDED.

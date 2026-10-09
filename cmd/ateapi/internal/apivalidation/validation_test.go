@@ -873,7 +873,7 @@ func TestValidateTrustBundleDataSource(t *testing.T) {
 
 func validExternalVolume(mutate ...func(*ateapipb.ExternalVolume)) *ateapipb.ExternalVolume {
 	v := &ateapipb.ExternalVolume{
-		VolumeName:      "my-vol",
+		Name:            "my-vol",
 		StorageVolumeId: "valid-storage-id",
 		VolumeType:      "mock",
 		Status:          ateapipb.ExternalVolume_STATUS_CREATED,
@@ -896,12 +896,12 @@ func TestValidateExternalVolume(t *testing.T) {
 		obj:  valid(),
 	}, {
 		name: "missing volume name",
-		obj:  valid(func(v *ateapipb.ExternalVolume) { v.VolumeName = "" }),
-		want: field.ErrorList{field.Required(field.NewPath("volume_name"), "")},
+		obj:  valid(func(v *ateapipb.ExternalVolume) { v.Name = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("name"), "")},
 	}, {
 		name: "invalid volume name",
-		obj:  valid(func(v *ateapipb.ExternalVolume) { v.VolumeName = "NOT A VOLUME" }),
-		want: field.ErrorList{field.Invalid(field.NewPath("volume_name"), nil, "").WithOrigin("format=k8s-short-name")},
+		obj:  valid(func(v *ateapipb.ExternalVolume) { v.Name = "NOT A VOLUME" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("name"), nil, "").WithOrigin("format=k8s-short-name")},
 	}, {
 		name: "valid external volume with empty storage volume id",
 		obj:  valid(func(v *ateapipb.ExternalVolume) { v.StorageVolumeId = "" }),
@@ -987,10 +987,10 @@ func TestValidateExternalVolume_Update(t *testing.T) {
 		oldObj: valid(),
 		newObj: valid(),
 	}, {
-		name:   "volume_name changed is invalid",
-		oldObj: valid(func(v *ateapipb.ExternalVolume) { v.VolumeName = "vol1" }),
-		newObj: valid(func(v *ateapipb.ExternalVolume) { v.VolumeName = "vol2" }),
-		want:   field.ErrorList{field.Invalid(field.NewPath("volume_name"), nil, "").WithOrigin("update")},
+		name:   "name changed is invalid",
+		oldObj: valid(func(v *ateapipb.ExternalVolume) { v.Name = "vol1" }),
+		newObj: valid(func(v *ateapipb.ExternalVolume) { v.Name = "vol2" }),
+		want:   field.ErrorList{field.Invalid(field.NewPath("name"), nil, "").WithOrigin("update")},
 	}, {
 		name:   "storage_volume_id transition from empty to non-empty is valid",
 		oldObj: valid(func(v *ateapipb.ExternalVolume) { v.StorageVolumeId = "" }),

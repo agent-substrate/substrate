@@ -706,7 +706,7 @@ func Validate_ActorStatus(
 		errs = append(errs, fn(fldPath.Child("worker_assignment"), obj.WorkerAssignment, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateapipb.ActorStatus.ActorVolumes
+	{ // field ateapipb.ActorStatus.ExternalVolumes
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj []*ateapipb.ExternalVolume,
@@ -735,21 +735,21 @@ func Validate_ActorStatus(
 			}
 			// lists with map semantics require unique keys
 			if e := validate.PtrSliceUnique(ctx, op, fldPath, obj, oldObj,
-				func(a *ateapipb.ExternalVolume, b *ateapipb.ExternalVolume) bool { return a.VolumeName == b.VolumeName }); len(e) != 0 {
+				func(a *ateapipb.ExternalVolume, b *ateapipb.ExternalVolume) bool { return a.Name == b.Name }); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			// iterate the list and call the type's validation function
 			if e := validate.EachPtrSliceVal(ctx, op, fldPath, obj, oldObj,
-				func(a *ateapipb.ExternalVolume, b *ateapipb.ExternalVolume) bool { return a.VolumeName == b.VolumeName }, ateDeepEqual, Validate_ExternalVolume); len(e) != 0 {
+				func(a *ateapipb.ExternalVolume, b *ateapipb.ExternalVolume) bool { return a.Name == b.Name }, ateDeepEqual, Validate_ExternalVolume); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			return
 		}
 		oldVal := safe.Field(oldObj,
 			func(oldObj *ateapipb.ActorStatus) []*ateapipb.ExternalVolume {
-				return oldObj.ActorVolumes
+				return oldObj.ExternalVolumes
 			})
-		errs = append(errs, fn(fldPath.Child("actor_volumes"), obj.ActorVolumes, oldVal, oldObj != nil)...)
+		errs = append(errs, fn(fldPath.Child("external_volumes"), obj.ExternalVolumes, oldVal, oldObj != nil)...)
 	}
 
 	{ // field ateapipb.ActorStatus.Crash
@@ -3556,7 +3556,7 @@ func Validate_ExternalVolume(
 	ctx context.Context, op operation.Operation, fldPath *field.Path,
 	obj, oldObj *ateapipb.ExternalVolume) (errs field.ErrorList) {
 
-	{ // field ateapipb.ExternalVolume.VolumeName
+	{ // field ateapipb.ExternalVolume.Name
 		fn := func(
 			fldPath *field.Path,
 			obj, oldObj *string,
@@ -3588,9 +3588,9 @@ func Validate_ExternalVolume(
 		}
 		oldVal := safe.Field(oldObj,
 			func(oldObj *ateapipb.ExternalVolume) *string {
-				return &oldObj.VolumeName
+				return &oldObj.Name
 			})
-		errs = append(errs, fn(fldPath.Child("volume_name"), &obj.VolumeName, oldVal, oldObj != nil)...)
+		errs = append(errs, fn(fldPath.Child("name"), &obj.Name, oldVal, oldObj != nil)...)
 	}
 
 	{ // field ateapipb.ExternalVolume.StorageVolumeId

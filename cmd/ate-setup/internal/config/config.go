@@ -121,6 +121,10 @@ type Config struct {
 	// pool (ACTOR_JWT_ALGORITHM): ES256 or RS256.
 	ActorJWTAlgorithm string
 
+	// ActorJWTIssuer is the iss claim of actor JWTs (ACTOR_JWT_ISSUER). It
+	// defaults to the in-cluster URL of the install's ate-idp-server Service.
+	ActorJWTIssuer string
+
 	// BucketName is the snapshot bucket demos are templated with.
 	BucketName string
 
