@@ -378,7 +378,10 @@ func (c *controller) ensure(ctx context.Context, pod string, d desiredWorker, w 
 	if err := c.relay.Report(ctx, addr, &ateapipb.RegisterWorkerRequest{
 		Worker:   &ateapipb.ObjectRef{Name: name},
 		Capacity: fixed,
-		Hardware: hardware.ProbeHost(),
+		DefaultRuntime: &ateapipb.SandboxRuntime{
+			SandboxClass:  string(d.pool.Spec.SandboxClass),
+			CompatVersion: hardware.ProbeHost(),
+		},
 	}); err != nil {
 		return fmt.Errorf("while reporting capacity for Worker %s: %w", name, err)
 	}

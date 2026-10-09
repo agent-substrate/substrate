@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/apivalidation"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/ateletauth"
@@ -27,11 +28,12 @@ import (
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/protobuf/proto"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
-// RegisterWorker records a Worker's reported capacity and the hardware identity of
-// its node in one write. As with MintCert, the caller must be an atelet
-// running on the Worker's node.
+// RegisterWorker records a Worker's reported capacity and sandbox runtimes in
+// one write. As with MintCert, the caller must be an atelet running on the
+// Worker's node.
 func (s *Server) RegisterWorker(ctx context.Context, req *ateapipb.RegisterWorkerRequest) (*ateapipb.RegisterWorkerResponse, error) {
 	// TODO(identity): This check should be handled by OpenFGA.
 	caller, err := ateletauth.Authenticate(ctx, s.ateletSPIFFEID)
@@ -42,7 +44,8 @@ func (s *Server) RegisterWorker(ctx context.Context, req *ateapipb.RegisterWorke
 		return nil, resources.ToAPIError(errs)
 	}
 	reported := req.GetCapacity()
-	reportedHardware := req.GetHardware()
+	defaultRuntime := req.GetDefaultRuntime()
+	restorable := req.GetRestorableRuntimes()
 	name := req.GetWorker().GetName()
 
 	// Use authoritative state to authorize the write.
@@ -62,16 +65,24 @@ func (s *Server) RegisterWorker(ctx context.Context, req *ateapipb.RegisterWorke
 			slog.String("caller_pod", caller.PodName))
 		return nil, apierror.NotFound("Worker %s not found", name)
 	}
+	if errs := validateRuntimeClasses(worker.GetSandboxClass(), req); len(errs) > 0 {
+		return nil, resources.ToAPIError(errs)
+	}
 
-	if proto.Equal(worker.GetStatus().GetCapacity(), reported) && proto.Equal(worker.GetStatus().GetHardware(), reportedHardware) {
+	status := worker.GetStatus()
+	if proto.Equal(status.GetCapacity(), reported) &&
+		proto.Equal(status.GetDefaultRuntime(), defaultRuntime) &&
+		sameRuntimes(status.GetRestorableRuntimes(), restorable) {
 		return &ateapipb.RegisterWorkerResponse{Worker: worker}, nil
 	}
 
 	updated, err := s.store.UpdateWorker(ctx, name, store.PreconditionFrom(worker), func(toUpdate *ateapipb.Worker) error {
 		// Replaces rather than merges: a Worker reports everything it has, so a
-		// dimension this report leaves out is one it no longer supplies.
+		// dimension or runtime this report leaves out is one it no longer
+		// supplies.
 		toUpdate.Status.Capacity = reported
-		toUpdate.Status.Hardware = reportedHardware
+		toUpdate.Status.DefaultRuntime = defaultRuntime
+		toUpdate.Status.RestorableRuntimes = restorable
 		return nil
 	})
 	switch {
@@ -83,10 +94,40 @@ func (s *Server) RegisterWorker(ctx context.Context, req *ateapipb.RegisterWorke
 	default:
 		return nil, fmt.Errorf("while recording capacity for worker %s: %w", name, err)
 	}
-	slog.InfoContext(ctx, "Worker registered its capacity and hardware",
+	slog.InfoContext(ctx, "Worker registered its capacity and sandbox runtimes",
 		slog.String("worker", name),
 		slog.String("was", worker.GetStatus().GetCapacity().String()),
 		slog.String("now", updated.GetStatus().GetCapacity().String()),
-		slog.String("hardware", updated.GetStatus().GetHardware().String()))
+		slog.String("default_runtime", updated.GetStatus().GetDefaultRuntime().String()),
+		slog.Int("restorable_runtimes", len(updated.GetStatus().GetRestorableRuntimes())))
 	return &ateapipb.RegisterWorkerResponse{Worker: updated}, nil
+}
+
+// validateRuntimeClasses rejects a runtime of a class other than the Worker's
+// own. The class is fixed when the pool creates the Worker and names the
+// sandbox its ateom runs, so a runtime of another class is one this Worker
+// cannot start or restore into, whatever it reports. A Worker recorded
+// without a class has nothing for a report to contradict.
+func validateRuntimeClasses(class string, req *ateapipb.RegisterWorkerRequest) field.ErrorList {
+	if class == "" {
+		return nil
+	}
+	var errs field.ErrorList
+	detail := fmt.Sprintf("must be the Worker's sandbox class %q", class)
+	if got := req.GetDefaultRuntime().GetSandboxClass(); got != class {
+		errs = append(errs, field.Invalid(field.NewPath("default_runtime", "sandbox_class"), got, detail))
+	}
+	for i, rt := range req.GetRestorableRuntimes() {
+		if got := rt.GetSandboxClass(); got != class {
+			errs = append(errs, field.Invalid(field.NewPath("restorable_runtimes").Index(i).Child("sandbox_class"), got, detail))
+		}
+	}
+	return errs
+}
+
+// sameRuntimes reports whether two runtime lists are identical entry for
+// entry, in order. A report is compared as sent, so a Worker that reorders its
+// runtimes between reports is recorded again.
+func sameRuntimes(a, b []*ateapipb.SandboxRuntime) bool {
+	return slices.EqualFunc(a, b, func(x, y *ateapipb.SandboxRuntime) bool { return proto.Equal(x, y) })
 }

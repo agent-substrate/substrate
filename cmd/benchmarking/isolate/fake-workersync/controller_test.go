@@ -216,16 +216,16 @@ func (f *fakeControl) uid(pod string) string {
 type fakeRelay struct {
 	control  *fakeControl
 	mu       sync.Mutex
-	reported map[string]*ateapipb.WorkerResources  // by Worker name
-	hardware map[string]*ateapipb.HardwareIdentity // by Worker name
-	via      map[string]string                     // relay address, by Worker name
+	reported map[string]*ateapipb.WorkerResources // by Worker name
+	runtimes map[string]*ateapipb.SandboxRuntime  // default runtime, by Worker name
+	via      map[string]string                    // relay address, by Worker name
 	reject   map[string]codes.Code
 	calls    int
 	live     map[string]string // as last pruned to
 }
 
 func newFakeRelay() *fakeRelay {
-	return &fakeRelay{reported: map[string]*ateapipb.WorkerResources{}, hardware: map[string]*ateapipb.HardwareIdentity{}, via: map[string]string{}, reject: map[string]codes.Code{}}
+	return &fakeRelay{reported: map[string]*ateapipb.WorkerResources{}, runtimes: map[string]*ateapipb.SandboxRuntime{}, via: map[string]string{}, reject: map[string]codes.Code{}}
 }
 
 func (f *fakeRelay) Report(_ context.Context, addr string, req *ateapipb.RegisterWorkerRequest) error {
@@ -237,12 +237,12 @@ func (f *fakeRelay) Report(_ context.Context, addr string, req *ateapipb.Registe
 		return status.Error(code, "rejected")
 	}
 	f.reported[name] = req.GetCapacity()
-	f.hardware[name] = req.GetHardware()
+	f.runtimes[name] = req.GetDefaultRuntime()
 	f.via[name] = addr
 	if f.control != nil {
 		f.control.mu.Lock()
 		if w, ok := f.control.workers[name]; ok {
-			w.Status.Capacity, w.Status.Hardware = req.GetCapacity(), req.GetHardware()
+			w.Status.Capacity, w.Status.DefaultRuntime = req.GetCapacity(), req.GetDefaultRuntime()
 		}
 		f.control.mu.Unlock()
 	}
@@ -408,8 +408,9 @@ func TestReconcileHonorsReplicasAndLimits(t *testing.T) {
 	if got, want := rel.reported[ctl.uid(name)], wantCapacity(1000, "1500m", "4Gi"); !proto.Equal(got, want) {
 		t.Errorf("reported %v, want %v from the pool's limits", got, want)
 	}
-	if got, want := rel.hardware[ctl.uid(name)], hardware.ProbeHost(); !proto.Equal(got, want) {
-		t.Errorf("hardware %v, want %v, which ate-api-server requires", got, want)
+	wantRuntime := &ateapipb.SandboxRuntime{SandboxClass: "gvisor", CompatVersion: hardware.ProbeHost()}
+	if got := rel.runtimes[ctl.uid(name)]; !proto.Equal(got, wantRuntime) {
+		t.Errorf("default runtime %v, want %v: the pool's class on this host, which ate-api-server requires", got, wantRuntime)
 	}
 	if got, want := cl.statuses["bench"], (atev1alpha1.WorkerPoolStatus{Replicas: 3, ReadyReplicas: 3, Selector: "ate.dev/worker-pool=bench"}); got != want {
 		t.Errorf("status = %+v, want %+v", got, want)
