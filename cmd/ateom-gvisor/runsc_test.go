@@ -168,6 +168,55 @@ func TestResumeArgs(t *testing.T) {
 	}
 }
 
+func TestCheckpointArgs(t *testing.T) {
+	r := &runsc{
+		path:      "/usr/bin/runsc",
+		actorUID:  "test-actor-123",
+		actorDirs: testActorDirs,
+	}
+	checkpointDir := "/node/actors/test-actor-123/checkpoints/snap-1"
+
+	got := r.checkpointArgs(ocispec.PauseContainer, checkpointDir, []string{"app:/var/data", "app:/var/cache"})
+	want := []string{
+		"-log-format", "json",
+		"--alsologtostderr",
+		"-root", "/node/actors/test-actor-123/runsc-state",
+		"checkpoint",
+		"-image-path", checkpointDir,
+		"-fs-checkpoint-paths", "app:/var/data,app:/var/cache",
+		ocispec.PauseContainer,
+	}
+
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("checkpointArgs() = %v, want %v", got, want)
+	}
+}
+
+func TestFsCheckpointArgs(t *testing.T) {
+	r := &runsc{
+		path:      "/usr/bin/runsc",
+		actorUID:  "test-actor-123",
+		actorDirs: testActorDirs,
+	}
+	checkpointDir := "/node/actors/test-actor-123/checkpoints/snap-1"
+
+	got := r.fsCheckpointArgs(ocispec.PauseContainer, checkpointDir, []string{"app:/var/data", "app:/var/cache"})
+	want := []string{
+		"-log-format", "json",
+		"--alsologtostderr",
+		"-root", "/node/actors/test-actor-123/runsc-state",
+		"fscheckpoint",
+		"-image-path", filepath.Join(checkpointDir, "fs"),
+		"-path", "app:/var/data",
+		"-path", "app:/var/cache",
+		ocispec.PauseContainer,
+	}
+
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("fsCheckpointArgs() = %v, want %v", got, want)
+	}
+}
+
 func TestRestoreArgs(t *testing.T) {
 	r := &runsc{
 		path:      "/usr/bin/runsc",

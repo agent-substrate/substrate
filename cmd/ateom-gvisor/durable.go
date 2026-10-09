@@ -17,104 +17,59 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
-	"github.com/agent-substrate/substrate/internal/tarutil"
 )
 
-// durableTarFile is the snapshot file holding the tar of one durable-dir
-// volume: the contents of <volumeName> under
-// ActorDirs.durable_dir_volume_mounts_dir, plus a root entry for the volume
-// directory's own metadata. The volume directory itself comes from atelet,
-// never from the snapshot: runsc bind-mounts it by path, so a symlink planted
-// there would expose whatever it points at to the sandbox.
-func durableTarFile(volumeName string) (string, error) {
-	if volumeName == "" || volumeName == "." || strings.Contains(volumeName, "/") || !filepath.IsLocal(volumeName) {
-		return "", fmt.Errorf("invalid durable-dir volume name %q", volumeName)
-	}
-	return "durable-dir-" + volumeName + ".tar", nil
-}
+const (
+	// fsCheckpointSubdir is the subdirectory under the checkpoint directory where
+	// runsc writes filesystem checkpoint files (fscheckpoint.pb, multitar.img,
+	// pages_meta.img, pages.img).
+	fsCheckpointSubdir   = "fs"
+	fsCheckpointManifest = "fscheckpoint.pb"
+)
 
-// hasDurableVolumes reports whether any container mounts a durable-dir volume.
-func hasDurableVolumes(containers []*ateompb.Container) bool {
+// durableFSCheckpointPaths returns the runsc filesystem checkpoint target
+// specs (<container_name>:<mount_path>) for all durable-dir volume mounts
+// across containers.
+func durableFSCheckpointPaths(containers []*ateompb.Container) []string {
+	var paths []string
 	for _, c := range containers {
-		if len(c.GetDurableDirVolumeMounts()) > 0 {
-			return true
+		for _, m := range c.GetDurableDirVolumeMounts() {
+			paths = append(paths, fmt.Sprintf("%s:%s", c.GetName(), m.GetMountPath()))
 		}
 	}
-	return false
+	return paths
 }
 
-// tarDurableVolumes archives each durable-dir volume under dir into the
-// checkpoint directory, one tar per volume, and returns the file names. The
-// caller must have paused the guest first.
-//
-// Sockets the workload left behind and gVisor internal files (.gvisor.*) are
-// skipped rather than archived.
-func tarDurableVolumes(ctx context.Context, dir, checkpointDir string, volumes []string) ([]string, error) {
-	skip := func(rel string) bool {
-		base := filepath.Base(rel)
-		return strings.HasPrefix(base, ".gvisor.")
-	}
-	var files []string
-	for _, vol := range volumes {
-		name, err := durableTarFile(vol)
-		if err != nil {
-			return nil, err
+// durableSnapshotFiles returns the subset of snapshotFiles that belong to the
+// filesystem checkpoint in the fs/ subdirectory.
+func durableSnapshotFiles(snapshotFiles []string) []string {
+	var out []string
+	for _, f := range snapshotFiles {
+		if filepath.Dir(f) == fsCheckpointSubdir {
+			out = append(out, f)
 		}
-		if err := tarutil.CreateFilteredWithRoot(ctx, filepath.Join(checkpointDir, name), filepath.Join(dir, vol), skip); err != nil {
-			return nil, fmt.Errorf("while archiving durable-dir volume %q: %w", vol, err)
-		}
-		files = append(files, name)
 	}
-	return files, nil
+	return out
 }
 
-// untarDurableVolumes restores each durable-dir volume from the snapshot into
-// its directory under dir, which atelet has already created, empty. A volume
-// with no tar in the snapshot (added to the template since) stays empty.
-func untarDurableVolumes(dir, snapshotDir string, volumes []string) error {
-	for _, vol := range volumes {
-		name, err := durableTarFile(vol)
-		if err != nil {
-			return err
+// fsRestoreArgs returns `--fs-restore-image-path <checkpointDir>/fs` if a
+// filesystem checkpoint manifest exists in <checkpointDir>/fs, or nil if no
+// filesystem checkpoint is present in the snapshot.
+func fsRestoreArgs(checkpointDir string) ([]string, error) {
+	fsDir := filepath.Join(checkpointDir, fsCheckpointSubdir)
+	manifestPath := filepath.Join(fsDir, fsCheckpointManifest)
+	if _, err := os.Stat(manifestPath); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
 		}
-		tarPath := filepath.Join(snapshotDir, name)
-		if _, err := os.Stat(tarPath); errors.Is(err, fs.ErrNotExist) {
-			continue
-		}
-		volDir := filepath.Join(dir, vol)
-		if err := os.MkdirAll(volDir, 0o700); err != nil {
-			return fmt.Errorf("while creating durable-dir volume dir %q: %w", volDir, err)
-		}
-		if err := tarutil.Extract(tarPath, volDir); err != nil {
-			return fmt.Errorf("while restoring durable-dir volume %q: %w", vol, err)
-		}
-		removeGVisorFiles(volDir)
+		return nil, fmt.Errorf("while checking filesystem checkpoint manifest %q: %w", manifestPath, err)
 	}
-	return nil
-}
-
-// removeGVisorFiles deletes gVisor internal files (.gvisor.*) under dir,
-// best-effort, through an os.Root so the restored tree's symlinks are never
-// followed.
-func removeGVisorFiles(dir string) {
-	root, err := os.OpenRoot(dir)
-	if err != nil {
-		return
-	}
-	defer root.Close()
-	_ = fs.WalkDir(root.FS(), ".", func(rel string, d fs.DirEntry, err error) error {
-		if err == nil && !d.IsDir() && strings.HasPrefix(d.Name(), ".gvisor.") {
-			_ = root.Remove(rel)
-		}
-		return nil
-	})
+	return []string{"--fs-restore-image-path", fsDir}, nil
 }

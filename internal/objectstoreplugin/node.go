@@ -83,6 +83,11 @@ func (p *NodePlugin) FetchSnapshot(ctx context.Context, req *objectstoresnapshot
 			if err != nil {
 				return fmt.Errorf("while addressing %s in GCS: %w", fileName, err)
 			}
+			if dir := filepath.Dir(fileName); dir != "." {
+				if err := root.MkdirAll(dir, 0o700); err != nil {
+					return fmt.Errorf("while creating %s in restore directory: %w", dir, err)
+				}
+			}
 			local, err := root.OpenFile(fileName, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 			if err != nil {
 				return fmt.Errorf("while opening %s in restore directory: %w", fileName, err)

@@ -841,6 +841,9 @@ func (s *AteomHerder) moveLocalCheckpoint(ctx context.Context, req *ateletpb.Che
 		}
 		recordSnapshotSize(ctx, fileName, allocatedBytes(info), req.GetActorTemplateAtespace(), req.GetActorTemplateName())
 
+		if err := root.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+			return fmt.Errorf("while creating parent directory for %s: %w", dst, err)
+		}
 		if err := root.Rename(src, dst); err != nil {
 			return fmt.Errorf("failed to move %s to %s: %w", src, dst, err)
 		}
@@ -1355,10 +1358,16 @@ func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequ
 }
 
 // checkLocalSnapshotFiles verifies each snapshot file exists in dir as a
-// regular file. Lstat, so a symlink cannot point ateom outside the snapshot.
+// regular file. Lstat via os.Root, so a symlink cannot point ateom outside the
+// snapshot.
 func checkLocalSnapshotFiles(dir string, files []string) error {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return wrapFileSystemErr("while opening local checkpoint directory", err)
+	}
+	defer root.Close()
 	for _, name := range files {
-		info, err := os.Lstat(filepath.Join(dir, name))
+		info, err := root.Lstat(name)
 		if err != nil {
 			return wrapFileSystemErr("while checking local checkpoint file", err)
 		}
@@ -1399,6 +1408,9 @@ func (s *AteomHerder) copyLocalCheckpoint(ctx context.Context, actorDir, snapsho
 		}
 		if !info.Mode().IsRegular() {
 			return fmt.Errorf("%s is not a regular file", src)
+		}
+		if err := root.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+			return fmt.Errorf("while creating parent directory for %s: %w", dst, err)
 		}
 		// Link rather than copy. The local checkpoint lives under the same actor dir
 		// as the restore staging area, so this stages the memory image in constant
