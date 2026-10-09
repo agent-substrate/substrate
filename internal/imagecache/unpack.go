@@ -26,6 +26,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 
 	"github.com/agent-substrate/substrate/internal/tarutil"
 )
@@ -124,6 +125,22 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 	// fs.protected_hardlinks=1, the common default: the kernel then refuses
 	// the link unless the caller could read and write the target.
 	dirHdrs := map[string]*tar.Header{}
+	// replaced drops the pending restore of a path a later entry replaced and,
+	// when the old entry was a directory or a symlink, of every directory
+	// declared under it: the new entry carries its own metadata, and those
+	// children are gone (or were reached through the old symlink).
+	replaced := func(name string, old os.FileInfo) {
+		delete(dirHdrs, name)
+		if !old.IsDir() && old.Mode()&os.ModeSymlink == 0 {
+			return
+		}
+		prefix := name + string(filepath.Separator)
+		for k := range dirHdrs {
+			if strings.HasPrefix(k, prefix) {
+				delete(dirHdrs, k)
+			}
+		}
+	}
 
 	// Ancestors an entry needed vs. directories the tar declared: the
 	// difference is recorded as ImplicitDirs (attrs fabricated, see the
@@ -194,10 +211,11 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 			// 1. If it's a symlink, we don't write through it (security vulnerability / incorrectness).
 			// 2. If it's a hardlink, we unlink it instead of truncating the shared inode.
 			// 3. If it's a directory, we recursively remove it so we can write the file.
-			if _, err := root.Lstat(name); err == nil {
+			if old, err := root.Lstat(name); err == nil {
 				if err := root.RemoveAll(name); err != nil {
 					return nil, fmt.Errorf("while replacing existing path at %q before regular file: %w", name, err)
 				}
+				replaced(name, old)
 			} else if !errors.Is(err, os.ErrNotExist) {
 				return nil, fmt.Errorf("while checking existing path at %q before regular file: %w", name, err)
 			}
@@ -224,7 +242,7 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 		case tar.TypeDir:
 			// Create owner-writable so children can be written even when the image
 			// marks the dir read-only; the real mode is restored after extraction
-			// (see dirModes / the restore pass below).
+			// (see dirHdrs / the restore pass below).
 			err := root.Mkdir(name, mode|0o700)
 			if errors.Is(err, os.ErrExist) {
 				// OCI layers can repeat a directory entry (real ko images do); the
@@ -257,6 +275,7 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 					if err := root.RemoveAll(name); err != nil {
 						return nil, fmt.Errorf("while replacing existing path at %q before symlink: %w", name, err)
 					}
+					replaced(name, existing)
 				}
 			} else if !errors.Is(err, os.ErrNotExist) {
 				return nil, fmt.Errorf("while checking existing path at %q before symlink: %w", name, err)
@@ -280,10 +299,11 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 				return nil, fmt.Errorf("invalid hardlink target for %q: empty", name)
 			}
 			// Same "later entry wins" handling as TypeSymlink: replace existing entry.
-			if _, err := root.Lstat(name); err == nil {
+			if old, err := root.Lstat(name); err == nil {
 				if err := root.RemoveAll(name); err != nil {
 					return nil, fmt.Errorf("while replacing existing path at %q before hardlink: %w", name, err)
 				}
+				replaced(name, old)
 			} else if !errors.Is(err, os.ErrNotExist) {
 				return nil, fmt.Errorf("while checking existing path at %q before hardlink: %w", name, err)
 			}
@@ -317,13 +337,20 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 	}
 	sort.Slice(dirs, func(i, j int) bool { return len(dirs[i]) > len(dirs[j]) })
 	for _, name := range dirs {
-		// A later entry may have replaced the directory (with a file or a
-		// symlink, taking its declared children with it); that entry's own
-		// metadata already applies, and Chmod would follow a symlink.
-		if fi, err := root.Lstat(name); errors.Is(err, os.ErrNotExist) || (err == nil && !fi.IsDir()) {
+		// Directories a later entry replaced were dropped from dirHdrs as it
+		// was written, so name resolves to the directory its entry created,
+		// through any symlink that already stood on its path then. A path
+		// that no longer resolves to a directory (a replacement reached
+		// through a symlink, or a declared dir whose Mkdir found a
+		// non-directory there) carries the replacing entry's metadata.
+		fi, err := root.Lstat(name)
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
 			continue
 		} else if err != nil {
 			return nil, fmt.Errorf("while checking directory %q: %w", name, err)
+		}
+		if !fi.IsDir() {
+			continue
 		}
 		hdr := dirHdrs[name]
 		mode := hdr.FileInfo().Mode().Perm()

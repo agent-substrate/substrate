@@ -399,6 +399,88 @@ func TestUnpackLayer_LaterEntryWins(t *testing.T) {
 		}
 	})
 
+	t.Run("declared dir under an ancestor replaced by symlink", func(t *testing.T) {
+		// "a/b/" is declared, then "a" becomes a symlink to "cc", which has its
+		// own "b/". Restoring "a/b"'s mode must not resolve through the symlink
+		// and land on "cc/b".
+		entries := []tarEntry{
+			{name: "a/", typeflag: tar.TypeDir},
+			{name: "a/b/", typeflag: tar.TypeDir, mode: 0o700},
+			{name: "cc/", typeflag: tar.TypeDir},
+			{name: "cc/b/", typeflag: tar.TypeDir, mode: 0o755},
+			{name: "a", typeflag: tar.TypeSymlink, linkname: "cc"},
+		}
+		dir, _, err := runUnpack(t, entries)
+		if err != nil {
+			t.Fatalf("unpackLayer: %v", err)
+		}
+		fi, err := os.Lstat(filepath.Join(dir, "cc/b"))
+		if err != nil {
+			t.Fatalf("lstat cc/b: %v", err)
+		}
+		if got := fi.Mode().Perm(); got != 0o755 {
+			t.Errorf("cc/b mode = %v, want 0755 as its own entry declares", got)
+		}
+	})
+
+	t.Run("declared dir under an ancestor replaced by an absolute symlink", func(t *testing.T) {
+		// Resolving "var/run/lock" would follow "/run" out of the root, which
+		// os.Root refuses; the restore pass must stop at "var/run" instead.
+		entries := []tarEntry{
+			{name: "var/", typeflag: tar.TypeDir},
+			{name: "var/run/", typeflag: tar.TypeDir},
+			{name: "var/run/lock/", typeflag: tar.TypeDir, mode: 0o700},
+			{name: "var/run", typeflag: tar.TypeSymlink, linkname: "/run"},
+		}
+		if _, _, err := runUnpack(t, entries); err != nil {
+			t.Fatalf("unpackLayer: %v", err)
+		}
+	})
+
+	t.Run("declared dir under an earlier symlink", func(t *testing.T) {
+		// "a" is already a symlink to "cc" when "a/b/" is declared, so the
+		// entry creates "cc/b", and its mode applies there.
+		entries := []tarEntry{
+			{name: "cc/", typeflag: tar.TypeDir},
+			{name: "a", typeflag: tar.TypeSymlink, linkname: "cc"},
+			{name: "a/b/", typeflag: tar.TypeDir, mode: 0o555},
+		}
+		dir, _, err := runUnpack(t, entries)
+		if err != nil {
+			t.Fatalf("unpackLayer: %v", err)
+		}
+		fi, err := os.Lstat(filepath.Join(dir, "cc/b"))
+		if err != nil {
+			t.Fatalf("lstat cc/b: %v", err)
+		}
+		if got := fi.Mode().Perm(); got != 0o555 {
+			t.Errorf("cc/b mode = %v, want 0555 as the a/b/ entry declares", got)
+		}
+	})
+
+	t.Run("dir declared through a symlink then replaced by a file", func(t *testing.T) {
+		// "a/b/" creates "cc/b"; the later "cc/b" file replaces it, so the
+		// file's mode stands and no directory mode is restored onto it.
+		entries := []tarEntry{
+			{name: "cc/", typeflag: tar.TypeDir},
+			{name: "a", typeflag: tar.TypeSymlink, linkname: "cc"},
+			{name: "a/b/", typeflag: tar.TypeDir, mode: 0o555},
+			{name: "a/b/d/", typeflag: tar.TypeDir, mode: 0o555},
+			{name: "cc/b", typeflag: tar.TypeReg, mode: 0o640, body: "file"},
+		}
+		dir, _, err := runUnpack(t, entries)
+		if err != nil {
+			t.Fatalf("unpackLayer: %v", err)
+		}
+		fi, err := os.Lstat(filepath.Join(dir, "cc/b"))
+		if err != nil {
+			t.Fatalf("lstat cc/b: %v", err)
+		}
+		if !fi.Mode().IsRegular() || fi.Mode().Perm() != 0o640 {
+			t.Errorf("cc/b mode = %v, want a regular file with 0640", fi.Mode())
+		}
+	})
+
 	t.Run("file overwritten by symlink", func(t *testing.T) {
 		entries := []tarEntry{
 			{name: "etc/", typeflag: tar.TypeDir},
