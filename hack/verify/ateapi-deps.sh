@@ -27,12 +27,21 @@ banned=(
   github.com/aws/aws-sdk-go-v2/service/s3
 )
 
-deps="$(go list -deps ./cmd/ateapi)"
+# ko ships ate-api-server for every platform in .ko.yaml.
+mapfile -t platforms < <(awk '/^defaultPlatforms:/ {in_list = 1; next} in_list && $1 == "-" {print $2; next} {in_list = 0}' .ko.yaml)
+if [[ ${#platforms[@]} -eq 0 ]]; then
+  echo "no defaultPlatforms in .ko.yaml." >&2
+  exit 1
+fi
+
 status=0
-for pkg in "${banned[@]}"; do
-  if grep -Fxq -- "${pkg}" <<<"${deps}"; then
-    echo "cmd/ateapi must not depend on ${pkg}." >&2
-    status=1
-  fi
+for platform in "${platforms[@]}"; do
+  deps="$(GOOS="${platform%/*}" GOARCH="${platform#*/}" CGO_ENABLED=0 go list -deps ./cmd/ateapi)"
+  for pkg in "${banned[@]}"; do
+    if grep -Fxq -- "${pkg}" <<<"${deps}"; then
+      echo "cmd/ateapi (${platform}) must not depend on ${pkg}." >&2
+      status=1
+    fi
+  done
 done
 exit "${status}"
