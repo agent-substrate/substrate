@@ -114,6 +114,7 @@ spec:
                                 cannot be read anonymously, is fetched by the node's object-store plugin
                                 with the plugin's credentials. The plugin refuses URLs under a snapshot
                                 location.
+                              maxLength: 2048
                               minLength: 1
                               type: string
                           required:

@@ -200,10 +200,17 @@ func checkWriteFile(root *os.Root, rel, shown string) error {
 	return nil
 }
 
+// maxAssetURIBytes bounds asset_uri, as the SandboxConfig CRD bounds
+// AssetFile.url, so the checks below stay cheap whatever a SandboxConfig names.
+const maxAssetURIBytes = 2048
+
 // parseAssetURI accepts gs://<bucket>/<object> and s3://<bucket>/<object>
 // whose object name is in canonical form and is not stored under a snapshot
 // location, and returns the bucket and object name.
 func parseAssetURI(uri string) (bucket, object string, err error) {
+	if len(uri) > maxAssetURIBytes {
+		return "", "", status.Errorf(codes.InvalidArgument, "asset URI is %d bytes long, more than the limit of %d", len(uri), maxAssetURIBytes)
+	}
 	u, err := url.Parse(uri)
 	if err != nil {
 		return "", "", status.Error(codes.InvalidArgument, "asset URI is not a valid URI")
@@ -226,27 +233,45 @@ func parseAssetURI(uri string) (bucket, object string, err error) {
 	if strings.Contains(object, `\`) {
 		return "", "", status.Errorf(codes.InvalidArgument, `asset URI %s must not contain '\'`, uri)
 	}
-	for seg := range strings.SplitSeq(object, "/") {
+	segments := strings.Split(object, "/")
+	for _, seg := range segments {
 		if seg == "" || strings.TrimSpace(seg) != seg || strings.HasSuffix(seg, ".") {
 			return "", "", status.Errorf(codes.InvalidArgument, "asset URI %s has an empty, '.'-terminated or space-padded path segment", uri)
 		}
 	}
-	if err := refuseSnapshotLocation(u); err != nil {
-		return "", "", err
+	// Snapshot files, manifests and tags are never assets, however their
+	// sha256 came to be known.
+	if n := snapshotPrefixLen(segments); n > 0 {
+		snapshot := url.URL{Scheme: u.Scheme, Host: u.Host, Path: "/" + strings.Join(segments[:n], "/")}
+		return "", "", status.Errorf(codes.PermissionDenied, "asset URI %s is stored under snapshot %s; assets must not live under a snapshot location", uri, snapshot.String())
 	}
 	return u.Host, object, nil
 }
 
-// refuseSnapshotLocation returns PermissionDenied if u, or any prefix of it,
-// is a snapshot or tag URI: snapshot files, manifests and tags are never
-// assets, however their sha256 came to be known.
-func refuseSnapshotLocation(u *url.URL) error {
-	segments := strings.Split(strings.TrimPrefix(u.Path, "/"), "/")
-	for i := len(segments); i > 0; i-- {
-		prefix := url.URL{Scheme: u.Scheme, Host: u.Host, Path: "/" + strings.Join(segments[:i], "/")}
-		if _, err := resources.ParseSnapshotURI(prefix.String()); err == nil {
-			return status.Errorf(codes.PermissionDenied, "asset URI %s is stored under snapshot %s; assets must not live under a snapshot location", u.String(), prefix.String())
+// snapshotPrefixLen returns the length of a prefix of segments that names a
+// snapshot or a tag, the way resources.ParseSnapshotURI reads one, or 0 if no
+// prefix does:
+//
+//	<root>/atespaces/<atespace>/actors/<uid>/snapshots/<name>
+//	<root>/atespaces/<atespace>/tags/<uid>
+//
+// segments must be canonical (see parseAssetURI), which makes every <root> a
+// valid snapshot location. Each segment is read at most a fixed number of
+// times, so the cost is linear in the URI's length.
+func snapshotPrefixLen(segments []string) int {
+	for i, seg := range segments {
+		if seg != "atespaces" {
+			continue
+		}
+		owner := segments[i+1:]
+		switch {
+		case len(owner) >= 3 && owner[1] == "tags" &&
+			resources.IsValidResourceName(owner[0]) && resources.IsValidResourceName(owner[2]):
+			return i + 4
+		case len(owner) >= 5 && owner[1] == "actors" && owner[3] == "snapshots" &&
+			resources.IsValidResourceName(owner[0]) && resources.IsValidResourceName(owner[2]) && resources.IsValidResourceName(owner[4]):
+			return i + 6
 		}
 	}
-	return nil
+	return 0
 }
