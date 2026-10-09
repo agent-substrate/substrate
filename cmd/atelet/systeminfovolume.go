@@ -168,17 +168,17 @@ func (r *systemInfoVolumeRefresher) DeregisterOwned(owner *registeredActor) {
 // collectData builds the volume's contents keyed by volume-relative path.
 func (r *systemInfoVolumeRefresher) collectData(ref resources.ActorRef, actorUID string, si *ateletpb.SystemInfoVolume) (payload map[string][]byte, err error) {
 	payload = map[string][]byte{}
-	for _, dataSourceAny := range si.GetDataSources() {
-		switch dataSource := dataSourceAny.GetDataSource().(type) {
-		case *ateletpb.SystemInfoDataSource_TrustBundle:
-			tb := dataSource.TrustBundle
+	for _, dataSource := range si.GetDataSources() {
+		switch {
+		case dataSource.GetTrustBundle() != nil:
+			tb := dataSource.GetTrustBundle()
 			pemBundle, err := r.bundles.Combined(tb.GetNames())
 			if err != nil {
 				return nil, fmt.Errorf("system-info projection %q: %w", tb.GetPath(), err)
 			}
 			payload[tb.GetPath()] = pemBundle
-		case *ateletpb.SystemInfoDataSource_ActorMetadata:
-			for _, item := range dataSource.ActorMetadata.GetItems() {
+		case dataSource.GetActorMetadata() != nil:
+			for _, item := range dataSource.GetActorMetadata().GetItems() {
 				var value string
 				switch item.GetField() {
 				case ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_NAME:

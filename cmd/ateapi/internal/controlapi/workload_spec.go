@@ -57,10 +57,8 @@ func workloadSpecFromActorTemplate(actorTemplate *ateapipb.ActorTemplate, actor 
 		switch {
 		case vol.GetDurableDir() != nil:
 			workloadSpec.Volumes = append(workloadSpec.Volumes, &ateletpb.Volume{
-				Name: vol.GetName(),
-				Source: &ateletpb.Volume_DurableDir{
-					DurableDir: &ateletpb.DurableDirVolume{},
-				},
+				Name:       vol.GetName(),
+				DurableDir: &ateletpb.DurableDirVolume{},
 			})
 
 		case vol.GetSystemInfo() != nil:
@@ -76,19 +74,15 @@ func workloadSpecFromActorTemplate(actorTemplate *ateapipb.ActorTemplate, actor 
 						})
 					}
 					ateletSystemInfo.DataSources = append(ateletSystemInfo.DataSources, &ateletpb.SystemInfoDataSource{
-						DataSource: &ateletpb.SystemInfoDataSource_ActorMetadata{
-							ActorMetadata: actorMetadata,
-						},
+						ActorMetadata: actorMetadata,
 					})
 				case dataSource.GetTrustBundle() != nil:
 					// atelet resolves named trustBundles against its allowlist
 					// and ClusterTrustBundle informer at write time
 					ateletSystemInfo.DataSources = append(ateletSystemInfo.DataSources, &ateletpb.SystemInfoDataSource{
-						DataSource: &ateletpb.SystemInfoDataSource_TrustBundle{
-							TrustBundle: &ateletpb.TrustBundleDataSource{
-								Names: dataSource.GetTrustBundle().GetNames(),
-								Path:  dataSource.GetTrustBundle().GetPath(),
-							},
+						TrustBundle: &ateletpb.TrustBundleDataSource{
+							Names: dataSource.GetTrustBundle().GetNames(),
+							Path:  dataSource.GetTrustBundle().GetPath(),
 						},
 					})
 				default:
@@ -96,19 +90,15 @@ func workloadSpecFromActorTemplate(actorTemplate *ateapipb.ActorTemplate, actor 
 				}
 			}
 			workloadSpec.Volumes = append(workloadSpec.Volumes, &ateletpb.Volume{
-				Name: vol.GetName(),
-				Source: &ateletpb.Volume_SystemInfo{
-					SystemInfo: ateletSystemInfo,
-				},
+				Name:       vol.GetName(),
+				SystemInfo: ateletSystemInfo,
 			})
 
 		case vol.GetImage() != nil:
 			workloadSpec.Volumes = append(workloadSpec.Volumes, &ateletpb.Volume{
 				Name: vol.GetName(),
-				Source: &ateletpb.Volume_Image{
-					Image: &ateletpb.ImageVolumeSource{
-						Reference: vol.GetImage().GetReference(),
-					},
+				Image: &ateletpb.ImageVolumeSource{
+					Reference: vol.GetImage().GetReference(),
 				},
 			})
 
@@ -188,13 +178,11 @@ func appendExternalVolumes(workloadSpec *ateletpb.WorkloadSpec, template *ateapi
 			}
 			workloadSpec.Volumes = append(workloadSpec.Volumes, &ateletpb.Volume{
 				Name: vol.GetName(),
-				Source: &ateletpb.Volume_External{
-					External: &ateletpb.ExternalVolumeSource{
-						StorageVolumeId: storageVolID,
-						VolumeType:      volType,
-						VolumeContext:   volCtx,
-						PublishContext:  volumePublishContexts[vol.GetName()],
-					},
+				External: &ateletpb.ExternalVolumeSource{
+					StorageVolumeId: storageVolID,
+					VolumeType:      volType,
+					VolumeContext:   volCtx,
+					PublishContext:  volumePublishContexts[vol.GetName()],
 				},
 			})
 		}

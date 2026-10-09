@@ -1,0 +1,153 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Custom validations for the WorkloadSpec tree. The field rules are shared
+// with the control plane through internal/resources: values arriving here
+// already passed them at template creation, so a failure is an internal
+// inconsistency, not a user error.
+
+package apivalidation
+
+import (
+	"context"
+
+	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
+	"github.com/agent-substrate/substrate/internal/resources"
+	"k8s.io/apimachinery/pkg/api/operation"
+	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/apimachinery/pkg/util/validation/field"
+)
+
+// ValidateCustom_WorkloadSpec rejects container volume mounts that name a
+// volume the spec does not declare, mirroring the template-side rule, so a
+// dangling mount is refused at the RPC edge rather than after atelet has
+// already reset the actor's directories and mounted its external volumes.
+func ValidateCustom_WorkloadSpec(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateletpb.WorkloadSpec) field.ErrorList {
+	declared := sets.New[string]()
+	for _, vol := range value.GetVolumes() {
+		declared.Insert(vol.GetName())
+	}
+	var errs field.ErrorList
+	for i, ctr := range value.GetContainers() {
+		for j, mount := range ctr.GetVolumeMounts() {
+			name := mount.GetName()
+			if name == "" {
+				continue // required is enforced by tags
+			}
+			if !declared.Has(name) {
+				errs = append(errs, field.Invalid(
+					fldPath.Child("containers").Index(i).Child("volume_mounts").Index(j).Child("name"),
+					name, "must reference a volume declared in the spec"))
+			}
+		}
+	}
+	return errs
+}
+
+func ValidateCustom_Container_Image(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return resources.ValidatePinnedImage(fldPath, *value)
+}
+
+func ValidateCustom_EnvEntry_Name(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return resources.ValidateEnvVarName(fldPath, *value)
+}
+
+func ValidateCustom_VolumeMount_MountPath(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return resources.ValidateMountPath(fldPath, *value)
+}
+
+// ValidateCustom_Container_VolumeMounts rejects nested mounts. Mount-path
+// uniqueness is enforced by the list key.
+func ValidateCustom_Container_VolumeMounts(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []*ateletpb.VolumeMount) field.ErrorList {
+	paths := make([]string, len(value))
+	for i, m := range value {
+		paths[i] = m.GetMountPath()
+	}
+	return resources.ValidateNestedMountPaths(fldPath, paths)
+}
+
+func ValidateCustom_Capabilities_Add(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []string) field.ErrorList {
+	return resources.ValidateCapabilities(fldPath, value, false)
+}
+
+func ValidateCustom_Capabilities_Drop(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []string) field.ErrorList {
+	return resources.ValidateCapabilities(fldPath, value, true)
+}
+
+func ValidateCustom_HTTPGetAction_Path(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return resources.ValidateHTTPGetPath(fldPath, *value)
+}
+
+func ValidateCustom_ExternalVolumeSource_StorageVolumeId(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return resources.ValidateStorageVolumeID(fldPath, *value)
+}
+
+func ValidateCustom_ExternalVolumeSource_VolumeType(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return resources.ValidateVolumeType(fldPath, *value)
+}
+
+func ValidateCustom_ExternalVolumeSource_VolumeContext(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ map[string]string) field.ErrorList {
+	return resources.ValidateCSIMap(fldPath, value)
+}
+
+func ValidateCustom_ExternalVolumeSource_PublishContext(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ map[string]string) field.ErrorList {
+	return resources.ValidateCSIMap(fldPath, value)
+}
+
+func ValidateCustom_ImageVolumeSource_Reference(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return resources.ValidatePinnedImage(fldPath, *value)
+}
+
+func ValidateCustom_ActorMetadataItem_Path(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return resources.ValidateProjectedPath(fldPath, *value)
+}
+
+func ValidateCustom_TrustBundleDataSource_Path(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+	return resources.ValidateProjectedPath(fldPath, *value)
+}
+
+// ValidateCustom_SystemInfoVolume_DataSources allows at most one
+// actor_metadata entry and requires every projected file path to be unique
+// across all data sources: atelet writes them in order into one tree, so a
+// repeated path silently clobbers the earlier file.
+func ValidateCustom_SystemInfoVolume_DataSources(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ []*ateletpb.SystemInfoDataSource) field.ErrorList {
+	var errs field.ErrorList
+	seen := sets.New[string]()
+	sawMetadata := false
+	for i, ds := range value {
+		switch {
+		case ds == nil:
+		case ds.TrustBundle != nil:
+			if seen.Has(ds.TrustBundle.Path) {
+				errs = append(errs, field.Duplicate(fldPath.Index(i).Child("trust_bundle", "path"), ds.TrustBundle.Path))
+			}
+			seen.Insert(ds.TrustBundle.Path)
+		case ds.ActorMetadata != nil:
+			if sawMetadata {
+				errs = append(errs, field.Forbidden(fldPath.Index(i).Child("actor_metadata"), "at most one actor_metadata entry may appear"))
+			}
+			sawMetadata = true
+			for j, item := range ds.ActorMetadata.Items {
+				if item == nil {
+					continue
+				}
+				if seen.Has(item.Path) {
+					errs = append(errs, field.Duplicate(fldPath.Index(i).Child("actor_metadata", "items").Index(j).Child("path"), item.Path))
+				}
+				seen.Insert(item.Path)
+			}
+		}
+	}
+	return errs
+}
