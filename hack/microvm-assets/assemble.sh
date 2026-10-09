@@ -101,10 +101,11 @@ KROOT="kata/opt/kata"
 cp "$(readlink -f "${KROOT}/share/kata-containers/vmlinux.container")" "${OUT}/vmlinux"
 # rootfs.img is attached over virtio-pmem and mounted with DAX (cmd/ateom-microvm/run.go).
 # The image must meet the following requirements:
-#   - a size that is a multiple of 2 MiB
-#   - partition 1 starting on a 4 KiB boundary
-#   - ext4 with 4 KiB blocks
-# kata's image is built for this (tools/osbuilder/image-builder/image_builder.sh).
+#   - a size that is a multiple of 2 MiB (cloud-hypervisor)
+#   - partition 1 aligned to the guest page size
+#   - a filesystem block size equal to the guest page size
+# The kata-containers.img used here is built for this, and vmlinux.container uses 4 KiB pages.
+# See https://github.com/kata-containers/kata-containers/blob/main/tools/osbuilder/image-builder/image_builder.sh
 cp "$(readlink -f "${KROOT}/share/kata-containers/kata-containers.img")" "${OUT}/rootfs.img"
 # Statically linked, so it runs as-is outside the kata layout it is packaged for.
 cp "${KROOT}/libexec/virtiofsd" "${OUT}/virtiofsd"
