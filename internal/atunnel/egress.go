@@ -295,6 +295,16 @@ func (e *Egress) handle(downstream net.Conn, active *egressActivation) {
 		}
 		upstream, err := active.dialer.DialContext(active.ctx, destination)
 		if err != nil {
+			var rejected *ConnectRejectedError
+			if errors.As(err, &rejected) {
+				// The gateway answered, and the answer was no. A clean close
+				// would read as a normal EOF, indistinguishable from the
+				// destination hanging up; reset so the actor sees the refusal.
+				slog.InfoContext(active.ctx, "atunnel egress connection rejected by policy",
+					slog.String("destination", destination), slog.Any("err", err))
+				resetConn(active.ctx, downstream)
+				return
+			}
 			slog.WarnContext(active.ctx, "atunnel failed to open egress tunnel", slog.String("destination", destination), slog.Any("err", err))
 			return
 		}
@@ -330,6 +340,23 @@ func closeWrite(conn net.Conn) {
 	if conn, ok := conn.(interface{ CloseWrite() error }); ok {
 		_ = conn.CloseWrite()
 	}
+}
+
+// resetConn closes conn with a TCP reset instead of a clean FIN, so the peer
+// observes ECONNRESET rather than a quiet end of stream. Kernel TCP sockets
+// (the listener type every sandbox serves today) force the reset with a zero
+// linger; anything else falls back to an ordinary close, loudly, so a future
+// non-TCP listener cannot silently break the egress contract.
+func resetConn(ctx context.Context, conn net.Conn) {
+	tcp, ok := conn.(*net.TCPConn)
+	if !ok {
+		slog.WarnContext(ctx, "atunnel cannot reset non-TCP egress connection; closing instead",
+			slog.String("connType", fmt.Sprintf("%T", conn)))
+		_ = conn.Close()
+		return
+	}
+	_ = tcp.SetLinger(0)
+	_ = tcp.Close()
 }
 
 // EgressPort is the port from a listen address, which each sandbox's redirect
