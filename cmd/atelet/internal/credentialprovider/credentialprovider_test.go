@@ -33,33 +33,38 @@ import (
 	"github.com/google/go-containerregistry/pkg/name"
 )
 
-// fakePlugin writes an executable named name into dir that records each
-// request it is handed (one JSON object per line in <dir>/<name>.requests) and
-// replies with response. It returns the requests file's path.
-func fakePlugin(t *testing.T, dir, pluginName, response string) string {
+// linkPlugin symlinks <dir>/<pluginName> to a pre-existing executable script
+// in testdata/. Pre-existing scripts are used instead of writing executable
+// files during the test to avoid ETXTBSY races when parallel tests fork+exec
+// plugins concurrently (https://go.dev/issue/22315).
+func linkPlugin(t *testing.T, dir, pluginName, testdataScript string) {
 	t.Helper()
-	requests := filepath.Join(dir, pluginName+".requests")
-	script := fmt.Sprintf(`#!/bin/sh
-cat >> %q
-echo >> %q
-cat <<'RESPONSE'
-%s
-RESPONSE
-`, requests, requests, response)
-	if err := os.WriteFile(filepath.Join(dir, pluginName), []byte(script), 0o700); err != nil {
-		t.Fatalf("Failed to write fake plugin: %v", err)
+	target, err := filepath.Abs(filepath.Join("testdata", testdataScript))
+	if err != nil {
+		t.Fatalf("Failed to resolve testdata script %q: %v", testdataScript, err)
 	}
-	return requests
+	if err := os.Symlink(target, filepath.Join(dir, pluginName)); err != nil {
+		t.Fatalf("Failed to symlink plugin %q: %v", pluginName, err)
+	}
 }
 
-// failingPlugin writes an executable that prints message to stderr and exits
-// non-zero.
-func failingPlugin(t *testing.T, dir, pluginName, message string) {
+// fakePlugin links an executable named pluginName into dir that records each
+// request it is handed (one JSON object per line in <dir>/<pluginName>.requests)
+// and replies with response. It returns the requests file's path.
+func fakePlugin(t *testing.T, dir, pluginName, response string) string {
 	t.Helper()
-	script := fmt.Sprintf("#!/bin/sh\necho %q >&2\nexit 7\n", message)
-	if err := os.WriteFile(filepath.Join(dir, pluginName), []byte(script), 0o700); err != nil {
-		t.Fatalf("Failed to write failing plugin: %v", err)
+	if err := os.WriteFile(filepath.Join(dir, pluginName+".response"), []byte(response), 0o600); err != nil {
+		t.Fatalf("Failed to write plugin response: %v", err)
 	}
+	linkPlugin(t, dir, pluginName, "fake-provider.sh")
+	return filepath.Join(dir, pluginName+".requests")
+}
+
+// failingPlugin links an executable that prints an error to stderr and exits
+// non-zero.
+func failingPlugin(t *testing.T, dir, pluginName string) {
+	t.Helper()
+	linkPlugin(t, dir, pluginName, "failing-provider.sh")
 }
 
 // writeConfig writes a CredentialProviderConfig into dir and returns its path.
@@ -159,7 +164,7 @@ func TestKeychainSkipsUnmatchedImage(t *testing.T) {
 	dir := t.TempDir()
 	// An image no provider claims must not exec anything, so point the config
 	// at a plugin that would fail loudly if it ever ran.
-	failingPlugin(t, dir, "fake-provider", "plugin must not be invoked")
+	failingPlugin(t, dir, "fake-provider")
 
 	kc, err := New(writeConfig(t, dir, gcpLikeConfig), dir)
 	if err != nil {
@@ -218,7 +223,7 @@ func TestKeychainSkipsFailingPlugin(t *testing.T) {
 		{
 			name: "plugin exits non-zero",
 			plugin: func(t *testing.T, dir string) {
-				failingPlugin(t, dir, "fake-provider", "metadata server unreachable")
+				failingPlugin(t, dir, "fake-provider")
 			},
 			wantLog: "metadata server unreachable",
 		},
@@ -394,7 +399,7 @@ func TestKeychainCandidatesSkipInvalidAuthKey(t *testing.T) {
 func TestKeychainCandidatesSkipFailingProvider(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	failingPlugin(t, dir, "first-provider", "metadata server unreachable")
+	failingPlugin(t, dir, "first-provider")
 	fakePlugin(t, dir, "second-provider", `{
   "kind": "CredentialProviderResponse",
   "apiVersion": "credentialprovider.kubelet.k8s.io/v1",
@@ -653,15 +658,7 @@ func TestKeychainPassesConfiguredEnv(t *testing.T) {
 	dir := t.TempDir()
 	// The plugin echoes an env var back as the username, so the assertion
 	// covers both the configured env and the inherited process env.
-	script := `#!/bin/sh
-cat > /dev/null
-cat <<RESPONSE
-{"kind":"CredentialProviderResponse","apiVersion":"credentialprovider.kubelet.k8s.io/v1","cacheKeyType":"Registry","auth":{"gcr.io":{"username":"$FROM_CONFIG","password":"$FROM_PROCESS"}}}
-RESPONSE
-`
-	if err := os.WriteFile(filepath.Join(dir, "fake-provider"), []byte(script), 0o700); err != nil {
-		t.Fatalf("Failed to write fake plugin: %v", err)
-	}
+	linkPlugin(t, dir, "fake-provider", "env-provider.sh")
 	t.Setenv("FROM_PROCESS", "inherited")
 
 	kc, err := New(writeConfig(t, dir, `kind: CredentialProviderConfig
@@ -691,15 +688,7 @@ providers:
 func TestKeychainPassesConfiguredArgs(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	script := `#!/bin/sh
-cat > /dev/null
-cat <<RESPONSE
-{"kind":"CredentialProviderResponse","apiVersion":"credentialprovider.kubelet.k8s.io/v1","cacheKeyType":"Registry","auth":{"gcr.io":{"username":"$1","password":"$2"}}}
-RESPONSE
-`
-	if err := os.WriteFile(filepath.Join(dir, "fake-provider"), []byte(script), 0o700); err != nil {
-		t.Fatalf("Failed to write fake plugin: %v", err)
-	}
+	linkPlugin(t, dir, "fake-provider", "args-provider.sh")
 
 	kc, err := New(writeConfig(t, dir, `kind: CredentialProviderConfig
 apiVersion: kubelet.config.k8s.io/v1
@@ -725,9 +714,7 @@ providers:
 func TestKeychainRespectsContextCancellation(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "fake-provider"), []byte("#!/bin/sh\nsleep 60\n"), 0o700); err != nil {
-		t.Fatalf("Failed to write fake plugin: %v", err)
-	}
+	linkPlugin(t, dir, "fake-provider", "sleep-provider.sh")
 
 	kc, err := New(writeConfig(t, dir, gcpLikeConfig), dir)
 	if err != nil {
