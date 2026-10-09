@@ -437,8 +437,9 @@ func (*CopySnapshotResponse) Descriptor() ([]byte, []int) {
 type FetchAssetRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The object to read, e.g. gs://<bucket>/kata-assets/vmlinux. Which schemes
-	// a plugin serves is up to the plugin. Masked in logged requests, like the
-	// SandboxConfig URL it comes from.
+	// a plugin serves is up to the plugin. At most 2048 bytes, the SandboxConfig
+	// URL's limit. Masked in logged requests, like the SandboxConfig URL it
+	// comes from.
 	AssetUri string `protobuf:"bytes,1,opt,name=asset_uri,json=assetUri,proto3" json:"asset_uri,omitempty"`
 	// The expected SHA-256 of the object's content, as 64 lower-case hex
 	// characters.

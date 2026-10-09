@@ -41,6 +41,7 @@ type AssetFile struct {
 	//
 	// +required
 	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=2048
 	URL string `json:"url"`
 
 	// SHA256 is the lower-case hex SHA256 of the asset. It both names the cached
