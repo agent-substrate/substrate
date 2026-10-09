@@ -135,7 +135,7 @@ func TestUpdateTag(t *testing.T) {
 			req: &ateapipb.Tag{
 				Scope: ateapipb.TagScope_TAG_SCOPE_PUBLISHED,
 				Status: &ateapipb.TagStatus{
-					Snapshot:         &ateapipb.ExternalSnapshot{SnapshotUri: "gs://attacker/elsewhere", ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA},
+					Snapshot:         newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, "", "gs://attacker/elsewhere", ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
 					ActorTemplateUid: "other-template-uid",
 				},
 			},
@@ -249,7 +249,10 @@ func newTestSuspendedActor(t *testing.T, ctx context.Context, st store.Interface
 		t.Fatalf("NewActorSnapshotURI: %v", err)
 	}
 	return mustUpdateActorStatus(t, ctx, st, actor, func(status *ateapipb.ActorStatus) {
-		status.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: uri.String(), ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL}
+		status.LastAssignedGeneration = 1
+		status.Snapshots = []*ateapipb.Snapshot{
+			newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", uri.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+		}
 	})
 }
 
@@ -263,27 +266,24 @@ func newTestTag(t *testing.T, name string, actor *ateapipb.Actor) *ateapipb.Tag 
 	if err != nil {
 		t.Fatalf("NewTagSnapshotURI: %v", err)
 	}
+	actorSnap, actorSt := findLatestSnapshotStorage(actor.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
 	return &ateapipb.Tag{
 		Metadata:    &ateapipb.ResourceMetadata{Atespace: atespace, Name: name},
 		Scope:       ateapipb.TagScope_TAG_SCOPE_ATESPACE,
 		SourceActor: resources.ActorRefFromActor(actor).ToObjectRef(),
 		Status: &ateapipb.TagStatus{
-			Snapshot: &ateapipb.ExternalSnapshot{
-				SnapshotUri:  uri.String(),
-				ContentScope: actor.GetStatus().GetExternalSnapshot().GetContentScope(),
-			},
+			Snapshot: newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG, actorSt.GetFidelity(), actorSnap.GetActorTemplateUid(), uri.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
 		},
 	}
 }
 
 // newPendingTestTag builds the tag a create leaves behind when it dies between
 // reserving the name and finishing the copy: the row names the prefix it was
-// writing into, and nothing else.
+// writing into as IN_PROGRESS.
 func newPendingTestTag(t *testing.T, name string, actor *ateapipb.Actor) *ateapipb.Tag {
 	t.Helper()
 	tag := newTestTag(t, name, actor)
-	tag.Status.StorageLocation = testStorageLocation
-	tag.Status.Snapshot = nil
+	tag.Status.Snapshot.Storage[0].Status = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS
 	return tag
 }
 

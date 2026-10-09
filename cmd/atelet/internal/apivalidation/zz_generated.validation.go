@@ -734,10 +734,10 @@ func Validate_CheckpointRequest(
 		errs = append(errs, fn(fldPath.Child("external_config"), obj.ExternalConfig, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateletpb.CheckpointRequest.Scope
+	{ // field ateletpb.CheckpointRequest.Fidelity
 		fn := func(
 			fldPath *field.Path,
-			obj, oldObj *ateletpb.SnapshotScope,
+			obj, oldObj *ateletpb.SnapshotFidelity,
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
@@ -754,7 +754,11 @@ func Validate_CheckpointRequest(
 			if earlyReturn {
 				return // do not proceed
 			}
-			if e := validate.Maximum(ctx, op, fldPath, obj, oldObj, 2); len(e) != 0 {
+			// custom validation
+			if e := ValidateCustom_CheckpointRequest_Fidelity(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			if e := validate.Maximum(ctx, op, fldPath, obj, oldObj, 3); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			if e := validate.Minimum(ctx, op, fldPath, obj, oldObj, 1); len(e) != 0 {
@@ -763,10 +767,10 @@ func Validate_CheckpointRequest(
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateletpb.CheckpointRequest) *ateletpb.SnapshotScope {
-				return &oldObj.Scope
+			func(oldObj *ateletpb.CheckpointRequest) *ateletpb.SnapshotFidelity {
+				return &oldObj.Fidelity
 			})
-		errs = append(errs, fn(fldPath.Child("scope"), &obj.Scope, oldVal, oldObj != nil)...)
+		errs = append(errs, fn(fldPath.Child("fidelity"), &obj.Fidelity, oldVal, oldObj != nil)...)
 	}
 
 	return errs
@@ -2573,10 +2577,10 @@ func Validate_RestoreRequest(
 		errs = append(errs, fn(fldPath.Child("external_config"), obj.ExternalConfig, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateletpb.RestoreRequest.Scope
+	{ // field ateletpb.RestoreRequest.Fidelity
 		fn := func(
 			fldPath *field.Path,
-			obj, oldObj *ateletpb.SnapshotScope,
+			obj, oldObj *ateletpb.SnapshotFidelity,
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
@@ -2593,7 +2597,11 @@ func Validate_RestoreRequest(
 			if earlyReturn {
 				return // do not proceed
 			}
-			if e := validate.Maximum(ctx, op, fldPath, obj, oldObj, 2); len(e) != 0 {
+			// custom validation
+			if e := ValidateCustom_RestoreRequest_Fidelity(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			if e := validate.Maximum(ctx, op, fldPath, obj, oldObj, 3); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			if e := validate.Minimum(ctx, op, fldPath, obj, oldObj, 1); len(e) != 0 {
@@ -2602,10 +2610,10 @@ func Validate_RestoreRequest(
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateletpb.RestoreRequest) *ateletpb.SnapshotScope {
-				return &oldObj.Scope
+			func(oldObj *ateletpb.RestoreRequest) *ateletpb.SnapshotFidelity {
+				return &oldObj.Fidelity
 			})
-		errs = append(errs, fn(fldPath.Child("scope"), &obj.Scope, oldVal, oldObj != nil)...)
+		errs = append(errs, fn(fldPath.Child("fidelity"), &obj.Fidelity, oldVal, oldObj != nil)...)
 	}
 
 	{ // field ateletpb.RestoreRequest.EgressGateway
@@ -3960,10 +3968,10 @@ func Validate_UploadPausedCheckpointRequest(
 		errs = append(errs, fn(fldPath.Child("destination_snapshot_uri"), &obj.DestinationSnapshotUri, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateletpb.UploadPausedCheckpointRequest.DesiredScope
+	{ // field ateletpb.UploadPausedCheckpointRequest.DesiredFidelity
 		fn := func(
 			fldPath *field.Path,
-			obj, oldObj *ateletpb.SnapshotScope,
+			obj, oldObj *ateletpb.SnapshotFidelity,
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
@@ -3980,7 +3988,11 @@ func Validate_UploadPausedCheckpointRequest(
 			if earlyReturn {
 				return // do not proceed
 			}
-			if e := validate.Maximum(ctx, op, fldPath, obj, oldObj, 2); len(e) != 0 {
+			// custom validation
+			if e := ValidateCustom_UploadPausedCheckpointRequest_DesiredFidelity(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			if e := validate.Maximum(ctx, op, fldPath, obj, oldObj, 3); len(e) != 0 {
 				errs = append(errs, e...)
 			}
 			if e := validate.Minimum(ctx, op, fldPath, obj, oldObj, 1); len(e) != 0 {
@@ -3989,10 +4001,10 @@ func Validate_UploadPausedCheckpointRequest(
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateletpb.UploadPausedCheckpointRequest) *ateletpb.SnapshotScope {
-				return &oldObj.DesiredScope
+			func(oldObj *ateletpb.UploadPausedCheckpointRequest) *ateletpb.SnapshotFidelity {
+				return &oldObj.DesiredFidelity
 			})
-		errs = append(errs, fn(fldPath.Child("desired_scope"), &obj.DesiredScope, oldVal, oldObj != nil)...)
+		errs = append(errs, fn(fldPath.Child("desired_fidelity"), &obj.DesiredFidelity, oldVal, oldObj != nil)...)
 	}
 
 	return errs

@@ -62,9 +62,8 @@ func TestActorTemplateCRUD(t *testing.T) {
 		Metadata:   &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "tmpl-a", Version: 1},
 		Containers: []*ateapipb.Container{{Name: "main", Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},
 		SnapshotConfig: &ateapipb.SnapshotConfig{
-			StorageLocation: "gs://my-bucket/snapshots",
-			OnPause:         ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
-			OnCommit:        ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+			StorageLocation:   "gs://my-bucket/snapshots",
+			PreferredFidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 		},
 		SandboxConfig: &ateapipb.SandboxConfig{
 			SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
@@ -175,7 +174,7 @@ func TestGoldenTagLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	uri := golden.GetStatus().GetSnapshot().GetSnapshotUri()
+	uri := tagSnapshotURI(golden)
 	parsed, err := resources.ParseSnapshotURI(uri)
 	if err != nil {
 		t.Fatal(err)
@@ -194,7 +193,7 @@ func TestGoldenTagLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if late.GetStatus().GetExternalSnapshot().GetSnapshotUri() != uri || late.GetStatus().GetExternalSnapshot().GetActorTemplateUid() != tmpl.GetMetadata().GetUid() {
+	if durableSnapshotURI(late.GetStatus()) != uri || durableSnapshot(late.GetStatus()).GetActorTemplateUid() != tmpl.GetMetadata().GetUid() {
 		t.Fatal("actor did not inherit golden tag snapshot and template UID")
 	}
 	waitForWorkerAvailable(t, tc, workerName)

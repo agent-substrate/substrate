@@ -83,6 +83,47 @@ spec:
       # the readinessProbe below reaching NotReady, plus propagation) +
       # --drain-timeout.
       terminationGracePeriodSeconds: 40
+      # The control snapshot plugin deletes and copies external snapshots for
+      # ate-api-server, over a Unix socket in a pod-local emptyDir. A native
+      # sidecar starts before ate-api-server and stops after it. ate-api-server
+      # starts only once the startup probe sees the plugin serving.
+      initContainers:
+      - name: snapshot-plugin
+        image: ko://github.com/agent-substrate/substrate/cmd/snapshot-plugin
+        restartPolicy: Always
+        args:
+        - control
+        - --socket=/run/snapshot-plugin/control.sock
+        # The plugin listens on a Unix socket, which a gRPC probe cannot
+        # reach, and the image has no shell, so the binary checks itself.
+        startupProbe:
+          exec:
+            command:
+            - /ko-app/snapshot-plugin
+            - healthcheck
+            - --socket=/run/snapshot-plugin/control.sock
+          periodSeconds: 2
+          failureThreshold: 30
+        securityContext:
+          capabilities:
+            drop:
+            - ALL
+        env:
+        # The sidecar, not ate-api-server, holds the object storage settings:
+        # it copies external snapshots for tags and deletes the ones nothing
+        # refers to any more, so it needs the same backend atelet's sidecar
+        # reads and writes them through. Unset or "gcs" selects GCS with
+        # ambient credentials; "s3" with the AWS_* variables selects S3 (see
+        # the kind overlay). ate-api-server exits if ATE_STORAGE_BACKEND is
+        # set on it.
+        - name: ATE_STORAGE_BACKEND
+          value: "gcs"
+        envFrom:
+        - configMapRef:
+            name: ate-otel-config
+        volumeMounts:
+        - name: snapshot-plugin
+          mountPath: /run/snapshot-plugin
       containers:
       - name: ate-api-server
         image: ko://github.com/agent-substrate/substrate/cmd/ateapi
@@ -107,6 +148,7 @@ spec:
           # Graceful shutdown knobs. The sum must fit within terminationGracePeriodSeconds.
           - --drain-delay=13s
           - --drain-timeout=15s
+          - --snapshot-plugin-socket=/run/snapshot-plugin/control.sock
         env:
         - name: POD_NAME
           valueFrom:
@@ -122,11 +164,6 @@ spec:
               fieldPath: metadata.uid
         - name: OTEL_RESOURCE_ATTRIBUTES
           value: k8s.namespace.name=$(POD_NAMESPACE),k8s.pod.name=$(POD_NAME),k8s.pod.uid=$(POD_UID),service.instance.id=$(POD_UID)
-        # ate-api copies external snapshots for tags and deletes the ones
-        # nothing refers to any more, so it needs the same backend atelet reads
-        # and writes them through.
-        - name: ATE_STORAGE_BACKEND
-          value: "gcs"
         # OTLP exporter settings are shared by every control plane component;
         # see manifests/ate-install/ate-otel-config.yaml. Listed first so the
         # per-developer ConfigMap below can still override a key.
@@ -147,14 +184,20 @@ spec:
             name: ate-api-server-secret-envvars
             optional: true
         volumeMounts:
+        - name: snapshot-plugin
+          mountPath: /run/snapshot-plugin
         # servicedns: the apiserver's own gRPC serving cert (DNS SAN api.ate-system.svc).
         - name: "servicedns"
           mountPath: "/run/servicedns.podcert.ate.dev"
         # podidentity: the apiserver's client identity (SPIFFE) when it dials
-        # the selected store and atelet, plus the trust bundle for verifying
+        # atelet, plus the trust bundle for verifying
         # atelet's serving certificate.
         - name: "podidentity"
           mountPath: "/run/podidentity.podcert.ate.dev"
+        # postgres: separate owner and read/write certificates, with each login as its CN.
+        - name: "postgres"
+          mountPath: "/run/postgres.podcert.ate.dev"
+          readOnly: true
         - name: "actor-id-jwt-pool"
           mountPath: "/run/actor-id-jwt-pool"
         - name: "actor-id-ca-pool"
@@ -208,6 +251,8 @@ spec:
           initialDelaySeconds: 10
           periodSeconds: 10
       volumes:
+      - name: snapshot-plugin
+        emptyDir: {}
       - name: "servicedns"
         projected:
           sources:
@@ -234,6 +279,21 @@ spec:
                 matchLabels:
                   podcert.ate.dev/canarying: live
               path: trust-bundle.pem
+      - name: "postgres"
+        projected:
+          sources:
+          - podCertificate:
+              signerName: postgres.podcert.ate.dev/identity
+              keyType: ECDSAP256
+              credentialBundlePath: substrate_owner_user.pem
+              userAnnotations:
+                postgres.podcert.ate.dev/username: substrate_owner_user
+          - podCertificate:
+              signerName: postgres.podcert.ate.dev/identity
+              keyType: ECDSAP256
+              credentialBundlePath: substrate_readwrite_user.pem
+              userAnnotations:
+                postgres.podcert.ate.dev/username: substrate_readwrite_user
       - name: "actor-id-jwt-pool"
         projected:
           sources:

@@ -313,9 +313,19 @@ kubectl ate admin make-ca-pool \
   --ca-id "1"
 
 # Generate a new JWT authority pool and push it to a Kubernetes Secret. The
-# key is ES256 (--alg RS256 for relying parties that don't support ES256) and
-# its ID defaults to the RFC 7638 thumbprint (--key-id to override).
+# key is ES256 (--alg RS256, a 4096-bit RSA key, for relying parties that don't
+# support ES256) and its ID defaults to the base64url SHA-256 of the public
+# key's PKIX encoding (--key-id to override).
 kubectl ate admin make-jwt-pool \
   --name actor-id-jwt-pool \
   --secret-namespace ate-system
+
+# Rotate the JWT signing key. The new key is published but signs nothing until
+# activated; activate it once relying parties have refetched the key set, and
+# remove the old key once every token it signed has expired. list-jwt-keys
+# shows each key's ID and algorithm and marks the active one.
+kubectl ate admin list-jwt-keys --name actor-id-jwt-pool --secret-namespace ate-system
+kubectl ate admin add-jwt-key --name actor-id-jwt-pool --secret-namespace ate-system
+kubectl ate admin activate-jwt-key --name actor-id-jwt-pool --secret-namespace ate-system --key-id <new key ID>
+kubectl ate admin remove-jwt-key --name actor-id-jwt-pool --secret-namespace ate-system --key-id <old key ID>
 ```

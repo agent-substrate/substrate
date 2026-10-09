@@ -32,8 +32,9 @@ func demoArg(d demos.Demo) string {
 }
 
 var deployDemoCmd = &cobra.Command{
-	Use:   "demo",
-	Short: "Deploy a bundled demo",
+	Annotations: map[string]string{recordAnnotation: "no"},
+	Use:         "demo",
+	Short:       "Deploy a bundled demo",
 }
 
 var deleteDemoCmd = &cobra.Command{

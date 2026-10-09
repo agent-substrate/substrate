@@ -24,7 +24,8 @@ import (
 	"path/filepath"
 
 	"github.com/agent-substrate/substrate/internal/imagecache"
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
+	"github.com/agent-substrate/substrate/internal/nodepath"
+	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
@@ -34,27 +35,15 @@ const specFile = "config.json"
 // hostname is the UTS hostname for actor containers.
 const hostname = "actor"
 
-// Options describes one actor container. Args, Env and Capabilities arrive
-// already resolved.
+// Options describes one actor container.
 type Options struct {
-	Args []string
-	Env  []string
-	// NetNSPath is the network namespace the ateom runs the actor in.
-	NetNSPath    string
-	Volumes      []*ateletpb.Volume
-	VolumeMounts []*ateletpb.VolumeMount
-	Capabilities []string
-	// Resources are the container's own declared limits, or nil for none.
-	Resources *ateletpb.ResourceLimits
-
-	// The actor's directories the bind mount sources are joined from, one
-	// subdirectory per volume name.
-	DurableDirVolumeMountsDir string
-	VolumesDir                string
-	SystemInfoVolumeRootsDir  string
-	// BundlePath is this container's bundle, where its image volumes are
-	// composed.
-	BundlePath string
+	// ActorUID names the actor's network namespace.
+	ActorUID string
+	// ActorDirs are the actor's directories the bind mount sources are joined
+	// from, one subdirectory per volume name.
+	ActorDirs *ateompb.ActorDirs
+	// Container carries the process and its volume mounts.
+	Container *ateompb.Container
 }
 
 const (
@@ -71,7 +60,7 @@ const (
 // ociResources maps the resolved limits onto the OCI spec's linux.resources.
 // Returns nil when nothing is set, so the spec carries no linux.resources at
 // all for a container that declares no limits.
-func ociResources(r *ateletpb.ResourceLimits) *specs.LinuxResources {
+func ociResources(r *ateompb.ResourceLimits) *specs.LinuxResources {
 	if r == nil || (r.GetMemoryBytes() <= 0 && r.GetCpuMillis() <= 0) {
 		return nil
 	}
@@ -89,19 +78,21 @@ func ociResources(r *ateletpb.ResourceLimits) *specs.LinuxResources {
 
 // Build returns a runtime-neutral OCI spec for an actor container.
 func Build(o Options) *specs.Spec {
+	container := o.Container
+	containerSpec := container.GetContainerSpec()
 	spec := &specs.Spec{
 		Process: &specs.Process{
 			User: specs.User{
 				UID: 0,
 				GID: 0,
 			},
-			Args: o.Args,
-			Env:  o.Env,
+			Args: containerSpec.GetArgs(),
+			Env:  containerSpec.GetEnv(),
 			Cwd:  "/",
 			Capabilities: &specs.LinuxCapabilities{
-				Bounding:  o.Capabilities,
-				Effective: o.Capabilities,
-				Permitted: o.Capabilities,
+				Bounding:  containerSpec.GetCapabilities(),
+				Effective: containerSpec.GetCapabilities(),
+				Permitted: containerSpec.GetCapabilities(),
 				// Inheritable and Ambient stay empty; capabilities inherit via
 				// Bounding.
 				//
@@ -110,8 +101,10 @@ func Build(o Options) *specs.Spec {
 			Rlimits: []specs.POSIXRlimit{
 				{
 					Type: "RLIMIT_NOFILE",
-					Hard: 1024,
-					Soft: 1024,
+					// NOTE: raised from 1024 because proxy-heavy actors ran out
+					// of sockets; 1048576 is the kernel's default fs.nr_open.
+					Hard: 1048576,
+					Soft: 1048576,
 				},
 			},
 		},
@@ -150,7 +143,7 @@ func Build(o Options) *specs.Spec {
 				},
 				{
 					Type: "network",
-					Path: o.NetNSPath, // Will be created by ateom
+					Path: nodepath.ActorNetNSPath(o.ActorUID),
 				},
 				{
 					Type: "ipc",
@@ -162,55 +155,36 @@ func Build(o Options) *specs.Spec {
 					Type: "mount",
 				},
 			},
-			Resources: ociResources(o.Resources),
+			Resources: ociResources(containerSpec.GetResources()),
 		},
 	}
 
-	volumesByName := make(map[string]*ateletpb.Volume, len(o.Volumes))
-	for _, vol := range o.Volumes {
-		volumesByName[vol.GetName()] = vol
-	}
-	for _, vm := range o.VolumeMounts {
-		var srcPath string
-		options := []string{"bind", "rw"}
-		vol := volumesByName[vm.GetName()]
-		switch {
-		case vol.GetDurableDir() != nil:
-			srcPath = filepath.Join(o.DurableDirVolumeMountsDir, vm.GetName())
-		case vol.GetExternal() != nil:
-			srcPath = filepath.Join(o.VolumesDir, vm.GetName())
-		case vol.GetSystemInfo() != nil:
-			srcPath = filepath.Join(o.SystemInfoVolumeRootsDir, vm.GetName())
-			options = []string{"bind", "ro"}
-		case vol.GetImage() != nil:
-			srcPath = imagecache.ImageVolumeMountPath(o.BundlePath, vm.GetName())
-			options = []string{"bind", "ro"}
-		default:
-			continue
-		}
+	// Mount order across volume kinds does not matter: the API rejects mounts
+	// that nest under one another.
+	bind := func(dest, src, mode string) {
 		spec.Mounts = append(spec.Mounts, specs.Mount{
-			Destination: vm.GetMountPath(),
+			Destination: dest,
 			Type:        "bind",
-			Source:      srcPath,
-			Options:     options,
+			Source:      src,
+			Options:     []string{"bind", mode},
 		})
+	}
+	actorDirs := o.ActorDirs
+	for _, m := range container.GetDurableDirVolumeMounts() {
+		bind(m.GetMountPath(), filepath.Join(actorDirs.GetDurableDirVolumeMountsDir(), m.GetVolumeName()), "rw")
+	}
+	for _, m := range container.GetCsiVolumeMounts() {
+		bind(m.GetMountPath(), filepath.Join(actorDirs.GetVolumesDir(), m.GetVolumeName()), "rw")
+	}
+	for _, m := range container.GetSystemInfoVolumeMounts() {
+		bind(m.GetMountPath(), filepath.Join(actorDirs.GetSystemInfoVolumeRootsDir(), m.GetVolumeName()), "ro")
+	}
+	bundlePath := filepath.Join(actorDirs.GetOciBundleDir(), container.GetName())
+	for _, m := range container.GetImageVolumeMounts() {
+		bind(m.GetMountPath(), imagecache.ImageVolumeMountPath(bundlePath, m.GetVolumeName()), "ro")
 	}
 
 	return spec
-}
-
-// Load reads the OCI spec of the bundle at bundlePath.
-func Load(bundlePath string) (*specs.Spec, error) {
-	specPath := path.Join(bundlePath, specFile)
-	b, err := os.ReadFile(specPath)
-	if err != nil {
-		return nil, fmt.Errorf("reading %q: %w", specPath, err)
-	}
-	var spec specs.Spec
-	if err := json.Unmarshal(b, &spec); err != nil {
-		return nil, fmt.Errorf("parsing %q: %w", specPath, err)
-	}
-	return &spec, nil
 }
 
 // Save writes spec as the OCI spec of the bundle at bundlePath.

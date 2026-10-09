@@ -412,6 +412,7 @@ func TestDebugRedactFieldsArePinned(t *testing.T) {
 		"ateapi.EnvVar.value":                                    true,
 		"ateapi.MintActorJWTResponse.actor_jwt":                  true,
 		"atelet.EnvEntry.value":                                  true,
+		"ateom.ContainerSpec.env":                                true,
 		"credprovider.FetchSecretResponse.opaque_bytes":          true,
 		"objectstoresnapshot.v1.FetchSnapshotRequest.actor_jwt":  true,
 		"objectstoresnapshot.v1.UploadSnapshotRequest.actor_jwt": true,

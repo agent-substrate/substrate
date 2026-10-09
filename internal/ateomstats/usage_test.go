@@ -145,16 +145,14 @@ func (r *recorder) len() int {
 	return len(r.records)
 }
 
-func newTestEmitter(flush func(context.Context) error) (*UsageEmitter, *recorder) {
+func newTestEmitter() (*UsageEmitter, *recorder) {
 	rec := &recorder{}
-	e := NewUsageEmitter(nil, rec, testPool)
-	e.flush = flush
-	return e, rec
+	return NewUsageEmitter(nil, rec, testPool), rec
 }
 
 func TestEmitDatesRecordAtReadTime(t *testing.T) {
 	t.Parallel()
-	e, rec := newTestEmitter(nil)
+	e, rec := newTestEmitter()
 	s := measuredSample()
 	e.Emit(context.Background(), ateattr.StatsKindInitial, s)
 	if rec.len() != 1 {
@@ -169,39 +167,6 @@ func TestNilEmitterWritesNothing(t *testing.T) {
 	t.Parallel()
 	var e *UsageEmitter
 	e.Emit(context.Background(), ateattr.StatsKindInitial, measuredSample())
-	e.EmitFinal(context.Background(), measuredSample())
-}
-
-func TestEmitFinalFlushes(t *testing.T) {
-	t.Parallel()
-	deadlines := make(chan time.Time, 1)
-	e, rec := newTestEmitter(func(ctx context.Context) error {
-		d, _ := ctx.Deadline()
-		deadlines <- d
-		return nil
-	})
-	start := time.Now()
-	e.EmitFinal(context.Background(), measuredSample())
-	if rec.len() != 1 {
-		t.Fatalf("wrote %d records, want 1", rec.len())
-	}
-	if kind := attrMap(recordAttrs(rec.records[0]))[string(ateattr.StatsKindKey)].String(); kind != ateattr.StatsKindFinal {
-		t.Errorf("kind = %q, want final", kind)
-	}
-	select {
-	case d := <-deadlines:
-		if d.IsZero() || d.Sub(start) > finalFlushTimeout+time.Second {
-			t.Errorf("flush deadline = %v, want about %v after the record", d, finalFlushTimeout)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("final record was not flushed")
-	}
-}
-
-func recordAttrs(r slog.Record) []slog.Attr {
-	var attrs []slog.Attr
-	r.Attrs(func(a slog.Attr) bool { attrs = append(attrs, a); return true })
-	return attrs
 }
 
 // TestStartSamplerSweepsOnSchedule runs six intervals and stops: six sweeps,

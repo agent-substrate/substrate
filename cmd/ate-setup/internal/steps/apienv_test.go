@@ -61,8 +61,8 @@ func TestCreateAPIServerEnvVarsPostgresIdentities(t *testing.T) {
 		{
 			name:          "bundled identities",
 			cfg:           config.Config{PostgresReadWriteRole: config.DefaultPostgresReadWriteRole, PostgresOwnerRole: config.DefaultPostgresOwnerRole},
-			readWriteDSN:  bundledPostgresDSN(postgressetup.ReadWriteUser, postgressetup.ReadWritePassword),
-			ownerDSN:      bundledPostgresDSN(postgressetup.OwnerUser, postgressetup.OwnerPassword),
+			readWriteDSN:  bundledPostgresDSN(postgressetup.ReadWriteUser),
+			ownerDSN:      bundledPostgresDSN(postgressetup.OwnerUser),
 			readWriteRole: config.DefaultPostgresReadWriteRole, ownerRole: config.DefaultPostgresOwnerRole,
 		},
 		{
@@ -70,8 +70,8 @@ func TestCreateAPIServerEnvVarsPostgresIdentities(t *testing.T) {
 			cfg: config.Config{
 				ClusterSize: config.ClusterSizeSize10, PostgresReadWriteRole: config.DefaultPostgresReadWriteRole, PostgresOwnerRole: config.DefaultPostgresOwnerRole,
 			},
-			readWriteDSN:  bundledPostgresDSN(postgressetup.ReadWriteUser, postgressetup.ReadWritePassword) + config.Size10PostgresPoolParams,
-			ownerDSN:      bundledPostgresDSN(postgressetup.OwnerUser, postgressetup.OwnerPassword),
+			readWriteDSN:  bundledPostgresDSN(postgressetup.ReadWriteUser) + config.Size10PostgresPoolParams,
+			ownerDSN:      bundledPostgresDSN(postgressetup.OwnerUser),
 			readWriteRole: config.DefaultPostgresReadWriteRole, ownerRole: config.DefaultPostgresOwnerRole,
 		},
 		{

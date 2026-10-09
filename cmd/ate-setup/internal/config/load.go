@@ -220,6 +220,7 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		PostgresSchema:       r.String("ateapi.postgres.schema"),
 		PostgresPoolMaxConns: r.String("ateapi.postgres.poolMaxConns"),
 		PostgresServerCAFile: r.String("ateapi.postgres.serverCAFile"),
+		PostgresStorageClass: r.String("ateapi.postgres.storageClass"),
 
 		PostgresReadWriteConnectionString: readWriteConnectionString,
 		PostgresOwnerConnectionString:     ownerConnectionString,

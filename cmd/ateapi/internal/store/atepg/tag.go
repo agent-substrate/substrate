@@ -185,6 +185,22 @@ func (p *Persistence) CreateTag(ctx context.Context, tag *ateapipb.Tag) (*ateapi
 	return dbTag, nil
 }
 
+func isAllowedTagSnapshotTransition(stored, mutated *ateapipb.Snapshot) bool {
+	if proto.Equal(stored, mutated) || stored == nil {
+		return true
+	}
+	if mutated == nil || len(stored.GetStorage()) != 1 || len(mutated.GetStorage()) != 1 {
+		return false
+	}
+	if stored.GetStorage()[0].GetStatus() != ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS ||
+		mutated.GetStorage()[0].GetStatus() != ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED {
+		return false
+	}
+	expected := proto.CloneOf(stored)
+	expected.Storage[0].Status = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+	return proto.Equal(expected, mutated)
+}
+
 func validateUpdateTagMutation(storedTag, mutatedTag *ateapipb.Tag) error {
 	if stored, mutated := storedTag.GetMetadata().GetAtespace(), mutatedTag.GetMetadata().GetAtespace(); stored != mutated {
 		return fmt.Errorf("metadata.atespace is immutable: mutation changed it from %q to %q", stored, mutated)
@@ -192,11 +208,8 @@ func validateUpdateTagMutation(storedTag, mutatedTag *ateapipb.Tag) error {
 	if stored, mutated := storedTag.GetMetadata().GetName(), mutatedTag.GetMetadata().GetName(); stored != mutated {
 		return fmt.Errorf("metadata.name is immutable: mutation changed it from %q to %q", stored, mutated)
 	}
-	if stored, mutated := storedTag.GetStatus().GetSnapshot(), mutatedTag.GetStatus().GetSnapshot(); stored != nil && !proto.Equal(stored, mutated) {
+	if stored, mutated := storedTag.GetStatus().GetSnapshot(), mutatedTag.GetStatus().GetSnapshot(); !isAllowedTagSnapshotTransition(stored, mutated) {
 		return fmt.Errorf("status.snapshot is immutable once set: mutation changed it from %s to %s", stored, mutated)
-	}
-	if stored, mutated := storedTag.GetStatus().GetStorageLocation(), mutatedTag.GetStatus().GetStorageLocation(); stored != mutated {
-		return fmt.Errorf("status.storage_location is immutable: mutation changed it from %q to %q", stored, mutated)
 	}
 	if stored, mutated := storedTag.GetStatus().GetActorTemplateUid(), mutatedTag.GetStatus().GetActorTemplateUid(); stored != mutated {
 		return fmt.Errorf("status.actor_template_uid is immutable: mutation changed it from %q to %q", stored, mutated)

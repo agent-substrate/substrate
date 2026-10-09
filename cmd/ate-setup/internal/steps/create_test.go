@@ -15,6 +15,7 @@
 package steps
 
 import (
+	"bytes"
 	"crypto/tls"
 	"crypto/x509"
 	"maps"
@@ -23,10 +24,10 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/localjwtauthority"
-	"github.com/agent-substrate/substrate/internal/oidcdiscovery"
 )
 
 // ate-api-server requires both connection strings and its schema in the
@@ -185,7 +186,7 @@ func TestNewJWTPoolSecretData(t *testing.T) {
 			if authority.Algorithm != alg {
 				t.Errorf("Algorithm = %q, want %q", authority.Algorithm, alg)
 			}
-			thumbprint, err := oidcdiscovery.Thumbprint(authority.SigningKey.Public())
+			thumbprint, err := localjwtauthority.Thumbprint(authority.SigningKey.Public())
 			if err != nil {
 				t.Fatalf("Thumbprint() error = %v", err)
 			}
@@ -193,5 +194,40 @@ func TestNewJWTPoolSecretData(t *testing.T) {
 				t.Errorf("key ID %q, active %q; want both to be the thumbprint %q", authority.ID, pool.ActiveForSigning, thumbprint)
 			}
 		})
+	}
+}
+
+// An existing install must gain the dedicated PostgreSQL CA without rotating
+// the signer pools it already uses.
+func TestEnsurePodCertificateCAs(t *testing.T) {
+	e := &Env{Kube: fakeKube(t, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: NamespacePodCert}})}
+	if err := e.CreatePodCertificateControllerCAs(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	before, err := e.Kube.Typed.CoreV1().Secrets(NamespacePodCert).Get(t.Context(), SecretServiceDNSCA, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Kube.Typed.CoreV1().Secrets(NamespacePodCert).Delete(t.Context(), SecretPostgresCA, metav1.DeleteOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.EnsurePodCertificateCAs(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{SecretServiceDNSCA, SecretPodIdentityCA, SecretPostgresCA} {
+		secret, err := e.Kube.Typed.CoreV1().Secrets(NamespacePodCert).Get(t.Context(), name, metav1.GetOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if name == SecretServiceDNSCA && !bytes.Equal(secret.Data["pool"], before.Data["pool"]) {
+			t.Fatal("existing service DNS CA rotated")
+		}
+		pool, err := localca.Unmarshal(secret.Data["pool"])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.TrustAnchors(); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

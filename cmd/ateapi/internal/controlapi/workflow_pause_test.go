@@ -50,14 +50,17 @@ func TestEnsurePausedFinalized_WorkerGone(t *testing.T) {
 				WorkerPool:      "pool1",
 				WorkerPod:       "worker-pod-1",
 			},
-			InProgressLocalSnapshotName: "local-snap-1",
+			LastAssignedGeneration: 1,
+			Snapshots: []*ateapipb.Snapshot{
+				newLocalSnapshot(1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "local-snap-1", ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS),
+			},
 		},
 	}
 	storetest.MustCreateActor(t, ctx, st, actor)
 	// Intentionally NOT creating the worker in store, simulates worker already gone.
 
 	w := &ActorWorkflow{store: st}
-	finalized, err := w.ensurePausedFinalized(ctx, actorRef, &ateapipb.ActorTemplate{})
+	finalized, err := w.ensurePausedFinalized(ctx, actorRef)
 	if err != nil {
 		t.Fatalf("ensurePausedFinalized: %v", err)
 	}
@@ -76,8 +79,8 @@ func TestEnsurePausedFinalized_WorkerGone(t *testing.T) {
 	if got.GetStatus().GetAssignedNode() != "" {
 		t.Errorf("AssignedNode = %q, want empty", got.GetStatus().GetAssignedNode())
 	}
-	if gotSnap := got.GetStatus().GetInProgressLocalSnapshotName(); gotSnap != "" {
-		t.Errorf("InProgressLocalSnapshotName = %q, want cleared on crash", gotSnap)
+	if _, gotSt := findLatestSnapshotStorage(got.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_LOCAL, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS); gotSt.GetLocal().GetSnapshotName() != "local-snap-1" {
+		t.Errorf("in-progress local snapshot name = %q, want %q preserved on crash", gotSt.GetLocal().GetSnapshotName(), "local-snap-1")
 	}
 
 	if finalized.GetStatus().GetWorkerAssignment() != nil {
@@ -99,8 +102,8 @@ func TestEnsurePausedFinalized_WorkerGone(t *testing.T) {
 
 // TestEnsurePausedFinalized_AlreadyCrashed verifies that if the actor was
 // already crashed out-of-band when ensurePausedFinalized runs with no
-// AssignedNode, its existing Crash status is preserved and no duplicate crash
-// log record is emitted.
+// AssignedNode, its existing Crash status and snapshots are preserved and no
+// duplicate crash log record is emitted.
 func TestEnsurePausedFinalized_AlreadyCrashed(t *testing.T) {
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
@@ -120,13 +123,16 @@ func TestEnsurePausedFinalized_AlreadyCrashed(t *testing.T) {
 				WorkerPool:      "pool1",
 				WorkerPod:       "worker-pod-1",
 			},
-			InProgressLocalSnapshotName: "local-snap-1",
+			LastAssignedGeneration: 1,
+			Snapshots: []*ateapipb.Snapshot{
+				newLocalSnapshot(1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "local-snap-1", ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS),
+			},
 		},
 	}
 	storetest.MustCreateActor(t, ctx, st, actor)
 
 	w := &ActorWorkflow{store: st}
-	finalized, err := w.ensurePausedFinalized(ctx, actorRef, &ateapipb.ActorTemplate{})
+	finalized, err := w.ensurePausedFinalized(ctx, actorRef)
 	if err != nil {
 		t.Fatalf("ensurePausedFinalized: %v", err)
 	}
@@ -136,6 +142,9 @@ func TestEnsurePausedFinalized_AlreadyCrashed(t *testing.T) {
 	if got, want := finalized.GetStatus().GetCrash().GetMessage(), originalCrash.GetMessage(); got != want {
 		t.Errorf("crash message = %q, want original %q preserved", got, want)
 	}
+	if _, gotSt := findLatestSnapshotStorage(finalized.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_LOCAL, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS); gotSt.GetLocal().GetSnapshotName() != "local-snap-1" {
+		t.Errorf("in-progress local snapshot name = %q, want %q preserved", gotSt.GetLocal().GetSnapshotName(), "local-snap-1")
+	}
 	if finalized.GetStatus().GetWorkerAssignment() != nil {
 		t.Errorf("WorkerAssignment = %v, want nil", finalized.GetStatus().GetWorkerAssignment())
 	}
@@ -144,19 +153,18 @@ func TestEnsurePausedFinalized_AlreadyCrashed(t *testing.T) {
 	}
 }
 
-// TestEnsurePausedFinalized_RecordsContentScope verifies pause finalization
-// records the scope the pause checkpoint captured (the template's onPause) in
-// LocalSnapshot, so a later suspend of the PAUSED actor knows what the
-// local snapshot contains even if the template's onPause changes while the
-// actor sits PAUSED.
-func TestEnsurePausedFinalized_RecordsContentScope(t *testing.T) {
+// TestEnsurePausedFinalized_RecordsFidelity verifies pause marks the
+// scope the pause checkpoint captures (the template's preferredFidelity) in
+// SnapshotStorage and finalization promotes it to COMPLETED, so a later suspend
+// or resume of the PAUSED actor knows what the local snapshot contains.
+func TestEnsurePausedFinalized_RecordsFidelity(t *testing.T) {
 	tests := []struct {
-		name    string
-		onPause ateapipb.SnapshotContentScope
-		want    ateapipb.SnapshotContentScope
+		name     string
+		fidelity ateapipb.SnapshotFidelity
+		want     ateapipb.SnapshotFidelity
 	}{
-		{"data", ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA},
-		{"full", ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
+		{"data", ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES},
+		{"full", ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -169,7 +177,7 @@ func TestEnsurePausedFinalized_RecordsContentScope(t *testing.T) {
 			created := storetest.MustCreateActor(t, ctx, st, &ateapipb.Actor{
 				Metadata: &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
 				Status: &ateapipb.ActorStatus{
-					State:        ateapipb.ActorState_ACTOR_STATE_PAUSING,
+					State:        ateapipb.ActorState_ACTOR_STATE_RUNNING,
 					AssignedNode: "node1",
 					WorkerAssignment: &ateapipb.WorkerAssignment{
 						Worker:          &ateapipb.ObjectRef{Name: workerName},
@@ -178,7 +186,6 @@ func TestEnsurePausedFinalized_RecordsContentScope(t *testing.T) {
 						WorkerPod:       "worker-pod-1",
 						WorkerPodUid:    workerName,
 					},
-					InProgressLocalSnapshotName: "snap-prefix",
 				},
 			})
 			if _, err := st.CreateWorker(ctx, &ateapipb.Worker{
@@ -199,9 +206,12 @@ func TestEnsurePausedFinalized_RecordsContentScope(t *testing.T) {
 
 			w := &ActorWorkflow{store: st}
 			tmpl := &ateapipb.ActorTemplate{
-				SnapshotConfig: &ateapipb.SnapshotConfig{OnPause: tc.onPause},
+				SnapshotConfig: &ateapipb.SnapshotConfig{PreferredFidelity: tc.fidelity},
 			}
-			got, err := w.ensurePausedFinalized(ctx, actorRef, tmpl)
+			if _, err := w.ensureMarkedPausing(ctx, actorRef, created, tmpl); err != nil {
+				t.Fatalf("ensureMarkedPausing: %v", err)
+			}
+			got, err := w.ensurePausedFinalized(ctx, actorRef)
 			if err != nil {
 				t.Fatalf("ensurePausedFinalized: %v", err)
 			}
@@ -209,8 +219,9 @@ func TestEnsurePausedFinalized_RecordsContentScope(t *testing.T) {
 			if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_PAUSED {
 				t.Fatalf("state = %v, want PAUSED", got.GetStatus().GetState())
 			}
-			if scope := got.GetStatus().GetLocalSnapshot().GetContentScope(); scope != tc.want {
-				t.Errorf("LocalSnapshot.ContentScope = %v, want %v", scope, tc.want)
+			_, localSt := findLatestSnapshotStorage(got.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_LOCAL, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+			if scope := localSt.GetFidelity(); scope != tc.want {
+				t.Errorf("local SnapshotStorage.Fidelity = %v, want %v", scope, tc.want)
 			}
 			if got.GetStatus().GetAssignedNode() != "node1" {
 				t.Errorf("AssignedNode = %q, want %q", got.GetStatus().GetAssignedNode(), "node1")
@@ -304,7 +315,7 @@ func TestEnsureMarkedPausing_StateMatrix(t *testing.T) {
 			Status:   &ateapipb.ActorStatus{State: seedState},
 		})
 
-		marked, err := w.ensureMarkedPausing(ctx, actorRef, actor)
+		marked, err := w.ensureMarkedPausing(ctx, actorRef, actor, &ateapipb.ActorTemplate{})
 		assertPrerequisiteResult(t, seedState, err, allowed[seedState])
 		if err == nil && marked.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_PAUSING {
 			t.Errorf("state %v: ensureMarkedPausing returned actor in %v, want PAUSING", seedState, marked.GetStatus().GetState())
@@ -332,6 +343,12 @@ func TestEnsureAteletPaused_DialFailureLeavesActorRetryable(t *testing.T) {
 			ctx := context.Background()
 			persistence := newTestPersistence(t)
 
+			var snapshots []*ateapipb.Snapshot
+			if tt.prevSnapshot != "" {
+				snapshots = append(snapshots, newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", tt.prevSnapshot, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED))
+			}
+			snapshots = append(snapshots, newLocalSnapshot(2, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "actor-1-never-written", ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS))
+
 			actor := &ateapipb.Actor{
 				Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
 				Status: &ateapipb.ActorStatus{
@@ -342,8 +359,8 @@ func TestEnsureAteletPaused_DialFailureLeavesActorRetryable(t *testing.T) {
 						WorkerPod:       "pod-gone",
 						NodeName:        "node-gone",
 					},
-					InProgressLocalSnapshotName: "actor-1-never-written",
-					ExternalSnapshot:            &ateapipb.ExternalSnapshot{SnapshotUri: tt.prevSnapshot},
+					LastAssignedGeneration: 2,
+					Snapshots:              snapshots,
 				},
 			}
 			created := storetest.MustCreateActor(t, ctx, persistence, actor)
@@ -360,10 +377,11 @@ func TestEnsureAteletPaused_DialFailureLeavesActorRetryable(t *testing.T) {
 			if stored.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_PAUSING {
 				t.Errorf("state = %v, want unchanged PAUSING", stored.GetStatus().GetState())
 			}
-			if got := stored.GetStatus().GetInProgressLocalSnapshotName(); got != "actor-1-never-written" {
-				t.Errorf("InProgressLocalSnapshotName = %q, want preserved for debugging", got)
+			if _, gotSt := findLatestSnapshotStorage(stored.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_LOCAL, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS); gotSt.GetLocal().GetSnapshotName() != "actor-1-never-written" {
+				t.Errorf("in-progress local snapshot name = %q, want preserved for debugging", gotSt.GetLocal().GetSnapshotName())
 			}
-			if got := stored.GetStatus().GetExternalSnapshot().GetSnapshotUri(); got != tt.prevSnapshot {
+			_, gotSt := findLatestSnapshotStorage(stored.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+			if got := gotSt.GetObject().GetSnapshotUri(); got != tt.prevSnapshot {
 				t.Errorf("SnapshotUri = %q, want %q", got, tt.prevSnapshot)
 			}
 		})
@@ -408,8 +426,9 @@ func TestEnsureMarkedPausing_GoldenAtespaceRejected(t *testing.T) {
 
 	_, err := w.ensureMarkedPausing(context.Background(),
 		resources.ActorRef{Atespace: resources.GoldenActorAtespace, Name: "golden-1"},
-		&ateapipb.Actor{Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING}})
+		&ateapipb.Actor{Status: &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING}},
+		&ateapipb.ActorTemplate{})
 	if got := apierror.Code(err); got != codes.FailedPrecondition {
-		t.Fatalf("status.Code = %v (err %v), want FailedPrecondition", got, err)
+		t.Fatalf("apierror.Code = %v (err %v), want FailedPrecondition", got, err)
 	}
 }

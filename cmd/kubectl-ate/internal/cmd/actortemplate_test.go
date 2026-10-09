@@ -57,8 +57,7 @@ resources:
   - name: memory
     quantity: 512Mi
 snapshotConfig:
-  onPause: SNAPSHOT_CONTENT_SCOPE_FULL
-  onCommit: SNAPSHOT_CONTENT_SCOPE_FULL
+  preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
   storageLocation: gs://ate-snapshots/ate-demo-counter/
 sandboxConfig:
   sandboxClass: SANDBOX_CLASS_GVISOR
@@ -91,9 +90,8 @@ func TestActorTemplateFromManifest(t *testing.T) {
 			{Name: "memory", Quantity: "512Mi"},
 		}},
 		SnapshotConfig: &ateapipb.SnapshotConfig{
-			OnPause:         ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
-			OnCommit:        ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
-			StorageLocation: "gs://ate-snapshots/ate-demo-counter/",
+			PreferredFidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+			StorageLocation:   "gs://ate-snapshots/ate-demo-counter/",
 		},
 		SandboxConfig: &ateapipb.SandboxConfig{
 			SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
@@ -115,7 +113,6 @@ func TestActorTemplateFromManifest_SnakeCase(t *testing.T) {
   atespace: ate-demo-counter
   name: counter
 snapshot_config:
-  on_pause: SNAPSHOT_CONTENT_SCOPE_FULL
   storage_location: gs://ate-snapshots/ate-demo-counter/
 sandbox_config:
   sandbox_class: SANDBOX_CLASS_MICROVM

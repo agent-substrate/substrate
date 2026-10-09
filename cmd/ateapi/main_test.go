@@ -304,3 +304,34 @@ func writeCA(t *testing.T, path, cn string) {
 		t.Fatalf("WriteFile(%s) error = %v", path, err)
 	}
 }
+
+func TestRejectStorageEnv(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		value *string // nil leaves the variable unset
+		want  bool    // an error naming the sidecar
+	}{
+		{name: "unset", value: nil, want: false},
+		{name: "s3", value: ptr("s3"), want: true},
+		// The old manifests set the default explicitly, so a stale patch
+		// can carry it.
+		{name: "gcs", value: ptr("gcs"), want: true},
+		{name: "empty", value: ptr(""), want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// t.Setenv restores the variable after the subtest, which also
+			// undoes the Unsetenv.
+			t.Setenv("ATE_STORAGE_BACKEND", "")
+			os.Unsetenv("ATE_STORAGE_BACKEND")
+			if tc.value != nil {
+				os.Setenv("ATE_STORAGE_BACKEND", *tc.value)
+			}
+			err := rejectStorageEnv()
+			if got := err != nil && strings.Contains(err.Error(), "snapshot-plugin sidecar"); got != tc.want {
+				t.Errorf("rejectStorageEnv() = %v, want error naming the sidecar: %t", err, tc.want)
+			}
+		})
+	}
+}
+
+func ptr(s string) *string { return &s }

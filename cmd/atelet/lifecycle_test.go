@@ -207,7 +207,7 @@ func TestLocalSnapshotGC(t *testing.T) {
 		ActorTemplateName:     "counter",
 		TargetAteomUid:        ateomUID,
 		Spec:                  spec,
-		Scope:                 ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
+		Fidelity:              ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 		Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
 		LocalConfig:           &ateletpb.LocalCheckpointConfiguration{SnapshotName: snapshotName},
 	}); err != nil {
@@ -228,7 +228,7 @@ func TestLocalSnapshotGC(t *testing.T) {
 		TargetAteomUid:        ateomUID,
 		SandboxAssets:         sandboxAssets,
 		Spec:                  spec,
-		Scope:                 ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
+		Fidelity:              ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 		Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
 		LocalConfig:           &ateletpb.LocalCheckpointConfiguration{SnapshotName: snapshotName},
 	}); err != nil {
@@ -360,7 +360,7 @@ func TestRestoreUsesRequestSandboxAssets(t *testing.T) {
 		ActorTemplateName:     "counter",
 		TargetAteomUid:        ateomUID,
 		Spec:                  spec,
-		Scope:                 ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
+		Fidelity:              ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 		Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
 		LocalConfig:           &ateletpb.LocalCheckpointConfiguration{SnapshotName: snapshotName},
 	}); err != nil {
@@ -388,7 +388,7 @@ func TestRestoreUsesRequestSandboxAssets(t *testing.T) {
 		TargetAteomUid:        ateomUID,
 		SandboxAssets:         assetsWithPause(restorePause),
 		Spec:                  spec,
-		Scope:                 ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
+		Fidelity:              ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 		Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
 		LocalConfig:           &ateletpb.LocalCheckpointConfiguration{SnapshotName: snapshotName},
 	}); err != nil {
@@ -482,7 +482,7 @@ func TestActivationFailureBeforeRegistration(t *testing.T) {
 				_, err = s.Restore(ctx, &ateletpb.RestoreRequest{
 					Atespace: "team-a", ActorName: "actor-1", ActorUid: actorUID, TargetAteomUid: "ateom-uid-1",
 					SandboxAssets: assets, Spec: spec,
-					Scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL, Type: ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
+					Fidelity: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, Type: ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
 					LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: snapshotName},
 				})
 			} else {
@@ -624,7 +624,7 @@ func TestRestoreFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
 			}}},
 		},
 		Spec:        spec,
-		Scope:       ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
+		Fidelity:    ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 		Type:        ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
 		LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: snapshotName},
 	})

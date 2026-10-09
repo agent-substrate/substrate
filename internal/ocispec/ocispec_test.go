@@ -15,11 +15,15 @@
 package ocispec
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 
 	"github.com/agent-substrate/substrate/internal/imagecache"
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
+	"github.com/agent-substrate/substrate/internal/nodepath"
+	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
@@ -35,18 +39,8 @@ func mountFor(t *testing.T, spec *specs.Spec, dest string) specs.Mount {
 	return specs.Mount{}
 }
 
-func durableVolume(name string) *ateletpb.Volume {
-	return &ateletpb.Volume{Name: name, DurableDir: &ateletpb.DurableDirVolume{}}
-}
-
 // Each volume mount becomes a bind of its host directory, rw or ro by kind.
 func TestBuild_VolumeMounts(t *testing.T) {
-	volumes := []*ateletpb.Volume{
-		durableVolume("data"),
-		{Name: "sysinfo", SystemInfo: &ateletpb.SystemInfoVolume{}},
-		{Name: "csi", External: &ateletpb.ExternalVolumeSource{}},
-		{Name: "agent", Image: &ateletpb.ImageVolumeSource{}},
-	}
 	const (
 		durableDir = "/node/actors/a/durable-dir"
 		volumesDir = "/node/actors/a/volumes"
@@ -54,19 +48,23 @@ func TestBuild_VolumeMounts(t *testing.T) {
 		bundle     = "/node/actors/a/bundles/app"
 	)
 	spec := Build(Options{
-		Args:    []string{"/app"},
-		Volumes: volumes,
-		VolumeMounts: []*ateletpb.VolumeMount{
-			{Name: "data", MountPath: "/var/data"},
-			{Name: "data", MountPath: "/home/counter"},
-			{Name: "sysinfo", MountPath: "/run/ate"},
-			{Name: "csi", MountPath: "/mnt/csi"},
-			{Name: "agent", MountPath: "/ate"},
+		ActorDirs: &ateompb.ActorDirs{
+			OciBundleDir:              "/node/actors/a/bundles",
+			DurableDirVolumeMountsDir: durableDir,
+			VolumesDir:                volumesDir,
+			SystemInfoVolumeRootsDir:  sysInfoDir,
 		},
-		DurableDirVolumeMountsDir: durableDir,
-		VolumesDir:                volumesDir,
-		SystemInfoVolumeRootsDir:  sysInfoDir,
-		BundlePath:                bundle,
+		Container: &ateompb.Container{
+			Name:          "app",
+			ContainerSpec: &ateompb.ContainerSpec{Args: []string{"/app"}},
+			DurableDirVolumeMounts: []*ateompb.DurableDirVolumeMount{
+				{VolumeName: "data", MountPath: "/var/data"},
+				{VolumeName: "data", MountPath: "/home/counter"},
+			},
+			SystemInfoVolumeMounts: []*ateompb.SystemInfoVolumeMount{{VolumeName: "sysinfo", MountPath: "/run/ate"}},
+			CsiVolumeMounts:        []*ateompb.VolumeMount{{VolumeName: "csi", MountPath: "/mnt/csi"}},
+			ImageVolumeMounts:      []*ateompb.ImageVolumeMount{{VolumeName: "agent", MountPath: "/ate"}},
+		},
 	})
 
 	for _, tc := range []struct {
@@ -93,22 +91,22 @@ func TestBuild_VolumeMounts(t *testing.T) {
 	}
 }
 
-// A mount naming an undeclared volume is skipped.
-func TestBuild_UnknownVolumeMountSkipped(t *testing.T) {
-	spec := Build(Options{
-		VolumeMounts: []*ateletpb.VolumeMount{{Name: "missing", MountPath: "/mnt/missing"}},
-	})
-	for _, m := range spec.Mounts {
-		if m.Destination == "/mnt/missing" {
-			t.Fatalf("mount for an undeclared volume was emitted: %v", m)
-		}
+// The container joins the network namespace ateom creates for the actor.
+func TestBuild_JoinsTheActorNetNS(t *testing.T) {
+	spec := Build(Options{ActorUID: "uid-a", Container: &ateompb.Container{ContainerSpec: &ateompb.ContainerSpec{Args: []string{"/app"}}}})
+	i := slices.IndexFunc(spec.Linux.Namespaces, func(ns specs.LinuxNamespace) bool { return ns.Type == specs.NetworkNamespace })
+	if i < 0 {
+		t.Fatal("spec has no network namespace")
+	}
+	if got, want := spec.Linux.Namespaces[i].Path, nodepath.ActorNetNSPath("uid-a"); got != want {
+		t.Errorf("network namespace path = %q, want %q", got, want)
 	}
 }
 
 // The resolved set lands in bounding, effective and permitted only.
 func TestBuild_Capabilities(t *testing.T) {
 	want := []string{"CAP_CHOWN", "CAP_KILL"}
-	spec := Build(Options{Args: []string{"/app"}, Capabilities: want})
+	spec := Build(Options{Container: &ateompb.Container{ContainerSpec: &ateompb.ContainerSpec{Args: []string{"/app"}, Capabilities: want}}})
 
 	caps := spec.Process.Capabilities
 	if caps == nil {
@@ -141,7 +139,7 @@ func TestBuild_Capabilities(t *testing.T) {
 
 // The pause container gets no capabilities.
 func TestBuild_NoCapabilitiesForPause(t *testing.T) {
-	spec := Build(Options{Args: []string{"/pause"}})
+	spec := Build(Options{Container: &ateompb.Container{ContainerSpec: &ateompb.ContainerSpec{Args: []string{"/pause"}}}})
 
 	caps := spec.Process.Capabilities
 	if caps == nil {
@@ -163,15 +161,19 @@ func TestBuild_NoCapabilitiesForPause(t *testing.T) {
 	}
 }
 
-func TestSaveLoadRoundTrip(t *testing.T) {
+func TestSave(t *testing.T) {
 	bundle := t.TempDir()
-	want := Build(Options{Args: []string{"/app"}, NetNSPath: "/run/netns/x"})
+	want := Build(Options{ActorUID: "uid-a", Container: &ateompb.Container{ContainerSpec: &ateompb.ContainerSpec{Args: []string{"/app"}}}})
 	if err := Save(bundle, want); err != nil {
 		t.Fatalf("Save() = %v", err)
 	}
-	got, err := Load(bundle)
+	b, err := os.ReadFile(filepath.Join(bundle, "config.json"))
 	if err != nil {
-		t.Fatalf("Load() = %v", err)
+		t.Fatal(err)
+	}
+	var got specs.Spec
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
 	}
 	if got.Hostname != want.Hostname || !slices.Equal(got.Process.Args, want.Process.Args) || len(got.Mounts) != len(want.Mounts) {
 		t.Errorf("round trip changed the spec:\n got %+v\nwant %+v", got, want)
@@ -182,11 +184,11 @@ func TestOCIResources(t *testing.T) {
 	if got := ociResources(nil); got != nil {
 		t.Errorf("ociResources(nil) = %v, want nil", got)
 	}
-	if got := ociResources(&ateletpb.ResourceLimits{}); got != nil {
+	if got := ociResources(&ateompb.ResourceLimits{}); got != nil {
 		t.Errorf("ociResources(zero) = %v, want nil so the spec is unchanged", got)
 	}
 
-	got := ociResources(&ateletpb.ResourceLimits{MemoryBytes: 268435456, CpuMillis: 200})
+	got := ociResources(&ateompb.ResourceLimits{MemoryBytes: 268435456, CpuMillis: 200})
 	if got == nil {
 		t.Fatal("ociResources() = nil, want limits")
 	}
@@ -213,7 +215,7 @@ func TestOCIResources(t *testing.T) {
 // EINVAL at container create.
 func TestOCIResources_ClampsQuotaToKernelMinimum(t *testing.T) {
 	for _, millis := range []int64{1, 5, 9} {
-		got := ociResources(&ateletpb.ResourceLimits{CpuMillis: millis})
+		got := ociResources(&ateompb.ResourceLimits{CpuMillis: millis})
 		if got == nil || got.CPU == nil || got.CPU.Quota == nil {
 			t.Fatalf("cpu=%dm: ociResources() = %v, want a quota", millis, got)
 		}
@@ -223,7 +225,7 @@ func TestOCIResources_ClampsQuotaToKernelMinimum(t *testing.T) {
 		}
 	}
 	// At the floor the quota is exact, not clamped.
-	got := ociResources(&ateletpb.ResourceLimits{CpuMillis: 10})
+	got := ociResources(&ateompb.ResourceLimits{CpuMillis: 10})
 	if *got.CPU.Quota != cpuQuotaMinUS {
 		t.Errorf("cpu=10m: quota = %d, want exactly %d", *got.CPU.Quota, cpuQuotaMinUS)
 	}
@@ -232,24 +234,24 @@ func TestOCIResources_ClampsQuotaToKernelMinimum(t *testing.T) {
 // A negative limit must not produce a non-nil but empty LinuxResources, which
 // would put a bare "resources": {} into the spec.
 func TestOCIResources_NegativeIsUnset(t *testing.T) {
-	if got := ociResources(&ateletpb.ResourceLimits{MemoryBytes: -1, CpuMillis: -1}); got != nil {
+	if got := ociResources(&ateompb.ResourceLimits{MemoryBytes: -1, CpuMillis: -1}); got != nil {
 		t.Errorf("ociResources(negative) = %+v, want nil", got)
 	}
 }
 
 // A container without limits carries no linux.resources at all.
 func TestBuild_NoResourcesLeavesLinuxUntouched(t *testing.T) {
-	spec := Build(Options{Args: []string{"/pause"}})
+	spec := Build(Options{Container: &ateompb.Container{ContainerSpec: &ateompb.ContainerSpec{Args: []string{"/app"}}}})
 	if spec.Linux.Resources != nil {
 		t.Errorf("Linux.Resources = %v, want nil when no limits are declared", spec.Linux.Resources)
 	}
 }
 
 func TestBuild_ResourcesApplied(t *testing.T) {
-	spec := Build(Options{
+	spec := Build(Options{Container: &ateompb.Container{ContainerSpec: &ateompb.ContainerSpec{
 		Args:      []string{"/app"},
-		Resources: &ateletpb.ResourceLimits{MemoryBytes: 67108864},
-	})
+		Resources: &ateompb.ResourceLimits{MemoryBytes: 67108864},
+	}}})
 	if spec.Linux.Resources == nil || spec.Linux.Resources.Memory == nil {
 		t.Fatalf("Linux.Resources = %v, want a memory limit", spec.Linux.Resources)
 	}

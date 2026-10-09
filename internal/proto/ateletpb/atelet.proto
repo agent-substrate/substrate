@@ -717,16 +717,21 @@ enum CheckpointType {
   // Keep this in sync with the maximums on fields of this type.
 }
 
-enum SnapshotScope {
+// SnapshotFidelity mirrors the public ateapi enum: the state layers a
+// snapshot holds, lowest to highest, each including the ones below it.
+enum SnapshotFidelity {
   // Not valid option; should never happen.
-  SNAPSHOT_SCOPE_UNSPECIFIED = 0;
-  // Capture process memory plus the full filesystem delta on top of the OCI
-  // image (including any attached DurableDir volumes).
-  SNAPSHOT_SCOPE_FULL = 1;
+  SNAPSHOT_FIDELITY_UNSPECIFIED = 0;
   // Capture only the contents of attached volumes that support snapshots
   // (currently DurableDir-typed volumes). Memory and the rest of rootfs are
   // excluded.
-  SNAPSHOT_SCOPE_DATA = 2;
+  SNAPSHOT_FIDELITY_VOLUMES = 1;
+  // Volumes plus the root filesystem changes made since boot. No runtime
+  // captures this yet; requests carrying it are rejected.
+  SNAPSHOT_FIDELITY_ROOTFS = 2;
+  // Capture process memory plus the full filesystem delta on top of the OCI
+  // image (including any attached DurableDir volumes).
+  SNAPSHOT_FIDELITY_MEMORY = 3;
   // Keep this in sync with the maximums on fields of this type.
 }
 
@@ -795,12 +800,13 @@ message CheckpointRequest {
   // +k8s:unionMember
   ExternalCheckpointConfiguration external_config = 10;
 
-  // What should be included in the checkpoint.
+  // Fidelity the checkpoint captures.
   //
   // +k8s:required
   // +k8s:minimum=1
-  // +k8s:maximum=2 # keep this in sync with the SnapshotScope enum
-  SnapshotScope scope = 11;
+  // +k8s:maximum=3 # keep this in sync with the SnapshotFidelity enum
+  // +k8s:customValidation # ROOTFS is not supported yet
+  SnapshotFidelity fidelity = 11;
 }
 
 message CheckpointResponse {
@@ -846,16 +852,17 @@ message UploadPausedCheckpointRequest {
   // +k8s:customValidation # a parseable snapshot URI
   string destination_snapshot_uri = 7;
 
-  // Scope the uploaded snapshot must have (the commit scope; FULL or DATA).
-  // The scope the pause checkpoint captured is not sent: atelet reads it from
+  // Fidelity the uploaded snapshot must have (MEMORY or VOLUMES). The
+  // fidelity the pause checkpoint captured is not sent: atelet reads it from
   // the local snapshot's own manifest, which is authoritative. When they
-  // differ, atelet converts where possible (a FULL capture to a DATA upload
-  // of the data-scope files ateom reported) and rejects otherwise.
+  // differ, atelet converts where possible (a MEMORY capture to a VOLUMES
+  // upload of the volume files ateom reported) and rejects otherwise.
   //
   // +k8s:required
   // +k8s:minimum=1
-  // +k8s:maximum=2 # keep this in sync with the SnapshotScope enum
-  SnapshotScope desired_scope = 8;
+  // +k8s:maximum=3 # keep this in sync with the SnapshotFidelity enum
+  // +k8s:customValidation # ROOTFS is not supported yet
+  SnapshotFidelity desired_fidelity = 8;
 }
 
 message UploadPausedCheckpointResponse {
@@ -908,20 +915,22 @@ message RestoreRequest {
   // +k8s:unionMember
   ExternalRestoreConfiguration external_config = 10;
 
-  // What content to restore from the checkpoint.
+  // Fidelity to restore from the checkpoint.
   //
   // +k8s:required
   // +k8s:minimum=1
-  // +k8s:maximum=2 # keep this in sync with the SnapshotScope enum
-  SnapshotScope scope = 11;
+  // +k8s:maximum=3 # keep this in sync with the SnapshotFidelity enum
+  // +k8s:customValidation # ROOTFS is not supported yet
+  SnapshotFidelity fidelity = 11;
+
   // When absent the actor has no egress: its TCP is captured and refused.
   //
   // +k8s:optional
   optional EgressGateway egress_gateway = 13;
 
   // The actor's declared size, from the ActorTemplate's resource limits. For
-  // gVisor and micro-VM DATA-scope restores the sandbox is (re)sized to these;
-  // for a FULL micro-VM restore the size baked into the snapshot wins. Zero
+  // gVisor and micro-VM VOLUMES restores the sandbox is (re)sized to these;
+  // for a MEMORY micro-VM restore the size baked into the snapshot wins. Zero
   // means "unset": keep the runtime default.
   //
   // +k8s:optional

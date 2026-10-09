@@ -42,7 +42,7 @@ func TestRecordRoundTripsThroughConfig(t *testing.T) {
 	})
 
 	dir := t.TempDir()
-	path, _, err := RecordSuccess(dir, "prod", r)
+	path, _, err := RecordSuccess(dir, "prod", "", r)
 	if err != nil {
 		t.Fatalf("RecordSuccess() error = %v", err)
 	}
@@ -77,7 +77,7 @@ func TestRecordRoundTripsAnEmptyFlag(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
-	path, _, err := RecordSuccess(t.TempDir(), "prod", r)
+	path, _, err := RecordSuccess(t.TempDir(), "prod", "", r)
 	if err != nil {
 		t.Fatalf("RecordSuccess() error = %v", err)
 	}
@@ -114,7 +114,7 @@ func TestRecordCanClearAStringThatHasADefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
-	path, _, err := RecordSuccess(t.TempDir(), "prod", r)
+	path, _, err := RecordSuccess(t.TempDir(), "prod", "", r)
 	if err != nil {
 		t.Fatalf("RecordSuccess() error = %v", err)
 	}
@@ -141,7 +141,7 @@ func TestRecordOmitsSettingsNobodySupplied(t *testing.T) {
 	r := resolvedWith(t, map[string]string{"FIXTURE_NAME": "a-name"})
 
 	dir := t.TempDir()
-	path, _, err := RecordSuccess(dir, "prod", r)
+	path, _, err := RecordSuccess(dir, "prod", "", r)
 	if err != nil {
 		t.Fatalf("RecordSuccess() error = %v", err)
 	}
@@ -174,7 +174,7 @@ func TestRecordNeverWritesASecret(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	path, omitted, err := RecordSuccess(dir, "prod", resolvedWith(t, env))
+	path, omitted, err := RecordSuccess(dir, "prod", "", resolvedWith(t, env))
 	if err != nil {
 		t.Fatalf("RecordSuccess() error = %v", err)
 	}
@@ -199,7 +199,7 @@ func TestSuccessReplacesAndFailureAccumulates(t *testing.T) {
 	dir := t.TempDir()
 
 	for range 2 {
-		if _, _, err := RecordSuccess(dir, "prod", r); err != nil {
+		if _, _, err := RecordSuccess(dir, "prod", "", r); err != nil {
 			t.Fatalf("RecordSuccess() error = %v", err)
 		}
 	}
@@ -207,11 +207,11 @@ func TestSuccessReplacesAndFailureAccumulates(t *testing.T) {
 		t.Errorf("%d success records, want 1 -- the second must replace the first", got)
 	}
 
-	first, _, err := RecordFailure(dir, "prod", r, "ate-setup deploy atenet")
+	first, _, err := RecordFailure(dir, "prod", "", r, "ate-setup deploy atenet")
 	if err != nil {
 		t.Fatalf("RecordFailure() error = %v", err)
 	}
-	second, _, err := RecordFailure(dir, "prod", r, "ate-setup deploy atenet")
+	second, _, err := RecordFailure(dir, "prod", "", r, "ate-setup deploy atenet")
 	if err != nil {
 		t.Fatalf("RecordFailure() error = %v", err)
 	}
@@ -248,7 +248,7 @@ func TestRecordNameIsPathSafe(t *testing.T) {
 
 func TestRecordFileIsNotWorldReadable(t *testing.T) {
 	dir := t.TempDir()
-	path, _, err := RecordSuccess(dir, "prod", resolvedWith(t, map[string]string{"FIXTURE_NAME": "x"}))
+	path, _, err := RecordSuccess(dir, "prod", "", resolvedWith(t, map[string]string{"FIXTURE_NAME": "x"}))
 	if err != nil {
 		t.Fatalf("RecordSuccess() error = %v", err)
 	}
@@ -266,7 +266,7 @@ func TestRecordFileIsNotWorldReadable(t *testing.T) {
 func TestRecordLeavesNoTemporaryFiles(t *testing.T) {
 	dir := t.TempDir()
 	r := resolvedWith(t, map[string]string{"FIXTURE_NAME": "x"})
-	if _, _, err := RecordSuccess(dir, "prod", r); err != nil {
+	if _, _, err := RecordSuccess(dir, "prod", "", r); err != nil {
 		t.Fatalf("RecordSuccess() error = %v", err)
 	}
 	if got := countFiles(t, filepath.Join(dir, installsDir)); got != 1 {

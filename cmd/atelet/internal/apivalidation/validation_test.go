@@ -423,7 +423,7 @@ func TestValidateCheckpointRequest(t *testing.T) {
 			Spec:                  &ateletpb.WorkloadSpec{},
 			Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
 			ExternalConfig:        &ateletpb.ExternalCheckpointConfiguration{SnapshotUri: snapshotURI},
-			Scope:                 ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
+			Fidelity:              ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 		}
 		for _, m := range mutate {
 			m(r)
@@ -449,8 +449,8 @@ func TestValidateCheckpointRequest(t *testing.T) {
 		name: "valid local",
 		obj:  valid(local("pause-snap-1")),
 	}, {
-		name: "valid data scope",
-		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA }),
+		name: "valid volumes fidelity",
+		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.Fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES }),
 	}, {
 		name: "missing target_ateom_uid",
 		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.TargetAteomUid = "" }),
@@ -552,13 +552,19 @@ func TestValidateCheckpointRequest(t *testing.T) {
 			field.Invalid(field.NewPath("external_config", "snapshot_uri"), nil, ""),
 		},
 	}, {
-		name: "unspecified scope",
-		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED }),
-		want: field.ErrorList{field.Required(field.NewPath("scope"), "")},
+		name: "unspecified fidelity",
+		obj: valid(func(r *ateletpb.CheckpointRequest) {
+			r.Fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
+		}),
+		want: field.ErrorList{field.Required(field.NewPath("fidelity"), "")},
 	}, {
-		name: "unknown scope",
-		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.Scope = 3 }),
-		want: field.ErrorList{field.Invalid(field.NewPath("scope"), nil, "").WithOrigin("maximum")},
+		name: "unknown fidelity",
+		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.Fidelity = 4 }),
+		want: field.ErrorList{field.Invalid(field.NewPath("fidelity"), nil, "").WithOrigin("maximum")},
+	}, {
+		name: "rootfs fidelity not supported yet",
+		obj:  valid(func(r *ateletpb.CheckpointRequest) { r.Fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS }),
+		want: field.ErrorList{field.Invalid(field.NewPath("fidelity"), nil, "")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -580,7 +586,7 @@ func TestValidateRestoreRequest(t *testing.T) {
 			Spec:                  &ateletpb.WorkloadSpec{},
 			Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
 			ExternalConfig:        &ateletpb.ExternalRestoreConfiguration{SnapshotUri: snapshotURI},
-			Scope:                 ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
+			Fidelity:              ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			SandboxAssets:         validSandboxAssets(),
 		}
 		for _, m := range mutate {
@@ -607,8 +613,8 @@ func TestValidateRestoreRequest(t *testing.T) {
 		name: "valid local",
 		obj:  valid(local("pause-snap-1")),
 	}, {
-		name: "valid data scope",
-		obj:  valid(func(r *ateletpb.RestoreRequest) { r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA }),
+		name: "valid volumes fidelity",
+		obj:  valid(func(r *ateletpb.RestoreRequest) { r.Fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES }),
 	}, {
 		name: "valid size and egress",
 		obj: valid(func(r *ateletpb.RestoreRequest) {
@@ -700,13 +706,17 @@ func TestValidateRestoreRequest(t *testing.T) {
 		obj:  valid(func(r *ateletpb.RestoreRequest) { r.ExternalConfig.SnapshotUri = "relative/path" }),
 		want: field.ErrorList{field.Invalid(field.NewPath("external_config", "snapshot_uri"), nil, "")},
 	}, {
-		name: "unspecified scope",
-		obj:  valid(func(r *ateletpb.RestoreRequest) { r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED }),
-		want: field.ErrorList{field.Required(field.NewPath("scope"), "")},
+		name: "unspecified fidelity",
+		obj:  valid(func(r *ateletpb.RestoreRequest) { r.Fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED }),
+		want: field.ErrorList{field.Required(field.NewPath("fidelity"), "")},
 	}, {
-		name: "unknown scope",
-		obj:  valid(func(r *ateletpb.RestoreRequest) { r.Scope = ateletpb.SnapshotScope(3) }),
-		want: field.ErrorList{field.Invalid(field.NewPath("scope"), nil, "").WithOrigin("maximum")},
+		name: "unknown fidelity",
+		obj:  valid(func(r *ateletpb.RestoreRequest) { r.Fidelity = ateletpb.SnapshotFidelity(4) }),
+		want: field.ErrorList{field.Invalid(field.NewPath("fidelity"), nil, "").WithOrigin("maximum")},
+	}, {
+		name: "rootfs fidelity not supported yet",
+		obj:  valid(func(r *ateletpb.RestoreRequest) { r.Fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS }),
+		want: field.ErrorList{field.Invalid(field.NewPath("fidelity"), nil, "")},
 	}, {
 		name: "negative cpu_milli",
 		obj:  valid(func(r *ateletpb.RestoreRequest) { r.CpuMilli = -1 }),
@@ -751,7 +761,7 @@ func TestValidateUploadPausedCheckpointRequest(t *testing.T) {
 			ActorTemplateName:      "tmpl-1",
 			LocalSnapshotName:      "pause-snap-1",
 			DestinationSnapshotUri: "gs://bucket/root/atespaces/team-a/actors/01234567-89ab-cdef-0123-456789abcdef/snapshots/snap-1",
-			DesiredScope:           ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
+			DesiredFidelity:        ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 		}
 		for _, m := range mutate {
 			m(r)
@@ -767,9 +777,9 @@ func TestValidateUploadPausedCheckpointRequest(t *testing.T) {
 		name: "valid",
 		obj:  valid(),
 	}, {
-		name: "valid data scope",
+		name: "valid volumes fidelity",
 		obj: valid(func(r *ateletpb.UploadPausedCheckpointRequest) {
-			r.DesiredScope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA
+			r.DesiredFidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
 		}),
 	}, {
 		name: "missing atespace",
@@ -831,17 +841,23 @@ func TestValidateUploadPausedCheckpointRequest(t *testing.T) {
 			field.Invalid(field.NewPath("destination_snapshot_uri"), nil, ""),
 		},
 	}, {
-		name: "unspecified desired_scope",
+		name: "unspecified desired_fidelity",
 		obj: valid(func(r *ateletpb.UploadPausedCheckpointRequest) {
-			r.DesiredScope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED
+			r.DesiredFidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
 		}),
-		want: field.ErrorList{field.Required(field.NewPath("desired_scope"), "")},
+		want: field.ErrorList{field.Required(field.NewPath("desired_fidelity"), "")},
 	}, {
-		name: "unknown desired_scope",
+		name: "unknown desired_fidelity",
 		obj: valid(func(r *ateletpb.UploadPausedCheckpointRequest) {
-			r.DesiredScope = 3
+			r.DesiredFidelity = 4
 		}),
-		want: field.ErrorList{field.Invalid(field.NewPath("desired_scope"), nil, "").WithOrigin("maximum")},
+		want: field.ErrorList{field.Invalid(field.NewPath("desired_fidelity"), nil, "").WithOrigin("maximum")},
+	}, {
+		name: "rootfs desired_fidelity not supported yet",
+		obj: valid(func(r *ateletpb.UploadPausedCheckpointRequest) {
+			r.DesiredFidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
+		}),
+		want: field.ErrorList{field.Invalid(field.NewPath("desired_fidelity"), nil, "")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

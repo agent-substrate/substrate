@@ -43,6 +43,8 @@ type runsc struct {
 	size sizing.SandboxSize
 	// durableVolumes are the durable-dir volume names declared to the sandbox.
 	durableVolumes []string
+	// containers are the workload's containers, from the request.
+	containers []*ateompb.Container
 }
 
 // durableVolumeNames returns the sorted, deduplicated durable-dir volume names
@@ -58,13 +60,27 @@ func durableVolumeNames(spec *ateompb.WorkloadSpec) []string {
 	return slices.Compact(names)
 }
 
-// shapeSpec loads, shapes for gVisor, and saves the container's OCI spec.
-func (r *runsc) shapeSpec(containerName string) error {
-	bundle := ociBundlePath(r.actorDirs, containerName)
-	spec, err := ocispec.Load(bundle)
-	if err != nil {
-		return err
+// pauseContainer is the sandbox root container. It only reaps, so it gets no
+// capabilities and mounts nothing.
+func pauseContainer() *ateompb.Container {
+	return &ateompb.Container{
+		Name:          ocispec.PauseContainer,
+		ContainerSpec: &ateompb.ContainerSpec{Args: []string{"/pause"}},
 	}
+}
+
+// writeSpec builds the container's OCI spec, shapes it for gVisor, and saves it
+// into the container's bundle.
+func (r *runsc) writeSpec(containerName string) error {
+	container := pauseContainer()
+	if containerName != ocispec.PauseContainer {
+		i := slices.IndexFunc(r.containers, func(c *ateompb.Container) bool { return c.GetName() == containerName })
+		if i < 0 {
+			return fmt.Errorf("container %q is not in the workload spec", containerName)
+		}
+		container = r.containers[i]
+	}
+	spec := ocispec.Build(ocispec.Options{ActorUID: r.actorUID, ActorDirs: r.actorDirs, Container: container})
 	ocispec.ShapeGVisor(spec, ocispec.GVisorOptions{
 		ActorUID:       r.actorUID,
 		ContainerName:  containerName,
@@ -72,14 +88,14 @@ func (r *runsc) shapeSpec(containerName string) error {
 		Size:           r.size,
 		ResolvConf:     resolvConfPath(r.actorDirs),
 	})
-	return ocispec.Save(bundle, spec)
+	return ocispec.Save(ociBundlePath(r.actorDirs, containerName), spec)
 }
 
 func (r *runsc) cmdCreate(ctx context.Context, out io.Writer, containerName string, additionalArgs []string) error {
 	slog.InfoContext(ctx, "About to run runsc create", slog.String("container", containerName))
 
-	if err := r.shapeSpec(containerName); err != nil {
-		return fmt.Errorf("while shaping the OCI spec for %q: %w", containerName, err)
+	if err := r.writeSpec(containerName); err != nil {
+		return fmt.Errorf("while writing the OCI spec for %q: %w", containerName, err)
 	}
 
 	args := []string{
@@ -290,8 +306,8 @@ func (r *runsc) restoreArgs(containerName, checkpointPath string) []string {
 func (r *runsc) cmdRestore(ctx context.Context, out io.Writer, containerName, checkpointPath string) error {
 	slog.InfoContext(ctx, "About to run runsc restore", slog.String("container", containerName))
 
-	if err := r.shapeSpec(containerName); err != nil {
-		return fmt.Errorf("while shaping the OCI spec for %q: %w", containerName, err)
+	if err := r.writeSpec(containerName); err != nil {
+		return fmt.Errorf("while writing the OCI spec for %q: %w", containerName, err)
 	}
 
 	cmd := exec.CommandContext(ctx, r.path, r.restoreArgs(containerName, checkpointPath)...)

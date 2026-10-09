@@ -131,6 +131,28 @@ func validateConfigMatchesType(fldPath *field.Path, typ ateletpb.CheckpointType,
 	return nil
 }
 
+func ValidateCustom_CheckpointRequest_Fidelity(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateletpb.SnapshotFidelity) field.ErrorList {
+	return validateFidelity(fldPath, *value)
+}
+
+func ValidateCustom_RestoreRequest_Fidelity(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateletpb.SnapshotFidelity) field.ErrorList {
+	return validateFidelity(fldPath, *value)
+}
+
+func ValidateCustom_UploadPausedCheckpointRequest_DesiredFidelity(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateletpb.SnapshotFidelity) field.ErrorList {
+	return validateFidelity(fldPath, *value)
+}
+
+// validateFidelity rejects ROOTFS until a sandbox runtime can capture root
+// filesystem changes without memory; the template refuses it the same way.
+// Presence and range are left to the tags.
+func validateFidelity(fldPath *field.Path, fidelity ateletpb.SnapshotFidelity) field.ErrorList {
+	if fidelity == ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS {
+		return field.ErrorList{field.Invalid(fldPath, fidelity.String(), "ROOTFS fidelity is not supported yet")}
+	}
+	return nil
+}
+
 func ValidateCustom_ExternalCheckpointConfiguration_SnapshotUri(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	return validateSnapshotURI(fldPath, *value)
 }
