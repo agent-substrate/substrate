@@ -76,23 +76,27 @@ func JWKS(keys []*VerificationKey) ([]byte, error) {
 
 // toJWK encodes a key that algorithmFits has accepted.
 func toJWK(key *VerificationKey) (jwk, error) {
-	b64 := base64.RawURLEncoding.EncodeToString
 	j := jwk{KeyID: key.KeyID, Use: "sig", Algorithm: key.Algorithm}
 	switch k := key.PublicKey.(type) {
 	case *rsa.PublicKey:
 		j.KeyType = "RSA"
-		j.N = b64(k.N.Bytes())
-		j.E = b64(big.NewInt(int64(k.E)).Bytes())
+		j.N = base64.RawURLEncoding.EncodeToString(k.N.Bytes())
+		j.E = base64.RawURLEncoding.EncodeToString(big.NewInt(int64(k.E)).Bytes())
 	case *ecdsa.PublicKey:
-		// The uncompressed point is 0x04 || x || y, each coordinate padded to
-		// the curve size as RFC 7518 requires.
-		point, err := k.Bytes()
-		if err != nil {
-			return jwk{}, err
+		switch k.Curve {
+		case elliptic.P256():
+			// Bytes returns 0x04 || x || y, with each coordinate padded to 32
+			// bytes, the fixed size of a P-256 coordinate.
+			point, err := k.Bytes()
+			if err != nil {
+				return jwk{}, err
+			}
+			j.KeyType, j.Curve = "EC", "P-256"
+			j.X = base64.RawURLEncoding.EncodeToString(point[1:33])
+			j.Y = base64.RawURLEncoding.EncodeToString(point[33:65])
+		default:
+			return jwk{}, errors.New("unsupported curve")
 		}
-		size := (len(point) - 1) / 2
-		j.KeyType, j.Curve = "EC", "P-256"
-		j.X, j.Y = b64(point[1:1+size]), b64(point[1+size:])
 	}
 	return j, nil
 }
