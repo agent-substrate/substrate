@@ -96,7 +96,7 @@ func newTestCAPool(t *testing.T) *localca.ConcretePool {
 func TestMintAteomActorCertificate(t *testing.T) {
 	st, actor := newFakeStoreWithActor("team-a", "my-actor", "3b9f1e77-2c4d-4a80-91be-6d5c8f0a7e21")
 	caPool := newTestCAPool(t)
-	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, caPool)
+	s := New(st, &fakeSuspender{}, nil, testAteletSPIFFEID, caPool)
 
 	csr, key := generateTestCSR(t)
 
@@ -143,7 +143,7 @@ func TestMintAteomActorCertificate(t *testing.T) {
 func TestMintAteomActorCertificate_Errors(t *testing.T) {
 	st, actor := newFakeStoreWithActor("team-a", "my-actor", "3b9f1e77-2c4d-4a80-91be-6d5c8f0a7e21")
 	caPool := newTestCAPool(t)
-	s := New(st, &fakeSuspender{}, testAteletSPIFFEID, caPool)
+	s := New(st, &fakeSuspender{}, nil, testAteletSPIFFEID, caPool)
 
 	csr, _ := generateTestCSR(t)
 	authed := ateletauthtest.ContextWith(ateletauthtest.CertOn(t, "node-1"))

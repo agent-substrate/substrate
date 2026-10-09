@@ -624,6 +624,30 @@ func TestValidateRequestActorSuspendRequest(t *testing.T) {
 	}
 }
 
+func TestValidateListNodeActorUIDsRequest(t *testing.T) {
+	tests := []struct {
+		name string
+		req  *ateapipb.ListNodeActorUIDsRequest
+		want field.ErrorList
+	}{{
+		name: "valid",
+		req:  &ateapipb.ListNodeActorUIDsRequest{MaxStalenessSeconds: 600},
+	}, {
+		name: "missing max_staleness_seconds",
+		req:  &ateapipb.ListNodeActorUIDsRequest{},
+		want: field.ErrorList{field.Required(field.NewPath("max_staleness_seconds"), "")},
+	}, {
+		name: "negative max_staleness_seconds",
+		req:  &ateapipb.ListNodeActorUIDsRequest{MaxStalenessSeconds: -1},
+		want: field.ErrorList{field.Invalid(field.NewPath("max_staleness_seconds"), nil, "").WithOrigin("minimum")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertValidateErr(t, ValidateListNodeActorUIDsRequest(context.Background(), tt.req), tt.want)
+		})
+	}
+}
+
 // validWorker returns a Worker in the shape CreateWorker accepts: named, with
 // its pod coordinates filled in and no status — status is output-only.
 func validWorker(name string, mods ...func(*ateapipb.Worker)) *ateapipb.Worker {

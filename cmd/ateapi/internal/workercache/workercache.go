@@ -47,6 +47,11 @@ type Cache struct {
 	handlers []func(*ateapipb.Worker)
 
 	ready atomic.Bool
+
+	// lastSynced is when the last full list that succeeded started. A time.Time
+	// rather than a Unix timestamp, so the monotonic reading survives and
+	// LastSynced's age is immune to wall-clock steps.
+	lastSynced atomic.Pointer[time.Time]
 }
 
 // AddHandler registers handler to be called with every Worker the cache holds
@@ -148,6 +153,19 @@ func (c *Cache) Forget(name string) {
 	delete(c.workers, name)
 }
 
+// LastSynced returns when the last full list that succeeded started, or the
+// zero time if none has. A Worker created after it may be missing from the
+// cache until the next one: the list is paged, so it can miss a Worker created
+// while it runs, and a dropped watch event leaves the Worker out until a list
+// finds it. A caller bounding its staleness reads this before Workers, so the
+// snapshot it gets is at least this fresh.
+func (c *Cache) LastSynced() time.Time {
+	if t := c.lastSynced.Load(); t != nil {
+		return *t
+	}
+	return time.Time{}
+}
+
 func (c *Cache) sync(ctx context.Context) (*store.WorkerWatch, error) {
 	watch, err := c.store.WatchWorkers(ctx)
 	if err != nil {
@@ -161,6 +179,7 @@ func (c *Cache) sync(ctx context.Context) (*store.WorkerWatch, error) {
 }
 
 func (c *Cache) relist(ctx context.Context) error {
+	start := time.Now()
 	var workers []*ateapipb.Worker
 	pageToken := ""
 	for {
@@ -189,6 +208,9 @@ func (c *Cache) relist(ctx context.Context) error {
 	c.workers = newMap
 	handlers := c.handlers
 	c.mu.Unlock()
+	// After the swap: a reader that sees this time sees this map, or a newer
+	// one.
+	c.lastSynced.Store(&start)
 	slog.InfoContext(ctx, "worker cache synced", slog.Int("count", len(newMap)), slog.Int("changed", len(changed)))
 	notify(handlers, changed...)
 	return nil

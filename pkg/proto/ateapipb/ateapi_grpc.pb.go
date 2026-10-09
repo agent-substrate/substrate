@@ -1828,6 +1828,7 @@ const (
 	WorkerService_RegisterWorker_FullMethodName            = "/ateapi.WorkerService/RegisterWorker"
 	WorkerService_MintAteomActorCertificate_FullMethodName = "/ateapi.WorkerService/MintAteomActorCertificate"
 	WorkerService_RequestActorSuspend_FullMethodName       = "/ateapi.WorkerService/RequestActorSuspend"
+	WorkerService_ListNodeActorUIDs_FullMethodName         = "/ateapi.WorkerService/ListNodeActorUIDs"
 )
 
 // WorkerServiceClient is the client API for WorkerService service.
@@ -1875,6 +1876,23 @@ type WorkerServiceClient interface {
 	// retries a suspend it had already been granted therefore sees a failure
 	// rather than a repeat of its success.
 	RequestActorSuspend(ctx context.Context, in *RequestActorSuspendRequest, opts ...grpc.CallOption) (*RequestActorSuspendResponse, error)
+	// ListNodeActorUIDs returns the UIDs of the Actors assigned to the Workers
+	// on the calling atelet's node. atelet uses it to tell an orphaned actor
+	// directory from a live one without reading every Worker in the cluster.
+	//
+	// atelet calls this with its own client certificate, as it does for
+	// RegisterWorker. The node is the one that certificate names, so a caller
+	// cannot ask about another node.
+	//
+	// The Workers on the node come from the control plane's worker cache, which
+	// a watch keeps current and periodic full lists repair. A Worker the cache
+	// is missing was created after its last successful full list started, and
+	// so were the placements on it. The call fails with UNAVAILABLE when that
+	// list started max_staleness_seconds or more ago, and while the cache is
+	// resyncing, rather than answer from a stale or partial view. So a caller
+	// must not read an Actor's absence as proof it is not placed here for state
+	// younger than max_staleness_seconds, measured from before the call.
+	ListNodeActorUIDs(ctx context.Context, in *ListNodeActorUIDsRequest, opts ...grpc.CallOption) (*ListNodeActorUIDsResponse, error)
 }
 
 type workerServiceClient struct {
@@ -1909,6 +1927,16 @@ func (c *workerServiceClient) RequestActorSuspend(ctx context.Context, in *Reque
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(RequestActorSuspendResponse)
 	err := c.cc.Invoke(ctx, WorkerService_RequestActorSuspend_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) ListNodeActorUIDs(ctx context.Context, in *ListNodeActorUIDsRequest, opts ...grpc.CallOption) (*ListNodeActorUIDsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListNodeActorUIDsResponse)
+	err := c.cc.Invoke(ctx, WorkerService_ListNodeActorUIDs_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1960,6 +1988,23 @@ type WorkerServiceServer interface {
 	// retries a suspend it had already been granted therefore sees a failure
 	// rather than a repeat of its success.
 	RequestActorSuspend(context.Context, *RequestActorSuspendRequest) (*RequestActorSuspendResponse, error)
+	// ListNodeActorUIDs returns the UIDs of the Actors assigned to the Workers
+	// on the calling atelet's node. atelet uses it to tell an orphaned actor
+	// directory from a live one without reading every Worker in the cluster.
+	//
+	// atelet calls this with its own client certificate, as it does for
+	// RegisterWorker. The node is the one that certificate names, so a caller
+	// cannot ask about another node.
+	//
+	// The Workers on the node come from the control plane's worker cache, which
+	// a watch keeps current and periodic full lists repair. A Worker the cache
+	// is missing was created after its last successful full list started, and
+	// so were the placements on it. The call fails with UNAVAILABLE when that
+	// list started max_staleness_seconds or more ago, and while the cache is
+	// resyncing, rather than answer from a stale or partial view. So a caller
+	// must not read an Actor's absence as proof it is not placed here for state
+	// younger than max_staleness_seconds, measured from before the call.
+	ListNodeActorUIDs(context.Context, *ListNodeActorUIDsRequest) (*ListNodeActorUIDsResponse, error)
 	mustEmbedUnimplementedWorkerServiceServer()
 }
 
@@ -1978,6 +2023,9 @@ func (UnimplementedWorkerServiceServer) MintAteomActorCertificate(context.Contex
 }
 func (UnimplementedWorkerServiceServer) RequestActorSuspend(context.Context, *RequestActorSuspendRequest) (*RequestActorSuspendResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RequestActorSuspend not implemented")
+}
+func (UnimplementedWorkerServiceServer) ListNodeActorUIDs(context.Context, *ListNodeActorUIDsRequest) (*ListNodeActorUIDsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListNodeActorUIDs not implemented")
 }
 func (UnimplementedWorkerServiceServer) mustEmbedUnimplementedWorkerServiceServer() {}
 func (UnimplementedWorkerServiceServer) testEmbeddedByValue()                       {}
@@ -2054,6 +2102,24 @@ func _WorkerService_RequestActorSuspend_Handler(srv interface{}, ctx context.Con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WorkerService_ListNodeActorUIDs_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListNodeActorUIDsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).ListNodeActorUIDs(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_ListNodeActorUIDs_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).ListNodeActorUIDs(ctx, req.(*ListNodeActorUIDsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // WorkerService_ServiceDesc is the grpc.ServiceDesc for WorkerService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -2072,6 +2138,10 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RequestActorSuspend",
 			Handler:    _WorkerService_RequestActorSuspend_Handler,
+		},
+		{
+			MethodName: "ListNodeActorUIDs",
+			Handler:    _WorkerService_ListNodeActorUIDs_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

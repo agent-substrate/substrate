@@ -5406,6 +5406,47 @@ func Validate_ListAtespacesRequest(
 	return errs
 }
 
+// Validate_ListNodeActorUIDsRequest validates an instance of ListNodeActorUIDsRequest according
+// to declarative validation rules in the API schema.
+func Validate_ListNodeActorUIDsRequest(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ateapipb.ListNodeActorUIDsRequest) (errs field.ErrorList) {
+
+	{ // field ateapipb.ListNodeActorUIDsRequest.MaxStalenessSeconds
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *int64,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.Minimum(ctx, op, fldPath, obj, oldObj, 1); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.ListNodeActorUIDsRequest) *int64 {
+				return &oldObj.MaxStalenessSeconds
+			})
+		errs = append(errs, fn(fldPath.Child("max_staleness_seconds"), &obj.MaxStalenessSeconds, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
 // Validate_ListTagsRequest validates an instance of ListTagsRequest according
 // to declarative validation rules in the API schema.
 func Validate_ListTagsRequest(

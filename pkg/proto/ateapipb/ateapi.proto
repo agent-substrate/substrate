@@ -2412,6 +2412,24 @@ service WorkerService {
   // retries a suspend it had already been granted therefore sees a failure
   // rather than a repeat of its success.
   rpc RequestActorSuspend(RequestActorSuspendRequest) returns (RequestActorSuspendResponse);
+
+  // ListNodeActorUIDs returns the UIDs of the Actors assigned to the Workers
+  // on the calling atelet's node. atelet uses it to tell an orphaned actor
+  // directory from a live one without reading every Worker in the cluster.
+  //
+  // atelet calls this with its own client certificate, as it does for
+  // RegisterWorker. The node is the one that certificate names, so a caller
+  // cannot ask about another node.
+  //
+  // The Workers on the node come from the control plane's worker cache, which
+  // a watch keeps current and periodic full lists repair. A Worker the cache
+  // is missing was created after its last successful full list started, and
+  // so were the placements on it. The call fails with UNAVAILABLE when that
+  // list started max_staleness_seconds or more ago, and while the cache is
+  // resyncing, rather than answer from a stale or partial view. So a caller
+  // must not read an Actor's absence as proof it is not placed here for state
+  // younger than max_staleness_seconds, measured from before the call.
+  rpc ListNodeActorUIDs(ListNodeActorUIDsRequest) returns (ListNodeActorUIDsResponse);
 }
 
 message RegisterWorkerRequest {
@@ -2512,6 +2530,25 @@ message RequestActorSuspendRequest {
 message RequestActorSuspendResponse {
   // The Actor as the suspend workflow left it.
   Actor actor = 1;
+}
+
+// Request message for ListNodeActorUIDs. The node is the one the caller's
+// certificate names.
+message ListNodeActorUIDsRequest {
+  // max_staleness_seconds bounds how old the control plane's view of the
+  // Workers may be. The call fails with UNAVAILABLE when the worker cache last
+  // started a successful full list this long ago or longer. atelet's sweep
+  // sends its --actor-gc-min-age.
+  //
+  // +k8s:required
+  // +k8s:minimum=1
+  int64 max_staleness_seconds = 1;
+}
+
+message ListNodeActorUIDsResponse {
+  // The UIDs of the Actors assigned to the Workers on the caller's node, in
+  // no particular order. Unpaged: the set is bounded by what one node can run.
+  repeated string actor_uids = 1;
 }
 
 // AccessPolicy is an access policy resource nested under a parent resource (or
