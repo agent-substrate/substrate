@@ -82,6 +82,11 @@ func Listen(path string) (net.Listener, error) {
 // grpc.WaitForReady itself opts out of the bound and waits as long as its
 // context allows; WaitReady does so at startup.
 //
+// The bound covers unary calls only. A streaming call gets gRPC's plain
+// fail-fast and fails at once while the plugin restarts, so the first
+// streaming RPC on this connection needs a grpc.WithStreamInterceptor that
+// applies the same wait.
+//
 // The connection is unauthenticated: the socket is reachable only from
 // inside the pod, and only by its owner.
 func Dial(path string, readyWait time.Duration) (*grpc.ClientConn, error) {
