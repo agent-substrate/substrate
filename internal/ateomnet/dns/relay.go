@@ -20,10 +20,7 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
-	"strconv"
 	"time"
-
-	"github.com/agent-substrate/substrate/internal/ateomnet/netns"
 )
 
 const (
@@ -97,43 +94,6 @@ func NewRelayForUpstreams(upstreams []string) (*Relay, error) {
 		upstreams: upstreams,
 		dialer:    &net.Dialer{Timeout: dnsExchangeTimeout},
 	}, nil
-}
-
-// Serve serves UDP and TCP DNS in the sandbox's local gateway namespace.
-func (r *Relay) Serve(ctx context.Context, ns netns.Handle) (*Server, error) {
-	// Bind the wildcard because the microVM tap's gateway address is added later.
-	address := net.JoinHostPort("0.0.0.0", strconv.Itoa(dnsPort))
-
-	netC := netConn{
-		dialer: *r.dialer,
-	}
-
-	if err := netns.Do(ctx, ns, func(context.Context) error {
-		pc, err := net.ListenPacket("udp", address)
-		if err != nil {
-			return fmt.Errorf("while opening the actor DNS socket: %w", err)
-		}
-		netC.udp = pc
-		l, err := net.Listen("tcp", address)
-		if err != nil {
-			_ = pc.Close()
-			return fmt.Errorf("while opening the actor DNS listener: %w", err)
-		}
-		netC.tcpListener = l
-		return nil
-	}); err != nil {
-		return nil, err
-	}
-
-	egressUDP, err := net.ListenPacket("udp", ":0")
-	if err != nil {
-		_ = netC.udp.Close()
-		_ = netC.tcpListener.Close()
-		return nil, fmt.Errorf("while opening the worker DNS egress socket: %w", err)
-	}
-	netC.egressUDP = egressUDP
-
-	return r.serveOn(ctx, &netC)
 }
 
 // serveOn serves DNS on netC's sockets, which the caller has already bound,
