@@ -106,16 +106,20 @@ func newControllerRuntimeLogger(h slog.Handler) logr.Logger {
 	return logr.FromSlogHandler(h)
 }
 
-// managerOptions configures the controller-runtime manager. servePull is
-// whether OTEL_METRICS_EXPORTER leaves its metrics listener on.
-func managerOptions(egressMITMCAPool types.NamespacedName, servePull bool) ctrl.Options {
-	metricsAddr := metricsOffAddr
+// metricsBindAddr is the manager's metrics address. servePull is whether
+// OTEL_METRICS_EXPORTER leaves the listener on.
+func metricsBindAddr(servePull bool) string {
 	if servePull {
-		metricsAddr = metricsPullAddr
+		return metricsPullAddr
 	}
+	return metricsOffAddr
+}
+
+// managerOptions configures the controller-runtime manager.
+func managerOptions(egressMITMCAPool types.NamespacedName, servePull bool) ctrl.Options {
 	return ctrl.Options{
 		Scheme:  scheme,
-		Metrics: metricsserver.Options{BindAddress: metricsAddr},
+		Metrics: metricsserver.Options{BindAddress: metricsBindAddr(servePull)},
 		Cache: cache.Options{
 			ByObject: map[client.Object]cache.ByObject{
 				&corev1.Secret{}: {
@@ -165,7 +169,7 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to initialize metrics", err)
 	}
 	defer serverboot.ShutdownProvider("MeterProvider", mp.Shutdown)
-	slog.InfoContext(ctx, "Metrics listener", slog.Bool("enabled", servePull), slog.String("addr", metricsPullAddr))
+	slog.InfoContext(ctx, "Metrics listener", slog.Bool("enabled", servePull), slog.String("addr", metricsBindAddr(servePull)))
 
 	k8sConfig := ctrl.GetConfigOrDie()
 	k8sClient, err := kubernetes.NewForConfig(k8sConfig)

@@ -220,7 +220,9 @@ func metricsExporters(ctx context.Context, pullServed bool) Exporters {
 		known = append(known, exporterPrometheus)
 		def[exporterPrometheus] = true
 	}
-	return resolveExportersEnv(ctx, metricsExporterEnv, known, def)
+	exporters := resolveExportersEnv(ctx, metricsExporterEnv, known, def)
+	slog.InfoContext(ctx, "Metrics exporters resolved", slog.String("exporters", exporters.String()))
+	return exporters
 }
 
 // metricsPushEnabled reports whether the OTLP reader is installed: while otlp
@@ -273,7 +275,6 @@ func InitMetricsBridged(ctx context.Context, serviceName string, reg interface {
 		return nil, false, fmt.Errorf("serviceName is required")
 	}
 	exporters := metricsExporters(ctx, true)
-	slog.InfoContext(ctx, "Metrics exporters resolved", slog.String("exporters", exporters.String()))
 	servePull = exporters.Has(exporterPrometheus)
 	switch {
 	case exporters.Has(ExporterOTLP):

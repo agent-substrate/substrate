@@ -321,7 +321,7 @@ Weaver permits only `groups` and `imports` at the top level of a registry file, 
 
 ### Bridged controller-runtime metrics (atecontroller)
 
-atecontroller bridges controller-runtime's private Prometheus registry, which the manager serves on an unscraped `:8080`, onto its OTLP reader. So `controller_runtime_*`, `workqueue_*`, `certwatcher_*`, `rest_client_*`, `leader_election_*`, `go_*`, and `process_*` reach the collector too, keeping their Prometheus names because they are upstream instruments and renaming them would break existing controller-runtime dashboards.
+atecontroller bridges controller-runtime's private Prometheus registry, which the manager serves on `:8080` only while `OTEL_METRICS_EXPORTER` leaves it on (see [Scraping instead of pushing](#scraping-instead-of-pushing)), onto its OTLP reader. So `controller_runtime_*`, `workqueue_*`, `certwatcher_*`, `rest_client_*`, `leader_election_*`, `go_*`, and `process_*` reach the collector too, keeping their Prometheus names because they are upstream instruments and renaming them would break existing controller-runtime dashboards.
 
 These can be used to answer whether the controller is keeping up, e.g. rising `workqueue_depth` or `workqueue_queue_duration_seconds` means reconciles are falling behind, and `controller_runtime_reconcile_errors_total` says which controller.
 
