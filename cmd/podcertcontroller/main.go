@@ -193,7 +193,7 @@ func main() {
 		slog.ErrorContext(ctx, "Error loading podidentity.podcert.ate.dev/identity CA pool state", slog.Any("err", err))
 		os.Exit(1)
 	}
-	podIdentitySignerController := signercontroller.New(clock.RealClock{}, podidentitysigner.NewImpl(kc, podIdentityCAPool, pcrClient), hasher, pcrClient, trustBundles)
+	podIdentitySignerController := signercontroller.New(clock.RealClock{}, podidentitysigner.NewImpl(podIdentityCAPool, pcrClient), hasher, pcrClient, trustBundles)
 	postgresCAPool, err := localca.NewRefreshingPool(*postgresCAPoolFile)
 	if err != nil {
 		slog.ErrorContext(ctx, "Error loading PostgreSQL CA pool state", slog.Any("err", err))
