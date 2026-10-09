@@ -15,9 +15,12 @@
 package hardware
 
 import (
+	"cmp"
 	"runtime"
+	"slices"
 	"testing"
 
+	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
@@ -26,8 +29,12 @@ func TestProbeHost(t *testing.T) {
 	if got := compat.GetSchemaVersion(); got != SchemaVersionV1 {
 		t.Errorf("ProbeHost() schema_version = %q, want %q", got, SchemaVersionV1)
 	}
-	if len(compat.GetAttributes()) != 1 || compat.GetAttributes()[0].GetKey() != AttrArchitecture || compat.GetAttributes()[0].GetValue() != runtime.GOARCH {
-		t.Errorf("ProbeHost() attributes = %v, want [{%s: %s}]", compat.GetAttributes(), AttrArchitecture, runtime.GOARCH)
+	attrs := compat.GetAttributes()
+	if len(attrs) != 1 || attrs[0].GetKey() != AttrArchitecture || attrs[0].GetValue() != runtime.GOARCH {
+		t.Errorf("ProbeHost() attributes = %v, want [{%s: %s}]", attrs, AttrArchitecture, runtime.GOARCH)
+	}
+	if !slices.IsSortedFunc(attrs, func(a, b *ateletpb.AttributeEntry) int { return cmp.Compare(a.GetKey(), b.GetKey()) }) {
+		t.Errorf("ProbeHost() attributes not sorted by key: %v", attrs)
 	}
 }
 

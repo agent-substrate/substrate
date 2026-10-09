@@ -380,7 +380,7 @@ func (c *controller) ensure(ctx context.Context, pod string, d desiredWorker, w 
 		Capacity: fixed,
 		DefaultRuntime: &ateapipb.SandboxRuntime{
 			SandboxClass:  string(d.pool.Spec.SandboxClass),
-			CompatVersion: hardware.ProbeHost(),
+			CompatVersion: hostCompat(),
 		},
 	}); err != nil {
 		return fmt.Errorf("while reporting capacity for Worker %s: %w", name, err)
@@ -389,6 +389,15 @@ func (c *controller) ensure(ctx context.Context, pod string, d desiredWorker, w 
 	w.reported = true
 	c.mu.Unlock()
 	return nil
+}
+
+func hostCompat() *ateapipb.VersionedSandboxCompat {
+	in := hardware.ProbeHost()
+	out := &ateapipb.VersionedSandboxCompat{SchemaVersion: in.GetSchemaVersion()}
+	for _, a := range in.GetAttributes() {
+		out.Attributes = append(out.Attributes, &ateapipb.AttributeEntry{Key: a.GetKey(), Value: a.GetValue()})
+	}
+	return out
 }
 
 // create registers the Worker with the fields the worker syncer would copy

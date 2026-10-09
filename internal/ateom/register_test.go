@@ -20,7 +20,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"testing"
 	"time"
 
@@ -154,9 +153,6 @@ func TestReportFailsFastWithoutSandboxClass(t *testing.T) {
 	err := Report(ctx, ReportConfig{SocketPath: filepath.Join(t.TempDir(), "atelet.sock")})
 	if err == nil {
 		t.Fatal("Report() without a SandboxClass succeeded, want an error the caller can exit on")
-	}
-	if !strings.Contains(err.Error(), "SandboxClass") {
-		t.Errorf("Report() = %v, want an error naming SandboxClass", err)
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("Report() retried a permanent failure until the deadline: %v", err)

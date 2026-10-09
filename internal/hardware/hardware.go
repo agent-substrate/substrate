@@ -17,8 +17,11 @@
 package hardware
 
 import (
+	"cmp"
 	"runtime"
+	"slices"
 
+	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
@@ -34,19 +37,28 @@ const (
 	// compatibility expands.
 )
 
-// ProbeHost inspects the current host and returns its v1 VersionedSandboxCompat.
+// ProbeHost inspects the current host and returns its v1 VersionedSandboxCompat
+// in atelet wire format.
+//
+// Attributes are emitted sorted by key so that repeated registrations of the
+// same runtime compare equal under proto.Equal without triggering spurious
+// store writes.
 //
 // TODO: Probe and populate cpu_features and other host hardware attributes
 // (e.g. via CPUID on amd64 and MIDR_EL1 on arm64).
-func ProbeHost() *ateapipb.VersionedSandboxCompat {
-	return &ateapipb.VersionedSandboxCompat{
-		SchemaVersion: SchemaVersionV1,
-		Attributes: []*ateapipb.AttributeEntry{
-			{
-				Key:   AttrArchitecture,
-				Value: runtime.GOARCH,
-			},
+func ProbeHost() *ateletpb.VersionedSandboxCompat {
+	attrs := []*ateletpb.AttributeEntry{
+		{
+			Key:   AttrArchitecture,
+			Value: runtime.GOARCH,
 		},
+	}
+	slices.SortFunc(attrs, func(a, b *ateletpb.AttributeEntry) int {
+		return cmp.Compare(a.GetKey(), b.GetKey())
+	})
+	return &ateletpb.VersionedSandboxCompat{
+		SchemaVersion: SchemaVersionV1,
+		Attributes:    attrs,
 	}
 }
 
@@ -78,6 +90,8 @@ func MatchesCompat(worker, snap *ateapipb.VersionedSandboxCompat) bool {
 	if len(wAttrs) != len(sAttrs) {
 		return false
 	}
+	// API validation bounds attributes to at most 32 entries with unique keys,
+	// so the nested scan is small and avoids map allocation on the hot path.
 	for _, sa := range sAttrs {
 		found := false
 		for _, wa := range wAttrs {

@@ -28,7 +28,6 @@ import (
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/protobuf/proto"
-	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
 // RegisterWorker records a Worker's reported capacity and sandbox runtimes in
@@ -65,8 +64,8 @@ func (s *Server) RegisterWorker(ctx context.Context, req *ateapipb.RegisterWorke
 			slog.String("caller_pod", caller.PodName))
 		return nil, apierror.NotFound("Worker %s not found", name)
 	}
-	if errs := validateRuntimeClasses(worker.GetSandboxClass(), req); len(errs) > 0 {
-		return nil, resources.ToAPIError(errs)
+	if err := validateRuntimeClasses(worker.GetSandboxClass(), req); err != nil {
+		return nil, err
 	}
 
 	status := worker.GetStatus()
@@ -105,24 +104,22 @@ func (s *Server) RegisterWorker(ctx context.Context, req *ateapipb.RegisterWorke
 
 // validateRuntimeClasses rejects a runtime of a class other than the Worker's
 // own. The class is fixed when the pool creates the Worker and names the
-// sandbox its ateom runs, so a runtime of another class is one this Worker
-// cannot start or restore into, whatever it reports. A Worker recorded
-// without a class has nothing for a report to contradict.
-func validateRuntimeClasses(class string, req *ateapipb.RegisterWorkerRequest) field.ErrorList {
+// sandbox its ateom runs, so a runtime of another class contradicts the
+// recorded Worker state. A Worker recorded without a class has nothing for a
+// report to contradict.
+func validateRuntimeClasses(class string, req *ateapipb.RegisterWorkerRequest) error {
 	if class == "" {
 		return nil
 	}
-	var errs field.ErrorList
-	detail := fmt.Sprintf("must be the Worker's sandbox class %q", class)
 	if got := req.GetDefaultRuntime().GetSandboxClass(); got != class {
-		errs = append(errs, field.Invalid(field.NewPath("default_runtime", "sandbox_class"), got, detail))
+		return apierror.FailedPrecondition("default_runtime.sandbox_class %q does not match Worker's sandbox_class %q", got, class)
 	}
 	for i, rt := range req.GetRestorableRuntimes() {
 		if got := rt.GetSandboxClass(); got != class {
-			errs = append(errs, field.Invalid(field.NewPath("restorable_runtimes").Index(i).Child("sandbox_class"), got, detail))
+			return apierror.FailedPrecondition("restorable_runtimes[%d].sandbox_class %q does not match Worker's sandbox_class %q", i, got, class)
 		}
 	}
-	return errs
+	return nil
 }
 
 // sameRuntimes reports whether two runtime lists are identical entry for

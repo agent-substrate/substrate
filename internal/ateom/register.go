@@ -32,7 +32,6 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateletdial"
 	"github.com/agent-substrate/substrate/internal/hardware"
 	"github.com/agent-substrate/substrate/internal/resources"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/api/resource"
 
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
@@ -78,26 +77,18 @@ func fromDir(dir string, actors int) *ateletpb.WorkerResources {
 
 // defaultRuntime is the runtime actors hosted by this ateom start under: its
 // sandbox class on this host's hardware. The name is left empty: it names a
-// SandboxConfig version, which the ateom does not know.
+// SandboxConfig version, which the ateom does not know. CompatVersion
+// attributes are emitted sorted by key by hardware.ProbeHost so repeated
+// registrations compare equal on the control plane.
 //
 // TODO: Report the pool's SandboxConfig so atelet can complete the identity
-// with the digests of the default version's assets and list its other
-// enabled versions as restorable_runtimes.
+// with the digests of the default version's assets (keeping attributes sorted
+// by key) and list its other enabled versions as restorable_runtimes.
 func defaultRuntime(sandboxClass string) *ateletpb.SandboxRuntime {
 	return &ateletpb.SandboxRuntime{
 		SandboxClass:  sandboxClass,
-		CompatVersion: toCompat(hardware.ProbeHost()),
+		CompatVersion: hardware.ProbeHost(),
 	}
-}
-
-// toCompat converts the probe's VersionedSandboxCompat to atelet's, which it
-// mirrors field for field.
-func toCompat(in *ateapipb.VersionedSandboxCompat) *ateletpb.VersionedSandboxCompat {
-	out := &ateletpb.VersionedSandboxCompat{SchemaVersion: in.GetSchemaVersion()}
-	for _, a := range in.GetAttributes() {
-		out.Attributes = append(out.Attributes, &ateletpb.AttributeEntry{Key: a.GetKey(), Value: a.GetValue()})
-	}
-	return out
 }
 
 // cpuMemory is the Resources for those two dimensions. A zero dimension is

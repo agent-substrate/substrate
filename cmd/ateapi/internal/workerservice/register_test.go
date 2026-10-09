@@ -157,8 +157,8 @@ func TestRegisterWorker_RejectsRuntimeOfAnotherClass(t *testing.T) {
 	}} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := s.RegisterWorker(authed, tc.req)
-			if got := apierror.Code(err); got != codes.InvalidArgument {
-				t.Fatalf("code = %v (err %v), want %v", got, err, codes.InvalidArgument)
+			if got := apierror.Code(err); got != codes.FailedPrecondition {
+				t.Fatalf("code = %v (err %v), want %v", got, err, codes.FailedPrecondition)
 			}
 		})
 	}

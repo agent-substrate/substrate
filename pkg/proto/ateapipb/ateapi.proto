@@ -2198,7 +2198,8 @@ message VersionedSandboxCompat {
   // both runtime assets (e.g. "gvisor_asset_hash") and effective guest hardware
   // features after masking (e.g. "architecture", "cpu_features").
   // Matched by exact equality of all keys and values within the same schema
-  // version.
+  // version. Producers must emit attributes sorted by key so repeated
+  // registrations of the same runtime compare equal without spurious writes.
   //
   // +k8s:required
   // +k8s:maxItems=32
