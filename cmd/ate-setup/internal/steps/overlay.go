@@ -18,11 +18,18 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"maps"
+	"net"
+	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
+	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kube"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kustomize"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
 )
@@ -436,13 +443,78 @@ const otelConfigMap = "ate-otel-config"
 // otelEndpointKey is the collector address inside it.
 const otelEndpointKey = "OTEL_EXPORTER_OTLP_ENDPOINT"
 
+// otelExporterKeys select the OTLP push for traces and metrics. Only
+// --otlp-endpoint=none sets them; no manifest does.
+var otelExporterKeys = []string{"OTEL_TRACES_EXPORTER", "OTEL_METRICS_EXPORTER"}
+
+// otelLogsExporterKey is set by the kind ConfigMap to send the actor events
+// over OTLP.
+const otelLogsExporterKey = "OTEL_LOGS_EXPORTER"
+
 // otelOverrideDeployments are the control plane Deployments that read
 // ate-otel-config. ate-controller additionally copies the values onto the
 // ateom worker pods it creates, so one patch reaches the whole system.
 var otelOverrideDeployments = []string{"ate-api-server", "ate-controller", "atenet-router"}
 
+// otelOverridePatch returns the ate-otel-config keys that the configured
+// endpoint sets, and a nil value for each key it removes.
+//
+// With none, the endpoint goes: atenet-router then turns off Envoy tracing,
+// atelet starts no relay, and ate-controller gives the ateoms no endpoint. The
+// exporters go to none so that no component falls back to the SDK default,
+// localhost:4317. OTEL_LOGS_EXPORTER goes too, so the actor events stay on
+// stdout.
+//
+// Without none, the exporter keys go, so that an install after a none install
+// pushes again. The merge patch owns them, so the bundle apply does not remove
+// them.
+func otelOverridePatch(endpoint string) map[string]*string {
+	patch := map[string]*string{}
+	if endpoint == config.OtlpEndpointNone {
+		none := "none"
+		patch[otelEndpointKey] = nil
+		patch[otelLogsExporterKey] = nil
+		for _, k := range otelExporterKeys {
+			patch[k] = &none
+		}
+		return patch
+	}
+	if endpoint != "" {
+		patch[otelEndpointKey] = &endpoint
+	}
+	for _, k := range otelExporterKeys {
+		patch[k] = nil
+	}
+	return patch
+}
+
+// otelPatchChanges reports whether patch changes data.
+func otelPatchChanges(data map[string]string, patch map[string]*string) bool {
+	for k, want := range patch {
+		got, ok := data[k]
+		if want == nil && ok || want != nil && (!ok || got != *want) {
+			return true
+		}
+	}
+	return false
+}
+
+// describeOtelPatch lists the changes of patch in a stable order, for the log.
+func describeOtelPatch(patch map[string]*string) string {
+	keys := slices.Sorted(maps.Keys(patch))
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		if v := patch[k]; v != nil {
+			parts = append(parts, k+"="+*v)
+		} else {
+			parts = append(parts, "-"+k)
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
 // applyOtelEndpointOverride points all control plane telemetry at a different
-// collector for the duration of a measurement. See
+// collector, or with none turns the OTLP push off. See
 // benchmarking/telemetry/README.md.
 //
 // Call this AFTER every apply: the ate-system bundle carries its own copy of
@@ -455,22 +527,21 @@ var otelOverrideDeployments = []string{"ate-api-server", "ate-controller", "aten
 // wait can then exceed its timeout. An absent workload is not an error,
 // because a single-component deploy has only that component.
 func (e *Env) applyOtelEndpointOverride(ctx context.Context) error {
-	endpoint := e.Cfg.OtlpEndpoint
-	if endpoint == "" {
-		return nil
-	}
-
 	cm, err := e.Kube.GetConfigMap(ctx, e.Namespace(), otelConfigMap)
 	if err != nil {
 		return err
 	}
-	if cm != nil && cm.Data[otelEndpointKey] == endpoint {
+	var data map[string]string
+	if cm != nil {
+		data = cm.Data
+	}
+	patch := otelOverridePatch(e.Cfg.OtlpEndpoint)
+	if !otelPatchChanges(data, patch) {
 		return nil
 	}
 
-	log.Infof("Overriding %s with %s", otelEndpointKey, endpoint)
-	if err := e.Kube.MergePatchConfigMap(ctx, e.Namespace(), otelConfigMap,
-		map[string]string{otelEndpointKey: endpoint}); err != nil {
+	log.Infof("Setting %s to %s", otelConfigMap, describeOtelPatch(patch))
+	if err := e.Kube.MergePatchConfigMap(ctx, e.Namespace(), otelConfigMap, patch); err != nil {
 		return err
 	}
 
@@ -492,4 +563,79 @@ func (e *Env) applyOtelEndpointOverride(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// CheckOtelCollector refuses an install whose OTLP endpoint names an
+// in-cluster Service that does not exist. Without this check, every component
+// fails to resolve the collector at each export, and the telemetry stops with
+// no clear error.
+//
+// The check is for the endpoint that the install sets: the --otlp-endpoint
+// value, or else the one in the ate-otel-config manifest. It does not apply on
+// kind, which deploys its collector in the same install, or to an endpoint
+// outside the cluster, which it cannot see.
+func (e *Env) CheckOtelCollector(ctx context.Context) error {
+	if e.Cfg.Kind || e.Cfg.OtlpEndpoint == config.OtlpEndpointNone {
+		return nil
+	}
+	endpoint := e.Cfg.OtlpEndpoint
+	if endpoint == "" {
+		var err error
+		if endpoint, err = manifestOtelEndpoint(e.otelConfigPath()); err != nil {
+			return err
+		}
+	}
+	namespace, service, ok := clusterService(endpoint)
+	if !ok {
+		return nil
+	}
+	exists, err := e.Kube.ServiceExists(ctx, namespace, service)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return fmt.Errorf("the OTLP endpoint %s names the Service %s/%s, which does not exist. "+
+			"Deploy the collector (on GKE, enable the managed OpenTelemetry addon), "+
+			"give --otlp-endpoint the address of a collector, "+
+			"or give --otlp-endpoint=%s to export no OTLP telemetry",
+			endpoint, namespace, service, config.OtlpEndpointNone)
+	}
+	return nil
+}
+
+// manifestOtelEndpoint reads the collector address from an ate-otel-config
+// manifest.
+func manifestOtelEndpoint(path string) (string, error) {
+	objs, err := kube.LoadPath(path)
+	if err != nil {
+		return "", err
+	}
+	for _, obj := range objs {
+		if obj.GetKind() != "ConfigMap" || obj.GetName() != otelConfigMap {
+			continue
+		}
+		endpoint, _, err := unstructured.NestedString(obj.Object, "data", otelEndpointKey)
+		if err != nil {
+			return "", fmt.Errorf("while reading %s from %s: %w", otelEndpointKey, path, err)
+		}
+		return endpoint, nil
+	}
+	return "", fmt.Errorf("%s has no ConfigMap %s", path, otelConfigMap)
+}
+
+// clusterService returns the Service that an OTLP endpoint names, when its
+// host is the cluster DNS name of a Service: <service>.<namespace>.svc, with
+// or without the cluster domain after it. The endpoint is a URL, or host:port.
+func clusterService(endpoint string) (namespace, service string, ok bool) {
+	host := endpoint
+	if u, err := url.Parse(endpoint); err == nil && u.Host != "" {
+		host = u.Hostname()
+	} else if h, _, err := net.SplitHostPort(endpoint); err == nil {
+		host = h
+	}
+	labels := strings.Split(host, ".")
+	if len(labels) < 3 || labels[2] != "svc" || labels[0] == "" || labels[1] == "" {
+		return "", "", false
+	}
+	return labels[1], labels[0], true
 }

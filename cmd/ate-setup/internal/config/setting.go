@@ -269,7 +269,8 @@ var Registry = []Setting{
 	},
 	{
 		Key: "otlpEndpoint", Env: "ATE_OTLP_ENDPOINT", Flag: "otlp-endpoint", Kind: KindString,
-		Usage: "Send control plane telemetry to this OTLP collector instead of the cluster default",
+		Usage: "Send control plane telemetry to this OTLP collector instead of the cluster default, " +
+			"or \"none\" to export no OTLP telemetry on a cluster without a collector",
 	},
 
 	{

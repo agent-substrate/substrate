@@ -23,6 +23,10 @@
 # same name with the in-cluster collector address; see
 # manifests/ate-install/kind/ate-otel-config.yaml.
 #
+# The endpoint below needs the GKE managed OpenTelemetry addon. ate-setup
+# refuses to install when its Service does not exist. On a cluster without a
+# collector, install with --otlp-endpoint=none; see docs/observability.md.
+#
 # NOTE: editing this ConfigMap does not restart the pods that consume it — the
 # pod template is unchanged, so no new rollout is triggered. Follow a change
 # with `kubectl rollout restart` on the affected workloads.

@@ -79,6 +79,11 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 	if err := e.CheckCSIDriver(opts.SetupCSI); err != nil {
 		return err
 	}
+	// The same for the collector: without it, telemetry fails with no clear
+	// error once the control plane is up.
+	if err := e.CheckOtelCollector(ctx); err != nil {
+		return err
+	}
 
 	// The namespace has to exist before RBAC or CRDs are applied.
 	if err := e.EnsureAteSystemNamespace(ctx); err != nil {
@@ -332,6 +337,9 @@ func (e *Env) DeployAteController(ctx context.Context) error {
 		return err
 	}
 	if err := e.applyOtelConfig(ctx); err != nil {
+		return err
+	}
+	if err := e.applyOtelEndpointOverride(ctx); err != nil {
 		return err
 	}
 	if err := e.renderResolveApply(ctx, e.Cfg.Manifest("ate-controller.yaml")); err != nil {

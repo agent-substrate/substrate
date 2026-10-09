@@ -91,7 +91,8 @@ func deployLocustArgs(opts BenchmarkOptions, otlpEndpoint, actorMemory string) [
 		"--sandbox-class", opts.SandboxClass,
 	}
 	// Send the actor telemetry to the same place as the control plane telemetry.
-	if otlpEndpoint != "" {
+	// With none there is no such place; deploy.sh then asks for an endpoint.
+	if otlpEndpoint != "" && otlpEndpoint != config.OtlpEndpointNone {
 		args = append(args, "--otlp-endpoint", otlpEndpoint)
 	}
 	if actorMemory != "" {

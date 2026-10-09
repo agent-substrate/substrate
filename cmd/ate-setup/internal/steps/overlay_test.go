@@ -26,6 +26,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	kyaml "sigs.k8s.io/kustomize/kyaml/yaml"
 	"sigs.k8s.io/yaml"
 
@@ -792,6 +793,132 @@ func TestApplyOtelEndpointOverride(t *testing.T) {
 			t.Error("the atelet DaemonSet was not restarted")
 		}
 	})
+
+	t.Run("none removes the endpoint and turns the push off", func(t *testing.T) {
+		cm := otelConfig("http://default:4317")
+		cm.Data[otelLogsExporterKey] = "otlp,console"
+		e := &Env{
+			Cfg:  &config.Config{OtlpEndpoint: config.OtlpEndpointNone},
+			Kube: fakeKube(t, cm, apiServerDeployment()),
+		}
+		if err := e.applyOtelEndpointOverride(t.Context()); err != nil {
+			t.Fatalf("applyOtelEndpointOverride() error = %v", err)
+		}
+		got, _ := e.Kube.GetConfigMap(t.Context(), NamespaceAteSystem, otelConfigMap)
+		want := map[string]string{"OTEL_TRACES_EXPORTER": "none", "OTEL_METRICS_EXPORTER": "none"}
+		if !reflect.DeepEqual(got.Data, want) {
+			t.Errorf("%s data = %v, want %v", otelConfigMap, got.Data, want)
+		}
+		if !restartedAt(t, e, "deployment", "ate-api-server") {
+			t.Error("ate-api-server was not restarted")
+		}
+	})
+
+	t.Run("none again restarts nothing", func(t *testing.T) {
+		cm := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Namespace: NamespaceAteSystem, Name: otelConfigMap},
+			Data:       map[string]string{"OTEL_TRACES_EXPORTER": "none", "OTEL_METRICS_EXPORTER": "none"},
+		}
+		e := &Env{
+			Cfg:  &config.Config{OtlpEndpoint: config.OtlpEndpointNone},
+			Kube: fakeKube(t, cm, apiServerDeployment()),
+		}
+		if err := e.applyOtelEndpointOverride(t.Context()); err != nil {
+			t.Fatalf("applyOtelEndpointOverride() error = %v", err)
+		}
+		if restartedAt(t, e, "deployment", "ate-api-server") {
+			t.Error("ate-api-server was restarted even though nothing changed")
+		}
+	})
+
+	// The bundle apply puts the endpoint back but leaves the exporter keys,
+	// which only the merge patch owns. Without their removal, the push stays
+	// off on a cluster that has a collector again.
+	for _, endpoint := range []string{"", endpoint} {
+		t.Run(fmt.Sprintf("endpoint %q after none turns the push on again", endpoint), func(t *testing.T) {
+			cm := otelConfig("http://default:4317")
+			cm.Data["OTEL_TRACES_EXPORTER"] = "none"
+			cm.Data["OTEL_METRICS_EXPORTER"] = "none"
+			e := &Env{
+				Cfg:  &config.Config{OtlpEndpoint: endpoint},
+				Kube: fakeKube(t, cm, apiServerDeployment()),
+			}
+			if err := e.applyOtelEndpointOverride(t.Context()); err != nil {
+				t.Fatalf("applyOtelEndpointOverride() error = %v", err)
+			}
+			got, _ := e.Kube.GetConfigMap(t.Context(), NamespaceAteSystem, otelConfigMap)
+			wantEndpoint := endpoint
+			if wantEndpoint == "" {
+				wantEndpoint = "http://default:4317"
+			}
+			want := map[string]string{otelEndpointKey: wantEndpoint}
+			if !reflect.DeepEqual(got.Data, want) {
+				t.Errorf("%s data = %v, want %v", otelConfigMap, got.Data, want)
+			}
+			if !restartedAt(t, e, "deployment", "ate-api-server") {
+				t.Error("ate-api-server was not restarted")
+			}
+		})
+	}
+}
+
+func TestClusterService(t *testing.T) {
+	for _, tc := range []struct {
+		endpoint, namespace, service string
+		ok                           bool
+	}{
+		{"http://opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317", "gke-managed-otel", "opentelemetry-collector", true},
+		{"http://opentelemetry-collector.otel-system.svc:4317", "otel-system", "opentelemetry-collector", true},
+		{"collector.monitoring.svc:4317", "monitoring", "collector", true},
+		{"https://otlp.example.com:4317", "", "", false},
+		{"http://collector:4317", "", "", false},
+		{"http://10.0.0.1:4317", "", "", false},
+		{"collector.monitoring:4317", "", "", false},
+	} {
+		namespace, service, ok := clusterService(tc.endpoint)
+		if namespace != tc.namespace || service != tc.service || ok != tc.ok {
+			t.Errorf("clusterService(%q) = %q, %q, %v, want %q, %q, %v",
+				tc.endpoint, namespace, service, ok, tc.namespace, tc.service, tc.ok)
+		}
+	}
+}
+
+func TestCheckOtelCollector(t *testing.T) {
+	root, err := config.RepoRoot()
+	if err != nil {
+		t.Fatalf("resolving repo root: %v", err)
+	}
+	// The collector that the GKE ate-otel-config manifest names.
+	gkeCollector := &corev1.Service{ObjectMeta: metav1.ObjectMeta{
+		Namespace: "gke-managed-otel", Name: "opentelemetry-collector",
+	}}
+	for _, tc := range []struct {
+		name     string
+		cfg      config.Config
+		services []runtime.Object
+		wantErr  bool
+	}{
+		{name: "manifest default with its collector", services: []runtime.Object{gkeCollector}},
+		{name: "manifest default without its collector", wantErr: true},
+		{name: "override without its collector", cfg: config.Config{OtlpEndpoint: "http://collector.monitoring.svc:4317"},
+			services: []runtime.Object{gkeCollector}, wantErr: true},
+		{name: "override outside the cluster", cfg: config.Config{OtlpEndpoint: "https://otlp.example.com:4317"}},
+		{name: "none", cfg: config.Config{OtlpEndpoint: config.OtlpEndpointNone}},
+		{name: "kind deploys its own collector", cfg: config.Config{Kind: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := tc.cfg
+			cfg.Root = root
+			e := &Env{Cfg: &cfg, Kube: fakeKube(t, tc.services...)}
+			err := e.CheckOtelCollector(t.Context())
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("CheckOtelCollector() error = %v, want error %v", err, tc.wantErr)
+			}
+			if err != nil && !strings.Contains(err.Error(), "--otlp-endpoint=none") {
+				t.Errorf("CheckOtelCollector() error = %v, want it to name --otlp-endpoint=none", err)
+			}
+		})
+	}
 }
 
 // A pre-built install renders the envoy egress manifest without building

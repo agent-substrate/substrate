@@ -58,8 +58,10 @@ type LoggingOptions struct {
 // through internal/actorevent, and sets whether those records also go to stdout
 // (console).
 //
-// It returns (nil, nil) when the exporter does not include otlp, and leaves the
-// OTel global alone: emitting then costs one Enabled check. Guard the shutdown
+// It returns (nil, nil) when the exporter does not include otlp, or when the
+// component has no place to push to (see hasExportTarget), and leaves the OTel
+// global alone: emitting then costs one Enabled check, and the records go to
+// stdout. Guard the shutdown
 // on a nil provider, unlike InitTracing which always returns one.
 //
 // The processor batches. These records sit on the actor resume and suspend
@@ -78,6 +80,9 @@ func InitLogging(ctx context.Context, opts LoggingOptions) (*sdklog.LoggerProvid
 	actorevent.SetConsole(opts.Exporter.Has(ExporterConsole))
 	if !opts.Exporter.Has(ExporterOTLP) {
 		slog.InfoContext(ctx, "OTLP logs export disabled", slog.String("exporter", opts.Exporter.String()))
+		return nil, nil
+	}
+	if !hasExportTarget(ctx, "logs", opts.RelayCapable, opts.ExporterConn, logsEndpointEnv) {
 		return nil, nil
 	}
 

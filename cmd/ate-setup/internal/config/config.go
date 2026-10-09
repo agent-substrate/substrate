@@ -52,6 +52,11 @@ const (
 	ClusterSizeSize10 = "size10"
 )
 
+// OtlpEndpointNone is the --otlp-endpoint value for a cluster without a
+// collector: the components keep their /metrics endpoints and trace context,
+// but push no OTLP telemetry.
+const OtlpEndpointNone = "none"
+
 // DefaultRolloutTimeout is the default wait timeout for workload rollouts.
 const DefaultRolloutTimeout = 60 * time.Second
 
@@ -203,6 +208,7 @@ type Config struct {
 
 	// OtlpEndpoint is where the control plane ships telemetry
 	// (ATE_OTLP_ENDPOINT). Benchmark actors are pointed at it too.
+	// OtlpEndpointNone turns the OTLP push off instead.
 	OtlpEndpoint string
 	// BenchmarkActorMemory is the memory limit for benchmark actors
 	// (BENCHMARK_ACTOR_MEMORY). Empty leaves the workload default in place.

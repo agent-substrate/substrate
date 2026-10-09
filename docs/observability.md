@@ -436,6 +436,12 @@ Telemetry is emitted the same way everywhere; only the backend differs between a
 >
 > ateom workers don't read the ConfigMap at all — `ate-controller` copies the value into each worker pod at creation. A new endpoint reaches them only once the controller itself restarts, and that restart then rolls every WorkerPool Deployment, replacing the running workers along with the actors on them.
 
+### A cluster without a collector
+
+The GKE `ate-otel-config` names the collector of the GKE managed OpenTelemetry addon. Before `ate-setup deploy ate-system` changes the cluster, it confirms that the Service the endpoint names exists. If the Service does not exist, the install stops and tells you what to do. The check applies when the host of the endpoint is the cluster DNS name of a Service (`<service>.<namespace>.svc`). It does not apply on kind, because kind deploys its collector in the same install.
+
+To install on a cluster without a collector, give `--otlp-endpoint=none` (or `ATE_OTLP_ENDPOINT=none`). `ate-setup` then removes `OTEL_EXPORTER_OTLP_ENDPOINT` and `OTEL_LOGS_EXPORTER` from `ate-otel-config`, and sets `OTEL_TRACES_EXPORTER=none` and `OTEL_METRICS_EXPORTER=none`. The components push no OTLP telemetry, and they keep their `/metrics` endpoints and trace context. With no endpoint, `atenet-router` turns off Envoy tracing, and atelet starts no [relay](#the-ateom-otlp-relay). `ate-controller` gives the ateom worker pods no endpoint. An ateom with no relay and no endpoint pushes nothing, so it does not dial the SDK default, `localhost:4317`. A later install with no `none` turns the push on again.
+
 ### The ateom OTLP relay
 
 ateom is the one component that does not talk to the collector directly. It exports logs, traces, and metrics over a unix socket at `/var/lib/ate/atelet-otlp.sock`, which `atelet` serves and forwards to the collector on the node's network ([`internal/otlprelay`](../internal/otlprelay)):
@@ -446,7 +452,7 @@ ateom ──OTLP/gRPC over unix socket──► atelet relay ──OTLP/gRPC─�
 
 The socket sits in the `BasePath` hostPath already mounted into both, so nothing new is mounted. `atelet` is a DaemonSet, so every ateom on a node shares one relay, and the many per-pod collector connections collapse into one per node. Four things motivate it: the worker pod runs untrusted agent code and will not need egress to the collector once direct fallback is phased out; the connection count drops; ateom's own telemetry stays clear of the transparent egress redirect it installs for the actor; and `atelet` outlives the worker pod, so spans still queued at teardown are not lost with it.
 
-The relay is best-effort. If the socket is absent when ateom starts — `atelet` not up yet, `--otlp-relay-socket=""`, or no collector configured for the relay to forward to — ateom logs it and exports directly to `OTEL_EXPORTER_OTLP_ENDPOINT` as before. That fallback is decided once at startup, not per export, and is stamped on telemetry as the `ate.otlp.relay` resource attribute (`relay` vs `direct`).
+The relay is best-effort. If the socket is absent when ateom starts — `atelet` not up yet, `--otlp-relay-socket=""`, or no collector configured for the relay to forward to — ateom logs it and exports directly to `OTEL_EXPORTER_OTLP_ENDPOINT` as before. If the ateom has no endpoint either, it exports no OTLP telemetry, because nothing listens on `localhost:4317`, the SDK default, in a worker pod. That fallback is decided once at startup, not per export, and is stamped on telemetry as the `ate.otlp.relay` resource attribute (`relay` vs `direct`).
 
 > **Note on Network Egress Lockdown:** Complete network policy lockdown of worker pod egress to the collector is planned as a Phase 2 milestone once the relay path is fully proven and direct fallback is deprecated. While the fallback path remains active, worker pods retain network egress to the collector and `ate-controller` continues to inject `OTEL_EXPORTER_OTLP_ENDPOINT`.
 
