@@ -41,6 +41,8 @@ func TestNewFromEnv(t *testing.T) {
 			missing := filepath.Join(t.TempDir(), "missing")
 			t.Setenv("AWS_CONFIG_FILE", missing)
 			t.Setenv("AWS_SHARED_CREDENTIALS_FILE", missing)
+			t.Setenv("AWS_PROFILE", "")
+			t.Setenv("AWS_DEFAULT_PROFILE", "")
 			t.Setenv("AWS_REGION", "us-east-1")
 			t.Setenv("ATE_STORAGE_BACKEND", tc.backend)
 			t.Setenv("AWS_S3_USE_PATH_STYLE", tc.pathStyle)
