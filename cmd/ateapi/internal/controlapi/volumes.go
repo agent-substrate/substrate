@@ -122,6 +122,7 @@ func createActorVolumes(ctx context.Context, registry VolumePluginRegistry, scLi
 			Name:       actVolID,
 			Capacity:   specVol.GetExternalVolumeTemplate().GetCapacity(),
 			Parameters: sc.Parameters,
+			DriverName: sc.Provisioner,
 		})
 		if volErr != nil {
 			return resultVolumes, apierror.Internal("failed to create volume %q: %v", specVol.GetName(), volErr)

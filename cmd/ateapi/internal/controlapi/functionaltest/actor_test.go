@@ -1693,7 +1693,11 @@ func (f *partialFailVolumePlugin) CreateVolume(ctx context.Context, req volume.C
 	if strings.HasSuffix(req.Name, "fail-vol2") {
 		return volume.CreateVolumeResponse{}, fmt.Errorf("simulated volume creation failure")
 	}
-	return volume.CreateVolumeResponse{VolumeID: "storage-" + req.Name, VolumeContext: req.Parameters}, nil
+	return volume.CreateVolumeResponse{
+		VolumeID:                "storage-" + req.Name,
+		VolumeContext:           req.Parameters,
+		ContentSourceSnapshotID: req.SourceSnapshotID,
+	}, nil
 }
 
 func (f *partialFailVolumePlugin) AttachVolume(ctx context.Context, req volume.AttachVolumeRequest) (volume.AttachVolumeResponse, error) {
@@ -1834,7 +1838,11 @@ func (r *retrySuccessVolumePlugin) CreateVolume(ctx context.Context, req volume.
 			return volume.CreateVolumeResponse{}, fmt.Errorf("simulated temporary volume creation failure")
 		}
 	}
-	return volume.CreateVolumeResponse{VolumeID: "storage-" + req.Name, VolumeContext: req.Parameters}, nil
+	return volume.CreateVolumeResponse{
+		VolumeID:                "storage-" + req.Name,
+		VolumeContext:           req.Parameters,
+		ContentSourceSnapshotID: req.SourceSnapshotID,
+	}, nil
 }
 
 func (r *retrySuccessVolumePlugin) AttachVolume(ctx context.Context, req volume.AttachVolumeRequest) (volume.AttachVolumeResponse, error) {

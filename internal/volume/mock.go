@@ -65,7 +65,11 @@ func (p *MockVolumePlugin) DriverName(ctx context.Context) (string, error) {
 func (p *MockVolumePlugin) CreateVolume(ctx context.Context, req CreateVolumeRequest) (CreateVolumeResponse, error) {
 	volumeID := "mock-vol-" + req.Name
 	slog.InfoContext(ctx, "MockVolumePlugin.CreateVolume", slog.String("name", req.Name), slog.String("capacity", req.Capacity), slog.String("volumeID", volumeID))
-	return CreateVolumeResponse{VolumeID: volumeID, VolumeContext: req.Parameters}, nil
+	return CreateVolumeResponse{
+		VolumeID:                volumeID,
+		VolumeContext:           req.Parameters,
+		ContentSourceSnapshotID: req.SourceSnapshotID,
+	}, nil
 }
 
 // DeleteVolume simulates volume deletion.
@@ -85,6 +89,41 @@ func (p *MockVolumePlugin) AttachVolume(ctx context.Context, req AttachVolumeReq
 func (p *MockVolumePlugin) DetachVolume(ctx context.Context, volumeID string, node string) error {
 	slog.InfoContext(ctx, "MockVolumePlugin.DetachVolume", slog.String("volumeID", volumeID), slog.String("node", node))
 	return nil
+}
+
+// CreateSnapshot simulates snapshotting a volume. Like the other control-plane
+// methods it keeps no state, so the handle is derived from the request and the
+// snapshot is immediately ready.
+func (p *MockVolumePlugin) CreateSnapshot(ctx context.Context, req CreateSnapshotRequest) (Snapshot, error) {
+	snapshotID := "mock-snap-" + req.Name
+	slog.InfoContext(ctx, "MockVolumePlugin.CreateSnapshot", slog.String("name", req.Name), slog.String("sourceVolumeID", req.SourceVolumeID), slog.String("snapshotID", snapshotID))
+	return Snapshot{
+		SnapshotID:     snapshotID,
+		SourceVolumeID: req.SourceVolumeID,
+		ReadyToUse:     true,
+	}, nil
+}
+
+// GetSnapshot reports any handle as present and ready. Being stateless, the
+// mock cannot tell a handle it issued from one it did not.
+func (p *MockVolumePlugin) GetSnapshot(ctx context.Context, snapshotID string) (Snapshot, bool, error) {
+	slog.InfoContext(ctx, "MockVolumePlugin.GetSnapshot", slog.String("snapshotID", snapshotID))
+	return Snapshot{
+		SnapshotID: snapshotID,
+		ReadyToUse: true,
+	}, true, nil
+}
+
+// DeleteSnapshot simulates releasing a snapshot.
+func (p *MockVolumePlugin) DeleteSnapshot(ctx context.Context, snapshotID string) error {
+	slog.InfoContext(ctx, "MockVolumePlugin.DeleteSnapshot", slog.String("snapshotID", snapshotID))
+	return nil
+}
+
+// ControllerCapabilities reports snapshot support, so that the mock exercises
+// the same paths a snapshot-capable driver does.
+func (p *MockVolumePlugin) ControllerCapabilities(ctx context.Context) (Capabilities, error) {
+	return Capabilities{CreateDeleteSnapshot: true, ListSnapshots: true}, nil
 }
 
 // MountVolume simulates mounting volume on the host.
