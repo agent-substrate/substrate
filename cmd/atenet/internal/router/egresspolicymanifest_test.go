@@ -18,6 +18,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"sigs.k8s.io/yaml"
 
@@ -203,9 +204,10 @@ func extProcOf(chain node) (node, int, []node) {
 	return child(filters[i], "typed_config"), i, filters
 }
 
-// Every ext_proc in the egress gateway fails closed, talks to the co-located
-// sidecar, asks for the attributes its leg reads, and can rewrite nothing that
-// routes. A missing attribute reads as "absent" and denies every request.
+// Every ext_proc in the egress gateway fails closed, waits as long as Envoy
+// allows for the co-located sidecar, asks for the attributes its leg reads,
+// and can rewrite nothing that routes. A missing attribute reads as "absent"
+// and denies every request.
 func TestEgressManifestsExtProcFilters(t *testing.T) {
 	required := map[string][]string{
 		extproc.EgressFilterChainName:          {extproc.FilterChainNameAttribute},
@@ -231,6 +233,16 @@ func TestEgressManifestsExtProcFilters(t *testing.T) {
 				}
 				if allow, _ := cfg["failure_mode_allow"].(bool); allow {
 					t.Errorf("chain %q ext_proc has failure_mode_allow: true; a sidecar outage would let every request through", name)
+				}
+				// Past message_timeout (200ms when unset) Envoy answers 504, so
+				// a slow ateapi would fail requests instead of slowing them.
+				for key, value := range map[string]string{
+					"message_timeout":      str(cfg, "message_timeout"),
+					"grpc_service.timeout": str(child(cfg, "grpc_service"), "timeout"),
+				} {
+					if d, err := time.ParseDuration(value); err != nil || d < time.Hour {
+						t.Errorf("chain %q ext_proc has %s %q, want Envoy's maximum of 1h", name, key, value)
+					}
 				}
 				if prefix := str(cfg, "stat_prefix"); prefix == "" {
 					t.Errorf("chain %q ext_proc has no stat_prefix; its failures would be indistinguishable from the other legs'", name)
