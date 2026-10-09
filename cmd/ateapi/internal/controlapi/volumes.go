@@ -29,9 +29,9 @@ import (
 	storagev1listers "k8s.io/client-go/listers/storage/v1"
 )
 
-// initialActorVolumes constructs the actor's volume objects before volume
+// initialExternalVolumes constructs the actor's volume objects before volume
 // creation. A volume has no storage volume ID until it is provisioned.
-func initialActorVolumes(ctx context.Context, scLister storagev1listers.StorageClassLister, template *ateapipb.ActorTemplate) ([]*ateapipb.ExternalVolume, error) {
+func initialExternalVolumes(ctx context.Context, scLister storagev1listers.StorageClassLister, template *ateapipb.ActorTemplate) ([]*ateapipb.ExternalVolume, error) {
 	if template == nil {
 		return nil, apierror.InvalidArgument("template is required")
 	}

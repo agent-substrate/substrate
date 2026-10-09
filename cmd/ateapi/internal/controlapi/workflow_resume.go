@@ -723,9 +723,8 @@ func (w *ActorWorkflow) ensureVolumesAttached(ctx context.Context, actor *ateapi
 	ctx, done := stepSpan(ctx, "AttachVolumes")
 	defer func() { err = done(err) }()
 
-	if !preview.IsEnabled(preview.GateExternalVolumes) {
-		markSkipped(ctx, "external volumes are disabled")
-		return nil, nil
+	if len(actor.GetStatus().GetExternalVolumes()) > 0 && !preview.IsEnabled(preview.GateExternalVolumes) {
+		return nil, fmt.Errorf("external volumes are not supported unless the ExternalVolumes preview gate is enabled")
 	}
 
 	node := worker.GetNodeName()
