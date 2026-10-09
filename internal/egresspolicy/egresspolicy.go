@@ -178,8 +178,9 @@ const (
 
 // EgressRule is a hostname pattern and the mode applied when it matches first.
 type EgressRule struct {
-	Pattern string
-	Mode    EgressMode
+	Pattern    string
+	Mode       EgressMode
+	HasEffects bool
 }
 
 // EgressRules returns the http, https, and tls_passthrough rules for a dialed
@@ -195,11 +196,14 @@ func (p *Policy) EgressRules(port uint16) []EgressRule {
 			continue
 		}
 		var mode EgressMode
+		var hasEffects bool
 		switch rule.protocol {
 		case protocolHTTP:
 			mode = EgressModeCleartext
+			hasEffects = len(rule.effects.GetReplaceHeaders()) > 0
 		case protocolHTTPS:
 			mode = EgressModeMITM
+			hasEffects = len(rule.effects.GetReplaceHeaders()) > 0
 		case protocolTLSPassthrough:
 			mode = EgressModePassthrough
 		default:
@@ -207,7 +211,7 @@ func (p *Policy) EgressRules(port uint16) []EgressRule {
 		}
 		for _, pattern := range rule.patterns {
 			entries = append(entries, ranked{
-				rule: EgressRule{Pattern: pattern.String(), Mode: mode},
+				rule: EgressRule{Pattern: pattern.String(), Mode: mode, HasEffects: hasEffects},
 				rank: matchRank{name: pattern.rank(), port: rule.portRank()},
 			})
 		}

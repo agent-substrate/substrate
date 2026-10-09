@@ -165,6 +165,7 @@ mod tests {
         .map(|(pattern, mode)| EgressRule {
           pattern: pattern.to_string(),
           mode: mode.to_string(),
+          has_effects: false,
         })
         .collect(),
     }

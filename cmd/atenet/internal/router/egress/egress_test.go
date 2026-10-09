@@ -397,6 +397,28 @@ func TestConnectLegOpensForAnyRules(t *testing.T) {
 		},
 		{name: "https rule on another port", policy: httpsPolicy("api.example.com"), dialed: "93.184.216.34:8443"},
 		{name: "https rule on the dialed port", policy: httpsPolicyOnPorts(ports(8443), "api.example.com"), dialed: "93.184.216.34:8443", want: mitm("api.example.com")},
+		{
+			name: "http and https rules with effects set has_effects",
+			policy: &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{
+				{Http: &ateapipb.HTTPRule{
+					Hostnames: []string{"http-effects.example.com"},
+					Ports:     ports(443),
+					Effects: &ateapipb.HttpRuleEffects{
+						ReplaceHeaders: []*ateapipb.CredentialHeader{{Header: "authorization", CredentialUri: "ate-secret://k8s/default/token"}},
+					},
+				}},
+				{Https: &ateapipb.HTTPSRule{
+					Hostnames: []string{"https-effects.example.com"},
+					Effects: &ateapipb.HttpRuleEffects{
+						ReplaceHeaders: []*ateapipb.CredentialHeader{{Header: "authorization", CredentialUri: "ate-secret://k8s/default/token"}},
+					},
+				}},
+			}},
+			want: []egresspolicy.EgressRule{
+				{Pattern: "http-effects.example.com", Mode: egresspolicy.EgressModeCleartext, HasEffects: true},
+				{Pattern: "https-effects.example.com", Mode: egresspolicy.EgressModeMITM, HasEffects: true},
+			},
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -437,8 +459,9 @@ func egressRulesOf(t *testing.T, res extproc.Result) []egresspolicy.EgressRule {
 	for i, v := range listVal.GetValues() {
 		fields := v.GetStructValue().GetFields()
 		out[i] = egresspolicy.EgressRule{
-			Pattern: fields[extproc.EgressRulePatternKey].GetStringValue(),
-			Mode:    egresspolicy.EgressMode(fields[extproc.EgressRuleModeKey].GetStringValue()),
+			Pattern:    fields[extproc.EgressRulePatternKey].GetStringValue(),
+			Mode:       egresspolicy.EgressMode(fields[extproc.EgressRuleModeKey].GetStringValue()),
+			HasEffects: fields[extproc.EgressRuleHasEffectsKey].GetBoolValue(),
 		}
 	}
 	return out

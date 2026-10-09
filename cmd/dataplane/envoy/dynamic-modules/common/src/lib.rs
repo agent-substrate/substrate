@@ -41,6 +41,8 @@ pub struct EgressPolicy {
 pub struct EgressRule {
   pub pattern: String,
   pub mode: String,
+  #[serde(default)]
+  pub has_effects: bool,
 }
 
 /// Reports whether a normalized `hostname` matches `pattern`. Must agree with
@@ -67,18 +69,6 @@ pub fn pattern_matches(pattern: &str, hostname: &str) -> bool {
 #[cfg(test)]
 mod tests {
   use super::*;
-
-  fn policy(rules: &[(&str, &str)]) -> EgressPolicy {
-    EgressPolicy {
-      rules: rules
-        .iter()
-        .map(|(pattern, mode)| EgressRule {
-          pattern: pattern.to_string(),
-          mode: mode.to_string(),
-        })
-        .collect(),
-    }
-  }
 
   #[test]
   fn test_pattern_matches() {
@@ -116,10 +106,26 @@ mod tests {
   #[test]
   fn test_policy_json_shape() {
     let parsed: EgressPolicy = serde_json::from_str(
-      r#"{"rules":[{"pattern":"api.example.com","mode":"mitm"},{"pattern":"*","mode":"mitm"}]}"#,
+      r#"{"rules":[{"pattern":"api.example.com","mode":"mitm","has_effects":true},{"pattern":"*","mode":"mitm","has_effects":false}]}"#,
     )
     .unwrap();
-    assert_eq!(parsed, policy(&[("api.example.com", "mitm"), ("*", "mitm")]));
+    assert_eq!(
+      parsed,
+      EgressPolicy {
+        rules: vec![
+          EgressRule {
+            pattern: "api.example.com".to_string(),
+            mode: "mitm".to_string(),
+            has_effects: true,
+          },
+          EgressRule {
+            pattern: "*".to_string(),
+            mode: "mitm".to_string(),
+            has_effects: false,
+          },
+        ],
+      }
+    );
     assert!(serde_json::from_str::<EgressPolicy>(r#"{"allowed_snis":["api.example.com"]}"#).is_err());
   }
 }

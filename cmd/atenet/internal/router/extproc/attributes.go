@@ -60,15 +60,17 @@ const (
 	EgressDialedPortKey = "dialed_port"
 	// EgressPolicyMetadataNamespace holds the egress rules returned on CONNECT.
 	// The outer chain copies it as JSON into filter state of the same name for
-	// the egress-policy module: {"rules": [{"pattern": ..., "mode": ...}]},
+	// the egress-policy module:
+	// {"rules": [{"pattern": ..., "mode": ..., "has_effects": ...}]},
 	// most specific first.
 	EgressPolicyMetadataNamespace = "dev.ate.policy.egress"
 	// EgressRulesKey, under EgressPolicyMetadataNamespace, is the ordered
-	// list of rules; EgressRulePatternKey and EgressRuleModeKey are the
-	// fields of each.
-	EgressRulesKey       = "rules"
-	EgressRulePatternKey = "pattern"
-	EgressRuleModeKey    = "mode"
+	// list of rules; EgressRulePatternKey, EgressRuleModeKey, and
+	// EgressRuleHasEffectsKey are the fields of each.
+	EgressRulesKey          = "rules"
+	EgressRulePatternKey    = "pattern"
+	EgressRuleModeKey       = "mode"
+	EgressRuleHasEffectsKey = "has_effects"
 
 	// EgressFilterChainFilterStateKey holds the egress-policy module's verdict:
 	// the filter chain name the egress manifest's matcher selects on.

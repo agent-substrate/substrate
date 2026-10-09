@@ -274,6 +274,8 @@ envoy_dynamicmodulescustom_ate_egress_cache_miss{} 1
 envoy_dynamicmodulescustom_ate_egress_allowed{} 3
 # TYPE envoy_dynamicmodulescustom_ate_egress_rejected counter
 envoy_dynamicmodulescustom_ate_egress_rejected{} 2
+# TYPE envoy_dynamicmodulescustom_ate_egress_has_effects counter
+envoy_dynamicmodulescustom_ate_egress_has_effects{} 5
 `
 
 func TestEgressExtProcStreamCounts(t *testing.T) {
@@ -388,6 +390,37 @@ func TestEgressPolicyVerdictCounts(t *testing.T) {
 			gotAllowed, gotRejected := EgressPolicyVerdictCounts(tt.scrape)
 			if gotAllowed != tt.wantAllowed || gotRejected != tt.wantRejected {
 				t.Errorf("EgressPolicyVerdictCounts() = (%d, %d), want (%d, %d)", gotAllowed, gotRejected, tt.wantAllowed, tt.wantRejected)
+			}
+		})
+	}
+}
+
+func TestEgressPolicyHasEffectsCount(t *testing.T) {
+	tests := []struct {
+		name   string
+		scrape string
+		want   int
+	}{
+		{
+			name:   "single replica",
+			scrape: sampleEgressEnvoyScrape,
+			want:   5,
+		},
+		{
+			name:   "summed across replicas",
+			scrape: sampleEgressEnvoyScrape + sampleEgressEnvoyScrape,
+			want:   10,
+		},
+		{
+			name:   "empty scrape",
+			scrape: "",
+			want:   0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := EgressPolicyHasEffectsCount(tt.scrape); got != tt.want {
+				t.Errorf("EgressPolicyHasEffectsCount() = %d, want %d", got, tt.want)
 			}
 		})
 	}

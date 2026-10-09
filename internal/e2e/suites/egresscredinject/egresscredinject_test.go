@@ -113,6 +113,12 @@ func TestActorEgressCredentialInjection(t *testing.T) {
 	}
 	defer rc.Close()
 
+	beforeScrape, err := e2e.ScrapeEgressEnvoyMetrics(ctx)
+	if err != nil {
+		t.Fatalf("scraping egress Envoy metrics before requests: %v", err)
+	}
+	hasEffectsBefore := e2e.EgressPolicyHasEffectsCount(beforeScrape)
+
 	for _, origin := range []string{echoOrigin, echoOriginPlain} {
 		t.Run(origin, func(t *testing.T) {
 			// The upstream must receive the policy's credential instead of the
@@ -165,6 +171,18 @@ func TestActorEgressCredentialInjection(t *testing.T) {
 				}
 			})
 		}
+	}
+
+	afterScrape, err := e2e.ScrapeEgressEnvoyMetrics(ctx)
+	if err != nil {
+		t.Fatalf("scraping egress Envoy metrics after requests: %v", err)
+	}
+	hasEffectsAfter := e2e.EgressPolicyHasEffectsCount(afterScrape)
+	// 10 requests total: 2 echo origins (HTTPS and HTTP) × 2 requests each (with
+	// and without the placeholder header) + 3 fail-closed origins × 2 protocols
+	// (HTTPS and HTTP).
+	if got := hasEffectsAfter - hasEffectsBefore; got != 10 {
+		t.Fatalf("ate_egress.has_effects incremented by %d, want 10 (before=%d, after=%d)", got, hasEffectsBefore, hasEffectsAfter)
 	}
 }
 

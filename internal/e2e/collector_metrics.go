@@ -62,6 +62,9 @@ const (
 	// EgressRejectedCounter is the Envoy dynamic-module counter name for
 	// rejected requests in atenet-egress.
 	EgressRejectedCounter = "ate_egress_rejected"
+	// EgressHasEffectsCounter is the Envoy dynamic-module counter name for
+	// requests matching a rule that has effects in atenet-egress.
+	EgressHasEffectsCounter = "ate_egress_has_effects"
 )
 
 // PlatformMetricPrefixes are the Prometheus metric-name prefixes (OTLP dots
@@ -305,6 +308,30 @@ func EgressPolicyVerdictCounts(scrape string) (allowed, rejected int) {
 		}
 	}
 	return allowed, rejected
+}
+
+// EgressPolicyHasEffectsCount returns the count of requests matching a rule
+// with effects from an Envoy /stats/prometheus scrape, summed across instances.
+func EgressPolicyHasEffectsCount(scrape string) int {
+	var count int
+	for _, line := range strings.Split(scrape, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		name := strings.TrimSuffix(metricNameFromLine(line), "_total")
+		fields := strings.Fields(line)
+		v, err := strconv.ParseFloat(fields[len(fields)-1], 64)
+		if err != nil {
+			continue
+		}
+		switch name {
+		case "envoy_dynamicmodulescustom_" + EgressHasEffectsCounter,
+			"envoy_" + EgressHasEffectsCounter:
+			count += int(v)
+		}
+	}
+	return count
 }
 
 // MissingPlatformMetrics returns the prefixes with no matching series in the
