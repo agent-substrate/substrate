@@ -44,6 +44,18 @@ pub const ATE_POLICY_EGRESS_INNER: &[u8] = b"dev.ate.policy.egress.inner";
 /// current request.
 pub const ATE_POLICY_EGRESS_SKIP_CALLOUT: &[u8] = b"dev.ate.policy.egress.skip_callout";
 
+/// Dynamic metadata namespace for egress routing decisions.
+pub const EGRESS_METADATA_NAMESPACE: &str = "dev.ate.egress";
+
+/// Dynamic metadata key for the egress dial mode.
+pub const EGRESS_DIAL_KEY: &str = "dial";
+
+/// Dynamic metadata value for dialing by hostname.
+pub const EGRESS_DIAL_NAME: &str = "name";
+
+/// Dynamic metadata key for the hostname to dial.
+pub const EGRESS_DIAL_HOST_KEY: &str = "host";
+
 /// Counter name for egress policy cache hits.
 pub const CACHE_HIT_COUNTER_NAME: &str = "ate_egress.cache_hit";
 
@@ -258,6 +270,30 @@ impl EgressPolicyPepFilter {
     cached_ptr.map(|ptr| unsafe { &*ptr })
   }
 
+  fn apply_matched_rule<EHF: EnvoyHttpFilter>(
+    &self,
+    envoy_filter: &mut EHF,
+    rule: &EgressRule,
+    hostname: &str,
+  ) {
+    if rule.has_effects {
+      let _ = envoy_filter.increment_counter(self.has_effects_counter, 1);
+    } else {
+      let _ = envoy_filter.set_filter_state_bytes(ATE_POLICY_EGRESS_SKIP_CALLOUT, b"true");
+      envoy_filter.set_dynamic_metadata_string(
+        EGRESS_METADATA_NAMESPACE,
+        EGRESS_DIAL_KEY,
+        EGRESS_DIAL_NAME,
+      );
+      envoy_filter.set_dynamic_metadata_string(
+        EGRESS_METADATA_NAMESPACE,
+        EGRESS_DIAL_HOST_KEY,
+        hostname,
+      );
+      envoy_filter.clear_route_cache();
+    }
+  }
+
   /// Enforces the egress policy on the current HTTP request.
   fn enforce_egress_policy<EHF: EnvoyHttpFilter>(
     &self,
@@ -294,11 +330,7 @@ impl EgressPolicyPepFilter {
           .iter()
           .find(|rule| rule.mode == EGRESS_MODE_MITM && pattern_matches(&rule.pattern, hostname))
         {
-          if rule.has_effects {
-            let _ = envoy_filter.increment_counter(self.has_effects_counter, 1);
-          } else {
-            let _ = envoy_filter.set_filter_state_bytes(ATE_POLICY_EGRESS_SKIP_CALLOUT, b"true");
-          }
+          self.apply_matched_rule(envoy_filter, rule, hostname);
         }
       }
     } else {
@@ -308,22 +340,21 @@ impl EgressPolicyPepFilter {
         .and_then(|auth| std::str::from_utf8(authority_hostname(auth.as_slice())).ok())
         .and_then(|host| {
           let lower = host.to_ascii_lowercase();
-          let hostname = lower.strip_suffix('.').unwrap_or(&lower);
+          let hostname = lower.strip_suffix('.').unwrap_or(&lower).to_owned();
           policy
             .policy
             .rules
             .iter()
-            .find(|rule| rule.mode == EGRESS_MODE_CLEARTEXT && pattern_matches(&rule.pattern, hostname))
+            .find(|rule| {
+              rule.mode == EGRESS_MODE_CLEARTEXT && pattern_matches(&rule.pattern, &hostname)
+            })
+            .map(|rule| (rule, hostname))
         });
-      let Some(rule) = matched_rule else {
+      let Some((rule, hostname)) = matched_rule else {
         envoy_filter.send_response(403, &[], Some(b"egress denied"), None);
         return envoy_dynamic_module_type_on_http_filter_request_headers_status::StopIteration;
       };
-      if rule.has_effects {
-        let _ = envoy_filter.increment_counter(self.has_effects_counter, 1);
-      } else {
-        let _ = envoy_filter.set_filter_state_bytes(ATE_POLICY_EGRESS_SKIP_CALLOUT, b"true");
-      }
+      self.apply_matched_rule(envoy_filter, rule, &hostname);
     }
     envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue
   }
@@ -630,6 +661,32 @@ mod tests {
     assert!(filter.get_or_create_cached_egress_policy(&mut mock_filter).is_none());
   }
 
+  fn expect_skip_callout(mock_filter: &mut MockEnvoyHttpFilter, want_host: &'static str) {
+    mock_filter
+      .expect_set_filter_state_bytes()
+      .withf(|key, val| key == ATE_POLICY_EGRESS_SKIP_CALLOUT && val == b"true")
+      .times(1)
+      .returning(|_, _| true);
+    mock_filter
+      .expect_set_dynamic_metadata_string()
+      .withf(|ns, key, val| {
+        ns == EGRESS_METADATA_NAMESPACE && key == EGRESS_DIAL_KEY && val == EGRESS_DIAL_NAME
+      })
+      .times(1)
+      .returning(|_, _, _| ());
+    mock_filter
+      .expect_set_dynamic_metadata_string()
+      .withf(move |ns, key, val| {
+        ns == EGRESS_METADATA_NAMESPACE && key == EGRESS_DIAL_HOST_KEY && val == want_host
+      })
+      .times(1)
+      .returning(|_, _, _| ());
+    mock_filter
+      .expect_clear_route_cache()
+      .times(1)
+      .returning(|| ());
+  }
+
   #[test]
   fn test_on_request_headers_populates_inner_filter_state_when_missing() {
     let config = EgressPolicyPepFilterConfig {
@@ -686,11 +743,7 @@ mod tests {
       .withf(|key| key == ":authority")
       .times(1)
       .returning(|_| Some(EnvoyBuffer::new(b"api.example.com")));
-    mock_filter
-      .expect_set_filter_state_bytes()
-      .withf(|key, val| key == ATE_POLICY_EGRESS_SKIP_CALLOUT && val == b"true")
-      .times(1)
-      .returning(|_, _| true);
+    expect_skip_callout(&mut mock_filter, "api.example.com");
     mock_filter
       .expect_increment_counter()
       .withf(|id, value| *id == EnvoyCounterId(3) && *value == 1)
@@ -790,11 +843,7 @@ mod tests {
       .withf(|key| key == ":authority")
       .times(1)
       .returning(|_| Some(EnvoyBuffer::new(b"api.example.com")));
-    mock_filter
-      .expect_set_filter_state_bytes()
-      .withf(|key, val| key == ATE_POLICY_EGRESS_SKIP_CALLOUT && val == b"true")
-      .times(1)
-      .returning(|_, _| true);
+    expect_skip_callout(&mut mock_filter, "api.example.com");
     mock_filter
       .expect_increment_counter()
       .withf(|id, value| *id == EnvoyCounterId(3) && *value == 1)
@@ -891,11 +940,7 @@ mod tests {
       .withf(|key| key == ":authority")
       .times(1)
       .returning(|_| Some(EnvoyBuffer::new(b"api.example.com")));
-    mock_filter
-      .expect_set_filter_state_bytes()
-      .withf(|key, val| key == ATE_POLICY_EGRESS_SKIP_CALLOUT && val == b"true")
-      .times(1)
-      .returning(|_, _| true);
+    expect_skip_callout(&mut mock_filter, "api.example.com");
     mock_filter.expect_send_response().times(0);
 
     assert_eq!(
@@ -940,6 +985,8 @@ mod tests {
       .times(1)
       .returning(|_, _| Ok(()));
     mock_filter.expect_set_filter_state_bytes().times(0);
+    mock_filter.expect_set_dynamic_metadata_string().times(0);
+    mock_filter.expect_clear_route_cache().times(0);
     mock_filter.expect_send_response().times(0);
 
     assert_eq!(
@@ -980,11 +1027,7 @@ mod tests {
       .withf(|key| key == ":authority")
       .times(1)
       .returning(|_| Some(EnvoyBuffer::new(b"api.example.com:1")));
-    mock_filter
-      .expect_set_filter_state_bytes()
-      .withf(|key, val| key == ATE_POLICY_EGRESS_SKIP_CALLOUT && val == b"true")
-      .times(1)
-      .returning(|_, _| true);
+    expect_skip_callout(&mut mock_filter, "api.example.com");
     mock_filter.expect_send_response().times(0);
 
     assert_eq!(
@@ -1050,10 +1093,10 @@ mod tests {
       },
     };
 
-    for authority in [
-      b"api.example.com".as_slice(),
-      b"API.Example.COM.:8080".as_slice(),
-      b"exact.example.org".as_slice(),
+    for (authority, want_host) in [
+      (b"api.example.com".as_slice(), "api.example.com"),
+      (b"API.Example.COM.:8080".as_slice(), "api.example.com"),
+      (b"exact.example.org".as_slice(), "exact.example.org"),
     ] {
       let mut mock_filter = MockEnvoyHttpFilter::new();
       mock_filter
@@ -1066,11 +1109,7 @@ mod tests {
         .withf(|key| key == ":authority")
         .times(1)
         .returning(move |_| Some(EnvoyBuffer::new(authority)));
-      mock_filter
-        .expect_set_filter_state_bytes()
-        .withf(|key, val| key == ATE_POLICY_EGRESS_SKIP_CALLOUT && val == b"true")
-        .times(1)
-        .returning(|_, _| true);
+      expect_skip_callout(&mut mock_filter, want_host);
       mock_filter.expect_send_response().times(0);
 
       assert_eq!(
@@ -1111,6 +1150,8 @@ mod tests {
       .times(1)
       .returning(|_, _| Ok(()));
     mock_filter.expect_set_filter_state_bytes().times(0);
+    mock_filter.expect_set_dynamic_metadata_string().times(0);
+    mock_filter.expect_clear_route_cache().times(0);
     mock_filter.expect_send_response().times(0);
 
     assert_eq!(
