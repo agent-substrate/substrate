@@ -233,7 +233,7 @@ blind_spots:
     brief: >
       This component has no metrics. A relying party that cannot fetch the
       discovery document or key set sees only failed token verification; check
-      the server's readiness and its "Cannot publish the actor JWT keys" logs.
+      the server's "Cannot publish the actor JWT keys" logs.
   - area: golden snapshot pipeline
     code: cmd/ateapi/internal/controlapi/template_reconciler.go
     brief: The template reconciler in ate-api has no instruments. Thus nothing measures a build of a golden image.

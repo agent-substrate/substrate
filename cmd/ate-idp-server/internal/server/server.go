@@ -17,7 +17,6 @@
 package server
 
 import (
-	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -25,7 +24,6 @@ import (
 	"path"
 	"strconv"
 	"strings"
-	"sync"
 
 	"github.com/agent-substrate/substrate/internal/localjwtauthority"
 	"github.com/agent-substrate/substrate/internal/oidcdiscovery"
@@ -40,23 +38,17 @@ type KeySource interface {
 }
 
 // Server serves the discovery document and JWK set under the issuer's path,
-// plus /healthz and /readyz. It builds both documents from its KeySource on
-// every request. When that fails it serves the last documents it built, and
-// until it has built any it reports not ready and answers document requests
-// with 503.
+// plus /healthz. It builds both documents from its KeySource on every request
+// and answers 500 when that fails.
 type Server struct {
 	issuer        string
 	discoveryPath string
 	jwksPath      string
 	keys          KeySource
-
-	mu         sync.Mutex
-	discovery  []byte
-	jwks       []byte
-	lastErrMsg string
 }
 
-// New returns a Server that publishes keys for issuer.
+// New returns a Server that publishes keys for issuer. It fails if the keys
+// cannot be published.
 func New(issuer string, keys KeySource) (*Server, error) {
 	if err := oidcdiscovery.ValidateIssuer(issuer); err != nil {
 		return nil, err
@@ -65,36 +57,35 @@ func New(issuer string, keys KeySource) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Clients and proxies may normalize dot segments, so routes match the
-	// cleaned path.
-	base := strings.TrimSuffix(path.Clean("/"+u.Path), "/")
-	return &Server{
+	// The escaped path keeps characters such as { from reading as pattern
+	// wildcards. Routes use the cleaned path because ServeMux redirects
+	// requests with dot segments to it.
+	base := strings.TrimSuffix(path.Clean("/"+u.EscapedPath()), "/")
+	s := &Server{
 		issuer:        issuer,
 		discoveryPath: base + wellKnownPath,
 		jwksPath:      base + oidcdiscovery.JWKSPath,
 		keys:          keys,
-	}, nil
+	}
+	if _, _, err := s.build(); err != nil {
+		return nil, fmt.Errorf("cannot publish the keys: %w", err)
+	}
+	return s, nil
 }
 
-// documents returns the discovery document and JWK set for the current keys,
-// or the last ones built if the keys cannot be published. Both are nil until a
-// build succeeds.
-func (s *Server) documents(ctx context.Context) (discovery, jwks []byte) {
-	discovery, jwks, err := s.build()
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if err != nil {
-		// A failing source fails every request, so log each distinct
-		// failure once.
-		if msg := err.Error(); msg != s.lastErrMsg {
-			slog.WarnContext(ctx, "Cannot publish the actor JWT keys; serving the last good key set", slog.Any("err", err))
-			s.lastErrMsg = msg
-		}
-		return s.discovery, s.jwks
-	}
-	s.discovery, s.jwks, s.lastErrMsg = discovery, jwks, ""
-	return discovery, jwks
+// Register adds the server's routes to mux.
+func (s *Server) Register(mux *http.ServeMux) {
+	mux.HandleFunc("GET "+s.discoveryPath, func(w http.ResponseWriter, r *http.Request) {
+		discovery, _, err := s.build()
+		serveDocument(w, r, discovery, err)
+	})
+	mux.HandleFunc("GET "+s.jwksPath, func(w http.ResponseWriter, r *http.Request) {
+		_, jwks, err := s.build()
+		serveDocument(w, r, jwks, err)
+	})
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
 }
 
 func (s *Server) build() (discovery, jwks []byte, err error) {
@@ -115,36 +106,10 @@ func (s *Server) build() (discovery, jwks []byte, err error) {
 	return discovery, jwks, nil
 }
 
-func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	switch route := path.Clean(r.URL.Path); route {
-	case "/healthz":
-		w.WriteHeader(http.StatusOK)
-	case "/readyz":
-		if _, jwks := s.documents(r.Context()); jwks == nil {
-			http.Error(w, "key set not loaded", http.StatusServiceUnavailable)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-	case s.discoveryPath, s.jwksPath:
-		if r.Method != http.MethodGet && r.Method != http.MethodHead {
-			w.Header().Set("Allow", "GET, HEAD")
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		discovery, jwks := s.documents(r.Context())
-		if route == s.discoveryPath {
-			serveDocument(w, r, discovery)
-		} else {
-			serveDocument(w, r, jwks)
-		}
-	default:
-		http.NotFound(w, r)
-	}
-}
-
-func serveDocument(w http.ResponseWriter, r *http.Request, doc []byte) {
-	if doc == nil {
-		http.Error(w, "key set not loaded", http.StatusServiceUnavailable)
+func serveDocument(w http.ResponseWriter, r *http.Request, doc []byte, err error) {
+	if err != nil {
+		slog.ErrorContext(r.Context(), "Cannot publish the actor JWT keys", slog.Any("err", err))
+		http.Error(w, "cannot publish the key set", http.StatusInternalServerError)
 		return
 	}
 	h := w.Header()
