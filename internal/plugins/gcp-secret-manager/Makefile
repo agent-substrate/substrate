@@ -35,10 +35,14 @@ test:
 fmt:
 	$(GOFMT) -w .
 
-.PHONY: verify
-verify:
+.PHONY: lint
+lint:
 	@out="$$($(GOFMT) -l .)"; if [ -n "$$out" ]; then echo "gofmt needed on:"; echo "$$out"; exit 1; fi
 	go vet ./...
+	../../../hack/run-tool.sh golangci-lint run --config ../../../.golangci.yaml ./...
+
+.PHONY: verify
+verify:
 	go mod tidy -diff
 
 # Builds the image and applies the manifests to the current kubectl context.

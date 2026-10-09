@@ -172,13 +172,23 @@ verify-fmt:
 
 .PHONY: lint
 
-# Runs golangci-lint and fails on any reported issues.
+# Runs all linters and fails on any reported issues.
 lint:
+	@./hack/verify/gofmt.sh
 	@./hack/verify/golangci-lint.sh
+	@./hack/verify/kube-api-linter.sh
+	@./hack/verify/proto-fmt.sh
+	@./hack/verify/shellcheck.sh
+	@$(MAKE) -C internal/plugins/gcp-secret-manager lint
 
-.PHONY: verify
-verify: test
-	bash hack/verify-all.sh
+.PHONY: verify verify-checks
+
+# Runs non-lint repository checks.
+verify-checks:
+	bash hack/verify-all.sh --skip-lint
+	@$(MAKE) -C internal/plugins/gcp-secret-manager verify
+
+verify: test lint verify-checks
 
 .PHONY: clean
 clean:
