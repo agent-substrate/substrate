@@ -61,6 +61,15 @@ func buildCreateClusterRequest(parent string, cfg *Config) *containerpb.CreateCl
 	}
 	nodeConfig := &containerpb.NodeConfig{
 		MachineType: cfg.MachineType,
+		LinuxNodeConfig: &containerpb.LinuxNodeConfig{
+			Sysctls: map[string]string{
+				"net.ipv4.neigh.default.gc_thresh1": "4096",
+				"net.ipv4.neigh.default.gc_thresh2": "8192",
+				"net.ipv4.neigh.default.gc_thresh3": "16384",
+				"fs.inotify.max_user_instances":     "65536",
+				"fs.inotify.max_user_watches":       "1048576",
+			},
+		},
 	}
 	if cfg.EnableNestedVirtualization {
 		nodeConfig.AdvancedMachineFeatures = &containerpb.AdvancedMachineFeatures{
