@@ -36,14 +36,15 @@ package main
 // removed at teardown — after CleanupSandboxState has dropped the overlay
 // mounts that use it.
 //
-// Snapshots: the upper does not ride in guest memory, so a MEMORY snapshot
-// ships it as one tar per container (rootfsUpperTarFile), taken while the
-// guest is paused (the share is write-through, so a paused guest's completed
-// writes are already in the upper). Each tar holds only the contents of that
-// container's upperdir: ateom creates the directory layout itself on restore,
-// so nothing in the snapshot decides a path ateom later mounts or wipes. A
-// VOLUMES snapshot deliberately excludes rootfs state: the workload cold-starts
-// on restore.
+// Snapshots: the upper does not ride in guest memory, so ROOTFS and MEMORY
+// snapshots ship it as one tar per container (rootfsUpperTarFile), taken while
+// the guest is paused (the share is write-through, so a paused guest's
+// completed writes are already in the upper). Each tar holds only the contents
+// of that container's upperdir: ateom creates the directory layout itself on
+// restore, so nothing in the snapshot decides a path ateom later mounts or
+// wipes. A ROOTFS restore puts the upper back and cold-boots on it; a VOLUMES
+// snapshot deliberately excludes rootfs state, so the workload cold-starts on a
+// pristine upper.
 
 import (
 	"context"

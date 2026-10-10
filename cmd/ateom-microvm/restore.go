@@ -95,6 +95,9 @@ func newReseedNonce() ([]byte, error) {
 //
 //   - MEMORY: relaunch cloud-hypervisor from the snapshot and resume the guest
 //     (restoreMemoryFidelity).
+//   - ROOTFS: as VOLUMES, but each container's rootfs upper is re-materialized
+//     from its tar first, so the cold boot sees the rootfs writes the actor had
+//     made.
 //   - VOLUMES: there is no guest to resume — re-materialize the durable-dir
 //     volumes and cold-boot the actor, which starts its containers afresh from
 //     the OCI image.
@@ -151,10 +154,10 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		return nil, err
 	}
 	// Publish attribution before restore, so a stats read during it is
-	// attributed. A VOLUMES restore cold-boots, so its CPU counts from zero; the other
-	// scopes resume the guest's counters, so theirs counts from the first
-	// reading.
-	resumesGuest := req.GetFidelity() != ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
+	// attributed. Only a MEMORY restore resumes the guest and its CPU counters,
+	// so only it counts from the first reading; the lower fidelities cold-boot
+	// a fresh guest whose CPU counts from zero.
+	resumesGuest := req.GetFidelity() == ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
 	if _, err := s.hostActor(ctx, attribution, resumesGuest); err != nil {
 		return nil, err
 	}
@@ -168,8 +171,8 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	}()
 
 	// Restore the durable-dir volumes before anything can observe them: for MEMORY
-	// that means before the share's virtiofsd starts, for VOLUMES before the workload
-	// cold-starts.
+	// that means before the share's virtiofsd starts, for the lower fidelities
+	// before the workload cold-starts.
 	if hasDurableVolumes(p.containers) {
 		if err := untarDurableVolumes(durableDir, restoreDir, durableVolumeNames(p.containers)); err != nil {
 			return nil, err
@@ -181,6 +184,26 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		if err := s.restoreMemoryFidelity(ctx, p, scope, restoreDir, req.GetPreserveRestoreDir(), tStart); err != nil {
 			return nil, err
 		}
+	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS:
+		// A ROOTFS snapshot holds no guest state either, but it carries each
+		// container's rootfs upper: put those back before the overlays are
+		// assembled, then cold-boot on top of them instead of a pristine upper.
+		tUpper := time.Now()
+		if err := untarRootfsUpper(rootfsUpperDir(p.actorDirs), restoreDir, containerNames(p.containers)); err != nil {
+			return nil, err
+		}
+		dUpper := time.Since(tUpper)
+		p.keepRootfsUpper = true
+		if err := s.coldBootActorRetrying(ctx, p); err != nil {
+			return nil, err
+		}
+		dTotal := time.Since(tStart)
+		slog.InfoContext(ctx, "Actor restored (rootfs upper + durable-dir volumes, cold boot)",
+			slog.String("id", p.actorUID), slog.Duration("rootfs_upper", dUpper), slog.Duration("total", dTotal))
+		ateomphaselog.LogSnapshotPhases(ctx, "Restore timing breakdown", attribution, scope,
+			ateomphaselog.RestoreDurationKey, nil, []ateomphaselog.Phase{
+				{Name: phaseRootfsUpper, D: dUpper}, {Name: phaseTotal, D: dTotal},
+			})
 	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
 		// A VOLUMES snapshot holds no guest state, so this is a cold boot that
 		// happens to start with the volumes already populated. wakeup probe gating comes

@@ -42,19 +42,24 @@ import (
 // Contract with atelet: after we return, atelet uploads the checkpoint dir to object
 // storage, then tears down bundles and resets the actor dir.
 //
-// What the snapshot holds depends on the requested scope:
+// What the snapshot holds depends on the requested fidelity; each level
+// includes the ones below it:
 //
-//   - MEMORY: the whole guest. ateom drives the CH REST api-socket: pause -> snapshot
-//     file://<checkpoint_dir> (config.json + state.json + sparse memory-ranges)
-//     -> tear the VMM down. Each container's rootfs is overlay(virtio-fs RO lower +
-//     disk-backed upper): the upper is host-backed like the durable-dir volumes and
-//     ships alongside as its own tar (see rootfsupper.go); process memory persists
-//     via the memory snapshot. The RO lower is reconstructed from the OCI image at
-//     restore, so it never ships. Durable-dir volumes ship alongside as per-volume tars.
-//   - VOLUMES: the durable-dir volumes only, as those same tars. The guest is discarded, so
-//     the actor cold-starts on restore with its volumes re-materialized.
+//   - MEMORY: the whole guest. ateom drives the CH REST api-socket: pause ->
+//     snapshot file://<checkpoint_dir> (config.json + state.json + sparse
+//     memory-ranges) -> tear the VMM down. Process memory persists via the
+//     memory snapshot; the volume and upper tars ship alongside as for ROOTFS.
+//   - ROOTFS: the volumes plus each container's rootfs upper. Each container's
+//     rootfs is overlay(virtio-fs RO lower + disk-backed upper): the upper is
+//     host-backed like the durable-dir volumes and ships as its own tar (see
+//     rootfsupper.go). The RO lower is reconstructed from the OCI image at
+//     restore, so it never ships. The guest is discarded; the actor cold-starts
+//     on restore with its rootfs writes back in place.
+//   - VOLUMES: the durable-dir volumes, as per-volume tars. The guest is
+//     discarded, so the actor cold-starts on restore with its volumes
+//     re-materialized.
 //
-// Either way the guest is paused first, which is what makes the tar coherent: the
+// Whatever the fidelity the guest is paused first, which is what makes the tar coherent: the
 // durable share is served write-through, so every completed guest write is already on
 // the host and no further ones can arrive.
 //
@@ -112,12 +117,13 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	// suspended mid-flight for a call that could never have succeeded.
 	//
 	// Durable-dir volumes are host-backed, so they are captured the same way
-	// under either fidelity — and are the ONLY thing a VOLUMES snapshot
-	// captures.
+	// under every fidelity — and are the ONLY thing a VOLUMES snapshot
+	// captures. ROOTFS and MEMORY always have something to capture: every
+	// container has a rootfs upper.
 	durable := hasDurableVolumes(req.GetSpec().GetContainers())
 	csi := hasCsiVolumes(req.GetSpec().GetContainers())
 	switch scope {
-	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
+	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS:
 	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
 		// TODO: Revisit handling for CSI volumes since snapshots are currently quietly ignored.
 		if !durable && !csi {
@@ -171,15 +177,17 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	// window costs the slowest of them rather than their sum (the tars scale
 	// with the actor's data; suspend latency is the metric that matters).
 	//
-	//   - CH snapshot (MEMORY only): the guest memory + VM state. A VOLUMES snapshot
-	//     deliberately captures no VM state — no memory image, and no base-id,
-	//     since nothing will reattach to the frozen virtio-fs lower: at restore
-	//     the actor cold-boots from the OCI image.
-	//   - Durable-dir tars (any scope, when declared): host-backed, so pausing
-	//     the write-through share makes the tars coherent.
-	//   - Rootfs upper tars (MEMORY only): host-backed like the durable volumes —
-	//     the memory snapshot does not carry rootfs writes. Under VOLUMES the
-	//     workload cold-starts on restore, discarding rootfs state.
+	//   - CH snapshot (MEMORY only): the guest memory + VM state. The lower
+	//     fidelities deliberately capture no VM state — no memory image, and no
+	//     base-id, since nothing will reattach to the frozen virtio-fs lower: at
+	//     restore the actor cold-boots from the OCI image.
+	//   - Durable-dir tars (any fidelity, when declared): host-backed, so
+	//     pausing the write-through share makes the tars coherent.
+	//   - Rootfs upper tars (ROOTFS and MEMORY): host-backed like the durable
+	//     volumes — the memory snapshot does not carry rootfs writes. Under
+	//     VOLUMES the workload cold-starts on restore, discarding rootfs state.
+	shipsRootfs := scope == ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS ||
+		scope == ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
 	var durableFiles []string
 	g, gctx := errgroup.WithContext(ctx)
 	if scope == ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
@@ -202,7 +210,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 			return err
 		})
 	}
-	if scope == ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
+	if shipsRootfs {
 		g.Go(func() error {
 			t := time.Now()
 			err := tarRootfsUpper(gctx, rootfsUpperDir(actorDirs), checkpointDir, containerNames(req.GetSpec().GetContainers()))
@@ -214,9 +222,10 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		return nil, err
 	}
 
-	// Report exactly the files we wrote so atelet ships precisely this snapshot: for
-	// MEMORY, the CH snapshot (config.json + state.json + memory-ranges + base-id)
-	// plus any durable-dir tars; for VOLUMES, those tars alone.
+	// Report exactly the files we wrote so atelet ships precisely this snapshot:
+	// for MEMORY, the CH snapshot (config.json + state.json + memory-ranges +
+	// base-id) plus the upper and durable-dir tars; for ROOTFS, the upper and
+	// durable-dir tars; for VOLUMES, the durable-dir tars alone.
 	snapshotFiles, err := listFiles(checkpointDir)
 	if err != nil {
 		return nil, fmt.Errorf("while listing snapshot files: %w", err)
