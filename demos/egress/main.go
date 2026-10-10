@@ -56,6 +56,9 @@ type fetchRequest struct {
 	URL    string `json:"url"`
 	RootCA string `json:"rootCA,omitempty"`
 	HTTP1  bool   `json:"http1,omitempty"`
+	// Host, when set, overrides the outbound HTTP request's Host header
+	// without changing the dial destination or TLS SNI derived from URL.
+	Host string `json:"host,omitempty"`
 }
 
 type fetchResponse struct {
@@ -162,6 +165,9 @@ func newHandler(client *http.Client) http.Handler {
 		if err != nil {
 			writeJSON(w, http.StatusBadRequest, fetchResponse{Error: fmt.Sprintf("invalid URL: %v", err)})
 			return
+		}
+		if input.Host != "" {
+			outbound.Host = input.Host
 		}
 		if traceparent := r.Header.Get("traceparent"); traceparent != "" {
 			outbound.Header.Set("traceparent", traceparent)

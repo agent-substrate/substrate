@@ -315,6 +315,20 @@ func httpFilterChains(t *testing.T, envoyYaml string) [][]map[string]any {
 // extProcCluster returns the cluster an ext_proc filter dials, or "" for any
 // other filter.
 func extProcCluster(filter map[string]any) string {
+	if filter["name"] == "envoy.filters.http.composite" {
+		typedConfig, _ := filter["typed_config"].(map[string]any)
+		matcher, _ := typedConfig["matcher"].(map[string]any)
+		matcherList, _ := matcher["matcher_list"].(map[string]any)
+		matchers, _ := matcherList["matchers"].([]any)
+		if len(matchers) > 0 {
+			m, _ := matchers[0].(map[string]any)
+			onMatch, _ := m["on_match"].(map[string]any)
+			action, _ := onMatch["action"].(map[string]any)
+			actionConfig, _ := action["typed_config"].(map[string]any)
+			inner, _ := actionConfig["typed_config"].(map[string]any)
+			filter = inner
+		}
+	}
 	if filter["name"] != "envoy.filters.http.ext_proc" {
 		return ""
 	}

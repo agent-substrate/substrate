@@ -355,23 +355,30 @@ func dialedPortOf(res extproc.Result) string {
 	return res.DynamicMetadata.GetFields()[extproc.EgressMetadataNamespace].GetStructValue().GetFields()[extproc.EgressDialedPortKey].GetStringValue()
 }
 
-// The CONNECT opens for any policy with rules and returns the https and
-// tls_passthrough SNI rules for the dialed port, most specific first.
+// The CONNECT opens for any policy with rules and returns the http, https, and
+// tls_passthrough egress rules for the dialed port, most specific first.
 func TestConnectLegOpensForAnyRules(t *testing.T) {
 	ca := newTestCA(t, "actor-identity-ca")
 	leaf := ca.issueActorCert(t, "spiffe://substrate-actor.local/ateom-for-actor/foo/bar", actorCertOptions{})
 
-	mitm := func(patterns ...string) []egresspolicy.SNIRule {
-		rules := make([]egresspolicy.SNIRule, len(patterns))
+	cleartext := func(patterns ...string) []egresspolicy.EgressRule {
+		rules := make([]egresspolicy.EgressRule, len(patterns))
 		for i, p := range patterns {
-			rules[i] = egresspolicy.SNIRule{Pattern: p, Mode: egresspolicy.SNIModeMITM}
+			rules[i] = egresspolicy.EgressRule{Pattern: p, Mode: egresspolicy.EgressModeCleartext}
 		}
 		return rules
 	}
-	passthrough := func(patterns ...string) []egresspolicy.SNIRule {
-		rules := make([]egresspolicy.SNIRule, len(patterns))
+	mitm := func(patterns ...string) []egresspolicy.EgressRule {
+		rules := make([]egresspolicy.EgressRule, len(patterns))
 		for i, p := range patterns {
-			rules[i] = egresspolicy.SNIRule{Pattern: p, Mode: egresspolicy.SNIModePassthrough}
+			rules[i] = egresspolicy.EgressRule{Pattern: p, Mode: egresspolicy.EgressModeMITM}
+		}
+		return rules
+	}
+	passthrough := func(patterns ...string) []egresspolicy.EgressRule {
+		rules := make([]egresspolicy.EgressRule, len(patterns))
+		for i, p := range patterns {
+			rules[i] = egresspolicy.EgressRule{Pattern: p, Mode: egresspolicy.EgressModePassthrough}
 		}
 		return rules
 	}
@@ -380,12 +387,20 @@ func TestConnectLegOpensForAnyRules(t *testing.T) {
 		policy *ateapipb.EgressPolicy
 		// dialed is the CONNECT authority; port 443 unless set.
 		dialed string
-		want   []egresspolicy.SNIRule
+		want   []egresspolicy.EgressRule
 	}{
-		{name: "http", policy: httpPolicy("api.example.com")},
+		{name: "http on another port", policy: httpPolicy("api.example.com")},
+		{name: "http on the dialed port", policy: httpPolicy("api.example.com"), dialed: "93.184.216.34:80", want: cleartext("api.example.com")},
 		{name: "https", policy: httpsPolicy("api.example.com"), want: mitm("api.example.com")},
 		{name: "tls passthrough", policy: passthroughPolicy(ports(443), "*"), want: passthrough("*")},
-		{name: "allow all", policy: allowAllPolicy(), want: mitm("*")},
+		{
+			name:   "allow all",
+			policy: allowAllPolicy(),
+			want: []egresspolicy.EgressRule{
+				{Pattern: "*", Mode: egresspolicy.EgressModeMITM},
+				{Pattern: "*", Mode: egresspolicy.EgressModeCleartext},
+			},
+		},
 		{
 			name: "https and tls passthrough rules, most specific first",
 			policy: combined(
@@ -393,14 +408,36 @@ func TestConnectLegOpensForAnyRules(t *testing.T) {
 				httpPolicy("plain.example.com"),
 				passthroughPolicy(ports(443), "foo.bar.com"),
 			),
-			want: []egresspolicy.SNIRule{
-				{Pattern: "api.example.com", Mode: egresspolicy.SNIModeMITM},
-				{Pattern: "foo.bar.com", Mode: egresspolicy.SNIModePassthrough},
-				{Pattern: "*.example.org", Mode: egresspolicy.SNIModeMITM},
+			want: []egresspolicy.EgressRule{
+				{Pattern: "api.example.com", Mode: egresspolicy.EgressModeMITM},
+				{Pattern: "foo.bar.com", Mode: egresspolicy.EgressModePassthrough},
+				{Pattern: "*.example.org", Mode: egresspolicy.EgressModeMITM},
 			},
 		},
 		{name: "https rule on another port", policy: httpsPolicy("api.example.com"), dialed: "93.184.216.34:8443"},
 		{name: "https rule on the dialed port", policy: httpsPolicyOnPorts(ports(8443), "api.example.com"), dialed: "93.184.216.34:8443", want: mitm("api.example.com")},
+		{
+			name: "http and https rules with effects set has_effects",
+			policy: &ateapipb.EgressPolicy{Rules: []*ateapipb.EgressRule{
+				{Http: &ateapipb.HTTPRule{
+					Hostnames: []string{"http-effects.example.com"},
+					Ports:     ports(443),
+					Effects: &ateapipb.HttpRuleEffects{
+						ReplaceHeaders: []*ateapipb.CredentialHeader{{Header: "authorization", CredentialUri: "ate-secret://k8s/default/token"}},
+					},
+				}},
+				{Https: &ateapipb.HTTPSRule{
+					Hostnames: []string{"https-effects.example.com"},
+					Effects: &ateapipb.HttpRuleEffects{
+						ReplaceHeaders: []*ateapipb.CredentialHeader{{Header: "authorization", CredentialUri: "ate-secret://k8s/default/token"}},
+					},
+				}},
+			}},
+			want: []egresspolicy.EgressRule{
+				{Pattern: "http-effects.example.com", Mode: egresspolicy.EgressModeCleartext, HasEffects: true},
+				{Pattern: "https-effects.example.com", Mode: egresspolicy.EgressModeMITM, HasEffects: true},
+			},
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -411,7 +448,9 @@ func TestConnectLegOpensForAnyRules(t *testing.T) {
 				md.Host = tc.dialed
 			}
 			md.Headers[":authority"] = md.Host
+			before := time.Now().UTC()
 			res, err := h.HandleRequestHeaders(context.Background(), md)
+			after := time.Now().UTC()
 			if err != nil {
 				t.Fatalf("HandleRequestHeaders() error = %v, want the tunnel to open", err)
 			}
@@ -419,30 +458,52 @@ func TestConnectLegOpensForAnyRules(t *testing.T) {
 			if got := dialedPortOf(res); got != wantPort {
 				t.Errorf("dialed port = %q, want %q", got, wantPort)
 			}
-			if got := sniRulesOf(t, res); !slices.Equal(got, tc.want) {
-				t.Errorf("SNI rules = %v, want %v", got, tc.want)
+			if got := egressRulesOf(t, res); !slices.Equal(got, tc.want) {
+				t.Errorf("egress rules = %v, want %v", got, tc.want)
+			}
+			if got := egressCreatedAtOf(t, res); got.Before(before) || got.After(after) {
+				t.Errorf("created_at = %v, want within [%v, %v]", got, before, after)
 			}
 		})
 	}
 }
 
-// sniRulesOf reads the SNI rules from a CONNECT result.
-func sniRulesOf(t *testing.T, res extproc.Result) []egresspolicy.SNIRule {
+// egressCreatedAtOf reads the creation timestamp from a CONNECT result.
+func egressCreatedAtOf(t *testing.T, res extproc.Result) time.Time {
 	t.Helper()
 	policyStruct := res.DynamicMetadata.GetFields()[extproc.EgressPolicyMetadataNamespace].GetStructValue()
 	if policyStruct == nil {
 		t.Fatalf("missing %q struct in DynamicMetadata", extproc.EgressPolicyMetadataNamespace)
 	}
-	listVal := policyStruct.GetFields()[extproc.EgressSNIRulesKey].GetListValue()
-	if listVal == nil {
-		t.Fatalf("missing %q list in %q DynamicMetadata", extproc.EgressSNIRulesKey, extproc.EgressPolicyMetadataNamespace)
+	raw := policyStruct.GetFields()[extproc.EgressPolicyCreatedAtKey].GetStringValue()
+	if raw == "" {
+		t.Fatalf("missing %q string in %q DynamicMetadata", extproc.EgressPolicyCreatedAtKey, extproc.EgressPolicyMetadataNamespace)
 	}
-	out := make([]egresspolicy.SNIRule, len(listVal.GetValues()))
+	ts, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		t.Fatalf("parsing %q value %q: %v", extproc.EgressPolicyCreatedAtKey, raw, err)
+	}
+	return ts
+}
+
+// egressRulesOf reads the egress rules from a CONNECT result.
+func egressRulesOf(t *testing.T, res extproc.Result) []egresspolicy.EgressRule {
+	t.Helper()
+	policyStruct := res.DynamicMetadata.GetFields()[extproc.EgressPolicyMetadataNamespace].GetStructValue()
+	if policyStruct == nil {
+		t.Fatalf("missing %q struct in DynamicMetadata", extproc.EgressPolicyMetadataNamespace)
+	}
+	listVal := policyStruct.GetFields()[extproc.EgressRulesKey].GetListValue()
+	if listVal == nil {
+		t.Fatalf("missing %q list in %q DynamicMetadata", extproc.EgressRulesKey, extproc.EgressPolicyMetadataNamespace)
+	}
+	out := make([]egresspolicy.EgressRule, len(listVal.GetValues()))
 	for i, v := range listVal.GetValues() {
 		fields := v.GetStructValue().GetFields()
-		out[i] = egresspolicy.SNIRule{
-			Pattern: fields[extproc.EgressSNIRulePatternKey].GetStringValue(),
-			Mode:    egresspolicy.SNIMode(fields[extproc.EgressSNIRuleModeKey].GetStringValue()),
+		out[i] = egresspolicy.EgressRule{
+			Pattern:    fields[extproc.EgressRulePatternKey].GetStringValue(),
+			Mode:       egresspolicy.EgressMode(fields[extproc.EgressRuleModeKey].GetStringValue()),
+			HasEffects: fields[extproc.EgressRuleHasEffectsKey].GetBoolValue(),
 		}
 	}
 	return out

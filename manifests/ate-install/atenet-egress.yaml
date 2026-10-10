@@ -493,47 +493,75 @@ data:
                         enabled: false
                       timeout: 0s
               http_filters:
+              - name: envoy.filters.http.dynamic_modules
+                typed_config:
+                  "@type": type.googleapis.com/envoy.extensions.filters.http.dynamic_modules.v3.DynamicModuleFilter
+                  dynamic_module_config:
+                    name: envoy_substrate_egress_policy_pep
+                  filter_name: envoy_substrate_egress_policy_pep
               # Every request on this chain is authorized against the actor's
               # EgressPolicy by the same sidecar; the actor comes from the filter
               # state the CONNECT leg set, never from a header.
-              - name: envoy.filters.http.ext_proc
+              - name: envoy.filters.http.composite
                 typed_config:
-                  "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor
-                  stat_prefix: egress_policy_mitm
-                  grpc_service:
-                    envoy_grpc:
-                      cluster_name: ext_proc_server
-                    timeout: 5s
-                  failure_mode_allow: false
-                  # A cache miss in the sidecar is one ateapi round trip; 5s covers that
-                  # with room, and a slower answer is a denied request, not an allowed one.
-                  message_timeout: 5s
-                  request_attributes:
-                  - xds.filter_chain_name
-                  - filter_state['dev.ate.actor.identity']
-                  - filter_state['dev.ate.connect.authority']
-                  - filter_state['envoy.network.transport_socket.original_dst_address'].ip
-                  - filter_state['envoy.network.transport_socket.original_dst_address'].port
-                  - connection.requested_server_name
-                  processing_mode:
-                    request_header_mode: SEND
-                    response_header_mode: SKIP
-                    request_body_mode: NONE
-                    response_body_mode: NONE
-                    request_trailer_mode: SKIP
-                    response_trailer_mode: SKIP
-                  # The sidecar may add headers but never touch routing: a rewritten
-                  # Host would ask the origin for a site other than the one policed.
-                  mutation_rules:
-                    disallow_system: true
-                    disallow_is_error: true
-                  # The answer (dev.ate.egress:dial) picks the route. Envoy drops
-                  # metadata from a namespace not listed here, and a request
-                  # with no dial has no route.
-                  metadata_options:
-                    receiving_namespaces:
-                      untyped:
-                      - dev.ate.egress
+                  "@type": type.googleapis.com/envoy.extensions.filters.http.composite.v3.Composite
+                  matcher:
+                    matcher_list:
+                      matchers:
+                      - predicate:
+                          not_matcher:
+                            single_predicate:
+                              input:
+                                name: filter_state
+                                typed_config:
+                                  "@type": type.googleapis.com/envoy.extensions.matching.common_inputs.network.v3.FilterStateInput
+                                  key: dev.ate.policy.egress.skip_callout
+                              value_match:
+                                exact: "true"
+                        on_match:
+                          action:
+                            name: composite-action
+                            typed_config:
+                              "@type": type.googleapis.com/envoy.extensions.filters.http.composite.v3.ExecuteFilterAction
+                              typed_config:
+                                name: envoy.filters.http.ext_proc
+                                typed_config:
+                                  "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor
+                                  stat_prefix: egress_policy_mitm
+                                  grpc_service:
+                                    envoy_grpc:
+                                      cluster_name: ext_proc_server
+                                    timeout: 5s
+                                  failure_mode_allow: false
+                                  # A cache miss in the sidecar is one ateapi round trip; 5s covers that
+                                  # with room, and a slower answer is a denied request, not an allowed one.
+                                  message_timeout: 5s
+                                  request_attributes:
+                                  - xds.filter_chain_name
+                                  - filter_state['dev.ate.actor.identity']
+                                  - filter_state['dev.ate.connect.authority']
+                                  - filter_state['envoy.network.transport_socket.original_dst_address'].ip
+                                  - filter_state['envoy.network.transport_socket.original_dst_address'].port
+                                  - connection.requested_server_name
+                                  processing_mode:
+                                    request_header_mode: SEND
+                                    response_header_mode: SKIP
+                                    request_body_mode: NONE
+                                    response_body_mode: NONE
+                                    request_trailer_mode: SKIP
+                                    response_trailer_mode: SKIP
+                                  # The sidecar may add headers but never touch routing: a rewritten
+                                  # Host would ask the origin for a site other than the one policed.
+                                  mutation_rules:
+                                    disallow_system: true
+                                    disallow_is_error: true
+                                  # The answer (dev.ate.egress:dial) picks the route. Envoy drops
+                                  # metadata from a namespace not listed here, and a request
+                                  # with no dial has no route.
+                                  metadata_options:
+                                    receiving_namespaces:
+                                      untyped:
+                                      - dev.ate.egress
               # Envoy dials a port written in the Host unless the name to dial
               # comes from filter state too, so the name the request was
               # decided on goes there. Must stay after ext_proc.
@@ -685,47 +713,75 @@ data:
                         enabled: false
                       timeout: 0s
               http_filters:
+              - name: envoy.filters.http.dynamic_modules
+                typed_config:
+                  "@type": type.googleapis.com/envoy.extensions.filters.http.dynamic_modules.v3.DynamicModuleFilter
+                  dynamic_module_config:
+                    name: envoy_substrate_egress_policy_pep
+                  filter_name: envoy_substrate_egress_policy_pep
               # Every request on this chain is authorized against the actor's
               # EgressPolicy by the same sidecar; the actor comes from the filter
               # state the CONNECT leg set, never from a header.
-              - name: envoy.filters.http.ext_proc
+              - name: envoy.filters.http.composite
                 typed_config:
-                  "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor
-                  stat_prefix: egress_policy_cleartext
-                  grpc_service:
-                    envoy_grpc:
-                      cluster_name: ext_proc_server
-                    timeout: 5s
-                  failure_mode_allow: false
-                  # A cache miss in the sidecar is one ateapi round trip; 5s covers that
-                  # with room, and a slower answer is a denied request, not an allowed one.
-                  message_timeout: 5s
-                  request_attributes:
-                  - xds.filter_chain_name
-                  - filter_state['dev.ate.actor.identity']
-                  - filter_state['dev.ate.connect.authority']
-                  - filter_state['envoy.network.transport_socket.original_dst_address'].ip
-                  - filter_state['envoy.network.transport_socket.original_dst_address'].port
-                  - connection.requested_server_name
-                  processing_mode:
-                    request_header_mode: SEND
-                    response_header_mode: SKIP
-                    request_body_mode: NONE
-                    response_body_mode: NONE
-                    request_trailer_mode: SKIP
-                    response_trailer_mode: SKIP
-                  # The sidecar may add headers but never touch routing: a rewritten
-                  # Host would ask the origin for a site other than the one policed.
-                  mutation_rules:
-                    disallow_system: true
-                    disallow_is_error: true
-                  # The answer (dev.ate.egress:dial) picks the route. Envoy drops
-                  # metadata from a namespace not listed here, and a request
-                  # with no dial has no route.
-                  metadata_options:
-                    receiving_namespaces:
-                      untyped:
-                      - dev.ate.egress
+                  "@type": type.googleapis.com/envoy.extensions.filters.http.composite.v3.Composite
+                  matcher:
+                    matcher_list:
+                      matchers:
+                      - predicate:
+                          not_matcher:
+                            single_predicate:
+                              input:
+                                name: filter_state
+                                typed_config:
+                                  "@type": type.googleapis.com/envoy.extensions.matching.common_inputs.network.v3.FilterStateInput
+                                  key: dev.ate.policy.egress.skip_callout
+                              value_match:
+                                exact: "true"
+                        on_match:
+                          action:
+                            name: composite-action
+                            typed_config:
+                              "@type": type.googleapis.com/envoy.extensions.filters.http.composite.v3.ExecuteFilterAction
+                              typed_config:
+                                name: envoy.filters.http.ext_proc
+                                typed_config:
+                                  "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor
+                                  stat_prefix: egress_policy_cleartext
+                                  grpc_service:
+                                    envoy_grpc:
+                                      cluster_name: ext_proc_server
+                                    timeout: 5s
+                                  failure_mode_allow: false
+                                  # A cache miss in the sidecar is one ateapi round trip; 5s covers that
+                                  # with room, and a slower answer is a denied request, not an allowed one.
+                                  message_timeout: 5s
+                                  request_attributes:
+                                  - xds.filter_chain_name
+                                  - filter_state['dev.ate.actor.identity']
+                                  - filter_state['dev.ate.connect.authority']
+                                  - filter_state['envoy.network.transport_socket.original_dst_address'].ip
+                                  - filter_state['envoy.network.transport_socket.original_dst_address'].port
+                                  - connection.requested_server_name
+                                  processing_mode:
+                                    request_header_mode: SEND
+                                    response_header_mode: SKIP
+                                    request_body_mode: NONE
+                                    response_body_mode: NONE
+                                    request_trailer_mode: SKIP
+                                    response_trailer_mode: SKIP
+                                  # The sidecar may add headers but never touch routing: a rewritten
+                                  # Host would ask the origin for a site other than the one policed.
+                                  mutation_rules:
+                                    disallow_system: true
+                                    disallow_is_error: true
+                                  # The answer (dev.ate.egress:dial) picks the route. Envoy drops
+                                  # metadata from a namespace not listed here, and a request
+                                  # with no dial has no route.
+                                  metadata_options:
+                                    receiving_namespaces:
+                                      untyped:
+                                      - dev.ate.egress
               # Envoy dials a port written in the Host unless the name to dial
               # comes from filter state too, so the name the request was
               # decided on goes there. Must stay after ext_proc.

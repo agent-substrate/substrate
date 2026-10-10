@@ -39,7 +39,7 @@ never reaches this filter, sets no verdict, and is closed.
 
 The Go side of the contract is `cmd/atenet/internal/router/extproc`
 (`EgressPolicyMetadataNamespace`, `EgressFilterChainFilterStateKey`) and
-`internal/egresspolicy` (`SNIRules`, whose pattern grammar this filter
+`internal/egresspolicy` (`EgressRules`, whose pattern grammar this filter
 mirrors). The manifest tests in `cmd/atenet/internal/router` hold the
 listener configuration to it.
 
