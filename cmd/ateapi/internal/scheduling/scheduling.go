@@ -107,7 +107,9 @@ func (s *scheduler) Schedule(ctx context.Context, constraints Constraints) (*ate
 		return nil, fmt.Errorf("while listing workers: %w", err)
 	}
 
-	want, err := resources.ParseQuantities(constraints.Limits)
+	// One check for the whole pass: it parses the actor's size once, not once
+	// per worker, and remembers every worker quantity string it has read.
+	check, err := NewRoomCheck(constraints.Limits)
 	if err != nil {
 		return nil, fmt.Errorf("while parsing actor resource limits: %w", err)
 	}
@@ -117,8 +119,8 @@ func (s *scheduler) Schedule(ctx context.Context, constraints Constraints) (*ate
 		if !s.Applies(worker, constraints) {
 			continue
 		}
-		if cand, ok := checkRoom(worker, want); ok {
-			candidates = append(candidates, cand)
+		if hasRoomWithCheck(worker, check) {
+			candidates = append(candidates, candidate{worker: worker, resUtil: -1})
 		}
 	}
 
@@ -144,7 +146,8 @@ func (s *scheduler) Schedule(ctx context.Context, constraints Constraints) (*ate
 type candidate struct {
 	worker *ateapipb.Worker
 	// resUtil is the worker's dominant compute-resource utilization in [0,1],
-	// or -1 if not yet computed.
+	// or -1 if not yet computed. Only the two sampled candidates ever need it,
+	// so it is computed on demand rather than for every worker in the fleet.
 	resUtil float64
 }
 
@@ -162,7 +165,7 @@ func (c *candidate) resourceUtilization() float64 {
 func lessLoaded(a, b *candidate) bool {
 	aAlloc := int64(a.worker.GetStatus().GetAllocated().GetActors())
 	bAlloc := int64(b.worker.GetStatus().GetAllocated().GetActors())
-	// checkRoom admits only workers with allocated < capacity, so capacity >= 1.
+	// hasRoomWithCheck admits only workers with allocated < capacity, so capacity >= 1.
 	aCap := int64(a.worker.GetStatus().GetCapacity().GetActors())
 	bCap := int64(b.worker.GetStatus().GetCapacity().GetActors())
 
@@ -234,49 +237,31 @@ func (s *scheduler) Applies(worker *ateapipb.Worker, constraints Constraints) bo
 }
 
 // HasRoom reports whether what the worker has left admits one more actor of
-// this size. A dimension the worker does not report is unconstrained, so
-// placement is never blocked by missing data.
+// this size. A worker reports every dimension it has, so one it does not
+// report is none of it, and an actor asking for that dimension does not fit.
 //
 // A worker whose recorded capacity or allocation will not parse is treated as
 // having no room: it is the only answer that cannot overcommit a worker whose
 // true occupancy is unreadable.
 func (s *scheduler) HasRoom(worker *ateapipb.Worker, constraints Constraints) bool {
-	want, err := resources.ParseQuantities(constraints.Limits)
+	check, err := NewRoomCheck(constraints.Limits)
 	if err != nil {
 		return false
 	}
-	_, ok := checkRoom(worker, want)
-	return ok
+	return hasRoomWithCheck(worker, check)
 }
 
-func checkRoom(worker *ateapipb.Worker, want resources.Quantities) (candidate, bool) {
+// hasRoomWithCheck is HasRoom for a check already built, so Schedule can ask
+// it of every worker without parsing the actor's size again for each.
+func hasRoomWithCheck(worker *ateapipb.Worker, check *RoomCheck) bool {
 	capacity := worker.GetStatus().GetCapacity()
 	used := worker.GetStatus().GetAllocated()
 
 	// No per-actor size to compare: every assignment costs one, so a worker at
 	// its limit has no room however small the next actor is.
 	if used.GetActors() >= capacity.GetActors() {
-		return candidate{}, false
+		return false
 	}
 
-	if len(want) == 0 {
-		return candidate{worker: worker, resUtil: -1}, true
-	}
-	free, err := resources.ParseQuantities(capacity.GetResources())
-	if err != nil {
-		return candidate{}, false
-	}
-	if free == nil {
-		free = resources.Quantities{}
-	}
-	allocated, err := resources.ParseQuantities(used.GetResources())
-	if err != nil {
-		return candidate{}, false
-	}
-	resUtil := quantitiesUtilization(free, allocated)
-	free.Sub(allocated)
-	if !free.Covers(want) {
-		return candidate{}, false
-	}
-	return candidate{worker: worker, resUtil: resUtil}, true
+	return check.Admits(capacity.GetResources(), used.GetResources())
 }
