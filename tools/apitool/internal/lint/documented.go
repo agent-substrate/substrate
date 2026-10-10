@@ -25,34 +25,39 @@ import (
 var Documented = Rule{
 	Name:        "documented",
 	Description: "Every message, enum, message field, and RPC method has a doc comment.",
-	Check:       checkDocumented,
+	Check: allOf(
+		forEachMessage(checkMessageDocumented),
+		forEachEnum(checkEnumDocumented),
+		forEachMethod(checkMethodDocumented),
+	),
 }
 
-func checkDocumented(api *model.API) ([]Finding, error) {
+// checkMessageDocumented checks m and each of its fields.
+func checkMessageDocumented(m model.Message) []Finding {
 	var findings []Finding
-	for _, m := range api.Messages {
-		if docText(m.Comment) == "" {
-			findings = append(findings, Finding{Subject: m.FullName, Message: "message has no doc comment"})
-		}
-		for _, f := range m.Fields {
-			if docText(f.Comment) == "" {
-				findings = append(findings, Finding{Subject: m.FullName + "." + f.Name, Message: "field has no doc comment"})
-			}
+	if docText(m.Comment) == "" {
+		findings = append(findings, findingf(m.FullName, "message has no doc comment"))
+	}
+	for _, f := range m.Fields {
+		if docText(f.Comment) == "" {
+			findings = append(findings, findingf(m.FullName+"."+f.Name, "field has no doc comment"))
 		}
 	}
-	for _, e := range api.Enums {
-		if docText(e.Comment) == "" {
-			findings = append(findings, Finding{Subject: e.FullName, Message: "enum has no doc comment"})
-		}
+	return findings
+}
+
+func checkEnumDocumented(e model.Enum) []Finding {
+	if docText(e.Comment) == "" {
+		return []Finding{findingf(e.FullName, "enum has no doc comment")}
 	}
-	for _, svc := range api.Services {
-		for _, method := range svc.Methods {
-			if docText(method.Comment) == "" {
-				findings = append(findings, Finding{Subject: method.ServiceFullName + "." + method.Name, Message: "method has no doc comment"})
-			}
-		}
+	return nil
+}
+
+func checkMethodDocumented(rpc model.Method) []Finding {
+	if docText(rpc.Comment) == "" {
+		return []Finding{findingf(subjectOf(rpc), "method has no doc comment")}
 	}
-	return findings, nil
+	return nil
 }
 
 func docText(comment string) string {

@@ -22,13 +22,21 @@ import (
 	"strings"
 
 	"github.com/bufbuild/protocompile"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/reflect/protoregistry"
+
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
 // sourceFileName is an arbitrary internal label: Build only ever compiles
 // one file, so its logical name doesn't matter beyond being self-consistent
 // and appearing in error messages.
 const sourceFileName = "source.proto"
+
+// GlobalParent is the ResourceAnnotation parent that stands for the whole
+// Substrate installation rather than another resource.
+const GlobalParent = "Global"
 
 // API is the whole documented surface of one proto file.
 type API struct {
@@ -86,6 +94,11 @@ type Method struct {
 	// return the resource itself rather than a wrapper message.
 	OutputName string
 
+	// Resource is the resource the method's (ateapi.method) annotation
+	// names, or "" if the method has none. For example, "Actor" for
+	// SuspendActor, or "EgressPolicy" for GetActorEgressPolicy.
+	Resource string
+
 	// ServiceFullName is the declaring service's full name. For example,
 	// "ateapi.Control".
 	ServiceFullName string
@@ -116,6 +129,22 @@ type Message struct {
 	// example, ResourceMetadata's atespace, name, uid, version,
 	// create_time, update_time.
 	Fields []Field
+	// Resource is the message's (ateapi.resource) annotation, or nil if the
+	// message isn't a resource. For example, non-nil for "ateapi.Actor";
+	// nil for "ateapi.ResourceMetadata".
+	Resource *ResourceAnnotation
+}
+
+// ResourceAnnotation is a resource message's (ateapi.resource) annotation.
+type ResourceAnnotation struct {
+	// Parents lists the resource types this resource is a subresource of:
+	// another resource's message name, or GlobalParent. For example,
+	// ["Global", "Atespace"] for AccessPolicy; empty for the top-level
+	// Actor.
+	Parents []string
+	// Singleton is true if each parent has at most one instance of this
+	// resource. For example, true for EgressPolicy.
+	Singleton bool
 }
 
 // Field is one field declared on a Message.
@@ -233,7 +262,10 @@ type EnumValue struct {
 }
 
 // Build compiles source - a single, self-contained proto3 file's raw text -
-// with source info retained, and walks the result into an API.
+// with source info retained, and walks the result into an API. Annotations
+// are read from the generated descriptors compiled into this binary (see
+// generatedOptions), so a message or method that has none, such as one in a
+// test fixture, comes back unannotated.
 func Build(ctx context.Context, source string) (*API, error) {
 	compiler := protocompile.Compiler{
 		Resolver: protocompile.WithStandardImports(&protocompile.SourceResolver{
@@ -367,6 +399,7 @@ func buildService(fd protoreflect.FileDescriptor, sd protoreflect.ServiceDescrip
 			Comment:         comment(fd, md),
 			InputName:       string(md.Input().FullName()),
 			OutputName:      string(md.Output().FullName()),
+			Resource:        methodResource(md),
 			ServiceFullName: svc.FullName,
 			ServiceName:     svc.Name,
 		})
@@ -380,12 +413,46 @@ func buildMessage(fd protoreflect.FileDescriptor, md protoreflect.MessageDescrip
 		Name:           shortName(fd, md.FullName()),
 		ParentFullName: string(parentFullName(md)),
 		Comment:        comment(fd, md),
+		Resource:       resourceAnnotation(md),
 	}
 	fields := md.Fields()
 	for i := range fields.Len() {
 		m.Fields = append(m.Fields, buildField(fd, fields.Get(i)))
 	}
 	return m
+}
+
+// generatedOptions returns the options of the generated descriptor compiled
+// into this binary under d's full name, or nil if there's none. Build reads
+// annotations from there rather than from d: protocompile, compiling the
+// annotations' own definitions from source, fills them in as dynamic
+// messages that the generated ateapipb extension types can't read.
+func generatedOptions(d protoreflect.Descriptor) proto.Message {
+	g, err := protoregistry.GlobalFiles.FindDescriptorByName(d.FullName())
+	if err != nil {
+		return nil
+	}
+	return g.Options()
+}
+
+func methodResource(md protoreflect.MethodDescriptor) string {
+	opts := generatedOptions(md)
+	if opts == nil {
+		return ""
+	}
+	return proto.GetExtension(opts, ateapipb.E_Method).(*ateapipb.MethodAnnotation).GetResource()
+}
+
+func resourceAnnotation(md protoreflect.MessageDescriptor) *ResourceAnnotation {
+	opts := generatedOptions(md)
+	if opts == nil || !proto.HasExtension(opts, ateapipb.E_Resource) {
+		return nil
+	}
+	a := proto.GetExtension(opts, ateapipb.E_Resource).(*ateapipb.ResourceAnnotation)
+	return &ResourceAnnotation{
+		Parents:   a.GetParents(),
+		Singleton: a.GetSingleton(),
+	}
 }
 
 func buildField(fd protoreflect.FileDescriptor, field protoreflect.FieldDescriptor) Field {
@@ -492,97 +559,51 @@ func comment(fd protoreflect.FileDescriptor, d protoreflect.Descriptor) string {
 	return strings.TrimSpace(fd.SourceLocations().ByDescriptor(d).LeadingComments)
 }
 
-// Resource pairs a message with every method (across services) that
-// resourceForMethodName matches it to, in encounter order.
+// Resource pairs a resource message with every method (across services)
+// whose annotation names it, in encounter order.
 type Resource struct {
 	Message Message
 	Methods []Method
 }
 
-// Resources partitions api's methods by resource, matching each method's
-// name against resourceNames (see resourceForMethodName), in api.Messages
-// order. Fails if a method matches no resource name or multiple
-// equally-specific ones, or if a matched name has no corresponding message.
+// Resources groups api's methods by the resource their annotation names,
+// one group per annotated message, in api.Messages order. Fails if a method
+// has no annotation or names a message that isn't a resource, or if a
+// resource names a parent that is neither GlobalParent nor another resource.
 func Resources(api *API) ([]Resource, error) {
-	// Pass 1: resolve every method to a resource name, and collect the
-	// names actually referenced.
-	methodResource := make(map[string]string, len(api.Services))
-	referencedNames := map[string]bool{}
-	for _, svc := range api.Services {
-		for _, method := range svc.Methods {
-			resource, err := resourceForMethodName(method.Name)
-			if err != nil {
-				return nil, fmt.Errorf("%s.%s: %w", svc.Name, method.Name, err)
-			}
-			methodResource[svc.Name+"."+method.Name] = resource
-			referencedNames[resource] = true
-		}
-	}
-
-	// Pass 2: one group per referenced resource, in api.Messages order,
-	// deleting each name as matched so any left over names an unknown
-	// resource.
-	groups := make([]Resource, 0, len(referencedNames))
+	var groups []Resource
 	for _, m := range api.Messages {
-		if referencedNames[m.Name] {
+		if m.Resource != nil {
 			groups = append(groups, Resource{Message: m})
-			delete(referencedNames, m.Name)
 		}
 	}
-	for name := range referencedNames {
-		return nil, fmt.Errorf("resource name %q, matched from a method name, has no corresponding message in this API", name)
-	}
 
-	// Pass 3: append each method to its group. groups's length is fixed by
-	// now, so taking addresses into it is safe.
+	// groups's length is fixed by now, so taking addresses into it is safe.
 	byName := make(map[string]*Resource, len(groups))
 	for i := range groups {
 		byName[groups[i].Message.Name] = &groups[i]
 	}
+
+	for _, g := range groups {
+		for _, parent := range g.Message.Resource.Parents {
+			if _, ok := byName[parent]; !ok && parent != GlobalParent {
+				return nil, fmt.Errorf("%s: parent %q is neither %q nor a resource in this API", g.Message.FullName, parent, GlobalParent)
+			}
+		}
+	}
+
 	for _, svc := range api.Services {
 		for _, method := range svc.Methods {
-			resource := methodResource[svc.Name+"."+method.Name]
-			byName[resource].Methods = append(byName[resource].Methods, method)
+			if method.Resource == "" {
+				return nil, fmt.Errorf("%s.%s: no resource annotation - add `option (ateapi.method).resource = \"<Resource>\";`", svc.Name, method.Name)
+			}
+			g, ok := byName[method.Resource]
+			if !ok {
+				return nil, fmt.Errorf("%s.%s: annotated resource %q is not a resource in this API - annotate its message with (ateapi.resource)", svc.Name, method.Name, method.Resource)
+			}
+			g.Methods = append(g.Methods, method)
 		}
 	}
 
 	return groups, nil
-}
-
-// TODO: We should consider adding proto options to attach this (and other)
-// metadata in the proto service descriptor itself.
-var resourceNames = []string{
-	"AccessPolicy",
-	"Actor",
-	"ActorSnapshot",
-	"Tag",
-	"ActorTemplate",
-	"Atespace",
-	"Worker",
-}
-
-func resourceForMethodName(methodName string) (string, error) {
-	var matches []string
-	for _, name := range resourceNames {
-		if strings.Contains(methodName, name) {
-			matches = append(matches, name)
-		}
-	}
-	if len(matches) == 0 {
-		return "", fmt.Errorf("no name in resourceNames is contained in %q - add one naming the resource this method operates on", methodName)
-	}
-
-	longest := matches[:1]
-	for _, m := range matches[1:] {
-		switch {
-		case len(m) > len(longest[0]):
-			longest = []string{m}
-		case len(m) == len(longest[0]):
-			longest = append(longest, m)
-		}
-	}
-	if len(longest) > 1 {
-		return "", fmt.Errorf("%q matches multiple equally-specific resource names %v - rename the method or the resource so only one matches", methodName, longest)
-	}
-	return longest[0], nil
 }

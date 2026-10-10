@@ -16,6 +16,7 @@ syntax = "proto3";
 
 package ateapi;
 
+import "google/protobuf/descriptor.proto";
 import "google/protobuf/timestamp.proto";
 
 option go_package = "github.com/agent-substrate/substrate/pkg/proto/ateapipb";
@@ -23,49 +24,75 @@ option go_package = "github.com/agent-substrate/substrate/pkg/proto/ateapipb";
 // Control is the primary RPC interface for Agentic Substrate.
 service Control {
   // Get an Actor.
-  rpc GetActor(GetActorRequest) returns (Actor) {}
+  rpc GetActor(GetActorRequest) returns (Actor) {
+    option (method).resource = "Actor";
+  }
 
   // Create a new Actor deriving from a given ActorTemplate.
-  rpc CreateActor(CreateActorRequest) returns (Actor) {}
+  rpc CreateActor(CreateActorRequest) returns (Actor) {
+    option (method).resource = "Actor";
+  }
 
   // Update mutable fields on an existing Actor.
-  rpc UpdateActor(UpdateActorRequest) returns (Actor) {}
+  rpc UpdateActor(UpdateActorRequest) returns (Actor) {
+    option (method).resource = "Actor";
+  }
 
   // Suspend a given actor to a new snapshot. A running actor is checkpointed
   // on its worker; a paused actor's node-local snapshot is uploaded, narrowed
   // to the template's commit scope where required (Full capture, Data commit).
-  rpc SuspendActor(SuspendActorRequest) returns (SuspendActorResponse) {}
+  rpc SuspendActor(SuspendActorRequest) returns (SuspendActorResponse) {
+    option (method).resource = "Actor";
+  }
 
   // Pause a given actor and keep its snapshots on node VM.
-  rpc PauseActor(PauseActorRequest) returns (PauseActorResponse) {}
+  rpc PauseActor(PauseActorRequest) returns (PauseActorResponse) {
+    option (method).resource = "Actor";
+  }
 
   // Resume an actor from its latest snapshot.
-  rpc ResumeActor(ResumeActorRequest) returns (ResumeActorResponse) {}
+  rpc ResumeActor(ResumeActorRequest) returns (ResumeActorResponse) {
+    option (method).resource = "Actor";
+  }
 
   // Revert an actor to SUSPENDED state.
   // Only crashed, running or paused actors can be reverted.
-  rpc RevertActor(RevertActorRequest) returns (RevertActorResponse) {}
+  rpc RevertActor(RevertActorRequest) returns (RevertActorResponse) {
+    option (method).resource = "Actor";
+  }
 
   // Delete an actor. Only suspended or crashed actors can be deleted unless
   // any_state is set.
-  rpc DeleteActor(DeleteActorRequest) returns (Actor) {}
+  rpc DeleteActor(DeleteActorRequest) returns (Actor) {
+    option (method).resource = "Actor";
+  }
 
   // Get the egress policy resource nested under an Actor.
-  rpc GetActorEgressPolicy(GetActorEgressPolicyRequest) returns (EgressPolicy) {}
+  rpc GetActorEgressPolicy(GetActorEgressPolicyRequest) returns (EgressPolicy) {
+    option (method).resource = "EgressPolicy";
+  }
 
   // Create the egress policy resource nested under an Actor.
-  rpc CreateActorEgressPolicy(CreateActorEgressPolicyRequest) returns (EgressPolicy) {}
+  rpc CreateActorEgressPolicy(CreateActorEgressPolicyRequest) returns (EgressPolicy) {
+    option (method).resource = "EgressPolicy";
+  }
 
   // Replace the egress policy resource nested under an Actor.
-  rpc UpdateActorEgressPolicy(UpdateActorEgressPolicyRequest) returns (EgressPolicy) {}
+  rpc UpdateActorEgressPolicy(UpdateActorEgressPolicyRequest) returns (EgressPolicy) {
+    option (method).resource = "EgressPolicy";
+  }
 
   // Delete the egress policy resource nested under an Actor.
-  rpc DeleteActorEgressPolicy(DeleteActorEgressPolicyRequest) returns (EgressPolicy) {}
+  rpc DeleteActorEgressPolicy(DeleteActorEgressPolicyRequest) returns (EgressPolicy) {
+    option (method).resource = "EgressPolicy";
+  }
 
   // Create a Substrate-issued JWT asserting the actor identity.
   //
   // * Called by the egress gateway when actor JWT injection is configured for outbound requests.
-  rpc MintActorJWT(MintActorJWTRequest) returns (MintActorJWTResponse) {}
+  rpc MintActorJWT(MintActorJWTRequest) returns (MintActorJWTResponse) {
+    option (method).resource = "Actor";
+  }
 
   // Create a Substrate-issued SPIFFE certificate asserting the actor identity.
   //
@@ -73,102 +100,160 @@ service Control {
   //
   // * Called by the egress gateway when actor client certificate injection is
   //   configured for outbound requests.
-  rpc MintActorCertificate(MintActorCertificateRequest) returns (MintActorCertificateResponse) {}
+  rpc MintActorCertificate(MintActorCertificateRequest) returns (MintActorCertificateResponse) {
+    option (method).resource = "Actor";
+  }
 
   // Tag the external snapshot a suspended Actor holds. The tag gets its own
   // copy of that snapshot, so suspending or deleting the Actor afterwards
   // cannot collect it.
-  rpc CreateTag(CreateTagRequest) returns (Tag) {}
+  rpc CreateTag(CreateTagRequest) returns (Tag) {
+    option (method).resource = "Tag";
+  }
 
   // Get a Tag.
-  rpc GetTag(GetTagRequest) returns (Tag) {}
+  rpc GetTag(GetTagRequest) returns (Tag) {
+    option (method).resource = "Tag";
+  }
 
   // List Tags.
-  rpc ListTags(ListTagsRequest) returns (ListTagsResponse) {}
+  rpc ListTags(ListTagsRequest) returns (ListTagsResponse) {
+    option (method).resource = "Tag";
+  }
 
   // Publish or unpublish a Tag without changing its address.
-  rpc UpdateTag(UpdateTagRequest) returns (Tag) {}
+  rpc UpdateTag(UpdateTagRequest) returns (Tag) {
+    option (method).resource = "Tag";
+  }
 
   // Delete a Tag and the external snapshot it owns. Actors created from the
   // tag that have not yet been suspended still point at that external snapshot
   // and become unrecoverable, so do not delete a tag while such Actors exist.
-  rpc DeleteTag(DeleteTagRequest) returns (Tag) {}
+  rpc DeleteTag(DeleteTagRequest) returns (Tag) {
+    option (method).resource = "Tag";
+  }
 
   // List Workers.
-  rpc ListWorkers(ListWorkersRequest) returns (ListWorkersResponse) {}
+  rpc ListWorkers(ListWorkersRequest) returns (ListWorkersResponse) {
+    option (method).resource = "Worker";
+  }
 
   // Get a Worker.
-  rpc GetWorker(GetWorkerRequest) returns (Worker) {}
+  rpc GetWorker(GetWorkerRequest) returns (Worker) {
+    option (method).resource = "Worker";
+  }
 
   // Register a Worker. Called once its Pod is Ready and has an IP.
-  rpc CreateWorker(CreateWorkerRequest) returns (Worker) {}
+  rpc CreateWorker(CreateWorkerRequest) returns (Worker) {
+    option (method).resource = "Worker";
+  }
 
   // Update observed pool state on a Worker.
-  rpc UpdateWorker(UpdateWorkerRequest) returns (Worker) {}
+  rpc UpdateWorker(UpdateWorkerRequest) returns (Worker) {
+    option (method).resource = "Worker";
+  }
 
   // Deregister a Worker. Does not cascade: the caller is responsible for
   // cleaning up related resources first.
-  rpc DeleteWorker(DeleteWorkerRequest) returns (Worker) {}
+  rpc DeleteWorker(DeleteWorkerRequest) returns (Worker) {
+    option (method).resource = "Worker";
+  }
 
   // Mark a Worker as terminating so the scheduler stops routing new Actors to
   // it. Idempotent; one-way. Deliberately leaves any bound Actor alone.
   // Returns ABORTED if another write lands on the Worker first; retry.
-  rpc DrainWorker(DrainWorkerRequest) returns (Worker) {}
+  rpc DrainWorker(DrainWorkerRequest) returns (Worker) {
+    option (method).resource = "Worker";
+  }
 
   // List the Actors hosted by a given Worker.
-  rpc ListWorkerActorAssignments(ListWorkerActorAssignmentsRequest) returns (ListWorkerActorAssignmentsResponse) {}
+  rpc ListWorkerActorAssignments(ListWorkerActorAssignmentsRequest) returns (ListWorkerActorAssignmentsResponse) {
+    option (method).resource = "ActorAssignment";
+  }
 
   // List Actors.
-  rpc ListActors(ListActorsRequest) returns (ListActorsResponse) {}
+  rpc ListActors(ListActorsRequest) returns (ListActorsResponse) {
+    option (method).resource = "Actor";
+  }
 
   // Create a new Atespace. Substrate-native, stored in database.
-  rpc CreateAtespace(CreateAtespaceRequest) returns (Atespace) {}
+  rpc CreateAtespace(CreateAtespaceRequest) returns (Atespace) {
+    option (method).resource = "Atespace";
+  }
 
   // Get an Atespace by name.
-  rpc GetAtespace(GetAtespaceRequest) returns (Atespace) {}
+  rpc GetAtespace(GetAtespaceRequest) returns (Atespace) {
+    option (method).resource = "Atespace";
+  }
 
   // List Atespaces.
-  rpc ListAtespaces(ListAtespacesRequest) returns (ListAtespacesResponse) {}
+  rpc ListAtespaces(ListAtespacesRequest) returns (ListAtespacesResponse) {
+    option (method).resource = "Atespace";
+  }
 
   // Delete an empty Atespace. Rejects (FailedPrecondition) if any Actors or
   // Tags remain.
-  rpc DeleteAtespace(DeleteAtespaceRequest) returns (Atespace) {}
+  rpc DeleteAtespace(DeleteAtespaceRequest) returns (Atespace) {
+    option (method).resource = "Atespace";
+  }
 
-  rpc CreateActorTemplate(CreateActorTemplateRequest) returns (ActorTemplate) {}
+  rpc CreateActorTemplate(CreateActorTemplateRequest) returns (ActorTemplate) {
+    option (method).resource = "ActorTemplate";
+  }
 
-  rpc GetActorTemplate(GetActorTemplateRequest) returns (ActorTemplate) {}
+  rpc GetActorTemplate(GetActorTemplateRequest) returns (ActorTemplate) {
+    option (method).resource = "ActorTemplate";
+  }
 
-  rpc ListActorTemplates(ListActorTemplatesRequest) returns (ListActorTemplatesResponse) {}
+  rpc ListActorTemplates(ListActorTemplatesRequest) returns (ListActorTemplatesResponse) {
+    option (method).resource = "ActorTemplate";
+  }
 
   // Delete an ActorTemplate together with its golden actor and golden
   // tag in the reserved ate-golden atespace.
-  rpc DeleteActorTemplate(DeleteActorTemplateRequest) returns (ActorTemplate) {}
+  rpc DeleteActorTemplate(DeleteActorTemplateRequest) returns (ActorTemplate) {
+    option (method).resource = "ActorTemplate";
+  }
 
   // Get the deployment-wide global access policy singleton. Returns NotFound
   // until the policy has been created.
-  rpc GetGlobalAccessPolicy(GetGlobalAccessPolicyRequest) returns (AccessPolicy) {}
+  rpc GetGlobalAccessPolicy(GetGlobalAccessPolicyRequest) returns (AccessPolicy) {
+    option (method).resource = "AccessPolicy";
+  }
 
   // Create the deployment-wide global access policy singleton. The server's
   // configured bootstrap owners are global owners whether or not this policy
   // exists, so they can create it.
-  rpc CreateGlobalAccessPolicy(CreateGlobalAccessPolicyRequest) returns (AccessPolicy) {}
+  rpc CreateGlobalAccessPolicy(CreateGlobalAccessPolicyRequest) returns (AccessPolicy) {
+    option (method).resource = "AccessPolicy";
+  }
 
   // Replace the deployment-wide global access policy singleton. Empty
   // bindings revoke every grant held through the policy; bootstrap owners
   // keep access.
-  rpc UpdateGlobalAccessPolicy(UpdateGlobalAccessPolicyRequest) returns (AccessPolicy) {}
+  rpc UpdateGlobalAccessPolicy(UpdateGlobalAccessPolicyRequest) returns (AccessPolicy) {
+    option (method).resource = "AccessPolicy";
+  }
 
   // Get the access policy resource nested under an Atespace.
-  rpc GetAtespaceAccessPolicy(GetAtespaceAccessPolicyRequest) returns (AccessPolicy) {}
+  rpc GetAtespaceAccessPolicy(GetAtespaceAccessPolicyRequest) returns (AccessPolicy) {
+    option (method).resource = "AccessPolicy";
+  }
 
   // Create the access policy resource nested under an Atespace.
-  rpc CreateAtespaceAccessPolicy(CreateAtespaceAccessPolicyRequest) returns (AccessPolicy) {}
+  rpc CreateAtespaceAccessPolicy(CreateAtespaceAccessPolicyRequest) returns (AccessPolicy) {
+    option (method).resource = "AccessPolicy";
+  }
 
   // Replace the access policy resource nested under an Atespace.
-  rpc UpdateAtespaceAccessPolicy(UpdateAtespaceAccessPolicyRequest) returns (AccessPolicy) {}
+  rpc UpdateAtespaceAccessPolicy(UpdateAtespaceAccessPolicyRequest) returns (AccessPolicy) {
+    option (method).resource = "AccessPolicy";
+  }
 
   // Delete the access policy resource nested under an Atespace.
-  rpc DeleteAtespaceAccessPolicy(DeleteAtespaceAccessPolicyRequest) returns (AccessPolicy) {}
+  rpc DeleteAtespaceAccessPolicy(DeleteAtespaceAccessPolicyRequest) returns (AccessPolicy) {
+    option (method).resource = "AccessPolicy";
+  }
 }
 
 // ObjectSnapshot addresses a snapshot held in object storage.
@@ -463,6 +548,9 @@ message ExternalVolume {
 }
 
 message Actor {
+  option (resource) = {
+  };
+
   // Common resource metadata: atespace, name, uid, version, timestamps.
   //
   // +k8s:required
@@ -503,6 +591,11 @@ message Actor {
 // at most one egress policy resource, named "default".
 //
 message EgressPolicy {
+  option (resource) = {
+    parents : "Actor"
+    singleton : true
+  };
+
   // Standard resource metadata. Atespace must match the parent Actor and name
   // must be "default". Both are caller-specified on create and immutable.
   // UID, version, create_time, and update_time are server-managed.
@@ -951,6 +1044,9 @@ message TagStatus {
 // snapshot is copied when the tag is created, and deleted when the tag is. Its
 // owning Atespace cannot be deleted until the tag is removed.
 message Tag {
+  option (resource) = {
+  };
+
   // Common resource metadata: atespace, name, uid, version, timestamps.
   //
   // +k8s:required
@@ -982,6 +1078,9 @@ message Tag {
 // Atespace is the isolation boundary an Actor is created into. Global-scoped:
 // metadata.atespace is always empty; the atespace's identity is metadata.name.
 message Atespace {
+  option (resource) = {
+  };
+
   // Common resource metadata: name, uid, version, timestamps.
   //
   // +k8s:required
@@ -1018,6 +1117,9 @@ enum SandboxClass {
 }
 
 message ActorTemplate {
+  option (resource) = {
+  };
+
   // Common resource metadata: atespace, name, uid, version, timestamps.
   //
   // +k8s:required
@@ -2102,6 +2204,9 @@ message ListActorsResponse {
 // an immutable field that a request changes — including by omitting it, which
 // would clear it — is rejected with INVALID_ARGUMENT.
 message Worker {
+  option (resource) = {
+  };
+
   // Output-only: name, uid, version and timestamps are all server-assigned.
   // uid and version are echoed back on UpdateWorker as preconditions.
   //
@@ -2323,6 +2428,10 @@ message WorkerResources {
 // ActorAssignment binds an Actor to a Worker.  This is a subresource of the
 // Worker.
 message ActorAssignment {
+  option (resource) = {
+    parents : "Worker"
+  };
+
   // Metadata about the assignment.
   //
   // The atespace field is always empty, since it corresponds to a Worker, and
@@ -2504,6 +2613,11 @@ message RequestActorSuspendResponse {
 // the global singleton installation). Every parent resource has at most one
 // access policy resource, named "default".
 message AccessPolicy {
+  option (resource) = {
+    parents : [ "Global", "Atespace" ]
+    singleton : true
+  };
+
   // Standard resource metadata. Atespace must match the parent resource (empty
   // for global-scoped parents like Global and Atespace) and name must be
   // "default". Both are caller-specified on create and immutable. UID, version,
@@ -2614,4 +2728,31 @@ message DeleteAtespaceAccessPolicyRequest {
   //
   // +k8s:optional
   DeleteOptions options = 2;
+}
+
+// ResourceAnnotation marks a message as an API resource. See
+// docs/resource-model.md.
+message ResourceAnnotation {
+  // The resource types this resource is a subresource of: another resource's
+  // message name, or "Global" for the whole Substrate installation. Empty for
+  // a top-level resource.
+  repeated string parents = 1;
+
+  // Whether each parent has at most one instance of this resource.
+  bool singleton = 2;
+}
+
+// MethodAnnotation describes an RPC of the API.
+message MethodAnnotation {
+  // The message name of the resource the method operates on. For example,
+  // "Actor" for SuspendActor, or "EgressPolicy" for GetActorEgressPolicy.
+  string resource = 1;
+}
+
+extend google.protobuf.MessageOptions {
+  ResourceAnnotation resource = 50000;
+}
+
+extend google.protobuf.MethodOptions {
+  MethodAnnotation method = 50000;
 }
