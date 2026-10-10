@@ -16,9 +16,9 @@
 // versions:
 // 	protoc-gen-go v1.36.11-devel
 // 	protoc        v4.25.3
-// source: objectstoresnapshot.proto
+// source: objectstore.proto
 
-package objectstoresnapshotv1
+package objectstorev1
 
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
@@ -55,7 +55,7 @@ type FetchSnapshotRequest struct {
 
 func (x *FetchSnapshotRequest) Reset() {
 	*x = FetchSnapshotRequest{}
-	mi := &file_objectstoresnapshot_proto_msgTypes[0]
+	mi := &file_objectstore_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -67,7 +67,7 @@ func (x *FetchSnapshotRequest) String() string {
 func (*FetchSnapshotRequest) ProtoMessage() {}
 
 func (x *FetchSnapshotRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_objectstoresnapshot_proto_msgTypes[0]
+	mi := &file_objectstore_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -80,7 +80,7 @@ func (x *FetchSnapshotRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FetchSnapshotRequest.ProtoReflect.Descriptor instead.
 func (*FetchSnapshotRequest) Descriptor() ([]byte, []int) {
-	return file_objectstoresnapshot_proto_rawDescGZIP(), []int{0}
+	return file_objectstore_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *FetchSnapshotRequest) GetSnapshotUri() string {
@@ -119,7 +119,7 @@ type FetchSnapshotResponse struct {
 
 func (x *FetchSnapshotResponse) Reset() {
 	*x = FetchSnapshotResponse{}
-	mi := &file_objectstoresnapshot_proto_msgTypes[1]
+	mi := &file_objectstore_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -131,7 +131,7 @@ func (x *FetchSnapshotResponse) String() string {
 func (*FetchSnapshotResponse) ProtoMessage() {}
 
 func (x *FetchSnapshotResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_objectstoresnapshot_proto_msgTypes[1]
+	mi := &file_objectstore_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -144,7 +144,7 @@ func (x *FetchSnapshotResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FetchSnapshotResponse.ProtoReflect.Descriptor instead.
 func (*FetchSnapshotResponse) Descriptor() ([]byte, []int) {
-	return file_objectstoresnapshot_proto_rawDescGZIP(), []int{1}
+	return file_objectstore_proto_rawDescGZIP(), []int{1}
 }
 
 // UploadSnapshotRequest asks the plugin to upload snapshot files.
@@ -166,7 +166,7 @@ type UploadSnapshotRequest struct {
 
 func (x *UploadSnapshotRequest) Reset() {
 	*x = UploadSnapshotRequest{}
-	mi := &file_objectstoresnapshot_proto_msgTypes[2]
+	mi := &file_objectstore_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -178,7 +178,7 @@ func (x *UploadSnapshotRequest) String() string {
 func (*UploadSnapshotRequest) ProtoMessage() {}
 
 func (x *UploadSnapshotRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_objectstoresnapshot_proto_msgTypes[2]
+	mi := &file_objectstore_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -191,7 +191,7 @@ func (x *UploadSnapshotRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UploadSnapshotRequest.ProtoReflect.Descriptor instead.
 func (*UploadSnapshotRequest) Descriptor() ([]byte, []int) {
-	return file_objectstoresnapshot_proto_rawDescGZIP(), []int{2}
+	return file_objectstore_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *UploadSnapshotRequest) GetSnapshotUri() string {
@@ -230,7 +230,7 @@ type UploadSnapshotResponse struct {
 
 func (x *UploadSnapshotResponse) Reset() {
 	*x = UploadSnapshotResponse{}
-	mi := &file_objectstoresnapshot_proto_msgTypes[3]
+	mi := &file_objectstore_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -242,7 +242,7 @@ func (x *UploadSnapshotResponse) String() string {
 func (*UploadSnapshotResponse) ProtoMessage() {}
 
 func (x *UploadSnapshotResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_objectstoresnapshot_proto_msgTypes[3]
+	mi := &file_objectstore_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -255,7 +255,7 @@ func (x *UploadSnapshotResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UploadSnapshotResponse.ProtoReflect.Descriptor instead.
 func (*UploadSnapshotResponse) Descriptor() ([]byte, []int) {
-	return file_objectstoresnapshot_proto_rawDescGZIP(), []int{3}
+	return file_objectstore_proto_rawDescGZIP(), []int{3}
 }
 
 // CleanupSnapshotRequest names the snapshots to delete.
@@ -271,7 +271,7 @@ type CleanupSnapshotRequest struct {
 
 func (x *CleanupSnapshotRequest) Reset() {
 	*x = CleanupSnapshotRequest{}
-	mi := &file_objectstoresnapshot_proto_msgTypes[4]
+	mi := &file_objectstore_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -283,7 +283,7 @@ func (x *CleanupSnapshotRequest) String() string {
 func (*CleanupSnapshotRequest) ProtoMessage() {}
 
 func (x *CleanupSnapshotRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_objectstoresnapshot_proto_msgTypes[4]
+	mi := &file_objectstore_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -296,7 +296,7 @@ func (x *CleanupSnapshotRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CleanupSnapshotRequest.ProtoReflect.Descriptor instead.
 func (*CleanupSnapshotRequest) Descriptor() ([]byte, []int) {
-	return file_objectstoresnapshot_proto_rawDescGZIP(), []int{4}
+	return file_objectstore_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *CleanupSnapshotRequest) GetSnapshotUri() string {
@@ -314,7 +314,7 @@ type CleanupSnapshotResponse struct {
 
 func (x *CleanupSnapshotResponse) Reset() {
 	*x = CleanupSnapshotResponse{}
-	mi := &file_objectstoresnapshot_proto_msgTypes[5]
+	mi := &file_objectstore_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -326,7 +326,7 @@ func (x *CleanupSnapshotResponse) String() string {
 func (*CleanupSnapshotResponse) ProtoMessage() {}
 
 func (x *CleanupSnapshotResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_objectstoresnapshot_proto_msgTypes[5]
+	mi := &file_objectstore_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -339,7 +339,7 @@ func (x *CleanupSnapshotResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CleanupSnapshotResponse.ProtoReflect.Descriptor instead.
 func (*CleanupSnapshotResponse) Descriptor() ([]byte, []int) {
-	return file_objectstoresnapshot_proto_rawDescGZIP(), []int{5}
+	return file_objectstore_proto_rawDescGZIP(), []int{5}
 }
 
 // CopySnapshotRequest names the source and destination snapshots.
@@ -355,7 +355,7 @@ type CopySnapshotRequest struct {
 
 func (x *CopySnapshotRequest) Reset() {
 	*x = CopySnapshotRequest{}
-	mi := &file_objectstoresnapshot_proto_msgTypes[6]
+	mi := &file_objectstore_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -367,7 +367,7 @@ func (x *CopySnapshotRequest) String() string {
 func (*CopySnapshotRequest) ProtoMessage() {}
 
 func (x *CopySnapshotRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_objectstoresnapshot_proto_msgTypes[6]
+	mi := &file_objectstore_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -380,7 +380,7 @@ func (x *CopySnapshotRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CopySnapshotRequest.ProtoReflect.Descriptor instead.
 func (*CopySnapshotRequest) Descriptor() ([]byte, []int) {
-	return file_objectstoresnapshot_proto_rawDescGZIP(), []int{6}
+	return file_objectstore_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *CopySnapshotRequest) GetSrcUri() string {
@@ -405,7 +405,7 @@ type CopySnapshotResponse struct {
 
 func (x *CopySnapshotResponse) Reset() {
 	*x = CopySnapshotResponse{}
-	mi := &file_objectstoresnapshot_proto_msgTypes[7]
+	mi := &file_objectstore_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -417,7 +417,7 @@ func (x *CopySnapshotResponse) String() string {
 func (*CopySnapshotResponse) ProtoMessage() {}
 
 func (x *CopySnapshotResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_objectstoresnapshot_proto_msgTypes[7]
+	mi := &file_objectstore_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -430,14 +430,14 @@ func (x *CopySnapshotResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CopySnapshotResponse.ProtoReflect.Descriptor instead.
 func (*CopySnapshotResponse) Descriptor() ([]byte, []int) {
-	return file_objectstoresnapshot_proto_rawDescGZIP(), []int{7}
+	return file_objectstore_proto_rawDescGZIP(), []int{7}
 }
 
-var File_objectstoresnapshot_proto protoreflect.FileDescriptor
+var File_objectstore_proto protoreflect.FileDescriptor
 
-const file_objectstoresnapshot_proto_rawDesc = "" +
+const file_objectstore_proto_rawDesc = "" +
 	"\n" +
-	"\x19objectstoresnapshot.proto\x12\x16objectstoresnapshot.v1\"\x90\x01\n" +
+	"\x11objectstore.proto\x12\x0eobjectstore.v1\"\x90\x01\n" +
 	"\x14FetchSnapshotRequest\x12!\n" +
 	"\fsnapshot_uri\x18\x01 \x01(\tR\vsnapshotUri\x12 \n" +
 	"\tactor_jwt\x18\x02 \x01(\tB\x03\x80\x01\x01R\bactorJwt\x12\x1d\n" +
@@ -458,46 +458,46 @@ const file_objectstoresnapshot_proto_rawDesc = "" +
 	"\x13CopySnapshotRequest\x12\x17\n" +
 	"\asrc_uri\x18\x01 \x01(\tR\x06srcUri\x12\x17\n" +
 	"\adst_uri\x18\x02 \x01(\tR\x06dstUri\"\x16\n" +
-	"\x14CopySnapshotResponse2\xf1\x01\n" +
-	"\fNodeProvider\x12n\n" +
-	"\rFetchSnapshot\x12,.objectstoresnapshot.v1.FetchSnapshotRequest\x1a-.objectstoresnapshot.v1.FetchSnapshotResponse\"\x00\x12q\n" +
-	"\x0eUploadSnapshot\x12-.objectstoresnapshot.v1.UploadSnapshotRequest\x1a..objectstoresnapshot.v1.UploadSnapshotResponse\"\x002\xf4\x01\n" +
-	"\x0fControlProvider\x12t\n" +
-	"\x0fCleanupSnapshot\x12..objectstoresnapshot.v1.CleanupSnapshotRequest\x1a/.objectstoresnapshot.v1.CleanupSnapshotResponse\"\x00\x12k\n" +
-	"\fCopySnapshot\x12+.objectstoresnapshot.v1.CopySnapshotRequest\x1a,.objectstoresnapshot.v1.CopySnapshotResponse\"\x00B_Z]github.com/agent-substrate/substrate/pkg/proto/objectstoresnapshotpb/v1;objectstoresnapshotv1b\x06proto3"
+	"\x14CopySnapshotResponse2\xd1\x01\n" +
+	"\fNodeProvider\x12^\n" +
+	"\rFetchSnapshot\x12$.objectstore.v1.FetchSnapshotRequest\x1a%.objectstore.v1.FetchSnapshotResponse\"\x00\x12a\n" +
+	"\x0eUploadSnapshot\x12%.objectstore.v1.UploadSnapshotRequest\x1a&.objectstore.v1.UploadSnapshotResponse\"\x002\xd4\x01\n" +
+	"\x0fControlProvider\x12d\n" +
+	"\x0fCleanupSnapshot\x12&.objectstore.v1.CleanupSnapshotRequest\x1a'.objectstore.v1.CleanupSnapshotResponse\"\x00\x12[\n" +
+	"\fCopySnapshot\x12#.objectstore.v1.CopySnapshotRequest\x1a$.objectstore.v1.CopySnapshotResponse\"\x00BOZMgithub.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1;objectstorev1b\x06proto3"
 
 var (
-	file_objectstoresnapshot_proto_rawDescOnce sync.Once
-	file_objectstoresnapshot_proto_rawDescData []byte
+	file_objectstore_proto_rawDescOnce sync.Once
+	file_objectstore_proto_rawDescData []byte
 )
 
-func file_objectstoresnapshot_proto_rawDescGZIP() []byte {
-	file_objectstoresnapshot_proto_rawDescOnce.Do(func() {
-		file_objectstoresnapshot_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_objectstoresnapshot_proto_rawDesc), len(file_objectstoresnapshot_proto_rawDesc)))
+func file_objectstore_proto_rawDescGZIP() []byte {
+	file_objectstore_proto_rawDescOnce.Do(func() {
+		file_objectstore_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_objectstore_proto_rawDesc), len(file_objectstore_proto_rawDesc)))
 	})
-	return file_objectstoresnapshot_proto_rawDescData
+	return file_objectstore_proto_rawDescData
 }
 
-var file_objectstoresnapshot_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
-var file_objectstoresnapshot_proto_goTypes = []any{
-	(*FetchSnapshotRequest)(nil),    // 0: objectstoresnapshot.v1.FetchSnapshotRequest
-	(*FetchSnapshotResponse)(nil),   // 1: objectstoresnapshot.v1.FetchSnapshotResponse
-	(*UploadSnapshotRequest)(nil),   // 2: objectstoresnapshot.v1.UploadSnapshotRequest
-	(*UploadSnapshotResponse)(nil),  // 3: objectstoresnapshot.v1.UploadSnapshotResponse
-	(*CleanupSnapshotRequest)(nil),  // 4: objectstoresnapshot.v1.CleanupSnapshotRequest
-	(*CleanupSnapshotResponse)(nil), // 5: objectstoresnapshot.v1.CleanupSnapshotResponse
-	(*CopySnapshotRequest)(nil),     // 6: objectstoresnapshot.v1.CopySnapshotRequest
-	(*CopySnapshotResponse)(nil),    // 7: objectstoresnapshot.v1.CopySnapshotResponse
+var file_objectstore_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_objectstore_proto_goTypes = []any{
+	(*FetchSnapshotRequest)(nil),    // 0: objectstore.v1.FetchSnapshotRequest
+	(*FetchSnapshotResponse)(nil),   // 1: objectstore.v1.FetchSnapshotResponse
+	(*UploadSnapshotRequest)(nil),   // 2: objectstore.v1.UploadSnapshotRequest
+	(*UploadSnapshotResponse)(nil),  // 3: objectstore.v1.UploadSnapshotResponse
+	(*CleanupSnapshotRequest)(nil),  // 4: objectstore.v1.CleanupSnapshotRequest
+	(*CleanupSnapshotResponse)(nil), // 5: objectstore.v1.CleanupSnapshotResponse
+	(*CopySnapshotRequest)(nil),     // 6: objectstore.v1.CopySnapshotRequest
+	(*CopySnapshotResponse)(nil),    // 7: objectstore.v1.CopySnapshotResponse
 }
-var file_objectstoresnapshot_proto_depIdxs = []int32{
-	0, // 0: objectstoresnapshot.v1.NodeProvider.FetchSnapshot:input_type -> objectstoresnapshot.v1.FetchSnapshotRequest
-	2, // 1: objectstoresnapshot.v1.NodeProvider.UploadSnapshot:input_type -> objectstoresnapshot.v1.UploadSnapshotRequest
-	4, // 2: objectstoresnapshot.v1.ControlProvider.CleanupSnapshot:input_type -> objectstoresnapshot.v1.CleanupSnapshotRequest
-	6, // 3: objectstoresnapshot.v1.ControlProvider.CopySnapshot:input_type -> objectstoresnapshot.v1.CopySnapshotRequest
-	1, // 4: objectstoresnapshot.v1.NodeProvider.FetchSnapshot:output_type -> objectstoresnapshot.v1.FetchSnapshotResponse
-	3, // 5: objectstoresnapshot.v1.NodeProvider.UploadSnapshot:output_type -> objectstoresnapshot.v1.UploadSnapshotResponse
-	5, // 6: objectstoresnapshot.v1.ControlProvider.CleanupSnapshot:output_type -> objectstoresnapshot.v1.CleanupSnapshotResponse
-	7, // 7: objectstoresnapshot.v1.ControlProvider.CopySnapshot:output_type -> objectstoresnapshot.v1.CopySnapshotResponse
+var file_objectstore_proto_depIdxs = []int32{
+	0, // 0: objectstore.v1.NodeProvider.FetchSnapshot:input_type -> objectstore.v1.FetchSnapshotRequest
+	2, // 1: objectstore.v1.NodeProvider.UploadSnapshot:input_type -> objectstore.v1.UploadSnapshotRequest
+	4, // 2: objectstore.v1.ControlProvider.CleanupSnapshot:input_type -> objectstore.v1.CleanupSnapshotRequest
+	6, // 3: objectstore.v1.ControlProvider.CopySnapshot:input_type -> objectstore.v1.CopySnapshotRequest
+	1, // 4: objectstore.v1.NodeProvider.FetchSnapshot:output_type -> objectstore.v1.FetchSnapshotResponse
+	3, // 5: objectstore.v1.NodeProvider.UploadSnapshot:output_type -> objectstore.v1.UploadSnapshotResponse
+	5, // 6: objectstore.v1.ControlProvider.CleanupSnapshot:output_type -> objectstore.v1.CleanupSnapshotResponse
+	7, // 7: objectstore.v1.ControlProvider.CopySnapshot:output_type -> objectstore.v1.CopySnapshotResponse
 	4, // [4:8] is the sub-list for method output_type
 	0, // [0:4] is the sub-list for method input_type
 	0, // [0:0] is the sub-list for extension type_name
@@ -505,26 +505,26 @@ var file_objectstoresnapshot_proto_depIdxs = []int32{
 	0, // [0:0] is the sub-list for field type_name
 }
 
-func init() { file_objectstoresnapshot_proto_init() }
-func file_objectstoresnapshot_proto_init() {
-	if File_objectstoresnapshot_proto != nil {
+func init() { file_objectstore_proto_init() }
+func file_objectstore_proto_init() {
+	if File_objectstore_proto != nil {
 		return
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_objectstoresnapshot_proto_rawDesc), len(file_objectstoresnapshot_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_objectstore_proto_rawDesc), len(file_objectstore_proto_rawDesc)),
 			NumEnums:      0,
 			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   2,
 		},
-		GoTypes:           file_objectstoresnapshot_proto_goTypes,
-		DependencyIndexes: file_objectstoresnapshot_proto_depIdxs,
-		MessageInfos:      file_objectstoresnapshot_proto_msgTypes,
+		GoTypes:           file_objectstore_proto_goTypes,
+		DependencyIndexes: file_objectstore_proto_depIdxs,
+		MessageInfos:      file_objectstore_proto_msgTypes,
 	}.Build()
-	File_objectstoresnapshot_proto = out.File
-	file_objectstoresnapshot_proto_goTypes = nil
-	file_objectstoresnapshot_proto_depIdxs = nil
+	File_objectstore_proto = out.File
+	file_objectstore_proto_goTypes = nil
+	file_objectstore_proto_depIdxs = nil
 }

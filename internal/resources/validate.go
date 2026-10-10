@@ -88,13 +88,13 @@ func IsValidResourceName(name string) bool {
 	return len(content.IsDNS1123Label(name)) == 0
 }
 
-// ValidateAteomUID rejects a target ateom pod UID that could escape the host
+// ValidateWorkerPodUID rejects a worker pod UID that could escape the host
 // path built from it: the ateom control socket (.../ateoms/<uid>/ateom.sock).
 // Kubernetes pod UIDs are UUIDs, which are valid DNS-1123 labels, so a label
 // check accepts every legitimate value while rejecting separators and "..".
-func ValidateAteomUID(targetAteomUID string) error {
-	if errs := content.IsDNS1123Label(targetAteomUID); len(errs) > 0 {
-		return fmt.Errorf("invalid target ateom UID %q: %s", targetAteomUID, strings.Join(errs, "; "))
+func ValidateWorkerPodUID(workerPodUID string) error {
+	if errs := content.IsDNS1123Label(workerPodUID); len(errs) > 0 {
+		return fmt.Errorf("invalid worker pod UID %q: %s", workerPodUID, strings.Join(errs, "; "))
 	}
 	return nil
 }

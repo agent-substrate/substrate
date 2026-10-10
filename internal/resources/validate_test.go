@@ -101,7 +101,7 @@ func TestIsValidResourceName(t *testing.T) {
 	}
 }
 
-func TestValidateAteomUID(t *testing.T) {
+func TestValidateWorkerPodUID(t *testing.T) {
 	tests := []struct {
 		name    string
 		uid     string
@@ -116,8 +116,8 @@ func TestValidateAteomUID(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if err := ValidateAteomUID(tt.uid); (err != nil) != tt.wantErr {
-				t.Errorf("ValidateAteomUID(%q) err = %v, wantErr %v", tt.uid, err, tt.wantErr)
+			if err := ValidateWorkerPodUID(tt.uid); (err != nil) != tt.wantErr {
+				t.Errorf("ValidateWorkerPodUID(%q) err = %v, wantErr %v", tt.uid, err, tt.wantErr)
 			}
 		})
 	}

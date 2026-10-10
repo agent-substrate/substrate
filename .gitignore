@@ -60,8 +60,8 @@ Thumbs.db
 /.worktrees/
 
 # Stray outputs from `go build` without -o. Root-module tools land at the repo
-# root; tools with their own go.mod land beside their source. Use
-# `make build-<tool>`, which writes to /bin/ above.
+# root; tools with their own go.mod land beside their source. Build with
+# `-o bin/<tool>`, which is ignored above.
 /validate-image-cache
 /setup-gcp
 /tools/apitool/apitool

@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/netip"
 	"strconv"
 	"time"
 
@@ -29,38 +30,19 @@ const (
 	// dnsPort is the relay port on the sandbox's gateway.
 	dnsPort = 53
 
-	// Read complete UDP datagrams without truncating EDNS responses.
-	maxDNSDatagram = 65535
-
-	// Drop excess UDP queries to bound goroutines and upstream sockets.
-	maxInFlightDNS = 64
-
-	// maxDNSConnections bounds open TCP connections.
-	maxDNSConnections = 16
-
-	// dnsTCPTimeout limits connection lifetime, including idle clients.
-	dnsTCPTimeout = 30 * time.Second
-
 	// dnsExchangeTimeout bounds each upstream attempt.
 	dnsExchangeTimeout = 5 * time.Second
 )
 
-// limiter caps UDP queries in flight and open TCP connections across every
-// sandbox the relay serves, so each Server must release its slots on Stop.
-type limiter struct {
-	inFlight    chan struct{}
-	connections chan struct{}
-}
-
-// Relay forwards UDP and TCP DNS unchanged to the worker pod's resolvers.
-// It listens in the sandbox's gateway namespace and dials from the worker's.
-// DNS bypasses the egress tunnel and is not checked against egress policy.
+// Relay validates and forwards UDP and TCP DNS queries to the worker pod's
+// resolvers. It listens in the sandbox's gateway namespace and dials from the
+// worker's. DNS bypasses the egress tunnel and is not checked against egress
+// policy.
 type Relay struct {
 	upstreams []string
 
 	// dialer reaches upstream resolvers from the worker namespace.
-	dialer  *net.Dialer
-	limiter limiter
+	dialer *net.Dialer
 }
 
 // NewRelay reads nameservers from resolvConfPath and forwards to each on port 53.
@@ -72,6 +54,29 @@ func NewRelay(resolvConfPath string) (*Relay, error) {
 	return NewRelayForUpstreams(upstreams)
 }
 
+func normalizeAddr(addr net.Addr) string {
+	if addr == nil {
+		return ""
+	}
+	switch a := addr.(type) {
+	case *net.UDPAddr:
+		ap := a.AddrPort()
+		return netip.AddrPortFrom(ap.Addr().Unmap(), ap.Port()).String()
+	case *net.TCPAddr:
+		ap := a.AddrPort()
+		return netip.AddrPortFrom(ap.Addr().Unmap(), ap.Port()).String()
+	default:
+		return normalizeAddrString(addr.String())
+	}
+}
+
+func normalizeAddrString(s string) string {
+	if ap, err := netip.ParseAddrPort(s); err == nil {
+		return netip.AddrPortFrom(ap.Addr().Unmap(), ap.Port()).String()
+	}
+	return s
+}
+
 // NewRelayForUpstreams forwards to upstreams, each "host:port", tried in order.
 func NewRelayForUpstreams(upstreams []string) (*Relay, error) {
 	if len(upstreams) == 0 {
@@ -81,6 +86,9 @@ func NewRelayForUpstreams(upstreams []string) (*Relay, error) {
 		if _, _, err := net.SplitHostPort(u); err != nil {
 			return nil, fmt.Errorf("dns: invalid upstream resolver %q: %w", u, err)
 		}
+		if _, err := net.ResolveUDPAddr("udp", u); err != nil {
+			return nil, fmt.Errorf("dns: invalid upstream resolver %q: %w", u, err)
+		}
 	}
 
 	slog.Info("DNS relay configured", slog.Any("upstreams", upstreams))
@@ -88,10 +96,6 @@ func NewRelayForUpstreams(upstreams []string) (*Relay, error) {
 	return &Relay{
 		upstreams: upstreams,
 		dialer:    &net.Dialer{Timeout: dnsExchangeTimeout},
-		limiter: limiter{
-			inFlight:    make(chan struct{}, maxInFlightDNS),
-			connections: make(chan struct{}, maxDNSConnections),
-		},
 	}, nil
 }
 
@@ -121,11 +125,19 @@ func (r *Relay) Serve(ctx context.Context, ns netns.Handle) (*Server, error) {
 		return nil, err
 	}
 
-	return r.serveOn(ctx, &netC), nil
+	egressUDP, err := net.ListenPacket("udp", ":0")
+	if err != nil {
+		_ = netC.udp.Close()
+		_ = netC.tcpListener.Close()
+		return nil, fmt.Errorf("while opening the worker DNS egress socket: %w", err)
+	}
+	netC.egressUDP = egressUDP
+
+	return r.serveOn(ctx, &netC)
 }
 
 // serveOn serves DNS on netC's sockets, which the caller has already bound,
 // and dials upstreams with netC's dialer.
-func (r *Relay) serveOn(ctx context.Context, netC *netConn) *Server {
-	return newServer(ctx, &serverConfig{upstreams: r.upstreams}, netC, &r.limiter)
+func (r *Relay) serveOn(ctx context.Context, netC *netConn) (*Server, error) {
+	return newServer(ctx, &serverConfig{upstreams: r.upstreams}, netC)
 }

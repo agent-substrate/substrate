@@ -53,7 +53,7 @@ type AteomSupportClient interface {
 	// MintActorCertificate (which would be used for certificates projected into
 	// the actor filesystem, when/if we support those).
 	MintActorCertificate(ctx context.Context, in *MintActorCertificateRequest, opts ...grpc.CallOption) (*MintActorCertificateResponse, error)
-	// Register capacity and hardware identity for this worker with atelet.
+	// Register capacity and supported sandbox runtimes for this worker with atelet.
 	RegisterWorker(ctx context.Context, in *RegisterWorkerRequest, opts ...grpc.CallOption) (*RegisterWorkerResponse, error)
 	// RequestActorSuspend asks that the actor this worker hosts be suspended,
 	// for atelet to forward to the control plane's WorkerService, which this
@@ -120,7 +120,7 @@ type AteomSupportServer interface {
 	// MintActorCertificate (which would be used for certificates projected into
 	// the actor filesystem, when/if we support those).
 	MintActorCertificate(context.Context, *MintActorCertificateRequest) (*MintActorCertificateResponse, error)
-	// Register capacity and hardware identity for this worker with atelet.
+	// Register capacity and supported sandbox runtimes for this worker with atelet.
 	RegisterWorker(context.Context, *RegisterWorkerRequest) (*RegisterWorkerResponse, error)
 	// RequestActorSuspend asks that the actor this worker hosts be suspended,
 	// for atelet to forward to the control plane's WorkerService, which this
