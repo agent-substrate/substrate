@@ -1819,18 +1819,15 @@ func validateTerminateRequest(req *ateletpb.TerminateRequest) error {
 	return resources.ValidateContainerNames(names)
 }
 
-// validateFidelity rejects a fidelity no runtime can serve. ROOTFS is in the
-// enum but not captured by any sandbox runtime yet, so it is refused here as
-// well as at template admission.
+// validateFidelity rejects an unspecified or out-of-range snapshot fidelity.
 func validateFidelity(fidelity ateletpb.SnapshotFidelity) error {
 	switch fidelity {
 	case ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+		ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
 		ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
 		return nil
 	case ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED:
 		return fmt.Errorf("snapshot fidelity must be non-zero")
-	case ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS:
-		return fmt.Errorf("ROOTFS fidelity is not supported yet")
 	default:
 		return fmt.Errorf("invalid snapshot fidelity: %v", fidelity)
 	}
@@ -1850,14 +1847,16 @@ func validateUploadPausedCheckpointRequest(req *ateletpb.UploadPausedCheckpointR
 	if _, err := resources.ParseSnapshotURI(req.GetDestinationSnapshotUri()); err != nil {
 		errs = append(errs, field.Invalid(field.NewPath("destination_snapshot_uri"), req.GetDestinationSnapshotUri(), err.Error()))
 	}
-	// Uploads only ever produce MEMORY or VOLUMES snapshots.
 	switch req.GetDesiredFidelity() {
-	case ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
-	case ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS:
-		errs = append(errs, field.Invalid(field.NewPath("desired_fidelity"), req.GetDesiredFidelity().String(), "ROOTFS fidelity is not supported yet"))
+	case ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+		ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+		ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
 	default:
-		errs = append(errs, field.NotSupported(field.NewPath("desired_fidelity"), req.GetDesiredFidelity(),
-			[]string{ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY.String(), ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES.String()}))
+		errs = append(errs, field.NotSupported(field.NewPath("desired_fidelity"), req.GetDesiredFidelity(), []string{
+			ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY.String(),
+			ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS.String(),
+			ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES.String(),
+		}))
 	}
 	return errs.ToAggregate()
 }

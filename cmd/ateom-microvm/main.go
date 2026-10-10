@@ -425,6 +425,9 @@ func validateFidelity(fidelity ateompb.SnapshotFidelity) error {
 	if errs := resources.ValidateSnapshotFidelity(fidelity, field.NewPath("fidelity")); len(errs) > 0 {
 		return apierror.InvalidArgument("%v", errs.ToAggregate())
 	}
+	if fidelity == ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS {
+		return apierror.InvalidArgument("fidelity: Invalid value: %q: ROOTFS fidelity is not supported by micro-VM runtime yet", fidelity.String())
+	}
 	return nil
 }
 

@@ -673,9 +673,9 @@ func TestValidateCheckpointRequest(t *testing.T) {
 			r.Fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
 		}), true},
 		{"invalid snapshot fidelity", makeReq(func(r *ateletpb.CheckpointRequest) { r.Fidelity = ateletpb.SnapshotFidelity(23) }), true},
-		{"rootfs fidelity not supported yet", makeReq(func(r *ateletpb.CheckpointRequest) {
+		{"rootfs fidelity", makeReq(func(r *ateletpb.CheckpointRequest) {
 			r.Fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
-		}), true},
+		}), false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -734,9 +734,9 @@ func TestValidateRestoreRequest(t *testing.T) {
 		{"unspecified snapshot type", makeReq(func(r *ateletpb.RestoreRequest) { r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_UNSPECIFIED }), true},
 		{"unspecified snapshot fidelity", makeReq(func(r *ateletpb.RestoreRequest) { r.Fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED }), true},
 		{"invalid snapshot fidelity", makeReq(func(r *ateletpb.RestoreRequest) { r.Fidelity = ateletpb.SnapshotFidelity(23) }), true},
-		{"rootfs fidelity not supported yet", makeReq(func(r *ateletpb.RestoreRequest) {
+		{"rootfs fidelity", makeReq(func(r *ateletpb.RestoreRequest) {
 			r.Fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
-		}), true},
+		}), false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1721,9 +1721,9 @@ func TestValidateUploadPausedCheckpointRequest(t *testing.T) {
 		{"unspecified fidelity", func(r *ateletpb.UploadPausedCheckpointRequest) {
 			r.DesiredFidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
 		}, true},
-		{"rootfs fidelity not supported yet", func(r *ateletpb.UploadPausedCheckpointRequest) {
+		{"rootfs fidelity", func(r *ateletpb.UploadPausedCheckpointRequest) {
 			r.DesiredFidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
-		}, true},
+		}, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

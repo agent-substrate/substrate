@@ -276,9 +276,7 @@ func TestDurableDirLifecycle(t *testing.T) {
 }
 
 // TestMultipleDurableDirLifecycle covers an Actor with TWO durable-dir volumes:
-// both must survive pause/resume and suspend/resume independently. Only the
-// micro-VM runtime supports more than one — gVisor templates are still capped at
-// one by the ActorTemplate CEL rules, so the template would be rejected there.
+// both must survive pause/resume and suspend/resume independently.
 func TestMultipleDurableDirLifecycle(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -316,6 +314,75 @@ func TestMultipleDurableDirLifecycle(t *testing.T) {
 			}
 			t.Parallel()
 			runActorLifecycleTestCase(t, "multi-durabledir-lifecycle", createActorTemplateWithTwoDurableDirs, test.tc)
+		})
+	}
+}
+
+// TestSplitRootfsAndDurableDirLifecycle covers splitting container rootfs and
+// durable-dir volumes into separate checkpoint bundles and restoring:
+//  1. Full (SNAPSHOT_FIDELITY_MEMORY): memory, rootfs, and durable dirs all preserved.
+//  2. Rootfs+DurDir (SNAPSHOT_FIDELITY_ROOTFS): memory resets on fresh start, while rootfs and durable dirs are preserved.
+//  3. Only DurDir (SNAPSHOT_FIDELITY_VOLUMES): memory and rootfs reset on fresh start, while durable dirs are preserved.
+func TestSplitRootfsAndDurableDirLifecycle(t *testing.T) {
+	if e2e.IsMicroVM() {
+		t.Skip("Skipping TestSplitRootfsAndDurableDirLifecycle: micro-VM runtime does not support split rootfs without memory")
+	}
+	t.Parallel()
+	tests := []struct {
+		name string
+		tc   actorLifecycleTestCase
+	}{
+		{
+			name: "restoreFull(preferredFidelity:MEMORY)",
+			tc: actorLifecycleTestCase{
+				fidelity:               ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+				wantMemoryAfterPause:   2,
+				wantRootfsAfterPause:   2,
+				wantFileAfterPause:     2,
+				wantMemoryAfterSuspend: 3,
+				wantRootfsAfterSuspend: 3,
+				wantFileAfterSuspend:   3,
+				checkSecondFileCounter: true,
+				checkRootfsCounter:     true,
+				wantSnapshotFidelity:   ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+			},
+		},
+		{
+			name: "restoreRootfsAndDurDir(preferredFidelity:ROOTFS)",
+			tc: actorLifecycleTestCase{
+				fidelity:               ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+				wantMemoryAfterPause:   1,
+				wantRootfsAfterPause:   2,
+				wantFileAfterPause:     2,
+				wantMemoryAfterSuspend: 1,
+				wantRootfsAfterSuspend: 3,
+				wantFileAfterSuspend:   3,
+				checkSecondFileCounter: true,
+				checkRootfsCounter:     true,
+				wantSnapshotFidelity:   ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+			},
+		},
+		{
+			name: "restoreOnlyDurDir(preferredFidelity:VOLUMES)",
+			tc: actorLifecycleTestCase{
+				fidelity:               ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
+				wantMemoryAfterPause:   1,
+				wantRootfsAfterPause:   1,
+				wantFileAfterPause:     2,
+				wantMemoryAfterSuspend: 1,
+				wantRootfsAfterSuspend: 1,
+				wantFileAfterSuspend:   3,
+				checkSecondFileCounter: true,
+				checkRootfsCounter:     true,
+				wantSnapshotFidelity:   ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			runActorLifecycleTestCase(t, "split-rootfs-durdir", createActorTemplateWithSplitRootfsAndDurableDirs, test.tc)
 		})
 	}
 }
@@ -510,8 +577,10 @@ func TestExternalVolume_NodeMigration(t *testing.T) {
 type actorLifecycleTestCase struct {
 	fidelity               ateapipb.SnapshotFidelity
 	wantMemoryAfterPause   int
+	wantRootfsAfterPause   int
 	wantFileAfterPause     int
 	wantMemoryAfterSuspend int
+	wantRootfsAfterSuspend int
 	wantFileAfterSuspend   int
 
 	// checkSecondFileCounter also asserts the counter kept in a SECOND durable
@@ -519,6 +588,10 @@ type actorLifecycleTestCase struct {
 	// first counter exactly — if one volume were dropped or restored into the
 	// wrong place, they would diverge.
 	checkSecondFileCounter bool
+
+	// checkRootfsCounter asserts the counter kept in a file on the container
+	// rootfs (outside any durable-dir volume).
+	checkRootfsCounter bool
 
 	// wantSnapshotFidelity, when set, asserts the content scope recorded
 	// on the ActorSnapshot the suspend produced.
@@ -585,6 +658,9 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 	if tc.checkSecondFileCounter {
 		validateSecondFileCounter(t, resp, "after creation", 1)
 	}
+	if tc.checkRootfsCounter {
+		validateRootfsCounter(t, resp, "after creation", 1)
+	}
 
 	//
 	// Pausing the actor
@@ -613,6 +689,9 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 	validateCounterResponse(t, resp, "after pause", tc.wantMemoryAfterPause, tc.wantFileAfterPause)
 	if tc.checkSecondFileCounter {
 		validateSecondFileCounter(t, resp, "after pause", tc.wantFileAfterPause)
+	}
+	if tc.checkRootfsCounter {
+		validateRootfsCounter(t, resp, "after pause", tc.wantRootfsAfterPause)
 	}
 
 	//
@@ -669,6 +748,9 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 	validateCounterResponse(t, resp, "after suspend", tc.wantMemoryAfterSuspend, tc.wantFileAfterSuspend)
 	if tc.checkSecondFileCounter {
 		validateSecondFileCounter(t, resp, "after suspend", tc.wantFileAfterSuspend)
+	}
+	if tc.checkRootfsCounter {
+		validateRootfsCounter(t, resp, "after suspend", tc.wantRootfsAfterSuspend)
 	}
 }
 
@@ -747,6 +829,16 @@ func validateSecondFileCounter(t *testing.T, resp string, stage string, want int
 	const prefix = "preserved second file counter: "
 	if !strings.Contains(resp, prefix+fmt.Sprintf("%d", want)) {
 		t.Errorf("[%s] expected second file count %d, got response: %s", stage, want, resp)
+	}
+}
+
+// validateRootfsCounter checks the counter the workload keeps on its container
+// rootfs (outside any durable-dir volume).
+func validateRootfsCounter(t *testing.T, resp string, stage string, want int) {
+	t.Helper()
+	const prefix = "preserved rootfs counter: "
+	if !strings.Contains(resp, prefix+fmt.Sprintf("%d", want)) {
+		t.Errorf("[%s] expected rootfs count %d, got response: %s", stage, want, resp)
 	}
 }
 
@@ -1342,6 +1434,30 @@ func createActorTemplateWithTwoDurableDirs(ctx context.Context, t *testing.T, cl
 		})
 	}
 	return createActorTemplateInternal(ctx, t, clients, nsObj, "counter-two-durabledirs", fidelity, modify)
+}
+
+func createActorTemplateWithSplitRootfsAndDurableDirs(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, fidelity ateapipb.SnapshotFidelity) (*ateapipb.ActorTemplate, error) {
+	modify := func(at *ateapipb.ActorTemplate) {
+		for _, c := range at.GetContainers() {
+			if c.GetName() != "counter" {
+				continue
+			}
+			c.Command = []string{
+				"/ko-app/counter",
+				"--second-file-counter-directory=" + secondDurableDirMountPath,
+				"--rootfs-counter-file=/rootfs-counter.txt",
+			}
+			c.VolumeMounts = append(c.VolumeMounts, &ateapipb.VolumeMount{
+				Name:      secondDurableDirVolume,
+				MountPath: secondDurableDirMountPath,
+			})
+		}
+		at.Volumes = append(at.Volumes, &ateapipb.Volume{
+			Name:       secondDurableDirVolume,
+			DurableDir: &ateapipb.DurableDirVolumeSource{},
+		})
+	}
+	return createActorTemplateInternal(ctx, t, clients, nsObj, "counter-split-rootfs-durdirs", fidelity, modify)
 }
 
 func hasStorageClass(ctx context.Context, clients *e2e.Clients, name string) bool {

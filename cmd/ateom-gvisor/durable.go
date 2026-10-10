@@ -17,104 +17,112 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
-	"github.com/agent-substrate/substrate/internal/tarutil"
 )
 
-// durableTarFile is the snapshot file holding the tar of one durable-dir
-// volume: the contents of <volumeName> under
-// ActorDirs.durable_dir_volume_mounts_dir, plus a root entry for the volume
-// directory's own metadata. The volume directory itself comes from atelet,
-// never from the snapshot: runsc bind-mounts it by path, so a symlink planted
-// there would expose whatever it points at to the sandbox.
-func durableTarFile(volumeName string) (string, error) {
-	if volumeName == "" || volumeName == "." || strings.Contains(volumeName, "/") || !filepath.IsLocal(volumeName) {
-		return "", fmt.Errorf("invalid durable-dir volume name %q", volumeName)
-	}
-	return "durable-dir-" + volumeName + ".tar", nil
+// fsCheckpointSuffixes are the suffixes of the files runsc writes per
+// filesystem checkpoint bundle prefix.
+var fsCheckpointSuffixes = []string{
+	"_fscheckpoint.pb",
+	"_multitar.img",
+	"_pages_meta.img",
+	"_pages.img",
 }
 
-// hasDurableVolumes reports whether any container mounts a durable-dir volume.
-func hasDurableVolumes(containers []*ateompb.Container) bool {
+// rootfsBundlePrefix returns the bundle prefix used for a container's root
+// filesystem overlay checkpoint (<container_name>_rootfs).
+func rootfsBundlePrefix(containerName string) string {
+	return containerName + "_rootfs"
+}
+
+// rootfsBundlePrefixes returns the bundle prefixes for all containers' root
+// filesystem overlay checkpoints.
+func rootfsBundlePrefixes(containers []*ateompb.Container) []string {
+	prefixes := make([]string, 0, len(containers))
 	for _, c := range containers {
-		if len(c.GetDurableDirVolumeMounts()) > 0 {
-			return true
-		}
+		prefixes = append(prefixes, rootfsBundlePrefix(c.GetName()))
 	}
-	return false
+	return prefixes
 }
 
-// tarDurableVolumes archives each durable-dir volume under dir into the
-// checkpoint directory, one tar per volume, and returns the file names. The
-// caller must have paused the guest first.
-//
-// Sockets the workload left behind and gVisor internal files (.gvisor.*) are
-// skipped rather than archived.
-func tarDurableVolumes(ctx context.Context, dir, checkpointDir string, volumes []string) ([]string, error) {
-	skip := func(rel string) bool {
-		base := filepath.Base(rel)
-		return strings.HasPrefix(base, ".gvisor.")
+// rootfsFSCheckpointPaths returns the runsc filesystem checkpoint bundle
+// target specs (<container_name>_rootfs=<container_name>:/) for all
+// containers' root filesystem overlays.
+func rootfsFSCheckpointPaths(containers []*ateompb.Container) []string {
+	paths := make([]string, 0, len(containers))
+	for _, c := range containers {
+		paths = append(paths, fmt.Sprintf("%s=%s:/", rootfsBundlePrefix(c.GetName()), c.GetName()))
 	}
-	var files []string
-	for _, vol := range volumes {
-		name, err := durableTarFile(vol)
-		if err != nil {
-			return nil, err
-		}
-		if err := tarutil.CreateFilteredWithRoot(ctx, filepath.Join(checkpointDir, name), filepath.Join(dir, vol), skip); err != nil {
-			return nil, fmt.Errorf("while archiving durable-dir volume %q: %w", vol, err)
-		}
-		files = append(files, name)
-	}
-	return files, nil
+	return paths
 }
 
-// untarDurableVolumes restores each durable-dir volume from the snapshot into
-// its directory under dir, which atelet has already created, empty. A volume
-// with no tar in the snapshot (added to the template since) stays empty.
-func untarDurableVolumes(dir, snapshotDir string, volumes []string) error {
-	for _, vol := range volumes {
-		name, err := durableTarFile(vol)
-		if err != nil {
-			return err
+// durableFSCheckpointPaths returns the runsc filesystem checkpoint bundle
+// target specs (<volume_name>=<container_name>:<mount_path>) for all
+// durable-dir volume mounts across containers.
+func durableFSCheckpointPaths(containers []*ateompb.Container) []string {
+	var paths []string
+	for _, c := range containers {
+		for _, m := range c.GetDurableDirVolumeMounts() {
+			paths = append(paths, fmt.Sprintf("%s=%s:%s", m.GetVolumeName(), c.GetName(), m.GetMountPath()))
 		}
-		tarPath := filepath.Join(snapshotDir, name)
-		if _, err := os.Stat(tarPath); errors.Is(err, fs.ErrNotExist) {
-			continue
-		}
-		volDir := filepath.Join(dir, vol)
-		if err := os.MkdirAll(volDir, 0o700); err != nil {
-			return fmt.Errorf("while creating durable-dir volume dir %q: %w", volDir, err)
-		}
-		if err := tarutil.Extract(tarPath, volDir); err != nil {
-			return fmt.Errorf("while restoring durable-dir volume %q: %w", vol, err)
-		}
-		removeGVisorFiles(volDir)
 	}
-	return nil
+	return paths
 }
 
-// removeGVisorFiles deletes gVisor internal files (.gvisor.*) under dir,
-// best-effort, through an os.Root so the restored tree's symlinks are never
-// followed.
-func removeGVisorFiles(dir string) {
-	root, err := os.OpenRoot(dir)
-	if err != nil {
-		return
-	}
-	defer root.Close()
-	_ = fs.WalkDir(root.FS(), ".", func(rel string, d fs.DirEntry, err error) error {
-		if err == nil && !d.IsDir() && strings.HasPrefix(d.Name(), ".gvisor.") {
-			_ = root.Remove(rel)
-		}
+// fsRestorePrefixes returns the filesystem checkpoint bundle prefixes to
+// restore for the requested snapshot fidelity:
+//   - VOLUMES: only durable-dir volume bundles
+//   - ROOTFS, MEMORY: container rootfs bundles plus durable-dir volume bundles
+func fsRestorePrefixes(fidelity ateompb.SnapshotFidelity, containers []*ateompb.Container, durableVolumes []string) []string {
+	switch fidelity {
+	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
+		return durableVolumes
+	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
+		return append(rootfsBundlePrefixes(containers), durableVolumes...)
+	default:
 		return nil
-	})
+	}
+}
+
+// durableSnapshotFiles returns the subset of snapshotFiles that belong to the
+// given durable-dir volumes.
+func durableSnapshotFiles(snapshotFiles, volumes []string) []string {
+	want := make(map[string]struct{}, len(volumes)*len(fsCheckpointSuffixes))
+	for _, vol := range volumes {
+		for _, suffix := range fsCheckpointSuffixes {
+			want[vol+suffix] = struct{}{}
+		}
+	}
+	var out []string
+	for _, f := range snapshotFiles {
+		if _, ok := want[f]; ok {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// fsRestoreArgs returns the `--fs-restore-image-path <checkpointDir>/<prefix>`
+// arguments for each filesystem checkpoint bundle prefix whose manifest exists
+// in checkpointDir. A prefix with no manifest in the snapshot (e.g. a volume
+// added to the template since) is skipped so it starts empty.
+func fsRestoreArgs(checkpointDir string, prefixes []string) ([]string, error) {
+	var args []string
+	for _, prefix := range prefixes {
+		manifestPath := filepath.Join(checkpointDir, prefix+"_fscheckpoint.pb")
+		if _, err := os.Stat(manifestPath); err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				continue
+			}
+			return nil, fmt.Errorf("while checking filesystem checkpoint manifest %q: %w", manifestPath, err)
+		}
+		args = append(args, "--fs-restore-image-path", filepath.Join(checkpointDir, prefix))
+	}
+	return args, nil
 }
