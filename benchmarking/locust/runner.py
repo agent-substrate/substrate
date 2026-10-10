@@ -160,10 +160,11 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=70,
         help=(
-            "Seconds to wait after the run, and to shift the snapshot window "
-            "by, so the atelet's last export is scraped. Must cover the "
-            "atelet's OTEL_METRIC_EXPORT_INTERVAL plus one Prometheus scrape; "
-            "the default fits the OTel SDK's 60s default export and a 10s scrape"
+            "Seconds to wait after the run, so the atelet's last export is "
+            "scraped; its snapshot and active actor windows are read half this "
+            "late. Must cover the atelet's OTEL_METRIC_EXPORT_INTERVAL plus one "
+            "Prometheus scrape; the default fits the OTel SDK's 60s default export "
+            "and a 10s scrape"
         ),
     )
     args, extra = p.parse_known_args()
@@ -332,6 +333,10 @@ def run_test(args: argparse.Namespace, csv_prefix: Path, logs: TextIO, traces: T
         "-t", args.duration,
         "-u", str(args.users),
         "--csv", str(csv_prefix),
+        # Every operation's row in stats_history.csv, not just Aggregated, so
+        # each one's latency can be charted over the run. Readers of the file
+        # here keep to the Aggregated rows.
+        "--csv-full-history",
     ]
     if with_boomer:
         # Master mode so boomer can connect as a worker on localhost:5557.
