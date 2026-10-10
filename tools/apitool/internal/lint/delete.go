@@ -59,7 +59,7 @@ func checkDeleteRequestShape(api *model.API) ([]Finding, error) {
 				switch {
 				case f.TypeKind == "message" && f.TypeFullName == objectRefTypeFullName:
 					objectRefFields++
-					if want := fieldNameForResource(rg.Message.Name); f.Name != want {
+					if want := fieldNameForResource(locatorResourceName(rg.Message.Name)); f.Name != want {
 						findings = append(findings, Finding{
 							Subject: subject,
 							Message: fmt.Sprintf("resource field is named %q, want %q", f.Name, want),
