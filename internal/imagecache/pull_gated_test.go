@@ -23,11 +23,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
-	"log"
 	"net/http"
-	"net/http/httptest"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,7 +31,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/go-containerregistry/pkg/registry"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 )
 
@@ -51,30 +46,25 @@ type gatedRegistry struct {
 func newGatedRegistry(t *testing.T) *gatedRegistry {
 	t.Helper()
 	g := &gatedRegistry{gates: map[string]chan struct{}{}}
-	inner := registry.New(registry.Logger(log.New(io.Discard, "", 0)))
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/blobs/") {
-			g.mu.Lock()
-			var ch chan struct{}
-			for hex, c := range g.gates {
-				if strings.Contains(r.URL.Path, hex) {
-					ch = c
-					break
+	g.host = newWrappedRegistry(t, func(inner http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/blobs/") {
+				g.mu.Lock()
+				var ch chan struct{}
+				for hex, c := range g.gates {
+					if strings.Contains(r.URL.Path, hex) {
+						ch = c
+						break
+					}
+				}
+				g.mu.Unlock()
+				if ch != nil {
+					<-ch
 				}
 			}
-			g.mu.Unlock()
-			if ch != nil {
-				<-ch
-			}
-		}
-		inner.ServeHTTP(w, r)
-	}))
-	t.Cleanup(srv.Close)
-	u, err := url.Parse(srv.URL)
-	if err != nil {
-		t.Fatalf("parsing registry URL: %v", err)
-	}
-	g.host = u.Host
+			inner.ServeHTTP(w, r)
+		})
+	})
 	return g
 }
 
