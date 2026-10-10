@@ -99,7 +99,7 @@ func TestTagActorSnapshot(t *testing.T) {
 	if got, want := tag.GetStatus().GetActorTemplateUid(), template.GetMetadata().GetUid(); got != want {
 		t.Errorf("actor template uid = %q, want %q", got, want)
 	}
-	if got, want := tag.GetStatus().GetSnapshot().GetDurableSnapshot().GetFidelity(), ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY; got != want {
+	if got, want := tag.GetStatus().GetSnapshot().GetFidelity(), ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY; got != want {
 		t.Errorf("fidelity = %v, want the source's %v", got, want)
 	}
 

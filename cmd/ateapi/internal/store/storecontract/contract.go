@@ -870,10 +870,10 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 				Snapshots: []*ateapipb.Snapshot{{
 					Generation: 1,
 					Owner:      ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR,
+					Fidelity:   ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 					DurableSnapshot: &ateapipb.SnapshotStorage{
-						Status:   ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
-						Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
-						Object:   &ateapipb.ObjectSnapshot{SnapshotUri: testActorSnapshotURI("gs://bucket", testAtespace, "snapshot-1")},
+						Status: ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+						Object: &ateapipb.ObjectSnapshot{SnapshotUri: testActorSnapshotURI("gs://bucket", testAtespace, "snapshot-1")},
 					},
 				}},
 			},
@@ -887,10 +887,10 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 				Snapshots: []*ateapipb.Snapshot{{
 					Generation: 1,
 					Owner:      ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR,
+					Fidelity:   ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 					DurableSnapshot: &ateapipb.SnapshotStorage{
-						Status:   ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
-						Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
-						Object:   &ateapipb.ObjectSnapshot{SnapshotUri: testActorSnapshotURI("gs://bucket", testAtespace, "snapshot-2")},
+						Status: ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+						Object: &ateapipb.ObjectSnapshot{SnapshotUri: testActorSnapshotURI("gs://bucket", testAtespace, "snapshot-2")},
 					},
 				}},
 			},
@@ -1167,10 +1167,10 @@ func newTestSuspendedActor(atespace, name string) *ateapipb.Actor {
 			Snapshots: []*ateapipb.Snapshot{{
 				Generation: 1,
 				Owner:      ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR,
+				Fidelity:   ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 				DurableSnapshot: &ateapipb.SnapshotStorage{
-					Status:   ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
-					Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
-					Object:   &ateapipb.ObjectSnapshot{SnapshotUri: testActorSnapshotURI("gs://private", atespace, name)},
+					Status: ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+					Object: &ateapipb.ObjectSnapshot{SnapshotUri: testActorSnapshotURI("gs://private", atespace, name)},
 				},
 			}},
 		},
@@ -1190,9 +1190,9 @@ func newTestInProgressTag(name string, actor *ateapipb.Actor) *ateapipb.Tag {
 			Snapshot: &ateapipb.Snapshot{
 				Generation: 1,
 				Owner:      ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG,
+				Fidelity:   ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 				DurableSnapshot: &ateapipb.SnapshotStorage{
-					Status:   ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING,
-					Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+					Status: ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING,
 					Object: &ateapipb.ObjectSnapshot{
 						SnapshotUri: testTagSnapshotURI("gs://private", atespace, name),
 					},
@@ -1373,7 +1373,7 @@ func runTagContractTests(t *testing.T, setup func(t *testing.T) store.Interface)
 			{
 				name: "snapshot content scope",
 				mutate: func(toUpdate *ateapipb.Tag) {
-					toUpdate.Status.Snapshot.DurableSnapshot.Fidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
+					toUpdate.Status.Snapshot.Fidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
 				},
 			},
 			{

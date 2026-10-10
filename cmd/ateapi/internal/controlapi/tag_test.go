@@ -272,7 +272,7 @@ func newTestTag(t *testing.T, name string, actor *ateapipb.Actor) *ateapipb.Tag 
 		Scope:       ateapipb.TagScope_TAG_SCOPE_ATESPACE,
 		SourceActor: resources.ActorRefFromActor(actor).ToObjectRef(),
 		Status: &ateapipb.TagStatus{
-			Snapshot: newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG, actorSnap.GetDurableSnapshot().GetFidelity(), actorSnap.GetActorTemplateUid(), uri.Name(), uri.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+			Snapshot: newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG, actorSnap.GetFidelity(), actorSnap.GetActorTemplateUid(), uri.Name(), uri.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
 		},
 	}
 }

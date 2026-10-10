@@ -254,7 +254,7 @@ func (w *ActorWorkflow) ensureTagReserved(ctx context.Context, tagRef resources.
 			Snapshot: newDurableSnapshot(
 				1,
 				ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG,
-				snap.GetDurableSnapshot().GetFidelity(),
+				snap.GetFidelity(),
 				"",
 				dst.Name(),
 				dst.String(),
@@ -307,11 +307,10 @@ func (w *ActorWorkflow) ensureTagFinalized(ctx context.Context, tag *ateapipb.Ta
 
 	tagRef := resources.TagRefFromTag(tag)
 	// The copy is byte-identical to the source, so it carries the same content.
-	srcSt := snapshot.GetDurableSnapshot()
 	finalSnapshot := newDurableSnapshot(
 		1,
 		ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG,
-		srcSt.GetFidelity(),
+		snapshot.GetFidelity(),
 		"",
 		dst.Name(),
 		dst.String(),

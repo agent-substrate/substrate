@@ -193,8 +193,7 @@ enum SnapshotOwner {
 // SnapshotStorageStatus indicates the lifecycle stage of a durable snapshot.
 enum SnapshotStorageStatus {
   SNAPSHOT_STORAGE_STATUS_UNSPECIFIED = 0;
-  // Snapshot creation in durable storage is in progress, or the snapshot is
-  // currently local-only and may be promoted to durable storage later.
+  // Snapshot creation in durable storage is in progress.
   SNAPSHOT_STORAGE_STATUS_PENDING = 1;
   // Snapshot is complete and ready for use in durable storage.
   SNAPSHOT_STORAGE_STATUS_COMPLETED = 2;
@@ -210,17 +209,10 @@ message SnapshotStorage {
   // +k8s:maximum=2 # keep this in sync with the SnapshotStorageStatus enum
   SnapshotStorageStatus status = 1;
 
-  // fidelity is what the durable snapshot holds.
-  //
-  // +k8s:required
-  // +k8s:minimum=1
-  // +k8s:maximum=3 # keep this in sync with the SnapshotFidelity enum
-  SnapshotFidelity fidelity = 2;
-
   // object snapshot is stored in object storage.
   //
   // +k8s:required
-  ObjectSnapshot object = 3;
+  ObjectSnapshot object = 2;
 }
 
 // Snapshot represents one generation of an Actor's or Tag's snapshot state.
@@ -247,12 +239,19 @@ message Snapshot {
   // +k8s:maximum=2 # keep this in sync with the SnapshotOwner enum
   SnapshotOwner owner = 3;
 
+  // fidelity is what this snapshot holds.
+  //
+  // +k8s:required
+  // +k8s:minimum=1
+  // +k8s:maximum=3 # keep this in sync with the SnapshotFidelity enum
+  SnapshotFidelity fidelity = 4;
+
   // UID of the ActorTemplate whose sandbox this snapshot's guest state was
   // captured from.
   //
   // +k8s:optional
   // +k8s:format=k8s-uuid
-  string actor_template_uid = 4;
+  string actor_template_uid = 5;
 
   // locality identifies where a local copy of this snapshot resides (currently
   // the Kubernetes node name). Empty until a local pause checkpoint completes,
@@ -260,12 +259,13 @@ message Snapshot {
   //
   // +k8s:optional
   // +k8s:format=k8s-long-name
-  string locality = 5;
+  string locality = 6;
 
   // durable_snapshot holds the durable storage representation of this snapshot.
+  // Unset when the snapshot only exists locally.
   //
-  // +k8s:required
-  SnapshotStorage durable_snapshot = 6;
+  // +k8s:optional
+  SnapshotStorage durable_snapshot = 7;
 }
 
 // SnapshotFidelity orders the state layers a snapshot can hold, lowest to
@@ -907,6 +907,7 @@ message TagStatus {
   // is usable only once COMPLETED.
   //
   // +k8s:required
+  // +k8s:subfield(durable_snapshot)=+k8s:required
   Snapshot snapshot = 1;
 
   // UID of the ActorTemplate the snapshot was taken under. Actors can only be

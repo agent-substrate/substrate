@@ -131,14 +131,6 @@ func (w *ActorWorkflow) ensureMarkedPausing(ctx context.Context, actorRef resour
 	}
 
 	snapshotUUID := resources.NewSnapshotName()
-	var snapshotURI string
-	if loc := actorTemplate.GetSnapshotConfig().GetStorageLocation(); loc != "" {
-		uri, err := resources.NewActorSnapshotURI(loc, actor.GetMetadata().GetAtespace(), actor.GetMetadata().GetUid(), snapshotUUID)
-		if err != nil {
-			return nil, fmt.Errorf("while building the snapshot URI for actor %s/%s: %w", actor.GetMetadata().GetAtespace(), actor.GetMetadata().GetName(), err)
-		}
-		snapshotURI = uri.String()
-	}
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_PAUSING
 		// Increment last_assigned_generation for the new Pause request.
@@ -151,7 +143,6 @@ func (w *ActorWorkflow) ensureMarkedPausing(ctx context.Context, actorRef resour
 				actorTemplate.GetMetadata().GetUid(),
 				snapshotUUID,
 				"",
-				snapshotURI,
 			))
 		return nil
 	})
@@ -226,10 +217,11 @@ func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resourc
 // ensurePausedFinalized releases the actor's worker (only when it is still
 // owned by this actor), records where the local snapshot lives, and commits
 // PAUSED with the assignment cleared in a single update — or CRASHED when the
-// worker's node name was lost, since a local snapshot on an unknown node can
-// never be resumed. It re-reads the actor first so an out-of-band transition
-// (e.g. the syncer crashing the actor after its worker died) is not
-// overwritten: with no assignment left there is nothing to finalize.
+// worker's node name was lost or the latest local snapshot entry is missing,
+// since the actor can never be resumed from local state. It re-reads the actor
+// first so an out-of-band transition (e.g. the syncer crashing the actor after
+// its worker died) is not overwritten: with no assignment left there is
+// nothing to finalize.
 func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef resources.ActorRef) (_ *ateapipb.Actor, err error) {
 	ctx, done := stepSpan(ctx, "FinalizePaused")
 	defer func() { err = done(err) }()
@@ -264,38 +256,30 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 		if err != nil {
 			return nil, err
 		}
-		wasAlreadyCrashed := latestActor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_CRASHED
-		newState := ateapipb.ActorState_ACTOR_STATE_PAUSED
-		var crashStatus *ateapipb.ActorCrash
-		if latestActor.GetStatus().GetAssignedNode() == "" {
-			// Without a node name we cannot record where the local snapshot lives,
-			// so the actor can never be resumed (the scheduler would search for a
-			// worker on an unknown node forever). Crash it instead of leaving it
-			// stuck in PAUSED.
-			slog.LogAttrs(ctx, slog.LevelError, "Node name not found during finalize pause, crashing actor",
-				ateattr.ActorRefLogAttrs(actorRef)...)
-			newState = ateapipb.ActorState_ACTOR_STATE_CRASHED
-			crashStatus = newActorCrash(ateattr.OperationPause, crashMessageLocalSnapshotNodeUnknown)
-		}
-		sandboxClass := ""
-		if worker != nil {
-			sandboxClass = worker.GetSandboxClass()
-		}
-		// Snapshot crash attributes before pod and pool pointers are cleared below.
-		latestActor.Status.State = newState
-		crashAttrs := ateattr.ActorMetricAttributes(latestActor, sandboxClass, ateattr.OperationPause)
-
 		storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapipb.Actor) error {
-			toUpdate.Status.State = newState
-			if newState == ateapipb.ActorState_ACTOR_STATE_CRASHED && !wasAlreadyCrashed {
-				toUpdate.Status.Crash = crashStatus
+			var crashStatus *ateapipb.ActorCrash
+			snap := snapshotAtLatestGeneration(toUpdate.Status)
+			if toUpdate.GetStatus().GetAssignedNode() == "" {
+				// Without a node name we cannot record where the local snapshot lives,
+				// so the actor can never be resumed (the scheduler would search for a
+				// worker on an unknown node forever). Crash it instead of leaving it
+				// stuck in PAUSED.
+				slog.LogAttrs(ctx, slog.LevelError, "Node name not found during finalize pause, crashing actor",
+					ateattr.ActorRefLogAttrs(actorRef)...)
+				crashStatus = newActorCrash(ateattr.OperationPause, crashMessageLocalSnapshotNodeUnknown)
+			} else if snap == nil {
+				slog.LogAttrs(ctx, slog.LevelError, "Latest local snapshot not found during finalize pause, crashing actor",
+					ateattr.ActorRefLogAttrs(actorRef)...)
+				crashStatus = newActorCrash(ateattr.OperationPause, crashMessageLocalSnapshotMissing)
 			}
-			if newState != ateapipb.ActorState_ACTOR_STATE_CRASHED {
-				// Record the node locality of the local checkpoint and clear older local checkpoints.
-				snap := snapshotAtLatestGeneration(toUpdate.Status)
-				if snap == nil || snap.GetUuid() == "" {
-					return fmt.Errorf("actor %s has no latest local snapshot", actorRef)
+			if crashStatus != nil {
+				if toUpdate.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+					toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_CRASHED
+					toUpdate.Status.Crash = crashStatus
 				}
+			} else {
+				toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_PAUSED
+				// Record the node locality of the local checkpoint and clear older local checkpoints.
 				clearLocalSnapshots(toUpdate.Status)
 				snap.Locality = toUpdate.GetStatus().GetAssignedNode()
 				pruneSnapshots(toUpdate.Status)
@@ -303,9 +287,13 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 			toUpdate.Status.WorkerAssignment = nil
 			return nil
 		})
-		if err == nil && storedActor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_CRASHED && !wasAlreadyCrashed {
+		if err == nil && storedActor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_CRASHED && latestActor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+			sandboxClass := ""
+			if worker != nil {
+				sandboxClass = worker.GetSandboxClass()
+			}
 			logActorCrashed(ctx, latestActor, ateattr.OperationPause)
-			recordActorCrash(ctx, crashAttrs)
+			recordActorCrash(ctx, ateattr.ActorMetricAttributes(latestActor, sandboxClass, ateattr.OperationPause))
 		}
 		if err == nil && storedActor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_PAUSED {
 			logActorStateChanged(ctx, storedActor, ateattr.OperationPause)

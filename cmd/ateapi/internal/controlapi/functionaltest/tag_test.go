@@ -65,7 +65,7 @@ func seedTag(t *testing.T, tc *testContext, actorName, tagName string, opts ...f
 		Scope:       ateapipb.TagScope_TAG_SCOPE_ATESPACE,
 		SourceActor: resources.ActorRefFromActor(actor).ToObjectRef(),
 		Status: &ateapipb.TagStatus{
-			Snapshot: newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG, durableSnapshotStorage(actor.GetStatus()).GetFidelity(), "", uri.Name(), uri.String()),
+			Snapshot: newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG, durableSnapshot(actor.GetStatus()).GetFidelity(), "", uri.Name(), uri.String()),
 		},
 	}
 	for _, opt := range opts {

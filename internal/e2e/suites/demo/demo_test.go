@@ -685,7 +685,7 @@ func validateSnapshotFidelity(ctx context.Context, t *testing.T, clients *e2e.Cl
 	if durableSnapshotURI(actor.GetStatus()) == "" {
 		t.Fatal("suspended Actor has no external snapshot")
 	}
-	if got := durableSnapshotStorage(actor.GetStatus()).GetFidelity(); got != want {
+	if got := durableSnapshot(actor.GetStatus()).GetFidelity(); got != want {
 		t.Errorf("snapshot %q content scope = %v, want %v", durableSnapshotURI(actor.GetStatus()), got, want)
 	}
 }

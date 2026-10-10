@@ -831,7 +831,7 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 				tag.Status.ActorTemplateUid = "other"
 				wantCode = codes.FailedPrecondition
 			case "data scope":
-				tag.Status.Snapshot.DurableSnapshot.Fidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
+				tag.Status.Snapshot.Fidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
 				wantCode = codes.FailedPrecondition
 			}
 			if scenario != "missing" {

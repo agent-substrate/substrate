@@ -109,10 +109,11 @@ func TestDeleteWorkerWorkflow_ReleasesBoundActor(t *testing.T) {
 	actor := seedAPIActor(t, ctx, persistence, ateapipb.ActorState_ACTOR_STATE_RUNNING, func(a *ateapipb.Actor) {
 		// Both in-progress checkpoints are set so the assertion covers the
 		// shared crash path, which cannot know which workflow was in flight.
-		a.Status.LastAssignedGeneration = 2
+		a.Status.LastAssignedGeneration = 3
 		a.Status.Snapshots = []*ateapipb.Snapshot{
 			newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "last", someActorSnapshotURI(t, testStorageLocation, apiActorRef.Atespace, "last"), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
-			newLocalSnapshot(2, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "partial-local-snapshot", "", someActorSnapshotURI(t, testStorageLocation, apiActorRef.Atespace, "partial-snapshot")),
+			newDurableSnapshot(2, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "partial-snapshot", someActorSnapshotURI(t, testStorageLocation, apiActorRef.Atespace, "partial-snapshot"), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
+			newLocalSnapshot(3, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "partial-local-snapshot", ""),
 		}
 	})
 	assignAPIWorker(t, ctx, persistence, apiWorkerName, actor.GetMetadata().GetUid())

@@ -492,27 +492,23 @@ func newDurableSnapshot(gen int32, owner ateapipb.SnapshotOwner, fidelity ateapi
 		Uuid:             uuid,
 		Generation:       gen,
 		Owner:            owner,
+		Fidelity:         fidelity,
 		ActorTemplateUid: templateUID,
 		DurableSnapshot: &ateapipb.SnapshotStorage{
-			Status:   ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
-			Fidelity: fidelity,
-			Object:   &ateapipb.ObjectSnapshot{SnapshotUri: uri},
+			Status: ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+			Object: &ateapipb.ObjectSnapshot{SnapshotUri: uri},
 		},
 	}
 }
 
-func newLocalSnapshot(gen int32, fidelity ateapipb.SnapshotFidelity, templateUID, uuid, locality, uri string) *ateapipb.Snapshot {
+func newLocalSnapshot(gen int32, fidelity ateapipb.SnapshotFidelity, templateUID, uuid, locality string) *ateapipb.Snapshot {
 	return &ateapipb.Snapshot{
 		Uuid:             uuid,
 		Generation:       gen,
 		Owner:            ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR,
+		Fidelity:         fidelity,
 		ActorTemplateUid: templateUID,
 		Locality:         locality,
-		DurableSnapshot: &ateapipb.SnapshotStorage{
-			Status:   ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING,
-			Fidelity: fidelity,
-			Object:   &ateapipb.ObjectSnapshot{SnapshotUri: uri},
-		},
 	}
 }
 

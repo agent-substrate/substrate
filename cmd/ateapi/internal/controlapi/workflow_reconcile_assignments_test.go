@@ -179,7 +179,7 @@ func TestReconcileAssignments_CrashesEarlierActors(t *testing.T) {
 	actor := seedAPIActor(t, ctx, persistence, ateapipb.ActorState_ACTOR_STATE_RUNNING, func(a *ateapipb.Actor) {
 		a.Status.LastAssignedGeneration = 1
 		a.Status.Snapshots = []*ateapipb.Snapshot{
-			newLocalSnapshot(1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "partial-local-snapshot", "", someActorSnapshotURI(t, testStorageLocation, apiActorRef.Atespace, "partial-local-snapshot")),
+			newLocalSnapshot(1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "partial-local-snapshot", ""),
 		}
 	})
 	assignAPIWorker(t, ctx, persistence, apiWorkerName, actor.GetMetadata().GetUid())

@@ -340,9 +340,10 @@ func PrintTagsTo(out io.Writer, tags []*ateapipb.Tag, format string) error {
 			// A pending tag has no snapshot yet, so neither its URI nor its
 			// fidelity says anything.
 			snapshotURI, fidelity := "<none>", "<none>"
-			if st := durableSnapshotStorage(tag.GetStatus().GetSnapshot()); st != nil {
+			snap := tag.GetStatus().GetSnapshot()
+			if st := durableSnapshotStorage(snap); st != nil {
 				snapshotURI = st.GetObject().GetSnapshotUri()
-				fidelity = st.GetFidelity().String()
+				fidelity = snap.GetFidelity().String()
 			}
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				tag.GetMetadata().GetAtespace(), tag.GetMetadata().GetName(), tag.GetScope(),

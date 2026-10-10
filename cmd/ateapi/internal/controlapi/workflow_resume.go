@@ -138,11 +138,10 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 // whose record drifted — surface a clear error instead of shipping a restore
 // request atelet would reject (or that would boot an empty guest).
 func validateGoldenSnapshotFidelity(snapshot *ateapipb.Snapshot) error {
-	st := snapshot.GetDurableSnapshot()
-	if fidelity := st.GetFidelity(); fidelity != ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
+	if fidelity := snapshot.GetFidelity(); fidelity != ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
 		return apierror.FailedPrecondition(
 			"ActorTemplate golden snapshot %q was taken with fidelity %s, not MEMORY; regenerate the golden snapshot",
-			st.GetObject().GetSnapshotUri(), fidelity)
+			snapshot.GetDurableSnapshot().GetObject().GetSnapshotUri(), fidelity)
 	}
 	return nil
 }
@@ -178,7 +177,7 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 		if src.SnapshotURI, err = resources.ParseSnapshotURI(st.GetObject().GetSnapshotUri()); err != nil {
 			return nil, nil, src, apierror.DataLoss("Actor %s external snapshot: %v", actorRef, err)
 		}
-		src.Fidelity = st.GetFidelity()
+		src.Fidelity = snap.GetFidelity()
 		capturedUnder := snap.GetActorTemplateUid()
 		src.TemplateReplaced = capturedUnder != "" && capturedUnder != actorTemplate.GetMetadata().GetUid()
 	}
@@ -717,7 +716,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		req.Config = &ateletpb.RestoreRequest_LocalConfig{
 			LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: localSnap.GetUuid()},
 		}
-		req.Fidelity = fidelityToAtelet(localSnap.GetDurableSnapshot().GetFidelity())
+		req.Fidelity = fidelityToAtelet(localSnap.GetFidelity())
 		tele.WireFidelity = ateattr.SnapshotFidelityValue(req.Fidelity)
 
 		if _, err = client.Restore(ctx, req); err != nil {

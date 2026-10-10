@@ -600,10 +600,10 @@ func TestPrintTagsTo_Table(t *testing.T) {
 			Scope: ateapipb.TagScope_TAG_SCOPE_PUBLISHED,
 			Status: &ateapipb.TagStatus{
 				Snapshot: &ateapipb.Snapshot{
+					Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 					DurableSnapshot: &ateapipb.SnapshotStorage{
-						Status:   ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
-						Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
-						Object:   &ateapipb.ObjectSnapshot{SnapshotUri: "gs://private/atespaces/team-a/tags/v2"},
+						Status: ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+						Object: &ateapipb.ObjectSnapshot{SnapshotUri: "gs://private/atespaces/team-a/tags/v2"},
 					},
 				},
 			},
@@ -617,10 +617,10 @@ func TestPrintTagsTo_Table(t *testing.T) {
 			Scope: ateapipb.TagScope_TAG_SCOPE_ATESPACE,
 			Status: &ateapipb.TagStatus{
 				Snapshot: &ateapipb.Snapshot{
+					Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 					DurableSnapshot: &ateapipb.SnapshotStorage{
-						Status:   ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
-						Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
-						Object:   &ateapipb.ObjectSnapshot{SnapshotUri: "gs://private/atespaces/team-a/tags/v1"},
+						Status: ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+						Object: &ateapipb.ObjectSnapshot{SnapshotUri: "gs://private/atespaces/team-a/tags/v1"},
 					},
 				},
 			},
@@ -636,10 +636,10 @@ func TestPrintTagsTo_Table(t *testing.T) {
 			Scope: ateapipb.TagScope_TAG_SCOPE_ATESPACE,
 			Status: &ateapipb.TagStatus{
 				Snapshot: &ateapipb.Snapshot{
+					Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 					DurableSnapshot: &ateapipb.SnapshotStorage{
-						Status:   ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING,
-						Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
-						Object:   &ateapipb.ObjectSnapshot{SnapshotUri: "gs://private/atespaces/team-a/tags/v3"},
+						Status: ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING,
+						Object: &ateapipb.ObjectSnapshot{SnapshotUri: "gs://private/atespaces/team-a/tags/v3"},
 					},
 				},
 			},

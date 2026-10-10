@@ -37,6 +37,8 @@ import (
 const (
 	crashMessageWorkerAssignmentMissing  = "actor has no worker assignment in a state that requires one"
 	crashMessageLocalSnapshotNodeUnknown = "node holding the actor's local snapshot is unknown"
+	crashMessageLocalSnapshotMissing     = "actor has no local snapshot"
+	crashMessageDurableSnapshotMissing   = "actor has no durable snapshot"
 	crashMessageWorkerGone               = "assigned worker no longer exists"
 	crashMessageWorkerDraining           = "assigned worker is draining"
 	crashMessageWorkerReassigned         = "assigned worker no longer hosts the actor"

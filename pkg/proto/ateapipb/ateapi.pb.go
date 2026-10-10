@@ -591,16 +591,10 @@ type SnapshotStorage struct {
 	// +k8s:minimum=1
 	// +k8s:maximum=2 # keep this in sync with the SnapshotStorageStatus enum
 	Status SnapshotStorageStatus `protobuf:"varint,1,opt,name=status,proto3,enum=ateapi.SnapshotStorageStatus" json:"status,omitempty"`
-	// fidelity is what the durable snapshot holds.
-	//
-	// +k8s:required
-	// +k8s:minimum=1
-	// +k8s:maximum=3 # keep this in sync with the SnapshotFidelity enum
-	Fidelity SnapshotFidelity `protobuf:"varint,2,opt,name=fidelity,proto3,enum=ateapi.SnapshotFidelity" json:"fidelity,omitempty"`
 	// object snapshot is stored in object storage.
 	//
 	// +k8s:required
-	Object        *ObjectSnapshot `protobuf:"bytes,3,opt,name=object,proto3" json:"object,omitempty"`
+	Object        *ObjectSnapshot `protobuf:"bytes,2,opt,name=object,proto3" json:"object,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -642,13 +636,6 @@ func (x *SnapshotStorage) GetStatus() SnapshotStorageStatus {
 	return SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_UNSPECIFIED
 }
 
-func (x *SnapshotStorage) GetFidelity() SnapshotFidelity {
-	if x != nil {
-		return x.Fidelity
-	}
-	return SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
-}
-
 func (x *SnapshotStorage) GetObject() *ObjectSnapshot {
 	if x != nil {
 		return x.Object
@@ -678,24 +665,30 @@ type Snapshot struct {
 	// +k8s:minimum=1
 	// +k8s:maximum=2 # keep this in sync with the SnapshotOwner enum
 	Owner SnapshotOwner `protobuf:"varint,3,opt,name=owner,proto3,enum=ateapi.SnapshotOwner" json:"owner,omitempty"`
+	// fidelity is what this snapshot holds.
+	//
+	// +k8s:required
+	// +k8s:minimum=1
+	// +k8s:maximum=3 # keep this in sync with the SnapshotFidelity enum
+	Fidelity SnapshotFidelity `protobuf:"varint,4,opt,name=fidelity,proto3,enum=ateapi.SnapshotFidelity" json:"fidelity,omitempty"`
 	// UID of the ActorTemplate whose sandbox this snapshot's guest state was
 	// captured from.
 	//
 	// +k8s:optional
 	// +k8s:format=k8s-uuid
-	ActorTemplateUid string `protobuf:"bytes,4,opt,name=actor_template_uid,json=actorTemplateUid,proto3" json:"actor_template_uid,omitempty"`
+	ActorTemplateUid string `protobuf:"bytes,5,opt,name=actor_template_uid,json=actorTemplateUid,proto3" json:"actor_template_uid,omitempty"`
 	// locality identifies where a local copy of this snapshot resides (currently
 	// the Kubernetes node name). Empty until a local pause checkpoint completes,
 	// and cleared when the local copy is superseded or discarded.
 	//
 	// +k8s:optional
 	// +k8s:format=k8s-long-name
-	Locality string `protobuf:"bytes,5,opt,name=locality,proto3" json:"locality,omitempty"`
+	Locality string `protobuf:"bytes,6,opt,name=locality,proto3" json:"locality,omitempty"`
 	// durable_snapshot holds the durable storage representation of this snapshot.
 	// Unset when the snapshot only exists locally.
 	//
 	// +k8s:optional
-	DurableSnapshot *SnapshotStorage `protobuf:"bytes,6,opt,name=durable_snapshot,json=durableSnapshot,proto3" json:"durable_snapshot,omitempty"`
+	DurableSnapshot *SnapshotStorage `protobuf:"bytes,7,opt,name=durable_snapshot,json=durableSnapshot,proto3" json:"durable_snapshot,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -749,6 +742,13 @@ func (x *Snapshot) GetOwner() SnapshotOwner {
 		return x.Owner
 	}
 	return SnapshotOwner_SNAPSHOT_OWNER_UNSPECIFIED
+}
+
+func (x *Snapshot) GetFidelity() SnapshotFidelity {
+	if x != nil {
+		return x.Fidelity
+	}
+	return SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
 }
 
 func (x *Snapshot) GetActorTemplateUid() string {
@@ -8386,20 +8386,20 @@ const file_ateapi_proto_rawDesc = "" +
 	"\n" +
 	"\fateapi.proto\x12\x06ateapi\x1a\x1fgoogle/protobuf/timestamp.proto\"3\n" +
 	"\x0eObjectSnapshot\x12!\n" +
-	"\fsnapshot_uri\x18\x01 \x01(\tR\vsnapshotUri\"\xae\x01\n" +
+	"\fsnapshot_uri\x18\x01 \x01(\tR\vsnapshotUri\"x\n" +
 	"\x0fSnapshotStorage\x125\n" +
-	"\x06status\x18\x01 \x01(\x0e2\x1d.ateapi.SnapshotStorageStatusR\x06status\x124\n" +
-	"\bfidelity\x18\x02 \x01(\x0e2\x18.ateapi.SnapshotFidelityR\bfidelity\x12.\n" +
-	"\x06object\x18\x03 \x01(\v2\x16.ateapi.ObjectSnapshotR\x06object\"\xf9\x01\n" +
+	"\x06status\x18\x01 \x01(\x0e2\x1d.ateapi.SnapshotStorageStatusR\x06status\x12.\n" +
+	"\x06object\x18\x02 \x01(\v2\x16.ateapi.ObjectSnapshotR\x06object\"\xaf\x02\n" +
 	"\bSnapshot\x12\x12\n" +
 	"\x04uuid\x18\x01 \x01(\tR\x04uuid\x12\x1e\n" +
 	"\n" +
 	"generation\x18\x02 \x01(\x05R\n" +
 	"generation\x12+\n" +
-	"\x05owner\x18\x03 \x01(\x0e2\x15.ateapi.SnapshotOwnerR\x05owner\x12,\n" +
-	"\x12actor_template_uid\x18\x04 \x01(\tR\x10actorTemplateUid\x12\x1a\n" +
-	"\blocality\x18\x05 \x01(\tR\blocality\x12B\n" +
-	"\x10durable_snapshot\x18\x06 \x01(\v2\x17.ateapi.SnapshotStorageR\x0fdurableSnapshot\"\x90\x01\n" +
+	"\x05owner\x18\x03 \x01(\x0e2\x15.ateapi.SnapshotOwnerR\x05owner\x124\n" +
+	"\bfidelity\x18\x04 \x01(\x0e2\x18.ateapi.SnapshotFidelityR\bfidelity\x12,\n" +
+	"\x12actor_template_uid\x18\x05 \x01(\tR\x10actorTemplateUid\x12\x1a\n" +
+	"\blocality\x18\x06 \x01(\tR\blocality\x12B\n" +
+	"\x10durable_snapshot\x18\a \x01(\v2\x17.ateapi.SnapshotStorageR\x0fdurableSnapshot\"\x90\x01\n" +
 	"\bSelector\x12D\n" +
 	"\fmatch_labels\x18\x01 \x03(\v2!.ateapi.Selector.MatchLabelsEntryR\vmatchLabels\x1a>\n" +
 	"\x10MatchLabelsEntry\x12\x10\n" +
@@ -9053,9 +9053,9 @@ var file_ateapi_proto_goTypes = []any{
 }
 var file_ateapi_proto_depIdxs = []int32{
 	1,   // 0: ateapi.SnapshotStorage.status:type_name -> ateapi.SnapshotStorageStatus
-	2,   // 1: ateapi.SnapshotStorage.fidelity:type_name -> ateapi.SnapshotFidelity
-	9,   // 2: ateapi.SnapshotStorage.object:type_name -> ateapi.ObjectSnapshot
-	0,   // 3: ateapi.Snapshot.owner:type_name -> ateapi.SnapshotOwner
+	9,   // 1: ateapi.SnapshotStorage.object:type_name -> ateapi.ObjectSnapshot
+	0,   // 2: ateapi.Snapshot.owner:type_name -> ateapi.SnapshotOwner
+	2,   // 3: ateapi.Snapshot.fidelity:type_name -> ateapi.SnapshotFidelity
 	10,  // 4: ateapi.Snapshot.durable_snapshot:type_name -> ateapi.SnapshotStorage
 	126, // 5: ateapi.Selector.match_labels:type_name -> ateapi.Selector.MatchLabelsEntry
 	129, // 6: ateapi.ResourceMetadata.create_time:type_name -> google.protobuf.Timestamp

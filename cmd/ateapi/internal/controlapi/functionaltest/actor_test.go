@@ -297,7 +297,7 @@ func TestCreateActor_RejectsDifferentTemplateForDataSnapshot(t *testing.T) {
 	createTemplateWithSelector(t, tc, "tmpl2", nil)
 
 	seedTag(t, tc, "data-source", "data-snapshot", func(tag *ateapipb.Tag) {
-		tag.Status.Snapshot.DurableSnapshot.Fidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
+		tag.Status.Snapshot.Fidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
 		tag.Status.ActorTemplateUid = tmpl.GetMetadata().GetUid()
 	})
 
@@ -3640,7 +3640,7 @@ func TestSuspendActor(t *testing.T) {
 	assertSnapshotPresent(t, tc, snapshotURI)
 	assertSnapshotPresent(t, tc, taggedSnapshotURI)
 
-	wantTagSnap := newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG, durableSnapshotStorage(sourceActor.GetStatus()).GetFidelity(), "", tagged.GetStatus().GetSnapshot().GetUuid(), taggedSnapshotURI)
+	wantTagSnap := newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG, durableSnapshot(sourceActor.GetStatus()).GetFidelity(), "", tagged.GetStatus().GetSnapshot().GetUuid(), taggedSnapshotURI)
 	wantTag := &ateapipb.Tag{
 		Metadata:    &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: tagName},
 		Scope:       ateapipb.TagScope_TAG_SCOPE_ATESPACE,
@@ -3744,7 +3744,7 @@ func TestSuspendActor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetActor failed: %v", err)
 	}
-	wantActorSnap := newDurableSnapshot(2, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, durableSnapshotStorage(sourceActor.GetStatus()).GetFidelity(), tmpl.GetMetadata().GetUid(), durableSnapshot(sourceActor.GetStatus()).GetUuid(), snapshotURI)
+	wantActorSnap := newDurableSnapshot(2, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, durableSnapshot(sourceActor.GetStatus()).GetFidelity(), tmpl.GetMetadata().GetUid(), durableSnapshot(sourceActor.GetStatus()).GetUuid(), snapshotURI)
 	want := &ateapipb.Actor{
 		Metadata:      &ateapipb.ResourceMetadata{Name: name, Atespace: testAtespace},
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
@@ -4040,10 +4040,6 @@ func TestPauseActor(t *testing.T) {
 	if ls.GetUuid() == "" {
 		t.Error("Snapshot.Uuid is empty, want the name the pause checkpointed under")
 	}
-	wantPauseURI, err := resources.NewActorSnapshotURI(tmpl.GetSnapshotConfig().GetStorageLocation(), testAtespace, getResp.GetMetadata().GetUid(), ls.GetUuid())
-	if err != nil {
-		t.Fatalf("NewActorSnapshotURI: %v", err)
-	}
 	want := &ateapipb.Actor{
 		Metadata:      &ateapipb.ResourceMetadata{Name: name, Atespace: testAtespace},
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
@@ -4053,7 +4049,7 @@ func TestPauseActor(t *testing.T) {
 			LastAssignedGeneration: 2,
 			Snapshots: []*ateapipb.Snapshot{
 				newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), goldenSnapshotName, goldenSnapshotURI(t)),
-				newLocalSnapshot(2, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), "ignored", "node1", wantPauseURI.String()),
+				newLocalSnapshot(2, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), "ignored", "node1"),
 			},
 		},
 	}
@@ -4759,7 +4755,7 @@ func TestSuspendActor_FromPaused(t *testing.T) {
 	if got, want := durableSnapshotURI(actor.GetStatus()), upload.GetDestinationSnapshotUri(); got != want {
 		t.Errorf("snapshot URI = %q, want the upload destination %q", got, want)
 	}
-	if got := durableSnapshotStorage(actor.GetStatus()).GetFidelity(); got != ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
+	if got := durableSnapshot(actor.GetStatus()).GetFidelity(); got != ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
 		t.Errorf("snapshot Fidelity = %v, want FULL", got)
 	}
 }

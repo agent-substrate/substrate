@@ -571,41 +571,41 @@ func TestValidateActorUpdate(t *testing.T) {
 		})),
 		field.ErrorList{field.Duplicate(field.NewPath("status", "snapshots").Index(1), nil)},
 	}, {
-		"valid actor.status.snapshots.durable_snapshot.fidelity",
+		"valid actor.status.snapshots.fidelity",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
 			s.Snapshots = []*ateapipb.Snapshot{validSnapshot(func(snap *ateapipb.Snapshot) {
-				snap.DurableSnapshot.Fidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
+				snap.Fidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
 			})}
 		})),
 		nil,
 	}, {
-		"missing actor.status.snapshots.durable_snapshot.fidelity",
+		"missing actor.status.snapshots.fidelity",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
 			s.Snapshots = []*ateapipb.Snapshot{validSnapshot(func(snap *ateapipb.Snapshot) {
-				snap.DurableSnapshot.Fidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
+				snap.Fidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
 			})}
 		})),
-		field.ErrorList{field.Required(field.NewPath("status", "snapshots").Index(0).Child("durable_snapshot", "fidelity"), "")},
+		field.ErrorList{field.Required(field.NewPath("status", "snapshots").Index(0).Child("fidelity"), "")},
 	}, {
-		"negative actor.status.snapshots.durable_snapshot.fidelity",
+		"negative actor.status.snapshots.fidelity",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
 			s.Snapshots = []*ateapipb.Snapshot{validSnapshot(func(snap *ateapipb.Snapshot) {
-				snap.DurableSnapshot.Fidelity = ateapipb.SnapshotFidelity(-1)
+				snap.Fidelity = ateapipb.SnapshotFidelity(-1)
 			})}
 		})),
-		field.ErrorList{field.Invalid(field.NewPath("status", "snapshots").Index(0).Child("durable_snapshot", "fidelity"), nil, "").WithOrigin("minimum")},
+		field.ErrorList{field.Invalid(field.NewPath("status", "snapshots").Index(0).Child("fidelity"), nil, "").WithOrigin("minimum")},
 	}, {
-		"invalid actor.status.snapshots.durable_snapshot.fidelity",
+		"invalid actor.status.snapshots.fidelity",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
 			s.Snapshots = []*ateapipb.Snapshot{validSnapshot(func(snap *ateapipb.Snapshot) {
-				snap.DurableSnapshot.Fidelity = ateapipb.SnapshotFidelity(4)
+				snap.Fidelity = ateapipb.SnapshotFidelity(4)
 			})}
 		})),
-		field.ErrorList{field.Invalid(field.NewPath("status", "snapshots").Index(0).Child("durable_snapshot", "fidelity"), nil, "").WithOrigin("maximum")},
+		field.ErrorList{field.Invalid(field.NewPath("status", "snapshots").Index(0).Child("fidelity"), nil, "").WithOrigin("maximum")},
 	}, {
 		"too many external_volumes",
 		validInput(),

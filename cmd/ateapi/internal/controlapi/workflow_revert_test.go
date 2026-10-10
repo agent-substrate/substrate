@@ -100,8 +100,8 @@ func TestRevertActor_ReturnsActorToItsSnapshot(t *testing.T) {
 				s.LastAssignedGeneration = 3
 				s.Snapshots = []*ateapipb.Snapshot{
 					newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "kept", keptURI, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
-					newLocalSnapshot(2, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "local-1", "node-1", ""),
-					newLocalSnapshot(3, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "local-in-progress", "", ""),
+					newLocalSnapshot(2, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "local-1", "node-1"),
+					newLocalSnapshot(3, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "local-in-progress", ""),
 				}
 			})
 
@@ -135,6 +135,9 @@ func TestRevertActor_ReturnsActorToItsSnapshot(t *testing.T) {
 			}
 			if got := findLatestDurableSnapshot(gotStatus, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING); got != nil {
 				t.Errorf("in-progress durable snapshot = %v, want nil", got)
+			}
+			if got := len(gotStatus.GetSnapshots()); got != 1 {
+				t.Errorf("len(snapshots) = %d, want 1 (only the completed durable snapshot should remain)", got)
 			}
 			if got := gotStatus.GetAssignedNode(); got != "" {
 				t.Errorf("assigned node = %q, want empty", got)

@@ -88,9 +88,7 @@ func clearLocalSnapshots(status *ateapipb.ActorStatus) {
 // because:
 //   - On pause finalization, pause is only reachable from RUNNING (a failed
 //     suspend cannot resume without reverting first, which discards any
-//     in-flight upload), so any older PENDING entry was only pre-populated by
-//     an earlier pause that was resumed rather than suspended and never wrote
-//     to object storage.
+//     in-flight upload), so no uncleaned PENDING durable snapshot exists.
 //   - On revert finalization, ensureInProgressSnapshotDiscarded has already
 //     deleted any in-flight durable snapshot objects.
 //   - On suspend finalization, the latest snapshot has already been marked
@@ -119,29 +117,25 @@ func newDurableSnapshot(gen int32, owner ateapipb.SnapshotOwner, fidelity ateapi
 		Uuid:             uuid,
 		Generation:       gen,
 		Owner:            owner,
+		Fidelity:         fidelity,
 		ActorTemplateUid: templateUID,
 		DurableSnapshot: &ateapipb.SnapshotStorage{
-			Status:   storageStatus,
-			Fidelity: fidelity,
-			Object:   &ateapipb.ObjectSnapshot{SnapshotUri: uri},
+			Status: storageStatus,
+			Object: &ateapipb.ObjectSnapshot{SnapshotUri: uri},
 		},
 	}
 }
 
 // newLocalSnapshot constructs an actor Snapshot for a local pause checkpoint
-// with Uuid, Locality, and a prepopulated PENDING DurableSnapshot entry.
-func newLocalSnapshot(gen int32, fidelity ateapipb.SnapshotFidelity, templateUID, uuid, locality, uri string) *ateapipb.Snapshot {
+// with Uuid, Fidelity, and Locality.
+func newLocalSnapshot(gen int32, fidelity ateapipb.SnapshotFidelity, templateUID, uuid, locality string) *ateapipb.Snapshot {
 	return &ateapipb.Snapshot{
 		Uuid:             uuid,
 		Generation:       gen,
 		Owner:            ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR,
+		Fidelity:         fidelity,
 		ActorTemplateUid: templateUID,
 		Locality:         locality,
-		DurableSnapshot: &ateapipb.SnapshotStorage{
-			Status:   ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING,
-			Fidelity: fidelity,
-			Object:   &ateapipb.ObjectSnapshot{SnapshotUri: uri},
-		},
 	}
 }
 
