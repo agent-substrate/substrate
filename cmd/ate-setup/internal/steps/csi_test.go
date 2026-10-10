@@ -17,10 +17,14 @@ package steps
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
+	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kube"
 )
 
 // setupCSIWithoutACluster runs SetupCSI against an Env holding no cluster
@@ -120,6 +124,46 @@ func TestTheHostpathControllerServiceIsCreatedBeforeTheDriver(t *testing.T) {
 		t.Error("setupCSIHostpath deploys the hostpath driver before creating the " +
 			"csi-hostpath-controller Service; the socat sidecar cannot be issued a " +
 			"certificate until the Service exists")
+	}
+}
+
+// The e2e tests, the demos and the benchmarks all provision from csi-nfs-sc, so
+// both NFS setups apply the one manifest that defines it rather than each
+// carrying a copy that can drift. The step wants a cluster, so which file it
+// applies is pinned in the source.
+func TestTheNFSSetupsApplyTheSharedStorageClass(t *testing.T) {
+	const manifest = "hack/third_party/csi-driver-nfs/deploy/example/storageclass-nfs.yaml"
+	root := repoRoot(t)
+
+	objs, err := kube.LoadPath(filepath.Join(root, manifest))
+	if err != nil {
+		t.Fatalf("loading %s: %v", manifest, err)
+	}
+	if len(objs) != 1 || objs[0].GetKind() != "StorageClass" || objs[0].GetName() != "csi-nfs-sc" {
+		t.Fatalf("%s holds %d object(s), want only the csi-nfs-sc StorageClass", manifest, len(objs))
+	}
+	if p, _, _ := unstructured.NestedString(objs[0].Object, "provisioner"); p != "nfs.csi.k8s.io" {
+		t.Errorf("csi-nfs-sc provisioner = %q, want nfs.csi.k8s.io", p)
+	}
+
+	goSetup := functionBody(t, "csi.go", "func (e *Env) setupCSINFS(")
+	if !strings.Contains(goSetup, `deployDir+"/example/storageclass-nfs.yaml"`) {
+		t.Errorf("setupCSINFS no longer applies %s", manifest)
+	}
+	script, err := os.ReadFile(filepath.Join(root, "hack", "setup-csi-nfs-kind.sh"))
+	if err != nil {
+		t.Fatalf("reading the shell setup: %v", err)
+	}
+	if !strings.Contains(string(script), manifest) {
+		t.Errorf("hack/setup-csi-nfs-kind.sh no longer applies %s", manifest)
+	}
+	for name, src := range map[string]string{
+		"setupCSINFS":                goSetup,
+		"hack/setup-csi-nfs-kind.sh": string(script),
+	} {
+		if strings.Contains(src, "kind: StorageClass") {
+			t.Errorf("%s defines a StorageClass inline; apply %s instead", name, manifest)
+		}
 	}
 }
 

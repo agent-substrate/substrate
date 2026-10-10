@@ -39,23 +39,6 @@ import (
 // they mount inside it are visible to atelet.
 const ateomHostDir = nodepath.BasePath
 
-// csiNFSStorageClass is the StorageClass the external volume demos provision
-// from.
-const csiNFSStorageClass = `
-apiVersion: storage.k8s.io/v1
-kind: StorageClass
-metadata:
-  name: csi-nfs-sc
-provisioner: nfs.csi.k8s.io
-parameters:
-  server: nfs-server.default.svc.cluster.local
-  share: /
-reclaimPolicy: Delete
-volumeBindingMode: Immediate
-mountOptions:
-  - nfsvers=4.1
-`
-
 // csiHostpathControllerService fronts the hostpath driver's socat sidecar,
 // which bridges the TCP endpoint atelet dials to the driver's unix socket. The
 // CSIDriverConfig applied later names this Service in both its
@@ -410,7 +393,7 @@ spec:
 	// The driver resolves the server's DNS name at provisioning time, so the
 	// StorageClass can be created before the NFS server has an address.
 	log.Infof("Creating the csi-nfs-sc StorageClass...")
-	if err := e.applyInline(ctx, csiNFSStorageClass); err != nil {
+	if err := e.Kube.ApplyPath(ctx, deployDir+"/example/storageclass-nfs.yaml"); err != nil {
 		return err
 	}
 
