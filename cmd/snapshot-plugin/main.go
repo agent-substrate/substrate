@@ -33,6 +33,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/objectstore"
 	"github.com/agent-substrate/substrate/internal/objectstoreplugin"
+	"github.com/agent-substrate/substrate/internal/pluginsocket"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/pkg/objectstorage"
 	objectstorev1 "github.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1"
@@ -105,7 +106,7 @@ func main() {
 	}
 	healthpb.RegisterHealthServer(srv, health.NewServer())
 
-	lis, err := objectstoreplugin.Listen(*socket)
+	lis, err := pluginsocket.Listen(*socket)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to listen", err)
 	}
@@ -149,12 +150,12 @@ func newObjectStore(ctx context.Context) (objectstore.Store, error) {
 // healthcheck dials the plugin at socket and waits up to timeout for it to
 // report that it is serving.
 func healthcheck(ctx context.Context, socket string, timeout time.Duration) error {
-	conn, err := objectstoreplugin.Dial(socket, objectstoreplugin.ReadyWait)
+	conn, err := pluginsocket.Dial(socket, pluginsocket.ReadyWait)
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	return objectstoreplugin.WaitReady(ctx, conn)
+	return pluginsocket.WaitReady(ctx, conn)
 }

@@ -20,7 +20,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/agent-substrate/substrate/internal/objectstoreplugin"
+	"github.com/agent-substrate/substrate/internal/pluginsocket"
 	objectstorev1 "github.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1"
 	"google.golang.org/grpc"
 )
@@ -39,12 +39,12 @@ func (s *AteomHerder) fetchSnapshotFiles(ctx context.Context, snapshotURI, dstDi
 		WritePath:   dstDir,
 		Files:       files,
 	})
-	return objectstoreplugin.CallError(err)
+	return pluginsocket.CallError(err)
 }
 
 // uploadSnapshotFiles uploads the named files in srcDir to the snapshot,
 // passing opts to the plugin call. It returns the plugin's error as is: an
-// upload that can be retried reports it through objectstoreplugin.CallError,
+// upload that can be retried reports it through pluginsocket.CallError,
 // one that cannot does not.
 func (s *AteomHerder) uploadSnapshotFiles(ctx context.Context, snapshotURI, srcDir string, files []string, opts ...grpc.CallOption) error {
 	if len(files) == 0 {

@@ -43,9 +43,9 @@ import (
 	"github.com/agent-substrate/substrate/internal/credbundle"
 	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/nodepath"
-	"github.com/agent-substrate/substrate/internal/objectstoreplugin"
 	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/otlprelay"
+	"github.com/agent-substrate/substrate/internal/pluginsocket"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -283,7 +283,7 @@ func main() {
 	go trustBundles.Informer().Run(stopCh)
 	cache.WaitForCacheSync(stopCh, trustBundles.Informer().HasSynced)
 
-	snapshotPluginConn, err := objectstoreplugin.Dial(*snapshotPluginSocket, objectstoreplugin.ReadyWait)
+	snapshotPluginConn, err := pluginsocket.Dial(*snapshotPluginSocket, pluginsocket.ReadyWait)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to set up the snapshot plugin client", err)
 	}
@@ -291,7 +291,7 @@ func main() {
 	// A plugin that never serves would fail every call. Fail at startup
 	// instead, giving the sidecar time to come up.
 	readyCtx, cancelReady := context.WithTimeout(ctx, time.Minute)
-	err = objectstoreplugin.WaitReady(readyCtx, snapshotPluginConn)
+	err = pluginsocket.WaitReady(readyCtx, snapshotPluginConn)
 	cancelReady()
 	if err != nil {
 		serverboot.Fatal(ctx, "Snapshot plugin is not serving", err)
@@ -874,7 +874,7 @@ func shouldHaveSnapshots(req *ateletpb.CheckpointRequest) bool {
 
 // uploadExternalCheckpoint uploads the checkpoint CheckpointWorkload just
 // took. Its plugin calls pass grpc.WaitForReady, so they wait out a plugin
-// outage for as long as ctx allows rather than only objectstoreplugin's ready
+// outage for as long as ctx allows rather than only pluginsocket's ready
 // wait, and their errors are not reported as retryable: see Checkpoint.
 func (s *AteomHerder) uploadExternalCheckpoint(ctx context.Context, req *ateletpb.CheckpointRequest, checkpointDir string, rec *sandboxAssetsRecord) error {
 	uri, err := resources.ParseSnapshotURI(req.GetExternalConfig().GetSnapshotUri())
@@ -1019,7 +1019,7 @@ func (s *AteomHerder) uploadLocalCheckpointDir(ctx context.Context, req *ateletp
 
 	// The local snapshot stays until the upload succeeds, so a retry can
 	// upload it again.
-	return rec.SandboxClass, objectstoreplugin.CallError(s.uploadSnapshot(ctx, uri, localDir, rec, req.GetActorTemplateAtespace(), req.GetActorTemplateName()))
+	return rec.SandboxClass, pluginsocket.CallError(s.uploadSnapshot(ctx, uri, localDir, rec, req.GetActorTemplateAtespace(), req.GetActorTemplateName()))
 }
 
 func readSnapshotManifest(dir string) ([]byte, error) {
