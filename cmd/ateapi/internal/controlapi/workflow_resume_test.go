@@ -30,6 +30,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/installdefaults"
+	"github.com/agent-substrate/substrate/internal/preview"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/volume"
@@ -1542,6 +1543,7 @@ func (p *publishContextVolumePlugin) AttachVolume(ctx context.Context, req volum
 // The attach step hands the publish context to the Restore call in memory and
 // leaves the stored actor untouched.
 func TestEnsureVolumesAttached_ReturnsPublishContext(t *testing.T) {
+	preview.InitForTest(t, "ExternalVolumes")
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}

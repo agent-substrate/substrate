@@ -34,6 +34,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/deviceplugin"
 	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/nodepath"
+	"github.com/agent-substrate/substrate/internal/preview"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 )
 
@@ -831,6 +832,7 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 				"--atunnel-client-identity="+installdefaults.RouterSPIFFEID(installdefaults.SystemNamespace),
 				"--atunnel-egress-listen-address=0.0.0.0:15001",
 				"--atunnel-egress-trust-bundle="+atunnelEgressTrustMountPath+"/trust-bundle.pem",
+				"--preview=",
 			).
 			WithPorts(corev1ac.ContainerPort().
 				WithName("https").
@@ -1066,6 +1068,35 @@ func TestBuildDeploymentApplyConfigLogsExporter(t *testing.T) {
 			got, ok := envByName(c.Env)["OTEL_LOGS_EXPORTER"]
 			if ok != (tt.want != "") || (ok && got.value != tt.want) {
 				t.Errorf("OTEL_LOGS_EXPORTER = %q (present %v), want %q", got.value, ok, tt.want)
+			}
+		})
+	}
+}
+
+// ateom gets preview features when the controller has them.
+func TestBuildDeploymentPreview(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		gates []string
+		want  []string
+	}{
+		{name: "disabled", want: []string{"--preview="}},
+		{name: "named", gates: []string{"Fake"}, want: []string{"--preview=Fake"}},
+		{name: "wildcard", gates: []string{"*"}, want: []string{"--preview=Fake,Phony"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			preview.InitForTestFake(t, []preview.Gate{"Fake", "Phony"}, tc.gates...)
+			c := buildDeploymentApplyConfig(testWorkerPoolApplyConfig(nil), ateomOTelSettings{},
+				installdefaults.SystemNamespace, installdefaults.AteletServiceAccount, installdefaults.RouterServiceAccount).
+				Spec.Template.Spec.Containers[0]
+			var got []string
+			for _, arg := range c.Args {
+				if strings.HasPrefix(arg, "--preview") {
+					got = append(got, arg)
+				}
+			}
+			if diff := cmp.Diff(tc.want, got); diff != "" {
+				t.Errorf("--preview args mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}

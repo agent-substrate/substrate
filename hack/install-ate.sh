@@ -90,6 +90,7 @@ usage() {
   echo "Overall infrastructure (all infrastructure components):"
   echo ""
   echo "  --deploy-ate-system                    Deploy core system (CRDs, atelet, apiserver)"
+  echo "  --preview GATES                        Enable preview gates (comma-separated, '*' for all, '' for none)"
   echo "  --setup-csi[=DRIVER]                   Setup CSI driver: nfs, hostpath, both, none (default: none;"
   echo "                                         a bare --setup-csi means nfs; hostpath is Kind only)"
   echo "  --delete-ate-system                    Delete core system"
@@ -268,6 +269,14 @@ for ((i = 0; i < ${#prescan_args[@]}; i++)); do
       fi
       GLOBAL_FLAGS+=("--atenet-dataplane=${prescan_args[$((i + 1))]}")
       ;;
+    --preview=*) GLOBAL_FLAGS+=("${prescan_args[i]}") ;;
+    --preview)
+      if (( i + 1 >= ${#prescan_args[@]} )); then
+        echo "Error: --preview requires a value" >&2
+        exit 1
+      fi
+      GLOBAL_FLAGS+=("--preview=${prescan_args[$((i + 1))]}")
+      ;;
     --experimental-additional-egress-extproc-service=*)
       GLOBAL_FLAGS+=("${prescan_args[i]}")
       ;;
@@ -368,6 +377,8 @@ while [[ "$#" -gt 0 ]]; do
     --experimental-additional-egress-extproc-service=*) ;;
     --credential-provider=*) ;;
     --benchmark-worker-count=*|--benchmark-sandbox-class=*|--benchmark-actor-memory=*) ;;
+    --preview) shift ;;
+    --preview=*) ;;
 
     --deploy-ate-system) ate_setup deploy ate-system "--setup-csi=${SETUP_CSI}" ;;
     --setup-csi=*) ate_setup setup csi "${SETUP_CSI}" ;;

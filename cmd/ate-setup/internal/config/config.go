@@ -204,6 +204,9 @@ type Config struct {
 	// OtlpEndpoint is where the control plane ships telemetry
 	// (ATE_OTLP_ENDPOINT). Benchmark actors are pointed at it too.
 	OtlpEndpoint string
+	// PreviewGates is the --preview value (ATE_PREVIEW) every substrate
+	// component is deployed with: gate names, or "*" for all of them.
+	PreviewGates []string
 	// BenchmarkActorMemory is the memory limit for benchmark actors
 	// (BENCHMARK_ACTOR_MEMORY). Empty leaves the workload default in place.
 	BenchmarkActorMemory string
@@ -421,6 +424,10 @@ func (c *Config) ScriptEnv() []string {
 	delete(merged, "ATE_INSTALL_CLUSTER_SIZE")
 	if c.ClusterSize != "" && c.ClusterSize != ClusterSizeSize0 {
 		merged["ATE_INSTALL_CLUSTER_SIZE"] = c.ClusterSize
+	}
+	delete(merged, "ATE_PREVIEW")
+	if len(c.PreviewGates) > 0 {
+		merged["ATE_PREVIEW"] = strings.Join(c.PreviewGates, ",")
 	}
 	delete(merged, "ATE_INSTALL_CORDON_CONTROL_PLANE")
 	if c.CordonControlPlane {

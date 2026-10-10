@@ -172,6 +172,11 @@ func (w *ActorWorkflow) ensureAteletTerminated(ctx context.Context, actorRef res
 			slog.String("actor", actorRef.Name),
 			slog.String("templateAtespace", actor.GetActorTemplate().GetAtespace()),
 			slog.String("templateName", actor.GetActorTemplate().GetName()))
+		// Given that external volumes has been in the codebase for a while and
+		// its preview-ness is solely around the API, and that the impact of
+		// disabling the gate while in use would be an orphaned volume
+		// attachment, we are NOT checking the ExternalVolumes gate in the
+		// delete/suspend path.
 		workloadSpec = &ateletpb.WorkloadSpec{}
 		for _, vol := range actor.GetStatus().GetExternalVolumes() {
 			// StorageVolumeId is only populated once the volume is provisioned.
@@ -217,6 +222,11 @@ func (w *ActorWorkflow) ensureVolumesDetachedForDelete(ctx context.Context, acto
 	ctx, done := stepSpan(ctx, "DetachVolumesForDelete")
 	defer func() { err = done(err) }()
 
+	// Given that external volumes has been in the codebase for a while and
+	// its preview-ness is solely around the API, and that the impact of
+	// disabling the gate while in use would be an orphaned volume
+	// attachment, we are NOT checking the ExternalVolumes gate in the
+	// delete/suspend path.
 	return detachActorVolumes(ctx, w.pluginRegistry, actor, actorTemplate, "delete")
 }
 
@@ -333,6 +343,11 @@ func (w *ActorWorkflow) ensureMarkedDeleting(ctx context.Context, actorRef resou
 
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_DELETING
+		// Given that external volumes has been in the codebase for a while and
+		// its preview-ness is solely around the API, and that the impact of
+		// disabling the gate while in use would be an orphaned volume
+		// attachment, we are NOT checking the ExternalVolumes gate in the
+		// delete/suspend path.
 		for _, vol := range toUpdate.GetStatus().GetExternalVolumes() {
 			vol.Status = ateapipb.ExternalVolume_STATUS_DELETING
 		}
@@ -359,6 +374,11 @@ func (w *ActorWorkflow) ensureVolumesDeleted(ctx context.Context, actor *ateapip
 		return apierror.FailedPrecondition("DeleteVolumes prerequisite not met for Actor: %s (got: %v, want %s)", actor.GetMetadata().GetName(), st, ateapipb.ActorState_ACTOR_STATE_DELETING)
 	}
 
+	// Given that external volumes has been in the codebase for a while and
+	// its preview-ness is solely around the API, and that the impact of
+	// disabling the gate while in use would be an orphaned volume
+	// attachment, we are NOT checking the ExternalVolumes gate in the
+	// delete/suspend path.
 	if err := deleteActorVolumes(ctx, w.pluginRegistry, actor.GetMetadata().GetUid(), actor.GetStatus().GetExternalVolumes()); err != nil {
 		return apierror.Internal("while deleting actor volumes: %v", err)
 	}

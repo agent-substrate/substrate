@@ -33,6 +33,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/objectstore"
 	"github.com/agent-substrate/substrate/internal/objectstoreplugin"
+	"github.com/agent-substrate/substrate/internal/preview"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/pkg/objectstorage"
 	objectstorev1 "github.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1"
@@ -55,10 +56,14 @@ func main() {
 	socket := flags.String("socket", "", "Unix socket to serve on, or to check in healthcheck mode")
 	root := flags.String("root", nodepath.BasePath, "node mode: the only directory tree local snapshot files may be read from or written to")
 	timeout := flags.Duration("timeout", 5*time.Second, "healthcheck mode: how long to wait for the plugin to report that it is serving")
+	previewFlags := flags.StringSlice("preview", nil, "Preview gates to enable.")
 	_ = flags.Parse(os.Args[2:])
 
 	ctx := context.Background()
 	serverboot.InitLogger()
+	if err := preview.Init(*previewFlags...); err != nil {
+		serverboot.Fatal(ctx, "Invalid --preview", err)
+	}
 	if *socket == "" {
 		serverboot.Fatal(ctx, "Missing --socket", fmt.Errorf("--socket is required"))
 	}

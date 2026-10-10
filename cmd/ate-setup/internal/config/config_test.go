@@ -19,11 +19,15 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/spf13/pflag"
+
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/images"
+	"github.com/agent-substrate/substrate/internal/preview"
 )
 
 // loadEnv isolates Load from the ambient environment.
@@ -62,6 +66,7 @@ func loadEnv(t *testing.T) {
 		"ATE_INSTALL_PODCERT_WORKERS_PER_SIGNER",
 		"ATE_INSTALL_ROLLOUT_TIMEOUT",
 		"ATE_OTLP_ENDPOINT",
+		"ATE_PREVIEW",
 		"BENCHMARK_ACTOR_MEMORY",
 		"BUCKET_NAME",
 		"CLUSTER_LOCATION",
@@ -217,6 +222,94 @@ func TestLoadDockerBuildFlags(t *testing.T) {
 	want := []string{"--cache-from", "type=gha", "--cache-to", "type=gha,mode=max"}
 	if !slices.Equal(cfg.DockerBuildFlags, want) {
 		t.Errorf("DockerBuildFlags = %q, want %q", cfg.DockerBuildFlags, want)
+	}
+}
+
+// The preview gates arrive from any channel as one comma-separated value. An
+// explicitly empty one turns every gate off, even over a lower channel's.
+func TestLoadPreviewGates(t *testing.T) {
+	preview.InitForTestFake(t, []preview.Gate{"A", "B"})
+
+	// nil leaves the channel out; a pointer to "" supplies it, empty.
+	val := func(s string) *string { return &s }
+	for _, tc := range []struct {
+		name            string
+		flag, file, env *string
+		want            []string
+	}{
+		{name: "default"},
+		{name: "flag all", flag: val("*"), want: []string{"*"}},
+		{name: "flag list", flag: val("A,B"), want: []string{"A", "B"}},
+		{name: "file", file: val("A, B"), want: []string{"A", "B"}},
+		{name: "environment", env: val("*"), want: []string{"*"}},
+		{name: "empty items dropped", env: val(",A,,"), want: []string{"A"}},
+		{name: "file beats environment", file: val("A"), env: val("*"), want: []string{"A"}},
+		{name: "flag beats file", flag: val("B"), file: val("A"), want: []string{"B"}},
+		{name: "empty flag beats environment", flag: val(""), env: val("*")},
+		{name: "empty file beats environment", file: val(""), env: val("*")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			loadEnv(t)
+			if tc.env != nil {
+				t.Setenv("ATE_PREVIEW", *tc.env)
+			}
+			fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
+			BindFlags(fs)
+			if tc.flag != nil {
+				if err := fs.Set("preview", *tc.flag); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var lo LoadOptions
+			if tc.file != nil {
+				lo.ConfigPath = filepath.Join(t.TempDir(), "install.yaml")
+				body := "apiVersion: " + FileAPIVersion + "\nkind: " + FileKind + "\n" +
+					"preview: " + strconv.Quote(*tc.file) + "\n"
+				if err := os.WriteFile(lo.ConfigPath, []byte(body), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cfg, err := LoadFlags(fs, lo)
+			if err != nil {
+				t.Fatalf("LoadFlags() error = %v", err)
+			}
+			if !slices.Equal(cfg.PreviewGates, tc.want) {
+				t.Errorf("PreviewGates = %q, want %q", cfg.PreviewGates, tc.want)
+			}
+			got, exported := scriptEnvMap(t, cfg)["ATE_PREVIEW"]
+			if want := strings.Join(tc.want, ","); got != want || exported != (want != "") {
+				t.Errorf("ScriptEnv() ATE_PREVIEW = %q (exported %v), want %q", got, exported, want)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsUnknownPreviewGates(t *testing.T) {
+	preview.InitForTestFake(t, []preview.Gate{"Fake"})
+	for _, tc := range []struct {
+		name    string
+		env     string
+		wantErr string
+	}{
+		{name: "all", env: "*"},
+		{name: "known gate", env: "Fake"},
+		{name: "unknown gate", env: "NoSuchGate", wantErr: "ATE_PREVIEW"},
+		{name: "unknown among known", env: "*,NoSuchGate", wantErr: "ATE_PREVIEW"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			loadEnv(t)
+			t.Setenv("ATE_PREVIEW", tc.env)
+			_, err := Load(Options{})
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("Load() error = %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) || !strings.Contains(err.Error(), "NoSuchGate") {
+				t.Fatalf("Load() error = %v, want one naming NoSuchGate and %s", err, tc.wantErr)
+			}
+		})
 	}
 }
 

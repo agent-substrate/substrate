@@ -92,12 +92,12 @@ func TestActorVolumesStorageClassErrors(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			lister := &fakeStorageClassLister{getErr: tt.getErr}
 			t.Run("initial", func(t *testing.T) {
-				_, err := initialActorVolumes(ctx, lister, tmpl)
+				_, err := initialExternalVolumes(ctx, lister, tmpl)
 				if got := apierror.Code(err); got != tt.wantCode {
-					t.Fatalf("initialActorVolumes() code = %v, want %v; error = %v", got, tt.wantCode, err)
+					t.Fatalf("initialExternalVolumes() code = %v, want %v; error = %v", got, tt.wantCode, err)
 				}
 				if !strings.Contains(err.Error(), `StorageClass "standard"`) {
-					t.Errorf("initialActorVolumes() error does not name the StorageClass: %v", err)
+					t.Errorf("initialExternalVolumes() error does not name the StorageClass: %v", err)
 				}
 			})
 			t.Run("create", func(t *testing.T) {
@@ -166,12 +166,12 @@ func TestInitialActorVolumes_PendingState(t *testing.T) {
 			},
 		},
 	}
-	initVols, err := initialActorVolumes(context.Background(), scLister, tmpl)
+	initVols, err := initialExternalVolumes(context.Background(), scLister, tmpl)
 	if err != nil {
-		t.Fatalf("initialActorVolumes failed: %v", err)
+		t.Fatalf("initialExternalVolumes failed: %v", err)
 	}
 	if diff := cmp.Diff(want, initVols, protocmp.Transform()); diff != "" {
-		t.Errorf("initialActorVolumes mismatch (-want +got):\n%s", diff)
+		t.Errorf("initialExternalVolumes mismatch (-want +got):\n%s", diff)
 	}
 }
 

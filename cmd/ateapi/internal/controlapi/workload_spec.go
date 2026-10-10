@@ -119,6 +119,8 @@ func workloadSpecFromActorTemplate(actorTemplate *ateapipb.ActorTemplate, actor 
 
 	// TODO: order may be important for nested mounts. Also need to think about
 	// nested mount support in general.
+	// This function is called from several places, so we do NOT check the
+	// ExternalVolumes gate here.  Callers must check it, if appropriate.
 	if err := appendExternalVolumes(workloadSpec, actorTemplate, actor, volumePublishContexts); err != nil {
 		return nil, err
 	}

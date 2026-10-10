@@ -32,6 +32,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/objectstore"
+	"github.com/agent-substrate/substrate/internal/preview"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/volume"
@@ -113,6 +114,7 @@ func TestCreateActor_WithExternalVolumes(t *testing.T) {
 	ns := namespaceForTest("ns-create-ext-vols")
 	tc := setupTest(t, ns)
 	defer tc.cleanup()
+	preview.InitForTest(t, "ExternalVolumes")
 
 	volumes := []*ateapipb.Volume{
 		{
@@ -317,6 +319,7 @@ func TestCreateActor_RejectsSnapshotWithExternalVolumes(t *testing.T) {
 	ns := namespaceForTest("ns-snapshot-external-volume")
 	tc := setupTest(t, ns)
 	defer tc.cleanup()
+	preview.InitForTest(t, "ExternalVolumes")
 	ensureDefaultGvisorSandboxConfig(t, tc)
 	template, err := tc.client.CreateActorTemplate(context.Background(), &ateapipb.CreateActorTemplateRequest{
 		ActorTemplate: &ateapipb.ActorTemplate{
@@ -1576,6 +1579,7 @@ func TestActorLifecycle_WithExternalVolumes(t *testing.T) {
 	ns := namespaceForTest("ns-lifecycle-ext-vols")
 	tc := setupTest(t, ns)
 	defer tc.cleanup()
+	preview.InitForTest(t, "ExternalVolumes")
 
 	volumes := []*ateapipb.Volume{
 		{

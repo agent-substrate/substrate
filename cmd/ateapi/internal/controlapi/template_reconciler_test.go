@@ -33,7 +33,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
-	"k8s.io/apimachinery/pkg/api/operation"
 )
 
 // fakeTemplateStore is an in-memory templateReconcilerStore.
@@ -763,7 +762,7 @@ func TestFail_TruncatesErrorMessage(t *testing.T) {
 	if !utf8.ValidString(msg) {
 		t.Error("error_message is not valid UTF-8")
 	}
-	op := operation.Operation{Type: operation.Update}
+	op := apivalidation.MakeUpdateOp()
 	if errs := apivalidation.Validate_GoldenSnapshotStatus(ctx, op, nil, golden, &ateapipb.GoldenSnapshotStatus{}); len(errs) != 0 {
 		t.Errorf("stored status fails validation: %v", errs)
 	}

@@ -157,11 +157,6 @@ func (r *Runner) BuildTagged(ctx context.Context, tag string, importPaths ...str
 	return refs, nil
 }
 
-// ResolvePath resolves a manifest file or directory.
-func (r *Runner) ResolvePath(ctx context.Context, path string) ([]byte, error) {
-	return r.Resolve(ctx, path, nil)
-}
-
 // ResolveBytes resolves an in-memory manifest, such as kustomize output.
 func (r *Runner) ResolveBytes(ctx context.Context, manifest []byte) ([]byte, error) {
 	return r.Resolve(ctx, "-", manifest)

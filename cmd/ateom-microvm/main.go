@@ -48,6 +48,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateomtunnel"
 	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/otlprelay"
+	"github.com/agent-substrate/substrate/internal/preview"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/serverboot"
@@ -68,6 +69,7 @@ var (
 	vmmMemReserve = pflag.Int("vmm-mem-reserve-mib", vmmMemReserveMiB, "Guest RAM (MiB) held back from the pod's memory limit for the cloud-hypervisor VMM + virtiofsd, which run as host processes in the pod cgroup alongside the guest RAM. Prevents the pod OOMing when the VM is sized to the pod's memory limit.")
 	showVersion   = pflag.Bool("version", false, "Print version and exit.")
 	logLevelFlag  = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
+	previewFlags  = pflag.StringSlice("preview", nil, "Preview gates to enable.")
 
 	otlpRelaySocket = pflag.String("otlp-relay-socket", nodepath.AteletOTLPSocketPath(),
 		"Unix socket of atelet's OTLP relay to export telemetry through, keeping it off the pod network. Empty, or absent at startup, exports directly to OTEL_EXPORTER_OTLP_ENDPOINT instead.")
@@ -108,6 +110,9 @@ func do(ctx context.Context) error {
 	serverboot.InitLoggerWithWriter(logWriter)
 	if err := serverboot.SetLogLevel(*logLevelFlag); err != nil {
 		return err
+	}
+	if err := preview.Init(*previewFlags...); err != nil {
+		return fmt.Errorf("invalid --preview: %w", err)
 	}
 	slog.InfoContext(ctx, "ateom-microvm booting", slog.String("version", version.Version))
 	if *maxActors < 0 {

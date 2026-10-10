@@ -31,6 +31,11 @@ import (
 
 func (s *AteomHerder) mountExternalVolumes(ctx context.Context, actorUID string, volumes []*ateletpb.Volume) error {
 	for _, vol := range volumes {
+		// Given that external volumes has been in the codebase for a while and
+		// its preview-ness is solely around the API, and that the impact of
+		// disabling the gate while in use would be an orphaned volume
+		// attachment, we are NOT checking the ExternalVolumes gate in the
+		// mount/unmount logic.
 		ext := vol.GetExternal()
 		if ext == nil {
 			continue
@@ -59,6 +64,11 @@ func (s *AteomHerder) mountExternalVolumes(ctx context.Context, actorUID string,
 func (s *AteomHerder) unmountExternalVolumes(ctx context.Context, actorUID string, volumes []*ateletpb.Volume) error {
 	var errs []error
 	for _, vol := range volumes {
+		// Given that external volumes has been in the codebase for a while and
+		// its preview-ness is solely around the API, and that the impact of
+		// disabling the gate while in use would be an orphaned volume
+		// attachment, we are NOT checking the ExternalVolumes gate in the
+		// mount/unmount logic.
 		ext := vol.GetExternal()
 		if ext == nil {
 			continue

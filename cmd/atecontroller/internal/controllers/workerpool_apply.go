@@ -16,6 +16,7 @@ package controllers
 
 import (
 	"slices"
+	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -29,6 +30,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/deviceplugin"
 	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/nodepath"
+	"github.com/agent-substrate/substrate/internal/preview"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 )
 
@@ -143,6 +145,19 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettin
 		"--atunnel-egress-listen-address=0.0.0.0:15001",
 		"--atunnel-egress-trust-bundle="+atunnelEgressTrustMountPath+"/trust-bundle.pem",
 	)
+
+	// ateom gets preview features when the controller has them.
+	enabledGates := func() []string {
+		ret := []string{}
+		for k, v := range preview.AsMap() {
+			if v {
+				ret = append(ret, k)
+			}
+		}
+		return ret
+	}
+	previewArg := "--preview=" + strings.Join(enabledGates(), ",")
+	args = append(args, previewArg)
 
 	containerAC := corev1ac.Container().
 		WithName("ateom").

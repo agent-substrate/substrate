@@ -18,6 +18,7 @@ import (
 	"context"
 	"net/netip"
 
+	"github.com/agent-substrate/substrate/internal/preview"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/api/operation"
@@ -29,6 +30,16 @@ import (
 // code calls by name; it delegates to resources.DeepEqual.
 func ateDeepEqual[T any](a, b T) bool {
 	return resources.DeepEqual(a, b)
+}
+
+// MakeCreateOp returns an operation.Operation for a create operation.
+func MakeCreateOp() operation.Operation {
+	return operation.Operation{Type: operation.Create, Options: preview.AsMap()}
+}
+
+// MakeUpdateOp returns an operation.Operation for an update operation.
+func MakeUpdateOp() operation.Operation {
+	return operation.Operation{Type: operation.Update, Options: preview.AsMap()}
 }
 
 // ValidateCustom_ResourceMetadata checks the server-stamped timestamps: each,

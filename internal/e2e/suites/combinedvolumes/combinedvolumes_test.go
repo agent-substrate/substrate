@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/e2e"
+	"github.com/agent-substrate/substrate/internal/preview"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-containerregistry/pkg/authn"
@@ -154,13 +155,18 @@ func buildFixtureImage(t *testing.T, repo string) string {
 	return fmt.Sprintf("%s@%s", tag.Context().Name(), digest)
 }
 
-// storageClassOrEmpty returns the configured StorageClass if the cluster has
-// one, and "" if it does not. The CSI driver is optional, so a missing class
+// storageClassOrEmpty returns the configured StorageClass if external volumes
+// are enabled and the cluster has the class, and "" if not. External volumes
+// are a preview feature and the CSI driver is optional, so either missing
 // drops the external volume from the template instead of failing every test
 // in the suite.
 func storageClassOrEmpty(ctx context.Context, t *testing.T, clients *e2e.Clients) string {
 	t.Helper()
 
+	if !preview.IsEnabled(preview.GateExternalVolumes) {
+		t.Logf("preview gate %q is not enabled; the external-volume cases will be skipped", preview.GateExternalVolumes)
+		return ""
+	}
 	if _, err := clients.K8s.StorageV1().StorageClasses().Get(ctx, e2e.StorageClass, metav1.GetOptions{}); err != nil {
 		t.Logf("StorageClass %q not found (%v); the external-volume case will be skipped", e2e.StorageClass, err)
 		return ""
@@ -360,6 +366,14 @@ func TestCombinedVolumes(t *testing.T) {
 
 	payloadPath := mountPath + "/" + payloadName
 
+	requireExternalVolume := func(t *testing.T) {
+		t.Helper()
+		e2e.RequirePreview(t, preview.GateExternalVolumes)
+		if storageClass == "" {
+			t.Skipf("StorageClass %q is not installed", e2e.StorageClass)
+		}
+	}
+
 	t.Run("DeliversImageContents", func(t *testing.T) {
 		requireContent(ctx, t, router, actorRef, payloadPath, payloadContent)
 	})
@@ -385,9 +399,7 @@ func TestCombinedVolumes(t *testing.T) {
 	})
 
 	t.Run("SameExternalVolumeAtTwoPathsSharesWrites", func(t *testing.T) {
-		if storageClass == "" {
-			t.Skipf("StorageClass %q is not installed", e2e.StorageClass)
-		}
+		requireExternalVolume(t)
 		requireSharedWrite(ctx, t, router, actorRef, extPathA+"/multi.txt", extPathB+"/multi.txt")
 	})
 
@@ -410,9 +422,7 @@ func TestCombinedVolumes(t *testing.T) {
 		// Suspend detached the external volume; the resume must reattach it
 		// once and restore both of its mounts.
 		t.Run("ExternalVolumeReattached", func(t *testing.T) {
-			if storageClass == "" {
-				t.Skipf("StorageClass %q is not installed", e2e.StorageClass)
-			}
+			requireExternalVolume(t)
 			requireContentAtBoth(resumeCtx, t, router, actorRef, extPathA+"/multi.txt", extPathB+"/multi.txt", probeWrittenContent)
 		})
 	})
@@ -454,9 +464,7 @@ func TestCombinedVolumes(t *testing.T) {
 		// it. The actor comes back with its memory and durable dir at the
 		// snapshot but this volume exactly as the discarded execution left it.
 		t.Run("ExternalVolumeNotReverted", func(t *testing.T) {
-			if storageClass == "" {
-				t.Skipf("StorageClass %q is not installed", e2e.StorageClass)
-			}
+			requireExternalVolume(t)
 			requireContentAtBoth(resumeCtx, t, router, actorRef, extPathA+"/"+postSnapshotName, extPathB+"/"+postSnapshotName, probeWrittenContent)
 		})
 	})
