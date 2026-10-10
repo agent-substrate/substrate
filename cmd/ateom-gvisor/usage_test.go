@@ -18,6 +18,7 @@ package main
 
 import (
 	"context"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -109,6 +110,49 @@ func TestRecordInitialAndFinal(t *testing.T) {
 		if src != ateattr.StatsSourceCgroup {
 			t.Errorf("record source = %q, want measured", src)
 		}
+	}
+}
+
+func TestFinalCPUReachesCounterAfterUnhosting(t *testing.T) {
+	s := newStatsService(t, healthyCgroup)
+	cpu, reader := ateomstatstest.NewCPUCounter(t, "ateom-gvisor")
+	s.cpu = cpu
+	h := hostWithEpoch(s, time.Now(), false)
+	s.recordInitial(context.Background(), h)
+	if got := ateomstatstest.CPUSeconds(t, reader); got != float64(healthyCPUUsec)/1e6 {
+		t.Fatalf("CPU after initial = %v, want %v", got, float64(healthyCPUUsec)/1e6)
+	}
+
+	path := filepath.Join(s.cgroupRoot, ocispec.GVisorCgroupLeaf(testActor.UID, sandboxCgroupContainer), "cpu.stat")
+	if err := os.WriteFile(path, []byte("usage_usec 1534567\nuser_usec 1000000\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	s.readFinal(context.Background(), h)
+	setHostedActor(s, nil)
+	s.recordFinalIfEnded(context.Background(), h)
+	if got := ateomstatstest.CPUSeconds(t, reader); math.Abs(got-1.534567) > 1e-12 {
+		t.Errorf("CPU after final = %v, want 1.534567", got)
+	}
+	s.recordFinalIfEnded(context.Background(), h)
+	if got := ateomstatstest.CPUSeconds(t, reader); math.Abs(got-1.534567) > 1e-12 {
+		t.Errorf("CPU after duplicate final = %v, want 1.534567", got)
+	}
+}
+
+func TestLateInitialCPUReachesCounterWithoutLateRecord(t *testing.T) {
+	s := newStatsService(t, healthyCgroup)
+	rec := withUsageRecorder(s)
+	cpu, reader := ateomstatstest.NewCPUCounter(t, "ateom-gvisor")
+	s.cpu = cpu
+	h := hostWithEpoch(s, time.Now(), false)
+
+	s.recordFinal(context.Background(), h)
+	s.recordInitial(context.Background(), h)
+	if got := ateomstatstest.CPUSeconds(t, reader); math.Abs(got-float64(healthyCPUUsec)/1e6) > 1e-12 {
+		t.Errorf("CPU after late initial = %v, want %v", got, float64(healthyCPUUsec)/1e6)
+	}
+	if got := rec.Kinds(); !slices.Equal(got, []string{ateattr.StatsKindFinal}) {
+		t.Errorf("records = %v, want only final", got)
 	}
 }
 

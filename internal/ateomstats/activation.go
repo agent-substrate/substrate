@@ -47,6 +47,9 @@ type Activation struct {
 	// yet.
 	cpu  uint64
 	last map[string]uint64
+	// charged is the CPU already added to the metric. It advances only when
+	// an initial, periodic, or final sample is accepted.
+	charged uint64
 	// latest is what the discovery read serves, pending included; measured
 	// is the newest sample with numbers, for the final record.
 	latest   *ateompb.WorkloadStatsSample
@@ -166,19 +169,26 @@ func (a *Activation) store(s *ateompb.WorkloadStatsSample) {
 // nothing. With a reading s it stores s and runs write, unless the final record
 // was written first; nil s means the reading failed, and periodic records start
 // without an initial one. write runs under the activation's lock and must not
-// block or call into a.
-func (a *Activation) Initial(s *ateompb.WorkloadStatsSample, write func()) {
+// block or call into a. The callback receives the CPU increase since the
+// last accepted sample. If a successful reading arrives after Final, Initial
+// returns its uncharged CPU without writing an initial record. The caller
+// must add that returned increase to the counter.
+func (a *Activation) Initial(s *ateompb.WorkloadStatsSample, write func(cpuDeltaUsec uint64)) (lateCPUUsec uint64) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.initialDone {
-		return
+		return 0
 	}
 	a.initialDone = true
-	if a.ended || s == nil {
-		return
+	if s == nil {
+		return 0
+	}
+	if a.ended {
+		return a.charge(s)
 	}
 	a.store(s)
-	write()
+	write(a.charge(s))
+	return 0
 }
 
 // Sampling reports whether a sweep should take a periodic reading: after the
@@ -192,28 +202,42 @@ func (a *Activation) Sampling() bool {
 // Periodic stores s and runs write if the activation is still between its
 // initial reading and its final record, which a sweep that read s may have
 // raced. write runs under the activation's lock and must not block or call
-// into a.
-func (a *Activation) Periodic(s *ateompb.WorkloadStatsSample, write func()) {
+// into a. The callback receives the CPU increase since the last accepted
+// sample.
+func (a *Activation) Periodic(s *ateompb.WorkloadStatsSample, write func(cpuDeltaUsec uint64)) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if !a.initialDone || a.ended {
 		return
 	}
 	a.store(s)
-	write()
+	write(a.charge(s))
 }
 
 // Final marks the activation ended and runs write with the newest measured
 // sample, or nil when there is none, once: a later call does nothing. write
-// runs under the activation's lock and must not block or call into a.
-func (a *Activation) Final(write func(measured *ateompb.WorkloadStatsSample)) {
+// runs under the activation's lock and must not block or call into a. The
+// callback receives the remaining CPU increase.
+func (a *Activation) Final(write func(measured *ateompb.WorkloadStatsSample, cpuDeltaUsec uint64)) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.ended {
 		return
 	}
 	a.ended = true
-	write(a.measured)
+	write(a.measured, a.charge(a.measured))
+}
+
+// charge returns the measured increase not yet added to the metric. Pending
+// samples have no CPU value, and an older sample cannot undo an increase.
+// The caller holds a.mu.
+func (a *Activation) charge(s *ateompb.WorkloadStatsSample) uint64 {
+	if s.GetSource() == ateompb.StatsSource_STATS_SOURCE_UNSPECIFIED || s.GetCpuUsageUsec() <= a.charged {
+		return 0
+	}
+	delta := s.GetCpuUsageUsec() - a.charged
+	a.charged = s.GetCpuUsageUsec()
+	return delta
 }
 
 // Latest is the last stored sample, or nil before the first. Callers must not

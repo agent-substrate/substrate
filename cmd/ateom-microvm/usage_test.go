@@ -19,6 +19,7 @@ package main
 import (
 	"context"
 	"errors"
+	"math"
 	"slices"
 	"testing"
 	"time"
@@ -117,6 +118,73 @@ func TestRecordInitialAndFinal(t *testing.T) {
 	want := []string{ateattr.StatsKindInitial, ateattr.StatsKindFinal}
 	if len(rec.Kinds()) != 2 || rec.Kinds()[0] != want[0] || rec.Kinds()[1] != want[1] {
 		t.Errorf("record kinds = %v, want %v", rec.Kinds(), want)
+	}
+}
+
+func TestFinalCPUReachesCounterAfterUnhosting(t *testing.T) {
+	agent := &fakeAgent{stats: map[string]*agentpb.CgroupStats{"app_ovl": containerStats(1000, 2000, 100, 5_000_000)}}
+	s := newStatsService(agent, "app_ovl")
+	cpu, reader := ateomstatstest.NewCPUCounter(t, "ateom-microvm")
+	s.cpu = cpu
+	h := setActivation(s, ateomstats.NewActivation(time.Now(), false))
+	s.recordInitial(context.Background(), h)
+	if got := ateomstatstest.CPUSeconds(t, reader); got != 0.005 {
+		t.Fatalf("CPU after initial = %v, want 0.005", got)
+	}
+
+	agent.mu.Lock()
+	agent.stats["app_ovl"] = containerStats(1000, 2000, 100, 9_000_000)
+	agent.mu.Unlock()
+	s.readFinal(context.Background(), h)
+	unhostTestActor(s, testActor.UID)
+	s.recordFinalIfEnded(context.Background(), h)
+	if got := ateomstatstest.CPUSeconds(t, reader); math.Abs(got-0.009) > 1e-12 {
+		t.Errorf("CPU after final = %v, want 0.009", got)
+	}
+	s.recordFinalIfEnded(context.Background(), h)
+	if got := ateomstatstest.CPUSeconds(t, reader); math.Abs(got-0.009) > 1e-12 {
+		t.Errorf("CPU after duplicate final = %v, want 0.009", got)
+	}
+}
+
+func TestLateInitialCPUReachesCounterWithoutLateRecord(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	agent := &fakeAgent{
+		stats:  map[string]*agentpb.CgroupStats{"app_ovl": containerStats(1000, 2000, 100, 5_000_000)},
+		onCall: func() { close(entered); <-release },
+	}
+	s := newStatsService(agent, "app_ovl")
+	rec := withUsageRecorder(s)
+	cpu, reader := ateomstatstest.NewCPUCounter(t, "ateom-microvm")
+	s.cpu = cpu
+	h := setActivation(s, ateomstats.NewActivation(time.Now(), false))
+	done := make(chan struct{})
+	go func() {
+		s.recordInitial(context.Background(), h)
+		close(done)
+	}()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("initial read did not start")
+	}
+
+	// The bounded final read cannot pass the initial read's lock.
+	s.readFinal(context.Background(), h)
+	unhostTestActor(s, testActor.UID)
+	s.recordFinalIfEnded(context.Background(), h)
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("initial read did not finish")
+	}
+	if got := ateomstatstest.CPUSeconds(t, reader); got != 0.005 {
+		t.Errorf("CPU after late initial = %v, want 0.005", got)
+	}
+	if got := rec.Kinds(); !slices.Equal(got, []string{ateattr.StatsKindFinal}) {
+		t.Errorf("records = %v, want only final", got)
 	}
 }
 
