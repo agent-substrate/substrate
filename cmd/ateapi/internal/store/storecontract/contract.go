@@ -870,12 +870,11 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 				Snapshots: []*ateapipb.Snapshot{{
 					Generation: 1,
 					Owner:      ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR,
-					Storage: []*ateapipb.SnapshotStorage{{
-						Durability: ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE,
-						Status:     ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
-						Fidelity:   ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
-						Object:     &ateapipb.ObjectSnapshot{SnapshotUri: testActorSnapshotURI("gs://bucket", testAtespace, "snapshot-1")},
-					}},
+					DurableSnapshot: &ateapipb.SnapshotStorage{
+						Status:   ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+						Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+						Object:   &ateapipb.ObjectSnapshot{SnapshotUri: testActorSnapshotURI("gs://bucket", testAtespace, "snapshot-1")},
+					},
 				}},
 			},
 		}
@@ -888,12 +887,11 @@ func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interfac
 				Snapshots: []*ateapipb.Snapshot{{
 					Generation: 1,
 					Owner:      ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR,
-					Storage: []*ateapipb.SnapshotStorage{{
-						Durability: ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE,
-						Status:     ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
-						Fidelity:   ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
-						Object:     &ateapipb.ObjectSnapshot{SnapshotUri: testActorSnapshotURI("gs://bucket", testAtespace, "snapshot-2")},
-					}},
+					DurableSnapshot: &ateapipb.SnapshotStorage{
+						Status:   ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+						Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+						Object:   &ateapipb.ObjectSnapshot{SnapshotUri: testActorSnapshotURI("gs://bucket", testAtespace, "snapshot-2")},
+					},
 				}},
 			},
 		}
@@ -1169,19 +1167,18 @@ func newTestSuspendedActor(atespace, name string) *ateapipb.Actor {
 			Snapshots: []*ateapipb.Snapshot{{
 				Generation: 1,
 				Owner:      ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR,
-				Storage: []*ateapipb.SnapshotStorage{{
-					Durability: ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE,
-					Status:     ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
-					Fidelity:   ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
-					Object:     &ateapipb.ObjectSnapshot{SnapshotUri: testActorSnapshotURI("gs://private", atespace, name)},
-				}},
+				DurableSnapshot: &ateapipb.SnapshotStorage{
+					Status:   ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+					Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+					Object:   &ateapipb.ObjectSnapshot{SnapshotUri: testActorSnapshotURI("gs://private", atespace, name)},
+				},
 			}},
 		},
 	}
 }
 
 // newTestInProgressTag builds the row CreateTag reserves for a
-// tag of actor: ATESPACE-scoped, with an IN_PROGRESS snapshot naming where the
+// tag of actor: ATESPACE-scoped, with a PENDING snapshot naming where the
 // copy is going.
 func newTestInProgressTag(name string, actor *ateapipb.Actor) *ateapipb.Tag {
 	atespace := actor.GetMetadata().GetAtespace()
@@ -1193,14 +1190,13 @@ func newTestInProgressTag(name string, actor *ateapipb.Actor) *ateapipb.Tag {
 			Snapshot: &ateapipb.Snapshot{
 				Generation: 1,
 				Owner:      ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG,
-				Storage: []*ateapipb.SnapshotStorage{{
-					Durability: ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE,
-					Status:     ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS,
-					Fidelity:   ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+				DurableSnapshot: &ateapipb.SnapshotStorage{
+					Status:   ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING,
+					Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 					Object: &ateapipb.ObjectSnapshot{
 						SnapshotUri: testTagSnapshotURI("gs://private", atespace, name),
 					},
-				}},
+				},
 			},
 		},
 	}
@@ -1242,10 +1238,10 @@ func runTagContractTests(t *testing.T, setup func(t *testing.T) store.Interface)
 		if err != nil {
 			t.Fatalf("GetTag failed: %v", err)
 		}
-		// A reserved tag has an IN_PROGRESS snapshot storage entry and is not
+		// A reserved tag has a PENDING snapshot storage entry and is not
 		// usable until the copy lands and finalize marks it COMPLETED.
-		if got := tag.GetStatus().GetSnapshot().GetStorage()[0].GetStatus(); got != ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS {
-			t.Errorf("reserved tag snapshot storage status = %v, want IN_PROGRESS", got)
+		if got := tag.GetStatus().GetSnapshot().GetDurableSnapshot().GetStatus(); got != ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING {
+			t.Errorf("reserved tag snapshot storage status = %v, want PENDING", got)
 		}
 		if diff := cmp.Diff(inProgressTag, tag, protocmp.Transform(), ignoreUID, ignoreVersion, ignoreTimestamps); diff != "" {
 			t.Errorf("stored tag mismatch (-want +got):\n%s", diff)
@@ -1262,14 +1258,11 @@ func runTagContractTests(t *testing.T, setup func(t *testing.T) store.Interface)
 			t.Fatalf("finalizing tag failed: %v", err)
 		}
 		wantURI := testTagSnapshotURI("gs://private", "team-a", "production")
-		var gotURI string
-		if len(ready.GetStatus().GetSnapshot().GetStorage()) > 0 {
-			gotURI = ready.GetStatus().GetSnapshot().GetStorage()[0].GetObject().GetSnapshotUri()
-		}
+		gotURI := ready.GetStatus().GetSnapshot().GetDurableSnapshot().GetObject().GetSnapshotUri()
 		if gotURI != wantURI {
 			t.Errorf("finalized tag snapshot uri = %q, want %q", gotURI, wantURI)
 		}
-		if got := ready.GetStatus().GetSnapshot().GetStorage()[0].GetStatus(); got != ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED {
+		if got := ready.GetStatus().GetSnapshot().GetDurableSnapshot().GetStatus(); got != ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED {
 			t.Errorf("finalized tag snapshot storage status = %v, want COMPLETED", got)
 		}
 
@@ -1374,13 +1367,13 @@ func runTagContractTests(t *testing.T, setup func(t *testing.T) store.Interface)
 			{
 				name: "snapshot uri",
 				mutate: func(toUpdate *ateapipb.Tag) {
-					toUpdate.Status.Snapshot.Storage[0].Object.SnapshotUri = "gs://private/elsewhere"
+					toUpdate.Status.Snapshot.DurableSnapshot.Object.SnapshotUri = "gs://private/elsewhere"
 				},
 			},
 			{
 				name: "snapshot content scope",
 				mutate: func(toUpdate *ateapipb.Tag) {
-					toUpdate.Status.Snapshot.Storage[0].Fidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
+					toUpdate.Status.Snapshot.DurableSnapshot.Fidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
 				},
 			},
 			{
@@ -1526,9 +1519,9 @@ func runTagContractTests(t *testing.T, setup func(t *testing.T) store.Interface)
 }
 
 // finalizeTag mutates a reserved tag the way the tag workflow's second
-// transaction does: it marks the in-progress snapshot storage COMPLETED.
+// transaction does: it marks the pending snapshot storage COMPLETED.
 func finalizeTag(toUpdate *ateapipb.Tag) error {
-	toUpdate.Status.Snapshot.Storage[0].Status = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+	toUpdate.Status.Snapshot.DurableSnapshot.Status = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
 	return nil
 }
 

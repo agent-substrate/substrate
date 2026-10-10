@@ -189,15 +189,15 @@ func isAllowedTagSnapshotTransition(stored, mutated *ateapipb.Snapshot) bool {
 	if proto.Equal(stored, mutated) || stored == nil {
 		return true
 	}
-	if mutated == nil || len(stored.GetStorage()) != 1 || len(mutated.GetStorage()) != 1 {
+	if mutated == nil || stored.GetDurableSnapshot() == nil || mutated.GetDurableSnapshot() == nil {
 		return false
 	}
-	if stored.GetStorage()[0].GetStatus() != ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS ||
-		mutated.GetStorage()[0].GetStatus() != ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED {
+	if stored.GetDurableSnapshot().GetStatus() != ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING ||
+		mutated.GetDurableSnapshot().GetStatus() != ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED {
 		return false
 	}
 	expected := proto.CloneOf(stored)
-	expected.Storage[0].Status = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+	expected.DurableSnapshot.Status = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
 	return proto.Equal(expected, mutated)
 }
 
