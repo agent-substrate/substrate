@@ -56,12 +56,11 @@ kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.c
 ./hack/run-microvm-demo-kind.sh
 ```
 
-This is a one-shot bring-up: it deploys the control plane, installs the
-cluster-wide microVM deps via `hack/install-microvm-deps.sh` — assembling the
-guest runtime assets for your architecture (skipped if already present under
-`bin/microvm-assets/`), staging them into the in-cluster rustfs bucket, and
-applying the `microvm` `SandboxConfig` — then deploys the demo worker pool +
-template.
+This is a one-shot bring-up: it deploys the control plane (which assembles the
+guest runtime assets for your architecture if not already present under
+`bin/microvm-assets/`, stages them into the in-cluster rustfs bucket, and
+applies the cluster-wide `microvm` `SandboxConfig`), then deploys the demo
+worker pool + template.
 
 ### 4. Verify
 
