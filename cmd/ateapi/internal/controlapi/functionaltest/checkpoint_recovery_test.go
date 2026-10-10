@@ -47,11 +47,10 @@ func TestSuspendCheckpointFailurePreservesLastGoodSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitForWorkerAvailable(t, tc, worker)
-	snapshot := suspended.GetActor().GetStatus().GetExternalSnapshot()
-	uri := snapshot.GetSnapshotUri()
+	uri := durableSnapshotURI(suspended.GetActor().GetStatus())
 	objects := snapshotObjectNames(t, tc, uri)
 	if uri == "" || len(objects) == 0 {
-		t.Fatalf("successful suspend produced no stored snapshot: %v", snapshot)
+		t.Fatalf("successful suspend produced no stored snapshot: %v", suspended.GetActor().GetStatus())
 	}
 	slices.Sort(objects)
 	assertKept := func(actor *ateapipb.Actor, wantState ateapipb.ActorState) {
@@ -59,7 +58,7 @@ func TestSuspendCheckpointFailurePreservesLastGoodSnapshot(t *testing.T) {
 		if got := actor.GetStatus().GetState(); got != wantState {
 			t.Fatalf("actor state = %v, want %v", got, wantState)
 		}
-		if got := actor.GetStatus().GetExternalSnapshot().GetSnapshotUri(); got != uri {
+		if got := durableSnapshotURI(actor.GetStatus()); got != uri {
 			t.Fatalf("external snapshot = %q, want last good snapshot %q", got, uri)
 		}
 		got := snapshotObjectNames(t, tc, uri)

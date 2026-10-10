@@ -123,6 +123,12 @@ var Registry = []Setting{
 		Usage: "Signing algorithm of the key in a new actor JWT pool: ES256 or RS256",
 	},
 	{
+		// The default depends on the namespace, so buildConfig applies it.
+		Key: "actorJWT.issuer", Env: "ACTOR_JWT_ISSUER", Flag: "actor-jwt-issuer", Kind: KindString,
+		Usage: "iss claim of actor JWTs, verbatim. Relying parties fetch <issuer>/.well-known/openid-configuration " +
+			"(default https://idp.<namespace>.svc)",
+	},
+	{
 		// Whitespace-separated, as the environment variable is. The registry
 		// has no list kind, so the value is carried as written and split
 		// where it is used.

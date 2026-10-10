@@ -138,10 +138,10 @@ func runUpdateTemplateTestCase(t *testing.T, fidelity ateapipb.SnapshotFidelity)
 	if err != nil {
 		t.Fatalf("failed to get suspended Actor: %v", err)
 	}
-	if got, want := suspended.GetStatus().GetExternalSnapshot().GetActorTemplateUid(), createdA.GetMetadata().GetUid(); got != want {
+	if got, want := durableSnapshot(suspended.GetStatus()).GetActorTemplateUid(), createdA.GetMetadata().GetUid(); got != want {
 		t.Errorf("suspended Actor external_snapshot.actor_template_uid = %q, want template A's %q", got, want)
 	}
-	if suspended.GetStatus().GetExternalSnapshot().GetSnapshotUri() == "" {
+	if durableSnapshotURI(suspended.GetStatus()) == "" {
 		t.Error("suspended Actor has no external snapshot")
 	}
 	if wa := suspended.GetStatus().GetWorkerAssignment(); wa != nil {
@@ -188,7 +188,7 @@ func runUpdateTemplateTestCase(t *testing.T, fidelity ateapipb.SnapshotFidelity)
 		t.Errorf("[after template update] expected %q (template B validating the preserved file), got response: %s", want, resp)
 	}
 
-	// Pause under template B while status.external_snapshot still holds the last
+	// Pause under template B while status.snapshots still holds the last
 	// committed snapshot from template A. Resuming from PAUSED restores the
 	// local checkpoint (which was captured under template B, since templates
 	// can only be updated while SUSPENDED) and preserves the in-memory counter
@@ -207,7 +207,7 @@ func runUpdateTemplateTestCase(t *testing.T, fidelity ateapipb.SnapshotFidelity)
 	if err != nil {
 		t.Fatalf("failed to get paused Actor: %v", err)
 	}
-	if got, want := paused.GetStatus().GetExternalSnapshot().GetActorTemplateUid(), createdA.GetMetadata().GetUid(); got != want {
+	if got, want := durableSnapshot(paused.GetStatus()).GetActorTemplateUid(), createdA.GetMetadata().GetUid(); got != want {
 		t.Errorf("paused Actor external_snapshot.actor_template_uid = %q, want template A's %q", got, want)
 	}
 
@@ -248,15 +248,15 @@ func runUpdateTemplateTestCase(t *testing.T, fidelity ateapipb.SnapshotFidelity)
 	}
 	// Resume prefers a local checkpoint over the external snapshot, so one
 	// surviving here would hide the repoint the next resume has to detect.
-	if got := revertedStatus.GetLocalSnapshot(); got != nil {
-		t.Errorf("reverted Actor local_snapshot = %v, want cleared", got)
+	if hasLocalSnapshot(revertedStatus) {
+		t.Errorf("reverted Actor local_snapshot present in %v, want cleared", revertedStatus.GetSnapshots())
 	}
 	// The two halves of the mismatch the next resume has to spot: the spec
 	// names B, the snapshot it would restore was captured under A.
 	if got := reverted.GetActor().GetActorTemplate().GetName(); got != nameB {
 		t.Errorf("reverted Actor actor_template = %q, want %q", got, nameB)
 	}
-	if got, want := revertedStatus.GetExternalSnapshot().GetActorTemplateUid(), createdA.GetMetadata().GetUid(); got != want {
+	if got, want := durableSnapshot(revertedStatus).GetActorTemplateUid(), createdA.GetMetadata().GetUid(); got != want {
 		t.Errorf("reverted Actor external_snapshot.actor_template_uid = %q, want template A's %q", got, want)
 	}
 
@@ -298,7 +298,7 @@ func runUpdateTemplateTestCase(t *testing.T, fidelity ateapipb.SnapshotFidelity)
 	if err != nil {
 		t.Fatalf("failed to get re-suspended Actor: %v", err)
 	}
-	if got, want := suspended.GetStatus().GetExternalSnapshot().GetActorTemplateUid(), createdB.GetMetadata().GetUid(); got != want {
+	if got, want := durableSnapshot(suspended.GetStatus()).GetActorTemplateUid(), createdB.GetMetadata().GetUid(); got != want {
 		t.Errorf("re-suspended Actor external_snapshot.actor_template_uid = %q, want template B's %q", got, want)
 	}
 }

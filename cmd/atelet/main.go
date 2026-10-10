@@ -34,7 +34,6 @@ import (
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/credentialprovider"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/sparsefile"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/trustbundle"
-	"github.com/agent-substrate/substrate/internal/actorlog"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
 	"github.com/agent-substrate/substrate/internal/ateattr"
@@ -60,7 +59,7 @@ import (
 	"github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
 	"github.com/agent-substrate/substrate/pkg/objectstorage"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	objectstoresnapshotv1 "github.com/agent-substrate/substrate/pkg/proto/objectstoresnapshotpb/v1"
+	objectstorev1 "github.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1"
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/spf13/pflag"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
@@ -127,13 +126,7 @@ func main() {
 		return
 	}
 	ctx := context.Background()
-	// One synchronized writer in front of stdout, shared by the runtime
-	// logger and the usage-event drain (see startStatsPoller): uncoordinated
-	// writers stay tear-free only while every record fits a pipe's
-	// atomic-write size -- an accident of field sizes, not a contract. Same
-	// pattern as the ateoms' actor-log forwarders.
-	logSink := actorlog.NewSyncedWriter(os.Stdout)
-	serverboot.InitLoggerWithWriter(logSink)
+	serverboot.InitLogger()
 	if err := serverboot.SetLogLevel(*logLevelFlag); err != nil {
 		serverboot.Fatal(ctx, "Invalid --log-level", err)
 	}
@@ -261,7 +254,7 @@ func main() {
 			// crash-looping every actor operation on the node.
 			slog.ErrorContext(ctx, "Actor stats sampling disabled: failed to create instruments", slog.Any("err", err))
 		} else {
-			startStatsPoller(ctx, interval, statsInst, k8sClient, logSink)
+			startStatsPoller(ctx, interval, statsInst, k8sClient)
 		}
 	}
 
@@ -309,7 +302,7 @@ func main() {
 		ateomDialer,
 		wrappedAnonGCS,
 		wrappedGCS,
-		objectstoresnapshotv1.NewNodeProviderClient(snapshotPluginConn),
+		objectstorev1.NewNodeProviderClient(snapshotPluginConn),
 		imageCache,
 		instruments,
 		volPlugins,
@@ -465,7 +458,7 @@ type AteomHerder struct {
 	// through snapshotPlugin.
 	gcsClient objectstorage.ObjectStorage
 	// snapshotPlugin moves external snapshot files between the node and storage.
-	snapshotPlugin objectstoresnapshotv1.NodeProviderClient
+	snapshotPlugin objectstorev1.NodeProviderClient
 	// snapshotScratchDir holds short-lived manifest directories; it must be
 	// inside the node plugin's root.
 	snapshotScratchDir    string
@@ -484,7 +477,7 @@ func NewService(
 	ateomDialer *AteomDialer,
 	anonGCSClient objectstorage.ObjectStorage,
 	gcsClient objectstorage.ObjectStorage,
-	snapshotPlugin objectstoresnapshotv1.NodeProviderClient,
+	snapshotPlugin objectstorev1.NodeProviderClient,
 	imageCache *imagecache.Store,
 	instruments *Instruments,
 	volumePlugins map[string]volume.VolumePluginWorkerPlane,
@@ -549,13 +542,13 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *
 		return nil, err
 	}
 	containerSpecs, err := s.prepareOCIBundles(ctx, actorUID, actorRef,
-		req.GetSpec(), sandboxRec.PauseImage, req.GetTargetAteomUid(),
+		req.GetSpec(), sandboxRec.PauseImage,
 	)
 	if err != nil {
 		return nil, err
 	}
 
-	client, err := s.dialAteom(ctx, req.GetTargetAteomUid())
+	client, err := s.dialAteom(ctx, req.GetWorkerPodUid())
 	if err != nil {
 		return nil, err
 	}
@@ -685,7 +678,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 
 	checkpointDir := ateletpath.CheckpointStateDir(actorUID)
 
-	client, err := s.dialAteom(ctx, req.GetTargetAteomUid())
+	client, err := s.dialAteom(ctx, req.GetWorkerPodUid())
 	if err != nil {
 		return nil, err
 	}
@@ -1223,7 +1216,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 			return err
 		}
 		t := time.Now()
-		containerSpecs, err = s.prepareOCIBundles(gctx, actorUID, actorRef, req.GetSpec(), runtimeRec.PauseImage, req.GetTargetAteomUid())
+		containerSpecs, err = s.prepareOCIBundles(gctx, actorUID, actorRef, req.GetSpec(), runtimeRec.PauseImage)
 		dBundles = time.Since(t)
 		if err != nil {
 			prepFailedPhase = ateattr.SnapshotPhaseOCIUnpack
@@ -1241,7 +1234,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		return nil, err
 	}
 
-	client, err := s.dialAteom(ctx, req.GetTargetAteomUid())
+	client, err := s.dialAteom(ctx, req.GetWorkerPodUid())
 	if err != nil {
 		return nil, err
 	}
@@ -1302,7 +1295,7 @@ func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequ
 	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
 	actorUID := req.GetActorUid()
 
-	if req.GetTargetAteomUid() != "" {
+	if req.GetWorkerPodUid() != "" {
 		var assetPaths map[string]string
 		sandboxRec, err := readSandboxRecord(actorUID)
 		if err != nil {
@@ -1314,7 +1307,7 @@ func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequ
 		}
 		assetPaths = paths
 
-		client, err := s.dialAteom(ctx, req.GetTargetAteomUid())
+		client, err := s.dialAteom(ctx, req.GetWorkerPodUid())
 		if err != nil {
 			return nil, fmt.Errorf("failed to dial ateom for terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
 		}
@@ -1486,7 +1479,6 @@ func (s *AteomHerder) prepareOCIBundles(
 	actorRef resources.ActorRef,
 	spec *ateletpb.WorkloadSpec,
 	pauseImage string,
-	targetAteomUid string,
 ) ([]*ateompb.ContainerSpec, error) {
 	// Prepare host folders for volume types that need them.
 	for _, vol := range spec.GetVolumes() {
@@ -1544,10 +1536,10 @@ func (s *AteomHerder) prepareOCIBundles(
 
 // dialAteom opens (or reuses) the gRPC connection to the target ateom
 // pod and returns an ateom client.
-func (s *AteomHerder) dialAteom(ctx context.Context, targetAteomUid string) (ateompb.AteomClient, error) {
-	conn, err := s.ateomDialer.DialAteomPod(ctx, targetAteomUid)
+func (s *AteomHerder) dialAteom(ctx context.Context, workerPodUID string) (ateompb.AteomClient, error) {
+	conn, err := s.ateomDialer.DialAteomPod(ctx, workerPodUID)
 	if err != nil {
-		return nil, fmt.Errorf("while getting ateom conn for %s: %w", targetAteomUid, err)
+		return nil, fmt.Errorf("while getting ateom conn for %s: %w", workerPodUID, err)
 	}
 	return ateompb.NewAteomClient(conn), nil
 }
@@ -1720,7 +1712,7 @@ func validateRunRequest(req *ateletpb.RunRequest) error {
 		return errs.ToAggregate()
 	}
 	// TODO: Migrate all validations below to the validation framework.
-	if err := resources.ValidateAteomUID(req.GetTargetAteomUid()); err != nil {
+	if err := resources.ValidateWorkerPodUID(req.GetWorkerPodUid()); err != nil {
 		return err
 	}
 	names := make([]string, 0, len(req.GetSpec().GetContainers()))
@@ -1739,7 +1731,7 @@ func validateCheckpointRequest(req *ateletpb.CheckpointRequest) error {
 		return errs.ToAggregate()
 	}
 	// TODO: Migrate all validations below to the validation framework.
-	if err := resources.ValidateAteomUID(req.GetTargetAteomUid()); err != nil {
+	if err := resources.ValidateWorkerPodUID(req.GetWorkerPodUid()); err != nil {
 		return err
 	}
 	names := make([]string, 0, len(req.GetSpec().GetContainers()))
@@ -1778,7 +1770,7 @@ func validateRestoreRequest(req *ateletpb.RestoreRequest) error {
 		return errs.ToAggregate()
 	}
 	// TODO: Migrate all validations below to the validation framework.
-	if err := resources.ValidateAteomUID(req.GetTargetAteomUid()); err != nil {
+	if err := resources.ValidateWorkerPodUID(req.GetWorkerPodUid()); err != nil {
 		return err
 	}
 	names := make([]string, 0, len(req.GetSpec().GetContainers()))
@@ -1820,8 +1812,8 @@ func validateTerminateRequest(req *ateletpb.TerminateRequest) error {
 	if len(errs) > 0 {
 		return errs.ToAggregate()
 	}
-	if req.GetTargetAteomUid() != "" {
-		if err := resources.ValidateAteomUID(req.GetTargetAteomUid()); err != nil {
+	if req.GetWorkerPodUid() != "" {
+		if err := resources.ValidateWorkerPodUID(req.GetWorkerPodUid()); err != nil {
 			return err
 		}
 	}

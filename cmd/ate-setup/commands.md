@@ -63,9 +63,9 @@ toolchain, and write access to a registry.
 `REPO` has to hold every component image the manifests reference, all under the
 same tag, which is how a release publishes them. A release that adds a component
 has to publish it alongside the others before a pre-built install can use it.
-`make build-release-images KO_DOCKER_REPO=REPO VERSION=TAG` publishes the full
-set, including `envoy-dataplane`, which is built from a Dockerfile with `docker
-buildx` rather than with `ko`. A build from source builds that image itself, so
+`VERSION=TAG ate-setup publish release-images --ko-docker-repo REPO` publishes
+the full set, including `envoy-dataplane`, which is built from a Dockerfile with
+`docker buildx` rather than with `ko`. A build from source builds that image itself, so
 it needs `docker` as well as `ko`.
 Each reference is then pinned to the digest its tag names, which takes one HEAD
 request per image, so the installer needs read access to `REPO` and not only the
@@ -105,9 +105,15 @@ a running cluster.
 | `ate-setup` | `hack/install-ate.sh` |
 |---|---|
 | `publish worker-images` | (no shell equivalent) |
+| `publish release-images` | (no shell equivalent) |
 
-Builds and pushes the ateom worker images for the checked-out build and prints
-their refs; a WorkerPool points `spec.workerImage` to a build to use the ateom.
+`publish worker-images` builds and pushes the ateom worker images for the
+checked-out build and prints their refs; a WorkerPool points `spec.workerImage`
+to a build to use the ateom.
+
+`publish release-images` builds and pushes every image a pre-built install
+needs, all tagged with the build version; see [Installing a
+release](#installing-a-release).
 
 ## Delete
 

@@ -40,22 +40,21 @@ See `docs/dev/code-layout.md` for the full rationale and per-directory details.
 
 ## Build and Test Commands
 
-Agent Substrate uses a `Makefile` for its build and test tasks.
+The dev entry points are the scripts under `hack/` and the `cmd/ate-setup` installer.
 
-### Building
-- **Binaries**: `make build` (builds images and `kubectl-ate`) or `make build-atectl`
-- **Images**: `make build-images` (uses ko to build container images)
-- **Demos**: `make build-demos`
-- **Release images**: `make build-release-images KO_DOCKER_REPO=REPO VERSION=TAG` (every image a pre-built install needs, all tagged `TAG`, including the docker-built `envoy-dataplane`; `make build-envoy-dataplane` builds only that one)
+### Building and Installing
+- **Install from source**: `go run ./cmd/ate-setup deploy ate-system` (or the `hack/install-ate.sh` shim) builds every image with ko as part of the install; see `cmd/ate-setup/README.md`
+- **Binaries**: `go build -o bin/kubectl-ate ./cmd/kubectl-ate`, `go build -o bin/ate-setup ./cmd/ate-setup`
+- **Release images**: `VERSION=TAG go run ./cmd/ate-setup publish release-images --ko-docker-repo REPO` (every image a pre-built install needs, all tagged `TAG`, including the docker-built `envoy-dataplane`)
 
 ### Testing and Verification
-- **Run Unit Tests**: `make test`
-- **Run E2E Tests**: `make e2e` (Requires GCP cluster setup and built images)
-- **Run Linters and Verifiers**: `make verify` (Includes `go vet` and checks for formatting, boilerplate headers, licenses, and go modules)
+- **Run Unit Tests**: `go test -race ./...`
+- **Run E2E Tests**: `hack/run-e2e.sh` (Requires a cluster with Agent Substrate installed; `hack/run-e2e-kind.sh` for kind)
+- **Run Linters and Verifiers**: `hack/verify-all.sh` (formatting, golangci-lint, boilerplate headers, licenses, go modules, generated code, and the metrics registry)
 
 ## Code Style Guidelines
 
-- **Go Formatting**: Code must be formatted with `gofmt`. Run `make fmt` to automatically format all files before submitting changes.
+- **Go Formatting**: Code must be formatted with `gofmt`. Run `hack/update/gofmt.sh` to automatically format all files before submitting changes.
 - **Copyright Headers**: All files must contain appropriate copyright and license headers. See templates in `hack/boilerplate/`.
 - **Modularity**: Submit small, focused Pull Requests that touch a limited part of the codebase for easier reviews and rebasing.
 - **Go Modules**: Ensure `go.mod` is clean. Run `go mod tidy` if adding or removing dependencies.
@@ -79,7 +78,7 @@ Do not add `reserved` statements to protos, deprecated aliases, fallbacks for ol
 
 `docs/metrics/registry/` is an [OpenTelemetry Weaver](https://github.com/open-telemetry/weaver) registry. `metrics.yaml` defines every metric instrument the ate system components emit, plus every attribute any signal uses and the permitted values of each. `events.yaml` defines the log events emitted over OTLP. Read them to find an instrument, an event, or their attributes.
 
-If you add or rename an instrument or an event, or add an attribute, follow `docs/dev/best-practices/metrics.md`, update the registry, and run `hack/verify/metrics.sh`. `make verify` runs the same check. Weaver reads the whole directory, so a new file in it is checked straight away.
+If you add or rename an instrument or an event, or add an attribute, follow `docs/dev/best-practices/metrics.md`, update the registry, and run `hack/verify/metrics.sh`. `hack/verify-all.sh` runs the same check. Weaver reads the whole directory, so a new file in it is checked straight away.
 
 Some attributes are defined in the registry but barred from metric labels: actor identity is the main one. The `note` on each says so, and `cardinality_rules` in `docs/metrics/substrate.yaml` is where the bar lives.
 
@@ -91,7 +90,7 @@ See the [metric registry](docs/observability.md#the-metric-registry) section of 
 
 1. Write tests for all new code. We will not merge code that lacks tests.
 2. Ensure changes do not break existing tests.
-3. Run `make verify` locally before requesting a code review to catch common issues like missed copyright headers or formatting drift.
+3. Run `go test -race ./...` and `hack/verify-all.sh` locally before requesting a code review to catch common issues like missed copyright headers or formatting drift.
 4. For end-to-end tests involving the actual infrastructure, ensure you have a running cluster (setup via `hack/ate-dev-env.sh.example` and `go run ./tools/setup-gcp bootstrap`).
 5. A test that skips when a precondition is missing — Docker, a cluster, an artifact directory — must **fail** on it in CI, because a skip and a pass are the same exit code. Resolve strictness through a named predicate rather than an inline `os.Getenv("CI")`; `cmd/ateapi/internal/store/dockerenv.Required()` is the reference implementation. Prove the strict branch red before merging: a guard only ever observed passing is not known to guard anything. See `docs/dev/best-practices/ci-fail-closed.md`.
 

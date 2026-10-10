@@ -80,7 +80,7 @@ func TestGoldenApplications(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		goldenURI := tag.GetStatus().GetSnapshot().GetSnapshotUri()
+		goldenURI := snapshotURI(tag.GetStatus().GetSnapshot())
 		if goldenURI == "" {
 			t.Fatal("published golden tag has no snapshot")
 		}
@@ -105,7 +105,7 @@ func TestGoldenApplications(t *testing.T) {
 					t.Errorf("cleanup actor %v: %v", ref, err)
 				}
 			})
-			if got := actor.GetStatus().GetExternalSnapshot().GetSnapshotUri(); got != goldenURI {
+			if got := durableSnapshotURI(actor.GetStatus()); got != goldenURI {
 				t.Fatalf("actor %s snapshot = %q, want golden %q", name, got, goldenURI)
 			}
 			if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, e2e.GetClients(), &ateapipb.ResumeActorRequest{Actor: ref}); err != nil {
@@ -268,4 +268,24 @@ func readBootID(ctx context.Context, router *e2e.RouterClient, actor resources.A
 		return "", fmt.Errorf("HTTP %d: %q", code, body)
 	}
 	return strings.TrimSpace(string(body)), nil
+}
+
+func durableSnapshotURI(status *ateapipb.ActorStatus) string {
+	var best *ateapipb.Snapshot
+	for _, snap := range status.GetSnapshots() {
+		if snapshotURI(snap) != "" && (best == nil || snap.GetGeneration() > best.GetGeneration()) {
+			best = snap
+		}
+	}
+	return snapshotURI(best)
+}
+
+func snapshotURI(snap *ateapipb.Snapshot) string {
+	for _, storage := range snap.GetStorage() {
+		if storage.GetDurability() == ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE &&
+			storage.GetStatus() == ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED {
+			return storage.GetObject().GetSnapshotUri()
+		}
+	}
+	return ""
 }

@@ -114,7 +114,7 @@ func TestReuseTokenUntilAThirdOfItsLifetimeRemains(t *testing.T) {
 		wantToken(t, m, testActor, src, "jwt-1")
 		want := &ateapipb.MintActorJWTRequest{
 			Actor:             &ateapipb.ObjectRef{Atespace: "default", Name: "my-actor"},
-			Audience:          []string{"https://a.example", "https://b.example"},
+			Audiences:         []string{"https://a.example", "https://b.example"},
 			ExpirationSeconds: 900,
 		}
 		if got := ctl.last.Load(); !proto.Equal(got, want) {

@@ -1768,15 +1768,14 @@ type WorkloadStatsSample struct {
 	// drifts upward with cache the kernel would drop for free under pressure.
 	MemoryWorkingSetBytes uint64 `protobuf:"varint,10,opt,name=memory_working_set_bytes,json=memoryWorkingSetBytes,proto3" json:"memory_working_set_bytes,omitempty"`
 	// Cumulative CPU time since the activation began (epoch_unix_nano), for
-	// every source. The cgroup source restarts on its own; the guest-agent
-	// source is rebased on its first read after a restore, since the guest's
-	// counters survive in guest RAM. An ateom that leaves epoch_unix_nano at zero
-	// also sends the raw guest counter. A lifetime figure is the sum over epochs
-	// of each epoch's highest value.
+	// every source, and never decreasing within it. The cgroup source restarts on
+	// its own; the guest-agent source counts from its first read after a restore
+	// that resumes the guest, since the guest's counters survive in guest RAM. A
+	// lifetime figure is the sum over epochs of each epoch's highest value.
 	CpuUsageUsec       uint64 `protobuf:"varint,11,opt,name=cpu_usage_usec,json=cpuUsageUsec,proto3" json:"cpu_usage_usec,omitempty"`
 	ObservedAtUnixNano int64  `protobuf:"varint,12,opt,name=observed_at_unix_nano,json=observedAtUnixNano,proto3" json:"observed_at_unix_nano,omitempty"`
 	// The activation this sample belongs to, as the unix-nano time it began. A
-	// Run or Restore starts one. Zero from an ateom that does not set it.
+	// Run or Restore starts one.
 	EpochUnixNano int64 `protobuf:"varint,13,opt,name=epoch_unix_nano,json=epochUnixNano,proto3" json:"epoch_unix_nano,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

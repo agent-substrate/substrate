@@ -532,7 +532,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) authorize(r *http.Request) (*activation, context.Context, func(), bool) {
-	ref, err := atenet.ParseTargetActor(r.Header.Get(atenet.TargetActorHeader))
+	vals := r.Header.Values(atenet.TargetActorHeader)
+	if len(vals) != 1 {
+		return nil, nil, nil, false
+	}
+	ref, err := atenet.ParseTargetActor(vals[0])
 	if err != nil {
 		return nil, nil, nil, false
 	}

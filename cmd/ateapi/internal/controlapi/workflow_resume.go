@@ -137,11 +137,12 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 // commit MEMORY (preferredFidelity), so this only trips on a golden snapshot
 // whose record drifted — surface a clear error instead of shipping a restore
 // request atelet would reject (or that would boot an empty guest).
-func validateGoldenSnapshotFidelity(snapshot *ateapipb.ExternalSnapshot) error {
-	if fidelity := snapshot.GetFidelity(); fidelity != ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
+func validateGoldenSnapshotFidelity(snapshot *ateapipb.Snapshot) error {
+	st := findSnapshotStorage(snapshot, ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE)
+	if fidelity := st.GetFidelity(); fidelity != ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
 		return apierror.FailedPrecondition(
 			"ActorTemplate golden snapshot %q was taken with fidelity %s, not MEMORY; regenerate the golden snapshot",
-			snapshot.GetSnapshotUri(), fidelity)
+			st.GetObject().GetSnapshotUri(), fidelity)
 	}
 	return nil
 }
@@ -172,12 +173,12 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 	if err != nil {
 		return nil, nil, src, err
 	}
-	if uri := actor.GetStatus().GetExternalSnapshot().GetSnapshotUri(); uri != "" {
-		if src.SnapshotURI, err = resources.ParseSnapshotURI(uri); err != nil {
+	if snap, st := findLatestSnapshotStorage(actor.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED); st != nil {
+		if src.SnapshotURI, err = resources.ParseSnapshotURI(st.GetObject().GetSnapshotUri()); err != nil {
 			return nil, nil, src, apierror.DataLoss("Actor %s external snapshot: %v", actorRef, err)
 		}
-		src.Fidelity = actor.GetStatus().GetExternalSnapshot().GetFidelity()
-		capturedUnder := actor.GetStatus().GetExternalSnapshot().GetActorTemplateUid()
+		src.Fidelity = st.GetFidelity()
+		capturedUnder := snap.GetActorTemplateUid()
 		src.TemplateReplaced = capturedUnder != "" && capturedUnder != actorTemplate.GetMetadata().GetUid()
 	}
 
@@ -192,7 +193,7 @@ func (w *ActorWorkflow) ensureVolumesCreated(ctx context.Context, actorRef resou
 	defer func() { err = done(err) }()
 
 	pending := false
-	for _, vol := range actor.GetStatus().GetActorVolumes() {
+	for _, vol := range actor.GetStatus().GetExternalVolumes() {
 		if vol.GetStatus() == ateapipb.ExternalVolume_STATUS_PENDING {
 			pending = true
 			break
@@ -203,12 +204,12 @@ func (w *ActorWorkflow) ensureVolumesCreated(ctx context.Context, actorRef resou
 		return actor, nil
 	}
 
-	volumes, createErr := createActorVolumes(ctx, w.pluginRegistry, w.storageClassLister, actor.GetMetadata().GetUid(), actorTemplate, actor.GetStatus().GetActorVolumes())
+	volumes, createErr := createActorVolumes(ctx, w.pluginRegistry, w.storageClassLister, actor.GetMetadata().GetUid(), actorTemplate, actor.GetStatus().GetExternalVolumes())
 	// createActorVolumes reports the state it got to even when it fails, so both
 	// paths persist the same field.
 	updatePrecondition := store.PreconditionFrom(actor)
 	persistVolumes := func(toUpdate *ateapipb.Actor) error {
-		toUpdate.Status.ActorVolumes = volumes
+		toUpdate.Status.ExternalVolumes = volumes
 		return nil
 	}
 	if createErr != nil {
@@ -639,7 +640,7 @@ func (w *ActorWorkflow) ensureVolumesAttached(ctx context.Context, actor *ateapi
 
 	ref := &ateapipb.ObjectRef{Atespace: actor.GetMetadata().GetAtespace(), Name: actor.GetMetadata().GetName()}
 	volumePublishContexts := make(map[string]map[string]string)
-	for _, vol := range getMountedActorVolumes(ctx, ref, actor.GetStatus().GetActorVolumes(), actorTemplate) {
+	for _, vol := range getMountedActorVolumes(ctx, ref, actor.GetStatus().GetExternalVolumes(), actorTemplate) {
 		slog.InfoContext(ctx, "Attaching volume to node", slog.String("volume_id", vol.GetStorageVolumeId()), slog.String("node", node))
 		plugin, err := w.pluginRegistry.GetPlugin(ctx, vol.GetVolumeType())
 		if err != nil {
@@ -650,7 +651,7 @@ func (w *ActorWorkflow) ensureVolumesAttached(ctx context.Context, actor *ateapi
 			return nil, fmt.Errorf("failed to attach volume %q to node %q: %w", vol.GetStorageVolumeId(), node, err)
 		}
 		if len(resp.PublishContext) > 0 {
-			volumePublishContexts[vol.GetVolumeName()] = resp.PublishContext
+			volumePublishContexts[vol.GetName()] = resp.PublishContext
 		}
 	}
 	return volumePublishContexts, nil
@@ -694,12 +695,12 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		return tele, fmt.Errorf("while resolving sandbox assets: %w", err)
 	}
 
-	if local := actor.GetStatus().GetLocalSnapshot(); local != nil {
+	if _, localSt := findLatestSnapshotStorage(actor.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_LOCAL, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED); localSt != nil {
 		slog.InfoContext(ctx, "Actor has snapshot; Restoring from snapshot")
 		tele.SnapshotKind = ateattr.SnapshotKindLocal
 
 		req := &ateletpb.RestoreRequest{
-			TargetAteomUid:        assignment.GetWorkerPodUid(),
+			WorkerPodUid:          assignment.GetWorkerPodUid(),
 			Atespace:              actor.GetMetadata().GetAtespace(),
 			ActorName:             actor.GetMetadata().GetName(),
 			ActorTemplateAtespace: actor.GetActorTemplate().GetAtespace(),
@@ -713,9 +714,9 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		}
 		req.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
 		req.Config = &ateletpb.RestoreRequest_LocalConfig{
-			LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: local.GetSnapshotName()},
+			LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: localSt.GetLocal().GetSnapshotName()},
 		}
-		req.Fidelity = fidelityToAtelet(local.GetFidelity())
+		req.Fidelity = fidelityToAtelet(localSt.GetFidelity())
 		tele.WireFidelity = ateattr.SnapshotFidelityValue(req.Fidelity)
 
 		if _, err = client.Restore(ctx, req); err != nil {
@@ -731,7 +732,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		}
 		tele.WireFidelity = ateattr.SnapshotFidelityValue(scope)
 		req := &ateletpb.RestoreRequest{
-			TargetAteomUid:        assignment.GetWorkerPodUid(),
+			WorkerPodUid:          assignment.GetWorkerPodUid(),
 			Atespace:              actor.GetMetadata().GetAtespace(),
 			ActorName:             actor.GetMetadata().GetName(),
 			ActorTemplateAtespace: actor.GetActorTemplate().GetAtespace(),
@@ -759,7 +760,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		tele.SnapshotKind = ateattr.SnapshotKindBoot
 
 		req := &ateletpb.RunRequest{
-			TargetAteomUid:        assignment.GetWorkerPodUid(),
+			WorkerPodUid:          assignment.GetWorkerPodUid(),
 			Atespace:              actor.GetMetadata().GetAtespace(),
 			ActorName:             actor.GetMetadata().GetName(),
 			ActorTemplateAtespace: actor.GetActorTemplate().GetAtespace(),

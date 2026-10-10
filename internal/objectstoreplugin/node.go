@@ -31,7 +31,7 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/objectstorage"
-	objectstoresnapshotv1 "github.com/agent-substrate/substrate/pkg/proto/objectstoresnapshotpb/v1"
+	objectstorev1 "github.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -44,7 +44,7 @@ const manifestFile = "manifest.json"
 
 // NodePlugin serves NodeProvider on an object storage client.
 type NodePlugin struct {
-	objectstoresnapshotv1.UnimplementedNodeProviderServer
+	objectstorev1.UnimplementedNodeProviderServer
 
 	gcsClient objectstorage.ObjectStorage
 	// root confines every local path a caller names.
@@ -61,7 +61,7 @@ func NewNodePlugin(gcsClient objectstorage.ObjectStorage, root string) (*NodePlu
 }
 
 // FetchSnapshot downloads the requested snapshot files into write_path.
-func (p *NodePlugin) FetchSnapshot(ctx context.Context, req *objectstoresnapshotv1.FetchSnapshotRequest) (*objectstoresnapshotv1.FetchSnapshotResponse, error) {
+func (p *NodePlugin) FetchSnapshot(ctx context.Context, req *objectstorev1.FetchSnapshotRequest) (*objectstorev1.FetchSnapshotResponse, error) {
 	uri, dstDir, err := p.validate(req.GetSnapshotUri(), req.GetWritePath(), req.GetFiles())
 	if err != nil {
 		return nil, err
@@ -98,12 +98,12 @@ func (p *NodePlugin) FetchSnapshot(ctx context.Context, req *objectstoresnapshot
 	if err := g.Wait(); err != nil {
 		return nil, toStatus(err)
 	}
-	return &objectstoresnapshotv1.FetchSnapshotResponse{}, nil
+	return &objectstorev1.FetchSnapshotResponse{}, nil
 }
 
 // UploadSnapshot uploads the requested files from local_path into the
 // snapshot.
-func (p *NodePlugin) UploadSnapshot(ctx context.Context, req *objectstoresnapshotv1.UploadSnapshotRequest) (*objectstoresnapshotv1.UploadSnapshotResponse, error) {
+func (p *NodePlugin) UploadSnapshot(ctx context.Context, req *objectstorev1.UploadSnapshotRequest) (*objectstorev1.UploadSnapshotResponse, error) {
 	uri, srcDir, err := p.validate(req.GetSnapshotUri(), req.GetLocalPath(), req.GetFiles())
 	if err != nil {
 		return nil, err
@@ -146,7 +146,7 @@ func (p *NodePlugin) UploadSnapshot(ctx context.Context, req *objectstoresnapsho
 	if err := g.Wait(); err != nil {
 		return nil, toStatus(err)
 	}
-	return &objectstoresnapshotv1.UploadSnapshotResponse{}, nil
+	return &objectstorev1.UploadSnapshotResponse{}, nil
 }
 
 // fetchManifest downloads the uncompressed manifest into root.

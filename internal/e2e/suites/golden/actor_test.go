@@ -97,8 +97,8 @@ func TestActorSuspendRejectsExitedApplication(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	snapshotURI := suspended.GetActor().GetStatus().GetExternalSnapshot().GetSnapshotUri()
-	if snapshotURI == "" || snapshotURI == created.GetStatus().GetExternalSnapshot().GetSnapshotUri() {
+	snapshotURI := durableSnapshotURI(suspended.GetActor().GetStatus())
+	if snapshotURI == "" || snapshotURI == durableSnapshotURI(created.GetStatus()) {
 		t.Fatalf("ordinary suspend did not create its own snapshot: %q", snapshotURI)
 	}
 	assertSnapshot := func(actor *ateapipb.Actor, state ateapipb.ActorState) {
@@ -106,7 +106,7 @@ func TestActorSuspendRejectsExitedApplication(t *testing.T) {
 		if got := actor.GetStatus().GetState(); got != state {
 			t.Fatalf("actor state = %v, want %v", got, state)
 		}
-		if got := actor.GetStatus().GetExternalSnapshot().GetSnapshotUri(); got != snapshotURI {
+		if got := durableSnapshotURI(actor.GetStatus()); got != snapshotURI {
 			t.Fatalf("external snapshot = %q, want last good snapshot %q", got, snapshotURI)
 		}
 	}

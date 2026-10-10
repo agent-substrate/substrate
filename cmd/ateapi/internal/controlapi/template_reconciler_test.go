@@ -184,6 +184,20 @@ func (c *fakeGoldenControl) CreateAtespace(_ context.Context, req *ateapipb.Crea
 	return req.GetAtespace(), nil
 }
 
+func (c *fakeGoldenControl) goldenActorStatus() *ateapipb.ActorStatus {
+	st := &ateapipb.ActorStatus{State: c.goldenState}
+	if c.crashMessage != "" {
+		st.Crash = &ateapipb.ActorCrash{Message: c.crashMessage}
+	}
+	if c.goldenSnapshot != "" {
+		st.LastAssignedGeneration = 1
+		st.Snapshots = []*ateapipb.Snapshot{
+			newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, testTemplateUID, c.goldenSnapshot, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+		}
+	}
+	return st
+}
+
 func (c *fakeGoldenControl) CreateActor(_ context.Context, req *ateapipb.CreateActorRequest) (*ateapipb.Actor, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -200,7 +214,7 @@ func (c *fakeGoldenControl) CreateActor(_ context.Context, req *ateapipb.CreateA
 	// a status observing the initial SUSPENDED state.
 	return &ateapipb.Actor{
 		Metadata: req.GetActor().GetMetadata(),
-		Status:   &ateapipb.ActorStatus{State: c.goldenState, ExternalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: c.goldenSnapshot}},
+		Status:   c.goldenActorStatus(),
 	}, nil
 }
 
@@ -215,10 +229,7 @@ func (c *fakeGoldenControl) GetActor(_ context.Context, req *ateapipb.GetActorRe
 	}
 	return &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: req.GetActor().GetAtespace(), Name: req.GetActor().GetName()},
-		Status: &ateapipb.ActorStatus{
-			State: c.goldenState, ExternalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: c.goldenSnapshot},
-			Crash: &ateapipb.ActorCrash{Message: c.crashMessage},
-		},
+		Status:   c.goldenActorStatus(),
 	}, nil
 }
 
@@ -250,7 +261,7 @@ func (c *fakeGoldenControl) SuspendActor(_ context.Context, req *ateapipb.Suspen
 		c.goldenSnapshot = c.snapshot
 	}
 	return &ateapipb.SuspendActorResponse{
-		Actor: &ateapipb.Actor{Status: &ateapipb.ActorStatus{ExternalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: c.goldenSnapshot}}},
+		Actor: &ateapipb.Actor{Status: c.goldenActorStatus()},
 	}, nil
 }
 
@@ -271,7 +282,10 @@ func (c *fakeGoldenControl) CreateTag(_ context.Context, req *ateapipb.CreateTag
 		return nil, c.tagErr
 	}
 	c.tag = proto.CloneOf(req.GetTag())
-	c.tag.Status = &ateapipb.TagStatus{ActorTemplateUid: testTemplateUID, Snapshot: &ateapipb.ExternalSnapshot{SnapshotUri: c.goldenSnapshot}}
+	c.tag.Status = &ateapipb.TagStatus{
+		ActorTemplateUid: testTemplateUID,
+		Snapshot:         newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, testTemplateUID, c.goldenSnapshot, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+	}
 	return proto.CloneOf(c.tag), nil
 }
 
@@ -895,7 +909,10 @@ func TestReconcileOne_GoldenTagRecovery(t *testing.T) {
 		Metadata:    &ateapipb.ResourceMetadata{Atespace: ref.Atespace, Name: ref.Name},
 		SourceActor: ref,
 		Scope:       ateapipb.TagScope_TAG_SCOPE_PUBLISHED,
-		Status:      &ateapipb.TagStatus{ActorTemplateUid: testTemplateUID, Snapshot: &ateapipb.ExternalSnapshot{SnapshotUri: "gs://bucket/tag-snapshot"}},
+		Status: &ateapipb.TagStatus{
+			ActorTemplateUid: testTemplateUID,
+			Snapshot:         newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, testTemplateUID, "gs://bucket/tag-snapshot", ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+		},
 	}
 	incomplete := proto.CloneOf(completed)
 	incomplete.Status.Snapshot = nil
@@ -952,7 +969,7 @@ func TestReconcileOne_GoldenTagRecovery(t *testing.T) {
 			if !proto.Equal(st.storedStatus(t, testTemplateRef).GetGoldenSnapshotStatus().GetGoldenTag(), ref) {
 				t.Fatal("golden tag not recorded")
 			}
-			if control.tag.GetStatus().GetSnapshot().GetSnapshotUri() == "" {
+			if tagDurableSnapshotURI(control.tag, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED) == "" {
 				t.Fatal("golden tag has no snapshot")
 			}
 			if len(control.createReqs) != 0 || len(control.resumeReqs) != 0 || len(control.suspendReqs) != 0 {

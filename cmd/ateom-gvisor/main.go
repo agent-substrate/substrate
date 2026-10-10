@@ -54,6 +54,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/sizing"
 	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/agent-substrate/substrate/internal/wakeupprobe"
+	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/spf13/pflag"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
@@ -181,8 +182,8 @@ func do(ctx context.Context) error {
 
 	// Create ateom dir
 	ateomDir := nodepath.AteomPath(*podUID)
-	if err := resources.ValidateAteomUID(*podUID); err != nil {
-		return fmt.Errorf("in resources.ValidateAteomUID: %w", err)
+	if err := resources.ValidateWorkerPodUID(*podUID); err != nil {
+		return fmt.Errorf("in resources.ValidateWorkerPodUID: %w", err)
 	}
 	if err := os.MkdirAll(ateomDir, 0o700); err != nil {
 		return fmt.Errorf("in os.MkdirAll(%q): %w", ateomDir, err)
@@ -266,6 +267,7 @@ func do(ctx context.Context) error {
 			TrustBundlePath:      tunnelConfig.TrustBundle,
 			AteletSPIFFEID:       tunnelConfig.BrokerIdentity,
 			Actors:               *maxActors,
+			SandboxClass:         string(atev1alpha1.SandboxClassGvisor),
 		})
 		if err != nil && ctx.Err() == nil {
 			serverboot.Fatal(ctx, "Failed to report worker capacity", err)
