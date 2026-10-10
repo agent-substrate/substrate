@@ -3616,15 +3616,14 @@ type Volume struct {
 	// +k8s:required
 	// +k8s:format=k8s-short-name
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	// Exactly one of durable_dir / external_volume_template / image /
-	// system_info must be set.
+	// Exactly one of durable_dir / external / image / system_info must be set.
 	//
 	// +k8s:optional
 	// +k8s:unionMember
 	DurableDir *DurableDirVolumeSource `protobuf:"bytes,2,opt,name=durable_dir,json=durableDir,proto3" json:"durable_dir,omitempty"`
 	// +k8s:optional
 	// +k8s:unionMember
-	ExternalVolumeTemplate *ExternalVolumeTemplate `protobuf:"bytes,3,opt,name=external_volume_template,json=externalVolumeTemplate,proto3" json:"external_volume_template,omitempty"`
+	External *ExternalVolumeSource `protobuf:"bytes,3,opt,name=external,proto3" json:"external,omitempty"`
 	// +k8s:optional
 	// +k8s:unionMember
 	SystemInfo *SystemInfoVolumeSource `protobuf:"bytes,5,opt,name=system_info,json=systemInfo,proto3" json:"system_info,omitempty"`
@@ -3681,9 +3680,9 @@ func (x *Volume) GetDurableDir() *DurableDirVolumeSource {
 	return nil
 }
 
-func (x *Volume) GetExternalVolumeTemplate() *ExternalVolumeTemplate {
+func (x *Volume) GetExternal() *ExternalVolumeSource {
 	if x != nil {
-		return x.ExternalVolumeTemplate
+		return x.External
 	}
 	return nil
 }
@@ -3793,9 +3792,9 @@ func (*DurableDirVolumeSource) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{40}
 }
 
-// ExternalVolumeTemplate provisions an external volume per actor; the volume
+// ExternalVolumeSource provisions an external volume per actor; the volume
 // lives only as long as the actor.
-type ExternalVolumeTemplate struct {
+type ExternalVolumeSource struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// capacity of the volume to create, in Kubernetes resource.Quantity string
 	// form (e.g. "10Gi"). Required.
@@ -3814,20 +3813,20 @@ type ExternalVolumeTemplate struct {
 	sizeCache        protoimpl.SizeCache
 }
 
-func (x *ExternalVolumeTemplate) Reset() {
-	*x = ExternalVolumeTemplate{}
+func (x *ExternalVolumeSource) Reset() {
+	*x = ExternalVolumeSource{}
 	mi := &file_ateapi_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *ExternalVolumeTemplate) String() string {
+func (x *ExternalVolumeSource) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*ExternalVolumeTemplate) ProtoMessage() {}
+func (*ExternalVolumeSource) ProtoMessage() {}
 
-func (x *ExternalVolumeTemplate) ProtoReflect() protoreflect.Message {
+func (x *ExternalVolumeSource) ProtoReflect() protoreflect.Message {
 	mi := &file_ateapi_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -3839,19 +3838,19 @@ func (x *ExternalVolumeTemplate) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use ExternalVolumeTemplate.ProtoReflect.Descriptor instead.
-func (*ExternalVolumeTemplate) Descriptor() ([]byte, []int) {
+// Deprecated: Use ExternalVolumeSource.ProtoReflect.Descriptor instead.
+func (*ExternalVolumeSource) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{41}
 }
 
-func (x *ExternalVolumeTemplate) GetCapacity() string {
+func (x *ExternalVolumeSource) GetCapacity() string {
 	if x != nil {
 		return x.Capacity
 	}
 	return ""
 }
 
-func (x *ExternalVolumeTemplate) GetStorageClassName() string {
+func (x *ExternalVolumeSource) GetStorageClassName() string {
 	if x != nil {
 		return x.StorageClassName
 	}
@@ -8675,19 +8674,19 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x0ftimeout_seconds\x18\x02 \x01(\x05R\x0etimeoutSeconds\"7\n" +
 	"\rHTTPGetAction\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x12\n" +
-	"\x04port\x18\x02 \x01(\x05R\x04port\"\xa9\x02\n" +
+	"\x04port\x18\x02 \x01(\x05R\x04port\"\x89\x02\n" +
 	"\x06Volume\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12?\n" +
 	"\vdurable_dir\x18\x02 \x01(\v2\x1e.ateapi.DurableDirVolumeSourceR\n" +
-	"durableDir\x12X\n" +
-	"\x18external_volume_template\x18\x03 \x01(\v2\x1e.ateapi.ExternalVolumeTemplateR\x16externalVolumeTemplate\x12?\n" +
+	"durableDir\x128\n" +
+	"\bexternal\x18\x03 \x01(\v2\x1c.ateapi.ExternalVolumeSourceR\bexternal\x12?\n" +
 	"\vsystem_info\x18\x05 \x01(\v2\x1e.ateapi.SystemInfoVolumeSourceR\n" +
 	"systemInfo\x12/\n" +
 	"\x05image\x18\x06 \x01(\v2\x19.ateapi.ImageVolumeSourceR\x05image\"1\n" +
 	"\x11ImageVolumeSource\x12\x1c\n" +
 	"\treference\x18\x01 \x01(\tR\treference\"\x18\n" +
-	"\x16DurableDirVolumeSource\"b\n" +
-	"\x16ExternalVolumeTemplate\x12\x1a\n" +
+	"\x16DurableDirVolumeSource\"`\n" +
+	"\x14ExternalVolumeSource\x12\x1a\n" +
 	"\bcapacity\x18\x01 \x01(\tR\bcapacity\x12,\n" +
 	"\x12storage_class_name\x18\x02 \x01(\tR\x10storageClassName\"Y\n" +
 	"\x16SystemInfoVolumeSource\x12?\n" +
@@ -9089,7 +9088,7 @@ var file_ateapi_proto_goTypes = []any{
 	(*Volume)(nil),                             // 48: ateapi.Volume
 	(*ImageVolumeSource)(nil),                  // 49: ateapi.ImageVolumeSource
 	(*DurableDirVolumeSource)(nil),             // 50: ateapi.DurableDirVolumeSource
-	(*ExternalVolumeTemplate)(nil),             // 51: ateapi.ExternalVolumeTemplate
+	(*ExternalVolumeSource)(nil),               // 51: ateapi.ExternalVolumeSource
 	(*SystemInfoVolumeSource)(nil),             // 52: ateapi.SystemInfoVolumeSource
 	(*SystemInfoDataSource)(nil),               // 53: ateapi.SystemInfoDataSource
 	(*ActorMetadataDataSource)(nil),            // 54: ateapi.ActorMetadataDataSource
@@ -9237,7 +9236,7 @@ var file_ateapi_proto_depIdxs = []int32{
 	44,  // 62: ateapi.SecurityContext.capabilities:type_name -> ateapi.Capabilities
 	47,  // 63: ateapi.ContainerWakeupProbe.http_get:type_name -> ateapi.HTTPGetAction
 	50,  // 64: ateapi.Volume.durable_dir:type_name -> ateapi.DurableDirVolumeSource
-	51,  // 65: ateapi.Volume.external_volume_template:type_name -> ateapi.ExternalVolumeTemplate
+	51,  // 65: ateapi.Volume.external:type_name -> ateapi.ExternalVolumeSource
 	52,  // 66: ateapi.Volume.system_info:type_name -> ateapi.SystemInfoVolumeSource
 	49,  // 67: ateapi.Volume.image:type_name -> ateapi.ImageVolumeSource
 	53,  // 68: ateapi.SystemInfoVolumeSource.data_sources:type_name -> ateapi.SystemInfoDataSource

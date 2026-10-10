@@ -1302,7 +1302,7 @@ func createActorTemplateWithExternalVolume(ctx context.Context, t *testing.T, cl
 		if !hasExtVol {
 			at.Volumes = append(at.Volumes, &ateapipb.Volume{
 				Name: "external-data",
-				ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
+				External: &ateapipb.ExternalVolumeSource{
 					Capacity:         "1Gi",
 					StorageClassName: scName,
 				},

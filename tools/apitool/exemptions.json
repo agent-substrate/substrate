@@ -371,7 +371,7 @@
   },
   {
     "rule": "documented",
-    "subject": "ateapi.Volume.external_volume_template",
+    "subject": "ateapi.Volume.external",
     "message": "field has no doc comment"
   },
   {

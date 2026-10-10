@@ -42,10 +42,10 @@ sandboxConfig:
   configName: gvisor-default
 volumes:
 - name: vol-hostpath
-  externalVolumeTemplate:
+  external:
     capacity: 1Gi
     storageClassName: csi-hostpath-sc
 - name: vol-nfs
-  externalVolumeTemplate:
+  external:
     capacity: 1Gi
     storageClassName: csi-nfs-sc

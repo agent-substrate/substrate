@@ -228,7 +228,7 @@ func createTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, ns 
 				&ateapipb.VolumeMount{Name: extVolume, MountPath: extPathB})
 			tmpl.Volumes = append(tmpl.Volumes, &ateapipb.Volume{
 				Name: extVolume,
-				ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
+				External: &ateapipb.ExternalVolumeSource{
 					Capacity:         extCapacity,
 					StorageClassName: storageClass,
 				},
