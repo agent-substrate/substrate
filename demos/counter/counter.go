@@ -67,6 +67,7 @@ func main() {
 	sigtermSleepDurationSecs.Store(15)
 	fileCounterDirectory := pflag.String("file-counter-directory", "/home/counter", "Directory for file counter")
 	secondFileCounterDirectory := pflag.String("second-file-counter-directory", "", "Directory for a second file counter; empty disables it. Used to exercise an Actor with more than one durable volume")
+	rootfsCounterFile := pflag.String("rootfs-counter-file", "/rootfs-counter.txt", "File on the container's root filesystem holding a third counter, so a snapshot's handling of rootfs writes is observable: ROOTFS and MEMORY fidelities preserve it, VOLUMES resets it")
 	validateExistingFilePath := pflag.String("validate-existing-file-path", "", "Path to existing file to validate reading")
 	extraPort := pflag.Int("extra-port", 0, "Additional port to listen on, for exercising atenet-router's arbitrary-port ingress support; 0 disables it")
 	tcpPort := pflag.Int("tcp-port", 0, "Plain TCP echo port for exercising atunnel CONNECT ingress; 0 disables it")
@@ -89,6 +90,7 @@ func main() {
 	defaultMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		fileCounter := incrementFileCounter(filepath.Join(*fileCounterDirectory, "a.txt"))
+		rootfsCounter := incrementFileCounter(*rootfsCounterFile)
 		memoryCounter := requestCount.Add(1)
 		currentIP := getCurrentIP()
 
@@ -112,7 +114,7 @@ func main() {
 			secondFileCounterStr = fmt.Sprintf(" | preserved second file counter: %d", secondFileCounter)
 		}
 
-		response := fmt.Sprintf("hello from: %s | preserved memory count: %d | preserved file counter: %d%s%s\n", currentIP, memoryCounter, fileCounter, secondFileCounterStr, fileContentStr)
+		response := fmt.Sprintf("hello from: %s | preserved memory count: %d | preserved file counter: %d | preserved rootfs counter: %d%s%s\n", currentIP, memoryCounter, fileCounter, rootfsCounter, secondFileCounterStr, fileContentStr)
 		slog.InfoContext(ctx, "Handled request", slog.String("response", response))
 
 		w.WriteHeader(http.StatusOK)
