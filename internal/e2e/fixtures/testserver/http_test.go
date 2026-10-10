@@ -15,70 +15,74 @@
 package main
 
 import (
-	"errors"
+	"crypto/tls"
+	"crypto/x509"
 	"io"
 	"net/http"
-	"net/http/httptest"
-	"strings"
 	"testing"
+	"time"
 )
 
-type trackingReader struct {
-	r    io.Reader
-	eof  bool
-	read int
-}
+func TestHTTPHandlerDefaultsToEmptyHealthz(t *testing.T) {
+	server := startOriginServer(t, newHTTPHandler(""), "", "")
 
-func (t *trackingReader) Read(p []byte) (int, error) {
-	n, err := t.r.Read(p)
-	t.read += n
-	if errors.Is(err, io.EOF) {
-		t.eof = true
+	client := &http.Client{Timeout: 2 * time.Second}
+	response, err := client.Get(server.httpURL + "/healthz")
+	if err != nil {
+		t.Fatalf("GET /healthz: %v", err)
 	}
-	return n, err
-}
+	defer response.Body.Close()
 
-type failingReader struct{}
-
-func (failingReader) Read([]byte) (int, error) {
-	return 0, io.ErrUnexpectedEOF
-}
-
-func TestHTTPHandlerHealthz(t *testing.T) {
-	recorder := httptest.NewRecorder()
-	newHTTPHandler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/healthz", nil))
-	if recorder.Code != http.StatusOK {
-		t.Errorf("GET /healthz = %d, want %d", recorder.Code, http.StatusOK)
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("GET /healthz status = %d, want %d", response.StatusCode, http.StatusOK)
+	}
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("reading /healthz: %v", err)
+	}
+	if len(body) != 0 {
+		t.Errorf("GET /healthz body = %q, want empty", body)
 	}
 }
 
-func TestHTTPHandlerFetchPostDrainsBody(t *testing.T) {
-	payload := strings.Repeat("payload-bytes-", 1024)
-	body := &trackingReader{r: strings.NewReader(payload)}
+func TestHTTPSTestResponseUsesHTTP11AndVerifiedIdentity(t *testing.T) {
+	cert := writeOriginCertificate(t)
+	server := startOriginServer(t, newHTTPHandler("fixture response"), cert.certFile, cert.keyFile)
 
-	recorder := httptest.NewRecorder()
-	newHTTPHandler().ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/fetch", body))
-
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("POST /fetch = %d, want %d", recorder.Code, http.StatusOK)
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(cert.caPEM) {
+		t.Fatal("adding fixture CA to trust pool")
 	}
-	if !body.eof || body.read != len(payload) {
-		t.Errorf("POST /fetch read %d bytes (eof=%v), want %d bytes and eof=true before responding", body.read, body.eof, len(payload))
+	protocols := new(http.Protocols)
+	protocols.SetHTTP1(true)
+	protocols.SetHTTP2(true)
+	client := &http.Client{
+		Timeout: 2 * time.Second,
+		Transport: &http.Transport{
+			Protocols: protocols,
+			TLSClientConfig: &tls.Config{
+				RootCAs:    roots,
+				ServerName: "127.0.0.1",
+			},
+		},
 	}
-}
-
-func TestHTTPHandlerFetchPostIncompleteBodyFails(t *testing.T) {
-	recorder := httptest.NewRecorder()
-	newHTTPHandler().ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/fetch", failingReader{}))
-	if recorder.Code == http.StatusOK {
-		t.Errorf("POST /fetch with truncated body = %d, want non-200 error status", recorder.Code)
+	response, err := client.Get(server.httpsURL + "/healthz")
+	if err != nil {
+		t.Fatalf("GET /healthz over verified TLS: %v", err)
 	}
-}
+	defer response.Body.Close()
 
-func TestHTTPHandlerFetchRejectsNonPost(t *testing.T) {
-	recorder := httptest.NewRecorder()
-	newHTTPHandler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/fetch", nil))
-	if recorder.Code != http.StatusMethodNotAllowed {
-		t.Errorf("GET /fetch = %d, want %d", recorder.Code, http.StatusMethodNotAllowed)
+	if response.Proto != "HTTP/1.1" {
+		t.Errorf("HTTPS response protocol with HTTP/2 offered = %q, want HTTP/1.1", response.Proto)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Errorf("HTTPS response status = %d, want %d", response.StatusCode, http.StatusOK)
+	}
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("reading HTTPS response: %v", err)
+	}
+	if string(body) != "fixture response" {
+		t.Errorf("HTTPS response body = %q, want %q", body, "fixture response")
 	}
 }

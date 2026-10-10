@@ -381,13 +381,12 @@ data:
             typed_config:
               "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
               stat_prefix: mitm_http
-              # Absent this, Envoy answers an Upgrade request itself instead of
-              # proxying it, so every WebSocket through this leg fails at the
-              # handshake. Note it covers the HTTP/1.1 path only; WebSockets over
-              # h2 are RFC 8441 extended CONNECT and would additionally need
-              # http2_protocol_options.allow_connect.
+              # The egress request filter returns the explanatory 403. Keep
+              # the HCM default disabled as a defense if a request ever gets
+              # past that decision.
               upgrade_configs:
               - upgrade_type: websocket
+                enabled: false
               # Disable stream_idle_timeout as there is already an overall timeout in the outer tunnel in the HCM.
               stream_idle_timeout: 0s
               # This is the leg that knows where the traffic actually went.
@@ -424,32 +423,15 @@ data:
                 - name: all
                   domains: ["*"]
                   routes:
-                  # Upgrade is what cannot cross an h2 upstream: forwarding one
-                  # needs RFC 8441 extended CONNECT, which almost no origin
-                  # advertises. So the default route below stays pinned to
-                  # HTTP/1.1, which every origin accepts, rather than letting
-                  # upstream ALPN choose -- ALPN takes h2 against nearly
-                  # everything today, and every WebSocket then fails with a 502.
-                  #
-                  # gRPC is the one thing that default cannot serve: its status
-                  # rides in trailers, which HTTP/1.1 cannot express.
-                  # content-type is how it opts out. The prefix also catches
-                  # application/grpc-web, which is deliberate --
-                  # egress_forward_proxy_grpc reads its protocol from upstream
-                  # ALPN, so a grpc-web endpoint that only speaks HTTP/1.1 still
-                  # gets HTTP/1.1.
-                  #
-                  # The cost of the pinned default is that non-gRPC h2 traffic
-                  # is downgraded and its trailers dropped silently. Nothing
-                  # sends those today. If that changes, invert this: match on
-                  # the `upgrade` header, pin that route to HTTP/1.1, and let
-                  # everything else negotiate.
-                  #
-                  # Each of the two exists once per dial the sidecar answers
-                  # with (dev.ate.egress:dial), and there is no default: a
-                  # request it did not answer for has no route. A by-name
+                  # There is no default route: the initial route lookup cannot
+                  # match before ext_proc supplies dev.ate.egress:dial. This
+                  # lets the request filter return the unsupported-upgrade
+                  # response before route-level upgrade rejection. A by-name
                   # route also needs the answered name (dev.ate.egress:host);
                   # without it the forward proxy would dial the Host's port.
+                  # Native gRPC uses upstream ALPN to negotiate h2 and carry
+                  # status in trailers. Other requests stay on HTTP/1.1; the
+                  # content-type match keeps those protocol choices separate.
                   - match:
                       prefix: "/"
                       headers:
@@ -465,6 +447,9 @@ data:
                         value: { present_match: true }
                     route:
                       cluster: egress_forward_proxy_grpc
+                      upgrade_configs:
+                      - upgrade_type: websocket
+                        enabled: false
                       timeout: 0s
                   - match:
                       prefix: "/"
@@ -478,6 +463,9 @@ data:
                         value: { string_match: { exact: address } }
                     route:
                       cluster: egress_original_dst_tls_grpc
+                      upgrade_configs:
+                      - upgrade_type: websocket
+                        enabled: false
                       timeout: 0s
                   - match:
                       prefix: "/"
@@ -490,6 +478,9 @@ data:
                         value: { present_match: true }
                     route:
                       cluster: egress_forward_proxy
+                      upgrade_configs:
+                      - upgrade_type: websocket
+                        enabled: false
                       # The route timeout runs until the response completes, which
                       # for SSE or long-poll is never, so 0.
                       timeout: 0s
@@ -501,6 +492,9 @@ data:
                         value: { string_match: { exact: address } }
                     route:
                       cluster: egress_original_dst_tls
+                      upgrade_configs:
+                      - upgrade_type: websocket
+                        enabled: false
                       timeout: 0s
               http_filters:
               # Every request on this chain is authorized against the actor's
@@ -627,8 +621,12 @@ data:
               # answers it 426 before any filter runs.
               http_protocol_options:
                 accept_http_10: true
+              # The egress request filter returns the explanatory 403. Keep
+              # the HCM default disabled as a defense if a request ever gets
+              # past that decision.
               upgrade_configs:
               - upgrade_type: websocket
+                enabled: false
               stream_idle_timeout: 0s
               access_log:
               - name: envoy.access_loggers.file
@@ -674,6 +672,9 @@ data:
                         value: { present_match: true }
                     route:
                       cluster: egress_forward_proxy_cleartext
+                      upgrade_configs:
+                      - upgrade_type: websocket
+                        enabled: false
                       timeout: 0s
                   - match:
                       prefix: "/"
@@ -683,6 +684,9 @@ data:
                         value: { string_match: { exact: address } }
                     route:
                       cluster: egress_original_dst_cleartext
+                      upgrade_configs:
+                      - upgrade_type: websocket
+                        enabled: false
                       timeout: 0s
               http_filters:
               # Every request on this chain is authorized against the actor's
