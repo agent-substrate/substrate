@@ -17,6 +17,7 @@ package controlapi
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -165,6 +166,9 @@ type fakeGoldenControl struct {
 	exists         bool
 	goldenState    ateapipb.ActorState
 	goldenSnapshot string
+	// goldenCrash seeds Status.Crash.message on the observed golden actor;
+	// empty leaves Crash unset.
+	goldenCrash string
 	// snapshot is the external snapshot a completed suspend produces; empty
 	// simulates a suspend that wrote none.
 	snapshot string
@@ -184,6 +188,9 @@ func (c *fakeGoldenControl) CreateAtespace(_ context.Context, req *ateapipb.Crea
 
 func (c *fakeGoldenControl) goldenActorStatus() *ateapipb.ActorStatus {
 	st := &ateapipb.ActorStatus{State: c.goldenState}
+	if c.goldenCrash != "" {
+		st.Crash = &ateapipb.ActorCrash{Message: c.goldenCrash}
+	}
 	if c.goldenSnapshot != "" {
 		st.LastAssignedGeneration = 1
 		st.Snapshots = []*ateapipb.Snapshot{
@@ -505,11 +512,11 @@ func TestReconcileOne(t *testing.T) {
 			wantCreates: 1,
 		},
 		{
-			name:             "crashed golden actor fails the template",
+			name:             "crashed golden actor carries its crash message into the failure",
 			template:         testTemplate(),
-			control:          &fakeGoldenControl{exists: true, goldenState: ateapipb.ActorState_ACTOR_STATE_CRASHED},
+			control:          &fakeGoldenControl{exists: true, goldenState: ateapipb.ActorState_ACTOR_STATE_CRASHED, goldenCrash: "atelet ResumeActor failed: while starting pause container: runsc start: exit status 128"},
 			wantFailedReason: reasonGoldenActorCrashed,
-			wantMessage:      "crashed",
+			wantMessage:      "golden actor crashed before its snapshot was taken: atelet ResumeActor failed: while starting pause container: runsc start: exit status 128",
 		},
 		{
 			name:        "resume failure requeues without failing",
@@ -968,14 +975,16 @@ func TestReconcileOne_GoldenTagConflict(t *testing.T) {
 			st := newFakeTemplateStore(testTemplate())
 			r := newTestTemplateReconciler(st, control)
 			defer r.queue.ShutDown()
+			wantMsg := fmt.Sprintf("%s: golden tag belongs to another actor or template: owner template UID %q, source actor %s",
+				reasonGoldenTagConflict, tt.templateUID, resources.ActorRefFromObjectRef(tt.sourceActor))
 			for range 2 {
 				after, err := r.reconcileOne(t.Context(), testTemplateRef)
 				if err != nil || after != 0 {
 					t.Fatalf("reconcile = (%v, %v), want terminal failure without retry", after, err)
 				}
 				snapshotStatus := st.storedStatus(t, testTemplateRef).GetGoldenSnapshotStatus()
-				if snapshotStatus.GetErrorMessage() != reasonGoldenTagConflict+": golden tag belongs to another actor or template" || snapshotStatus.GetGoldenTag() != nil {
-					t.Fatalf("unexpected golden snapshot status: %v", snapshotStatus)
+				if snapshotStatus.GetErrorMessage() != wantMsg || snapshotStatus.GetGoldenTag() != nil {
+					t.Fatalf("unexpected golden snapshot status: %v, want error message %q", snapshotStatus, wantMsg)
 				}
 				if !proto.Equal(control.tag, tag) || !control.exists || len(control.tagReqs) != 0 || len(control.deleteReqs) != 0 {
 					t.Fatal("modified golden resources after ownership conflict")
