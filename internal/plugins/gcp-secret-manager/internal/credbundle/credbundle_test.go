@@ -287,10 +287,10 @@ func TestLoaderConcurrentHandshakes(t *testing.T) {
 			for i := 0; i < 100; i++ {
 				cert, err := getCert(nil)
 				if err != nil {
-					// Removing the old payload after swapping ..data can
-					// race path resolution and surface a transient ENOENT.
-					// macOS can also surface EINVAL during the swap.
-					if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.EINVAL) {
+					// On macOS, stat through a symlink being renamed over
+					// can fail with a transient EINVAL. Linux always
+					// resolves the old or the new target.
+					if errors.Is(err, syscall.EINVAL) {
 						continue
 					}
 					t.Errorf("Loader() error = %v", err)
