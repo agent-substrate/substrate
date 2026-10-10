@@ -30,6 +30,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/kubectl-ate/internal/printer"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/ateclient"
+	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/spf13/cobra"
@@ -633,7 +634,10 @@ func (f logLineFilter) matches(emitter resources.ActorRef, containerName string)
 			return false
 		}
 	}
-	return f.container == "" || containerName == f.container
+	if f.container == "" {
+		return containerName != ocispec.PauseContainer
+	}
+	return containerName == f.container
 }
 
 // containerNameKeyQuoted is the container-name label key as it appears in a
@@ -757,7 +761,7 @@ func init() {
 	logsActorsCmd.Flags().BoolVarP(&logsActorFollowFlag, "follow", "f", false, "Specify if the logs should be streamed.")
 	logsActorsCmd.Flags().StringVarP(&logsActorAtespaceFlag, "atespace", "a", "", "Atespace the actor lives in")
 	_ = logsActorsCmd.MarkFlagRequired("atespace")
-	logsActorsCmd.Flags().StringVarP(&logsActorContainerFlag, "container", "c", "", "Show only logs from this container.")
-	logsActorsCmd.Flags().StringVar(&logsActorSourceFlag, "source", string(logSourceAll), "Which lines to show: all, containers (every container's output, no lifecycle events), or lifecycle (only the actor's lifecycle events).")
+	logsActorsCmd.Flags().StringVarP(&logsActorContainerFlag, "container", "c", "", "Show only logs from this container; use _pause for runsc diagnostics.")
+	logsActorsCmd.Flags().StringVar(&logsActorSourceFlag, "source", string(logSourceAll), "Which lines to show: all, containers (container output, no lifecycle events), or lifecycle (only the actor's lifecycle events).")
 	logsCmd.AddCommand(logsActorsCmd)
 }

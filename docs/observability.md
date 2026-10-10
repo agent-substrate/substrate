@@ -12,7 +12,7 @@ To make underlying infrastructure transitions transparent, Agent Substrate estab
 * `ate.actor.uid`: Server-assigned UID of the actor, unique to the lifetime of an actor.
 * `ate.template.name`: The name of the actor's ActorTemplate (e.g., `counter`).
 * `ate.template.atespace`: The atespace of the actor's ActorTemplate (e.g., `ate-demo-counter`).
-* `ate.actor.container.name`: The name of the container within the actor that produced the log line (e.g., `counter`), so a multi-container actor's logs can be demultiplexed by container. Absent on the synthetic lifecycle records (`Actor starting`, `Actor restored`, …): those are about the actor, so no container produced them.
+* `ate.actor.container.name`: The name of the container within the actor that produced the log line (e.g., `counter`), so a multi-container actor's logs can be demultiplexed by container. Absent on the synthetic lifecycle records (`Actor starting`, `Actor restored`, …): those are about the actor, so no container produced them. The `runsc create`, `start`, and `restore` CLI output and the pause container's stdio are wrapped under `_pause`. This does not capture sentry or gofer output, which runsc directs to `/dev/null` when debug logging is disabled.
 
 Currently, Agent Substrate automatically wraps container output and injects these metadata labels into **container logs**. For metrics and distributed tracing, Agent Substrate provides foundational system telemetry and on-demand request tracing, with roadmap plans to fully integrate actor-level correlation.
 
@@ -68,13 +68,19 @@ Actor is currently running on pod ate-demo-counter/counter-ab123-x4y5z
 ```
 
 #### Example 4: Filtering by Container or Source
-An actor can run several containers. By default every line is shown, including the synthetic lifecycle events (`Actor starting`, `Actor started`, `Actor checkpointing`, `Actor checkpointed`, `Actor restoring`, `Actor restored`, `Actor terminated`). `--container` (short form `-c`) restricts the output to the named container's logs:
+An actor can run several containers. By default application container logs and synthetic lifecycle events (`Actor starting`, `Actor started`, `Actor checkpointing`, `Actor checkpointed`, `Actor restoring`, `Actor restored`, `Actor terminated`) are shown. The `_pause` logs are excluded so runsc startup diagnostics do not mix with application output. `--container` (short form `-c`) restricts the output to the named container's logs:
 
 ```bash
 kubectl ate logs actors <actor-name> -a <atespace> -c <container-name>
 ```
 
-`--source` selects a class of lines instead of a container. `containers` shows every container's output with the lifecycle events removed; `lifecycle` shows only the lifecycle events, which is the quickest way to see how often an actor has been suspended and restored on its current worker (a migration moves the actor to another pod, whose log holds none of the earlier workers' events):
+To view the pause container's runsc diagnostics explicitly:
+
+```bash
+kubectl ate logs actors <actor-name> -a <atespace> -c _pause
+```
+
+`--source` selects a class of lines instead of a container. `containers` shows application container output with the lifecycle events removed; `_pause` remains excluded unless selected with `-c _pause`. `lifecycle` shows only the lifecycle events, which is the quickest way to see how often an actor has been suspended and restored on its current worker (a migration moves the actor to another pod, whose log holds none of the earlier workers' events):
 
 ```bash
 $ kubectl ate logs actors test -a demo --source=lifecycle
