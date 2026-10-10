@@ -121,6 +121,9 @@ func (r *ActorTemplateReconciler) resync(ctx context.Context) {
 			return
 		}
 		for _, tmpl := range page.Items {
+			if tmpl.GetSnapshotConfig().GetGoldenSnapshotConfig().GetMode() == ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED {
+				continue
+			}
 			ref := resources.ActorTemplateRefFromActorTemplate(tmpl)
 			if goldenSnapshotDone(tmpl.GetStatus().GetGoldenSnapshotStatus()) {
 				slog.DebugContext(ctx, "Skipping actor template with terminal golden snapshot status", slog.String("ActorTemplate", ref.String()))
@@ -188,6 +191,10 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 			return 0, nil
 		}
 		return 0, err
+	}
+
+	if tmpl.GetSnapshotConfig().GetGoldenSnapshotConfig().GetMode() == ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED {
+		return 0, nil
 	}
 
 	goldenActorRef := &ateapipb.ObjectRef{

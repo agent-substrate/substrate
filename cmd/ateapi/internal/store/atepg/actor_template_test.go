@@ -97,7 +97,8 @@ func TestGetActorTemplate_BackfillsDefaults(t *testing.T) {
 		t.Fatalf("GetActorTemplate failed: %v", err)
 	}
 	want := &ateapipb.SnapshotConfig{
-		PreferredFidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+		PreferredFidelity:    ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+		GoldenSnapshotConfig: &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_ENABLED},
 	}
 	if diff := cmp.Diff(want, got.GetSnapshotConfig(), protocmp.Transform()); diff != "" {
 		t.Errorf("GetActorTemplate did not backfill snapshot_config defaults (-want +got):\n%s", diff)

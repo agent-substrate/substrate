@@ -4302,6 +4302,50 @@ func Validate_GetWorkerRequest(
 	return errs
 }
 
+// Validate_GoldenSnapshotConfig validates an instance of GoldenSnapshotConfig according
+// to declarative validation rules in the API schema.
+func Validate_GoldenSnapshotConfig(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ateapipb.GoldenSnapshotConfig) (errs field.ErrorList) {
+
+	{ // field ateapipb.GoldenSnapshotConfig.Mode
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateapipb.GoldenSnapshotMode,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.Maximum(ctx, op, fldPath, obj, oldObj, 2); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			if e := validate.Minimum(ctx, op, fldPath, obj, oldObj, 1); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.GoldenSnapshotConfig) *ateapipb.GoldenSnapshotMode {
+				return &oldObj.Mode
+			})
+		errs = append(errs, fn(fldPath.Child("mode"), &obj.Mode, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
 // Validate_GoldenSnapshotStatus validates an instance of GoldenSnapshotStatus according
 // to declarative validation rules in the API schema.
 func Validate_GoldenSnapshotStatus(
@@ -7292,6 +7336,36 @@ func Validate_SnapshotConfig(
 				return &oldObj.PreferredFidelity
 			})
 		errs = append(errs, fn(fldPath.Child("preferred_fidelity"), &obj.PreferredFidelity, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateapipb.SnapshotConfig.GoldenSnapshotConfig
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateapipb.GoldenSnapshotConfig,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_GoldenSnapshotConfig(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.SnapshotConfig) *ateapipb.GoldenSnapshotConfig {
+				return oldObj.GoldenSnapshotConfig
+			})
+		errs = append(errs, fn(fldPath.Child("golden_snapshot_config"), obj.GoldenSnapshotConfig, oldVal, oldObj != nil)...)
 	}
 
 	return errs

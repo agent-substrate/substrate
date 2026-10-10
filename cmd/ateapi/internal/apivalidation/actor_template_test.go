@@ -281,6 +281,34 @@ func TestValidateActorTemplate(t *testing.T) {
 	}{{
 		name: "valid",
 	}, {
+		name: "golden snapshot enabled without wakeup probe",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.SnapshotConfig.GoldenSnapshotConfig = &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_ENABLED}
+		},
+	}, {
+		name: "golden snapshot disabled",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.SnapshotConfig.GoldenSnapshotConfig = &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED}
+		},
+	}, {
+		name: "golden snapshot mode unspecified",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.SnapshotConfig.GoldenSnapshotConfig = &ateapipb.GoldenSnapshotConfig{}
+		},
+		want: field.ErrorList{field.Required(field.NewPath("snapshot_config", "golden_snapshot_config", "mode"), "")},
+	}, {
+		name: "golden snapshot mode negative",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.SnapshotConfig.GoldenSnapshotConfig = &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode(-1)}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("snapshot_config", "golden_snapshot_config", "mode"), nil, "").WithOrigin("minimum")},
+	}, {
+		name: "golden snapshot mode unknown",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.SnapshotConfig.GoldenSnapshotConfig = &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode(3)}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("snapshot_config", "golden_snapshot_config", "mode"), nil, "").WithOrigin("maximum")},
+	}, {
 		name:   "missing metadata",
 		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.Metadata = nil },
 		want:   field.ErrorList{field.Required(field.NewPath("metadata"), "")},
