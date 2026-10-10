@@ -182,7 +182,10 @@ func (s *AteWorkerService) sweepUsage(ctx context.Context) {
 		if raw.Empty { // a failed read returns a zero Sample
 			s.warnDeadSandbox(ctx, h, raw)
 		}
-		h.usage.Periodic(sample, func() { s.usage.Emit(ctx, ateattr.StatsKindPeriodic, sample) })
+		h.usage.Periodic(sample, func(delta uint64) {
+			s.cpu.Add(ctx, sample, delta)
+			s.usage.Emit(ctx, ateattr.StatsKindPeriodic, sample)
+		})
 	}
 }
 
@@ -194,7 +197,11 @@ func (s *AteWorkerService) recordInitial(ctx context.Context, h *hostedActor) {
 		slog.WarnContext(ctx, "No initial usage sample", slog.String(string(ateattr.ActorUIDKey), h.attribution.UID), slog.Any("err", err))
 		sample = nil
 	}
-	h.usage.Initial(sample, func() { s.usage.Emit(ctx, ateattr.StatsKindInitial, sample) })
+	lateDelta := h.usage.Initial(sample, func(delta uint64) {
+		s.cpu.Add(ctx, sample, delta)
+		s.usage.Emit(ctx, ateattr.StatsKindInitial, sample)
+	})
+	s.cpu.Add(ctx, sample, lateDelta)
 }
 
 // readFinal samples an activation while its sandbox still exists, for the final
@@ -219,10 +226,11 @@ func (s *AteWorkerService) recordFinalIfEnded(ctx context.Context, h *hostedActo
 // terminate ended, from its newest measured sample.
 func (s *AteWorkerService) recordFinal(ctx context.Context, h *hostedActor) {
 	pending := h.usage.WithEpoch(pendingSample(&h.attribution))
-	h.usage.Final(func(measured *ateworkerpb.WorkloadStatsSample) {
+	h.usage.Final(func(measured *ateworkerpb.WorkloadStatsSample, delta uint64) {
 		if measured == nil {
 			measured = pending
 		}
+		s.cpu.Add(ctx, measured, delta)
 		s.usage.Emit(ctx, ateattr.StatsKindFinal, measured)
 	})
 }
