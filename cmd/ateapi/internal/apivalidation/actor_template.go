@@ -61,13 +61,15 @@ func ValidateActorTemplateUpdate(ctx context.Context, fldPath *field.Path, newVa
 	return Validate_ActorTemplate(ctx, op, fldPath, newVal, oldVal)
 }
 
-// ValidateCustom_CreateActorTemplateRequest_ActorTemplate rejects container
-// volume mounts that reference volumes the template does not declare.
+// ValidateCustom_CreateActorTemplateRequest_ActorTemplate checks volume
+// references and whether the mounted volumes support VOLUMES snapshots.
 func ValidateCustom_CreateActorTemplateRequest_ActorTemplate(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapipb.ActorTemplate) field.ErrorList {
-	declared := make(map[string]bool, len(value.GetVolumes()))
+	declared := make(map[string]*ateapipb.Volume, len(value.GetVolumes()))
 	for _, vol := range value.GetVolumes() {
-		declared[vol.GetName()] = true
+		declared[vol.GetName()] = vol
 	}
+	microVM := value.GetSandboxConfig().GetSandboxClass() == ateapipb.SandboxClass_SANDBOX_CLASS_MICROVM
+	hasSnapshotVolume := false
 	var errs field.ErrorList
 	for i, ctr := range value.GetContainers() {
 		for j, mount := range ctr.GetVolumeMounts() {
@@ -75,12 +77,25 @@ func ValidateCustom_CreateActorTemplateRequest_ActorTemplate(_ context.Context, 
 			if name == "" {
 				continue // required is enforced by tags
 			}
-			if !declared[name] {
+			vol := declared[name]
+			if vol == nil {
 				errs = append(errs, field.Invalid(
 					fldPath.Child("containers").Index(i).Child("volume_mounts").Index(j).Child("name"),
 					name, "must reference a volume declared in the template"))
+				continue
+			}
+			if vol.GetDurableDir() != nil || (microVM && vol.GetExternalVolumeTemplate() != nil) {
+				hasSnapshotVolume = true
 			}
 		}
+	}
+	fidelity := value.GetSnapshotConfig().GetPreferredFidelity()
+	if !hasSnapshotVolume && fidelity == ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES {
+		detail := "VOLUMES snapshots require a mounted durable-dir volume"
+		if microVM {
+			detail = "VOLUMES snapshots require a mounted durable-dir or CSI volume"
+		}
+		errs = append(errs, field.Invalid(fldPath.Child("snapshot_config", "preferred_fidelity"), fidelity.String(), detail))
 	}
 	return errs
 }
