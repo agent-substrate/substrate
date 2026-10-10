@@ -46,6 +46,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
 	corev1 "k8s.io/api/core/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
 )
@@ -1550,8 +1551,8 @@ func TestEnsureVolumesAttached_ReturnsPublishContext(t *testing.T) {
 		Status: &ateapipb.ActorStatus{
 			State: ateapipb.ActorState_ACTOR_STATE_RESUMING,
 			ExternalVolumes: []*ateapipb.ExternalVolume{
-				{Name: "mounted", StorageVolumeId: "storage-mounted", VolumeType: "mock", Status: ateapipb.ExternalVolume_STATUS_CREATED},
-				{Name: "unmounted", StorageVolumeId: "storage-unmounted", VolumeType: "mock", Status: ateapipb.ExternalVolume_STATUS_CREATED},
+				{Name: "mounted", StorageVolumeId: "storage-mounted", VolumeType: "mock"},
+				{Name: "unmounted", StorageVolumeId: "storage-unmounted", VolumeType: "mock"},
 			},
 		},
 	})
@@ -1592,6 +1593,78 @@ func TestEnsureVolumesAttached_ReturnsPublishContext(t *testing.T) {
 	}
 	if diff := cmp.Diff(actor, stored, protocmp.Transform()); diff != "" {
 		t.Errorf("attach wrote to the stored actor (-before +after):\n%s", diff)
+	}
+}
+
+// createCountingVolumePlugin provisions volumes and counts the calls.
+type createCountingVolumePlugin struct {
+	volume.VolumePluginControlPlane
+	creates int
+}
+
+func (p *createCountingVolumePlugin) CreateVolume(ctx context.Context, req volume.CreateVolumeRequest) (volume.CreateVolumeResponse, error) {
+	p.creates++
+	return volume.CreateVolumeResponse{VolumeID: "id-" + req.Name}, nil
+}
+
+// An actor being deleted gets no volume provisioned by a resume.
+func TestEnsureVolumesCreated(t *testing.T) {
+	tmpl := &ateapipb.ActorTemplate{
+		Volumes: []*ateapipb.Volume{{
+			Name:                   "data",
+			ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{StorageClassName: "sc"},
+		}},
+	}
+	tests := []struct {
+		name        string
+		state       ateapipb.ActorState
+		wantCode    codes.Code
+		wantCreates int
+	}{
+		{"suspended actor gets its volume", ateapipb.ActorState_ACTOR_STATE_SUSPENDED, codes.OK, 1},
+		{"deleting actor gets no volume", ateapipb.ActorState_ACTOR_STATE_DELETING, codes.FailedPrecondition, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			persistence := newTestPersistence(t)
+			actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+			storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+				Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "id1"},
+				Status: &ateapipb.ActorStatus{
+					State:           tt.state,
+					ExternalVolumes: []*ateapipb.ExternalVolume{{Name: "data", VolumeType: "mock"}},
+				},
+			})
+			actor, err := persistence.GetActor(ctx, actorRef)
+			if err != nil {
+				t.Fatalf("GetActor: %v", err)
+			}
+
+			plugin := &createCountingVolumePlugin{}
+			w := &ActorWorkflow{
+				store:          persistence,
+				pluginRegistry: &mockPluginRegistry{plugins: map[string]volume.VolumePluginControlPlane{"mock": plugin}},
+				storageClassLister: &fakeStorageClassLister{storageClasses: map[string]*storagev1.StorageClass{
+					"sc": {ObjectMeta: metav1.ObjectMeta{Name: "sc"}, Provisioner: "mock"},
+				}},
+			}
+
+			_, err = w.ensureVolumesCreated(ctx, actorRef, actor, tmpl)
+			if code := apierror.Code(err); code != tt.wantCode {
+				t.Fatalf("ensureVolumesCreated code = %v, want %v; error = %v", code, tt.wantCode, err)
+			}
+			if plugin.creates != tt.wantCreates {
+				t.Errorf("CreateVolume calls = %d, want %d", plugin.creates, tt.wantCreates)
+			}
+			stored, err := persistence.GetActor(ctx, actorRef)
+			if err != nil {
+				t.Fatalf("GetActor: %v", err)
+			}
+			if provisioned := stored.GetStatus().GetExternalVolumes()[0].GetStorageVolumeId() != ""; provisioned != (tt.wantCreates > 0) {
+				t.Errorf("stored volume provisioned = %t, want %t", provisioned, tt.wantCreates > 0)
+			}
+		})
 	}
 }
 

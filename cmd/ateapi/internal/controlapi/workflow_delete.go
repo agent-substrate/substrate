@@ -306,9 +306,9 @@ func (w *ActorWorkflow) ensureWorkerReleased(ctx context.Context, actorRef resou
 	return latestActor, nil
 }
 
-// ensureMarkedDeleting transitions the actor and its volumes to DELETING and
-// persists the change, returning the stored copy. Skips when a previous
-// attempt already marked the actor.
+// ensureMarkedDeleting transitions the actor to DELETING and persists the
+// change, returning the stored copy. Skips when a previous attempt already
+// marked the actor.
 func (w *ActorWorkflow) ensureMarkedDeleting(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, anyState bool) (updated *ateapipb.Actor, err error) {
 	ctx, done := stepSpan(ctx, "MarkDeleting")
 	defer func() { err = done(err) }()
@@ -333,9 +333,6 @@ func (w *ActorWorkflow) ensureMarkedDeleting(ctx context.Context, actorRef resou
 
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_DELETING
-		for _, vol := range toUpdate.GetStatus().GetExternalVolumes() {
-			vol.Status = ateapipb.ExternalVolume_STATUS_DELETING
-		}
 		return nil
 	})
 	if err != nil {

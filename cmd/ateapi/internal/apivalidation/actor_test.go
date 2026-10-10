@@ -672,14 +672,13 @@ func TestValidateActorUpdate(t *testing.T) {
 	}, {
 		"provisioning transition on an existing volume is valid",
 		validInput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.ExternalVolumes = []*ateapipb.ExternalVolume{{Name: "vol-a", VolumeType: "substrate.io/mock", Status: ateapipb.ExternalVolume_STATUS_PENDING}}
+			s.ExternalVolumes = []*ateapipb.ExternalVolume{{Name: "vol-a", VolumeType: "substrate.io/mock"}}
 		})),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
 			s.ExternalVolumes = []*ateapipb.ExternalVolume{{
 				Name:            "vol-a",
 				VolumeType:      "substrate.io/mock",
 				StorageVolumeId: "csi-426d29b7",
-				Status:          ateapipb.ExternalVolume_STATUS_CREATED,
 				VolumeContext:   map[string]string{"attachment": "iqn.2026-08.io.ate:vol-a"},
 			}}
 		})),
