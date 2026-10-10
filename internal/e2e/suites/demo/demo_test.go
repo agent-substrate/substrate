@@ -685,7 +685,7 @@ func validateSnapshotFidelity(ctx context.Context, t *testing.T, clients *e2e.Cl
 	if durableSnapshotURI(actor.GetStatus()) == "" {
 		t.Fatal("suspended Actor has no external snapshot")
 	}
-	if got := durableSnapshotStorage(actor.GetStatus()).GetFidelity(); got != want {
+	if got := durableSnapshot(actor.GetStatus()).GetFidelity(); got != want {
 		t.Errorf("snapshot %q content scope = %v, want %v", durableSnapshotURI(actor.GetStatus()), got, want)
 	}
 }
@@ -693,13 +693,11 @@ func validateSnapshotFidelity(ctx context.Context, t *testing.T, clients *e2e.Cl
 func durableSnapshot(status *ateapipb.ActorStatus) *ateapipb.Snapshot {
 	var best *ateapipb.Snapshot
 	for _, snap := range status.GetSnapshots() {
-		for _, st := range snap.GetStorage() {
-			if st.GetDurability() == ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE &&
-				st.GetStatus() == ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED &&
-				st.GetObject().GetSnapshotUri() != "" {
-				if best == nil || snap.GetGeneration() > best.GetGeneration() {
-					best = snap
-				}
+		st := snap.GetDurableSnapshot()
+		if st.GetStatus() == ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED &&
+			st.GetObject().GetSnapshotUri() != "" {
+			if best == nil || snap.GetGeneration() > best.GetGeneration() {
+				best = snap
 			}
 		}
 	}
@@ -707,13 +705,7 @@ func durableSnapshot(status *ateapipb.ActorStatus) *ateapipb.Snapshot {
 }
 
 func durableSnapshotStorage(status *ateapipb.ActorStatus) *ateapipb.SnapshotStorage {
-	snap := durableSnapshot(status)
-	for _, st := range snap.GetStorage() {
-		if st.GetDurability() == ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE {
-			return st
-		}
-	}
-	return nil
+	return durableSnapshot(status).GetDurableSnapshot()
 }
 
 func durableSnapshotURI(status *ateapipb.ActorStatus) string {
@@ -722,22 +714,15 @@ func durableSnapshotURI(status *ateapipb.ActorStatus) string {
 
 func hasLocalSnapshot(status *ateapipb.ActorStatus) bool {
 	for _, snap := range status.GetSnapshots() {
-		for _, st := range snap.GetStorage() {
-			if st.GetDurability() == ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_LOCAL {
-				return true
-			}
+		if snap.GetLocality() != "" && snap.GetUuid() != "" {
+			return true
 		}
 	}
 	return false
 }
 
 func tagSnapshotURI(tag *ateapipb.Tag) string {
-	for _, st := range tag.GetStatus().GetSnapshot().GetStorage() {
-		if st.GetDurability() == ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE {
-			return st.GetObject().GetSnapshotUri()
-		}
-	}
-	return ""
+	return tag.GetStatus().GetSnapshot().GetDurableSnapshot().GetObject().GetSnapshotUri()
 }
 
 // validateSecondFileCounter checks the counter the workload keeps in its second

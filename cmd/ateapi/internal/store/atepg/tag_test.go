@@ -38,12 +38,11 @@ func createTestTag(t *testing.T, s *Persistence, tagAtespace, tagName string) *a
 			Snapshot: &ateapipb.Snapshot{
 				Generation: 1,
 				Owner:      ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG,
-				Storage: []*ateapipb.SnapshotStorage{{
-					Durability: ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE,
-					Status:     ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
-					Fidelity:   ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
-					Object:     &ateapipb.ObjectSnapshot{SnapshotUri: "gs://bucket/atespaces/" + tagAtespace + "/tags/" + tagName},
-				}},
+				Fidelity:   ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+				DurableSnapshot: &ateapipb.SnapshotStorage{
+					Status: ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+					Object: &ateapipb.ObjectSnapshot{SnapshotUri: "gs://bucket/atespaces/" + tagAtespace + "/tags/" + tagName},
+				},
 			},
 		},
 	})

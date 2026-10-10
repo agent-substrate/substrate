@@ -21,6 +21,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
+	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
@@ -52,7 +53,7 @@ func TestEnsurePausedFinalized_WorkerGone(t *testing.T) {
 			},
 			LastAssignedGeneration: 1,
 			Snapshots: []*ateapipb.Snapshot{
-				newLocalSnapshot(1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "local-snap-1", ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS),
+				newLocalSnapshot(1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "local-snap-1", ""),
 			},
 		},
 	}
@@ -79,8 +80,8 @@ func TestEnsurePausedFinalized_WorkerGone(t *testing.T) {
 	if got.GetStatus().GetAssignedNode() != "" {
 		t.Errorf("AssignedNode = %q, want empty", got.GetStatus().GetAssignedNode())
 	}
-	if _, gotSt := findLatestSnapshotStorage(got.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_LOCAL, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS); gotSt.GetLocal().GetSnapshotName() != "local-snap-1" {
-		t.Errorf("in-progress local snapshot name = %q, want %q preserved on crash", gotSt.GetLocal().GetSnapshotName(), "local-snap-1")
+	if gotSnap := snapshotAtLatestGeneration(got.GetStatus()); gotSnap.GetUuid() != "local-snap-1" {
+		t.Errorf("in-progress local snapshot uuid = %q, want %q preserved on crash", gotSnap.GetUuid(), "local-snap-1")
 	}
 
 	if finalized.GetStatus().GetWorkerAssignment() != nil {
@@ -125,7 +126,7 @@ func TestEnsurePausedFinalized_AlreadyCrashed(t *testing.T) {
 			},
 			LastAssignedGeneration: 1,
 			Snapshots: []*ateapipb.Snapshot{
-				newLocalSnapshot(1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "local-snap-1", ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS),
+				newLocalSnapshot(1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "local-snap-1", ""),
 			},
 		},
 	}
@@ -142,8 +143,8 @@ func TestEnsurePausedFinalized_AlreadyCrashed(t *testing.T) {
 	if got, want := finalized.GetStatus().GetCrash().GetMessage(), originalCrash.GetMessage(); got != want {
 		t.Errorf("crash message = %q, want original %q preserved", got, want)
 	}
-	if _, gotSt := findLatestSnapshotStorage(finalized.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_LOCAL, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS); gotSt.GetLocal().GetSnapshotName() != "local-snap-1" {
-		t.Errorf("in-progress local snapshot name = %q, want %q preserved", gotSt.GetLocal().GetSnapshotName(), "local-snap-1")
+	if gotSnap := snapshotAtLatestGeneration(finalized.GetStatus()); gotSnap.GetUuid() != "local-snap-1" {
+		t.Errorf("in-progress local snapshot uuid = %q, want %q preserved", gotSnap.GetUuid(), "local-snap-1")
 	}
 	if finalized.GetStatus().GetWorkerAssignment() != nil {
 		t.Errorf("WorkerAssignment = %v, want nil", finalized.GetStatus().GetWorkerAssignment())
@@ -153,19 +154,20 @@ func TestEnsurePausedFinalized_AlreadyCrashed(t *testing.T) {
 	}
 }
 
-// TestEnsurePausedFinalized_RecordsFidelity verifies pause marks the
-// scope the pause checkpoint captures (the template's preferredFidelity) in
-// SnapshotStorage and finalization promotes it to COMPLETED, so a later suspend
-// or resume of the PAUSED actor knows what the local snapshot contains.
+// TestEnsurePausedFinalized_RecordsFidelity verifies pause records the
+// template's preferred_fidelity on the local Snapshot alongside Locality and
+// leaves DurableSnapshot unset until the actor is suspended.
 func TestEnsurePausedFinalized_RecordsFidelity(t *testing.T) {
 	tests := []struct {
-		name     string
-		fidelity ateapipb.SnapshotFidelity
-		want     ateapipb.SnapshotFidelity
+		name      string
+		preferred ateapipb.SnapshotFidelity
+		want      ateapipb.SnapshotFidelity
 	}{
-		{"data", ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES},
-		{"full", ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY},
+		{"MEMORY", ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY},
+		{"VOLUMES", ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES},
+		{"UNSPECIFIED recorded as UNSPECIFIED", ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED},
 	}
+
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			st, cleanup := storetest.SetupTestStore(t)
@@ -206,7 +208,9 @@ func TestEnsurePausedFinalized_RecordsFidelity(t *testing.T) {
 
 			w := &ActorWorkflow{store: st}
 			tmpl := &ateapipb.ActorTemplate{
-				SnapshotConfig: &ateapipb.SnapshotConfig{PreferredFidelity: tc.fidelity},
+				SnapshotConfig: &ateapipb.SnapshotConfig{
+					PreferredFidelity: tc.preferred,
+				},
 			}
 			if _, err := w.ensureMarkedPausing(ctx, actorRef, created, tmpl); err != nil {
 				t.Fatalf("ensureMarkedPausing: %v", err)
@@ -219,14 +223,82 @@ func TestEnsurePausedFinalized_RecordsFidelity(t *testing.T) {
 			if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_PAUSED {
 				t.Fatalf("state = %v, want PAUSED", got.GetStatus().GetState())
 			}
-			_, localSt := findLatestSnapshotStorage(got.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_LOCAL, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
-			if scope := localSt.GetFidelity(); scope != tc.want {
-				t.Errorf("local SnapshotStorage.Fidelity = %v, want %v", scope, tc.want)
+			localSnap := findLatestLocalSnapshot(got.GetStatus())
+			if localSnap.GetFidelity() != tc.want {
+				t.Errorf("local Snapshot.Fidelity = %v, want %v", localSnap.GetFidelity(), tc.want)
+			}
+			if localSnap.GetDurableSnapshot() != nil {
+				t.Errorf("local DurableSnapshot = %v, want nil", localSnap.GetDurableSnapshot())
+			}
+			if localSnap.GetLocality() != "node1" {
+				t.Errorf("local Snapshot.Locality = %q, want %q", localSnap.GetLocality(), "node1")
 			}
 			if got.GetStatus().GetAssignedNode() != "node1" {
 				t.Errorf("AssignedNode = %q, want %q", got.GetStatus().GetAssignedNode(), "node1")
 			}
 		})
+	}
+}
+
+// TestEnsurePausedFinalized_MissingLocalSnapshotClearsAssignment verifies that
+// if the latest generation snapshot entry is missing when ensurePausedFinalized
+// runs, the actor transitions to CRASHED and clears WorkerAssignment after
+// releasing the worker rather than getting stuck in PAUSING.
+func TestEnsurePausedFinalized_MissingLocalSnapshotClearsAssignment(t *testing.T) {
+	st, cleanup := storetest.SetupTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+	records := crashRecords(t)
+
+	workerName := testWorkerUID("worker-pod-1")
+	created := storetest.MustCreateActor(t, ctx, st, &ateapipb.Actor{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+		Status: &ateapipb.ActorStatus{
+			State:        ateapipb.ActorState_ACTOR_STATE_PAUSING,
+			AssignedNode: "node1",
+			WorkerAssignment: &ateapipb.WorkerAssignment{
+				Worker:          &ateapipb.ObjectRef{Name: workerName},
+				WorkerNamespace: "default",
+				WorkerPool:      "pool1",
+				WorkerPod:       "worker-pod-1",
+				WorkerPodUid:    workerName,
+			},
+			LastAssignedGeneration: 1,
+		},
+	})
+	if _, err := st.CreateWorker(ctx, &ateapipb.Worker{
+		Metadata:        &ateapipb.ResourceMetadata{Name: workerName},
+		WorkerNamespace: "default",
+		WorkerPool:      "pool1",
+		WorkerPod:       "worker-pod-1",
+		WorkerPodUid:    workerName,
+		NodeName:        "node1",
+		Status:          &ateapipb.WorkerStatus{},
+	}); err != nil {
+		t.Fatalf("CreateWorker: %v", err)
+	}
+	seedAssignment(t, st, workerName, &ateapipb.ActorAssignment{
+		Actor:    &ateapipb.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name},
+		ActorUid: created.GetMetadata().GetUid(),
+	})
+
+	w := &ActorWorkflow{store: st}
+	got, err := w.ensurePausedFinalized(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("ensurePausedFinalized: %v", err)
+	}
+	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+		t.Errorf("state = %v, want CRASHED", got.GetStatus().GetState())
+	}
+	if msg, want := got.GetStatus().GetCrash().GetMessage(), "pause failed: "+crashMessageLocalSnapshotMissing; msg != want {
+		t.Errorf("crash message = %q, want %q", msg, want)
+	}
+	if got.GetStatus().GetWorkerAssignment() != nil {
+		t.Errorf("WorkerAssignment = %v, want nil", got.GetStatus().GetWorkerAssignment())
+	}
+	if len(*records) != 1 {
+		t.Fatalf("got %d crash records, want 1", len(*records))
 	}
 }
 
@@ -345,9 +417,9 @@ func TestEnsureAteletPaused_DialFailureLeavesActorRetryable(t *testing.T) {
 
 			var snapshots []*ateapipb.Snapshot
 			if tt.prevSnapshot != "" {
-				snapshots = append(snapshots, newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", tt.prevSnapshot, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED))
+				snapshots = append(snapshots, newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "prev-snapshot", tt.prevSnapshot, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED))
 			}
-			snapshots = append(snapshots, newLocalSnapshot(2, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "actor-1-never-written", ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS))
+			snapshots = append(snapshots, newLocalSnapshot(2, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "actor-1-never-written", ""))
 
 			actor := &ateapipb.Actor{
 				Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
@@ -377,11 +449,11 @@ func TestEnsureAteletPaused_DialFailureLeavesActorRetryable(t *testing.T) {
 			if stored.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_PAUSING {
 				t.Errorf("state = %v, want unchanged PAUSING", stored.GetStatus().GetState())
 			}
-			if _, gotSt := findLatestSnapshotStorage(stored.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_LOCAL, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS); gotSt.GetLocal().GetSnapshotName() != "actor-1-never-written" {
-				t.Errorf("in-progress local snapshot name = %q, want preserved for debugging", gotSt.GetLocal().GetSnapshotName())
+			if gotSnap := snapshotAtLatestGeneration(stored.GetStatus()); gotSnap.GetUuid() != "actor-1-never-written" {
+				t.Errorf("in-progress local snapshot uuid = %q, want preserved for debugging", gotSnap.GetUuid())
 			}
-			_, gotSt := findLatestSnapshotStorage(stored.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
-			if got := gotSt.GetObject().GetSnapshotUri(); got != tt.prevSnapshot {
+			gotSnap := findLatestDurableSnapshot(stored.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+			if got := gotSnap.GetDurableSnapshot().GetObject().GetSnapshotUri(); got != tt.prevSnapshot {
 				t.Errorf("SnapshotUri = %q, want %q", got, tt.prevSnapshot)
 			}
 		})
@@ -430,5 +502,64 @@ func TestEnsureMarkedPausing_GoldenAtespaceRejected(t *testing.T) {
 		&ateapipb.ActorTemplate{})
 	if got := apierror.Code(err); got != codes.FailedPrecondition {
 		t.Fatalf("apierror.Code = %v (err %v), want FailedPrecondition", got, err)
+	}
+}
+
+// TestEnsureAteletPaused_ForwardsPreferredFidelity verifies that local pause
+// checkpoints forward the template's PreferredFidelity to atelet.
+func TestEnsureAteletPaused_ForwardsPreferredFidelity(t *testing.T) {
+	tests := []struct {
+		preferred ateapipb.SnapshotFidelity
+		want      ateletpb.SnapshotFidelity
+	}{
+		{ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY},
+		{ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES},
+		{ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED, ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED},
+	}
+	for _, tc := range tests {
+		t.Run(tc.preferred.String(), func(t *testing.T) {
+			ctx := context.Background()
+			persistence := newTestPersistence(t)
+			w, atelet := newWireCaptureWorkflow(t, persistence)
+
+			actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+			created := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+				Metadata:      &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+				ActorTemplate: &ateapipb.ObjectRef{Atespace: "ns", Name: "tmpl1"},
+				Status: &ateapipb.ActorStatus{
+					State:                  ateapipb.ActorState_ACTOR_STATE_PAUSING,
+					AssignedNode:           "node-1",
+					WorkerAssignment:       wireTestAssignment(),
+					LastAssignedGeneration: 1,
+					Snapshots: []*ateapipb.Snapshot{
+						newLocalSnapshot(1, tc.preferred, "", "local-snap-1", ""),
+					},
+				},
+			})
+			tmpl := &ateapipb.ActorTemplate{
+				Metadata: &ateapipb.ResourceMetadata{Atespace: "ns", Name: "tmpl1"},
+				SnapshotConfig: &ateapipb.SnapshotConfig{
+					PreferredFidelity: tc.preferred,
+				},
+			}
+
+			wireFidelity, err := w.ensureAteletPaused(ctx, actorRef, created, tmpl)
+			if err != nil {
+				t.Fatalf("ensureAteletPaused: %v", err)
+			}
+			if want := ateattr.SnapshotFidelityValue(tc.want); wireFidelity != want {
+				t.Errorf("wireFidelity = %q, want %q", wireFidelity, want)
+			}
+			req := atelet.checkpointRequest()
+			if req == nil {
+				t.Fatal("expected Checkpoint RPC to be called")
+			}
+			if got := req.GetFidelity(); got != tc.want {
+				t.Errorf("CheckpointRequest.Fidelity = %v, want %v", got, tc.want)
+			}
+			if got := req.GetLocalConfig().GetSnapshotName(); got != "local-snap-1" {
+				t.Errorf("CheckpointRequest.LocalConfig.SnapshotName = %q, want %q", got, "local-snap-1")
+			}
+		})
 	}
 }

@@ -67,7 +67,7 @@ func (w *ActorWorkflow) TagActorSnapshot(ctx context.Context, tag *ateapipb.Tag)
 	if err != nil {
 		return nil, err
 	}
-	snapshot, _ := findLatestSnapshotStorage(actor.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+	snapshot := findLatestDurableSnapshot(actor.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
 
 	reserved, dst, err := w.ensureTagReserved(leaseCtx, tagRef, actor, actorTemplate, tag)
 	if err != nil {
@@ -201,8 +201,8 @@ func (w *ActorWorkflow) loadActorForTag(ctx context.Context, actorRef resources.
 	if got := actor.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
 		return nil, nil, apierror.FailedPrecondition("Actor %s must be %s to be tagged (got: %v)", actorRef, ateapipb.ActorState_ACTOR_STATE_SUSPENDED, got)
 	}
-	snap, st := findLatestSnapshotStorage(actor.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
-	if st == nil {
+	snap := findLatestDurableSnapshot(actor.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+	if snap == nil {
 		return nil, nil, apierror.FailedPrecondition("Actor %s holds no external snapshot to tag", actorRef)
 	}
 	// Every way an Actor comes to hold an external snapshot records the
@@ -239,7 +239,7 @@ func (w *ActorWorkflow) ensureTagReserved(ctx context.Context, tagRef resources.
 	if err != nil {
 		return nil, resources.SnapshotURI{}, fmt.Errorf("while building the snapshot URI for tag %s: %w", tagRef, err)
 	}
-	snap, st := findLatestSnapshotStorage(actor.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+	snap := findLatestDurableSnapshot(actor.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
 	tagToCreate := &ateapipb.Tag{
 		Metadata:    &ateapipb.ResourceMetadata{Atespace: tagRef.Atespace, Name: tagRef.Name},
 		Scope:       tag.GetScope(),
@@ -254,10 +254,11 @@ func (w *ActorWorkflow) ensureTagReserved(ctx context.Context, tagRef resources.
 			Snapshot: newDurableSnapshot(
 				1,
 				ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG,
-				st.GetFidelity(),
+				snap.GetFidelity(),
 				"",
+				dst.Name(),
 				dst.String(),
-				ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS,
+				ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING,
 			),
 		},
 	}
@@ -286,7 +287,7 @@ func (w *ActorWorkflow) ensureTagSnapshotCopied(ctx context.Context, tag *ateapi
 		return nil
 	}
 	tagRef := resources.TagRefFromTag(tag)
-	srcURI := findSnapshotStorage(snapshot, ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE).GetObject().GetSnapshotUri()
+	srcURI := snapshot.GetDurableSnapshot().GetObject().GetSnapshotUri()
 	src, err := resources.ParseSnapshotURI(srcURI)
 	if err != nil {
 		return fmt.Errorf("while parsing the external snapshot %q of the source actor: %w", srcURI, err)
@@ -306,12 +307,12 @@ func (w *ActorWorkflow) ensureTagFinalized(ctx context.Context, tag *ateapipb.Ta
 
 	tagRef := resources.TagRefFromTag(tag)
 	// The copy is byte-identical to the source, so it carries the same content.
-	srcSt := findSnapshotStorage(snapshot, ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE)
 	finalSnapshot := newDurableSnapshot(
 		1,
 		ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG,
-		srcSt.GetFidelity(),
+		snapshot.GetFidelity(),
 		"",
+		dst.Name(),
 		dst.String(),
 		ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
 	)

@@ -180,18 +180,6 @@ message ObjectSnapshot {
   string snapshot_uri = 1;
 }
 
-// LocalSnapshot records information about a node-local snapshot.
-message LocalSnapshot {
-  // The name of the local checkpoint on the node. Checkpoint names are
-  // server-generated UUIDs, but any resource name is valid here.
-  //
-  // TODO: consider removing this since it's the same as the snapshot_id
-  //
-  // +k8s:required
-  // +k8s:format=k8s-short-name
-  string snapshot_name = 1;
-}
-
 // SnapshotOwner indicates the owner of a snapshot.
 enum SnapshotOwner {
   SNAPSHOT_OWNER_UNSPECIFIED = 0;
@@ -202,99 +190,82 @@ enum SnapshotOwner {
   // Keep this in sync with Snapshot.owner's maximum.
 }
 
-// SnapshotDurability indicates the durability level of the snapshot.
-// TODO: potentially rename this to survivability level. Is it at the actor or snapshot level?
-enum SnapshotDurability {
-  SNAPSHOT_DURABILITY_UNSPECIFIED = 0;
-  // Node-local checkpoint on the worker node
-  // Survives node reboot.
-  SNAPSHOT_DURABILITY_LOCAL = 1;
-  // Durable snapshot in external storage.
-  // Survives node crash and deletion.
-  SNAPSHOT_DURABILITY_DURABLE = 2;
-  // Keep this in sync with SnapshotStorage.durability's maximum.
-}
-
-// SnapshotStorageStatus indicates the lifecycle stage of a snapshot storage entry.
+// SnapshotStorageStatus indicates the lifecycle stage of a durable snapshot.
 enum SnapshotStorageStatus {
   SNAPSHOT_STORAGE_STATUS_UNSPECIFIED = 0;
-  // Snapshot creation or promotion is in progress.
-  SNAPSHOT_STORAGE_STATUS_IN_PROGRESS = 1;
-  // Snapshot is complete and ready for use.
+  // Snapshot creation in durable storage is in progress.
+  SNAPSHOT_STORAGE_STATUS_PENDING = 1;
+  // Snapshot is complete and ready for use in durable storage.
   SNAPSHOT_STORAGE_STATUS_COMPLETED = 2;
   // Keep this in sync with SnapshotStorage.status's maximum.
 }
 
-// SnapshotStorage records the physical storage representation of a Snapshot.
+// SnapshotStorage records the durable storage representation of a Snapshot.
 message SnapshotStorage {
-  // durability is the durability tier of this storage entry. Only
-  // SNAPSHOT_DURABILITY_LOCAL and SNAPSHOT_DURABILITY_DURABLE are allowed.
-  //
-  // +k8s:required
-  // +k8s:minimum=1
-  // +k8s:maximum=2 # keep this in sync with the SnapshotDurability enum
-  SnapshotDurability durability = 1;
-
-  // status is the lifecycle status of this storage representation.
+  // status is the lifecycle status of the durable snapshot.
   //
   // +k8s:required
   // +k8s:minimum=1
   // +k8s:maximum=2 # keep this in sync with the SnapshotStorageStatus enum
-  SnapshotStorageStatus status = 2;
-
-  // fidelity is what the snapshot holds.
-  //
-  // +k8s:required
-  // +k8s:minimum=1
-  // +k8s:maximum=3 # keep this in sync with the SnapshotFidelity enum
-  SnapshotFidelity fidelity = 3;
-
-  // Exactly one of local or object must be set.
-  //
-  // local snapshot is stored on the node where the actor was suspended.
-  //
-  // +k8s:optional
-  // +k8s:unionMember
-  LocalSnapshot local = 4;
+  SnapshotStorageStatus status = 1;
 
   // object snapshot is stored in object storage.
   //
-  // +k8s:optional
-  // +k8s:unionMember
-  ObjectSnapshot object = 5;
+  // +k8s:required
+  ObjectSnapshot object = 2;
 }
 
 // Snapshot represents one generation of an Actor's or Tag's snapshot state.
 message Snapshot {
+  // uuid is the server-generated unique identifier for this snapshot, passed to
+  // atelet to identify the local checkpoint on disk and used as the snapshot
+  // name in object storage.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-short-name
+  string uuid = 1;
+
   // generation is the monotonically increasing generation number of this
   // snapshot, starting at 1.
   //
   // +k8s:required
   // +k8s:minimum=1
-  int32 generation = 1;
+  int32 generation = 2;
 
   // owner identifies the origin and ownership of this snapshot.
   //
   // +k8s:required
   // +k8s:minimum=1
   // +k8s:maximum=2 # keep this in sync with the SnapshotOwner enum
-  SnapshotOwner owner = 2;
+  SnapshotOwner owner = 3;
+
+  // fidelity is what this snapshot holds.
+  //
+  // +k8s:required
+  // +k8s:minimum=1
+  // +k8s:maximum=3 # keep this in sync with the SnapshotFidelity enum
+  SnapshotFidelity fidelity = 4;
 
   // UID of the ActorTemplate whose sandbox this snapshot's guest state was
   // captured from.
   //
   // +k8s:optional
   // +k8s:format=k8s-uuid
-  string actor_template_uid = 3;
+  string actor_template_uid = 5;
 
-  // storage lists the storage representations of this snapshot by durability.
-  // Only SNAPSHOT_DURABILITY_LOCAL and SNAPSHOT_DURABILITY_DURABLE are allowed.
+  // locality identifies where a local copy of this snapshot resides (currently
+  // the Kubernetes node name). Empty until a local pause checkpoint completes,
+  // and cleared when the local copy is superseded or discarded.
   //
-  // +k8s:required
-  // +k8s:maxItems=2
-  // +k8s:listType=map
-  // +k8s:listMapKey=durability
-  repeated SnapshotStorage storage = 4;
+  // +k8s:optional
+  // +k8s:format=k8s-long-name
+  string locality = 6;
+
+  // durable_snapshot holds the durable storage representation of this snapshot.
+  // Unset when the snapshot only exists locally.
+  //
+  // +k8s:optional
+  SnapshotStorage durable_snapshot = 7;
 }
 
 // SnapshotFidelity orders the state layers a snapshot can hold, lowest to
@@ -930,12 +901,13 @@ message WorkerAssignment {
 // The tag is fixed to one external snapshot once its creation completes, so
 // the rest is immutable provenance.
 message TagStatus {
-  // snapshot is the external snapshot this tag points at. Its storage entry is
-  // IN_PROGRESS while the tag is being created and transitions to COMPLETED
-  // once the copy finishes: a tag never moves between snapshots and is usable
-  // only once COMPLETED.
+  // snapshot is the external snapshot this tag points at. Its durable_snapshot
+  // status is PENDING while the tag is being created and transitions to
+  // COMPLETED once the copy finishes: a tag never moves between snapshots and
+  // is usable only once COMPLETED.
   //
   // +k8s:required
+  // +k8s:subfield(durable_snapshot)=+k8s:required
   Snapshot snapshot = 1;
 
   // UID of the ActorTemplate the snapshot was taken under. Actors can only be

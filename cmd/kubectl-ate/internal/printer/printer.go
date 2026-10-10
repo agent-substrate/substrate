@@ -340,9 +340,10 @@ func PrintTagsTo(out io.Writer, tags []*ateapipb.Tag, format string) error {
 			// A pending tag has no snapshot yet, so neither its URI nor its
 			// fidelity says anything.
 			snapshotURI, fidelity := "<none>", "<none>"
-			if st := durableSnapshotStorage(tag.GetStatus().GetSnapshot()); st != nil {
+			snap := tag.GetStatus().GetSnapshot()
+			if st := durableSnapshotStorage(snap); st != nil {
 				snapshotURI = st.GetObject().GetSnapshotUri()
-				fidelity = st.GetFidelity().String()
+				fidelity = snap.GetFidelity().String()
 			}
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				tag.GetMetadata().GetAtespace(), tag.GetMetadata().GetName(), tag.GetScope(),
@@ -356,12 +357,10 @@ func PrintTagsTo(out io.Writer, tags []*ateapipb.Tag, format string) error {
 }
 
 func durableSnapshotStorage(snapshot *ateapipb.Snapshot) *ateapipb.SnapshotStorage {
-	for _, st := range snapshot.GetStorage() {
-		if st.GetDurability() == ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE &&
-			st.GetStatus() == ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED &&
-			st.GetObject().GetSnapshotUri() != "" {
-			return st
-		}
+	st := snapshot.GetDurableSnapshot()
+	if st.GetStatus() == ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED &&
+		st.GetObject().GetSnapshotUri() != "" {
+		return st
 	}
 	return nil
 }
