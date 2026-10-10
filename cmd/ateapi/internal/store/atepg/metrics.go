@@ -23,7 +23,9 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/multitracer"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/puddle/v2"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 )
@@ -133,9 +135,20 @@ func (i *Instruments) recordAcquire(ctx context.Context, name string, duration t
 		ateattr.StoreConnectionAcquireOutcomeKey.String(outcome),
 	}
 	if outcome == ateattr.StoreConnectionAcquireError {
-		attrs = append(attrs, ateattr.ErrorTypeKey.String("_OTHER"))
+		attrs = append(attrs, ateattr.ErrorTypeKey.String(acquireErrorType(err)))
 	}
 	i.wait.Record(ctx, duration.Seconds(), metric.WithAttributes(attrs...))
+}
+
+func acquireErrorType(err error) string {
+	if errors.Is(err, puddle.ErrClosedPool) {
+		return ateattr.StoreConnectionAcquirePoolClosed
+	}
+	var connectErr *pgconn.ConnectError
+	if errors.As(err, &connectErr) {
+		return ateattr.StoreConnectionAcquireConnectError
+	}
+	return ateattr.StoreConnectionAcquireOtherError
 }
 
 type poolMetricsTracer struct {
