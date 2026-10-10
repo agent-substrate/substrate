@@ -19,6 +19,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/agent-substrate/substrate/tools/apitool/internal/model"
 )
 
@@ -202,75 +203,136 @@ message Widget {
 	}
 }
 
-// The resource names below ("Actor", "Worker") aren't arbitrary -
-// model.Resources itself hardcodes that vocabulary (see resourceNames in
-// model.go), so this fixture has to use it too.
-func TestResources(t *testing.T) {
-	api := buildAPI(t, `
-service FixtureService {
-  rpc GetActor(GetActorRequest) returns (Actor);
-  rpc CreateActor(CreateActorRequest) returns (Actor);
-  rpc GetWorker(GetWorkerRequest) returns (Worker);
+func TestBuild_Annotations(t *testing.T) {
+	api, err := model.Build(t.Context(), ateapipb.Source)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+
+	gotResources := map[string]*model.ResourceAnnotation{}
+	for _, m := range api.Messages {
+		if m.Resource != nil {
+			gotResources[m.Name] = m.Resource
+		}
+	}
+	wantResources := map[string]*model.ResourceAnnotation{
+		"Actor":           {},
+		"EgressPolicy":    {Parents: []string{"Actor"}, Singleton: true},
+		"Tag":             {},
+		"Atespace":        {},
+		"ActorTemplate":   {},
+		"Worker":          {},
+		"ActorAssignment": {Parents: []string{"Worker"}},
+		"AccessPolicy":    {Parents: []string{"Global", "Atespace"}, Singleton: true},
+	}
+	if diff := cmp.Diff(wantResources, gotResources); diff != "" {
+		t.Errorf("resource annotations mismatch (-want +got):\n%s", diff)
+	}
+
+	wantMethods := map[string]string{
+		"GetActor":                   "Actor",
+		"SuspendActor":               "Actor",
+		"GetActorEgressPolicy":       "EgressPolicy",
+		"GetGlobalAccessPolicy":      "AccessPolicy",
+		"GetAtespaceAccessPolicy":    "AccessPolicy",
+		"ListWorkerActorAssignments": "ActorAssignment",
+	}
+	gotMethods := map[string]string{}
+	for _, svc := range api.Services {
+		for _, m := range svc.Methods {
+			if _, ok := wantMethods[m.Name]; ok {
+				gotMethods[m.Name] = m.Resource
+			}
+		}
+	}
+	if diff := cmp.Diff(wantMethods, gotMethods); diff != "" {
+		t.Errorf("method annotations mismatch (-want +got):\n%s", diff)
+	}
 }
 
-message GetActorRequest { string name = 1; }
-message CreateActorRequest { string name = 1; }
-message GetWorkerRequest { string name = 1; }
-
-message Actor { string name = 1; }
-message Worker { string name = 1; }
-`)
+func TestResources(t *testing.T) {
+	api := &model.API{
+		Services: []model.Service{{
+			Name: "Control",
+			Methods: []model.Method{
+				{Name: "GetActor", ServiceName: "Control", Resource: "Actor"},
+				{Name: "GetWorker", ServiceName: "Control", Resource: "Worker"},
+				{Name: "SuspendActor", ServiceName: "Control", Resource: "Actor"},
+			},
+		}},
+		Messages: []model.Message{
+			{FullName: "test.GetActorRequest", Name: "GetActorRequest"},
+			{FullName: "test.Worker", Name: "Worker", Resource: &model.ResourceAnnotation{}},
+			{FullName: "test.Actor", Name: "Actor", Resource: &model.ResourceAnnotation{}},
+			{FullName: "test.EgressPolicy", Name: "EgressPolicy", Resource: &model.ResourceAnnotation{Parents: []string{"Global", "Actor"}}},
+		},
+	}
 
 	groups, err := model.Resources(api)
 	if err != nil {
 		t.Fatalf("Resources() error = %v", err)
 	}
 
-	var actorGroup *model.Resource
-	for i := range groups {
-		if groups[i].Message.Name == "Actor" {
-			actorGroup = &groups[i]
+	got := map[string][]string{}
+	var gotOrder []string
+	for _, g := range groups {
+		gotOrder = append(gotOrder, g.Message.Name)
+		got[g.Message.Name] = []string{}
+		for _, m := range g.Methods {
+			got[g.Message.Name] = append(got[g.Message.Name], m.Name)
 		}
 	}
-	if actorGroup == nil {
-		t.Fatalf("no Resource for Actor; groups = %+v", groups)
+	if diff := cmp.Diff([]string{"Worker", "Actor", "EgressPolicy"}, gotOrder); diff != "" {
+		t.Errorf("resource order mismatch (-want +got):\n%s", diff)
 	}
-
-	var gotNames []string
-	for _, m := range actorGroup.Methods {
-		gotNames = append(gotNames, m.Name)
+	want := map[string][]string{
+		"Worker":       {"GetWorker"},
+		"Actor":        {"GetActor", "SuspendActor"},
+		"EgressPolicy": {},
 	}
-	wantNames := []string{"GetActor", "CreateActor"}
-	if len(gotNames) != len(wantNames) {
-		t.Fatalf("Actor group methods = %v, want %v", gotNames, wantNames)
-	}
-	for i, want := range wantNames {
-		if gotNames[i] != want {
-			t.Errorf("Actor group methods[%d] = %q, want %q (declaration order matters)", i, gotNames[i], want)
-		}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("methods by resource mismatch (-want +got):\n%s", diff)
 	}
 }
 
-func TestResources_InvalidMethodName(t *testing.T) {
+func TestResources_Invalid(t *testing.T) {
 	tests := []struct {
-		name       string
-		methodName string
+		name string
+		api  *model.API
 	}{
-		{"no resource name matches", "DoThing"},
-		{"two equally-specific resource names match", "ActorSnapshotAndActorTemplate"},
+		{
+			name: "method without annotation",
+			api: &model.API{
+				Services: []model.Service{{Name: "Control", Methods: []model.Method{{Name: "GetActor"}}}},
+				Messages: []model.Message{{FullName: "test.Actor", Name: "Actor", Resource: &model.ResourceAnnotation{}}},
+			},
+		},
+		{
+			name: "method annotated with a message that isn't a resource",
+			api: &model.API{
+				Services: []model.Service{{Name: "Control", Methods: []model.Method{{Name: "GetActor", Resource: "Actor"}}}},
+				Messages: []model.Message{{FullName: "test.Actor", Name: "Actor"}},
+			},
+		},
+		{
+			name: "method annotated with an unknown resource",
+			api: &model.API{
+				Services: []model.Service{{Name: "Control", Methods: []model.Method{{Name: "GetActor", Resource: "Actor"}}}},
+			},
+		},
+		{
+			name: "unknown parent",
+			api: &model.API{
+				Messages: []model.Message{
+					{FullName: "test.EgressPolicy", Name: "EgressPolicy", Resource: &model.ResourceAnnotation{Parents: []string{"Actor"}}},
+				},
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			api := &model.API{
-				Services: []model.Service{{
-					Name: "Bogus",
-					Methods: []model.Method{
-						{Name: tt.methodName, ServiceName: "Bogus"},
-					},
-				}},
-			}
-			if _, err := model.Resources(api); err == nil {
-				t.Errorf("Resources() error = nil for method %q, want an error", tt.methodName)
+			if _, err := model.Resources(tt.api); err == nil {
+				t.Error("Resources() error = nil, want an error")
 			}
 		})
 	}

@@ -12,92 +12,51 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Fixture builders shared by more than one verb's test file - e.g. a
-// Create fixture used both by create_test.go and by another verb's test
-// confirming it ignores Create methods.
+// Builders for the APIs rule tests check. They declare every message in
+// package "test", and every method on service "test.Control".
 package lint_test
 
 import (
 	"github.com/agent-substrate/substrate/tools/apitool/internal/model"
 )
 
-// standardMethodAPI builds a minimal API with one Control.GetAtespace
-// method (see resourceAPI's comment) whose response is outputName,
-// targeting an "Atespace" resource with the given fields.
-func standardMethodAPI(outputName string, atespaceFields []model.Field) *model.API {
+// methodAPI builds an API whose test.Control service has the one method
+// rpc, plus messages.
+func methodAPI(rpc model.Method, messages ...model.Message) *model.API {
+	rpc.ServiceFullName = "test.Control"
+	rpc.ServiceName = "Control"
 	return &model.API{
-		Services: []model.Service{{
-			Name: "Control",
-			Methods: []model.Method{
-				{Name: "GetAtespace", ServiceName: "Control", InputName: "test.GetAtespaceRequest", OutputName: outputName},
-			},
-		}},
-		Messages: []model.Message{
-			{FullName: "test.Atespace", Name: "Atespace", Fields: atespaceFields},
-			{FullName: "test.GetAtespaceRequest", Name: "GetAtespaceRequest", Fields: []model.Field{
-				{Name: "atespace", TypeKind: "message", TypeFullName: "ateapi.ObjectRef"},
-			}},
-			{FullName: "test.GetAtespaceResponse", Name: "GetAtespaceResponse"},
-		},
+		Services: []model.Service{{Name: "Control", Methods: []model.Method{rpc}}},
+		Messages: messages,
 	}
 }
 
-// deleteMethodAPI builds a minimal API with one Control.DeleteAtespace
-// method targeting an "Atespace" resource, with the given request fields.
-func deleteMethodAPI(reqFields []model.Field) *model.API {
-	return &model.API{
-		Services: []model.Service{{
-			Name: "Control",
-			Methods: []model.Method{
-				{Name: "DeleteAtespace", ServiceName: "Control", InputName: "test.DeleteAtespaceRequest", OutputName: "test.Atespace"},
-			},
-		}},
-		Messages: []model.Message{
-			{FullName: "test.Atespace", Name: "Atespace"},
-			{FullName: "test.DeleteAtespaceRequest", Name: "DeleteAtespaceRequest", Fields: reqFields},
-		},
-	}
+// messagesAPI builds an API with just messages.
+func messagesAPI(messages ...model.Message) *model.API {
+	return &model.API{Messages: messages}
 }
 
-// createAtespaceAPI builds a minimal API with one Control.CreateAtespace
-// method whose request embeds the resource (not an ObjectRef) - used to
-// confirm Get/Delete-only rules ignore Create/Update.
-func createAtespaceAPI() *model.API {
-	return createMethodAPI([]model.Field{
-		{Name: "atespace", TypeKind: "message", TypeFullName: "test.Atespace"},
-	})
+// rpc returns a method named name, annotated with resource, taking
+// test.{name}Request and returning test.{output}.
+func rpc(name, resource, output string) model.Method {
+	return model.Method{Name: name, Resource: resource, InputName: "test." + name + "Request", OutputName: "test." + output}
 }
 
-// createMethodAPI builds a minimal API with one Control.CreateAtespace
-// method targeting an "Atespace" resource, with the given request fields.
-func createMethodAPI(reqFields []model.Field) *model.API {
-	return &model.API{
-		Services: []model.Service{{
-			Name: "Control",
-			Methods: []model.Method{
-				{Name: "CreateAtespace", ServiceName: "Control", InputName: "test.CreateAtespaceRequest", OutputName: "test.Atespace"},
-			},
-		}},
-		Messages: []model.Message{
-			{FullName: "test.Atespace", Name: "Atespace"},
-			{FullName: "test.CreateAtespaceRequest", Name: "CreateAtespaceRequest", Fields: reqFields},
-		},
-	}
+// resource returns a resource message test.{name}, with the given parents
+// and fields.
+func resource(name string, parents []string, fields ...model.Field) model.Message {
+	return model.Message{FullName: "test." + name, Name: name, Fields: fields, Resource: &model.ResourceAnnotation{Parents: parents}}
 }
 
-// updateMethodAPI builds a minimal API with one Control.UpdateAtespace
-// method targeting an "Atespace" resource, with the given request fields.
-func updateMethodAPI(reqFields []model.Field) *model.API {
-	return &model.API{
-		Services: []model.Service{{
-			Name: "Control",
-			Methods: []model.Method{
-				{Name: "UpdateAtespace", ServiceName: "Control", InputName: "test.UpdateAtespaceRequest", OutputName: "test.Atespace"},
-			},
-		}},
-		Messages: []model.Message{
-			{FullName: "test.Atespace", Name: "Atespace"},
-			{FullName: "test.UpdateAtespaceRequest", Name: "UpdateAtespaceRequest", Fields: reqFields},
-		},
-	}
+// msg returns a message test.{name} with the given fields.
+func msg(name string, fields ...model.Field) model.Message {
+	return model.Message{FullName: "test." + name, Name: name, Fields: fields}
+}
+
+// singletonResource returns a singleton resource message test.{name}, with
+// the given parents.
+func singletonResource(name string, parents []string) model.Message {
+	m := resource(name, parents)
+	m.Resource.Singleton = true
+	return m
 }

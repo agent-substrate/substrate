@@ -35,3 +35,25 @@ type Rule struct {
 	Description string
 	Check       func(api *model.API) ([]Finding, error)
 }
+
+// All is every rule `apitool validate` runs, in the order their findings
+// are reported.
+var All = []Rule{
+	ResourceMetadata,
+	ListMethodShape,
+	RequestNameMatchesMethod,
+	StandardMethodReturnsResource,
+	GetRequestShape,
+	DeleteRequestShape,
+	DeleteOptionsShape,
+	CreateRequestShape,
+	UpdateRequestShape,
+	ListResponseNameMatchesMethod,
+	SingletonNoList,
+	SubresourceNaming,
+	EnumZeroValueUnspecified,
+	EnumValuesPrefixed,
+	ResourceStatusFieldShape,
+	NoOneofs,
+	Documented,
+}
