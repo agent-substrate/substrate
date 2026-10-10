@@ -304,6 +304,10 @@ func TestPullPinsBeforeJoiningLayerFlight(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	blob, err := layer.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Lead the layer's flight ourselves, and do its real work only once
 	// released, so the pull below has to join and wait.
@@ -311,7 +315,7 @@ func TestPullPinsBeforeJoiningLayerFlight(t *testing.T) {
 	var once sync.Once
 	t.Cleanup(func() { once.Do(func() { close(release) }) })
 	go func() {
-		_, _, _ = store.layerSF.Do(diffID.String(), func() (any, error) {
+		_, _, _ = store.layerSF.Do(layerFlightKey(diffID, blob), func() (any, error) {
 			close(held)
 			<-release
 			return nil, store.unpackLayerToPool(context.Background(), diffID, layer)

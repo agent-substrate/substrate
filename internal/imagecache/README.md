@@ -58,7 +58,7 @@ anywhere.
 
 ```
 <cache-root>/                        default: /var/lib/ate/image-cache
-  version                            layout version marker ("1")
+  version                            layout version marker ("2")
   layers/sha256/<diffid-hex>/
       fs/                            the unpacked layer tree (an overlay lowerdir)
       whiteouts.json                 whiteout state recorded at unpack time
@@ -91,10 +91,12 @@ layer diffIDs in order — layers shared by N images exist once.
    present, return with no network I/O. Missing layers (only) are re-pulled.
 3. **Pull** by resolved digest: layers download in parallel (bounded at 4),
    each streamed download → decompress → untar directly into the pool.
-   Concurrent pulls of the same image or layer are collapsed with
+   Concurrent pulls of the same image or layer blob are collapsed with
    singleflight, so simultaneous actor starts never duplicate work — and
    each completed layer lands individually, so an interrupted pull makes
-   incremental progress across retries.
+   incremental progress across retries. A layer's flight is keyed by its
+   blob as well as its diffID, so one image's bad blob cannot fail
+   another image's pull of the same diffID.
 4. **Unpack** (`unpackLayer`) is the repo's hardened untar: `os.Root`
    confinement (path traversal and symlink/hardlink escapes are refused),
    "later entry wins" within a layer, read-only-dir handling that works
@@ -103,7 +105,19 @@ layer diffIDs in order — layers shared by N images exist once.
    (`.wh.*`) are **not** written into the tree — overlayfs whiteouts are
    char devices atelet cannot create — they are recorded in
    `whiteouts.json` for the consumer to materialize.
-5. **Record**: the image config + diffID list is written under the
+5. **Verify** before the layer becomes visible. The pool is keyed by
+   diffID and shared by every image on the node, but a diffID comes from
+   the image config, which the image's author controls. So the
+   uncompressed stream is hashed as it unpacks and must match the claimed
+   diffID, and it is read to EOF so go-containerregistry's compressed
+   digest check (which runs only at EOF) rejects a blob that does not
+   match the manifest. On a mismatch the `.tmp-*` tree is discarded and
+   the pull fails. A layer already in the pool is reused without
+   re-hashing: its content was verified when it was written, though the
+   reusing image's own blob for it is not downloaded and so not checked.
+   Layout version 1 pools predate verification, and `New` refuses them;
+   delete the cache dir to rebuild it.
+6. **Record**: the image config + diffID list is written under the
    requested digest (and the per-platform child digest for multi-arch refs).
 
 `prepareOCIDirectory` in atelet then writes `rootfs-overlay.json`
@@ -253,8 +267,8 @@ overlay lowerdir in another mount namespace succeeds silently, leaves the
 overlay's behavior undefined, and doesn't even free the space until the
 mount goes away.
 
-Deleting the cache root by hand (while no actors are starting) remains
-safe — the store re-pulls whatever is missing.
+Deleting the cache root by hand (while no actors are running on the node)
+remains safe — the store re-pulls whatever is missing.
 
 This is Phase 2 of [#463](https://github.com/agent-substrate/substrate/issues/463);
 the watermark loop, flags, and cache metrics complete it. Phase 3 adds
