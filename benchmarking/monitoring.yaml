@@ -184,10 +184,10 @@ data:
           # cAdvisor sends a very large number of metrics. Keep only the
           # metrics that the benchmarks read: kernel pressure stall (PSI),
           # container network bandwidth, disk I/O, memory RSS/working-set,
-          # CPU utilization, and CFS throttling.
+          # CPU utilization, CFS throttling, and OOM kill events.
           - source_labels: [__name__]
             action: keep
-            regex: container_((.*pressure.*)|network_(receive|transmit)_bytes_total|fs_(reads|writes)_bytes_total|memory_rss|memory_working_set_bytes|cpu_usage_seconds_total|cpu_cfs_.*|spec_memory_limit_bytes)
+            regex: container_((.*pressure.*)|network_(receive|transmit)_bytes_total|fs_(reads|writes)_bytes_total|memory_rss|memory_working_set_bytes|cpu_usage_seconds_total|cpu_cfs_.*|spec_memory_limit_bytes|oom_events_total)
           # Drop the series that have an empty container label only for cumulative
           # memory working set and CPU usage. cAdvisor gives a rollup for the whole
           # pod cgroup next to the series for each container; keeping both counts

@@ -27,6 +27,7 @@ import json
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -64,13 +65,29 @@ def pod(phase="Running", node_name="node-a"):
                            status=SimpleNamespace(phase=phase))
 
 
-def fake_api(nodes=None, ns_pods=None):
+def worker_pod(uid, restarts=0, last=None, evicted=False, statuses=True):
+    """A worker pod for the snapshot: ateom's restarts and last exit reason."""
+    ateom = SimpleNamespace(
+        name="ateom", restart_count=restarts,
+        last_state=SimpleNamespace(
+            terminated=SimpleNamespace(reason=last) if last else None))
+    sidecar = SimpleNamespace(name="sidecar", restart_count=9, last_state=None)
+    return SimpleNamespace(
+        metadata=SimpleNamespace(uid=uid),
+        status=SimpleNamespace(
+            container_statuses=[sidecar, ateom] if statuses else None,
+            reason="Evicted" if evicted else None))
+
+
+def fake_api(nodes=None, ns_pods=None, events=None):
     """Stand-in CoreV1Api; None raises 403 Forbidden."""
     def forbidden(*_args, **_kwargs):
         raise ApiException(status=403, reason="Forbidden")
 
     api = mock.Mock()
-    for attr, items in (("list_node", nodes), ("list_namespaced_pod", ns_pods)):
+    lists = (("list_node", nodes), ("list_namespaced_pod", ns_pods),
+             ("list_namespaced_event", events))
+    for attr, items in lists:
         if items is None:
             getattr(api, attr).side_effect = forbidden
         else:
@@ -83,6 +100,13 @@ def discover(api):
          mock.patch.object(cluster_facts.client, "CoreV1Api", return_value=api), \
          contextlib.redirect_stdout(io.StringIO()):
         return cluster_facts.get_cluster_hardware_facts()
+
+
+def snapshot(api):
+    with mock.patch.object(cluster_facts, "_load_kube_config", return_value=True), \
+         mock.patch.object(cluster_facts.client, "CoreV1Api", return_value=api), \
+         contextlib.redirect_stdout(io.StringIO()):
+        return cluster_facts.snapshot_worker_pods()
 
 
 def summarize(facts, directory, stats=STATS_HEADER + ",Aggregated,100,25\n",
@@ -298,6 +322,101 @@ class ClusterFactsTest(unittest.TestCase):
             row = summarize(FACTS, td, STATS_HEADER + ",Aggregated,10,0\n")
         self.assertNotIn("resume_actor_failure_ratio", row["measurements"])
         self.assertNotIn("suspend_actor_failure_ratio", row["measurements"])
+
+    def test_worker_pod_snapshot(self):
+        api = fake_api(ns_pods=[
+            worker_pod("a", restarts=2, last="OOMKilled"),
+            worker_pod("b", restarts=1, last="Error"),
+            worker_pod("p", statuses=False),  # Pending, no statuses yet
+            worker_pod("e", evicted=True, statuses=False),
+        ])
+        # ateom only: the sidecar's 9 restarts never show.
+        self.assertEqual(snapshot(api), {
+            "a": {"restarts": 2, "last_oomkilled": True, "evicted": False},
+            "b": {"restarts": 1, "last_oomkilled": False, "evicted": False},
+            "p": {"restarts": 0, "last_oomkilled": False, "evicted": False},
+            "e": {"restarts": 0, "last_oomkilled": False, "evicted": True},
+        })
+        api.list_namespaced_pod.assert_called_once_with(
+            namespace="benchmark-workloads",
+            label_selector="ate.dev/worker-pool",
+            _request_timeout=5,
+        )
+        # A denied read or no credentials is unknown, not an empty pool.
+        self.assertIsNone(snapshot(fake_api(ns_pods=None)))
+        with mock.patch.object(cluster_facts, "_load_kube_config", return_value=False):
+            self.assertIsNone(cluster_facts.snapshot_worker_pods())
+
+    def test_evicted_pods_from_events(self):
+        def event(uid, last=None, event_time=None, created=None):
+            def ts(s):
+                return datetime.fromtimestamp(s, timezone.utc) if s else None
+            return SimpleNamespace(
+                involved_object=SimpleNamespace(uid=uid),
+                last_timestamp=ts(last), event_time=ts(event_time),
+                metadata=SimpleNamespace(creation_timestamp=ts(created)))
+
+        api = fake_api(events=[
+            event("a", last=120),
+            event("a", last=150),             # same pod again: counted once
+            event("old", last=90),            # evicted before the run
+            event("b", event_time=110),       # events.k8s.io: no last_timestamp
+            event("c", created=130),          # only creation_timestamp
+        ])
+        with mock.patch.object(cluster_facts, "_load_kube_config", return_value=True), \
+             mock.patch.object(cluster_facts.client, "CoreV1Api", return_value=api), \
+             contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(cluster_facts.read_evicted_pods(100), {"a", "b", "c"})
+            api.list_namespaced_event.assert_called_once_with(
+                namespace="benchmark-workloads",
+                field_selector="reason=Evicted,involvedObject.kind=Pod",
+                _request_timeout=5,
+            )
+            # A denied read is unknown, not zero evictions.
+            api.list_namespaced_event.side_effect = ApiException(status=403)
+            self.assertIsNone(cluster_facts.read_evicted_pods(100))
+
+    def test_worker_pod_diff(self):
+        def state(restarts=0, oom=False, evicted=False):
+            return {"restarts": restarts, "last_oomkilled": oom, "evicted": evicted}
+
+        before = {"a": state(), "b": state(1, oom=True), "e": state(evicted=True),
+                  "gone": state()}         # deleted in the run: lost
+        after = {
+            "a": state(2, oom=True),       # 2 restarts, last OOMKilled: 1 pod
+            "b": state(1, oom=True),       # an OOMKilled from before the run
+            "e": state(evicted=True),      # evicted before the run
+            "c": state(1, oom=True),       # new pod, restarted once
+            "f": state(evicted=True),      # evicted in the run, still listed
+        }
+        # "f" is in both sources, "g" was deleted before the second snapshot.
+        self.assertEqual(cluster_facts.diff_worker_pods(before, after, {"f", "g"}), {
+            "worker_restarts": 3, "worker_oomkilled_pods": 2, "evicted": 2,
+            "worker_pods_lost": 1})
+        # Each field is null only when its own source failed.
+        self.assertEqual(cluster_facts.diff_worker_pods(None, after, {"g"}), {
+            "worker_restarts": None, "worker_oomkilled_pods": None, "evicted": 1,
+            "worker_pods_lost": None})
+        self.assertEqual(cluster_facts.diff_worker_pods(before, after, None), {
+            "worker_restarts": 3, "worker_oomkilled_pods": 2, "evicted": None,
+            "worker_pods_lost": 1})
+
+    def test_worker_pod_reads_follow_cluster_facts_flag(self):
+        with mock.patch.object(runner, "snapshot_worker_pods") as read, \
+             mock.patch.object(runner, "read_evicted_pods") as events:
+            off = parse("--no-cluster-facts")
+            self.assertIsNone(runner.read_worker_pods(off, io.StringIO()))
+            self.assertIsNone(runner.read_evictions(off, 100, io.StringIO()))
+            read.assert_not_called()
+            events.assert_not_called()
+        # A failed read never stops the run.
+        with mock.patch.object(runner, "snapshot_worker_pods",
+                               side_effect=RuntimeError("boom")), \
+             mock.patch.object(runner, "read_evicted_pods",
+                               side_effect=RuntimeError("boom")), \
+             contextlib.redirect_stdout(io.StringIO()):
+            self.assertIsNone(runner.read_worker_pods(parse(), io.StringIO()))
+            self.assertIsNone(runner.read_evictions(parse(), 100, io.StringIO()))
 
 
 if __name__ == "__main__":

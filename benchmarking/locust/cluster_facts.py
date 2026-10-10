@@ -17,7 +17,8 @@
 
 Reads allocatable CPU/RAM, node count and worker pod count from the Kubernetes
 API, then derives the actor-density frontiers (actors per node / vCPU / GB RAM
-and the actors-per-pod percentiles) for a completed trial.
+and the actors-per-pod percentiles) for a completed trial. Also reads worker
+pod restarts and evictions around a run, for server telemetry's `oom_events`.
 """
 
 import argparse
@@ -34,6 +35,7 @@ API_TIMEOUT_SECONDS = 5
 WORKER_POOL_NAMESPACE = "benchmark-workloads"
 WORKER_POOL_LABEL = "ate.dev/worker-pool"
 LIVE_POD_PHASES = ("Running", "Pending")
+WORKER_CONTAINER = "ateom"
 MACHINE_TYPE_LABEL = "node.kubernetes.io/instance-type"
 
 # Shape returned when the cluster cannot be read, or when discovery is skipped
@@ -273,3 +275,106 @@ def append_trial_summary(
     with open(jsonl_path, "a", encoding="utf-8") as f:
         f.write(json.dumps(summary_entry) + "\n")
     _log(logs, f"Appended trial_summary to {jsonl_path}")
+
+
+def snapshot_worker_pods(
+    logs: TextIO | None = None,
+) -> dict[str, dict[str, Any]] | None:
+    """Per worker pod uid: ateom restarts, last exit OOMKilled, evicted.
+
+    An evicted pod is usually gone by now; read_evicted_pods covers it. None if
+    the read failed.
+    """
+    if not _load_kube_config(logs):
+        return None
+    try:
+        # Consistent read, so the snapshot right after the run is exact.
+        pods = client.CoreV1Api().list_namespaced_pod(
+            namespace=WORKER_POOL_NAMESPACE,
+            label_selector=WORKER_POOL_LABEL,
+            _request_timeout=API_TIMEOUT_SECONDS,
+        ).items
+    except Exception as e:
+        reason = getattr(e, "reason", e)
+        _log(logs,
+             f"Notice: could not list pods in {WORKER_POOL_NAMESPACE}: {reason}")
+        return None
+    out: dict[str, dict[str, Any]] = {}
+    for pod in pods:
+        # By name, so a sidecar can't skew it; a Pending pod may have none yet.
+        cs = next((c for c in pod.status.container_statuses or []
+                   if c.name == WORKER_CONTAINER), None)
+        last = cs.last_state.terminated if cs and cs.last_state else None
+        out[pod.metadata.uid] = {
+            "restarts": (cs.restart_count or 0) if cs else 0,
+            "last_oomkilled": bool(last and last.reason == "OOMKilled"),
+            "evicted": pod.status.reason == "Evicted",
+        }
+    return out
+
+
+def read_evicted_pods(
+    since_ts: int,
+    logs: TextIO | None = None,
+) -> set[str] | None:
+    """Uids of pods evicted at or after since_ts, from Evicted events.
+
+    atecontroller deletes an evicted worker pod at once, so the pod is gone by
+    the next snapshot; its event stays for about 1h. Events can't be filtered by
+    label, so this covers every pod in the namespace, where only workers run.
+    None if the read failed.
+    """
+    if not _load_kube_config(logs):
+        return None
+    try:
+        events = client.CoreV1Api().list_namespaced_event(
+            namespace=WORKER_POOL_NAMESPACE,
+            field_selector="reason=Evicted,involvedObject.kind=Pod",
+            _request_timeout=API_TIMEOUT_SECONDS,
+        ).items
+    except Exception as e:
+        reason = getattr(e, "reason", e)
+        _log(logs,
+             f"Notice: could not list events in {WORKER_POOL_NAMESPACE}: {reason}")
+        return None
+    uids: set[str] = set()
+    for ev in events:
+        # Kubelet sets last_timestamp; events.k8s.io writers set event_time.
+        t = ev.last_timestamp or ev.event_time or ev.metadata.creation_timestamp
+        if t and t.timestamp() >= since_ts and ev.involved_object.uid:
+            uids.add(ev.involved_object.uid)
+    return uids
+
+
+def diff_worker_pods(
+    before: dict[str, dict[str, Any]] | None,
+    after: dict[str, dict[str, Any]] | None,
+    evicted_uids: set[str] | None,
+) -> dict[str, int | None]:
+    """Worker restarts, OOMKilled pods, evictions and lost pods over the run.
+
+    `worker_oomkilled_pods` counts pods, not kills: lastState keeps only the
+    last exit. A node OOM can also restart a worker. `evicted` is kubelet
+    eviction or admission rejection, not a kernel OOM kill: pods evicted in the
+    run, from events and from the snapshots, once per uid. `worker_pods_lost`
+    is pods gone by the second snapshot, for any reason. A field is None when
+    its source failed.
+    """
+    restarts: int | None = None
+    oomkilled: int | None = None
+    lost: int | None = None
+    status_evicted: set[str] = set()
+    if before is not None and after is not None:
+        grown = oom = 0
+        for uid, now in after.items():
+            was = before.get(uid, {"restarts": 0, "evicted": False})
+            grew = max(now["restarts"] - was["restarts"], 0)
+            grown += grew
+            oom += bool(grew and now["last_oomkilled"])
+            if now["evicted"] and not was["evicted"]:
+                status_evicted.add(uid)
+        restarts, oomkilled = grown, oom
+        lost = len(before.keys() - after.keys())
+    evicted = None if evicted_uids is None else len(evicted_uids | status_evicted)
+    return {"worker_restarts": restarts, "worker_oomkilled_pods": oomkilled,
+            "evicted": evicted, "worker_pods_lost": lost}
