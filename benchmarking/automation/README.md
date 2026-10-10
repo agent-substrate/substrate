@@ -20,13 +20,12 @@ the router capacity benchmark — see
    and/or `${KO_DOCKER_REPO}/nighthawk-ingress-test:<commit>`.
 5. `hack/install-ate.sh --deploy-ate-system` (with `ATE_CREDENTIAL_PROVIDER`
    in `.ate-dev-env.sh`, or `--credential-provider` in the test's
-   `ateArgs`) + `benchmarking/workloads/deploy.sh
+   `ateArgs`, which also stages the micro-VM guest assets to the cluster's
+   object store bucket and applies both the `gvisor-default` and `microvm`
+   `SandboxConfig`s) + `benchmarking/workloads/deploy.sh
    --deploy --sandbox-class <class>` (these build & push substrate / workload
    images via `ko` as part of their deploy steps — there's no separate
-   `make build-images` step). For a `microvm` test the orchestrator also
-   runs `go run ./cmd/ate-setup deploy microvm-deps` between the two, which
-   stages kata + cloud-hypervisor + virtiofsd assets to the cluster's object
-   store bucket and applies the cluster-wide `microvm` SandboxConfig.
+   `make build-images` step).
    For a `nighthawk-ingress` test the orchestrator additionally patches the
    `atenet-router` Deployment right after `deploy_substrate`: `envoyCpu`
    is the benchmark's independent variable and the shipped manifest sets
@@ -39,7 +38,7 @@ the router capacity benchmark — see
      (`runner-job.yaml.tmpl` for locust,
      `nighthawk-ingress-runner-job.yaml.tmpl` for nighthawk-ingress).
    - Polls until complete/failed/timeout; tails logs; deletes the Job.
-   - Tears down workloads + micro-VM deps (if any) + substrate.
+   - Tears down workloads + substrate.
    - If not the last test, redeploys them so the next run starts clean.
 
 ## Choosing a sandbox class

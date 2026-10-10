@@ -419,50 +419,6 @@ func TestWaitJobComplete(t *testing.T) {
 	})
 }
 
-// Deploying benchmarks onto micro-VM has to bring the SandboxConfig with it:
-// the workloads reference it by name.
-func TestDeployBenchmarksInstallsMicroVMDeps(t *testing.T) {
-	silenceStepLog(t)
-
-	// Passing an unsupported ARCH makes DeployMicroVMDeps return an error
-	// immediately, proving DeployBenchmarks invoked it before deploy_locust.sh.
-	t.Setenv("ARCH", "unsupported-arch")
-	env := &Env{Cfg: &config.Config{Root: t.TempDir()}}
-
-	err := env.DeployBenchmarks(t.Context(), BenchmarkOptions{
-		WorkerCount:  1,
-		SandboxClass: config.SandboxClassMicrovm,
-	})
-	if err == nil || !strings.Contains(err.Error(), "unsupported ARCH=unsupported-arch") {
-		t.Fatalf("DeployBenchmarks() = %v, want error from DeployMicroVMDeps", err)
-	}
-}
-
-// Confirm the opposite: a gvisor benchmark run must not touch the cluster-wide
-// micro-VM SandboxConfig.
-func TestDeleteBenchmarksLeavesMicroVMDepsAloneForGvisor(t *testing.T) {
-	silenceStepLog(t)
-
-	root := t.TempDir()
-	locust := filepath.Join(root, deployLocustScript)
-	if err := os.MkdirAll(filepath.Dir(locust), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(locust, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	// Kube is nil: if DeleteBenchmarks called DeleteMicroVMDeps for gvisor, it
-	// would dereference e.Kube and panic.
-	env := &Env{Cfg: &config.Config{Root: root}}
-	if err := env.DeleteBenchmarks(t.Context(), BenchmarkOptions{
-		WorkerCount:  1,
-		SandboxClass: config.SandboxClassGvisor,
-	}); err != nil {
-		t.Fatalf("DeleteBenchmarks(gvisor) = %v, want nil", err)
-	}
-}
-
 func TestMicroVMDepsStepsAreSeparableFromContext(t *testing.T) {
 	silenceStepLog(t)
 

@@ -34,8 +34,10 @@ var deployAteSystemCmd = &cobra.Command{
 	Long: `Deploy the whole Agent Substrate control plane.
 
 This installs the CRDs and RBAC, the podcertificate controller and the secrets
-it signs, PostgreSQL, ate-api-server, ate-controller, the atenet dataplane, and
-the atelet DaemonSet, then waits for each to roll out.
+it signs, PostgreSQL, ate-api-server, ate-controller, the atenet dataplane,
+the default gVisor and micro-VM SandboxConfigs (staging the micro-VM guest
+assets to the cluster object store), and the atelet DaemonSet, then waits for
+each to roll out.
 
 The bundled PostgreSQL StatefulSet is skipped when
 ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING or the ATE_API_POSTGRES_CLOUDSQL_* variables
@@ -108,7 +110,7 @@ var deployPodCertControllerCmd = &cobra.Command{
 
 var deploySandboxConfigCmd = &cobra.Command{
 	Use:   "sandboxconfig",
-	Short: "Deploy the SandboxConfig admission policy and the default gVisor SandboxConfig only",
+	Short: "Deploy the SandboxConfig admission policy and the default gVisor and micro-VM SandboxConfigs only",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		return env.DeploySandboxConfig(cmd.Context())
@@ -146,4 +148,6 @@ func init() {
 	deployAteSystemCmd.Flags().StringVar(&deployOpts.SetupCSI, "setup-csi", "none",
 		"Also install CSI driver (nfs, hostpath, both, none; default: none)")
 	deployAteSystemCmd.Flags().Lookup("setup-csi").NoOptDefVal = "none"
+	deployAteSystemCmd.Flags().BoolVar(&deployOpts.SkipMicroVMDeps, "skip-microvm-deps", false,
+		"Skip staging micro-VM guest assets and applying the microvm SandboxConfig")
 }

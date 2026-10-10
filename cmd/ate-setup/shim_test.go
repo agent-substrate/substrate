@@ -46,13 +46,6 @@ printf '%s\n' "$*" >> "${SHIM_TEST_LOG}"
 // invocations and the script's exit status.
 func runShim(t *testing.T, env []string, args ...string) (invocations []string, exitCode int) {
 	t.Helper()
-	return runNamedShim(t, "install-ate.sh", env, args...)
-}
-
-// runNamedShim runs a script under hack/ with a stub `go` on PATH and returns
-// the recorded `go` invocations (verified against cmd.Root()) and exit status.
-func runNamedShim(t *testing.T, scriptName string, env []string, args ...string) (invocations []string, exitCode int) {
-	t.Helper()
 
 	root := repoRoot(t)
 	bin := t.TempDir()
@@ -61,7 +54,7 @@ func runNamedShim(t *testing.T, scriptName string, env []string, args ...string)
 	}
 	log := filepath.Join(t.TempDir(), "invocations")
 
-	script := exec.Command("bash", filepath.Join(root, "hack", scriptName))
+	script := exec.Command("bash", filepath.Join(root, "hack", "install-ate.sh"))
 	script.Args = append(script.Args, args...)
 	script.Dir = root
 	// A fixed environment: the script reads SETUP_CSI and STORAGE_CLASS, so a
@@ -210,6 +203,10 @@ func TestShimTranslatesFlags(t *testing.T) {
 		name: "no CSI driver by default",
 		args: []string{"--deploy-ate-system"},
 		want: []string{"deploy ate-system --setup-csi=none"},
+	}, {
+		name: "--skip-microvm-deps is forwarded to deploy ate-system",
+		args: []string{"--deploy-ate-system", "--skip-microvm-deps"},
+		want: []string{"deploy ate-system --setup-csi=none --skip-microvm-deps"},
 	}, {
 		// The value-bearing flags were pre-scanned, so they shape every action
 		// regardless of where they appear.
@@ -431,54 +428,4 @@ func shimUsage(t *testing.T) string {
 		t.Fatalf("install-ate.sh --help: %v", err)
 	}
 	return string(out)
-}
-
-func TestMicroVMShim(t *testing.T) {
-	for _, tc := range []struct {
-		name     string
-		args     []string
-		want     []string
-		exitCode int
-	}{
-		{
-			name: "--install maps to deploy microvm-deps",
-			args: []string{"--install"},
-			want: []string{goRunPrefix + "deploy microvm-deps"},
-		},
-		{
-			name: "--delete maps to delete microvm-deps",
-			args: []string{"--delete"},
-			want: []string{goRunPrefix + "delete microvm-deps"},
-		},
-		{
-			name:     "--help exits cleanly without running ate-setup",
-			args:     []string{"--help"},
-			exitCode: 0,
-		},
-		{
-			name:     "-h exits cleanly without running ate-setup",
-			args:     []string{"-h"},
-			exitCode: 0,
-		},
-		{
-			name:     "no arguments is an error",
-			args:     nil,
-			exitCode: 1,
-		},
-		{
-			name:     "unknown argument is rejected",
-			args:     []string{"--unknown"},
-			exitCode: 1,
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			got, exitCode := runNamedShim(t, "install-microvm-deps.sh", nil, tc.args...)
-			if exitCode != tc.exitCode {
-				t.Fatalf("exit code = %d, want %d", exitCode, tc.exitCode)
-			}
-			if strings.Join(got, "\n") != strings.Join(tc.want, "\n") {
-				t.Errorf("invocations = %q, want %q", got, tc.want)
-			}
-		})
-	}
 }

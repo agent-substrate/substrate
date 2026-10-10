@@ -62,6 +62,10 @@ func (e *Env) DeleteAteSystem(ctx context.Context) error {
 		return fmt.Errorf("while deleting atelet daemonsets: %w", err)
 	}
 
+	if err := e.DeleteMicroVMDeps(ctx); err != nil {
+		return err
+	}
+
 	for _, path := range [][]string{
 		{"components", "agentgateway", "configmap.yaml"},
 		{"postgres", "postgres.yaml"},

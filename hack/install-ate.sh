@@ -60,9 +60,6 @@ demo_usage() {
       echo "  --deploy-demo-counter-with-external-volume    Deploy demo-counter with external volume validation"
       echo "                                                (STORAGE_CLASS names the class; it otherwise follows --setup-csi)"
       ;;
-    demo-counter-microvm|demo-egress-microvm)
-      echo "  Needs 'go run ./cmd/ate-setup deploy microvm-deps' to have run (cluster-wide microvm SandboxConfig)."
-      ;;
     demo-claude-code-multiplex)
       echo "  Required env: ANTHROPIC_API_KEY, BUCKET_NAME, KO_DOCKER_REPO"
       echo "  See demos/claude-code-multiplex/README.md for the walkthrough."
@@ -79,6 +76,7 @@ usage() {
   echo "Overall infrastructure (all infrastructure components):"
   echo ""
   echo "  --deploy-ate-system                    Deploy core system (CRDs, atelet, apiserver)"
+  echo "  --skip-microvm-deps                    Skip staging micro-VM guest assets and applying the microvm SandboxConfig"
   echo "  --setup-csi[=DRIVER]                   Setup CSI driver: nfs, hostpath, both, none (default: none;"
   echo "                                         a bare --setup-csi means nfs; hostpath is Kind only)"
   echo "  --delete-ate-system                    Delete core system"
@@ -160,8 +158,7 @@ usage() {
   echo "  --deploy-benchmarks                    Deploy workloads + locust load test stack"
   echo "  --delete-benchmarks                    Delete the locust stack and workloads"
   echo "  --benchmark-worker-count N             Number of WorkerPool replicas (default: 1)"
-  echo "  --benchmark-sandbox-class CLASS        Sandbox runtime for the benchmark WorkerPool: gvisor | microvm (default: gvisor)."
-  echo "                                         microvm also runs 'ate-setup deploy microvm-deps'."
+  echo "  --benchmark-sandbox-class CLASS        Sandbox runtime for the benchmark WorkerPool: gvisor | microvm (default: gvisor)"
   echo "  --benchmark-actor-memory SIZE          Memory limit for the benchmark ActorTemplates (default: 256Mi,"
   echo "                                         the smallest size microvm admits)"
   echo ""
@@ -243,6 +240,7 @@ GLOBAL_FLAGS=()
 # CSI driver is an opt-in extra, and NFS needs kernel modules a plain
 # workstation will not have loaded.
 SETUP_CSI="${SETUP_CSI:-none}"
+DEPLOY_ATE_SYSTEM_FLAGS=()
 BENCHMARK_FLAGS=()
 prescan_args=("$@")
 for ((i = 0; i < ${#prescan_args[@]}; i++)); do
@@ -336,6 +334,7 @@ for ((i = 0; i < ${#prescan_args[@]}; i++)); do
         SETUP_CSI="nfs"
       fi
       ;;
+    --skip-microvm-deps|--skip-microvm-deps=*) DEPLOY_ATE_SYSTEM_FLAGS+=("${prescan_args[i]}") ;;
   esac
 done
 
@@ -355,8 +354,12 @@ while [[ "$#" -gt 0 ]]; do
     --experimental-additional-egress-extproc-service=*) ;;
     --credential-provider=*) ;;
     --benchmark-worker-count=*|--benchmark-sandbox-class=*|--benchmark-actor-memory=*) ;;
+    --skip-microvm-deps|--skip-microvm-deps=*) ;;
 
-    --deploy-ate-system) ate_setup deploy ate-system "--setup-csi=${SETUP_CSI}" ;;
+    --deploy-ate-system)
+      ate_setup deploy ate-system "--setup-csi=${SETUP_CSI}" \
+        ${DEPLOY_ATE_SYSTEM_FLAGS[@]+"${DEPLOY_ATE_SYSTEM_FLAGS[@]}"}
+      ;;
     --setup-csi=*) ate_setup setup csi "${SETUP_CSI}" ;;
     --setup-csi)
       if [[ "$#" -gt 1 && "$2" != --* ]]; then

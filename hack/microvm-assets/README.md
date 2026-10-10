@@ -12,32 +12,26 @@ set. The asset set is four files:
 - `vmlinux` — the guest kernel (from kata-static)
 - `rootfs.img` — the guest rootfs image (from kata-static)
 
-`go run ./cmd/ate-setup deploy microvm-deps` (or the `hack/install-microvm-deps.sh --install`
-shim) assembles the asset set for your node arch into `bin/microvm-assets/$ARCH`, stages it
-into the cluster's object store (`rustfs` on kind, GCS on GKE), and applies the cluster-wide
-`microvm` `SandboxConfig`. When `/dev/kvm` is available, `hack/create-kind-cluster.sh` mounts
-it into the node; atelet then advertises it as a device, which is what places micro-VM
-workers there.
+`go run ./cmd/ate-setup deploy ate-system` (and `deploy sandboxconfig`) assembles the asset set
+for your node arch into `bin/microvm-assets/$ARCH`, stages it into the cluster's object store
+(`rustfs` on kind, GCS on GKE), and applies the cluster-wide `microvm` `SandboxConfig`. When
+`/dev/kvm` is available, `hack/create-kind-cluster.sh` mounts it into the node; atelet then
+advertises it as a device, which is what places micro-VM workers there.
 
 > [!TIP]
 > `hack/run-microvm-demo.sh` (and `hack/run-microvm-demo-kind.sh` for kind) automates the
-> full bring-up below (control plane, micro-VM assets + `SandboxConfig`, and demo apply)
+> full bring-up below (control plane + micro-VM assets/`SandboxConfig`, and demo apply)
 > without editing committed files.
 
 ## Steps (run on a KVM-capable Linux host matching the node arch)
 
-1. **Bring up the cluster + control plane:**
+1. **Bring up the cluster + control plane (stages micro-VM assets and applies `microvm` `SandboxConfig`):**
    ```sh
    hack/create-kind-cluster.sh                          # mounts /dev/kvm into the nodes
-   hack/install-ate-kind.sh --deploy-ate-system         # control plane + rustfs (bucket: ate-snapshots)
+   hack/install-ate-kind.sh --deploy-ate-system         # control plane + rustfs + micro-VM assets/SandboxConfig
    ```
 
-2. **Assemble and stage the micro-VM assets + `SandboxConfig`:**
-   ```sh
-   ATE_INSTALL_KIND=true hack/install-microvm-deps.sh --install
-   ```
-
-3. **Apply the demo + drive it:**
+2. **Apply the demo + drive it:**
    ```sh
    hack/install-ate-kind.sh --deploy-demo-counter-microvm
    ```

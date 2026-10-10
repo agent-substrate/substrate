@@ -61,15 +61,6 @@ func (e *Env) DeployBenchmarks(ctx context.Context, opts BenchmarkOptions) error
 		return err
 	}
 	log.Stepf("deploy_benchmarks (worker_count=%d, sandbox_class=%s)", opts.WorkerCount, opts.SandboxClass)
-
-	// The microvm SandboxConfig lives outside the default set installed by
-	// `deploy ate-system`, which only installs gvisor-default. The workloads
-	// deploy references it by name and would fail if this were skipped.
-	if opts.SandboxClass == config.SandboxClassMicrovm {
-		if err := e.DeployMicroVMDeps(ctx); err != nil {
-			return err
-		}
-	}
 	return e.runScript(ctx, deployLocustScript, deployLocustArgs(opts, e.Cfg.OtlpEndpoint, e.Cfg.BenchmarkActorMemory)...)
 }
 
@@ -101,16 +92,7 @@ func (e *Env) DeleteBenchmarks(ctx context.Context, opts BenchmarkOptions) error
 		return err
 	}
 	log.Stepf("delete_benchmarks (sandbox_class=%s)", opts.SandboxClass)
-
-	if err := e.runScript(ctx, deployLocustScript, "--delete"); err != nil {
-		return err
-	}
-	// Only tear down the microvm SandboxConfig if the caller opted into
-	// microvm: it is cluster-wide and may be in use by something else.
-	if opts.SandboxClass == config.SandboxClassMicrovm {
-		return e.DeleteMicroVMDeps(ctx)
-	}
-	return nil
+	return e.runScript(ctx, deployLocustScript, "--delete")
 }
 
 // runScript executes a repository script from the repository root with the

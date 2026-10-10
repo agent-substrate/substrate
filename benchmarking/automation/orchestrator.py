@@ -313,20 +313,6 @@ def teardown_substrate() -> None:
     run_no_check(["hack/install-ate.sh", "--delete-ate-system"])
 
 
-def install_microvm_deps() -> None:
-    """Stage kata/cloud-hypervisor assets and apply the cluster-wide
-    microvm SandboxConfig. Required before a microvm ActorTemplate can
-    boot; must run after deploy_substrate() (which installs the CRDs)."""
-    run(["go", "run", "./cmd/ate-setup", "deploy", "microvm-deps"])
-
-
-def teardown_microvm_deps() -> None:
-    """Remove the microvm SandboxConfig. Must run before
-    teardown_substrate(), which deletes the SandboxConfig CRD (and would
-    prevent this from succeeding via kubectl)."""
-    run_no_check(["go", "run", "./cmd/ate-setup", "delete", "microvm-deps"])
-
-
 def deploy_workloads(
     worker_count: int = 1,
     sandbox_class: str = "gvisor",
@@ -506,11 +492,8 @@ def main() -> None:
             # fire that crashed mid-test (or any other process that left
             # state behind) would otherwise leak its substrate + workloads
             # into this run. All teardowns use --ignore-not-found, so
-            # this is cheap on a clean cluster. Order matters:
-            # microvm-deps deletes a SandboxConfig CR, which requires the
-            # SandboxConfig CRD that teardown_substrate removes.
+            # this is cheap on a clean cluster.
             teardown_workloads()
-            teardown_microvm_deps()
             teardown_substrate()
 
             sandbox_class = test.get("sandboxClass", "gvisor")
@@ -520,10 +503,6 @@ def main() -> None:
             try:
                 deploy_substrate(test.get("ateArgs", []))
                 TYPES[ttype].pre_test(test)
-                # install-microvm-deps needs the CRDs from deploy_substrate;
-                # deploy_workloads needs the microvm SandboxConfig.
-                if sandbox_class == "microvm":
-                    install_microvm_deps()
                 deploy_workloads(
                     test.get("workerCount", 1),
                     sandbox_class,
@@ -550,10 +529,7 @@ def main() -> None:
             finally:
                 # Always tear down, even if deploy or run failed, so the
                 # next test (and the next CronJob fire) starts clean.
-                # microvm-deps must go before substrate for the same reason
-                # as above.
                 teardown_workloads()
-                teardown_microvm_deps()
                 teardown_substrate()
             duration = time.time() - start_time
             results.append((test["name"], status, duration, failure_msg))

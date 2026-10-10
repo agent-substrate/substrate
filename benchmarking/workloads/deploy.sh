@@ -68,8 +68,7 @@ usage() {
   echo "  --deploy                    Substitute env vars and deploy workloads to the cluster using ko apply"
   echo "  --delete                    Substitute env vars and delete workloads from the cluster"
   echo "  --worker-count N            Number of WorkerPool replicas (default: 1)"
-  echo "  --sandbox-class CLASS       Sandbox runtime for the WorkerPool: gvisor | microvm (default: gvisor)."
-  echo "                              microvm requires hack/install-microvm-deps.sh --install to have run."
+  echo "  --sandbox-class CLASS       Sandbox runtime for the WorkerPool: gvisor | microvm (default: gvisor)"
   echo "  --actor-memory SIZE         Memory limit for the benchmark ActorTemplates (default: 256Mi,"
   echo "                              the smallest size microvm admits)"
   echo "  --worker-memory SIZE        Memory request and limit for each WorkerPool pod"
@@ -123,8 +122,8 @@ run_kubectl_ate() {
 substitute() {
   # SandboxConfig names are pinned per class in the ActorTemplates (rather
   # than defaulted) so a stale config from a dirty teardown fails loudly
-  # instead of silently binding these workloads. gvisor-default is applied by
-  # hack/install-ate.sh; microvm is applied by hack/install-microvm-deps.sh.
+  # instead of silently binding these workloads. Both gvisor-default and
+  # microvm are applied by `ate-setup deploy ate-system`.
   # The protojson templates take the sandbox class as its proto enum spelling.
   local manifest="$1"
   local sandbox_config_name sandbox_class_enum worker_template=""

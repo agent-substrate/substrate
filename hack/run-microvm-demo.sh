@@ -19,11 +19,9 @@
 # and calls this script), mirroring install-ate.sh / install-ate-kind.sh.
 #
 # Composes:
-#   1. hack/install-ate.sh --deploy-ate-system    (control plane)
-#   2. go run ./cmd/ate-setup deploy microvm-deps (asset build/stage + cluster-wide
-#                                                  microvm SandboxConfig)
-#   3. Deploy the counter-microvm demo (worker pool manifest, atespace, and
-#      ActorTemplate through the ate API).
+#   1. hack/install-ate.sh --deploy-ate-system           (control plane + micro-VM assets and SandboxConfig)
+#   2. hack/install-ate.sh --deploy-demo-counter-microvm (worker pool manifest, atespace, and
+#                                                         ActorTemplate through the ate API)
 #
 # Like the other hack scripts, this sources .ate-dev-env.sh for the cluster /
 # registry / bucket settings unless NO_DEV_ENV is set. The control plane deploy
@@ -78,7 +76,7 @@ log() {
   echo -e "${COLOR_CYAN}[run-microvm-demo]: $*${COLOR_RESET}"
 }
 
-# --- 1. deploy the control plane -------------------------------------------
+# --- 1. deploy the control plane (includes micro-VM assets + SandboxConfig) -
 log "Deploying the ate control plane (--deploy-ate-system)..."
 if [[ "${ATE_INSTALL_KIND}" == "true" ]]; then
   # install-ate-kind.sh sets NO_DEV_ENV/KO_DOCKER_REPO/ARCH/ATE_INSTALL_KIND itself.
@@ -88,13 +86,7 @@ else
   KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" hack/install-ate.sh --deploy-ate-system
 fi
 
-# --- 2. install micro-VM deps (assets + cluster-wide SandboxConfig) --------
-# `ate-setup deploy microvm-deps` handles the assemble/stage/apply flow. Ordering
-# matters: the control plane must be up so the SandboxConfig CRD exists.
-log "Installing micro-VM dependencies..."
-KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" go run ./cmd/ate-setup deploy microvm-deps
-
-# --- 3. apply the demo ------------------------------------------------------
+# --- 2. apply the demo ------------------------------------------------------
 KCTX_FLAG=""
 if [[ -n "${KUBECTL_CONTEXT}" ]]; then
   KCTX_FLAG=" --context=${KUBECTL_CONTEXT}"

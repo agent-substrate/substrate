@@ -14,12 +14,10 @@
 
 // Package egressmicrovm installs the micro-VM variant of the egress demo.
 //
-// It needs the cluster-wide `microvm` SandboxConfig that `deploy
-// microvm-deps` creates. It is a demo of its own
-// rather than a flag on demo-egress so that it appears in help and in the
-// `delete all` sweep, and so that both can be installed side by side: the
-// networking e2e suite runs against whichever the sandbox class under test
-// selects.
+// It is a demo of its own rather than a flag on demo-egress so that it appears
+// in help and in the `delete all` sweep, and so that both can be installed side
+// by side: the networking e2e suite runs against whichever the sandbox class
+// under test selects.
 package egressmicrovm
 
 import (
@@ -35,7 +33,7 @@ const namespace = "ate-demo-egress-microvm"
 func init() {
 	demos.Register(&demos.Substrate{
 		DemoName:           "demo-egress-microvm",
-		Short:              "Egress policy enforcement on micro-VM workers (needs `deploy microvm-deps`)",
+		Short:              "Egress policy enforcement on micro-VM workers",
 		WorkerPoolManifest: "demos/egress/egress-microvm.yaml.tmpl",
 		Deployments:        []steps.TemplateRef{{Atespace: namespace, Name: "egress-microvm"}},
 		Templates: []demos.SubstrateTemplate{{

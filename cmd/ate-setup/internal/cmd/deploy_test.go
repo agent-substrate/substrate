@@ -42,3 +42,15 @@ func TestComponentDeploySubcommands(t *testing.T) {
 		})
 	}
 }
+
+func TestDeployAteSystemSkipMicroVMDepsFlag(t *testing.T) {
+	t.Cleanup(func() {
+		deployOpts.SkipMicroVMDeps = false
+	})
+	if err := deployAteSystemCmd.ParseFlags([]string{"--skip-microvm-deps"}); err != nil {
+		t.Fatalf("ParseFlags(--skip-microvm-deps): %v", err)
+	}
+	if !deployOpts.SkipMicroVMDeps {
+		t.Error("deployOpts.SkipMicroVMDeps = false, want true")
+	}
+}

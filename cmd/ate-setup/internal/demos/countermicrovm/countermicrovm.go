@@ -14,9 +14,7 @@
 
 // Package countermicrovm installs the micro-VM variant of the counter demo.
 //
-// It needs the cluster-wide `microvm` SandboxConfig that `deploy
-// microvm-deps` creates. It has no external-volume option: the CSI path is
-// covered by demo-counter.
+// It has no external-volume option: the CSI path is covered by demo-counter.
 package countermicrovm
 
 import (
@@ -32,7 +30,7 @@ const namespace = "ate-demo-counter-microvm"
 func init() {
 	demos.Register(&demos.Substrate{
 		DemoName:           "demo-counter-microvm",
-		Short:              "The counter demo on micro-VM workers (needs `deploy microvm-deps`)",
+		Short:              "The counter demo on micro-VM workers",
 		WorkerPoolManifest: "demos/counter/counter-microvm.yaml.tmpl",
 		Deployments:        []steps.TemplateRef{{Atespace: namespace, Name: "counter-microvm"}},
 		Templates: []demos.SubstrateTemplate{{

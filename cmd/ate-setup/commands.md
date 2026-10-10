@@ -86,6 +86,7 @@ that already names a manifest is used as written, and is not looked up.
 |---|---|
 | `deploy ate-system` | `--deploy-ate-system` |
 | `deploy ate-system --setup-csi=nfs` | `--deploy-ate-system --setup-csi=nfs` |
+| `deploy ate-system --skip-microvm-deps` | `--deploy-ate-system --skip-microvm-deps` |
 | `deploy atelet` | `--deploy-atelet` |
 | `deploy apiserver` | `--deploy-ate-apiserver` |
 | `deploy ate-controller` | (no shell equivalent) |
@@ -93,18 +94,13 @@ that already names a manifest is used as written, and is not looked up.
 | `deploy podcertificate-controller` | (no shell equivalent) |
 | `deploy sandboxconfig` | (no shell equivalent) |
 | `deploy postgres` | (no shell equivalent) |
-| `deploy microvm-deps` | `hack/install-microvm-deps.sh --install` |
 
 `deploy ate-system` is the whole control plane: CRDs, RBAC, the store, the
-apiserver, the controller, atenet, and atelet. It creates every `create`
-resource below on the way, so those subcommands are only needed to redo one on
-a running cluster.
-
-`deploy microvm-deps` makes the cluster able to run micro-VM workers: it
-assembles the guest assets, stages them in the object store the atelet pulls
-from, and applies the cluster-wide `microvm` SandboxConfig. `deploy ate-system`
-installs only `gvisor-default`, so this is needed before any micro-VM demo or
-WorkerPool. `deploy benchmarks --sandbox-class=microvm` runs it for you.
+apiserver, the controller, atenet, and atelet. Unless `--skip-microvm-deps` is
+passed, it also stages the micro-VM guest assets into the cluster object store
+and applies the `microvm` cluster-wide `SandboxConfig` alongside
+`gvisor-default`. It creates every `create` resource below on the way, so those
+subcommands are only needed to redo one on a running cluster.
 
 ## Publish
 
@@ -122,14 +118,8 @@ their refs; a WorkerPool points `spec.workerImage` to a build to use the ateom.
 | `delete ate-system` | `--delete-ate-system` |
 | `delete atenet` | `--delete-atenet` |
 | `delete all` | `--delete-all` |
-| `delete microvm-deps` | `hack/install-microvm-deps.sh --delete` |
 
 `delete all` removes every registered demo and then the control plane.
-
-`delete microvm-deps` removes only the cluster-wide `microvm` SandboxConfig; the
-staged assets stay in the object store, which outlives any one install. It is
-not part of `delete all`, since the SandboxConfig may belong to something other
-than the install being removed.
 
 ## Create
 
@@ -186,9 +176,9 @@ See
 |---|---|---|
 | `deploy demo counter` | `--deploy-demo-counter` | A counter actor exercising snapshot, resume, and atenet ingress |
 | `deploy demo counter --with-external-volume [--storage-class NAME]` | `--deploy-demo-counter-with-external-volume` (`STORAGE_CLASS=NAME`) | The same, plus an external volume and a pre-seeded file to validate. Run `setup csi` first and name the class it created, e.g. `csi-nfs-sc`; defaults to `standard` |
-| `deploy demo counter-microvm` | `--deploy-demo-counter-microvm` | The counter demo on micro-VM workers. Run `deploy microvm-deps` first |
+| `deploy demo counter-microvm` | `--deploy-demo-counter-microvm` | The counter demo on micro-VM workers |
 | `deploy demo egress` | `--deploy-demo-egress` | Egress policy enforcement through atenet; the actors trust the egress gateway's CA |
-| `deploy demo egress-microvm` | `--deploy-demo-egress-microvm` | The same on micro-VM workers. Run `deploy microvm-deps` first |
+| `deploy demo egress-microvm` | `--deploy-demo-egress-microvm` | The same on micro-VM workers |
 | `deploy demo jupyter` | `--deploy-demo-jupyter` | A Jupyter notebook server per actor, reached through atenet ingress |
 | `deploy demo sandbox` | `--deploy-demo-sandbox` | An on-demand sandbox actor driven by the sandbox client |
 | `deploy demo multi-template` | `--deploy-demo-multi-template` | Two ActorTemplates sharing one WorkerPool |

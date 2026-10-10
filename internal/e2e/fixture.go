@@ -56,7 +56,7 @@ func substrateTemplateSubstitutions(bucket, name string, trustBundle bool) (inli
 	}
 
 	inline["${FIXTURE_SUFFIX}"] = "-" + SandboxClassMicroVM + "-" + name
-	// The cluster-wide SandboxConfig hack/install-microvm-deps.sh installs;
+	// The cluster-wide SandboxConfig deploy ate-system installs;
 	// a missing or stale one fails loudly at template creation.
 	blocks["${TEMPLATE_SANDBOX_CONFIG}"] = "sandboxConfig:\n  sandboxClass: SANDBOX_CLASS_MICROVM\n  configName: microvm"
 	// Only for fixtures that declare no limits of their own. Without them the
