@@ -16,6 +16,7 @@ package clustertrustbundle
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"testing"
@@ -68,6 +69,9 @@ func TestDiscovery(t *testing.T) {
 				}
 				if tc.err != nil && calls != 1 {
 					t.Fatal("fell back after discovery error")
+				}
+				if notServed := errors.Is(err, ErrNotServed); notServed != (tc.err == nil) {
+					t.Fatalf("errors.Is(%v, ErrNotServed) = %t", err, notServed)
 				}
 				return
 			}
@@ -150,13 +154,7 @@ func TestClient(t *testing.T) {
 			check(c.Update(ctx, want, metav1.UpdateOptions{FieldManager: "test"}))
 			receive()
 			check(c.GetCached(want.Name))
-			// Delete through the selected native client to exercise watch deletion.
-			if version == "v1" {
-				err = kc.CertificatesV1().ClusterTrustBundles().Delete(ctx, want.Name, metav1.DeleteOptions{})
-			} else {
-				err = kc.CertificatesV1beta1().ClusterTrustBundles().Delete(ctx, want.Name, metav1.DeleteOptions{})
-			}
-			if err != nil {
+			if err := c.Delete(ctx, want.Name, metav1.DeleteOptions{}); err != nil {
 				t.Fatal(err)
 			}
 			receive()
