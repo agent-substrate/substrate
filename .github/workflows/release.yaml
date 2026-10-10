@@ -12,10 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Pushing a vX.Y.Z[-PRERELEASE] tag creates a DRAFT release with generated
-# notes (.github/release.yml). A maintainer edits and publishes it; see
-# docs/dev/release-notes.md. Run manually to draft a release for a tag that
-# has none; an existing release is never modified.
+# Pushing a vX.Y.Z[-PRERELEASE] tag publishes the release images and then
+# creates a DRAFT release with generated notes (.github/release.yml). A
+# maintainer edits and publishes it; see docs/dev/releasing.md.
+#
+# Images are published only from agent-substrate/substrate, to
+# ghcr.io/agent-substrate/substrate. In any other repository (a fork) the
+# images job is skipped, because GitHub bills package storage to the fork's
+# owner, and the draft is created as before.
+#
+# Run manually to publish images or draft a release for an existing tag.
+# Images that already exist and an existing release are left unchanged.
 name: release
 on:
   push:
@@ -25,14 +32,117 @@ on:
       tag:
         description: 'Existing tag to draft a release for (e.g. v0.3.0)'
         required: true
-# Creating a release needs contents: write.
+      force:
+        description: 'Rebuild and replace images that already exist for the tag'
+        type: boolean
+        default: false
+      dry_run_images:
+        description: 'Build the images into a registry inside the job and discard them; no images published, no draft'
+        type: boolean
+        default: false
+# Each job requests the permissions it needs.
 permissions:
-  contents: write
+  contents: read
 concurrency:
   group: release-${{ inputs.tag || github.ref_name }}
 jobs:
-  draft:
+  # The only job that writes to a registry.
+  images:
+    if: github.repository == 'agent-substrate/substrate' && !inputs.dry_run_images
     runs-on: ubuntu-latest
+    # Building the Rust module in envoy-dataplane for arm64 runs under QEMU.
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+    # Read by ate-setup publish release-images.
+    env:
+      VERSION: ${{ inputs.tag || github.ref_name }}
+      KO_DOCKER_REPO: ghcr.io/agent-substrate/substrate
+      KO_DEFAULTPLATFORMS: linux/amd64,linux/arm64
+      # inputs.force is empty on a tag push, and ate-setup rejects an empty bool.
+      ATE_PUBLISH_FORCE: ${{ inputs.force == true }}
+    steps:
+    - name: Checkout
+      uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      with:
+        ref: refs/tags/${{ inputs.tag || github.ref_name }}
+        persist-credentials: false
+    - name: Setup Go
+      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+      with:
+        go-version-file: 'go.mod'
+    # ko cross-compiles Go and needs no emulation. The envoy-dataplane
+    # Dockerfile compiles Rust inside an arm64 container, which runs under QEMU.
+    # The handler needs the F (fix-binary) flag: without it the kernel looks for
+    # the interpreter inside each container, where it does not exist.
+    - name: Set up QEMU
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq --no-install-recommends qemu-user-static
+        grep -E '^flags:.*F' /proc/sys/fs/binfmt_misc/qemu-aarch64
+    # The default docker driver cannot push a multi-platform image.
+    - name: Set up buildx
+      uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+    # ko, docker buildx, and ate-setup's registry checks all read the
+    # credentials docker login stores.
+    - name: Log in to ghcr.io
+      env:
+        TOKEN: ${{ github.token }}
+      run: docker login ghcr.io --username "${GITHUB_ACTOR}" --password-stdin <<<"${TOKEN}"
+    # Builds nothing if every image already exists for the tag, unless forced,
+    # and checks every image for every platform after pushing.
+    - name: Publish images
+      run: go run ./cmd/ate-setup publish release-images
+  # The same build and checks against a registry that exists only for the
+  # duration of this job. Runs only when started manually with dry_run_images.
+  images-dry-run:
+    if: inputs.dry_run_images
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    services:
+      registry:
+        image: registry:3
+        ports: ['5000:5000']
+    env:
+      VERSION: ${{ inputs.tag }}
+      KO_DOCKER_REPO: localhost:5000/substrate
+      KO_DEFAULTPLATFORMS: linux/amd64,linux/arm64
+      ATE_PUBLISH_FORCE: ${{ inputs.force == true }}
+    steps:
+    - name: Checkout
+      uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      with:
+        ref: refs/tags/${{ inputs.tag }}
+        persist-credentials: false
+    - name: Setup Go
+      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+      with:
+        go-version-file: 'go.mod'
+    - name: Set up QEMU
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq --no-install-recommends qemu-user-static
+        grep -E '^flags:.*F' /proc/sys/fs/binfmt_misc/qemu-aarch64
+    - name: Set up buildx
+      uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      with:
+        # Lets the builder container reach the registry on the runner's
+        # localhost.
+        driver-opts: network=host
+    - name: Publish images
+      run: go run ./cmd/ate-setup publish release-images
+  draft:
+    needs: images
+    # Runs after images succeeded, or when images was skipped (any repository
+    # other than agent-substrate/substrate). If images failed, no draft is
+    # created, so a release cannot be published without its images. Skipped
+    # in a dry run.
+    if: ${{ !cancelled() && !inputs.dry_run_images && (needs.images.result == 'success' || needs.images.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    # Creating a release needs contents: write.
+    permissions:
+      contents: write
     steps:
     - name: Checkout
       uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0

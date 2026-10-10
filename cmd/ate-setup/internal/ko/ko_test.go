@@ -99,7 +99,7 @@ func TestBuildTagged(t *testing.T) {
 	binary, argsFile := fakeKo(t, "repo/ateapi:v1.2.3@sha256:a\\nrepo/atelet:v1.2.3@sha256:b\\n")
 	r := &Runner{Root: t.TempDir(), Stderr: os.Stderr, binary: binary}
 
-	refs, err := r.BuildTagged(t.Context(), "v1.2.3", "./cmd/ateapi", "./cmd/atelet")
+	refs, err := r.BuildTagged(t.Context(), "v1.2.3", []string{"org.example/source=https://example.com"}, "./cmd/ateapi", "./cmd/atelet")
 	if err != nil {
 		t.Fatalf("BuildTagged() error = %v", err)
 	}
@@ -114,7 +114,7 @@ func TestBuildTagged(t *testing.T) {
 	if got := args[:3]; !slices.Equal(got, []string{"build", "./cmd/ateapi", "./cmd/atelet"}) {
 		t.Errorf("args[:3] = %v, want [build ./cmd/ateapi ./cmd/atelet]", got)
 	}
-	for _, want := range []string{"--tags=v1.2.3", "--base-import-paths"} {
+	for _, want := range []string{"--tags=v1.2.3", "--base-import-paths", "--image-label=org.example/source=https://example.com"} {
 		if !slices.Contains(args, want) {
 			t.Errorf("args = %v, want %s", args, want)
 		}
@@ -127,7 +127,7 @@ func TestBuildTaggedRejectsMissingRefs(t *testing.T) {
 	binary, _ := fakeKo(t, "repo/ateapi:v1@sha256:a\\n")
 	r := &Runner{Root: t.TempDir(), Stderr: os.Stderr, binary: binary}
 
-	if _, err := r.BuildTagged(t.Context(), "v1", "./cmd/ateapi", "./cmd/atelet"); err == nil {
+	if _, err := r.BuildTagged(t.Context(), "v1", nil, "./cmd/ateapi", "./cmd/atelet"); err == nil {
 		t.Error("BuildTagged() error = nil, want one for 1 ref from 2 packages")
 	}
 }
