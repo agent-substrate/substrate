@@ -1375,9 +1375,6 @@ spec:
       # ext_proc handler (no xDS server, no Kubernetes access). The egress
       # Envoy calls it over localhost to
       # authenticate actor identity against the ate API on every CONNECT.
-      #
-      # Ingress and egress are separate Deployments because they scale
-      # independently, not because they need separate binaries.
       - name: ext-proc
         image: ko://github.com/agent-substrate/substrate/cmd/atenet
         args:

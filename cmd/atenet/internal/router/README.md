@@ -188,8 +188,7 @@ than falling back to the other handler, which would run the request through the
 wrong trust model.
 
 Ingress and egress are deployed separately — `atenet-router` fronts the
-ingress dataplane, `atenet-egress` the egress gateway — because the two scale
-independently, not because they need separate binaries.
+ingress dataplane, `atenet-egress` the egress gateway.
 
 `--atenet-dataplane` selects the dataplane for both Deployments. Each gateway has
 its own static configuration because ingress and egress scale independently.
