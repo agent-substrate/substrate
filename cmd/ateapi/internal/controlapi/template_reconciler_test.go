@@ -327,7 +327,7 @@ func testTemplate(opts ...func(*ateapipb.ActorTemplate)) *ateapipb.ActorTemplate
 			{Name: "main", Image: "img", WakeupProbe: &ateapipb.ContainerWakeupProbe{}},
 		},
 		SnapshotConfig: &ateapipb.SnapshotConfig{
-			GoldenSnapshotConfig: &ateapipb.GoldenSnapshotConfig{Enabled: proto.Bool(true)},
+			GoldenSnapshotConfig: &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_ENABLED},
 		},
 		Status: &ateapipb.ActorTemplateStatus{},
 	}
@@ -344,7 +344,7 @@ func withoutWakeupProbe(tmpl *ateapipb.ActorTemplate) {
 }
 
 func withoutGoldenSnapshot(tmpl *ateapipb.ActorTemplate) {
-	tmpl.SnapshotConfig.GoldenSnapshotConfig.Enabled = proto.Bool(false)
+	tmpl.SnapshotConfig.GoldenSnapshotConfig.Mode = ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED
 }
 
 // seededGoldenStatus returns the template's golden snapshot status, allocating
@@ -419,11 +419,18 @@ func TestReconcileOne(t *testing.T) {
 		// wantTag indicates that the golden tag should be recorded.
 		wantTag bool
 		// wantDeadline asserts whether take_golden_snapshot_at is set.
-		wantDeadline bool
-		wantCreates  int
-		wantResumes  int
-		wantSuspends int
+		wantDeadline  bool
+		wantCreates   int
+		wantResumes   int
+		wantSuspends  int
+		wantUnchanged bool
 	}{
+		{
+			name:          "golden snapshot disabled is a noop",
+			template:      testTemplate(withoutGoldenSnapshot),
+			control:       &fakeGoldenControl{},
+			wantUnchanged: true,
+		},
 		{
 			name:         "happy path creates, resumes, and snapshots the golden actor",
 			template:     testTemplate(),
@@ -599,6 +606,15 @@ func TestReconcileOne(t *testing.T) {
 			if tt.template == nil {
 				return
 			}
+			if tt.wantUnchanged {
+				got, err := st.GetActorTemplate(t.Context(), testTemplateRef)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !proto.Equal(tt.template, got) {
+					t.Fatalf("template was modified: %v", got)
+				}
+			}
 			snapshotStatus := st.storedStatus(t, testTemplateRef).GetGoldenSnapshotStatus()
 			errorMessage := snapshotStatus.GetErrorMessage()
 			if tt.wantFailedReason == "" && tt.wantMessage == "" {
@@ -620,24 +636,6 @@ func TestReconcileOne(t *testing.T) {
 				t.Error("stored take_golden_snapshot_at is nil, want set")
 			}
 		})
-	}
-}
-
-func TestReconcileOne_GoldenSnapshotDisabled(t *testing.T) {
-	tmpl := testTemplate(withoutGoldenSnapshot)
-	st := newFakeTemplateStore(tmpl)
-	// A disabled template must not make any control-plane calls.
-	r := newTestTemplateReconciler(st, nil)
-	requeueAfter, err := r.reconcileOne(t.Context(), testTemplateRef)
-	if err != nil || requeueAfter != 0 {
-		t.Fatalf("reconcileOne() = (%v, %v), want (0, nil)", requeueAfter, err)
-	}
-	got, err := st.GetActorTemplate(t.Context(), testTemplateRef)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !proto.Equal(tmpl, got) {
-		t.Fatalf("disabled template was modified: %v", got)
 	}
 }
 

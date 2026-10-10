@@ -121,7 +121,7 @@ func (r *ActorTemplateReconciler) resync(ctx context.Context) {
 			return
 		}
 		for _, tmpl := range page.Items {
-			if !tmpl.GetSnapshotConfig().GetGoldenSnapshotConfig().GetEnabled() {
+			if tmpl.GetSnapshotConfig().GetGoldenSnapshotConfig().GetMode() == ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED {
 				continue
 			}
 			ref := resources.ActorTemplateRefFromActorTemplate(tmpl)
@@ -193,7 +193,7 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 		return 0, err
 	}
 
-	if !tmpl.GetSnapshotConfig().GetGoldenSnapshotConfig().GetEnabled() {
+	if tmpl.GetSnapshotConfig().GetGoldenSnapshotConfig().GetMode() == ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED {
 		return 0, nil
 	}
 

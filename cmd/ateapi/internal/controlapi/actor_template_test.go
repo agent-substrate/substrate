@@ -31,7 +31,6 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -182,7 +181,7 @@ func TestCreateActorTemplateIgnoresServerOwnedFields(t *testing.T) {
 
 	want := validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
 		tmpl.Metadata.Version = 1
-		tmpl.SnapshotConfig.GoldenSnapshotConfig = &ateapipb.GoldenSnapshotConfig{Enabled: proto.Bool(true)}
+		tmpl.SnapshotConfig.GoldenSnapshotConfig = &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_ENABLED}
 		tmpl.WorkerSelector = in.GetWorkerSelector()
 		tmpl.Containers = in.GetContainers()
 		tmpl.Resources = in.GetResources()

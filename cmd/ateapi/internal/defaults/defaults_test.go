@@ -46,7 +46,7 @@ func TestApply(t *testing.T) {
 		in:   &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{}},
 		want: &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{
 			PreferredFidelity:    scopeFull,
-			GoldenSnapshotConfig: &ateapipb.GoldenSnapshotConfig{Enabled: proto.Bool(true)},
+			GoldenSnapshotConfig: &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_ENABLED},
 		}},
 	}, {
 		name: "set scopes are kept",
@@ -55,7 +55,7 @@ func TestApply(t *testing.T) {
 		}},
 		want: &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{
 			PreferredFidelity:    scopeData,
-			GoldenSnapshotConfig: &ateapipb.GoldenSnapshotConfig{Enabled: proto.Bool(true)},
+			GoldenSnapshotConfig: &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_ENABLED},
 		}},
 	}, {
 		name: "container without wakeup probe stays without one",
@@ -157,21 +157,23 @@ func TestApply(t *testing.T) {
 
 func TestGoldenSnapshotDefaults(t *testing.T) {
 	for _, tt := range []struct {
-		name    string
-		config  string
-		enabled bool
+		name   string
+		config string
+		mode   ateapipb.GoldenSnapshotMode
 	}{
-		{"omitted config", `{}`, true},
-		{"omitted enabled", `{"goldenSnapshotConfig": {}}`, true},
-		{"enabled", `{"goldenSnapshotConfig": {"enabled": true}}`, true},
-		{"disabled", `{"goldenSnapshotConfig": {"enabled": false}}`, false},
+		{"omitted config", `{}`, ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_ENABLED},
+		{"omitted mode", `{"goldenSnapshotConfig": {}}`, ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_ENABLED},
+		{"unspecified mode", `{"goldenSnapshotConfig": {"mode": "GOLDEN_SNAPSHOT_MODE_UNSPECIFIED"}}`, ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_ENABLED},
+		{"explicit zero", `{"goldenSnapshotConfig": {"mode": 0}}`, ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_ENABLED},
+		{"enabled", `{"goldenSnapshotConfig": {"mode": "GOLDEN_SNAPSHOT_MODE_ENABLED"}}`, ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_ENABLED},
+		{"disabled", `{"goldenSnapshotConfig": {"mode": "GOLDEN_SNAPSHOT_MODE_DISABLED"}}`, ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			tmpl := &ateapipb.ActorTemplate{}
 			if err := protojson.Unmarshal([]byte(`{"snapshotConfig": `+tt.config+`}`), tmpl); err != nil {
 				t.Fatal(err)
 			}
-			// Both JSON and gRPC must preserve an explicit false through defaulting.
+			// JSON and gRPC use the enum value rather than field presence.
 			data, err := proto.Marshal(tmpl)
 			if err != nil {
 				t.Fatal(err)
@@ -180,7 +182,7 @@ func TestGoldenSnapshotDefaults(t *testing.T) {
 				t.Fatal(err)
 			}
 			Apply(tmpl)
-			want := &ateapipb.GoldenSnapshotConfig{Enabled: proto.Bool(tt.enabled)}
+			want := &ateapipb.GoldenSnapshotConfig{Mode: tt.mode}
 			if diff := cmp.Diff(want, tmpl.GetSnapshotConfig().GetGoldenSnapshotConfig(), protocmp.Transform()); diff != "" {
 				t.Fatalf("golden snapshot default mismatch (-want +got):\n%s", diff)
 			}

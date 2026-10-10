@@ -1161,13 +1161,22 @@ message SnapshotConfig {
   GoldenSnapshotConfig golden_snapshot_config = 5;
 }
 
+// GoldenSnapshotMode selects whether a template builds a golden snapshot.
+enum GoldenSnapshotMode {
+  GOLDEN_SNAPSHOT_MODE_UNSPECIFIED = 0;
+  GOLDEN_SNAPSHOT_MODE_ENABLED = 1;
+  GOLDEN_SNAPSHOT_MODE_DISABLED = 2;
+}
+
 // GoldenSnapshotConfig controls automated golden snapshot creation for a template.
 message GoldenSnapshotConfig {
-  // enabled defaults to true when unset. Set false to skip creating the
+  // mode defaults to ENABLED when unspecified. DISABLED skips creating the
   // template's golden actor and tag.
   //
-  // +k8s:optional
-  optional bool enabled = 1;
+  // +k8s:required
+  // +k8s:minimum=1
+  // +k8s:maximum=2 # keep this in sync with the GoldenSnapshotMode enum
+  GoldenSnapshotMode mode = 1;
 }
 
 // Container is a single application container of an ActorTemplate.

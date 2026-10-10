@@ -184,7 +184,7 @@ for a complete manifest example.
 | `ATESPACE` | The atespace the template belongs to. |
 | `NAME` | The template's name. |
 | `SANDBOX CLASS` | The sandbox runtime family (`SANDBOX_CLASS_GVISOR` or `SANDBOX_CLASS_MICROVM`). |
-| `GOLDEN TAG` | The golden tag's name once it exists; empty while the golden build is still running. |
+| `GOLDEN TAG` | The golden tag's name once it exists; `DISABLED` when the template opts out of golden snapshot creation; empty while the golden build is still running. |
 | `ERROR` | `ERROR` when the golden build failed; `-o yaml` shows the full message. |
 | `AGE` | Time elapsed since the template was created. |
 

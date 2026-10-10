@@ -473,6 +473,17 @@ func TestPrintActorTemplatesTo_Table(t *testing.T) {
 				ConfigName:   "gvisor-default",
 			},
 		},
+		{
+			Metadata: &ateapipb.ResourceMetadata{
+				Atespace:   "ate-demo-counter-substrate",
+				Name:       "counter-3",
+				CreateTime: timestamppb.New(now.Add(-15 * time.Minute)),
+			},
+			SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR},
+			SnapshotConfig: &ateapipb.SnapshotConfig{
+				GoldenSnapshotConfig: &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED},
+			},
+		},
 	}
 
 	if err := PrintActorTemplatesTo(&buf, templates, "table"); err != nil {
@@ -484,6 +495,7 @@ func TestPrintActorTemplatesTo_Table(t *testing.T) {
 	expected := `ATESPACE                             NAME              SANDBOX CLASS           GOLDEN TAG   ERROR   AGE
 ate-demo-counter-substrate           counter           SANDBOX_CLASS_GVISOR    golden-tag           5m
 ate-demo-counter-substrate           counter-2         SANDBOX_CLASS_GVISOR                         3d
+ate-demo-counter-substrate           counter-3         SANDBOX_CLASS_GVISOR    DISABLED             15m
 ate-demo-counter-substrate-microvm   counter-microvm   SANDBOX_CLASS_MICROVM                ERROR   5h
 `
 	if diff := cmp.Diff(expected, buf.String()); diff != "" {
