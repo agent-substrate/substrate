@@ -14,9 +14,9 @@
 
 """Harvests server-side Prometheus ground-truth timeseries during benchmark trials.
 
-Queries Prometheus over [T_start, T_end] and the steady-state window [T_steady, T_end]
-to capture cluster packing, node and pod PSI stalls, and snapshot sizes, latencies
-and throughput.
+Queries Prometheus over [T_start, T_end] and the steady-state window inside it
+to capture cluster packing, node and pod PSI stalls, snapshot sizes, latencies
+and throughput, running actors and memory working set.
 """
 
 import csv
@@ -26,6 +26,7 @@ import sys
 import time
 import urllib.parse
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, TextIO
 
@@ -274,12 +275,35 @@ def _steady_values(
     return vals
 
 
-def _rpc_buckets(method: str) -> str:
-    """The duration bucket selector for one AteomHerder RPC."""
-    return (
-        'rpc_server_call_duration_seconds_bucket'
-        f'{{rpc_method="atelet.AteomHerder/{method}"}}'
-    )
+def _snapshot_op(op: str, suffix: str) -> str:
+    """atelet's histogram for a whole suspend (checkpoint) or resume (restore).
+
+    Buckets reach 60s. Every snapshot kind counts, like the size metric, which
+    has no kind label.
+    """
+    return f'ate_actor_{op}_duration_seconds_{suffix}{{ate_snapshot_phase="total"}}'
+
+
+def _series_samples(series: dict[str, Any]) -> dict[int, float]:
+    """A range series' finite values by timestamp; malformed points are skipped.
+
+    Inf is dropped as well as NaN: these reach server_summary.json, and
+    json.dumps would emit a bare Infinity that strict parsers reject.
+    """
+    samples: dict[int, float] = {}
+    for pt in series.get("values", []):
+        try:
+            t, val = int(pt[0]), float(pt[1])
+        except (ValueError, IndexError, TypeError):
+            continue
+        if not math.isnan(val) and not math.isinf(val):
+            samples[t] = val
+    return samples
+
+
+def _process_key(metric: dict[str, str]) -> str:
+    """`exported_instance` when a collector re-exports, else the scraped one."""
+    return metric.get("exported_instance") or metric.get("instance", "")
 
 
 def _harvest_cluster_packing(
@@ -302,18 +326,9 @@ def _harvest_cluster_packing(
     for series in packing_series:
         metric = series.get("metric", {})
         state = metric.get("ate_worker_state", "unknown")
-        instance = metric.get("exported_instance") or metric.get("instance", "")
-        samples = by_instance.setdefault(instance, {})
-        for pt in series.get("values", []):
-            try:
-                t = int(pt[0])
-                val = float(pt[1])
-                # Inf as well as NaN: these reach server_summary.json, and
-                # json.dumps would emit a bare Infinity that strict parsers reject.
-                if not math.isnan(val) and not math.isinf(val):
-                    samples.setdefault(t, {})[state] = val
-            except (ValueError, IndexError):
-                continue
+        samples = by_instance.setdefault(_process_key(metric), {})
+        for t, val in _series_samples(series).items():
+            samples.setdefault(t, {})[state] = val
 
     # The collector re-exports exited ateapis until they expire, so read
     # the process whose series runs latest, which is a live one.
@@ -436,15 +451,13 @@ def _harvest_snapshots(
     c_end = round(count_end) if count_end is not None else None
     snap_avg = _ratio(delta(snap_selector % "_sum"), count, scale=mb)
 
-    def rpc_mean(method: str) -> float | None:
-        sel = f'{{rpc_method="atelet.AteomHerder/{method}"}}'
+    def op_mean(op: str) -> float | None:
         return _ratio(
-            delta(f"rpc_server_call_duration_seconds_sum{sel}"),
-            delta(f"rpc_server_call_duration_seconds_count{sel}"),
+            delta(_snapshot_op(op, "sum")), delta(_snapshot_op(op, "count"))
         )
 
-    restore_q = quantiles(_rpc_buckets("Restore"))
-    ckpt_q = quantiles(_rpc_buckets("Checkpoint"))
+    restore_q = quantiles(_snapshot_op("restore", "bucket"))
+    ckpt_q = quantiles(_snapshot_op("checkpoint", "bucket"))
 
     # All files' bytes over `total`-phase seconds.
     written = delta("atelet_snapshot_size_bytes_sum")
@@ -465,14 +478,223 @@ def _harvest_snapshots(
         "restore_p90_s": restore_q[1],
         "restore_p95_s": restore_q[2],
         "restore_p99_s": restore_q[3],
-        "restore_mean_s": rpc_mean("Restore"),
+        "restore_mean_s": op_mean("restore"),
         "checkpoint_p50_s": ckpt_q[0],
         "checkpoint_p90_s": ckpt_q[1],
         "checkpoint_p95_s": ckpt_q[2],
         "checkpoint_p99_s": ckpt_q[3],
-        "checkpoint_mean_s": rpc_mean("Checkpoint"),
+        "checkpoint_mean_s": op_mean("checkpoint"),
         "checkpoint_mb_s": checkpoint_mb_s,
     }
+
+
+def _count_active_actors(
+    prom_url: str,
+    start_ts: int,
+    end_ts: int,
+    steady_start_ts: int,
+    steady_end_ts: int,
+    lag_s: int = 0,
+) -> dict[str, Any]:
+    """Running actors over the run, cluster-wide.
+
+    `summary` is percentiles of the cluster-wide total over the steady window.
+    `timeseries` covers the whole run, ramp-up included: every 10s, the total
+    and `active_atelets` hosting an actor. `atelets` counts the atelet
+    processes seen in the run, not nodes.
+
+    The atelet drops a template's series when its last actor on the node
+    leaves, so at a step where at least one atelet reported, a missing series
+    is zero actors. A step where none reported is skipped, since a failed
+    scrape looks the same as no actors anywhere. If the metric was never seen,
+    every field stays null.
+
+    The collector re-exports an exited atelet's last value for about 5 minutes,
+    so a restarted atelet can briefly count twice. An atelet scraped directly
+    and through a collector shows up under 2 keys and is not merged.
+
+    The atelet exports it like the snapshot block, so it is read `lag_s // 2`
+    late and each point is stamped back by the same amount.
+    """
+    shift = lag_s // 2
+    first, last = start_ts + shift, max(end_ts, start_ts + 1) + shift
+    steady_first, steady_last = steady_start_ts + shift, steady_end_ts + shift
+    res = query_prometheus_range(
+        prom_url,
+        "sum by (instance, exported_instance) (ate_actor_stats_sampled_actors)",
+        first, last, step="10s",
+    )
+    # Same key as packing; 2 series under one key (e.g. 2 collector replicas)
+    # describe the same atelet, so they merge by max, not sum.
+    by_atelet: dict[str, dict[int, float]] = {}
+    for series in res:
+        new = _series_samples(series)
+        if not new:
+            continue
+        samples = by_atelet.setdefault(_process_key(series.get("metric", {})), {})
+        for t, v in new.items():
+            samples[t] = max(samples.get(t, v), v)
+
+    if not by_atelet:
+        return {
+            "summary": compute_percentiles([]),
+            "atelets": None,
+            "timeseries": [],
+        }
+
+    # Range query samples land on first + k * step.
+    points, steady_totals = [], []
+    for t in range(first, last + 1, 10):
+        if not any(t in s for s in by_atelet.values()):
+            continue
+        counts = [s.get(t, 0.0) for s in by_atelet.values()]
+        total = sum(counts)
+        points.append({
+            "timestamp": t - shift,
+            "active_actors": total,
+            "active_atelets": sum(1 for v in counts if v > 0),
+        })
+        if steady_first <= t <= steady_last:
+            steady_totals.append(total)
+    return {
+        "summary": compute_percentiles(steady_totals),
+        "atelets": len(by_atelet),
+        "timeseries": points,
+    }
+
+
+# Live worker pods: the rate drops a deleted pod's stale series in ~1 min, not 5.
+WORKER_PODS = (
+    "rate(container_cpu_usage_seconds_total"
+    '{namespace="benchmark-workloads", container="ateom"}[1m]) > 0'
+)
+
+# Only nodes/pods with a live worker; max, not sum: a restart briefly has 2 series.
+WORKING_SET_QUERIES = {
+    "node": (
+        'max by (instance) (container_memory_working_set_bytes{container="node"})'
+        f" and on (instance) count by (instance) ({WORKER_PODS})"
+    ),
+    "ateom": (
+        "max by (pod) (container_memory_working_set_bytes"
+        '{namespace="benchmark-workloads", container="ateom"})'
+        f" and on (pod) ({WORKER_PODS})"
+    ),
+    "atelet": (
+        "max by (pod, instance) (container_memory_working_set_bytes"
+        '{namespace="ate-system", container="atelet"})'
+        f" and on (instance) count by (instance) ({WORKER_PODS})"
+    ),
+}
+
+# Actors' working set and running count per atelet, all templates summed; keyed
+# like packing and active_actors. Not node names, so no worker filter: the
+# atelet stops exporting on a node with no running actor.
+ACTOR_WORKING_SET = (
+    "sum by (instance, exported_instance) (ate_actor_stats_memory_working_set_bytes)"
+)
+ACTOR_COUNT = "sum by (instance, exported_instance) (ate_actor_stats_sampled_actors)"
+WORKING_SET_KEYS = (*WORKING_SET_QUERIES, "actor", "per_actor")
+
+BYTES_PER_GIB = 2**30
+
+
+def _label_key(metric: dict[str, str]) -> tuple:
+    """Every label, so each series keeps its own key."""
+    return tuple(sorted(metric.items()))
+
+
+def _read_series(
+    prom_url: str, query: str, start_ts: int, end_ts: int, shift: int = 0,
+    key: Callable[[dict[str, str]], Any] = _label_key,
+) -> dict[Any, dict[int, float]]:
+    """Samples per `key` every 10s, read `shift` late and moved back by it.
+
+    Series sharing a key describe the same thing, so they merge by max.
+    """
+    res = query_prometheus_range(
+        prom_url, query, start_ts + shift, end_ts + shift, step="10s"
+    )
+    out: dict[Any, dict[int, float]] = {}
+    for series in res:
+        new = _series_samples(series)
+        if not new:
+            continue
+        samples = out.setdefault(key(series.get("metric", {})), {})
+        for t, val in new.items():
+            samples[t - shift] = max(samples.get(t - shift, val), val)
+    return out
+
+
+def _summarize_gb(
+    series: dict[Any, dict[int, float]],
+    steady_start_ts: int,
+    steady_end_ts: int,
+) -> dict[str, Any]:
+    """Steady percentiles, series seen in steady, and a 10s sum/max timeseries."""
+    by_ts: dict[int, list[float]] = {}
+    steady_gb: list[float] = []
+    steady_series = 0
+    for samples in series.values():
+        in_steady = False
+        for t, val in samples.items():
+            gb = val / BYTES_PER_GIB
+            by_ts.setdefault(t, []).append(gb)
+            if steady_start_ts <= t <= steady_end_ts:
+                steady_gb.append(gb)
+                in_steady = True
+        steady_series += in_steady
+    return {
+        "summary": compute_percentiles(steady_gb),
+        "count": steady_series if by_ts else None,
+        "timeseries": [
+            {
+                "timestamp": t,
+                "total_gb": round(sum(v), 4),
+                "max_gb": round(max(v), 4),
+            }
+            for t, v in sorted(by_ts.items())
+        ],
+    }
+
+
+def _measure_working_set(
+    prom_url: str,
+    start_ts: int,
+    end_ts: int,
+    steady_start_ts: int,
+    steady_end_ts: int,
+    lag_s: int = 0,
+) -> dict[str, Any]:
+    """Working set GiB per node, ateom, atelet and actor; null, not 0, with no series.
+
+    `ateom` is the whole worker pod, every actor on it included. `actor` is the
+    atelet's sum over the actors it measured, per atelet; `per_actor` divides it
+    by their count. The atelet samples about once a minute and exports late, so
+    both are read `lag_s // 2` late and moved back onto the run's 10s grid.
+    """
+    def summarize(series: dict[Any, dict[int, float]]) -> dict[str, Any]:
+        return _summarize_gb(series, steady_start_ts, steady_end_ts)
+
+    out: dict[str, Any] = {
+        key: summarize(_read_series(prom_url, query, start_ts, end_ts))
+        for key, query in WORKING_SET_QUERIES.items()
+    }
+    shift = lag_s // 2
+    actor = _read_series(
+        prom_url, ACTOR_WORKING_SET, start_ts, end_ts, shift, key=_process_key
+    )
+    count = _read_series(
+        prom_url, ACTOR_COUNT, start_ts, end_ts, shift, key=_process_key
+    )
+    out["actor"] = summarize(actor)
+    # Same atelet and timestamp; a missing or zero count is skipped.
+    out["per_actor"] = summarize({
+        key: {t: v / count[key][t] for t, v in samples.items()
+              if count.get(key, {}).get(t)}
+        for key, samples in actor.items()
+    })
+    return out
 
 
 def harvest_server_telemetry(
@@ -485,8 +707,9 @@ def harvest_server_telemetry(
 ) -> dict[str, Any]:
     """Harvests the ground truth metric streams from Prometheus.
 
-    Only the atelet-exported snapshot block is read late, by up to `lag_s`;
-    packing and PSI are scraped directly and read over the run window as is.
+    Only the atelet-exported snapshot, active actor and actor working set
+    blocks are read late, by `lag_s // 2`; packing, PSI and the cAdvisor
+    working set aren't shifted and are read over the run window as is.
     """
     steady_end = end_ts if steady_end_ts is None else steady_end_ts
     return {
@@ -501,6 +724,12 @@ def harvest_server_telemetry(
         ),
         "snapshots": _harvest_snapshots(
             prom_url, steady_start_ts, steady_end, lag_s
+        ),
+        "active_actors": _count_active_actors(
+            prom_url, start_ts, end_ts, steady_start_ts, steady_end, lag_s
+        ),
+        "working_set": _measure_working_set(
+            prom_url, start_ts, end_ts, steady_start_ts, steady_end, lag_s
         ),
     }
 
@@ -539,8 +768,8 @@ def extract_and_record_server_telemetry(
     )
     log(
         f"Detected steady-state window: [{steady_start}, {steady_end}] "
-        f"({steady_end - steady_start}s), snapshot reads at "
-        f"[{steady_start + lag_s // 2}, {steady_end + lag_s // 2}]"
+        f"({steady_end - steady_start}s), atelet-exported reads (snapshots, "
+        f"active actors) at [{steady_start + lag_s // 2}, {steady_end + lag_s // 2}]"
     )
 
     telemetry = harvest_server_telemetry(
@@ -595,6 +824,14 @@ def extract_and_record_server_telemetry(
             measurements[f"{rpc}_{p}_s"] = snaps.get(f"{rpc}_{p}_s")
         measurements[f"{rpc}_mean_s"] = snaps.get(f"{rpc}_mean_s")
     measurements["checkpoint_mb_s"] = snaps.get("checkpoint_mb_s")
+    active = telemetry.get("active_actors", {}).get("summary", {})
+    for p in ps:
+        measurements[f"active_actors_{p}"] = active.get(p)
+    working_set = telemetry.get("working_set", {})
+    for block in WORKING_SET_KEYS:
+        ws = working_set.get(block, {}).get("summary", {})
+        for p in (*ps, "max"):
+            measurements[f"working_set_{block}_{p}_gb"] = ws.get(p)
 
     jsonl_row = {
         "timestamp": data_ts,

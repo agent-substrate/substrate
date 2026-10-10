@@ -40,8 +40,8 @@ WINDOW = {"prom_url": "http://localhost:9090", "start_ts": 100,
           "end_ts": 105, "steady_start_ts": 100}
 
 
-def ranges(packing, node=(), pod=()):
-    """A query_prometheus_range fake answering packing, node PSI and pod PSI.
+def ranges(packing, node=(), pod=(), active=(), ws=(), actor_ws=()):
+    """A query_prometheus_range fake: packing, PSI, active actors, working set.
 
     Pod PSI only answers the pod-slice selector, so a query that loses the id
     regex (and would also sum the pause container) gets nothing back. Node PSI
@@ -54,6 +54,13 @@ def ranges(packing, node=(), pod=()):
     def fake(_url, query, *_args, **_kwargs):
         if "ate_workerpool_workers" in query:
             return packing
+        if "ate_actor_stats_sampled_actors" in query:
+            return list(active)
+        if "ate_actor_stats_memory_working_set_bytes" in query:
+            return list(actor_ws)
+        # Before the PSI branch: the node working set query has container="node".
+        if "container_memory_working_set_bytes" in query:
+            return list(ws)
         if 'container="node"' in query:
             return list(node) if worker_nodes in query and pod_slice in query else []
         return list(pod) if pod_slice in query else []
@@ -84,17 +91,20 @@ MB = 1024 * 1024
 # The memory image selector: pages.img (gVisor) or memory-ranges (microVM).
 MEMORY_IMAGE = '{file_name=~"pages.img|memory-ranges"}'
 
+# A whole suspend or resume, every snapshot kind.
+SNAPSHOT_OP = '{ate_snapshot_phase="total"}'
+
 # Each cumulative sum _harvest_snapshots reads, by a substring of its query.
 SUMS = {
     "count": "atelet_snapshot_size_bytes_count" + MEMORY_IMAGE,
     "size": "atelet_snapshot_size_bytes_sum" + MEMORY_IMAGE,
     "bytes": "sum(atelet_snapshot_size_bytes_sum)",
-    "seconds": "ate_actor_checkpoint_duration_seconds_sum",
-    "restore_sum": 'seconds_sum{rpc_method="atelet.AteomHerder/Restore"}',
-    "restore_count": 'seconds_count{rpc_method="atelet.AteomHerder/Restore"}',
-    "checkpoint_sum": 'seconds_sum{rpc_method="atelet.AteomHerder/Checkpoint"}',
+    # Checkpoint seconds: both checkpoint_mb_s and checkpoint_mean_s read it.
+    "seconds": "ate_actor_checkpoint_duration_seconds_sum" + SNAPSHOT_OP,
+    "restore_sum": "ate_actor_restore_duration_seconds_sum" + SNAPSHOT_OP,
+    "restore_count": "ate_actor_restore_duration_seconds_count" + SNAPSHOT_OP,
     "checkpoint_count":
-        'seconds_count{rpc_method="atelet.AteomHerder/Checkpoint"}',
+        "ate_actor_checkpoint_duration_seconds_count" + SNAPSHOT_OP,
 }
 
 
@@ -123,14 +133,15 @@ def snapshot_prom(quantile=None, start=None, end=None, at=(100, 105)):
 
 
 def history_csv(rows):
-    """A stats_history.csv built from (timestamp, user count) pairs."""
+    """A stats_history.csv from (timestamp, users) or (timestamp, users, name)."""
     f = tempfile.NamedTemporaryFile(
         "w", delete=False, suffix=".csv", encoding="utf-8"
     )
     writer = csv.DictWriter(f, fieldnames=["Timestamp", "Name", "User Count"])
     writer.writeheader()
-    for ts, users in rows:
-        writer.writerow({"Timestamp": ts, "Name": "Aggregated", "User Count": users})
+    for ts, users, *name in rows:
+        writer.writerow({"Timestamp": ts, "Name": name[0] if name else "Aggregated",
+                         "User Count": users})
     f.close()
     return Path(f.name)
 
@@ -234,16 +245,22 @@ class ServerTelemetryTest(unittest.TestCase):
                   "values": [[100, "0.0"], [105, "0.0"]]} for n in "ab"]
         pods = [{"metric": {"pod": f"benchmark-ateom-{p}"},
                  "values": [[100, "0.5"], [105, "0.5"]]} for p in "ab"]
-        mock_range.side_effect = ranges([partial, full, idle], node=quiet, pod=pods)
+        mock_range.side_effect = ranges(
+            [partial, full, idle], node=quiet, pod=pods,
+            active=[{"metric": {"instance": "atelet-a"}, "values": [[135, "3"]]}],
+            ws=[{"metric": {"instance": "node-a"},
+                 "values": [[100, str(2**30)], [105, str(2**30)]]}],
+            actor_ws=[{"metric": {"instance": "atelet-a"},
+                       "values": [[135, str(6 * 2**30)]]}])
         # The default 70s lag reads the snapshot window at 135 and 140.
         mock_instant.side_effect = snapshot_prom(
             "11.5",
             start={"count": "100", "size": "0", "restore_sum": "0",
-                   "restore_count": "0", "checkpoint_sum": "0",
+                   "restore_count": "0", "seconds": "0",
                    "checkpoint_count": "0"},
             end={"count": "150", "size": str(100 * MB), "bytes": str(100 * MB),
                  "seconds": "50", "restore_sum": "4", "restore_count": "8",
-                 "checkpoint_sum": "100", "checkpoint_count": "50"},
+                 "checkpoint_count": "25"},
             at=(135, 140))
 
         with tempfile.TemporaryDirectory() as td:
@@ -268,12 +285,14 @@ class ServerTelemetryTest(unittest.TestCase):
 
         sleep.assert_called_once_with(65)  # until end 105 + 70, from 110
         self.assertEqual(summary["metadata"]["atelet_lag_s"], 70)
-        # Packing and PSI are not shifted.
-        self.assertEqual({c.args[2:4] for c in mock_range.call_args_list},
-                         {(100, 105)})
+        # Packing, PSI and cAdvisor are not shifted; atelet stats are, like snapshots.
+        windows = {("ate_actor_stats" in c.args[1], c.args[2:4])
+                   for c in mock_range.call_args_list}
+        self.assertEqual(windows, {(False, (100, 105)), (True, (135, 140))})
         self.assertEqual(
             set(summary),
-            {"metadata", "cluster_packing", "node_psi", "pod_psi", "snapshots"},
+            {"metadata", "cluster_packing", "node_psi", "pod_psi", "snapshots",
+             "active_actors", "working_set"},
         )
         packing = summary["cluster_packing"]
         self.assertEqual(packing["summary"]["p50"], 0.8)  # 3 + 1 busy / 5 workers
@@ -293,7 +312,7 @@ class ServerTelemetryTest(unittest.TestCase):
         self.assertEqual(row["metric"], "server_summary")
         m = row["measurements"]
         # Every source answered, so a key wired to a wrong name would read None.
-        self.assertEqual(len(m), 45)
+        self.assertEqual(len(m), 74)
         self.assertEqual([k for k, v in m.items() if v is None], [])
         # Every value a string, so one row's types match every other row's.
         self.assertTrue(all(isinstance(v, str) for v in m.values()))
@@ -304,6 +323,12 @@ class ServerTelemetryTest(unittest.TestCase):
         self.assertEqual(m["snapshot_size_p95_mb"], "11.5")
         self.assertEqual(m["restore_mean_s"], "0.5")
         self.assertEqual(m["checkpoint_mean_s"], "2.0")
+        self.assertEqual(m["active_actors_p99"], "3.0")
+        # Read at 135, moved back to 100; 6 GiB over the 3 actors on atelet-a.
+        actor = summary["working_set"]["actor"]
+        self.assertEqual(actor["timeseries"][0]["timestamp"], 100)
+        self.assertEqual(m["working_set_actor_p50_gb"], "6.0")
+        self.assertEqual(m["working_set_per_actor_p50_gb"], "2.0")
 
     @mock.patch("server_telemetry.query_prometheus_range")
     @mock.patch("server_telemetry.query_prometheus_instant")
@@ -453,6 +478,60 @@ class ServerTelemetryTest(unittest.TestCase):
         self.assertEqual(out["node_psi"]["cpu_stall_pct"]["max"], 0.5)
         self.assertEqual(out["pod_psi"]["cpu_stall_pct"]["max"], 0.5)
 
+    @mock.patch("server_telemetry.query_prometheus_range")
+    def test_working_set_gib_and_steady_window(self, mock_range):
+        gib = 2**30
+        mock_range.side_effect = ranges([], ws=[
+            {"metric": {"instance": "node-a"},
+             "values": [[90, str(8 * gib)], [100, str(gib)], [110, str(3 * gib)]]},
+            {"metric": {"instance": "node-b"}, "values": [[110, str(gib)]]},
+        ])
+        out = server_telemetry._measure_working_set("http://p", 90, 110, 100, 110)
+        node = out["node"]
+        # The 8 GiB sample at 90 is ramp-up: in the timeseries, not the summary.
+        self.assertEqual((node["summary"]["p50"], node["summary"]["max"]), (1.0, 3.0))
+        self.assertEqual(node["count"], 2)
+        self.assertEqual(node["timeseries"], [
+            {"timestamp": 90, "total_gb": 8.0, "max_gb": 8.0},
+            {"timestamp": 100, "total_gb": 1.0, "max_gb": 1.0},
+            {"timestamp": 110, "total_gb": 4.0, "max_gb": 3.0},
+        ])
+        self.assertEqual(set(out), {"node", "ateom", "atelet", "actor", "per_actor"})
+
+    @mock.patch("server_telemetry.query_prometheus_range")
+    def test_working_set_null_not_zero(self, mock_range):
+        mock_range.side_effect = ranges([])
+        out = server_telemetry._measure_working_set("http://p", 90, 110, 100, 110)
+        for block in out.values():
+            self.assertEqual(block, {"summary": NO_PERCENTILES, "count": None,
+                                     "timeseries": []})
+
+    @mock.patch("server_telemetry.query_prometheus_range")
+    def test_working_set_actor_keys_like_active_actors(self, mock_range):
+        # One atelet through 2 meter pods, a stale 4 GiB and a fresh 6 GiB.
+        gib = 2**30
+        meter = [{"exported_instance": "a", "instance": f"meter-{i}"} for i in "01"]
+        mock_range.side_effect = ranges(
+            [],
+            ws=[{"metric": {"pod": p}, "values": [[100, str(gib)]]} for p in "ab"],
+            actor_ws=[{"metric": m, "values": [[100, str(v * gib)]]}
+                      for m, v in zip(meter, (4, 6))],
+            active=[{"metric": m, "values": [[100, "2"]]} for m in meter])
+        out = server_telemetry._measure_working_set("http://p", 90, 110, 100, 110)
+        self.assertEqual(out["actor"]["count"], 1)
+        self.assertEqual(out["per_actor"]["summary"]["min"], 3.0)  # max 6 / 2
+        # cAdvisor keeps the label key: 2 worker pods are still 2.
+        self.assertEqual(out["ateom"]["count"], 2)
+
+    def test_working_set_queries_keep_live_workers(self):
+        q = server_telemetry.WORKING_SET_QUERIES
+        live = "rate(container_cpu_usage_seconds_total"
+        for block in q.values():
+            self.assertTrue(block.startswith("max by ("))  # a restart has 2 series
+            self.assertIn(live, block)
+        self.assertIn('container="node"', q["node"])
+        self.assertIn("and on (pod)", q["ateom"])
+
     @mock.patch("server_telemetry.query_prometheus_instant")
     def test_failed_delta_read_is_unknown(self, mock_instant):
         # A failed delta query is not taken as a series born in the window.
@@ -499,6 +578,134 @@ class ServerTelemetryTest(unittest.TestCase):
         self.assertTrue(any("_sum" + MEMORY_IMAGE in q for q in sizes))
         self.assertFalse(any('file_name="pages.img"' in q for q in sizes))
         self.assertIn("sum(atelet_snapshot_size_bytes_sum)", queries)
+
+    @mock.patch("server_telemetry.query_prometheus_instant")
+    def test_restore_and_checkpoint_read_atelet_histograms(self, mock_instant):
+        # 42s, above 10s: the buckets reach 60s.
+        mock_instant.side_effect = snapshot_prom(
+            "42.0",
+            start={"restore_sum": "0", "restore_count": "0",
+                   "seconds": "0", "checkpoint_count": "0"},
+            end={"restore_sum": "300", "restore_count": "10",
+                 "seconds": "40", "checkpoint_count": "20"})
+        snaps = snapshots()
+        self.assertEqual(snaps["restore_p99_s"], 42.0)
+        self.assertEqual(snaps["checkpoint_p50_s"], 42.0)
+        self.assertEqual(snaps["restore_mean_s"], 30.0)    # 300s / 10
+        self.assertEqual(snaps["checkpoint_mean_s"], 2.0)  # 40s / 20
+
+        queries = [c.args[1] for c in mock_instant.call_args_list]
+        self.assertFalse(any("rpc_server_call_duration" in q for q in queries))
+        for op in ("restore", "checkpoint"):
+            self.assertTrue(any(
+                q.startswith("histogram_quantile")
+                and f"ate_actor_{op}_duration_seconds_bucket{SNAPSHOT_OP}" in q
+                for q in queries))
+        # Every kind, like the sizes, which have no kind label.
+        self.assertFalse(any("ate_snapshot_kind" in q for q in queries))
+
+    @mock.patch("server_telemetry.query_prometheus_range")
+    def test_active_actors(self, mock_range):
+        def active(lag_s=0, steady=(100, 130)):
+            return server_telemetry._count_active_actors(
+                "http://localhost:9090", 100, 130, *steady, lag_s=lag_s)
+
+        # At 120 no atelet reported, so the step is skipped; at 130 only a
+        # did, so b's missing series counts as 0.
+        mock_range.return_value = [
+            {"metric": {"instance": "a"},
+             "values": [[100, "2"], [110, "3"], [130, "4"]]},
+            {"metric": {"instance": "b"}, "values": [[100, "1"], [110, "1"]]},
+        ]
+        out = active()
+        self.assertEqual([p["active_actors"] for p in out["timeseries"]],
+                         [3.0, 4.0, 4.0])
+        self.assertEqual([p["timestamp"] for p in out["timeseries"]],
+                         [100, 110, 130])
+        self.assertEqual((out["summary"]["min"], out["summary"]["max"]),
+                         (3.0, 4.0))
+        self.assertEqual(out["atelets"], 2)
+        query = mock_range.call_args.args[1]
+        self.assertIn("sum by (instance, exported_instance)", query)
+        self.assertIn("ate_actor_stats_sampled_actors", query)
+
+        # Atelets hosting an actor at each point; b drops out at 130.
+        self.assertEqual([p["active_atelets"] for p in out["timeseries"]],
+                         [2, 2, 1])
+        self.assertEqual(set(out["timeseries"][0]),
+                         {"timestamp", "active_actors", "active_atelets"})
+
+        # The steady window bounds the summary but not the timeseries.
+        out = active(steady=(100, 110))
+        self.assertEqual(out["summary"]["min"], 3.0)
+        self.assertEqual(len(out["timeseries"]), 3)
+
+        # Read half the lag late, like the snapshot block, but stamped back
+        # onto the run's clock; the steady window still picks the late reads.
+        mock_range.return_value = [{"metric": {"instance": "a"},
+                                    "values": [[135, "3"], [145, "5"]]}]
+        out = active(lag_s=70, steady=(100, 100))
+        self.assertEqual(mock_range.call_args.args[2:4], (135, 165))
+        self.assertEqual([p["timestamp"] for p in out["timeseries"]], [100, 110])
+        self.assertEqual(out["summary"]["max"], 3.0)
+
+        # One atelet re-exported by 2 collector replicas merges by max, not sum.
+        mock_range.return_value = [
+            {"metric": {"instance": f"meter-{i}", "exported_instance": "a"},
+             "values": [[100, "3"], [110, v]]} for i, v in ((0, "2"), (1, "3"))
+        ]
+        out = active()
+        self.assertEqual([p["active_actors"] for p in out["timeseries"]],
+                         [3.0, 3.0])
+        self.assertEqual(out["atelets"], 1)
+
+        # A reported 0 is not hosting.
+        mock_range.return_value = [
+            {"metric": {"instance": "a"}, "values": [[100, "0"], [110, "2"]]},
+            {"metric": {"instance": "b"}, "values": [[100, "3"], [110, "0"]]},
+        ]
+        out = active()
+        self.assertEqual([p["active_atelets"] for p in out["timeseries"]][:2],
+                         [1, 1])
+
+        # Never seen (not scraped) is unmeasured, not zero.
+        mock_range.return_value = []
+        out = active()
+        self.assertEqual(out["summary"], NO_PERCENTILES)
+        self.assertIsNone(out["atelets"])
+        self.assertEqual(out["timeseries"], [])
+
+    def test_series_samples_skips_bad_points(self):
+        series = {"values": [[100, "1"], [110, "NaN"], [120, "+Inf"],
+                             [130, "-Inf"], [140], [150, None], ["x", "2"],
+                             [160, "2.5"]]}
+        self.assertEqual(server_telemetry._series_samples(series),
+                         {100: 1.0, 160: 2.5})
+        self.assertEqual(server_telemetry._series_samples({}), {})
+
+    def test_steady_window_ignores_per_request_rows(self):
+        # --csv-full-history adds a row per operation; only Aggregated counts.
+        path = history_csv([("100", "5"), ("100", "500", "ResumeActor"),
+                            ("110", "10"), ("110", "500", "ResumeActor")])
+        try:
+            self.assertEqual(
+                server_telemetry.get_steady_state_window(path, 100, 150),
+                (110, 110))
+        finally:
+            path.unlink()
+
+    def test_locust_writes_full_history(self):
+        class Launched(Exception):
+            pass
+
+        with mock.patch.object(runner, "needs_boomer", return_value=False), \
+             mock.patch.object(runner.subprocess, "Popen",
+                               side_effect=Launched) as popen, \
+             contextlib.redirect_stdout(io.StringIO()), \
+             self.assertRaises(Launched):
+            runner.run_test(parse(), Path("/tmp/unit"), io.StringIO(),
+                            io.StringIO())
+        self.assertIn("--csv-full-history", popen.call_args.args[0])
 
     def test_prometheus_url_flag(self):
         self.assertEqual(parse().prometheus_url, runner.DEFAULT_PROMETHEUS_URL)

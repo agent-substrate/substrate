@@ -92,7 +92,7 @@ Three flags control the optional post-run measurements described in
   Defaults to the in-cluster service installed by
   [Optional: Prometheus + Grafana](#optional-prometheus--grafana).
 * `--atelet-lag-s`: how long to wait after the run before reading the
-  atelet's snapshot metrics. Defaults to 70.
+  atelet's metrics. Defaults to 70.
 
 Test-specific flags are appended to the same command; see the sections below.
 
@@ -367,7 +367,9 @@ them are checked into the repository.
   those two keys, because it is what CI orchestration reads to decide whether a
   trial ran at all.
 * `stats.csv`, `stats_history.csv`, `failures.csv`, `exceptions.csv`: Locust's
-  own CSV output.
+  own CSV output. `stats_history.csv` has a row per operation every second as
+  well as the `Aggregated` row, so each operation's latency can be charted
+  over the run; filter to `Aggregated` for run-wide numbers.
 * `logs.txt`, `traces.txt`: the runner log, and the trace IDs seen during the run.
 * `stats.jsonl`: one JSON object per line, one per metric. Every row carries
   the same five keys: `timestamp`, `tag`, `test_name`, `metric`, and a flat
@@ -407,7 +409,9 @@ comparing numbers across runs:
 * **Actors are derived, not counted.** Locust only sees virtual users, so the
   numerator is the peak user count times `--actors-per-user`. No server-side
   gauge counts resident actors: `ate.actor.stats.sampled_actors` drops any
-  actor without a live resource measurement, so suspended ones fall out.
+  actor without a live resource measurement, so suspended ones fall out. It
+  is recorded as `active_actors` in `server_summary.json`, a running-actor
+  count rather than a resident one.
 * **The denominators are read once, after the run.** A cluster that autoscaled
   mid-run is measured at its final size, so the ratio pairs a peak from one
   moment with a capacity from another.
@@ -433,11 +437,49 @@ actually did, independent of what the load generator reported.
 * `snapshots.size_p50_mb` through `size_p99_mb`: actor memory image sizes.
 * `snapshots.size_avg_mb`: mean memory image size.
 * `snapshots.restore_p50_s` through `restore_p99_s`, `restore_mean_s`, and the
-  same for `checkpoint_*`: atelet restore and checkpoint latency.
+  same for `checkpoint_*`: how long the atelet took to resume or suspend an
+  actor (`ate_actor_{restore,checkpoint}_duration`, `total` phase). Every
+  snapshot kind counts, as in the sizes: the actor's own snapshot, a
+  template's first start from its golden snapshot, and a pause. The buckets
+  reach 60s, so a slower operation reads as 60s.
 * `snapshots.checkpoints_in_window`, `checkpoints_cumulative`: checkpoint
   volume over the steady-state window, and since the atelet started.
 * `snapshots.checkpoint_mb_s`: bytes written per second spent checkpointing,
   not per second of wall clock.
+* `active_actors`: running actors (`ate_actor_stats_sampled_actors`), as a
+  percentile `summary` of the cluster-wide count, `atelets` seen, and a
+  `timeseries` every 10s over the whole run (ramp-up included). Each point has
+  the cluster-wide count and `active_atelets` hosting an actor. As the
+  assumptions above note, the gauge drops actors without a live measurement,
+  so suspended ones fall out and the count dips while actors are suspended.
+  The atelet stops exporting when a node has no running actor, so at a step
+  where at least one atelet reported, a missing one counts as 0. A step where
+  none reported is skipped, not 0, since a failed scrape looks the same; this
+  mostly hits 1-user runs. If the metric never appeared during the run, every
+  field is `null`. `atelets` counts atelet processes seen in the run, not
+  nodes: the collector keeps an exited atelet's last value for about 5
+  minutes, so a restart can briefly count twice, and an atelet scraped both
+  directly and through a collector counts twice.
+* `working_set.node`, `ateom`, `atelet`: memory working set in GiB from
+  cAdvisor on the nodes hosting a worker pod, per worker pod (every actor on it
+  included), and per atelet on those nodes. Each has a percentile `summary`
+  (plus `max`) over the steady-state window, `count` of series seen in it, and
+  a `timeseries` every 10s over the whole run with the sum (`total_gb`) and
+  largest (`max_gb`). A spike shorter than 10s can be missed.
+* `working_set.actor`, `per_actor`: the same shape for the actors' own working
+  set as the atelet reports it (`ate_actor_stats_memory_working_set_bytes`),
+  per atelet with every template summed, and the average per measured actor
+  (`ate_actor_stats_sampled_actors`) on each atelet; `count` is atelet
+  processes, keyed like `active_actors`. As `per_actor` is an average per
+  atelet, its `max` is the highest atelet average, not the largest actor, and
+  its `total_gb` has no meaning. A gVisor actor is read from its sandbox cgroup
+  on the host, a microVM actor from inside the guest. As with `active_actors`,
+  suspended actors fall out, but through the telemetry-meter a series that
+  stops being exported keeps its last value for up to 5m. Missing samples are
+  skipped, not counted as 0. The atelet samples every
+  `--actor-stats-poll-interval` (default 1m), so these move in steps of a
+  minute or more. `actor` matches one worker pod's actors only when the node
+  runs one worker pod.
 
 Every distribution reports p50, p90, p95 and p99 over the steady-state window.
 The steady-state window runs from the first to the last Locust sample at 90% or
@@ -450,14 +492,15 @@ every 10s.
 
 The atelet exports before Prometheus scrapes it, so the harvest waits
 `--atelet-lag-s` seconds (default 70, enough for the OTel SDK's 60s default
-export and a 10s scrape)
-and reads the snapshot window half that late. The window ends at the last
+export and a 10s scrape) and reads the snapshot, `active_actors` and actor
+working set windows half that late, stamping `active_actors` and actor
+working set points back by the same amount. The window ends at the last
 full-load sample, so teardown suspends are left out.
 
-`metadata.start_ts` and `end_ts` bound the whole run, which the packing
-`timeseries` covers. `steady_start_ts` and `steady_end_ts` bound the
-steady-state window. A flat subset of the numbers also goes into a
-`server_summary` row in `stats.jsonl`.
+`metadata.start_ts` and `end_ts` bound the whole run, which the packing,
+`active_actors` and `working_set` timeseries cover. `steady_start_ts` and
+`steady_end_ts` bound the steady-state window. A flat subset of the numbers
+also goes into a `server_summary` row in `stats.jsonl`.
 
 Neither the Kubernetes API nor Prometheus is required. If either is unreachable,
 or discovery was skipped, the affected fields are written as `null` and the run
