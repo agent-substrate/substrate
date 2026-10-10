@@ -18,6 +18,7 @@ package tarutil
 
 import (
 	"archive/tar"
+	"bytes"
 	"context"
 	"errors"
 	"net"
@@ -31,6 +32,85 @@ import (
 	"github.com/agent-substrate/substrate/internal/roottest"
 	"golang.org/x/sys/unix"
 )
+
+func TestRoundTripSubsecondMtime(t *testing.T) {
+	src := t.TempDir()
+	base := time.Unix(1700000000, 0)
+	want := map[string]time.Time{
+		"whole.txt":     base,
+		"point2.txt":    base.Add(200 * time.Millisecond),
+		"point7.txt":    base.Add(700 * time.Millisecond),
+		"nanos.txt":     base.Add(123456789 * time.Nanosecond),
+		"dir":           base.Add(700 * time.Millisecond),
+		"dir/inner.txt": base.Add(200 * time.Millisecond),
+		"xattr.txt":     base.Add(700 * time.Millisecond),
+	}
+	if err := os.Mkdir(filepath.Join(src, "dir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for rel := range want {
+		if rel != "dir" {
+			if err := os.WriteFile(filepath.Join(src, rel), []byte(rel), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := unix.Lsetxattr(filepath.Join(src, "xattr.txt"), "user.custom", []byte("value"), 0); err != nil {
+		t.Fatalf("setting user xattr: %v", err)
+	}
+	for rel, mtime := range want {
+		if err := os.Chtimes(filepath.Join(src, rel), mtime, mtime); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tarPath := filepath.Join(t.TempDir(), "mtime.tar")
+	if err := Create(t.Context(), tarPath, src); err != nil {
+		t.Fatal(err)
+	}
+	dst := t.TempDir()
+	if err := Extract(tarPath, dst); err != nil {
+		t.Fatal(err)
+	}
+	for rel, mtime := range want {
+		st, err := os.Lstat(filepath.Join(dst, rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := st.ModTime(); !got.Equal(mtime) {
+			t.Errorf("%q mtime = %v, want %v (off by %v)", rel, got, mtime, got.Sub(mtime))
+		}
+	}
+}
+
+func TestCreateIgnoresAccessAndChangeTimes(t *testing.T) {
+	src := t.TempDir()
+	path := filepath.Join(src, "file")
+	if err := os.WriteFile(path, []byte("same contents"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mtime := time.Unix(1700000000, 123456789)
+	archive := func(name string, atime time.Time) []byte {
+		t.Helper()
+		// Changing atime also changes ctime; neither is part of the restore.
+		if err := os.Chtimes(path, atime, mtime); err != nil {
+			t.Fatal(err)
+		}
+		tarPath := filepath.Join(t.TempDir(), name)
+		if err := Create(t.Context(), tarPath, src); err != nil {
+			t.Fatal(err)
+		}
+		data, err := os.ReadFile(tarPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return data
+	}
+	first := archive("first.tar", mtime.Add(-time.Hour))
+	second := archive("second.tar", mtime.Add(time.Hour))
+	if !bytes.Equal(first, second) {
+		t.Error("unchanged tree produced different archives after atime/ctime changed")
+	}
+}
 
 // writeTar builds a tar file at path from the given headers; a header with a
 // non-empty body is written as a regular file with that content.
