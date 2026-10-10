@@ -33,15 +33,11 @@ import (
 	"github.com/spf13/pflag"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
-	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/cache"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 
@@ -54,6 +50,8 @@ var (
 	setupLog = ctrl.Log.WithName("setup")
 
 	ateAPIConnSpec = pflag.String("ateapi-conn-spec", "k8s:///api.ate-system.svc:443", "")
+
+	watchNamespace = pflag.String("watch-namespace", "", "Namespace containing the WorkerPools to manage. Empty watches all namespaces. Does not change the system namespace or cluster-scoped resources.")
 
 	showVersion  = pflag.Bool("version", false, "Print version and exit.")
 	logLevelFlag = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
@@ -108,6 +106,10 @@ func main() {
 	if err := serverboot.SetLogLevel(*logLevelFlag); err != nil {
 		serverboot.Fatal(ctx, "Invalid --log-level", err)
 	}
+	if err := serverboot.ValidateWatchNamespace(*watchNamespace); err != nil {
+		serverboot.Fatal(ctx, "Invalid --watch-namespace", err)
+	}
+	slog.InfoContext(ctx, "Resolved workload watch scope", "watch-namespace", *watchNamespace, "all-namespaces", *watchNamespace == "")
 	slog.InfoContext(ctx, "atecontroller starting", slog.String("version", version.Version))
 	ctrl.SetLogger(newControllerRuntimeLogger(slog.Default().Handler()))
 
@@ -174,22 +176,10 @@ func main() {
 		}
 	}
 
-	// EgressMITMTrustReconciler watches the Secret `egress-mitm-ca-pool`.
 	systemNamespace := installdefaults.NamespaceFromPodEnv()
-	egressMITMCAPool := controllers.EgressMITMCAPoolRef(systemNamespace)
 	mgr, err := ctrl.NewManager(k8sConfig, ctrl.Options{
 		Scheme: scheme,
-		Cache: cache.Options{
-			ByObject: map[client.Object]cache.ByObject{
-				&corev1.Secret{}: {
-					Namespaces: map[string]cache.Config{
-						egressMITMCAPool.Namespace: {
-							FieldSelector: fields.OneTermEqualSelector("metadata.name", egressMITMCAPool.Name),
-						},
-					},
-				},
-			},
-		},
+		Cache:  controllers.CacheOptions(*watchNamespace, systemNamespace),
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
@@ -248,14 +238,14 @@ func main() {
 	// without a pod event, and an informer's resync period is a property of the
 	// informer, so asking the shared cache for one would impose it on every other
 	// controller here too.
-	ateFactory := externalversions.NewSharedInformerFactory(ateClient, 0)
+	ateFactory := externalversions.NewSharedInformerFactoryWithOptions(ateClient, 0, externalversions.WithNamespace(*watchNamespace))
 	workerPoolInformer := ateFactory.Api().V1alpha1().WorkerPools()
-	workerPodInformerFactory, workerPodInformer := workersync.WorkerPodInformer(k8sClient)
+	workerPodInformerFactory, workerPodInformer := workersync.WorkerPodInformer(k8sClient, *watchNamespace)
 
 	// Start registers the informer event handlers, so it has to run before the
 	// factory does: the initial list then synthesizes an Add for every pod that
 	// already exists, and no explicit startup re-list is needed.
-	workersync.NewWorkerPoolSyncer(ateapiClient, k8sClient.CoreV1(), workerPodInformer, workerPoolInformer.Informer()).Start(runCtx)
+	workersync.NewWorkerPoolSyncer(ateapiClient, k8sClient.CoreV1(), workerPodInformer, workerPoolInformer.Informer(), *watchNamespace).Start(runCtx)
 
 	workerPodInformerFactory.Start(runCtx.Done())
 	ateFactory.Start(runCtx.Done())
