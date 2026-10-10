@@ -445,9 +445,12 @@ func bridgedRegistry(t *testing.T) *prometheus.Registry {
 func TestInitMetricsBridgedPushesEachMetricOnce(t *testing.T) {
 	collector := startMetricsCollector(t, "otlp")
 	reg := bridgedRegistry(t)
-	mp, err := InitMetricsBridged(t.Context(), "test-bridged-otlp", reg, nil)
+	mp, servePull, err := InitMetricsBridged(t.Context(), "test-bridged-otlp", reg, nil)
 	if err != nil {
 		t.Fatalf("InitMetricsBridged: %v", err)
+	}
+	if servePull {
+		t.Error("OTEL_METRICS_EXPORTER=otlp left the scrape endpoint on")
 	}
 	addOne(t, mp, "ate.test.bridged.count")
 	if gatheredNames(t, reg)["ate_test_bridged_count_total"] {
@@ -469,7 +472,7 @@ func TestInitMetricsBridgedWrapsPushedProducer(t *testing.T) {
 			return inner.Produce(ctx)
 		})
 	}
-	mp, err := InitMetricsBridged(t.Context(), "test-bridged-wrap", bridgedRegistry(t), wrap)
+	mp, _, err := InitMetricsBridged(t.Context(), "test-bridged-wrap", bridgedRegistry(t), wrap)
 	if err != nil {
 		t.Fatalf("InitMetricsBridged: %v", err)
 	}
@@ -486,27 +489,82 @@ type producerFunc func(context.Context) ([]metricdata.ScopeMetrics, error)
 
 func (f producerFunc) Produce(ctx context.Context) ([]metricdata.ScopeMetrics, error) { return f(ctx) }
 
-// With OTEL_METRICS_EXPORTER=none, the OTel instrument is served from the
+// With OTEL_METRICS_EXPORTER=prometheus, the OTel instrument is served from the
 // bridged registry next to its own families, and nothing is pushed.
-func TestInitMetricsBridgedExporterNoneServesFromRegistry(t *testing.T) {
-	collector := startMetricsCollector(t, "none")
+func TestInitMetricsBridgedPrometheusServesFromRegistry(t *testing.T) {
+	collector := startMetricsCollector(t, "prometheus")
 	reg := bridgedRegistry(t)
-	mp, err := InitMetricsBridged(t.Context(), "test-bridged-none", reg, nil)
+	mp, servePull, err := InitMetricsBridged(t.Context(), "test-bridged-prometheus", reg, nil)
 	if err != nil {
 		t.Fatalf("InitMetricsBridged: %v", err)
 	}
-	addOne(t, mp, "ate.test.bridgednone.count")
+	if !servePull {
+		t.Error("OTEL_METRICS_EXPORTER=prometheus turned the scrape endpoint off")
+	}
+	addOne(t, mp, "ate.test.bridgedprom.count")
 	names := gatheredNames(t, reg)
-	if !names["ate_test_bridgednone_count_total"] || !names["test_bridged_family"] {
+	if !names["ate_test_bridgedprom_count_total"] || !names["test_bridged_family"] {
 		t.Errorf("the bridged registry does not serve both the instrument and its own family: %v", names)
+	}
+	if pushed := collector.flush(t, mp); pushed != nil {
+		t.Errorf("OTEL_METRICS_EXPORTER=prometheus still pushed %v", pushed)
+	}
+}
+
+// With OTEL_METRICS_EXPORTER=none there is no push and no endpoint to serve,
+// so the instrument is not registered anywhere.
+func TestInitMetricsBridgedExporterNoneExportsNothing(t *testing.T) {
+	collector := startMetricsCollector(t, "none")
+	reg := bridgedRegistry(t)
+	mp, servePull, err := InitMetricsBridged(t.Context(), "test-bridged-none", reg, nil)
+	if err != nil {
+		t.Fatalf("InitMetricsBridged: %v", err)
+	}
+	if servePull {
+		t.Error("OTEL_METRICS_EXPORTER=none left the scrape endpoint on")
+	}
+	addOne(t, mp, "ate.test.bridgednone.count")
+	if gatheredNames(t, reg)["ate_test_bridgednone_count_total"] {
+		t.Error("the instrument is registered on the bridged registry")
 	}
 	if pushed := collector.flush(t, mp); pushed != nil {
 		t.Errorf("OTEL_METRICS_EXPORTER=none still pushed %v", pushed)
 	}
 }
 
+// servePull follows the policy table: unset and the list keep both paths.
+func TestInitMetricsBridgedServePull(t *testing.T) {
+	tests := []struct {
+		name     string
+		value    string
+		wantPush bool
+		wantPull bool
+	}{
+		{"unset", "", true, true},
+		{"otlp", "otlp", true, false},
+		{"prometheus", "prometheus", false, true},
+		{"list", "otlp,prometheus", true, true},
+		{"none", "none", false, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			collector := startMetricsCollector(t, tt.value)
+			mp, servePull, err := InitMetricsBridged(t.Context(), "test-bridged-table", bridgedRegistry(t), nil)
+			if err != nil {
+				t.Fatalf("InitMetricsBridged: %v", err)
+			}
+			if servePull != tt.wantPull {
+				t.Errorf("servePull = %t, want %t", servePull, tt.wantPull)
+			}
+			if pushed := collector.flush(t, mp) != nil; pushed != tt.wantPush {
+				t.Errorf("pushed = %t, want %t", pushed, tt.wantPush)
+			}
+		})
+	}
+}
+
 func TestInitMetricsBridgedRequiresServiceName(t *testing.T) {
-	if _, err := InitMetricsBridged(t.Context(), "", prometheus.NewRegistry(), nil); err == nil {
+	if _, _, err := InitMetricsBridged(t.Context(), "", prometheus.NewRegistry(), nil); err == nil {
 		t.Error("InitMetricsBridged(\"\") must return an error")
 	}
 }

@@ -36,6 +36,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -44,6 +45,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
@@ -89,12 +91,47 @@ func init() {
 	utilruntime.Must(clientv1alpha1.AddToScheme(scheme)) // Register our CRD
 }
 
-const serviceName = "atecontroller"
+const (
+	serviceName = "atecontroller"
+
+	// metricsPullAddr is the manager's metrics listener, and metricsOffAddr
+	// turns it off.
+	metricsPullAddr = ":8080"
+	metricsOffAddr  = "0"
+)
 
 // logr verbosity V(n) maps to slog level -n, so V(1) stays below Info until
 // --log-level=debug. logr carries no context, so these records have no trace IDs.
 func newControllerRuntimeLogger(h slog.Handler) logr.Logger {
 	return logr.FromSlogHandler(h)
+}
+
+// metricsBindAddr is the manager's metrics address. servePull is whether
+// OTEL_METRICS_EXPORTER leaves the listener on.
+func metricsBindAddr(servePull bool) string {
+	if servePull {
+		return metricsPullAddr
+	}
+	return metricsOffAddr
+}
+
+// managerOptions configures the controller-runtime manager.
+func managerOptions(egressMITMCAPool types.NamespacedName, servePull bool) ctrl.Options {
+	return ctrl.Options{
+		Scheme:  scheme,
+		Metrics: metricsserver.Options{BindAddress: metricsBindAddr(servePull)},
+		Cache: cache.Options{
+			ByObject: map[client.Object]cache.ByObject{
+				&corev1.Secret{}: {
+					Namespaces: map[string]cache.Config{
+						egressMITMCAPool.Namespace: {
+							FieldSelector: fields.OneTermEqualSelector("metadata.name", egressMITMCAPool.Name),
+						},
+					},
+				},
+			},
+		},
+	}
 }
 
 func main() {
@@ -124,13 +161,15 @@ func main() {
 	defer serverboot.ShutdownProvider("TracerProvider", tp.Shutdown)
 
 	// controller-runtime records reconcile, workqueue, and runtime metrics into its
-	// own Prometheus registry, which the manager serves. On the OTLP path the
-	// bridged queue histograms are padded so the Telemetry API accepts idle ones.
-	mp, err := serverboot.InitMetricsBridged(ctx, serviceName, ctrlmetrics.Registry, padEmptyExponentialHistograms)
+	// own Prometheus registry. OTEL_METRICS_EXPORTER picks where they go: the
+	// OTLP push, which pads the bridged queue histograms so the Telemetry API
+	// accepts idle ones, and the manager's scrape listener.
+	mp, servePull, err := serverboot.InitMetricsBridged(ctx, serviceName, ctrlmetrics.Registry, padEmptyExponentialHistograms)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize metrics", err)
 	}
 	defer serverboot.ShutdownProvider("MeterProvider", mp.Shutdown)
+	slog.InfoContext(ctx, "Metrics listener", slog.Bool("enabled", servePull), slog.String("addr", metricsBindAddr(servePull)))
 
 	k8sConfig := ctrl.GetConfigOrDie()
 	k8sClient, err := kubernetes.NewForConfig(k8sConfig)
@@ -177,20 +216,7 @@ func main() {
 	// EgressMITMTrustReconciler watches the Secret `egress-mitm-ca-pool`.
 	systemNamespace := installdefaults.NamespaceFromPodEnv()
 	egressMITMCAPool := controllers.EgressMITMCAPoolRef(systemNamespace)
-	mgr, err := ctrl.NewManager(k8sConfig, ctrl.Options{
-		Scheme: scheme,
-		Cache: cache.Options{
-			ByObject: map[client.Object]cache.ByObject{
-				&corev1.Secret{}: {
-					Namespaces: map[string]cache.Config{
-						egressMITMCAPool.Namespace: {
-							FieldSelector: fields.OneTermEqualSelector("metadata.name", egressMITMCAPool.Name),
-						},
-					},
-				},
-			},
-		},
-	})
+	mgr, err := ctrl.NewManager(k8sConfig, managerOptions(egressMITMCAPool, servePull))
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
 		os.Exit(1)
