@@ -213,6 +213,9 @@ func main() {
 		os.Exit(1)
 	}
 	dialOpts = append(dialOpts, grpc.WithStatsHandler(otelgrpc.NewClientHandler()))
+	// atecontroller acts for the system, not a user, so it always opts in to
+	// the preview features the server enables.
+	dialOpts = append(dialOpts, preview.DialOptionsWithOptIn()...)
 
 	ateapiConn, err := grpc.NewClient(*ateAPIConnSpec, dialOpts...)
 	if err != nil {

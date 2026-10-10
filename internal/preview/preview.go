@@ -49,9 +49,10 @@ var realKnownGates = []Gate{
 	GateExternalVolumes,
 }
 
-var globalKnownGates []Gate        // all known gates
-var globalStateMap map[string]bool // gate-name -> enabled
-var globalInitialized bool         // true if Init has been called, false otherwise
+var globalKnownGates []Gate           // all known gates
+var globalStateMap map[string]bool    // gate-name -> enabled?
+var globalDisabledMap map[string]bool // gate-name -> false (all disabled)
+var globalInitialized bool            // true if Init has been called, false otherwise
 var globalInitLock sync.Mutex
 
 // init sets the globalStateMap to the default state of all known gates disabled. It
@@ -70,12 +71,13 @@ func init() {
 	} else {
 		globalKnownGates = realKnownGates
 		globalStateMap = m
+		globalDisabledMap = newDisabledMap(realKnownGates)
 	}
 }
 
 // Init sets the process-wide preview gates from the --preview flag values.
 // The special value "*" enables all known gates. With no values, all gates are
-// disabled. It panics if called agasin after the first successful call.
+// disabled. It panics if called again after the first successful call.
 func Init(values ...string) error {
 	globalInitLock.Lock()
 	defer globalInitLock.Unlock()
@@ -95,6 +97,7 @@ func doInit(knownGates []Gate, logFunc func(state string), values ...string) err
 	} else {
 		globalKnownGates = knownGates
 		globalStateMap = m
+		globalDisabledMap = newDisabledMap(knownGates)
 		globalInitialized = true
 
 		if logFunc != nil {
@@ -137,6 +140,14 @@ func newGateMap(knownGates []Gate, values ...string) (map[string]bool, error) {
 	return tmpMap, nil
 }
 
+func newDisabledMap(knownGates []Gate) map[string]bool {
+	m := make(map[string]bool, len(knownGates))
+	for _, g := range knownGates {
+		m[string(g)] = false
+	}
+	return m
+}
+
 // Verify checks that the given values are all valid preview gates.
 func Verify(values ...string) error {
 	return doVerify(globalKnownGates, values...)
@@ -159,4 +170,12 @@ func IsEnabled(gate Gate) bool {
 // TODO: Fix this to use an interface when DV supports it.
 func AsMap() map[string]bool {
 	return globalStateMap
+}
+
+// DisabledMap returns the map of known gate names, all disabled.
+// The returned map MUST NOT be modified.
+//
+// TODO: Fix this to use an interface when DV supports it.
+func DisabledMap() map[string]bool {
+	return globalDisabledMap
 }

@@ -47,7 +47,8 @@ func InitForTestFake(tb testingTB, fakeKnownGates []Gate, values ...string) {
 
 	prevInitialized := globalInitialized
 	prevKnownGates := globalKnownGates
-	prevMap := globalStateMap
+	prevStateMap := globalStateMap
+	prevDisabledMap := globalDisabledMap
 
 	logFunc := func(state string) {
 		tb.Log("initialized preview gates for test:", state)
@@ -59,6 +60,7 @@ func InitForTestFake(tb testingTB, fakeKnownGates []Gate, values ...string) {
 	tb.Cleanup(func() {
 		globalInitialized = prevInitialized
 		globalKnownGates = prevKnownGates
-		globalStateMap = prevMap
+		globalStateMap = prevStateMap
+		globalDisabledMap = prevDisabledMap
 	})
 }

@@ -122,12 +122,12 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 	var initVols []*ateapipb.ExternalVolume
 	if iv, err := initialExternalVolumes(ctx, s.storageClassLister, template); err != nil {
 		return nil, err
-	} else if preview.IsEnabled(preview.GateExternalVolumes) {
+	} else if preview.IsEnabledFor(ctx, preview.GateExternalVolumes) {
 		initVols = iv
 	} else if len(iv) > 0 {
 		errs := field.ErrorList{
 			field.Forbidden(field.NewPath("actor", "actor_template"),
-				"ActorTemplates with external volumes are not supported unless the ExternalVolumes preview gate is enabled"),
+				"ActorTemplates with external volumes require the ExternalVolumes preview gate to be enabled on the server and the client to opt in to preview features (kubectl ate --preview, or the "+preview.Header+" header)"),
 		}
 		return nil, resources.ToAPIError(errs)
 	}

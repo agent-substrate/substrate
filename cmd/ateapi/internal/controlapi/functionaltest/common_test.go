@@ -87,6 +87,7 @@ var (
 type testContext struct {
 	service             *controlapi.RPCService
 	client              ateapipb.ControlClient
+	noOptInClient       ateapipb.ControlClient // never sends preview.Header
 	k8sClient           kubernetes.Interface
 	substrateClient     versioned.Interface
 	persistence         store.Interface
@@ -109,18 +110,36 @@ type testContext struct {
 // setupTest sets up a fully isolated test environment.
 func setupTest(t *testing.T, ns string) *testContext {
 	t.Helper()
-	return setupTestWithVolumePlugins(t, ns, nil)
+	return setupTestWithOptions(t, ns, testOptions{})
 }
 
-// setupTestWithVolumePlugins is setupTest with the default mock volume plugin
-// replaced by plugins, keyed by driver name. Tests that need a failure-injecting
-// plugin pass it here rather than swapping it into the running RPCService, so each
-// test owns its own plugin set.
+type testOptions struct {
+	allowPreview  bool // enable use of preview features over gRPC
+	volumePlugins map[string]volume.VolumePluginControlPlane
+}
+
+// setupPreviewTest is setupTest with a client that opts in to preview
+// features. It does not enable any gate; call preview.InitForTest for that.
+func setupPreviewTest(t *testing.T, ns string) *testContext {
+	t.Helper()
+	return setupTestWithOptions(t, ns, testOptions{allowPreview: true})
+}
+
+// setupTestWithVolumePlugins is setupPreviewTest with the default mock volume
+// plugin replaced by plugins, keyed by driver name. Tests that need a
+// failure-injecting plugin pass it here rather than swapping it into the
+// running RPCService, so each test owns its own plugin set.
 func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volume.VolumePluginControlPlane) *testContext {
 	t.Helper()
+	return setupTestWithOptions(t, ns, testOptions{volumePlugins: plugins, allowPreview: true})
+}
 
-	if len(plugins) > 0 {
-		preview.InitForTest(t, "ExternalVolumes")
+func setupTestWithOptions(t *testing.T, ns string, options testOptions) *testContext {
+	t.Helper()
+
+	var dialOpts []grpc.DialOption
+	if options.allowPreview {
+		dialOpts = preview.DialOptionsWithOptIn()
 	}
 
 	// 1. Start an isolated PostgreSQL-backed store.
@@ -181,7 +200,7 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 		cleanupStore()
 		t.Fatalf("failed to create metric instruments: %v", err)
 	}
-	volPlugins := plugins
+	volPlugins := options.volumePlugins
 	if volPlugins == nil {
 		mockPlugin := volume.NewMockVolumePlugin()
 		mockDriverName, err := mockPlugin.DriverName(ctx)
@@ -239,6 +258,7 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 	grpcServer := grpc.NewServer(grpc.ChainUnaryInterceptor(
 		ateinterceptors.ServerUnaryInterceptor,
 		ateinterceptors.RejectUnknownFieldsUnaryInterceptor,
+		preview.UnaryServerInterceptor,
 	))
 	ateapipb.RegisterControlServer(grpcServer, service)
 
@@ -250,19 +270,28 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 		}
 	}()
 
-	conn, err := grpc.NewClient(
-		"passthrough://bufnet",
+	baseDialOpts := []grpc.DialOption{
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithContextDialer(func(ctx context.Context, s string) (net.Conn, error) {
 			return lis.Dial()
 		}),
-	)
+	}
+	conn, err := grpc.NewClient("passthrough://bufnet", append(baseDialOpts, dialOpts...)...)
 	if err != nil {
 		grpcServer.Stop()
 		cancel()
 		cleanupStore()
 		t.Fatalf("failed to connect: %v", err)
 	}
+	noOptInConn, err := grpc.NewClient("passthrough://bufnet", baseDialOpts...)
+	if err != nil {
+		conn.Close()
+		grpcServer.Stop()
+		cancel()
+		cleanupStore()
+		t.Fatalf("failed to connect: %v", err)
+	}
+	t.Cleanup(func() { noOptInConn.Close() })
 
 	client := ateapipb.NewControlClient(conn)
 
@@ -303,6 +332,7 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 	return &testContext{
 		service:             service,
 		client:              client,
+		noOptInClient:       ateapipb.NewControlClient(noOptInConn),
 		k8sClient:           k8sClient,
 		substrateClient:     substrateClient,
 		persistence:         persistence,

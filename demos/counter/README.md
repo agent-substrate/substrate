@@ -32,7 +32,7 @@ To enable validation of reading from an external volume (e.g.
 `/external-data/test.txt`), run:
 
 ```bash
-./hack/install-ate.sh --deploy-demo-counter-with-external-volume
+./hack/install-ate.sh --deploy-demo-counter-with-external-volume --preview=ExternalVolumes
 ```
 
 This command will:

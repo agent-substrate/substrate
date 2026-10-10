@@ -29,6 +29,7 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/testing/protocmp"
 )
 
@@ -393,36 +394,54 @@ func TestDeleteActorTemplate_Preconditions(t *testing.T) {
 	assertGrpcError(t, err, codes.NotFound, "ActorTemplate "+templateRef.String()+" not found")
 }
 
-// TestCreateActorTemplate_ExternalVolumesPreviewDisabled checks that a server
-// without the Preview gate rejects external volumes.
-func TestCreateActorTemplate_ExternalVolumesPreviewDisabled(t *testing.T) {
-	ns := namespaceForTest("ns-template-ext-vol-disabled")
+// TestCreateActorTemplate_ExternalVolumesPreview checks that external volumes
+// are accepted only when the server enables the gate and the client opts in
+// to preview features.
+func TestCreateActorTemplate_ExternalVolumesPreview(t *testing.T) {
+	ns := namespaceForTest("ns-template-ext-vol-preview")
 	tc := setupTest(t, ns)
 	defer tc.cleanup()
-	preview.InitForTest(t)
-	ctx := context.Background()
 	ensureDefaultGvisorSandboxConfig(t, tc)
 
-	_, err := tc.client.CreateActorTemplate(ctx, &ateapipb.CreateActorTemplateRequest{
-		ActorTemplate: &ateapipb.ActorTemplate{
-			Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "tmpl-ext"},
-			Containers: []*ateapipb.Container{{
-				Name:         "main",
-				Image:        "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-				VolumeMounts: []*ateapipb.VolumeMount{{Name: "data", MountPath: "/data"}},
-			}},
-			Volumes: []*ateapipb.Volume{{
-				Name:                   "data",
-				ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{StorageClassName: "standard", Capacity: "1Gi"},
-			}},
-			SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://my-bucket/snapshots"},
-			SandboxConfig: &ateapipb.SandboxConfig{
-				SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
-				ConfigName:   "gvisor-default",
-			},
-		},
-	})
-	if status.Code(err) != codes.InvalidArgument {
-		t.Fatalf("CreateActorTemplate error = %v, want InvalidArgument", err)
+	for i, tt := range []struct {
+		name     string
+		gates    []string
+		optIn    bool
+		wantCode codes.Code
+	}{
+		{name: "gate off", gates: nil, optIn: true, wantCode: codes.InvalidArgument},
+		{name: "no opt-in", gates: []string{"ExternalVolumes"}, optIn: false, wantCode: codes.InvalidArgument},
+		{name: "gate on and opt-in", gates: []string{"ExternalVolumes"}, optIn: true, wantCode: codes.OK},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			preview.InitForTest(t, tt.gates...)
+			ctx := context.Background()
+			if tt.optIn {
+				ctx = metadata.AppendToOutgoingContext(ctx, preview.Header, "true")
+			}
+			_, err := tc.client.CreateActorTemplate(ctx, &ateapipb.CreateActorTemplateRequest{
+				ActorTemplate: &ateapipb.ActorTemplate{
+					Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: fmt.Sprintf("tmpl-ext-%d", i)},
+					Containers: []*ateapipb.Container{{
+						Name:         "main",
+						Image:        "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+						VolumeMounts: []*ateapipb.VolumeMount{{Name: "data", MountPath: "/data"}},
+					}},
+					Volumes: []*ateapipb.Volume{{
+						Name:                   "data",
+						ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{StorageClassName: "standard", Capacity: "1Gi"},
+					}},
+					Resources:      &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: "cpu", Quantity: "1"}, {Name: "memory", Quantity: "1Gi"}}},
+					SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://my-bucket/snapshots"},
+					SandboxConfig: &ateapipb.SandboxConfig{
+						SandboxClass: "gvisor",
+						ConfigName:   "gvisor-default",
+					},
+				},
+			})
+			if status.Code(err) != tt.wantCode {
+				t.Fatalf("CreateActorTemplate error = %v, want %v", err, tt.wantCode)
+			}
+		})
 	}
 }

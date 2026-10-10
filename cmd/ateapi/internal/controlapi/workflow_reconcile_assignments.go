@@ -20,6 +20,7 @@ import (
 	"fmt"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/preview"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
@@ -38,6 +39,7 @@ func needsAssignmentReconcile(worker *ateapipb.Worker) bool {
 //
 // Nothing to do, including a Worker that is gone, is success.
 func (w *WorkerWorkflow) ReconcileAssignments(ctx context.Context, name string) (err error) {
+	ctx = preview.ContextWithOptIn(ctx)
 	ctx, done := stepSpan(ctx, "ReconcileAssignments")
 	defer func() { err = done(err) }()
 

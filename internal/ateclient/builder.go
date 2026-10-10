@@ -128,6 +128,7 @@ func (c *Client) Close() {
 
 // NewClient creates a new Ate API client. If endpoint is empty, it automatically
 // port-forwards to the ate-api-server pod in substrate's system namespace.
+// extraOpts are appended to the options used to dial the server.
 func NewClient(ctx context.Context, kubeconfigPath, k8sContext, endpoint, tokenFile string, traceEnabled bool, extraOpts ...grpc.DialOption) (*Client, error) {
 	tp, err := initTracing(ctx, traceEnabled)
 	if err != nil {

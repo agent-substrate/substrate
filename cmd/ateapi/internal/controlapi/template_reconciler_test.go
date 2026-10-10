@@ -785,7 +785,7 @@ func TestFail_TruncatesErrorMessage(t *testing.T) {
 	if !utf8.ValidString(msg) {
 		t.Error("error_message is not valid UTF-8")
 	}
-	op := apivalidation.MakeUpdateOp()
+	op := apivalidation.MakeUpdateOp(ctx)
 	if errs := apivalidation.Validate_GoldenSnapshotStatus(ctx, op, nil, golden, &ateapipb.GoldenSnapshotStatus{}); len(errs) != 0 {
 		t.Errorf("stored status fails validation: %v", errs)
 	}

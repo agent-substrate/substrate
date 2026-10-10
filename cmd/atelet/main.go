@@ -326,6 +326,9 @@ func main() {
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to build ateapi client credentials", err)
 	}
+	// atelet acts for the system, not a user, so it always opts in to the
+	// preview features the server enables.
+	dialOpts = append(dialOpts, preview.DialOptionsWithOptIn()...)
 	ateapiConn, err := grpc.NewClient(*ateapiAddress, dialOpts...)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to create ateapi client", err)

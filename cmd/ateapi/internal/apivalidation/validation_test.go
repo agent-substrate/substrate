@@ -116,7 +116,7 @@ func TestValidateResourceMetadataCreate(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			op := MakeCreateOp()
+			op := MakeCreateOp(context.Background())
 			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
 			matcher.Test(t, tt.want, Validate_ResourceMetadata(context.Background(), op, nil, tt.obj, nil))
 		})
@@ -232,7 +232,7 @@ func TestValidateResourceMetadataUpdate(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			op := MakeUpdateOp()
+			op := MakeUpdateOp(context.Background())
 			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
 			matcher.Test(t, tt.want, Validate_ResourceMetadata(context.Background(), op, nil, tt.newObj, tt.oldObj))
 		})
@@ -431,7 +431,7 @@ func TestValidateResourceMetadataNameAndAtespaceFormat(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			obj := proto.CloneOf(tt.obj) // avoid internal mutations
-			op := MakeCreateOp()
+			op := MakeCreateOp(context.Background())
 			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
 			matcher.Test(t, tt.want, Validate_ResourceMetadata(context.Background(), op, nil, obj, nil))
 		})
@@ -645,7 +645,7 @@ func TestValidateObjectRef(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			op := MakeCreateOp()
+			op := MakeCreateOp(context.Background())
 			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
 			matcher.Test(t, tt.want, Validate_ObjectRef(context.Background(), op, nil, tt.ref, nil))
 		})
@@ -800,7 +800,7 @@ func TestValidateSystemInfoVolumeSource(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			op := MakeCreateOp()
+			op := MakeCreateOp(context.Background())
 			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
 			matcher.Test(t, tt.want, Validate_SystemInfoVolumeSource(context.Background(), op, nil, tt.obj, nil))
 		})
@@ -864,7 +864,7 @@ func TestValidateTrustBundleDataSource(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			op := MakeCreateOp()
+			op := MakeCreateOp(context.Background())
 			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
 			matcher.Test(t, tt.want, Validate_TrustBundleDataSource(context.Background(), op, nil, tt.obj, nil))
 		})
@@ -959,7 +959,7 @@ func TestValidateExternalVolume(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			op := MakeCreateOp()
+			op := MakeCreateOp(context.Background())
 			assertValidateErr(t, Validate_ExternalVolume(context.Background(), op, nil, tt.obj, nil), tt.want)
 		})
 	}
@@ -1008,7 +1008,7 @@ func TestValidateExternalVolume_Update(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			op := MakeUpdateOp()
+			op := MakeUpdateOp(context.Background())
 			assertValidateErr(t, Validate_ExternalVolume(context.Background(), op, nil, tt.newObj, tt.oldObj), tt.want)
 		})
 	}
@@ -1049,7 +1049,7 @@ func TestValidateDeleteOptions(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			op := MakeCreateOp()
+			op := MakeCreateOp(context.Background())
 			matcher := field.ErrorMatcher{}.ByType().ByField().ByOrigin()
 			matcher.Test(t, tt.want, Validate_DeleteOptions(context.Background(), op, nil, tt.obj, nil))
 		})
@@ -1245,7 +1245,7 @@ func TestValidateSnapshot(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			op := MakeCreateOp()
+			op := MakeCreateOp(context.Background())
 			assertValidateErr(t, Validate_Snapshot(context.Background(), op, nil, tt.obj, nil), tt.want)
 		})
 	}
@@ -1332,7 +1332,7 @@ func TestValidateSnapshotUpdate(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			op := MakeUpdateOp()
+			op := MakeUpdateOp(context.Background())
 			assertValidateErr(t, Validate_Snapshot(context.Background(), op, nil, tt.newObj, tt.oldObj), tt.want)
 		})
 	}
@@ -1354,7 +1354,7 @@ func TestValidateNestedSnapshot(t *testing.T) {
 			validate: func(ctx context.Context) field.ErrorList {
 				// The live path: the server validates the Actor it is about to
 				// write, as an update against the stored one.
-				op := MakeUpdateOp()
+				op := MakeUpdateOp(context.Background())
 				oldVal := validActor(withActorStatus())
 				newVal := validActor(withActorStatus(func(s *ateapipb.ActorStatus) {
 					s.Snapshots = []*ateapipb.Snapshot{badSnapshot()}
@@ -1366,7 +1366,7 @@ func TestValidateNestedSnapshot(t *testing.T) {
 			name: "tag.status.snapshot",
 			path: field.NewPath("status", "snapshot"),
 			validate: func(ctx context.Context) field.ErrorList {
-				op := MakeCreateOp()
+				op := MakeCreateOp(context.Background())
 				obj := validTag(func(tag *ateapipb.Tag) {
 					tag.Status.Snapshot = badSnapshot()
 				})
@@ -1494,7 +1494,7 @@ func TestValidateTag(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			op := MakeCreateOp()
+			op := MakeCreateOp(context.Background())
 			assertValidateErr(t, Validate_Tag(context.Background(), op, nil, tt.obj, nil), tt.want)
 		})
 	}
@@ -1538,7 +1538,7 @@ func TestValidateTagUpdate(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			op := MakeUpdateOp()
+			op := MakeUpdateOp(context.Background())
 			assertValidateErr(t, Validate_Tag(context.Background(), op, nil, tt.newObj, tt.oldObj), tt.want)
 		})
 	}
@@ -1704,7 +1704,7 @@ func TestValidateTagRequestPayloads(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			op := MakeCreateOp()
+			op := MakeCreateOp(context.Background())
 			assertValidateErr(t, tt.validate(context.Background(), op), tt.want)
 		})
 	}
@@ -1768,7 +1768,7 @@ func TestValidateGoldenSnapshotStatus(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			op := MakeCreateOp()
+			op := MakeCreateOp(context.Background())
 			assertValidateErr(t, Validate_GoldenSnapshotStatus(context.Background(), op, nil, tt.obj, nil), tt.want)
 		})
 	}
@@ -1820,7 +1820,7 @@ func TestValidateGoldenSnapshotStatusUpdate(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			op := MakeUpdateOp()
+			op := MakeUpdateOp(context.Background())
 			assertValidateErr(t, Validate_GoldenSnapshotStatus(context.Background(), op, nil, tt.newObj, tt.oldObj), tt.want)
 		})
 	}

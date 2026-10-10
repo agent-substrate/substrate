@@ -25,6 +25,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
+	"github.com/agent-substrate/substrate/internal/preview"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel/attribute"
@@ -56,6 +57,7 @@ func isRevertable(actor *ateapipb.Actor) bool {
 // actor was reverted from, so a re-entered workflow fast-forwards to wherever
 // the previous attempt stopped.
 func (w *ActorWorkflow) RevertActor(ctx context.Context, actorRef resources.ActorRef) (_ *ateapipb.Actor, err error) {
+	ctx = preview.ContextWithOptIn(ctx)
 	start := time.Now()
 	var actor *ateapipb.Actor
 	var actorTemplate *ateapipb.ActorTemplate

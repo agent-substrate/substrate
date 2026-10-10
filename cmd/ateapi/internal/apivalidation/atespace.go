@@ -23,24 +23,24 @@ import (
 
 func ValidateCreateAtespaceRequest(ctx context.Context, req *ateapipb.CreateAtespaceRequest) field.ErrorList {
 	// Call the generated validation.
-	op := MakeCreateOp()
+	op := MakeCreateOp(ctx)
 	return Validate_CreateAtespaceRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateGetAtespaceRequest(ctx context.Context, req *ateapipb.GetAtespaceRequest) field.ErrorList {
 	// Call the generated validation.
-	op := MakeCreateOp()
+	op := MakeCreateOp(ctx)
 	return Validate_GetAtespaceRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateListAtespacesRequest(ctx context.Context, req *ateapipb.ListAtespacesRequest) field.ErrorList {
 	// Call the generated validation.
-	op := MakeCreateOp()
+	op := MakeCreateOp(ctx)
 	return Validate_ListAtespacesRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateDeleteAtespaceRequest(ctx context.Context, req *ateapipb.DeleteAtespaceRequest) field.ErrorList {
 	// Call the generated validation.
-	op := MakeCreateOp()
+	op := MakeCreateOp(ctx)
 	return Validate_DeleteAtespaceRequest(ctx, op, nil, req, nil)
 }

@@ -20,6 +20,8 @@ import (
 	"strings"
 	"testing"
 
+	"google.golang.org/grpc"
+
 	"github.com/agent-substrate/substrate/internal/preview"
 
 	"github.com/spf13/pflag"
@@ -56,6 +58,17 @@ func initPreview() error {
 	}
 	if err := preview.Init(gates...); err != nil {
 		return fmt.Errorf("--preview: %w", err)
+	}
+	return nil
+}
+
+// previewDialOptions returns the options for the ATE API client to opt in to
+// preview features, if the install under test enabled any.
+func previewDialOptions() []grpc.DialOption {
+	for _, enabled := range preview.AsMap() {
+		if enabled {
+			return preview.DialOptionsWithOptIn()
+		}
 	}
 	return nil
 }

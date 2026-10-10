@@ -20,6 +20,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/agent-substrate/substrate/internal/preview"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -211,6 +212,22 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 			assertValidateErr(t, ValidateCreateActorTemplateRequest(context.Background(), tt.req), tt.want)
 		})
 	}
+}
+
+func TestValidateCreateActorTemplateRequest_PreviewRestricted(t *testing.T) {
+	setPreviewForTest(t, "*")
+	req := &ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
+		tmpl.Volumes = []*ateapipb.Volume{{Name: "data", ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{Capacity: "10Gi", StorageClassName: "fast-ssd"}}}
+	})}
+
+	t.Run("allowed", func(t *testing.T) {
+		assertValidateErr(t, ValidateCreateActorTemplateRequest(context.Background(), req), nil)
+	})
+	t.Run("restricted", func(t *testing.T) {
+		ctx := preview.ContextWithOptOut(context.Background())
+		want := field.ErrorList{field.Forbidden(field.NewPath("actor_template", "volumes").Index(0).Child("external_volume_template"), "")}
+		assertValidateErr(t, ValidateCreateActorTemplateRequest(ctx, req), want)
+	})
 }
 
 func TestValidateGetActorTemplateRequest(t *testing.T) {
@@ -929,7 +946,7 @@ func TestValidateActorTemplate(t *testing.T) {
 				tt.mutate(tmpl)
 			}
 			assertValidate(t, func() field.ErrorList {
-				op := MakeCreateOp()
+				op := MakeCreateOp(context.Background())
 				return Validate_ActorTemplate(context.Background(), op, nil, tmpl, nil)
 			}, tt.want, tt.wantWithPreview)
 		})

@@ -351,6 +351,7 @@ func main() {
 		ateinterceptors.ServerUnaryInterceptor,
 		authz.UnaryServerInterceptor(authorizer, *experimentalEnableAuthz),
 		ateinterceptors.RejectUnknownFieldsUnaryInterceptor,
+		preview.UnaryServerInterceptor,
 	}
 
 	mux := grpc.NewServer(
@@ -366,6 +367,7 @@ func main() {
 		grpc.ChainUnaryInterceptor(unaryInterceptors...),
 		grpc.ChainStreamInterceptor(
 			apiauthn.StreamServerInterceptor(authCfg),
+			preview.StreamServerInterceptor,
 		),
 	)
 	reflection.Register(mux)
