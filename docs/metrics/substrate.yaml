@@ -234,12 +234,3 @@ blind_spots:
   - area: router shutdown outcome
     code: cmd/atenet/internal/router/drain.go
     brief: The code has two TODOs. Nothing counts a drain that ends with an error.
-  - area: CPU of short activations
-    code: cmd/atelet/statspoller.go
-    brief: >
-      ate.actor.stats.cpu.time counts only the samples atelet reads while an
-      actor is hosted. It loses the end of each activation, up to one poll
-      interval plus one ateom sample interval. Thus an activation shorter than
-      that, as a checkpoint-when-idle agent, can show little or no CPU here.
-      Its ate.actor.usage_sampled records keep it. Issue #2362 moves the
-      counter to the ateoms.

@@ -106,6 +106,70 @@ func TestActivationCPU(t *testing.T) {
 	}
 }
 
+// TestActivationCPUIncrements counts a short activation even when no periodic
+// sample occurs between its initial and final readings.
+func TestActivationCPUIncrements(t *testing.T) {
+	t.Parallel()
+	a := NewActivation(time.Now(), false)
+	first := &ateompb.WorkloadStatsSample{Source: ateompb.StatsSource_STATS_SOURCE_CGROUP, CpuUsageUsec: 200}
+	final := &ateompb.WorkloadStatsSample{Source: ateompb.StatsSource_STATS_SOURCE_CGROUP, CpuUsageUsec: 500}
+	var increments []uint64
+	a.Initial(first, func(delta uint64) { increments = append(increments, delta) })
+	a.Store(final)
+	a.Final(func(_ *ateompb.WorkloadStatsSample, delta uint64) { increments = append(increments, delta) })
+	if want := []uint64{200, 300}; !slices.Equal(increments, want) {
+		t.Errorf("CPU increments = %v, want %v", increments, want)
+	}
+}
+
+func TestActivationCPUIncrementsIgnorePendingAndLateSamples(t *testing.T) {
+	t.Parallel()
+	a := NewActivation(time.Now(), false)
+	measured := func(cpu uint64) *ateompb.WorkloadStatsSample {
+		return &ateompb.WorkloadStatsSample{Source: ateompb.StatsSource_STATS_SOURCE_CGROUP, CpuUsageUsec: cpu}
+	}
+	var increments []uint64
+	a.Initial(measured(200), func(delta uint64) { increments = append(increments, delta) })
+	a.Periodic(&ateompb.WorkloadStatsSample{}, func(delta uint64) { increments = append(increments, delta) })
+	a.Periodic(measured(350), func(delta uint64) { increments = append(increments, delta) })
+	a.Store(measured(500))
+	a.Final(func(_ *ateompb.WorkloadStatsSample, delta uint64) { increments = append(increments, delta) })
+	a.Periodic(measured(600), func(uint64) { t.Error("late periodic sample was accepted") })
+	a.Final(func(*ateompb.WorkloadStatsSample, uint64) { t.Error("final sample was accepted twice") })
+	if want := []uint64{200, 0, 150, 150}; !slices.Equal(increments, want) {
+		t.Errorf("CPU increments = %v, want %v", increments, want)
+	}
+}
+
+func TestActivationCPUIncrementsAfterResumingGuest(t *testing.T) {
+	t.Parallel()
+	a := NewActivation(time.Now(), true)
+	var increments []uint64
+	first := measure(t, a, reading{"": 9000})
+	a.Initial(&ateompb.WorkloadStatsSample{Source: ateompb.StatsSource_STATS_SOURCE_GUEST_AGENT, CpuUsageUsec: first}, func(delta uint64) {
+		increments = append(increments, delta)
+	})
+	final := measure(t, a, reading{"": 9300})
+	a.Store(&ateompb.WorkloadStatsSample{Source: ateompb.StatsSource_STATS_SOURCE_GUEST_AGENT, CpuUsageUsec: final})
+	a.Final(func(_ *ateompb.WorkloadStatsSample, delta uint64) { increments = append(increments, delta) })
+	if want := []uint64{0, 300}; !slices.Equal(increments, want) {
+		t.Errorf("CPU increments = %v, want %v", increments, want)
+	}
+}
+
+func TestActivationLateInitialChargesWithoutWritingRecord(t *testing.T) {
+	t.Parallel()
+	a := NewActivation(time.Now(), false)
+	a.Final(func(*ateompb.WorkloadStatsSample, uint64) {})
+	s := &ateompb.WorkloadStatsSample{Source: ateompb.StatsSource_STATS_SOURCE_GUEST_AGENT, CpuUsageUsec: 400}
+	if got := a.Initial(s, func(uint64) { t.Error("initial record after final") }); got != 400 {
+		t.Errorf("late initial CPU = %d, want 400", got)
+	}
+	if got := a.Initial(s, func(uint64) { t.Error("duplicate initial record") }); got != 0 {
+		t.Errorf("duplicate late initial CPU = %d, want 0", got)
+	}
+}
+
 func TestActivationMeasureError(t *testing.T) {
 	t.Parallel()
 	a := NewActivation(time.Now(), true)
@@ -138,7 +202,7 @@ func TestActivationStore(t *testing.T) {
 	if a.Latest() != p {
 		t.Error("Latest() is not the newest sample")
 	}
-	a.Final(func(m *ateompb.WorkloadStatsSample) {
+	a.Final(func(m *ateompb.WorkloadStatsSample, _ uint64) {
 		if m != newer {
 			t.Errorf("final sample = %v, want the newest measured one", m)
 		}
@@ -148,13 +212,13 @@ func TestActivationStore(t *testing.T) {
 func TestActivationInitialAfterFinal(t *testing.T) {
 	t.Parallel()
 	a := NewActivation(time.Now(), false)
-	a.Final(func(m *ateompb.WorkloadStatsSample) {
+	a.Final(func(m *ateompb.WorkloadStatsSample, _ uint64) {
 		if m != nil {
 			t.Errorf("final sample with nothing measured = %v, want nil", m)
 		}
 	})
 	wrote := false
-	a.Initial(&ateompb.WorkloadStatsSample{Source: ateompb.StatsSource_STATS_SOURCE_CGROUP}, func() { wrote = true })
+	a.Initial(&ateompb.WorkloadStatsSample{Source: ateompb.StatsSource_STATS_SOURCE_CGROUP}, func(uint64) { wrote = true })
 	if wrote || a.Latest() != nil {
 		t.Error("initial record written after the final one")
 	}
@@ -226,7 +290,7 @@ func TestActivationPeriodicWindow(t *testing.T) {
 	}
 	a := NewActivation(time.Now(), false)
 	var wrote []string
-	write := func(kind string) func() { return func() { wrote = append(wrote, kind) } }
+	write := func(kind string) func(uint64) { return func(uint64) { wrote = append(wrote, kind) } }
 
 	if a.Sampling() {
 		t.Error("Sampling() before the initial reading = true")
@@ -238,7 +302,7 @@ func TestActivationPeriodicWindow(t *testing.T) {
 	}
 	a.Periodic(sample(3), write("periodic"))
 	a.Initial(sample(4), write("initial-again"))
-	a.Final(func(*ateompb.WorkloadStatsSample) { wrote = append(wrote, "final") })
+	a.Final(func(*ateompb.WorkloadStatsSample, uint64) { wrote = append(wrote, "final") })
 	if a.Sampling() {
 		t.Error("Sampling() after the final record = true")
 	}
@@ -254,12 +318,12 @@ func TestActivationPeriodicWindow(t *testing.T) {
 func TestActivationFailedInitialOpensWindow(t *testing.T) {
 	t.Parallel()
 	a := NewActivation(time.Now(), true)
-	a.Initial(nil, func() { t.Error("wrote an initial record for a failed reading") })
+	a.Initial(nil, func(uint64) { t.Error("wrote an initial record for a failed reading") })
 	if !a.Sampling() {
 		t.Fatal("Sampling() after a failed initial reading = false")
 	}
 	wrote := false
-	a.Periodic(&ateompb.WorkloadStatsSample{ObservedAtUnixNano: 1}, func() { wrote = true })
+	a.Periodic(&ateompb.WorkloadStatsSample{ObservedAtUnixNano: 1}, func(uint64) { wrote = true })
 	if !wrote {
 		t.Error("no periodic record after a failed initial reading")
 	}
@@ -270,8 +334,8 @@ func TestActivationFinalOnce(t *testing.T) {
 	t.Parallel()
 	a := NewActivation(time.Now(), false)
 	writes := 0
-	a.Final(func(*ateompb.WorkloadStatsSample) { writes++ })
-	a.Final(func(*ateompb.WorkloadStatsSample) { writes++ })
+	a.Final(func(*ateompb.WorkloadStatsSample, uint64) { writes++ })
+	a.Final(func(*ateompb.WorkloadStatsSample, uint64) { writes++ })
 	if writes != 1 {
 		t.Errorf("Final wrote %d records, want 1", writes)
 	}
@@ -291,7 +355,7 @@ func TestActivationStoreMeasuredAfterNewerPending(t *testing.T) {
 	if a.Latest() != pending {
 		t.Errorf("Latest() = %v, want the newer pending sample", a.Latest())
 	}
-	a.Final(func(m *ateompb.WorkloadStatsSample) {
+	a.Final(func(m *ateompb.WorkloadStatsSample, _ uint64) {
 		if m != older {
 			t.Errorf("final sample = %v, want the measured sample read at 10", m)
 		}

@@ -963,26 +963,31 @@ groups:
     stability: development
     brief: The total CPU time in seconds of the actors that are in operation.
     note: >
-      This is a usual counter. The other three stats instruments use a
-      callback. atelet adds the increase of each activation to this counter.
-      Thus the value always increases. If a template leaves the node, its
-      series keeps its last value. It does not disappear. This is the
-      behaviour that a rate() query needs.
+      Each ateom adds the CPU increase of an activation when its initial,
+      periodic, or final sample is accepted. A final sample includes the CPU
+      from its last successful reading, even after the actor leaves the hosted
+      list. A successful initial read that finishes after the final record
+      still adds its CPU without writing a late usage record. The counter is
+      cumulative within each ateom process; a series holds its last value
+      after the last actor of a template leaves that process. Each worker pod
+      has its own ateom process and service instance, so each bounded label
+      set produces a series per worker pod rather than one per atelet node.
+      A replacement worker pod starts a new series; a restarted container in
+      the same pod reuses that pod's series and restarts it at zero, as a
+      cumulative counter reset. The other three stats instruments are atelet
+      callbacks.
 
-      It does not count usage twice. It can count less: the end of an
-      activation after the last sample atelet read of it, which is up to one
-      poll interval plus one ateom sample interval plus the sweep's own time
-      (up to 45s on a micro-VM), so an activation shorter than that can lose
-      most or all of its CPU here, while its usage records keep it; the time
-      around an atelet restart; and, in a
-      micro-VM restored from a full snapshot, a container's use before its
-      first successful reading. A node clock that steps back across an atelet
-      restart can count one activation in full a second time.
+      CPU can still be undercounted when the final reading fails and the last
+      measured sample is older, when an ateom exits without a final reading,
+      or, for a micro-VM restored from a full snapshot, before a container's
+      first successful reading. A gVisor VOLUMES checkpoint can run after its
+      final reading; CPU used between that reading and teardown is omitted
+      unless another sample captures it. OTLP delivery is best effort.
     annotations:
       substrate:
-        emitted_by: [atelet]
+        emitted_by: [ateom-gvisor, ateom-microvm]
         golden_signals: [saturation]
-        code_anchor: cmd/atelet/statspoller.go
+        code_anchor: internal/ateomstats/metrics.go
         cuj: Which template uses the CPU of the node?
     attributes: &actor_stats_attributes
       - ref: ate.template.atespace
@@ -1247,8 +1252,8 @@ groups:
     brief: The time, the rate and the errors of each gRPC method on the server.
     note: >
       The otelgrpc interceptor sends this instrument. The code of Substrate does
-      not make it. This instrument is the only instrumentation of ateom. ateom
-      has it on the gRPC interface that atelet calls.
+      not make it. The ateoms use it on the gRPC interface that atelet calls;
+      they also create ate.actor.stats.cpu.time.
     annotations:
       substrate:
         emitted_by: [ateapi, atelet, atenet-router, ateom-gvisor, ateom-microvm]

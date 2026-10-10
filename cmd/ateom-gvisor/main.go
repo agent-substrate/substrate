@@ -69,7 +69,7 @@ var (
 
 	readinessListenAddress = pflag.String("readiness-listen-address", "0.0.0.0:8080", "Address for HTTP readiness checks")
 	maxActors              = pflag.Int("max-actors", 1000, "How many actors this worker will host at once")
-	usageSampleInterval    = pflag.Duration("usage-sample-interval", time.Minute, "How often the ateom samples the resource usage of its actors. Each sample writes an ate.actor.usage_sampled record per actor, and GetActiveWorkloadStats serves the latest.")
+	usageSampleInterval    = pflag.Duration("usage-sample-interval", time.Minute, "How often the ateom samples actor resource usage. Each accepted sample writes an ate.actor.usage_sampled record, adds its CPU increase to ate.actor.stats.cpu.time, and is served by GetActiveWorkloadStats.")
 
 	showVersion  = pflag.Bool("version", false, "Print version and exit.")
 	logLevelFlag = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
@@ -224,11 +224,15 @@ func do(ctx context.Context) error {
 	// The controller sets both from the downward API.
 	pool := ateomstats.Pool{Namespace: os.Getenv("POD_NAMESPACE"), Name: os.Getenv("WORKER_POOL_NAME")}
 	if pool.Namespace == "" || pool.Name == "" {
-		slog.WarnContext(ctx, "Worker pool unknown; usage records will name no pool", slog.Any("pool", pool))
+		slog.WarnContext(ctx, "Worker pool unknown; usage telemetry will name no pool", slog.Any("pool", pool))
 	}
 	usageStdout := ateomstats.NewStdoutHandler(syncedWriter)
 	defer usageStdout.Close()
 	ateomService.usage = ateomstats.NewUsageEmitter(lp, usageStdout, pool)
+	ateomService.cpu, err = ateomstats.NewCPUCounter(mp.Meter("ateom-gvisor"), pool)
+	if err != nil {
+		return fmt.Errorf("initialize actor CPU metric: %w", err)
+	}
 	defer ateomstats.StartSampler(ctx, *usageSampleInterval, func(ctx context.Context) { ateomService.sweepUsage(ctx) })()
 
 	svr := grpc.NewServer(
@@ -318,6 +322,8 @@ type AteomService struct {
 	tunnel      *ateomtunnel.Tunnel
 	// usage writes the usage records. Nil writes none.
 	usage *ateomstats.UsageEmitter
+	// cpu records accepted activation CPU increases through the OTLP relay.
+	cpu *ateomstats.CPUCounter
 
 	// shuttingDown is set once SIGTERM has been received. While true, new
 	// workload RPCs are rejected with codes.Unavailable.

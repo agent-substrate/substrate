@@ -94,9 +94,8 @@ type activeStatsClient interface {
 // ateom registers itself on disk by creating its socket directory at boot (the
 // same sockets the lifecycle RPCs dial), so one readdir plus one probe per
 // socket is complete discovery, and discovery survives an atelet restart.
-// The CPU used between the old atelet's last sweep and the new one's first is
-// not charged. Attribution comes solely from the identity echoed inside each
-// sample, per the RPC's contract.
+// Attribution comes solely from the identity echoed inside each sample, per
+// the RPC's contract.
 type statsPoller struct {
 	// interval between the end of one sweep and the start of the next. Sweeps
 	// never overlap: a slow sweep delays the next tick rather than stacking a
@@ -126,38 +125,12 @@ type statsPoller struct {
 	inst *statsInstruments
 
 	// cachedPools carries pool resolutions across sweeps, so one failed pod
-	// list cannot re-home a tick's samples -- and the CPU counter's
-	// increments, which can never be re-attributed -- onto a pool-less label
-	// set. Safe because a pod's pool is immutable for the pod's lifetime: an
+	// list cannot re-home a tick's samples onto a pool-less label set. Safe
+	// because a pod's pool is immutable for the pod's lifetime: an
 	// entry can be stale, never wrong. Only the sweep loop touches it;
 	// resolveWorkerPools prunes it to the pods whose ateom directories still
 	// exist.
 	cachedPools map[string]workerPoolRef
-
-	// lastCPU is the last measured cpu_usage_usec per activation, the baseline
-	// for the next delta; read-only during a sweep and replaced whole at the
-	// end. An activation keeps its entry while its worker reports it, pending
-	// included, and while its worker does not answer; it is dropped once that
-	// worker answers without it or the worker's directory is gone. A worker
-	// that dies without removing its directory keeps its entries until atelet
-	// restarts.
-	lastCPU map[cpuKey]cpuBaseline
-
-	// startedAt is when this atelet started, in unix nanoseconds. An activation
-	// that began later was never charged, so its first sample counts in full.
-	startedAt int64
-}
-
-// cpuKey is one activation of one actor, the span a CPU counter counts within.
-type cpuKey struct {
-	actorUID string
-	epoch    int64
-}
-
-// cpuBaseline is an activation's last CPU reading and the worker that sent it.
-type cpuBaseline struct {
-	usec   uint64
-	podUID string
 }
 
 // templateAggregate is one tick's sums for one templateKey group: the
@@ -165,18 +138,11 @@ type cpuBaseline struct {
 // identity deliberately never reach a metric label; per-actor detail is on
 // the ateoms' usage records.
 //
-// The memory fields are point-in-time sums the gauges observe. cpuDeltaUsec is
-// different: cpu_usage_usec is a cumulative counter per activation, so summing
-// the raw values across a churning actor set would be meaningless to rate() --
-// instead the poller tracks each activation's last seen value and this carries
-// the sweep's INCREASE, which tick adds onto a monotonic counter. Counter
-// semantics survive actors joining, leaving, and starting new activations by
-// construction.
+// The memory fields are point-in-time sums the gauges observe.
 type templateAggregate struct {
 	sampledActors         int64
 	memoryCurrentBytes    int64
 	memoryWorkingSetBytes int64
-	cpuDeltaUsec          int64
 }
 
 // workerPoolRef names one WorkerPool: the pod's namespace and the
@@ -232,12 +198,10 @@ func (p *statsPoller) run(ctx context.Context) {
 	}
 }
 
-// tick sweeps every ateom on the node once, adds the sweep's CPU increases
-// onto the counters, and publishes the aggregates for the next metric
-// collection to observe.
+// tick sweeps every ateom on the node once and publishes the aggregates for
+// the next metric collection to observe.
 func (p *statsPoller) tick(ctx context.Context) {
 	aggs := p.collect(ctx)
-	p.inst.addCPU(ctx, aggs)
 	p.inst.publish(aggs)
 }
 
@@ -251,8 +215,7 @@ func (p *statsPoller) tick(ctx context.Context) {
 // their directory but not yet listened, and workers torn down mid-sweep. The
 // no-sample answers are equally routine: an empty samples list is an idle
 // worker, and a pending entry (source UNSPECIFIED) is a workload the ateom
-// has not measured (boot, restore, or an unreached guest), which adds nothing
-// but keeps its CPU baseline.
+// has not measured (boot, restore, or an unreached guest), which adds nothing.
 func (p *statsPoller) collect(ctx context.Context) map[templateKey]*templateAggregate {
 	entries, err := os.ReadDir(p.ateomsDir)
 	if err != nil {
@@ -263,22 +226,17 @@ func (p *statsPoller) collect(ctx context.Context) map[templateKey]*templateAggr
 	}
 
 	podUIDs := make([]string, 0, len(entries))
-	present := make(map[string]bool, len(entries))
 	for _, e := range entries {
 		if e.IsDir() {
 			podUIDs = append(podUIDs, e.Name())
-			present[e.Name()] = true
 		}
 	}
 	pools := p.resolveWorkerPools(ctx, podUIDs)
 
 	var (
-		mu      sync.Mutex
-		aggs    = make(map[templateKey]*templateAggregate)
-		seenCPU = make(map[cpuKey]cpuBaseline)
-		// answered is the workers whose probe succeeded this sweep.
-		answered = make(map[string]bool)
-		g        errgroup.Group
+		mu   sync.Mutex
+		aggs = make(map[templateKey]*templateAggregate)
+		g    errgroup.Group
 	)
 	g.SetLimit(statsSweepConcurrency)
 	for _, podUID := range podUIDs {
@@ -304,22 +262,11 @@ func (p *statsPoller) collect(ctx context.Context) map[templateKey]*templateAggr
 				return nil
 			}
 
-			mu.Lock()
-			answered[podUID] = true
-			mu.Unlock()
-
 			// One entry per workload the ateom is hosting; empty when it is
 			// available.
 			for _, sample := range resp.GetSamples() {
-				cpuAt := cpuKey{actorUID: sample.GetActorUid(), epoch: sample.GetEpochUnixNano()}
 				if sample.GetSource() == ateompb.StatsSource_STATS_SOURCE_UNSPECIFIED {
-					// Pending: hosted but not measured, so it adds nothing
-					// and its CPU baseline carries forward.
-					if last, ok := p.lastCPU[cpuAt]; ok {
-						mu.Lock()
-						seenCPU[cpuAt] = last
-						mu.Unlock()
-					}
+					// Pending: hosted but not measured, so it adds nothing.
 					continue
 				}
 				key := templateKey{
@@ -338,23 +285,6 @@ func (p *statsPoller) collect(ctx context.Context) map[templateKey]*templateAggr
 				agg.sampledActors++
 				agg.memoryCurrentBytes = addSat(agg.memoryCurrentBytes, sample.GetMemoryCurrentBytes())
 				agg.memoryWorkingSetBytes = addSat(agg.memoryWorkingSetBytes, sample.GetMemoryWorkingSetBytes())
-
-				// The counter increase since the activation's baseline; the
-				// ateom never lets it decrease within an activation. An
-				// activation with no baseline that began after this atelet
-				// started was never charged, so its value counts in full. One
-				// that began earlier may have been charged by the atelet before
-				// this one, so it only sets the baseline. Both times come from
-				// this node's clock: atelet reads only the ateoms on its node.
-				cpu := sample.GetCpuUsageUsec()
-				seenCPU[cpuAt] = cpuBaseline{usec: cpu, podUID: podUID}
-				if last, ok := p.lastCPU[cpuAt]; ok {
-					if cpu > last.usec {
-						agg.cpuDeltaUsec = addSat(agg.cpuDeltaUsec, cpu-last.usec)
-					}
-				} else if cpuAt.epoch > p.startedAt {
-					agg.cpuDeltaUsec = addSat(agg.cpuDeltaUsec, cpu)
-				}
 				mu.Unlock()
 			}
 			return nil
@@ -363,16 +293,6 @@ func (p *statsPoller) collect(ctx context.Context) map[templateKey]*templateAggr
 	// The tasks only ever return nil: a probe that fails is "not a target this
 	// tick", never a failed sweep.
 	_ = g.Wait()
-	// A worker that did not answer keeps its activations' baselines: dropping
-	// one would charge the activation in full again once the worker answers.
-	// Everything else this sweep did not see is dropped, so lastCPU does not
-	// grow with actor churn on workers that answer.
-	for k, b := range p.lastCPU {
-		if _, seen := seenCPU[k]; !seen && present[b.podUID] && !answered[b.podUID] {
-			seenCPU[k] = b
-		}
-	}
-	p.lastCPU = seenCPU
 	return aggs
 }
 
@@ -380,8 +300,7 @@ func (p *statsPoller) collect(ctx context.Context) map[templateKey]*templateAggr
 // MaxInt64 at both hops: converting the wire value and adding it. The wire
 // carries whatever the guest kernel -- or, on the micro-VM runtime, the guest
 // agent -- reported, and a corrupt reading above 2^63 must degrade to a pinned
-// ceiling, not flip a gauge negative or feed a negative Add into the CPU
-// counter (which the OTel spec forbids). The same reasoning as
+// ceiling, not flip a gauge negative. The same reasoning as
 // agentstats.Sample.Plus, one type boundary later.
 func addSat(agg int64, v uint64) int64 {
 	if v > math.MaxInt64 {
@@ -463,8 +382,8 @@ func newWorkerPoolFetcher(client kubernetes.Interface, nodeName string) func(ctx
 }
 
 // Metric names follow the OTel semantic-convention shape for container
-// resource metrics (container.cpu.time, container.memory.usage,
-// container.memory.working_set): dot-separated resource.measurement leaves,
+// resource metrics (container.memory.usage, container.memory.working_set):
+// dot-separated resource.measurement leaves,
 // units carried by the instrument's unit field rather than the name --
 // exporters re-attach them per their own conventions (the Prometheus
 // rendering of memory.working_set is ate_actor_stats_memory_working_set_bytes).
@@ -472,7 +391,6 @@ const (
 	sampledActorsMetric = "ate.actor.stats.sampled_actors"
 	memoryCurrentMetric = "ate.actor.stats.memory.usage"
 	workingSetMetric    = "ate.actor.stats.memory.working_set"
-	cpuUsageMetric      = "ate.actor.stats.cpu.time"
 )
 
 // statsInstruments exposes the latest sweep's aggregates as observable
@@ -486,26 +404,10 @@ type statsInstruments struct {
 	// latest is the snapshot the callback reads: written whole by publish,
 	// never mutated in place.
 	latest atomic.Pointer[map[templateKey]*templateAggregate]
-
-	// cpuUsage is a plain synchronous counter, unlike the gauges: the sweep's
-	// per-actor increases are ADDED here, and cumulative-counter semantics --
-	// including a vanished template's series holding its final value rather
-	// than disappearing -- are exactly what rate() consumers expect.
-	cpuUsage metric.Float64Counter
 }
 
 func newStatsInstruments(meter metric.Meter) (*statsInstruments, error) {
 	i := &statsInstruments{}
-
-	cpuUsage, err := meter.Float64Counter(
-		cpuUsageMetric,
-		metric.WithUnit("s"),
-		metric.WithDescription("Cumulative CPU time consumed by running actors, in seconds."),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("create %s counter: %w", cpuUsageMetric, err)
-	}
-	i.cpuUsage = cpuUsage
 
 	sampledActors, err := meter.Int64ObservableGauge(
 		sampledActorsMetric,
@@ -561,21 +463,6 @@ func (i *statsInstruments) publish(aggs map[templateKey]*templateAggregate) {
 	i.latest.Store(&aggs)
 }
 
-// addCPU adds one sweep's CPU increases onto the counters. A nil receiver is
-// a valid no-op, like Instruments.
-func (i *statsInstruments) addCPU(ctx context.Context, aggs map[templateKey]*templateAggregate) {
-	if i == nil {
-		return
-	}
-	for key, agg := range aggs {
-		// The wire carries microseconds; the metric is seconds -- the base
-		// unit CPU time is exported in everywhere else (cAdvisor's
-		// container_cpu_usage_seconds_total, OTel's *.cpu.time) -- so the
-		// existing rate() idioms read directly as cores.
-		i.cpuUsage.Add(ctx, float64(agg.cpuDeltaUsec)/1e6, key.attrs())
-	}
-}
-
 // startStatsPoller assembles the metrics poller and starts it. Split from
 // main's boot sequence so the subsystem has one obvious entry point.
 //
@@ -593,8 +480,7 @@ func startStatsPoller(ctx context.Context, interval time.Duration, inst *statsIn
 			}
 			return ateompb.NewAteomClient(conn), closer, nil
 		},
-		inst:      inst,
-		startedAt: time.Now().UnixNano(),
+		inst: inst,
 	}
 	// NODE_NAME comes from the Downward API; without it the samples still
 	// flow, just grouped without pool labels.

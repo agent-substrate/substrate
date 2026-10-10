@@ -12,13 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package ateomstatstest records the usage records an ateom writes, for tests.
+// Package ateomstatstest records the usage telemetry an ateom writes, for tests.
 package ateomstatstest
 
 import (
 	"context"
 	"log/slog"
 	"sync"
+	"testing"
+
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/ateomstats"
@@ -35,6 +39,44 @@ type Recorder struct {
 func NewEmitter() (*ateomstats.UsageEmitter, *Recorder) {
 	rec := &Recorder{}
 	return ateomstats.NewUsageEmitter(nil, rec, ateomstats.Pool{}), rec
+}
+
+// NewCPUCounter returns a counter backed by a manual reader under scope.
+func NewCPUCounter(t *testing.T, scope string) (*ateomstats.CPUCounter, *sdkmetric.ManualReader) {
+	t.Helper()
+	reader := sdkmetric.NewManualReader()
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	t.Cleanup(func() { _ = mp.Shutdown(context.Background()) })
+	counter, err := ateomstats.NewCPUCounter(mp.Meter(scope), ateomstats.Pool{Namespace: "ns", Name: "pool"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return counter, reader
+}
+
+// CPUSeconds collects the actor CPU counter, returning zero before any Add.
+func CPUSeconds(t *testing.T, reader *sdkmetric.ManualReader) float64 {
+	t.Helper()
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatal(err)
+	}
+	var total float64
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name != ateomstats.CPUTimeMetric {
+				continue
+			}
+			sum, ok := m.Data.(metricdata.Sum[float64])
+			if !ok {
+				t.Fatalf("CPU metric has data %T, want Sum[float64]", m.Data)
+			}
+			for _, dp := range sum.DataPoints {
+				total += dp.Value
+			}
+		}
+	}
+	return total
 }
 
 // Kinds is the ate.stats.kind of each record, in order.
