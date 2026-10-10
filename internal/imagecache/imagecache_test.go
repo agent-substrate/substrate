@@ -53,6 +53,19 @@ func newTestRegistry(t *testing.T) (*httptest.Server, string) {
 	return srv, u.Host
 }
 
+// newWrappedRegistry starts an in-memory OCI registry behind wrap and returns
+// its host.
+func newWrappedRegistry(t *testing.T, wrap func(http.Handler) http.Handler) string {
+	t.Helper()
+	srv := httptest.NewServer(wrap(registry.New(registry.Logger(log.New(io.Discard, "", 0)))))
+	t.Cleanup(srv.Close)
+	u, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatalf("parsing registry URL: %v", err)
+	}
+	return u.Host
+}
+
 func layerFromEntries(t *testing.T, entries []tarEntry) v1.Layer {
 	t.Helper()
 	b := buildTar(t, entries)
