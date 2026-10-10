@@ -38,6 +38,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/peer"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -855,7 +856,11 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 				actor.SourceTag = &ateapipb.ObjectRef{Atespace: ref.Atespace, Name: "explicit"}
 			}
 			svc := &ServiceImpl{store: persistence}
+			original := proto.CloneOf(actor)
 			created, err := svc.CreateActor(ctx, actor)
+			if diff := cmp.Diff(original, actor, protocmp.Transform()); diff != "" {
+				t.Fatalf("CreateActor mutated input (-want +got):\n%s", diff)
+			}
 			if apierror.Code(err) != wantCode {
 				t.Fatalf("CreateActor = %v, want %v", err, wantCode)
 			}
@@ -865,6 +870,13 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 			gotSnap, gotSt := findLatestSnapshotStorage(created.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
 			if gotSt.GetObject().GetSnapshotUri() != tagDurableSnapshotURI(tag, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED) || gotSnap.GetActorTemplateUid() != tmpl.GetMetadata().GetUid() {
 				t.Fatalf("incorrect initial status: %v", created.GetStatus())
+			}
+			wantTag := ref
+			if scenario == "explicit tag" {
+				wantTag = actor.GetSourceTag()
+			}
+			if got := created.GetSourceTag(); got.GetAtespace() != wantTag.GetAtespace() || got.GetName() != wantTag.GetName() {
+				t.Fatalf("source tag = %v, want %v", got, wantTag)
 			}
 			if scenario == "own snapshot" {
 				uri, err := resources.NewActorSnapshotURI(tmpl.GetSnapshotConfig().GetStorageLocation(), "team-a", created.GetMetadata().GetUid(), "snapshot")

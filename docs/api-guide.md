@@ -463,7 +463,7 @@ When an `ActorTemplate` is created:
 3. It creates a published tag named after the template UID, copying the snapshot into tag-owned storage.
 4. It deletes the golden actor and records the tag reference in the template status.
 
-`CreateActor` uses an explicit `sourceTag` when supplied; otherwise it resolves the template's golden tag and records that snapshot on the new actor. If the golden tag is not ready yet, the actor starts without a snapshot and cold-boots even if the tag becomes ready before its first resume. The default does not populate the caller-owned `sourceTag` field. Deleting the template collects its golden tag and any unfinished golden actor.
+`CreateActor` uses an explicit `sourceTag` when supplied; otherwise it resolves the template's golden tag, records that snapshot on the new actor, and stamps the golden tag into the actor's `sourceTag`. If the golden tag is not ready yet, the actor starts without a snapshot and cold-boots even if the tag becomes ready before its first resume. Deleting the template collects its golden tag and any unfinished golden actor.
 
 ### Resumption Lifecycle
 Once a template is `Ready`, creating an actor logically (via `kubectl ate create actor`) allows it to be resumed instantly on any free worker in the referenced `WorkerPool`. Substrate bypasses the standard container boot and restores the process directly from its last saved state.

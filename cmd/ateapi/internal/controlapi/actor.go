@@ -88,9 +88,20 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 	}
 
 	// Resolve the explicit tag, or freeze the template's current golden default.
+	goldenDefault := inActor.GetSourceTag() == nil
 	tagRef := inActor.GetSourceTag()
-	if tagRef == nil {
+	if goldenDefault {
 		tagRef = template.GetStatus().GetGoldenSnapshotStatus().GetGoldenTag()
+		if tagRef != nil {
+			// Default the request's source tag to the golden tag it borrows
+			// from, so the stored Actor carries the reference itself. The
+			// template is otherwise the only record of it, and deleting the
+			// template strands actors that have not resumed yet. Stamp a copy
+			// of the request: the caller's message, which the RPC interceptor
+			// logs after the handler returns, keeps reflecting what was sent.
+			inActor = proto.CloneOf(inActor)
+			inActor.SourceTag = proto.CloneOf(tagRef)
+		}
 	} else {
 		for _, volume := range template.GetVolumes() {
 			if volume.GetExternalVolumeTemplate() != nil {
@@ -105,7 +116,7 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 		if err != nil {
 			return nil, err
 		}
-		if inActor.GetSourceTag() == nil {
+		if goldenDefault {
 			if err := validateGoldenSnapshotFidelity(sourceTag.GetStatus().GetSnapshot()); err != nil {
 				return nil, err
 			}
