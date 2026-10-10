@@ -21,7 +21,7 @@ import (
 	"path/filepath"
 
 	"github.com/agent-substrate/substrate/internal/pluginsocket"
-	objectstoresnapshotv1 "github.com/agent-substrate/substrate/pkg/proto/objectstoresnapshotpb/v1"
+	objectstorev1 "github.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1"
 	"google.golang.org/grpc"
 )
 
@@ -34,7 +34,7 @@ func (s *AteomHerder) fetchSnapshotFiles(ctx context.Context, snapshotURI, dstDi
 	if len(files) == 0 {
 		return nil
 	}
-	_, err := s.snapshotPlugin.FetchSnapshot(ctx, &objectstoresnapshotv1.FetchSnapshotRequest{
+	_, err := s.snapshotPlugin.FetchSnapshot(ctx, &objectstorev1.FetchSnapshotRequest{
 		SnapshotUri: snapshotURI,
 		WritePath:   dstDir,
 		Files:       files,
@@ -50,7 +50,7 @@ func (s *AteomHerder) uploadSnapshotFiles(ctx context.Context, snapshotURI, srcD
 	if len(files) == 0 {
 		return nil
 	}
-	_, err := s.snapshotPlugin.UploadSnapshot(ctx, &objectstoresnapshotv1.UploadSnapshotRequest{
+	_, err := s.snapshotPlugin.UploadSnapshot(ctx, &objectstorev1.UploadSnapshotRequest{
 		SnapshotUri: snapshotURI,
 		LocalPath:   srcDir,
 		Files:       files,

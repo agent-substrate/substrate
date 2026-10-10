@@ -290,6 +290,73 @@ func TestServeHTTP(t *testing.T) {
 	}
 }
 
+func TestServerRejectsDuplicateOrCommaTargetActorHeaders(t *testing.T) {
+	upstreamURL, err := url.Parse("http://actor.internal:80")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s := newTestServer(t, upstreamURL)
+	var upstreamCalled bool
+	actorTransport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		upstreamCalled = true
+		return &http.Response{
+			StatusCode: http.StatusNoContent,
+			Header:     make(http.Header),
+			Body:       http.NoBody,
+		}, nil
+	})
+	if err := s.Activate("team-a", "actor-1", "uid-actor-1", testDial); err != nil {
+		t.Fatal(err)
+	}
+	setActorTransport(t, s, "team-a", "actor-1", actorTransport)
+
+	tests := []struct {
+		name    string
+		host    string
+		headers []string
+	}{
+		{
+			name:    "duplicate different actors",
+			host:    "actor-1.team-a.actors.resources.substrate.ate.dev",
+			headers: []string{"team-a/actor-1", "secret/x"},
+		},
+		{
+			name:    "duplicate identical actors",
+			host:    "actor-1.team-a.actors.resources.substrate.ate.dev",
+			headers: []string{"team-a/actor-1", "team-a/actor-1"},
+		},
+		{
+			name:    "comma-joined actors",
+			host:    "actor-1.team-a.actors.resources.substrate.ate.dev",
+			headers: []string{"team-a/actor-1,secret/x"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			upstreamCalled = false
+			req := httptest.NewRequest(http.MethodGet, "https://worker/hello", nil)
+			req.Host = tt.host
+			for _, h := range tt.headers {
+				req.Header.Add(atenet.TargetActorHeader, h)
+			}
+			rec := httptest.NewRecorder()
+			s.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusMisdirectedRequest {
+				t.Fatalf("status = %d, want %d", rec.Code, http.StatusMisdirectedRequest)
+			}
+			if rec.Header().Get(StaleAssignmentHeader) != "true" {
+				t.Errorf("missing %s response header", StaleAssignmentHeader)
+			}
+			if upstreamCalled {
+				t.Errorf("upstream was dialed, expected request to be rejected")
+			}
+		})
+	}
+}
+
 func TestServeHTTPHonorsTargetPortHeader(t *testing.T) {
 	upstreamURL, err := url.Parse("http://actor.internal:80")
 	if err != nil {

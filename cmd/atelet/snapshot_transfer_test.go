@@ -35,7 +35,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/pluginsocket"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/objectstorage"
-	objectstoresnapshotv1 "github.com/agent-substrate/substrate/pkg/proto/objectstoresnapshotpb/v1"
+	objectstorev1 "github.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/connectivity"
@@ -155,11 +155,11 @@ type failingNodePlugin struct {
 	err error
 }
 
-func (p failingNodePlugin) FetchSnapshot(context.Context, *objectstoresnapshotv1.FetchSnapshotRequest, ...grpc.CallOption) (*objectstoresnapshotv1.FetchSnapshotResponse, error) {
+func (p failingNodePlugin) FetchSnapshot(context.Context, *objectstorev1.FetchSnapshotRequest, ...grpc.CallOption) (*objectstorev1.FetchSnapshotResponse, error) {
 	return nil, p.err
 }
 
-func (p failingNodePlugin) UploadSnapshot(context.Context, *objectstoresnapshotv1.UploadSnapshotRequest, ...grpc.CallOption) (*objectstoresnapshotv1.UploadSnapshotResponse, error) {
+func (p failingNodePlugin) UploadSnapshot(context.Context, *objectstorev1.UploadSnapshotRequest, ...grpc.CallOption) (*objectstorev1.UploadSnapshotResponse, error) {
 	return nil, p.err
 }
 
@@ -259,7 +259,7 @@ func (s *pluginSidecar) start() {
 		return
 	}
 	srv := grpc.NewServer()
-	objectstoresnapshotv1.RegisterNodeProviderServer(srv, s.plugin)
+	objectstorev1.RegisterNodeProviderServer(srv, s.plugin)
 	healthpb.RegisterHealthServer(srv, health.NewServer())
 	go srv.Serve(lis)
 	s.mu.Lock()
@@ -298,7 +298,7 @@ func TestCheckpointUploadWaitsOutPluginOutage(t *testing.T) {
 		t.Fatalf("WaitReady = %v", err)
 	}
 	s := &AteomHerder{
-		snapshotPlugin:     objectstoresnapshotv1.NewNodeProviderClient(conn),
+		snapshotPlugin:     objectstorev1.NewNodeProviderClient(conn),
 		snapshotScratchDir: t.TempDir(),
 	}
 	rec := sandboxAssetsRecord{

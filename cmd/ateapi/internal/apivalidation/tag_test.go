@@ -54,9 +54,8 @@ func TestValidateCreateTagRequest(t *testing.T) {
 			req: &ateapipb.CreateTagRequest{
 				Tag: validTag(func(tag *ateapipb.Tag) {
 					tag.Status = &ateapipb.TagStatus{
-						Snapshot:         validExternalSnapshot(),
+						Snapshot:         validSnapshot(),
 						ActorTemplateUid: someActorUID,
-						StorageLocation:  testStorageLocation,
 					}
 				}),
 			},

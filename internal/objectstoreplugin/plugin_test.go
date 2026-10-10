@@ -29,7 +29,7 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/pluginsocket"
 	"github.com/agent-substrate/substrate/pkg/objectstorage"
-	objectstoresnapshotv1 "github.com/agent-substrate/substrate/pkg/proto/objectstoresnapshotpb/v1"
+	objectstorev1 "github.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/health"
@@ -129,8 +129,8 @@ func serve(t *testing.T, backend *memObjects, root string) *grpc.ClientConn {
 		t.Fatal(err)
 	}
 	srv := grpc.NewServer()
-	objectstoresnapshotv1.RegisterNodeProviderServer(srv, node)
-	objectstoresnapshotv1.RegisterControlProviderServer(srv, NewControlPlugin(backend))
+	objectstorev1.RegisterNodeProviderServer(srv, node)
+	objectstorev1.RegisterControlProviderServer(srv, NewControlPlugin(backend))
 	healthpb.RegisterHealthServer(srv, health.NewServer())
 	go srv.Serve(lis)
 	t.Cleanup(srv.Stop)
@@ -155,7 +155,7 @@ func TestUploadFetchRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	backend := newMemObjects()
 	root := t.TempDir()
-	client := objectstoresnapshotv1.NewNodeProviderClient(serve(t, backend, root))
+	client := objectstorev1.NewNodeProviderClient(serve(t, backend, root))
 
 	src := filepath.Join(root, "src")
 	dst := filepath.Join(root, "dst")
@@ -175,12 +175,12 @@ func TestUploadFetchRoundTrip(t *testing.T) {
 		}
 	}
 
-	if _, err := client.UploadSnapshot(ctx, &objectstoresnapshotv1.UploadSnapshotRequest{
+	if _, err := client.UploadSnapshot(ctx, &objectstorev1.UploadSnapshotRequest{
 		SnapshotUri: testURI, LocalPath: src, Files: []string{"memory.img", "state.bin"},
 	}); err != nil {
 		t.Fatalf("UploadSnapshot(data) = %v", err)
 	}
-	if _, err := client.UploadSnapshot(ctx, &objectstoresnapshotv1.UploadSnapshotRequest{
+	if _, err := client.UploadSnapshot(ctx, &objectstorev1.UploadSnapshotRequest{
 		SnapshotUri: testURI, LocalPath: src, Files: []string{manifestFile},
 	}); err != nil {
 		t.Fatalf("UploadSnapshot(manifest) = %v", err)
@@ -199,7 +199,7 @@ func TestUploadFetchRoundTrip(t *testing.T) {
 		t.Errorf("stored manifest = %q, want it uncompressed", got)
 	}
 
-	if _, err := client.FetchSnapshot(ctx, &objectstoresnapshotv1.FetchSnapshotRequest{
+	if _, err := client.FetchSnapshot(ctx, &objectstorev1.FetchSnapshotRequest{
 		SnapshotUri: testURI, WritePath: dst, Files: []string{manifestFile, "memory.img", "state.bin"},
 	}); err != nil {
 		t.Fatalf("FetchSnapshot = %v", err)
@@ -217,9 +217,9 @@ func TestUploadFetchRoundTrip(t *testing.T) {
 
 func TestFetchMissingIsNotFound(t *testing.T) {
 	root := t.TempDir()
-	client := objectstoresnapshotv1.NewNodeProviderClient(serve(t, newMemObjects(), root))
+	client := objectstorev1.NewNodeProviderClient(serve(t, newMemObjects(), root))
 	for _, file := range []string{manifestFile, "memory.img"} {
-		_, err := client.FetchSnapshot(context.Background(), &objectstoresnapshotv1.FetchSnapshotRequest{
+		_, err := client.FetchSnapshot(context.Background(), &objectstorev1.FetchSnapshotRequest{
 			SnapshotUri: testURI, WritePath: root, Files: []string{file},
 		})
 		if status.Code(err) != codes.NotFound {
@@ -230,7 +230,7 @@ func TestFetchMissingIsNotFound(t *testing.T) {
 
 func TestNodeRequestValidation(t *testing.T) {
 	root := t.TempDir()
-	client := objectstoresnapshotv1.NewNodeProviderClient(serve(t, newMemObjects(), root))
+	client := objectstorev1.NewNodeProviderClient(serve(t, newMemObjects(), root))
 	for _, tc := range []struct {
 		name  string
 		uri   string
@@ -249,10 +249,10 @@ func TestNodeRequestValidation(t *testing.T) {
 		{"duplicate file", testURI, root, []string{"a", "b", "a"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, fetchErr := client.FetchSnapshot(context.Background(), &objectstoresnapshotv1.FetchSnapshotRequest{
+			_, fetchErr := client.FetchSnapshot(context.Background(), &objectstorev1.FetchSnapshotRequest{
 				SnapshotUri: tc.uri, WritePath: tc.dir, Files: tc.files,
 			})
-			_, uploadErr := client.UploadSnapshot(context.Background(), &objectstoresnapshotv1.UploadSnapshotRequest{
+			_, uploadErr := client.UploadSnapshot(context.Background(), &objectstorev1.UploadSnapshotRequest{
 				SnapshotUri: tc.uri, LocalPath: tc.dir, Files: tc.files,
 			})
 			for _, err := range []error{fetchErr, uploadErr} {
@@ -269,7 +269,7 @@ func TestUploadRejectsSymlinkOutsideDir(t *testing.T) {
 		t.Run(file, func(t *testing.T) {
 			parent := t.TempDir()
 			backend := newMemObjects()
-			client := objectstoresnapshotv1.NewNodeProviderClient(serve(t, backend, parent))
+			client := objectstorev1.NewNodeProviderClient(serve(t, backend, parent))
 			checkpointDir := filepath.Join(parent, "checkpoint-state")
 			if err := os.Mkdir(checkpointDir, 0o700); err != nil {
 				t.Fatal(err)
@@ -282,7 +282,7 @@ func TestUploadRejectsSymlinkOutsideDir(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			_, err := client.UploadSnapshot(context.Background(), &objectstoresnapshotv1.UploadSnapshotRequest{
+			_, err := client.UploadSnapshot(context.Background(), &objectstorev1.UploadSnapshotRequest{
 				SnapshotUri: testURI, LocalPath: checkpointDir, Files: []string{file},
 			})
 			if err == nil {
@@ -301,7 +301,7 @@ func TestFetchRejectsSymlinkOutsideDir(t *testing.T) {
 			ctx := context.Background()
 			parent := t.TempDir()
 			backend := newMemObjects()
-			client := objectstoresnapshotv1.NewNodeProviderClient(serve(t, backend, parent))
+			client := objectstorev1.NewNodeProviderClient(serve(t, backend, parent))
 			src := filepath.Join(parent, "src")
 			restoreDir := filepath.Join(parent, "restore-state")
 			for _, d := range []string{src, restoreDir} {
@@ -312,7 +312,7 @@ func TestFetchRejectsSymlinkOutsideDir(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(src, file), []byte("replacement"), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := client.UploadSnapshot(ctx, &objectstoresnapshotv1.UploadSnapshotRequest{
+			if _, err := client.UploadSnapshot(ctx, &objectstorev1.UploadSnapshotRequest{
 				SnapshotUri: testURI, LocalPath: src, Files: []string{file},
 			}); err != nil {
 				t.Fatal(err)
@@ -325,7 +325,7 @@ func TestFetchRejectsSymlinkOutsideDir(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			_, err := client.FetchSnapshot(ctx, &objectstoresnapshotv1.FetchSnapshotRequest{
+			_, err := client.FetchSnapshot(ctx, &objectstorev1.FetchSnapshotRequest{
 				SnapshotUri: testURI, WritePath: restoreDir, Files: []string{file},
 			})
 			if err == nil {
@@ -358,9 +358,9 @@ func TestRejectsDirSymlinkOutsideRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	backend := newMemObjects()
-	client := objectstoresnapshotv1.NewNodeProviderClient(serve(t, backend, root))
+	client := objectstorev1.NewNodeProviderClient(serve(t, backend, root))
 
-	if _, err := client.UploadSnapshot(ctx, &objectstoresnapshotv1.UploadSnapshotRequest{
+	if _, err := client.UploadSnapshot(ctx, &objectstorev1.UploadSnapshotRequest{
 		SnapshotUri: testURI, LocalPath: link, Files: []string{"checkpoint.img"},
 	}); err == nil {
 		t.Error("UploadSnapshot read through a directory symlink outside --root")
@@ -370,7 +370,7 @@ func TestRejectsDirSymlinkOutsideRoot(t *testing.T) {
 	}
 
 	backend.m[testBucket+"/"+testPrefix+"/"+manifestFile] = []byte("m")
-	if _, err := client.FetchSnapshot(ctx, &objectstoresnapshotv1.FetchSnapshotRequest{
+	if _, err := client.FetchSnapshot(ctx, &objectstorev1.FetchSnapshotRequest{
 		SnapshotUri: testURI, WritePath: link, Files: []string{manifestFile},
 	}); err == nil {
 		t.Error("FetchSnapshot succeeded through a directory symlink outside --root")
@@ -383,7 +383,7 @@ func TestRejectsDirSymlinkOutsideRoot(t *testing.T) {
 func TestCleanupSnapshot(t *testing.T) {
 	ctx := context.Background()
 	backend := newMemObjects()
-	client := objectstoresnapshotv1.NewControlProviderClient(serve(t, backend, t.TempDir()))
+	client := objectstorev1.NewControlProviderClient(serve(t, backend, t.TempDir()))
 	// uid10 shares a string prefix with uid1, so it survives only if cleanup
 	// stops at a path-segment boundary.
 	keep := testBucket + "/root/atespaces/team-a/actors/uid10/snapshots/snap1/manifest.json"
@@ -393,19 +393,19 @@ func TestCleanupSnapshot(t *testing.T) {
 
 	// An owner prefix collects every snapshot below it, and nothing beside it.
 	owner := "gs://" + testBucket + "/root/atespaces/team-a/actors/uid1"
-	if _, err := client.CleanupSnapshot(ctx, &objectstoresnapshotv1.CleanupSnapshotRequest{SnapshotUri: owner}); err != nil {
+	if _, err := client.CleanupSnapshot(ctx, &objectstorev1.CleanupSnapshotRequest{SnapshotUri: owner}); err != nil {
 		t.Fatalf("CleanupSnapshot = %v", err)
 	}
 	if got := backend.keys(); !equal(got, []string{keep}) {
 		t.Errorf("objects left = %v, want only %s", got, keep)
 	}
 	// Cleaning up again is a no-op.
-	if _, err := client.CleanupSnapshot(ctx, &objectstoresnapshotv1.CleanupSnapshotRequest{SnapshotUri: owner}); err != nil {
+	if _, err := client.CleanupSnapshot(ctx, &objectstorev1.CleanupSnapshotRequest{SnapshotUri: owner}); err != nil {
 		t.Errorf("repeated CleanupSnapshot = %v", err)
 	}
 	// A bare bucket is never a valid prefix.
 	for _, uri := range []string{"gs://" + testBucket, "gs://" + testBucket + "/", "not a uri?x=1"} {
-		_, err := client.CleanupSnapshot(ctx, &objectstoresnapshotv1.CleanupSnapshotRequest{SnapshotUri: uri})
+		_, err := client.CleanupSnapshot(ctx, &objectstorev1.CleanupSnapshotRequest{SnapshotUri: uri})
 		if status.Code(err) != codes.InvalidArgument {
 			t.Errorf("CleanupSnapshot(%q) = %v, want InvalidArgument", uri, err)
 		}
@@ -415,11 +415,11 @@ func TestCleanupSnapshot(t *testing.T) {
 func TestCopySnapshot(t *testing.T) {
 	ctx := context.Background()
 	backend := newMemObjects()
-	client := objectstoresnapshotv1.NewControlProviderClient(serve(t, backend, t.TempDir()))
+	client := objectstorev1.NewControlProviderClient(serve(t, backend, t.TempDir()))
 	backend.m[testBucket+"/"+testPrefix+"/manifest.json"] = []byte("m")
 	tag := "gs://" + testBucket + "/root/atespaces/team-a/tags/tag1"
 
-	if _, err := client.CopySnapshot(ctx, &objectstoresnapshotv1.CopySnapshotRequest{SrcUri: testURI, DstUri: tag}); err != nil {
+	if _, err := client.CopySnapshot(ctx, &objectstorev1.CopySnapshotRequest{SrcUri: testURI, DstUri: tag}); err != nil {
 		t.Fatalf("CopySnapshot = %v", err)
 	}
 	if got := backend.m[testBucket+"/root/atespaces/team-a/tags/tag1/manifest.json"]; string(got) != "m" {
@@ -427,7 +427,7 @@ func TestCopySnapshot(t *testing.T) {
 	}
 
 	empty := "gs://" + testBucket + "/root/atespaces/team-a/actors/uid9/snapshots/none"
-	_, err := client.CopySnapshot(ctx, &objectstoresnapshotv1.CopySnapshotRequest{SrcUri: empty, DstUri: tag})
+	_, err := client.CopySnapshot(ctx, &objectstorev1.CopySnapshotRequest{SrcUri: empty, DstUri: tag})
 	if status.Code(err) != codes.FailedPrecondition {
 		t.Errorf("CopySnapshot(empty source) = %v, want FailedPrecondition", err)
 	}

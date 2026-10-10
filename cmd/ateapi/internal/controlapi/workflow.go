@@ -30,7 +30,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/resources"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	objectstoresnapshotv1 "github.com/agent-substrate/substrate/pkg/proto/objectstoresnapshotpb/v1"
+	objectstorev1 "github.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -110,7 +110,7 @@ type ActorWorkflow struct {
 	instruments          *Instruments
 	egressGatewayAddress string
 	pluginRegistry       VolumePluginRegistry
-	snapshotPlugin       objectstoresnapshotv1.ControlProviderClient
+	snapshotPlugin       objectstorev1.ControlProviderClient
 }
 
 // NewActorWorkflow creates a new ActorWorkflow. instruments may be nil.
@@ -127,7 +127,7 @@ func NewActorWorkflow(
 	instruments *Instruments,
 	egressGatewayAddress string,
 	pluginRegistry VolumePluginRegistry,
-	snapshotPlugin objectstoresnapshotv1.ControlProviderClient,
+	snapshotPlugin objectstorev1.ControlProviderClient,
 ) *ActorWorkflow {
 	return &ActorWorkflow{
 		store:                store,
@@ -146,14 +146,14 @@ func NewActorWorkflow(
 // cleanupSnapshot deletes every object under prefix through the control
 // snapshot plugin.
 func (w *ActorWorkflow) cleanupSnapshot(ctx context.Context, prefix resources.StoragePrefix) error {
-	_, err := w.snapshotPlugin.CleanupSnapshot(ctx, &objectstoresnapshotv1.CleanupSnapshotRequest{SnapshotUri: prefix.String()})
+	_, err := w.snapshotPlugin.CleanupSnapshot(ctx, &objectstorev1.CleanupSnapshotRequest{SnapshotUri: prefix.String()})
 	return pluginsocket.CallError(err)
 }
 
 // copySnapshot copies every object under src to dst through the control
 // snapshot plugin.
 func (w *ActorWorkflow) copySnapshot(ctx context.Context, src, dst resources.StoragePrefix) error {
-	_, err := w.snapshotPlugin.CopySnapshot(ctx, &objectstoresnapshotv1.CopySnapshotRequest{SrcUri: src.String(), DstUri: dst.String()})
+	_, err := w.snapshotPlugin.CopySnapshot(ctx, &objectstorev1.CopySnapshotRequest{SrcUri: src.String(), DstUri: dst.String()})
 	return pluginsocket.CallError(err)
 }
 

@@ -191,6 +191,11 @@ const (
 	StatsCPUTimeKey          = attribute.Key("ate.stats.cpu.time")
 )
 
+// SandboxOOMKillsKey is memory.events' oom_kill for the sandbox cgroup leaf, on
+// the record ateom-gvisor writes when a hosted actor's sandbox has no process
+// left. Logs only: it is only ever recorded beside actor identity.
+const SandboxOOMKillsKey = attribute.Key("ate.sandbox.oom_kills")
+
 // Values for StatsKindKey. An initial or final sample brackets an activation; a
 // periodic one is the timer's.
 const (
