@@ -138,6 +138,7 @@ func TestRelayTLSAdmitsOnlyTheAllowedID(t *testing.T) {
 // A pod-identity CA rotation during a long run must not cut fake-workersync
 // off: the relay reads the trust bundle at each handshake.
 func TestRelayTLSFollowsATrustBundleRotation(t *testing.T) {
+	t.Cleanup(credbundle.SetRecheckIntervalForTesting(0))
 	const allowed = "spiffe://cluster.local/ns/benchmark-workloads/sa/fake-workersync"
 	ca := fakeworkertest.NewCA(t)
 	serverCfg, err := relayTLSConfig(ca.Issue(t, "spiffe://cluster.local/ns/ate-system/sa/atelet"), ca.TrustBundle, allowed)

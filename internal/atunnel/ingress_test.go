@@ -40,6 +40,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/resources"
 
 	"github.com/agent-substrate/substrate/internal/atenet"
+	"github.com/agent-substrate/substrate/internal/credbundle"
 )
 
 func TestActivationDialerClosesLateConnection(t *testing.T) {
@@ -914,6 +915,7 @@ func writeCredentialBundle(t *testing.T, path string, cert tls.Certificate) {
 // certificate chaining to a CA added to the trust bundle after the server
 // started is accepted on the next handshake, without a restart.
 func TestMutualTLSClientAuthenticationReloadsTrustBundle(t *testing.T) {
+	t.Cleanup(credbundle.SetRecheckIntervalForTesting(0))
 	dir := t.TempDir()
 	ca := newTestCA(t)
 	serverCert := ca.issue(t, "", []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth})

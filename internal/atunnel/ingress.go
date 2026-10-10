@@ -26,7 +26,6 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -73,9 +72,8 @@ type Config struct {
 
 // Server is an HTTPS reverse proxy for the worker's active actors.
 type Server struct {
-	credentialBundlePath string
-	tlsConfig            *tls.Config
-	upstream             *url.URL
+	tlsConfig *tls.Config
+	upstream  *url.URL
 	// Overridable by tests to avoid dialing real sandboxes.
 	newProxy func(DialFunc) *httputil.ReverseProxy
 
@@ -113,61 +111,32 @@ func NewServer(cfg Config) (*Server, error) {
 		return nil, fmt.Errorf("atunnel: upstream URL is required")
 	}
 
-	// Load once at startup so a malformed or missing projection fails the pod
-	// promptly. GetCertificate reloads the bundle for every new TLS connection,
-	// allowing kubelet's projected certificate rotation to take effect.
-	if _, err := loadCredentialBundle(cfg.CredentialBundlePath); err != nil {
-		return nil, err
-	}
-	loadClientCAs := credbundle.PoolLoader(cfg.TrustBundlePath)
-	if _, err := loadClientCAs(); err != nil {
-		return nil, fmt.Errorf("atunnel: loading trust bundle: %w", err)
-	}
-
 	s := &Server{
-		credentialBundlePath: cfg.CredentialBundlePath,
-		upstream:             cfg.Upstream,
-		active:               map[resources.ActorRef]*activation{},
+		upstream: cfg.Upstream,
+		active:   map[resources.ActorRef]*activation{},
 	}
 	s.newProxy = func(dial DialFunc) *httputil.ReverseProxy {
 		return newActorProxy(cfg.Upstream, dial)
 	}
-	verifyConnection := func(cs tls.ConnectionState) error {
-		if len(cs.PeerCertificates) == 0 {
-			return fmt.Errorf("atunnel: client certificate is required")
-		}
-		for _, uri := range cs.PeerCertificates[0].URIs {
-			if uri.String() == cfg.AllowedClientID {
-				return nil
+
+	tlsConfig, err := credbundle.PrepareServerTLSConfig(credbundle.ServerConfig{
+		CertPath:     cfg.CredentialBundlePath,
+		ClientCAPath: cfg.TrustBundlePath,
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		VerifyPeer: func(cs tls.ConnectionState) error {
+			for _, uri := range cs.PeerCertificates[0].URIs {
+				if uri.String() == cfg.AllowedClientID {
+					return nil
+				}
 			}
-		}
-		return fmt.Errorf("atunnel: client is not %q", cfg.AllowedClientID)
-	}
-	s.tlsConfig = &tls.Config{
-		MinVersion: tls.VersionTLS12,
-		// GetConfigForClient reloads the trust bundle per connection: kubelet
-		// keeps the projected ClusterTrustBundle in sync with the signer, and
-		// this is what lets a long-lived worker see a CA rotation without a
-		// pod restart. Its returned Config replaces this one entirely for the
-		// handshake, so NextProtos must be repeated here rather than left to
-		// the outer Config.
-		GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) {
-			clientCAs, err := loadClientCAs()
-			if err != nil {
-				return nil, err
-			}
-			return &tls.Config{
-				MinVersion: tls.VersionTLS12,
-				NextProtos: []string{"h2", "http/1.1"},
-				GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
-					return loadCredentialBundle(s.credentialBundlePath)
-				},
-				ClientAuth:       tls.RequireAndVerifyClientCert,
-				ClientCAs:        clientCAs,
-				VerifyConnection: verifyConnection,
-			}, nil
+			return fmt.Errorf("atunnel: client is not %q", cfg.AllowedClientID)
 		},
+		NextProtos: []string{"h2", "http/1.1"},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("atunnel: %w", err)
 	}
+	s.tlsConfig = tlsConfig
 	return s, nil
 }
 
@@ -257,18 +226,6 @@ var _ interface{ CloseIdleConnections() } = protocolMirrorTransport{}
 func (t protocolMirrorTransport) CloseIdleConnections() {
 	t.h1.CloseIdleConnections()
 	t.h2c.CloseIdleConnections()
-}
-
-func loadCredentialBundle(path string) (*tls.Certificate, error) {
-	pemBytes, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("atunnel: reading credential bundle: %w", err)
-	}
-	cert, err := tls.X509KeyPair(pemBytes, pemBytes)
-	if err != nil {
-		return nil, fmt.Errorf("atunnel: parsing credential bundle: %w", err)
-	}
-	return &cert, nil
 }
 
 // Serve serves HTTPS on lis until ctx is canceled or the server fails.

@@ -30,12 +30,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/credbundle"
 	"github.com/agent-substrate/substrate/internal/substratex509"
 )
 
 const ateletSPIFFEID = "spiffe://cluster.local/ns/ate-system/sa/atelet"
 
 func TestTLSConfigReloadsAteletTrustBundle(t *testing.T) {
+	t.Cleanup(credbundle.SetRecheckIntervalForTesting(0))
 	dir := t.TempDir()
 	ca := newTestCA(t)
 

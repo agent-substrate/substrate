@@ -1968,26 +1968,15 @@ func removeActorDirs(actorUID string) error {
 // credential bundle at servingBundlePath, requires a client certificate
 // chaining to a CA in clientCAPath.
 func ateletServerTLSConfig(servingBundlePath, clientCAPath string) (*tls.Config, error) {
-	loadClientCAs := credbundle.PoolLoader(clientCAPath)
-	if _, err := loadClientCAs(); err != nil {
+	cfg, err := credbundle.PrepareServerTLSConfig(credbundle.ServerConfig{
+		CertPath:     servingBundlePath,
+		ClientCAPath: clientCAPath,
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+	})
+	if err != nil {
 		return nil, fmt.Errorf("load CA bundle %s: %w", clientCAPath, err)
 	}
-	serverCert := credbundle.Loader(servingBundlePath)
-	return &tls.Config{
-		MinVersion: tls.VersionTLS13,
-		GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) {
-			clientCAs, err := loadClientCAs()
-			if err != nil {
-				return nil, err
-			}
-			return &tls.Config{
-				MinVersion:     tls.VersionTLS13,
-				GetCertificate: serverCert,
-				ClientAuth:     tls.RequireAndVerifyClientCert,
-				ClientCAs:      clientCAs,
-			}, nil
-		},
-	}, nil
+	return cfg, nil
 }
 
 func newKubeClients() (*kubernetes.Clientset, versioned.Interface, error) {

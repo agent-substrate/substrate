@@ -31,6 +31,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/credbundle"
 	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"google.golang.org/grpc/credentials"
 )
@@ -99,6 +100,7 @@ func TestVerifyClientSAN(t *testing.T) {
 // on a new connection without rebuilding the credentials, while both the chain
 // check and the injector SAN check still hold.
 func TestBuildServerCredsReloadsClientCA(t *testing.T) {
+	t.Cleanup(credbundle.SetRecheckIntervalForTesting(0))
 	serverCA := newCA(t, "server-ca")
 	serverBundlePath := writeCredBundle(t, serverCA.issue(t, certOpts{dnsNames: []string{"credprovider.test"}}))
 	serverRoots := x509.NewCertPool()

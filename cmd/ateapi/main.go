@@ -568,41 +568,24 @@ func buildServerCreds(ctx context.Context) (credentials.TransportCredentials, er
 // the pod-identity CA pool (if not, client certs stay optional), and
 // composes the TLS config for the ateapi gRPC server.
 func buildServerTLSConfig(ctx context.Context, credBundlePath, caCertsPath string) (*tls.Config, error) {
-	serverCert := credbundle.Loader(credBundlePath)
 	// Client certs stay optional at the transport level: certless clients
 	// such as kubectl-ate authenticate with a Bearer token in the
 	// ateapiauth interceptor.
 	const clientAuth = tls.VerifyClientCertIfGiven
 
-	if caCertsPath == "" {
-		return &tls.Config{
-			GetCertificate: serverCert,
-			ClientAuth:     clientAuth,
-		}, nil
+	if caCertsPath != "" {
+		slog.InfoContext(ctx, "Using pod-identity CA for client-cert verification", slog.String("path", caCertsPath))
 	}
 
-	// Load once so a missing or unparsable trust bundle fails the pod
-	// promptly; GetConfigForClient below reloads it for every connection, so
-	// a pod-identity CA rotation verifies without an ateapi restart.
-	loadClientCAs := credbundle.PoolLoader(caCertsPath)
-	if _, err := loadClientCAs(); err != nil {
+	cfg, err := credbundle.PrepareServerTLSConfig(credbundle.ServerConfig{
+		CertPath:     credBundlePath,
+		ClientCAPath: caCertsPath,
+		ClientAuth:   clientAuth,
+	})
+	if err != nil {
 		return nil, fmt.Errorf("load pod-identity CA: %w", err)
 	}
-	slog.InfoContext(ctx, "Using pod-identity CA for client-cert verification", slog.String("path", caCertsPath))
-
-	return &tls.Config{
-		GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) {
-			clientCAs, err := loadClientCAs()
-			if err != nil {
-				return nil, err
-			}
-			return &tls.Config{
-				GetCertificate: serverCert,
-				ClientAuth:     clientAuth,
-				ClientCAs:      clientCAs,
-			}, nil
-		},
-	}, nil
+	return cfg, nil
 }
 
 func buildJWTProviders(ctx context.Context, cfg *apiauthn.AuthenticationConfig) (apiauthn.ServerConfig, error) {

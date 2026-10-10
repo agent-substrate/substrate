@@ -202,32 +202,14 @@ func buildServerCreds(ctx context.Context) (credentials.TransportCredentials, er
 		return nil, fmt.Errorf("--client-ca-file is required")
 	}
 
-	// Load the client CA pool once so a missing or empty projection fails the
-	// pod promptly; GetConfigForClient below reloads it for every connection.
-	loadPool := credbundle.PoolLoader(*clientCAFile)
-	if _, err := loadPool(); err != nil {
+	cfg, err := credbundle.PrepareServerTLSConfig(credbundle.ServerConfig{
+		CertPath:     *serverBundle,
+		ClientCAPath: *clientCAFile,
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		VerifyPeer:   verifyClientSAN(*injectorIdentity),
+	})
+	if err != nil {
 		return nil, err
-	}
-
-	serverCert := credbundle.Loader(*serverBundle)
-	verifySAN := verifyClientSAN(*injectorIdentity)
-
-	// GetConfigForClient builds the config anew per connection: a certificate
-	// signed by a newly published CA verifies without a restart.
-	cfg := &tls.Config{
-		GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) {
-			pool, err := loadPool()
-			if err != nil {
-				return nil, err
-			}
-			return &tls.Config{
-				MinVersion:       tls.VersionTLS13,
-				GetCertificate:   serverCert,
-				ClientAuth:       tls.RequireAndVerifyClientCert,
-				ClientCAs:        pool,
-				VerifyConnection: verifySAN,
-			}, nil
-		},
 	}
 	slog.InfoContext(ctx, "verifying caller client certificates",
 		slog.String("ca", *clientCAFile), slog.String("required_san", *injectorIdentity))

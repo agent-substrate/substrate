@@ -26,6 +26,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/agent-substrate/substrate/internal/credbundle"
 )
 
 func testCertPEM(t *testing.T) []byte {
@@ -56,6 +58,7 @@ func TestServerTLSConfigRejectsUnreadableCACerts(t *testing.T) {
 // frozen at startup would refuse ate-api-server once its certificate is signed
 // by the new CA, which a long benchmark would read as a data plane outage.
 func TestServerTLSConfigReloadsCACertsWithoutRestart(t *testing.T) {
+	t.Cleanup(credbundle.SetRecheckIntervalForTesting(0))
 	path := filepath.Join(t.TempDir(), "trust-bundle.pem")
 	if err := os.WriteFile(path, testCertPEM(t), 0o600); err != nil {
 		t.Fatal(err)

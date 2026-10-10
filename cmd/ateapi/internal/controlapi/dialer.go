@@ -16,21 +16,15 @@ package controlapi
 
 import (
 	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"net"
-	"slices"
 	"strconv"
 	"sync"
 
 	"github.com/agent-substrate/substrate/internal/atelet"
 	"github.com/agent-substrate/substrate/internal/credbundle"
-	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/substratex509"
-	"github.com/spiffe/go-spiffe/v2/bundle/x509bundle"
-	"github.com/spiffe/go-spiffe/v2/spiffeid"
-	"github.com/spiffe/go-spiffe/v2/svid/x509svid"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -169,58 +163,31 @@ func (d *AteletDialer) DialForAteletOnNode(nodeName string) (*grpc.ClientConn, e
 }
 
 func buildTLSConfig(ateletSPIFFEID, clientBundlePath, serverCAPath, expectedPodUID string) (*tls.Config, error) {
-	trustDomain, err := spiffeid.TrustDomainFromString(installdefaults.AteletTrustDomain)
-	if err != nil {
-		return nil, fmt.Errorf("while parsing trust domain %q: %w", installdefaults.AteletTrustDomain, err)
-	}
-	bundle, err := x509bundle.Load(trustDomain, serverCAPath)
-	if err != nil {
-		return nil, fmt.Errorf("while loading CA bundle from %s: %w", serverCAPath, err)
-	}
-	expectedID, err := spiffeid.FromString(ateletSPIFFEID)
-	if err != nil {
-		return nil, fmt.Errorf("while parsing expected atelet SPIFFE ID %q: %w", ateletSPIFFEID, err)
-	}
-
-	verify, err := verifyAteletServerCert(bundle, expectedID, expectedPodUID)
+	verify, err := verifyAteletServerCert(ateletSPIFFEID, expectedPodUID)
 	if err != nil {
 		return nil, fmt.Errorf("while creating atelet server cert verifier: %w", err)
 	}
-
-	tlsConfig := tls.Config{
-		MinVersion:           tls.VersionTLS13,
+	return credbundle.PrepareClientTLSConfig(credbundle.ClientConfig{
 		GetClientCertificate: credbundle.ClientLoader(clientBundlePath),
-		// Skip the default verification because the peer is dialed by IP and its
-		// certificate has no DNS/IP SAN.
-		InsecureSkipVerify: true,
-		VerifyConnection:   verify,
-	}
-
-	return &tlsConfig, nil
+		TrustBundlePath:      serverCAPath,
+		VerifyPeer:           verify,
+	})
 }
 
-func verifyAteletServerCert(bundle *x509bundle.Bundle, expectedID spiffeid.ID, expectedPodUID string) (func(tls.ConnectionState) error, error) {
+// verifyAteletServerCert checks the identities that chain verification cannot
+// express: atelet is dialed by IP, so its certificate has no DNS/IP SAN, and
+// a pod UID is not something an X.509 chain check can see at all.
+func verifyAteletServerCert(expectedSPIFFEID, expectedPodUID string) (func(tls.ConnectionState) error, error) {
 	if expectedPodUID == "" {
 		return nil, fmt.Errorf("expected pod UID must not be empty")
 	}
-	if expectedID.IsZero() {
+	if expectedSPIFFEID == "" {
 		return nil, fmt.Errorf("expected pod spiffe ID must not be empty")
 	}
 	return func(cs tls.ConnectionState) error {
-		if len(cs.PeerCertificates) == 0 {
-			return fmt.Errorf("server presented no certificate")
-		}
-		id, _, err := x509svid.Verify(cs.PeerCertificates, bundle)
-		if err != nil {
-			return fmt.Errorf("verifying server certificate chain: %w", err)
-		}
-		if id != expectedID {
-			return fmt.Errorf("server SPIFFE ID %q does not match expected %q", id, expectedID)
-		}
-
 		leaf := cs.PeerCertificates[0]
-		if !slices.Contains(leaf.ExtKeyUsage, x509.ExtKeyUsageServerAuth) {
-			return fmt.Errorf("server certificate lacks the serverAuth extended key usage")
+		if len(leaf.URIs) != 1 || leaf.URIs[0].String() != expectedSPIFFEID {
+			return fmt.Errorf("server SPIFFE ID does not match expected %q", expectedSPIFFEID)
 		}
 
 		identity, err := substratex509.PodIdentityFromCertificate(leaf)

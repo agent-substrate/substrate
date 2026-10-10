@@ -31,6 +31,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/credbundle"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -115,6 +116,7 @@ func TestDialOptionsMTLSHandshake(t *testing.T) {
 // TestDialOptionsReloadsCAFile verifies that a rotation of the CA file on
 // disk is picked up by the next handshake, without redialing.
 func TestDialOptionsReloadsCAFile(t *testing.T) {
+	t.Cleanup(credbundle.SetRecheckIntervalForTesting(0))
 	ca := newTestCA(t)
 	dir := t.TempDir()
 	caFile := filepath.Join(dir, "ca.pem")

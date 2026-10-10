@@ -154,6 +154,7 @@ func TestRelayClientRefusesAServerThatIsNotAtelet(t *testing.T) {
 // A pod-identity CA rotation during a long run must not cut the relays off:
 // the client reads the trust bundle at each handshake.
 func TestRelayClientFollowsATrustBundleRotation(t *testing.T) {
+	t.Cleanup(credbundle.SetRecheckIntervalForTesting(0))
 	ca := fakeworkertest.NewCA(t)
 	relay := newTestRelay(t, ca)
 	next := fakeworkertest.NewCA(t)

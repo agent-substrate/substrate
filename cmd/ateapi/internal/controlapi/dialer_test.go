@@ -21,17 +21,19 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/pem"
 	"errors"
 	"math/big"
+	"net"
 	"net/url"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/substratex509"
-	"github.com/spiffe/go-spiffe/v2/bundle/x509bundle"
-	"github.com/spiffe/go-spiffe/v2/spiffeid"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials"
@@ -42,19 +44,36 @@ import (
 	"k8s.io/client-go/tools/cache"
 )
 
-const testAteletSPIFFEID = "spiffe://cluster.local/ns/ate-system/sa/atelet"
+const (
+	testAteletSPIFFEID = "spiffe://cluster.local/ns/ate-system/sa/atelet"
+	testPodUID         = "5a2e1c9f-0b57-4a52-9f6e-2f6d3a1b8c4d"
+)
 
-// makeTestCA mints a self-signed CA and returns it along with an X.509 bundle
-// containing it as the sole authority for the cluster.local trust domain.
-func makeTestCA(t *testing.T) (*x509.Certificate, *ecdsa.PrivateKey, *x509bundle.Bundle) {
+// leafOpts controls the contents of a test atelet server leaf certificate.
+type leafOpts struct {
+	// podUID, if non-empty, is embedded in a PodIdentity extension.
+	podUID string
+	// spiffeID, if non-empty, is added as a URI SAN.
+	spiffeID string
+	// noServerAuth omits the serverAuth EKU.
+	noServerAuth bool
+}
+
+// testCA is a self-signed certificate authority used to issue test certificates.
+type testCA struct {
+	cert    *x509.Certificate
+	key     *ecdsa.PrivateKey
+	certPEM []byte
+}
+
+func newTestCA(t *testing.T) *testCA {
 	t.Helper()
-
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatalf("generating CA key: %v", err)
 	}
 	template := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
+		SerialNumber:          big.NewInt(time.Now().UnixNano()),
 		Subject:               pkix.Name{CommonName: "test-ca"},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(time.Hour),
@@ -70,31 +89,19 @@ func makeTestCA(t *testing.T) (*x509.Certificate, *ecdsa.PrivateKey, *x509bundle
 	if err != nil {
 		t.Fatalf("parsing CA certificate: %v", err)
 	}
-	td := spiffeid.RequireTrustDomainFromString("cluster.local")
-	bundle := x509bundle.FromX509Authorities(td, []*x509.Certificate{cert})
-	return cert, key, bundle
+	return &testCA{cert: cert, key: key, certPEM: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})}
 }
 
-// leafOpts controls the contents of a test leaf certificate.
-type leafOpts struct {
-	// podUID, if non-empty, is embedded in a PodIdentity extension.
-	podUID string
-	// spiffeID, if non-empty, is added as a URI SAN.
-	spiffeID string
-	// noServerAuth omits the serverAuth EKU.
-	noServerAuth bool
-}
-
-// makeLeafCert mints a server leaf certificate signed by the given CA.
-func makeLeafCert(t *testing.T, ca *x509.Certificate, caKey *ecdsa.PrivateKey, opts leafOpts) *x509.Certificate {
+// issueLeaf mints a server-auth leaf certificate signed by the CA, shaped by
+// opts.
+func (ca *testCA) issueLeaf(t *testing.T, opts leafOpts) tls.Certificate {
 	t.Helper()
-
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatalf("generating leaf key: %v", err)
 	}
 	template := &x509.Certificate{
-		SerialNumber: big.NewInt(2),
+		SerialNumber: big.NewInt(time.Now().UnixNano()),
 		NotBefore:    time.Now().Add(-time.Hour),
 		NotAfter:     time.Now().Add(time.Hour),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
@@ -126,15 +133,139 @@ func makeLeafCert(t *testing.T, ca *x509.Certificate, caKey *ecdsa.PrivateKey, o
 			t.Fatalf("adding PodIdentity extension: %v", err)
 		}
 	}
-	der, err := x509.CreateCertificate(rand.Reader, template, ca, &key.PublicKey, caKey)
+	der, err := x509.CreateCertificate(rand.Reader, template, ca.cert, &key.PublicKey, ca.key)
 	if err != nil {
 		t.Fatalf("creating leaf certificate: %v", err)
 	}
-	cert, err := x509.ParseCertificate(der)
+	cert, err := tls.X509KeyPair(
+		append(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), ca.certPEM...),
+		mustMarshalPKCS8(t, key),
+	)
 	if err != nil {
-		t.Fatalf("parsing leaf certificate: %v", err)
+		t.Fatalf("building key pair: %v", err)
 	}
 	return cert
+}
+
+func mustMarshalPKCS8(t *testing.T, key *ecdsa.PrivateKey) []byte {
+	t.Helper()
+	der, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatalf("marshal PKCS8 key: %v", err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
+}
+
+// writeClientBundle writes a credbundle-shaped (PKCS8 key + cert chain) file
+// for an arbitrary client identity; buildTLSConfig's own client certificate
+// is irrelevant to these tests since atelet's dialer.go never verifies it.
+func writeClientBundle(t *testing.T, dir string) string {
+	t.Helper()
+	ca := newTestCA(t)
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generating client key: %v", err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(time.Now().UnixNano()),
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, ca.cert, &key.PublicKey, ca.key)
+	if err != nil {
+		t.Fatalf("creating client certificate: %v", err)
+	}
+	path := filepath.Join(dir, "client.pem")
+	bundle := append(mustMarshalPKCS8(t, key), pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})...)
+	if err := os.WriteFile(path, bundle, 0o600); err != nil {
+		t.Fatalf("writing client bundle: %v", err)
+	}
+	return path
+}
+
+func writeTrustBundle(t *testing.T, dir string, cas ...*testCA) string {
+	t.Helper()
+	var pemBytes []byte
+	for _, ca := range cas {
+		pemBytes = append(pemBytes, ca.certPEM...)
+	}
+	path := filepath.Join(dir, "trust.pem")
+	if err := os.WriteFile(path, pemBytes, 0o600); err != nil {
+		t.Fatalf("writing trust bundle: %v", err)
+	}
+	return path
+}
+
+// dialHandshake runs one TLS handshake with serverLeaf served over an
+// in-memory pipe, returning each side's own error.
+func dialHandshake(t *testing.T, clientConfig *tls.Config, serverLeaf tls.Certificate) (serverErr, clientErr error) {
+	t.Helper()
+	serverConn, clientConn := net.Pipe()
+	deadline := time.Now().Add(5 * time.Second)
+	_ = serverConn.SetDeadline(deadline)
+	_ = clientConn.SetDeadline(deadline)
+	serverTLS := tls.Server(serverConn, &tls.Config{
+		MinVersion:   tls.VersionTLS13,
+		Certificates: []tls.Certificate{serverLeaf},
+	})
+	clientTLS := tls.Client(clientConn, clientConfig)
+	done := make(chan error, 1)
+	go func() {
+		err := serverTLS.Handshake()
+		_ = serverConn.Close()
+		done <- err
+	}()
+	clientErr = clientTLS.Handshake()
+	_ = clientConn.Close()
+	return <-done, clientErr
+}
+
+func TestBuildTLSConfig(t *testing.T) {
+	dir := t.TempDir()
+	ca := newTestCA(t)
+	otherCA := newTestCA(t)
+	clientBundlePath := writeClientBundle(t, dir)
+	trustBundlePath := writeTrustBundle(t, dir, ca)
+
+	tlsConfig, err := buildTLSConfig(testAteletSPIFFEID, clientBundlePath, trustBundlePath, testPodUID)
+	if err != nil {
+		t.Fatalf("buildTLSConfig() error = %v", err)
+	}
+
+	tests := []struct {
+		name string
+		ca   *testCA
+		opts leafOpts
+		want bool // true if the handshake should succeed
+	}{
+		{"matching identity succeeds", ca, leafOpts{podUID: testPodUID, spiffeID: testAteletSPIFFEID}, true},
+		{"mismatched pod UID fails", ca, leafOpts{podUID: "some-other-uid", spiffeID: testAteletSPIFFEID}, false},
+		{"missing pod UID extension fails", ca, leafOpts{spiffeID: testAteletSPIFFEID}, false},
+		{"cert from untrusted CA fails", otherCA, leafOpts{podUID: testPodUID, spiffeID: testAteletSPIFFEID}, false},
+		{"wrong SPIFFE ID fails", ca, leafOpts{podUID: testPodUID, spiffeID: "spiffe://cluster.local/ns/other/sa/other"}, false},
+		{"missing URI SAN fails", ca, leafOpts{podUID: testPodUID}, false},
+		{"missing serverAuth EKU fails", ca, leafOpts{podUID: testPodUID, spiffeID: testAteletSPIFFEID, noServerAuth: true}, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			leaf := tc.ca.issueLeaf(t, tc.opts)
+			_, clientErr := dialHandshake(t, tlsConfig, leaf)
+			if succeeded := clientErr == nil; succeeded != tc.want {
+				t.Fatalf("client handshake error = %v, want success=%v", clientErr, tc.want)
+			}
+		})
+	}
+}
+
+func TestVerifyAteletServerCertRejectsEmptyFields(t *testing.T) {
+	if _, err := verifyAteletServerCert("", testPodUID); err == nil {
+		t.Fatal("verifyAteletServerCert with no SPIFFE ID succeeded, want error")
+	}
+	if _, err := verifyAteletServerCert(testAteletSPIFFEID, ""); err == nil {
+		t.Fatal("verifyAteletServerCert with no pod UID succeeded, want error")
+	}
 }
 
 // dialerWithAtelets builds an AteletDialer over the given atelet pods, dialing
@@ -201,95 +332,6 @@ func TestDialForAteletOnNodeNoIPs(t *testing.T) {
 	if _, err := d.DialForAteletOnNode("node-1"); err == nil {
 		t.Fatal("DialForAteletOnNode succeeded, want error for atelet with no IPs")
 	}
-}
-
-func TestVerifyAteletServerCert(t *testing.T) {
-	ca, caKey, bundle := makeTestCA(t)
-	otherCA, otherCAKey, _ := makeTestCA(t)
-
-	expectedID := spiffeid.RequireFromString(testAteletSPIFFEID)
-
-	const uid = "5a2e1c9f-0b57-4a52-9f6e-2f6d3a1b8c4d"
-
-	tests := []struct {
-		name        string
-		leaf        *x509.Certificate
-		expectedUID string
-		wantErr     bool
-	}{
-		{
-			name:        "matching UID succeeds",
-			leaf:        makeLeafCert(t, ca, caKey, leafOpts{podUID: uid, spiffeID: testAteletSPIFFEID}),
-			expectedUID: uid,
-		},
-		{
-			name:        "mismatched UID fails",
-			leaf:        makeLeafCert(t, ca, caKey, leafOpts{podUID: "some-other-uid", spiffeID: testAteletSPIFFEID}),
-			expectedUID: uid,
-			wantErr:     true,
-		},
-		{
-			name:        "missing pod UID extension fails",
-			leaf:        makeLeafCert(t, ca, caKey, leafOpts{spiffeID: testAteletSPIFFEID}),
-			expectedUID: uid,
-			wantErr:     true,
-		},
-		{
-			name:        "cert from untrusted CA fails",
-			leaf:        makeLeafCert(t, otherCA, otherCAKey, leafOpts{podUID: uid, spiffeID: testAteletSPIFFEID}),
-			expectedUID: uid,
-			wantErr:     true,
-		},
-		{
-			name:        "wrong SPIFFE ID fails",
-			leaf:        makeLeafCert(t, ca, caKey, leafOpts{podUID: uid, spiffeID: "spiffe://cluster.local/ns/other/sa/other"}),
-			expectedUID: uid,
-			wantErr:     true,
-		},
-		{
-			name:        "missing URI SAN fails",
-			leaf:        makeLeafCert(t, ca, caKey, leafOpts{podUID: uid}),
-			expectedUID: uid,
-			wantErr:     true,
-		},
-		{
-			name:        "missing serverAuth EKU fails",
-			leaf:        makeLeafCert(t, ca, caKey, leafOpts{podUID: uid, spiffeID: testAteletSPIFFEID, noServerAuth: true}),
-			expectedUID: uid,
-			wantErr:     true,
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			verify, err := verifyAteletServerCert(bundle, expectedID, tc.expectedUID)
-			if err != nil {
-				t.Fatalf("constructing verifier: %v", err)
-			}
-			err = verify(tls.ConnectionState{
-				PeerCertificates: []*x509.Certificate{tc.leaf},
-			})
-			if gotErr := err != nil; gotErr != tc.wantErr {
-				t.Fatalf("verify returned error %v, wantErr=%v", err, tc.wantErr)
-			}
-		})
-	}
-
-	t.Run("no peer certificate fails", func(t *testing.T) {
-		verify, err := verifyAteletServerCert(bundle, expectedID, uid)
-		if err != nil {
-			t.Fatalf("constructing verifier: %v", err)
-		}
-		if err := verify(tls.ConnectionState{}); err == nil {
-			t.Fatal("verify succeeded, want error")
-		}
-	})
-
-	t.Run("empty expected UID fails at construction", func(t *testing.T) {
-		if _, err := verifyAteletServerCert(bundle, expectedID, ""); err == nil {
-			t.Fatal("verifyAteletServerCert succeeded, want error")
-		}
-	})
 }
 
 // newTestAteletIndexer builds an indexer with the production byNode index

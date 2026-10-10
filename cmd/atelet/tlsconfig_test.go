@@ -15,10 +15,52 @@
 package main
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"math/big"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
+
+	"github.com/agent-substrate/substrate/internal/credbundle"
 )
+
+// testCredentialBundlePath writes a self-signed cert and PKCS8 key, in the
+// format credbundle.Parse expects, and returns its path.
+func testCredentialBundlePath(t *testing.T) string {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.CreateCertificate(rand.Reader, &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "test"},
+		NotBefore:    time.Now(),
+		NotAfter:     time.Now().Add(time.Hour),
+	}, &x509.Certificate{SerialNumber: big.NewInt(1)}, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle := append(
+		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}),
+		pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})...,
+	)
+	path := filepath.Join(t.TempDir(), "credential-bundle.pem")
+	if err := os.WriteFile(path, bundle, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
 
 func TestAteletServerTLSConfigRejectsUnreadableCACerts(t *testing.T) {
 	_, err := ateletServerTLSConfig("/nonexistent-cred-bundle.pem", filepath.Join(t.TempDir(), "absent.pem"))
@@ -31,12 +73,13 @@ func TestAteletServerTLSConfigRejectsUnreadableCACerts(t *testing.T) {
 // pod-identity CA rotation on disk is picked up by the next handshake, not
 // frozen at the config's construction.
 func TestAteletServerTLSConfigReloadsCACertsWithoutRestart(t *testing.T) {
+	t.Cleanup(credbundle.SetRecheckIntervalForTesting(0))
 	path := filepath.Join(t.TempDir(), "trust-bundle.pem")
 	if err := os.WriteFile(path, testCertPEM(t), 0o600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	cfg, err := ateletServerTLSConfig("/nonexistent-cred-bundle.pem", path)
+	cfg, err := ateletServerTLSConfig(testCredentialBundlePath(t), path)
 	if err != nil {
 		t.Fatalf("ateletServerTLSConfig() error = %v", err)
 	}
