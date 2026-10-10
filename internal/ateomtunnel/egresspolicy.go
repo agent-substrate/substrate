@@ -27,6 +27,7 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/ateletdial"
+	"github.com/agent-substrate/substrate/internal/ateomnet/dns"
 	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -66,7 +67,7 @@ type actorEgressPolicy struct {
 
 // ActorEgressPolicy returns the source of actor's egress policy for its DNS
 // relay.
-func (t *Tunnel) ActorEgressPolicy(actor resources.ActorAttribution) *actorEgressPolicy {
+func (t *Tunnel) ActorEgressPolicy(actor resources.ActorAttribution) dns.PolicySource {
 	return &actorEgressPolicy{
 		fetch: func(ctx context.Context) (*ateletpb.EgressPolicy, error) {
 			conn, err := ateletdial.Dial(nodepath.AteomSupportSocket, t.ateletTLS)

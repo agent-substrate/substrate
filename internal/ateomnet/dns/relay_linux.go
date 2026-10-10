@@ -26,7 +26,7 @@ import (
 )
 
 // Serve serves UDP and TCP DNS in the sandbox's local gateway namespace.
-func (r *Relay) Serve(ctx context.Context, ns netns.Handle) (*Server, error) {
+func (r *Relay) Serve(ctx context.Context, ns netns.Handle, policy PolicySource) (*Server, error) {
 	// Bind the wildcard because the microVM tap's gateway address is added later.
 	address := net.JoinHostPort("0.0.0.0", strconv.Itoa(dnsPort))
 
@@ -59,5 +59,11 @@ func (r *Relay) Serve(ctx context.Context, ns netns.Handle) (*Server, error) {
 	}
 	netC.egressUDP = egressUDP
 
-	return r.serveOn(ctx, &netC)
+	return r.serveOn(ctx, &netC, policy)
+}
+
+// serveOn serves DNS on netC's sockets, which the caller has already bound,
+// and dials upstreams with netC's dialer.
+func (r *Relay) serveOn(ctx context.Context, netC *netConn, policy PolicySource) (*Server, error) {
+	return newServer(ctx, &serverConfig{upstreams: r.upstreams, policy: policy}, netC)
 }

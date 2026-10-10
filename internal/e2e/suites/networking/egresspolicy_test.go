@@ -284,6 +284,44 @@ func TestActorEgressPendingPlaintextHeadersDoNotBlockMITM(t *testing.T) {
 	}
 }
 
+// TestActorDNSRequiresPolicy: the sandbox's DNS relay refuses the queries of an
+// actor with no EgressPolicy, and answers them once the actor has one, without
+// a restart.
+func TestActorDNSRequiresPolicy(t *testing.T) {
+	ctx := context.Background()
+	origin := egressHTTPTarget()
+	target := e2e.DeployServerPod(t, ctx, origin)
+	name := fmt.Sprintf("%s.%s.svc.cluster.local", origin.Name, target.Namespace)
+	url := "http://" + name + "/healthz"
+
+	_, actorName, _ := createAndResumeActorWithEgress(t, ctx, "dns-nopolicy", e2e.EgressFixture())
+	router := mustRouterClient(t, ctx)
+	defer router.Close()
+	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
+	waitForActorRoute(t, ctx, router, actorRef)
+
+	status, body := fetchThroughEgressActorUntil(t, ctx, router, actorRef, url, notTransient)
+	if status != http.StatusBadGateway || !isRefusedLookup(string(body), name) {
+		t.Fatalf("fetch of %s by an actor with no policy returned HTTP %d, want its lookup refused; body: %s", url, status, body)
+	}
+	t.Logf("lookup was refused as expected: %s", body)
+
+	// The relay fetches the policy again within seconds, so the retries below
+	// see it.
+	e2e.EnsureEgressPolicy(t, ctx, e2e.GetClients(), actorRef.ToObjectRef(), e2e.EgressAllowAll()...)
+	status, body = fetchThroughEgressActorUntil(t, ctx, router, actorRef, url, reached)
+	if status != http.StatusOK {
+		t.Fatalf("fetch of %s after the actor was given a policy returned HTTP %d, want 200; body: %s", url, status, body)
+	}
+}
+
+// isRefusedLookup reports whether body is the egress demo's report of a lookup
+// of name that the resolver refused. Go's resolver reports a REFUSED answer as
+// "server misbehaving".
+func isRefusedLookup(body, name string) bool {
+	return strings.Contains(body, "lookup "+name) && strings.Contains(body, "server misbehaving")
+}
+
 // fetchThroughEgressActorUntil is fetchThroughEgressActor with the caller
 // deciding which answer is final.
 func fetchThroughEgressActorUntil(t *testing.T, ctx context.Context, router *e2e.RouterClient, actorRef resources.ActorRef, url string, done func(status int, body []byte) bool) (int, []byte) {

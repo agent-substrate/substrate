@@ -15,7 +15,6 @@
 package dns
 
 import (
-	"context"
 	"fmt"
 	"log/slog"
 	"net"
@@ -32,9 +31,8 @@ const (
 )
 
 // Relay validates and forwards UDP and TCP DNS queries to the worker pod's
-// resolvers. It listens in the sandbox's gateway namespace and dials from the
-// worker's. DNS bypasses the egress tunnel and is not checked against egress
-// policy.
+// resolvers. It listens in the sandbox's gateway netns and dials from the
+// worker's netns.
 type Relay struct {
 	upstreams []string
 
@@ -94,10 +92,4 @@ func NewRelayForUpstreams(upstreams []string) (*Relay, error) {
 		upstreams: upstreams,
 		dialer:    &net.Dialer{Timeout: dnsExchangeTimeout},
 	}, nil
-}
-
-// serveOn serves DNS on netC's sockets, which the caller has already bound,
-// and dials upstreams with netC's dialer.
-func (r *Relay) serveOn(ctx context.Context, netC *netConn) (*Server, error) {
-	return newServer(ctx, &serverConfig{upstreams: r.upstreams}, netC)
 }
