@@ -50,6 +50,11 @@ const (
 	// the podcertificate controller's API rate limits to match.
 	ClusterSizeSize0  = "size0"
 	ClusterSizeSize10 = "size10"
+
+	// Ingress router authentication modes; see atenet router's
+	// --ingress-auth-mode.
+	IngressAuthDeprecatedInsecure = "deprecated-insecure"
+	IngressAuthStaticMTLS         = "static-mtls"
 )
 
 // DefaultRolloutTimeout is the default wait timeout for workload rollouts.
@@ -190,6 +195,11 @@ type Config struct {
 	// and a one-node pool labeled and tainted
 	// ate.dev/workloadType=ate-postgres:NoSchedule for postgres alone.
 	CordonControlPlane bool
+
+	// IngressAuthMode is how the ingress router authenticates its clients
+	// (ATE_INGRESS_AUTH_MODE): IngressAuthDeprecatedInsecure or
+	// IngressAuthStaticMTLS.
+	IngressAuthMode string
 
 	// AdditionalEgressExtprocService is the optional NS/SVC:PORT external processor filter.
 	AdditionalEgressExtprocService string
@@ -425,6 +435,10 @@ func (c *Config) ScriptEnv() []string {
 	delete(merged, "ATE_INSTALL_CORDON_CONTROL_PLANE")
 	if c.CordonControlPlane {
 		merged["ATE_INSTALL_CORDON_CONTROL_PLANE"] = "true"
+	}
+	delete(merged, "ATE_INGRESS_AUTH_MODE")
+	if c.IngressAuthMode != "" && c.IngressAuthMode != IngressAuthDeprecatedInsecure {
+		merged["ATE_INGRESS_AUTH_MODE"] = c.IngressAuthMode
 	}
 	if c.AdditionalEgressExtprocService != "" {
 		merged["ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE"] = c.AdditionalEgressExtprocService

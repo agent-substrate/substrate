@@ -104,7 +104,7 @@ func TestCrossAtespaceIsolation(t *testing.T) {
 
 	ns := deployAtespaces(t, ctx, clients, env["BUCKET_NAME"])
 
-	rc, err := e2e.NewRouterClient(ctx)
+	rc, err := e2e.NewRouterClient(t, ctx)
 	if err != nil {
 		t.Fatalf("NewRouterClient: %v", err)
 	}

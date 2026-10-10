@@ -352,7 +352,7 @@ func TestCombinedVolumes(t *testing.T) {
 		t.Fatalf("ResumeActor: %v", err)
 	}
 
-	router, err := e2e.NewRouterClient(ctx)
+	router, err := e2e.NewRouterClient(t, ctx)
 	if err != nil {
 		t.Fatalf("NewRouterClient: %v", err)
 	}

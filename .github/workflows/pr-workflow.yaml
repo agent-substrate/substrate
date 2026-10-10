@@ -157,6 +157,13 @@ jobs:
       # because every ate-setup invocation reads it, including the control
       # plane redeploy in run-microvm-demo-kind.sh.
       ATE_CREDENTIAL_PROVIDER: '{"name":"k8s.io"}'
+      # The envoy router requires mTLS client certificates; agentgateway is
+      # configured statically and cannot. Job-wide for the same reason as the
+      # injection switch: every ate-setup invocation re-renders the router.
+      # E2E_INGRESS_AUTH_MODE tells the suites what was installed, and must
+      # match.
+      ATE_INGRESS_AUTH_MODE: ${{ matrix.dataplane == 'envoy' && 'static-mtls' || 'deprecated-insecure' }}
+      E2E_INGRESS_AUTH_MODE: ${{ matrix.dataplane == 'envoy' && 'static-mtls' || 'deprecated-insecure' }}
       # E2E_JUNIT_FILE is set per step, not here: the lanes below share this
       # job, so one job-level path would have each overwrite the last.
       ARTIFACTS: ${{ github.workspace }}/_artifacts

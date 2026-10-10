@@ -74,7 +74,7 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 	resume(t, ctx, clients, actorID)
 
 	// Drive request through the router so the dataplane emits atenet_router_route_duration.
-	rClient, err := e2e.NewRouterClient(ctx)
+	rClient, err := e2e.NewRouterClient(t, ctx)
 	if err != nil {
 		t.Fatalf("NewRouterClient: %v", err)
 	}

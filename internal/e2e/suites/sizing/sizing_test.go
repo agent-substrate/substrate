@@ -74,7 +74,7 @@ func TestActorSizing_SandboxObservesDeclaredLimits(t *testing.T) {
 	const id = "sized-actor"
 	createAndResumeActor(t, ctx, clients, id)
 
-	rc, err := e2e.NewRouterClient(ctx)
+	rc, err := e2e.NewRouterClient(t, ctx)
 	if err != nil {
 		t.Fatalf("NewRouterClient: %v", err)
 	}

@@ -83,7 +83,7 @@ func TestActorCapabilities(t *testing.T) {
 			actor := tt.template + "-actor"
 			createAndResumeActor(t, ctx, clients, namespace, tt.template, actor)
 
-			rc, err := e2e.NewRouterClient(ctx)
+			rc, err := e2e.NewRouterClient(t, ctx)
 			if err != nil {
 				t.Fatalf("NewRouterClient: %v", err)
 			}

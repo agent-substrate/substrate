@@ -107,7 +107,7 @@ func TestActorEgressCredentialInjection(t *testing.T) {
 	createAndResumeActor(t, ctx, clients, id)
 	waitForActorState(t, ctx, clients, id, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 
-	rc, err := e2e.NewRouterClient(ctx)
+	rc, err := e2e.NewRouterClient(t, ctx)
 	if err != nil {
 		t.Fatalf("NewRouterClient: %v", err)
 	}
