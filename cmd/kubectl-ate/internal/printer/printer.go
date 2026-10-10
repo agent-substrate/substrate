@@ -356,12 +356,10 @@ func PrintTagsTo(out io.Writer, tags []*ateapipb.Tag, format string) error {
 }
 
 func durableSnapshotStorage(snapshot *ateapipb.Snapshot) *ateapipb.SnapshotStorage {
-	for _, st := range snapshot.GetStorage() {
-		if st.GetDurability() == ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE &&
-			st.GetStatus() == ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED &&
-			st.GetObject().GetSnapshotUri() != "" {
-			return st
-		}
+	st := snapshot.GetDurableSnapshot()
+	if st.GetStatus() == ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED &&
+		st.GetObject().GetSnapshotUri() != "" {
+		return st
 	}
 	return nil
 }

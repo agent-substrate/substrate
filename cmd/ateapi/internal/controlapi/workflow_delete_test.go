@@ -276,8 +276,8 @@ func TestEnsureExternalSnapshotsReleased(t *testing.T) {
 			actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
 				s.LastAssignedGeneration = 2
 				s.Snapshots = []*ateapipb.Snapshot{
-					newDurableSnapshot(1, currentType, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", current.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
-					newDurableSnapshot(2, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", inFlight.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS),
+					newDurableSnapshot(1, currentType, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", current.Name(), current.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+					newDurableSnapshot(2, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", inFlight.Name(), inFlight.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
 				}
 			})
 
@@ -325,7 +325,7 @@ func TestEnsureExternalSnapshotsReleased_CollectsStrandedSnapshots(t *testing.T)
 	actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
 		s.LastAssignedGeneration = 1
 		s.Snapshots = []*ateapipb.Snapshot{
-			newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", currentSnapshot.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+			newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", currentSnapshot.Name(), currentSnapshot.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
 		}
 	})
 
@@ -365,7 +365,7 @@ func TestDeleteActor_CollectsInFlightSnapshotWithoutTemplate(t *testing.T) {
 	mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
 		s.LastAssignedGeneration = 1
 		s.Snapshots = []*ateapipb.Snapshot{
-			newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", inFlight.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS),
+			newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", inFlight.Name(), inFlight.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
 		}
 	})
 
@@ -398,7 +398,7 @@ func TestEnsureExternalSnapshotsReleased_DeletePrefixFailure(t *testing.T) {
 	actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
 		s.LastAssignedGeneration = 1
 		s.Snapshots = []*ateapipb.Snapshot{
-			newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", current.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+			newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", current.Name(), current.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
 		}
 	})
 
@@ -495,7 +495,7 @@ func TestDeleteActor_CollectsSnapshotsAfterWorkerDelete(t *testing.T) {
 				actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
 					s.LastAssignedGeneration = 1
 					s.Snapshots = []*ateapipb.Snapshot{
-						newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", previous.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+						newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", previous.Name(), previous.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
 					}
 				})
 			}
@@ -507,8 +507,8 @@ func TestDeleteActor_CollectsSnapshotsAfterWorkerDelete(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ensureMarkedSuspending: %v", err)
 			}
-			_, freshSt := findLatestSnapshotStorage(actor.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS)
-			fresh := mustParseSnapshotURI(t, freshSt.GetObject().GetSnapshotUri())
+			freshSnap := findLatestDurableSnapshot(actor.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING)
+			fresh := mustParseSnapshotURI(t, freshSnap.GetDurableSnapshot().GetObject().GetSnapshotUri())
 			objects.PutSnapshot(t, fresh, "manifest.json")
 
 			// The worker's pod goes away with the commit still outstanding, so

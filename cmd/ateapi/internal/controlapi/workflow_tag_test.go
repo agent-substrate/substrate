@@ -46,7 +46,7 @@ func seedTagSource(t *testing.T, ctx context.Context, persistence store.Interfac
 	actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
 		s.LastAssignedGeneration = 1
 		s.Snapshots = []*ateapipb.Snapshot{
-			newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, template.GetMetadata().GetUid(), uri.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+			newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, template.GetMetadata().GetUid(), uri.Name(), uri.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
 		}
 	})
 	return actor, uri
@@ -99,7 +99,7 @@ func TestTagActorSnapshot(t *testing.T) {
 	if got, want := tag.GetStatus().GetActorTemplateUid(), template.GetMetadata().GetUid(); got != want {
 		t.Errorf("actor template uid = %q, want %q", got, want)
 	}
-	if got, want := findSnapshotStorage(tag.GetStatus().GetSnapshot(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE).GetFidelity(), ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY; got != want {
+	if got, want := tag.GetStatus().GetSnapshot().GetDurableSnapshot().GetFidelity(), ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY; got != want {
 		t.Errorf("fidelity = %v, want the source's %v", got, want)
 	}
 
@@ -203,7 +203,7 @@ func TestTagActorSnapshot_Preconditions(t *testing.T) {
 					}
 					s.LastAssignedGeneration = 1
 					s.Snapshots = []*ateapipb.Snapshot{
-						newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmplUID, uri.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+						newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmplUID, uri.Name(), uri.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
 					}
 				})
 			}

@@ -971,7 +971,7 @@ func TestLoadActorForResume_TemplateReplaced(t *testing.T) {
 				seedOpts = append(seedOpts, func(a *ateapipb.Actor) {
 					a.Status.LastAssignedGeneration = 1
 					a.Status.Snapshots = []*ateapipb.Snapshot{
-						newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, resolve(tt.snapshotUID), someActorSnapshotURI(t, testStorageLocation, actorRef.Atespace, "snap-1"), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+						newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, resolve(tt.snapshotUID), "snap-1", someActorSnapshotURI(t, testStorageLocation, actorRef.Atespace, "snap-1"), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
 					}
 				})
 			}
@@ -1142,10 +1142,10 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 	unspecScope := ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
 
 	extSnap := func(uri string, fidelity ateapipb.SnapshotFidelity) *ateapipb.Snapshot {
-		return newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, fidelity, "", uri, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+		return newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, fidelity, "", "snap-1", uri, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
 	}
 	localSnap := func(name string, fidelity ateapipb.SnapshotFidelity) *ateapipb.Snapshot {
-		return newLocalSnapshot(1, fidelity, "", name, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+		return newLocalSnapshot(1, fidelity, "", name, "node-1", actorURI)
 	}
 
 	// actorSeed is the actor status a row persists before resuming.

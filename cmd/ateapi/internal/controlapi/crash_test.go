@@ -65,7 +65,7 @@ func seedActor(t *testing.T, ctx context.Context, st store.Interface, actorRef r
 			},
 			LastAssignedGeneration: 1,
 			Snapshots: []*ateapipb.Snapshot{
-				newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "gs://bucket/atespaces/as/actors/uid/snapshots/reserved-snapshot", ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS),
+				newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "reserved-snapshot", "gs://bucket/atespaces/as/actors/uid/snapshots/reserved-snapshot", ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
 			},
 		},
 	})
@@ -112,7 +112,7 @@ func seedUnboundActor(t *testing.T, ctx context.Context, st store.Interface, act
 			State:                  ateapipb.ActorState_ACTOR_STATE_RUNNING,
 			LastAssignedGeneration: 1,
 			Snapshots: []*ateapipb.Snapshot{
-				newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "gs://bucket/atespaces/as/actors/uid/snapshots/reserved-snapshot", ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS),
+				newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "reserved-snapshot", "gs://bucket/atespaces/as/actors/uid/snapshots/reserved-snapshot", ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
 			},
 		},
 	})
@@ -130,7 +130,7 @@ func assertCrashed(t *testing.T, ctx context.Context, st store.Interface, actorR
 		t.Errorf("status = %v, want %v", got.GetStatus().GetState(), ateapipb.ActorState_ACTOR_STATE_CRASHED)
 	}
 	// Keep the snapshot uri for debugging.
-	if _, st := findLatestSnapshotStorage(got.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS); st == nil {
+	if findLatestDurableSnapshot(got.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING) == nil {
 		t.Error(`in-progress durable snapshot URI = "", want preserved`)
 	}
 	if got.GetStatus().GetWorkerAssignment() != nil {

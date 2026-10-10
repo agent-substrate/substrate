@@ -600,12 +600,11 @@ func TestPrintTagsTo_Table(t *testing.T) {
 			Scope: ateapipb.TagScope_TAG_SCOPE_PUBLISHED,
 			Status: &ateapipb.TagStatus{
 				Snapshot: &ateapipb.Snapshot{
-					Storage: []*ateapipb.SnapshotStorage{{
-						Durability: ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE,
-						Status:     ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
-						Fidelity:   ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
-						Object:     &ateapipb.ObjectSnapshot{SnapshotUri: "gs://private/atespaces/team-a/tags/v2"},
-					}},
+					DurableSnapshot: &ateapipb.SnapshotStorage{
+						Status:   ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+						Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+						Object:   &ateapipb.ObjectSnapshot{SnapshotUri: "gs://private/atespaces/team-a/tags/v2"},
+					},
 				},
 			},
 		},
@@ -618,12 +617,11 @@ func TestPrintTagsTo_Table(t *testing.T) {
 			Scope: ateapipb.TagScope_TAG_SCOPE_ATESPACE,
 			Status: &ateapipb.TagStatus{
 				Snapshot: &ateapipb.Snapshot{
-					Storage: []*ateapipb.SnapshotStorage{{
-						Durability: ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE,
-						Status:     ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
-						Fidelity:   ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
-						Object:     &ateapipb.ObjectSnapshot{SnapshotUri: "gs://private/atespaces/team-a/tags/v1"},
-					}},
+					DurableSnapshot: &ateapipb.SnapshotStorage{
+						Status:   ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+						Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+						Object:   &ateapipb.ObjectSnapshot{SnapshotUri: "gs://private/atespaces/team-a/tags/v1"},
+					},
 				},
 			},
 		},
@@ -638,12 +636,11 @@ func TestPrintTagsTo_Table(t *testing.T) {
 			Scope: ateapipb.TagScope_TAG_SCOPE_ATESPACE,
 			Status: &ateapipb.TagStatus{
 				Snapshot: &ateapipb.Snapshot{
-					Storage: []*ateapipb.SnapshotStorage{{
-						Durability: ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE,
-						Status:     ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS,
-						Fidelity:   ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
-						Object:     &ateapipb.ObjectSnapshot{SnapshotUri: "gs://private/atespaces/team-a/tags/v3"},
-					}},
+					DurableSnapshot: &ateapipb.SnapshotStorage{
+						Status:   ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING,
+						Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+						Object:   &ateapipb.ObjectSnapshot{SnapshotUri: "gs://private/atespaces/team-a/tags/v3"},
+					},
 				},
 			},
 		},
