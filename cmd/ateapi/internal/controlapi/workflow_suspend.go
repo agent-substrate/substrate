@@ -134,7 +134,7 @@ func (w *ActorWorkflow) ensureMarkedSuspending(ctx context.Context, actorRef res
 	if actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_PAUSED {
 		localSnap, _ := findLatestSnapshotStorage(actor.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_LOCAL, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
 		if localSnap == nil {
-			if err := crashActor(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageLocalSnapshotNodeUnknown); err != nil {
+			if err := w.crashActor(ctx, actorRef, actorTemplate, ateattr.OperationSuspend, crashMessageLocalSnapshotNodeUnknown); err != nil {
 				slog.ErrorContext(ctx, "Failed to crash actor", slog.String("err", err.Error()))
 			}
 			return nil, fmt.Errorf("actor is CRASHED because it was in PAUSED state with no completed local snapshot")
@@ -233,7 +233,7 @@ func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef reso
 	assignment := actor.GetStatus().GetWorkerAssignment()
 	if assignment == nil {
 		// Missing active worker pod reference in SUSPENDING state indicates corrupted store state.
-		if err := crashActor(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageWorkerAssignmentMissing); err != nil {
+		if err := w.crashActor(ctx, actorRef, actorTemplate, ateattr.OperationSuspend, crashMessageWorkerAssignmentMissing); err != nil {
 			slog.ErrorContext(ctx, "Failed to crash actor", slog.String("err", err.Error()))
 		}
 		return "", fmt.Errorf("actor is CRASHED because it was in SUSPENDING state but has no active worker")
@@ -273,7 +273,7 @@ func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef reso
 	wireFidelity = ateattr.SnapshotFidelityValue(req.Fidelity)
 
 	if _, err = client.Checkpoint(ctx, req); err != nil {
-		return wireFidelity, handleAteletError(ctx, w.store, actorRef, ateattr.OperationSuspend, "Checkpoint", false, err)
+		return wireFidelity, w.handleAteletError(ctx, actorRef, actorTemplate, ateattr.OperationSuspend, "Checkpoint", false, err)
 	}
 	return wireFidelity, nil
 }
@@ -293,7 +293,7 @@ func (w *ActorWorkflow) ensurePausedSnapshotUploaded(ctx context.Context, actorR
 	if localSt == nil || nodeName == "" {
 		// Without the node the snapshot can never be found (mirrors
 		// FinalizePaused, which crashes rather than record an unknown node).
-		if err := crashActor(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageLocalSnapshotNodeUnknown); err != nil {
+		if err := w.crashActor(ctx, actorRef, actorTemplate, ateattr.OperationSuspend, crashMessageLocalSnapshotNodeUnknown); err != nil {
 			slog.ErrorContext(ctx, "Failed to crash actor", slog.String("err", err.Error()))
 		}
 		return "", fmt.Errorf("actor is CRASHED because it was suspending a paused snapshot with no node recorded")
@@ -324,7 +324,7 @@ func (w *ActorWorkflow) ensurePausedSnapshotUploaded(ctx context.Context, actorR
 	wireFidelity = ateattr.SnapshotFidelityValue(req.DesiredFidelity)
 
 	if _, err = client.UploadPausedCheckpoint(ctx, req); err != nil {
-		return wireFidelity, handleAteletError(ctx, w.store, actorRef, ateattr.OperationSuspend, "UploadPausedCheckpoint", false, err)
+		return wireFidelity, w.handleAteletError(ctx, actorRef, actorTemplate, ateattr.OperationSuspend, "UploadPausedCheckpoint", false, err)
 	}
 	return wireFidelity, nil
 }

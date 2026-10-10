@@ -707,11 +707,12 @@ func TestResumeActor_CrashesOnMissingWorkerAssignment(t *testing.T) {
 // recovery path loads the worker by pod name only, so the assignment may have
 // been cleared and the worker re-claimed by another actor in the meantime. On
 // a mismatch the actor is crashed and the worker — which is not ours — must
-// not be written.
+// not be written. A worker that still hosts the actor but is draining or no
+// longer eligible gets the actor's slot back when the actor is crashed.
 func TestValidateAssignedWorker(t *testing.T) {
+	// ownAssignment's ActorUid is the seeded actor's, filled in per run.
 	ownAssignment := &ateapipb.ActorAssignment{
-		Actor:    &ateapipb.ObjectRef{Atespace: "team-a", Name: "shared"},
-		ActorUid: "own-actor-uid",
+		Actor: &ateapipb.ObjectRef{Atespace: "team-a", Name: "shared"},
 	}
 	otherAssignment := &ateapipb.ActorAssignment{
 		Actor:    &ateapipb.ObjectRef{Atespace: "team-b", Name: "shared"},
@@ -749,14 +750,15 @@ func TestValidateAssignedWorker(t *testing.T) {
 			wantCrashMessage: "resume failed: " + crashMessageWorkerGone,
 		},
 		{
-			name:             "crashes actor and leaves worker untouched when worker is draining",
+			name:             "releases own draining worker and crashes actor",
 			workerStatus:     drainingStatus,
 			sandboxClass:     "gvisor",
 			assignment:       ownAssignment,
 			wantCode:         codes.Aborted,
 			wantActorState:   ateapipb.ActorState_ACTOR_STATE_CRASHED,
 			wantCrashMessage: "resume failed: " + crashMessageWorkerDraining,
-			wantAssignment:   ownAssignment,
+			wantAssignment:   nil,
+			wantWorkerWrite:  true,
 		},
 		{
 			name:             "crashes actor and leaves worker untouched when assigned to another actor",
@@ -814,6 +816,31 @@ func TestValidateAssignedWorker(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
 			persistence := newTestPersistence(t)
+			actorRef := resources.ActorRef{Atespace: "team-a", Name: "shared"}
+
+			// The stored actor names the worker, as a RESUMING actor's record
+			// does, so crashing it releases whatever it still holds there.
+			seedWorkflowActor(t, ctx, persistence, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_RESUMING, func(a *ateapipb.Actor) {
+				a.Status.WorkerAssignment = &ateapipb.WorkerAssignment{
+					Worker:          &ateapipb.ObjectRef{Name: testWorkerUID("pod-1")},
+					WorkerNamespace: "worker-ns",
+					WorkerPool:      "pool",
+					WorkerPod:       "pod-1",
+					WorkerPodUid:    testWorkerUID("pod-1"),
+				}
+			})
+			resumingActor, err := persistence.GetActor(ctx, actorRef)
+			if err != nil {
+				t.Fatalf("GetActor: %v", err)
+			}
+			assignment, wantAssignment := tt.assignment, tt.wantAssignment
+			if assignment == ownAssignment {
+				assignment = proto.CloneOf(ownAssignment)
+				assignment.ActorUid = resumingActor.GetMetadata().GetUid()
+			}
+			if wantAssignment == ownAssignment {
+				wantAssignment = assignment
+			}
 
 			var seeded *ateapipb.Worker
 			if tt.workerStatus != nil {
@@ -828,38 +855,22 @@ func TestValidateAssignedWorker(t *testing.T) {
 				}); err != nil {
 					t.Fatalf("CreateWorker: %v", err)
 				}
-				seedAssignment(t, persistence, testWorkerUID("pod-1"), tt.assignment)
+				seedAssignment(t, persistence, testWorkerUID("pod-1"), assignment)
 				// Fetch the stored version so the no-write assertion below can
 				// detect any optimistic update.
-				var err error
 				if seeded, err = persistence.GetWorker(ctx, testWorkerUID("pod-1")); err != nil {
 					t.Fatalf("GetWorker: %v", err)
 				}
 			}
 
-			seedWorkflowActor(t, ctx, persistence, resources.ActorRef{Atespace: "team-a", Name: "shared"}, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_RESUMING)
-
 			w := &ActorWorkflow{store: persistence, scheduler: scheduling.New(nil)}
-			resumingActor := &ateapipb.Actor{
-				Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "shared", Uid: "own-actor-uid"},
-				Status: &ateapipb.ActorStatus{
-					State: ateapipb.ActorState_ACTOR_STATE_RESUMING,
-					WorkerAssignment: &ateapipb.WorkerAssignment{
-						Worker:          &ateapipb.ObjectRef{Name: testWorkerUID("pod-1")},
-						WorkerNamespace: "worker-ns",
-						WorkerPool:      "pool",
-						WorkerPod:       "pod-1",
-						WorkerPodUid:    testWorkerUID("pod-1"),
-					},
-				},
-			}
 			tmpl := &ateapipb.ActorTemplate{SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR}}
-			_, err := w.validateAssignedWorker(ctx, resources.ActorRef{Atespace: "team-a", Name: "shared"}, resumingActor, tmpl)
+			_, err = w.validateAssignedWorker(ctx, actorRef, resumingActor, tmpl)
 			if got := apierror.Code(err); got != tt.wantCode {
 				t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, tt.wantCode, err)
 			}
 
-			actor, err := persistence.GetActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "shared"})
+			actor, err := persistence.GetActor(ctx, actorRef)
 			if err != nil {
 				t.Fatalf("GetActor: %v", err)
 			}
@@ -877,8 +888,8 @@ func TestValidateAssignedWorker(t *testing.T) {
 			if err != nil {
 				t.Fatalf("GetWorker: %v", err)
 			}
-			if got := firstAssignment(t, persistence, testWorkerUID("pod-1")); !proto.Equal(got, tt.wantAssignment) {
-				t.Errorf("stored worker assignment = %v, want %v", got, tt.wantAssignment)
+			if got := firstAssignment(t, persistence, testWorkerUID("pod-1")); !proto.Equal(got, wantAssignment) {
+				t.Errorf("stored worker assignment = %v, want %v", got, wantAssignment)
 			}
 			if !tt.wantWorkerWrite && stored.GetMetadata().GetVersion() != seeded.GetMetadata().GetVersion() {
 				t.Errorf("worker version moved %d -> %d, want no write", seeded.GetMetadata().GetVersion(), stored.GetMetadata().GetVersion())
@@ -1070,13 +1081,36 @@ func wireTestAssignment() *ateapipb.WorkerAssignment {
 }
 
 // newWireCaptureWorkflow builds an ActorWorkflow whose atelet dialer resolves
-// to an in-process capturing fake. The dialer's conn cache is pre-warmed with
-// a bufconn-backed connection for the atelet pod's UID and IP, so
-// DialForAteletOnNode returns it without dialing the pod IP.
+// to an in-process capturing fake.
 func newWireCaptureWorkflow(t *testing.T, persistence store.Interface) (*ActorWorkflow, *capturingAtelet) {
 	t.Helper()
 
 	fake := &capturingAtelet{}
+	dialer := newFakeAteletDialer(t, fake)
+
+	lister := sandboxConfigListerFor(t, []*atev1alpha1.SandboxConfig{{
+		ObjectMeta: metav1.ObjectMeta{Name: "gvisor"},
+		Spec: atev1alpha1.SandboxConfigSpec{
+			SandboxClass:   atev1alpha1.SandboxClassGvisor,
+			DefaultVersion: "v1",
+			Versions: []atev1alpha1.SandboxVersionConfig{{
+				Name:       "v1",
+				PauseImage: "pause@sha256:abc",
+				Assets:     testAssets(),
+			}},
+		},
+	}})
+
+	return &ActorWorkflow{store: persistence, dialer: dialer, sandboxConfigLister: lister}, fake
+}
+
+// newFakeAteletDialer builds an atelet dialer that resolves node-1 to the
+// in-process fake. The dialer's conn cache is pre-warmed with a bufconn-backed
+// connection for the atelet pod's UID and IP, so DialForAteletOnNode returns
+// it without dialing the pod IP.
+func newFakeAteletDialer(t *testing.T, fake ateletpb.AteomHerderServer) *AteletDialer {
+	t.Helper()
+
 	srv := grpc.NewServer()
 	ateletpb.RegisterAteomHerderServer(srv, fake)
 	lis := bufconn.Listen(1 << 20)
@@ -1105,21 +1139,7 @@ func newWireCaptureWorkflow(t *testing.T, persistence store.Interface) (*ActorWo
 	}
 	dialer := NewAteletDialer(newTestAteletIndexer(t, ateletPod), installdefaults.SystemNamespace, "", "")
 	dialer.ateletConns.Add("atelet-uid", &ateletConn{ip: "10.0.0.1", conn: conn})
-
-	lister := sandboxConfigListerFor(t, []*atev1alpha1.SandboxConfig{{
-		ObjectMeta: metav1.ObjectMeta{Name: "gvisor"},
-		Spec: atev1alpha1.SandboxConfigSpec{
-			SandboxClass:   atev1alpha1.SandboxClassGvisor,
-			DefaultVersion: "v1",
-			Versions: []atev1alpha1.SandboxVersionConfig{{
-				Name:       "v1",
-				PauseImage: "pause@sha256:abc",
-				Assets:     testAssets(),
-			}},
-		},
-	}})
-
-	return &ActorWorkflow{store: persistence, dialer: dialer, sandboxConfigLister: lister}, fake
+	return dialer
 }
 
 // TestResumeActor_AteletWireRequest is the characteristic test for the

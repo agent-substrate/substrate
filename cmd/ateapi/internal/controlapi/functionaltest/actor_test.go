@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -5501,6 +5502,228 @@ func TestRevertActor_FromCrashed(t *testing.T) {
 	}
 	if resumed.GetActor().GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
 		t.Errorf("resumed state = %v, want RUNNING", resumed.GetActor().GetStatus().GetState())
+	}
+}
+
+// TestActorLifecycle_CrashRevertResumeDelete drives an actor with an external
+// volume through create, a resume that crashes it on an atelet failure, revert,
+// a resume that succeeds, and delete. The crash terminates the sandbox and
+// detaches the volume while the worker still hosts the actor, and only then
+// frees the worker.
+func TestActorLifecycle_CrashRevertResumeDelete(t *testing.T) {
+	ns := namespaceForTest("ns-lifecycle-crash-revert")
+	plugin := &detachFailVolumePlugin{}
+	tc := setupTestWithVolumePlugins(t, ns, map[string]volume.VolumePluginControlPlane{
+		"substrate.io/mock": plugin,
+	})
+	defer tc.cleanup()
+
+	createTemplateWithVolumes(t, tc, ns,
+		[]*ateapipb.Volume{{
+			Name: "vol1",
+			ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{
+				StorageClassName: "standard",
+				Capacity:         "10Gi",
+			},
+		}},
+		[]*ateapipb.VolumeMount{{Name: "vol1", MountPath: "/mnt/vol1"}})
+	podUID := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+
+	ctx := context.Background()
+	const name = "id1"
+	ref := &ateapipb.ObjectRef{Atespace: testAtespace, Name: name}
+
+	// 1. Create.
+	if _, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+	}}); err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+
+	// 2. Resume, crashing on atelet. Whether the actor boots or restores, the
+	// call fails.
+	injected := status.Error(codes.Internal, "injected atelet failure")
+	tc.fakeAtelet.Lock.Lock()
+	tc.fakeAtelet.FailRun = injected
+	tc.fakeAtelet.FailRestore = injected
+	tc.fakeAtelet.Lock.Unlock()
+	if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: ref}); status.Code(err) != codes.Internal {
+		t.Fatalf("ResumeActor err = %v, want %v", err, codes.Internal)
+	}
+
+	crashed, err := tc.client.GetActor(ctx, &ateapipb.GetActorRequest{Actor: ref})
+	if err != nil {
+		t.Fatalf("GetActor after crash failed: %v", err)
+	}
+	if got := crashed.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+		t.Fatalf("state after failed resume = %v, want CRASHED", got)
+	}
+	if got := crashed.GetStatus().GetWorkerAssignment(); got != nil {
+		t.Errorf("worker assignment after crash = %v, want nil", got)
+	}
+	storageVolumeID := crashed.GetStatus().GetExternalVolumes()[0].GetStorageVolumeId()
+	if storageVolumeID == "" {
+		t.Fatal("volume has no storage volume ID after resume, want it created")
+	}
+	tc.fakeAtelet.Lock.Lock()
+	terminated, terminateReq := tc.fakeAtelet.TerminateCalled, tc.fakeAtelet.TerminateRequest
+	tc.fakeAtelet.FailRun = nil
+	tc.fakeAtelet.FailRestore = nil
+	tc.fakeAtelet.TerminateCalled = false
+	tc.fakeAtelet.TerminateRequest = nil
+	tc.fakeAtelet.Lock.Unlock()
+	// The crash targets the worker's ateom only while the worker still hosts
+	// the actor, so a target here means Terminate ran before the release.
+	if !terminated {
+		t.Error("crash did not call atelet Terminate")
+	} else if got := terminateReq.GetTargetAteomUid(); got != podUID {
+		t.Errorf("crash TerminateRequest.TargetAteomUid = %q, want %q", got, podUID)
+	}
+	plugin.mu.Lock()
+	detachedOnCrash := slices.Clone(plugin.detachedNodes)
+	plugin.mu.Unlock()
+	if !slices.Equal(detachedOnCrash, []string{"node1"}) {
+		t.Errorf("volume detached from %v on crash, want [node1]", detachedOnCrash)
+	}
+	worker, err := tc.persistence.GetWorker(ctx, podUID)
+	if err != nil {
+		t.Fatalf("GetWorker(%s) failed: %v", podUID, err)
+	}
+	if n := worker.GetStatus().GetAllocated().GetActors(); n != 0 {
+		t.Errorf("worker still holds %d actors after crash, want 0", n)
+	}
+	waitForWorkerAvailable(t, tc, podUID)
+
+	// 3. Revert.
+	reverted, err := tc.client.RevertActor(ctx, &ateapipb.RevertActorRequest{Actor: ref})
+	if err != nil {
+		t.Fatalf("RevertActor failed: %v", err)
+	}
+	if got := reverted.GetActor().GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+		t.Errorf("state after revert = %v, want SUSPENDED", got)
+	}
+	if got := reverted.GetActor().GetStatus().GetCrash(); got != nil {
+		t.Errorf("crash after revert = %v, want cleared", got)
+	}
+	if got := reverted.GetActor().GetStatus().GetAssignedNode(); got != "" {
+		t.Errorf("assigned node after revert = %q, want empty", got)
+	}
+
+	// 4. Resume.
+	resumed, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: ref})
+	if err != nil {
+		t.Fatalf("ResumeActor after revert failed: %v", err)
+	}
+	if got := resumed.GetActor().GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+		t.Errorf("state after second resume = %v, want RUNNING", got)
+	}
+	if got := resumed.GetActor().GetStatus().GetWorkerAssignment().GetWorker().GetName(); got != podUID {
+		t.Errorf("assigned worker after second resume = %q, want %q", got, podUID)
+	}
+
+	// 5. Delete.
+	if _, err := tc.client.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref, AnyState: true}); err != nil {
+		t.Fatalf("DeleteActor failed: %v", err)
+	}
+	if _, err := tc.client.GetActor(ctx, &ateapipb.GetActorRequest{Actor: ref}); status.Code(err) != codes.NotFound {
+		t.Errorf("GetActor after delete err = %v, want NotFound", err)
+	}
+	plugin.mu.Lock()
+	deleted := slices.Clone(plugin.deleted)
+	plugin.mu.Unlock()
+	if !slices.Equal(deleted, []string{storageVolumeID}) {
+		t.Errorf("deleted volumes = %v, want [%s]", deleted, storageVolumeID)
+	}
+	worker, err = tc.persistence.GetWorker(ctx, podUID)
+	if err != nil {
+		t.Fatalf("GetWorker(%s) failed: %v", podUID, err)
+	}
+	if n := worker.GetStatus().GetAllocated().GetActors(); n != 0 {
+		t.Errorf("worker still holds %d actors after delete, want 0", n)
+	}
+}
+
+// TestResumeActor_CrashTerminateFailureKeepsWorker verifies that an actor
+// whose crash cannot terminate its sandbox is still CRASHED but keeps its
+// worker, and that a revert terminates the sandbox and frees the worker.
+func TestResumeActor_CrashTerminateFailureKeepsWorker(t *testing.T) {
+	ns := namespaceForTest("ns-crash-terminate-fail")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	createTemplate(t, tc, ns)
+	podUID := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+
+	ctx := context.Background()
+	const name = "id1"
+	ref := &ateapipb.ObjectRef{Atespace: testAtespace, Name: name}
+
+	if _, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
+		ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl1"},
+	}}); err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+
+	// Whether the actor boots or restores, the call fails, and so does the
+	// crash's Terminate.
+	injected := status.Error(codes.Internal, "injected atelet failure")
+	tc.fakeAtelet.Lock.Lock()
+	tc.fakeAtelet.FailRun = injected
+	tc.fakeAtelet.FailRestore = injected
+	tc.fakeAtelet.FailTerminate = status.Error(codes.Internal, "injected terminate failure")
+	tc.fakeAtelet.Lock.Unlock()
+	if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: ref}); status.Code(err) != codes.Internal {
+		t.Fatalf("ResumeActor err = %v, want %v", err, codes.Internal)
+	}
+
+	crashed, err := tc.client.GetActor(ctx, &ateapipb.GetActorRequest{Actor: ref})
+	if err != nil {
+		t.Fatalf("GetActor after crash failed: %v", err)
+	}
+	if got := crashed.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+		t.Fatalf("state after failed resume = %v, want CRASHED", got)
+	}
+	if got := crashed.GetStatus().GetWorkerAssignment().GetWorker().GetName(); got != podUID {
+		t.Errorf("assigned worker after crash = %q, want %q kept for the revert", got, podUID)
+	}
+	worker, err := tc.persistence.GetWorker(ctx, podUID)
+	if err != nil {
+		t.Fatalf("GetWorker(%s) failed: %v", podUID, err)
+	}
+	if n := worker.GetStatus().GetAllocated().GetActors(); n != 1 {
+		t.Errorf("worker holds %d actors after crash, want 1", n)
+	}
+
+	tc.fakeAtelet.Lock.Lock()
+	tc.fakeAtelet.FailRun = nil
+	tc.fakeAtelet.FailRestore = nil
+	tc.fakeAtelet.FailTerminate = nil
+	tc.fakeAtelet.TerminateCalled = false
+	tc.fakeAtelet.Lock.Unlock()
+	reverted, err := tc.client.RevertActor(ctx, &ateapipb.RevertActorRequest{Actor: ref})
+	if err != nil {
+		t.Fatalf("RevertActor failed: %v", err)
+	}
+	if got := reverted.GetActor().GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+		t.Errorf("state after revert = %v, want SUSPENDED", got)
+	}
+	if got := reverted.GetActor().GetStatus().GetWorkerAssignment(); got != nil {
+		t.Errorf("worker assignment after revert = %v, want nil", got)
+	}
+	tc.fakeAtelet.Lock.Lock()
+	terminated := tc.fakeAtelet.TerminateCalled
+	tc.fakeAtelet.Lock.Unlock()
+	if !terminated {
+		t.Error("revert did not call atelet Terminate")
+	}
+	worker, err = tc.persistence.GetWorker(ctx, podUID)
+	if err != nil {
+		t.Fatalf("GetWorker(%s) failed: %v", podUID, err)
+	}
+	if n := worker.GetStatus().GetAllocated().GetActors(); n != 0 {
+		t.Errorf("worker still holds %d actors after revert, want 0", n)
 	}
 }
 

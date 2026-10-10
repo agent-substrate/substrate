@@ -32,7 +32,9 @@ import (
 	"github.com/agent-substrate/substrate/internal/actorevent"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
+	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
+	"github.com/agent-substrate/substrate/internal/volume"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
 	"go.opentelemetry.io/otel/attribute"
@@ -43,8 +45,15 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
 )
+
+// crashWorkflow builds an ActorWorkflow over st for crash tests whose actors
+// record no node, so crashing them never reaches atelet or a volume plugin.
+func crashWorkflow(st actorWorkflowStore) *ActorWorkflow {
+	return &ActorWorkflow{store: st}
+}
 
 // seedActor stores a running actor with all worker-binding fields populated, so
 // tests can assert they are cleared when the actor crashes.
@@ -286,7 +295,7 @@ func TestCrashActor(t *testing.T) {
 				tt.setup(t, ctx, st)
 			}
 
-			err := crashActor(ctx, st, actorRef, ateattr.OperationUnknown, "test crash")
+			err := crashWorkflow(st).crashActor(ctx, actorRef, nil, ateattr.OperationUnknown, "test crash")
 
 			tt.check(t, ctx, st, err)
 		})
@@ -301,7 +310,7 @@ func TestCrashActor_RecordsCrash(t *testing.T) {
 	seedActor(t, ctx, st, actorRef)
 
 	before := time.Now().Truncate(time.Microsecond)
-	if err := crashActor(ctx, st, actorRef, ateattr.OperationResume, crashMessageWorkerDraining); err != nil {
+	if err := crashWorkflow(st).crashActor(ctx, actorRef, nil, ateattr.OperationResume, crashMessageWorkerDraining); err != nil {
 		t.Fatalf("crashActor() = %v, want nil", err)
 	}
 	first, err := st.GetActor(ctx, actorRef)
@@ -317,7 +326,7 @@ func TestCrashActor_RecordsCrash(t *testing.T) {
 	}
 
 	// Crashing an already-crashed actor, as a concurrent crash does, keeps the first crash.
-	if err := crashActor(ctx, st, actorRef, ateattr.OperationResume, crashMessageWorkerGone); err != nil {
+	if err := crashWorkflow(st).crashActor(ctx, actorRef, nil, ateattr.OperationResume, crashMessageWorkerGone); err != nil {
 		t.Fatalf("second crashActor() = %v, want nil", err)
 	}
 	second, err := st.GetActor(ctx, actorRef)
@@ -471,7 +480,7 @@ func TestHandleAteletError(t *testing.T) {
 			seedActor(t, ctx, st, actorRef)
 			seedWorker(t, ctx, st, actorRef)
 
-			err := handleAteletError(tt.ctx, st, actorRef, ateattr.OperationResume, tt.rpc, tt.isTerminateRPC, tt.err)
+			err := crashWorkflow(st).handleAteletError(tt.ctx, actorRef, nil, ateattr.OperationResume, tt.rpc, tt.isTerminateRPC, tt.err)
 			if got := apierror.Code(err); got != tt.wantCode {
 				t.Errorf("apierror.Code(handleAteletError()) = %v, want %v (err: %v)", got, tt.wantCode, err)
 			}
@@ -594,7 +603,7 @@ func TestCrashActor_Metrics(t *testing.T) {
 	}
 	storetest.MustCreateActor(t, ctx, st, actor)
 
-	if err := crashActor(ctx, st, actorRef, ateattr.OperationResume, "test crash"); err != nil {
+	if err := crashWorkflow(st).crashActor(ctx, actorRef, nil, ateattr.OperationResume, "test crash"); err != nil {
 		t.Fatalf("crashActor: %v", err)
 	}
 
@@ -678,12 +687,12 @@ func (f failingReleaseStore) ReleaseActorFromWorker(context.Context, string, str
 	return nil, f.err
 }
 
-// A transient failure releasing the worker must not move the actor to the
-// CRASHED state: doing so would strand the still-assigned worker with
-// no actor left to drive a retry, permanently consuming the worker slot.
-// crashActor must return the error with the actor and worker left intact so the
-// caller retries and the worker is reclaimed.
-func TestCrashActorReleaseFailureLeavesWorkerReclaimable(t *testing.T) {
+// A transient failure releasing the worker still crashes the actor, but the
+// actor keeps its worker assignment. Clearing it would strand the
+// still-assigned worker with no actor left to drive a retry, permanently
+// consuming the worker slot. Keeping it lets a later revert or delete release
+// the worker.
+func TestCrashActorReleaseFailureKeepsWorkerAssignment(t *testing.T) {
 	ctx := context.Background()
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
 
@@ -693,32 +702,179 @@ func TestCrashActorReleaseFailureLeavesWorkerReclaimable(t *testing.T) {
 	seedWorker(t, ctx, st, actorRef)
 
 	releaseErr := errors.New("state store unavailable")
-	err := crashActor(ctx, failingReleaseStore{Interface: st, err: releaseErr}, actorRef, ateattr.OperationUnknown, "test crash")
-
-	if err == nil {
-		t.Fatal("crashActor() = nil, want error")
-	}
-	if !errors.Is(err, releaseErr) {
-		t.Errorf("crashActor() error = %v, want it to wrap %v", err, releaseErr)
+	if err := crashWorkflow(failingReleaseStore{Interface: st, err: releaseErr}).crashActor(ctx, actorRef, nil, ateattr.OperationUnknown, "test crash"); err != nil {
+		t.Fatalf("crashActor() = %v, want nil", err)
 	}
 
-	// The actor must stay RUNNING with its worker assignment intact, so a retry
-	// can re-release the worker.
-	got, gerr := st.GetActor(ctx, actorRef)
-	if gerr != nil {
-		t.Fatalf("GetActor() = %v, want nil", gerr)
+	got, err := st.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("GetActor() = %v, want nil", err)
 	}
-	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
-		t.Errorf("status = %v, want %v (actor must not be crashed when the release fails)", got.GetStatus().GetState(), ateapipb.ActorState_ACTOR_STATE_RUNNING)
+	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+		t.Errorf("status = %v, want %v", got.GetStatus().GetState(), ateapipb.ActorState_ACTOR_STATE_CRASHED)
 	}
 	if got.GetStatus().GetWorkerAssignment() == nil {
-		t.Error("WorkerAssignment cleared, want preserved so the release can be retried")
+		t.Error("WorkerAssignment cleared, want kept so a revert or delete can release the worker")
 	}
-
-	// The worker must still be assigned to the actor (the failed release did not
-	// persist): it is not leaked, and a retry will reclaim it.
 	if firstAssignment(t, st, "uid") == nil {
-		t.Error("worker assignment = nil, want still assigned (release failed, must remain retriable)")
+		t.Error("worker assignment = nil, want still assigned since the release failed")
+	}
+}
+
+// terminatingAtelet records each Terminate request and answers it with err,
+// after calling observe so a test can inspect the store at that moment.
+type terminatingAtelet struct {
+	ateletpb.UnimplementedAteomHerderServer
+	err     error
+	observe func(step string)
+
+	mu       sync.Mutex
+	requests []*ateletpb.TerminateRequest
+}
+
+func (f *terminatingAtelet) Terminate(ctx context.Context, req *ateletpb.TerminateRequest) (*ateletpb.TerminateResponse, error) {
+	f.observe("terminate")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.requests = append(f.requests, proto.CloneOf(req))
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &ateletpb.TerminateResponse{}, nil
+}
+
+// observingDetachPlugin calls observe before each detach.
+type observingDetachPlugin struct {
+	mockDetachVolumePlugin
+	observe func(step string)
+}
+
+func (p *observingDetachPlugin) DetachVolume(ctx context.Context, volumeID, node string) error {
+	p.observe("detach")
+	return p.mockDetachVolumePlugin.DetachVolume(ctx, volumeID, node)
+}
+
+// crashStep is what the store held when crashActor reached a teardown step.
+type crashStep struct {
+	Step   string
+	State  ateapipb.ActorState
+	Hosted bool
+}
+
+// crashActor terminates the sandbox and detaches the actor's volumes while the
+// worker still hosts it, and only then releases the worker. The actor is
+// CRASHED either way, but a failed teardown step leaves it holding its worker,
+// so a later revert or delete reaches the same sandbox.
+func TestCrashActor_TerminatesAndDetachesBeforeRelease(t *testing.T) {
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+	running := ateapipb.ActorState_ACTOR_STATE_RUNNING
+	terminated := crashStep{Step: "terminate", State: running, Hosted: true}
+	detached := crashStep{Step: "detach", State: running, Hosted: true}
+
+	tests := []struct {
+		name           string
+		terminateErr   error
+		detachErr      error
+		wantWorkerKept bool
+		wantSteps      []crashStep
+	}{
+		{
+			name:      "terminates and detaches before releasing the worker",
+			wantSteps: []crashStep{terminated, detached},
+		},
+		{
+			name:         "workload already gone on atelet counts as terminated",
+			terminateErr: status.Error(codes.NotFound, "workload not found"),
+			wantSteps:    []crashStep{terminated, detached},
+		},
+		{
+			name:           "terminate failure crashes the actor but keeps its worker",
+			terminateErr:   status.Error(codes.Internal, "while unmounting volumes"),
+			wantWorkerKept: true,
+			wantSteps:      []crashStep{terminated},
+		},
+		{
+			name:           "detach failure crashes the actor but keeps its worker",
+			detachErr:      errors.New("detach failed"),
+			wantWorkerKept: true,
+			wantSteps:      []crashStep{terminated, detached},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			st, cleanup := storetest.SetupTestStore(t)
+			defer cleanup()
+			storetest.MustCreateActor(t, ctx, st, &ateapipb.Actor{
+				Metadata: &ateapipb.ResourceMetadata{Name: actorRef.Name, Atespace: actorRef.Atespace},
+				Status: &ateapipb.ActorStatus{
+					State:        running,
+					AssignedNode: "node-1",
+					WorkerAssignment: &ateapipb.WorkerAssignment{
+						Worker:       &ateapipb.ObjectRef{Name: "uid"},
+						WorkerPodUid: "uid",
+						NodeName:     "node-1",
+					},
+					ExternalVolumes: []*ateapipb.ExternalVolume{
+						{Name: "data", StorageVolumeId: "storage-vol-1", VolumeType: "mock"},
+					},
+				},
+			})
+			seedWorker(t, ctx, st, actorRef)
+
+			// Terminate is observed on the fake atelet's goroutine, but the
+			// steps run one after another, so steps is never written concurrently.
+			var steps []crashStep
+			observe := func(step string) {
+				actor, err := st.GetActor(ctx, actorRef)
+				if err != nil {
+					t.Errorf("GetActor during %s: %v", step, err)
+					return
+				}
+				hosted, err := workerHostsActor(ctx, st, "uid", actor.GetMetadata().GetUid())
+				if err != nil {
+					t.Errorf("workerHostsActor during %s: %v", step, err)
+				}
+				steps = append(steps, crashStep{Step: step, State: actor.GetStatus().GetState(), Hosted: hosted})
+			}
+			atelet := &terminatingAtelet{err: tt.terminateErr, observe: observe}
+			plugin := &observingDetachPlugin{
+				mockDetachVolumePlugin: mockDetachVolumePlugin{detachErrs: map[string]error{"storage-vol-1": tt.detachErr}},
+				observe:                observe,
+			}
+			w := &ActorWorkflow{
+				store:          st,
+				dialer:         newFakeAteletDialer(t, atelet),
+				pluginRegistry: &mockPluginRegistry{plugins: map[string]volume.VolumePluginControlPlane{"mock": plugin}},
+			}
+
+			if err := w.crashActor(ctx, actorRef, nil, ateattr.OperationResume, "test crash"); err != nil {
+				t.Fatalf("crashActor() = %v, want nil", err)
+			}
+			if diff := cmp.Diff(tt.wantSteps, steps); diff != "" {
+				t.Errorf("store state at each teardown step (-want +got):\n%s", diff)
+			}
+			if len(atelet.requests) != 1 {
+				t.Fatalf("got %d Terminate requests, want 1", len(atelet.requests))
+			}
+			if got := atelet.requests[0].GetTargetAteomUid(); got != "uid" {
+				t.Errorf("Terminate TargetAteomUid = %q, want %q", got, "uid")
+			}
+
+			got, err := st.GetActor(ctx, actorRef)
+			if err != nil {
+				t.Fatalf("GetActor: %v", err)
+			}
+			if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+				t.Errorf("status = %v, want %v", got.GetStatus().GetState(), ateapipb.ActorState_ACTOR_STATE_CRASHED)
+			}
+			if kept := got.GetStatus().GetWorkerAssignment() != nil; kept != tt.wantWorkerKept {
+				t.Errorf("actor WorkerAssignment kept = %v, want %v", kept, tt.wantWorkerKept)
+			}
+			if hosted := firstAssignment(t, st, "uid") != nil; hosted != tt.wantWorkerKept {
+				t.Errorf("worker still hosts the actor = %v, want %v", hosted, tt.wantWorkerKept)
+			}
+		})
 	}
 }
 
@@ -886,7 +1042,7 @@ func TestCrashActor_RecordAndCounterAgree(t *testing.T) {
 		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING},
 	})
 
-	if err := crashActor(ctx, st, actorRef, ateattr.OperationResume, "test crash"); err != nil {
+	if err := crashWorkflow(st).crashActor(ctx, actorRef, nil, ateattr.OperationResume, "test crash"); err != nil {
 		t.Fatalf("crashActor: %v", err)
 	}
 	// The logs exporter is on, so the record goes to OTLP only.
@@ -921,7 +1077,7 @@ func TestCrashActor_RecordAndCounterAgree(t *testing.T) {
 	}
 
 	// Re-crashing an already-crashed actor must move neither signal.
-	if err := crashActor(ctx, st, actorRef, ateattr.OperationResume, "test crash"); err != nil {
+	if err := crashWorkflow(st).crashActor(ctx, actorRef, nil, ateattr.OperationResume, "test crash"); err != nil {
 		t.Fatalf("second crashActor: %v", err)
 	}
 	if gotEvents := events(); len(gotEvents) != 1 {
