@@ -27,6 +27,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/boomerutil"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/dynconfig"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/userclass"
+	"github.com/agent-substrate/substrate/internal/controlclienttest"
 	gluttonpb "github.com/agent-substrate/substrate/internal/proto/glutton"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/otel"
@@ -198,7 +199,7 @@ func TestSpawnRunBatch_Success(t *testing.T) {
 	srv := newTestHTTPServer(t, nil)
 	defer srv.Close()
 
-	fakeAPI := &fakeControlClient{}
+	fakeAPI := &controlclienttest.Fake{}
 	cfg := &userclass.Config{
 		APIStub:          fakeAPI,
 		HTTPClient:       srv.Client(),
@@ -247,15 +248,15 @@ func TestSpawnRunBatch_PartialFailure(t *testing.T) {
 	defer srv.Close()
 
 	var failCount atomic.Int64
-	fakeAPI := &fakeControlClient{
-		createActorFn: func(name string) error {
+	fakeAPI := &controlclienttest.Fake{
+		CreateActorFunc: createActorFunc(func(name string) error {
 			// Fail 2 out of 5 actors terminally
 			if strings.HasSuffix(name, "-1") || strings.HasSuffix(name, "-2") {
 				failCount.Add(1)
 				return status.Error(codes.InvalidArgument, "invalid actor spec")
 			}
 			return nil
-		},
+		}),
 	}
 
 	cfg := &userclass.Config{
@@ -311,10 +312,10 @@ func TestSpawnRunBatch_AllFailed(t *testing.T) {
 	srv := newTestHTTPServer(t, nil)
 	defer srv.Close()
 
-	fakeAPI := &fakeControlClient{
-		createActorFn: func(name string) error {
+	fakeAPI := &controlclienttest.Fake{
+		CreateActorFunc: createActorFunc(func(name string) error {
 			return status.Error(codes.InvalidArgument, "invalid actor spec")
-		},
+		}),
 	}
 
 	cfg := &userclass.Config{
@@ -356,11 +357,11 @@ func TestSpawnIterate_StopOnceBlocking(t *testing.T) {
 	defer srv.Close()
 
 	var batchRuns atomic.Int64
-	fakeAPI := &fakeControlClient{
-		createActorFn: func(name string) error {
+	fakeAPI := &controlclienttest.Fake{
+		CreateActorFunc: createActorFunc(func(name string) error {
 			batchRuns.Add(1)
 			return nil
-		},
+		}),
 	}
 
 	cfg := &userclass.Config{
@@ -418,15 +419,15 @@ func TestSpawnCreate_AlreadyExistsOnRetrySucceeds(t *testing.T) {
 	defer srv.Close()
 
 	var attempts atomic.Int64
-	fakeAPI := &fakeControlClient{
-		createActorFn: func(name string) error {
+	fakeAPI := &controlclienttest.Fake{
+		CreateActorFunc: createActorFunc(func(name string) error {
 			// First attempt fails with Unavailable (transient network blip after server committed)
 			if attempts.Add(1) == 1 {
 				return status.Error(codes.Unavailable, "network timeout")
 			}
 			// Retry receives AlreadyExists from server
 			return status.Error(codes.AlreadyExists, "actor already exists")
-		},
+		}),
 	}
 
 	cfg := &userclass.Config{
@@ -463,11 +464,11 @@ func TestSpawnResume_ConcurrentUpdateRetry(t *testing.T) {
 	srv := newTestHTTPServer(t, nil)
 	defer srv.Close()
 
-	fakeAPI := &fakeControlClient{
-		resumeErrs: []error{
+	fakeAPI := &controlclienttest.Fake{
+		ResumeActorFunc: resumeActorFunc(
 			status.Error(codes.Aborted, boomerutil.ConcurrentUpdateMsg),
 			status.Error(codes.Aborted, boomerutil.ConcurrentUpdateMsg),
-		},
+		),
 	}
 
 	cfg := &userclass.Config{
@@ -504,10 +505,10 @@ func TestSpawnResume_Crashed(t *testing.T) {
 	srv := newTestHTTPServer(t, nil)
 	defer srv.Close()
 
-	fakeAPI := &fakeControlClient{
-		resumeErrs: []error{
+	fakeAPI := &controlclienttest.Fake{
+		ResumeActorFunc: resumeActorFunc(
 			status.Error(codes.Aborted, "actor crashed while restoring"),
-		},
+		),
 	}
 
 	cfg := &userclass.Config{
@@ -545,7 +546,7 @@ func TestSpawnShutdown_DeleteAll(t *testing.T) {
 	srv := newTestHTTPServer(t, nil)
 	defer srv.Close()
 
-	fakeAPI := &fakeControlClient{}
+	fakeAPI := &controlclienttest.Fake{}
 	cfg := &userclass.Config{
 		APIStub:          fakeAPI,
 		HTTPClient:       srv.Client(),
@@ -573,7 +574,7 @@ func TestSpawnShutdown_DeleteAll(t *testing.T) {
 
 	rt.shutdown(shutdownCtx)
 
-	if got := len(fakeAPI.recordedDeleteRequests()); got != 4 {
+	if got := len(fakeAPI.RecordedDeleteActorRequests()); got != 4 {
 		t.Fatalf("expected 4 deleted actors, got %d", got)
 	}
 }
@@ -585,13 +586,13 @@ func TestSpawnShutdown_MidBatchBoundedWait(t *testing.T) {
 	// A fake CreateActor that ignores ctx and blocks indefinitely.
 	createStarted := make(chan struct{})
 	var started atomic.Int32
-	fakeAPI := &fakeControlClient{
-		createActorFn: func(name string) error {
+	fakeAPI := &controlclienttest.Fake{
+		CreateActorFunc: createActorFunc(func(name string) error {
 			if started.Add(1) == 2 {
 				close(createStarted)
 			}
 			select {}
-		},
+		}),
 	}
 
 	cfg := &userclass.Config{
@@ -627,9 +628,9 @@ func TestSpawnShutdown_MidBatchBoundedWait(t *testing.T) {
 		t.Fatalf("expected shutdown to bound wait around 2s, took %v", elapsed)
 	}
 
-	deletedCount := len(fakeAPI.recordedDeleteRequests())
+	deletedCount := len(fakeAPI.RecordedDeleteActorRequests())
 	var createdCount int
-	for _, call := range fakeAPI.recordedCalls() {
+	for _, call := range fakeAPI.RecordedCalls() {
 		if call == "CreateActor" {
 			createdCount++
 		}
@@ -645,7 +646,7 @@ func TestSpawnRunBatch_DynConfigOverride(t *testing.T) {
 	defer srv.Close()
 
 	t.Run("overrides when set", func(t *testing.T) {
-		fakeAPI := &fakeControlClient{}
+		fakeAPI := &controlclienttest.Fake{}
 		dyn := dynconfig.NewHolder(dynconfig.Config{
 			TotalActors:      3,
 			SpawnConcurrency: 2,
@@ -683,7 +684,7 @@ func TestSpawnRunBatch_DynConfigOverride(t *testing.T) {
 	})
 
 	t.Run("falls back to cfg when dynconfig is zero", func(t *testing.T) {
-		fakeAPI := &fakeControlClient{}
+		fakeAPI := &controlclienttest.Fake{}
 		dyn := dynconfig.NewHolder(dynconfig.Config{
 			TotalActors:      0, // 0 = unset
 			SpawnConcurrency: 0,
