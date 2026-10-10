@@ -65,6 +65,9 @@ func (e *Env) DeployBenchmarks(ctx context.Context, opts BenchmarkOptions) error
 	if err := opts.Validate(); err != nil {
 		return err
 	}
+	if err := e.RequireControlPlane(ctx); err != nil {
+		return err
+	}
 	log.Stepf("deploy_benchmarks (worker_count=%d, sandbox_class=%s)", opts.WorkerCount, opts.SandboxClass)
 
 	// The microvm SandboxConfig lives outside the default set installed by
