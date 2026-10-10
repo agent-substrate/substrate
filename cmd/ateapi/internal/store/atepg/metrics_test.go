@@ -24,7 +24,9 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/puddle/v2"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
@@ -485,6 +487,69 @@ func TestPoolMetricsConnectRegistrationFailure(t *testing.T) {
 	defer p.pool.Close()
 	p.Close()
 	assertPoolCounts(t, reader, nil)
+}
+
+func TestPoolMetricsAcquireFailureClasses(t *testing.T) {
+	cfg, err := pgxpool.ParseConfig("postgres://unused@127.0.0.1:1/test?sslmode=disable&connect_timeout=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool, err := pgxpool.NewWithConfig(t.Context(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	conn, connectErr := pool.Acquire(t.Context())
+	if connectErr == nil {
+		conn.Release()
+		t.Fatal("expected connection establishment failure")
+	}
+	var typedConnectErr *pgconn.ConnectError
+	if !errors.As(connectErr, &typedConnectErr) {
+		t.Fatalf("acquisition error is not a ConnectError: %v", connectErr)
+	}
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	for _, tc := range []struct {
+		name      string
+		ctx       context.Context
+		err       error
+		outcome   string
+		errorType string
+	}{
+		{"closed pool", t.Context(), puddle.ErrClosedPool, ateattr.StoreConnectionAcquireError, ateattr.StoreConnectionAcquirePoolClosed},
+		{"wrapped closed pool", t.Context(), fmt.Errorf("acquire: %w", puddle.ErrClosedPool), ateattr.StoreConnectionAcquireError, ateattr.StoreConnectionAcquirePoolClosed},
+		{"connect", t.Context(), connectErr, ateattr.StoreConnectionAcquireError, ateattr.StoreConnectionAcquireConnectError},
+		{"wrapped connect", t.Context(), fmt.Errorf("acquire: %w", connectErr), ateattr.StoreConnectionAcquireError, ateattr.StoreConnectionAcquireConnectError},
+		{"connect with cancelled context", cancelled, connectErr, ateattr.StoreConnectionAcquireError, ateattr.StoreConnectionAcquireConnectError},
+		{"unknown", t.Context(), errors.New("unbounded details"), ateattr.StoreConnectionAcquireError, ateattr.StoreConnectionAcquireOtherError},
+		{"wrapped cancellation", cancelled, fmt.Errorf("acquire: %w", context.Canceled), ateattr.StoreConnectionAcquireCancelled, ""},
+		{"wrapped deadline", t.Context(), fmt.Errorf("acquire: %w", context.DeadlineExceeded), ateattr.StoreConnectionAcquireTimeout, ""},
+		{"connect wrapping cancellation", cancelled, errors.Join(connectErr, context.Canceled), ateattr.StoreConnectionAcquireCancelled, ""},
+		{"success with cancelled context", cancelled, nil, ateattr.StoreConnectionAcquireSuccess, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			instruments, reader := newPoolMetrics(t)
+			instruments.recordAcquire(tc.ctx, ateattr.DBConnectionPoolMain, 2*time.Millisecond, tc.err)
+			m := collectPoolMetrics(t, reader)[connectionWaitMetric]
+			histogram, ok := m.Data.(metricdata.Histogram[float64])
+			if !ok || len(histogram.DataPoints) != 1 {
+				t.Fatalf("wrong acquisition histogram: %+v", m)
+			}
+			point := histogram.DataPoints[0]
+			attrs := []attribute.KeyValue{
+				ateattr.DBConnectionPoolNameKey.String(ateattr.DBConnectionPoolMain),
+				ateattr.StoreConnectionAcquireOutcomeKey.String(tc.outcome),
+			}
+			if tc.errorType != "" {
+				attrs = append(attrs, ateattr.ErrorTypeKey.String(tc.errorType))
+			}
+			want := attribute.NewSet(attrs...)
+			if !point.Attributes.Equals(&want) || point.Count != 1 || point.Sum != 0.002 {
+				t.Fatalf("acquisition point = %+v, want labels %v, count 1 and duration 0.002", point, want)
+			}
+		})
+	}
 }
 
 func assertPendingAcquires(t *testing.T, reader *sdkmetric.ManualReader, want map[string]int64) {
