@@ -22,7 +22,11 @@ import (
 // A trimmed sample of what the Collector's prometheus exporter emits: HELP/TYPE
 // comments plus suffixed series lines, so the matcher is exercised against the
 // real exposition shape.
-const sampleScrape = `# HELP ate_actor_lifecycle_operation_duration_seconds Duration of an actor lifecycle operation.
+const sampleScrape = `db_client_connection_count{db_client_connection_pool_name="main",db_client_connection_state="used"} 1
+db_client_connection_max{db_client_connection_pool_name="main"} 7
+db_client_connection_pending_requests{db_client_connection_pool_name="main"} 0
+db_client_connection_wait_time_seconds_count{db_client_connection_pool_name="main",ate_store_connection_acquire_outcome="success"} 2
+# HELP ate_actor_lifecycle_operation_duration_seconds Duration of an actor lifecycle operation.
 # TYPE ate_actor_lifecycle_operation_duration_seconds histogram
 ate_actor_lifecycle_operation_duration_seconds_bucket{ate_actor_operation_name="resume",le="0.1"} 2
 ate_actor_lifecycle_operation_duration_seconds_count{ate_actor_operation_name="resume"} 2
@@ -51,6 +55,10 @@ func TestMissingPlatformMetrics(t *testing.T) {
 			name:   "all present via suffix, exact, and comment forms",
 			scrape: sampleScrape,
 			prefixes: []string{
+				"db_client_connection_count",
+				"db_client_connection_max",
+				"db_client_connection_wait_time",
+				"db_client_connection_pending_requests",
 				"ate_actor_lifecycle_operation_duration",
 				"ate_workerpool_workers",
 				"ate_workerpool_desired_workers",
