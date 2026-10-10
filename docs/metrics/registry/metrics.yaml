@@ -33,38 +33,8 @@ groups:
 
   - id: registry.ate.store.connection
     type: attribute_group
-    brief: Bounded PostgreSQL pool identities, states, and acquisition outcomes.
+    brief: Bounded PostgreSQL connection acquisition outcomes.
     attributes:
-      - id: db.client.connection.pool.name
-        stability: development
-        brief: The pool's purpose, unique within ateapi; never derived from a DSN.
-        type:
-          members:
-            - id: main
-              value: main
-              stability: development
-              brief: Store and authorization read/write traffic.
-            - id: watch
-              value: watch
-              stability: development
-              brief: Worker-event polling and expired-lease cleanup.
-            - id: owner
-              value: owner
-              stability: development
-              brief: Schema migrations and outbox partition maintenance.
-      - id: db.client.connection.state
-        stability: development
-        brief: The state of an open connection; connections under construction are excluded.
-        type:
-          members:
-            - id: used
-              value: used
-              stability: development
-              brief: Acquired by a caller.
-            - id: idle
-              value: idle
-              stability: development
-              brief: Available for acquisition.
       - id: ate.store.connection.acquire.outcome
         stability: development
         brief: The result of one connection acquisition attempt.
@@ -815,6 +785,23 @@ groups:
       substrate:
         owner: opentelemetry
     attributes:
+      - id: db.client.connection.pool.name
+        stability: development
+        type: string
+        brief: >
+          The pool's name, unique within the instrumented application. Ateapi
+          emits only main (store and authorization), watch (worker-event
+          polling and expired-lease cleanup), and owner (migrations and outbox
+          partition maintenance), never a DSN or hostname.
+        examples: [main, watch, owner]
+      - id: db.client.connection.state
+        stability: development
+        type: string
+        brief: >
+          The state of a connection in the pool. Ateapi emits idle for an
+          available connection or used for one acquired by a caller.
+          Connections under construction are excluded.
+        examples: [idle, used]
       - id: error.type
         stability: stable
         type: string
@@ -861,7 +848,7 @@ groups:
     instrument: updowncounter
     unit: "{connection}"
     stability: development
-    brief: The number of used and idle PostgreSQL connections by pool.
+    brief: "The number of connections that are currently in state described by the `state` attribute."
     note: >
       Observable, following the upstream database pool conventions. Each
       collection reads pgx pool statistics and reports both states, including
@@ -884,7 +871,7 @@ groups:
     instrument: updowncounter
     unit: "{connection}"
     stability: development
-    brief: The maximum number of open PostgreSQL connections allowed by pool.
+    brief: The maximum number of open connections allowed.
     note: >
       Observable, following the upstream database pool conventions. Reports
       the effective pgx maximum, including defaults and dedicated pool limits,
@@ -905,7 +892,7 @@ groups:
     instrument: histogram
     unit: s
     stability: development
-    brief: The time to acquire a PostgreSQL connection by pool and outcome.
+    brief: The time it took to obtain an open connection from the pool.
     note: >
       Extends the upstream pool wait-time metric to include unsuccessful
       attempts. The histogram count gives acquisition rates by outcome,
@@ -939,7 +926,7 @@ groups:
     instrument: updowncounter
     unit: "{request}"
     stability: development
-    brief: The number of PostgreSQL connection acquisitions currently in progress by pool.
+    brief: The number of current pending requests for an open connection.
     note: >
       Follows the upstream database pool convention. Incremented at the start
       of pgx Acquire and decremented on every return, including cancellation,

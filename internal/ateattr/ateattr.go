@@ -286,23 +286,36 @@ const (
 // meaning success, never as a parallel _failures counter.
 const ErrorTypeKey = attribute.Key("error.type")
 
-// Database pool attributes follow the upstream OpenTelemetry conventions.
+// Database pool name and state keys follow upstream OpenTelemetry conventions.
+// The acquisition outcome key is specific to Substrate.
 const (
 	DBConnectionPoolNameKey          = attribute.Key("db.client.connection.pool.name")
 	DBConnectionStateKey             = attribute.Key("db.client.connection.state")
 	StoreConnectionAcquireOutcomeKey = attribute.Key("ate.store.connection.acquire.outcome")
-	DBConnectionPoolMain             = "main"
-	DBConnectionPoolWatch            = "watch"
-	DBConnectionPoolOwner            = "owner"
-	DBConnectionStateUsed            = "used"
-	DBConnectionStateIdle            = "idle"
-	StoreConnectionAcquireSuccess    = "success"
-	StoreConnectionAcquireCancelled  = "cancelled"
-	StoreConnectionAcquireTimeout    = "timeout"
-	StoreConnectionAcquireError      = "error"
 )
 
-// Values of ErrorTypeKey for failed PostgreSQL connection acquisitions.
+// Values for DBConnectionPoolNameKey.
+const (
+	DBConnectionPoolMain  = "main"
+	DBConnectionPoolWatch = "watch"
+	DBConnectionPoolOwner = "owner"
+)
+
+// Values for DBConnectionStateKey.
+const (
+	DBConnectionStateUsed = "used"
+	DBConnectionStateIdle = "idle"
+)
+
+// Values for StoreConnectionAcquireOutcomeKey.
+const (
+	StoreConnectionAcquireSuccess   = "success"
+	StoreConnectionAcquireCancelled = "cancelled"
+	StoreConnectionAcquireTimeout   = "timeout"
+	StoreConnectionAcquireError     = "error"
+)
+
+// Values for ErrorTypeKey on failed PostgreSQL connection acquisitions.
 const (
 	StoreConnectionAcquirePoolClosed   = "pool_closed"
 	StoreConnectionAcquireConnectError = "connect_error"
