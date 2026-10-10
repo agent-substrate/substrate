@@ -44,6 +44,9 @@ type DeployOptions struct {
 	// SetupCSI additionally installs the CSI driver (nfs, hostpath, both, none).
 	// Kind only. The hostpath driver is Kind only.
 	SetupCSI string
+	// SkipMicroVMDeps skips staging the micro-VM guest assets and applying the
+	// microvm SandboxConfig.
+	SkipMicroVMDeps bool
 }
 
 // Validate checks the options that can be checked without configuration or a
@@ -113,10 +116,6 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 		return err
 	}
 
-	if err := e.DeploySandboxConfig(ctx); err != nil {
-		return err
-	}
-
 	// Ahead of the bundle below, for the same reason as the namespace: every
 	// workload pulls this ConfigMap in via envFrom, and a container whose
 	// envFrom target is missing will not start.
@@ -146,6 +145,12 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 		return err
 	}
 	if err := e.applyWithAPIServerEnvHash(ctx, manifests); err != nil {
+		return err
+	}
+
+	// After the bundle on Kind, which creates the rustfs Deployment and
+	// bucket-init Job that DeployMicroVMDeps stages guest assets into.
+	if err := e.DeploySandboxConfig(ctx, opts.SkipMicroVMDeps); err != nil {
 		return err
 	}
 
@@ -583,8 +588,8 @@ func (e *Env) DeployAtenet(ctx context.Context) error {
 }
 
 // DeploySandboxConfig applies the SandboxConfig admission policy, then the
-// default gVisor SandboxConfig.
-func (e *Env) DeploySandboxConfig(ctx context.Context) error {
+// default gVisor and (unless skipMicroVMDeps is set) micro-VM SandboxConfigs.
+func (e *Env) DeploySandboxConfig(ctx context.Context, skipMicroVMDeps bool) error {
 	log.Step("deploy_sandboxconfig")
 
 	if err := e.EnsureCRDs(ctx); err != nil {
@@ -592,14 +597,20 @@ func (e *Env) DeploySandboxConfig(ctx context.Context) error {
 	}
 
 	// Enforce per-class SandboxConfig asset requirements. This is applied
-	// before any SandboxConfig so the config below is validated too.
+	// before any SandboxConfig so the configs below are validated too.
 	if err := e.Kube.ApplyPath(ctx, e.Cfg.Manifest("sandboxconfig-validation.yaml")); err != nil {
 		return err
 	}
 
-	// Install the cluster-wide default gVisor SandboxConfig that gVisor
-	// WorkerPools resolve by default unless they pin their own configRef.
-	return e.Kube.ApplyPath(ctx, e.Cfg.Manifest("sandboxconfig-gvisor.yaml"))
+	// Install the cluster-wide default SandboxConfigs that WorkerPools
+	// resolve by default unless they pin their own configRef.
+	if err := e.Kube.ApplyPath(ctx, e.Cfg.Manifest("sandboxconfig-gvisor.yaml")); err != nil {
+		return err
+	}
+	if skipMicroVMDeps {
+		return nil
+	}
+	return e.DeployMicroVMDeps(ctx)
 }
 
 // EnsureCRDs creates the generated CRDs that are missing. Existing CRDs and

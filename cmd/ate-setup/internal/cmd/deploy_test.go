@@ -14,7 +14,12 @@
 
 package cmd
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
+	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/steps"
+)
 
 // An upgrade or a rollback moves the control plane one component at a time,
 // so the components that only deploy ate-system used to install have their own
@@ -41,4 +46,56 @@ func TestComponentDeploySubcommands(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDeploySkipMicroVMDepsFlag(t *testing.T) {
+	t.Run("deploy ate-system", func(t *testing.T) {
+		f := deployAteSystemCmd.Flags().Lookup("skip-microvm-deps")
+		t.Cleanup(func() {
+			_ = f.Value.Set("false")
+			f.Changed = false
+		})
+		if err := deployAteSystemCmd.ParseFlags([]string{"--skip-microvm-deps"}); err != nil {
+			t.Fatalf("ParseFlags(--skip-microvm-deps): %v", err)
+		}
+		r, err := config.Resolve(deployAteSystemCmd.Flags(), config.ResolveOptions{})
+		if err != nil {
+			t.Fatalf("Resolve: %v", err)
+		}
+		cfg := &config.Config{}
+		cfg.SetResolved(r)
+
+		prev := env
+		env = &steps.Env{Cfg: cfg}
+		t.Cleanup(func() { env = prev })
+
+		opts, err := deployOptions()
+		if err != nil {
+			t.Fatalf("deployOptions(): %v", err)
+		}
+		if !opts.SkipMicroVMDeps {
+			t.Error("opts.SkipMicroVMDeps = false, want true")
+		}
+	})
+
+	t.Run("deploy sandboxconfig", func(t *testing.T) {
+		f := deploySandboxConfigCmd.Flags().Lookup("skip-microvm-deps")
+		if f == nil {
+			t.Fatal("deploy sandboxconfig is missing --skip-microvm-deps flag")
+		}
+		t.Cleanup(func() {
+			_ = f.Value.Set("false")
+			f.Changed = false
+		})
+		if err := deploySandboxConfigCmd.ParseFlags([]string{"--skip-microvm-deps"}); err != nil {
+			t.Fatalf("ParseFlags(--skip-microvm-deps): %v", err)
+		}
+		r, err := config.Resolve(deploySandboxConfigCmd.Flags(), config.ResolveOptions{})
+		if err != nil {
+			t.Fatalf("Resolve: %v", err)
+		}
+		if !r.Bool("skipMicroVMDeps") {
+			t.Error("r.Bool(\"skipMicroVMDeps\") = false, want true")
+		}
+	})
 }

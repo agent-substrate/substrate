@@ -63,9 +63,6 @@ var probeNamespace string
 //	hack/setup-e2e-egress-tls-kind.sh
 //	hack/run-e2e-kind.sh ./internal/e2e/suites/egressmitm -v -args --no-color
 //	E2E_SANDBOX_CLASS=microvm hack/run-e2e-kind.sh ./internal/e2e/suites/egressmitm -v -args --no-color
-//
-// The micro-VM variant additionally needs the micro-VM deps installed
-// (hack/run-microvm-demo-kind.sh, or hack/install-microvm-deps.sh --install).
 func TestActorEgressMITMTrust(t *testing.T) {
 	if _, err := e2e.CheckEnv("KO_DOCKER_REPO"); err != nil {
 		t.Fatalf("CheckEnv failed: %v", err)

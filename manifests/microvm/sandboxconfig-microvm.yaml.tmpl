@@ -13,13 +13,11 @@
 # limitations under the License.
 
 # Cluster-wide SandboxConfig for the micro-VM (kata + cloud-hypervisor) sandbox
-# class. Unlike sandboxconfig-gvisor.yaml (applied unconditionally by
-# ate-setup deploy ate-system), this is opt-in: apply via
-# hack/install-microvm-deps.sh --install (or `go run ./cmd/ate-setup deploy
-# microvm-deps`), which assembles the asset set, stages it to the cluster's
-# object store, and applies this manifest. A microvm WorkerPool resolves it as
-# its class default (or names it via configRef: microvm), so a missing/stale
-# config shows on the pool's status.
+# class. `go run ./cmd/ate-setup deploy ate-system` (and `deploy sandboxconfig`)
+# assembles the asset set, stages it to the cluster's object store, and applies
+# this manifest alongside sandboxconfig-gvisor.yaml. A microvm WorkerPool
+# resolves it as its class default (or names it via configRef: microvm), so a
+# missing/stale config shows on the pool's status.
 #
 # The sandbox binaries (cloud-hypervisor, virtiofsd, guest kernel, guest rootfs)
 # are FETCHED at runtime from the asset bucket ${ASSET_BUCKET_NAME} under
@@ -34,7 +32,7 @@
 # The per-arch sha256 values below are the asset sets assembled by
 # cmd/ate-setup/internal/steps/microvm.go; atelet selects the block matching
 # the node's architecture, and each cluster's bucket holds that arch's binaries
-# at these paths (staged by hack/install-microvm-deps.sh --install).
+# at these paths.
 
 apiVersion: ate.dev/v1
 kind: SandboxConfig
@@ -63,7 +61,6 @@ spec:
         kata-image:
           url: "${BUCKET_SCHEME}://${ASSET_BUCKET_NAME}/kata-assets/rootfs.img"
           sha256: "69f9a76e5a2563b7c74d1f271f3a904240f50ef405465f832021525894519f97"
-      # amd64 assets are kata 4.3.1 (ARCH=amd64).
       amd64:
         cloud-hypervisor:
           url: "${BUCKET_SCHEME}://${ASSET_BUCKET_NAME}/kata-assets/cloud-hypervisor"

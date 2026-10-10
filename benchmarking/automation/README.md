@@ -22,17 +22,16 @@ To run the cold resume tests from your workstation instead, see
    and/or `${KO_DOCKER_REPO}/nighthawk-ingress-test:<commit>`.
 5. `go run ./cmd/ate-setup deploy ate-system` (with `ATE_CREDENTIAL_PROVIDER`
    in `.ate-dev-env.sh`, or `--credential-provider` in the test's
-   `ateArgs`) + `benchmarking/workloads/deploy.sh
+   `ateArgs`, which also stages the micro-VM guest assets to the cluster's
+   object store bucket and applies both the `gvisor-default` and `microvm`
+   `SandboxConfig`s) + `benchmarking/workloads/deploy.sh
    --deploy --sandbox-class <class>` (these build & push substrate / workload
    images via `ko` as part of their deploy steps — there's no separate
    image build step). The install sets `ATE_API_AUTHZ_BOOTSTRAP_OWNERS` to
    the `ate-client` and `benchmarking/benchmark-runner` ServiceAccounts so the
    runner's calls pass [authorization](../../docs/guides/authorization.md), and sets
    `ATE_INGRESS_ALLOWED_SPIFFE_IDS` to `benchmarking/benchmark-runner` for the
-   Envoy ingress router. For a `microvm` test the orchestrator also
-   runs `go run ./cmd/ate-setup deploy microvm-deps` between the two, which
-   stages kata + cloud-hypervisor + virtiofsd assets to the cluster's object
-   store bucket and applies the cluster-wide `microvm` SandboxConfig.
+   Envoy ingress router.
    For a `nighthawk-ingress` test the orchestrator additionally patches the
    `atenet-router` Deployment right after `deploy_substrate`: `envoyCpu`
    is the benchmark's independent variable and the shipped manifest sets
@@ -49,7 +48,7 @@ To run the cold resume tests from your workstation instead, see
      variable (a JSON object) if set. A `--metadata` in the test's own
      `flags` is merged in too, its keys winning on conflict.
    - Polls until complete/failed/timeout; tails logs; deletes the Job.
-   - Tears down workloads + microVM deps (if any) + substrate.
+   - Tears down workloads + substrate.
    - If not the last test, redeploys them so the next run starts clean.
 
 ## Choosing a sandbox class

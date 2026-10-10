@@ -1,11 +1,12 @@
 # ate-setup vs. the install shell scripts
 
 `ate-setup` is a Go port of `hack/install-ate.sh`, the seven
-`hack/install-demo-*.sh` scripts it sourced, and `hack/setup-csi-*-kind.sh`.
+`hack/install-demo-*.sh` scripts it sourced, `hack/setup-csi-*-kind.sh`, and
+`hack/install-microvm-deps.sh`.
 
-The port has replaced them. `hack/install-ate.sh`, the demo scripts, and
-`hack/setup-csi-hostpath-kind.sh` are deleted. See
-[`commands.md`](commands.md) for the commands.
+The port has replaced them. `hack/install-ate.sh` and the demo, CSI, and
+micro-VM asset scripts are deleted. See [`commands.md`](commands.md) for the
+commands.
 
 This document covers the design decisions of the port, against the shell it
 replaced. For anything not listed here, the port is intended to be
@@ -91,8 +92,9 @@ is fronted by `deploy`/`delete benchmarks`.
 
 The micro-VM asset assembly (`kata-static` `.tar.zst` extraction and
 `cloud-hypervisor` download), object-store staging (`rustfs` on Kind, GCS on
-GKE), and `microvm` `SandboxConfig` lifecycle live in `deploy`/`delete
-microvm-deps`, with `hack/install-microvm-deps.sh` kept as a translation shim.
+GKE), and `microvm` `SandboxConfig` lifecycle now run in Go as part of `deploy
+ate-system` (and `deploy sandboxconfig`), with `delete ate-system` removing the
+`microvm` `SandboxConfig` alongside the rest of the control plane.
 
 `ko` is no longer asked to apply anything. The scripts ran `run_ko apply`, which
 made ko shell out to kubectl and forced the awkward `-- --context=` special case
