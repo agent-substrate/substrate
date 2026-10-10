@@ -353,6 +353,49 @@ The web UI shows the same fields; `0` keeps the value boomer-worker started with
 The `actors_per_*` ratios in `trial_summary` are wrong for this test: they
 count users × `--actors-per-user`, not `--total-actors`.
 
+### Isolate Mode
+
+A real cold resume is limited by the node's restore capacity, which hides the
+limits of ate-api-server and Postgres. Isolate mode takes the nodes out:
+
+```bash
+./benchmarking/workloads/deploy.sh --deploy --isolate \
+  --worker-count 200 --isolate-nodes 2 --isolate-delay 500ms
+```
+
+This deploys the usual WorkerPool, but serves it with two fakes from
+`cmd/benchmarking/isolate/` instead of worker pods, a fake data plane:
+
+* `fake-workersync` stands in for ate-controller's WorkerPool controller and
+  worker syncer. It honors each pool's `spec.replicas` with fake Workers, none
+  backed by a pod, round robin on the `--isolate-nodes` nodes, and scales them
+  up and down with the pool, draining a Worker before deleting it. Each Worker
+  reports what a real worker would: cpu and memory from the pool's
+  `template.resources.limits`, or the node's allocatable without one, and 1000
+  actors, ateom's default, unless the pool's `ate.dev/fake-max-actors`
+  annotation says otherwise. It writes the pool's status, so
+  `kubectl get workerpool` and `kubectl scale workerpool` work.
+* `fake-atelet` takes atelet's place on those nodes and answers every
+  lifecycle call with success after `--isolate-delay`, without running or
+  saving any workload. It writes one placeholder object per snapshot, because
+  ate-api-server refuses to tag an empty one. Like ateom, it mints the actor's
+  certificate from ate-api-server on every run and restore that names an
+  egress gateway, which the default install does; the mint is ate-api-server's
+  time, so it adds to `--isolate-delay`, the data plane's share of the call.
+  It also relays fake-workersync's capacity reports, as atelet relays ateom's:
+  ate-api-server accepts a report only from the atelet on the Worker's node.
+  The relay admits only fake-workersync's pod identity.
+
+The mode moves the real atelet off the chosen nodes and scales ate-controller
+to zero, whose worker syncer would delete the fake Workers. `deploy.sh
+--delete` undoes both whenever it finds isolate mode deployed. Never use it on
+a cluster that serves real actors: actors placed on fake Workers do not exist.
+
+Nothing answers behind the router, so the mode suits only a user class that
+sends the actors no requests, such as `ate_api.py`, which creates, gets,
+resumes and suspends actors. Every boomer user class pings its actors through
+the router. In `tests.yaml`, an `isolate` block selects the mode.
+
 ### Viewing Traces
 You must have enabled otel tracing for your cluster to view traces.
 

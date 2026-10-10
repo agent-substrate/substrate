@@ -1,0 +1,295 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# The fake data plane for control-plane benchmarks, deployed by
+# workloads/deploy.sh --isolate (isolate mode). fake-atelet takes atelet's place on
+# the nodes labeled ate.dev/fake-data-plane=true, and fake-workersync honors
+# every WorkerPool with fake Workers on those nodes instead of worker pods.
+# Actors placed on them do not exist. Never deploy this on a cluster that
+# serves real actors.
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: benchmark-workloads
+
+---
+
+# fake-atelet is dialed by ate-api-server as the node's atelet: it must be in
+# ate-system, carry app: atelet, and run as the atelet service account, whose
+# pod certificate carries atelet's SPIFFE ID. The ate.dev/fake-atelet label
+# keeps its selector disjoint from the real atelet DaemonSet's.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: fake-atelet
+  namespace: ate-system
+  labels:
+    app: atelet
+    ate.dev/fake-atelet: "true"
+spec:
+  selector:
+    matchLabels:
+      app: atelet
+      ate.dev/fake-atelet: "true"
+  template:
+    metadata:
+      labels:
+        app: atelet
+        ate.dev/fake-atelet: "true"
+    spec:
+      serviceAccountName: atelet
+      # fake-atelet never calls the Kubernetes API; its identity comes from
+      # the projected pod certificate.
+      automountServiceAccountToken: false
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: ate.dev/fake-data-plane
+                operator: In
+                values: ["true"]
+      # The same toleration as atelet, for node pools reserved for one
+      # sandbox class.
+      tolerations:
+      - key: ate.dev/sandboxClass
+        operator: Exists
+        effect: NoSchedule
+      containers:
+      - name: fake-atelet
+        image: ko://github.com/agent-substrate/substrate/cmd/benchmarking/isolate/fake-atelet
+        args:
+        - --delay=${ISOLATE_DELAY}
+        # Placeholders go where atelet writes snapshots: deploy.sh copies the
+        # real atelet's storage settings into this Secret.
+        envFrom:
+        - secretRef:
+            name: fake-atelet-storage
+        ports:
+        - name: grpc
+          containerPort: 8085
+        # fake-workersync's capacity reports, relayed to ate-api-server under
+        # this pod's atelet identity; only fake-workersync's is admitted.
+        - name: relay
+          containerPort: 8086
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 9090
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 9090
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 65532
+          capabilities:
+            drop: ["ALL"]
+        volumeMounts:
+        - name: podidentity
+          mountPath: /run/podidentity.podcert.ate.dev
+          readOnly: true
+        - name: servicedns-ca
+          mountPath: /run/servicedns.podcert.ate.dev
+          readOnly: true
+      volumes:
+      - name: podidentity
+        projected:
+          sources:
+          - podCertificate:
+              signerName: podidentity.podcert.ate.dev/identity
+              keyType: ECDSAP256
+              credentialBundlePath: credential-bundle.pem
+          - clusterTrustBundle:
+              signerName: podidentity.podcert.ate.dev/identity
+              labelSelector:
+                matchLabels:
+                  podcert.ate.dev/canarying: live
+              path: trust-bundle.pem
+      - name: servicedns-ca
+        projected:
+          sources:
+          - clusterTrustBundle:
+              signerName: servicedns.podcert.ate.dev/identity
+              labelSelector:
+                matchLabels:
+                  podcert.ate.dev/canarying: live
+              path: trust-bundle.pem
+
+---
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: fake-workersync
+  namespace: benchmark-workloads
+
+---
+
+# fake-workersync watches every WorkerPool and writes its status, and lists
+# the labeled nodes to place fake Workers on, with what each can allocate.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: fake-workersync
+rules:
+- apiGroups: ["ate.dev"]
+  resources: ["workerpools"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["ate.dev"]
+  resources: ["workerpools/status"]
+  verbs: ["update"]
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["list"]
+
+---
+
+# fake-workersync finds the fake-atelet relay on each node by listing the
+# fake-atelet pods.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: fake-workersync-pods
+  namespace: ate-system
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["list"]
+
+---
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: fake-workersync-pods
+  namespace: ate-system
+subjects:
+- kind: ServiceAccount
+  name: fake-workersync
+  namespace: benchmark-workloads
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: fake-workersync-pods
+
+---
+
+# Resolving ate-api-server's k8s:/// target reads its EndpointSlices, through
+# the Role atelet and boomer are bound to.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: fake-workersync-endpointslices
+  namespace: ate-system
+subjects:
+- kind: ServiceAccount
+  name: fake-workersync
+  namespace: benchmark-workloads
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: atelet-endpointslices
+
+---
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: fake-workersync
+subjects:
+- kind: ServiceAccount
+  name: fake-workersync
+  namespace: benchmark-workloads
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: fake-workersync
+
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fake-workersync
+  namespace: benchmark-workloads
+  labels:
+    app: fake-workersync
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fake-workersync
+  template:
+    metadata:
+      labels:
+        app: fake-workersync
+    spec:
+      serviceAccountName: fake-workersync
+      # Shutdown deletes every fake Worker; sized to fit --delete-timeout.
+      terminationGracePeriodSeconds: 330
+      containers:
+      - name: fake-workersync
+        image: ko://github.com/agent-substrate/substrate/cmd/benchmarking/isolate/fake-workersync
+        args:
+        - --run=${ISOLATE_RUN}
+        - --node-label=ate.dev/fake-data-plane=true
+        - --delete-timeout=5m
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 65532
+          capabilities:
+            drop: ["ALL"]
+        volumeMounts:
+        - name: servicedns-ca
+          mountPath: /run/servicedns-ca
+          readOnly: true
+        - name: podidentity
+          mountPath: /run/podidentity.podcert.ate.dev
+          readOnly: true
+      volumes:
+      # The same client identity boomer presents to ate-api-server (see
+      # internal/benchmarking/boomer/boomerutil.DialControl), also presented
+      # to the relay, plus the trust bundle the relay's certificate must chain
+      # to.
+      - name: servicedns-ca
+        projected:
+          sources:
+          - clusterTrustBundle:
+              signerName: servicedns.podcert.ate.dev/identity
+              labelSelector:
+                matchLabels:
+                  podcert.ate.dev/canarying: live
+              path: ca.crt
+      - name: podidentity
+        projected:
+          sources:
+          - podCertificate:
+              signerName: podidentity.podcert.ate.dev/identity
+              keyType: ECDSAP256
+              credentialBundlePath: credential-bundle.pem
+          - clusterTrustBundle:
+              signerName: podidentity.podcert.ate.dev/identity
+              labelSelector:
+                matchLabels:
+                  podcert.ate.dev/canarying: live
+              path: trust-bundle.pem
