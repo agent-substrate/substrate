@@ -200,6 +200,7 @@ func do(ctx context.Context) error {
 	if _, err := ateomcgroup.Delegate(ctx); err != nil {
 		return fmt.Errorf("while setting up cgroup delegation: %w", err)
 	}
+	removeStaleCheckpointCgroups(ctx, defaultCgroupRoot)
 
 	go reaper.Run(ctx)
 	slog.InfoContext(ctx, "Child process reaper launched")
@@ -328,6 +329,9 @@ type AteomService struct {
 	// than a constant so tests can point GetWorkloadStats at a fixture tree.
 	cgroupRoot string
 
+	// procRoot is the procfs root ("/proc") used to read process cmdlines.
+	procRoot string
+
 	// readSandboxCgroup overrides cgroupstats.Read when set. Only tests set it:
 	// it is the seam that lets them interleave a lifecycle transition with the
 	// stats handlers' lock-free read, the way containerStatsReader does for the
@@ -347,6 +351,7 @@ func NewService(tunnel *ateomtunnel.Tunnel, actorLogger *actorlog.ActorLogger, m
 		tunnel:      tunnel,
 		actorLogger: actorLogger,
 		cgroupRoot:  defaultCgroupRoot,
+		procRoot:    defaultProcRoot,
 	}
 }
 
@@ -749,6 +754,23 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 
 	// durableFiles are the durable-dir tars written below: the VOLUMES subset.
 	var durableFiles []string
+
+	// Cleanup the containers after checkpointing. This also unhosts the actor,
+	// before the snapshot listing below can fail.
+	// This is best-effort cleanup for actor containers that may have been left behind after checkpointing.
+	terminate := func() error {
+		err := s.terminateWorkload(ctx, attribution.Ref, attribution.UID, req.GetRunscPath(), req.GetActorDirs(), req.GetSpec().GetContainers())
+		if err != nil {
+			slog.WarnContext(ctx, "failed to terminate workload after checkpoint",
+				slog.String("actor", attribution.Ref.String()),
+				slog.String("actorUID", attribution.UID),
+				slog.Any("err", err))
+		}
+		timing.teardown = lap(&tLast)
+		s.recordFinalIfEnded(ctx, hosted)
+		return err
+	}
+
 	// Always take durable-dir snapshot if at least one container has a durable-dir volume mount.
 	// TODO(dberkov): this is a temporary workaround until gVisor supports taking durable-dir snapshots in a single request with the process snapshot.
 	switch fidelity {
@@ -777,38 +799,16 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		if tarErr != nil {
 			return nil, fmt.Errorf("while archiving durable-dir volumes: %w", tarErr)
 		}
+		_ = terminate()
 	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
-		// Checkpoint pause container (root of the sandbox)
-		// TODO: Consider pause -> tar -> resume -> checkpoint order for better failure handling.
-		err := rcmd.cmdCheckpoint(ctx, ocispec.PauseContainer, checkpointPath)
-		timing.checkpoint = lap(&tLast)
+		var err error
+		durableFiles, err = checkpointFull(ctx, s.cgroupRoot, s.procRoot, req.GetActorUid(), req.GetActorDirs(), req.GetSpec(), &timing, &tLast, rcmd.cmdCheckpoint, terminate)
 		if err != nil {
-			return nil, fmt.Errorf("while checkpointing pause: %w", err)
-		}
-		if hasDurableVolumes(req.GetSpec().GetContainers()) {
-			var err error
-			durableFiles, err = tarDurableVolumes(ctx, req.GetActorDirs().GetDurableDirVolumeMountsDir(), checkpointPath, durableVolumeNames(req.GetSpec()))
-			timing.durableDir = lap(&tLast)
-			if err != nil {
-				return nil, fmt.Errorf("while archiving durable-dir volumes: %w", err)
-			}
+			return nil, err
 		}
 	default:
 		return nil, fmt.Errorf("unsupported snapshot fidelity: %v", fidelity)
 	}
-
-	// Cleanup the containers after checkpointing. This also unhosts the actor,
-	// before the snapshot listing below can fail.
-	// This is best-effort cleanup for actor containers that may have been left behind after checkpointing.
-	if err := s.terminateWorkload(ctx, attribution.Ref, attribution.UID, req.GetRunscPath(), req.GetActorDirs(), req.GetSpec().GetContainers()); err != nil {
-		slog.WarnContext(ctx, "failed to terminate workload after checkpoint",
-			slog.String("actor", attribution.Ref.String()),
-			slog.String("actorUID", attribution.UID),
-			slog.Any("err", err))
-	}
-	timing.teardown = lap(&tLast)
-	s.recordFinalIfEnded(ctx, hosted)
-
 	// Report exactly the files runsc wrote so atelet ships precisely this set
 	// (checkpoint.img plus any pages images), rather than a hardcoded list.
 	snapshotFiles, err := listSnapshotFiles(checkpointPath)
@@ -1088,6 +1088,14 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	timing.activate = lap(&tLast)
 	if err != nil {
 		return nil, err
+	}
+	switch fidelity {
+	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
+		dropActorCheckpointCacheAsync(req.GetActorUid(), checkpointDir, req.GetPreserveRestoreDir(), nil)
+	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
+		dropActorCheckpointCacheAsync(req.GetActorUid(), checkpointDir, req.GetPreserveRestoreDir(), func(waitCtx context.Context) error {
+			return rcmd.cmdWaitRestore(waitCtx, ocispec.PauseContainer)
+		})
 	}
 
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor restored", attribution)

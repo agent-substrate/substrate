@@ -443,3 +443,26 @@ func (r *runsc) cmdWait(ctx context.Context, containerName string) error {
 	}
 	return nil
 }
+
+// waitRestoreArgs builds the argv for `runsc wait -restore <container>`.
+func (r *runsc) waitRestoreArgs(containerName string) []string {
+	return []string{
+		"-log-format", "json",
+		"--alsologtostderr",
+		"-root", runscStateDir(r.actorDirs),
+		"wait",
+		"-restore",
+		containerName,
+	}
+}
+
+// cmdWaitRestore blocks until background page loading from `runsc restore -background` completes.
+func (r *runsc) cmdWaitRestore(ctx context.Context, containerName string) error {
+	cmd := exec.CommandContext(ctx, r.path, r.waitRestoreArgs(containerName)...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := reaper.RunCommand(cmd); err != nil {
+		return fmt.Errorf("while running `runsc wait -restore`: %w", err)
+	}
+	return nil
+}
