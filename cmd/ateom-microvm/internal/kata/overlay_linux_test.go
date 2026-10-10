@@ -84,7 +84,7 @@ func TestVirtiofsdArgs(t *testing.T) {
 	args := virtiofsdArgs(VirtiofsdOptions{
 		SocketPath: "/run/vm/virtiofsd.sock",
 		SharedDir:  "/run/kata-containers/shared/sandboxes/uid/shared",
-	})
+	}, true)
 	if !slices.Contains(args, "--cache=auto") {
 		t.Errorf("args %v do not contain --cache=auto", args)
 	}
@@ -97,6 +97,21 @@ func TestVirtiofsdArgs(t *testing.T) {
 	// inode, such as a live-rotated trust bundle, could never be restored.
 	if i := slices.Index(args, "--migration-on-error"); i < 0 || i+1 >= len(args) || args[i+1] != "guest-error" {
 		t.Errorf("args %v do not set --migration-on-error guest-error", args)
+	}
+	if slices.Contains(args, "--modcaps=-mknod") {
+		t.Errorf("args %v drop MKNOD when the worker retains it", args)
+	}
+}
+
+func TestVirtiofsdArgsWithoutMknod(t *testing.T) {
+	opts := VirtiofsdOptions{
+		SocketPath: "/run/vm/virtiofsd.sock",
+		SharedDir:  "/run/kata-containers/shared/sandboxes/uid/shared",
+	}
+	got := virtiofsdArgs(opts, false)
+	want := append(virtiofsdArgs(opts, true), "--modcaps=-mknod")
+	if !slices.Equal(got, want) {
+		t.Errorf("args = %v, want %v", got, want)
 	}
 }
 

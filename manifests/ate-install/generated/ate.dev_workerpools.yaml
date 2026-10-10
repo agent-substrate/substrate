@@ -419,6 +419,82 @@ spec:
                           More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                         type: object
                     type: object
+                  securityContext:
+                    description: |-
+                      SecurityContext restricts the worker container's runtime permissions.
+                      These settings do not change the actor containers' security contexts.
+                    properties:
+                      allowPrivilegeEscalation:
+                        description: |-
+                          AllowPrivilegeEscalation requests no_new_privs when false; explicit true is rejected.
+                          When omitted, the controller leaves the field unset, preserving default runtime behavior.
+                          Removing a configured false restores the omitted/default behavior.
+                        type: boolean
+                        x-kubernetes-validations:
+                        - message: allowPrivilegeEscalation can only be disabled
+                          rule: self == false
+                      dropCapabilities:
+                        description: |-
+                          DropCapabilities removes capabilities from the sandbox class's default set.
+                          ALL removes the entire set. No capabilities are added by this field.
+                        items:
+                          description: Capability represent POSIX capabilities type
+                          enum:
+                          - ALL
+                          - NET_ADMIN
+                          - SYS_ADMIN
+                          - SYS_CHROOT
+                          - SYS_PTRACE
+                          - SETUID
+                          - SETGID
+                          - SETPCAP
+                          - DAC_OVERRIDE
+                          - FOWNER
+                          - CHOWN
+                          - MKNOD
+                          - NET_RAW
+                          - SETFCAP
+                          - FSETID
+                          - DAC_READ_SEARCH
+                          type: string
+                        maxItems: 16
+                        type: array
+                        x-kubernetes-list-type: set
+                      seccompProfile:
+                        description: |-
+                          SeccompProfile replaces the sandbox class's default seccomp profile.
+                          A Localhost profile must be installed on every node this pool selects.
+                        properties:
+                          localhostProfile:
+                            description: |-
+                              localhostProfile indicates a profile defined in a file on the node should be used.
+                              The profile must be preconfigured on the node to work.
+                              Must be a descending path, relative to the kubelet's configured seccomp profile location.
+                              Must be set if type is "Localhost". Must NOT be set for any other type.
+                            type: string
+                          type:
+                            description: |-
+                              type indicates which kind of seccomp profile will be applied.
+                              Valid options are:
+
+                              Localhost - a profile defined in a file on the node should be used.
+                              RuntimeDefault - the container runtime default profile should be used.
+                              Unconfined - no profile should be applied.
+                            type: string
+                        required:
+                        - type
+                        type: object
+                        x-kubernetes-validations:
+                        - message: invalid seccomp profile type
+                          rule: self.type in ['Unconfined', 'RuntimeDefault', 'Localhost']
+                        - message: localhostProfile is required only for Localhost
+                          rule: 'self.type == ''Localhost'' ? (has(self.localhostProfile)
+                            && size(self.localhostProfile) > 0) : !has(self.localhostProfile)'
+                        - message: localhostProfile must be a relative path without
+                            traversal
+                          rule: '!has(self.localhostProfile) || (self.localhostProfile.matches(''^[^/]+(/[^/]+)*$'')
+                            && !self.localhostProfile.matches(''(^|/)[.]{1,2}(/|$)''))'
+                    type: object
                   serviceAccountName:
                     description: |-
                       ServiceAccountName for the worker pods. The ServiceAccount must exist

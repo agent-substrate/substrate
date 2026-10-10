@@ -83,6 +83,37 @@ type WorkerPoolPodTemplate struct {
 	// +optional
 	// +kubebuilder:validation:MinLength=1
 	ServiceAccountName *string `json:"serviceAccountName,omitempty"`
+
+	// SecurityContext restricts the worker container's runtime permissions.
+	// These settings do not change the actor containers' security contexts.
+	// +optional
+	SecurityContext *WorkerPoolSecurityContext `json:"securityContext,omitempty"`
+}
+
+// WorkerPoolSecurityContext configures restrictions on the worker container.
+type WorkerPoolSecurityContext struct {
+	// DropCapabilities removes capabilities from the sandbox class's default set.
+	// ALL removes the entire set. No capabilities are added by this field.
+	// +optional
+	// +kubebuilder:validation:MaxItems=16
+	// +listType=set
+	// +kubebuilder:validation:items:Enum=ALL;NET_ADMIN;SYS_ADMIN;SYS_CHROOT;SYS_PTRACE;SETUID;SETGID;SETPCAP;DAC_OVERRIDE;FOWNER;CHOWN;MKNOD;NET_RAW;SETFCAP;FSETID;DAC_READ_SEARCH
+	DropCapabilities []corev1.Capability `json:"dropCapabilities,omitempty"`
+
+	// SeccompProfile replaces the sandbox class's default seccomp profile.
+	// A Localhost profile must be installed on every node this pool selects.
+	// +optional
+	// +kubebuilder:validation:XValidation:rule="self.type in ['Unconfined', 'RuntimeDefault', 'Localhost']",message="invalid seccomp profile type"
+	// +kubebuilder:validation:XValidation:rule="self.type == 'Localhost' ? (has(self.localhostProfile) && size(self.localhostProfile) > 0) : !has(self.localhostProfile)",message="localhostProfile is required only for Localhost"
+	// +kubebuilder:validation:XValidation:rule="!has(self.localhostProfile) || (self.localhostProfile.matches('^[^/]+(/[^/]+)*$') && !self.localhostProfile.matches('(^|/)[.]{1,2}(/|$)'))",message="localhostProfile must be a relative path without traversal"
+	SeccompProfile *corev1.SeccompProfile `json:"seccompProfile,omitempty"`
+
+	// AllowPrivilegeEscalation requests no_new_privs when false; explicit true is rejected.
+	// When omitted, the controller leaves the field unset, preserving default runtime behavior.
+	// Removing a configured false restores the omitted/default behavior.
+	// +optional
+	// +kubebuilder:validation:XValidation:rule="self == false",message="allowPrivilegeEscalation can only be disabled"
+	AllowPrivilegeEscalation *bool `json:"allowPrivilegeEscalation,omitempty"`
 }
 
 type WorkerPoolSpec struct {

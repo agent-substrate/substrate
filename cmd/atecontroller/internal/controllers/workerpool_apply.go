@@ -15,15 +15,19 @@
 package controllers
 
 import (
+	"fmt"
 	"slices"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	appsv1ac "k8s.io/client-go/applyconfigurations/apps/v1"
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 	metav1ac "k8s.io/client-go/applyconfigurations/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/agent-substrate/substrate/internal/ateom"
 	"github.com/agent-substrate/substrate/internal/deviceplugin"
@@ -234,6 +238,9 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettin
 		)
 
 	applyWorkerPoolPodTemplate(podSpecAC, containerAC, wp.Spec.Template)
+	if wp.Spec.Template != nil && wp.Spec.Template.SecurityContext != nil {
+		applyWorkerSecurityContext(containerAC.SecurityContext, wp.Spec.Template.SecurityContext)
+	}
 	applySandboxClassToleration(podSpecAC, wp.Spec.DefaultSandboxClass())
 	maybeApplyMicroVMPodShape(podSpecAC, containerAC, wp.Spec.DefaultSandboxClass())
 	podSpecAC.WithContainers(containerAC)
@@ -339,27 +346,97 @@ func fieldRefEnv(name, fieldPath string) *corev1ac.EnvVarApplyConfiguration {
 				WithFieldPath(fieldPath)))
 }
 
-// ateomGvisorCapabilities is the capability set an unprivileged gVisor worker
-// needs. runsc's gofer maps a full-range identity in a user namespace
+// deploymentApplyConfiguration preserves explicitly empty capability lists.
+// The generated apply types omit empty slices, which leaves another field
+// manager's additions intact even when the worker must drop every capability.
+func deploymentApplyConfiguration(dep *appsv1ac.DeploymentApplyConfiguration) (runtime.ApplyConfiguration, error) {
+	if dep == nil || dep.Spec == nil || dep.Spec.Template == nil || dep.Spec.Template.Spec == nil {
+		return nil, fmt.Errorf("Deployment apply configuration must include a pod spec")
+	}
+	typedContainers := dep.Spec.Template.Spec.Containers
+	needsEmptyCapabilities := false
+	for _, container := range typedContainers {
+		sc := container.SecurityContext
+		if sc != nil && sc.Capabilities != nil && len(sc.Capabilities.Add) == 0 {
+			needsEmptyCapabilities = true
+			break
+		}
+	}
+	if !needsEmptyCapabilities {
+		return dep, nil
+	}
+
+	obj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(dep)
+	if err != nil {
+		return nil, fmt.Errorf("convert Deployment apply configuration: %w", err)
+	}
+	containers, found, err := unstructured.NestedSlice(obj, "spec", "template", "spec", "containers")
+	if err != nil {
+		return nil, fmt.Errorf("read Deployment apply containers: %w", err)
+	}
+	if !found || len(containers) != len(typedContainers) {
+		return nil, fmt.Errorf("Deployment apply containers missing or inconsistent with typed configuration")
+	}
+	for i, container := range typedContainers {
+		sc := container.SecurityContext
+		if sc == nil || sc.Capabilities == nil || len(sc.Capabilities.Add) != 0 {
+			continue
+		}
+		containerObj, ok := containers[i].(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("Deployment apply container %d: expected an object, got %T", i, containers[i])
+		}
+		if err := unstructured.SetNestedSlice(containerObj, []interface{}{}, "securityContext", "capabilities", "add"); err != nil {
+			return nil, fmt.Errorf("set empty worker capabilities: %w", err)
+		}
+	}
+	if err := unstructured.SetNestedSlice(obj, containers, "spec", "template", "spec", "containers"); err != nil {
+		return nil, fmt.Errorf("set Deployment apply containers: %w", err)
+	}
+	return client.ApplyConfigurationFromUnstructured(&unstructured.Unstructured{Object: obj}), nil
+}
+
+func applyWorkerSecurityContext(sc *corev1ac.SecurityContextApplyConfiguration, settings *atev1alpha1.WorkerPoolSecurityContext) {
+	if slices.Contains(settings.DropCapabilities, "ALL") {
+		sc.Capabilities.Add = nil
+	} else {
+		sc.Capabilities.Add = slices.DeleteFunc(sc.Capabilities.Add, func(capability corev1.Capability) bool {
+			return slices.Contains(settings.DropCapabilities, capability)
+		})
+	}
+	if settings.SeccompProfile != nil {
+		profile := corev1ac.SeccompProfile().WithType(settings.SeccompProfile.Type)
+		if settings.SeccompProfile.LocalhostProfile != nil {
+			profile.WithLocalhostProfile(*settings.SeccompProfile.LocalhostProfile)
+		}
+		sc.WithSeccompProfile(profile)
+	}
+	if settings.AllowPrivilegeEscalation != nil {
+		sc.WithAllowPrivilegeEscalation(*settings.AllowPrivilegeEscalation)
+	}
+}
+
+// ateomGvisorCapabilities is the default capability set for gVisor workers.
+// runsc's gofer maps a full-range identity in a user namespace
 // (SETUID/SETGID/SETPCAP/SETFCAP), the sandbox pivots root and traces the
 // application (SYS_ADMIN/SYS_CHROOT/SYS_PTRACE), actor networking programs the
-// veth and nftables rules (NET_ADMIN/NET_RAW), and the OCI rootfs is unpacked
-// and device nodes created as root over image-owned trees
-// (DAC_OVERRIDE/FOWNER/CHOWN/MKNOD). This replaces the former privileged worker;
-// seccomp stays at the runtime default, but AppArmor must be Unconfined (see
-// ateomSecurityContext) since runsc's own mounts trip the default profile.
+// veth and nftables rules (NET_ADMIN/NET_RAW), and rootfs trees are managed as
+// root (DAC_OVERRIDE/FOWNER/CHOWN). MKNOD remains in the default set; Linux's
+// 0:0 overlay whiteouts do not require it on the tested kernels.
+// Workers use Unconfined seccomp and AppArmor profiles by default so the sandbox
+// runtime can set up its mounts (see ateomSecurityContext).
 var ateomGvisorCapabilities = []corev1.Capability{
 	"NET_ADMIN", "SYS_ADMIN", "SYS_CHROOT", "SYS_PTRACE",
 	"SETUID", "SETGID", "SETPCAP", "DAC_OVERRIDE",
 	"FOWNER", "CHOWN", "MKNOD", "NET_RAW", "SETFCAP",
 }
 
-// ateomMicroVMCapabilities is the capability set an unprivileged micro-VM worker
-// needs: the gVisor set, which covers the same worker-side work, plus FSETID and
-// DAC_READ_SEARCH for virtiofsd. virtiofsd re-applies a fixed set to its
-// sandboxed child, and the kernel refuses to raise a capability the bounding set
-// omits, so without those two it exits with "can't apply the child capabilities"
-// and the VM never gets its virtio-fs device.
+// ateomMicroVMCapabilities is the default capability set for micro-VM workers:
+// the gVisor set, which covers the same worker-side work, plus FSETID and
+// DAC_READ_SEARCH for virtiofsd. Its default sandboxed child set includes those
+// two capabilities and MKNOD. Missing capabilities make child setup fail, not
+// whiteout preparation. When the worker drops MKNOD, StartVirtiofsd excludes it
+// from the child's set with --modcaps=-mknod.
 //
 // The hypervisor devices are not capabilities: they come from atelet's device
 // plugin (see maybeApplyMicroVMPodShape).

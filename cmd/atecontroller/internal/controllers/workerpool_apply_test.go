@@ -15,7 +15,9 @@
 package controllers
 
 import (
+	"encoding/json"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -492,6 +494,181 @@ func TestAteomSecurityContextByClass(t *testing.T) {
 				*sc.SeccompProfile.Type == corev1.SeccompProfileTypeUnconfined
 			if gotSeccompUnconfined != tt.wantSeccompUnconfined {
 				t.Errorf("seccomp Unconfined = %v, want %v", gotSeccompUnconfined, tt.wantSeccompUnconfined)
+			}
+		})
+	}
+}
+
+func TestDeploymentApplyConfiguration(t *testing.T) {
+	for _, class := range []atev1alpha1.SandboxClass{atev1alpha1.SandboxClassGvisor, atev1alpha1.SandboxClassMicroVM} {
+		defaults := slices.Clone(ateomGvisorCapabilities)
+		if class == atev1alpha1.SandboxClassMicroVM {
+			defaults = slices.Clone(ateomMicroVMCapabilities)
+		}
+		for _, tt := range []struct {
+			name         string
+			drop         []corev1.Capability
+			wantEmptyAdd bool
+		}{
+			{name: "defaults"},
+			{name: "partial drop", drop: []corev1.Capability{"SYS_PTRACE"}},
+			{name: "drop all", drop: []corev1.Capability{"ALL"}, wantEmptyAdd: true},
+			{name: "drop individually", drop: defaults, wantEmptyAdd: true},
+		} {
+			t.Run(string(class)+"/"+tt.name, func(t *testing.T) {
+				wp := testWorkerPoolApplyConfig(&atev1alpha1.WorkerPoolPodTemplate{
+					NodeSelector: map[string]string{"workload": "substrate"},
+					SecurityContext: &atev1alpha1.WorkerPoolSecurityContext{
+						DropCapabilities: tt.drop,
+					},
+				})
+				wp.Spec.SandboxClasses = []atev1alpha1.WorkerPoolSandboxClass{{Name: class}}
+				dep := buildDeploymentApplyConfig(wp, ateomOTelSettings{}, installdefaults.SystemNamespace, installdefaults.AteletServiceAccount, installdefaults.RouterServiceAccount)
+				dep.Spec.Template.Spec.WithContainers(
+					corev1ac.Container().WithName("metrics").WithImage("metrics:v1").
+						WithSecurityContext(corev1ac.SecurityContext().
+							WithCapabilities(corev1ac.Capabilities().WithAdd("NET_BIND_SERVICE"))),
+					corev1ac.Container().WithName("helper").WithImage("helper:v1"),
+				)
+				before, err := json.Marshal(dep)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var want appsv1ac.DeploymentApplyConfiguration
+				if err := json.Unmarshal(before, &want); err != nil {
+					t.Fatal(err)
+				}
+				if tt.wantEmptyAdd {
+					want.Spec.Template.Spec.Containers[0].SecurityContext.Capabilities.Add = []corev1.Capability{}
+				}
+				applied, err := deploymentApplyConfiguration(dep)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !tt.wantEmptyAdd {
+					if typed, ok := applied.(*appsv1ac.DeploymentApplyConfiguration); !ok || typed != dep {
+						t.Fatalf("non-empty capabilities must keep the original typed apply configuration, got %T", applied)
+					}
+				}
+				payload, err := json.Marshal(applied)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var got appsv1ac.DeploymentApplyConfiguration
+				if err := json.Unmarshal(payload, &got); err != nil {
+					t.Fatal(err)
+				}
+				// An explicit [] decodes as a non-nil empty slice. An omitted
+				// add field decodes as nil, so cmp detects the SSA regression.
+				if diff := cmp.Diff(&want, &got); diff != "" {
+					t.Errorf("serialized Deployment (-want +got):\n%s", diff)
+				}
+				after, err := json.Marshal(dep)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if diff := cmp.Diff(string(before), string(after)); diff != "" {
+					t.Errorf("input apply configuration was mutated (-before +after):\n%s", diff)
+				}
+			})
+		}
+	}
+}
+
+func TestDeploymentApplyConfigurationRequiresPodSpec(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		dep  *appsv1ac.DeploymentApplyConfiguration
+	}{
+		{name: "nil deployment"},
+		{name: "missing spec", dep: appsv1ac.Deployment("worker", "default")},
+		{name: "missing template", dep: appsv1ac.Deployment("worker", "default").WithSpec(appsv1ac.DeploymentSpec())},
+		{name: "missing pod spec", dep: appsv1ac.Deployment("worker", "default").WithSpec(appsv1ac.DeploymentSpec().WithTemplate(corev1ac.PodTemplateSpec()))},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := deploymentApplyConfiguration(tt.dep); err == nil || !strings.Contains(err.Error(), "must include a pod spec") {
+				t.Fatalf("got %v, want missing pod spec error", err)
+			}
+		})
+	}
+}
+
+func TestWorkerSecurityContext(t *testing.T) {
+	gvisorDefaults := slices.Clone(ateomGvisorCapabilities)
+	microVMDefaults := slices.Clone(ateomMicroVMCapabilities)
+	tests := []struct {
+		name     string
+		class    atev1alpha1.SandboxClass
+		settings *atev1alpha1.WorkerPoolSecurityContext
+		wantCaps []corev1.Capability
+	}{
+		{"omitted settings", atev1alpha1.SandboxClassGvisor, nil, gvisorDefaults},
+		{"empty settings", atev1alpha1.SandboxClassGvisor, &atev1alpha1.WorkerPoolSecurityContext{}, gvisorDefaults},
+		{"empty microvm settings", atev1alpha1.SandboxClassMicroVM, &atev1alpha1.WorkerPoolSecurityContext{}, microVMDefaults},
+		{"drop gvisor capabilities", atev1alpha1.SandboxClassGvisor, &atev1alpha1.WorkerPoolSecurityContext{DropCapabilities: []corev1.Capability{"SYS_PTRACE", "MKNOD"}}, []corev1.Capability{"NET_ADMIN", "SYS_ADMIN", "SYS_CHROOT", "SETUID", "SETGID", "SETPCAP", "DAC_OVERRIDE", "FOWNER", "CHOWN", "NET_RAW", "SETFCAP"}},
+		{"drop microvm capabilities", atev1alpha1.SandboxClassMicroVM, &atev1alpha1.WorkerPoolSecurityContext{DropCapabilities: []corev1.Capability{"FSETID", "DAC_READ_SEARCH"}}, gvisorDefaults},
+		{"capability absent from class", atev1alpha1.SandboxClassGvisor, &atev1alpha1.WorkerPoolSecurityContext{DropCapabilities: []corev1.Capability{"FSETID"}}, gvisorDefaults},
+		{"drop all", atev1alpha1.SandboxClassGvisor, &atev1alpha1.WorkerPoolSecurityContext{DropCapabilities: []corev1.Capability{"ALL"}}, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wp := testWorkerPoolApplyConfig(&atev1alpha1.WorkerPoolPodTemplate{SecurityContext: tt.settings})
+			wp.Spec.SandboxClasses = []atev1alpha1.WorkerPoolSandboxClass{{Name: tt.class}}
+			sc := buildDeploymentApplyConfig(wp, ateomOTelSettings{}, installdefaults.SystemNamespace, installdefaults.AteletServiceAccount, installdefaults.RouterServiceAccount).Spec.Template.Spec.Containers[0].SecurityContext
+			if sc == nil || sc.Capabilities == nil {
+				t.Fatal("worker security context and capabilities must be set")
+			}
+			if diff := cmp.Diff(tt.wantCaps, sc.Capabilities.Add); diff != "" {
+				t.Fatalf("capabilities (-want +got):\n%s", diff)
+			}
+			if !ptr.Equal(sc.Privileged, ptr.To(false)) || !ptr.Equal(sc.RunAsUser, ptr.To(int64(0))) || !ptr.Equal(sc.RunAsGroup, ptr.To(int64(0))) || !slices.Equal(sc.Capabilities.Drop, []corev1.Capability{"ALL"}) {
+				t.Fatal("worker identity, privileged mode or capability default changed")
+			}
+			if diff := cmp.Diff(corev1ac.SeccompProfile().WithType(corev1.SeccompProfileTypeUnconfined), sc.SeccompProfile); diff != "" {
+				t.Errorf("default seccomp profile (-want +got):\n%s", diff)
+			}
+			if sc.AllowPrivilegeEscalation != nil {
+				t.Errorf("AllowPrivilegeEscalation = %v, want nil", *sc.AllowPrivilegeEscalation)
+			}
+			// Compare against copies taken before any overrides, not the globals
+			// that a slice-aliasing regression could have mutated.
+			for _, defaults := range []struct {
+				class atev1alpha1.SandboxClass
+				want  []corev1.Capability
+				got   []corev1.Capability
+			}{
+				{atev1alpha1.SandboxClassGvisor, gvisorDefaults, ateomGvisorCapabilities},
+				{atev1alpha1.SandboxClassMicroVM, microVMDefaults, ateomMicroVMCapabilities},
+			} {
+				if diff := cmp.Diff(defaults.want, defaults.got); diff != "" {
+					t.Errorf("%s global defaults mutated (-want +got):\n%s", defaults.class, diff)
+				}
+				otherPool := testWorkerPoolApplyConfig(nil)
+				otherPool.Spec.SandboxClasses = []atev1alpha1.WorkerPoolSandboxClass{{Name: defaults.class}}
+				otherSC := buildDeploymentApplyConfig(otherPool, ateomOTelSettings{}, installdefaults.SystemNamespace, installdefaults.AteletServiceAccount, installdefaults.RouterServiceAccount).Spec.Template.Spec.Containers[0].SecurityContext
+				if diff := cmp.Diff(defaults.want, otherSC.Capabilities.Add); diff != "" {
+					t.Errorf("%s subsequent pool capabilities (-want +got):\n%s", defaults.class, diff)
+				}
+			}
+		})
+	}
+	for _, profile := range []*corev1.SeccompProfile{
+		{Type: corev1.SeccompProfileTypeLocalhost, LocalhostProfile: ptr.To("substrate-worker.json")},
+		{Type: corev1.SeccompProfileTypeRuntimeDefault},
+		{Type: corev1.SeccompProfileTypeUnconfined},
+	} {
+		t.Run(string(profile.Type), func(t *testing.T) {
+			wp := testWorkerPoolApplyConfig(&atev1alpha1.WorkerPoolPodTemplate{SecurityContext: &atev1alpha1.WorkerPoolSecurityContext{SeccompProfile: profile, AllowPrivilegeEscalation: ptr.To(false)}})
+			sc := buildDeploymentApplyConfig(wp, ateomOTelSettings{}, installdefaults.SystemNamespace, installdefaults.AteletServiceAccount, installdefaults.RouterServiceAccount).Spec.Template.Spec.Containers[0].SecurityContext
+			want := corev1ac.SeccompProfile().WithType(profile.Type)
+			if profile.LocalhostProfile != nil {
+				want.WithLocalhostProfile(*profile.LocalhostProfile)
+			}
+			if diff := cmp.Diff(want, sc.SeccompProfile); diff != "" {
+				t.Errorf("seccomp profile (-want +got):\n%s", diff)
+			}
+			if sc.AllowPrivilegeEscalation == nil || *sc.AllowPrivilegeEscalation {
+				t.Fatal("privilege escalation was not disabled")
 			}
 		})
 	}

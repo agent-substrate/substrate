@@ -23,11 +23,11 @@
 //     them into the pool (Store.EnsureImage), and writes a rootfs-overlay.json
 //     into each bundle (WriteSpec). Whiteout entries are
 //     recorded in per-layer metadata rather than materialized, because
-//     overlayfs whiteouts are char devices (CAP_MKNOD) with trusted.* xattrs
-//     for opaque dirs (CAP_SYS_ADMIN).
-//   - ateom (privileged; it already owns every mount on the node) finalizes
-//     layers — materializing the recorded whiteout state, once per layer —
-//     and mounts the overlay rootfs (SetupBundleRootfs) just before
+//     opaque directories need trusted.* xattrs (CAP_SYS_ADMIN). The 0:0 char
+//     devices used as whiteouts have a separate kernel permission check and
+//     can be created without CAP_MKNOD on supported kernels.
+//   - ateom finalizes layers, materializing the recorded whiteout state once per
+//     layer, and mounts the overlay rootfs (SetupBundleRootfs) just before
 //     `runsc create` / staging the micro-VM virtio-fs lower.
 //
 // On-disk layout under the cache root (a directory on the BasePath hostPath,

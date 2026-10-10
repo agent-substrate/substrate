@@ -19,9 +19,11 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
 	"go.opentelemetry.io/otel/attribute"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
@@ -453,6 +455,143 @@ func TestWorkerPoolPodTemplateUpdate(t *testing.T) {
 		return podSpec.NodeSelector["workload"] == "updated" &&
 			podSpec.Containers[0].Resources.Requests.Cpu().String() == "500m", nil
 	})
+}
+
+func TestWorkerPoolSecurityContextUpdateAndClear(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	wp := makeWorkerPool("test-security-update", "default", 1, "ateom:v1")
+	wp.Spec.Template = &atev1alpha1.WorkerPoolPodTemplate{SecurityContext: &atev1alpha1.WorkerPoolSecurityContext{
+		DropCapabilities:         []corev1.Capability{"SYS_PTRACE", "MKNOD"},
+		AllowPrivilegeEscalation: ptr.To(false),
+		SeccompProfile:           &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeLocalhost, LocalhostProfile: ptr.To("worker.json")},
+	}}
+	if err := k8sClient.Create(ctx, wp); err != nil {
+		t.Fatal(err)
+	}
+	deleteOnCleanup(t, wp)
+	want := &corev1.SecurityContext{
+		Capabilities: &corev1.Capabilities{
+			Add:  []corev1.Capability{"NET_ADMIN", "SYS_ADMIN", "SYS_CHROOT", "SETUID", "SETGID", "SETPCAP", "DAC_OVERRIDE", "FOWNER", "CHOWN", "NET_RAW", "SETFCAP"},
+			Drop: []corev1.Capability{"ALL"},
+		},
+		SeccompProfile:           &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeLocalhost, LocalhostProfile: ptr.To("worker.json")},
+		AllowPrivilegeEscalation: ptr.To(false),
+		RunAsUser:                ptr.To(int64(0)), RunAsGroup: ptr.To(int64(0)), Privileged: ptr.To(false),
+		AppArmorProfile: &corev1.AppArmorProfile{Type: corev1.AppArmorProfileTypeUnconfined},
+	}
+	waitForWorkerSecurityContext(t, wp, want)
+	updateWorkerPoolSpec(t, ctx, wp, "change seccomp profile", func(current *atev1alpha1.WorkerPool) {
+		current.Spec.Template.SecurityContext.SeccompProfile = &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}
+	})
+	want.SeccompProfile = &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}
+	waitForWorkerSecurityContext(t, wp, want)
+	updateDeploymentSpec(t, ctx, wp, "alter generated security context", func(dep *appsv1.Deployment) {
+		dep.Spec.Template.Spec.Containers[0].SecurityContext.AllowPrivilegeEscalation = ptr.To(true)
+	})
+	waitForWorkerSecurityContext(t, wp, want)
+	updateWorkerPoolSpec(t, ctx, wp, "clear capability override", func(current *atev1alpha1.WorkerPool) {
+		current.Spec.Template.SecurityContext.DropCapabilities = nil
+	})
+	want.Capabilities.Add = slices.Clone(ateomGvisorCapabilities)
+	waitForWorkerSecurityContext(t, wp, want)
+	updateWorkerPoolSpec(t, ctx, wp, "clear seccomp override", func(current *atev1alpha1.WorkerPool) {
+		current.Spec.Template.SecurityContext.SeccompProfile = nil
+	})
+	want.SeccompProfile = &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeUnconfined}
+	waitForWorkerSecurityContext(t, wp, want)
+	updateWorkerPoolSpec(t, ctx, wp, "restore capability and seccomp restrictions", func(current *atev1alpha1.WorkerPool) {
+		current.Spec.Template.SecurityContext.DropCapabilities = []corev1.Capability{"ALL"}
+		current.Spec.Template.SecurityContext.SeccompProfile = &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeLocalhost, LocalhostProfile: ptr.To("worker.json")}
+	})
+	want.Capabilities.Add = nil
+	want.SeccompProfile = &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeLocalhost, LocalhostProfile: ptr.To("worker.json")}
+	waitForWorkerSecurityContext(t, wp, want)
+	updateWorkerPoolSpec(t, ctx, wp, "clear escalation override", func(current *atev1alpha1.WorkerPool) {
+		current.Spec.Template.SecurityContext.AllowPrivilegeEscalation = nil
+	})
+	want.AllowPrivilegeEscalation = nil
+	waitForWorkerSecurityContext(t, wp, want)
+	updateWorkerPoolSpec(t, ctx, wp, "remove security overrides", func(current *atev1alpha1.WorkerPool) {
+		current.Spec.Template.SecurityContext = nil
+	})
+	want.Capabilities.Add = slices.Clone(ateomGvisorCapabilities)
+	want.SeccompProfile = &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeUnconfined}
+	waitForWorkerSecurityContext(t, wp, want)
+}
+
+func waitForWorkerSecurityContext(t *testing.T, wp *atev1alpha1.WorkerPool, want *corev1.SecurityContext) {
+	t.Helper()
+	var lastDiff string
+	defer func() {
+		if t.Failed() {
+			t.Logf("security context (-want +got):\n%s", lastDiff)
+		}
+	}()
+	eventually(t, func(ctx context.Context) (bool, error) {
+		dep, err := getDeployment(ctx, wp)
+		if err != nil {
+			return false, client.IgnoreNotFound(err)
+		}
+		lastDiff = cmp.Diff(want, dep.Spec.Template.Spec.Containers[0].SecurityContext)
+		return lastDiff == "", nil
+	})
+}
+
+func TestWorkerPoolEmptyCapabilitiesRepairDrift(t *testing.T) {
+	for _, class := range []atev1alpha1.SandboxClass{atev1alpha1.SandboxClassGvisor, atev1alpha1.SandboxClassMicroVM} {
+		for _, mode := range []string{"all", "individual"} {
+			t.Run(string(class)+"/"+mode, func(t *testing.T) {
+				t.Parallel()
+				ctx := t.Context()
+				defaults := slices.Clone(ateomGvisorCapabilities)
+				if class == atev1alpha1.SandboxClassMicroVM {
+					defaults = slices.Clone(ateomMicroVMCapabilities)
+				}
+				drop := []corev1.Capability{"ALL"}
+				if mode == "individual" {
+					drop = slices.Clone(defaults)
+				}
+				wp := makeWorkerPool("test-empty-caps-"+string(class)+"-"+mode, "default", 1, "ateom:v1")
+				wp.Spec.SandboxClasses = []atev1alpha1.WorkerPoolSandboxClass{{Name: class}}
+				wp.Spec.Template = &atev1alpha1.WorkerPoolPodTemplate{SecurityContext: &atev1alpha1.WorkerPoolSecurityContext{DropCapabilities: drop}}
+				if err := k8sClient.Create(ctx, wp); err != nil {
+					t.Fatal(err)
+				}
+				deleteOnCleanup(t, wp)
+				eventually(t, func(ctx context.Context) (bool, error) {
+					dep, err := getDeployment(ctx, wp)
+					if err != nil {
+						return false, client.IgnoreNotFound(err)
+					}
+					return len(dep.Spec.Template.Spec.Containers[0].SecurityContext.Capabilities.Add) == 0, nil
+				})
+				updateDeploymentSpec(t, ctx, wp, "introduce capability drift", func(dep *appsv1.Deployment) {
+					dep.Spec.Template.Spec.Containers[0].SecurityContext.Capabilities.Add = []corev1.Capability{"SYS_ADMIN"}
+				})
+				// Apply synchronously so failure reports the surviving capabilities
+				// rather than timing out waiting for background reconciliation.
+				r := &WorkerPoolReconciler{Client: k8sClient}
+				if err := r.applyDeployment(ctx, wp); err != nil {
+					t.Fatal(err)
+				}
+				dep, err := getDeployment(ctx, wp)
+				if err != nil {
+					t.Fatal(err)
+				}
+				caps := dep.Spec.Template.Spec.Containers[0].SecurityContext.Capabilities
+				if len(caps.Add) != 0 || !slices.Equal(caps.Drop, []corev1.Capability{"ALL"}) {
+					t.Fatalf("capabilities after reconciliation = %+v, want add empty and drop [ALL]", caps)
+				}
+				updateWorkerPoolSpec(t, ctx, wp, "restore class defaults", func(current *atev1alpha1.WorkerPool) {
+					current.Spec.Template.SecurityContext = nil
+				})
+				want := dep.Spec.Template.Spec.Containers[0].SecurityContext.DeepCopy()
+				want.Capabilities.Add = defaults
+				waitForWorkerSecurityContext(t, wp, want)
+			})
+		}
+	}
 }
 
 // TestWorkerPoolPodTemplateClear verifies that clearing template.nodeSelector
