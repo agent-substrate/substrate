@@ -317,14 +317,10 @@ For the PostgreSQL connection pool metrics:
 The kind collector exposes these as `db_client_connection_count`,
 `db_client_connection_max`, `db_client_connection_pending_requests`, and
 `db_client_connection_wait_time_seconds`
-(with `_bucket`, `_sum`, and `_count` histogram series). To validate the
-production store connection and OTLP exporter wiring against disposable
-PostgreSQL and collector containers, run
-`REQUIRE_DOCKER=true go test ./cmd/ateapi/internal/store/atepg -run '^TestPoolMetricsOTLPCollector$' -count=1 -v`.
-This checks the collector's Prometheus scrape, including saturation, outstanding
-requests during contention, successful contention, timeouts, cancellations,
-and bounded error labels; it is not a
-deployed-ateapi or live Kubernetes E2E test.
+(with `_bucket`, `_sum`, and `_count` histogram series). The platform metrics
+E2E suite checks that these families reach the cluster collector. Store tests
+use a local OpenTelemetry `ManualReader` to assert values and labels, with
+real PostgreSQL for contention and production pool wiring.
 
 For `ate.workerpool.desired_workers` and `ate.workerpool.ready_workers`:
 * **Supply-Side Saturation Golden Signal**: Measures whether commanded capacity was delivered. Dedicated instruments match Kubernetes semantic conventions (`k8s.deployment.desired_pods` / `k8s.deployment.available_pods`) because desired + ready is not a disjoint sum.
