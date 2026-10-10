@@ -28,6 +28,7 @@ import (
 	"github.com/jackc/puddle/v2"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/semconv/v1.40.0/dbconv"
 )
 
 const (
@@ -52,37 +53,55 @@ type Instruments struct {
 func NewInstruments(meter metric.Meter) (*Instruments, error) {
 	count, err := meter.Int64ObservableUpDownCounter(connectionCountMetric,
 		metric.WithUnit("{connection}"),
-		metric.WithDescription("Number of used and idle PostgreSQL connections by pool."))
+		metric.WithDescription(dbconv.ClientConnectionCount{}.Description()))
 	if err != nil {
 		return nil, fmt.Errorf("create %s instrument: %w", connectionCountMetric, err)
 	}
 	max, err := meter.Int64ObservableUpDownCounter(connectionMaxMetric,
 		metric.WithUnit("{connection}"),
-		metric.WithDescription("Maximum number of open PostgreSQL connections allowed by pool."))
+		metric.WithDescription(dbconv.ClientConnectionMax{}.Description()))
 	if err != nil {
 		return nil, fmt.Errorf("create %s instrument: %w", connectionMaxMetric, err)
 	}
-	wait, err := meter.Float64Histogram(connectionWaitMetric,
-		metric.WithUnit("s"),
-		metric.WithDescription("Time to acquire a PostgreSQL connection, including unsuccessful attempts, by pool and outcome."),
+	wait, err := dbconv.NewClientConnectionWaitTime(meter,
 		metric.WithExplicitBucketBoundaries(connectionWaitBuckets...))
 	if err != nil {
 		return nil, fmt.Errorf("create %s instrument: %w", connectionWaitMetric, err)
 	}
-	pending, err := meter.Int64UpDownCounter(connectionPendingMetric,
-		metric.WithUnit("{request}"),
-		metric.WithDescription("Number of PostgreSQL connection acquisition requests currently in progress by pool."))
+	pending, err := dbconv.NewClientConnectionPendingRequests(meter)
 	if err != nil {
 		return nil, fmt.Errorf("create %s instrument: %w", connectionPendingMetric, err)
 	}
-	return &Instruments{meter: meter, count: count, max: max, wait: wait, pending: pending}, nil
+	return &Instruments{meter: meter, count: count, max: max, wait: wait.Float64Histogram, pending: pending.Int64UpDownCounter}, nil
 }
 
 func (i *Instruments) configurePool(cfg *pgxpool.Config, name string) {
 	if i == nil {
 		return
 	}
-	tracer := &poolMetricsTracer{instruments: i, name: name}
+	poolAttr := ateattr.DBConnectionPoolNameKey.String(name)
+	tracer := &poolMetricsTracer{
+		instruments:    i,
+		poolOnly:       metric.WithAttributeSet(attribute.NewSet(poolAttr)),
+		acquireOptions: make(map[string]metric.MeasurementOption, 6),
+	}
+	for _, outcome := range []string{
+		ateattr.StoreConnectionAcquireSuccess,
+		ateattr.StoreConnectionAcquireCancelled,
+		ateattr.StoreConnectionAcquireTimeout,
+	} {
+		tracer.acquireOptions[outcome] = metric.WithAttributeSet(attribute.NewSet(
+			poolAttr, ateattr.StoreConnectionAcquireOutcomeKey.String(outcome)))
+	}
+	for _, errorType := range []string{
+		ateattr.StoreConnectionAcquirePoolClosed,
+		ateattr.StoreConnectionAcquireConnectError,
+		ateattr.StoreConnectionAcquireOtherError,
+	} {
+		tracer.acquireOptions[errorType] = metric.WithAttributeSet(attribute.NewSet(
+			poolAttr, ateattr.StoreConnectionAcquireOutcomeKey.String(ateattr.StoreConnectionAcquireError),
+			ateattr.ErrorTypeKey.String(errorType)))
+	}
 	if cfg.ConnConfig.Tracer == nil {
 		cfg.ConnConfig.Tracer = tracer
 	} else {
@@ -117,8 +136,8 @@ func (i *Instruments) registerPools(pools ...namedPool) (metric.Registration, er
 	return registration, nil
 }
 
-func (i *Instruments) recordAcquire(ctx context.Context, name string, duration time.Duration, err error) {
-	if i == nil {
+func (t *poolMetricsTracer) recordAcquire(ctx context.Context, duration time.Duration, err error) {
+	if t == nil {
 		return
 	}
 	outcome := ateattr.StoreConnectionAcquireSuccess
@@ -128,16 +147,9 @@ func (i *Instruments) recordAcquire(ctx context.Context, name string, duration t
 	case errors.Is(err, context.DeadlineExceeded):
 		outcome = ateattr.StoreConnectionAcquireTimeout
 	case err != nil:
-		outcome = ateattr.StoreConnectionAcquireError
+		outcome = acquireErrorType(err)
 	}
-	attrs := []attribute.KeyValue{
-		ateattr.DBConnectionPoolNameKey.String(name),
-		ateattr.StoreConnectionAcquireOutcomeKey.String(outcome),
-	}
-	if outcome == ateattr.StoreConnectionAcquireError {
-		attrs = append(attrs, ateattr.ErrorTypeKey.String(acquireErrorType(err)))
-	}
-	i.wait.Record(ctx, duration.Seconds(), metric.WithAttributes(attrs...))
+	t.instruments.wait.Record(ctx, duration.Seconds(), t.acquireOptions[outcome])
 }
 
 func acquireErrorType(err error) string {
@@ -152,8 +164,9 @@ func acquireErrorType(err error) string {
 }
 
 type poolMetricsTracer struct {
-	instruments *Instruments
-	name        string
+	instruments    *Instruments
+	poolOnly       metric.MeasurementOption
+	acquireOptions map[string]metric.MeasurementOption
 }
 
 type acquireStartKey struct{}
@@ -169,12 +182,12 @@ func (*poolMetricsTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, _ pg
 func (*poolMetricsTracer) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
 
 func (t *poolMetricsTracer) TraceAcquireStart(ctx context.Context, _ *pgxpool.Pool, _ pgxpool.TraceAcquireStartData) context.Context {
-	t.instruments.pending.Add(ctx, 1, metric.WithAttributes(ateattr.DBConnectionPoolNameKey.String(t.name)))
+	t.instruments.pending.Add(ctx, 1, t.poolOnly)
 	return context.WithValue(ctx, acquireStartKey{}, time.Now())
 }
 
 func (t *poolMetricsTracer) TraceAcquireEnd(ctx context.Context, _ *pgxpool.Pool, data pgxpool.TraceAcquireEndData) {
-	t.instruments.pending.Add(ctx, -1, metric.WithAttributes(ateattr.DBConnectionPoolNameKey.String(t.name)))
+	t.instruments.pending.Add(ctx, -1, t.poolOnly)
 	start := ctx.Value(acquireStartKey{}).(time.Time)
-	t.instruments.recordAcquire(ctx, t.name, time.Since(start), data.Err)
+	t.recordAcquire(ctx, time.Since(start), data.Err)
 }
