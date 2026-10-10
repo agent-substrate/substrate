@@ -95,6 +95,9 @@ type ingressAuthConfig struct {
 	// AllowedSPIFFEIDs is the exact set of SPIFFE IDs allowed to connect to
 	// actors through the TLS listeners. Required whenever a TLS listener is
 	// enabled.
+	//
+	// Entries are complete SPIFFE IDs, like
+	// `spiffe://mytrustdomain.com/foo/bar/baz`.
 	AllowedSPIFFEIDs []string
 }
 
@@ -205,7 +208,6 @@ type routerConfig struct {
 	Auth authConfig
 
 	// IngressAuth configures client authentication on the ingress listeners.
-	// Egress-only instances ignore it.
 	IngressAuth ingressAuthConfig
 
 	// RouteTimeout is Envoy's end-to-end timeout on the workload route: the
