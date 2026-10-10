@@ -45,7 +45,9 @@ import (
 	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
 	tracev3 "github.com/envoyproxy/go-control-plane/envoy/config/trace/v3"
 	streamaccesslogv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/access_loggers/stream/v3"
+	dynamicmodulesv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/dynamic_modules/v3"
 	setfilterstatecommonv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/common/set_filter_state/v3"
+	httpdynamicmodulesv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/dynamic_modules/v3"
 	extprocv3filter "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/ext_proc/v3"
 	routerv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/router/v3"
 	setfilterstatev3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/set_filter_state/v3"
@@ -111,6 +113,18 @@ const (
 	// httpExtProcFilterName is envoy.filters.http.ext_proc's own well-known
 	// name, used as the HttpFilter.Name in buildHcm.
 	httpExtProcFilterName = "envoy.filters.http.ext_proc"
+
+	// httpDynamicModulesFilterName is envoy.filters.http.dynamic_modules's
+	// well-known name, used as the HttpFilter.Name in buildHcm.
+	httpDynamicModulesFilterName = "envoy.filters.http.dynamic_modules"
+
+	// ingressCacheDynamicModuleName is the shared library and filter name for
+	// the ingress-cache dynamic module.
+	ingressCacheDynamicModuleName = "envoy_substrate_ingress_cache"
+
+	// endpointCachedHeader is set by the ingress-cache dynamic module on a cache
+	// hit so route selection picks the route that disables ext_proc.
+	endpointCachedHeader = "ate-endpoint-cached"
 )
 
 // defaultExtProcMessageTimeout is Envoy's per-message ext_proc response timeout
@@ -834,6 +848,37 @@ func (x *XdsServer) buildOriginalDstCluster() *clusterv3.Cluster {
 }
 
 func (x *XdsServer) buildRoutes() *routev3.RouteConfiguration {
+	routeAction := func() *routev3.Route_Route {
+		return &routev3.Route_Route{
+			Route: &routev3.RouteAction{
+				ClusterSpecifier: &routev3.RouteAction_Cluster{
+					Cluster: OriginalDstClusterName,
+				},
+				// Two separate limits: Timeout bounds the upstream response,
+				// IdleTimeout bounds a stream with no activity on it, and
+				// routeIdleTimeout keeps the second from firing before the
+				// first. This route also serves CONNECT-tunneled traffic
+				// re-injected via main_internal, where Envoy applies Timeout to
+				// the whole tunnel lifetime, so a long-lived tunnel needs
+				// --route-timeout raised like a long LLM turn does.
+				Timeout:     durationpb.New(x.routeTimeout),
+				IdleTimeout: durationpb.New(x.routeIdleTimeout()),
+			},
+		}
+	}
+	requestHeadersToAdd := func() []*corev3.HeaderValueOption {
+		return []*corev3.HeaderValueOption{
+			{
+				Header: &corev3.HeaderValue{
+					Key: atunnel.TargetPortHeader,
+					Value: fmt.Sprintf("%%DYNAMIC_METADATA(%s:%s)%%",
+						ingress.OriginalDstMetadataKey, ingress.OriginalDstPortKey),
+				},
+				AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
+			},
+		}
+	}
+
 	return &routev3.RouteConfiguration{
 		Name: RouteName,
 		VirtualHosts: []*routev3.VirtualHost{
@@ -846,33 +891,37 @@ func (x *XdsServer) buildRoutes() *routev3.RouteConfiguration {
 							PathSpecifier: &routev3.RouteMatch_Prefix{
 								Prefix: "/",
 							},
-						},
-						Action: &routev3.Route_Route{
-							Route: &routev3.RouteAction{
-								ClusterSpecifier: &routev3.RouteAction_Cluster{
-									Cluster: OriginalDstClusterName,
+							Headers: []*routev3.HeaderMatcher{
+								{
+									Name: endpointCachedHeader,
+									HeaderMatchSpecifier: &routev3.HeaderMatcher_StringMatch{
+										StringMatch: &matcherv3.StringMatcher{
+											MatchPattern: &matcherv3.StringMatcher_Exact{
+												Exact: "1",
+											},
+										},
+									},
 								},
-								// Two separate limits: Timeout bounds the upstream response,
-								// IdleTimeout bounds a stream with no activity on it, and
-								// routeIdleTimeout keeps the second from firing before the
-								// first. This route also serves CONNECT-tunneled traffic
-								// re-injected via main_internal, where Envoy applies Timeout to
-								// the whole tunnel lifetime, so a long-lived tunnel needs
-								// --route-timeout raised like a long LLM turn does.
-								Timeout:     durationpb.New(x.routeTimeout),
-								IdleTimeout: durationpb.New(x.routeIdleTimeout()),
 							},
 						},
-						RequestHeadersToAdd: []*corev3.HeaderValueOption{
-							{
-								Header: &corev3.HeaderValue{
-									Key: atunnel.TargetPortHeader,
-									Value: fmt.Sprintf("%%DYNAMIC_METADATA(%s:%s)%%",
-										ingress.OriginalDstMetadataKey, ingress.OriginalDstPortKey),
+						Action:              routeAction(),
+						RequestHeadersToAdd: requestHeadersToAdd(),
+						TypedPerFilterConfig: map[string]*anypb.Any{
+							httpExtProcFilterName: newAny(&extprocv3filter.ExtProcPerRoute{
+								Override: &extprocv3filter.ExtProcPerRoute_Disabled{
+									Disabled: true,
 								},
-								AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
+							}),
+						},
+					},
+					{
+						Match: &routev3.RouteMatch{
+							PathSpecifier: &routev3.RouteMatch_Prefix{
+								Prefix: "/",
 							},
 						},
+						Action:              routeAction(),
+						RequestHeadersToAdd: requestHeadersToAdd(),
 					},
 				},
 			},
@@ -1074,6 +1123,13 @@ func (x *XdsServer) buildHcm(statPrefix string, captureActorRouting bool) *anypb
 		},
 	})
 
+	ingressCacheConfig := newAny(&httpdynamicmodulesv3.DynamicModuleFilter{
+		DynamicModuleConfig: &dynamicmodulesv3.DynamicModuleConfig{
+			Name: ingressCacheDynamicModuleName,
+		},
+		FilterName: ingressCacheDynamicModuleName,
+	})
+
 	routerAny := newAny(&routerv3.Router{})
 
 	httpFilters := []*hcmv3.HttpFilter{}
@@ -1081,6 +1137,12 @@ func (x *XdsServer) buildHcm(statPrefix string, captureActorRouting bool) *anypb
 		httpFilters = append(httpFilters, actorRoutingFilterStateFilter(false))
 	}
 	httpFilters = append(httpFilters,
+		&hcmv3.HttpFilter{
+			Name: httpDynamicModulesFilterName,
+			ConfigType: &hcmv3.HttpFilter_TypedConfig{
+				TypedConfig: ingressCacheConfig,
+			},
+		},
 		&hcmv3.HttpFilter{
 			Name: httpExtProcFilterName,
 			ConfigType: &hcmv3.HttpFilter_TypedConfig{

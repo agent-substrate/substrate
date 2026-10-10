@@ -381,8 +381,10 @@ github.com/envoyproxy/go-control-plane/envoy/config/trace/v3
 github.com/envoyproxy/go-control-plane/envoy/data/accesslog/v3
 github.com/envoyproxy/go-control-plane/envoy/extensions/access_loggers/stream/v3
 github.com/envoyproxy/go-control-plane/envoy/extensions/clusters/aggregate/v3
+github.com/envoyproxy/go-control-plane/envoy/extensions/dynamic_modules/v3
 github.com/envoyproxy/go-control-plane/envoy/extensions/filters/common/fault/v3
 github.com/envoyproxy/go-control-plane/envoy/extensions/filters/common/set_filter_state/v3
+github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/dynamic_modules/v3
 github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/ext_proc/v3
 github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/fault/v3
 github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/gcp_authn/v3
