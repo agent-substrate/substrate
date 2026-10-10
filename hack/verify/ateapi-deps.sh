@@ -28,7 +28,10 @@ banned=(
 )
 
 # ko ships ate-api-server for every platform in .ko.yaml.
-mapfile -t platforms < <(awk '/^defaultPlatforms:/ {in_list = 1; next} in_list && $1 == "-" {print $2; next} {in_list = 0}' .ko.yaml)
+platforms=()
+while IFS= read -r platform; do
+  platforms+=("${platform}")
+done < <(awk '/^defaultPlatforms:/ {in_list = 1; next} in_list && $1 == "-" {print $2; next} {in_list = 0}' .ko.yaml)
 if [[ ${#platforms[@]} -eq 0 ]]; then
   echo "no defaultPlatforms in .ko.yaml." >&2
   exit 1
