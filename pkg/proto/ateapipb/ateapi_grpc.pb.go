@@ -164,8 +164,11 @@ type ControlClient interface {
 	// Delete an empty Atespace. Rejects (FailedPrecondition) if any Actors or
 	// Tags remain.
 	DeleteAtespace(ctx context.Context, in *DeleteAtespaceRequest, opts ...grpc.CallOption) (*Atespace, error)
+	// Create an ActorTemplate.
 	CreateActorTemplate(ctx context.Context, in *CreateActorTemplateRequest, opts ...grpc.CallOption) (*ActorTemplate, error)
+	// Get an ActorTemplate.
 	GetActorTemplate(ctx context.Context, in *GetActorTemplateRequest, opts ...grpc.CallOption) (*ActorTemplate, error)
+	// List ActorTemplates.
 	ListActorTemplates(ctx context.Context, in *ListActorTemplatesRequest, opts ...grpc.CallOption) (*ListActorTemplatesResponse, error)
 	// Delete an ActorTemplate together with its golden actor and golden
 	// tag in the reserved ate-golden atespace.
@@ -706,8 +709,11 @@ type ControlServer interface {
 	// Delete an empty Atespace. Rejects (FailedPrecondition) if any Actors or
 	// Tags remain.
 	DeleteAtespace(context.Context, *DeleteAtespaceRequest) (*Atespace, error)
+	// Create an ActorTemplate.
 	CreateActorTemplate(context.Context, *CreateActorTemplateRequest) (*ActorTemplate, error)
+	// Get an ActorTemplate.
 	GetActorTemplate(context.Context, *GetActorTemplateRequest) (*ActorTemplate, error)
+	// List ActorTemplates.
 	ListActorTemplates(context.Context, *ListActorTemplatesRequest) (*ListActorTemplatesResponse, error)
 	// Delete an ActorTemplate together with its golden actor and golden
 	// tag in the reserved ate-golden atespace.

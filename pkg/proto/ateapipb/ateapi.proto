@@ -134,10 +134,13 @@ service Control {
   // Tags remain.
   rpc DeleteAtespace(DeleteAtespaceRequest) returns (Atespace) {}
 
+  // Create an ActorTemplate.
   rpc CreateActorTemplate(CreateActorTemplateRequest) returns (ActorTemplate) {}
 
+  // Get an ActorTemplate.
   rpc GetActorTemplate(GetActorTemplateRequest) returns (ActorTemplate) {}
 
+  // List ActorTemplates.
   rpc ListActorTemplates(ListActorTemplatesRequest) returns (ListActorTemplatesResponse) {}
 
   // Delete an ActorTemplate together with its golden actor and golden
@@ -313,6 +316,7 @@ enum SnapshotFidelity {
   // Keep this in sync with the maximums on fields of this type.
 }
 
+// TagScope is where a Tag may be used to initialize Actors.
 enum TagScope {
   // Not set and rejected wherever a client supplies a scope
   TAG_SCOPE_UNSPECIFIED = 0;
@@ -772,6 +776,7 @@ message ActorJWTSource {
   int64 expiration_seconds = 2;
 }
 
+// ActorState is the lifecycle state of an Actor.
 enum ActorState {
   ACTOR_STATE_UNSPECIFIED = 0;
   ACTOR_STATE_RESUMING = 1;
@@ -1426,6 +1431,8 @@ message ActorMetadataDataSource {
 // ActorMetadataItem projects one actor identity field to a file at path,
 // a clean relative Unix path from the root of the volume.
 message ActorMetadataItem {
+  // The identity field to project.
+  //
   // +k8s:required
   // +k8s:minimum=1
   // +k8s:maximum=3 # keep this in sync with the ActorMetadataField enum
@@ -1502,6 +1509,7 @@ message VolumeMount {
   string mount_path = 2;
 }
 
+// Request to create an Atespace.
 message CreateAtespaceRequest {
   // The atespace to create.
   //
@@ -1509,12 +1517,17 @@ message CreateAtespaceRequest {
   Atespace atespace = 1;
 }
 
+// Request to get an Atespace.
 message GetAtespaceRequest {
+  // The Atespace to get. atespace is always empty; Atespaces are
+  // global-scoped.
+  //
   // +k8s:required
   // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
   ObjectRef atespace = 1;
 }
 
+// Request to list Atespaces.
 message ListAtespacesRequest {
   // Requested page size; the server may return fewer, or occasionally
   // slightly more. If unspecified, defaults to a server-chosen value;
@@ -1532,6 +1545,7 @@ message ListAtespacesRequest {
   string page_token = 2;
 }
 
+// A page of Atespaces.
 message ListAtespacesResponse {
   // The page of atespaces. This list may be empty even if there are more results.
   repeated Atespace atespaces = 1;
@@ -1540,7 +1554,11 @@ message ListAtespacesResponse {
   string next_page_token = 2;
 }
 
+// Request to delete an Atespace.
 message DeleteAtespaceRequest {
+  // The Atespace to delete. atespace is always empty; Atespaces are
+  // global-scoped.
+  //
   // +k8s:required
   // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
   ObjectRef atespace = 1;
@@ -1551,6 +1569,7 @@ message DeleteAtespaceRequest {
   DeleteOptions options = 2;
 }
 
+// Request to create an ActorTemplate.
 message CreateActorTemplateRequest {
   // The actor template version to create. Server-assigned metadata (uid,
   // version, timestamps) is ignored, as are the status fields.
@@ -1560,12 +1579,16 @@ message CreateActorTemplateRequest {
   ActorTemplate actor_template = 1;
 }
 
+// Request to get an ActorTemplate.
 message GetActorTemplateRequest {
+  // The ActorTemplate to get.
+  //
   // +k8s:required
   // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor_template = 1;
 }
 
+// Request to list ActorTemplates.
 message ListActorTemplatesRequest {
   // The atespace to list actor templates from. Empty lists across all
   // atespaces.
@@ -1590,6 +1613,7 @@ message ListActorTemplatesRequest {
   string page_token = 3;
 }
 
+// A page of ActorTemplates.
 message ListActorTemplatesResponse {
   // The page of actor template versions. This list may be empty even if
   // there are more results.
@@ -1599,7 +1623,10 @@ message ListActorTemplatesResponse {
   string next_page_token = 2;
 }
 
+// Request to delete an ActorTemplate.
 message DeleteActorTemplateRequest {
+  // The ActorTemplate to delete.
+  //
   // +k8s:required
   // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor_template = 1;
@@ -1610,7 +1637,10 @@ message DeleteActorTemplateRequest {
   DeleteOptions options = 2;
 }
 
+// Request to get an Actor.
 message GetActorRequest {
+  // The Actor to get.
+  //
   // +k8s:required
   // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor = 1;
@@ -1640,33 +1670,48 @@ message UpdateActorRequest {
   Actor actor = 1;
 }
 
+// Request to suspend an Actor.
 message SuspendActorRequest {
+  // The Actor to suspend.
+  //
   // +k8s:required
   // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor = 1;
 }
 
+// Response to SuspendActor.
 message SuspendActorResponse {
+  // The Actor after the suspend.
   Actor actor = 1;
 }
 
+// Request to pause an Actor.
 message PauseActorRequest {
+  // The Actor to pause.
+  //
   // +k8s:required
   // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor = 1;
 }
 
+// Response to PauseActor.
 message PauseActorResponse {
+  // The Actor after the pause.
   Actor actor = 1;
 }
 
+// Request to resume an Actor.
 message ResumeActorRequest {
+  // The Actor to resume.
+  //
   // +k8s:required
   // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor = 1;
 }
 
+// Response to ResumeActor.
 message ResumeActorResponse {
+  // The Actor after the resume.
   Actor actor = 1;
 
   // True if a resume workflow was executed to activate the actor.
@@ -1689,7 +1734,10 @@ message RevertActorResponse {
   Actor actor = 1;
 }
 
+// Request to delete an Actor.
 message DeleteActorRequest {
+  // The Actor to delete.
+  //
   // +k8s:required
   // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor = 1;
@@ -1762,7 +1810,10 @@ message DeleteActorEgressPolicyRequest {
   DeleteOptions options = 2;
 }
 
+// Request to get a Tag.
 message GetTagRequest {
+  // The Tag to get.
+  //
   // +k8s:required
   // +k8s:subfield(atespace)=+k8s:required
   ObjectRef tag = 1;
@@ -1849,6 +1900,7 @@ message MintActorCertificateResponse {
   repeated bytes actor_certificates = 1;
 }
 
+// Request to list Tags.
 message ListTagsRequest {
   // The atespace to list tags from. Empty lists across all atespaces.
   //
@@ -1872,8 +1924,12 @@ message ListTagsRequest {
   string page_token = 3;
 }
 
+// A page of Tags.
 message ListTagsResponse {
+  // The page of tags. This list may be empty even if there are more results.
   repeated Tag tags = 1;
+
+  // Pagination token for the next page. Empty if this is the last page.
   string next_page_token = 2;
 }
 
@@ -1915,7 +1971,10 @@ message UpdateTagRequest {
   Tag tag = 1;
 }
 
+// Request to delete a Tag.
 message DeleteTagRequest {
+  // The Tag to delete.
+  //
   // +k8s:required
   // +k8s:subfield(atespace)=+k8s:required
   ObjectRef tag = 1;
@@ -1977,6 +2036,7 @@ message ListWorkerActorAssignmentsResponse {
   string next_page_token = 2;
 }
 
+// Request to list Workers.
 message ListWorkersRequest {
   // Requested page size; the server may return fewer, or occasionally
   // slightly more. If unspecified, defaults to a server-chosen value;
@@ -1994,6 +2054,7 @@ message ListWorkersRequest {
   string page_token = 2;
 }
 
+// A page of Workers.
 message ListWorkersResponse {
   // The page of workers. This list may be empty even if there are more results.
   repeated Worker workers = 1;
@@ -2002,6 +2063,7 @@ message ListWorkersResponse {
   string next_page_token = 2;
 }
 
+// Request to get a Worker.
 message GetWorkerRequest {
   // The Worker to fetch. atespace is always empty; Workers are global-scoped.
   //
@@ -2010,6 +2072,7 @@ message GetWorkerRequest {
   ObjectRef worker = 1;
 }
 
+// Request to register a Worker.
 message CreateWorkerRequest {
   // The Worker to register.
   //
@@ -2017,6 +2080,7 @@ message CreateWorkerRequest {
   Worker worker = 1;
 }
 
+// Request to update a Worker.
 message UpdateWorkerRequest {
   // The Worker to update.
   // worker.metadata.name identifies which resource to update. atespace is
@@ -2037,6 +2101,7 @@ message UpdateWorkerRequest {
   Worker worker = 1;
 }
 
+// Request to deregister a Worker.
 message DeleteWorkerRequest {
   // The Worker to deregister.
   //
@@ -2050,6 +2115,7 @@ message DeleteWorkerRequest {
   DeleteOptions options = 2;
 }
 
+// Request to drain a Worker.
 message DrainWorkerRequest {
   // The Worker to mark as terminating.
   //
@@ -2083,6 +2149,7 @@ message ListActorsRequest {
   string page_token = 3;
 }
 
+// A page of Actors.
 message ListActorsResponse {
   // The page of actors. This list may be empty even if there are more results.
   repeated Actor actors = 1;
@@ -2115,18 +2182,30 @@ message Worker {
   // +k8s:format=k8s-short-name
   // +k8s:immutable
   string worker_namespace = 2;
+
+  // The WorkerPool the pod belongs to, in worker_namespace.
+  //
   // +k8s:required
   // +k8s:format=k8s-long-name
   // +k8s:immutable
   string worker_pool = 3;
+
+  // The Worker's pod, in worker_namespace.
+  //
   // +k8s:required
   // +k8s:format=k8s-long-name
   // +k8s:immutable
   string worker_pod = 4;
+
+  // The UID of the Worker's pod.
+  //
   // +k8s:required
   // +k8s:format=k8s-uuid
   // +k8s:immutable
   string worker_pod_uid = 5;
+
+  // The node the Worker's pod runs on.
+  //
   // +k8s:required
   // +k8s:format=k8s-long-name
   // +k8s:immutable
@@ -2181,6 +2260,7 @@ message Worker {
   WorkerStatus status = 11;
 }
 
+// WorkerState is the lifecycle state of a Worker.
 enum WorkerState {
   WORKER_STATE_UNSPECIFIED = 0;
   // Ready; schedulable.
@@ -2190,7 +2270,10 @@ enum WorkerState {
   // Keep this in sync with WorkerStatus.state's maximum.
 }
 
+// WorkerStatus is the output-only, server-managed state of a Worker.
 message WorkerStatus {
+  // The Worker's lifecycle state.
+  //
   // +k8s:required
   // +k8s:minimum=1
   // +k8s:maximum=2 # keep this in sync with the WorkerState enum
@@ -2339,6 +2422,8 @@ message ActorAssignment {
   // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor = 2;
 
+  // The UID of the assigned Actor.
+  //
   // +k8s:required
   // +k8s:format=k8s-uuid
   string actor_uid = 3;
