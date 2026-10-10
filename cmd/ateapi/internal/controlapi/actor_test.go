@@ -278,6 +278,7 @@ func TestUpdateActor_RepointTemplate(t *testing.T) {
 			Volumes:        tmpl.volumes,
 			SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://my-bucket/snapshots"},
 			SandboxConfig:  tmpl.sandboxConfig,
+			Resources:      resources.CPUMemory(1000, 512<<20),
 		}); err != nil {
 			t.Fatalf("creating template %s: %v", name, err)
 		}

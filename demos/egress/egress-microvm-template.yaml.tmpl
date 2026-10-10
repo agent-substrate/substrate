@@ -62,9 +62,8 @@ volumes:
         names:
         - egress-mitm.ate.dev
         path: trust-bundle.pem
-# Sandbox size: without these the guest boots at ateom's default size
-# (2GiB). ateom applies them to the VM (see internal/sizing). Quantities are
-# strings in the proto.
+# Sandbox size: ateom applies these to the VM (see internal/sizing).
+# Quantities are strings in the proto.
 resources:
   limits:
   - name: cpu

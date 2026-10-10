@@ -18,14 +18,6 @@ import (
 	"strings"
 )
 
-const (
-	// TODO(#1724): Tune the following values for Substrate actors.
-	// DefaultMemoryMiB is the default guest memory size (MiB).
-	DefaultMemoryMiB = 2048
-	// DefaultVCPUs is the default guest vCPU count.
-	DefaultVCPUs = 1
-)
-
 // BaseKernelParams is the guest kernel command line parameters ateom boots with
 const BaseKernelParams = "cgroup_no_v1=all systemd.unified_cgroup_hierarchy=1"
 

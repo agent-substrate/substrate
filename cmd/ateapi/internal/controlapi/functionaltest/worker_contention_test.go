@@ -24,6 +24,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
@@ -153,8 +154,9 @@ func setWorkerActorCapacity(t *testing.T, tc *testContext, pool string, actors i
 }
 
 // reportWorkerCapacity stands in for the ateom's capacity report, which atelet
-// forwards to WorkerService in a real cluster. It waits for the worker cache,
-// which placement reads, to catch up.
+// forwards to WorkerService in a real cluster, with compute for actors of the
+// size test templates declare. It waits for the worker cache, which placement
+// reads, to catch up.
 func reportWorkerCapacity(t *testing.T, tc *testContext, name string, actors int32) {
 	t.Helper()
 	ctx := context.Background()
@@ -163,7 +165,10 @@ func reportWorkerCapacity(t *testing.T, tc *testContext, name string, actors int
 		t.Fatalf("getting worker %s: %v", name, err)
 	}
 	if _, err := tc.persistence.UpdateWorker(ctx, name, store.PreconditionFrom(worker), func(toUpdate *ateapipb.Worker) error {
-		toUpdate.Status.Capacity = &ateapipb.WorkerResources{Actors: actors}
+		toUpdate.Status.Capacity = &ateapipb.WorkerResources{
+			Actors:    actors,
+			Resources: resources.CPUMemory(int64(actors)*1000, int64(actors)*512<<20),
+		}
 		return nil
 	}); err != nil {
 		t.Fatalf("setting capacity on worker %s: %v", name, err)

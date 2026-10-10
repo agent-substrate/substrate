@@ -85,6 +85,22 @@ func ValidateCustom_CreateActorTemplateRequest_ActorTemplate(_ context.Context, 
 	return errs
 }
 
+// ValidateCustom_ActorTemplate_Resources requires both a cpu and a memory
+// limit, which the scheduler books against worker capacity.
+func ValidateCustom_ActorTemplate_Resources(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapipb.Resources) field.ErrorList {
+	set := sets.New[string]()
+	for _, l := range value.GetLimits() {
+		set.Insert(l.GetName())
+	}
+	var errs field.ErrorList
+	for _, name := range []string{resources.ResourceCPU, resources.ResourceMemory} {
+		if !set.Has(name) {
+			errs = append(errs, field.Required(fldPath.Child("limits"), "must set a "+name+" limit"))
+		}
+	}
+	return errs
+}
+
 // httpGetPathRE constrains wakeup probe paths to RFC 3986 path-segment
 // characters only, with well-formed percent-escapes, and no query string
 // or fragment.

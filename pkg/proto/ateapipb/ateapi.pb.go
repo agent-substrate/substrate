@@ -2674,9 +2674,12 @@ type ActorTemplate struct {
 	//
 	// +k8s:required
 	SandboxConfig *SandboxConfig `protobuf:"bytes,6,opt,name=sandbox_config,json=sandboxConfig,proto3" json:"sandbox_config,omitempty"`
-	// Resource usage configuration.
+	// resources is the actor's compute size. Both cpu and memory limits are
+	// required: the scheduler books them against worker capacity, and a
+	// micro-VM is booted at that size.
 	//
-	// +k8s:optional
+	// +k8s:required
+	// +k8s:customValidation # cpu and memory limits are both set
 	Resources *Resources `protobuf:"bytes,7,opt,name=resources,proto3" json:"resources,omitempty"`
 	// +k8s:optional
 	Status        *ActorTemplateStatus `protobuf:"bytes,8,opt,name=status,proto3" json:"status,omitempty"`

@@ -447,6 +447,7 @@ func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns st
 			WorkerSelector: &ateapipb.Selector{
 				MatchLabels: map[string]string{poolLabelKey: ns},
 			},
+			Resources: resources.CPUMemory(1000, 512<<20),
 		},
 	})
 	if err != nil {
@@ -671,6 +672,7 @@ func createTemplateWithSelector(t *testing.T, tc *testContext, name string, sele
 				{Name: "main", Image: "main@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", Command: []string{"/main"}},
 			},
 			WorkerSelector: selector,
+			Resources:      resources.CPUMemory(1000, 512<<20),
 		},
 	})
 	if err != nil {

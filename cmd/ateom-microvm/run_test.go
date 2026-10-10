@@ -100,14 +100,12 @@ func TestDialAgentRetryContextCanceled(t *testing.T) {
 	}
 }
 
-// resolveGuestMemMiB must honor a declared limit (minus the VMM reserve), fall back
-// to the kata default only when the limit is unset, and error — never silently boot
-// bigger than declared — when the reserve leaves too little to boot a guest.
+// resolveGuestMemMiB must honor a declared limit (minus the VMM reserve) and error
+// when the limit is unset or the reserve leaves too little to boot a guest.
 func TestResolveGuestMemMiB(t *testing.T) {
 	const (
-		mib      = 1024 * 1024
-		reserve  = 256  // vmmMemReserveMiB
-		fallback = 2048 // kata.DefaultMemoryMiB
+		mib     = 1024 * 1024
+		reserve = 256 // vmmMemReserveMiB
 	)
 	tests := []struct {
 		name        string
@@ -115,7 +113,7 @@ func TestResolveGuestMemMiB(t *testing.T) {
 		wantMiB     int
 		wantErr     bool
 	}{
-		{name: "unset falls back to kata default", declaredMiB: 0, wantMiB: fallback},
+		{name: "unset", declaredMiB: 0, wantErr: true},
 		{name: "declared honored minus reserve", declaredMiB: 1536, wantMiB: 1536 - reserve},
 		{name: "just above minimum", declaredMiB: reserve + minGuestMemMiB, wantMiB: minGuestMemMiB},
 		{name: "reserve exactly swallows limit", declaredMiB: reserve, wantErr: true},
@@ -124,7 +122,7 @@ func TestResolveGuestMemMiB(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := resolveGuestMemMiB(tc.declaredMiB*mib, reserve, fallback)
+			got, err := resolveGuestMemMiB(tc.declaredMiB*mib, reserve)
 			if tc.wantErr {
 				if err == nil {
 					t.Fatalf("resolveGuestMemMiB(%dMiB) = %d, nil; want an error", tc.declaredMiB, got)
@@ -209,18 +207,18 @@ func TestWorkloadIDs(t *testing.T) {
 	}
 }
 
-func TestGuestConfigDebugConsole(t *testing.T) {
-	_, _, prodParams := (&AteomService{guestDebug: false}).guestConfig()
+func TestKernelParamsDebugConsole(t *testing.T) {
+	prodParams := (&AteomService{guestDebug: false}).kernelParams()
 	for _, forbidden := range []string{"agent.debug_console", "agent.debug_console_vport", "1026"} {
 		if strings.Contains(prodParams, forbidden) {
-			t.Errorf("expected guestConfig() with guestDebug=false not to contain %q, but got %q", forbidden, prodParams)
+			t.Errorf("expected kernelParams() with guestDebug=false not to contain %q, but got %q", forbidden, prodParams)
 		}
 	}
 
-	_, _, dbgParams := (&AteomService{guestDebug: true}).guestConfig()
+	dbgParams := (&AteomService{guestDebug: true}).kernelParams()
 	for _, want := range []string{"agent.log=debug", "agent.debug_console", "agent.debug_console_vport=1026"} {
 		if !strings.Contains(dbgParams, want) {
-			t.Errorf("expected guestConfig() with guestDebug=true to contain %q, but got %q", want, dbgParams)
+			t.Errorf("expected kernelParams() with guestDebug=true to contain %q, but got %q", want, dbgParams)
 		}
 	}
 }

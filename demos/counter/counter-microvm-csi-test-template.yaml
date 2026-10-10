@@ -32,6 +32,14 @@ containers:
   volumeMounts:
   - name: data
     mountPath: /home/counter
+# Sandbox size: vCPUs and guest RAM (see internal/sizing). The pool sets no
+# worker limits, so these only need to fit the node.
+resources:
+  limits:
+  - name: cpu
+    quantity: "1"
+  - name: memory
+    quantity: 512Mi
 snapshotConfig:
   preferredFidelity: SNAPSHOT_FIDELITY_VOLUMES
   storageLocation: gs://ate-snapshots/ate-demo-counter-microvm-csi/

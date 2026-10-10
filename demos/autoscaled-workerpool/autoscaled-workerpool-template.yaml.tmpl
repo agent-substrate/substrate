@@ -35,6 +35,14 @@ containers:
   volumeMounts:
   - name: data
     mountPath: /home/counter
+# Sandbox size. The pool sets no worker limits, so the worker offers the
+# node's allocatable and these only need to fit the node.
+resources:
+  limits:
+  - name: cpu
+    quantity: "1"
+  - name: memory
+    quantity: 512Mi
 snapshotConfig:
   preferredFidelity: SNAPSHOT_FIDELITY_VOLUMES
   storageLocation: gs://${BUCKET_NAME}/ate-demo-autoscaled-workerpool/

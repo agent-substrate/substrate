@@ -1050,9 +1050,12 @@ message ActorTemplate {
   // +k8s:required
   SandboxConfig sandbox_config = 6;
 
-  // Resource usage configuration.
+  // resources is the actor's compute size. Both cpu and memory limits are
+  // required: the scheduler books them against worker capacity, and a
+  // micro-VM is booted at that size.
   //
-  // +k8s:optional
+  // +k8s:required
+  // +k8s:customValidation # cpu and memory limits are both set
   Resources resources = 7;
 
   // +k8s:optional

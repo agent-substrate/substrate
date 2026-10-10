@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/grpc/codes"
@@ -164,7 +165,10 @@ func TestListWorkers(t *testing.T) {
 			Ips:             []string{"127.0.0.1"},
 			SandboxClass:    "gvisor",
 			Labels:          map[string]string{"foo": "bar"},
-			Status:          &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Capacity: &ateapipb.WorkerResources{Actors: 1}},
+			Status: &ateapipb.WorkerStatus{
+				State:    ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+				Capacity: &ateapipb.WorkerResources{Actors: 1, Resources: resources.CPUMemory(1000, 512<<20)},
+			},
 		},
 	}
 

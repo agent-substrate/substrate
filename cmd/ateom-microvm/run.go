@@ -310,7 +310,6 @@ type actorBootParams struct {
 	// size is the actor's declared limits (from the ActorTemplate), supplied on
 	// the RunWorkload / RestoreWorkload RPC. It sizes the VM itself (vCPUs,
 	// memory); a container's own cgroup limit comes from its declared resources.
-	// Zero fields keep the kata defaults.
 	size sizing.SandboxSize
 }
 
@@ -416,22 +415,19 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 		}
 	}()
 
-	// Guest sizing + agent kernel params.
-	memMiB, vcpus, kparams := s.guestConfig()
+	kparams := s.kernelParams()
 
-	// Right-size the VM to the actor's declared limits (see internal/sizing),
-	// keeping the defaults above as the fallback when a limit is unset.
-	// vCPUs round up; VM RAM reserves a fixed margin for the VMM + virtiofsd, which
-	// share the pod cgroup with the guest RAM. A declared memory limit the reserve
-	// leaves too small to boot is rejected (resolveGuestMemMiB) rather than silently
-	// falling back to the larger kata default. NB: a MEMORY snapshot restore
-	// reuses the size baked into the snapshot (restoreMemoryFidelity), so resizing an
-	// existing actor takes effect on its next cold boot.
-	sz := p.size
-	if v := sz.VCPUs(); v > 0 {
-		vcpus = v
+	// Size the VM to the actor's declared limits (see internal/sizing), which the
+	// API requires. vCPUs round up; VM RAM reserves a fixed margin for the VMM +
+	// virtiofsd, which share the pod cgroup with the guest RAM. NB: a MEMORY
+	// snapshot restore reuses the size baked into the snapshot
+	// (restoreMemoryFidelity), so resizing an existing actor takes effect on its
+	// next cold boot.
+	vcpus := p.size.VCPUs()
+	if vcpus == 0 {
+		return errors.New("actor has no cpu limit to size the micro-VM's vCPUs")
 	}
-	memMiB, err = resolveGuestMemMiB(sz.MemoryBytes, s.memReserveMiB, memMiB)
+	memMiB, err := resolveGuestMemMiB(p.size.MemoryBytes, s.memReserveMiB)
 	if err != nil {
 		return err
 	}
@@ -450,7 +446,7 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 	if err := checkResourceEnvelope(ctrs, guestEnvelope{
 		memMiB:        memMiB,
 		vcpus:         vcpus,
-		declaredBytes: sz.MemoryBytes,
+		declaredBytes: p.size.MemoryBytes,
 		reserveMiB:    s.memReserveMiB,
 	}); err != nil {
 		return err
@@ -712,25 +708,22 @@ func (s *AteomService) stageMergedRootfs(ctx context.Context, rr resolvedRuntime
 	return vfsdCmd, nil
 }
 
-// guestConfig returns the default guest sizing and kernel params
-func (s *AteomService) guestConfig() (memMiB, vcpus int, kparams string) {
-	kparams = kata.BaseKernelParams
+// kernelParams returns the guest kernel params
+func (s *AteomService) kernelParams() string {
+	kparams := kata.BaseKernelParams
 	if s.guestDebug {
 		kparams = kata.WithAgentDebug(kparams)
 	}
-	return kata.DefaultMemoryMiB, kata.DefaultVCPUs, kparams
+	return kparams
 }
 
 // resolveGuestMemMiB returns the micro-VM guest RAM (MiB) for an actor's declared
-// memory limit. declaredBytes == 0 means "unset" and returns fallbackMiB
-// (kata.DefaultMemoryMiB). Otherwise the guest gets the declared memory minus the VMM
-// reserve; if that leaves less than a bootable minimum it errors — naming the limit,
-// the reserve, and the minimum — instead of silently reverting to the (larger)
-// fallback, which would boot the actor bigger than the worker was sized for and OOM
-// the pod (see vmmMemReserveMiB, minGuestMemMiB, and internal/sizing).
-func resolveGuestMemMiB(declaredBytes int64, reserveMiB, fallbackMiB int) (int, error) {
+// memory limit: the declared memory minus the VMM reserve. It errors if the limit is
+// unset or leaves less than a bootable minimum (see vmmMemReserveMiB, minGuestMemMiB,
+// and internal/sizing).
+func resolveGuestMemMiB(declaredBytes int64, reserveMiB int) (int, error) {
 	if declaredBytes <= 0 {
-		return fallbackMiB, nil
+		return 0, errors.New("actor has no memory limit to size the micro-VM's RAM")
 	}
 	declaredMiB := int(declaredBytes / (1024 * 1024))
 	m := declaredMiB - reserveMiB

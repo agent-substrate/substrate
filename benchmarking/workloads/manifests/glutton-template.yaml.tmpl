@@ -53,11 +53,12 @@ containers:
     httpGet:
       path: /readyz
       port: 80
-# See the note on the sleep template: unset means the 2 GiB microvm default,
-# which the benchmarks should not silently inherit. Raise ${ACTOR_MEMORY}
-# for suites that exercise glutton's WriteRAM path.
+# See the note on the sleep template. Raise ${ACTOR_MEMORY} for suites that
+# exercise glutton's WriteRAM path.
 resources:
   limits:
+  - name: cpu
+    quantity: "1"
   - name: memory
     quantity: ${ACTOR_MEMORY}
 snapshotConfig:

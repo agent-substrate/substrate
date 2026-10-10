@@ -36,7 +36,12 @@ containers:
       path: /healthz
       port: 80
     timeoutSeconds: 60
-${TEMPLATE_RESOURCES}
+resources:
+  limits:
+  - name: cpu
+    quantity: "1"
+  - name: memory
+    quantity: 512Mi
 ${TEMPLATE_SANDBOX_CONFIG}
 snapshotConfig:
   storageLocation: gs://${BUCKET_NAME}/ate-e2e-caps-default${FIXTURE_SUFFIX}/
@@ -68,7 +73,12 @@ containers:
       path: /healthz
       port: 80
     timeoutSeconds: 60
-${TEMPLATE_RESOURCES}
+resources:
+  limits:
+  - name: cpu
+    quantity: "1"
+  - name: memory
+    quantity: 512Mi
 ${TEMPLATE_SANDBOX_CONFIG}
 snapshotConfig:
   storageLocation: gs://${BUCKET_NAME}/ate-e2e-caps-exact${FIXTURE_SUFFIX}/

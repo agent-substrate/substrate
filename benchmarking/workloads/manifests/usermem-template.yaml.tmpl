@@ -15,9 +15,9 @@
 # ActorTemplate (protojson-shaped ateapipb.ActorTemplate) for the usermem
 # benchmark workload (locust/tests/usermem.py): stress holds 1 GiB of user
 # memory to size memory snapshots. Not part of deploy.sh's default template
-# set; deploy with WORKLOAD_TEMPLATES="usermem ...". No memory limit: the
-# workload allocates 1 GiB, well above the 256Mi default --actor-memory the
-# other templates take. The sandbox class must match the WorkerPool's so
+# set; deploy with WORKLOAD_TEMPLATES="usermem ...". Its memory limit is
+# fixed rather than --actor-memory: the workload allocates 1 GiB, well above
+# the 256Mi default. The sandbox class must match the WorkerPool's so
 # snapshots stay within a class.
 metadata:
   atespace: benchmark-workloads
@@ -29,6 +29,13 @@ containers:
 - name: usermem
   image: containerstack/alpine-stress:latest
   command: ["stress", "--vm", "1", "--vm-bytes", "1G", "--vm-keep", "--vm-hang", "0"]
+# Sandbox size: the 1 GiB stress allocation plus headroom.
+resources:
+  limits:
+  - name: cpu
+    quantity: "1"
+  - name: memory
+    quantity: 1536Mi
 snapshotConfig:
   preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
   storageLocation: gs://${BUCKET_NAME}/benchmark-workloads/usermem/

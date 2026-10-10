@@ -46,6 +46,14 @@ containers:
   env:
   - name: SWEPERF_DISABLE_INTERNAL_SLEEP
     value: "1"
+# Sandbox size: enough for the astropy test runs the trace replays. The cpu
+# limit caps the measured execution time, so keep it fixed across runs.
+resources:
+  limits:
+  - name: cpu
+    quantity: "2"
+  - name: memory
+    quantity: 4Gi
 sandboxConfig:
   sandboxClass: ${SANDBOX_CLASS_ENUM}
   configName: ${SANDBOX_CONFIG_NAME}

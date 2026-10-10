@@ -15,9 +15,7 @@
 # Sized variant of the probe template: a protojson-shaped
 # ateapipb.ActorTemplate declaring its own resources.limits, so the sizing e2e
 # suite can assert the actor's sandbox is shaped to those limits. Reuses the
-# probe image (it serves the /resources endpoint). Unlike
-# probe-template.yaml.tmpl this carries no ${TEMPLATE_RESOURCES} placeholder —
-# the limits are the thing under test.
+# probe image (it serves the /resources endpoint).
 
 metadata:
   atespace: ate-e2e${FIXTURE_SUFFIX}

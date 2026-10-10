@@ -16,10 +16,10 @@
 # benchmark workload (locust/tests/kernelmem.py): fills kernel memory with
 # dentry cache and sleeping processes to size kernel-state snapshots. Not
 # part of deploy.sh's default template set; deploy with
-# WORKLOAD_TEMPLATES="kernelmem ...". No memory limit: the 50000 sleeping
-# processes need more than the 256Mi default --actor-memory the other
-# templates take. The sandbox class must match the WorkerPool's so snapshots
-# stay within a class.
+# WORKLOAD_TEMPLATES="kernelmem ...". Its memory limit is fixed rather than
+# --actor-memory: the 50000 sleeping processes need far more than the 256Mi
+# default. The sandbox class must match the WorkerPool's so snapshots stay
+# within a class.
 metadata:
   atespace: benchmark-workloads
   name: kernelmem
@@ -30,6 +30,14 @@ containers:
 - name: kernelmem
   image: containerstack/alpine-stress:latest
   command: ["sh", "-c", "find /; for i in $(seq 50000); do sleep 10000 & done; sleep 10000"]
+# Sandbox size: the 50000 sleeping processes take ~6.3GiB on Linux (~130KB
+# each, mostly page tables and kernel state).
+resources:
+  limits:
+  - name: cpu
+    quantity: "1"
+  - name: memory
+    quantity: 8Gi
 snapshotConfig:
   preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
   storageLocation: gs://${BUCKET_NAME}/benchmark-workloads/kernelmem/

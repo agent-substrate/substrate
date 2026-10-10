@@ -20,6 +20,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -171,6 +172,33 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 			tmpl.SandboxConfig.ConfigName = ""
 		})},
 		field.ErrorList{field.Required(field.NewPath("actor_template", "sandbox_config", "config_name"), "")},
+	}, {
+		"missing resources",
+		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Resources = nil
+		})},
+		field.ErrorList{field.Required(field.NewPath("actor_template", "resources"), "")},
+	}, {
+		"missing cpu limit",
+		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Resources = resources.CPUMemory(0, 512<<20)
+		})},
+		field.ErrorList{field.Required(field.NewPath("actor_template", "resources", "limits"), "must set a cpu limit")},
+	}, {
+		"missing memory limit",
+		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Resources = resources.CPUMemory(1000, 0)
+		})},
+		field.ErrorList{field.Required(field.NewPath("actor_template", "resources", "limits"), "must set a memory limit")},
+	}, {
+		"empty limits",
+		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.Resources = &ateapipb.Resources{}
+		})},
+		field.ErrorList{
+			field.Required(field.NewPath("actor_template", "resources", "limits"), "must set a cpu limit"),
+			field.Required(field.NewPath("actor_template", "resources", "limits"), "must set a memory limit"),
+		},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -965,9 +993,12 @@ func TestValidateActorTemplate(t *testing.T) {
 	}, {
 		name: "template-level resources validated too",
 		mutate: func(tmpl *ateapipb.ActorTemplate) {
-			tmpl.Resources = &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: "gpu", Quantity: "1"}}}
+			tmpl.Resources = &ateapipb.Resources{Limits: []*ateapipb.Limits{{Name: "cpu", Quantity: "1"}, {Name: "gpu", Quantity: "1"}}}
 		},
-		want: field.ErrorList{field.NotSupported[string](field.NewPath("resources", "limits").Index(0).Child("name"), nil, nil)},
+		want: field.ErrorList{
+			field.NotSupported[string](field.NewPath("resources", "limits").Index(1).Child("name"), nil, nil),
+			field.Required(field.NewPath("resources", "limits"), "must set a memory limit"),
+		},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -994,6 +1025,7 @@ func validActorTemplate(mutations ...func(*ateapipb.ActorTemplate)) *ateapipb.Ac
 			PreferredFidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 		},
 		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR, ConfigName: "gvisor-default"},
+		Resources:     resources.CPUMemory(1000, 512<<20),
 	}
 	for _, m := range mutations {
 		m(template)

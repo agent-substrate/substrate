@@ -43,6 +43,13 @@ containers:
 volumes:
 - name: data
   durableDir: {}
+# Sandbox size: see the note on the sleep template.
+resources:
+  limits:
+  - name: cpu
+    quantity: "1"
+  - name: memory
+    quantity: ${ACTOR_MEMORY}
 snapshotConfig:
   preferredFidelity: SNAPSHOT_FIDELITY_VOLUMES
   storageLocation: gs://${BUCKET_NAME}/benchmark-workloads/glutton-durdir-data/
