@@ -1839,15 +1839,15 @@ const (
 // authorization: Control is the client-facing API, while these RPCs are served
 // only to an atelet, and only for the Workers on its own node.
 type WorkerServiceClient interface {
-	// RegisterWorker records what a Worker can hold and its hardware identity in
-	// one write, so a Worker is never schedulable without hardware to match
-	// snapshots against. Capacity and hardware are the Worker's to report rather
-	// than the control plane's to infer: they are what the ateom can actually
-	// supply and expose, only its node can observe them, and a fleet may run
-	// mixed ateom versions.
+	// RegisterWorker records what a Worker can hold and its supported sandbox
+	// runtimes in one write, so a Worker is never schedulable without runtime
+	// compatibility information to match snapshots against. Capacity and
+	// runtimes are the Worker's to report rather than the control plane's to
+	// infer: they are what the worker can actually supply and expose, only its
+	// node can observe them, and a fleet may run mixed versions.
 	//
 	// atelet calls this with its own client certificate, as it does for
-	// MintCert. Idempotent: re-sending the same capacity and hardware is not a
+	// MintCert. Idempotent: re-sending the same capacity and runtimes is not a
 	// write.
 	RegisterWorker(ctx context.Context, in *RegisterWorkerRequest, opts ...grpc.CallOption) (*RegisterWorkerResponse, error)
 	// Create a Substrate-issued SPIFFE certificate that asserts an ateom acting
@@ -1924,15 +1924,15 @@ func (c *workerServiceClient) RequestActorSuspend(ctx context.Context, in *Reque
 // authorization: Control is the client-facing API, while these RPCs are served
 // only to an atelet, and only for the Workers on its own node.
 type WorkerServiceServer interface {
-	// RegisterWorker records what a Worker can hold and its hardware identity in
-	// one write, so a Worker is never schedulable without hardware to match
-	// snapshots against. Capacity and hardware are the Worker's to report rather
-	// than the control plane's to infer: they are what the ateom can actually
-	// supply and expose, only its node can observe them, and a fleet may run
-	// mixed ateom versions.
+	// RegisterWorker records what a Worker can hold and its supported sandbox
+	// runtimes in one write, so a Worker is never schedulable without runtime
+	// compatibility information to match snapshots against. Capacity and
+	// runtimes are the Worker's to report rather than the control plane's to
+	// infer: they are what the worker can actually supply and expose, only its
+	// node can observe them, and a fleet may run mixed versions.
 	//
 	// atelet calls this with its own client certificate, as it does for
-	// MintCert. Idempotent: re-sending the same capacity and hardware is not a
+	// MintCert. Idempotent: re-sending the same capacity and runtimes is not a
 	// write.
 	RegisterWorker(context.Context, *RegisterWorkerRequest) (*RegisterWorkerResponse, error)
 	// Create a Substrate-issued SPIFFE certificate that asserts an ateom acting

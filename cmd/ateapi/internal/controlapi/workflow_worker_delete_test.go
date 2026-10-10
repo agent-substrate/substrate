@@ -109,9 +109,12 @@ func TestDeleteWorkerWorkflow_ReleasesBoundActor(t *testing.T) {
 	actor := seedAPIActor(t, ctx, persistence, ateapipb.ActorState_ACTOR_STATE_RUNNING, func(a *ateapipb.Actor) {
 		// Both in-progress checkpoints are set so the assertion covers the
 		// shared crash path, which cannot know which workflow was in flight.
-		a.Status.InProgressSnapshotUri = someActorSnapshotURI(t, testStorageLocation, apiActorRef.Atespace, "partial-snapshot")
-		a.Status.InProgressLocalSnapshotName = "partial-local-snapshot"
-		a.Status.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: someActorSnapshotURI(t, testStorageLocation, apiActorRef.Atespace, "last")}
+		a.Status.LastAssignedGeneration = 3
+		a.Status.Snapshots = []*ateapipb.Snapshot{
+			newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", someActorSnapshotURI(t, testStorageLocation, apiActorRef.Atespace, "last"), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+			newDurableSnapshot(2, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", someActorSnapshotURI(t, testStorageLocation, apiActorRef.Atespace, "partial-snapshot"), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS),
+			newLocalSnapshot(3, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "partial-local-snapshot", ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS),
+		}
 	})
 	assignAPIWorker(t, ctx, persistence, apiWorkerName, actor.GetMetadata().GetUid())
 
@@ -132,19 +135,21 @@ func TestDeleteWorkerWorkflow_ReleasesBoundActor(t *testing.T) {
 	if got.GetStatus().GetWorkerAssignment() != nil {
 		t.Errorf("actor worker assignment = %v, want it cleared", got.GetStatus().GetWorkerAssignment())
 	}
-	// The local checkpoint lived on the node that went away, so it dies with
-	// the worker.
-	if got.GetStatus().GetInProgressLocalSnapshotName() != "" {
-		t.Errorf("in-progress local checkpoint not cleared: %v", got.GetStatus())
+	// In-progress checkpoints are kept so delete or revert can clean them up
+	// while assigned_node or the object prefix is still recorded.
+	if _, gotSt := findLatestSnapshotStorage(got.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_LOCAL, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS); gotSt.GetLocal().GetSnapshotName() != "partial-local-snapshot" {
+		t.Errorf("in-progress local checkpoint = %q, want %q preserved", gotSt.GetLocal().GetSnapshotName(), "partial-local-snapshot")
 	}
 	// The durable one is kept: it names the prefix whatever atelet already
 	// uploaded lives under, which delete or revert needs to collect it.
-	if want := someActorSnapshotURI(t, testStorageLocation, apiActorRef.Atespace, "partial-snapshot"); got.GetStatus().GetInProgressSnapshotUri() != want {
+	_, gotInProgressSt := findLatestSnapshotStorage(got.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS)
+	if want := someActorSnapshotURI(t, testStorageLocation, apiActorRef.Atespace, "partial-snapshot"); gotInProgressSt.GetObject().GetSnapshotUri() != want {
 		t.Errorf("in-progress external checkpoint not preserved: %v", got.GetStatus())
 	}
 	// The last completed snapshot is what makes the actor resumable, so it stays.
-	if want := someActorSnapshotURI(t, testStorageLocation, apiActorRef.Atespace, "last"); got.GetStatus().GetExternalSnapshot().GetSnapshotUri() != want {
-		t.Errorf("external snapshot = %q, want it preserved as %q", got.GetStatus().GetExternalSnapshot().GetSnapshotUri(), want)
+	_, gotCompletedSt := findLatestSnapshotStorage(got.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+	if want := someActorSnapshotURI(t, testStorageLocation, apiActorRef.Atespace, "last"); gotCompletedSt.GetObject().GetSnapshotUri() != want {
+		t.Errorf("external snapshot = %q, want it preserved as %q", gotCompletedSt.GetObject().GetSnapshotUri(), want)
 	}
 }
 

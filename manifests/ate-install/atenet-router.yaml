@@ -265,9 +265,9 @@ spec:
         envFrom:
         - configMapRef:
             name: ate-otel-config
+        # The xDS server (--port-xds) binds 127.0.0.1 and serves only the Envoy
+        # in this pod, so it is deliberately not declared as a container port.
         ports:
-        - name: xds
-          containerPort: 18000
         - name: extproc
           containerPort: 50051
         - name: status

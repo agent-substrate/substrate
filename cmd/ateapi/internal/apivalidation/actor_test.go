@@ -435,126 +435,248 @@ func TestValidateActorUpdate(t *testing.T) {
 		})),
 		field.ErrorList{field.Invalid(field.NewPath("status", "assigned_node"), nil, "").WithOrigin("format=k8s-long-name")},
 	}, {
-		"valid actor.status.in_progress_snapshot_uri",
+		"valid actor.status.last_assigned_generation",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.InProgressSnapshotUri = "gs://private/atespaces/as/actors/" + someActorUID + "/snapshots/snap-1"
+			s.LastAssignedGeneration = 1
 		})),
 		nil,
 	}, {
-		"invalid actor.status.in_progress_snapshot_uri: too long",
-		validInput(),
-		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.InProgressSnapshotUri = "gs://" + strings.Repeat("x", 2044)
+		"increasing actor.status.last_assigned_generation",
+		validInput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.LastAssignedGeneration = 2
 		})),
-		field.ErrorList{field.TooLong(field.NewPath("status", "in_progress_snapshot_uri"), nil, 2048).WithOrigin("maxLength")},
-	}, {
-		"valid actor.status.external_snapshot",
-		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.ExternalSnapshot = &ateapipb.ExternalSnapshot{
-				SnapshotUri: "gs://private/atespaces/as/actors/" + someActorUID + "/snapshots/snap-1",
-				Fidelity:    ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
-			}
+			s.LastAssignedGeneration = 3
 		})),
 		nil,
 	}, {
-		"valid actor.status.external_snapshot.actor_template_uid",
+		"unchanged actor.status.last_assigned_generation",
+		validInput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.LastAssignedGeneration = 3
+		})),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.LastAssignedGeneration = 3
+		})),
+		nil,
+	}, {
+		"decreasing actor.status.last_assigned_generation",
+		validInput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.LastAssignedGeneration = 3
+		})),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.LastAssignedGeneration = 1
+		})),
+		field.ErrorList{field.Invalid(field.NewPath("status", "last_assigned_generation"), nil, "").WithOrigin("monotonic")},
+	}, {
+		"unsetting actor.status.last_assigned_generation",
+		validInput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.LastAssignedGeneration = 3
+		})),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.LastAssignedGeneration = 0
+		})),
+		field.ErrorList{field.Invalid(field.NewPath("status", "last_assigned_generation"), nil, "").WithOrigin("update")},
+	}, {
+		"negative actor.status.last_assigned_generation",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: "gs://private/atespaces/as/actors/" + someActorUID + "/snapshots/snap-1", ActorTemplateUid: "01234567-89ab-cdef-0123-456789abcdef"}
+			s.LastAssignedGeneration = -1
+		})),
+		field.ErrorList{field.Invalid(field.NewPath("status", "last_assigned_generation"), nil, "").WithOrigin("minimum")},
+	}, {
+		"valid actor.status.snapshots with durable object snapshot",
+		validInput(),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.Snapshots = []*ateapipb.Snapshot{validSnapshot()}
+		})),
+		nil,
+	}, {
+		"valid actor.status.snapshots actor_template_uid",
+		validInput(),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.Snapshots = []*ateapipb.Snapshot{validSnapshot(func(snap *ateapipb.Snapshot) {
+				snap.ActorTemplateUid = "01234567-89ab-cdef-0123-456789abcdef"
+			})}
 		})),
 		nil,
 	}, {
 		// Each suspend restamps the UID of the template the snapshot was captured under.
-		"changing actor.status.external_snapshot.actor_template_uid is allowed",
+		"changing actor.status.snapshots.actor_template_uid is allowed",
 		validInput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: "gs://private/atespaces/as/actors/" + someActorUID + "/snapshots/snap-1", ActorTemplateUid: "01234567-89ab-cdef-0123-456789abcdef"}
+			s.Snapshots = []*ateapipb.Snapshot{validSnapshot(func(snap *ateapipb.Snapshot) {
+				snap.ActorTemplateUid = "01234567-89ab-cdef-0123-456789abcdef"
+			})}
 		})),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: "gs://private/atespaces/as/actors/" + someActorUID + "/snapshots/snap-1", ActorTemplateUid: "fedcba98-7654-3210-fedc-ba9876543210"}
+			s.Snapshots = []*ateapipb.Snapshot{validSnapshot(func(snap *ateapipb.Snapshot) {
+				snap.ActorTemplateUid = "fedcba98-7654-3210-fedc-ba9876543210"
+			})}
 		})),
 		nil,
 	}, {
-		"invalid actor.status.external_snapshot.actor_template_uid",
+		"invalid actor.status.snapshots.actor_template_uid",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: "gs://private/atespaces/as/actors/" + someActorUID + "/snapshots/snap-1", ActorTemplateUid: "not-a-uuid"}
+			s.Snapshots = []*ateapipb.Snapshot{validSnapshot(func(snap *ateapipb.Snapshot) {
+				snap.ActorTemplateUid = "not-a-uuid"
+			})}
 		})),
-		field.ErrorList{field.Invalid(field.NewPath("status", "external_snapshot", "actor_template_uid"), nil, "").WithOrigin("format=k8s-uuid")},
+		field.ErrorList{field.Invalid(field.NewPath("status", "snapshots").Index(0).Child("actor_template_uid"), nil, "").WithOrigin("format=k8s-uuid")},
 	}, {
-		"valid actor.status.local_snapshot.snapshot_name",
+		"valid actor.status.snapshots local snapshot_name",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.LocalSnapshot = &ateapipb.LocalSnapshot{SnapshotName: "snap-1"}
-		})),
-		nil,
-	}, {
-		"invalid actor.status.local_snapshot.snapshot_name",
-		validInput(),
-		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.LocalSnapshot = &ateapipb.LocalSnapshot{SnapshotName: "SNAP 1"}
-		})),
-		field.ErrorList{field.Invalid(field.NewPath("status", "local_snapshot", "snapshot_name"), nil, "").WithOrigin("format=k8s-short-name")},
-	}, {
-		"valid actor.status.local_snapshot.fidelity",
-		validInput(),
-		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.LocalSnapshot = &ateapipb.LocalSnapshot{Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES}
+			s.Snapshots = []*ateapipb.Snapshot{validSnapshot(func(snap *ateapipb.Snapshot) {
+				snap.Storage = []*ateapipb.SnapshotStorage{{
+					Durability: ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_LOCAL,
+					Status:     ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+					Fidelity:   ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+					Local:      &ateapipb.LocalSnapshot{SnapshotName: "snap-1"},
+				}}
+			})}
 		})),
 		nil,
 	}, {
-		"negative actor.status.local_snapshot.fidelity",
+		"invalid actor.status.snapshots local snapshot_name",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.LocalSnapshot = &ateapipb.LocalSnapshot{Fidelity: ateapipb.SnapshotFidelity(-1)}
+			s.Snapshots = []*ateapipb.Snapshot{validSnapshot(func(snap *ateapipb.Snapshot) {
+				snap.Storage = []*ateapipb.SnapshotStorage{{
+					Durability: ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_LOCAL,
+					Status:     ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+					Fidelity:   ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+					Local:      &ateapipb.LocalSnapshot{SnapshotName: "SNAP 1"},
+				}}
+			})}
 		})),
-		field.ErrorList{field.Invalid(field.NewPath("status", "local_snapshot", "fidelity"), nil, "").WithOrigin("minimum")},
+		field.ErrorList{field.Invalid(field.NewPath("status", "snapshots").Index(0).Child("storage").Index(0).Child("local", "snapshot_name"), nil, "").WithOrigin("format=k8s-short-name")},
 	}, {
-		"invalid actor.status.local_snapshot.fidelity",
+		"duplicate actor.status.snapshots generation",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.LocalSnapshot = &ateapipb.LocalSnapshot{Fidelity: ateapipb.SnapshotFidelity(4)}
+			s.Snapshots = []*ateapipb.Snapshot{
+				validSnapshot(func(snap *ateapipb.Snapshot) { snap.Generation = 1 }),
+				validSnapshot(func(snap *ateapipb.Snapshot) { snap.Generation = 1 }),
+			}
 		})),
-		field.ErrorList{field.Invalid(field.NewPath("status", "local_snapshot", "fidelity"), nil, "").WithOrigin("maximum")},
+		field.ErrorList{field.Duplicate(field.NewPath("status", "snapshots").Index(1), nil)},
 	}, {
-		"too many actor_volumes",
+		"duplicate actor.status.snapshots.storage durability",
+		validInput(),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.Snapshots = []*ateapipb.Snapshot{validSnapshot(func(snap *ateapipb.Snapshot) {
+				snap.Storage = []*ateapipb.SnapshotStorage{
+					validSnapshotStorage(),
+					validSnapshotStorage(),
+				}
+			})}
+		})),
+		field.ErrorList{field.Duplicate(field.NewPath("status", "snapshots").Index(0).Child("storage").Index(1), nil)},
+	}, {
+		"too many actor.status.snapshots.storage entries",
+		validInput(),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.Snapshots = []*ateapipb.Snapshot{validSnapshot(func(snap *ateapipb.Snapshot) {
+				snap.Storage = []*ateapipb.SnapshotStorage{
+					validSnapshotStorage(func(ss *ateapipb.SnapshotStorage) {
+						ss.Durability = ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_LOCAL
+						ss.Object = nil
+						ss.Local = &ateapipb.LocalSnapshot{SnapshotName: "snap-1"}
+					}),
+					validSnapshotStorage(func(ss *ateapipb.SnapshotStorage) {
+						ss.Durability = ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE
+					}),
+					validSnapshotStorage(func(ss *ateapipb.SnapshotStorage) {
+						ss.Durability = ateapipb.SnapshotDurability(3)
+					}),
+				}
+			})}
+		})),
+		field.ErrorList{field.TooMany(field.NewPath("status", "snapshots").Index(0).Child("storage"), 3, 2).WithOrigin("maxItems")},
+	}, {
+		"invalid actor.status.snapshots.storage.durability",
+		validInput(),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.Snapshots = []*ateapipb.Snapshot{validSnapshot(func(snap *ateapipb.Snapshot) {
+				snap.Storage[0].Durability = ateapipb.SnapshotDurability(3)
+			})}
+		})),
+		field.ErrorList{field.Invalid(field.NewPath("status", "snapshots").Index(0).Child("storage").Index(0).Child("durability"), nil, "").WithOrigin("maximum")},
+	}, {
+		"valid actor.status.snapshots.storage.fidelity",
+		validInput(),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.Snapshots = []*ateapipb.Snapshot{validSnapshot(func(snap *ateapipb.Snapshot) {
+				snap.Storage[0].Fidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
+			})}
+		})),
+		nil,
+	}, {
+		"missing actor.status.snapshots.storage.fidelity",
+		validInput(),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.Snapshots = []*ateapipb.Snapshot{validSnapshot(func(snap *ateapipb.Snapshot) {
+				snap.Storage[0].Fidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
+			})}
+		})),
+		field.ErrorList{field.Required(field.NewPath("status", "snapshots").Index(0).Child("storage").Index(0).Child("fidelity"), "")},
+	}, {
+		"negative actor.status.snapshots.storage.fidelity",
+		validInput(),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.Snapshots = []*ateapipb.Snapshot{validSnapshot(func(snap *ateapipb.Snapshot) {
+				snap.Storage[0].Fidelity = ateapipb.SnapshotFidelity(-1)
+			})}
+		})),
+		field.ErrorList{field.Invalid(field.NewPath("status", "snapshots").Index(0).Child("storage").Index(0).Child("fidelity"), nil, "").WithOrigin("minimum")},
+	}, {
+		"invalid actor.status.snapshots.storage.fidelity",
+		validInput(),
+		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
+			s.Snapshots = []*ateapipb.Snapshot{validSnapshot(func(snap *ateapipb.Snapshot) {
+				snap.Storage[0].Fidelity = ateapipb.SnapshotFidelity(4)
+			})}
+		})),
+		field.ErrorList{field.Invalid(field.NewPath("status", "snapshots").Index(0).Child("storage").Index(0).Child("fidelity"), nil, "").WithOrigin("maximum")},
+	}, {
+		"too many external_volumes",
 		validInput(),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
 			vols := make([]*ateapipb.ExternalVolume, 33)
 			for i := range vols {
-				vols[i] = &ateapipb.ExternalVolume{VolumeName: fmt.Sprintf("vol-%d", i), VolumeType: "substrate.io/mock"}
+				vols[i] = &ateapipb.ExternalVolume{Name: fmt.Sprintf("vol-%d", i), VolumeType: "substrate.io/mock"}
 			}
-			s.ActorVolumes = vols
+			s.ExternalVolumes = vols
 		})),
-		field.ErrorList{field.TooMany(field.NewPath("status", "actor_volumes"), 33, 32).WithOrigin("maxItems")},
+		field.ErrorList{field.TooMany(field.NewPath("status", "external_volumes"), 33, 32).WithOrigin("maxItems")},
 	}, {
 		// Set-once fields permit the nil->set transition, so a volume added
 		// in an update validates like one added at creation.
 		"adding a volume on update is allowed",
 		validInput(withStatus()),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.ActorVolumes = []*ateapipb.ExternalVolume{{VolumeName: "vol-a", VolumeType: "substrate.io/mock"}}
+			s.ExternalVolumes = []*ateapipb.ExternalVolume{{Name: "vol-a", VolumeType: "substrate.io/mock"}}
 		})),
 		nil,
 	}, {
-		"duplicate actor_volumes volume_name",
+		"duplicate external_volumes name",
 		validInput(withStatus()),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.ActorVolumes = []*ateapipb.ExternalVolume{
-				{VolumeName: "vol-a", VolumeType: "substrate.io/mock"},
-				{VolumeName: "vol-a", VolumeType: "substrate.io/mock"},
+			s.ExternalVolumes = []*ateapipb.ExternalVolume{
+				{Name: "vol-a", VolumeType: "substrate.io/mock"},
+				{Name: "vol-a", VolumeType: "substrate.io/mock"},
 			}
 		})),
-		field.ErrorList{field.Duplicate(field.NewPath("status", "actor_volumes").Index(1), nil)},
+		field.ErrorList{field.Duplicate(field.NewPath("status", "external_volumes").Index(1), nil)},
 	}, {
 		"provisioning transition on an existing volume is valid",
 		validInput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.ActorVolumes = []*ateapipb.ExternalVolume{{VolumeName: "vol-a", VolumeType: "substrate.io/mock", Status: ateapipb.ExternalVolume_STATUS_PENDING}}
+			s.ExternalVolumes = []*ateapipb.ExternalVolume{{Name: "vol-a", VolumeType: "substrate.io/mock", Status: ateapipb.ExternalVolume_STATUS_PENDING}}
 		})),
 		validOutput(withStatus(func(s *ateapipb.ActorStatus) {
-			s.ActorVolumes = []*ateapipb.ExternalVolume{{
-				VolumeName:      "vol-a",
+			s.ExternalVolumes = []*ateapipb.ExternalVolume{{
+				Name:            "vol-a",
 				VolumeType:      "substrate.io/mock",
 				StorageVolumeId: "csi-426d29b7",
 				Status:          ateapipb.ExternalVolume_STATUS_CREATED,
@@ -562,11 +684,6 @@ func TestValidateActorUpdate(t *testing.T) {
 			}}
 		})),
 		nil,
-	}, {
-		"invalid actor.status.in_progress_local_snapshot_name",
-		validInput(),
-		validOutput(withStatus(func(s *ateapipb.ActorStatus) { s.InProgressLocalSnapshotName = "BAD NAME" })),
-		field.ErrorList{field.Invalid(field.NewPath("status", "in_progress_local_snapshot_name"), nil, "").WithOrigin("format=k8s-short-name")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1016,7 +1133,7 @@ func TestValidateMintActorJWTRequest(t *testing.T) {
 	withExpiration := func(seconds int64) *ateapipb.MintActorJWTRequest {
 		return &ateapipb.MintActorJWTRequest{
 			Actor:             &ateapipb.ObjectRef{Atespace: "ns1", Name: "id1"},
-			Audience:          []string{"https://example.com"},
+			Audiences:         []string{"https://example.com"},
 			ExpirationSeconds: seconds,
 		}
 	}

@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/atenet"
 	"github.com/agent-substrate/substrate/internal/e2e"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -49,6 +50,24 @@ func TestActorDirectAccess(t *testing.T) {
 			return router.Get(ctx, actorRef, "/readyz")
 		})
 		t.Logf("Actor access through ingress succeeded; body: %s", body)
+	})
+	t.Run("duplicate actor header rejected on plain HTTP", func(t *testing.T) {
+		actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, router.BaseURL()+"/readyz", nil)
+		if err != nil {
+			t.Fatalf("creating request: %v", err)
+		}
+		req.Header.Add(atenet.TargetActorHeader, actorRef.String())
+		req.Header.Add(atenet.TargetActorHeader, "untrusted/actor")
+		resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+		if err != nil {
+			t.Fatalf("sending request with duplicate actor headers: %v", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusNotFound {
+			body, _ := io.ReadAll(resp.Body)
+			t.Fatalf("duplicate actor header on plain HTTP returned %d, want 404; body: %s", resp.StatusCode, body)
+		}
 	})
 }
 

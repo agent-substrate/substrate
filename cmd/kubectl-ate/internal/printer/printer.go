@@ -338,11 +338,11 @@ func PrintTagsTo(out io.Writer, tags []*ateapipb.Tag, format string) error {
 		fmt.Fprintln(w, "ATESPACE\tNAME\tSCOPE\tSTATE\tSNAPSHOT\tFIDELITY\tAGE")
 		for _, tag := range tags {
 			// A pending tag has no snapshot yet, so neither its URI nor its
-			// content scope says anything.
+			// fidelity says anything.
 			snapshotURI, fidelity := "<none>", "<none>"
-			if snapshot := tag.GetStatus().GetSnapshot(); snapshot.GetSnapshotUri() != "" {
-				snapshotURI = snapshot.GetSnapshotUri()
-				fidelity = snapshot.GetFidelity().String()
+			if st := durableSnapshotStorage(tag.GetStatus().GetSnapshot()); st != nil {
+				snapshotURI = st.GetObject().GetSnapshotUri()
+				fidelity = st.GetFidelity().String()
 			}
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				tag.GetMetadata().GetAtespace(), tag.GetMetadata().GetName(), tag.GetScope(),
@@ -355,11 +355,22 @@ func PrintTagsTo(out io.Writer, tags []*ateapipb.Tag, format string) error {
 	}
 }
 
+func durableSnapshotStorage(snapshot *ateapipb.Snapshot) *ateapipb.SnapshotStorage {
+	for _, st := range snapshot.GetStorage() {
+		if st.GetDurability() == ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE &&
+			st.GetStatus() == ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED &&
+			st.GetObject().GetSnapshotUri() != "" {
+			return st
+		}
+	}
+	return nil
+}
+
 // tagState reports whether a tag is usable. A tag is Pending until
 // the copy of its own snapshot lands; until then it names nothing an Actor can
 // be created from, and deleting it collects whatever the create stranded.
 func tagState(tag *ateapipb.Tag) string {
-	if tag.GetStatus().GetSnapshot().GetSnapshotUri() == "" {
+	if durableSnapshotStorage(tag.GetStatus().GetSnapshot()) == nil {
 		return "Pending"
 	}
 	return "Ready"
