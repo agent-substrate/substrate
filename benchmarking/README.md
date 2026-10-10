@@ -82,7 +82,7 @@ not a local entry point. See [automation/README.md](automation/README.md).
 python3 runner.py -f tests/<user-class>.py -t 1m -u 1 --name <run-name> --dest /tmp/bench
 ```
 
-Three flags control the optional post-run measurements described in
+Four flags control the optional post-run measurements described in
 [Benchmark output files](#benchmark-output-files):
 
 * `--cluster-facts` / `--no-cluster-facts`: read node capacity and worker pod
@@ -93,6 +93,11 @@ Three flags control the optional post-run measurements described in
   [Optional: Prometheus + Grafana](#optional-prometheus--grafana).
 * `--atelet-lag-s`: how long to wait after the run before reading the
   atelet's snapshot metrics. Defaults to 70.
+* `--phase-breakdown` / `--no-phase-breakdown`: read the atelet and worker pod
+  logs once the run ends and add the suspend/resume phase percentiles to
+  `stats.jsonl`. On by default; needs `pods/log` access in `ate-system` and
+  `benchmark-workloads` (granted in `automation/manifests/runner-job.yaml.tmpl`).
+  See [analysis/README.md](analysis/README.md#automated-runs).
 
 Test-specific flags are appended to the same command; see the sections below.
 
@@ -371,7 +376,10 @@ them are checked into the repository.
 * `logs.txt`, `traces.txt`: the runner log, and the trace IDs seen during the run.
 * `stats.jsonl`: one JSON object per line, one per metric. Every row carries
   the same five keys: `timestamp`, `tag`, `test_name`, `metric`, and a flat
-  `measurements` map holding that metric's numbers.
+  `measurements` map holding that metric's numbers. The `phase_*` rows and
+  the `phase_breakdown_summary` row are the suspend/resume phase percentiles
+  read from the node logs (see
+  [analysis/README.md](analysis/README.md#automated-runs)).
 * `server_summary.json`: server-side telemetry harvested from Prometheus,
   including the per-sample bin-packing timeseries.
 
