@@ -145,6 +145,7 @@ atelet's `Restore timing breakdown` and `Checkpoint timing breakdown` are the un
  "ate.actor.restore.duration.download":0.310,
  "ate.actor.restore.duration.oci_unpack":0.050,
  "ate.actor.restore.duration.ateom_restore":0.060,
+ "ate.actor.restore.duration.sandbox_record":0.007,
  "ate.actor.restore.duration.total":0.420,
  "trace_id":"4bf92f…","span_id":"00f067…","trace_flags":"01"}
 ```
@@ -301,7 +302,7 @@ For `ate.imagecache.requests`:
 The three snapshot labels are orthogonal and mean the same thing on every histogram that carries them:
 * `ate.snapshot.kind`: which snapshot the operation reads or writes. `local` (node-local, written by a pause), `latest` (the actor's own durable snapshot), `golden` (the template's image), or `boot` (from scratch, so it never appears on the atelet histograms).
 * `ate.snapshot.fidelity`: what state it holds. `volumes`, `rootfs`, or `memory`.
-* `ate.snapshot.phase`: which step was timed. `volume_mount`, `manifest_fetch`, `sandbox_assets`, `download`, `oci_unpack`, `ateom_restore` on restore; `sandbox_assets`, `ateom_checkpoint`, `persist` on checkpoint; `total` on both.
+* `ate.snapshot.phase`: which step was timed. `volume_mount`, `manifest_fetch`, `sandbox_assets`, `download`, `oci_unpack`, `ateom_restore`, `sandbox_record` on restore; `sandbox_assets`, `ateom_checkpoint`, `persist` on checkpoint; `total` on both.
 
 **Phases overlap and do not sum to `total`.** The download runs concurrently with the asset fetch and OCI unpack, so each is an independent observation; use `total` as the denominator. A phase that never started is absent rather than zero.
 

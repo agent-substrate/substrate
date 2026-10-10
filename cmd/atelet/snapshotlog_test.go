@@ -148,6 +148,7 @@ func TestSnapshotLogAttrs(t *testing.T) {
 				{ateattr.SnapshotPhaseDownload, 310 * time.Millisecond},
 				{ateattr.SnapshotPhaseOCIUnpack, 50 * time.Millisecond},
 				{ateattr.SnapshotPhaseAteomRestore, 60 * time.Millisecond},
+				{ateattr.SnapshotPhaseSandboxRecord, 7 * time.Millisecond},
 				{ateattr.SnapshotPhaseTotal, 420 * time.Millisecond},
 			},
 			wantStrings: map[string]string{
@@ -164,6 +165,7 @@ func TestSnapshotLogAttrs(t *testing.T) {
 				"ate.actor.restore.duration.volume_mount":   0.004,
 				"ate.actor.restore.duration.manifest_fetch": 0.021,
 				"ate.actor.restore.duration.download":       0.310,
+				"ate.actor.restore.duration.sandbox_record": 0.007,
 				"ate.actor.restore.duration.total":          0.420,
 			},
 			// The phase key names the one step a datapoint timed; this record has

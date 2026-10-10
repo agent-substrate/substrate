@@ -364,6 +364,7 @@ const (
 	SnapshotPhaseDownload        = "download"
 	SnapshotPhaseOCIUnpack       = "oci_unpack"
 	SnapshotPhaseAteomRestore    = "ateom_restore"
+	SnapshotPhaseSandboxRecord   = "sandbox_record"
 	SnapshotPhaseAteomCheckpoint = "ateom_checkpoint"
 	// Persist is one step with two destinations (upload for external, rename
 	// for local); SnapshotKindKey already says which.
