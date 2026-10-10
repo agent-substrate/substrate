@@ -125,7 +125,7 @@ The `ActorTemplate` defines the code, environment, and state-management policies
 | `workerSelector` | `*Selector` | Optional. Gates which `WorkerPool`s actors from this template may use, by matching against each pool's labels (`matchLabels`). If unset, all pools are eligible (subject to the actor's own `worker_selector`). |
 | `snapshotConfig` | `SnapshotConfig` | **Required.** The base object-storage location snapshots are written under, plus the snapshot fidelity (`preferredFidelity`) every Pause and Suspend captures. See [Snapshot Storage Layout](#snapshot-storage-layout). |
 | `volumes` | `[]Volume` | Optional. Volumes the containers may mount, each a `durableDir`, an `externalVolumeTemplate` (see [CSI Volumes Guide](csi-volumes.md)), or a `systemInfo` volume (see [SystemInfo Volumes](#systeminfo-volumes)). Every declared volume must be mounted by at least one container. A `microvm` template may declare several `durableDir` volumes; a `gvisor` template is limited to one. |
-| `resources` | `*ResourceRequirements` | Optional. Declares each actor's compute size via `limits` — see [Sandbox Right-Sizing](#sandbox-right-sizing-resources). Immutable, like the rest of the template. |
+| `resources` | `*Resources` | Optional. Declares each actor's compute size via `limits` — see [Sandbox Right-Sizing](#sandbox-right-sizing-resources). Immutable, like the rest of the template. |
 
 The sandbox itself — the binaries (e.g. the gVisor `runsc` binary) and the `pauseImage` holding the sandbox's namespaces — comes from the cluster-scoped [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) object the template names via `sandboxConfig.configName`. An actor always resolves the config from its current template — repointing the actor at another template requires the same config.
 
@@ -141,7 +141,7 @@ Unlike a Pod, an actor is sized by its **`limits`** (CPU and Memory): the size i
 2. **Gate scheduling.** An actor is only placed on a `WorkerPool` whose [worker capacity](#worker-capacity-spectemplateresources) is `>=` these limits.
 3. **Fall back to runtime defaults.** A zero or absent limit leaves that dimension at the runtime default: unlimited for gVisor, and 2 GiB / 1 vCPU for the micro-VM.
 
-`requests` are not consulted today (an actor occupies its whole worker). Because the size is baked into snapshots, a **micro-VM MEMORY-fidelity restore reuses the size in the snapshot**; changing an actor's limits takes effect on its next cold boot.
+The size is baked into snapshots, so a **micro-VM MEMORY-fidelity restore reuses the size in the snapshot**; changing an actor's limits takes effect on its next cold boot.
 
 Container environment variables support literal `value` entries only. Values are not interpolated (`$(VAR)` references are not expanded), and Kubernetes `envFrom`/`valueFrom` sources are not supported.
 
