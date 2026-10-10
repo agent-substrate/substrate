@@ -40,6 +40,12 @@ spec:
     - jsonPath: .status.readyReplicas
       name: Ready
       type: integer
+    - jsonPath: .status.sandboxClasses[*].configRef.name
+      name: SandboxConfig
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="SandboxConfigResolved")].status
+      name: Resolved
+      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -75,7 +81,7 @@ spec:
                 type: integer
               sandboxClasses:
                 description: |-
-                  SandboxClasses lists the sandbox runtime families this pool runs. Exactly
+                  sandboxClasses lists the sandbox runtime families this pool runs. Exactly
                   one entry is allowed today.
                 items:
                   description: WorkerPoolSandboxClass is one sandbox runtime family
@@ -83,11 +89,15 @@ spec:
                   properties:
                     configRef:
                       description: |-
-                        ConfigRef names a cluster-scoped SandboxConfig for this sandbox class.
-                        The referenced config's SandboxClass must match Name. Not consumed yet.
+                        configRef names a cluster-scoped SandboxConfig for this sandbox class.
+                        The referenced config's sandboxClass must match name. When omitted, the
+                        pool uses the newest SandboxConfig of this class annotated
+                        sandboxconfig.ate.dev/is-class-default: "true". The controller reports
+                        the resolved config in status.sandboxClasses.
                       properties:
                         name:
-                          description: Name is the SandboxConfig's metadata.name.
+                          description: name is the SandboxConfig's metadata.name.
+                          maxLength: 253
                           minLength: 1
                           type: string
                       required:
@@ -95,7 +105,7 @@ spec:
                       type: object
                     name:
                       description: |-
-                        Name selects the sandbox runtime family, which drives the worker pod
+                        name selects the sandbox runtime family, which drives the worker pod
                         shape (KVM/vhost device mounts and node placement). The concrete binary
                         is still selected by WorkerImage. The sandbox binaries themselves come
                         from the SandboxConfig each ActorTemplate names (required).
@@ -482,6 +492,66 @@ spec:
           status:
             description: status is the observed state of WorkerPool
             properties:
+              conditions:
+                description: conditions describe the current state of the WorkerPool.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      default: ""
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
               readyReplicas:
                 description: ReadyReplicas is the number of ready worker pods.
                 format: int32
@@ -492,6 +562,44 @@ spec:
                 format: int32
                 minimum: 0
                 type: integer
+              sandboxClasses:
+                description: |-
+                  sandboxClasses reports the SandboxConfig each sandbox class of the pool
+                  uses. An entry keeps its last resolved config while spec.sandboxClasses
+                  cannot be resolved; see the SandboxConfigResolved condition.
+                items:
+                  description: |-
+                    WorkerPoolSandboxClassStatus is the SandboxConfig one sandbox class of a
+                    WorkerPool uses.
+                  properties:
+                    configRef:
+                      description: |-
+                        configRef names the cluster-scoped SandboxConfig in use: either
+                        spec.sandboxClasses[].configRef or the class default.
+                      properties:
+                        name:
+                          description: name is the SandboxConfig's metadata.name.
+                          maxLength: 253
+                          minLength: 1
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    name:
+                      description: name is the sandbox runtime family.
+                      enum:
+                      - gvisor
+                      - microvm
+                      type: string
+                  required:
+                  - configRef
+                  - name
+                  type: object
+                maxItems: 1
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
               selector:
                 description: Selector is the label selector for the worker pods.
                 type: string

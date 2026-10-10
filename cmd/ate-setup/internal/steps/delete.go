@@ -17,11 +17,16 @@ package steps
 import (
 	"context"
 	"fmt"
+	"slices"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/util/retry"
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
+	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 )
 
 // DeleteAteSystem removes the control plane.
@@ -74,7 +79,49 @@ func (e *Env) DeleteAteSystem(ctx context.Context) error {
 	if err := e.Kube.WaitDeleted(ctx, schema.GroupVersionKind{Version: "v1", Kind: "Namespace"}, "", e.Namespace(), e.Cfg.WaitTimeout(BootstrapTimeout)); err != nil {
 		return err
 	}
+	// Safe to remove the protection finalizer by hand: the controller that
+	// would remove it is already deleted with the namespace, and deleting the
+	// CRDs above deletes every WorkerPool, so no pool is still using a config.
+	if err := releaseSandboxConfigs(ctx, e.Kube.Dynamic.Resource(atev1alpha1.GroupVersion.WithResource("sandboxconfigs"))); err != nil {
+		return err
+	}
 	return e.UnlabelNodesSubstrateVersion(ctx)
+}
+
+// releaseSandboxConfigs removes the WorkerPool protection finalizer from
+// every SandboxConfig. Only atecontroller adds and releases it, and
+// atecontroller is gone once the namespace is, so without this step no
+// SandboxConfig could finish deleting and the CRD would hang.
+func releaseSandboxConfigs(ctx context.Context, res dynamic.ResourceInterface) error {
+	list, err := res.List(ctx, metav1.ListOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("while listing SandboxConfigs: %w", err)
+	}
+	for _, item := range list.Items {
+		name := item.GetName()
+		err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+			sc, err := res.Get(ctx, name, metav1.GetOptions{})
+			if err != nil {
+				return err
+			}
+			finalizers := slices.DeleteFunc(sc.GetFinalizers(), func(f string) bool {
+				return f == atev1alpha1.SandboxConfigWorkerPoolProtectionFinalizer
+			})
+			if len(finalizers) == len(sc.GetFinalizers()) {
+				return nil
+			}
+			sc.SetFinalizers(finalizers)
+			_, err = res.Update(ctx, sc, metav1.UpdateOptions{})
+			return err
+		})
+		if err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("while releasing SandboxConfig %s: %w", name, err)
+		}
+	}
+	return nil
 }
 
 // DeleteAtenet removes the atenet dataplane and the bundled credential
@@ -108,14 +155,35 @@ type Deleter interface {
 	Delete(ctx context.Context, e *Env) error
 }
 
-// DeleteAll removes every registered demo and then the control plane.
+// DeleteAll removes every demo, then the microvm SandboxConfig, then the
+// control plane.
 func (e *Env) DeleteAll(ctx context.Context, demos []Deleter) error {
 	log.Step("delete_all")
 
+	if err := e.deleteDemos(ctx, demos); err != nil {
+		return err
+	}
+	return e.DeleteAteSystem(ctx)
+}
+
+// deleteDemos removes every demo, then tries to delete the microvm
+// SandboxConfig. An earlier `delete benchmarks` or `delete demo` may have
+// left it behind because a pool still used it; after the demos, none does.
+// Best effort: the script skips a config still in use, and a failure is
+// only logged, since DeleteAteSystem removes the config with the CRD anyway.
+//
+// The gvisor config needs no such step. It is installed and deleted with the
+// control plane, and DeleteAteSystem strips its finalizer itself. The microvm
+// config is managed separately by hack/install-microvm-deps.sh, whose
+// `kubectl delete` would block while a pool still uses it.
+func (e *Env) deleteDemos(ctx context.Context, demos []Deleter) error {
 	for _, demo := range demos {
 		if err := demo.Delete(ctx, e); err != nil {
 			return err
 		}
 	}
-	return e.DeleteAteSystem(ctx)
+	if err := e.runScript(ctx, installMicrovmDepScript, "--delete"); err != nil {
+		log.Warnf("while deleting the microvm SandboxConfig: %v", err)
+	}
+	return nil
 }

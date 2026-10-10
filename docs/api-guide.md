@@ -12,7 +12,7 @@ The `WorkerPool` defines the pool of physical "warm" compute capacity. It manage
 | :--- | :--- | :--- |
 | `replicas` | `int32` | **Required.** Number of physical standby pods to maintain in the cluster. |
 | `workerImage` | `string` | **Required.** The container image for the `ateom` herder process (e.g. `ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor`). |
-| `sandboxClasses` | `[]WorkerPoolSandboxClass` | **Required.** The sandbox runtime families the pool runs; exactly one entry today. Each entry has `name` (**required**, `gvisor` or `microvm`), which drives the worker pod shape (e.g. KVM device mounts, node placement), and `configRef.name` (optional), which names a cluster-scoped [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) of the same class. `configRef` is not consumed yet: the sandbox binaries still come from the `SandboxConfig` each `ActorTemplate` selects. |
+| `sandboxClasses` | `[]WorkerPoolSandboxClass` | **Required.** The sandbox runtime families the pool runs; exactly one entry today. Each entry has `name` (**required**, `gvisor` or `microvm`), which drives the worker pod shape (e.g. KVM device mounts, node placement), and `configRef.name` (optional), which names a cluster-scoped [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) of the same class. Without `configRef`, the pool uses the class default (see [Class default](#class-default)). The controller records the result in `status.sandboxClasses` and creates or updates the worker Deployment only while every entry resolves. The sandbox binaries an actor boots with still come from the `SandboxConfig` its `ActorTemplate` selects. |
 | `template` | `WorkerPoolPodTemplate` | **Optional.** Metadata, scheduling, and resource settings for worker workloads. |
 
 #### `WorkerPoolPodTemplate` (`spec.template`)
@@ -109,6 +109,8 @@ worker pod on a GPU node and reserves the device, and nothing else reads it.
 | :--- | :--- | :--- |
 | `replicas` | `int32` | Total number of worker pods, mirrored from the managed Deployment. |
 | `selector` | `string` | Label selector for the worker pods. |
+| `sandboxClasses` | `[]WorkerPoolSandboxClassStatus` | The `SandboxConfig` each sandbox class uses: `name` and `configRef.name`. While `spec.sandboxClasses` does not resolve, an entry keeps its last resolved config. |
+| `conditions` | `[]Condition` | `SandboxConfigResolved` is `True` (reason `Resolved`) when every `spec.sandboxClasses` entry resolves. Otherwise it is `False` with reason `SandboxConfigNotFound`, `SandboxConfigDeleting`, `SandboxClassMismatch`, or `DefaultConfigNotFound`, the controller emits a Warning event, and it neither creates nor updates the worker Deployment. |
 
 ---
 
@@ -418,6 +420,20 @@ Each entry of `versions` (`SandboxVersionConfig`):
 | `assets` | `map[arch]map[name]AssetFile` | Content-addressed files atelet fetches, keyed by architecture (`amd64`, `arm64`) then asset name. gVisor expects a `gvisor` asset (the release's `gvisor.tar.zstd`), which atelet auto-extracts. A micro-VM backend expects several. Each `AssetFile` is a `{ url, sha256 }` pair. A `ValidatingAdmissionPolicy` enforces each class's required assets on every version. |
 
 A cluster-wide gVisor `SandboxConfig` (`gvisor-default`) is installed with the platform, so gVisor templates can name it via `sandboxConfig.configName` without any extra setup.
+
+### Class default
+
+A `SandboxConfig` annotated `sandboxconfig.ate.dev/is-class-default: "true"` is a default for its `sandboxClass`. A `WorkerPool` entry without `configRef` uses the newest such config of its class that is not being deleted; configs created in the same second go to the name that sorts first. More than one config of a class may carry the annotation, so a new default can be rolled out by creating it, and pools move to it without restarting their workers.
+
+A pool that already uses a config keeps it while no other default is available, even if that config is being deleted or has lost the annotation. A pool reports `DefaultConfigNotFound` only when no default is available and it is not already using a config of the class that still exists.
+
+### Deletion protection
+
+When a `WorkerPool` resolves a `SandboxConfig`, atecontroller puts the `sandboxconfig.ate.dev/workerpool-protection` finalizer on the config before recording it in the pool's `status.sandboxClasses`, so a config is never in use without it. The finalizer stays until the config is deleted: deleting it marks it for deletion, and atecontroller removes the finalizer only once no `WorkerPool`'s `status.sandboxClasses` names the config, confirming against the API server rather than its cache before it removes it. A config that pools stopped using is gone within a reconcile; one that pools use stays `Terminating` until they move or are deleted. A config no pool has ever used carries no finalizer and deletes at once. A config that is being deleted takes no new pools: a `configRef` to it reports `SandboxConfigDeleting`, and it stops being a class default. A pool already on it keeps resolving to it, a pinned pool until its `configRef` is changed and an unpinned pool until another default exists, so a `Terminating` config only loses users. `WorkerPool`s carry no finalizer and delete without waiting.
+
+A delete cannot be undone, and an object that is being deleted cannot be recreated under the same name: applying its manifest again only updates the terminating object. To recover from deleting a class default that pools still use, create a replacement under a different name with the `is-class-default` annotation. Pools move to it on their own, the finalizer is released, and the old config disappears. Once it is gone, the next `ate-setup` upgrade recreates the shipped config under its original name, and pools move back because it is then the newest default.
+
+atecontroller alone adds and releases the finalizer. While it is down, `kubectl delete sandboxconfig` of a config that carries it hangs until it is back. `ate-setup` strips the finalizer from every config when it deletes the control plane.
 
 ### Example
 

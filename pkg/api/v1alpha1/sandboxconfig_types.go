@@ -54,6 +54,24 @@ type AssetFile struct {
 // class may carry it; the newest one wins.
 const SandboxConfigClassDefaultAnnotation = "sandboxconfig.ate.dev/is-class-default"
 
+// SandboxConfigWorkerPoolProtectionFinalizer is put on a SandboxConfig by
+// atecontroller before any WorkerPool's status records it, and stays until
+// the config is deleted. Deleting a config that carries it goes in three
+// steps:
+//
+//  1. The delete only sets deletionTimestamp, because the finalizer list is
+//     not empty. The config stays, Terminating.
+//  2. atecontroller checks whether any WorkerPool's status.sandboxClasses
+//     names the config. If one does, it leaves the finalizer and checks
+//     again whenever a WorkerPool changes; the config waits. Once none does,
+//     it removes the finalizer.
+//  3. With the finalizer list empty, the API server deletes the config.
+//
+// Without atecontroller, step 2 never happens and the config stays
+// Terminating until someone clears the finalizer by hand. A config no pool
+// has ever used carries no finalizer and deletes at once.
+const SandboxConfigWorkerPoolProtectionFinalizer = "sandboxconfig.ate.dev/workerpool-protection"
+
 // SandboxVersionState is whether a SandboxConfig version may be used.
 //
 // +kubebuilder:validation:Enum=Enabled;Disabled

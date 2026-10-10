@@ -50,6 +50,15 @@ rules:
 - apiGroups:
   - ate.dev
   resources:
+  - sandboxconfigs
+  verbs:
+  - get
+  - list
+  - patch
+  - watch
+- apiGroups:
+  - ate.dev
+  resources:
   - workerpools
   verbs:
   - create
@@ -93,6 +102,13 @@ rules:
   - signers
   verbs:
   - attest
+- apiGroups:
+  - events.k8s.io
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
 - apiGroups:
   - networking.k8s.io
   resources:

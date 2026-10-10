@@ -126,6 +126,25 @@ func TestWorkerPoolValidation(t *testing.T) {
 		wantErr: true,
 		errMsg:  "spec.sandboxClasses[0].configRef.name",
 	}, {
+		name: "configRef name of 253 characters",
+		mutate: func(wp *WorkerPool) {
+			wp.Spec.SandboxClasses = []WorkerPoolSandboxClass{{
+				Name:      SandboxClassGvisor,
+				ConfigRef: &SandboxConfigReference{Name: strings.Repeat("a", 253)},
+			}}
+		},
+		wantErr: false,
+	}, {
+		name: "configRef name of 254 characters",
+		mutate: func(wp *WorkerPool) {
+			wp.Spec.SandboxClasses = []WorkerPoolSandboxClass{{
+				Name:      SandboxClassGvisor,
+				ConfigRef: &SandboxConfigReference{Name: strings.Repeat("a", 254)},
+			}}
+		},
+		wantErr: true,
+		errMsg:  "spec.sandboxClasses[0].configRef.name",
+	}, {
 		name: "valid template",
 		mutate: func(wp *WorkerPool) {
 			wp.Spec.Template = &WorkerPoolPodTemplate{
