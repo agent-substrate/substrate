@@ -303,7 +303,8 @@ For the PostgreSQL connection pool metrics:
   acquisition percentiles; use the histogram count by outcome for attempt rates
   and unsuccessful-acquisition ratios. Cancellation and deadlines are
   `cancelled` and `timeout`, not `error`. Only `error` carries `error.type`,
-  always `_OTHER`, never the error message.
+  `pool_closed` for a closed pool, `connect_error` for connection establishment
+  failures, and `_OTHER` for other failures, never the error message.
 * Query execution, end-to-end store operations, and outbox/background maintenance
   telemetry remain uninstrumented. Fast acquisition does not imply a fast store.
 * `pending_requests` counts acquisitions in progress, including connection
