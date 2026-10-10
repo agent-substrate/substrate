@@ -187,7 +187,7 @@ func TestPauseContainerLogAttribution(t *testing.T) {
 	actorName := string(ateattr.ActorNameKey)
 	containerName := string(ateattr.ActorContainerNameKey)
 	for name, record := range map[string]map[string]any{"json": jsonRecord, "plain": plainRecord} {
-		labels, ok := record[actorlog.LabelsKey(false)].(map[string]any)
+		labels, ok := record["labels"].(map[string]any)
 		if !ok {
 			t.Fatalf("%s record has no labels group: %v", name, record)
 		}

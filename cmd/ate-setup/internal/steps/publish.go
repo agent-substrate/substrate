@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/images"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
 )
 
@@ -55,6 +56,49 @@ func (e *Env) PublishWorkerImages(ctx context.Context, w io.Writer) error {
 	}
 	for _, line := range refs {
 		if _, err := fmt.Fprintln(w, line); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// PublishReleaseImages builds and pushes every image a pre-built install
+// needs, all tagged with the build version, and writes their pushed references
+// to w. That is what `deploy --image-repo KO_DOCKER_REPO --image-tag VERSION`
+// installs: the ko images in images.Components, plus envoy-dataplane, which is
+// built from a Dockerfile.
+func (e *Env) PublishReleaseImages(ctx context.Context, w io.Writer) error {
+	if e.Cfg.KODockerRepo == "" {
+		return fmt.Errorf("publishing release images needs a registry to push to; set KO_DOCKER_REPO or --ko-docker-repo")
+	}
+	tag, _, err := e.SubstrateVersion()
+	if err != nil {
+		return err
+	}
+	log.Stepf("publish_release_images (%s)", tag)
+	runner, err := e.koRunner()
+	if err != nil {
+		return err
+	}
+	pkgs := make([]string, 0, len(images.Components))
+	for _, pkg := range images.Components {
+		pkgs = append(pkgs, "./"+pkg)
+	}
+	refs, err := runner.BuildTagged(ctx, tag, pkgs...)
+	if err != nil {
+		return err
+	}
+	envoy, err := images.PublishDockerfileImage(ctx, e.Cfg.Root, e.Cfg.KODockerRepo, envoyDataplaneImage, tag,
+		e.Cfg.Path(envoyDataplaneDockefile), e.Cfg.KODefaultPlatforms, e.Cfg.DockerBuildFlags)
+	if err != nil {
+		return err
+	}
+	refs = append(refs, envoy)
+	if _, err := fmt.Fprintf(w, "\nRelease images for %s:\n", tag); err != nil {
+		return err
+	}
+	for _, ref := range refs {
+		if _, err := fmt.Fprintln(w, ref); err != nil {
 			return err
 		}
 	}

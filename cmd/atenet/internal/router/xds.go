@@ -918,12 +918,12 @@ func (x *XdsServer) buildMainInternalListener() *listenerv3.Listener {
 // main_internal can read it across the CONNECT internal-listener hop.
 func actorRoutingFilterStateFilter(captureAuthority bool) *hcmv3.HttpFilter {
 	values := make([]*setfilterstatecommonv3.FilterStateValue, 0, 2)
-	routingFields := []struct{ key, header string }{
-		{extproc.TargetActorFilterStateKey, atenet.TargetActorHeader},
+	routingFields := []struct{ key, format string }{
+		{extproc.TargetActorFilterStateKey, "%CEL(request.headers['" + atenet.TargetActorHeader + "'])%"},
 	}
 	if captureAuthority {
-		routingFields = append(routingFields, struct{ key, header string }{
-			extproc.ConnectAuthorityFilterStateKey, extproc.AuthorityHeader,
+		routingFields = append(routingFields, struct{ key, format string }{
+			extproc.ConnectAuthorityFilterStateKey, "%REQ(" + extproc.AuthorityHeader + ")%",
 		})
 	}
 	for _, routingField := range routingFields {
@@ -937,7 +937,7 @@ func actorRoutingFilterStateFilter(captureAuthority bool) *hcmv3.HttpFilter {
 					Format: &corev3.SubstitutionFormatString_TextFormatSource{
 						TextFormatSource: &corev3.DataSource{
 							Specifier: &corev3.DataSource_InlineString{
-								InlineString: "%REQ(" + routingField.header + ")%",
+								InlineString: routingField.format,
 							},
 						},
 					},

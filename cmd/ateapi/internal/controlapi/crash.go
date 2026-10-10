@@ -140,11 +140,10 @@ func crashActor(ctx context.Context, st crashActorStore, actorRef resources.Acto
 			toUpdate.Status.Crash = newActorCrash(opName, message)
 		}
 
-		// InProgressSnapshotUri and InProgressLocalSnapshotName are kept so a
-		// later DeleteActor or RevertActor can delete what they name: each is
-		// the only pointer to it, so clearing them here would leak the objects
-		// for good; failed workflow steps must never promote either of them to an
-		// ExternalSnapshot or to LocalSnapshot.
+		// In-progress snapshot entries in Status.Snapshots are kept so a later
+		// DeleteActor or RevertActor can delete what they name: each is the only
+		// pointer to it, so clearing them here would leak the objects for good;
+		// failed workflow steps must never promote them to COMPLETED.
 		toUpdate.Status.WorkerAssignment = nil
 		return nil
 	})

@@ -132,13 +132,13 @@ type Field struct {
 
 	// Repeated is true for a `repeated` field, not a map - see
 	// MapValueKind for those. For example, true for
-	// `repeated ExternalVolume actor_volumes = 7;` on ActorStatus; false
+	// `repeated ExternalVolume external_volumes = 7;` on ActorStatus; false
 	// for ResourceMetadata.atespace.
 	Repeated bool
 
 	// TypeDisplay is always a ready-to-render string. For example, "string"
 	// for ResourceMetadata.name, "int64" for ResourceMetadata.version,
-	// "repeated ExternalVolume" for ActorStatus.actor_volumes,
+	// "repeated ExternalVolume" for ActorStatus.external_volumes,
 	// "map<string, ArchAssets>" for SandboxAssets.assets, "ActorState" for
 	// ActorStatus.state, or "google.protobuf.Timestamp" for
 	// ResourceMetadata.create_time.

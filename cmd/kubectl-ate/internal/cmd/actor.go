@@ -56,6 +56,7 @@ var (
 	logsActorAtespaceFlag    string
 	logsActorFollowFlag      bool
 	logsActorContainerFlag   string
+	logsActorSourceFlag      string
 )
 
 var getActorsCmd = &cobra.Command{
@@ -305,13 +306,14 @@ func (s *k8sPodLogsStreamer) StreamLogs(ctx context.Context, namespace, podName 
 
 // LogsActorRunner executes the log printing or streaming.
 type LogsActorRunner struct {
-	apiClient         AteAPIClient
-	streamer          PodLogsStreamer
-	actorRef          resources.ActorRef
-	stdout            io.Writer
-	stderr            io.Writer
-	follow            bool
-	container         string
+	apiClient AteAPIClient
+	streamer  PodLogsStreamer
+	actorRef  resources.ActorRef
+	stdout    io.Writer
+	stderr    io.Writer
+	follow    bool
+	// filter selects the lines to display; see newLogLineFilter.
+	filter            logLineFilter
 	pollInterval      time.Duration
 	reconnectInterval time.Duration
 	tickerInterval    time.Duration
@@ -319,6 +321,8 @@ type LogsActorRunner struct {
 
 // Run executes the logs command.
 func (r *LogsActorRunner) Run(ctx context.Context) error {
+	defer r.apiClient.Close()
+
 	if r.pollInterval <= 0 {
 		r.pollInterval = 2 * time.Second
 	}
@@ -329,7 +333,6 @@ func (r *LogsActorRunner) Run(ctx context.Context) error {
 		r.tickerInterval = 2 * time.Second
 	}
 
-	defer r.apiClient.Close()
 	if r.follow {
 		return r.runFollow(ctx)
 	}
@@ -359,13 +362,12 @@ func (r *LogsActorRunner) runOneShot(ctx context.Context) error {
 	}
 	defer stream.Close()
 
-	filter := logLineFilter{target: r.actorRef, container: r.container}
 	scanner := bufio.NewScanner(stream)
 	buf := make([]byte, 0, 64*1024)
 	scanner.Buffer(buf, 1024*1024) // Support up to 1MB lines
 	for scanner.Scan() {
 		line := scanner.Text()
-		filterAndDisplayLogLine(line, filter, r.stdout)
+		filterAndDisplayLogLine(line, r.filter, r.stdout)
 	}
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("error reading log stream: %w", err)
@@ -375,6 +377,8 @@ func (r *LogsActorRunner) runOneShot(ctx context.Context) error {
 
 func (r *LogsActorRunner) runFollow(ctx context.Context) error {
 	var lastWorkerPod string
+	// lastSeenTime is the kubelet's timestamp on the last line read from
+	// lastWorkerPod, the resume cursor for a reconnect to it.
 	var lastSeenTime time.Time
 
 	for {
@@ -409,14 +413,21 @@ func (r *LogsActorRunner) runFollow(ctx context.Context) error {
 			}
 		}
 
-		// actor is resumed on anther worker
-		if podName != lastWorkerPod {
+		// The actor resumed on another worker.
+		switchedPod := podName != lastWorkerPod
+		if switchedPod {
 			fmt.Fprintf(r.stderr, "Actor is currently running on pod %s/%s\n", namespace, podName)
 			lastWorkerPod = podName
 		}
 
+		// The kubelet's own timestamp on every line is the resume cursor. It
+		// is what SinceTime is compared against, and it does not depend on the
+		// line's content: an actor's record keeps a time the actor wrote, which
+		// can run ahead of the node's clock and would make a reconnect skip
+		// lines.
 		opts := &corev1.PodLogOptions{
-			Follow: true,
+			Follow:     true,
+			Timestamps: true,
 		}
 		if !lastSeenTime.IsZero() {
 			opts.SinceTime = &metav1.Time{Time: lastSeenTime}
@@ -437,16 +448,22 @@ func (r *LogsActorRunner) runFollow(ctx context.Context) error {
 		var wg sync.WaitGroup
 		r.startMigrationMonitor(streamCtx, streamCancel, &wg, podName)
 
-		filter := logLineFilter{target: r.actorRef, container: r.container}
 		scanner := bufio.NewScanner(stream)
 		buf := make([]byte, 0, 64*1024)
 		scanner.Buffer(buf, 1024*1024) // Support up to 1MB lines
 		for scanner.Scan() {
-			line := scanner.Text()
-			logTime, _ := filterAndDisplayLogLine(line, filter, r.stdout)
-			if !logTime.IsZero() {
-				lastSeenTime = logTime
+			stamp, line, ok := splitKubeletTimestamp(scanner.Text())
+			if ok {
+				// SinceTime has second precision, so a reconnect to the same pod
+				// re-reads the cursor's second; lines up to the cursor were
+				// already shown. Another pod's lines are all new, and its node's
+				// clock is not this one's, so they are not compared.
+				if !switchedPod && !stamp.After(lastSeenTime) {
+					continue
+				}
+				lastSeenTime = stamp
 			}
+			filterAndDisplayLogLine(line, r.filter, r.stdout)
 		}
 		scanErr := scanner.Err()
 		stream.Close()
@@ -505,8 +522,32 @@ func (r *LogsActorRunner) startMigrationMonitor(
 	}()
 }
 
+// splitKubeletTimestamp splits the timestamp the kubelet prefixes to a log
+// line when PodLogOptions.Timestamps is set (RFC 3339 with nanoseconds, then
+// a space) from the line itself. ok is false for a line without one, which
+// is then returned whole.
+func splitKubeletTimestamp(line string) (stamp time.Time, rest string, ok bool) {
+	stampText, rest, found := strings.Cut(line, " ")
+	if !found {
+		return time.Time{}, line, false
+	}
+	stamp, err := time.Parse(time.RFC3339Nano, stampText)
+	if err != nil {
+		return time.Time{}, line, false
+	}
+	return stamp, rest, true
+}
+
 func runLogsActor(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
+
+	// Before any connection: a bad flag combination is answered as such, not
+	// as an unreachable server.
+	actorRef := resources.ActorRef{Atespace: logsActorAtespaceFlag, Name: args[0]}
+	filter, err := newLogLineFilter(actorRef, logsActorSourceFlag, logsActorContainerFlag)
+	if err != nil {
+		return err
+	}
 
 	apiClient, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
 	if err != nil {
@@ -515,6 +556,7 @@ func runLogsActor(cmd *cobra.Command, args []string) error {
 
 	config, err := ateclient.LoadKubeConfig(kubeconfig, k8sContext)
 	if err != nil {
+		apiClient.Close()
 		return fmt.Errorf("while loading kubeconfig: %w", err)
 	}
 	k8sClient, err := kubernetes.NewForConfig(config)
@@ -526,11 +568,11 @@ func runLogsActor(cmd *cobra.Command, args []string) error {
 	runner := &LogsActorRunner{
 		apiClient:         apiClient,
 		streamer:          &k8sPodLogsStreamer{clientset: k8sClient},
-		actorRef:          resources.ActorRef{Atespace: logsActorAtespaceFlag, Name: args[0]},
+		actorRef:          actorRef,
 		stdout:            os.Stdout,
 		stderr:            os.Stderr,
 		follow:            logsActorFollowFlag,
-		container:         logsActorContainerFlag,
+		filter:            filter,
 		pollInterval:      2 * time.Second,
 		reconnectInterval: 1 * time.Second,
 		tickerInterval:    2 * time.Second,
@@ -539,11 +581,40 @@ func runLogsActor(cmd *cobra.Command, args []string) error {
 	return runner.Run(ctx)
 }
 
+// logSource names a class of lines in an actor's log stream, selected with
+// --source. Container output carries the container's name; the lifecycle
+// events ateom emits around a start, checkpoint, restore, or termination
+// carry none, which is what tells the two apart.
+type logSource string
+
+const (
+	logSourceAll        logSource = "all"
+	logSourceContainers logSource = "containers"
+	logSourceLifecycle  logSource = "lifecycle"
+)
+
 // logLineFilter selects which of an actor's log lines are displayed: all of
-// them by default, or only the named container's when container is set.
+// them by default, one class of them when source is set, or only the named
+// container's when container is set.
 type logLineFilter struct {
 	target    resources.ActorRef
+	source    logSource
 	container string
+}
+
+// newLogLineFilter builds the filter for target from the --source and
+// --container flag values, rejecting combinations that could never match.
+func newLogLineFilter(target resources.ActorRef, source, container string) (logLineFilter, error) {
+	switch logSource(source) {
+	case logSourceAll, logSourceContainers:
+	case logSourceLifecycle:
+		if container != "" {
+			return logLineFilter{}, fmt.Errorf("--container cannot be combined with --source=lifecycle: lifecycle events are not emitted by a container")
+		}
+	default:
+		return logLineFilter{}, fmt.Errorf("invalid --source %q: must be one of %s, %s, %s", source, logSourceAll, logSourceContainers, logSourceLifecycle)
+	}
+	return logLineFilter{target: target, source: logSource(source), container: container}, nil
 }
 
 // matches reports whether a line emitted by emitter from containerName (empty
@@ -554,27 +625,42 @@ func (f logLineFilter) matches(emitter resources.ActorRef, containerName string)
 	if emitter != f.target || f.target.Atespace == "" || f.target.Name == "" {
 		return false
 	}
+	switch f.source {
+	case logSourceLifecycle:
+		// f.container is empty here: newLogLineFilter rejects it with lifecycle.
+		return containerName == ""
+	case logSourceContainers:
+		if containerName == "" {
+			return false
+		}
+	}
 	if f.container == "" {
 		return containerName != ocispec.PauseContainer
 	}
 	return containerName == f.container
 }
 
-func filterAndDisplayLogLine(line string, filter logLineFilter, w io.Writer) (time.Time, bool) {
+// containerNameKeyQuoted is the container-name label key as it appears in a
+// JSON line. Every container line carries it (ateattr.ActorLogLabels) and
+// no lifecycle line does; an actor cannot forge it, since actorlog strips
+// the reserved keys from an actor's own labels, and the text inside a value
+// only ever makes a container line skip early.
+var containerNameKeyQuoted = `"` + string(ateattr.ActorContainerNameKey) + `"`
+
+// filterAndDisplayLogLine writes line to w if filter selects it, and
+// reports whether it did.
+func filterAndDisplayLogLine(line string, filter logLineFilter, w io.Writer) bool {
+	// Under lifecycle, nearly every line is a container's; a busy actor
+	// writes many, so skip them before decoding.
+	if filter.source == logSourceLifecycle && strings.Contains(line, containerNameKeyQuoted) {
+		return false
+	}
+
 	var m map[string]any
 	dec := json.NewDecoder(strings.NewReader(line))
 	dec.UseNumber()
 	if err := dec.Decode(&m); err != nil {
-		return time.Time{}, false
-	}
-
-	var logTime time.Time
-	if tVal, ok := m["time"].(string); ok {
-		if t, err := time.Parse(time.RFC3339Nano, tVal); err == nil {
-			logTime = t
-		} else if t, err := time.Parse(time.RFC3339, tVal); err == nil {
-			logTime = t
-		}
+		return false
 	}
 
 	var emitter resources.ActorRef
@@ -593,7 +679,7 @@ func filterAndDisplayLogLine(line string, filter logLineFilter, w io.Writer) (ti
 	}
 
 	if !filter.matches(emitter, emitterContainer) {
-		return time.Time{}, false
+		return false
 	}
 
 	// Remove substrate's labels from CLI output. Stripping the whole reserved
@@ -623,7 +709,7 @@ func filterAndDisplayLogLine(line string, filter logLineFilter, w io.Writer) (ti
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
 	if err := enc.Encode(m); err != nil {
-		return time.Time{}, false
+		return false
 	}
 
 	encodedStr := strings.TrimSpace(buf.String())
@@ -640,7 +726,7 @@ func filterAndDisplayLogLine(line string, filter logLineFilter, w io.Writer) (ti
 		fmt.Fprintln(w, encodedStr)
 	}
 
-	return logTime, true
+	return true
 }
 
 func init() {
@@ -676,5 +762,6 @@ func init() {
 	logsActorsCmd.Flags().StringVarP(&logsActorAtespaceFlag, "atespace", "a", "", "Atespace the actor lives in")
 	_ = logsActorsCmd.MarkFlagRequired("atespace")
 	logsActorsCmd.Flags().StringVarP(&logsActorContainerFlag, "container", "c", "", "Show only logs from this container; use _pause for runsc diagnostics.")
+	logsActorsCmd.Flags().StringVar(&logsActorSourceFlag, "source", string(logSourceAll), "Which lines to show: all, containers (container output, no lifecycle events), or lifecycle (only the actor's lifecycle events).")
 	logsCmd.AddCommand(logsActorsCmd)
 }

@@ -68,7 +68,7 @@ func (w *ActorWorkflow) PauseActor(ctx context.Context, actorRef resources.Actor
 		return actor, nil
 	}
 	var marked *ateapipb.Actor
-	if marked, err = w.ensureMarkedPausing(leaseCtx, actorRef, actor); err != nil {
+	if marked, err = w.ensureMarkedPausing(leaseCtx, actorRef, actor, actorTemplate); err != nil {
 		return nil, err
 	}
 	actor = marked
@@ -85,7 +85,7 @@ func (w *ActorWorkflow) PauseActor(ctx context.Context, actorRef resources.Actor
 	// them here, as crash.go does for the crash counter.
 	finalAttrs = lifecycleOpAttrs(actor, actorTemplate, "", wireFidelity)
 	var finalized *ateapipb.Actor
-	if finalized, err = w.ensurePausedFinalized(leaseCtx, actorRef, actorTemplate); err != nil {
+	if finalized, err = w.ensurePausedFinalized(leaseCtx, actorRef); err != nil {
 		return nil, err
 	}
 	actor = finalized
@@ -112,7 +112,7 @@ func (w *ActorWorkflow) loadActorForPause(ctx context.Context, actorRef resource
 // local snapshot name. Skips when a previous attempt already marked the
 // actor; the persisted name then stays authoritative for the rest of the
 // workflow.
-func (w *ActorWorkflow) ensureMarkedPausing(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor) (_ *ateapipb.Actor, err error) {
+func (w *ActorWorkflow) ensureMarkedPausing(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (_ *ateapipb.Actor, err error) {
 	ctx, done := stepSpan(ctx, "MarkPausing")
 	defer func() { err = done(err) }()
 
@@ -133,7 +133,17 @@ func (w *ActorWorkflow) ensureMarkedPausing(ctx context.Context, actorRef resour
 	snapshotName := resources.NewSnapshotName()
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_PAUSING
-		toUpdate.Status.InProgressLocalSnapshotName = snapshotName
+		// Increment last_assigned_generation for the new Pause request.
+		gen := toUpdate.Status.LastAssignedGeneration + 1
+		toUpdate.Status.LastAssignedGeneration = gen
+		toUpdate.Status.Snapshots = append(toUpdate.Status.Snapshots,
+			newLocalSnapshot(
+				gen,
+				actorTemplate.GetSnapshotConfig().GetPreferredFidelity(),
+				actorTemplate.GetMetadata().GetUid(),
+				snapshotName,
+				ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS,
+			))
 		return nil
 	})
 	if err != nil {
@@ -179,8 +189,9 @@ func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resourc
 	// Checkpoint does not carry the sandbox config: atelet uses the version the
 	// actor is currently running (recorded on-node at Run/Restore) and pins it
 	// into the snapshot manifest.
+	_, inProgressLocal := findLatestSnapshotStorage(actor.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_LOCAL, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS)
 	req := &ateletpb.CheckpointRequest{
-		TargetAteomUid:        assignment.GetWorkerPodUid(),
+		WorkerPodUid:          assignment.GetWorkerPodUid(),
 		Atespace:              actor.GetMetadata().GetAtespace(),
 		ActorName:             actor.GetMetadata().GetName(),
 		ActorTemplateAtespace: actor.GetActorTemplate().GetAtespace(),
@@ -189,7 +200,7 @@ func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resourc
 		Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
 		Config: &ateletpb.CheckpointRequest_LocalConfig{
 			LocalConfig: &ateletpb.LocalCheckpointConfiguration{
-				SnapshotName: actor.GetStatus().GetInProgressLocalSnapshotName(),
+				SnapshotName: inProgressLocal.GetLocal().GetSnapshotName(),
 			},
 		},
 		Fidelity: fidelityToAtelet(actorTemplate.GetSnapshotConfig().GetPreferredFidelity()),
@@ -210,7 +221,7 @@ func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resourc
 // never be resumed. It re-reads the actor first so an out-of-band transition
 // (e.g. the syncer crashing the actor after its worker died) is not
 // overwritten: with no assignment left there is nothing to finalize.
-func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef resources.ActorRef, actorTemplate *ateapipb.ActorTemplate) (_ *ateapipb.Actor, err error) {
+func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef resources.ActorRef) (_ *ateapipb.Actor, err error) {
 	ctx, done := stepSpan(ctx, "FinalizePaused")
 	defer func() { err = done(err) }()
 
@@ -257,7 +268,6 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 			newState = ateapipb.ActorState_ACTOR_STATE_CRASHED
 			crashStatus = newActorCrash(ateattr.OperationPause, crashMessageLocalSnapshotNodeUnknown)
 		}
-		fidelity := actorTemplate.GetSnapshotConfig().GetPreferredFidelity()
 		sandboxClass := ""
 		if worker != nil {
 			sandboxClass = worker.GetSandboxClass()
@@ -271,14 +281,16 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 			if newState == ateapipb.ActorState_ACTOR_STATE_CRASHED && !wasAlreadyCrashed {
 				toUpdate.Status.Crash = crashStatus
 			}
-			// TODO(dberkov) - what if InProgressLocalSnapshotName is empty? That shouldn't be possible.
-			if toUpdate.GetStatus().GetInProgressLocalSnapshotName() != "" {
-				localSnapshot := &ateapipb.LocalSnapshot{
-					SnapshotName: toUpdate.GetStatus().GetInProgressLocalSnapshotName(),
-					Fidelity:     fidelity,
+			if newState != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+				// Finalize the snapshot and move it from IN_PROGRESS to COMPLETED.
+				snap := snapshotAtLatestGeneration(toUpdate.Status)
+				if snap == nil {
+					return fmt.Errorf("actor %s has no latest snapshot", actorRef)
 				}
-				toUpdate.Status.LocalSnapshot = localSnapshot
-				toUpdate.Status.InProgressLocalSnapshotName = ""
+				if inProgressSt := findSnapshotStorage(snap, ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_LOCAL); inProgressSt.GetLocal().GetSnapshotName() != "" {
+					inProgressSt.Status = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
+					removeOlderSnapshotStorageEntries(toUpdate.Status, ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_LOCAL, nil, snap.GetGeneration())
+				}
 			}
 			toUpdate.Status.WorkerAssignment = nil
 			return nil
