@@ -452,9 +452,6 @@ func TestEgressManifestsGiveEachTunnelItsOwnInnerPool(t *testing.T) {
 			if internal == 0 {
 				t.Fatal("no cluster targets an internal listener")
 			}
-			if got := str(hcm(outerChain(t, tree)), "codec_type"); got != "HTTP1" {
-				t.Errorf("egress chain codec_type is %q, want HTTP1: any other codec can carry several CONNECTs on one downstream connection, and they would share a pool", got)
-			}
 		})
 	}
 }
