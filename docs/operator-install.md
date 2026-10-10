@@ -317,6 +317,7 @@ demos, the [benchmarks](../benchmarking/README.md#settings), and the
 | `preview`                                    | `ATE_PREVIEW`                                   | `--preview`                                        | —                     | (global)                                 |
 | `record.dir`                                 | `ATE_RECORD_DIR`                                | `--record-dir`                                     | —                     | (global)                                 |
 | `rolloutTimeout`                             | `ATE_INSTALL_ROLLOUT_TIMEOUT`                   | `--rollout-timeout`                                | `1m0s`                | (global)                                 |
+| `skipMicroVMDeps`                            | `ATE_INSTALL_SKIP_MICROVM_DEPS`                 | `--skip-microvm-deps`                              | `false`               | `deploy ate-system`, `deploy sandboxconfig` |
 | `storage.bucketName`                         | `BUCKET_NAME`                                   | `--storage-bucket-name`                            | —                     | (global)                                 |
 | `storage.snapshotLocation`                   | `SNAPSHOT_LOCATION`                             | `--snapshot-location`                              | —                     | (global)                                 |
 | `storage.transferGSAName`                    | `SNAPSHOT_TRANSFER_GSA_NAME`                    | `--snapshot-transfer-gsa-name`                     | —                     | (global)                                 |
@@ -352,7 +353,7 @@ does not create the bucket or grant access to it: run
 [tools/setup-gcp](../tools/setup-gcp/README.md)).
 
 setup-gcp also creates an asset bucket, `<BUCKET_NAME>-assets`, where
-`hack/install-microvm-deps.sh` stages microVM sandbox assets, and gives atelet
+`ate-setup` stages microVM sandbox assets, and gives atelet
 read access to it. atelet gets no access to the snapshot bucket: every snapshot
 transfer runs on a token scoped to its actor, issued by ate-api-server's
 credential exchange. A GCP project set up before the asset bucket existed

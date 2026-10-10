@@ -25,13 +25,6 @@ kubectl config use-context kind-kind
 ATE_CREDENTIAL_PROVIDER='{"name":"k8s.io"}' ./hack/install-ate-kind.sh --deploy-ate-system
 ```
 
-For microVM, install its assets before deploying the fixture:
-
-```bash
-NO_DEV_ENV=true ATE_INSTALL_KIND=true KUBECTL_CONTEXT=kind-kind \
-  ./hack/install-microvm-deps.sh --install
-```
-
 Deploy both egress ActorTemplates and add local-origin trust to the current
 gateway:
 
