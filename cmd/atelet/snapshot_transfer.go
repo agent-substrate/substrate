@@ -23,11 +23,30 @@ import (
 	"github.com/agent-substrate/substrate/internal/objectstoreplugin"
 	objectstorev1 "github.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // External snapshots move between the node and storage only through the
 // snapshot plugin. These helpers adapt the plugin's file-oriented API to the
 // manifest bytes atelet works with.
+
+// pluginCallError replaces a snapshot plugin's error with one that keeps its
+// gRPC code and drops its message. The message may quote a signed URL or other
+// credential, and atelet's errors reach ate-api-server, its RPC log and the
+// actor's crash message, so only the code and the redacted snapshot URI are
+// reported. Callers read the code: NotFound means no such snapshot, and
+// Unavailable is retried.
+func pluginCallError(op, snapshotURI string, err error) error {
+	if err == nil {
+		return nil
+	}
+	code := status.Code(err)
+	if code == codes.Unknown {
+		code = status.FromContextError(err).Code() // a context error that is not a status
+	}
+	return status.Errorf(code, "snapshot plugin %s of %s failed (%s)", op, redactURLString(snapshotURI), code)
+}
 
 // fetchSnapshotFiles downloads the named snapshot files into dstDir.
 func (s *AteomHerder) fetchSnapshotFiles(ctx context.Context, snapshotURI, dstDir string, files []string) error {
@@ -39,13 +58,14 @@ func (s *AteomHerder) fetchSnapshotFiles(ctx context.Context, snapshotURI, dstDi
 		WritePath:   dstDir,
 		Files:       files,
 	})
-	return objectstoreplugin.CallError(err)
+	return objectstoreplugin.CallError(pluginCallError("fetch", snapshotURI, err))
 }
 
 // uploadSnapshotFiles uploads the named files in srcDir to the snapshot,
-// passing opts to the plugin call. It returns the plugin's error as is: an
-// upload that can be retried reports it through objectstoreplugin.CallError,
-// one that cannot does not.
+// passing opts to the plugin call. It returns the plugin's code without its
+// message, and leaves the Unavailable mapping to the caller: an upload that can
+// be retried reports it through objectstoreplugin.CallError, one that cannot
+// does not.
 func (s *AteomHerder) uploadSnapshotFiles(ctx context.Context, snapshotURI, srcDir string, files []string, opts ...grpc.CallOption) error {
 	if len(files) == 0 {
 		return nil
@@ -55,7 +75,7 @@ func (s *AteomHerder) uploadSnapshotFiles(ctx context.Context, snapshotURI, srcD
 		LocalPath:   srcDir,
 		Files:       files,
 	}, opts...)
-	return err
+	return pluginCallError("upload", snapshotURI, err)
 }
 
 // fetchManifest returns a snapshot's manifest. The returned error is the

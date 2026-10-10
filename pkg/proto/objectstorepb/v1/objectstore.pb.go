@@ -433,6 +433,123 @@ func (*CopySnapshotResponse) Descriptor() ([]byte, []int) {
 	return file_objectstore_proto_rawDescGZIP(), []int{7}
 }
 
+// FetchAssetRequest asks the plugin to fetch one content-addressed asset.
+type FetchAssetRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The object to read, e.g. gs://<bucket>/kata-assets/vmlinux. Which schemes
+	// a plugin serves is up to the plugin. At most 2048 bytes, the SandboxConfig
+	// URL's limit. Masked in logged requests, like the SandboxConfig URL it
+	// comes from.
+	AssetUri string `protobuf:"bytes,1,opt,name=asset_uri,json=assetUri,proto3" json:"asset_uri,omitempty"`
+	// The expected SHA-256 of the object's content, as 64 lower-case hex
+	// characters.
+	Sha256 string `protobuf:"bytes,2,opt,name=sha256,proto3" json:"sha256,omitempty"`
+	// Full local path of an existing regular file the asset is written to. The
+	// plugin replaces the file, keeping its mode, only once the content has been
+	// verified, never creates it, and leaves it unchanged on any error. The
+	// caller opens it after the call: a descriptor opened before still reads
+	// the old content.
+	WritePath string `protobuf:"bytes,3,opt,name=write_path,json=writePath,proto3" json:"write_path,omitempty"`
+	// The largest object, in bytes, the caller accepts. Must be positive.
+	MaxBytes      int64 `protobuf:"varint,4,opt,name=max_bytes,json=maxBytes,proto3" json:"max_bytes,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FetchAssetRequest) Reset() {
+	*x = FetchAssetRequest{}
+	mi := &file_objectstore_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FetchAssetRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FetchAssetRequest) ProtoMessage() {}
+
+func (x *FetchAssetRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_objectstore_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FetchAssetRequest.ProtoReflect.Descriptor instead.
+func (*FetchAssetRequest) Descriptor() ([]byte, []int) {
+	return file_objectstore_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *FetchAssetRequest) GetAssetUri() string {
+	if x != nil {
+		return x.AssetUri
+	}
+	return ""
+}
+
+func (x *FetchAssetRequest) GetSha256() string {
+	if x != nil {
+		return x.Sha256
+	}
+	return ""
+}
+
+func (x *FetchAssetRequest) GetWritePath() string {
+	if x != nil {
+		return x.WritePath
+	}
+	return ""
+}
+
+func (x *FetchAssetRequest) GetMaxBytes() int64 {
+	if x != nil {
+		return x.MaxBytes
+	}
+	return 0
+}
+
+type FetchAssetResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FetchAssetResponse) Reset() {
+	*x = FetchAssetResponse{}
+	mi := &file_objectstore_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FetchAssetResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FetchAssetResponse) ProtoMessage() {}
+
+func (x *FetchAssetResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_objectstore_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FetchAssetResponse.ProtoReflect.Descriptor instead.
+func (*FetchAssetResponse) Descriptor() ([]byte, []int) {
+	return file_objectstore_proto_rawDescGZIP(), []int{9}
+}
+
 var File_objectstore_proto protoreflect.FileDescriptor
 
 const file_objectstore_proto_rawDesc = "" +
@@ -458,13 +575,23 @@ const file_objectstore_proto_rawDesc = "" +
 	"\x13CopySnapshotRequest\x12\x17\n" +
 	"\asrc_uri\x18\x01 \x01(\tR\x06srcUri\x12\x17\n" +
 	"\adst_uri\x18\x02 \x01(\tR\x06dstUri\"\x16\n" +
-	"\x14CopySnapshotResponse2\xd1\x01\n" +
+	"\x14CopySnapshotResponse\"\x89\x01\n" +
+	"\x11FetchAssetRequest\x12 \n" +
+	"\tasset_uri\x18\x01 \x01(\tB\x03\x80\x01\x01R\bassetUri\x12\x16\n" +
+	"\x06sha256\x18\x02 \x01(\tR\x06sha256\x12\x1d\n" +
+	"\n" +
+	"write_path\x18\x03 \x01(\tR\twritePath\x12\x1b\n" +
+	"\tmax_bytes\x18\x04 \x01(\x03R\bmaxBytes\"\x14\n" +
+	"\x12FetchAssetResponse2\xd1\x01\n" +
 	"\fNodeProvider\x12^\n" +
 	"\rFetchSnapshot\x12$.objectstore.v1.FetchSnapshotRequest\x1a%.objectstore.v1.FetchSnapshotResponse\"\x00\x12a\n" +
 	"\x0eUploadSnapshot\x12%.objectstore.v1.UploadSnapshotRequest\x1a&.objectstore.v1.UploadSnapshotResponse\"\x002\xd4\x01\n" +
 	"\x0fControlProvider\x12d\n" +
 	"\x0fCleanupSnapshot\x12&.objectstore.v1.CleanupSnapshotRequest\x1a'.objectstore.v1.CleanupSnapshotResponse\"\x00\x12[\n" +
-	"\fCopySnapshot\x12#.objectstore.v1.CopySnapshotRequest\x1a$.objectstore.v1.CopySnapshotResponse\"\x00BOZMgithub.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1;objectstorev1b\x06proto3"
+	"\fCopySnapshot\x12#.objectstore.v1.CopySnapshotRequest\x1a$.objectstore.v1.CopySnapshotResponse\"\x002f\n" +
+	"\rAssetProvider\x12U\n" +
+	"\n" +
+	"FetchAsset\x12!.objectstore.v1.FetchAssetRequest\x1a\".objectstore.v1.FetchAssetResponse\"\x00BOZMgithub.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1;objectstorev1b\x06proto3"
 
 var (
 	file_objectstore_proto_rawDescOnce sync.Once
@@ -478,7 +605,7 @@ func file_objectstore_proto_rawDescGZIP() []byte {
 	return file_objectstore_proto_rawDescData
 }
 
-var file_objectstore_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_objectstore_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_objectstore_proto_goTypes = []any{
 	(*FetchSnapshotRequest)(nil),    // 0: objectstore.v1.FetchSnapshotRequest
 	(*FetchSnapshotResponse)(nil),   // 1: objectstore.v1.FetchSnapshotResponse
@@ -488,18 +615,22 @@ var file_objectstore_proto_goTypes = []any{
 	(*CleanupSnapshotResponse)(nil), // 5: objectstore.v1.CleanupSnapshotResponse
 	(*CopySnapshotRequest)(nil),     // 6: objectstore.v1.CopySnapshotRequest
 	(*CopySnapshotResponse)(nil),    // 7: objectstore.v1.CopySnapshotResponse
+	(*FetchAssetRequest)(nil),       // 8: objectstore.v1.FetchAssetRequest
+	(*FetchAssetResponse)(nil),      // 9: objectstore.v1.FetchAssetResponse
 }
 var file_objectstore_proto_depIdxs = []int32{
 	0, // 0: objectstore.v1.NodeProvider.FetchSnapshot:input_type -> objectstore.v1.FetchSnapshotRequest
 	2, // 1: objectstore.v1.NodeProvider.UploadSnapshot:input_type -> objectstore.v1.UploadSnapshotRequest
 	4, // 2: objectstore.v1.ControlProvider.CleanupSnapshot:input_type -> objectstore.v1.CleanupSnapshotRequest
 	6, // 3: objectstore.v1.ControlProvider.CopySnapshot:input_type -> objectstore.v1.CopySnapshotRequest
-	1, // 4: objectstore.v1.NodeProvider.FetchSnapshot:output_type -> objectstore.v1.FetchSnapshotResponse
-	3, // 5: objectstore.v1.NodeProvider.UploadSnapshot:output_type -> objectstore.v1.UploadSnapshotResponse
-	5, // 6: objectstore.v1.ControlProvider.CleanupSnapshot:output_type -> objectstore.v1.CleanupSnapshotResponse
-	7, // 7: objectstore.v1.ControlProvider.CopySnapshot:output_type -> objectstore.v1.CopySnapshotResponse
-	4, // [4:8] is the sub-list for method output_type
-	0, // [0:4] is the sub-list for method input_type
+	8, // 4: objectstore.v1.AssetProvider.FetchAsset:input_type -> objectstore.v1.FetchAssetRequest
+	1, // 5: objectstore.v1.NodeProvider.FetchSnapshot:output_type -> objectstore.v1.FetchSnapshotResponse
+	3, // 6: objectstore.v1.NodeProvider.UploadSnapshot:output_type -> objectstore.v1.UploadSnapshotResponse
+	5, // 7: objectstore.v1.ControlProvider.CleanupSnapshot:output_type -> objectstore.v1.CleanupSnapshotResponse
+	7, // 8: objectstore.v1.ControlProvider.CopySnapshot:output_type -> objectstore.v1.CopySnapshotResponse
+	9, // 9: objectstore.v1.AssetProvider.FetchAsset:output_type -> objectstore.v1.FetchAssetResponse
+	5, // [5:10] is the sub-list for method output_type
+	0, // [0:5] is the sub-list for method input_type
 	0, // [0:0] is the sub-list for extension type_name
 	0, // [0:0] is the sub-list for extension extendee
 	0, // [0:0] is the sub-list for field type_name
@@ -516,9 +647,9 @@ func file_objectstore_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_objectstore_proto_rawDesc), len(file_objectstore_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   8,
+			NumMessages:   10,
 			NumExtensions: 0,
-			NumServices:   2,
+			NumServices:   3,
 		},
 		GoTypes:           file_objectstore_proto_goTypes,
 		DependencyIndexes: file_objectstore_proto_depIdxs,

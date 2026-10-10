@@ -114,7 +114,7 @@ var (
 	drainDelay   = pflag.Duration("drain-delay", 0, "How long to keep accepting new RPCs after SIGTERM before starting the gRPC drain.")
 	drainTimeout = pflag.Duration("drain-timeout", 5*time.Minute, "Deadline for the graceful gRPC drain on shutdown. In-flight RPCs still running past it are forcefully cancelled.")
 
-	snapshotPluginSocket = pflag.String("snapshot-plugin-socket", "/run/snapshot-plugin/node.sock", "Unix socket of the node snapshot plugin that external snapshots are fetched and uploaded through.")
+	snapshotPluginSocket = pflag.String("snapshot-plugin-socket", "/run/snapshot-plugin/node.sock", "Unix socket of the node object-store plugin that external snapshots are fetched and uploaded through, and sandbox assets other than public gs:// objects are fetched through.")
 )
 
 var _ imagecache.CandidateKeychain = (*credentialprovider.Keychain)(nil)
@@ -131,6 +131,9 @@ func main() {
 		serverboot.Fatal(ctx, "Invalid --log-level", err)
 	}
 	slog.InfoContext(ctx, "atelet starting", slog.String("version", version.Version))
+	if err := rejectStorageEnv(); err != nil {
+		serverboot.Fatal(ctx, "Invalid environment", err)
+	}
 
 	// Kept separate from ctx so in-flight work (e.g. a Checkpoint/Restore
 	// streaming a multi-GiB snapshot) is not cancelled the moment SIGTERM
@@ -228,14 +231,11 @@ func main() {
 		go newImageCacheGC(imageCache, *imageCacheDir).Run(ctx)
 	}
 
+	// Public sandbox assets (gs://gvisor) are read anonymously; every other
+	// asset goes through the object-store plugin.
 	wrappedAnonGCS, err := objectstorage.NewGCSClient(ctx, option.WithoutAuthentication())
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to create anonymous GCS client", err)
-	}
-
-	wrappedGCS, err := objectstorage.NewFromEnv(ctx)
-	if err != nil {
-		serverboot.Fatal(ctx, "Failed to set up the object storage backend", err)
 	}
 
 	volPlugins := make(map[string]volume.VolumePluginWorkerPlane)
@@ -301,8 +301,9 @@ func main() {
 		ctx,
 		ateomDialer,
 		wrappedAnonGCS,
-		wrappedGCS,
 		objectstorev1.NewNodeProviderClient(snapshotPluginConn),
+		objectstorev1.NewAssetProviderClient(snapshotPluginConn),
+		*snapshotPluginSocket,
 		imageCache,
 		instruments,
 		volPlugins,
@@ -388,11 +389,7 @@ func main() {
 		}
 	}()
 
-	svr := grpc.NewServer(
-		grpc.Creds(credentials.NewTLS(tlsCfg)),
-		grpc.StatsHandler(otelgrpc.NewServerHandler()),
-		grpc.UnaryInterceptor(ateinterceptors.InternalServerUnaryInterceptor),
-	)
+	svr := grpc.NewServer(ateomHerderServerOptions(credentials.NewTLS(tlsCfg))...)
 	ateletpb.RegisterAteomHerderServer(svr, wmService)
 	reflection.Register(svr)
 	slog.InfoContext(ctx, "WorkersManagerService listening", slog.Any("address", lis.Addr()))
@@ -403,6 +400,28 @@ func main() {
 	}
 	<-drainDone
 	slog.InfoContext(ctx, "Shutdown complete")
+}
+
+// ateomHerderServerOptions are the options of the gRPC server that serves
+// AteomHerder to ate-api-server. Its interceptor logs every request; fields
+// marked debug_redact (env values, asset URLs) are masked in that log.
+func ateomHerderServerOptions(creds credentials.TransportCredentials) []grpc.ServerOption {
+	return []grpc.ServerOption{
+		grpc.Creds(creds),
+		grpc.StatsHandler(otelgrpc.NewServerHandler()),
+		grpc.UnaryInterceptor(ateinterceptors.InternalServerUnaryInterceptor),
+	}
+}
+
+// rejectStorageEnv fails if ATE_STORAGE_BACKEND is set on atelet, which no
+// longer reads it: object storage settings belong on the snapshot-plugin
+// sidecar. Only this variable is a signal: EKS pod identity sets AWS_* in
+// every container.
+func rejectStorageEnv() error {
+	if v, ok := os.LookupEnv("ATE_STORAGE_BACKEND"); ok {
+		return fmt.Errorf("ATE_STORAGE_BACKEND=%q is set on atelet, which no longer reads it; set the storage backend on its snapshot-plugin sidecar", v)
+	}
+	return nil
 }
 
 // drainOnShutdown drives graceful shutdown when ctx is cancelled (SIGTERM or
@@ -451,14 +470,16 @@ func (g *directCSIDriverConfigGetter) Get(name string) (*atev1alpha1.CSIDriverCo
 type AteomHerder struct {
 	ateletpb.UnimplementedAteomHerderServer
 
-	ateomDialer   *AteomDialer
-	imageCache    *imagecache.Store
+	ateomDialer *AteomDialer
+	imageCache  *imagecache.Store
+	// anonGCSClient reads public gs:// sandbox assets without credentials.
 	anonGCSClient objectstorage.ObjectStorage
-	// gcsClient downloads sandbox assets. Snapshot files never use it: they move
-	// through snapshotPlugin.
-	gcsClient objectstorage.ObjectStorage
 	// snapshotPlugin moves external snapshot files between the node and storage.
 	snapshotPlugin objectstorev1.NodeProviderClient
+	// assetPlugin fetches every sandbox asset anonGCSClient does not serve.
+	assetPlugin objectstorev1.AssetProviderClient
+	// pluginSocket is the object-store plugin's socket, for error messages.
+	pluginSocket string
 	// snapshotScratchDir holds short-lived manifest directories; it must be
 	// inside the node plugin's root.
 	snapshotScratchDir    string
@@ -476,8 +497,9 @@ func NewService(
 	ctx context.Context,
 	ateomDialer *AteomDialer,
 	anonGCSClient objectstorage.ObjectStorage,
-	gcsClient objectstorage.ObjectStorage,
 	snapshotPlugin objectstorev1.NodeProviderClient,
+	assetPlugin objectstorev1.AssetProviderClient,
+	pluginSocket string,
 	imageCache *imagecache.Store,
 	instruments *Instruments,
 	volumePlugins map[string]volume.VolumePluginWorkerPlane,
@@ -488,8 +510,9 @@ func NewService(
 		ateomDialer:           ateomDialer,
 		imageCache:            imageCache,
 		anonGCSClient:         anonGCSClient,
-		gcsClient:             gcsClient,
 		snapshotPlugin:        snapshotPlugin,
+		assetPlugin:           assetPlugin,
+		pluginSocket:          pluginSocket,
 		snapshotScratchDir:    ateletpath.SnapshotScratchDir,
 		instruments:           instruments,
 		volumePlugins:         volumePlugins,

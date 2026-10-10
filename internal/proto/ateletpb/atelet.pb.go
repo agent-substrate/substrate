@@ -1236,7 +1236,10 @@ func (x *EgressGateway) GetAddress() string {
 // (e.g. the gVisor release tarball).
 type AssetFile struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// gs:// URL to download the asset from.
+	// URL to download the asset from. atelet reads a gs:// URL anonymously
+	// first and fetches every other URL through the node's object-store plugin.
+	// Masked in logged requests, since a signed URL carries its credential in
+	// the query.
 	Url string `protobuf:"bytes,1,opt,name=url,proto3" json:"url,omitempty"`
 	// Lower-case hex SHA256; names the cached file and verifies its integrity.
 	Sha256        string `protobuf:"bytes,2,opt,name=sha256,proto3" json:"sha256,omitempty"`
@@ -3313,9 +3316,9 @@ const file_atelet_proto_rawDesc = "" +
 	"\fmemory_bytes\x18\v \x01(\x03R\vmemoryBytesB\x11\n" +
 	"\x0f_egress_gateway\")\n" +
 	"\rEgressGateway\x12\x18\n" +
-	"\aaddress\x18\x01 \x01(\tR\aaddress\"5\n" +
-	"\tAssetFile\x12\x10\n" +
-	"\x03url\x18\x01 \x01(\tR\x03url\x12\x16\n" +
+	"\aaddress\x18\x01 \x01(\tR\aaddress\":\n" +
+	"\tAssetFile\x12\x15\n" +
+	"\x03url\x18\x01 \x01(\tB\x03\x80\x01\x01R\x03url\x12\x16\n" +
 	"\x06sha256\x18\x02 \x01(\tR\x06sha256\"\x8e\x01\n" +
 	"\n" +
 	"ArchAssets\x123\n" +

@@ -222,6 +222,87 @@ func TestSnapshotPluginErrorCodeThroughAtelet(t *testing.T) {
 	}
 }
 
+// A snapshot plugin's status text can quote a signed URL or other credential.
+// Neither it nor the snapshot URI's query reaches atelet's RPC log or the
+// error ate-api-server receives: only the plugin's code and the snapshot URI
+// as scheme://host/path do, and callers still read the code.
+func TestSnapshotPluginErrorKeepsCredentialsOut(t *testing.T) {
+	const (
+		secret    = "SECRET-SIG"
+		signedURI = "s3://bucket/snapshots/a?sig=" + secret
+		shownURI  = "s3://bucket/snapshots/a"
+	)
+	uri, err := resources.ParseSnapshotURI(pausedSnapshotURI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := sandboxAssetsRecord{SandboxClass: "gvisor", PauseImage: testPauseImage, SnapshotFiles: []string{"a"}, Fidelity: ateattr.SnapshotFidelityMemory}
+	transfers := []struct {
+		name string
+		uri  string // the URI the transfer names in its error, when it takes one
+		run  func(ctx context.Context, s *AteomHerder) error
+	}{
+		{"download", signedURI, func(ctx context.Context, s *AteomHerder) error {
+			return s.downloadExternalCheckpoint(ctx, signedURI, t.TempDir(), []string{"a"})
+		}},
+		{"upload", signedURI, func(ctx context.Context, s *AteomHerder) error {
+			return s.uploadSnapshotFiles(ctx, signedURI, t.TempDir(), []string{"a"})
+		}},
+		{"manifest fetch", signedURI, func(ctx context.Context, s *AteomHerder) error {
+			_, err := s.fetchManifest(ctx, signedURI)
+			return err
+		}},
+		{"paused upload", "", func(ctx context.Context, s *AteomHerder) error {
+			dir := t.TempDir()
+			writeLocalSnapshot(t, dir, rec, map[string]string{"a": "a"})
+			_, err := s.uploadLocalCheckpointDir(ctx, validUploadPausedCheckpointRequest(), dir, uri)
+			return err
+		}},
+	}
+	for _, pluginCode := range []codes.Code{codes.Unavailable, codes.Internal, codes.NotFound} {
+		for _, tr := range transfers {
+			t.Run(pluginCode.String()+"/"+tr.name, func(t *testing.T) {
+				logs := captureLogs(t)
+				s := &AteomHerder{
+					snapshotPlugin:     failingNodePlugin{err: status.Error(pluginCode, "get "+signedURI+": AccountKey="+secret)},
+					snapshotScratchDir: t.TempDir(),
+				}
+				_, err := ateinterceptors.InternalServerUnaryInterceptor(context.Background(), nil, &grpc.UnaryServerInfo{FullMethod: "/test"},
+					func(ctx context.Context, _ any) (any, error) { return nil, tr.run(ctx, s) })
+				if err == nil {
+					t.Fatal("transfer succeeded")
+				}
+				for name, text := range map[string]string{"error": err.Error(), "logs": logs.String()} {
+					for _, leak := range []string{secret, "sig=", "AccountKey"} {
+						if strings.Contains(text, leak) {
+							t.Errorf("%s carries %q:\n%s", name, leak, text)
+						}
+					}
+				}
+				if tr.uri != "" && !strings.Contains(err.Error(), shownURI) {
+					t.Errorf("error %q does not name the snapshot as %s", err, shownURI)
+				}
+			})
+		}
+	}
+}
+
+// The plugin's code survives the message being dropped.
+func TestPluginCallErrorKeepsCode(t *testing.T) {
+	for _, code := range []codes.Code{codes.Unavailable, codes.NotFound, codes.Internal, codes.Canceled} {
+		err := pluginCallError("fetch", "s3://b/o?sig=x", status.Error(code, "secret"))
+		if got := status.Code(err); got != code {
+			t.Errorf("code = %s, want %s", got, code)
+		}
+	}
+	if err := pluginCallError("fetch", "s3://b/o", nil); err != nil {
+		t.Errorf("pluginCallError(nil) = %v", err)
+	}
+	if got := status.Code(pluginCallError("fetch", "s3://b/o", context.DeadlineExceeded)); got != codes.DeadlineExceeded {
+		t.Errorf("code for a context error = %s, want %s", got, codes.DeadlineExceeded)
+	}
+}
+
 // pluginSidecar serves a NodePlugin on a Unix socket and can be stopped and
 // started again on the same path, as kubelet restarts a sidecar container.
 type pluginSidecar struct {
