@@ -20,11 +20,12 @@ next pair. Each step was a separate run, thus each step also carried a deploy,
 a set of cold caches, and a new baseline for the reader to align.
 
 `--ladder` makes the steps one run. Give the steps as a comma-separated list
-of `users:duration[:trace_probability]`:
+of `users:duration[:trace_probability][@target_rps]`:
 
     --ladder 5:3m,15:3m,30:3m          the user sweep, S1
     --ladder 15:3m:0,15:3m:0.1,15:3m:1 the sample-rate sweep, S2
     --ladder 0:5m                      the idle floor, S0
+    --ladder 200:3m@1000,200:3m@2000   a rate sweep at 200 users
 
 Name this file in the `file` of the test, after the test itself:
 
@@ -45,6 +46,16 @@ The value goes to the parsed options of the master, thus:
     the step change makes. boomer fetches that endpoint on each spawn
     message, and a step change is a spawn message.
 
+A step that names a target rate works the same way: the rate applies as the
+step starts and stays until another step changes it, and `--target-rps` gives
+the rate before the first step that names one. Only a user class that paces
+reads it (resumecold), and it caps the requests per second of the whole
+worker. The users must be enough to reach it, as each waits for its whole
+iteration to return: for resumecold, a resume plus a pause.
+A step that holds the number of users makes no spawn message, thus boomer
+reads the new rate at its next poll of /boomer-config, within 10 s; trim the
+start of each step. `0` removes the cap.
+
 Use a boomer user class for a ladder. Python and gRPC hold each other at a
 high number of users, and the latency of that condition is the latency of the
 load generator and not of substrate.
@@ -58,17 +69,19 @@ from locust.argument_parser import LocustArgumentParser
 
 logger = logging.getLogger(__name__)
 
-# users:duration[:trace_probability]
+# users:duration[:trace_probability][@target_rps]
 _STEP_RE = re.compile(
     r"^(?P<users>\d+):(?P<duration>\d+)(?P<unit>[smh]?)"
-    r"(?::(?P<probability>[0-9.]+))?$"
+    r"(?::(?P<probability>[0-9.]+))?"
+    r"(?:@(?P<rps>[0-9.]+))?$"
 )
 
 _UNIT_SECONDS = {"s": 1, "m": 60, "h": 3600}
 
 # A step of the ladder holds one number of users, for one period, at one
-# sample rate. `probability` is None when the step does not change the rate.
-Step = tuple[int, int, float | None]
+# sample rate and one target request rate. `probability` and `rps` are None
+# when the step does not change them.
+Step = tuple[int, int, float | None, float | None]
 
 
 def parse_ladder(spec: str) -> list[Step]:
@@ -84,25 +97,31 @@ def parse_ladder(spec: str) -> list[Step]:
         if not m:
             raise ValueError(
                 f"unrecognized ladder step {item!r}; "
-                f"the form is users:duration[:trace_probability], "
-                f"as in 15:3m or 15:3m:0.1"
+                f"the form is users:duration[:trace_probability][@target_rps], "
+                f"as in 15:3m, 15:3m:0.1, or 200:3m@1000"
             )
         seconds = int(m.group("duration")) * _UNIT_SECONDS[m.group("unit") or "s"]
         if seconds <= 0:
             raise ValueError(f"ladder step {item!r} has no duration")
-        probability = m.group("probability")
-        if probability is None:
-            steps.append((int(m.group("users")), seconds, None))
-            continue
-        value = float(probability)
-        if not 0.0 <= value <= 1.0:
+        probability = _parse_float(item, m.group("probability"), "trace probability")
+        if probability is not None and not 0.0 <= probability <= 1.0:
             raise ValueError(
                 f"ladder step {item!r} has a trace probability outside 0.0 to 1.0"
             )
-        steps.append((int(m.group("users")), seconds, value))
+        rps = _parse_float(item, m.group("rps"), "target rate")
+        steps.append((int(m.group("users")), seconds, probability, rps))
     if not steps:
         raise ValueError("--ladder has no steps")
     return steps
+
+
+def _parse_float(item: str, value: str | None, what: str) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except ValueError:
+        raise ValueError(f"ladder step {item!r} has a {what} that is not a number")
 
 
 @events.init_command_line_parser.add_listener
@@ -114,8 +133,8 @@ def _(parser: LocustArgumentParser) -> None:
         env_var="LOCUST_LADDER",
         help=(
             "Run a ladder of steps in one test, as "
-            "users:duration[:trace_probability],... For example "
-            "5:3m,15:3m,30:3m"
+            "users:duration[:trace_probability][@target_rps],... For "
+            "example 5:3m,15:3m,30:3m"
         ),
         include_in_web_ui=True,
     )
@@ -142,6 +161,11 @@ def _set_trace_probability(environment, probability: float) -> None:
     set_trace_probability(probability)
 
 
+def _set_target_rps(environment, rps: float) -> None:
+    """Apply `rps` to the parsed options, which /boomer-config serves."""
+    environment.parsed_options.target_rps = rps
+
+
 class LadderShape(LoadTestShape):
     """Holds each step of `--ladder` in turn, then stops the run.
 
@@ -165,7 +189,7 @@ class LadderShape(LoadTestShape):
         self._steps = parse_ladder(spec) if spec else []
         elapsed = 0.0
         self._boundaries = []
-        for _, seconds, _ in self._steps:
+        for _, seconds, _, _ in self._steps:
             elapsed += seconds
             self._boundaries.append(elapsed)
         if self._steps:
@@ -190,19 +214,22 @@ class LadderShape(LoadTestShape):
             logger.info("Ladder complete after %.0fs", run_time)
             return None
 
-        users, _, probability = self._steps[index]
+        users, _, probability, rps = self._steps[index]
         spawn_rate = self.runner.environment.parsed_options.ladder_spawn_rate
 
         if index != self._current:
             self._current = index
             if probability is not None:
                 _set_trace_probability(self.runner.environment, probability)
+            if rps is not None:
+                _set_target_rps(self.runner.environment, rps)
             logger.info(
-                "Ladder step %d/%d: users=%d trace_probability=%s",
+                "Ladder step %d/%d: users=%d trace_probability=%s target_rps=%s",
                 index + 1,
                 len(self._steps),
                 users,
                 "unchanged" if probability is None else probability,
+                "unchanged" if rps is None else rps,
             )
 
         return (users, spawn_rate)

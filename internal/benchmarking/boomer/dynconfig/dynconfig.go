@@ -85,6 +85,8 @@ type Config struct {
 	TotalActors      int           // spawn batch size; 0 keeps --total-actors
 	SpawnConcurrency int           // actors the spawn batch creates concurrently; 0 keeps --spawn-concurrency
 	ActorDeadline    time.Duration // per-actor timeout in the spawn batch; 0 keeps --actor-deadline
+
+	TargetRPS float64 // requests per second the whole worker paces to, for user classes that pace; 0 means unpaced
 }
 
 // Holder lets readers Load() the current Config and writers Store() a new
@@ -143,6 +145,8 @@ type payload struct {
 	TotalActors      *float64 `json:"total_actors"`
 	SpawnConcurrency *float64 `json:"spawn_concurrency"`
 	ActorDeadline    *float64 `json:"actor_deadline"`
+
+	TargetRPS *float64 `json:"target_rps"`
 }
 
 // Parse decodes a JSON blob (typically from a CLI flag) and merges its
@@ -254,6 +258,9 @@ func (c Config) Validate() error {
 	if c.ActorDeadline < 0 {
 		return fmt.Errorf("actor_deadline cannot be negative: %v", c.ActorDeadline)
 	}
+	if c.TargetRPS < 0 {
+		return fmt.Errorf("target_rps cannot be negative: %v", c.TargetRPS)
+	}
 	// MaxPingsPerWake < 1 is treated as 1 at read time (see iterate() in
 	// glutton/lifecycle.go), so Config's zero value stays usable — no
 	// validate rejection here.
@@ -347,6 +354,9 @@ func (p payload) merge(current Config) Config {
 	if p.ActorDeadline != nil {
 		out.ActorDeadline = time.Duration(*p.ActorDeadline * float64(time.Second))
 	}
+	if p.TargetRPS != nil {
+		out.TargetRPS = *p.TargetRPS
+	}
 	return out
 }
 
@@ -431,6 +441,7 @@ func StartPoll(
 					slog.Int("total_actors", next.TotalActors),
 					slog.Int("spawn_concurrency", next.SpawnConcurrency),
 					slog.Duration("actor_deadline", next.ActorDeadline),
+					slog.Float64("target_rps", next.TargetRPS),
 				)
 			}
 		}
@@ -486,6 +497,7 @@ func SubscribeSpawn(url string, holder *Holder, sampler ProbabilityUpdater, fetc
 			slog.Int("total_actors", next.TotalActors),
 			slog.Int("spawn_concurrency", next.SpawnConcurrency),
 			slog.Duration("actor_deadline", next.ActorDeadline),
+			slog.Float64("target_rps", next.TargetRPS),
 		)
 	})
 }
