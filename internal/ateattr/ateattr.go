@@ -298,6 +298,13 @@ const (
 	StoreConnectionAcquireError      = "error"
 )
 
+// Values of ErrorTypeKey for failed PostgreSQL connection acquisitions.
+const (
+	StoreConnectionAcquirePoolClosed   = "pool_closed"
+	StoreConnectionAcquireConnectError = "connect_error"
+	StoreConnectionAcquireOtherError   = "_OTHER"
+)
+
 // Values for WorkerStateKey. Unschedulable wins over occupancy.
 const (
 	WorkerStateIdle          = "idle"

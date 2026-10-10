@@ -362,7 +362,7 @@ func checkExportedPoolMetrics(families map[string]*dto.MetricFamily, maxima map[
 						return fmt.Errorf("%s timeout duration not seconds: %g", pool, h.GetSampleSum())
 					}
 				case "error":
-					if !closed || pool != "main" || labels["error_type"] != "_OTHER" || h.GetSampleCount() != 1 {
+					if !closed || pool != "main" || labels["error_type"] != "pool_closed" || h.GetSampleCount() != 1 {
 						return fmt.Errorf("unexpected error series %v", labels)
 					}
 				default:
