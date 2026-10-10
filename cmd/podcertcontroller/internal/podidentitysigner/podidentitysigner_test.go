@@ -49,6 +49,10 @@ func makePodAndPCR(namespace, podName, serviceAccount string, maxExpirationSecon
 			Name:      podName,
 			UID:       types.UID("pod-uid-1"),
 		},
+		Spec: corev1.PodSpec{
+			ServiceAccountName: serviceAccount,
+			NodeName:           "node-1",
+		},
 	}
 	pcr := &certsv1beta1.PodCertificateRequest{
 		ObjectMeta: metav1.ObjectMeta{
@@ -298,6 +302,8 @@ func TestMakeCertErrors(t *testing.T) {
 		name       string
 		omitPod    bool
 		podUID     types.UID
+		podSA      string // overrides the pod's ServiceAccount when set
+		podNode    string // overrides the pod's node when set
 		omitKey    bool
 		failUpdate bool
 	}{
@@ -309,6 +315,16 @@ func TestMakeCertErrors(t *testing.T) {
 		{
 			name:   "pod UID mismatch",
 			podUID: "other-uid",
+		},
+		{
+			name:   "pod ServiceAccount mismatch",
+			podUID: "pod-uid-1",
+			podSA:  "other-sa",
+		},
+		{
+			name:    "pod node mismatch",
+			podUID:  "pod-uid-1",
+			podNode: "other-node",
 		},
 		{
 			name:    "no key material in PCR",
@@ -332,6 +348,12 @@ func TestMakeCertErrors(t *testing.T) {
 
 			pod, pcr := makePodAndPCR("ate-system", "atelet-abcde", "atelet", 86400)
 			pod.ObjectMeta.UID = tc.podUID
+			if tc.podSA != "" {
+				pod.Spec.ServiceAccountName = tc.podSA
+			}
+			if tc.podNode != "" {
+				pod.Spec.NodeName = tc.podNode
+			}
 			if !tc.omitKey {
 				_, subjectPriv, err := ed25519.GenerateKey(rand.Reader)
 				if err != nil {
