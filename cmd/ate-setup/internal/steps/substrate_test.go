@@ -121,6 +121,17 @@ func TestActorTemplateFromManifestDemos(t *testing.T) {
 	}
 }
 
+// ko resolve ends every document with a "---" separator.
+func TestActorTemplateFromManifestKoOutput(t *testing.T) {
+	template, err := ActorTemplateFromManifest([]byte("metadata: {atespace: a, name: t}\n---\n"))
+	if err != nil {
+		t.Fatalf("ActorTemplateFromManifest: %v", err)
+	}
+	if got := template.GetMetadata().GetName(); got != "t" {
+		t.Errorf("name = %q, want t", got)
+	}
+}
+
 func TestActorTemplateFromManifestErrors(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -128,6 +139,7 @@ func TestActorTemplateFromManifestErrors(t *testing.T) {
 	}{
 		{name: "empty", manifest: ""},
 		{name: "not yaml", manifest: ":\t:"},
+		{name: "second document", manifest: "metadata: {atespace: a, name: t}\n---\nmetadata: {atespace: a, name: u}\n"},
 		// Strict parsing: a typo must fail rather than silently drop the field.
 		{name: "unknown field", manifest: "metadata:\n  atespace: a\n  name: t\nsnapshotsConfig: {}\n"},
 	}

@@ -15,7 +15,6 @@
 package cmd
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -23,14 +22,12 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/kubectl-ate/internal/printer"
 	"github.com/agent-substrate/substrate/internal/ateclient"
+	"github.com/agent-substrate/substrate/internal/manifest"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/encoding/protojson"
-	yamlv3 "gopkg.in/yaml.v3"
-	"sigs.k8s.io/yaml"
 )
 
 var egressPolicyFlags struct {
@@ -84,45 +81,11 @@ var deleteEgressPolicyCmd = &cobra.Command{
 	RunE:    runDeleteEgressPolicy,
 }
 
-// egressPolicyFromManifest parses a single protojson-shaped YAML or JSON
-// document into an EgressPolicy. Parsing is strict: unknown fields are an
-// error.
+// egressPolicyFromManifest parses a manifest holding a single protojson-shaped
+// EgressPolicy. An egress policy is a singleton under its actor, so more than
+// one document is an error.
 func egressPolicyFromManifest(data []byte) (*ateapipb.EgressPolicy, error) {
-	jsonData, err := manifestToJSON(data)
-	if err != nil {
-		return nil, err
-	}
-	policy := &ateapipb.EgressPolicy{}
-	if err := protojson.Unmarshal(jsonData, policy); err != nil {
-		return nil, fmt.Errorf("invalid EgressPolicy: %w", err)
-	}
-	return policy, nil
-}
-
-// manifestToJSON converts a YAML or JSON manifest to JSON. YAML is a superset
-// of JSON, so one decoder parses both. The manifest must hold exactly one
-// document, counted the way the YAML spec counts them: an empty document, such
-// as the one a trailing "---" opens, is a document too, and is rejected.
-func manifestToJSON(data []byte) ([]byte, error) {
-	dec := yamlv3.NewDecoder(bytes.NewReader(data))
-	if err := dec.Decode(&yamlv3.Node{}); err != nil {
-		if errors.Is(err, io.EOF) {
-			return nil, errors.New("manifest is empty")
-		}
-		return nil, fmt.Errorf("invalid YAML: %w", err)
-	}
-	// Decode again to check that the manifest holds no second document.
-	if err := dec.Decode(&yamlv3.Node{}); !errors.Is(err, io.EOF) {
-		return nil, errors.New("manifest holds more than one document, expected one")
-	}
-	j, err := yaml.YAMLToJSON(data)
-	if err != nil {
-		return nil, fmt.Errorf("invalid YAML: %w", err)
-	}
-	if string(j) == "null" {
-		return nil, errors.New("manifest is empty")
-	}
-	return j, nil
+	return manifest.ParseOne[ateapipb.EgressPolicy](data)
 }
 
 // overrideEgressPolicyMetadata defaults each of metadata.atespace and
