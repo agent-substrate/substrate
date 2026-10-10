@@ -74,6 +74,31 @@ of running pods, so clean up once you are done reading:
 $ hack/cleanup-e2e.sh   # deletes every namespace labeled ate.dev/e2e
 ```
 
+## Golden snapshot application liveness
+
+The `golden` suite uses real gVisor workers to check that an application exiting
+with status 0 or 1 cannot produce a golden snapshot, including when another
+container has a healthy wakeup probe. It checks the template's error and absence
+of a golden tag through the control API. A healthy two-container template must
+restore two actors with the same per-container boot IDs, proving that their
+process state came from the shared golden rather than a cold boot.
+
+The suite also checks an ordinary actor without a wakeup probe. It saves a MEMORY
+snapshot, resumes it, increments an in-memory counter, and exits the application.
+Suspend must fail, leave the actor CRASHED, and retain the previous snapshot URI.
+After revert and resume, both the boot ID and counter must match the saved
+snapshot. The newer, unsaved increment must not survive recovery.
+
+After installing the gVisor counter demo (the source of the worker image and
+sandbox configuration), run:
+
+```shell
+$ hack/run-e2e-kind.sh ./internal/e2e/suites/golden -count=1
+```
+
+The normal gVisor E2E lane includes this suite. It is skipped in the micro-VM
+lane because the checkpoint liveness check is specific to gVisor.
+
 ## Creating a new test suite
 
 Copy `testmain_test.go` from `internal/e2e/suites/example` into your new suite. It will

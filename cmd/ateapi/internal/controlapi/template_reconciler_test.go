@@ -165,6 +165,8 @@ type fakeGoldenControl struct {
 	exists         bool
 	goldenState    ateapipb.ActorState
 	goldenSnapshot string
+	crashMessage   string
+	suspendCrash   string
 	// snapshot is the external snapshot a completed suspend produces; empty
 	// simulates a suspend that wrote none.
 	snapshot string
@@ -184,6 +186,9 @@ func (c *fakeGoldenControl) CreateAtespace(_ context.Context, req *ateapipb.Crea
 
 func (c *fakeGoldenControl) goldenActorStatus() *ateapipb.ActorStatus {
 	st := &ateapipb.ActorStatus{State: c.goldenState}
+	if c.crashMessage != "" {
+		st.Crash = &ateapipb.ActorCrash{Message: c.crashMessage}
+	}
 	if c.goldenSnapshot != "" {
 		st.LastAssignedGeneration = 1
 		st.Snapshots = []*ateapipb.Snapshot{
@@ -243,6 +248,11 @@ func (c *fakeGoldenControl) SuspendActor(_ context.Context, req *ateapipb.Suspen
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.suspendReqs = append(c.suspendReqs, req)
+	if c.suspendCrash != "" {
+		c.goldenState = ateapipb.ActorState_ACTOR_STATE_CRASHED
+		c.crashMessage = c.suspendCrash
+		return nil, apierror.FailedPrecondition("%s", c.suspendCrash)
+	}
 	if c.suspendErr != nil {
 		return nil, c.suspendErr
 	}
@@ -654,6 +664,35 @@ func TestReconcileOne_GoldenActorRequests(t *testing.T) {
 	}
 	if st.storedStatus(t, testTemplateRef).GetGoldenSnapshotStatus().GetTakeGoldenSnapshotAt() == nil {
 		t.Error("stored take_golden_snapshot_at is nil, want set")
+	}
+}
+
+func TestReconcileOne_CheckpointFailureTerminatesGolden(t *testing.T) {
+	const detail = `application container "app" exited before checkpoint (exit code 1)`
+	st := newFakeTemplateStore(testTemplate(withoutWakeupProbe, withSnapshotDeadline(time.Now().Add(-time.Minute))))
+	control := &fakeGoldenControl{
+		exists: true, goldenState: ateapipb.ActorState_ACTOR_STATE_RUNNING, suspendCrash: detail,
+	}
+	r := newTestTemplateReconciler(st, control)
+	if _, err := r.reconcileOne(t.Context(), testTemplateRef); err == nil {
+		t.Fatal("reconcile succeeded despite the failed checkpoint")
+	}
+	// The suspend workflow records the crash; the next observation must fail
+	// the template with its cause instead of publishing a tag or resuming again.
+	for range 2 {
+		if after, err := r.reconcileOne(t.Context(), testTemplateRef); err != nil || after != 0 {
+			t.Fatalf("reconcile after crash = %v, %v; want terminal failure", after, err)
+		}
+	}
+	snapshot := st.storedStatus(t, testTemplateRef).GetGoldenSnapshotStatus()
+	if got := snapshot.GetErrorMessage(); !strings.Contains(got, reasonGoldenActorCrashed) || !strings.Contains(got, detail) {
+		t.Errorf("template failure = %q, want crash reason and %q", got, detail)
+	}
+	if snapshot.GetGoldenTag() != nil || len(control.tagReqs) != 0 {
+		t.Error("failed checkpoint published a golden tag")
+	}
+	if len(control.suspendReqs) != 1 || len(control.resumeReqs) != 0 {
+		t.Errorf("terminal failure retried work: suspends=%d, resumes=%d", len(control.suspendReqs), len(control.resumeReqs))
 	}
 }
 

@@ -778,12 +778,10 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 			return nil, fmt.Errorf("while archiving durable-dir volumes: %w", tarErr)
 		}
 	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
-		// Checkpoint pause container (root of the sandbox)
-		// TODO: Consider pause -> tar -> resume -> checkpoint order for better failure handling.
-		err := rcmd.cmdCheckpoint(ctx, ocispec.PauseContainer, checkpointPath)
+		err := rcmd.checkpointRunningWorkload(ctx, req.GetSpec().GetContainers(), checkpointPath)
 		timing.checkpoint = lap(&tLast)
 		if err != nil {
-			return nil, fmt.Errorf("while checkpointing pause: %w", err)
+			return nil, err
 		}
 		if hasDurableVolumes(req.GetSpec().GetContainers()) {
 			var err error

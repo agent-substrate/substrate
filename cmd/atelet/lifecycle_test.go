@@ -27,11 +27,14 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/trustbundle"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -55,6 +58,7 @@ func useTempNodeDirs(t *testing.T) {
 // the request, never derived from the actor UID.
 type fakeAteom struct {
 	ateompb.UnimplementedAteomServer
+	checkpointErr error
 	// snapshotFiles are written at checkpoint and reported back to atelet as
 	// the exact set the snapshot consists of.
 	snapshotFiles map[string]string
@@ -82,6 +86,9 @@ func (f *fakeAteom) RunWorkload(_ context.Context, req *ateompb.RunWorkloadReque
 
 func (f *fakeAteom) CheckpointWorkload(_ context.Context, req *ateompb.CheckpointWorkloadRequest) (*ateompb.CheckpointWorkloadResponse, error) {
 	f.recordActorDirs("CheckpointWorkload", req.GetActorDirs())
+	if f.checkpointErr != nil {
+		return nil, f.checkpointErr
+	}
 	dir := req.GetActorDirs().GetCheckpointDir()
 	names := make([]string, 0, len(f.snapshotFiles))
 	for name, body := range f.snapshotFiles {
@@ -91,6 +98,30 @@ func (f *fakeAteom) CheckpointWorkload(_ context.Context, req *ateompb.Checkpoin
 		names = append(names, name)
 	}
 	return &ateompb.CheckpointWorkloadResponse{SnapshotFiles: names}, nil
+}
+
+func TestCheckpointPreservesApplicationExitCode(t *testing.T) {
+	useTempNodeDirs(t)
+	const message = `application container "app" exited before checkpoint (exit code 1)`
+	serveFakeAteom(t, &fakeAteom{checkpointErr: status.Error(codes.FailedPrecondition, message)})
+	req := validCheckpointRequest()
+	runsc := []byte("runsc binary")
+	if err := writeSandboxRecord(req.ActorUid, &sandboxAssetsRecord{
+		SandboxClass: "gvisor", PauseImage: "registry.k8s.io/pause:3.9",
+		Assets: map[string]assetEntry{runscAssetName: {
+			URL: "gs://test-bucket/runsc", SHA256: fmt.Sprintf("%x", sha256.Sum256(runsc)),
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s := &AteomHerder{ateomDialer: newAteomDialer(1), anonGCSClient: fakeObjectStorage{data: runsc}}
+	resp, err := s.Checkpoint(t.Context(), req)
+	if resp != nil || apierror.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("Checkpoint = %v, %v; want FailedPrecondition", resp, err)
+	}
+	if !strings.Contains(err.Error(), message) {
+		t.Fatalf("checkpoint error %q lost the application exit diagnostic", err)
+	}
 }
 
 func (f *fakeAteom) RestoreWorkload(_ context.Context, req *ateompb.RestoreWorkloadRequest) (*ateompb.RestoreWorkloadResponse, error) {
