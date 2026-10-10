@@ -31,7 +31,6 @@ import (
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/substratex509"
 	certsv1beta1 "k8s.io/api/certificates/v1beta1"
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -40,25 +39,19 @@ import (
 	"k8s.io/utils/ptr"
 )
 
-// makePodAndPCR returns a pod and a matching PodCertificateRequest with no
-// key material set; callers fill in StubPKCS10Request.
-func makePodAndPCR(namespace, podName, serviceAccount string, maxExpirationSeconds int32) (*corev1.Pod, *certsv1beta1.PodCertificateRequest) {
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: namespace,
-			Name:      podName,
-			UID:       types.UID("pod-uid-1"),
-		},
-	}
-	pcr := &certsv1beta1.PodCertificateRequest{
+// makePCR returns a PodCertificateRequest with no key material set; callers
+// fill in StubPKCS10Request. The pod, ServiceAccount and node it names exist
+// nowhere: the signer takes the identity from the request alone.
+func makePCR(namespace, podName, serviceAccount string, maxExpirationSeconds int32) *certsv1beta1.PodCertificateRequest {
+	return &certsv1beta1.PodCertificateRequest{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: namespace,
 			Name:      "req-1",
 		},
 		Spec: certsv1beta1.PodCertificateRequestSpec{
 			SignerName:           Name,
-			PodName:              pod.ObjectMeta.Name,
-			PodUID:               pod.ObjectMeta.UID,
+			PodName:              podName,
+			PodUID:               types.UID("pod-uid-1"),
 			ServiceAccountName:   serviceAccount,
 			ServiceAccountUID:    types.UID("sa-uid-1"),
 			NodeName:             types.NodeName("node-1"),
@@ -66,7 +59,6 @@ func makePodAndPCR(namespace, podName, serviceAccount string, maxExpirationSecon
 			MaxExpirationSeconds: ptr.To(maxExpirationSeconds),
 		},
 	}
-	return pod, pcr
 }
 
 // stubCSR returns a stub PKCS#10 request carrying priv's public key.
@@ -85,7 +77,6 @@ func TestMakeCert(t *testing.T) {
 		namespace            string
 		podName              string
 		serviceAccount       string
-		podLabels            map[string]string
 		maxExpirationSeconds int32
 		wantLifetime         time.Duration
 		wantURI              string
@@ -118,7 +109,6 @@ func TestMakeCert(t *testing.T) {
 			namespace:            "ate-demo-counter",
 			podName:              "counter-abcde",
 			serviceAccount:       "default",
-			podLabels:            map[string]string{"ate.dev/worker-pool": "counter"},
 			maxExpirationSeconds: 86400,
 			wantLifetime:         24 * time.Hour,
 			wantURI:              "spiffe://cluster.local/ns/ate-demo-counter/sa/default",
@@ -206,12 +196,12 @@ func TestMakeCert(t *testing.T) {
 					t.Fatalf("while generating subject key: %v", err)
 				}
 
-				pod, pcr := makePodAndPCR(tc.namespace, tc.podName, tc.serviceAccount, tc.maxExpirationSeconds)
-				pod.ObjectMeta.Labels = tc.podLabels
+				pcr := makePCR(tc.namespace, tc.podName, tc.serviceAccount, tc.maxExpirationSeconds)
 				pcr.Spec.StubPKCS10Request = stubCSR(t, subjectPriv)
 
-				kc := fake.NewSimpleClientset(pod, pcr)
-				impl := NewImpl(kc, caPool, betaClient(t, kc))
+				// Only the PCR exists: the signer must not need the pod.
+				kc := fake.NewSimpleClientset(pcr)
+				impl := NewImpl(caPool, betaClient(t, kc))
 
 				if err := impl.MakeCert(context.Background(), pcr); err != nil {
 					t.Fatalf("MakeCert: %v", err)
@@ -296,28 +286,15 @@ func TestMakeCert(t *testing.T) {
 func TestMakeCertErrors(t *testing.T) {
 	testCases := []struct {
 		name       string
-		omitPod    bool
-		podUID     types.UID
 		omitKey    bool
 		failUpdate bool
 	}{
 		{
-			name:    "pod not found",
-			omitPod: true,
-			podUID:  "pod-uid-1",
-		},
-		{
-			name:   "pod UID mismatch",
-			podUID: "other-uid",
-		},
-		{
 			name:    "no key material in PCR",
-			podUID:  "pod-uid-1",
 			omitKey: true,
 		},
 		{
 			name:       "status update fails",
-			podUID:     "pod-uid-1",
 			failUpdate: true,
 		},
 	}
@@ -330,8 +307,7 @@ func TestMakeCertErrors(t *testing.T) {
 			}
 			caPool := &localca.ConcretePool{CAs: []*localca.CA{ca}}
 
-			pod, pcr := makePodAndPCR("ate-system", "atelet-abcde", "atelet", 86400)
-			pod.ObjectMeta.UID = tc.podUID
+			pcr := makePCR("ate-system", "atelet-abcde", "atelet", 86400)
 			if !tc.omitKey {
 				_, subjectPriv, err := ed25519.GenerateKey(rand.Reader)
 				if err != nil {
@@ -340,17 +316,13 @@ func TestMakeCertErrors(t *testing.T) {
 				pcr.Spec.StubPKCS10Request = stubCSR(t, subjectPriv)
 			}
 
-			objects := []runtime.Object{pcr}
-			if !tc.omitPod {
-				objects = append(objects, pod)
-			}
-			kc := fake.NewSimpleClientset(objects...)
+			kc := fake.NewSimpleClientset(pcr)
 			if tc.failUpdate {
 				kc.PrependReactor("update", "podcertificaterequests", func(action k8stesting.Action) (bool, runtime.Object, error) {
 					return true, nil, errors.New("injected update failure")
 				})
 			}
-			impl := NewImpl(kc, caPool, betaClient(t, kc))
+			impl := NewImpl(caPool, betaClient(t, kc))
 
 			if err := impl.MakeCert(context.Background(), pcr); err == nil {
 				t.Fatalf("MakeCert: got nil error, want error")
@@ -377,7 +349,7 @@ func TestDesiredClusterTrustBundles(t *testing.T) {
 		t.Fatalf("while generating CA 2: %v", err)
 	}
 	caPool := &localca.ConcretePool{CAs: []*localca.CA{ca1, ca2}}
-	impl := NewImpl(nil, caPool, nil)
+	impl := NewImpl(caPool, nil)
 
 	ctbs, err := impl.DesiredClusterTrustBundles()
 	if err != nil {

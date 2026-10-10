@@ -41,6 +41,26 @@ const (
 // apply under --cordon-control-plane.
 const cordonControlPlaneComponent = installDir + "/components/cordon-control-plane"
 
+// routerStaticMTLSComponent is the kustomize component that switches the
+// ingress router to --ingress-auth-mode=static-mtls, layered over every
+// control plane apply under --ingress-auth-mode=static-mtls.
+const routerStaticMTLSComponent = installDir + "/components/router-static-mtls"
+
+// components lists the kustomize components every control plane apply is
+// composed with. Each patch targets its workloads by name, and kustomize leaves
+// a stream alone when nothing in it matches, so composing a manifest that
+// carries none of them is harmless.
+func (e *Env) components() []string {
+	var components []string
+	if e.Cfg.CordonControlPlane {
+		components = append(components, e.Cfg.Path(cordonControlPlaneComponent))
+	}
+	if e.Cfg.IngressAuthMode == config.IngressAuthStaticMTLS {
+		components = append(components, e.Cfg.Path(routerStaticMTLSComponent))
+	}
+	return components
+}
+
 // SystemOverlay picks the kustomization for a full control plane install.
 //
 // The choice is a product of two switches: kind vs GKE, and the atenet router
@@ -64,15 +84,12 @@ func SystemOverlay(cfg *config.Config) string {
 }
 
 // render emits the manifests at path, an absolute manifest file or
-// kustomization directory, before image resolution. Under
-// --cordon-control-plane it composes path with the cordon-control-plane
-// component, so the same node pinning reaches every control plane workload
-// whichever apply path delivers it. The component's patch has a name-regex
-// target and kustomize leaves a stream alone when nothing in it matches, so
-// wrapping a manifest that carries none of those workloads is harmless.
+// kustomization directory, before image resolution. It composes path with the
+// selected components (see components), so the same patches reach every
+// control plane workload whichever apply path delivers it.
 func (e *Env) render(path string) ([]byte, error) {
-	if e.Cfg.CordonControlPlane {
-		return kustomize.Compose(path, e.Cfg.Path(cordonControlPlaneComponent))
+	if components := e.components(); len(components) > 0 {
+		return kustomize.Compose(path, components...)
 	}
 	info, err := os.Stat(path)
 	if err != nil {
@@ -90,8 +107,8 @@ func (e *Env) render(path string) ([]byte, error) {
 
 // renderBytes is render for a manifest already held in memory.
 func (e *Env) renderBytes(manifest []byte) ([]byte, error) {
-	if e.Cfg.CordonControlPlane {
-		return kustomize.ComposeBytes(manifest, e.Cfg.Path(cordonControlPlaneComponent))
+	if components := e.components(); len(components) > 0 {
+		return kustomize.ComposeBytes(manifest, components...)
 	}
 	return manifest, nil
 }

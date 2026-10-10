@@ -268,6 +268,14 @@ var Registry = []Setting{
 			"labeled and tainted ate.dev/workloadType=ate-postgres:NoSchedule for postgres alone",
 	},
 	{
+		Key: "ingressAuthMode", Env: "ATE_INGRESS_AUTH_MODE", Flag: "ingress-auth-mode", Kind: KindString,
+		Default: IngressAuthDeprecatedInsecure,
+		Usage: "How the ingress router authenticates clients: deprecated-insecure or static-mtls. Both check a " +
+			"client certificate on the router's TLS ports against the podidentity CA and the SPIFFE IDs listed in " +
+			"manifests/ate-install/atenet-router.yaml; deprecated-insecure also lets through TLS clients without one " +
+			"and serves plaintext ports, while static-mtls requires the certificate and --atenet-dataplane=envoy",
+	},
+	{
 		Key: "otlpEndpoint", Env: "ATE_OTLP_ENDPOINT", Flag: "otlp-endpoint", Kind: KindString,
 		Usage: "Send control plane telemetry to this OTLP collector instead of the cluster default",
 	},
