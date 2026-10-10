@@ -368,7 +368,7 @@ func fetchFromGCSWithZstd(ctx context.Context, client ObjectStorage, gsURL strin
 	}
 	defer func() {
 		if closeErr := rc.Close(); closeErr != nil {
-			if err != nil {
+			if err == nil {
 				err = closeErr
 			} else {
 				slog.InfoContext(ctx, "Dropped error from rc.Close", slog.Any("err", closeErr))
