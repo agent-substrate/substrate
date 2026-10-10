@@ -1138,6 +1138,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 	goldenURI := someActorSnapshotURI(t, "gs://bucket/golden-root", "ate-golden", "golden-1")
 
 	fullScope := ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
+	rootfsScope := ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
 	dataScope := ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
 	unspecScope := ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
 
@@ -1250,6 +1251,29 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			name: "08 repointed actor's Full durable snapshot drops to Data",
 			actor: actorSeed{
 				externalSnapshot: extSnap(actorURI, fullScope),
+				tmplUID:          "mismatch",
+			},
+			want: restoreWant{
+				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
+				snapshotURI:    actorURI,
+				scope:          ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
+			},
+		},
+		{
+			name:  "08a Rootfs durable snapshot restores as Rootfs",
+			actor: actorSeed{externalSnapshot: extSnap(actorURI, rootfsScope)},
+			want: restoreWant{
+				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
+				snapshotURI:    actorURI,
+				scope:          ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+			},
+		},
+		{
+			// A rootfs upper is only valid over the image it was written on,
+			// so a repointed actor drops to Data like a Full snapshot does.
+			name: "08b repointed actor's Rootfs durable snapshot drops to Data",
+			actor: actorSeed{
+				externalSnapshot: extSnap(actorURI, rootfsScope),
 				tmplUID:          "mismatch",
 			},
 			want: restoreWant{

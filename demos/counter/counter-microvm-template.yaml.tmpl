@@ -45,8 +45,8 @@ containers:
     timeoutSeconds: 120
   # The counter writes its file counter here. With the durableDir volume
   # below it lands on a host-backed virtio-fs share instead of the guest-RAM
-  # rootfs upper, so it survives a DATA-scope snapshot (which keeps no guest
-  # memory).
+  # rootfs upper, so it survives a VOLUMES snapshot (which keeps neither guest
+  # memory nor rootfs writes).
   volumeMounts:
   - name: data
     mountPath: /home/counter
@@ -60,9 +60,10 @@ resources:
   - name: memory
     quantity: 512Mi
 snapshotConfig:
-  # MEMORY, matching the gVisor variant: a suspend captures
-  # guest memory, so the in-RAM count continues from where it left off — the
-  # round-trip this demo promises.
+  # MEMORY, matching the gVisor variant: a suspend captures guest memory, so
+  # the in-RAM count continues from where it left off — the round-trip this
+  # demo promises. ROOTFS is also available on this class: it would keep the
+  # file counter and any rootfs writes but cold-boot the memory counter.
   preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
   storageLocation: gs://${BUCKET_NAME}/ate-demo-counter-microvm/
 sandboxConfig:
