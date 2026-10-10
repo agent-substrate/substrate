@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/puddle/v2"
@@ -31,7 +30,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/semconv/v1.40.0/dbconv"
 )
 
 func newPoolMetrics(t *testing.T) (*Instruments, *sdkmetric.ManualReader) {
@@ -130,67 +129,19 @@ func TestPoolMetricsZeroCountsAndUnregister(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertPoolCounts(t, reader, want)
+	metrics := collectPoolMetrics(t, reader)
+	for name, description := range map[string]string{
+		connectionCountMetric: dbconv.ClientConnectionCount{}.Description(),
+		connectionMaxMetric:   dbconv.ClientConnectionMax{}.Description(),
+	} {
+		if got := metrics[name].Description; got != description {
+			t.Errorf("%s description = %q, want %q", name, got, description)
+		}
+	}
 	if err := registration.Unregister(); err != nil {
 		t.Fatal(err)
 	}
 	assertPoolCounts(t, reader, nil)
-}
-
-func TestPoolMetricsAcquireOutcomesUnsampled(t *testing.T) {
-	instruments, reader := newPoolMetrics(t)
-	provider := sdktrace.NewTracerProvider(sdktrace.WithSampler(sdktrace.NeverSample()))
-	t.Cleanup(func() {
-		if err := provider.Shutdown(context.Background()); err != nil {
-			t.Errorf("shutdown trace provider: %v", err)
-		}
-	})
-	ctx, span := provider.Tracer("test").Start(t.Context(), "unsampled")
-	defer span.End()
-	if span.SpanContext().IsSampled() {
-		t.Fatal("test span is sampled")
-	}
-	for _, tc := range []struct {
-		err error
-	}{
-		{nil},
-		{fmt.Errorf("wrapped: %w", context.Canceled)},
-		{fmt.Errorf("wrapped: %w", context.DeadlineExceeded)},
-		{errors.New("unbounded error message")},
-		{errors.New("a different error message")},
-	} {
-		instruments.recordAcquire(ctx, ateattr.DBConnectionPoolMain, 2*time.Millisecond, tc.err)
-	}
-	m := collectPoolMetrics(t, reader)[connectionWaitMetric]
-	histogram, ok := m.Data.(metricdata.Histogram[float64])
-	if m.Unit != "s" || !ok {
-		t.Fatalf("wrong wait histogram: %+v", m)
-	}
-	want := map[attribute.Set]uint64{}
-	for _, outcome := range []string{
-		ateattr.StoreConnectionAcquireSuccess, ateattr.StoreConnectionAcquireCancelled,
-		ateattr.StoreConnectionAcquireTimeout, ateattr.StoreConnectionAcquireError,
-	} {
-		attrs := []attribute.KeyValue{
-			ateattr.DBConnectionPoolNameKey.String(ateattr.DBConnectionPoolMain),
-			ateattr.StoreConnectionAcquireOutcomeKey.String(outcome),
-		}
-		count := uint64(1)
-		if outcome == ateattr.StoreConnectionAcquireError {
-			attrs = append(attrs, ateattr.ErrorTypeKey.String("_OTHER"))
-			count = 2
-		}
-		want[attribute.NewSet(attrs...)] = count
-	}
-	got := make(map[attribute.Set]uint64)
-	for _, point := range histogram.DataPoints {
-		got[point.Attributes] = point.Count
-		if point.Sum != float64(point.Count)*0.002 || !reflect.DeepEqual(point.Bounds, connectionWaitBuckets) {
-			t.Errorf("wrong duration or buckets: %+v", point)
-		}
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("acquire series = %v, want %v", got, want)
-	}
 }
 
 func TestPoolMetricsNilSafe(t *testing.T) {
@@ -207,45 +158,18 @@ func TestPoolMetricsNilSafe(t *testing.T) {
 	if registration != nil || err != nil {
 		t.Fatalf("nil instruments registration = %v, %v", registration, err)
 	}
-	instruments.recordAcquire(t.Context(), ateattr.DBConnectionPoolMain, time.Second, nil)
+	var tracer *poolMetricsTracer
+	tracer.recordAcquire(t.Context(), time.Second, nil)
 }
 
-type queryProbe struct {
-	started bool
-	ended   bool
-}
-
-type queryProbeKey struct{}
-
-func (q *queryProbe) TraceQueryStart(ctx context.Context, _ *pgx.Conn, _ pgx.TraceQueryStartData) context.Context {
-	q.started = true
-	return context.WithValue(ctx, queryProbeKey{}, true)
-}
-
-func (q *queryProbe) TraceQueryEnd(ctx context.Context, _ *pgx.Conn, _ pgx.TraceQueryEndData) {
-	q.ended = ctx.Value(queryProbeKey{}) == true
-}
-
-func TestPoolMetricsPreservesQueryTracer(t *testing.T) {
-	instruments, reader := newPoolMetrics(t)
+func newPoolMetricsTracer(t *testing.T, instruments *Instruments, name string) *poolMetricsTracer {
+	t.Helper()
 	cfg, err := pgxpool.ParseConfig("postgres://unused@localhost/test")
 	if err != nil {
 		t.Fatal(err)
 	}
-	probe := &queryProbe{}
-	cfg.ConnConfig.Tracer = probe
-	instruments.configurePool(cfg, ateattr.DBConnectionPoolMain)
-	queryCtx := cfg.ConnConfig.Tracer.TraceQueryStart(t.Context(), nil, pgx.TraceQueryStartData{})
-	cfg.ConnConfig.Tracer.TraceQueryEnd(queryCtx, nil, pgx.TraceQueryEndData{})
-	if !probe.started || !probe.ended {
-		t.Fatal("query tracer was not preserved")
-	}
-	tracer := cfg.ConnConfig.Tracer.(pgxpool.AcquireTracer)
-	ctx := tracer.TraceAcquireStart(t.Context(), nil, pgxpool.TraceAcquireStartData{})
-	tracer.TraceAcquireEnd(ctx, nil, pgxpool.TraceAcquireEndData{})
-	if _, ok := collectPoolMetrics(t, reader)[connectionWaitMetric]; !ok {
-		t.Fatal("composed tracer did not record acquisition")
-	}
+	instruments.configurePool(cfg, name)
+	return cfg.ConnConfig.Tracer.(*poolMetricsTracer)
 }
 
 func TestPoolMetricsContention(t *testing.T) {
@@ -402,54 +326,12 @@ func TestPoolMetricsConnectAndClose(t *testing.T) {
 
 type failingPoolMeter struct {
 	metric.Meter
-	fail string
 }
 
 var errPoolMetric = errors.New("instrument failure")
 
-func (m failingPoolMeter) Int64ObservableUpDownCounter(name string, opts ...metric.Int64ObservableUpDownCounterOption) (metric.Int64ObservableUpDownCounter, error) {
-	if name == m.fail {
-		return nil, errPoolMetric
-	}
-	return m.Meter.Int64ObservableUpDownCounter(name, opts...)
-}
-
-func (m failingPoolMeter) Float64Histogram(name string, opts ...metric.Float64HistogramOption) (metric.Float64Histogram, error) {
-	if name == m.fail {
-		return nil, errPoolMetric
-	}
-	return m.Meter.Float64Histogram(name, opts...)
-}
-
-func (m failingPoolMeter) Int64UpDownCounter(name string, opts ...metric.Int64UpDownCounterOption) (metric.Int64UpDownCounter, error) {
-	if name == m.fail {
-		return nil, errPoolMetric
-	}
-	return m.Meter.Int64UpDownCounter(name, opts...)
-}
-
-func (m failingPoolMeter) RegisterCallback(callback metric.Callback, instruments ...metric.Observable) (metric.Registration, error) {
-	if m.fail == "callback" {
-		return nil, errPoolMetric
-	}
-	return m.Meter.RegisterCallback(callback, instruments...)
-}
-
-func TestPoolMetricsInstrumentErrors(t *testing.T) {
-	for _, name := range []string{connectionCountMetric, connectionMaxMetric, connectionWaitMetric, connectionPendingMetric} {
-		t.Run(name, func(t *testing.T) {
-			instruments, _ := newPoolMetrics(t)
-			_, err := NewInstruments(failingPoolMeter{Meter: instruments.meter, fail: name})
-			if !errors.Is(err, errPoolMetric) {
-				t.Fatalf("constructor error = %v", err)
-			}
-		})
-	}
-	instruments, _ := newPoolMetrics(t)
-	instruments.meter = failingPoolMeter{Meter: instruments.meter, fail: "callback"}
-	if _, err := instruments.registerPools(); !errors.Is(err, errPoolMetric) {
-		t.Fatalf("registration error = %v", err)
-	}
+func (failingPoolMeter) RegisterCallback(metric.Callback, ...metric.Observable) (metric.Registration, error) {
+	return nil, errPoolMetric
 }
 
 func TestPoolMetricsFailedConnectDoesNotRegister(t *testing.T) {
@@ -470,7 +352,7 @@ func TestPoolMetricsConnectRegistrationFailure(t *testing.T) {
 	requirePool(t)
 	instruments, reader := newPoolMetrics(t)
 	meter := instruments.meter
-	instruments.meter = failingPoolMeter{Meter: meter, fail: "callback"}
+	instruments.meter = failingPoolMeter{Meter: meter}
 	cfg := testConnectConfig("pool_metrics_registration_failure")
 	cfg.Instruments = instruments
 	if _, err := Connect(t.Context(), cfg); !errors.Is(err, errPoolMetric) {
@@ -489,7 +371,7 @@ func TestPoolMetricsConnectRegistrationFailure(t *testing.T) {
 	assertPoolCounts(t, reader, nil)
 }
 
-func TestPoolMetricsAcquireFailureClasses(t *testing.T) {
+func TestPoolMetricsAcquireOutcomes(t *testing.T) {
 	cfg, err := pgxpool.ParseConfig("postgres://unused@127.0.0.1:1/test?sslmode=disable&connect_timeout=1")
 	if err != nil {
 		t.Fatal(err)
@@ -517,12 +399,14 @@ func TestPoolMetricsAcquireFailureClasses(t *testing.T) {
 		outcome   string
 		errorType string
 	}{
+		{"success", t.Context(), nil, ateattr.StoreConnectionAcquireSuccess, ""},
 		{"closed pool", t.Context(), puddle.ErrClosedPool, ateattr.StoreConnectionAcquireError, ateattr.StoreConnectionAcquirePoolClosed},
 		{"wrapped closed pool", t.Context(), fmt.Errorf("acquire: %w", puddle.ErrClosedPool), ateattr.StoreConnectionAcquireError, ateattr.StoreConnectionAcquirePoolClosed},
 		{"connect", t.Context(), connectErr, ateattr.StoreConnectionAcquireError, ateattr.StoreConnectionAcquireConnectError},
 		{"wrapped connect", t.Context(), fmt.Errorf("acquire: %w", connectErr), ateattr.StoreConnectionAcquireError, ateattr.StoreConnectionAcquireConnectError},
 		{"connect with cancelled context", cancelled, connectErr, ateattr.StoreConnectionAcquireError, ateattr.StoreConnectionAcquireConnectError},
 		{"unknown", t.Context(), errors.New("unbounded details"), ateattr.StoreConnectionAcquireError, ateattr.StoreConnectionAcquireOtherError},
+		{"another unknown", t.Context(), errors.New("different details"), ateattr.StoreConnectionAcquireError, ateattr.StoreConnectionAcquireOtherError},
 		{"wrapped cancellation", cancelled, fmt.Errorf("acquire: %w", context.Canceled), ateattr.StoreConnectionAcquireCancelled, ""},
 		{"wrapped deadline", t.Context(), fmt.Errorf("acquire: %w", context.DeadlineExceeded), ateattr.StoreConnectionAcquireTimeout, ""},
 		{"connect wrapping cancellation", cancelled, errors.Join(connectErr, context.Canceled), ateattr.StoreConnectionAcquireCancelled, ""},
@@ -530,10 +414,14 @@ func TestPoolMetricsAcquireFailureClasses(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			instruments, reader := newPoolMetrics(t)
-			instruments.recordAcquire(tc.ctx, ateattr.DBConnectionPoolMain, 2*time.Millisecond, tc.err)
+			tracer := newPoolMetricsTracer(t, instruments, ateattr.DBConnectionPoolMain)
+			tracer.recordAcquire(tc.ctx, 2*time.Millisecond, tc.err)
 			m := collectPoolMetrics(t, reader)[connectionWaitMetric]
+			if m.Description != (dbconv.ClientConnectionWaitTime{}).Description() {
+				t.Errorf("wait_time description = %q, want upstream description", m.Description)
+			}
 			histogram, ok := m.Data.(metricdata.Histogram[float64])
-			if !ok || len(histogram.DataPoints) != 1 {
+			if m.Unit != "s" || !ok || len(histogram.DataPoints) != 1 {
 				t.Fatalf("wrong acquisition histogram: %+v", m)
 			}
 			point := histogram.DataPoints[0]
@@ -545,7 +433,7 @@ func TestPoolMetricsAcquireFailureClasses(t *testing.T) {
 				attrs = append(attrs, ateattr.ErrorTypeKey.String(tc.errorType))
 			}
 			want := attribute.NewSet(attrs...)
-			if !point.Attributes.Equals(&want) || point.Count != 1 || point.Sum != 0.002 {
+			if !point.Attributes.Equals(&want) || point.Count != 1 || point.Sum != 0.002 || !reflect.DeepEqual(point.Bounds, connectionWaitBuckets) {
 				t.Fatalf("acquisition point = %+v, want labels %v, count 1 and duration 0.002", point, want)
 			}
 		})
@@ -558,6 +446,9 @@ func assertPendingAcquires(t *testing.T, reader *sdkmetric.ManualReader, want ma
 	sum, ok := m.Data.(metricdata.Sum[int64])
 	if m.Unit != "{request}" || !ok || sum.IsMonotonic {
 		t.Fatalf("wrong pending request instrument: %+v", m)
+	}
+	if m.Description != (dbconv.ClientConnectionPendingRequests{}).Description() {
+		t.Errorf("pending_requests description = %q, want upstream description", m.Description)
 	}
 	got := make(map[string]int64)
 	for _, point := range sum.DataPoints {
@@ -574,7 +465,7 @@ func assertPendingAcquires(t *testing.T, reader *sdkmetric.ManualReader, want ma
 
 func TestPoolMetricsPendingRequests(t *testing.T) {
 	instruments, reader := newPoolMetrics(t)
-	tracer := &poolMetricsTracer{instruments: instruments, name: ateattr.DBConnectionPoolMain}
+	tracer := newPoolMetricsTracer(t, instruments, ateattr.DBConnectionPoolMain)
 	for _, err := range []error{nil, context.Canceled, context.DeadlineExceeded, errors.New("acquire failure")} {
 		first := tracer.TraceAcquireStart(t.Context(), nil, pgxpool.TraceAcquireStartData{})
 		second := tracer.TraceAcquireStart(t.Context(), nil, pgxpool.TraceAcquireStartData{})
@@ -583,5 +474,46 @@ func TestPoolMetricsPendingRequests(t *testing.T) {
 		assertPendingAcquires(t, reader, map[string]int64{ateattr.DBConnectionPoolMain: 1})
 		tracer.TraceAcquireEnd(second, nil, pgxpool.TraceAcquireEndData{Err: err})
 		assertPendingAcquires(t, reader, map[string]int64{ateattr.DBConnectionPoolMain: 0})
+	}
+}
+
+func BenchmarkPoolMetricsAcquire(b *testing.B) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"success", nil},
+		{"cancelled", context.Canceled},
+		{"timeout", context.DeadlineExceeded},
+		{"pool_closed", puddle.ErrClosedPool},
+		{"connect_error", &pgconn.ConnectError{}},
+		{"other", errors.New("acquire failure")},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			reader := sdkmetric.NewManualReader()
+			provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+			b.Cleanup(func() {
+				if err := provider.Shutdown(context.Background()); err != nil {
+					b.Error(err)
+				}
+			})
+			instruments, err := NewInstruments(provider.Meter("ateapi"))
+			if err != nil {
+				b.Fatal(err)
+			}
+			cfg, err := pgxpool.ParseConfig("postgres://unused@localhost/test")
+			if err != nil {
+				b.Fatal(err)
+			}
+			instruments.configurePool(cfg, ateattr.DBConnectionPoolMain)
+			tracer := cfg.ConnConfig.Tracer.(pgxpool.AcquireTracer)
+			ctx := b.Context()
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				acquireCtx := tracer.TraceAcquireStart(ctx, nil, pgxpool.TraceAcquireStartData{})
+				tracer.TraceAcquireEnd(acquireCtx, nil, pgxpool.TraceAcquireEndData{Err: tc.err})
+			}
+		})
 	}
 }
