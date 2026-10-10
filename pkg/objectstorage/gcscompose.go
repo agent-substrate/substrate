@@ -21,39 +21,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 
 	"cloud.google.com/go/storage"
 	"golang.org/x/sync/errgroup"
 )
-
-// uploadPoolSize is how many storage.Clients the parallel part upload spreads its
-// parts over. One client keeps a single HTTP/2 connection per host and multiplexes
-// every part onto it, so parts that should be independent share one TCP stream:
-// measured on a GKE worker node at 8 streams, 334 MB/s shared against 518 MB/s with a
-// connection each.
-const uploadPoolSize = 8
-
-// uploadClient returns the client part i should use, or the default client if the pool
-// could not be built (a pool failure costs throughput, not correctness).
-func (g *gcsClient) uploadClient(ctx context.Context, i int) *storage.Client {
-	g.poolOnce.Do(func() {
-		for range uploadPoolSize {
-			// The clients outlive this call, so they must not hold its cancellation.
-			c, err := storage.NewClient(context.WithoutCancel(ctx), g.opts...)
-			if err != nil {
-				slog.WarnContext(ctx, "Falling back to one client for part uploads", slog.Any("err", err))
-				return
-			}
-			setRetry(c)
-			g.pool = append(g.pool, c)
-		}
-	})
-	if len(g.pool) == 0 {
-		return g.client
-	}
-	return g.pool[i%len(g.pool)]
-}
 
 // One stream to GCS tops out near 100 MiB/s however it is chunked; several do not
 // (measured at 300 MiB: 82-107 MiB/s on one stream, 233-257 on four). So a large object
@@ -74,7 +45,7 @@ const (
 // putComposite uploads head followed by rest as concurrent parts, then composes them
 // into object. Only for objects past uploadCompositeMin; putSingle handles the rest.
 func (g *gcsClient) putComposite(ctx context.Context, bucket, object string, head io.Reader, rest io.Reader) (err error) {
-	bkt := g.client.Bucket(bucket)
+	bkt := g.controlClient.Bucket(bucket)
 	// A run id keeps concurrent or retried uploads of the same object from colliding on
 	// part names, and makes leftovers from a crash identifiable.
 	var idBytes [8]byte
@@ -115,7 +86,7 @@ func (g *gcsClient) putComposite(ctx context.Context, bucket, object string, hea
 		if n > 0 {
 			part := bkt.Object(fmt.Sprintf("%s.part-%s-%04d", object, runID, i))
 			parts = append(parts, part)
-			upPart := g.uploadClient(ctx, i).Bucket(bucket).Object(part.ObjectName())
+			upPart := g.poolClient().Bucket(bucket).Object(part.ObjectName())
 			data := buf[:n]
 			g2.Go(func() error {
 				defer func() { free <- buf }()

@@ -37,10 +37,8 @@ const (
 	downloadConcurrency = 8
 )
 
-// fetchRangeFunc reads the object's [off, off+n) into buf. i is the range's index,
-// which backends whose client holds a single connection use to spread ranges over a
-// pool (see gcsClient.poolClient).
-type fetchRangeFunc func(ctx context.Context, i int, off, n int64, buf []byte) error
+// fetchRangeFunc reads the object's [off, off+n) into buf.
+type fetchRangeFunc func(ctx context.Context, off, n int64, buf []byte) error
 
 // rangedReader reassembles parallel ranged reads into one ordered stream. head, if
 // set, is the already-open body of the first range, so the size probe is not wasted.
@@ -98,18 +96,18 @@ func (r *rangedReader) schedule(ctx context.Context, size int64, head io.Reader,
 		if i > 0 {
 			src = nil
 		}
-		go func(i int, off, n int64, buf []byte, src io.Reader) {
+		go func(off, n int64, buf []byte, src io.Reader) {
 			if src != nil {
 				if _, err := io.ReadFull(src, buf[:n]); err != nil {
 					out <- rangeResult{err: fmt.Errorf("while reading range %d+%d: %w", off, n, err)}
 					return
 				}
-			} else if err := fetch(ctx, i, off, n, buf[:n]); err != nil {
+			} else if err := fetch(ctx, off, n, buf[:n]); err != nil {
 				out <- rangeResult{err: err}
 				return
 			}
 			out <- rangeResult{buf: buf[:n]}
-		}(i, off, n, buf, src)
+		}(off, n, buf, src)
 	}
 }
 

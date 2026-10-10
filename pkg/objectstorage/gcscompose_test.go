@@ -69,7 +69,7 @@ func body(n int) []byte {
 // has no idea it was split.
 func TestPutObjectCompositeRoundTrip(t *testing.T) {
 	client, bucket := emulatorClient(t)
-	g := &gcsClient{client: client}
+	g := newTestGCSClient(t)
 	ctx := context.Background()
 
 	for _, tc := range []struct {
