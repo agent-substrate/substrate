@@ -28,6 +28,7 @@ a pre-scan pass, so they may appear anywhere on its command line.
 | `--rollout-timeout DURATION` | `--rollout-timeout DURATION` | Readiness timeout for workloads (default `60s`). Unlike the shell flag it also governs the podcertificate-controller and CSI waits, which stay at their 120s default until it is passed |
 | `--podcert-workers-per-signer N` | `--podcert-workers-per-signer N` | Concurrent workers per podcertificate-controller signer |
 | `--cluster-size size0\|size10` | `--cluster-size size0\|size10` | Footprint profile (default `size0`). `size10` assumes a dedicated PostgreSQL node: it resizes the bundled StatefulSet and its `postgresql.conf`, pins the apiserver's connection pool, and raises the podcertificate-controller's API rate limits. `ATE_INSTALL_CLUSTER_SIZE` when the flag is absent |
+| `--ateapi-postgres-storage-class NAME` | `ATE_API_POSTGRES_STORAGE_CLASS=NAME` | StorageClass for the bundled PostgreSQL volume instead of the cluster default, such as `dynamic-rwo` on GKE so C4 and N4 nodes can attach it. An existing install must delete the postgres StatefulSet and its claim first |
 | `--cordon-control-plane` | `--cordon-control-plane` | Keep the control plane off the worker nodes. Assumes a small shared pool labeled and tainted `ate.dev/workloadType=ate-control-plane:NoSchedule`, across which each workload's replicas are spread, and a one-node pool labeled and tainted `ate.dev/workloadType=ate-postgres:NoSchedule` for postgres alone. `ATE_INSTALL_CORDON_CONTROL_PLANE=true` when the flag is absent |
 | `--experimental-additional-egress-extproc-service NS/SVC:PORT` | `--experimental-additional-egress-extproc-service NS/SVC:PORT` | External processor authorization filter |
 | `--credential-provider JSON` | `--credential-provider JSON`, or `ATE_CREDENTIAL_PROVIDER` | Required by `deploy ate-system` and `deploy atenet`. A JSON object: `{"name":"k8s.io"}` deploys and uses the bundled Kubernetes Secrets provider, with a NetworkPolicy that admits only the egress gateway; `{"enabled":false}` turns egress credential injection off; `{"name":"<provider>","address":"<host>:<port>"}` uses a provider you deploy yourself. See [`docs/egress-credential-injection.md`](../../docs/egress-credential-injection.md) |
@@ -62,9 +63,9 @@ toolchain, and write access to a registry.
 `REPO` has to hold every component image the manifests reference, all under the
 same tag, which is how a release publishes them. A release that adds a component
 has to publish it alongside the others before a pre-built install can use it.
-`make build-release-images KO_DOCKER_REPO=REPO VERSION=TAG` publishes the full
-set, including `envoy-dataplane`, which is built from a Dockerfile with `docker
-buildx` rather than with `ko`. A build from source builds that image itself, so
+`VERSION=TAG ate-setup publish release-images --ko-docker-repo REPO` publishes
+the full set, including `envoy-dataplane`, which is built from a Dockerfile with
+`docker buildx` rather than with `ko`. A build from source builds that image itself, so
 it needs `docker` as well as `ko`.
 Each reference is then pinned to the digest its tag names, which takes one HEAD
 request per image, so the installer needs read access to `REPO` and not only the
@@ -104,9 +105,15 @@ a running cluster.
 | `ate-setup` | `hack/install-ate.sh` |
 |---|---|
 | `publish worker-images` | (no shell equivalent) |
+| `publish release-images` | (no shell equivalent) |
 
-Builds and pushes the ateom worker images for the checked-out build and prints
-their refs; a WorkerPool points `spec.workerImage` to a build to use the ateom.
+`publish worker-images` builds and pushes the ateom worker images for the
+checked-out build and prints their refs; a WorkerPool points `spec.workerImage`
+to a build to use the ateom.
+
+`publish release-images` builds and pushes every image a pre-built install
+needs, all tagged with the build version; see [Installing a
+release](#installing-a-release).
 
 ## Delete
 

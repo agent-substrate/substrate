@@ -72,13 +72,19 @@ func TestFromFilesMissing(t *testing.T) {
 	}
 }
 
-func TestProbeHardware(t *testing.T) {
-	got := probeHardware()
-	want := &ateletpb.HardwareIdentity{
-		Attributes: map[string]string{hardware.AttrArchitecture: runtime.GOARCH},
+func TestDefaultRuntime(t *testing.T) {
+	got := defaultRuntime("gvisor")
+	// The class is the ateom's own; the compat identity is the host's, under
+	// the probe's schema version.
+	want := &ateletpb.SandboxRuntime{
+		SandboxClass: "gvisor",
+		Version: &ateletpb.VersionedSandboxCompat{
+			SchemaVersion: hardware.SchemaVersionV1,
+			Attributes:    []*ateletpb.AttributeEntry{{Key: hardware.AttrArchitecture, Value: runtime.GOARCH}},
+		},
 	}
 	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
-		t.Errorf("probeHardware() mismatch (-want +got):\n%s", diff)
+		t.Errorf("defaultRuntime() mismatch (-want +got):\n%s", diff)
 	}
 }
 
@@ -127,9 +133,25 @@ func TestReportFailsFastOnBadCredentials(t *testing.T) {
 		SocketPath:           filepath.Join(t.TempDir(), "atelet.sock"),
 		CredentialBundlePath: filepath.Join(t.TempDir(), "does-not-exist.pem"),
 		TrustBundlePath:      filepath.Join(t.TempDir(), "also-missing.pem"),
+		SandboxClass:         "gvisor",
 	})
 	if err == nil {
 		t.Fatal("Report() with unreadable credentials succeeded, want an error the caller can exit on")
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("Report() retried a permanent failure until the deadline: %v", err)
+	}
+}
+
+// A runtime without a class is refused by the control plane on every attempt,
+// so an ateom that names none must exit rather than retry.
+func TestReportFailsFastWithoutSandboxClass(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	err := Report(ctx, ReportConfig{SocketPath: filepath.Join(t.TempDir(), "atelet.sock")})
+	if err == nil {
+		t.Fatal("Report() without a SandboxClass succeeded, want an error the caller can exit on")
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("Report() retried a permanent failure until the deadline: %v", err)

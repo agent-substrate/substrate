@@ -27,6 +27,10 @@ import (
 // exporterNone selects the empty set; it is not an exporter.
 const exporterNone = "none"
 
+// exporterPrometheus is the specification's pull exporter, a known name only
+// for a component that serves its own /metrics.
+const exporterPrometheus = "prometheus"
+
 // The exporter names the OTEL_*_EXPORTER variables use, for checking a
 // resolved set with Has.
 const (

@@ -31,7 +31,7 @@ are **atespace-scoped**, whereas `Atespace` resources are naturally **global-sco
 ### 2.1 Identity and scope
 
 * Atespace-scoped resources belong to an atespace. Their identity is `(atespace, name)`, unique within the resource type.
-* Global-scoped resources are global across the entire deployment and do not belong to any atespace. For these, the identity is `name` alone.
+* Global-scoped resources are global across the entire Substrate installation and do not belong to any atespace. For these, the identity is `name` alone.
 
 In both cases, a `metadata` field contains both `atespace` and `name`. For global resources, the `atespace` must always be empty.
 
@@ -118,6 +118,38 @@ Note that this assumes that ActorTemplates are also resources in the substrate g
 - Do not use a plain `string {resource}_name` field for global-scoped references — use `ObjectRef` for consistency and type safety.
 
 TODO: Decide the convention for cross-references that point to a resource in the *same* atespace as the referrer: whether the caller must fill in `atespace` explicitly, or leaves it empty and the server resolves/validates it against the referrer's atespace. Current leaning is to require it be filled in.
+
+### 2.4 Subresources
+
+A **subresource** is a resource nested under a parent resource. It exists only in the context of that parent, is reached through the parent, and is deleted with it. Examples are `EgressPolicy` under `Actor`, `AccessPolicy` under `Atespace`, and `ActorAssignment` under `Worker`.
+
+A subresource's parent may also be **Global**, the implicit root that stands for the whole Substrate installation. The global `AccessPolicy` is a subresource of Global.
+
+A resource that only *lives in* an atespace is not a subresource of the `Atespace`. `Actor` is atespace-scoped but top-level, with its own standard methods and its own `ObjectRef`. A resource that only *references* another is not its subresource either. A `Tag` references its source `Actor` through `source_actor`, but outlives it.
+
+Rules:
+- Each instance has exactly one parent instance, which never changes. A subresource type may allow more than one parent type, including Global.
+- Deleting the parent **must** delete its subresources.
+- A subresource has the same scope as its parent. `metadata.atespace` **must** equal the parent's atespace. For an `EgressPolicy` that is the Actor's atespace. For an `AccessPolicy` under an `Atespace` it is empty, because `Atespace` is global-scoped, and it is empty for every subresource of Global.
+- `metadata.name` **must** be unique among the parent's subresources of that type. A singleton is named `default` (see section #2.5).
+- The message **must** be named for the subresource itself, without the parent type. Use `EgressPolicy`, not `ActorEgressPolicy`. A subresource that allows more than one parent type uses the same message under each, and the RPC names tell the parents apart (`AccessPolicy` under Global and under `Atespace`).
+- RPC names **must** be the standard verb, then the parent type, then the subresource type, as in `GetActorEgressPolicy`, `CreateAtespaceAccessPolicy` and `ListWorkerActorAssignments`. For a subresource of Global, the parent type is `Global`, as in `GetGlobalAccessPolicy`.
+- The request **must** identify the parent with an `ObjectRef` field named after the parent type (`actor`, `atespace`, `worker`). Get and Delete requests **must** also carry a `name` field holding the subresource's name, and for a singleton `name` **must** be `default`. A request for a subresource of Global carries no parent reference, since Global has no identity.
+- On Create and Update, the subresource is embedded in a field named after its snake_case type (`egress_policy`, `access_policy`). Its `metadata` **must** agree with the parent, and a mismatch returns `INVALID_ARGUMENT`.
+- A subresource may be managed by the system, such as `ActorAssignment`. The system creates and deletes it as part of other operations, and the API exposes only List and, optionally, Get.
+- Subresource's methods follow section #3. Update replaces the whole object with `uid` and `version` preconditions, Delete takes `DeleteOptions`, and List is paginated.
+
+TODO: The existing Get and Delete requests for singleton subresources do not carry `name` yet. They identify the subresource by its parent alone.
+
+### 2.5 Singletons
+
+A **singleton** is a resource type that allows at most one instance per parent. For example, each `Actor` has at most one `EgressPolicy`, and each `Atespace` has at most one `AccessPolicy`, as does Global.
+
+Rules:
+- Clients **must** always set `metadata.name` to `default`. Any other value, including an empty one, fails with `INVALID_ARGUMENT`.
+- A singleton **must not** have a List method.
+- Get **must** return `NOT_FOUND` until the singleton has been created.
+- Create **must** return `ALREADY_EXISTS` if the singleton exists. It is never an upsert.
 
 ---
 

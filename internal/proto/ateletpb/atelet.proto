@@ -30,7 +30,7 @@ service AteomSupport {
   // the actor filesystem, when/if we support those).
   rpc MintActorCertificate(MintActorCertificateRequest) returns (MintActorCertificateResponse) {}
 
-  // Register capacity and hardware identity for this worker with atelet.
+  // Register capacity and supported sandbox runtimes for this worker with atelet.
   rpc RegisterWorker(RegisterWorkerRequest) returns (RegisterWorkerResponse) {}
 
   // RequestActorSuspend asks that the actor this worker hosts be suspended,
@@ -52,24 +52,84 @@ message RegisterWorkerRequest {
   // +k8s:required
   WorkerResources capacity = 1;
 
-  // Hardware identity of the worker. atelet converts it to the control
-  // plane's HardwareIdentity when forwarding.
+  // Runtime that new and cold-booted actors start under.
+  // Snapshots matching default_runtime can also warm-boot on this worker.
+  // atelet converts it to the control plane's SandboxRuntime when forwarding.
   //
   // +k8s:required
-  HardwareIdentity hardware = 2;
-}
+  SandboxRuntime default_runtime = 2;
 
-// HardwareIdentity identifies the hardware properties of a worker. It mirrors
-// the control plane's HardwareIdentity and is validated by the same rules.
-message HardwareIdentity {
-  // Key-value pairs describing hardware properties (currently "architecture";
-  // TODO: add "cpu_vendor", "cpu_model", etc.).
+  // Additional runtimes (excluding default_runtime) that this worker can
+  // restore snapshots from right now.
   //
   // +k8s:optional
-  // +k8s:maxProperties=32
-  // +k8s:eachKey=+k8s:maxLength=128
-  // +k8s:eachVal=+k8s:maxLength=256
-  map<string, string> attributes = 1;
+  // +k8s:maxItems=32
+  // +k8s:listType=atomic
+  repeated SandboxRuntime restorable_runtimes = 3;
+}
+
+// SandboxRuntime describes a sandbox runtime and its compatibility identity as
+// reported by a worker. It mirrors the control plane's SandboxRuntime and is
+// validated by the same rules.
+message SandboxRuntime {
+  // e.g. "gvisor", "microvm"
+  //
+  // +k8s:required
+  // +k8s:maxLength=63
+  string sandbox_class = 1;
+
+  // Primary compatibility version stamped onto an actor's snapshot when a
+  // checkpoint is taken on this runtime. Snapshots matching `version`
+  // can warm-boot on this runtime.
+  // TODO: Add support for additional compatibility versions.
+  //
+  // +k8s:required
+  VersionedSandboxCompat version = 2;
+
+  // TODO: Add an informational SandboxConfig version name (e.g. "gvisor-2")
+  // once workers report one.
+}
+
+// VersionedSandboxCompat holds the compatibility schema version and the
+// key-value compatibility attributes for a SandboxRuntime.
+message VersionedSandboxCompat {
+  // Compatibility schema version (e.g. "v1") defining which runtime and
+  // hardware attributes are recorded and how they are computed.
+  //
+  // +k8s:required
+  // +k8s:maxLength=64
+  string schema_version = 1;
+
+  // Key-value compatibility attributes defined by this schema version, covering
+  // both runtime assets (e.g. "gvisor_asset_hash") and effective guest hardware
+  // features after masking (e.g. "architecture", "cpu_features").
+  // Matched against a snapshot under the same schema_version: every attribute
+  // on the snapshot must be present on the worker with an equal value; keys
+  // only the worker has are ignored. Bump schema_version when a key's meaning
+  // changes or older snapshots must no longer match.
+  // Order as sent does not matter: ate-api-server sorts attributes by key
+  // before recording them.
+  //
+  // +k8s:required
+  // +k8s:maxItems=32
+  // +k8s:listType=map
+  // +k8s:listMapKey=key
+  repeated AttributeEntry attributes = 2;
+}
+
+// AttributeEntry is a single key-value compatibility attribute.
+message AttributeEntry {
+  // Attribute name (e.g. "architecture", "cpu_features", "gvisor_asset_hash").
+  //
+  // +k8s:required
+  // +k8s:maxLength=128
+  string key = 1;
+
+  // Attribute value corresponding to key.
+  //
+  // +k8s:required
+  // +k8s:maxLength=256
+  string value = 2;
 }
 
 // WorkerResources is what a worker can supply. It mirrors the control plane's
@@ -203,7 +263,7 @@ service AteomHerder {
 
 message TerminateRequest {
   // If unset, the atelet will just cleanup node resources for the actor.
-  string target_ateom_uid = 1;
+  string worker_pod_uid = 1;
 
   string atespace = 2;
   string actor_name = 3;
@@ -219,7 +279,7 @@ message TerminateResponse {
 }
 
 message RunRequest {
-  string target_ateom_uid = 1;
+  string worker_pod_uid = 1;
 
   string atespace = 2;
   string actor_name = 3;
@@ -449,16 +509,21 @@ enum CheckpointType {
   CHECKPOINT_TYPE_EXTERNAL = 2;
 }
 
-enum SnapshotScope {
+// SnapshotFidelity mirrors the public ateapi enum: the state layers a
+// snapshot holds, lowest to highest, each including the ones below it.
+enum SnapshotFidelity {
   // Not valid option; should never happen.
-  SNAPSHOT_SCOPE_UNSPECIFIED = 0;
-  // Capture process memory plus the full filesystem delta on top of the OCI
-  // image (including any attached DurableDir volumes).
-  SNAPSHOT_SCOPE_FULL = 1;
+  SNAPSHOT_FIDELITY_UNSPECIFIED = 0;
   // Capture only the contents of attached volumes that support snapshots
   // (currently DurableDir-typed volumes). Memory and the rest of rootfs are
   // excluded.
-  SNAPSHOT_SCOPE_DATA = 2;
+  SNAPSHOT_FIDELITY_VOLUMES = 1;
+  // Volumes plus the root filesystem changes made since boot. No runtime
+  // captures this yet; requests carrying it are rejected.
+  SNAPSHOT_FIDELITY_ROOTFS = 2;
+  // Capture process memory plus the full filesystem delta on top of the OCI
+  // image (including any attached DurableDir volumes).
+  SNAPSHOT_FIDELITY_MEMORY = 3;
 }
 
 // ExternalRestoreConfiguration is an external snapshot a restore reads.
@@ -472,7 +537,7 @@ message ExternalRestoreConfiguration {
 }
 
 message CheckpointRequest {
-  string target_ateom_uid = 1;
+  string worker_pod_uid = 1;
 
   string atespace = 2;
   string actor_name = 3;
@@ -494,8 +559,8 @@ message CheckpointRequest {
     ExternalCheckpointConfiguration external_config = 10;
   }
 
-  // What should be included in the checkpoint.
-  SnapshotScope scope = 11;
+  // Fidelity the checkpoint captures.
+  SnapshotFidelity fidelity = 11;
 }
 
 message CheckpointResponse {
@@ -517,19 +582,19 @@ message UploadPausedCheckpointRequest {
   // Destination object-storage URI (the actor's in-progress snapshot URI).
   string destination_snapshot_uri = 7;
 
-  // Scope the uploaded snapshot must have (the commit scope; FULL or DATA).
-  // The scope the pause checkpoint captured is not sent: atelet reads it from
+  // Fidelity the uploaded snapshot must have (MEMORY or VOLUMES). The
+  // fidelity the pause checkpoint captured is not sent: atelet reads it from
   // the local snapshot's own manifest, which is authoritative. When they
-  // differ, atelet converts where possible (a FULL capture to a DATA upload
-  // of the data-scope files ateom reported) and rejects otherwise.
-  SnapshotScope desired_scope = 8;
+  // differ, atelet converts where possible (a MEMORY capture to a VOLUMES
+  // upload of the volume files ateom reported) and rejects otherwise.
+  SnapshotFidelity desired_fidelity = 8;
 }
 
 message UploadPausedCheckpointResponse {
 }
 
 message RestoreRequest {
-  string target_ateom_uid = 1;
+  string worker_pod_uid = 1;
 
   string atespace = 2;
   string actor_name = 3;
@@ -548,15 +613,15 @@ message RestoreRequest {
     ExternalRestoreConfiguration external_config = 10;
   }
 
-  // What content to restore from the checkpoint.
-  SnapshotScope scope = 11;
+  // Fidelity to restore from the checkpoint.
+  SnapshotFidelity fidelity = 11;
 
   // When absent the actor has no egress: its TCP is captured and refused.
   optional EgressGateway egress_gateway = 13;
 
   // The actor's declared size, from the ActorTemplate's resource limits. For
-  // gVisor and micro-VM DATA-scope restores the sandbox is (re)sized to these;
-  // for a FULL micro-VM restore the size baked into the snapshot wins. Zero
+  // gVisor and micro-VM VOLUMES restores the sandbox is (re)sized to these;
+  // for a MEMORY micro-VM restore the size baked into the snapshot wins. Zero
   // means "unset": keep the runtime default.
   int64 cpu_milli = 14;    // CPU limit in millicores (1000 = one core).
   int64 memory_bytes = 15; // Memory limit in bytes.

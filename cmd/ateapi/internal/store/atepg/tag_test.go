@@ -35,7 +35,16 @@ func createTestTag(t *testing.T, s *Persistence, tagAtespace, tagName string) *a
 		Metadata: &ateapipb.ResourceMetadata{Atespace: tagAtespace, Name: tagName},
 		Scope:    ateapipb.TagScope_TAG_SCOPE_ATESPACE,
 		Status: &ateapipb.TagStatus{
-			Snapshot: &ateapipb.ExternalSnapshot{SnapshotUri: "gs://bucket/atespaces/" + tagAtespace + "/tags/" + tagName},
+			Snapshot: &ateapipb.Snapshot{
+				Generation: 1,
+				Owner:      ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG,
+				Storage: []*ateapipb.SnapshotStorage{{
+					Durability: ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE,
+					Status:     ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+					Fidelity:   ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+					Object:     &ateapipb.ObjectSnapshot{SnapshotUri: "gs://bucket/atespaces/" + tagAtespace + "/tags/" + tagName},
+				}},
+			},
 		},
 	})
 	if err != nil {
@@ -84,9 +93,7 @@ func TestCreateTag_TagForeignKeyErrors(t *testing.T) {
 	// A tag in an atespace that does not exist trips the tag's atespace FK.
 	_, err := s.CreateTag(ctx, &ateapipb.Tag{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: "gone", Name: "latest"},
-		Status: &ateapipb.TagStatus{
-			StorageLocation: "gs://bucket",
-		},
+		Status:   &ateapipb.TagStatus{},
 	})
 	if !errors.Is(err, store.ErrFailedPrecondition) {
 		t.Errorf("missing tag atespace error = %v, want ErrFailedPrecondition", err)

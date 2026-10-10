@@ -59,7 +59,11 @@ func NewRequestMetadata(headers []*corev3.HeaderValue, attributes map[string]*st
 			val = string(h.RawValue)
 		}
 
-		headersMap[k] = val
+		if existing, ok := headersMap[k]; ok {
+			headersMap[k] = existing + "," + val
+		} else {
+			headersMap[k] = val
+		}
 		if k == ":path" {
 			path = val
 		}
@@ -82,7 +86,38 @@ func NewRequestMetadata(headers []*corev3.HeaderValue, attributes map[string]*st
 // Header returns the value of a header by name, case-insensitively, or "" when
 // it was not sent.
 func (m *RequestMetadata) Header(name string) string {
+	if m == nil {
+		return ""
+	}
 	return m.Headers[strings.ToLower(name)]
+}
+
+// Get returns the value associated with the passed key, implementing propagation.TextMapCarrier.
+func (m *RequestMetadata) Get(key string) string {
+	return m.Header(key)
+}
+
+// Set stores the key-value pair, implementing propagation.TextMapCarrier.
+func (m *RequestMetadata) Set(key, val string) {
+	if m == nil {
+		return
+	}
+	if m.Headers == nil {
+		m.Headers = make(map[string]string)
+	}
+	m.Headers[strings.ToLower(key)] = val
+}
+
+// Keys lists the keys stored in this carrier, implementing propagation.TextMapCarrier.
+func (m *RequestMetadata) Keys() []string {
+	if m == nil || m.Headers == nil {
+		return nil
+	}
+	keys := make([]string, 0, len(m.Headers))
+	for k := range m.Headers {
+		keys = append(keys, k)
+	}
+	return keys
 }
 
 // Attribute returns the named CEL request_attributes value, scanning every

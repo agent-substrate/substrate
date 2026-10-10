@@ -15,14 +15,10 @@
 // Command fake-workersync stands in for atecontroller's WorkerPool
 // controller and worker syncer in control-plane benchmarks. It honors every
 // WorkerPool's spec.replicas with fake Workers that no pod backs, placed
-// round robin on the nodes carrying --node-label. It writes each pool's
-// status, so the scale subresource and `kubectl get workerpool` work, and
-// deletes its Workers when it shuts down.
-//
-// No capacity is reported for the fake Workers yet. ate-api-server registers
-// each one ACTIVE with no capacity, which the scheduler treats as no room, so
-// no actor can be placed on one and every resume fails with no_capacity, even
-// though the pool's status counts the Worker ready.
+// round robin on the nodes carrying --node-label, and has each Worker's
+// capacity reported through the fake-atelet on its node, as ateom reports
+// through atelet. It writes each pool's status, so the scale subresource and
+// `kubectl get workerpool` work, and deletes its Workers when it shuts down.
 //
 // atecontroller must not run alongside it: its WorkerPool controller would
 // create real worker pods for the same pools, and its worker syncer deletes
@@ -34,13 +30,16 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"os/signal"
 	"slices"
+	"strconv"
 	"syscall"
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/benchmarking/isolate/internal/fakeworker"
 	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/boomerutil"
+	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/version"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
@@ -48,6 +47,7 @@ import (
 	ateinformers "github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
 	atelisters "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/spf13/pflag"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/kubernetes"
@@ -57,11 +57,18 @@ import (
 
 var (
 	apiEndpoint   = pflag.String("api-endpoint", "k8s:///api.ate-system.svc.cluster.local:443", "ate-api-server gRPC dial target.")
-	run           = pflag.String("run", "bench", "Run prefix of the fake Worker names.")
+	run           = pflag.String("run", "bench", "Run prefix of the fake Worker pod names.")
 	nodeLabel     = pflag.String("node-label", "ate.dev/fake-data-plane=true", "Label selector for the benchmark nodes that run fake-atelet.")
+	ateletNS      = pflag.String("atelet-namespace", "ate-system", "Namespace of the fake-atelet pods.")
+	ateletLabel   = pflag.String("fake-atelet-label", "ate.dev/fake-atelet=true", "Label selector for the fake-atelet pods.")
+	relayPort     = pflag.Int("relay-port", fakeworker.DefaultRelayPort, "Port fake-atelet serves capacity reports on.")
+	ateletID      = pflag.String("atelet-spiffe-id", installdefaults.SPIFFEID("ate-system", "atelet"), "SPIFFE ID the fake-atelet relay must present.")
+	clientBundle  = pflag.String("client-cred-bundle", "/run/podidentity.podcert.ate.dev/credential-bundle.pem", "Credential bundle presented to the relay.")
+	trustBundle   = pflag.String("trust-bundle", "/run/podidentity.podcert.ate.dev/trust-bundle.pem", "Pod-identity trust bundle the relay's certificate must chain to.")
 	resync        = pflag.Duration("resync", 10*time.Second, "Reconcile at least this often, besides on every WorkerPool change.")
 	concurrency   = pflag.Int("concurrency", 32, "Worker calls in flight.")
 	cleanup       = pflag.Bool("cleanup", false, "Delete this run's registered fake Workers, then exit.")
+	drainGrace    = pflag.Duration("drain-grace", time.Minute, "How long a draining fake Worker waits for its Actors to leave before it is deleted, releasing them. Stands in for the time ateom takes to stop a terminating pod's Actors.")
 	deleteTimeout = pflag.Duration("delete-timeout", 5*time.Minute, "How long shutdown spends deleting the fake Workers.")
 
 	showVersion  = pflag.Bool("version", false, "Print version and exit.")
@@ -105,6 +112,11 @@ func main() {
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to create ate client", err)
 	}
+	relay, err := newGRPCRelay(*clientBundle, *trustBundle, *ateletID)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to build the relay client", err)
+	}
+	defer relay.Close()
 
 	factory := ateinformers.NewSharedInformerFactory(ac, 0)
 	poolInformer := factory.Api().V1alpha1().WorkerPools()
@@ -123,12 +135,15 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to watch WorkerPools", err)
 	}
 	cl := &kubeCluster{
-		kc:        kc,
-		ac:        ac,
-		pools:     poolInformer.Lister(),
-		nodeLabel: *nodeLabel,
+		kc:          kc,
+		ac:          ac,
+		pools:       poolInformer.Lister(),
+		nodeLabel:   *nodeLabel,
+		ateletNS:    *ateletNS,
+		ateletLabel: *ateletLabel,
+		relayPort:   *relayPort,
 	}
-	c := newController(control, cl, *run, *concurrency)
+	c := newController(control, relay, cl, *run, *concurrency, *drainGrace)
 
 	if err := c.adopt(ctx); err != nil {
 		serverboot.Fatal(ctx, "Failed to load registered fake Workers", err)
@@ -166,10 +181,13 @@ func main() {
 
 // kubeCluster is the controller's view of Kubernetes.
 type kubeCluster struct {
-	kc        kubernetes.Interface
-	ac        versioned.Interface
-	pools     atelisters.WorkerPoolLister
-	nodeLabel string
+	kc          kubernetes.Interface
+	ac          versioned.Interface
+	pools       atelisters.WorkerPoolLister
+	nodeLabel   string
+	ateletNS    string
+	ateletLabel string
+	relayPort   int
 }
 
 func (k *kubeCluster) Pools() ([]*atev1alpha1.WorkerPool, error) {
@@ -183,10 +201,25 @@ func (k *kubeCluster) Nodes(ctx context.Context) ([]node, error) {
 	}
 	nodes := make([]node, 0, len(list.Items))
 	for _, n := range list.Items {
-		nodes = append(nodes, node{name: n.Name})
+		nodes = append(nodes, node{name: n.Name, allocatable: n.Status.Allocatable})
 	}
 	slices.SortFunc(nodes, func(a, b node) int { return cmp.Compare(a.name, b.name) })
 	return nodes, nil
+}
+
+func (k *kubeCluster) Relays(ctx context.Context) (map[string]string, error) {
+	pods, err := k.kc.CoreV1().Pods(k.ateletNS).List(ctx, metav1.ListOptions{LabelSelector: k.ateletLabel})
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]string{}
+	for _, p := range pods.Items {
+		if p.Status.Phase != corev1.PodRunning || p.Status.PodIP == "" || p.DeletionTimestamp != nil {
+			continue
+		}
+		out[p.Spec.NodeName] = net.JoinHostPort(p.Status.PodIP, strconv.Itoa(k.relayPort))
+	}
+	return out, nil
 }
 
 func (k *kubeCluster) UpdateStatus(ctx context.Context, wp *atev1alpha1.WorkerPool) error {

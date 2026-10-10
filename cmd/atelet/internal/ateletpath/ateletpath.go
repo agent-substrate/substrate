@@ -29,6 +29,11 @@ var (
 	// directories are visible at the same path in atelet (which writes them)
 	// and in every ateom pod (which mounts them as overlay lowerdirs).
 	ImageCacheDir = filepath.Join(nodepath.BasePath, "image-cache")
+
+	// SnapshotScratchDir holds short-lived directories for snapshot manifests
+	// moved through the snapshot plugin. It lives under BasePath, which the
+	// node plugin shares with atelet.
+	SnapshotScratchDir = filepath.Join(nodepath.BasePath, "snapshot-scratch")
 )
 
 func RunSCBinaryPath(sha256 string) string {
@@ -124,8 +129,8 @@ func DurableDirVolumeMountPoint(actorUID, volumeName string) string {
 //     DurableDirVolumeMountsDir (see ateom-microvm's tarDurableVolumes), so
 //     system-info roots are excluded by living in this separate directory.
 //   - gVisor captures by declaration: durable mounts are registered with
-//     the sandbox (mount-hint annotations for FULL checkpoints, the
-//     enumerated durable mount paths for DATA fscheckpoints); system-info
+//     the sandbox (mount-hint annotations for MEMORY checkpoints, the
+//     enumerated durable mount paths for VOLUMES fscheckpoints); system-info
 //     mounts are plain undeclared binds, never captured regardless of host
 //     layout.
 //

@@ -31,3 +31,5 @@ metadata:
 spec:
   replicas: 1
   workerImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
+  sandboxClasses:
+  - name: gvisor

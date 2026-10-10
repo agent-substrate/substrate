@@ -27,7 +27,6 @@ import (
 	"syscall"
 	"time"
 
-	"cloud.google.com/go/storage"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/apiauthn"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/authz"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/controlapi"
@@ -40,7 +39,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/localjwtauthority"
-	"github.com/agent-substrate/substrate/internal/objectstore"
+	"github.com/agent-substrate/substrate/internal/objectstoreplugin"
 	"github.com/agent-substrate/substrate/internal/oidcdiscovery"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/version"
@@ -48,8 +47,7 @@ import (
 	"github.com/agent-substrate/substrate/pkg/client/clientset/versioned"
 	"github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
+	objectstorev1 "github.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/spf13/pflag"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
@@ -87,7 +85,7 @@ var (
 	authzBootstrapOwners = pflag.StringSlice("authz-bootstrap-owners", nil, "Principal IDs that are always global owners while listed, independent of the stored global AccessPolicy. Removing an ID revokes its access on restart. At least one is required when --experimental-enable-authz is set.")
 
 	actorIDJWTPoolFile          = pflag.String("actor-id-jwt-pool", "", "The file that contains the serialized JWT authority pool for signing actor JWTs")
-	actorJWTIssuer              = pflag.String("actor-jwt-issuer", "", "Issuer URL placed in the iss claim of actor JWTs. Relying parties fetch <issuer>/.well-known/openid-configuration to verify them. Must be https with no query or fragment. Empty means https://"+installdefaults.IDPServiceName+".<pod namespace>.svc.")
+	actorJWTIssuer              = pflag.String("actor-jwt-issuer", "", "Issuer URL placed in the iss claim of actor JWTs. Relying parties fetch <issuer>/.well-known/openid-configuration to verify them. Must be https with no query or fragment. Required.")
 	defaultEgressGatewayAddress = pflag.String("default-egress-gateway-address", "", "Default address (host:port) of the egress PEP that each actor's atunnel dials. Sent on every atelet Run and Restore, so it takes effect at the actor's next activation. Empty leaves actors with no TCP egress.")
 
 	actorIDCAPoolFile      = pflag.String("actor-id-ca-pool", "", "The file that contains the CA pool for signing actor JWTs")
@@ -97,6 +95,8 @@ var (
 
 	drainDelay   = pflag.Duration("drain-delay", 13*time.Second, "How long to keep accepting new work after SIGTERM, before starting the gRPC drain.")
 	drainTimeout = pflag.Duration("drain-timeout", 15*time.Second, "Deadline for the graceful gRPC drain on shutdown. In-flight RPCs still running past it are forcefully cancelled.")
+
+	snapshotPluginSocket = pflag.String("snapshot-plugin-socket", "/run/snapshot-plugin/control.sock", "Unix socket of the control snapshot plugin that external snapshots are deleted and copied through.")
 
 	templateResyncInterval = pflag.Duration("template-resync-interval", 20*time.Second, fmt.Sprintf("Interval between actor template resyncs. Must be at least %s.", minResyncInterval))
 
@@ -118,15 +118,16 @@ func main() {
 	if err := loadFlagsFromEnv(); err != nil {
 		serverboot.Fatal(ctx, "Invalid PostgreSQL configuration", err)
 	}
+	if err := rejectStorageEnv(); err != nil {
+		serverboot.Fatal(ctx, "Storage settings moved to the snapshot-plugin sidecar", err)
+	}
 	slog.InfoContext(ctx, "ateapi starting", slog.String("version", version.Version))
 	if *templateResyncInterval < minResyncInterval {
 		serverboot.Fatal(ctx, "Invalid --template-resync-interval", fmt.Errorf("must be at least %s", minResyncInterval))
 	}
-	resolvedActorJWTIssuer, err := resolveActorJWTIssuer(*actorJWTIssuer, installdefaults.NamespaceFromPodEnv())
-	if err != nil {
+	if err := validateActorJWTIssuer(*actorJWTIssuer); err != nil {
 		serverboot.Fatal(ctx, "Invalid --actor-jwt-issuer", err)
 	}
-	slog.InfoContext(ctx, "Resolved actor JWT issuer", slog.String("actor-jwt-issuer", resolvedActorJWTIssuer))
 
 	// Kept separate from ctx so that in-progress work (clients, informers) is
 	// not cancelled the moment SIGTERM arrives. The drainOnShutdown
@@ -258,9 +259,18 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to create metric instruments", err)
 	}
 
-	objectStore, err := newObjectStore(ctx)
+	snapshotPluginConn, err := objectstoreplugin.Dial(*snapshotPluginSocket, objectstoreplugin.ReadyWait)
 	if err != nil {
-		serverboot.Fatal(ctx, "Failed to set up the object storage backend", err)
+		serverboot.Fatal(ctx, "Failed to set up the snapshot plugin client", err)
+	}
+	defer snapshotPluginConn.Close()
+	// A plugin that never serves would fail every call. Fail at startup
+	// instead, giving the sidecar time to come up.
+	readyCtx, cancelReady := context.WithTimeout(ctx, time.Minute)
+	err = objectstoreplugin.WaitReady(readyCtx, snapshotPluginConn)
+	cancelReady()
+	if err != nil {
+		serverboot.Fatal(ctx, "Snapshot plugin is not serving", err)
 	}
 
 	volPlugins := make(map[string]volume.VolumePluginControlPlane)
@@ -286,8 +296,8 @@ func main() {
 		instruments,
 		*defaultEgressGatewayAddress,
 		volPlugins,
-		objectStore,
-		resolvedActorJWTIssuer,
+		objectstorev1.NewControlProviderClient(snapshotPluginConn),
+		*actorJWTIssuer,
 		actorIDJWTAuthorityPool,
 		actorIDCAPool,
 	)
@@ -392,6 +402,7 @@ func loadFlagsFromEnv() error {
 		{postgresReadWriteRole, "ATE_API_POSTGRES_READ_WRITE_ROLE"},
 		{postgresOwnerRole, "ATE_API_POSTGRES_OWNER_ROLE"},
 		{postgresSchema, "ATE_API_POSTGRES_SCHEMA"},
+		{actorJWTIssuer, "ATE_API_ACTOR_JWT_ISSUER"},
 	}
 	for _, o := range overrides {
 		if *o.flag == "@env" {
@@ -409,6 +420,19 @@ func loadFlagsFromEnv() error {
 	}
 	if v := os.Getenv("ATE_API_EXPERIMENTAL_ENABLE_AUTHZ"); v != "" && !pflag.CommandLine.Changed("experimental-enable-authz") {
 		*experimentalEnableAuthz = (v == "true" || v == "1")
+	}
+	return nil
+}
+
+// rejectStorageEnv fails if ATE_STORAGE_BACKEND is set on ate-api-server,
+// which no longer reads it; objectstorage.UsesS3 reads it in the sidecar. An
+// install that still patches it onto this container would otherwise come up
+// healthy with a sidecar on the default backend, and fail at the first
+// snapshot cleanup or copy. Only this variable is a signal: EKS pod identity
+// sets AWS_* in every container.
+func rejectStorageEnv() error {
+	if v, ok := os.LookupEnv("ATE_STORAGE_BACKEND"); ok {
+		return fmt.Errorf("ATE_STORAGE_BACKEND=%q is set on ate-api-server, which no longer reads it; set the storage backend on its snapshot-plugin sidecar", v)
 	}
 	return nil
 }
@@ -434,35 +458,6 @@ func logFlagValues(ctx context.Context) {
 		slog.Duration("drain-delay", *drainDelay),
 		slog.Duration("drain-timeout", *drainTimeout),
 	)
-}
-
-// newObjectStore builds the client ate-api manages external snapshots with.
-// The backend is selected the same way atelet selects the one it reads and
-// writes snapshots through, so both ends of a snapshot's life agree on where
-// it lives.
-func newObjectStore(ctx context.Context) (objectstore.Store, error) {
-	switch backend := os.Getenv("ATE_STORAGE_BACKEND"); backend {
-	case "s3":
-		slog.InfoContext(ctx, "Using S3 storage backend")
-		// Depends on the standard AWS environment variables, which have to be
-		// set on the ate-api pod.
-		cfg, err := config.LoadDefaultConfig(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("loading S3 config: %w", err)
-		}
-		return objectstore.NewS3(s3.NewFromConfig(cfg, func(o *s3.Options) {
-			if os.Getenv("AWS_S3_USE_PATH_STYLE") == "true" {
-				o.UsePathStyle = true
-			}
-		})), nil
-	// GCS is currently the default, TODO: we assume workload identity / ADC
-	default:
-		client, err := storage.NewClient(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("creating GCS client: %w", err)
-		}
-		return objectstore.NewGCS(client), nil
-	}
 }
 
 // postgresConnectionAttr describes the connection string for the startup log
@@ -634,15 +629,9 @@ func buildJWTProviders(ctx context.Context, cfg *apiauthn.AuthenticationConfig) 
 	return serverCfg, nil
 }
 
-// resolveActorJWTIssuer applies the install default to an empty
-// --actor-jwt-issuer and validates the result.
-func resolveActorJWTIssuer(flagValue, namespace string) (string, error) {
-	issuer := flagValue
+func validateActorJWTIssuer(issuer string) error {
 	if issuer == "" {
-		issuer = installdefaults.ActorJWTIssuer(namespace)
+		return errors.New("required")
 	}
-	if err := oidcdiscovery.ValidateIssuer(issuer); err != nil {
-		return "", err
-	}
-	return issuer, nil
+	return oidcdiscovery.ValidateIssuer(issuer)
 }

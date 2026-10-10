@@ -94,7 +94,7 @@ for etcd.
 ## Volumes
 
 - **DurableDir volume**: a directory mounted into one or more containers
-  whose contents are preserved by the [`Data` snapshot scope](#snapshots)
+  whose contents are preserved by the [`VOLUMES` snapshot fidelity](#snapshots)
   and therefore survive across Suspend/Resume independently of process
   memory or other rootfs writes. A volume may be mounted into multiple
   containers, potentially at different paths. This is the per-Actor
@@ -108,27 +108,31 @@ for etcd.
 
 ## Snapshots
 
-- **Snapshot scope**: what an `ActorTemplate`'s `SnapshotConfig` includes
-  in a given snapshot. Two scopes exist today:
-  - **`Full`**: process memory plus the rootfs delta on top of the OCI
-    image, and any attached `DurableDir` volumes. Used to capture
-    everything needed to resume hot.
-  - **`Data`**: only the contents of attached volumes that support
-    snapshots — currently `DurableDir` volumes. Process memory and the
-    rest of rootfs are discarded. Used to persist application data
-    cheaply without the cost of a full memory image. On Resume the
-    containers start afresh from the OCI image with the `DurableDir`
-    contents restored.
+- **Snapshot fidelity**: the state layers a snapshot holds, ordered lowest
+  to highest; each level includes the ones below it.
+  - **`VOLUMES`**: only the contents of attached volumes that support
+    snapshots — currently `DurableDir` volumes. Process memory and rootfs
+    changes are discarded. Used to persist application data cheaply
+    without the cost of a memory image. On Resume the containers start
+    afresh from the OCI image with the `DurableDir` contents restored.
+  - **`ROOTFS`**: volumes plus the root filesystem changes made since boot.
+    Defined in the API but not supported by any sandbox runtime yet;
+    templates that request it are rejected.
+  - **`MEMORY`**: volumes, rootfs changes, and process memory. Used to
+    capture everything needed to resume hot.
 
-  Scopes describe only what a snapshot *captures*. A template sets one
-  scope, `onCommit`, and every snapshot of its actors uses it: the
-  node-local checkpoint a [Pause](#lifecycle) keeps on the node and the
-  snapshot a [Suspend](#lifecycle) uploads to snapshot storage.
+  Fidelity describes only what a snapshot *holds*. A template sets one
+  level, `preferredFidelity`, the ceiling for every snapshot of its actors:
+  the node-local checkpoint a [Pause](#lifecycle) keeps on the node and the
+  snapshot a [Suspend](#lifecycle) uploads to snapshot storage. It is best
+  effort: the system never packages more than that level, and may package
+  less when a layer cannot be captured or is too expensive to capture at
+  the time. A process resumed in place keeps its memory regardless.
 
 - **Golden Snapshot**: the initial checkpoint captured once, when an
   `ActorTemplate` is created, from a temporary "golden" boot of the workload.
   By default an Actor of that template is first restored from this shared
-  snapshot. It is always a `Full` capture.
+  snapshot. It is always a `MEMORY` capture.
 
 - **Last Snapshot**: the most recent per-Actor snapshot, written on Suspend and
   used to restore that specific Actor on the next Resume.

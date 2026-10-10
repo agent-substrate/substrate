@@ -39,6 +39,7 @@ func loadEnv(t *testing.T) {
 	t.Setenv("NO_DEV_ENV", "1")
 	for _, name := range []string{
 		"ACTOR_JWT_ALGORITHM",
+		"ACTOR_JWT_ISSUER",
 		"ANTHROPIC_API_KEY",
 		"ATE_ADDITIONAL_EGRESS_EXTPROC_SERVICE",
 		"ATE_API_POSTGRES_CLOUDSQL_GSA",
@@ -431,6 +432,47 @@ func TestLoadActorJWTAlgorithm(t *testing.T) {
 			}
 			if cfg.ActorJWTAlgorithm != tt.want {
 				t.Errorf("ActorJWTAlgorithm = %q, want %q", cfg.ActorJWTAlgorithm, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoadActorJWTIssuer(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		env       string
+		namespace string
+		want      string
+		wantErr   bool
+	}{
+		{name: "unset", want: "https://idp.ate-system.svc"},
+		{name: "unset in a relocated install", namespace: "team-a", want: "https://idp.team-a.svc"},
+		{name: "set is used as given", env: "https://idp.example.com/prod/", want: "https://idp.example.com/prod/"},
+		{name: "not https", env: "http://idp.example.com", wantErr: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			loadEnv(t)
+			if tt.env != "" {
+				t.Setenv("ACTOR_JWT_ISSUER", tt.env)
+			}
+			if tt.namespace != "" {
+				t.Setenv("ATE_NAMESPACE", tt.namespace)
+			} else {
+				unsetEnv(t, "ATE_NAMESPACE")
+			}
+
+			cfg, err := Load(Options{})
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("Load() with ACTOR_JWT_ISSUER=%q returned nil error", tt.env)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.ActorJWTIssuer != tt.want {
+				t.Errorf("ActorJWTIssuer = %q, want %q", cfg.ActorJWTIssuer, tt.want)
 			}
 		})
 	}

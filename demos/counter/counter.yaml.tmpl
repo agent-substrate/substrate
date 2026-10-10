@@ -38,6 +38,10 @@ spec:
   # deploy blocks on a rollout that never completes.
   replicas: 3
   workerImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
+  sandboxClasses:
+  - name: gvisor
+    configRef:
+      name: gvisor-default
   template:
     nodeSelector:
       ate.dev/substrate-version: "${SUBSTRATE_VERSION}"

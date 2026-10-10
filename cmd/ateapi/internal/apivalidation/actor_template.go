@@ -237,6 +237,15 @@ func ValidateCustom_SnapshotConfig_StorageLocation(_ context.Context, _ operatio
 	return nil
 }
 
+// ValidateCustom_SnapshotConfig_PreferredFidelity rejects ROOTFS until a
+// sandbox runtime can capture root filesystem changes without memory.
+func ValidateCustom_SnapshotConfig_PreferredFidelity(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapipb.SnapshotFidelity) field.ErrorList {
+	if *value == ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS {
+		return field.ErrorList{field.Invalid(fldPath, value.String(), "ROOTFS fidelity is not supported yet")}
+	}
+	return nil
+}
+
 // envVarNameRE constrains env var names to any printable ASCII character
 // except '='.
 var envVarNameRE = regexp.MustCompile(`^[ -<>-~]+$`)

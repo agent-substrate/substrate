@@ -463,6 +463,16 @@ Neither the Kubernetes API nor Prometheus is required. If either is unreachable,
 or discovery was skipped, the affected fields are written as `null` and the run
 still succeeds. A `null` means the value was not measured. It never means zero.
 
+## Suspend/resume phase breakdown
+
+`SuspendActor` and `ResumeActor` latency can be attributed to the phases
+inside them (object-storage transfer, hypervisor snapshot/restore, rootfs
+assembly, ...) from the structured log records atelet and ateom-microvm
+emit. `analysis/collect_logs.sh` dumps the node logs of a run and
+`analysis/phase_report.py` aggregates them into per-phase percentiles and
+waterfalls of the slowest operations. See
+[analysis/README.md](analysis/README.md).
+
 ## Optional: Prometheus + Grafana
 
 Locust provides graphs, statistics, etc. via the UI. However, you
@@ -496,4 +506,11 @@ repository root:
 
 ```bash
 python3 -m unittest discover -s benchmarking/locust/unit_tests
+```
+
+`analysis/test_phase_report.py` covers the phase-log report's parser and
+aggregation:
+
+```bash
+python3 -m unittest discover -s benchmarking/analysis
 ```

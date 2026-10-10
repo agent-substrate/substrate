@@ -1,0 +1,123 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+package objectstore.v1;
+
+option go_package = "github.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1;objectstorev1";
+
+// NodeProvider is the plugin API an object storage platform implements
+// on every node. atelet calls it to move actor snapshots between the node and
+// the platform's object storage. How the platform stores them (object names,
+// compression) is private to the plugin. The only requirement is that
+// FetchSnapshot returns the bytes UploadSnapshot was given. Substrate stores
+// no checksums; verifying integrity is up to the plugin.
+//
+// Callers name every file they want moved. A snapshot's file list lives in
+// its manifest, which the caller fetches first by name. The caller also owns
+// commit ordering: it uploads the data files, and only after that call
+// succeeds does it upload the manifest in a separate call, so a reader that
+// finds the manifest can rely on every file it lists.
+//
+// Every RPC is idempotent: a retry overwrites whatever an earlier attempt
+// stored or wrote.
+service NodeProvider {
+  // FetchSnapshot downloads the named files of a snapshot into write_path.
+  // It returns NOT_FOUND if any requested file is absent from the snapshot.
+  // A plugin that authorizes per actor returns PERMISSION_DENIED if actor_jwt
+  // does not grant read access to snapshot_uri.
+  rpc FetchSnapshot(FetchSnapshotRequest) returns (FetchSnapshotResponse) {}
+
+  // UploadSnapshot uploads the named files from local_path into a snapshot.
+  // It returns success only once every file is durably stored. On failure,
+  // files already stored may remain, and the caller can remove them with
+  // ControlProvider.CleanupSnapshot. A plugin that authorizes per actor returns
+  // PERMISSION_DENIED if actor_jwt does not grant write access to snapshot_uri.
+  rpc UploadSnapshot(UploadSnapshotRequest) returns (UploadSnapshotResponse) {}
+}
+
+// FetchSnapshotRequest asks the plugin to download snapshot files.
+message FetchSnapshotRequest {
+  // The snapshot to read, e.g. gs://<bucket>/<prefix>.
+  string snapshot_uri = 1;
+
+  // The JWT of the actor that owns the snapshot, for plugins that authorize
+  // storage access per actor. Substrate does not set it yet, so it is
+  // currently always empty.
+  string actor_jwt = 2 [ debug_redact = true ];
+
+  // Full local path of the directory the files are written into. It must
+  // exist.
+  string write_path = 3;
+
+  // Base names of the files to download. Required.
+  repeated string files = 4;
+}
+
+message FetchSnapshotResponse {}
+
+// UploadSnapshotRequest asks the plugin to upload snapshot files.
+message UploadSnapshotRequest {
+  // The snapshot to write, e.g. gs://<bucket>/<prefix>.
+  string snapshot_uri = 1;
+
+  // The JWT of the actor that owns the snapshot, for plugins that authorize
+  // storage access per actor. Substrate does not set it yet, so it is
+  // currently always empty.
+  string actor_jwt = 2 [ debug_redact = true ];
+
+  // Full local path of the directory the files are read from.
+  string local_path = 3;
+
+  // Base names of the files to upload. Required.
+  repeated string files = 4;
+}
+
+message UploadSnapshotResponse {}
+
+// ControlProvider is the plugin API an object storage platform
+// implements for the control plane. ate-api-server calls it to manage whole
+// snapshots.
+service ControlProvider {
+  // CleanupSnapshot deletes every file of a snapshot, or of every snapshot
+  // under an owner's prefix. Deleting an absent snapshot succeeds.
+  rpc CleanupSnapshot(CleanupSnapshotRequest) returns (CleanupSnapshotResponse) {}
+
+  // CopySnapshot copies every file of src_uri to dst_uri, overwriting files
+  // already at dst_uri. src_uri and dst_uri may be in different buckets. It
+  // returns FAILED_PRECONDITION if src_uri holds no files.
+  rpc CopySnapshot(CopySnapshotRequest) returns (CopySnapshotResponse) {}
+}
+
+// CleanupSnapshotRequest names the snapshots to delete.
+message CleanupSnapshotRequest {
+  // A snapshot URI, or the prefix of a resource that owns several snapshots
+  // (e.g. gs://<bucket>/<root>/atespaces/<atespace>/actors/<uid>). Every file
+  // below it is deleted. A bare bucket is rejected with INVALID_ARGUMENT.
+  string snapshot_uri = 1;
+}
+
+message CleanupSnapshotResponse {}
+
+// CopySnapshotRequest names the source and destination snapshots.
+message CopySnapshotRequest {
+  // The URI to copy from, e.g. an actor's snapshot.
+  string src_uri = 1;
+
+  // The URI to copy to, e.g. a tag's prefix.
+  string dst_uri = 2;
+}
+
+message CopySnapshotResponse {}

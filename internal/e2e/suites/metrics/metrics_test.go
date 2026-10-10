@@ -311,17 +311,17 @@ func validateSnapshotPhaseLabels(scrape string) error {
 			}
 			phase := extractLabelValue(line, "ate_snapshot_phase")
 			kind := extractLabelValue(line, "ate_snapshot_kind")
-			scope := extractLabelValue(line, "ate_snapshot_scope")
+			fidelity := extractLabelValue(line, "ate_snapshot_fidelity")
 			class := extractLabelValue(line, "ate_sandbox_class")
 			if phase == "" {
 				return fmt.Errorf("%s line is missing ate_snapshot_phase: %q", m, line)
 			}
-			if kind != "" && scope != "" && class != "" {
+			if kind != "" && fidelity != "" && class != "" {
 				labelled = true
 			}
 		}
 		if !labelled {
-			return fmt.Errorf("no %s line carried all of ate_snapshot_kind, ate_snapshot_scope and ate_sandbox_class", m)
+			return fmt.Errorf("no %s line carried all of ate_snapshot_kind, ate_snapshot_fidelity and ate_sandbox_class", m)
 		}
 	}
 	return nil
