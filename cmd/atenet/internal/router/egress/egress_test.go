@@ -448,7 +448,9 @@ func TestConnectLegOpensForAnyRules(t *testing.T) {
 				md.Host = tc.dialed
 			}
 			md.Headers[":authority"] = md.Host
+			before := time.Now().UTC()
 			res, err := h.HandleRequestHeaders(context.Background(), md)
+			after := time.Now().UTC()
 			if err != nil {
 				t.Fatalf("HandleRequestHeaders() error = %v, want the tunnel to open", err)
 			}
@@ -459,8 +461,29 @@ func TestConnectLegOpensForAnyRules(t *testing.T) {
 			if got := egressRulesOf(t, res); !slices.Equal(got, tc.want) {
 				t.Errorf("egress rules = %v, want %v", got, tc.want)
 			}
+			if got := egressCreatedAtOf(t, res); got.Before(before) || got.After(after) {
+				t.Errorf("created_at = %v, want within [%v, %v]", got, before, after)
+			}
 		})
 	}
+}
+
+// egressCreatedAtOf reads the creation timestamp from a CONNECT result.
+func egressCreatedAtOf(t *testing.T, res extproc.Result) time.Time {
+	t.Helper()
+	policyStruct := res.DynamicMetadata.GetFields()[extproc.EgressPolicyMetadataNamespace].GetStructValue()
+	if policyStruct == nil {
+		t.Fatalf("missing %q struct in DynamicMetadata", extproc.EgressPolicyMetadataNamespace)
+	}
+	raw := policyStruct.GetFields()[extproc.EgressPolicyCreatedAtKey].GetStringValue()
+	if raw == "" {
+		t.Fatalf("missing %q string in %q DynamicMetadata", extproc.EgressPolicyCreatedAtKey, extproc.EgressPolicyMetadataNamespace)
+	}
+	ts, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		t.Fatalf("parsing %q value %q: %v", extproc.EgressPolicyCreatedAtKey, raw, err)
+	}
+	return ts
 }
 
 // egressRulesOf reads the egress rules from a CONNECT result.

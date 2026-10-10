@@ -192,9 +192,10 @@ func (h *Handler) handleConnect(ctx context.Context, md *extproc.RequestMetadata
 	return res, nil
 }
 
-// connectMetadata encodes the egress rules for EgressPolicyMetadataNamespace and
-// the dialed port for EgressMetadataNamespace. The port is always set: without
-// it the passthrough chain falls back to its configured port instead of closing.
+// connectMetadata encodes the egress rules and creation timestamp for
+// EgressPolicyMetadataNamespace and the dialed port for EgressMetadataNamespace.
+// The port is always set: without it the passthrough chain falls back to its
+// configured port instead of closing.
 func connectMetadata(dest egresspolicy.Destination, rules []egresspolicy.EgressRule) *structpb.Struct {
 	values := make([]*structpb.Value, len(rules))
 	for i, rule := range rules {
@@ -209,7 +210,8 @@ func connectMetadata(dest egresspolicy.Destination, rules []egresspolicy.EgressR
 			extproc.EgressDialedPortKey: structpb.NewStringValue(strconv.Itoa(int(dest.Port))),
 		}}),
 		extproc.EgressPolicyMetadataNamespace: structpb.NewStructValue(&structpb.Struct{Fields: map[string]*structpb.Value{
-			extproc.EgressRulesKey: structpb.NewListValue(&structpb.ListValue{Values: values}),
+			extproc.EgressPolicyCreatedAtKey: structpb.NewStringValue(time.Now().UTC().Format(time.RFC3339Nano)),
+			extproc.EgressRulesKey:           structpb.NewListValue(&structpb.ListValue{Values: values}),
 		}}),
 	}}
 }

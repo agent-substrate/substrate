@@ -157,9 +157,11 @@ mod tests {
   use envoy_proxy_dynamic_modules_rust_sdk::{
     EnvoyBuffer, MockEnvoyListenerFilter, MockEnvoyListenerFilterConfig,
   };
+  use substrate_envoy_common::DateTime;
 
   fn policy(rules: &[(&str, &str)]) -> EgressPolicy {
     EgressPolicy {
+      created_at: DateTime::UNIX_EPOCH,
       rules: rules
         .iter()
         .map(|(pattern, mode)| EgressRule {
@@ -297,7 +299,7 @@ mod tests {
   #[test]
   fn test_policy_json_shape() {
     let parsed: EgressPolicy = serde_json::from_str(
-      r#"{"rules":[{"pattern":"api.example.com","mode":"mitm"},{"pattern":"*","mode":"mitm"}]}"#,
+      r#"{"created_at":"1970-01-01T00:00:00Z","rules":[{"pattern":"api.example.com","mode":"mitm"},{"pattern":"*","mode":"mitm"}]}"#,
     )
     .unwrap();
     assert_eq!(parsed, policy(&[("api.example.com", "mitm"), ("*", "mitm")]));
@@ -388,7 +390,7 @@ mod tests {
   }
 
   const RULES: &[u8] =
-    br#"{"rules":[{"pattern":"api.google.com","mode":"mitm"},{"pattern":"*.google.com","mode":"mitm"}]}"#;
+    br#"{"created_at":"1970-01-01T00:00:00Z","rules":[{"pattern":"api.google.com","mode":"mitm"},{"pattern":"*.google.com","mode":"mitm"}]}"#;
 
   #[test]
   fn test_on_accept_matching_sni() {
@@ -413,7 +415,11 @@ mod tests {
 
   #[test]
   fn test_on_accept_no_rules() {
-    assert_tls_verdict(Some(b"api.google.com"), Some(br#"{"rules":[]}"#), ATE_EGRESS_FILTER_CHAIN_DENIED);
+    assert_tls_verdict(
+      Some(b"api.google.com"),
+      Some(br#"{"created_at":"1970-01-01T00:00:00Z","rules":[]}"#),
+      ATE_EGRESS_FILTER_CHAIN_DENIED,
+    );
   }
 
   #[test]

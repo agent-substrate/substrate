@@ -17,7 +17,7 @@
 
 mod config;
 
-use std::{ffi::c_void, time::Instant};
+use std::ffi::c_void;
 
 pub use config::{Config, EgressPolicyPepFilterConfig, DEFAULT_CACHE_ENABLED, DEFAULT_CACHE_TTL};
 use envoy_proxy_dynamic_modules_rust_sdk::{
@@ -70,12 +70,14 @@ pub const REJECTED_COUNTER_NAME: &str = "ate_egress.rejected";
 /// Counter name for requests matching a rule that has effects.
 pub const HAS_EFFECTS_COUNTER_NAME: &str = "ate_egress.has_effects";
 
+/// Response body returned when a WebSocket upgrade request is rejected.
+const WEBSOCKET_DENIED_BODY: &[u8] = b"WebSocket egress is not supported";
+
 /// Cached egress policy state stored in Envoy filter state under
 /// [`ATE_POLICY_EGRESS_INNER`] with [`envoy_dynamic_module_type_filter_state_life_span::Connection`]
 /// lifespan.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CachedEgressPolicy {
-  pub created_at: Instant,
   pub policy: EgressPolicy,
 }
 
@@ -105,6 +107,27 @@ fn authority_hostname(authority: &[u8]) -> &[u8] {
   }
 }
 
+/// Reports whether a comma-separated HTTP header value contains `want` as an
+/// ASCII case-insensitive token.
+fn has_http_token(value: &[u8], want: &[u8]) -> bool {
+  value
+    .split(|&b| b == b',')
+    .any(|token| token.trim_ascii().eq_ignore_ascii_case(want))
+}
+
+/// Reports whether the current request is an HTTP/1.1 WebSocket upgrade.
+fn is_websocket_upgrade<EHF: EnvoyHttpFilter>(envoy_filter: &mut EHF) -> bool {
+  envoy_filter
+    .get_request_header_value("upgrade")
+    .is_some_and(|v| has_http_token(v.as_slice(), b"websocket"))
+    && envoy_filter
+      .get_request_header_value("connection")
+      .is_some_and(|v| has_http_token(v.as_slice(), b"upgrade"))
+    && envoy_filter
+      .get_request_header_value(":method")
+      .is_some_and(|v| v.as_slice() == b"GET")
+}
+
 impl EgressPolicyPepFilter {
   /// Returns the [`CachedEgressPolicy`] from [`ATE_POLICY_EGRESS_INNER`] if
   /// present, or creates and stores one from [`ATE_POLICY_EGRESS`] with
@@ -117,8 +140,7 @@ impl EgressPolicyPepFilter {
     // If the policy cache on the inner connection does not exist, then it is
     // the first request on the inner connection and the policy provided by the
     // CONNECT filter chain is still fresh. Create a new connection-level filter
-    // state with the policy and creation timestamp, so its freshness can be
-    // checked.
+    // state with the policy, so its freshness can be checked.
     let cached_ptr = match envoy_filter
       .get_filter_state_object(ATE_POLICY_EGRESS_INNER)
       .filter(|ptr| !ptr.is_null())
@@ -126,7 +148,7 @@ impl EgressPolicyPepFilter {
       Some(ptr) => Some(ptr as *const CachedEgressPolicy),
       None => envoy_filter
         // If there is no cached policy object yet, use policy passed from CONNECT termination
-        // to create inner policy object with the creation timestamp to check freshness.
+        // to create inner policy object.
         .get_filter_state_bytes(ATE_POLICY_EGRESS)
         .and_then(|raw_policy| {
           match serde_json::from_slice::<EgressPolicy>(raw_policy.as_slice()) {
@@ -138,10 +160,7 @@ impl EgressPolicyPepFilter {
           }
         })
         .and_then(|policy| {
-          let state = Box::new(CachedEgressPolicy {
-            created_at: Instant::now(),
-            policy,
-          });
+          let state = Box::new(CachedEgressPolicy { policy });
           let ptr = Box::into_raw(state);
           // SAFETY: `ptr` is a freshly boxed `CachedEgressPolicy` and
           // `drop_cached_egress_policy` frees that exact type without unwinding.
@@ -204,6 +223,10 @@ impl EgressPolicyPepFilter {
     envoy_filter: &mut EHF,
     policy: &CachedEgressPolicy,
   ) -> envoy_dynamic_module_type_on_http_filter_request_headers_status {
+    if is_websocket_upgrade(envoy_filter) {
+      envoy_filter.send_response(403, &[], Some(WEBSOCKET_DENIED_BODY), None);
+      return envoy_dynamic_module_type_on_http_filter_request_headers_status::StopIteration;
+    }
     if envoy_filter
       .get_attribute_string(envoy_dynamic_module_type_attribute_id::ConnectionTlsVersion)
       .is_some()
@@ -339,19 +362,18 @@ fn new_http_filter_config_fn<
 
 #[cfg(test)]
 mod tests {
-  use std::{
-    sync::{
-      atomic::{AtomicUsize, Ordering},
-      Arc,
-    },
-    time::Duration,
+  use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
   };
 
   use super::*;
   use envoy_proxy_dynamic_modules_rust_sdk::{EnvoyBuffer, MockEnvoyHttpFilter};
+  use substrate_envoy_common::DateTime;
 
   fn expected_policy() -> EgressPolicy {
     EgressPolicy {
+      created_at: DateTime::UNIX_EPOCH,
       rules: vec![EgressRule {
         pattern: "api.example.com".to_string(),
         mode: "mitm".to_string(),
@@ -389,7 +411,6 @@ mod tests {
     let filter = test_filter();
     let mut mock_filter = MockEnvoyHttpFilter::new();
     let mut existing = CachedEgressPolicy {
-      created_at: Instant::now(),
       policy: expected_policy(),
     };
     let existing_ptr = &mut existing as *mut CachedEgressPolicy as usize;
@@ -417,7 +438,8 @@ mod tests {
   fn test_get_or_create_cached_egress_policy_returns_ref_when_created() {
     let filter = test_filter();
     let mut mock_filter = MockEnvoyHttpFilter::new();
-    let raw_policy = br#"{"rules":[{"pattern":"api.example.com","mode":"mitm"}]}"#;
+    let raw_policy =
+      br#"{"created_at":"1970-01-01T00:00:00Z","rules":[{"pattern":"api.example.com","mode":"mitm"}]}"#;
     let stored_ptr = Arc::new(AtomicUsize::new(0));
     let stored_ptr_clone = Arc::clone(&stored_ptr);
 
@@ -453,7 +475,6 @@ mod tests {
       .get_or_create_cached_egress_policy(&mut mock_filter)
       .expect("expected CachedEgressPolicy reference");
     assert_eq!(cached.policy, expected_policy());
-    assert!(cached.created_at.elapsed() < Duration::from_secs(5));
 
     drop_cached_egress_policy(stored_ptr.load(Ordering::SeqCst) as *mut c_void);
   }
@@ -512,7 +533,7 @@ mod tests {
   fn test_get_or_create_cached_egress_policy_returns_none_when_set_fails() {
     let filter = test_filter();
     let mut mock_filter = MockEnvoyHttpFilter::new();
-    let raw_policy = br#"{"rules":[]}"#;
+    let raw_policy = br#"{"created_at":"1970-01-01T00:00:00Z","rules":[]}"#;
 
     mock_filter
       .expect_get_filter_state_object()
@@ -535,6 +556,14 @@ mod tests {
       .returning(|_, _| Ok(()));
 
     assert!(filter.get_or_create_cached_egress_policy(&mut mock_filter).is_none());
+  }
+
+  fn expect_no_websocket_upgrade(mock_filter: &mut MockEnvoyHttpFilter) {
+    mock_filter
+      .expect_get_request_header_value()
+      .withf(|key| key == "upgrade")
+      .times(1)
+      .returning(|_| None);
   }
 
   fn expect_skip_callout(mock_filter: &mut MockEnvoyHttpFilter, want_host: &'static str) {
@@ -573,7 +602,8 @@ mod tests {
       ..Default::default()
     };
     let mut mock_filter = MockEnvoyHttpFilter::new();
-    let raw_policy = br#"{"rules":[{"pattern":"api.example.com","mode":"mitm"}]}"#;
+    let raw_policy =
+      br#"{"created_at":"1970-01-01T00:00:00Z","rules":[{"pattern":"api.example.com","mode":"mitm"}]}"#;
     let stored_ptr = Arc::new(AtomicUsize::new(0));
     let stored_ptr_clone = Arc::clone(&stored_ptr);
 
@@ -604,6 +634,7 @@ mod tests {
       .withf(|id, value| *id == EnvoyCounterId(1) && *value == 1)
       .times(1)
       .returning(|_, _| Ok(()));
+    expect_no_websocket_upgrade(&mut mock_filter);
     mock_filter
       .expect_get_attribute_string()
       .withf(|attr| *attr == envoy_dynamic_module_type_attribute_id::ConnectionTlsVersion)
@@ -636,7 +667,6 @@ mod tests {
     assert!(!ptr.is_null());
     let cached = unsafe { &*(ptr as *const CachedEgressPolicy) };
     assert_eq!(cached.policy, expected_policy());
-    assert!(cached.created_at.elapsed() < Duration::from_secs(5));
     drop_cached_egress_policy(ptr);
   }
 
@@ -686,8 +716,8 @@ mod tests {
     };
     let mut mock_filter = MockEnvoyHttpFilter::new();
     let mut existing = CachedEgressPolicy {
-      created_at: Instant::now(),
       policy: EgressPolicy {
+        created_at: DateTime::UNIX_EPOCH,
         rules: vec![EgressRule {
           pattern: "api.example.com".to_string(),
           mode: "cleartext".to_string(),
@@ -709,6 +739,7 @@ mod tests {
       .withf(|id, value| *id == EnvoyCounterId(1) && *value == 1)
       .times(1)
       .returning(|_, _| Ok(()));
+    expect_no_websocket_upgrade(&mut mock_filter);
     mock_filter
       .expect_get_attribute_string()
       .withf(|attr| *attr == envoy_dynamic_module_type_attribute_id::ConnectionTlsVersion)
@@ -744,7 +775,6 @@ mod tests {
     };
     let mut mock_filter = MockEnvoyHttpFilter::new();
     let mut existing = CachedEgressPolicy {
-      created_at: Instant::now(),
       policy: expected_policy(),
     };
     let existing_ptr = &mut existing as *mut CachedEgressPolicy as usize;
@@ -759,6 +789,7 @@ mod tests {
       .withf(|id, value| *id == EnvoyCounterId(1) && *value == 1)
       .times(1)
       .returning(|_, _| Ok(()));
+    expect_no_websocket_upgrade(&mut mock_filter);
     mock_filter
       .expect_get_attribute_string()
       .withf(|attr| *attr == envoy_dynamic_module_type_attribute_id::ConnectionTlsVersion)
@@ -797,10 +828,10 @@ mod tests {
     let filter = test_filter();
     let mut mock_filter = MockEnvoyHttpFilter::new();
     let cached = CachedEgressPolicy {
-      created_at: Instant::now(),
       policy: expected_policy(),
     };
 
+    expect_no_websocket_upgrade(&mut mock_filter);
     mock_filter
       .expect_get_attribute_string()
       .withf(|attr| *attr == envoy_dynamic_module_type_attribute_id::ConnectionTlsVersion)
@@ -830,8 +861,8 @@ mod tests {
     let filter = test_filter();
     let mut mock_filter = MockEnvoyHttpFilter::new();
     let cached = CachedEgressPolicy {
-      created_at: Instant::now(),
       policy: EgressPolicy {
+        created_at: DateTime::UNIX_EPOCH,
         rules: vec![EgressRule {
           pattern: "*.example.com".to_string(),
           mode: "mitm".to_string(),
@@ -840,6 +871,7 @@ mod tests {
       },
     };
 
+    expect_no_websocket_upgrade(&mut mock_filter);
     mock_filter
       .expect_get_attribute_string()
       .withf(|attr| *attr == envoy_dynamic_module_type_attribute_id::ConnectionTlsVersion)
@@ -884,10 +916,10 @@ mod tests {
     let filter = test_filter();
     let mut mock_filter = MockEnvoyHttpFilter::new();
     let cached = CachedEgressPolicy {
-      created_at: Instant::now(),
       policy: expected_policy(),
     };
 
+    expect_no_websocket_upgrade(&mut mock_filter);
     mock_filter
       .expect_get_attribute_string()
       .withf(|attr| *attr == envoy_dynamic_module_type_attribute_id::ConnectionTlsVersion)
@@ -917,10 +949,10 @@ mod tests {
     let filter = test_filter();
     let mut mock_filter = MockEnvoyHttpFilter::new();
     let cached = CachedEgressPolicy {
-      created_at: Instant::now(),
       policy: expected_policy(),
     };
 
+    expect_no_websocket_upgrade(&mut mock_filter);
     mock_filter
       .expect_get_attribute_string()
       .withf(|attr| *attr == envoy_dynamic_module_type_attribute_id::ConnectionTlsVersion)
@@ -952,8 +984,8 @@ mod tests {
   fn test_enforce_egress_policy_cleartext_matching_host_continues() {
     let filter = test_filter();
     let cached = CachedEgressPolicy {
-      created_at: Instant::now(),
       policy: EgressPolicy {
+        created_at: DateTime::UNIX_EPOCH,
         rules: vec![
           EgressRule {
             pattern: "*.example.com".to_string(),
@@ -975,6 +1007,7 @@ mod tests {
       (b"exact.example.org".as_slice(), "exact.example.org"),
     ] {
       let mut mock_filter = MockEnvoyHttpFilter::new();
+      expect_no_websocket_upgrade(&mut mock_filter);
       mock_filter
         .expect_get_attribute_string()
         .withf(|attr| *attr == envoy_dynamic_module_type_attribute_id::ConnectionTlsVersion)
@@ -999,8 +1032,8 @@ mod tests {
   fn test_enforce_egress_policy_cleartext_does_not_skip_callout_when_has_effects() {
     let filter = test_filter();
     let cached = CachedEgressPolicy {
-      created_at: Instant::now(),
       policy: EgressPolicy {
+        created_at: DateTime::UNIX_EPOCH,
         rules: vec![EgressRule {
           pattern: "*.example.com".to_string(),
           mode: "cleartext".to_string(),
@@ -1010,6 +1043,7 @@ mod tests {
     };
 
     let mut mock_filter = MockEnvoyHttpFilter::new();
+    expect_no_websocket_upgrade(&mut mock_filter);
     mock_filter
       .expect_get_attribute_string()
       .withf(|attr| *attr == envoy_dynamic_module_type_attribute_id::ConnectionTlsVersion)
@@ -1040,8 +1074,8 @@ mod tests {
   fn test_enforce_egress_policy_cleartext_mismatched_host_sends_403() {
     let filter = test_filter();
     let cached = CachedEgressPolicy {
-      created_at: Instant::now(),
       policy: EgressPolicy {
+        created_at: DateTime::UNIX_EPOCH,
         rules: vec![
           EgressRule {
             pattern: "api.example.com".to_string(),
@@ -1065,6 +1099,7 @@ mod tests {
     ] {
       let mut mock_filter = MockEnvoyHttpFilter::new();
       let authority = *authority;
+      expect_no_websocket_upgrade(&mut mock_filter);
       mock_filter
         .expect_get_attribute_string()
         .withf(|attr| *attr == envoy_dynamic_module_type_attribute_id::ConnectionTlsVersion)
@@ -1086,6 +1121,105 @@ mod tests {
       assert_eq!(
         filter.enforce_egress_policy(&mut mock_filter, &cached),
         envoy_dynamic_module_type_on_http_filter_request_headers_status::StopIteration
+      );
+    }
+  }
+
+  #[test]
+  fn test_enforce_egress_policy_rejects_websocket_upgrade() {
+    let filter = test_filter();
+    let cached = CachedEgressPolicy {
+      policy: expected_policy(),
+    };
+
+    let mut mock_filter = MockEnvoyHttpFilter::new();
+    mock_filter
+      .expect_get_request_header_value()
+      .withf(|key| key == "upgrade")
+      .times(1)
+      .returning(|_| Some(EnvoyBuffer::new(b"WebSocket")));
+    mock_filter
+      .expect_get_request_header_value()
+      .withf(|key| key == "connection")
+      .times(1)
+      .returning(|_| Some(EnvoyBuffer::new(b"keep-alive, UpGrAdE")));
+    mock_filter
+      .expect_get_request_header_value()
+      .withf(|key| key == ":method")
+      .times(1)
+      .returning(|_| Some(EnvoyBuffer::new(b"GET")));
+    mock_filter.expect_get_attribute_string().times(0);
+    mock_filter
+      .expect_send_response()
+      .withf(|status, _headers, body, _details| {
+        *status == 403 && *body == Some(WEBSOCKET_DENIED_BODY)
+      })
+      .times(1)
+      .returning(|_, _, _, _| ());
+
+    assert_eq!(
+      filter.enforce_egress_policy(&mut mock_filter, &cached),
+      envoy_dynamic_module_type_on_http_filter_request_headers_status::StopIteration
+    );
+  }
+
+  #[test]
+  fn test_enforce_egress_policy_allows_non_websocket_upgrades() {
+    let filter = test_filter();
+    let cached = CachedEgressPolicy {
+      policy: expected_policy(),
+    };
+
+    for (method, connection, upgrade) in [
+      (None, None, Some(b"h2c".as_slice())),
+      (None, Some(b"keep-alive".as_slice()), Some(b"websocket".as_slice())),
+      (
+        Some(b"POST".as_slice()),
+        Some(b"Upgrade".as_slice()),
+        Some(b"websocket".as_slice()),
+      ),
+    ] {
+      let mut mock_filter = MockEnvoyHttpFilter::new();
+      mock_filter
+        .expect_get_request_header_value()
+        .withf(|key| key == "upgrade")
+        .times(1)
+        .returning(move |_| upgrade.map(EnvoyBuffer::new));
+      if let Some(connection) = connection {
+        mock_filter
+          .expect_get_request_header_value()
+          .withf(|key| key == "connection")
+          .times(1)
+          .returning(move |_| Some(EnvoyBuffer::new(connection)));
+      }
+      if let Some(method) = method {
+        mock_filter
+          .expect_get_request_header_value()
+          .withf(|key| key == ":method")
+          .times(1)
+          .returning(move |_| Some(EnvoyBuffer::new(method)));
+      }
+      mock_filter
+        .expect_get_attribute_string()
+        .withf(|attr| *attr == envoy_dynamic_module_type_attribute_id::ConnectionTlsVersion)
+        .times(1)
+        .returning(|_| Some(EnvoyBuffer::new(b"TLSv1.3")));
+      mock_filter
+        .expect_get_attribute_string()
+        .withf(|attr| *attr == envoy_dynamic_module_type_attribute_id::ConnectionRequestedServerName)
+        .times(1)
+        .returning(|_| Some(EnvoyBuffer::new(b"api.example.com")));
+      mock_filter
+        .expect_get_request_header_value()
+        .withf(|key| key == ":authority")
+        .times(1)
+        .returning(|_| Some(EnvoyBuffer::new(b"api.example.com")));
+      expect_skip_callout(&mut mock_filter, "api.example.com");
+      mock_filter.expect_send_response().times(0);
+
+      assert_eq!(
+        filter.enforce_egress_policy(&mut mock_filter, &cached),
+        envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue
       );
     }
   }

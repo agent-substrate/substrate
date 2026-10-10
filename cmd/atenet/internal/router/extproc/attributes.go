@@ -61,9 +61,12 @@ const (
 	// EgressPolicyMetadataNamespace holds the egress rules returned on CONNECT.
 	// The outer chain copies it as JSON into filter state of the same name for
 	// the egress-policy module:
-	// {"rules": [{"pattern": ..., "mode": ..., "has_effects": ...}]},
+	// {"created_at": ..., "rules": [{"pattern": ..., "mode": ..., "has_effects": ...}]},
 	// most specific first.
 	EgressPolicyMetadataNamespace = "dev.ate.policy.egress"
+	// EgressPolicyCreatedAtKey, under EgressPolicyMetadataNamespace, is the
+	// RFC 3339 creation timestamp of the policy metadata.
+	EgressPolicyCreatedAtKey = "created_at"
 	// EgressRulesKey, under EgressPolicyMetadataNamespace, is the ordered
 	// list of rules; EgressRulePatternKey, EgressRuleModeKey, and
 	// EgressRuleHasEffectsKey are the fields of each.

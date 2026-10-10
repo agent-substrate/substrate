@@ -14,6 +14,7 @@
 
 //! Shared egress policy types and matching logic for Envoy dynamic modules.
 
+pub use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
 /// Filter state holding the egress rules as JSON. See
@@ -32,6 +33,7 @@ pub const EGRESS_MODE_PASSTHROUGH: &str = "passthrough";
 /// The egress rules for a connection.
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct EgressPolicy {
+  pub created_at: DateTime<Utc>,
   /// Most specific first; the first match wins.
   pub rules: Vec<EgressRule>,
 }
@@ -106,12 +108,13 @@ mod tests {
   #[test]
   fn test_policy_json_shape() {
     let parsed: EgressPolicy = serde_json::from_str(
-      r#"{"rules":[{"pattern":"api.example.com","mode":"mitm","has_effects":true},{"pattern":"*","mode":"mitm","has_effects":false}]}"#,
+      r#"{"created_at":"2026-10-10T12:34:56.123456789Z","rules":[{"pattern":"api.example.com","mode":"mitm","has_effects":true},{"pattern":"*","mode":"mitm","has_effects":false}]}"#,
     )
     .unwrap();
     assert_eq!(
       parsed,
       EgressPolicy {
+        created_at: DateTime::from_timestamp(1_791_635_696, 123_456_789).unwrap(),
         rules: vec![
           EgressRule {
             pattern: "api.example.com".to_string(),
@@ -125,6 +128,19 @@ mod tests {
           },
         ],
       }
+    );
+    // Missing created_at or invalid shape fails deserialization.
+    assert!(
+      serde_json::from_str::<EgressPolicy>(
+        r#"{"rules":[{"pattern":"api.example.com","mode":"mitm"}]}"#
+      )
+      .is_err()
+    );
+    assert!(
+      serde_json::from_str::<EgressPolicy>(
+        r#"{"created_at":"not-a-timestamp","rules":[{"pattern":"api.example.com","mode":"mitm"}]}"#
+      )
+      .is_err()
     );
     assert!(serde_json::from_str::<EgressPolicy>(r#"{"allowed_snis":["api.example.com"]}"#).is_err());
   }
