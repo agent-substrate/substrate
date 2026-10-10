@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"fmt"
 	"io"
 	"math/rand/v2"
 	"os"
@@ -118,6 +119,56 @@ func TestPutObjectCompositeRoundTrip(t *testing.T) {
 		}
 		if strings.Contains(attrs.Name, ".part-") || strings.Contains(attrs.Name, ".compose-") {
 			t.Errorf("upload left scratch object %q behind", attrs.Name)
+		}
+	}
+}
+
+// Folding more than maxComposeSources parts goes through intermediate objects, and
+// none may outlive the compose, including the ones the final compose consumes.
+func TestComposeAllRemovesIntermediates(t *testing.T) {
+	client, bucket := emulatorClient(t)
+	ctx := context.Background()
+	bkt := client.Bucket(bucket)
+
+	const partSize = 1 << 10
+	want := body((maxComposeSources + 8) * partSize)
+	var parts []*storage.ObjectHandle
+	for i := 0; i < len(want); i += partSize {
+		p := bkt.Object(fmt.Sprintf("fold/obj.part-run-%04d", i/partSize))
+		if err := writeObject(ctx, p, want[i:i+partSize], partSize); err != nil {
+			t.Fatalf("writing part: %v", err)
+		}
+		parts = append(parts, p)
+	}
+
+	if err := composeAll(ctx, bkt, "fold/obj", parts, "run"); err != nil {
+		t.Fatalf("composeAll: %v", err)
+	}
+
+	rc, err := bkt.Object("fold/obj").NewReader(ctx)
+	if err != nil {
+		t.Fatalf("reading back: %v", err)
+	}
+	got, err := io.ReadAll(rc)
+	rc.Close()
+	if err != nil {
+		t.Fatalf("reading back: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Errorf("composed %d bytes differ from the %d uploaded", len(got), len(want))
+	}
+
+	it := bkt.Objects(ctx, &storage.Query{Prefix: "fold/"})
+	for {
+		attrs, err := it.Next()
+		if err == iterator.Done {
+			break
+		}
+		if err != nil {
+			t.Fatalf("listing: %v", err)
+		}
+		if strings.Contains(attrs.Name, ".compose-") {
+			t.Errorf("composeAll left intermediate %q behind", attrs.Name)
 		}
 	}
 }
