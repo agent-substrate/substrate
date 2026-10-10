@@ -93,10 +93,9 @@ func newSystemInfoVolumeRefresher(bundles *trustbundle.Source, informer cache.Sh
 }
 
 // Register records actorUID's system-info volumes and writes their contents
-// from current cluster state. If actorUID is already registered (for example
-// after a worker pod crash left a stale entry without Terminate), the previous
-// registration is superseded, even if this registration's initial write fails.
-// The failed registration is removed without restoring the previous one.
+// from current cluster state. A duplicate actorUID panics. If an initial write
+// fails, Register removes its own entry and returns no owner, so caller cleanup
+// cannot remove a later registration.
 func (r *systemInfoVolumeRefresher) Register(actorUID string, ref resources.ActorRef, volumes []*systemInfoVolume) (*registeredActor, error) {
 	actor := &registeredActor{uid: actorUID, ref: ref, volumes: volumes}
 	// Held until the initial write finishes so a refresh cannot interleave.
@@ -104,26 +103,19 @@ func (r *systemInfoVolumeRefresher) Register(actorUID string, ref resources.Acto
 	defer actor.mu.Unlock()
 
 	r.mu.Lock()
-	prev := r.actors[actorUID]
+	if r.actors[actorUID] != nil {
+		r.mu.Unlock()
+		panic(fmt.Sprintf("system-info volumes: duplicate registration for actor UID %s, actor: %v", actorUID, ref))
+	}
 	r.actors[actorUID] = actor
 	r.mu.Unlock()
-	if prev != nil {
-		prev.mu.Lock()
-		prev.stale = true
-		prev.mu.Unlock()
-		slog.Info("Superseded a stale system-info volume registration",
-			slog.String("actor_uid", actorUID),
-			slog.Any("actor", ref))
-	}
 
 	for _, v := range volumes {
 		if err := r.write(ref, actorUID, v); err != nil {
-			r.mu.Lock()
-			if r.actors[actorUID] == actor {
-				delete(r.actors, actorUID)
+			if r.unlink(actorUID, actor) != nil {
+				// Register still holds actor.mu from the initial write.
 				actor.stale = true
 			}
-			r.mu.Unlock()
 			return nil, fmt.Errorf("while populating system-info volume %q: %w", v.Name, err)
 		}
 	}
@@ -133,36 +125,40 @@ func (r *systemInfoVolumeRefresher) Register(actorUID string, ref resources.Acto
 // Deregister drops actorUID's registration. After Deregister returns, no more
 // system-info volumes will be written for the actor.
 func (r *systemInfoVolumeRefresher) Deregister(actorUID string) {
-	r.mu.Lock()
-	actor := r.actors[actorUID]
-	delete(r.actors, actorUID)
-	r.mu.Unlock()
-	if actor != nil {
-		// Setting stale stops a refresh that snapshotted the entry before
-		// the delete.
-		actor.mu.Lock()
-		actor.stale = true
-		actor.mu.Unlock()
-	}
+	r.deregister(actorUID, nil)
 }
 
 // DeregisterOwned removes owner only when its UID still points at it. This
 // protects a newer registration from cleanup belonging to an older operation.
 func (r *systemInfoVolumeRefresher) DeregisterOwned(owner *registeredActor) {
-	if owner == nil {
-		return
+	if owner != nil {
+		r.deregister(owner.uid, owner)
 	}
-	r.mu.Lock()
-	if r.actors[owner.uid] != owner {
-		r.mu.Unlock()
-		return
-	}
-	delete(r.actors, owner.uid)
-	r.mu.Unlock()
+}
 
-	owner.mu.Lock()
-	owner.stale = true
-	owner.mu.Unlock()
+func (r *systemInfoVolumeRefresher) deregister(actorUID string, owner *registeredActor) {
+	actor := r.unlink(actorUID, owner)
+	if actor == nil {
+		return
+	}
+	// Setting stale stops a refresh that snapshotted the entry before the delete.
+	actor.mu.Lock()
+	actor.stale = true
+	actor.mu.Unlock()
+}
+
+// unlink removes actorUID's current registration, optionally only if it is
+// owner, and returns the removed registration.
+func (r *systemInfoVolumeRefresher) unlink(actorUID string, owner *registeredActor) *registeredActor {
+	r.mu.Lock()
+	actor := r.actors[actorUID]
+	if actor == nil || (owner != nil && actor != owner) {
+		r.mu.Unlock()
+		return nil
+	}
+	delete(r.actors, actorUID)
+	r.mu.Unlock()
+	return actor
 }
 
 // collectData builds the volume's contents keyed by volume-relative path.
