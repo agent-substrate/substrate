@@ -518,8 +518,8 @@ enum SnapshotFidelity {
   // (currently DurableDir-typed volumes). Memory and the rest of rootfs are
   // excluded.
   SNAPSHOT_FIDELITY_VOLUMES = 1;
-  // Volumes plus the root filesystem changes made since boot. No runtime
-  // captures this yet; requests carrying it are rejected.
+  // Volumes plus the root filesystem changes made since boot. Served by the
+  // micro-VM runtime only; other runtimes reject requests carrying it.
   SNAPSHOT_FIDELITY_ROOTFS = 2;
   // Capture process memory plus the full filesystem delta on top of the OCI
   // image (including any attached DurableDir volumes).
@@ -582,11 +582,10 @@ message UploadPausedCheckpointRequest {
   // Destination object-storage URI (the actor's in-progress snapshot URI).
   string destination_snapshot_uri = 7;
 
-  // Fidelity the uploaded snapshot must have (MEMORY or VOLUMES). The
-  // fidelity the pause checkpoint captured is not sent: atelet reads it from
-  // the local snapshot's own manifest, which is authoritative. When they
-  // differ, atelet converts where possible (a MEMORY capture to a VOLUMES
-  // upload of the volume files ateom reported) and rejects otherwise.
+  // Fidelity the uploaded snapshot must have. The fidelity the pause
+  // checkpoint captured is not sent: atelet reads it from the local
+  // snapshot's own manifest, which is authoritative, and rejects the upload
+  // if the two differ.
   SnapshotFidelity desired_fidelity = 8;
 }
 

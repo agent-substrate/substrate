@@ -66,6 +66,16 @@ type fakeAteom struct {
 	// preserveRestoreDir records the PreserveRestoreDir flag from the most
 	// recent RestoreWorkload request.
 	preserveRestoreDir bool
+	// fidelities records the fidelity each checkpoint or restore arrived
+	// with, by RPC name.
+	fidelities map[string]ateompb.SnapshotFidelity
+}
+
+func (f *fakeAteom) recordFidelity(rpc string, fidelity ateompb.SnapshotFidelity) {
+	if f.fidelities == nil {
+		f.fidelities = map[string]ateompb.SnapshotFidelity{}
+	}
+	f.fidelities[rpc] = fidelity
 }
 
 func (f *fakeAteom) recordActorDirs(rpc string, actorDirs *ateompb.ActorDirs) {
@@ -82,6 +92,7 @@ func (f *fakeAteom) RunWorkload(_ context.Context, req *ateompb.RunWorkloadReque
 
 func (f *fakeAteom) CheckpointWorkload(_ context.Context, req *ateompb.CheckpointWorkloadRequest) (*ateompb.CheckpointWorkloadResponse, error) {
 	f.recordActorDirs("CheckpointWorkload", req.GetActorDirs())
+	f.recordFidelity("CheckpointWorkload", req.GetFidelity())
 	dir := req.GetActorDirs().GetCheckpointDir()
 	names := make([]string, 0, len(f.snapshotFiles))
 	for name, body := range f.snapshotFiles {
@@ -95,6 +106,7 @@ func (f *fakeAteom) CheckpointWorkload(_ context.Context, req *ateompb.Checkpoin
 
 func (f *fakeAteom) RestoreWorkload(_ context.Context, req *ateompb.RestoreWorkloadRequest) (*ateompb.RestoreWorkloadResponse, error) {
 	f.recordActorDirs("RestoreWorkload", req.GetActorDirs())
+	f.recordFidelity("RestoreWorkload", req.GetFidelity())
 	f.preserveRestoreDir = req.GetPreserveRestoreDir()
 	dir := req.GetActorDirs().GetRestoreDir()
 	f.restored = map[string]string{}
@@ -140,8 +152,20 @@ func serveFakeAteom(t *testing.T, f *fakeAteom) {
 
 // TestLocalSnapshotGC walks an actor through
 // run -> pause -> resume -> terminate over atelet's RPC surface and ensures that
-// the local snapshot is garbage collected after the actor is terminated.
+// the local snapshot is garbage collected after the actor is terminated. It
+// runs at every fidelity atelet forwards, pinning that the pause and the
+// resume hand ateom the fidelity the control plane asked for, unchanged.
 func TestLocalSnapshotGC(t *testing.T) {
+	for _, fidelity := range []ateletpb.SnapshotFidelity{
+		ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
+		ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+		ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+	} {
+		t.Run(fidelity.String(), func(t *testing.T) { runLocalSnapshotGC(t, fidelity) })
+	}
+}
+
+func runLocalSnapshotGC(t *testing.T, fidelity ateletpb.SnapshotFidelity) {
 	useTempNodeDirs(t)
 	ctx := t.Context()
 
@@ -207,7 +231,7 @@ func TestLocalSnapshotGC(t *testing.T) {
 		ActorTemplateName:     "counter",
 		WorkerPodUid:          workerPodUID,
 		Spec:                  spec,
-		Fidelity:              ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+		Fidelity:              fidelity,
 		Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
 		Config: &ateletpb.CheckpointRequest_LocalConfig{
 			LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: snapshotName},
@@ -230,7 +254,7 @@ func TestLocalSnapshotGC(t *testing.T) {
 		WorkerPodUid:          workerPodUID,
 		SandboxAssets:         sandboxAssets,
 		Spec:                  spec,
-		Fidelity:              ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+		Fidelity:              fidelity,
 		Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
 		Config: &ateletpb.RestoreRequest_LocalConfig{
 			LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: snapshotName},
@@ -240,6 +264,11 @@ func TestLocalSnapshotGC(t *testing.T) {
 	}
 	if got := ateom.restored["checkpoint.img"]; got != "guest-memory" {
 		t.Fatalf("restore staged %q for ateom, want the pause snapshot's %q", got, "guest-memory")
+	}
+	for _, rpc := range []string{"CheckpointWorkload", "RestoreWorkload"} {
+		if got := ateom.fidelities[rpc]; got != toAteomFidelity(fidelity) {
+			t.Errorf("%s carried fidelity %v, want %v", rpc, got, toAteomFidelity(fidelity))
+		}
 	}
 	if !ateom.preserveRestoreDir {
 		t.Errorf("RestoreWorkload preserve_restore_dir = false, want true for pure-local restore")
