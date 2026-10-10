@@ -304,8 +304,9 @@ enum SnapshotFidelity {
   // Durable volumes only. The actor resumes by cold-booting its containers
   // from the OCI image with the volumes restored.
   SNAPSHOT_FIDELITY_VOLUMES = 1;
-  // Volumes plus the root filesystem changes made since boot. Not yet
-  // supported by any sandbox runtime; templates may not request it.
+  // Volumes plus the root filesystem changes made since boot. The actor
+  // cold-boots on resume with its rootfs writes back in place. Served by the
+  // micro-VM sandbox class only.
   SNAPSHOT_FIDELITY_ROOTFS = 2;
   // Volumes, root filesystem changes, and process memory. The actor resumes
   // where it left off.
@@ -1145,13 +1146,13 @@ message SnapshotConfig {
   // more than this level, and it may package less when a layer cannot be
   // captured or is too expensive to capture at the time, for example memory
   // under host pressure. A process resumed in place on its worker keeps its
-  // memory regardless of this setting. ROOTFS is not supported yet and is
-  // rejected. Defaults to MEMORY when unset.
+  // memory regardless of this setting. ROOTFS requires
+  // sandbox_config.sandbox_class SANDBOX_CLASS_MICROVM. Defaults to MEMORY
+  // when unset.
   //
   // +k8s:required
   // +k8s:minimum=1
   // +k8s:maximum=3 # keep this in sync with the SnapshotFidelity enum
-  // +k8s:customValidation # ROOTFS is not supported yet
   SnapshotFidelity preferred_fidelity = 2;
 }
 
@@ -1556,7 +1557,7 @@ message CreateActorTemplateRequest {
   // version, timestamps) is ignored, as are the status fields.
   //
   // +k8s:required
-  // +k8s:customValidation # volume_mounts must reference declared volumes
+  // +k8s:customValidation # volume_mounts must reference declared volumes; ROOTFS fidelity requires the micro-VM sandbox class
   ActorTemplate actor_template = 1;
 }
 

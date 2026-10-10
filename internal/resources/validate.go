@@ -121,21 +121,21 @@ func ValidateActorDirs(actorDirs *ateompb.ActorDirs, fldPath *field.Path) field.
 }
 
 // ValidateSnapshotFidelity rejects a checkpoint or restore request whose
-// fidelity no runtime can serve. ROOTFS is defined in the enum but no sandbox
-// runtime captures rootfs changes without memory yet, so it is refused here
-// as well as at template admission.
-func ValidateSnapshotFidelity(fidelity ateompb.SnapshotFidelity, fldPath *field.Path) field.ErrorList {
-	switch fidelity {
-	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
-		return nil
-	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED:
+// fidelity the calling sandbox runtime cannot serve. Each runtime passes the
+// levels it implements; anything else, including an unset fidelity, is
+// refused before the request touches the guest.
+func ValidateSnapshotFidelity(fidelity ateompb.SnapshotFidelity, supported []ateompb.SnapshotFidelity, fldPath *field.Path) field.ErrorList {
+	if fidelity == ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED {
 		return field.ErrorList{field.Required(fldPath, "")}
-	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS:
-		return field.ErrorList{field.Invalid(fldPath, fidelity.String(), "ROOTFS fidelity is not supported yet")}
-	default:
-		return field.ErrorList{field.NotSupported(fldPath, fidelity,
-			[]string{ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES.String(), ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY.String()})}
 	}
+	names := make([]string, 0, len(supported))
+	for _, f := range supported {
+		if f == fidelity {
+			return nil
+		}
+		names = append(names, f.String())
+	}
+	return field.ErrorList{field.NotSupported(fldPath, fidelity, names)}
 }
 
 func validateAbsDir(dir string, fldPath *field.Path) field.ErrorList {

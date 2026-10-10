@@ -312,6 +312,10 @@ type actorBootParams struct {
 	// memory); a container's own cgroup limit comes from its declared resources.
 	// Zero fields keep the kata defaults.
 	size sizing.SandboxSize
+	// keepRootfsUpper boots on top of whatever the host rootfs upper dir holds
+	// instead of wiping it first: a ROOTFS restore re-materializes the upper
+	// from the snapshot before cold-booting.
+	keepRootfsUpper bool
 }
 
 func (p actorBootParams) attribution() resources.ActorAttribution {
@@ -464,8 +468,13 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 
 	// A cold boot starts from the bare image: give it a pristine host upper dir
 	// (atelet's actor-dir reset does not know this directory; see rootfsupper.go).
-	if err := resetRootfsUpperDir(p.actorDirs); err != nil {
-		return err
+	// A ROOTFS restore has already re-materialized the upper and boots on it;
+	// that holds across a retry too, since a guest that never reached its agent
+	// wrote nothing and cleanupSandboxState only drops the overlay mounts.
+	if !p.keepRootfsUpper {
+		if err := resetRootfsUpperDir(p.actorDirs); err != nil {
+			return err
+		}
 	}
 
 	// Assemble each container's merged rootfs on the host (overlay of image lower +

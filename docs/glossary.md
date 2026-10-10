@@ -116,8 +116,10 @@ for etcd.
     without the cost of a memory image. On Resume the containers start
     afresh from the OCI image with the `DurableDir` contents restored.
   - **`ROOTFS`**: volumes plus the root filesystem changes made since boot.
-    Defined in the API but not supported by any sandbox runtime yet;
-    templates that request it are rejected.
+    Process memory is discarded; on Resume the containers cold-boot from the
+    OCI image with their rootfs writes back in place. Served by the micro-VM
+    sandbox class only: gVisor keeps rootfs changes inside its memory
+    checkpoint, so a gVisor template that requests it is rejected.
   - **`MEMORY`**: volumes, rootfs changes, and process memory. Used to
     capture everything needed to resume hot.
 
