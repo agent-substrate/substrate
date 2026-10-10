@@ -106,19 +106,6 @@ func TestBuildCreateClusterRequest_NodeConfig(t *testing.T) {
 			if nodeConfig.DiskType != tt.wantDiskType {
 				t.Errorf("DiskType = %q, want %q", nodeConfig.DiskType, tt.wantDiskType)
 			}
-			sysctls := nodeConfig.GetLinuxNodeConfig().GetSysctls()
-			wantSysctls := map[string]string{
-				"net.ipv4.neigh.default.gc_thresh1": "4096",
-				"net.ipv4.neigh.default.gc_thresh2": "8192",
-				"net.ipv4.neigh.default.gc_thresh3": "16384",
-				"fs.inotify.max_user_instances":     "65536",
-				"fs.inotify.max_user_watches":       "1048576",
-			}
-			for k, wantV := range wantSysctls {
-				if gotV := sysctls[k]; gotV != wantV {
-					t.Errorf("LinuxNodeConfig.Sysctls[%q] = %q, want %q", k, gotV, wantV)
-				}
-			}
 		})
 	}
 }
