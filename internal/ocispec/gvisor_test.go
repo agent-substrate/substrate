@@ -54,6 +54,22 @@ func TestGVisorCgroupLeafMatchesTheShapedPath(t *testing.T) {
 	}
 }
 
+// Cgroup cleanup finds an actor's leaves by the leaf of an empty container name.
+func TestGVisorCgroupLeafWithoutAContainerPrefixesEveryLeaf(t *testing.T) {
+	prefix := GVisorCgroupLeaf("uid-a", "")
+	for _, name := range []string{PauseContainer, "app"} {
+		if leaf := GVisorCgroupLeaf("uid-a", name); !strings.HasPrefix(leaf, prefix) {
+			t.Errorf("leaf %q does not start with prefix %q", leaf, prefix)
+		}
+	}
+	if prefix == "uid-a" {
+		t.Errorf("prefix %q is the bare UID, so it would match the actor's own leaf", prefix)
+	}
+	if leaf := GVisorCgroupLeaf("uid-ab", PauseContainer); strings.HasPrefix(leaf, prefix) {
+		t.Errorf("prefix %q matches leaf %q of another actor", prefix, leaf)
+	}
+}
+
 func TestShapeGVisorBindsTheNamedResolvConf(t *testing.T) {
 	for _, tc := range []struct {
 		name       string

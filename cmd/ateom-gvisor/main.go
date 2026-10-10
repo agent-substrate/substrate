@@ -849,6 +849,9 @@ func stopContainers(ctx context.Context, rcmd containerRuntime, containers []*at
 	}
 }
 
+// cleanupContainers deletes the actor's containers. A failure on one container
+// does not stop the rest: deleting the pause (root) container tears down the
+// sandbox with everything left in it, and runsc removes their cgroups.
 func cleanupContainers(ctx context.Context, rcmd containerRuntime, containers []*ateompb.Container) error {
 	// Application containers first, the pause (root) container last.
 	names := make([]string, 0, len(containers)+1)
@@ -857,6 +860,7 @@ func cleanupContainers(ctx context.Context, rcmd containerRuntime, containers []
 	}
 	names = append(names, ocispec.PauseContainer)
 
+	var errs []error
 	// Check state of all containers to mimic containerd.
 	// Without this, `runsc delete` occasionally throws an error.
 	present := make([]string, 0, len(names))
@@ -865,24 +869,26 @@ func cleanupContainers(ctx context.Context, rcmd containerRuntime, containers []
 			err = fmt.Errorf("while checking state of %q container: %w", name, err)
 			gone, listErr := isContainerAlreadyGone(ctx, rcmd, name)
 			if listErr != nil {
-				return errors.Join(err, listErr)
+				errs = append(errs, err, listErr)
+				continue
 			}
 			if gone {
 				slog.InfoContext(ctx, "runsc container already destroyed, skipping its cleanup", slog.String("container", name))
 				continue
 			}
-			return err
+			errs = append(errs, err)
+			continue
 		}
 		present = append(present, name)
 	}
 
 	for _, name := range present {
 		if err := rcmd.cmdDelete(ctx, name); err != nil {
-			return fmt.Errorf("while deleting %q container: %w", name, err)
+			errs = append(errs, fmt.Errorf("while deleting %q container: %w", name, err))
 		}
 	}
 
-	return nil
+	return errors.Join(errs...)
 }
 
 // isContainerAlreadyGone reports whether runsc no longer has a record of the
@@ -1150,6 +1156,16 @@ func (s *AteomService) terminateWorkload(ctx context.Context, actorRef resources
 	// directories after uploading the snapshot.
 	if err := cleanupContainers(cleanupCtx, rcmd, containers); err != nil {
 		errs = append(errs, fmt.Errorf("while cleaning up runsc containers: %w", err))
+	}
+	// runsc removes the cgroups it made only when its delete succeeds, so clear
+	// whatever a failed or skipped delete left behind. A leftover cgroup costs
+	// kernel memory but cannot affect another actor, so it must not hold up
+	// the rest of the teardown.
+	if err := ateomcgroup.RemoveEmptyContainerLeaves(actorUID, ocispec.GVisorCgroupLeaf(actorUID, "")); err != nil {
+		slog.WarnContext(ctx, "failed to remove actor cgroups",
+			slog.String("actor", actorRef.String()),
+			slog.String("actorUID", actorUID),
+			slog.Any("err", err))
 	}
 
 	// The actor may resume on another worker, so this one may never see another

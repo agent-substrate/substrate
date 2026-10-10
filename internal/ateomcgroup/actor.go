@@ -158,6 +158,62 @@ func removeActorLeaf(root, actorUID string) error {
 	return nil
 }
 
+// RemoveEmptyContainerLeaves deletes the actor's per-container cgroups, the
+// directories under Root whose names start with leafPrefix, and any cgroups
+// nested in them. leafPrefix must extend actorUID, so it cannot reach the
+// actor's own leaf. It could still match another actor whose UID extends
+// leafPrefix; that cannot happen because ateapi assigns UIDs as fixed-length
+// UUIDs. Only empty cgroups can be removed; any that still hold processes are
+// reported.
+func RemoveEmptyContainerLeaves(actorUID, leafPrefix string) error {
+	return removeEmptyContainerLeaves(Root, actorUID, leafPrefix)
+}
+
+func removeEmptyContainerLeaves(root, actorUID, leafPrefix string) error {
+	if _, err := actorLeafPath(root, actorUID); err != nil {
+		return err
+	}
+	if len(leafPrefix) <= len(actorUID) || !strings.HasPrefix(leafPrefix, actorUID) || strings.ContainsAny(leafPrefix, "/\x00") {
+		return fmt.Errorf("invalid container cgroup prefix %q for actor %q", leafPrefix, actorUID)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return fmt.Errorf("while listing cgroup %q: %w", root, err)
+	}
+	var errs []error
+	for _, e := range entries {
+		if e.IsDir() && strings.HasPrefix(e.Name(), leafPrefix) {
+			errs = append(errs, removeCgroupTree(filepath.Join(root, e.Name())))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// removeCgroupTree removes the cgroup at path after its descendants: rmdir
+// refuses a cgroup that still has children.
+func removeCgroupTree(path string) error {
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("while listing cgroup %q: %w", path, err)
+	}
+	var errs []error
+	for _, e := range entries {
+		if e.IsDir() {
+			errs = append(errs, removeCgroupTree(filepath.Join(path, e.Name())))
+		}
+	}
+	if err := errors.Join(errs...); err != nil {
+		return err
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("while removing cgroup %q: %w", path, err)
+	}
+	return nil
+}
+
 func actorLeafPath(root, actorUID string) (string, error) {
 	if actorUID == "" || actorUID == "." || actorUID == ".." || actorUID == workerLeaf || strings.ContainsAny(actorUID, "/\x00") {
 		return "", fmt.Errorf("invalid actor cgroup name %q", actorUID)
