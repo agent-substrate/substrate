@@ -222,7 +222,9 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 		}
 		if err == nil {
 			if tag.GetStatus().GetActorTemplateUid() != tmpl.GetMetadata().GetUid() || resources.ActorRefFromObjectRef(tag.GetSourceActor()) != resources.ActorRefFromObjectRef(goldenActorRef) {
-				return 0, r.fail(ctx, tmpl, reasonGoldenTagConflict, "golden tag belongs to another actor or template")
+				return 0, r.fail(ctx, tmpl, reasonGoldenTagConflict, fmt.Sprintf(
+					"golden tag belongs to another actor or template: owner template UID %q, source actor %s",
+					tag.GetStatus().GetActorTemplateUid(), resources.ActorRefFromObjectRef(tag.GetSourceActor())))
 			}
 			if tagDurableSnapshotURI(tag, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED) != "" {
 				return 0, r.saveGoldenTag(ctx, tmpl, goldenActorRef)
@@ -244,7 +246,8 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 
 		switch state := actor.GetStatus().GetState(); state {
 		case ateapipb.ActorState_ACTOR_STATE_CRASHED:
-			return 0, r.fail(ctx, tmpl, reasonGoldenActorCrashed, "golden actor crashed before its snapshot was taken")
+			return 0, r.fail(ctx, tmpl, reasonGoldenActorCrashed,
+				"golden actor crashed before its snapshot was taken: "+actor.GetStatus().GetCrash().GetMessage())
 
 		case ateapipb.ActorState_ACTOR_STATE_RUNNING:
 			takeAt := goldenSnapshotStatus.GetTakeGoldenSnapshotAt()
