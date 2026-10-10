@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"strconv"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -87,14 +88,24 @@ func (s *RouterServer) startEnvoyDataplane(ctx context.Context, g *errgroup.Grou
 
 	// Envoy receives all routing configuration from the local xDS server.
 	g.Go(func() error {
-		slog.InfoContext(ctx, "Starting Envoy xDS Server", slog.Int("port", s.cfg.XdsPort))
-		lis, err := net.Listen("tcp", fmt.Sprintf(":%d", s.cfg.XdsPort))
+		addr := xdsListenAddress(s.cfg.XdsPort)
+		slog.InfoContext(ctx, "Starting Envoy xDS Server", slog.String("address", addr))
+		lis, err := net.Listen("tcp", addr)
 		if err != nil {
-			return fmt.Errorf("failed to listen on port %d: %w", s.cfg.XdsPort, err)
+			return fmt.Errorf("failed to listen on %s: %w", addr, err)
 		}
 		defer lis.Close()
 
 		return xdsSrv.Serve(ctx, lis)
 	})
 	return nil
+}
+
+// xdsListenAddress is where the router serves xDS to the Envoy in its own pod.
+// The xDS server is plaintext and unauthenticated, and its ADS and SDS streams
+// describe every listener, route, cluster and secret path in the dataplane, so
+// it binds loopback only: Envoy dials it at 127.0.0.1 from the same network
+// namespace, and nothing else in the cluster has any business reaching it.
+func xdsListenAddress(port int) string {
+	return net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
 }
