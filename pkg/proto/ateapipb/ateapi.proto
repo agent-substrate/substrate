@@ -1712,6 +1712,13 @@ message GetActorEgressPolicyRequest {
   // +k8s:required
   // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor = 1;
+
+  // Name of the singleton egress policy. Must be "default".
+  //
+  // +k8s:required
+  // +k8s:format=k8s-short-name
+  // +k8s:customValidation # must be "default"
+  string name = 2;
 }
 
 // CreateActorEgressPolicyRequest creates an egress policy for an Actor.
@@ -1756,10 +1763,17 @@ message DeleteActorEgressPolicyRequest {
   // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor = 1;
 
+  // Name of the singleton egress policy. Must be "default".
+  //
+  // +k8s:required
+  // +k8s:format=k8s-short-name
+  // +k8s:customValidation # must be "default"
+  string name = 2;
+
   // Optional per-delete preconditions.
   //
   // +k8s:optional
-  DeleteOptions options = 2;
+  DeleteOptions options = 3;
 }
 
 message GetTagRequest {
@@ -2543,7 +2557,14 @@ message Binding {
 }
 
 // GetGlobalAccessPolicyRequest retrieves the deployment-wide global access policy singleton.
-message GetGlobalAccessPolicyRequest {}
+message GetGlobalAccessPolicyRequest {
+  // Name of the singleton access policy. Must be "default".
+  //
+  // +k8s:required
+  // +k8s:format=k8s-short-name
+  // +k8s:customValidation # must be "default"
+  string name = 1;
+}
 
 // CreateGlobalAccessPolicyRequest creates the deployment-wide global access policy singleton.
 message CreateGlobalAccessPolicyRequest {
@@ -2570,6 +2591,13 @@ message GetAtespaceAccessPolicyRequest {
   // +k8s:required
   // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
   ObjectRef atespace = 1;
+
+  // Name of the singleton access policy. Must be "default".
+  //
+  // +k8s:required
+  // +k8s:format=k8s-short-name
+  // +k8s:customValidation # must be "default"
+  string name = 2;
 }
 
 // CreateAtespaceAccessPolicyRequest creates an access policy for an Atespace.
@@ -2610,8 +2638,15 @@ message DeleteAtespaceAccessPolicyRequest {
   // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
   ObjectRef atespace = 1;
 
+  // Name of the singleton access policy. Must be "default".
+  //
+  // +k8s:required
+  // +k8s:format=k8s-short-name
+  // +k8s:customValidation # must be "default"
+  string name = 2;
+
   // Optional per-delete preconditions.
   //
   // +k8s:optional
-  DeleteOptions options = 2;
+  DeleteOptions options = 3;
 }

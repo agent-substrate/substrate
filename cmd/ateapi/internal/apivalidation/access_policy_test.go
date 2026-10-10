@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/authz"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
@@ -170,7 +171,15 @@ func TestValidateGetGlobalAccessPolicyRequest(t *testing.T) {
 		wantError field.ErrorList
 	}{{
 		name: "valid",
-		req:  &ateapipb.GetGlobalAccessPolicyRequest{},
+		req:  &ateapipb.GetGlobalAccessPolicyRequest{Name: resources.SingletonName},
+	}, {
+		name:      "missing name",
+		req:       &ateapipb.GetGlobalAccessPolicyRequest{},
+		wantError: field.ErrorList{field.Required(field.NewPath("name"), "")},
+	}, {
+		name:      "wrong name",
+		req:       &ateapipb.GetGlobalAccessPolicyRequest{Name: "other"},
+		wantError: field.ErrorList{field.Invalid(field.NewPath("name"), nil, "").WithOrigin("custom=default")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -298,11 +307,19 @@ func TestValidateGetAtespaceAccessPolicyRequest(t *testing.T) {
 		wantError field.ErrorList
 	}{{
 		name: "valid",
-		req:  &ateapipb.GetAtespaceAccessPolicyRequest{Atespace: &ateapipb.ObjectRef{Name: "team-a"}},
+		req:  &ateapipb.GetAtespaceAccessPolicyRequest{Atespace: &ateapipb.ObjectRef{Name: "team-a"}, Name: resources.SingletonName},
 	}, {
 		name:      "missing atespace",
-		req:       &ateapipb.GetAtespaceAccessPolicyRequest{},
+		req:       &ateapipb.GetAtespaceAccessPolicyRequest{Name: resources.SingletonName},
 		wantError: field.ErrorList{field.Required(field.NewPath("atespace"), "")},
+	}, {
+		name:      "missing name",
+		req:       &ateapipb.GetAtespaceAccessPolicyRequest{Atespace: &ateapipb.ObjectRef{Name: "team-a"}},
+		wantError: field.ErrorList{field.Required(field.NewPath("name"), "")},
+	}, {
+		name:      "wrong name",
+		req:       &ateapipb.GetAtespaceAccessPolicyRequest{Atespace: &ateapipb.ObjectRef{Name: "team-a"}, Name: "other"},
+		wantError: field.ErrorList{field.Invalid(field.NewPath("name"), nil, "").WithOrigin("custom=default")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -372,11 +389,19 @@ func TestValidateDeleteAtespaceAccessPolicyRequest(t *testing.T) {
 		wantError field.ErrorList
 	}{{
 		name: "valid",
-		req:  &ateapipb.DeleteAtespaceAccessPolicyRequest{Atespace: &ateapipb.ObjectRef{Name: "team-a"}},
+		req:  &ateapipb.DeleteAtespaceAccessPolicyRequest{Atespace: &ateapipb.ObjectRef{Name: "team-a"}, Name: resources.SingletonName},
 	}, {
 		name:      "missing atespace",
-		req:       &ateapipb.DeleteAtespaceAccessPolicyRequest{},
+		req:       &ateapipb.DeleteAtespaceAccessPolicyRequest{Name: resources.SingletonName},
 		wantError: field.ErrorList{field.Required(field.NewPath("atespace"), "")},
+	}, {
+		name:      "missing name",
+		req:       &ateapipb.DeleteAtespaceAccessPolicyRequest{Atespace: &ateapipb.ObjectRef{Name: "team-a"}},
+		wantError: field.ErrorList{field.Required(field.NewPath("name"), "")},
+	}, {
+		name:      "wrong name",
+		req:       &ateapipb.DeleteAtespaceAccessPolicyRequest{Atespace: &ateapipb.ObjectRef{Name: "team-a"}, Name: "other"},
+		wantError: field.ErrorList{field.Invalid(field.NewPath("name"), nil, "").WithOrigin("custom=default")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

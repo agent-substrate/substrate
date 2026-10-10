@@ -5381,7 +5381,13 @@ type GetActorEgressPolicyRequest struct {
 	//
 	// +k8s:required
 	// +k8s:subfield(atespace)=+k8s:required
-	Actor         *ObjectRef `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
+	Actor *ObjectRef `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
+	// Name of the singleton egress policy. Must be "default".
+	//
+	// +k8s:required
+	// +k8s:format=k8s-short-name
+	// +k8s:customValidation # must be "default"
+	Name          string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -5421,6 +5427,13 @@ func (x *GetActorEgressPolicyRequest) GetActor() *ObjectRef {
 		return x.Actor
 	}
 	return nil
+}
+
+func (x *GetActorEgressPolicyRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
 }
 
 // CreateActorEgressPolicyRequest creates an egress policy for an Actor.
@@ -5557,10 +5570,16 @@ type DeleteActorEgressPolicyRequest struct {
 	// +k8s:required
 	// +k8s:subfield(atespace)=+k8s:required
 	Actor *ObjectRef `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
+	// Name of the singleton egress policy. Must be "default".
+	//
+	// +k8s:required
+	// +k8s:format=k8s-short-name
+	// +k8s:customValidation # must be "default"
+	Name string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	// Optional per-delete preconditions.
 	//
 	// +k8s:optional
-	Options       *DeleteOptions `protobuf:"bytes,2,opt,name=options,proto3" json:"options,omitempty"`
+	Options       *DeleteOptions `protobuf:"bytes,3,opt,name=options,proto3" json:"options,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -5600,6 +5619,13 @@ func (x *DeleteActorEgressPolicyRequest) GetActor() *ObjectRef {
 		return x.Actor
 	}
 	return nil
+}
+
+func (x *DeleteActorEgressPolicyRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
 }
 
 func (x *DeleteActorEgressPolicyRequest) GetOptions() *DeleteOptions {
@@ -8126,7 +8152,13 @@ func (x *Binding) GetMembers() []string {
 
 // GetGlobalAccessPolicyRequest retrieves the deployment-wide global access policy singleton.
 type GetGlobalAccessPolicyRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Name of the singleton access policy. Must be "default".
+	//
+	// +k8s:required
+	// +k8s:format=k8s-short-name
+	// +k8s:customValidation # must be "default"
+	Name          string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -8159,6 +8191,13 @@ func (x *GetGlobalAccessPolicyRequest) ProtoReflect() protoreflect.Message {
 // Deprecated: Use GetGlobalAccessPolicyRequest.ProtoReflect.Descriptor instead.
 func (*GetGlobalAccessPolicyRequest) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{111}
+}
+
+func (x *GetGlobalAccessPolicyRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
 }
 
 // CreateGlobalAccessPolicyRequest creates the deployment-wide global access policy singleton.
@@ -8266,7 +8305,13 @@ type GetAtespaceAccessPolicyRequest struct {
 	//
 	// +k8s:required
 	// +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
-	Atespace      *ObjectRef `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
+	Atespace *ObjectRef `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
+	// Name of the singleton access policy. Must be "default".
+	//
+	// +k8s:required
+	// +k8s:format=k8s-short-name
+	// +k8s:customValidation # must be "default"
+	Name          string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -8306,6 +8351,13 @@ func (x *GetAtespaceAccessPolicyRequest) GetAtespace() *ObjectRef {
 		return x.Atespace
 	}
 	return nil
+}
+
+func (x *GetAtespaceAccessPolicyRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
 }
 
 // CreateAtespaceAccessPolicyRequest creates an access policy for an Atespace.
@@ -8438,10 +8490,16 @@ type DeleteAtespaceAccessPolicyRequest struct {
 	// +k8s:required
 	// +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
 	Atespace *ObjectRef `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
+	// Name of the singleton access policy. Must be "default".
+	//
+	// +k8s:required
+	// +k8s:format=k8s-short-name
+	// +k8s:customValidation # must be "default"
+	Name string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	// Optional per-delete preconditions.
 	//
 	// +k8s:optional
-	Options       *DeleteOptions `protobuf:"bytes,2,opt,name=options,proto3" json:"options,omitempty"`
+	Options       *DeleteOptions `protobuf:"bytes,3,opt,name=options,proto3" json:"options,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -8481,6 +8539,13 @@ func (x *DeleteAtespaceAccessPolicyRequest) GetAtespace() *ObjectRef {
 		return x.Atespace
 	}
 	return nil
+}
+
+func (x *DeleteAtespaceAccessPolicyRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
 }
 
 func (x *DeleteAtespaceAccessPolicyRequest) GetOptions() *DeleteOptions {
@@ -8762,18 +8827,20 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x12DeleteActorRequest\x12'\n" +
 	"\x05actor\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\x12\x1b\n" +
 	"\tany_state\x18\x02 \x01(\bR\banyState\x12/\n" +
-	"\aoptions\x18\x03 \x01(\v2\x15.ateapi.DeleteOptionsR\aoptions\"F\n" +
+	"\aoptions\x18\x03 \x01(\v2\x15.ateapi.DeleteOptionsR\aoptions\"Z\n" +
 	"\x1bGetActorEgressPolicyRequest\x12'\n" +
-	"\x05actor\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\"\x84\x01\n" +
+	"\x05actor\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\"\x84\x01\n" +
 	"\x1eCreateActorEgressPolicyRequest\x12'\n" +
 	"\x05actor\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\x129\n" +
 	"\regress_policy\x18\x02 \x01(\v2\x14.ateapi.EgressPolicyR\fegressPolicy\"\x84\x01\n" +
 	"\x1eUpdateActorEgressPolicyRequest\x12'\n" +
 	"\x05actor\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\x129\n" +
-	"\regress_policy\x18\x02 \x01(\v2\x14.ateapi.EgressPolicyR\fegressPolicy\"z\n" +
+	"\regress_policy\x18\x02 \x01(\v2\x14.ateapi.EgressPolicyR\fegressPolicy\"\x8e\x01\n" +
 	"\x1eDeleteActorEgressPolicyRequest\x12'\n" +
-	"\x05actor\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\x12/\n" +
-	"\aoptions\x18\x02 \x01(\v2\x15.ateapi.DeleteOptionsR\aoptions\"4\n" +
+	"\x05actor\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12/\n" +
+	"\aoptions\x18\x03 \x01(\v2\x15.ateapi.DeleteOptionsR\aoptions\"4\n" +
 	"\rGetTagRequest\x12#\n" +
 	"\x03tag\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x03tag\"\x8b\x01\n" +
 	"\x13MintActorJWTRequest\x12'\n" +
@@ -8910,23 +8977,26 @@ const file_ateapi_proto_rawDesc = "" +
 	"\bbindings\x18\x02 \x03(\v2\x0f.ateapi.BindingR\bbindings\"7\n" +
 	"\aBinding\x12\x12\n" +
 	"\x04role\x18\x01 \x01(\tR\x04role\x12\x18\n" +
-	"\amembers\x18\x02 \x03(\tR\amembers\"\x1e\n" +
-	"\x1cGetGlobalAccessPolicyRequest\"\\\n" +
+	"\amembers\x18\x02 \x03(\tR\amembers\"2\n" +
+	"\x1cGetGlobalAccessPolicyRequest\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\"\\\n" +
 	"\x1fCreateGlobalAccessPolicyRequest\x129\n" +
 	"\raccess_policy\x18\x01 \x01(\v2\x14.ateapi.AccessPolicyR\faccessPolicy\"\\\n" +
 	"\x1fUpdateGlobalAccessPolicyRequest\x129\n" +
-	"\raccess_policy\x18\x01 \x01(\v2\x14.ateapi.AccessPolicyR\faccessPolicy\"O\n" +
+	"\raccess_policy\x18\x01 \x01(\v2\x14.ateapi.AccessPolicyR\faccessPolicy\"c\n" +
 	"\x1eGetAtespaceAccessPolicyRequest\x12-\n" +
-	"\batespace\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\batespace\"\x8d\x01\n" +
+	"\batespace\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\batespace\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\"\x8d\x01\n" +
 	"!CreateAtespaceAccessPolicyRequest\x12-\n" +
 	"\batespace\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\batespace\x129\n" +
 	"\raccess_policy\x18\x02 \x01(\v2\x14.ateapi.AccessPolicyR\faccessPolicy\"\x8d\x01\n" +
 	"!UpdateAtespaceAccessPolicyRequest\x12-\n" +
 	"\batespace\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\batespace\x129\n" +
-	"\raccess_policy\x18\x02 \x01(\v2\x14.ateapi.AccessPolicyR\faccessPolicy\"\x83\x01\n" +
+	"\raccess_policy\x18\x02 \x01(\v2\x14.ateapi.AccessPolicyR\faccessPolicy\"\x97\x01\n" +
 	"!DeleteAtespaceAccessPolicyRequest\x12-\n" +
-	"\batespace\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\batespace\x12/\n" +
-	"\aoptions\x18\x02 \x01(\v2\x15.ateapi.DeleteOptionsR\aoptions*a\n" +
+	"\batespace\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\batespace\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12/\n" +
+	"\aoptions\x18\x03 \x01(\v2\x15.ateapi.DeleteOptionsR\aoptions*a\n" +
 	"\rSnapshotOwner\x12\x1e\n" +
 	"\x1aSNAPSHOT_OWNER_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14SNAPSHOT_OWNER_ACTOR\x10\x01\x12\x16\n" +

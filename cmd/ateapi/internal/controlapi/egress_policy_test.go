@@ -46,11 +46,13 @@ func TestActorEgressPolicy(t *testing.T) {
 
 	if _, err := service.GetActorEgressPolicy(t.Context(), &ateapipb.GetActorEgressPolicyRequest{
 		Actor: actorRef,
+		Name:  resources.SingletonName,
 	}); apierror.Code(err) != codes.NotFound {
 		t.Fatalf("policy before create status = %v, want NotFound", apierror.Code(err))
 	}
 	if _, err := service.GetActorEgressPolicy(t.Context(), &ateapipb.GetActorEgressPolicyRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "missing-actor"},
+		Name:  resources.SingletonName,
 	}); apierror.Code(err) != codes.NotFound {
 		t.Fatalf("missing parent status = %v, want NotFound", apierror.Code(err))
 	}
@@ -93,7 +95,7 @@ func TestActorEgressPolicy(t *testing.T) {
 	if md := created.GetMetadata(); md.GetName() != "default" || md.GetAtespace() != testAtespace || md.GetUid() == "" || md.GetVersion() != 1 || md.GetCreateTime() == nil || md.GetUpdateTime() == nil {
 		t.Fatalf("created metadata = %v", md)
 	}
-	got, err := service.GetActorEgressPolicy(t.Context(), &ateapipb.GetActorEgressPolicyRequest{Actor: actorRef})
+	got, err := service.GetActorEgressPolicy(t.Context(), &ateapipb.GetActorEgressPolicyRequest{Actor: actorRef, Name: resources.SingletonName})
 	if err != nil || !proto.Equal(got, created) {
 		t.Fatalf("policy after create = %v, %v; want %v", got, err, created)
 	}
@@ -138,12 +140,14 @@ func TestActorEgressPolicy(t *testing.T) {
 	}
 	deleted, err := service.DeleteActorEgressPolicy(t.Context(), &ateapipb.DeleteActorEgressPolicyRequest{
 		Actor: actorRef,
+		Name:  resources.SingletonName,
 	})
 	if err != nil || !proto.Equal(deleted, updated) {
 		t.Fatalf("deleted policy = %v, %v; want %v", deleted, err, updated)
 	}
 	if _, err := service.GetActorEgressPolicy(t.Context(), &ateapipb.GetActorEgressPolicyRequest{
 		Actor: actorRef,
+		Name:  resources.SingletonName,
 	}); apierror.Code(err) != codes.NotFound {
 		t.Fatalf("policy after delete status = %v, want NotFound", apierror.Code(err))
 	}

@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/grpc/codes"
@@ -38,7 +39,7 @@ func TestGlobalAccessPolicy_CRUD(t *testing.T) {
 	defer tc.cleanup()
 	ctx := context.Background()
 
-	_, err := tc.client.GetGlobalAccessPolicy(ctx, &ateapipb.GetGlobalAccessPolicyRequest{})
+	_, err := tc.client.GetGlobalAccessPolicy(ctx, &ateapipb.GetGlobalAccessPolicyRequest{Name: resources.SingletonName})
 	wantCode(t, "Get before create", err, codes.NotFound)
 
 	created, err := tc.client.CreateGlobalAccessPolicy(ctx, &ateapipb.CreateGlobalAccessPolicyRequest{
@@ -62,7 +63,7 @@ func TestGlobalAccessPolicy_CRUD(t *testing.T) {
 	})
 	wantCode(t, "second Create", err, codes.AlreadyExists)
 
-	got, err := tc.client.GetGlobalAccessPolicy(ctx, &ateapipb.GetGlobalAccessPolicyRequest{})
+	got, err := tc.client.GetGlobalAccessPolicy(ctx, &ateapipb.GetGlobalAccessPolicyRequest{Name: resources.SingletonName})
 	if err != nil {
 		t.Fatalf("Get failed: %v", err)
 	}
@@ -108,7 +109,7 @@ func TestAtespaceAccessPolicy_CRUD(t *testing.T) {
 	})
 	wantCode(t, "Create on missing atespace", err, codes.FailedPrecondition)
 
-	_, err = tc.client.GetAtespaceAccessPolicy(ctx, &ateapipb.GetAtespaceAccessPolicyRequest{Atespace: ref})
+	_, err = tc.client.GetAtespaceAccessPolicy(ctx, &ateapipb.GetAtespaceAccessPolicyRequest{Atespace: ref, Name: resources.SingletonName})
 	wantCode(t, "Get before create", err, codes.NotFound)
 
 	created, err := tc.client.CreateAtespaceAccessPolicy(ctx, &ateapipb.CreateAtespaceAccessPolicyRequest{Atespace: ref, AccessPolicy: policy})
@@ -118,7 +119,7 @@ func TestAtespaceAccessPolicy_CRUD(t *testing.T) {
 	_, err = tc.client.CreateAtespaceAccessPolicy(ctx, &ateapipb.CreateAtespaceAccessPolicyRequest{Atespace: ref, AccessPolicy: policy})
 	wantCode(t, "second Create", err, codes.AlreadyExists)
 
-	got, err := tc.client.GetAtespaceAccessPolicy(ctx, &ateapipb.GetAtespaceAccessPolicyRequest{Atespace: ref})
+	got, err := tc.client.GetAtespaceAccessPolicy(ctx, &ateapipb.GetAtespaceAccessPolicyRequest{Atespace: ref, Name: resources.SingletonName})
 	if err != nil {
 		t.Fatalf("Get failed: %v", err)
 	}
@@ -138,16 +139,17 @@ func TestAtespaceAccessPolicy_CRUD(t *testing.T) {
 
 	_, err = tc.client.DeleteAtespaceAccessPolicy(ctx, &ateapipb.DeleteAtespaceAccessPolicyRequest{
 		Atespace: ref,
+		Name:     resources.SingletonName,
 		Options:  &ateapipb.DeleteOptions{Version: created.GetMetadata().GetVersion()},
 	})
 	wantCode(t, "Delete with stale version", err, codes.Aborted)
 
-	if _, err := tc.client.DeleteAtespaceAccessPolicy(ctx, &ateapipb.DeleteAtespaceAccessPolicyRequest{Atespace: ref}); err != nil {
+	if _, err := tc.client.DeleteAtespaceAccessPolicy(ctx, &ateapipb.DeleteAtespaceAccessPolicyRequest{Atespace: ref, Name: resources.SingletonName}); err != nil {
 		t.Fatalf("Delete failed: %v", err)
 	}
-	_, err = tc.client.GetAtespaceAccessPolicy(ctx, &ateapipb.GetAtespaceAccessPolicyRequest{Atespace: ref})
+	_, err = tc.client.GetAtespaceAccessPolicy(ctx, &ateapipb.GetAtespaceAccessPolicyRequest{Atespace: ref, Name: resources.SingletonName})
 	wantCode(t, "Get after delete", err, codes.NotFound)
-	_, err = tc.client.DeleteAtespaceAccessPolicy(ctx, &ateapipb.DeleteAtespaceAccessPolicyRequest{Atespace: ref})
+	_, err = tc.client.DeleteAtespaceAccessPolicy(ctx, &ateapipb.DeleteAtespaceAccessPolicyRequest{Atespace: ref, Name: resources.SingletonName})
 	wantCode(t, "second Delete", err, codes.NotFound)
 
 	// Deleting the atespace removes its policy with it.
@@ -157,6 +159,6 @@ func TestAtespaceAccessPolicy_CRUD(t *testing.T) {
 	if _, err := tc.client.DeleteAtespace(ctx, &ateapipb.DeleteAtespaceRequest{Atespace: ref}); err != nil {
 		t.Fatalf("DeleteAtespace failed: %v", err)
 	}
-	_, err = tc.client.GetAtespaceAccessPolicy(ctx, &ateapipb.GetAtespaceAccessPolicyRequest{Atespace: ref})
+	_, err = tc.client.GetAtespaceAccessPolicy(ctx, &ateapipb.GetAtespaceAccessPolicyRequest{Atespace: ref, Name: resources.SingletonName})
 	wantCode(t, "Get after DeleteAtespace", err, codes.NotFound)
 }
