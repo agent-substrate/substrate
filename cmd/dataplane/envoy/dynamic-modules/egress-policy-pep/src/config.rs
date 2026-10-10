@@ -85,6 +85,7 @@ impl Default for EgressPolicyPepFilterConfig {
 impl<EHF: EnvoyHttpFilter> HttpFilterConfig<EHF> for EgressPolicyPepFilterConfig {
   fn new_http_filter(&self, _envoy: &mut EHF) -> Box<dyn HttpFilter<EHF>> {
     Box::new(EgressPolicyPepFilter {
+      config: self.config.clone(),
       cache_hit_counter: self.cache_hit_counter,
       cache_miss_counter: self.cache_miss_counter,
       allowed_counter: self.allowed_counter,

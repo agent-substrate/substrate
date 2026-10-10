@@ -17,7 +17,7 @@
 
 mod config;
 
-use std::ffi::c_void;
+use std::{ffi::c_void, time::SystemTime};
 
 pub use config::{Config, EgressPolicyPepFilterConfig, DEFAULT_CACHE_ENABLED, DEFAULT_CACHE_TTL};
 use envoy_proxy_dynamic_modules_rust_sdk::{
@@ -31,13 +31,17 @@ use envoy_proxy_dynamic_modules_rust_sdk::{
   EnvoyHttpFilter, EnvoyHttpFilterConfig, HttpFilter, HttpFilterConfig,
 };
 pub use substrate_envoy_common::{
-  pattern_matches, EgressPolicy, EgressRule, ATE_POLICY_EGRESS,
+  pattern_matches, DateTime, EgressPolicy, EgressRule, Utc, ATE_POLICY_EGRESS,
   EGRESS_MODE_CLEARTEXT, EGRESS_MODE_MITM,
 };
 
 /// Filter state key holding the cached egress policy object on the inner
 /// connection.
 pub const ATE_POLICY_EGRESS_INNER: &[u8] = b"dev.ate.policy.egress.inner";
+
+/// Filter state key holding the refreshed egress policy JSON written after an
+/// ext_proc callout on the inner connection.
+pub const ATE_POLICY_EGRESS_REFRESH: &[u8] = b"dev.ate.policy.egress.refresh";
 
 /// Filter state key indicating that ext_proc callout should be skipped for the
 /// current request.
@@ -91,6 +95,7 @@ extern "C" fn drop_cached_egress_policy(object: *mut c_void) {
 
 /// Per-stream HTTP filter instance for egress policy enforcement.
 pub struct EgressPolicyPepFilter {
+  pub(crate) config: Config,
   pub(crate) cache_hit_counter: EnvoyCounterId,
   pub(crate) cache_miss_counter: EnvoyCounterId,
   pub(crate) allowed_counter: EnvoyCounterId,
@@ -131,8 +136,8 @@ fn is_websocket_upgrade<EHF: EnvoyHttpFilter>(envoy_filter: &mut EHF) -> bool {
 impl EgressPolicyPepFilter {
   /// Returns the [`CachedEgressPolicy`] from [`ATE_POLICY_EGRESS_INNER`] if
   /// present, or creates and stores one from [`ATE_POLICY_EGRESS`] with
-  /// connection lifespan. Increments [`CACHE_HIT_COUNTER_NAME`] when a cached
-  /// policy is returned and [`CACHE_MISS_COUNTER_NAME`] otherwise.
+  /// connection lifespan. Increments [`CACHE_HIT_COUNTER_NAME`] when a non-stale
+  /// cached policy is returned and [`CACHE_MISS_COUNTER_NAME`] otherwise.
   fn get_or_create_cached_egress_policy<EHF: EnvoyHttpFilter>(
     &self,
     envoy_filter: &mut EHF,
@@ -181,16 +186,24 @@ impl EgressPolicyPepFilter {
         }),
     };
 
-    let counter = if cached_ptr.is_some() {
-      self.cache_hit_counter
-    } else {
-      self.cache_miss_counter
-    };
-    let _ = envoy_filter.increment_counter(counter, 1);
-
     // SAFETY: `cached_ptr` points to a `CachedEgressPolicy` stored in
     // `ATE_POLICY_EGRESS_INNER` and owned by Envoy for the connection lifespan.
-    cached_ptr.map(|ptr| unsafe { &*ptr })
+    let Some(cached) = cached_ptr.map(|ptr| unsafe { &*ptr }) else {
+      let _ = envoy_filter.increment_counter(self.cache_miss_counter, 1);
+      return None;
+    };
+
+    if DateTime::<Utc>::from(SystemTime::now())
+      .signed_duration_since(cached.policy.created_at)
+      .to_std()
+      .is_ok_and(|age| age >= self.config.cache_ttl)
+    {
+      let _ = envoy_filter.increment_counter(self.cache_miss_counter, 1);
+      return None;
+    }
+
+    let _ = envoy_filter.increment_counter(self.cache_hit_counter, 1);
+    Some(cached)
   }
 
   fn apply_matched_rule<EHF: EnvoyHttpFilter>(
@@ -316,13 +329,32 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for EgressPolicyPepFilter {
 
   fn on_response_headers(
     &mut self,
-    _envoy_filter: &mut EHF,
+    envoy_filter: &mut EHF,
     end_of_stream: bool,
   ) -> envoy_dynamic_module_type_on_http_filter_response_headers_status {
     envoy_log_trace!(
       "egress policy pep: on_response_headers end_of_stream={}",
       end_of_stream
     );
+    if let Some(raw_policy) = envoy_filter.get_filter_state_bytes(ATE_POLICY_EGRESS_REFRESH) {
+      match serde_json::from_slice::<EgressPolicy>(raw_policy.as_slice()) {
+        Ok(policy) => {
+          if let Some(ptr) = envoy_filter
+            .get_filter_state_object(ATE_POLICY_EGRESS_INNER)
+            .filter(|ptr| !ptr.is_null())
+          {
+            // SAFETY: `ptr` points to a `CachedEgressPolicy` stored in
+            // `ATE_POLICY_EGRESS_INNER` and owned by Envoy for the connection
+            // lifespan. Envoy's event loop is single-threaded per connection.
+            let cached = unsafe { &mut *(ptr as *mut CachedEgressPolicy) };
+            cached.policy = policy;
+          }
+        }
+        Err(err) => {
+          envoy_log_debug!("egress policy pep: invalid refreshed egress policy: {}", err);
+        }
+      }
+    }
     envoy_dynamic_module_type_on_http_filter_response_headers_status::Continue
   }
 }
@@ -362,18 +394,24 @@ fn new_http_filter_config_fn<
 
 #[cfg(test)]
 mod tests {
-  use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc,
+  use std::{
+    sync::{
+      atomic::{AtomicUsize, Ordering},
+      Arc,
+    },
+    time::Duration,
   };
 
   use super::*;
   use envoy_proxy_dynamic_modules_rust_sdk::{EnvoyBuffer, MockEnvoyHttpFilter};
-  use substrate_envoy_common::DateTime;
+
+  fn fresh_created_at() -> DateTime<Utc> {
+    DateTime::from_timestamp(4_070_908_800, 0).unwrap()
+  }
 
   fn expected_policy() -> EgressPolicy {
     EgressPolicy {
-      created_at: DateTime::UNIX_EPOCH,
+      created_at: fresh_created_at(),
       rules: vec![EgressRule {
         pattern: "api.example.com".to_string(),
         mode: "mitm".to_string(),
@@ -398,6 +436,7 @@ mod tests {
 
   fn test_filter() -> EgressPolicyPepFilter {
     EgressPolicyPepFilter {
+      config: Config::default(),
       cache_hit_counter: EnvoyCounterId(1),
       cache_miss_counter: EnvoyCounterId(2),
       allowed_counter: EnvoyCounterId(3),
@@ -435,11 +474,44 @@ mod tests {
   }
 
   #[test]
+  fn test_get_or_create_cached_egress_policy_returns_none_when_stale() {
+    let mut filter = test_filter();
+    filter.config.cache_ttl = Duration::from_secs(10);
+    let mut mock_filter = MockEnvoyHttpFilter::new();
+    let mut existing = CachedEgressPolicy {
+      policy: EgressPolicy {
+        created_at: DateTime::<Utc>::from(SystemTime::now() - Duration::from_secs(11)),
+        rules: vec![EgressRule {
+          pattern: "api.example.com".to_string(),
+          mode: "mitm".to_string(),
+          has_effects: false,
+        }],
+      },
+    };
+    let existing_ptr = &mut existing as *mut CachedEgressPolicy as usize;
+
+    mock_filter
+      .expect_get_filter_state_object()
+      .withf(|key| key == ATE_POLICY_EGRESS_INNER)
+      .times(1)
+      .returning(move |_| Some(existing_ptr as *mut c_void));
+    mock_filter.expect_get_filter_state_bytes().times(0);
+    mock_filter.expect_set_filter_state_object().times(0);
+    mock_filter
+      .expect_increment_counter()
+      .withf(|id, value| *id == EnvoyCounterId(2) && *value == 1)
+      .times(1)
+      .returning(|_, _| Ok(()));
+
+    assert!(filter.get_or_create_cached_egress_policy(&mut mock_filter).is_none());
+  }
+
+  #[test]
   fn test_get_or_create_cached_egress_policy_returns_ref_when_created() {
     let filter = test_filter();
     let mut mock_filter = MockEnvoyHttpFilter::new();
     let raw_policy =
-      br#"{"created_at":"1970-01-01T00:00:00Z","rules":[{"pattern":"api.example.com","mode":"mitm"}]}"#;
+      br#"{"created_at":"2099-01-01T00:00:00Z","rules":[{"pattern":"api.example.com","mode":"mitm"}]}"#;
     let stored_ptr = Arc::new(AtomicUsize::new(0));
     let stored_ptr_clone = Arc::clone(&stored_ptr);
 
@@ -533,7 +605,7 @@ mod tests {
   fn test_get_or_create_cached_egress_policy_returns_none_when_set_fails() {
     let filter = test_filter();
     let mut mock_filter = MockEnvoyHttpFilter::new();
-    let raw_policy = br#"{"created_at":"1970-01-01T00:00:00Z","rules":[]}"#;
+    let raw_policy = br#"{"created_at":"2099-01-01T00:00:00Z","rules":[]}"#;
 
     mock_filter
       .expect_get_filter_state_object()
@@ -603,7 +675,7 @@ mod tests {
     };
     let mut mock_filter = MockEnvoyHttpFilter::new();
     let raw_policy =
-      br#"{"created_at":"1970-01-01T00:00:00Z","rules":[{"pattern":"api.example.com","mode":"mitm"}]}"#;
+      br#"{"created_at":"2099-01-01T00:00:00Z","rules":[{"pattern":"api.example.com","mode":"mitm"}]}"#;
     let stored_ptr = Arc::new(AtomicUsize::new(0));
     let stored_ptr_clone = Arc::clone(&stored_ptr);
 
@@ -717,7 +789,7 @@ mod tests {
     let mut mock_filter = MockEnvoyHttpFilter::new();
     let mut existing = CachedEgressPolicy {
       policy: EgressPolicy {
-        created_at: DateTime::UNIX_EPOCH,
+        created_at: fresh_created_at(),
         rules: vec![EgressRule {
           pattern: "api.example.com".to_string(),
           mode: "cleartext".to_string(),
@@ -756,6 +828,49 @@ mod tests {
       .withf(|id, value| *id == EnvoyCounterId(3) && *value == 1)
       .times(1)
       .returning(|_, _| Ok(()));
+
+    let mut filter = config.new_http_filter(&mut mock_filter);
+    assert_eq!(
+      filter.on_request_headers(&mut mock_filter, false),
+      envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue
+    );
+  }
+
+  #[test]
+  fn test_on_request_headers_skips_enforcement_when_policy_is_stale() {
+    let config = EgressPolicyPepFilterConfig {
+      cache_hit_counter: EnvoyCounterId(1),
+      cache_miss_counter: EnvoyCounterId(2),
+      allowed_counter: EnvoyCounterId(3),
+      rejected_counter: EnvoyCounterId(4),
+      ..Default::default()
+    };
+    let mut mock_filter = MockEnvoyHttpFilter::new();
+    let mut existing = CachedEgressPolicy {
+      policy: EgressPolicy {
+        created_at: DateTime::UNIX_EPOCH,
+        rules: vec![EgressRule {
+          pattern: "api.example.com".to_string(),
+          mode: "cleartext".to_string(),
+          has_effects: false,
+        }],
+      },
+    };
+    let existing_ptr = &mut existing as *mut CachedEgressPolicy as usize;
+
+    mock_filter
+      .expect_get_filter_state_object()
+      .withf(|key| key == ATE_POLICY_EGRESS_INNER)
+      .times(1)
+      .returning(move |_| Some(existing_ptr as *mut c_void));
+    mock_filter.expect_get_filter_state_bytes().times(0);
+    mock_filter.expect_set_filter_state_object().times(0);
+    mock_filter
+      .expect_increment_counter()
+      .withf(|id, value| *id == EnvoyCounterId(2) && *value == 1)
+      .times(1)
+      .returning(|_, _| Ok(()));
+    mock_filter.expect_set_filter_state_bytes().times(0);
 
     let mut filter = config.new_http_filter(&mut mock_filter);
     assert_eq!(
@@ -1228,6 +1343,65 @@ mod tests {
   fn test_on_response_headers_continues() {
     let config = EgressPolicyPepFilterConfig::default();
     let mut mock_filter = MockEnvoyHttpFilter::new();
+    mock_filter
+      .expect_get_filter_state_bytes()
+      .withf(|key| key == ATE_POLICY_EGRESS_REFRESH)
+      .times(1)
+      .returning(|_| None);
+    mock_filter.expect_get_filter_state_object().times(0);
+
+    let mut filter = config.new_http_filter(&mut mock_filter);
+    assert_eq!(
+      filter.on_response_headers(&mut mock_filter, false),
+      envoy_dynamic_module_type_on_http_filter_response_headers_status::Continue
+    );
+  }
+
+  #[test]
+  fn test_on_response_headers_updates_cached_egress_policy_when_refresh_present() {
+    let config = EgressPolicyPepFilterConfig::default();
+    let mut mock_filter = MockEnvoyHttpFilter::new();
+    let mut existing = CachedEgressPolicy {
+      policy: EgressPolicy {
+        created_at: DateTime::UNIX_EPOCH,
+        rules: vec![],
+      },
+    };
+    let existing_ptr = &mut existing as *mut CachedEgressPolicy as usize;
+    let raw_policy =
+      br#"{"created_at":"2099-01-01T00:00:00Z","rules":[{"pattern":"api.example.com","mode":"mitm"}]}"#;
+
+    mock_filter
+      .expect_get_filter_state_bytes()
+      .withf(|key| key == ATE_POLICY_EGRESS_REFRESH)
+      .times(1)
+      .returning(move |_| Some(EnvoyBuffer::new(raw_policy)));
+    mock_filter
+      .expect_get_filter_state_object()
+      .withf(|key| key == ATE_POLICY_EGRESS_INNER)
+      .times(1)
+      .returning(move |_| Some(existing_ptr as *mut c_void));
+
+    let mut filter = config.new_http_filter(&mut mock_filter);
+    assert_eq!(
+      filter.on_response_headers(&mut mock_filter, false),
+      envoy_dynamic_module_type_on_http_filter_response_headers_status::Continue
+    );
+    assert_eq!(existing.policy, expected_policy());
+  }
+
+  #[test]
+  fn test_on_response_headers_ignores_invalid_refresh_json() {
+    let config = EgressPolicyPepFilterConfig::default();
+    let mut mock_filter = MockEnvoyHttpFilter::new();
+
+    mock_filter
+      .expect_get_filter_state_bytes()
+      .withf(|key| key == ATE_POLICY_EGRESS_REFRESH)
+      .times(1)
+      .returning(|_| Some(EnvoyBuffer::new(b"not-json")));
+    mock_filter.expect_get_filter_state_object().times(0);
+
     let mut filter = config.new_http_filter(&mut mock_filter);
     assert_eq!(
       filter.on_response_headers(&mut mock_filter, false),
