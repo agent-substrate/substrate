@@ -290,18 +290,18 @@ kubectl ate delete egress-policy <actor-name> -a <atespace> --uid <uid> --versio
 ```bash
 # Print the logs an actor has produced on its current worker.
 # -a/--atespace is required, since an actor is addressed by (atespace, name).
-kubectl ate logs actors my-actor -a <atespace>
+kubectl ate logs actor my-actor -a <atespace>
 
 # Follow the logs with -f. The stream is aggregated across worker
 # reassignments, so the same actor stays queryable as it teleports between pods.
-kubectl ate logs actors my-actor -a <atespace> -f
+kubectl ate logs actor my-actor -a <atespace> -f
 
 # Show only one container's logs with -c/--container.
-kubectl ate logs actors my-actor -a <atespace> -c my-container
+kubectl ate logs actor my-actor -a <atespace> -c my-container
 
 # Pick a class of lines with --source: containers (every container's output,
 # no lifecycle events) or lifecycle (only the actor's lifecycle events).
-kubectl ate logs actors my-actor -a <atespace> --source=lifecycle
+kubectl ate logs actor my-actor -a <atespace> --source=lifecycle
 ```
 
 Logs are streamable only while the actor is bound to a worker (i.e., `ACTOR_STATE_RUNNING`). For history across worker migrations, route through a centralized log backend (Cloud Logging, Loki, etc.); see `docs/observability.md`.

@@ -254,11 +254,10 @@ var suspendActorCmd = &cobra.Command{
 }
 
 var logsActorsCmd = &cobra.Command{
-	Use:     "actors <actor-name>",
-	Aliases: []string{"actor"},
-	Short:   "Stream logs for a specific actor",
-	Args:    cobra.ExactArgs(1),
-	RunE:    runLogsActor,
+	Use:   "actor <actor-name>",
+	Short: "Stream logs for a specific actor",
+	Args:  cobra.ExactArgs(1),
+	RunE:  runLogsActor,
 }
 
 func buildCreateActorRequest(actorName, atespace, template, tag string) (*ateapipb.CreateActorRequest, error) {
