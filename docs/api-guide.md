@@ -281,6 +281,7 @@ Each container runs with a default set of Linux capabilities — `AUDIT_WRITE`, 
 
 - **`ALL` in `add` is rejected.** Kubernetes accepts it in the API and relies on PodSecurity admission to deny it; Substrate has no equivalent policy layer yet, so it is refused at admission instead. Name the capabilities the container needs.
 - **Ambient capabilities are not supported** ([gvisor#3166](https://github.com/google/gvisor/issues/3166)).
+- **Image files owned by other users.** Image files keep the owner their image's layers record, as under containerd. Containers run as root and the image's `USER` is not applied, and the default set has no `DAC_OVERRIDE` or `DAC_READ_SEARCH`, so on a file or directory another user owns, root gets only what its permission bits grant to others. It cannot write there even at `0755` or `0644`, and it cannot read or enter content closed to others, such as a `0700` home directory. Images that hand a directory to the user they name in `USER` hit this, for example `RUN chown -R app:app /app` followed by `USER app`, as does any image whose `HOME` belongs to its user. Add `DAC_OVERRIDE` if the container writes to such files, or `DAC_READ_SEARCH` if it only reads them.
 
 The sandbox — gVisor or micro-VM — remains the isolation boundary; capabilities constrain the workload *inside* it.
 

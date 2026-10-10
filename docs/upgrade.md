@@ -481,6 +481,19 @@ Wait for the new `atelet` pod on the node to be Ready before going on. Usually t
 kubectl get pods -n ate-system -l app=atelet --field-selector spec.nodeName=$NODE
 ```
 
+If it never becomes Ready and its log says the image cache has a layout
+version this atelet does not support, the new release unpacks image
+layers differently and will not reuse the node's cached layers. Step c
+left no actor running on the node, so delete the cache and let the new
+atelet rebuild it on demand:
+
+```bash
+kubectl debug node/$NODE -it --image=busybox -- rm -rf /host/var/lib/ate/image-cache
+kubectl delete pod -n ate-system -l app=atelet --field-selector spec.nodeName=$NODE
+# kubectl debug leaves its finished pod behind.
+kubectl get pods -o name | grep "^pod/node-debugger-$NODE-" | xargs kubectl delete
+```
+
 **e. Delete the node's old-pool worker pods.** Step c emptied them,
 but they are still Ready and hold capacity the new pool needs on this
 node. Their Deployment cannot reschedule them here anymore. Repeat
@@ -597,7 +610,12 @@ the install, `VERSION` included if the install pinned it.
 - Past step 5: roll each flipped node back by running step 5 with the
   sides swapped: drain, get every actor off the node as in b and c,
   flip the label back to `$OLD_VERSION`, and delete the node's
-  new-pool pods.
+  new-pool pods. If the old atelet then never becomes Ready and its log
+  says the image cache has a layout version this atelet does not
+  support, the new atelet rebuilt the node's cache in a layout the old
+  one does not read. No actor is running on the node, so delete the cache
+  with the commands in [step 5d](#5-roll-each-node) and the
+  old atelet rebuilds it.
 - Past step 4: once no actor is assigned to a new-pool worker, delete
   each clone: `kubectl -n $NS delete workerpool $NEW_WORKERPOOL`.
 - Past step 3: once no node carries `$NEW_VERSION`, delete the new

@@ -35,6 +35,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -209,6 +210,36 @@ func readfile(w http.ResponseWriter, r *http.Request) {
 		resp["content"] = string(b)
 	} else {
 		resp["error"] = err.Error()
+	}
+	writeJSON(w, resp)
+}
+
+// statResponse is the /stat payload: path's numeric owner and mode as the
+// actor sees them, without following a final-component symlink.
+type statResponse struct {
+	Path string `json:"path"`
+	UID  uint32 `json:"uid"`
+	GID  uint32 `json:"gid"`
+	// Mode is the os.FileMode string, e.g. "drwx------".
+	Mode  string `json:"mode"`
+	Error string `json:"error,omitempty"`
+}
+
+// stat reports a path's owner and mode inside the actor, so a test can assert
+// on the ownership the image's layers gave it.
+func stat(w http.ResponseWriter, r *http.Request) {
+	resp := statResponse{Path: r.URL.Query().Get("path")}
+	fi, err := os.Lstat(resp.Path)
+	if err != nil {
+		resp.Error = err.Error()
+		writeJSON(w, resp)
+		return
+	}
+	resp.Mode = fi.Mode().String()
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
+		resp.UID, resp.GID = st.Uid, st.Gid
+	} else {
+		resp.Error = "no owner information for " + resp.Path
 	}
 	writeJSON(w, resp)
 }
@@ -454,6 +485,7 @@ func main() {
 	mux.HandleFunc("/fetch", fetch)
 	mux.HandleFunc("/readfile", readfile)
 	mux.HandleFunc("/writefile", writefile)
+	mux.HandleFunc("/stat", stat)
 	mux.HandleFunc("/resources", resources)
 	mux.HandleFunc("/capabilities", capabilities)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })

@@ -18,9 +18,9 @@ package imagecache
 // rename(2) inside the layer singleflight — the only step that contends
 // with the pull path) and the slow RemoveAll of the renamed-aside tree
 // happens afterwards, outside all locks. A crash in between leaves a
-// ".rm-*" dir for the startup sweep. Nothing here needs privileges:
-// retirement is rename/chmod/unlink, which plain root can do even on
-// read-only trees.
+// ".rm-*" dir for the startup sweep. Retirement is rename/chmod/unlink,
+// which plain root can do on read-only trees it owns; trees an image gave to
+// another user also need CAP_DAC_OVERRIDE (see RemoveAllWritable).
 
 import (
 	"errors"

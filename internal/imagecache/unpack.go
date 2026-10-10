@@ -26,6 +26,9 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
+
+	"github.com/agent-substrate/substrate/internal/tarutil"
 )
 
 const (
@@ -93,6 +96,16 @@ func validateTarName(name string) (cleaned string, skip bool, err error) {
 // entries (.wh.*) are not written to the tree; they are returned so the
 // caller can persist them for later materialization by a privileged process.
 //
+// Every entry keeps the numeric owner its tar header records, as containerd
+// and moby apply it, so image content given to a non-root user (a home
+// directory, an application's data dir) belongs to that user inside the
+// actor. Hardlinks apply their header's owner to the shared inode, as those
+// runtimes do. Run as root, a failed chown fails the unpack: atelet holds
+// CAP_CHOWN for this, and a layer must never land in the pool with ownership
+// silently dropped. An unprivileged process (unit tests, local tooling) cannot
+// chown, so its extracted tree belongs to the extracting user (see
+// tarutil.Lchown); New warns when the store runs that way.
+//
 // Unlike a flattened-image extract, cross-layer "later entry wins" semantics
 // are overlayfs's job now; the handling here only needs to cope with
 // duplicate entries within a single layer (real ko images repeat directory
@@ -100,12 +113,34 @@ func validateTarName(name string) (cleaned string, skip bool, err error) {
 func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteoutSet, error) {
 	wh := &whiteoutSet{Version: 1}
 
-	// Directories are created owner-writable during extraction (so their children
-	// can be written even when the image marks them read-only, e.g. ko ships
-	// /ko-app as 0555) and their real modes are restored afterwards. This lets
-	// atelet, running as plain root, unpack arbitrary actor images without
-	// CAP_DAC_OVERRIDE. Keyed by name so a repeated dir entry's last mode wins.
-	dirModes := map[string]os.FileMode{}
+	// Directories are created root-owned and owner-writable during extraction
+	// (so their children can be written even when the image marks them
+	// read-only, e.g. ko ships /ko-app as 0555, or gives them to another
+	// user), and their real modes and owners are restored afterwards, so
+	// writing into them needs no CAP_DAC_OVERRIDE. Keyed by name so a
+	// repeated dir entry's last header wins.
+	//
+	// Files take their owner as they are written, so a hardlink to one that
+	// belongs to another user needs CAP_DAC_OVERRIDE (or CAP_FOWNER) wherever
+	// fs.protected_hardlinks=1, the common default: the kernel then refuses
+	// the link unless the caller could read and write the target.
+	dirHdrs := map[string]*tar.Header{}
+	// replaced drops the pending restore of a path a later entry replaced and,
+	// when the old entry was a directory or a symlink, of every directory
+	// declared under it: the new entry carries its own metadata, and those
+	// children are gone (or were reached through the old symlink).
+	replaced := func(name string, old os.FileInfo) {
+		delete(dirHdrs, name)
+		if !old.IsDir() && old.Mode()&os.ModeSymlink == 0 {
+			return
+		}
+		prefix := name + string(filepath.Separator)
+		for k := range dirHdrs {
+			if strings.HasPrefix(k, prefix) {
+				delete(dirHdrs, k)
+			}
+		}
+	}
 
 	// Ancestors an entry needed vs. directories the tar declared: the
 	// difference is recorded as ImplicitDirs (attrs fabricated, see the
@@ -176,10 +211,11 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 			// 1. If it's a symlink, we don't write through it (security vulnerability / incorrectness).
 			// 2. If it's a hardlink, we unlink it instead of truncating the shared inode.
 			// 3. If it's a directory, we recursively remove it so we can write the file.
-			if _, err := root.Lstat(name); err == nil {
+			if old, err := root.Lstat(name); err == nil {
 				if err := root.RemoveAll(name); err != nil {
 					return nil, fmt.Errorf("while replacing existing path at %q before regular file: %w", name, err)
 				}
+				replaced(name, old)
 			} else if !errors.Is(err, os.ErrNotExist) {
 				return nil, fmt.Errorf("while checking existing path at %q before regular file: %w", name, err)
 			}
@@ -199,11 +235,14 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 			if closeErr != nil {
 				return nil, fmt.Errorf("while closing file %q: %w", name, closeErr)
 			}
+			if err := tarutil.Lchown(root, name, hdr); err != nil {
+				return nil, err
+			}
 
 		case tar.TypeDir:
 			// Create owner-writable so children can be written even when the image
 			// marks the dir read-only; the real mode is restored after extraction
-			// (see dirModes / the restore pass below).
+			// (see dirHdrs / the restore pass below).
 			err := root.Mkdir(name, mode|0o700)
 			if errors.Is(err, os.ErrExist) {
 				// OCI layers can repeat a directory entry (real ko images do); the
@@ -212,7 +251,7 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 			} else if err != nil {
 				return nil, fmt.Errorf("while creating directory=%q, mode=%v: %w", name, mode, err)
 			}
-			dirModes[name] = mode
+			dirHdrs[name] = hdr
 			declared[name] = true
 			delete(implicit, name)
 
@@ -220,25 +259,35 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 			// A layer may re-define the same path (e.g. declare /var/run as a dir
 			// then re-declare it as a symlink). Standard tar-extract semantics are
 			// "later entry wins": replace any existing entry.
+			same := false
 			if existing, err := root.Lstat(name); err == nil {
 				// If it's already the same symlink, skip the unlink+symlink pair.
 				if existing.Mode()&os.ModeSymlink != 0 {
 					if cur, rerr := root.Readlink(name); rerr == nil && cur == hdr.Linkname {
-						continue
+						same = true
 					}
 				}
 				// Root.RemoveAll removes the symlink entry itself; it does NOT
 				// traverse and remove the directory the symlink points to.
 				// That's the desired semantic here — replace this path's
 				// entry without touching whatever the prior symlink targeted.
-				if err := root.RemoveAll(name); err != nil {
-					return nil, fmt.Errorf("while replacing existing path at %q before symlink: %w", name, err)
+				if !same {
+					if err := root.RemoveAll(name); err != nil {
+						return nil, fmt.Errorf("while replacing existing path at %q before symlink: %w", name, err)
+					}
+					replaced(name, existing)
 				}
 			} else if !errors.Is(err, os.ErrNotExist) {
 				return nil, fmt.Errorf("while checking existing path at %q before symlink: %w", name, err)
 			}
-			if err := root.Symlink(hdr.Linkname, name); err != nil {
-				return nil, fmt.Errorf("while creating symlink src=%q target=%q: %w", name, hdr.Linkname, err)
+			if !same {
+				if err := root.Symlink(hdr.Linkname, name); err != nil {
+					return nil, fmt.Errorf("while creating symlink src=%q target=%q: %w", name, hdr.Linkname, err)
+				}
+			}
+			// Even an unchanged symlink takes the later entry's owner.
+			if err := tarutil.Lchown(root, name, hdr); err != nil {
+				return nil, err
 			}
 
 		case tar.TypeLink:
@@ -250,15 +299,19 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 				return nil, fmt.Errorf("invalid hardlink target for %q: empty", name)
 			}
 			// Same "later entry wins" handling as TypeSymlink: replace existing entry.
-			if _, err := root.Lstat(name); err == nil {
+			if old, err := root.Lstat(name); err == nil {
 				if err := root.RemoveAll(name); err != nil {
 					return nil, fmt.Errorf("while replacing existing path at %q before hardlink: %w", name, err)
 				}
+				replaced(name, old)
 			} else if !errors.Is(err, os.ErrNotExist) {
 				return nil, fmt.Errorf("while checking existing path at %q before hardlink: %w", name, err)
 			}
 			if err := root.Link(linkname, name); err != nil {
 				return nil, fmt.Errorf("while creating hardlink src=%q target=%q: %w", name, linkname, err)
+			}
+			if err := tarutil.Lchown(root, name, hdr); err != nil {
+				return nil, err
 			}
 
 		default:
@@ -268,19 +321,44 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 		}
 	}
 
-	// Restore the image's intended directory modes now that every child exists.
-	// Deepest paths first: a child's path is always longer than its parent's, so
-	// length-descending order guarantees a directory is restored before any of its
-	// ancestors — restoring a parent to a non-traversable mode then can't block
-	// restoring its children.
-	dirs := make([]string, 0, len(dirModes))
-	for name := range dirModes {
+	// Restore the image's intended directory modes and owners now that every
+	// child exists. Deepest paths first: a child's path is always longer than
+	// its parent's, so length-descending order guarantees a directory is
+	// restored before any of its ancestors — restoring a parent to a
+	// non-traversable mode or owner then can't block restoring its children.
+	//
+	// Chmod comes before chown, unlike tarutil's restore: once a directory
+	// belongs to another uid, changing its mode needs CAP_FOWNER, which atelet
+	// does not hold. The mode is permission bits only, which chown leaves
+	// alone.
+	dirs := make([]string, 0, len(dirHdrs))
+	for name := range dirHdrs {
 		dirs = append(dirs, name)
 	}
 	sort.Slice(dirs, func(i, j int) bool { return len(dirs[i]) > len(dirs[j]) })
 	for _, name := range dirs {
-		if err := root.Chmod(name, dirModes[name]); err != nil {
-			return nil, fmt.Errorf("while restoring mode %v on directory %q: %w", dirModes[name], name, err)
+		// Directories a later entry replaced were dropped from dirHdrs as it
+		// was written, so name resolves to the directory its entry created,
+		// through any symlink that already stood on its path then. A path
+		// that no longer resolves to a directory (a replacement reached
+		// through a symlink, or a declared dir whose Mkdir found a
+		// non-directory there) carries the replacing entry's metadata.
+		fi, err := root.Lstat(name)
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
+			continue
+		} else if err != nil {
+			return nil, fmt.Errorf("while checking directory %q: %w", name, err)
+		}
+		if !fi.IsDir() {
+			continue
+		}
+		hdr := dirHdrs[name]
+		mode := hdr.FileInfo().Mode().Perm()
+		if err := root.Chmod(name, mode); err != nil {
+			return nil, fmt.Errorf("while restoring mode %v on directory %q: %w", mode, name, err)
+		}
+		if err := tarutil.Lchown(root, name, hdr); err != nil {
+			return nil, err
 		}
 	}
 
