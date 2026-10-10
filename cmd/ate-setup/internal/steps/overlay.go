@@ -178,10 +178,6 @@ func (e *Env) renderAtenetEgressManifest(ctx context.Context, provider config.Cr
 	if err != nil {
 		return nil, err
 	}
-	raw, err = e.patchAtenetEgressStatsFlushOnAdmin(raw)
-	if err != nil {
-		return nil, err
-	}
 	raw = e.patchEnvoyDataplaneImage(raw, imageReference)
 	rendered, err := e.renderBytes(raw)
 	if err != nil {
@@ -194,17 +190,6 @@ func (e *Env) renderAtenetEgressManifest(ctx context.Context, provider config.Cr
 // the manifest with imageRef.
 func (e *Env) patchEnvoyDataplaneImage(raw []byte, imageRef string) []byte {
 	return bytes.ReplaceAll(raw, []byte("${ENVOY_DATAPLANE_IMAGE}"), []byte(imageRef))
-}
-
-// patchAtenetEgressStatsFlushOnAdmin replaces the #ATE_EGRESS_STATS_FLUSH_ON_ADMIN
-// marker in the Envoy bootstrap config with stats_flush_on_admin: true when
-// E2ETesting is enabled, or removes the marker when disabled.
-func (e *Env) patchAtenetEgressStatsFlushOnAdmin(raw []byte) ([]byte, error) {
-	var block string
-	if e.Cfg.E2ETesting {
-		block = "stats_flush_on_admin: true"
-	}
-	return replaceManifestMarker(raw, "#ATE_EGRESS_STATS_FLUSH_ON_ADMIN", block)
 }
 
 // patchAtenetEgressInject replaces the #ATE_EGRESS_INJECT_FLAGS marker in the

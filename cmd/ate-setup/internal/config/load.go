@@ -252,7 +252,6 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		PodcertWorkersPerSigner:        podcertWorkers,
 		ClusterSize:                    r.String("clusterSize"),
 		CordonControlPlane:             r.Bool("cordonControlPlane"),
-		E2ETesting:                     r.Bool("e2eTesting"),
 		AdditionalEgressExtprocService: r.String("atenet.egress.additionalExtprocService"),
 		CredentialProviderJSON:         r.String("atenet.egress.credentialProvider"),
 		AnthropicAPIKey:                r.String("demo.anthropicAPIKey"),

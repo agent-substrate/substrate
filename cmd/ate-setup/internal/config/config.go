@@ -191,9 +191,6 @@ type Config struct {
 	// ate.dev/workloadType=ate-postgres:NoSchedule for postgres alone.
 	CordonControlPlane bool
 
-	// E2ETesting enables E2E testing overrides in rendered manifests (E2E_TESTING).
-	E2ETesting bool
-
 	// AdditionalEgressExtprocService is the optional NS/SVC:PORT external processor filter.
 	AdditionalEgressExtprocService string
 
