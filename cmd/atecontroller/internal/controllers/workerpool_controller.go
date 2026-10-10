@@ -130,7 +130,11 @@ func (r *WorkerPoolReconciler) applyDeployment(ctx context.Context, wp *atev1alp
 		TracesSamplerArg:     r.OTelTracesSamplerArg,
 		LogsExporter:         r.OTelLogsExporter,
 	}, r.SystemNamespace, r.AteletServiceAccount, r.RouterServiceAccount)
-	if err := r.Apply(ctx, depAC, client.FieldOwner(workerPoolFieldOwner), client.ForceOwnership); err != nil {
+	applyConfig, err := deploymentApplyConfiguration(depAC)
+	if err != nil {
+		return err
+	}
+	if err := r.Apply(ctx, applyConfig, client.FieldOwner(workerPoolFieldOwner), client.ForceOwnership); err != nil {
 		return fmt.Errorf("failed to apply Deployment: %w", err)
 	}
 	return nil

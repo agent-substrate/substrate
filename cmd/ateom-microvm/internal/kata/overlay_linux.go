@@ -122,8 +122,8 @@ type VirtiofsdOptions struct {
 }
 
 // virtiofsdArgs builds the virtiofsd command line for o.
-func virtiofsdArgs(o VirtiofsdOptions) []string {
-	return []string{
+func virtiofsdArgs(o VirtiofsdOptions, hasMknod bool) []string {
+	args := []string{
 		"--socket-path=" + o.SocketPath,
 		"--shared-dir=" + o.SharedDir,
 		"--cache=auto",
@@ -135,6 +135,12 @@ func virtiofsdArgs(o VirtiofsdOptions) []string {
 		// trust bundle. guest-error returns EIO on those inodes instead.
 		"--migration-on-error", "guest-error",
 	}
+	if !hasMknod {
+		// virtiofsd's default child capability set includes MKNOD. It cannot
+		// retain a capability the worker's bounding set excludes.
+		args = append(args, "--modcaps=-mknod")
+	}
+	return args
 }
 
 // StartVirtiofsd launches virtiofsd in find-paths migration mode serving o.SharedDir
@@ -146,7 +152,11 @@ func StartVirtiofsd(ctx context.Context, o VirtiofsdOptions) (*exec.Cmd, error) 
 		bin = "virtiofsd"
 	}
 	_ = os.Remove(o.SocketPath)
-	cmd := exec.Command(bin, virtiofsdArgs(o)...)
+	hasMknod, err := unix.PrctlRetInt(unix.PR_CAPBSET_READ, unix.CAP_MKNOD, 0, 0, 0)
+	if err != nil {
+		return nil, fmt.Errorf("reading worker MKNOD bounding capability: %w", err)
+	}
+	cmd := exec.Command(bin, virtiofsdArgs(o, hasMknod == 1)...)
 	cmd.Stdout = o.Log
 	cmd.Stderr = o.Log
 	cmd.SysProcAttr = o.SysProcAttr
