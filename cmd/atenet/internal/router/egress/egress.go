@@ -197,33 +197,32 @@ func (h *Handler) handleConnect(ctx context.Context, md *extproc.RequestMetadata
 // The port is always set: without it the passthrough chain falls back to its
 // configured port instead of closing.
 func connectMetadata(dest egresspolicy.Destination, rules []egresspolicy.EgressRule) *structpb.Struct {
-	values := make([]*structpb.Value, len(rules))
+	return metadataAnswer(map[string]string{
+		extproc.EgressDialedPortKey: strconv.Itoa(int(dest.Port)),
+	}, rules)
+}
+
+// metadataAnswer encodes fields under EgressMetadataNamespace and rules (with
+// a creation timestamp) under EgressPolicyMetadataNamespace.
+func metadataAnswer(fields map[string]string, rules []egresspolicy.EgressRule) *structpb.Struct {
+	egressFields := make(map[string]*structpb.Value, len(fields))
+	for key, value := range fields {
+		egressFields[key] = structpb.NewStringValue(value)
+	}
+	ruleValues := make([]*structpb.Value, len(rules))
 	for i, rule := range rules {
-		values[i] = structpb.NewStructValue(&structpb.Struct{Fields: map[string]*structpb.Value{
+		ruleValues[i] = structpb.NewStructValue(&structpb.Struct{Fields: map[string]*structpb.Value{
 			extproc.EgressRulePatternKey:    structpb.NewStringValue(rule.Pattern),
 			extproc.EgressRuleModeKey:       structpb.NewStringValue(string(rule.Mode)),
 			extproc.EgressRuleHasEffectsKey: structpb.NewBoolValue(rule.HasEffects),
 		}})
 	}
 	return &structpb.Struct{Fields: map[string]*structpb.Value{
-		extproc.EgressMetadataNamespace: structpb.NewStructValue(&structpb.Struct{Fields: map[string]*structpb.Value{
-			extproc.EgressDialedPortKey: structpb.NewStringValue(strconv.Itoa(int(dest.Port))),
-		}}),
+		extproc.EgressMetadataNamespace: structpb.NewStructValue(&structpb.Struct{Fields: egressFields}),
 		extproc.EgressPolicyMetadataNamespace: structpb.NewStructValue(&structpb.Struct{Fields: map[string]*structpb.Value{
 			extproc.EgressPolicyCreatedAtKey: structpb.NewStringValue(time.Now().UTC().Format(time.RFC3339Nano)),
-			extproc.EgressRulesKey:           structpb.NewListValue(&structpb.ListValue{Values: values}),
+			extproc.EgressRulesKey:           structpb.NewListValue(&structpb.ListValue{Values: ruleValues}),
 		}}),
-	}}
-}
-
-// metadataAnswer is an answer in the egress metadata namespace.
-func metadataAnswer(fields map[string]string) *structpb.Struct {
-	values := make(map[string]*structpb.Value, len(fields))
-	for key, value := range fields {
-		values[key] = structpb.NewStringValue(value)
-	}
-	return &structpb.Struct{Fields: map[string]*structpb.Value{
-		extproc.EgressMetadataNamespace: structpb.NewStructValue(&structpb.Struct{Fields: values}),
 	}}
 }
 

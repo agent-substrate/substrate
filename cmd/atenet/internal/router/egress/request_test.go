@@ -17,6 +17,7 @@ package egress
 import (
 	"context"
 	"maps"
+	"slices"
 	"testing"
 	"time"
 
@@ -27,6 +28,7 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
+	"github.com/agent-substrate/substrate/internal/egresspolicy"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
@@ -194,6 +196,67 @@ func TestRequestLegAnswersTheNameToDial(t *testing.T) {
 			wantDial(t, res, err, extproc.EgressDialName)
 			if got := hostOf(res); got != tc.want {
 				t.Errorf("host = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRequestLegIncludesEgressPolicyMetadata(t *testing.T) {
+	policy := combined(
+		httpPolicy("api.example.com"),
+		httpPolicyOnPorts(ports(8080), "custom.example.com"),
+		httpsPolicy("api.example.com", "*.example.org"),
+		cleartextInjectionPolicy("effects.example.com"),
+	)
+	h := policyHandler(policy)
+
+	tests := []struct {
+		name      string
+		leg       string
+		authority string
+		attrs     map[string]string
+		want      []egresspolicy.EgressRule
+	}{
+		{
+			name:      "cleartext default port 80",
+			leg:       extproc.EgressCleartextFilterChainName,
+			authority: "api.example.com",
+			want: []egresspolicy.EgressRule{
+				{Pattern: "api.example.com", Mode: egresspolicy.EgressModeCleartext},
+				{Pattern: "effects.example.com", Mode: egresspolicy.EgressModeCleartext, HasEffects: true},
+			},
+		},
+		{
+			name:      "cleartext custom dialed port 8080",
+			leg:       extproc.EgressCleartextFilterChainName,
+			authority: "custom.example.com",
+			attrs:     dialed("93.184.216.34:8080"),
+			want: []egresspolicy.EgressRule{
+				{Pattern: "custom.example.com", Mode: egresspolicy.EgressModeCleartext},
+			},
+		},
+		{
+			name:      "mitm port 443",
+			leg:       extproc.EgressTLSMITMFilterChainName,
+			authority: "api.example.com",
+			want: []egresspolicy.EgressRule{
+				{Pattern: "api.example.com", Mode: egresspolicy.EgressModeMITM},
+				{Pattern: "*.example.org", Mode: egresspolicy.EgressModeMITM},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			before := time.Now().UTC()
+			res, err := h.HandleRequestHeaders(context.Background(), innerMetadata(tc.leg, "GET", tc.authority, tc.attrs))
+			after := time.Now().UTC()
+			wantDial(t, res, err, extproc.EgressDialName)
+			if got := egressRulesOf(t, res); !slices.Equal(got, tc.want) {
+				t.Errorf("egress rules = %v, want %v", got, tc.want)
+			}
+			if got := egressCreatedAtOf(t, res); got.Before(before) || got.After(after) {
+				t.Errorf("created_at = %v, want within [%v, %v]", got, before, after)
 			}
 		})
 	}

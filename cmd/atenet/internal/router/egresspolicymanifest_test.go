@@ -941,3 +941,54 @@ func TestEgressManifestsRequestLegsSkipExtProcOnFilterState(t *testing.T) {
 		}
 	}
 }
+
+func TestEgressManifestsRequestLegsRefreshEgressRulesInFilterState(t *testing.T) {
+	const refreshKey = "dev.ate.policy.egress.refresh"
+	tree := bootstrapTree(t, egressManifest)
+	if writers := filterStateWriters(tree, refreshKey); len(writers) != len(requestLegs) {
+		t.Errorf("%s is set by %d filters, want one per request leg", refreshKey, len(writers))
+	}
+	for _, leg := range requestLegs {
+		chain := byName(list(mitmListener(t, tree), "filter_chains"), leg)
+		if chain == nil {
+			t.Fatalf("no %q chain on mitm_listener", leg)
+		}
+		cfg, extProcAt, filters := extProcOf(chain)
+		if cfg == nil {
+			t.Fatalf("chain %q has no ext_proc filter", leg)
+		}
+		admitted := strs(child(child(cfg, "metadata_options"), "receiving_namespaces"), "untyped")
+		if !slices.Contains(admitted, extproc.EgressPolicyMetadataNamespace) {
+			t.Errorf("chain %q ext_proc does not admit dynamic metadata in %q", leg, extproc.EgressPolicyMetadataNamespace)
+		}
+		var entry node
+		at := -1
+		for i, f := range filters {
+			if str(f, "name") != setFilterStateFilter {
+				continue
+			}
+			for _, v := range list(child(f, "typed_config"), "on_request_headers") {
+				if str(v, "object_key") == refreshKey {
+					entry, at = v, i
+				}
+			}
+		}
+		if at < 0 {
+			t.Errorf("chain %q does not set %s", leg, refreshKey)
+			continue
+		}
+		if at < extProcAt {
+			t.Errorf("chain %q sets %s at http_filters[%d], before ext_proc at [%d]", leg, refreshKey, at, extProcAt)
+		}
+		format := child(entry, "format_string")
+		if got := str(child(format, "text_format_source"), "inline_string"); got != extproc.EgressPolicyMetadataFormat {
+			t.Errorf("chain %q sets %s from %q, want %q", leg, refreshKey, got, extproc.EgressPolicyMetadataFormat)
+		}
+		if got := str(entry, "factory_key"); got != "envoy.string" {
+			t.Errorf("chain %q %s uses factory %q, want envoy.string", leg, refreshKey, got)
+		}
+		if skip, _ := entry["skip_if_empty"].(bool); !skip {
+			t.Errorf("chain %q %s is not skip_if_empty", leg, refreshKey)
+		}
+	}
+}

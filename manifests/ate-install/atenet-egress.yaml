@@ -562,6 +562,7 @@ data:
                                     receiving_namespaces:
                                       untyped:
                                       - dev.ate.egress
+                                      - dev.ate.policy.egress
               # Envoy dials a port written in the Host unless the name to dial
               # comes from filter state too, so the name the request was
               # decided on goes there. Must stay after ext_proc.
@@ -574,6 +575,13 @@ data:
                     format_string:
                       text_format_source:
                         inline_string: "%DYNAMIC_METADATA(dev.ate.egress:host)%"
+                      omit_empty_values: true
+                  - object_key: dev.ate.policy.egress.refresh
+                    factory_key: envoy.string
+                    skip_if_empty: true
+                    format_string:
+                      text_format_source:
+                        inline_string: "%DYNAMIC_METADATA(dev.ate.policy.egress)%"
                       omit_empty_values: true
               #ATE_MITM_EXTPROC_FILTER -- see the mitm_listener comment above.
               # Resolves the by-name route's name before the cluster dials it.
@@ -782,6 +790,7 @@ data:
                                     receiving_namespaces:
                                       untyped:
                                       - dev.ate.egress
+                                      - dev.ate.policy.egress
               # Envoy dials a port written in the Host unless the name to dial
               # comes from filter state too, so the name the request was
               # decided on goes there. Must stay after ext_proc.
@@ -794,6 +803,13 @@ data:
                     format_string:
                       text_format_source:
                         inline_string: "%DYNAMIC_METADATA(dev.ate.egress:host)%"
+                      omit_empty_values: true
+                  - object_key: dev.ate.policy.egress.refresh
+                    factory_key: envoy.string
+                    skip_if_empty: true
+                    format_string:
+                      text_format_source:
+                        inline_string: "%DYNAMIC_METADATA(dev.ate.policy.egress)%"
                       omit_empty_values: true
               #ATE_MITM_EXTPROC_FILTER -- Don't modify this line.
               # Resolves the by-name route's name before the cluster dials it.

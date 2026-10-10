@@ -110,7 +110,7 @@ func (h *Handler) handleRequest(ctx context.Context, md *extproc.RequestMetadata
 	res.DynamicMetadata = metadataAnswer(map[string]string{
 		extproc.EgressDialKey:     extproc.EgressDialName,
 		extproc.EgressDialHostKey: dialHost(dest),
-	})
+	}, policy.EgressRules(dest.Port))
 	return res, nil
 }
 
