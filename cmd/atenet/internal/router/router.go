@@ -301,9 +301,10 @@ func (s *RouterServer) Run(ctx context.Context) error {
 
 	// Start HTTP status endpoint
 	if s.cfg.StatusPort > 0 {
-		listener, err := net.Listen("tcp", fmt.Sprintf(":%d", s.cfg.StatusPort))
+		statusListenAddr := net.JoinHostPort(s.cfg.StatusAddr, strconv.Itoa(s.cfg.StatusPort))
+		listener, err := net.Listen("tcp", statusListenAddr)
 		if err != nil {
-			return fmt.Errorf("failed binding Router HTTP status server port: %w", err)
+			return fmt.Errorf("failed binding Router HTTP status server address %q: %w", statusListenAddr, err)
 		}
 
 		mux := http.NewServeMux()
