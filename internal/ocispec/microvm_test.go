@@ -17,7 +17,7 @@ package ocispec
 import (
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
+	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
@@ -121,10 +121,10 @@ func eqInt64Ptr(a, b *int64) bool {
 // unbound the container.
 func TestShapeMicroVM_KeepsDeclaredContainerLimits(t *testing.T) {
 	const declared = 64 * 1024 * 1024
-	spec := Build(Options{
+	spec := Build(Options{Container: &ateompb.Container{ContainerSpec: &ateompb.ContainerSpec{
 		Args:      []string{"/app"},
-		Resources: &ateletpb.ResourceLimits{MemoryBytes: declared},
-	})
+		Resources: &ateompb.ResourceLimits{MemoryBytes: declared},
+	}}})
 	if err := ShapeMicroVM(spec, MicroVMOptions{ActorDirs: parityActorDirs, ContainerID: "app"}); err != nil {
 		t.Fatalf("ShapeMicroVM() = %v", err)
 	}
@@ -140,7 +140,7 @@ func TestShapeMicroVM_KeepsDeclaredContainerLimits(t *testing.T) {
 // A container that declares nothing must stay unbounded inside the guest: guest
 // RAM is the real ceiling, and a cap equal to the whole guest can never bind.
 func TestShapeMicroVM_LeavesUndeclaredContainerUnlimited(t *testing.T) {
-	spec := Build(Options{Args: []string{"/app"}})
+	spec := Build(Options{Container: &ateompb.Container{ContainerSpec: &ateompb.ContainerSpec{Args: []string{"/app"}}}})
 	if err := ShapeMicroVM(spec, MicroVMOptions{ActorDirs: parityActorDirs, ContainerID: "app"}); err != nil {
 		t.Fatalf("ShapeMicroVM() = %v", err)
 	}

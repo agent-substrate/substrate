@@ -101,7 +101,7 @@ func TestIsValidResourceName(t *testing.T) {
 	}
 }
 
-func TestValidateAteomUID(t *testing.T) {
+func TestValidateWorkerPodUID(t *testing.T) {
 	tests := []struct {
 		name    string
 		uid     string
@@ -116,8 +116,8 @@ func TestValidateAteomUID(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if err := ValidateAteomUID(tt.uid); (err != nil) != tt.wantErr {
-				t.Errorf("ValidateAteomUID(%q) err = %v, wantErr %v", tt.uid, err, tt.wantErr)
+			if err := ValidateWorkerPodUID(tt.uid); (err != nil) != tt.wantErr {
+				t.Errorf("ValidateWorkerPodUID(%q) err = %v, wantErr %v", tt.uid, err, tt.wantErr)
 			}
 		})
 	}
@@ -195,6 +195,16 @@ func TestValidateSnapshotLocation(t *testing.T) {
 		// Opaque form (no //) parses with an empty host, so it is rejected
 		// on either the bucket or the opaque check.
 		{"opaque", "gs:bucket/path", true},
+		{"dot dot", "gs://bucket/team-a/../team-b", true},
+		{"trailing dot dot", "gs://bucket/path/..", true},
+		{"escaped dot dot", "gs://bucket/%2e%2e/path", true},
+		{"dot", "gs://bucket/./path", true},
+		{"triple dot", "gs://bucket/.../path", true},
+		{"space padded dot dot", "gs://bucket/a/%20..%20/b", true},
+		{"trailing space dot dot", "gs://bucket/a/..%20/b", true},
+		{"backslash", `gs://bucket/team-a\..\team-b`, true},
+		{"escaped backslash", "gs://bucket/a%5Cb", true},
+		{"dots in a name", "gs://bucket/a..b/.c/d.", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -311,6 +321,32 @@ func testActorDirs() *ateompb.ActorDirs {
 		DurableDirVolumeMountsDir: "/node/actors/a/durable-dir",
 		SystemInfoVolumeRootsDir:  "/node/actors/a/system-info",
 		VolumesDir:                "/node/actors/a/volumes",
+	}
+}
+
+func TestValidateSnapshotFidelity(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		fidelity ateompb.SnapshotFidelity
+		wantErr  bool
+	}{
+		{"volumes", ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, false},
+		{"memory", ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, false},
+		{"unspecified", ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED, true},
+		{"rootfs not supported yet", ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, true},
+		{"outside the enum", ateompb.SnapshotFidelity(99), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			errs := ValidateSnapshotFidelity(tc.fidelity, field.NewPath("fidelity"))
+			if gotErr := len(errs) != 0; gotErr != tc.wantErr {
+				t.Fatalf("ValidateSnapshotFidelity(%v) = %v, wantErr %t", tc.fidelity, errs, tc.wantErr)
+			}
+			for _, e := range errs {
+				if e.Field != "fidelity" {
+					t.Errorf("error names field %q, want %q", e.Field, "fidelity")
+				}
+			}
+		})
 	}
 }
 

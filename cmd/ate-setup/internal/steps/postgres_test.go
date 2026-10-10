@@ -15,11 +15,13 @@
 package steps
 
 import (
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -106,7 +108,7 @@ func TestApplyPostgresSize10Overrides(t *testing.T) {
 	}
 	// And the TLS wiring the base's postgresql.conf carried must not be lost
 	// by the replacement, or the server refuses connections.
-	for _, want := range []string{"ssl = on", "hba_file = "} {
+	for _, want := range []string{"ssl = on", "hba_file = ", "ssl_ca_file = '/run/postgres.podcert.ate.dev/trust-bundle.pem'"} {
 		if !strings.Contains(data["postgresql.conf"], want) {
 			t.Errorf("size10 postgresql.conf lacks %q", want)
 		}
@@ -147,6 +149,92 @@ func TestApplyPostgresSize10OverridesRejectsMissingObjects(t *testing.T) {
 	}
 	if err := applyPostgresSize10Overrides(objs, []byte("data: {}\n")); err == nil {
 		t.Error("applyPostgresSize10Overrides succeeded with an empty patch, want an error")
+	}
+}
+
+// dataClaimStorageClass returns the StorageClass of the postgres StatefulSet's
+// data claim, and whether it is set at all.
+func dataClaimStorageClass(t *testing.T, objs []*unstructured.Unstructured) (string, bool) {
+	t.Helper()
+	ss := findObject(objs, "StatefulSet", "postgres")
+	if ss == nil {
+		t.Fatal("no statefulset/postgres")
+	}
+	claims, _, _ := unstructured.NestedSlice(ss.Object, "spec", "volumeClaimTemplates")
+	for _, c := range claims {
+		claim := c.(map[string]any)
+		if name, _, _ := unstructured.NestedString(claim, "metadata", "name"); name == "data" {
+			class, found, _ := unstructured.NestedString(claim, "spec", "storageClassName")
+			return class, found
+		}
+	}
+	t.Fatal("statefulset/postgres has no data claim")
+	return "", false
+}
+
+// Runs over the real manifests, so a renamed claim fails here rather than on
+// an install that asked for a StorageClass.
+func TestSetPostgresStorageClass(t *testing.T) {
+	for _, kind := range []bool{false, true} {
+		objs := postgresObjects(t, kind)
+		if class, found := dataClaimStorageClass(t, objs); found {
+			t.Fatalf("kind=%v: manifest already names StorageClass %q", kind, class)
+		}
+		if err := setPostgresStorageClass(objs, "dynamic-rwo"); err != nil {
+			t.Fatalf("kind=%v: setPostgresStorageClass: %v", kind, err)
+		}
+		if class, _ := dataClaimStorageClass(t, objs); class != "dynamic-rwo" {
+			t.Errorf("kind=%v: StorageClass = %q, want dynamic-rwo", kind, class)
+		}
+	}
+}
+
+func TestSetPostgresStorageClassRejectsMissingObjects(t *testing.T) {
+	objs := postgresObjects(t, false)
+
+	var withoutStatefulSet []*unstructured.Unstructured
+	for _, obj := range objs {
+		if obj.GetKind() != "StatefulSet" {
+			withoutStatefulSet = append(withoutStatefulSet, obj)
+		}
+	}
+	if err := setPostgresStorageClass(withoutStatefulSet, "x"); err == nil {
+		t.Error("setPostgresStorageClass succeeded without a StatefulSet, want an error")
+	}
+
+	ss := findObject(objs, "StatefulSet", "postgres")
+	unstructured.RemoveNestedField(ss.Object, "spec", "volumeClaimTemplates")
+	if err := setPostgresStorageClass(objs, "x"); err == nil {
+		t.Error("setPostgresStorageClass succeeded without a data claim, want an error")
+	}
+}
+
+func TestPostgresObjectsStorageClass(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		class     string
+		size10    bool
+		wantClass string
+		wantSet   bool
+	}{
+		{name: "unset keeps the cluster default"},
+		{name: "set", class: "dynamic-rwo", wantClass: "dynamic-rwo", wantSet: true},
+		{name: "set with size10", class: "dynamic-rwo", size10: true, wantClass: "dynamic-rwo", wantSet: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &config.Config{Root: repoRoot(t), PostgresStorageClass: tc.class}
+			if tc.size10 {
+				cfg.ClusterSize = config.ClusterSizeSize10
+			}
+			objs, err := (&Env{Cfg: cfg}).postgresObjects()
+			if err != nil {
+				t.Fatalf("postgresObjects: %v", err)
+			}
+			class, set := dataClaimStorageClass(t, objs)
+			if class != tc.wantClass || set != tc.wantSet {
+				t.Errorf("StorageClass = %q (set %v), want %q (set %v)", class, set, tc.wantClass, tc.wantSet)
+			}
+		})
 	}
 }
 
@@ -283,10 +371,10 @@ func TestBundledPostgresIdentityConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if readWrite != bundledPostgresDSN(postgressetup.ReadWriteUser, postgressetup.ReadWritePassword) {
+	if readWrite != bundledPostgresDSN(postgressetup.ReadWriteUser) {
 		t.Errorf("read/write DSN = %q", readWrite)
 	}
-	if owner != bundledPostgresDSN(postgressetup.OwnerUser, postgressetup.OwnerPassword) {
+	if owner != bundledPostgresDSN(postgressetup.OwnerUser) {
 		t.Errorf("owner DSN = %q", owner)
 	}
 }
@@ -307,7 +395,7 @@ func TestBundledPostgresManifestAuthentication(t *testing.T) {
 	for _, want := range []string{
 		"local all all trust",
 		"hostssl all postgres all reject",
-		"hostssl atepg all all scram-sha-256 clientcert=verify-ca",
+		"hostssl atepg substrate_owner_user,substrate_readwrite_user all cert",
 		"name: POSTGRES_HOST_AUTH_METHOD",
 		"value: trust",
 	} {
@@ -315,4 +403,99 @@ func TestBundledPostgresManifestAuthentication(t *testing.T) {
 			t.Errorf("postgres manifest lacks %q", want)
 		}
 	}
+}
+
+// Resolve the shipped DSN's client credential paths through the API pod's
+// projections, and the database's client trust bundle through its projection.
+func TestPostgresCertificateProjections(t *testing.T) {
+	e := &Env{Cfg: &config.Config{Root: repoRoot(t)}}
+	manifest, err := e.render(e.Cfg.Manifest("ate-api-server.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	objs, err := kube.DecodeManifestBytes(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment := findObject(objs, "Deployment", "ate-api-server")
+	if deployment == nil {
+		t.Fatal("missing API deployment")
+	}
+	var api appsv1.Deployment
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(deployment.Object, &api); err != nil {
+		t.Fatal(err)
+	}
+	e.Cfg.PostgresReadWriteRole = config.DefaultPostgresReadWriteRole
+	e.Cfg.PostgresOwnerRole = config.DefaultPostgresOwnerRole
+	readWriteDSN, ownerDSN, err := e.postgresReadWriteConnectionStrings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths := map[string]bool{}
+	for _, tc := range []struct{ dsn, username string }{{readWriteDSN, postgressetup.ReadWriteUser}, {ownerDSN, postgressetup.OwnerUser}} {
+		dsn, err := url.Parse(tc.dsn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, hasPassword := dsn.User.Password()
+		if dsn.User.Username() != tc.username || hasPassword || dsn.Query().Get("sslmode") != "verify-full" {
+			t.Fatalf("DSN must use %s with verified TLS and no password", tc.username)
+		}
+		certPath := dsn.Query().Get("sslcert")
+		if paths[certPath] {
+			t.Fatal("owner and runtime share a certificate")
+		}
+		paths[certPath] = true
+		if certPath != dsn.Query().Get("sslkey") || filepath.Base(certPath) != tc.username+".pem" {
+			t.Fatal("DSN does not use the login's credential bundle")
+		}
+		for _, param := range []string{"sslcert", "sslkey"} {
+			if signer := projectedFileSigner(t, api.Spec.Template.Spec, dsn.Query().Get(param), false); signer != "postgres.podcert.ate.dev/identity" {
+				t.Fatalf("%s projected by %q", param, signer)
+			}
+		}
+		if signer := projectedFileSigner(t, api.Spec.Template.Spec, dsn.Query().Get("sslrootcert"), true); signer != "servicedns.podcert.ate.dev/identity" {
+			t.Fatalf("server trust projected by %q", signer)
+		}
+	}
+
+	for _, kind := range []bool{false, true} {
+		objs := postgresObjects(t, kind)
+		var database appsv1.StatefulSet
+		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(findObject(objs, "StatefulSet", "postgres").Object, &database); err != nil {
+			t.Fatal(err)
+		}
+		if signer := projectedFileSigner(t, database.Spec.Template.Spec, "/run/postgres.podcert.ate.dev/trust-bundle.pem", true); signer != "postgres.podcert.ate.dev/identity" {
+			t.Fatalf("database client trust projected by %q", signer)
+		}
+	}
+}
+
+func projectedFileSigner(t *testing.T, pod corev1.PodSpec, path string, trust bool) string {
+	t.Helper()
+	for _, container := range pod.Containers {
+		for _, mount := range container.VolumeMounts {
+			if filepath.Dir(path) != mount.MountPath {
+				continue
+			}
+			for _, volume := range pod.Volumes {
+				if volume.Name != mount.Name || volume.Projected == nil {
+					continue
+				}
+				for _, source := range volume.Projected.Sources {
+					if trust && source.ClusterTrustBundle != nil && source.ClusterTrustBundle.Path == filepath.Base(path) {
+						return *source.ClusterTrustBundle.SignerName
+					}
+					if !trust && source.PodCertificate != nil && source.PodCertificate.CredentialBundlePath == filepath.Base(path) {
+						if got := source.PodCertificate.UserAnnotations["postgres.podcert.ate.dev/username"]; got != strings.TrimSuffix(filepath.Base(path), ".pem") {
+							t.Fatalf("projection for %s requests username %q", path, got)
+						}
+						return source.PodCertificate.SignerName
+					}
+				}
+			}
+		}
+	}
+	t.Fatalf("no projected %s in pod", path)
+	return ""
 }

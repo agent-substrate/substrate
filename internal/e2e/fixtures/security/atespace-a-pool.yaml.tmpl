@@ -1,0 +1,50 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Atespace A of the cross-atespace security fixture: a namespace plus the only
+# WorkerPool. Atespace B deploys atespace-b-namespace.yaml.tmpl, a namespace
+# with no pool, so its actors run on this one too.
+#
+# replicas is 1 on purpose. Pools are not scoped to an atespace: the scheduler
+# matches on sandbox class, labels and capacity, never on the actor's
+# atespace. The test runs the victim, suspends it, then starts the attacker.
+# With one worker the attacker has to land on the worker the victim just
+# left, which is where the victim's per-actor host state is. With more
+# workers the attacker could boot on a fresh one and the host-state checks
+# would prove nothing.
+#
+# The workload label is a fixed string rather than ${FIXTURE_SUFFIX}-suffixed
+# because both atespaces' templates must select this one pool and they render
+# with different suffixes. Sharing the label across the gVisor and micro-VM
+# lanes is safe: they run one after the other, and sandbox class is itself a
+# scheduling constraint.
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ate-e2e${FIXTURE_SUFFIX}
+
+---
+
+apiVersion: ate.dev/v1alpha1
+kind: WorkerPool
+metadata:
+  name: shared
+  namespace: ate-e2e${FIXTURE_SUFFIX}
+  labels:
+    workload: ate-e2e-security
+spec:
+  replicas: 1
+  workerImage: ${ATEOM_IMAGE}
+${WORKERPOOL_RUNTIME}

@@ -62,14 +62,14 @@ func ValidateActorTemplateUpdate(ctx context.Context, fldPath *field.Path, newVa
 }
 
 // ValidateCustom_CreateActorTemplateRequest_ActorTemplate checks volume
-// references and whether the mounted volumes support DATA snapshots.
+// references and whether the mounted volumes support VOLUMES snapshots.
 func ValidateCustom_CreateActorTemplateRequest_ActorTemplate(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapipb.ActorTemplate) field.ErrorList {
 	declared := make(map[string]*ateapipb.Volume, len(value.GetVolumes()))
 	for _, vol := range value.GetVolumes() {
 		declared[vol.GetName()] = vol
 	}
 	microVM := value.GetSandboxConfig().GetSandboxClass() == ateapipb.SandboxClass_SANDBOX_CLASS_MICROVM
-	hasDataVolume := false
+	hasSnapshotVolume := false
 	var errs field.ErrorList
 	for i, ctr := range value.GetContainers() {
 		for j, mount := range ctr.GetVolumeMounts() {
@@ -85,17 +85,17 @@ func ValidateCustom_CreateActorTemplateRequest_ActorTemplate(_ context.Context, 
 				continue
 			}
 			if vol.GetDurableDir() != nil || (microVM && vol.GetExternalVolumeTemplate() != nil) {
-				hasDataVolume = true
+				hasSnapshotVolume = true
 			}
 		}
 	}
-	scope := value.GetSnapshotConfig().GetOnCommit()
-	if !hasDataVolume && scope == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA {
-		detail := "DATA snapshots require a mounted durable-dir volume"
+	fidelity := value.GetSnapshotConfig().GetPreferredFidelity()
+	if !hasSnapshotVolume && fidelity == ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES {
+		detail := "VOLUMES snapshots require a mounted durable-dir volume"
 		if microVM {
-			detail = "DATA snapshots require a mounted durable-dir or CSI volume"
+			detail = "VOLUMES snapshots require a mounted durable-dir or CSI volume"
 		}
-		errs = append(errs, field.Invalid(fldPath.Child("snapshot_config", "on_commit"), scope.String(), detail))
+		errs = append(errs, field.Invalid(fldPath.Child("snapshot_config", "preferred_fidelity"), fidelity.String(), detail))
 	}
 	return errs
 }
@@ -248,6 +248,15 @@ func ValidateCustom_ExternalVolumeTemplate_Capacity(_ context.Context, _ operati
 func ValidateCustom_SnapshotConfig_StorageLocation(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	if err := resources.ValidateSnapshotLocation(*value); err != nil {
 		return field.ErrorList{field.Invalid(fldPath, *value, err.Error())}
+	}
+	return nil
+}
+
+// ValidateCustom_SnapshotConfig_PreferredFidelity rejects ROOTFS until a
+// sandbox runtime can capture root filesystem changes without memory.
+func ValidateCustom_SnapshotConfig_PreferredFidelity(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapipb.SnapshotFidelity) field.ErrorList {
+	if *value == ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS {
+		return field.ErrorList{field.Invalid(fldPath, value.String(), "ROOTFS fidelity is not supported yet")}
 	}
 	return nil
 }

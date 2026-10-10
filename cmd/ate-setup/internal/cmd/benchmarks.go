@@ -63,8 +63,9 @@ func benchmarkOptions() (steps.BenchmarkOptions, error) {
 }
 
 var deployBenchmarksCmd = &cobra.Command{
-	Use:   "benchmarks",
-	Short: "Deploy the benchmark workloads and the locust load test stack",
+	Annotations: map[string]string{recordAnnotation: "no"},
+	Use:         "benchmarks",
+	Short:       "Deploy the benchmark workloads and the locust load test stack",
 	Long: `Deploy the benchmark workloads and the locust load test stack.
 
 See benchmarking/README.md for the walkthrough and customization options.`,

@@ -68,7 +68,7 @@ func TestKindInstallRecordsWhatItUsed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	path, _, err := RecordSuccess(t.TempDir(), cfg.Context, cfg.Resolved())
+	path, _, err := RecordSuccess(t.TempDir(), cfg.Context, "", cfg.Resolved())
 	if err != nil {
 		t.Fatalf("RecordSuccess() error = %v", err)
 	}
@@ -111,7 +111,7 @@ func TestKindRecordReplaysToTheSameInstall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	path, _, err := RecordSuccess(t.TempDir(), cfg.Context, cfg.Resolved())
+	path, _, err := RecordSuccess(t.TempDir(), cfg.Context, "", cfg.Resolved())
 	if err != nil {
 		t.Fatalf("RecordSuccess() error = %v", err)
 	}

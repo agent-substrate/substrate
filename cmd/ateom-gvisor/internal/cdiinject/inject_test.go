@@ -56,11 +56,12 @@ func injectFixture(t *testing.T, bundleDir, specDir string) error {
 		return err
 	}
 	return IntoBundle(context.Background(), bundleDir, spec, Options{
-		Devices:      []string{"all"},
-		AllowedHooks: map[string]bool{"create-symlinks": true, "enable-cuda-compat": true},
-		HookBinary:   testHookBinary,
-		LibraryDirs:  []string{"/usr/local/nvidia/lib64"},
-		DropEnv:      []string{"NVIDIA_VISIBLE_DEVICES"},
+		Devices:         []string{"all"},
+		AllowedHooks:    map[string]bool{"create-symlinks": true, "enable-cuda-compat": true},
+		HookBinary:      testHookBinary,
+		AllowedHostDirs: []string{"/usr/local/nvidia"},
+		LibraryDirs:     []string{"/usr/local/nvidia/lib64"},
+		DropEnv:         []string{"NVIDIA_VISIBLE_DEVICES"},
 	})
 }
 
@@ -320,15 +321,24 @@ func TestStageSonameSymlinks_ConfinedToRootfs(t *testing.T) {
 				}
 			}
 
+			hostDir := filepath.Join(dir, "host")
+			if err := os.MkdirAll(hostDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			hostLib := filepath.Join(hostDir, "libcuda.so.580.65.06")
+			if err := os.WriteFile(hostLib, []byte("stub"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
 			old := elfSonameFn
-			elfSonameFn = func(string) (string, error) { return tc.soname, nil }
+			elfSonameFn = func(string, string) (string, error) { return tc.soname, nil }
 			defer func() { elfSonameFn = old }()
 
 			// Refusing outright and skipping are both acceptable; writing outside is not.
 			_ = StageSonameSymlinks(context.Background(), rootfs, []specs.Mount{{
-				Source:      "/host/libcuda.so.580.65.06",
+				Source:      hostLib,
 				Destination: tc.dest,
-			}})
+			}}, []string{hostDir})
 
 			if b, err := os.ReadFile(victim); err != nil || string(b) != "do not delete" {
 				t.Fatalf("a file outside the rootfs was modified: err=%v content=%q", err, b)
@@ -353,5 +363,288 @@ func TestInjectGPUIntoBundle_MissingSpecFails(t *testing.T) {
 	os.MkdirAll(emptyDir, 0o755)
 	if err := injectFixture(t, bundle, emptyDir); err == nil {
 		t.Fatal("expected error when the CDI spec is missing")
+	}
+}
+
+func TestIntoBundle_HostMountsAllowlistAndConfinement(t *testing.T) {
+	dir := t.TempDir()
+	allowedDir := filepath.Join(dir, "allowed-driver")
+	outsideDir := filepath.Join(dir, "outside")
+	if err := os.MkdirAll(filepath.Join(allowedDir, "lib64"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(outsideDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	validLib := filepath.Join(allowedDir, "lib64", "libcuda.so.580.65.06")
+	if err := os.WriteFile(validLib, []byte("stub-lib"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outsideSecret := filepath.Join(outsideDir, "libsecret.so.1.0")
+	if err := os.WriteFile(outsideSecret, []byte("secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	escapeFileLink := filepath.Join(allowedDir, "lib64", "libescape.so.1.0")
+	if err := os.Symlink(outsideSecret, escapeFileLink); err != nil {
+		t.Fatal(err)
+	}
+	escapeRelLink := filepath.Join(allowedDir, "lib64", "librel-escape.so.1.0")
+	if err := os.Symlink("../../outside/libsecret.so.1.0", escapeRelLink); err != nil {
+		t.Fatal(err)
+	}
+	escapeDirLink := filepath.Join(allowedDir, "escaped-dir")
+	if err := os.Symlink(outsideDir, escapeDirLink); err != nil {
+		t.Fatal(err)
+	}
+
+	old := elfSonameFn
+	elfSonameFn = func(string, string) (string, error) { return "libcuda.so.1", nil }
+	defer func() { elfSonameFn = old }()
+
+	newBundle := func(t *testing.T) string {
+		t.Helper()
+		b := filepath.Join(t.TempDir(), "bundle")
+		if err := os.MkdirAll(filepath.Join(b, "rootfs"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		data, err := json.Marshal(&specs.Spec{Version: "1.0.0", Process: &specs.Process{Args: []string{"true"}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(b, "config.json"), data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+
+	specForMount := func(m cdi.Mount) *cdi.Spec {
+		return &cdi.Spec{
+			Devices: []cdi.Device{{
+				Name: "all",
+				ContainerEdits: cdi.Edits{
+					DeviceNodes: []cdi.Dev{{Path: "/dev/nvidia0", Major: 195, Minor: 0, Type: "c"}},
+					Mounts:      []cdi.Mount{m},
+				},
+			}},
+		}
+	}
+
+	for _, tc := range []struct {
+		name        string
+		mount       cdi.Mount
+		allowedDirs []string
+		wantErr     bool
+	}{
+		{
+			name: "allowed regular file mount succeeds",
+			mount: cdi.Mount{
+				HostPath:      validLib,
+				ContainerPath: "/usr/local/nvidia/lib64/libcuda.so.580.65.06",
+			},
+			allowedDirs: []string{allowedDir},
+			wantErr:     false,
+		},
+		{
+			name: "empty allowlist rejects mount",
+			mount: cdi.Mount{
+				HostPath:      validLib,
+				ContainerPath: "/usr/local/nvidia/lib64/libcuda.so.580.65.06",
+			},
+			allowedDirs: nil,
+			wantErr:     true,
+		},
+		{
+			name: "hostPath outside allowed directory is rejected",
+			mount: cdi.Mount{
+				HostPath:      outsideSecret,
+				ContainerPath: "/usr/local/nvidia/lib64/libsecret.so.1.0",
+			},
+			allowedDirs: []string{allowedDir},
+			wantErr:     true,
+		},
+		{
+			name: "unclean hostPath with dot-dot is rejected",
+			mount: cdi.Mount{
+				HostPath:      allowedDir + "/../outside/libsecret.so.1.0",
+				ContainerPath: "/usr/local/nvidia/lib64/libsecret.so.1.0",
+			},
+			allowedDirs: []string{allowedDir},
+			wantErr:     true,
+		},
+		{
+			name: "absolute symlink escaping allowed directory is rejected",
+			mount: cdi.Mount{
+				HostPath:      escapeFileLink,
+				ContainerPath: "/usr/local/nvidia/lib64/libescape.so.1.0",
+			},
+			allowedDirs: []string{allowedDir},
+			wantErr:     true,
+		},
+		{
+			name: "relative symlink escaping allowed directory is rejected",
+			mount: cdi.Mount{
+				HostPath:      escapeRelLink,
+				ContainerPath: "/usr/local/nvidia/lib64/librel-escape.so.1.0",
+			},
+			allowedDirs: []string{allowedDir},
+			wantErr:     true,
+		},
+		{
+			name: "parent directory symlink escaping allowed directory is rejected",
+			mount: cdi.Mount{
+				HostPath:      filepath.Join(escapeDirLink, "libsecret.so.1.0"),
+				ContainerPath: "/usr/local/nvidia/lib64/libsecret.so.1.0",
+			},
+			allowedDirs: []string{allowedDir},
+			wantErr:     true,
+		},
+		{
+			name: "relative containerPath is rejected",
+			mount: cdi.Mount{
+				HostPath:      validLib,
+				ContainerPath: "usr/local/nvidia/lib64/libcuda.so.580.65.06",
+			},
+			allowedDirs: []string{allowedDir},
+			wantErr:     true,
+		},
+		{
+			name: "unclean containerPath is rejected",
+			mount: cdi.Mount{
+				HostPath:      validLib,
+				ContainerPath: "/usr/local/../../escaped",
+			},
+			allowedDirs: []string{allowedDir},
+			wantErr:     true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bundle := newBundle(t)
+			err := IntoBundle(context.Background(), bundle, specForMount(tc.mount), Options{
+				Devices:         []string{"all"},
+				AllowedHostDirs: tc.allowedDirs,
+			})
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("IntoBundle() error = %v, wantErr %v", err, tc.wantErr)
+			}
+			if !tc.wantErr {
+				linkTarget, err := os.Readlink(filepath.Join(bundle, "rootfs/usr/local/nvidia/lib64/libcuda.so.1"))
+				if err != nil || linkTarget != "libcuda.so.580.65.06" {
+					t.Fatalf("SONAME symlink target = %q, err = %v; want libcuda.so.580.65.06", linkTarget, err)
+				}
+			}
+		})
+	}
+}
+
+func TestIntoBundle_DevicePathConfinement(t *testing.T) {
+	dir := t.TempDir()
+	fakeDev := filepath.Join(dir, "dev")
+	outside := filepath.Join(dir, "outside")
+	if err := os.MkdirAll(fakeDev, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	regularInDev := filepath.Join(fakeDev, "not-a-device")
+	if err := os.WriteFile(regularInDev, []byte("plain"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	escapeLink := filepath.Join(fakeDev, "escaped-dev")
+	if err := os.Symlink("/dev/null", escapeLink); err != nil {
+		t.Fatal(err)
+	}
+
+	oldDevRoot := devRoot
+	devRoot = fakeDev
+	defer func() { devRoot = oldDevRoot }()
+
+	for _, tc := range []struct {
+		name string
+		dev  cdi.Dev
+	}{
+		{
+			name: "device path outside devRoot is rejected",
+			dev:  cdi.Dev{Path: "/etc/shadow", Major: 195, Minor: 0},
+		},
+		{
+			name: "unclean device path with dot-dot is rejected",
+			dev:  cdi.Dev{Path: fakeDev + "/../outside/node", Major: 195, Minor: 0},
+		},
+		{
+			name: "symlink escaping devRoot is rejected when major is 0",
+			dev:  cdi.Dev{Path: escapeLink},
+		},
+		{
+			name: "symlink escaping devRoot is rejected even when major is set",
+			dev:  cdi.Dev{Path: escapeLink, Major: 1, Minor: 3},
+		},
+		{
+			name: "regular file inside devRoot is rejected",
+			dev:  cdi.Dev{Path: regularInDev},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bundle := filepath.Join(t.TempDir(), "bundle")
+			if err := os.MkdirAll(filepath.Join(bundle, "rootfs"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			data, _ := json.Marshal(&specs.Spec{Version: "1.0.0", Process: &specs.Process{Args: []string{"true"}}})
+			if err := os.WriteFile(filepath.Join(bundle, "config.json"), data, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			spec := &cdi.Spec{
+				Devices: []cdi.Device{{
+					Name:           "all",
+					ContainerEdits: cdi.Edits{DeviceNodes: []cdi.Dev{tc.dev}},
+				}},
+			}
+			if err := IntoBundle(context.Background(), bundle, spec, Options{Devices: []string{"all"}}); err == nil {
+				t.Fatalf("expected error for device %+v, got nil", tc.dev)
+			}
+		})
+	}
+}
+
+func TestStageSonameSymlinks_HostConfinement(t *testing.T) {
+	dir := t.TempDir()
+	allowedDir := filepath.Join(dir, "allowed")
+	outsideDir := filepath.Join(dir, "outside")
+	rootfs := filepath.Join(dir, "rootfs")
+	for _, d := range []string{allowedDir, outsideDir, rootfs} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	outsideFile := filepath.Join(outsideDir, "liboutside.so.1.0")
+	if err := os.WriteFile(outsideFile, []byte("not-allowed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	escapeLink := filepath.Join(allowedDir, "libescape.so.1.0")
+	if err := os.Symlink(outsideFile, escapeLink); err != nil {
+		t.Fatal(err)
+	}
+
+	// Unallowed host path must fail StageSonameSymlinks.
+	if err := StageSonameSymlinks(context.Background(), rootfs, []specs.Mount{{
+		Source:      outsideFile,
+		Destination: "/usr/lib/liboutside.so.1.0",
+	}}, []string{allowedDir}); err == nil {
+		t.Fatal("expected error for mount source outside allowedHostDirs")
+	}
+
+	// Symlink inside allowedDir pointing outside must fail both StageSonameSymlinks and elfSoname.
+	if err := StageSonameSymlinks(context.Background(), rootfs, []specs.Mount{{
+		Source:      escapeLink,
+		Destination: "/usr/lib/libescape.so.1.0",
+	}}, []string{allowedDir}); err == nil {
+		t.Fatal("expected error for symlink escaping allowedHostDirs")
+	}
+	if _, err := elfSoname(allowedDir, "libescape.so.1.0"); err == nil {
+		t.Fatal("expected elfSoname to reject symlink escaping allowedDir")
 	}
 }

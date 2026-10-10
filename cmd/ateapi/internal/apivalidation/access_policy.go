@@ -95,7 +95,7 @@ func ValidateDeleteAtespaceAccessPolicyRequest(ctx context.Context, req *ateapip
 }
 
 // ValidateCustom_AccessPolicy_Metadata requires an access policy to be the
-// unatespaced singleton named "default". An empty name is left to defaulting.
+// unatespaced singleton named "default".
 func ValidateCustom_AccessPolicy_Metadata(_ context.Context, _ operation.Operation, root *field.Path, meta, _ *ateapipb.ResourceMetadata) field.ErrorList {
 	var errs field.ErrorList
 	if meta.GetAtespace() != "" {

@@ -42,8 +42,9 @@ func TestWorkerPoolValidation(t *testing.T) {
 			Namespace: "default",
 		},
 		Spec: WorkerPoolSpec{
-			Replicas:    1,
-			WorkerImage: "ateom:latest",
+			Replicas:       1,
+			WorkerImage:    "ateom:latest",
+			SandboxClasses: []WorkerPoolSandboxClass{{Name: SandboxClassGvisor}},
 		},
 	}
 
@@ -70,6 +71,60 @@ func TestWorkerPoolValidation(t *testing.T) {
 		},
 		wantErr: true,
 		errMsg:  "spec.workerImage: Invalid value: \"\": spec.workerImage in body should be at least 1 chars long",
+	}, {
+		name: "missing sandboxClasses",
+		mutate: func(wp *WorkerPool) {
+			wp.Spec.SandboxClasses = nil
+		},
+		wantErr: true,
+		errMsg:  "spec.sandboxClasses: Required value",
+	}, {
+		name: "empty sandboxClasses",
+		mutate: func(wp *WorkerPool) {
+			wp.Spec.SandboxClasses = []WorkerPoolSandboxClass{}
+		},
+		wantErr: true,
+		errMsg:  "spec.sandboxClasses",
+	}, {
+		name: "sandboxClass with empty name",
+		mutate: func(wp *WorkerPool) {
+			wp.Spec.SandboxClasses = []WorkerPoolSandboxClass{{}}
+		},
+		wantErr: true,
+		errMsg:  "spec.sandboxClasses[0].name",
+	}, {
+		name: "more than one sandboxClass",
+		mutate: func(wp *WorkerPool) {
+			wp.Spec.SandboxClasses = []WorkerPoolSandboxClass{{Name: SandboxClassGvisor}, {Name: SandboxClassMicroVM}}
+		},
+		wantErr: true,
+		errMsg:  "spec.sandboxClasses: Too many",
+	}, {
+		name: "unknown sandboxClass",
+		mutate: func(wp *WorkerPool) {
+			wp.Spec.SandboxClasses = []WorkerPoolSandboxClass{{Name: "kata"}}
+		},
+		wantErr: true,
+		errMsg:  "spec.sandboxClasses[0].name: Unsupported value",
+	}, {
+		name: "sandboxClass with configRef",
+		mutate: func(wp *WorkerPool) {
+			wp.Spec.SandboxClasses = []WorkerPoolSandboxClass{{
+				Name:      SandboxClassGvisor,
+				ConfigRef: &SandboxConfigReference{Name: "gvisor-default"},
+			}}
+		},
+		wantErr: false,
+	}, {
+		name: "configRef with empty name",
+		mutate: func(wp *WorkerPool) {
+			wp.Spec.SandboxClasses = []WorkerPoolSandboxClass{{
+				Name:      SandboxClassGvisor,
+				ConfigRef: &SandboxConfigReference{},
+			}}
+		},
+		wantErr: true,
+		errMsg:  "spec.sandboxClasses[0].configRef.name",
 	}, {
 		name: "valid template",
 		mutate: func(wp *WorkerPool) {
@@ -190,7 +245,7 @@ func TestWorkerPoolValidation(t *testing.T) {
 		// Devices are no longer interpreted: the limit only places the pod.
 		name: "extended resource on a pool is not interpreted",
 		mutate: func(wp *WorkerPool) {
-			wp.Spec.SandboxClass = SandboxClassMicroVM
+			wp.Spec.SandboxClasses = []WorkerPoolSandboxClass{{Name: SandboxClassMicroVM}}
 			wp.Spec.Template = gpuTemplate(corev1.ResourceList{gpuResourceName: resource.MustParse("1")}, nil)
 		},
 		wantErr: false,
@@ -227,8 +282,9 @@ func TestWorkerPoolReservedMetadataUpdate(t *testing.T) {
 			Namespace: "default",
 		},
 		Spec: WorkerPoolSpec{
-			Replicas:    1,
-			WorkerImage: "example.com/ateom:latest",
+			Replicas:       1,
+			WorkerImage:    "example.com/ateom:latest",
+			SandboxClasses: []WorkerPoolSandboxClass{{Name: SandboxClassGvisor}},
 		},
 	}
 	if err := k8sClient.Create(ctx, wp); err != nil {

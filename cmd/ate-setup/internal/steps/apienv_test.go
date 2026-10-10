@@ -61,8 +61,8 @@ func TestCreateAPIServerEnvVarsPostgresIdentities(t *testing.T) {
 		{
 			name:          "bundled identities",
 			cfg:           config.Config{PostgresReadWriteRole: config.DefaultPostgresReadWriteRole, PostgresOwnerRole: config.DefaultPostgresOwnerRole},
-			readWriteDSN:  bundledPostgresDSN(postgressetup.ReadWriteUser, postgressetup.ReadWritePassword),
-			ownerDSN:      bundledPostgresDSN(postgressetup.OwnerUser, postgressetup.OwnerPassword),
+			readWriteDSN:  bundledPostgresDSN(postgressetup.ReadWriteUser),
+			ownerDSN:      bundledPostgresDSN(postgressetup.OwnerUser),
 			readWriteRole: config.DefaultPostgresReadWriteRole, ownerRole: config.DefaultPostgresOwnerRole,
 		},
 		{
@@ -70,8 +70,8 @@ func TestCreateAPIServerEnvVarsPostgresIdentities(t *testing.T) {
 			cfg: config.Config{
 				ClusterSize: config.ClusterSizeSize10, PostgresReadWriteRole: config.DefaultPostgresReadWriteRole, PostgresOwnerRole: config.DefaultPostgresOwnerRole,
 			},
-			readWriteDSN:  bundledPostgresDSN(postgressetup.ReadWriteUser, postgressetup.ReadWritePassword) + config.Size10PostgresPoolParams,
-			ownerDSN:      bundledPostgresDSN(postgressetup.OwnerUser, postgressetup.OwnerPassword),
+			readWriteDSN:  bundledPostgresDSN(postgressetup.ReadWriteUser) + config.Size10PostgresPoolParams,
+			ownerDSN:      bundledPostgresDSN(postgressetup.OwnerUser),
 			readWriteRole: config.DefaultPostgresReadWriteRole, ownerRole: config.DefaultPostgresOwnerRole,
 		},
 		{
@@ -174,6 +174,28 @@ func TestCreateAPIServerEnvVarsPoolSize(t *testing.T) {
 		secret.StringData["ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"] != cfg.PostgresReadWriteConnectionString {
 		t.Fatalf("pool size %q, connection %q", cm.Data["ATE_API_POSTGRES_POOL_MAX_CONNS"],
 			secret.StringData["ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"])
+	}
+}
+
+func TestCreateAPIServerEnvVarsActorJWTIssuer(t *testing.T) {
+	cfg := config.Config{
+		PostgresReadWriteConnectionString: "postgres://runtime@postgres/atepg",
+		ActorJWTIssuer:                    "https://idp.example.com/prod",
+	}
+	e := &Env{Cfg: &cfg, Kube: fakeKube(t,
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: NamespaceAteSystem}},
+		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: ConfigMapAPIEnvVars, Namespace: NamespaceAteSystem}},
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: SecretAPIEnvVars, Namespace: NamespaceAteSystem}},
+	)}
+	if err := e.CreateAPIServerEnvVars(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	cm, err := e.Kube.GetConfigMap(t.Context(), NamespaceAteSystem, ConfigMapAPIEnvVars)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cm.Data["ATE_API_ACTOR_JWT_ISSUER"]; got != cfg.ActorJWTIssuer {
+		t.Errorf("ATE_API_ACTOR_JWT_ISSUER = %q, want %q", got, cfg.ActorJWTIssuer)
 	}
 }
 

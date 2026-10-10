@@ -13,33 +13,42 @@
 // limitations under the License.
 
 // Package fakeworker holds what the two programs of the benchmark fake data
-// plane share: how a fake Worker is named and placed.
+// plane share: how a fake Worker's stand-in pod is named and placed, and how each checks the
+// other's identity on the capacity relay between them.
 package fakeworker
 
 import (
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
-
-	"github.com/google/uuid"
 )
 
 // MaxRunLength bounds the run prefix so every generated name stays well inside
-// the 63-character limit on Worker names.
+// the 63-character limit on pod names.
 const MaxRunLength = 8
+
+// DefaultMaxActors is how many actors a fake Worker holds, the default of
+// ateom's --max-actors, which no WorkerPool field sets for a real worker.
+const DefaultMaxActors = 1000
+
+// MaxActorsAnnotation, on a WorkerPool, overrides DefaultMaxActors for that
+// pool's fake Workers.
+const MaxActorsAnnotation = "ate.dev/fake-max-actors"
 
 // WorkerPoolLabel is the label key the WorkerPool controller selects a pool's
 // worker pods by; a fake pool's status.selector names it the same way.
 const WorkerPoolLabel = "ate.dev/worker-pool"
 
-var runPattern = regexp.MustCompile(`^[a-z0-9]+$`)
+// DefaultRelayPort is the default of --relay-port on both fake-atelet, which
+// serves capacity reports on it, and fake-workersync, which sends them there.
+const DefaultRelayPort = 8086
 
-// podUIDNamespace is the UUIDv5 namespace fake WorkerPodUids are derived in.
-// Changing it renames every fake Worker's pod UID.
-var podUIDNamespace = uuid.MustParse("6f1c2a5e-8b3d-4e7a-9c01-5d2b7e4f8a90")
+var runPattern = regexp.MustCompile(`^[a-z0-9]+$`)
 
 // ValidateRun reports whether run is usable as a run prefix.
 func ValidateRun(run string) error {
@@ -49,20 +58,21 @@ func ValidateRun(run string) error {
 	return nil
 }
 
-// Prefix is the name prefix every fake Worker of run shares.
+// Prefix is the pod name prefix every fake Worker of run shares.
 func Prefix(run string) string {
 	return "fake-" + run + "-"
 }
 
-// Name returns the name of the index-th fake Worker of a WorkerPool. The pool
-// enters as a hash because its namespace and name together can exceed the
-// 63-character limit on Worker names.
+// Name returns the pod name of the index-th fake Worker of a WorkerPool, the
+// same for every Worker that fills that index. The pool enters as a hash
+// because its namespace and name together can exceed the 63-character limit
+// on pod names.
 func Name(run, namespace, pool string, index int) string {
 	return poolPrefix(run, namespace, pool) + strconv.Itoa(index)
 }
 
-// Index returns the index of the fake Worker named name in a WorkerPool, and
-// false when the name is not one of that pool's fake Workers.
+// Index returns the index of the fake Worker whose pod is named name in a
+// WorkerPool, and false when the name is not one of that pool's fake pods.
 func Index(run, namespace, pool, name string) (int, bool) {
 	rest, ok := strings.CutPrefix(name, poolPrefix(run, namespace, pool))
 	if !ok {
@@ -86,14 +96,23 @@ func Node(index int, nodes []string) string {
 	return nodes[index%len(nodes)]
 }
 
-// PodUID returns the WorkerPodUid recorded for the Worker named name.
-func PodUID(name string) string {
-	return uuid.NewSHA1(podUIDNamespace, []byte(name)).String()
-}
-
 // IP returns the address recorded for the index-th fake Worker of a pool: a
 // documentation-range address that nothing answers on. Addresses repeat past
 // 254 Workers, which ate-api-server allows.
 func IP(index int) string {
 	return "192.0.2." + strconv.Itoa(index%254+1)
+}
+
+// VerifyPeerID checks that the peer's leaf certificate carries the SPIFFE ID
+// want. It complements the chain verification done against the pod-identity
+// trust bundle: the chain proves the signer, this proves which workload.
+func VerifyPeerID(cs tls.ConnectionState, want string) error {
+	if len(cs.PeerCertificates) == 0 {
+		return errors.New("peer presented no certificate")
+	}
+	leaf := cs.PeerCertificates[0]
+	if len(leaf.URIs) == 0 || leaf.URIs[0].String() != want {
+		return fmt.Errorf("peer SPIFFE ID %v is not %q", leaf.URIs, want)
+	}
+	return nil
 }

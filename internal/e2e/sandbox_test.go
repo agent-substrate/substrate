@@ -41,6 +41,10 @@ var substrateFixtures = []struct {
 		Template: "internal/e2e/fixtures/probe/probe-sized-template.yaml.tmpl",
 	}, 1},
 	{SubstrateFixtureManifests{
+		Pool:     "internal/e2e/fixtures/security/atespace-a-pool.yaml.tmpl",
+		Template: "internal/e2e/fixtures/security/atespace-template.yaml.tmpl",
+	}, 1},
+	{SubstrateFixtureManifests{
 		Pool:     "internal/e2e/fixtures/capabilities/capabilities.yaml.tmpl",
 		Template: "internal/e2e/fixtures/capabilities/capabilities-templates.yaml.tmpl",
 	}, 2},
@@ -128,8 +132,8 @@ func TestRenderSubstrateFixtures_GVisor(t *testing.T) {
 			if !strings.HasSuffix(pool.Spec.WorkerImage, "/cmd/ateom-gvisor") {
 				t.Errorf("WorkerPool workerImage = %q, want the gVisor ateom", pool.Spec.WorkerImage)
 			}
-			if pool.Spec.SandboxClass != "" {
-				t.Errorf("WorkerPool carries micro-VM runtime fields: class=%q", pool.Spec.SandboxClass)
+			if pool.Spec.DefaultSandboxClass() != v1alpha1.SandboxClassGvisor {
+				t.Errorf("WorkerPool runtime = class %q, want gvisor", pool.Spec.DefaultSandboxClass())
 			}
 
 			templates := renderTemplates(t, fixture.manifests.Template)
@@ -177,8 +181,8 @@ func TestRenderSubstrateFixtures_MicroVM(t *testing.T) {
 			if !strings.HasSuffix(pool.Spec.WorkerImage, "/cmd/ateom-microvm") {
 				t.Errorf("WorkerPool workerImage = %q, want the micro-VM ateom", pool.Spec.WorkerImage)
 			}
-			if pool.Spec.SandboxClass != SandboxClassMicroVM {
-				t.Errorf("WorkerPool runtime = class %q, want microvm", pool.Spec.SandboxClass)
+			if pool.Spec.DefaultSandboxClass() != SandboxClassMicroVM {
+				t.Errorf("WorkerPool runtime = class %q, want microvm", pool.Spec.DefaultSandboxClass())
 			}
 
 			templates := renderTemplates(t, fixture.manifests.Template)

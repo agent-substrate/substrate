@@ -103,6 +103,18 @@ func TestExtractMetadata(t *testing.T) {
 			wantPath: "",
 			wantHost: "",
 		},
+		{
+			name: "repeated headers are joined with commas",
+			headers: []*corev3.HeaderValue{
+				{Key: "X-Repeated", Value: "first"},
+				{Key: "x-repeated", Value: "second"},
+			},
+			wantHeaders: map[string]string{
+				"x-repeated": "first,second",
+			},
+			wantPath: "",
+			wantHost: "",
+		},
 	}
 
 	for _, tc := range tests {
@@ -119,6 +131,30 @@ func TestExtractMetadata(t *testing.T) {
 				t.Errorf("NewRequestMetadata() host = %v, want %v", got.Host, tc.wantHost)
 			}
 		})
+	}
+}
+
+func TestRequestMetadataHeaderCommaJoinsDuplicates(t *testing.T) {
+	headers := []*corev3.HeaderValue{
+		{Key: "X-Single", Value: "single-val"},
+		{Key: "X-Multiple", Value: "val-1"},
+		{Key: "X-Multiple", Value: "val-2"},
+	}
+	md := NewRequestMetadata(headers, nil)
+
+	if got := md.Header("X-Single"); got != "single-val" {
+		t.Errorf("Header(X-Single) = %q, want %q", got, "single-val")
+	}
+	if got := md.Header("X-Multiple"); got != "val-1,val-2" {
+		t.Errorf("Header(X-Multiple) = %q, want %q", got, "val-1,val-2")
+	}
+	if got := md.Header("X-Missing"); got != "" {
+		t.Errorf("Header(X-Missing) = %q, want empty string", got)
+	}
+
+	var nilMD *RequestMetadata
+	if got := nilMD.Header("X-Single"); got != "" {
+		t.Errorf("nil.Header() = %q, want empty string", got)
 	}
 }
 

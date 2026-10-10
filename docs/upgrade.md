@@ -346,7 +346,7 @@ version did not change (see Checkout and environment) and the command
 rolled the running atelet in place.
 
 Last, build and push the new worker images. The refs print together
-at the end. The one for your pool's `sandboxClass` goes into the clone
+at the end. The one for your pool's `sandboxClasses[].name` goes into the clone
 in step 4:
 
 ```bash
@@ -354,7 +354,7 @@ go run ./cmd/ate-setup publish worker-images
 ```
 
 If you are using prebuilt images there is nothing to publish. The new worker image
-is the release's `ateom-<sandboxClass>` image under the same repo and
+is the release's `ateom-<sandboxClasses[].name>` image under the same repo and
 tag as the control plane, pinned by digest:
 
 ```bash
@@ -376,15 +376,19 @@ else, including the `metadata.labels` the scheduler matches actors
 by, carries over as is.
 
 ```bash
-NEW_IMAGE=<the ateom ref from step 3, for this pool's sandboxClass>
+NEW_IMAGE=<the ateom ref from step 3, for this pool's sandboxClasses[].name>
+# Only read when the old pool predates spec.sandboxClasses.
+SANDBOX_CLASS=<gvisor or microvm: the old pool's former spec.sandboxClass>
 
 kubectl -n $NS get workerpool $OLD_WORKERPOOL -o json \
-  | jq --arg name "$NEW_WORKERPOOL" --arg image "$NEW_IMAGE" --arg version "$NEW_VERSION" '
+  | jq --arg name "$NEW_WORKERPOOL" --arg image "$NEW_IMAGE" --arg version "$NEW_VERSION" \
+       --arg class "$SANDBOX_CLASS" '
       {apiVersion, kind,
        metadata: {name: $name, namespace: .metadata.namespace,
                   labels: .metadata.labels},
        spec: (.spec + {workerImage: $image})}
       | .spec.template.nodeSelector["ate.dev/substrate-version"] = $version
+      | .spec.sandboxClasses //= [{name: $class}]
     ' \
   | kubectl apply -f -
 ```

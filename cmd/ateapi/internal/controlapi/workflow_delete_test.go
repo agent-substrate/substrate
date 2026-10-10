@@ -17,12 +17,14 @@ package controlapi
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/objectstore/objectstoretest"
+	"github.com/agent-substrate/substrate/internal/objectstoreplugin/objectstoreplugintest"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
@@ -261,8 +263,10 @@ func TestEnsureExternalSnapshotsReleased(t *testing.T) {
 			// The actor's prefix is keyed on the UID the store just assigned, so
 			// its snapshots can only be placed now.
 			current := mustActorSnapshotURI(t, template, actor, "current")
+			currentType := ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR
 			if tt.tagOwnedSnapshot {
 				current = mustTagSnapshotURI(t, template, "team-a", "v1-snapshot")
+				currentType = ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG
 			}
 			objects.PutSnapshot(t, current, "manifest.json")
 			inFlight := mustActorSnapshotURI(t, template, actor, inFlightSnapshotName)
@@ -270,8 +274,11 @@ func TestEnsureExternalSnapshotsReleased(t *testing.T) {
 				objects.PutSnapshot(t, inFlight, "manifest.json")
 			}
 			actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
-				s.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: current.String()}
-				s.InProgressSnapshotUri = inFlight.String()
+				s.LastAssignedGeneration = 2
+				s.Snapshots = []*ateapipb.Snapshot{
+					newDurableSnapshot(1, currentType, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", current.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+					newDurableSnapshot(2, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", inFlight.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS),
+				}
 			})
 
 			if err := w.ensureExternalSnapshotsReleased(ctx, actor); err != nil {
@@ -316,7 +323,10 @@ func TestEnsureExternalSnapshotsReleased_CollectsStrandedSnapshots(t *testing.T)
 		objects.PutSnapshot(t, uri, "manifest.json")
 	}
 	actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
-		s.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: currentSnapshot.String()}
+		s.LastAssignedGeneration = 1
+		s.Snapshots = []*ateapipb.Snapshot{
+			newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", currentSnapshot.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+		}
 	})
 
 	if err := w.ensureExternalSnapshotsReleased(ctx, actor); err != nil {
@@ -337,7 +347,7 @@ func TestDeleteActor_CollectsInFlightSnapshotWithoutTemplate(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
 	objects := objectstoretest.New()
-	w := NewActorWorkflow(persistence, nil, nil, nil, nil, nil, "", nil, objects)
+	w := NewActorWorkflow(persistence, nil, nil, nil, nil, nil, "", nil, objectstoreplugintest.ControlClient(objects))
 
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
 	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
@@ -353,7 +363,10 @@ func TestDeleteActor_CollectsInFlightSnapshotWithoutTemplate(t *testing.T) {
 	}, actor, "abandoned")
 	objects.PutSnapshot(t, inFlight, "manifest.json")
 	mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
-		s.InProgressSnapshotUri = inFlight.String()
+		s.LastAssignedGeneration = 1
+		s.Snapshots = []*ateapipb.Snapshot{
+			newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", inFlight.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS),
+		}
 	})
 
 	if _, err := w.DeleteActor(ctx, actorRef, true, store.DeletePreconditions{}); err != nil {
@@ -383,7 +396,10 @@ func TestEnsureExternalSnapshotsReleased_DeletePrefixFailure(t *testing.T) {
 	current := mustActorSnapshotURI(t, template, actor, "current")
 	objects.PutSnapshot(t, current, "manifest.json", "memory.zst")
 	actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
-		s.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: current.String()}
+		s.LastAssignedGeneration = 1
+		s.Snapshots = []*ateapipb.Snapshot{
+			newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", current.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+		}
 	})
 
 	errTransient := errors.New("simulated transient delete failure")
@@ -392,8 +408,8 @@ func TestEnsureExternalSnapshotsReleased_DeletePrefixFailure(t *testing.T) {
 	}
 
 	err := w.ensureExternalSnapshotsReleased(ctx, actor)
-	if !errors.Is(err, errTransient) {
-		t.Fatalf("ensureExternalSnapshotsReleased error = %v, want error wrapping %v", err, errTransient)
+	if err == nil || !strings.Contains(err.Error(), errTransient.Error()) {
+		t.Fatalf("ensureExternalSnapshotsReleased error = %v, want it to report %v", err, errTransient)
 	}
 
 	// Objects should not have been deleted
@@ -414,8 +430,8 @@ func TestEnsureExternalSnapshotsReleased_DeletePrefixFailure(t *testing.T) {
 // TestDeleteActor_CollectsSnapshotsAfterWorkerDelete verifies that
 // deleting an actor whose suspend a worker delete crashed mid-finalize deletes
 // every object that suspend wrote. When an actor crashes mid-suspend, only
-// DeleteActor or RevertActor can delete the in-progress snapshot
-// (in_progress_snapshot_uri): whatever they cannot name is leaked for good.
+// DeleteActor or RevertActor can delete the in-progress snapshot:
+// whatever they cannot name is leaked for good.
 func TestDeleteActor_CollectsSnapshotsAfterWorkerDelete(t *testing.T) {
 	tests := []struct {
 		name string
@@ -477,18 +493,22 @@ func TestDeleteActor_CollectsSnapshotsAfterWorkerDelete(t *testing.T) {
 				previous := mustActorSnapshotURI(t, template, actor, "old")
 				objects.PutSnapshot(t, previous, "manifest.json")
 				actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
-					s.ExternalSnapshot = &ateapipb.ExternalSnapshot{SnapshotUri: previous.String()}
+					s.LastAssignedGeneration = 1
+					s.Snapshots = []*ateapipb.Snapshot{
+						newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", previous.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+					}
 				})
 			}
 
-			actorWorkflow := NewActorWorkflow(persistence, nil, nil, nil, nil, nil, "", nil, objects)
+			actorWorkflow := NewActorWorkflow(persistence, nil, nil, nil, nil, nil, "", nil, objectstoreplugintest.ControlClient(objects))
 			// Suspend the actor as far as it gets: MarkSuspending mints the
 			// in-progress URI, and the checkpoint writes under it
 			actor, err := actorWorkflow.ensureMarkedSuspending(ctx, actorRef, actor, template)
 			if err != nil {
 				t.Fatalf("ensureMarkedSuspending: %v", err)
 			}
-			fresh := mustParseSnapshotURI(t, actor.GetStatus().GetInProgressSnapshotUri())
+			_, freshSt := findLatestSnapshotStorage(actor.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS)
+			fresh := mustParseSnapshotURI(t, freshSt.GetObject().GetSnapshotUri())
 			objects.PutSnapshot(t, fresh, "manifest.json")
 
 			// The worker's pod goes away with the commit still outstanding, so

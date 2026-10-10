@@ -21,23 +21,25 @@ import (
 	"strings"
 	"testing"
 
+	"sigs.k8s.io/yaml"
+
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/steps"
 )
 
-// A record describes how a cluster was configured, so only the commands that
-// configure one write it. The annotation is inherited, which is what keeps a
-// demo added later from quietly missing it -- and what makes it worth checking
-// that it has not spread to commands that install nothing.
-func TestOnlyDeployCommandsRecordTheirRun(t *testing.T) {
+// A record describes how the system was installed, so only the commands that
+// install it write it. Demos and benchmarks deploy on top of the system with
+// their own settings, and recording them would replace the system's record.
+func TestOnlySystemDeploysRecordTheirRun(t *testing.T) {
 	for _, tc := range []struct {
 		path string
 		want bool
 	}{
 		{path: "deploy ate-system", want: true},
 		{path: "deploy atenet", want: true},
-		{path: "deploy benchmarks", want: true},
-		{path: "deploy demo counter", want: true},
+		{path: "deploy apiserver", want: true},
+		{path: "deploy benchmarks", want: false},
+		{path: "deploy demo counter", want: false},
 		{path: "delete ate-system", want: false},
 		{path: "delete benchmarks", want: false},
 		{path: "setup csi", want: false},
@@ -148,5 +150,24 @@ func TestRecordRunWritesAFailureArtifact(t *testing.T) {
 	}
 	if installs, _ := filepath.Glob(filepath.Join(dir, "installs", "*.yaml")); len(installs) != 0 {
 		t.Errorf("a failed run wrote an install record: %v", installs)
+	}
+}
+
+// The record names the release the run installed, so a later reader can tell
+// what the cluster runs without asking the cluster.
+func TestRecordNamesTheInstalledVersion(t *testing.T) {
+	t.Setenv("VERSION", "v0.9.1")
+	raw, err := os.ReadFile(recordFor(t, t.TempDir(), nil))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	var doc struct {
+		Cluster config.DocumentMetadata `json:"cluster"`
+	}
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if got := doc.Cluster.SubstrateVersion; got != "v0.9.1" {
+		t.Errorf("cluster.substrateVersion = %q, want %q", got, "v0.9.1")
 	}
 }

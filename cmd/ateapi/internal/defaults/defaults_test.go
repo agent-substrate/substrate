@@ -25,8 +25,8 @@ import (
 
 func TestApply(t *testing.T) {
 	const (
-		scopeFull = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL
-		scopeData = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
+		scopeFull = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
+		scopeData = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
 	)
 	tests := []struct {
 		name string
@@ -44,15 +44,15 @@ func TestApply(t *testing.T) {
 		name: "empty snapshot_config gets every default",
 		in:   &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{}},
 		want: &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{
-			OnCommit: scopeFull,
+			PreferredFidelity: scopeFull,
 		}},
 	}, {
 		name: "set scopes are kept",
 		in: &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{
-			OnCommit: scopeData,
+			PreferredFidelity: scopeData,
 		}},
 		want: &ateapipb.ActorTemplate{SnapshotConfig: &ateapipb.SnapshotConfig{
-			OnCommit: scopeData,
+			PreferredFidelity: scopeData,
 		}},
 	}, {
 		name: "container without wakeup probe stays without one",

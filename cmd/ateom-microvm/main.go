@@ -33,6 +33,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	"cloud.google.com/go/compute/metadata"
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/reaper"
@@ -43,6 +44,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateom"
 	"github.com/agent-substrate/substrate/internal/ateomcgroup"
 	"github.com/agent-substrate/substrate/internal/ateomnet"
+	"github.com/agent-substrate/substrate/internal/ateomstats"
 	"github.com/agent-substrate/substrate/internal/ateomtunnel"
 	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/otlprelay"
@@ -50,6 +52,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/version"
+	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/spf13/pflag"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"golang.org/x/sys/unix"
@@ -73,7 +76,12 @@ var (
 
 	readinessListenAddress = pflag.String("readiness-listen-address", "0.0.0.0:8080", "Address for HTTP readiness checks")
 	maxActors              = pflag.Int("max-actors", 1000, "How many actors this worker will host at once")
+	usageSampleInterval    = pflag.Duration("usage-sample-interval", time.Minute, "How often the ateom samples the resource usage of its actors. Each sample writes an ate.actor.usage_sampled record per actor, and GetActiveWorkloadStats serves the latest.")
 )
+
+// minUsageSampleInterval is the floor of --usage-sample-interval, the same as
+// atelet's poll interval floor. It keeps statsSweepBudget inside one interval.
+const minUsageSampleInterval = 50 * time.Second
 
 func main() {
 	pflag.Parse()
@@ -104,6 +112,9 @@ func do(ctx context.Context) error {
 	slog.InfoContext(ctx, "ateom-microvm booting", slog.String("version", version.Version))
 	if *maxActors < 0 {
 		return fmt.Errorf("--max-actors must not be negative, got %d", *maxActors)
+	}
+	if *usageSampleInterval < minUsageSampleInterval {
+		return fmt.Errorf("--usage-sample-interval must be at least %v, got %v", minUsageSampleInterval, *usageSampleInterval)
 	}
 
 	const serviceName = "ateom-microvm"
@@ -161,8 +172,8 @@ func do(ctx context.Context) error {
 
 	// Create ateom dir.
 	ateomDir := nodepath.AteomPath(*podUID)
-	if err := resources.ValidateAteomUID(*podUID); err != nil {
-		return fmt.Errorf("in resources.ValidateAteomUID: %w", err)
+	if err := resources.ValidateWorkerPodUID(*podUID); err != nil {
+		return fmt.Errorf("in resources.ValidateWorkerPodUID: %w", err)
 	}
 	if err := os.MkdirAll(ateomDir, 0o700); err != nil {
 		return fmt.Errorf("in os.MkdirAll(%q): %w", ateomDir, err)
@@ -222,6 +233,15 @@ func do(ctx context.Context) error {
 	}
 	ateomService := NewService(*podUID, *chBinary, *guestDebug, *vmmMemReserve, *maxActors, tunnel, actorLogger)
 	ateomService.actorCgroups = actorCgroups
+	// The controller sets both from the downward API.
+	pool := ateomstats.Pool{Namespace: os.Getenv("POD_NAMESPACE"), Name: os.Getenv("WORKER_POOL_NAME")}
+	if pool.Namespace == "" || pool.Name == "" {
+		slog.WarnContext(ctx, "Worker pool unknown; usage records will name no pool", slog.Any("pool", pool))
+	}
+	usageStdout := ateomstats.NewStdoutHandler(logWriter)
+	defer usageStdout.Close()
+	ateomService.usage = ateomstats.NewUsageEmitter(lp, usageStdout, pool)
+	defer ateomstats.StartSampler(ctx, *usageSampleInterval, func(ctx context.Context) { ateomService.sweepUsage(ctx) })()
 
 	svr := grpc.NewServer(
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
@@ -263,6 +283,7 @@ func do(ctx context.Context) error {
 			TrustBundlePath:      tunnelConfig.TrustBundle,
 			AteletSPIFFEID:       tunnelConfig.BrokerIdentity,
 			Actors:               *maxActors,
+			SandboxClass:         string(atev1alpha1.SandboxClassMicroVM),
 		})
 		if err != nil && ctx.Err() == nil {
 			serverboot.Fatal(ctx, "Failed to report worker capacity", err)
@@ -343,9 +364,14 @@ type AteomService struct {
 	// with ateom-gvisor).
 	actorLogger *actorlog.ActorLogger
 	tunnel      *ateomtunnel.Tunnel
+	// usage writes the usage records. Nil writes none.
+	usage *ateomstats.UsageEmitter
 
 	// Guards actors, draining, and mutable hostedActor fields.
 	actorsMu sync.RWMutex
+	// guestSlots bounds the guest reads of the sweeps and initial readings
+	// together to statsFanOut at once.
+	guestSlots chan struct{}
 	// Keyed by actor UID.
 	actors map[string]*hostedActor
 	// Actors undergoing network cleanup still count against capacity.
@@ -364,6 +390,7 @@ func NewService(podUID, chBinary string, guestDebug bool, memReserveMiB, maxActo
 		locks:         actorlock.New(),
 		inFlight:      actorlock.NewInFlight(),
 		actors:        map[string]*hostedActor{},
+		guestSlots:    make(chan struct{}, statsFanOut),
 		maxActors:     maxActors,
 		podUID:        podUID,
 		chBinary:      chBinary,
@@ -387,6 +414,15 @@ func (s *AteomService) beginRPC(actorUID, name string, cancel context.CancelFunc
 // validateActorDirs rejects a request whose actor directories are unusable.
 func validateActorDirs(actorDirs *ateompb.ActorDirs) error {
 	if errs := resources.ValidateActorDirs(actorDirs, field.NewPath("actor_dirs")); len(errs) > 0 {
+		return apierror.InvalidArgument("%v", errs.ToAggregate())
+	}
+	return nil
+}
+
+// validateFidelity rejects a checkpoint or restore request whose fidelity
+// this runtime cannot serve.
+func validateFidelity(fidelity ateompb.SnapshotFidelity) error {
+	if errs := resources.ValidateSnapshotFidelity(fidelity, field.NewPath("fidelity")); len(errs) > 0 {
 		return apierror.InvalidArgument("%v", errs.ToAggregate())
 	}
 	return nil
