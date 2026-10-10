@@ -40,10 +40,9 @@ func ValidateCreateGlobalAccessPolicyRequest(ctx context.Context, req *ateapipb.
 	return append(errs, validateBindings(bindingsPath, req.GetAccessPolicy(), validGlobalRoles)...)
 }
 
-// ValidateGetGlobalAccessPolicyRequest accepts every request: the message has
-// no fields, so validation-gen emits no validator for it.
-func ValidateGetGlobalAccessPolicyRequest(_ context.Context, _ *ateapipb.GetGlobalAccessPolicyRequest) field.ErrorList {
-	return nil
+func ValidateGetGlobalAccessPolicyRequest(ctx context.Context, req *ateapipb.GetGlobalAccessPolicyRequest) field.ErrorList {
+	op := operation.Operation{Type: operation.Create}
+	return Validate_GetGlobalAccessPolicyRequest(ctx, op, nil, req, nil)
 }
 
 func ValidateUpdateGlobalAccessPolicyRequest(ctx context.Context, req *ateapipb.UpdateGlobalAccessPolicyRequest) field.ErrorList {
@@ -101,10 +100,19 @@ func ValidateCustom_AccessPolicy_Metadata(_ context.Context, _ operation.Operati
 	if meta.GetAtespace() != "" {
 		errs = append(errs, field.Forbidden(root.Child("atespace"), "must not be set"))
 	}
-	if name := meta.GetName(); name != "" && name != "default" {
-		errs = append(errs, field.Invalid(root.Child("name"), name, `must be "default"`).WithOrigin("custom=default"))
-	}
-	return errs
+	return append(errs, validateSingletonName(root.Child("name"), meta.GetName())...)
+}
+
+func ValidateCustom_GetGlobalAccessPolicyRequest_Name(_ context.Context, _ operation.Operation, p *field.Path, name, _ *string) field.ErrorList {
+	return validateSingletonName(p, *name)
+}
+
+func ValidateCustom_GetAtespaceAccessPolicyRequest_Name(_ context.Context, _ operation.Operation, p *field.Path, name, _ *string) field.ErrorList {
+	return validateSingletonName(p, *name)
+}
+
+func ValidateCustom_DeleteAtespaceAccessPolicyRequest_Name(_ context.Context, _ operation.Operation, p *field.Path, name, _ *string) field.ErrorList {
+	return validateSingletonName(p, *name)
 }
 
 // validateBindings checks that each binding names an allowed role at most once,

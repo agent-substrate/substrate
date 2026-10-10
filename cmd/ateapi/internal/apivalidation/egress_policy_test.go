@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/defaults"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/protobuf/proto"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -192,6 +193,7 @@ func TestValidateGetActorEgressPolicyRequest(t *testing.T) {
 	validReq := func() *ateapipb.GetActorEgressPolicyRequest {
 		return &ateapipb.GetActorEgressPolicyRequest{
 			Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor"},
+			Name:  resources.SingletonName,
 		}
 	}
 	tests := []struct {
@@ -203,7 +205,7 @@ func TestValidateGetActorEgressPolicyRequest(t *testing.T) {
 		req:  validReq(),
 	}, {
 		name: "missing actor",
-		req:  &ateapipb.GetActorEgressPolicyRequest{},
+		req:  &ateapipb.GetActorEgressPolicyRequest{Name: resources.SingletonName},
 		want: field.ErrorList{
 			field.Required(field.NewPath("actor"), ""),
 		},
@@ -246,6 +248,26 @@ func TestValidateGetActorEgressPolicyRequest(t *testing.T) {
 		}(),
 		want: field.ErrorList{
 			field.Invalid(field.NewPath("actor", "name"), nil, "").WithOrigin("format=k8s-short-name"),
+		},
+	}, {
+		name: "missing singleton name",
+		req: func() *ateapipb.GetActorEgressPolicyRequest {
+			r := validReq()
+			r.Name = ""
+			return r
+		}(),
+		want: field.ErrorList{
+			field.Required(field.NewPath("name"), ""),
+		},
+	}, {
+		name: "wrong singleton name",
+		req: func() *ateapipb.GetActorEgressPolicyRequest {
+			r := validReq()
+			r.Name = "other"
+			return r
+		}(),
+		want: field.ErrorList{
+			field.Invalid(field.NewPath("name"), nil, "").WithOrigin("custom=default"),
 		},
 	}}
 	for _, tc := range tests {
@@ -321,6 +343,7 @@ func TestValidateDeleteActorEgressPolicyRequest(t *testing.T) {
 	validReq := func() *ateapipb.DeleteActorEgressPolicyRequest {
 		return &ateapipb.DeleteActorEgressPolicyRequest{
 			Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor"},
+			Name:  resources.SingletonName,
 		}
 	}
 	tests := []struct {
@@ -332,7 +355,7 @@ func TestValidateDeleteActorEgressPolicyRequest(t *testing.T) {
 		req:  validReq(),
 	}, {
 		name: "missing actor",
-		req:  &ateapipb.DeleteActorEgressPolicyRequest{},
+		req:  &ateapipb.DeleteActorEgressPolicyRequest{Name: resources.SingletonName},
 		want: field.ErrorList{
 			field.Required(field.NewPath("actor"), ""),
 		},
@@ -375,6 +398,26 @@ func TestValidateDeleteActorEgressPolicyRequest(t *testing.T) {
 		}(),
 		want: field.ErrorList{
 			field.Invalid(field.NewPath("actor", "name"), nil, "").WithOrigin("format=k8s-short-name"),
+		},
+	}, {
+		name: "missing singleton name",
+		req: func() *ateapipb.DeleteActorEgressPolicyRequest {
+			r := validReq()
+			r.Name = ""
+			return r
+		}(),
+		want: field.ErrorList{
+			field.Required(field.NewPath("name"), ""),
+		},
+	}, {
+		name: "wrong singleton name",
+		req: func() *ateapipb.DeleteActorEgressPolicyRequest {
+			r := validReq()
+			r.Name = "other"
+			return r
+		}(),
+		want: field.ErrorList{
+			field.Invalid(field.NewPath("name"), nil, "").WithOrigin("custom=default"),
 		},
 	}}
 	for _, tc := range tests {

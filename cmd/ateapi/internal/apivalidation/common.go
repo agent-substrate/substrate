@@ -16,6 +16,7 @@ package apivalidation
 
 import (
 	"context"
+	"fmt"
 	"net/netip"
 
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -29,6 +30,15 @@ import (
 // code calls by name; it delegates to resources.DeepEqual.
 func ateDeepEqual[T any](a, b T) bool {
 	return resources.DeepEqual(a, b)
+}
+
+// validateSingletonName requires the name of a singleton subresource to be
+// resources.SingletonName. An empty name is left to the required tag.
+func validateSingletonName(fldPath *field.Path, name string) field.ErrorList {
+	if name == "" || name == resources.SingletonName {
+		return nil
+	}
+	return field.ErrorList{field.Invalid(fldPath, name, fmt.Sprintf("must be %q", resources.SingletonName)).WithOrigin("custom=default")}
 }
 
 // ValidateCustom_ResourceMetadata checks the server-stamped timestamps: each,
