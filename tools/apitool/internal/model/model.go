@@ -40,9 +40,8 @@ type API struct {
 	// "ateapi.ResourceMetadata" both appear here as top-level entries.
 	Messages []Message
 	// Enums lists every enum declared in the file, top-level and nested,
-	// flattened the same way as Messages. For example, both the top-level
-	// "ateapi.ActorState" and the nested "ateapi.ExternalVolume.Status"
-	// appear here.
+	// flattened the same way as Messages. For example, the top-level
+	// "ateapi.ActorState" appears here.
 	Enums []Enum
 }
 
@@ -100,10 +99,9 @@ type Message struct {
 	FullName string
 	// Name is the message's short name, with its enclosing message's name
 	// dotted in front for a nested type. For example, "ResourceMetadata"
-	// for a top-level message. ateapi.proto has no nested message today
-	// (only a nested enum, ExternalVolume.Status - see Enum.Name for that
-	// shape); a nested message named "Child" inside "Parent" would read
-	// "Parent.Child" here.
+	// for a top-level message. ateapi.proto has no nested message today; a
+	// nested message named "Child" inside "Parent" would read "Parent.Child"
+	// here.
 	Name string
 	// ParentFullName is the enclosing message's full name, or "" for a
 	// top-level message. For example, "" for "ateapi.ResourceMetadata".
@@ -184,26 +182,24 @@ type Field struct {
 // Enum is one enum declared in the file, top-level or nested.
 type Enum struct {
 	// FullName is the enum's proto full name. For example, "ateapi.ActorState"
-	// for a top-level enum, or "ateapi.ExternalVolume.Status" for one
-	// nested inside the ExternalVolume message.
+	// for a top-level enum, or "ateapi.Parent.Status" for one nested inside
+	// a Parent message.
 	FullName string
 	// Name is the enum's short name, with its enclosing message's name
 	// dotted in front for a nested enum. For example, "ActorState" for
-	// the top-level enum, or "ExternalVolume.Status" for the one nested
-	// inside ExternalVolume.
+	// the top-level enum, or "Parent.Status" for one nested inside Parent.
 	Name string
 	// ParentFullName is the enclosing message's full name, or "" for a
 	// top-level enum. For example, "" for "ateapi.ActorState", or
-	// "ateapi.ExternalVolume" for "ateapi.ExternalVolume.Status".
+	// "ateapi.Parent" for "ateapi.Parent.Status".
 	ParentFullName string
 	// Comment is the enum's leading doc comment. ateapi.proto's ActorState
-	// and ExternalVolume.Status have none today, so this is often "" in
-	// practice even though the field is populated the same way as for a
-	// message or field.
+	// has none today, so this is often "" in practice even though the field
+	// is populated the same way as for a message or field.
 	Comment string
 	// Values lists the enum's values, in declaration order. For example,
-	// ExternalVolume.Status's STATUS_UNSPECIFIED, STATUS_PENDING,
-	// STATUS_CREATED, STATUS_DELETING.
+	// ActorState's ACTOR_STATE_UNSPECIFIED, ACTOR_STATE_RESUMING,
+	// ACTOR_STATE_RUNNING, and so on.
 	Values []EnumValue
 }
 
@@ -220,15 +216,13 @@ func (e Enum) ValueByNumber(number int32) *EnumValue {
 
 // EnumValue is one value declared on an Enum.
 type EnumValue struct {
-	// Name is the value's proto name. For example, "STATUS_PENDING" for
-	// ExternalVolume.Status.
+	// Name is the value's proto name. For example, "ACTOR_STATE_RESUMING"
+	// for ActorState.
 	Name string
 	// Number is the value's proto number. For example, 1 for
-	// `STATUS_PENDING = 1;`.
+	// `ACTOR_STATE_RESUMING = 1;`.
 	Number int32
-	// Comment is the value's leading doc comment. For example, "Volume
-	// creation pending in the storage system." for ExternalVolume.Status's
-	// STATUS_PENDING.
+	// Comment is the value's leading doc comment, or "" when it has none.
 	Comment string
 }
 

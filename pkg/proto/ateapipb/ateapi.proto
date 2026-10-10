@@ -434,22 +434,6 @@ message ExternalVolume {
   // +k8s:customValidation
   string volume_type = 3;
 
-  enum Status {
-    STATUS_UNSPECIFIED = 0;
-    // Volume creation pending in the storage system.
-    STATUS_PENDING = 1;
-    // Volume successfully created in the storage system.
-    STATUS_CREATED = 2;
-    // Volume being deleted from the storage system.
-    STATUS_DELETING = 3;
-    // Keep this in sync with ExternalVolume.status's maximum.
-  }
-
-  // +k8s:optional
-  // +k8s:minimum=1
-  // +k8s:maximum=3 # keep this in sync with the Status enum
-  Status status = 4;
-
   // volume_context contains metadata returned by the CSI driver during volume
   // provisioning, needed by the node plugin for mounting (e.g. attachment
   // info). Keys and values are the driver's own, so they are only bounded,

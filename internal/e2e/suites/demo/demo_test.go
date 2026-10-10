@@ -377,7 +377,7 @@ func TestDeleteActorAnyStateWithExternalVolume(t *testing.T) {
 	}
 	waitForActorState(ctx, t, clients, actorName, ateapipb.ActorState_ACTOR_STATE_RUNNING)
 
-	// Verify volume exists in actor (status should be CREATED)
+	// Verify volume exists in actor (it should be provisioned)
 	actor, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
 	})
@@ -388,8 +388,8 @@ func TestDeleteActorAnyStateWithExternalVolume(t *testing.T) {
 		t.Fatalf("expected actor to have volumes, got 0")
 	}
 	for _, vol := range actor.GetStatus().GetExternalVolumes() {
-		if vol.Status != ateapipb.ExternalVolume_STATUS_CREATED {
-			t.Fatalf("expected volume %q to be CREATED, got %s", vol.Name, vol.Status)
+		if vol.StorageVolumeId == "" {
+			t.Fatalf("expected volume %q to be provisioned, got no storage volume ID", vol.Name)
 		}
 	}
 
