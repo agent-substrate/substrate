@@ -32,6 +32,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
+	appsv1client "k8s.io/client-go/kubernetes/typed/apps/v1"
 	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
@@ -100,6 +101,7 @@ func (k workerKey) logAttrs() []any {
 type WorkerPoolSyncer struct {
 	client             ateapipb.ControlClient
 	pods               corev1client.PodsGetter
+	apps               appsv1client.AppsV1Interface
 	workerInformer     cache.SharedIndexInformer
 	workerPoolInformer cache.SharedIndexInformer
 	queue              workqueue.TypedRateLimitingInterface[workerKey]
@@ -112,11 +114,13 @@ type WorkerPoolSyncer struct {
 }
 
 // NewWorkerPoolSyncer creates a new WorkerPoolSyncer. pods is used to delete
-// worker pods that have reached a terminal phase.
-func NewWorkerPoolSyncer(client ateapipb.ControlClient, pods corev1client.PodsGetter, workerInformer, workerPoolInformer cache.SharedIndexInformer) *WorkerPoolSyncer {
+// worker pods that have reached a terminal phase or outlived their pool, and
+// apps to tell the latter from pods the garbage collector is still removing.
+func NewWorkerPoolSyncer(client ateapipb.ControlClient, pods corev1client.PodsGetter, apps appsv1client.AppsV1Interface, workerInformer, workerPoolInformer cache.SharedIndexInformer) *WorkerPoolSyncer {
 	return &WorkerPoolSyncer{
 		client:             client,
 		pods:               pods,
+		apps:               apps,
 		workerInformer:     workerInformer,
 		workerPoolInformer: workerPoolInformer,
 		queue:              workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[workerKey]()),
@@ -147,18 +151,8 @@ func (s *WorkerPoolSyncer) Start(ctx context.Context) {
 			s.enqueuePod(newPod)
 		},
 		DeleteFunc: func(obj interface{}) {
-			var pod *corev1.Pod
-			switch t := obj.(type) {
-			case *corev1.Pod:
-				pod = t
-			case cache.DeletedFinalStateUnknown:
-				var ok bool
-				pod, ok = t.Obj.(*corev1.Pod)
-				if !ok {
-					slog.ErrorContext(ctx, "Failed to cast DeletedFinalStateUnknown object to Pod")
-					return
-				}
-			default:
+			pod, ok := deletedObject[*corev1.Pod](obj)
+			if !ok {
 				slog.ErrorContext(ctx, "Unknown object type in delete handler", slog.Any("obj", obj))
 				return
 			}
@@ -168,11 +162,16 @@ func (s *WorkerPoolSyncer) Start(ctx context.Context) {
 	s.workerPoolInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc:    s.enqueueWorkerPool,
 		UpdateFunc: func(_, obj interface{}) { s.enqueueWorkerPool(obj) },
+		// Orphaned pods outlive their pool; reconcile them now, not at the
+		// next resync.
+		DeleteFunc: s.enqueueWorkerPool,
 	})
 
 	go func() {
 		defer s.queue.ShutDown()
-		if !cache.WaitForCacheSync(ctx.Done(), s.workerInformer.HasSynced) {
+		// The pool cache must be warm too: reconciling a pod against an empty
+		// one would read every pool as missing and deregister every Worker.
+		if !cache.WaitForCacheSync(ctx.Done(), s.workerInformer.HasSynced, s.workerPoolInformer.HasSynced) {
 			slog.ErrorContext(ctx, "Syncer: failed to sync informer cache")
 			return
 		}
@@ -192,9 +191,20 @@ func (s *WorkerPoolSyncer) Start(ctx context.Context) {
 	}()
 }
 
+// deletedObject returns the T that a delete event carries. An informer that
+// missed the delete itself delivers a cache.DeletedFinalStateUnknown holding the
+// last state it knew of, so that is unwrapped first.
+func deletedObject[T any](obj interface{}) (T, bool) {
+	if tombstone, ok := obj.(cache.DeletedFinalStateUnknown); ok {
+		obj = tombstone.Obj
+	}
+	t, ok := obj.(T)
+	return t, ok
+}
+
 // enqueueWorkerPool schedules every current pod in pool.
 func (s *WorkerPoolSyncer) enqueueWorkerPool(obj interface{}) {
-	pool, ok := obj.(*atev1alpha1.WorkerPool)
+	pool, ok := deletedObject[*atev1alpha1.WorkerPool](obj)
 	if !ok {
 		slog.Error("Syncer: unexpected WorkerPool informer object", slog.Any("obj", obj))
 		return
@@ -278,9 +288,10 @@ func (s *WorkerPoolSyncer) reconcile(ctx context.Context, key workerKey) error {
 	}
 	// Checked before eligibility for the same reason: a terminal pod is never
 	// Ready, so the eligibility gate would leave its Worker, and the Actors bound
-	// to it, registered for as long as the pod object lingers.
+	// to it, registered for as long as the pod object lingers. The API server
+	// deletes a terminal pod without a grace period.
 	if isPodTerminal(pod) {
-		return s.deleteTerminalPod(ctx, key, pod)
+		return s.deleteWorkerPod(ctx, key, pod, "phase "+string(pod.Status.Phase))
 	}
 	if !isWorkerEligible(pod) {
 		// The pod has no IP or is not Ready yet; a later update event re-enqueues
@@ -337,7 +348,7 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 		return fmt.Errorf("getting WorkerPool %s/%s: %w", key.namespace, poolName, err)
 	}
 	if !exists {
-		return fmt.Errorf("getting WorkerPool %s/%s: not found", key.namespace, poolName)
+		return s.reconcileMissingPool(ctx, key, pod, poolName)
 	}
 	pool, ok := poolObject.(*atev1alpha1.WorkerPool)
 	if !ok {
@@ -442,21 +453,20 @@ func isPodTerminal(pod *corev1.Pod) bool {
 	return pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed
 }
 
-// deleteTerminalPod deletes a worker pod that has reached a terminal phase.
-// The API server deletes a terminal pod without a grace period, and the
-// resulting Pod Deleted event deregisters the Worker and releases its Actors
-// through reconcileDeadWorker. The Worker is marked DRAINING first so the
-// scheduler stops routing to it even while a failed delete is being retried.
+// deleteWorkerPod gracefully deletes a worker pod; the Pod Deleted event then
+// deregisters the Worker through reconcileDeadWorker. The Worker is marked
+// DRAINING first so the scheduler stops routing to it even if the delete is
+// retried.
 //
 // The delete is preconditioned on the key's UID so it can never remove a
 // same-named replacement. A pod already gone, or replaced, is the state this
 // drives towards, so NotFound and Conflict are success.
-func (s *WorkerPoolSyncer) deleteTerminalPod(ctx context.Context, key workerKey, pod *corev1.Pod) error {
+func (s *WorkerPoolSyncer) deleteWorkerPod(ctx context.Context, key workerKey, pod *corev1.Pod, reason string) error {
 	if err := s.markWorkerDraining(ctx, key); err != nil {
 		return err
 	}
-	slog.InfoContext(ctx, "Syncer: deleting worker pod (terminal phase)",
-		append(key.logAttrs(), slog.String("phase", string(pod.Status.Phase)))...)
+	slog.InfoContext(ctx, "Syncer: deleting worker pod",
+		append(key.logAttrs(), slog.String("reason", reason))...)
 	uid := pod.UID
 	err := s.pods.Pods(key.namespace).Delete(ctx, key.name, metav1.DeleteOptions{
 		Preconditions: &metav1.Preconditions{UID: &uid},
@@ -465,9 +475,83 @@ func (s *WorkerPoolSyncer) deleteTerminalPod(ctx context.Context, key workerKey,
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("deleting terminal pod: %w", err)
+		return fmt.Errorf("deleting pod (%s): %w", reason, err)
 	}
 	return nil
+}
+
+// reconcileMissingPool handles a live pod whose WorkerPool is not in the cache.
+// The Worker is never deleted outright, which would crash its Actors. A pod
+// the garbage collector is still removing is left to it. An orphaned pod is
+// deleted gracefully; a replacement from its ReplicaSet has no Worker, so is
+// left alone.
+func (s *WorkerPoolSyncer) reconcileMissingPool(ctx context.Context, key workerKey, pod *corev1.Pod, poolName string) error {
+	_, err := s.client.GetWorker(ctx, &ateapipb.GetWorkerRequest{Worker: key.workerRef()})
+	if status.Code(err) == codes.NotFound {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("getting worker: %w", err)
+	}
+	pending, err := s.poolCleanupPending(ctx, pod)
+	if err != nil {
+		return err
+	}
+	if pending {
+		slog.InfoContext(ctx, "Syncer: leaving worker to cascading delete (pool not found)",
+			append(key.logAttrs(), slog.String("workerPool", key.namespace+"/"+poolName))...)
+		return nil
+	}
+	return s.deleteWorkerPod(ctx, key, pod, "orphaned from deleted pool "+poolName)
+}
+
+// poolCleanupPending reports whether the garbage collector will still remove
+// pod. It walks the controller chain pod -> ReplicaSet -> Deployment ->
+// WorkerPool: a gone owner means collection is pending, a cut link means the
+// pod was orphaned.
+func (s *WorkerPoolSyncer) poolCleanupPending(ctx context.Context, pod *corev1.Pod) (bool, error) {
+	var obj metav1.Object = pod
+	for _, kind := range []string{"ReplicaSet", "Deployment"} {
+		ref := metav1.GetControllerOf(obj)
+		if ref == nil || ref.Kind != kind {
+			return false, nil
+		}
+		owner, err := s.getOwner(ctx, pod.Namespace, ref)
+		if err != nil {
+			return false, fmt.Errorf("getting %s %s/%s: %w", ref.Kind, pod.Namespace, ref.Name, err)
+		}
+		if owner == nil {
+			return true, nil
+		}
+		obj = owner
+	}
+	ref := metav1.GetControllerOf(obj)
+	return ref != nil && ref.Kind == "WorkerPool", nil
+}
+
+// getOwner reads the ReplicaSet or Deployment ref names, or nil if it is gone
+// or was replaced under the same name.
+func (s *WorkerPoolSyncer) getOwner(ctx context.Context, namespace string, ref *metav1.OwnerReference) (metav1.Object, error) {
+	var owner metav1.Object
+	var err error
+	switch ref.Kind {
+	case "ReplicaSet":
+		owner, err = s.apps.ReplicaSets(namespace).Get(ctx, ref.Name, metav1.GetOptions{})
+	case "Deployment":
+		owner, err = s.apps.Deployments(namespace).Get(ctx, ref.Name, metav1.GetOptions{})
+	default:
+		return nil, fmt.Errorf("unsupported owner kind %q", ref.Kind)
+	}
+	if apierrors.IsNotFound(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if owner.GetUID() != ref.UID {
+		return nil, nil
+	}
+	return owner, nil
 }
 
 // podIPs returns the pod's IP addresses, one per IP family, in the order
