@@ -186,8 +186,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	//   - Rootfs upper tars (ROOTFS and MEMORY): host-backed like the durable
 	//     volumes — the memory snapshot does not carry rootfs writes. Under
 	//     VOLUMES the workload cold-starts on restore, discarding rootfs state.
-	shipsRootfs := scope == ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS ||
-		scope == ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
+	shipsRootfs := includesRootfs(scope)
 	var durableFiles []string
 	g, gctx := errgroup.WithContext(ctx)
 	if scope == ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {

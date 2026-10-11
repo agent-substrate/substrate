@@ -157,7 +157,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	// attributed. Only a MEMORY restore resumes the guest and its CPU counters,
 	// so only it counts from the first reading; the lower fidelities cold-boot
 	// a fresh guest whose CPU counts from zero.
-	resumesGuest := req.GetFidelity() == ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
+	resumesGuest := includesMemory(req.GetFidelity())
 	if _, err := s.hostActor(ctx, attribution, resumesGuest); err != nil {
 		return nil, err
 	}
@@ -186,24 +186,18 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		}
 	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS:
 		// A ROOTFS snapshot holds no guest state either, but it carries each
-		// container's rootfs upper: put those back before the overlays are
-		// assembled, then cold-boot on top of them instead of a pristine upper.
-		tUpper := time.Now()
-		if err := untarRootfsUpper(rootfsUpperDir(p.actorDirs), restoreDir, containerNames(p.containers)); err != nil {
-			return nil, err
-		}
-		dUpper := time.Since(tUpper)
-		p.keepRootfsUpper = true
+		// container's rootfs upper. The cold boot re-materializes the uppers
+		// from the snapshot instead of starting from a pristine dir, overlapped
+		// with its bundle preparation like the MEMORY path does.
+		p.rootfsUpperSnapshotDir = restoreDir
 		if err := s.coldBootActorRetrying(ctx, p); err != nil {
 			return nil, err
 		}
 		dTotal := time.Since(tStart)
 		slog.InfoContext(ctx, "Actor restored (rootfs upper + durable-dir volumes, cold boot)",
-			slog.String("id", p.actorUID), slog.Duration("rootfs_upper", dUpper), slog.Duration("total", dTotal))
+			slog.String("id", p.actorUID), slog.Duration("total", dTotal))
 		ateomphaselog.LogSnapshotPhases(ctx, "Restore timing breakdown", attribution, scope,
-			ateomphaselog.RestoreDurationKey, nil, []ateomphaselog.Phase{
-				{Name: phaseRootfsUpper, D: dUpper}, {Name: phaseTotal, D: dTotal},
-			})
+			ateomphaselog.RestoreDurationKey, nil, []ateomphaselog.Phase{{Name: phaseTotal, D: dTotal}})
 	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
 		// A VOLUMES snapshot holds no guest state, so this is a cold boot that
 		// happens to start with the volumes already populated. wakeup probe gating comes

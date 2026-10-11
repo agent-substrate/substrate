@@ -80,6 +80,18 @@ func containerNames(containers []*ateompb.Container) []string {
 	return names
 }
 
+// stageRootfsUpper prepares the host upper dir for a cold boot: pristine when
+// snapshotDir is empty, otherwise re-materialized from the per-container tars
+// a ROOTFS or MEMORY snapshot left in snapshotDir. Either way any previous
+// activation's contents are gone first. Must run after CleanupSandboxState
+// has dropped the overlay mounts that used the dir.
+func stageRootfsUpper(actorDirs *ateompb.ActorDirs, snapshotDir string, containers []string) error {
+	if snapshotDir == "" {
+		return resetRootfsUpperDir(actorDirs)
+	}
+	return untarRootfsUpper(rootfsUpperDir(actorDirs), snapshotDir, containers)
+}
+
 // resetRootfsUpperDir gives a cold boot a pristine upper directory: a cold
 // boot must start from the bare image, and atelet's actor-dir reset does not
 // know about this directory, so ateom wipes any previous activation's contents

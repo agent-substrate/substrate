@@ -26,6 +26,30 @@ import (
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 )
 
+// TestFidelityLadder pins which layers each level carries: the checkpoint's
+// capture set and the restore's resume-versus-cold-boot decision both key off
+// these two predicates.
+func TestFidelityLadder(t *testing.T) {
+	for _, tc := range []struct {
+		fidelity               ateompb.SnapshotFidelity
+		wantRootfs, wantMemory bool
+	}{
+		{ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED, false, false},
+		{ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, false, false},
+		{ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, true, false},
+		{ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, true, true},
+	} {
+		t.Run(tc.fidelity.String(), func(t *testing.T) {
+			if got := includesRootfs(tc.fidelity); got != tc.wantRootfs {
+				t.Errorf("includesRootfs = %t, want %t", got, tc.wantRootfs)
+			}
+			if got := includesMemory(tc.fidelity); got != tc.wantMemory {
+				t.Errorf("includesMemory = %t, want %t", got, tc.wantMemory)
+			}
+		})
+	}
+}
+
 // TestValidateFidelity pins what this runtime serves: every level of the
 // ladder, ROOTFS included, since the rootfs upper is host-backed and ships
 // with or without guest memory. Anything else is refused before the request
