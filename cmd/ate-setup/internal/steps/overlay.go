@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -163,6 +164,10 @@ func (e *Env) renderSystemManifests(ctx context.Context) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
+		manifest, err = e.patchAtenetRouterSettings(manifest)
+		if err != nil {
+			return nil, err
+		}
 		imageReference, err := e.dockerfileImage(ctx, images.EnvoyDataplane)
 		if err != nil {
 			return nil, err
@@ -191,6 +196,10 @@ func (e *Env) renderAtenetRouterManifest(ctx context.Context) ([]byte, error) {
 		return nil, err
 	}
 	manifest, err = e.patchAtenetRouterAllowedSPIFFEIDs(manifest)
+	if err != nil {
+		return nil, err
+	}
+	manifest, err = e.patchAtenetRouterSettings(manifest)
 	if err != nil {
 		return nil, err
 	}
@@ -307,11 +316,61 @@ func (e *Env) patchAtenetRouterAllowedSPIFFEIDs(raw []byte) ([]byte, error) {
 		"--ingress-allowed-spiffe-ids="+strings.Join(e.Cfg.IngressAllowedSPIFFEIDs, ","))
 }
 
-// appendContainerArgs uses a kustomize JSON6902 patch to append args to the
-// first container of the named Deployment in ate-system. The patch first
-// tests that the first container is the one named, so a reordered manifest
-// fails the render instead of patching the wrong container.
+// The router manifest's terminationGracePeriodSeconds, and the
+// --parked-request-budget it is sized for, the router default.
+const (
+	routerManifestGracePeriodSeconds  = 60
+	routerManifestParkedRequestBudget = 5 * time.Second
+)
+
+// patchAtenetRouterSettings appends the flags the atenet.router.* settings set
+// to the atenet-router container's args. A parked request budget above the
+// manifest's grows terminationGracePeriodSeconds by the difference, since the
+// router's drain deadline follows the budget. Unset settings leave the
+// manifest alone.
+func (e *Env) patchAtenetRouterSettings(raw []byte) ([]byte, error) {
+	var args []string
+	if d := e.Cfg.RouterRouteTimeout; d > 0 {
+		args = append(args, "--route-timeout="+d.String())
+	}
+	if d := e.Cfg.RouterParkedRequestBudget; d > 0 {
+		args = append(args, "--parked-request-budget="+d.String())
+	}
+	if len(args) == 0 {
+		return raw, nil
+	}
+	raw, err := appendContainerArgs(raw, "atenet-router", "atenet-router", args...)
+	if err != nil {
+		return nil, err
+	}
+	if extra := e.Cfg.RouterParkedRequestBudget - routerManifestParkedRequestBudget; extra > 0 {
+		grace := routerManifestGracePeriodSeconds + int64(math.Ceil(extra.Seconds()))
+		raw, err = patchDeployment(raw, "atenet-router", fmt.Sprintf(`- op: replace
+  path: /spec/template/spec/terminationGracePeriodSeconds
+  value: %d`, grace))
+	}
+	return raw, err
+}
+
+// appendContainerArgs appends args to the first container of the named
+// Deployment in ate-system. The patch first tests that the first container is
+// the one named, so a reordered manifest fails the render instead of patching
+// the wrong container.
 func appendContainerArgs(raw []byte, deployment, container string, args ...string) ([]byte, error) {
+	ops := []string{fmt.Sprintf(`- op: test
+  path: /spec/template/spec/containers/0/name
+  value: %q`, container)}
+	for _, arg := range args {
+		ops = append(ops, fmt.Sprintf(`- op: add
+  path: /spec/template/spec/containers/0/args/-
+  value: %q`, arg))
+	}
+	return patchDeployment(raw, deployment, ops...)
+}
+
+// patchDeployment applies ops, the entries of a JSON6902 patch in YAML, to the
+// named Deployment in ate-system through a scratch kustomization.
+func patchDeployment(raw []byte, deployment string, ops ...string) ([]byte, error) {
 	dir, err := os.MkdirTemp("", "ate-setup-kustomize-")
 	if err != nil {
 		return nil, fmt.Errorf("while creating a scratch kustomization: %w", err)
@@ -334,15 +393,11 @@ patches:
       name: %s
       namespace: ate-system
     patch: |-
-      - op: test
-        path: /spec/template/spec/containers/0/name
-        value: %q
-`, deployment, container)
-	for _, arg := range args {
-		fmt.Fprintf(&kustomization, `      - op: add
-        path: /spec/template/spec/containers/0/args/-
-        value: %q
-`, arg)
+`, deployment)
+	for _, op := range ops {
+		for line := range strings.SplitSeq(op, "\n") {
+			kustomization.WriteString("      " + line + "\n")
+		}
 	}
 	if err := os.WriteFile(filepath.Join(dir, "kustomization.yaml"), []byte(kustomization.String()), 0o600); err != nil {
 		return nil, fmt.Errorf("while writing a scratch kustomization: %w", err)
