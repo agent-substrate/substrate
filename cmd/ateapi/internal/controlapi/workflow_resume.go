@@ -544,7 +544,7 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 
 	newAssignment := workerAssignmentFrom(bound, snapRuntime)
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapi.Actor) error {
-		toUpdate.Status.State = ateapi.ActorState_ACTOR_STATE_RESUMING
+		setActorState(toUpdate.Status, ateapi.ActorState_ACTOR_STATE_RESUMING)
 		toUpdate.Status.WorkerAssignment = newAssignment
 		toUpdate.Status.AssignedNode = newAssignment.GetNodeName()
 		return nil
@@ -933,7 +933,7 @@ func (w *ActorWorkflow) finalizeRunning(ctx context.Context, actorRef resources.
 	}
 
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapi.Actor) error {
-		toUpdate.Status.State = ateapi.ActorState_ACTOR_STATE_RUNNING
+		setActorState(toUpdate.Status, ateapi.ActorState_ACTOR_STATE_RUNNING)
 		toUpdate.Status.WorkerAssignment.WorkerEpoch = workerEpoch
 		toUpdate.Status.WorkerAssignment.WorkerPodIps = slices.Clone(worker.GetStatus().GetIps())
 		// The workload already runs, so a record that can't take the upload

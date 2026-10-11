@@ -180,7 +180,7 @@ func (w *ActorWorkflow) ensureMarkedSuspending(ctx context.Context, actorRef res
 		return nil, err
 	}
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapi.Actor) error {
-		toUpdate.Status.State = ateapi.ActorState_ACTOR_STATE_SUSPENDING
+		setActorState(toUpdate.Status, ateapi.ActorState_ACTOR_STATE_SUSPENDING)
 		// Increment last_assigned_generation for the new Suspend request and create
 		// a snapshot for that generation with a pending durable copy. Both modes
 		// record where the snapshot is uploaded, so the mode can change on a retry.
@@ -396,7 +396,7 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 	// since then fails the update instead of being overwritten.
 	t = time.Now()
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapi.Actor) error {
-		toUpdate.Status.State = ateapi.ActorState_ACTOR_STATE_SUSPENDED
+		setActorState(toUpdate.Status, ateapi.ActorState_ACTOR_STATE_SUSPENDED)
 		// The precondition makes toUpdate the version applied was built from.
 		toUpdate.Status.Snapshots = applied.GetSnapshots()
 		snap := snapshotAtLatestGeneration(toUpdate.Status)

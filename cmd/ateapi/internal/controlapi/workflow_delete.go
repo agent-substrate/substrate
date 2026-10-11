@@ -330,7 +330,7 @@ func (w *ActorWorkflow) ensureMarkedDeleting(ctx context.Context, actorRef resou
 			alreadyDeleting = toUpdate
 			return errAlreadyMarked
 		}
-		toUpdate.Status.State = ateapi.ActorState_ACTOR_STATE_DELETING
+		setActorState(toUpdate.Status, ateapi.ActorState_ACTOR_STATE_DELETING)
 		return nil
 	})
 	if errors.Is(err, errAlreadyMarked) {
