@@ -76,22 +76,21 @@ func main() {
 		cancel()
 	}()
 
-	// 1. Connect to ateapi and Resume Actor
-	log.Println("Connecting to ateapi...")
-	cli, err := ateclient.NewClient(ctx, *kubeconfig, *k8sContext, *ateapiAddr, "", false)
+	// 1. Connect to ateapi, once, up front, so a bad kube context fails here
+	// rather than at the first command. The connection is deliberately not tied
+	// to ctx: ctx is canceled by the interrupt handler, and the deferred suspend
+	// below still has to reach ateapi after that.
+	log.Printf("Connecting to ateapi (endpoint=%q; empty = auto port-forward to svc/api)...", *ateapiAddr)
+	cli, err := ateclient.NewClient(context.Background(), *kubeconfig, *k8sContext, *ateapiAddr, "", false)
 	if err != nil {
-		log.Fatalf("Failed to dial ateapi: %v", err)
+		log.Fatalf("Failed to connect to ateapi: %v", err)
 	}
 	defer cli.Close()
 
-	log.Printf("Resuming actor %s...", actorRef.Name)
-	_, err = cli.ResumeActor(ctx, &ateapi.ResumeActorRequest{Actor: actorRef.ToObjectRef()})
-	if err != nil {
-		log.Fatalf("Failed to resume actor: %v", err)
-	}
-	log.Println("Actor resumed successfully.")
+	// No explicit resume: a request through the router activates a suspended
+	// actor on its own, so the first command wakes it.
 
-	// Ensure we suspend the actor on exit
+	// Ensure we suspend the actor on exit.
 	defer func() {
 		log.Printf("Suspending actor %s...", actorRef.Name)
 		suspendCtx := context.Background()
