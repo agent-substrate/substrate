@@ -97,6 +97,15 @@ func LocalCheckpointsDir(actorUID string) string {
 	)
 }
 
+// SuspendCacheDirName is the per-actor directory name of SuspendCacheDir.
+const SuspendCacheDirName = "suspend-cache"
+
+// SuspendCacheDir holds the actor's suspend cache entry: the files of its last
+// external checkpoint taken on this node, kept after the upload.
+func SuspendCacheDir(actorUID string) string {
+	return filepath.Join(ActorPath(actorUID), SuspendCacheDirName)
+}
+
 // LocalSnapshotDir is the directory holding one named local (pause) snapshot
 // of an actor: the checkpoint files plus their manifest.
 func LocalSnapshotDir(actorUID, snapshotName string) string {
