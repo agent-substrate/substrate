@@ -39,6 +39,10 @@ rolloutTimeout: 1m0s
 # Ingress and egress dataplane: envoy or agentgateway.
 atenet:
   dataplane: envoy
+  # Router timeouts for agent workloads; unset keeps the router defaults (5s, 5m). Envoy only.
+  router:
+    parkedRequestBudget: 2m
+    routeTimeout: 30m
 
 # Prebuilt images. Both halves are required together: a tag with no repository
 # would be dropped, leaving a build from source that looks like the release the
