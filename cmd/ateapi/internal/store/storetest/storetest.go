@@ -180,7 +180,7 @@ func requireAdminPool(t *testing.T) *pgxpool.Pool {
 			containerErr = err
 			return
 		}
-		containerPG, containerErr = postgres.Run(ctx, "postgres:18-alpine",
+		containerPG, containerErr = postgres.Run(ctx, dockerenv.PostgresImage,
 			postgres.WithDatabase("postgres"),
 			postgres.WithUsername("postgres"),
 			postgres.WithPassword("postgres"),

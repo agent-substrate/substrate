@@ -37,6 +37,7 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	tcexec "github.com/testcontainers/testcontainers-go/exec"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
+	"go.ate.dev/substrate/cmd/ateapi/internal/store/dockerenv"
 	"go.ate.dev/substrate/internal/localca"
 	"go.ate.dev/substrate/pkg/postgressetup"
 	"sigs.k8s.io/yaml"
@@ -88,7 +89,7 @@ func TestBundledPostgresCertificateAuthentication(t *testing.T) {
 	).Replace(cm.Data["postgresql.conf"])
 	configPath := filepath.Join(dir, "postgresql.conf")
 	writeCertTestFile(t, configPath, []byte(conf))
-	container, err := postgres.Run(t.Context(), "postgres:18-alpine",
+	container, err := postgres.Run(t.Context(), dockerenv.PostgresImage,
 		postgres.WithDatabase("atepg"), postgres.WithUsername("postgres"), postgres.WithPassword("unused"),
 		postgres.WithSSLCert(clientRoot, serverCert, serverKey), postgres.WithConfigFile(configPath),
 		testcontainers.WithFiles(testcontainers.ContainerFile{Reader: strings.NewReader(cm.Data["pg_hba.conf"]), ContainerFilePath: "/tmp/testcontainers-go/postgres/pg_hba.conf", FileMode: 0644}),
