@@ -605,6 +605,7 @@ Activates a suspended or paused actor by restoring it onto a physical worker.
 *   **Request:** `ResumeActorRequest`
     *   `actor`: `ObjectRef` of the actor to resume.
 *   **Response:** `ResumeActorResponse` containing the updated `Actor` object (including the physical worker placement in `status.worker_assignment`).
+*   **Errors:** a refusal carries a `google.rpc.ErrorInfo` detail (domain `ate.dev`) with reason `NO_CAPACITY`, `IN_TRANSITION`, `CONFLICT` or `TERMINAL_STATE`; the message stays free text. The router forwards the reason as the `ate-error-reason` header (see [request parking](request-parking.md#behavior)).
 
 #### `SuspendActor`
 Hibernate a running actor, capturing its current RAM and disk state into a snapshot.
