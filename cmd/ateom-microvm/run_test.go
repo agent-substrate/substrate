@@ -17,8 +17,10 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"path/filepath"
 	"runtime"
@@ -97,6 +99,46 @@ func TestDialAgentRetryContextCanceled(t *testing.T) {
 
 	if _, err := dialAgentRetry(ctx, path, time.Minute); !errors.Is(err, context.Canceled) {
 		t.Errorf("dialAgentRetry(%q) error = %v, want context.Canceled", path, err)
+	}
+}
+
+// The agent of a restored guest answers within a few ms of vm.resume, so the poll
+// must notice it quickly: a refused CONNECT is retried after agentDialInterval,
+// not after a long sleep.
+func TestDialAgentRetryNoticesAgentQuickly(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "clh.sock")
+	l, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatalf("failed to create test socket: %v", err)
+	}
+	defer l.Close()
+	// A hybrid-vsock muxer whose guest refuses the first CONNECTs and then accepts.
+	const refusals = 5
+	go func() {
+		for n := 0; ; n++ {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			_, _ = bufio.NewReader(c).ReadString('\n')
+			if n < refusals {
+				c.Close()
+				continue
+			}
+			_, _ = fmt.Fprintf(c, "OK 1\n")
+			defer c.Close()
+		}
+	}()
+
+	start := time.Now()
+	ac, err := dialAgentRetry(t.Context(), path, 10*time.Second)
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("dialAgentRetry(%q) error = %v", path, err)
+	}
+	_ = ac.Close()
+	if max := refusals * 10 * time.Millisecond; elapsed > max {
+		t.Errorf("dialAgentRetry took %v to get past %d refusals, want under %v", elapsed, refusals, max)
 	}
 }
 

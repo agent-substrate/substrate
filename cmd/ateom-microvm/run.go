@@ -933,12 +933,13 @@ var errGuestStopped = errors.New("micro-VM stopped before the kata-agent answere
 // comes up cannot succeed (cloud-hypervisor has answered that CONNECT), so the wait
 // is the attempt plus the interval.
 //
-// They were 5s and 500ms, i.e. one attempt a second. What dominates this phase is
-// the guest not listening yet — measured at 1.37s on GKE — so the poll should cost
-// a fraction of that, not add half a second of its own.
+// On a cold boot the guest not listening yet dominates this phase (1.37s on GKE).
+// On a restore the agent is already listening in the snapshot and answers within
+// a few ms of vm.resume, so about half of restores miss the first attempt and pay
+// one interval: keep it to a couple of ms.
 const (
 	agentDialAttemptTimeout = 300 * time.Millisecond
-	agentDialInterval       = 20 * time.Millisecond
+	agentDialInterval       = 2 * time.Millisecond
 )
 
 // dialAgentRetry polls DialAgent until the kata-agent answers the hybrid-vsock
