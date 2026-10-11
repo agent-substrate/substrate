@@ -148,6 +148,7 @@ func main() {
 	if *snapshotDetachDelay <= 0 {
 		serverboot.Fatal(ctx, "Invalid --snapshot-detach-delay", fmt.Errorf("--snapshot-detach-delay %v must be > 0", *snapshotDetachDelay))
 	}
+	logNodeLimits(ctx, "/proc/sys")
 
 	// Kept separate from ctx so in-flight work (e.g. a Checkpoint/Restore
 	// streaming a multi-GiB snapshot) is not cancelled the moment SIGTERM
