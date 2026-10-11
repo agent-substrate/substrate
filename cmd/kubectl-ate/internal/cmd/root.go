@@ -60,4 +60,8 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&tokenFile, "token-file", "", "Path to a bearer token for ate-api authentication, or - to read it from stdin. Defaults to a Kubernetes ServiceAccount token.")
 	rootCmd.PersistentFlags().StringVarP(&outputFmt, "output", "o", "table", "Output format. One of: table|json|yaml")
 	rootCmd.PersistentFlags().BoolVar(&traceEnabled, "trace", false, "Enable tracing for the request")
+
+	// Register --version without a -v shorthand so -v stays free for --verbose.
+	rootCmd.Flags().Bool("version", false, "version for "+rootCmd.DisplayName())
+	_ = rootCmd.Flags().SetAnnotation("version", cobra.FlagSetByCobraAnnotation, []string{"true"})
 }

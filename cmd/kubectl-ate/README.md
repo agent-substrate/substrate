@@ -70,6 +70,8 @@ These flags can be appended to any command:
 | `--output` | `-o` | Output format (`table`, `json`, `yaml`) | `table` |
 | `--trace` | | Enable on-demand tracing for the request | `false` |
 
+Pass `--version` (`kubectl ate --version`) to print the CLI version and exit.
+
 ---
 
 ## Command Reference & Examples
