@@ -20,6 +20,8 @@ every setting with its environment variable.
 |---|---|
 | `--kind` | Kind overlays, the local registry, and host-architecture image builds. `ATE_INSTALL_KIND=true` when the flag is absent |
 | `--atenet-dataplane envoy\|agentgateway` | atenet ingress and egress dataplane (default `envoy`) |
+| `--atenet-route-timeout DURATION` | The router's `--route-timeout` (default `5m`). Envoy dataplane only. `ATE_ATENET_ROUTE_TIMEOUT` when the flag is absent |
+| `--atenet-parked-request-budget DURATION` | The router's `--parked-request-budget` (default `5s`); the router pod's `terminationGracePeriodSeconds` grows with it. Envoy dataplane only. `ATE_ATENET_PARKED_REQUEST_BUDGET` when the flag is absent |
 | `--rollout-timeout DURATION` | Readiness timeout for workloads (default `60s`). It also governs the podcertificate-controller and CSI waits, which stay at their 120s default until it is passed |
 | `--podcert-workers-per-signer N` | Concurrent workers per podcertificate-controller signer |
 | `--cluster-size size0\|size10` | Footprint profile (default `size0`). `size10` assumes a dedicated PostgreSQL node: it resizes the bundled StatefulSet and its `postgresql.conf`, pins the apiserver's connection pool, and raises the podcertificate-controller's API rate limits. `ATE_INSTALL_CLUSTER_SIZE` when the flag is absent |

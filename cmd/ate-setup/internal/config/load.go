@@ -238,11 +238,13 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 			Repo: strings.TrimSuffix(r.String("images.repo"), "/"),
 			Tag:  r.String("images.tag"),
 		},
-		Router:               r.String("atenet.dataplane"),
-		PostgresSchema:       r.String("ateapi.postgres.schema"),
-		PostgresPoolMaxConns: r.String("ateapi.postgres.poolMaxConns"),
-		PostgresServerCAFile: r.String("ateapi.postgres.serverCAFile"),
-		PostgresStorageClass: r.String("ateapi.postgres.storageClass"),
+		Router:                    r.String("atenet.dataplane"),
+		RouterRouteTimeout:        r.Duration("atenet.router.routeTimeout"),
+		RouterParkedRequestBudget: r.Duration("atenet.router.parkedRequestBudget"),
+		PostgresSchema:            r.String("ateapi.postgres.schema"),
+		PostgresPoolMaxConns:      r.String("ateapi.postgres.poolMaxConns"),
+		PostgresServerCAFile:      r.String("ateapi.postgres.serverCAFile"),
+		PostgresStorageClass:      r.String("ateapi.postgres.storageClass"),
 
 		PostgresReadWriteConnectionString: readWriteConnectionString,
 		PostgresOwnerConnectionString:     ownerConnectionString,
@@ -392,6 +394,20 @@ func validateResolved(cfg *Config, r *Resolved) error {
 	case RouterEnvoy, RouterAgentgateway:
 	default:
 		return &InvalidError{Value: dataplane, Want: RouterEnvoy + " or " + RouterAgentgateway}
+	}
+
+	// Only the envoy dataplane runs the atenet-router container the flags go on.
+	for _, key := range []string{"atenet.router.routeTimeout", "atenet.router.parkedRequestBudget"} {
+		v, _ := r.Value(key)
+		if v.Raw == "" {
+			continue
+		}
+		if r.Duration(key) <= 0 {
+			return &InvalidError{Value: v, Want: "a positive duration"}
+		}
+		if cfg.Router != RouterEnvoy {
+			return &ConflictError{A: v, B: dataplane, Why: "the router flags need the envoy dataplane"}
+		}
 	}
 
 	if ipType, _ := r.Value("ateapi.postgres.cloudsql.ipType"); ipType.Raw != "" {
