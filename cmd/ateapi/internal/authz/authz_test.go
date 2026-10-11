@@ -18,9 +18,6 @@ import (
 	"context"
 	"errors"
 	"os"
-	"os/exec"
-	"runtime"
-	"strings"
 	"testing"
 	"time"
 
@@ -33,42 +30,20 @@ import (
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"google.golang.org/grpc/codes"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/dockerenv"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/principal"
 )
 
-func configureDockerEnv(ctx context.Context) error {
-	if os.Getenv("DOCKER_HOST") != "" {
-		return nil
-	}
-	output, err := exec.CommandContext(ctx, "docker", "context", "inspect", "--format", "{{.Endpoints.docker.Host}}").Output()
-	if err != nil {
-		return err
-	}
-	host := strings.TrimSpace(string(output))
-	if host == "" {
-		return nil
-	}
-	_ = os.Setenv("DOCKER_HOST", host)
-	if os.Getenv("TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE") == "" {
-		socket := host
-		if runtime.GOOS == "darwin" {
-			socket = "/var/run/docker.sock"
-		}
-		_ = os.Setenv("TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE", socket)
-	}
-	return nil
-}
-
 func startPostgres(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	ctx := context.Background()
-	if err := configureDockerEnv(ctx); err != nil {
+	if err := dockerenv.Configure(ctx); err != nil {
 		t.Skipf("skipping test; docker is unavailable: %v", err)
 	}
 
 	pgContainer, err := postgres.Run(ctx,
-		"postgres:18-alpine",
+		dockerenv.PostgresImage,
 		postgres.WithDatabase("testdb"),
 		postgres.WithUsername("postgres"),
 		postgres.WithPassword("postgres"),

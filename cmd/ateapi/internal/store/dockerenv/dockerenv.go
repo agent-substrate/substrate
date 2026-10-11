@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package dockerenv points testcontainers at the active Docker context.
+// Package dockerenv points testcontainers at the active Docker context and
+// names the images they start.
 //
 // It lives apart from storetest because storetest imports atepg, so atepg
 // cannot import storetest back, and both need this before starting a
@@ -28,6 +29,11 @@ import (
 	"runtime"
 	"strings"
 )
+
+// PostgresImage is the PostgreSQL testcontainer image. It comes from Google's
+// Docker Hub mirror, because anonymous pulls from Docker Hub are rate limited
+// per runner IP and fail every PostgreSQL-backed test at once.
+const PostgresImage = "mirror.gcr.io/library/postgres:18-alpine"
 
 // Configure sets the environment testcontainers reads to find Docker, unless
 // it is already set. testcontainers-go resolves the daemon from DOCKER_HOST
