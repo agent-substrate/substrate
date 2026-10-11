@@ -130,7 +130,7 @@ func (w *ActorWorkflow) ensureMarkedPausing(ctx context.Context, actorRef resour
 		return nil, apierror.FailedPrecondition("actors in atespace %q are golden actors, which cannot be paused", actorRef.Atespace)
 	}
 
-	snapshotName := resources.NewSnapshotName()
+	snapshotUUID := resources.NewSnapshotName()
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_PAUSING
 		// Increment last_assigned_generation for the new Pause request.
@@ -141,8 +141,8 @@ func (w *ActorWorkflow) ensureMarkedPausing(ctx context.Context, actorRef resour
 				gen,
 				actorTemplate.GetSnapshotConfig().GetPreferredFidelity(),
 				actorTemplate.GetMetadata().GetUid(),
-				snapshotName,
-				ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS,
+				snapshotUUID,
+				"",
 			))
 		return nil
 	})
@@ -189,7 +189,7 @@ func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resourc
 	// Checkpoint does not carry the sandbox config: atelet uses the version the
 	// actor is currently running (recorded on-node at Run/Restore) and pins it
 	// into the snapshot manifest.
-	_, inProgressLocal := findLatestSnapshotStorage(actor.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_LOCAL, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS)
+	inProgressSnap := snapshotAtLatestGeneration(actor.GetStatus())
 	req := &ateletpb.CheckpointRequest{
 		WorkerPodUid:          assignment.GetWorkerPodUid(),
 		Atespace:              actor.GetMetadata().GetAtespace(),
@@ -200,7 +200,7 @@ func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resourc
 		Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
 		Config: &ateletpb.CheckpointRequest_LocalConfig{
 			LocalConfig: &ateletpb.LocalCheckpointConfiguration{
-				SnapshotName: inProgressLocal.GetLocal().GetSnapshotName(),
+				SnapshotName: inProgressSnap.GetUuid(),
 			},
 		},
 		Fidelity: fidelityToAtelet(actorTemplate.GetSnapshotConfig().GetPreferredFidelity()),
@@ -282,15 +282,13 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 				toUpdate.Status.Crash = crashStatus
 			}
 			if newState != ateapipb.ActorState_ACTOR_STATE_CRASHED {
-				// Finalize the snapshot and move it from IN_PROGRESS to COMPLETED.
+				// Record the node locality of the local checkpoint and clear older local checkpoints.
 				snap := snapshotAtLatestGeneration(toUpdate.Status)
 				if snap == nil {
 					return fmt.Errorf("actor %s has no latest snapshot", actorRef)
 				}
-				if inProgressSt := findSnapshotStorage(snap, ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_LOCAL); inProgressSt.GetLocal().GetSnapshotName() != "" {
-					inProgressSt.Status = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
-					removeOlderSnapshotStorageEntries(toUpdate.Status, ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_LOCAL, nil, snap.GetGeneration())
-				}
+				snap.Locality = toUpdate.GetStatus().GetAssignedNode()
+				pruneSnapshots(toUpdate.Status, snap)
 			}
 			toUpdate.Status.WorkerAssignment = nil
 			return nil
