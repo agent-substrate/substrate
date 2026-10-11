@@ -25,6 +25,8 @@ a pre-scan pass, so they may appear anywhere on its command line.
 |---|---|---|
 | `--kind` | `hack/install-ate-kind.sh`, or `ATE_INSTALL_KIND=true` | Kind overlays, the local registry, and host-architecture image builds |
 | `--atenet-dataplane envoy\|agentgateway` | `--atenet-dataplane envoy\|agentgateway` | atenet ingress and egress dataplane (default `envoy`) |
+| `--atenet-route-timeout DURATION` | `ATE_ATENET_ROUTE_TIMEOUT=DURATION` | New. The router's `--route-timeout` (default `5m`). Envoy dataplane only |
+| `--atenet-parked-request-budget DURATION` | `ATE_ATENET_PARKED_REQUEST_BUDGET=DURATION` | New. The router's `--parked-request-budget` (default `5s`); the router pod's `terminationGracePeriodSeconds` grows with it. Envoy dataplane only |
 | `--rollout-timeout DURATION` | `--rollout-timeout DURATION` | Readiness timeout for workloads (default `60s`). Unlike the shell flag it also governs the podcertificate-controller and CSI waits, which stay at their 120s default until it is passed |
 | `--podcert-workers-per-signer N` | `--podcert-workers-per-signer N` | Concurrent workers per podcertificate-controller signer |
 | `--cluster-size size0\|size10` | `--cluster-size size0\|size10` | Footprint profile (default `size0`). `size10` assumes a dedicated PostgreSQL node: it resizes the bundled StatefulSet and its `postgresql.conf`, pins the apiserver's connection pool, and raises the podcertificate-controller's API rate limits. `ATE_INSTALL_CLUSTER_SIZE` when the flag is absent |

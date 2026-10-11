@@ -20,6 +20,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Under --kind the ambient environment is ignored, but a value the caller named
@@ -216,4 +217,58 @@ func errPath(err error) string {
 		return rest[:j]
 	}
 	return rest
+}
+
+func TestLoadFlagsRouterSettings(t *testing.T) {
+	loadEnv(t)
+	t.Setenv("ATE_ATENET_ROUTE_TIMEOUT", "30m")
+	t.Setenv("ATE_ATENET_PARKED_REQUEST_BUDGET", "2m")
+
+	fs, err := optionsFlagSet(Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadFlags(fs, LoadOptions{})
+	if err != nil {
+		t.Fatalf("LoadFlags() error = %v", err)
+	}
+	if cfg.RouterRouteTimeout != 30*time.Minute {
+		t.Errorf("RouterRouteTimeout = %s, want 30m", cfg.RouterRouteTimeout)
+	}
+	if cfg.RouterParkedRequestBudget != 2*time.Minute {
+		t.Errorf("RouterParkedRequestBudget = %s, want 2m", cfg.RouterParkedRequestBudget)
+	}
+}
+
+func TestLoadFlagsRouterSettingsNeedEnvoy(t *testing.T) {
+	loadEnv(t)
+	t.Setenv("ATE_ATENET_DATAPLANE", RouterAgentgateway)
+	t.Setenv("ATE_ATENET_PARKED_REQUEST_BUDGET", "2m")
+
+	fs, err := optionsFlagSet(Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = LoadFlags(fs, LoadOptions{})
+	if err == nil {
+		t.Fatal("LoadFlags() = nil error, want a dataplane conflict")
+	}
+	for _, want := range []string{"ATE_ATENET_PARKED_REQUEST_BUDGET", "ATE_ATENET_DATAPLANE"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not name %s", err, want)
+		}
+	}
+}
+
+func TestLoadFlagsRouterSettingsMustBePositive(t *testing.T) {
+	loadEnv(t)
+	t.Setenv("ATE_ATENET_ROUTE_TIMEOUT", "0s")
+
+	fs, err := optionsFlagSet(Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadFlags(fs, LoadOptions{}); err == nil || !strings.Contains(err.Error(), "positive duration") {
+		t.Errorf("LoadFlags() error = %v, want a positive-duration error", err)
+	}
 }
