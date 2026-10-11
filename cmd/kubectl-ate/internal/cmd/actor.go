@@ -63,14 +63,6 @@ var getActorsCmd = &cobra.Command{
 	Aliases: []string{"actor"},
 	Short:   "List all actors or get one or more actors",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx := cmd.Context()
-
-		apiClient, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
-		if err != nil {
-			return fmt.Errorf("failed to connect to ate-api-server: %w", err)
-		}
-		defer apiClient.Close()
-
 		if len(args) > 0 {
 			// An actor is addressed by (atespace, name), so the atespace is
 			// mandatory and "all atespaces" is meaningless here.
@@ -80,7 +72,25 @@ var getActorsCmd = &cobra.Command{
 			if getActorAtespaceFlag == "" {
 				return fmt.Errorf("--atespace is required when getting actors")
 			}
+		} else {
+			// Listing requires exactly one of --atespace (one atespace) or -A (all
+			// atespaces). There is no default atespace to fall back on.
+			if getActorAllAtespacesFlag && getActorAtespaceFlag != "" {
+				return fmt.Errorf("--atespace and -A/--all-atespaces are mutually exclusive")
+			}
+			if !getActorAllAtespacesFlag && getActorAtespaceFlag == "" {
+				return fmt.Errorf("specify --atespace <name> to list one atespace, or -A/--all-atespaces for all")
+			}
+		}
 
+		ctx := cmd.Context()
+		apiClient, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
+		if err != nil {
+			return fmt.Errorf("failed to connect to ate-api-server: %w", err)
+		}
+		defer apiClient.Close()
+
+		if len(args) > 0 {
 			actors := make([]*ateapipb.Actor, 0, len(args))
 			for _, actorName := range args {
 				actorRef := resources.ActorRef{Atespace: getActorAtespaceFlag, Name: actorName}
@@ -94,15 +104,6 @@ var getActorsCmd = &cobra.Command{
 				return printer.PrintActorTo(cmd.OutOrStdout(), actors[0], outputFmt)
 			}
 			return printer.PrintActorsTo(cmd.OutOrStdout(), actors, outputFmt)
-		}
-
-		// Listing requires exactly one of --atespace (one atespace) or -A (all
-		// atespaces). There is no default atespace to fall back on.
-		if getActorAllAtespacesFlag && getActorAtespaceFlag != "" {
-			return fmt.Errorf("--atespace and -A/--all-atespaces are mutually exclusive")
-		}
-		if !getActorAllAtespacesFlag && getActorAtespaceFlag == "" {
-			return fmt.Errorf("specify --atespace <name> to list one atespace, or -A/--all-atespaces for all")
 		}
 
 		var allActors []*ateapipb.Actor
