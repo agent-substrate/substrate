@@ -141,6 +141,16 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 	return actor, true, nil
 }
 
+// resumeRefusalReason tells a caller whether a refused state changes on its
+// own: CRASHED and DELETING do not.
+func resumeRefusalReason(state ateapipb.ActorState) string {
+	switch state {
+	case ateapipb.ActorState_ACTOR_STATE_CRASHED, ateapipb.ActorState_ACTOR_STATE_DELETING:
+		return apierror.ReasonTerminalState
+	}
+	return apierror.ReasonInTransition
+}
+
 // validateGoldenSnapshotFidelity rejects a golden snapshot that does not carry
 // the guest state (memory + fs delta) a restore needs. Golden actors always
 // commit MEMORY (preferredFidelity), so this only trips on a golden snapshot
@@ -267,7 +277,8 @@ func (w *ActorWorkflow) ensureWorkerAssigned(ctx context.Context, actorRef resou
 		return actor, worker, nil
 	case ateapipb.ActorState_ACTOR_STATE_SUSPENDED:
 	default:
-		return nil, nil, apierror.FailedPrecondition("AssignWorker prerequisite not met for Actor: %s (got: %v, want %s)", actorRef, actor.GetStatus().GetState(), ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
+		err := apierror.FailedPrecondition("AssignWorker prerequisite not met for Actor: %s (got: %v, want %s)", actorRef, actor.GetStatus().GetState(), ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
+		return nil, nil, apierror.WithReason(err, resumeRefusalReason(actor.GetStatus().GetState()))
 	}
 
 	var assignedActor *ateapipb.Actor
@@ -514,7 +525,7 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 		if err != nil {
 			if errors.Is(err, scheduling.ErrNoCapacity) {
 				outcome = ateattr.SchedulerOutcomeNoCapacity
-				return nil, nil, apierror.ResourceExhausted("no worker has room for the actor")
+				return nil, nil, apierror.WithReason(apierror.ResourceExhausted("no worker has room for the actor"), apierror.ReasonNoCapacity)
 			}
 			return nil, nil, err
 		}
