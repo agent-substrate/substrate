@@ -592,6 +592,8 @@ func TestValidateActorUpdate(t *testing.T) {
 		})),
 		want: field.ErrorList{field.Invalid(field.NewPath("status", "snapshots").Index(0).Child("fidelity"), nil, "").WithOrigin("maximum")},
 	}, {
+		// Status is written by the server, so it is not preview-gated: the
+		// volume cases below expect the same result with and without preview.
 		name:            "no volumes",
 		oldVal:          validActor(withActorStatus()),
 		newVal:          validActor(withActorStatus()),
@@ -605,7 +607,7 @@ func TestValidateActorUpdate(t *testing.T) {
 		newVal: validActor(withActorStatus(func(s *ateapipb.ActorStatus) {
 			s.ExternalVolumes = []*ateapipb.ExternalVolume{{Name: "vol-a", VolumeType: "substrate.io/mock"}}
 		})),
-		want:            field.ErrorList{field.Forbidden(field.NewPath("status", "external_volumes"), "")},
+		want:            nil,
 		wantWithPreview: map[string]field.ErrorList{"*": nil},
 	}, {
 		name:   "adding a volume to an actor with no status",
@@ -613,7 +615,7 @@ func TestValidateActorUpdate(t *testing.T) {
 		newVal: validActor(withActorStatus(func(s *ateapipb.ActorStatus) {
 			s.ExternalVolumes = []*ateapipb.ExternalVolume{{Name: "vol-a", VolumeType: "substrate.io/mock"}}
 		})),
-		want:            field.ErrorList{field.Forbidden(field.NewPath("status", "external_volumes"), "")},
+		want:            nil,
 		wantWithPreview: map[string]field.ErrorList{"*": nil},
 	}, {
 		name: "provisioning transition on an existing volume",
@@ -628,7 +630,7 @@ func TestValidateActorUpdate(t *testing.T) {
 				VolumeContext:   map[string]string{"attachment": "iqn.2026-08.io.ate:vol-a"},
 			}}
 		})),
-		want:            field.ErrorList{field.Forbidden(field.NewPath("status", "external_volumes"), "")},
+		want:            nil,
 		wantWithPreview: map[string]field.ErrorList{"*": nil},
 	}, {
 		name:   "duplicate external_volumes volume_name",
@@ -639,7 +641,7 @@ func TestValidateActorUpdate(t *testing.T) {
 				{Name: "vol-a", VolumeType: "substrate.io/mock"},
 			}
 		})),
-		want: field.ErrorList{field.Forbidden(field.NewPath("status", "external_volumes"), "")},
+		want: field.ErrorList{field.Duplicate(field.NewPath("status", "external_volumes").Index(1), nil)},
 		wantWithPreview: map[string]field.ErrorList{
 			"*": {field.Duplicate(field.NewPath("status", "external_volumes").Index(1), nil)},
 		},
@@ -653,10 +655,7 @@ func TestValidateActorUpdate(t *testing.T) {
 			}
 			s.ExternalVolumes = vols
 		})),
-		want: field.ErrorList{
-			field.Forbidden(field.NewPath("status", "external_volumes"), ""),
-			field.TooMany(field.NewPath("status", "external_volumes"), 33, 32).WithOrigin("maxItems"),
-		},
+		want: field.ErrorList{field.TooMany(field.NewPath("status", "external_volumes"), 33, 32).WithOrigin("maxItems")},
 		wantWithPreview: map[string]field.ErrorList{
 			"*": {field.TooMany(field.NewPath("status", "external_volumes"), 33, 32).WithOrigin("maxItems")},
 		},
