@@ -418,6 +418,9 @@ func TestMetricLabelValues(t *testing.T) {
 		{RouterResumeNone, "none"},
 		{RouterResumeTriggered, "triggered"},
 		{RouterResumeJoined, "joined"},
+		{RouterResumeParkedExhausted, "parked_exhausted"},
+		{RouterResumeParkedRejected, "parked_rejected"},
+		{RouterResumeCanceled, "canceled"},
 		{RouterResumeUnknown, "unknown"},
 	}
 	for _, tt := range tests {

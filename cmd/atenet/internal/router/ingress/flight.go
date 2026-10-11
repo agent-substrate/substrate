@@ -15,6 +15,7 @@
 package ingress
 
 import (
+	"errors"
 	"sync/atomic"
 
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
@@ -71,10 +72,9 @@ func (f *resumeActorFlight) retryErr() error {
 // be called after f.done is closed.
 //
 // Only a resume that completed without an error says whether an activation
-// ran, so the three activation labels are reserved for that case. A failed
-// resume reports "unknown": the gRPC code alone does not carry the fact. A
-// canceled leader's flight outlives its request and keeps restoring the actor,
-// and a DeadlineExceeded can land in the middle of a restore.
+// ran, so the three activation labels are reserved for that case. A flight
+// that waited out its budget reports "parked_exhausted"; any other failure
+// reports "unknown", since the gRPC code alone does not carry the fact.
 func (f *resumeActorFlight) callerResult(reqID uint64) (*ateapipb.Actor, ResumeOutcome, error) {
 	res := f.result
 	if res == nil {
@@ -82,6 +82,10 @@ func (f *resumeActorFlight) callerResult(reqID uint64) (*ateapipb.Actor, ResumeO
 	}
 
 	if res.err != nil {
+		var budget *budgetExhaustedError
+		if errors.As(res.err, &budget) {
+			return nil, ResumeOutcomeParkedExhausted, res.err
+		}
 		return nil, ResumeOutcomeUnknown, res.err
 	}
 
