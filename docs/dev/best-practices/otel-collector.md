@@ -504,12 +504,12 @@ failure.
 
 ## Local Development (kind)
 
-`hack/install-ate-kind.sh` installs a collector plus a Jaeger all-in-one into
-the `otel-system` namespace — see
-`manifests/ate-install/kind/otel-collector.yaml`. It is a single-replica
-Deployment, which is appropriate for a one-node kind cluster. The kind
-overlay patches every component's `OTEL_EXPORTER_OTLP_ENDPOINT` to point at
-it.
+`hack/install-ate-kind.sh` installs a collector plus a Jaeger all-in-one, a
+Prometheus and a Loki into the `otel-system` namespace — see
+`manifests/ate-install/kind/otel-collector.yaml`, `prometheus.yaml` and
+`loki.yaml`. The collector is a single-replica Deployment, which is
+appropriate for a one-node kind cluster. The kind overlay patches every
+component's `OTEL_EXPORTER_OTLP_ENDPOINT` to point at it.
 
 View traces:
 
