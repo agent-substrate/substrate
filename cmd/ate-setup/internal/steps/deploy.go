@@ -148,7 +148,14 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 	if err := e.removeFakeWorkersync(ctx); err != nil {
 		return err
 	}
-	if err := e.applyWithAPIServerEnvHash(ctx, manifests); err != nil {
+	objs, err := kube.DecodeManifestBytes(manifests)
+	if err != nil {
+		return err
+	}
+	if err := e.configureAtenetRouter(objs); err != nil {
+		return err
+	}
+	if err := e.applyWithAPIServerEnvHash(ctx, objs); err != nil {
 		return err
 	}
 
@@ -332,7 +339,11 @@ func (e *Env) DeployAteAPIServer(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := e.applyWithAPIServerEnvHash(ctx, manifest); err != nil {
+	objs, err := kube.DecodeManifestBytes(manifest)
+	if err != nil {
+		return err
+	}
+	if err := e.applyWithAPIServerEnvHash(ctx, objs); err != nil {
 		return err
 	}
 	// After the manifest, which resets the pod template to the sidecar-free base.
@@ -558,7 +569,14 @@ func (e *Env) DeployAtenet(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := e.Kube.ApplyBytes(ctx, routerManifest); err != nil {
+	routerObjs, err := kube.DecodeManifestBytes(routerManifest)
+	if err != nil {
+		return err
+	}
+	if err := e.configureAtenetRouter(routerObjs); err != nil {
+		return err
+	}
+	if err := e.Kube.Apply(ctx, routerObjs); err != nil {
 		return err
 	}
 	if err := e.EnsureEgressMITMCAPoolSecret(ctx); err != nil {

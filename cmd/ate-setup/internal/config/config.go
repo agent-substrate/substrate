@@ -158,6 +158,10 @@ type Config struct {
 
 	// Router selects the atenet router dataplane.
 	Router string
+	// RouterRouteTimeout and RouterParkedRequestBudget are the router's
+	// --route-timeout and --parked-request-budget; zero keeps the router default.
+	RouterRouteTimeout        time.Duration
+	RouterParkedRequestBudget time.Duration
 	// The read/write and owner connections can use different login identities.
 	// With one configured connection, both pools use it. Both empty selects
 	// bundled PostgreSQL.
