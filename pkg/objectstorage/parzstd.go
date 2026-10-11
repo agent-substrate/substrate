@@ -33,8 +33,10 @@ import (
 // Independent chunks cost a little ratio (no matches across a boundary), which
 // parZstdChunk is sized to keep negligible.
 const (
-	// parZstdChunk is the per-frame chunk size.
-	parZstdChunk = 8 << 20
+	// parZstdChunk is the per-frame chunk size. Frames are also the unit a
+	// download decodes in parallel (parZstdReader), and one 8MiB frame of guest
+	// memory took ~12ms to decode, so smaller frames finish a download sooner.
+	parZstdChunk = 2 << 20
 	// parZstdQueue is how many chunks may be outstanding per worker, so the producer
 	// can run ahead while workers compress.
 	parZstdQueue = 2

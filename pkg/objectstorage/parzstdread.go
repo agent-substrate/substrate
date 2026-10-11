@@ -16,6 +16,7 @@ package objectstorage
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -24,6 +25,7 @@ import (
 	"sync"
 
 	"github.com/klauspost/compress/zstd"
+	"golang.org/x/sync/semaphore"
 )
 
 // zstd decodes one frame on one core however many it is given, which capped a
@@ -40,12 +42,14 @@ import (
 // the first frame that does not qualify (one written by a streaming encoder, or a
 // huge one), the rest of the stream is decoded serially.
 const (
-	// parZstdMaxFrame is the largest frame decoded in parallel: twice parZstdChunk,
-	// so every frame parZstd writes qualifies.
-	parZstdMaxFrame = 2 * parZstdChunk
-	// parZstdMaxDecoders caps the decode workers, and with them the memory held in
-	// decoded frames (about 3*parZstdMaxDecoders*parZstdMaxFrame at most).
-	parZstdMaxDecoders = 8
+	// parZstdMaxFrame is the largest frame decoded in parallel, well above
+	// parZstdChunk so that every frame parZstd writes qualifies.
+	parZstdMaxFrame = 16 << 20
+	// parZstdMaxDecoders caps the decode workers.
+	parZstdMaxDecoders = 16
+	// parZstdDecodeBudget bounds the decoded bytes held at once, by frames being
+	// decoded or waiting to be read.
+	parZstdDecodeBudget = 64 << 20
 )
 
 const (
@@ -61,21 +65,25 @@ const (
 type parZstdReader struct {
 	ordered chan chan parZstdResult
 	cur     []byte
+	held    int64 // budget held by cur
 	serial  io.Reader
 	serialD *zstd.Decoder
 	err     error
 
-	stop     chan struct{}
-	stopOnce sync.Once
-	wg       sync.WaitGroup
+	budget *semaphore.Weighted
+	ctx    context.Context // canceled by Close
+	stop   context.CancelFunc
+	wg     sync.WaitGroup
 }
 
 // parZstdResult is one frame's output, or the reader to decode the rest of the
 // stream from serially (tail), or a split error.
 type parZstdResult struct {
 	data []byte
-	tail io.Reader
-	err  error
+	// weight is the budget the frame holds until it has been read.
+	weight int64
+	tail   io.Reader
+	err    error
 }
 
 type parZstdDecodeJob struct {
@@ -87,13 +95,21 @@ type parZstdDecodeJob struct {
 	out     chan parZstdResult
 }
 
+// parZstdOrderedDepth is how many frames, per worker, may be dispatched ahead of
+// the reader. Whichever of this and parZstdDecodeBudget is reached first stops
+// the splitter.
+const parZstdOrderedDepth = 4
+
 // newParZstdReader starts splitting src into frames and decoding them, on up to
 // workers goroutines (capped at GOMAXPROCS and parZstdMaxDecoders).
 func newParZstdReader(src io.Reader, workers int) *parZstdReader {
 	workers = min(max(workers, 1), runtime.GOMAXPROCS(0), parZstdMaxDecoders)
+	ctx, stop := context.WithCancel(context.Background())
 	r := &parZstdReader{
-		ordered: make(chan chan parZstdResult, 2*workers),
-		stop:    make(chan struct{}),
+		ordered: make(chan chan parZstdResult, parZstdOrderedDepth*workers),
+		budget:  semaphore.NewWeighted(parZstdDecodeBudget),
+		ctx:     ctx,
+		stop:    stop,
 	}
 	jobs := make(chan parZstdDecodeJob, workers)
 	for range workers {
@@ -119,7 +135,7 @@ func (r *parZstdReader) decodeWorker(jobs <-chan parZstdDecodeJob) {
 		if err == nil && j.size >= 0 && len(data) != j.size {
 			err = fmt.Errorf("zstd frame decoded to %d bytes, header declared %d", len(data), j.size)
 		}
-		j.out <- parZstdResult{data: data, err: err}
+		j.out <- parZstdResult{data: data, weight: int64(j.maxSize), err: err}
 	}
 }
 
@@ -136,7 +152,7 @@ func (r *parZstdReader) split(src io.Reader, jobs chan<- parZstdDecodeJob) {
 		select {
 		case r.ordered <- out:
 			return true
-		case <-r.stop:
+		case <-r.ctx.Done():
 			return false
 		}
 	}
@@ -154,15 +170,19 @@ func (r *parZstdReader) split(src io.Reader, jobs chan<- parZstdDecodeJob) {
 		case frame == nil:
 			continue // skippable frame
 		}
+		// The reader returns the budget once it has read the frame's output.
+		if r.budget.Acquire(r.ctx, int64(maxSize)) != nil {
+			return
+		}
 		out := make(chan parZstdResult, 1)
 		select {
 		case r.ordered <- out:
-		case <-r.stop:
+		case <-r.ctx.Done():
 			return
 		}
 		select {
 		case jobs <- parZstdDecodeJob{frame: frame, size: size, maxSize: maxSize, out: out}:
-		case <-r.stop:
+		case <-r.ctx.Done():
 			return
 		}
 	}
@@ -180,6 +200,10 @@ func (r *parZstdReader) Read(p []byte) (int, error) {
 			}
 			return n, err
 		}
+		if r.held > 0 {
+			r.budget.Release(r.held)
+			r.held = 0
+		}
 		out, ok := <-r.ordered
 		if !ok {
 			r.err = io.EOF
@@ -193,7 +217,7 @@ func (r *parZstdReader) Read(p []byte) (int, error) {
 			r.serialD, r.err = zstd.NewReader(res.tail, zstd.WithDecoderConcurrency(1))
 			r.serial = r.serialD
 		default:
-			r.cur = res.data
+			r.cur, r.held = res.data, res.weight
 		}
 	}
 	n := copy(p, r.cur)
@@ -205,7 +229,7 @@ func (r *parZstdReader) Read(p []byte) (int, error) {
 // never block on a result (each has a buffered channel), so they exit once the
 // splitter stops dispatching.
 func (r *parZstdReader) Close() error {
-	r.stopOnce.Do(func() { close(r.stop) })
+	r.stop()
 	r.wg.Wait()
 	if r.serialD != nil {
 		r.serialD.Close()
@@ -244,7 +268,7 @@ func readZstdFrame(src io.Reader) (frame []byte, size, maxSize int, ok bool, err
 	if m != zstdFrameMagic {
 		return magic[:], 0, 0, false, fmt.Errorf("not a zstd frame (magic %#x)", m)
 	}
-	buf := bytes.NewBuffer(make([]byte, 0, parZstdChunk/2))
+	buf := bytes.NewBuffer(make([]byte, 0, parZstdChunk))
 	buf.Write(magic[:])
 	read := func(n int) ([]byte, error) {
 		start := buf.Len()

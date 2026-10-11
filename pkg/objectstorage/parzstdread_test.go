@@ -133,7 +133,7 @@ func TestReadZstdFrameBoundsUnsizedSmallFrames(t *testing.T) {
 // decodes serially.
 func TestParZstdReaderFallsBackForUnsizedFrames(t *testing.T) {
 	a := compressibleData(t, parZstdChunk+7)
-	b := compressibleData(t, 3*parZstdChunk)
+	b := compressibleData(t, parZstdMaxFrame+parZstdChunk)
 	c := compressibleData(t, 1000)
 	var stream []byte
 	stream = append(stream, parFrames(t, a)...)
