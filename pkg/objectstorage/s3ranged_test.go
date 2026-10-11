@@ -19,10 +19,10 @@ import "testing"
 func TestByteRange(t *testing.T) {
 	// The header's end is inclusive, so an off-by-one here silently drops or
 	// duplicates a byte at every chunk boundary.
-	if got, want := byteRange(0, downloadChunkSize), "bytes=0-16777215"; got != want {
+	if got, want := byteRange(0, 16<<20), "bytes=0-16777215"; got != want {
 		t.Errorf("byteRange(0, chunk) = %q, want %q", got, want)
 	}
-	if got, want := byteRange(downloadChunkSize, 10), "bytes=16777216-16777225"; got != want {
+	if got, want := byteRange(16<<20, 10), "bytes=16777216-16777225"; got != want {
 		t.Errorf("byteRange(chunk, 10) = %q, want %q", got, want)
 	}
 }
