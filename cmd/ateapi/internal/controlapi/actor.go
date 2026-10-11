@@ -88,10 +88,20 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 	}
 
 	// Resolve the explicit tag, or freeze the template's current golden default.
+	// The golden actor boots fresh: its snapshot is the golden, so the golden
+	// the template records is never its source, and one being taken again in
+	// the current snapshot layout, which holds the other creates on the
+	// template, does not hold the golden actor's that takes it.
 	tagRef := inActor.GetSourceTag()
-	if tagRef == nil {
-		tagRef = template.GetStatus().GetGoldenSnapshotStatus().GetGoldenTag()
-	} else {
+	switch {
+	case tagRef == nil && isGoldenActor(inActor, template):
+	case tagRef == nil:
+		snapshotStatus := template.GetStatus().GetGoldenSnapshotStatus()
+		if goldenSnapshotRetakePending(snapshotStatus) {
+			return nil, goldenSnapshotAwaitingRetake(template)
+		}
+		tagRef = snapshotStatus.GetGoldenTag()
+	default:
 		for _, volume := range template.GetVolumes() {
 			if volume.GetExternalVolumeTemplate() != nil {
 				// TODO: Permit cloning after CSI volume snapshots are supported.

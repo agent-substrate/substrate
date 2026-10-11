@@ -32,6 +32,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/resources"
+	"github.com/agent-substrate/substrate/internal/snapshotlayout"
 	"github.com/agent-substrate/substrate/internal/substratex509"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
@@ -803,7 +804,7 @@ func rpcServiceWithActor(t *testing.T, actor *ateapipb.Actor) (*RPCService, *ate
 }
 
 func TestCreateActor_GoldenTagDefault(t *testing.T) {
-	for _, scenario := range []string{"default", "explicit tag", "own snapshot", "missing", "pending", "wrong template", "data scope"} {
+	for _, scenario := range []string{"default", "explicit tag", "own snapshot", "missing", "pending", "wrong template", "data scope", "golden without a layout", "golden in an older layout", "failed re-take"} {
 		t.Run(scenario, func(t *testing.T) {
 			ctx := t.Context()
 			persistence := newTestPersistence(t)
@@ -833,6 +834,13 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 			case "data scope":
 				tag.Status.Snapshot.Storage[0].Fidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
 				wantCode = codes.FailedPrecondition
+			case "golden without a layout", "golden in an older layout":
+				// The golden is being taken again in the current snapshot
+				// layout: a refusal a retry outlives.
+				wantCode = codes.Unavailable
+			case "failed re-take":
+				// The re-take failed for good: the old golden stays the
+				// template's and a create starts from it.
 			}
 			if scenario != "missing" {
 				if _, err := persistence.CreateTag(ctx, tag); err != nil {
@@ -840,7 +848,17 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 				}
 			}
 			if _, err := persistence.UpdateActorTemplate(ctx, resources.ActorTemplateRefFromActorTemplate(tmpl), store.PreconditionFrom(tmpl), func(db *ateapipb.ActorTemplate) error {
-				db.Status = &ateapipb.ActorTemplateStatus{GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{GoldenTag: ref}}
+				goldenStatus := &ateapipb.GoldenSnapshotStatus{GoldenTag: ref, SnapshotLayout: snapshotlayout.Current}
+				switch scenario {
+				case "golden without a layout":
+					goldenStatus.SnapshotLayout = snapshotlayout.Unrecorded
+				case "golden in an older layout":
+					goldenStatus.SnapshotLayout = snapshotlayout.SingleDurableTar
+				case "failed re-take":
+					goldenStatus.SnapshotLayout = snapshotlayout.SingleDurableTar
+					goldenStatus.ErrorMessage = reasonGoldenActorCrashed + ": golden actor crashed before its snapshot was taken"
+				}
+				db.Status = &ateapipb.ActorTemplateStatus{GoldenSnapshotStatus: goldenStatus}
 				return nil
 			}); err != nil {
 				t.Fatal(err)
@@ -888,6 +906,64 @@ func TestCreateActor_GoldenTagDefault(t *testing.T) {
 			}
 			if src.SnapshotURI.IsZero() {
 				t.Fatalf("missing snapshot source for %s", scenario)
+			}
+		})
+	}
+}
+
+// TestCreateActor_GoldenActorStartsFresh pins that the template's golden actor
+// is created without a source snapshot whatever the template's golden status:
+// its snapshot becomes the golden, so the golden the template records, and the
+// re-take that refuses the other creates on the template for the moment, are
+// no concern of its create.
+func TestCreateActor_GoldenActorStartsFresh(t *testing.T) {
+	for _, scenario := range []string{"no golden", "golden", "golden without a layout", "golden in an older layout", "failed re-take"} {
+		t.Run(scenario, func(t *testing.T) {
+			ctx := t.Context()
+			persistence := newTestPersistence(t)
+			storetest.MustCreateAtespace(t, ctx, persistence, resources.GoldenActorAtespace)
+			tmpl := seedSubstrateTemplate(t, ctx, persistence, "tmpl")
+			goldenRef := goldenActorRefFor(tmpl)
+			if scenario != "no golden" {
+				tag := &ateapipb.Tag{
+					Metadata:    &ateapipb.ResourceMetadata{Atespace: goldenRef.Atespace, Name: goldenRef.Name},
+					SourceActor: goldenRef,
+					Scope:       ateapipb.TagScope_TAG_SCOPE_PUBLISHED,
+					Status: &ateapipb.TagStatus{
+						ActorTemplateUid: tmpl.GetMetadata().GetUid(),
+						Snapshot:         newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmpl.GetMetadata().GetUid(), "gs://bucket/atespaces/ate-golden/tags/"+someActorUID, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+					},
+				}
+				if _, err := persistence.CreateTag(ctx, tag); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := persistence.UpdateActorTemplate(ctx, resources.ActorTemplateRefFromActorTemplate(tmpl), store.PreconditionFrom(tmpl), func(db *ateapipb.ActorTemplate) error {
+					goldenStatus := &ateapipb.GoldenSnapshotStatus{GoldenTag: goldenRef, SnapshotLayout: snapshotlayout.Current}
+					switch scenario {
+					case "golden without a layout":
+						goldenStatus.SnapshotLayout = snapshotlayout.Unrecorded
+					case "golden in an older layout":
+						goldenStatus.SnapshotLayout = snapshotlayout.SingleDurableTar
+					case "failed re-take":
+						goldenStatus.SnapshotLayout = snapshotlayout.SingleDurableTar
+						goldenStatus.ErrorMessage = reasonGoldenActorCrashed + ": golden actor crashed before its snapshot was taken"
+					}
+					db.Status = &ateapipb.ActorTemplateStatus{GoldenSnapshotStatus: goldenStatus}
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			svc := &RPCService{impl: newServiceImpl(persistence, nil)}
+			created, err := svc.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+				Metadata:      &ateapipb.ResourceMetadata{Atespace: goldenRef.Atespace, Name: goldenRef.Name},
+				ActorTemplate: resources.ActorTemplateRefFromActorTemplate(tmpl).ToObjectRef(),
+			}})
+			if err != nil {
+				t.Fatalf("CreateActor of the golden actor = %v, want it created", err)
+			}
+			if got := created.GetStatus(); got.GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED || len(got.GetSnapshots()) != 0 {
+				t.Fatalf("golden actor status = %v, want SUSPENDED without a source snapshot", got)
 			}
 		})
 	}

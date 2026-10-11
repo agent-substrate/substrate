@@ -26,6 +26,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/objectstoreplugin/objectstoreplugintest"
 	"github.com/agent-substrate/substrate/internal/resources"
+	"github.com/agent-substrate/substrate/internal/snapshotlayout"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -205,12 +206,20 @@ func TestDeleteActorTemplate(t *testing.T) {
 		failPrefix            string
 		wantActorAfterFailure bool
 		staleGuard            bool
+		// retakenTag records a golden taken again in the current layout,
+		// named after the uid and the layout, beside the first tag;
+		// retakePending leaves that tag unfinished with the first one still
+		// recorded, without its layout.
+		retakenTag    bool
+		retakePending bool
 	}{
 		{name: "golden actor and tag"},
 		{name: "golden actor already deleted", actorDeleted: true},
 		{name: "golden tag absent", tagDeleted: true},
 		{name: "no golden resources", actorDeleted: true, tagDeleted: true},
 		{name: "incomplete golden tag", pendingTag: true},
+		{name: "golden taken again in the current layout", retakenTag: true},
+		{name: "golden being taken again", retakePending: true},
 		{name: "actor cleanup failure", failPrefix: "/actors/", wantActorAfterFailure: true},
 		{name: "tag cleanup failure", failPrefix: "/tags/"},
 		{name: "stale guard refused before cleanup", staleGuard: true},
@@ -249,6 +258,34 @@ func TestDeleteActorTemplate(t *testing.T) {
 			tagRef := resources.TagRefFromTag(tag)
 			tagURI := mustReservedTagSnapshotURI(t, tag)
 			objects.PutSnapshot(t, tagURI, "manifest.json")
+			var retakeRef resources.TagRef
+			var retakeURI resources.SnapshotURI
+			if tt.retakenTag || tt.retakePending {
+				retakeRef = resources.TagRef{Atespace: resources.GoldenActorAtespace, Name: retakenGoldenTagName(goldenRef.Name)}
+				var retakeTag *ateapipb.Tag
+				if tt.retakePending {
+					retakeTag = storetest.MustCreateTag(t, ctx, persistence, newPendingTestTag(t, retakeRef.Name, actor))
+				} else {
+					var err error
+					if retakeTag, err = workflow.TagActorSnapshot(ctx, tagToCreate(goldenRef, retakeRef.Name)); err != nil {
+						t.Fatal(err)
+					}
+				}
+				retakeURI = mustReservedTagSnapshotURI(t, retakeTag)
+				objects.PutSnapshot(t, retakeURI, "manifest.json")
+				recorded, layout := tagRef, snapshotlayout.Unrecorded
+				if tt.retakenTag {
+					recorded, layout = retakeRef, snapshotlayout.Current
+				}
+				updated, err := persistence.UpdateActorTemplate(ctx, templateRef, store.PreconditionFrom(tmpl), func(db *ateapipb.ActorTemplate) error {
+					db.Status = &ateapipb.ActorTemplateStatus{GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{GoldenTag: recorded.ToObjectRef(), SnapshotLayout: layout}}
+					return nil
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				tmpl = updated
+			}
 			svc := &RPCService{impl: newServiceImpl(persistence, nil), actorWorkflow: workflow, snapshotPlugin: objectstoreplugintest.ControlClient(objects)}
 			// The handler must request AnyState to clean up an active golden actor.
 			mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
@@ -322,7 +359,14 @@ func TestDeleteActorTemplate(t *testing.T) {
 			if _, err := persistence.GetTag(ctx, tagRef); !errors.Is(err, store.ErrNotFound) {
 				t.Fatalf("GetTag after delete = %v, want NotFound", err)
 			}
-			for _, uri := range []resources.SnapshotURI{actorURI, tagURI} {
+			uris := []resources.SnapshotURI{actorURI, tagURI}
+			if retakeRef.Name != "" {
+				if _, err := persistence.GetTag(ctx, retakeRef); !errors.Is(err, store.ErrNotFound) {
+					t.Fatalf("GetTag %s after delete = %v, want NotFound", retakeRef, err)
+				}
+				uris = append(uris, retakeURI)
+			}
+			for _, uri := range uris {
 				if got := objects.Snapshot(t, uri); len(got) != 0 {
 					t.Errorf("snapshot %s still holds %v", uri, got)
 				}
