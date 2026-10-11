@@ -106,7 +106,7 @@ rules:
 			},
 		},
 		{
-			name:     "json input",
+			name:     "single JSON",
 			manifest: `{"metadata": {"atespace": "team-a", "name": "default"}, "rules": [{"tls_passthrough": {"hostnames": ["*.example.com"], "ports": {"numbers": [443]}}}]}`,
 			want:     &ateapipb.EgressPolicy{Metadata: fullMetadata, Rules: tlsRules},
 		},
@@ -123,7 +123,7 @@ metadata: {name: default}
 		},
 		{name: "not yaml", manifest: "\t{", wantErr: true, wantErrContains: "invalid YAML"},
 		{
-			name: "leading document separator",
+			name: "YAML: leading document separator",
 			manifest: `---
 rules:
 - http: {hostnames: ["*"]}
@@ -131,7 +131,7 @@ rules:
 			want: &ateapipb.EgressPolicy{Rules: anyRules},
 		},
 		{
-			name: "document end marker",
+			name: "YAML: document end marker (...)",
 			manifest: `rules:
 - http: {hostnames: ["*"]}
 ...
@@ -139,54 +139,49 @@ rules:
 			want: &ateapipb.EgressPolicy{Rules: anyRules},
 		},
 		{
-			name: "trailing document separator",
+			name: "YAML: trailing document separator",
 			manifest: `rules:
 - http: {hostnames: ["*"]}
 ---
 `,
-			wantErr:         true,
-			wantErrContains: "manifest holds more than one document",
+			want: &ateapipb.EgressPolicy{Rules: anyRules},
 		},
 		{
-			name: "empty second document",
+			name: "YAML: empty second document",
 			manifest: `rules:
 - http: {hostnames: ["*"]}
 ---
 # nothing here
 `,
-			wantErr:         true,
-			wantErrContains: "manifest holds more than one document",
+			want: &ateapipb.EgressPolicy{Rules: anyRules},
 		},
 		{
-			name: "empty first document",
+			name: "YAML: empty first document",
 			manifest: `---
 # nothing
 ---
 rules:
 - http: {hostnames: ["*"]}
 `,
-			wantErr:         true,
-			wantErrContains: "manifest holds more than one document",
+			want: &ateapipb.EgressPolicy{Rules: anyRules},
 		},
 		{
-			name: "two leading separators",
+			name: "YAML: two leading document separators",
 			manifest: `---
 ---
 rules:
 - http: {hostnames: ["*"]}
 `,
-			wantErr:         true,
-			wantErrContains: "manifest holds more than one document",
+			want: &ateapipb.EgressPolicy{Rules: anyRules},
 		},
 		{
-			name: "document end marker then separator",
+			name: "YAML: document end marker (...) then document separator",
 			manifest: `rules:
 - http: {hostnames: ["*"]}
 ...
 ---
 `,
-			wantErr:         true,
-			wantErrContains: "manifest holds more than one document",
+			want: &ateapipb.EgressPolicy{Rules: anyRules},
 		},
 		{
 			name: "two egress policies separated by ---",
@@ -210,7 +205,7 @@ rules:
       - 443
 `,
 			wantErr:         true,
-			wantErrContains: "manifest holds more than one document",
+			wantErrContains: "manifest holds 2 EgressPolicy records, expected one",
 		},
 		{
 			name: "three egress policies separated by ---",
@@ -227,7 +222,7 @@ rules:
 - http: {hostnames: ["*"]}
 `,
 			wantErr:         true,
-			wantErrContains: "manifest holds more than one document",
+			wantErrContains: "manifest holds 3 EgressPolicy records, expected one",
 		},
 		{
 			name: "two policies with an empty document between",
@@ -242,16 +237,16 @@ rules:
 - tls_passthrough: {hostnames: ["*.example.com"], ports: {numbers: [443]}}
 `,
 			wantErr:         true,
-			wantErrContains: "manifest holds more than one document",
+			wantErrContains: "manifest holds 2 EgressPolicy records, expected one",
 		},
 		{
-			name: `two json documents separated by ---`,
+			name: "YAML multi-document in JSON style",
 			manifest: `{"metadata": {"atespace": "team-a", "name": "default"}, "rules": [{"http": {"hostnames": ["*"]}}]}
 ---
 {"metadata": {"atespace": "team-b", "name": "default"}, "rules": [{"http": {"hostnames": ["*"]}}]}
 `,
 			wantErr:         true,
-			wantErrContains: "manifest holds more than one document",
+			wantErrContains: "manifest holds 2 EgressPolicy records, expected one",
 		},
 		{name: "only a separator", manifest: "---\n", wantErr: true, wantErrContains: "manifest is empty"},
 		{name: "comment only", manifest: "# nothing\n", wantErr: true, wantErrContains: "manifest is empty"},

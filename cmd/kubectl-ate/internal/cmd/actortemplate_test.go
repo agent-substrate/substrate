@@ -82,10 +82,11 @@ func parseTemplate(t *testing.T, data string) *ateapipb.ActorTemplate {
 	if err != nil {
 		t.Fatalf("manifest.Parse: %v", err)
 	}
-	if len(templates) != 1 {
-		t.Fatalf("manifest.Parse returned %d templates, want 1", len(templates))
+	template, err := manifest.One(templates)
+	if err != nil {
+		t.Fatalf("manifest.One: %v", err)
 	}
-	return templates[0]
+	return template
 }
 
 func TestParseActorTemplate(t *testing.T) {

@@ -56,10 +56,7 @@ func ActorTemplateFromManifest(data []byte) (*ateapipb.ActorTemplate, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(templates) > 1 {
-		return nil, fmt.Errorf("manifest holds %d ActorTemplates, expected one", len(templates))
-	}
-	return templates[0], nil
+	return manifest.One(templates)
 }
 
 // CreateActorTemplate creates the template through the ate API. Actor

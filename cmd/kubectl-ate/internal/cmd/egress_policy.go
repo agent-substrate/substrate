@@ -83,9 +83,13 @@ var deleteEgressPolicyCmd = &cobra.Command{
 
 // egressPolicyFromManifest parses a manifest holding a single protojson-shaped
 // EgressPolicy. An egress policy is a singleton under its actor, so more than
-// one document is an error.
+// one record is an error.
 func egressPolicyFromManifest(data []byte) (*ateapipb.EgressPolicy, error) {
-	return manifest.ParseOne[ateapipb.EgressPolicy](data)
+	policies, err := manifest.Parse[ateapipb.EgressPolicy](data)
+	if err != nil {
+		return nil, err
+	}
+	return manifest.One(policies)
 }
 
 // overrideEgressPolicyMetadata defaults each of metadata.atespace and

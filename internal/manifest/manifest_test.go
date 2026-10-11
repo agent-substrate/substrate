@@ -23,45 +23,153 @@ import (
 	"google.golang.org/protobuf/testing/protocmp"
 )
 
-func meta(name string) *ateapipb.ResourceMetadata {
-	return &ateapipb.ResourceMetadata{Atespace: "a", Name: name}
-}
-
+// The tests parse into ateapipb.Atespace, whose only field is a nested message,
+// so that flow-style YAML has something to nest.
 func TestParse(t *testing.T) {
-	const (
-		one = "atespace: a\nname: one\n"
-		two = "atespace: a\nname: two\n"
-	)
 	tests := []struct {
 		name            string
 		manifest        string
-		want            []*ateapipb.ResourceMetadata
+		want            []*ateapipb.Atespace
 		wantErrContains string
 	}{
-		{name: "one document", manifest: one, want: []*ateapipb.ResourceMetadata{meta("one")}},
-		{name: "json", manifest: `{"atespace": "a", "name": "one"}`, want: []*ateapipb.ResourceMetadata{meta("one")}},
-		{name: "leading separator", manifest: "---\n" + one, want: []*ateapipb.ResourceMetadata{meta("one")}},
-		{name: "document end marker", manifest: one + "...\n", want: []*ateapipb.ResourceMetadata{meta("one")}},
-		{name: "two documents", manifest: one + "---\n" + two, want: []*ateapipb.ResourceMetadata{meta("one"), meta("two")}},
 		{
-			name:     "two json documents",
-			manifest: `{"atespace": "a", "name": "one"}` + "\n---\n" + `{"atespace": "a", "name": "two"}`,
-			want:     []*ateapipb.ResourceMetadata{meta("one"), meta("two")},
+			name: "single block-style YAML",
+			manifest: `metadata:
+  atespace: a
+  name: one
+`,
+			want: []*ateapipb.Atespace{{Metadata: &ateapipb.ResourceMetadata{Atespace: "a", Name: "one"}}},
 		},
-		{name: "empty documents skipped", manifest: "---\n# nothing\n---\n" + one + "---\n---\n" + two + "---\n", want: []*ateapipb.ResourceMetadata{meta("one"), meta("two")}},
-		{name: "alias", manifest: "atespace: &x a\nname: *x\n", want: []*ateapipb.ResourceMetadata{{Atespace: "a", Name: "a"}}},
+		{
+			name:     "single flow-style YAML",
+			manifest: "metadata: { atespace: a, name: one, }\n",
+			want:     []*ateapipb.Atespace{{Metadata: &ateapipb.ResourceMetadata{Atespace: "a", Name: "one"}}},
+		},
+		{
+			name:     "single JSON",
+			manifest: `{"metadata": {"atespace": "a", "name": "one"}}`,
+			want:     []*ateapipb.Atespace{{Metadata: &ateapipb.ResourceMetadata{Atespace: "a", Name: "one"}}},
+		},
+		{
+			name: "YAML: leading document separator",
+			manifest: `---
+metadata:
+  atespace: a
+  name: one
+`,
+			want: []*ateapipb.Atespace{{Metadata: &ateapipb.ResourceMetadata{Atespace: "a", Name: "one"}}},
+		},
+		{
+			name: "YAML: document end marker (...)",
+			manifest: `metadata:
+  atespace: a
+  name: one
+...
+`,
+			want: []*ateapipb.Atespace{{Metadata: &ateapipb.ResourceMetadata{Atespace: "a", Name: "one"}}},
+		},
+		{
+			name: "YAML: trailing document separator",
+			manifest: `metadata:
+  atespace: a
+  name: one
+---
+`,
+			want: []*ateapipb.Atespace{{Metadata: &ateapipb.ResourceMetadata{Atespace: "a", Name: "one"}}},
+		},
+		{
+			name: "YAML multi-document in block style",
+			manifest: `metadata:
+  atespace: a
+  name: one
+---
+metadata:
+  atespace: a
+  name: two
+`,
+			want: []*ateapipb.Atespace{
+				{Metadata: &ateapipb.ResourceMetadata{Atespace: "a", Name: "one"}},
+				{Metadata: &ateapipb.ResourceMetadata{Atespace: "a", Name: "two"}},
+			},
+		},
+		{
+			name: "YAML multi-document in flow style",
+			manifest: `metadata: { atespace: a, name: one, }
+---
+metadata: { atespace: a, name: two, }
+`,
+			want: []*ateapipb.Atespace{
+				{Metadata: &ateapipb.ResourceMetadata{Atespace: "a", Name: "one"}},
+				{Metadata: &ateapipb.ResourceMetadata{Atespace: "a", Name: "two"}},
+			},
+		},
+		{
+			name: "YAML multi-document in JSON style",
+			manifest: `{"metadata": {"atespace": "a", "name": "one"}}
+---
+{"metadata": {"atespace": "a", "name": "two"}}
+`,
+			want: []*ateapipb.Atespace{
+				{Metadata: &ateapipb.ResourceMetadata{Atespace: "a", Name: "one"}},
+				{Metadata: &ateapipb.ResourceMetadata{Atespace: "a", Name: "two"}},
+			},
+		},
+		{
+			name: "YAML: empty documents are skipped",
+			manifest: `---
+# nothing
+---
+metadata: { atespace: a, name: one, }
+---
+---
+metadata: { atespace: a, name: two, }
+---
+`,
+			want: []*ateapipb.Atespace{
+				{Metadata: &ateapipb.ResourceMetadata{Atespace: "a", Name: "one"}},
+				{Metadata: &ateapipb.ResourceMetadata{Atespace: "a", Name: "two"}},
+			},
+		},
+		{
+			name:     "YAML: alias",
+			manifest: "metadata: { atespace: &x a, name: *x, }\n",
+			want:     []*ateapipb.Atespace{{Metadata: &ateapipb.ResourceMetadata{Atespace: "a", Name: "a"}}},
+		},
 		{name: "empty", manifest: "", wantErrContains: "manifest is empty"},
-		{name: "only separators", manifest: "---\n---\n", wantErrContains: "manifest is empty"},
-		{name: "comment only", manifest: "# nothing\n", wantErrContains: "manifest is empty"},
-		{name: "not yaml", manifest: "\t{", wantErrContains: "invalid YAML"},
-		{name: "bad second document", manifest: one + "---\n\t{", wantErrContains: "invalid YAML"},
-		{name: "unknown field", manifest: "atespace: a\nnmae: one\n", wantErrContains: "invalid ResourceMetadata"},
-		{name: "unknown field in second document", manifest: one + "---\nnmae: two\n", wantErrContains: "document 2: invalid ResourceMetadata"},
-		{name: "not an object", manifest: "- a\n", wantErrContains: "invalid ResourceMetadata"},
+		{name: "YAML: only document separators", manifest: "---\n---\n", wantErrContains: "manifest is empty"},
+		{name: "YAML: comment only", manifest: "# nothing\n", wantErrContains: "manifest is empty"},
+		{name: "not YAML", manifest: "\t{", wantErrContains: "invalid YAML"},
+		{
+			name:            "YAML: invalid second document",
+			manifest:        "metadata: { atespace: a, name: one, }\n---\n\t{\n",
+			wantErrContains: "invalid YAML",
+		},
+		{
+			name: "JSON documents with no separator are not supported",
+			manifest: `{"metadata": {"atespace": "a", "name": "one"}}
+{"metadata": {"atespace": "a", "name": "two"}}
+`,
+			wantErrContains: "invalid YAML",
+		},
+		{
+			name:            "unknown field",
+			manifest:        `{"metadata": {"atespace": "a", "nmae": "one"}}`,
+			wantErrContains: "invalid Atespace",
+		},
+		{
+			name: "YAML: unknown field in second document",
+			manifest: `metadata: { atespace: a, name: one, }
+---
+metadata: { atespace: a, nmae: two, }
+`,
+			wantErrContains: "document 2: invalid Atespace",
+		},
+		{name: "not an object", manifest: "- a\n", wantErrContains: "invalid Atespace"},
+		{name: "JSON array of objects is not supported", manifest: `[{"metadata": {"atespace": "a", "name": "one"}}]`, wantErrContains: "invalid Atespace"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got, err := Parse[ateapipb.ResourceMetadata]([]byte(test.manifest))
+			got, err := Parse[ateapipb.Atespace]([]byte(test.manifest))
 			if test.wantErrContains != "" {
 				if err == nil || !strings.Contains(err.Error(), test.wantErrContains) {
 					t.Fatalf("Parse() error = %v, want it to contain %q", err, test.wantErrContains)
@@ -78,43 +186,33 @@ func TestParse(t *testing.T) {
 	}
 }
 
-func TestParseOne(t *testing.T) {
-	const one = "atespace: a\nname: one\n"
+func TestOne(t *testing.T) {
+	one := &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Atespace: "a", Name: "one"}}
+	two := &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Atespace: "a", Name: "two"}}
 	tests := []struct {
 		name            string
-		manifest        string
-		want            *ateapipb.ResourceMetadata
+		msgs            []*ateapipb.Atespace
+		want            *ateapipb.Atespace
 		wantErrContains string
 	}{
-		{name: "one document", manifest: one, want: meta("one")},
-		{name: "json", manifest: `{"atespace": "a", "name": "one"}`, want: meta("one")},
-		{name: "leading separator", manifest: "---\n" + one, want: meta("one")},
-		{name: "document end marker", manifest: one + "...\n", want: meta("one")},
-		{name: "empty", manifest: "", wantErrContains: "manifest is empty"},
-		{name: "only a separator", manifest: "---\n", wantErrContains: "manifest is empty"},
-		{name: "comment only", manifest: "# nothing\n", wantErrContains: "manifest is empty"},
-		{name: "not yaml", manifest: "\t{", wantErrContains: "invalid YAML"},
-		{name: "unknown field", manifest: "nmae: one\n", wantErrContains: "invalid ResourceMetadata"},
-		{name: "second document", manifest: one + "---\n" + one, wantErrContains: "more than one document"},
-		{name: "trailing separator", manifest: one + "---\n", wantErrContains: "more than one document"},
-		{name: "empty first document", manifest: "---\n# nothing\n---\n" + one, wantErrContains: "more than one document"},
-		{name: "two leading separators", manifest: "---\n---\n" + one, wantErrContains: "more than one document"},
-		{name: "end marker then separator", manifest: one + "...\n---\n", wantErrContains: "more than one document"},
+		{name: "one record", msgs: []*ateapipb.Atespace{one}, want: one},
+		{name: "no records", wantErrContains: "manifest is empty"},
+		{name: "two records", msgs: []*ateapipb.Atespace{one, two}, wantErrContains: "manifest holds 2 Atespace records, expected one"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got, err := ParseOne[ateapipb.ResourceMetadata]([]byte(test.manifest))
+			got, err := One(test.msgs)
 			if test.wantErrContains != "" {
 				if err == nil || !strings.Contains(err.Error(), test.wantErrContains) {
-					t.Fatalf("ParseOne() error = %v, want it to contain %q", err, test.wantErrContains)
+					t.Fatalf("One() error = %v, want it to contain %q", err, test.wantErrContains)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("ParseOne() error = %v", err)
+				t.Fatalf("One() error = %v", err)
 			}
 			if diff := cmp.Diff(test.want, got, protocmp.Transform()); diff != "" {
-				t.Errorf("ParseOne() mismatch (-want +got):\n%s", diff)
+				t.Errorf("One() mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}

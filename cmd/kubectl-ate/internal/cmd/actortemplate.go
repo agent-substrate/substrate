@@ -113,14 +113,15 @@ var createActorTemplateCmd = &cobra.Command{
 	Short: "Create actor templates from a manifest",
 	Long: `Create actor templates from a manifest file.
 
-The manifest holds one or more YAML (or JSON) documents separated by "---",
-each one ateapipb.ActorTemplate message in its protojson form, exactly as
+A manifest is a valid JSON or YAML file (YAML files may contain multiple
+documents, delimited by the YAML document separator: "---"). Each record is a
+complete ateapipb.ActorTemplate message in its protojson form, exactly as
 printed by "kubectl ate get actor-template <name> -a <atespace> -o yaml".
-Each template's atespace and name come from its metadata.
+Each template's atespace and name come from its own metadata.
 The atespace must already exist.
 
 The templates are created independently: a failure does not stop the rest, and
-the failures are reported together at the end. A manifest with one document
+the failures are reported together at the end. A manifest with one record
 prints the template, one with several prints a list.
 
 Actor templates are immutable: there is no update; delete and recreate to change one.`,
@@ -224,7 +225,7 @@ func init() {
 	getActorTemplatesCmd.Flags().BoolVarP(&getActorTemplateAllAtespacesFlag, "all-atespaces", "A", false, "List actor templates across all atespaces (listing only; mutually exclusive with --atespace)")
 	getCmd.AddCommand(getActorTemplatesCmd)
 
-	createActorTemplateCmd.Flags().StringVarP(&createActorTemplateFilenameFlag, "filename", "f", "", "Manifest file holding one or more protojson-shaped ActorTemplate documents; use - for stdin (required)")
+	createActorTemplateCmd.Flags().StringVarP(&createActorTemplateFilenameFlag, "filename", "f", "", "JSON or YAML manifest of protojson-shaped ActorTemplates (YAML may hold several documents); use - for stdin (required)")
 	_ = createActorTemplateCmd.MarkFlagRequired("filename")
 	createCmd.AddCommand(createActorTemplateCmd)
 

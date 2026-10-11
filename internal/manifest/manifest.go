@@ -12,8 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package manifest parses YAML or JSON manifests, in their protojson form,
-// into protobuf messages.
+// Package manifest parses manifests, in their protojson form, into protobuf
+// messages. A manifest is either a JSON file, which holds one record, or a YAML
+// file, which holds any number of documents delimited by the YAML document
+// separator ("---"). JSON has no multi-document form, so several JSON objects
+// separated by "---" are a YAML file, not a JSON one.
 package manifest
 
 import (
@@ -34,9 +37,10 @@ type message[M any] interface {
 	proto.Message
 }
 
-// Parse parses each document of a manifest into an M, in order. Empty
-// documents are skipped, as kubectl does. Parsing is strict: unknown fields
-// are an error, so typos don't silently drop configuration.
+// Parse parses each record of a manifest into an M, in order. Each non-empty
+// YAML document is a record, and a JSON file is a single record. Empty
+// documents are skipped, as kubectl does. Parsing is strict: unknown fields are an error, so
+// typos don't silently drop configuration.
 func Parse[M any, PM message[M]](data []byte) ([]PM, error) {
 	docs, err := splitDocuments(data)
 	if err != nil {
@@ -62,21 +66,16 @@ func Parse[M any, PM message[M]](data []byte) ([]PM, error) {
 	return msgs, nil
 }
 
-// ParseOne parses a manifest that holds exactly one document into an M.
-// Documents are counted the way the YAML spec counts them: an empty document,
-// such as the one a trailing "---" opens, is a document too.
-func ParseOne[M any, PM message[M]](data []byte) (PM, error) {
-	docs, err := splitDocuments(data)
-	if err != nil {
-		return nil, err
-	}
-	if len(docs) > 1 {
-		return nil, errors.New("manifest holds more than one document, expected one")
-	}
-	if isEmpty(docs[0]) {
+// One returns the only record of msgs, as returned by Parse, for callers that
+// accept a single record. It is an error if there is more than one.
+func One[M any, PM message[M]](msgs []PM) (PM, error) {
+	switch len(msgs) {
+	case 0:
 		return nil, errEmpty
+	case 1:
+		return msgs[0], nil
 	}
-	return unmarshal[M, PM](docs[0])
+	return nil, fmt.Errorf("manifest holds %d %s records, expected one", len(msgs), msgs[0].ProtoReflect().Descriptor().Name())
 }
 
 var errEmpty = errors.New("manifest is empty")
