@@ -20,13 +20,26 @@ import (
 	"fmt"
 
 	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type/v3"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	"go.ate.dev/substrate/cmd/atenet/internal/router/extproc"
+	"go.ate.dev/substrate/internal/apierror"
 	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/resources"
 )
+
+// reasonOf returns the apierror reason the status of err carries, through any
+// wrapper, or "".
+func reasonOf(err error) string {
+	for _, d := range status.Convert(err).Details() {
+		if info, ok := d.(*errdetails.ErrorInfo); ok && info.GetDomain() == apierror.ErrorInfoDomain {
+			return info.GetReason()
+		}
+	}
+	return ""
+}
 
 // actorNotFoundErr returns a 404 denial identifying the missing actor.
 func actorNotFoundErr(actorRef resources.ActorRef) error {
@@ -65,12 +78,15 @@ func shedOutcome(retryErr error) string {
 // other retryErr is dropped: a shed request is not a lock conflict or a failed
 // precondition, so it reports unavailable.
 func parkingFullErr(actorID string, retryErr error) error {
-	if shedOutcome(retryErr) == ateattr.RouterOutcomeNoCapacity {
-		return extproc.WrapReqError(envoy_type.StatusCode_ServiceUnavailable, retryErr,
-			"actor %q unavailable: router at capacity", actorID)
+	re := &extproc.ReqError{
+		Msg:        fmt.Sprintf("actor %q unavailable: router at capacity", actorID),
+		StatusCode: int(envoy_type.StatusCode_ServiceUnavailable),
+		Reason:     apierror.ReasonLotFull,
 	}
-	return extproc.NewReqError(envoy_type.StatusCode_ServiceUnavailable,
-		"actor %q unavailable: router at capacity", actorID)
+	if shedOutcome(retryErr) == ateattr.RouterOutcomeNoCapacity {
+		re.Cause = retryErr
+	}
+	return re
 }
 
 // mapResumeError translates an ActorResumer error into a client-facing
@@ -90,7 +106,7 @@ func mapResumeError(actorRef resources.ActorRef, err error) error {
 		return err
 	}
 
-	re := &extproc.ReqError{Cause: err}
+	re := &extproc.ReqError{Cause: err, Reason: reasonOf(err)}
 
 	// Bare context sentinels reach here when the request's own context ends
 	// (client disconnect or stream deadline) — status.Code would classify them
@@ -127,6 +143,9 @@ func mapResumeError(actorRef resources.ActorRef, err error) error {
 	case codes.Unavailable:
 		re.StatusCode = int(envoy_type.StatusCode_ServiceUnavailable)
 		re.Msg = fmt.Sprintf("actor %s unavailable", actorRef)
+		if re.Reason == "" {
+			re.Reason = apierror.ReasonAPIUnavailable
+		}
 	case codes.DeadlineExceeded:
 		re.StatusCode = int(envoy_type.StatusCode_GatewayTimeout)
 		re.Msg = fmt.Sprintf("actor %s request timed out", actorRef)
