@@ -268,6 +268,29 @@ Control plane and node component logs mask proto fields marked `debug_redact`, s
 
 ---
 
+### Local Logs with Loki (Kind Cluster)
+
+For local development inside a `kind` cluster, Agent Substrate provisions a single-binary [Loki](https://grafana.com/docs/loki/latest/) in the `otel-system` namespace, and the collector's logs pipeline sends every record to it next to the `debug` exporter, so the lifecycle events outlive kubelet's 10 MiB stdout rotation.
+
+Loki indexes `service_name`, `service_instance_id`, `k8s_namespace_name` and `k8s_pod_name` as stream labels and keeps the other attributes, the `ate.*` keys among them, as structured metadata with dots replaced by underscores. Actor identity never becomes an index label.
+
+To read the lifecycle of one actor:
+
+1. **Expose the Loki API** via port forwarding:
+   ```bash
+   kubectl port-forward -n otel-system svc/loki 3100:3100
+   ```
+
+2. **Query by actor name**, oldest first. The range defaults to the last hour.
+   ```bash
+   curl -sG http://localhost:3100/loki/api/v1/query_range \
+     --data-urlencode 'query={service_name="ateapi"} | ate_actor_name="counter-1"' \
+     --data-urlencode 'direction=forward' | jq -c '.data.result[] | .stream | {ate_actor_operation_name, ate_actor_state, ate_actor_uid}'
+   ```
+   One line per state change comes back, each with the `trace_id` of the operation that caused it. Add `| ate_actor_state="crashed"` to keep one state, or query by `ate_template_name` to follow every actor of a template.
+
+> **Note:** Storage is ephemeral (`emptyDir`), so logs are lost when the Loki pod restarts.
+
 ## 2. Metrics
 
 Agent Substrate emits foundational OpenTelemetry system and server metrics to monitor the overall health and performance of the control plane services. Every metric below is emitted by a service binary over OTLP and is **independent of the deployment** — a Kind dev cluster gets the same instruments as production; only the backend differs (see [Where Telemetry Goes](#4-where-telemetry-goes)).
@@ -334,6 +357,8 @@ For the `ate.filecache.*` instruments, one series per cache under `ate.filecache
 `ate.workerpool.namespace` and `ate.workerpool.name` identify a pool together, on every instrument that names one. A WorkerPool is a namespaced resource, so the name on its own merges same-named pools from different namespaces into one series. The pair means that capacity (`ate.workerpool.workers`, `ate.workerpool.desired_workers`, `ate.workerpool.ready_workers`) joins to demand (`ate.scheduler.assignment.duration`, `ate.actor.lifecycle.operation.duration`, `ate.actor.crashes`) by pool.
 
 **No keys** means the operation has no pool. The actor-centric instruments omit the pair, so a crash before the actor reached a worker, or the `no_capacity` outcome, names no pool. No instrument sends the pair with both keys empty.
+
+**Per-replica observables.** Every `ate-api-server` replica reports `ate.workerpool.workers` for the whole fleet, and the install runs two, so a `sum()` across them doubles each count. Aggregate with `max by (ate_workerpool_namespace, ate_workerpool_name, ate_worker_state, ate_sandbox_class) (ate_workerpool_workers)`, or drop the `instance` and `pod` labels first. The same holds for any observable a replicated component reads from a shared source; instruments a replica records for its own requests sum as usual.
 
 The three snapshot labels are orthogonal and mean the same thing on every histogram that carries them:
 * `ate.snapshot.kind`: which snapshot the operation reads or writes. `local` (the copy on the node: an asynchronous suspend writes it, and a resume reads it while the node still has it, whether or not its upload to durable storage has finished. A synchronous suspend is `latest`, but it also keeps a copy on the node, so the resume after it can be `local`), `latest` (a durable snapshot, including a template's golden snapshot), or `boot` (from scratch, so it never appears on the atelet histograms).
