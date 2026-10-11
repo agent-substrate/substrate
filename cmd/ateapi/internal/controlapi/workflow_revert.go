@@ -155,7 +155,7 @@ func (w *ActorWorkflow) ensureMarkedReverting(ctx context.Context, actorRef reso
 	}
 
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
-		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_REVERTING
+		setActorState(toUpdate.Status, ateapipb.ActorState_ACTOR_STATE_REVERTING)
 		return nil
 	})
 	if err != nil {
@@ -255,7 +255,7 @@ func (w *ActorWorkflow) ensureRevertedFinalized(ctx context.Context, actorRef re
 	}
 
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapipb.Actor) error {
-		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
+		setActorState(toUpdate.Status, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
 		toUpdate.Status.WorkerAssignment = nil
 		toUpdate.Status.AssignedNode = ""
 		// We revert back to the latest durable snapshot, so all local snapshots

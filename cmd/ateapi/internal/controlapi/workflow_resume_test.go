@@ -145,6 +145,9 @@ func TestFinalizeRunning_CommitsRunning(t *testing.T) {
 	if locality := findLatestLocalSnapshot(got.GetStatus()).GetLocality(); locality != "node-1" {
 		t.Errorf("local snapshot locality = %q, want %q kept after resume", locality, "node-1")
 	}
+	if got.GetStatus().GetStateTransitionTime() == nil {
+		t.Error("state_transition_time not stamped")
+	}
 }
 
 // bindErrorStore fails every claim, standing in for a worker that moved or

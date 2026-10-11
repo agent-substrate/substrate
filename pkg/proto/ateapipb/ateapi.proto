@@ -870,6 +870,11 @@ message ActorStatus {
   // +k8s:maximum=9 # keep this in sync with the ActorState enum
   ActorState state = 1;
 
+  // state_transition_time is when state last changed.
+  //
+  // +k8s:optional
+  google.protobuf.Timestamp state_transition_time = 13;
+
   // worker_assignment points at the worker currently hosting this Actor.
   // Unset whenever the Actor has no worker (SUSPENDED, CRASHED).
   //

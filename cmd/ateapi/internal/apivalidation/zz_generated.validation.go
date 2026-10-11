@@ -799,6 +799,34 @@ func Validate_ActorStatus(
 		errs = append(errs, fn(fldPath.Child("state"), &obj.State, oldVal, oldObj != nil)...)
 	}
 
+	{ // field ateapipb.ActorStatus.StateTransitionTime
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *timestamppb.Timestamp,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateapipb.ActorStatus) *timestamppb.Timestamp {
+				return oldObj.StateTransitionTime
+			})
+		errs = append(errs, fn(fldPath.Child("state_transition_time"), obj.StateTransitionTime, oldVal, oldObj != nil)...)
+	}
+
 	{ // field ateapipb.ActorStatus.WorkerAssignment
 		fn := func(
 			fldPath *field.Path,

@@ -148,7 +148,7 @@ func crashActor(ctx context.Context, st crashActorStore, actorRef resources.Acto
 	crashAttrs := ateattr.ActorMetricAttributes(actor, sandboxClass, opName)
 
 	_, err = st.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapipb.Actor) error {
-		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_CRASHED
+		setActorState(toUpdate.Status, ateapipb.ActorState_ACTOR_STATE_CRASHED)
 		// An actor crashed concurrently, e.g. by worker deletion, keeps its first crash.
 		if !wasAlreadyCrashed {
 			toUpdate.Status.Crash = newActorCrash(opName, message)

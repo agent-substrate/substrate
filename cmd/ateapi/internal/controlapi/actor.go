@@ -135,8 +135,9 @@ func (s *ServiceImpl) CreateActor(ctx context.Context, inActor *ateapipb.Actor) 
 	// Verify that the result is properly valid before storing it.
 	outActor := proto.CloneOf(inActor)
 	outActor.Status = &ateapipb.ActorStatus{
-		State:           ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
-		ExternalVolumes: initVols,
+		State:               ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+		StateTransitionTime: timestamppb.Now(),
+		ExternalVolumes:     initVols,
 	}
 	if sourceTag != nil {
 		// The Actor starts out borrowing the tag's snapshot rather than
