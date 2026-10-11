@@ -60,7 +60,7 @@ import (
 	"github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
 	"github.com/agent-substrate/substrate/pkg/objectstorage"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	objectstoresnapshotv1 "github.com/agent-substrate/substrate/pkg/proto/objectstoresnapshotpb/v1"
+	objectstorev1 "github.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1"
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/spf13/pflag"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
@@ -302,7 +302,7 @@ func main() {
 		ateomDialer,
 		wrappedAnonGCS,
 		wrappedGCS,
-		objectstoresnapshotv1.NewNodeProviderClient(snapshotPluginConn),
+		objectstorev1.NewNodeProviderClient(snapshotPluginConn),
 		imageCache,
 		instruments,
 		volPlugins,
@@ -458,7 +458,7 @@ type AteomHerder struct {
 	// through snapshotPlugin.
 	gcsClient objectstorage.ObjectStorage
 	// snapshotPlugin moves external snapshot files between the node and storage.
-	snapshotPlugin objectstoresnapshotv1.NodeProviderClient
+	snapshotPlugin objectstorev1.NodeProviderClient
 	// snapshotScratchDir holds short-lived manifest directories; it must be
 	// inside the node plugin's root.
 	snapshotScratchDir    string
@@ -477,7 +477,7 @@ func NewService(
 	ateomDialer *AteomDialer,
 	anonGCSClient objectstorage.ObjectStorage,
 	gcsClient objectstorage.ObjectStorage,
-	snapshotPlugin objectstoresnapshotv1.NodeProviderClient,
+	snapshotPlugin objectstorev1.NodeProviderClient,
 	imageCache *imagecache.Store,
 	instruments *Instruments,
 	volumePlugins map[string]volume.VolumePluginWorkerPlane,
@@ -1003,18 +1003,12 @@ func (s *AteomHerder) uploadLocalCheckpointDir(ctx context.Context, req *ateletp
 	if capturedFidelity == "" {
 		return rec.SandboxClass, apierror.FailedPrecondition("local snapshot %q has no fidelity recorded in its manifest; resume and pause the actor again before suspending it", req.GetLocalSnapshotName())
 	}
-	desiredFidelity := ateattr.SnapshotFidelityValue(req.GetDesiredFidelity())
-
-	switch {
-	case capturedFidelity == desiredFidelity:
-	case capturedFidelity == ateattr.SnapshotFidelityVolumes && desiredFidelity == ateattr.SnapshotFidelityMemory:
-		// The control plane rejects this before marking SUSPENDING; reaching
-		// it here means the template changed mid-flight or store state drifted.
-		return rec.SandboxClass, apierror.FailedPrecondition("pause snapshot captured %s; cannot upload it as %s (memory was never captured)", capturedFidelity, desiredFidelity)
-	default: // captured MEMORY, VOLUMES wanted
-		if err := narrowMemoryCaptureToVolumes(rec); err != nil {
-			return rec.SandboxClass, err
-		}
+	// Pause and suspend capture the template's one preferred fidelity, and a
+	// paused actor's template cannot change, so the upload is always of what
+	// the pause captured. A mismatch means the store or the control plane
+	// drifted; refuse rather than guess.
+	if desiredFidelity := ateattr.SnapshotFidelityValue(req.GetDesiredFidelity()); capturedFidelity != desiredFidelity {
+		return rec.SandboxClass, apierror.FailedPrecondition("pause snapshot captured %s; upload asks for %s", capturedFidelity, desiredFidelity)
 	}
 
 	// The local snapshot stays until the upload succeeds, so a retry can
@@ -1029,19 +1023,6 @@ func readSnapshotManifest(dir string) ([]byte, error) {
 	}
 	defer root.Close()
 	return root.ReadFile(sandboxManifestName)
-}
-
-// narrowMemoryCaptureToVolumes rewrites rec so a MEMORY capture uploads as a
-// VOLUMES snapshot holding only the volume files ateom reported at checkpoint.
-func narrowMemoryCaptureToVolumes(rec *sandboxAssetsRecord) error {
-	if len(rec.DataSnapshotFiles) == 0 {
-		// Either no durable-dir volumes were attached at pause, or the
-		// manifest predates the list. Neither is retryable.
-		return apierror.FailedPrecondition("memory capture lists no volume files; the actor has no durable data to upload as %s", ateattr.SnapshotFidelityVolumes)
-	}
-	rec.SnapshotFiles = rec.DataSnapshotFiles
-	rec.Fidelity = ateattr.SnapshotFidelityVolumes
-	return nil
 }
 
 func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (resp *ateletpb.RestoreResponse, err error) {

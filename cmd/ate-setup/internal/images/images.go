@@ -69,8 +69,7 @@ func KoReference(pkg string) string { return "ko://" + ModulePath + "/" + pkg }
 // well, which changes nothing while every package here already is.
 //
 // This only describes reality because every ko invocation asks for that
-// naming — internal/ko passes the flag, and the Makefile passes it as
-// KO_NAMING. ko's own default appends an md5 of the full import path, which
+// naming: internal/ko passes the flag. ko's own default appends an md5 of the full import path, which
 // nothing here can reproduce, so a build that loses the flag publishes images
 // no --image-repo install can find.
 func ImageName(pkg string) string { return path.Base(pkg) }

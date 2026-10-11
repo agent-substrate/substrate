@@ -165,3 +165,28 @@ func TestWaitActorTemplateGoldenTimeoutIncludesLastError(t *testing.T) {
 		t.Errorf("WaitActorTemplateGolden error = %v, want it to wrap %v", err, getErr)
 	}
 }
+
+// disabledTemplateClient serves one ActorTemplate that opted out of the
+// golden snapshot and has no golden status.
+type disabledTemplateClient struct {
+	ateapipb.ControlClient
+}
+
+func (disabledTemplateClient) GetActorTemplate(_ context.Context, in *ateapipb.GetActorTemplateRequest, _ ...grpc.CallOption) (*ateapipb.ActorTemplate, error) {
+	return &ateapipb.ActorTemplate{
+		Metadata:       &ateapipb.ResourceMetadata{Atespace: in.GetActorTemplate().GetAtespace(), Name: in.GetActorTemplate().GetName()},
+		SnapshotConfig: &ateapipb.SnapshotConfig{GoldenSnapshotConfig: &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED}},
+	}, nil
+}
+
+// TestWaitActorTemplateGoldenDisabledTemplateReady: a template that opted out
+// never gets a golden tag or an error, so the wait must treat it as ready
+// instead of timing out.
+func TestWaitActorTemplateGoldenDisabledTemplateReady(t *testing.T) {
+	client := &ateclient.Client{ControlClient: disabledTemplateClient{}}
+	ref := resources.ActorTemplateRef{Atespace: "ate-demo", Name: "counter"}
+
+	if err := WaitActorTemplateGolden(context.Background(), client, ref, 0); err != nil {
+		t.Fatalf("WaitActorTemplateGolden on a disabled template = %v, want nil", err)
+	}
+}

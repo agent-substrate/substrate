@@ -16,6 +16,7 @@ package functionaltest
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -62,8 +63,9 @@ func TestActorTemplateCRUD(t *testing.T) {
 		Metadata:   &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "tmpl-a", Version: 1},
 		Containers: []*ateapipb.Container{{Name: "main", Image: "example.com/app:v1@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}},
 		SnapshotConfig: &ateapipb.SnapshotConfig{
-			StorageLocation:   "gs://my-bucket/snapshots",
-			PreferredFidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+			StorageLocation:      "gs://my-bucket/snapshots",
+			PreferredFidelity:    ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+			GoldenSnapshotConfig: &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_ENABLED},
 		},
 		SandboxConfig: &ateapipb.SandboxConfig{
 			SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
@@ -232,6 +234,110 @@ func TestGoldenTagLifecycle(t *testing.T) {
 	_, err = tc.client.GetTag(ctx, &ateapipb.GetTagRequest{Tag: goldenRef})
 	if status.Code(err) != codes.NotFound {
 		t.Fatalf("golden tag was not deleted: %v", err)
+	}
+}
+
+func TestActorLifecycleWithoutGoldenSnapshot(t *testing.T) {
+	ns := namespaceForTest("no-golden")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	ensureDefaultGvisorSandboxConfig(t, tc)
+	createWorkerPool(t, tc, ns, "pool1", map[string]string{poolLabelKey: ns})
+	tmpl, err := tc.client.CreateActorTemplate(ctx, &ateapipb.CreateActorTemplateRequest{ActorTemplate: &ateapipb.ActorTemplate{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "no-golden"},
+		SnapshotConfig: &ateapipb.SnapshotConfig{
+			StorageLocation:      testStorageLocation,
+			GoldenSnapshotConfig: &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED},
+		},
+		SandboxConfig:  &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR, ConfigName: "gvisor-default"},
+		Containers:     []*ateapipb.Container{{Name: "main", Image: "main@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", Command: []string{"/main"}}},
+		WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{poolLabelKey: ns}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tmpl.GetSnapshotConfig().GetGoldenSnapshotConfig().GetMode() != ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED {
+		t.Fatal("CreateActorTemplate did not preserve the golden snapshot opt-out")
+	}
+	workerName := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+	controlTemplate := createTemplateWithSelector(t, tc, "golden-control", &ateapipb.Selector{MatchLabels: map[string]string{poolLabelKey: ns}})
+	goldenRef := &ateapipb.ObjectRef{Atespace: resources.GoldenActorAtespace, Name: tmpl.GetMetadata().GetUid()}
+	assertNoGolden := func(ctx context.Context) error {
+		if _, err := tc.client.GetActor(ctx, &ateapipb.GetActorRequest{Actor: goldenRef}); status.Code(err) != codes.NotFound {
+			return fmt.Errorf("disabled template's golden actor: got %v, want NotFound", err)
+		}
+		if _, err := tc.client.GetTag(ctx, &ateapipb.GetTagRequest{Tag: goldenRef}); status.Code(err) != codes.NotFound {
+			return fmt.Errorf("disabled template's golden tag: got %v, want NotFound", err)
+		}
+		return nil
+	}
+	controlapi.NewActorTemplateReconciler(tc.persistence, tc.service, 7*time.Second).Start(ctx)
+	// The enabled template proves the same reconciler is making progress.
+	err = wait.PollUntilContextTimeout(ctx, 50*time.Millisecond, 30*time.Second, true, func(ctx context.Context) (bool, error) {
+		if err := assertNoGolden(ctx); err != nil {
+			return false, err
+		}
+		current, err := tc.client.GetActorTemplate(ctx, &ateapipb.GetActorTemplateRequest{
+			ActorTemplate: resources.ActorTemplateRefFromActorTemplate(controlTemplate).ToObjectRef(),
+		})
+		return current.GetStatus().GetGoldenSnapshotStatus().GetGoldenTag() != nil, err
+	})
+	if err != nil {
+		t.Fatalf("waiting for enabled template's golden tag: %v", err)
+	}
+	waitForWorkerAvailable(t, tc, workerName)
+	actor, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "actor"},
+		ActorTemplate: resources.ActorTemplateRefFromActorTemplate(tmpl).ToObjectRef(),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if durableSnapshot(actor.GetStatus()) != nil {
+		t.Fatal("new actor unexpectedly inherited a snapshot")
+	}
+	ref := resources.ActorRefFromActor(actor).ToObjectRef()
+	tc.fakeAtelet.Lock.Lock()
+	tc.fakeAtelet.RunCalled, tc.fakeAtelet.RestoreCalled = false, false
+	tc.fakeAtelet.Lock.Unlock()
+	if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: ref}); err != nil {
+		t.Fatal(err)
+	}
+	tc.fakeAtelet.Lock.Lock()
+	ran, restored := tc.fakeAtelet.RunCalled, tc.fakeAtelet.RestoreCalled
+	tc.fakeAtelet.Lock.Unlock()
+	if !ran || restored {
+		t.Fatal("first resume did not cold boot")
+	}
+	suspended, err := tc.client.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: ref})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshotURI := durableSnapshotURI(suspended.GetActor().GetStatus())
+	if snapshotURI == "" {
+		t.Fatal("suspend did not produce the actor's own snapshot")
+	}
+	assertSnapshotPresent(t, tc, snapshotURI)
+	waitForWorkerAvailable(t, tc, workerName)
+	if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: ref}); err != nil {
+		t.Fatal(err)
+	}
+	if got := tc.fakeAtelet.lastRestoreRequest().GetExternalConfig().GetSnapshotUri(); got != snapshotURI {
+		t.Fatalf("restored snapshot = %q, want actor's snapshot %q", got, snapshotURI)
+	}
+	if err := assertNoGolden(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tc.client.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref, AnyState: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tc.client.DeleteActorTemplate(ctx, &ateapipb.DeleteActorTemplateRequest{ActorTemplate: resources.ActorTemplateRefFromActorTemplate(tmpl).ToObjectRef()}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tc.client.DeleteActorTemplate(ctx, &ateapipb.DeleteActorTemplateRequest{ActorTemplate: resources.ActorTemplateRefFromActorTemplate(controlTemplate).ToObjectRef()}); err != nil {
+		t.Fatal(err)
 	}
 }
 

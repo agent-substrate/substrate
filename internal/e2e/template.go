@@ -146,8 +146,9 @@ func CreateSubstrateTemplateFrom(ctx context.Context, t *testing.T, clients *Cli
 }
 
 // WaitForSubstrateTemplateReady blocks until the substrate ActorTemplate's
-// golden snapshot exists. The timeout follows the sandbox class under test
-// (see TemplateReadyTimeout).
+// golden snapshot exists, returning immediately for a template that opted
+// out of the golden snapshot. The timeout follows the sandbox class under
+// test (see TemplateReadyTimeout).
 func WaitForSubstrateTemplateReady(ctx context.Context, t *testing.T, clients *Clients, atespace, name string) {
 	t.Helper()
 
@@ -161,6 +162,11 @@ func WaitForSubstrateTemplateReady(ctx context.Context, t *testing.T, clients *C
 			ActorTemplate: &ateapipb.ObjectRef{Atespace: atespace, Name: name},
 		})
 		if err == nil {
+			if at.GetSnapshotConfig().GetGoldenSnapshotConfig().GetMode() == ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED {
+				// The template opted out: no golden snapshot will ever appear,
+				// and none is needed.
+				return
+			}
 			lastStatus = at.GetStatus().GetGoldenSnapshotStatus()
 			if lastStatus.GetGoldenTag().GetName() != "" {
 				return

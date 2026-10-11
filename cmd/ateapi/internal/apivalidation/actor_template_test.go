@@ -69,13 +69,20 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 		})},
 		nil,
 	}, {
-		// ROOTFS is in the enum for the API's sake but no runtime captures it
-		// yet, so templates may not ask for it.
-		"rootfs fidelity not supported",
+		// Only the micro-VM runtime captures rootfs changes without memory;
+		// the fixture is a gVisor template.
+		"rootfs fidelity on gvisor rejected",
 		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
 			tmpl.SnapshotConfig.PreferredFidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
 		})},
 		field.ErrorList{field.Invalid(field.NewPath("actor_template", "snapshot_config", "preferred_fidelity"), "SNAPSHOT_FIDELITY_ROOTFS", "")},
+	}, {
+		"rootfs fidelity on microvm accepted",
+		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.SnapshotConfig.PreferredFidelity = ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
+			tmpl.SandboxConfig = &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_MICROVM, ConfigName: "microvm-default"}
+		})},
+		nil,
 	}, {
 		"invalid worker_selector label key",
 		&ateapipb.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
@@ -280,6 +287,34 @@ func TestValidateActorTemplate(t *testing.T) {
 		want   field.ErrorList
 	}{{
 		name: "valid",
+	}, {
+		name: "golden snapshot enabled without wakeup probe",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.SnapshotConfig.GoldenSnapshotConfig = &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_ENABLED}
+		},
+	}, {
+		name: "golden snapshot disabled",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.SnapshotConfig.GoldenSnapshotConfig = &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED}
+		},
+	}, {
+		name: "golden snapshot mode unspecified",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.SnapshotConfig.GoldenSnapshotConfig = &ateapipb.GoldenSnapshotConfig{}
+		},
+		want: field.ErrorList{field.Required(field.NewPath("snapshot_config", "golden_snapshot_config", "mode"), "")},
+	}, {
+		name: "golden snapshot mode negative",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.SnapshotConfig.GoldenSnapshotConfig = &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode(-1)}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("snapshot_config", "golden_snapshot_config", "mode"), nil, "").WithOrigin("minimum")},
+	}, {
+		name: "golden snapshot mode unknown",
+		mutate: func(tmpl *ateapipb.ActorTemplate) {
+			tmpl.SnapshotConfig.GoldenSnapshotConfig = &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode(3)}
+		},
+		want: field.ErrorList{field.Invalid(field.NewPath("snapshot_config", "golden_snapshot_config", "mode"), nil, "").WithOrigin("maximum")},
 	}, {
 		name:   "missing metadata",
 		mutate: func(tmpl *ateapipb.ActorTemplate) { tmpl.Metadata = nil },

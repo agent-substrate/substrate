@@ -114,7 +114,7 @@ worker pod on a GPU node and reserves the device, and nothing else reads it.
 
 ## 2. ActorTemplate: The Workload Blueprint
 
-The `ActorTemplate` defines the code, environment, and state-management policies for a specific type of agent. It is used to generate the "Golden Snapshot" from which all actors of this type are derived.
+The `ActorTemplate` defines the code, environment, and state-management policies for a specific type of agent. By default, it is used to generate a "Golden Snapshot" that new actors can start from.
 
 ### Specification (`ActorTemplate`)
 
@@ -123,7 +123,7 @@ The `ActorTemplate` defines the code, environment, and state-management policies
 | `containers` | `[]Container` | **Required.** The workload definition — see [Container Fields](#container-fields) below. Each container may also declare an optional `wakeupProbe` HTTP probe — see [Container Wakeup Probe](#container-wakeup-probe-wakeupprobe). |
 | `sandboxConfig` | `SandboxConfig` | **Required.** The sandbox runtime selection: `sandboxClass` (**required**, `SANDBOX_CLASS_GVISOR` or `SANDBOX_CLASS_MICROVM`) picks the runtime family this template's actors require — only `WorkerPool`s whose `sandboxClasses` entry matches are eligible — and `configName` (**required**) names the cluster-scoped [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) object supplying the sandbox binaries. It must reference an existing config of the matching class; `CreateActorTemplate` rejects the template otherwise. |
 | `workerSelector` | `*Selector` | Optional. Gates which `WorkerPool`s actors from this template may use, by matching against each pool's labels (`matchLabels`). If unset, all pools are eligible (subject to the actor's own `worker_selector`). |
-| `snapshotConfig` | `SnapshotConfig` | **Required.** The base object-storage location snapshots are written under, plus the snapshot fidelity (`preferredFidelity`) every Pause and Suspend captures. See [Snapshot Storage Layout](#snapshot-storage-layout). |
+| `snapshotConfig` | `SnapshotConfig` | **Required.** The base object-storage location snapshots are written under, the snapshot fidelity (`preferredFidelity`) every Pause and Suspend captures (`SNAPSHOT_FIDELITY_ROOTFS` requires `sandboxClass: SANDBOX_CLASS_MICROVM`), and automated golden snapshot creation (`goldenSnapshotConfig.mode`). See [Snapshot Storage Layout](#snapshot-storage-layout). |
 | `volumes` | `[]Volume` | Optional. Volumes the containers may mount, each a `durableDir`, an `externalVolumeTemplate` (see [CSI Volumes Guide](csi-volumes.md)), or a `systemInfo` volume (see [SystemInfo Volumes](#systeminfo-volumes)). Every declared volume must be mounted by at least one container. A `microvm` template may declare several `durableDir` volumes; a `gvisor` template is limited to one. |
 | `resources` | `*ResourceRequirements` | Optional. Declares each actor's compute size via `limits` — see [Sandbox Right-Sizing](#sandbox-right-sizing-resources). Immutable, like the rest of the template. |
 
@@ -457,7 +457,18 @@ See [`hack/microvm-assets/`](../hack/microvm-assets/) for scripts that assemble 
 ## 4. Operational Workflow
 
 ### The Golden Snapshot
-When an `ActorTemplate` is created:
+
+Golden snapshot creation is enabled by default. To disable it, set
+`snapshotConfig.goldenSnapshotConfig.mode: GOLDEN_SNAPSHOT_MODE_DISABLED` on the
+template. Omitting the config or leaving `mode` unspecified defaults to
+`GOLDEN_SNAPSHOT_MODE_ENABLED`. A disabled template creates no
+golden actor or tag. Actors created without a `sourceTag` cold-boot and can still
+pause, suspend, and resume using their own snapshots.
+
+`kubectl ate get actor-templates` shows `DISABLED` in the `GOLDEN TAG` column
+for these templates.
+
+When an `ActorTemplate` is created with golden snapshots enabled:
 1. Substrate creates and resumes a temporary golden actor in `ate-golden`.
 2. It waits for readiness (or the warm-up interval), then suspends the actor.
 3. It creates a published tag named after the template UID, copying the snapshot into tag-owned storage.
@@ -468,13 +479,30 @@ When an `ActorTemplate` is created:
 ### Resumption Lifecycle
 Once a template is `Ready`, creating an actor logically (via `kubectl ate create actor`) allows it to be resumed instantly on any free worker in the referenced `WorkerPool`. Substrate bypasses the standard container boot and restores the process directly from its last saved state.
 
+### Eviction
+A worker pod can go away while it hosts running actors: when its `WorkerPool` rolls to a new worker image or pod template, as in an [upgrade](upgrade.md), or scales down, when its node is drained, or when its Spot VM is reclaimed.
+
+When the pod gets `SIGTERM`, its worker stops accepting actors and sends `SIGTERM` to the main process of each container of every actor it hosts. Each actor then has 30 minutes, counted from the pod's `SIGTERM`, to be suspended. An actor suspended in that window keeps its state and resumes on another worker like any suspended actor.
+
+Substrate does not suspend the actor for you. Whatever drives the actor, usually its harness, has to call `SuspendActor` (`kubectl ate suspend`) within the 30 minutes. Only the actor gets the `SIGTERM`, so it has to pass that on, for example on an endpoint the harness polls.
+
+Every actor that must keep its state through an eviction needs a `SIGTERM` handler that:
+
+- **does not exit.** A process that has exited cannot be suspended.
+- **runs in the container's main process.** Substrate signals only to the main process.
+- **gets the actor suspended within the 30 minutes.**
+
+An actor still running when the 30 minutes are up is killed. Once the pod is gone, the actor moves to `ACTOR_STATE_CRASHED`, and everything since its last snapshot is lost. `RevertActor` (`kubectl ate revert`) returns a crashed actor to `ACTOR_STATE_SUSPENDED` at its last external snapshot.
+
+The node can cut the 30 minutes short. GKE node upgrades and cluster autoscaler scale-downs wait up to an hour for a pod, so they leave the full 30 minutes. A reclaimed GKE [Spot VM](https://docs.cloud.google.com/kubernetes-engine/docs/concepts/spot-vms) gives pods 15 seconds by default and at most 2 minutes, so an actor there has to be suspended in that time or it crashes.
+
 ---
 
 ## 5. Best Practices
-*   **Startup Logic:** Place expensive initialization (loading large models, establishing baseline connections) in your application's entry point. These will be captured in the Golden Snapshot and won't need to be repeated on every resumption.
+*   **Startup Logic:** Place expensive initialization (loading large models, establishing baseline connections) in your application's entry point. When golden snapshots are enabled, this initialization can be captured in the Golden Snapshot. Actors that cold-boot run initialization again.
 *   **Placement:** Ensure your `ActorTemplate`'s `sandboxClass` matches your `WorkerPool`'s `sandboxClasses[].name`, and use the template's `workerSelector` to target specific pools — pool selection is by label match, not by namespace or RBAC.
 *   **Version Management:** When updating code, create a new `ActorTemplate` (e.g. `v2`). Substrate treats each template as an immutable state root.
-*   **Eviction:** When its worker pod is evicted, an actor gets `SIGTERM` and 30 minutes to be suspended. After that it is killed and moves to `ACTOR_STATE_CRASHED`, and everything since its last snapshot is lost. So an actor that runs for more than 30 minutes without a suspend can lose data. A `CRASHED` actor can be recovered back to `ACTOR_STATE_SUSPENDED` at its last external snapshot using `RevertActor` (`kubectl ate revert`).
+*   **Eviction:** Give every actor a `SIGTERM` handler that does not exit, and have the actor suspended within 30 minutes of it. See [Eviction](#eviction).
 
 ---
 

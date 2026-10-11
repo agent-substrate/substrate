@@ -50,7 +50,7 @@ func New(client ateapipb.ControlClient) *Minter {
 func (m *Minter) Token(ctx context.Context, ref resources.ActorRef, src *ateapipb.ActorJWTSource) (string, error) {
 	req := &ateapipb.MintActorJWTRequest{
 		Actor:             ref.ToObjectRef(),
-		Audience:          slices.Sorted(slices.Values(src.GetAudiences())),
+		Audiences:         slices.Sorted(slices.Values(src.GetAudiences())),
 		ExpirationSeconds: src.GetExpirationSeconds(),
 	}
 	key, err := tokenKey(req)

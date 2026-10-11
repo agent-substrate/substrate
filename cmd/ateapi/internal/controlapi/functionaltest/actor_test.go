@@ -5210,7 +5210,7 @@ func TestMintActorJWT_Success(t *testing.T) {
 			Atespace: createResp.GetMetadata().GetAtespace(),
 			Name:     createResp.GetMetadata().GetName(),
 		},
-		Audience:          []string{"foo"},
+		Audiences:         []string{"foo"},
 		ExpirationSeconds: 1800,
 	})
 	if err != nil {

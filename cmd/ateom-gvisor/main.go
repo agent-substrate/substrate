@@ -54,6 +54,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/sizing"
 	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/agent-substrate/substrate/internal/wakeupprobe"
+	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/spf13/pflag"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
@@ -266,6 +267,7 @@ func do(ctx context.Context) error {
 			TrustBundlePath:      tunnelConfig.TrustBundle,
 			AteletSPIFFEID:       tunnelConfig.BrokerIdentity,
 			Actors:               *maxActors,
+			SandboxClass:         string(atev1alpha1.SandboxClassGvisor),
 		})
 		if err != nil && ctx.Err() == nil {
 			serverboot.Fatal(ctx, "Failed to report worker capacity", err)
@@ -545,10 +547,18 @@ func validateActorDirs(actorDirs *ateompb.ActorDirs) error {
 	return nil
 }
 
+// supportedFidelities are the snapshot fidelities this runtime serves. gVisor
+// keeps rootfs changes inside its memory checkpoint, so it cannot capture
+// ROOTFS without MEMORY.
+var supportedFidelities = []ateompb.SnapshotFidelity{
+	ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
+	ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+}
+
 // validateFidelity rejects a checkpoint or restore request whose fidelity
 // this runtime cannot serve.
 func validateFidelity(fidelity ateompb.SnapshotFidelity) error {
-	if errs := resources.ValidateSnapshotFidelity(fidelity, field.NewPath("fidelity")); len(errs) > 0 {
+	if errs := resources.ValidateSnapshotFidelity(fidelity, supportedFidelities, field.NewPath("fidelity")); len(errs) > 0 {
 		return apierror.InvalidArgument("%v", errs.ToAggregate())
 	}
 	return nil

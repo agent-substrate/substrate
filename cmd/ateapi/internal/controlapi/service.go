@@ -27,7 +27,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/volume/csi"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	objectstoresnapshotv1 "github.com/agent-substrate/substrate/pkg/proto/objectstoresnapshotpb/v1"
+	objectstorev1 "github.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1"
 	storagev1listers "k8s.io/client-go/listers/storage/v1"
 )
 
@@ -49,7 +49,7 @@ type RPCService struct {
 	instruments           *Instruments
 	mu                    sync.RWMutex
 	volumePlugins         map[string]volume.VolumePluginControlPlane
-	snapshotPlugin        objectstoresnapshotv1.ControlProviderClient
+	snapshotPlugin        objectstorev1.ControlProviderClient
 
 	actorJWTIssuer string
 	actorIDJWTPool localjwtauthority.Pool
@@ -83,7 +83,7 @@ func NewRPCService(
 	instruments *Instruments,
 	egressGatewayAddress string,
 	volumePlugins map[string]volume.VolumePluginControlPlane,
-	snapshotPlugin objectstoresnapshotv1.ControlProviderClient,
+	snapshotPlugin objectstorev1.ControlProviderClient,
 	actorJWTIssuer string,
 	actorIDJWTPool localjwtauthority.Pool,
 	actorIDCAPool localca.Pool,

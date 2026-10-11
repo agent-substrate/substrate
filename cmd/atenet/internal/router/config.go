@@ -51,18 +51,15 @@ const (
 	// Nothing else runs: the egress gateway is statically configured, so there
 	// is no xDS server and no Kubernetes client.
 	ModeEgress Mode = "egress"
-	// ModeAll serves both directions from one instance. This is the default,
-	// and what a single-gateway or local development setup wants.
-	ModeAll Mode = "all"
 )
 
 // ServesIngress reports whether this mode answers ingress requests. It also
 // gates the ingress control plane: the xDS server that configures the ingress
 // dataplane (Envoy only).
-func (m Mode) ServesIngress() bool { return m != ModeEgress }
+func (m Mode) ServesIngress() bool { return m == ModeIngress }
 
 // ServesEgress reports whether this mode answers egress CONNECTs.
-func (m Mode) ServesEgress() bool { return m != ModeIngress }
+func (m Mode) ServesEgress() bool { return m == ModeEgress }
 
 // authConfig holds the router's mTLS settings for dialing ateapi.
 type authConfig struct {
@@ -96,7 +93,7 @@ type credentialProviderConfig struct {
 
 // routerConfig holds deployment setup and endpoint options for the router node instance.
 type routerConfig struct {
-	// Mode restricts the instance to one traffic direction. Empty means ModeAll.
+	// Mode is the one traffic direction this instance serves. Required.
 	Mode         Mode
 	AtenetRouter string
 	Namespace    string
@@ -254,9 +251,9 @@ func (c routerConfig) validate() error {
 		return fmt.Errorf("--atenet-dataplane must be %q or %q, got %q", atenetRouterEnvoy, atenetRouterAgentgateway, c.AtenetRouter)
 	}
 	switch c.Mode {
-	case "", ModeIngress, ModeEgress, ModeAll:
+	case ModeIngress, ModeEgress:
 	default:
-		return fmt.Errorf("--mode must be one of %q, %q, or %q, got %q", ModeIngress, ModeEgress, ModeAll, c.Mode)
+		return fmt.Errorf("--mode must be %q or %q, got %q", ModeIngress, ModeEgress, c.Mode)
 	}
 	if err := c.ParkedRequest.Validate(); err != nil {
 		return err

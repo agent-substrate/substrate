@@ -562,7 +562,7 @@ func (s *RPCService) MintActorJWT(ctx context.Context, req *ateapipb.MintActorJW
 	}
 
 	// We only issue tokens with audience bindings.
-	if len(req.GetAudience()) == 0 {
+	if len(req.GetAudiences()) == 0 {
 		return nil, fmt.Errorf("at least one audience must be requested")
 	}
 
@@ -573,7 +573,7 @@ func (s *RPCService) MintActorJWT(ctx context.Context, req *ateapipb.MintActorJW
 	actorClaims := &actoridjwt.Claims{
 		Issuer:     s.actorJWTIssuer,
 		Subject:    fmt.Sprintf("actor/%s/%s", dbActor.GetMetadata().GetAtespace(), dbActor.GetMetadata().GetName()),
-		Audiences:  req.GetAudience(),
+		Audiences:  req.GetAudiences(),
 		Expiration: expiresAt,
 		NotBefore:  now.Add(-5 * time.Minute),
 		IssuedAt:   now,

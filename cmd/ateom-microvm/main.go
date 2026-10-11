@@ -52,6 +52,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/version"
+	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/spf13/pflag"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"golang.org/x/sys/unix"
@@ -282,6 +283,7 @@ func do(ctx context.Context) error {
 			TrustBundlePath:      tunnelConfig.TrustBundle,
 			AteletSPIFFEID:       tunnelConfig.BrokerIdentity,
 			Actors:               *maxActors,
+			SandboxClass:         string(atev1alpha1.SandboxClassMicroVM),
 		})
 		if err != nil && ctx.Err() == nil {
 			serverboot.Fatal(ctx, "Failed to report worker capacity", err)
@@ -417,10 +419,18 @@ func validateActorDirs(actorDirs *ateompb.ActorDirs) error {
 	return nil
 }
 
+// supportedFidelities are the snapshot fidelities this runtime serves: the
+// rootfs upper is host-backed, so it ships with or without guest memory.
+var supportedFidelities = []ateompb.SnapshotFidelity{
+	ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
+	ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+	ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+}
+
 // validateFidelity rejects a checkpoint or restore request whose fidelity
 // this runtime cannot serve.
 func validateFidelity(fidelity ateompb.SnapshotFidelity) error {
-	if errs := resources.ValidateSnapshotFidelity(fidelity, field.NewPath("fidelity")); len(errs) > 0 {
+	if errs := resources.ValidateSnapshotFidelity(fidelity, supportedFidelities, field.NewPath("fidelity")); len(errs) > 0 {
 		return apierror.InvalidArgument("%v", errs.ToAggregate())
 	}
 	return nil

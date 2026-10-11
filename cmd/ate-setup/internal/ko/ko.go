@@ -37,7 +37,6 @@ import (
 )
 
 // versionPkg is the package whose Version variable receives the build stamp.
-// It matches VERSION_PKG in the Makefile.
 const versionPkg = "github.com/agent-substrate/substrate/internal/version"
 
 // baseImportPaths publishes each image as the last element of its import path,
@@ -46,8 +45,7 @@ const versionPkg = "github.com/agent-substrate/substrate/internal/version"
 // ko's default instead appends an md5 of the full import path, which nothing
 // outside ko can predict. images.ImageName is the other half of this: it is
 // how `--image-repo` addresses a published image, and it can only be right if
-// the images were published under this naming. The Makefile passes the same
-// flag, as KO_NAMING.
+// the images were published under this naming.
 const baseImportPaths = "--base-import-paths"
 
 // Runner invokes ko with a fixed repository root and environment.
@@ -139,6 +137,26 @@ func (r *Runner) Build(ctx context.Context, importPath string) (string, error) {
 	return lines[len(lines)-1], nil
 }
 
+// BuildTagged builds and publishes the images for importPaths in one ko
+// invocation, tagging each with tag, and returns their pushed references.
+func (r *Runner) BuildTagged(ctx context.Context, tag string, importPaths ...string) ([]string, error) {
+	defer log.Elapsed(time.Now(), "ko build --tags="+tag)
+	cmd := exec.CommandContext(ctx, r.binary, append(r.args("build", importPaths...), "--tags="+tag)...)
+	cmd.Dir = r.Root
+	cmd.Env = append(os.Environ(), r.Env...)
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = r.Stderr
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("while running ko build --tags=%s: %w", tag, err)
+	}
+	refs := strings.Fields(stdout.String())
+	if len(refs) != len(importPaths) {
+		return nil, fmt.Errorf("ko build printed %d image references for %d packages", len(refs), len(importPaths))
+	}
+	return refs, nil
+}
+
 // ResolvePath resolves a manifest file or directory.
 func (r *Runner) ResolvePath(ctx context.Context, path string) ([]byte, error) {
 	return r.Resolve(ctx, path, nil)
@@ -160,15 +178,13 @@ func (r *Runner) args(subcommand string, target ...string) []string {
 	return args
 }
 
-// ldflags returns the version stamp ko should bake into binaries. The shell
-// scripts shelled out to `make ldflags` for this; computing it here keeps the
-// value identical without depending on make.
+// ldflags returns the version stamp ko should bake into binaries.
 func (r *Runner) ldflags() []string {
 	return []string{fmt.Sprintf("-X=%s.Version=%s", versionPkg, BuildVersion(r.Root))}
 }
 
-// BuildVersion mirrors the Makefile's VERSION: `git describe`, or "dev" when
-// git has nothing to say. It is what ko stamps into the binaries.
+// BuildVersion is the VERSION environment variable, else `git describe`, or
+// "dev" when git has nothing to say. It is what ko stamps into the binaries.
 func BuildVersion(root string) string {
 	if v := os.Getenv("VERSION"); v != "" {
 		return v

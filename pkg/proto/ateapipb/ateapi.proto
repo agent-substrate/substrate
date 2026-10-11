@@ -304,8 +304,9 @@ enum SnapshotFidelity {
   // Durable volumes only. The actor resumes by cold-booting its containers
   // from the OCI image with the volumes restored.
   SNAPSHOT_FIDELITY_VOLUMES = 1;
-  // Volumes plus the root filesystem changes made since boot. Not yet
-  // supported by any sandbox runtime; templates may not request it.
+  // Volumes plus the root filesystem changes made since boot. The actor
+  // cold-boots on resume with its rootfs writes back in place. Served by the
+  // micro-VM sandbox class only.
   SNAPSHOT_FIDELITY_ROOTFS = 2;
   // Volumes, root filesystem changes, and process memory. The actor resumes
   // where it left off.
@@ -1143,14 +1144,38 @@ message SnapshotConfig {
   // more than this level, and it may package less when a layer cannot be
   // captured or is too expensive to capture at the time, for example memory
   // under host pressure. A process resumed in place on its worker keeps its
-  // memory regardless of this setting. ROOTFS is not supported yet and is
-  // rejected. Defaults to MEMORY when unset.
+  // memory regardless of this setting. ROOTFS requires
+  // sandbox_config.sandbox_class SANDBOX_CLASS_MICROVM. Defaults to MEMORY
+  // when unset.
   //
   // +k8s:required
   // +k8s:minimum=1
   // +k8s:maximum=3 # keep this in sync with the SnapshotFidelity enum
-  // +k8s:customValidation # ROOTFS is not supported yet
   SnapshotFidelity preferred_fidelity = 2;
+
+  // golden_snapshot_config configures automated golden snapshot creation.
+  // Golden snapshots are enabled when this config is omitted.
+  //
+  // +k8s:optional
+  GoldenSnapshotConfig golden_snapshot_config = 5;
+}
+
+// GoldenSnapshotMode selects whether a template builds a golden snapshot.
+enum GoldenSnapshotMode {
+  GOLDEN_SNAPSHOT_MODE_UNSPECIFIED = 0;
+  GOLDEN_SNAPSHOT_MODE_ENABLED = 1;
+  GOLDEN_SNAPSHOT_MODE_DISABLED = 2;
+}
+
+// GoldenSnapshotConfig controls automated golden snapshot creation for a template.
+message GoldenSnapshotConfig {
+  // mode defaults to ENABLED when unspecified. DISABLED skips creating the
+  // template's golden actor and tag.
+  //
+  // +k8s:required
+  // +k8s:minimum=1
+  // +k8s:maximum=2 # keep this in sync with the GoldenSnapshotMode enum
+  GoldenSnapshotMode mode = 1;
 }
 
 // Container is a single application container of an ActorTemplate.
@@ -1554,7 +1579,7 @@ message CreateActorTemplateRequest {
   // version, timestamps) is ignored, as are the status fields.
   //
   // +k8s:required
-  // +k8s:customValidation # volume_mounts must reference declared volumes
+  // +k8s:customValidation # volume_mounts must reference declared volumes; ROOTFS fidelity requires the micro-VM sandbox class
   ActorTemplate actor_template = 1;
 }
 
@@ -1782,7 +1807,7 @@ message MintActorJWTRequest {
   // +k8s:maxItems=16 # guardrail; tokens realistically bind a handful of audiences
   // +k8s:listType=set
   // +k8s:eachVal=+k8s:maxLength=512 # audiences are caller-defined URIs; bound only
-  repeated string audience = 1;
+  repeated string audiences = 1;
 
   // Lifetime of the JWT, in seconds.
   //
@@ -2221,23 +2246,83 @@ message WorkerStatus {
   // +k8s:minimum=0
   int64 observed_epoch = 4;
 
-  // Hardware identity reported by the Worker at registration.
+  // Runtime that new and cold-booted actors start under, as reported by the
+  // Worker at registration. Snapshots matching default_runtime can also
+  // warm-boot on this worker.
   //
   // +k8s:optional
-  HardwareIdentity hardware = 5;
+  SandboxRuntime default_runtime = 5;
+
+  // Additional runtimes (excluding default_runtime) that this worker can
+  // restore snapshots from right now.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=32
+  // +k8s:listType=atomic
+  repeated SandboxRuntime restorable_runtimes = 6;
 }
 
-// HardwareIdentity identifies the hardware of a Worker or the Worker a
-// snapshot was captured on.
-message HardwareIdentity {
-  // Key-value pairs describing hardware properties (currently
-  // "architecture"; TODO: add "cpu_vendor", "cpu_model", etc.).
+// SandboxRuntime describes a sandbox runtime and its compatibility identity as
+// reported by a Worker or recorded on a snapshot.
+message SandboxRuntime {
+  // e.g. "gvisor", "microvm"
   //
-  // +k8s:optional
-  // +k8s:maxProperties=32
-  // +k8s:eachKey=+k8s:maxLength=128
-  // +k8s:eachVal=+k8s:maxLength=256
-  map<string, string> attributes = 1;
+  // +k8s:required
+  // +k8s:maxLength=63
+  string sandbox_class = 1;
+
+  // Primary compatibility version stamped onto an actor's snapshot when a
+  // checkpoint is taken on this runtime. Snapshots matching `version`
+  // can warm-boot on this runtime.
+  // TODO: Add support for additional compatibility versions.
+  //
+  // +k8s:required
+  VersionedSandboxCompat version = 2;
+
+  // TODO: Add an informational SandboxConfig version name (e.g. "gvisor-2")
+  // once workers report one.
+}
+
+// VersionedSandboxCompat holds the compatibility schema version and the
+// key-value compatibility attributes for a SandboxRuntime.
+message VersionedSandboxCompat {
+  // Compatibility schema version (e.g. "v1") defining which runtime and
+  // hardware attributes are recorded and how they are computed.
+  //
+  // +k8s:required
+  // +k8s:maxLength=64
+  string schema_version = 1;
+
+  // Key-value compatibility attributes defined by this schema version, covering
+  // both runtime assets (e.g. "gvisor_asset_hash") and effective guest hardware
+  // features after masking (e.g. "architecture", "cpu_features").
+  // Matched against a snapshot under the same schema_version: every attribute
+  // on the snapshot must be present on the worker with an equal value; keys
+  // only the worker has are ignored. Bump schema_version when a key's meaning
+  // changes or older snapshots must no longer match.
+  // Order as sent does not matter: ate-api-server sorts attributes by key
+  // before recording them.
+  //
+  // +k8s:required
+  // +k8s:maxItems=32
+  // +k8s:listType=map
+  // +k8s:listMapKey=key
+  repeated AttributeEntry attributes = 2;
+}
+
+// AttributeEntry is a single key-value compatibility attribute.
+message AttributeEntry {
+  // Attribute name (e.g. "architecture", "cpu_features", "gvisor_asset_hash").
+  //
+  // +k8s:required
+  // +k8s:maxLength=128
+  string key = 1;
+
+  // Attribute value corresponding to key.
+  //
+  // +k8s:required
+  // +k8s:maxLength=256
+  string value = 2;
 }
 
 // WorkerResources represents a set of resources.
@@ -2298,15 +2383,15 @@ message ActorAssignment {
 // authorization: Control is the client-facing API, while these RPCs are served
 // only to an atelet, and only for the Workers on its own node.
 service WorkerService {
-  // RegisterWorker records what a Worker can hold and its hardware identity in
-  // one write, so a Worker is never schedulable without hardware to match
-  // snapshots against. Capacity and hardware are the Worker's to report rather
-  // than the control plane's to infer: they are what the ateom can actually
-  // supply and expose, only its node can observe them, and a fleet may run
-  // mixed ateom versions.
+  // RegisterWorker records what a Worker can hold and its supported sandbox
+  // runtimes in one write, so a Worker is never schedulable without runtime
+  // compatibility information to match snapshots against. Capacity and
+  // runtimes are the Worker's to report rather than the control plane's to
+  // infer: they are what the worker can actually supply and expose, only its
+  // node can observe them, and a fleet may run mixed versions.
   //
   // atelet calls this with its own client certificate, as it does for
-  // MintCert. Idempotent: re-sending the same capacity and hardware is not a
+  // MintCert. Idempotent: re-sending the same capacity and runtimes is not a
   // write.
   rpc RegisterWorker(RegisterWorkerRequest) returns (RegisterWorkerResponse);
 
@@ -2353,11 +2438,20 @@ message RegisterWorkerRequest {
   // +k8s:required
   WorkerResources capacity = 2;
 
-  // Hardware identity reported by the Worker. Like capacity, this replaces
-  // what is recorded on the Worker.
+  // Runtime that new and cold-booted actors start under.
+  // Snapshots matching default_runtime can also warm-boot on this worker.
+  // Like capacity, this replaces what is recorded on the Worker.
   //
   // +k8s:required
-  HardwareIdentity hardware = 3;
+  SandboxRuntime default_runtime = 3;
+
+  // Additional runtimes (excluding default_runtime) that this worker can
+  // restore snapshots from right now.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=32
+  // +k8s:listType=atomic
+  repeated SandboxRuntime restorable_runtimes = 4;
 }
 
 message RegisterWorkerResponse {
