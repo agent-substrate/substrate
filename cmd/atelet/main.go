@@ -163,6 +163,7 @@ func main() {
 	if err := validateSnapshotWorkerFlags(); err != nil {
 		serverboot.Fatal(ctx, "Invalid snapshot worker flags", err)
 	}
+	logNodeLimits(ctx, "/proc/sys")
 
 	// Kept separate from ctx so in-flight work (e.g. a Checkpoint/Restore
 	// streaming a multi-GiB snapshot) is not cancelled the moment SIGTERM
