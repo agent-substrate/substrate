@@ -74,6 +74,8 @@ data:
           # ipv4_compat rather than a second socket: IPv4 peers arrive as
           # ::ffff: and nothing here reads the peer -- identity is the cert.
           socket_address: { address: "::", ipv4_compat: true, port_value: 443 }
+        # Limit single I/O read to 64 Kb to prevent overly active actors from starving other actors.
+        per_connection_buffer_limit_bytes: 65535
         filter_chains:
         # Named so ext_proc can read it back as xds.filter_chain_name. Must
         # match EgressFilterChainName in
@@ -113,6 +115,9 @@ data:
               http2_protocol_options:
                 # 100 streams per connection provides good balance between connection sharing and worker load.
                 max_concurrent_streams: 100
+                # Set windows sizes to values that balance throughput and memory usage.
+                initial_stream_window_size: 1048576
+                initial_connection_window_size: 1048576
               upgrade_configs:
               - upgrade_type: CONNECT
               # TODO(liorlieberman): Can we make this cleaner?
