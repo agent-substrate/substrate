@@ -137,10 +137,7 @@ func (w *ActorWorkflow) ensureMarkedSuspending(ctx context.Context, actorRef res
 	if actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_PAUSED {
 		localSnap := findLatestLocalSnapshot(actor.GetStatus())
 		if localSnap == nil {
-			if err := crashActor(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageLocalSnapshotNodeUnknown); err != nil {
-				slog.ErrorContext(ctx, "Failed to crash actor", slog.String("err", err.Error()))
-			}
-			return nil, fmt.Errorf("actor is CRASHED because it was in PAUSED state with no completed local snapshot")
+			return nil, crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageLocalSnapshotMissing)
 		}
 		snapshotName = localSnap.GetUuid()
 	} else {
@@ -238,10 +235,7 @@ func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef reso
 	assignment := actor.GetStatus().GetWorkerAssignment()
 	if assignment == nil {
 		// Missing active worker pod reference in SUSPENDING state indicates corrupted store state.
-		if err := crashActor(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageWorkerAssignmentMissing); err != nil {
-			slog.ErrorContext(ctx, "Failed to crash actor", slog.String("err", err.Error()))
-		}
-		return "", fmt.Errorf("actor is CRASHED because it was in SUSPENDING state but has no active worker")
+		return "", crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageWorkerAssignmentMissing)
 	}
 
 	ateletConn, err := w.dialer.DialForAteletOnNode(assignment.GetNodeName())
@@ -294,14 +288,14 @@ func (w *ActorWorkflow) ensurePausedSnapshotUploaded(ctx context.Context, actorR
 	defer func() { err = done(err) }()
 
 	localSnap := findLatestLocalSnapshot(actor.GetStatus())
+	if localSnap == nil {
+		return "", crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageLocalSnapshotMissing)
+	}
 	nodeName := actor.GetStatus().GetAssignedNode()
-	if localSnap == nil || nodeName == "" {
+	if nodeName == "" {
 		// Without the node the snapshot can never be found (mirrors
 		// FinalizePaused, which crashes rather than record an unknown node).
-		if err := crashActor(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageLocalSnapshotNodeUnknown); err != nil {
-			slog.ErrorContext(ctx, "Failed to crash actor", slog.String("err", err.Error()))
-		}
-		return "", fmt.Errorf("actor is CRASHED because it was suspending a paused snapshot with no node recorded")
+		return "", crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageLocalSnapshotNodeUnknown)
 	}
 
 	ateletConn, err := w.dialer.DialForAteletOnNode(nodeName)
@@ -361,6 +355,8 @@ func (w *ActorWorkflow) ensureVolumesDetached(ctx context.Context, actor *ateapi
 // owned by this actor), records the in-progress snapshot as the actor's
 // durable snapshot, and commits SUSPENDED with the assignment cleared in a
 // single update, then releases the durable snapshot that update replaced.
+// When the latest snapshot has no durable snapshot to record, it commits
+// CRASHED instead and fails the step.
 // It re-reads the actor first so an out-of-band transition (e.g. the syncer
 // crashing the actor after its worker died) is not overwritten: with no
 // assignment left there is nothing to finalize.
@@ -373,14 +369,13 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 	// that stalls and then fails still reports where the time went; steps not
 	// reached (or skipped) log zero.
 	start := time.Now()
-	var dGetActor, dReleaseWorker, dRefetchActor, dUpdateActor, dReleaseSnapshot time.Duration
+	var dGetActor, dReleaseWorker, dUpdateActor, dReleaseSnapshot time.Duration
 	defer func() {
 		slog.InfoContext(ctx, "FinalizeSuspended store call durations",
 			slog.Any("actor", actorRef),
 			slog.Duration("total", time.Since(start)),
 			slog.Duration("get_actor", dGetActor),
 			slog.Duration("release_worker", dReleaseWorker),
-			slog.Duration("refetch_actor", dRefetchActor),
 			slog.Duration("update_actor", dUpdateActor),
 			slog.Duration("release_snapshot", dReleaseSnapshot))
 	}()
@@ -391,6 +386,9 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 	if err != nil {
 		return nil, err
 	}
+	if snapshotAtLatestGeneration(latestActor.GetStatus()).GetDurableSnapshot() == nil {
+		return nil, crashActorAndFail(ctx, w.store, actorRef, ateattr.OperationSuspend, crashMessageDurableSnapshotMissing)
+	}
 
 	// 1. Free the worker (if it hasn't been freed yet)
 	if latestActor.GetStatus().GetWorkerAssignment() != nil {
@@ -400,29 +398,18 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 		if err != nil {
 			return nil, err
 		}
-
-		// Re-fetch the actor now that the worker is freed.
-		t = time.Now()
-		latestActor, err = w.store.GetActor(ctx, actorRef)
-		dRefetchActor = time.Since(t)
-		if err != nil {
-			return nil, err
-		}
 	}
 
 	// 2. Finalize the actor: record its new durable snapshot and mark it SUSPENDED. This
 	// must run even with no worker assignment (nothing to free), or the actor
 	// would be left SUSPENDING forever with the workflow reporting success.
+	// The precondition pins the version checked above, so an out-of-band write
+	// since then fails the update instead of being overwritten.
 	t = time.Now()
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
-		snap := snapshotAtLatestGeneration(toUpdate.Status)
-		if snap == nil {
-			return fmt.Errorf("actor %s has no latest snapshot", actorRef)
-		}
-		if inProgressSt := snap.GetDurableSnapshot(); inProgressSt.GetObject().GetSnapshotUri() != "" {
-			inProgressSt.Status = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
-		}
+		inProgressSt := snapshotAtLatestGeneration(toUpdate.Status).GetDurableSnapshot()
+		inProgressSt.Status = ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED
 		// Remove all local snapshots since they are superseded by the new durable snapshot.
 		// TODO: This will change when we merge pause and suspend and allow for both local
 		// and durable snapshots to be kept.
