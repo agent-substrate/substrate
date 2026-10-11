@@ -20,16 +20,24 @@ import (
 	"testing"
 )
 
+func resetRootFlags(t *testing.T) {
+	t.Helper()
+	rootCmd.SetArgs(nil)
+	rootCmd.SetOut(nil)
+	rootCmd.SetErr(nil)
+	if f := rootCmd.Flags().Lookup("version"); f != nil {
+		_ = f.Value.Set("false")
+		f.Changed = false
+	}
+	if f := rootCmd.PersistentFlags().Lookup("verbose"); f != nil {
+		_ = f.Value.Set("0")
+		f.Changed = false
+	}
+	verbosity = 0
+}
+
 func TestVersionFlag(t *testing.T) {
-	t.Cleanup(func() {
-		rootCmd.SetArgs(nil)
-		rootCmd.SetOut(nil)
-		rootCmd.SetErr(nil)
-		if f := rootCmd.Flags().Lookup("version"); f != nil {
-			_ = f.Value.Set("false")
-			f.Changed = false
-		}
-	})
+	t.Cleanup(func() { resetRootFlags(t) })
 
 	var out, errOut bytes.Buffer
 	rootCmd.SetOut(&out)
@@ -43,19 +51,53 @@ func TestVersionFlag(t *testing.T) {
 		t.Errorf("Execute(--version) output = %q, want prefix %q", out.String(), "kubectl-ate version ")
 	}
 
-	if f := rootCmd.Flags().Lookup("version"); f != nil {
-		if f.Shorthand != "" {
-			t.Errorf("--version shorthand = %q, want empty", f.Shorthand)
-		}
-		_ = f.Value.Set("false")
-		f.Changed = false
+	if f := rootCmd.Flags().Lookup("version"); f != nil && f.Shorthand != "" {
+		t.Errorf("--version shorthand = %q, want empty", f.Shorthand)
 	}
 
+	resetRootFlags(t)
 	out.Reset()
 	errOut.Reset()
+	rootCmd.SetOut(&out)
+	rootCmd.SetErr(&errOut)
 	rootCmd.SetArgs([]string{"-v"})
-	err := rootCmd.Execute()
-	if err == nil || !strings.Contains(err.Error(), "unknown shorthand flag: 'v'") {
-		t.Fatalf("Execute(-v) error = %v, want unknown shorthand flag 'v'", err)
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("Execute(-v) unexpected error: %v", err)
+	}
+	if strings.HasPrefix(out.String(), "kubectl-ate version ") {
+		t.Errorf("Execute(-v) printed version %q, want help output", out.String())
+	}
+}
+
+func TestVerboseFlagCounting(t *testing.T) {
+	t.Cleanup(func() { resetRootFlags(t) })
+
+	tests := []struct {
+		name string
+		args []string
+		want int
+	}{
+		{name: "default", args: nil, want: 0},
+		{name: "single short", args: []string{"-v"}, want: 1},
+		{name: "stacked short 2", args: []string{"-vv"}, want: 2},
+		{name: "stacked short 3", args: []string{"-vvv"}, want: 3},
+		{name: "stacked short 5", args: []string{"-vvvvv"}, want: 5},
+		{name: "repeated short", args: []string{"-v", "-v", "-v"}, want: 3},
+		{name: "single long", args: []string{"--verbose"}, want: 1},
+		{name: "repeated long", args: []string{"--verbose", "--verbose"}, want: 2},
+		{name: "mixed short and long", args: []string{"-vv", "--verbose"}, want: 3},
+		{name: "explicit value", args: []string{"--verbose=4"}, want: 4},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			resetRootFlags(t)
+			if err := rootCmd.PersistentFlags().Parse(tc.args); err != nil {
+				t.Fatalf("Parse(%v) unexpected error: %v", tc.args, err)
+			}
+			if verbosity != tc.want {
+				t.Errorf("verbosity = %d, want %d", verbosity, tc.want)
+			}
+		})
 	}
 }

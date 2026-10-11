@@ -69,6 +69,7 @@ These flags can be appended to any command:
 | `--token-file` | | Path to a bearer token for ate-api authentication, or `-` for stdin | Kubernetes ServiceAccount token |
 | `--output` | `-o` | Output format (`table`, `json`, `yaml`) | `table` |
 | `--trace` | | Enable on-demand tracing for the request | `false` |
+| `--verbose` | `-v` | Increase output verbosity; may be repeated or stacked (e.g., `-v`, `-vv`, `-vvvvv`) | `0` |
 
 Pass `--version` (`kubectl ate --version`) to print the CLI version and exit.
 
