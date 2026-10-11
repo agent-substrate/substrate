@@ -138,7 +138,7 @@ func crashActor(ctx context.Context, st crashActorStore, actorRef resources.Acto
 	// The worker is released in the same write, so a failure leaves both the
 	// actor and its assignment for the caller's retry.
 	if _, err := st.UpdateActorAndRelease(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapi.Actor) error {
-		toUpdate.Status.State = ateapi.ActorState_ACTOR_STATE_CRASHED
+		setActorState(toUpdate.Status, ateapi.ActorState_ACTOR_STATE_CRASHED)
 		if !wasAlreadyCrashed {
 			toUpdate.Status.Crash = newActorCrash(opName, message)
 		}
