@@ -295,6 +295,10 @@ func PrintActorTemplatesTo(out io.Writer, templates []*ateapipb.ActorTemplate, f
 		fmt.Fprintln(w, "ATESPACE\tNAME\tSANDBOX CLASS\tGOLDEN TAG\tERROR\tAGE")
 		for _, t := range templates {
 			gss := t.GetStatus().GetGoldenSnapshotStatus()
+			goldenTag := gss.GetGoldenTag().GetName()
+			if t.GetSnapshotConfig().GetGoldenSnapshotConfig().GetMode() == ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED {
+				goldenTag = "DISABLED"
+			}
 			// Error messages are too long for a table cell.
 			errFlag := ""
 			if gss.GetErrorMessage() != "" {
@@ -303,7 +307,7 @@ func PrintActorTemplatesTo(out io.Writer, templates []*ateapipb.ActorTemplate, f
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
 				t.GetMetadata().GetAtespace(), t.GetMetadata().GetName(),
 				t.GetSandboxConfig().GetSandboxClass(),
-				gss.GetGoldenTag().GetName(), errFlag,
+				goldenTag, errFlag,
 				formatAge(t.GetMetadata().GetCreateTime()))
 		}
 		return w.Flush()

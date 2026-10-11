@@ -151,8 +151,8 @@ const (
 	// (currently DurableDir-typed volumes). Memory and the rest of rootfs are
 	// excluded.
 	SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES SnapshotFidelity = 1
-	// Volumes plus the root filesystem changes made since boot. No runtime
-	// captures this yet; requests carrying it are rejected.
+	// Volumes plus the root filesystem changes made since boot. Served by the
+	// micro-VM runtime only; other runtimes reject requests carrying it.
 	SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS SnapshotFidelity = 2
 	// Capture process memory plus the full filesystem delta on top of the OCI
 	// image (including any attached DurableDir volumes).
@@ -2879,11 +2879,10 @@ type UploadPausedCheckpointRequest struct {
 	LocalSnapshotName string `protobuf:"bytes,6,opt,name=local_snapshot_name,json=localSnapshotName,proto3" json:"local_snapshot_name,omitempty"`
 	// Destination object-storage URI (the actor's in-progress snapshot URI).
 	DestinationSnapshotUri string `protobuf:"bytes,7,opt,name=destination_snapshot_uri,json=destinationSnapshotUri,proto3" json:"destination_snapshot_uri,omitempty"`
-	// Fidelity the uploaded snapshot must have (MEMORY or VOLUMES). The
-	// fidelity the pause checkpoint captured is not sent: atelet reads it from
-	// the local snapshot's own manifest, which is authoritative. When they
-	// differ, atelet converts where possible (a MEMORY capture to a VOLUMES
-	// upload of the volume files ateom reported) and rejects otherwise.
+	// Fidelity the uploaded snapshot must have. The fidelity the pause
+	// checkpoint captured is not sent: atelet reads it from the local
+	// snapshot's own manifest, which is authoritative, and rejects the upload
+	// if the two differ.
 	DesiredFidelity SnapshotFidelity `protobuf:"varint,8,opt,name=desired_fidelity,json=desiredFidelity,proto3,enum=atelet.SnapshotFidelity" json:"desired_fidelity,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache

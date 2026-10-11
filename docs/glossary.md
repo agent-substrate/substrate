@@ -9,7 +9,9 @@ For how the pieces fit together, see the [Architecture](architecture.md) and
 
 - **ActorTemplate** (ate API resource): the definition of an actor "class":
   the container image(s) and snapshot configuration. Creating an
-  `ActorTemplate` triggers creation of a [Golden Snapshot](#snapshots). It is
+  `ActorTemplate` triggers creation of a [Golden Snapshot](#snapshots) by
+  default. Set `snapshotConfig.goldenSnapshotConfig.mode` to
+  `GOLDEN_SNAPSHOT_MODE_DISABLED` to skip it. The template is
   treated as immutable: you create a new template for a new version rather
   than editing an existing one. It is analogous to a Pod template, but for a
   checkpointable workload. ActorTemplates are created and managed through the
@@ -116,8 +118,10 @@ for etcd.
     without the cost of a memory image. On Resume the containers start
     afresh from the OCI image with the `DurableDir` contents restored.
   - **`ROOTFS`**: volumes plus the root filesystem changes made since boot.
-    Defined in the API but not supported by any sandbox runtime yet;
-    templates that request it are rejected.
+    Process memory is discarded; on Resume the containers cold-boot from the
+    OCI image with their rootfs writes back in place. Served by the micro-VM
+    sandbox class only: gVisor keeps rootfs changes inside its memory
+    checkpoint, so a gVisor template that requests it is rejected.
   - **`MEMORY`**: volumes, rootfs changes, and process memory. Used to
     capture everything needed to resume hot.
 
@@ -129,10 +133,12 @@ for etcd.
   less when a layer cannot be captured or is too expensive to capture at
   the time. A process resumed in place keeps its memory regardless.
 
-- **Golden Snapshot**: the initial checkpoint captured once, when an
+- **Golden Snapshot**: the initial checkpoint normally captured once, when an
   `ActorTemplate` is created, from a temporary "golden" boot of the workload.
-  By default an Actor of that template is first restored from this shared
-  snapshot. It is always a `MEMORY` capture.
+  Templates with golden snapshot creation disabled do not create one. By
+  default an Actor of that template is first restored from this shared
+  snapshot when it is available; otherwise it cold-boots. It is always a
+  `MEMORY` capture.
 
 - **Last Snapshot**: the most recent per-Actor snapshot, written on Suspend and
   used to restore that specific Actor on the next Resume.

@@ -325,19 +325,26 @@ func testActorDirs() *ateompb.ActorDirs {
 }
 
 func TestValidateSnapshotFidelity(t *testing.T) {
+	volumes := ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
+	rootfs := ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
+	memory := ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
+	all := []ateompb.SnapshotFidelity{volumes, rootfs, memory}
+	noRootfs := []ateompb.SnapshotFidelity{volumes, memory}
 	for _, tc := range []struct {
-		name     string
-		fidelity ateompb.SnapshotFidelity
-		wantErr  bool
+		name      string
+		fidelity  ateompb.SnapshotFidelity
+		supported []ateompb.SnapshotFidelity
+		wantErr   bool
 	}{
-		{"volumes", ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, false},
-		{"memory", ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, false},
-		{"unspecified", ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED, true},
-		{"rootfs not supported yet", ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, true},
-		{"outside the enum", ateompb.SnapshotFidelity(99), true},
+		{"volumes", volumes, all, false},
+		{"memory", memory, all, false},
+		{"rootfs where supported", rootfs, all, false},
+		{"rootfs where unsupported", rootfs, noRootfs, true},
+		{"unspecified", ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED, all, true},
+		{"outside the enum", ateompb.SnapshotFidelity(99), all, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			errs := ValidateSnapshotFidelity(tc.fidelity, field.NewPath("fidelity"))
+			errs := ValidateSnapshotFidelity(tc.fidelity, tc.supported, field.NewPath("fidelity"))
 			if gotErr := len(errs) != 0; gotErr != tc.wantErr {
 				t.Fatalf("ValidateSnapshotFidelity(%v) = %v, wantErr %t", tc.fidelity, errs, tc.wantErr)
 			}

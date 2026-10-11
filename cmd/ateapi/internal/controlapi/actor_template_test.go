@@ -181,6 +181,7 @@ func TestCreateActorTemplateIgnoresServerOwnedFields(t *testing.T) {
 
 	want := validActorTemplate(func(tmpl *ateapipb.ActorTemplate) {
 		tmpl.Metadata.Version = 1
+		tmpl.SnapshotConfig.GoldenSnapshotConfig = &ateapipb.GoldenSnapshotConfig{Mode: ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_ENABLED}
 		tmpl.WorkerSelector = in.GetWorkerSelector()
 		tmpl.Containers = in.GetContainers()
 		tmpl.Resources = in.GetResources()
