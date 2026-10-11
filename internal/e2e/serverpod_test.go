@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/yaml"
@@ -284,5 +285,43 @@ func TestRenderServerPod_Volumes(t *testing.T) {
 		if !volumes[m.Name] {
 			t.Errorf("volumeMount %q names no volume; the pod has %v", m.Name, volumes)
 		}
+	}
+}
+
+func TestRenderServerPod_HTTPSProbe(t *testing.T) {
+	pod, _ := renderServerPodDocs(t, ServerPod{Name: "tls", Port: 8443, HealthScheme: corev1.URISchemeHTTPS})
+	probe := pod.Spec.Containers[0].ReadinessProbe.HTTPGet
+	if probe.Scheme != corev1.URISchemeHTTPS || probe.Port.IntValue() != 8443 {
+		t.Fatalf("probe = %+v, want HTTPS on 8443", probe)
+	}
+}
+
+func TestServerEndpointReady(t *testing.T) {
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "origin", Namespace: "test", UID: "current"}, Status: corev1.PodStatus{PodIP: "10.0.0.2"}}
+	base := discoveryv1.EndpointSlice{
+		Ports:     []discoveryv1.EndpointPort{{Port: ptr.To(int32(8443)), Protocol: ptr.To(corev1.ProtocolTCP)}},
+		Endpoints: []discoveryv1.Endpoint{{Addresses: []string{"10.0.0.2"}, TargetRef: &corev1.ObjectReference{Kind: "Pod", Namespace: "test", Name: "origin", UID: "current"}, Conditions: discoveryv1.EndpointConditions{Ready: ptr.To(true)}}},
+	}
+	cases := []struct {
+		name   string
+		change func(*discoveryv1.EndpointSlice)
+		want   bool
+	}{
+		{"ready origin", func(*discoveryv1.EndpointSlice) {}, true},
+		{"not ready", func(s *discoveryv1.EndpointSlice) { s.Endpoints[0].Conditions.Ready = ptr.To(false) }, false},
+		{"unknown readiness", func(s *discoveryv1.EndpointSlice) { s.Endpoints[0].Conditions.Ready = nil }, false},
+		{"previous pod", func(s *discoveryv1.EndpointSlice) { s.Endpoints[0].TargetRef.UID = "previous" }, false},
+		{"wrong address", func(s *discoveryv1.EndpointSlice) { s.Endpoints[0].Addresses = []string{"10.0.0.3"} }, false},
+		{"wrong port", func(s *discoveryv1.EndpointSlice) { s.Ports[0].Port = ptr.To(int32(443)) }, false},
+		{"terminating", func(s *discoveryv1.EndpointSlice) { s.Endpoints[0].Conditions.Terminating = ptr.To(true) }, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := base.DeepCopy()
+			tc.change(s)
+			if got := serverEndpointReady([]discoveryv1.EndpointSlice{*s}, pod, 8443); got != tc.want {
+				t.Fatalf("ready = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

@@ -23,6 +23,8 @@ import (
 	"testing"
 
 	"github.com/agent-substrate/substrate/internal/tarutil"
+
+	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 )
 
 // upperDirWith returns a rootfs upper directory laid out the way the host
@@ -94,6 +96,51 @@ func TestRootfsUpperRoundTrip(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dst, "app_ovl/fs/stale.txt")); !os.IsNotExist(err) {
 		t.Errorf("stale pre-restore content survived untarRootfsUpper (stat err = %v), want it wiped", err)
 	}
+}
+
+// TestStageRootfsUpper pins the one decision a cold boot makes about the
+// host upper dir: without a snapshot dir it starts pristine, wiping whatever
+// a previous activation left; with one it is re-materialized from the tars.
+func TestStageRootfsUpper(t *testing.T) {
+	containers := []string{"app_ovl"}
+	src := upperDirWith(t, map[string]string{"app_ovl/fs/home/agent/notes.txt": "rootfs write"})
+	snapshotDir := t.TempDir()
+	if err := tarRootfsUpper(t.Context(), src, snapshotDir, containers); err != nil {
+		t.Fatalf("tarRootfsUpper: %v", err)
+	}
+
+	t.Run("pristine without a snapshot", func(t *testing.T) {
+		stale := upperDirWith(t, map[string]string{"app_ovl/fs/stale.txt": "stale"})
+		dirs := &ateompb.ActorDirs{RootDir: filepath.Dir(stale)}
+		if err := os.Rename(stale, rootfsUpperDir(dirs)); err != nil {
+			t.Fatal(err)
+		}
+		if err := stageRootfsUpper(dirs, "", containers); err != nil {
+			t.Fatalf("stageRootfsUpper: %v", err)
+		}
+		entries, err := os.ReadDir(rootfsUpperDir(dirs))
+		if err != nil || len(entries) != 0 {
+			t.Errorf("upper dir after pristine staging: ReadDir = %v, %v; want an empty directory", entries, err)
+		}
+	})
+
+	t.Run("re-materialized from a snapshot", func(t *testing.T) {
+		stale := upperDirWith(t, map[string]string{"app_ovl/fs/stale.txt": "stale"})
+		dirs := &ateompb.ActorDirs{RootDir: filepath.Dir(stale)}
+		if err := os.Rename(stale, rootfsUpperDir(dirs)); err != nil {
+			t.Fatal(err)
+		}
+		if err := stageRootfsUpper(dirs, snapshotDir, containers); err != nil {
+			t.Fatalf("stageRootfsUpper: %v", err)
+		}
+		got, err := os.ReadFile(filepath.Join(rootfsUpperDir(dirs), "app_ovl/fs/home/agent/notes.txt"))
+		if err != nil || string(got) != "rootfs write" {
+			t.Errorf("restored upper content = %q, %v; want the snapshot's write", got, err)
+		}
+		if _, err := os.Stat(filepath.Join(rootfsUpperDir(dirs), "app_ovl/fs/stale.txt")); !os.IsNotExist(err) {
+			t.Errorf("stale content survived staging from a snapshot (stat err = %v), want it wiped", err)
+		}
+	})
 }
 
 // The snapshot is untrusted, so it must not decide any directory above the

@@ -220,46 +220,85 @@ func TestDurableDirLifecycle(t *testing.T) {
 				fidelity:               ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 				wantMemoryAfterPause:   2,
 				wantFileAfterPause:     2,
+				wantRootfsAfterPause:   2,
 				wantMemoryAfterSuspend: 3,
 				wantFileAfterSuspend:   3,
+				wantRootfsAfterSuspend: 3,
 			},
 		},
 		{
-			// Pause captures the same Data scope as suspend, so memory
-			// cold-boots on every resume.
+			// Pause captures the same VOLUMES fidelity as suspend, so memory
+			// and rootfs writes cold-boot on every resume.
 			name: "preferredFidelity:VOLUMES",
 			tc: actorLifecycleTestCase{
 				fidelity:               ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 				wantMemoryAfterPause:   1,
 				wantFileAfterPause:     2,
+				wantRootfsAfterPause:   1,
 				wantMemoryAfterSuspend: 1,
 				wantFileAfterSuspend:   3,
+				wantRootfsAfterSuspend: 1,
 			},
 		},
 		{
-			// Suspend from PAUSED uploads the Full local snapshot.
+			// ROOTFS keeps the rootfs writes across a cold boot: the memory
+			// counter restarts while the rootfs counter continues.
+			name: "preferredFidelity:ROOTFS",
+			tc: actorLifecycleTestCase{
+				fidelity:               ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+				wantMemoryAfterPause:   1,
+				wantFileAfterPause:     2,
+				wantRootfsAfterPause:   2,
+				wantMemoryAfterSuspend: 1,
+				wantFileAfterSuspend:   3,
+				wantRootfsAfterSuspend: 3,
+				microVMOnly:            true,
+			},
+		},
+		{
+			// Suspend from PAUSED uploads the MEMORY local snapshot.
 			name: "preferredFidelity:MEMORY, suspend from PAUSED",
 			tc: actorLifecycleTestCase{
 				fidelity:               ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 				wantMemoryAfterPause:   2,
 				wantFileAfterPause:     2,
+				wantRootfsAfterPause:   2,
 				wantMemoryAfterSuspend: 3,
 				wantFileAfterSuspend:   3,
+				wantRootfsAfterSuspend: 3,
 				wantSnapshotFidelity:   ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 				suspendWhilePaused:     true,
 			},
 		},
 		{
-			// Suspend from PAUSED uploads the Data local snapshot.
+			// Suspend from PAUSED uploads the VOLUMES local snapshot.
 			name: "preferredFidelity:VOLUMES, suspend from PAUSED",
 			tc: actorLifecycleTestCase{
 				fidelity:               ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 				wantMemoryAfterPause:   1,
 				wantFileAfterPause:     2,
+				wantRootfsAfterPause:   1,
 				wantMemoryAfterSuspend: 1,
 				wantFileAfterSuspend:   3,
+				wantRootfsAfterSuspend: 1,
 				wantSnapshotFidelity:   ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 				suspendWhilePaused:     true,
+			},
+		},
+		{
+			// Suspend from PAUSED uploads the ROOTFS local snapshot.
+			name: "preferredFidelity:ROOTFS, suspend from PAUSED",
+			tc: actorLifecycleTestCase{
+				fidelity:               ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+				wantMemoryAfterPause:   1,
+				wantFileAfterPause:     2,
+				wantRootfsAfterPause:   2,
+				wantMemoryAfterSuspend: 1,
+				wantFileAfterSuspend:   3,
+				wantRootfsAfterSuspend: 3,
+				wantSnapshotFidelity:   ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+				suspendWhilePaused:     true,
+				microVMOnly:            true,
 			},
 		},
 	}
@@ -267,7 +306,7 @@ func TestDurableDirLifecycle(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			if test.tc.microVMOnly && !e2e.IsMicroVM() {
-				t.Skipf("Skipping %s: micro-VM-only case (durable-data extraction from a Full capture)", test.name)
+				t.Skipf("Skipping %s: only the micro-VM runtime serves this fidelity", test.name)
 			}
 			t.Parallel()
 			runActorLifecycleTestCase(t, "durabledir-lifecycle", createActorTemplate, test.tc)
@@ -305,6 +344,20 @@ func TestMultipleDurableDirLifecycle(t *testing.T) {
 				wantMemoryAfterSuspend: 1,
 				wantFileAfterSuspend:   3,
 				checkSecondFileCounter: true,
+			},
+		},
+		{
+			name: "preferredFidelity:ROOTFS",
+			tc: actorLifecycleTestCase{
+				fidelity:               ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+				wantMemoryAfterPause:   1,
+				wantFileAfterPause:     2,
+				wantRootfsAfterPause:   2,
+				wantMemoryAfterSuspend: 1,
+				wantFileAfterSuspend:   3,
+				wantRootfsAfterSuspend: 3,
+				checkSecondFileCounter: true,
+				microVMOnly:            true,
 			},
 		},
 	}
@@ -514,6 +567,12 @@ type actorLifecycleTestCase struct {
 	wantMemoryAfterSuspend int
 	wantFileAfterSuspend   int
 
+	// wantRootfsAfterPause and wantRootfsAfterSuspend assert the counter the
+	// workload keeps in a file on its root filesystem: ROOTFS and MEMORY
+	// snapshots carry it, VOLUMES resets it. Zero skips the check.
+	wantRootfsAfterPause   int
+	wantRootfsAfterSuspend int
+
 	// checkSecondFileCounter also asserts the counter kept in a SECOND durable
 	// volume. Both volumes are written on every request, so it must track the
 	// first counter exactly — if one volume were dropped or restored into the
@@ -585,6 +644,9 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 	if tc.checkSecondFileCounter {
 		validateSecondFileCounter(t, resp, "after creation", 1)
 	}
+	if tc.wantRootfsAfterPause != 0 {
+		validateRootfsCounter(t, resp, "after creation", 1)
+	}
 
 	//
 	// Pausing the actor
@@ -613,6 +675,9 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 	validateCounterResponse(t, resp, "after pause", tc.wantMemoryAfterPause, tc.wantFileAfterPause)
 	if tc.checkSecondFileCounter {
 		validateSecondFileCounter(t, resp, "after pause", tc.wantFileAfterPause)
+	}
+	if tc.wantRootfsAfterPause != 0 {
+		validateRootfsCounter(t, resp, "after pause", tc.wantRootfsAfterPause)
 	}
 
 	//
@@ -669,6 +734,9 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 	validateCounterResponse(t, resp, "after suspend", tc.wantMemoryAfterSuspend, tc.wantFileAfterSuspend)
 	if tc.checkSecondFileCounter {
 		validateSecondFileCounter(t, resp, "after suspend", tc.wantFileAfterSuspend)
+	}
+	if tc.wantRootfsAfterSuspend != 0 {
+		validateRootfsCounter(t, resp, "after suspend", tc.wantRootfsAfterSuspend)
 	}
 }
 
@@ -747,6 +815,15 @@ func validateSecondFileCounter(t *testing.T, resp string, stage string, want int
 	const prefix = "preserved second file counter: "
 	if !strings.Contains(resp, prefix+fmt.Sprintf("%d", want)) {
 		t.Errorf("[%s] expected second file count %d, got response: %s", stage, want, resp)
+	}
+}
+
+// validateRootfsCounter asserts the counter the workload keeps in a file on
+// its root filesystem, the one layer that tells ROOTFS apart from VOLUMES.
+func validateRootfsCounter(t *testing.T, resp string, stage string, want int) {
+	t.Helper()
+	if !strings.Contains(resp, fmt.Sprintf("preserved rootfs counter: %d", want)) {
+		t.Errorf("[%s] expected rootfs counter %d, got response: %s", stage, want, resp)
 	}
 }
 

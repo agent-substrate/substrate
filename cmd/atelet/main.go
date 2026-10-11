@@ -1003,18 +1003,12 @@ func (s *AteomHerder) uploadLocalCheckpointDir(ctx context.Context, req *ateletp
 	if capturedFidelity == "" {
 		return rec.SandboxClass, apierror.FailedPrecondition("local snapshot %q has no fidelity recorded in its manifest; resume and pause the actor again before suspending it", req.GetLocalSnapshotName())
 	}
-	desiredFidelity := ateattr.SnapshotFidelityValue(req.GetDesiredFidelity())
-
-	switch {
-	case capturedFidelity == desiredFidelity:
-	case capturedFidelity == ateattr.SnapshotFidelityVolumes && desiredFidelity == ateattr.SnapshotFidelityMemory:
-		// The control plane rejects this before marking SUSPENDING; reaching
-		// it here means the template changed mid-flight or store state drifted.
-		return rec.SandboxClass, apierror.FailedPrecondition("pause snapshot captured %s; cannot upload it as %s (memory was never captured)", capturedFidelity, desiredFidelity)
-	default: // captured MEMORY, VOLUMES wanted
-		if err := narrowMemoryCaptureToVolumes(rec); err != nil {
-			return rec.SandboxClass, err
-		}
+	// Pause and suspend capture the template's one preferred fidelity, and a
+	// paused actor's template cannot change, so the upload is always of what
+	// the pause captured. A mismatch means the store or the control plane
+	// drifted; refuse rather than guess.
+	if desiredFidelity := ateattr.SnapshotFidelityValue(req.GetDesiredFidelity()); capturedFidelity != desiredFidelity {
+		return rec.SandboxClass, apierror.FailedPrecondition("pause snapshot captured %s; upload asks for %s", capturedFidelity, desiredFidelity)
 	}
 
 	// The local snapshot stays until the upload succeeds, so a retry can
@@ -1029,19 +1023,6 @@ func readSnapshotManifest(dir string) ([]byte, error) {
 	}
 	defer root.Close()
 	return root.ReadFile(sandboxManifestName)
-}
-
-// narrowMemoryCaptureToVolumes rewrites rec so a MEMORY capture uploads as a
-// VOLUMES snapshot holding only the volume files ateom reported at checkpoint.
-func narrowMemoryCaptureToVolumes(rec *sandboxAssetsRecord) error {
-	if len(rec.DataSnapshotFiles) == 0 {
-		// Either no durable-dir volumes were attached at pause, or the
-		// manifest predates the list. Neither is retryable.
-		return apierror.FailedPrecondition("memory capture lists no volume files; the actor has no durable data to upload as %s", ateattr.SnapshotFidelityVolumes)
-	}
-	rec.SnapshotFiles = rec.DataSnapshotFiles
-	rec.Fidelity = ateattr.SnapshotFidelityVolumes
-	return nil
 }
 
 func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (resp *ateletpb.RestoreResponse, err error) {
@@ -1819,18 +1800,17 @@ func validateTerminateRequest(req *ateletpb.TerminateRequest) error {
 	return resources.ValidateContainerNames(names)
 }
 
-// validateFidelity rejects a fidelity no runtime can serve. ROOTFS is in the
-// enum but not captured by any sandbox runtime yet, so it is refused here as
-// well as at template admission.
+// validateFidelity accepts every level of the ladder. Which levels a sandbox
+// runtime can actually serve is the runtime's call: atelet forwards the
+// fidelity and ateom rejects what it cannot capture.
 func validateFidelity(fidelity ateletpb.SnapshotFidelity) error {
 	switch fidelity {
-	case ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
-		ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
+	case ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
+		ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+		ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
 		return nil
 	case ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED:
 		return fmt.Errorf("snapshot fidelity must be non-zero")
-	case ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS:
-		return fmt.Errorf("ROOTFS fidelity is not supported yet")
 	default:
 		return fmt.Errorf("invalid snapshot fidelity: %v", fidelity)
 	}
@@ -1850,14 +1830,8 @@ func validateUploadPausedCheckpointRequest(req *ateletpb.UploadPausedCheckpointR
 	if _, err := resources.ParseSnapshotURI(req.GetDestinationSnapshotUri()); err != nil {
 		errs = append(errs, field.Invalid(field.NewPath("destination_snapshot_uri"), req.GetDestinationSnapshotUri(), err.Error()))
 	}
-	// Uploads only ever produce MEMORY or VOLUMES snapshots.
-	switch req.GetDesiredFidelity() {
-	case ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
-	case ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS:
-		errs = append(errs, field.Invalid(field.NewPath("desired_fidelity"), req.GetDesiredFidelity().String(), "ROOTFS fidelity is not supported yet"))
-	default:
-		errs = append(errs, field.NotSupported(field.NewPath("desired_fidelity"), req.GetDesiredFidelity(),
-			[]string{ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY.String(), ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES.String()}))
+	if err := validateFidelity(req.GetDesiredFidelity()); err != nil {
+		errs = append(errs, field.Invalid(field.NewPath("desired_fidelity"), req.GetDesiredFidelity().String(), err.Error()))
 	}
 	return errs.ToAggregate()
 }
