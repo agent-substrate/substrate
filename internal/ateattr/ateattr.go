@@ -152,19 +152,20 @@ func ActorStateValue(state ateapipb.ActorState) string {
 // pool is node state every actor shares. For the same reason it is the only
 // ate.* label on its counter.
 const (
-	ActorOperationNameKey  = attribute.Key("ate.actor.operation.name")
-	WorkerPoolNamespaceKey = attribute.Key("ate.workerpool.namespace")
-	WorkerPoolNameKey      = attribute.Key("ate.workerpool.name")
-	WorkerStateKey         = attribute.Key("ate.worker.state")
-	SandboxClassKey        = attribute.Key("ate.sandbox.class")
-	SnapshotKindKey        = attribute.Key("ate.snapshot.kind")
-	SnapshotFidelityKey    = attribute.Key("ate.snapshot.fidelity")
-	SnapshotPhaseKey       = attribute.Key("ate.snapshot.phase")
-	ImageCacheOutcomeKey   = attribute.Key("ate.imagecache.outcome")
-	SchedulerOutcomeKey    = attribute.Key("ate.scheduler.outcome")
-	RouterResumeKey        = attribute.Key("ate.router.resume")
-	RouterOutcomeKey       = attribute.Key("ate.router.outcome")
-	StatsSourceKey         = attribute.Key("ate.stats.source")
+	ActorOperationNameKey    = attribute.Key("ate.actor.operation.name")
+	WorkerPoolNamespaceKey   = attribute.Key("ate.workerpool.namespace")
+	WorkerPoolNameKey        = attribute.Key("ate.workerpool.name")
+	WorkerStateKey           = attribute.Key("ate.worker.state")
+	SandboxClassKey          = attribute.Key("ate.sandbox.class")
+	SnapshotKindKey          = attribute.Key("ate.snapshot.kind")
+	SnapshotFidelityKey      = attribute.Key("ate.snapshot.fidelity")
+	SnapshotPhaseKey         = attribute.Key("ate.snapshot.phase")
+	ImageCacheOutcomeKey     = attribute.Key("ate.imagecache.outcome")
+	SchedulerOutcomeKey      = attribute.Key("ate.scheduler.outcome")
+	TemplateGoldenOutcomeKey = attribute.Key("ate.template.golden.outcome")
+	RouterResumeKey          = attribute.Key("ate.router.resume")
+	RouterOutcomeKey         = attribute.Key("ate.router.outcome")
+	StatsSourceKey           = attribute.Key("ate.stats.source")
 )
 
 // Keys of the actor usage record. Logs only: the measurements are unbounded and
@@ -306,6 +307,17 @@ const (
 	SchedulerOutcomeAssigned   = "assigned"
 	SchedulerOutcomeNoCapacity = "no_capacity"
 	SchedulerOutcomeError      = "error"
+)
+
+// Values for TemplateGoldenOutcomeKey: the success value and the four terminal
+// failure reasons of the golden snapshot pipeline. The reconciler records
+// exactly one outcome per build that reaches a terminal state.
+const (
+	TemplateGoldenSuccess         = "success"
+	TemplateGoldenTagConflict     = "golden_tag_conflict"
+	TemplateGoldenActorInvalid    = "golden_actor_invalid"
+	TemplateGoldenActorCrashed    = "golden_actor_crashed"
+	TemplateGoldenUnexpectedState = "golden_actor_unexpected_state"
 )
 
 // Values for SnapshotKindKey, set by ateapi from its own resume branching, so

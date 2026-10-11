@@ -33,9 +33,13 @@ const (
 	lifecycleOpDurationMetric = "ate.actor.lifecycle.operation.duration"
 	schedulerAssignmentMetric = "ate.scheduler.assignment.duration"
 	actorCrashesMetric        = "ate.actor.crashes"
+	goldenBuildsMetric        = "ate.template.golden.builds"
 )
 
-var actorCrashesCounter metric.Int64Counter
+var (
+	actorCrashesCounter metric.Int64Counter
+	goldenBuildsCounter metric.Int64Counter
+)
 
 // RegisterActorCrashes initializes the ate.actor.crashes counter instrument.
 func RegisterActorCrashes(meter metric.Meter) error {
@@ -49,6 +53,34 @@ func RegisterActorCrashes(meter metric.Meter) error {
 	}
 	actorCrashesCounter = counter
 	return nil
+}
+
+// RegisterGoldenBuilds initializes the ate.template.golden.builds counter instrument.
+func RegisterGoldenBuilds(meter metric.Meter) error {
+	counter, err := meter.Int64Counter(
+		goldenBuildsMetric,
+		metric.WithUnit("{build}"),
+		metric.WithDescription("Number of golden snapshot builds that reached a terminal state, with the outcome."),
+	)
+	if err != nil {
+		return fmt.Errorf("create %s counter: %w", goldenBuildsMetric, err)
+	}
+	goldenBuildsCounter = counter
+	return nil
+}
+
+// recordGoldenBuild records the terminal outcome of one golden snapshot build.
+// Called only after the terminal status commit succeeded, so retries and other
+// replicas cannot double-count a build.
+func recordGoldenBuild(ctx context.Context, tmpl *ateapipb.ActorTemplate, outcome string) {
+	if goldenBuildsCounter == nil {
+		return
+	}
+	goldenBuildsCounter.Add(ctx, 1, metric.WithAttributes(
+		ateattr.TemplateAtespaceKey.String(tmpl.GetMetadata().GetAtespace()),
+		ateattr.TemplateNameKey.String(tmpl.GetMetadata().GetName()),
+		ateattr.TemplateGoldenOutcomeKey.String(outcome),
+	))
 }
 
 // recordActorCrash records a crash event on ate.actor.crashes with low-cardinality attributes.

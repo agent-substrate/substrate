@@ -24,6 +24,7 @@ import (
 
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/ateattr"
 	"go.ate.dev/substrate/internal/resources"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
@@ -51,6 +52,15 @@ const (
 	reasonGoldenActorCrashed = "GoldenActorCrashed"
 	reasonUnexpectedState    = "GoldenActorUnexpectedState"
 )
+
+// goldenBuildOutcomes maps the terminal failure reasons to the bounded outcome
+// values of ate.template.golden.builds; success maps directly.
+var goldenBuildOutcomes = map[string]string{
+	reasonGoldenTagConflict:  ateattr.TemplateGoldenTagConflict,
+	reasonGoldenActorInvalid: ateattr.TemplateGoldenActorInvalid,
+	reasonGoldenActorCrashed: ateattr.TemplateGoldenActorCrashed,
+	reasonUnexpectedState:    ateattr.TemplateGoldenUnexpectedState,
+}
 
 // maxGoldenErrorMessageLen is the maxLength of
 // GoldenSnapshotStatus.error_message.
@@ -354,6 +364,9 @@ func (r *ActorTemplateReconciler) saveGoldenTag(ctx context.Context, tmpl *ateap
 	_, err := r.checkpoint(ctx, tmpl, func(snapshotStatus *ateapipb.GoldenSnapshotStatus) {
 		snapshotStatus.GoldenTag = ref
 	})
+	if err == nil {
+		recordGoldenBuild(ctx, tmpl, ateattr.TemplateGoldenSuccess)
+	}
 	return err
 }
 
@@ -386,6 +399,13 @@ func (r *ActorTemplateReconciler) fail(ctx context.Context, observed *ateapipb.A
 	_, err := r.checkpoint(ctx, observed, func(snapshotStatus *ateapipb.GoldenSnapshotStatus) {
 		snapshotStatus.ErrorMessage = truncateUTF8(reason+": "+msg, maxGoldenErrorMessageLen)
 	})
+	if err == nil {
+		if outcome, ok := goldenBuildOutcomes[reason]; ok {
+			recordGoldenBuild(ctx, observed, outcome)
+		} else {
+			slog.WarnContext(ctx, "golden build failed with an unmapped terminal reason; not recording an outcome", slog.String("reason", reason))
+		}
+	}
 	return err
 }
 
