@@ -170,6 +170,8 @@ func do(ctx context.Context) error {
 		defer serverboot.ShutdownProvider("LoggerProvider", lp.Shutdown)
 	}
 
+	_, _ = keepCoreSchedulingEnabled(ctx)
+
 	// Create ateom dir.
 	ateomDir := nodepath.AteomPath(*podUID)
 	if err := resources.ValidateWorkerPodUID(*podUID); err != nil {
