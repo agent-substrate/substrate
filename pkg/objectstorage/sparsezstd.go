@@ -21,8 +21,7 @@ import (
 	"fmt"
 	"io"
 	"os"
-
-	"github.com/klauspost/compress/zstd"
+	"runtime"
 )
 
 // sparseMagic marks the sparse-extent snapshot format (see writeSparseZstd). It is
@@ -147,10 +146,7 @@ func readSparseZstd(dst *os.File, src io.Reader) (logical int64, err error) {
 		return 0, fmt.Errorf("unsupported sparse snapshot format version %d (this build supports %d)", ver, sparseVersion)
 	}
 
-	zr, err := zstd.NewReader(src, zstd.WithDecoderConcurrency(1))
-	if err != nil {
-		return 0, err
-	}
+	zr := newParZstdReader(src, runtime.GOMAXPROCS(0))
 	defer zr.Close()
 
 	var size int64
