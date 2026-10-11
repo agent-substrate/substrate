@@ -191,6 +191,7 @@ type dialCall struct {
 	err     error
 }
 
+// Open one connection at a time to avoid opening more H/2 connection while one is already being established.
 func (c *Client) acquireConn(ctx context.Context) (*h2ClientConn, bool, *tls.Conn, error) {
 	for {
 		if err := ctx.Err(); err != nil {
@@ -206,6 +207,9 @@ func (c *Client) acquireConn(ctx context.Context) (*h2ClientConn, bool, *tls.Con
 		keep := c.h2Conns[:0]
 		var reserved *h2ClientConn
 		var wasVerified bool
+		// Loop through established H/2 connections.
+		// Find one connection with available capacity.
+		// At the same time, discard these that are closed, or idle and GOAWAY'ed.
 		for _, h2Conn := range c.h2Conns {
 			if h2Conn.isClosed() {
 				continue
@@ -217,6 +221,8 @@ func (c *Client) acquireConn(ctx context.Context) (*h2ClientConn, bool, *tls.Con
 					keep = append(keep, h2Conn)
 					continue
 				}
+				// If connection is not yet closed, but has 0 streams and could not reseve a new
+				// stream, it means it received GOAWAY from the peer. Discard these as well.
 				if h2Conn.isClosed() || h2Conn.cc.InFlight() == 0 {
 					continue
 				}
@@ -230,7 +236,7 @@ func (c *Client) acquireConn(ctx context.Context) (*h2ClientConn, bool, *tls.Con
 		}
 
 		// If there are no H/2 connections with idle capacity, start a new connection.
-		// Dial new connection if there are no in progress connections already .
+		// Dial new connection if there are no in progress connections already.
 		call := c.dialing
 		if call == nil {
 			dialCtx, cancel := context.WithCancel(context.Background())
@@ -253,6 +259,7 @@ func (c *Client) acquireConn(ctx context.Context) (*h2ClientConn, bool, *tls.Con
 		case <-call.done:
 			call.mu.Lock()
 			call.waiters--
+			// If we negotiated CONNECT over H/1 connection, return its TCP stream to the atunnel.
 			if call.h1Conn != nil {
 				conn := call.h1Conn
 				call.h1Conn = nil
@@ -424,6 +431,7 @@ func (c *Client) connectH1(tlsConn *tls.Conn, destination string) (net.Conn, err
 		return nil, newConnectRejectedError(resp, body)
 	}
 
+	// Return wrapped net.Conn including the reader that was used for CONNECT handshake.
 	return &bufferedConn{Conn: tlsConn, reader: reader}, nil
 }
 
@@ -437,6 +445,7 @@ func (c *Client) connectH2(ctx context.Context, h2Conn *h2ClientConn, wasVerifie
 	})
 	stopCancel := context.AfterFunc(ctx, streamCancel)
 
+	// Roundrip the CONNECT request with provided body writer.
 	req := (&http.Request{
 		Method:        http.MethodConnect,
 		URL:           &url.URL{Host: destination},
@@ -484,6 +493,9 @@ func (c *Client) connectH2(ctx context.Context, h2Conn *h2ClientConn, wasVerifie
 		return nil, false, newConnectRejectedError(resp, body)
 	}
 
+	// Create new stream wrapper with body reader and writer.
+	// newH2StreamConn implements all net.Conn method redirecting Read/Write calls to
+	// body reader and writer for the H/2 stream.
 	return newH2StreamConn(h2Conn, reqBody, resp.Body, streamCancel), false, nil
 }
 
@@ -500,11 +512,16 @@ func newConnectRejectedError(resp *http.Response, body []byte) *ConnectRejectedE
 }
 
 type h2ClientConn struct {
-	cc         *http.ClientConn
+	// H/2 connection.
+	cc *http.ClientConn
+	// TLS connection backing this H/2 connection.
 	raw        *trackedTLSConn
 	localAddr  net.Addr
 	remoteAddr net.Addr
-	verified   atomic.Bool
+	// Set to true when at least one request had been completed.
+	// Used to distinguish between connection establishment errors and errors
+	// on an already working connection.
+	verified atomic.Bool
 }
 
 func (h *h2ClientConn) isClosed() bool {
