@@ -371,11 +371,48 @@ snapshotConfig:
 
 The objects of a snapshot (its manifest, memory image, durable-data tar) are named below it. So for the template above, a snapshot of an actor in atespace `team-a` is stored at `gs://my-bucket/secret-agent/atespaces/team-a/actors/3f8b…/snapshots/f47ac10b-…`, and the template's golden snapshot — the golden tag lives in the reserved `ate-golden` atespace — under `gs://my-bucket/secret-agent/atespaces/ate-golden/tags/<tag uid>`.
 
-An actor takes a series of snapshots over its life, so it gets a prefix of its own and each snapshot sits below it. A tag holds exactly one, so the tag's prefix *is* its snapshot's. Both owners are keyed on their UID, so recreating an actor or tag under the same name never inherits its predecessor's objects. A pending tag records its base location in `status.storageLocation`; together with its atespace and UID, this identifies any partial copy to collect if creation fails.
+An actor takes a series of snapshots over its life, so it gets a prefix of its
+own and each snapshot sits below it. A tag holds exactly one, so the tag's
+prefix *is* its snapshot's. Both owners are keyed on their UID, so recreating an
+actor or tag under the same name never inherits its predecessor's objects. A tag
+records its snapshot's URI in `status.snapshot` right after it is reserved,
+before anything is copied, so a tag whose creation failed still names any
+partial copy to collect.
 
 An owner is collected by deleting everything under its prefix, and it can delete nothing else. That is what makes a borrowed snapshot safe: an actor created from a tag points at a URI under `tags/`, which its own prefix does not cover. See [Snapshot lifetime](#snapshot-lifetime).
 
-An `Actor` reports its snapshots in the server-managed `status.snapshots` (and `status.lastAssignedGeneration`) and a `Tag` in `status.snapshot`, each a `Snapshot` carrying `generation`, `owner`, `actorTemplateUid`, and `storage`. The URI and `fidelity` are recorded in a `DURABLE` `SnapshotStorage` entry (`object.snapshotUri` and `fidelity`) when the snapshot is written. `actorTemplateUid` records the `ActorTemplate` whose sandbox the guest state was captured from, which is not always the template the actor points at now: an actor may be repointed while `SUSPENDED`, and the snapshot on disk still came from the old one. A resume that finds the two disagree restores the durable data only and boots the guest fresh, because memory captured under one sandbox image cannot be resumed under another. An `ActorTemplate` references its golden tag with the `ObjectRef` in `status.goldenSnapshotStatus.goldenTag`. These status fields are server-owned and ignored on input. Parse a URI only against the scheme above.
+An `Actor` reports its snapshots in the server-managed `status.snapshots` (and
+`status.lastAssignedGeneration`) and a `Tag` in `status.snapshot`. Each entry is
+a `Snapshot` with the following fields:
+
+- `uuid`: The snapshot's server-generated name. It names the node-local
+  checkpoint and forms the last segment of the snapshot's URI in object storage
+  (so a tag's snapshot is named by the tag's UID).
+- `generation`: The monotonically increasing snapshot generation on the owner.
+- `owner`: The resource kind that owns the snapshot (`SNAPSHOT_OWNER_ACTOR` or
+  `SNAPSHOT_OWNER_TAG`).
+- `fidelity`: The state layers the snapshot holds (`SNAPSHOT_FIDELITY_VOLUMES`,
+  `SNAPSHOT_FIDELITY_ROOTFS`, or `SNAPSHOT_FIDELITY_MEMORY`).
+- `actorTemplateUid`: The UID of the `ActorTemplate` whose sandbox the guest
+  state was captured from. This is not always the template the actor points at
+  now: an actor may be repointed while `SUSPENDED`, while the snapshot on disk
+  still came from the old one. A resume that finds the two disagree restores the
+  durable data only and boots the guest fresh, because memory captured under one
+  sandbox image cannot be resumed under another.
+- `locality`: The node that holds the snapshot's local files. It is set when a
+  pause completes and cleared once those files are deleted from the node (when
+  the actor is next paused or suspended, or is reverted). A resume restores from
+  the files without deleting them, so an actor resumed from pause still reports
+  where they are.
+- `durableSnapshot`: The copy in object storage, with its URI in
+  `object.snapshotUri` and a `status` that is `PENDING` while the copy is being
+  written and `COMPLETED` once it can be restored from. A snapshot that exists
+  only on a node has no `durableSnapshot`. A tag's snapshot always has one, and
+  the tag can seed actors only once it is `COMPLETED`.
+
+An `ActorTemplate` references its golden tag with the `ObjectRef` in
+`status.goldenSnapshotStatus.goldenTag`. These status fields are server-owned
+and ignored on input. Parse a URI only against the scheme above.
 
 An `ActorTemplate` belongs to one atespace, but one `storageLocation` still holds snapshots for many atespaces: the golden actor lives in the reserved `ate-golden` atespace, and a `PUBLISHED` snapshot may be cloned from other atespaces. The `<atespace>` level exists so that access can be granted per tenant: an object-storage policy can only condition on an **object-name prefix**, and cannot read the identity recorded inside a snapshot's manifest. Binding a per-atespace grant on GCS looks like:
 
