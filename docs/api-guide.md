@@ -472,7 +472,9 @@ When an `ActorTemplate` is created with golden snapshots enabled:
 1. Substrate creates and resumes a temporary golden actor in `ate-golden`.
 2. It waits for readiness (or the warm-up interval), then suspends the actor.
 3. It creates a published tag named after the template UID, copying the snapshot into tag-owned storage.
-4. It deletes the golden actor and records the tag reference in the template status.
+4. It deletes the golden actor and records the tag reference in the template status, with the snapshot layout the workers wrote it in (`status.goldenSnapshotStatus.snapshotLayout`).
+
+A release whose workers write snapshots in a newer layout takes every golden snapshot in an older layout, or recorded without one, again: Substrate boots a golden actor once more and creates the new tag, named after the template UID and the layout, beside the recorded one. The recorded tag stays the template's golden until the new one is complete; then the template status names the new tag and the old one is deleted with its snapshot. Until then, `CreateActor` without a `sourceTag` returns `UNAVAILABLE`, which a retry outlives, instead of starting the actor from a snapshot its worker cannot read. If the new golden fails, the old tag stays recorded beside the error and new actors start from it.
 
 `CreateActor` uses an explicit `sourceTag` when supplied; otherwise it resolves the template's golden tag and records that snapshot on the new actor. If the golden tag is not ready yet, the actor starts without a snapshot and cold-boots even if the tag becomes ready before its first resume. The default does not populate the caller-owned `sourceTag` field. Deleting the template collects its golden tag and any unfinished golden actor.
 
