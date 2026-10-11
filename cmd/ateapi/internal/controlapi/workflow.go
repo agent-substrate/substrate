@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"go.ate.dev/substrate/cmd/ateapi/internal/scheduling"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
@@ -219,18 +220,29 @@ type leaseHolder interface {
 	AcquireLease(ctx context.Context, key string) (*store.Lease, error)
 }
 
+// workflowDeadline bounds a workflow that no longer follows its caller. It is
+// generous on purpose: a deadline mid-checkpoint strands the actor like a
+// client cancel did.
+const workflowDeadline = 30 * time.Minute
+
 // acquireLease takes the lease named by key and returns the context to run
-// under: it is cancelled if the lease is lost. subject names what the lease
-// covers, for the message a caller that loses the race gets.
+// under: the caller's values without the caller's cancellation, ended when
+// the lease is lost or workflowDeadline passes. A caller that went away used
+// to cancel the lease and the atelet call with it and strand the actor.
+// subject names what the lease covers, for the message a caller that loses
+// the race gets.
 func acquireLease(ctx context.Context, holder leaseHolder, key, subject string) (context.Context, *store.Lease, error) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), workflowDeadline)
 	lease, err := holder.AcquireLease(ctx, key)
 	if err != nil {
+		cancel()
 		if errors.Is(err, store.ErrLeaseConflict) {
 			return nil, nil, apierror.Aborted("another operation is in progress for this %s", subject)
 		}
 		return nil, nil, fmt.Errorf("while acquiring lease: %w", err)
 	}
-
+	// Release the deadline's timer with the lease.
+	context.AfterFunc(lease.Context(), cancel)
 	return lease.Context(), lease, nil
 }
 
