@@ -40,7 +40,8 @@ const ServiceName = "atenet-router"
 const routeDurationMetricName = "atenet.router.route.duration"
 
 // NewRouteDurationHistogram creates the atenet.router.route.duration histogram from
-// the global MeterProvider.
+// the global MeterProvider. Buckets reach 1800 s: the route time includes the
+// parked wait.
 func NewRouteDurationHistogram() (metric.Float64Histogram, error) {
 	h, err := otel.Meter(ServiceName).Float64Histogram(
 		routeDurationMetricName,
@@ -52,6 +53,7 @@ func NewRouteDurationHistogram() (metric.Float64Histogram, error) {
 		metric.WithExplicitBucketBoundaries(
 			0.001, 0.0025, 0.005, 0.01, 0.025, 0.05,
 			0.075, 0.1, 0.15, 0.2, 0.25, 0.5, 1, 2.5, 5, 10, 15, 30,
+			60, 90, 120, 180, 300, 600, 1800,
 		),
 	)
 	if err != nil {
