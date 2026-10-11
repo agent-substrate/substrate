@@ -377,8 +377,23 @@ func extractEntry(root *os.Root, tr *tar.Reader, hdr *tar.Header, name string, d
 
 	switch hdr.Typeflag {
 	case tar.TypeDir:
-		if err := root.Mkdir(name, mode|0o700); err != nil && !errors.Is(err, os.ErrExist) {
-			return fmt.Errorf("creating directory %q: %w", name, err)
+		if err := root.Mkdir(name, mode|0o700); err != nil {
+			if !errors.Is(err, os.ErrExist) {
+				return fmt.Errorf("creating directory %q: %w", name, err)
+			}
+			// ErrExist only means the name is taken, not that it is a
+			// directory: a directory entry replaces whatever non-directory
+			// occupies the name, like every other entry type, instead of
+			// leaving it to fail the first child with ENOTDIR. A directory
+			// occupant is kept and merged into.
+			if info, statErr := root.Lstat(name); statErr != nil || !info.IsDir() {
+				if err := replaceExisting(root, name); err != nil {
+					return err
+				}
+				if err := root.Mkdir(name, mode|0o700); err != nil {
+					return fmt.Errorf("creating directory %q: %w", name, err)
+				}
+			}
 		}
 		dirs[name] = hdr
 		return nil

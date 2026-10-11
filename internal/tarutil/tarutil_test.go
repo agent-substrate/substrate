@@ -861,3 +861,89 @@ func TestCreateDoesNotFollowSwappedDir(t *testing.T) {
 		}
 	}
 }
+
+// A directory entry landing on an existing non-directory must replace it, per
+// the documented later-entry-wins semantics — otherwise the stale entry stays
+// and the first child fails with a confusing ENOTDIR.
+func TestExtractDirReplacesNonDirectory(t *testing.T) {
+	seedSymlink := func(t *testing.T, dst string) {
+		t.Helper()
+		if err := os.Symlink("elsewhere", filepath.Join(dst, "a")); err != nil {
+			t.Fatalf("seeding destination symlink: %v", err)
+		}
+	}
+	seedFile := func(t *testing.T, dst string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dst, "a"), []byte("stale"), 0o644); err != nil {
+			t.Fatalf("seeding destination file: %v", err)
+		}
+	}
+	for _, tc := range []struct {
+		name  string
+		extra []tar.Header
+		seed  func(t *testing.T, dst string)
+	}{
+		{
+			name: "regular file earlier in the archive",
+			extra: []tar.Header{
+				{Name: "a", Mode: 0o644, Size: 1, Typeflag: tar.TypeReg},
+			},
+		},
+		{
+			name: "stale file at the destination",
+			seed: seedFile,
+		},
+		{
+			name: "stale symlink at the destination",
+			seed: seedSymlink,
+		},
+		{
+			// The boundary on the other side: an existing directory is
+			// merged into, not replaced — a pre-existing child survives.
+			name: "existing directory at the destination",
+			seed: func(t *testing.T, dst string) {
+				t.Helper()
+				if err := os.MkdirAll(filepath.Join(dst, "a"), 0o755); err != nil {
+					t.Fatalf("seeding destination dir: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(dst, "a", "keep"), []byte("keep"), 0o644); err != nil {
+					t.Fatalf("seeding destination child: %v", err)
+				}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			entries := append(tc.extra,
+				tar.Header{Name: "a/", Mode: 0o755, Typeflag: tar.TypeDir},
+				tar.Header{Name: "a/b", Mode: 0o644, Size: 1, Typeflag: tar.TypeReg},
+			)
+			tarPath := filepath.Join(t.TempDir(), "out.tar")
+			writeTar(t, tarPath, entries...)
+
+			dst := t.TempDir()
+			if tc.seed != nil {
+				tc.seed(t, dst)
+			}
+			if err := Extract(tarPath, dst); err != nil {
+				t.Fatalf("Extract: %v", err)
+			}
+			info, err := os.Lstat(filepath.Join(dst, "a"))
+			if err != nil {
+				t.Fatalf("lstat a: %v", err)
+			}
+			if !info.IsDir() {
+				t.Errorf("a mode = %v, want a directory", info.Mode())
+			}
+			got, err := os.ReadFile(filepath.Join(dst, "a", "b"))
+			if err != nil || string(got) != "x" {
+				t.Errorf("a/b = %q, %v; want %q, nil", got, err, "x")
+			}
+			if tc.name == "existing directory at the destination" {
+				kept, err := os.ReadFile(filepath.Join(dst, "a", "keep"))
+				if err != nil || string(kept) != "keep" {
+					t.Errorf("a/keep = %q, %v; want %q, nil (existing directory must be merged, not replaced)", kept, err, "keep")
+				}
+			}
+		})
+	}
+}
