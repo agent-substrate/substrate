@@ -36,6 +36,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	storagev1listers "k8s.io/client-go/listers/storage/v1"
 )
 
@@ -254,6 +255,14 @@ func acquireLease(ctx context.Context, holder leaseHolder, key, subject string) 
 	}
 
 	return lease.Context(), lease, nil
+}
+
+// setActorState moves status to state and stamps the transition.
+func setActorState(status *ateapi.ActorStatus, state ateapi.ActorState) {
+	if status.State != state {
+		status.StateTransitionTime = timestamppb.Now()
+	}
+	status.State = state
 }
 
 // actorLeaseKey names the lease that serializes the operations on an Actor.

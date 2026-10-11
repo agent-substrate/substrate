@@ -274,7 +274,7 @@ func (w *WorkerWorkflow) crashBoundActor(ctx context.Context, worker *ateapi.Wor
 		append(ateattr.ActorLogAttrs(resources.ActorAttributionFromActor(actor)),
 			slog.String("worker", name))...)
 	_, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(actor), func(toUpdate *ateapi.Actor) error {
-		toUpdate.Status.State = ateapi.ActorState_ACTOR_STATE_CRASHED
+		setActorState(toUpdate.Status, ateapi.ActorState_ACTOR_STATE_CRASHED)
 		if !wasAlreadyCrashed {
 			toUpdate.Status.Crash = newActorCrash(opName, crashMsg)
 		}
