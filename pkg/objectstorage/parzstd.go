@@ -144,16 +144,3 @@ func (p *parZstd) Close() error {
 	<-p.done
 	return p.err
 }
-
-// newSerialZstd is a plain streaming encoder, for callers that are already running one
-// per parallel unit of work (an upload part) and so need no fan-out of their own.
-func newSerialZstd(dst io.Writer) *zstd.Encoder {
-	// NewWriter only errors on bad options, which are compile-time constants here.
-	enc, err := zstd.NewWriter(dst,
-		zstd.WithEncoderLevel(zstd.SpeedFastest),
-		zstd.WithEncoderConcurrency(1))
-	if err != nil {
-		panic(err)
-	}
-	return enc
-}
