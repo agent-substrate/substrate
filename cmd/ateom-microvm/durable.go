@@ -46,6 +46,7 @@ import (
 	"strings"
 
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/tarutil"
@@ -64,6 +65,17 @@ func durableTarFile(volumeName string) (string, error) {
 	}
 	return "durable-dir-" + volumeName + ".tar", nil
 }
+
+// legacyDurableTarFile is the single tar of every durable-dir volume that
+// snapshots held before the one-tar-per-volume layout. A checkpoint never
+// writes it any more, so its presence marks a snapshot in that layout.
+const legacyDurableTarFile = "durable-dir.tar"
+
+// errLegacySnapshotLayout refuses a restore from a snapshot in the layout
+// before one tar per durable-dir volume: its data is in legacyDurableTarFile,
+// which is never extracted, so restoring it would bring the actor up with
+// empty volumes.
+var errLegacySnapshotLayout = errors.New("snapshot written before the per-volume layout; re-snapshot from a running actor or reset the golden snapshot")
 
 // hasDurableVolumes reports whether any container mounts a durable-dir volume.
 func hasDurableVolumes(containers []*ateompb.Container) bool {
@@ -127,8 +139,12 @@ func tarDurableVolumes(ctx context.Context, dir, checkpointDir string, volumes [
 // its directory under dir, which atelet has already created, empty. A volume
 // with no tar in the snapshot (added to the template since) stays empty. It
 // must run before the durable share's virtiofsd starts, so the guest never
-// observes the directory mid-restore.
+// observes the directory mid-restore. A snapshot in the layout before one tar
+// per volume is refused with errLegacySnapshotLayout.
 func untarDurableVolumes(dir, snapshotDir string, volumes []string) error {
+	if _, err := os.Stat(filepath.Join(snapshotDir, legacyDurableTarFile)); err == nil {
+		return apierror.FailedPrecondition("%w", errLegacySnapshotLayout)
+	}
 	for _, vol := range volumes {
 		name, err := durableTarFile(vol)
 		if err != nil {
