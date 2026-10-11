@@ -348,6 +348,21 @@ func TestSandboxConfigValidation(t *testing.T) {
 	}
 }
 
+// An omitted sandboxClass is defaulted to gvisor, not rejected.
+func TestSandboxConfigSandboxClassDefault(t *testing.T) {
+	ctx := t.Context()
+	sc := sandboxConfig("default-class", SandboxClassGvisor, gvisorAssets())
+	sc.Spec.SandboxClass = ""
+	if err := k8sClient.Create(ctx, sc); err != nil {
+		t.Fatalf("Create() unexpected error: %v", err)
+	}
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, sc) })
+
+	if sc.Spec.SandboxClass != SandboxClassGvisor {
+		t.Errorf("SandboxClass = %q, want %q", sc.Spec.SandboxClass, SandboxClassGvisor)
+	}
+}
+
 func TestSandboxConfigUpdateRemovingDefaultVersion(t *testing.T) {
 	ctx := t.Context()
 	sc := withVersions(sandboxConfig("update-remove-default", SandboxClassGvisor, gvisorAssets()), sandboxVersion("v2", SandboxClassGvisor, gvisorAssets()))
