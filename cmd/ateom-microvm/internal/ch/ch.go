@@ -74,6 +74,10 @@ func (c *Client) Ping(ctx context.Context) (VMMInfo, error) {
 // run the binary again to ask.
 func (c *Client) WaitReady(ctx context.Context, deadline time.Duration) (VMMInfo, error) {
 	end := time.Now().Add(deadline)
+	// A ping on a socket the VMM has not started serving blocks rather than fails
+	// (LaunchVMM binds it ahead of the VMM), so bound each ping by the deadline too.
+	ctx, cancel := context.WithDeadline(ctx, end)
+	defer cancel()
 	for {
 		info, err := c.Ping(ctx)
 		if err == nil {

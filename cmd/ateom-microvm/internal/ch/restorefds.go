@@ -68,13 +68,24 @@ func LaunchVMM(ctx context.Context, o LaunchVMMOptions) (*exec.Cmd, *Client, err
 		bin = "cloud-hypervisor"
 	}
 	_ = os.Remove(o.APISocket)
+	// Bind the api-socket here and hand cloud-hypervisor the listening fd, so the
+	// socket accepts connections from the moment cmd starts: the first vmm.ping
+	// queues in the backlog until CH serves it, instead of polling for CH to bind.
+	lf, err := listenUnixFile(o.APISocket)
+	if err != nil {
+		return nil, nil, err
+	}
 	// Deliberately NOT exec.CommandContext: the VMM must outlive the RPC whose
 	// ctx launched it. The caller owns cmd; WaitReady honors ctx.
-	cmd := exec.Command(bin, "--api-socket", o.APISocket)
+	cmd := exec.Command(bin, "--api-socket", "fd=3")
+	cmd.ExtraFiles = []*os.File{lf}
 	cmd.Stdout = o.Stdout
 	cmd.Stderr = o.Stderr
 	cmd.SysProcAttr = o.SysProcAttr
-	if err := cmd.Start(); err != nil {
+	err = cmd.Start()
+	// CH holds its own copy now; ours would keep the socket accepting after CH exits.
+	_ = lf.Close()
+	if err != nil {
 		return nil, nil, fmt.Errorf("while starting cloud-hypervisor: %w", err)
 	}
 	client := NewClient(o.APISocket)
@@ -247,4 +258,21 @@ func SnapshotNetDevices(snapshotDir string) ([]SnapshotNetDevice, error) {
 		out = append(out, SnapshotNetDevice{ID: n.ID, QueuePairs: qp, MAC: n.MAC})
 	}
 	return out, nil
+}
+
+// listenUnixFile binds and listens on a unix socket at path and returns the
+// listening socket as a file, for a child process to inherit. The socket file
+// stays on disk after the returned file is closed.
+func listenUnixFile(path string) (*os.File, error) {
+	l, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
+	if err != nil {
+		return nil, fmt.Errorf("while listening on VMM api-socket: %w", err)
+	}
+	l.SetUnlinkOnClose(false)
+	defer l.Close()
+	f, err := l.File()
+	if err != nil {
+		return nil, fmt.Errorf("while duplicating VMM api-socket listener: %w", err)
+	}
+	return f, nil
 }
