@@ -133,10 +133,10 @@ ends those are. Reuse an existing set when the quantity is comparable:
 
 | Quantity | Boundaries used in tree |
 |---|---|
-| a lifecycle operation | `0.005 … 30` (`cmd/ateapi/internal/controlapi/metrics.go`) |
+| a lifecycle operation | `0.005 … 1800` (`cmd/ateapi/internal/controlapi/metrics.go`) |
 | a scheduler step | `0.0005 … 5` (same file) |
-| a snapshot phase | `0.005 … 60` (`cmd/atelet/metrics.go`, `snapshotPhaseBuckets`) |
-| a request wait | `0.001 … 60` (`cmd/atenet/internal/router/ingress/metrics.go`) |
+| a snapshot phase | `0.005 … 1800` (`cmd/atelet/metrics.go`, `snapshotPhaseBuckets`) |
+| a request wait | `0.001 … 1800` (`cmd/atenet/internal/router/ingress/metrics.go`) |
 | a size in bytes | `1e6 … 1e10` (`cmd/atelet/main.go`) |
 | a small count (workers) | `0, 1, 2, 3, 5, 10, 20, 50, 100, 250` (`cmd/ateapi/internal/scheduling/metrics.go`) |
 

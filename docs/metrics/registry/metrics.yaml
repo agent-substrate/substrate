@@ -809,7 +809,7 @@ groups:
         emitted_by: [ateapi]
         golden_signals: [latency, traffic]
         code_anchor: cmd/ateapi/internal/controlapi/metrics.go
-        buckets: [0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.15, 0.25, 0.5, 1, 2.5, 5, 10, 30]
+        buckets: [0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.15, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600, 1800]
         cuj: Which actor operation is slow, and for which template or pool?
     attributes:
       - ref: ate.actor.operation.name
@@ -910,7 +910,7 @@ groups:
         emitted_by: [atelet]
         golden_signals: [latency]
         code_anchor: cmd/atelet/metrics.go
-        buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60]
+        buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60, 120, 300, 600, 1800]
         cuj: Cold starts are slow. Is the cause the download, the unpack, or ateworker?
     attributes:
       - ref: ate.template.atespace
@@ -944,7 +944,7 @@ groups:
         emitted_by: [atelet]
         golden_signals: [latency]
         code_anchor: cmd/atelet/metrics.go
-        buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60]
+        buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60, 120, 300, 600, 1800]
         cuj: Suspends are slow. Is the cause ateworker or the upload?
     attributes:
       - ref: ate.template.atespace
@@ -1196,7 +1196,7 @@ groups:
         emitted_by: [atenet-router]
         golden_signals: [latency, traffic, errors]
         code_anchor: cmd/atenet/internal/router/extproc/metrics.go
-        buckets: [0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.15, 0.2, 0.25, 0.5, 1, 2.5, 5, 10, 15, 30]
+        buckets: [0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.15, 0.2, 0.25, 0.5, 1, 2.5, 5, 10, 15, 30, 60, 90, 120, 180, 300, 600, 1800]
         cuj: A request stopped or got a 503 error. Was the actor cold, was the fleet full, or has the router a defect?
     attributes:
       - ref: ate.template.atespace
@@ -1239,7 +1239,7 @@ groups:
         emitted_by: [atenet-router]
         golden_signals: [latency, saturation]
         code_anchor: cmd/atenet/internal/router/ingress/metrics.go
-        buckets: [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 15, 30, 45, 60]
+        buckets: [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 15, 30, 45, 60, 90, 120, 180, 300, 600, 1800]
         cuj: How much of the wait of the user is a queue, and how much is an activation?
     attributes:
       - ref: outcome

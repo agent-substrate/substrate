@@ -60,12 +60,14 @@ func NewParkingMetrics() (*ParkingMetrics, error) {
 		return nil, fmt.Errorf("create %s counter: %w", parkingActiveMetricName, err)
 	}
 
+	// Buckets reach 1800 s: a parked wait lasts up to the configured budget.
 	wait, err := meter.Float64Histogram(
 		parkingWaitMetricName,
 		metric.WithUnit("s"),
 		metric.WithDescription("time a request spent parked in the router before being served, timing out, or failing"),
 		metric.WithExplicitBucketBoundaries(
 			0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 15, 30, 45, 60,
+			90, 120, 180, 300, 600, 1800,
 		),
 	)
 	if err != nil {

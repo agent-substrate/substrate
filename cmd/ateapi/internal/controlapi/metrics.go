@@ -154,15 +154,16 @@ type Instruments struct {
 	schedulerAssignmentDuration metric.Float64Histogram
 }
 
-// NewInstruments builds the two histograms against meter. Assignment buckets are
-// finer than lifecycle's (a cache pick plus a few store writes, not a
-// multi-second restore) but reach 5s so store latency spikes stay measurable.
+// NewInstruments builds the two histograms against meter. Lifecycle buckets
+// reach 1800 s: moving a multi-GiB snapshot takes minutes. Assignment buckets
+// are finer (a cache pick plus a few store writes) but reach 5s so store
+// latency spikes stay measurable.
 func NewInstruments(meter metric.Meter) (*Instruments, error) {
 	lifecycleOpDuration, err := meter.Float64Histogram(
 		lifecycleOpDurationMetric,
 		metric.WithUnit("s"),
 		metric.WithDescription("Duration of an actor lifecycle operation (create, resume, suspend, delete, revert) handled by ateapi."),
-		metric.WithExplicitBucketBoundaries(0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.15, 0.25, 0.5, 1, 2.5, 5, 10, 30),
+		metric.WithExplicitBucketBoundaries(0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.15, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600, 1800),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create %s histogram: %w", lifecycleOpDurationMetric, err)
