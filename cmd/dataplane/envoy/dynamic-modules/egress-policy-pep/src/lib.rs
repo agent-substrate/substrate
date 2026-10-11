@@ -310,6 +310,9 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for EgressPolicyPepFilter {
       "egress policy pep: on_request_headers end_of_stream={}",
       end_of_stream
     );
+    if !self.config.cache_enabled {
+      return envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue;
+    }
     match self.get_or_create_cached_egress_policy(envoy_filter) {
       Some(policy) => {
         let status = self.enforce_egress_policy(envoy_filter, policy);
@@ -336,6 +339,9 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for EgressPolicyPepFilter {
       "egress policy pep: on_response_headers end_of_stream={}",
       end_of_stream
     );
+    if !self.config.cache_enabled {
+      return envoy_dynamic_module_type_on_http_filter_response_headers_status::Continue;
+    }
     if let Some(raw_policy) = envoy_filter.get_filter_state_bytes(ATE_POLICY_EGRESS_REFRESH) {
       match serde_json::from_slice::<EgressPolicy>(raw_policy.as_slice()) {
         Ok(policy) => {
@@ -1388,6 +1394,47 @@ mod tests {
       envoy_dynamic_module_type_on_http_filter_response_headers_status::Continue
     );
     assert_eq!(existing.policy, expected_policy());
+  }
+
+  #[test]
+  fn test_on_request_headers_skips_when_cache_disabled() {
+    let config = EgressPolicyPepFilterConfig {
+      config: Config {
+        cache_enabled: false,
+        ..Default::default()
+      },
+      ..Default::default()
+    };
+    let mut mock_filter = MockEnvoyHttpFilter::new();
+    mock_filter.expect_get_filter_state_object().times(0);
+    mock_filter.expect_get_filter_state_bytes().times(0);
+    mock_filter.expect_increment_counter().times(0);
+
+    let mut filter = config.new_http_filter(&mut mock_filter);
+    assert_eq!(
+      filter.on_request_headers(&mut mock_filter, false),
+      envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue
+    );
+  }
+
+  #[test]
+  fn test_on_response_headers_skips_when_cache_disabled() {
+    let config = EgressPolicyPepFilterConfig {
+      config: Config {
+        cache_enabled: false,
+        ..Default::default()
+      },
+      ..Default::default()
+    };
+    let mut mock_filter = MockEnvoyHttpFilter::new();
+    mock_filter.expect_get_filter_state_bytes().times(0);
+    mock_filter.expect_get_filter_state_object().times(0);
+
+    let mut filter = config.new_http_filter(&mut mock_filter);
+    assert_eq!(
+      filter.on_response_headers(&mut mock_filter, false),
+      envoy_dynamic_module_type_on_http_filter_response_headers_status::Continue
+    );
   }
 
   #[test]
