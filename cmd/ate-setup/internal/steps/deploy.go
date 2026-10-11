@@ -300,7 +300,7 @@ func (e *Env) DeployAteAPIServer(ctx context.Context) error {
 			return err
 		}
 	}
-	manifest, err := e.renderResolve(ctx, e.Cfg.Manifest("ate-api-server.yaml"))
+	manifest, err := e.renderComponentResolve(ctx, "ate-api-server.yaml")
 	if err != nil {
 		return err
 	}
@@ -330,11 +330,7 @@ func (e *Env) DeployAteController(ctx context.Context) error {
 	if err := e.applyOtelConfig(ctx); err != nil {
 		return err
 	}
-	manifest, err := e.renderDataPlane(e.Cfg.Manifest("ate-controller.yaml"))
-	if err != nil {
-		return err
-	}
-	if err := e.ResolveAndApplyBytes(ctx, manifest); err != nil {
+	if err := e.renderComponentResolveApply(ctx, "ate-controller.yaml"); err != nil {
 		return err
 	}
 	if err := e.Kube.RolloutStatus(ctx, kube.KindDeployment, e.Namespace(), "ate-controller", e.Cfg.RolloutTimeout); err != nil {
