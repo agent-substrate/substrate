@@ -306,6 +306,9 @@ func main() {
 	if err := controlapi.RegisterActorCrashes(otel.Meter("ateapi")); err != nil {
 		serverboot.Fatal(ctx, "Failed to register actor-crashes metric", err)
 	}
+	if err := controlapi.RegisterGoldenBuilds(otel.Meter("ateapi")); err != nil {
+		serverboot.Fatal(ctx, "Failed to register golden-builds metric", err)
+	}
 
 	instruments, err := controlapi.NewInstruments(otel.Meter("ateapi"))
 	if err != nil {
