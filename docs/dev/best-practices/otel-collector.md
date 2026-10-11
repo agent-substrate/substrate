@@ -504,12 +504,12 @@ failure.
 
 ## Local Development (kind)
 
-`ate-setup --kind` installs a collector plus Jaeger into
-the `otel-system` namespace — see
-`manifests/ate-install/kind/otel-collector.yaml`. It is a single-replica
-Deployment, which is appropriate for a one-node kind cluster. The kind
-overlay patches every component's `OTEL_EXPORTER_OTLP_ENDPOINT` to point at
-it.
+`ate-setup --kind` installs a collector plus Jaeger, a Prometheus and a
+Loki into the `otel-system` namespace — see
+`manifests/ate-install/kind/otel-collector.yaml`, `prometheus.yaml` and
+`loki.yaml`. The collector is a single-replica Deployment, which is
+appropriate for a one-node kind cluster. The kind overlay patches every
+component's `OTEL_EXPORTER_OTLP_ENDPOINT` to point at it.
 
 View traces:
 
