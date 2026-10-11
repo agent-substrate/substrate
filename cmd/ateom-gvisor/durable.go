@@ -44,15 +44,15 @@ func durableTarFile(volumeName string) (string, error) {
 }
 
 // legacyDurableTarFile is the single tar of every durable-dir volume that
-// snapshots held before the one-tar-per-volume layout. A checkpoint never
-// writes it any more, so its presence marks a snapshot in that layout.
+// snapshots held before the one-tar-per-volume layout, its entries named
+// <volumeName>/... . A checkpoint never writes it any more, so its presence
+// marks a snapshot in that layout.
 const legacyDurableTarFile = "durable-dir.tar"
 
 // errLegacySnapshotLayout refuses a restore from a snapshot in the layout
-// before one tar per durable-dir volume: its data is in legacyDurableTarFile,
-// which is never extracted, so restoring it would bring the actor up with
-// empty volumes.
-var errLegacySnapshotLayout = errors.New("snapshot written before the per-volume layout; re-snapshot from a running actor or reset the golden snapshot")
+// before one tar per durable-dir volume that convertLegacyDurableLayout
+// cannot convert.
+var errLegacySnapshotLayout = errors.New("snapshot written before the per-volume layout does not convert")
 
 // hasDurableVolumes reports whether any container mounts a durable-dir volume.
 func hasDurableVolumes(containers []*ateompb.Container) bool {
@@ -89,14 +89,44 @@ func tarDurableVolumes(ctx context.Context, dir, checkpointDir string, volumes [
 	return files, nil
 }
 
+// convertLegacyDurableLayout rewrites a snapshot directory in the layout
+// before one tar per durable-dir volume into the current one: the entries of
+// legacyDurableTarFile under each of volumes become that volume's
+// durableTarFile, which a restore extracts like any other. It does nothing
+// for a snapshot in the current layout. legacyDurableTarFile stays, so a
+// conversion that did not finish runs again on the next restore; the next
+// checkpoint writes the current layout.
+//
+// A snapshot it cannot convert, one whose archive is unreadable or holds an
+// entry outside every volume, is refused with errLegacySnapshotLayout and the
+// cause, so the actor never resumes with empty volumes.
+func convertLegacyDurableLayout(snapshotDir string, volumes []string) error {
+	legacy := filepath.Join(snapshotDir, legacyDurableTarFile)
+	if _, err := os.Stat(legacy); errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	dsts := make(map[string]string, len(volumes))
+	for _, vol := range volumes {
+		name, err := durableTarFile(vol)
+		if err != nil {
+			return err
+		}
+		dsts[vol] = filepath.Join(snapshotDir, name)
+	}
+	if err := tarutil.Split(legacy, dsts); err != nil {
+		return apierror.FailedPrecondition("%w: %w; re-snapshot from a running actor or reset the golden snapshot", errLegacySnapshotLayout, err)
+	}
+	return nil
+}
+
 // untarDurableVolumes restores each durable-dir volume from the snapshot into
 // its directory under dir, which atelet has already created, empty. A volume
 // with no tar in the snapshot (added to the template since) stays empty. A
-// snapshot in the layout before one tar per volume is refused with
-// errLegacySnapshotLayout.
+// snapshot in the layout before one tar per volume is converted first (see
+// convertLegacyDurableLayout).
 func untarDurableVolumes(dir, snapshotDir string, volumes []string) error {
-	if _, err := os.Stat(filepath.Join(snapshotDir, legacyDurableTarFile)); err == nil {
-		return apierror.FailedPrecondition("%w", errLegacySnapshotLayout)
+	if err := convertLegacyDurableLayout(snapshotDir, volumes); err != nil {
+		return err
 	}
 	for _, vol := range volumes {
 		name, err := durableTarFile(vol)
