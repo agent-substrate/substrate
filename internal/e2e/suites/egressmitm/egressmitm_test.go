@@ -22,6 +22,7 @@ package egressmitm
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -79,6 +80,7 @@ func TestActorEgressMITMTrust(t *testing.T) {
 	e2e.EnsureEgressTrustBundle(t, ctx, clients)
 
 	probeNamespace, _ = e2e.DeployProbe(t, env["BUCKET_NAME"], "egressmitm", e2e.WithTrustBundle())
+	e2e.LogEgressGatewayOnFailure(t, 300)
 
 	const id = "probe-mitm"
 	createAndResumeActor(t, ctx, clients, id)
@@ -92,27 +94,12 @@ func TestActorEgressMITMTrust(t *testing.T) {
 
 	const origin = "https://" + egressOriginHost + "/"
 
-	// The gateway signs with the pool mounted into its pod, and kubelet
-	// propagates Secret contents into that mount on its own schedule (up to
-	// ~1 minute). In CI the pool predates the gateway pod, but a LOCAL rerun
-	// can recreate the pool moments before this fetch (a prior run's cleanup
-	// deleted it), leaving the gateway briefly signing with the old CA — so
-	// certificate failures retry for one propagation window before counting.
-	deadline := time.Now().Add(2 * time.Minute)
-	var pos fetchResponse
-	for {
-		pos = probeFetch(t, ctx, rc, id, origin, "bundle")
-		isCertErr := strings.Contains(pos.Error, "certificate") || strings.Contains(pos.Error, "x509")
-		if pos.Error == "" || !isCertErr || time.Now().After(deadline) {
-			break
-		}
-		time.Sleep(5 * time.Second)
-	}
+	pos := fetchOK(t, ctx, rc, id, origin, "bundle")
 	if pos.Error != "" {
 		t.Fatalf("TLS through the MITM egress gateway with the projected trust bundle failed: %s — the projected anchors did not validate the gateway's minted leaf (or interception/minting is broken)", pos.Error)
 	}
 	if pos.Status != "200" {
-		t.Fatalf("fetch %s via projected bundle: status %s, want 200", origin, pos.Status)
+		t.Fatalf("fetch %s via projected bundle: want status 200, got %s", origin, pos)
 	}
 
 	neg := probeFetch(t, ctx, rc, id, origin, "system")
@@ -129,12 +116,12 @@ func TestActorEgressMITMTrust(t *testing.T) {
 		{origin: "https://" + egressOriginHost + ":1/", dial: egressOriginHost + ":443"},
 		{origin: "http://" + egressOriginHost + ":1/", dial: egressOriginHost + ":80"},
 	} {
-		res := probeFetch(t, ctx, rc, id, tc.origin, "bundle", "dial="+url.QueryEscape(tc.dial))
+		res := fetchOK(t, ctx, rc, id, tc.origin, "bundle", "dial="+url.QueryEscape(tc.dial))
 		switch {
 		case res.Error != "":
 			t.Errorf("fetch of %s dialed at %s failed: %s", tc.origin, tc.dial, res.Error)
 		case res.Status != "200":
-			t.Errorf("fetch of %s dialed at %s: status %s, want 200 — the gateway dialed the port in the Host instead of the one the actor dialed", tc.origin, tc.dial, res.Status)
+			t.Errorf("fetch of %s dialed at %s: want status 200, got %s — a gateway-generated status says why in the body; an upstream failure there means the gateway dialed the port in the Host instead of the one the actor dialed", tc.origin, tc.dial, res)
 		}
 	}
 
@@ -142,21 +129,21 @@ func TestActorEgressMITMTrust(t *testing.T) {
 	// must validate with the system roots. That is also the proof it was not
 	// intercepted.
 	const passthroughOrigin = "https://" + egressOriginPassthroughHost + "/"
-	pt := probeFetch(t, ctx, rc, id, passthroughOrigin, "system")
+	pt := fetchOK(t, ctx, rc, id, passthroughOrigin, "system")
 	if pt.Error != "" {
 		t.Fatalf("TLS passthrough to %s failed: %s — the origin's certificate did not validate against the system roots, so the connection was intercepted, misrouted, or closed", passthroughOrigin, pt.Error)
 	}
 	if pt.Status != "200" {
-		t.Fatalf("passthrough fetch %s: status %s, want 200", passthroughOrigin, pt.Status)
+		t.Fatalf("passthrough fetch %s: want status 200, got %s", passthroughOrigin, pt)
 	}
 
 	// The gateway dials the name the SNI claims.
-	bySNI := probeFetch(t, ctx, rc, id, passthroughOrigin, "system", "dial="+url.QueryEscape(unreachableAddress))
+	bySNI := fetchOK(t, ctx, rc, id, passthroughOrigin, "system", "dial="+url.QueryEscape(unreachableAddress))
 	switch {
 	case bySNI.Error != "":
 		t.Errorf("TLS passthrough to %s dialed at %s failed: %s — the gateway dialed the actor's address instead of resolving the SNI", passthroughOrigin, unreachableAddress, bySNI.Error)
 	case bySNI.Status != "200":
-		t.Errorf("passthrough fetch %s dialed at %s: status %s, want 200", passthroughOrigin, unreachableAddress, bySNI.Status)
+		t.Errorf("passthrough fetch %s dialed at %s: want status 200, got %s", passthroughOrigin, unreachableAddress, bySNI)
 	}
 
 	// Envoy closes denied connections at the ClientHello; agentgateway
@@ -172,7 +159,7 @@ func TestActorEgressMITMTrust(t *testing.T) {
 			case denied.Status == "403" && denied.Error == "":
 				// An explicit denial after completing TLS with the actor.
 			case denied.Error == "":
-				t.Errorf("fetch of %s returned status %s, want 403 or a connection closed at the ClientHello", tc.origin, denied.Status)
+				t.Errorf("fetch of %s returned %s, want 403 or a connection closed at the ClientHello", tc.origin, denied)
 			case strings.Contains(denied.Error, "certificate") || strings.Contains(denied.Error, "x509"):
 				t.Errorf("fetch of %s failed certificate verification instead of returning a policy denial: %s", tc.origin, denied.Error)
 			case denied.Status != "":
@@ -197,6 +184,23 @@ const (
 type fetchResponse struct {
 	Status string `json:"status"`
 	Error  string `json:"error"`
+	// Body is what answered: the origin's page, or for a status the gateway
+	// generated, its reason (Envoy's upstream failure text or the ext_proc
+	// denial). A failure message quotes it so a 503 names its cause.
+	Body string `json:"body"`
+}
+
+// maxQuotedBody bounds the body a failure message quotes, so an origin's
+// page does not drown the assertion. A gateway's reason is far shorter.
+const maxQuotedBody = 512
+
+// String describes a fetch for a failure message.
+func (r fetchResponse) String() string {
+	body := strings.TrimSpace(r.Body)
+	if len(body) > maxQuotedBody {
+		body = body[:maxQuotedBody] + "..."
+	}
+	return fmt.Sprintf("status %q, error %q, body %q", r.Status, r.Error, body)
 }
 
 // probeFetch asks the probe to fetch origin with the given roots mode;
@@ -235,6 +239,53 @@ func probeFetch(t *testing.T, ctx context.Context, rc *e2e.RouterClient, id, ori
 		}
 		time.Sleep(2 * time.Second)
 	}
+}
+
+// fetchRetryWindow bounds how long a fetch that should succeed is retried
+// for a transient failure before the failure counts.
+const fetchRetryWindow = 2 * time.Minute
+
+// fetchOK is probeFetch for fetches that should return 200. It retries
+// transient failures for up to fetchRetryWindow, logging each with its
+// reason, as the credential-injection suite does:
+//
+//   - with the projected bundle, certificate errors: the gateway signs with
+//     the pool mounted into its pod, and kubelet propagates Secret contents
+//     into that mount on its own schedule (up to ~1 minute). In CI the pool
+//     predates the gateway pod, but a local rerun can recreate the pool
+//     moments before the fetch, leaving the gateway briefly signing with the
+//     old CA. With the system roots a certificate error is the result being
+//     tested for, so it is returned at once.
+//   - 502, 503 and 504, whether the gateway generated them (its dial to the
+//     origin or its control-plane lookup failed) or the public origin did.
+//     Neither is what these tests prove, and both clear on their own; a
+//     gateway bug keeps failing past the window.
+func fetchOK(t *testing.T, ctx context.Context, rc *e2e.RouterClient, id, origin, roots string, extraParams ...string) fetchResponse {
+	t.Helper()
+	deadline := time.Now().Add(fetchRetryWindow)
+	for {
+		start := time.Now()
+		resp := probeFetch(t, ctx, rc, id, origin, roots, extraParams...)
+		if !transientFailure(resp, roots) || time.Now().After(deadline) {
+			return resp
+		}
+		// The duration tells a timeout (the gateway's 5s dial, its 4s policy
+		// fetch) from an immediate refusal.
+		t.Logf("fetch of %s with %s roots: transient failure after %s, retrying: %s", origin, roots, time.Since(start).Round(time.Millisecond), resp)
+		time.Sleep(5 * time.Second)
+	}
+}
+
+// transientFailure reports whether fetchOK should retry resp.
+func transientFailure(resp fetchResponse, roots string) bool {
+	if resp.Error != "" {
+		return roots == "bundle" && (strings.Contains(resp.Error, "certificate") || strings.Contains(resp.Error, "x509"))
+	}
+	switch resp.Status {
+	case "502", "503", "504":
+		return true
+	}
+	return false
 }
 
 // createAndResumeActor mirrors the identity suite's self-healing actor
