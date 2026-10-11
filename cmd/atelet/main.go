@@ -115,6 +115,8 @@ var (
 	drainTimeout = pflag.Duration("drain-timeout", 5*time.Minute, "Deadline for the graceful gRPC drain on shutdown. In-flight RPCs still running past it are forcefully cancelled.")
 
 	snapshotPluginSocket = pflag.String("snapshot-plugin-socket", "/run/snapshot-plugin/node.sock", "Unix socket of the node snapshot plugin that external snapshots are fetched and uploaded through.")
+
+	suspendCacheMaxBytes = pflag.Int64("suspend-cache-max-bytes", 4<<30, "Disk budget for keeping suspended actors' snapshot files on the node after upload, so a resume on this node skips the download. Oldest entries are evicted first. 0 disables the cache.")
 )
 
 var _ imagecache.CandidateKeychain = (*credentialprovider.Keychain)(nil)
@@ -309,6 +311,7 @@ func main() {
 		csiDriverConfigGetter,
 		systemInfoVolumes,
 	)
+	wmService.suspendCacheMaxBytes = *suspendCacheMaxBytes
 	go systemInfoVolumes.run(ctx)
 
 	// Pre-download sandbox assets as SandboxConfigs appear/change so the first
@@ -467,6 +470,11 @@ type AteomHerder struct {
 	volumePlugins         map[string]volume.VolumePluginWorkerPlane
 	csiDriverConfigGetter csi.CSIDriverConfigGetter
 	systemInfoVolumes     *systemInfoVolumeRefresher
+
+	// suspendCacheMaxBytes bounds the suspend cache (suspend_cache.go); 0
+	// disables it. suspendCacheGC serializes its eviction sweeps.
+	suspendCacheMaxBytes int64
+	suspendCacheGC       sync.Mutex
 }
 
 var _ ateletpb.AteomHerderServer = (*AteomHerder)(nil)
@@ -755,6 +763,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 			dPersist = time.Since(tPersist)
 			return nil, fmt.Errorf("while uploading external snapshot: %w", err)
 		}
+		s.cacheSuspendedCheckpoint(ctx, actorUID, req.GetExternalConfig().GetSnapshotUri(), checkpointDir, sandboxRec)
 	case ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL:
 		if err := s.moveLocalCheckpoint(ctx, req, sandboxRec); err != nil {
 			dPersist = time.Since(tPersist)
@@ -1128,8 +1137,14 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		}
 	}()
 	var sandboxRec *sandboxAssetsRecord
+	// cacheEntry is set when this node kept the snapshot's files at suspend.
+	var cacheEntry string
 	switch req.GetType() {
 	case ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL:
+		if rec, entry, ok := cachedSuspendedCheckpoint(actorUID, req.GetExternalConfig().GetSnapshotUri()); ok {
+			sandboxRec, cacheEntry = rec, entry
+			break
+		}
 		manifest, err := s.fetchManifest(ctx, req.GetExternalConfig().GetSnapshotUri())
 		if err != nil {
 			return nil, fmt.Errorf("while fetching snapshot manifest: %w", err)
@@ -1151,6 +1166,10 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 
 	dManifest = time.Since(tManifest)
 	manifestDone = true
+	if cacheEntry == "" {
+		// Whatever the actor cached is superseded: it restores from another snapshot.
+		dropSuspendCache(ctx, actorUID)
+	}
 
 	// The manifest is what tells a golden restore from a latest one, so the
 	// snapshot kind only becomes knowable here.
@@ -1186,6 +1205,14 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		}()
 		switch req.GetType() {
 		case ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL:
+			if cacheEntry != "" {
+				err := takeSuspendCacheEntry(cacheEntry, checkpointDir, sandboxRec.SnapshotFiles)
+				if err == nil {
+					slog.InfoContext(gctx, "Restoring from the snapshot files kept on this node at suspend")
+					return nil
+				}
+				slog.WarnContext(gctx, "Failed to use the node's suspend cache; downloading", slog.Any("err", err))
+			}
 			if err := s.downloadExternalCheckpoint(gctx, req.GetExternalConfig().GetSnapshotUri(), checkpointDir, sandboxRec.SnapshotFiles); err != nil {
 				return err
 			}
@@ -1345,6 +1372,7 @@ func (s *AteomHerder) Terminate(ctx context.Context, req *ateletpb.TerminateRequ
 	if err := pruneLocalCheckpoints(ctx, actorUID); err != nil {
 		return nil, fmt.Errorf("failed to prune local checkpoints during terminate (actor: %s, actorUID: %s): %w", actorRef, actorUID, err)
 	}
+	dropSuspendCache(ctx, actorUID)
 
 	// Reclaim the actor's directories on the node
 	if err := removeActorDirs(actorUID); err != nil {
