@@ -428,6 +428,9 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 		// Remove all durable snapshots older than the new durable snapshot.
 		removeOlderSnapshotStorageEntries(toUpdate.Status, ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE, new(ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED), snap.GetGeneration())
 		toUpdate.Status.WorkerAssignment = nil
+		// The node keeps the snapshot's files after uploading them, so a resume
+		// there skips the download.
+		toUpdate.Status.CachedSnapshotNode = toUpdate.Status.AssignedNode
 		toUpdate.Status.AssignedNode = ""
 		return nil
 	})

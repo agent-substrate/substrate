@@ -299,6 +299,59 @@ func TestAssignWorkerAttempt_ReleasesIneligibleStaleWorker(t *testing.T) {
 	}
 }
 
+// A suspended actor resumes on the node that kept its snapshot files when one of
+// its workers has room, and the assignment clears the hint.
+func TestAssignWorkerAttempt_PrefersCachedSnapshotNode(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+
+	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "id1"},
+		Status: &ateapipb.ActorStatus{
+			State:              ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+			CachedSnapshotNode: "node-7",
+		},
+	})
+	// Sixteen eligible free workers, one per node: without the preference the
+	// cached node would be picked about one time in sixteen.
+	for i := range 16 {
+		pod := fmt.Sprintf("pod-%d", i)
+		if _, err := persistence.CreateWorker(ctx, &ateapipb.Worker{
+			Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerUID(pod)},
+			WorkerNamespace: "worker-ns",
+			WorkerPool:      "pool",
+			WorkerPod:       pod,
+			WorkerPodUid:    testWorkerUID(pod),
+			NodeName:        fmt.Sprintf("node-%d", i),
+			SandboxClass:    "gvisor",
+			Status:          &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Capacity: &ateapipb.WorkerResources{Actors: 1}},
+		}); err != nil {
+			t.Fatalf("CreateWorker(%s): %v", pod, err)
+		}
+	}
+
+	cacheCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	wc := workercache.New(persistence, time.Minute)
+	if err := wc.Start(cacheCtx); err != nil {
+		t.Fatalf("workercache.Start: %v", err)
+	}
+	w := &ActorWorkflow{store: persistence, workerCache: wc, scheduler: scheduling.New(wc)}
+	tmpl := &ateapipb.ActorTemplate{
+		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR},
+	}
+	stored, worker, err := w.assignWorkerAttempt(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, tmpl)
+	if err != nil {
+		t.Fatalf("assignWorkerAttempt() error = %v", err)
+	}
+	if got := worker.GetNodeName(); got != "node-7" {
+		t.Errorf("assigned a worker on %q, want the cached snapshot node %q", got, "node-7")
+	}
+	if got := stored.GetStatus().GetCachedSnapshotNode(); got != "" {
+		t.Errorf("CachedSnapshotNode = %q after assignment, want cleared", got)
+	}
+}
+
 // TestAssignWorkerAttempt_RetryAfterConflictPicksFreshWorker verifies an
 // assignment attempt carries no state from a conflicted predecessor: when a
 // concurrent resume wins the picked worker, the loser's retry re-selects from

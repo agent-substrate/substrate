@@ -3752,6 +3752,8 @@ func TestSuspendActor(t *testing.T) {
 			Snapshots: []*ateapipb.Snapshot{
 				newDurableSnapshot(2, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, durableSnapshotStorage(sourceActor.GetStatus()).GetFidelity(), tmpl.GetMetadata().GetUid(), snapshotURI),
 			},
+			// The node the actor was suspended from keeps the snapshot's files.
+			CachedSnapshotNode: "node1",
 		},
 	}
 
