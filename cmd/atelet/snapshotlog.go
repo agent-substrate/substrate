@@ -17,9 +17,9 @@ package main
 import (
 	"log/slog"
 
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/resources"
-	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
@@ -57,12 +57,14 @@ func snapshotLogAttrs(a resources.ActorAttribution, op snapshotOp, durationKey s
 	}
 
 	if err != nil {
-		// Only an error that came back over gRPC carries a status; atelet's
-		// own failures are plain errors, and the ones worth telling apart are
-		// the context ones (a timed-out download, a cancelled restore).
-		code := status.Code(err)
-		if code == codes.Unknown {
-			code = status.FromContextError(err).Code()
+		// The code atelet chose, or the context's (a timed-out download, a
+		// cancelled restore); failing that, the code of a failed upstream
+		// call, which tells its failures apart even though atelet's caller
+		// only sees Internal.
+		s, ok := apierror.FromError(err)
+		code := s.Code()
+		if !ok {
+			code = status.Code(err)
 		}
 		attrs = append(attrs, slog.String(string(ateattr.ErrorTypeKey), code.String()))
 	}

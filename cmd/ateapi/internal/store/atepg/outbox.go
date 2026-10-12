@@ -119,15 +119,8 @@ const (
 	// Minimum time retention keeps outbox rows.
 	outboxRetentionAge = 15 * time.Minute
 
-	// Paces partition maintenance.
-	outboxMaintenanceInterval = time.Minute
-
 	// The outbox partition range width.
 	outboxPartitionInterval = 15 * time.Minute
-
-	// Bounds a maintenance pass to prevent indefinite hangs (e.g., from lock waits)
-	// which would permanently starve partition creation. Stalls abort and retry.
-	outboxMaintenancePassTimeout = 5 * time.Minute
 
 	// How many intervals ahead partitions are pre-created: creation must stall past
 	// lead-1 intervals before any write detours into the DEFAULT partition backstop.
@@ -148,24 +141,6 @@ func (p *Persistence) outboxNow(ctx context.Context) (time.Time, error) {
 		return time.Time{}, fmt.Errorf("reading database clock: %w", err)
 	}
 	return now.UTC(), nil
-}
-
-// Maintains worker_outbox partitions on a fixed timer.
-func (p *Persistence) outboxMaintenance(ctx context.Context) {
-	ticker := time.NewTicker(outboxMaintenanceInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-		passCtx, cancel := context.WithTimeout(ctx, outboxMaintenancePassTimeout)
-		if err := p.maintainWorkerOutboxPartitions(passCtx); err != nil && ctx.Err() == nil {
-			slog.WarnContext(ctx, "worker outbox maintenance failed", slog.Any("err", err))
-		}
-		cancel()
-	}
 }
 
 // Database-scoped advisory lock used to elect a single replica to run the retention transaction (drops + trim).
@@ -213,7 +188,7 @@ func (p *Persistence) maintainWorkerOutboxPartitions(ctx context.Context) error 
 // own elected transaction. Locks touched: DEFAULT child only — never the
 // parent (see maintainWorkerOutboxPartitions on deadlock ordering).
 func (p *Persistence) retireStrayedOutboxDefault(ctx context.Context) error {
-	tx, err := p.watchPool.Begin(ctx)
+	tx, err := p.ownerPool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("beginning outbox stray-cleanup transaction: %w", err)
 	}
@@ -255,7 +230,7 @@ func (p *Persistence) retireStrayedOutboxDefault(ctx context.Context) error {
 // worker write's outbox append) plus the dropped children — never the
 // DEFAULT while waiting on the parent.
 func (p *Persistence) dropExpiredOutboxRetention(ctx context.Context, now time.Time) error {
-	tx, err := p.watchPool.Begin(ctx)
+	tx, err := p.ownerPool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("beginning outbox retention transaction: %w", err)
 	}
@@ -313,7 +288,7 @@ func (p *Persistence) createWorkerOutboxPartitions(ctx context.Context, instants
 func isCheckViolation(err error) bool { return pgErrCode(err) == "23514" }
 
 func (p *Persistence) tryCreateWorkerOutboxPartitions(ctx context.Context, truncateStrays bool, instants ...time.Time) error {
-	tx, err := p.watchPool.Begin(ctx)
+	tx, err := p.ownerPool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("beginning outbox partition transaction: %w", err)
 	}

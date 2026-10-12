@@ -2,13 +2,13 @@
 
 This directory contains a demo of a stateful counter application running on Agent Substrate.
 
-It deploys a simple Go HTTP server (`counter.go`) that increments two counters on every request — one in process memory, one in a file on a durable volume — and preserves both across suspends and resumes: the template's `Full`-scope `onCommit` snapshot captures process memory alongside the durable volumes, so the in-memory count continues from where it left off. (With a `Data`-scope snapshot policy, only the durable-volume counter would survive and the in-memory counter would restart from a cold boot.)
+It deploys a simple Go HTTP server (`counter.go`) that increments two counters on every request — one in process memory, one in a file on a durable volume — and preserves both across suspends and resumes: the template's `MEMORY` `preferredFidelity` snapshot captures process memory alongside the durable volumes, so the in-memory count continues from where it left off. (With a `VOLUMES` fidelity, only the durable-volume counter would survive and the in-memory counter would restart from a cold boot.)
 
 The demo uses two kinds of resources: the `WorkerPool` is a Kubernetes CRD, while the actor template is a Substrate `ActorTemplate` resource — an `ateapipb.ActorTemplate` living in an **atespace** rather than a Kubernetes namespace, managed through the ate API with `kubectl ate`.
 
 ## Prerequisites
 
-- A k8s cluster with Agent Substrate installed (`./hack/install-ate.sh --deploy-ate-system`).
+- A k8s cluster with Agent Substrate installed (`./hack/install-ate.sh --deploy-ate-system --credential-provider='{"name":"k8s.io"}'`).
 - `ko` installed for building images.
 - A GCS bucket for storing snapshots (configured via `BUCKET_NAME` env var).
 
@@ -99,7 +99,7 @@ kubectl ate suspend actor my-counter-1 -a ate-demo-counter
 
 Repeat the `curl` from step 1 and the actor resumes from its snapshot —
 possibly on a different worker — with **both** counters continuing from where
-they left off: the memory count comes back from the `Full` snapshot's process
+they left off: the memory count comes back from the `MEMORY` snapshot's process
 memory, the file counter from the durable volume.
 
 4. To permanently delete the suspended actor:
@@ -142,6 +142,10 @@ prioritizing it, not a fundamental limitation of the design.
 The same in-RAM-counter suspend/resume-continuity demo also runs on the micro-VM
 sandbox class (`ateom-microvm`: a Kata guest on Cloud Hypervisor), proving that
 the guest-memory snapshot round-trips just as gVisor's process snapshot does.
+The micro-VM class is also the one that serves `SNAPSHOT_FIDELITY_ROOTFS`, a
+snapshot of the volumes and each container's rootfs writes without guest
+memory; this template keeps `MEMORY` because the in-RAM counter is the point of
+the demo.
 
 - [`demos/counter/counter-microvm.yaml.tmpl`](counter-microvm.yaml.tmpl) —
   the `WorkerPool` for the micro-VM sandbox class.

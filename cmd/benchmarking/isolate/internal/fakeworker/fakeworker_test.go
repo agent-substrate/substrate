@@ -1,0 +1,132 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package fakeworker
+
+import (
+	"crypto/tls"
+	"crypto/x509"
+	"net/netip"
+	"net/url"
+	"regexp"
+	"strings"
+	"testing"
+)
+
+// Names are pinned: a change renames every fake Worker's pod, which strands
+// the Workers a previous fake-workersync registered.
+func TestNamePinned(t *testing.T) {
+	if got, want := Name("r1", "benchmark-workloads", "benchmark-ateom", 0), "fake-r1-c52b9bd3-0"; got != want {
+		t.Errorf("Name = %q, want %q", got, want)
+	}
+}
+
+// k8sShortName is the k8s-short-name format pod names follow.
+var k8sShortName = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
+
+func TestNameIsAShortNameAtTheBounds(t *testing.T) {
+	name := Name(strings.Repeat("z", MaxRunLength), strings.Repeat("n", 63), strings.Repeat("p", 253), 99999)
+	if len(name) > 63 || !k8sShortName.MatchString(name) {
+		t.Errorf("Name at the bounds = %q (%d chars), want a short name of at most 63", name, len(name))
+	}
+}
+
+func TestNamesDistinctAcrossPools(t *testing.T) {
+	a := Name("r1", "ns", "pool-a", 0)
+	b := Name("r1", "ns", "pool-b", 0)
+	c := Name("r1", "other", "pool-a", 0)
+	if a == b || a == c || b == c {
+		t.Errorf("pools share a name: %q %q %q", a, b, c)
+	}
+}
+
+func TestIndexRoundTrips(t *testing.T) {
+	for _, i := range []int{0, 7, 1234} {
+		got, ok := Index("r1", "ns", "pool", Name("r1", "ns", "pool", i))
+		if !ok || got != i {
+			t.Errorf("Index(Name(%d)) = %d, %v", i, got, ok)
+		}
+	}
+	for _, name := range []string{
+		Name("r1", "ns", "other", 3),                                // another pool
+		Name("r2", "ns", "pool", 3),                                 // another run
+		Name("r1", "ns", "pool", 3) + "x",                           // not a number
+		strings.TrimSuffix(Name("r1", "ns", "pool", 0), "0") + "01", // not canonical
+		"benchmark-ateom-5d8f-xyz",
+	} {
+		if _, ok := Index("r1", "ns", "pool", name); ok {
+			t.Errorf("Index(%q) matched the pool", name)
+		}
+	}
+}
+
+func TestNodeRoundRobin(t *testing.T) {
+	nodes := []string{"a", "b", "c"}
+	var got []string
+	for i := range 5 {
+		got = append(got, Node(i, nodes))
+	}
+	if strings.Join(got, ",") != "a,b,c,a,b" {
+		t.Errorf("Node over 5 indexes = %v", got)
+	}
+}
+
+func TestIPInDocumentationRange(t *testing.T) {
+	doc := netip.MustParsePrefix("192.0.2.0/24")
+	for _, i := range []int{0, 253, 254, 1000} {
+		addr, err := netip.ParseAddr(IP(i))
+		if err != nil || !doc.Contains(addr) || addr.As4()[3] == 0 || addr.As4()[3] == 255 {
+			t.Errorf("IP(%d) = %q, want a host address in %s", i, IP(i), doc)
+		}
+	}
+	if IP(0) != IP(254) {
+		t.Errorf("IP(0) = %q, IP(254) = %q; addresses should repeat every 254", IP(0), IP(254))
+	}
+}
+
+func TestValidateRun(t *testing.T) {
+	for _, run := range []string{"r", "abc12345"} {
+		if err := ValidateRun(run); err != nil {
+			t.Errorf("ValidateRun(%q) = %v, want nil", run, err)
+		}
+	}
+	for _, run := range []string{"", "abc123456", "Run", "a-b", "a_b"} {
+		if err := ValidateRun(run); err == nil {
+			t.Errorf("ValidateRun(%q) = nil, want an error", run)
+		}
+	}
+}
+
+func TestVerifyPeerID(t *testing.T) {
+	const want = "spiffe://cluster.local/ns/benchmark-workloads/sa/fake-workersync"
+	state := func(path string) tls.ConnectionState {
+		cert := &x509.Certificate{}
+		if path != "" {
+			cert.URIs = []*url.URL{{Scheme: "spiffe", Host: "cluster.local", Path: path}}
+		}
+		return tls.ConnectionState{PeerCertificates: []*x509.Certificate{cert}}
+	}
+	if err := VerifyPeerID(state("/ns/benchmark-workloads/sa/fake-workersync"), want); err != nil {
+		t.Errorf("VerifyPeerID(matching) = %v", err)
+	}
+	if err := VerifyPeerID(state("/ns/ate-system/sa/atelet"), want); err == nil {
+		t.Error("VerifyPeerID accepted another workload")
+	}
+	if err := VerifyPeerID(state(""), want); err == nil {
+		t.Error("VerifyPeerID accepted a certificate with no SPIFFE ID")
+	}
+	if err := VerifyPeerID(tls.ConnectionState{}, want); err == nil {
+		t.Error("VerifyPeerID accepted no certificate")
+	}
+}

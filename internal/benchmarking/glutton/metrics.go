@@ -103,16 +103,25 @@ func (s *Service) initMetrics() error {
 	if err != nil {
 		return fmt.Errorf("create glutton.gossip.delay gauge: %w", err)
 	}
+	cpuWorkers, err := m.Int64ObservableGauge(
+		"glutton.cpu.workers",
+		metric.WithDescription("Number of goroutines currently spinning under UseCPU."),
+	)
+	if err != nil {
+		return fmt.Errorf("create glutton.cpu.workers gauge: %w", err)
+	}
 
 	if _, err := m.RegisterCallback(func(_ context.Context, o metric.Observer) error {
 		s.mu.Lock()
-		defer s.mu.Unlock()
 		o.ObserveInt64(fdsOpen, int64(len(s.fds)))
 		for host, p := range s.peers {
 			o.ObserveInt64(peerDelay, int64(p.delayMs), metric.WithAttributes(attribute.String("host", host)))
 		}
+		s.mu.Unlock()
+		// cpuLoad has its own lock, so read it outside s.mu.
+		o.ObserveInt64(cpuWorkers, int64(s.cpu.N()))
 		return nil
-	}, fdsOpen, peerDelay); err != nil {
+	}, fdsOpen, peerDelay, cpuWorkers); err != nil {
 		return fmt.Errorf("register glutton observable callback: %w", err)
 	}
 

@@ -19,8 +19,10 @@ $ go test -v ./internal/e2e/suites/... -args --e2e
 ## Preconditions
 
 The e2e tests assume you have a cluster set up with Agent Substrate installed,
-for example via `hack/install-ate.sh --deploy-ate-system` or
-`hack/install-ate-kind.sh --deploy-ate-system`.
+for example via `hack/install-ate.sh --deploy-ate-system --credential-provider='{"name":"k8s.io"}'`
+or `hack/install-ate-kind.sh --deploy-ate-system --credential-provider='{"name":"k8s.io"}'`.
+The egress credential injection suite needs that bundled provider, which is
+what CI installs on the envoy lane; see `internal/e2e/suites/egresscredinject`.
 
 ## Sandbox classes
 

@@ -21,13 +21,13 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/authz"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/principal"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	openfgav1 "github.com/openfga/api/proto/openfga/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // validAtespace returns a minimal Atespace which should pass input validation.
@@ -58,7 +58,7 @@ func TestAtespace_EndToEndOpenFGAScenarios(t *testing.T) {
 	}
 	t.Cleanup(fgaServer.Close)
 
-	authorizer, policyManager, err := authz.New(ctx, pool, fgaServer)
+	authorizer, policyManager, err := authz.New(ctx, pool, fgaServer, nil)
 	if err != nil {
 		t.Fatalf("authz.New failed: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestAtespace_EndToEndOpenFGAScenarios(t *testing.T) {
 	svc := &RPCService{
 		impl: newServiceImpl(persistence, nil),
 	}
-	interceptor := authz.UnaryServerInterceptor(authorizer)
+	interceptor := authz.UnaryServerInterceptor(authorizer, true)
 
 	asUser := func(id string) context.Context {
 		return principal.InjectContext(ctx, principal.PrincipalInfo{
@@ -164,12 +164,12 @@ func TestAtespace_EndToEndOpenFGAScenarios(t *testing.T) {
 	if _, err := callGet(bobCtx, "team-1"); err != nil {
 		t.Fatalf("expected bob to GetAtespace(team-1), got %v", err)
 	}
-	if _, err := callDelete(bobCtx, "team-1"); status.Code(err) != codes.PermissionDenied {
+	if _, err := callDelete(bobCtx, "team-1"); apierror.Code(err) != codes.PermissionDenied {
 		t.Fatalf("expected bob denied DeleteAtespace(team-1), got %v", err)
 	}
 
 	// Attempt duplicate CreateAtespace(team-1) -> AlreadyExists, and alice & bob keep permissions.
-	if _, err := callCreate(rootCtx, "team-1"); status.Code(err) != codes.AlreadyExists {
+	if _, err := callCreate(rootCtx, "team-1"); apierror.Code(err) != codes.AlreadyExists {
 		t.Fatalf("expected AlreadyExists on duplicate CreateAtespace(team-1), got %v", err)
 	}
 	if _, err := callGet(aliceCtx, "team-1"); err != nil {
@@ -186,7 +186,7 @@ func TestAtespace_EndToEndOpenFGAScenarios(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateActorTemplate failed: %v", err)
 	}
-	if _, err := callDelete(aliceCtx, "team-1"); status.Code(err) != codes.FailedPrecondition {
+	if _, err := callDelete(aliceCtx, "team-1"); apierror.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("expected FailedPrecondition when deleting non-empty team-1, got %v", err)
 	}
 	// Verify alice and bob still have their permissions on team-1.
@@ -234,10 +234,10 @@ func TestAtespace_EndToEndOpenFGAScenarios(t *testing.T) {
 	if _, err := callCreate(rootCtx, "team-1"); err != nil {
 		t.Fatalf("recreating team-1 failed: %v", err)
 	}
-	if _, err := callGet(aliceCtx, "team-1"); status.Code(err) != codes.PermissionDenied {
+	if _, err := callGet(aliceCtx, "team-1"); apierror.Code(err) != codes.PermissionDenied {
 		t.Fatalf("expected alice denied on recreated team-1, got %v", err)
 	}
-	if _, err := callGet(bobCtx, "team-1"); status.Code(err) != codes.PermissionDenied {
+	if _, err := callGet(bobCtx, "team-1"); apierror.Code(err) != codes.PermissionDenied {
 		t.Fatalf("expected bob denied on recreated team-1, got %v", err)
 	}
 }

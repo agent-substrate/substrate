@@ -338,31 +338,26 @@ func TestCleanupClosesEachDescriptorOnce(t *testing.T) {
 	}
 }
 
-// slowDNS holds its serving goroutines open until released, so a test can tell
-// whether Close waits for them or merely closes their sockets.
-type slowDNS struct{ release chan struct{} }
+// slowEgress holds its serving goroutine open until released, so a test can
+// tell whether Close waits for serving to stop or merely closes the sockets.
+type slowEgress struct{ release chan struct{} }
 
-func (d *slowDNS) ServePacket(ctx context.Context, pc net.PacketConn) error {
-	<-ctx.Done()
-	<-d.release
-	return pc.Close()
-}
-
-func (d *slowDNS) Serve(ctx context.Context, l net.Listener) error {
-	<-ctx.Done()
-	<-d.release
-	return l.Close()
+func (e *slowEgress) Bind(string) (func(context.Context, net.Listener) error, error) {
+	return func(_ context.Context, l net.Listener) error {
+		<-e.release
+		return l.Close()
+	}, nil
 }
 
 // Close's contract is that serving has stopped when it returns, not just that
-// the sockets are shut: a caller tearing an actor down needs the relay's
+// the sockets are shut: a caller tearing an actor down needs the worker's
 // capacity back.
 func TestSessionCloseWaitsForServingToStop(t *testing.T) {
 	roottest.Require(t, "creates network namespaces")
-	relay := &slowDNS{release: make(chan struct{})}
+	egress := &slowEgress{release: make(chan struct{})}
 	session, err := ServeSandbox(context.Background(), SandboxNetworkConfig{
-		ActorUID: "close-waits", EgressPort: testEgressPort, DNSPort: 53,
-	}, nil, relay)
+		ActorUID: "close-waits", EgressPort: testEgressPort,
+	}, egress, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -371,11 +366,11 @@ func TestSessionCloseWaitsForServingToStop(t *testing.T) {
 	go func() { returned <- session.Close(context.Background()) }()
 	select {
 	case <-returned:
-		t.Fatal("Close returned while the relay was still serving")
+		t.Fatal("Close returned while the session was still serving")
 	case <-time.After(250 * time.Millisecond):
 	}
 
-	close(relay.release)
+	close(egress.release)
 	select {
 	case err := <-returned:
 		if err != nil {
@@ -391,11 +386,11 @@ func TestSessionCloseWaitsForServingToStop(t *testing.T) {
 // activation of this actor.
 func TestSessionCloseReportsAWaitItCouldNotFinish(t *testing.T) {
 	roottest.Require(t, "creates network namespaces")
-	relay := &slowDNS{release: make(chan struct{})}
-	defer close(relay.release)
+	egress := &slowEgress{release: make(chan struct{})}
+	defer close(egress.release)
 	session, err := ServeSandbox(context.Background(), SandboxNetworkConfig{
-		ActorUID: "close-deadline", EgressPort: testEgressPort, DNSPort: 53,
-	}, nil, relay)
+		ActorUID: "close-deadline", EgressPort: testEgressPort,
+	}, egress, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

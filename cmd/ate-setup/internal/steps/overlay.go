@@ -19,6 +19,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -129,30 +131,31 @@ func (e *Env) renderAtenetRouterManifest(ctx context.Context) ([]byte, error) {
 	return e.renderResolve(ctx, e.Cfg.Manifest("atenet-router.yaml"))
 }
 
-// atenetEgressManifestPath returns the egress manifest path based on configuration.
+// atenetEgressManifestPath returns the envoy egress gateway manifest.
 func (e *Env) atenetEgressManifestPath() string {
-	if e.Cfg.ExperimentalUseSDSMint {
-		return e.Cfg.Manifest("atenet-egress-with-sdsmint.yaml")
-	}
 	return e.Cfg.Manifest("atenet-egress.yaml")
 }
 
 // renderAtenetEgressManifest produces the atenet egress manifest.
-func (e *Env) renderAtenetEgressManifest(ctx context.Context) ([]byte, error) {
+func (e *Env) renderAtenetEgressManifest(ctx context.Context, provider config.CredentialProvider) ([]byte, error) {
 	general := e.Cfg.AdditionalEgressExtprocService != ""
-	injection := e.Cfg.ExperimentalEgressCredentialInjection
 
 	if e.Cfg.Router == config.RouterAgentgateway {
+		// Rejected during configuration loading, which names the channel the
+		// value came from. This guards the invariant for a caller that built
+		// a Config directly; an operator never sees it.
 		if general {
-			return nil, fmt.Errorf("--experimental-additional-egress-extproc-service requires --atenet-dataplane=envoy")
+			return nil, fmt.Errorf("internal: additional ext_proc filter reached rendering with dataplane %s", config.RouterAgentgateway)
 		}
-		if injection {
-			return nil, fmt.Errorf("--experimental-egress-credential-injection requires --atenet-dataplane=envoy")
+		raw, err := e.render(e.Cfg.Path(installDir + "/agentgateway-egress"))
+		if err != nil {
+			return nil, err
 		}
-		if e.Cfg.ExperimentalUseSDSMint {
-			return e.renderResolve(ctx, e.Cfg.Path(installDir+"/agentgateway-egress-mitm"))
+		raw, err = patchAgentgatewayEgressInject(raw, provider)
+		if err != nil {
+			return nil, err
 		}
-		return e.renderResolve(ctx, e.Cfg.Path(installDir+"/agentgateway-egress"))
+		return e.ResolveManifestBytes(ctx, raw)
 	}
 
 	imageReference, err := e.dockerfileImage(ctx, envoyDataplaneImage, envoyDataplaneDockefile)
@@ -173,18 +176,63 @@ func (e *Env) renderAtenetEgressManifest(ctx context.Context) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if injection {
-		raw, err = e.patchAtenetEgressInject(raw)
+	raw, err = e.patchAtenetEgressInject(raw, provider)
+	if err != nil {
+		return nil, err
+	}
+	raw = e.patchEnvoyDataplaneImage(raw, imageReference)
+	if e.Cfg.EnvoyConcurrency > 0 {
+		raw, err = patchAtenetEgressEnvoyConcurrency(raw, e.Cfg.EnvoyConcurrency)
 		if err != nil {
 			return nil, err
 		}
 	}
-	raw = e.patchEnvoyDataplaneImage(raw, imageReference)
 	rendered, err := e.renderBytes(raw)
 	if err != nil {
 		return nil, err
 	}
 	return e.ResolveManifestBytes(ctx, rendered)
+}
+
+// patchAtenetEgressEnvoyConcurrency uses a kustomize JSON6902 patch to append
+// --concurrency <concurrency> to the envoy container's args in the
+// atenet-egress Deployment.
+func patchAtenetEgressEnvoyConcurrency(raw []byte, concurrency int) ([]byte, error) {
+	dir, err := os.MkdirTemp("", "ate-setup-kustomize-")
+	if err != nil {
+		return nil, fmt.Errorf("while creating a scratch kustomization: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+
+	if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), raw, 0o600); err != nil {
+		return nil, fmt.Errorf("while staging a manifest for kustomize: %w", err)
+	}
+	kustomization := fmt.Sprintf(`apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - manifest.yaml
+patches:
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: atenet-egress
+      namespace: ate-system
+    patch: |-
+      - op: test
+        path: /spec/template/spec/containers/0/name
+        value: envoy
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: --concurrency
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: %q
+`, strconv.Itoa(concurrency))
+	if err := os.WriteFile(filepath.Join(dir, "kustomization.yaml"), []byte(kustomization), 0o600); err != nil {
+		return nil, fmt.Errorf("while writing a scratch kustomization: %w", err)
+	}
+	return kustomize.Build(dir)
 }
 
 // patchEnvoyDataplaneImage replaces the ${ENVOY_DATAPLANE_IMAGE} placeholder in
@@ -193,50 +241,54 @@ func (e *Env) patchEnvoyDataplaneImage(raw []byte, imageRef string) []byte {
 	return bytes.ReplaceAll(raw, []byte("${ENVOY_DATAPLANE_IMAGE}"), []byte(imageRef))
 }
 
-// patchAtenetEgressInject splices the credential-provider flags into the egress
-// sidecar over the #ATE_EGRESS_INJECT_FLAGS marker. It takes the manifest bytes
-// rather than reading the file so it can run after the general patch. Mirrors
-// hack/experimental-egress-credential-injection.sh; the two must stay in sync.
-func (e *Env) patchAtenetEgressInject(raw []byte) ([]byte, error) {
-	if !e.Cfg.ExperimentalUseSDSMint {
-		return nil, fmt.Errorf("--experimental-egress-credential-injection requires --experimental-use-sdsmint")
+// patchAtenetEgressInject replaces the #ATE_EGRESS_INJECT_FLAGS marker in the
+// egress sidecar's args with the credential-provider flags, or removes it when
+// injection is off, which leaves the gateway with no provider. It takes the
+// manifest bytes so it can run after the general patch.
+func (e *Env) patchAtenetEgressInject(raw []byte, provider config.CredentialProvider) ([]byte, error) {
+	var flagsBlock string
+	if provider.Enabled() {
+		flagsBlock = emitEgressInjectFlags(provider.Name, provider.Address, provider.ServerName())
 	}
+	return replaceManifestMarker(raw, "#ATE_EGRESS_INJECT_FLAGS", flagsBlock)
+}
 
-	name := e.Cfg.CredentialProviderName
-	if name == "" {
-		name = "ate-secret://k8s.io"
+// The HTTP and HTTPS listeners share the egress policy and its providers.
+func patchAgentgatewayEgressInject(raw []byte, provider config.CredentialProvider) ([]byte, error) {
+	var block string
+	if provider.Enabled() {
+		block = fmt.Sprintf(`credentialProviders:
+- uriAuthority: %q
+  target:
+    host: %q
+    policies:
+      backendTLS:
+        hostname: %q
+        cert: /run/podidentity.podcert.ate.dev/credential-bundle.pem
+        key: /run/podidentity.podcert.ate.dev/credential-bundle.pem
+        root: /run/servicedns-ca/trust-bundle.pem`, provider.Name, provider.Address, provider.ServerName())
 	}
-	address := e.Cfg.CredentialProviderAddress
-	if address == "" {
-		address = "k8s-credential-provider.ate-system.svc:50051"
-	}
-	serverName := address
-	if i := strings.LastIndex(address, ":"); i >= 0 {
-		serverName = address[:i]
-	}
+	return replaceManifestMarker(raw, "#ATE_AGENTGATEWAY_CREDENTIAL_PROVIDERS", block)
+}
 
-	flagsBlock := emitEgressInjectFlags(name, address, serverName)
-
+func replaceManifestMarker(raw []byte, marker, block string) ([]byte, error) {
 	var out []string
-	flagsReplaced := 0
+	replaced := 0
 	for _, line := range strings.Split(string(raw), "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "#ATE_EGRESS_INJECT_FLAGS") {
+		if strings.HasPrefix(strings.TrimSpace(line), marker) {
 			indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
-			for _, l := range strings.Split(flagsBlock, "\n") {
-				if l == "" {
-					out = append(out, "")
-				} else {
+			if block != "" {
+				for _, l := range strings.Split(block, "\n") {
 					out = append(out, indent+l)
 				}
 			}
-			flagsReplaced++
+			replaced++
 			continue
 		}
 		out = append(out, line)
 	}
-	if flagsReplaced != 1 {
-		return nil, fmt.Errorf("expected 1 #ATE_EGRESS_INJECT_FLAGS marker in %s, found %d",
-			e.atenetEgressManifestPath(), flagsReplaced)
+	if replaced != 1 {
+		return nil, fmt.Errorf("expected 1 %s marker, found %d", marker, replaced)
 	}
 	return []byte(strings.Join(out, "\n")), nil
 }
@@ -250,9 +302,6 @@ func emitEgressInjectFlags(name, address, serverName string) string {
 }
 
 func (e *Env) patchAtenetEgressManifest() ([]byte, error) {
-	if !e.Cfg.ExperimentalUseSDSMint {
-		return nil, fmt.Errorf("--experimental-additional-egress-extproc-service requires --experimental-use-sdsmint")
-	}
 	raw, err := os.ReadFile(e.atenetEgressManifestPath())
 	if err != nil {
 		return nil, fmt.Errorf("reading egress manifest: %w", err)
@@ -387,8 +436,8 @@ func emitAdditionalEgressExtprocCluster(address, port, serverName string) string
               port_value: %s`, additionalEgressExtprocCluster, serverName, serverName, additionalEgressExtprocCluster, address, port)
 }
 
-func (e *Env) applyAtenetEgress(ctx context.Context) error {
-	manifests, err := e.renderAtenetEgressManifest(ctx)
+func (e *Env) applyAtenetEgress(ctx context.Context, provider config.CredentialProvider) error {
+	manifests, err := e.renderAtenetEgressManifest(ctx, provider)
 	if err != nil {
 		return err
 	}
@@ -402,7 +451,7 @@ func (e *Env) applyAtenetEgress(ctx context.Context) error {
 		return err
 	}
 
-	if running && (e.Cfg.AdditionalEgressExtprocService != "" || e.Cfg.ExperimentalEgressCredentialInjection) {
+	if running && (e.Cfg.AdditionalEgressExtprocService != "" || provider.Enabled()) {
 		if err := e.Kube.RolloutRestartDeployment(ctx, e.Namespace(), "atenet-egress", time.Now()); err != nil {
 			return err
 		}

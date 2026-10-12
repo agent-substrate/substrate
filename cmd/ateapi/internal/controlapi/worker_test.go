@@ -22,10 +22,10 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
 )
@@ -57,9 +57,8 @@ func validWorker(name string, mods ...func(*ateapipb.Worker)) *ateapipb.Worker {
 
 func newAPIAssignment(actorUID string) *ateapipb.ActorAssignment {
 	return &ateapipb.ActorAssignment{
-		ActorTemplateRef: &ateapipb.ObjectRef{Atespace: "ate-system", Name: "tmpl"},
-		Actor:            &ateapipb.ObjectRef{Atespace: "team-a", Name: "actor-1"},
-		ActorUid:         actorUID,
+		Actor:    &ateapipb.ObjectRef{Atespace: "team-a", Name: "actor-1"},
+		ActorUid: actorUID,
 	}
 }
 
@@ -165,7 +164,7 @@ func TestListWorkerAssignments_AbsentWorker(t *testing.T) {
 	_, err := svc.ListWorkerActorAssignments(ctx, &ateapipb.ListWorkerActorAssignmentsRequest{
 		Worker: workerRef("3b9f1e77-2c4d-4a80-91be-6d5c8f0a7e21"),
 	})
-	if got := status.Code(err); got != codes.NotFound {
+	if got := apierror.Code(err); got != codes.NotFound {
 		t.Fatalf("code = %v (err %v), want %v", got, err, codes.NotFound)
 	}
 }
@@ -212,7 +211,7 @@ func TestGetWorker_Errors(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := svc.GetWorker(ctx, tc.req)
-			if got := status.Code(err); got != tc.want {
+			if got := apierror.Code(err); got != tc.want {
 				t.Errorf("GetWorker() code = %v (err %v), want %v", got, err, tc.want)
 			}
 		})
@@ -273,7 +272,7 @@ func TestCreateWorker_AlreadyExists(t *testing.T) {
 	seedAPIWorker(t, ctx, persistence, validWorker(apiWorkerName))
 
 	_, err := svc.CreateWorker(ctx, &ateapipb.CreateWorkerRequest{Worker: validWorker(apiWorkerName)})
-	if got := status.Code(err); got != codes.AlreadyExists {
+	if got := apierror.Code(err); got != codes.AlreadyExists {
 		t.Errorf("CreateWorker() code = %v (err %v), want %v", got, err, codes.AlreadyExists)
 	}
 }
@@ -307,7 +306,7 @@ func TestCreateWorker_InvalidArgument(t *testing.T) {
 				req.Worker = worker
 			}
 			_, err := svc.CreateWorker(ctx, req)
-			if got := status.Code(err); got != codes.InvalidArgument {
+			if got := apierror.Code(err); got != codes.InvalidArgument {
 				t.Errorf("CreateWorker() code = %v (err %v), want %v", got, err, codes.InvalidArgument)
 			}
 		})
@@ -404,14 +403,14 @@ func TestUpdateWorker_Preconditions(t *testing.T) {
 
 	t.Run("stale version", func(t *testing.T) {
 		err := update(func(md *ateapipb.ResourceMetadata) { md.Version += 7 })
-		if got := status.Code(err); got != codes.Aborted {
+		if got := apierror.Code(err); got != codes.Aborted {
 			t.Errorf("UpdateWorker() code = %v, want %v", got, codes.Aborted)
 		}
 	})
 
 	t.Run("foreign uid", func(t *testing.T) {
 		err := update(func(md *ateapipb.ResourceMetadata) { md.Uid = apiOtherWorkerName })
-		if got := status.Code(err); got != codes.Aborted {
+		if got := apierror.Code(err); got != codes.Aborted {
 			t.Errorf("UpdateWorker() code = %v, want %v", got, codes.Aborted)
 		}
 	})
@@ -420,14 +419,14 @@ func TestUpdateWorker_Preconditions(t *testing.T) {
 	// which is rejected before it reaches the store.
 	t.Run("missing uid", func(t *testing.T) {
 		err := update(func(md *ateapipb.ResourceMetadata) { md.Uid = "" })
-		if got := status.Code(err); got != codes.InvalidArgument {
+		if got := apierror.Code(err); got != codes.InvalidArgument {
 			t.Errorf("UpdateWorker() code = %v, want %v", got, codes.InvalidArgument)
 		}
 	})
 
 	t.Run("missing version", func(t *testing.T) {
 		err := update(func(md *ateapipb.ResourceMetadata) { md.Version = 0 })
-		if got := status.Code(err); got != codes.InvalidArgument {
+		if got := apierror.Code(err); got != codes.InvalidArgument {
 			t.Errorf("UpdateWorker() code = %v, want %v", got, codes.InvalidArgument)
 		}
 	})
@@ -479,7 +478,7 @@ func TestUpdateWorker_Errors(t *testing.T) {
 				req.Worker = updateFrom(seeded, tc.mutate)
 			}
 			_, err := svc.UpdateWorker(ctx, req)
-			if got := status.Code(err); got != tc.want {
+			if got := apierror.Code(err); got != tc.want {
 				t.Errorf("UpdateWorker() code = %v (err %v), want %v", got, err, tc.want)
 			}
 		})
@@ -498,7 +497,7 @@ func TestUpdateWorker_DrainingWorkerKeepsLabelsMutable(t *testing.T) {
 	}
 
 	got, err := svc.UpdateWorker(ctx, &ateapipb.UpdateWorkerRequest{
-		Worker: updateFrom(drained, func(w *ateapipb.Worker) { w.Labels = map[string]string{"tier": "batch"} }),
+		Worker: updateFrom(drained.GetWorker(), func(w *ateapipb.Worker) { w.Labels = map[string]string{"tier": "batch"} }),
 	})
 	if err != nil {
 		t.Fatalf("UpdateWorker() failed: %v", err)
@@ -542,7 +541,7 @@ func TestDeleteWorker_Absent(t *testing.T) {
 	svc, _ := newWorkerAPIService(t)
 
 	_, err := svc.DeleteWorker(ctx, &ateapipb.DeleteWorkerRequest{Worker: workerRef(apiWorkerName)})
-	if got := status.Code(err); got != codes.NotFound {
+	if got := apierror.Code(err); got != codes.NotFound {
 		t.Errorf("DeleteWorker() code = %v (err %v), want %v", got, err, codes.NotFound)
 	}
 }
@@ -575,7 +574,7 @@ func TestDeleteWorker_Preconditions(t *testing.T) {
 			Worker:  workerRef(apiWorkerName),
 			Options: &ateapipb.DeleteOptions{Version: seeded.GetMetadata().GetVersion() + 7},
 		})
-		if got := status.Code(err); got != codes.Aborted {
+		if got := apierror.Code(err); got != codes.Aborted {
 			t.Errorf("DeleteWorker() code = %v (err %v), want %v", got, err, codes.Aborted)
 		}
 	})
@@ -585,7 +584,7 @@ func TestDeleteWorker_Preconditions(t *testing.T) {
 			Worker:  workerRef(apiWorkerName),
 			Options: &ateapipb.DeleteOptions{Uid: apiOtherWorkerName},
 		})
-		if got := status.Code(err); got != codes.Aborted {
+		if got := apierror.Code(err); got != codes.Aborted {
 			t.Errorf("DeleteWorker() code = %v (err %v), want %v", got, err, codes.Aborted)
 		}
 	})
@@ -617,11 +616,11 @@ func TestDrainWorker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DrainWorker() failed: %v", err)
 	}
-	if got.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_DRAINING {
-		t.Errorf("state = %v, want %v", got.GetStatus().GetState(), ateapipb.WorkerState_WORKER_STATE_DRAINING)
+	if got.GetWorker().GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_DRAINING {
+		t.Errorf("state = %v, want %v", got.GetWorker().GetStatus().GetState(), ateapipb.WorkerState_WORKER_STATE_DRAINING)
 	}
-	if got.GetMetadata().GetVersion() != 2 {
-		t.Errorf("version = %d, want 2", got.GetMetadata().GetVersion())
+	if got.GetWorker().GetMetadata().GetVersion() != 2 {
+		t.Errorf("version = %d, want 2", got.GetWorker().GetMetadata().GetVersion())
 	}
 
 	// Draining again is a no-op, and specifically must not bump the version:
@@ -647,7 +646,7 @@ func TestDrainWorker_KeepsAssignment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DrainWorker() failed: %v", err)
 	}
-	if n := got.GetStatus().GetAllocated().GetActors(); n != 1 {
+	if n := got.GetWorker().GetStatus().GetAllocated().GetActors(); n != 1 {
 		t.Errorf("drained worker hosts %d actors, want the 1 left in place", n)
 	}
 }
@@ -669,7 +668,7 @@ func TestDrainWorker_Errors(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := svc.DrainWorker(ctx, tc.req)
-			if got := status.Code(err); got != tc.want {
+			if got := apierror.Code(err); got != tc.want {
 				t.Errorf("DrainWorker() code = %v (err %v), want %v", got, err, tc.want)
 			}
 		})
@@ -709,7 +708,7 @@ func TestServiceImplUpdateWorker_ImmutableFields(t *testing.T) {
 				tc.mutate(toUpdate)
 				return nil
 			})
-			if got := status.Code(err); got != codes.InvalidArgument {
+			if got := apierror.Code(err); got != codes.InvalidArgument {
 				t.Fatalf("changing %s returned %v (err %v), want %v", tc.field, got, err, codes.InvalidArgument)
 			}
 			if !strings.Contains(err.Error(), tc.field) {

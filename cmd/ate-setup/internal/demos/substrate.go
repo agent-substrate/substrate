@@ -18,8 +18,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/spf13/pflag"
-
+	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/kube"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/steps"
@@ -79,8 +78,8 @@ type Substrate struct {
 func (d *Substrate) Name() string        { return d.DemoName }
 func (d *Substrate) Description() string { return d.Short }
 
-// Flags registers nothing: most demos take no options.
-func (d *Substrate) Flags(*pflag.FlagSet) {}
+// Settings reports no configuration: most demos take none.
+func (d *Substrate) Settings() []config.Setting { return nil }
 
 // SubstrateDemo returns the demo's substrate configuration. It exists so
 // tests can reach the manifests and template refs of demos that embed

@@ -34,7 +34,7 @@ import (
 )
 
 // TestEgressDNSLookupFamily requires ALL on every dynamic forward proxy DNS
-// cache in the install tree, so a new egress variant is checked the day it is
+// cache in the install tree, so a new egress manifest is checked the day it is
 // added rather than the day it is installed. atenet-egress.yaml says why ALL.
 func TestEgressDNSLookupFamily(t *testing.T) {
 	for _, path := range manifestPaths(t) {
@@ -63,26 +63,15 @@ func TestRenderedOverlaysDNSLookupFamily(t *testing.T) {
 	}
 }
 
-// TestEgressManifestsCarryDNSCaches pins the cache count of each manifest the
-// installer can select, so a walk that quietly stopped matching fails here
-// instead of passing TestEgressDNSLookupFamily vacuously. Ranging over
-// ExperimentalUseSDSMint covers the whole input domain of the selection.
+// TestEgressManifestsCarryDNSCaches pins the cache count of the envoy egress
+// manifest the installer selects, so a walk that quietly stopped matching
+// fails here instead of passing TestEgressDNSLookupFamily vacuously.
 func TestEgressManifestsCarryDNSCaches(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		sdsmint bool
-		want    int
-	}{
-		{name: "envoy", want: 2},
-		{name: "sdsmint", sdsmint: true, want: 7},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			env := &Env{Cfg: &config.Config{Root: repoRoot(t), ExperimentalUseSDSMint: tc.sdsmint}}
-			path := env.atenetEgressManifestPath()
-			if got := len(dnsCacheConfigs(t, path)); got != tc.want {
-				t.Errorf("%s has %d dns_cache_config blocks, want %d", path, got, tc.want)
-			}
-		})
+	const want = 7
+	env := &Env{Cfg: &config.Config{Root: repoRoot(t)}}
+	path := env.atenetEgressManifestPath()
+	if got := len(dnsCacheConfigs(t, path)); got != want {
+		t.Errorf("%s has %d dns_cache_config blocks, want %d", path, got, want)
 	}
 }
 

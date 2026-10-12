@@ -14,7 +14,7 @@
 
 # The egress credential-injection fixture: the Secret the suite's policy
 # injects, and the k8s-credential-provider authorization policy that lets the
-# probe fixture's atespaces resolve it. Applied by e2e.DeployCredentialProvider
+# probe fixture's atespaces resolve it. Applied by e2e.ConfigureCredentialProvider
 # before the provider Deployment itself, which reads the ConfigMap once at
 # startup.
 

@@ -44,7 +44,12 @@ func (s *AteomHerder) mountExternalVolumes(ctx context.Context, actorUID string,
 		if err != nil {
 			return fmt.Errorf("failed to get volume plugin for %q: %w", ext.GetVolumeType(), err)
 		}
-		if err := plugin.MountVolume(ctx, ext.GetStorageVolumeId(), hostPath, ext.GetVolumeContext()); err != nil {
+		if err := plugin.MountVolume(ctx, volume.MountVolumeRequest{
+			VolumeID:       ext.GetStorageVolumeId(),
+			TargetPath:     hostPath,
+			VolumeContext:  ext.GetVolumeContext(),
+			PublishContext: ext.GetPublishContext(),
+		}); err != nil {
 			return fmt.Errorf("failed to mount volume %q to %q: %w", ext.GetStorageVolumeId(), hostPath, err)
 		}
 	}
@@ -86,7 +91,7 @@ func (s *AteomHerder) getPlugin(ctx context.Context, driverName string) (volume.
 		return plugin, nil
 	}
 
-	csiPlugin, err := csi.NewCSIPlugin(ctx, s.csiDriverConfigLister, driverName, false /*isController*/)
+	csiPlugin, err := csi.NewCSIPlugin(ctx, s.csiDriverConfigGetter, driverName, false /*isController*/)
 	if err != nil {
 		return nil, err
 	}

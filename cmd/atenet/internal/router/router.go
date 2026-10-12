@@ -57,8 +57,8 @@ type RouterServer struct {
 	Cmd       *cobra.Command
 	clientset kubernetes.Interface
 	apiClient ateapipb.ControlClient
-	// extprocSrv is the ext_proc mux. Which handlers it carries — ingress,
-	// egress, or both — follows cfg.Mode.
+	// extprocSrv is the ext_proc mux. Which handler it carries, ingress or
+	// egress, follows cfg.Mode.
 	extprocSrv *extproc.Server
 	// ingressHandler is the ingress handler registered on extprocSrv, kept for
 	// the status page's parking snapshot. Nil in egress-only mode.
@@ -190,9 +190,9 @@ func (s *RouterServer) Run(ctx context.Context) error {
 
 	g, ctx := errgroup.WithContext(ctx)
 
-	// Register one handler per direction this instance serves. The mux refuses
-	// any direction missing from this map, so the mode is enforced here rather
-	// than merely advertised.
+	// Register the handler for the direction this instance serves. The mux
+	// refuses any direction missing from this map, so the mode is enforced here
+	// rather than merely advertised.
 	handlers := extproc.Handlers{}
 	if s.cfg.Mode.ServesIngress() {
 		parkMetrics, err := ingress.NewParkingMetrics()
@@ -220,8 +220,8 @@ func (s *RouterServer) Run(ctx context.Context) error {
 		}
 		// Enable egress credential injection when a credential provider address
 		// is set: dial the provider over mTLS and hand the client to the handler.
-		// With no address the handler gets no provider, so an
-		// injection-requiring rule is skipped (see egress.applyEffects).
+		// With no address the handler gets no provider, and a request matching
+		// an injection-requiring rule is denied (see egress.applyEffects).
 		var provider credproviderpb.CredentialProviderClient
 		var providerName string
 		if s.cfg.CredentialProvider.Address != "" {

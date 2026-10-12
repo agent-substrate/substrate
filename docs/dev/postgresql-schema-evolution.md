@@ -49,6 +49,8 @@ This sequence keeps the previous binary compatible during a rollout and a tempor
 
 Store migration files in `cmd/ateapi/internal/store/atepg/migrations`.
 
+Standalone Substrate defaults to the `substrate` schema, including under Kagent's umbrella chart. Set `postgres.schema` in Helm or `ATE_API_POSTGRES_SCHEMA` in local setup to use another schema.
+
 - Use the next sequential `NNNNNN_name.sql` filename.
 - Add exactly one `-- +goose Up` annotation.
 - Use SQL migrations only.
@@ -57,6 +59,7 @@ Store migration files in `cmd/ateapi/internal/store/atepg/migrations`.
 - Do not add SQL transaction control statements.
 - Do not use `IF NOT EXISTS` for a schema change.
 - Keep each startup migration short.
+- A database administrator must configure the owner role's default table and sequence privileges for the read/write role before migrations. These grants do not go to `PUBLIC` or Kagent's roles. In this first pass, migration ledgers receive the same table privileges as other objects.
 
 Before the first stable v1 release, developers can change or squash migration files. Recreate a development database after its migration history changes.
 

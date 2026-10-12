@@ -101,10 +101,10 @@ func Validate(s *Script) error {
 	}
 	b := Budgets(s.Steps)
 	if s.MinActorMemory <= 0 {
-		return fmt.Errorf("script %q: min_actor_memory is required (declared RAM %s + disk %s)", s.Name, formatSize(b.RAM), formatSize(b.Disk))
+		return fmt.Errorf("script %q: min_actor_memory is required (declared RAM %s + disk %s)", s.Name, FormatSize(b.RAM), FormatSize(b.Disk))
 	}
 	if declared := b.RAM + b.Disk; s.MinActorMemory < declared {
-		return fmt.Errorf("script %q: min_actor_memory %s is below the declared RAM %s + disk %s", s.Name, formatSize(s.MinActorMemory), formatSize(b.RAM), formatSize(b.Disk))
+		return fmt.Errorf("script %q: min_actor_memory %s is below the declared RAM %s + disk %s", s.Name, FormatSize(s.MinActorMemory), FormatSize(b.RAM), FormatSize(b.Disk))
 	}
 	return nil
 }

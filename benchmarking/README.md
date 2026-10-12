@@ -27,6 +27,9 @@ image, then deploys the Locust workers:
 Useful flags:
 
 * `--worker-count N` — number of `WorkerPool` replicas (default 1).
+* `--worker-memory SIZE` — memory request and limit for each `WorkerPool` pod
+  (default unset, the pod is unsized). Set it above half a node's allocatable
+  memory to get one worker per node.
 * `--skip-build` — reuse the existing `:latest` locust image (skip the
   `docker build && docker push` step).
 
@@ -45,7 +48,7 @@ convenience:
 ```
 
 The installer accepts `--benchmark-worker-count N` (default `1`).
-`--skip-build` is only available when invoking
+`--skip-build` and `--worker-memory` are only available when invoking
 `benchmarking/deploy_locust.sh` directly.
 
 ## Running Tests
@@ -208,8 +211,13 @@ deployment fails loudly instead of showing up as OOM-flaky steps.
 
 * `--agentsession-script` — built-in script variant to run, by file name
   under `internal/benchmarking/boomer/agentsession/scripts/` (default
-  `coding-session`). Read once, on the worker's first iteration after the
-  swarm starts, then fixed for the worker's lifetime.
+  `coding-session`). Resolved when a session starts, so a change takes
+  effect for sessions started after the next swarm; sessions already
+  running finish on the script they started with.
+* `--agentsession-script-file` — path, on the boomer worker, of a script
+  YAML to run instead of a built-in variant; wins over
+  `--agentsession-script`. Normally set for you by
+  `locust/deploy.sh --agentsession-script FILE` (below).
 * `--agentsession-think-scale` — multiplier on every think gap; 0.5 makes the
   fleet twice as chatty, 4.0 models slow reasoning models (default 1.0). Each
   gap gets ±20% jitter so sessions don't move in lockstep.
@@ -255,12 +263,51 @@ Sizes are Kubernetes quantities. Each op is one glutton RPC:
 | `churn_ram` | `key`, `size` | re-randomizes part of an array in place, dirtying pages |
 | `walk_ram` | `key` | touches one byte per page: demand-paging cost after a resume |
 | `ping` | none | a minimal round trip through the router |
+| `dwell` | `millis` | no request: the actor stays resident and idle, as a gateway does during a model round trip or a typing gap |
 
 Loading is strict: unknown op kinds or fields, an argument a kind does not
 take, a read of a file nothing wrote, a walk of an array nothing filled, a
 duplicate step name, or a `min_actor_memory` below the declared RAM plus
 disk all fail before any actor is created. Built-in variants are checked by
 `TestEmbeddedScriptsAreValid`, so a broken file cannot merge.
+
+#### Built-in script variants
+
+`coding-session` (default) is a coding agent working one task: 20 steps of
+build, test and edit work, each preceded by a few seconds of LLM thinking
+spent suspended; about 40 CPU-seconds of sandbox work per lap.
+
+`personal-assistant` is an always-on assistant of the OpenClaw or Hermes
+Agent kind: one lap is one day in real time, with about 30 user messages
+in 7 clusters, a heartbeat turn every 30 minutes while the user is awake,
+hourly system-event crons, a morning briefing, model-catalog refreshes,
+one context compaction and a nightly memory sweep (61 wakes, about 65
+CPU-seconds and 150 MiB written per lap, a 640Mi resident heap that grows
+to about 960Mi). Each turn reads its session store, ships a 50 to 110 KiB
+context out through the router, dwells for the model round trip, and
+appends to its store, sized from an strace profile of OpenClaw; the
+script's header comment lists the figures. Its think gaps are the real
+idle gaps, so run it with a fractional think scale:
+`--agentsession-script personal-assistant --agentsession-think-scale 0.02`
+plays a day in about 30 minutes. Because every heartbeat and cron is a
+wake, the script also shows what an always-on agent costs a system that
+suspends it between events: an internal timer cannot fire in a suspended
+sandbox, so each of those turns needs an external wake.
+
+To run a script of your own without rebuilding anything, hand it to the
+locust deploy:
+
+```sh
+./benchmarking/locust/deploy.sh --deploy --user-class agentsession --agentsession-script ./my-session.yaml
+```
+
+The script validates the file locally first (the same check the worker
+runs, via `boomer-worker --check-agentsession-script`), uploads it as the
+`agentsession-script` ConfigMap, mounts it into the boomer workers at
+`/etc/agentsession/script.yaml`, and points the master's
+`--agentsession-script-file` default at that path. Workers log the loaded
+script's name, step count, and declared budgets on their first iteration.
+To go back to a built-in variant, redeploy without the flag.
 
 #### Agent-Session Reported Metrics
 
@@ -271,6 +318,40 @@ disk all fail before any actor is created. Built-in variants are checked by
   think gap excluded.
 * `SuspendActor` / `ResumeActor` / `CreateActor` / `DeleteActor`: control-plane
   lifecycle latencies.
+
+### Spawn Benchmark
+
+The Spawn benchmark creates a batch of actors once and measures how long each
+actor takes from creation to its first answered ping, and how long the whole
+batch takes. `tests.yaml` runs it as `spawn_smoke_10_actors` with
+`shapes/spawn_shape.py`, which holds one user and ends the run once
+`TimeToAllReady` is recorded.
+
+Each boomer process creates one batch; extra users in the same process do
+nothing. Actors are named `spawn-<run-id>-<n>` and deleted when boomer exits.
+
+#### Spawn Configuration Knobs
+
+* `--total-actors`: Actors in the batch (default `100`).
+* `--spawn-concurrency`: Actors created concurrently (default `1`).
+* `--actor-deadline`: Per-actor timeout in seconds, covering create, resume and
+  first ping (default `120`).
+
+The web UI shows the same fields; `0` keeps the value boomer-worker started with.
+
+#### Spawn Reported Metrics
+
+* `CreateActor`, `ResumeActor`, `GluttonPing`: Latency of each call.
+* `ActorTimeToReady`: Per actor, from its first `CreateActor` attempt to its
+  first successful ping.
+* `TimeToReady_<k>pct` (`k` = 10, 20, … 100): From batch start until `k`% of
+  the batch was ready.
+* `TimeToAllReady`: From batch start until the last ready actor answered.
+  Actors that failed show up as `ActorTimeToReady` failures instead.
+* `CrashCount`: Actors that crashed during resume.
+
+The `actors_per_*` ratios in `trial_summary` are wrong for this test: they
+count users × `--actors-per-user`, not `--total-actors`.
 
 ### Viewing Traces
 You must have enabled otel tracing for your cluster to view traces.
@@ -382,6 +463,16 @@ Neither the Kubernetes API nor Prometheus is required. If either is unreachable,
 or discovery was skipped, the affected fields are written as `null` and the run
 still succeeds. A `null` means the value was not measured. It never means zero.
 
+## Suspend/resume phase breakdown
+
+`SuspendActor` and `ResumeActor` latency can be attributed to the phases
+inside them (object-storage transfer, hypervisor snapshot/restore, rootfs
+assembly, ...) from the structured log records atelet and ateom-microvm
+emit. `analysis/collect_logs.sh` dumps the node logs of a run and
+`analysis/phase_report.py` aggregates them into per-phase percentiles and
+waterfalls of the slowest operations. See
+[analysis/README.md](analysis/README.md).
+
 ## Optional: Prometheus + Grafana
 
 Locust provides graphs, statistics, etc. via the UI. However, you
@@ -415,4 +506,11 @@ repository root:
 
 ```bash
 python3 -m unittest discover -s benchmarking/locust/unit_tests
+```
+
+`analysis/test_phase_report.py` covers the phase-log report's parser and
+aggregation:
+
+```bash
+python3 -m unittest discover -s benchmarking/analysis
 ```

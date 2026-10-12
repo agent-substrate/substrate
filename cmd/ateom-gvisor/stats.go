@@ -24,10 +24,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
-
 	"github.com/agent-substrate/substrate/cmd/ateom-gvisor/internal/cgroupstats"
+	"github.com/agent-substrate/substrate/internal/apierror"
+	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/ocispec"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -95,7 +94,7 @@ const sandboxCgroupContainer = ocispec.PauseContainer
 // would wait on telemetry. The cgroup files are read with no lock held.
 func (s *AteomService) GetWorkloadStats(ctx context.Context, req *ateompb.GetWorkloadStatsRequest) (*ateompb.GetWorkloadStatsResponse, error) {
 	if req.GetActorUid() == "" {
-		return nil, status.Error(codes.InvalidArgument, "actor_uid is required")
+		return nil, apierror.InvalidArgument("actor_uid is required")
 	}
 
 	// NOT_FOUND rather than FAILED_PRECONDITION: the requested actor is not
@@ -103,11 +102,11 @@ func (s *AteomService) GetWorkloadStats(ctx context.Context, req *ateompb.GetWor
 	// worker-to-actor mapping wants re-resolving.
 	hosted := s.lookupActor(req.GetActorUid())
 	if hosted == nil {
-		return nil, status.Errorf(codes.NotFound, "ateom is not executing actor %q", req.GetActorUid())
+		return nil, apierror.NotFound("ateom is not executing actor %q", req.GetActorUid())
 	}
-	active := &hosted.attribution
-
-	sample, err := s.sampleSandbox(active)
+	// The raw reading is dropped: the dead-sandbox check runs in the usage
+	// sweep, which reads every hosted actor.
+	sample, _, err := s.measure(ctx, hosted)
 	if err != nil {
 		// The requested actor is the active one but its cgroup is not there.
 		// Most often that is a poll landing in the boot: the ateom retains the
@@ -118,46 +117,33 @@ func (s *AteomService) GetWorkloadStats(ctx context.Context, req *ateompb.GetWor
 		// caller should take the next sample, so FAILED_PRECONDITION. Anything
 		// else is a real read failure.
 		if errors.Is(err, fs.ErrNotExist) {
-			return nil, status.Error(codes.FailedPrecondition, "no sandbox cgroup to measure yet")
+			return nil, apierror.FailedPrecondition("no sandbox cgroup to measure yet")
 		}
-		return nil, status.Errorf(codes.Internal, "reading sandbox cgroup: %v", err)
+		return nil, apierror.Internal("reading sandbox cgroup: %v", err)
 	}
 
-	// The read above holds no lock, so a checkpoint plus a fresh run can land
-	// underneath it. Pointer identity catches that: hostActor stores a new
-	// record every time.
+	// The read above holds no lifecycle lock, so a checkpoint plus a fresh run
+	// can land underneath it. Pointer identity catches that: hostActor stores
+	// a new record every time.
 	if s.lookupActor(req.GetActorUid()) != hosted {
-		return nil, status.Errorf(codes.NotFound, "ateom stopped executing actor %q while the sample was being taken", req.GetActorUid())
+		return nil, apierror.NotFound("ateom stopped executing actor %q while the sample was being taken", req.GetActorUid())
 	}
+	// The reading advanced the activation's CPU, so the cache keeps up with it.
+	hosted.usage.Store(sample)
 
 	return &ateompb.GetWorkloadStatsResponse{Sample: sample}, nil
 }
 
-// GetActiveWorkloadStats implements
-// ateompb.Ateom/GetActiveWorkloadStats: the discovery read, sampling
-// whatever is executing with no identity asserted. Same lock discipline as
-// GetWorkloadStats above, for the same reasons.
+// GetActiveWorkloadStats implements ateompb.Ateom/GetActiveWorkloadStats: the
+// discovery read. It serves each actor's latest sample from the sampler, so a
+// poll costs no read of its own; an actor not sampled yet is pending.
 func (s *AteomService) GetActiveWorkloadStats(ctx context.Context, req *ateompb.GetActiveWorkloadStatsRequest) (*ateompb.GetActiveWorkloadStatsResponse, error) {
 	hosted := s.hostedActors()
 	samples := make([]*ateompb.WorkloadStatsSample, 0, len(hosted))
 	for _, h := range hosted {
-		// An actor with no numbers is reported as pending: most often it is
-		// booting, but a failed read for one must not lose the others either.
-		sample, err := s.sampleSandbox(&h.attribution)
-		if err != nil {
-			if !errors.Is(err, fs.ErrNotExist) {
-				slog.WarnContext(ctx, "Failed to read sandbox cgroup", slog.String("actorUID", h.attribution.UID), slog.Any("err", err))
-			}
-			sample = pendingSample(&h.attribution)
-		}
-		// The read holds no lock, and the cgroup is found by UID alone. If the
-		// actor was re-hosted meanwhile, perhaps on another template, the
-		// numbers are the new activation's: report it as pending instead.
-		switch latest := s.lookupActor(h.attribution.UID); {
-		case latest == nil:
-			continue
-		case latest != h:
-			sample = pendingSample(&latest.attribution)
+		sample := h.usage.Latest()
+		if sample == nil {
+			sample = h.usage.WithEpoch(pendingSample(&h.attribution))
 		}
 		samples = append(samples, sample)
 	}
@@ -165,6 +151,80 @@ func (s *AteomService) GetActiveWorkloadStats(ctx context.Context, req *ateompb.
 	// An empty list is "available", per the proto: a normal answer for a
 	// scraper to get, not an error.
 	return &ateompb.GetActiveWorkloadStatsResponse{Samples: samples}, nil
+}
+
+// sweepUsage samples every hosted actor between its initial reading and its
+// final record, and stores each sample and writes its periodic record. Same
+// lock discipline as GetWorkloadStats, for the same reasons.
+func (s *AteomService) sweepUsage(ctx context.Context) {
+	for _, h := range s.hostedActors() {
+		if !h.usage.Sampling() {
+			continue
+		}
+		// An actor with no numbers is reported as pending, so a failed read for
+		// one does not lose the others. Past the initial reading, a missing
+		// cgroup means the sandbox is going away.
+		sample, raw, err := s.measure(ctx, h)
+		if err != nil {
+			if !errors.Is(err, fs.ErrNotExist) {
+				attrs := append(ateattr.ActorLogAttrs(h.attribution), slog.Any("err", err))
+				slog.LogAttrs(ctx, slog.LevelWarn, "Failed to read sandbox cgroup", attrs...)
+			}
+			sample = h.usage.WithEpoch(pendingSample(&h.attribution))
+		}
+		// The read holds no lifecycle lock, and the cgroup is found by UID
+		// alone. If the actor was re-hosted meanwhile, perhaps on another
+		// template, the numbers are the new activation's: drop them, and let
+		// the new activation start with its own initial reading.
+		if s.lookupActor(h.attribution.UID) != h {
+			continue
+		}
+		if raw.Empty { // a failed read returns a zero Sample
+			s.warnDeadSandbox(ctx, h, raw)
+		}
+		h.usage.Periodic(sample, func() { s.usage.Emit(ctx, ateattr.StatsKindPeriodic, sample) })
+	}
+}
+
+// recordInitial samples a new activation once its sandbox is up and writes its
+// initial record.
+func (s *AteomService) recordInitial(ctx context.Context, h *hostedActor) {
+	sample, _, err := s.measure(ctx, h)
+	if err != nil {
+		slog.WarnContext(ctx, "No initial usage sample", slog.String(string(ateattr.ActorUIDKey), h.attribution.UID), slog.Any("err", err))
+		sample = nil
+	}
+	h.usage.Initial(sample, func() { s.usage.Emit(ctx, ateattr.StatsKindInitial, sample) })
+}
+
+// readFinal samples an activation while its sandbox still exists, for the final
+// record a successful checkpoint or terminate writes. A failed read leaves the
+// newest measured sample to stand in.
+func (s *AteomService) readFinal(ctx context.Context, h *hostedActor) {
+	if sample, _, err := s.measure(ctx, h); err == nil {
+		h.usage.Store(sample)
+	}
+}
+
+// recordFinalIfEnded writes h's final record if a checkpoint or terminate tore
+// its activation down, which unhosts the actor even when a later step fails.
+// The caller holds the actor's lock.
+func (s *AteomService) recordFinalIfEnded(ctx context.Context, h *hostedActor) {
+	if h != nil && s.lookupActor(h.attribution.UID) != h {
+		s.recordFinal(ctx, h)
+	}
+}
+
+// recordFinal writes the final record of an activation that a checkpoint or a
+// terminate ended, from its newest measured sample.
+func (s *AteomService) recordFinal(ctx context.Context, h *hostedActor) {
+	pending := h.usage.WithEpoch(pendingSample(&h.attribution))
+	h.usage.Final(func(measured *ateompb.WorkloadStatsSample) {
+		if measured == nil {
+			measured = pending
+		}
+		s.usage.Emit(ctx, ateattr.StatsKindFinal, measured)
+	})
 }
 
 // pendingSample is a workload with no numbers to give yet, as the discovery
@@ -185,13 +245,26 @@ func pendingSample(active *resources.ActorAttribution) *ateompb.WorkloadStatsSam
 	}
 }
 
+// measure reads h's sandbox cgroup as a reading of its activation, returning
+// the raw cgroup reading alongside it for the dead-sandbox check.
+func (s *AteomService) measure(ctx context.Context, h *hostedActor) (*ateompb.WorkloadStatsSample, cgroupstats.Sample, error) {
+	var raw cgroupstats.Sample
+	sample, err := h.usage.Measure(ctx, func() (*ateompb.WorkloadStatsSample, map[string]uint64, error) {
+		sample, r, err := s.sampleSandbox(&h.attribution)
+		raw = r
+		return sample, nil, err
+	})
+	return sample, raw, err
+}
+
 // sampleSandbox reads the sandbox cgroup and builds the sample attributed to
-// active. Errors come back raw -- notably fs.ErrNotExist for a cgroup that is
-// not there yet -- because the two RPCs disagree on what that means: an error
-// code for the keyed read, a normal EXECUTING answer for the discovery read.
-// The read holds no lock, so the keyed caller re-checks the actor record it
-// loaded after this returns.
-func (s *AteomService) sampleSandbox(active *resources.ActorAttribution) (*ateompb.WorkloadStatsSample, error) {
+// active, returning the raw reading alongside it. Errors come back raw --
+// notably fs.ErrNotExist for a cgroup that is not there yet -- because the
+// callers disagree on what that means: an error code for the keyed read, a
+// pending sample for the sweep.
+// The read holds no lifecycle lock, so the keyed caller re-checks the actor
+// record it loaded after this returns.
+func (s *AteomService) sampleSandbox(active *resources.ActorAttribution) (*ateompb.WorkloadStatsSample, cgroupstats.Sample, error) {
 	read := s.readSandboxCgroup
 	if read == nil {
 		read = cgroupstats.Read
@@ -199,7 +272,7 @@ func (s *AteomService) sampleSandbox(active *resources.ActorAttribution) (*ateom
 	observedAt := time.Now()
 	sample, err := read(filepath.Join(s.cgroupRoot, ocispec.GVisorCgroupLeaf(active.UID, sandboxCgroupContainer)))
 	if err != nil {
-		return nil, err
+		return nil, cgroupstats.Sample{}, err
 	}
 
 	return &ateompb.WorkloadStatsSample{
@@ -218,5 +291,30 @@ func (s *AteomService) sampleSandbox(active *resources.ActorAttribution) (*ateom
 		CpuUsageUsec:          sample.CPUUsageUsec,
 
 		ObservedAtUnixNano: observedAt.UnixNano(),
-	}, nil
+	}, sample, nil
+}
+
+// warnDeadSandbox logs, once per activation, that h's sandbox cgroup has no
+// process left. Nothing else notices this today: the actor stays RUNNING and
+// its stats read like an idle actor's (#2211).
+//
+// A lifecycle RPC empties the cgroup on purpose when it tears the sandbox down,
+// and holds the actor's lock while it does, so a busy actor is skipped. The
+// cgroup was read before the lock was checked, and h is looked up again after,
+// so a teardown that starts or finishes in between is never reported.
+//
+// oom_kill counts over the cgroup's lifetime. A leaf left behind by an earlier
+// activation of the same actor carries its count forward.
+func (s *AteomService) warnDeadSandbox(ctx context.Context, h *hostedActor, raw cgroupstats.Sample) {
+	if h.deadReported.Load() {
+		return
+	}
+	if s.locks.Busy(h.attribution.UID) || s.lookupActor(h.attribution.UID) != h {
+		return
+	}
+	if !h.deadReported.CompareAndSwap(false, true) {
+		return
+	}
+	attrs := append(ateattr.ActorLogAttrs(h.attribution), slog.Uint64(string(ateattr.SandboxOOMKillsKey), raw.OOMKills))
+	slog.LogAttrs(ctx, slog.LevelWarn, "Sandbox has no processes left while the actor is hosted", attrs...)
 }

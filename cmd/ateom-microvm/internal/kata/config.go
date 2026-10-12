@@ -26,28 +26,12 @@ const (
 	DefaultVCPUs = 1
 )
 
-const (
-	// baseKernelParams is the guest kernel command line parameters ateom boots with;
-	// there is no kata shim to inject them.
-	baseKernelParams         = "cgroup_no_v1=all systemd.unified_cgroup_hierarchy=1"
-	debugConsoleKernelParams = baseKernelParams + " agent.debug_console agent.debug_console_vport=1026"
-)
+// BaseKernelParams is the guest kernel command line parameters ateom boots with
+const BaseKernelParams = "cgroup_no_v1=all systemd.unified_cgroup_hierarchy=1"
 
-// WithDebugConsole returns the kernel params with the kata-agent debug console
-// enabled, so the guest agent binds a root debug shell on vsock port 1026, which
-// DebugConsoleDump connects to for in-guest diagnostics. Both params are required:
-// agent.debug_console enables the console and agent.debug_console_vport=1026 makes
-// the agent bind it on the vsock port (the agent only binds a vsock listener when
-// the vport is > 0).
-func WithDebugConsole() string {
-	return debugConsoleKernelParams
-}
-
-// WithAgentDebug appends agent.log=debug so the guest kata-agent emits
-// debug-level logs (including the failing path on errors) over its vsock log
-// channel. Idempotent.
+// WithAgentDebug enables guest agent debug logging and the debug console on vsock 1026
 func WithAgentDebug(kernelParams string) string {
-	return appendKernelParams(kernelParams, "agent.log=", "agent.log=debug agent.debug_console")
+	return appendKernelParams(kernelParams, "agent.log=", "agent.log=debug agent.debug_console agent.debug_console_vport=1026")
 }
 
 // appendKernelParams appends add to a kernel_params string unless marker is

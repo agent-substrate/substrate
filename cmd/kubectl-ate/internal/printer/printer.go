@@ -295,6 +295,10 @@ func PrintActorTemplatesTo(out io.Writer, templates []*ateapipb.ActorTemplate, f
 		fmt.Fprintln(w, "ATESPACE\tNAME\tSANDBOX CLASS\tGOLDEN TAG\tERROR\tAGE")
 		for _, t := range templates {
 			gss := t.GetStatus().GetGoldenSnapshotStatus()
+			goldenTag := gss.GetGoldenTag().GetName()
+			if t.GetSnapshotConfig().GetGoldenSnapshotConfig().GetMode() == ateapipb.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED {
+				goldenTag = "DISABLED"
+			}
 			// Error messages are too long for a table cell.
 			errFlag := ""
 			if gss.GetErrorMessage() != "" {
@@ -303,7 +307,7 @@ func PrintActorTemplatesTo(out io.Writer, templates []*ateapipb.ActorTemplate, f
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
 				t.GetMetadata().GetAtespace(), t.GetMetadata().GetName(),
 				t.GetSandboxConfig().GetSandboxClass(),
-				gss.GetGoldenTag().GetName(), errFlag,
+				goldenTag, errFlag,
 				formatAge(t.GetMetadata().GetCreateTime()))
 		}
 		return w.Flush()
@@ -335,18 +339,19 @@ func PrintTagsTo(out io.Writer, tags []*ateapipb.Tag, format string) error {
 		return printProto(out, &ateapipb.ListTagsResponse{Tags: tags}, format)
 	case "table":
 		w := tabwriter.NewWriter(out, 0, 0, 3, ' ', 0)
-		fmt.Fprintln(w, "ATESPACE\tNAME\tSCOPE\tSTATE\tSNAPSHOT\tCONTENT SCOPE\tAGE")
+		fmt.Fprintln(w, "ATESPACE\tNAME\tSCOPE\tSTATE\tSNAPSHOT\tFIDELITY\tAGE")
 		for _, tag := range tags {
 			// A pending tag has no snapshot yet, so neither its URI nor its
-			// content scope says anything.
-			snapshotURI, contentScope := "<none>", "<none>"
-			if snapshot := tag.GetStatus().GetSnapshot(); snapshot.GetSnapshotUri() != "" {
-				snapshotURI = snapshot.GetSnapshotUri()
-				contentScope = snapshot.GetContentScope().String()
+			// fidelity says anything.
+			snapshotURI, fidelity := "<none>", "<none>"
+			snap := tag.GetStatus().GetSnapshot()
+			if st := durableSnapshotStorage(snap); st != nil {
+				snapshotURI = st.GetObject().GetSnapshotUri()
+				fidelity = snap.GetFidelity().String()
 			}
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				tag.GetMetadata().GetAtespace(), tag.GetMetadata().GetName(), tag.GetScope(),
-				tagState(tag), snapshotURI, contentScope,
+				tagState(tag), snapshotURI, fidelity,
 				formatAge(tag.GetMetadata().GetCreateTime()))
 		}
 		return w.Flush()
@@ -355,11 +360,20 @@ func PrintTagsTo(out io.Writer, tags []*ateapipb.Tag, format string) error {
 	}
 }
 
+func durableSnapshotStorage(snapshot *ateapipb.Snapshot) *ateapipb.SnapshotStorage {
+	st := snapshot.GetDurableSnapshot()
+	if st.GetStatus() == ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED &&
+		st.GetObject().GetSnapshotUri() != "" {
+		return st
+	}
+	return nil
+}
+
 // tagState reports whether a tag is usable. A tag is Pending until
 // the copy of its own snapshot lands; until then it names nothing an Actor can
 // be created from, and deleting it collects whatever the create stranded.
 func tagState(tag *ateapipb.Tag) string {
-	if tag.GetStatus().GetSnapshot().GetSnapshotUri() == "" {
+	if durableSnapshotStorage(tag.GetStatus().GetSnapshot()) == nil {
 		return "Pending"
 	}
 	return "Ready"

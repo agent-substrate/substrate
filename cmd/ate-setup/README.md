@@ -4,7 +4,7 @@ Installs and tears down Agent Substrate on a Kubernetes cluster.
 
 ```
 go run ./cmd/ate-setup [global flags] <command> [flags]
-make build-ate-setup    # builds bin/ate-setup
+go build -o bin/ate-setup ./cmd/ate-setup
 ```
 
 `ate-setup` is the installer. `hack/install-ate.sh` is a shim over it, kept so
@@ -19,6 +19,7 @@ images instead, name the registry they were pushed to:
 
 ```
 ate-setup deploy ate-system \
+  --credential-provider='{"name":"k8s.io"}' \
   --image-repo registry.example.com/substrate \
   --image-tag v0.0.0
 ```

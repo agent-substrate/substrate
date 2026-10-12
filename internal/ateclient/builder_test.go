@@ -29,7 +29,8 @@ import (
 	"testing"
 	"time"
 
-	certsv1beta1 "k8s.io/api/certificates/v1beta1"
+	"github.com/agent-substrate/substrate/internal/clustertrustbundle"
+	certsv1 "k8s.io/api/certificates/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
@@ -117,10 +118,10 @@ func testCAPEM(t *testing.T, cn string) []byte {
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 }
 
-func trustBundle(name, signer string, live bool, pemData []byte) *certsv1beta1.ClusterTrustBundle {
-	ctb := &certsv1beta1.ClusterTrustBundle{
+func trustBundle(name, signer string, live bool, pemData []byte) *certsv1.ClusterTrustBundle {
+	ctb := &certsv1.ClusterTrustBundle{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
-		Spec: certsv1beta1.ClusterTrustBundleSpec{
+		Spec: certsv1.ClusterTrustBundleSpec{
 			SignerName:  signer,
 			TrustBundle: string(pemData),
 		},
@@ -137,34 +138,47 @@ func TestServerTLSConfig(t *testing.T) {
 	podidentityCA := testCAPEM(t, "podidentity-ca")
 	canaryCA := testCAPEM(t, "servicedns-ca-canary")
 
-	clientset := fake.NewSimpleClientset(
+	objects := []runtime.Object{
 		trustBundle("servicedns.podcert.ate.dev:identity:primary-bundle", serviceDNSSignerName, true, append(servicednsCA1, servicednsCA2...)),
 		trustBundle("podidentity.podcert.ate.dev:identity:primary-bundle", "podidentity.podcert.ate.dev/identity", true, podidentityCA),
 		trustBundle("servicedns.podcert.ate.dev:identity:canary-bundle", serviceDNSSignerName, false, canaryCA),
-	)
-
-	cfg, err := serverTLSConfig(context.Background(), clientset)
-	if err != nil {
-		t.Fatalf("serverTLSConfig: %v", err)
 	}
 
-	if got, want := cfg.ServerName, "api.ate-system.svc"; got != want {
-		t.Errorf("ServerName=%q want %q", got, want)
-	}
-	if cfg.MinVersion < tls.VersionTLS13 {
-		t.Errorf("MinVersion=%x want at least %x", cfg.MinVersion, tls.VersionTLS13)
-	}
-	if cfg.InsecureSkipVerify {
-		t.Error("InsecureSkipVerify=true, want false")
-	}
+	for _, version := range []string{"v1", "v1beta1"} {
+		t.Run(version, func(t *testing.T) {
+			native := make([]runtime.Object, len(objects))
+			for i, obj := range objects {
+				native[i] = obj
+				if version == "v1beta1" {
+					native[i] = clustertrustbundle.ToBeta(obj.(*certsv1.ClusterTrustBundle))
+				}
+			}
+			clientset := fake.NewSimpleClientset(native...)
+			clientset.Resources = []*metav1.APIResourceList{{GroupVersion: "certificates.k8s.io/" + version, APIResources: []metav1.APIResource{{Name: "clustertrustbundles"}}}}
+			cfg, err := serverTLSConfig(context.Background(), clientset)
+			if err != nil {
+				t.Fatalf("serverTLSConfig: %v", err)
+			}
 
-	// The pool must contain exactly the live servicedns CAs: not the
-	// podidentity bundle and not the non-live canary bundle.
-	wantPool := x509.NewCertPool()
-	wantPool.AppendCertsFromPEM(servicednsCA1)
-	wantPool.AppendCertsFromPEM(servicednsCA2)
-	if !cfg.RootCAs.Equal(wantPool) {
-		t.Error("RootCAs does not match the live servicedns trust bundle")
+			if got, want := cfg.ServerName, "api.ate-system.svc"; got != want {
+				t.Errorf("ServerName=%q want %q", got, want)
+			}
+			if cfg.MinVersion < tls.VersionTLS13 {
+				t.Errorf("MinVersion=%x want at least %x", cfg.MinVersion, tls.VersionTLS13)
+			}
+			if cfg.InsecureSkipVerify {
+				t.Error("InsecureSkipVerify=true, want false")
+			}
+
+			// The pool must contain exactly the live servicedns CAs: not the
+			// podidentity bundle and not the non-live canary bundle.
+			wantPool := x509.NewCertPool()
+			wantPool.AppendCertsFromPEM(servicednsCA1)
+			wantPool.AppendCertsFromPEM(servicednsCA2)
+			if !cfg.RootCAs.Equal(wantPool) {
+				t.Error("RootCAs does not match the live servicedns trust bundle")
+			}
+		})
 	}
 }
 
@@ -189,6 +203,7 @@ func TestServerTLSConfigErrors(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			clientset := fake.NewSimpleClientset(tc.objects...)
+			clientset.Resources = []*metav1.APIResourceList{{GroupVersion: "certificates.k8s.io/v1", APIResources: []metav1.APIResource{{Name: "clustertrustbundles"}}}}
 			if _, err := serverTLSConfig(context.Background(), clientset); err == nil {
 				t.Error("serverTLSConfig: want error, got nil")
 			}

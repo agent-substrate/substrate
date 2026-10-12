@@ -15,7 +15,8 @@
 # The atespace→namespace authorization policy k8s-credential-provider enforces: an actor's
 # atespace may only resolve Secrets whose URI namespace is listed for it here.
 # Enforcement is default-deny — an atespace absent from this file resolves
-# nothing.
+# nothing. The install creates this ConfigMap only when it is absent, granting
+# nothing; the provider needs it to start.
 #
 # TODO: k8s-credential-provider loads this once at startup, so editing this ConfigMap
 # requires restarting the k8s-credential-provider Deployment. Make it reload dynamically.
@@ -26,9 +27,10 @@ metadata:
   namespace: ate-system
 data:
   namespace-policy.yaml: |
-    # atespace "team-a" may resolve secrets in namespace "ns1" (matches the
-    # sample policy's ate-secret://k8s.io/default/ns1/example-api/token).
-    policies:
-    - atespace: team-a
-      allowedNamespaces:
-      - ns1
+    # No atespace may resolve any Secret until it is listed here, for example:
+    #
+    #   policies:
+    #   - atespace: team-a
+    #     allowedNamespaces:
+    #     - ns1
+    policies: []

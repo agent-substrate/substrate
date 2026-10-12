@@ -35,6 +35,12 @@
 #   actorMemory    Optional (default "256Mi", the smallest size microvm
 #                  admits). Memory limit on the benchmark ActorTemplates;
 #                  raise it for suites that exercise glutton's WriteRAM path.
+#   workerMemory   Optional (default unset: the worker pods have no requests
+#                  or limits). Memory request and limit on each WorkerPool
+#                  pod. Use it to fix how many workers share a node: one per
+#                  node needs more than half the node's allocatable memory.
+#                  The limit is also the memory the worker reports as its
+#                  actor capacity.
 #   workerWaitTimeout
 #                  Optional (default 300, set by workloads/deploy.sh).
 #                  Whole seconds to wait after the WorkerPool deploy for
@@ -43,8 +49,11 @@
 #                  outrun the default.
 #   ateArgs        Optional. List of strings appended verbatim to
 #                  `hack/install-ate.sh --deploy-ate-system` when this
-#                  test's substrate is deployed (e.g. ["--atenet-dataplane=agentgateway"]
-#                  or ["--experimental-use-sdsmint"]).
+#                  test's substrate is deployed (e.g. ["--atenet-dataplane=agentgateway"]).
+#                  The deploy requires --credential-provider; set it here
+#                  as one YAML string, '--credential-provider={"name":"k8s.io"}'
+#                  (no shell quoting: the args are passed without a shell),
+#                  or as ATE_CREDENTIAL_PROVIDER in .ate-dev-env.sh.
 #
 # ---- type: locust -----------------------------------------------------------
 #
@@ -53,6 +62,13 @@
 # orchestrator's --dest flag. `file`, `duration` and `users` are required.
 # Optional `flags` is a list of arbitrary strings appended to runner.py's
 # argv; runner.py forwards them to locust verbatim.
+#
+# Optional `runnerCpu` (default "500m") and `runnerMemory` (default "512Mi")
+# are the runner pod's requests. They are requests only, no limits, so the
+# pod lands on a node with that much free and may burst beyond it. Raise
+# them for boomer-driven classes at thousands of users: agentsession holds
+# one goroutine per session and marshals up to 32Mi per in-flight ingest,
+# so 1000+ sessions want on the order of 4 CPU and 8Gi on a node that has it.
 #
 # `file` is one path, or a comma-separated list of paths that locust reads as
 # one test. Give the test first, then each load shape. A shape changes the
@@ -568,6 +584,21 @@ tests:
       - "1.0"
       - "--max-wait-time"
       - "1.0"
+  - name: spawn_smoke_10_actors
+    type: locust
+    description: "Spawn benchmark smoke: 10 actors created with concurrency 2"
+    targetCluster: dev
+    file: /app/tests/spawn.py,/app/shapes/spawn_shape.py
+    duration: 5m
+    users: 1
+    workerCount: 10
+    flags:
+      - "--total-actors"
+      - "10"
+      - "--spawn-concurrency"
+      - "2"
+      - "--actor-deadline"
+      - "120"
   - name: ingress_routercap_envoy_2cpu
     description: "Router capacity: Nighthawk adaptive max-RPS search under a 25ms tail-latency SLO, Envoy at 2 CPUs"
     type: nighthawk-ingress

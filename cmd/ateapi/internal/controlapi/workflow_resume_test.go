@@ -27,19 +27,27 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
+	"github.com/agent-substrate/substrate/internal/apierror"
+	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
+	"github.com/agent-substrate/substrate/internal/volume"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/google/go-cmp/cmp"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/testing/protocmp"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/wait"
 )
 
 // TestSchedulerRecordable guards the retry-dedup rule: the assignment loop
@@ -55,6 +63,8 @@ func TestSchedulerRecordable(t *testing.T) {
 		{name: "success is recorded", err: nil, want: true},
 		{name: "version conflict is skipped", err: store.ErrVersionConflict, want: false},
 		{name: "wrapped version conflict is skipped", err: fmt.Errorf("update worker: %w", store.ErrVersionConflict), want: false},
+		{name: "filled up worker is skipped", err: errWorkerFilledUp, want: false},
+		{name: "wrapped filled up worker is skipped", err: fmt.Errorf("bind actor: %w", errWorkerFilledUp), want: false},
 		{name: "real error is recorded", err: status.Error(codes.Internal, "boom"), want: true},
 	}
 	for _, tt := range tests {
@@ -102,14 +112,23 @@ func TestResumeActor_RunningFastPathDoesNotAcquireLease(t *testing.T) {
 }
 
 // TestFinalizeRunning_CommitsRunning verifies the last step of a resume moves
-// the actor out of RESUMING against a freshly read version.
+// the actor out of RESUMING against a freshly read version, and keeps the
+// locality of the local snapshot it restored from: resume does not delete the
+// snapshot's files from the node.
 func TestFinalizeRunning_CommitsRunning(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
 	storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
 		Metadata:      &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "id1"},
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "tmpl-2"},
-		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RESUMING},
+		Status: &ateapipb.ActorStatus{
+			State:                  ateapipb.ActorState_ACTOR_STATE_RESUMING,
+			AssignedNode:           "node-1",
+			LastAssignedGeneration: 1,
+			Snapshots: []*ateapipb.Snapshot{
+				newLocalSnapshot(1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "local-1", "node-1"),
+			},
+		},
 	})
 	w := &ActorWorkflow{store: persistence}
 
@@ -119,6 +138,9 @@ func TestFinalizeRunning_CommitsRunning(t *testing.T) {
 	}
 	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
 		t.Errorf("state = %v, want RUNNING", got.GetStatus().GetState())
+	}
+	if locality := findLatestLocalSnapshot(got.GetStatus()).GetLocality(); locality != "node-1" {
+		t.Errorf("local snapshot locality = %q, want %q kept after resume", locality, "node-1")
 	}
 }
 
@@ -168,58 +190,6 @@ func TestEnsureWorkerAssigned_ConflictExhaustionIsRetryable(t *testing.T) {
 	}
 }
 
-// TestAssignWorkerAttempt_StampsSubstrateTemplateRef verifies a ref-mode
-// actor's worker claim names the substrate template via actor_template_ref
-// and leaves the legacy kube reference unset.
-func TestAssignWorkerAttempt_StampsSubstrateTemplateRef(t *testing.T) {
-	ctx := context.Background()
-	persistence := newTestPersistence(t)
-
-	worker := &ateapipb.Worker{
-		Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerUID("pod-free")},
-		WorkerNamespace: "worker-ns",
-		WorkerPool:      "pool",
-		WorkerPod:       "pod-free",
-		WorkerPodUid:    testWorkerUID("pod-free"),
-		SandboxClass:    "gvisor",
-		Status:          &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Capacity: &ateapipb.WorkerResources{Actors: 1}},
-	}
-	if _, err := persistence.CreateWorker(ctx, worker); err != nil {
-		t.Fatalf("CreateWorker: %v", err)
-	}
-
-	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "id1"},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "sub-tmpl"},
-		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
-	})
-
-	cacheCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	wc := workercache.New(persistence, time.Minute)
-	if err := wc.Start(cacheCtx); err != nil {
-		t.Fatalf("workercache.Start: %v", err)
-	}
-
-	w := &ActorWorkflow{store: persistence, workerCache: wc, scheduler: scheduling.New(wc)}
-	tmpl := &ateapipb.ActorTemplate{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "sub-tmpl"},
-		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR},
-	}
-	_, assigned, err := w.assignWorkerAttempt(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, tmpl)
-	if err != nil {
-		t.Fatalf("assignWorkerAttempt: %v", err)
-	}
-
-	assignment, err := persistence.GetWorkerAssignment(ctx, assigned.GetMetadata().GetName(), actor.GetMetadata().GetUid())
-	if err != nil {
-		t.Fatalf("GetWorkerAssignment: %v", err)
-	}
-	if assignment.GetActorTemplateRef().GetAtespace() != "team-a" || assignment.GetActorTemplateRef().GetName() != "sub-tmpl" {
-		t.Errorf("assignment ActorTemplateRef = %v, want team-a/sub-tmpl", assignment.GetActorTemplateRef())
-	}
-}
-
 func TestAssignWorkerAttempt_SkipsWorkerAssignedInOtherAtespace(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
@@ -258,8 +228,8 @@ func TestAssignWorkerAttempt_SkipsWorkerAssignedInOtherAtespace(t *testing.T) {
 		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR},
 	}
 	_, _, err := w.assignWorkerAttempt(ctx, resources.ActorRef{Atespace: "team-a", Name: "shared"}, actor, tmpl)
-	if status.Code(err) != codes.ResourceExhausted {
-		t.Fatalf("assignWorkerAttempt() error = %v, want ResourceExhausted (no free workers)", err)
+	if apierror.Code(err) != codes.ResourceExhausted {
+		t.Fatalf("assignWorkerAttempt() error = %v, want ResourceExhausted (no worker has room)", err)
 	}
 
 	stored := firstAssignment(t, persistence, testWorkerUID("pod-1"))
@@ -548,8 +518,8 @@ func TestAssignWorkerAttempt_ConflictRefreshesActor(t *testing.T) {
 					t.Errorf("refreshed actor WorkerSelector = %v, want %v (concurrent write must survive)", refreshed.GetWorkerSelector(), injected.GetWorkerSelector())
 				}
 			} else {
-				if got := status.Code(err); got != codes.Aborted {
-					t.Fatalf("status.Code(err) = %v, want %v (err: %v)", got, codes.Aborted, err)
+				if got := apierror.Code(err); got != codes.Aborted {
+					t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, codes.Aborted, err)
 				}
 			}
 
@@ -613,8 +583,8 @@ func TestResumeActorWorkflow_RejectedAndIdempotentPaths(t *testing.T) {
 
 			actor, resumed, err := w.ResumeActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
 			if tc.wantErr {
-				if got := status.Code(err); got != codes.FailedPrecondition {
-					t.Fatalf("status.Code(err) = %v, want %v (err: %v)", got, codes.FailedPrecondition, err)
+				if got := apierror.Code(err); got != codes.FailedPrecondition {
+					t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, codes.FailedPrecondition, err)
 				}
 			} else {
 				if err != nil {
@@ -728,8 +698,8 @@ func TestResumeActor_CrashesOnMissingWorkerAssignment(t *testing.T) {
 	})
 
 	_, _, err := w.ResumeActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
-	if got := status.Code(err); got != codes.Aborted {
-		t.Fatalf("status.Code(err) = %v, want %v (err: %v)", got, codes.Aborted, err)
+	if got := apierror.Code(err); got != codes.Aborted {
+		t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, codes.Aborted, err)
 	}
 
 	got, err := st.GetActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
@@ -897,8 +867,8 @@ func TestValidateAssignedWorker(t *testing.T) {
 			}
 			tmpl := &ateapipb.ActorTemplate{SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR}}
 			_, err := w.validateAssignedWorker(ctx, resources.ActorRef{Atespace: "team-a", Name: "shared"}, resumingActor, tmpl)
-			if got := status.Code(err); got != tt.wantCode {
-				t.Fatalf("status.Code(err) = %v, want %v (err: %v)", got, tt.wantCode, err)
+			if got := apierror.Code(err); got != tt.wantCode {
+				t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, tt.wantCode, err)
 			}
 
 			actor, err := persistence.GetActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "shared"})
@@ -924,180 +894,6 @@ func TestValidateAssignedWorker(t *testing.T) {
 			}
 			if !tt.wantWorkerWrite && stored.GetMetadata().GetVersion() != seeded.GetMetadata().GetVersion() {
 				t.Errorf("worker version moved %d -> %d, want no write", seeded.GetMetadata().GetVersion(), stored.GetMetadata().GetVersion())
-			}
-		})
-	}
-}
-
-// TestLoadActorForResume_OnGoldenDataResume verifies the golden-location
-// plumbing: when the template's onResume.fromData is Golden, a pending
-// data-only restore (a Data durable snapshot, or a paused actor whose
-// onPause is Data) additionally resolves the template's golden snapshot
-func TestLoadActorForResume_OnGoldenDataResume(t *testing.T) {
-	goldenSnapshotURI := someActorSnapshotURI(t, "gs://bucket/golden-root", "ate-golden", "golden-1")
-	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
-
-	tests := []struct {
-		name     string
-		fromData ateapipb.ResumeSource
-		// paused seeds the actor with LocalSnapshot (a pause checkpoint)
-		// instead of a durable snapshot; onPause is the template's pause
-		// scope, contentScope the durable snapshot's recorded content.
-		paused       bool
-		onPause      ateapipb.SnapshotContentScope
-		contentScope ateapipb.SnapshotContentScope
-		// goldenURI and goldenScope are the template's recorded golden
-		// external snapshot; an empty URI means the template has none. A zero
-		// scope is treated as Full, the scope a golden snapshot must hold.
-		goldenURI     string
-		goldenScope   ateapipb.SnapshotContentScope
-		wantCode      codes.Code
-		wantGoldenURI string
-	}{
-		{
-			name:          "resolves golden location for Data durable snapshot",
-			fromData:      ateapipb.ResumeSource_RESUME_SOURCE_GOLDEN,
-			contentScope:  ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
-			goldenURI:     goldenSnapshotURI,
-			goldenScope:   ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
-			wantCode:      codes.OK,
-			wantGoldenURI: goldenSnapshotURI,
-		},
-		{
-			name:          "resolves golden location for paused actor with Data onPause",
-			fromData:      ateapipb.ResumeSource_RESUME_SOURCE_GOLDEN,
-			paused:        true,
-			onPause:       ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
-			goldenURI:     goldenSnapshotURI,
-			goldenScope:   ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
-			wantCode:      codes.OK,
-			wantGoldenURI: goldenSnapshotURI,
-		},
-		{
-			// A Full pause snapshot restores from its own content; the policy
-			// only governs data-only restores.
-			name:          "leaves golden location empty for paused actor with Full onPause",
-			fromData:      ateapipb.ResumeSource_RESUME_SOURCE_GOLDEN,
-			paused:        true,
-			onPause:       ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
-			goldenURI:     goldenSnapshotURI,
-			goldenScope:   ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
-			wantCode:      codes.OK,
-			wantGoldenURI: "",
-		},
-		{
-			name:         "fails when golden snapshot is not Full",
-			fromData:     ateapipb.ResumeSource_RESUME_SOURCE_GOLDEN,
-			contentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
-			goldenURI:    goldenSnapshotURI,
-			goldenScope:  ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
-			wantCode:     codes.FailedPrecondition,
-		},
-		{
-			name:         "fails when template has no golden snapshot",
-			fromData:     ateapipb.ResumeSource_RESUME_SOURCE_GOLDEN,
-			contentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
-			wantCode:     codes.FailedPrecondition,
-		},
-		{
-			name:         "fails when the golden snapshot uri is malformed",
-			fromData:     ateapipb.ResumeSource_RESUME_SOURCE_GOLDEN,
-			contentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
-			goldenURI:    "golden-1",
-			goldenScope:  ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
-			wantCode:     codes.DataLoss,
-		},
-		{
-			// A Full snapshot restores from its own content even under
-			// Golden fromData (e.g. taken before the template switched).
-			name:          "leaves golden location empty for Full snapshot",
-			fromData:      ateapipb.ResumeSource_RESUME_SOURCE_GOLDEN,
-			contentScope:  ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
-			goldenURI:     goldenSnapshotURI,
-			goldenScope:   ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
-			wantCode:      codes.OK,
-			wantGoldenURI: "",
-		},
-		{
-			name:          "leaves golden location empty under ColdBoot fromData",
-			fromData:      ateapipb.ResumeSource_RESUME_SOURCE_COLD_BOOT,
-			contentScope:  ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
-			goldenURI:     goldenSnapshotURI,
-			goldenScope:   ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
-			wantCode:      codes.OK,
-			wantGoldenURI: "",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ctx := context.Background()
-			persistence := newTestPersistence(t)
-
-			var seedOpts []func(*ateapipb.Actor)
-			if tt.paused {
-				seedOpts = append(seedOpts, func(a *ateapipb.Actor) {
-					a.Status.LocalSnapshot = &ateapipb.LocalSnapshot{SnapshotName: "pause-1"}
-				})
-			} else {
-				seedOpts = append(seedOpts, func(a *ateapipb.Actor) {
-					a.Status.ExternalSnapshot = &ateapipb.ExternalSnapshot{
-						SnapshotUri:  someActorSnapshotURI(t, testStorageLocation, actorRef.Atespace, "snap-1"),
-						ContentScope: tt.contentScope,
-					}
-				})
-			}
-			actorState := ateapipb.ActorState_ACTOR_STATE_SUSPENDED
-			if tt.paused {
-				actorState = ateapipb.ActorState_ACTOR_STATE_PAUSED
-			}
-			seedWorkflowActor(t, ctx, persistence, actorRef, "ns", "tmpl1", actorState, seedOpts...)
-
-			storetest.MustCreateAtespace(t, ctx, persistence, "ns")
-			tmpl := &ateapipb.ActorTemplate{
-				Metadata: &ateapipb.ResourceMetadata{Atespace: "ns", Name: "tmpl1"},
-				SnapshotConfig: &ateapipb.SnapshotConfig{
-					OnPause:  tt.onPause,
-					OnResume: &ateapipb.OnResumeConfig{FromData: tt.fromData},
-				},
-			}
-			if tt.goldenURI != "" {
-				tmpl.Status = &ateapipb.ActorTemplateStatus{GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
-					GoldenTag: &ateapipb.ObjectRef{Atespace: "ns", Name: "golden"},
-				}}
-			}
-			stored, err := persistence.CreateActorTemplate(ctx, tmpl)
-			if err != nil {
-				t.Fatalf("create template: %v", err)
-			}
-			if tt.goldenURI != "" {
-				_, err := persistence.CreateTag(ctx, &ateapipb.Tag{
-					Metadata:    &ateapipb.ResourceMetadata{Atespace: "ns", Name: "golden"},
-					SourceActor: &ateapipb.ObjectRef{Atespace: "ns", Name: "golden"},
-					Scope:       ateapipb.TagScope_TAG_SCOPE_PUBLISHED,
-					Status: &ateapipb.TagStatus{
-						ActorTemplateUid: stored.GetMetadata().GetUid(),
-						Snapshot:         &ateapipb.ExternalSnapshot{SnapshotUri: tt.goldenURI, ContentScope: tt.goldenScope},
-					},
-				})
-				if err != nil {
-					t.Fatalf("create golden tag: %v", err)
-				}
-			}
-
-			w := &ActorWorkflow{store: persistence}
-			_, _, src, err := w.loadActorForResume(ctx, actorRef)
-			if got := status.Code(err); got != tt.wantCode {
-				t.Fatalf("status.Code(err) = %v, want %v (err: %v)", got, tt.wantCode, err)
-			}
-			if err != nil {
-				return
-			}
-			if got := src.GoldenSnapshotURI.String(); got != tt.wantGoldenURI {
-				t.Errorf("src.GoldenSnapshotURI = %q, want %q", got, tt.wantGoldenURI)
-			}
-			if !tt.paused && src.Scope != tt.contentScope {
-				t.Errorf("src.Scope = %v, want %v", src.Scope, tt.contentScope)
 			}
 		})
 	}
@@ -1185,10 +981,9 @@ func TestLoadActorForResume_TemplateReplaced(t *testing.T) {
 			var seedOpts []func(*ateapipb.Actor)
 			if !tt.noSnapshot {
 				seedOpts = append(seedOpts, func(a *ateapipb.Actor) {
-					a.Status.ExternalSnapshot = &ateapipb.ExternalSnapshot{
-						SnapshotUri:      someActorSnapshotURI(t, testStorageLocation, actorRef.Atespace, "snap-1"),
-						ContentScope:     ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
-						ActorTemplateUid: resolve(tt.snapshotUID),
+					a.Status.LastAssignedGeneration = 1
+					a.Status.Snapshots = []*ateapipb.Snapshot{
+						newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, resolve(tt.snapshotUID), "snap-1", someActorSnapshotURI(t, testStorageLocation, actorRef.Atespace, "snap-1"), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
 					}
 				})
 			}
@@ -1228,7 +1023,7 @@ func TestLoadActorForResume_RunningActorShortCircuits(t *testing.T) {
 	if tmpl != nil {
 		t.Errorf("expected nil template, got %v", tmpl)
 	}
-	if !src.SnapshotURI.IsZero() || !src.GoldenSnapshotURI.IsZero() {
+	if !src.SnapshotURI.IsZero() {
 		t.Errorf("expected empty snapshot source, got %+v", src)
 	}
 }
@@ -1238,9 +1033,10 @@ func TestLoadActorForResume_RunningActorShortCircuits(t *testing.T) {
 type capturingAtelet struct {
 	ateletpb.UnimplementedAteomHerderServer
 
-	mu      sync.Mutex
-	restore *ateletpb.RestoreRequest
-	run     *ateletpb.RunRequest
+	mu         sync.Mutex
+	restore    *ateletpb.RestoreRequest
+	run        *ateletpb.RunRequest
+	checkpoint *ateletpb.CheckpointRequest
 }
 
 func (f *capturingAtelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (*ateletpb.RestoreResponse, error) {
@@ -1255,6 +1051,22 @@ func (f *capturingAtelet) Run(ctx context.Context, req *ateletpb.RunRequest) (*a
 	defer f.mu.Unlock()
 	f.run = proto.Clone(req).(*ateletpb.RunRequest)
 	return &ateletpb.RunResponse{}, nil
+}
+
+func (f *capturingAtelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest) (*ateletpb.CheckpointResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.checkpoint = proto.Clone(req).(*ateletpb.CheckpointRequest)
+	return &ateletpb.CheckpointResponse{}, nil
+}
+
+func (f *capturingAtelet) checkpointRequest() *ateletpb.CheckpointRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.checkpoint == nil {
+		return nil
+	}
+	return proto.Clone(f.checkpoint).(*ateletpb.CheckpointRequest)
 }
 
 // requests returns the recorded Restore and Run requests, nil for an RPC that
@@ -1288,7 +1100,7 @@ func wireTestAssignment() *ateapipb.WorkerAssignment {
 
 // newWireCaptureWorkflow builds an ActorWorkflow whose atelet dialer resolves
 // to an in-process capturing fake. The dialer's conn cache is pre-warmed with
-// a bufconn-backed connection keyed by the atelet pod's UID, so
+// a bufconn-backed connection for the atelet pod's UID and IP, so
 // DialForAteletOnNode returns it without dialing the pod IP.
 func newWireCaptureWorkflow(t *testing.T, persistence store.Interface) (*ActorWorkflow, *capturingAtelet) {
 	t.Helper()
@@ -1318,16 +1130,21 @@ func newWireCaptureWorkflow(t *testing.T, persistence store.Interface) (*ActorWo
 	ateletPod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Namespace: installdefaults.SystemNamespace, Name: "atelet-1", UID: "atelet-uid"},
 		Spec:       corev1.PodSpec{NodeName: "node-1"},
+		Status:     corev1.PodStatus{PodIPs: []corev1.PodIP{{IP: "10.0.0.1"}}},
 	}
 	dialer := NewAteletDialer(newTestAteletIndexer(t, ateletPod), installdefaults.SystemNamespace, "", "")
-	dialer.ateletConns.Add("atelet-uid", conn)
+	dialer.ateletConns.Add("atelet-uid", &ateletConn{ip: "10.0.0.1", conn: conn})
 
 	lister := sandboxConfigListerFor(t, []*atev1alpha1.SandboxConfig{{
 		ObjectMeta: metav1.ObjectMeta{Name: "gvisor"},
 		Spec: atev1alpha1.SandboxConfigSpec{
-			SandboxClass: atev1alpha1.SandboxClassGvisor,
-			PauseImage:   "pause@sha256:abc",
-			Assets:       testAssets(),
+			SandboxClass:   atev1alpha1.SandboxClassGvisor,
+			DefaultVersion: "v1",
+			Versions: []atev1alpha1.SandboxVersionConfig{{
+				Name:       "v1",
+				PauseImage: "pause@sha256:abc",
+				Assets:     testAssets(),
+			}},
 		},
 	}})
 
@@ -1337,11 +1154,11 @@ func newWireCaptureWorkflow(t *testing.T, persistence store.Interface) (*ActorWo
 // TestResumeActor_AteletWireRequest is the characteristic test for the
 // loadActorForResume + ensureAteletRestored seam: for every combination of
 // boot-source inputs it pins the exact request atelet receives — which RPC,
-// req.Scope, req.BaseConfig, and the snapshot the config names — and
-// that a source-resolution error never produces an atelet RPC.
+// req.Fidelity, and the snapshot the config names — and that a source-resolution
+// error never produces an atelet RPC.
 //
 // The rows are ordered strictly by input columns (local → external → tmplUID →
-// golden → fromData) so a missing permutation is visible by scanning.
+// golden) so a missing permutation is visible by scanning.
 func TestResumeActor_AteletWireRequest(t *testing.T) {
 	const localSnapshotName = "pause-snap-1"
 	const malformedURI = "not-a-valid-snapshot-uri"
@@ -1349,18 +1166,25 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 	actorURI := someActorSnapshotURI(t, testStorageLocation, "team-a", "snap-1")
 	goldenURI := someActorSnapshotURI(t, "gs://bucket/golden-root", "ate-golden", "golden-1")
 
-	fullScope := ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL
-	dataScope := ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
-	unspecScope := ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED
-	fromGolden := ateapipb.ResumeSource_RESUME_SOURCE_GOLDEN
+	fullScope := ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY
+	rootfsScope := ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS
+	dataScope := ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
+	unspecScope := ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
+
+	extSnap := func(uri string, fidelity ateapipb.SnapshotFidelity) *ateapipb.Snapshot {
+		return newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, fidelity, "", "snap-1", uri, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+	}
+	localSnap := func(name string, fidelity ateapipb.SnapshotFidelity) *ateapipb.Snapshot {
+		return newLocalSnapshot(1, fidelity, "", name, "node-1")
+	}
 
 	// actorSeed is the actor status a row persists before resuming.
 	type actorSeed struct {
-		// localSnapshot seeds Status.LocalSnapshot (the pause checkpoint);
+		// localSnapshot seeds a completed local snapshot (the pause checkpoint);
 		// a non-nil value also parks the actor PAUSED instead of SUSPENDED.
-		localSnapshot *ateapipb.LocalSnapshot
-		// externalSnapshot seeds Status.ExternalSnapshot (the durable snapshot).
-		externalSnapshot *ateapipb.ExternalSnapshot
+		localSnapshot *ateapipb.Snapshot
+		// externalSnapshot seeds a completed durable snapshot.
+		externalSnapshot *ateapipb.Snapshot
 		// tmplUID seeds the template UID the snapshot's guest state was built
 		// on, stamped onto externalSnapshot: "current" stands for the created
 		// template's store-assigned UID (unknown until runtime), "" leaves the
@@ -1369,12 +1193,8 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 	}
 	// templateSeed is the ActorTemplate configuration a row persists.
 	type templateSeed struct {
-		// onPause is the template's pause scope.
-		onPause ateapipb.SnapshotContentScope
 		// golden seeds the template's golden tag snapshot.
-		golden *ateapipb.ExternalSnapshot
-		// fromData is the template's onResume boot-source policy.
-		fromData ateapipb.ResumeSource
+		golden *ateapipb.Snapshot
 		// configName is the SandboxConfig the template names; "" means the
 		// "gvisor" config the workflow's lister serves.
 		configName string
@@ -1392,8 +1212,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 		// a row also pins that the other config is absent.
 		snapshotName string
 		snapshotURI  string
-		scope        ateletpb.SnapshotScope
-		goldenURI    string
+		scope        ateletpb.SnapshotFidelity
 	}
 
 	tests := []struct {
@@ -1407,329 +1226,192 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			want: restoreWant{run: true},
 		},
 		{
-			// fromData only governs data-only snapshots; with no snapshot at
-			// all the golden policy never engages and the actor cold-boots.
-			name: "02 Golden fromData with nothing to restore still cold-boots",
-			tmpl: templateSeed{fromData: fromGolden},
-			want: restoreWant{run: true},
-		},
-		{
-			name:  "03 inherited golden snapshot restores in Full",
-			actor: actorSeed{externalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: goldenURI, ContentScope: fullScope}, tmplUID: "current"},
-			tmpl:  templateSeed{golden: &ateapipb.ExternalSnapshot{SnapshotUri: goldenURI, ContentScope: fullScope}},
+			name:  "02 inherited golden snapshot restores in Full",
+			actor: actorSeed{externalSnapshot: extSnap(goldenURI, fullScope), tmplUID: "current"},
+			tmpl:  templateSeed{golden: extSnap(goldenURI, fullScope)},
 			want: restoreWant{
 				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
 				snapshotURI:    goldenURI,
-				scope:          ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
+				scope:          ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			},
 		},
 		{
-			// An inherited Full golden snapshot needs no data-only overlay.
-			name:  "04 inherited golden under Golden fromData is a plain Full restore",
-			actor: actorSeed{externalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: goldenURI, ContentScope: fullScope}, tmplUID: "current"},
-			tmpl: templateSeed{
-				golden:   &ateapipb.ExternalSnapshot{SnapshotUri: goldenURI, ContentScope: fullScope},
-				fromData: fromGolden,
-			},
-			want: restoreWant{
-				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
-				snapshotURI:    goldenURI,
-				scope:          ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
-			},
-		},
-		{
-			name: "05 late non-Full golden does not change a cold boot",
-			tmpl: templateSeed{golden: &ateapipb.ExternalSnapshot{SnapshotUri: goldenURI, ContentScope: dataScope}},
+			name: "03 late non-Full golden does not change a cold boot",
+			tmpl: templateSeed{golden: extSnap(goldenURI, dataScope)},
 			want: restoreWant{run: true},
 		},
 		{
-			name:  "06 inherited golden snapshot rejects a malformed URI",
-			actor: actorSeed{externalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: malformedURI, ContentScope: fullScope}, tmplUID: "current"},
-			tmpl:  templateSeed{golden: &ateapipb.ExternalSnapshot{SnapshotUri: malformedURI, ContentScope: fullScope}},
+			name:  "04 inherited golden snapshot rejects a malformed URI",
+			actor: actorSeed{externalSnapshot: extSnap(malformedURI, fullScope), tmplUID: "current"},
+			tmpl:  templateSeed{golden: extSnap(malformedURI, fullScope)},
 			want:  restoreWant{code: codes.DataLoss},
 		},
 		{
-			name:  "07 template repoint with a late golden still cold-boots",
+			name:  "05 template repoint with a late golden still cold-boots",
 			actor: actorSeed{tmplUID: "old-template-uid"},
-			tmpl:  templateSeed{golden: &ateapipb.ExternalSnapshot{SnapshotUri: goldenURI, ContentScope: fullScope}},
+			tmpl:  templateSeed{golden: extSnap(goldenURI, fullScope)},
 			want:  restoreWant{run: true},
 		},
 		{
-			name:  "08 Full durable snapshot restores itself in Full",
-			actor: actorSeed{externalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: actorURI, ContentScope: fullScope}},
+			name:  "06 Full durable snapshot restores itself in Full",
+			actor: actorSeed{externalSnapshot: extSnap(actorURI, fullScope)},
 			want: restoreWant{
 				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
 				snapshotURI:    actorURI,
-				scope:          ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
+				scope:          ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			},
 		},
 		{
-			name:  "09 Full durable snapshot ignores Golden fromData",
-			actor: actorSeed{externalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: actorURI, ContentScope: fullScope}},
-			tmpl: templateSeed{
-				golden:   &ateapipb.ExternalSnapshot{SnapshotUri: goldenURI, ContentScope: fullScope},
-				fromData: fromGolden,
-			},
-			want: restoreWant{
-				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
-				snapshotURI:    actorURI,
-				scope:          ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
-			},
-		},
-		{
-			name: "10 durable snapshot built on the current template stays Full",
+			name: "07 durable snapshot built on the current template stays Full",
 			actor: actorSeed{
-				externalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: actorURI, ContentScope: fullScope},
+				externalSnapshot: extSnap(actorURI, fullScope),
 				tmplUID:          "current",
 			},
 			want: restoreWant{
 				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
 				snapshotURI:    actorURI,
-				scope:          ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
+				scope:          ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			},
 		},
 		{
 			// The snapshot's guest state was built on another template; the
 			// repointed actor must drop to Data so the new template's image
 			// boots fresh and only the volume data carries over.
-			name: "11 repointed actor's Full durable snapshot drops to Data",
+			name: "08 repointed actor's Full durable snapshot drops to Data",
 			actor: actorSeed{
-				externalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: actorURI, ContentScope: fullScope},
+				externalSnapshot: extSnap(actorURI, fullScope),
 				tmplUID:          "mismatch",
 			},
 			want: restoreWant{
 				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
 				snapshotURI:    actorURI,
-				scope:          ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA,
+				scope:          ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			},
 		},
 		{
-			// TemplateReplaced leads the scope switch: a repointed actor
-			// restores plain Data even when the golden policy is configured,
-			// with no golden overlay.
-			name: "12 template repoint beats the golden policy",
+			name:  "08a Rootfs durable snapshot restores as Rootfs",
+			actor: actorSeed{externalSnapshot: extSnap(actorURI, rootfsScope)},
+			want: restoreWant{
+				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
+				snapshotURI:    actorURI,
+				scope:          ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+			},
+		},
+		{
+			// A rootfs upper is only valid over the image it was written on,
+			// so a repointed actor drops to Data like a Full snapshot does.
+			name: "08b repointed actor's Rootfs durable snapshot drops to Data",
 			actor: actorSeed{
-				externalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: actorURI, ContentScope: fullScope},
+				externalSnapshot: extSnap(actorURI, rootfsScope),
 				tmplUID:          "mismatch",
 			},
-			tmpl: templateSeed{
-				golden:   &ateapipb.ExternalSnapshot{SnapshotUri: goldenURI, ContentScope: fullScope},
-				fromData: fromGolden,
-			},
 			want: restoreWant{
 				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
 				snapshotURI:    actorURI,
-				scope:          ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA,
+				scope:          ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			},
 		},
 		{
-			name:  "13 Data durable snapshot restores as Data",
-			actor: actorSeed{externalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: actorURI, ContentScope: dataScope}},
+			name:  "09 Data durable snapshot restores as Data",
+			actor: actorSeed{externalSnapshot: extSnap(actorURI, dataScope)},
 			want: restoreWant{
 				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
 				snapshotURI:    actorURI,
-				scope:          ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA,
+				scope:          ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			},
 		},
 		{
-			name:  "14 Data durable snapshot under Golden fromData restores on the golden",
-			actor: actorSeed{externalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: actorURI, ContentScope: dataScope}},
-			tmpl: templateSeed{
-				golden:   &ateapipb.ExternalSnapshot{SnapshotUri: goldenURI, ContentScope: fullScope},
-				fromData: fromGolden,
-			},
+			// The template's golden snapshot never supplies guest state for a
+			// Data snapshot: it restores as plain Data.
+			name:  "10 Data durable snapshot ignores the template's golden",
+			actor: actorSeed{externalSnapshot: extSnap(actorURI, dataScope)},
+			tmpl:  templateSeed{golden: extSnap(goldenURI, fullScope)},
 			want: restoreWant{
 				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
 				snapshotURI:    actorURI,
-				scope:          ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN,
-				goldenURI:      goldenURI,
+				scope:          ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			},
 		},
 		{
-			name:  "15 Golden data resume rejects a non-Full golden",
-			actor: actorSeed{externalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: actorURI, ContentScope: dataScope}},
-			tmpl: templateSeed{
-				golden:   &ateapipb.ExternalSnapshot{SnapshotUri: goldenURI, ContentScope: dataScope},
-				fromData: fromGolden,
-			},
-			want: restoreWant{code: codes.FailedPrecondition},
-		},
-		{
-			// Even when the golden policy would produce DATA_ON_GOLDEN, a
-			// repointed actor restores plain Data with no golden overlay.
-			name: "16 template repoint beats a Golden data resume",
-			actor: actorSeed{
-				externalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: actorURI, ContentScope: dataScope},
-				tmplUID:          "mismatch",
-			},
-			tmpl: templateSeed{
-				golden:   &ateapipb.ExternalSnapshot{SnapshotUri: goldenURI, ContentScope: fullScope},
-				fromData: fromGolden,
-			},
+			// A stored snapshot always records its fidelity; one without is a
+			// drifted record, and ateapi forwards it unchanged for atelet's
+			// validation to reject rather than guessing MEMORY.
+			name:  "11 unspecified durable fidelity goes out unspecified",
+			actor: actorSeed{externalSnapshot: extSnap(actorURI, unspecScope)},
 			want: restoreWant{
 				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
 				snapshotURI:    actorURI,
-				scope:          ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA,
+				scope:          ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED,
 			},
 		},
 		{
-			// Snapshots recorded before content_scope existed carry
-			// UNSPECIFIED; the conversion sends them out as Full.
-			name:  "17 unspecified durable scope goes out as Full",
-			actor: actorSeed{externalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: actorURI, ContentScope: unspecScope}},
-			want: restoreWant{
-				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
-				snapshotURI:    actorURI,
-				scope:          ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
-			},
-		},
-		{
-			name:  "18 malformed durable snapshot URI fails with DataLoss",
-			actor: actorSeed{externalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: malformedURI, ContentScope: fullScope}},
+			name:  "12 malformed durable snapshot URI fails with DataLoss",
+			actor: actorSeed{externalSnapshot: extSnap(malformedURI, fullScope)},
 			want:  restoreWant{code: codes.DataLoss},
 		},
 		{
-			name: "19 Full pause snapshot restores locally as Full",
+			name: "13 Full pause snapshot restores locally as Full",
 			actor: actorSeed{
-				localSnapshot: &ateapipb.LocalSnapshot{SnapshotName: localSnapshotName, NodeVmsWithLocalSnapshots: []string{"node-1"}},
-			},
-			tmpl: templateSeed{onPause: fullScope},
-			want: restoreWant{
-				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
-				snapshotName:   localSnapshotName,
-				scope:          ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
-			},
-		},
-		{
-			name: "20 Full pause snapshot ignores Golden fromData",
-			actor: actorSeed{
-				localSnapshot: &ateapipb.LocalSnapshot{SnapshotName: localSnapshotName, NodeVmsWithLocalSnapshots: []string{"node-1"}},
-			},
-			tmpl: templateSeed{
-				onPause:  fullScope,
-				golden:   &ateapipb.ExternalSnapshot{SnapshotUri: goldenURI, ContentScope: fullScope},
-				fromData: fromGolden,
+				localSnapshot: localSnap(localSnapshotName, fullScope),
 			},
 			want: restoreWant{
 				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
 				snapshotName:   localSnapshotName,
-				scope:          ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
+				scope:          ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			},
 		},
 		{
 			// The repoint permutation without a durable snapshot is
 			// deliberately not pinned: its wire scope is in flux while the
 			// resume-source resolution is being reworked.
-			name: "21 local snapshot built on the current template stays Full",
+			name: "14 local snapshot built on the current template stays Full",
 			actor: actorSeed{
-				localSnapshot: &ateapipb.LocalSnapshot{SnapshotName: localSnapshotName, NodeVmsWithLocalSnapshots: []string{"node-1"}},
+				localSnapshot: localSnap(localSnapshotName, fullScope),
 				tmplUID:       "current",
 			},
-			tmpl: templateSeed{onPause: fullScope},
 			want: restoreWant{
 				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
 				snapshotName:   localSnapshotName,
-				scope:          ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
+				scope:          ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			},
 		},
 		{
-			name: "22 Data pause snapshot restores locally as Data",
+			name: "15 Data pause snapshot restores locally as Data",
 			actor: actorSeed{
-				localSnapshot: &ateapipb.LocalSnapshot{SnapshotName: localSnapshotName, NodeVmsWithLocalSnapshots: []string{"node-1"}},
-			},
-			tmpl: templateSeed{onPause: dataScope},
-			want: restoreWant{
-				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
-				snapshotName:   localSnapshotName,
-				scope:          ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA,
-			},
-		},
-		{
-			name: "23 Golden data resume requires a golden snapshot",
-			actor: actorSeed{
-				localSnapshot: &ateapipb.LocalSnapshot{SnapshotName: localSnapshotName, NodeVmsWithLocalSnapshots: []string{"node-1"}},
-			},
-			tmpl: templateSeed{onPause: dataScope, fromData: fromGolden},
-			want: restoreWant{code: codes.FailedPrecondition},
-		},
-		{
-			name: "24 Data pause snapshot under Golden fromData restores on the golden",
-			actor: actorSeed{
-				localSnapshot: &ateapipb.LocalSnapshot{SnapshotName: localSnapshotName, NodeVmsWithLocalSnapshots: []string{"node-1"}},
-			},
-			tmpl: templateSeed{
-				onPause:  dataScope,
-				golden:   &ateapipb.ExternalSnapshot{SnapshotUri: goldenURI, ContentScope: fullScope},
-				fromData: fromGolden,
+				localSnapshot: localSnap(localSnapshotName, dataScope),
 			},
 			want: restoreWant{
 				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
 				snapshotName:   localSnapshotName,
-				scope:          ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN,
-				goldenURI:      goldenURI,
+				scope:          ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			},
 		},
 		{
-			name: "25 Golden data resume rejects a non-Full golden, local path",
+			name: "16 Data pause snapshot ignores the template's golden",
 			actor: actorSeed{
-				localSnapshot: &ateapipb.LocalSnapshot{SnapshotName: localSnapshotName, NodeVmsWithLocalSnapshots: []string{"node-1"}},
+				localSnapshot: localSnap(localSnapshotName, dataScope),
 			},
 			tmpl: templateSeed{
-				onPause:  dataScope,
-				golden:   &ateapipb.ExternalSnapshot{SnapshotUri: goldenURI, ContentScope: dataScope},
-				fromData: fromGolden,
-			},
-			want: restoreWant{code: codes.FailedPrecondition},
-		},
-		{
-			// Golden snapshots recorded before content_scope existed carry
-			// UNSPECIFIED, which counts as Full.
-			name: "26 unspecified golden scope is accepted for a Golden data resume",
-			actor: actorSeed{
-				localSnapshot: &ateapipb.LocalSnapshot{SnapshotName: localSnapshotName, NodeVmsWithLocalSnapshots: []string{"node-1"}},
-			},
-			tmpl: templateSeed{
-				onPause:  dataScope,
-				golden:   &ateapipb.ExternalSnapshot{SnapshotUri: goldenURI, ContentScope: unspecScope},
-				fromData: fromGolden,
+				golden: extSnap(goldenURI, fullScope),
 			},
 			want: restoreWant{
 				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
 				snapshotName:   localSnapshotName,
-				scope:          ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN,
-				goldenURI:      goldenURI,
+				scope:          ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			},
 		},
 		{
-			name: "27 Golden data resume rejects a malformed golden URI",
+			// The local snapshot takes precedence at restore, carrying its own
+			// scope rather than the durable snapshot's.
+			name: "17 local snapshot wins over a Full durable snapshot",
 			actor: actorSeed{
-				localSnapshot: &ateapipb.LocalSnapshot{SnapshotName: localSnapshotName, NodeVmsWithLocalSnapshots: []string{"node-1"}},
-			},
-			tmpl: templateSeed{
-				onPause:  dataScope,
-				golden:   &ateapipb.ExternalSnapshot{SnapshotUri: malformedURI, ContentScope: fullScope},
-				fromData: fromGolden,
-			},
-			want: restoreWant{code: codes.DataLoss},
-		},
-		{
-			// The local snapshot takes precedence at restore, and dataOnly
-			// comes from the pause scope, not the durable snapshot's.
-			name: "28 local snapshot wins over a Full durable snapshot",
-			actor: actorSeed{
-				localSnapshot:    &ateapipb.LocalSnapshot{SnapshotName: localSnapshotName, NodeVmsWithLocalSnapshots: []string{"node-1"}},
-				externalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: actorURI, ContentScope: fullScope},
-			},
-			tmpl: templateSeed{
-				onPause:  dataScope,
-				golden:   &ateapipb.ExternalSnapshot{SnapshotUri: goldenURI, ContentScope: fullScope},
-				fromData: fromGolden,
+				localSnapshot:    localSnap(localSnapshotName, dataScope),
+				externalSnapshot: extSnap(actorURI, fullScope),
 			},
 			want: restoreWant{
 				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
 				snapshotName:   localSnapshotName,
-				scope:          ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN,
-				goldenURI:      goldenURI,
+				scope:          ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			},
 		},
 		{
@@ -1737,47 +1419,40 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			// local pause restore: templates can only be updated while
 			// SUSPENDED, so a pause checkpoint is always from the current
 			// template.
-			name: "29 local snapshot ignores an older external snapshot's template mismatch",
+			name: "18 local snapshot ignores an older external snapshot's template mismatch",
 			actor: actorSeed{
-				localSnapshot:    &ateapipb.LocalSnapshot{SnapshotName: localSnapshotName, NodeVmsWithLocalSnapshots: []string{"node-1"}},
-				externalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: actorURI, ContentScope: fullScope},
+				localSnapshot:    localSnap(localSnapshotName, fullScope),
+				externalSnapshot: extSnap(actorURI, fullScope),
 				tmplUID:          "mismatch",
-			},
-			tmpl: templateSeed{
-				onPause:  dataScope,
-				golden:   &ateapipb.ExternalSnapshot{SnapshotUri: goldenURI, ContentScope: fullScope},
-				fromData: fromGolden,
 			},
 			want: restoreWant{
 				checkpointType: ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
 				snapshotName:   localSnapshotName,
-				scope:          ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN,
-				goldenURI:      goldenURI,
+				scope:          ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			},
 		},
 		{
 			// Restores take their sandbox from the template, like cold boots,
 			// so an unresolvable SandboxConfig stops them before atelet.
-			name:  "30 durable snapshot restore with a missing SandboxConfig is rejected",
-			actor: actorSeed{externalSnapshot: &ateapipb.ExternalSnapshot{SnapshotUri: actorURI, ContentScope: fullScope}},
+			name:  "19 durable snapshot restore with a missing SandboxConfig is rejected",
+			actor: actorSeed{externalSnapshot: extSnap(actorURI, fullScope)},
 			tmpl:  templateSeed{configName: "missing"},
 			want:  restoreWant{code: codes.FailedPrecondition},
 		},
 		{
-			name:  "31 local snapshot restore with a missing SandboxConfig is rejected",
-			actor: actorSeed{localSnapshot: &ateapipb.LocalSnapshot{SnapshotName: localSnapshotName}},
-			tmpl:  templateSeed{onPause: fullScope, configName: "missing"},
+			name:  "20 local snapshot restore with a missing SandboxConfig is rejected",
+			actor: actorSeed{localSnapshot: localSnap(localSnapshotName, fullScope)},
+			tmpl:  templateSeed{configName: "missing"},
 			want:  restoreWant{code: codes.FailedPrecondition},
 		},
 	}
 
 	// Every request atelet receives, Run or Restore, carries the sandbox the
 	// template's SandboxConfig resolves to.
-	wantSandboxAssets := sandboxAssetsProto(&atev1alpha1.SandboxConfig{Spec: atev1alpha1.SandboxConfigSpec{
-		SandboxClass: atev1alpha1.SandboxClassGvisor,
-		PauseImage:   "pause@sha256:abc",
-		Assets:       testAssets(),
-	}})
+	wantSandboxAssets := sandboxAssetsProto(
+		&atev1alpha1.SandboxConfig{Spec: atev1alpha1.SandboxConfigSpec{SandboxClass: atev1alpha1.SandboxClassGvisor}},
+		&atev1alpha1.SandboxVersionConfig{Name: "v1", PauseImage: "pause@sha256:abc", Assets: testAssets()},
+	)
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1794,8 +1469,6 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 				Metadata: &ateapipb.ResourceMetadata{Atespace: "ns", Name: "tmpl1"},
 				SnapshotConfig: &ateapipb.SnapshotConfig{
 					StorageLocation: testStorageLocation,
-					OnPause:         tt.tmpl.onPause,
-					OnResume:        &ateapipb.OnResumeConfig{FromData: tt.tmpl.fromData},
 				},
 				SandboxConfig: &ateapipb.SandboxConfig{
 					SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
@@ -1834,26 +1507,39 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
 			seedWorkflowActor(t, ctx, persistence, actorRef, "ns", "tmpl1", actorState, func(a *ateapipb.Actor) {
 				a.Status.WorkerAssignment = wireTestAssignment()
-				a.Status.LocalSnapshot = tt.actor.localSnapshot
 				uid := tt.actor.tmplUID
 				if uid == "current" {
 					uid = createdTmpl.GetMetadata().GetUid()
 				}
+				var gen int32
 				if tt.actor.externalSnapshot != nil {
+					gen++
 					ext := proto.CloneOf(tt.actor.externalSnapshot)
+					ext.Generation = gen
 					if ext.ActorTemplateUid == "" {
 						ext.ActorTemplateUid = uid
 					}
-					a.Status.ExternalSnapshot = ext
+					a.Status.Snapshots = append(a.Status.Snapshots, ext)
 				}
+				if tt.actor.localSnapshot != nil {
+					gen++
+					a.Status.AssignedNode = "node-1"
+					loc := proto.CloneOf(tt.actor.localSnapshot)
+					loc.Generation = gen
+					if loc.ActorTemplateUid == "" {
+						loc.ActorTemplateUid = uid
+					}
+					a.Status.Snapshots = append(a.Status.Snapshots, loc)
+				}
+				a.Status.LastAssignedGeneration = gen
 			})
 
 			actor, loadedTmpl, src, err := w.loadActorForResume(ctx, actorRef)
 			if err == nil {
-				_, err = w.ensureAteletRestored(ctx, actorRef, actor, loadedTmpl, src)
+				_, err = w.ensureAteletRestored(ctx, actorRef, actor, loadedTmpl, nil, src)
 			}
-			if got := status.Code(err); got != tt.want.code {
-				t.Fatalf("status.Code(err) = %v, want %v (err: %v)", got, tt.want.code, err)
+			if got := apierror.Code(err); got != tt.want.code {
+				t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, tt.want.code, err)
 			}
 
 			restore, run := atelet.requests()
@@ -1888,12 +1574,495 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			if got := restore.GetExternalConfig().GetSnapshotUri(); got != tt.want.snapshotURI {
 				t.Errorf("ExternalConfig.SnapshotUri = %q, want %q", got, tt.want.snapshotURI)
 			}
-			if got := restore.GetScope(); got != tt.want.scope {
+			if got := restore.GetFidelity(); got != tt.want.scope {
 				t.Errorf("restore scope = %v, want %v", got, tt.want.scope)
 			}
-			if got := restore.GetBaseConfig().GetSnapshotUri(); got != tt.want.goldenURI {
-				t.Errorf("BaseConfig.SnapshotUri = %q, want %q", got, tt.want.goldenURI)
-			}
 		})
+	}
+}
+
+// publishContextVolumePlugin hands back a fixed publish context, standing in
+// for a driver whose node plugin needs attachment metadata.
+type publishContextVolumePlugin struct {
+	volume.VolumePluginControlPlane
+	publishContext map[string]string
+}
+
+func (p *publishContextVolumePlugin) AttachVolume(ctx context.Context, req volume.AttachVolumeRequest) (volume.AttachVolumeResponse, error) {
+	return volume.AttachVolumeResponse{PublishContext: p.publishContext}, nil
+}
+
+// The attach step hands the publish context to the Restore call in memory and
+// leaves the stored actor untouched.
+func TestEnsureVolumesAttached_ReturnsPublishContext(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+	storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "id1"},
+		Status: &ateapipb.ActorStatus{
+			State: ateapipb.ActorState_ACTOR_STATE_RESUMING,
+			ExternalVolumes: []*ateapipb.ExternalVolume{
+				{Name: "mounted", StorageVolumeId: "storage-mounted", VolumeType: "mock", Status: ateapipb.ExternalVolume_STATUS_CREATED},
+				{Name: "unmounted", StorageVolumeId: "storage-unmounted", VolumeType: "mock", Status: ateapipb.ExternalVolume_STATUS_CREATED},
+			},
+		},
+	})
+	actor, err := persistence.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("GetActor: %v", err)
+	}
+
+	w := &ActorWorkflow{
+		store: persistence,
+		pluginRegistry: &mockPluginRegistry{plugins: map[string]volume.VolumePluginControlPlane{
+			"mock": &publishContextVolumePlugin{publishContext: map[string]string{"devicePath": "/dev/xvdba"}},
+		}},
+	}
+	worker := &ateapipb.Worker{NodeName: "node-1"}
+	tmpl := &ateapipb.ActorTemplate{
+		Volumes: []*ateapipb.Volume{
+			{Name: "mounted", ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{StorageClassName: "sc"}},
+			{Name: "unmounted", ExternalVolumeTemplate: &ateapipb.ExternalVolumeTemplate{StorageClassName: "sc"}},
+		},
+		Containers: []*ateapipb.Container{
+			{Name: "main", Image: "img", VolumeMounts: []*ateapipb.VolumeMount{{Name: "mounted", MountPath: "/data"}}},
+		},
+	}
+
+	got, err := w.ensureVolumesAttached(ctx, actor, worker, tmpl)
+	if err != nil {
+		t.Fatalf("ensureVolumesAttached: %v", err)
+	}
+	want := map[string]map[string]string{"mounted": {"devicePath": "/dev/xvdba"}}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("publish contexts mismatch (-want +got):\n%s", diff)
+	}
+
+	stored, err := persistence.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("GetActor: %v", err)
+	}
+	if diff := cmp.Diff(actor, stored, protocmp.Transform()); diff != "" {
+		t.Errorf("attach wrote to the stored actor (-before +after):\n%s", diff)
+	}
+}
+
+// filledUpScheduler hands out workers in order and refuses room on the ones
+// named in full. It stands in for a stale worker cache: Schedule offers a
+// worker that looked free, and the admit callback that BindActorToWorker runs
+// under the Worker's row lock then refuses it with errWorkerFilledUp.
+type filledUpScheduler struct {
+	workers []*ateapipb.Worker
+	full    map[string]bool
+	calls   int
+	// onSchedule runs after each Schedule call, with the number of calls made
+	// so far, so a test can act between attempts.
+	onSchedule func(calls int)
+	// err, if set, is what every Schedule call returns.
+	err error
+}
+
+// Schedule repeats the last worker, so a test that offers no free one keeps
+// returning a full worker until the backoff ends.
+func (s *filledUpScheduler) Schedule(context.Context, scheduling.Constraints) (*ateapipb.Worker, error) {
+	i := min(s.calls, len(s.workers)-1)
+	s.calls++
+	if s.onSchedule != nil {
+		s.onSchedule(s.calls)
+	}
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.workers[i], nil
+}
+
+func (s *filledUpScheduler) Applies(*ateapipb.Worker, scheduling.Constraints) bool { return true }
+
+func (s *filledUpScheduler) HasRoom(worker *ateapipb.Worker, _ scheduling.Constraints) bool {
+	return !s.full[worker.GetWorkerPod()]
+}
+
+// contentionStore is the smallest store that an assignment attempt needs. The
+// bug under test is in the metric path, so nothing here reaches a database.
+type contentionStore struct {
+	actorWorkflowStore
+	workers map[string]*ateapipb.Worker
+	actor   *ateapipb.Actor
+}
+
+func (s *contentionStore) FindWorkerHostingActor(context.Context, string) (string, error) {
+	return "", store.ErrNotFound
+}
+
+// BindActorToWorker runs admit as the real store does under the Worker's row
+// lock, and returns its refusal unchanged.
+func (s *contentionStore) BindActorToWorker(_ context.Context, workerName string, _ *ateapipb.ActorAssignment, admit func(*ateapipb.Worker) error) error {
+	worker, ok := s.workers[workerName]
+	if !ok {
+		return store.ErrNotFound
+	}
+	if admit != nil {
+		return admit(worker)
+	}
+	return nil
+}
+
+func (s *contentionStore) UpdateActor(_ context.Context, _ resources.ActorRef, _ store.Precondition, mutate func(*ateapipb.Actor) error) (*ateapipb.Actor, error) {
+	updated := proto.Clone(s.actor).(*ateapipb.Actor)
+	if err := mutate(updated); err != nil {
+		return nil, err
+	}
+	s.actor = updated
+	return updated, nil
+}
+
+// newAssignmentReader gives a workflow its own ManualReader-backed
+// Instruments, so a test reads ate.scheduler.assignment.duration without the
+// global meter provider.
+func newAssignmentReader(t *testing.T) (*Instruments, *sdkmetric.ManualReader) {
+	t.Helper()
+	reader := sdkmetric.NewManualReader()
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	instruments, err := NewInstruments(mp.Meter("ateapi"))
+	if err != nil {
+		t.Fatalf("NewInstruments: %v", err)
+	}
+	return instruments, reader
+}
+
+// assignmentObservations returns how many observations reached
+// ate.scheduler.assignment.duration, and the outcome of each one. An outcome
+// that carries error.type is reported as "outcome/error.type".
+func assignmentObservations(t *testing.T, reader *sdkmetric.ManualReader) (int, []string) {
+	t.Helper()
+	m, ok := collectMetric(t, reader, "ate.scheduler.assignment.duration")
+	if !ok {
+		return 0, nil
+	}
+	hist, ok := m.Data.(metricdata.Histogram[float64])
+	if !ok {
+		t.Fatalf("ate.scheduler.assignment.duration data = %T, want Histogram[float64]", m.Data)
+	}
+	total := 0
+	var outcomes []string
+	for _, dp := range hist.DataPoints {
+		total += int(dp.Count)
+		outcome, _ := dp.Attributes.Value(ateattr.SchedulerOutcomeKey)
+		label := outcome.AsString()
+		if errType, ok := dp.Attributes.Value(ateattr.ErrorTypeKey); ok {
+			label += "/" + errType.AsString()
+		}
+		for range dp.Count {
+			outcomes = append(outcomes, label)
+		}
+	}
+	return total, outcomes
+}
+
+// assignmentSum returns the total of every observation on
+// ate.scheduler.assignment.duration, in seconds.
+func assignmentSum(t *testing.T, reader *sdkmetric.ManualReader) float64 {
+	t.Helper()
+	m, ok := collectMetric(t, reader, "ate.scheduler.assignment.duration")
+	if !ok {
+		return 0
+	}
+	hist, ok := m.Data.(metricdata.Histogram[float64])
+	if !ok {
+		t.Fatalf("ate.scheduler.assignment.duration data = %T, want Histogram[float64]", m.Data)
+	}
+	var sum float64
+	for _, dp := range hist.DataPoints {
+		sum += dp.Sum
+	}
+	return sum
+}
+
+func contendedWorker(podName string) *ateapipb.Worker {
+	return &ateapipb.Worker{
+		Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerUID(podName)},
+		WorkerNamespace: "worker-ns",
+		WorkerPool:      "pool",
+		WorkerPod:       podName,
+		WorkerPodUid:    testWorkerUID(podName),
+		SandboxClass:    "gvisor",
+		Status: &ateapipb.WorkerStatus{
+			State:    ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+			Capacity: &ateapipb.WorkerResources{Actors: 1},
+		},
+	}
+}
+
+// staticWorkerSource feeds a worker cache a fixed fleet and a watch that
+// never fires, which is the stale cache this contention arises from.
+type staticWorkerSource struct {
+	workers []*ateapipb.Worker
+}
+
+func (s *staticWorkerSource) WatchWorkers(context.Context) (*store.WorkerWatch, error) {
+	return store.NewWorkerWatch(make(chan store.WorkerEvent), func() {}), nil
+}
+
+func (s *staticWorkerSource) ListWorkers(context.Context, store.ListOptions) (store.ListResponse[*ateapipb.Worker], error) {
+	return store.ListResponse[*ateapipb.Worker]{Items: s.workers}, nil
+}
+
+// newContendedWorkflow builds a workflow around sched, with a SUSPENDED actor
+// ready to resume and a cache that holds every worker sched offers.
+func newContendedWorkflow(t *testing.T, sched *filledUpScheduler) (*ActorWorkflow, *ateapipb.Actor, *sdkmetric.ManualReader) {
+	t.Helper()
+	actor := &ateapipb.Actor{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "id1", Uid: "actor-uid", Version: 1},
+		Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED},
+	}
+	byName := make(map[string]*ateapipb.Worker, len(sched.workers))
+	for _, worker := range sched.workers {
+		byName[worker.GetMetadata().GetName()] = worker
+	}
+	instruments, reader := newAssignmentReader(t)
+
+	cacheCtx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	wc := workercache.New(&staticWorkerSource{workers: sched.workers}, time.Minute)
+	if err := wc.Start(cacheCtx); err != nil {
+		t.Fatalf("workercache.Start: %v", err)
+	}
+	w := &ActorWorkflow{
+		store:       &contentionStore{workers: byName, actor: actor},
+		workerCache: wc,
+		scheduler:   sched,
+		instruments: instruments,
+	}
+	return w, actor, reader
+}
+
+func gvisorTemplate() *ateapipb.ActorTemplate {
+	return &ateapipb.ActorTemplate{
+		SandboxConfig: &ateapipb.SandboxConfig{SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR},
+	}
+}
+
+// TestEnsureWorkerAssigned_ContentionRecordsOneObservation holds the note on
+// ate.scheduler.assignment.duration: ateapi records only the last attempt. A
+// resume that loses a race for the last slot on a worker retries, and the
+// retried attempt must not reach the histogram. Losing that race is a
+// capacity condition, and the registry says a lack of room is not a failure.
+func TestEnsureWorkerAssigned_ContentionRecordsOneObservation(t *testing.T) {
+	sched := &filledUpScheduler{
+		workers: []*ateapipb.Worker{contendedWorker("full-pod"), contendedWorker("free-pod")},
+		full:    map[string]bool{"full-pod": true},
+	}
+	w, actor, reader := newContendedWorkflow(t, sched)
+
+	_, worker, err := w.ensureWorkerAssigned(context.Background(), resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, gvisorTemplate())
+	if err != nil {
+		t.Fatalf("ensureWorkerAssigned: %v", err)
+	}
+	if got := worker.GetWorkerPod(); got != "free-pod" {
+		t.Errorf("assigned worker = %q, want %q", got, "free-pod")
+	}
+
+	got, outcomes := assignmentObservations(t, reader)
+	if got != 1 {
+		t.Errorf("observations on ate.scheduler.assignment.duration = %d %v, want 1: the retried attempt must not be recorded", got, outcomes)
+	}
+	for _, outcome := range outcomes {
+		if outcome != ateattr.SchedulerOutcomeAssigned {
+			t.Errorf("recorded outcome %q, want only %q", outcome, ateattr.SchedulerOutcomeAssigned)
+		}
+	}
+}
+
+// TestEnsureWorkerAssigned_ExhaustedBackoffRecordsOneError covers the other
+// end: every attempt loses the race, the retries run out, and the resume
+// fails. The histogram carries one observation for the resume, and not one
+// for each attempt. error.type is the code RPCService.ResumeActor returns, so
+// the scheduler histogram agrees with the router. The returned error carries
+// that code too, so ate.actor.lifecycle.operation.duration, which classifies
+// the same error, also records Aborted. The record times the last attempt and
+// not the backoff, as every other record on the histogram does.
+func TestEnsureWorkerAssigned_ExhaustedBackoffRecordsOneError(t *testing.T) {
+	sched := &filledUpScheduler{
+		workers: []*ateapipb.Worker{contendedWorker("full-pod")},
+		full:    map[string]bool{"full-pod": true},
+	}
+	w, actor, reader := newContendedWorkflow(t, sched)
+
+	_, _, err := w.ensureWorkerAssigned(context.Background(), resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, gvisorTemplate())
+	if err == nil {
+		t.Fatal("ensureWorkerAssigned succeeded, want a failure after the backoff ended")
+	}
+	if got := apierror.Code(err); got != codes.Aborted {
+		t.Errorf("apierror.Code(err) = %v, want %v (err: %v)", got, codes.Aborted, err)
+	}
+	if !errors.Is(err, store.ErrVersionConflict) {
+		t.Errorf("ensureWorkerAssigned error = %v, want one that wraps store.ErrVersionConflict for RPCService.ResumeActor", err)
+	}
+
+	got, outcomes := assignmentObservations(t, reader)
+	if got != 1 {
+		t.Fatalf("observations on ate.scheduler.assignment.duration = %d %v, want 1 for the whole resume", got, outcomes)
+	}
+	want := ateattr.SchedulerOutcomeError + "/" + codes.Aborted.String()
+	if outcomes[0] != want {
+		t.Errorf("recorded outcome %q, want %q: error.type must be the code ResumeActor returns", outcomes[0], want)
+	}
+
+	// One attempt against the stubs takes microseconds, so a record that
+	// includes the sleep after the last attempt goes above half of it.
+	_, sleep := replayBackoff(t, assignmentBackoff)
+	if recorded := assignmentSum(t, reader); recorded >= sleep.Seconds()/2 {
+		t.Errorf("recorded duration = %.3fs, want less than %.3fs: the record must time the last attempt, not the backoff", recorded, sleep.Seconds()/2)
+	}
+}
+
+// replayBackoff returns how many attempts wait.ExponentialBackoff makes with
+// b, and the shortest sleep it makes after the last attempt before it gives
+// up. It replays the steps of ExponentialBackoff without jitter.
+func replayBackoff(t *testing.T, b wait.Backoff) (attempts int, lastSleep time.Duration) {
+	t.Helper()
+	b.Jitter = 0
+	for b.Steps > 0 {
+		attempts++
+		if b.Steps == 1 {
+			t.Fatal("the backoff ends on Steps, with no sleep after the last attempt; these tests need a backoff that ends on Cap")
+		}
+		lastSleep = b.Step()
+	}
+	return attempts, lastSleep
+}
+
+// TestEnsureWorkerAssigned_CancelledDuringBackoffRecordsOne covers the loop
+// ending between attempts. The caller goes away while an attempt that lost a
+// race is waiting to retry, so no attempt records, and the resume would leave
+// no trace on the histogram without the one record the loop writes. That
+// record times the attempt that lost the race, not the context check after it.
+func TestEnsureWorkerAssigned_CancelledDuringBackoffRecordsOne(t *testing.T) {
+	sched := &filledUpScheduler{
+		workers: []*ateapipb.Worker{contendedWorker("full-pod")},
+		full:    map[string]bool{"full-pod": true},
+	}
+	w, actor, reader := newContendedWorkflow(t, sched)
+
+	// Cancel once the first attempt has lost its race, so the loop ends in the
+	// pre-check of the second attempt and not before the first. The sleep
+	// makes that attempt long enough to tell apart from the context check.
+	const attemptTime = 50 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	sched.onSchedule = func(calls int) {
+		if calls == 1 {
+			time.Sleep(attemptTime)
+			cancel()
+		}
+	}
+	defer cancel()
+
+	_, _, err := w.ensureWorkerAssigned(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, gvisorTemplate())
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("ensureWorkerAssigned error = %v, want context.Canceled", err)
+	}
+
+	got, outcomes := assignmentObservations(t, reader)
+	if got != 1 {
+		t.Fatalf("observations on ate.scheduler.assignment.duration = %d %v, want 1 for the whole resume", got, outcomes)
+	}
+	want := ateattr.SchedulerOutcomeError + "/" + codes.Canceled.String()
+	if outcomes[0] != want {
+		t.Errorf("recorded outcome %q, want %q", outcomes[0], want)
+	}
+	if recorded := assignmentSum(t, reader); recorded < attemptTime.Seconds() {
+		t.Errorf("recorded duration = %.3fs, want at least %.3fs: the record must time the attempt that lost the race", recorded, attemptTime.Seconds())
+	}
+}
+
+// TestEnsureWorkerAssigned_CancelledBeforeFirstAttemptRecordsNothing covers a
+// context that ended before the loop began. No attempt ran, so there is no
+// attempt to time and the histogram gets no record.
+func TestEnsureWorkerAssigned_CancelledBeforeFirstAttemptRecordsNothing(t *testing.T) {
+	sched := &filledUpScheduler{
+		workers: []*ateapipb.Worker{contendedWorker("free-pod")},
+	}
+	w, actor, reader := newContendedWorkflow(t, sched)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, _, err := w.ensureWorkerAssigned(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, gvisorTemplate())
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("ensureWorkerAssigned error = %v, want context.Canceled", err)
+	}
+	if sched.calls != 0 {
+		t.Fatalf("Schedule calls = %d, want 0: no attempt may run after the context ended", sched.calls)
+	}
+	if got, outcomes := assignmentObservations(t, reader); got != 0 {
+		t.Errorf("observations on ate.scheduler.assignment.duration = %d %v, want 0", got, outcomes)
+	}
+}
+
+// TestEnsureWorkerAssigned_CancelledInLastSleepRecordsOne covers the context
+// ending in the sleep after the last attempt. The backoff then gives up with
+// its own timeout, but the caller went away, so the resume reports the
+// context error and not that the retries ran out.
+func TestEnsureWorkerAssigned_CancelledInLastSleepRecordsOne(t *testing.T) {
+	sched := &filledUpScheduler{
+		workers: []*ateapipb.Worker{contendedWorker("full-pod")},
+		full:    map[string]bool{"full-pod": true},
+	}
+	w, actor, reader := newContendedWorkflow(t, sched)
+
+	attempts, _ := replayBackoff(t, assignmentBackoff)
+	ctx, cancel := context.WithCancel(context.Background())
+	sched.onSchedule = func(calls int) {
+		if calls == attempts {
+			cancel()
+		}
+	}
+	defer cancel()
+
+	_, _, err := w.ensureWorkerAssigned(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, gvisorTemplate())
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("ensureWorkerAssigned error = %v, want context.Canceled", err)
+	}
+	if sched.calls != attempts {
+		t.Fatalf("Schedule calls = %d, want %d: the context must end after the last attempt", sched.calls, attempts)
+	}
+
+	got, outcomes := assignmentObservations(t, reader)
+	if got != 1 {
+		t.Fatalf("observations on ate.scheduler.assignment.duration = %d %v, want 1 for the whole resume", got, outcomes)
+	}
+	want := ateattr.SchedulerOutcomeError + "/" + codes.Canceled.String()
+	if outcomes[0] != want {
+		t.Errorf("recorded outcome %q, want %q", outcomes[0], want)
+	}
+}
+
+// TestEnsureWorkerAssigned_ContextEndsInsideAttemptRecordsOne covers an
+// attempt that fails because the context ended inside it. The attempt records
+// itself, so the loop must not add a second record, and the caller gets the
+// context error and not Aborted.
+func TestEnsureWorkerAssigned_ContextEndsInsideAttemptRecordsOne(t *testing.T) {
+	sched := &filledUpScheduler{
+		workers: []*ateapipb.Worker{contendedWorker("free-pod")},
+		err:     fmt.Errorf("list workers: %w", context.DeadlineExceeded),
+	}
+	w, actor, reader := newContendedWorkflow(t, sched)
+
+	_, _, err := w.ensureWorkerAssigned(context.Background(), resources.ActorRef{Atespace: "team-a", Name: "id1"}, actor, gvisorTemplate())
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("ensureWorkerAssigned error = %v, want context.DeadlineExceeded", err)
+	}
+	if got := apierror.Code(err); got != codes.DeadlineExceeded {
+		t.Errorf("apierror.Code(err) = %v, want %v (err: %v)", got, codes.DeadlineExceeded, err)
+	}
+
+	got, outcomes := assignmentObservations(t, reader)
+	if got != 1 {
+		t.Fatalf("observations on ate.scheduler.assignment.duration = %d %v, want 1 for the whole resume", got, outcomes)
+	}
+	want := ateattr.SchedulerOutcomeError + "/" + codes.DeadlineExceeded.String()
+	if outcomes[0] != want {
+		t.Errorf("recorded outcome %q, want %q", outcomes[0], want)
 	}
 }

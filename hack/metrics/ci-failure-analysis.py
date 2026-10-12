@@ -21,7 +21,8 @@ Instead of treating all CI failures as "flakiness", this script fetches job logs
 from failed runs and classifies each failure into one of several categories:
 
   no_free_workers   — envtest/integration tests fail because no worker is assigned
-                      ("no free workers available") — resource contention in tests
+                      ("no worker has room for the actor", or the older "no free
+                      workers available") — resource contention in tests
   e2e_timeout       — e2e tests time out waiting for actor/service responses or
                       kubectl wait conditions; upstream connect errors
   gcs_access        — GCS/S3 bucket access denied or not found when fetching
@@ -86,7 +87,7 @@ def _gh_text(*args: str) -> Optional[str]:
 # Ordered: first match wins.
 #
 # - Infrastructure patterns (no_free_workers, e2e_timeout, gcs_access) come
-#   first so that an envtest run that dies on "no free workers available" is not
+#   first so that an envtest run that dies on "no worker has room" is not
 #   mis-attributed to the Go test that printed "--- FAIL:" before crashing.
 # - named_test_fail comes before verify_fail: if a specific test name is
 #   available it is more useful than a generic "verify failed". verify_fail's
@@ -98,7 +99,7 @@ def _gh_text(*args: str) -> Optional[str]:
 #   intentionally omitted from e2e_timeout: they appear in ordinary unit-test
 #   output and would over-trigger when infra patterns fire before named_test_fail.
 _PATTERNS = [
-    ("no_free_workers", re.compile(r'no free workers available', re.IGNORECASE)),
+    ("no_free_workers", re.compile(r'no worker has room for the actor|no free workers available', re.IGNORECASE)),
     ("e2e_timeout",     re.compile(
         r'timed out waiting for actor response'
         r'|timed out waiting for the condition'

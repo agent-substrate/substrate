@@ -94,7 +94,7 @@ func (s *AteomService) gracefulShutdown(ctx context.Context) {
 		if h.vm == nil {
 			continue
 		}
-		targets = append(targets, drainTarget{id: uid, agent: h.vm.guestAgent, workloadIDs: h.vm.workloadIDs})
+		targets = append(targets, drainTarget{id: uid, agent: h.vm.guestAgent, workloadIDs: h.vm.workloadIDs, hosted: h})
 	}
 	s.actorsMu.RUnlock()
 
@@ -112,7 +112,11 @@ func (s *AteomService) gracefulShutdown(ctx context.Context) {
 		wg.Add(1)
 		go func(t drainTarget) {
 			defer wg.Done()
+			// The drain ends the activation: read it while the guest answers,
+			// and write its final record once the workloads are down.
+			s.readFinal(ctx, t.hosted)
 			gracefullyStopActor(ctx, t, deadline)
+			s.recordFinal(ctx, t.hosted)
 		}(t)
 	}
 	wg.Wait()
@@ -134,6 +138,8 @@ type drainTarget struct {
 	id          string
 	agent       *kata.AgentClient
 	workloadIDs []string
+	// hosted is the activation the drain ends, for its final record.
+	hosted *hostedActor
 }
 
 // guestAgent is the slice of *kata.AgentClient the drain needs: signal a guest

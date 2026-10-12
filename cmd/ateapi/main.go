@@ -17,17 +17,16 @@ package main
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
-	"cloud.google.com/go/storage"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/apiauthn"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/authz"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/controlapi"
@@ -40,18 +39,16 @@ import (
 	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/localjwtauthority"
-	"github.com/agent-substrate/substrate/internal/objectstore"
 	"github.com/agent-substrate/substrate/internal/oidcdiscovery"
+	"github.com/agent-substrate/substrate/internal/pluginsocket"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/agent-substrate/substrate/internal/volume"
 	"github.com/agent-substrate/substrate/pkg/client/clientset/versioned"
 	"github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
+	objectstorev1 "github.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/spf13/pflag"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/otel"
@@ -74,13 +71,21 @@ var (
 	metricsListenAddr    = pflag.String("metrics-listen-addr", ":9090", "Address and port the prometheus metrics server should listen on.")
 	grpcServerCredBundle = pflag.String("grpc-server-cred-bundle", "", "File with the server TLS credential bundle.")
 
-	authenticationConfigFile = pflag.String("authentication-config", "", "YAML file configuring trusted JWT providers.")
-	postgresConnectionString = pflag.String("postgres-connection-string", "", "PostgreSQL connection string (libpq DSN or URI).")
-	postgresSchema           = pflag.String("postgres-schema", "public", "PostgreSQL schema for Substrate tables. This overrides a search_path connection parameter.")
-	experimentalEnableAuthz  = pflag.Bool("experimental-enable-authz", false, "Enable OpenFGA authorization checks (experimental).")
+	authenticationConfigFile          = pflag.String("authentication-config", "", "YAML file configuring trusted JWT providers.")
+	postgresReadWriteConnectionString = pflag.String("postgres-read-write-connection-string", "", "PostgreSQL connection string (libpq DSN or URI).")
+	postgresOwnerConnectionString     = pflag.String("postgres-owner-connection-string", "", "PostgreSQL owner connection string (libpq DSN or URI).")
+	postgresReadWriteRole             = pflag.String("postgres-read-write-role", "", "Required PostgreSQL role assumed by read/write connections.")
+	postgresOwnerRole                 = pflag.String("postgres-owner-role", "", "Required PostgreSQL role assumed by owner connections.")
+	postgresSchema                    = pflag.String("postgres-schema", "substrate", "PostgreSQL schema for Substrate tables. This overrides a search_path connection parameter.")
+	postgresPoolMaxConns              = pflag.Int32("postgres-pool-max-conns", 0, "Maximum connections in the shared Substrate and OpenFGA read/write PostgreSQL pool. Does not affect the owner or watch pools. The DSN or pgx default is used when unset.")
+	experimentalEnableAuthz           = pflag.Bool("experimental-enable-authz", false, "Enforce OpenFGA authorization checks on all registered RPCs (experimental). AccessPolicy RPCs are always checked.")
+	// TODO: Move the authz settings into the hot-reloadable config proto
+	// (agent-substrate/substrate#2021) once it lands, so bootstrap owner
+	// changes take effect without a restart.
+	authzBootstrapOwners = pflag.StringSlice("authz-bootstrap-owners", nil, "Principal IDs that are always global owners while listed, independent of the stored global AccessPolicy. Removing an ID revokes its access on restart. At least one is required when --experimental-enable-authz is set.")
 
 	actorIDJWTPoolFile          = pflag.String("actor-id-jwt-pool", "", "The file that contains the serialized JWT authority pool for signing actor JWTs")
-	actorJWTIssuer              = pflag.String("actor-jwt-issuer", "", "Issuer URL placed in the iss claim of actor JWTs. Relying parties fetch <issuer>/.well-known/openid-configuration to verify them. Must be https with no query or fragment. Empty means https://"+installdefaults.IDPServiceName+".<pod namespace>.svc.")
+	actorJWTIssuer              = pflag.String("actor-jwt-issuer", "", "Issuer URL placed in the iss claim of actor JWTs. Relying parties fetch <issuer>/.well-known/openid-configuration to verify them. Must be https with no query or fragment. Required.")
 	defaultEgressGatewayAddress = pflag.String("default-egress-gateway-address", "", "Default address (host:port) of the egress PEP that each actor's atunnel dials. Sent on every atelet Run and Restore, so it takes effect at the actor's next activation. Empty leaves actors with no TCP egress.")
 
 	actorIDCAPoolFile      = pflag.String("actor-id-ca-pool", "", "The file that contains the CA pool for signing actor JWTs")
@@ -90,6 +95,8 @@ var (
 
 	drainDelay   = pflag.Duration("drain-delay", 13*time.Second, "How long to keep accepting new work after SIGTERM, before starting the gRPC drain.")
 	drainTimeout = pflag.Duration("drain-timeout", 15*time.Second, "Deadline for the graceful gRPC drain on shutdown. In-flight RPCs still running past it are forcefully cancelled.")
+
+	snapshotPluginSocket = pflag.String("snapshot-plugin-socket", "/run/snapshot-plugin/control.sock", "Unix socket of the control snapshot plugin that external snapshots are deleted and copied through.")
 
 	templateResyncInterval = pflag.Duration("template-resync-interval", 20*time.Second, fmt.Sprintf("Interval between actor template resyncs. Must be at least %s.", minResyncInterval))
 
@@ -108,15 +115,19 @@ func main() {
 	if err := serverboot.SetLogLevel(*logLevelFlag); err != nil {
 		serverboot.Fatal(ctx, "Invalid --log-level", err)
 	}
+	if err := loadFlagsFromEnv(); err != nil {
+		serverboot.Fatal(ctx, "Invalid PostgreSQL configuration", err)
+	}
+	if err := rejectStorageEnv(); err != nil {
+		serverboot.Fatal(ctx, "Storage settings moved to the snapshot-plugin sidecar", err)
+	}
 	slog.InfoContext(ctx, "ateapi starting", slog.String("version", version.Version))
 	if *templateResyncInterval < minResyncInterval {
 		serverboot.Fatal(ctx, "Invalid --template-resync-interval", fmt.Errorf("must be at least %s", minResyncInterval))
 	}
-	resolvedActorJWTIssuer, err := resolveActorJWTIssuer(*actorJWTIssuer, installdefaults.NamespaceFromPodEnv())
-	if err != nil {
+	if err := validateActorJWTIssuer(*actorJWTIssuer); err != nil {
 		serverboot.Fatal(ctx, "Invalid --actor-jwt-issuer", err)
 	}
-	slog.InfoContext(ctx, "Resolved actor JWT issuer", slog.String("actor-jwt-issuer", resolvedActorJWTIssuer))
 
 	// Kept separate from ctx so that in-progress work (clients, informers) is
 	// not cancelled the moment SIGTERM arrives. The drainOnShutdown
@@ -141,17 +152,16 @@ func main() {
 
 	lp, err := serverboot.InitLogging(ctx, serverboot.LoggingOptions{
 		ServiceName: "ateapi",
-		Exporter:    serverboot.ResolveLogsExporter(ctx, serverboot.LogsExporterNone),
+		Exporter:    serverboot.ResolveLogsExporter(ctx),
 	})
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize logging", err)
 	}
-	// Nil when the exporter is none.
+	// Nil when the exporter does not include otlp.
 	if lp != nil {
 		defer serverboot.ShutdownProvider("LoggerProvider", lp.Shutdown)
 	}
 
-	loadFlagsFromEnv()
 	logFlagValues(ctx)
 	authenticationConfig, err := apiauthn.LoadAuthenticationConfig(*authenticationConfigFile)
 	if err != nil {
@@ -172,21 +182,24 @@ func main() {
 	// (atepg's outbox maintenance loop); stop it on shutdown before closing pool.
 	defer persistence.Close()
 
-	var authorizer *authz.Authorizer
-	if *experimentalEnableAuthz {
-		fgaServer, err := authz.NewOpenFGAServer(pool)
-		if err != nil {
-			serverboot.Fatal(ctx, "Failed to create OpenFGA server", err)
-		}
-		defer fgaServer.Close()
-
-		var policyManager *authz.PolicyManager
-		authorizer, policyManager, err = authz.New(shutdownCtx, pool, fgaServer)
-		if err != nil {
-			serverboot.Fatal(ctx, "Failed to initialize OpenFGA authz", err)
-		}
-		persistence.SetPolicyManager(policyManager)
+	// The authz stack is always wired so policy tuples stay in sync with the
+	// store; --experimental-enable-authz only controls enforcement in the
+	// interceptor.
+	if *experimentalEnableAuthz && len(*authzBootstrapOwners) == 0 {
+		// Without a bootstrap owner, nobody could create the global
+		// AccessPolicy, so the enforced API would be unusable.
+		serverboot.Fatal(ctx, "Invalid flags", fmt.Errorf("--authz-bootstrap-owners must list at least one principal when --experimental-enable-authz is set"))
 	}
+	fgaServer, err := authz.NewOpenFGAServer(pool)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to create OpenFGA server", err)
+	}
+	defer fgaServer.Close()
+	authorizer, policyManager, err := authz.New(shutdownCtx, pool, fgaServer, *authzBootstrapOwners)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to initialize OpenFGA authz", err)
+	}
+	persistence.SetPolicyManager(policyManager)
 
 	clientset, ateClient, err := newKubeClients()
 	if err != nil {
@@ -246,9 +259,18 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to create metric instruments", err)
 	}
 
-	objectStore, err := newObjectStore(ctx)
+	snapshotPluginConn, err := pluginsocket.Dial(*snapshotPluginSocket, pluginsocket.ReadyWait)
 	if err != nil {
-		serverboot.Fatal(ctx, "Failed to set up the object storage backend", err)
+		serverboot.Fatal(ctx, "Failed to set up the snapshot plugin client", err)
+	}
+	defer snapshotPluginConn.Close()
+	// A plugin that never serves would fail every call. Fail at startup
+	// instead, giving the sidecar time to come up.
+	readyCtx, cancelReady := context.WithTimeout(ctx, time.Minute)
+	err = pluginsocket.WaitReady(readyCtx, snapshotPluginConn)
+	cancelReady()
+	if err != nil {
+		serverboot.Fatal(ctx, "Snapshot plugin is not serving", err)
 	}
 
 	volPlugins := make(map[string]volume.VolumePluginControlPlane)
@@ -274,8 +296,8 @@ func main() {
 		instruments,
 		*defaultEgressGatewayAddress,
 		volPlugins,
-		objectStore,
-		resolvedActorJWTIssuer,
+		objectstorev1.NewControlProviderClient(snapshotPluginConn),
+		*actorJWTIssuer,
 		actorIDJWTAuthorityPool,
 		actorIDCAPool,
 	)
@@ -302,13 +324,9 @@ func main() {
 		apiauthn.UnaryServerInterceptor(authCfg),
 		ateinterceptors.MaxDeadlineUnaryInterceptor(maxRPCDeadline),
 		ateinterceptors.ServerUnaryInterceptor,
-	}
-	if *experimentalEnableAuthz {
-		unaryInterceptors = append(unaryInterceptors, authz.UnaryServerInterceptor(authorizer))
-	}
-	unaryInterceptors = append(unaryInterceptors,
+		authz.UnaryServerInterceptor(authorizer, *experimentalEnableAuthz),
 		ateinterceptors.RejectUnknownFieldsUnaryInterceptor,
-	)
+	}
 
 	mux := grpc.NewServer(
 		grpc.Creds(serverCreds),
@@ -374,22 +392,49 @@ func drainOnShutdown(ctx context.Context, srv *grpc.Server, readiness *serverboo
 // against a known environment variable. Lets one set of Kubernetes
 // manifests source per-developer config from a ConfigMap without
 // editing the manifests for each branch.
-func loadFlagsFromEnv() {
+func loadFlagsFromEnv() error {
 	overrides := []struct {
 		flag *string
 		env  string
 	}{
-		{postgresConnectionString, "ATE_API_POSTGRES_CONNECTION_STRING"},
+		{postgresReadWriteConnectionString, "ATE_API_POSTGRES_READ_WRITE_CONNECTION_STRING"},
+		{postgresOwnerConnectionString, "ATE_API_POSTGRES_OWNER_CONNECTION_STRING"},
+		{postgresReadWriteRole, "ATE_API_POSTGRES_READ_WRITE_ROLE"},
+		{postgresOwnerRole, "ATE_API_POSTGRES_OWNER_ROLE"},
 		{postgresSchema, "ATE_API_POSTGRES_SCHEMA"},
+		{actorJWTIssuer, "ATE_API_ACTOR_JWT_ISSUER"},
 	}
 	for _, o := range overrides {
 		if *o.flag == "@env" {
 			*o.flag = os.Getenv(o.env)
 		}
 	}
+	if !pflag.CommandLine.Changed("postgres-pool-max-conns") {
+		if raw, ok := os.LookupEnv("ATE_API_POSTGRES_POOL_MAX_CONNS"); ok && raw != "" {
+			value, err := strconv.ParseInt(raw, 10, 32)
+			if err != nil || value <= 0 {
+				return fmt.Errorf("ATE_API_POSTGRES_POOL_MAX_CONNS must be a positive integer")
+			}
+			*postgresPoolMaxConns = int32(value)
+		}
+	}
 	if v := os.Getenv("ATE_API_EXPERIMENTAL_ENABLE_AUTHZ"); v != "" && !pflag.CommandLine.Changed("experimental-enable-authz") {
 		*experimentalEnableAuthz = (v == "true" || v == "1")
 	}
+	return nil
+}
+
+// rejectStorageEnv fails if ATE_STORAGE_BACKEND is set on ate-api-server,
+// which no longer reads it; objectstorage.UsesS3 reads it in the sidecar. An
+// install that still patches it onto this container would otherwise come up
+// healthy with a sidecar on the default backend, and fail at the first
+// snapshot cleanup or copy. Only this variable is a signal: EKS pod identity
+// sets AWS_* in every container.
+func rejectStorageEnv() error {
+	if v, ok := os.LookupEnv("ATE_STORAGE_BACKEND"); ok {
+		return fmt.Errorf("ATE_STORAGE_BACKEND=%q is set on ate-api-server, which no longer reads it; set the storage backend on its snapshot-plugin sidecar", v)
+	}
+	return nil
 }
 
 func logFlagValues(ctx context.Context) {
@@ -397,9 +442,14 @@ func logFlagValues(ctx context.Context) {
 		slog.String("grpc-listen-addr", *listenAddr),
 		slog.String("grpc-server-cred-bundle", *grpcServerCredBundle),
 		slog.String("authentication-config", *authenticationConfigFile),
-		postgresConnectionAttr(*postgresConnectionString),
+		postgresConnectionAttr("postgres-read-write-connection-string", *postgresReadWriteConnectionString),
+		postgresConnectionAttr("postgres-owner-connection-string", *postgresOwnerConnectionString),
+		slog.String("postgres-read-write-role", *postgresReadWriteRole),
+		slog.String("postgres-owner-role", *postgresOwnerRole),
 		slog.String("postgres-schema", *postgresSchema),
+		slog.Int("postgres-pool-max-conns", int(*postgresPoolMaxConns)),
 		slog.Bool("experimental-enable-authz", *experimentalEnableAuthz),
+		slog.Any("authz-bootstrap-owners", *authzBootstrapOwners),
 		slog.String("actor-id-jwt-pool", *actorIDJWTPoolFile),
 		slog.String("actor-jwt-issuer", *actorJWTIssuer),
 		slog.String("actor-id-ca-pool", *actorIDCAPoolFile),
@@ -410,43 +460,13 @@ func logFlagValues(ctx context.Context) {
 	)
 }
 
-// newObjectStore builds the client ate-api manages external snapshots with.
-// The backend is selected the same way atelet selects the one it reads and
-// writes snapshots through, so both ends of a snapshot's life agree on where
-// it lives.
-func newObjectStore(ctx context.Context) (objectstore.Store, error) {
-	switch backend := os.Getenv("ATE_STORAGE_BACKEND"); backend {
-	case "s3":
-		slog.InfoContext(ctx, "Using S3 storage backend")
-		// Depends on the standard AWS environment variables, which have to be
-		// set on the ate-api pod.
-		cfg, err := config.LoadDefaultConfig(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("loading S3 config: %w", err)
-		}
-		return objectstore.NewS3(s3.NewFromConfig(cfg, func(o *s3.Options) {
-			if os.Getenv("AWS_S3_USE_PATH_STYLE") == "true" {
-				o.UsePathStyle = true
-			}
-		})), nil
-	// GCS is currently the default, TODO: we assume workload identity / ADC
-	default:
-		client, err := storage.NewClient(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("creating GCS client: %w", err)
-		}
-		return objectstore.NewGCS(client), nil
-	}
-}
-
 // postgresConnectionAttr describes the connection string for the startup log
 // without echoing it. The bundled and Cloud SQL IAM setups use passwordless
 // strings, but an external database DSN can carry a password, and the raw
 // value would otherwise be written to the log on every restart. Only the
 // parsed, non-secret parts are logged; a string that does not parse is
 // reported as invalid and connectStore surfaces the actual error.
-func postgresConnectionAttr(connString string) slog.Attr {
-	const key = "postgres-connection-string"
+func postgresConnectionAttr(key, connString string) slog.Attr {
 	if connString == "" {
 		return slog.String(key, "")
 	}
@@ -467,11 +487,11 @@ func postgresConnectionAttr(connString string) slog.Attr {
 // connectStore builds the PostgreSQL-backed *atepg.Persistence. Startup fails if
 // its configuration is missing or the database can't be reached.
 func connectStore(ctx context.Context) (*atepg.Persistence, error) {
-	if *postgresConnectionString == "" {
-		return nil, fmt.Errorf("--postgres-connection-string is required")
+	if *postgresReadWriteConnectionString == "" {
+		return nil, fmt.Errorf("--postgres-read-write-connection-string is required")
 	}
-	if _, err := pgxpool.ParseConfig(*postgresConnectionString); err != nil {
-		return nil, fmt.Errorf("parsing PostgreSQL connection string: %w", err)
+	if *postgresPoolMaxConns < 0 {
+		return nil, fmt.Errorf("--postgres-pool-max-conns must not be negative")
 	}
 	persistence, err := connectPostgresWithRetries(ctx)
 	if err != nil {
@@ -488,7 +508,14 @@ var (
 func connectPostgresWithRetries(ctx context.Context) (*atepg.Persistence, error) {
 	var connectErr error
 	for attempt := 1; attempt <= postgresConnectTries; attempt++ {
-		persistence, err := atepg.Connect(ctx, *postgresConnectionString, *postgresSchema)
+		persistence, err := atepg.Connect(ctx, atepg.ConnectConfig{
+			ReadWriteDSN:  *postgresReadWriteConnectionString,
+			OwnerDSN:      *postgresOwnerConnectionString,
+			ReadWriteRole: *postgresReadWriteRole,
+			OwnerRole:     *postgresOwnerRole,
+			Schema:        *postgresSchema,
+			PoolMaxConns:  *postgresPoolMaxConns,
+		})
 		if err == nil {
 			return persistence, nil
 		}
@@ -527,31 +554,55 @@ func newKubeClients() (*kubernetes.Clientset, versioned.Interface, error) {
 	return clientset, ateClient, nil
 }
 
-// buildServerCreds loads the pod-identity CA pool (if configured) and
-// composes gRPC TransportCredentials over the server bundle + optional
-// client-cert verification.
+// buildServerCreds composes gRPC TransportCredentials over the server bundle
+// and pod-identity CA pool named by flags.
 func buildServerCreds(ctx context.Context) (credentials.TransportCredentials, error) {
-	var clientCAs *x509.CertPool
-	if *podIdentityCACerts != "" {
-		// TODO: Periodically reload these to handle rotations. Consult with Tina to see how she did it for client-go.
-		ca, err := os.ReadFile(*podIdentityCACerts)
-		if err != nil {
-			return nil, fmt.Errorf("read pod-identity CA: %w", err)
-		}
-		clientCAs = x509.NewCertPool()
-		if !clientCAs.AppendCertsFromPEM(ca) {
-			return nil, fmt.Errorf("parse pod-identity CA from %s", *podIdentityCACerts)
-		}
-		slog.InfoContext(ctx, "Using pod-identity CA for client-cert verification", slog.String("path", *podIdentityCACerts))
+	cfg, err := buildServerTLSConfig(ctx, *grpcServerCredBundle, *podIdentityCACerts)
+	if err != nil {
+		return nil, err
 	}
-	return credentials.NewTLS(&tls.Config{
-		GetCertificate: credbundle.Loader(*grpcServerCredBundle),
-		// Client certs stay optional at the transport level: certless
-		// clients such as kubectl-ate authenticate with a Bearer token in the
-		// ateapiauth interceptor.
-		ClientAuth: tls.VerifyClientCertIfGiven,
-		ClientCAs:  clientCAs,
-	}), nil
+	return credentials.NewTLS(cfg), nil
+}
+
+// buildServerTLSConfig loads the server bundle and, if caCertsPath is set,
+// the pod-identity CA pool (if not, client certs stay optional), and
+// composes the TLS config for the ateapi gRPC server.
+func buildServerTLSConfig(ctx context.Context, credBundlePath, caCertsPath string) (*tls.Config, error) {
+	serverCert := credbundle.Loader(credBundlePath)
+	// Client certs stay optional at the transport level: certless clients
+	// such as kubectl-ate authenticate with a Bearer token in the
+	// ateapiauth interceptor.
+	const clientAuth = tls.VerifyClientCertIfGiven
+
+	if caCertsPath == "" {
+		return &tls.Config{
+			GetCertificate: serverCert,
+			ClientAuth:     clientAuth,
+		}, nil
+	}
+
+	// Load once so a missing or unparsable trust bundle fails the pod
+	// promptly; GetConfigForClient below reloads it for every connection, so
+	// a pod-identity CA rotation verifies without an ateapi restart.
+	loadClientCAs := credbundle.PoolLoader(caCertsPath)
+	if _, err := loadClientCAs(); err != nil {
+		return nil, fmt.Errorf("load pod-identity CA: %w", err)
+	}
+	slog.InfoContext(ctx, "Using pod-identity CA for client-cert verification", slog.String("path", caCertsPath))
+
+	return &tls.Config{
+		GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) {
+			clientCAs, err := loadClientCAs()
+			if err != nil {
+				return nil, err
+			}
+			return &tls.Config{
+				GetCertificate: serverCert,
+				ClientAuth:     clientAuth,
+				ClientCAs:      clientCAs,
+			}, nil
+		},
+	}, nil
 }
 
 func buildJWTProviders(ctx context.Context, cfg *apiauthn.AuthenticationConfig) (apiauthn.ServerConfig, error) {
@@ -578,15 +629,9 @@ func buildJWTProviders(ctx context.Context, cfg *apiauthn.AuthenticationConfig) 
 	return serverCfg, nil
 }
 
-// resolveActorJWTIssuer applies the install default to an empty
-// --actor-jwt-issuer and validates the result.
-func resolveActorJWTIssuer(flagValue, namespace string) (string, error) {
-	issuer := flagValue
+func validateActorJWTIssuer(issuer string) error {
 	if issuer == "" {
-		issuer = installdefaults.ActorJWTIssuer(namespace)
+		return errors.New("required")
 	}
-	if err := oidcdiscovery.ValidateIssuer(issuer); err != nil {
-		return "", err
-	}
-	return issuer, nil
+	return oidcdiscovery.ValidateIssuer(issuer)
 }

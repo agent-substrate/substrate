@@ -86,7 +86,7 @@ func workerPod(ns, name, poolName, uid, ip string) *corev1.Pod {
 func workerPool(ns, name, sandboxClass string, labels map[string]string) *atev1alpha1.WorkerPool {
 	return &atev1alpha1.WorkerPool{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: labels},
-		Spec:       atev1alpha1.WorkerPoolSpec{SandboxClass: atev1alpha1.SandboxClass(sandboxClass)},
+		Spec:       atev1alpha1.WorkerPoolSpec{SandboxClasses: []atev1alpha1.WorkerPoolSandboxClass{{Name: atev1alpha1.SandboxClass(sandboxClass)}}},
 	}
 }
 
@@ -131,7 +131,7 @@ func setupSyncerTest(t *testing.T, ctx context.Context, api *fakeControl, initPo
 
 	// Start before the factories: the informer's initial list is what seeds the
 	// queue with the pods that already exist.
-	NewWorkerPoolSyncer(api, fakeK8s.CoreV1(), fakeK8s.AppsV1(), workerInformer, workerPoolInformer).Start(ctx)
+	NewWorkerPoolSyncer(api, fakeK8s.CoreV1(), fakeK8s.AppsV1(), workerInformer, workerPoolInformer, 2).Start(ctx)
 	workerFactory.Start(ctx.Done())
 	poolFactory.Start(ctx.Done())
 	workerFactory.WaitForCacheSync(ctx.Done())
@@ -159,7 +159,7 @@ func setupReconcileTest(t *testing.T, api *fakeControl, initPools ...*atev1alpha
 		}
 	}
 
-	return NewWorkerPoolSyncer(api, fakeK8s.CoreV1(), fakeK8s.AppsV1(), workerInformer, workerPoolInformer), workerInformer.GetIndexer(), poolIndexer
+	return NewWorkerPoolSyncer(api, fakeK8s.CoreV1(), fakeK8s.AppsV1(), workerInformer, workerPoolInformer, 2), workerInformer.GetIndexer(), poolIndexer
 }
 
 // seedPod puts a pod in the syncer's cache as though the informer had delivered
@@ -906,7 +906,7 @@ func TestSyncer_StartWaitsForWorkerPoolCache(t *testing.T) {
 	workerFactory, workerInformer := WorkerPodInformer(fakeK8s)
 	_, poolFactory, workerPoolInformer := newWorkerPoolInformer(workerPool(ns, poolName, "", poolLabels))
 
-	NewWorkerPoolSyncer(api, fakeK8s.CoreV1(), fakeK8s.AppsV1(), workerInformer, workerPoolInformer).Start(ctx)
+	NewWorkerPoolSyncer(api, fakeK8s.CoreV1(), fakeK8s.AppsV1(), workerInformer, workerPoolInformer, 2).Start(ctx)
 	workerFactory.Start(ctx.Done())
 	workerFactory.WaitForCacheSync(ctx.Done())
 

@@ -49,7 +49,7 @@ func substrateTemplateSubstitutions(bucket, name string, trustBundle bool) (inli
 	if trustBundle {
 		// Indented to sit in a template's systemInfo dataSources list. The
 		// name must be on atelet's supported-bundle allowlist.
-		blocks["${TEMPLATE_TRUST_BUNDLE}"] = "    - trustBundle:\n        name: egress-mitm.ate.dev\n        path: trust-bundle.pem"
+		blocks["${TEMPLATE_TRUST_BUNDLE}"] = "    - trustBundle:\n        names:\n        - egress-mitm.ate.dev\n        path: trust-bundle.pem"
 	}
 	if !IsMicroVM() {
 		return inline, blocks

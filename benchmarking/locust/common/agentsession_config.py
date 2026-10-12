@@ -33,6 +33,18 @@ def add_agentsession_arguments(parser: LocustArgumentParser) -> None:
         include_in_web_ui=True,
     )
     parser.add_argument(
+        "--agentsession-script-file",
+        type=str,
+        default="",
+        env_var="LOCUST_AGENTSESSION_SCRIPT_FILE",
+        help=(
+            "Path, on the boomer worker, of a script YAML to run instead of a "
+            "built-in variant. locust/deploy.sh --agentsession-script FILE "
+            "mounts FILE there and sets this (default: unset)"
+        ),
+        include_in_web_ui=True,
+    )
+    parser.add_argument(
         "--agentsession-think-scale",
         type=float,
         default=1.0,

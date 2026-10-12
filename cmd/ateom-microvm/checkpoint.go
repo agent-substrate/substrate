@@ -25,16 +25,16 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/resources"
 
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/ch"
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
+	"github.com/agent-substrate/substrate/internal/ateomphaselog"
 	"github.com/agent-substrate/substrate/internal/ateomstats"
 	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"golang.org/x/sync/errgroup"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // CheckpointWorkload suspends the actor and writes a portable snapshot.
@@ -42,19 +42,24 @@ import (
 // Contract with atelet: after we return, atelet uploads the checkpoint dir to object
 // storage, then tears down bundles and resets the actor dir.
 //
-// What the snapshot holds depends on the requested scope:
+// What the snapshot holds depends on the requested fidelity; each level
+// includes the ones below it:
 //
-//   - FULL: the whole guest. ateom drives the CH REST api-socket: pause -> snapshot
-//     file://<checkpoint_dir> (config.json + state.json + sparse memory-ranges)
-//     -> tear the VMM down. Each container's rootfs is overlay(virtio-fs RO lower +
-//     disk-backed upper): the upper is host-backed like the durable-dir volumes and
-//     ships alongside as its own tar (see rootfsupper.go); process memory persists
-//     via the memory snapshot. The RO lower is reconstructed from the OCI image at
-//     restore, so it never ships. Durable-dir volumes ship alongside as a tar.
-//   - DATA: the durable-dir volumes only, as that same tar. The guest is discarded, so
-//     the actor cold-starts on restore with its volumes re-materialized.
+//   - MEMORY: the whole guest. ateom drives the CH REST api-socket: pause ->
+//     snapshot file://<checkpoint_dir> (config.json + state.json + sparse
+//     memory-ranges) -> tear the VMM down. Process memory persists via the
+//     memory snapshot; the volume and upper tars ship alongside as for ROOTFS.
+//   - ROOTFS: the volumes plus each container's rootfs upper. Each container's
+//     rootfs is overlay(virtio-fs RO lower + disk-backed upper): the upper is
+//     host-backed like the durable-dir volumes and ships as its own tar (see
+//     rootfsupper.go). The RO lower is reconstructed from the OCI image at
+//     restore, so it never ships. The guest is discarded; the actor cold-starts
+//     on restore with its rootfs writes back in place.
+//   - VOLUMES: the durable-dir volumes, as per-volume tars. The guest is
+//     discarded, so the actor cold-starts on restore with its volumes
+//     re-materialized.
 //
-// Either way the guest is paused first, which is what makes the tar coherent: the
+// Whatever the fidelity the guest is paused first, which is what makes the tar coherent: the
 // durable share is served write-through, so every completed guest write is already on
 // the host and no further ones can arrive.
 //
@@ -64,8 +69,11 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	if err := validateActorDirs(req.GetActorDirs()); err != nil {
 		return nil, err
 	}
+	if err := validateFidelity(req.GetFidelity()); err != nil {
+		return nil, err
+	}
 	if !s.locks.Lock(ctx, req.GetActorUid()) {
-		return nil, status.Error(codes.Canceled, "gave up waiting for the actor's lock")
+		return nil, fmt.Errorf("gave up waiting for the actor's lock: %w", ctx.Err())
 	}
 	defer s.locks.Unlock(req.GetActorUid())
 
@@ -81,17 +89,17 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	tStart := time.Now()
 	var dPrep, dPause, dSnapshot, dDurable, dUpper, dTeardown time.Duration
 	attribution := ateomstats.ActorAttributionFromRequest(req)
-	scope := req.GetScope()
+	scope := req.GetFidelity()
 	defer func() {
-		logSnapshotPhases(ctx, "Checkpoint timing breakdown", attribution, scope,
-			checkpointDurationKey, err, []phase{
-				{phasePrep, dPrep},
-				{phasePause, dPause},
-				{phaseSnapshot, dSnapshot},
-				{phaseDurableDir, dDurable},
-				{phaseRootfsUpper, dUpper},
-				{phaseTeardown, dTeardown},
-				{phaseTotal, time.Since(tStart)},
+		ateomphaselog.LogSnapshotPhases(ctx, "Checkpoint timing breakdown", attribution, scope,
+			ateomphaselog.CheckpointDurationKey, err, []ateomphaselog.Phase{
+				{Name: phasePrep, D: dPrep},
+				{Name: phasePause, D: dPause},
+				{Name: phaseSnapshot, D: dSnapshot},
+				{Name: phaseDurableDir, D: dDurable},
+				{Name: phaseRootfsUpper, D: dUpper},
+				{Name: phaseTeardown, D: dTeardown},
+				{Name: phaseTotal, D: time.Since(tStart)},
 			})
 	}()
 
@@ -109,22 +117,26 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	// suspended mid-flight for a call that could never have succeeded.
 	//
 	// Durable-dir volumes are host-backed, so they are captured the same way
-	// under either scope — and are the ONLY thing a Data-scope snapshot
-	// captures. DATA_ON_GOLDEN is restore-only (a DataOnGolden commit arrives
-	// here as plain DATA) and lands in the default rejection.
+	// under every fidelity — and are the ONLY thing a VOLUMES snapshot
+	// captures. ROOTFS and MEMORY always have something to capture: every
+	// container has a rootfs upper.
 	durable := hasDurableVolumes(req.GetSpec().GetContainers())
 	csi := hasCsiVolumes(req.GetSpec().GetContainers())
 	switch scope {
-	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL:
-	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
+	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS:
+	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
 		// TODO: Revisit handling for CSI volumes since snapshots are currently quietly ignored.
 		if !durable && !csi {
-			return nil, status.Error(codes.FailedPrecondition,
-				"no durable-dir or CSI volumes found for a Data-scope snapshot")
+			return nil, apierror.FailedPrecondition(
+				"no durable-dir or CSI volumes found for a VOLUMES snapshot")
 		}
 	default:
-		return nil, status.Errorf(codes.InvalidArgument, "unsupported snapshot scope: %v", scope)
+		return nil, apierror.InvalidArgument("unsupported snapshot fidelity: %v", scope)
 	}
+
+	// Captured now: the checkpoint unhosts the actor, and the final record
+	// waits for the teardown.
+	hosted := s.lookupActor(actorUID)
 
 	// The actor's CH was booted by RunWorkload or relaunched by RestoreWorkload;
 	// either way ateom owns it and tracks its api-socket.
@@ -136,6 +148,10 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	client := ch.NewClient(chSocket)
 	if _, err := client.WaitReady(ctx, 10*time.Second); err != nil {
 		return nil, fmt.Errorf("while waiting for CH api-socket: %w", err)
+	}
+	// Read before the pause: a paused guest cannot answer.
+	if hosted != nil {
+		s.readFinal(ctx, hosted)
 	}
 
 	tPause := time.Now()
@@ -156,23 +172,24 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	}
 
 	// Capture the snapshot's pieces CONCURRENTLY: the CH snapshot, the
-	// durable-dir tar, and the rootfs upper tar read independent data from a
+	// durable-dir tars, and the rootfs upper tars read independent data from a
 	// quiesced guest and write distinct files into checkpointDir, so the paused
 	// window costs the slowest of them rather than their sum (the tars scale
 	// with the actor's data; suspend latency is the metric that matters).
 	//
-	//   - CH snapshot (Full only): the guest memory + VM state. A Data snapshot
-	//     deliberately captures no VM state — no memory image, and no base-id,
-	//     since nothing will reattach to the frozen virtio-fs lower: at restore
-	//     the actor cold-boots from the OCI image (or, under an OnGolden data
-	//     resume policy, is combined with the golden snapshot's guest state).
-	//   - Durable-dir tar (any scope, when declared): host-backed, so pausing
-	//     the write-through share makes the tar coherent.
-	//   - Rootfs upper tar (Full only): host-backed like the durable volumes —
-	//     the memory snapshot does not carry rootfs writes. Under Data the
-	//     workload cold-starts on restore, discarding rootfs state.
+	//   - CH snapshot (MEMORY only): the guest memory + VM state. The lower
+	//     fidelities deliberately capture no VM state — no memory image, and no
+	//     base-id, since nothing will reattach to the frozen virtio-fs lower: at
+	//     restore the actor cold-boots from the OCI image.
+	//   - Durable-dir tars (any fidelity, when declared): host-backed, so
+	//     pausing the write-through share makes the tars coherent.
+	//   - Rootfs upper tars (ROOTFS and MEMORY): host-backed like the durable
+	//     volumes — the memory snapshot does not carry rootfs writes. Under
+	//     VOLUMES the workload cold-starts on restore, discarding rootfs state.
+	shipsRootfs := includesRootfs(scope)
+	var durableFiles []string
 	g, gctx := errgroup.WithContext(ctx)
-	if scope == ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL {
+	if scope == ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
 		g.Go(func() error {
 			t := time.Now()
 			d, err := s.snapshotVMState(gctx, client, ra, actorUID, checkpointDir)
@@ -186,15 +203,16 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	if durable {
 		g.Go(func() error {
 			t := time.Now()
-			err := tarDurableVolumes(gctx, actorDirs.GetDurableDirVolumeMountsDir(), checkpointDir)
+			var err error
+			durableFiles, err = tarDurableVolumes(gctx, actorDirs.GetDurableDirVolumeMountsDir(), checkpointDir, durableVolumeNames(req.GetSpec().GetContainers()))
 			dDurable = time.Since(t)
 			return err
 		})
 	}
-	if scope == ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL {
+	if shipsRootfs {
 		g.Go(func() error {
 			t := time.Now()
-			err := tarRootfsUpper(gctx, rootfsUpperDir(actorDirs), checkpointDir)
+			err := tarRootfsUpper(gctx, rootfsUpperDir(actorDirs), checkpointDir, containerNames(req.GetSpec().GetContainers()))
 			dUpper = time.Since(t)
 			return err
 		})
@@ -203,9 +221,10 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		return nil, err
 	}
 
-	// Report exactly the files we wrote so atelet ships precisely this snapshot: for
-	// Full, the CH snapshot (config.json + state.json + memory-ranges + base-id) plus
-	// any durable-dir tar; for Data, that tar alone.
+	// Report exactly the files we wrote so atelet ships precisely this snapshot:
+	// for MEMORY, the CH snapshot (config.json + state.json + memory-ranges +
+	// base-id) plus the upper and durable-dir tars; for ROOTFS, the upper and
+	// durable-dir tars; for VOLUMES, the durable-dir tars alone.
 	snapshotFiles, err := listFiles(checkpointDir)
 	if err != nil {
 		return nil, fmt.Errorf("while listing snapshot files: %w", err)
@@ -231,7 +250,8 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		// rootfs_upper), and the tar durations scale with the actor's data.
 		slog.Duration("durable_dir", dDurable), slog.Duration("rootfs_upper", dUpper),
 		slog.Duration("teardown", dTeardown))
-	return &ateompb.CheckpointWorkloadResponse{SnapshotFiles: snapshotFiles}, nil
+	s.recordFinalIfEnded(ctx, hosted)
+	return &ateompb.CheckpointWorkloadResponse{SnapshotFiles: snapshotFiles, DataSnapshotFiles: durableFiles}, nil
 }
 
 // snapshotVMState captures the paused guest into checkpointDir: the CH snapshot
@@ -273,13 +293,8 @@ func (s *AteomService) snapshotVMState(ctx context.Context, client *ch.Client, r
 		slog.InfoContext(ctx, "Snapshot is self-contained (eager restore); skipping merge",
 			slog.String("id", actorUID))
 	} else if ra != nil && ra.restoreSourceDir != "" {
-		base := filepath.Join(ra.restoreSourceDir, "memory-ranges")
-		delta := filepath.Join(checkpointDir, "memory-ranges")
 		tMerge := time.Now()
-		// Reuse base's on-disk working set (rename + overlay) instead of copying it —
-		// CH is paused and about to be torn down, and base is discarded after. See
-		// MergeDeltaIntoBase. (Falls back to the copying merge across filesystems.)
-		if err := ch.MergeDeltaIntoBase(ctx, base, delta); err != nil {
+		if err := mergeOnDemandDelta(ctx, ra.restoreSourceDir, checkpointDir, ra.preserveRestoreSource); err != nil {
 			return 0, fmt.Errorf("while merging OnDemand delta into restore source: %w", err)
 		}
 		slog.InfoContext(ctx, "Merged OnDemand delta into base (complete snapshot)",
@@ -289,6 +304,17 @@ func (s *AteomService) snapshotVMState(ctx context.Context, client *ch.Client, r
 	// The RO lower never ships (reconstructed from the OCI image at restore).
 	// The disk-backed upper ships as its own tar from CheckpointWorkload; a
 	return dSnapshot, nil
+}
+
+// mergeOnDemandDelta merges the OnDemand delta in checkpointDir with the base in
+// restoreSourceDir. A preserved base is copied, never modified in place.
+func mergeOnDemandDelta(ctx context.Context, restoreSourceDir, checkpointDir string, preserveRestoreSource bool) error {
+	base := filepath.Join(restoreSourceDir, "memory-ranges")
+	delta := filepath.Join(checkpointDir, "memory-ranges")
+	if preserveRestoreSource {
+		return ch.MergeSparseOverlay(ctx, base, delta, delta)
+	}
+	return ch.MergeDeltaIntoBase(ctx, base, delta)
 }
 
 // listFiles returns the (relative) names of regular files directly under dir.
@@ -385,19 +411,46 @@ func (s *AteomService) TerminateWorkload(ctx context.Context, req *ateompb.Termi
 		return nil, err
 	}
 	if !s.locks.Lock(ctx, req.GetActorUid()) {
-		return nil, status.Error(codes.Canceled, "gave up waiting for the actor's lock")
+		return nil, fmt.Errorf("gave up waiting for the actor's lock: %w", ctx.Err())
 	}
 	defer s.locks.Unlock(req.GetActorUid())
 
 	attribution := ateomstats.ActorAttributionFromRequest(req)
 
-	if err := s.terminateWorkload(ctx, attribution, req.GetActorDirs()); err != nil {
+	hosted := s.lookupActor(attribution.UID)
+	if hosted != nil {
+		s.readFinal(ctx, hosted)
+	}
+	err := s.terminateWorkload(ctx, attribution, req.GetActorDirs())
+	s.recordFinalIfEnded(ctx, hosted)
+	if err != nil {
 		return nil, fmt.Errorf("failed to terminate workload: %w", err)
 	}
 
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor terminated", attribution)
 
 	return &ateompb.TerminateWorkloadResponse{}, nil
+}
+
+// endPreviousActivation ends the activation a re-host is about to replace. A VM
+// still running for the actor would be dropped from tracking by the re-host and
+// left running, so it is stopped, read first for the final record. This happens
+// after a checkpoint that failed before its teardown, or on a retried Run or
+// Restore. Ending the activation also stops a late recordInitial from writing.
+func (s *AteomService) endPreviousActivation(ctx context.Context, actorUID string, actorDirs *ateompb.ActorDirs) error {
+	old := s.lookupActor(actorUID)
+	if s.runningVM(actorUID) != nil {
+		if old != nil {
+			s.readFinal(ctx, old)
+		}
+		if err := s.stopActorVM(ctx, actorUID, actorDirs); err != nil {
+			return fmt.Errorf("while stopping the actor's previous micro-VM: %w", err)
+		}
+	}
+	if old != nil {
+		s.recordFinal(ctx, old)
+	}
+	return nil
 }
 
 // stopActorVM tears down the actor's micro-VM, if any, keeping it hosted.

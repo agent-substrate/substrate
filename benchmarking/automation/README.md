@@ -18,10 +18,12 @@ the router capacity benchmark — see
 4. `docker build && docker push` builds the runner image for each test type
    in use, tagged with the commit hash: `${KO_DOCKER_REPO}/locust-test:<commit>`
    and/or `${KO_DOCKER_REPO}/nighthawk-ingress-test:<commit>`.
-5. `hack/install-ate.sh --deploy-ate-system` + `benchmarking/workloads/deploy.sh
+5. `hack/install-ate.sh --deploy-ate-system` (with `ATE_CREDENTIAL_PROVIDER`
+   in `.ate-dev-env.sh`, or `--credential-provider` in the test's
+   `ateArgs`) + `benchmarking/workloads/deploy.sh
    --deploy --sandbox-class <class>` (these build & push substrate / workload
    images via `ko` as part of their deploy steps — there's no separate
-   `make build-images` step). For a `microvm` test the orchestrator also
+   image build step). For a `microvm` test the orchestrator also
    runs `hack/install-microvm-deps.sh --install` between the two, which
    stages kata + cloud-hypervisor + virtiofsd assets to the cluster's object
    store bucket and applies the cluster-wide `microvm` SandboxConfig.
@@ -43,7 +45,7 @@ the router capacity benchmark — see
 ## Choosing a sandbox class
 
 Each entry in `tests.yaml` may set `sandboxClass: gvisor | microvm` (default
-`gvisor`). This controls both `spec.sandboxClass` on the benchmark WorkerPool
+`gvisor`). This controls both `spec.sandboxClasses[0].name` on the benchmark WorkerPool
 and its `workerImage` (`ateom-gvisor` vs `ateom-microvm`).
 
 For `microvm` tests the target cluster must have KVM-capable nodes and the
@@ -88,7 +90,10 @@ default is `0 3 * * *`, 3am UTC).
 
 Create the test cluster with the substrate-required beta APIs, Workload
 Identity, and Managed OpenTelemetry enabled. The control plane must be on
-Kubernetes 1.36+ so `certificates.k8s.io/v1beta1` is available:
+Kubernetes 1.36+. Substrate discovers PodCertificateRequest and
+ClusterTrustBundle independently, preferring `certificates.k8s.io/v1` for each
+and using `v1beta1` when the stable resource is not served. On GKE 1.36,
+enable both beta APIs at cluster creation:
 
 ```bash
 gcloud container clusters create <CLUSTER_NAME> \
@@ -98,6 +103,9 @@ gcloud container clusters create <CLUSTER_NAME> \
   --managed-otel-scope=COLLECTION_AND_INSTRUMENTATION_COMPONENTS \
   --enable-kubernetes-unstable-apis=certificates.k8s.io/v1beta1/podcertificaterequests,certificates.k8s.io/v1beta1/clustertrustbundles
 ```
+
+On GKE 1.37 or higher, omit `--enable-kubernetes-unstable-apis`; the
+required APIs are served by default. See the [cluster setup guide](../../tools/setup-gcp/README.md#2-create-cluster) for details.
 
 The orchestration cluster needs Workload Identity but no special APIs. It only
 ever runs one pod (the orchestrator + DIND sidecar), so a single zonal node

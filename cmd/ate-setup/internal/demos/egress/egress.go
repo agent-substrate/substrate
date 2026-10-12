@@ -14,6 +14,11 @@
 
 // Package egress installs the egress demo, which exercises egress policy
 // enforcement through atenet.
+//
+// Its actors project the egress gateway trust bundle. A golden snapshot only
+// exists once an actor starts, and an actor whose trust bundle does not
+// resolve never does, so a timeout waiting for the golden is the symptom of a
+// missing egress gateway CA.
 package egress
 
 import (

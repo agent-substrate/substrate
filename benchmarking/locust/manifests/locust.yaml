@@ -58,6 +58,11 @@ spec:
         env:
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
           value: http://opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317
+        # Default for the --agentsession-script-file flag the master serves to
+        # boomer workers. locust/deploy.sh --agentsession-script FILE sets it
+        # to the path the agentsession-script ConfigMap is mounted at below.
+        - name: LOCUST_AGENTSESSION_SCRIPT_FILE
+          value: "${AGENTSESSION_SCRIPT_FILE}"
         ports:
         - name: prometheus
           containerPort: 8000
@@ -132,6 +137,11 @@ spec:
         env:
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
           value: opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317
+        # Checksum of the operator-supplied agent-session script, if any.
+        # Not read by the worker: it is here so that deploying a different
+        # script changes the pod template and rolls the workers.
+        - name: AGENTSESSION_SCRIPT_SHA
+          value: "${AGENTSESSION_SCRIPT_SHA}"
         ports:
         - name: boomer-prom
           containerPort: 8001
@@ -143,12 +153,22 @@ spec:
         - name: podidentity
           mountPath: /run/podidentity.podcert.ate.dev
           readOnly: true
+        # An operator-supplied agent-session script, when deploy.sh was given
+        # --agentsession-script. Optional: absent, the worker runs a built-in
+        # variant and this mount is an empty directory.
+        - name: agentsession-script
+          mountPath: /etc/agentsession
+          readOnly: true
         resources:
           requests:
             cpu: "500m"
             memory: "256Mi"
 
       volumes:
+      - name: agentsession-script
+        configMap:
+          name: agentsession-script
+          optional: true
       - name: servicedns-ca
         projected:
           sources:

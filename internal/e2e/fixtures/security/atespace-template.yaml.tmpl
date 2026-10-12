@@ -1,0 +1,76 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# The ActorTemplate of the cross-atespace security fixture: a
+# protojson-shaped ateapipb.ActorTemplate created through the ate API by
+# e2e.DeploySubstrateFixture.
+#
+# BOTH atespaces deploy this same file. They differ only in the ${FIXTURE_SUFFIX}
+# they render with, which is what gives each its own atespace and its own
+# snapshot prefix, so the suite compares two actors that are identical in
+# every respect except the boundary under test.
+#
+# The container is the shared e2e probe image. Its /readfile and /writefile
+# endpoints let the test try reads and writes from inside the running actor,
+# which is the only place the isolation claim can be checked: what the actor
+# actually sees at /data, not what atelet's mount config says it should see.
+#
+# The workerSelector names the single shared pool (see atespace-a-pool.yaml.tmpl),
+# not a per-atespace one.
+
+metadata:
+  atespace: ate-e2e${FIXTURE_SUFFIX}
+  name: probe
+workerSelector:
+  matchLabels:
+    workload: ate-e2e-security
+containers:
+- name: probe
+  image: ko://github.com/agent-substrate/substrate/internal/e2e/fixtures/probe
+  command: ["/ko-app/probe"]
+  volumeMounts:
+  # The probe expects its identity files under /run/ate. The mount also makes
+  # atelet write a per-actor identity file on the worker host, which is one
+  # of the host paths the attacker is checked against.
+  - name: system-info
+    mountPath: /run/ate
+  # The per-actor durable directory whose isolation is under test.
+  - name: data
+    mountPath: /data
+  # Gate the golden snapshot on the probe actually serving, so a read or write
+  # right after a resume cannot race a sandbox checkpointed before the
+  # listener came up.
+  wakeupProbe:
+    httpGet:
+      path: /healthz
+      port: 80
+    timeoutSeconds: 60
+volumes:
+- name: system-info
+  systemInfo:
+    dataSources:
+    - actorMetadata:
+        items:
+        - field: ACTOR_METADATA_FIELD_NAME
+          path: actor-id
+        - field: ACTOR_METADATA_FIELD_ATESPACE
+          path: atespace
+        - field: ACTOR_METADATA_FIELD_UID
+          path: actor-uid
+- name: data
+  durableDir: {}
+${TEMPLATE_RESOURCES}
+${TEMPLATE_SANDBOX_CONFIG}
+snapshotConfig:
+  storageLocation: gs://${BUCKET_NAME}/ate-e2e${FIXTURE_SUFFIX}/

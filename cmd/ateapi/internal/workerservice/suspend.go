@@ -23,10 +23,9 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/apivalidation"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/ateletauth"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // RequestActorSuspend suspends an Actor on behalf of the Worker hosting it. The
@@ -37,7 +36,7 @@ func (s *Server) RequestActorSuspend(ctx context.Context, req *ateapipb.RequestA
 		return nil, err
 	}
 	if errs := apivalidation.ValidateRequestActorSuspendRequest(ctx, req); len(errs) > 0 {
-		return nil, resources.ToGRPCStatusError(errs)
+		return nil, resources.ToAPIError(errs)
 	}
 
 	// A golden actor may be suspended, but only by the template controller:
@@ -47,7 +46,7 @@ func (s *Server) RequestActorSuspend(ctx context.Context, req *ateapipb.RequestA
 	// would commit the snapshot before that window ends -- leaving every actor
 	// restored from the template to start from a workload that never warmed up.
 	if req.GetActor().GetAtespace() == resources.GoldenActorAtespace {
-		return nil, status.Errorf(codes.FailedPrecondition, "actors in atespace %q are golden actors, which cannot request their own suspend", resources.GoldenActorAtespace)
+		return nil, apierror.FailedPrecondition("actors in atespace %q are golden actors, which cannot request their own suspend", resources.GoldenActorAtespace)
 	}
 
 	workerName := req.GetWorker().GetName()
@@ -58,7 +57,7 @@ func (s *Server) RequestActorSuspend(ctx context.Context, req *ateapipb.RequestA
 	worker, err := s.store.GetWorker(ctx, workerName)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, status.Errorf(codes.NotFound, "Worker %s not found", workerName)
+			return nil, apierror.NotFound("Worker %s not found", workerName)
 		}
 		return nil, fmt.Errorf("while fetching worker %s: %w", workerName, err)
 	}
@@ -69,13 +68,13 @@ func (s *Server) RequestActorSuspend(ctx context.Context, req *ateapipb.RequestA
 			slog.String("worker_node", worker.GetNodeName()),
 			slog.String("caller_node", caller.NodeName),
 			slog.String("caller_pod", caller.PodName))
-		return nil, status.Errorf(codes.NotFound, "Worker %s not found", workerName)
+		return nil, apierror.NotFound("Worker %s not found", workerName)
 	}
 
 	actor, err := s.store.GetActor(ctx, actorRef)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, status.Errorf(codes.NotFound, "Actor %s not found", actorRef)
+			return nil, apierror.NotFound("Actor %s not found", actorRef)
 		}
 		return nil, fmt.Errorf("while fetching actor %s: %w", actorRef, err)
 	}
@@ -122,7 +121,7 @@ func checkActorHostedBy(ctx context.Context, actor *ateapipb.Actor, workerName, 
 			slog.String("actor", actorRef.String()),
 			slog.String("requested_uid", actorUID),
 			slog.String("actual_uid", got))
-		return status.Errorf(codes.NotFound, "Actor %s not found", actorRef)
+		return apierror.NotFound("Actor %s not found", actorRef)
 	}
 	// An Actor with no assignment has no worker to speak for it: it is
 	// SUSPENDED, PAUSED, or CRASHED, and nothing hosts it.
@@ -131,7 +130,7 @@ func checkActorHostedBy(ctx context.Context, actor *ateapipb.Actor, workerName, 
 			slog.String("worker", workerName),
 			slog.String("actor", actorRef.String()),
 			slog.String("assigned_worker", assigned))
-		return status.Errorf(codes.NotFound, "Actor %s not found", actorRef)
+		return apierror.NotFound("Actor %s not found", actorRef)
 	}
 	return nil
 }

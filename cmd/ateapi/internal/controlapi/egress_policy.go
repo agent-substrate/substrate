@@ -22,10 +22,9 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/apivalidation"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/defaults"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
@@ -39,7 +38,7 @@ func (s *RPCService) CreateActorEgressPolicy(ctx context.Context, req *ateapipb.
 		defaults.Apply(policy)
 	}
 	if errs := apivalidation.ValidateCreateActorEgressPolicyRequest(ctx, req); len(errs) > 0 {
-		return nil, resources.ToGRPCStatusError(errs)
+		return nil, resources.ToAPIError(errs)
 	}
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	return s.impl.CreateEgressPolicy(ctx, actorRef, policy)
@@ -52,7 +51,7 @@ func (s *ServiceImpl) CreateEgressPolicy(ctx context.Context, actorRef resources
 
 func (s *RPCService) GetActorEgressPolicy(ctx context.Context, req *ateapipb.GetActorEgressPolicyRequest) (*ateapipb.EgressPolicy, error) {
 	if errs := apivalidation.ValidateGetActorEgressPolicyRequest(ctx, req); len(errs) > 0 {
-		return nil, resources.ToGRPCStatusError(errs)
+		return nil, resources.ToAPIError(errs)
 	}
 
 	return s.impl.GetEgressPolicy(ctx, resources.ActorRefFromObjectRef(req.GetActor()))
@@ -61,7 +60,7 @@ func (s *RPCService) GetActorEgressPolicy(ctx context.Context, req *ateapipb.Get
 func (s *ServiceImpl) GetEgressPolicy(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.EgressPolicy, error) {
 	policy, err := s.store.GetEgressPolicy(ctx, actorRef)
 	if errors.Is(err, store.ErrNotFound) {
-		return nil, status.Errorf(codes.NotFound, "EgressPolicy for actor %s not found", actorRef)
+		return nil, apierror.NotFound("EgressPolicy for actor %s not found", actorRef)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("while getting Actor egress policy: %w", err)
@@ -75,7 +74,7 @@ func (s *RPCService) UpdateActorEgressPolicy(ctx context.Context, req *ateapipb.
 		scrubResourceMetadataForUpdate(policy.Metadata)
 	}
 	if errs := apivalidation.ValidateUpdateActorEgressPolicyRequest(ctx, req); len(errs) > 0 {
-		return nil, resources.ToGRPCStatusError(errs)
+		return nil, resources.ToAPIError(errs)
 	}
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	return s.impl.UpdateEgressPolicy(ctx, actorRef, store.PreconditionFrom(policy), func(toUpdate *ateapipb.EgressPolicy) error {
@@ -95,7 +94,7 @@ func (s *ServiceImpl) UpdateEgressPolicy(ctx context.Context, actorRef resources
 			return err
 		}
 		if errs := apivalidation.ValidateEgressPolicyUpdate(ctx, field.NewPath("egress_policy"), toUpdate, oldVal); len(errs) > 0 {
-			return resources.ToGRPCStatusError(errs)
+			return resources.ToAPIError(errs)
 		}
 		// EgressPolicy has no status or other server-derived fields to verify.
 		return nil
@@ -105,7 +104,7 @@ func (s *ServiceImpl) UpdateEgressPolicy(ctx context.Context, actorRef resources
 
 func (s *RPCService) DeleteActorEgressPolicy(ctx context.Context, req *ateapipb.DeleteActorEgressPolicyRequest) (*ateapipb.EgressPolicy, error) {
 	if errs := apivalidation.ValidateDeleteActorEgressPolicyRequest(ctx, req); len(errs) > 0 {
-		return nil, resources.ToGRPCStatusError(errs)
+		return nil, resources.ToAPIError(errs)
 	}
 
 	return s.impl.DeleteEgressPolicy(ctx, resources.ActorRefFromObjectRef(req.GetActor()), toDeletePreconditions(req.GetOptions()))
@@ -121,17 +120,17 @@ func mapEgressPolicyWrite(policy *ateapipb.EgressPolicy, err error) (*ateapipb.E
 	case err == nil:
 		return policy, nil
 	case errors.Is(err, store.ErrNotFound):
-		return nil, status.Error(codes.NotFound, "EgressPolicy not found")
+		return nil, apierror.NotFound("EgressPolicy not found")
 	case errors.Is(err, store.ErrAlreadyExists):
-		return nil, status.Error(codes.AlreadyExists, "EgressPolicy already exists")
+		return nil, apierror.AlreadyExists("EgressPolicy already exists")
 	case errors.Is(err, store.ErrVersionConflict):
-		return nil, status.Error(codes.Aborted, "EgressPolicy version conflict")
+		return nil, apierror.Aborted("EgressPolicy version conflict")
 	case errors.Is(err, store.ErrUIDConflict):
-		return nil, status.Error(codes.Aborted, "EgressPolicy UID conflict")
+		return nil, apierror.Aborted("EgressPolicy UID conflict")
 	case errors.Is(err, store.ErrPreconditionRequired):
-		return nil, status.Error(codes.InvalidArgument, "EgressPolicy UID and version are required")
+		return nil, apierror.InvalidArgument("EgressPolicy UID and version are required")
 	case errors.Is(err, store.ErrFailedPrecondition):
-		return nil, status.Error(codes.FailedPrecondition, "parent Actor does not exist")
+		return nil, apierror.FailedPrecondition("parent Actor does not exist")
 	default:
 		return nil, fmt.Errorf("while writing EgressPolicy: %w", err)
 	}

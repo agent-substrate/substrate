@@ -72,7 +72,7 @@ func sdsmintCAPoolPath(t *testing.T, pod *corev1.PodSpec) string {
 
 func egressPodSpec(t *testing.T) *corev1.PodSpec {
 	t.Helper()
-	const egressManifestPath = "../../../../manifests/ate-install/atenet-egress-with-sdsmint.yaml"
+	const egressManifestPath = "../../../../manifests/ate-install/atenet-egress.yaml"
 	raw, err := os.ReadFile(egressManifestPath)
 	if err != nil {
 		t.Fatalf("reading %s: %v", egressManifestPath, err)

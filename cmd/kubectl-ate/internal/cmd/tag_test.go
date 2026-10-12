@@ -60,7 +60,13 @@ func TestUpdateTagScope(t *testing.T) {
 		},
 		Scope: ateapipb.TagScope_TAG_SCOPE_ATESPACE,
 		Status: &ateapipb.TagStatus{
-			Snapshot: &ateapipb.ExternalSnapshot{SnapshotUri: "gs://private/atespaces/space-1/tags/tag-1"},
+			Snapshot: &ateapipb.Snapshot{
+				Fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+				DurableSnapshot: &ateapipb.SnapshotStorage{
+					Status: ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
+					Object: &ateapipb.ObjectSnapshot{SnapshotUri: "gs://private/atespaces/space-1/tags/tag-1"},
+				},
+			},
 		},
 	}
 

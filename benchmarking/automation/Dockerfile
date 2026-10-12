@@ -13,7 +13,7 @@
 # limitations under the License.
 
 # Build context = benchmarking/automation/.
-# Build with: docker build -t <image> benchmarking/automation/
+# Build with: docker build --platform=linux/amd64 -t <image> benchmarking/automation/
 
 FROM ubuntu:24.04
 
@@ -31,6 +31,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         python3-pip \
         python3-venv \
         docker.io \
+        docker-buildx \
         unzip \
         zstd \
     && rm -rf /var/lib/apt/lists/*

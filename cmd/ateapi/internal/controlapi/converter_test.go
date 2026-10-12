@@ -21,36 +21,46 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
-// TestSnapshotScopeToAtelet covers the wire scope derivation for template
-// content scopes: an unset scope falls back to Full.
-func TestSnapshotScopeToAtelet(t *testing.T) {
+// TestFidelityToAtelet pins the level-by-level mapping onto the atelet enum:
+// nothing is promoted, and an unset fidelity stays unset so atelet rejects it.
+func TestFidelityToAtelet(t *testing.T) {
 	tests := []struct {
 		name     string
-		in       ateapipb.SnapshotContentScope
-		expected ateletpb.SnapshotScope
+		in       ateapipb.SnapshotFidelity
+		expected ateletpb.SnapshotFidelity
 	}{
 		{
-			name:     "Full scope",
-			in:       ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
-			expected: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
+			name:     "memory",
+			in:       ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+			expected: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 		},
 		{
-			name:     "Data scope",
-			in:       ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
-			expected: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA,
+			name:     "rootfs",
+			in:       ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+			expected: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
 		},
 		{
-			name:     "Default scope (unspecified)",
-			in:       ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED,
-			expected: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
+			name:     "volumes",
+			in:       ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
+			expected: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
+		},
+		{
+			name:     "unspecified stays unspecified",
+			in:       ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED,
+			expected: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED,
+		},
+		{
+			name:     "value outside the enum",
+			in:       ateapipb.SnapshotFidelity(99),
+			expected: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := actorSnapshotContentScopeToAtelet(tt.in)
+			result := fidelityToAtelet(tt.in)
 			if result != tt.expected {
-				t.Errorf("actorSnapshotContentScopeToAtelet(%v) = %v, want %v", tt.in, result, tt.expected)
+				t.Errorf("fidelityToAtelet(%v) = %v, want %v", tt.in, result, tt.expected)
 			}
 		})
 	}

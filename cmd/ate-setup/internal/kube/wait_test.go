@@ -18,14 +18,21 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/discovery/cached/memory"
+	"k8s.io/client-go/dynamic"
 	kubefake "k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/restmapper"
 )
 
 // shortPollInterval makes the retry path observable without a real sleep.
@@ -143,3 +150,37 @@ func TestRolloutStatusGivesUpOnAPersistentlyMissingWorkload(t *testing.T) {
 		t.Errorf("RolloutStatus() error = %v, want it to say the deployment was not found", err)
 	}
 }
+
+func TestWaitClusterTrustBundlesVersions(t *testing.T) {
+	for _, version := range []string{"v1", "v1beta1"} {
+		t.Run(version, func(t *testing.T) {
+			gv := schema.GroupVersion{Group: "certificates.k8s.io", Version: version}
+			kc := kubefake.NewSimpleClientset()
+			kc.Resources = []*metav1.APIResourceList{{GroupVersion: gv.String(), APIResources: []metav1.APIResource{{Name: "clustertrustbundles", Kind: "ClusterTrustBundle"}}}}
+			cached := memory.NewMemCacheClient(kc.Discovery())
+			calls := 0
+			dyn, err := dynamic.NewForConfig(&rest.Config{Host: "https://cluster.test", Transport: bundleRoundTripper(func(req *http.Request) (*http.Response, error) {
+				calls++
+				if req.Method != http.MethodGet || req.URL.Path != "/apis/"+gv.String()+"/clustertrustbundles/bundle" {
+					t.Errorf("wrong request: %s %s", req.Method, req.URL.Path)
+				}
+				body := fmt.Sprintf(`{"apiVersion":%q,"kind":"ClusterTrustBundle","metadata":{"name":"bundle"}}`, gv.String())
+				return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}, nil
+			})})
+			if err != nil {
+				t.Fatal(err)
+			}
+			c := &Client{Typed: kc, Dynamic: dyn, discovery: cached, mapper: restmapper.NewDeferredDiscoveryRESTMapper(cached)}
+			if err := c.WaitClusterTrustBundles(t.Context(), []string{"bundle"}, time.Second); err != nil {
+				t.Fatal(err)
+			}
+			if calls != 1 {
+				t.Fatalf("got %d GETs, want 1", calls)
+			}
+		})
+	}
+}
+
+type bundleRoundTripper func(*http.Request) (*http.Response, error)
+
+func (f bundleRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

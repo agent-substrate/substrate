@@ -58,8 +58,9 @@ const (
 	// stageTunnel is any other failure opening the tunnel: DNS, TCP, a
 	// truncated response.
 	stageTunnel = "tunnel"
-	// stageInnerHandshake is the tunneled TLS handshake -- the one sdsmint
-	// serves. A failure here is the minter's, not the front door's.
+	// stageInnerHandshake is the tunneled TLS handshake -- the one the gateway
+	// answers with a minted leaf. A failure here is the minter's, not the
+	// front door's.
 	stageInnerHandshake = "inner_handshake"
 )
 
@@ -93,8 +94,8 @@ type handshakeResult struct {
 }
 
 // handshake opens a tunnel through the gateway and completes an inner TLS
-// handshake for the requested SNI, which is what makes Envoy ask sdsmint for a
-// secret under that name.
+// handshake for the requested SNI, which is what makes the gateway mint a leaf
+// under that name.
 func handshake(w http.ResponseWriter, r *http.Request, cfg probeConfig) {
 	sni := r.URL.Query().Get("sni")
 	if sni == "" {

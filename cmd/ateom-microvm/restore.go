@@ -27,6 +27,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/apierror"
+	"github.com/agent-substrate/substrate/internal/ateomphaselog"
 	"github.com/agent-substrate/substrate/internal/ateomstats"
 
 	"github.com/agent-substrate/substrate/internal/ateomnet"
@@ -38,8 +40,6 @@ import (
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/sizing"
 	"github.com/agent-substrate/substrate/internal/wakeupprobe"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // restoreMemMode picks how cloud-hypervisor should load guest RAM, from what the VMM
@@ -67,7 +67,7 @@ func restoreMemMode(ctx context.Context, info ch.VMMInfo) string {
 }
 
 // reseedGuestCRNG mixes fresh, per-restore entropy into the restored guest's kernel
-// CRNG through the kata-agent (see the call site in restoreFullScope for why a restore
+// CRNG through the kata-agent (see the call site in restoreMemoryFidelity for why a restore
 // needs this). The nonce is a throwaway; its only job is to differ between restores so
 // that clones of one snapshot diverge instead of producing identical randomness. The
 // caller owns ac: it stays open for log forwarding and guest stats.
@@ -91,25 +91,31 @@ func newReseedNonce() ([]byte, error) {
 }
 
 // RestoreWorkload brings the actor back from a snapshot, on a possibly different
-// pod. What that means depends on the scope the snapshot was taken with:
+// pod. What that means depends on the fidelity the snapshot was taken with:
 //
-//   - FULL: relaunch cloud-hypervisor from the snapshot and resume the guest
-//     (restoreFullScope).
-//   - DATA: there is no guest to resume — re-materialize the durable-dir volumes and
-//     cold-boot the actor, which starts its containers afresh from the OCI image.
-//   - DATA_ON_GOLDEN: atelet staged a combined set into restore_dir — the
-//     guest files (memory + VM state) from the template's golden snapshot plus
-//     the durable-dir tar from the actor's own snapshot — so this restores
-//     exactly like FULL: the golden guest resumes over the actor's data.
+//   - MEMORY: relaunch cloud-hypervisor from the snapshot and resume the guest
+//     (restoreMemoryFidelity).
+//   - ROOTFS: as VOLUMES, but each container's rootfs upper is re-materialized
+//     from its tar first, so the cold boot sees the rootfs writes the actor had
+//     made.
+//   - VOLUMES: there is no guest to resume — re-materialize the durable-dir
+//     volumes and cold-boot the actor, which starts its containers afresh from
+//     the OCI image.
 //
-// Contract with atelet: the snapshot's files have been downloaded to
-// ActorDirs.restore_dir, and the durable-dir volume directories re-created (empty).
+// Contract with atelet: the snapshot's files are in ActorDirs.restore_dir,
+// and the durable-dir volume directories re-created (empty).
 func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.RestoreWorkloadRequest) (resp *ateompb.RestoreWorkloadResponse, retErr error) {
 	if err := validateActorDirs(req.GetActorDirs()); err != nil {
 		return nil, err
 	}
+	if err := validateFidelity(req.GetFidelity()); err != nil {
+		return nil, err
+	}
+	if err := validateRuntimeAssetPaths(req.GetRuntimeAssetPaths()); err != nil {
+		return nil, err
+	}
 	if !s.locks.Lock(ctx, req.GetActorUid()) {
-		return nil, status.Error(codes.Canceled, "gave up waiting for the actor's lock")
+		return nil, fmt.Errorf("gave up waiting for the actor's lock: %w", ctx.Err())
 	}
 	defer s.locks.Unlock(req.GetActorUid())
 
@@ -144,15 +150,15 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	attribution := p.actorAttribution()
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor restoring", attribution)
 
-	// A VM still running for this actor would be dropped from tracking by the
-	// re-host below and left running, so stop it first.
-	if s.runningVM(attribution.UID) != nil {
-		if err := s.stopActorVM(ctx, attribution.UID, req.GetActorDirs()); err != nil {
-			return nil, fmt.Errorf("while stopping the actor's previous micro-VM: %w", err)
-		}
+	if err := s.endPreviousActivation(ctx, attribution.UID, req.GetActorDirs()); err != nil {
+		return nil, err
 	}
-	// Publish attribution before restore so stats can include startup usage.
-	if _, err := s.hostActor(ctx, attribution); err != nil {
+	// Publish attribution before restore, so a stats read during it is
+	// attributed. Only a MEMORY restore resumes the guest and its CPU counters,
+	// so only it counts from the first reading; the lower fidelities cold-boot
+	// a fresh guest whose CPU counts from zero.
+	resumesGuest := includesMemory(req.GetFidelity())
+	if _, err := s.hostActor(ctx, attribution, resumesGuest); err != nil {
 		return nil, err
 	}
 	defer func() {
@@ -164,28 +170,36 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		}
 	}()
 
-	// Restore the durable-dir volumes before anything can observe them: for Full
-	// that means before the share's virtiofsd starts, for Data before the workload
-	// cold-starts. The snapshot must carry them — the actor declares the volume, and
-	// every scope captures it.
+	// Restore the durable-dir volumes before anything can observe them: for MEMORY
+	// that means before the share's virtiofsd starts, for the lower fidelities
+	// before the workload cold-starts.
 	if hasDurableVolumes(p.containers) {
-		if err := untarDurableVolumes(durableDir, restoreDir); err != nil {
+		if err := untarDurableVolumes(durableDir, restoreDir, durableVolumeNames(p.containers)); err != nil {
 			return nil, err
 		}
 	}
 
-	switch scope := req.GetScope(); scope {
-	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
-		ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN:
-		// DATA_ON_GOLDEN: the restore dir holds the golden snapshot's guest
-		// files, and the untar above re-materialized the ACTOR's durable-dir
-		// data, so resuming the golden guest picks up the actor's data through
-		// the durable virtio-fs share.
-		if err := s.restoreFullScope(ctx, p, scope, restoreDir, tStart); err != nil {
+	switch scope := req.GetFidelity(); scope {
+	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
+		if err := s.restoreMemoryFidelity(ctx, p, scope, restoreDir, req.GetPreserveRestoreDir(), tStart); err != nil {
 			return nil, err
 		}
-	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
-		// A Data snapshot holds no guest state, so this is a cold boot that
+	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS:
+		// A ROOTFS snapshot holds no guest state either, but it carries each
+		// container's rootfs upper. The cold boot re-materializes the uppers
+		// from the snapshot instead of starting from a pristine dir, overlapped
+		// with its bundle preparation like the MEMORY path does.
+		p.rootfsUpperSnapshotDir = restoreDir
+		if err := s.coldBootActorRetrying(ctx, p); err != nil {
+			return nil, err
+		}
+		dTotal := time.Since(tStart)
+		slog.InfoContext(ctx, "Actor restored (rootfs upper + durable-dir volumes, cold boot)",
+			slog.String("id", p.actorUID), slog.Duration("total", dTotal))
+		ateomphaselog.LogSnapshotPhases(ctx, "Restore timing breakdown", attribution, scope,
+			ateomphaselog.RestoreDurationKey, nil, []ateomphaselog.Phase{{Name: phaseTotal, D: dTotal}})
+	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
+		// A VOLUMES snapshot holds no guest state, so this is a cold boot that
 		// happens to start with the volumes already populated. wakeup probe gating comes
 		// with the cold-boot path, so the actor is serving when we return.
 		if err := s.coldBootActorRetrying(ctx, p); err != nil {
@@ -194,31 +208,31 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		dTotal := time.Since(tStart)
 		slog.InfoContext(ctx, "Actor restored (durable-dir volumes, cold boot)",
 			slog.String("id", p.actorUID), slog.Duration("total", dTotal))
-		// A cold boot has none of the full-scope phases, so the total is the
+		// A cold boot has none of the memory-restore phases, so the total is the
 		// only observation on its record.
-		logSnapshotPhases(ctx, "Restore timing breakdown", attribution, scope,
-			restoreDurationKey, nil, []phase{{phaseTotal, dTotal}})
+		ateomphaselog.LogSnapshotPhases(ctx, "Restore timing breakdown", attribution, scope,
+			ateomphaselog.RestoreDurationKey, nil, []ateomphaselog.Phase{{Name: phaseTotal, D: dTotal}})
 	default:
-		return nil, status.Errorf(codes.InvalidArgument, "unsupported snapshot scope: %v", scope)
+		return nil, apierror.InvalidArgument("unsupported snapshot fidelity: %v", scope)
 	}
 
 	s.actorLogger.EmitLifecycleLog(ctx, "Actor restored", attribution)
 	return &ateompb.RestoreWorkloadResponse{}, nil
 }
 
-// restoreFullScope restores a whole-guest snapshot: relaunch cloud-hypervisor
+// restoreMemoryFidelity restores a whole-guest snapshot: relaunch cloud-hypervisor
 // directly from it and resume.
 //
 // Each container's rootfs is a host-merged overlay (image lower + host upper). Steps:
 // rewrite the snapshot config's per-VMDir paths (vsock + serial + fs sockets) to this
-// actor's; re-materialize the uppers from rootfs-upper.tar (in the background,
+// actor's; re-materialize the uppers from the per-container tars (in the background,
 // overlapped with bundle preparation) and re-mount the merged trees at the frozen
 // find-paths paths; start the virtiofsd serving them; rebuild the tap (the snapshot's
 // virtio-net is fd-backed → fresh net_fds); relaunch CH with --restore (OnDemand),
 // and resume. Guest RAM — the actor's in-memory state and the frozen network config —
 // comes back from the memory snapshot; the durable-dir volumes were restored by the
 // caller from their tar.
-func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, scope ateompb.SnapshotScope, restoreDir string, tStart time.Time) (retErr error) {
+func (s *AteomService) restoreMemoryFidelity(ctx context.Context, p actorBootParams, scope ateompb.SnapshotFidelity, restoreDir string, preserveRestoreDir bool, tStart time.Time) (retErr error) {
 	actorUID := p.actorUID
 
 	rr := s.resolveRuntime(p.assetPaths)
@@ -244,13 +258,10 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 	}
 	tPrep := time.Now()
 
-	// Merged-rootfs snapshots carry the upper as rootfs-upper.tar (the tar's
-	// presence is what says which model the guest expects). Start
-	// re-materializing the upper contents NOW, in the background: the untar
-	// scales with the actor's data and is joined right before the host overlay
-	// mounts need it, so it hides behind the bundle preparation below. Legacy
-	// guest-tmpfs-upper snapshots have no tar: their upper rides inside the
-	// restored guest memory and the share presents the bare image instead.
+	// MEMORY snapshots carry each container's upper as a tar (rootfsUpperTarFile).
+	// Start re-materializing the upper contents NOW, in the background: the
+	// untar scales with the actor's data and is joined right before the host
+	// overlay mounts need it, so it hides behind the bundle preparation below.
 	//
 	// An error return between here and the join MUST drain the goroutine (the
 	// deferred receive below): returning with the untar still writing would let
@@ -258,7 +269,7 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 	untarDone := make(chan error, 1)
 	untarJoined := false
 	go func() {
-		untarDone <- untarRootfsUpper(rootfsUpperDir(p.actorDirs), restoreDir)
+		untarDone <- untarRootfsUpper(rootfsUpperDir(p.actorDirs), restoreDir, containerNames(p.containers))
 	}()
 	defer func() {
 		if !untarJoined {
@@ -275,12 +286,12 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 	// (plus, for merged rootfs, the upper re-materialized from the tar).
 	containers := p.containers
 	if len(containers) == 0 {
-		return status.Error(codes.InvalidArgument, "actor spec has no containers")
+		return apierror.InvalidArgument("actor spec has no containers")
 	}
 	if len(containers) > maxActorContainers {
-		return status.Errorf(codes.Unimplemented, "ateom-microvm supports at most %d containers, got %d", maxActorContainers, len(containers))
+		return apierror.Unimplemented("ateom-microvm supports at most %d containers, got %d", maxActorContainers, len(containers))
 	}
-	ctrs, err := s.buildActorContainers(p.actorDirs, containers)
+	ctrs, err := s.buildActorContainers(p.actorUID, p.actorDirs, containers)
 	if err != nil {
 		return err
 	}
@@ -455,38 +466,24 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 	// The joinable per-actor record the benchmarking tooling aggregates. The
 	// durable delta is not carried: tDurable is pinned to tLowers today, so it
 	// would always be the zero a record skips.
-	logSnapshotPhases(ctx, "Restore timing breakdown", p.actorAttribution(), scope,
-		restoreDurationKey, nil, []phase{
-			{phasePrep, tPrep.Sub(tStart)},
-			{phaseBundles, tBundles.Sub(tPrep)},
-			{phaseUpperJoin, tUpper.Sub(tBundles)},
-			{phaseLowers, tLowers.Sub(tUpper)},
-			{phaseTap, tTap.Sub(tDurable)},
-			{phaseVMMLaunch, tLaunch.Sub(tTap)},
-			{phaseVMRestore, tVMRestore.Sub(tLaunch)},
-			{phaseResume, tResume.Sub(tVMRestore)},
-			{phaseWakeupProbe, dWakeupProbe},
-			{phaseTotal, dTotal},
+	ateomphaselog.LogSnapshotPhases(ctx, "Restore timing breakdown", p.actorAttribution(), scope,
+		ateomphaselog.RestoreDurationKey, nil, []ateomphaselog.Phase{
+			{Name: phasePrep, D: tPrep.Sub(tStart)},
+			{Name: phaseBundles, D: tBundles.Sub(tPrep)},
+			{Name: phaseUpperJoin, D: tUpper.Sub(tBundles)},
+			{Name: phaseLowers, D: tLowers.Sub(tUpper)},
+			{Name: phaseTap, D: tTap.Sub(tDurable)},
+			{Name: phaseVMMLaunch, D: tLaunch.Sub(tTap)},
+			{Name: phaseVMRestore, D: tVMRestore.Sub(tLaunch)},
+			{Name: phaseResume, D: tResume.Sub(tVMRestore)},
+			{Name: phaseWakeupProbe, D: dWakeupProbe},
+			{Name: phaseTotal, D: dTotal},
 		})
-
-	// An eager restore has read the whole snapshot into guest memory, and nothing
-	// merges against it afterwards, so the staged copy is dead weight from here on —
-	// a second ~160MiB per running actor on top of the checkpoint it will write.
-	// Drop the memory image but keep the directory: atelet re-stages it wholesale
-	// before any later restore, and the small files beside it stay cheap to keep.
-	if memMode == ch.MemRestoreEager {
-		staged := filepath.Join(restoreDir, "memory-ranges")
-		if err := os.Remove(staged); err != nil && !os.IsNotExist(err) {
-			// Not fatal: it only costs disk until the actor is torn down.
-			slog.WarnContext(ctx, "could not drop the staged memory image", "error", err)
-		} else {
-			slog.InfoContext(ctx, "dropped the staged memory image (eager restore needs no merge base)")
-		}
-	}
 
 	ra := &runningActor{
 		chCmd: chCmd, vfsdCmd: vfsdCmd,
 		apiSocket: apiSocket, baseID: srcID, restoreSourceDir: restoreDir,
+		preserveRestoreSource:   preserveRestoreDir,
 		snapshotIsSelfContained: memMode == ch.MemRestoreEager,
 		// Signaling an id the agent does not know fails the whole graceful
 		// shutdown with InvalidContainerId, so these must be what the guest runs.
@@ -507,14 +504,38 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 	}
 	s.setRunningVM(actorUID, ra)
 
+	// After the last error return, so a failed restore stays retryable.
+	maybeDropStagedMemoryImage(ctx, restoreDir, memMode, preserveRestoreDir)
+
 	// Publish the guest to GetWorkloadStats, past the last error return above
 	// for the same reason as in coldBootActor. Same client the forwarding above
 	// reads over.
 	s.setGuestStats(actorUID, &guestStatsTarget{actorUID: actorUID, agent: guestAC, workloadIDs: ra.workloadIDs})
+	// Looked up while the caller holds the actor's lock, so it is this
+	// activation.
+	if hosted := s.lookupActor(actorUID); hosted != nil {
+		go s.recordInitial(context.WithoutCancel(ctx), hosted)
+	}
 
 	slog.InfoContext(ctx, "Actor restored (overlay rootfs)",
 		slog.String("id", actorUID), slog.Duration("total", time.Since(tStart)))
 	return nil
+}
+
+// maybeDropStagedMemoryImage deletes memory-ranges after an eager restore (it is
+// fully in guest memory and nothing merges against it), unless restoreDir is a
+// preserved snapshot.
+func maybeDropStagedMemoryImage(ctx context.Context, restoreDir, memMode string, preserveRestoreDir bool) {
+	if memMode != ch.MemRestoreEager || preserveRestoreDir {
+		return
+	}
+	staged := filepath.Join(restoreDir, "memory-ranges")
+	if err := os.Remove(staged); err != nil && !os.IsNotExist(err) {
+		// Not fatal: it only costs disk until the actor is torn down.
+		slog.WarnContext(ctx, "could not drop the staged memory image", "error", err)
+	} else {
+		slog.InfoContext(ctx, "dropped the staged memory image (eager restore needs no merge base)")
+	}
 }
 
 // rewriteSnapshotSocketPaths repoints the snapshot config.json's per-VMDir paths from
@@ -533,8 +554,13 @@ func rewriteSnapshotSocketPaths(snapshotDir, id string) error {
 	if err := json.Unmarshal(b, &cfg); err != nil {
 		return fmt.Errorf("parsing %q: %w", cfgPath, err)
 	}
+	changed := false
 	if vsock, ok := cfg["vsock"].(map[string]any); ok {
-		vsock["socket"] = kata.VsockSocketPath(id)
+		want := kata.VsockSocketPath(id)
+		if got, _ := vsock["socket"].(string); got != want {
+			vsock["socket"] = want
+			changed = true
+		}
 	}
 	// ateom captures the guest console to a file under the source actor's VMDir
 	// (virtio-console normally, plus the UART in debug mode). On restore those paths
@@ -550,7 +576,10 @@ func rewriteSnapshotSocketPaths(snapshotDir, id string) error {
 			continue
 		}
 		if mode, _ := dev["mode"].(string); mode == "File" {
-			dev["file"] = path
+			if got, _ := dev["file"].(string); got != path {
+				dev["file"] = path
+				changed = true
+			}
 		}
 	}
 	// The virtio-fs share is served by its per-VMDir virtiofsd socket; the
@@ -563,22 +592,25 @@ func rewriteSnapshotSocketPaths(snapshotDir, id string) error {
 			}
 			switch tag, _ := fm["tag"].(string); tag {
 			case kata.FsTag:
-				fm["socket"] = kata.VirtiofsdSocketPath(id)
+				want := kata.VirtiofsdSocketPath(id)
+				if got, _ := fm["socket"].(string); got != want {
+					fm["socket"] = want
+					changed = true
+				}
 			default:
 				return fmt.Errorf("snapshot config %q has fs device with unknown tag %q", cfgPath, tag)
 			}
 		}
 	}
+	if !changed {
+		// Same-actor resume: nothing to rewrite, so leave a preserved snapshot untouched.
+		return nil
+	}
 	out, err := json.Marshal(cfg)
 	if err != nil {
 		return err
 	}
-	// Temp file + rename, not os.WriteFile: atelet stages a local checkpoint by
-	// hard-linking it into this dir, so config.json can share an inode with the
-	// actor's cached pause snapshot. O_TRUNC would write straight through that link
-	// and rewrite the snapshot, and a crash mid-write would leave the actor's only
-	// local restore point holding a truncated config. Renaming replaces the name
-	// here and leaves the linked original whole.
+	// Temp file + rename, not O_TRUNC, which would write through a shared inode.
 	tmp, err := os.CreateTemp(snapshotDir, ".config.json.tmp-*")
 	if err != nil {
 		return err

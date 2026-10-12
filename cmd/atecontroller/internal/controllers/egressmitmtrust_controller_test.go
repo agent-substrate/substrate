@@ -21,6 +21,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/clustertrustbundle"
+	"github.com/agent-substrate/substrate/internal/installdefaults"
+	"github.com/agent-substrate/substrate/internal/localca"
+	certsv1 "k8s.io/api/certificates/v1"
 	certsv1beta1 "k8s.io/api/certificates/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	k8errors "k8s.io/apimachinery/pkg/api/errors"
@@ -31,9 +35,6 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
-
-	"github.com/agent-substrate/substrate/internal/installdefaults"
-	"github.com/agent-substrate/substrate/internal/localca"
 )
 
 func egressMITMScheme(t *testing.T) *runtime.Scheme {
@@ -87,14 +88,14 @@ func rootPEM(t *testing.T, pool *localca.ConcretePool) string {
 
 func reconcilePool(t *testing.T, c client.Client) error {
 	t.Helper()
-	r := &EgressMITMTrustReconciler{Client: c, SystemNamespace: installdefaults.SystemNamespace}
+	r := &EgressMITMTrustReconciler{Client: c, SystemNamespace: installdefaults.SystemNamespace, bundleV1: true}
 	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: EgressMITMCAPoolRef(installdefaults.SystemNamespace)})
 	return err
 }
 
-func getTrustBundle(t *testing.T, c client.Client) (*certsv1beta1.ClusterTrustBundle, bool) {
+func getTrustBundle(t *testing.T, c client.Client) (*certsv1.ClusterTrustBundle, bool) {
 	t.Helper()
-	ctb := &certsv1beta1.ClusterTrustBundle{}
+	ctb := &certsv1.ClusterTrustBundle{}
 	err := c.Get(context.Background(), types.NamespacedName{Name: egressMITMTrustBundleName}, ctb)
 	if k8errors.IsNotFound(err) {
 		return nil, false
@@ -242,9 +243,9 @@ func TestEgressMITMTrustDeletesBundleWhenPoolIsGone(t *testing.T) {
 func TestEgressMITMTrustLeavesForeignBundleAlone(t *testing.T) {
 	t.Parallel()
 	scheme := egressMITMScheme(t)
-	foreign := &certsv1beta1.ClusterTrustBundle{
+	foreign := &certsv1.ClusterTrustBundle{
 		ObjectMeta: metav1.ObjectMeta{Name: egressMITMTrustBundleName},
-		Spec:       certsv1beta1.ClusterTrustBundleSpec{SignerName: "someone.else.example/identity"},
+		Spec:       certsv1.ClusterTrustBundleSpec{SignerName: "someone.else.example/identity"},
 	}
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(foreign).Build()
 
@@ -297,6 +298,76 @@ func TestEgressMITMTrustKeepsLastGoodBundleOnBadPool(t *testing.T) {
 			}
 			if want := rootPEM(t, pool); ctb.Spec.TrustBundle != want {
 				t.Errorf("trustBundle was rewritten from an unreadable pool:\n%s", ctb.Spec.TrustBundle)
+			}
+		})
+	}
+}
+
+func TestEgressMITMTrustAPIVersions(t *testing.T) {
+	for _, stable := range []bool{false, true} {
+		version := "v1beta1"
+		if stable {
+			version = "v1"
+		}
+		t.Run(version, func(t *testing.T) {
+			ctx := t.Context()
+			secret, pool := caPoolSecret(t, "initial")
+			c := fake.NewClientBuilder().WithScheme(egressMITMScheme(t)).WithObjects(secret).Build()
+			r := &EgressMITMTrustReconciler{Client: c, SystemNamespace: installdefaults.SystemNamespace, bundleV1: stable}
+			reconcile := func() {
+				t.Helper()
+				if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: EgressMITMCAPoolRef(r.SystemNamespace)}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			read := func() *certsv1.ClusterTrustBundle {
+				t.Helper()
+				obj := r.bundleObject()
+				if err := c.Get(ctx, types.NamespacedName{Name: egressMITMTrustBundleName}, obj); err != nil {
+					t.Fatal(err)
+				}
+				if stable {
+					return obj.(*certsv1.ClusterTrustBundle)
+				}
+				return clustertrustbundle.ToV1(obj.(*certsv1beta1.ClusterTrustBundle))
+			}
+			reconcile()
+			bundle := read()
+			if bundle.Spec.TrustBundle != rootPEM(t, pool) || bundle.Spec.SignerName != egressMITMSignerName || bundle.Labels["podcert.ate.dev/canarying"] != "live" {
+				t.Fatalf("incorrect bundle: %#v", bundle)
+			}
+			rotated, nextPool := caPoolSecret(t, "rotated")
+			if err := c.Get(ctx, client.ObjectKeyFromObject(secret), secret); err != nil {
+				t.Fatal(err)
+			}
+			secret.Data = rotated.Data
+			if err := c.Update(ctx, secret); err != nil {
+				t.Fatal(err)
+			}
+			reconcile()
+			if read().Spec.TrustBundle != rootPEM(t, nextPool) {
+				t.Fatal("rotation was not applied")
+			}
+			if err := c.Delete(ctx, secret); err != nil {
+				t.Fatal(err)
+			}
+			reconcile()
+			if err := c.Get(ctx, types.NamespacedName{Name: egressMITMTrustBundleName}, r.bundleObject()); !k8errors.IsNotFound(err) {
+				t.Fatalf("bundle survived pool deletion: %v", err)
+			}
+			foreign := &certsv1.ClusterTrustBundle{ObjectMeta: metav1.ObjectMeta{Name: egressMITMTrustBundleName}, Spec: certsv1.ClusterTrustBundleSpec{SignerName: "other.example/signer"}}
+			var obj client.Object = foreign
+			if !stable {
+				obj = clustertrustbundle.ToBeta(foreign)
+			}
+			if err := c.Create(ctx, obj); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: EgressMITMCAPoolRef(r.SystemNamespace)}); err == nil {
+				t.Fatal("did not reject deletion of a foreign bundle")
+			}
+			if read().Spec.SignerName != "other.example/signer" {
+				t.Fatal("foreign bundle was changed")
 			}
 		})
 	}

@@ -31,7 +31,6 @@ patches:
             containers:
             - name: atelet
               args:
-              - --gcp-auth-for-image-pulls=false
               - --localhost-registry-replacement=kind-registry:5000
               - --grpc-server-cred-bundle=/run/podidentity.podcert.ate.dev/credential-bundle.pem
               - --client-ca-certs=/run/podidentity.podcert.ate.dev/trust-bundle.pem
@@ -42,6 +41,40 @@ patches:
               # atelet DaemonSet consumes via envFrom; the kind copy lives at
               # ../ate-otel-config.yaml and is applied by the parent overlay or
               # by hack/install-ate.sh for a targeted redeploy.
+              env:
+              - name: ATE_STORAGE_BACKEND
+                value: s3
+              - name: AWS_REGION
+                value: us-east-1
+              - name: AWS_ENDPOINT_URL
+                value: http://rustfs.ate-system.svc:9000
+              - name: AWS_S3_USE_PATH_STYLE
+                value: "true"
+              # TODO: use a secret / identity management
+              - name: AWS_ACCESS_KEY_ID
+                value: rustfsadmin
+              - name: AWS_SECRET_ACCESS_KEY
+                value: rustfsadmin
+              # kind nodes ship no credential provider plugin (the args above
+              # leave the --image-credential-provider-* flags unset), so drop
+              # the base manifest's host mounts instead of fabricating empty
+              # ones on the node. volumeMounts merges on mountPath; volumes
+              # merges on name.
+              volumeMounts:
+              - mountPath: /run/image-credential-provider/bin
+                $patch: delete
+              - mountPath: /run/image-credential-provider/config.yaml
+                $patch: delete
+            volumes:
+            - name: image-credential-provider-bin
+              $patch: delete
+            - name: image-credential-provider-config
+              $patch: delete
+            # The snapshot plugin transfers atelet's external snapshots, so it
+            # needs the same rustfs settings. atelet keeps its own copy for
+            # sandbox assets.
+            initContainers:
+            - name: snapshot-plugin
               env:
               - name: ATE_STORAGE_BACKEND
                 value: s3

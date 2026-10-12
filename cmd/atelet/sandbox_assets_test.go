@@ -203,6 +203,19 @@ func TestRecordFromRequest(t *testing.T) {
 		}
 	})
 
+	t.Run("microvm needs no pause image", func(t *testing.T) {
+		sa := valid()
+		sa.SandboxClass = "microvm"
+		sa.PauseImage = ""
+		got, err := recordFromRequest(sa)
+		if err != nil {
+			t.Fatalf("recordFromRequest: %v", err)
+		}
+		if got.PauseImage != "" {
+			t.Errorf("PauseImage = %q, want empty", got.PauseImage)
+		}
+	})
+
 	for _, tc := range []struct {
 		name   string
 		mutate func(*ateletpb.SandboxAssets) *ateletpb.SandboxAssets
@@ -212,7 +225,7 @@ func TestRecordFromRequest(t *testing.T) {
 			sa.Assets = map[string]*ateletpb.ArchAssets{"not-" + runtime.GOARCH: sa.Assets[runtime.GOARCH]}
 			return sa
 		}},
-		{"no pause image", func(sa *ateletpb.SandboxAssets) *ateletpb.SandboxAssets {
+		{"gvisor without pause image", func(sa *ateletpb.SandboxAssets) *ateletpb.SandboxAssets {
 			sa.PauseImage = ""
 			return sa
 		}},

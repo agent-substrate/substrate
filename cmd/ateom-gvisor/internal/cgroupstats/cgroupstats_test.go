@@ -168,6 +168,44 @@ func TestRead(t *testing.T) {
 			want: Sample{},
 		},
 		{
+			name: "live cgroup is not empty",
+			files: map[string]string{
+				"memory.current": "1000\n",
+				"memory.events":  "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\n",
+				"cgroup.events":  "populated 1\nfrozen 0\n",
+			},
+			want: Sample{
+				MemoryCurrentBytes:    1000,
+				MemoryWorkingSetBytes: 1000,
+			},
+		},
+		{
+			// What a sandbox leaf looked like on kind after the kernel OOM-killed
+			// the sentry: the leaf and its counters outlive every process in it.
+			name: "OOM-killed sandbox is empty",
+			files: map[string]string{
+				"memory.current": "16384\n",
+				"memory.events":  "low 0\nhigh 0\nmax 0\noom 5334\noom_kill 3\noom_group_kill 0\n",
+				"cgroup.events":  "populated 0\nfrozen 0\n",
+			},
+			want: Sample{
+				MemoryCurrentBytes:    16384,
+				MemoryWorkingSetBytes: 16384,
+				OOMKills:              3,
+				Empty:                 true,
+			},
+		},
+		{
+			name: "no cgroup.events is not taken for empty",
+			files: map[string]string{
+				"memory.current": "1000\n",
+			},
+			want: Sample{
+				MemoryCurrentBytes:    1000,
+				MemoryWorkingSetBytes: 1000,
+			},
+		},
+		{
 			// A short, blank, or over-long line must not panic: this runs in an RPC
 			// handler on a timer, and grpc-go does not recover handler panics.
 			name: "malformed lines in keyed files are skipped",
@@ -190,6 +228,9 @@ func TestRead(t *testing.T) {
 				"memory.current": "157286400\n",
 				"memory.peak":    "not-a-number\n",
 				"cpu.stat":       "usage_usec eleventy\n",
+				"memory.events":  "oom_kill lots\n",
+				// Garbage here must not read as a dead sandbox.
+				"cgroup.events": "populated no\n",
 			},
 			want: Sample{
 				MemoryCurrentBytes:    157286400,

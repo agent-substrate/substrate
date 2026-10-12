@@ -33,9 +33,9 @@ func ValidateMintActorCertificateRequest(ctx context.Context, req *ateletpb.Mint
 	return Validate_MintActorCertificateRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
 }
 
-// ValidateSetWorkerCapacityRequest runs the generated validation for req.
-func ValidateSetWorkerCapacityRequest(ctx context.Context, req *ateletpb.SetWorkerCapacityRequest) field.ErrorList {
-	return Validate_SetWorkerCapacityRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
+// ValidateRegisterWorkerRequest runs the generated validation for req.
+func ValidateRegisterWorkerRequest(ctx context.Context, req *ateletpb.RegisterWorkerRequest) field.ErrorList {
+	return Validate_RegisterWorkerRequest(ctx, operation.Operation{Type: operation.Create}, nil, req, nil)
 }
 
 // ValidateCustom_Limits validates one limit with resources.ValidateLimit, the

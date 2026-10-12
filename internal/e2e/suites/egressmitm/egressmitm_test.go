@@ -14,7 +14,7 @@
 
 // Package egressmitm e2e-tests the trust half of MITM'd egress TLS (#871):
 // an actor that projects the egress trust bundle can complete a TLS
-// handshake with the sdsmint egress gateway's per-SNI minted leaf, using
+// handshake with the egress gateway's per-SNI minted leaf, using
 // ONLY the projected anchors. See TestActorEgressMITMTrust for the proof
 // structure and how to run this locally.
 package egressmitm
@@ -25,7 +25,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -45,29 +44,23 @@ var probeNamespace string
 //   - positive: /fetch with roots=bundle succeeds — the gateway's per-SNI
 //     minted leaf (signed from the egress-mitm-ca-pool) validates against
 //     the anchors atelet projected from the reconciler-published bundle.
-//     This also fails under a PASSTHROUGH gateway (the bundle holds no
-//     public CAs), so a pass certifies interception is on.
+//     The bundle holds no public CAs, so a pass certifies interception is
+//     on.
 //   - negative: /fetch with roots=system fails certificate verification —
 //     the minted leaf chains to no public CA, proving the traffic really is
-//     intercepted rather than relayed (under passthrough this fetch would
+//     intercepted rather than relayed (were it relayed this fetch would
 //     succeed, and the positive case would be meaningless).
 //
-// The gate: this needs the sdsmint egress gateway variant, which replaces
-// the passthrough gateway cluster-wide, so CI runs it as separate steps
-// after the standard lanes (see pr-workflow.yaml) — once per sandbox class,
+// CI runs this in both lanes (see pr-workflow.yaml) — once per sandbox class,
 // since trust delivery differs per class (gVisor RO bind vs the micro-VM
 // unified virtio-fs share). Locally:
 //
-//	hack/install-ate-kind.sh --deploy-atenet --experimental-use-sdsmint
-//	E2E_EGRESS_MITM=1 hack/run-e2e-kind.sh ./internal/e2e/suites/egressmitm -v -args --no-color
-//	E2E_EGRESS_MITM=1 E2E_SANDBOX_CLASS=microvm hack/run-e2e-kind.sh ./internal/e2e/suites/egressmitm -v -args --no-color
+//	hack/run-e2e-kind.sh ./internal/e2e/suites/egressmitm -v -args --no-color
+//	E2E_SANDBOX_CLASS=microvm hack/run-e2e-kind.sh ./internal/e2e/suites/egressmitm -v -args --no-color
 //
 // The micro-VM variant additionally needs the micro-VM deps installed
 // (hack/run-microvm-demo-kind.sh, or hack/install-microvm-deps.sh --install).
 func TestActorEgressMITMTrust(t *testing.T) {
-	if os.Getenv("E2E_EGRESS_MITM") == "" {
-		t.Skip("needs the sdsmint (MITM) egress gateway: deploy with hack/install-ate-kind.sh --deploy-atenet --experimental-use-sdsmint, then set E2E_EGRESS_MITM=1")
-	}
 	env, err := e2e.CheckEnv("BUCKET_NAME", "KO_DOCKER_REPO")
 	if err != nil {
 		t.Fatalf("CheckEnv failed: %v", err)
@@ -75,10 +68,10 @@ func TestActorEgressMITMTrust(t *testing.T) {
 	ctx := context.Background()
 	clients := e2e.GetClients()
 
-	// Ensure, never replace: sdsmintd signs with the pool mounted into the
-	// gateway pod, and kubelet propagates Secret updates into that mount on
+	// Ensure, never replace: the gateway signs with the pool mounted into its
+	// pod, and kubelet propagates Secret updates into that mount on
 	// its own schedule — replacing the pool here would race the propagation
-	// and flake the handshake. The sdsmint install path created the pool; we
+	// and flake the handshake. The install created the pool; we
 	// only wait for the reconciler-derived bundle so actor start can resolve
 	// the projection. (DeployProbe ensures too; this makes the dependency
 	// explicit and fails with the clearer message when the reconciler is
@@ -99,7 +92,7 @@ func TestActorEgressMITMTrust(t *testing.T) {
 
 	const origin = "https://" + egressOriginHost + "/"
 
-	// sdsmintd signs with the pool mounted into the gateway pod, and kubelet
+	// The gateway signs with the pool mounted into its pod, and kubelet
 	// propagates Secret contents into that mount on its own schedule (up to
 	// ~1 minute). In CI the pool predates the gateway pod, but a LOCAL rerun
 	// can recreate the pool moments before this fetch (a prior run's cleanup
@@ -124,9 +117,25 @@ func TestActorEgressMITMTrust(t *testing.T) {
 
 	neg := probeFetch(t, ctx, rc, id, origin, "system")
 	if neg.Error == "" {
-		t.Errorf("fetch with system roots unexpectedly succeeded (status %s): the minted leaf should chain to no public CA — is the sdsmint (MITM) gateway actually deployed, or is egress running in passthrough mode?", neg.Status)
+		t.Errorf("fetch with system roots unexpectedly succeeded (status %s): the minted leaf should chain to no public CA — is the egress gateway actually terminating TLS?", neg.Status)
 	} else if !strings.Contains(neg.Error, "certificate") && !strings.Contains(neg.Error, "x509") {
 		t.Errorf("fetch with system roots failed, but not with a certificate-verification error: %s", neg.Error)
+	}
+
+	// A port in the Host is never dialed: no rule checked it. The gateway
+	// dials the Host's name on the port the actor dialed, and nothing answers
+	// on port 1.
+	for _, tc := range []struct{ origin, dial string }{
+		{origin: "https://" + egressOriginHost + ":1/", dial: egressOriginHost + ":443"},
+		{origin: "http://" + egressOriginHost + ":1/", dial: egressOriginHost + ":80"},
+	} {
+		res := probeFetch(t, ctx, rc, id, tc.origin, "bundle", "dial="+url.QueryEscape(tc.dial))
+		switch {
+		case res.Error != "":
+			t.Errorf("fetch of %s dialed at %s failed: %s", tc.origin, tc.dial, res.Error)
+		case res.Status != "200":
+			t.Errorf("fetch of %s dialed at %s: status %s, want 200 — the gateway dialed the port in the Host instead of the one the actor dialed", tc.origin, tc.dial, res.Status)
+		}
 	}
 
 	// The gateway relays passthrough TLS unread, so the origin's own certificate
@@ -150,30 +159,26 @@ func TestActorEgressMITMTrust(t *testing.T) {
 		t.Errorf("passthrough fetch %s dialed at %s: status %s, want 200", passthroughOrigin, unreachableAddress, bySNI.Status)
 	}
 
-	// The rule for this name covers 8443 only, so the ClientHello on 443 is
-	// closed.
-	const wrongPortOrigin = "https://" + egressOriginPassthroughWrongPortHost + "/"
-	wrongPort := probeFetch(t, ctx, rc, id, wrongPortOrigin, "system")
-	switch {
-	case wrongPort.Error == "":
-		t.Errorf("fetch of %s succeeded with status %s, want the connection closed at the ClientHello: its passthrough rule names port 8443, not 443", wrongPortOrigin, wrongPort.Status)
-	case strings.Contains(wrongPort.Error, "certificate") || strings.Contains(wrongPort.Error, "x509"):
-		t.Errorf("fetch of %s was intercepted (certificate error %q), want the connection closed at the ClientHello", wrongPortOrigin, wrongPort.Error)
-	case wrongPort.Status != "":
-		t.Errorf("fetch of %s got status %s with error %q, want no HTTP exchange at all", wrongPortOrigin, wrongPort.Status, wrongPort.Error)
-	}
-
-	// A host outside the policy is closed at the ClientHello: expect a
-	// transport error, not a certificate error or an HTTP status. The error
-	// text varies, so only its presence is checked.
-	denied := probeFetch(t, ctx, rc, id, "https://example.org/", "bundle")
-	switch {
-	case denied.Error == "":
-		t.Errorf("fetch of a host outside the policy succeeded with status %s, want the connection closed at the ClientHello", denied.Status)
-	case strings.Contains(denied.Error, "certificate") || strings.Contains(denied.Error, "x509"):
-		t.Errorf("fetch of a host outside the policy was intercepted (certificate error %q), want the connection closed at the ClientHello", denied.Error)
-	case denied.Status != "":
-		t.Errorf("fetch of a host outside the policy got status %s with error %q, want no HTTP exchange at all", denied.Status, denied.Error)
+	// Envoy closes denied connections at the ClientHello; agentgateway
+	// terminates TLS to return 403. Trust the gateway's CA so a certificate
+	// failure cannot masquerade as either policy-denial response.
+	for _, tc := range []struct{ name, origin string }{
+		{"passthrough rule excludes port 443", "https://" + egressOriginPassthroughWrongPortHost + "/"},
+		{"host outside the policy", "https://example.org/"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			denied := probeFetch(t, ctx, rc, id, tc.origin, "bundle")
+			switch {
+			case denied.Status == "403" && denied.Error == "":
+				// An explicit denial after completing TLS with the actor.
+			case denied.Error == "":
+				t.Errorf("fetch of %s returned status %s, want 403 or a connection closed at the ClientHello", tc.origin, denied.Status)
+			case strings.Contains(denied.Error, "certificate") || strings.Contains(denied.Error, "x509"):
+				t.Errorf("fetch of %s failed certificate verification instead of returning a policy denial: %s", tc.origin, denied.Error)
+			case denied.Status != "":
+				t.Errorf("fetch of %s got status %s with error %q, want no HTTP exchange after a TLS failure", tc.origin, denied.Status, denied.Error)
+			}
+		})
 	}
 }
 
@@ -250,6 +255,7 @@ func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Client
 	// The gateway refuses every tunnel for an actor without a policy. Naming
 	// only the origin also lets the same actor show a denial.
 	e2e.EnsureEgressPolicy(t, ctx, clients, ref,
+		e2e.EgressAllowHTTP(egressOriginHost),
 		e2e.EgressAllowHTTPS(egressOriginHost),
 		e2e.EgressAllowPassthrough(egressOriginPassthroughHost),
 		e2e.EgressAllowPassthroughOnPorts([]int32{8443}, egressOriginPassthroughWrongPortHost),

@@ -23,6 +23,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
+	"sigs.k8s.io/yaml"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -352,6 +353,37 @@ func TestNewNamespaceAuthorizerRejectsMalformedNarrowing(t *testing.T) {
 // The policy arrives as YAML, so the wire shape needs its own test: a struct
 // literal cannot catch a wrong field tag, and an absent selector must mean no
 // narrowing rather than a selector that matches nothing.
+// The install applies the shipped namespace policy when none exists. The
+// provider must start with it, and it must grant nothing until an operator
+// lists atespaces.
+func TestShippedNamespacePolicyGrantsNothing(t *testing.T) {
+	raw, err := os.ReadFile("../../../manifests/egress-credential-injection/namespace-policy.yaml")
+	if err != nil {
+		t.Fatalf("reading the shipped policy: %v", err)
+	}
+	var cm struct {
+		Data map[string]string `json:"data"`
+	}
+	if err := yaml.Unmarshal(raw, &cm); err != nil {
+		t.Fatalf("parsing the shipped policy ConfigMap: %v", err)
+	}
+	policy, ok := cm.Data["namespace-policy.yaml"]
+	if !ok {
+		t.Fatal("shipped policy ConfigMap has no namespace-policy.yaml key, the file the provider mounts")
+	}
+	path := t.TempDir() + "/policy.yaml"
+	if err := os.WriteFile(path, []byte(policy), 0o600); err != nil {
+		t.Fatalf("write policy: %v", err)
+	}
+	authz, err := LoadNamespaceAuthorizer(path)
+	if err != nil {
+		t.Fatalf("LoadNamespaceAuthorizer(shipped policy): %v", err)
+	}
+	if grants := authz.Grants(); len(grants) != 0 {
+		t.Errorf("shipped policy grants %v, want nothing", grants)
+	}
+}
+
 func TestLoadNamespaceAuthorizerSecretNarrowing(t *testing.T) {
 	dir := t.TempDir()
 	path := dir + "/policy.yaml"

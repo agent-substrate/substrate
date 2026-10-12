@@ -18,6 +18,7 @@ import (
 	"embed"
 	"fmt"
 	"io/fs"
+	"os"
 	"sort"
 	"strings"
 )
@@ -49,20 +50,52 @@ func Names() []string {
 	return names
 }
 
-// Load returns the built-in script variant called name. The file's name
-// field must agree with the file name, so a knob value always matches what
-// the stats rows and logs report.
-func Load(name string) (*Script, error) {
-	data, err := scriptFS.ReadFile("scripts/" + name + ".yaml")
-	if err != nil {
-		return nil, fmt.Errorf("no built-in agent-session script %q (have %s)", name, strings.Join(Names(), ", "))
+// readScript returns the raw YAML of a script source: a file path on the
+// worker when fromFile is set, else a built-in variant name.
+func readScript(source string, fromFile bool) ([]byte, error) {
+	if fromFile {
+		data, err := os.ReadFile(source)
+		if err != nil {
+			return nil, fmt.Errorf("read agent-session script: %w", err)
+		}
+		return data, nil
 	}
+	data, err := scriptFS.ReadFile("scripts/" + source + ".yaml")
+	if err != nil {
+		return nil, fmt.Errorf("no built-in agent-session script %q (have %s)", source, strings.Join(Names(), ", "))
+	}
+	return data, nil
+}
+
+// decodeScript decodes YAML read from source. A built-in variant's name
+// field must agree with its file name, so a knob value always matches what
+// the stats rows and logs report; a file's name is unconstrained.
+func decodeScript(data []byte, source string, fromFile bool) (*Script, error) {
 	s, err := Decode(data)
 	if err != nil {
-		return nil, fmt.Errorf("built-in script %q: %w", name, err)
+		return nil, fmt.Errorf("agent-session script %s: %w", source, err)
 	}
-	if s.Name != name {
-		return nil, fmt.Errorf("built-in script file %q names itself %q", name, s.Name)
+	if !fromFile && s.Name != source {
+		return nil, fmt.Errorf("built-in script file %q names itself %q", source, s.Name)
 	}
 	return s, nil
+}
+
+// LoadFile reads a script from a YAML file on the worker, typically a
+// ConfigMap mounted by benchmarking/locust/deploy.sh --agentsession-script.
+func LoadFile(path string) (*Script, error) {
+	data, err := readScript(path, true)
+	if err != nil {
+		return nil, err
+	}
+	return decodeScript(data, path, true)
+}
+
+// Load returns the built-in script variant called name.
+func Load(name string) (*Script, error) {
+	data, err := readScript(name, false)
+	if err != nil {
+		return nil, err
+	}
+	return decodeScript(data, name, false)
 }

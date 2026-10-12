@@ -80,7 +80,7 @@ docker info >/dev/null 2>&1 || {
 
 kubectl get deployment atenet-router -n ate-system >/dev/null 2>&1 || {
   echo "ERROR: substrate is not deployed on ${CLUSTER_NAME}. Run:" >&2
-  echo "  hack/install-ate.sh --deploy-ate-system" >&2
+  echo "  hack/install-ate.sh --deploy-ate-system --credential-provider='{\"name\":\"k8s.io\"}'" >&2
   exit 1
 }
 

@@ -107,7 +107,7 @@ layer diffIDs in order — layers shared by N images exist once.
    requested digest (and the per-platform child digest for multi-arch refs).
 
 `prepareOCIDirectory` in atelet then writes `rootfs-overlay.json`
-(`OverlaySpec`) into the bundle next to `config.json`, listing the layer
+(`OverlaySpec`) into the bundle, listing the layer
 directories bottom-first plus any `ExtraDirs` (in-rootfs bind-mount targets,
 e.g. the actor identity mount at `/run/ate`), and creates the empty
 bundle-local `rootfs/`, `upper/`, and `work/` directories.

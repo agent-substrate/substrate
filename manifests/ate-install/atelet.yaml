@@ -147,11 +147,68 @@ spec:
       - key: ate.dev/sandboxClass
         operator: Exists
         effect: NoSchedule
+      # The node snapshot plugin moves external snapshots between this node and
+      # object storage for atelet, over a Unix socket in a pod-local emptyDir.
+      # A native sidecar (restartPolicy: Always) starts before atelet and stops
+      # after it, so uploads still in flight during atelet's drain finish.
+      # atelet starts only once the startup probe sees the plugin serving.
+      initContainers:
+      - name: snapshot-plugin
+        image: ko://github.com/agent-substrate/substrate/cmd/snapshot-plugin
+        restartPolicy: Always
+        args:
+        - node
+        - --socket=/run/snapshot-plugin/node.sock
+        - --root=/var/lib/ate
+        # The plugin listens on a Unix socket, which a gRPC probe cannot
+        # reach, and the image has no shell, so the binary checks itself.
+        startupProbe:
+          exec:
+            command:
+            - /ko-app/snapshot-plugin
+            - healthcheck
+            - --socket=/run/snapshot-plugin/node.sock
+          periodSeconds: 2
+          failureThreshold: 30
+        # Reads and writes snapshot files under the /var/lib/ate hostPath as
+        # root, like atelet; needs no capabilities.
+        securityContext:
+          runAsUser: 0
+          runAsGroup: 0
+          capabilities:
+            drop:
+            - ALL
+        # Same reservation as atelet and no limits: the plugin now does the
+        # zstd work atelet used to, and must not get less CPU for it.
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+        env:
+        # Object storage settings for snapshot transfers. Unset or "gcs"
+        # selects GCS with ambient credentials; "s3" with the AWS_* variables
+        # selects S3 (see the kind overlay). atelet keeps its own copy below
+        # for sandbox asset downloads, which do not go through the plugin.
+        - name: ATE_STORAGE_BACKEND
+          value: "gcs"
+        envFrom:
+        - configMapRef:
+            name: ate-otel-config
+        volumeMounts:
+        - name: run-ateom
+          mountPath: /var/lib/ate
+        - name: snapshot-plugin
+          mountPath: /run/snapshot-plugin
       containers:
       - name: atelet
         image: ko://github.com/agent-substrate/substrate/cmd/atelet
         args:
-        - --gcp-auth-for-image-pulls=true
+        # Pull credentials come from the node's own kubelet credential provider
+        # plugin (mounted read-only below) rather than a cloud SDK compiled into
+        # atelet, so the same atelet authenticates to Artifact Registry on GKE
+        # and to ECR on EKS.
+        - --image-credential-provider-config=/run/image-credential-provider/config.yaml
+        - --image-credential-provider-bin-dir=/run/image-credential-provider/bin
         - --grpc-server-cred-bundle=/run/podidentity.podcert.ate.dev/credential-bundle.pem
         - --client-ca-certs=/run/podidentity.podcert.ate.dev/trust-bundle.pem
         - --ateapi-ca-file=/run/servicedns.podcert.ate.dev/trust-bundle.pem
@@ -159,6 +216,7 @@ spec:
         # terminationGracePeriodSeconds above.
         - --drain-delay=0s
         - --drain-timeout=5m
+        - --snapshot-plugin-socket=/run/snapshot-plugin/node.sock
         # atelet does no mounts, netlink, device, or namespace operations (those
         # live in the ateom worker pod) — it only reads/writes the
         # /var/lib/ate hostPath as root. CAP_DAC_OVERRIDE is for one thing:
@@ -233,6 +291,8 @@ spec:
         volumeMounts:
         - name: run-ateom
           mountPath: /var/lib/ate
+        - name: snapshot-plugin
+          mountPath: /run/snapshot-plugin
         - name: podidentity
           mountPath: /run/podidentity.podcert.ate.dev
         - name: servicedns-ca
@@ -245,7 +305,15 @@ spec:
         - name: host-dev
           mountPath: /host/dev
           readOnly: true
+        - name: image-credential-provider-bin
+          mountPath: /run/image-credential-provider/bin
+          readOnly: true
+        - name: image-credential-provider-config
+          mountPath: /run/image-credential-provider/config.yaml
+          readOnly: true
       volumes:
+      - name: snapshot-plugin
+        emptyDir: {}
       - name: run-ateom
         hostPath:
           path: /var/lib/ate
@@ -271,6 +339,19 @@ spec:
         hostPath:
           path: /dev
           type: Directory
+      # The kubelet's own credential provider bin dir and config; these paths
+      # are GKE's, other node distributions differ. The bin dir also holds the
+      # node's other kubelet-installed binaries -- the plugin contract is
+      # directory-scoped, so a narrower mount would have to hard-code the
+      # provider name and give up being cloud-agnostic.
+      - name: image-credential-provider-bin
+        hostPath:
+          path: /home/kubernetes/bin
+          type: DirectoryOrCreate
+      - name: image-credential-provider-config
+        hostPath:
+          path: /etc/srv/kubernetes/cri_auth_config.yaml
+          type: FileOrCreate
       # Identity for mutual TLS with the ate-apiserver. atelet is not behind a
       # Service, so it uses a podidentity (SPIFFE) cert rather than a servicedns
       # serving cert (which requires DNS SANs it would not have); the

@@ -69,7 +69,7 @@ Maintainers are Reviewers or Contributors who have made significant
 contributions to the project, and are trusted to approve and merge other
 people's PRs.
 
-To become a Reviewer, you can either nominate yourself (via email to the
+To become a Maintainer, you can either nominate yourself (via email to the
 ate-dev mailing list) or be nominated by another Maintainer.
 
 ### Emeritus Maintainers
