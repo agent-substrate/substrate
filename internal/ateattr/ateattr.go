@@ -248,8 +248,11 @@ const (
 // reports the same condition. It is a capacity signal, not a defect. A request
 // that the router sheds from a full parking lot is RouterOutcomeNoCapacity when
 // its resume failed with ResourceExhausted. A 503 without a gRPC cause, such as
-// a denied egress request, a failed policy lookup, or a shed request whose
-// resume failed for a different reason, is RouterOutcomeUnavailable.
+// a failed policy lookup or a shed request whose resume failed for a different
+// reason, is RouterOutcomeUnavailable. RouterOutcomeDenied is a request the
+// router refused by policy (a 403 or PermissionDenied), such as an egress
+// request outside the actor's egress policy. It is a policy decision, not a
+// defect.
 const (
 	RouterOutcomeOK                 = "ok"
 	RouterOutcomeCancelled          = "cancelled"
@@ -260,6 +263,7 @@ const (
 	RouterOutcomeNotFound           = "not_found"
 	RouterOutcomeUnavailable        = "unavailable"
 	RouterOutcomeRateLimited        = "rate_limited"
+	RouterOutcomeDenied             = "denied"
 	RouterOutcomeResumeError        = "resume_error"
 )
 
