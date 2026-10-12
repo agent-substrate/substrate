@@ -28,6 +28,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel/attribute"
+	"google.golang.org/protobuf/proto"
 )
 
 // SuspendActor executes the workflow to suspend a running or paused actor:
@@ -170,15 +171,16 @@ func (w *ActorWorkflow) ensureMarkedSuspending(ctx context.Context, actorRef res
 		// an in-progress snapshot for that generation.
 		gen := toUpdate.Status.LastAssignedGeneration + 1
 		toUpdate.Status.LastAssignedGeneration = gen
-		toUpdate.Status.Snapshots = append(toUpdate.Status.Snapshots,
-			newDurableSnapshot(
-				gen,
-				ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR,
-				preferredFidelity(actorRef.Atespace, actorTemplate),
-				actorTemplate.GetMetadata().GetUid(),
-				uri.String(),
-				ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS,
-			))
+		snap := newDurableSnapshot(
+			gen,
+			ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR,
+			preferredFidelity(actorRef.Atespace, actorTemplate),
+			actorTemplate.GetMetadata().GetUid(),
+			uri.String(),
+			ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS,
+		)
+		snap.SandboxRuntime = proto.CloneOf(toUpdate.GetStatus().GetWorkerAssignment().GetSandboxRuntime())
+		toUpdate.Status.Snapshots = append(toUpdate.Status.Snapshots, snap)
 		return nil
 	})
 	if err != nil {

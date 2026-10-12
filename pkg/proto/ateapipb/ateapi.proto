@@ -295,6 +295,12 @@ message Snapshot {
   // +k8s:listType=map
   // +k8s:listMapKey=durability
   repeated SnapshotStorage storage = 4;
+
+  // sandbox_runtime is the worker sandbox runtime and compatibility version
+  // this snapshot's guest state was captured on.
+  //
+  // +k8s:optional
+  SandboxRuntime sandbox_runtime = 5;
 }
 
 // SnapshotFidelity orders the state layers a snapshot can hold, lowest to
@@ -925,6 +931,12 @@ message WorkerAssignment {
   // +k8s:optional
   // +k8s:minimum=0
   int64 worker_epoch = 8;
+
+  // sandbox_runtime is the sandbox runtime and compatibility version the Actor
+  // was started or restored under on this Worker.
+  //
+  // +k8s:optional
+  SandboxRuntime sandbox_runtime = 9;
 }
 
 // TagStatus is the server-owned state of a Tag.

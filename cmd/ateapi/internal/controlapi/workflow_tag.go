@@ -23,6 +23,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"google.golang.org/protobuf/proto"
 )
 
 // TagActorSnapshot tags the external snapshot held by the suspended actor the
@@ -240,6 +241,15 @@ func (w *ActorWorkflow) ensureTagReserved(ctx context.Context, tagRef resources.
 		return nil, resources.SnapshotURI{}, fmt.Errorf("while building the snapshot URI for tag %s: %w", tagRef, err)
 	}
 	snap, st := findLatestSnapshotStorage(actor.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+	tagSnapshot := newDurableSnapshot(
+		1,
+		ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG,
+		st.GetFidelity(),
+		"",
+		dst.String(),
+		ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS,
+	)
+	tagSnapshot.SandboxRuntime = proto.CloneOf(snap.GetSandboxRuntime())
 	tagToCreate := &ateapipb.Tag{
 		Metadata:    &ateapipb.ResourceMetadata{Atespace: tagRef.Atespace, Name: tagRef.Name},
 		Scope:       tag.GetScope(),
@@ -251,14 +261,7 @@ func (w *ActorWorkflow) ensureTagReserved(ctx context.Context, tagRef resources.
 			// memory under the new one's identity, past the data-only downgrade a resume of
 			// the actor itself would take.
 			ActorTemplateUid: snap.GetActorTemplateUid(),
-			Snapshot: newDurableSnapshot(
-				1,
-				ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG,
-				st.GetFidelity(),
-				"",
-				dst.String(),
-				ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS,
-			),
+			Snapshot:         tagSnapshot,
 		},
 	}
 
@@ -315,6 +318,7 @@ func (w *ActorWorkflow) ensureTagFinalized(ctx context.Context, tag *ateapipb.Ta
 		dst.String(),
 		ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
 	)
+	finalSnapshot.SandboxRuntime = proto.CloneOf(snapshot.GetSandboxRuntime())
 	stored, err := w.store.UpdateTag(ctx, tagRef, store.PreconditionFrom(tag), func(toUpdate *ateapipb.Tag) error {
 		toUpdate.Status.Snapshot = finalSnapshot
 		return nil

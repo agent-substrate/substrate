@@ -30,6 +30,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/volume"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"google.golang.org/protobuf/proto"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -578,6 +579,10 @@ func workerAssignmentFrom(w *ateapipb.Worker) *ateapipb.WorkerAssignment {
 		WorkerPodUid:    w.GetWorkerPodUid(),
 		WorkerPodIps:    slices.Clone(w.GetIps()),
 		NodeName:        w.GetNodeName(),
+		// The runtime the actor is started under. Snapshots taken during
+		// this assignment are stamped with it, so a worker that later
+		// changes its default does not relabel state captured on the old one.
+		SandboxRuntime: proto.CloneOf(w.GetStatus().GetDefaultRuntime()),
 	}
 }
 

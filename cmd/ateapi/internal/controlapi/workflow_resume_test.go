@@ -317,6 +317,15 @@ func TestAssignWorkerAttempt_RetryAfterConflictPicksFreshWorker(t *testing.T) {
 		SandboxClass:    "gvisor",
 		Status:          &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Capacity: &ateapipb.WorkerResources{Actors: 1}},
 	}
+	wantRuntime := &ateapipb.SandboxRuntime{
+		SandboxClass: "gvisor",
+		Version: &ateapipb.VersionedSandboxCompat{
+			SchemaVersion: "v1",
+			Attributes: []*ateapipb.AttributeEntry{
+				{Key: "architecture", Value: "amd64"},
+			},
+		},
+	}
 	fallback := &ateapipb.Worker{
 		Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerUID("fallback-pod")},
 		WorkerNamespace: "worker-ns",
@@ -324,7 +333,11 @@ func TestAssignWorkerAttempt_RetryAfterConflictPicksFreshWorker(t *testing.T) {
 		WorkerPod:       "fallback-pod",
 		WorkerPodUid:    testWorkerUID("fallback-pod"),
 		SandboxClass:    "gvisor",
-		Status:          &ateapipb.WorkerStatus{State: ateapipb.WorkerState_WORKER_STATE_ACTIVE, Capacity: &ateapipb.WorkerResources{Actors: 1}},
+		Status: &ateapipb.WorkerStatus{
+			State:          ateapipb.WorkerState_WORKER_STATE_ACTIVE,
+			Capacity:       &ateapipb.WorkerResources{Actors: 1},
+			DefaultRuntime: wantRuntime,
+		},
 	}
 	for _, w := range []*ateapipb.Worker{contested, fallback} {
 		if _, err := persistence.CreateWorker(ctx, w); err != nil {
@@ -381,6 +394,9 @@ func TestAssignWorkerAttempt_RetryAfterConflictPicksFreshWorker(t *testing.T) {
 	}
 	if got := storedActor.GetStatus().GetWorkerAssignment().GetWorkerPod(); got != "fallback-pod" {
 		t.Errorf("stored actor WorkerAssignment.WorkerPod = %q, want %q", got, "fallback-pod")
+	}
+	if gotRt := storedActor.GetStatus().GetWorkerAssignment().GetSandboxRuntime(); !proto.Equal(gotRt, wantRuntime) {
+		t.Errorf("stored actor WorkerAssignment.SandboxRuntime = %v, want %v", gotRt, wantRuntime)
 	}
 }
 

@@ -175,6 +175,15 @@ func TestEnsurePausedFinalized_RecordsFidelity(t *testing.T) {
 			actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
 
 			workerName := testWorkerUID("worker-pod-1")
+			wantRuntime := &ateapipb.SandboxRuntime{
+				SandboxClass: "gvisor",
+				Version: &ateapipb.VersionedSandboxCompat{
+					SchemaVersion: "v1",
+					Attributes: []*ateapipb.AttributeEntry{
+						{Key: "architecture", Value: "amd64"},
+					},
+				},
+			}
 			created := storetest.MustCreateActor(t, ctx, st, &ateapipb.Actor{
 				Metadata: &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
 				Status: &ateapipb.ActorStatus{
@@ -186,6 +195,7 @@ func TestEnsurePausedFinalized_RecordsFidelity(t *testing.T) {
 						WorkerPool:      "pool1",
 						WorkerPod:       "worker-pod-1",
 						WorkerPodUid:    workerName,
+						SandboxRuntime:  wantRuntime,
 					},
 				},
 			})
@@ -196,7 +206,7 @@ func TestEnsurePausedFinalized_RecordsFidelity(t *testing.T) {
 				WorkerPod:       "worker-pod-1",
 				WorkerPodUid:    workerName,
 				NodeName:        "node1",
-				Status:          &ateapipb.WorkerStatus{},
+				SandboxClass:    "gvisor",
 			}); err != nil {
 				t.Fatalf("CreateWorker: %v", err)
 			}
@@ -220,9 +230,15 @@ func TestEnsurePausedFinalized_RecordsFidelity(t *testing.T) {
 			if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_PAUSED {
 				t.Fatalf("state = %v, want PAUSED", got.GetStatus().GetState())
 			}
-			_, localSt := findLatestSnapshotStorage(got.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_LOCAL, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+			snap, localSt := findLatestSnapshotStorage(got.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_LOCAL, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
 			if scope := localSt.GetFidelity(); scope != tc.want {
 				t.Errorf("local SnapshotStorage.Fidelity = %v, want %v", scope, tc.want)
+			}
+			if gotRt := snap.GetSandboxRuntime(); gotRt.GetSandboxClass() != wantRuntime.GetSandboxClass() ||
+				gotRt.GetVersion().GetSchemaVersion() != wantRuntime.GetVersion().GetSchemaVersion() ||
+				len(gotRt.GetVersion().GetAttributes()) != 1 ||
+				gotRt.GetVersion().GetAttributes()[0].GetValue() != "amd64" {
+				t.Errorf("Snapshot.SandboxRuntime = %v, want %v", gotRt, wantRuntime)
 			}
 			if got.GetStatus().GetAssignedNode() != "node1" {
 				t.Errorf("AssignedNode = %q, want %q", got.GetStatus().GetAssignedNode(), "node1")

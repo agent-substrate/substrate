@@ -45,9 +45,17 @@ func seedTagSource(t *testing.T, ctx context.Context, persistence store.Interfac
 	objects.PutSnapshot(t, uri, objectNames...)
 	actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
 		s.LastAssignedGeneration = 1
-		s.Snapshots = []*ateapipb.Snapshot{
-			newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, template.GetMetadata().GetUid(), uri.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+		snap := newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, template.GetMetadata().GetUid(), uri.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+		snap.SandboxRuntime = &ateapipb.SandboxRuntime{
+			SandboxClass: "gvisor",
+			Version: &ateapipb.VersionedSandboxCompat{
+				SchemaVersion: "v1",
+				Attributes: []*ateapipb.AttributeEntry{
+					{Key: "architecture", Value: "amd64"},
+				},
+			},
 		}
+		s.Snapshots = []*ateapipb.Snapshot{snap}
 	})
 	return actor, uri
 }
@@ -101,6 +109,12 @@ func TestTagActorSnapshot(t *testing.T) {
 	}
 	if got, want := findSnapshotStorage(tag.GetStatus().GetSnapshot(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE).GetFidelity(), ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY; got != want {
 		t.Errorf("fidelity = %v, want the source's %v", got, want)
+	}
+	if gotRt := tag.GetStatus().GetSnapshot().GetSandboxRuntime(); gotRt.GetSandboxClass() != "gvisor" ||
+		gotRt.GetVersion().GetSchemaVersion() != "v1" ||
+		len(gotRt.GetVersion().GetAttributes()) != 1 ||
+		gotRt.GetVersion().GetAttributes()[0].GetValue() != "amd64" {
+		t.Errorf("tag Snapshot.SandboxRuntime = %v, want gvisor/v1/amd64", gotRt)
 	}
 
 	// Both prefixes hold the same objects: the tag copied rather than moved.

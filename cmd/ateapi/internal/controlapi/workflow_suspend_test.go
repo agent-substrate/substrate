@@ -35,9 +35,29 @@ import (
 func TestEnsureMarkedSuspending_SnapshotURI(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
+	workerName := testWorkerUID("worker-pod-1")
+	wantRuntime := &ateapipb.SandboxRuntime{
+		SandboxClass: "gvisor",
+		Version: &ateapipb.VersionedSandboxCompat{
+			SchemaVersion: "v1",
+			Attributes: []*ateapipb.AttributeEntry{
+				{Key: "architecture", Value: "amd64"},
+			},
+		},
+	}
 	actor := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
-		Status:   &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING},
+		Status: &ateapipb.ActorStatus{
+			State: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+			WorkerAssignment: &ateapipb.WorkerAssignment{
+				Worker:          &ateapipb.ObjectRef{Name: workerName},
+				WorkerNamespace: "default",
+				WorkerPool:      "pool1",
+				WorkerPod:       "worker-pod-1",
+				WorkerPodUid:    workerName,
+				SandboxRuntime:  wantRuntime,
+			},
+		},
 	})
 	tmpl := &ateapipb.ActorTemplate{
 		SnapshotConfig: &ateapipb.SnapshotConfig{StorageLocation: "gs://bucket/root/"},
@@ -48,7 +68,7 @@ func TestEnsureMarkedSuspending_SnapshotURI(t *testing.T) {
 		t.Fatalf("ensureMarkedSuspending: %v", err)
 	}
 
-	_, inProgressSt := findLatestSnapshotStorage(marked.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS)
+	snap, inProgressSt := findLatestSnapshotStorage(marked.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS)
 	uri := mustParseSnapshotURI(t, inProgressSt.GetObject().GetSnapshotUri())
 	if !resources.IsValidResourceName(uri.Name()) {
 		t.Errorf("in-progress snapshot name = %q, want a valid resource name", uri.Name())
@@ -56,6 +76,12 @@ func TestEnsureMarkedSuspending_SnapshotURI(t *testing.T) {
 	want := "gs://bucket/root/atespaces/team-a/actors/" + marked.GetMetadata().GetUid() + "/snapshots/" + uri.Name()
 	if uri.String() != want {
 		t.Errorf("snapshot URI = %q, want %q", uri, want)
+	}
+	if gotRt := snap.GetSandboxRuntime(); gotRt.GetSandboxClass() != wantRuntime.GetSandboxClass() ||
+		gotRt.GetVersion().GetSchemaVersion() != wantRuntime.GetVersion().GetSchemaVersion() ||
+		len(gotRt.GetVersion().GetAttributes()) != 1 ||
+		gotRt.GetVersion().GetAttributes()[0].GetValue() != "amd64" {
+		t.Errorf("Snapshot.SandboxRuntime = %v, want %v", gotRt, wantRuntime)
 	}
 }
 
