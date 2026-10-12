@@ -17,6 +17,8 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -1080,5 +1082,46 @@ func TestDeleteEgressPolicyRunner_Run(t *testing.T) {
 				t.Errorf("stdout mismatch (-want +got):\n%s", diff)
 			}
 		})
+	}
+}
+
+func TestEgressPolicyFromManifest_NighthawkEgress(t *testing.T) {
+	t.Parallel()
+	data, err := os.ReadFile(filepath.Join("../../../..", "benchmarking", "nighthawk-egress", "egress-policy.yaml"))
+	if err != nil {
+		t.Fatalf("reading nighthawk-egress policy manifest: %v", err)
+	}
+	got, err := egressPolicyFromManifest(data)
+	if err != nil {
+		t.Fatalf("egressPolicyFromManifest: %v", err)
+	}
+	want := &ateapipb.EgressPolicy{
+		Metadata: &ateapipb.ResourceMetadata{
+			Atespace: "nighthawk",
+			Name:     "default",
+		},
+		Rules: []*ateapipb.EgressRule{
+			{
+				Http: &ateapipb.HTTPRule{
+					Hostnames: []string{"*"},
+					Ports:     &ateapipb.Ports{Numbers: []int32{80}},
+				},
+			},
+			{
+				Https: &ateapipb.HTTPSRule{
+					Hostnames: []string{"*"},
+					Ports:     &ateapipb.Ports{Numbers: []int32{443}},
+				},
+			},
+			{
+				TlsPassthrough: &ateapipb.TLSPassthroughRule{
+					Hostnames: []string{"*"},
+					Ports:     &ateapipb.Ports{Numbers: []int32{8443}},
+				},
+			},
+		},
+	}
+	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
+		t.Errorf("egressPolicyFromManifest mismatch (-want +got):\n%s", diff)
 	}
 }
