@@ -55,6 +55,8 @@ const (
 	maxWebSocketHandshakeBody = 4 << 10
 	muxRequestCount           = 250
 	muxBodySize               = 64
+	// Keep connection around longer than ext_proc cache freshness (10s)
+	postBodyDelay = 15 * time.Second
 )
 
 type fetchRequest struct {
@@ -202,10 +204,130 @@ func newHandler(client *http.Client) http.Handler {
 			TLS:        verifiedTLS,
 		})
 	})
+	mux.HandleFunc("/post", handlePost(postBodyDelay))
 	mux.HandleFunc("/mux", handleMux)
 	mux.HandleFunc("/websocket", handleWebSocket)
 	mux.HandleFunc("/grpc", handleGRPC)
 	return mux
+}
+
+func handlePost(bodyDelay time.Duration) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", http.MethodPost)
+			writeJSON(w, http.StatusMethodNotAllowed, fetchResponse{Error: "method must be POST"})
+			return
+		}
+
+		var input fetchRequest
+		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBody))
+		if err := decoder.Decode(&input); err != nil {
+			writeJSON(w, http.StatusBadRequest, fetchResponse{Error: fmt.Sprintf("invalid JSON payload: %v", err)})
+			return
+		}
+		if err := validateURL(input.URL); err != nil {
+			writeJSON(w, http.StatusBadRequest, fetchResponse{Error: err.Error()})
+			return
+		}
+		parsed, err := url.Parse(input.URL)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, fetchResponse{Error: fmt.Sprintf("invalid URL: %v", err)})
+			return
+		}
+
+		var tlsCfg *tls.Config
+		if parsed.Scheme == "https" {
+			tlsCfg = &tls.Config{
+				ServerName: parsed.Hostname(),
+				MinVersion: tls.VersionTLS12,
+			}
+			if input.RootCA != "" {
+				roots := x509.NewCertPool()
+				if !roots.AppendCertsFromPEM([]byte(input.RootCA)) {
+					writeJSON(w, http.StatusBadRequest, fetchResponse{Error: "rootCA does not contain a valid certificate"})
+					return
+				}
+				tlsCfg.RootCAs = roots
+			}
+		}
+
+		targetAddr := parsed.Host
+		if parsed.Port() == "" {
+			defaultPort := "80"
+			if parsed.Scheme == "https" {
+				defaultPort = "443"
+			}
+			targetAddr = net.JoinHostPort(parsed.Hostname(), defaultPort)
+		}
+
+		ctx, cancel := context.WithTimeout(r.Context(), requestTimeout+bodyDelay)
+		defer cancel()
+
+		var dialer net.Dialer
+		conn, err := dialer.DialContext(ctx, "tcp", targetAddr)
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, fetchResponse{Error: fmt.Sprintf("request failed: %v", err)})
+			return
+		}
+		defer conn.Close()
+
+		if deadline, ok := ctx.Deadline(); ok {
+			if err := conn.SetDeadline(deadline); err != nil {
+				writeJSON(w, http.StatusBadGateway, fetchResponse{Error: fmt.Sprintf("request failed: %v", err)})
+				return
+			}
+		}
+
+		if tlsCfg != nil {
+			tlsConn := tls.Client(conn, tlsCfg)
+			if err := tlsConn.HandshakeContext(ctx); err != nil {
+				writeJSON(w, http.StatusBadGateway, fetchResponse{Error: fmt.Sprintf("request failed: %v", err)})
+				return
+			}
+			conn = tlsConn
+		}
+
+		reqHeader := fmt.Sprintf(
+			"POST %s HTTP/1.1\r\nHost: %s\r\nContent-Length: %d\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n",
+			parsed.RequestURI(), parsed.Host, muxBodySize,
+		)
+		if _, err := io.WriteString(conn, reqHeader); err != nil {
+			writeJSON(w, http.StatusBadGateway, fetchResponse{Error: fmt.Sprintf("request failed: %v", err)})
+			return
+		}
+
+		select {
+		case <-time.After(bodyDelay):
+		case <-ctx.Done():
+			writeJSON(w, http.StatusBadGateway, fetchResponse{Error: fmt.Sprintf("request failed: %v", ctx.Err())})
+			return
+		}
+
+		body := bytes.Repeat([]byte("a"), muxBodySize)
+		if _, err := conn.Write(body); err != nil {
+			writeJSON(w, http.StatusBadGateway, fetchResponse{Error: fmt.Sprintf("request failed: %v", err)})
+			return
+		}
+
+		resp, err := http.ReadResponse(bufio.NewReader(conn), &http.Request{Method: http.MethodPost})
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, fetchResponse{Error: fmt.Sprintf("reading response: %v", err)})
+			return
+		}
+		defer resp.Body.Close()
+
+		respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, fetchResponse{Error: fmt.Sprintf("reading response: %v", err)})
+			return
+		}
+		writeJSON(w, resp.StatusCode, fetchResponse{
+			StatusCode: resp.StatusCode,
+			Body:       string(respBody),
+			Protocol:   resp.Proto,
+			TLS:        tlsCfg != nil,
+		})
+	}
 }
 
 // This handler is for testing mutiplexing of actor `muxRequestCount` connections over H/2

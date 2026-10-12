@@ -28,6 +28,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"google.golang.org/grpc"
@@ -725,4 +726,71 @@ func TestMuxInvalidRequests(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPost(t *testing.T) {
+	headersReceived := make(chan struct{})
+	var bodyBytes atomic.Int32
+	srv, rootCA := startIPTLSServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("method = %s, want POST", r.Method)
+		}
+		if r.URL.Path != "/fetch" {
+			t.Errorf("path = %s, want /fetch", r.URL.Path)
+		}
+		close(headersReceived)
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		bodyBytes.Store(int32(len(body)))
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/post", handlePost(50*time.Millisecond))
+
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		done <- postHandler(t, mux, "/post", fetchRequest{
+			URL:    srv.URL + "/fetch",
+			RootCA: rootCA,
+		})
+	}()
+
+	<-headersReceived
+	if got := bodyBytes.Load(); got != 0 {
+		t.Fatalf("body bytes immediately after headers = %d, want 0", got)
+	}
+
+	rec := <-done
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/post status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if got := int(bodyBytes.Load()); got != muxBodySize {
+		t.Errorf("body bytes after /post completed = %d, want %d", got, muxBodySize)
+	}
+}
+
+func TestPostInvalidRequests(t *testing.T) {
+	handler := newHandler(http.DefaultClient)
+
+	t.Run("method not allowed", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, "/post", nil)
+		handler.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusMethodNotAllowed {
+			t.Errorf("status = %d, want %d", recorder.Code, http.StatusMethodNotAllowed)
+		}
+	})
+	t.Run("invalid rootCA", func(t *testing.T) {
+		recorder := postHandler(t, handler, "/post", fetchRequest{
+			URL:    "https://example.com/fetch",
+			RootCA: "not-a-cert",
+		})
+		if recorder.Code != http.StatusBadRequest {
+			t.Errorf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
+		}
+	})
 }

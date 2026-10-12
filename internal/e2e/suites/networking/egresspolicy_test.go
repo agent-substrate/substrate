@@ -16,6 +16,7 @@ package networking
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -151,6 +152,58 @@ func TestActorEgressHTTPSByHostnamePassthrough(t *testing.T) {
 	status, body = fetchThroughEgressActorUntil(t, ctx, router, actorRef, "https://example.org/", notTransient)
 	if !dataplane.IsEgressPolicyDenied(status, string(body)) {
 		t.Fatalf("fetch of a host outside the policy returned HTTP %d, want an egress-policy denial; body: %s", status, body)
+	}
+}
+
+// This test validates that TLS passthrough connection is denied when policy changes
+// even if there are outstanding connections that were allowed by the previous policy.
+func TestActorEgressPassthroughPolicyRefresh(t *testing.T) {
+	ctx := t.Context()
+	dataplane := e2e.CurrentAtenetDataplane()
+	_, address, rootCA := prepareProtocolOrigin(t, ctx, e2e.ServerPod{
+		Name:       "passthrough-origin",
+		ImportPath: "github.com/agent-substrate/substrate/internal/e2e/fixtures/testserver",
+		Args:       []string{"http"},
+		Port:       443,
+		TargetPort: 8443,
+	}, true)
+
+	_, actorName, _ := createAndResumeActorWithEgress(t, ctx, "egress-passthrough-refresh", e2e.EgressFixture(), e2e.EgressAllowPassthrough("*"))
+	router := mustRouterClient(t, ctx)
+	defer router.Close()
+	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
+	waitForActorRoute(t, ctx, router, actorRef)
+
+	url := "https://" + address + "/fetch"
+	postPayload, err := json.Marshal(map[string]string{"url": url, "rootCA": rootCA})
+	if err != nil {
+		t.Fatalf("marshaling /post request: %v", err)
+	}
+
+	type postResult struct {
+		status int
+		body   []byte
+	}
+	firstResult := make(chan postResult, 1)
+	go func() {
+		status, body := postThroughEgressActorUntil(t, ctx, router, actorRef, "/post", postPayload, notTransient)
+		firstResult <- postResult{status: status, body: body}
+	}()
+
+	// Allow connection to be fully established before changing the policy.
+	time.Sleep(1 * time.Second)
+	e2e.EnsureEgressPolicy(t, ctx, e2e.GetClients(), actorRef.ToObjectRef())
+	// Wait for the policy cached in ext_proc server to expire, so it will fetch the new one.
+	time.Sleep(10 * time.Second)
+
+	status, body := postThroughEgressActorUntil(t, ctx, router, actorRef, "/post", postPayload, notTransient)
+	if !dataplane.IsEgressPolicyDenied(status, string(body)) {
+		t.Fatalf("second POST to %s after policy update returned HTTP %d, want an egress-policy denial; body: %s", url, status, body)
+	}
+
+	first := <-firstResult
+	if first.status != http.StatusOK {
+		t.Fatalf("first POST to %s returned HTTP %d, want 200; body: %s", url, first.status, first.body)
 	}
 }
 
