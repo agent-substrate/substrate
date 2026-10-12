@@ -181,3 +181,50 @@ func assertPrerequisiteResult(t *testing.T, st ateapipb.ActorState, err error, w
 		t.Errorf("state %v: status.Code = %v, want %v", st, got, codes.FailedPrecondition)
 	}
 }
+
+// workerDeletedDuringReleaseStore runs the DeleteWorker workflow's release of
+// an actor right after a finalize step frees the actor's worker. That workflow
+// takes no actor lease, so its crash can land between the step's read of the
+// actor and its write.
+type workerDeletedDuringReleaseStore struct {
+	store.Interface
+}
+
+func (s workerDeletedDuringReleaseStore) ReleaseActorFromWorker(ctx context.Context, workerName, actorUID string) (*ateapipb.Worker, error) {
+	worker, err := s.Interface.GetWorker(ctx, workerName)
+	if err != nil {
+		return nil, err
+	}
+	assignment, err := s.Interface.GetWorkerAssignment(ctx, workerName, actorUID)
+	if err != nil {
+		return nil, err
+	}
+	released, err := s.Interface.ReleaseActorFromWorker(ctx, workerName, actorUID)
+	if err != nil {
+		return nil, err
+	}
+	if err := NewWorkerWorkflow(s.Interface).releaseBoundActor(ctx, worker, assignment); err != nil {
+		return nil, err
+	}
+	return released, nil
+}
+
+// assertConcurrentCrashKept verifies that a finalize step racing
+// workerDeletedDuringReleaseStore failed as Aborted and left the actor CRASHED
+// with the crash DeleteWorker recorded, rather than committing over it.
+func assertConcurrentCrashKept(t *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef, finalizeErr error, wantCrash string) {
+	t.Helper()
+	if got := apierror.Code(finalizeErr); got != codes.Aborted {
+		t.Errorf("finalize error = %v, want code %v", finalizeErr, codes.Aborted)
+	}
+	got, err := st.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("GetActor: %v", err)
+	}
+	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+		t.Errorf("state = %v, want %v", got.GetStatus().GetState(), ateapipb.ActorState_ACTOR_STATE_CRASHED)
+	}
+	if msg := got.GetStatus().GetCrash().GetMessage(); msg != wantCrash {
+		t.Errorf("crash message = %q, want %q", msg, wantCrash)
+	}
+}

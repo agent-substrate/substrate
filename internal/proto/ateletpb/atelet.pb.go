@@ -3061,8 +3061,8 @@ type UploadPausedCheckpointRequest struct {
 	// +k8s:optional
 	// +k8s:format=k8s-short-name
 	ActorTemplateName string `protobuf:"bytes,5,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
-	// The local checkpoint to upload: LocalSnapshot.snapshot_name recorded
-	// at pause time.
+	// The local checkpoint to upload: the uuid of the actor's pause snapshot
+	// (ateapi Snapshot.uuid, validated as a short name there too).
 	//
 	// +k8s:required
 	// +k8s:format=k8s-short-name

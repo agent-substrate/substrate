@@ -903,8 +903,8 @@ message UploadPausedCheckpointRequest {
   // +k8s:format=k8s-short-name
   string actor_template_name = 5;
 
-  // The local checkpoint to upload: LocalSnapshot.snapshot_name recorded
-  // at pause time.
+  // The local checkpoint to upload: the uuid of the actor's pause snapshot
+  // (ateapi Snapshot.uuid, validated as a short name there too).
   //
   // +k8s:required
   // +k8s:format=k8s-short-name

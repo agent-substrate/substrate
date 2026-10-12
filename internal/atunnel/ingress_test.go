@@ -357,6 +357,40 @@ func TestServerRejectsDuplicateOrCommaTargetActorHeaders(t *testing.T) {
 	}
 }
 
+func TestServeHTTPStripsStaleAssignmentHeaderFromActor(t *testing.T) {
+	upstreamURL, err := url.Parse("http://actor.internal:80")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s := newTestServer(t, upstreamURL)
+	actorTransport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		h := make(http.Header)
+		h.Set(StaleAssignmentHeader, "true")
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     h,
+			Body:       http.NoBody,
+		}, nil
+	})
+	if err := s.Activate("team-a", "actor-1", "uid-actor-1", testDial); err != nil {
+		t.Fatal(err)
+	}
+	setActorTransport(t, s, "team-a", "actor-1", actorTransport)
+
+	req := httptest.NewRequest(http.MethodGet, "https://worker/hello", nil)
+	req.Header.Set(atenet.TargetActorHeader, "team-a/actor-1")
+	rec := httptest.NewRecorder()
+	s.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if got := rec.Header().Get(StaleAssignmentHeader); got != "" {
+		t.Errorf("expected %s to be stripped from actor response, got %q", StaleAssignmentHeader, got)
+	}
+}
+
 func TestServeHTTPHonorsTargetPortHeader(t *testing.T) {
 	upstreamURL, err := url.Parse("http://actor.internal:80")
 	if err != nil {
