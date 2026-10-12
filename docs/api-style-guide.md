@@ -173,6 +173,7 @@ Rules:
 - Response **must** be the resource itself — not a `GetActorResponse` wrapper.
 - Request **must** identify the resource with a single `ObjectRef` field (for both atespace-scoped and global-scoped resources).
 - That field **must** be named after the resource's own snake_case type name (e.g. `actor` for `Actor`, `tag` for `Tag`), not a generic name like `name` or `ref`.
+- The request **must** have no other fields. A subresource's Get request carries its parent's `ObjectRef` and a `name` instead (see section #2.4).
 - If the resource does not exist: return `NOT_FOUND`.
 
 ### 3.2 List
@@ -280,6 +281,7 @@ Rules:
   - **Output-only** fields — server-managed, never set by the client (`uid`, `version`, `create_time`, `update_time`, and the whole `status` submessage). Whatever the request carries in them is ignored and the server's own values are kept.
   - **Immutable** fields — caller-set at creation but fixed thereafter (`atespace`, `name`, and resource-specific ones such as an actor's `source_snapshot_tag`). A request that changes one - including by omitting it, which would clear it - **must** return `INVALID_ARGUMENT` naming the field.
 - The embedded resource field **must** be named after the resource's own snake_case type name (e.g. `actor` for `Actor`), not a generic name like `resource` or `body`.
+- The request **must** have no other fields, apart from its parent's `ObjectRef` for a subresource (see section #2.4).
 - Unknown fields in the request are preserved, so a client built against a newer schema does not lose data by round-tripping through an older one.
 - The resource's `atespace` and `name` identify the resource to update; they are not themselves updatable.
 - If the resource does not exist: return `NOT_FOUND`.
@@ -301,8 +303,7 @@ message DeleteActorRequest {
 
 // DeleteOptions carries per-delete controls. Today it holds optional
 // preconditions that guard against acting on a resource that is not in the
-// state the caller expects (see section #7). Future delete-specific controls
-// (e.g. dry-run) should be added here.
+// state the caller expects (see section #7).
 message DeleteOptions {
   // If non-zero, delete only if the server's current version matches.
   int64 version = 1;
@@ -320,6 +321,7 @@ Rules:
 - If the resource does not exist: return `NOT_FOUND`.
 - `version` and `uid` preconditions are honored via a `DeleteOptions` field (see section #7). Both are optional; the zero value skips the check.
 - Further non-resource "control" fields (e.g. dry-run) belong in `DeleteOptions`, not as loose top-level fields on the request.
+- `DeleteOptions` **must** have only the fields defined above. This list may be extended in the future with options such as `dry_run` or `force`.
 
 
 TODO: Delete operations are synchronous, but might revisit this and introduce the concept of soft-deletion to 
@@ -347,6 +349,7 @@ message SuspendActorResponse {
 
 Rules:
 - RPC name **must** be a verb phrase: `{Verb}{Resource}` (e.g., `SuspendActor`, `ResumeActor`).
+- RPC name **must not** start with a standard verb (`Get`, `List`, `Create`, `Update`, `Delete`). A method named with one is a standard method and follows section #3.
 - Request message name **must** match the RPC name with a `Request` suffix.
 - The request **must** identify the target resource using an `ObjectRef` field (for both atespace-scoped and global-scoped resources).
 - Response message name **must** match the RPC name with a `Response` suffix. A custom method **must not** return the resource directly; put it in a field of the response, so method-specific output can be added later (e.g., `ResumeActorResponse.resumed`).
@@ -373,7 +376,7 @@ Rules:
 
 - Enum type names **must** use `PascalCase`, like message names: `ActorState`.
 - Enum values **must** use `UPPER_SNAKE_CASE`.
-- Package-level enum values **must** be prefixed with the enum name. Some languages (including C++) hoist enum values into the parent namespace, which can cause conflicts between enums in the same proto package. (Values of a *nested* enum **must not** be prefixed.)
+- Enum values **must** be prefixed with the enum name, for top-level and nested enums alike. Some languages (including C++) hoist enum values into the parent namespace, which can cause conflicts between enums in the same proto package or message.
 - The zero value **must** be `{ENUM_NAME}_UNSPECIFIED` and mean "not set."
 
 ```proto
