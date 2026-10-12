@@ -33,6 +33,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/objectstore/objectstoretest"
 	"github.com/agent-substrate/substrate/internal/objectstoreplugin/objectstoreplugintest"
 	"github.com/agent-substrate/substrate/internal/resources"
+	"github.com/agent-substrate/substrate/internal/snapshotlayout"
 	"github.com/agent-substrate/substrate/internal/volume"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/client/clientset/versioned"
@@ -487,7 +488,8 @@ func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns st
 		func(dbTemplate *ateapipb.ActorTemplate) error {
 			dbTemplate.Status = &ateapipb.ActorTemplateStatus{
 				GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
-					GoldenTag: resources.TagRefFromTag(tag).ToObjectRef(),
+					GoldenTag:      resources.TagRefFromTag(tag).ToObjectRef(),
+					SnapshotLayout: snapshotlayout.Current,
 				},
 			}
 			return nil

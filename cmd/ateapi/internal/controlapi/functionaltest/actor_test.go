@@ -34,6 +34,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/objectstore"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
+	"github.com/agent-substrate/substrate/internal/snapshotlayout"
 	"github.com/agent-substrate/substrate/internal/volume"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
@@ -3080,7 +3081,8 @@ func createDataFidelityTemplate(t *testing.T, tc *testContext, ns string) *ateap
 		func(dbTemplate *ateapipb.ActorTemplate) error {
 			dbTemplate.Status = &ateapipb.ActorTemplateStatus{
 				GoldenSnapshotStatus: &ateapipb.GoldenSnapshotStatus{
-					GoldenTag: resources.TagRefFromTag(tag).ToObjectRef(),
+					GoldenTag:      resources.TagRefFromTag(tag).ToObjectRef(),
+					SnapshotLayout: snapshotlayout.Current,
 				},
 			}
 			return nil

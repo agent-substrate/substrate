@@ -138,7 +138,8 @@ for etcd.
   Templates with golden snapshot creation disabled do not create one. By
   default an Actor of that template is first restored from this shared
   snapshot when it is available; otherwise it cold-boots. It is always a
-  `MEMORY` capture.
+  `MEMORY` capture. A golden snapshot written in an older snapshot layout than
+  the workers write is captured again.
 
 - **Last Snapshot**: the most recent per-Actor snapshot, written on Suspend and
   used to restore that specific Actor on the next Resume.

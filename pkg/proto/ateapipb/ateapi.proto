@@ -1080,6 +1080,17 @@ message GoldenSnapshotStatus {
   // +k8s:optional
   // +k8s:maxLength=4096
   string error_message = 3;
+
+  // snapshot_layout is the layout the golden tag's snapshot was written in:
+  // the snapshotlayout version the workers wrote when the tag was recorded.
+  // A golden recorded without it, by a release before the field, or in a
+  // layout older than the one the workers write now is taken again in the
+  // current layout; golden_tag names the old one until the new one is
+  // recorded.
+  //
+  // +k8s:optional
+  // +k8s:minimum=1
+  int32 snapshot_layout = 4;
 }
 
 message ActorTemplateStatus {

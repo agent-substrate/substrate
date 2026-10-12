@@ -58,6 +58,11 @@ import (
 // never from the snapshot: kata-agent bind-mounts it by path inside the guest,
 // so a symlink planted there would expose whatever it points at in the guest
 // rootfs to the container.
+//
+// This is the per-volume snapshot layout, snapshotlayout.PerVolume. A change
+// to the files a checkpoint writes, or to how a restore reads them, makes the
+// next layout snapshotlayout.Current, which has every golden snapshot in this
+// one taken again.
 func durableTarFile(volumeName string) (string, error) {
 	if volumeName == "" || volumeName == "." || strings.Contains(volumeName, "/") || !filepath.IsLocal(volumeName) {
 		return "", fmt.Errorf("invalid durable-dir volume name %q", volumeName)

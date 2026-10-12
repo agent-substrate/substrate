@@ -51,13 +51,16 @@ func (w *ActorWorkflow) DeleteActorTemplate(ctx context.Context, templateRef res
 		return nil, apierror.Aborted("concurrent update conflict, please retry")
 	}
 
-	// Both are named after the template's uid, in the reserved atespace.
-	goldenName := tmpl.GetMetadata().GetUid()
-	if err := w.ensureGoldenActorDeleted(ctx, resources.ActorRef{Atespace: resources.GoldenActorAtespace, Name: goldenName}); err != nil {
+	// The golden actor is named after the template's uid, in the reserved
+	// atespace; the tags are the ones the golden flow may have made for it,
+	// named after the uid and, for a golden taken again, the layout.
+	if err := w.ensureGoldenActorDeleted(ctx, resources.ActorRefFromObjectRef(goldenActorRefFor(tmpl))); err != nil {
 		return nil, err
 	}
-	if err := w.ensureGoldenTagDeleted(ctx, resources.TagRef{Atespace: resources.GoldenActorAtespace, Name: goldenName}); err != nil {
-		return nil, err
+	for _, goldenTagRef := range goldenTagRefs(tmpl) {
+		if err := w.ensureGoldenTagDeleted(ctx, goldenTagRef); err != nil {
+			return nil, err
+		}
 	}
 	return w.finalizeTemplateDeleted(ctx, templateRef, precondition)
 }
