@@ -37,11 +37,6 @@ import (
 	"k8s.io/client-go/util/workqueue"
 )
 
-// syncerWorkerCount is the number of goroutines draining the work queue. The
-// queue never hands the same key to two workers concurrently, so per-key
-// ordering is preserved.
-const syncerWorkerCount = 2
-
 // workerPodLabel names the WorkerPool a worker pod belongs to. Its presence is
 // also what marks a pod as a worker pod at all, so it doubles as the selector
 // the pod informer is narrowed by.
@@ -96,13 +91,16 @@ func (k workerKey) logAttrs() []any {
 //
 // Informer event handlers only enqueue keys; worker goroutines reconcile each
 // key against the current informer cache state, requeuing with rate-limited
-// backoff on transient failures such as a lost version precondition.
+// backoff on transient failures such as a lost version precondition. The queue
+// never hands the same key to two workers concurrently, so per-key ordering is
+// preserved regardless of workerCount.
 type WorkerPoolSyncer struct {
 	client             ateapipb.ControlClient
 	pods               corev1client.PodsGetter
 	workerInformer     cache.SharedIndexInformer
 	workerPoolInformer cache.SharedIndexInformer
 	queue              workqueue.TypedRateLimitingInterface[workerKey]
+	workerCount        int
 
 	// Exponential backoff schedule for retrying a failed page of the startup
 	// registered-worker scan. Per-syncer rather than package-level so a test
@@ -113,13 +111,14 @@ type WorkerPoolSyncer struct {
 
 // NewWorkerPoolSyncer creates a new WorkerPoolSyncer. pods is used to delete
 // worker pods that have reached a terminal phase.
-func NewWorkerPoolSyncer(client ateapipb.ControlClient, pods corev1client.PodsGetter, workerInformer, workerPoolInformer cache.SharedIndexInformer) *WorkerPoolSyncer {
+func NewWorkerPoolSyncer(client ateapipb.ControlClient, pods corev1client.PodsGetter, workerInformer, workerPoolInformer cache.SharedIndexInformer, workerCount int) *WorkerPoolSyncer {
 	return &WorkerPoolSyncer{
 		client:             client,
 		pods:               pods,
 		workerInformer:     workerInformer,
 		workerPoolInformer: workerPoolInformer,
 		queue:              workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[workerKey]()),
+		workerCount:        workerCount,
 		listBackoff:        defaultListBackoff,
 		listCap:            defaultListCap,
 	}
@@ -176,7 +175,7 @@ func (s *WorkerPoolSyncer) Start(ctx context.Context) {
 			slog.ErrorContext(ctx, "Syncer: failed to sync informer cache")
 			return
 		}
-		for range syncerWorkerCount {
+		for range s.workerCount {
 			go wait.UntilWithContext(ctx, s.runWorker, time.Second)
 		}
 
@@ -357,7 +356,7 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 			Ips:             podIPs(pod),
 			WorkerPodUid:    string(pod.UID),
 			NodeName:        pod.Spec.NodeName,
-			SandboxClass:    string(pool.Spec.SandboxClass),
+			SandboxClass:    string(pool.Spec.DefaultSandboxClass()),
 			Labels:          pool.GetLabels(),
 			Epoch:           podEpoch(pod),
 			// Capacity is the Worker's to report, not the syncer's to infer
@@ -395,7 +394,7 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 		w.Labels = pool.GetLabels()
 		changed = true
 	}
-	if w.GetSandboxClass() != string(pool.Spec.SandboxClass) {
+	if w.GetSandboxClass() != string(pool.Spec.DefaultSandboxClass()) {
 		// Expected mid-rollout: sandboxClass drives the worker pod's shape, so
 		// editing it on the pool replaces every pod rather than reclassifying
 		// any. This pod predates that edit and is on its way out; its successor
@@ -403,7 +402,7 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 		// back would be rejected, and would misreport this pod's shape to the
 		// scheduler if it were not.
 		slog.DebugContext(ctx, "Syncer: registered worker sandbox class predates its pool",
-			append(key.logAttrs(), slog.String("registered", w.GetSandboxClass()), slog.String("pool", string(pool.Spec.SandboxClass)))...)
+			append(key.logAttrs(), slog.String("registered", w.GetSandboxClass()), slog.String("pool", string(pool.Spec.DefaultSandboxClass())))...)
 	}
 	if ips := podIPs(pod); !slices.Equal(w.GetIps(), ips) {
 		// TODO: I don't think this is possible, but handling this case so we can

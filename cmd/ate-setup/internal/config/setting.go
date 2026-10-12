@@ -123,6 +123,12 @@ var Registry = []Setting{
 		Usage: "Signing algorithm of the key in a new actor JWT pool: ES256 or RS256",
 	},
 	{
+		// The default depends on the namespace, so buildConfig applies it.
+		Key: "actorJWT.issuer", Env: "ACTOR_JWT_ISSUER", Flag: "actor-jwt-issuer", Kind: KindString,
+		Usage: "iss claim of actor JWTs, verbatim. Relying parties fetch <issuer>/.well-known/openid-configuration " +
+			"(default https://idp.<namespace>.svc)",
+	},
+	{
 		// Whitespace-separated, as the environment variable is. The registry
 		// has no list kind, so the value is carried as written and split
 		// where it is used.
@@ -212,6 +218,12 @@ var Registry = []Setting{
 		Usage: "Local PEM file holding an external PostgreSQL server CA",
 	},
 	{
+		Key: "ateapi.postgres.storageClass", Env: "ATE_API_POSTGRES_STORAGE_CLASS",
+		Flag: "ateapi-postgres-storage-class", Kind: KindString,
+		Usage: "StorageClass for the bundled PostgreSQL volume, instead of the cluster default. " +
+			"An existing install must delete the postgres StatefulSet and its claim first",
+	},
+	{
 		Key: "ateapi.postgres.cloudsql.instance", Env: "ATE_API_POSTGRES_CLOUDSQL_INSTANCE",
 		Flag: "ateapi-postgres-cloudsql-instance", Kind: KindString,
 		Usage: "Cloud SQL instance connection name, PROJECT:REGION:INSTANCE",
@@ -236,6 +248,11 @@ var Registry = []Setting{
 		Key: "podcert.workersPerSigner", Env: "ATE_INSTALL_PODCERT_WORKERS_PER_SIGNER",
 		Flag: "podcert-workers-per-signer", Kind: KindInt, Default: "0",
 		Usage: "Worker goroutines per signer in podcertificate-controller",
+	},
+	{
+		Key: "e2e.envoyConcurrency", Env: "E2E_ATE_ENVOY_CONCURRENCY",
+		Flag: "e2e-envoy-concurrency", Kind: KindInt, Default: "0",
+		Usage: "Worker threads (--concurrency) for the Envoy container in atenet-egress",
 	},
 
 	{

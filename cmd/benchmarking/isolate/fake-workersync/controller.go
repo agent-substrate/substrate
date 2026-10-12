@@ -39,6 +39,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/labels"
 )
 
@@ -46,7 +47,7 @@ import (
 type workerClient interface {
 	CreateWorker(ctx context.Context, in *ateapipb.CreateWorkerRequest, opts ...grpc.CallOption) (*ateapipb.Worker, error)
 	DeleteWorker(ctx context.Context, in *ateapipb.DeleteWorkerRequest, opts ...grpc.CallOption) (*ateapipb.Worker, error)
-	DrainWorker(ctx context.Context, in *ateapipb.DrainWorkerRequest, opts ...grpc.CallOption) (*ateapipb.Worker, error)
+	DrainWorker(ctx context.Context, in *ateapipb.DrainWorkerRequest, opts ...grpc.CallOption) (*ateapipb.DrainWorkerResponse, error)
 	GetWorker(ctx context.Context, in *ateapipb.GetWorkerRequest, opts ...grpc.CallOption) (*ateapipb.Worker, error)
 	UpdateWorker(ctx context.Context, in *ateapipb.UpdateWorkerRequest, opts ...grpc.CallOption) (*ateapipb.Worker, error)
 	ListWorkers(ctx context.Context, in *ateapipb.ListWorkersRequest, opts ...grpc.CallOption) (*ateapipb.ListWorkersResponse, error)
@@ -326,7 +327,7 @@ func (c *controller) ensure(ctx context.Context, pod string, d desiredWorker, w 
 			index:        d.index,
 			node:         fakeworker.Node(d.index, nodes),
 			labels:       maps.Clone(d.pool.GetLabels()),
-			sandboxClass: string(d.pool.Spec.SandboxClass),
+			sandboxClass: string(d.pool.Spec.DefaultSandboxClass()),
 		}
 		c.mu.Lock()
 		c.workers[w.name] = w
@@ -378,7 +379,10 @@ func (c *controller) ensure(ctx context.Context, pod string, d desiredWorker, w 
 	if err := c.relay.Report(ctx, addr, &ateapipb.RegisterWorkerRequest{
 		Worker:   &ateapipb.ObjectRef{Name: name},
 		Capacity: fixed,
-		Hardware: hardware.ProbeHost(),
+		DefaultRuntime: &ateapipb.SandboxRuntime{
+			SandboxClass: string(d.pool.Spec.DefaultSandboxClass()),
+			Version:      hostCompat(),
+		},
 	}); err != nil {
 		return fmt.Errorf("while reporting capacity for Worker %s: %w", name, err)
 	}
@@ -386,6 +390,15 @@ func (c *controller) ensure(ctx context.Context, pod string, d desiredWorker, w 
 	w.reported = true
 	c.mu.Unlock()
 	return nil
+}
+
+func hostCompat() *ateapipb.VersionedSandboxCompat {
+	in := hardware.ProbeHost()
+	out := &ateapipb.VersionedSandboxCompat{SchemaVersion: in.GetSchemaVersion()}
+	for _, a := range in.GetAttributes() {
+		out.Attributes = append(out.Attributes, &ateapipb.AttributeEntry{Key: a.GetKey(), Value: a.GetValue()})
+	}
+	return out
 }
 
 // create registers the Worker with the fields the worker syncer would copy
@@ -401,7 +414,7 @@ func (c *controller) create(ctx context.Context, w *fakeWorker, wp *atev1alpha1.
 		WorkerPodUid:    name,
 		NodeName:        w.node,
 		Ips:             []string{fakeworker.IP(w.index)},
-		SandboxClass:    string(wp.Spec.SandboxClass),
+		SandboxClass:    string(wp.Spec.DefaultSandboxClass()),
 		Labels:          maps.Clone(wp.GetLabels()),
 	}})
 	if err != nil && status.Code(err) != codes.AlreadyExists {
@@ -502,7 +515,7 @@ func (c *controller) syncStatus(ctx context.Context, wp *atev1alpha1.WorkerPool,
 		}
 	}
 	c.mu.Unlock()
-	if wp.Status == want {
+	if equality.Semantic.DeepEqual(wp.Status, want) {
 		return nil
 	}
 	updated := wp.DeepCopy()
@@ -558,7 +571,7 @@ func templateOf(wp *atev1alpha1.WorkerPool) (template, error) {
 	if err != nil {
 		return template{}, err
 	}
-	t := template{sandboxClass: string(wp.Spec.SandboxClass), actors: actors}
+	t := template{sandboxClass: string(wp.Spec.DefaultSandboxClass()), actors: actors}
 	if wp.Spec.Template != nil && wp.Spec.Template.Resources != nil {
 		limits := wp.Spec.Template.Resources.Limits
 		t.cpuMilli = limits.Cpu().MilliValue()
@@ -589,7 +602,7 @@ func (t template) capacity(allocatable corev1.ResourceList) *ateapipb.WorkerReso
 // down is replaced too. A held pool's Workers fit, since they are left as
 // they are.
 func fits(w *fakeWorker, wp *atev1alpha1.WorkerPool, allocatable map[string]corev1.ResourceList) bool {
-	if w.sandboxClass != string(wp.Spec.SandboxClass) {
+	if w.sandboxClass != string(wp.Spec.DefaultSandboxClass()) {
 		return false
 	}
 	t, err := templateOf(wp)

@@ -19,6 +19,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -179,11 +181,58 @@ func (e *Env) renderAtenetEgressManifest(ctx context.Context, provider config.Cr
 		return nil, err
 	}
 	raw = e.patchEnvoyDataplaneImage(raw, imageReference)
+	if e.Cfg.EnvoyConcurrency > 0 {
+		raw, err = patchAtenetEgressEnvoyConcurrency(raw, e.Cfg.EnvoyConcurrency)
+		if err != nil {
+			return nil, err
+		}
+	}
 	rendered, err := e.renderBytes(raw)
 	if err != nil {
 		return nil, err
 	}
 	return e.ResolveManifestBytes(ctx, rendered)
+}
+
+// patchAtenetEgressEnvoyConcurrency uses a kustomize JSON6902 patch to append
+// --concurrency <concurrency> to the envoy container's args in the
+// atenet-egress Deployment.
+func patchAtenetEgressEnvoyConcurrency(raw []byte, concurrency int) ([]byte, error) {
+	dir, err := os.MkdirTemp("", "ate-setup-kustomize-")
+	if err != nil {
+		return nil, fmt.Errorf("while creating a scratch kustomization: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+
+	if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), raw, 0o600); err != nil {
+		return nil, fmt.Errorf("while staging a manifest for kustomize: %w", err)
+	}
+	kustomization := fmt.Sprintf(`apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - manifest.yaml
+patches:
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: atenet-egress
+      namespace: ate-system
+    patch: |-
+      - op: test
+        path: /spec/template/spec/containers/0/name
+        value: envoy
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: --concurrency
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: %q
+`, strconv.Itoa(concurrency))
+	if err := os.WriteFile(filepath.Join(dir, "kustomization.yaml"), []byte(kustomization), 0o600); err != nil {
+		return nil, fmt.Errorf("while writing a scratch kustomization: %w", err)
+	}
+	return kustomize.Build(dir)
 }
 
 // patchEnvoyDataplaneImage replaces the ${ENVOY_DATAPLANE_IMAGE} placeholder in

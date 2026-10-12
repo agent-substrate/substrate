@@ -49,7 +49,7 @@ func NewRouterCmd() *cobra.Command {
 
 // bindRouterFlags registers the router's flags on fs, writing into cfg.
 func bindRouterFlags(fs *pflag.FlagSet, cfg *routerConfig) {
-	fs.StringVar((*string)(&cfg.Mode), "mode", string(ModeAll), fmt.Sprintf("Traffic direction this instance serves: %q (also runs the ingress control plane — the xDS server — for an Envoy dataplane), %q (ext_proc only, needs no Kubernetes access), or %q for both. The ext_proc mux refuses a direction this instance was not started to serve rather than falling back to the other one", ModeIngress, ModeEgress, ModeAll))
+	fs.StringVar((*string)(&cfg.Mode), "mode", "", fmt.Sprintf("Required. Traffic direction this instance serves: %q (also runs the ingress control plane — the xDS server — for an Envoy dataplane) or %q (ext_proc only, needs no Kubernetes access). The ext_proc mux refuses the other direction rather than falling back to it", ModeIngress, ModeEgress))
 
 	fs.StringVar(&cfg.LogLevel, "log-level", "info", "Log level: debug, info, warn, error")
 

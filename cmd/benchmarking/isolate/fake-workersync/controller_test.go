@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"reflect"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -25,7 +26,6 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/benchmarking/isolate/internal/fakeworker"
-	"github.com/agent-substrate/substrate/internal/hardware"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc"
@@ -91,7 +91,7 @@ func (f *fakeControl) DeleteWorker(_ context.Context, in *ateapipb.DeleteWorkerR
 	return w, nil
 }
 
-func (f *fakeControl) DrainWorker(_ context.Context, in *ateapipb.DrainWorkerRequest, _ ...grpc.CallOption) (*ateapipb.Worker, error) {
+func (f *fakeControl) DrainWorker(_ context.Context, in *ateapipb.DrainWorkerRequest, _ ...grpc.CallOption) (*ateapipb.DrainWorkerResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.drainErr != nil {
@@ -102,7 +102,7 @@ func (f *fakeControl) DrainWorker(_ context.Context, in *ateapipb.DrainWorkerReq
 		return nil, status.Error(codes.NotFound, "no such Worker")
 	}
 	w.Status.State = ateapipb.WorkerState_WORKER_STATE_DRAINING
-	return w, nil
+	return &ateapipb.DrainWorkerResponse{Worker: w}, nil
 }
 
 func (f *fakeControl) GetWorker(_ context.Context, in *ateapipb.GetWorkerRequest, _ ...grpc.CallOption) (*ateapipb.Worker, error) {
@@ -216,16 +216,16 @@ func (f *fakeControl) uid(pod string) string {
 type fakeRelay struct {
 	control  *fakeControl
 	mu       sync.Mutex
-	reported map[string]*ateapipb.WorkerResources  // by Worker name
-	hardware map[string]*ateapipb.HardwareIdentity // by Worker name
-	via      map[string]string                     // relay address, by Worker name
+	reported map[string]*ateapipb.WorkerResources // by Worker name
+	runtimes map[string]*ateapipb.SandboxRuntime  // default runtime, by Worker name
+	via      map[string]string                    // relay address, by Worker name
 	reject   map[string]codes.Code
 	calls    int
 	live     map[string]string // as last pruned to
 }
 
 func newFakeRelay() *fakeRelay {
-	return &fakeRelay{reported: map[string]*ateapipb.WorkerResources{}, hardware: map[string]*ateapipb.HardwareIdentity{}, via: map[string]string{}, reject: map[string]codes.Code{}}
+	return &fakeRelay{reported: map[string]*ateapipb.WorkerResources{}, runtimes: map[string]*ateapipb.SandboxRuntime{}, via: map[string]string{}, reject: map[string]codes.Code{}}
 }
 
 func (f *fakeRelay) Report(_ context.Context, addr string, req *ateapipb.RegisterWorkerRequest) error {
@@ -237,12 +237,12 @@ func (f *fakeRelay) Report(_ context.Context, addr string, req *ateapipb.Registe
 		return status.Error(code, "rejected")
 	}
 	f.reported[name] = req.GetCapacity()
-	f.hardware[name] = req.GetHardware()
+	f.runtimes[name] = req.GetDefaultRuntime()
 	f.via[name] = addr
 	if f.control != nil {
 		f.control.mu.Lock()
 		if w, ok := f.control.workers[name]; ok {
-			w.Status.Capacity, w.Status.Hardware = req.GetCapacity(), req.GetHardware()
+			w.Status.Capacity, w.Status.DefaultRuntime = req.GetCapacity(), req.GetDefaultRuntime()
 		}
 		f.control.mu.Unlock()
 	}
@@ -324,7 +324,7 @@ func (f *fakeCluster) setReplicas(pool string, n int32) {
 func pool(name string, replicas int32, limits corev1.ResourceList) *atev1alpha1.WorkerPool {
 	wp := &atev1alpha1.WorkerPool{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "benchmark-workloads", Name: name, Labels: map[string]string{"workload": name}},
-		Spec:       atev1alpha1.WorkerPoolSpec{Replicas: replicas, SandboxClass: atev1alpha1.SandboxClass("gvisor")},
+		Spec:       atev1alpha1.WorkerPoolSpec{Replicas: replicas, SandboxClasses: []atev1alpha1.WorkerPoolSandboxClass{{Name: atev1alpha1.SandboxClassGvisor}}},
 	}
 	if limits != nil {
 		wp.Spec.Template = &atev1alpha1.WorkerPoolPodTemplate{Resources: &corev1.ResourceRequirements{Limits: limits}}
@@ -408,10 +408,11 @@ func TestReconcileHonorsReplicasAndLimits(t *testing.T) {
 	if got, want := rel.reported[ctl.uid(name)], wantCapacity(1000, "1500m", "4Gi"); !proto.Equal(got, want) {
 		t.Errorf("reported %v, want %v from the pool's limits", got, want)
 	}
-	if got, want := rel.hardware[ctl.uid(name)], hardware.ProbeHost(); !proto.Equal(got, want) {
-		t.Errorf("hardware %v, want %v, which ate-api-server requires", got, want)
+	wantRuntime := &ateapipb.SandboxRuntime{SandboxClass: "gvisor", Version: hostCompat()}
+	if got := rel.runtimes[ctl.uid(name)]; !proto.Equal(got, wantRuntime) {
+		t.Errorf("default runtime %v, want %v: the pool's class on this host, which ate-api-server requires", got, wantRuntime)
 	}
-	if got, want := cl.statuses["bench"], (atev1alpha1.WorkerPoolStatus{Replicas: 3, ReadyReplicas: 3, Selector: "ate.dev/worker-pool=bench"}); got != want {
+	if got, want := cl.statuses["bench"], (atev1alpha1.WorkerPoolStatus{Replicas: 3, ReadyReplicas: 3, Selector: "ate.dev/worker-pool=bench"}); !reflect.DeepEqual(got, want) {
 		t.Errorf("status = %+v, want %+v", got, want)
 	}
 }
@@ -878,7 +879,9 @@ func TestPoolSandboxClassChangeReplacesWorkers(t *testing.T) {
 	oldBusy := ctl.uid(busy)
 	ctl.assignments[oldBusy] = 1
 
-	cl.editPool("bench", func(wp *atev1alpha1.WorkerPool) { wp.Spec.SandboxClass = "microvm" })
+	cl.editPool("bench", func(wp *atev1alpha1.WorkerPool) {
+		wp.Spec.SandboxClasses = []atev1alpha1.WorkerPoolSandboxClass{{Name: atev1alpha1.SandboxClassMicroVM}}
+	})
 	if err := reconcile(t, c); err != nil {
 		t.Fatalf("reconcile after the class change: %v", err)
 	}
@@ -918,7 +921,7 @@ func TestFailedDrainOfAReplacedWorkerIsNoReplica(t *testing.T) {
 	old := ctl.worker(pod)
 	ctl.drainErr = status.Error(codes.Unavailable, "connection reset")
 	cl.editPool("bench", func(wp *atev1alpha1.WorkerPool) {
-		wp.Spec.SandboxClass = "microvm"
+		wp.Spec.SandboxClasses = []atev1alpha1.WorkerPoolSandboxClass{{Name: atev1alpha1.SandboxClassMicroVM}}
 		wp.Labels = map[string]string{"workload": "v2"}
 	})
 	if err := reconcile(t, c); err == nil {

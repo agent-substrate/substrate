@@ -164,7 +164,7 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettin
 			WithHTTPGet(corev1ac.HTTPGetAction().
 				WithPath("/readyz").
 				WithPort(intstr.FromString("readyz")))).
-		WithSecurityContext(ateomSecurityContext(wp.Spec.SandboxClass)).
+		WithSecurityContext(ateomSecurityContext(wp.Spec.DefaultSandboxClass())).
 		WithEnv(ateomContainerEnv(otel)...).
 		WithVolumeMounts(
 			corev1ac.VolumeMount().
@@ -234,8 +234,8 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettin
 		)
 
 	applyWorkerPoolPodTemplate(podSpecAC, containerAC, wp.Spec.Template)
-	applySandboxClassToleration(podSpecAC, wp.Spec.SandboxClass)
-	maybeApplyMicroVMPodShape(podSpecAC, containerAC, wp.Spec.SandboxClass)
+	applySandboxClassToleration(podSpecAC, wp.Spec.DefaultSandboxClass())
+	maybeApplyMicroVMPodShape(podSpecAC, containerAC, wp.Spec.DefaultSandboxClass())
 	podSpecAC.WithContainers(containerAC)
 	podSpecAC.WithTerminationGracePeriodSeconds(workerTerminationGracePeriodSeconds)
 

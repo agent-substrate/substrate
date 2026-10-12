@@ -30,7 +30,7 @@ containers:
   image: containerstack/alpine-stress:latest
   command: ["stress", "--vm", "1", "--vm-bytes", "1G", "--vm-keep", "--vm-hang", "0"]
 snapshotConfig:
-  onCommit: SNAPSHOT_CONTENT_SCOPE_FULL
+  preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
   storageLocation: gs://${BUCKET_NAME}/benchmark-workloads/usermem/
 sandboxConfig:
   sandboxClass: ${SANDBOX_CLASS_ENUM}

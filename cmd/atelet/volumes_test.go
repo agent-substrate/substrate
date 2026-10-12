@@ -76,7 +76,7 @@ var _ volume.VolumePluginWorkerPlane = (*fakeWorkerPlugin)(nil)
 
 // withTempActorsDir redirects nodepath.ActorsDir at a temp dir for the
 // duration of the test. Every path derived from ActorsDir moves with it,
-// including the ones resetActorDirs and the OCI spec builder compute
+// including the ones resetActorDirs and the bundle preparation compute
 // independently of the volume mount code.
 func withTempActorsDir(t *testing.T) {
 	t.Helper()

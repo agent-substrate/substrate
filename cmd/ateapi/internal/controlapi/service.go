@@ -22,12 +22,12 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/localjwtauthority"
-	"github.com/agent-substrate/substrate/internal/objectstore"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/volume"
 	"github.com/agent-substrate/substrate/internal/volume/csi"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	objectstorev1 "github.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1"
 	storagev1listers "k8s.io/client-go/listers/storage/v1"
 )
 
@@ -49,7 +49,7 @@ type RPCService struct {
 	instruments           *Instruments
 	mu                    sync.RWMutex
 	volumePlugins         map[string]volume.VolumePluginControlPlane
-	objectStore           objectstore.Store
+	snapshotPlugin        objectstorev1.ControlProviderClient
 
 	actorJWTIssuer string
 	actorIDJWTPool localjwtauthority.Pool
@@ -68,9 +68,9 @@ type VolumePluginRegistry interface {
 //
 // instruments may be nil; the record helpers no-op.
 //
-// objectStore may be nil, which leaves external snapshots in place instead of
-// copying and releasing them. Only tests that never reach those steps pass nil;
-// ate-api always builds one.
+// snapshotPlugin may be nil, which leaves external snapshots in place instead
+// of copying and releasing them. Only tests that never reach those steps pass
+// nil; ate-api always builds one.
 //
 // actorJWTIssuer is copied verbatim into the iss claim of every actor JWT.
 func NewRPCService(
@@ -83,7 +83,7 @@ func NewRPCService(
 	instruments *Instruments,
 	egressGatewayAddress string,
 	volumePlugins map[string]volume.VolumePluginControlPlane,
-	objectStore objectstore.Store,
+	snapshotPlugin objectstorev1.ControlProviderClient,
 	actorJWTIssuer string,
 	actorIDJWTPool localjwtauthority.Pool,
 	actorIDCAPool localca.Pool,
@@ -98,12 +98,12 @@ func NewRPCService(
 		dialer:                dialer,
 		instruments:           instruments,
 		volumePlugins:         volumePlugins,
-		objectStore:           objectStore,
+		snapshotPlugin:        snapshotPlugin,
 		actorJWTIssuer:        actorJWTIssuer,
 		actorIDJWTPool:        actorIDJWTPool,
 		actorIDCAPool:         actorIDCAPool,
 	}
-	s.actorWorkflow = NewActorWorkflow(impl, workerCache, dialer, sandboxConfigLister, storageClassLister, instruments, egressGatewayAddress, s, objectStore)
+	s.actorWorkflow = NewActorWorkflow(impl, workerCache, dialer, sandboxConfigLister, storageClassLister, instruments, egressGatewayAddress, s, snapshotPlugin)
 	s.workerWorkflow = NewWorkerWorkflow(impl)
 	return s
 }

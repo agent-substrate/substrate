@@ -16,7 +16,7 @@
 // ateom emits for each checkpoint and restore. Every ateom binary times its
 // own phases, which are implementation details of that runtime; this package
 // holds the shape they share so the records of all ateoms carry the same
-// identity, scope and key layout, and atelet's own record joins to any of them.
+// identity, fidelity and key layout, and atelet's own record joins to any of them.
 package ateomphaselog
 
 import (
@@ -43,7 +43,7 @@ const (
 )
 
 // Phase is one timed step of a snapshot operation. A zero duration means the
-// phase never ran (a Data-scope checkpoint captures no guest) and is skipped
+// phase never ran (a VOLUMES checkpoint captures no guest) and is skipped
 // rather than logged as instant. Name is suffixed onto the duration key; each
 // ateom defines its own names, with ateattr.SnapshotPhaseTotal shared so the
 // two layers' records agree on the denominator.
@@ -52,18 +52,20 @@ type Phase struct {
 	D    time.Duration
 }
 
-// ScopeLogValue maps the ateom wire enum onto the shared scope label values,
-// the same way ateattr.SnapshotScopeValue does for the atelet enum. An
-// unrecognized scope reports as unknown rather than stringified, so no wire
-// value can widen the value set readers key on.
-func ScopeLogValue(scope ateompb.SnapshotScope) string {
-	switch scope {
-	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL:
-		return ateattr.SnapshotScopeFull
-	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
-		return ateattr.SnapshotScopeData
+// FidelityLogValue maps the ateom wire enum onto the shared fidelity label
+// values, the same way ateattr.SnapshotFidelityValue does for the atelet
+// enum. An unrecognized fidelity reports as unknown rather than stringified,
+// so no wire value can widen the value set readers key on.
+func FidelityLogValue(fidelity ateompb.SnapshotFidelity) string {
+	switch fidelity {
+	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
+		return ateattr.SnapshotFidelityVolumes
+	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS:
+		return ateattr.SnapshotFidelityRootfs
+	case ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
+		return ateattr.SnapshotFidelityMemory
 	default:
-		return ateattr.SnapshotScopeUnknown
+		return ateattr.SnapshotFidelityUnknown
 	}
 }
 
@@ -77,9 +79,9 @@ func ScopeLogValue(scope ateompb.SnapshotScope) string {
 // it completed, marked with error.type (the gRPC code, context errors as
 // DeadlineExceeded / Canceled) so a reader can leave it out of a latency
 // distribution. Absence means success.
-func SnapshotPhaseAttrs(a resources.ActorAttribution, scope ateompb.SnapshotScope, durationKey string, err error, phases []Phase) []slog.Attr {
+func SnapshotPhaseAttrs(a resources.ActorAttribution, fidelity ateompb.SnapshotFidelity, durationKey string, err error, phases []Phase) []slog.Attr {
 	attrs := ateattr.ActorLogAttrs(a)
-	attrs = append(attrs, slog.String(string(ateattr.SnapshotScopeKey), ScopeLogValue(scope)))
+	attrs = append(attrs, slog.String(string(ateattr.SnapshotFidelityKey), FidelityLogValue(fidelity)))
 	if err != nil {
 		s, ok := apierror.FromError(err)
 		code := s.Code()
@@ -101,6 +103,6 @@ func SnapshotPhaseAttrs(a resources.ActorAttribution, scope ateompb.SnapshotScop
 }
 
 // LogSnapshotPhases emits the SnapshotPhaseAttrs record under msg.
-func LogSnapshotPhases(ctx context.Context, msg string, a resources.ActorAttribution, scope ateompb.SnapshotScope, durationKey string, err error, phases []Phase) {
-	slog.LogAttrs(ctx, slog.LevelInfo, msg, SnapshotPhaseAttrs(a, scope, durationKey, err, phases)...)
+func LogSnapshotPhases(ctx context.Context, msg string, a resources.ActorAttribution, fidelity ateompb.SnapshotFidelity, durationKey string, err error, phases []Phase) {
+	slog.LogAttrs(ctx, slog.LevelInfo, msg, SnapshotPhaseAttrs(a, fidelity, durationKey, err, phases)...)
 }

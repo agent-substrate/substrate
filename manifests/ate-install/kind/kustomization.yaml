@@ -43,9 +43,9 @@ resources:
 # shared by every component via envFrom -- putting always_on there would pin the
 # router and the control plane to 100% too, undoing their per-component ratios.
 #
-# The storage settings point ate-api at the same rustfs the ./atelet overlay
-# points atelet at: both ends of an external snapshot's life have to agree on
-# where it lives.
+# The storage settings point ate-api-server's snapshot plugin at the same
+# rustfs the ./atelet overlay points atelet's at: both ends of an external
+# snapshot's life have to agree on where it lives.
 patches:
   - patch: |-
       apiVersion: apps/v1
@@ -61,6 +61,9 @@ patches:
               env:
               - name: OTEL_TRACES_SAMPLER
                 value: parentbased_always_on
+            initContainers:
+            - name: snapshot-plugin
+              env:
               - name: ATE_STORAGE_BACKEND
                 value: s3
               - name: AWS_REGION

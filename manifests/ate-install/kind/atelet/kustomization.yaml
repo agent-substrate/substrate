@@ -70,3 +70,22 @@ patches:
               $patch: delete
             - name: image-credential-provider-config
               $patch: delete
+            # The snapshot plugin transfers atelet's external snapshots, so it
+            # needs the same rustfs settings. atelet keeps its own copy for
+            # sandbox assets.
+            initContainers:
+            - name: snapshot-plugin
+              env:
+              - name: ATE_STORAGE_BACKEND
+                value: s3
+              - name: AWS_REGION
+                value: us-east-1
+              - name: AWS_ENDPOINT_URL
+                value: http://rustfs.ate-system.svc:9000
+              - name: AWS_S3_USE_PATH_STYLE
+                value: "true"
+              # TODO: use a secret / identity management
+              - name: AWS_ACCESS_KEY_ID
+                value: rustfsadmin
+              - name: AWS_SECRET_ACCESS_KEY
+                value: rustfsadmin

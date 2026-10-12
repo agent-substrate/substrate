@@ -113,7 +113,7 @@ service Control {
   // Mark a Worker as terminating so the scheduler stops routing new Actors to
   // it. Idempotent; one-way. Deliberately leaves any bound Actor alone.
   // Returns ABORTED if another write lands on the Worker first; retry.
-  rpc DrainWorker(DrainWorkerRequest) returns (Worker) {}
+  rpc DrainWorker(DrainWorkerRequest) returns (DrainWorkerResponse) {}
 
   // List the Actors hosted by a given Worker.
   rpc ListWorkerActorAssignments(ListWorkerActorAssignmentsRequest) returns (ListWorkerActorAssignmentsResponse) {}
@@ -171,54 +171,118 @@ service Control {
   rpc DeleteAtespaceAccessPolicy(DeleteAtespaceAccessPolicyRequest) returns (AccessPolicy) {}
 }
 
-// ExternalSnapshot addresses a snapshot held in object storage.
-message ExternalSnapshot {
+// ObjectSnapshot addresses a snapshot held in object storage.
+message ObjectSnapshot {
   // snapshot_uri addresses the snapshot's prefix in object storage.
   //
   // +k8s:required
   // +k8s:maxLength=2048 # the template's storage_location bound plus the owner prefix and snapshot name
   string snapshot_uri = 1;
+}
 
-  // content_scope is what the snapshot captured.
+// SnapshotOwner indicates the owner of a snapshot.
+enum SnapshotOwner {
+  SNAPSHOT_OWNER_UNSPECIFIED = 0;
+  // Snapshot captured directly from this Actor.
+  SNAPSHOT_OWNER_ACTOR = 1;
+  // Snapshot owned by a Tag (also includes Golden Snapshot)
+  SNAPSHOT_OWNER_TAG = 2;
+  // Keep this in sync with Snapshot.owner's maximum.
+}
+
+// SnapshotStorageStatus indicates the lifecycle stage of a durable snapshot.
+enum SnapshotStorageStatus {
+  SNAPSHOT_STORAGE_STATUS_UNSPECIFIED = 0;
+  // Snapshot creation in durable storage is in progress.
+  SNAPSHOT_STORAGE_STATUS_PENDING = 1;
+  // Snapshot is complete and ready for use in durable storage.
+  SNAPSHOT_STORAGE_STATUS_COMPLETED = 2;
+  // Keep this in sync with SnapshotStorage.status's maximum.
+}
+
+// SnapshotStorage records the durable storage representation of a Snapshot.
+message SnapshotStorage {
+  // status is the lifecycle status of the durable snapshot.
   //
-  // +k8s:optional
+  // +k8s:required
   // +k8s:minimum=1
-  // +k8s:maximum=2 # keep this in sync with the SnapshotContentScope enum
-  SnapshotContentScope content_scope = 2;
+  // +k8s:maximum=2 # keep this in sync with the SnapshotStorageStatus enum
+  SnapshotStorageStatus status = 1;
+
+  // object snapshot is stored in object storage.
+  //
+  // +k8s:required
+  ObjectSnapshot object = 2;
+}
+
+// Snapshot represents one generation of an Actor's or Tag's snapshot state.
+message Snapshot {
+  // uuid is the server-generated unique identifier for this snapshot, passed to
+  // atelet to identify the local checkpoint on disk and used as the snapshot
+  // name in object storage.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-short-name
+  string uuid = 1;
+
+  // generation is the monotonically increasing generation number of this
+  // snapshot, starting at 1.
+  //
+  // +k8s:required
+  // +k8s:minimum=1
+  int32 generation = 2;
+
+  // owner identifies the origin and ownership of this snapshot.
+  //
+  // +k8s:required
+  // +k8s:minimum=1
+  // +k8s:maximum=2 # keep this in sync with the SnapshotOwner enum
+  SnapshotOwner owner = 3;
+
+  // fidelity is what this snapshot holds.
+  //
+  // +k8s:required
+  // +k8s:minimum=1
+  // +k8s:maximum=3 # keep this in sync with the SnapshotFidelity enum
+  SnapshotFidelity fidelity = 4;
 
   // UID of the ActorTemplate whose sandbox this snapshot's guest state was
   // captured from.
   //
   // +k8s:optional
   // +k8s:format=k8s-uuid
-  string actor_template_uid = 3;
-}
+  string actor_template_uid = 5;
 
-// LocalSnapshot records information about a node-local snapshot.
-message LocalSnapshot {
-  // The name of the local checkpoint on the node. Checkpoint names are
-  // server-generated UUIDs, but any resource name is valid here.
+  // locality identifies the node holding this snapshot's files (currently the
+  // Kubernetes node name). Set when a local pause checkpoint completes, and
+  // cleared once the files are deleted from that node; a resume does not
+  // delete them.
   //
   // +k8s:optional
-  // +k8s:format=k8s-short-name
-  string snapshot_name = 1;
+  // +k8s:format=k8s-long-name
+  string locality = 6;
 
-  // Scope the pause checkpoint captured (the template's onCommit at pause
-  // time).
+  // durable_snapshot holds the durable storage representation of this snapshot.
+  // Unset when the snapshot only exists locally.
   //
   // +k8s:optional
-  // +k8s:minimum=1
-  // +k8s:maximum=2 # keep this in sync with the SnapshotContentScope enum
-  SnapshotContentScope content_scope = 2;
+  SnapshotStorage durable_snapshot = 7;
 }
 
-enum SnapshotContentScope {
-  // Unspecified snapshot content scope.
-  SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED = 0;
-  // Captures process memory, root filesystem changes, and durable data.
-  SNAPSHOT_CONTENT_SCOPE_FULL = 1;
-  // Captures durable data without process memory or root filesystem changes.
-  SNAPSHOT_CONTENT_SCOPE_DATA = 2;
+// SnapshotFidelity orders the state layers a snapshot can hold, lowest to
+// highest. Each level includes the ones below it.
+enum SnapshotFidelity {
+  SNAPSHOT_FIDELITY_UNSPECIFIED = 0;
+  // Durable volumes only. The actor resumes by cold-booting its containers
+  // from the OCI image with the volumes restored.
+  SNAPSHOT_FIDELITY_VOLUMES = 1;
+  // Volumes plus the root filesystem changes made since boot. The actor
+  // cold-boots on resume with its rootfs writes back in place. Served by the
+  // micro-VM sandbox class only.
+  SNAPSHOT_FIDELITY_ROOTFS = 2;
+  // Volumes, root filesystem changes, and process memory. The actor resumes
+  // where it left off.
+  SNAPSHOT_FIDELITY_MEMORY = 3;
   // Keep this in sync with the maximums on fields of this type.
 }
 
@@ -316,7 +380,7 @@ message ExternalVolume {
   // +k8s:update=NoModify
   // +k8s:update=NoUnset # set-once; immutable would reject the create
   // ratchet's nil->set when the final object is validated as an update
-  string volume_name = 1;
+  string name = 1;
 
   // The globally unique volume_id returned from the storage system.
   // This will be initially empty during volume creation. Its format is the
@@ -339,7 +403,7 @@ message ExternalVolume {
   // +k8s:required
   // +k8s:maxLength=253
   // +k8s:update=NoModify
-  // +k8s:update=NoUnset # set-once, like volume_name above
+  // +k8s:update=NoUnset # set-once, like name above
   // +k8s:customValidation
   string volume_type = 3;
 
@@ -710,25 +774,6 @@ message ActorStatus {
   // +k8s:update=NoModify # can be set and cleared, but not changed in place
   WorkerAssignment worker_assignment = 2;
 
-  // in_progress_snapshot_uri is the URI in object storage of the durable
-  // snapshot the Actor is currently taking.
-  //
-  // +k8s:optional
-  // +k8s:maxLength=2048 # the template's storage_location bound plus the owner prefix and snapshot name
-  string in_progress_snapshot_uri = 3;
-
-  // external_snapshot is the Actor's current external snapshot.
-  // If the Actor was created from a Tag this is the tag's snapshot, borrowed
-  // until the Actor's first suspend writes one of its own. Otherwise it is
-  // unset until the Actor is first suspended.
-  // +k8s:optional
-  ExternalSnapshot external_snapshot = 4;
-
-  // Node-local state used only while the Actor is paused.
-  //
-  // +k8s:optional
-  LocalSnapshot local_snapshot = 5;
-
   // Volumes attached to the actor. These volumes only live as long as the actor.
   // They are deleted when the actor is deleted. Each template volume
   // appears at most once.
@@ -736,15 +781,8 @@ message ActorStatus {
   // +k8s:optional
   // +k8s:maxItems=32 # matches the template's volumes bound
   // +k8s:listType=map
-  // +k8s:listMapKey=volume_name
-  repeated ExternalVolume actor_volumes = 7;
-
-  // The name of the in-progress node-local checkpoint. Like durable snapshot
-  // names, these are server-generated UUIDs.
-  //
-  // +k8s:optional
-  // +k8s:format=k8s-short-name
-  string in_progress_local_snapshot_name = 8;
+  // +k8s:listMapKey=name
+  repeated ExternalVolume external_volumes = 7;
 
   // crash records why and when the Actor entered CRASHED. It is set with the
   // CRASHED state and cleared when a revert returns the Actor to SUSPENDED.
@@ -759,6 +797,26 @@ message ActorStatus {
   // +k8s:optional
   // +k8s:format=k8s-long-name
   string assigned_node = 10;
+
+  // snapshots holds the Actor's active and in-progress snapshot generations.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=16
+  // +k8s:listType=atomic
+  // +k8s:unique=map
+  // +k8s:listMapKey=generation
+  repeated Snapshot snapshots = 11;
+
+  // last_assigned_generation tracks the last snapshot generation assigned for
+  // this Actor during a Suspend or Pause request.
+  // Even during Revert, the generation is not decreased to keep track of snapshots
+  // that have become stale and need to be cleaned up.
+  //
+  // +k8s:optional
+  // +k8s:alpha(since: "0.0")=+k8s:monotonic # TODO: get rid of alpha prefix
+  // +k8s:minimum=0
+  // +k8s:update=NoUnset
+  int32 last_assigned_generation = 12;
 }
 
 // ActorCrash describes the failure that moved an Actor to CRASHED.
@@ -845,12 +903,16 @@ message WorkerAssignment {
 // The tag is fixed to one external snapshot once its creation completes, so
 // the rest is immutable provenance.
 message TagStatus {
-  // snapshot is the external snapshot this tag points at. Unset while the tag
-  // is still being created, and immutable once set: a tag never moves between
-  // snapshots. A tag is usable only once this is set.
+  // snapshot is the external snapshot this tag points at: the tag's own copy,
+  // stored under a prefix keyed on the tag's UID. It is recorded with its
+  // durable_snapshot PENDING right after the tag is reserved, before anything
+  // is copied, and transitions to COMPLETED once the copy finishes: a tag never
+  // moves between snapshots and is usable only once COMPLETED. Unset until it
+  // is recorded; a tag whose creation failed first never gets one.
   //
   // +k8s:optional
-  ExternalSnapshot snapshot = 1;
+  // +k8s:subfield(durable_snapshot)=+k8s:required
+  Snapshot snapshot = 1;
 
   // UID of the ActorTemplate the snapshot was taken under. Actors can only be
   // seeded from a tag under the same template.
@@ -858,15 +920,6 @@ message TagStatus {
   // +k8s:required
   // +k8s:format=k8s-uuid
   string actor_template_uid = 2;
-
-  // storage_location is the base object-storage URI for this tag's snapshot.
-  // Set by the server from the source actor's template when the tag is created
-  // and immutable thereafter. The full snapshot URI is available in
-  // snapshot.snapshot_uri once tag creation completes.
-  //
-  // +k8s:required
-  // +k8s:maxLength=1024
-  string storage_location = 3;
 }
 
 // Tag is an Atespace-owned, stable name for one external snapshot. The
@@ -1052,26 +1105,54 @@ message SandboxConfig {
 }
 
 // SnapshotConfig selects what actor snapshots capture and where they are
-// stored. A FULL snapshot resumes from its own content. A DATA snapshot
-// resumes by starting the containers afresh from the OCI image, with the
-// durable-dir volumes populated from the snapshot.
+// stored.
 message SnapshotConfig {
-  // on_commit defines the scope of every snapshot taken of an actor, both
-  // the node-local one captured on pause and the one uploaded on suspend.
-  // Defaults to FULL when unset.
-  //
-  // +k8s:required
-  // +k8s:minimum=1
-  // +k8s:maximum=2 # keep this in sync with the SnapshotContentScope enum
-  SnapshotContentScope on_commit = 2;
-
   // storage_location is the base object-storage URI snapshots of actors on
   // this version are stored under. Required.
   //
   // +k8s:required
   // +k8s:maxLength=1024
   // +k8s:customValidation # Validate URI
-  string storage_location = 4;
+  string storage_location = 1;
+
+  // preferred_fidelity is the highest fidelity the system packages when it
+  // snapshots the actor, on pause (node-local) and on suspend (uploaded).
+  // It is a best-effort ceiling, not a guarantee: the system never packages
+  // more than this level, and it may package less when a layer cannot be
+  // captured or is too expensive to capture at the time, for example memory
+  // under host pressure. A process resumed in place on its worker keeps its
+  // memory regardless of this setting. ROOTFS requires
+  // sandbox_config.sandbox_class SANDBOX_CLASS_MICROVM. Defaults to MEMORY
+  // when unset.
+  //
+  // +k8s:required
+  // +k8s:minimum=1
+  // +k8s:maximum=3 # keep this in sync with the SnapshotFidelity enum
+  SnapshotFidelity preferred_fidelity = 2;
+
+  // golden_snapshot_config configures automated golden snapshot creation.
+  // Golden snapshots are enabled when this config is omitted.
+  //
+  // +k8s:optional
+  GoldenSnapshotConfig golden_snapshot_config = 5;
+}
+
+// GoldenSnapshotMode selects whether a template builds a golden snapshot.
+enum GoldenSnapshotMode {
+  GOLDEN_SNAPSHOT_MODE_UNSPECIFIED = 0;
+  GOLDEN_SNAPSHOT_MODE_ENABLED = 1;
+  GOLDEN_SNAPSHOT_MODE_DISABLED = 2;
+}
+
+// GoldenSnapshotConfig controls automated golden snapshot creation for a template.
+message GoldenSnapshotConfig {
+  // mode defaults to ENABLED when unspecified. DISABLED skips creating the
+  // template's golden actor and tag.
+  //
+  // +k8s:required
+  // +k8s:minimum=1
+  // +k8s:maximum=2 # keep this in sync with the GoldenSnapshotMode enum
+  GoldenSnapshotMode mode = 1;
 }
 
 // Container is a single application container of an ActorTemplate.
@@ -1475,7 +1556,7 @@ message CreateActorTemplateRequest {
   // version, timestamps) is ignored, as are the status fields.
   //
   // +k8s:required
-  // +k8s:customValidation # volume_mounts must reference declared volumes
+  // +k8s:customValidation # volume_mounts must reference declared volumes; ROOTFS fidelity requires the micro-VM sandbox class
   ActorTemplate actor_template = 1;
 }
 
@@ -1631,6 +1712,13 @@ message GetActorEgressPolicyRequest {
   // +k8s:required
   // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor = 1;
+
+  // Name of the singleton egress policy. Must be "default".
+  //
+  // +k8s:required
+  // +k8s:format=k8s-short-name
+  // +k8s:customValidation # must be "default"
+  string name = 2;
 }
 
 // CreateActorEgressPolicyRequest creates an egress policy for an Actor.
@@ -1675,10 +1763,17 @@ message DeleteActorEgressPolicyRequest {
   // +k8s:subfield(atespace)=+k8s:required
   ObjectRef actor = 1;
 
+  // Name of the singleton egress policy. Must be "default".
+  //
+  // +k8s:required
+  // +k8s:format=k8s-short-name
+  // +k8s:customValidation # must be "default"
+  string name = 2;
+
   // Optional per-delete preconditions.
   //
   // +k8s:optional
-  DeleteOptions options = 2;
+  DeleteOptions options = 3;
 }
 
 message GetTagRequest {
@@ -1703,7 +1798,7 @@ message MintActorJWTRequest {
   // +k8s:maxItems=16 # guardrail; tokens realistically bind a handful of audiences
   // +k8s:listType=set
   // +k8s:eachVal=+k8s:maxLength=512 # audiences are caller-defined URIs; bound only
-  repeated string audience = 1;
+  repeated string audiences = 1;
 
   // Lifetime of the JWT, in seconds.
   //
@@ -1977,6 +2072,12 @@ message DrainWorkerRequest {
   ObjectRef worker = 1;
 }
 
+// DrainWorkerResponse holds the drained Worker.
+message DrainWorkerResponse {
+  // The worker being drained.
+  Worker worker = 1;
+}
+
 // List actors with pagination. Provides "soft" guarantees: actors may be
 // missed or duplicated if the system state changes during pagination.
 message ListActorsRequest {
@@ -2060,8 +2161,7 @@ message Worker {
   // +k8s:immutable
   repeated string ips = 7;
 
-  // sandbox_class mirrors the WorkerPool's sandboxClass; its values are the
-  // CRD's own vocabulary, so it is only bounded, not validated.
+  // sandbox_class mirrors the WorkerPool's default sandbox class
   //
   // +k8s:optional
   // +k8s:maxLength=63
@@ -2143,23 +2243,83 @@ message WorkerStatus {
   // +k8s:minimum=0
   int64 observed_epoch = 4;
 
-  // Hardware identity reported by the Worker at registration.
+  // Runtime that new and cold-booted actors start under, as reported by the
+  // Worker at registration. Snapshots matching default_runtime can also
+  // warm-boot on this worker.
   //
   // +k8s:optional
-  HardwareIdentity hardware = 5;
+  SandboxRuntime default_runtime = 5;
+
+  // Additional runtimes (excluding default_runtime) that this worker can
+  // restore snapshots from right now.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=32
+  // +k8s:listType=atomic
+  repeated SandboxRuntime restorable_runtimes = 6;
 }
 
-// HardwareIdentity identifies the hardware of a Worker or the Worker a
-// snapshot was captured on.
-message HardwareIdentity {
-  // Key-value pairs describing hardware properties (currently
-  // "architecture"; TODO: add "cpu_vendor", "cpu_model", etc.).
+// SandboxRuntime describes a sandbox runtime and its compatibility identity as
+// reported by a Worker or recorded on a snapshot.
+message SandboxRuntime {
+  // e.g. "gvisor", "microvm"
   //
-  // +k8s:optional
-  // +k8s:maxProperties=32
-  // +k8s:eachKey=+k8s:maxLength=128
-  // +k8s:eachVal=+k8s:maxLength=256
-  map<string, string> attributes = 1;
+  // +k8s:required
+  // +k8s:maxLength=63
+  string sandbox_class = 1;
+
+  // Primary compatibility version stamped onto an actor's snapshot when a
+  // checkpoint is taken on this runtime. Snapshots matching `version`
+  // can warm-boot on this runtime.
+  // TODO: Add support for additional compatibility versions.
+  //
+  // +k8s:required
+  VersionedSandboxCompat version = 2;
+
+  // TODO: Add an informational SandboxConfig version name (e.g. "gvisor-2")
+  // once workers report one.
+}
+
+// VersionedSandboxCompat holds the compatibility schema version and the
+// key-value compatibility attributes for a SandboxRuntime.
+message VersionedSandboxCompat {
+  // Compatibility schema version (e.g. "v1") defining which runtime and
+  // hardware attributes are recorded and how they are computed.
+  //
+  // +k8s:required
+  // +k8s:maxLength=64
+  string schema_version = 1;
+
+  // Key-value compatibility attributes defined by this schema version, covering
+  // both runtime assets (e.g. "gvisor_asset_hash") and effective guest hardware
+  // features after masking (e.g. "architecture", "cpu_features").
+  // Matched against a snapshot under the same schema_version: every attribute
+  // on the snapshot must be present on the worker with an equal value; keys
+  // only the worker has are ignored. Bump schema_version when a key's meaning
+  // changes or older snapshots must no longer match.
+  // Order as sent does not matter: ate-api-server sorts attributes by key
+  // before recording them.
+  //
+  // +k8s:required
+  // +k8s:maxItems=32
+  // +k8s:listType=map
+  // +k8s:listMapKey=key
+  repeated AttributeEntry attributes = 2;
+}
+
+// AttributeEntry is a single key-value compatibility attribute.
+message AttributeEntry {
+  // Attribute name (e.g. "architecture", "cpu_features", "gvisor_asset_hash").
+  //
+  // +k8s:required
+  // +k8s:maxLength=128
+  string key = 1;
+
+  // Attribute value corresponding to key.
+  //
+  // +k8s:required
+  // +k8s:maxLength=256
+  string value = 2;
 }
 
 // WorkerResources represents a set of resources.
@@ -2220,15 +2380,15 @@ message ActorAssignment {
 // authorization: Control is the client-facing API, while these RPCs are served
 // only to an atelet, and only for the Workers on its own node.
 service WorkerService {
-  // RegisterWorker records what a Worker can hold and its hardware identity in
-  // one write, so a Worker is never schedulable without hardware to match
-  // snapshots against. Capacity and hardware are the Worker's to report rather
-  // than the control plane's to infer: they are what the ateom can actually
-  // supply and expose, only its node can observe them, and a fleet may run
-  // mixed ateom versions.
+  // RegisterWorker records what a Worker can hold and its supported sandbox
+  // runtimes in one write, so a Worker is never schedulable without runtime
+  // compatibility information to match snapshots against. Capacity and
+  // runtimes are the Worker's to report rather than the control plane's to
+  // infer: they are what the worker can actually supply and expose, only its
+  // node can observe them, and a fleet may run mixed versions.
   //
   // atelet calls this with its own client certificate, as it does for
-  // MintCert. Idempotent: re-sending the same capacity and hardware is not a
+  // MintCert. Idempotent: re-sending the same capacity and runtimes is not a
   // write.
   rpc RegisterWorker(RegisterWorkerRequest) returns (RegisterWorkerResponse);
 
@@ -2275,11 +2435,20 @@ message RegisterWorkerRequest {
   // +k8s:required
   WorkerResources capacity = 2;
 
-  // Hardware identity reported by the Worker. Like capacity, this replaces
-  // what is recorded on the Worker.
+  // Runtime that new and cold-booted actors start under.
+  // Snapshots matching default_runtime can also warm-boot on this worker.
+  // Like capacity, this replaces what is recorded on the Worker.
   //
   // +k8s:required
-  HardwareIdentity hardware = 3;
+  SandboxRuntime default_runtime = 3;
+
+  // Additional runtimes (excluding default_runtime) that this worker can
+  // restore snapshots from right now.
+  //
+  // +k8s:optional
+  // +k8s:maxItems=32
+  // +k8s:listType=atomic
+  repeated SandboxRuntime restorable_runtimes = 4;
 }
 
 message RegisterWorkerResponse {
@@ -2394,7 +2563,14 @@ message Binding {
 }
 
 // GetGlobalAccessPolicyRequest retrieves the deployment-wide global access policy singleton.
-message GetGlobalAccessPolicyRequest {}
+message GetGlobalAccessPolicyRequest {
+  // Name of the singleton access policy. Must be "default".
+  //
+  // +k8s:required
+  // +k8s:format=k8s-short-name
+  // +k8s:customValidation # must be "default"
+  string name = 1;
+}
 
 // CreateGlobalAccessPolicyRequest creates the deployment-wide global access policy singleton.
 message CreateGlobalAccessPolicyRequest {
@@ -2421,6 +2597,13 @@ message GetAtespaceAccessPolicyRequest {
   // +k8s:required
   // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
   ObjectRef atespace = 1;
+
+  // Name of the singleton access policy. Must be "default".
+  //
+  // +k8s:required
+  // +k8s:format=k8s-short-name
+  // +k8s:customValidation # must be "default"
+  string name = 2;
 }
 
 // CreateAtespaceAccessPolicyRequest creates an access policy for an Atespace.
@@ -2461,8 +2644,15 @@ message DeleteAtespaceAccessPolicyRequest {
   // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
   ObjectRef atespace = 1;
 
+  // Name of the singleton access policy. Must be "default".
+  //
+  // +k8s:required
+  // +k8s:format=k8s-short-name
+  // +k8s:customValidation # must be "default"
+  string name = 2;
+
   // Optional per-delete preconditions.
   //
   // +k8s:optional
-  DeleteOptions options = 2;
+  DeleteOptions options = 3;
 }

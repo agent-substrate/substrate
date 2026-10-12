@@ -150,7 +150,7 @@ type ControlClient interface {
 	// Mark a Worker as terminating so the scheduler stops routing new Actors to
 	// it. Idempotent; one-way. Deliberately leaves any bound Actor alone.
 	// Returns ABORTED if another write lands on the Worker first; retry.
-	DrainWorker(ctx context.Context, in *DrainWorkerRequest, opts ...grpc.CallOption) (*Worker, error)
+	DrainWorker(ctx context.Context, in *DrainWorkerRequest, opts ...grpc.CallOption) (*DrainWorkerResponse, error)
 	// List the Actors hosted by a given Worker.
 	ListWorkerActorAssignments(ctx context.Context, in *ListWorkerActorAssignmentsRequest, opts ...grpc.CallOption) (*ListWorkerActorAssignmentsResponse, error)
 	// List Actors.
@@ -439,9 +439,9 @@ func (c *controlClient) DeleteWorker(ctx context.Context, in *DeleteWorkerReques
 	return out, nil
 }
 
-func (c *controlClient) DrainWorker(ctx context.Context, in *DrainWorkerRequest, opts ...grpc.CallOption) (*Worker, error) {
+func (c *controlClient) DrainWorker(ctx context.Context, in *DrainWorkerRequest, opts ...grpc.CallOption) (*DrainWorkerResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(Worker)
+	out := new(DrainWorkerResponse)
 	err := c.cc.Invoke(ctx, Control_DrainWorker_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -692,7 +692,7 @@ type ControlServer interface {
 	// Mark a Worker as terminating so the scheduler stops routing new Actors to
 	// it. Idempotent; one-way. Deliberately leaves any bound Actor alone.
 	// Returns ABORTED if another write lands on the Worker first; retry.
-	DrainWorker(context.Context, *DrainWorkerRequest) (*Worker, error)
+	DrainWorker(context.Context, *DrainWorkerRequest) (*DrainWorkerResponse, error)
 	// List the Actors hosted by a given Worker.
 	ListWorkerActorAssignments(context.Context, *ListWorkerActorAssignmentsRequest) (*ListWorkerActorAssignmentsResponse, error)
 	// List Actors.
@@ -813,7 +813,7 @@ func (UnimplementedControlServer) UpdateWorker(context.Context, *UpdateWorkerReq
 func (UnimplementedControlServer) DeleteWorker(context.Context, *DeleteWorkerRequest) (*Worker, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteWorker not implemented")
 }
-func (UnimplementedControlServer) DrainWorker(context.Context, *DrainWorkerRequest) (*Worker, error) {
+func (UnimplementedControlServer) DrainWorker(context.Context, *DrainWorkerRequest) (*DrainWorkerResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DrainWorker not implemented")
 }
 func (UnimplementedControlServer) ListWorkerActorAssignments(context.Context, *ListWorkerActorAssignmentsRequest) (*ListWorkerActorAssignmentsResponse, error) {
@@ -1839,15 +1839,15 @@ const (
 // authorization: Control is the client-facing API, while these RPCs are served
 // only to an atelet, and only for the Workers on its own node.
 type WorkerServiceClient interface {
-	// RegisterWorker records what a Worker can hold and its hardware identity in
-	// one write, so a Worker is never schedulable without hardware to match
-	// snapshots against. Capacity and hardware are the Worker's to report rather
-	// than the control plane's to infer: they are what the ateom can actually
-	// supply and expose, only its node can observe them, and a fleet may run
-	// mixed ateom versions.
+	// RegisterWorker records what a Worker can hold and its supported sandbox
+	// runtimes in one write, so a Worker is never schedulable without runtime
+	// compatibility information to match snapshots against. Capacity and
+	// runtimes are the Worker's to report rather than the control plane's to
+	// infer: they are what the worker can actually supply and expose, only its
+	// node can observe them, and a fleet may run mixed versions.
 	//
 	// atelet calls this with its own client certificate, as it does for
-	// MintCert. Idempotent: re-sending the same capacity and hardware is not a
+	// MintCert. Idempotent: re-sending the same capacity and runtimes is not a
 	// write.
 	RegisterWorker(ctx context.Context, in *RegisterWorkerRequest, opts ...grpc.CallOption) (*RegisterWorkerResponse, error)
 	// Create a Substrate-issued SPIFFE certificate that asserts an ateom acting
@@ -1924,15 +1924,15 @@ func (c *workerServiceClient) RequestActorSuspend(ctx context.Context, in *Reque
 // authorization: Control is the client-facing API, while these RPCs are served
 // only to an atelet, and only for the Workers on its own node.
 type WorkerServiceServer interface {
-	// RegisterWorker records what a Worker can hold and its hardware identity in
-	// one write, so a Worker is never schedulable without hardware to match
-	// snapshots against. Capacity and hardware are the Worker's to report rather
-	// than the control plane's to infer: they are what the ateom can actually
-	// supply and expose, only its node can observe them, and a fleet may run
-	// mixed ateom versions.
+	// RegisterWorker records what a Worker can hold and its supported sandbox
+	// runtimes in one write, so a Worker is never schedulable without runtime
+	// compatibility information to match snapshots against. Capacity and
+	// runtimes are the Worker's to report rather than the control plane's to
+	// infer: they are what the worker can actually supply and expose, only its
+	// node can observe them, and a fleet may run mixed versions.
 	//
 	// atelet calls this with its own client certificate, as it does for
-	// MintCert. Idempotent: re-sending the same capacity and hardware is not a
+	// MintCert. Idempotent: re-sending the same capacity and runtimes is not a
 	// write.
 	RegisterWorker(context.Context, *RegisterWorkerRequest) (*RegisterWorkerResponse, error)
 	// Create a Substrate-issued SPIFFE certificate that asserts an ateom acting
