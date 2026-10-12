@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -340,6 +341,38 @@ func TestValidateRunscPathRequiresTheActorsOwnDir(t *testing.T) {
 			}
 			if err != nil && apierror.Code(err) != codes.InvalidArgument {
 				t.Errorf("code = %v, want %v", apierror.Code(err), codes.InvalidArgument)
+			}
+		})
+	}
+}
+
+func TestPreviousCheckpointReusable(t *testing.T) {
+	running := func(context.Context) (string, error) { return "running", nil }
+	stopped := func(context.Context) (string, error) { return "stopped", nil }
+	gone := func(context.Context) (string, error) { return "", errors.New("container does not exist") }
+	withImage := func(size int) string {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "checkpoint.img"), make([]byte, size), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+	tests := []struct {
+		name   string
+		dir    string
+		status func(context.Context) (string, error)
+		want   bool
+	}{
+		{"no image", t.TempDir(), gone, false},
+		{"empty image", withImage(0), gone, false},
+		{"image, container gone", withImage(1), gone, true},
+		{"image, container stopped", withImage(1), stopped, true},
+		{"image, container running", withImage(1), running, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := previousCheckpointReusable(context.Background(), tt.status, tt.dir); got != tt.want {
+				t.Errorf("previousCheckpointReusable() = %v, want %v", got, tt.want)
 			}
 		})
 	}
