@@ -261,6 +261,10 @@ func unpackLayer(ctx context.Context, tarData io.Reader, root *os.Root) (*whiteo
 				return nil, fmt.Errorf("while creating hardlink src=%q target=%q: %w", name, linkname, err)
 			}
 
+		case tar.TypeChar, tar.TypeBlock, tar.TypeFifo:
+			// gVisor supplies /dev; a device node or FIFO in a layer has no use in a volume.
+			slog.WarnContext(ctx, "Skipping device node or FIFO in layer", slog.String("path", name))
+
 		default:
 			tfStr := string([]byte{hdr.Typeflag})
 			slog.ErrorContext(ctx, "Unhandled tar entry typeflag", slog.String("typeflag", tfStr), slog.Any("hdr", hdr))
