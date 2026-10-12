@@ -105,7 +105,7 @@ func main() {
 		if err := os.MkdirAll(*assetStagingDir, 0o700); err != nil {
 			serverboot.Fatal(ctx, "Failed to create --asset-staging-dir", err)
 		}
-		assets, err := objectstoreplugin.NewAssetPlugin(objects, *root, *assetStagingDir, capacity)
+		assets, err := objectstoreplugin.NewAssetPlugin(objects, assetScheme(), *root, *assetStagingDir, capacity)
 		if err != nil {
 			serverboot.Fatal(ctx, "Invalid --asset-staging-dir", err)
 		}
@@ -161,6 +161,15 @@ func newObjectStore(ctx context.Context) (objectstore.Store, error) {
 		return nil, fmt.Errorf("creating GCS client: %w", err)
 	}
 	return objectstore.NewGCS(client), nil
+}
+
+// assetScheme is the asset URI scheme the node plugin serves: its backend's,
+// as objectstorage.NewFromEnv selects it.
+func assetScheme() string {
+	if objectstorage.UsesS3() {
+		return "s3"
+	}
+	return "gs"
 }
 
 // healthcheck dials the plugin at socket and waits up to timeout for it to

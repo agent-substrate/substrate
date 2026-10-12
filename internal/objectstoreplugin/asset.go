@@ -16,6 +16,7 @@ package objectstoreplugin
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"strings"
 
@@ -27,8 +28,10 @@ import (
 )
 
 // AssetPlugin serves AssetProvider on an object storage client. It reads
-// gs:// and s3:// URIs as <bucket>/<object> on the configured backend, the way
-// it reads snapshot URIs.
+// URIs of its backend's scheme (gs:// on GCS, s3:// on S3) as
+// <bucket>/<object>, and returns InvalidArgument for any other scheme without
+// reading anything: a gs:// bucket name read on S3 names someone else's
+// bucket, or none. atelet then reads a gs:// asset anonymously.
 //
 // It downloads each asset into stagingDir, which must be private to the
 // plugin, and copies it to the caller's file only once its size and sha256
@@ -38,25 +41,30 @@ type AssetPlugin struct {
 	objectstorev1.UnimplementedAssetProviderServer
 
 	client objectstorage.ObjectStorage
+	scheme string
 	stager *assetfetch.Stager
 }
 
-// NewAssetPlugin returns an AssetPlugin that writes caller files only below
-// root and stages downloads in stagingDir, which must not be below root,
-// holding at most stagingCapacity bytes there at once.
-func NewAssetPlugin(client objectstorage.ObjectStorage, root, stagingDir string, stagingCapacity int64) (*AssetPlugin, error) {
+// NewAssetPlugin returns an AssetPlugin that serves URIs of scheme ("gs" or
+// "s3", client's backend) from client, writes caller files only below root and
+// stages downloads in stagingDir, which must not be below root, holding at
+// most stagingCapacity bytes there at once.
+func NewAssetPlugin(client objectstorage.ObjectStorage, scheme, root, stagingDir string, stagingCapacity int64) (*AssetPlugin, error) {
+	if scheme != "gs" && scheme != "s3" {
+		return nil, fmt.Errorf("asset URI scheme %q is not gs or s3", scheme)
+	}
 	stager, err := assetfetch.NewStager(root, stagingDir, stagingCapacity)
 	if err != nil {
 		return nil, err
 	}
-	return &AssetPlugin{client: client, stager: stager}, nil
+	return &AssetPlugin{client: client, scheme: scheme, stager: stager}, nil
 }
 
 // FetchAsset downloads the object at asset_uri into the staging directory and,
 // if it is at most max_bytes long and hashes to sha256, copies it into the
 // existing file at write_path (see assetfetch.Stager.Fetch).
 func (p *AssetPlugin) FetchAsset(ctx context.Context, req *objectstorev1.FetchAssetRequest) (*objectstorev1.FetchAssetResponse, error) {
-	bucket, object, err := parseAssetURI(req.GetAssetUri())
+	bucket, object, err := parseAssetURI(req.GetAssetUri(), p.scheme)
 	if err != nil {
 		return nil, err
 	}
@@ -77,16 +85,16 @@ func (p *AssetPlugin) FetchAsset(ctx context.Context, req *objectstorev1.FetchAs
 	return &objectstorev1.FetchAssetResponse{}, nil
 }
 
-// parseAssetURI accepts gs://<bucket>/<object> and s3://<bucket>/<object>
-// whose object name is in canonical form and is not stored under a snapshot
-// location, and returns the bucket and object name.
-func parseAssetURI(uri string) (bucket, object string, err error) {
+// parseAssetURI accepts <scheme>://<bucket>/<object> whose object name is in
+// canonical form and is not stored under a snapshot location, and returns the
+// bucket and object name.
+func parseAssetURI(uri, scheme string) (bucket, object string, err error) {
 	u, err := assetfetch.ParseURI(uri)
 	if err != nil {
 		return "", "", err
 	}
-	if u.Scheme != "gs" && u.Scheme != "s3" {
-		return "", "", status.Errorf(codes.InvalidArgument, "asset URI %s: scheme %q is not served by this plugin (want gs or s3)", uri, u.Scheme)
+	if u.Scheme != scheme {
+		return "", "", status.Errorf(codes.InvalidArgument, "asset URI %s: scheme %q is not served by this plugin, whose storage backend serves %s://", uri, u.Scheme, scheme)
 	}
 	object = strings.TrimPrefix(u.Path, "/")
 	if u.Host == "" || object == "" {

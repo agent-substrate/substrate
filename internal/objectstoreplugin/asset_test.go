@@ -72,14 +72,15 @@ type assetFixture struct {
 	staging string
 }
 
-func newAssetFixture(t *testing.T) *assetFixture {
+// newAssetFixture serves assets of scheme ("gs" or "s3").
+func newAssetFixture(t *testing.T, scheme string) *assetFixture {
 	t.Helper()
 	f := &assetFixture{
 		backend: &countingObjects{memObjects: newMemObjects()},
 		root:    t.TempDir(),
 		staging: t.TempDir(),
 	}
-	plugin, err := NewAssetPlugin(f.backend, f.root, f.staging, 1<<30)
+	plugin, err := NewAssetPlugin(f.backend, scheme, f.root, f.staging, 1<<30)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,8 +160,8 @@ func TestFetchAsset(t *testing.T) {
 	content := []byte("micro-vm kernel bytes")
 
 	t.Run("happy path", func(t *testing.T) {
-		f := newAssetFixture(t)
 		for _, scheme := range []string{"gs", "s3"} {
+			f := newAssetFixture(t, scheme)
 			sum := f.put(t, "kata-assets/vmlinux", content)
 			dst := f.writeFile(t, untouched)
 			_, err := f.client.FetchAsset(t.Context(), &objectstorev1.FetchAssetRequest{
@@ -178,7 +179,7 @@ func TestFetchAsset(t *testing.T) {
 	})
 
 	t.Run("digest mismatch leaves write_path untouched", func(t *testing.T) {
-		f := newAssetFixture(t)
+		f := newAssetFixture(t, "gs")
 		f.put(t, "kata-assets/vmlinux", content)
 		dst := f.writeFile(t, untouched)
 		_, err := f.client.FetchAsset(t.Context(), &objectstorev1.FetchAssetRequest{
@@ -195,7 +196,7 @@ func TestFetchAsset(t *testing.T) {
 	})
 
 	t.Run("max_bytes is enforced", func(t *testing.T) {
-		f := newAssetFixture(t)
+		f := newAssetFixture(t, "gs")
 		sum := f.put(t, "kata-assets/vmlinux", content)
 		dst := f.writeFile(t, untouched)
 		_, err := f.client.FetchAsset(t.Context(), &objectstorev1.FetchAssetRequest{
@@ -211,8 +212,29 @@ func TestFetchAsset(t *testing.T) {
 		f.assertStagingEmpty(t)
 	})
 
+	t.Run("other scheme is refused before reading", func(t *testing.T) {
+		for _, tc := range []struct{ plugin, asset string }{{"s3", "gs"}, {"gs", "s3"}} {
+			f := newAssetFixture(t, tc.plugin)
+			sum := f.put(t, "kata-assets/vmlinux", content)
+			dst := f.writeFile(t, untouched)
+			_, err := f.client.FetchAsset(t.Context(), &objectstorev1.FetchAssetRequest{
+				AssetUri:  tc.asset + "://" + testBucket + "/kata-assets/vmlinux",
+				Sha256:    sum,
+				WritePath: dst,
+				MaxBytes:  1 << 20,
+			})
+			if status.Code(err) != codes.InvalidArgument {
+				t.Errorf("%s plugin: FetchAsset of a %s:// asset = %v, want %s", tc.plugin, tc.asset, err, codes.InvalidArgument)
+			}
+			assertContent(t, dst, untouched)
+			if n := f.backend.gets.Load(); n != 0 {
+				t.Errorf("%s plugin read %d objects for a %s:// asset, want 0", tc.plugin, n, tc.asset)
+			}
+		}
+	})
+
 	t.Run("reported size over max_bytes fails before staging", func(t *testing.T) {
-		f := newAssetFixture(t)
+		f := newAssetFixture(t, "gs")
 		f.backend.reportSize = true
 		sum := f.put(t, "kata-assets/vmlinux", content)
 		dst := f.writeFile(t, untouched)
@@ -231,7 +253,7 @@ func TestFetchAsset(t *testing.T) {
 	})
 
 	t.Run("not found", func(t *testing.T) {
-		f := newAssetFixture(t)
+		f := newAssetFixture(t, "gs")
 		dst := f.writeFile(t, untouched)
 		_, err := f.client.FetchAsset(t.Context(), &objectstorev1.FetchAssetRequest{
 			AssetUri:  "gs://" + testBucket + "/kata-assets/missing",
@@ -247,7 +269,7 @@ func TestFetchAsset(t *testing.T) {
 	})
 
 	t.Run("write_path must be an existing regular file below root", func(t *testing.T) {
-		f := newAssetFixture(t)
+		f := newAssetFixture(t, "gs")
 		sum := f.put(t, "kata-assets/vmlinux", content)
 		outside := filepath.Join(t.TempDir(), "outside")
 		if err := os.WriteFile(outside, []byte(untouched), 0o600); err != nil {
@@ -292,7 +314,7 @@ func TestFetchAsset(t *testing.T) {
 	})
 
 	t.Run("invalid requests", func(t *testing.T) {
-		f := newAssetFixture(t)
+		f := newAssetFixture(t, "gs")
 		sum := f.put(t, "kata-assets/vmlinux", content)
 		dst := f.writeFile(t, untouched)
 		for _, tc := range []struct {
@@ -338,7 +360,13 @@ func TestFetchAsset(t *testing.T) {
 // bucket as the assets, and asks for each with its correct sha256: the plugin
 // must refuse every one before reading it.
 func TestFetchAssetRefusesSnapshots(t *testing.T) {
-	f := newAssetFixture(t)
+	for _, scheme := range []string{"gs", "s3"} {
+		t.Run(scheme, func(t *testing.T) { testFetchAssetRefusesSnapshots(t, scheme) })
+	}
+}
+
+func testFetchAssetRefusesSnapshots(t *testing.T, scheme string) {
+	f := newAssetFixture(t, scheme)
 	snapshotObjects := []string{
 		testPrefix + "/manifest.json",
 		testPrefix + "/checkpoint.img.zstd",
@@ -357,18 +385,16 @@ func TestFetchAssetRefusesSnapshots(t *testing.T) {
 	assetSum := f.put(t, "kata-assets/vmlinux", []byte("kernel"))
 
 	dst := f.writeFile(t, untouched)
-	for _, scheme := range []string{"gs", "s3"} {
-		for _, object := range snapshotObjects {
-			uri := scheme + "://" + testBucket + "/" + object
-			_, err := f.client.FetchAsset(t.Context(), &objectstorev1.FetchAssetRequest{
-				AssetUri:  uri,
-				Sha256:    sums[object],
-				WritePath: dst,
-				MaxBytes:  1 << 20,
-			})
-			if status.Code(err) != codes.PermissionDenied {
-				t.Errorf("FetchAsset(%s) = %v, want %s", uri, err, codes.PermissionDenied)
-			}
+	for _, object := range snapshotObjects {
+		uri := scheme + "://" + testBucket + "/" + object
+		_, err := f.client.FetchAsset(t.Context(), &objectstorev1.FetchAssetRequest{
+			AssetUri:  uri,
+			Sha256:    sums[object],
+			WritePath: dst,
+			MaxBytes:  1 << 20,
+		})
+		if status.Code(err) != codes.PermissionDenied {
+			t.Errorf("FetchAsset(%s) = %v, want %s", uri, err, codes.PermissionDenied)
 		}
 	}
 	assertContent(t, dst, untouched)
@@ -384,7 +410,7 @@ func TestFetchAssetRefusesSnapshots(t *testing.T) {
 			sum = f.put(t, object, []byte("asset "+object))
 		}
 		if _, err := f.client.FetchAsset(t.Context(), &objectstorev1.FetchAssetRequest{
-			AssetUri:  "gs://" + testBucket + "/" + object,
+			AssetUri:  scheme + "://" + testBucket + "/" + object,
 			Sha256:    sum,
 			WritePath: dst,
 			MaxBytes:  1 << 20,
@@ -397,7 +423,7 @@ func TestFetchAssetRefusesSnapshots(t *testing.T) {
 // TestFetchAssetManySegmentURIs sends URIs of up to assetfetch.MaxURIBytes made of
 // as many path segments as fit, which the snapshot check reads in one pass.
 func TestFetchAssetManySegmentURIs(t *testing.T) {
-	f := newAssetFixture(t)
+	f := newAssetFixture(t, "s3")
 	dst := f.writeFile(t, untouched)
 	// pad returns "s3://<bucket>/" + repeated unit + a non-empty filler
 	// segment + suffix, exactly assetfetch.MaxURIBytes long.
@@ -446,16 +472,24 @@ func TestFetchAssetManySegmentURIs(t *testing.T) {
 func TestNewAssetPluginRejectsStagingBelowRoot(t *testing.T) {
 	root := t.TempDir()
 	for _, staging := range []string{root, filepath.Join(root, "staging")} {
-		if _, err := NewAssetPlugin(newMemObjects(), root, staging, 1<<30); err == nil {
+		if _, err := NewAssetPlugin(newMemObjects(), "gs", root, staging, 1<<30); err == nil {
 			t.Errorf("NewAssetPlugin(root=%s, staging=%s) succeeded, want an error", root, staging)
 		}
 	}
 	for _, tc := range []struct{ root, staging string }{{"relative", t.TempDir()}, {root, "relative"}} {
-		if _, err := NewAssetPlugin(newMemObjects(), tc.root, tc.staging, 1<<30); err == nil {
+		if _, err := NewAssetPlugin(newMemObjects(), "gs", tc.root, tc.staging, 1<<30); err == nil {
 			t.Errorf("NewAssetPlugin(root=%s, staging=%s) succeeded, want an error", tc.root, tc.staging)
 		}
 	}
-	if _, err := NewAssetPlugin(newMemObjects(), root, t.TempDir(), 1<<30); err != nil {
+	if _, err := NewAssetPlugin(newMemObjects(), "gs", root, t.TempDir(), 1<<30); err != nil {
 		t.Errorf("NewAssetPlugin with a separate staging directory: %v", err)
+	}
+}
+
+func TestNewAssetPluginRejectsUnknownScheme(t *testing.T) {
+	for _, scheme := range []string{"", "https", "GS"} {
+		if _, err := NewAssetPlugin(newMemObjects(), scheme, t.TempDir(), t.TempDir(), 1<<30); err == nil {
+			t.Errorf("NewAssetPlugin(scheme=%q) succeeded, want an error", scheme)
+		}
 	}
 }
