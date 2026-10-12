@@ -455,3 +455,21 @@ func TestServerUnaryInterceptorLogsNilResponseOnHandlerError(t *testing.T) {
 		t.Errorf("nil response should log as null: %s", log.String())
 	}
 }
+
+func TestServerUnaryInterceptorElidesListResponses(t *testing.T) {
+	log := captureDefaultLog(t)
+
+	resp := &ateapipb.ListActorsResponse{Actors: []*ateapipb.Actor{{Metadata: &ateapipb.ResourceMetadata{Name: "gym-0123456789ab"}}}}
+	got, err := ServerUnaryInterceptor(context.Background(), &ateapipb.ListActorsRequest{Atespace: "nemo-gym"}, &grpc.UnaryServerInfo{FullMethod: "/ateapi.Control/ListActors"}, func(ctx context.Context, req interface{}) (interface{}, error) {
+		return resp, nil
+	})
+	if err != nil {
+		t.Fatalf("ServerUnaryInterceptor failed: %v", err)
+	}
+	if gotLog := log.String(); strings.Contains(gotLog, "gym-0123456789ab") || !strings.Contains(gotLog, "ListActors response elided") {
+		t.Fatalf("list response not elided from the log: %s", gotLog)
+	}
+	if len(got.(*ateapipb.ListActorsResponse).GetActors()) != 1 {
+		t.Fatalf("interceptor mutated the response returned to the client")
+	}
+}
