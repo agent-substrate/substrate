@@ -30,6 +30,12 @@ var ActorsDir = filepath.Join(BasePath, "actors")
 // StaticFilesDir holds things like runsc binaries.
 var StaticFilesDir = filepath.Join(BasePath, "static-files")
 
+// ImageCacheDir is the node-local OCI image layer cache (see
+// internal/imagecache). It lives under BasePath so the cached layer
+// directories are visible at the same path in atelet (which writes them) and
+// in every ateom pod (which mounts them as overlay lowerdirs).
+var ImageCacheDir = filepath.Join(BasePath, "image-cache")
+
 // AteomSupportSocket is the node-local atelet socket used by atunnel
 // to request credentials for the worker's current actor assignment.
 var AteomSupportSocket = filepath.Join(BasePath, "ateom-support.sock")

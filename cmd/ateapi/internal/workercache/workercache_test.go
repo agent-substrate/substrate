@@ -374,14 +374,56 @@ func TestCache_Relist_FailureIsNonFatal(t *testing.T) {
 	}
 }
 
+// LastSynced is the start of the last full list that succeeded: zero before the
+// first, advanced by every later success, and left alone by a failure, so a run
+// of failed relists shows up as a growing age.
+func TestCache_LastSynced(t *testing.T) {
+	fs := newFakeStore(makeWorker("ns", "pod1", 1))
+	c := workercache.New(fs, 10*time.Millisecond)
+	if got := c.LastSynced(); !got.IsZero() {
+		t.Fatalf("LastSynced() before Start = %v, want the zero time", got)
+	}
+
+	before := time.Now()
+	if err := c.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if got := c.LastSynced(); got.Before(before) {
+		t.Fatalf("LastSynced() after Start = %v, want no earlier than %v", got, before)
+	}
+
+	fs.mu.Lock()
+	fs.listErr = errors.New("store unavailable")
+	fs.mu.Unlock()
+	// Relists run one at a time, so once one has failed, any that listed
+	// before the error was set has stored its time.
+	listFails := func() int {
+		fs.mu.Lock()
+		defer fs.mu.Unlock()
+		return fs.listFails
+	}
+	eventually(t, func() bool { return listFails() >= 1 }, time.Second)
+	failing := c.LastSynced()
+	eventually(t, func() bool { return listFails() >= 4 }, time.Second)
+	if got := c.LastSynced(); !got.Equal(failing) {
+		t.Errorf("LastSynced() moved from %v to %v while every relist failed", failing, got)
+	}
+
+	fs.mu.Lock()
+	fs.listErr = nil
+	fs.mu.Unlock()
+	eventually(t, func() bool { return c.LastSynced().After(failing) }, time.Second)
+}
+
 type fakeStore struct {
 	store.Interface
 
-	mu      sync.Mutex
-	workers []*ateapipb.Worker
-	watchCh chan store.WorkerEvent
-	listErr error // if set, ListWorkers returns it
-	closes  int   // number of times a returned watch was Closed
+	mu        sync.Mutex
+	workers   []*ateapipb.Worker
+	watchCh   chan store.WorkerEvent
+	listErr   error // if set, ListWorkers returns it
+	listFails int   // number of ListWorkers calls that returned listErr
+	closes    int   // number of times a returned watch was Closed
 }
 
 func newFakeStore(workers ...*ateapipb.Worker) *fakeStore {
@@ -405,6 +447,7 @@ func (f *fakeStore) ListWorkers(_ context.Context, _ store.ListOptions) (store.L
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.listErr != nil {
+		f.listFails++
 		return store.ListResponse[*ateapipb.Worker]{}, f.listErr
 	}
 	out := make([]*ateapipb.Worker, len(f.workers))

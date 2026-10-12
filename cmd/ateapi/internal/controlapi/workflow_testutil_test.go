@@ -183,9 +183,11 @@ func assertPrerequisiteResult(t *testing.T, st ateapipb.ActorState, err error, w
 }
 
 // workerDeletedDuringReleaseStore runs the DeleteWorker workflow's release of
-// an actor right after a finalize step frees the actor's worker. That workflow
-// takes no actor lease, so its crash can land between the step's read of the
-// actor and its write.
+// an actor right after a finalize step frees the actor's worker, so its crash
+// lands between the step's read of the actor and its write. In production the
+// release takes the actor's lease, which pause and suspend hold through their
+// finalize steps, so it waits for them instead; the steps are called here
+// without the lease, which keeps their own guard against the crash covered.
 type workerDeletedDuringReleaseStore struct {
 	store.Interface
 }
@@ -203,7 +205,7 @@ func (s workerDeletedDuringReleaseStore) ReleaseActorFromWorker(ctx context.Cont
 	if err != nil {
 		return nil, err
 	}
-	if err := NewWorkerWorkflow(s.Interface).releaseBoundActor(ctx, worker, assignment); err != nil {
+	if err := NewWorkerWorkflow(s.Interface, nil).releaseBoundActor(ctx, worker, assignment, &nodeReclaim{}); err != nil {
 		return nil, err
 	}
 	return released, nil
