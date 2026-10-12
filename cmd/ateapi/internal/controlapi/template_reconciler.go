@@ -49,7 +49,6 @@ const (
 	reasonGoldenTagConflict  = "GoldenTagConflict"
 	reasonGoldenActorInvalid = "GoldenActorInvalid"
 	reasonGoldenActorCrashed = "GoldenActorCrashed"
-	reasonUnexpectedState    = "GoldenActorUnexpectedState"
 )
 
 // maxGoldenErrorMessageLen is the maxLength of
@@ -308,14 +307,30 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 				return 0, err
 			}
 		case ateapipb.ActorState_ACTOR_STATE_DELETING, ateapipb.ActorState_ACTOR_STATE_PAUSED, ateapipb.ActorState_ACTOR_STATE_PAUSING, ateapipb.ActorState_ACTOR_STATE_REVERTING:
-			// Nothing in the golden flow deletes, pauses, or reverts the actor before
-			// the snapshot is taken; someone else interfered.
-			return 0, r.fail(ctx, tmpl, reasonUnexpectedState, fmt.Sprintf("golden actor in unexpected state %v", state))
+			// Nothing in the golden flow pauses or reverts the actor before the
+			// snapshot is taken, and a DELETING one is a release of the golden
+			// actor that was cut, by a rollback of ate-api for one. None of them
+			// says anything about the template: release the actor and take the
+			// golden again.
+			return 0, r.releaseStrayGoldenActor(ctx, goldenActorRef, state)
 
 		default:
 			return r.resyncInterval, nil
 		}
 	}
+}
+
+// releaseStrayGoldenActor deletes a golden actor found in a state the golden
+// flow never puts it in before its snapshot, finishing a delete that was cut,
+// so the next pass boots a fresh one; the error it returns requeues the
+// template with the work queue's backoff. Nothing is recorded on the template.
+func (r *ActorTemplateReconciler) releaseStrayGoldenActor(ctx context.Context, goldenActorRef *ateapipb.ObjectRef, state ateapipb.ActorState) error {
+	slog.WarnContext(ctx, "Golden actor in a state the golden flow does not put it in; releasing it and retrying the golden snapshot",
+		slog.String("goldenActor", resources.ActorRefFromObjectRef(goldenActorRef).String()), slog.String("state", state.String()))
+	if _, err := r.control.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: goldenActorRef, AnyState: true}); err != nil && apierror.Code(err) != codes.NotFound {
+		return fmt.Errorf("while deleting golden actor in state %v: %w", state, err)
+	}
+	return fmt.Errorf("golden actor was in state %v, retrying", state)
 }
 
 // suspendActor waits for the golden actor to produce an external snapshot.
