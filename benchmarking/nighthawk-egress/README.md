@@ -20,7 +20,7 @@ flowchart LR
     server["nighthawk-server<br/>(:80, :443, :8443)"]
 
     client -->|"start test"| invoker
-    invoker -->|"HTTP/2 + ate-target-actor: nighthawk/tester"| router
+    invoker -->|"gRPC + ate-target-actor: nighthawk/tester"| router
     router --> atunnel-ingress
     atunnel-ingress --> actor
     actor ==>|"test traffic"| atunnel-egress
@@ -105,14 +105,3 @@ Delete `nighthawk-server` and `traffic-driver-invoker` from `ate-system`:
 ```bash
 ./benchmarking/nighthawk-egress/deploy.sh --delete
 ```
-
-### Components
-
-- **[`nighthawk-server.yaml`](nighthawk-server.yaml)**: In-cluster `nighthawk_test_server` (`Deployment` + `Service` in `ate-system`) acting as the upstream target. Listens for plaintext HTTP on `:80`/`:8080` and TLS on `:443`/`:8443` (with a serving certificate issued by `servicedns.podcert.ate.dev/identity` for `nighthawk-server.ate-system.svc.cluster.local`).
-- **[`traffic-driver-invoker.yaml`](traffic-driver-invoker.yaml)**: In-cluster Envoy proxy (`Deployment` + `Service` in `ate-system`) listening on `:19980`. Injects `ate-target-actor: nighthawk/tester` onto incoming `nighthawk_client` gRPC requests and forwards them to `atenet-router.ate-system.svc.cluster.local:80`.
-- **[`traffic-driver.yaml.tmpl`](traffic-driver.yaml.tmpl)**: `nighthawk` Kubernetes namespace and 1-replica `ateom-gvisor` `WorkerPool` (`traffic-driver`).
-- **[`traffic-driver-template.yaml.tmpl`](traffic-driver-template.yaml.tmpl)**: Substrate `ActorTemplate` (`nighthawk/traffic-driver`) running `nighthawk_service` (`traffic-generator-service`) on port `80` inside a gVisor sandbox, configured to trust the egress gateway's MITM CA bundle (`egress-mitm.ate.dev` and `system-roots.ate.dev`).
-- **[`egress-policy.yaml`](egress-policy.yaml)**: Substrate `EgressPolicy` applied to the `nighthawk/tester` actor allowing:
-  - HTTP to `*` on port `80`
-  - HTTPS (TLS MITM) to `*` on port `443`
-  - TLS passthrough to `*` on port `8443`
