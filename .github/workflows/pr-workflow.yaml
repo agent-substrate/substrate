@@ -252,6 +252,8 @@ jobs:
       run: |
         hack/install-ate-kind.sh --deploy-demo-egress
         hack/install-ate-kind.sh --deploy-demo-egress-microvm
+    - name: Trust local TLS origins in egress gateway
+      run: hack/setup-e2e-egress-tls-kind.sh
     # scale the idle sandbox class's demo pools to zero so each lane has the node
     - name: Focus the node on gVisor
       run: hack/e2e-focus-sandbox-class.sh gvisor

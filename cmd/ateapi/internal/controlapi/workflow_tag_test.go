@@ -46,7 +46,7 @@ func seedTagSource(t *testing.T, ctx context.Context, persistence store.Interfac
 	actor = mustUpdateActorStatus(t, ctx, persistence, actor, func(s *ateapipb.ActorStatus) {
 		s.LastAssignedGeneration = 1
 		s.Snapshots = []*ateapipb.Snapshot{
-			newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, template.GetMetadata().GetUid(), uri.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+			newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, template.GetMetadata().GetUid(), uri.Name(), uri.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
 		}
 	})
 	return actor, uri
@@ -93,13 +93,16 @@ func TestTagActorSnapshot(t *testing.T) {
 	if tagSnapshot == "" || tagSnapshot == actorSnapshot.String() {
 		t.Fatalf("tag snapshot uri = %q, want a copy of its own rather than the actor's %q", tagSnapshot, actorSnapshot)
 	}
-	if want := mustReservedTagSnapshotURI(t, tag).String(); tagSnapshot != want {
+	if want := mustTagSnapshotURI(t, template, "team-a", tag.GetMetadata().GetUid()).String(); tagSnapshot != want {
 		t.Errorf("tag snapshot uri = %q, want UID-based URI %q", tagSnapshot, want)
+	}
+	if got, want := tag.GetStatus().GetSnapshot().GetUuid(), tag.GetMetadata().GetUid(); got != want {
+		t.Errorf("tag snapshot uuid = %q, want the tag's UID %q", got, want)
 	}
 	if got, want := tag.GetStatus().GetActorTemplateUid(), template.GetMetadata().GetUid(); got != want {
 		t.Errorf("actor template uid = %q, want %q", got, want)
 	}
-	if got, want := findSnapshotStorage(tag.GetStatus().GetSnapshot(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE).GetFidelity(), ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY; got != want {
+	if got, want := tag.GetStatus().GetSnapshot().GetFidelity(), ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY; got != want {
 		t.Errorf("fidelity = %v, want the source's %v", got, want)
 	}
 
@@ -203,7 +206,7 @@ func TestTagActorSnapshot_Preconditions(t *testing.T) {
 					}
 					s.LastAssignedGeneration = 1
 					s.Snapshots = []*ateapipb.Snapshot{
-						newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmplUID, uri.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+						newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, tmplUID, uri.Name(), uri.String(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
 					}
 				})
 			}
@@ -294,7 +297,7 @@ func TestTagActorSnapshot_RecreateAfterCopyFailure(t *testing.T) {
 	if recreated == "" || recreated == stranded {
 		t.Fatalf("snapshot uri after the delete = %q, want a fresh prefix rather than the stranded %q", recreated, stranded)
 	}
-	if want := mustReservedTagSnapshotURI(t, tag).String(); recreated != want {
+	if want := mustTagSnapshotURI(t, template, "team-a", tag.GetMetadata().GetUid()).String(); recreated != want {
 		t.Errorf("recreated tag snapshot uri = %q, want UID-based URI %q", recreated, want)
 	}
 	if diff := cmp.Diff([]string{"manifest.json", "memory.zst"}, objects.Snapshot(t, mustParseSnapshotURI(t, recreated))); diff != "" {
@@ -305,6 +308,74 @@ func TestTagActorSnapshot_RecreateAfterCopyFailure(t *testing.T) {
 	_, err = w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"))
 	if code := apierror.Code(err); code != codes.AlreadyExists {
 		t.Errorf("TagActorSnapshot over the finished tag = %v (code %v), want code AlreadyExists", err, code)
+	}
+}
+
+// recordTagErrorStore fails every UpdateTag while err is set, standing in for
+// a create that dies between reserving the tag and recording its snapshot.
+type recordTagErrorStore struct {
+	store.Interface
+	err error
+}
+
+func (s *recordTagErrorStore) UpdateTag(ctx context.Context, tagRef resources.TagRef, precondition store.Precondition, mutate func(*ateapipb.Tag) error) (*ateapipb.Tag, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.Interface.UpdateTag(ctx, tagRef, precondition, mutate)
+}
+
+// TestTagActorSnapshot_RecreateAfterRecordFailure verifies what a create that
+// dies after reserving the name, before recording the snapshot, leaves behind:
+// a tag with no snapshot and nothing in object storage, since nothing is
+// copied until the snapshot's URI is recorded. Deleting that tag frees the
+// name without touching object storage, and the create then runs again.
+func TestTagActorSnapshot_RecreateAfterRecordFailure(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	template := seedSubstrateTemplate(t, ctx, persistence, "sub-tmpl")
+	failing := &recordTagErrorStore{Interface: persistence, err: errors.New("store unavailable")}
+	w, objects := newFinalizeWorkflow(failing)
+
+	actor, _ := seedTagSource(t, ctx, persistence, objects, template, "actor-1", "manifest.json", "memory.zst")
+	actorRef := resources.ActorRefFromActor(actor)
+	tagRef := resources.TagRef{Atespace: "team-a", Name: "v1"}
+
+	if _, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1")); !errors.Is(err, failing.err) {
+		t.Fatalf("TagActorSnapshot = %v, want an error wrapping %v", err, failing.err)
+	}
+	failing.err = nil
+
+	reserved, err := persistence.GetTag(ctx, tagRef)
+	if err != nil {
+		t.Fatalf("GetTag after the failed record: %v", err)
+	}
+	if snap := reserved.GetStatus().GetSnapshot(); snap != nil {
+		t.Errorf("snapshot after the failed record = %v, want unset", snap)
+	}
+	if got := objects.Snapshot(t, mustTagSnapshotURI(t, template, "team-a", reserved.GetMetadata().GetUid())); len(got) != 0 {
+		t.Errorf("the reserved tag's prefix holds %v, want nothing copied before the snapshot is recorded", got)
+	}
+
+	// The delete has nothing to collect, so it must not reach object storage.
+	objects.OnList = func(_, prefix string) error {
+		t.Errorf("DeleteTag listed %q for a tag that records no snapshot", prefix)
+		return nil
+	}
+	if _, err := w.DeleteTag(ctx, tagRef, store.DeletePreconditions{}); err != nil {
+		t.Fatalf("DeleteTag on the reserved tag: %v", err)
+	}
+	objects.OnList = nil
+	if _, err := persistence.GetTag(ctx, tagRef); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("GetTag after the delete = %v, want ErrNotFound", err)
+	}
+
+	tag, err := w.TagActorSnapshot(ctx, tagToCreate(actorRef, "v1"))
+	if err != nil {
+		t.Fatalf("TagActorSnapshot after the delete: %v", err)
+	}
+	if got, want := tagDurableSnapshotURI(tag, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED), mustTagSnapshotURI(t, template, "team-a", tag.GetMetadata().GetUid()).String(); got != want {
+		t.Errorf("recreated tag snapshot uri = %q, want UID-based URI %q", got, want)
 	}
 }
 

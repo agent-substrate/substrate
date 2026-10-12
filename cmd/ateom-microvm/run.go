@@ -312,6 +312,11 @@ type actorBootParams struct {
 	// memory); a container's own cgroup limit comes from its declared resources.
 	// Zero fields keep the kata defaults.
 	size sizing.SandboxSize
+	// rootfsUpperSnapshotDir, when set, names a snapshot directory holding the
+	// per-container rootfs upper tars; the cold boot re-materializes the uppers
+	// from it instead of starting from a pristine dir. A ROOTFS restore sets it
+	// to the restore dir.
+	rootfsUpperSnapshotDir string
 }
 
 func (p actorBootParams) attribution() resources.ActorAttribution {
@@ -416,6 +421,29 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 		}
 	}()
 
+	// Clean stale per-sandbox state before anything touches the host upper dir.
+	// Also  create the runtime dir for the sockets.
+
+	s.cleanupSandboxState(ctx, actorUID)
+	if err := os.MkdirAll(kata.VMDir(actorUID), 0o700); err != nil {
+		return fmt.Errorf("while creating VM dir: %w", err)
+	}
+
+	// Stage the host upper dir in the background (pristine, or from a ROOTFS
+	// snapshot's tars) and join it right before the overlay mounts need it,
+	// hiding it behind the bundle preparation below. Every return before the
+	// join must drain the goroutine, or a retry's staging would race it.
+	upperDone := make(chan error, 1)
+	upperJoined := false
+	go func() {
+		upperDone <- stageRootfsUpper(p.actorDirs, p.rootfsUpperSnapshotDir, containerNames(containers))
+	}()
+	defer func() {
+		if !upperJoined {
+			<-upperDone
+		}
+	}()
+
 	// Guest sizing + agent kernel params.
 	memMiB, vcpus, kparams := s.guestConfig()
 
@@ -456,15 +484,9 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 		return err
 	}
 
-	// Clean stale per-sandbox state + create the runtime dir for the sockets.
-	s.cleanupSandboxState(ctx, actorUID)
-	if err := os.MkdirAll(kata.VMDir(actorUID), 0o700); err != nil {
-		return fmt.Errorf("while creating VM dir: %w", err)
-	}
-
-	// A cold boot starts from the bare image: give it a pristine host upper dir
-	// (atelet's actor-dir reset does not know this directory; see rootfsupper.go).
-	if err := resetRootfsUpperDir(p.actorDirs); err != nil {
+	// The overlay mounts below need the upper dir in its final state.
+	upperJoined = true
+	if err := <-upperDone; err != nil {
 		return err
 	}
 
@@ -666,8 +688,7 @@ func (s *AteomService) buildActorContainers(actorUID string, actorDirs *ateompb.
 // CSI volumes, and system-info volumes (if any) under SharedDir(id)/durable,
 // SharedDir(id)/csi, and SharedDir(id)/system-info,
 // then starts the ONE virtiofsd that serves them all. Must run AFTER CleanupSandboxState (which
-// wipes SharedDir) and resetRootfsUpperDir/untarRootfsUpper (which own the
-// upper contents). The returned virtiofsd cmd outlives this call (CH
+// wipes SharedDir) and stageRootfsUpper (which owns the upper contents). The returned virtiofsd cmd outlives this call (CH
 // demand-pages from it); the caller owns it (tracked on runningActor, killed
 // in teardownActor).
 func (s *AteomService) stageMergedRootfs(ctx context.Context, rr resolvedRuntime, id string, actorDirs *ateompb.ActorDirs, ctrs []actorContainer, containers []*ateompb.Container, procAttr *syscall.SysProcAttr) (*exec.Cmd, error) {

@@ -46,8 +46,8 @@ const (
 	// (currently DurableDir-typed volumes). Memory and the rest of rootfs are
 	// excluded.
 	SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES SnapshotFidelity = 1
-	// Volumes plus the root filesystem changes made since boot. No runtime
-	// captures this yet; requests carrying it are rejected.
+	// Volumes plus the root filesystem changes made since boot. Served by the
+	// micro-VM runtime only; other runtimes reject requests carrying it.
 	SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS SnapshotFidelity = 2
 	// Capture process memory plus the full filesystem delta on top of the OCI
 	// image (including any attached DurableDir volumes).

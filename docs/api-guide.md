@@ -12,7 +12,7 @@ The `WorkerPool` defines the pool of physical "warm" compute capacity. It manage
 | :--- | :--- | :--- |
 | `replicas` | `int32` | **Required.** Number of physical standby pods to maintain in the cluster. |
 | `workerImage` | `string` | **Required.** The container image for the `ateom` herder process (e.g. `ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor`). |
-| `sandboxClasses` | `[]WorkerPoolSandboxClass` | **Required.** The sandbox runtime families the pool runs; exactly one entry today. Each entry has `name` (**required**, `gvisor` or `microvm`), which drives the worker pod shape (e.g. KVM device mounts, node placement), and `configRef.name` (optional), which names a cluster-scoped [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) of the same class. `configRef` is not consumed yet: the sandbox binaries still come from the `SandboxConfig` each `ActorTemplate` selects. |
+| `sandboxClasses` | `[]WorkerPoolSandboxClass` | **Required.** The sandbox runtime families the pool runs; exactly one entry today. Each entry has `name` (**required**, `gvisor` or `microvm`, immutable), which drives the worker pod shape (e.g. KVM device mounts, node placement), and `configRef.name` (optional), which names a cluster-scoped [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) of the same class. Without `configRef`, the pool uses the class default (see [Class default](#class-default)). The controller records the result in `status.sandboxClasses`. The sandbox binaries an actor boots with still come from the `SandboxConfig` its `ActorTemplate` selects. |
 | `template` | `WorkerPoolPodTemplate` | **Optional.** Metadata, scheduling, and resource settings for worker workloads. |
 
 #### `WorkerPoolPodTemplate` (`spec.template`)
@@ -109,12 +109,13 @@ worker pod on a GPU node and reserves the device, and nothing else reads it.
 | :--- | :--- | :--- |
 | `replicas` | `int32` | Total number of worker pods, mirrored from the managed Deployment. |
 | `selector` | `string` | Label selector for the worker pods. |
+| `sandboxClasses` | `[]WorkerPoolSandboxClassStatus` | One entry per sandbox class, with `name`, `configRef.name` (the `SandboxConfig` in use), `pendingConfigRef.name` (transient, the config the class is switching to; see [Deletion protection](#deletion-protection)), and `conditions`. The `Resolved` condition is `True` (reason `Resolved`) when the class's spec resolves. Otherwise it is `False` with reason `SandboxConfigNotFound`, `SandboxConfigDeleting`, `SandboxClassMismatch`, or `DefaultConfigNotFound`, the controller emits a Warning event, and `configRef` keeps the last resolved config. `configRef` is omitted if the class has never resolved. Each time `configRef` changes, the controller emits a Normal `SandboxConfigSwitched` event naming the old and new config, so `kubectl events --for workerpool/NAME` shows the configs the pool used recently. The API server keeps an event for one hour by default, so the full history is only in a logging backend that stores events. The controller creates the worker Deployment only once every class has a config, and keeps updating an existing Deployment while a class does not resolve. |
 
 ---
 
 ## 2. ActorTemplate: The Workload Blueprint
 
-The `ActorTemplate` defines the code, environment, and state-management policies for a specific type of agent. It is used to generate the "Golden Snapshot" from which all actors of this type are derived.
+The `ActorTemplate` defines the code, environment, and state-management policies for a specific type of agent. By default, it is used to generate a "Golden Snapshot" that new actors can start from.
 
 ### Specification (`ActorTemplate`)
 
@@ -123,7 +124,7 @@ The `ActorTemplate` defines the code, environment, and state-management policies
 | `containers` | `[]Container` | **Required.** The workload definition — see [Container Fields](#container-fields) below. Each container may also declare an optional `wakeupProbe` HTTP probe — see [Container Wakeup Probe](#container-wakeup-probe-wakeupprobe). |
 | `sandboxConfig` | `SandboxConfig` | **Required.** The sandbox runtime selection: `sandboxClass` (**required**, `SANDBOX_CLASS_GVISOR` or `SANDBOX_CLASS_MICROVM`) picks the runtime family this template's actors require — only `WorkerPool`s whose `sandboxClasses` entry matches are eligible — and `configName` (**required**) names the cluster-scoped [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) object supplying the sandbox binaries. It must reference an existing config of the matching class; `CreateActorTemplate` rejects the template otherwise. |
 | `workerSelector` | `*Selector` | Optional. Gates which `WorkerPool`s actors from this template may use, by matching against each pool's labels (`matchLabels`). If unset, all pools are eligible (subject to the actor's own `worker_selector`). |
-| `snapshotConfig` | `SnapshotConfig` | **Required.** The base object-storage location snapshots are written under, plus the snapshot fidelity (`preferredFidelity`) every Pause and Suspend captures. See [Snapshot Storage Layout](#snapshot-storage-layout). |
+| `snapshotConfig` | `SnapshotConfig` | **Required.** The base object-storage location snapshots are written under, the snapshot fidelity (`preferredFidelity`) every Pause and Suspend captures (`SNAPSHOT_FIDELITY_ROOTFS` requires `sandboxClass: SANDBOX_CLASS_MICROVM`), and automated golden snapshot creation (`goldenSnapshotConfig.mode`). See [Snapshot Storage Layout](#snapshot-storage-layout). |
 | `volumes` | `[]Volume` | Optional. Volumes the containers may mount, each a `durableDir`, an `externalVolumeTemplate` (see [CSI Volumes Guide](csi-volumes.md)), or a `systemInfo` volume (see [SystemInfo Volumes](#systeminfo-volumes)). Every declared volume must be mounted by at least one container. A `microvm` template may declare several `durableDir` volumes; a `gvisor` template is limited to one. |
 | `resources` | `*ResourceRequirements` | Optional. Declares each actor's compute size via `limits` — see [Sandbox Right-Sizing](#sandbox-right-sizing-resources). Immutable, like the rest of the template. |
 
@@ -371,11 +372,48 @@ snapshotConfig:
 
 The objects of a snapshot (its manifest, memory image, durable-data tar) are named below it. So for the template above, a snapshot of an actor in atespace `team-a` is stored at `gs://my-bucket/secret-agent/atespaces/team-a/actors/3f8b…/snapshots/f47ac10b-…`, and the template's golden snapshot — the golden tag lives in the reserved `ate-golden` atespace — under `gs://my-bucket/secret-agent/atespaces/ate-golden/tags/<tag uid>`.
 
-An actor takes a series of snapshots over its life, so it gets a prefix of its own and each snapshot sits below it. A tag holds exactly one, so the tag's prefix *is* its snapshot's. Both owners are keyed on their UID, so recreating an actor or tag under the same name never inherits its predecessor's objects. A pending tag records its base location in `status.storageLocation`; together with its atespace and UID, this identifies any partial copy to collect if creation fails.
+An actor takes a series of snapshots over its life, so it gets a prefix of its
+own and each snapshot sits below it. A tag holds exactly one, so the tag's
+prefix *is* its snapshot's. Both owners are keyed on their UID, so recreating an
+actor or tag under the same name never inherits its predecessor's objects. A tag
+records its snapshot's URI in `status.snapshot` right after it is reserved,
+before anything is copied, so a tag whose creation failed still names any
+partial copy to collect.
 
 An owner is collected by deleting everything under its prefix, and it can delete nothing else. That is what makes a borrowed snapshot safe: an actor created from a tag points at a URI under `tags/`, which its own prefix does not cover. See [Snapshot lifetime](#snapshot-lifetime).
 
-An `Actor` reports its snapshots in the server-managed `status.snapshots` (and `status.lastAssignedGeneration`) and a `Tag` in `status.snapshot`, each a `Snapshot` carrying `generation`, `owner`, `actorTemplateUid`, and `storage`. The URI and `fidelity` are recorded in a `DURABLE` `SnapshotStorage` entry (`object.snapshotUri` and `fidelity`) when the snapshot is written. `actorTemplateUid` records the `ActorTemplate` whose sandbox the guest state was captured from, which is not always the template the actor points at now: an actor may be repointed while `SUSPENDED`, and the snapshot on disk still came from the old one. A resume that finds the two disagree restores the durable data only and boots the guest fresh, because memory captured under one sandbox image cannot be resumed under another. An `ActorTemplate` references its golden tag with the `ObjectRef` in `status.goldenSnapshotStatus.goldenTag`. These status fields are server-owned and ignored on input. Parse a URI only against the scheme above.
+An `Actor` reports its snapshots in the server-managed `status.snapshots` (and
+`status.lastAssignedGeneration`) and a `Tag` in `status.snapshot`. Each entry is
+a `Snapshot` with the following fields:
+
+- `uuid`: The snapshot's server-generated name. It names the node-local
+  checkpoint and forms the last segment of the snapshot's URI in object storage
+  (so a tag's snapshot is named by the tag's UID).
+- `generation`: The monotonically increasing snapshot generation on the owner.
+- `owner`: The resource kind that owns the snapshot (`SNAPSHOT_OWNER_ACTOR` or
+  `SNAPSHOT_OWNER_TAG`).
+- `fidelity`: The state layers the snapshot holds (`SNAPSHOT_FIDELITY_VOLUMES`,
+  `SNAPSHOT_FIDELITY_ROOTFS`, or `SNAPSHOT_FIDELITY_MEMORY`).
+- `actorTemplateUid`: The UID of the `ActorTemplate` whose sandbox the guest
+  state was captured from. This is not always the template the actor points at
+  now: an actor may be repointed while `SUSPENDED`, while the snapshot on disk
+  still came from the old one. A resume that finds the two disagree restores the
+  durable data only and boots the guest fresh, because memory captured under one
+  sandbox image cannot be resumed under another.
+- `locality`: The node that holds the snapshot's local files. It is set when a
+  pause completes and cleared once those files are deleted from the node (when
+  the actor is next paused or suspended, or is reverted). A resume restores from
+  the files without deleting them, so an actor resumed from pause still reports
+  where they are.
+- `durableSnapshot`: The copy in object storage, with its URI in
+  `object.snapshotUri` and a `status` that is `PENDING` while the copy is being
+  written and `COMPLETED` once it can be restored from. A snapshot that exists
+  only on a node has no `durableSnapshot`. A tag's snapshot always has one, and
+  the tag can seed actors only once it is `COMPLETED`.
+
+An `ActorTemplate` references its golden tag with the `ObjectRef` in
+`status.goldenSnapshotStatus.goldenTag`. These status fields are server-owned
+and ignored on input. Parse a URI only against the scheme above.
 
 An `ActorTemplate` belongs to one atespace, but one `storageLocation` still holds snapshots for many atespaces: the golden actor lives in the reserved `ate-golden` atespace, and a `PUBLISHED` snapshot may be cloned from other atespaces. The `<atespace>` level exists so that access can be granted per tenant: an object-storage policy can only condition on an **object-name prefix**, and cannot read the identity recorded inside a snapshot's manifest. Binding a per-atespace grant on GCS looks like:
 
@@ -419,6 +457,30 @@ Each entry of `versions` (`SandboxVersionConfig`):
 
 A cluster-wide gVisor `SandboxConfig` (`gvisor-default`) is installed with the platform, so gVisor templates can name it via `sandboxConfig.configName` without any extra setup.
 
+### Class default
+
+A `SandboxConfig` annotated `sandboxconfig.ate.dev/is-class-default: "true"` is a default for its `sandboxClass`. A `WorkerPool` entry without `configRef` uses the newest such config of its class that is not being deleted. Among configs created in the same second, the name that sorts first wins. More than one config of a class may carry the annotation, so a new default can be rolled out by creating it, and pools move to it without restarting their workers.
+
+While no default is available, the class reports `Resolved=False` with reason `DefaultConfigNotFound`, or `SandboxConfigDeleting` if the only defaults are being deleted. A pool that already uses a config keeps it meanwhile, even if that config is being deleted or has lost the annotation.
+
+### Deletion protection
+
+atecontroller keeps a `SandboxConfig` from being deleted while a `WorkerPool` uses it.
+
+- When a `WorkerPool` resolves a `SandboxConfig`, atecontroller puts the finalizer `sandboxconfig.ate.dev/workerpool-protection` on the config before it records the config in the pool's `status.sandboxClasses`.
+- A pool that switches to another config first records the new config in `pendingConfigRef` and keeps its current config in `configRef`. It then reads the new config from the API server, and moves `configRef` only if the config is not being deleted. Otherwise it keeps its current config.
+- The finalizer stays until the config is deleted. Deleting the config marks it for deletion. atecontroller removes the finalizer once no `WorkerPool`'s `status.sandboxClasses` names the config. It confirms that against the API server, not only its cache.
+- A config that pools stopped using is gone within a reconcile. A config that pools still use stays `Terminating` until they move or are deleted. A config no pool has ever used carries no finalizer and is deleted at once.
+- A config that is being deleted takes no new pools. A `configRef` to it reports `SandboxConfigDeleting`, and it stops being a class default. A pool already on it keeps it and reports `Resolved=False`. A pinned pool does so until its `configRef` changes, an unpinned pool until another default exists. So a `Terminating` config only loses users.
+- `WorkerPool`s carry no finalizer and delete without waiting.
+
+A delete cannot be undone, and an object that is being deleted cannot be recreated under the same name. Applying its manifest again only updates the terminating object. To recover from deleting a class default that pools still use:
+
+1. Create a replacement under a different name with the `is-class-default` annotation. Pools move to it on their own, the finalizer is released, and the old config disappears.
+2. Once the old config is gone, the next `ate-setup` upgrade recreates the shipped config under its original name. Pools move back to it, because it is then the newest default.
+
+atecontroller alone adds and releases the finalizer. While it is down, `kubectl delete sandboxconfig` of a config that carries the finalizer hangs until atecontroller is back. `ate-setup` strips the finalizer from every config when it deletes the control plane.
+
 ### Example
 
 ```yaml
@@ -457,7 +519,18 @@ See [`hack/microvm-assets/`](../hack/microvm-assets/) for scripts that assemble 
 ## 4. Operational Workflow
 
 ### The Golden Snapshot
-When an `ActorTemplate` is created:
+
+Golden snapshot creation is enabled by default. To disable it, set
+`snapshotConfig.goldenSnapshotConfig.mode: GOLDEN_SNAPSHOT_MODE_DISABLED` on the
+template. Omitting the config or leaving `mode` unspecified defaults to
+`GOLDEN_SNAPSHOT_MODE_ENABLED`. A disabled template creates no
+golden actor or tag. Actors created without a `sourceTag` cold-boot and can still
+pause, suspend, and resume using their own snapshots.
+
+`kubectl ate get actor-templates` shows `DISABLED` in the `GOLDEN TAG` column
+for these templates.
+
+When an `ActorTemplate` is created with golden snapshots enabled:
 1. Substrate creates and resumes a temporary golden actor in `ate-golden`.
 2. It waits for readiness (or the warm-up interval), then suspends the actor.
 3. It creates a published tag named after the template UID, copying the snapshot into tag-owned storage.
@@ -488,7 +561,7 @@ The node can cut the 30 minutes short. GKE node upgrades and cluster autoscaler 
 ---
 
 ## 5. Best Practices
-*   **Startup Logic:** Place expensive initialization (loading large models, establishing baseline connections) in your application's entry point. These will be captured in the Golden Snapshot and won't need to be repeated on every resumption.
+*   **Startup Logic:** Place expensive initialization (loading large models, establishing baseline connections) in your application's entry point. When golden snapshots are enabled, this initialization can be captured in the Golden Snapshot. Actors that cold-boot run initialization again.
 *   **Placement:** Ensure your `ActorTemplate`'s `sandboxClass` matches your `WorkerPool`'s `sandboxClasses[].name`, and use the template's `workerSelector` to target specific pools — pool selection is by label match, not by namespace or RBAC.
 *   **Version Management:** When updating code, create a new `ActorTemplate` (e.g. `v2`). Substrate treats each template as an immutable state root.
 *   **Eviction:** Give every actor a `SIGTERM` handler that does not exit, and have the actor suspended within 30 minutes of it. See [Eviction](#eviction).
