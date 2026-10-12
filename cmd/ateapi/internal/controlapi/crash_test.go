@@ -928,3 +928,72 @@ func TestCrashActor_RecordAndCounterAgree(t *testing.T) {
 		t.Errorf("got %d crash events after re-crashing, want 1", len(gotEvents))
 	}
 }
+
+// TestCrashActor_RecordsItsWorkerLeaving crashes a resume whose restore was
+// cut by its worker's pod going away, `runsc start` killed by a signal: a
+// worker draining, gone or replaced is named in the crash, so the resume
+// retry returns the actor to its snapshot. The same failure on a worker that
+// keeps serving stays terminal.
+func TestCrashActor_RecordsItsWorkerLeaving(t *testing.T) {
+	killed := ateletCrashMessage("Restore", status.Error(codes.Internal, "while calling ateom.RestoreWorkload: rpc error: code = Internal desc = while starting \"kagent\" application container: while running `runsc start`: signal: killed"))
+	tests := []struct {
+		name      string
+		worker    func(t *testing.T, ctx context.Context, st store.Interface)
+		wantCause string
+	}{
+		{"draining", func(t *testing.T, ctx context.Context, st store.Interface) {
+			setWorker(t, ctx, st, func(w *ateapipb.Worker) { w.Status.State = ateapipb.WorkerState_WORKER_STATE_DRAINING })
+		}, crashMessageWorkerDraining},
+		{"gone", func(t *testing.T, ctx context.Context, st store.Interface) {
+			if _, err := st.DeleteWorker(ctx, "uid", store.DeletePreconditions{}); err != nil {
+				t.Fatalf("DeleteWorker: %v", err)
+			}
+		}, crashMessageWorkerGone},
+		{"serving", func(*testing.T, context.Context, store.Interface) {}, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			st, cleanup := storetest.SetupTestStore(t)
+			defer cleanup()
+			actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+			seedActor(t, ctx, st, actorRef)
+			seedWorker(t, ctx, st, actorRef)
+			setWorker(t, ctx, st, func(w *ateapipb.Worker) { w.Status.State = ateapipb.WorkerState_WORKER_STATE_ACTIVE })
+			tt.worker(t, ctx, st)
+
+			if err := crashActor(ctx, st, actorRef, ateattr.OperationResume, killed); err != nil {
+				t.Fatalf("crashActor() = %v, want nil", err)
+			}
+			got, err := st.GetActor(ctx, actorRef)
+			if err != nil {
+				t.Fatalf("GetActor: %v", err)
+			}
+			want := "resume failed: " + killed
+			if tt.wantCause != "" {
+				want += " (" + tt.wantCause + ")"
+			}
+			if msg := got.GetStatus().GetCrash().GetMessage(); msg != want {
+				t.Errorf("Crash.Message = %q, want %q", msg, want)
+			}
+			if got, want := transientResumeCrash(got), tt.wantCause != ""; got != want {
+				t.Errorf("transientResumeCrash = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
+// setWorker applies mutate to the worker seedWorker registers.
+func setWorker(t *testing.T, ctx context.Context, st store.Interface, mutate func(*ateapipb.Worker)) {
+	t.Helper()
+	worker, err := st.GetWorker(ctx, "uid")
+	if err != nil {
+		t.Fatalf("GetWorker: %v", err)
+	}
+	if _, err := st.UpdateWorker(ctx, "uid", store.PreconditionFrom(worker), func(toUpdate *ateapipb.Worker) error {
+		mutate(toUpdate)
+		return nil
+	}); err != nil {
+		t.Fatalf("UpdateWorker: %v", err)
+	}
+}

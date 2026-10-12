@@ -173,6 +173,11 @@ func crashActor(ctx context.Context, st crashActorStore, actorRef resources.Acto
 	if err != nil {
 		return fmt.Errorf("while releasing worker to crash actor: %w", err)
 	}
+	if !wasAlreadyCrashed && !transientCrashCause(message) {
+		if cause := workerLeavingCause(ctx, st, actor); cause != "" {
+			message += " (" + cause + ")"
+		}
+	}
 
 	// Snapshot crash attributes before pod and pool pointers are cleared below;
 	// the counter itself is emitted only after the transition commits.
@@ -203,6 +208,33 @@ func crashActor(ctx context.Context, st crashActorStore, actorRef resources.Acto
 	}
 
 	return nil
+}
+
+// workerLeavingCause names why the worker the actor was assigned when its
+// call failed is going away: it drained, its record is gone, or its pod was
+// replaced. A call cut by its worker's pod going away fails with whatever the
+// killed process reported, `runsc start` killed by a signal for one, so the
+// worker's own state is what tells it apart from a failure on a worker that
+// keeps serving, which yields "".
+func workerLeavingCause(ctx context.Context, st crashActorStore, actor *ateapipb.Actor) string {
+	assignment := actor.GetStatus().GetWorkerAssignment()
+	if assignment == nil {
+		return ""
+	}
+	worker, err := st.GetWorker(ctx, assignment.GetWorker().GetName())
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return crashMessageWorkerGone
+	case err != nil:
+		slog.WarnContext(ctx, "Could not read the crashed actor's worker; recording the crash as is",
+			slog.String("worker", assignment.GetWorker().GetName()), slog.Any("err", err))
+		return ""
+	case worker.GetStatus().GetState() == ateapipb.WorkerState_WORKER_STATE_DRAINING:
+		return crashMessageWorkerDraining
+	case assignment.GetWorkerPodUid() != "" && worker.GetWorkerPodUid() != assignment.GetWorkerPodUid():
+		return crashMessageWorkerPodGone
+	}
+	return ""
 }
 
 // newActorCrash records a crash that happens now, prefixing message with the
