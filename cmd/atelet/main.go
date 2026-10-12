@@ -381,6 +381,7 @@ func main() {
 
 	ateletpb.RegisterAteomSupportServer(ateomFacingSrv, &ateomSupportServer{
 		workers: ateapipb.NewWorkerServiceClient(ateapiConn),
+		control: ateapipb.NewControlClient(ateapiConn),
 	})
 	go func() {
 		if err := ateomFacingSrv.Serve(ateomFacingLis); err != nil {

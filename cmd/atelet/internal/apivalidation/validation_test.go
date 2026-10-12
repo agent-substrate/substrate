@@ -127,6 +127,49 @@ func TestValidateRequestActorSuspendRequest(t *testing.T) {
 	}
 }
 
+func TestValidateGetActorEgressPolicyRequest(t *testing.T) {
+	valid := func(mutate ...func(*ateletpb.GetActorEgressPolicyRequest)) *ateletpb.GetActorEgressPolicyRequest {
+		r := &ateletpb.GetActorEgressPolicyRequest{
+			ActorAtespace: "team-a",
+			ActorName:     "actor-1",
+		}
+		for _, m := range mutate {
+			m(r)
+		}
+		return r
+	}
+
+	tests := []struct {
+		name string
+		obj  *ateletpb.GetActorEgressPolicyRequest
+		want field.ErrorList
+	}{{
+		name: "valid",
+		obj:  valid(),
+	}, {
+		name: "missing actor_atespace",
+		obj:  valid(func(r *ateletpb.GetActorEgressPolicyRequest) { r.ActorAtespace = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("actor_atespace"), "")},
+	}, {
+		name: "invalid actor_atespace: uppercase",
+		obj:  valid(func(r *ateletpb.GetActorEgressPolicyRequest) { r.ActorAtespace = "Team-A" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("actor_atespace"), nil, "").WithOrigin("format=k8s-short-name")},
+	}, {
+		name: "missing actor_name",
+		obj:  valid(func(r *ateletpb.GetActorEgressPolicyRequest) { r.ActorName = "" }),
+		want: field.ErrorList{field.Required(field.NewPath("actor_name"), "")},
+	}, {
+		name: "invalid actor_name: trailing dash",
+		obj:  valid(func(r *ateletpb.GetActorEgressPolicyRequest) { r.ActorName = "actor-" }),
+		want: field.ErrorList{field.Invalid(field.NewPath("actor_name"), nil, "").WithOrigin("format=k8s-short-name")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertValidateErr(t, ValidateGetActorEgressPolicyRequest(context.Background(), tt.obj), tt.want)
+		})
+	}
+}
+
 func TestValidateMintActorCertificateRequest(t *testing.T) {
 	valid := func(mutate ...func(*ateletpb.MintActorCertificateRequest)) *ateletpb.MintActorCertificateRequest {
 		r := &ateletpb.MintActorCertificateRequest{
