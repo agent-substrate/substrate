@@ -41,12 +41,12 @@ func newFakeRunsc(containers ...string) *fakeRunsc {
 	return f
 }
 
-func (f *fakeRunsc) cmdState(_ context.Context, name string) error {
+func (f *fakeRunsc) cmdState(_ context.Context, name string) (string, error) {
 	f.calls = append(f.calls, "state "+name)
 	if !f.containers[name] {
-		return errors.New("exit status 128")
+		return "", errors.New("exit status 128")
 	}
-	return nil
+	return "running", nil
 }
 
 func (f *fakeRunsc) cmdDelete(_ context.Context, name string) error {
