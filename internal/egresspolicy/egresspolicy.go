@@ -17,7 +17,7 @@
 // matches with, so the two cannot drift.
 //
 // Requests are decided here; TLS connections are decided by the dataplane
-// against SNIRules.
+// against EgressRules.
 //
 // The package is pure: no I/O, no logging.
 package egresspolicy
@@ -163,28 +163,31 @@ func (r compiledRule) matchesPort(port uint16) bool {
 	return r.anyPort || slices.Contains(r.ports, port)
 }
 
-// SNIMode is how a TLS connection is handled when an SNIRule matches. Values
-// must match cmd/dataplane/envoy/dynamic-modules/egress-policy.
-type SNIMode string
+// EgressMode is how a connection or request is handled when an EgressRule
+// matches. Values must match cmd/dataplane/envoy/dynamic-modules.
+type EgressMode string
 
 const (
-	// SNIModeMITM terminates TLS and decides each request inside.
-	SNIModeMITM SNIMode = "mitm"
-	// SNIModePassthrough forwards TLS without decryption.
-	SNIModePassthrough SNIMode = "passthrough"
+	// EgressModeCleartext handles plain HTTP requests.
+	EgressModeCleartext EgressMode = "cleartext"
+	// EgressModeMITM terminates TLS and decides each request inside.
+	EgressModeMITM EgressMode = "mitm"
+	// EgressModePassthrough forwards TLS without decryption.
+	EgressModePassthrough EgressMode = "passthrough"
 )
 
-// SNIRule is an SNI pattern and the mode applied when it matches first.
-type SNIRule struct {
-	Pattern string
-	Mode    SNIMode
+// EgressRule is a hostname pattern and the mode applied when it matches first.
+type EgressRule struct {
+	Pattern    string
+	Mode       EgressMode
+	HasEffects bool
 }
 
-// SNIRules returns the https and tls_passthrough rules for a dialed port,
-// sorted according to the API tie-breaking rules
-func (p *Policy) SNIRules(port uint16) []SNIRule {
+// EgressRules returns the http, https, and tls_passthrough rules for a dialed
+// port, sorted according to the API tie-breaking rules.
+func (p *Policy) EgressRules(port uint16) []EgressRule {
 	type ranked struct {
-		rule SNIRule
+		rule EgressRule
 		rank matchRank
 	}
 	var entries []ranked
@@ -192,18 +195,23 @@ func (p *Policy) SNIRules(port uint16) []SNIRule {
 		if !rule.matchesPort(port) {
 			continue
 		}
-		var mode SNIMode
+		var mode EgressMode
+		var hasEffects bool
 		switch rule.protocol {
+		case protocolHTTP:
+			mode = EgressModeCleartext
+			hasEffects = len(rule.effects.GetReplaceHeaders()) > 0
 		case protocolHTTPS:
-			mode = SNIModeMITM
+			mode = EgressModeMITM
+			hasEffects = len(rule.effects.GetReplaceHeaders()) > 0
 		case protocolTLSPassthrough:
-			mode = SNIModePassthrough
+			mode = EgressModePassthrough
 		default:
 			continue
 		}
 		for _, pattern := range rule.patterns {
 			entries = append(entries, ranked{
-				rule: SNIRule{Pattern: pattern.String(), Mode: mode},
+				rule: EgressRule{Pattern: pattern.String(), Mode: mode, HasEffects: hasEffects},
 				rank: matchRank{name: pattern.rank(), port: rule.portRank()},
 			})
 		}
@@ -217,7 +225,7 @@ func (p *Policy) SNIRules(port uint16) []SNIRule {
 		}
 		return 0
 	})
-	rules := make([]SNIRule, len(entries))
+	rules := make([]EgressRule, len(entries))
 	for i, e := range entries {
 		rules[i] = e.rule
 	}

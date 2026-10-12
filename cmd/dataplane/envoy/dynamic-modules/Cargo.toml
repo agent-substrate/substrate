@@ -1,0 +1,36 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+[workspace]
+resolver = "3"
+members = [
+    "common",
+    "egress-policy",
+    "egress-policy-pep",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]
+# Pin to v1.39.1 commit SHA
+# When changing the SDK version, the version of Envoy in the cmd/dataplane/envoy/Dockerfile SHOULD match.
+# SDK version SHOULD NOT be newer than Envoy's in the dataplane image, as extensions will not load if they use
+# APIs not supported by the Envoy binary in the image.
+chrono = { version = "0.4", default-features = false, features = ["std", "serde"] }
+envoy-proxy-dynamic-modules-rust-sdk = { git = "https://github.com/envoyproxy/envoy", rev = "b579d07d3ad7ee11d32b105e91a5a39ad24718d7" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+substrate-envoy-common = { path = "common" }

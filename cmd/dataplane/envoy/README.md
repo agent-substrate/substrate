@@ -7,14 +7,17 @@ This directory contains the build definition and custom extensions for the Envoy
 ```
 cmd/dataplane/envoy/
 ├── Dockerfile                       # Multi-stage build for the Envoy dataplane image
-└── dynamic-modules/
-    └── egress-policy/               # Rust Envoy Dynamic Module for egress policy enforcement
+└── dynamic-modules/                 # Cargo workspace for Rust Envoy Dynamic Modules
+    ├── Cargo.toml
+    ├── egress-policy/               # Listener filter for egress policy chain selection
+    └── egress-policy-pep/           # HTTP filter for egress policy enforcement (PEP)
 ```
 
 - **`Dockerfile`**: Multi-stage container build that:
-  1. Compiles the Rust dynamic module (`envoy-substrate-egress-policy`) into a shared library (`libenvoy_substrate_egress_policy.so`) in a `rust:bookworm` builder stage.
-  2. Packages the compiled `.so` into the `envoyproxy/envoy:v1.39-latest` runtime image under `/usr/local/lib/libenvoy_substrate_egress_policy.so` and sets `ENVOY_DYNAMIC_MODULES_SEARCH_PATH=/usr/local/lib`.
+  1. Compiles the Rust dynamic modules workspace into shared libraries (`libenvoy_substrate_egress_policy.so` and `libenvoy_substrate_egress_policy_pep.so`) in a `rust:bookworm` builder stage.
+  2. Packages the compiled `.so` files into the `envoyproxy/envoy:v1.39.1` runtime image under `/usr/local/lib/` and sets `ENVOY_DYNAMIC_MODULES_SEARCH_PATH=/usr/local/lib`.
 - **`dynamic-modules/egress-policy/`**: A Rust crate using the Envoy Dynamic Modules SDK (`envoy-proxy-dynamic-modules-rust-sdk`) that implements a custom Envoy listener filter for Substrate egress policy evaluation. See [`dynamic-modules/egress-policy/README.md`](dynamic-modules/egress-policy/README.md) for module-specific build, test, and Envoy configuration details.
+- **`dynamic-modules/egress-policy-pep/`**: A Rust crate using the Envoy Dynamic Modules SDK (`envoy-proxy-dynamic-modules-rust-sdk`) that implements an Envoy HTTP filter for egress policy enforcement. See [`dynamic-modules/egress-policy-pep/README.md`](dynamic-modules/egress-policy-pep/README.md).
 
 ## Building and Deployment
 

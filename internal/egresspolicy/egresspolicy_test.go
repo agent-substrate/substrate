@@ -403,18 +403,25 @@ func httpsRuleOnPorts(ports *ateapipb.Ports, patterns ...string) *ateapipb.Egres
 	return &ateapipb.EgressRule{Https: &ateapipb.HTTPSRule{Hostnames: patterns, Ports: ports}}
 }
 
-func TestSNIRules(t *testing.T) {
-	mitm := func(patterns ...string) []SNIRule {
-		rules := make([]SNIRule, len(patterns))
+func TestEgressRules(t *testing.T) {
+	cleartext := func(patterns ...string) []EgressRule {
+		rules := make([]EgressRule, len(patterns))
 		for i, p := range patterns {
-			rules[i] = SNIRule{Pattern: p, Mode: SNIModeMITM}
+			rules[i] = EgressRule{Pattern: p, Mode: EgressModeCleartext}
 		}
 		return rules
 	}
-	passthrough := func(patterns ...string) []SNIRule {
-		rules := make([]SNIRule, len(patterns))
+	mitm := func(patterns ...string) []EgressRule {
+		rules := make([]EgressRule, len(patterns))
 		for i, p := range patterns {
-			rules[i] = SNIRule{Pattern: p, Mode: SNIModePassthrough}
+			rules[i] = EgressRule{Pattern: p, Mode: EgressModeMITM}
+		}
+		return rules
+	}
+	passthrough := func(patterns ...string) []EgressRule {
+		rules := make([]EgressRule, len(patterns))
+		for i, p := range patterns {
+			rules[i] = EgressRule{Pattern: p, Mode: EgressModePassthrough}
 		}
 		return rules
 	}
@@ -422,10 +429,13 @@ func TestSNIRules(t *testing.T) {
 		name   string
 		policy *ateapipb.EgressPolicy
 		port   uint16
-		want   []SNIRule
+		want   []EgressRule
 	}{
 		{name: "no rules", policy: &ateapipb.EgressPolicy{}, port: 443},
-		{name: "http rules decide requests, not connections", policy: policy(httpRule("api.example.com")), port: 80},
+		{name: "http on its default port", policy: policy(httpRule("api.example.com", "*.example.org")), port: 80, want: cleartext("api.example.com", "*.example.org")},
+		{name: "http default port covers no other", policy: policy(httpRule("api.example.com")), port: 8080},
+		{name: "http on a named port", policy: policy(httpRuleOnPorts(ports(8080, 9090), "api.example.com")), port: 9090, want: cleartext("api.example.com")},
+		{name: "http on all ports", policy: policy(httpRuleOnPorts(allPorts(), "api.example.com")), port: 12345, want: cleartext("api.example.com")},
 		{name: "tls_passthrough on a named port", policy: policy(passthroughRule(ports(443), "tls.example.com", "*")), port: 443, want: passthrough("tls.example.com", "*")},
 		{name: "tls_passthrough on all ports", policy: policy(passthroughRule(allPorts(), "tls.example.com")), port: 8443, want: passthrough("tls.example.com")},
 		{name: "https on its default port", policy: policy(httpsRule("api.example.com", "*.example.org")), port: 443, want: mitm("api.example.com", "*.example.org")},
@@ -433,39 +443,43 @@ func TestSNIRules(t *testing.T) {
 		{name: "https on a named port", policy: policy(httpsRuleOnPorts(ports(8443, 9443), "api.example.com")), port: 9443, want: mitm("api.example.com")},
 		{name: "https on all ports", policy: policy(httpsRuleOnPorts(allPorts(), "api.example.com")), port: 12345, want: mitm("api.example.com")},
 		{
-			name: "https and tls_passthrough rules for the dialed port",
+			name: "http, https, and tls_passthrough rules for the dialed port",
 			policy: policy(
 				httpsRule("api.example.com"),
 				httpsRuleOnPorts(ports(8443), "alt.example.com"),
 				httpRule("plain.example.com"),
+				httpRuleOnPorts(ports(443), "http-on-443.example.com"),
 				passthroughRule(ports(443), "pinned.example.com"),
 				passthroughRule(ports(8443), "other-pinned.example.com"),
 			),
 			port: 443,
-			want: []SNIRule{
-				{Pattern: "api.example.com", Mode: SNIModeMITM},
-				{Pattern: "pinned.example.com", Mode: SNIModePassthrough},
+			want: []EgressRule{
+				{Pattern: "api.example.com", Mode: EgressModeMITM},
+				{Pattern: "http-on-443.example.com", Mode: EgressModeCleartext},
+				{Pattern: "pinned.example.com", Mode: EgressModePassthrough},
 			},
 		},
 		{
-			// Name specificity outranks port specificity across https and tls_passthrough.
-			name: "most specific first across https and tls_passthrough",
+			// Name specificity outranks port specificity across http, https, and tls_passthrough.
+			name: "most specific first across http, https, and tls_passthrough",
 			policy: policy(
 				httpsRule("*"),
 				passthroughRule(allPorts(), "a.example.com"),
 				httpsRule("*.example.com"),
 				httpsRule("b.example.com"),
+				httpRuleOnPorts(ports(443), "c.example.com"),
 				passthroughRule(ports(443), "*.example.org"),
 				httpsRuleOnPorts(allPorts(), "*.example.net"),
 			),
 			port: 443,
-			want: []SNIRule{
-				{Pattern: "b.example.com", Mode: SNIModeMITM},
-				{Pattern: "a.example.com", Mode: SNIModePassthrough},
-				{Pattern: "*.example.com", Mode: SNIModeMITM},
-				{Pattern: "*.example.org", Mode: SNIModePassthrough},
-				{Pattern: "*.example.net", Mode: SNIModeMITM},
-				{Pattern: "*", Mode: SNIModeMITM},
+			want: []EgressRule{
+				{Pattern: "b.example.com", Mode: EgressModeMITM},
+				{Pattern: "c.example.com", Mode: EgressModeCleartext},
+				{Pattern: "a.example.com", Mode: EgressModePassthrough},
+				{Pattern: "*.example.com", Mode: EgressModeMITM},
+				{Pattern: "*.example.org", Mode: EgressModePassthrough},
+				{Pattern: "*.example.net", Mode: EgressModeMITM},
+				{Pattern: "*", Mode: EgressModeMITM},
 			},
 		},
 		{
@@ -480,19 +494,44 @@ func TestSNIRules(t *testing.T) {
 			name:   "ties keep policy order",
 			policy: policy(httpsRule("b.example.com", "a.example.com"), passthroughRule(ports(443), "c.example.com")),
 			port:   443,
-			want: []SNIRule{
-				{Pattern: "b.example.com", Mode: SNIModeMITM},
-				{Pattern: "a.example.com", Mode: SNIModeMITM},
-				{Pattern: "c.example.com", Mode: SNIModePassthrough},
+			want: []EgressRule{
+				{Pattern: "b.example.com", Mode: EgressModeMITM},
+				{Pattern: "a.example.com", Mode: EgressModeMITM},
+				{Pattern: "c.example.com", Mode: EgressModePassthrough},
 			},
 		},
 		{name: "invalid patterns dropped", policy: policy(httpsRule("good.example.com", "not a hostname")), port: 443, want: mitm("good.example.com")},
+		{
+			name: "http and https rules with effects set HasEffects",
+			policy: policy(
+				&ateapipb.EgressRule{Http: &ateapipb.HTTPRule{
+					Hostnames: []string{"http-effects.example.com"},
+					Ports:     ports(443),
+					Effects: &ateapipb.HttpRuleEffects{
+						ReplaceHeaders: []*ateapipb.CredentialHeader{{Header: "authorization", CredentialUri: "ate-secret://k8s/default/token"}},
+					},
+				}},
+				&ateapipb.EgressRule{Https: &ateapipb.HTTPSRule{
+					Hostnames: []string{"https-effects.example.com"},
+					Effects: &ateapipb.HttpRuleEffects{
+						ReplaceHeaders: []*ateapipb.CredentialHeader{{Header: "authorization", CredentialUri: "ate-secret://k8s/default/token"}},
+					},
+				}},
+				httpsRule("no-effects.example.com"),
+			),
+			port: 443,
+			want: []EgressRule{
+				{Pattern: "http-effects.example.com", Mode: EgressModeCleartext, HasEffects: true},
+				{Pattern: "https-effects.example.com", Mode: EgressModeMITM, HasEffects: true},
+				{Pattern: "no-effects.example.com", Mode: EgressModeMITM, HasEffects: false},
+			},
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			compiled, _ := Compile(tc.policy)
-			if got := compiled.SNIRules(tc.port); !slices.Equal(got, tc.want) {
-				t.Errorf("SNIRules(%d) = %v, want %v", tc.port, got, tc.want)
+			if got := compiled.EgressRules(tc.port); !slices.Equal(got, tc.want) {
+				t.Errorf("EgressRules(%d) = %v, want %v", tc.port, got, tc.want)
 			}
 		})
 	}

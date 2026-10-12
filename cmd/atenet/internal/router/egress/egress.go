@@ -184,43 +184,45 @@ func (h *Handler) handleConnect(ctx context.Context, md *extproc.RequestMetadata
 	if err != nil {
 		return extproc.Result{}, err
 	}
-	rules := policy.SNIRules(dest.Port)
+	rules := policy.EgressRules(dest.Port)
 	slog.InfoContext(ctx, "egress tunnel opened: requests inside it are decided one by one",
-		slog.Any("actor", ref), slog.String("leg", leg), slog.String("destination", md.Host), slog.Int("sniRules", len(rules)))
+		slog.Any("actor", ref), slog.String("leg", leg), slog.String("destination", md.Host), slog.Int("egressRules", len(rules)))
 	res := allow()
 	res.DynamicMetadata = connectMetadata(dest, rules)
 	return res, nil
 }
 
-// connectMetadata encodes the SNI rules for EgressPolicyMetadataNamespace and
-// the dialed port for EgressMetadataNamespace. The port is always set: without
-// it the passthrough chain falls back to its configured port instead of closing.
-func connectMetadata(dest egresspolicy.Destination, rules []egresspolicy.SNIRule) *structpb.Struct {
-	values := make([]*structpb.Value, len(rules))
+// connectMetadata encodes the egress rules and creation timestamp for
+// EgressPolicyMetadataNamespace and the dialed port for EgressMetadataNamespace.
+// The port is always set: without it the passthrough chain falls back to its
+// configured port instead of closing.
+func connectMetadata(dest egresspolicy.Destination, rules []egresspolicy.EgressRule) *structpb.Struct {
+	return metadataAnswer(map[string]string{
+		extproc.EgressDialedPortKey: strconv.Itoa(int(dest.Port)),
+	}, rules)
+}
+
+// metadataAnswer encodes fields under EgressMetadataNamespace and rules (with
+// a creation timestamp) under EgressPolicyMetadataNamespace.
+func metadataAnswer(fields map[string]string, rules []egresspolicy.EgressRule) *structpb.Struct {
+	egressFields := make(map[string]*structpb.Value, len(fields))
+	for key, value := range fields {
+		egressFields[key] = structpb.NewStringValue(value)
+	}
+	ruleValues := make([]*structpb.Value, len(rules))
 	for i, rule := range rules {
-		values[i] = structpb.NewStructValue(&structpb.Struct{Fields: map[string]*structpb.Value{
-			extproc.EgressSNIRulePatternKey: structpb.NewStringValue(rule.Pattern),
-			extproc.EgressSNIRuleModeKey:    structpb.NewStringValue(string(rule.Mode)),
+		ruleValues[i] = structpb.NewStructValue(&structpb.Struct{Fields: map[string]*structpb.Value{
+			extproc.EgressRulePatternKey:    structpb.NewStringValue(rule.Pattern),
+			extproc.EgressRuleModeKey:       structpb.NewStringValue(string(rule.Mode)),
+			extproc.EgressRuleHasEffectsKey: structpb.NewBoolValue(rule.HasEffects),
 		}})
 	}
 	return &structpb.Struct{Fields: map[string]*structpb.Value{
-		extproc.EgressMetadataNamespace: structpb.NewStructValue(&structpb.Struct{Fields: map[string]*structpb.Value{
-			extproc.EgressDialedPortKey: structpb.NewStringValue(strconv.Itoa(int(dest.Port))),
-		}}),
+		extproc.EgressMetadataNamespace: structpb.NewStructValue(&structpb.Struct{Fields: egressFields}),
 		extproc.EgressPolicyMetadataNamespace: structpb.NewStructValue(&structpb.Struct{Fields: map[string]*structpb.Value{
-			extproc.EgressSNIRulesKey: structpb.NewListValue(&structpb.ListValue{Values: values}),
+			extproc.EgressPolicyCreatedAtKey: structpb.NewStringValue(time.Now().UTC().Format(time.RFC3339Nano)),
+			extproc.EgressRulesKey:           structpb.NewListValue(&structpb.ListValue{Values: ruleValues}),
 		}}),
-	}}
-}
-
-// metadataAnswer is an answer in the egress metadata namespace.
-func metadataAnswer(fields map[string]string) *structpb.Struct {
-	values := make(map[string]*structpb.Value, len(fields))
-	for key, value := range fields {
-		values[key] = structpb.NewStringValue(value)
-	}
-	return &structpb.Struct{Fields: map[string]*structpb.Value{
-		extproc.EgressMetadataNamespace: structpb.NewStructValue(&structpb.Struct{Fields: values}),
 	}}
 }
 
