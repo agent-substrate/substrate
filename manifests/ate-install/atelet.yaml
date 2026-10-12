@@ -147,20 +147,21 @@ spec:
       - key: ate.dev/sandboxClass
         operator: Exists
         effect: NoSchedule
-      # The node snapshot plugin moves external snapshots between this node and
-      # object storage for atelet, over a Unix socket in a pod-local emptyDir.
+      # The node object-store plugin moves external snapshots between this
+      # node and object storage and fetches sandbox assets for atelet, over a
+      # Unix socket in a pod-local emptyDir.
       # A native sidecar (restartPolicy: Always) starts before atelet and stops
       # after it, so uploads still in flight during atelet's drain finish.
       # atelet starts only once the startup probe sees the plugin serving.
       initContainers:
-      - name: snapshot-plugin
-        image: ko://github.com/agent-substrate/substrate/cmd/snapshot-plugin
+      - name: objectstore-plugin
+        image: ko://github.com/agent-substrate/substrate/cmd/objectstore-plugin
         restartPolicy: Always
         args:
         - node
-        - --socket=/run/snapshot-plugin/node.sock
+        - --socket=/run/objectstore-plugin/node.sock
         - --root=/var/lib/ate
-        - --asset-staging-dir=/var/lib/snapshot-plugin/asset-staging
+        - --asset-staging-dir=/var/lib/objectstore-plugin/asset-staging
         # atelet's 8 GiB per-asset cap, so any asset fits. Each download
         # reserves its object's size; ones past the capacity wait their turn,
         # so the asset-staging volume below never fills up.
@@ -170,9 +171,9 @@ spec:
         startupProbe:
           exec:
             command:
-            - /ko-app/snapshot-plugin
+            - /ko-app/objectstore-plugin
             - healthcheck
-            - --socket=/run/snapshot-plugin/node.sock
+            - --socket=/run/objectstore-plugin/node.sock
           periodSeconds: 2
           failureThreshold: 30
         # Reads and writes snapshot and asset files under the /var/lib/ate
@@ -203,13 +204,13 @@ spec:
         volumeMounts:
         - name: run-ateom
           mountPath: /var/lib/ate
-        - name: snapshot-plugin
-          mountPath: /run/snapshot-plugin
+        - name: objectstore-plugin
+          mountPath: /run/objectstore-plugin
         # Sandbox assets are downloaded here and verified against their sha256
         # before the plugin copies them below /var/lib/ate. Only this container
         # mounts it, so atelet never sees bytes it did not pin.
         - name: asset-staging
-          mountPath: /var/lib/snapshot-plugin/asset-staging
+          mountPath: /var/lib/objectstore-plugin/asset-staging
       containers:
       - name: atelet
         image: ko://github.com/agent-substrate/substrate/cmd/atelet
@@ -227,7 +228,7 @@ spec:
         # terminationGracePeriodSeconds above.
         - --drain-delay=0s
         - --drain-timeout=5m
-        - --snapshot-plugin-socket=/run/snapshot-plugin/node.sock
+        - --objectstore-plugin-socket=/run/objectstore-plugin/node.sock
         # atelet does no mounts, netlink, device, or namespace operations (those
         # live in the ateom worker pod) — it only reads/writes the
         # /var/lib/ate hostPath as root. CAP_DAC_OVERRIDE is for one thing:
@@ -300,8 +301,8 @@ spec:
         volumeMounts:
         - name: run-ateom
           mountPath: /var/lib/ate
-        - name: snapshot-plugin
-          mountPath: /run/snapshot-plugin
+        - name: objectstore-plugin
+          mountPath: /run/objectstore-plugin
         - name: podidentity
           mountPath: /run/podidentity.podcert.ate.dev
         - name: servicedns-ca
@@ -321,7 +322,7 @@ spec:
           mountPath: /run/image-credential-provider/config.yaml
           readOnly: true
       volumes:
-      - name: snapshot-plugin
+      - name: objectstore-plugin
         emptyDir: {}
       # Holds asset downloads until they are verified. The plugin keeps them
       # within --asset-staging-capacity; the limit adds 1Gi for filesystem

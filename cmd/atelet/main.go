@@ -114,7 +114,7 @@ var (
 	drainDelay   = pflag.Duration("drain-delay", 0, "How long to keep accepting new RPCs after SIGTERM before starting the gRPC drain.")
 	drainTimeout = pflag.Duration("drain-timeout", 5*time.Minute, "Deadline for the graceful gRPC drain on shutdown. In-flight RPCs still running past it are forcefully cancelled.")
 
-	snapshotPluginSocket = pflag.String("snapshot-plugin-socket", "/run/snapshot-plugin/node.sock", "Unix socket of the node object-store plugin that external snapshots are fetched and uploaded through, and every sandbox asset is fetched through. A gs:// asset the plugin cannot serve is then read anonymously.")
+	objectStorePluginSocket = pflag.String("objectstore-plugin-socket", "/run/objectstore-plugin/node.sock", "Unix socket of the node object-store plugin that external snapshots are fetched and uploaded through, and every sandbox asset is fetched through. A gs:// asset the plugin cannot serve is then read anonymously.")
 )
 
 var _ imagecache.CandidateKeychain = (*credentialprovider.Keychain)(nil)
@@ -284,27 +284,27 @@ func main() {
 	go trustBundles.Informer().Run(stopCh)
 	cache.WaitForCacheSync(stopCh, trustBundles.Informer().HasSynced)
 
-	snapshotPluginConn, err := pluginsocket.Dial(*snapshotPluginSocket, pluginsocket.ReadyWait)
+	objectStorePluginConn, err := pluginsocket.Dial(*objectStorePluginSocket, pluginsocket.ReadyWait)
 	if err != nil {
-		serverboot.Fatal(ctx, "Failed to set up the snapshot plugin client", err)
+		serverboot.Fatal(ctx, "Failed to set up the object-store plugin client", err)
 	}
-	defer snapshotPluginConn.Close()
+	defer objectStorePluginConn.Close()
 	// A plugin that never serves would fail every call. Fail at startup
 	// instead, giving the sidecar time to come up.
 	readyCtx, cancelReady := context.WithTimeout(ctx, time.Minute)
-	err = pluginsocket.WaitReady(readyCtx, snapshotPluginConn)
+	err = pluginsocket.WaitReady(readyCtx, objectStorePluginConn)
 	cancelReady()
 	if err != nil {
-		serverboot.Fatal(ctx, "Snapshot plugin is not serving", err)
+		serverboot.Fatal(ctx, "Object-store plugin is not serving", err)
 	}
 
 	wmService := NewService(
 		ctx,
 		ateomDialer,
 		wrappedAnonGCS,
-		objectstorev1.NewNodeProviderClient(snapshotPluginConn),
-		objectstorev1.NewAssetProviderClient(snapshotPluginConn),
-		*snapshotPluginSocket,
+		objectstorev1.NewNodeProviderClient(objectStorePluginConn),
+		objectstorev1.NewAssetProviderClient(objectStorePluginConn),
+		*objectStorePluginSocket,
 		imageCache,
 		instruments,
 		volPlugins,
@@ -415,12 +415,12 @@ func ateomHerderServerOptions(creds credentials.TransportCredentials) []grpc.Ser
 }
 
 // rejectStorageEnv fails if ATE_STORAGE_BACKEND is set on atelet, which no
-// longer reads it: object storage settings belong on the snapshot-plugin
+// longer reads it: object storage settings belong on the objectstore-plugin
 // sidecar. Only this variable is a signal: EKS pod identity sets AWS_* in
 // every container.
 func rejectStorageEnv() error {
 	if v, ok := os.LookupEnv("ATE_STORAGE_BACKEND"); ok {
-		return fmt.Errorf("ATE_STORAGE_BACKEND=%q is set on atelet, which no longer reads it; set the storage backend on its snapshot-plugin sidecar", v)
+		return fmt.Errorf("ATE_STORAGE_BACKEND=%q is set on atelet, which no longer reads it; set the storage backend on its objectstore-plugin sidecar", v)
 	}
 	return nil
 }
@@ -475,8 +475,8 @@ type AteomHerder struct {
 	imageCache  *imagecache.Store
 	// anonGCSClient reads gs:// assets the plugin cannot serve, without credentials.
 	anonGCSClient objectstorage.ObjectStorage
-	// snapshotPlugin moves external snapshot files between the node and storage.
-	snapshotPlugin objectstorev1.NodeProviderClient
+	// objectStorePlugin moves external snapshot files between the node and storage.
+	objectStorePlugin objectstorev1.NodeProviderClient
 	// assetPlugin fetches every sandbox asset first; anonGCSClient reads a gs://
 	// asset it cannot serve.
 	assetPlugin objectstorev1.AssetProviderClient
@@ -499,7 +499,7 @@ func NewService(
 	ctx context.Context,
 	ateomDialer *AteomDialer,
 	anonGCSClient objectstorage.ObjectStorage,
-	snapshotPlugin objectstorev1.NodeProviderClient,
+	objectStorePlugin objectstorev1.NodeProviderClient,
 	assetPlugin objectstorev1.AssetProviderClient,
 	pluginSocket string,
 	imageCache *imagecache.Store,
@@ -512,7 +512,7 @@ func NewService(
 		ateomDialer:           ateomDialer,
 		imageCache:            imageCache,
 		anonGCSClient:         anonGCSClient,
-		snapshotPlugin:        snapshotPlugin,
+		objectStorePlugin:     objectStorePlugin,
 		assetPlugin:           assetPlugin,
 		pluginSocket:          pluginSocket,
 		snapshotScratchDir:    ateletpath.SnapshotScratchDir,
@@ -772,7 +772,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	switch req.GetType() {
 	case ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL:
 		// CheckpointWorkload has already deleted the workload, so a retried
-		// Checkpoint cannot redo this upload. It waits for the snapshot plugin
+		// Checkpoint cannot redo this upload. It waits for the object-store plugin
 		// as long as ctx allows, and a plugin error reaches the control plane as
 		// Internal, which crashes the actor.
 		// TODO(#362): Because we do not cache the external snapshot files when upload fails, we have to mark the Actor as CRASHED.
@@ -913,7 +913,7 @@ func (s *AteomHerder) uploadExternalCheckpoint(ctx context.Context, req *ateletp
 }
 
 // uploadSnapshot uploads rec's snapshot files from srcDir to uri through the
-// snapshot plugin, then the marshaled manifest. The manifest goes last, in its
+// object-store plugin, then the marshaled manifest. The manifest goes last, in its
 // own call: its presence is the commit marker — readers assume every file it
 // lists is already present. A crash mid-upload thus leaves only orphaned
 // files, never a manifest pointing at files that never landed; retries
