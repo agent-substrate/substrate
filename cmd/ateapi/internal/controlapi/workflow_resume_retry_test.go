@@ -66,10 +66,10 @@ func TestTransientResumeCrash(t *testing.T) {
 	}
 }
 
-// TestRecoverTransientResumeCrash returns a transiently crashed actor to the
+// TestRecoverTransientCrash returns a transiently crashed actor to the
 // state its resume started from, keeping a pause snapshot the resume was
 // restoring and the node holding it, and leaves any other actor alone.
-func TestRecoverTransientResumeCrash(t *testing.T) {
+func TestRecoverTransientCrash(t *testing.T) {
 	tests := []struct {
 		name          string
 		crash         string
@@ -98,12 +98,12 @@ func TestRecoverTransientResumeCrash(t *testing.T) {
 				}
 			})
 
-			crash, recovered, err := w.recoverTransientResumeCrash(ctx, actorRef)
+			crash, recovered, err := w.recoverTransientCrash(ctx, actorRef)
 			if err != nil {
-				t.Fatalf("recoverTransientResumeCrash: %v", err)
+				t.Fatalf("recoverTransientCrash: %v", err)
 			}
 			if recovered != tt.wantRecovered || (recovered && crash != tt.crash) {
-				t.Errorf("recoverTransientResumeCrash = (%q, %v), want (%q, %v)", crash, recovered, tt.crash, tt.wantRecovered)
+				t.Errorf("recoverTransientCrash = (%q, %v), want (%q, %v)", crash, recovered, tt.crash, tt.wantRecovered)
 			}
 			stored, err := st.GetActor(ctx, actorRef)
 			if err != nil {
@@ -152,8 +152,8 @@ func TestResumeActor_TransientCrashAfterTheCallEnded(t *testing.T) {
 		t.Errorf("ResumeActor error message = %q, want the crash's cause named", msg)
 	}
 
-	if _, recovered, err := w.recoverTransientResumeCrash(ctx, actorRef); err != nil || !recovered {
-		t.Fatalf("recoverTransientResumeCrash = (%v, %v), want the actor recovered", recovered, err)
+	if _, recovered, err := w.recoverTransientCrash(ctx, actorRef); err != nil || !recovered {
+		t.Fatalf("recoverTransientCrash = (%v, %v), want the actor recovered", recovered, err)
 	}
 	stored, err := st.GetActor(ctx, actorRef)
 	if err != nil {

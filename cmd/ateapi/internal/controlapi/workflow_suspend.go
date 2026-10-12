@@ -30,12 +30,23 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 )
 
-// SuspendActor executes the workflow to suspend a running or paused actor:
+// SuspendActor runs suspendActorOnce; a checkpoint a rolling worker pool interrupts
+// returns the actor to its latest durable snapshot and answers Unavailable
+// (checkpointInterrupted).
+func (w *ActorWorkflow) SuspendActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error) {
+	actor, err := w.suspendActorOnce(ctx, actorRef)
+	if err != nil {
+		return nil, w.checkpointInterrupted(ctx, actorRef, ateattr.OperationSuspend, err)
+	}
+	return actor, nil
+}
+
+// suspendActorOnce executes the workflow to suspend a running or paused actor:
 // a running actor is checkpointed on its worker, a paused actor's node-local
 // snapshot is uploaded. Idempotent: a re-entered workflow fast-forwards past
 // the steps a previous attempt completed, deriving progress from the
 // persisted actor alone.
-func (w *ActorWorkflow) SuspendActor(ctx context.Context, actorRef resources.ActorRef) (_ *ateapipb.Actor, err error) {
+func (w *ActorWorkflow) suspendActorOnce(ctx context.Context, actorRef resources.ActorRef) (_ *ateapipb.Actor, err error) {
 	start := time.Now()
 	var actor *ateapipb.Actor
 	var actorTemplate *ateapipb.ActorTemplate

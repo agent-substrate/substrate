@@ -93,6 +93,48 @@ func transientResumeCrash(actor *ateapipb.Actor) bool {
 		strings.HasPrefix(msg, resumeCrashPrefix) && transientCrashCause(msg)
 }
 
+// checkpointCrashPrefixes start the messages of crashes recorded by the
+// operations that checkpoint a running workload.
+var checkpointCrashPrefixes = []string{
+	ateattr.OperationSuspend + " failed: ",
+	ateattr.OperationPause + " failed: ",
+}
+
+// pausedUploadCrashMessage starts the message of a crash a paused-origin
+// suspend records when atelet fails to upload the pause snapshot.
+const pausedUploadCrashMessage = "atelet UploadPausedCheckpoint: "
+
+// transientCheckpointCrash reports whether the actor is CRASHED by a suspend
+// or a pause that a rolling worker pool interrupted while it checkpointed the
+// running workload, and holds a completed durable snapshot. The workload went
+// with its worker, so that snapshot is the latest state of the actor that
+// survives: returning the actor to it loses nothing the crash has not lost
+// already. A paused-origin suspend checkpoints no workload: the pause snapshot
+// it uploads stays on its node, so its crash is not one.
+func transientCheckpointCrash(actor *ateapipb.Actor) bool {
+	if actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
+		return false
+	}
+	if _, durable := findLatestSnapshotStorage(actor.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED); durable == nil {
+		return false
+	}
+	msg := actor.GetStatus().GetCrash().GetMessage()
+	for _, prefix := range checkpointCrashPrefixes {
+		if cause, ok := strings.CutPrefix(msg, prefix); ok {
+			return !strings.HasPrefix(cause, pausedUploadCrashMessage) && transientCrashCause(cause)
+		}
+	}
+	return false
+}
+
+// transientCrash reports whether the actor is CRASHED for a transient cause
+// that returns it to a snapshot: a resume (transientResumeCrash) or a
+// checkpoint (transientCheckpointCrash) that a rolling worker pool
+// interrupted.
+func transientCrash(actor *ateapipb.Actor) bool {
+	return transientResumeCrash(actor) || transientCheckpointCrash(actor)
+}
+
 // ateletCrashMessage describes a failed atelet call with the error text atelet
 // returned, since its gRPC code is Unknown for most failures.
 // TODO: consider sanizing the error message returned by atelet.
