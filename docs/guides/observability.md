@@ -328,9 +328,10 @@ For the PostgreSQL connection pool metrics:
 * The histogram extends the upstream convention to record unsuccessful attempts
   too. Filter `ate.store.connection.acquire.outcome=success` for successful
   acquisition percentiles; use the histogram count by outcome for attempt rates
-  and unsuccessful-acquisition ratios. Cancellation and deadlines are
-  `cancelled` and `timeout`, not `error`. Only `error` carries `error.type`,
+  and unsuccessful-acquisition ratios. Caller cancellation and acquisition
+  deadlines are `cancelled` and `timeout`, not `error`. Only `error` carries `error.type`,
   `pool_closed` for a closed pool, `connect_error` for a pgconn connect failure,
+  including pgconn's internal connection timeout,
   and `_OTHER` for other failures, including `BeforeConnect` and `AfterConnect`
   hook failures. It never contains the error message.
 * Query execution, end-to-end store operations, and outbox/background maintenance
