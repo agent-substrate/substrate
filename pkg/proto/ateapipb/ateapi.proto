@@ -817,6 +817,15 @@ message ActorStatus {
   // +k8s:minimum=0
   // +k8s:update=NoUnset
   int32 last_assigned_generation = 12;
+
+  // cached_snapshot_node is the Kubernetes node the Actor was last suspended
+  // from. That node keeps the files of the snapshot it uploaded, so resuming
+  // there skips downloading them. A scheduling preference only: the node may
+  // have evicted the files, or have no room for the Actor.
+  //
+  // +k8s:optional
+  // +k8s:format=k8s-long-name
+  string cached_snapshot_node = 13;
 }
 
 // ActorCrash describes the failure that moved an Actor to CRASHED.

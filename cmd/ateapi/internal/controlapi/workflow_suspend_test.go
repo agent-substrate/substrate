@@ -368,6 +368,9 @@ func TestEnsureSuspendedFinalized_NoAssignment(t *testing.T) {
 	if local := findLatestLocalSnapshot(stored.GetStatus()); local != nil {
 		t.Errorf("LocalSnapshot = %v, want cleared", local)
 	}
+	if got := stored.GetStatus().GetCachedSnapshotNode(); got != "node1" {
+		t.Errorf("CachedSnapshotNode = %q, want the node suspended from, %q", got, "node1")
+	}
 	if got := stored.GetStatus().GetAssignedNode(); got != "" {
 		t.Errorf("AssignedNode = %q, want cleared", got)
 	}

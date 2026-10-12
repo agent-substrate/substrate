@@ -415,6 +415,9 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 		// and durable snapshots to be kept.
 		pruneSnapshots(toUpdate.Status, nil)
 		toUpdate.Status.WorkerAssignment = nil
+		// The node keeps the snapshot's files after uploading them, so a resume
+		// there skips the download.
+		toUpdate.Status.CachedSnapshotNode = toUpdate.Status.AssignedNode
 		toUpdate.Status.AssignedNode = ""
 		return nil
 	})

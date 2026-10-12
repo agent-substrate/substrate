@@ -42,6 +42,11 @@ type Constraints struct {
 	// to specific node VMs.
 	RequiredNodes []string
 
+	// PreferredNodes, when non-empty, narrows placement to workers on one of
+	// these nodes if any of them meets the other constraints and has room, and
+	// is ignored otherwise. Used when a node holds the actor's snapshot files.
+	PreferredNodes []string
+
 	// Limits are the actor's declared resource limits, named as a Worker names
 	// the capacity it reports, so the two subtract.
 	Limits *ateapipb.Resources
@@ -124,6 +129,14 @@ func (s *scheduler) Schedule(ctx context.Context, constraints Constraints) (*ate
 
 	if len(candidates) == 0 {
 		return nil, ErrNoCapacity
+	}
+	if len(constraints.PreferredNodes) > 0 {
+		preferred := slices.DeleteFunc(slices.Clone(candidates), func(c candidate) bool {
+			return !slices.Contains(constraints.PreferredNodes, c.worker.GetNodeName())
+		})
+		if len(preferred) > 0 {
+			candidates = preferred
+		}
 	}
 	if len(candidates) == 1 {
 		return candidates[0].worker, nil

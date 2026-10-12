@@ -3754,6 +3754,8 @@ func TestSuspendActor(t *testing.T) {
 			Snapshots: []*ateapipb.Snapshot{
 				wantActorSnap,
 			},
+			// The node the actor was suspended from keeps the snapshot's files.
+			CachedSnapshotNode: "node1",
 		},
 	}
 
