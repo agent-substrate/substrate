@@ -126,6 +126,25 @@ func TestWorkerPoolValidation(t *testing.T) {
 		wantErr: true,
 		errMsg:  "spec.sandboxClasses[0].configRef.name",
 	}, {
+		name: "configRef name of 253 characters",
+		mutate: func(wp *WorkerPool) {
+			wp.Spec.SandboxClasses = []WorkerPoolSandboxClass{{
+				Name:      SandboxClassGvisor,
+				ConfigRef: &SandboxConfigReference{Name: strings.Repeat("a", 253)},
+			}}
+		},
+		wantErr: false,
+	}, {
+		name: "configRef name of 254 characters",
+		mutate: func(wp *WorkerPool) {
+			wp.Spec.SandboxClasses = []WorkerPoolSandboxClass{{
+				Name:      SandboxClassGvisor,
+				ConfigRef: &SandboxConfigReference{Name: strings.Repeat("a", 254)},
+			}}
+		},
+		wantErr: true,
+		errMsg:  "spec.sandboxClasses[0].configRef.name",
+	}, {
 		name: "valid template",
 		mutate: func(wp *WorkerPool) {
 			wp.Spec.Template = &WorkerPoolPodTemplate{
@@ -301,5 +320,62 @@ func TestWorkerPoolReservedMetadataUpdate(t *testing.T) {
 	}
 	if want := "ate.dev and its subdomains are reserved"; !strings.Contains(err.Error(), want) {
 		t.Errorf("wrong error:\n  wanted: %q\n     got: %q", want, err.Error())
+	}
+}
+
+// TestWorkerPoolSandboxClassesUpdate verifies that the names in
+// spec.sandboxClasses cannot change after creation, while the rest of an
+// entry can.
+func TestWorkerPoolSandboxClassesUpdate(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name    string
+		mutate  func(*WorkerPool)
+		wantErr string
+	}{{
+		name: "change the sandbox class",
+		mutate: func(wp *WorkerPool) {
+			wp.Spec.SandboxClasses[0].Name = SandboxClassMicroVM
+		},
+		wantErr: "sandboxClasses names are immutable",
+	}, {
+		name: "set configRef",
+		mutate: func(wp *WorkerPool) {
+			wp.Spec.SandboxClasses[0].ConfigRef = &SandboxConfigReference{Name: "gvisor-release1"}
+		},
+	}}
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wp := &WorkerPool{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      fmt.Sprintf("test-sandbox-classes-update-%d", i),
+					Namespace: "default",
+				},
+				Spec: WorkerPoolSpec{
+					Replicas:       1,
+					WorkerImage:    "example.com/ateom:latest",
+					SandboxClasses: []WorkerPoolSandboxClass{{Name: SandboxClassGvisor}},
+				},
+			}
+			if err := k8sClient.Create(ctx, wp); err != nil {
+				t.Fatalf("create WorkerPool: %v", err)
+			}
+			t.Cleanup(func() { _ = k8sClient.Delete(ctx, wp) })
+
+			tt.mutate(wp)
+			err := k8sClient.Update(ctx, wp)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("update: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("update unexpectedly accepted, want %q", tt.wantErr)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("wrong error:\n  wanted: %q\n     got: %q", tt.wantErr, err.Error())
+			}
+		})
 	}
 }

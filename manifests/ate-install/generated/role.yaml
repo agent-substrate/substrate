@@ -50,6 +50,14 @@ rules:
 - apiGroups:
   - ate.dev
   resources:
+  - sandboxconfigs
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ate.dev
+  resources:
   - workerpools
   verbs:
   - create

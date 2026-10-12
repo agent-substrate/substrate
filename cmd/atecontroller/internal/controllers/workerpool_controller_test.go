@@ -87,6 +87,13 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
+	// makeWorkerPool omits configRef, so every gvisor pool resolves to this
+	// class default. Tests that need to control the class default use microvm.
+	if err := k8sClient.Create(context.Background(), makeSandboxConfig(testGvisorDefault, atev1alpha1.SandboxClassGvisor, true)); err != nil {
+		fmt.Fprintf(os.Stderr, "create default SandboxConfig: %v\n", err)
+		os.Exit(1)
+	}
+
 	if err := (&NetworkPolicyReconciler{
 		Client:          mgr.GetClient(),
 		Scheme:          mgr.GetScheme(),

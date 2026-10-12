@@ -17,6 +17,7 @@ package controllers
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/metric"
@@ -28,7 +29,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
@@ -73,6 +76,7 @@ type WorkerPoolReconciler struct {
 //+kubebuilder:rbac:groups=ate.dev,resources=workerpools/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=ate.dev,resources=workerpools/finalizers,verbs=update
 //+kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=ate.dev,resources=sandboxconfigs,verbs=get;list;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -102,23 +106,55 @@ func (r *WorkerPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	return ctrl.Result{}, nil
 }
 
+// reconcileWorkerPool applies the worker Deployment, resolves the pool's
+// SandboxConfigs, and records them in status.
 func (r *WorkerPoolReconciler) reconcileWorkerPool(ctx context.Context, wp *atev1alpha1.WorkerPool) error {
 	log := log.FromContext(ctx)
 	log.Info("Reconciling worker pool")
 
-	if err := r.applyDeployment(ctx, wp); err != nil {
+	existing := &appsv1.Deployment{}
+	if err := r.Get(ctx, types.NamespacedName{Name: wp.Name, Namespace: wp.Namespace}, existing); err != nil {
+		if !k8errors.IsNotFound(err) {
+			return fmt.Errorf("failed to get deployment: %w", err)
+		}
+		existing = nil
+	}
+	// Worker pods take nothing from the SandboxConfig, so an existing
+	// Deployment is applied first. A SandboxConfig error never holds back a
+	// scale.
+	if existing != nil {
+		if err := r.applyDeployment(ctx, wp); err != nil {
+			return err
+		}
+	}
+
+	var list atev1alpha1.SandboxConfigList
+	if err := r.List(ctx, &list); err != nil {
+		return fmt.Errorf("failed to list SandboxConfigs: %w", err)
+	}
+	configs := list.Items
+
+	classes, _ := resolveSandboxClasses(wp, configs)
+	if err := r.syncStatus(ctx, wp, existing, classes); err != nil {
 		return err
 	}
-
-	dep := &appsv1.Deployment{}
-	if err := r.Get(ctx, types.NamespacedName{Name: wp.Name, Namespace: wp.Namespace}, dep); err != nil {
-		if k8errors.IsNotFound(err) {
-			return nil
-		}
-		return fmt.Errorf("failed to get deployment: %w", err)
+	// A pool without a Deployment gets one only once every sandbox class has
+	// a config.
+	if existing == nil && everyClassHasConfig(classes) {
+		return r.applyDeployment(ctx, wp)
 	}
+	return nil
+}
 
-	return r.syncStatus(ctx, wp, dep)
+// everyClassHasConfig reports whether every class in classes has a
+// SandboxConfig, either resolved now or kept from before.
+func everyClassHasConfig(classes []atev1alpha1.WorkerPoolSandboxClassStatus) bool {
+	for _, c := range classes {
+		if c.ConfigRef == nil {
+			return false
+		}
+	}
+	return true
 }
 
 func (r *WorkerPoolReconciler) applyDeployment(ctx context.Context, wp *atev1alpha1.WorkerPool) error {
@@ -136,22 +172,25 @@ func (r *WorkerPoolReconciler) applyDeployment(ctx context.Context, wp *atev1alp
 	return nil
 }
 
-func (r *WorkerPoolReconciler) syncStatus(ctx context.Context, wp *atev1alpha1.WorkerPool, dep *appsv1.Deployment) error {
-	selector, err := metav1.LabelSelectorAsSelector(dep.Spec.Selector)
-	if err != nil {
-		return fmt.Errorf("failed to convert Deployment selector: %w", err)
+// syncStatus writes wp's status: replica counts and selector from dep (left
+// as they are when dep is nil) and sandboxClasses from classes.
+func (r *WorkerPoolReconciler) syncStatus(ctx context.Context, wp *atev1alpha1.WorkerPool, dep *appsv1.Deployment, classes []atev1alpha1.WorkerPoolSandboxClassStatus) error {
+	want := wp.Status.DeepCopy()
+	if dep != nil {
+		selector, err := metav1.LabelSelectorAsSelector(dep.Spec.Selector)
+		if err != nil {
+			return fmt.Errorf("failed to convert Deployment selector: %w", err)
+		}
+		want.Replicas = dep.Status.Replicas
+		want.ReadyReplicas = dep.Status.ReadyReplicas
+		want.Selector = selector.String()
 	}
-
-	want := atev1alpha1.WorkerPoolStatus{
-		Replicas:      dep.Status.Replicas,
-		ReadyReplicas: dep.Status.ReadyReplicas,
-		Selector:      selector.String(),
-	}
-	if equality.Semantic.DeepEqual(wp.Status, want) {
+	want.SandboxClasses = classes
+	if equality.Semantic.DeepEqual(wp.Status, *want) {
 		return nil
 	}
 
-	wp.Status = want
+	wp.Status = *want
 	if err := r.Status().Update(ctx, wp); err != nil {
 		return fmt.Errorf("failed to update WorkerPool status: %w", err)
 	}
@@ -209,7 +248,12 @@ func (r *WorkerPoolReconciler) InitMetrics(meter metric.Meter) error {
 	return nil
 }
 
-// SetupWithManager sets up the controller with the Manager.
+// SetupWithManager registers this reconciler with mgr. The manager is the
+// controller-runtime object that runs every controller in atecontroller. It
+// keeps one shared cache of the Kubernetes objects the controllers watch, and
+// it calls a controller's Reconcile when one of those objects changes. A
+// WorkerPool is reconciled when it changes, when its Deployment changes, and
+// when a SandboxConfig that can change its resolution changes.
 func (r *WorkerPoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if err := r.InitMetrics(otel.Meter("atecontroller")); err != nil {
 		return fmt.Errorf("failed to initialize workerpool metrics: %w", err)
@@ -217,5 +261,39 @@ func (r *WorkerPoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&atev1alpha1.WorkerPool{}).
 		Owns(&appsv1.Deployment{}).
+		Watches(&atev1alpha1.SandboxConfig{}, handler.EnqueueRequestsFromMapFunc(r.workerPoolsForSandboxConfig)).
 		Complete(r)
+}
+
+// workerPoolsForSandboxConfig maps a SandboxConfig event to the WorkerPools
+// whose resolution it can change. Those are the pools that run its sandbox
+// class, because the config may become or stop being their default, and the
+// pools whose spec or status names it.
+func (r *WorkerPoolReconciler) workerPoolsForSandboxConfig(ctx context.Context, obj client.Object) []reconcile.Request {
+	sc, ok := obj.(*atev1alpha1.SandboxConfig)
+	if !ok {
+		return nil
+	}
+	var pools atev1alpha1.WorkerPoolList
+	if err := r.List(ctx, &pools); err != nil {
+		log.FromContext(ctx).Error(err, "failed to list worker pools for SandboxConfig", "sandboxConfig", sc.Name)
+		return nil
+	}
+	var reqs []reconcile.Request
+	for i := range pools.Items {
+		wp := &pools.Items[i]
+		if workerPoolMayUseSandboxConfig(wp, sc) {
+			reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(wp)})
+		}
+	}
+	return reqs
+}
+
+func workerPoolMayUseSandboxConfig(wp *atev1alpha1.WorkerPool, sc *atev1alpha1.SandboxConfig) bool {
+	for _, entry := range wp.Spec.SandboxClasses {
+		if entry.Name == sc.Spec.SandboxClass || (entry.ConfigRef != nil && entry.ConfigRef.Name == sc.Name) {
+			return true
+		}
+	}
+	return slices.Contains(sandboxConfigsInUse(wp), sc.Name)
 }

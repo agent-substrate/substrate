@@ -12,7 +12,7 @@ The `WorkerPool` defines the pool of physical "warm" compute capacity. It manage
 | :--- | :--- | :--- |
 | `replicas` | `int32` | **Required.** Number of physical standby pods to maintain in the cluster. |
 | `workerImage` | `string` | **Required.** The container image for the `ateom` herder process (e.g. `ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor`). |
-| `sandboxClasses` | `[]WorkerPoolSandboxClass` | **Required.** The sandbox runtime families the pool runs; exactly one entry today. Each entry has `name` (**required**, `gvisor` or `microvm`), which drives the worker pod shape (e.g. KVM device mounts, node placement), and `configRef.name` (optional), which names a cluster-scoped [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) of the same class. `configRef` is not consumed yet: the sandbox binaries still come from the `SandboxConfig` each `ActorTemplate` selects. |
+| `sandboxClasses` | `[]WorkerPoolSandboxClass` | **Required.** The sandbox runtime families the pool runs; exactly one entry today. Each entry has `name` (**required**, `gvisor` or `microvm`, immutable), which drives the worker pod shape (e.g. KVM device mounts, node placement), and `configRef.name` (optional), which names a cluster-scoped [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself) of the same class. Without `configRef`, the pool uses the class default (see [Class default](#class-default)). The controller records the result in `status.sandboxClasses`. The sandbox binaries an actor boots with still come from the `SandboxConfig` its `ActorTemplate` selects. |
 | `template` | `WorkerPoolPodTemplate` | **Optional.** Metadata, scheduling, and resource settings for worker workloads. |
 
 #### `WorkerPoolPodTemplate` (`spec.template`)
@@ -109,6 +109,7 @@ worker pod on a GPU node and reserves the device, and nothing else reads it.
 | :--- | :--- | :--- |
 | `replicas` | `int32` | Total number of worker pods, mirrored from the managed Deployment. |
 | `selector` | `string` | Label selector for the worker pods. |
+| `sandboxClasses` | `[]WorkerPoolSandboxClassStatus` | One entry per sandbox class, with `name`, `configRef.name` (the `SandboxConfig` in use), and `conditions`. The `Resolved` condition is `True` (reason `Resolved`) when the class's spec resolves. Otherwise it is `False` with reason `SandboxConfigNotFound`, `SandboxConfigDeleting`, `SandboxClassMismatch`, or `DefaultConfigNotFound`, and `configRef` keeps the last resolved config. `configRef` is omitted if the class has never resolved. The controller creates the worker Deployment only once every class has a config, and keeps updating an existing Deployment while a class does not resolve. |
 
 ---
 
@@ -418,6 +419,12 @@ Each entry of `versions` (`SandboxVersionConfig`):
 | `assets` | `map[arch]map[name]AssetFile` | Content-addressed files atelet fetches, keyed by architecture (`amd64`, `arm64`) then asset name. gVisor expects a `gvisor` asset (the release's `gvisor.tar.zstd`), which atelet auto-extracts. A micro-VM backend expects several. Each `AssetFile` is a `{ url, sha256 }` pair. A `ValidatingAdmissionPolicy` enforces each class's required assets on every version. |
 
 A cluster-wide gVisor `SandboxConfig` (`gvisor-default`) is installed with the platform, so gVisor templates can name it via `sandboxConfig.configName` without any extra setup.
+
+### Class default
+
+A `SandboxConfig` annotated `sandboxconfig.ate.dev/is-class-default: "true"` is a default for its `sandboxClass`. A `WorkerPool` entry without `configRef` uses the newest such config of its class that is not being deleted. Among configs created in the same second, the name that sorts first wins. More than one config of a class may carry the annotation, so a new default can be rolled out by creating it, and pools move to it without restarting their workers.
+
+While no default is available, the class reports `Resolved=False` with reason `DefaultConfigNotFound`, or `SandboxConfigDeleting` if the only defaults are being deleted. A pool that already uses a config keeps it meanwhile, even if that config is being deleted or has lost the annotation.
 
 ### Example
 
