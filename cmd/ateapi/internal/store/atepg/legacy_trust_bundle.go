@@ -26,14 +26,26 @@ import (
 // migrateLegacyActorTemplate has read it.
 const legacyTrustBundleDataSourceName protowire.Number = 1
 
+// legacyTrustBundleName is the one bundle a projection written before the
+// repeated names can have named: from the trust-bundle data source's
+// introduction until the names replaced the name, atelet allowlisted this
+// name alone.
+const legacyTrustBundleName = "egress-mitm.ate.dev"
+
 // migrateLegacyActorTemplate rewrites the trust-bundle projections an older
 // release wrote into the shape this release reads. Such a release named a
 // projection's one bundle in field 1, name, which the repeated names replaced
 // without a migration of the stored rows: read as written, the projection
 // names no bundle, and every boot from the template fails on the empty list
 // that a create of the same spec is refused for. A projection without names
-// takes its legacy name as its one name; one that carries names is left as it
-// is. The rewritten template is persisted by its next update.
+// takes its legacy name as its one name. One that holds neither is such a row
+// that a later release rewrote: every update of a template decodes the row
+// without the fields its descriptor does not declare and writes the whole
+// proto back, so the reconciler's first status write dropped field 1. It takes
+// legacyTrustBundleName, the only name such a release accepted; since the
+// repeated names a create without one is refused, so no other row stores a
+// projection without names. One that carries names is left as it is. The
+// rewritten template is persisted by its next update.
 func migrateLegacyActorTemplate(template *ateapipb.ActorTemplate) {
 	for _, vol := range template.GetVolumes() {
 		for _, dataSource := range vol.GetSystemInfo().GetDataSources() {
@@ -41,9 +53,11 @@ func migrateLegacyActorTemplate(template *ateapipb.ActorTemplate) {
 			if tb == nil || len(tb.GetNames()) > 0 {
 				continue
 			}
-			if name := unknownString(tb.ProtoReflect(), legacyTrustBundleDataSourceName); name != "" {
-				tb.Names = []string{name}
+			name := unknownString(tb.ProtoReflect(), legacyTrustBundleDataSourceName)
+			if name == "" {
+				name = legacyTrustBundleName
 			}
+			tb.Names = []string{name}
 		}
 	}
 }

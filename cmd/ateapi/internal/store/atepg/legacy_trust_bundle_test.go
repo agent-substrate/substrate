@@ -68,6 +68,9 @@ func TestUnmarshalStoredMigratesLegacyTrustBundleName(t *testing.T) {
 	legacy := func() *ateapipb.TrustBundleDataSource {
 		return withUnknownString(&ateapipb.TrustBundleDataSource{Path: legacyTestBundlePath}, legacyTrustBundleDataSourceName, legacyTestBundleName)
 	}
+	rewritten := func() *ateapipb.TrustBundleDataSource {
+		return &ateapipb.TrustBundleDataSource{Path: legacyTestBundlePath}
+	}
 
 	tests := []struct {
 		name    string
@@ -89,12 +92,23 @@ func TestUnmarshalStoredMigratesLegacyTrustBundleName(t *testing.T) {
 			legacyTrustBundleDataSourceName, legacyTestBundleName)),
 		want: legacyTestVolumes(&ateapipb.TrustBundleDataSource{Names: []string{"other.ate.dev"}, Path: legacyTestBundlePath}),
 	}, {
-		name:    "a projection without any name stays without one",
-		written: legacyTestTemplate(&ateapipb.TrustBundleDataSource{Path: legacyTestBundlePath}),
-		want:    legacyTestVolumes(&ateapipb.TrustBundleDataSource{Path: legacyTestBundlePath}),
+		name: "a legacy name wins over the allowlisted one",
+		written: legacyTestTemplate(withUnknownString(
+			&ateapipb.TrustBundleDataSource{Path: legacyTestBundlePath}, legacyTrustBundleDataSourceName, "other.ate.dev")),
+		want: legacyTestVolumes(&ateapipb.TrustBundleDataSource{Names: []string{"other.ate.dev"}, Path: legacyTestBundlePath}),
+	}, {
+		// A later release's update rewrote the legacy row without field 1:
+		// the projection can only have named the one bundle atelet allowed.
+		name:    "a rewritten legacy row takes the allowlisted name",
+		written: legacyTestTemplate(rewritten()),
+		want:    legacyTestVolumes(migrated),
 	}, {
 		name:    "two projections, one legacy",
 		written: twoProjections(legacyTestTemplate(legacy()), proto.CloneOf(migrated)),
+		want:    twoProjections(legacyTestTemplate(migrated), migrated).GetVolumes(),
+	}, {
+		name:    "two projections, one rewritten",
+		written: twoProjections(legacyTestTemplate(proto.CloneOf(migrated)), rewritten()),
 		want:    twoProjections(legacyTestTemplate(migrated), migrated).GetVolumes(),
 	}, {
 		name:    "unknown fields of a newer release are dropped",
@@ -138,55 +152,67 @@ func twoProjections(template *ateapipb.ActorTemplate, trustBundle *ateapipb.Trus
 }
 
 func TestLegacyTrustBundleNameMigrationIsPersisted(t *testing.T) {
-	s := setupPostgresPersistence(t)
-	ctx := context.Background()
-	createTestAtespace(t, s, "team-a")
-	created, err := s.CreateActorTemplate(ctx, legacyTestTemplate(&ateapipb.TrustBundleDataSource{
-		Names: []string{legacyTestBundleName}, Path: legacyTestBundlePath,
-	}))
-	if err != nil {
-		t.Fatalf("CreateActorTemplate: %v", err)
-	}
-	templateRef := resources.ActorTemplateRefFromActorTemplate(created)
+	for _, tc := range []struct {
+		name   string
+		legacy *ateapipb.TrustBundleDataSource
+	}{{
+		// What a release before names wrote for the template.
+		name:   "legacy name",
+		legacy: withUnknownString(&ateapipb.TrustBundleDataSource{Path: legacyTestBundlePath}, legacyTrustBundleDataSourceName, legacyTestBundleName),
+	}, {
+		// The same row after a later release's update rewrote it.
+		name:   "rewritten legacy row",
+		legacy: &ateapipb.TrustBundleDataSource{Path: legacyTestBundlePath},
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := setupPostgresPersistence(t)
+			ctx := context.Background()
+			createTestAtespace(t, s, "team-a")
+			created, err := s.CreateActorTemplate(ctx, legacyTestTemplate(&ateapipb.TrustBundleDataSource{
+				Names: []string{legacyTestBundleName}, Path: legacyTestBundlePath,
+			}))
+			if err != nil {
+				t.Fatalf("CreateActorTemplate: %v", err)
+			}
+			templateRef := resources.ActorTemplateRefFromActorTemplate(created)
 
-	// Overwrite the row with what a release before names wrote for this
-	// template.
-	legacy := proto.CloneOf(created)
-	legacy.Volumes = legacyTestVolumes(withUnknownString(
-		&ateapipb.TrustBundleDataSource{Path: legacyTestBundlePath}, legacyTrustBundleDataSourceName, legacyTestBundleName))
-	legacyBytes, err := proto.Marshal(legacy)
-	if err != nil {
-		t.Fatalf("Marshal: %v", err)
-	}
-	if _, err := s.pool.Exec(ctx, `UPDATE actor_templates SET proto = $1 WHERE atespace = $2 AND name = $3`, legacyBytes, templateRef.Atespace, templateRef.Name); err != nil {
-		t.Fatalf("writing the legacy row: %v", err)
-	}
+			legacy := proto.CloneOf(created)
+			legacy.Volumes = legacyTestVolumes(tc.legacy)
+			legacyBytes, err := proto.Marshal(legacy)
+			if err != nil {
+				t.Fatalf("Marshal: %v", err)
+			}
+			if _, err := s.pool.Exec(ctx, `UPDATE actor_templates SET proto = $1 WHERE atespace = $2 AND name = $3`, legacyBytes, templateRef.Atespace, templateRef.Name); err != nil {
+				t.Fatalf("writing the legacy row: %v", err)
+			}
 
-	wantNames := []string{legacyTestBundleName}
-	got, err := s.GetActorTemplate(ctx, templateRef)
-	if err != nil {
-		t.Fatalf("GetActorTemplate: %v", err)
-	}
-	if diff := cmp.Diff(wantNames, legacyTestTrustBundleNames(got)); diff != "" {
-		t.Fatalf("GetActorTemplate trust bundle names (-want +got):\n%s", diff)
-	}
+			wantNames := []string{legacyTestBundleName}
+			got, err := s.GetActorTemplate(ctx, templateRef)
+			if err != nil {
+				t.Fatalf("GetActorTemplate: %v", err)
+			}
+			if diff := cmp.Diff(wantNames, legacyTestTrustBundleNames(got)); diff != "" {
+				t.Fatalf("GetActorTemplate trust bundle names (-want +got):\n%s", diff)
+			}
 
-	if _, err := s.UpdateActorTemplate(ctx, templateRef, store.PreconditionFrom(got), func(*ateapipb.ActorTemplate) error { return nil }); err != nil {
-		t.Fatalf("UpdateActorTemplate: %v", err)
-	}
-	var stored []byte
-	if err := s.pool.QueryRow(ctx, `SELECT proto FROM actor_templates WHERE atespace = $1 AND name = $2`, templateRef.Atespace, templateRef.Name).Scan(&stored); err != nil {
-		t.Fatalf("reading the row: %v", err)
-	}
-	if !unknownFieldsFree(t, stored, &ateapipb.ActorTemplate{}) {
-		t.Errorf("the updated row still holds the legacy name")
-	}
-	persisted := &ateapipb.ActorTemplate{}
-	if err := proto.Unmarshal(stored, persisted); err != nil {
-		t.Fatalf("Unmarshal: %v", err)
-	}
-	if diff := cmp.Diff(wantNames, legacyTestTrustBundleNames(persisted)); diff != "" {
-		t.Errorf("persisted trust bundle names (-want +got):\n%s", diff)
+			if _, err := s.UpdateActorTemplate(ctx, templateRef, store.PreconditionFrom(got), func(*ateapipb.ActorTemplate) error { return nil }); err != nil {
+				t.Fatalf("UpdateActorTemplate: %v", err)
+			}
+			var stored []byte
+			if err := s.pool.QueryRow(ctx, `SELECT proto FROM actor_templates WHERE atespace = $1 AND name = $2`, templateRef.Atespace, templateRef.Name).Scan(&stored); err != nil {
+				t.Fatalf("reading the row: %v", err)
+			}
+			if !unknownFieldsFree(t, stored, &ateapipb.ActorTemplate{}) {
+				t.Errorf("the updated row still holds the legacy name")
+			}
+			persisted := &ateapipb.ActorTemplate{}
+			if err := proto.Unmarshal(stored, persisted); err != nil {
+				t.Fatalf("Unmarshal: %v", err)
+			}
+			if diff := cmp.Diff(wantNames, legacyTestTrustBundleNames(persisted)); diff != "" {
+				t.Errorf("persisted trust bundle names (-want +got):\n%s", diff)
+			}
+		})
 	}
 }
 
