@@ -150,7 +150,7 @@ type ControlClient interface {
 	// Mark a Worker as terminating so the scheduler stops routing new Actors to
 	// it. Idempotent; one-way. Deliberately leaves any bound Actor alone.
 	// Returns ABORTED if another write lands on the Worker first; retry.
-	DrainWorker(ctx context.Context, in *DrainWorkerRequest, opts ...grpc.CallOption) (*Worker, error)
+	DrainWorker(ctx context.Context, in *DrainWorkerRequest, opts ...grpc.CallOption) (*DrainWorkerResponse, error)
 	// List the Actors hosted by a given Worker.
 	ListWorkerActorAssignments(ctx context.Context, in *ListWorkerActorAssignmentsRequest, opts ...grpc.CallOption) (*ListWorkerActorAssignmentsResponse, error)
 	// List Actors.
@@ -439,9 +439,9 @@ func (c *controlClient) DeleteWorker(ctx context.Context, in *DeleteWorkerReques
 	return out, nil
 }
 
-func (c *controlClient) DrainWorker(ctx context.Context, in *DrainWorkerRequest, opts ...grpc.CallOption) (*Worker, error) {
+func (c *controlClient) DrainWorker(ctx context.Context, in *DrainWorkerRequest, opts ...grpc.CallOption) (*DrainWorkerResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(Worker)
+	out := new(DrainWorkerResponse)
 	err := c.cc.Invoke(ctx, Control_DrainWorker_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -692,7 +692,7 @@ type ControlServer interface {
 	// Mark a Worker as terminating so the scheduler stops routing new Actors to
 	// it. Idempotent; one-way. Deliberately leaves any bound Actor alone.
 	// Returns ABORTED if another write lands on the Worker first; retry.
-	DrainWorker(context.Context, *DrainWorkerRequest) (*Worker, error)
+	DrainWorker(context.Context, *DrainWorkerRequest) (*DrainWorkerResponse, error)
 	// List the Actors hosted by a given Worker.
 	ListWorkerActorAssignments(context.Context, *ListWorkerActorAssignmentsRequest) (*ListWorkerActorAssignmentsResponse, error)
 	// List Actors.
@@ -813,7 +813,7 @@ func (UnimplementedControlServer) UpdateWorker(context.Context, *UpdateWorkerReq
 func (UnimplementedControlServer) DeleteWorker(context.Context, *DeleteWorkerRequest) (*Worker, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteWorker not implemented")
 }
-func (UnimplementedControlServer) DrainWorker(context.Context, *DrainWorkerRequest) (*Worker, error) {
+func (UnimplementedControlServer) DrainWorker(context.Context, *DrainWorkerRequest) (*DrainWorkerResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DrainWorker not implemented")
 }
 func (UnimplementedControlServer) ListWorkerActorAssignments(context.Context, *ListWorkerActorAssignmentsRequest) (*ListWorkerActorAssignmentsResponse, error) {
@@ -1825,7 +1825,7 @@ var Control_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	WorkerService_SetWorkerCapacity_FullMethodName         = "/ateapi.WorkerService/SetWorkerCapacity"
+	WorkerService_RegisterWorker_FullMethodName            = "/ateapi.WorkerService/RegisterWorker"
 	WorkerService_MintAteomActorCertificate_FullMethodName = "/ateapi.WorkerService/MintAteomActorCertificate"
 	WorkerService_RequestActorSuspend_FullMethodName       = "/ateapi.WorkerService/RequestActorSuspend"
 )
@@ -1839,14 +1839,17 @@ const (
 // authorization: Control is the client-facing API, while these RPCs are served
 // only to an atelet, and only for the Workers on its own node.
 type WorkerServiceClient interface {
-	// SetWorkerCapacity records what a Worker can hold. Capacity is the Worker's
-	// to report rather than the control plane's to infer: it is what the ateom
-	// can actually supply, only its node can observe it, and a fleet may run
-	// mixed ateom versions.
+	// RegisterWorker records what a Worker can hold and its supported sandbox
+	// runtimes in one write, so a Worker is never schedulable without runtime
+	// compatibility information to match snapshots against. Capacity and
+	// runtimes are the Worker's to report rather than the control plane's to
+	// infer: they are what the worker can actually supply and expose, only its
+	// node can observe them, and a fleet may run mixed versions.
 	//
 	// atelet calls this with its own client certificate, as it does for
-	// MintCert. Idempotent: re-sending the same capacity is not a write.
-	SetWorkerCapacity(ctx context.Context, in *SetWorkerCapacityRequest, opts ...grpc.CallOption) (*SetWorkerCapacityResponse, error)
+	// MintCert. Idempotent: re-sending the same capacity and runtimes is not a
+	// write.
+	RegisterWorker(ctx context.Context, in *RegisterWorkerRequest, opts ...grpc.CallOption) (*RegisterWorkerResponse, error)
 	// Create a Substrate-issued SPIFFE certificate that asserts an ateom acting
 	// on behalf of a particular actor.
 	//
@@ -1862,7 +1865,7 @@ type WorkerServiceClient interface {
 	// that races a resume, pause, or delete loses to it.
 	//
 	// atelet calls this with its own client certificate, as it does for
-	// SetWorkerCapacity, naming the Worker its caller proved itself to be. The
+	// RegisterWorker, naming the Worker its caller proved itself to be. The
 	// control plane serves it only for an Actor that is assigned to that Worker.
 	//
 	// Not idempotent, unlike Control.SuspendActor, which reports an
@@ -1882,10 +1885,10 @@ func NewWorkerServiceClient(cc grpc.ClientConnInterface) WorkerServiceClient {
 	return &workerServiceClient{cc}
 }
 
-func (c *workerServiceClient) SetWorkerCapacity(ctx context.Context, in *SetWorkerCapacityRequest, opts ...grpc.CallOption) (*SetWorkerCapacityResponse, error) {
+func (c *workerServiceClient) RegisterWorker(ctx context.Context, in *RegisterWorkerRequest, opts ...grpc.CallOption) (*RegisterWorkerResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(SetWorkerCapacityResponse)
-	err := c.cc.Invoke(ctx, WorkerService_SetWorkerCapacity_FullMethodName, in, out, cOpts...)
+	out := new(RegisterWorkerResponse)
+	err := c.cc.Invoke(ctx, WorkerService_RegisterWorker_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1921,14 +1924,17 @@ func (c *workerServiceClient) RequestActorSuspend(ctx context.Context, in *Reque
 // authorization: Control is the client-facing API, while these RPCs are served
 // only to an atelet, and only for the Workers on its own node.
 type WorkerServiceServer interface {
-	// SetWorkerCapacity records what a Worker can hold. Capacity is the Worker's
-	// to report rather than the control plane's to infer: it is what the ateom
-	// can actually supply, only its node can observe it, and a fleet may run
-	// mixed ateom versions.
+	// RegisterWorker records what a Worker can hold and its supported sandbox
+	// runtimes in one write, so a Worker is never schedulable without runtime
+	// compatibility information to match snapshots against. Capacity and
+	// runtimes are the Worker's to report rather than the control plane's to
+	// infer: they are what the worker can actually supply and expose, only its
+	// node can observe them, and a fleet may run mixed versions.
 	//
 	// atelet calls this with its own client certificate, as it does for
-	// MintCert. Idempotent: re-sending the same capacity is not a write.
-	SetWorkerCapacity(context.Context, *SetWorkerCapacityRequest) (*SetWorkerCapacityResponse, error)
+	// MintCert. Idempotent: re-sending the same capacity and runtimes is not a
+	// write.
+	RegisterWorker(context.Context, *RegisterWorkerRequest) (*RegisterWorkerResponse, error)
 	// Create a Substrate-issued SPIFFE certificate that asserts an ateom acting
 	// on behalf of a particular actor.
 	//
@@ -1944,7 +1950,7 @@ type WorkerServiceServer interface {
 	// that races a resume, pause, or delete loses to it.
 	//
 	// atelet calls this with its own client certificate, as it does for
-	// SetWorkerCapacity, naming the Worker its caller proved itself to be. The
+	// RegisterWorker, naming the Worker its caller proved itself to be. The
 	// control plane serves it only for an Actor that is assigned to that Worker.
 	//
 	// Not idempotent, unlike Control.SuspendActor, which reports an
@@ -1964,8 +1970,8 @@ type WorkerServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedWorkerServiceServer struct{}
 
-func (UnimplementedWorkerServiceServer) SetWorkerCapacity(context.Context, *SetWorkerCapacityRequest) (*SetWorkerCapacityResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method SetWorkerCapacity not implemented")
+func (UnimplementedWorkerServiceServer) RegisterWorker(context.Context, *RegisterWorkerRequest) (*RegisterWorkerResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RegisterWorker not implemented")
 }
 func (UnimplementedWorkerServiceServer) MintAteomActorCertificate(context.Context, *MintAteomActorCertificateRequest) (*MintAteomActorCertificateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method MintAteomActorCertificate not implemented")
@@ -1994,20 +2000,20 @@ func RegisterWorkerServiceServer(s grpc.ServiceRegistrar, srv WorkerServiceServe
 	s.RegisterService(&WorkerService_ServiceDesc, srv)
 }
 
-func _WorkerService_SetWorkerCapacity_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(SetWorkerCapacityRequest)
+func _WorkerService_RegisterWorker_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RegisterWorkerRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(WorkerServiceServer).SetWorkerCapacity(ctx, in)
+		return srv.(WorkerServiceServer).RegisterWorker(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: WorkerService_SetWorkerCapacity_FullMethodName,
+		FullMethod: WorkerService_RegisterWorker_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(WorkerServiceServer).SetWorkerCapacity(ctx, req.(*SetWorkerCapacityRequest))
+		return srv.(WorkerServiceServer).RegisterWorker(ctx, req.(*RegisterWorkerRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -2056,8 +2062,8 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*WorkerServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
-			MethodName: "SetWorkerCapacity",
-			Handler:    _WorkerService_SetWorkerCapacity_Handler,
+			MethodName: "RegisterWorker",
+			Handler:    _WorkerService_RegisterWorker_Handler,
 		},
 		{
 			MethodName: "MintAteomActorCertificate",

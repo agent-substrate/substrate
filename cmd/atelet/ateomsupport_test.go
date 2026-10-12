@@ -88,18 +88,18 @@ func workerCertificate(t *testing.T, podUID, nodeName string) *x509.Certificate 
 type fakeWorkerService struct {
 	ateapipb.WorkerServiceClient
 
-	got      []*ateapipb.SetWorkerCapacityRequest
+	got      []*ateapipb.RegisterWorkerRequest
 	mintGot  []*ateapipb.MintAteomActorCertificateRequest
 	mintResp *ateapipb.MintAteomActorCertificateResponse
 	err      error
 }
 
-func (s *fakeWorkerService) SetWorkerCapacity(_ context.Context, in *ateapipb.SetWorkerCapacityRequest, _ ...grpc.CallOption) (*ateapipb.SetWorkerCapacityResponse, error) {
+func (s *fakeWorkerService) RegisterWorker(_ context.Context, in *ateapipb.RegisterWorkerRequest, _ ...grpc.CallOption) (*ateapipb.RegisterWorkerResponse, error) {
 	if s.err != nil {
 		return nil, s.err
 	}
 	s.got = append(s.got, in)
-	return &ateapipb.SetWorkerCapacityResponse{}, nil
+	return &ateapipb.RegisterWorkerResponse{}, nil
 }
 
 func (s *fakeWorkerService) MintAteomActorCertificate(_ context.Context, in *ateapipb.MintAteomActorCertificateRequest, _ ...grpc.CallOption) (*ateapipb.MintAteomActorCertificateResponse, error) {
@@ -113,11 +113,42 @@ func (s *fakeWorkerService) MintAteomActorCertificate(_ context.Context, in *ate
 	return &ateapipb.MintAteomActorCertificateResponse{}, nil
 }
 
-func TestSetWorkerCapacity(t *testing.T) {
-	forwarded := func(capacity *ateapipb.WorkerResources) []*ateapipb.SetWorkerCapacityRequest {
+func TestRegisterWorker(t *testing.T) {
+	reqRuntime := func(hash string) *ateletpb.SandboxRuntime {
+		return &ateletpb.SandboxRuntime{
+			SandboxClass: "gvisor",
+			Version: &ateletpb.VersionedSandboxCompat{
+				SchemaVersion: "v1",
+				Attributes: []*ateletpb.AttributeEntry{
+					{Key: "architecture", Value: "amd64"},
+					{Key: "gvisor_asset_hash", Value: hash},
+				},
+			},
+		}
+	}
+	wantRuntime := func(hash string) *ateapipb.SandboxRuntime {
+		return &ateapipb.SandboxRuntime{
+			SandboxClass: "gvisor",
+			Version: &ateapipb.VersionedSandboxCompat{
+				SchemaVersion: "v1",
+				Attributes: []*ateapipb.AttributeEntry{
+					{Key: "architecture", Value: "amd64"},
+					{Key: "gvisor_asset_hash", Value: hash},
+				},
+			},
+		}
+	}
+	reqDefault, wantDefault := reqRuntime("9988"), wantRuntime("9988")
+	forwarded := func(capacity *ateapipb.WorkerResources, restorable ...*ateapipb.SandboxRuntime) []*ateapipb.RegisterWorkerRequest {
 		// The Worker is named after the worker pod UID, taken from the
-		// certificate rather than the request.
-		return []*ateapipb.SetWorkerCapacityRequest{{Worker: &ateapipb.ObjectRef{Name: "pod-a"}, Capacity: capacity}}
+		// certificate rather than the request; capacity and runtimes come
+		// from what the worker reported.
+		return []*ateapipb.RegisterWorkerRequest{{
+			Worker:             &ateapipb.ObjectRef{Name: "pod-a"},
+			Capacity:           capacity,
+			DefaultRuntime:     wantDefault,
+			RestorableRuntimes: restorable,
+		}}
 	}
 
 	tests := []struct {
@@ -126,38 +157,56 @@ func TestSetWorkerCapacity(t *testing.T) {
 		unauthenticated bool
 		// serviceErr is what the control plane answers with.
 		serviceErr    error
-		req           *ateletpb.SetWorkerCapacityRequest
+		req           *ateletpb.RegisterWorkerRequest
 		wantCode      codes.Code
-		wantForwarded []*ateapipb.SetWorkerCapacityRequest
+		wantForwarded []*ateapipb.RegisterWorkerRequest
 	}{{
 		name: "records what the worker says",
-		req: &ateletpb.SetWorkerCapacityRequest{Capacity: &ateletpb.WorkerResources{Actors: 4, Resources: &ateletpb.Resources{
-			Limits: []*ateletpb.Limits{{Name: "cpu", Quantity: "2"}, {Name: "memory", Quantity: "4Gi"}},
-		}}},
+		req: &ateletpb.RegisterWorkerRequest{
+			Capacity: &ateletpb.WorkerResources{Actors: 4, Resources: &ateletpb.Resources{
+				Limits: []*ateletpb.Limits{{Name: "cpu", Quantity: "2"}, {Name: "memory", Quantity: "4Gi"}},
+			}},
+			DefaultRuntime: reqDefault,
+		},
 		wantForwarded: forwarded(&ateapipb.WorkerResources{Actors: 4, Resources: resources.CPUMemory(2000, 4294967296)}),
 	}, {
+		name: "forwards restorable runtimes",
+		req: &ateletpb.RegisterWorkerRequest{
+			Capacity:           &ateletpb.WorkerResources{Actors: 1},
+			DefaultRuntime:     reqDefault,
+			RestorableRuntimes: []*ateletpb.SandboxRuntime{reqRuntime("d547")},
+		},
+		wantForwarded: forwarded(&ateapipb.WorkerResources{Actors: 1}, wantRuntime("d547")),
+	}, {
 		name:          "omits undetermined compute",
-		req:           &ateletpb.SetWorkerCapacityRequest{Capacity: &ateletpb.WorkerResources{Actors: 1}},
+		req:           &ateletpb.RegisterWorkerRequest{Capacity: &ateletpb.WorkerResources{Actors: 1}, DefaultRuntime: reqDefault},
 		wantForwarded: forwarded(&ateapipb.WorkerResources{Actors: 1}),
 	}, {
 		name:          "forwards empty resources",
-		req:           &ateletpb.SetWorkerCapacityRequest{Capacity: &ateletpb.WorkerResources{Resources: &ateletpb.Resources{}}},
+		req:           &ateletpb.RegisterWorkerRequest{Capacity: &ateletpb.WorkerResources{Resources: &ateletpb.Resources{}}, DefaultRuntime: reqDefault},
 		wantForwarded: forwarded(&ateapipb.WorkerResources{Resources: &ateapipb.Resources{}}),
 	}, {
 		name: "rejects invalid capacity without forwarding",
-		req: &ateletpb.SetWorkerCapacityRequest{Capacity: &ateletpb.WorkerResources{Resources: &ateletpb.Resources{
-			Limits: []*ateletpb.Limits{{Name: "gpu", Quantity: "1"}},
-		}}},
+		req: &ateletpb.RegisterWorkerRequest{
+			Capacity: &ateletpb.WorkerResources{Resources: &ateletpb.Resources{
+				Limits: []*ateletpb.Limits{{Name: "gpu", Quantity: "1"}},
+			}},
+			DefaultRuntime: reqDefault,
+		},
 		wantCode: codes.InvalidArgument,
 	}, {
 		name:     "rejects missing capacity without forwarding",
-		req:      &ateletpb.SetWorkerCapacityRequest{},
+		req:      &ateletpb.RegisterWorkerRequest{DefaultRuntime: reqDefault},
+		wantCode: codes.InvalidArgument,
+	}, {
+		name:     "rejects missing default runtime without forwarding",
+		req:      &ateletpb.RegisterWorkerRequest{Capacity: &ateletpb.WorkerResources{Actors: 1}},
 		wantCode: codes.InvalidArgument,
 	}, {
 		// A worker may report only what its certificate proves it is.
 		name:            "requires a certificate",
 		unauthenticated: true,
-		req:             &ateletpb.SetWorkerCapacityRequest{Capacity: &ateletpb.WorkerResources{Actors: 1}},
+		req:             &ateletpb.RegisterWorkerRequest{Capacity: &ateletpb.WorkerResources{Actors: 1}, DefaultRuntime: reqDefault},
 		wantCode:        codes.Unauthenticated,
 	}, {
 		// The Worker record may not exist yet. The error must reach the
@@ -165,7 +214,7 @@ func TestSetWorkerCapacity(t *testing.T) {
 		// leaves the Worker with no capacity forever.
 		name:       "surfaces the control plane's rejection",
 		serviceErr: errors.New("no such worker"),
-		req:        &ateletpb.SetWorkerCapacityRequest{Capacity: &ateletpb.WorkerResources{Actors: 1}},
+		req:        &ateletpb.RegisterWorkerRequest{Capacity: &ateletpb.WorkerResources{Actors: 1}, DefaultRuntime: reqDefault},
 		wantCode:   codes.Unknown,
 	}}
 	for _, tt := range tests {
@@ -177,9 +226,9 @@ func TestSetWorkerCapacity(t *testing.T) {
 				ctx = context.Background()
 			}
 
-			_, err := svc.SetWorkerCapacity(ctx, tt.req)
+			_, err := svc.RegisterWorker(ctx, tt.req)
 			if got := status.Code(err); got != tt.wantCode {
-				t.Errorf("SetWorkerCapacity() code = %v (%v), want %v", got, err, tt.wantCode)
+				t.Errorf("RegisterWorker() code = %v (%v), want %v", got, err, tt.wantCode)
 			}
 			if diff := cmp.Diff(tt.wantForwarded, workers.got, protocmp.Transform()); diff != "" {
 				t.Errorf("forwarded requests mismatch (-want +got):\n%s", diff)

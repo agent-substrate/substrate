@@ -24,6 +24,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
+	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/resources"
 )
 
@@ -45,9 +46,29 @@ func statusDescription(err error) string {
 	return status.Convert(err).Message()
 }
 
+// shedOutcome returns the route outcome of a request that is shed while its
+// flight retries on retryErr: no_capacity for a ResourceExhausted retryErr,
+// unavailable otherwise. parkingFullErr and the parking.rejected label both
+// use it, so the two always agree.
+func shedOutcome(retryErr error) string {
+	if status.Code(retryErr) == codes.ResourceExhausted {
+		return ateattr.RouterOutcomeNoCapacity
+	}
+	return ateattr.RouterOutcomeUnavailable
+}
+
 // parkingFullErr returns a 503 denial signaling that the router's parking lot
 // is at capacity, so the request was shed without waiting. Clients should retry.
-func parkingFullErr(actorID string) error {
+//
+// retryErr is the failure that made the flight retry. A ResourceExhausted
+// retryErr is kept as the cause, so the route metric reports no_capacity. Any
+// other retryErr is dropped: a shed request is not a lock conflict or a failed
+// precondition, so it reports unavailable.
+func parkingFullErr(actorID string, retryErr error) error {
+	if shedOutcome(retryErr) == ateattr.RouterOutcomeNoCapacity {
+		return extproc.WrapReqError(envoy_type.StatusCode_ServiceUnavailable, retryErr,
+			"actor %q unavailable: router at capacity", actorID)
+	}
 	return extproc.NewReqError(envoy_type.StatusCode_ServiceUnavailable,
 		"actor %q unavailable: router at capacity", actorID)
 }
@@ -117,8 +138,8 @@ func mapResumeError(actorRef resources.ActorRef, err error) error {
 		re.Msg = fmt.Sprintf("actor %s authentication required", actorRef)
 	case codes.ResourceExhausted:
 		// Preserve the gRPC description for ResourceExhausted. It carries actionable
-		// client-facing context (e.g. "no free workers available") and are not
-		// security-sensitive.
+		// client-facing context (e.g. "no worker has room for the actor") and are
+		// not security-sensitive.
 		// Pool saturation (ResourceExhausted) is 503 rather than 429: the fleet is
 		// full, the caller did not send too many requests.
 		re.StatusCode = int(envoy_type.StatusCode_ServiceUnavailable)

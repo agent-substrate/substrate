@@ -20,11 +20,11 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
@@ -176,10 +176,10 @@ func TestRejectUnknownFieldsUnaryInterceptor(t *testing.T) {
 				called = true
 				return nil, nil
 			})
-		if got, want := status.Code(err), codes.InvalidArgument; got != want {
+		if got, want := apierror.Code(err), codes.InvalidArgument; got != want {
 			t.Fatalf("status code = %v, want %v (error: %v)", got, want, err)
 		}
-		if got, want := status.Convert(err).Message(), "request: Invalid value: unknown field with protobuf tag 9999"; got != want {
+		if got, want := err.Error(), "request: Invalid value: unknown field with protobuf tag 9999"; got != want {
 			t.Errorf("error message = %q, want %q", got, want)
 		}
 		if called {

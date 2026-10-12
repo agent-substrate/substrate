@@ -20,11 +20,10 @@ import (
 	"context"
 	"log/slog"
 
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/substratex509"
-	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/peer"
-	"google.golang.org/grpc/status"
 )
 
 // Caller is the verified identity of an atelet.
@@ -44,16 +43,16 @@ type Caller struct {
 func Authenticate(ctx context.Context, ateletSPIFFEID string) (*Caller, error) {
 	p, ok := peer.FromContext(ctx)
 	if !ok {
-		return nil, status.Errorf(codes.Unauthenticated, "no peer transport information found")
+		return nil, apierror.Unauthenticated("no peer transport information found")
 	}
 
 	tlsInfo, ok := p.AuthInfo.(credentials.TLSInfo)
 	if !ok {
-		return nil, status.Errorf(codes.Unauthenticated, "unexpected peer transport credentials")
+		return nil, apierror.Unauthenticated("unexpected peer transport credentials")
 	}
 
 	if len(tlsInfo.State.PeerCertificates) == 0 {
-		return nil, status.Errorf(codes.Unauthenticated, "could not verify peer certificate")
+		return nil, apierror.Unauthenticated("could not verify peer certificate")
 	}
 	leaf := tlsInfo.State.PeerCertificates[0]
 
@@ -83,5 +82,5 @@ func Authenticate(ctx context.Context, ateletSPIFFEID string) (*Caller, error) {
 // denied is deliberately uniform: a caller learns that it is not atelet, and
 // nothing about why.
 func denied() error {
-	return status.Error(codes.PermissionDenied, "caller is not permitted")
+	return apierror.PermissionDenied("caller is not permitted")
 }

@@ -610,8 +610,24 @@ func (u *sessionUser) execOp(ctx context.Context, o op) error {
 		return u.postProto(ctx, glutton.PingRoute,
 			&gluttonpb.PingRequest{Message: "think"},
 			&gluttonpb.PingResponse{})
+	case opDwell:
+		// No request: the actor stays resident while the driver waits, the
+		// way a gateway sits in an LLM round trip or a typing gap.
+		return dwell(ctx, time.Duration(o.millis)*time.Millisecond)
 	default:
 		return fmt.Errorf("unknown op kind %d", o.kind)
+	}
+}
+
+// dwell idles for d or until ctx ends, whichever comes first.
+func dwell(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 

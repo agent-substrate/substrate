@@ -25,8 +25,7 @@ package demos
 import (
 	"context"
 	"sort"
-
-	"github.com/spf13/pflag"
+	"strings"
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/steps"
@@ -44,8 +43,10 @@ type Demo interface {
 	Name() string
 	// Description is the one-line summary shown in help.
 	Description() string
-	// Flags registers demo-specific flags, if any.
-	Flags(fs *pflag.FlagSet)
+	// Settings declares the demo's own configuration, if any. They are
+	// registered globally and bound as flags only on this demo's deploy
+	// command, so a document can name them whichever command runs.
+	Settings() []config.Setting
 	// Deploy installs the demo.
 	Deploy(ctx context.Context, e *steps.Env) error
 	// Delete removes the demo. It must succeed on a cluster where the demo was
@@ -68,6 +69,22 @@ func Register(d Demo) {
 		panic("duplicate demo registration: " + d.Name())
 	}
 	registry[d.Name()] = d
+
+	// A demo's settings are registered here rather than where the command
+	// tree is built, so they exist wherever the demo package is linked --
+	// including its own tests.
+	settings := d.Settings()
+	path := DeployCommandPath(d)
+	for i := range settings {
+		settings[i].Commands = []string{path}
+	}
+	config.RegisterCommand(settings...)
+}
+
+// DeployCommandPath is the command a demo is deployed by, as it is typed:
+// "deploy demo counter". Demo settings bind their flags to it.
+func DeployCommandPath(d Demo) string {
+	return "deploy demo " + strings.TrimPrefix(d.Name(), "demo-")
 }
 
 // All returns every registered demo, sorted by name.

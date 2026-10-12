@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -35,14 +36,14 @@ func TestMapAccessPolicyWrite_Codes(t *testing.T) {
 	}{
 		{name: "nonstandard backend code", err: openFGAErr, want: codes.Internal},
 		{name: "wrapped nonstandard backend code", err: fmt.Errorf("reconciling: %w", openFGAErr), want: codes.Internal},
-		{name: "canonical status passes through", err: status.Error(codes.InvalidArgument, "bad"), want: codes.InvalidArgument},
-		{name: "plain error", err: errors.New("boom"), want: codes.Unknown},
+		{name: "apierror passes through", err: apierror.InvalidArgument("bad"), want: codes.InvalidArgument},
+		{name: "plain error", err: errors.New("boom"), want: codes.Internal},
 		{name: "not found", err: store.ErrNotFound, want: codes.NotFound},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := mapAccessPolicyWrite(nil, tc.err)
-			if got := status.Code(err); got != tc.want {
+			if got := apierror.Code(err); got != tc.want {
 				t.Errorf("mapAccessPolicyWrite(%v) code = %v, want %v", tc.err, got, tc.want)
 			}
 		})

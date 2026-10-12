@@ -39,3 +39,8 @@ func (c *Client) ControllerPublishVolume(ctx context.Context, req *csi.Controlle
 func (c *Client) ControllerUnpublishVolume(ctx context.Context, req *csi.ControllerUnpublishVolumeRequest) (*csi.ControllerUnpublishVolumeResponse, error) {
 	return c.controller.ControllerUnpublishVolume(ctx, req)
 }
+
+// ControllerGetCapabilities returns the capabilities supported by the controller service.
+func (c *Client) ControllerGetCapabilities(ctx context.Context, req *csi.ControllerGetCapabilitiesRequest) (*csi.ControllerGetCapabilitiesResponse, error) {
+	return c.controller.ControllerGetCapabilities(ctx, req)
+}

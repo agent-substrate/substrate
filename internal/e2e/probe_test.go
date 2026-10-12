@@ -22,10 +22,8 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
-// TestProbeTemplate_TrustBundle pins the opt-in. The bundle is derived from
-// one cluster-wide Secret, so a probe suite that does not ask for the
-// projection must not carry it: it would otherwise fail whenever the suite
-// that owns the pool finishes and takes the bundle with it.
+// TestProbeTemplate_TrustBundle checks that the probe template includes the
+// trust bundle only when a suite asks for it with WithTrustBundle.
 func TestProbeTemplate_TrustBundle(t *testing.T) {
 	t.Setenv(sandboxClassEnv, "")
 	for _, tc := range []struct {

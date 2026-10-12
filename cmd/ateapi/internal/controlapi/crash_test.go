@@ -23,12 +23,14 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/internal/actorevent"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -61,7 +63,10 @@ func seedActor(t *testing.T, ctx context.Context, st store.Interface, actorRef r
 				WorkerPodUid:    "uid",
 				WorkerPodIps:    []string{"1.2.3.4"},
 			},
-			InProgressSnapshotUri: "gs://bucket/atespaces/as/actors/uid/snapshots/reserved-snapshot",
+			LastAssignedGeneration: 1,
+			Snapshots: []*ateapipb.Snapshot{
+				newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "reserved-snapshot", "gs://bucket/atespaces/as/actors/uid/snapshots/reserved-snapshot", ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
+			},
 		},
 	})
 }
@@ -104,8 +109,11 @@ func seedUnboundActor(t *testing.T, ctx context.Context, st store.Interface, act
 	storetest.MustCreateActor(t, ctx, st, &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Name: actorRef.Name, Atespace: actorRef.Atespace},
 		Status: &ateapipb.ActorStatus{
-			State:                 ateapipb.ActorState_ACTOR_STATE_RUNNING,
-			InProgressSnapshotUri: "gs://bucket/atespaces/as/actors/uid/snapshots/reserved-snapshot",
+			State:                  ateapipb.ActorState_ACTOR_STATE_RUNNING,
+			LastAssignedGeneration: 1,
+			Snapshots: []*ateapipb.Snapshot{
+				newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "reserved-snapshot", "gs://bucket/atespaces/as/actors/uid/snapshots/reserved-snapshot", ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING),
+			},
 		},
 	})
 }
@@ -122,8 +130,8 @@ func assertCrashed(t *testing.T, ctx context.Context, st store.Interface, actorR
 		t.Errorf("status = %v, want %v", got.GetStatus().GetState(), ateapipb.ActorState_ACTOR_STATE_CRASHED)
 	}
 	// Keep the snapshot uri for debugging.
-	if got.GetStatus().GetInProgressSnapshotUri() == "" {
-		t.Error(`InProgressSnapshotUri = "", want preserved`)
+	if findLatestDurableSnapshot(got.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING) == nil {
+		t.Error(`in-progress durable snapshot URI = "", want preserved`)
 	}
 	if got.GetStatus().GetWorkerAssignment() != nil {
 		t.Errorf("WorkerAssignment = %v, want cleared", got.GetStatus().GetWorkerAssignment())
@@ -350,6 +358,8 @@ func TestAteletCrashMessage(t *testing.T) {
 func TestHandleAteletError(t *testing.T) {
 	ended, cancel := context.WithCancel(context.Background())
 	cancel()
+	expired, cancelExpired := context.WithDeadline(context.Background(), time.Unix(0, 0))
+	defer cancelExpired()
 
 	tests := []struct {
 		name string
@@ -359,6 +369,7 @@ func TestHandleAteletError(t *testing.T) {
 		rpc            string
 		isTerminateRPC bool
 		err            error
+		wantCode       codes.Code
 		wantState      ateapipb.ActorState
 	}{
 		{
@@ -366,6 +377,7 @@ func TestHandleAteletError(t *testing.T) {
 			ctx:       context.Background(),
 			rpc:       "Restore",
 			err:       status.Error(codes.Unavailable, "connection refused"),
+			wantCode:  codes.Unavailable,
 			wantState: ateapipb.ActorState_ACTOR_STATE_RUNNING,
 		},
 		{
@@ -373,6 +385,7 @@ func TestHandleAteletError(t *testing.T) {
 			ctx:       context.Background(),
 			rpc:       "Restore",
 			err:       status.Error(codes.Canceled, "grpc: the client connection is closing"),
+			wantCode:  codes.Internal,
 			wantState: ateapipb.ActorState_ACTOR_STATE_RUNNING,
 		},
 		{
@@ -380,6 +393,7 @@ func TestHandleAteletError(t *testing.T) {
 			ctx:       context.Background(),
 			rpc:       "Restore",
 			err:       status.Error(codes.DeadlineExceeded, "context deadline exceeded"),
+			wantCode:  codes.Internal,
 			wantState: ateapipb.ActorState_ACTOR_STATE_RUNNING,
 		},
 		{
@@ -387,6 +401,23 @@ func TestHandleAteletError(t *testing.T) {
 			ctx:       context.Background(),
 			rpc:       "Restore",
 			err:       fmt.Errorf("while restoring actor: %w", status.Error(codes.Unavailable, "connection refused")),
+			wantCode:  codes.Unavailable,
+			wantState: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+		},
+		{
+			name:      "cancelled caller gets Canceled and leaves the actor as it was",
+			ctx:       ended,
+			rpc:       "Restore",
+			err:       fmt.Errorf("while restoring actor: %w", status.Error(codes.Canceled, "connection closing")),
+			wantCode:  codes.Canceled,
+			wantState: ateapipb.ActorState_ACTOR_STATE_RUNNING,
+		},
+		{
+			name:      "expired caller deadline gets DeadlineExceeded and leaves the actor as it was",
+			ctx:       expired,
+			rpc:       "Restore",
+			err:       fmt.Errorf("while restoring actor: %w", status.Error(codes.DeadlineExceeded, "restore reply timed out")),
+			wantCode:  codes.DeadlineExceeded,
 			wantState: ateapipb.ActorState_ACTOR_STATE_RUNNING,
 		},
 		{
@@ -394,6 +425,7 @@ func TestHandleAteletError(t *testing.T) {
 			ctx:       ended,
 			rpc:       "Restore",
 			err:       status.Error(codes.Internal, "context canceled"),
+			wantCode:  codes.Canceled,
 			wantState: ateapipb.ActorState_ACTOR_STATE_RUNNING,
 		},
 		{
@@ -401,6 +433,7 @@ func TestHandleAteletError(t *testing.T) {
 			ctx:       context.Background(),
 			rpc:       "Restore",
 			err:       status.Error(codes.Internal, "while reading local snapshot manifest"),
+			wantCode:  codes.Internal,
 			wantState: ateapipb.ActorState_ACTOR_STATE_CRASHED,
 		},
 		{
@@ -408,6 +441,7 @@ func TestHandleAteletError(t *testing.T) {
 			ctx:       context.Background(),
 			rpc:       "Restore",
 			err:       status.Error(codes.FailedPrecondition, "invalid checkpoint result"),
+			wantCode:  codes.Internal,
 			wantState: ateapipb.ActorState_ACTOR_STATE_CRASHED,
 		},
 		{
@@ -415,6 +449,7 @@ func TestHandleAteletError(t *testing.T) {
 			ctx:       context.Background(),
 			rpc:       "Restore",
 			err:       errors.New("while getting atelet conn"),
+			wantCode:  codes.Internal,
 			wantState: ateapipb.ActorState_ACTOR_STATE_CRASHED,
 		},
 		{
@@ -423,6 +458,7 @@ func TestHandleAteletError(t *testing.T) {
 			rpc:            "Terminate",
 			isTerminateRPC: true,
 			err:            status.Error(codes.Internal, "while unmounting volumes"),
+			wantCode:       codes.Internal,
 			wantState:      ateapipb.ActorState_ACTOR_STATE_RUNNING,
 		},
 	}
@@ -436,10 +472,18 @@ func TestHandleAteletError(t *testing.T) {
 			seedWorker(t, ctx, st, actorRef)
 
 			err := handleAteletError(tt.ctx, st, actorRef, ateattr.OperationResume, tt.rpc, tt.isTerminateRPC, tt.err)
-			// The caller sees atelet's status either way, so a retryable
-			// failure stays retryable.
-			if got, want := status.Code(err), status.Code(tt.err); got != want {
-				t.Errorf("status.Code(handleAteletError()) = %v, want %v (err: %v)", got, want, err)
+			if got := apierror.Code(err); got != tt.wantCode {
+				t.Errorf("apierror.Code(handleAteletError()) = %v, want %v (err: %v)", got, tt.wantCode, err)
+			}
+
+			if !errors.Is(err, tt.err) {
+				t.Errorf("original atelet error was lost: %v", err)
+			}
+			if tt.wantCode == codes.Canceled && !errors.Is(err, context.Canceled) {
+				t.Errorf("error does not wrap context.Canceled: %v", err)
+			}
+			if tt.wantCode == codes.DeadlineExceeded && !errors.Is(err, context.DeadlineExceeded) {
+				t.Errorf("error does not wrap context.DeadlineExceeded: %v", err)
 			}
 
 			actor, err := st.GetActor(ctx, actorRef)
@@ -678,6 +722,51 @@ func TestCrashActorReleaseFailureLeavesWorkerReclaimable(t *testing.T) {
 	}
 }
 
+// TestCrashActorAndFail verifies the error a workflow step fails with when it
+// crashes the actor: FailedPrecondition once the crash commits, since no retry
+// can finish the step, but the crash's own error when it does not, leaving the
+// actor as it was so the caller retries and the retry crashes it.
+func TestCrashActorAndFail(t *testing.T) {
+	ctx := context.Background()
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+
+	t.Run("committed crash is FailedPrecondition", func(t *testing.T) {
+		st, cleanup := storetest.SetupTestStore(t)
+		defer cleanup()
+		seedActor(t, ctx, st, actorRef)
+		seedWorker(t, ctx, st, actorRef)
+
+		err := crashActorAndFail(ctx, st, actorRef, ateattr.OperationSuspend, crashMessageLocalSnapshotMissing)
+		if got := apierror.Code(err); got != codes.FailedPrecondition {
+			t.Fatalf("apierror.Code(err) = %v, want %v (err: %v)", got, codes.FailedPrecondition, err)
+		}
+		assertCrashed(t, ctx, st, actorRef)
+	})
+
+	t.Run("failed crash returns its error", func(t *testing.T) {
+		st, cleanup := storetest.SetupTestStore(t)
+		defer cleanup()
+		seedActor(t, ctx, st, actorRef)
+		seedWorker(t, ctx, st, actorRef)
+
+		releaseErr := errors.New("state store unavailable")
+		err := crashActorAndFail(ctx, failingReleaseStore{Interface: st, err: releaseErr}, actorRef, ateattr.OperationSuspend, crashMessageLocalSnapshotMissing)
+		if !errors.Is(err, releaseErr) {
+			t.Fatalf("crashActorAndFail() = %v, want it to wrap %v", err, releaseErr)
+		}
+		if got := apierror.Code(err); got == codes.FailedPrecondition {
+			t.Errorf("apierror.Code(err) = %v for a crash that did not commit, want a code the caller retries", got)
+		}
+		got, gerr := st.GetActor(ctx, actorRef)
+		if gerr != nil {
+			t.Fatalf("GetActor() = %v, want nil", gerr)
+		}
+		if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+			t.Errorf("status = %v, want %v (the crash did not commit)", got.GetStatus().GetState(), ateapipb.ActorState_ACTOR_STATE_RUNNING)
+		}
+	})
+}
+
 // crashRecords captures the "Actor crashed" records a crash emits, so a test can
 // assert the identity that ate.actor.crashes is barred from carrying. crashActor
 // logs through the slog default, so this swaps it and the caller cannot be parallel.
@@ -686,12 +775,9 @@ func crashRecords(t *testing.T) *[]stdoutRecord {
 	return logRecords(t, actorevent.Crashed.Body)
 }
 
-// stdoutRecord is one captured record from the stdout copy. It keeps the level
-// and the time, not just the attributes, so a test can hold those against the
-// OTLP copy. The message is whatever logRecords filtered on.
+// stdoutRecord is the attributes of one captured stdout record. The message is
+// whatever logRecords filtered on.
 type stdoutRecord struct {
-	level slog.Level
-	time  time.Time
 	attrs map[string]string
 }
 
@@ -705,7 +791,7 @@ func logRecords(t *testing.T, msg string) *[]stdoutRecord {
 		if r.Message != msg {
 			return
 		}
-		rec := stdoutRecord{level: r.Level, time: r.Time, attrs: map[string]string{}}
+		rec := stdoutRecord{attrs: map[string]string{}}
 		r.Attrs(func(a slog.Attr) bool {
 			rec.attrs[a.Key] = a.Value.String()
 			return true
@@ -716,20 +802,30 @@ func logRecords(t *testing.T, msg string) *[]stdoutRecord {
 	return &records
 }
 
-// otlpEvent is one captured record from the OTLP copy of a log record.
+// otlpEvent is one captured OTLP log record.
 type otlpEvent struct {
-	name      string
-	body      string
-	severity  otellog.Severity
-	timestamp time.Time
-	attrs     map[string]string
+	name     string
+	body     string
+	severity otellog.Severity
+	attrs    map[string]string
 }
 
 var (
 	otlpSinkOnce sync.Once
 	otlpSinkMu   sync.Mutex
 	otlpSink     []otlpEvent
+	// otlpOn is whether the one global provider takes records. Off, the
+	// actor events go to stdout, as when no logs exporter is configured.
+	otlpOn atomic.Bool
 )
+
+// switchProcessor takes records only while otlpOn is set, so one global
+// provider can stand for the logs exporter being on or off.
+type switchProcessor struct{ sdklog.Processor }
+
+func (p switchProcessor) Enabled(ctx context.Context, param sdklog.EnabledParameters) bool {
+	return otlpOn.Load() && p.Processor.Enabled(ctx, param)
+}
 
 type otlpSinkExporter struct{}
 
@@ -738,11 +834,10 @@ func (otlpSinkExporter) Export(_ context.Context, records []sdklog.Record) error
 	defer otlpSinkMu.Unlock()
 	for _, r := range records {
 		e := otlpEvent{
-			name:      r.EventName(),
-			body:      r.Body().String(),
-			severity:  r.Severity(),
-			timestamp: r.Timestamp(),
-			attrs:     map[string]string{},
+			name:     r.EventName(),
+			body:     r.Body().String(),
+			severity: r.Severity(),
+			attrs:    map[string]string{},
 		}
 		r.WalkAttributes(func(kv attribute.KeyValue) bool {
 			e.attrs[string(kv.Key)] = kv.Value.String()
@@ -756,16 +851,17 @@ func (otlpSinkExporter) Export(_ context.Context, records []sdklog.Record) error
 func (otlpSinkExporter) Shutdown(context.Context) error   { return nil }
 func (otlpSinkExporter) ForceFlush(context.Context) error { return nil }
 
-// otlpEvents captures the events emitted while a test runs, so a test can assert
-// the OTLP copy beside the stdout one. The global logger provider only ever
-// delegates once, so one provider serves the whole binary and each call clears
-// the sink. Like logRecords, this makes the caller non-parallel.
+// otlpEvents turns the logs exporter on for the rest of the test and captures
+// the events emitted, which then go to OTLP instead of stdout. The global logger
+// provider only ever delegates once, so one provider serves the whole binary,
+// switched off between tests, and each call clears the sink. Like logRecords,
+// this makes the caller non-parallel.
 func otlpEvents(t *testing.T) func() []otlpEvent {
 	t.Helper()
 
 	otlpSinkOnce.Do(func() {
 		global.SetLoggerProvider(sdklog.NewLoggerProvider(
-			sdklog.WithProcessor(sdklog.NewSimpleProcessor(otlpSinkExporter{}))))
+			sdklog.WithProcessor(switchProcessor{sdklog.NewSimpleProcessor(otlpSinkExporter{})})))
 	})
 
 	clear := func() {
@@ -774,7 +870,11 @@ func otlpEvents(t *testing.T) func() []otlpEvent {
 		otlpSink = nil
 	}
 	clear()
-	t.Cleanup(clear)
+	otlpOn.Store(true)
+	t.Cleanup(func() {
+		otlpOn.Store(false)
+		clear()
+	})
 
 	return func() []otlpEvent {
 		otlpSinkMu.Lock()
@@ -793,24 +893,19 @@ func (f slogHandlerFunc) Handle(_ context.Context, r slog.Record) error {
 func (f slogHandlerFunc) WithAttrs([]slog.Attr) slog.Handler { return f }
 func (f slogHandlerFunc) WithGroup(string) slog.Handler      { return f }
 
-// assertCopiesAgree checks the fields that no longer live at a call site. Both
-// copies take their severity and body from ev, so neither can hold its own. A
-// stdout body that drifted fails earlier, when logRecords matches nothing.
-func assertCopiesAgree(t *testing.T, stdout stdoutRecord, otlp otlpEvent, ev actorevent.Event) {
+// assertEvent checks the fields that no longer live at a call site: the event
+// takes its severity and body from ev, so it cannot hold its own.
+func assertEvent(t *testing.T, otlp otlpEvent, ev actorevent.Event) {
 	t.Helper()
 
-	if stdout.level != ev.Level() {
-		t.Errorf("stdout level = %v, want %v", stdout.level, ev.Level())
+	if otlp.name != ev.Name {
+		t.Errorf("event name = %q, want %q", otlp.name, ev.Name)
 	}
 	if otlp.severity != ev.Severity {
 		t.Errorf("OTLP severity = %v, want %v", otlp.severity, ev.Severity)
 	}
 	if otlp.body != ev.Body {
 		t.Errorf("OTLP body = %q, want %q", otlp.body, ev.Body)
-	}
-	// One time.Now() serves both, so a consumer can join them on it.
-	if !stdout.time.Equal(otlp.timestamp) {
-		t.Errorf("timestamps differ: stdout %v, OTLP %v", stdout.time, otlp.timestamp)
 	}
 }
 
@@ -839,11 +934,17 @@ func TestCrashActor_RecordAndCounterAgree(t *testing.T) {
 	if err := crashActor(ctx, st, actorRef, ateattr.OperationResume, "test crash"); err != nil {
 		t.Fatalf("crashActor: %v", err)
 	}
-	if len(*records) != 1 {
-		t.Fatalf("got %d crash records, want 1", len(*records))
+	// The logs exporter is on, so the record goes to OTLP only.
+	if len(*records) != 0 {
+		t.Errorf("got %d stdout crash records with the exporter on, want 0", len(*records))
 	}
+	gotEvents := events()
+	if len(gotEvents) != 1 {
+		t.Fatalf("got %d crash events, want 1: %v", len(gotEvents), gotEvents)
+	}
+	assertEvent(t, gotEvents[0], actorevent.Crashed)
 
-	got := (*records)[0].attrs
+	got := gotEvents[0].attrs
 	stored, err := st.GetActor(ctx, actorRef)
 	if err != nil {
 		t.Fatalf("GetActor: %v", err)
@@ -864,26 +965,9 @@ func TestCrashActor_RecordAndCounterAgree(t *testing.T) {
 		t.Error("crash record carries no ate.actor.uid; it cannot survive a name reuse")
 	}
 
-	// The OTLP copy is the same record under an event name. One call writes both,
-	// so anything either copy holds alone is a bug in actorevent.Log.
-	gotEvents := events()
-	if len(gotEvents) != 1 {
-		t.Fatalf("got %d crash events, want 1: %v", len(gotEvents), gotEvents)
-	}
-	if gotEvents[0].name != actorevent.Crashed.Name {
-		t.Errorf("event name = %q, want %q", gotEvents[0].name, actorevent.Crashed.Name)
-	}
-	if !maps.Equal(gotEvents[0].attrs, got) {
-		t.Errorf("crash event attributes = %v, want the stdout record's %v", gotEvents[0].attrs, got)
-	}
-	assertCopiesAgree(t, (*records)[0], gotEvents[0], actorevent.Crashed)
-
 	// Re-crashing an already-crashed actor must move neither signal.
 	if err := crashActor(ctx, st, actorRef, ateattr.OperationResume, "test crash"); err != nil {
 		t.Fatalf("second crashActor: %v", err)
-	}
-	if len(*records) != 1 {
-		t.Errorf("got %d crash records after re-crashing, want 1", len(*records))
 	}
 	if gotEvents := events(); len(gotEvents) != 1 {
 		t.Errorf("got %d crash events after re-crashing, want 1", len(gotEvents))

@@ -18,74 +18,35 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
-	"strings"
 
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc"
 	"go.opentelemetry.io/otel/log/global"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	"google.golang.org/grpc"
+
+	"github.com/agent-substrate/substrate/internal/actorevent"
 )
 
 const logsExporterEnv = "OTEL_LOGS_EXPORTER"
 
-// LogsExporter says where log records go. Only the records a component emits
-// through the OTel logs API are affected; slog to stdout is always on.
-type LogsExporter string
+// logsExporters are the names OTEL_LOGS_EXPORTER accepts. console is the
+// actor events' stdout form, the component's own JSON log line.
+var logsExporters = []string{ExporterOTLP, ExporterConsole}
 
-const (
-	// LogsExporterNone drops the records. It is the component default, so an
-	// environment that has not opted in changes nothing.
-	LogsExporterNone LogsExporter = "none"
-	// LogsExporterOTLP sends to OTEL_EXPORTER_OTLP_ENDPOINT.
-	LogsExporterOTLP LogsExporter = "otlp"
-)
-
-// ResolveLogsExporter applies OTEL_LOGS_EXPORTER on top of the component
-// default. An unrecognized value keeps the default and logs, rather than
-// failing startup over a telemetry setting.
-//
-// The default is none rather than the spec's otlp while this rolls out, so
-// turning it on is one ConfigMap key per environment.
-func ResolveLogsExporter(ctx context.Context, def LogsExporter) LogsExporter {
-	value, isSet := os.LookupEnv(logsExporterEnv)
-	resolved, err := resolveLogsExporter(value, isSet, def)
-	if err != nil {
-		slog.WarnContext(ctx, "Invalid logs exporter environment, keeping the component default",
-			slog.String("exporter", value),
-			slog.String("default", string(def)),
-			slog.Any("err", err))
-	}
-	return resolved
-}
-
-// resolveLogsExporter accepts otlp and none. Any error means def was kept.
-func resolveLogsExporter(value string, isSet bool, def LogsExporter) (LogsExporter, error) {
-	if !isSet {
-		return def, nil
-	}
-	value = strings.ToLower(strings.TrimSpace(value))
-	// Treat set-but-empty as unset: templated manifests can render empty env vars.
-	if value == "" {
-		return def, nil
-	}
-
-	switch LogsExporter(value) {
-	case LogsExporterNone:
-		return LogsExporterNone, nil
-	case LogsExporterOTLP:
-		return LogsExporterOTLP, nil
-	}
-	return def, fmt.Errorf("unsupported %s %q", logsExporterEnv, value)
+// ResolveLogsExporter reads OTEL_LOGS_EXPORTER with the shared exporter rules.
+// The default is none rather than the spec's otlp, so turning it on is one
+// ConfigMap key per environment.
+func ResolveLogsExporter(ctx context.Context) Exporters {
+	return resolveExportersEnv(ctx, logsExporterEnv, logsExporters, Exporters{})
 }
 
 // LoggingOptions configures InitLogging.
 type LoggingOptions struct {
 	// ServiceName is required; populates resource.semconv ServiceName.
 	ServiceName string
-	// Exporter is required. Build it with ResolveLogsExporter so
-	// OTEL_LOGS_EXPORTER overrides the component default.
-	Exporter LogsExporter
+	// Exporter is required; the empty set is none. Build it with
+	// ResolveLogsExporter.
+	Exporter Exporters
 	// ExporterConn and RelayCapable are the logs counterpart of the same fields
 	// on TracingOptions: ateom passes its relay connection and marks itself
 	// relay-capable so the resource carries ate.otlp.relay.
@@ -94,26 +55,29 @@ type LoggingOptions struct {
 }
 
 // InitLogging registers a global LoggerProvider for the records components emit
-// through internal/actorevent.
+// through internal/actorevent, and sets whether those records also go to stdout
+// (console).
 //
-// It returns (nil, nil) when the exporter is none, and leaves the OTel global
-// alone: emitting then costs one Enabled check. Guard the shutdown on a nil
-// provider, unlike InitTracing which always returns one.
+// It returns (nil, nil) when the exporter does not include otlp, and leaves the
+// OTel global alone: emitting then costs one Enabled check. Guard the shutdown
+// on a nil provider, unlike InitTracing which always returns one.
 //
 // The processor batches. These records sit on the actor resume and suspend
 // path, and exporting inside the emit call would put a blocking gRPC round trip
 // there, serialized across every emitting goroutine, so an unreachable
-// collector would surface as control-plane latency. The cost is a bounded loss
-// window on an ungraceful exit, where the same record is still on stdout.
+// collector would surface as control-plane latency. The cost is that an
+// ungraceful exit loses the records still queued, unless console also wrote
+// them to stdout.
 func InitLogging(ctx context.Context, opts LoggingOptions) (*sdklog.LoggerProvider, error) {
 	if opts.ServiceName == "" {
 		return nil, fmt.Errorf("LoggingOptions.ServiceName is required")
 	}
-	if opts.Exporter == "" {
+	if opts.Exporter == nil {
 		return nil, fmt.Errorf("LoggingOptions.Exporter is required")
 	}
-	if opts.Exporter == LogsExporterNone {
-		slog.InfoContext(ctx, "Logs exporter disabled", slog.String("exporter", string(opts.Exporter)))
+	actorevent.SetConsole(opts.Exporter.Has(ExporterConsole))
+	if !opts.Exporter.Has(ExporterOTLP) {
+		slog.InfoContext(ctx, "OTLP logs export disabled", slog.String("exporter", opts.Exporter.String()))
 		return nil, nil
 	}
 
@@ -122,14 +86,16 @@ func InitLogging(ctx context.Context, opts LoggingOptions) (*sdklog.LoggerProvid
 		return nil, err
 	}
 	global.SetLoggerProvider(lp)
-	slog.InfoContext(ctx, "Logging initialized", slog.String("exporter", string(opts.Exporter)))
+	slog.InfoContext(ctx, "Logging initialized", slog.String("exporter", opts.Exporter.String()))
 	return lp, nil
 }
 
-// newLoggerProvider is InitLogging without the global registration. Tests add a
-// processor to read the resource off an emitted record; the provider does not
-// expose it otherwise.
-func newLoggerProvider(ctx context.Context, opts LoggingOptions, extra ...sdklog.Processor) (*sdklog.LoggerProvider, error) {
+// testLogProcessors are added to every provider newLoggerProvider builds, so a
+// test can read the records, and their resource, that the provider emits.
+var testLogProcessors []sdklog.Processor
+
+// newLoggerProvider builds the provider InitLogging installs.
+func newLoggerProvider(ctx context.Context, opts LoggingOptions) (*sdklog.LoggerProvider, error) {
 	res, err := newResource(ctx, opts.ServiceName, relayAttrs(opts.RelayCapable, opts.ExporterConn)...)
 	if err != nil {
 		return nil, fmt.Errorf("create logger resource: %w", err)
@@ -152,7 +118,7 @@ func newLoggerProvider(ctx context.Context, opts LoggingOptions, extra ...sdklog
 		sdklog.WithResource(res),
 		sdklog.WithProcessor(sdklog.NewBatchProcessor(exporter)),
 	}
-	for _, p := range extra {
+	for _, p := range testLogProcessors {
 		popts = append(popts, sdklog.WithProcessor(p))
 	}
 	return sdklog.NewLoggerProvider(popts...), nil

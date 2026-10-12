@@ -23,7 +23,6 @@ import (
 	"os"
 	"slices"
 
-	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/config"
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/log"
 )
 
@@ -35,7 +34,8 @@ const envHashAnnotation = "ate.dev/env-hash"
 // CreateAPIServerEnvVars reconciles how ate-api-server reaches its PostgreSQL
 // store: both DSNs and the schema into the ate-api-server-secret-envvars Secret,
 // stable roles and Cloud SQL settings into the ConfigMap,
-// and an external server CA into postgres-server-ca.
+// and an external server CA into postgres-server-ca. The ConfigMap also
+// carries the actor JWT issuer.
 //
 // ate-api-server.yaml pulls both in through optional envFrom sources and
 // resolves the PostgreSQL connection, role, and schema flags from
@@ -74,17 +74,8 @@ func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 				return err
 			}
 		} else {
-			readWriteDSN = config.DefaultPostgresConnectionString
-			ownerDSN = readWriteDSN
-			if e.Cfg.Size10() {
-				readWriteDSN += config.Size10PostgresPoolParams
-			}
-			// Bundled PostgreSQL uses its existing account for both pools.
-			if !e.Cfg.PostgresReadWriteRoleSet {
-				readWriteRole = "postgres"
-			}
-			if !e.Cfg.PostgresOwnerRoleSet {
-				ownerRole = "postgres"
+			if readWriteDSN, ownerDSN, err = e.postgresReadWriteConnectionStrings(); err != nil {
+				return err
 			}
 		}
 	}
@@ -122,6 +113,7 @@ func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 	if poolMaxConns != "" {
 		configVars["ATE_API_POSTGRES_POOL_MAX_CONNS"] = poolMaxConns
 	}
+	configVars["ATE_API_ACTOR_JWT_ISSUER"] = e.Cfg.ActorJWTIssuer
 	if err := e.Kube.ApplyConfigMap(ctx, e.Namespace(), ConfigMapAPIEnvVars, configVars); err != nil {
 		return err
 	}

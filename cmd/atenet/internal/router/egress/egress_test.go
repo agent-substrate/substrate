@@ -40,9 +40,11 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
 	"github.com/agent-substrate/substrate/internal/egresspolicy"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
@@ -182,6 +184,12 @@ type egressMockClient struct {
 	// policyGate, when non-nil, blocks each GetActorEgressPolicy until it is
 	// closed, so a test can hold several callers on one fetch.
 	policyGate chan struct{}
+
+	// The nth MintActorJWT call returns "jwt-<n>", expiring
+	// expiration_seconds from now. mintErr, when set, is returned instead.
+	mintCalls atomic.Int32
+	lastMint  atomic.Pointer[ateapipb.MintActorJWTRequest]
+	mintErr   error
 }
 
 func (m *egressMockClient) GetActor(context.Context, *ateapipb.GetActorRequest, ...grpc.CallOption) (*ateapipb.Actor, error) {
@@ -191,8 +199,11 @@ func (m *egressMockClient) GetActor(context.Context, *ateapipb.GetActorRequest, 
 	return m.actor, nil
 }
 
-func (m *egressMockClient) GetActorEgressPolicy(ctx context.Context, _ *ateapipb.GetActorEgressPolicyRequest, _ ...grpc.CallOption) (*ateapipb.EgressPolicy, error) {
+func (m *egressMockClient) GetActorEgressPolicy(ctx context.Context, req *ateapipb.GetActorEgressPolicyRequest, _ ...grpc.CallOption) (*ateapipb.EgressPolicy, error) {
 	m.policyCalls.Add(1)
+	if req.GetName() != resources.SingletonName {
+		return nil, status.Errorf(codes.InvalidArgument, "name must be %q", resources.SingletonName)
+	}
 	if m.policyGate != nil {
 		select {
 		case <-m.policyGate:
@@ -207,6 +218,18 @@ func (m *egressMockClient) GetActorEgressPolicy(ctx context.Context, _ *ateapipb
 		return nil, status.Error(codes.NotFound, "EgressPolicy not found")
 	}
 	return m.policy, nil
+}
+
+func (m *egressMockClient) MintActorJWT(_ context.Context, req *ateapipb.MintActorJWTRequest, _ ...grpc.CallOption) (*ateapipb.MintActorJWTResponse, error) {
+	n := m.mintCalls.Add(1)
+	m.lastMint.Store(req)
+	if m.mintErr != nil {
+		return nil, m.mintErr
+	}
+	return &ateapipb.MintActorJWTResponse{
+		ActorJwt:  fmt.Sprintf("jwt-%d", n),
+		ExpiresAt: timestamppb.New(time.Now().Add(time.Duration(req.GetExpirationSeconds()) * time.Second)),
+	}, nil
 }
 
 // allowAllPolicy allows every name and address: cleartext HTTP on any port

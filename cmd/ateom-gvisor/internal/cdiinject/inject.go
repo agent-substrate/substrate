@@ -24,11 +24,13 @@ package cdiinject
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
@@ -51,6 +53,11 @@ type Options struct {
 	// HookBinary replaces the hook path the spec carries, so hooks run from a
 	// binary the caller trusts rather than wherever the generator pointed.
 	HookBinary string
+
+	// AllowedHostDirs are the host directories from which CDI mounts may be
+	// sourced. Every mount's HostPath must resolve inside one of these
+	// directories without escaping via symlinks.
+	AllowedHostDirs []string
 
 	// LibraryDirs are prepended to the container's LD_LIBRARY_PATH.
 	LibraryDirs []string
@@ -112,14 +119,20 @@ func IntoBundle(ctx context.Context, bundleDir string, spec *cdi.Spec, opts Opti
 		})
 	}
 
+	cdiMounts := make([]specs.Mount, 0, len(edits.Mounts))
 	for _, m := range edits.Mounts {
+		if err := validateMount(m, opts.AllowedHostDirs); err != nil {
+			return err
+		}
 		mType := m.Type
 		if mType == "" {
 			mType = "bind" // CDI omits type for its bind mounts; runsc's gofer needs it.
 		}
-		ociSpec.Mounts = append(ociSpec.Mounts, specs.Mount{
+		mount := specs.Mount{
 			Source: m.HostPath, Destination: m.ContainerPath, Type: mType, Options: m.Options,
-		})
+		}
+		ociSpec.Mounts = append(ociSpec.Mounts, mount)
+		cdiMounts = append(cdiMounts, mount)
 	}
 
 	if ociSpec.Process != nil {
@@ -160,7 +173,7 @@ func IntoBundle(ctx context.Context, bundleDir string, spec *cdi.Spec, opts Opti
 	if !filepath.IsAbs(rootfs) {
 		rootfs = filepath.Join(bundleDir, rootfs)
 	}
-	if err := StageSonameSymlinks(ctx, rootfs, ociSpec.Mounts); err != nil {
+	if err := StageSonameSymlinks(ctx, rootfs, cdiMounts, opts.AllowedHostDirs); err != nil {
 		return fmt.Errorf("staging SONAME symlinks: %w", err)
 	}
 
@@ -188,20 +201,99 @@ func hasInjectedDevice(l *specs.Linux, nodes []cdi.Dev) bool {
 	return false
 }
 
-// resolveDevNumbers fills a device node's major/minor from the host when the CDI
-// spec omitted them. CDI delegates that to the OCI runtime, which stats the
-// host; the merge happens here instead, so the stat happens here too. Otherwise
-// the container gets bogus 0,0 char devices that reach no driver.
+// devRoot is the host directory under which CDI device nodes must reside. A var
+// so tests can point it at a fixture directory.
+var devRoot = "/dev"
+
+// resolveDevNumbers validates that path is a clean device path confined to
+// devRoot and fills its major/minor from the host when the CDI spec omitted
+// them. CDI delegates that to the OCI runtime, which stats the host; the merge
+// happens here instead, so the stat happens here too. Otherwise the container
+// gets bogus 0,0 char devices that reach no driver.
 func resolveDevNumbers(path string, major, minor int64) (int64, int64, error) {
+	cleanDevRoot := filepath.Clean(devRoot)
+	if path == "" || !filepath.IsAbs(path) || filepath.Clean(path) != path {
+		return 0, 0, fmt.Errorf("CDI device path %q must be a clean absolute path", path)
+	}
+	rel, err := filepath.Rel(cleanDevRoot, path)
+	if err != nil || rel == "." || !filepath.IsLocal(rel) {
+		return 0, 0, fmt.Errorf("CDI device path %q is outside %s", path, cleanDevRoot)
+	}
+	root, err := os.OpenRoot(cleanDevRoot)
+	if err != nil {
+		return 0, 0, fmt.Errorf("opening device root %s: %w", cleanDevRoot, err)
+	}
+	defer root.Close()
+
+	fi, err := root.Stat(rel)
 	if major != 0 {
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return 0, 0, fmt.Errorf("stat device %s: %w", path, err)
+		}
+		if err == nil && fi.Mode()&os.ModeDevice == 0 {
+			return 0, 0, fmt.Errorf("CDI device path %s is not a device node", path)
+		}
 		return major, minor, nil
 	}
-	var st unix.Stat_t
-	if err := unix.Stat(path, &st); err != nil {
+	if err != nil {
 		return 0, 0, fmt.Errorf("stat device %s: %w", path, err)
+	}
+	if fi.Mode()&os.ModeDevice == 0 {
+		return 0, 0, fmt.Errorf("CDI device path %s is not a device node", path)
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, 0, fmt.Errorf("unexpected stat type for %s", path)
 	}
 	rdev := uint64(st.Rdev)
 	return int64(unix.Major(rdev)), int64(unix.Minor(rdev)), nil
+}
+
+// validateMount checks that a CDI mount has a clean, rootfs-local containerPath
+// and a hostPath confined to one of allowedHostDirs.
+func validateMount(m cdi.Mount, allowedHostDirs []string) error {
+	if m.ContainerPath == "" || !filepath.IsAbs(m.ContainerPath) || filepath.Clean(m.ContainerPath) != m.ContainerPath {
+		return fmt.Errorf("CDI mount containerPath %q must be a clean absolute path", m.ContainerPath)
+	}
+	relDst := strings.TrimPrefix(m.ContainerPath, "/")
+	if relDst == "" || !filepath.IsLocal(relDst) {
+		return fmt.Errorf("CDI mount containerPath %q escapes the rootfs", m.ContainerPath)
+	}
+	_, _, err := resolveAllowedHostPath(m.HostPath, allowedHostDirs)
+	return err
+}
+
+// resolveAllowedHostPath verifies that hostPath is a clean absolute path inside
+// one of allowedDirs and that resolving it through os.Root does not escape that
+// directory via symlinks. It returns the matched root directory and relative path.
+func resolveAllowedHostPath(hostPath string, allowedDirs []string) (string, string, error) {
+	if hostPath == "" || !filepath.IsAbs(hostPath) || filepath.Clean(hostPath) != hostPath {
+		return "", "", fmt.Errorf("CDI mount hostPath %q must be a clean absolute path", hostPath)
+	}
+	for _, dir := range allowedDirs {
+		if dir == "" {
+			continue
+		}
+		cleanDir := filepath.Clean(dir)
+		if !filepath.IsAbs(cleanDir) {
+			continue
+		}
+		rel, err := filepath.Rel(cleanDir, hostPath)
+		if err != nil || rel == "." || !filepath.IsLocal(rel) {
+			continue
+		}
+		root, err := os.OpenRoot(cleanDir)
+		if err != nil {
+			return "", "", fmt.Errorf("opening allowed host dir %q: %w", cleanDir, err)
+		}
+		_, statErr := root.Stat(rel)
+		root.Close()
+		if statErr != nil {
+			return "", "", fmt.Errorf("CDI mount hostPath %q invalid in allowed dir %q: %w", hostPath, cleanDir, statErr)
+		}
+		return cleanDir, rel, nil
+	}
+	return "", "", fmt.Errorf("CDI mount hostPath %q is not under any allowed host directory", hostPath)
 }
 
 // dropEnvVar returns env with every "KEY=..." entry for the given key removed.

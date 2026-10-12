@@ -28,8 +28,7 @@ containers:
 - name: counter
   image: ko://github.com/agent-substrate/substrate/demos/counter
 snapshotConfig:
-  onPause: SNAPSHOT_CONTENT_SCOPE_FULL
-  onCommit: SNAPSHOT_CONTENT_SCOPE_FULL
+  preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
   storageLocation: gs://${BUCKET_NAME}/ate-demo-multi-template-counter/
 sandboxConfig:
   sandboxClass: SANDBOX_CLASS_GVISOR

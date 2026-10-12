@@ -290,6 +290,107 @@ func TestServeHTTP(t *testing.T) {
 	}
 }
 
+func TestServerRejectsDuplicateOrCommaTargetActorHeaders(t *testing.T) {
+	upstreamURL, err := url.Parse("http://actor.internal:80")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s := newTestServer(t, upstreamURL)
+	var upstreamCalled bool
+	actorTransport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		upstreamCalled = true
+		return &http.Response{
+			StatusCode: http.StatusNoContent,
+			Header:     make(http.Header),
+			Body:       http.NoBody,
+		}, nil
+	})
+	if err := s.Activate("team-a", "actor-1", "uid-actor-1", testDial); err != nil {
+		t.Fatal(err)
+	}
+	setActorTransport(t, s, "team-a", "actor-1", actorTransport)
+
+	tests := []struct {
+		name    string
+		host    string
+		headers []string
+	}{
+		{
+			name:    "duplicate different actors",
+			host:    "actor-1.team-a.actors.resources.substrate.ate.dev",
+			headers: []string{"team-a/actor-1", "secret/x"},
+		},
+		{
+			name:    "duplicate identical actors",
+			host:    "actor-1.team-a.actors.resources.substrate.ate.dev",
+			headers: []string{"team-a/actor-1", "team-a/actor-1"},
+		},
+		{
+			name:    "comma-joined actors",
+			host:    "actor-1.team-a.actors.resources.substrate.ate.dev",
+			headers: []string{"team-a/actor-1,secret/x"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			upstreamCalled = false
+			req := httptest.NewRequest(http.MethodGet, "https://worker/hello", nil)
+			req.Host = tt.host
+			for _, h := range tt.headers {
+				req.Header.Add(atenet.TargetActorHeader, h)
+			}
+			rec := httptest.NewRecorder()
+			s.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusMisdirectedRequest {
+				t.Fatalf("status = %d, want %d", rec.Code, http.StatusMisdirectedRequest)
+			}
+			if rec.Header().Get(StaleAssignmentHeader) != "true" {
+				t.Errorf("missing %s response header", StaleAssignmentHeader)
+			}
+			if upstreamCalled {
+				t.Errorf("upstream was dialed, expected request to be rejected")
+			}
+		})
+	}
+}
+
+func TestServeHTTPStripsStaleAssignmentHeaderFromActor(t *testing.T) {
+	upstreamURL, err := url.Parse("http://actor.internal:80")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s := newTestServer(t, upstreamURL)
+	actorTransport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		h := make(http.Header)
+		h.Set(StaleAssignmentHeader, "true")
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     h,
+			Body:       http.NoBody,
+		}, nil
+	})
+	if err := s.Activate("team-a", "actor-1", "uid-actor-1", testDial); err != nil {
+		t.Fatal(err)
+	}
+	setActorTransport(t, s, "team-a", "actor-1", actorTransport)
+
+	req := httptest.NewRequest(http.MethodGet, "https://worker/hello", nil)
+	req.Header.Set(atenet.TargetActorHeader, "team-a/actor-1")
+	rec := httptest.NewRecorder()
+	s.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if got := rec.Header().Get(StaleAssignmentHeader); got != "" {
+		t.Errorf("expected %s to be stripped from actor response, got %q", StaleAssignmentHeader, got)
+	}
+}
+
 func TestServeHTTPHonorsTargetPortHeader(t *testing.T) {
 	upstreamURL, err := url.Parse("http://actor.internal:80")
 	if err != nil {
@@ -533,8 +634,8 @@ func TestMutualTLSClientAuthentication(t *testing.T) {
 
 // TestServeNegotiatesH2 checks that the ingress server negotiates h2 with a
 // client that offers it, and HTTP/1.1 with one that does not. The router's
-// HTTP/2 pool depends on the h2 side, which holds only because ServeTLS
-// enables HTTP/2 when tlsConfig.NextProtos is empty — this pins that.
+// HTTP/2 pool depends on the h2 side, which holds because the server offers
+// both protocols in NextProtos — this pins that.
 func TestServeNegotiatesH2(t *testing.T) {
 	dir := t.TempDir()
 	ca := newTestCA(t)
@@ -840,6 +941,54 @@ func writeCredentialBundle(t *testing.T, path string, cert tls.Certificate) {
 	bundle = append(bundle, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})...)
 	if err := os.WriteFile(path, bundle, 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestMutualTLSClientAuthenticationReloadsTrustBundle verifies that a client
+// certificate chaining to a CA added to the trust bundle after the server
+// started is accepted on the next handshake, without a restart.
+func TestMutualTLSClientAuthenticationReloadsTrustBundle(t *testing.T) {
+	dir := t.TempDir()
+	ca := newTestCA(t)
+	serverCert := ca.issue(t, "", []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth})
+	bundlePath := filepath.Join(dir, "server.pem")
+	trustPath := filepath.Join(dir, "trust.pem")
+	writeCredentialBundle(t, bundlePath, serverCert)
+	if err := os.WriteFile(trustPath, ca.certPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	upstream, err := url.Parse("http://actor.internal:80")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := NewServer(Config{
+		CredentialBundlePath: bundlePath,
+		TrustBundlePath:      trustPath,
+		AllowedClientID:      "spiffe://cluster.local/ns/ate-system/sa/atenet-router",
+		Upstream:             upstream,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rotatedCA := newTestCA(t)
+	rotatedClientCert := rotatedCA.issue(t, "spiffe://cluster.local/ns/ate-system/sa/atenet-router", []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth})
+
+	clientConfig := &tls.Config{
+		MinVersion:         tls.VersionTLS12,
+		InsecureSkipVerify: true, // Test only the server's client authentication here.
+		Certificates:       []tls.Certificate{rotatedClientCert},
+	}
+	if serverErr, clientErr := tlsHandshake(s.tlsConfig, clientConfig); serverErr == nil && clientErr == nil {
+		t.Fatalf("handshake with a not-yet-trusted CA succeeded, want it rejected before the rotation")
+	}
+
+	if err := os.WriteFile(trustPath, append(ca.certPEM, rotatedCA.certPEM...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if serverErr, clientErr := tlsHandshake(s.tlsConfig, clientConfig); serverErr != nil || clientErr != nil {
+		t.Fatalf("server error = %v, client error = %v, want the rotated CA accepted", serverErr, clientErr)
 	}
 }
 

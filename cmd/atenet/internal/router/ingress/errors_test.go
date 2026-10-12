@@ -43,6 +43,42 @@ func TestActorNotFoundErr(t *testing.T) {
 	}
 }
 
+func TestParkingFullErr(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		retryErr error
+		wantCode codes.Code
+	}{
+		{name: "ResourceExhausted is kept", retryErr: status.Error(codes.ResourceExhausted, "no worker has room for the actor"), wantCode: codes.ResourceExhausted},
+		{name: "Aborted is dropped", retryErr: status.Error(codes.Aborted, "conflict"), wantCode: codes.Unknown},
+		{name: "FailedPrecondition is dropped", retryErr: status.Error(codes.FailedPrecondition, "suspending"), wantCode: codes.Unknown},
+		{name: "Unavailable is dropped", retryErr: status.Error(codes.Unavailable, "restarting"), wantCode: codes.Unknown},
+		{name: "nil", retryErr: nil, wantCode: codes.Unknown},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := parkingFullErr("team-a/ctr6", tc.retryErr)
+			var reqErr *extproc.ReqError
+			if !errors.As(err, &reqErr) {
+				t.Fatalf("errors.As(*extproc.ReqError) = false, want true; err type = %T", err)
+			}
+			if reqErr.StatusCode != int(envoy_type.StatusCode_ServiceUnavailable) {
+				t.Errorf("StatusCode = %d, want %d", reqErr.StatusCode, envoy_type.StatusCode_ServiceUnavailable)
+			}
+			if got, want := err.Error(), `actor "team-a/ctr6" unavailable: router at capacity`; got != want {
+				t.Errorf("Error() = %q, want %q", got, want)
+			}
+			if got := status.Code(err); got != tc.wantCode {
+				t.Errorf("status.Code(err) = %v, want %v", got, tc.wantCode)
+			}
+		})
+	}
+}
+
 func TestMapResumeError(t *testing.T) {
 	t.Parallel()
 
@@ -62,9 +98,9 @@ func TestMapResumeError(t *testing.T) {
 		},
 		{
 			name:     "FailedPrecondition maps to 503 and preserves desc",
-			err:      status.Error(codes.FailedPrecondition, "no free workers available"),
+			err:      status.Error(codes.FailedPrecondition, "no worker has room for the actor"),
 			wantCode: envoy_type.StatusCode_ServiceUnavailable,
-			wantBody: `actor team-a/ctr6 unavailable: no free workers available`,
+			wantBody: `actor team-a/ctr6 unavailable: no worker has room for the actor`,
 		},
 		{
 			name:     "Unavailable maps to 503",
@@ -92,9 +128,9 @@ func TestMapResumeError(t *testing.T) {
 		},
 		{
 			name:     "budget exhausted on capacity keeps a clean body through the wrapper",
-			err:      &budgetExhaustedError{lastErr: status.Error(codes.FailedPrecondition, "no free workers available")},
+			err:      &budgetExhaustedError{lastErr: status.Error(codes.FailedPrecondition, "no worker has room for the actor")},
 			wantCode: envoy_type.StatusCode_ServiceUnavailable,
-			wantBody: `actor team-a/ctr6 unavailable: no free workers available`,
+			wantBody: `actor team-a/ctr6 unavailable: no worker has room for the actor`,
 		},
 		{
 			name:     "bare context.Canceled maps to 408 client-gone, not 500",
@@ -124,9 +160,9 @@ func TestMapResumeError(t *testing.T) {
 			// Pool saturation is 503, not 429: the fleet is full, the caller
 			// did not send too many requests.
 			name:     "ResourceExhausted maps to 503 preserving the description",
-			err:      status.Error(codes.ResourceExhausted, "no free workers available"),
+			err:      status.Error(codes.ResourceExhausted, "no worker has room for the actor"),
 			wantCode: envoy_type.StatusCode_ServiceUnavailable,
-			wantBody: `actor team-a/ctr6 unavailable: no free workers available`,
+			wantBody: `actor team-a/ctr6 unavailable: no worker has room for the actor`,
 		},
 		{
 			name:     "unknown gRPC code maps to 500 without leaking desc",

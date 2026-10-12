@@ -26,20 +26,34 @@ import (
 // GetObject streams the object, fetching it as parallel byte ranges when it spans
 // more than one chunk (see rangedget.go). Smaller objects stay a single request.
 func (g *gcsClient) GetObject(ctx context.Context, bucket, object string) (io.ReadCloser, error) {
+	ctx, cancel := context.WithCancel(ctx)
 	// The first chunk doubles as the size probe: a range read reports the whole
 	// object's size in its attrs, so nothing pays an extra round trip for it.
 	head, err := g.client.Bucket(bucket).Object(object).NewRangeReader(ctx, 0, downloadChunkSize)
 	if err != nil {
+		cancel()
 		if errors.Is(err, storage.ErrObjectNotExist) || errors.Is(err, storage.ErrBucketNotExist) {
 			return nil, fmt.Errorf("%w: Bucket:%q, Object:%q", ErrObjectNotFound, bucket, object)
 		}
 		return nil, err
 	}
+	reader := &gcsReader{Reader: head, cancel: cancel}
 	size := head.Attrs.Size
 	if size <= downloadChunkSize {
-		return head, nil
+		return reader, nil
 	}
-	return newRangedReader(ctx, size, head, g.fetchRange(bucket, object)), nil
+	return newRangedReader(ctx, size, reader, g.fetchRange(bucket, object)), nil
+}
+
+type gcsReader struct {
+	*storage.Reader
+	cancel context.CancelFunc
+}
+
+func (r *gcsReader) Close() error {
+	// Cancel before closing so a blocked read cannot reopen the GCS request.
+	r.cancel()
+	return r.Reader.Close()
 }
 
 // fetchRange reads one range with a pooled client, so concurrent ranges do not all

@@ -32,10 +32,15 @@ func TestConstructors(t *testing.T) {
 	}{
 		{name: "InvalidArgument", err: InvalidArgument("tier %d", 1), wantCode: codes.InvalidArgument},
 		{name: "NotFound", err: NotFound("tier %d", 1), wantCode: codes.NotFound},
+		{name: "AlreadyExists", err: AlreadyExists("tier %d", 1), wantCode: codes.AlreadyExists},
 		{name: "FailedPrecondition", err: FailedPrecondition("tier %d", 1), wantCode: codes.FailedPrecondition},
+		{name: "Aborted", err: Aborted("tier %d", 1), wantCode: codes.Aborted},
+		{name: "PermissionDenied", err: PermissionDenied("tier %d", 1), wantCode: codes.PermissionDenied},
+		{name: "Unauthenticated", err: Unauthenticated("tier %d", 1), wantCode: codes.Unauthenticated},
 		{name: "ResourceExhausted", err: ResourceExhausted("tier %d", 1), wantCode: codes.ResourceExhausted},
 		{name: "Unimplemented", err: Unimplemented("tier %d", 1), wantCode: codes.Unimplemented},
 		{name: "Unavailable", err: Unavailable("tier %d", 1), wantCode: codes.Unavailable},
+		{name: "DataLoss", err: DataLoss("tier %d", 1), wantCode: codes.DataLoss},
 		{name: "Internal", err: Internal("tier %d", 1), wantCode: codes.Internal},
 	}
 	for _, tt := range tests {

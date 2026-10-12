@@ -16,6 +16,7 @@ package agentsession
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -113,6 +114,7 @@ steps:
   - walk_ram: {key: ctx}
   - read_disk_data: {key: repo}
   - burn_cpu: {millis: 10}
+  - dwell: {millis: 5}
   - ping: {}
 `
 
@@ -129,6 +131,9 @@ func TestDecodeAcceptsValidScript(t *testing.T) {
 	if got, want := s.Steps[0].Ops[0], (op{kind: opFillRAM, key: "ctx", bytes: 4 << 20}); got != want {
 		t.Errorf("fill_ram decoded as %+v, want %+v", got, want)
 	}
+	if got, want := s.Steps[1].Ops[3], (op{kind: opDwell, millis: 5}); got != want {
+		t.Errorf("dwell decoded as %+v, want %+v", got, want)
+	}
 }
 
 // TestDecodeRejects lists the mistakes a hand-written script can make; each
@@ -144,6 +149,8 @@ func TestDecodeRejects(t *testing.T) {
 		{"missing size", "- ingest: {key: repo, size: 1Mi}", "size is required"},
 		{"bad key", "- ingest: {key: repo, size: 1Mi}", "must match"},
 		{"zero millis", "- burn_cpu: {millis: 10}", "millis must be positive"},
+		{"dwell with parallel", "- dwell: {millis: 5}", "takes no parallel"},
+		{"ping with millis", "- ping: {}", "takes no millis"},
 		{"walk before fill", "- fill_ram: {key: ctx, size: 4Mi}", "before any fill_ram"},
 		{"read before write", "- ingest: {key: repo, size: 1Mi}", "before any ingest"},
 		{"duplicate step", "name: 02_use", "duplicate step name"},
@@ -169,6 +176,10 @@ func TestDecodeRejects(t *testing.T) {
 				doc = strings.Replace(doc, tc.edit, "- ingest: {key: ../repo, size: 1Mi}", 1)
 			case "zero millis":
 				doc = strings.Replace(doc, tc.edit, "- burn_cpu: {millis: 0}", 1)
+			case "dwell with parallel":
+				doc = strings.Replace(doc, tc.edit, "- dwell: {millis: 5, parallel: 2}", 1)
+			case "ping with millis":
+				doc = strings.Replace(doc, tc.edit, "- ping: {millis: 5}", 1)
 			case "walk before fill":
 				doc = strings.Replace(doc, tc.edit, "- ping: {}", 1)
 			case "read before write":
@@ -227,13 +238,16 @@ func TestExecOpAgainstFake(t *testing.T) {
 			if o.kind == opIngest && o.bytes > 1<<10 {
 				o.bytes = 1 << 10
 			}
-			if o.kind == opBurnCPU {
+			if o.kind == opBurnCPU || o.kind == opDwell {
 				o.millis = 1
 			}
 			if err := u.execOp(context.Background(), o); err != nil {
 				t.Fatalf("step %q op %d: %v", s.Name, i, err)
 			}
-			opCount++
+			// A dwell is the one op that sends nothing.
+			if o.kind != opDwell {
+				opCount++
+			}
 		}
 	}
 	if got := len(fakeSrv.RecordedPaths()); got != opCount {
@@ -733,7 +747,7 @@ func TestRunStep_KeepsActorThroughCapacityShortage(t *testing.T) {
 	const rounds = maxConsecutiveStepFailures + 2
 	errs := make([]error, rounds)
 	for i := range errs {
-		errs[i] = status.Error(codes.ResourceExhausted, "no free workers available")
+		errs[i] = status.Error(codes.ResourceExhausted, "no worker has room for the actor")
 	}
 	ctl := &fakeControlClient{resumeErrs: errs}
 	u := newTestUser(t, &fake.Server{}, ctl, dynconfig.Config{ResumeMode: dynconfig.ResumeModeExplicit})
@@ -818,5 +832,36 @@ func TestBurnRatePerGoroutine(t *testing.T) {
 	}
 	if _, ok := burnRatePerGoroutine(op{kind: opBurnCPU, parallel: 1}, 5); ok {
 		t.Error("a zero-duration burn must not report a rate")
+	}
+}
+
+// TestDwell: a dwell idles for its duration without any request, and a
+// canceled context ends it early with the context's error.
+func TestDwell(t *testing.T) {
+	fakeSrv := &fake.Server{}
+	ts := fakeSrv.Start(t)
+	u := &sessionUser{
+		cfg: &userclass.Config{
+			HTTPClient: http.DefaultClient,
+			RouterURL:  ts.URL,
+			Atespace:   "benchmark",
+			Dyn:        dynconfig.NewHolder(dynconfig.Config{}),
+		},
+		actorName: "agent-test",
+	}
+	start := time.Now()
+	if err := u.execOp(context.Background(), op{kind: opDwell, millis: 30}); err != nil {
+		t.Fatal(err)
+	}
+	if took := time.Since(start); took < 30*time.Millisecond {
+		t.Errorf("dwell returned after %v, want at least 30ms", took)
+	}
+	if n := len(fakeSrv.RecordedPaths()); n != 0 {
+		t.Errorf("dwell sent %d requests, want none", n)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := u.execOp(ctx, op{kind: opDwell, millis: 10_000}); !errors.Is(err, context.Canceled) {
+		t.Errorf("canceled dwell returned %v, want context.Canceled", err)
 	}
 }

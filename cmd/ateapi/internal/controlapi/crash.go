@@ -23,6 +23,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/actorevent"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -36,6 +37,8 @@ import (
 const (
 	crashMessageWorkerAssignmentMissing  = "actor has no worker assignment in a state that requires one"
 	crashMessageLocalSnapshotNodeUnknown = "node holding the actor's local snapshot is unknown"
+	crashMessageLocalSnapshotMissing     = "actor has no local snapshot"
+	crashMessageDurableSnapshotMissing   = "actor has no durable snapshot"
 	crashMessageWorkerGone               = "assigned worker no longer exists"
 	crashMessageWorkerDraining           = "assigned worker is draining"
 	crashMessageWorkerReassigned         = "assigned worker no longer hosts the actor"
@@ -92,7 +95,27 @@ func handleAteletError(ctx context.Context, st crashActorStore, actorRef resourc
 		return fmt.Errorf("actor %s crashed: %w", actorRef, err)
 	}
 
-	return fmt.Errorf("while calling atelet %s: %w", rpc, err)
+	// The caller went away or its deadline passed: report that, not atelet's
+	// error. The actor keeps its assignment, so a retry can finish the operation.
+	if ctx.Err() != nil {
+		return fmt.Errorf("while calling atelet %s: %w: %w", rpc, err, ctx.Err())
+	}
+	if status.Code(err) == codes.Unavailable {
+		return apierror.Unavailable("while calling atelet %s: %w", rpc, err)
+	}
+	return apierror.Internal("while calling atelet %s: %w", rpc, err)
+}
+
+// crashActorAndFail crashes the actor for a workflow step that found its
+// record in a state no retry can recover from, and returns the error the step
+// fails with: FailedPrecondition once the crash is committed, since retrying
+// the operation is pointless, or crashActor's own error if the crash did not
+// commit, so the caller retries and the retry crashes the actor again.
+func crashActorAndFail(ctx context.Context, st crashActorStore, actorRef resources.ActorRef, opName, message string) error {
+	if err := crashActor(ctx, st, actorRef, opName, message); err != nil {
+		return err
+	}
+	return apierror.FailedPrecondition("actor %s is CRASHED: %s", actorRef, message)
 }
 
 // crashActor moves the actor to CRASHED state and frees the worker it was
@@ -131,11 +154,10 @@ func crashActor(ctx context.Context, st crashActorStore, actorRef resources.Acto
 			toUpdate.Status.Crash = newActorCrash(opName, message)
 		}
 
-		// InProgressSnapshotUri and InProgressLocalSnapshotName are kept so a
-		// later DeleteActor or RevertActor can delete what they name: each is
-		// the only pointer to it, so clearing them here would leak the objects
-		// for good; failed workflow steps must never promote either of them to an
-		// ExternalSnapshot or to LocalSnapshot.
+		// In-progress snapshot entries in Status.Snapshots are kept so a later
+		// DeleteActor or RevertActor can delete what they name: each is the only
+		// pointer to it, so clearing them here would leak the objects for good;
+		// failed workflow steps must never promote them to COMPLETED.
 		toUpdate.Status.WorkerAssignment = nil
 		return nil
 	})

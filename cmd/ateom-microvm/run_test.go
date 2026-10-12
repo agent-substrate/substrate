@@ -208,3 +208,19 @@ func TestWorkloadIDs(t *testing.T) {
 		t.Errorf("workloadIDs() = %v, want %v", got, want)
 	}
 }
+
+func TestGuestConfigDebugConsole(t *testing.T) {
+	_, _, prodParams := (&AteomService{guestDebug: false}).guestConfig()
+	for _, forbidden := range []string{"agent.debug_console", "agent.debug_console_vport", "1026"} {
+		if strings.Contains(prodParams, forbidden) {
+			t.Errorf("expected guestConfig() with guestDebug=false not to contain %q, but got %q", forbidden, prodParams)
+		}
+	}
+
+	_, _, dbgParams := (&AteomService{guestDebug: true}).guestConfig()
+	for _, want := range []string{"agent.log=debug", "agent.debug_console", "agent.debug_console_vport=1026"} {
+		if !strings.Contains(dbgParams, want) {
+			t.Errorf("expected guestConfig() with guestDebug=true to contain %q, but got %q", want, dbgParams)
+		}
+	}
+}

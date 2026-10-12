@@ -39,3 +39,8 @@ func (c *Client) NodePublishVolume(ctx context.Context, req *csi.NodePublishVolu
 func (c *Client) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpublishVolumeRequest) (*csi.NodeUnpublishVolumeResponse, error) {
 	return c.node.NodeUnpublishVolume(ctx, req)
 }
+
+// NodeGetCapabilities returns the capabilities supported by the node service.
+func (c *Client) NodeGetCapabilities(ctx context.Context, req *csi.NodeGetCapabilitiesRequest) (*csi.NodeGetCapabilitiesResponse, error) {
+	return c.node.NodeGetCapabilities(ctx, req)
+}

@@ -396,10 +396,14 @@ func TestCombinedVolumes(t *testing.T) {
 			t.Fatalf("SuspendActor: %v", err)
 		}
 
-		// No explicit resume: routing to the actor is what wakes it. Restore
-		// must re-establish all mounts and preserve shared writes across them.
+		// This suite checks volume restore, which can outlast the router's
+		// request-parking budget on a busy node. Resume through the control
+		// plane before checking the mounts and their shared writes.
 		resumeCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 		defer cancel()
+		if _, err := e2e.ResumeActorAwaitCapacity(t, resumeCtx, clients, &ateapipb.ResumeActorRequest{Actor: actorRef.ToObjectRef()}); err != nil {
+			t.Fatalf("ResumeActor after suspend: %v", err)
+		}
 		requireContentAtBoth(resumeCtx, t, router, actorRef, payloadPath, mountPathAlias+"/"+payloadName, payloadContent)
 		requireContentAtBoth(resumeCtx, t, router, actorRef, scratchPathA+"/multi.txt", scratchPathB+"/multi.txt", probeWrittenContent)
 
@@ -432,6 +436,9 @@ func TestCombinedVolumes(t *testing.T) {
 
 		resumeCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 		defer cancel()
+		if _, err := e2e.ResumeActorAwaitCapacity(t, resumeCtx, clients, &ateapipb.ResumeActorRequest{Actor: actorRef.ToObjectRef()}); err != nil {
+			t.Fatalf("ResumeActor after revert: %v", err)
+		}
 
 		// The image volume is immutable and remounted from its digest, so it
 		// is unaffected either way.
