@@ -39,6 +39,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/labels"
 )
 
@@ -378,7 +379,10 @@ func (c *controller) ensure(ctx context.Context, pod string, d desiredWorker, w 
 	if err := c.relay.Report(ctx, addr, &ateapipb.RegisterWorkerRequest{
 		Worker:   &ateapipb.ObjectRef{Name: name},
 		Capacity: fixed,
-		Hardware: hardware.ProbeHost(),
+		DefaultRuntime: &ateapipb.SandboxRuntime{
+			SandboxClass: string(d.pool.Spec.DefaultSandboxClass()),
+			Version:      hostCompat(),
+		},
 	}); err != nil {
 		return fmt.Errorf("while reporting capacity for Worker %s: %w", name, err)
 	}
@@ -386,6 +390,15 @@ func (c *controller) ensure(ctx context.Context, pod string, d desiredWorker, w 
 	w.reported = true
 	c.mu.Unlock()
 	return nil
+}
+
+func hostCompat() *ateapipb.VersionedSandboxCompat {
+	in := hardware.ProbeHost()
+	out := &ateapipb.VersionedSandboxCompat{SchemaVersion: in.GetSchemaVersion()}
+	for _, a := range in.GetAttributes() {
+		out.Attributes = append(out.Attributes, &ateapipb.AttributeEntry{Key: a.GetKey(), Value: a.GetValue()})
+	}
+	return out
 }
 
 // create registers the Worker with the fields the worker syncer would copy
@@ -502,7 +515,7 @@ func (c *controller) syncStatus(ctx context.Context, wp *atev1alpha1.WorkerPool,
 		}
 	}
 	c.mu.Unlock()
-	if wp.Status == want {
+	if equality.Semantic.DeepEqual(wp.Status, want) {
 		return nil
 	}
 	updated := wp.DeepCopy()

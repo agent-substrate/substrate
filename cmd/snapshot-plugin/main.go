@@ -35,7 +35,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/objectstoreplugin"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/pkg/objectstorage"
-	objectstoresnapshotv1 "github.com/agent-substrate/substrate/pkg/proto/objectstoresnapshotpb/v1"
+	objectstorev1 "github.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1"
 	"github.com/spf13/pflag"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
@@ -92,13 +92,13 @@ func main() {
 		if err != nil {
 			serverboot.Fatal(ctx, "Invalid --root", err)
 		}
-		objectstoresnapshotv1.RegisterNodeProviderServer(srv, plugin)
+		objectstorev1.RegisterNodeProviderServer(srv, plugin)
 	case "control":
 		store, err := newObjectStore(ctx)
 		if err != nil {
 			serverboot.Fatal(ctx, "Failed to set up the object storage backend", err)
 		}
-		objectstoresnapshotv1.RegisterControlProviderServer(srv, objectstoreplugin.NewControlPlugin(store))
+		objectstorev1.RegisterControlProviderServer(srv, objectstoreplugin.NewControlPlugin(store))
 	default:
 		fmt.Fprintln(os.Stderr, usage)
 		os.Exit(2)

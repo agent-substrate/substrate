@@ -137,7 +137,7 @@ func (c *policyCache) cached(ref resources.ActorRef) (*egresspolicy.Policy, bool
 // fetch loads and compiles one actor's policy and stores the result. A nil
 // policy with a nil error is the stored form of "no policy".
 func (c *policyCache) fetch(ctx context.Context, ref resources.ActorRef) (*egresspolicy.Policy, error) {
-	resp, err := c.client.GetActorEgressPolicy(ctx, &ateapipb.GetActorEgressPolicyRequest{Actor: ref.ToObjectRef()})
+	resp, err := c.client.GetActorEgressPolicy(ctx, &ateapipb.GetActorEgressPolicyRequest{Actor: ref.ToObjectRef(), Name: resources.SingletonName})
 	var policy *egresspolicy.Policy
 	switch {
 	case err == nil:

@@ -46,9 +46,16 @@ func TestUpdateTemplateLifecycle(t *testing.T) {
 			name:     "preferredFidelity:MEMORY",
 			fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 		},
+		{
+			name:     "preferredFidelity:ROOTFS",
+			fidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			if test.fidelity == ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS && !e2e.IsMicroVM() {
+				t.Skipf("Skipping %s: only the micro-VM runtime serves this fidelity", test.name)
+			}
 			t.Parallel()
 			runUpdateTemplateTestCase(t, test.fidelity)
 		})
@@ -118,6 +125,7 @@ func runUpdateTemplateTestCase(t *testing.T, fidelity ateapipb.SnapshotFidelity)
 			t.Fatalf("failed to call actor (call %d): %v", i, err)
 		}
 		validateCounterResponse(t, resp, "under template A", i, i)
+		validateRootfsCounter(t, resp, "under template A", i)
 	}
 
 	//
@@ -184,6 +192,9 @@ func runUpdateTemplateTestCase(t *testing.T, fidelity ateapipb.SnapshotFidelity)
 		t.Fatalf("failed to call actor after template update: %v", err)
 	}
 	validateCounterResponse(t, resp, "after template update", 1, 3)
+	// The repoint drops the restore to VOLUMES whatever the snapshot holds:
+	// a rootfs upper is only valid over the image it was written on.
+	validateRootfsCounter(t, resp, "after template update", 1)
 	if want := "file content: 3"; !strings.Contains(resp, want) {
 		t.Errorf("[after template update] expected %q (template B validating the preserved file), got response: %s", want, resp)
 	}
@@ -192,7 +203,7 @@ func runUpdateTemplateTestCase(t *testing.T, fidelity ateapipb.SnapshotFidelity)
 	// committed snapshot from template A. Resuming from PAUSED restores the
 	// local checkpoint (which was captured under template B, since templates
 	// can only be updated while SUSPENDED) and preserves the in-memory counter
-	// when preferredFidelity is FULL.
+	// when preferredFidelity is MEMORY.
 	t.Logf("Pausing Actor %q under template B...", actorID)
 	if _, err := clients.SubstrateAPI.PauseActor(ctx, &ateapipb.PauseActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
@@ -223,11 +234,18 @@ func runUpdateTemplateTestCase(t *testing.T, fidelity ateapipb.SnapshotFidelity)
 	if err != nil {
 		t.Fatalf("failed to call actor after pause/resume under template B: %v", err)
 	}
-	wantMemAfterPause := 2
-	if fidelity == ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES {
+	// The pause snapshot was captured under B, so it restores at its own
+	// fidelity: MEMORY keeps both counters, ROOTFS keeps the rootfs one, and
+	// VOLUMES neither.
+	wantMemAfterPause, wantRootfsAfterPause := 2, 2
+	switch fidelity {
+	case ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
+		wantMemAfterPause, wantRootfsAfterPause = 1, 1
+	case ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS:
 		wantMemAfterPause = 1
 	}
 	validateCounterResponse(t, resp, "after pause/resume under template B", wantMemAfterPause, 4)
+	validateRootfsCounter(t, resp, "after pause/resume under template B", wantRootfsAfterPause)
 
 	// Revert while running under template B: the actor goes back to SUSPENDED
 	// at the external snapshot it still holds, which is template A's. The spec
@@ -278,6 +296,7 @@ func runUpdateTemplateTestCase(t *testing.T, fidelity ateapipb.SnapshotFidelity)
 	// and this call takes it to 3 -- the same value the first resume under B
 	// produced, now reached a second time from the same snapshot.
 	validateCounterResponse(t, resp, "after revert under template B", 1, 3)
+	validateRootfsCounter(t, resp, "after revert under template B", 1)
 	if want := "file content: 3"; !strings.Contains(resp, want) {
 		t.Errorf("[after revert under template B] expected %q (template B reading the rewound file), got response: %s", want, resp)
 	}

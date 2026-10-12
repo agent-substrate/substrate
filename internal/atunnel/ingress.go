@@ -188,6 +188,12 @@ func newActorProxy(upstream *url.URL, dial DialFunc) *httputil.ReverseProxy {
 			}
 			pr.SetXForwarded()
 		},
+		// Prevent untrusted actor responses from spoofing routing rejections
+		// to trigger cache evictions and stream restarts in the ingress router.
+		ModifyResponse: func(resp *http.Response) error {
+			resp.Header.Del(StaleAssignmentHeader)
+			return nil
+		},
 		Transport: newProtocolMirrorTransport(dial),
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			slog.WarnContext(r.Context(), "atunnel upstream request failed", slog.Any("err", err))

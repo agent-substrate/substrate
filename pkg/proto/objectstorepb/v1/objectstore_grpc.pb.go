@@ -16,9 +16,9 @@
 // versions:
 // - protoc-gen-go-grpc v1.6.2
 // - protoc             v4.25.3
-// source: objectstoresnapshot.proto
+// source: objectstore.proto
 
-package objectstoresnapshotv1
+package objectstorev1
 
 import (
 	context "context"
@@ -33,8 +33,8 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	NodeProvider_FetchSnapshot_FullMethodName  = "/objectstoresnapshot.v1.NodeProvider/FetchSnapshot"
-	NodeProvider_UploadSnapshot_FullMethodName = "/objectstoresnapshot.v1.NodeProvider/UploadSnapshot"
+	NodeProvider_FetchSnapshot_FullMethodName  = "/objectstore.v1.NodeProvider/FetchSnapshot"
+	NodeProvider_UploadSnapshot_FullMethodName = "/objectstore.v1.NodeProvider/UploadSnapshot"
 )
 
 // NodeProviderClient is the client API for NodeProvider service.
@@ -206,7 +206,7 @@ func _NodeProvider_UploadSnapshot_Handler(srv interface{}, ctx context.Context, 
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var NodeProvider_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "objectstoresnapshot.v1.NodeProvider",
+	ServiceName: "objectstore.v1.NodeProvider",
 	HandlerType: (*NodeProviderServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
@@ -219,12 +219,12 @@ var NodeProvider_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "objectstoresnapshot.proto",
+	Metadata: "objectstore.proto",
 }
 
 const (
-	ControlProvider_CleanupSnapshot_FullMethodName = "/objectstoresnapshot.v1.ControlProvider/CleanupSnapshot"
-	ControlProvider_CopySnapshot_FullMethodName    = "/objectstoresnapshot.v1.ControlProvider/CopySnapshot"
+	ControlProvider_CleanupSnapshot_FullMethodName = "/objectstore.v1.ControlProvider/CleanupSnapshot"
+	ControlProvider_CopySnapshot_FullMethodName    = "/objectstore.v1.ControlProvider/CopySnapshot"
 )
 
 // ControlProviderClient is the client API for ControlProvider service.
@@ -364,7 +364,7 @@ func _ControlProvider_CopySnapshot_Handler(srv interface{}, ctx context.Context,
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var ControlProvider_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "objectstoresnapshot.v1.ControlProvider",
+	ServiceName: "objectstore.v1.ControlProvider",
 	HandlerType: (*ControlProviderServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
@@ -377,5 +377,5 @@ var ControlProvider_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "objectstoresnapshot.proto",
+	Metadata: "objectstore.proto",
 }

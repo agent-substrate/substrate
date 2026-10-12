@@ -105,8 +105,8 @@ type sandboxAssetsRecord struct {
 	// Empty when the capture holds no durable data.
 	DataSnapshotFiles []string `json:"dataSnapshotFiles,omitempty"`
 	// Fidelity is the snapshot fidelity the checkpoint captured, as the shared
-	// ateattr label ("memory" or "volumes"), so a snapshot's content is
-	// knowable from the manifest alone. Empty in the on-node record written at
+	// ateattr label ("volumes", "rootfs", or "memory"), so a snapshot's content
+	// is knowable from the manifest alone. Empty in the on-node record written at
 	// Run/Restore.
 	Fidelity string `json:"fidelity,omitempty"`
 }

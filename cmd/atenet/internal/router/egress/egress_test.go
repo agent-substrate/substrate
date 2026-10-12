@@ -44,6 +44,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
 	"github.com/agent-substrate/substrate/internal/egresspolicy"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
@@ -198,8 +199,11 @@ func (m *egressMockClient) GetActor(context.Context, *ateapipb.GetActorRequest, 
 	return m.actor, nil
 }
 
-func (m *egressMockClient) GetActorEgressPolicy(ctx context.Context, _ *ateapipb.GetActorEgressPolicyRequest, _ ...grpc.CallOption) (*ateapipb.EgressPolicy, error) {
+func (m *egressMockClient) GetActorEgressPolicy(ctx context.Context, req *ateapipb.GetActorEgressPolicyRequest, _ ...grpc.CallOption) (*ateapipb.EgressPolicy, error) {
 	m.policyCalls.Add(1)
+	if req.GetName() != resources.SingletonName {
+		return nil, status.Errorf(codes.InvalidArgument, "name must be %q", resources.SingletonName)
+	}
 	if m.policyGate != nil {
 		select {
 		case <-m.policyGate:

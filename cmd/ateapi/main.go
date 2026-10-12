@@ -47,7 +47,7 @@ import (
 	"github.com/agent-substrate/substrate/pkg/client/clientset/versioned"
 	"github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	objectstoresnapshotv1 "github.com/agent-substrate/substrate/pkg/proto/objectstoresnapshotpb/v1"
+	objectstorev1 "github.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/spf13/pflag"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
@@ -296,7 +296,7 @@ func main() {
 		instruments,
 		*defaultEgressGatewayAddress,
 		volPlugins,
-		objectstoresnapshotv1.NewControlProviderClient(snapshotPluginConn),
+		objectstorev1.NewControlProviderClient(snapshotPluginConn),
 		*actorJWTIssuer,
 		actorIDJWTAuthorityPool,
 		actorIDCAPool,

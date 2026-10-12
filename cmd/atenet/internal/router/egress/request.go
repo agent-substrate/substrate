@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type/v3"
@@ -27,6 +28,8 @@ import (
 	"github.com/agent-substrate/substrate/internal/egresspolicy"
 	"github.com/agent-substrate/substrate/internal/resources"
 )
+
+const websocketDeniedBody = "WebSocket egress is not supported"
 
 // handleRequest authorizes one request the gateway can read: cleartext HTTP,
 // or HTTPS the gateway terminated. It runs per request, because the
@@ -38,6 +41,11 @@ import (
 // request is dialed by the name it was decided on, on the port the actor
 // dialed.
 func (h *Handler) handleRequest(ctx context.Context, md *extproc.RequestMetadata, leg string) (extproc.Result, error) {
+	if isWebSocketUpgrade(md) {
+		slog.WarnContext(ctx, "egress denied: WebSocket upgrades are not supported", slog.String("leg", leg), slog.String("host", md.Host))
+		return extproc.Result{}, extproc.NewReqError(envoy_type.StatusCode_Forbidden, websocketDeniedBody)
+	}
+
 	ref, err := actorFromFilterState(md)
 	if err != nil {
 		slog.WarnContext(ctx, "egress denied: request carries no actor identity", slog.String("leg", leg), slog.Any("err", err))
@@ -119,6 +127,19 @@ func dialHost(dest egresspolicy.Destination) string {
 	default:
 		return dest.IP.String()
 	}
+}
+
+func isWebSocketUpgrade(md *extproc.RequestMetadata) bool {
+	return md.Method == "GET" && hasHTTPToken(md.Header("connection"), "upgrade") && hasHTTPToken(md.Header("upgrade"), "websocket")
+}
+
+func hasHTTPToken(value, want string) bool {
+	for _, token := range strings.Split(value, ",") {
+		if strings.EqualFold(strings.TrimSpace(token), want) {
+			return true
+		}
+	}
+	return false
 }
 
 // connectionDestination is the SNI a decrypted connection presented, on the

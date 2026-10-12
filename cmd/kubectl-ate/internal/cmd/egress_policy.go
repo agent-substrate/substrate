@@ -23,6 +23,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/kubectl-ate/internal/printer"
 	"github.com/agent-substrate/substrate/internal/ateclient"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
@@ -129,7 +130,6 @@ func manifestToJSON(data []byte) ([]byte, error) {
 // metadata.name the manifest leaves empty, then checks that both match the
 // command line: the atespace flag and the fixed policy name.
 func overrideEgressPolicyMetadata(policy *ateapipb.EgressPolicy, atespace string) error {
-	const policyNameDefault = "default"
 	if policy.Metadata == nil {
 		policy.Metadata = &ateapipb.ResourceMetadata{}
 	}
@@ -137,13 +137,13 @@ func overrideEgressPolicyMetadata(policy *ateapipb.EgressPolicy, atespace string
 		policy.Metadata.Atespace = atespace
 	}
 	if policy.Metadata.Name == "" {
-		policy.Metadata.Name = policyNameDefault
+		policy.Metadata.Name = resources.SingletonName
 	}
 	if policy.Metadata.Atespace != atespace {
 		return fmt.Errorf("manifest metadata.atespace %q does not match --atespace %q", policy.Metadata.Atespace, atespace)
 	}
-	if policy.Metadata.Name != policyNameDefault {
-		return fmt.Errorf("manifest metadata.name %q must be %q", policy.Metadata.Name, policyNameDefault)
+	if policy.Metadata.Name != resources.SingletonName {
+		return fmt.Errorf("manifest metadata.name %q must be %q", policy.Metadata.Name, resources.SingletonName)
 	}
 	return nil
 }
@@ -198,7 +198,7 @@ type getEgressPolicyRunner struct {
 }
 
 func (r *getEgressPolicyRunner) Run(ctx context.Context) error {
-	policy, err := r.getter.GetActorEgressPolicy(ctx, &ateapipb.GetActorEgressPolicyRequest{Actor: r.actor})
+	policy, err := r.getter.GetActorEgressPolicy(ctx, &ateapipb.GetActorEgressPolicyRequest{Actor: r.actor, Name: resources.SingletonName})
 	if status.Code(err) == codes.NotFound {
 		if err := requireActor(ctx, r.getter, r.actor); err != nil {
 			return err
@@ -372,7 +372,7 @@ type deleteEgressPolicyRunner struct {
 }
 
 func (r *deleteEgressPolicyRunner) Run(ctx context.Context) error {
-	_, err := r.deleter.DeleteActorEgressPolicy(ctx, &ateapipb.DeleteActorEgressPolicyRequest{Actor: r.actor, Options: r.options})
+	_, err := r.deleter.DeleteActorEgressPolicy(ctx, &ateapipb.DeleteActorEgressPolicyRequest{Actor: r.actor, Name: resources.SingletonName, Options: r.options})
 	if status.Code(err) == codes.NotFound {
 		if err := requireActor(ctx, r.deleter, r.actor); err != nil {
 			return err

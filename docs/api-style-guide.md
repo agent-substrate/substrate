@@ -139,8 +139,6 @@ Rules:
 - A subresource may be managed by the system, such as `ActorAssignment`. The system creates and deletes it as part of other operations, and the API exposes only List and, optionally, Get.
 - Subresource's methods follow section #3. Update replaces the whole object with `uid` and `version` preconditions, Delete takes `DeleteOptions`, and List is paginated.
 
-TODO: The existing Get and Delete requests for singleton subresources do not carry `name` yet. They identify the subresource by its parent alone.
-
 ### 2.5 Singletons
 
 A **singleton** is a resource type that allows at most one instance per parent. For example, each `Actor` has at most one `EgressPolicy`, and each `Atespace` has at most one `AccessPolicy`, as does Global.
