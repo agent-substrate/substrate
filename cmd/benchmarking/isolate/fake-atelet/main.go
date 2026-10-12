@@ -66,13 +66,13 @@ var (
 	ateapiCAFile         = pflag.String("ateapi-ca-file", "/run/servicedns.podcert.ate.dev/trust-bundle.pem", "CA bundle used to verify ate-api-server.")
 	ateapiServerName     = pflag.String("ateapi-server-name", "api.ate-system.svc", "DNS name expected on the ate-api-server certificate.")
 
-	delay                       = pflag.Duration("delay", 0, "How long each AteomHerder call takes before it succeeds, not counting the actor certificate mint on Run and Restore.")
-	delayRun                    = pflag.Duration("delay-run", -1, "Override --delay for Run. Negative uses --delay.")
-	delayRestore                = pflag.Duration("delay-restore", -1, "Override --delay for Restore. Negative uses --delay.")
-	delayCheckpoint             = pflag.Duration("delay-checkpoint", -1, "Override --delay for Checkpoint. Negative uses --delay.")
-	delayUploadPausedCheckpoint = pflag.Duration("delay-upload-paused-checkpoint", -1, "Override --delay for UploadPausedCheckpoint. Negative uses --delay.")
-	delayTerminate              = pflag.Duration("delay-terminate", -1, "Override --delay for Terminate. Negative uses --delay.")
-	mintActorCertificate        = pflag.Bool("mint-actor-certificate", true, "On each Run and Restore that names an egress gateway, mint the actor's certificate from ate-api-server before the delay, as ateom does before starting the workload.")
+	delay                = pflag.Duration("delay", 0, "How long each AteomHerder call takes before it succeeds, not counting the actor certificate mint on Run and Restore.")
+	delayRun             = pflag.Duration("delay-run", -1, "Override --delay for Run. Negative uses --delay.")
+	delayRestore         = pflag.Duration("delay-restore", -1, "Override --delay for Restore. Negative uses --delay.")
+	delayCheckpoint      = pflag.Duration("delay-checkpoint", -1, "Override --delay for Checkpoint. Negative uses --delay.")
+	delayPromoteSnapshot = pflag.Duration("delay-promote-snapshot", -1, "Override --delay for PromoteSnapshot. Negative uses --delay.")
+	delayTerminate       = pflag.Duration("delay-terminate", -1, "Override --delay for Terminate. Negative uses --delay.")
+	mintActorCertificate = pflag.Bool("mint-actor-certificate", true, "On each Run and Restore that names an egress gateway, mint the actor's certificate from ate-api-server before the delay, as ateom does before starting the workload.")
 
 	showVersion  = pflag.Bool("version", false, "Print version and exit.")
 	logLevelFlag = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
@@ -90,7 +90,7 @@ func main() {
 	if err := serverboot.SetLogLevel(*logLevelFlag); err != nil {
 		serverboot.Fatal(ctx, "Invalid --log-level", err)
 	}
-	callDelays, err := resolveDelays(*delay, *delayRun, *delayRestore, *delayCheckpoint, *delayUploadPausedCheckpoint, *delayTerminate)
+	callDelays, err := resolveDelays(*delay, *delayRun, *delayRestore, *delayCheckpoint, *delayPromoteSnapshot, *delayTerminate)
 	if err != nil {
 		serverboot.Fatal(ctx, "Invalid --delay", err)
 	}

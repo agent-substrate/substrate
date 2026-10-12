@@ -128,9 +128,9 @@ type FakeAteletServer struct {
 	FailRestore    error
 	RestoreDelay   time.Duration
 
-	UploadCalled  bool
-	UploadRequest *ateletpb.UploadPausedCheckpointRequest
-	FailUpload    error
+	PromoteCalled  bool
+	PromoteRequest *ateletpb.PromoteSnapshotRequest
+	FailPromote    error
 
 	TerminateCalled  bool
 	TerminateRequest *ateletpb.TerminateRequest
@@ -180,9 +180,9 @@ func (f *FakeAteletServer) Reset() {
 	f.FailRestore = nil
 	f.RestoreDelay = 0
 
-	f.UploadCalled = false
-	f.UploadRequest = nil
-	f.FailUpload = nil
+	f.PromoteCalled = false
+	f.PromoteRequest = nil
+	f.FailPromote = nil
 
 	f.TerminateCalled = false
 	f.TerminateRequest = nil
@@ -191,19 +191,19 @@ func (f *FakeAteletServer) Reset() {
 	f.objectStore = nil
 }
 
-func (f *FakeAteletServer) UploadPausedCheckpoint(ctx context.Context, req *ateletpb.UploadPausedCheckpointRequest) (*ateletpb.UploadPausedCheckpointResponse, error) {
+func (f *FakeAteletServer) PromoteSnapshot(ctx context.Context, req *ateletpb.PromoteSnapshotRequest) (*ateletpb.PromoteSnapshotResponse, error) {
 	f.Lock.Lock()
 	defer f.Lock.Unlock()
 
-	f.UploadCalled = true
-	f.UploadRequest = proto.Clone(req).(*ateletpb.UploadPausedCheckpointRequest)
-	if f.FailUpload != nil {
-		return nil, f.FailUpload
+	f.PromoteCalled = true
+	f.PromoteRequest = proto.Clone(req).(*ateletpb.PromoteSnapshotRequest)
+	if f.FailPromote != nil {
+		return nil, f.FailPromote
 	}
-	if err := f.writeSnapshot(req.GetDestinationSnapshotUri()); err != nil {
+	if err := f.writeSnapshot(req.GetSnapshot().GetObject().GetSnapshotUri()); err != nil {
 		return nil, err
 	}
-	return &ateletpb.UploadPausedCheckpointResponse{}, nil
+	return &ateletpb.PromoteSnapshotResponse{}, nil
 }
 
 func (f *FakeAteletServer) Run(ctx context.Context, req *ateletpb.RunRequest) (*ateletpb.RunResponse, error) {
@@ -229,7 +229,7 @@ func (f *FakeAteletServer) Checkpoint(ctx context.Context, req *ateletpb.Checkpo
 		return nil, f.FailCheckpoint
 	}
 
-	if err := f.writeSnapshot(req.GetExternalConfig().GetSnapshotUri()); err != nil {
+	if err := f.writeSnapshot(req.GetSnapshot().GetObject().GetSnapshotUri()); err != nil {
 		return nil, err
 	}
 	return &ateletpb.CheckpointResponse{}, nil

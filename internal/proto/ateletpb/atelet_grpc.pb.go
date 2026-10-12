@@ -251,11 +251,11 @@ var AteomSupport_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	AteomHerder_Run_FullMethodName                    = "/atelet.AteomHerder/Run"
-	AteomHerder_Checkpoint_FullMethodName             = "/atelet.AteomHerder/Checkpoint"
-	AteomHerder_Restore_FullMethodName                = "/atelet.AteomHerder/Restore"
-	AteomHerder_UploadPausedCheckpoint_FullMethodName = "/atelet.AteomHerder/UploadPausedCheckpoint"
-	AteomHerder_Terminate_FullMethodName              = "/atelet.AteomHerder/Terminate"
+	AteomHerder_Run_FullMethodName             = "/atelet.AteomHerder/Run"
+	AteomHerder_Checkpoint_FullMethodName      = "/atelet.AteomHerder/Checkpoint"
+	AteomHerder_Restore_FullMethodName         = "/atelet.AteomHerder/Restore"
+	AteomHerder_PromoteSnapshot_FullMethodName = "/atelet.AteomHerder/PromoteSnapshot"
+	AteomHerder_Terminate_FullMethodName       = "/atelet.AteomHerder/Terminate"
 )
 
 // AteomHerderClient is the client API for AteomHerder service.
@@ -276,11 +276,12 @@ type AteomHerderClient interface {
 	Checkpoint(ctx context.Context, in *CheckpointRequest, opts ...grpc.CallOption) (*CheckpointResponse, error)
 	// Restore restores a workload from checkpoint onto an ateom.
 	Restore(ctx context.Context, in *RestoreRequest, opts ...grpc.CallOption) (*RestoreResponse, error)
-	// UploadPausedCheckpoint copies a local (pause) checkpoint from this node's
-	// disk to object storage. Unlike Checkpoint it drives no ateom: the actor is
-	// paused, its sandbox is gone; the checkpoint files plus their manifest
-	// already sit under the actor's local-checkpoints directory.
-	UploadPausedCheckpoint(ctx context.Context, in *UploadPausedCheckpointRequest, opts ...grpc.CallOption) (*UploadPausedCheckpointResponse, error)
+	// PromoteSnapshot copies a local checkpoint from this node's disk to object
+	// storage, then prunes the actor's local checkpoints. Unlike Checkpoint it
+	// drives no ateom: the actor is paused, its sandbox is gone; the checkpoint
+	// files plus their manifest already sit under the actor's local-checkpoints
+	// directory.
+	PromoteSnapshot(ctx context.Context, in *PromoteSnapshotRequest, opts ...grpc.CallOption) (*PromoteSnapshotResponse, error)
 	// Terminate tells atelet to terminate/kill any running workload for an actor,
 	// unmount its volumes, and clean up actor state on the node.
 	Terminate(ctx context.Context, in *TerminateRequest, opts ...grpc.CallOption) (*TerminateResponse, error)
@@ -324,10 +325,10 @@ func (c *ateomHerderClient) Restore(ctx context.Context, in *RestoreRequest, opt
 	return out, nil
 }
 
-func (c *ateomHerderClient) UploadPausedCheckpoint(ctx context.Context, in *UploadPausedCheckpointRequest, opts ...grpc.CallOption) (*UploadPausedCheckpointResponse, error) {
+func (c *ateomHerderClient) PromoteSnapshot(ctx context.Context, in *PromoteSnapshotRequest, opts ...grpc.CallOption) (*PromoteSnapshotResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(UploadPausedCheckpointResponse)
-	err := c.cc.Invoke(ctx, AteomHerder_UploadPausedCheckpoint_FullMethodName, in, out, cOpts...)
+	out := new(PromoteSnapshotResponse)
+	err := c.cc.Invoke(ctx, AteomHerder_PromoteSnapshot_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -362,11 +363,12 @@ type AteomHerderServer interface {
 	Checkpoint(context.Context, *CheckpointRequest) (*CheckpointResponse, error)
 	// Restore restores a workload from checkpoint onto an ateom.
 	Restore(context.Context, *RestoreRequest) (*RestoreResponse, error)
-	// UploadPausedCheckpoint copies a local (pause) checkpoint from this node's
-	// disk to object storage. Unlike Checkpoint it drives no ateom: the actor is
-	// paused, its sandbox is gone; the checkpoint files plus their manifest
-	// already sit under the actor's local-checkpoints directory.
-	UploadPausedCheckpoint(context.Context, *UploadPausedCheckpointRequest) (*UploadPausedCheckpointResponse, error)
+	// PromoteSnapshot copies a local checkpoint from this node's disk to object
+	// storage, then prunes the actor's local checkpoints. Unlike Checkpoint it
+	// drives no ateom: the actor is paused, its sandbox is gone; the checkpoint
+	// files plus their manifest already sit under the actor's local-checkpoints
+	// directory.
+	PromoteSnapshot(context.Context, *PromoteSnapshotRequest) (*PromoteSnapshotResponse, error)
 	// Terminate tells atelet to terminate/kill any running workload for an actor,
 	// unmount its volumes, and clean up actor state on the node.
 	Terminate(context.Context, *TerminateRequest) (*TerminateResponse, error)
@@ -389,8 +391,8 @@ func (UnimplementedAteomHerderServer) Checkpoint(context.Context, *CheckpointReq
 func (UnimplementedAteomHerderServer) Restore(context.Context, *RestoreRequest) (*RestoreResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Restore not implemented")
 }
-func (UnimplementedAteomHerderServer) UploadPausedCheckpoint(context.Context, *UploadPausedCheckpointRequest) (*UploadPausedCheckpointResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method UploadPausedCheckpoint not implemented")
+func (UnimplementedAteomHerderServer) PromoteSnapshot(context.Context, *PromoteSnapshotRequest) (*PromoteSnapshotResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method PromoteSnapshot not implemented")
 }
 func (UnimplementedAteomHerderServer) Terminate(context.Context, *TerminateRequest) (*TerminateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Terminate not implemented")
@@ -470,20 +472,20 @@ func _AteomHerder_Restore_Handler(srv interface{}, ctx context.Context, dec func
 	return interceptor(ctx, in, info, handler)
 }
 
-func _AteomHerder_UploadPausedCheckpoint_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(UploadPausedCheckpointRequest)
+func _AteomHerder_PromoteSnapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PromoteSnapshotRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(AteomHerderServer).UploadPausedCheckpoint(ctx, in)
+		return srv.(AteomHerderServer).PromoteSnapshot(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: AteomHerder_UploadPausedCheckpoint_FullMethodName,
+		FullMethod: AteomHerder_PromoteSnapshot_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(AteomHerderServer).UploadPausedCheckpoint(ctx, req.(*UploadPausedCheckpointRequest))
+		return srv.(AteomHerderServer).PromoteSnapshot(ctx, req.(*PromoteSnapshotRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -526,8 +528,8 @@ var AteomHerder_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _AteomHerder_Restore_Handler,
 		},
 		{
-			MethodName: "UploadPausedCheckpoint",
-			Handler:    _AteomHerder_UploadPausedCheckpoint_Handler,
+			MethodName: "PromoteSnapshot",
+			Handler:    _AteomHerder_PromoteSnapshot_Handler,
 		},
 		{
 			MethodName: "Terminate",

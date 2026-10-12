@@ -607,11 +607,14 @@ func TestEnsureAteletPaused_ForwardsPreferredFidelity(t *testing.T) {
 			if req == nil {
 				t.Fatal("expected Checkpoint RPC to be called")
 			}
-			if got := req.GetFidelity(); got != tc.want {
-				t.Errorf("CheckpointRequest.Fidelity = %v, want %v", got, tc.want)
+			if got := req.GetSnapshot().GetFidelity(); got != tc.want {
+				t.Errorf("CheckpointRequest.Snapshot.Fidelity = %v, want %v", got, tc.want)
 			}
-			if got := req.GetLocalConfig().GetSnapshotName(); got != "local-snap-1" {
-				t.Errorf("CheckpointRequest.LocalConfig.SnapshotName = %q, want %q", got, "local-snap-1")
+			if got := req.GetSnapshot().GetSnapshotUuid(); got != "local-snap-1" {
+				t.Errorf("CheckpointRequest.Snapshot.SnapshotUuid = %q, want %q", got, "local-snap-1")
+			}
+			if got := req.GetPromotionPolicy(); got != nil {
+				t.Errorf("CheckpointRequest.PromotionPolicy = %v, want unset: a pause keeps the snapshot LOCAL_ONLY", got)
 			}
 		})
 	}

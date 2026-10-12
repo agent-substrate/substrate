@@ -66,7 +66,7 @@ func (s *recordingStorage) objects() []string {
 }
 
 func uniformDelays(d time.Duration) delays {
-	return delays{run: d, restore: d, checkpoint: d, uploadPausedCheckpoint: d, terminate: d}
+	return delays{run: d, restore: d, checkpoint: d, promoteSnapshot: d, terminate: d}
 }
 
 // herderCalls invokes every AteomHerder method the herder implements. The
@@ -85,8 +85,12 @@ func herderCalls(h *herder) map[string]func(context.Context) error {
 			_, err := h.Checkpoint(ctx, externalCheckpoint(testSnapshotURI))
 			return err
 		},
-		"UploadPausedCheckpoint": func(ctx context.Context) error {
-			_, err := h.UploadPausedCheckpoint(ctx, &ateletpb.UploadPausedCheckpointRequest{DestinationSnapshotUri: testSnapshotURI})
+		"PromoteSnapshot": func(ctx context.Context) error {
+			_, err := h.PromoteSnapshot(ctx, &ateletpb.PromoteSnapshotRequest{
+				Snapshot: &ateletpb.Snapshot{
+					Object: &ateletpb.ObjectStorage{SnapshotUri: testSnapshotURI},
+				},
+			})
 			return err
 		},
 		"Terminate": func(ctx context.Context) error {
@@ -98,8 +102,12 @@ func herderCalls(h *herder) map[string]func(context.Context) error {
 
 func externalCheckpoint(uri string) *ateletpb.CheckpointRequest {
 	return &ateletpb.CheckpointRequest{
-		Type:   ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
-		Config: &ateletpb.CheckpointRequest_ExternalConfig{ExternalConfig: &ateletpb.ExternalCheckpointConfiguration{SnapshotUri: uri}},
+		Snapshot: &ateletpb.Snapshot{
+			Object: &ateletpb.ObjectStorage{SnapshotUri: uri},
+		},
+		PromotionPolicy: &ateletpb.SnapshotPromotionPolicy{
+			DurableOnly: &ateletpb.SnapshotPromotionStep{TtlSeconds: 0},
+		},
 	}
 }
 
@@ -155,7 +163,7 @@ func TestHerderUsesEachCallsOwnDelay(t *testing.T) {
 // an object under its URI.
 func TestHerderWritesPlaceholderUnderSnapshotURI(t *testing.T) {
 	const want = "bench-bucket/benchmark-workloads/sleep/atespaces/team-a/actors/0f9c1d2e-3b4a-4c5d-8e6f-7a8b9c0d1e2f/snapshots/snap-1/" + placeholderObject
-	for _, name := range []string{"Checkpoint", "UploadPausedCheckpoint"} {
+	for _, name := range []string{"Checkpoint", "PromoteSnapshot"} {
 		t.Run(name, func(t *testing.T) {
 			storage := &recordingStorage{}
 			if err := herderCalls(&herder{storage: storage})[name](context.Background()); err != nil {
@@ -171,11 +179,11 @@ func TestHerderWritesPlaceholderUnderSnapshotURI(t *testing.T) {
 func TestHerderWritesNothingForLocalCheckpoint(t *testing.T) {
 	storage := &recordingStorage{}
 	h := &herder{storage: storage}
-	if _, err := h.Checkpoint(context.Background(), &ateletpb.CheckpointRequest{Type: ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL}); err != nil {
+	if _, err := h.Checkpoint(context.Background(), &ateletpb.CheckpointRequest{}); err != nil {
 		t.Fatalf("Checkpoint: %v", err)
 	}
 	for name, call := range herderCalls(h) {
-		if name == "Checkpoint" || name == "UploadPausedCheckpoint" {
+		if name == "Checkpoint" || name == "PromoteSnapshot" {
 			continue
 		}
 		if err := call(context.Background()); err != nil {

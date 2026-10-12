@@ -50,7 +50,7 @@ type actorCertMinter interface {
 // delays is how long each AteomHerder call takes before it succeeds: the
 // data plane's share of it, not counting an actor certificate mint.
 type delays struct {
-	run, restore, checkpoint, uploadPausedCheckpoint, terminate time.Duration
+	run, restore, checkpoint, promoteSnapshot, terminate time.Duration
 }
 
 // herder answers every AteomHerder call with success after its delay, without
@@ -170,8 +170,9 @@ func (h *herder) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (*at
 
 func (h *herder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest) (*ateletpb.CheckpointResponse, error) {
 	start := time.Now()
-	if req.GetType() == ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL {
-		if err := h.writePlaceholder(ctx, start, h.delays.checkpoint, req.GetExternalConfig().GetSnapshotUri()); err != nil {
+	// Any promotion step puts the snapshot in object storage.
+	if policy := req.GetPromotionPolicy(); policy.GetDurableOnly() != nil {
+		if err := h.writePlaceholder(ctx, start, h.delays.checkpoint, req.GetSnapshot().GetObject().GetSnapshotUri()); err != nil {
 			return nil, err
 		}
 	}
@@ -181,15 +182,15 @@ func (h *herder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 	return &ateletpb.CheckpointResponse{}, nil
 }
 
-func (h *herder) UploadPausedCheckpoint(ctx context.Context, req *ateletpb.UploadPausedCheckpointRequest) (*ateletpb.UploadPausedCheckpointResponse, error) {
+func (h *herder) PromoteSnapshot(ctx context.Context, req *ateletpb.PromoteSnapshotRequest) (*ateletpb.PromoteSnapshotResponse, error) {
 	start := time.Now()
-	if err := h.writePlaceholder(ctx, start, h.delays.uploadPausedCheckpoint, req.GetDestinationSnapshotUri()); err != nil {
+	if err := h.writePlaceholder(ctx, start, h.delays.promoteSnapshot, req.GetSnapshot().GetObject().GetSnapshotUri()); err != nil {
 		return nil, err
 	}
-	if err := wait(ctx, start, h.delays.uploadPausedCheckpoint); err != nil {
+	if err := wait(ctx, start, h.delays.promoteSnapshot); err != nil {
 		return nil, err
 	}
-	return &ateletpb.UploadPausedCheckpointResponse{}, nil
+	return &ateletpb.PromoteSnapshotResponse{}, nil
 }
 
 func (h *herder) Terminate(ctx context.Context, _ *ateletpb.TerminateRequest) (*ateletpb.TerminateResponse, error) {
