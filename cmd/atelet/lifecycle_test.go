@@ -231,9 +231,11 @@ func runLocalSnapshotGC(t *testing.T, fidelity ateletpb.SnapshotFidelity) {
 		ActorTemplateName:     "counter",
 		WorkerPodUid:          workerPodUID,
 		Spec:                  spec,
-		Fidelity:              fidelity,
-		Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
-		LocalConfig:           &ateletpb.LocalCheckpointConfiguration{SnapshotName: snapshotName},
+		Snapshot: &ateletpb.Snapshot{
+			SnapshotUuid: snapshotName,
+			Fidelity:     fidelity,
+		},
+		UploadConfig: &ateletpb.UploadConfig{Mode: ateletpb.UploadMode_UPLOAD_MODE_DEFERRED},
 	}); err != nil {
 		t.Fatalf("Checkpoint: %v", err)
 	}
@@ -252,9 +254,10 @@ func runLocalSnapshotGC(t *testing.T, fidelity ateletpb.SnapshotFidelity) {
 		WorkerPodUid:          workerPodUID,
 		SandboxAssets:         sandboxAssets,
 		Spec:                  spec,
-		Fidelity:              fidelity,
-		Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
-		LocalConfig:           &ateletpb.LocalCheckpointConfiguration{SnapshotName: snapshotName},
+		Snapshot: &ateletpb.Snapshot{
+			SnapshotUuid: snapshotName,
+			Fidelity:     fidelity,
+		},
 	}); err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
@@ -389,9 +392,11 @@ func TestRestoreUsesRequestSandboxAssets(t *testing.T) {
 		ActorTemplateName:     "counter",
 		WorkerPodUid:          workerPodUID,
 		Spec:                  spec,
-		Fidelity:              ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
-		Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
-		LocalConfig:           &ateletpb.LocalCheckpointConfiguration{SnapshotName: snapshotName},
+		Snapshot: &ateletpb.Snapshot{
+			SnapshotUuid: snapshotName,
+			Fidelity:     ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+		},
+		UploadConfig: &ateletpb.UploadConfig{Mode: ateletpb.UploadMode_UPLOAD_MODE_DEFERRED},
 	}); err != nil {
 		t.Fatalf("Checkpoint: %v", err)
 	}
@@ -417,9 +422,10 @@ func TestRestoreUsesRequestSandboxAssets(t *testing.T) {
 		WorkerPodUid:          workerPodUID,
 		SandboxAssets:         assetsWithPause(restorePause),
 		Spec:                  spec,
-		Fidelity:              ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
-		Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
-		LocalConfig:           &ateletpb.LocalCheckpointConfiguration{SnapshotName: snapshotName},
+		Snapshot: &ateletpb.Snapshot{
+			SnapshotUuid: snapshotName,
+			Fidelity:     ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+		},
 	}); err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
@@ -511,8 +517,10 @@ func TestActivationFailureBeforeRegistration(t *testing.T) {
 				_, err = s.Restore(ctx, &ateletpb.RestoreRequest{
 					Atespace: "team-a", ActorName: "actor-1", ActorUid: actorUID, WorkerPodUid: "5f1c0d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f",
 					SandboxAssets: assets, Spec: spec,
-					Fidelity: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, Type: ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
-					LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: snapshotName},
+					Snapshot: &ateletpb.Snapshot{
+						SnapshotUuid: snapshotName,
+						Fidelity:     ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+					},
 				})
 			} else {
 				_, err = s.Run(ctx, &ateletpb.RunRequest{
@@ -652,10 +660,11 @@ func TestRestoreFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
 				runscAssetName: {Url: "gs://test-bucket/runsc", Sha256: assetHash},
 			}}},
 		},
-		Spec:        spec,
-		Fidelity:    ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
-		Type:        ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
-		LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: snapshotName},
+		Spec: spec,
+		Snapshot: &ateletpb.Snapshot{
+			SnapshotUuid: snapshotName,
+			Fidelity:     ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+		},
 	})
 	if err == nil || !strings.Contains(err.Error(), "while creating pause OCI bundle") {
 		t.Fatalf("Restore error = %v, want the post-registration OCI preparation failure", err)

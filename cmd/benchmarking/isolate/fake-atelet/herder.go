@@ -50,15 +50,16 @@ type actorCertMinter interface {
 // delays is how long each AteomHerder call takes before it succeeds: the
 // data plane's share of it, not counting an actor certificate mint.
 type delays struct {
-	run, restore, checkpoint, uploadPausedCheckpoint, terminate time.Duration
+	run, restore, checkpoint, promoteSnapshot, terminate time.Duration
 }
 
 // herder answers every AteomHerder call with success after its delay, without
 // running or saving any workload. Actors it "runs" do not exist.
 //
 // The one side effect it keeps is a placeholder object under each snapshot
-// URI it is asked to write: ate-api-server copies an actor's snapshot when it
-// creates a tag, golden tags included, and refuses to copy an empty one.
+// URI a call uploads to before it returns: ate-api-server copies an actor's
+// snapshot when it creates a tag, golden tags included, and refuses to copy
+// an empty one.
 //
 // The one call back it keeps is the actor certificate mint: before ateom
 // starts a workload with tunneled egress it has atelet mint the actor's
@@ -170,8 +171,11 @@ func (h *herder) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (*at
 
 func (h *herder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest) (*ateletpb.CheckpointResponse, error) {
 	start := time.Now()
-	if req.GetType() == ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL {
-		if err := h.writePlaceholder(ctx, start, h.delays.checkpoint, req.GetExternalConfig().GetSnapshotUri()); err != nil {
+	// An immediate upload puts the snapshot in object storage before
+	// Checkpoint returns. The fake does not run deferred uploads: the
+	// actor's PromoteSnapshot writes it instead.
+	if req.GetUploadConfig().GetMode() == ateletpb.UploadMode_UPLOAD_MODE_IMMEDIATE {
+		if err := h.writePlaceholder(ctx, start, h.delays.checkpoint, req.GetSnapshot().GetObject().GetSnapshotUri()); err != nil {
 			return nil, err
 		}
 	}
@@ -181,15 +185,15 @@ func (h *herder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest
 	return &ateletpb.CheckpointResponse{}, nil
 }
 
-func (h *herder) UploadPausedCheckpoint(ctx context.Context, req *ateletpb.UploadPausedCheckpointRequest) (*ateletpb.UploadPausedCheckpointResponse, error) {
+func (h *herder) PromoteSnapshot(ctx context.Context, req *ateletpb.PromoteSnapshotRequest) (*ateletpb.PromoteSnapshotResponse, error) {
 	start := time.Now()
-	if err := h.writePlaceholder(ctx, start, h.delays.uploadPausedCheckpoint, req.GetDestinationSnapshotUri()); err != nil {
+	if err := h.writePlaceholder(ctx, start, h.delays.promoteSnapshot, req.GetSnapshot().GetObject().GetSnapshotUri()); err != nil {
 		return nil, err
 	}
-	if err := wait(ctx, start, h.delays.uploadPausedCheckpoint); err != nil {
+	if err := wait(ctx, start, h.delays.promoteSnapshot); err != nil {
 		return nil, err
 	}
-	return &ateletpb.UploadPausedCheckpointResponse{}, nil
+	return &ateletpb.PromoteSnapshotResponse{}, nil
 }
 
 func (h *herder) Terminate(ctx context.Context, _ *ateletpb.TerminateRequest) (*ateletpb.TerminateResponse, error) {

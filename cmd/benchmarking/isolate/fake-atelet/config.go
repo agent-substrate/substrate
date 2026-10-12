@@ -21,7 +21,7 @@ import (
 
 // resolveDelays applies each per-call override over the default delay. A
 // negative override means "use the default".
-func resolveDelays(def, run, restore, checkpoint, uploadPausedCheckpoint, terminate time.Duration) (delays, error) {
+func resolveDelays(def, run, restore, checkpoint, promoteSnapshot, terminate time.Duration) (delays, error) {
 	if def < 0 {
 		return delays{}, fmt.Errorf("delay must not be negative, got %v", def)
 	}
@@ -32,10 +32,10 @@ func resolveDelays(def, run, restore, checkpoint, uploadPausedCheckpoint, termin
 		return d
 	}
 	return delays{
-		run:                    pick(run),
-		restore:                pick(restore),
-		checkpoint:             pick(checkpoint),
-		uploadPausedCheckpoint: pick(uploadPausedCheckpoint),
-		terminate:              pick(terminate),
+		run:             pick(run),
+		restore:         pick(restore),
+		checkpoint:      pick(checkpoint),
+		promoteSnapshot: pick(promoteSnapshot),
+		terminate:       pick(terminate),
 	}, nil
 }
