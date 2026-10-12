@@ -183,6 +183,8 @@ spec:
             - nc -z 127.0.0.1 5432
           initialDelaySeconds: 2
           periodSeconds: 2
+          timeoutSeconds: 5
+          failureThreshold: 6
         livenessProbe:
           exec:
             command:
@@ -191,6 +193,8 @@ spec:
             - pg_isready -U "${POSTGRES_USER}" -d postgres
           initialDelaySeconds: 10
           periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 6
         args:
         - -c
         - config_file=/etc/postgresql/postgresql.conf
