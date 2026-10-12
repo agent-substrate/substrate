@@ -26,6 +26,73 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
+func TestValidateCreateActorTemplateRequestVolumesFidelity(t *testing.T) {
+	// The CSI cases declare external volume templates, which the ExternalVolumes
+	// preview gate controls.
+	setPreviewForTest(t, "ALL")
+	durable := &ateapi.Volume{Name: "data", DurableDir: &ateapi.DurableDirVolumeSource{}}
+	csi := &ateapi.Volume{Name: "csi", External: &ateapi.ExternalVolumeSource{Template: &ateapi.ExternalVolumeTemplate{
+		CapacityBytes: 1 << 30, StorageClassName: "standard",
+	}}}
+	image := &ateapi.Volume{Name: "data", Image: &ateapi.ImageVolumeSource{
+		Reference: "example.com/data@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+	}}
+	systemInfo := &ateapi.Volume{Name: "system-info", SystemInfo: &ateapi.SystemInfoVolumeSource{
+		DataSources: []*ateapi.SystemInfoDataSource{{ActorMetadata: &ateapi.ActorMetadataDataSource{
+			Items: []*ateapi.ActorMetadataItem{{Field: ateapi.ActorMetadataField_ACTOR_METADATA_FIELD_NAME, Path: "actor-name"}},
+		}}},
+	}}
+	for _, snapshots := range []struct {
+		name     string
+		fidelity ateapi.SnapshotFidelity
+	}{
+		{"memory", ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY},
+		{"volumes", ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES},
+	} {
+		for _, tt := range []struct {
+			name            string
+			volume          *ateapi.Volume
+			extra           *ateapi.Volume
+			mounted         bool
+			supportsVolumes bool
+		}{
+			{"no volumes", nil, nil, false, false},
+			{"mounted durable-dir", durable, nil, true, true},
+			{"unmounted durable-dir", durable, nil, false, false},
+			{"mounted CSI", csi, nil, true, true},
+			{"unmounted CSI", csi, nil, false, false},
+			{"mounted image", image, nil, true, false},
+			{"mounted durable-dir and CSI", durable, csi, true, true},
+			{"mounted systemInfo", systemInfo, nil, true, false},
+		} {
+			t.Run(snapshots.name+"/"+tt.name, func(t *testing.T) {
+				tmpl := validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
+					tmpl.SnapshotConfig.PreferredFidelity = snapshots.fidelity
+					var volumes []*ateapi.Volume
+					for _, v := range []*ateapi.Volume{tt.volume, tt.extra} {
+						if v != nil {
+							volumes = append(volumes, v)
+						}
+					}
+					tmpl.Volumes = volumes
+					if tt.mounted {
+						for _, v := range volumes {
+							tmpl.Containers[0].VolumeMounts = append(tmpl.Containers[0].VolumeMounts, &ateapi.VolumeMount{
+								Name: v.GetName(), MountPath: "/" + v.GetName(),
+							})
+						}
+					}
+				})
+				var want field.ErrorList
+				if !tt.supportsVolumes && snapshots.fidelity == ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES {
+					want = append(want, field.Invalid(field.NewPath("actor_template", "snapshot_config", "preferred_fidelity"), snapshots.fidelity.String(), ""))
+				}
+				assertValidateErr(t, ValidateCreateActorTemplateRequest(context.Background(), &ateapi.CreateActorTemplateRequest{ActorTemplate: tmpl}), want)
+			})
+		}
+	}
+}
+
 func TestValidateCreateActorTemplateRequest(t *testing.T) {
 	tests := []struct {
 		name string
@@ -109,6 +176,8 @@ func TestValidateCreateActorTemplateRequest(t *testing.T) {
 		"valid volumes fidelity",
 		&ateapi.CreateActorTemplateRequest{ActorTemplate: validActorTemplate(func(tmpl *ateapi.ActorTemplate) {
 			tmpl.SnapshotConfig.PreferredFidelity = ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
+			tmpl.Volumes = []*ateapi.Volume{{Name: "data", DurableDir: &ateapi.DurableDirVolumeSource{}}}
+			tmpl.Containers[0].VolumeMounts = []*ateapi.VolumeMount{{Name: "data", MountPath: "/data"}}
 		})},
 		nil,
 	}, {

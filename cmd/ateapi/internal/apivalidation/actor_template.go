@@ -57,28 +57,40 @@ func ValidateActorTemplateUpdate(ctx context.Context, fldPath *field.Path, newVa
 }
 
 // ValidateCustom_CreateActorTemplateRequest_ActorTemplate holds the rules
-// that span more than one field of a template.
+// that span more than one field of a template: container volume mounts must
+// reference volumes the template declares, and a VOLUMES preferred fidelity
+// needs a mounted volume snapshots can capture.
 func ValidateCustom_CreateActorTemplateRequest_ActorTemplate(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateapi.ActorTemplate) field.ErrorList {
 	var errs field.ErrorList
 	if value.GetGoldenEgressPolicy() != nil && value.GetSnapshotConfig().GetGoldenSnapshotConfig().GetMode() == ateapi.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED {
 		errs = append(errs, field.Forbidden(fldPath.Child("golden_egress_policy"), "requires golden snapshots to be enabled"))
 	}
-	declared := make(map[string]bool, len(value.GetVolumes()))
+	declared := make(map[string]*ateapi.Volume, len(value.GetVolumes()))
 	for _, vol := range value.GetVolumes() {
-		declared[vol.GetName()] = true
+		declared[vol.GetName()] = vol
 	}
+	hasSnapshotVolume := false
 	for i, ctr := range value.GetContainers() {
 		for j, mount := range ctr.GetVolumeMounts() {
 			name := mount.GetName()
 			if name == "" {
 				continue // required is enforced by tags
 			}
-			if !declared[name] {
+			vol := declared[name]
+			if vol == nil {
 				errs = append(errs, field.Invalid(
 					fldPath.Child("containers").Index(i).Child("volume_mounts").Index(j).Child("name"),
 					name, "must reference a volume declared in the template"))
+				continue
+			}
+			if vol.GetDurableDir() != nil || vol.GetExternal() != nil {
+				hasSnapshotVolume = true
 			}
 		}
+	}
+	fidelity := value.GetSnapshotConfig().GetPreferredFidelity()
+	if !hasSnapshotVolume && fidelity == ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES {
+		errs = append(errs, field.Invalid(fldPath.Child("snapshot_config", "preferred_fidelity"), fidelity.String(), "VOLUMES snapshots require a mounted durable-dir or CSI volume"))
 	}
 	return errs
 }

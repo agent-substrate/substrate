@@ -3343,10 +3343,12 @@ func createDataFidelityTemplate(t *testing.T, tc *testContext, ns string) *ateap
 				PreferredFidelity: ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 			},
 			Containers: []*ateapi.Container{{
-				Name:    "main",
-				Image:   "main@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-				Command: []string{"/main"},
+				Name:         "main",
+				Image:        "main@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+				Command:      []string{"/main"},
+				VolumeMounts: []*ateapi.VolumeMount{{Name: "data", MountPath: "/data"}},
 			}},
+			Volumes: []*ateapi.Volume{{Name: "data", DurableDir: &ateapi.DurableDirVolumeSource{}}},
 			WorkerSelector: &ateapi.Selector{
 				MatchLabels: map[string]string{poolLabelKey: ns},
 			},
