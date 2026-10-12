@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateattr"
@@ -180,7 +181,8 @@ func acquireErrorType(err error) string {
 }
 
 type poolMetricsTracer struct {
-	instruments *Instruments
+	instruments         *Instruments
+	missingStartWarning sync.Once
 
 	poolOption         metric.MeasurementOption
 	successOption      metric.MeasurementOption
@@ -212,7 +214,9 @@ func (t *poolMetricsTracer) TraceAcquireEnd(ctx context.Context, _ *pgxpool.Pool
 	t.instruments.pending.Add(ctx, -1, t.poolOption)
 	start, ok := ctx.Value(acquireStartKey{}).(time.Time)
 	if !ok {
-		slog.WarnContext(ctx, "PostgreSQL acquisition metric missing start time")
+		t.missingStartWarning.Do(func() {
+			slog.WarnContext(ctx, "PostgreSQL acquisition metric missing start time")
+		})
 		return
 	}
 	t.recordAcquire(ctx, time.Since(start), data.Err)
