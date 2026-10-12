@@ -29,8 +29,9 @@ import (
 )
 
 // workerPoolSandboxConfigIndex names the cache index from a SandboxConfig's
-// name to the WorkerPools whose status uses it.
-const workerPoolSandboxConfigIndex = "status.sandboxClasses.configRef.name"
+// name to the WorkerPools whose status uses it, in configRef or
+// pendingConfigRef. See sandboxConfigsInUse.
+const workerPoolSandboxConfigIndex = "status.sandboxClasses.sandboxConfig"
 
 // SandboxConfigProtectionReconciler removes the protection finalizer from a
 // SandboxConfig that is being deleted, once no WorkerPool uses it.

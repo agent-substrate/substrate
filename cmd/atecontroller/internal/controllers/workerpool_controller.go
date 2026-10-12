@@ -278,8 +278,9 @@ func (r *WorkerPoolReconciler) confirmSandboxConfigSwitches(ctx context.Context,
 // state differs from prev, the pool's status before this reconcile.
 //
 //   - A class whose configRef changed gets a Normal event that names the old
-//     and the new config. The pool's events are then the history of the
-//     configs it has used.
+//     and the new config. The pool's events are then the history of its
+//     recent configs. The API server drops an event after its TTL, one hour
+//     by default, so the full trail lives in whatever stores the events.
 //   - A class whose Resolved condition is False gets a Warning event, unless
 //     prev already reports the same failure. A pool that stays unresolved
 //     does not repeat the event on every reconcile.
