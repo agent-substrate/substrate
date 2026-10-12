@@ -32,6 +32,7 @@ if [[ $# -gt 0 ]]; then
       echo "  KIND_CLUSTER_NAME      Name of the cluster to create (default: kind)."
       echo "  IP_FAMILY              Address families for pods and Services: ipv4, ipv6 or dual (default: ipv4)."
       echo "  ATE_KIND_RESERVED_CPU  CPU reserved for the kubelet and the system on each node (default: none)."
+      echo "  KIND_WORKERS           Worker nodes besides the control plane (default: 0)."
       exit 0
       ;;
   esac
@@ -40,6 +41,11 @@ fi
 # Only ipFamily is set; kind's per-family podSubnet/serviceSubnet defaults are
 # already what we want.
 IP_FAMILY="${IP_FAMILY:-ipv4}"
+KIND_WORKERS="${KIND_WORKERS:-0}"
+if ! [[ "${KIND_WORKERS}" =~ ^[0-9]+$ ]]; then
+  echo "error: KIND_WORKERS must be a non-negative integer (got '${KIND_WORKERS}')" >&2
+  exit 1
+fi
 case "${IP_FAMILY}" in
   ipv4|ipv6|dual)
     ;;
@@ -85,7 +91,7 @@ else
   echo "/dev/kvm not available: micro-VM support disabled (gVisor still works)."
 fi
 
-echo "Creating kind configuration for cluster '${KIND_CLUSTER_NAME}' (ipFamily=${IP_FAMILY})..."
+echo "Creating kind configuration for cluster '${KIND_CLUSTER_NAME}' (ipFamily=${IP_FAMILY}, workers=${KIND_WORKERS})..."
 cat <<EOF > "${ROOT}/bin/kind-config.yaml"
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
@@ -101,6 +107,9 @@ if [ "${HAS_KVM}" = "1" ]; then
     containerPath: /dev/kvm
 EOF
 fi
+for ((i = 0; i < KIND_WORKERS; i++)); do
+  echo "- role: worker" >> "${ROOT}/bin/kind-config.yaml"
+done
 cat <<EOF >> "${ROOT}/bin/kind-config.yaml"
 # cmd/podcertcontroller depends on ClusterTrustBundle & PodCertificateRequest.
 # They are not enabled by default as of Kubernetes v1.36
