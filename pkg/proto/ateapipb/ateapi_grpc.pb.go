@@ -150,7 +150,7 @@ type ControlClient interface {
 	// Mark a Worker as terminating so the scheduler stops routing new Actors to
 	// it. Idempotent; one-way. Deliberately leaves any bound Actor alone.
 	// Returns ABORTED if another write lands on the Worker first; retry.
-	DrainWorker(ctx context.Context, in *DrainWorkerRequest, opts ...grpc.CallOption) (*Worker, error)
+	DrainWorker(ctx context.Context, in *DrainWorkerRequest, opts ...grpc.CallOption) (*DrainWorkerResponse, error)
 	// List the Actors hosted by a given Worker.
 	ListWorkerActorAssignments(ctx context.Context, in *ListWorkerActorAssignmentsRequest, opts ...grpc.CallOption) (*ListWorkerActorAssignmentsResponse, error)
 	// List Actors.
@@ -439,9 +439,9 @@ func (c *controlClient) DeleteWorker(ctx context.Context, in *DeleteWorkerReques
 	return out, nil
 }
 
-func (c *controlClient) DrainWorker(ctx context.Context, in *DrainWorkerRequest, opts ...grpc.CallOption) (*Worker, error) {
+func (c *controlClient) DrainWorker(ctx context.Context, in *DrainWorkerRequest, opts ...grpc.CallOption) (*DrainWorkerResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(Worker)
+	out := new(DrainWorkerResponse)
 	err := c.cc.Invoke(ctx, Control_DrainWorker_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -692,7 +692,7 @@ type ControlServer interface {
 	// Mark a Worker as terminating so the scheduler stops routing new Actors to
 	// it. Idempotent; one-way. Deliberately leaves any bound Actor alone.
 	// Returns ABORTED if another write lands on the Worker first; retry.
-	DrainWorker(context.Context, *DrainWorkerRequest) (*Worker, error)
+	DrainWorker(context.Context, *DrainWorkerRequest) (*DrainWorkerResponse, error)
 	// List the Actors hosted by a given Worker.
 	ListWorkerActorAssignments(context.Context, *ListWorkerActorAssignmentsRequest) (*ListWorkerActorAssignmentsResponse, error)
 	// List Actors.
@@ -813,7 +813,7 @@ func (UnimplementedControlServer) UpdateWorker(context.Context, *UpdateWorkerReq
 func (UnimplementedControlServer) DeleteWorker(context.Context, *DeleteWorkerRequest) (*Worker, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteWorker not implemented")
 }
-func (UnimplementedControlServer) DrainWorker(context.Context, *DrainWorkerRequest) (*Worker, error) {
+func (UnimplementedControlServer) DrainWorker(context.Context, *DrainWorkerRequest) (*DrainWorkerResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DrainWorker not implemented")
 }
 func (UnimplementedControlServer) ListWorkerActorAssignments(context.Context, *ListWorkerActorAssignmentsRequest) (*ListWorkerActorAssignmentsResponse, error) {

@@ -51,9 +51,8 @@ var getEgressPolicyCmd = &cobra.Command{
 }
 
 var createEgressPolicyCmd = &cobra.Command{
-	Use:     "egress-policy <actor-name> -f <manifest>",
-	Aliases: []string{"egress-policies"},
-	Short:   "Create an actor's egress policy from a manifest",
+	Use:   "egress-policy <actor-name> -f <manifest>",
+	Short: "Create an actor's egress policy from a manifest",
 	Long: `Create the egress policy of an actor from a manifest file.
 
 The manifest is a YAML or JSON EgressPolicy, as printed by
@@ -64,9 +63,8 @@ Its metadata may be omitted.`,
 }
 
 var updateEgressPolicyCmd = &cobra.Command{
-	Use:     "egress-policy <actor-name> -f <manifest>",
-	Aliases: []string{"egress-policies"},
-	Short:   "Replace an actor's egress policy from a manifest",
+	Use:   "egress-policy <actor-name> -f <manifest>",
+	Short: "Replace an actor's egress policy from a manifest",
 	Long: `Replace the egress policy of an actor from a manifest file.
 
 The manifest is a YAML or JSON EgressPolicy, as printed by
@@ -78,11 +76,10 @@ rejects the update when they no longer match those of the stored egress policy.`
 }
 
 var deleteEgressPolicyCmd = &cobra.Command{
-	Use:     "egress-policy <actor-name>",
-	Aliases: []string{"egress-policies"},
-	Short:   "Delete the egress policy of an actor",
-	Args:    cobra.ExactArgs(1),
-	RunE:    runDeleteEgressPolicy,
+	Use:   "egress-policy <actor-name>",
+	Short: "Delete the egress policy of an actor",
+	Args:  cobra.ExactArgs(1),
+	RunE:  runDeleteEgressPolicy,
 }
 
 // egressPolicyFromManifest parses a single protojson-shaped YAML or JSON

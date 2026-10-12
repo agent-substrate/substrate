@@ -92,6 +92,8 @@ var withPlaceholder = []string{"header=" + url.QueryEscape("Authorization:"+plac
 //	hack/install-ate-kind.sh --deploy-atenet --credential-provider='{"name":"k8s.io"}'
 //	hack/run-e2e-kind.sh ./internal/e2e/suites/egresscredinject -v -args --no-color
 func TestActorEgressCredentialInjection(t *testing.T) {
+	t.Skip("disabled until the echo origin is in-cluster: httpbin.org outages fail CI for every PR (issue 2513)")
+
 	env, err := e2e.CheckEnv("BUCKET_NAME", "KO_DOCKER_REPO")
 	if err != nil {
 		t.Fatalf("CheckEnv failed: %v", err)
