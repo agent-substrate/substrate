@@ -54,7 +54,6 @@ func loadEnv(t *testing.T) {
 		"ATE_API_POSTGRES_SERVER_CA_FILE",
 		"ATE_ATENET_DATAPLANE",
 		"ATE_CREDENTIAL_PROVIDER",
-		"ATE_ENVOY_CONCURRENCY",
 		"ATE_IMAGE_REPO",
 		"ATE_IMAGE_TAG",
 		"ATE_INSTALL_CLUSTER_SIZE",
@@ -68,6 +67,7 @@ func loadEnv(t *testing.T) {
 		"CLUSTER_LOCATION",
 		"CLUSTER_NAME",
 		"DOCKER_BUILD_FLAGS",
+		"E2E_ATE_ENVOY_CONCURRENCY",
 		"EXPECTED_JWT_ISSUER",
 		"KIND_CLUSTER_NAME",
 		"KO_DEFAULTPLATFORMS",
@@ -809,16 +809,16 @@ func TestLoadEnvoyConcurrency(t *testing.T) {
 	if cfg.EnvoyConcurrency != 4 {
 		t.Errorf("EnvoyConcurrency = %d, want 4", cfg.EnvoyConcurrency)
 	}
-	if got := scriptEnvMap(t, cfg)["ATE_ENVOY_CONCURRENCY"]; got != "4" {
-		t.Errorf("ScriptEnv()[ATE_ENVOY_CONCURRENCY] = %q, want 4", got)
+	if got := scriptEnvMap(t, cfg)["E2E_ATE_ENVOY_CONCURRENCY"]; got != "4" {
+		t.Errorf("ScriptEnv()[E2E_ATE_ENVOY_CONCURRENCY] = %q, want 4", got)
 	}
 
 	for _, val := range []string{"0", "-1", "abc"} {
 		t.Run("invalid_"+val, func(t *testing.T) {
 			loadEnv(t)
-			t.Setenv("ATE_ENVOY_CONCURRENCY", val)
+			t.Setenv("E2E_ATE_ENVOY_CONCURRENCY", val)
 			if _, err := Load(Options{}); err == nil {
-				t.Fatalf("Load() with ATE_ENVOY_CONCURRENCY=%q succeeded, want an error", val)
+				t.Fatalf("Load() with E2E_ATE_ENVOY_CONCURRENCY=%q succeeded, want an error", val)
 			}
 		})
 	}

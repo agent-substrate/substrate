@@ -188,9 +188,9 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		return nil, &InvalidError{Value: v, Want: "a positive integer"}
 	}
 
-	envoyConcurrency := r.Int("envoyConcurrency")
-	if r.Supplied("envoyConcurrency") && envoyConcurrency < 1 {
-		v, _ := r.Value("envoyConcurrency")
+	envoyConcurrency := r.Int("e2e.envoyConcurrency")
+	if r.Supplied("e2e.envoyConcurrency") && envoyConcurrency < 1 {
+		v, _ := r.Value("e2e.envoyConcurrency")
 		return nil, &InvalidError{Value: v, Want: "a positive integer"}
 	}
 

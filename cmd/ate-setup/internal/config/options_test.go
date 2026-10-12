@@ -116,7 +116,7 @@ func optionsFlagSet(opts Options) (*pflag.FlagSet, error) {
 		}
 	}
 	if opts.EnvoyConcurrency != 0 {
-		if err := fs.Set("envoy-concurrency", strconv.Itoa(opts.EnvoyConcurrency)); err != nil {
+		if err := fs.Set("e2e-envoy-concurrency", strconv.Itoa(opts.EnvoyConcurrency)); err != nil {
 			return nil, err
 		}
 	}

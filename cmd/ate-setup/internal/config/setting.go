@@ -250,8 +250,8 @@ var Registry = []Setting{
 		Usage: "Worker goroutines per signer in podcertificate-controller",
 	},
 	{
-		Key: "envoyConcurrency", Env: "ATE_ENVOY_CONCURRENCY",
-		Flag: "envoy-concurrency", Kind: KindInt, Default: "0",
+		Key: "e2e.envoyConcurrency", Env: "E2E_ATE_ENVOY_CONCURRENCY",
+		Flag: "e2e-envoy-concurrency", Kind: KindInt, Default: "0",
 		Usage: "Worker threads (--concurrency) for the Envoy container in atenet-egress",
 	},
 

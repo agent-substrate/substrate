@@ -420,7 +420,7 @@ func (c *Config) ScriptEnv() []string {
 		merged["ATE_INSTALL_PODCERT_WORKERS_PER_SIGNER"] = strconv.Itoa(c.PodcertWorkersPerSigner)
 	}
 	if c.EnvoyConcurrency > 0 {
-		merged["ATE_ENVOY_CONCURRENCY"] = strconv.Itoa(c.EnvoyConcurrency)
+		merged["E2E_ATE_ENVOY_CONCURRENCY"] = strconv.Itoa(c.EnvoyConcurrency)
 	}
 	// Resolved values again, so a flag overrides whatever the environment
 	// carried rather than layering under it.
