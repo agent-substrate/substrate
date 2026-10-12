@@ -873,3 +873,75 @@ func TestPatchEnvoyDataplaneImage(t *testing.T) {
 		t.Errorf("patchEnvoyDataplaneImage() = %q, want %q", got, want)
 	}
 }
+
+func TestRenderAtenetEgressManifestEnvoyConcurrency(t *testing.T) {
+	const digest = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+	src := images.Source{Repo: "example.com/substrate", Tag: "v1.2.3"}
+
+	envoyArgs := func(t *testing.T, manifest []byte) []string {
+		t.Helper()
+		for _, doc := range strings.Split(string(manifest), "\n---\n") {
+			var dep appsv1.Deployment
+			if err := yaml.Unmarshal([]byte(doc), &dep); err != nil || dep.Kind != "Deployment" || dep.Name != "atenet-egress" {
+				continue
+			}
+			for _, c := range dep.Spec.Template.Spec.Containers {
+				if c.Name == "envoy" {
+					return c.Args
+				}
+			}
+			t.Fatal("atenet-egress Deployment has no envoy container")
+		}
+		t.Fatal("rendered manifest has no atenet-egress Deployment")
+		return nil
+	}
+
+	t.Run("unset leaves envoy args unchanged", func(t *testing.T) {
+		e := &Env{
+			Cfg: &config.Config{Root: repoRoot(t), Router: config.RouterEnvoy, Images: src},
+			resolver: images.NewPrebuilt(src, func(context.Context, string) (string, error) {
+				return digest, nil
+			}),
+		}
+		out, err := e.renderAtenetEgressManifest(t.Context(), config.CredentialProvider{})
+		if err != nil {
+			t.Fatalf("renderAtenetEgressManifest() error = %v", err)
+		}
+		args := envoyArgs(t, out)
+		if slices.Contains(args, "--concurrency") {
+			t.Errorf("envoy args unexpectedly contain --concurrency: %v", args)
+		}
+	})
+
+	t.Run("specified appends --concurrency to envoy container via kustomize", func(t *testing.T) {
+		e := &Env{
+			Cfg: &config.Config{
+				Root:             repoRoot(t),
+				Router:           config.RouterEnvoy,
+				Images:           src,
+				EnvoyConcurrency: 4,
+			},
+			resolver: images.NewPrebuilt(src, func(context.Context, string) (string, error) {
+				return digest, nil
+			}),
+		}
+		out, err := e.renderAtenetEgressManifest(t.Context(), config.CredentialProvider{})
+		if err != nil {
+			t.Fatalf("renderAtenetEgressManifest() error = %v", err)
+		}
+		args := envoyArgs(t, out)
+		want := []string{
+			"-c",
+			"/etc/envoy/envoy.yaml",
+			"--service-node",
+			"atenet-egress",
+			"--service-cluster",
+			"atenet-egress",
+			"--concurrency",
+			"4",
+		}
+		if !slices.Equal(args, want) {
+			t.Errorf("envoy args = %v, want %v", args, want)
+		}
+	})
+}

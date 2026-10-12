@@ -32,6 +32,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/objectstoreplugin"
 	"github.com/agent-substrate/substrate/internal/objectstoreplugin/objectstoreplugintest"
+	"github.com/agent-substrate/substrate/internal/pluginsocket"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/objectstorage"
 	objectstorev1 "github.com/agent-substrate/substrate/pkg/proto/objectstorepb/v1"
@@ -252,7 +253,7 @@ func newPluginSidecar(t *testing.T, store objectstorage.ObjectStorage) *pluginSi
 
 // start may run on any goroutine, so it reports failures with Error.
 func (s *pluginSidecar) start() {
-	lis, err := objectstoreplugin.Listen(s.path)
+	lis, err := pluginsocket.Listen(s.path)
 	if err != nil {
 		s.t.Errorf("Listen: %v", err)
 		return
@@ -286,14 +287,14 @@ func TestCheckpointUploadWaitsOutPluginOutage(t *testing.T) {
 	store := &orderedObjectStorage{}
 	sidecar := newPluginSidecar(t, store)
 	sidecar.start()
-	conn, err := objectstoreplugin.Dial(sidecar.path, wait)
+	conn, err := pluginsocket.Dial(sidecar.path, wait)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer conn.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	if err := objectstoreplugin.WaitReady(ctx, conn); err != nil {
+	if err := pluginsocket.WaitReady(ctx, conn); err != nil {
 		t.Fatalf("WaitReady = %v", err)
 	}
 	s := &AteomHerder{

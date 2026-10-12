@@ -59,8 +59,8 @@ var (
 )
 
 var getActorsCmd = &cobra.Command{
-	Use:     "actors <actor-name ...>",
-	Aliases: []string{"actor"},
+	Use:     "actor <actor-name ...>",
+	Aliases: []string{"actors"},
 	Short:   "List all actors or get one or more actors",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if len(args) > 0 {
@@ -254,11 +254,10 @@ var suspendActorCmd = &cobra.Command{
 }
 
 var logsActorsCmd = &cobra.Command{
-	Use:     "actors <actor-name>",
-	Aliases: []string{"actor"},
-	Short:   "Stream logs for a specific actor",
-	Args:    cobra.ExactArgs(1),
-	RunE:    runLogsActor,
+	Use:   "actor <actor-name>",
+	Short: "Stream logs for a specific actor",
+	Args:  cobra.ExactArgs(1),
+	RunE:  runLogsActor,
 }
 
 func buildCreateActorRequest(actorName, atespace, template, tag string) (*ateapipb.CreateActorRequest, error) {
