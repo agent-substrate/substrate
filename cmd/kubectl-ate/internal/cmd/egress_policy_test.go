@@ -27,6 +27,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
+	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -392,6 +393,15 @@ func TestEgressPolicyManifest_RoundTrip(t *testing.T) {
 }
 
 func TestEgressPolicyCommandArgs(t *testing.T) {
+	resetFlagsRecursive(rootCmd)
+	t.Cleanup(func() { resetFlagsRecursive(rootCmd) })
+	for _, c := range []*cobra.Command{getEgressPolicyCmd, createEgressPolicyCmd, updateEgressPolicyCmd, deleteEgressPolicyCmd} {
+		_ = c.Flags().Set("atespace", "team-a")
+		if c.Flags().Lookup("filename") != nil {
+			_ = c.Flags().Set("filename", "policy.yaml")
+		}
+	}
+
 	runCommandArgsTests(t, []commandArgsTest{
 		{name: "get", command: getEgressPolicyCmd, args: []string{"c1"}},
 		{name: "get requires actor", command: getEgressPolicyCmd, wantErr: true},

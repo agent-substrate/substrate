@@ -50,13 +50,9 @@ var adminCmd = &cobra.Command{
 var makeCaPoolCmd = &cobra.Command{
 	Use:   "make-ca-pool",
 	Short: "Make a new secret that contains a CA pool to be used by a signing controller",
+	Args:  noArgs("use --name to specify the secret name", "name"),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
-
-		kc, err := newKubeClient(cmd.ErrOrStderr())
-		if err != nil {
-			return err
-		}
 
 		var keyType localca.KeyType
 		switch makeCaPoolKeyTypeFlag {
@@ -65,7 +61,7 @@ var makeCaPoolCmd = &cobra.Command{
 		case "ECDSAP256":
 			keyType = localca.KeyTypeECDSAP256
 		default:
-			return fmt.Errorf("unknown key type %q", makeCaPoolKeyTypeFlag)
+			return usageErrorf("unknown key type %q", makeCaPoolKeyTypeFlag)
 		}
 
 		ca, err := localca.GenerateCA(
@@ -75,6 +71,11 @@ var makeCaPoolCmd = &cobra.Command{
 		)
 		if err != nil {
 			return fmt.Errorf("while generating CA: %w", err)
+		}
+
+		kc, err := newKubeClient(cmd.ErrOrStderr())
+		if err != nil {
+			return err
 		}
 
 		pool := &localca.ConcretePool{
@@ -121,15 +122,16 @@ var makeCaPoolCmd = &cobra.Command{
 var makeJwtPoolCmd = &cobra.Command{
 	Use:   "make-jwt-pool",
 	Short: "Make a new secret that contains a JWT authority pool to be used by the actor ID broker",
+	Args:  noArgs("use --name to specify the secret name", "name"),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 
-		kc, err := newKubeClient(cmd.ErrOrStderr())
+		secret, keyID, err := newJWTPoolSecret(poolSecretNamespaceFlag, poolSecretNameFlag, jwtAlgFlag, jwtKeyIDFlag)
 		if err != nil {
-			return err
+			return wrapUsageError(err)
 		}
 
-		secret, keyID, err := newJWTPoolSecret(poolSecretNamespaceFlag, poolSecretNameFlag, jwtAlgFlag, jwtKeyIDFlag)
+		kc, err := newKubeClient(cmd.ErrOrStderr())
 		if err != nil {
 			return err
 		}
@@ -147,6 +149,7 @@ var makeJwtPoolCmd = &cobra.Command{
 var listJwtKeysCmd = &cobra.Command{
 	Use:   "list-jwt-keys",
 	Short: "List the keys in a JWT authority pool secret",
+	Args:  noArgs("use --name to specify the secret name", "name"),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		kc, err := newKubeClient(cmd.ErrOrStderr())
 		if err != nil {
@@ -169,16 +172,18 @@ var addJwtKeyCmd = &cobra.Command{
 The key is published to relying parties but signs nothing until activate-jwt-key
 makes it the signing key. Activate it only once relying parties have refetched
 the key set.`,
+	Args: noArgs("use --name to specify the secret name", "name"),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		authority, err := localjwtauthority.GenerateAuthority(jwtAlgFlag, jwtKeyIDFlag)
+		if err != nil {
+			return wrapUsageError(fmt.Errorf("while generating JWT authority: %w", err))
+		}
+
 		kc, err := newKubeClient(cmd.ErrOrStderr())
 		if err != nil {
 			return err
 		}
 
-		authority, err := localjwtauthority.GenerateAuthority(jwtAlgFlag, jwtKeyIDFlag)
-		if err != nil {
-			return fmt.Errorf("while generating JWT authority: %w", err)
-		}
 		if err := updateJWTPool(cmd.Context(), cmd.ErrOrStderr(), kc.CoreV1().Secrets(poolSecretNamespaceFlag), poolSecretNameFlag, func(pool *localjwtauthority.ConcretePool) error {
 			return pool.AddAuthority(authority)
 		}); err != nil {
@@ -193,6 +198,7 @@ the key set.`,
 var activateJwtKeyCmd = &cobra.Command{
 	Use:   "activate-jwt-key",
 	Short: "Make a key in a JWT authority pool secret the one that signs",
+	Args:  noArgs("use --name and --key-id to specify the secret and key", "name", "key-id"),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		kc, err := newKubeClient(cmd.ErrOrStderr())
 		if err != nil {
@@ -217,6 +223,7 @@ var removeJwtKeyCmd = &cobra.Command{
 
 Tokens the key signed stop verifying once relying parties refetch the key set,
 so remove it only after the last of them has expired.`,
+	Args: noArgs("use --name and --key-id to specify the secret and key", "name", "key-id"),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		kc, err := newKubeClient(cmd.ErrOrStderr())
 		if err != nil {
@@ -330,41 +337,36 @@ func newJWTPoolSecret(namespace, name, algorithm, keyID string) (*corev1.Secret,
 }
 
 func init() {
+	requireSubcommand(adminCmd)
 	rootCmd.AddCommand(adminCmd)
 
-	makeCaPoolCmd.Flags().StringVar(&makeCaPoolIDFlag, "ca-id", "", "The ID of the initial CA in the Pool")
-	makeCaPoolCmd.Flags().StringVar(&poolSecretNamespaceFlag, "secret-namespace", "default", "Create the secret in this namespace")
-	makeCaPoolCmd.Flags().StringVar(&poolSecretNameFlag, "name", "", "Create the secret with this name")
-	makeCaPoolCmd.Flags().StringVar(&makeCaPoolKeyTypeFlag, "key-type", "ED25519", "CA key type.  One of [ED25519, ECDSAP256]")
-	makeCaPoolCmd.Flags().DurationVar(&makeCaPoolValidityFlag, "validity", 365*24*time.Hour, "How long the CA certificate is valid for")
-	_ = makeCaPoolCmd.MarkFlagRequired("name")
+	makeCaPoolCmd.Flags().StringVar(&makeCaPoolIDFlag, "ca-id", "", "ID of the initial CA in the pool")
+	makeCaPoolCmd.Flags().StringVar(&poolSecretNamespaceFlag, "secret-namespace", "default", "namespace of the pool secret")
+	makeCaPoolCmd.Flags().StringVar(&poolSecretNameFlag, "name", "", "name of the pool secret")
+	makeCaPoolCmd.Flags().StringVar(&makeCaPoolKeyTypeFlag, "key-type", "ED25519", "CA key type: ED25519 or ECDSAP256")
+	makeCaPoolCmd.Flags().DurationVar(&makeCaPoolValidityFlag, "validity", 365*24*time.Hour, "how long the CA certificate is valid for")
 	adminCmd.AddCommand(makeCaPoolCmd)
 
-	makeJwtPoolCmd.Flags().StringVar(&jwtAlgFlag, "alg", "ES256", "Signing algorithm of the initial key.  One of [ES256, RS256]; RS256 keys are 4096-bit RSA")
-	makeJwtPoolCmd.Flags().StringVar(&jwtKeyIDFlag, "key-id", "", "The ID of the initial JWT signing key in the pool.  Defaults to the base64url SHA-256 of the key's PKIX encoding")
-	makeJwtPoolCmd.Flags().StringVar(&poolSecretNamespaceFlag, "secret-namespace", "default", "Create the secret in this namespace")
-	makeJwtPoolCmd.Flags().StringVar(&poolSecretNameFlag, "name", "", "Create the secret with this name")
-	_ = makeJwtPoolCmd.MarkFlagRequired("name")
+	makeJwtPoolCmd.Flags().StringVar(&jwtAlgFlag, "alg", "ES256", "signing algorithm of the initial key: ES256 or RS256 (4096-bit RSA)")
+	makeJwtPoolCmd.Flags().StringVar(&jwtKeyIDFlag, "key-id", "", "ID of the initial JWT signing key in the pool (defaults to the base64url SHA-256 of the key's PKIX encoding)")
+	makeJwtPoolCmd.Flags().StringVar(&poolSecretNamespaceFlag, "secret-namespace", "default", "namespace of the pool secret")
+	makeJwtPoolCmd.Flags().StringVar(&poolSecretNameFlag, "name", "", "name of the pool secret")
 	adminCmd.AddCommand(makeJwtPoolCmd)
 
-	listJwtKeysCmd.Flags().StringVar(&poolSecretNamespaceFlag, "secret-namespace", "default", "The namespace of the pool secret")
-	listJwtKeysCmd.Flags().StringVar(&poolSecretNameFlag, "name", "", "The name of the pool secret")
-	_ = listJwtKeysCmd.MarkFlagRequired("name")
+	listJwtKeysCmd.Flags().StringVar(&poolSecretNamespaceFlag, "secret-namespace", "default", "namespace of the pool secret")
+	listJwtKeysCmd.Flags().StringVar(&poolSecretNameFlag, "name", "", "name of the pool secret")
 	adminCmd.AddCommand(listJwtKeysCmd)
 
-	addJwtKeyCmd.Flags().StringVar(&jwtAlgFlag, "alg", "ES256", "Signing algorithm of the new key.  One of [ES256, RS256]; RS256 keys are 4096-bit RSA")
-	addJwtKeyCmd.Flags().StringVar(&jwtKeyIDFlag, "key-id", "", "The ID of the new key.  Defaults to the base64url SHA-256 of the key's PKIX encoding")
-	addJwtKeyCmd.Flags().StringVar(&poolSecretNamespaceFlag, "secret-namespace", "default", "The namespace of the pool secret")
-	addJwtKeyCmd.Flags().StringVar(&poolSecretNameFlag, "name", "", "The name of the pool secret")
-	_ = addJwtKeyCmd.MarkFlagRequired("name")
+	addJwtKeyCmd.Flags().StringVar(&jwtAlgFlag, "alg", "ES256", "signing algorithm of the new key: ES256 or RS256 (4096-bit RSA)")
+	addJwtKeyCmd.Flags().StringVar(&jwtKeyIDFlag, "key-id", "", "ID of the new key (defaults to the base64url SHA-256 of the key's PKIX encoding)")
+	addJwtKeyCmd.Flags().StringVar(&poolSecretNamespaceFlag, "secret-namespace", "default", "namespace of the pool secret")
+	addJwtKeyCmd.Flags().StringVar(&poolSecretNameFlag, "name", "", "name of the pool secret")
 	adminCmd.AddCommand(addJwtKeyCmd)
 
 	for _, cmd := range []*cobra.Command{activateJwtKeyCmd, removeJwtKeyCmd} {
-		cmd.Flags().StringVar(&jwtKeyIDFlag, "key-id", "", "The ID of the key")
-		cmd.Flags().StringVar(&poolSecretNamespaceFlag, "secret-namespace", "default", "The namespace of the pool secret")
-		cmd.Flags().StringVar(&poolSecretNameFlag, "name", "", "The name of the pool secret")
-		_ = cmd.MarkFlagRequired("key-id")
-		_ = cmd.MarkFlagRequired("name")
+		cmd.Flags().StringVar(&jwtKeyIDFlag, "key-id", "", "ID of the key")
+		cmd.Flags().StringVar(&poolSecretNamespaceFlag, "secret-namespace", "default", "namespace of the pool secret")
+		cmd.Flags().StringVar(&poolSecretNameFlag, "name", "", "name of the pool secret")
 		adminCmd.AddCommand(cmd)
 	}
 }

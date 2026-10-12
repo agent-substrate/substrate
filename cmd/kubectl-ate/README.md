@@ -288,7 +288,7 @@ kubectl ate delete egress-policy <actor-name> -a <atespace> --uid <uid> --versio
 
 ### Logs
 
-`kubectl ate logs` requires a resource-type subcommand; running `kubectl ate logs <actor-name>` on its own prints help. The only supported resource type is `actors`:
+`kubectl ate logs` requires a resource-type subcommand. The only supported resource type is `actor`:
 
 ```bash
 # Print the logs an actor has produced on its current worker.
