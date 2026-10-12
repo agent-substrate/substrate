@@ -37,8 +37,9 @@ type echoedHeaders struct {
 // rather than defaulted from the URL scheme: the actor fetches its /healthz on a
 // non-standard port, and the gateway's access log is expected to carry that
 // port. The optional body makes the same fixture useful for assertions about a
-// response inside the egress tunnel. /echoheaders returns the request headers as
-// they arrived, which is how a suite sees what the gateway put on the wire.
+// response inside the egress tunnel. /echoheaders and every path under it
+// return the request headers as they arrived, which is how a suite sees what
+// the gateway put on the wire.
 func newHTTPHandler(body string) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -47,7 +48,7 @@ func newHTTPHandler(body string) http.Handler {
 			_, _ = io.WriteString(w, body)
 		}
 	})
-	mux.HandleFunc("/echoheaders", func(w http.ResponseWriter, r *http.Request) {
+	echoHeaders := func(w http.ResponseWriter, r *http.Request) {
 		echoed := echoedHeaders{Headers: make(map[string]string, len(r.Header))}
 		for name, values := range r.Header {
 			echoed.Headers[name] = strings.Join(values, ",")
@@ -56,7 +57,11 @@ func newHTTPHandler(body string) http.Handler {
 		if err := json.NewEncoder(w).Encode(echoed); err != nil {
 			log.Printf("testserver http: encoding /echoheaders response: %v", err)
 		}
-	})
+	}
+	// Every path under /echoheaders/ echoes too, so a suite can tell what the
+	// gateway put on the wire for different request paths of one host.
+	mux.HandleFunc("/echoheaders", echoHeaders)
+	mux.HandleFunc("/echoheaders/", echoHeaders)
 	return mux
 }
 
