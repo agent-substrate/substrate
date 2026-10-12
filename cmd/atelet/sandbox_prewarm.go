@@ -111,9 +111,10 @@ func newSandboxPrewarmer(assets sandboxAssetFetcher, images *imagecache.Store, l
 // is logged and left to the on-demand fetch in ensureSandboxAssets and the
 // pull inside prepareOCIBundles, which remain the correctness path.
 //
-// TODO: the static-files cache is never pruned, and prewarming every config
-// revision makes stale releases accumulate faster. Add a GC that removes
-// assets referenced by no current SandboxConfig and no on-node actor record.
+// TODO: the static-files cache is never pruned, and prewarming every enabled
+// version of every config revision makes stale releases accumulate faster.
+// Add a GC that removes assets referenced by no current SandboxConfig and no
+// on-node actor record.
 func startSandboxAssetPrewarm(ctx context.Context, informer cache.SharedIndexInformer, assets sandboxAssetFetcher, images *imagecache.Store, microvmCapable bool) (*sandboxPrewarmer, error) {
 	p := newSandboxPrewarmer(assets, images, listersv1alpha1.NewSandboxConfigLister(informer.GetIndexer()), microvmCapable)
 	// Atelet startup never waits for this informer to sync: prewarm is
@@ -247,28 +248,41 @@ func (p *sandboxPrewarmer) process(ctx context.Context, name string) {
 	p.queue.Forget(name)
 }
 
-// prewarm fetches every asset of one SandboxConfig into the static-files
-// cache and its pause image into the image cache. Racing an on-demand
+// prewarm fetches the assets of every Enabled version of one SandboxConfig
+// into the static-files cache and their pause images into the image cache,
+// the default version first. Every enabled version, not just the default:
+// workers read all of them from their sandbox versions file, and restore
+// snapshots taken on any of them. Racing an on-demand
 // ensureSandboxAssets for the same assets is safe: both paths install
 // content-addressed files via atomic rename, and the image cache collapses
 // concurrent pulls of one digest.
 func (p *sandboxPrewarmer) prewarm(ctx context.Context, cfg *v1alpha1.SandboxConfig) error {
 	ctx, cancel := context.WithTimeout(ctx, prewarmTimeout)
 	defer cancel()
-	t := time.Now()
 
-	// TODO: prewarm every Enabled version, not just the default.
-	ver, ok := cfg.Spec.DefaultVersionConfig()
-	if !ok {
+	vers := enabledVersions(cfg)
+	if len(vers) == 0 {
 		// The CRD rejects this shape, so this should not be reachable.
 		slog.WarnContext(ctx, "Skipping sandbox asset prewarm: config has no enabled default version",
 			slog.String("config", cfg.Name), slog.String("defaultVersion", cfg.Spec.DefaultVersion))
 		return nil
 	}
+	var errs []error
+	for _, ver := range vers {
+		if err := p.prewarmVersion(ctx, cfg, ver); err != nil {
+			errs = append(errs, fmt.Errorf("version %q: %w", ver.Name, err))
+		}
+	}
+	return errors.Join(errs...)
+}
 
+// prewarmVersion fetches one version's assets and its pause image
+// concurrently. Versions that share a pause image are a cache hit after the
+// first.
+func (p *sandboxPrewarmer) prewarmVersion(ctx context.Context, cfg *v1alpha1.SandboxConfig, ver *v1alpha1.SandboxVersionConfig) error {
+	t := time.Now()
 	var imageErr error
 	var wg sync.WaitGroup
-	// schedule prewarm pause image if provided
 	if ver.PauseImage != "" {
 		wg.Go(func() {
 			if _, err := p.images.EnsureImage(ctx, ver.PauseImage); err != nil {
@@ -276,7 +290,6 @@ func (p *sandboxPrewarmer) prewarm(ctx context.Context, cfg *v1alpha1.SandboxCon
 			}
 		})
 	}
-	// schedule prewarm sandbox assets if provided
 	rec, assetErr := recordFromSandboxConfig(cfg, ver)
 	switch {
 	case errors.Is(assetErr, errNoAssetsForArch):
@@ -284,7 +297,7 @@ func (p *sandboxPrewarmer) prewarm(ctx context.Context, cfg *v1alpha1.SandboxCon
 		// retrying would burn every attempt on a non-failure and redo the
 		// pause-image pull with it. Nothing to do for this node.
 		slog.DebugContext(ctx, "No sandbox assets to prewarm for this node's architecture",
-			slog.String("config", cfg.Name), slog.String("arch", runtime.GOARCH))
+			slog.String("config", cfg.Name), slog.String("version", ver.Name), slog.String("arch", runtime.GOARCH))
 		assetErr = nil
 	case assetErr == nil:
 		wg.Go(func() {
@@ -306,6 +319,25 @@ func (p *sandboxPrewarmer) prewarm(ctx context.Context, cfg *v1alpha1.SandboxCon
 		slog.String("pauseImage", ver.PauseImage),
 		slog.Duration("duration", time.Since(t)))
 	return nil
+}
+
+// enabledVersions returns the versions of cfg that may be used: the default
+// version first, then the other Enabled versions in spec order. It returns
+// nil when cfg has no usable default version, which the CRD rejects.
+func enabledVersions(cfg *v1alpha1.SandboxConfig) []*v1alpha1.SandboxVersionConfig {
+	def, ok := cfg.Spec.DefaultVersionConfig()
+	if !ok {
+		return nil
+	}
+	vers := []*v1alpha1.SandboxVersionConfig{def}
+	for i := range cfg.Spec.Versions {
+		v := &cfg.Spec.Versions[i]
+		if v.Name == def.Name || (v.State != nil && *v.State == v1alpha1.SandboxVersionStateDisabled) {
+			continue
+		}
+		vers = append(vers, v)
+	}
+	return vers
 }
 
 // errNoAssetsForArch reports that a SandboxConfig lists no assets for this

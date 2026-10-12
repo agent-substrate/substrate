@@ -69,6 +69,23 @@ func TestAteletOTLPSocketPath(t *testing.T) {
 	}
 }
 
+func TestAteomSandboxVersionsFile(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		podUID string
+		want   string
+	}{
+		{name: "under the pod's ateom directory", podUID: "123e4567-e89b-12d3-a456-426614174000", want: AteomPath("123e4567-e89b-12d3-a456-426614174000") + "/sandbox-versions.json"},
+		{name: "distinct per pod", podUID: "987f6543-e21b-32d1-b654-246614174111", want: AteomPath("987f6543-e21b-32d1-b654-246614174111") + "/sandbox-versions.json"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := AteomSandboxVersionsFile(tc.podUID); got != tc.want {
+				t.Errorf("AteomSandboxVersionsFile(%q) = %q, want %q", tc.podUID, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestAteomPathUniqueness(t *testing.T) {
 	uid1 := "123e4567-e89b-12d3-a456-426614174000"
 	uid2 := "987f6543-e21b-32d1-b654-246614174111"

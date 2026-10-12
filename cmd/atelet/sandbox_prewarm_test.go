@@ -30,7 +30,6 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/cache"
-	"k8s.io/utils/ptr"
 
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
 	"github.com/agent-substrate/substrate/internal/imagecache"
@@ -39,6 +38,7 @@ import (
 	"github.com/agent-substrate/substrate/pkg/client/clientset/versioned/fake"
 	"github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
+	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/registry"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
@@ -355,46 +355,59 @@ func TestPrewarmTimeout(t *testing.T) {
 	}
 }
 
-// TestPrewarmDefaultVersionOnly verifies prewarm fetches only the version
-// defaultVersion names, and that a config without its default version, or
-// whose default version is Disabled, is nothing to do rather than a retryable
-// failure.
-func TestPrewarmDefaultVersionOnly(t *testing.T) {
-	origDir := nodepath.StaticFilesDir
-	nodepath.StaticFilesDir = t.TempDir()
-	t.Cleanup(func() { nodepath.StaticFilesDir = origDir })
-
+// TestPrewarmEnabledVersions verifies prewarm fetches every Enabled version,
+// the default first, skipping Disabled versions and versions with no assets
+// for this node's architecture, and that a config without a usable default
+// version is nothing to do rather than a retryable failure.
+func TestPrewarmEnabledVersions(t *testing.T) {
 	ctx := context.Background()
-	content := []byte("runsc binary bytes")
-	cfg := gvisorConfig("gvisor-default", "gs://bucket/runsc", fmt.Sprintf("%x", sha256.Sum256(content)))
-	cfg.Spec.Versions[0].PauseImage = ""
-	// A non-default version whose asset the fake bucket cannot serve: fetching
-	// it would fail the hash check.
-	otherSHA := fmt.Sprintf("%x", sha256.Sum256([]byte("other runsc")))
-	cfg.Spec.Versions = append([]v1alpha1.SandboxVersionConfig{{
-		Name:   "v0",
-		Assets: map[string]map[string]v1alpha1.AssetFile{runtime.GOARCH: {runscAssetName: {URL: "gs://bucket/other-runsc", SHA256: otherSHA}}},
-	}}, cfg.Spec.Versions...)
+	noPause := func(cfg *v1alpha1.SandboxConfig) *v1alpha1.SandboxConfig {
+		for i := range cfg.Spec.Versions {
+			cfg.Spec.Versions[i].PauseImage = ""
+		}
+		return cfg
+	}
+	fetchedSHAs := func(f *recordingFetcher) []string {
+		var shas []string
+		for _, rec := range f.got {
+			shas = append(shas, rec.Assets[gvisorAssetName].SHA256)
+		}
+		return shas
+	}
 
-	p := &sandboxPrewarmer{assets: &AteomHerder{anonGCSClient: fakeObjectStorage{data: content}}}
-	if err := p.prewarm(ctx, cfg); err != nil {
+	fetcher := &recordingFetcher{}
+	p := &sandboxPrewarmer{assets: fetcher}
+	if err := p.prewarm(ctx, noPause(multiVersionConfig())); err != nil {
 		t.Fatalf("prewarm: %v", err)
 	}
-	if _, err := os.Stat(ateletpath.RunSCBinaryPath(otherSHA)); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("non-default version asset was prewarmed (stat err = %v)", err)
+	if diff := cmp.Diff([]string{"sha-v2", "sha-v1"}, fetchedSHAs(fetcher)); diff != "" {
+		t.Errorf("prewarmed versions mismatch (-want +got):\n%s", diff)
 	}
 
-	// Any fetch would fail, so a nil error means nothing was attempted.
+	// One version failing fails the attempt, so the config is retried, but
+	// does not keep the others from being fetched.
+	fetcher = &recordingFetcher{err: errors.New("bucket unavailable")}
+	p = &sandboxPrewarmer{assets: fetcher}
+	if err := p.prewarm(ctx, noPause(multiVersionConfig())); err == nil {
+		t.Error("prewarm returned nil despite the fetches failing")
+	}
+	if got := len(fetcher.got); got != 2 {
+		t.Errorf("attempted %d versions after a failure, want 2", got)
+	}
+
+	fetcher = &recordingFetcher{}
+	p = &sandboxPrewarmer{assets: fetcher}
+	cfg := noPause(multiVersionConfig())
 	cfg.Spec.DefaultVersion = "missing"
-	p = &sandboxPrewarmer{assets: &AteomHerder{anonGCSClient: fakeObjectStorage{err: errors.New("bucket unavailable")}}}
 	if err := p.prewarm(ctx, cfg); err != nil {
 		t.Errorf("prewarm of a config without its default version: %v", err)
 	}
-
-	cfg.Spec.DefaultVersion = "v0"
-	cfg.Spec.Versions[0].State = ptr.To(v1alpha1.SandboxVersionStateDisabled)
+	cfg.Spec.DefaultVersion = "v0" // Disabled
 	if err := p.prewarm(ctx, cfg); err != nil {
 		t.Errorf("prewarm of a config whose default version is Disabled: %v", err)
+	}
+	if len(fetcher.got) != 0 {
+		t.Errorf("prewarm of a config without a usable default fetched %d versions, want none", len(fetcher.got))
 	}
 }
 

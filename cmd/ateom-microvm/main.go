@@ -24,6 +24,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -175,15 +176,11 @@ func do(ctx context.Context) error {
 	if err := resources.ValidateWorkerPodUID(*podUID); err != nil {
 		return fmt.Errorf("in resources.ValidateWorkerPodUID: %w", err)
 	}
+	// atelet owns the directory and the sandbox versions file in it; only the
+	// socket below is this process's. Both outlive a container restart.
 	if err := os.MkdirAll(ateomDir, 0o700); err != nil {
 		return fmt.Errorf("in os.MkdirAll(%q): %w", ateomDir, err)
 	}
-	// Clean up the ateom directory during graceful shutdown (#1677).
-	defer func() {
-		if err := os.RemoveAll(ateomDir); err != nil {
-			slog.ErrorContext(ctx, "Failed to remove the ateom directory on shutdown", slog.Any("err", err))
-		}
-	}()
 
 	// Reap children reparented to us: the detached cloud-hypervisor VMM and
 	// virtiofsd. Synchronous subprocesses (mount, umount, cp, ...) instead go
@@ -214,6 +211,11 @@ func do(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("while opening unix socket: %w", err)
 	}
+	defer func() {
+		if err := os.Remove(sockPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			slog.ErrorContext(ctx, "Failed to remove the ateom socket on shutdown", slog.Any("err", err))
+		}
+	}()
 
 	// Forward the actor container's stdout/stderr to the worker pod's stdout as
 	// JSON with ate.dev/* labels (logging parity with ateom-gvisor). It shares
@@ -273,9 +275,10 @@ func do(ctx context.Context) error {
 
 	// Report what this worker can supply. Nothing else tells the control plane,
 	// which places no Actor here until it lands, so a worker that cannot report
-	// is one that will sit idle forever. Report retries every failure it can
-	// outlast, including the window before the Worker record exists; anything
-	// that reaches here is a misconfiguration no restart-in-place will fix.
+	// is one that will sit idle forever. Report runs until shutdown, retrying
+	// every failure it can outlast and re-registering whenever atelet rewrites
+	// the sandbox versions file; anything that reaches here is a
+	// misconfiguration no restart-in-place will fix.
 	go func() {
 		err := ateom.Report(ctx, ateom.ReportConfig{
 			SocketPath:           nodepath.AteomSupportSocket,
@@ -284,6 +287,7 @@ func do(ctx context.Context) error {
 			AteletSPIFFEID:       tunnelConfig.BrokerIdentity,
 			Actors:               *maxActors,
 			SandboxClass:         string(atev1alpha1.SandboxClassMicroVM),
+			VersionsFile:         nodepath.AteomSandboxVersionsFile(*podUID),
 		})
 		if err != nil && ctx.Err() == nil {
 			serverboot.Fatal(ctx, "Failed to report worker capacity", err)

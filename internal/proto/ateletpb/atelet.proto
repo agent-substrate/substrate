@@ -45,6 +45,47 @@ service AteomSupport {
   rpc RequestActorSuspend(RequestActorSuspendRequest) returns (RequestActorSuspendResponse) {}
 }
 
+// WorkerSandboxVersions is the content of a worker's sandbox versions file
+// (nodepath.AteomSandboxVersionsFile): the enabled versions of the
+// SandboxConfig the worker's pool uses, each with its assets already fetched
+// to the node. atelet writes it; the worker reads it to build the runtimes it
+// reports with RegisterWorker.
+message WorkerSandboxVersions {
+  // Sandbox class of the worker's pool. A worker ignores a file for any other
+  // class.
+  string sandbox_class = 1;
+
+  // Name of the SandboxConfig the versions come from.
+  string sandbox_config = 2;
+
+  // The config's default version first, then its other Enabled versions in
+  // spec order. Versions with no assets for this node's architecture are left
+  // out.
+  repeated SandboxVersion versions = 3;
+}
+
+// SandboxVersion is one version of a SandboxConfig, projected onto the node's
+// architecture and fetched to the node.
+message SandboxVersion {
+  // SandboxConfig version name, e.g. "gvisor-4".
+  string name = 1;
+
+  // Whether this is the config's defaultVersion, which new and cold-booted
+  // actors start under.
+  bool is_default = 2;
+
+  // Root sandbox container image. Only gVisor has one.
+  string pause_image = 3;
+
+  // Asset name to local path on the node, as RunWorkloadRequest's runsc_path
+  // and runtime_asset_paths.
+  map<string, string> asset_paths = 4;
+
+  // Asset name to the asset's sha256, so the worker can identify exactly
+  // which assets it ran.
+  map<string, string> asset_digests = 5;
+}
+
 message RegisterWorkerRequest {
   // What the worker can supply. atelet converts it to the control plane's
   // WorkerResources when forwarding.

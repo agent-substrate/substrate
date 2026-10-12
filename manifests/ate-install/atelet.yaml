@@ -36,6 +36,12 @@ rules:
 - apiGroups: ["ate.dev"]
   resources: ["sandboxconfigs"]
   verbs: ["get", "list", "watch"]
+# WorkerPools are watched to find the SandboxConfig each local worker's pool
+# uses, whose versions atelet writes to the worker's sandbox versions file
+# (see cmd/atelet/worker_sandbox.go).
+- apiGroups: ["ate.dev"]
+  resources: ["workerpools"]
+  verbs: ["get", "list", "watch"]
 # ClusterTrustBundles referenced by SystemInfo trustBundle data sources are
 # resolved on the node: atelet reads them through an informer and projects
 # the sanitized PEM into actors (see cmd/atelet/trustbundle.go).
