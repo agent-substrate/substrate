@@ -13,8 +13,8 @@
 // limitations under the License.
 
 // Package version exposes build-time identity for substrate binaries.
-// Values are set via -ldflags -X at build time; if unset, init() falls
-// back to runtime/debug.ReadBuildInfo() so plain `go build` /
+// Values are set via -ldflags -X at build time; each one left unset
+// falls back to runtime/debug.ReadBuildInfo() so plain `go build` /
 // `go install` still produce something meaningful.
 package version
 
@@ -31,32 +31,56 @@ var (
 )
 
 func init() {
-	if Commit != "unknown" {
-		return
+	if info, ok := debug.ReadBuildInfo(); ok {
+		Version, Commit, BuildDate = fromBuildInfo(Version, Commit, BuildDate, info)
 	}
-	info, ok := debug.ReadBuildInfo()
-	if !ok {
-		return
+}
+
+// fromBuildInfo fills each of version, commit and buildDate that still holds
+// its unstamped default from info. Builds may stamp only some of them (ko
+// stamps Version alone), so each is decided on its own.
+func fromBuildInfo(version, commit, buildDate string, info *debug.BuildInfo) (string, string, string) {
+	if version == "dev" && info.Main.Version != "" && info.Main.Version != "(devel)" {
+		version = info.Main.Version
 	}
+	var revision, vcsTime string
+	var modified bool
 	for _, s := range info.Settings {
 		switch s.Key {
 		case "vcs.revision":
-			Commit = s.Value
+			revision = s.Value
 		case "vcs.time":
-			BuildDate = s.Value
+			vcsTime = s.Value
 		case "vcs.modified":
-			if s.Value == "true" {
-				Commit += "-dirty"
-			}
+			modified = s.Value == "true"
 		}
 	}
-	Version = info.Main.Path + ".Version=" + info.Main.Version
+	if commit == "unknown" && revision != "" {
+		commit = revision
+		if modified {
+			commit += "-dirty"
+		}
+	}
+	if buildDate == "unknown" && vcsTime != "" {
+		buildDate = vcsTime
+	}
+	return version, commit, buildDate
 }
 
 // String returns a human-readable single-line version summary,
 // formatted to sit cleanly after cobra's auto "<binary> version "
 // prefix.
 func String() string {
-	return fmt.Sprintf("%s commit=%s built=%s %s/%s",
-		Version, Commit, BuildDate, runtime.GOOS, runtime.GOARCH)
+	return Format(Version, Commit, BuildDate, Platform())
+}
+
+// Platform returns the binary's GOOS/GOARCH, e.g. "linux/amd64".
+func Platform() string {
+	return runtime.GOOS + "/" + runtime.GOARCH
+}
+
+// Format renders build identity the way String does, so that another binary's
+// identity (e.g. one reported over RPC) prints in the same shape.
+func Format(version, commit, buildDate, platform string) string {
+	return fmt.Sprintf("%s commit=%s built=%s %s", version, commit, buildDate, platform)
 }
