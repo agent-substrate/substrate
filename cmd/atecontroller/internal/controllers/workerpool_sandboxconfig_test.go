@@ -18,6 +18,7 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -64,6 +65,9 @@ func TestResolveSandboxConfig(t *testing.T) {
 		return c
 	}
 	deleting := func(c *atev1alpha1.SandboxConfig) { c.DeletionTimestamp = &t1 }
+	protected := func(c *atev1alpha1.SandboxConfig) {
+		controllerutil.AddFinalizer(c, atev1alpha1.SandboxConfigWorkerPoolProtectionFinalizer)
+	}
 	gvisor := func(ref string) atev1alpha1.WorkerPoolSandboxClass {
 		e := atev1alpha1.WorkerPoolSandboxClass{Name: atev1alpha1.SandboxClassGvisor}
 		if ref != "" {
@@ -135,10 +139,18 @@ func TestResolveSandboxConfig(t *testing.T) {
 			name:        "explicit ref being deleted is kept but reported by a pool already using it",
 			entry:       gvisor("dying"),
 			inUse:       "dying",
-			configs:     []atev1alpha1.SandboxConfig{sc("dying", gv, false, t0, deleting)},
+			configs:     []atev1alpha1.SandboxConfig{sc("dying", gv, false, t0, deleting, protected)},
 			want:        "dying",
 			wantReason:  atev1alpha1.WorkerPoolReasonSandboxConfigDeleting,
 			wantMessage: `SandboxConfig "dying" is being deleted; keeping "dying"`,
+		},
+		{
+			name:        "explicit ref being deleted and released is not kept by a pool using it",
+			entry:       gvisor("dying"),
+			inUse:       "dying",
+			configs:     []atev1alpha1.SandboxConfig{sc("dying", gv, false, t0, deleting)},
+			wantReason:  atev1alpha1.WorkerPoolReasonSandboxConfigDeleting,
+			wantMessage: `SandboxConfig "dying" is being deleted`,
 		},
 		{
 			name:        "explicit ref being deleted keeps the previous config in use",
@@ -190,10 +202,18 @@ func TestResolveSandboxConfig(t *testing.T) {
 			name:        "default being deleted is kept but reported by a pool already using it",
 			entry:       gvisor(""),
 			inUse:       "dying",
-			configs:     []atev1alpha1.SandboxConfig{sc("dying", gv, true, t0, deleting)},
+			configs:     []atev1alpha1.SandboxConfig{sc("dying", gv, true, t0, deleting, protected)},
 			want:        "dying",
 			wantReason:  atev1alpha1.WorkerPoolReasonSandboxConfigDeleting,
 			wantMessage: `the default SandboxConfig for sandbox class "gvisor" is being deleted; keeping "dying"`,
+		},
+		{
+			name:        "default being deleted and released is not kept by a pool using it",
+			entry:       gvisor(""),
+			inUse:       "dying",
+			configs:     []atev1alpha1.SandboxConfig{sc("dying", gv, true, t0, deleting)},
+			wantReason:  atev1alpha1.WorkerPoolReasonSandboxConfigDeleting,
+			wantMessage: `the default SandboxConfig for sandbox class "gvisor" is being deleted`,
 		},
 		{
 			name:        "a live default replaces the deleting one in use, even when older",
@@ -275,10 +295,354 @@ func TestResolveSandboxConfig(t *testing.T) {
 	}
 }
 
+// TestReconcileProtectsBeforeRecording verifies that the WorkerPool
+// controller puts the protection finalizer on a config it resolved, and does
+// so before its status names the config. It is the only writer that adds the
+// finalizer, so a fake client without the protection reconciler is the real
+// situation, not a simplification.
+func TestReconcileProtectsBeforeRecording(t *testing.T) {
+	t.Parallel()
+	scheme := runtime.NewScheme()
+	if err := clientgoscheme.AddToScheme(scheme); err != nil {
+		t.Fatalf("add client-go scheme: %v", err)
+	}
+	if err := atev1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add scheme: %v", err)
+	}
+	protected := func(sc *atev1alpha1.SandboxConfig) *atev1alpha1.SandboxConfig {
+		controllerutil.AddFinalizer(sc, atev1alpha1.SandboxConfigWorkerPoolProtectionFinalizer)
+		return sc
+	}
+	tests := []struct {
+		name   string
+		config *atev1alpha1.SandboxConfig
+		// ref is the pool's configRef. "" follows the class default.
+		ref string
+		// wantResolved is whether the pool must end up using config.
+		wantResolved bool
+		// wantProtected is whether config must carry the finalizer afterwards.
+		wantProtected bool
+	}{
+		{
+			name:          "unprotected class default",
+			config:        makeSandboxConfig("fresh-default", atev1alpha1.SandboxClassGvisor, true),
+			wantResolved:  true,
+			wantProtected: true,
+		},
+		{
+			name:          "unprotected configRef target",
+			config:        makeSandboxConfig("fresh-ref", atev1alpha1.SandboxClassGvisor, false),
+			ref:           "fresh-ref",
+			wantResolved:  true,
+			wantProtected: true,
+		},
+		{
+			name:          "already protected config",
+			config:        protected(makeSandboxConfig("held", atev1alpha1.SandboxClassGvisor, true)),
+			wantResolved:  true,
+			wantProtected: true,
+		},
+		{
+			name:          "unresolved pool protects nothing",
+			config:        makeSandboxConfig("other-class", atev1alpha1.SandboxClassMicroVM, false),
+			ref:           "other-class",
+			wantResolved:  false,
+			wantProtected: false,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			wp := makeWorkerPool("pool", "default", 1, "ateom:v1")
+			if tc.ref != "" {
+				wp.Spec.SandboxClasses[0].ConfigRef = &atev1alpha1.SandboxConfigReference{Name: tc.ref}
+			}
+			// protectedAtWrite records whether config carried the finalizer
+			// at the moment the pool's status was written.
+			var wroteStatus, protectedAtWrite bool
+			c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(wp, tc.config).WithStatusSubresource(wp).
+				WithInterceptorFuncs(interceptor.Funcs{
+					SubResourceUpdate: func(ctx context.Context, c client.Client, sub string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+						sc := &atev1alpha1.SandboxConfig{}
+						if err := c.Get(ctx, types.NamespacedName{Name: tc.config.Name}, sc); err != nil {
+							return err
+						}
+						wroteStatus = true
+						protectedAtWrite = controllerutil.ContainsFinalizer(sc, atev1alpha1.SandboxConfigWorkerPoolProtectionFinalizer)
+						return c.SubResource(sub).Update(ctx, obj, opts...)
+					},
+				}).Build()
+			r := &WorkerPoolReconciler{Client: c, APIReader: c}
+			if _, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(wp)}); err != nil {
+				t.Fatalf("Reconcile: %v", err)
+			}
+
+			sc := &atev1alpha1.SandboxConfig{}
+			if err := c.Get(t.Context(), types.NamespacedName{Name: tc.config.Name}, sc); err != nil {
+				t.Fatalf("get SandboxConfig: %v", err)
+			}
+			if got := controllerutil.ContainsFinalizer(sc, atev1alpha1.SandboxConfigWorkerPoolProtectionFinalizer); got != tc.wantProtected {
+				t.Errorf("config protected = %v, want %v", got, tc.wantProtected)
+			}
+			got := &atev1alpha1.WorkerPool{}
+			if err := c.Get(t.Context(), client.ObjectKeyFromObject(wp), got); err != nil {
+				t.Fatalf("get WorkerPool: %v", err)
+			}
+			if resolved := statusConfig(got, atev1alpha1.SandboxClassGvisor) == tc.config.Name; resolved != tc.wantResolved {
+				t.Errorf("status names config = %v, want %v (status %+v)", resolved, tc.wantResolved, got.Status)
+			}
+			if !wroteStatus {
+				t.Fatalf("status was never written")
+			}
+			if tc.wantResolved && !protectedAtWrite {
+				t.Errorf("status named the config before it carried the protection finalizer")
+			}
+		})
+	}
+}
+
+// TestReconcileConfigDeletedBeforeClaim verifies that a config deleted after
+// the cached read the pool resolved from, but before the status write that
+// claims it, never becomes the config in use: the protection reconciler runs
+// while the claim is being written, as it can on a real cluster, and cannot
+// see the pool yet. The read that confirms the switch finds the config gone
+// or being deleted, so the class keeps the config it already uses, and the
+// next reconcile, which the SandboxConfig watch triggers, settles on the
+// older default.
+func TestReconcileConfigDeletedBeforeClaim(t *testing.T) {
+	t.Parallel()
+	scheme := runtime.NewScheme()
+	if err := clientgoscheme.AddToScheme(scheme); err != nil {
+		t.Fatalf("add scheme: %v", err)
+	}
+	if err := atev1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add scheme: %v", err)
+	}
+	t0 := metav1.NewTime(time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC))
+	// newDefault is the newest gvisor default, so the pool resolves to it
+	// first. oldDefault is the one it must fall back to.
+	config := func(name string, created metav1.Time, finalizers ...string) *atev1alpha1.SandboxConfig {
+		sc := makeSandboxConfig(name, atev1alpha1.SandboxClassGvisor, true)
+		sc.CreationTimestamp = created
+		sc.Finalizers = finalizers
+		return sc
+	}
+	using := func(name string) []atev1alpha1.WorkerPoolSandboxClassStatus {
+		return []atev1alpha1.WorkerPoolSandboxClassStatus{{
+			Name:      atev1alpha1.SandboxClassGvisor,
+			ConfigRef: &atev1alpha1.SandboxConfigReference{Name: name},
+		}}
+	}
+
+	tests := []struct {
+		name string
+		// newDefault is the config the pool resolves to from the cache.
+		newDefault *atev1alpha1.SandboxConfig
+		// pinned sets the pool's configRef to newDefault.
+		pinned bool
+		// status is the pool's status before the reconcile.
+		status []atev1alpha1.WorkerPoolSandboxClassStatus
+		// deletedBefore marks newDefault for deletion before the reconcile.
+		deletedBefore bool
+		// deleteDuringWrite deletes newDefault just before the first status
+		// write. release then runs the protection reconciler on it.
+		deleteDuringWrite bool
+		release           bool
+		// wantFirst and want are the configs status must name after the
+		// first and the second reconcile.
+		wantFirst string
+		want      string
+	}{
+		{
+			name:       "not deleted: switched",
+			newDefault: config("new-default", metav1.NewTime(t0.Add(time.Minute))),
+			wantFirst:  "new-default",
+			want:       "new-default",
+		},
+		{
+			name:              "deleted and released: never named, falls back on the next reconcile",
+			newDefault:        config("new-default", metav1.NewTime(t0.Add(time.Minute))),
+			deleteDuringWrite: true,
+			release:           true,
+			wantFirst:         "",
+			want:              "old-default",
+		},
+		{
+			name:              "deleted, released, held by another finalizer: never named, falls back on the next reconcile",
+			newDefault:        config("new-default", metav1.NewTime(t0.Add(time.Minute)), testHoldFinalizer),
+			deleteDuringWrite: true,
+			release:           true,
+			wantFirst:         "",
+			want:              "old-default",
+		},
+		{
+			name:              "deleted, not yet released: never named, falls back on the next reconcile",
+			newDefault:        config("new-default", metav1.NewTime(t0.Add(time.Minute))),
+			deleteDuringWrite: true,
+			wantFirst:         "",
+			want:              "old-default",
+		},
+		{
+			name:              "deleted and released while switching away from a config: keeps it",
+			newDefault:        config("new-default", metav1.NewTime(t0.Add(time.Minute))),
+			status:            using("old-default"),
+			deleteDuringWrite: true,
+			release:           true,
+			wantFirst:         "old-default",
+			want:              "old-default",
+		},
+		{
+			name:              "deleted, not yet released, while switching away from a config: keeps it",
+			newDefault:        config("new-default", metav1.NewTime(t0.Add(time.Minute))),
+			status:            using("old-default"),
+			deleteDuringWrite: true,
+			wantFirst:         "old-default",
+			want:              "old-default",
+		},
+		{
+			name:          "pinned, named in status but released: dropped",
+			newDefault:    config("new-default", metav1.NewTime(t0.Add(time.Minute)), testHoldFinalizer),
+			pinned:        true,
+			status:        using("new-default"),
+			deletedBefore: true,
+			wantFirst:     "",
+			want:          "",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			wp := makeWorkerPool("pool", "default", 1, "ateom:v1")
+			wp.Status.SandboxClasses = tc.status
+			if tc.pinned {
+				wp.Spec.SandboxClasses[0].ConfigRef = &atev1alpha1.SandboxConfigReference{Name: tc.newDefault.Name}
+			}
+			newDefault := tc.newDefault.DeepCopy()
+			if tc.deletedBefore {
+				newDefault.DeletionTimestamp = &t0
+			}
+			deleted := false
+			c := fake.NewClientBuilder().WithScheme(scheme).
+				WithObjects(wp, newDefault, config("old-default", t0)).
+				WithStatusSubresource(wp).
+				WithIndex(&atev1alpha1.WorkerPool{}, workerPoolSandboxConfigIndex, func(obj client.Object) []string {
+					return sandboxConfigsInUse(obj.(*atev1alpha1.WorkerPool))
+				}).
+				WithInterceptorFuncs(interceptor.Funcs{
+					SubResourceUpdate: func(ctx context.Context, c client.Client, sub string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+						if tc.deleteDuringWrite && !deleted {
+							deleted = true
+							if err := c.Delete(ctx, newDefault.DeepCopy()); err != nil {
+								return err
+							}
+							if tc.release {
+								p := &SandboxConfigProtectionReconciler{Client: c, APIReader: c}
+								if _, err := p.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(newDefault)}); err != nil {
+									return err
+								}
+							}
+						}
+						return c.SubResource(sub).Update(ctx, obj, opts...)
+					},
+				}).Build()
+			r := &WorkerPoolReconciler{Client: c, APIReader: c}
+			for i, want := range []string{tc.wantFirst, tc.want} {
+				if _, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(wp)}); err != nil {
+					t.Fatalf("Reconcile %d: %v", i+1, err)
+				}
+				if tc.deleteDuringWrite && !deleted {
+					t.Fatalf("status was never written, so nothing was deleted")
+				}
+				got := &atev1alpha1.WorkerPool{}
+				if err := c.Get(t.Context(), client.ObjectKeyFromObject(wp), got); err != nil {
+					t.Fatalf("get WorkerPool: %v", err)
+				}
+				if name := statusConfig(got, atev1alpha1.SandboxClassGvisor); name != want {
+					t.Errorf("after reconcile %d, status names %q, want %q", i+1, name, want)
+				}
+				for _, class := range got.Status.SandboxClasses {
+					if class.PendingConfigRef != nil {
+						t.Errorf("after reconcile %d, class %q still claims %q", i+1, class.Name, class.PendingConfigRef.Name)
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestSandboxConfigReleasedWhenUnused verifies that a SandboxConfig no pool
+// uses deletes without waiting: one no pool ever used carries no protection
+// finalizer at all, and one a pool switched away from is released. The pool
+// resolves to another config first, which shows both controllers have been
+// running while the released config existed.
+func TestSandboxConfigReleasedWhenUnused(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		// configs are created before the pool.
+		configs []string
+		pool    string
+		// ref is the pool's first configRef.
+		ref string
+		// switchTo, if set, is the configRef the pool moves to.
+		switchTo string
+		// release is the config that must delete at once.
+		release string
+	}{
+		{
+			name:    "never used",
+			configs: []string{"unused-sc", "unused-sc-other"},
+			pool:    "test-unused-sc",
+			ref:     "unused-sc-other",
+			release: "unused-sc",
+		},
+		{
+			name:     "pool switched away",
+			configs:  []string{"switch-from", "switch-to"},
+			pool:     "test-switch-ref",
+			ref:      "switch-from",
+			switchTo: "switch-to",
+			release:  "switch-from",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			for _, name := range tc.configs {
+				createSandboxConfig(t, makeSandboxConfig(name, atev1alpha1.SandboxClassGvisor, false))
+			}
+			wp := makeWorkerPool(tc.pool, "default", 1, "ateom:v1")
+			wp.Spec.SandboxClasses[0].ConfigRef = &atev1alpha1.SandboxConfigReference{Name: tc.ref}
+			createWorkerPool(t, wp)
+			waitResolvedAndDeployed(t, wp, tc.ref)
+
+			if tc.switchTo != "" {
+				updateWorkerPoolSpec(t, t.Context(), wp, "switch configRef", func(wp *atev1alpha1.WorkerPool) {
+					wp.Spec.SandboxClasses[0].ConfigRef.Name = tc.switchTo
+				})
+				waitResolved(t, wp, tc.switchTo)
+				waitProtectionFinalizer(t, tc.switchTo, true)
+			}
+			if tc.release != tc.ref {
+				// Never used, so never protected.
+				got := &atev1alpha1.SandboxConfig{}
+				if err := k8sClient.Get(t.Context(), types.NamespacedName{Name: tc.release}, got); err != nil {
+					t.Fatalf("get SandboxConfig: %v", err)
+				}
+				if controllerutil.ContainsFinalizer(got, atev1alpha1.SandboxConfigWorkerPoolProtectionFinalizer) {
+					t.Fatalf("unused SandboxConfig %s carries the protection finalizer", tc.release)
+				}
+			}
+			deleteAndWait(t, &atev1alpha1.SandboxConfig{ObjectMeta: metav1.ObjectMeta{Name: tc.release}})
+		})
+	}
+}
+
 // TestWorkerPoolConfigRef covers a pool with an explicit configRef. It
 // resolves only when the named SandboxConfig exists, is of the pool's class,
-// and is not being deleted. It then gets its Deployment. Otherwise it reports
-// why, records no config in status, and gets no Deployment.
+// and is not being deleted. It then protects the config and gets its
+// Deployment. Otherwise it reports why, records no config in status, and gets
+// no Deployment.
 func TestWorkerPoolConfigRef(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -356,11 +720,12 @@ func TestWorkerPoolConfigRef(t *testing.T) {
 	}
 }
 
-// waitResolvedAndDeployed waits for wp to resolve to config and for wp's
-// Deployment to exist.
+// waitResolvedAndDeployed waits for wp to resolve to config, for config to
+// carry the protection finalizer, and for wp's Deployment to exist.
 func waitResolvedAndDeployed(t *testing.T, wp *atev1alpha1.WorkerPool, config string) {
 	t.Helper()
 	waitResolved(t, wp, config)
+	waitProtectionFinalizer(t, config, true)
 	eventually(t, func(ctx context.Context) (bool, error) {
 		_, err := getDeployment(ctx, wp)
 		return err == nil, nil
@@ -369,7 +734,8 @@ func waitResolvedAndDeployed(t *testing.T, wp *atev1alpha1.WorkerPool, config st
 
 // TestWorkerPoolUnresolvedKeepsConfigInUse verifies that a pool whose sandbox
 // class stops resolving keeps the config it uses. It reports why, keeps the
-// config in status, and the controller keeps updating its Deployment.
+// config in status and protected, and the controller keeps updating its
+// Deployment.
 func TestWorkerPoolUnresolvedKeepsConfigInUse(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -428,6 +794,7 @@ func TestWorkerPoolUnresolvedKeepsConfigInUse(t *testing.T) {
 			if got := statusConfig(current, atev1alpha1.SandboxClassGvisor); got != inUse {
 				t.Errorf("status.sandboxClasses names %q, want the config in use %q", got, inUse)
 			}
+			waitProtectionFinalizer(t, inUse, true)
 
 			if tc.missingRef == "" {
 				updateWorkerPoolSpec(t, ctx, wp, "scale WorkerPool", func(wp *atev1alpha1.WorkerPool) {
@@ -451,6 +818,83 @@ func waitDeploymentReplicas(t *testing.T, wp *atev1alpha1.WorkerPool, replicas i
 	})
 }
 
+// TestSandboxConfigInUseProtection verifies that a SandboxConfig shared by
+// several pools survives a delete until all of them are gone, and that the
+// pools themselves delete without waiting.
+//
+// A sentinel pool uses a sentinel config that is deleted at the same time as
+// the shared one. The pool deletions reach the protection reconciler through
+// the same WorkerPool watch, in order, and it reconciles one config at a
+// time, so once the sentinel is gone the shared config has been reconciled
+// for every user deleted before the sentinel pool and found still in use.
+func TestSandboxConfigInUseProtection(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		config string
+		// users are the pools sharing config, deleted in order.
+		users        []string
+		sentinel     string
+		sentinelPool string
+	}{
+		{
+			name:         "two pools",
+			config:       "shared-sc",
+			users:        []string{"test-shared-a", "test-shared-b"},
+			sentinel:     "shared-sentinel",
+			sentinelPool: "test-shared-sentinel",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := t.Context()
+			sc := makeSandboxConfig(tc.config, atev1alpha1.SandboxClassGvisor, false)
+			createSandboxConfig(t, sc)
+			sentinel := makeSandboxConfig(tc.sentinel, atev1alpha1.SandboxClassGvisor, false)
+			createSandboxConfig(t, sentinel)
+			newPool := func(name, config string) *atev1alpha1.WorkerPool {
+				wp := makeWorkerPool(name, "default", 1, "ateom:v1")
+				wp.Spec.SandboxClasses[0].ConfigRef = &atev1alpha1.SandboxConfigReference{Name: config}
+				createWorkerPool(t, wp)
+				waitResolved(t, wp, config)
+				return wp
+			}
+			var users []*atev1alpha1.WorkerPool
+			for _, name := range tc.users {
+				users = append(users, newPool(name, sc.Name))
+			}
+			sentinelPool := newPool(tc.sentinelPool, sentinel.Name)
+			waitProtectionFinalizer(t, sc.Name, true)
+			waitProtectionFinalizer(t, sentinel.Name, true)
+
+			for _, c := range []*atev1alpha1.SandboxConfig{sc, sentinel} {
+				if err := k8sClient.Delete(ctx, c); err != nil {
+					t.Fatalf("delete SandboxConfig %s: %v", c.Name, err)
+				}
+			}
+			last := users[len(users)-1]
+			for _, wp := range users[:len(users)-1] {
+				deleteAndWait(t, wp)
+			}
+			deleteAndWait(t, sentinelPool)
+			waitGone(t, sentinel)
+			// The shared config has been reconciled for every other user's
+			// deletion. It must stay for the last one.
+			got := &atev1alpha1.SandboxConfig{}
+			if err := k8sClient.Get(ctx, types.NamespacedName{Name: sc.Name}, got); err != nil {
+				t.Fatalf("SandboxConfig still used by %s: get: %v", last.Name, err)
+			}
+			if got.DeletionTimestamp.IsZero() {
+				t.Fatalf("SandboxConfig has no deletionTimestamp after delete")
+			}
+
+			deleteAndWait(t, last)
+			waitGone(t, sc)
+		})
+	}
+}
+
 // TestWorkerPoolDefaultNewestWins verifies that a pool without a configRef
 // follows the newest class default, and keeps the config it uses, while
 // reporting why, once no default is left. Each step changes the class
@@ -459,11 +903,9 @@ func waitDeploymentReplicas(t *testing.T, wp *atev1alpha1.WorkerPool, replicas i
 func TestWorkerPoolDefaultNewestWins(t *testing.T) {
 	mvdefA := makeSandboxConfig("mvdef-a", atev1alpha1.SandboxClassMicroVM, true)
 	mvdefB := makeSandboxConfig("mvdef-b", atev1alpha1.SandboxClassMicroVM, true)
-	controllerutil.AddFinalizer(mvdefB, testHoldFinalizer)
 	// The steps create the configs, but they outlive each step.
 	deleteOnCleanup(t, mvdefA)
 	deleteOnCleanup(t, mvdefB)
-	t.Cleanup(func() { removeFinalizer(t, mvdefB.Name, testHoldFinalizer) })
 	create := func(t *testing.T, sc *atev1alpha1.SandboxConfig) {
 		t.Helper()
 		if err := k8sClient.Create(t.Context(), sc); err != nil {
@@ -510,7 +952,7 @@ func TestWorkerPoolDefaultNewestWins(t *testing.T) {
 			wantConfig: "mvdef-b",
 		},
 		{
-			name: "the only default being deleted is kept",
+			name: "the only default being deleted is kept, held by its finalizer",
 			act: func(t *testing.T) {
 				if err := k8sClient.Delete(t.Context(), mvdefB); err != nil {
 					t.Fatalf("delete SandboxConfig mvdef-b: %v", err)
@@ -559,9 +1001,13 @@ func TestWorkerPoolDefaultNewestWins(t *testing.T) {
 			return
 		}
 	}
+
+	// Once the pool is gone, nothing holds mvdef-b.
+	deleteAndWait(t, wp)
+	waitGone(t, mvdefB)
 }
 
-// TestWorkerPoolMayUseSandboxConfig covers the three ways a SandboxConfig
+// TestWorkerPoolMayUseSandboxConfig covers the ways a SandboxConfig
 // event can concern a WorkerPool.
 func TestWorkerPoolMayUseSandboxConfig(t *testing.T) {
 	t.Parallel()
@@ -602,6 +1048,16 @@ func TestWorkerPoolMayUseSandboxConfig(t *testing.T) {
 			spec:   []atev1alpha1.WorkerPoolSandboxClass{microvm},
 			status: []atev1alpha1.WorkerPoolSandboxClassStatus{using("sc")},
 			want:   true,
+		},
+		{
+			name: "status claims the config",
+			spec: []atev1alpha1.WorkerPoolSandboxClass{microvm},
+			status: []atev1alpha1.WorkerPoolSandboxClassStatus{{
+				Name:             atev1alpha1.SandboxClassMicroVM,
+				ConfigRef:        &atev1alpha1.SandboxConfigReference{Name: "other"},
+				PendingConfigRef: &atev1alpha1.SandboxConfigReference{Name: "sc"},
+			}},
+			want: true,
 		},
 		{
 			name:   "another class, another config",
@@ -796,6 +1252,640 @@ func TestResolveSandboxClasses(t *testing.T) {
 	}
 }
 
+// TestClaimSandboxConfigs verifies the status written to claim the configs a
+// pool switches to: each class's status stays as it was, a switching class
+// names its new config in pendingConfigRef, and nothing is written when no
+// class switches.
+func TestClaimSandboxConfigs(t *testing.T) {
+	t.Parallel()
+	ref := func(name string) *atev1alpha1.SandboxConfigReference {
+		if name == "" {
+			return nil
+		}
+		return &atev1alpha1.SandboxConfigReference{Name: name}
+	}
+	resolved := metav1.Condition{
+		Type:   atev1alpha1.WorkerPoolSandboxClassConditionResolved,
+		Status: metav1.ConditionTrue,
+		Reason: atev1alpha1.WorkerPoolReasonResolved,
+	}
+	// status builds the pool's single gvisor status entry.
+	status := func(configRef, pending string, conds ...metav1.Condition) []atev1alpha1.WorkerPoolSandboxClassStatus {
+		return []atev1alpha1.WorkerPoolSandboxClassStatus{{
+			Name:             atev1alpha1.SandboxClassGvisor,
+			ConfigRef:        ref(configRef),
+			PendingConfigRef: ref(pending),
+			Conditions:       conds,
+		}}
+	}
+
+	tests := []struct {
+		name string
+		prev []atev1alpha1.WorkerPoolSandboxClassStatus
+		// classes is the status resolveSandboxClasses built.
+		classes []atev1alpha1.WorkerPoolSandboxClassStatus
+		want    []atev1alpha1.WorkerPoolSandboxClassStatus
+	}{
+		{
+			name:    "same config: no claim",
+			prev:    status("x", "", resolved),
+			classes: status("x", ""),
+			want:    nil,
+		},
+		{
+			name:    "unresolved and nothing kept: no claim",
+			classes: status("", ""),
+			want:    nil,
+		},
+		{
+			name:    "new pool: claims, no config in use",
+			classes: status("x", ""),
+			want:    status("", "x"),
+		},
+		{
+			name:    "switch: claims and keeps the config in use",
+			prev:    status("y", "", resolved),
+			classes: status("x", ""),
+			want:    status("y", "x", resolved),
+		},
+		{
+			name:    "earlier claim for the same config: claimed again",
+			prev:    status("y", "x", resolved),
+			classes: status("x", ""),
+			want:    status("y", "x", resolved),
+		},
+		{
+			name:    "earlier claim for another config: replaced",
+			prev:    status("y", "x", resolved),
+			classes: status("z", ""),
+			want:    status("y", "z", resolved),
+		},
+		{
+			name:    "earlier claim, back to the config in use: no claim",
+			prev:    status("y", "x", resolved),
+			classes: status("y", ""),
+			want:    nil,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			wp := makeWorkerPool("pool", "default", 1, "ateom:v1")
+			wp.Status.SandboxClasses = tc.prev
+			if got := claimSandboxConfigs(wp, tc.classes); !equality.Semantic.DeepEqual(got, tc.want) {
+				t.Errorf("claimSandboxConfigs = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestConfirmSandboxConfigSwitch verifies how the config a class switches to,
+// as read from the API server, settles the class: a live config of the class
+// stands, and anything else keeps the config in use with a False Resolved
+// condition.
+func TestConfirmSandboxConfigSwitch(t *testing.T) {
+	t.Parallel()
+	const generation = 3
+	now := metav1.Now()
+	resolvedX := metav1.Condition{
+		Type:               atev1alpha1.WorkerPoolSandboxClassConditionResolved,
+		Status:             metav1.ConditionTrue,
+		Reason:             atev1alpha1.WorkerPoolReasonResolved,
+		Message:            `resolved to SandboxConfig "x"`,
+		ObservedGeneration: generation,
+	}
+	// class is the entry resolveSandboxClasses built: switching to x.
+	class := atev1alpha1.WorkerPoolSandboxClassStatus{
+		Name:       atev1alpha1.SandboxClassGvisor,
+		ConfigRef:  &atev1alpha1.SandboxConfigReference{Name: "x"},
+		Conditions: []metav1.Condition{resolvedX},
+	}
+	onY := []atev1alpha1.WorkerPoolSandboxClassStatus{{
+		Name:             atev1alpha1.SandboxClassGvisor,
+		ConfigRef:        &atev1alpha1.SandboxConfigReference{Name: "y"},
+		PendingConfigRef: &atev1alpha1.SandboxConfigReference{Name: "x"},
+	}}
+	x := makeSandboxConfig("x", atev1alpha1.SandboxClassGvisor, false)
+	deletingX := x.DeepCopy()
+	deletingX.DeletionTimestamp = &now
+	configs := []atev1alpha1.SandboxConfig{*makeSandboxConfig("y", atev1alpha1.SandboxClassGvisor, false), *x}
+
+	tests := []struct {
+		name string
+		prev []atev1alpha1.WorkerPoolSandboxClassStatus
+		// live is x as read from the API server. nil means not found.
+		live *atev1alpha1.SandboxConfig
+		// wantConfig is the config the class must end up using.
+		wantConfig  string
+		wantReason  string
+		wantMessage string
+	}{
+		{
+			name:        "live: switches",
+			prev:        onY,
+			live:        x,
+			wantConfig:  "x",
+			wantReason:  atev1alpha1.WorkerPoolReasonResolved,
+			wantMessage: `resolved to SandboxConfig "x"`,
+		},
+		{
+			name:        "not found: keeps the config in use",
+			prev:        onY,
+			wantConfig:  "y",
+			wantReason:  atev1alpha1.WorkerPoolReasonSandboxConfigNotFound,
+			wantMessage: `SandboxConfig "x" not found; keeping "y"`,
+		},
+		{
+			name:        "being deleted: keeps the config in use",
+			prev:        onY,
+			live:        deletingX,
+			wantConfig:  "y",
+			wantReason:  atev1alpha1.WorkerPoolReasonSandboxConfigDeleting,
+			wantMessage: `SandboxConfig "x" is being deleted; keeping "y"`,
+		},
+		{
+			name:        "now of another class: keeps the config in use",
+			prev:        onY,
+			live:        makeSandboxConfig("x", atev1alpha1.SandboxClassMicroVM, false),
+			wantConfig:  "y",
+			wantReason:  atev1alpha1.WorkerPoolReasonSandboxClassMismatch,
+			wantMessage: `SandboxConfig "x" is for sandbox class "microvm", not "gvisor"; keeping "y"`,
+		},
+		{
+			name:        "being deleted, new pool: no config",
+			live:        deletingX,
+			wantReason:  atev1alpha1.WorkerPoolReasonSandboxConfigDeleting,
+			wantMessage: `SandboxConfig "x" is being deleted`,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			wp := makeWorkerPool("pool", "default", 1, "ateom:v1")
+			wp.Generation = generation
+			wp.Status.SandboxClasses = tc.prev
+			got := confirmSandboxConfigSwitch(wp, *class.DeepCopy(), tc.live, configs)
+			if name := ptr.Deref(got.ConfigRef, atev1alpha1.SandboxConfigReference{}).Name; name != tc.wantConfig {
+				t.Errorf("configRef = %q, want %q", name, tc.wantConfig)
+			}
+			if got.PendingConfigRef != nil {
+				t.Errorf("pendingConfigRef = %q, want none", got.PendingConfigRef.Name)
+			}
+			cond := meta.FindStatusCondition(got.Conditions, atev1alpha1.WorkerPoolSandboxClassConditionResolved)
+			if cond == nil {
+				t.Fatalf("no Resolved condition in %+v", got.Conditions)
+			}
+			if cond.Reason != tc.wantReason || cond.Message != tc.wantMessage || cond.ObservedGeneration != generation {
+				t.Errorf("condition = %s %q (generation %d), want %s %q (generation %d)",
+					cond.Reason, cond.Message, cond.ObservedGeneration, tc.wantReason, tc.wantMessage, generation)
+			}
+		})
+	}
+}
+
+// TestReconcileConfirmsSwitch verifies a switch against a cache that lags
+// the API server: the cache shows the new config live, while the API server
+// has it gone or being deleted. The pool's status must claim the new config
+// before it is read from the API server, and the switch only stands if that
+// read finds it live. Otherwise the pool keeps the config it uses.
+func TestReconcileConfirmsSwitch(t *testing.T) {
+	t.Parallel()
+	scheme := runtime.NewScheme()
+	if err := clientgoscheme.AddToScheme(scheme); err != nil {
+		t.Fatalf("add client-go scheme: %v", err)
+	}
+	if err := atev1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add scheme: %v", err)
+	}
+	now := metav1.Now()
+	protected := func(sc *atev1alpha1.SandboxConfig) *atev1alpha1.SandboxConfig {
+		controllerutil.AddFinalizer(sc, atev1alpha1.SandboxConfigWorkerPoolProtectionFinalizer)
+		return sc
+	}
+	deleting := func(sc *atev1alpha1.SandboxConfig) *atev1alpha1.SandboxConfig {
+		sc.DeletionTimestamp = &now
+		return sc
+	}
+	x := func() *atev1alpha1.SandboxConfig {
+		return protected(makeSandboxConfig("x", atev1alpha1.SandboxClassGvisor, false))
+	}
+
+	tests := []struct {
+		name string
+		// inUse is the config the pool's status uses before the reconcile.
+		// "" for a new pool.
+		inUse string
+		// liveX is x on the API server. nil means it is gone.
+		liveX *atev1alpha1.SandboxConfig
+		// wantRead is whether x must be read from the API server.
+		wantRead       bool
+		wantConfig     string
+		wantReason     string
+		wantDeployment bool
+	}{
+		{
+			name:           "live: switches",
+			inUse:          "y",
+			liveX:          x(),
+			wantRead:       true,
+			wantConfig:     "x",
+			wantReason:     atev1alpha1.WorkerPoolReasonResolved,
+			wantDeployment: true,
+		},
+		{
+			name:           "being deleted: keeps the config in use",
+			inUse:          "y",
+			liveX:          deleting(x()),
+			wantRead:       true,
+			wantConfig:     "y",
+			wantReason:     atev1alpha1.WorkerPoolReasonSandboxConfigDeleting,
+			wantDeployment: true,
+		},
+		{
+			name:           "gone: keeps the config in use",
+			inUse:          "y",
+			wantRead:       true,
+			wantConfig:     "y",
+			wantReason:     atev1alpha1.WorkerPoolReasonSandboxConfigNotFound,
+			wantDeployment: true,
+		},
+		{
+			name:           "live, new pool: switches and gets a Deployment",
+			liveX:          x(),
+			wantRead:       true,
+			wantConfig:     "x",
+			wantReason:     atev1alpha1.WorkerPoolReasonResolved,
+			wantDeployment: true,
+		},
+		{
+			name:       "being deleted, new pool: no config, no Deployment",
+			liveX:      deleting(x()),
+			wantRead:   true,
+			wantReason: atev1alpha1.WorkerPoolReasonSandboxConfigDeleting,
+		},
+		{
+			name:           "already in use: not read again",
+			inUse:          "x",
+			liveX:          deleting(x()),
+			wantConfig:     "x",
+			wantReason:     atev1alpha1.WorkerPoolReasonResolved,
+			wantDeployment: true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			wp := makeWorkerPool("pool", "default", 1, "ateom:v1")
+			wp.Spec.SandboxClasses[0].ConfigRef = &atev1alpha1.SandboxConfigReference{Name: "x"}
+			objs := []client.Object{wp, x(), protected(makeSandboxConfig("y", atev1alpha1.SandboxClassGvisor, false))}
+			if tc.inUse != "" {
+				wp.Status.SandboxClasses = []atev1alpha1.WorkerPoolSandboxClassStatus{{
+					Name:      atev1alpha1.SandboxClassGvisor,
+					ConfigRef: &atev1alpha1.SandboxConfigReference{Name: tc.inUse},
+				}}
+				objs = append(objs, &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: wp.Name, Namespace: wp.Namespace}})
+			}
+			c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).WithStatusSubresource(wp).Build()
+
+			var liveObjs []client.Object
+			if tc.liveX != nil {
+				liveObjs = append(liveObjs, tc.liveX)
+			}
+			// claimedAtRead records whether the pool's status claimed x
+			// when x was read from the API server.
+			var read, claimedAtRead bool
+			live := fake.NewClientBuilder().WithScheme(scheme).WithObjects(liveObjs...).
+				WithInterceptorFuncs(interceptor.Funcs{
+					Get: func(ctx context.Context, lc client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+						read = true
+						pool := &atev1alpha1.WorkerPool{}
+						if err := c.Get(ctx, client.ObjectKeyFromObject(wp), pool); err != nil {
+							return err
+						}
+						claimedAtRead = slices.Contains(sandboxConfigsInUse(pool), key.Name)
+						return lc.Get(ctx, key, obj, opts...)
+					},
+				}).Build()
+
+			r := &WorkerPoolReconciler{Client: c, APIReader: live}
+			if _, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(wp)}); err != nil {
+				t.Fatalf("Reconcile: %v", err)
+			}
+
+			if read != tc.wantRead {
+				t.Errorf("read x from the API server = %v, want %v", read, tc.wantRead)
+			}
+			if read && !claimedAtRead {
+				t.Errorf("x was read from the API server before the pool's status claimed it")
+			}
+			got := &atev1alpha1.WorkerPool{}
+			if err := c.Get(t.Context(), client.ObjectKeyFromObject(wp), got); err != nil {
+				t.Fatalf("get WorkerPool: %v", err)
+			}
+			if name := statusConfig(got, atev1alpha1.SandboxClassGvisor); name != tc.wantConfig {
+				t.Errorf("status names %q, want %q", name, tc.wantConfig)
+			}
+			class := sandboxClassStatus(got, atev1alpha1.SandboxClassGvisor)
+			if class == nil {
+				t.Fatalf("no gvisor status entry in %+v", got.Status)
+			}
+			if class.PendingConfigRef != nil {
+				t.Errorf("pendingConfigRef = %q, want none", class.PendingConfigRef.Name)
+			}
+			if cond := meta.FindStatusCondition(class.Conditions, atev1alpha1.WorkerPoolSandboxClassConditionResolved); cond == nil || cond.Reason != tc.wantReason {
+				t.Errorf("Resolved condition = %+v, want reason %s", cond, tc.wantReason)
+			}
+			err := c.Get(t.Context(), client.ObjectKeyFromObject(wp), &appsv1.Deployment{})
+			if hasDeployment := err == nil; hasDeployment != tc.wantDeployment {
+				t.Errorf("has Deployment = %v (get error %v), want %v", hasDeployment, err, tc.wantDeployment)
+			}
+		})
+	}
+}
+
+// TestSwitchInterleavings runs a pool's switch from config y to config x with
+// a deletion and a protection reconcile interleaved at each point of the
+// switch, as they can be on a real cluster: before the claim is written,
+// after it, after x is read from the API server, and after the final status
+// write. Throughout, the config status names in configRef must exist, and
+// the deleted config must outlive its last claim: the protection reconciler
+// may release it only while no pool's status names it.
+func TestSwitchInterleavings(t *testing.T) {
+	t.Parallel()
+	scheme := runtime.NewScheme()
+	if err := clientgoscheme.AddToScheme(scheme); err != nil {
+		t.Fatalf("add client-go scheme: %v", err)
+	}
+	if err := atev1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add scheme: %v", err)
+	}
+	// The points in a switch where the deletion and the protection reconcile
+	// run.
+	const (
+		beforeClaim = "before claim"
+		afterClaim  = "after claim"
+		afterRead   = "after read"
+		afterFinal  = "after final write"
+	)
+
+	tests := []struct {
+		name string
+		// deleted is the config deleted at the point at.
+		deleted string
+		at      string
+		// unprotected starts x without the protection finalizer, as a config
+		// no pool has used yet.
+		unprotected bool
+		// wantHeldAtPoint is whether the deleted config still exists after
+		// the protection reconcile at the point.
+		wantHeldAtPoint bool
+		// wantFirst is the config status names after the reconcile, and
+		// wantSettled after the protection and pool reconciles that the
+		// deletion triggers have run.
+		wantFirst   string
+		wantSettled string
+		// wantGone is whether the deleted config is gone once settled.
+		wantGone bool
+	}{
+		{
+			name:        "x deleted and released before the claim: switch rejected",
+			deleted:     "x",
+			at:          beforeClaim,
+			wantFirst:   "y",
+			wantSettled: "y",
+			wantGone:    true,
+		},
+		{
+			name:        "unused x deleted and released before the claim: switch rejected",
+			deleted:     "x",
+			at:          beforeClaim,
+			unprotected: true,
+			wantFirst:   "y",
+			wantSettled: "y",
+			wantGone:    true,
+		},
+		{
+			name:            "x deleted after the claim: held by the claim, switch rejected, then released",
+			deleted:         "x",
+			at:              afterClaim,
+			wantHeldAtPoint: true,
+			wantFirst:       "y",
+			wantSettled:     "y",
+			wantGone:        true,
+		},
+		{
+			name:            "x deleted after the read: held by the claim, switched, kept while in use",
+			deleted:         "x",
+			at:              afterRead,
+			wantHeldAtPoint: true,
+			wantFirst:       "x",
+			wantSettled:     "x",
+		},
+		{
+			name:            "x deleted after the final write: held, kept while in use",
+			deleted:         "x",
+			at:              afterFinal,
+			wantHeldAtPoint: true,
+			wantFirst:       "x",
+			wantSettled:     "x",
+		},
+		{
+			name:            "y deleted before the claim: held while named, released after the switch",
+			deleted:         "y",
+			at:              beforeClaim,
+			wantHeldAtPoint: true,
+			wantFirst:       "x",
+			wantSettled:     "x",
+			wantGone:        true,
+		},
+		{
+			name:            "y deleted after the claim: held while named, released after the switch",
+			deleted:         "y",
+			at:              afterClaim,
+			wantHeldAtPoint: true,
+			wantFirst:       "x",
+			wantSettled:     "x",
+			wantGone:        true,
+		},
+		{
+			name:            "y deleted after the read: held while named, released after the switch",
+			deleted:         "y",
+			at:              afterRead,
+			wantHeldAtPoint: true,
+			wantFirst:       "x",
+			wantSettled:     "x",
+			wantGone:        true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			wp := makeWorkerPool("pool", "default", 1, "ateom:v1")
+			wp.Spec.SandboxClasses[0].ConfigRef = &atev1alpha1.SandboxConfigReference{Name: "x"}
+			wp.Status.SandboxClasses = []atev1alpha1.WorkerPoolSandboxClassStatus{{
+				Name:      atev1alpha1.SandboxClassGvisor,
+				ConfigRef: &atev1alpha1.SandboxConfigReference{Name: "y"},
+			}}
+			x := makeSandboxConfig("x", atev1alpha1.SandboxClassGvisor, false)
+			if !tc.unprotected {
+				controllerutil.AddFinalizer(x, atev1alpha1.SandboxConfigWorkerPoolProtectionFinalizer)
+			}
+			y := makeSandboxConfig("y", atev1alpha1.SandboxClassGvisor, false)
+			controllerutil.AddFinalizer(y, atev1alpha1.SandboxConfigWorkerPoolProtectionFinalizer)
+			// base is the cluster itself: the hooks and the protection
+			// reconciler use it, so only the pool's reconcile is intercepted.
+			base := fake.NewClientBuilder().WithScheme(scheme).WithObjects(wp, x, y).WithStatusSubresource(wp).
+				WithIndex(&atev1alpha1.WorkerPool{}, workerPoolSandboxConfigIndex, func(obj client.Object) []string {
+					return sandboxConfigsInUse(obj.(*atev1alpha1.WorkerPool))
+				}).Build()
+			protection := &SandboxConfigProtectionReconciler{Client: base, APIReader: base}
+			protect := func(ctx context.Context) error {
+				for _, name := range []string{"x", "y"} {
+					if _, err := protection.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: name}}); err != nil {
+						return fmt.Errorf("protection reconcile of %q: %w", name, err)
+					}
+				}
+				return nil
+			}
+			exists := func(ctx context.Context, name string) (bool, error) {
+				err := base.Get(ctx, types.NamespacedName{Name: name}, &atev1alpha1.SandboxConfig{})
+				if k8errors.IsNotFound(err) {
+					return false, nil
+				}
+				return err == nil, err
+			}
+			// checkConfigRef fails the test if status names a config in
+			// configRef that does not exist.
+			checkConfigRef := func(ctx context.Context, when string) error {
+				pool := &atev1alpha1.WorkerPool{}
+				if err := base.Get(ctx, client.ObjectKeyFromObject(wp), pool); err != nil {
+					return err
+				}
+				for _, class := range pool.Status.SandboxClasses {
+					if class.ConfigRef == nil {
+						continue
+					}
+					ok, err := exists(ctx, class.ConfigRef.Name)
+					if err != nil {
+						return err
+					}
+					if !ok {
+						t.Errorf("%s: status names %q, which no longer exists", when, class.ConfigRef.Name)
+					}
+				}
+				return nil
+			}
+
+			armed, hit := true, false
+			// interleave deletes the config and runs the protection
+			// reconciler, if at is the point the test interleaves at.
+			interleave := func(ctx context.Context, at string) error {
+				if !armed || at != tc.at {
+					return nil
+				}
+				hit = true
+				sc := &atev1alpha1.SandboxConfig{}
+				if err := base.Get(ctx, types.NamespacedName{Name: tc.deleted}, sc); err != nil {
+					return err
+				}
+				if err := base.Delete(ctx, sc); err != nil {
+					return err
+				}
+				if err := protect(ctx); err != nil {
+					return err
+				}
+				held, err := exists(ctx, tc.deleted)
+				if err != nil {
+					return err
+				}
+				if held != tc.wantHeldAtPoint {
+					t.Errorf("%s: %q exists after the protection reconcile = %v, want %v", at, tc.deleted, held, tc.wantHeldAtPoint)
+				}
+				return checkConfigRef(ctx, at)
+			}
+			statusWrites := 0
+			c := interceptor.NewClient(base, interceptor.Funcs{
+				SubResourceUpdate: func(ctx context.Context, c client.Client, sub string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+					statusWrites++
+					claim := statusWrites == 1
+					if claim {
+						if err := interleave(ctx, beforeClaim); err != nil {
+							return err
+						}
+					}
+					if err := c.SubResource(sub).Update(ctx, obj, opts...); err != nil {
+						return err
+					}
+					if claim {
+						return interleave(ctx, afterClaim)
+					}
+					return interleave(ctx, afterFinal)
+				},
+				Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+					if err := c.Get(ctx, key, obj, opts...); err != nil {
+						return err
+					}
+					if _, ok := obj.(*atev1alpha1.SandboxConfig); ok {
+						return interleave(ctx, afterRead)
+					}
+					return nil
+				},
+			})
+
+			r := &WorkerPoolReconciler{Client: c, APIReader: c}
+			req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(wp)}
+			if _, err := r.Reconcile(t.Context(), req); err != nil {
+				t.Fatalf("Reconcile: %v", err)
+			}
+			armed = false
+			if !hit {
+				t.Fatalf("the reconcile never reached %q", tc.at)
+			}
+			if statusWrites != 2 {
+				t.Errorf("status writes = %d, want 2: the claim and the final write", statusWrites)
+			}
+			got := &atev1alpha1.WorkerPool{}
+			if err := base.Get(t.Context(), req.NamespacedName, got); err != nil {
+				t.Fatalf("get WorkerPool: %v", err)
+			}
+			if name := statusConfig(got, atev1alpha1.SandboxClassGvisor); name != tc.wantFirst {
+				t.Errorf("after the reconcile, status names %q, want %q", name, tc.wantFirst)
+			}
+			if err := checkConfigRef(t.Context(), "after the reconcile"); err != nil {
+				t.Fatal(err)
+			}
+
+			// Settle: the deletion and the status writes trigger the
+			// protection reconciler and another pool reconcile.
+			if err := protect(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := r.Reconcile(t.Context(), req); err != nil {
+				t.Fatalf("second Reconcile: %v", err)
+			}
+			if err := protect(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if err := base.Get(t.Context(), req.NamespacedName, got); err != nil {
+				t.Fatalf("get WorkerPool: %v", err)
+			}
+			if name := statusConfig(got, atev1alpha1.SandboxClassGvisor); name != tc.wantSettled {
+				t.Errorf("once settled, status names %q, want %q", name, tc.wantSettled)
+			}
+			if err := checkConfigRef(t.Context(), "once settled"); err != nil {
+				t.Fatal(err)
+			}
+			ok, err := exists(t.Context(), tc.deleted)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if gone := !ok; gone != tc.wantGone {
+				t.Errorf("once settled, %q gone = %v, want %v", tc.deleted, gone, tc.wantGone)
+			}
+		})
+	}
+}
+
 // TestEveryClassHasConfig covers when a pool without a worker Deployment
 // gets one.
 func TestEveryClassHasConfig(t *testing.T) {
@@ -855,6 +1945,14 @@ func TestReconcileAppliesExistingDeploymentFirst(t *testing.T) {
 			return c.List(ctx, list, opts...)
 		},
 	}
+	failProtect := interceptor.Funcs{
+		Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+			if _, ok := obj.(*atev1alpha1.SandboxConfig); ok {
+				return errInjected
+			}
+			return c.Patch(ctx, obj, patch, opts...)
+		},
+	}
 	failStatus := interceptor.Funcs{
 		SubResourceUpdate: func(context.Context, client.Client, string, client.Object, ...client.SubResourceUpdateOption) error {
 			return errInjected
@@ -877,6 +1975,12 @@ func TestReconcileAppliesExistingDeploymentFirst(t *testing.T) {
 			wantReplicas:  3,
 		},
 		{
+			name:          "protection fails, Deployment exists",
+			funcs:         failProtect,
+			hasDeployment: true,
+			wantReplicas:  3,
+		},
+		{
 			name:          "status write fails, Deployment exists",
 			funcs:         failStatus,
 			hasDeployment: true,
@@ -885,6 +1989,10 @@ func TestReconcileAppliesExistingDeploymentFirst(t *testing.T) {
 		{
 			name:  "list fails, no Deployment",
 			funcs: failList,
+		},
+		{
+			name:  "protection fails, no Deployment",
+			funcs: failProtect,
 		},
 		{
 			name:  "status write fails, no Deployment",
@@ -904,7 +2012,7 @@ func TestReconcileAppliesExistingDeploymentFirst(t *testing.T) {
 			}
 			c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).WithStatusSubresource(wp).
 				WithInterceptorFuncs(tc.funcs).Build()
-			r := &WorkerPoolReconciler{Client: c}
+			r := &WorkerPoolReconciler{Client: c, APIReader: c}
 			if _, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(wp)}); !errors.Is(err, errInjected) {
 				t.Fatalf("Reconcile error = %v, want %v", err, errInjected)
 			}
@@ -1022,6 +2130,44 @@ func TestSyncStatus(t *testing.T) {
 	}
 }
 
+// TestAddProtectionFinalizer checks that addProtectionFinalizer patches only
+// when the finalizer is missing, leaves other finalizers alone, never adds to
+// a deleting config, and fails with a conflict when the config changed since
+// it was read.
+func TestAddProtectionFinalizer(t *testing.T) {
+	t.Parallel()
+	runProtectionFinalizerCases(t, []protectionFinalizerCase{
+		{
+			name:        "add to unprotected config",
+			op:          addProtectionFinalizer,
+			sc:          protectedSandboxConfig(false, false),
+			wantPatches: 1,
+			want:        true,
+		},
+		{
+			name: "add to protected config: no patch",
+			op:   addProtectionFinalizer,
+			sc:   protectedSandboxConfig(true, false),
+			want: true,
+		},
+		{
+			name: "add to deleting config: no patch",
+			op:   addProtectionFinalizer,
+			sc:   protectedSandboxConfig(false, true),
+			want: false,
+		},
+		{
+			name:        "add to stale config: conflict",
+			op:          addProtectionFinalizer,
+			sc:          protectedSandboxConfig(false, false),
+			stale:       true,
+			wantPatches: 1,
+			want:        false,
+			wantErr:     k8errors.IsConflict,
+		},
+	})
+}
+
 // --- helpers ---
 
 func makeSandboxConfig(name string, class atev1alpha1.SandboxClass, isDefault bool) *atev1alpha1.SandboxConfig {
@@ -1093,6 +2239,19 @@ func waitCondition(t *testing.T, wp *atev1alpha1.WorkerPool, ok func(*atev1alpha
 		return cond != nil && cond.ObservedGeneration == current.Generation && ok(current, cond), nil
 	})
 	return current
+}
+
+// waitProtectionFinalizer waits for the SandboxConfig name to carry, or not
+// carry, the protection finalizer.
+func waitProtectionFinalizer(t *testing.T, name string, want bool) {
+	t.Helper()
+	eventually(t, func(ctx context.Context) (bool, error) {
+		sc := &atev1alpha1.SandboxConfig{}
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: name}, sc); err != nil {
+			return false, nil
+		}
+		return controllerutil.ContainsFinalizer(sc, atev1alpha1.SandboxConfigWorkerPoolProtectionFinalizer) == want, nil
+	})
 }
 
 // waitGone waits for obj to no longer exist.

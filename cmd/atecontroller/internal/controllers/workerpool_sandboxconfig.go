@@ -20,6 +20,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 )
@@ -96,14 +97,19 @@ func resolveSandboxConfig(entry atev1alpha1.WorkerPoolSandboxClass, inUse string
 }
 
 // keepSandboxConfig returns the config a class keeps when its spec does not
-// resolve, and a False Resolved condition with reason and message. The class
-// keeps inUse, so a running pool never loses its config. The result is nil
-// only when inUse is "" or no longer names a config of the class.
+// resolve, and a False Resolved condition with reason and message.
+//
+// The class keeps inUse, so a running pool never loses its config. The result
+// is nil only when inUse is "" or no longer names a config of the class. A
+// config in use that is being deleted carries the protection finalizer while
+// any pool's status names it. One without the finalizer is about to
+// disappear, so it is not kept.
 func keepSandboxConfig(class atev1alpha1.SandboxClass, inUse string, configs []atev1alpha1.SandboxConfig, reason, message string) (*atev1alpha1.SandboxConfig, metav1.Condition) {
 	var kept *atev1alpha1.SandboxConfig
 	if inUse != "" {
 		i := slices.IndexFunc(configs, func(sc atev1alpha1.SandboxConfig) bool { return sc.Name == inUse })
-		if i >= 0 && configs[i].Spec.SandboxClass == class {
+		if i >= 0 && configs[i].Spec.SandboxClass == class &&
+			(configs[i].DeletionTimestamp.IsZero() || controllerutil.ContainsFinalizer(&configs[i], atev1alpha1.SandboxConfigWorkerPoolProtectionFinalizer)) {
 			kept = &configs[i]
 			message = fmt.Sprintf("%s; keeping %q", message, kept.Name)
 		}
@@ -164,6 +170,72 @@ func sandboxClassStatusFor(wp *atev1alpha1.WorkerPool, class atev1alpha1.Sandbox
 	return status
 }
 
+// switchesSandboxConfig reports whether class, as resolved, uses a config
+// other than the one wp's status uses for it.
+func switchesSandboxConfig(wp *atev1alpha1.WorkerPool, class atev1alpha1.WorkerPoolSandboxClassStatus) bool {
+	if class.ConfigRef == nil {
+		return false
+	}
+	prev := sandboxClassStatus(wp, class.Name)
+	return prev == nil || prev.ConfigRef == nil || prev.ConfigRef.Name != class.ConfigRef.Name
+}
+
+// claimSandboxConfigs returns the status that claims every config a class in
+// classes switches to, or nil if no class switches. The claim keeps each
+// class's status in wp as it is and names the new config in pendingConfigRef.
+// That protects the new config like configRef does while
+// confirmSandboxConfigSwitch checks it.
+func claimSandboxConfigs(wp *atev1alpha1.WorkerPool, classes []atev1alpha1.WorkerPoolSandboxClassStatus) []atev1alpha1.WorkerPoolSandboxClassStatus {
+	claim := make([]atev1alpha1.WorkerPoolSandboxClassStatus, 0, len(classes))
+	claimed := false
+	for _, class := range classes {
+		status := atev1alpha1.WorkerPoolSandboxClassStatus{Name: class.Name}
+		if prev := sandboxClassStatus(wp, class.Name); prev != nil {
+			status = *prev.DeepCopy()
+			status.PendingConfigRef = nil
+		}
+		if switchesSandboxConfig(wp, class) {
+			status.PendingConfigRef = class.ConfigRef.DeepCopy()
+			claimed = true
+		}
+		claim = append(claim, status)
+	}
+	if !claimed {
+		return nil
+	}
+	return claim
+}
+
+// confirmSandboxConfigSwitch returns the status entry for a class that
+// switches to a new config. live is that config as read from the API server
+// after wp's status claimed it, or nil if it does not exist. The switch stands
+// if the config belongs to the class and is not being deleted. Otherwise the
+// class keeps the config wp's status uses, with a False Resolved condition.
+// configs is the cached list keepSandboxConfig checks that config against.
+func confirmSandboxConfigSwitch(wp *atev1alpha1.WorkerPool, class atev1alpha1.WorkerPoolSandboxClassStatus, live *atev1alpha1.SandboxConfig, configs []atev1alpha1.SandboxConfig) atev1alpha1.WorkerPoolSandboxClassStatus {
+	name := class.ConfigRef.Name
+	var reason, message string
+	switch {
+	case live == nil:
+		reason, message = atev1alpha1.WorkerPoolReasonSandboxConfigNotFound,
+			fmt.Sprintf("SandboxConfig %q not found", name)
+	case live.Spec.SandboxClass != class.Name:
+		reason, message = atev1alpha1.WorkerPoolReasonSandboxClassMismatch,
+			fmt.Sprintf("SandboxConfig %q is for sandbox class %q, not %q", name, live.Spec.SandboxClass, class.Name)
+	case !live.DeletionTimestamp.IsZero():
+		reason, message = atev1alpha1.WorkerPoolReasonSandboxConfigDeleting,
+			fmt.Sprintf("SandboxConfig %q is being deleted", name)
+	default:
+		return class
+	}
+	inUse := ""
+	if prev := sandboxClassStatus(wp, class.Name); prev != nil && prev.ConfigRef != nil {
+		inUse = prev.ConfigRef.Name
+	}
+	sc, cond := keepSandboxConfig(class.Name, inUse, configs, reason, message)
+	return sandboxClassStatusFor(wp, class.Name, sc, cond)
+}
+
 // sandboxClassStatus returns the status entry wp records for class, or nil.
 func sandboxClassStatus(wp *atev1alpha1.WorkerPool, class atev1alpha1.SandboxClass) *atev1alpha1.WorkerPoolSandboxClassStatus {
 	for i := range wp.Status.SandboxClasses {
@@ -175,12 +247,15 @@ func sandboxClassStatus(wp *atev1alpha1.WorkerPool, class atev1alpha1.SandboxCla
 }
 
 // sandboxConfigsInUse returns the names of the SandboxConfigs wp's status
-// records as in use.
+// records as in use. That is every configRef and every pendingConfigRef.
 func sandboxConfigsInUse(wp *atev1alpha1.WorkerPool) []string {
 	names := make([]string, 0, len(wp.Status.SandboxClasses))
 	for _, s := range wp.Status.SandboxClasses {
 		if s.ConfigRef != nil {
 			names = append(names, s.ConfigRef.Name)
+		}
+		if s.PendingConfigRef != nil {
+			names = append(names, s.PendingConfigRef.Name)
 		}
 	}
 	return names

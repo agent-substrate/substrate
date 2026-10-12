@@ -198,6 +198,14 @@ type WorkerPoolSandboxClassStatus struct {
 	// +optional
 	ConfigRef *SandboxConfigReference `json:"configRef,omitempty"`
 
+	// PendingConfigRef names the SandboxConfig the class is switching to
+	// while the controller confirms it against the API server. It protects
+	// the config from deletion like configRef does. The same reconcile
+	// clears it, and configRef either moves to it or stays where it was.
+	//
+	// +optional
+	PendingConfigRef *SandboxConfigReference `json:"pendingConfigRef,omitempty"`
+
 	// Conditions describe the current state of this sandbox class.
 	//
 	// +optional

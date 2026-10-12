@@ -29,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -67,6 +68,10 @@ type WorkerPoolReconciler struct {
 	SystemNamespace      string
 	AteletServiceAccount string
 	RouterServiceAccount string
+	// APIReader reads a SandboxConfig straight from the API server, not from
+	// the cache. It confirms a config the pool switches to, once status has
+	// claimed it.
+	APIReader client.Reader
 
 	desiredWorkers metric.Int64ObservableUpDownCounter
 	readyWorkers   metric.Int64ObservableUpDownCounter
@@ -76,7 +81,7 @@ type WorkerPoolReconciler struct {
 //+kubebuilder:rbac:groups=ate.dev,resources=workerpools/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=ate.dev,resources=workerpools/finalizers,verbs=update
 //+kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=ate.dev,resources=sandboxconfigs,verbs=get;list;watch
+//+kubebuilder:rbac:groups=ate.dev,resources=sandboxconfigs,verbs=get;list;watch;patch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -108,6 +113,26 @@ func (r *WorkerPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 // reconcileWorkerPool applies the worker Deployment, resolves the pool's
 // SandboxConfigs, and records them in status.
+//
+// A class that switches to a new SandboxConfig does so in two status writes.
+// This makes sure status never names a config after its protection finalizer
+// was released.
+//
+//  1. Resolve every class from the cache, and add the protection finalizer
+//     to each config a class resolved to.
+//  2. Write status with the new config in pendingConfigRef and the config in
+//     use still in configRef. Both are protected from now on.
+//  3. Read the new config from the API server. If it is live, configRef
+//     moves to it. If it is gone or being deleted, the class keeps the config
+//     in use.
+//  4. Write status again.
+//
+// The read in step 3 has to come after the write in step 2. The protection
+// reconciler only releases a config that is already being deleted, and only
+// after it listed the WorkerPools and found none using the config. If it
+// released this config, it listed the pools before step 2 wrote the claim.
+// The config was already being deleted then, so the read in step 3 sees the
+// deletion and the class does not switch.
 func (r *WorkerPoolReconciler) reconcileWorkerPool(ctx context.Context, wp *atev1alpha1.WorkerPool) error {
 	log := log.FromContext(ctx)
 	log.Info("Reconciling worker pool")
@@ -135,6 +160,17 @@ func (r *WorkerPoolReconciler) reconcileWorkerPool(ctx context.Context, wp *atev
 	configs := list.Items
 
 	classes, _ := resolveSandboxClasses(wp, configs)
+	if err := protectSandboxConfigs(ctx, r.Client, classes, configs); err != nil {
+		return err
+	}
+	if claim := claimSandboxConfigs(wp, classes); claim != nil {
+		if err := r.syncStatus(ctx, wp, existing, claim); err != nil {
+			return err
+		}
+		if err := r.confirmSandboxConfigSwitches(ctx, wp, classes, configs); err != nil {
+			return err
+		}
+	}
 	if err := r.syncStatus(ctx, wp, existing, classes); err != nil {
 		return err
 	}
@@ -155,6 +191,68 @@ func everyClassHasConfig(classes []atev1alpha1.WorkerPoolSandboxClassStatus) boo
 		}
 	}
 	return true
+}
+
+// protectSandboxConfigs adds the protection finalizer to every SandboxConfig
+// that classes resolved to. It runs before status names the config.
+//
+// This is the only place the finalizer is added. A config that no pool has
+// ever used has no finalizer and is deleted right away. A config that was
+// deleted after the cached read is caught later, when reconcileWorkerPool
+// confirms it against the API server.
+func protectSandboxConfigs(ctx context.Context, c client.Client, classes []atev1alpha1.WorkerPoolSandboxClassStatus, configs []atev1alpha1.SandboxConfig) error {
+	for _, class := range classes {
+		if class.ConfigRef == nil {
+			continue
+		}
+		i := slices.IndexFunc(configs, func(sc atev1alpha1.SandboxConfig) bool { return sc.Name == class.ConfigRef.Name })
+		if i < 0 {
+			return fmt.Errorf("resolved SandboxConfig %q is not in the list it was resolved from", class.ConfigRef.Name)
+		}
+		if err := addProtectionFinalizer(ctx, c, &configs[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// addProtectionFinalizer adds the protection finalizer to sc. The API server
+// rejects a new finalizer on an object that is being deleted, so a deleting
+// config is left alone. The patch carries sc's resourceVersion, so a
+// concurrent change to the config fails with a conflict and the reconcile is
+// retried.
+func addProtectionFinalizer(ctx context.Context, c client.Client, sc *atev1alpha1.SandboxConfig) error {
+	if controllerutil.ContainsFinalizer(sc, atev1alpha1.SandboxConfigWorkerPoolProtectionFinalizer) || !sc.DeletionTimestamp.IsZero() {
+		return nil
+	}
+	orig := sc.DeepCopy()
+	controllerutil.AddFinalizer(sc, atev1alpha1.SandboxConfigWorkerPoolProtectionFinalizer)
+	if err := c.Patch(ctx, sc, client.MergeFromWithOptions(orig, client.MergeFromWithOptimisticLock{})); err != nil {
+		return fmt.Errorf("failed to update finalizers of SandboxConfig %q: %w", sc.Name, err)
+	}
+	return nil
+}
+
+// confirmSandboxConfigSwitches reads every config that a class in classes
+// switches to from the API server. A class whose new config is gone, belongs
+// to another class, or is being deleted gets an entry that keeps the config in
+// use instead. wp's status must already claim the new configs. See
+// reconcileWorkerPool.
+func (r *WorkerPoolReconciler) confirmSandboxConfigSwitches(ctx context.Context, wp *atev1alpha1.WorkerPool, classes []atev1alpha1.WorkerPoolSandboxClassStatus, configs []atev1alpha1.SandboxConfig) error {
+	for i, class := range classes {
+		if !switchesSandboxConfig(wp, class) {
+			continue
+		}
+		live := &atev1alpha1.SandboxConfig{}
+		if err := r.APIReader.Get(ctx, client.ObjectKey{Name: class.ConfigRef.Name}, live); err != nil {
+			if !k8errors.IsNotFound(err) {
+				return fmt.Errorf("failed to get SandboxConfig %q: %w", class.ConfigRef.Name, err)
+			}
+			live = nil
+		}
+		classes[i] = confirmSandboxConfigSwitch(wp, class, live, configs)
+	}
+	return nil
 }
 
 func (r *WorkerPoolReconciler) applyDeployment(ctx context.Context, wp *atev1alpha1.WorkerPool) error {

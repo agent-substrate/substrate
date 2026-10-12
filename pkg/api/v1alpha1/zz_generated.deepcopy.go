@@ -410,6 +410,11 @@ func (in *WorkerPoolSandboxClassStatus) DeepCopyInto(out *WorkerPoolSandboxClass
 		*out = new(SandboxConfigReference)
 		**out = **in
 	}
+	if in.PendingConfigRef != nil {
+		in, out := &in.PendingConfigRef, &out.PendingConfigRef
+		*out = new(SandboxConfigReference)
+		**out = **in
+	}
 	if in.Conditions != nil {
 		in, out := &in.Conditions, &out.Conditions
 		*out = make([]metav1.Condition, len(*in))

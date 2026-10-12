@@ -80,10 +80,19 @@ func TestMain(m *testing.M) {
 	}
 
 	if err := (&WorkerPoolReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:    mgr.GetClient(),
+		Scheme:    mgr.GetScheme(),
+		APIReader: mgr.GetAPIReader(),
 	}).SetupWithManager(mgr); err != nil {
 		fmt.Fprintf(os.Stderr, "controller setup failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	if err := (&SandboxConfigProtectionReconciler{
+		Client:    mgr.GetClient(),
+		APIReader: mgr.GetAPIReader(),
+	}).SetupWithManager(mgr); err != nil {
+		fmt.Fprintf(os.Stderr, "sandboxconfig protection controller setup failed: %v\n", err)
 		os.Exit(1)
 	}
 

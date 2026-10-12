@@ -426,6 +426,24 @@ A `SandboxConfig` annotated `sandboxconfig.ate.dev/is-class-default: "true"` is 
 
 While no default is available, the class reports `Resolved=False` with reason `DefaultConfigNotFound`, or `SandboxConfigDeleting` if the only defaults are being deleted. A pool that already uses a config keeps it meanwhile, even if that config is being deleted or has lost the annotation.
 
+### Deletion protection
+
+atecontroller keeps a `SandboxConfig` from being deleted while a `WorkerPool` uses it.
+
+- When a `WorkerPool` resolves a `SandboxConfig`, atecontroller puts the finalizer `sandboxconfig.ate.dev/workerpool-protection` on the config before it records the config in the pool's `status.sandboxClasses`.
+- A pool that switches to another config first records the new config in `pendingConfigRef` and keeps its current config in `configRef`. It then reads the new config from the API server, and moves `configRef` only if the config is not being deleted. Otherwise it keeps its current config.
+- The finalizer stays until the config is deleted. Deleting the config marks it for deletion. atecontroller removes the finalizer once no `WorkerPool`'s `status.sandboxClasses` names the config. It confirms that against the API server, not only its cache.
+- A config that pools stopped using is gone within a reconcile. A config that pools still use stays `Terminating` until they move or are deleted. A config no pool has ever used carries no finalizer and is deleted at once.
+- A config that is being deleted takes no new pools. A `configRef` to it reports `SandboxConfigDeleting`, and it stops being a class default. A pool already on it keeps it and reports `Resolved=False`. A pinned pool does so until its `configRef` changes, an unpinned pool until another default exists. So a `Terminating` config only loses users.
+- `WorkerPool`s carry no finalizer and delete without waiting.
+
+A delete cannot be undone, and an object that is being deleted cannot be recreated under the same name. Applying its manifest again only updates the terminating object. To recover from deleting a class default that pools still use:
+
+1. Create a replacement under a different name with the `is-class-default` annotation. Pools move to it on their own, the finalizer is released, and the old config disappears.
+2. Once the old config is gone, the next `ate-setup` upgrade recreates the shipped config under its original name. Pools move back to it, because it is then the newest default.
+
+atecontroller alone adds and releases the finalizer. While it is down, `kubectl delete sandboxconfig` of a config that carries the finalizer hangs until atecontroller is back. `ate-setup` strips the finalizer from every config when it deletes the control plane.
+
 ### Example
 
 ```yaml

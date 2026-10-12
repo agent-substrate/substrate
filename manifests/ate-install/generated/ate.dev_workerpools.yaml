@@ -597,6 +597,21 @@ spec:
                       - gvisor
                       - microvm
                       type: string
+                    pendingConfigRef:
+                      description: |-
+                        PendingConfigRef names the SandboxConfig the class is switching to
+                        while the controller confirms it against the API server. It protects
+                        the config from deletion like configRef does. The same reconcile
+                        clears it, and configRef either moves to it or stays where it was.
+                      properties:
+                        name:
+                          description: Name is the SandboxConfig's metadata.name.
+                          maxLength: 253
+                          minLength: 1
+                          type: string
+                      required:
+                      - name
+                      type: object
                   required:
                   - name
                   type: object
