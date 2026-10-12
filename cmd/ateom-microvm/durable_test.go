@@ -17,11 +17,16 @@
 package main
 
 import (
+	"archive/tar"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
 	"testing"
 
+	"google.golang.org/grpc/codes"
+
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/tarutil"
 )
@@ -167,6 +172,50 @@ func TestUntarDurableVolumesMissingTarIsEmpty(t *testing.T) {
 	entries, err := os.ReadDir(filepath.Join(dst, "new"))
 	if err != nil || len(entries) != 0 {
 		t.Errorf("new: ReadDir = %v, %v; want an empty directory", entries, err)
+	}
+}
+
+// writeLegacyDurableTar writes the snapshot file of the layout before one tar
+// per volume: a single durable-dir.tar whose entries are <volume>/... .
+func writeLegacyDurableTar(t *testing.T, snapshotDir string, files map[string]string) {
+	t.Helper()
+	f, err := os.Create(filepath.Join(snapshotDir, legacyDurableTarFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	tw := tar.NewWriter(f)
+	for name, body := range files {
+		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o600, Size: int64(len(body)), Typeflag: tar.TypeReg}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write([]byte(body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A snapshot in the layout before one tar per volume holds the actor's data in
+// durable-dir.tar, which a restore never extracts: it is refused instead of
+// restoring the volumes empty.
+func TestUntarDurableVolumesRefusesLegacyLayout(t *testing.T) {
+	dst, snap := t.TempDir(), t.TempDir()
+	mkVolumeDirs(t, dst, "data")
+	writeLegacyDurableTar(t, snap, map[string]string{"data/app.db": "state"})
+
+	err := untarDurableVolumes(dst, snap, []string{"data"})
+	if !errors.Is(err, errLegacySnapshotLayout) {
+		t.Fatalf("untarDurableVolumes = %v; want %v", err, errLegacySnapshotLayout)
+	}
+	if got := apierror.Code(err); got != codes.FailedPrecondition {
+		t.Errorf("code = %v; want %v", got, codes.FailedPrecondition)
+	}
+	entries, rerr := os.ReadDir(filepath.Join(dst, "data"))
+	if rerr != nil || len(entries) != 0 {
+		t.Errorf("data: ReadDir = %v, %v; want it untouched", entries, rerr)
 	}
 }
 
