@@ -2083,8 +2083,16 @@ type ActorStatus struct {
 	// +k8s:minimum=0
 	// +k8s:update=NoUnset
 	LastAssignedGeneration int32 `protobuf:"varint,12,opt,name=last_assigned_generation,json=lastAssignedGeneration,proto3" json:"last_assigned_generation,omitempty"`
-	unknownFields          protoimpl.UnknownFields
-	sizeCache              protoimpl.SizeCache
+	// cached_snapshot_node is the Kubernetes node the Actor was last suspended
+	// from. That node keeps the files of the snapshot it uploaded, so resuming
+	// there skips downloading them. A scheduling preference only: the node may
+	// have evicted the files, or have no room for the Actor.
+	//
+	// +k8s:optional
+	// +k8s:format=k8s-long-name
+	CachedSnapshotNode string `protobuf:"bytes,13,opt,name=cached_snapshot_node,json=cachedSnapshotNode,proto3" json:"cached_snapshot_node,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *ActorStatus) Reset() {
@@ -2164,6 +2172,13 @@ func (x *ActorStatus) GetLastAssignedGeneration() int32 {
 		return x.LastAssignedGeneration
 	}
 	return 0
+}
+
+func (x *ActorStatus) GetCachedSnapshotNode() string {
+	if x != nil {
+		return x.CachedSnapshotNode
+	}
+	return ""
 }
 
 // ActorCrash describes the failure that moved an Actor to CRASHED.
@@ -8583,7 +8598,7 @@ const file_ateapi_proto_rawDesc = "" +
 	"\tactor_jwt\x18\x04 \x01(\v2\x16.ateapi.ActorJWTSourceR\bactorJwt\"]\n" +
 	"\x0eActorJWTSource\x12\x1c\n" +
 	"\taudiences\x18\x01 \x03(\tR\taudiences\x12-\n" +
-	"\x12expiration_seconds\x18\x02 \x01(\x03R\x11expirationSeconds\"\xfa\x02\n" +
+	"\x12expiration_seconds\x18\x02 \x01(\x03R\x11expirationSeconds\"\xac\x03\n" +
 	"\vActorStatus\x12(\n" +
 	"\x05state\x18\x01 \x01(\x0e2\x12.ateapi.ActorStateR\x05state\x12E\n" +
 	"\x11worker_assignment\x18\x02 \x01(\v2\x18.ateapi.WorkerAssignmentR\x10workerAssignment\x12A\n" +
@@ -8592,7 +8607,8 @@ const file_ateapi_proto_rawDesc = "" +
 	"\rassigned_node\x18\n" +
 	" \x01(\tR\fassignedNode\x12.\n" +
 	"\tsnapshots\x18\v \x03(\v2\x10.ateapi.SnapshotR\tsnapshots\x128\n" +
-	"\x18last_assigned_generation\x18\f \x01(\x05R\x16lastAssignedGeneration\"a\n" +
+	"\x18last_assigned_generation\x18\f \x01(\x05R\x16lastAssignedGeneration\x120\n" +
+	"\x14cached_snapshot_node\x18\r \x01(\tR\x12cachedSnapshotNode\"a\n" +
 	"\n" +
 	"ActorCrash\x12\x18\n" +
 	"\amessage\x18\x01 \x01(\tR\amessage\x129\n" +

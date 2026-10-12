@@ -537,6 +537,9 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_RESUMING
 		toUpdate.Status.WorkerAssignment = newAssignment
 		toUpdate.Status.AssignedNode = newAssignment.GetNodeName()
+		// A resume consumes the cached files wherever it lands; the next suspend
+		// records the node again.
+		toUpdate.Status.CachedSnapshotNode = ""
 		return nil
 	})
 	if err != nil {
@@ -608,15 +611,19 @@ func schedulingConstraints(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate) 
 	if err != nil {
 		return scheduling.Constraints{}, fmt.Errorf("invalid template resource limits: %w", err)
 	}
-	var requiredNodes []string
+	var requiredNodes, preferredNodes []string
 	if node := actor.GetStatus().GetAssignedNode(); node != "" {
 		requiredNodes = []string{node}
 	}
+	if node := actor.GetStatus().GetCachedSnapshotNode(); node != "" {
+		preferredNodes = []string{node}
+	}
 	c := scheduling.Constraints{
-		SandboxClass:  sandboxClassString(tmpl.GetSandboxConfig().GetSandboxClass()),
-		ActorSelector: labels.SelectorFromSet(labels.Set(actor.GetWorkerSelector().GetMatchLabels())),
-		RequiredNodes: requiredNodes,
-		Limits:        limits.Proto(),
+		SandboxClass:   sandboxClassString(tmpl.GetSandboxConfig().GetSandboxClass()),
+		ActorSelector:  labels.SelectorFromSet(labels.Set(actor.GetWorkerSelector().GetMatchLabels())),
+		RequiredNodes:  requiredNodes,
+		PreferredNodes: preferredNodes,
+		Limits:         limits.Proto(),
 	}
 	if sel := tmpl.GetWorkerSelector(); sel != nil {
 		c.TemplateSelector = labels.SelectorFromSet(labels.Set(sel.GetMatchLabels()))
