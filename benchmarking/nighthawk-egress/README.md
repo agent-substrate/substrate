@@ -11,20 +11,21 @@ flowchart LR
     router["atenet-router<br/>(:80)"]
 
     subgraph worker["WorkerPod (ateom-gvisor)"]
-        atunnel["atunnel"]
+        atunnel-ingress["ingress atunnel"]
         actor["Actor: nighthawk/tester<br/>(nighthawk_service :80)"]
+        atunnel-egress["egress atunnel"]
     end
 
     egress["atenet-egress<br/>(HTTP / HTTPS MITM / TLS passthrough)"]
     server["nighthawk-server<br/>(:80, :443, :8443)"]
 
-    client -->|"gRPC (port-forward :19980)"| invoker
+    client -->|"start test"| invoker
     invoker -->|"HTTP/2 + ate-target-actor: nighthawk/tester"| router
-    router -->|"mTLS :443"| atunnel
-    atunnel --> actor
-    actor -->|"egress traffic"| atunnel
-    atunnel -->|"mTLS"| egress
-    egress --> server
+    router --> atunnel-ingress
+    atunnel-ingress --> actor
+    actor ==>|"test traffic"| atunnel-egress
+    atunnel-egress ==>|"mTLS"| egress
+    egress ==> server
 ```
 
 To measure pre-CPU performance characteristics of Envoy dataplane set ATE_ENVOY_CONCURRENCY=1 environment
