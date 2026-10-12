@@ -465,11 +465,9 @@ func durableSnapshotURI(status *ateapipb.ActorStatus) string {
 }
 
 func snapshotURI(snap *ateapipb.Snapshot) string {
-	for _, st := range snap.GetStorage() {
-		if st.GetDurability() == ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE &&
-			st.GetStatus() == ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED {
-			return st.GetObject().GetSnapshotUri()
-		}
+	st := snap.GetDurableSnapshot()
+	if st.GetStatus() == ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED {
+		return st.GetObject().GetSnapshotUri()
 	}
 	return ""
 }
