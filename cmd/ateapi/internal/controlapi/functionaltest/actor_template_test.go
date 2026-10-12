@@ -181,8 +181,8 @@ func TestGoldenTagLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !parsed.OwnedBy(resources.TagSnapshotOwner(resources.GoldenActorAtespace, parsed.Name())) {
-		t.Fatal("golden snapshot is not tag-owned")
+	if !parsed.OwnedBy(resources.TagSnapshotOwner(resources.GoldenActorAtespace, golden.GetMetadata().GetUid())) {
+		t.Fatalf("golden snapshot %q is not under the golden tag's own prefix", uri)
 	}
 	assertSnapshotPresent(t, tc, uri)
 	_, err = tc.client.GetActor(ctx, &ateapipb.GetActorRequest{Actor: goldenRef})

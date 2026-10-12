@@ -575,8 +575,8 @@ message UploadPausedCheckpointRequest {
   string actor_template_atespace = 4;
   string actor_template_name = 5;
 
-  // The local checkpoint to upload: LocalSnapshot.snapshot_name recorded
-  // at pause time.
+  // The local checkpoint to upload: the uuid of the actor's pause snapshot
+  // (ateapi Snapshot.uuid).
   string local_snapshot_name = 6;
 
   // Destination object-storage URI (the actor's in-progress snapshot URI).

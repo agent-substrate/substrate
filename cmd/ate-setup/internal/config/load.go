@@ -188,6 +188,12 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		return nil, &InvalidError{Value: v, Want: "a positive integer"}
 	}
 
+	envoyConcurrency := r.Int("e2e.envoyConcurrency")
+	if r.Supplied("e2e.envoyConcurrency") && envoyConcurrency < 1 {
+		v, _ := r.Value("e2e.envoyConcurrency")
+		return nil, &InvalidError{Value: v, Want: "a positive integer"}
+	}
+
 	kubeconfig, kubeconfigEnv := splitKubeconfig(r)
 
 	// One configured connection serves both pools; both empty selects the
@@ -250,6 +256,7 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		RolloutTimeout:                 rolloutTimeout,
 		rolloutTimeoutSet:              r.Supplied("rolloutTimeout"),
 		PodcertWorkersPerSigner:        podcertWorkers,
+		EnvoyConcurrency:               envoyConcurrency,
 		ClusterSize:                    r.String("clusterSize"),
 		CordonControlPlane:             r.Bool("cordonControlPlane"),
 		AdditionalEgressExtprocService: r.String("atenet.egress.additionalExtprocService"),

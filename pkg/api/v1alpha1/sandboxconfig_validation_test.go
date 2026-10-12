@@ -399,7 +399,16 @@ func TestShippedSandboxConfigManifests(t *testing.T) {
 			if err := k8sClient.Create(ctx, sc); err != nil {
 				t.Fatalf("Create() unexpected error: %v", err)
 			}
-			t.Cleanup(func() { _ = k8sClient.Delete(ctx, sc) })
+			// No controller runs here, so the object never gains the
+			// protection finalizer and a plain delete completes. t.Context()
+			// is already canceled when cleanups run, hence a fresh one.
+			t.Cleanup(func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				if err := client.IgnoreNotFound(k8sClient.Delete(ctx, sc)); err != nil {
+					t.Errorf("cleanup: delete SandboxConfig %s: %v", sc.Name, err)
+				}
+			})
 		})
 	}
 }

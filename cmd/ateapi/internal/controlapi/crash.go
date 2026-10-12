@@ -37,6 +37,8 @@ import (
 const (
 	crashMessageWorkerAssignmentMissing  = "actor has no worker assignment in a state that requires one"
 	crashMessageLocalSnapshotNodeUnknown = "node holding the actor's local snapshot is unknown"
+	crashMessageLocalSnapshotMissing     = "actor has no local snapshot"
+	crashMessageDurableSnapshotMissing   = "actor has no durable snapshot"
 	crashMessageWorkerGone               = "assigned worker no longer exists"
 	crashMessageWorkerDraining           = "assigned worker is draining"
 	crashMessageWorkerReassigned         = "assigned worker no longer hosts the actor"
@@ -102,6 +104,18 @@ func handleAteletError(ctx context.Context, st crashActorStore, actorRef resourc
 		return apierror.Unavailable("while calling atelet %s: %w", rpc, err)
 	}
 	return apierror.Internal("while calling atelet %s: %w", rpc, err)
+}
+
+// crashActorAndFail crashes the actor for a workflow step that found its
+// record in a state no retry can recover from, and returns the error the step
+// fails with: FailedPrecondition once the crash is committed, since retrying
+// the operation is pointless, or crashActor's own error if the crash did not
+// commit, so the caller retries and the retry crashes the actor again.
+func crashActorAndFail(ctx context.Context, st crashActorStore, actorRef resources.ActorRef, opName, message string) error {
+	if err := crashActor(ctx, st, actorRef, opName, message); err != nil {
+		return err
+	}
+	return apierror.FailedPrecondition("actor %s is CRASHED: %s", actorRef, message)
 }
 
 // crashActor moves the actor to CRASHED state and frees the worker it was

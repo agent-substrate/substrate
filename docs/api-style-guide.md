@@ -139,8 +139,6 @@ Rules:
 - A subresource may be managed by the system, such as `ActorAssignment`. The system creates and deletes it as part of other operations, and the API exposes only List and, optionally, Get.
 - Subresource's methods follow section #3. Update replaces the whole object with `uid` and `version` preconditions, Delete takes `DeleteOptions`, and List is paginated.
 
-TODO: The existing Get and Delete requests for singleton subresources do not carry `name` yet. They identify the subresource by its parent alone.
-
 ### 2.5 Singletons
 
 A **singleton** is a resource type that allows at most one instance per parent. For example, each `Actor` has at most one `EgressPolicy`, and each `Atespace` has at most one `AccessPolicy`, as does Global.
@@ -328,10 +326,14 @@ allow external controllers and upstream systems / automations to react to resour
 Custom methods are for operations that don't map cleanly to CRUD: lifecycle transitions (Suspend, Resume, Pause), long-running actions, or commands with side effects that standard Update semantics would misrepresent.
 
 ```proto
-rpc SuspendActor(SuspendActorRequest) returns (Actor) {}
+rpc SuspendActor(SuspendActorRequest) returns (SuspendActorResponse) {}
 
 message SuspendActorRequest {
   ObjectRef actor = 1;
+}
+
+message SuspendActorResponse {
+  Actor actor = 1;
 }
 ```
 
@@ -339,7 +341,7 @@ Rules:
 - RPC name **must** be a verb phrase: `{Verb}{Resource}` (e.g., `SuspendActor`, `ResumeActor`).
 - Request message name **must** match the RPC name with a `Request` suffix.
 - The request **must** identify the target resource using an `ObjectRef` field (for both atespace-scoped and global-scoped resources).
-- Custom methods should return a response message matching the RPC name, with a Response suffix. When operating on a specific resource, a custom method may return the resource itself.
+- Response message name **must** match the RPC name with a `Response` suffix. A custom method **must not** return the resource directly; put it in a field of the response, so method-specific output can be added later (e.g., `ResumeActorResponse.resumed`).
 
 ---
 

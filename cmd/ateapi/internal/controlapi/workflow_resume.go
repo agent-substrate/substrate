@@ -145,11 +145,10 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 // whose record drifted — surface a clear error instead of shipping a restore
 // request atelet would reject (or that would boot an empty guest).
 func validateGoldenSnapshotFidelity(snapshot *ateapipb.Snapshot) error {
-	st := findSnapshotStorage(snapshot, ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE)
-	if fidelity := st.GetFidelity(); fidelity != ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
+	if fidelity := snapshot.GetFidelity(); fidelity != ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY {
 		return apierror.FailedPrecondition(
 			"ActorTemplate golden snapshot %q was taken with fidelity %s, not MEMORY; regenerate the golden snapshot",
-			st.GetObject().GetSnapshotUri(), fidelity)
+			snapshot.GetDurableSnapshot().GetObject().GetSnapshotUri(), fidelity)
 	}
 	return nil
 }
@@ -181,11 +180,12 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 		return nil, nil, src, err
 	}
 	src.RequiredRuntime = requiredSnapshotRuntime(actor, actorTemplate)
-	if snap, st := findLatestSnapshotStorage(actor.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED); st != nil {
+	if snap := findLatestDurableSnapshot(actor.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED); snap != nil {
+		st := snap.GetDurableSnapshot()
 		if src.SnapshotURI, err = resources.ParseSnapshotURI(st.GetObject().GetSnapshotUri()); err != nil {
 			return nil, nil, src, apierror.DataLoss("Actor %s external snapshot: %v", actorRef, err)
 		}
-		src.Fidelity = st.GetFidelity()
+		src.Fidelity = snap.GetFidelity()
 		capturedUnder := snap.GetActorTemplateUid()
 		src.TemplateReplaced = capturedUnder != "" && capturedUnder != actorTemplate.GetMetadata().GetUid()
 		src.Owner = snap.GetOwner()
@@ -655,14 +655,14 @@ func schedulingConstraints(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate) 
 // that ResumeActor will restore guest state from, or nil when the resume does
 // not restore guest state (cold boot, VOLUMES fidelity, or replaced template).
 func requiredSnapshotRuntime(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate) *ateapipb.SandboxRuntime {
-	if localSnap, localSt := findLatestSnapshotStorage(actor.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_LOCAL, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED); localSt != nil {
-		if localSt.GetFidelity() == ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES {
+	if localSnap := findLatestLocalSnapshot(actor.GetStatus()); localSnap != nil {
+		if localSnap.GetFidelity() == ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES {
 			return nil
 		}
 		return localSnap.GetSandboxRuntime()
 	}
-	if snap, st := findLatestSnapshotStorage(actor.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED); st != nil {
-		if st.GetFidelity() == ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES {
+	if snap := findLatestDurableSnapshot(actor.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED); snap != nil {
+		if snap.GetFidelity() == ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES {
 			return nil
 		}
 		capturedUnder := snap.GetActorTemplateUid()
@@ -676,14 +676,15 @@ func requiredSnapshotRuntime(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate
 
 // canRelaxRuntime reports whether a resume may drop its RequiredRuntime
 // constraint and fall back to cold-booting or volume-only restore when no
-// runtime-compatible worker has capacity. Local pause checkpoints are not
-// relaxed because nothing releases the node-local checkpoint and claim yet.
+// runtime-compatible worker has capacity. A local pause checkpoint is not
+// relaxed: the resume stays pinned to its node, the local restore has no
+// fidelity downgrade, and nothing invalidates the checkpoint files if the actor
+// boots elsewhere. Suspending the actor uploads it and lifts the pin.
 func canRelaxRuntime(actor *ateapipb.Actor, constraints scheduling.Constraints) bool {
 	if constraints.RequiredRuntime == nil {
 		return false
 	}
-	_, localSt := findLatestSnapshotStorage(actor.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_LOCAL, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
-	return localSt == nil
+	return findLatestLocalSnapshot(actor.GetStatus()) == nil
 }
 
 // appliesWithFallback reports whether worker satisfies constraints, or — when
@@ -772,7 +773,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 	// what decides how this restore runs.
 	runtimeIncompatible := src.RequiredRuntime != nil && !hardware.Matches(assignment.GetSandboxRuntime(), src.RequiredRuntime)
 	borrowedGolden := src.Owner == ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG && actor.GetSourceTag() == nil
-	if _, localSt := findLatestSnapshotStorage(actor.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_LOCAL, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED); localSt != nil {
+	if localSnap := findLatestLocalSnapshot(actor.GetStatus()); localSnap != nil {
 		slog.InfoContext(ctx, "Actor has snapshot; Restoring from snapshot")
 		tele.SnapshotKind = ateattr.SnapshotKindLocal
 
@@ -791,9 +792,9 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		}
 		req.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
 		req.Config = &ateletpb.RestoreRequest_LocalConfig{
-			LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: localSt.GetLocal().GetSnapshotName()},
+			LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: localSnap.GetUuid()},
 		}
-		req.Fidelity = fidelityToAtelet(localSt.GetFidelity())
+		req.Fidelity = fidelityToAtelet(localSnap.GetFidelity())
 		tele.WireFidelity = ateattr.SnapshotFidelityValue(req.Fidelity)
 
 		if _, err = client.Restore(ctx, req); err != nil {

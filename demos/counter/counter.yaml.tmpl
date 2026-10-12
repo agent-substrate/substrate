@@ -38,10 +38,11 @@ spec:
   # deploy blocks on a rollout that never completes.
   replicas: 3
   workerImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
+  # No configRef: the pool follows the class default, the newest SandboxConfig
+  # of the class annotated sandboxconfig.ate.dev/is-class-default=true
+  # (gvisor-default as installed), and moves to a new default when one appears.
   sandboxClasses:
   - name: gvisor
-    configRef:
-      name: gvisor-default
   template:
     nodeSelector:
       ate.dev/substrate-version: "${SUBSTRATE_VERSION}"
