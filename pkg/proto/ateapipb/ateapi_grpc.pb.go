@@ -75,6 +75,7 @@ const (
 	Control_CreateAtespaceAccessPolicy_FullMethodName = "/ateapi.Control/CreateAtespaceAccessPolicy"
 	Control_UpdateAtespaceAccessPolicy_FullMethodName = "/ateapi.Control/UpdateAtespaceAccessPolicy"
 	Control_DeleteAtespaceAccessPolicy_FullMethodName = "/ateapi.Control/DeleteAtespaceAccessPolicy"
+	Control_GetServerInfo_FullMethodName              = "/ateapi.Control/GetServerInfo"
 )
 
 // ControlClient is the client API for Control service.
@@ -189,6 +190,10 @@ type ControlClient interface {
 	UpdateAtespaceAccessPolicy(ctx context.Context, in *UpdateAtespaceAccessPolicyRequest, opts ...grpc.CallOption) (*AccessPolicy, error)
 	// Delete the access policy resource nested under an Atespace.
 	DeleteAtespaceAccessPolicy(ctx context.Context, in *DeleteAtespaceAccessPolicyRequest, opts ...grpc.CallOption) (*AccessPolicy, error)
+	// Report the build of the ateapi instance that serves the request. ateapi
+	// runs several replicas, which differ in version during an upgrade, so the
+	// answer describes only the instance named in the response.
+	GetServerInfo(ctx context.Context, in *GetServerInfoRequest, opts ...grpc.CallOption) (*ServerInfo, error)
 }
 
 type controlClient struct {
@@ -619,6 +624,16 @@ func (c *controlClient) DeleteAtespaceAccessPolicy(ctx context.Context, in *Dele
 	return out, nil
 }
 
+func (c *controlClient) GetServerInfo(ctx context.Context, in *GetServerInfoRequest, opts ...grpc.CallOption) (*ServerInfo, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ServerInfo)
+	err := c.cc.Invoke(ctx, Control_GetServerInfo_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ControlServer is the server API for Control service.
 // All implementations must embed UnimplementedControlServer
 // for forward compatibility.
@@ -731,6 +746,10 @@ type ControlServer interface {
 	UpdateAtespaceAccessPolicy(context.Context, *UpdateAtespaceAccessPolicyRequest) (*AccessPolicy, error)
 	// Delete the access policy resource nested under an Atespace.
 	DeleteAtespaceAccessPolicy(context.Context, *DeleteAtespaceAccessPolicyRequest) (*AccessPolicy, error)
+	// Report the build of the ateapi instance that serves the request. ateapi
+	// runs several replicas, which differ in version during an upgrade, so the
+	// answer describes only the instance named in the response.
+	GetServerInfo(context.Context, *GetServerInfoRequest) (*ServerInfo, error)
 	mustEmbedUnimplementedControlServer()
 }
 
@@ -866,6 +885,9 @@ func (UnimplementedControlServer) UpdateAtespaceAccessPolicy(context.Context, *U
 }
 func (UnimplementedControlServer) DeleteAtespaceAccessPolicy(context.Context, *DeleteAtespaceAccessPolicyRequest) (*AccessPolicy, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteAtespaceAccessPolicy not implemented")
+}
+func (UnimplementedControlServer) GetServerInfo(context.Context, *GetServerInfoRequest) (*ServerInfo, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetServerInfo not implemented")
 }
 func (UnimplementedControlServer) mustEmbedUnimplementedControlServer() {}
 func (UnimplementedControlServer) testEmbeddedByValue()                 {}
@@ -1644,6 +1666,24 @@ func _Control_DeleteAtespaceAccessPolicy_Handler(srv interface{}, ctx context.Co
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Control_GetServerInfo_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetServerInfoRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).GetServerInfo(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_GetServerInfo_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).GetServerInfo(ctx, req.(*GetServerInfoRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Control_ServiceDesc is the grpc.ServiceDesc for Control service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1818,6 +1858,10 @@ var Control_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteAtespaceAccessPolicy",
 			Handler:    _Control_DeleteAtespaceAccessPolicy_Handler,
+		},
+		{
+			MethodName: "GetServerInfo",
+			Handler:    _Control_GetServerInfo_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

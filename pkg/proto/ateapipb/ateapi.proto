@@ -169,6 +169,34 @@ service Control {
 
   // Delete the access policy resource nested under an Atespace.
   rpc DeleteAtespaceAccessPolicy(DeleteAtespaceAccessPolicyRequest) returns (AccessPolicy) {}
+
+  // Report the build of the ateapi instance that serves the request. ateapi
+  // runs several replicas, which differ in version during an upgrade, so the
+  // answer describes only the instance named in the response.
+  rpc GetServerInfo(GetServerInfoRequest) returns (ServerInfo) {}
+}
+
+// GetServerInfoRequest is empty: the instance that receives it answers.
+message GetServerInfoRequest {}
+
+// ServerInfo identifies the build of one ateapi instance. It is read-only and
+// has no ResourceMetadata: it describes the serving process, not stored state.
+message ServerInfo {
+  // instance names the ateapi instance that served the request; in Kubernetes,
+  // its pod name.
+  string instance = 1;
+
+  // version is the build version stamped into the binary.
+  string version = 2;
+
+  // commit is the VCS revision the binary was built from.
+  string commit = 3;
+
+  // build_date is the time of the commit the binary was built from.
+  string build_date = 4;
+
+  // platform is the binary's GOOS/GOARCH, e.g. "linux/amd64".
+  string platform = 5;
 }
 
 // ObjectSnapshot addresses a snapshot held in object storage.

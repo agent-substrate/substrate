@@ -415,6 +415,11 @@
     "message": "field has no doc comment"
   },
   {
+    "rule": "get-request-single-objectref",
+    "subject": "ateapi.Control.GetServerInfo",
+    "message": "request has 0 field(s), want exactly 1 (an ObjectRef)"
+  },
+  {
     "rule": "list-method-shape",
     "subject": "ateapi.Control.ListWorkerActorAssignments",
     "message": "field \"worker\" is not part of the standard List request shape - only atespace, page_size, and page_token are allowed (sorting/filtering per AIP-132 is not supported)"
@@ -423,5 +428,10 @@
     "rule": "list-method-shape",
     "subject": "ateapi.Control.ListWorkerActorAssignments",
     "message": "repeated field is named \"actor_assignments\", want \"worker_actor_assignments\" (the plural resource name, matching the method name)"
+  },
+  {
+    "rule": "resource-metadata",
+    "subject": "ateapi.ServerInfo",
+    "message": "has no \"metadata\" field"
   }
 ]
