@@ -128,3 +128,87 @@ func TestMatchesCompat(t *testing.T) {
 		})
 	}
 }
+
+func TestMatchingRuntimeAndWorkerMatches(t *testing.T) {
+	rt := func(class, arch, hash string) *ateapipb.SandboxRuntime {
+		attrs := []*ateapipb.AttributeEntry{{Key: AttrArchitecture, Value: arch}}
+		if hash != "" {
+			attrs = append(attrs, &ateapipb.AttributeEntry{Key: "gvisor_asset_hash", Value: hash})
+		}
+		return &ateapipb.SandboxRuntime{
+			SandboxClass: class,
+			Version: &ateapipb.VersionedSandboxCompat{
+				SchemaVersion: SchemaVersionV1,
+				Attributes:    attrs,
+			},
+		}
+	}
+
+	defRT := rt("gvisor", "amd64", "v2-hash")
+	restorable1 := rt("gvisor", "amd64", "v1-hash")
+	restorable2 := rt("gvisor", "amd64", "v0-hash")
+	unmatchedRT := rt("gvisor", "arm64", "v2-hash")
+
+	status := &ateapipb.WorkerStatus{
+		DefaultRuntime:     defRT,
+		RestorableRuntimes: []*ateapipb.SandboxRuntime{restorable1, restorable2},
+	}
+
+	t.Run("nil snap matches any worker status and returns DefaultRuntime", func(t *testing.T) {
+		if !WorkerMatches(nil, nil) {
+			t.Errorf("WorkerMatches(nil, nil) = false, want true")
+		}
+		if !WorkerMatches(&ateapipb.WorkerStatus{}, nil) {
+			t.Errorf("WorkerMatches(empty, nil) = false, want true")
+		}
+		if got := MatchingRuntime(status, nil); got != defRT {
+			t.Errorf("MatchingRuntime(status, nil) = %v, want DefaultRuntime", got)
+		}
+	})
+
+	t.Run("matches DefaultRuntime", func(t *testing.T) {
+		if !WorkerMatches(status, defRT) {
+			t.Errorf("WorkerMatches(status, defRT) = false, want true")
+		}
+		if got := MatchingRuntime(status, defRT); got != defRT {
+			t.Errorf("MatchingRuntime(status, defRT) = %v, want defRT", got)
+		}
+	})
+
+	t.Run("matches RestorableRuntimes entry", func(t *testing.T) {
+		if !WorkerMatches(status, restorable2) {
+			t.Errorf("WorkerMatches(status, restorable2) = false, want true")
+		}
+		if got := MatchingRuntime(status, restorable2); got != restorable2 {
+			t.Errorf("MatchingRuntime(status, restorable2) = %v, want restorable2", got)
+		}
+	})
+
+	t.Run("returns nil and false when neither DefaultRuntime nor RestorableRuntimes match", func(t *testing.T) {
+		if WorkerMatches(status, unmatchedRT) {
+			t.Errorf("WorkerMatches(status, unmatchedRT) = true, want false")
+		}
+		if got := MatchingRuntime(status, unmatchedRT); got != nil {
+			t.Errorf("MatchingRuntime(status, unmatchedRT) = %v, want nil", got)
+		}
+		if WorkerMatches(nil, defRT) {
+			t.Errorf("WorkerMatches(nil, defRT) = true, want false")
+		}
+	})
+
+	t.Run("RuntimeFor is the match, else the default a cold boot runs on", func(t *testing.T) {
+		if got := RuntimeFor(status, restorable2); got != restorable2 {
+			t.Errorf("RuntimeFor(status, restorable2) = %v, want restorable2", got)
+		}
+		if got := RuntimeFor(status, unmatchedRT); got != defRT {
+			t.Errorf("RuntimeFor(status, unmatchedRT) = %v, want DefaultRuntime", got)
+		}
+		if got := RuntimeFor(status, nil); got != defRT {
+			t.Errorf("RuntimeFor(status, nil) = %v, want DefaultRuntime", got)
+		}
+		// A worker that reported no runtimes runs the actor under none.
+		if got := RuntimeFor(&ateapipb.WorkerStatus{}, unmatchedRT); got != nil {
+			t.Errorf("RuntimeFor(empty, unmatchedRT) = %v, want nil", got)
+		}
+	})
+}

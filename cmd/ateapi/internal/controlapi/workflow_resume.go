@@ -26,6 +26,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
+	"github.com/agent-substrate/substrate/internal/hardware"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/volume"
@@ -48,6 +49,11 @@ type resumeSnapshotSource struct {
 	// TemplateReplaced is true when the external snapshot's recorded template
 	// UID differs from the actor's current template.
 	TemplateReplaced bool
+	// RequiredRuntime is the runtime resolved from the snapshot's guest state
+	// (via requiredSnapshotRuntime), or nil when guest state is not restored.
+	RequiredRuntime *ateapipb.SandboxRuntime
+	// Owner is the ownership kind of the durable snapshot.
+	Owner ateapipb.SnapshotOwner
 }
 
 // restoreTelemetry labels the restore operation for the resume lifecycle
@@ -174,6 +180,7 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 	if err != nil {
 		return nil, nil, src, err
 	}
+	src.RequiredRuntime = requiredSnapshotRuntime(actor, actorTemplate)
 	if snap, st := findLatestSnapshotStorage(actor.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED); st != nil {
 		if src.SnapshotURI, err = resources.ParseSnapshotURI(st.GetObject().GetSnapshotUri()); err != nil {
 			return nil, nil, src, apierror.DataLoss("Actor %s external snapshot: %v", actorRef, err)
@@ -181,6 +188,7 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 		src.Fidelity = st.GetFidelity()
 		capturedUnder := snap.GetActorTemplateUid()
 		src.TemplateReplaced = capturedUnder != "" && capturedUnder != actorTemplate.GetMetadata().GetUid()
+		src.Owner = snap.GetOwner()
 	}
 
 	return actor, actorTemplate, src, nil
@@ -394,7 +402,7 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 	if err != nil {
 		return nil, err
 	}
-	if !w.scheduler.Applies(worker, constraints) {
+	if !w.appliesWithFallback(worker, constraints, canRelaxRuntime(actor, constraints)) {
 		slog.ErrorContext(ctx, "crashing actor because previously assigned worker is not eligible anymore")
 		// If that worker's pool is no longer eligible (e.g. the actor's
 		// worker_selector was updated after the failed attempt), release it back
@@ -419,7 +427,7 @@ func admittedResources(constraints scheduling.Constraints) *ateapipb.Resources {
 
 // workerHoldingStaleClaim recovers a claim written before the Actor update.
 // It releases the claim if the Worker is no longer eligible.
-func (w *ActorWorkflow) workerHoldingStaleClaim(ctx context.Context, actor *ateapipb.Actor, constraints scheduling.Constraints) (*ateapipb.Worker, error) {
+func (w *ActorWorkflow) workerHoldingStaleClaim(ctx context.Context, actor *ateapipb.Actor, constraints scheduling.Constraints, relaxable bool) (*ateapipb.Worker, error) {
 	actorUID := actor.GetMetadata().GetUid()
 	workerName, err := w.store.FindWorkerHostingActor(ctx, actorUID)
 	if err != nil {
@@ -437,7 +445,7 @@ func (w *ActorWorkflow) workerHoldingStaleClaim(ctx context.Context, actor *atea
 	}
 
 	// The Actor's allocation makes HasRoom unsuitable for an existing claim.
-	if w.scheduler.Applies(worker, constraints) {
+	if w.appliesWithFallback(worker, constraints, relaxable) {
 		return worker, nil
 	}
 
@@ -480,13 +488,19 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 	if err != nil {
 		return nil, nil, err
 	}
+	snapRuntime := constraints.RequiredRuntime
+	relaxable := canRelaxRuntime(actor, constraints)
 
-	assignedWorker, err := w.workerHoldingStaleClaim(ctx, actor, constraints)
+	assignedWorker, err := w.workerHoldingStaleClaim(ctx, actor, constraints, relaxable)
 	if err != nil {
 		return nil, nil, err
 	}
 	if assignedWorker == nil {
 		pickedWorker, err := w.scheduler.Schedule(ctx, constraints)
+		if errors.Is(err, scheduling.ErrNoCapacity) && relaxable {
+			constraints.RequiredRuntime = nil
+			pickedWorker, err = w.scheduler.Schedule(ctx, constraints)
+		}
 		if err != nil {
 			if errors.Is(err, scheduling.ErrNoCapacity) {
 				outcome = ateattr.SchedulerOutcomeNoCapacity
@@ -497,6 +511,10 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 
 		assignedWorker = pickedWorker
 		slog.InfoContext(ctx, "Picked worker", slog.Any("worker", pickedWorker.String()))
+	} else if relaxable && !hardware.WorkerMatches(assignedWorker.GetStatus(), snapRuntime) {
+		// The stale claim only passed the relaxed check, so bind under it:
+		// admit asks the same question again under the row lock.
+		constraints.RequiredRuntime = nil
 	}
 
 	assignment := &ateapipb.ActorAssignment{
@@ -513,10 +531,13 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 	// longer eligible. The store re-asks under the Worker's row lock, where the
 	// answer holds until the bind commits, so nothing here needs a fresh read
 	// and two claims for the last place cannot both be admitted.
+	// The bind evaluates the fresh row; record the assignment from the same view.
+	bound := assignedWorker
 	admit := func(fresh *ateapipb.Worker) error {
 		if !w.scheduler.Applies(fresh, constraints) || !w.scheduler.HasRoom(fresh, constraints) {
 			return errWorkerFilledUp
 		}
+		bound = fresh
 		return nil
 	}
 	if err := w.store.BindActorToWorker(ctx, assignedWorker.GetMetadata().GetName(), assignment, admit); err != nil {
@@ -530,7 +551,7 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 		return nil, nil, err
 	}
 
-	newAssignment := workerAssignmentFrom(assignedWorker)
+	newAssignment := workerAssignmentFrom(bound, snapRuntime)
 	// The cached Worker may predate a raised epoch; the bind read it under the
 	// Worker's row lock.
 	newAssignment.WorkerEpoch = assignment.GetWorkerEpoch()
@@ -558,11 +579,11 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 			return nil, nil, apierror.Aborted("actor %s is %s and can no longer be resumed", actorRef, fresh.GetStatus().GetState())
 		}
 	}
-	poolNamespace = assignedWorker.GetWorkerNamespace()
-	pool = assignedWorker.GetWorkerPool()
+	poolNamespace = bound.GetWorkerNamespace()
+	pool = bound.GetWorkerPool()
 	outcome = ateattr.SchedulerOutcomeAssigned
 	logActorStateChanged(ctx, storedActor, ateattr.OperationResume)
-	return storedActor, assignedWorker, nil
+	return storedActor, bound, nil
 }
 
 // errWorkerFilledUp reports that the Worker the scheduler picked would not take
@@ -570,7 +591,7 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 // attempt re-runs scheduling.
 var errWorkerFilledUp = errors.New("picked worker no longer has room")
 
-func workerAssignmentFrom(w *ateapipb.Worker) *ateapipb.WorkerAssignment {
+func workerAssignmentFrom(w *ateapipb.Worker, snapRuntime *ateapipb.SandboxRuntime) *ateapipb.WorkerAssignment {
 	return &ateapipb.WorkerAssignment{
 		Worker:          &ateapipb.ObjectRef{Name: w.GetMetadata().GetName()},
 		WorkerNamespace: w.GetWorkerNamespace(),
@@ -579,10 +600,10 @@ func workerAssignmentFrom(w *ateapipb.Worker) *ateapipb.WorkerAssignment {
 		WorkerPodUid:    w.GetWorkerPodUid(),
 		WorkerPodIps:    slices.Clone(w.GetIps()),
 		NodeName:        w.GetNodeName(),
-		// The runtime the actor is started under. Snapshots taken during
-		// this assignment are stamped with it, so a worker that later
+		// The runtime the actor is started or restored under. Snapshots taken
+		// during this assignment are stamped with it, so a worker that later
 		// changes its default does not relabel state captured on the old one.
-		SandboxRuntime: proto.CloneOf(w.GetStatus().GetDefaultRuntime()),
+		SandboxRuntime: proto.CloneOf(hardware.RuntimeFor(w.GetStatus(), snapRuntime)),
 	}
 }
 
@@ -618,15 +639,62 @@ func schedulingConstraints(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate) 
 		requiredNodes = []string{node}
 	}
 	c := scheduling.Constraints{
-		SandboxClass:  sandboxClassString(tmpl.GetSandboxConfig().GetSandboxClass()),
-		ActorSelector: labels.SelectorFromSet(labels.Set(actor.GetWorkerSelector().GetMatchLabels())),
-		RequiredNodes: requiredNodes,
-		Limits:        limits.Proto(),
+		SandboxClass:    sandboxClassString(tmpl.GetSandboxConfig().GetSandboxClass()),
+		RequiredRuntime: requiredSnapshotRuntime(actor, tmpl),
+		ActorSelector:   labels.SelectorFromSet(labels.Set(actor.GetWorkerSelector().GetMatchLabels())),
+		RequiredNodes:   requiredNodes,
+		Limits:          limits.Proto(),
 	}
 	if sel := tmpl.GetWorkerSelector(); sel != nil {
 		c.TemplateSelector = labels.SelectorFromSet(labels.Set(sel.GetMatchLabels()))
 	}
 	return c, nil
+}
+
+// requiredSnapshotRuntime returns the SandboxRuntime stamped on the snapshot
+// that ResumeActor will restore guest state from, or nil when the resume does
+// not restore guest state (cold boot, VOLUMES fidelity, or replaced template).
+func requiredSnapshotRuntime(actor *ateapipb.Actor, tmpl *ateapipb.ActorTemplate) *ateapipb.SandboxRuntime {
+	if localSnap, localSt := findLatestSnapshotStorage(actor.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_LOCAL, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED); localSt != nil {
+		if localSt.GetFidelity() == ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES {
+			return nil
+		}
+		return localSnap.GetSandboxRuntime()
+	}
+	if snap, st := findLatestSnapshotStorage(actor.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED); st != nil {
+		if st.GetFidelity() == ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES {
+			return nil
+		}
+		capturedUnder := snap.GetActorTemplateUid()
+		if capturedUnder != "" && capturedUnder != tmpl.GetMetadata().GetUid() {
+			return nil
+		}
+		return snap.GetSandboxRuntime()
+	}
+	return nil
+}
+
+// canRelaxRuntime reports whether a resume may drop its RequiredRuntime
+// constraint and fall back to cold-booting or volume-only restore when no
+// runtime-compatible worker has capacity. Local pause checkpoints are not
+// relaxed because nothing releases the node-local checkpoint and claim yet.
+func canRelaxRuntime(actor *ateapipb.Actor, constraints scheduling.Constraints) bool {
+	if constraints.RequiredRuntime == nil {
+		return false
+	}
+	_, localSt := findLatestSnapshotStorage(actor.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_LOCAL, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+	return localSt == nil
+}
+
+// appliesWithFallback reports whether worker satisfies constraints, or — when
+// relaxable — satisfies constraints with RequiredRuntime relaxed.
+func (w *ActorWorkflow) appliesWithFallback(worker *ateapipb.Worker, constraints scheduling.Constraints, relaxable bool) bool {
+	relaxed := constraints
+	relaxed.RequiredRuntime = nil
+	if !w.scheduler.Applies(worker, relaxed) {
+		return false
+	}
+	return relaxable || hardware.WorkerMatches(worker.GetStatus(), constraints.RequiredRuntime)
 }
 
 // ensureVolumesAttached attaches the actor's mounted external volumes to the
@@ -700,6 +768,10 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		return tele, fmt.Errorf("while resolving sandbox assets: %w", err)
 	}
 
+	// The assignment is what the next checkpoint is stamped from, so it is also
+	// what decides how this restore runs.
+	runtimeIncompatible := src.RequiredRuntime != nil && !hardware.Matches(assignment.GetSandboxRuntime(), src.RequiredRuntime)
+	borrowedGolden := src.Owner == ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG && actor.GetSourceTag() == nil
 	if _, localSt := findLatestSnapshotStorage(actor.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_LOCAL, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED); localSt != nil {
 		slog.InfoContext(ctx, "Actor has snapshot; Restoring from snapshot")
 		tele.SnapshotKind = ateattr.SnapshotKindLocal
@@ -728,11 +800,14 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			return tele, handleAteletError(ctx, w.store, actorRef, ateattr.OperationResume, "Restore", false, err)
 		}
 		return tele, nil
-	} else if !src.SnapshotURI.IsZero() {
+	} else if !src.SnapshotURI.IsZero() && !(runtimeIncompatible && borrowedGolden) {
 		slog.InfoContext(ctx, "Actor has durable snapshot; Restoring from snapshot")
 		tele.SnapshotKind = ateattr.SnapshotKindLatest
 		scope := fidelityToAtelet(src.Fidelity)
-		if src.TemplateReplaced {
+		if src.TemplateReplaced || runtimeIncompatible {
+			if runtimeIncompatible {
+				logRuntimeFallback(ctx, actorRef, assignment, src.RequiredRuntime, "volumes")
+			}
 			scope = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
 		}
 		tele.WireFidelity = ateattr.SnapshotFidelityValue(scope)
@@ -761,6 +836,9 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		}
 		return tele, nil
 	} else {
+		if runtimeIncompatible && borrowedGolden {
+			logRuntimeFallback(ctx, actorRef, assignment, src.RequiredRuntime, "cold_boot")
+		}
 		slog.InfoContext(ctx, "Actor has no snapshot; Booting from ActorTemplate spec")
 		tele.SnapshotKind = ateattr.SnapshotKindBoot
 
@@ -782,6 +860,19 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		}
 		return tele, nil
 	}
+}
+
+// logRuntimeFallback records a resume that discards the snapshot's guest
+// state because the assigned worker does not run the runtime it was captured
+// under. fallback names what runs instead: "volumes" for a restore of the
+// durable volumes alone, "cold_boot" for a boot from the template spec.
+func logRuntimeFallback(ctx context.Context, actorRef resources.ActorRef, assignment *ateapipb.WorkerAssignment, required *ateapipb.SandboxRuntime, fallback string) {
+	slog.WarnContext(ctx, "Assigned worker cannot restore the snapshot's runtime; discarding guest state",
+		slog.String("actor", actorRef.String()),
+		slog.String("worker", assignment.GetWorkerPod()),
+		slog.String("fallback", fallback),
+		slog.Any("required_runtime", required),
+		slog.Any("assigned_runtime", assignment.GetSandboxRuntime()))
 }
 
 func (w *ActorWorkflow) egressGateway() *ateletpb.EgressGateway {
