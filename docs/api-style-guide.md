@@ -211,7 +211,7 @@ message ListActorsResponse {
 ```
 
 Rules:
-- RPC name **must** begin with `List` followed by the **plural** resource name.
+- RPC name **must** begin with `List` followed by the **plural** resource name, as its `(resource)` option declares it (see section #11.1).
 - Both the request and response message names **must** match the RPC name with `Request`/`Response` suffixes. (Unlike Get/Create/Update, List responses are not the resource itself.)
 - `page_size` and `page_token` **must** be carried in a `ListOptions` field named `options`. Further non-resource "control" fields belong in `ListOptions`, not as loose top-level fields on the request.
 - `next_page_token` **must** be present on every List response message. It **must** be empty when there are no further pages.
@@ -648,3 +648,70 @@ Rules:
 
 All fields of all APIs must be validated.  We use
 [validation-gen](https://github.com/kubernetes/code-generator/tree/master/cmd/validation-gen) to generate validation code for our APIs.  See [the guidelines for validation](api-validation.md) for more information.
+
+---
+
+## 11. Annotations
+
+Resources and methods carry proto options that say which messages are resources, how they nest, and which resource each RPC operates on.
+
+### 11.1 Resources
+
+Every resource message **must** carry a `(resource)` option:
+
+```proto
+message Actor {
+  option (resource) = {
+    scope : SCOPE_ATESPACE
+    plural : "Actors"
+  };
+
+  // ... fields
+}
+
+message EgressPolicy {
+  option (resource) = {
+    parents : "Actor"
+    singleton : true
+    plural : "EgressPolicies"
+  };
+
+  // ... fields
+}
+
+message AccessPolicy {
+  option (resource) = {
+    parents : [ "Global", "Atespace" ]
+    singleton : true
+    plural : "AccessPolicies"
+  };
+
+  // ... fields
+}
+```
+
+Rules:
+- `parents` lists the resource types the resource is a subresource of (see section #2.4): another resource's message name, or `Global`. A top-level resource has no `parents`.
+- `singleton` is `true` for a singleton (see section #2.5).
+- `scope` **must** be set on a top-level resource: `SCOPE_ATESPACE` or `SCOPE_GLOBAL` (see section #2.1). A subresource **must not** set it, because it has its parent's scope.
+- `plural` **must** be set on every resource, singletons included. It is the plural that List methods and their repeated resource field use (see section #3).
+- A message that is not a resource, such as a request, a status message, or `ObjectRef`, carries no `(resource)` option.
+- When you add, remove, or re-parent a resource, update [the resource model](resource-model.md) too.
+
+### 11.2 Methods
+
+Every RPC of the `Control` service **must** carry a `(method)` option naming the resource it operates on, for standard and custom methods alike:
+
+```proto
+rpc GetActorEgressPolicy(GetActorEgressPolicyRequest) returns (EgressPolicy) {
+  option (method).resource = "EgressPolicy";
+}
+
+rpc SuspendActor(SuspendActorRequest) returns (SuspendActorResponse) {
+  option (method).resource = "Actor";
+}
+```
+
+Rules:
+- `resource` is the resource's message name, and that message **must** carry a `(resource)` option.
+- A subresource's method names the subresource, not its parent: `EgressPolicy` for `GetActorEgressPolicy`.

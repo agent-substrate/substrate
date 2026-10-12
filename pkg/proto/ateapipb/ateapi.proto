@@ -16,6 +16,7 @@ syntax = "proto3";
 
 package ateapi;
 
+import "google/protobuf/descriptor.proto";
 import "google/protobuf/timestamp.proto";
 
 option go_package = "github.com/agent-substrate/substrate/pkg/proto/ateapipb";
@@ -2843,4 +2844,49 @@ message DeleteAtespaceAccessPolicyRequest {
   //
   // +k8s:optional
   DeleteOptions options = 3;
+}
+
+// ResourceAnnotation marks a message as an API resource. See
+// docs/resource-model.md.
+message ResourceAnnotation {
+  // The resource types this resource is a subresource of: another resource's
+  // message name, or "Global" for the whole Substrate installation. Empty for
+  // a top-level resource.
+  repeated string parents = 1;
+
+  // Whether each parent has at most one instance of this resource.
+  bool singleton = 2;
+
+  // Whether a top-level resource belongs to an atespace. Set only on a
+  // top-level resource: a subresource has its parent's scope.
+  Scope scope = 3;
+
+  // The resource's plural name, as List methods and their response fields
+  // use it. For example, "AccessPolicies" for AccessPolicy.
+  string plural = 4;
+}
+
+// Scope is whether a top-level resource belongs to an atespace.
+enum Scope {
+  // The scope is not set.
+  SCOPE_UNSPECIFIED = 0;
+  // The resource belongs to an atespace, identified by (atespace, name).
+  SCOPE_ATESPACE = 1;
+  // The resource belongs to no atespace, identified by its name alone.
+  SCOPE_GLOBAL = 2;
+}
+
+// MethodAnnotation describes an RPC of the API.
+message MethodAnnotation {
+  // The message name of the resource the method operates on. For example,
+  // "Actor" for SuspendActor, or "EgressPolicy" for GetActorEgressPolicy.
+  string resource = 1;
+}
+
+extend google.protobuf.MessageOptions {
+  ResourceAnnotation resource = 50000;
+}
+
+extend google.protobuf.MethodOptions {
+  MethodAnnotation method = 50000;
 }
