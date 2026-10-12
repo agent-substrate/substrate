@@ -193,44 +193,24 @@ ingress dataplane, `atenet-egress` the egress gateway.
 `--atenet-dataplane` selects the dataplane for both Deployments. Each gateway has
 its own static configuration because ingress and egress scale independently.
 
-## ingress client authentication
+## Ingress client authentication and authorization
 
-`--ingress-auth-mode` selects who may send traffic to actors through the
-ingress listeners. In both modes the TLS listeners (`--port-https`,
-`--port-connect-tls`) ask clients for a certificate and reject one that does
-not chain to `--ingress-client-ca-file` or whose URI SAN does not exactly
-match one of `--ingress-allowed-spiffe-ids`. The modes differ in what happens
-to a client that presents none, and in whether the plaintext listeners run:
+The ingress router is migrating to require clients to present a SPIFFE certificate.
+* With `--ingress-auth-mode=static-mtls`, the ingress router no longer offers any
+  plaintext listeners, and all clients *must* present a SPIFFE certificate.
+* With `--ingress-auth-mode=deprecated-insecure`, the ingress router offers both
+  plaintext and secure listeners.  If a client presents a SPIFFE certificate, it
+  must be valid.
 
-| `--ingress-auth-mode` | plaintext (`--port-http`, `--port-connect`) | TLS, no client certificate | TLS, client certificate |
-| --- | --- | --- | --- |
-| `deprecated-insecure` (default) | anyone | let through | must pass the allowlist |
-| `static-mtls` | must be disabled | rejected | must pass the allowlist |
+Configure the CA that is used to validate client certificates with the
+`--ingress-client-ca-file` flag, which points at a PEM file containing root
+certificates.
 
-`deprecated-insecure` lets clients move to mTLS one at a time: a client can
-start presenting its certificate, and learn whether it is accepted, while
-everyone else carries on without one. It authenticates nobody who does not opt
-in, and goes away once every client has.
-
-Envoy enforces client authentication in the TLS handshake (a validation
-context with URI SAN matchers on every downstream TLS context, plus
-`require_client_certificate` in `static-mtls`), so a refused client never
-reaches ext_proc and cannot resume an actor. The CA bundle reaches Envoy over SDS with a watched directory, like the
-serving certificate, so a rotated ClusterTrustBundle is picked up without a
-restart. Envoy reads the file, so it must be mounted at the same path in the
-envoy container.
-
-The router refuses to start with a TLS listener enabled but no client CA or
-allowlist. In `static-mtls` it also refuses to start with a plaintext listener
-enabled (`--port-http` or `--port-connect` above 0), without a TLS listener,
-or with `--atenet-dataplane=agentgateway`, whose configuration is static;
-`deprecated-insecure` leaves agentgateway's statically configured listeners
-alone. The allowlist is the whole authorization policy: any listed client may
-reach any actor. The base manifest (`manifests/ate-install/atenet-router.yaml`)
-sets the client CA and lists the allowed SPIFFE IDs;
-`ate-setup --ingress-auth-mode=static-mtls` layers on
-`manifests/ate-install/components/router-static-mtls`, which switches the mode
-and disables the plaintext listeners.
+Right now the only "authorization" policy is to check the client's SPIFFE ID
+against a static allowlist.  Any ID on the allowlist may use the ingress router
+to contact any actor.  Richer authorization policies may be added post-GA.  Use
+the `--ingress-allowed-spiffe-ids` flag to set the allowlist (comma-separated
+list).
 
 ## status page
 
