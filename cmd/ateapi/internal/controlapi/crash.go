@@ -48,6 +48,51 @@ const (
 // maxCrashMessageBytes matches the maxLength on ActorCrash.message.
 const maxCrashMessageBytes = 4096
 
+// transientCrashCauses are the parts of a crash message that name a cause a
+// rolling worker pool or atelet DaemonSet produces and a later resume
+// outlives: the worker assigned to the actor drained, went away or no longer
+// hosts it; atelet could not be dialed yet, its new pod without an IP or
+// beside the old one on the node; ateom on the worker was not listening yet
+// or restarted; the worker's call was cancelled under it, its wakeup probe
+// with it, while its pod went away (a cancellation of ate-api's own call
+// crashes nothing). The message is matched because atelet's failures reach
+// ate-api as text only.
+var transientCrashCauses = []string{
+	crashMessageWorkerDraining,
+	crashMessageWorkerGone,
+	crashMessageWorkerReassigned,
+	crashMessageWorkerPodGone,
+	crashMessageAteomRestarted,
+	"has no assigned IPs",
+	"atelet pods on node",
+	"ateom.sock: connect:",
+	"transport: Error while dialing",
+	"rpc error: code = Canceled",
+	"wakeup probe cancelled",
+}
+
+// transientCrashCause reports whether msg names one of transientCrashCauses.
+func transientCrashCause(msg string) bool {
+	for _, cause := range transientCrashCauses {
+		if strings.Contains(msg, cause) {
+			return true
+		}
+	}
+	return false
+}
+
+// resumeCrashPrefix starts the message of a crash recorded by a resume.
+var resumeCrashPrefix = ateattr.OperationResume + " failed: "
+
+// transientResumeCrash reports whether the actor is CRASHED by a resume that
+// a rolling worker pool interrupted. The actor never ran since the snapshot
+// it was resuming from, so returning it to that snapshot loses nothing.
+func transientResumeCrash(actor *ateapipb.Actor) bool {
+	msg := actor.GetStatus().GetCrash().GetMessage()
+	return actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_CRASHED &&
+		strings.HasPrefix(msg, resumeCrashPrefix) && transientCrashCause(msg)
+}
+
 // ateletCrashMessage describes a failed atelet call with the error text atelet
 // returned, since its gRPC code is Unknown for most failures.
 // TODO: consider sanizing the error message returned by atelet.

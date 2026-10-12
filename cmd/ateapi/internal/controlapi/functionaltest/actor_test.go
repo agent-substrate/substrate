@@ -4268,11 +4268,12 @@ func TestResumeActor_ReleasesStaleWorkerWhenPoolBecomesIneligible(t *testing.T) 
 	}
 }
 
-// TestResumeActor_ReleasesDrainingWorkerFromPriorAttempt exercises the reuse-loop
-// change in AssignWorkerStep.Execute: a worker still assigned to the actor from a
-// previous (failed) attempt that has since entered DRAINING must not be reused —
-// it is released and the actor is crashed.
-func TestResumeActor_CrashesIfAssignedWorkerIsDraining(t *testing.T) {
+// TestResumeActor_RetriesOffADrainingWorker covers a worker still assigned to
+// the actor from a previous (failed) attempt that has since entered DRAINING:
+// it is not reused. The resume that finds it crashes the actor only for the
+// moment: the actor goes back to its snapshot, the draining worker is
+// released, and the retry resumes the actor on the other worker.
+func TestResumeActor_RetriesOffADrainingWorker(t *testing.T) {
 	ns := namespaceForTest("ns-resume-release-draining")
 	tc := setupTest(t, ns)
 	defer tc.cleanup()
@@ -4365,26 +4366,28 @@ func TestResumeActor_CrashesIfAssignedWorkerIsDraining(t *testing.T) {
 		t.Fatalf("worker %s did not reach DRAINING: %v", assignedPod, err)
 	}
 
-	// The resume must fail and crash the actor because its worker is draining.
-	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: id}})
-	if err == nil {
-		t.Fatalf("expected ResumeActor to fail")
+	// The resume is retried off the draining worker and succeeds.
+	resumeResp, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: id}})
+	if err != nil {
+		t.Fatalf("ResumeActor failed: %v", err)
 	}
-	if status.Code(err) != codes.Aborted || !strings.Contains(err.Error(), "crashed") {
-		t.Errorf("expected Aborted/crashed error, got %v", err)
+	if !resumeResp.GetResumed() {
+		t.Error("ResumeActor resumed = false, want true")
 	}
 
 	getResp, err = tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: id}})
 	if err != nil {
 		t.Fatalf("GetActor failed: %v", err)
 	}
-	if got := getResp.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_CRASHED {
-		t.Errorf("expected actor state CRASHED, got %v", got)
+	if got := getResp.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+		t.Errorf("expected actor state RUNNING, got %v", got)
 	}
-	if got := getResp.GetStatus().GetWorkerAssignment().GetWorkerPod(); got != "" {
-		t.Errorf("expected actor pod name to be empty, got %q", got)
+	if got := getResp.GetStatus().GetWorkerAssignment().GetWorkerPod(); got == assignedPod || got == "" {
+		t.Errorf("expected actor on the other worker, got %q", got)
 	}
-	assertActorCrashStatus(t, tc, id, "resume failed: assigned worker is draining")
+	if crash := getResp.GetStatus().GetCrash(); crash != nil {
+		t.Errorf("expected no crash recorded, got %v", crash)
+	}
 
 	// The draining worker must have been released.
 	listResp, err := tc.client.ListWorkers(context.Background(), &ateapipb.ListWorkersRequest{})
@@ -4531,7 +4534,7 @@ func TestResumeActor_LeaseConflict(t *testing.T) {
 	}
 }
 
-func TestResumeActor_DanglingWorker(t *testing.T) {
+func TestResumeActor_RecoversFromItsWorkerDeleted(t *testing.T) {
 	ns := namespaceForTest("ns-resume-dangling")
 	tc := setupTest(t, ns)
 	defer tc.cleanup()
@@ -4597,28 +4600,33 @@ func TestResumeActor_DanglingWorker(t *testing.T) {
 	// Create Worker Pod B
 	createWorkerPod(t, tc, ns, "worker-b", "node1", "pool1")
 
-	// Call ResumeActor again -> Expect it to fail because it is already CRASHED
-	// by the worker delete.
-	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
-	})
-	if err == nil {
-		t.Fatalf("expected ResumeActor to fail because worker is gone")
-	}
-	if status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "ACTOR_STATE_CRASHED") {
-		t.Errorf("expected FailedPrecondition/ACTOR_STATE_CRASHED error, got %v", err)
-	}
-
-	// Verify actor state is CRASHED and worker assignment is empty
-	actor, err = tc.persistence.GetActor(context.Background(), resources.ActorRef{Atespace: testAtespace, Name: name})
+	// The worker delete crashed the RESUMING actor; ResumeActor returns it to
+	// its snapshot and resumes it on worker-b.
+	actor, err = tc.persistence.GetActor(context.Background(), actorRef)
 	if err != nil {
 		t.Fatalf("failed to get actor from store: %v", err)
 	}
 	if actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_CRASHED {
-		t.Errorf("expected state CRASHED, got %v", actor.GetStatus().GetState())
+		t.Fatalf("expected the worker delete to crash the actor, got %v", actor.GetStatus().GetState())
 	}
-	if actor.GetStatus().GetWorkerAssignment().GetWorkerPod() != "" {
-		t.Errorf("expected worker to be unassigned, got %v", actor.GetStatus().GetWorkerAssignment().GetWorkerPod())
+	if _, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
+	}); err != nil {
+		t.Fatalf("ResumeActor failed: %v", err)
+	}
+
+	actor, err = tc.persistence.GetActor(context.Background(), actorRef)
+	if err != nil {
+		t.Fatalf("failed to get actor from store: %v", err)
+	}
+	if actor.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+		t.Errorf("expected state RUNNING, got %v", actor.GetStatus().GetState())
+	}
+	if got := actor.GetStatus().GetWorkerAssignment().GetWorkerPod(); got != "worker-b" {
+		t.Errorf("expected worker-b assigned, got %q", got)
+	}
+	if crash := actor.GetStatus().GetCrash(); crash != nil {
+		t.Errorf("expected no crash recorded, got %v", crash)
 	}
 }
 

@@ -19,7 +19,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -328,34 +327,10 @@ func (r *ActorTemplateReconciler) reconcileOne(ctx context.Context, ref resource
 	}
 }
 
-// transientGoldenCrashCauses are the parts of a crash message that name a
-// cause a rolling worker pool or atelet DaemonSet produces and a later resume
-// outlives: the worker assigned to the golden actor drained, went away or no
-// longer hosts it; atelet could not be dialed yet, its new pod without an IP
-// or beside the old one on the node; ateom on the worker was not listening yet
-// or restarted.
-var transientGoldenCrashCauses = []string{
-	crashMessageWorkerDraining,
-	crashMessageWorkerGone,
-	crashMessageWorkerReassigned,
-	crashMessageWorkerPodGone,
-	crashMessageAteomRestarted,
-	"has no assigned IPs",
-	"atelet pods on node",
-	"ateom.sock: connect:",
-	"transport: Error while dialing",
-}
-
 // transientGoldenCrash reports whether the golden actor crashed for a cause a
 // rolling worker pool produces, so the take is retried, never failed.
 func transientGoldenCrash(actor *ateapipb.Actor) bool {
-	msg := actor.GetStatus().GetCrash().GetMessage()
-	for _, cause := range transientGoldenCrashCauses {
-		if strings.Contains(msg, cause) {
-			return true
-		}
-	}
-	return false
+	return transientCrashCause(actor.GetStatus().GetCrash().GetMessage())
 }
 
 // releaseTransientlyCrashedGoldenActor deletes a golden actor that crashed for

@@ -1031,6 +1031,7 @@ func TestTransientGoldenCrash(t *testing.T) {
 		{"resume failed: atelet RunWorkload: while calling ateom.RunWorkload: rpc error: code = Unavailable desc = connection error: desc = \"transport: Error while dialing: dial unix /var/lib/ate/ateoms/w-1/ateom.sock: connect: no such file or directory\"", true},
 		{"resume failed: atelet Restore: selected atelet \"ate-system/atelet-x\" has no assigned IPs", true},
 		{"resume failed: atelet Restore: found 2 atelet pods on node \"n-1\", expected 1", true},
+		{wakeupProbeCancelledCrash, true},
 		{"resume failed: atelet Run: while creating workload from spec: MANIFEST_UNKNOWN: manifest unknown", false},
 		{"", false},
 	}
