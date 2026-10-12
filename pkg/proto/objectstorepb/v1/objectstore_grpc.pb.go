@@ -391,7 +391,9 @@ const (
 // AssetProvider is the plugin API an object storage platform implements on
 // every node, next to NodeProvider, to serve sandbox runtime assets (the files
 // a SandboxConfig names, such as a micro-VM kernel and guest image). atelet
-// calls it for every asset it does not download anonymously.
+// calls it for every asset. It reads a gs:// asset anonymously only if the
+// plugin returns NOT_FOUND, INVALID_ARGUMENT, UNIMPLEMENTED or UNAVAILABLE for
+// it; any other failure is final.
 //
 // An asset is pinned by its sha256, so the plugin hands back an object only if
 // the caller already knows its content. The plugin must also refuse to read
@@ -433,7 +435,9 @@ func (c *assetProviderClient) FetchAsset(ctx context.Context, in *FetchAssetRequ
 // AssetProvider is the plugin API an object storage platform implements on
 // every node, next to NodeProvider, to serve sandbox runtime assets (the files
 // a SandboxConfig names, such as a micro-VM kernel and guest image). atelet
-// calls it for every asset it does not download anonymously.
+// calls it for every asset. It reads a gs:// asset anonymously only if the
+// plugin returns NOT_FOUND, INVALID_ARGUMENT, UNIMPLEMENTED or UNAVAILABLE for
+// it; any other failure is final.
 //
 // An asset is pinned by its sha256, so the plugin hands back an object only if
 // the caller already knows its content. The plugin must also refuse to read

@@ -231,8 +231,9 @@ func main() {
 		go newImageCacheGC(imageCache, *imageCacheDir).Run(ctx)
 	}
 
-	// Public sandbox assets (gs://gvisor) are read anonymously; every other
-	// asset goes through the object-store plugin.
+	// Sandbox assets go through the object-store plugin; a gs:// asset it
+	// cannot serve, such as one in the public gs://gvisor bucket, is read
+	// anonymously.
 	wrappedAnonGCS, err := objectstorage.NewGCSClient(ctx, option.WithoutAuthentication())
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to create anonymous GCS client", err)

@@ -1236,8 +1236,9 @@ func (x *EgressGateway) GetAddress() string {
 // (e.g. the gVisor release tarball).
 type AssetFile struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// URL to download the asset from. atelet reads a gs:// URL anonymously
-	// first and fetches every other URL through the node's object-store plugin.
+	// URL to download the asset from. atelet fetches every URL through the
+	// node's object-store plugin, and reads a gs:// URL anonymously only when
+	// the plugin cannot serve it.
 	// Masked in logged requests, since a signed URL carries its credential in
 	// the query.
 	Url string `protobuf:"bytes,1,opt,name=url,proto3" json:"url,omitempty"`

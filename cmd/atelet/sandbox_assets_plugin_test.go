@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -169,10 +170,27 @@ func TestFetchAssetThroughPlugin(t *testing.T) {
 		}
 	})
 
-	t.Run("gs scheme falls back to the plugin", func(t *testing.T) {
+	t.Run("gs scheme served by the plugin is not read anonymously", func(t *testing.T) {
 		f := newAssetHerderFixture(t)
 		sum := f.put(t, "kata-assets/vmlinux", content)
+		f.anon.objects[testAssetBucket+"/kata-assets/vmlinux"] = content
 		path, err := f.herder.fetchAsset(t.Context(), assetEntry{URL: "gs://" + testAssetBucket + "/kata-assets/vmlinux", SHA256: sum})
+		if err != nil {
+			t.Fatalf("fetchAsset: %v", err)
+		}
+		if got, _ := os.ReadFile(path); !bytes.Equal(got, content) {
+			t.Errorf("cached bytes = %q, want %q", got, content)
+		}
+		if f.anon.gets.Load() != 0 || f.plugin.calls.Load() != 1 {
+			t.Errorf("anonymous reads = %d, plugin calls = %d; want 0 and 1", f.anon.gets.Load(), f.plugin.calls.Load())
+		}
+	})
+
+	t.Run("public gs asset the plugin does not have is read anonymously", func(t *testing.T) {
+		f := newAssetHerderFixture(t)
+		f.anon.objects["gvisor/release.tar"] = content
+		sum := fmt.Sprintf("%x", sha256.Sum256(content))
+		path, err := f.herder.fetchAsset(t.Context(), assetEntry{URL: "gs://gvisor/release.tar", SHA256: sum})
 		if err != nil {
 			t.Fatalf("fetchAsset: %v", err)
 		}
@@ -181,18 +199,6 @@ func TestFetchAssetThroughPlugin(t *testing.T) {
 		}
 		if f.anon.gets.Load() != 1 || f.plugin.calls.Load() != 1 {
 			t.Errorf("anonymous reads = %d, plugin calls = %d; want 1 each", f.anon.gets.Load(), f.plugin.calls.Load())
-		}
-	})
-
-	t.Run("public gs asset does not use the plugin", func(t *testing.T) {
-		f := newAssetHerderFixture(t)
-		f.anon.objects["gvisor/release.tar"] = content
-		sum := fmt.Sprintf("%x", sha256.Sum256(content))
-		if _, err := f.herder.fetchAsset(t.Context(), assetEntry{URL: "gs://gvisor/release.tar", SHA256: sum}); err != nil {
-			t.Fatalf("fetchAsset: %v", err)
-		}
-		if n := f.plugin.calls.Load(); n != 0 {
-			t.Errorf("plugin called %d times for an anonymously readable asset", n)
 		}
 	})
 
@@ -247,12 +253,16 @@ func TestFetchAssetThroughPlugin(t *testing.T) {
 	t.Run("snapshot in the same bucket is refused", func(t *testing.T) {
 		f := newAssetHerderFixture(t)
 		sum := f.put(t, "root/atespaces/team-a/actors/uid1/snapshots/snap1/checkpoint.img.zstd", []byte("another actor's memory"))
+		f.anon.objects[testAssetBucket+"/root/atespaces/team-a/actors/uid1/snapshots/snap1/checkpoint.img.zstd"] = []byte("another actor's memory")
 		_, err := f.herder.fetchAsset(t.Context(), assetEntry{URL: "gs://" + testAssetBucket + "/root/atespaces/team-a/actors/uid1/snapshots/snap1/checkpoint.img.zstd", SHA256: sum})
 		if apierror.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "snapshot location") {
 			t.Fatalf("fetchAsset of a snapshot file = %v (code %s), want %s about the snapshot location", err, apierror.Code(err), codes.FailedPrecondition)
 		}
 		if n := f.bucket.gets.Load(); n != 0 {
 			t.Errorf("the plugin read %d objects for a refused request", n)
+		}
+		if n := f.anon.gets.Load(); n != 0 {
+			t.Errorf("a refused snapshot file was tried anonymously %d times", n)
 		}
 		assertNotCached(t)
 	})
@@ -307,21 +317,194 @@ func TestFetchAssetThroughPlugin(t *testing.T) {
 	})
 }
 
-// fakeAssetClient writes data into write_path and returns err, standing in
-// for a third-party plugin.
+// fakeAssetClient writes data, if set, into write_path and returns err,
+// standing in for a third-party plugin.
 type fakeAssetClient struct {
 	data []byte
 	err  error
 }
 
 func (c fakeAssetClient) FetchAsset(_ context.Context, in *objectstorev1.FetchAssetRequest, _ ...grpc.CallOption) (*objectstorev1.FetchAssetResponse, error) {
+	if c.data != nil {
+		if err := os.WriteFile(in.GetWritePath(), c.data, 0o600); err != nil {
+			return nil, err
+		}
+	}
 	if c.err != nil {
 		return nil, c.err
 	}
-	if err := os.WriteFile(in.GetWritePath(), c.data, 0o600); err != nil {
-		return nil, err
-	}
 	return &objectstorev1.FetchAssetResponse{}, nil
+}
+
+// TestFetchAssetAnonymousFallback covers when atelet reads an asset
+// anonymously after the plugin fails: only for gs:// URLs, and only when the
+// plugin cannot serve the asset rather than refuses it.
+func TestFetchAssetAnonymousFallback(t *testing.T) {
+	content := []byte("gvisor release bytes")
+	sum := fmt.Sprintf("%x", sha256.Sum256(content))
+	const (
+		object    = "gvisor/releases/runsc"
+		gsURL     = "gs://" + object
+		pluginMsg = "plugin text SECRET-SIG"
+	)
+	pluginErr := func(code codes.Code) error { return status.Error(code, pluginMsg) }
+
+	for _, code := range anonymousFallbackCodes {
+		t.Run(code.String()+" falls back", func(t *testing.T) {
+			logs := captureLogs(t)
+			f := newAssetHerderFixture(t)
+			f.anon.objects[object] = content
+			// A partial write the plugin leaves behind is replaced.
+			f.herder.assetPlugin = fakeAssetClient{data: []byte("partial plugin write, longer than the asset"), err: pluginErr(code)}
+			path, err := f.herder.fetchAsset(t.Context(), assetEntry{URL: gsURL, SHA256: sum})
+			if err != nil {
+				t.Fatalf("fetchAsset: %v", err)
+			}
+			if got, _ := os.ReadFile(path); !bytes.Equal(got, content) {
+				t.Errorf("cached bytes = %q, want %q", got, content)
+			}
+			if n := f.anon.gets.Load(); n != 1 {
+				t.Errorf("anonymous reads = %d, want 1", n)
+			}
+			if !strings.Contains(logs.String(), `"code":"`+code.String()+`"`) || strings.Contains(logs.String(), "SECRET") {
+				t.Errorf("logs do not carry the plugin code %s alone:\n%s", code, logs)
+			}
+		})
+
+		t.Run(code.String()+" then anonymous failure reports both", func(t *testing.T) {
+			logs := captureLogs(t)
+			f := newAssetHerderFixture(t)
+			f.herder.assetPlugin = fakeAssetClient{err: pluginErr(code)}
+			_, err := f.herder.fetchAsset(t.Context(), assetEntry{URL: gsURL, SHA256: sum})
+			if err == nil {
+				t.Fatal("fetchAsset succeeded")
+			}
+			if n := f.anon.gets.Load(); n != 1 {
+				t.Errorf("anonymous reads = %d, want 1", n)
+			}
+			// The status ate-api-server receives carries the apierror's own
+			// message only, so both descriptions must be in it.
+			st, _ := apierror.FromError(err)
+			wantCode := codes.FailedPrecondition
+			if code == codes.Unavailable {
+				wantCode = codes.Unavailable
+			}
+			if st.Code() != wantCode {
+				t.Errorf("code = %s, want %s (%v)", st.Code(), wantCode, err)
+			}
+			for _, want := range []string{gsURL, "object-store plugin", "anonymous download failed", "object not found"} {
+				if !strings.Contains(st.Message(), want) {
+					t.Errorf("status message %q does not carry %q", st.Message(), want)
+				}
+			}
+			for name, text := range map[string]string{"error": err.Error(), "logs": logs.String()} {
+				if strings.Contains(text, "SECRET") {
+					t.Errorf("%s carries the plugin's status text:\n%s", name, text)
+				}
+			}
+			assertNotCached(t)
+		})
+
+		for _, u := range []string{"s3://" + object, "https://storage.example/" + object} {
+			t.Run(code.String()+" "+u+" does not fall back", func(t *testing.T) {
+				f := newAssetHerderFixture(t)
+				f.anon.objects[object] = content
+				f.herder.assetPlugin = fakeAssetClient{err: pluginErr(code)}
+				if _, err := f.herder.fetchAsset(t.Context(), assetEntry{URL: u, SHA256: sum}); err == nil {
+					t.Fatal("fetchAsset succeeded")
+				}
+				if n := f.anon.gets.Load(); n != 0 {
+					t.Errorf("anonymous reads = %d, want 0", n)
+				}
+				assertNotCached(t)
+			})
+		}
+	}
+
+	for _, code := range []codes.Code{codes.PermissionDenied, codes.FailedPrecondition, codes.Internal, codes.Unknown, codes.ResourceExhausted, codes.Canceled, codes.DeadlineExceeded} {
+		t.Run(code.String()+" does not fall back", func(t *testing.T) {
+			f := newAssetHerderFixture(t)
+			f.anon.objects[object] = content
+			f.herder.assetPlugin = fakeAssetClient{err: pluginErr(code)}
+			_, err := f.herder.fetchAsset(t.Context(), assetEntry{URL: gsURL, SHA256: sum})
+			if err == nil {
+				t.Fatal("fetchAsset succeeded")
+			}
+			if n := f.anon.gets.Load(); n != 0 {
+				t.Errorf("anonymous reads = %d, want 0", n)
+			}
+			if strings.Contains(err.Error(), "anonymous") || strings.Contains(err.Error(), "SECRET") {
+				t.Errorf("error %q mentions an anonymous read or the plugin's text", err)
+			}
+			assertNotCached(t)
+		})
+	}
+
+	t.Run("canceled request does not fall back", func(t *testing.T) {
+		f := newAssetHerderFixture(t)
+		f.anon.objects[object] = content
+		ctx, cancel := context.WithCancel(t.Context())
+		f.herder.assetPlugin = cancelingAssetClient{cancel: cancel, err: pluginErr(codes.Unavailable)}
+		_, err := f.herder.fetchAsset(ctx, assetEntry{URL: gsURL, SHA256: sum})
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("fetchAsset = %v, want context.Canceled", err)
+		}
+		if n := f.anon.gets.Load(); n != 0 {
+			t.Errorf("anonymous reads = %d, want 0", n)
+		}
+		assertNotCached(t)
+	})
+
+	t.Run("no plugin reads gs anonymously", func(t *testing.T) {
+		f := newAssetHerderFixture(t)
+		f.anon.objects[object] = content
+		f.herder.assetPlugin = nil
+		path, err := f.herder.fetchAsset(t.Context(), assetEntry{URL: gsURL, SHA256: sum})
+		if err != nil {
+			t.Fatalf("fetchAsset: %v", err)
+		}
+		if got, _ := os.ReadFile(path); !bytes.Equal(got, content) {
+			t.Errorf("cached bytes = %q, want %q", got, content)
+		}
+		if n := f.anon.gets.Load(); n != 1 {
+			t.Errorf("anonymous reads = %d, want 1", n)
+		}
+	})
+
+	t.Run("no plugin, gs anonymous failure", func(t *testing.T) {
+		f := newAssetHerderFixture(t)
+		f.herder.assetPlugin = nil
+		_, err := f.herder.fetchAsset(t.Context(), assetEntry{URL: gsURL, SHA256: sum})
+		if err == nil || !strings.Contains(err.Error(), "object not found") || strings.Contains(err.Error(), "object-store plugin") {
+			t.Fatalf("fetchAsset = %v, want the anonymous read's error alone", err)
+		}
+		assertNotCached(t)
+	})
+
+	t.Run("no plugin, non-gs is refused", func(t *testing.T) {
+		f := newAssetHerderFixture(t)
+		f.anon.objects[object] = content
+		f.herder.assetPlugin = nil
+		_, err := f.herder.fetchAsset(t.Context(), assetEntry{URL: "s3://" + object, SHA256: sum})
+		if apierror.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "no object-store plugin") {
+			t.Fatalf("fetchAsset = %v (code %s), want %s naming the missing plugin", err, apierror.Code(err), codes.FailedPrecondition)
+		}
+		if n := f.anon.gets.Load(); n != 0 {
+			t.Errorf("anonymous reads = %d, want 0", n)
+		}
+		assertNotCached(t)
+	})
+}
+
+// cancelingAssetClient cancels the caller's request, then fails with err.
+type cancelingAssetClient struct {
+	cancel context.CancelFunc
+	err    error
+}
+
+func (c cancelingAssetClient) FetchAsset(context.Context, *objectstorev1.FetchAssetRequest, ...grpc.CallOption) (*objectstorev1.FetchAssetResponse, error) {
+	c.cancel()
+	return nil, c.err
 }
 
 // TestFetchAssetVerifiesPluginOutput checks that atelet does not trust a

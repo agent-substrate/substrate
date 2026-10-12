@@ -291,11 +291,14 @@ func (s *AteomHerder) fetchGVisorRelease(ctx context.Context, entry assetEntry) 
 // On error the temp file is removed; on success the caller owns it (rename it
 // into place or extract from it, then remove it).
 //
-// A gs:// asset is first read anonymously, which serves public buckets such
-// as gs://gvisor without credentials. Every other asset, and a gs:// asset the
-// anonymous read cannot serve, is fetched through the object-store plugin's
-// AssetProvider. atelet holds no storage credentials of its own, and verifies
-// the bytes it caches whichever path fetched them, since it executes them.
+// Every asset is fetched through the object-store plugin's AssetProvider
+// first, with the plugin's credentials; atelet holds none of its own and does
+// not know which bucket holds snapshots. A gs:// asset is then read
+// anonymously, which serves public buckets such as gs://gvisor, but only when
+// no plugin is configured or the plugin reports it cannot serve the asset
+// (see anonymousFallbackCodes). A refusal on policy or content, and a canceled
+// request, are final. atelet verifies the bytes it caches whichever path
+// fetched them, since it executes them.
 func (s *AteomHerder) downloadVerified(ctx context.Context, entry assetEntry, tmpPrefix string) (string, error) {
 	wantSum, err := hex.DecodeString(entry.SHA256)
 	if err != nil {
@@ -312,47 +315,69 @@ func (s *AteomHerder) downloadVerified(ctx context.Context, entry assetEntry, tm
 		return "", wrapFileSystemErr("while creating temp file", err)
 	}
 	tmpName := tmpFile.Name()
-	defer tmpFile.Close()
 	ok := false
 	defer func() {
 		if !ok {
 			os.Remove(tmpName)
 		}
 	}()
+	// The plugin writes the file by path.
+	if err := tmpFile.Close(); err != nil {
+		return "", wrapFileSystemErr("while closing temp file", err)
+	}
 
-	var anonErr error
-	if u.Scheme == "gs" {
-		anonErr = s.downloadAnonymous(ctx, entry, shown, tmpFile, wantSum)
-		if anonErr == nil {
-			if err := tmpFile.Close(); err != nil { // flush before the caller reads/renames
-				return "", wrapFileSystemErr("while closing temp file", err)
+	anonymous := u.Scheme == "gs"
+	var pluginCode codes.Code
+	if s.assetPlugin != nil {
+		pluginCode = s.fetchFromPlugin(ctx, entry, shown, tmpName)
+		if pluginCode == codes.OK {
+			if err := verifyAssetFile(tmpName, shown, wantSum); err != nil {
+				return "", err
 			}
 			ok = true
 			return tmpName, nil
 		}
-		if s.assetPlugin == nil {
-			return "", anonErr
+		if !anonymous || !slices.Contains(anonymousFallbackCodes, pluginCode) {
+			slog.WarnContext(ctx, "Object-store plugin failed to fetch sandbox asset",
+				slog.String("url", shown), slog.String("code", pluginCode.String()))
+			return "", s.pluginError(ctx, entry, shown, pluginCode, nil)
 		}
-		slog.InfoContext(ctx, "Anonymous sandbox asset download failed; fetching through the object-store plugin",
-			slog.String("url", shown), slog.Any("err", anonErr))
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", fmt.Errorf("sandbox asset %s: %w", shown, ctxErr)
+		}
+		slog.InfoContext(ctx, "Object-store plugin did not serve sandbox asset; downloading it anonymously",
+			slog.String("url", shown), slog.String("code", pluginCode.String()))
+	} else if !anonymous {
+		return "", apierror.FailedPrecondition("sandbox asset %s: no object-store plugin is configured to fetch it", shown)
 	}
-	if err := tmpFile.Close(); err != nil {
-		return "", wrapFileSystemErr("while closing temp file", err)
-	}
-	if err := s.fetchFromPlugin(ctx, entry, shown, tmpName, anonErr); err != nil {
-		return "", err
-	}
-	if err := verifyAssetFile(tmpName, shown, wantSum); err != nil {
-		return "", err
+
+	if err := s.downloadAnonymous(ctx, entry, shown, tmpName, wantSum); err != nil {
+		if s.assetPlugin == nil {
+			return "", err
+		}
+		return "", s.pluginError(ctx, entry, shown, pluginCode, err)
 	}
 	ok = true
 	return tmpName, nil
 }
 
-// downloadAnonymous streams the gs:// asset entry.URL into out with no
-// credentials, hashing as it goes, and checks the size cap and sha256.
-func (s *AteomHerder) downloadAnonymous(ctx context.Context, entry assetEntry, shown string, out io.Writer, wantSum []byte) error {
+// anonymousFallbackCodes are the plugin codes after which atelet reads a gs://
+// asset anonymously: the plugin has no such object, cannot serve the URL, does
+// not implement AssetProvider, or cannot be reached. PermissionDenied (the URL
+// is under a snapshot location) and FailedPrecondition (wrong size or sha256)
+// are refusals another source must not override.
+var anonymousFallbackCodes = []codes.Code{codes.NotFound, codes.InvalidArgument, codes.Unimplemented, codes.Unavailable}
+
+// downloadAnonymous streams the gs:// asset entry.URL into the existing file
+// at path with no credentials, replacing anything a failed plugin fetch left
+// there, hashing as it goes, and checks the size cap and sha256.
+func (s *AteomHerder) downloadAnonymous(ctx context.Context, entry assetEntry, shown, path string, wantSum []byte) error {
 	slog.DebugContext(ctx, "Streaming anonymous download from storage", slog.String("url", shown))
+	out, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return wrapFileSystemErr("while opening temp file", err)
+	}
+	defer out.Close()
 	rc, err := objectstorage.Open(ctx, s.anonGCSClient, entry.URL)
 	if err != nil {
 		return fmt.Errorf("while fetching %v: %w", shown, err)
@@ -371,21 +396,21 @@ func (s *AteomHerder) downloadAnonymous(ctx context.Context, entry assetEntry, s
 	if got := hasher.Sum(nil); !bytes.Equal(got, wantSum) {
 		return fmt.Errorf("asset %v sha256 mismatch; got=%x want=%x", shown, got, wantSum)
 	}
+	if err := out.Close(); err != nil { // flush before the caller reads/renames
+		return wrapFileSystemErr("while closing temp file", err)
+	}
 	return nil
 }
 
 // fetchFromPlugin asks the object-store plugin to write entry into the
-// existing file at path. anonErr, if set, is why the anonymous read failed;
-// it is atelet's own text and is kept in the returned error.
+// existing file at path, and returns the plugin's gRPC code: codes.OK once the
+// plugin reports the file written. pluginError turns any other code into
+// atelet's error.
 //
-// The plugin's status message is neither logged nor returned: atelet's errors
-// become actor crash messages, and a plugin's text may quote a signed URL or
-// other credential in a form no scrubber can recognize. Both the log and the
-// returned error carry the plugin's code and atelet's own description of it.
-func (s *AteomHerder) fetchFromPlugin(ctx context.Context, entry assetEntry, shown, path string, anonErr error) error {
-	if s.assetPlugin == nil {
-		return apierror.FailedPrecondition("sandbox asset %s: no object-store plugin is configured to fetch it", shown)
-	}
+// The plugin's status message is dropped here and never logged or returned:
+// atelet's errors become actor crash messages, and a plugin's text may quote a
+// signed URL or other credential in a form no scrubber can recognize.
+func (s *AteomHerder) fetchFromPlugin(ctx context.Context, entry assetEntry, shown, path string) codes.Code {
 	slog.DebugContext(ctx, "Fetching sandbox asset through the object-store plugin", slog.String("url", shown))
 	_, err := s.assetPlugin.FetchAsset(ctx, &objectstorev1.FetchAssetRequest{
 		AssetUri:  entry.URL,
@@ -393,41 +418,46 @@ func (s *AteomHerder) fetchFromPlugin(ctx context.Context, entry assetEntry, sho
 		WritePath: path,
 		MaxBytes:  maxAssetBytes,
 	})
-	if err == nil {
-		return nil
-	}
-	code := status.Code(err)
-	slog.WarnContext(ctx, "Object-store plugin failed to fetch sandbox asset",
-		slog.String("url", shown), slog.String("code", code.String()))
+	return status.Code(err)
+}
 
-	prefix := fmt.Sprintf("sandbox asset %s", shown)
-	if anonErr != nil {
-		prefix = fmt.Sprintf("%s (anonymous download failed: %v)", prefix, anonErr)
-	}
+// pluginError is atelet's own description of the plugin failing with code.
+// anonErr, if set, is why the anonymous read that followed failed; it is
+// atelet's own text and is kept in the message the caller receives.
+func (s *AteomHerder) pluginError(ctx context.Context, entry assetEntry, shown string, code codes.Code, anonErr error) error {
+	newErr := apierror.FailedPrecondition
+	var msg string
 	switch code {
 	case codes.Unimplemented:
-		return apierror.FailedPrecondition("%s: the object-store plugin at %s does not serve %s; private sandbox assets need a plugin that implements it",
-			prefix, s.pluginSocket, objectstorev1.AssetProvider_ServiceDesc.ServiceName)
+		msg = fmt.Sprintf("the object-store plugin at %s does not serve %s; private sandbox assets need a plugin that implements it",
+			s.pluginSocket, objectstorev1.AssetProvider_ServiceDesc.ServiceName)
 	case codes.Unavailable:
-		return apierror.Unavailable("%s: the object-store plugin at %s is unavailable", prefix, s.pluginSocket)
+		newErr, msg = apierror.Unavailable, fmt.Sprintf("the object-store plugin at %s is unavailable", s.pluginSocket)
 	case codes.Canceled, codes.DeadlineExceeded:
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return fmt.Errorf("%s: %w", prefix, ctxErr)
+			return fmt.Errorf("sandbox asset %s: %w", shown, ctxErr)
 		}
-		return apierror.Unavailable("%s: the object-store plugin returned %s", prefix, code)
+		newErr, msg = apierror.Unavailable, fmt.Sprintf("the object-store plugin returned %s", code)
 	case codes.PermissionDenied:
-		return apierror.FailedPrecondition("%s: the object-store plugin refused it (%s); assets must not live under a snapshot location", prefix, code)
+		msg = fmt.Sprintf("the object-store plugin refused it (%s); assets must not live under a snapshot location", code)
 	case codes.NotFound:
-		return apierror.FailedPrecondition("%s: the object-store plugin did not find it (%s)", prefix, code)
+		msg = fmt.Sprintf("the object-store plugin did not find it (%s)", code)
 	case codes.FailedPrecondition:
-		return apierror.FailedPrecondition("%s: the object-store plugin rejected its content (%s): larger than %d bytes or sha256 is not %s", prefix, code, maxAssetBytes, entry.SHA256)
+		msg = fmt.Sprintf("the object-store plugin rejected its content (%s): larger than %d bytes or sha256 is not %s", code, maxAssetBytes, entry.SHA256)
 	case codes.InvalidArgument:
-		return apierror.FailedPrecondition("%s: the object-store plugin cannot serve this URL (%s)", prefix, code)
+		msg = fmt.Sprintf("the object-store plugin cannot serve this URL (%s)", code)
+	default:
+		newErr, msg = apierror.Internal, fmt.Sprintf("the object-store plugin failed (%s)", code)
 	}
-	return apierror.Internal("%s: the object-store plugin failed (%s)", prefix, code)
+	if anonErr != nil {
+		msg += fmt.Sprintf("; anonymous download failed: %v", anonErr)
+	}
+	return newErr("sandbox asset %s: %s", shown, msg)
 }
 
 // verifyAssetFile checks the size cap and sha256 of the file at path.
+// The plugin is out of process and may be third-party, so atelet does not
+// rely on pkg/assetfetch and verifies the bytes it executes.
 func verifyAssetFile(path, shown string, wantSum []byte) error {
 	f, err := os.Open(path)
 	if err != nil {
