@@ -23,6 +23,7 @@ import (
 	"go.ate.dev/substrate/cmd/ateapi/internal/store"
 	"go.ate.dev/substrate/cmd/ateapi/internal/store/storetest"
 	"go.ate.dev/substrate/internal/apierror"
+	"go.ate.dev/substrate/internal/installdefaults"
 	"go.ate.dev/substrate/internal/objectstore/objectstoretest"
 	"go.ate.dev/substrate/internal/objectstoreplugin/objectstoreplugintest"
 	"go.ate.dev/substrate/internal/resources"
@@ -87,6 +88,40 @@ func TestDeleteActorWorkflow_ExecutionPaths(t *testing.T) {
 			}
 			if _, err := st.GetActor(ctx, actorRef); err == nil {
 				t.Errorf("expected actor to be deleted from store, but it still exists")
+			}
+		})
+	}
+}
+
+// A node that left the cluster takes its workload with it, so revert and
+// delete must not wait for its atelet. A node that is still there may get its
+// atelet back, and a failed lookup proves nothing, so both stay retryable.
+func TestEnsureAteletTerminated_NodeGone(t *testing.T) {
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+	actor := &ateapipb.Actor{Status: &ateapipb.ActorStatus{AssignedNode: "node1"}}
+	for _, tc := range []struct {
+		name      string
+		nodes     []string
+		lookupErr error
+		wantErr   bool
+	}{
+		{name: "node gone", nodes: []string{"node2"}},
+		{name: "node still there", nodes: []string{"node1"}, wantErr: true},
+		{name: "node lookup fails", lookupErr: errors.New("connection refused"), wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newTestActorWorkflow(t, newTestPersistence(t), "team-a", "tmpl")
+			w.dialer = NewAteletDialer(newTestAteletIndexer(t), installdefaults.AteletSPIFFEID(installdefaults.SystemNamespace), "", "",
+				WithNodeGetter(nodeGetter(tc.lookupErr, tc.nodes...)))
+			err := w.ensureAteletTerminated(context.Background(), actorRef, actor, nil, "revert")
+			if tc.wantErr != (err != nil) {
+				t.Fatalf("ensureAteletTerminated = %v, want error %v", err, tc.wantErr)
+			}
+			if tc.wantErr && !errors.Is(err, ErrNoAteletOnNode) {
+				t.Fatalf("ensureAteletTerminated = %v, want ErrNoAteletOnNode", err)
+			}
+			if tc.lookupErr != nil && !strings.Contains(err.Error(), tc.lookupErr.Error()) {
+				t.Fatalf("ensureAteletTerminated = %v, want the node lookup error in it", err)
 			}
 		})
 	}
