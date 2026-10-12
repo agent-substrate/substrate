@@ -887,8 +887,9 @@ groups:
       creation and validation, not just queueing; excludes SQL execution and
       connection holding time. Recorded independently of trace sampling,
       including startup acquisitions. On error, error.type is pool_closed for
-      a closed pool, connect_error for a connection establishment failure,
-      and _OTHER for other failures;
+      a closed pool, connect_error for a pgconn connect failure,
+      and _OTHER for other failures, including BeforeConnect and AfterConnect
+      hook failures;
       cancellation and deadlines have their own outcomes and no error.type.
     annotations:
       substrate:
