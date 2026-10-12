@@ -157,9 +157,13 @@ const (
 	// Store only on node-local disk (`local-checkpoint/<snapshot_uuid>`), and
 	// prune the actor's other local checkpoints.
 	SnapshotStoreOption_SNAPSHOT_STORE_OPTION_LOCAL_ONLY SnapshotStoreOption = 1
-	// Store only in durable storage (`snapshot.object`, at `snapshot.fidelity`),
-	// and prune the actor's local checkpoints.
+	// Store only in durable storage (`snapshot.object`, at `snapshot.fidelity`).
+	// Prunes the actor's local checkpoints once the upload commits.
 	SnapshotStoreOption_SNAPSHOT_STORE_OPTION_DURABLE_ONLY SnapshotStoreOption = 2
+	// Store both on node-local disk (`local-checkpoint/<snapshot_uuid>`) and in
+	// durable storage (`snapshot.object`). Keeps the local checkpoint cached on
+	// disk, and prunes the actor's other local checkpoints.
+	SnapshotStoreOption_SNAPSHOT_STORE_OPTION_LOCAL_AND_DURABLE SnapshotStoreOption = 3
 )
 
 // Enum value maps for SnapshotStoreOption.
@@ -168,11 +172,13 @@ var (
 		0: "SNAPSHOT_STORE_OPTION_UNSPECIFIED",
 		1: "SNAPSHOT_STORE_OPTION_LOCAL_ONLY",
 		2: "SNAPSHOT_STORE_OPTION_DURABLE_ONLY",
+		3: "SNAPSHOT_STORE_OPTION_LOCAL_AND_DURABLE",
 	}
 	SnapshotStoreOption_value = map[string]int32{
-		"SNAPSHOT_STORE_OPTION_UNSPECIFIED":  0,
-		"SNAPSHOT_STORE_OPTION_LOCAL_ONLY":   1,
-		"SNAPSHOT_STORE_OPTION_DURABLE_ONLY": 2,
+		"SNAPSHOT_STORE_OPTION_UNSPECIFIED":       0,
+		"SNAPSHOT_STORE_OPTION_LOCAL_ONLY":        1,
+		"SNAPSHOT_STORE_OPTION_DURABLE_ONLY":      2,
+		"SNAPSHOT_STORE_OPTION_LOCAL_AND_DURABLE": 3,
 	}
 )
 
@@ -2584,7 +2590,7 @@ type Snapshot struct {
 	// On Restore: the fidelity to restore the actor with.
 	Fidelity SnapshotFidelity `protobuf:"varint,2,opt,name=fidelity,proto3,enum=atelet.SnapshotFidelity" json:"fidelity,omitempty"`
 	// The snapshot's durable copy in object storage. Required when the request
-	// asks for DURABLE_ONLY.
+	// asks for LOCAL_AND_DURABLE or DURABLE_ONLY.
 	Object        *ObjectStorage `protobuf:"bytes,3,opt,name=object,proto3" json:"object,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2698,8 +2704,11 @@ func (x *SnapshotPromotionStep) GetTtlSeconds() int64 {
 // step is skipped.
 type SnapshotPromotionPolicy struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Promotes the snapshot to DURABLE_ONLY: uploads it to `snapshot.object`,
-	// then drops the local copy.
+	// Promotes the snapshot to LOCAL_AND_DURABLE: uploads it to
+	// `snapshot.object` and keeps the local copy.
+	LocalAndDurable *SnapshotPromotionStep `protobuf:"bytes,1,opt,name=local_and_durable,json=localAndDurable,proto3" json:"local_and_durable,omitempty"`
+	// Promotes the snapshot to DURABLE_ONLY: uploads it unless an earlier step
+	// has, then drops the local copy.
 	DurableOnly   *SnapshotPromotionStep `protobuf:"bytes,2,opt,name=durable_only,json=durableOnly,proto3" json:"durable_only,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2733,6 +2742,13 @@ func (x *SnapshotPromotionPolicy) ProtoReflect() protoreflect.Message {
 // Deprecated: Use SnapshotPromotionPolicy.ProtoReflect.Descriptor instead.
 func (*SnapshotPromotionPolicy) Descriptor() ([]byte, []int) {
 	return file_atelet_proto_rawDescGZIP(), []int{41}
+}
+
+func (x *SnapshotPromotionPolicy) GetLocalAndDurable() *SnapshotPromotionStep {
+	if x != nil {
+		return x.LocalAndDurable
+	}
+	return nil
 }
 
 func (x *SnapshotPromotionPolicy) GetDurableOnly() *SnapshotPromotionStep {
@@ -2769,6 +2785,15 @@ type CheckpointRequest struct {
 	//     stays LOCAL_ONLY. Used for a pause.
 	//   durable_only 0s: Checkpoint returns once the snapshot is uploaded; no
 	//     local copy is kept. Used for a suspend.
+	//   local_and_durable 0s: Checkpoint returns once the snapshot is uploaded;
+	//     the local copy is kept.
+	//   local_and_durable 0s, durable_only 3600s: Checkpoint returns once the
+	//     snapshot is uploaded; atelet drops the local copy an hour later.
+	//   local_and_durable 600s: Checkpoint returns once the snapshot is stored
+	//     locally; atelet uploads it 10 minutes later and keeps the local copy.
+	//   local_and_durable 600s, durable_only 3600s: Checkpoint returns once the
+	//     snapshot is stored locally; atelet uploads it 10 minutes later, keeps
+	//     the local copy, and drops that copy an hour after the upload.
 	//   durable_only 600s: Checkpoint returns once the snapshot is stored
 	//     locally; atelet uploads it 10 minutes later and drops the local copy.
 	//
@@ -2920,9 +2945,15 @@ type PromoteSnapshotRequest struct {
 	// destination (`object`), and the `fidelity` the uploaded snapshot must
 	// have.
 	//
-	// Promotion never converts between fidelities: if the local checkpoint has
-	// another fidelity, FAILED_PRECONDITION is returned.
-	Snapshot      *Snapshot `protobuf:"bytes,6,opt,name=snapshot,proto3" json:"snapshot,omitempty"`
+	// Promotion never converts between fidelities: if the local checkpoint, or a
+	// snapshot already committed at `object`, has another fidelity,
+	// FAILED_PRECONDITION is returned.
+	Snapshot *Snapshot `protobuf:"bytes,6,opt,name=snapshot,proto3" json:"snapshot,omitempty"`
+	// Must be `SNAPSHOT_STORE_OPTION_LOCAL_AND_DURABLE` (keep this local
+	// checkpoint cached after uploading, pruning the actor's others) or
+	// `SNAPSHOT_STORE_OPTION_DURABLE_ONLY` (prune all of the actor's local
+	// checkpoints after uploading).
+	StoreOption   SnapshotStoreOption `protobuf:"varint,7,opt,name=store_option,json=storeOption,proto3,enum=atelet.SnapshotStoreOption" json:"store_option,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2999,6 +3030,13 @@ func (x *PromoteSnapshotRequest) GetSnapshot() *Snapshot {
 	return nil
 }
 
+func (x *PromoteSnapshotRequest) GetStoreOption() SnapshotStoreOption {
+	if x != nil {
+		return x.StoreOption
+	}
+	return SnapshotStoreOption_SNAPSHOT_STORE_OPTION_UNSPECIFIED
+}
+
 type PromoteSnapshotResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -3044,9 +3082,9 @@ type RestoreRequest struct {
 	ActorTemplateAtespace string                 `protobuf:"bytes,5,opt,name=actor_template_atespace,json=actorTemplateAtespace,proto3" json:"actor_template_atespace,omitempty"`
 	ActorTemplateName     string                 `protobuf:"bytes,6,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
 	Spec                  *WorkloadSpec          `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
-	// Snapshot to restore from: the node-local copy under
-	// `local-checkpoint/<snapshot_uuid>` when `object` is unset, otherwise the
-	// copy in `snapshot.object`.
+	// Snapshot to restore from. atelet checks `local-checkpoint/<snapshot_uuid>`
+	// first and falls back to `snapshot.object` if the local copy is absent or
+	// unusable: its manifest does not parse or lists a missing file.
 	Snapshot *Snapshot `protobuf:"bytes,8,opt,name=snapshot,proto3" json:"snapshot,omitempty"`
 	// When absent the actor has no egress: its TCP is captured and refused.
 	EgressGateway *EgressGateway `protobuf:"bytes,13,opt,name=egress_gateway,json=egressGateway,proto3,oneof" json:"egress_gateway,omitempty"`
@@ -3386,8 +3424,9 @@ const file_atelet_proto_rawDesc = "" +
 	"\x06object\x18\x03 \x01(\v2\x15.atelet.ObjectStorageR\x06object\"8\n" +
 	"\x15SnapshotPromotionStep\x12\x1f\n" +
 	"\vttl_seconds\x18\x01 \x01(\x03R\n" +
-	"ttlSeconds\"[\n" +
-	"\x17SnapshotPromotionPolicy\x12@\n" +
+	"ttlSeconds\"\xa6\x01\n" +
+	"\x17SnapshotPromotionPolicy\x12I\n" +
+	"\x11local_and_durable\x18\x01 \x01(\v2\x1d.atelet.SnapshotPromotionStepR\x0flocalAndDurable\x12@\n" +
 	"\fdurable_only\x18\x02 \x01(\v2\x1d.atelet.SnapshotPromotionStepR\vdurableOnly\"\x9d\x03\n" +
 	"\x11CheckpointRequest\x12$\n" +
 	"\x0eworker_pod_uid\x18\x01 \x01(\tR\fworkerPodUid\x12\x1a\n" +
@@ -3400,7 +3439,7 @@ const file_atelet_proto_rawDesc = "" +
 	"\x04spec\x18\a \x01(\v2\x14.atelet.WorkloadSpecR\x04spec\x12,\n" +
 	"\bsnapshot\x18\b \x01(\v2\x10.atelet.SnapshotR\bsnapshot\x12J\n" +
 	"\x10promotion_policy\x18\t \x01(\v2\x1f.atelet.SnapshotPromotionPolicyR\x0fpromotionPolicy\"\x14\n" +
-	"\x12CheckpointResponse\"\x86\x02\n" +
+	"\x12CheckpointResponse\"\xc6\x02\n" +
 	"\x16PromoteSnapshotRequest\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +
@@ -3408,7 +3447,8 @@ const file_atelet_proto_rawDesc = "" +
 	"\tactor_uid\x18\x03 \x01(\tR\bactorUid\x126\n" +
 	"\x17actor_template_atespace\x18\x04 \x01(\tR\x15actorTemplateAtespace\x12.\n" +
 	"\x13actor_template_name\x18\x05 \x01(\tR\x11actorTemplateName\x12,\n" +
-	"\bsnapshot\x18\x06 \x01(\v2\x10.atelet.SnapshotR\bsnapshot\"\x19\n" +
+	"\bsnapshot\x18\x06 \x01(\v2\x10.atelet.SnapshotR\bsnapshot\x12>\n" +
+	"\fstore_option\x18\a \x01(\x0e2\x1b.atelet.SnapshotStoreOptionR\vstoreOption\"\x19\n" +
 	"\x17PromoteSnapshotResponse\"\xa2\x04\n" +
 	"\x0eRestoreRequest\x12$\n" +
 	"\x0eworker_pod_uid\x18\x01 \x01(\tR\fworkerPodUid\x12\x1a\n" +
@@ -3435,11 +3475,12 @@ const file_atelet_proto_rawDesc = "" +
 	"\x1dSNAPSHOT_FIDELITY_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19SNAPSHOT_FIDELITY_VOLUMES\x10\x01\x12\x1c\n" +
 	"\x18SNAPSHOT_FIDELITY_ROOTFS\x10\x02\x12\x1c\n" +
-	"\x18SNAPSHOT_FIDELITY_MEMORY\x10\x03*\x8a\x01\n" +
+	"\x18SNAPSHOT_FIDELITY_MEMORY\x10\x03*\xb7\x01\n" +
 	"\x13SnapshotStoreOption\x12%\n" +
 	"!SNAPSHOT_STORE_OPTION_UNSPECIFIED\x10\x00\x12$\n" +
 	" SNAPSHOT_STORE_OPTION_LOCAL_ONLY\x10\x01\x12&\n" +
-	"\"SNAPSHOT_STORE_OPTION_DURABLE_ONLY\x10\x022\xa8\x02\n" +
+	"\"SNAPSHOT_STORE_OPTION_DURABLE_ONLY\x10\x02\x12+\n" +
+	"'SNAPSHOT_STORE_OPTION_LOCAL_AND_DURABLE\x10\x032\xa8\x02\n" +
 	"\fAteomSupport\x12c\n" +
 	"\x14MintActorCertificate\x12#.atelet.MintActorCertificateRequest\x1a$.atelet.MintActorCertificateResponse\"\x00\x12Q\n" +
 	"\x0eRegisterWorker\x12\x1d.atelet.RegisterWorkerRequest\x1a\x1e.atelet.RegisterWorkerResponse\"\x00\x12`\n" +
@@ -3559,38 +3600,40 @@ var file_atelet_proto_depIdxs = []int32{
 	39, // 32: atelet.WakeupProbe.http_get:type_name -> atelet.HTTPGetAction
 	1,  // 33: atelet.Snapshot.fidelity:type_name -> atelet.SnapshotFidelity
 	41, // 34: atelet.Snapshot.object:type_name -> atelet.ObjectStorage
-	43, // 35: atelet.SnapshotPromotionPolicy.durable_only:type_name -> atelet.SnapshotPromotionStep
-	22, // 36: atelet.CheckpointRequest.spec:type_name -> atelet.WorkloadSpec
-	42, // 37: atelet.CheckpointRequest.snapshot:type_name -> atelet.Snapshot
-	44, // 38: atelet.CheckpointRequest.promotion_policy:type_name -> atelet.SnapshotPromotionPolicy
-	42, // 39: atelet.PromoteSnapshotRequest.snapshot:type_name -> atelet.Snapshot
-	22, // 40: atelet.RestoreRequest.spec:type_name -> atelet.WorkloadSpec
-	42, // 41: atelet.RestoreRequest.snapshot:type_name -> atelet.Snapshot
-	18, // 42: atelet.RestoreRequest.egress_gateway:type_name -> atelet.EgressGateway
-	21, // 43: atelet.RestoreRequest.sandbox_assets:type_name -> atelet.SandboxAssets
-	19, // 44: atelet.ArchAssets.FilesEntry.value:type_name -> atelet.AssetFile
-	20, // 45: atelet.SandboxAssets.AssetsEntry.value:type_name -> atelet.ArchAssets
-	13, // 46: atelet.AteomSupport.MintActorCertificate:input_type -> atelet.MintActorCertificateRequest
-	3,  // 47: atelet.AteomSupport.RegisterWorker:input_type -> atelet.RegisterWorkerRequest
-	11, // 48: atelet.AteomSupport.RequestActorSuspend:input_type -> atelet.RequestActorSuspendRequest
-	17, // 49: atelet.AteomHerder.Run:input_type -> atelet.RunRequest
-	45, // 50: atelet.AteomHerder.Checkpoint:input_type -> atelet.CheckpointRequest
-	49, // 51: atelet.AteomHerder.Restore:input_type -> atelet.RestoreRequest
-	47, // 52: atelet.AteomHerder.PromoteSnapshot:input_type -> atelet.PromoteSnapshotRequest
-	15, // 53: atelet.AteomHerder.Terminate:input_type -> atelet.TerminateRequest
-	14, // 54: atelet.AteomSupport.MintActorCertificate:output_type -> atelet.MintActorCertificateResponse
-	10, // 55: atelet.AteomSupport.RegisterWorker:output_type -> atelet.RegisterWorkerResponse
-	12, // 56: atelet.AteomSupport.RequestActorSuspend:output_type -> atelet.RequestActorSuspendResponse
-	40, // 57: atelet.AteomHerder.Run:output_type -> atelet.RunResponse
-	46, // 58: atelet.AteomHerder.Checkpoint:output_type -> atelet.CheckpointResponse
-	50, // 59: atelet.AteomHerder.Restore:output_type -> atelet.RestoreResponse
-	48, // 60: atelet.AteomHerder.PromoteSnapshot:output_type -> atelet.PromoteSnapshotResponse
-	16, // 61: atelet.AteomHerder.Terminate:output_type -> atelet.TerminateResponse
-	54, // [54:62] is the sub-list for method output_type
-	46, // [46:54] is the sub-list for method input_type
-	46, // [46:46] is the sub-list for extension type_name
-	46, // [46:46] is the sub-list for extension extendee
-	0,  // [0:46] is the sub-list for field type_name
+	43, // 35: atelet.SnapshotPromotionPolicy.local_and_durable:type_name -> atelet.SnapshotPromotionStep
+	43, // 36: atelet.SnapshotPromotionPolicy.durable_only:type_name -> atelet.SnapshotPromotionStep
+	22, // 37: atelet.CheckpointRequest.spec:type_name -> atelet.WorkloadSpec
+	42, // 38: atelet.CheckpointRequest.snapshot:type_name -> atelet.Snapshot
+	44, // 39: atelet.CheckpointRequest.promotion_policy:type_name -> atelet.SnapshotPromotionPolicy
+	42, // 40: atelet.PromoteSnapshotRequest.snapshot:type_name -> atelet.Snapshot
+	2,  // 41: atelet.PromoteSnapshotRequest.store_option:type_name -> atelet.SnapshotStoreOption
+	22, // 42: atelet.RestoreRequest.spec:type_name -> atelet.WorkloadSpec
+	42, // 43: atelet.RestoreRequest.snapshot:type_name -> atelet.Snapshot
+	18, // 44: atelet.RestoreRequest.egress_gateway:type_name -> atelet.EgressGateway
+	21, // 45: atelet.RestoreRequest.sandbox_assets:type_name -> atelet.SandboxAssets
+	19, // 46: atelet.ArchAssets.FilesEntry.value:type_name -> atelet.AssetFile
+	20, // 47: atelet.SandboxAssets.AssetsEntry.value:type_name -> atelet.ArchAssets
+	13, // 48: atelet.AteomSupport.MintActorCertificate:input_type -> atelet.MintActorCertificateRequest
+	3,  // 49: atelet.AteomSupport.RegisterWorker:input_type -> atelet.RegisterWorkerRequest
+	11, // 50: atelet.AteomSupport.RequestActorSuspend:input_type -> atelet.RequestActorSuspendRequest
+	17, // 51: atelet.AteomHerder.Run:input_type -> atelet.RunRequest
+	45, // 52: atelet.AteomHerder.Checkpoint:input_type -> atelet.CheckpointRequest
+	49, // 53: atelet.AteomHerder.Restore:input_type -> atelet.RestoreRequest
+	47, // 54: atelet.AteomHerder.PromoteSnapshot:input_type -> atelet.PromoteSnapshotRequest
+	15, // 55: atelet.AteomHerder.Terminate:input_type -> atelet.TerminateRequest
+	14, // 56: atelet.AteomSupport.MintActorCertificate:output_type -> atelet.MintActorCertificateResponse
+	10, // 57: atelet.AteomSupport.RegisterWorker:output_type -> atelet.RegisterWorkerResponse
+	12, // 58: atelet.AteomSupport.RequestActorSuspend:output_type -> atelet.RequestActorSuspendResponse
+	40, // 59: atelet.AteomHerder.Run:output_type -> atelet.RunResponse
+	46, // 60: atelet.AteomHerder.Checkpoint:output_type -> atelet.CheckpointResponse
+	50, // 61: atelet.AteomHerder.Restore:output_type -> atelet.RestoreResponse
+	48, // 62: atelet.AteomHerder.PromoteSnapshot:output_type -> atelet.PromoteSnapshotResponse
+	16, // 63: atelet.AteomHerder.Terminate:output_type -> atelet.TerminateResponse
+	56, // [56:64] is the sub-list for method output_type
+	48, // [48:56] is the sub-list for method input_type
+	48, // [48:48] is the sub-list for extension type_name
+	48, // [48:48] is the sub-list for extension extendee
+	0,  // [0:48] is the sub-list for field type_name
 }
 
 func init() { file_atelet_proto_init() }

@@ -619,3 +619,67 @@ func TestEnsureAteletPaused_ForwardsPreferredFidelity(t *testing.T) {
 		})
 	}
 }
+
+// TestEnsurePausedFinalized_RemovesReplacedLocalSnapshot verifies that
+// finalizing a pause removes any older local snapshot entry (since
+// atelet.Checkpoint already pruned previous local snapshots on disk) while
+// preserving any older durable snapshot.
+func TestEnsurePausedFinalized_RemovesReplacedLocalSnapshot(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	w, _ := newWireCaptureWorkflow(t, persistence)
+
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+	workerName := testWorkerUID("pod-1")
+	durableURI := someActorSnapshotURI(t, testStorageLocation, "team-a", "durable-1")
+	created := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+		Status: &ateapipb.ActorStatus{
+			State:        ateapipb.ActorState_ACTOR_STATE_PAUSING,
+			AssignedNode: "node-1",
+			WorkerAssignment: &ateapipb.WorkerAssignment{
+				Worker:          &ateapipb.ObjectRef{Name: workerName},
+				WorkerNamespace: "default",
+				WorkerPool:      "pool1",
+				WorkerPod:       "pod-1",
+				WorkerPodUid:    workerName,
+			},
+			LastAssignedGeneration: 3,
+			Snapshots: []*ateapipb.Snapshot{
+				newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "tmpl-1", "durable-1", durableURI, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+				newLocalSnapshot(2, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "tmpl-1", "local-snap-2", "node-1"),
+				newLocalSnapshot(3, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "tmpl-1", "local-snap-3", ""),
+			},
+		},
+	})
+	if _, err := persistence.CreateWorker(ctx, &ateapipb.Worker{
+		Metadata:        &ateapipb.ResourceMetadata{Name: workerName},
+		WorkerNamespace: "default",
+		WorkerPool:      "pool1",
+		WorkerPod:       "pod-1",
+		WorkerPodUid:    workerName,
+		NodeName:        "node-1",
+		Status:          &ateapipb.WorkerStatus{},
+	}); err != nil {
+		t.Fatalf("CreateWorker: %v", err)
+	}
+	seedAssignment(t, persistence, workerName, &ateapipb.ActorAssignment{
+		Actor:    &ateapipb.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name},
+		ActorUid: created.GetMetadata().GetUid(),
+	})
+
+	got, err := w.ensurePausedFinalized(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("ensurePausedFinalized: %v", err)
+	}
+	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_PAUSED {
+		t.Fatalf("state = %v, want PAUSED", got.GetStatus().GetState())
+	}
+	if len(got.GetStatus().GetSnapshots()) != 2 {
+		t.Fatalf("snapshots = %v, want 2 (Gen 1 DURABLE and Gen 3 LOCAL)", got.GetStatus().GetSnapshots())
+	}
+	completedLocal := findLatestLocalSnapshot(got.GetStatus())
+	if completedLocal.GetUuid() != "local-snap-3" || completedLocal.GetLocality() != "node-1" {
+		t.Errorf("completed local snapshot = %v, want uuid=local-snap-3 locality=node-1", completedLocal)
+	}
+}

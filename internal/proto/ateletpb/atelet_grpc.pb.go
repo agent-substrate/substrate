@@ -277,10 +277,15 @@ type AteomHerderClient interface {
 	// Restore restores a workload from checkpoint onto an ateom.
 	Restore(ctx context.Context, in *RestoreRequest, opts ...grpc.CallOption) (*RestoreResponse, error)
 	// PromoteSnapshot copies a local checkpoint from this node's disk to object
-	// storage, then prunes the actor's local checkpoints. Unlike Checkpoint it
-	// drives no ateom: the actor is paused, its sandbox is gone; the checkpoint
-	// files plus their manifest already sit under the actor's local-checkpoints
-	// directory.
+	// storage. Unlike Checkpoint it drives no ateom: the actor is paused, its
+	// sandbox is gone; the checkpoint files plus their manifest already sit under
+	// the actor's local-checkpoints directory.
+	//
+	// Idempotent: when `snapshot.object` already holds the snapshot at
+	// `snapshot.fidelity`, nothing is uploaded and only `store_option` applies,
+	// so a retry is safe and DURABLE_ONLY drops the local copy of a
+	// LOCAL_AND_DURABLE snapshot. A snapshot generation keeps one fidelity, so
+	// one there at another fidelity fails the call with FAILED_PRECONDITION.
 	PromoteSnapshot(ctx context.Context, in *PromoteSnapshotRequest, opts ...grpc.CallOption) (*PromoteSnapshotResponse, error)
 	// Terminate tells atelet to terminate/kill any running workload for an actor,
 	// unmount its volumes, and clean up actor state on the node.
@@ -364,10 +369,15 @@ type AteomHerderServer interface {
 	// Restore restores a workload from checkpoint onto an ateom.
 	Restore(context.Context, *RestoreRequest) (*RestoreResponse, error)
 	// PromoteSnapshot copies a local checkpoint from this node's disk to object
-	// storage, then prunes the actor's local checkpoints. Unlike Checkpoint it
-	// drives no ateom: the actor is paused, its sandbox is gone; the checkpoint
-	// files plus their manifest already sit under the actor's local-checkpoints
-	// directory.
+	// storage. Unlike Checkpoint it drives no ateom: the actor is paused, its
+	// sandbox is gone; the checkpoint files plus their manifest already sit under
+	// the actor's local-checkpoints directory.
+	//
+	// Idempotent: when `snapshot.object` already holds the snapshot at
+	// `snapshot.fidelity`, nothing is uploaded and only `store_option` applies,
+	// so a retry is safe and DURABLE_ONLY drops the local copy of a
+	// LOCAL_AND_DURABLE snapshot. A snapshot generation keeps one fidelity, so
+	// one there at another fidelity fails the call with FAILED_PRECONDITION.
 	PromoteSnapshot(context.Context, *PromoteSnapshotRequest) (*PromoteSnapshotResponse, error)
 	// Terminate tells atelet to terminate/kill any running workload for an actor,
 	// unmount its volumes, and clean up actor state on the node.

@@ -90,6 +90,7 @@ func herderCalls(h *herder) map[string]func(context.Context) error {
 				Snapshot: &ateletpb.Snapshot{
 					Object: &ateletpb.ObjectStorage{SnapshotUri: testSnapshotURI},
 				},
+				StoreOption: ateletpb.SnapshotStoreOption_SNAPSHOT_STORE_OPTION_DURABLE_ONLY,
 			})
 			return err
 		},

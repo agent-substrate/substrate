@@ -28,6 +28,12 @@ func durableOnlyPolicy() *ateletpb.SnapshotPromotionPolicy {
 	return &ateletpb.SnapshotPromotionPolicy{DurableOnly: promotionStepAfter(0)}
 }
 
+// localAndDurablePolicy uploads the snapshot during Checkpoint and keeps the
+// local copy.
+func localAndDurablePolicy() *ateletpb.SnapshotPromotionPolicy {
+	return &ateletpb.SnapshotPromotionPolicy{LocalAndDurable: promotionStepAfter(0)}
+}
+
 func promotionStepAfter(ttlSeconds int64) *ateletpb.SnapshotPromotionStep {
 	return &ateletpb.SnapshotPromotionStep{TtlSeconds: ttlSeconds}
 }
@@ -36,8 +42,9 @@ func promotionStepAfter(ttlSeconds int64) *ateletpb.SnapshotPromotionStep {
 // shape of policy, and whether any step is left for the background.
 func TestCheckpointStoreOption(t *testing.T) {
 	const (
-		localOnly   = ateletpb.SnapshotStoreOption_SNAPSHOT_STORE_OPTION_LOCAL_ONLY
-		durableOnly = ateletpb.SnapshotStoreOption_SNAPSHOT_STORE_OPTION_DURABLE_ONLY
+		localOnly       = ateletpb.SnapshotStoreOption_SNAPSHOT_STORE_OPTION_LOCAL_ONLY
+		localAndDurable = ateletpb.SnapshotStoreOption_SNAPSHOT_STORE_OPTION_LOCAL_AND_DURABLE
+		durableOnly     = ateletpb.SnapshotStoreOption_SNAPSHOT_STORE_OPTION_DURABLE_ONLY
 	)
 	tests := []struct {
 		name           string
@@ -47,7 +54,28 @@ func TestCheckpointStoreOption(t *testing.T) {
 	}{
 		{"unset", nil, localOnly, false},
 		{"no steps", &ateletpb.SnapshotPromotionPolicy{}, localOnly, false},
+		{"local_and_durable 0s", localAndDurablePolicy(), localAndDurable, false},
 		{"durable_only 0s", durableOnlyPolicy(), durableOnly, false},
+		{
+			"local_and_durable 0s, durable_only 0s",
+			&ateletpb.SnapshotPromotionPolicy{LocalAndDurable: promotionStepAfter(0), DurableOnly: promotionStepAfter(0)},
+			durableOnly, false,
+		},
+		{
+			"local_and_durable 0s, durable_only 3600s",
+			&ateletpb.SnapshotPromotionPolicy{LocalAndDurable: promotionStepAfter(0), DurableOnly: promotionStepAfter(3600)},
+			localAndDurable, true,
+		},
+		{
+			"local_and_durable 600s",
+			&ateletpb.SnapshotPromotionPolicy{LocalAndDurable: promotionStepAfter(600)},
+			localOnly, true,
+		},
+		{
+			"local_and_durable 600s, durable_only 0s",
+			&ateletpb.SnapshotPromotionPolicy{LocalAndDurable: promotionStepAfter(600), DurableOnly: promotionStepAfter(0)},
+			localOnly, true,
+		},
 		{
 			"durable_only 600s",
 			&ateletpb.SnapshotPromotionPolicy{DurableOnly: promotionStepAfter(600)},
@@ -75,7 +103,12 @@ func TestCheckpointRejectsBackgroundPromotion(t *testing.T) {
 	useTempNodeDirs(t)
 	s := &AteomHerder{}
 	for name, policy := range map[string]*ateletpb.SnapshotPromotionPolicy{
-		"durable_only waits": {DurableOnly: promotionStepAfter(600)},
+		"local_and_durable waits": {LocalAndDurable: promotionStepAfter(600)},
+		"durable_only waits":      {DurableOnly: promotionStepAfter(600)},
+		"durable_only waits after a synchronous local_and_durable": {
+			LocalAndDurable: promotionStepAfter(0),
+			DurableOnly:     promotionStepAfter(3600),
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			req := validCheckpointRequest()

@@ -640,6 +640,9 @@ func TestValidateCheckpointRequest(t *testing.T) {
 		wantErr bool
 	}{
 		{"valid durable only", makeReq(), false},
+		{"valid local and durable", makeReq(func(r *ateletpb.CheckpointRequest) {
+			r.PromotionPolicy = localAndDurablePolicy()
+		}), false},
 		{"valid local only", makeReq(func(r *ateletpb.CheckpointRequest) {
 			r.PromotionPolicy = nil
 			r.Snapshot.Object = nil
@@ -653,13 +656,16 @@ func TestValidateCheckpointRequest(t *testing.T) {
 			r.PromotionPolicy = &ateletpb.SnapshotPromotionPolicy{}
 			r.Snapshot.Object = nil
 		}), false},
-		{"background step passes validation", makeReq(func(r *ateletpb.CheckpointRequest) {
-			r.PromotionPolicy = &ateletpb.SnapshotPromotionPolicy{DurableOnly: promotionStepAfter(600)}
+		{"background steps pass validation", makeReq(func(r *ateletpb.CheckpointRequest) {
+			r.PromotionPolicy = &ateletpb.SnapshotPromotionPolicy{LocalAndDurable: promotionStepAfter(600), DurableOnly: promotionStepAfter(3600)}
 		}), false},
 		{"promotion without object storage", makeReq(func(r *ateletpb.CheckpointRequest) { r.Snapshot.Object = nil }), true},
 		{"background promotion without object storage", makeReq(func(r *ateletpb.CheckpointRequest) {
-			r.PromotionPolicy = &ateletpb.SnapshotPromotionPolicy{DurableOnly: promotionStepAfter(600)}
+			r.PromotionPolicy = &ateletpb.SnapshotPromotionPolicy{LocalAndDurable: promotionStepAfter(600)}
 			r.Snapshot.Object = nil
+		}), true},
+		{"negative local_and_durable ttl", makeReq(func(r *ateletpb.CheckpointRequest) {
+			r.PromotionPolicy = &ateletpb.SnapshotPromotionPolicy{LocalAndDurable: promotionStepAfter(-1)}
 		}), true},
 		{"negative durable_only ttl", makeReq(func(r *ateletpb.CheckpointRequest) {
 			r.PromotionPolicy = &ateletpb.SnapshotPromotionPolicy{DurableOnly: promotionStepAfter(-1)}
@@ -1455,10 +1461,16 @@ func TestBuildAteomWorkloadSpec_ImageVolumeMounts(t *testing.T) {
 type recordingObjectStorage struct {
 	mu      sync.Mutex
 	objects map[string][]byte
-	putErr  error
+	// puts lists every object put, in order, including overwrites.
+	puts   []string
+	putErr error
+	getErr error
 }
 
 func (r *recordingObjectStorage) GetObject(_ context.Context, bucket, object string) (io.ReadCloser, error) {
+	if r.getErr != nil {
+		return nil, r.getErr
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	b, ok := r.objects[bucket+"/"+object]
@@ -1482,6 +1494,7 @@ func (r *recordingObjectStorage) PutObject(_ context.Context, bucket, object str
 		r.objects = map[string][]byte{}
 	}
 	r.objects[bucket+"/"+object] = b
+	r.puts = append(r.puts, bucket+"/"+object)
 	return nil
 }
 
@@ -1494,6 +1507,13 @@ func (r *recordingObjectStorage) keys() []string {
 	}
 	slices.Sort(keys)
 	return keys
+}
+
+// uploads returns every object put so far, in order.
+func (r *recordingObjectStorage) uploads() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.puts)
 }
 
 // writeLocalSnapshot lays a local pause snapshot out in dir: the given files
@@ -1529,6 +1549,7 @@ func validPromoteSnapshotRequest() *ateletpb.PromoteSnapshotRequest {
 			Fidelity:     ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
 			Object:       &ateletpb.ObjectStorage{SnapshotUri: pausedSnapshotURI},
 		},
+		StoreOption: ateletpb.SnapshotStoreOption_SNAPSHOT_STORE_OPTION_DURABLE_ONLY,
 	}
 }
 
@@ -1671,14 +1692,90 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 		}
 	})
 
+	// uploadedManifest is the manifest a committed upload of the paused
+	// snapshot leaves at its destination.
+	uploadedManifest := func(fidelity string) map[string][]byte {
+		return map[string][]byte{
+			pausedSnapshotPath + "/manifest.json": []byte(`{"sandboxClass":"microvm","fidelity":"` + fidelity + `"}`),
+		}
+	}
+
 	t.Run("gone locally but already uploaded succeeds", func(t *testing.T) {
-		store := &recordingObjectStorage{objects: map[string][]byte{
-			pausedSnapshotPath + "/manifest.json": []byte(`{"sandboxClass":"microvm"}`),
-		}}
+		store := &recordingObjectStorage{objects: uploadedManifest(ateattr.SnapshotFidelityMemory)}
 		s := newPluginHerder(t, store)
 
 		if _, err := s.uploadLocalCheckpointDir(ctx, validPromoteSnapshotRequest(), filepath.Join(t.TempDir(), "never-created"), uri); err != nil {
 			t.Fatalf("uploadLocalCheckpointDir: %v", err)
+		}
+		if got := store.uploads(); len(got) != 0 {
+			t.Errorf("uploaded %v for a snapshot already uploaded, want nothing", got)
+		}
+	})
+
+	t.Run("already uploaded skips the upload", func(t *testing.T) {
+		store := &recordingObjectStorage{objects: uploadedManifest(ateattr.SnapshotFidelityMemory)}
+		s := newPluginHerder(t, store)
+		dir := filepath.Join(t.TempDir(), "pause-snap-1")
+		writeLocalSnapshot(t, dir, fullRec("microvm"), map[string]string{
+			"config.json": "cfg", "memory-ranges": "mem", "data.tar": "data",
+		})
+
+		class, err := s.uploadLocalCheckpointDir(ctx, validPromoteSnapshotRequest(), dir, uri)
+		if err != nil {
+			t.Fatalf("uploadLocalCheckpointDir: %v", err)
+		}
+		if got := store.uploads(); len(got) != 0 {
+			t.Errorf("uploaded %v for a snapshot already uploaded, want nothing", got)
+		}
+		if class != "microvm" {
+			t.Errorf("sandbox class = %q, want %q from the uploaded manifest", class, "microvm")
+		}
+	})
+
+	t.Run("already uploaded at another fidelity is refused", func(t *testing.T) {
+		store := &recordingObjectStorage{objects: uploadedManifest(ateattr.SnapshotFidelityVolumes)}
+		s := newPluginHerder(t, store)
+		dir := filepath.Join(t.TempDir(), "pause-snap-1")
+		writeLocalSnapshot(t, dir, fullRec("microvm"), map[string]string{
+			"config.json": "cfg", "memory-ranges": "mem", "data.tar": "data",
+		})
+
+		_, err := s.uploadLocalCheckpointDir(ctx, validPromoteSnapshotRequest(), dir, uri)
+		if got := apierror.Code(err); got != codes.FailedPrecondition {
+			t.Fatalf("status.Code = %v (err %v), want FailedPrecondition", got, err)
+		}
+		if got := store.uploads(); len(got) != 0 {
+			t.Errorf("overwrote the committed snapshot with %v, want nothing uploaded", got)
+		}
+	})
+
+	t.Run("gone locally and uploaded at another fidelity is refused", func(t *testing.T) {
+		store := &recordingObjectStorage{objects: uploadedManifest(ateattr.SnapshotFidelityVolumes)}
+		s := newPluginHerder(t, store)
+
+		_, err := s.uploadLocalCheckpointDir(ctx, validPromoteSnapshotRequest(), filepath.Join(t.TempDir(), "never-created"), uri)
+		if got := apierror.Code(err); got != codes.FailedPrecondition {
+			t.Fatalf("status.Code = %v (err %v), want FailedPrecondition", got, err)
+		}
+		if got := store.uploads(); len(got) != 0 {
+			t.Errorf("uploaded %v with no local copy, want nothing", got)
+		}
+	})
+
+	t.Run("probe failure uploads nothing", func(t *testing.T) {
+		store := &recordingObjectStorage{getErr: errors.New("boom")}
+		s := newPluginHerder(t, store)
+		dir := filepath.Join(t.TempDir(), "pause-snap-1")
+		writeLocalSnapshot(t, dir, fullRec("microvm"), map[string]string{
+			"config.json": "cfg", "memory-ranges": "mem", "data.tar": "data",
+		})
+
+		_, err := s.uploadLocalCheckpointDir(ctx, validPromoteSnapshotRequest(), dir, uri)
+		if got := apierror.Code(err); got != codes.Unavailable {
+			t.Fatalf("status.Code = %v (err %v), want Unavailable: nothing was uploaded, so a retry is safe", got, err)
+		}
+		if got := store.uploads(); len(got) != 0 {
+			t.Errorf("uploaded %v without knowing whether the snapshot was already uploaded, want nothing", got)
 		}
 	})
 
@@ -1708,13 +1805,162 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 	})
 }
 
+// TestPromoteSnapshot_StoreOption checks what each store option leaves on the
+// node once the upload commits: the promoted snapshot stays under
+// LOCAL_AND_DURABLE and goes under DURABLE_ONLY, and an older local snapshot
+// of the actor goes under both.
+func TestPromoteSnapshot_StoreOption(t *testing.T) {
+	for _, tc := range []struct {
+		storeOption ateletpb.SnapshotStoreOption
+		wantPruned  bool
+	}{
+		{ateletpb.SnapshotStoreOption_SNAPSHOT_STORE_OPTION_LOCAL_AND_DURABLE, false},
+		{ateletpb.SnapshotStoreOption_SNAPSHOT_STORE_OPTION_DURABLE_ONLY, true},
+	} {
+		t.Run(tc.storeOption.String(), func(t *testing.T) {
+			useTempNodeDirs(t)
+			ctx := context.Background()
+			store := &recordingObjectStorage{}
+			s := newPluginHerder(t, store)
+
+			req := validPromoteSnapshotRequest()
+			req.StoreOption = tc.storeOption
+			rec := sandboxAssetsRecord{
+				SandboxClass:  "microvm",
+				PauseImage:    testPauseImage,
+				SnapshotFiles: []string{"config.json", "memory-ranges"},
+				Fidelity:      ateattr.SnapshotFidelityMemory,
+			}
+			files := map[string]string{"config.json": "cfg", "memory-ranges": "mem"}
+			localDir := ateletpath.LocalSnapshotDir(req.GetActorUid(), req.GetSnapshot().GetSnapshotUuid())
+			writeLocalSnapshot(t, localDir, rec, files)
+			// An older local snapshot of the actor, as a failed prune leaves.
+			olderDir := ateletpath.LocalSnapshotDir(req.GetActorUid(), "pause-snap-0")
+			writeLocalSnapshot(t, olderDir, rec, files)
+
+			if _, err := s.PromoteSnapshot(ctx, req); err != nil {
+				t.Fatalf("PromoteSnapshot: %v", err)
+			}
+
+			if !slices.Contains(store.keys(), pausedSnapshotPath+"/manifest.json") {
+				t.Errorf("objects after PromoteSnapshot(%s) = %v, want the snapshot uploaded", tc.storeOption, store.keys())
+			}
+			if _, err := os.Stat(olderDir); !os.IsNotExist(err) {
+				t.Errorf("older local snapshot after PromoteSnapshot(%s): stat = %v, want it pruned", tc.storeOption, err)
+			}
+			_, statErr := os.Stat(localDir)
+			if tc.wantPruned && !os.IsNotExist(statErr) {
+				t.Errorf("localDir still exists after PromoteSnapshot(%s): statErr = %v", tc.storeOption, statErr)
+			}
+			if !tc.wantPruned && statErr != nil {
+				t.Errorf("localDir missing after PromoteSnapshot(%s): statErr = %v", tc.storeOption, statErr)
+			}
+		})
+	}
+}
+
+// TestPromoteSnapshot_LocalAndDurableThenDurableOnly promotes one local
+// snapshot keeping its local copy, then again as DURABLE_ONLY: the second
+// promote finds the snapshot already uploaded, uploads nothing, and only drops
+// the local copy. A retry after that is a no-op.
+func TestPromoteSnapshot_LocalAndDurableThenDurableOnly(t *testing.T) {
+	useTempNodeDirs(t)
+	ctx := context.Background()
+	store := &recordingObjectStorage{}
+	s := newPluginHerder(t, store)
+
+	req := validPromoteSnapshotRequest()
+	localDir := ateletpath.LocalSnapshotDir(req.GetActorUid(), req.GetSnapshot().GetSnapshotUuid())
+	writeLocalSnapshot(t, localDir, sandboxAssetsRecord{
+		SandboxClass:  "microvm",
+		PauseImage:    testPauseImage,
+		SnapshotFiles: []string{"config.json", "memory-ranges"},
+		Fidelity:      ateattr.SnapshotFidelityMemory,
+	}, map[string]string{"config.json": "cfg", "memory-ranges": "mem"})
+
+	req.StoreOption = ateletpb.SnapshotStoreOption_SNAPSHOT_STORE_OPTION_LOCAL_AND_DURABLE
+	if _, err := s.PromoteSnapshot(ctx, req); err != nil {
+		t.Fatalf("PromoteSnapshot(LOCAL_AND_DURABLE): %v", err)
+	}
+	uploaded := store.keys()
+	if !slices.Contains(uploaded, pausedSnapshotPath+"/manifest.json") {
+		t.Fatalf("objects after PromoteSnapshot(LOCAL_AND_DURABLE) = %v, want the snapshot uploaded", uploaded)
+	}
+	if _, err := os.Stat(localDir); err != nil {
+		t.Fatalf("local copy missing after PromoteSnapshot(LOCAL_AND_DURABLE): %v", err)
+	}
+	puts := len(store.uploads())
+
+	req.StoreOption = ateletpb.SnapshotStoreOption_SNAPSHOT_STORE_OPTION_DURABLE_ONLY
+	for _, attempt := range []string{"first", "retry"} {
+		if _, err := s.PromoteSnapshot(ctx, req); err != nil {
+			t.Fatalf("PromoteSnapshot(DURABLE_ONLY) %s: %v", attempt, err)
+		}
+		if got := store.uploads()[puts:]; len(got) != 0 {
+			t.Errorf("PromoteSnapshot(DURABLE_ONLY) %s uploaded %v, want nothing: the snapshot was already uploaded", attempt, got)
+		}
+		if _, err := os.Stat(ateletpath.LocalCheckpointsDir(req.GetActorUid())); !os.IsNotExist(err) {
+			t.Errorf("local checkpoints after PromoteSnapshot(DURABLE_ONLY) %s: stat = %v, want them pruned", attempt, err)
+		}
+	}
+	if got := store.keys(); !slices.Equal(got, uploaded) {
+		t.Errorf("objects after PromoteSnapshot(DURABLE_ONLY) = %v, want the uploaded snapshot %v untouched", got, uploaded)
+	}
+}
+
+// A PromoteSnapshot(DURABLE_ONLY) that fails keeps the local copy: a retry
+// needs it, and only a committed upload may prune it.
+func TestPromoteSnapshot_FailureKeepsLocalCopy(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		store *recordingObjectStorage
+		want  codes.Code
+	}{
+		{"probe fails", &recordingObjectStorage{getErr: errors.New("boom")}, codes.Unavailable},
+		{"upload fails", &recordingObjectStorage{putErr: errors.New("boom")}, codes.Internal},
+		{"uploaded at another fidelity", &recordingObjectStorage{objects: map[string][]byte{
+			pausedSnapshotPath + "/manifest.json": []byte(`{"sandboxClass":"microvm","fidelity":"` + ateattr.SnapshotFidelityVolumes + `"}`),
+		}}, codes.FailedPrecondition},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			useTempNodeDirs(t)
+			s := newPluginHerder(t, tc.store)
+			req := validPromoteSnapshotRequest()
+			localDir := ateletpath.LocalSnapshotDir(req.GetActorUid(), req.GetSnapshot().GetSnapshotUuid())
+			writeLocalSnapshot(t, localDir, sandboxAssetsRecord{
+				SandboxClass:  "microvm",
+				PauseImage:    testPauseImage,
+				SnapshotFiles: []string{"config.json", "memory-ranges"},
+				Fidelity:      ateattr.SnapshotFidelityMemory,
+			}, map[string]string{"config.json": "cfg", "memory-ranges": "mem"})
+
+			_, err := s.PromoteSnapshot(context.Background(), req)
+			if got := apierror.Code(err); got != tc.want {
+				t.Errorf("PromoteSnapshot(DURABLE_ONLY) code = %v (err %v), want %v", got, err, tc.want)
+			}
+			if _, err := os.Stat(filepath.Join(localDir, sandboxManifestName)); err != nil {
+				t.Errorf("local copy after the failed PromoteSnapshot(DURABLE_ONLY): %v, want it kept for a retry", err)
+			}
+		})
+	}
+}
+
 func TestValidatePromoteSnapshotRequest(t *testing.T) {
 	tests := []struct {
 		name    string
 		mutate  func(*ateletpb.PromoteSnapshotRequest)
 		wantErr bool
 	}{
-		{"valid", func(*ateletpb.PromoteSnapshotRequest) {}, false},
+		{"valid durable only", func(*ateletpb.PromoteSnapshotRequest) {}, false},
+		{"valid local and durable", func(r *ateletpb.PromoteSnapshotRequest) {
+			r.StoreOption = ateletpb.SnapshotStoreOption_SNAPSHOT_STORE_OPTION_LOCAL_AND_DURABLE
+		}, false},
+		{"local only rejected", func(r *ateletpb.PromoteSnapshotRequest) {
+			r.StoreOption = ateletpb.SnapshotStoreOption_SNAPSHOT_STORE_OPTION_LOCAL_ONLY
+		}, true},
+		{"unspecified store option rejected", func(r *ateletpb.PromoteSnapshotRequest) {
+			r.StoreOption = ateletpb.SnapshotStoreOption_SNAPSHOT_STORE_OPTION_UNSPECIFIED
+		}, true},
 		{"valid volumes fidelity", func(r *ateletpb.PromoteSnapshotRequest) {
 			r.Snapshot.Fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
 		}, false},

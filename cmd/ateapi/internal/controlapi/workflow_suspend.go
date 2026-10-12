@@ -333,6 +333,7 @@ func (w *ActorWorkflow) ensurePausedSnapshotUploaded(ctx context.Context, actorR
 				SnapshotUri: destURI,
 			},
 		},
+		StoreOption: ateletpb.SnapshotStoreOption_SNAPSHOT_STORE_OPTION_DURABLE_ONLY,
 	}
 	wireFidelity = ateattr.SnapshotFidelityValue(fidelity)
 

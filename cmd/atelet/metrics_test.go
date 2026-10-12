@@ -288,22 +288,32 @@ func TestRestoreSnapshotKind(t *testing.T) {
 		Object:       &ateletpb.ObjectStorage{SnapshotUri: "gs://bucket/snap"},
 	}
 	tests := []struct {
-		name string
-		req  *ateletpb.RestoreRequest
-		rec  *sandboxAssetsRecord
-		want string
+		name        string
+		directLocal bool
+		req         *ateletpb.RestoreRequest
+		rec         *sandboxAssetsRecord
+		want        string
 	}{
 		{
-			name: "local pause snapshot",
-			req:  &ateletpb.RestoreRequest{Snapshot: localSnapshot},
-			rec:  &sandboxAssetsRecord{Atespace: "team-a"},
-			want: ateattr.SnapshotKindLocal,
+			name:        "local pause snapshot",
+			directLocal: true,
+			req:         &ateletpb.RestoreRequest{Snapshot: localSnapshot},
+			rec:         &sandboxAssetsRecord{Atespace: "team-a"},
+			want:        ateattr.SnapshotKindLocal,
 		},
 		{
-			name: "local restore is classifiable before the manifest is read",
-			req:  &ateletpb.RestoreRequest{Snapshot: localSnapshot},
-			rec:  nil,
-			want: ateattr.SnapshotKindLocal,
+			name:        "local restore is classifiable before the manifest is read",
+			directLocal: false,
+			req:         &ateletpb.RestoreRequest{Snapshot: localSnapshot},
+			rec:         nil,
+			want:        ateattr.SnapshotKindLocal,
+		},
+		{
+			name:        "durable snapshot served from local cache is classified as local",
+			directLocal: true,
+			req:         &ateletpb.RestoreRequest{Snapshot: externalSnapshot},
+			rec:         &sandboxAssetsRecord{Atespace: "team-a"},
+			want:        ateattr.SnapshotKindLocal,
 		},
 		{
 			name: "external snapshot written by a golden actor",
@@ -332,7 +342,7 @@ func TestRestoreSnapshotKind(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := restoreSnapshotKind(tt.req, tt.rec); got != tt.want {
+			if got := restoreSnapshotKind(tt.directLocal, tt.req, tt.rec); got != tt.want {
 				t.Errorf("restoreSnapshotKind() = %q, want %q", got, tt.want)
 			}
 		})
@@ -353,6 +363,11 @@ func TestCheckpointSnapshotKind(t *testing.T) {
 		{
 			name: "suspend writes the actor's durable snapshot",
 			req:  &ateletpb.CheckpointRequest{PromotionPolicy: durableOnlyPolicy(), Atespace: "team-a"},
+			want: ateattr.SnapshotKindLatest,
+		},
+		{
+			name: "suspend with local cache still reports latest",
+			req:  &ateletpb.CheckpointRequest{PromotionPolicy: localAndDurablePolicy(), Atespace: "team-a"},
 			want: ateattr.SnapshotKindLatest,
 		},
 		{

@@ -171,7 +171,7 @@ func (h *herder) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (*at
 func (h *herder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest) (*ateletpb.CheckpointResponse, error) {
 	start := time.Now()
 	// Any promotion step puts the snapshot in object storage.
-	if policy := req.GetPromotionPolicy(); policy.GetDurableOnly() != nil {
+	if policy := req.GetPromotionPolicy(); policy.GetLocalAndDurable() != nil || policy.GetDurableOnly() != nil {
 		if err := h.writePlaceholder(ctx, start, h.delays.checkpoint, req.GetSnapshot().GetObject().GetSnapshotUri()); err != nil {
 			return nil, err
 		}

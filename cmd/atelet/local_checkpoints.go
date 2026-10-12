@@ -25,13 +25,14 @@ import (
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ateletpath"
 )
 
-// pruneLocalCheckpoints removes every local snapshot of the actor. A missing
-// directory is not an error, so retries are safe.
-func pruneLocalCheckpoints(ctx context.Context, actorUID string) error {
-	return pruneLocalCheckpointDir(ctx, ateletpath.LocalCheckpointsDir(actorUID))
+// pruneLocalCheckpoints removes every local snapshot of the actor except keep
+// (pass "" to remove all of them). A missing directory is not an error, so
+// retries are safe.
+func pruneLocalCheckpoints(ctx context.Context, actorUID, keep string) error {
+	return pruneLocalCheckpointDir(ctx, ateletpath.LocalCheckpointsDir(actorUID), keep)
 }
 
-func pruneLocalCheckpointDir(ctx context.Context, dir string) error {
+func pruneLocalCheckpointDir(ctx context.Context, dir, keep string) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -42,7 +43,12 @@ func pruneLocalCheckpointDir(ctx context.Context, dir string) error {
 	// Every entry is attempted: one undeletable snapshot must not strand the
 	// others on disk.
 	var errs []error
+	kept := false
 	for _, entry := range entries {
+		if keep != "" && entry.Name() == keep {
+			kept = true
+			continue
+		}
 		path := filepath.Join(dir, entry.Name())
 		if err := os.RemoveAll(path); err != nil {
 			errs = append(errs, fmt.Errorf("while pruning local checkpoint %s: %w", path, err))
@@ -53,8 +59,10 @@ func pruneLocalCheckpointDir(ctx context.Context, dir string) error {
 	if len(errs) > 0 {
 		return errors.Join(errs...)
 	}
-	if err := os.Remove(dir); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("while removing local checkpoints dir %s: %w", dir, err)
+	if !kept {
+		if err := os.Remove(dir); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("while removing local checkpoints dir %s: %w", dir, err)
+		}
 	}
 	return nil
 }

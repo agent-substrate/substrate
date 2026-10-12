@@ -31,6 +31,9 @@ type promotionStep struct {
 // promotionSteps returns the policy's set steps in the order they run.
 func promotionSteps(policy *ateletpb.SnapshotPromotionPolicy) []promotionStep {
 	var steps []promotionStep
+	if s := policy.GetLocalAndDurable(); s != nil {
+		steps = append(steps, promotionStep{"local_and_durable", ateletpb.SnapshotStoreOption_SNAPSHOT_STORE_OPTION_LOCAL_AND_DURABLE, s})
+	}
 	if s := policy.GetDurableOnly(); s != nil {
 		steps = append(steps, promotionStep{"durable_only", ateletpb.SnapshotStoreOption_SNAPSHOT_STORE_OPTION_DURABLE_ONLY, s})
 	}

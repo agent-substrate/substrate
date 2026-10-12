@@ -251,10 +251,15 @@ service AteomHerder {
   rpc Restore(RestoreRequest) returns (RestoreResponse) {}
 
   // PromoteSnapshot copies a local checkpoint from this node's disk to object
-  // storage, then prunes the actor's local checkpoints. Unlike Checkpoint it
-  // drives no ateom: the actor is paused, its sandbox is gone; the checkpoint
-  // files plus their manifest already sit under the actor's local-checkpoints
-  // directory.
+  // storage. Unlike Checkpoint it drives no ateom: the actor is paused, its
+  // sandbox is gone; the checkpoint files plus their manifest already sit under
+  // the actor's local-checkpoints directory.
+  //
+  // Idempotent: when `snapshot.object` already holds the snapshot at
+  // `snapshot.fidelity`, nothing is uploaded and only `store_option` applies,
+  // so a retry is safe and DURABLE_ONLY drops the local copy of a
+  // LOCAL_AND_DURABLE snapshot. A snapshot generation keeps one fidelity, so
+  // one there at another fidelity fails the call with FAILED_PRECONDITION.
   rpc PromoteSnapshot(PromoteSnapshotRequest) returns (PromoteSnapshotResponse) {}
 
   // Terminate tells atelet to terminate/kill any running workload for an actor,
@@ -522,7 +527,7 @@ message Snapshot {
   SnapshotFidelity fidelity = 2;
 
   // The snapshot's durable copy in object storage. Required when the request
-  // asks for DURABLE_ONLY.
+  // asks for LOCAL_AND_DURABLE or DURABLE_ONLY.
   ObjectStorage object = 3;
 }
 
@@ -533,9 +538,14 @@ enum SnapshotStoreOption {
   // prune the actor's other local checkpoints.
   SNAPSHOT_STORE_OPTION_LOCAL_ONLY = 1;
 
-  // Store only in durable storage (`snapshot.object`, at `snapshot.fidelity`),
-  // and prune the actor's local checkpoints.
+  // Store only in durable storage (`snapshot.object`, at `snapshot.fidelity`).
+  // Prunes the actor's local checkpoints once the upload commits.
   SNAPSHOT_STORE_OPTION_DURABLE_ONLY = 2;
+
+  // Store both on node-local disk (`local-checkpoint/<snapshot_uuid>`) and in
+  // durable storage (`snapshot.object`). Keeps the local checkpoint cached on
+  // disk, and prunes the actor's other local checkpoints.
+  SNAPSHOT_STORE_OPTION_LOCAL_AND_DURABLE = 3;
 }
 
 // SnapshotPromotionStep is when atelet promotes a snapshot to one store
@@ -554,8 +564,12 @@ message SnapshotPromotionStep {
 // where every snapshot starts. Its steps run in field order, and an unset
 // step is skipped.
 message SnapshotPromotionPolicy {
-  // Promotes the snapshot to DURABLE_ONLY: uploads it to `snapshot.object`,
-  // then drops the local copy.
+  // Promotes the snapshot to LOCAL_AND_DURABLE: uploads it to
+  // `snapshot.object` and keeps the local copy.
+  SnapshotPromotionStep local_and_durable = 1;
+
+  // Promotes the snapshot to DURABLE_ONLY: uploads it unless an earlier step
+  // has, then drops the local copy.
   SnapshotPromotionStep durable_only = 2;
 }
 
@@ -590,6 +604,15 @@ message CheckpointRequest {
   //     stays LOCAL_ONLY. Used for a pause.
   //   durable_only 0s: Checkpoint returns once the snapshot is uploaded; no
   //     local copy is kept. Used for a suspend.
+  //   local_and_durable 0s: Checkpoint returns once the snapshot is uploaded;
+  //     the local copy is kept.
+  //   local_and_durable 0s, durable_only 3600s: Checkpoint returns once the
+  //     snapshot is uploaded; atelet drops the local copy an hour later.
+  //   local_and_durable 600s: Checkpoint returns once the snapshot is stored
+  //     locally; atelet uploads it 10 minutes later and keeps the local copy.
+  //   local_and_durable 600s, durable_only 3600s: Checkpoint returns once the
+  //     snapshot is stored locally; atelet uploads it 10 minutes later, keeps
+  //     the local copy, and drops that copy an hour after the upload.
   //   durable_only 600s: Checkpoint returns once the snapshot is stored
   //     locally; atelet uploads it 10 minutes later and drops the local copy.
   //
@@ -614,9 +637,16 @@ message PromoteSnapshotRequest {
   // destination (`object`), and the `fidelity` the uploaded snapshot must
   // have.
   //
-  // Promotion never converts between fidelities: if the local checkpoint has
-  // another fidelity, FAILED_PRECONDITION is returned.
+  // Promotion never converts between fidelities: if the local checkpoint, or a
+  // snapshot already committed at `object`, has another fidelity,
+  // FAILED_PRECONDITION is returned.
   Snapshot snapshot = 6;
+
+  // Must be `SNAPSHOT_STORE_OPTION_LOCAL_AND_DURABLE` (keep this local
+  // checkpoint cached after uploading, pruning the actor's others) or
+  // `SNAPSHOT_STORE_OPTION_DURABLE_ONLY` (prune all of the actor's local
+  // checkpoints after uploading).
+  SnapshotStoreOption store_option = 7;
 }
 
 message PromoteSnapshotResponse {
@@ -634,9 +664,9 @@ message RestoreRequest {
 
   WorkloadSpec spec = 7;
 
-  // Snapshot to restore from: the node-local copy under
-  // `local-checkpoint/<snapshot_uuid>` when `object` is unset, otherwise the
-  // copy in `snapshot.object`.
+  // Snapshot to restore from. atelet checks `local-checkpoint/<snapshot_uuid>`
+  // first and falls back to `snapshot.object` if the local copy is absent or
+  // unusable: its manifest does not parse or lists a missing file.
   Snapshot snapshot = 8;
 
   // When absent the actor has no egress: its TCP is captured and refused.

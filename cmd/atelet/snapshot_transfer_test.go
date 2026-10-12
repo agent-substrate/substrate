@@ -149,24 +149,27 @@ func TestSnapshotTransferSkipsEmptyFileLists(t *testing.T) {
 	}
 }
 
-// failingNodePlugin fails every call with err.
+// failingNodePlugin fails FetchSnapshot with fetchErr and UploadSnapshot
+// with uploadErr.
 type failingNodePlugin struct {
-	err error
+	fetchErr, uploadErr error
 }
 
 func (p failingNodePlugin) FetchSnapshot(context.Context, *objectstorev1.FetchSnapshotRequest, ...grpc.CallOption) (*objectstorev1.FetchSnapshotResponse, error) {
-	return nil, p.err
+	return nil, p.fetchErr
 }
 
 func (p failingNodePlugin) UploadSnapshot(context.Context, *objectstorev1.UploadSnapshotRequest, ...grpc.CallOption) (*objectstorev1.UploadSnapshotResponse, error) {
-	return nil, p.err
+	return nil, p.uploadErr
 }
 
 // A snapshot plugin that cannot be reached reaches ate-api-server as
 // Unavailable, which it retries, rather than Internal, which crashes the
 // actor. The upload after CheckpointWorkload is the exception: a retried
 // Checkpoint cannot redo it, so it stays Internal. Other plugin errors reach
-// ate-api-server as Internal.
+// ate-api-server as Internal, except from the paused upload's probe for an
+// already-uploaded snapshot, which runs before anything is uploaded and so
+// is always Unavailable.
 func TestSnapshotPluginErrorCodeThroughAtelet(t *testing.T) {
 	uri, err := resources.ParseSnapshotURI(pausedSnapshotURI)
 	if err != nil {
@@ -178,47 +181,55 @@ func TestSnapshotPluginErrorCodeThroughAtelet(t *testing.T) {
 		SnapshotFiles: []string{"a"},
 		Fidelity:      ateattr.SnapshotFidelityMemory,
 	}
-	transfers := []struct {
-		name      string
-		retryable bool
-		run       func(ctx context.Context, s *AteomHerder) error
-	}{
-		{"download", true, func(ctx context.Context, s *AteomHerder) error {
-			return s.downloadExternalCheckpoint(ctx, pausedSnapshotURI, t.TempDir(), []string{"a"})
-		}},
-		{"paused upload", true, func(ctx context.Context, s *AteomHerder) error {
-			dir := t.TempDir()
-			writeLocalSnapshot(t, dir, rec, map[string]string{"a": "a"})
-			_, err := s.uploadLocalCheckpointDir(ctx, validPromoteSnapshotRequest(), dir, uri)
-			return err
-		}},
-		{"checkpoint upload", false, func(ctx context.Context, s *AteomHerder) error {
-			dir := t.TempDir()
-			if err := os.WriteFile(filepath.Join(dir, "a"), []byte("a"), 0o600); err != nil {
-				return err
-			}
-			return s.uploadExternalCheckpoint(ctx, validCheckpointRequest(), dir, &rec)
-		}},
+	download := func(ctx context.Context, s *AteomHerder) error {
+		return s.downloadExternalCheckpoint(ctx, pausedSnapshotURI, t.TempDir(), []string{"a"})
 	}
-	for _, pluginCode := range []codes.Code{codes.Unavailable, codes.Internal, codes.NotFound} {
-		for _, tr := range transfers {
-			t.Run(pluginCode.String()+"/"+tr.name, func(t *testing.T) {
-				want := codes.Internal
-				if pluginCode == codes.Unavailable && tr.retryable {
-					want = codes.Unavailable
-				}
-				s := &AteomHerder{
-					snapshotPlugin:     failingNodePlugin{err: status.Error(pluginCode, "plugin failed")},
-					snapshotScratchDir: t.TempDir(),
-				}
-				// atelet's server interceptor decides the code ate-api-server sees.
-				_, err := ateinterceptors.InternalServerUnaryInterceptor(context.Background(), nil, &grpc.UnaryServerInfo{FullMethod: "/test"},
-					func(ctx context.Context, _ any) (any, error) { return nil, tr.run(ctx, s) })
-				if got := status.Code(err); got != want {
-					t.Errorf("code = %s (%v), want %s", got, err, want)
-				}
-			})
+	pausedUpload := func(ctx context.Context, s *AteomHerder) error {
+		dir := t.TempDir()
+		writeLocalSnapshot(t, dir, rec, map[string]string{"a": "a"})
+		_, err := s.uploadLocalCheckpointDir(ctx, validPromoteSnapshotRequest(), dir, uri)
+		return err
+	}
+	checkpointUpload := func(ctx context.Context, s *AteomHerder) error {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "a"), []byte("a"), 0o600); err != nil {
+			return err
 		}
+		return s.uploadExternalCheckpoint(ctx, validCheckpointRequest(), dir, &rec)
+	}
+	failed := func(c codes.Code) error { return status.Error(c, "plugin failed") }
+	// The paused upload's probe finds no uploaded snapshot, so it uploads.
+	notUploaded := failed(codes.NotFound)
+	for _, tc := range []struct {
+		name   string
+		plugin failingNodePlugin
+		run    func(context.Context, *AteomHerder) error
+		want   codes.Code
+	}{
+		{"download/Unavailable", failingNodePlugin{fetchErr: failed(codes.Unavailable)}, download, codes.Unavailable},
+		{"download/Internal", failingNodePlugin{fetchErr: failed(codes.Internal)}, download, codes.Internal},
+		{"download/NotFound", failingNodePlugin{fetchErr: failed(codes.NotFound)}, download, codes.Internal},
+		{"paused probe/Unavailable", failingNodePlugin{fetchErr: failed(codes.Unavailable)}, pausedUpload, codes.Unavailable},
+		{"paused probe/Internal", failingNodePlugin{fetchErr: failed(codes.Internal)}, pausedUpload, codes.Unavailable},
+		{"paused upload/Unavailable", failingNodePlugin{fetchErr: notUploaded, uploadErr: failed(codes.Unavailable)}, pausedUpload, codes.Unavailable},
+		{"paused upload/Internal", failingNodePlugin{fetchErr: notUploaded, uploadErr: failed(codes.Internal)}, pausedUpload, codes.Internal},
+		{"paused upload/NotFound", failingNodePlugin{fetchErr: notUploaded, uploadErr: failed(codes.NotFound)}, pausedUpload, codes.Internal},
+		{"checkpoint upload/Unavailable", failingNodePlugin{uploadErr: failed(codes.Unavailable)}, checkpointUpload, codes.Internal},
+		{"checkpoint upload/Internal", failingNodePlugin{uploadErr: failed(codes.Internal)}, checkpointUpload, codes.Internal},
+		{"checkpoint upload/NotFound", failingNodePlugin{uploadErr: failed(codes.NotFound)}, checkpointUpload, codes.Internal},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &AteomHerder{
+				snapshotPlugin:     tc.plugin,
+				snapshotScratchDir: t.TempDir(),
+			}
+			// atelet's server interceptor decides the code ate-api-server sees.
+			_, err := ateinterceptors.InternalServerUnaryInterceptor(context.Background(), nil, &grpc.UnaryServerInfo{FullMethod: "/test"},
+				func(ctx context.Context, _ any) (any, error) { return nil, tc.run(ctx, s) })
+			if got := status.Code(err); got != tc.want {
+				t.Errorf("code = %s (%v), want %s", got, err, tc.want)
+			}
+		})
 	}
 }
 
@@ -278,6 +289,16 @@ func (s *pluginSidecar) stop() {
 	}
 }
 
+// notUploadedYet reports every snapshot as not yet uploaded, and passes the
+// rest of NodeProviderClient through.
+type notUploadedYet struct {
+	objectstorev1.NodeProviderClient
+}
+
+func (notUploadedYet) FetchSnapshot(context.Context, *objectstorev1.FetchSnapshotRequest, ...grpc.CallOption) (*objectstorev1.FetchSnapshotResponse, error) {
+	return nil, status.Error(codes.NotFound, "not uploaded yet")
+}
+
 // The upload after CheckpointWorkload waits out a plugin outage longer than
 // the ready wait, since a retried Checkpoint cannot redo it. The paused
 // upload, which a retry can redo, still fails within the ready wait.
@@ -297,7 +318,9 @@ func TestCheckpointUploadWaitsOutPluginOutage(t *testing.T) {
 		t.Fatalf("WaitReady = %v", err)
 	}
 	s := &AteomHerder{
-		snapshotPlugin:     objectstorev1.NewNodeProviderClient(conn),
+		// The paused upload's probe finds nothing uploaded yet without
+		// contacting the plugin, so its upload is the call the outage meets.
+		snapshotPlugin:     notUploadedYet{objectstorev1.NewNodeProviderClient(conn)},
 		snapshotScratchDir: t.TempDir(),
 	}
 	rec := sandboxAssetsRecord{
@@ -358,7 +381,7 @@ func TestCheckpointUploadWaitsOutPluginOutage(t *testing.T) {
 // snapshot upload uses to tell a missing snapshot from a failed probe.
 func TestFetchManifestKeepsNotFound(t *testing.T) {
 	s := &AteomHerder{
-		snapshotPlugin:     failingNodePlugin{err: status.Error(codes.NotFound, "no manifest")},
+		snapshotPlugin:     failingNodePlugin{fetchErr: status.Error(codes.NotFound, "no manifest")},
 		snapshotScratchDir: t.TempDir(),
 	}
 	_, err := s.fetchManifest(context.Background(), pausedSnapshotURI)

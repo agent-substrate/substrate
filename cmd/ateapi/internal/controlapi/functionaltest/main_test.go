@@ -30,6 +30,8 @@ import (
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/testenv"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
@@ -130,7 +132,14 @@ type FakeAteletServer struct {
 
 	PromoteCalled  bool
 	PromoteRequest *ateletpb.PromoteSnapshotRequest
-	FailPromote    error
+	// PromoteRequests holds every PromoteSnapshot request, in order.
+	PromoteRequests []*ateletpb.PromoteSnapshotRequest
+	FailPromote     error
+	// FailPromoteAfterCommit is returned once the upload has committed, as
+	// when the response to a successful promote is lost.
+	FailPromoteAfterCommit error
+	// promoted holds the fidelity committed at each promote destination.
+	promoted map[string]ateletpb.SnapshotFidelity
 
 	TerminateCalled  bool
 	TerminateRequest *ateletpb.TerminateRequest
@@ -182,7 +191,10 @@ func (f *FakeAteletServer) Reset() {
 
 	f.PromoteCalled = false
 	f.PromoteRequest = nil
+	f.PromoteRequests = nil
 	f.FailPromote = nil
+	f.FailPromoteAfterCommit = nil
+	f.promoted = nil
 
 	f.TerminateCalled = false
 	f.TerminateRequest = nil
@@ -197,11 +209,28 @@ func (f *FakeAteletServer) PromoteSnapshot(ctx context.Context, req *ateletpb.Pr
 
 	f.PromoteCalled = true
 	f.PromoteRequest = proto.Clone(req).(*ateletpb.PromoteSnapshotRequest)
+	f.PromoteRequests = append(f.PromoteRequests, f.PromoteRequest)
 	if f.FailPromote != nil {
 		return nil, f.FailPromote
 	}
-	if err := f.writeSnapshot(req.GetSnapshot().GetObject().GetSnapshotUri()); err != nil {
+	// Like atelet, leave a destination already holding the snapshot at the
+	// requested fidelity alone, and refuse one holding another fidelity.
+	uri := req.GetSnapshot().GetObject().GetSnapshotUri()
+	if committed, ok := f.promoted[uri]; ok {
+		if committed != req.GetSnapshot().GetFidelity() {
+			return nil, status.Errorf(codes.FailedPrecondition, "%s already holds the snapshot as %v", uri, committed)
+		}
+		return &ateletpb.PromoteSnapshotResponse{}, nil
+	}
+	if err := f.writeSnapshot(uri); err != nil {
 		return nil, err
+	}
+	if f.promoted == nil {
+		f.promoted = map[string]ateletpb.SnapshotFidelity{}
+	}
+	f.promoted[uri] = req.GetSnapshot().GetFidelity()
+	if f.FailPromoteAfterCommit != nil {
+		return nil, f.FailPromoteAfterCommit
 	}
 	return &ateletpb.PromoteSnapshotResponse{}, nil
 }
