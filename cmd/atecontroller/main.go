@@ -208,8 +208,18 @@ func main() {
 		SystemNamespace:          systemNamespace,
 		AteletServiceAccount:     *ateletServiceAccount,
 		RouterServiceAccount:     *routerServiceAccount,
+		Recorder:                 mgr.GetEventRecorder("workerpool-controller"),
+		APIReader:                mgr.GetAPIReader(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "WorkerPool")
+		os.Exit(1)
+	}
+
+	if err = (&controllers.SandboxConfigProtectionReconciler{
+		Client:    mgr.GetClient(),
+		APIReader: mgr.GetAPIReader(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "SandboxConfigProtection")
 		os.Exit(1)
 	}
 

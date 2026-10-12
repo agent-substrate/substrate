@@ -112,14 +112,23 @@ func TestResumeActor_RunningFastPathDoesNotAcquireLease(t *testing.T) {
 }
 
 // TestFinalizeRunning_CommitsRunning verifies the last step of a resume moves
-// the actor out of RESUMING against a freshly read version.
+// the actor out of RESUMING against a freshly read version, and keeps the
+// locality of the local snapshot it restored from: resume does not delete the
+// snapshot's files from the node.
 func TestFinalizeRunning_CommitsRunning(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
 	storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
 		Metadata:      &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "id1"},
 		ActorTemplate: &ateapipb.ObjectRef{Atespace: "team-a", Name: "tmpl-2"},
-		Status:        &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RESUMING},
+		Status: &ateapipb.ActorStatus{
+			State:                  ateapipb.ActorState_ACTOR_STATE_RESUMING,
+			AssignedNode:           "node-1",
+			LastAssignedGeneration: 1,
+			Snapshots: []*ateapipb.Snapshot{
+				newLocalSnapshot(1, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, "", "local-1", "node-1"),
+			},
+		},
 	})
 	w := &ActorWorkflow{store: persistence}
 
@@ -129,6 +138,9 @@ func TestFinalizeRunning_CommitsRunning(t *testing.T) {
 	}
 	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
 		t.Errorf("state = %v, want RUNNING", got.GetStatus().GetState())
+	}
+	if locality := findLatestLocalSnapshot(got.GetStatus()).GetLocality(); locality != "node-1" {
+		t.Errorf("local snapshot locality = %q, want %q kept after resume", locality, "node-1")
 	}
 }
 
@@ -971,7 +983,7 @@ func TestLoadActorForResume_TemplateReplaced(t *testing.T) {
 				seedOpts = append(seedOpts, func(a *ateapipb.Actor) {
 					a.Status.LastAssignedGeneration = 1
 					a.Status.Snapshots = []*ateapipb.Snapshot{
-						newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, resolve(tt.snapshotUID), someActorSnapshotURI(t, testStorageLocation, actorRef.Atespace, "snap-1"), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+						newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, resolve(tt.snapshotUID), "snap-1", someActorSnapshotURI(t, testStorageLocation, actorRef.Atespace, "snap-1"), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
 					}
 				})
 			}
@@ -1021,9 +1033,10 @@ func TestLoadActorForResume_RunningActorShortCircuits(t *testing.T) {
 type capturingAtelet struct {
 	ateletpb.UnimplementedAteomHerderServer
 
-	mu      sync.Mutex
-	restore *ateletpb.RestoreRequest
-	run     *ateletpb.RunRequest
+	mu         sync.Mutex
+	restore    *ateletpb.RestoreRequest
+	run        *ateletpb.RunRequest
+	checkpoint *ateletpb.CheckpointRequest
 }
 
 func (f *capturingAtelet) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (*ateletpb.RestoreResponse, error) {
@@ -1038,6 +1051,22 @@ func (f *capturingAtelet) Run(ctx context.Context, req *ateletpb.RunRequest) (*a
 	defer f.mu.Unlock()
 	f.run = proto.Clone(req).(*ateletpb.RunRequest)
 	return &ateletpb.RunResponse{}, nil
+}
+
+func (f *capturingAtelet) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest) (*ateletpb.CheckpointResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.checkpoint = proto.Clone(req).(*ateletpb.CheckpointRequest)
+	return &ateletpb.CheckpointResponse{}, nil
+}
+
+func (f *capturingAtelet) checkpointRequest() *ateletpb.CheckpointRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.checkpoint == nil {
+		return nil
+	}
+	return proto.Clone(f.checkpoint).(*ateletpb.CheckpointRequest)
 }
 
 // requests returns the recorded Restore and Run requests, nil for an RPC that
@@ -1143,10 +1172,10 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 	unspecScope := ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_UNSPECIFIED
 
 	extSnap := func(uri string, fidelity ateapipb.SnapshotFidelity) *ateapipb.Snapshot {
-		return newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, fidelity, "", uri, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+		return newDurableSnapshot(1, ateapipb.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, fidelity, "", "snap-1", uri, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
 	}
 	localSnap := func(name string, fidelity ateapipb.SnapshotFidelity) *ateapipb.Snapshot {
-		return newLocalSnapshot(1, fidelity, "", name, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+		return newLocalSnapshot(1, fidelity, "", name, "node-1")
 	}
 
 	// actorSeed is the actor status a row persists before resuming.
@@ -1372,8 +1401,8 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 			},
 		},
 		{
-			// The local snapshot takes precedence at restore, and its recorded
-			// scope wins over the durable snapshot's.
+			// The local snapshot takes precedence at restore, carrying its own
+			// scope rather than the durable snapshot's.
 			name: "17 local snapshot wins over a Full durable snapshot",
 			actor: actorSeed{
 				localSnapshot:    localSnap(localSnapshotName, dataScope),
@@ -1412,7 +1441,7 @@ func TestResumeActor_AteletWireRequest(t *testing.T) {
 		},
 		{
 			name:  "20 local snapshot restore with a missing SandboxConfig is rejected",
-			actor: actorSeed{localSnapshot: localSnap(localSnapshotName, unspecScope)},
+			actor: actorSeed{localSnapshot: localSnap(localSnapshotName, fullScope)},
 			tmpl:  templateSeed{configName: "missing"},
 			want:  restoreWant{code: codes.FailedPrecondition},
 		},

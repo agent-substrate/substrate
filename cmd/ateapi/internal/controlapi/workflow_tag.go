@@ -30,10 +30,12 @@ import (
 // The tag is given its own copy of that snapshot, so suspending the actor again
 // or deleting the actor does not garbage collect the tag's snapshot.
 //
-// The tag is built in 3 phases:
-//  1. Reserve the tag and record its storage location.
-//  2. Copy the snapshot under the reserved tag's UID.
-//  3. Finalize: write the completed snapshot object to the tag.
+// The tag is built in 4 phases:
+//  1. Reserve the tag's name; the store assigns its UID.
+//  2. Record the snapshot's URI, under the tag's UID, before anything is
+//     copied there.
+//  3. Copy the snapshot to that URI.
+//  4. Finalize: mark the tag's snapshot COMPLETED.
 //
 // The tag captures whichever snapshot the actor holds when the workflow runs.
 // An actor keeps no snapshot history, so a suspend that lands first moves what
@@ -67,16 +69,20 @@ func (w *ActorWorkflow) TagActorSnapshot(ctx context.Context, tag *ateapipb.Tag)
 	if err != nil {
 		return nil, err
 	}
-	snapshot, _ := findLatestSnapshotStorage(actor.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+	snapshot := findLatestDurableSnapshot(actor.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
 
-	reserved, dst, err := w.ensureTagReserved(leaseCtx, tagRef, actor, actorTemplate, tag)
+	reserved, err := w.ensureTagReserved(leaseCtx, tagRef, actor, actorTemplate, snapshot, tag)
 	if err != nil {
 		return nil, err
 	}
-	if err := w.ensureTagSnapshotCopied(leaseCtx, reserved, snapshot, dst); err != nil {
+	recorded, dst, err := w.ensureTagSnapshotRecorded(leaseCtx, reserved, actorTemplate, snapshot)
+	if err != nil {
 		return nil, err
 	}
-	return w.ensureTagFinalized(leaseCtx, reserved, snapshot, dst)
+	if err := w.ensureTagSnapshotCopied(leaseCtx, recorded, snapshot, dst); err != nil {
+		return nil, err
+	}
+	return w.ensureTagFinalized(leaseCtx, recorded, snapshot, dst)
 }
 
 // DeleteTag releases the external snapshot the tag owns and then removes the
@@ -145,7 +151,9 @@ func (w *ActorWorkflow) loadTagForDelete(ctx context.Context, tagRef resources.T
 
 // ensureTagSnapshotReleased deletes the objects the tag's external snapshot is
 // made of. It tolerates a partly-collected snapshot, so a retry finishes
-// cleanly. It collects the in-progress snapshot of a pending tag too.
+// cleanly. It collects the in-progress snapshot of a pending tag too, and
+// skips a tag whose create died before recording its snapshot: nothing is
+// copied until the URI is recorded, so such a tag stranded nothing.
 func (w *ActorWorkflow) ensureTagSnapshotReleased(ctx context.Context, tag *ateapipb.Tag) (err error) {
 	ctx, done := stepSpan(ctx, "ReleaseTagSnapshot")
 	defer func() { err = done(err) }()
@@ -155,7 +163,12 @@ func (w *ActorWorkflow) ensureTagSnapshotReleased(ctx context.Context, tag *atea
 		return nil
 	}
 	tagRef := resources.TagRefFromTag(tag)
-	uri, err := resources.ParseSnapshotURI(tagDurableSnapshotURI(tag, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_UNSPECIFIED))
+	snapshotURI := tagDurableSnapshotURI(tag, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_UNSPECIFIED)
+	if snapshotURI == "" {
+		markSkipped(ctx, "the tag records no snapshot")
+		return nil
+	}
+	uri, err := resources.ParseSnapshotURI(snapshotURI)
 	if err != nil {
 		return fmt.Errorf("while resolving the external snapshot of tag %s: %w", tagRef, err)
 	}
@@ -201,8 +214,8 @@ func (w *ActorWorkflow) loadActorForTag(ctx context.Context, actorRef resources.
 	if got := actor.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
 		return nil, nil, apierror.FailedPrecondition("Actor %s must be %s to be tagged (got: %v)", actorRef, ateapipb.ActorState_ACTOR_STATE_SUSPENDED, got)
 	}
-	snap, st := findLatestSnapshotStorage(actor.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
-	if st == nil {
+	snap := findLatestDurableSnapshot(actor.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+	if snap == nil {
 		return nil, nil, apierror.FailedPrecondition("Actor %s holds no external snapshot to tag", actorRef)
 	}
 	// Every way an Actor comes to hold an external snapshot records the
@@ -220,26 +233,24 @@ func (w *ActorWorkflow) loadActorForTag(ctx context.Context, actorRef resources.
 	return actor, actorTemplate, nil
 }
 
-// ensureTagReserved takes the tag's name and records the in-progress snapshot.
+// ensureTagReserved takes the tag's name. The store assigns the tag's UID on
+// create, and the UID keys the prefix the snapshot is copied to, so the
+// snapshot is recorded by the next step.
 //
 // A name already taken is AlreadyExists, whether the tag holding it is finished
 // or was left pending by a create that died. Resuming a pending row would mean
 // deciding whether the objects under it still belong to the snapshot being
 // tagged, and the row may not even be this actor's; deleting the tag collects
 // them and frees the name, so a retry is a delete followed by a create.
-func (w *ActorWorkflow) ensureTagReserved(ctx context.Context, tagRef resources.TagRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate, tag *ateapipb.Tag) (_ *ateapipb.Tag, _ resources.SnapshotURI, err error) {
+func (w *ActorWorkflow) ensureTagReserved(ctx context.Context, tagRef resources.TagRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate, snapshot *ateapipb.Snapshot, tag *ateapipb.Tag) (_ *ateapipb.Tag, err error) {
 	ctx, done := stepSpan(ctx, "ReserveTag")
 	defer func() { err = done(err) }()
 
-	location := actorTemplate.GetSnapshotConfig().GetStorageLocation()
-	if err := resources.ValidateSnapshotLocation(location); err != nil {
-		return nil, resources.SnapshotURI{}, fmt.Errorf("invalid storage location for tag %s: %w", tagRef, err)
+	// Checked before the name is taken, so an unusable location fails the
+	// create without leaving a pending tag behind.
+	if err := resources.ValidateSnapshotLocation(actorTemplate.GetSnapshotConfig().GetStorageLocation()); err != nil {
+		return nil, fmt.Errorf("invalid storage location for tag %s: %w", tagRef, err)
 	}
-	dst, err := resources.NewTagSnapshotURI(location, tagRef.Atespace, resources.NewSnapshotName())
-	if err != nil {
-		return nil, resources.SnapshotURI{}, fmt.Errorf("while building the snapshot URI for tag %s: %w", tagRef, err)
-	}
-	snap, st := findLatestSnapshotStorage(actor.GetStatus(), ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE, ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
 	tagToCreate := &ateapipb.Tag{
 		Metadata:    &ateapipb.ResourceMetadata{Atespace: tagRef.Atespace, Name: tagRef.Name},
 		Scope:       tag.GetScope(),
@@ -250,28 +261,58 @@ func (w *ActorWorkflow) ensureTagReserved(ctx context.Context, tagRef resources.
 			// and a tag that claimed the new template would hand clones the old template's
 			// memory under the new one's identity, past the data-only downgrade a resume of
 			// the actor itself would take.
-			ActorTemplateUid: snap.GetActorTemplateUid(),
-			Snapshot: newDurableSnapshot(
-				1,
-				ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG,
-				st.GetFidelity(),
-				"",
-				dst.String(),
-				ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_IN_PROGRESS,
-			),
+			ActorTemplateUid: snapshot.GetActorTemplateUid(),
 		},
 	}
 
 	stored, err := w.store.CreateTag(ctx, tagToCreate)
 	switch {
 	case err == nil:
-		return stored, dst, nil
+		return stored, nil
 	case errors.Is(err, store.ErrFailedPrecondition):
-		return nil, resources.SnapshotURI{}, apierror.FailedPrecondition("Atespace %s not found", tagRef.Atespace)
+		return nil, apierror.FailedPrecondition("Atespace %s not found", tagRef.Atespace)
 	case errors.Is(err, store.ErrAlreadyExists):
-		return nil, resources.SnapshotURI{}, apierror.AlreadyExists("Tag %s already exists; delete it and create it again to retry", tagRef)
+		return nil, apierror.AlreadyExists("Tag %s already exists; delete it and create it again to retry", tagRef)
 	}
-	return nil, resources.SnapshotURI{}, fmt.Errorf("while reserving tag %s: %w", tagRef, err)
+	return nil, fmt.Errorf("while reserving tag %s: %w", tagRef, err)
+}
+
+// ensureTagSnapshotRecorded records the snapshot the tag will hold as PENDING:
+// a copy of snapshot under the tag's own prefix, keyed on the UID the store
+// assigned when the tag was reserved. It lands before anything is copied, so a
+// tag whose create fails later still names the objects it stranded.
+func (w *ActorWorkflow) ensureTagSnapshotRecorded(ctx context.Context, tag *ateapipb.Tag, actorTemplate *ateapipb.ActorTemplate, snapshot *ateapipb.Snapshot) (_ *ateapipb.Tag, _ resources.SnapshotURI, err error) {
+	ctx, done := stepSpan(ctx, "RecordTagSnapshot")
+	defer func() { err = done(err) }()
+
+	tagRef := resources.TagRefFromTag(tag)
+	dst, err := resources.NewTagSnapshotURI(actorTemplate.GetSnapshotConfig().GetStorageLocation(), tagRef.Atespace, tag.GetMetadata().GetUid())
+	if err != nil {
+		return nil, resources.SnapshotURI{}, fmt.Errorf("while building the snapshot URI for tag %s: %w", tagRef, err)
+	}
+	pending := newDurableSnapshot(
+		1,
+		ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG,
+		snapshot.GetFidelity(),
+		"",
+		dst.Name(),
+		dst.String(),
+		ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING,
+	)
+	stored, err := w.store.UpdateTag(ctx, tagRef, store.PreconditionFrom(tag), func(toUpdate *ateapipb.Tag) error {
+		toUpdate.Status.Snapshot = pending
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, store.ErrVersionConflict) {
+			return nil, resources.SnapshotURI{}, apierror.Aborted("concurrent update conflict, please retry")
+		}
+		if errors.Is(err, store.ErrNotFound) || errors.Is(err, store.ErrUIDConflict) {
+			return nil, resources.SnapshotURI{}, apierror.Aborted("Tag %s was deleted while it was being created, please retry", tagRef)
+		}
+		return nil, resources.SnapshotURI{}, fmt.Errorf("while recording the snapshot of tag %s: %w", tagRef, err)
+	}
+	return stored, dst, nil
 }
 
 // ensureTagSnapshotCopied copies the actor's external snapshot to the tag's own
@@ -286,7 +327,7 @@ func (w *ActorWorkflow) ensureTagSnapshotCopied(ctx context.Context, tag *ateapi
 		return nil
 	}
 	tagRef := resources.TagRefFromTag(tag)
-	srcURI := findSnapshotStorage(snapshot, ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE).GetObject().GetSnapshotUri()
+	srcURI := snapshot.GetDurableSnapshot().GetObject().GetSnapshotUri()
 	src, err := resources.ParseSnapshotURI(srcURI)
 	if err != nil {
 		return fmt.Errorf("while parsing the external snapshot %q of the source actor: %w", srcURI, err)
@@ -306,12 +347,12 @@ func (w *ActorWorkflow) ensureTagFinalized(ctx context.Context, tag *ateapipb.Ta
 
 	tagRef := resources.TagRefFromTag(tag)
 	// The copy is byte-identical to the source, so it carries the same content.
-	srcSt := findSnapshotStorage(snapshot, ateapipb.SnapshotDurability_SNAPSHOT_DURABILITY_DURABLE)
 	finalSnapshot := newDurableSnapshot(
 		1,
 		ateapipb.SnapshotOwner_SNAPSHOT_OWNER_TAG,
-		srcSt.GetFidelity(),
+		snapshot.GetFidelity(),
 		"",
+		dst.Name(),
 		dst.String(),
 		ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED,
 	)
