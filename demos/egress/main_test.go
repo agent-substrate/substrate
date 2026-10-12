@@ -794,3 +794,59 @@ func TestPostInvalidRequests(t *testing.T) {
 		}
 	})
 }
+
+func TestSlowHeaders(t *testing.T) {
+	headersCompleted := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("method = %s, want GET", r.Method)
+		}
+		close(headersCompleted)
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "ok")
+	}))
+	defer srv.Close()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/slow-headers", handleSlowHeaders(80*time.Millisecond))
+
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		done <- postHandler(t, mux, "/slow-headers", fetchRequest{
+			URL: srv.URL + "/",
+		})
+	}()
+
+	select {
+	case <-headersCompleted:
+		t.Fatal("headers completed before headerDelay elapsed")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	<-headersCompleted
+	rec := <-done
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/slow-headers status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+}
+
+func TestSlowHeadersInvalidRequests(t *testing.T) {
+	handler := newHandler(http.DefaultClient)
+
+	t.Run("method not allowed", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, "/slow-headers", nil)
+		handler.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusMethodNotAllowed {
+			t.Errorf("status = %d, want %d", recorder.Code, http.StatusMethodNotAllowed)
+		}
+	})
+	t.Run("https rejected", func(t *testing.T) {
+		recorder := postHandler(t, handler, "/slow-headers", fetchRequest{
+			URL: "https://example.net/",
+		})
+		if recorder.Code != http.StatusBadRequest {
+			t.Errorf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
+		}
+	})
+}

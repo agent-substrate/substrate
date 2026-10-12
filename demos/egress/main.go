@@ -56,7 +56,8 @@ const (
 	muxRequestCount           = 250
 	muxBodySize               = 64
 	// Keep connection around longer than ext_proc cache freshness (10s)
-	postBodyDelay = 15 * time.Second
+	postBodyDelay   = 15 * time.Second
+	slowHeaderDelay = 5 * time.Second
 )
 
 type fetchRequest struct {
@@ -205,10 +206,105 @@ func newHandler(client *http.Client) http.Handler {
 		})
 	})
 	mux.HandleFunc("/post", handlePost(postBodyDelay))
+	mux.HandleFunc("/slow-headers", handleSlowHeaders(slowHeaderDelay))
 	mux.HandleFunc("/mux", handleMux)
 	mux.HandleFunc("/websocket", handleWebSocket)
 	mux.HandleFunc("/grpc", handleGRPC)
 	return mux
+}
+
+func handleSlowHeaders(headerDelay time.Duration) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", http.MethodPost)
+			writeJSON(w, http.StatusMethodNotAllowed, fetchResponse{Error: "method must be POST"})
+			return
+		}
+
+		var input fetchRequest
+		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBody))
+		if err := decoder.Decode(&input); err != nil {
+			writeJSON(w, http.StatusBadRequest, fetchResponse{Error: fmt.Sprintf("invalid JSON payload: %v", err)})
+			return
+		}
+		if err := validateURL(input.URL); err != nil {
+			writeJSON(w, http.StatusBadRequest, fetchResponse{Error: err.Error()})
+			return
+		}
+		parsed, err := url.Parse(input.URL)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, fetchResponse{Error: fmt.Sprintf("invalid URL: %v", err)})
+			return
+		}
+		if parsed.Scheme != "http" {
+			writeJSON(w, http.StatusBadRequest, fetchResponse{Error: "URL scheme must be http"})
+			return
+		}
+
+		targetAddr := parsed.Host
+		if parsed.Port() == "" {
+			targetAddr = net.JoinHostPort(parsed.Hostname(), "80")
+		}
+
+		ctx, cancel := context.WithTimeout(r.Context(), requestTimeout+headerDelay)
+		defer cancel()
+
+		var dialer net.Dialer
+		conn, err := dialer.DialContext(ctx, "tcp", targetAddr)
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, fetchResponse{Error: fmt.Sprintf("request failed: %v", err)})
+			return
+		}
+		defer conn.Close()
+
+		if deadline, ok := ctx.Deadline(); ok {
+			if err := conn.SetDeadline(deadline); err != nil {
+				writeJSON(w, http.StatusBadGateway, fetchResponse{Error: fmt.Sprintf("request failed: %v", err)})
+				return
+			}
+		}
+
+		// Send request line and headers without the final "\r\n" that terminates the header block.
+		reqHeader := fmt.Sprintf(
+			"GET %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n",
+			parsed.RequestURI(), parsed.Host,
+		)
+		if _, err := io.WriteString(conn, reqHeader); err != nil {
+			writeJSON(w, http.StatusBadGateway, fetchResponse{Error: fmt.Sprintf("request failed: %v", err)})
+			return
+		}
+
+		select {
+		case <-time.After(headerDelay):
+		case <-ctx.Done():
+			writeJSON(w, http.StatusBadGateway, fetchResponse{Error: fmt.Sprintf("request failed: %v", ctx.Err())})
+			return
+		}
+
+		if _, err := io.WriteString(conn, "\r\n"); err != nil {
+			writeJSON(w, http.StatusBadGateway, fetchResponse{Error: fmt.Sprintf("request failed: %v", err)})
+			return
+		}
+
+		resp, err := http.ReadResponse(bufio.NewReader(conn), &http.Request{Method: http.MethodGet})
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, fetchResponse{Error: fmt.Sprintf("reading response: %v", err)})
+			return
+		}
+		defer resp.Body.Close()
+
+		respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, fetchResponse{Error: fmt.Sprintf("reading response: %v", err)})
+			return
+		}
+		writeJSON(w, resp.StatusCode, fetchResponse{
+			StatusCode: resp.StatusCode,
+			Body:       string(respBody),
+			Protocol:   resp.Proto,
+			TLS:        false,
+		})
+	}
 }
 
 func handlePost(bodyDelay time.Duration) http.HandlerFunc {

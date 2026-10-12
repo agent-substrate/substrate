@@ -170,7 +170,7 @@ data:
                   "@type": type.googleapis.com/envoy.extensions.filters.http.set_filter_state.v3.Config
                   on_request_headers:
                   - object_key: dev.ate.actor.identity
-                    factory_key: envoy.string
+                    factory_key: envoy.hashable_string
                     shared_with_upstream: ONCE
                     skip_if_empty: true
                     format_string:
@@ -182,7 +182,7 @@ data:
                   # The IP:port the actor dialed, for the request legs to match a
                   # rule's ports against: a port in a request's Host is not it.
                   - object_key: dev.ate.connect.authority
-                    factory_key: envoy.string
+                    factory_key: envoy.hashable_string
                     shared_with_upstream: ONCE
                     skip_if_empty: true
                     format_string:
@@ -254,7 +254,7 @@ data:
                   # SNI rules for the egress-policy module. If absent, all TLS
                   # is denied.
                   - object_key: dev.ate.policy.egress
-                    factory_key: envoy.string
+                    factory_key: envoy.hashable_string
                     skip_if_empty: true
                     shared_with_upstream: ONCE
                     format_string:
@@ -863,6 +863,13 @@ data:
       # The only way into mitm_listener. An internal address, not a socket, so
       # the MITM leg has no listening port anywhere in the pod's netns.
       - name: mitm_internal
+        # Create one pool per unique tuple, containing:
+        # actor ID
+        # CONNECT authority
+        # Egress policy
+        # TODO(yanavlasov): use just the port from CONNECT athority to minimize number of pools.
+        # Pools are create using hashes of filter state, which includes filter state objects that use
+        # envoy.hashable_string factory.
         connect_timeout: 1s
         # Each open tunnel holds one connection and one request here, so these
         # cap concurrent tunnels per replica (Envoy's default is 1024); past
@@ -873,12 +880,6 @@ data:
             max_connections: 16384
             max_requests: 16384
             max_pending_requests: 16384
-        # One pool per tunnel. A pool gives every connection it opens the
-        # filter state of the tunnel that created it, so a pool shared by two
-        # tunnels would hand the second one the first one's actor, authority
-        # and rules. The egress listener speaks HTTP/1, which carries one
-        # CONNECT per downstream connection.
-        connection_pool_per_downstream_connection: true
         typed_extension_protocol_options:
           envoy.extensions.upstreams.tcp.v3.TcpProtocolOptions:
             "@type": type.googleapis.com/envoy.extensions.upstreams.tcp.v3.TcpProtocolOptions

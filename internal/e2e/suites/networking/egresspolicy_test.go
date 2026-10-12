@@ -174,6 +174,8 @@ func TestActorEgressPassthroughPolicyRefresh(t *testing.T) {
 	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
 	waitForActorRoute(t, ctx, router, actorRef)
 
+	// Ask egres actor to POST to /fetch on the test server. Test server /fetch handler
+	// waits for the entire body before responding.
 	url := "https://" + address + "/fetch"
 	postPayload, err := json.Marshal(map[string]string{"url": url, "rootCA": rootCA})
 	if err != nil {
@@ -204,6 +206,50 @@ func TestActorEgressPassthroughPolicyRefresh(t *testing.T) {
 	first := <-firstResult
 	if first.status != http.StatusOK {
 		t.Fatalf("first POST to %s returned HTTP %d, want 200; body: %s", url, first.status, first.body)
+	}
+}
+
+func TestActorEgressPendingPlaintextHeadersDoNotBlockMITM(t *testing.T) {
+	ctx := t.Context()
+	_, actorName, _ := createAndResumeActorWithEgress(
+		t, ctx, "egress-slow-headers", e2e.EgressFixture(),
+		e2e.EgressAllowHTTPS("example.com"),
+		e2e.EgressAllowHTTP("example.net"),
+	)
+	router := mustRouterClient(t, ctx)
+	defer router.Close()
+	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
+	waitForActorRoute(t, ctx, router, actorRef)
+
+	slowPayload, err := json.Marshal(map[string]string{"url": "http://example.net/"})
+	if err != nil {
+		t.Fatalf("marshaling /slow-headers request: %v", err)
+	}
+
+	type postResult struct {
+		status int
+		body   []byte
+	}
+	pendingResult := make(chan postResult, 1)
+	go func() {
+		status, body := postThroughEgressActorUntil(t, ctx, router, actorRef, "/slow-headers", slowPayload, notTransient)
+		pendingResult <- postResult{status: status, body: body}
+	}()
+
+	// Allow the plaintext request to send its incomplete headers before issuing the MITM request.
+	time.Sleep(1 * time.Second)
+
+	status, body := fetchThroughEgressActorUntil(t, ctx, router, actorRef, "https://example.com/", notTransient)
+	if status != http.StatusOK {
+		t.Fatalf("fetch of https://example.com/ returned HTTP %d, want 200; body: %s", status, body)
+	}
+	if !isMitmCert(string(body)) {
+		t.Fatalf("request to https://example.com/ did not use minted cert; body: %s", body)
+	}
+
+	pending := <-pendingResult
+	if pending.status != http.StatusOK {
+		t.Fatalf("fetch of http://example.net/ returned HTTP %d, want 200; body: %s", pending.status, pending.body)
 	}
 }
 
