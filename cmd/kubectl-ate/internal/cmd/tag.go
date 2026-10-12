@@ -38,8 +38,8 @@ var (
 )
 
 var getTagsCmd = &cobra.Command{
-	Use:     "tags [tag-name ...]",
-	Aliases: []string{"tag"},
+	Use:     "tag [tag-name ...]",
+	Aliases: []string{"tags"},
 	Short:   "List or get tags",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if getTagAllAtespacesFlag && getTagAtespaceFlag != "" {

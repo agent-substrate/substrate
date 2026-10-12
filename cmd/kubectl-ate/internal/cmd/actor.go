@@ -59,8 +59,8 @@ var (
 )
 
 var getActorsCmd = &cobra.Command{
-	Use:     "actors <actor-name ...>",
-	Aliases: []string{"actor"},
+	Use:     "actor <actor-name ...>",
+	Aliases: []string{"actors"},
 	Short:   "List all actors or get one or more actors",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if len(args) > 0 {
