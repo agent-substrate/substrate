@@ -124,6 +124,17 @@ kubeadmConfigPatches:
   serializeImagePulls: false
   maxParallelImagePulls: 4
 EOF
+# Hundreds of sandboxes per node can starve the kubelet's node heartbeat; after
+# the 300 s toleration the taint manager evicts every pod on the node. Opt in to
+# a CPU reservation for the kubelet and the system, e.g. KIND_RESERVED_CPU=2.
+if [[ -n "${KIND_RESERVED_CPU:-}" ]]; then
+cat <<EOF >> "${ROOT}/bin/kind-config.yaml"
+  systemReserved:
+    cpu: "${KIND_RESERVED_CPU}"
+  kubeReserved:
+    cpu: "${KIND_RESERVED_CPU}"
+EOF
+fi
 
 echo "Deleting existing kind cluster '${KIND_CLUSTER_NAME}' if it exists..."
 "${ROOT}"/hack/kind.sh delete cluster --name "${KIND_CLUSTER_NAME}" || true
