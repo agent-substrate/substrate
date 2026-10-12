@@ -80,27 +80,38 @@ func (i *Instruments) configurePool(cfg *pgxpool.Config, name string) {
 		return
 	}
 	poolAttr := ateattr.DBConnectionPoolNameKey.String(name)
+	// Precompute acquisition labels once per pool to avoid rebuilding attribute
+	// sets on the hot path. Only failed acquisitions include error.type.
+	acquireOption := func(outcome, errorType string) metric.MeasurementOption {
+		attrs := []attribute.KeyValue{
+			poolAttr,
+			ateattr.StoreConnectionAcquireOutcomeKey.String(outcome),
+		}
+		if errorType != "" {
+			attrs = append(attrs, ateattr.ErrorTypeKey.String(errorType))
+		}
+		return metric.WithAttributeSet(attribute.NewSet(attrs...))
+	}
 	tracer := &poolMetricsTracer{
-		instruments:    i,
-		poolOnly:       metric.WithAttributeSet(attribute.NewSet(poolAttr)),
-		acquireOptions: make(map[string]metric.MeasurementOption, 6),
-	}
-	for _, outcome := range []string{
-		ateattr.StoreConnectionAcquireSuccess,
-		ateattr.StoreConnectionAcquireCancelled,
-		ateattr.StoreConnectionAcquireTimeout,
-	} {
-		tracer.acquireOptions[outcome] = metric.WithAttributeSet(attribute.NewSet(
-			poolAttr, ateattr.StoreConnectionAcquireOutcomeKey.String(outcome)))
-	}
-	for _, errorType := range []string{
-		ateattr.StoreConnectionAcquirePoolClosed,
-		ateattr.StoreConnectionAcquireConnectError,
-		ateattr.StoreConnectionAcquireOtherError,
-	} {
-		tracer.acquireOptions[errorType] = metric.WithAttributeSet(attribute.NewSet(
-			poolAttr, ateattr.StoreConnectionAcquireOutcomeKey.String(ateattr.StoreConnectionAcquireError),
-			ateattr.ErrorTypeKey.String(errorType)))
+		instruments: i,
+		poolOption:  metric.WithAttributeSet(attribute.NewSet(poolAttr)),
+
+		successOption:   acquireOption(ateattr.StoreConnectionAcquireSuccess, ""),
+		cancelledOption: acquireOption(ateattr.StoreConnectionAcquireCancelled, ""),
+		timeoutOption:   acquireOption(ateattr.StoreConnectionAcquireTimeout, ""),
+
+		poolClosedOption: acquireOption(
+			ateattr.StoreConnectionAcquireError,
+			ateattr.StoreConnectionAcquirePoolClosed,
+		),
+		connectErrorOption: acquireOption(
+			ateattr.StoreConnectionAcquireError,
+			ateattr.StoreConnectionAcquireConnectError,
+		),
+		otherErrorOption: acquireOption(
+			ateattr.StoreConnectionAcquireError,
+			ateattr.StoreConnectionAcquireOtherError,
+		),
 	}
 	if cfg.ConnConfig.Tracer == nil {
 		cfg.ConnConfig.Tracer = tracer
@@ -140,16 +151,23 @@ func (t *poolMetricsTracer) recordAcquire(ctx context.Context, duration time.Dur
 	if t == nil {
 		return
 	}
-	outcome := ateattr.StoreConnectionAcquireSuccess
+	option := t.successOption
 	switch {
 	case errors.Is(err, context.Canceled):
-		outcome = ateattr.StoreConnectionAcquireCancelled
+		option = t.cancelledOption
 	case errors.Is(err, context.DeadlineExceeded):
-		outcome = ateattr.StoreConnectionAcquireTimeout
+		option = t.timeoutOption
 	case err != nil:
-		outcome = acquireErrorType(err)
+		switch acquireErrorType(err) {
+		case ateattr.StoreConnectionAcquirePoolClosed:
+			option = t.poolClosedOption
+		case ateattr.StoreConnectionAcquireConnectError:
+			option = t.connectErrorOption
+		default:
+			option = t.otherErrorOption
+		}
 	}
-	t.instruments.wait.Record(ctx, duration.Seconds(), t.acquireOptions[outcome])
+	t.instruments.wait.Record(ctx, duration.Seconds(), option)
 }
 
 func acquireErrorType(err error) string {
@@ -164,9 +182,15 @@ func acquireErrorType(err error) string {
 }
 
 type poolMetricsTracer struct {
-	instruments    *Instruments
-	poolOnly       metric.MeasurementOption
-	acquireOptions map[string]metric.MeasurementOption
+	instruments *Instruments
+
+	poolOption         metric.MeasurementOption
+	successOption      metric.MeasurementOption
+	cancelledOption    metric.MeasurementOption
+	timeoutOption      metric.MeasurementOption
+	poolClosedOption   metric.MeasurementOption
+	connectErrorOption metric.MeasurementOption
+	otherErrorOption   metric.MeasurementOption
 }
 
 type acquireStartKey struct{}
@@ -182,12 +206,12 @@ func (*poolMetricsTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, _ pg
 func (*poolMetricsTracer) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
 
 func (t *poolMetricsTracer) TraceAcquireStart(ctx context.Context, _ *pgxpool.Pool, _ pgxpool.TraceAcquireStartData) context.Context {
-	t.instruments.pending.Add(ctx, 1, t.poolOnly)
+	t.instruments.pending.Add(ctx, 1, t.poolOption)
 	return context.WithValue(ctx, acquireStartKey{}, time.Now())
 }
 
 func (t *poolMetricsTracer) TraceAcquireEnd(ctx context.Context, _ *pgxpool.Pool, data pgxpool.TraceAcquireEndData) {
-	t.instruments.pending.Add(ctx, -1, t.poolOnly)
+	t.instruments.pending.Add(ctx, -1, t.poolOption)
 	start := ctx.Value(acquireStartKey{}).(time.Time)
 	t.recordAcquire(ctx, time.Since(start), data.Err)
 }
