@@ -78,6 +78,7 @@ import (
 	"google.golang.org/grpc/status"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
+	kubeinformers "k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
@@ -311,22 +312,6 @@ func main() {
 	)
 	go systemInfoVolumes.run(ctx)
 
-	// Pre-download sandbox assets as SandboxConfigs appear/change so the first
-	// Run/Restore on this node hits the cache. Best-effort: on failure the
-	// on-demand fetch in ensureSandboxAssets still covers correctness.
-	//
-	// We intentionally never WaitForCacheSync on this factory, so a failing
-	// list/watch (e.g. Forbidden while the ClusterRole rollout lags the
-	// binary) cannot hold up atelet startup: the reflector retries in the
-	// background and prewarm stays cold until it recovers.
-	ateFactory := externalversions.NewSharedInformerFactory(ateClient, 0)
-	sandboxConfigInformer := ateFactory.Api().V1alpha1().SandboxConfigs().Informer()
-	if _, err := startSandboxAssetPrewarm(ctx, sandboxConfigInformer, wmService, imageCache, microvmNodeCapable(hostDevRoot)); err != nil {
-		slog.ErrorContext(ctx, "Sandbox asset prewarm disabled", slog.Any("err", err))
-	}
-	// Start after the informer is registered: the factory only runs informers
-	// that exist when Start is called.
-	ateFactory.Start(stopCh)
 	dialOpts, err := ateapiauth.DialOptions(ateapiauth.ClientConfig{
 		K8sClient:        k8sClient,
 		CAFile:           *ateapiCAFile,
@@ -362,6 +347,44 @@ func main() {
 	if ateletIdentity == nil {
 		serverboot.Fatal(ctx, "Failed to load atelet Pod identity", fmt.Errorf("credential bundle has no Pod identity"))
 	}
+
+	// WorkerPools tell which SandboxConfig each local worker's pool uses; see
+	// workerSandboxSyncer.
+	//
+	// We intentionally never WaitForCacheSync on these factories, so a failing
+	// list/watch (e.g. Forbidden while the ClusterRole rollout lags the
+	// binary) cannot hold up atelet startup: the reflector retries in the
+	// background and the syncer waits until it recovers.
+	//
+	// 0 disables periodic resync. The syncer reacts to watch events and retries on its own.
+	ateFactory := externalversions.NewSharedInformerFactory(ateClient, 0)
+	// Watch only worker pods on this node, the same way the kubelet watches only its own pods.
+	// The apiserver indexes pods by spec.nodeName, so list and watch cost scales with
+	// the pods on this node, not the whole cluster.
+	workerPodFactory := kubeinformers.NewSharedInformerFactoryWithOptions(k8sClient, 0,
+		kubeinformers.WithTweakListOptions(func(o *metav1.ListOptions) {
+			o.FieldSelector = "spec.nodeName=" + ateletIdentity.NodeName
+			o.LabelSelector = workerPoolLabel
+		}))
+	// Keep a sandbox versions file in each local worker's directory: the
+	// enabled versions of its pool's SandboxConfig and their local asset
+	// paths, rewritten when the config changes. The syncer fetches each
+	// version's assets and pause image, so the first Run/Restore on a worker
+	// hits the cache. Best-effort: on failure the on-demand fetches in
+	// ensureSandboxAssets and prepareOCIBundles still cover correctness.
+	if _, err := startWorkerSandboxSyncer(ctx,
+		workerPodFactory.Core().V1().Pods(),
+		ateFactory.Api().V1alpha1().WorkerPools(),
+		ateFactory.Api().V1alpha1().SandboxConfigs(),
+		wmService,
+		imageCache,
+		nodepath.AteomsDir()); err != nil {
+		slog.ErrorContext(ctx, "Worker sandbox versions syncer disabled", slog.Any("err", err))
+	}
+	// Start after the informers are registered: a factory only runs
+	// informers that exist when Start is called.
+	ateFactory.Start(stopCh)
+	workerPodFactory.Start(stopCh)
 
 	ateomFacingTLS := tlsCfg.Clone()
 	ateomFacingTLS.VerifyConnection = verifyClientOnSameNode(ateletIdentity)
