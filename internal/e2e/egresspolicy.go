@@ -21,6 +21,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
@@ -106,7 +107,7 @@ func replaceHeaderEffects(header, prefix, credentialURI string) *ateapipb.HttpRu
 func EnsureEgressPolicy(t *testing.T, ctx context.Context, clients *Clients, actor *ateapipb.ObjectRef, rules ...*ateapipb.EgressRule) {
 	t.Helper()
 	policy := &ateapipb.EgressPolicy{
-		Metadata: &ateapipb.ResourceMetadata{Atespace: actor.GetAtespace(), Name: "default"},
+		Metadata: &ateapipb.ResourceMetadata{Atespace: actor.GetAtespace(), Name: resources.SingletonName},
 		Rules:    rules,
 	}
 	_, err := clients.SubstrateAPI.CreateActorEgressPolicy(ctx, &ateapipb.CreateActorEgressPolicyRequest{
@@ -119,7 +120,7 @@ func EnsureEgressPolicy(t *testing.T, ctx context.Context, clients *Clients, act
 		}
 		return
 	}
-	existing, err := clients.SubstrateAPI.GetActorEgressPolicy(ctx, &ateapipb.GetActorEgressPolicyRequest{Actor: actor})
+	existing, err := clients.SubstrateAPI.GetActorEgressPolicy(ctx, &ateapipb.GetActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName})
 	if err != nil {
 		t.Fatalf("GetActorEgressPolicy for %s/%s: %v", actor.GetAtespace(), actor.GetName(), err)
 	}

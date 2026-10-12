@@ -419,10 +419,18 @@ func validateActorDirs(actorDirs *ateompb.ActorDirs) error {
 	return nil
 }
 
+// supportedFidelities are the snapshot fidelities this runtime serves: the
+// rootfs upper is host-backed, so it ships with or without guest memory.
+var supportedFidelities = []ateompb.SnapshotFidelity{
+	ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
+	ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS,
+	ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+}
+
 // validateFidelity rejects a checkpoint or restore request whose fidelity
 // this runtime cannot serve.
 func validateFidelity(fidelity ateompb.SnapshotFidelity) error {
-	if errs := resources.ValidateSnapshotFidelity(fidelity, field.NewPath("fidelity")); len(errs) > 0 {
+	if errs := resources.ValidateSnapshotFidelity(fidelity, supportedFidelities, field.NewPath("fidelity")); len(errs) > 0 {
 		return apierror.InvalidArgument("%v", errs.ToAggregate())
 	}
 	return nil
