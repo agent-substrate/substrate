@@ -173,11 +173,17 @@ func sandboxClassStatusFor(wp *atev1alpha1.WorkerPool, class atev1alpha1.Sandbox
 // switchesSandboxConfig reports whether class, as resolved, uses a config
 // other than the one wp's status uses for it.
 func switchesSandboxConfig(wp *atev1alpha1.WorkerPool, class atev1alpha1.WorkerPoolSandboxClassStatus) bool {
+	return switchesSandboxConfigFrom(wp.Status.SandboxClasses, class)
+}
+
+// switchesSandboxConfigFrom reports whether class, as resolved, uses a config
+// other than the one its entry in prev uses.
+func switchesSandboxConfigFrom(prev []atev1alpha1.WorkerPoolSandboxClassStatus, class atev1alpha1.WorkerPoolSandboxClassStatus) bool {
 	if class.ConfigRef == nil {
 		return false
 	}
-	prev := sandboxClassStatus(wp, class.Name)
-	return prev == nil || prev.ConfigRef == nil || prev.ConfigRef.Name != class.ConfigRef.Name
+	p := findSandboxClassStatus(prev, class.Name)
+	return p == nil || p.ConfigRef == nil || p.ConfigRef.Name != class.ConfigRef.Name
 }
 
 // claimSandboxConfigs returns the status that claims every config a class in
@@ -238,9 +244,14 @@ func confirmSandboxConfigSwitch(wp *atev1alpha1.WorkerPool, class atev1alpha1.Wo
 
 // sandboxClassStatus returns the status entry wp records for class, or nil.
 func sandboxClassStatus(wp *atev1alpha1.WorkerPool, class atev1alpha1.SandboxClass) *atev1alpha1.WorkerPoolSandboxClassStatus {
-	for i := range wp.Status.SandboxClasses {
-		if wp.Status.SandboxClasses[i].Name == class {
-			return &wp.Status.SandboxClasses[i]
+	return findSandboxClassStatus(wp.Status.SandboxClasses, class)
+}
+
+// findSandboxClassStatus returns the entry of class in statuses, or nil.
+func findSandboxClassStatus(statuses []atev1alpha1.WorkerPoolSandboxClassStatus, class atev1alpha1.SandboxClass) *atev1alpha1.WorkerPoolSandboxClassStatus {
+	for i := range statuses {
+		if statuses[i].Name == class {
+			return &statuses[i]
 		}
 	}
 	return nil

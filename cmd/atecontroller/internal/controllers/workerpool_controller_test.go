@@ -82,6 +82,7 @@ func TestMain(m *testing.M) {
 	if err := (&WorkerPoolReconciler{
 		Client:    mgr.GetClient(),
 		Scheme:    mgr.GetScheme(),
+		Recorder:  mgr.GetEventRecorder("workerpool-controller"),
 		APIReader: mgr.GetAPIReader(),
 	}).SetupWithManager(mgr); err != nil {
 		fmt.Fprintf(os.Stderr, "controller setup failed: %v\n", err)

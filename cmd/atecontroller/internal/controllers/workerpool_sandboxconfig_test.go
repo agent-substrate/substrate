@@ -24,6 +24,7 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	eventsv1 "k8s.io/api/events/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	k8errors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -31,6 +32,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/util/retry"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -372,7 +374,7 @@ func TestReconcileProtectsBeforeRecording(t *testing.T) {
 						return c.SubResource(sub).Update(ctx, obj, opts...)
 					},
 				}).Build()
-			r := &WorkerPoolReconciler{Client: c, APIReader: c}
+			r := &WorkerPoolReconciler{Client: c, APIReader: c, Recorder: events.NewFakeRecorder(1)}
 			if _, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(wp)}); err != nil {
 				t.Fatalf("Reconcile: %v", err)
 			}
@@ -545,7 +547,7 @@ func TestReconcileConfigDeletedBeforeClaim(t *testing.T) {
 						return c.SubResource(sub).Update(ctx, obj, opts...)
 					},
 				}).Build()
-			r := &WorkerPoolReconciler{Client: c, APIReader: c}
+			r := &WorkerPoolReconciler{Client: c, APIReader: c, Recorder: events.NewFakeRecorder(10)}
 			for i, want := range []string{tc.wantFirst, tc.want} {
 				if _, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(wp)}); err != nil {
 					t.Fatalf("Reconcile %d: %v", i+1, err)
@@ -641,8 +643,8 @@ func TestSandboxConfigReleasedWhenUnused(t *testing.T) {
 // TestWorkerPoolConfigRef covers a pool with an explicit configRef. It
 // resolves only when the named SandboxConfig exists, is of the pool's class,
 // and is not being deleted. It then protects the config and gets its
-// Deployment. Otherwise it reports why, records no config in status, and gets
-// no Deployment.
+// Deployment. Otherwise it reports why, records no config in status, gets no
+// Deployment, and emits a Warning event.
 func TestWorkerPoolConfigRef(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -712,6 +714,7 @@ func TestWorkerPoolConfigRef(t *testing.T) {
 				t.Errorf("status.sandboxClasses names %q, want no config for a pool that never resolved", got)
 			}
 			assertNoDeployment(t, wp)
+			waitWarningEvent(t, wp, tc.wantReason)
 			if tc.late != nil {
 				createSandboxConfig(t, tc.late)
 				waitResolvedAndDeployed(t, wp, tc.ref)
@@ -732,10 +735,27 @@ func waitResolvedAndDeployed(t *testing.T, wp *atev1alpha1.WorkerPool, config st
 	})
 }
 
+// waitWarningEvent waits for a Warning event with reason about wp.
+func waitWarningEvent(t *testing.T, wp *atev1alpha1.WorkerPool, reason string) {
+	t.Helper()
+	eventually(t, func(ctx context.Context) (bool, error) {
+		var evs eventsv1.EventList
+		if err := k8sClient.List(ctx, &evs, client.InNamespace(wp.Namespace)); err != nil {
+			return false, err
+		}
+		for _, ev := range evs.Items {
+			if ev.Regarding.Name == wp.Name && ev.Type == "Warning" && ev.Reason == reason {
+				return true, nil
+			}
+		}
+		return false, nil
+	})
+}
+
 // TestWorkerPoolUnresolvedKeepsConfigInUse verifies that a pool whose sandbox
-// class stops resolving keeps the config it uses. It reports why, keeps the
-// config in status and protected, and the controller keeps updating its
-// Deployment.
+// class stops resolving keeps the config it uses: it reports why with a
+// Warning event, keeps the config in status and protected, and the controller
+// keeps updating its Deployment.
 func TestWorkerPoolUnresolvedKeepsConfigInUse(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -794,6 +814,7 @@ func TestWorkerPoolUnresolvedKeepsConfigInUse(t *testing.T) {
 			if got := statusConfig(current, atev1alpha1.SandboxClassGvisor); got != inUse {
 				t.Errorf("status.sandboxClasses names %q, want the config in use %q", got, inUse)
 			}
+			waitWarningEvent(t, wp, tc.wantReason)
 			waitProtectionFinalizer(t, inUse, true)
 
 			if tc.missingRef == "" {
@@ -994,6 +1015,7 @@ func TestWorkerPoolDefaultNewestWins(t *testing.T) {
 			if got := statusConfig(current, atev1alpha1.SandboxClassMicroVM); got != step.wantConfig {
 				t.Errorf("status.sandboxClasses names %q, want %q", got, step.wantConfig)
 			}
+			waitWarningEvent(t, wp, step.wantReason)
 			if step.wantConfig == "" {
 				assertNoDeployment(t, wp)
 			}
@@ -1154,6 +1176,209 @@ func TestWorkerPoolsForSandboxConfig(t *testing.T) {
 			slices.SortFunc(got, func(a, b reconcile.Request) int { return cmp.Compare(a.String(), b.String()) })
 			if !slices.Equal(got, tc.want) {
 				t.Errorf("workerPoolsForSandboxConfig = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRecordSandboxConfigEvents verifies the events a reconcile emits per
+// class: a Normal event each time the config in use changes, naming the old
+// and new config, and a Warning event for a failure, reported once and again
+// only when its reason or message changes or the class resolved in between.
+// A class whose config and failure are as before emits nothing.
+func TestRecordSandboxConfigEvents(t *testing.T) {
+	t.Parallel()
+	failed := metav1.Condition{
+		Type:    atev1alpha1.WorkerPoolSandboxClassConditionResolved,
+		Status:  metav1.ConditionFalse,
+		Reason:  atev1alpha1.WorkerPoolReasonSandboxConfigNotFound,
+		Message: `SandboxConfig "x" not found`,
+	}
+	resolved := func(config string) metav1.Condition {
+		return metav1.Condition{
+			Type:    atev1alpha1.WorkerPoolSandboxClassConditionResolved,
+			Status:  metav1.ConditionTrue,
+			Reason:  atev1alpha1.WorkerPoolReasonResolved,
+			Message: fmt.Sprintf("resolved to SandboxConfig %q", config),
+		}
+	}
+	// class builds a gvisor status entry using config ("" for none) with
+	// cond.
+	class := func(config string, cond metav1.Condition) []atev1alpha1.WorkerPoolSandboxClassStatus {
+		status := atev1alpha1.WorkerPoolSandboxClassStatus{Name: atev1alpha1.SandboxClassGvisor, Conditions: []metav1.Condition{cond}}
+		if config != "" {
+			status.ConfigRef = &atev1alpha1.SandboxConfigReference{Name: config}
+		}
+		return []atev1alpha1.WorkerPoolSandboxClassStatus{status}
+	}
+	with := func(reason, message string) metav1.Condition {
+		c := failed
+		c.Reason = reason
+		c.Message = message
+		return c
+	}
+	warning := "Warning " + failed.Reason + " " + failed.Message
+
+	tests := []struct {
+		name string
+		// prev is the pool's status before the reconcile.
+		prev    []atev1alpha1.WorkerPoolSandboxClassStatus
+		classes []atev1alpha1.WorkerPoolSandboxClassStatus
+		want    []string
+	}{
+		{
+			name:    "first resolve",
+			classes: class("x", resolved("x")),
+			want:    []string{`Normal SandboxConfigSwitched sandbox class "gvisor" uses SandboxConfig "x"`},
+		},
+		{
+			name:    "first resolve after a failure",
+			prev:    class("", failed),
+			classes: class("x", resolved("x")),
+			want:    []string{`Normal SandboxConfigSwitched sandbox class "gvisor" uses SandboxConfig "x"`},
+		},
+		{
+			name:    "switch",
+			prev:    class("x", resolved("x")),
+			classes: class("y", resolved("y")),
+			want:    []string{`Normal SandboxConfigSwitched sandbox class "gvisor" switched from SandboxConfig "x" to "y"`},
+		},
+		{
+			name:    "same config: nothing",
+			prev:    class("x", resolved("x")),
+			classes: class("x", resolved("x")),
+		},
+		{
+			name:    "resolves again to the kept config: nothing",
+			prev:    class("x", failed),
+			classes: class("x", resolved("x")),
+		},
+		{
+			name:    "first failure",
+			classes: class("", failed),
+			want:    []string{warning},
+		},
+		{
+			name:    "failure keeping the config: warning only",
+			prev:    class("x", resolved("x")),
+			classes: class("x", failed),
+			want:    []string{warning},
+		},
+		{
+			name:    "same failure already reported",
+			prev:    class("", failed),
+			classes: class("", failed),
+		},
+		{
+			name:    "another reason",
+			prev:    class("", with(atev1alpha1.WorkerPoolReasonSandboxClassMismatch, failed.Message)),
+			classes: class("", failed),
+			want:    []string{warning},
+		},
+		{
+			name:    "another message",
+			prev:    class("", with(failed.Reason, `SandboxConfig "y" not found`)),
+			classes: class("", failed),
+			want:    []string{warning},
+		},
+		{
+			name:    "resolved in between",
+			prev:    class("", resolved("x")),
+			classes: class("", failed),
+			want:    []string{warning},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			wp := makeWorkerPool("pool", "default", 1, "ateom:v1")
+			rec := events.NewFakeRecorder(2 * len(tc.classes))
+			r := &WorkerPoolReconciler{Recorder: rec}
+			r.recordSandboxConfigEvents(wp, tc.prev, tc.classes)
+			var got []string
+			for len(rec.Events) > 0 {
+				got = append(got, <-rec.Events)
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("events = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestReconcileReportsSwitchOnceWritten verifies that a switch's
+// SandboxConfigSwitched event follows the status write that records it: a
+// reconcile whose write is rejected emits nothing, and the switch is
+// reported once when a later reconcile writes it.
+func TestReconcileReportsSwitchOnceWritten(t *testing.T) {
+	t.Parallel()
+	scheme := runtime.NewScheme()
+	if err := clientgoscheme.AddToScheme(scheme); err != nil {
+		t.Fatalf("add client-go scheme: %v", err)
+	}
+	if err := atev1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add scheme: %v", err)
+	}
+	tests := []struct {
+		name string
+		// rejected is how many status writes moving configRef to "y" are
+		// rejected with a Conflict before one goes through.
+		rejected int
+	}{
+		{name: "written at once"},
+		{name: "written on the second try", rejected: 1},
+		{name: "written on the third try", rejected: 2},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			wp := makeWorkerPoolClasses("default", "pool",
+				[]atev1alpha1.WorkerPoolSandboxClass{{Name: atev1alpha1.SandboxClassGvisor, ConfigRef: &atev1alpha1.SandboxConfigReference{Name: "y"}}},
+				[]atev1alpha1.WorkerPoolSandboxClassStatus{{Name: atev1alpha1.SandboxClassGvisor, ConfigRef: &atev1alpha1.SandboxConfigReference{Name: "x"}}})
+			objs := []client.Object{wp,
+				makeSandboxConfig("x", atev1alpha1.SandboxClassGvisor, false),
+				makeSandboxConfig("y", atev1alpha1.SandboxClassGvisor, false),
+			}
+			rejected := 0
+			c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).WithStatusSubresource(wp).
+				WithInterceptorFuncs(interceptor.Funcs{
+					SubResourceUpdate: func(ctx context.Context, c client.Client, sub string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+						if pool, ok := obj.(*atev1alpha1.WorkerPool); ok && rejected < tc.rejected && statusConfig(pool, atev1alpha1.SandboxClassGvisor) == "y" {
+							rejected++
+							return k8errors.NewConflict(atev1alpha1.GroupVersion.WithResource("workerpools").GroupResource(), pool.Name, errors.New("stale"))
+						}
+						return c.SubResource(sub).Update(ctx, obj, opts...)
+					},
+				}).Build()
+			rec := events.NewFakeRecorder(10)
+			r := &WorkerPoolReconciler{Client: c, APIReader: c, Recorder: rec}
+			req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(wp)}
+
+			for i := 0; i < tc.rejected; i++ {
+				if _, err := r.Reconcile(t.Context(), req); !k8errors.IsConflict(err) {
+					t.Fatalf("Reconcile %d error = %v, want Conflict", i+1, err)
+				}
+				if len(rec.Events) != 0 {
+					t.Fatalf("Reconcile %d emitted %q before status was written", i+1, <-rec.Events)
+				}
+			}
+			if _, err := r.Reconcile(t.Context(), req); err != nil {
+				t.Fatalf("Reconcile: %v", err)
+			}
+			var got []string
+			for len(rec.Events) > 0 {
+				got = append(got, <-rec.Events)
+			}
+			want := []string{`Normal SandboxConfigSwitched sandbox class "gvisor" switched from SandboxConfig "x" to "y"`}
+			if !slices.Equal(got, want) {
+				t.Errorf("events = %q, want %q", got, want)
+			}
+			current := &atev1alpha1.WorkerPool{}
+			if err := c.Get(t.Context(), client.ObjectKeyFromObject(wp), current); err != nil {
+				t.Fatalf("get WorkerPool: %v", err)
+			}
+			if name := statusConfig(current, atev1alpha1.SandboxClassGvisor); name != "y" {
+				t.Errorf("status names %q, want %q", name, "y")
 			}
 		})
 	}
@@ -1567,7 +1792,7 @@ func TestReconcileConfirmsSwitch(t *testing.T) {
 					},
 				}).Build()
 
-			r := &WorkerPoolReconciler{Client: c, APIReader: live}
+			r := &WorkerPoolReconciler{Client: c, APIReader: live, Recorder: events.NewFakeRecorder(1)}
 			if _, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(wp)}); err != nil {
 				t.Fatalf("Reconcile: %v", err)
 			}
@@ -1832,7 +2057,7 @@ func TestSwitchInterleavings(t *testing.T) {
 				},
 			})
 
-			r := &WorkerPoolReconciler{Client: c, APIReader: c}
+			r := &WorkerPoolReconciler{Client: c, APIReader: c, Recorder: events.NewFakeRecorder(10)}
 			req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(wp)}
 			if _, err := r.Reconcile(t.Context(), req); err != nil {
 				t.Fatalf("Reconcile: %v", err)
@@ -2012,7 +2237,7 @@ func TestReconcileAppliesExistingDeploymentFirst(t *testing.T) {
 			}
 			c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).WithStatusSubresource(wp).
 				WithInterceptorFuncs(tc.funcs).Build()
-			r := &WorkerPoolReconciler{Client: c, APIReader: c}
+			r := &WorkerPoolReconciler{Client: c, APIReader: c, Recorder: events.NewFakeRecorder(1)}
 			if _, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(wp)}); !errors.Is(err, errInjected) {
 				t.Fatalf("Reconcile error = %v, want %v", err, errInjected)
 			}

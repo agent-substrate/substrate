@@ -22,11 +22,14 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/metric"
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	k8errors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -38,7 +41,15 @@ import (
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 )
 
-const workerPoolFieldOwner = "workerpool-controller"
+const (
+	workerPoolFieldOwner = "workerpool-controller"
+	// eventReasonSandboxConfigSwitched is the reason of the Normal event a
+	// pool emits each time a class's status configRef changes.
+	eventReasonSandboxConfigSwitched = "SandboxConfigSwitched"
+	// eventActionResolveSandboxConfig is the action of every event the pool
+	// emits while resolving its SandboxConfigs.
+	eventActionResolveSandboxConfig = "ResolveSandboxConfig"
+)
 
 type WorkerPoolReconciler struct {
 	client.Client
@@ -68,6 +79,9 @@ type WorkerPoolReconciler struct {
 	SystemNamespace      string
 	AteletServiceAccount string
 	RouterServiceAccount string
+	// Recorder emits a Normal event each time a pool's SandboxConfig
+	// changes, and a Warning event when a class stops resolving.
+	Recorder events.EventRecorder
 	// APIReader reads a SandboxConfig straight from the API server, not from
 	// the cache. It confirms a config the pool switches to, once status has
 	// claimed it.
@@ -82,6 +96,7 @@ type WorkerPoolReconciler struct {
 //+kubebuilder:rbac:groups=ate.dev,resources=workerpools/finalizers,verbs=update
 //+kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=ate.dev,resources=sandboxconfigs,verbs=get;list;watch;patch
+//+kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -125,7 +140,7 @@ func (r *WorkerPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 //  3. Read the new config from the API server. If it is live, configRef
 //     moves to it. If it is gone or being deleted, the class keeps the config
 //     in use.
-//  4. Write status again.
+//  4. Write status again, and emit events for what changed.
 //
 // The read in step 3 has to come after the write in step 2. The protection
 // reconciler only releases a config that is already being deleted, and only
@@ -163,6 +178,9 @@ func (r *WorkerPoolReconciler) reconcileWorkerPool(ctx context.Context, wp *atev
 	if err := protectSandboxConfigs(ctx, r.Client, classes, configs); err != nil {
 		return err
 	}
+	// prev is the status before this reconcile, for the events below.
+	// syncStatus overwrites wp.Status.
+	prev := wp.Status.DeepCopy().SandboxClasses
 	if claim := claimSandboxConfigs(wp, classes); claim != nil {
 		if err := r.syncStatus(ctx, wp, existing, claim); err != nil {
 			return err
@@ -174,6 +192,7 @@ func (r *WorkerPoolReconciler) reconcileWorkerPool(ctx context.Context, wp *atev
 	if err := r.syncStatus(ctx, wp, existing, classes); err != nil {
 		return err
 	}
+	r.recordSandboxConfigEvents(wp, prev, classes)
 	// A pool without a Deployment gets one only once every sandbox class has
 	// a config.
 	if existing == nil && everyClassHasConfig(classes) {
@@ -253,6 +272,45 @@ func (r *WorkerPoolReconciler) confirmSandboxConfigSwitches(ctx context.Context,
 		classes[i] = confirmSandboxConfigSwitch(wp, class, live, configs)
 	}
 	return nil
+}
+
+// recordSandboxConfigEvents emits an event for every class in classes whose
+// state differs from prev, the pool's status before this reconcile.
+//
+//   - A class whose configRef changed gets a Normal event that names the old
+//     and the new config. The pool's events are then the history of the
+//     configs it has used.
+//   - A class whose Resolved condition is False gets a Warning event, unless
+//     prev already reports the same failure. A pool that stays unresolved
+//     does not repeat the event on every reconcile.
+//
+// It runs after classes is written to status. A reconcile that read a stale
+// copy of the pool sees the switch a second time. The reconcile that a claim
+// write triggers often does. Its status write fails on the resourceVersion
+// before it gets here, so the switch is reported once.
+func (r *WorkerPoolReconciler) recordSandboxConfigEvents(wp *atev1alpha1.WorkerPool, prev, classes []atev1alpha1.WorkerPoolSandboxClassStatus) {
+	for _, class := range classes {
+		if switchesSandboxConfigFrom(prev, class) {
+			if prev := findSandboxClassStatus(prev, class.Name); prev != nil && prev.ConfigRef != nil {
+				r.Recorder.Eventf(wp, nil, corev1.EventTypeNormal, eventReasonSandboxConfigSwitched, eventActionResolveSandboxConfig,
+					"sandbox class %q switched from SandboxConfig %q to %q", class.Name, prev.ConfigRef.Name, class.ConfigRef.Name)
+			} else {
+				r.Recorder.Eventf(wp, nil, corev1.EventTypeNormal, eventReasonSandboxConfigSwitched, eventActionResolveSandboxConfig,
+					"sandbox class %q uses SandboxConfig %q", class.Name, class.ConfigRef.Name)
+			}
+		}
+		cond := meta.FindStatusCondition(class.Conditions, atev1alpha1.WorkerPoolSandboxClassConditionResolved)
+		if cond == nil || cond.Status == metav1.ConditionTrue {
+			continue
+		}
+		if prev := findSandboxClassStatus(prev, class.Name); prev != nil {
+			p := meta.FindStatusCondition(prev.Conditions, cond.Type)
+			if p != nil && p.Status == cond.Status && p.Reason == cond.Reason && p.Message == cond.Message {
+				continue
+			}
+		}
+		r.Recorder.Eventf(wp, nil, corev1.EventTypeWarning, cond.Reason, eventActionResolveSandboxConfig, "%s", cond.Message)
+	}
 }
 
 func (r *WorkerPoolReconciler) applyDeployment(ctx context.Context, wp *atev1alpha1.WorkerPool) error {
