@@ -249,6 +249,11 @@ var Registry = []Setting{
 		Flag: "podcert-workers-per-signer", Kind: KindInt, Default: "0",
 		Usage: "Worker goroutines per signer in podcertificate-controller",
 	},
+	{
+		Key: "envoyConcurrency", Env: "ATE_ENVOY_CONCURRENCY",
+		Flag: "envoy-concurrency", Kind: KindInt, Default: "0",
+		Usage: "Worker threads (--concurrency) for the Envoy container in atenet-egress",
+	},
 
 	{
 		Key: "rolloutTimeout", Env: "ATE_INSTALL_ROLLOUT_TIMEOUT", Flag: "rollout-timeout",

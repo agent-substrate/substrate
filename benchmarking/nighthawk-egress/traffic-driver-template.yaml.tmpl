@@ -24,6 +24,9 @@
 metadata:
   atespace: nighthawk
   name: traffic-driver
+workerSelector:
+  matchLabels:
+    workload: traffic-driver
 containers:
 - name: nighthawk-service
   # Same envoyproxy/nighthawk-dev digest as nighthawk-server.yaml and

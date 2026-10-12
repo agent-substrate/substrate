@@ -54,6 +54,7 @@ func loadEnv(t *testing.T) {
 		"ATE_API_POSTGRES_SERVER_CA_FILE",
 		"ATE_ATENET_DATAPLANE",
 		"ATE_CREDENTIAL_PROVIDER",
+		"ATE_ENVOY_CONCURRENCY",
 		"ATE_IMAGE_REPO",
 		"ATE_IMAGE_TAG",
 		"ATE_INSTALL_CLUSTER_SIZE",
@@ -794,6 +795,30 @@ func TestLoadRejectsInvalidPodcertWorkersEnv(t *testing.T) {
 			t.Setenv("ATE_INSTALL_PODCERT_WORKERS_PER_SIGNER", val)
 			if _, err := Load(Options{}); err == nil {
 				t.Fatalf("Load() with env %q succeeded, want an error", val)
+			}
+		})
+	}
+}
+
+func TestLoadEnvoyConcurrency(t *testing.T) {
+	loadEnv(t)
+	cfg, err := Load(Options{EnvoyConcurrency: 4})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.EnvoyConcurrency != 4 {
+		t.Errorf("EnvoyConcurrency = %d, want 4", cfg.EnvoyConcurrency)
+	}
+	if got := scriptEnvMap(t, cfg)["ATE_ENVOY_CONCURRENCY"]; got != "4" {
+		t.Errorf("ScriptEnv()[ATE_ENVOY_CONCURRENCY] = %q, want 4", got)
+	}
+
+	for _, val := range []string{"0", "-1", "abc"} {
+		t.Run("invalid_"+val, func(t *testing.T) {
+			loadEnv(t)
+			t.Setenv("ATE_ENVOY_CONCURRENCY", val)
+			if _, err := Load(Options{}); err == nil {
+				t.Fatalf("Load() with ATE_ENVOY_CONCURRENCY=%q succeeded, want an error", val)
 			}
 		})
 	}

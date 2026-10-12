@@ -20,7 +20,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 cd "${REPO_ROOT}"
 
-if [[ -f "${REPO_ROOT}/.ate-dev-env.sh" ]]; then
+if [[ -f "${REPO_ROOT}/.ate-dev-env.sh" ]] && [[ -z "${NO_DEV_ENV:-}" ]]; then
   # shellcheck source=/dev/null
   source "${REPO_ROOT}/.ate-dev-env.sh"
 fi
@@ -28,22 +28,25 @@ fi
 ATESPACE="nighthawk"
 TEMPLATE_NAME="traffic-driver"
 ACTOR_NAME="tester"
+POOL_MANIFEST="${SCRIPT_DIR}/traffic-driver.yaml.tmpl"
 MANIFEST="${SCRIPT_DIR}/traffic-driver-template.yaml.tmpl"
 EGRESS_POLICY_MANIFEST="${SCRIPT_DIR}/egress-policy.yaml"
 KUBECTL_ATE_BIN="kubectl-ate"
 WAIT_TIMEOUT_SECS=300
 CONTEXT="${KUBECTL_CONTEXT:-}"
-BUCKET_NAME="${BUCKET_NAME:-}"
+BUCKET_NAME="${BUCKET_NAME:-ate-snapshots}"
+KO_DOCKER_REPO="${KO_DOCKER_REPO:-localhost:5001}"
 
 usage() {
   echo "Usage: $0 [options]"
   echo ""
   echo "Options:"
-  echo "  --deploy                Deploy the ${ATESPACE}/${TEMPLATE_NAME} actor template and ${ACTOR_NAME} actor (default)"
-  echo "  --delete                Delete the ${ACTOR_NAME} actor, template, and atespace"
+  echo "  --deploy                Deploy the ${ATESPACE}/${TEMPLATE_NAME} worker pool, actor template, and ${ACTOR_NAME} actor (default)"
+  echo "  --delete                Delete the ${ACTOR_NAME} actor, template, atespace, and worker pool"
   echo "  --bucket-name BUCKET    GCS bucket name for actor snapshots (default: \$BUCKET_NAME)"
+  echo "  --ko-docker-repo REPO   Container registry for ko image builds (default: \$KO_DOCKER_REPO)"
   echo "  --context CONTEXT       kubectl context to use (default: \$KUBECTL_CONTEXT or current context)"
-  echo "  --wait-timeout SECONDS  Timeout waiting for golden snapshot readiness (default: ${WAIT_TIMEOUT_SECS})"
+  echo "  --wait-timeout SECONDS  Timeout waiting for worker pool and golden snapshot readiness (default: ${WAIT_TIMEOUT_SECS})"
   echo "  -h, --help              Show this help message"
 }
 
@@ -62,6 +65,13 @@ while [[ "$#" -gt 0 ]]; do
       ;;
     --bucket-name=*)
       BUCKET_NAME="${1#*=}"
+      ;;
+    --ko-docker-repo)
+      shift
+      KO_DOCKER_REPO="$1"
+      ;;
+    --ko-docker-repo=*)
+      KO_DOCKER_REPO="${1#*=}"
       ;;
     --context)
       shift
@@ -94,6 +104,14 @@ if ! [[ "${WAIT_TIMEOUT_SECS}" =~ ^[0-9]+$ ]]; then
   echo "Error: --wait-timeout must be a whole number of seconds like 300, got '${WAIT_TIMEOUT_SECS}'" >&2
   exit 1
 fi
+
+run_kubectl() {
+  local args=()
+  if [[ -n "${CONTEXT}" ]]; then
+    args+=(--context "${CONTEXT}")
+  fi
+  kubectl "${args[@]}" "$@"
+}
 
 run_kubectl_ate() {
   local args=()
@@ -135,6 +153,19 @@ deploy() {
     echo "Error: BUCKET_NAME is not set. Pass --bucket-name or configure .ate-dev-env.sh." >&2
     exit 1
   fi
+  if [[ -z "${KO_DOCKER_REPO}" ]]; then
+    echo "Error: KO_DOCKER_REPO is not set. Pass --ko-docker-repo or configure .ate-dev-env.sh." >&2
+    exit 1
+  fi
+  export KO_DOCKER_REPO
+
+  echo "Deploying worker pool from ${POOL_MANIFEST}..."
+  hack/run-tool.sh ko resolve -f "${POOL_MANIFEST}" | run_kubectl apply -f -
+  echo "Waiting for worker pool ${ATESPACE}/${TEMPLATE_NAME} to be ready (timeout: ${WAIT_TIMEOUT_SECS}s)..."
+  run_kubectl wait --for=create "deployment/${TEMPLATE_NAME}" \
+    --namespace="${ATESPACE}" --timeout="${WAIT_TIMEOUT_SECS}s"
+  run_kubectl rollout status "deployment/${TEMPLATE_NAME}" \
+    --namespace="${ATESPACE}" --timeout="${WAIT_TIMEOUT_SECS}s"
 
   echo "Ensuring atespace ${ATESPACE} exists..."
   run_kubectl_ate create atespace "${ATESPACE}" >/dev/null 2>&1 \
@@ -170,6 +201,9 @@ delete() {
   run_kubectl_ate delete actor-template "${TEMPLATE_NAME}" -a "${ATESPACE}" >/dev/null 2>&1 || true
   run_kubectl_ate delete atespace "${ATESPACE}" >/dev/null 2>&1 \
     || echo "atespace ${ATESPACE} not deleted (may not exist or is not empty)"
+
+  echo "Deleting worker pool from ${POOL_MANIFEST}..."
+  run_kubectl delete --ignore-not-found -f "${POOL_MANIFEST}"
 }
 
 "${action}"
