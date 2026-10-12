@@ -125,6 +125,31 @@ func relayAttrs(relayCapable bool, conn *grpc.ClientConn) []attribute.KeyValue {
 	return []attribute.KeyValue{ateattr.OTLPRelayKey.String(status)}
 }
 
+// The standard OTLP endpoint variables: the shared one, and the override of
+// each signal.
+const (
+	endpointEnv        = "OTEL_EXPORTER_OTLP_ENDPOINT"
+	tracesEndpointEnv  = "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"
+	metricsEndpointEnv = "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT"
+	logsEndpointEnv    = "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT"
+)
+
+// hasExportTarget reports whether a component has a place to push a signal to.
+// A relay-capable component without the relay and without an endpoint has
+// none: its exporter would dial the SDK default, localhost:4317, and in a
+// worker pod nothing listens there. That is the case when atelet has no
+// collector, so it serves no relay, and the worker pod has no endpoint. Any
+// other component keeps the SDK default, so a collector on localhost still
+// works for it.
+func hasExportTarget(ctx context.Context, signal string, relayCapable bool, conn *grpc.ClientConn, signalEndpointEnv string) bool {
+	if !relayCapable || conn != nil || os.Getenv(endpointEnv) != "" || os.Getenv(signalEndpointEnv) != "" {
+		return true
+	}
+	slog.InfoContext(ctx, "OTLP export disabled: no relay and no collector endpoint",
+		slog.String("signal", signal), slog.String("env", endpointEnv))
+	return false
+}
+
 // TracingOptions configures InitTracing.
 type TracingOptions struct {
 	// ServiceName is required; populates resource.semconv ServiceName.
@@ -176,7 +201,8 @@ func InitTracing(ctx context.Context, opts TracingOptions) (*sdktrace.TracerProv
 	// Without an exporter the provider still samples and propagates trace
 	// context, so a component that exports nothing keeps the traces of the
 	// components around it whole.
-	export := tracesPushEnabled(ctx)
+	export := tracesPushEnabled(ctx) &&
+		hasExportTarget(ctx, "traces", opts.RelayCapable, opts.ExporterConn, tracesEndpointEnv)
 	if export {
 		expOpts := []otlptracegrpc.Option{
 			// GKE managed traces doesn't support validating the TLS certs of the collector.
@@ -302,7 +328,7 @@ func newMeterProvider(ctx context.Context, serviceName string, push, relayCapabl
 		return nil, fmt.Errorf("create metric resource: %w", err)
 	}
 	opts := []sdkmetric.Option{sdkmetric.WithResource(res)}
-	if push {
+	if push && hasExportTarget(ctx, "metrics", relayCapable, conn, metricsEndpointEnv) {
 		expOpts := []otlpmetricgrpc.Option{
 			// GKE managed metrics doesn't support validating the TLS certs of the collector.
 			otlpmetricgrpc.WithInsecure(),

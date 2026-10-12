@@ -75,10 +75,10 @@ func (c *Client) GetConfigMap(ctx context.Context, namespace, name string) (*cor
 }
 
 // MergePatchConfigMap merges keys into a ConfigMap's data, leaving the rest of
-// it alone. Unlike an apply this claims no ownership of the keys it does not
-// name, which is what lets the otel endpoint override amend a ConfigMap the
-// bundle owns.
-func (c *Client) MergePatchConfigMap(ctx context.Context, namespace, name string, data map[string]string) error {
+// it alone. A nil value removes its key. Unlike an apply this claims no
+// ownership of the keys it does not name, which is what lets the otel endpoint
+// override amend a ConfigMap the bundle owns.
+func (c *Client) MergePatchConfigMap(ctx context.Context, namespace, name string, data map[string]*string) error {
 	patch, err := json.Marshal(map[string]any{"data": data})
 	if err != nil {
 		return fmt.Errorf("while building the patch for configmap %s/%s: %w", namespace, name, err)
@@ -116,6 +116,18 @@ func (c *Client) ConfigMapExists(ctx context.Context, namespace, name string) (b
 			return false, nil
 		}
 		return false, fmt.Errorf("while getting configmap %s/%s: %w", namespace, name, err)
+	}
+	return true, nil
+}
+
+// ServiceExists reports whether a Service is present.
+func (c *Client) ServiceExists(ctx context.Context, namespace, name string) (bool, error) {
+	_, err := c.Typed.CoreV1().Services(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("while getting service %s/%s: %w", namespace, name, err)
 	}
 	return true, nil
 }

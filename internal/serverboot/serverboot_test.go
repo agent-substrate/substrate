@@ -17,6 +17,7 @@ package serverboot
 import (
 	"bytes"
 	"context"
+	"log"
 	"log/slog"
 	"net"
 	"net/http"
@@ -681,5 +682,95 @@ func TestInitTracingExporterNoneExportsNothing(t *testing.T) {
 	endOneSpan(t, "test-traces-none")
 	if got := collector.spans.Load(); got != 0 {
 		t.Errorf("OTEL_TRACES_EXPORTER=none still exported %d span(s)", got)
+	}
+}
+
+// The four ways a component can reach a collector, and the one where it
+// cannot: a relay-capable component with no relay and no endpoint.
+func TestHasExportTarget(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		relayCapable bool
+		conn         bool
+		env          string
+		want         bool
+	}{
+		{name: "relay", relayCapable: true, conn: true, want: true},
+		{name: "shared endpoint", relayCapable: true, env: endpointEnv, want: true},
+		{name: "signal endpoint", relayCapable: true, env: metricsEndpointEnv, want: true},
+		{name: "not relay capable", want: true},
+		{name: "no relay and no endpoint", relayCapable: true, want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, env := range []string{endpointEnv, metricsEndpointEnv} {
+				t.Setenv(env, "")
+			}
+			if tc.env != "" {
+				t.Setenv(tc.env, "http://collector:4317")
+			}
+			var conn *grpc.ClientConn
+			if tc.conn {
+				conn = lazyConn(t)
+			}
+			if got := hasExportTarget(t.Context(), "metrics", tc.relayCapable, conn, metricsEndpointEnv); got != tc.want {
+				t.Errorf("hasExportTarget() = %t, want %t", got, tc.want)
+			}
+		})
+	}
+}
+
+// An ateom with no relay and no endpoint installs no OTLP exporter for any
+// signal, instead of pushing to localhost:4317. Asserted through each Init
+// function, so a wiring mistake in one of them fails here.
+func TestInitWithoutExportTargetSkipsOTLP(t *testing.T) {
+	for _, env := range []string{endpointEnv, tracesEndpointEnv, metricsEndpointEnv, logsEndpointEnv} {
+		t.Setenv(env, "")
+	}
+	// slog.SetDefault also points the log package at the handler, and setting
+	// slog back does not undo that, so restore all three.
+	prev, prevOut, prevFlags := slog.Default(), log.Writer(), log.Flags()
+	t.Cleanup(func() {
+		slog.SetDefault(prev)
+		log.SetOutput(prevOut)
+		log.SetFlags(prevFlags)
+	})
+	var buf bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+
+	tp, err := InitTracing(t.Context(), TracingOptions{
+		ServiceName:  "ateom-gvisor",
+		Sampling:     ParentRatioSampling(1),
+		RelayCapable: true,
+	})
+	if err != nil {
+		t.Fatalf("InitTracing: %v", err)
+	}
+	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
+	mp, err := InitMetricsPushOnlyVia(t.Context(), "ateom-gvisor", nil)
+	if err != nil {
+		t.Fatalf("InitMetricsPushOnlyVia: %v", err)
+	}
+	t.Cleanup(func() { _ = mp.Shutdown(context.Background()) })
+	lp, err := InitLogging(t.Context(), LoggingOptions{
+		ServiceName:  "ateom-gvisor",
+		Exporter:     Exporters{ExporterOTLP: true},
+		RelayCapable: true,
+	})
+	if err != nil {
+		t.Fatalf("InitLogging: %v", err)
+	}
+	if lp != nil {
+		t.Error("InitLogging returned a provider, want nil without a place to push to")
+	}
+
+	out := buf.String()
+	for _, signal := range []string{"traces", "metrics", "logs"} {
+		if !strings.Contains(out, "OTLP export disabled: no relay and no collector endpoint") ||
+			!strings.Contains(out, "signal="+signal) {
+			t.Errorf("no skip logged for %s; log:\n%s", signal, out)
+		}
+	}
+	if !strings.Contains(out, "export=false") {
+		t.Errorf("InitTracing did not log export=false; log:\n%s", out)
 	}
 }
