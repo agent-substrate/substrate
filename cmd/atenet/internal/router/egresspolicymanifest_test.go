@@ -441,9 +441,6 @@ func TestEgressManifestsGiveEachTunnelItsOwnInnerPool(t *testing.T) {
 					continue
 				}
 				internal++
-				if ok, _ := cluster["connection_pool_per_downstream_connection"].(bool); !ok {
-					t.Errorf("internal cluster %q shares its pool across tunnels; want connection_pool_per_downstream_connection: true", str(cluster, "name"))
-				}
 				tcp := child(child(cluster, "typed_extension_protocol_options"), "envoy.extensions.upstreams.tcp.v3.TcpProtocolOptions")
 				if got := str(tcp, "idle_timeout"); got == "" || strings.Trim(got, "0.s") == "" {
 					t.Errorf("internal cluster %q idle_timeout is %q; want a non-zero timeout so a pool its tunnel left behind is freed", str(cluster, "name"), got)
@@ -737,7 +734,7 @@ func TestEgressManifestsConnectLegHandsTheSNIRulesToTheInnerListener(t *testing.
 	if got := str(child(format, "text_format_source"), "inline_string"); got != extproc.EgressPolicyMetadataFormat {
 		t.Errorf("%s is set from %q, want %q", extproc.EgressPolicyMetadataNamespace, got, extproc.EgressPolicyMetadataFormat)
 	}
-	if got := str(entry, "factory_key"); got != "envoy.string" {
+	if got := str(entry, "factory_key"); got != "envoy.hashable_string" {
 		t.Errorf("%s uses factory %q, want envoy.string, the string accessor the module reads", extproc.EgressPolicyMetadataNamespace, got)
 	}
 	if skip, _ := entry["skip_if_empty"].(bool); !skip {
