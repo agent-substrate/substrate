@@ -573,6 +573,59 @@ You must have enabled otel tracing for your cluster to view traces.
 
 You can find trace IDs by viewing the `logs` tab in the Locust UI
 
+## Running at scale
+
+A dense run meets limits the demo path never reaches. The ones met so far, and
+what to set before the run:
+
+* **Reach the API and the router without `kubectl port-forward`.** The forward
+  resets under load and takes every in-flight resume and pause down with it.
+  Expose `svc/api` and `svc/atenet-router` through a NodePort or LoadBalancer
+  Service and point the load generator at that address. The port-forwards in
+  this document are for the UIs only.
+* **PostgreSQL connection slots.** ateapi's read/write pool holds up to
+  `--postgres-pool-max-conns` connections per replica (default 20) plus a few
+  for its owner and watch pools, against PostgreSQL's default `max_connections`
+  of 100. Keep `replicas x 25` under it, or raise `max_connections` with a `-c`
+  argument on the StatefulSet in `manifests/ate-install/postgres/postgres.yaml`.
+  When the slots run out, requests fail with `INTERNAL` and
+  `remaining connection slots are reserved`.
+* **PostgreSQL probes.** Under load the `nc` and `pg_isready` probes miss their
+  default 1 s timeout; three misses in a row restart postgres mid-run. Give
+  them `timeoutSeconds: 5` and `failureThreshold: 6`, and requests that match
+  the load.
+* **Parking budget.** `--parked-request-budget` (default `5s`) has to cover a
+  pause-and-resume cycle under load, tens of seconds, times the
+  oversubscription; a 2x run needs minutes. Watch
+  `atenet.router.parking.wait.duration{outcome="budget_exhausted"}`. See
+  [docs/request-parking.md](../docs/request-parking.md).
+* **Synchronized bursts.** Clients that step in lockstep send one request per
+  actor at the same instant. Above the ext_proc circuit breaker Envoy answers
+  `503 ... reset reason: overflow` and the router never sees it. Jitter the
+  clients, or size `--extproc-max-requests`.
+* **Kernel neighbor table.** Every sandbox has a link-local address, and
+  `net.ipv4.neigh.default.gc_thresh3` is global across network namespaces.
+  Above about a thousand sandboxes per host, raise the thresholds
+  (`gc_thresh1/2/3` = 4096/16384/32768). The symptom is an idle host with
+  `connection timed out` to its sandboxes and `arp_cache: neighbor table
+  overflow!` in `dmesg`.
+* **Restores under full load.** A node's restore throughput falls as its
+  sandboxes burn CPU, and a restore wave onto a saturated node makes the
+  wakeup probe time out: the actor is crashed. Pace admission (creates per
+  second) to the restore rate, and keep restores off nodes running at their
+  CPU limit.
+* **The kubelet.** Hundreds of sandboxes per node starve its heartbeat; after
+  the 300 s toleration the taint manager evicts every pod on the node.
+  Reserve CPU for it (`systemReserved`, `kubeReserved`) before going above a
+  few hundred sandboxes per node, and watch node `Ready`.
+
+Besides the Locust statistics, watch `ate.actor.crashes` (a crash is a finding,
+not noise), `atenet.router.parking.*`, atelet restore and checkpoint p99,
+`pg_stat_activity` against `max_connections`, node conditions, and `dmesg` for
+OOM and neighbor-table lines. ateapi logs every RPC at INFO and its container
+log rotates at 10 MiB, so read lifecycle events from the collector rather than
+from `kubectl logs`.
+
 ## Benchmark output files
 
 A run writes the following to `--dest`. Each run produces them fresh; none of
