@@ -113,7 +113,7 @@ service Control {
   // Mark a Worker as terminating so the scheduler stops routing new Actors to
   // it. Idempotent; one-way. Deliberately leaves any bound Actor alone.
   // Returns ABORTED if another write lands on the Worker first; retry.
-  rpc DrainWorker(DrainWorkerRequest) returns (Worker) {}
+  rpc DrainWorker(DrainWorkerRequest) returns (DrainWorkerResponse) {}
 
   // List the Actors hosted by a given Worker.
   rpc ListWorkerActorAssignments(ListWorkerActorAssignmentsRequest) returns (ListWorkerActorAssignmentsResponse) {}
@@ -2070,6 +2070,12 @@ message DrainWorkerRequest {
   // +k8s:required
   // +k8s:beta(since: "0.0")=+k8s:subfield(atespace)=+k8s:forbidden # TODO: get rid of beta prefix
   ObjectRef worker = 1;
+}
+
+// DrainWorkerResponse holds the drained Worker.
+message DrainWorkerResponse {
+  // The worker being drained.
+  Worker worker = 1;
 }
 
 // List actors with pagination. Provides "soft" guarantees: actors may be

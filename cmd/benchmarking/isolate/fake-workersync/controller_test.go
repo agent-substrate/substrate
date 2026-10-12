@@ -91,7 +91,7 @@ func (f *fakeControl) DeleteWorker(_ context.Context, in *ateapipb.DeleteWorkerR
 	return w, nil
 }
 
-func (f *fakeControl) DrainWorker(_ context.Context, in *ateapipb.DrainWorkerRequest, _ ...grpc.CallOption) (*ateapipb.Worker, error) {
+func (f *fakeControl) DrainWorker(_ context.Context, in *ateapipb.DrainWorkerRequest, _ ...grpc.CallOption) (*ateapipb.DrainWorkerResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.drainErr != nil {
@@ -102,7 +102,7 @@ func (f *fakeControl) DrainWorker(_ context.Context, in *ateapipb.DrainWorkerReq
 		return nil, status.Error(codes.NotFound, "no such Worker")
 	}
 	w.Status.State = ateapipb.WorkerState_WORKER_STATE_DRAINING
-	return w, nil
+	return &ateapipb.DrainWorkerResponse{Worker: w}, nil
 }
 
 func (f *fakeControl) GetWorker(_ context.Context, in *ateapipb.GetWorkerRequest, _ ...grpc.CallOption) (*ateapipb.Worker, error) {
