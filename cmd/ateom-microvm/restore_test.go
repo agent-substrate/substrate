@@ -20,10 +20,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"syscall"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc/codes"
 
@@ -433,5 +435,37 @@ func TestRPCsRejectUntrustedRuntimeAssetPaths(t *testing.T) {
 		if got := apierror.Code(call()); got != codes.InvalidArgument {
 			t.Errorf("%s() code = %v, want %v", name, got, codes.InvalidArgument)
 		}
+	}
+}
+
+// fn must start without waiting for join, and every join sees its one result.
+func TestRunAlongside(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	calls := 0
+	join := runAlongside(func() (int, error) {
+		calls++
+		close(started)
+		<-release
+		return 42, nil
+	})
+	select {
+	case <-started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("fn did not start before join")
+	}
+	close(release)
+	for range 2 {
+		if v, err := join(); v != 42 || err != nil {
+			t.Fatalf("join() = %v, %v, want 42, nil", v, err)
+		}
+	}
+	if calls != 1 {
+		t.Errorf("fn ran %d times, want once", calls)
+	}
+
+	wantErr := errors.New("mint failed")
+	if _, err := runAlongside(func() (struct{}, error) { return struct{}{}, wantErr })(); !errors.Is(err, wantErr) {
+		t.Errorf("join() error = %v, want %v", err, wantErr)
 	}
 }
