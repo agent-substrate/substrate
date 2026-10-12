@@ -295,8 +295,9 @@ func (s *AteomHerder) fetchGVisorRelease(ctx context.Context, entry assetEntry) 
 // first, with the plugin's credentials; atelet holds none of its own and does
 // not know which bucket holds snapshots. A gs:// asset is then read
 // anonymously, which serves public buckets such as gs://gvisor, but only when
-// no plugin is configured or the plugin reports it cannot serve the asset
-// (see anonymousFallbackCodes). A refusal on policy or content, and a canceled
+// no plugin is configured or the plugin reports it has no such object or
+// cannot serve it, as a plugin on a backend other than GCS does for every
+// gs:// URI (see anonymousFallbackCodes). A refusal on policy or content, and a canceled
 // request, are final. atelet verifies the bytes it caches whichever path
 // fetched them, since it executes them.
 func (s *AteomHerder) downloadVerified(ctx context.Context, entry assetEntry, tmpPrefix string) (string, error) {
@@ -326,7 +327,9 @@ func (s *AteomHerder) downloadVerified(ctx context.Context, entry assetEntry, tm
 		return "", wrapFileSystemErr("while closing temp file", err)
 	}
 
-	anonymous := u.Scheme == "gs"
+	// atelet's only client of its own is an anonymous GCS client, for public
+	// buckets such as gs://gvisor, so only a gs:// asset has a fallback.
+	anonFallback := u.Scheme == "gs"
 	var pluginCode codes.Code
 	if s.assetPlugin != nil {
 		pluginCode = s.fetchFromPlugin(ctx, entry, shown, tmpName)
@@ -337,7 +340,7 @@ func (s *AteomHerder) downloadVerified(ctx context.Context, entry assetEntry, tm
 			ok = true
 			return tmpName, nil
 		}
-		if !anonymous || !slices.Contains(anonymousFallbackCodes, pluginCode) {
+		if !anonFallback || !slices.Contains(anonymousFallbackCodes, pluginCode) {
 			slog.WarnContext(ctx, "Object-store plugin failed to fetch sandbox asset",
 				slog.String("url", shown), slog.String("code", pluginCode.String()))
 			return "", s.pluginError(ctx, entry, shown, pluginCode, nil)
@@ -347,7 +350,7 @@ func (s *AteomHerder) downloadVerified(ctx context.Context, entry assetEntry, tm
 		}
 		slog.InfoContext(ctx, "Object-store plugin did not serve sandbox asset; downloading it anonymously",
 			slog.String("url", shown), slog.String("code", pluginCode.String()))
-	} else if !anonymous {
+	} else if !anonFallback {
 		return "", apierror.FailedPrecondition("sandbox asset %s: no object-store plugin is configured to fetch it", shown)
 	}
 
