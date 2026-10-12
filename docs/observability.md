@@ -267,6 +267,7 @@ Agent Substrate emits foundational OpenTelemetry system and server metrics to mo
 | `rpc.server.call.duration` | ateapi & atelet (gRPC servers, via `otelgrpc`) | histogram | per-method gRPC latency, request rate, and errors (labels `rpc.method`, `rpc.response.status_code`) |
 | `ate.actor.crashes` | ateapi | counter | Number of times actors transitioned to `ACTOR_STATE_CRASHED` (labels `ate.actor.operation.name`, `ate.template.atespace`, `ate.template.name`, `ate.workerpool.namespace`, `ate.workerpool.name`, `ate.sandbox.class`) |
 | `atenet.router.route.duration` | atenet-router | histogram | Substrate E2E — Envoy receiving a request to Envoy forwarding it to the resolved worker, excluding actor compute and the response (labels `ate.template.atespace`, `ate.template.name`, `ate.router.outcome`, `ate.router.resume`) |
+| `atenet.router.egress.refused` | atenet-router (egress) | counter | requests of actors the egress gateway refused, by the actor's template and why (labels `ate.template.atespace`, `ate.template.name`, `ate.egress.refusal.reason`) |
 | `atelet.snapshot.size` | atelet | histogram | uncompressed allocated size in bytes of each snapshot image written during checkpoint (`st_blocks * 512`, excluding sparse holes in micro-VM `memory-ranges`) (labels `file.name`, `ate.template.atespace`, `ate.template.name`) |
 | `ate.workerpool.desired_workers` | atecontroller | up/down counter | number of worker pods requested for a WorkerPool, from `spec.replicas` (labels
 `ate.workerpool.namespace`, `ate.workerpool.name`) |
@@ -289,6 +290,10 @@ For `atenet.router.route.duration`:
 * `ate.router.outcome` categorizes the route attempt result: `ok`, `cancelled`, `timeout`, `no_capacity`, `failed_precondition`, `lock_conflict`, `not_found`, `unavailable`, `rate_limited`, or `resume_error`.
 * The router and the scheduler both report `no_capacity` for one condition, but they count different events. The scheduler records one sample on `ate.scheduler.assignment.duration` for each resume. The router records one sample for each request. Many requests can join one resume, and one parked request can cause more than one resume. Thus do not compare the two counts directly.
 * `ate.router.resume` indicates the singleflight execution state of actor resumption: `none` (the resume found the actor already running), `triggered` (this request completed a cold activation), `joined` (this request waited on another request's resume, which activated the actor), or `unknown` (the resume did not complete, so whether an activation ran is unknown). `ate.template.atespace` and `ate.template.name` hold `unknown` when the router has no template to name.
+
+For `atenet.router.egress.refused`:
+* `ate.egress.refusal.reason` is `not_in_policy` when no rule allows the destination or the connection's SNI, `no_policy`, `actor_not_running`, `unknown_actor`, `unauthenticated`, `bad_destination`, `websocket`, `credential` when the injected credential could not be fetched, or `unavailable` when the control plane did not answer. Only `unavailable` is not a decision about the actor.
+* The template labels hold `unknown` when the gateway does not know the actor: an unauthenticated request, or an actor the control plane does not know. The actor and the destination are on the refusal's log line.
 
 For `ate.imagecache.requests`:
 * `ate.imagecache.outcome` is `hit` when the node holds a complete image record — every layer directory the record names is present — and `miss` when the lookup must pull. A failed lookup is neither: `error` is a failed lookup whatever the cause, and `cancelled` or `timeout` is the caller giving up, as on `ate.router.outcome`. So the hit ratio is `hit / (hit + miss)`, with failures and abandoned lookups out of the denominator.
