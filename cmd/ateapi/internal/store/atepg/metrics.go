@@ -151,19 +151,25 @@ func (i *Instruments) registerPools(pools ...namedPool) (metric.Registration, er
 
 func (t *poolMetricsTracer) recordAcquire(ctx context.Context, duration time.Duration, err error) {
 	option := t.successOption
-	switch {
-	case errors.Is(err, context.Canceled):
-		option = t.cancelledOption
-	case errors.Is(err, context.DeadlineExceeded):
-		option = t.timeoutOption
-	case err != nil:
+	if err != nil {
+		// Check pool and connection errors before cancellation or timeout.
+		// A pgconn ConnectError can wrap DeadlineExceeded from its own connection
+		// timeout while the caller's context is still active. Classify that as
+		// connect_error, not a caller acquisition timeout.
 		switch acquireErrorType(err) {
 		case ateattr.StoreConnectionAcquirePoolClosed:
 			option = t.poolClosedOption
 		case ateattr.StoreConnectionAcquireConnectError:
 			option = t.connectErrorOption
 		default:
-			option = t.otherErrorOption
+			switch {
+			case errors.Is(err, context.Canceled):
+				option = t.cancelledOption
+			case errors.Is(err, context.DeadlineExceeded):
+				option = t.timeoutOption
+			default:
+				option = t.otherErrorOption
+			}
 		}
 	}
 	t.instruments.wait.Record(ctx, duration.Seconds(), option)
