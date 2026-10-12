@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/grpc/codes"
@@ -94,7 +95,7 @@ func TestCreateActorEgressPolicy_Success(t *testing.T) {
 		t.Errorf("timestamps = (%v, %v), want server-generated values", md.GetCreateTime(), md.GetUpdateTime())
 	}
 
-	got, err := tc.client.GetActorEgressPolicy(context.Background(), &ateapipb.GetActorEgressPolicyRequest{Actor: actor})
+	got, err := tc.client.GetActorEgressPolicy(context.Background(), &ateapipb.GetActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName})
 	if err != nil {
 		t.Fatalf("GetActorEgressPolicy failed: %v", err)
 	}
@@ -122,7 +123,7 @@ func TestCreateActorEgressPolicy_Errors(t *testing.T) {
 
 func TestGetActorEgressPolicy_NotFound(t *testing.T) {
 	tc, actor := setupEgressPolicyActor(t, "ns-get-egress-policy-missing")
-	_, err := tc.client.GetActorEgressPolicy(context.Background(), &ateapipb.GetActorEgressPolicyRequest{Actor: actor})
+	_, err := tc.client.GetActorEgressPolicy(context.Background(), &ateapipb.GetActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName})
 	assertGrpcError(t, err, codes.NotFound, "EgressPolicy for actor "+actor.GetAtespace()+"/"+actor.GetName()+" not found")
 }
 
@@ -152,7 +153,7 @@ func TestUpdateActorEgressPolicy(t *testing.T) {
 		t.Errorf("updated rules = %v, want one tls_passthrough rule", updated.GetRules())
 	}
 
-	got, err := tc.client.GetActorEgressPolicy(context.Background(), &ateapipb.GetActorEgressPolicyRequest{Actor: actor})
+	got, err := tc.client.GetActorEgressPolicy(context.Background(), &ateapipb.GetActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName})
 	if err != nil {
 		t.Fatalf("GetActorEgressPolicy failed: %v", err)
 	}
@@ -190,14 +191,14 @@ func TestDeleteActorEgressPolicy(t *testing.T) {
 	tc, actor := setupEgressPolicyActor(t, "ns-delete-egress-policy")
 	created := createEgressPolicy(t, tc, actor)
 
-	deleted, err := tc.client.DeleteActorEgressPolicy(context.Background(), &ateapipb.DeleteActorEgressPolicyRequest{Actor: actor})
+	deleted, err := tc.client.DeleteActorEgressPolicy(context.Background(), &ateapipb.DeleteActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName})
 	if err != nil {
 		t.Fatalf("DeleteActorEgressPolicy failed: %v", err)
 	}
 	if diff := cmp.Diff(created, deleted, protocmp.Transform()); diff != "" {
 		t.Errorf("deleted policy mismatch (-created +deleted):\n%s", diff)
 	}
-	_, err = tc.client.DeleteActorEgressPolicy(context.Background(), &ateapipb.DeleteActorEgressPolicyRequest{Actor: actor})
+	_, err = tc.client.DeleteActorEgressPolicy(context.Background(), &ateapipb.DeleteActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName})
 	assertGrpcError(t, err, codes.NotFound, "EgressPolicy not found")
 }
 
@@ -208,7 +209,7 @@ func TestDeleteActor_CascadesEgressPolicy(t *testing.T) {
 	if _, err := tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{Actor: actor}); err != nil {
 		t.Fatalf("DeleteActor failed: %v", err)
 	}
-	_, err := tc.client.GetActorEgressPolicy(context.Background(), &ateapipb.GetActorEgressPolicyRequest{Actor: actor})
+	_, err := tc.client.GetActorEgressPolicy(context.Background(), &ateapipb.GetActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName})
 	assertGrpcError(t, err, codes.NotFound, "EgressPolicy for actor "+actor.GetAtespace()+"/"+actor.GetName()+" not found")
 }
 
@@ -230,7 +231,7 @@ func TestDeleteActorEgressPolicy_Preconditions(t *testing.T) {
 	tc, actor := setupEgressPolicyActor(t, "ns-delete-egress-policy-preconditions")
 	ctx := context.Background()
 	del := func(opts *ateapipb.DeleteOptions) error {
-		_, err := tc.client.DeleteActorEgressPolicy(ctx, &ateapipb.DeleteActorEgressPolicyRequest{Actor: actor, Options: opts})
+		_, err := tc.client.DeleteActorEgressPolicy(ctx, &ateapipb.DeleteActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName, Options: opts})
 		return err
 	}
 
@@ -241,7 +242,7 @@ func TestDeleteActorEgressPolicy_Preconditions(t *testing.T) {
 	assertGrpcError(t, del(&ateapipb.DeleteOptions{Uid: uid, Version: version + 1}), codes.Aborted, "EgressPolicy version conflict")
 	assertGrpcError(t, del(&ateapipb.DeleteOptions{Uid: foreignUID}), codes.Aborted, "EgressPolicy UID conflict")
 	assertGrpcError(t, del(&ateapipb.DeleteOptions{Uid: foreignUID, Version: version}), codes.Aborted, "EgressPolicy UID conflict")
-	if _, err := tc.client.GetActorEgressPolicy(ctx, &ateapipb.GetActorEgressPolicyRequest{Actor: actor}); err != nil {
+	if _, err := tc.client.GetActorEgressPolicy(ctx, &ateapipb.GetActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName}); err != nil {
 		t.Fatalf("a refused delete removed the policy: %v", err)
 	}
 
@@ -256,6 +257,6 @@ func TestDeleteActorEgressPolicy_Preconditions(t *testing.T) {
 	if err := del(&ateapipb.DeleteOptions{Uid: policy.GetMetadata().GetUid(), Version: policy.GetMetadata().GetVersion()}); err != nil {
 		t.Fatalf("DeleteActorEgressPolicy with both guards: %v", err)
 	}
-	_, err := tc.client.GetActorEgressPolicy(ctx, &ateapipb.GetActorEgressPolicyRequest{Actor: actor})
+	_, err := tc.client.GetActorEgressPolicy(ctx, &ateapipb.GetActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName})
 	assertGrpcError(t, err, codes.NotFound, "EgressPolicy for actor "+actor.GetAtespace()+"/"+actor.GetName()+" not found")
 }
