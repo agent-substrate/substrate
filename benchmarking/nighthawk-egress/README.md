@@ -28,10 +28,10 @@ flowchart LR
     egress ==> server
 ```
 
-To measure pre-CPU performance characteristics of Envoy dataplane set ATE_ENVOY_CONCURRENCY=1 environment
-variable when deploying ATE.
-
 ## Prerequisites
+
+To measure single CPU performance characteristics of Envoy dataplane set ATE_ENVOY_CONCURRENCY=1 environment
+variable when deploying ATE.
 
 1. **Cluster with Agent Substrate deployed**:
    - **Existing cluster** (with `.ate-dev-env.sh` configured):
@@ -84,7 +84,7 @@ docker run --rm --network=host --entrypoint /usr/local/bin/nighthawk_client envo
 
 See [Nighthawk CLI help](https://github.com/envoyproxy/nighthawk#using-the-nighthawk-client-cli) for all command line options.
 
-### Target URLs by Egress Mode
+### Target URLs and Default Egress Policy
 
 | Egress Mode | Target URL | Port |
 |---|---|---|
