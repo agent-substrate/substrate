@@ -24,13 +24,21 @@ import (
 // length, and a bounded request keeps one call from monopolising the thread.
 const maxKernelCopy = 1 << 30
 
-// kernelCopyRange copies up to length bytes at off from srcFd to dstFd without the
+// ErrKernelCopyUnsupported means this platform, kernel or filesystem cannot copy a
+// range in the kernel, so the caller should copy through userspace instead.
+var ErrKernelCopyUnsupported = errKernelCopyUnsupported
+
+// KernelCopyRange copies up to length bytes at off from srcFd to dstFd without the
 // data crossing into userspace, and reports how much it copied (short copies are
 // normal, so callers must loop).
 //
-// It reports errKernelCopyUnsupported when the kernel or filesystem cannot do the
+// It reports ErrKernelCopyUnsupported when the kernel or filesystem cannot do the
 // copy — most commonly EXDEV, when source and destination are on different
 // filesystems — so the caller can fall back to a userspace copy.
+func KernelCopyRange(srcFd, dstFd int, off, length int64) (int64, error) {
+	return kernelCopyRange(srcFd, dstFd, off, length)
+}
+
 func kernelCopyRange(srcFd, dstFd int, off, length int64) (int64, error) {
 	if length > maxKernelCopy {
 		length = maxKernelCopy
