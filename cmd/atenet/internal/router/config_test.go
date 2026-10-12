@@ -133,6 +133,7 @@ func TestRouterConfigValidate(t *testing.T) {
 // TestRouterConfigValidateIngressAuth to break one field at a time.
 func staticMTLSConfig() routerConfig {
 	return routerConfig{
+		Mode:           ModeIngress,
 		ParkedRequest:  ingress.ParkedRequestConfig{Max: ingress.DefaultParkedRequestMax},
 		HttpsPort:      8443,
 		ConnectTLSPort: 8444,
