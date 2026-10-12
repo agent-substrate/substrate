@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sync"
 )
 
 // A restore spends most of its download blocked on the socket: 450 MB of snapshot
@@ -52,6 +53,11 @@ type rangedReader struct {
 	cur     []byte
 	curFull []byte
 	err     error
+
+	// mu guards the large-transfer slot schedule takes and Close gives back.
+	mu      sync.Mutex
+	release func()
+	closed  bool
 }
 
 type rangeResult struct {
@@ -60,8 +66,9 @@ type rangeResult struct {
 }
 
 // newRangedReader starts fetching size bytes as chunks, at most downloadConcurrency
-// of them in flight. head supplies the first chunk when the caller already opened it
-// and is closed with the returned reader.
+// of them in flight, once a large-transfer slot is free (see largetransfer.go). head
+// supplies the first chunk when the caller already opened it and is closed with the
+// returned reader.
 func newRangedReader(ctx context.Context, size int64, head io.ReadCloser, fetch fetchRangeFunc) *rangedReader {
 	ctx, cancel := context.WithCancel(ctx)
 	r := &rangedReader{
@@ -70,16 +77,30 @@ func newRangedReader(ctx context.Context, size int64, head io.ReadCloser, fetch 
 		ordered: make(chan chan rangeResult, downloadConcurrency),
 		free:    make(chan []byte, downloadConcurrency),
 	}
-	for range downloadConcurrency {
-		r.free <- make([]byte, downloadChunkSize)
-	}
 	go r.schedule(ctx, size, head, fetch)
 	return r
 }
 
-// schedule issues the ranges in order, bounded by the free buffers.
+// schedule takes a large-transfer slot, allocates the buffers and issues the ranges
+// in order, bounded by the free buffers. The slot is held until Close.
 func (r *rangedReader) schedule(ctx context.Context, size int64, head io.Reader, fetch fetchRangeFunc) {
 	defer close(r.ordered)
+	release, err := acquireLargeTransfer(ctx)
+	if err != nil {
+		r.fail(fmt.Errorf("while waiting to download: %w", err))
+		return
+	}
+	r.mu.Lock()
+	if r.closed {
+		r.mu.Unlock()
+		release()
+		return
+	}
+	r.release = release
+	r.mu.Unlock()
+	for range downloadConcurrency {
+		r.free <- make([]byte, downloadChunkSize)
+	}
 	for i, off := 0, int64(0); off < size; i, off = i+1, off+downloadChunkSize {
 		var buf []byte
 		select {
@@ -144,8 +165,22 @@ func (r *rangedReader) Read(p []byte) (int, error) {
 	return n, nil
 }
 
+// fail hands err to the reader in place of the next range.
+func (r *rangedReader) fail(err error) {
+	out := make(chan rangeResult, 1)
+	out <- rangeResult{err: err}
+	r.ordered <- out
+}
+
 func (r *rangedReader) Close() error {
 	r.cancel()
+	r.mu.Lock()
+	r.closed = true
+	if r.release != nil {
+		r.release()
+		r.release = nil
+	}
+	r.mu.Unlock()
 	if r.head != nil {
 		return r.head.Close()
 	}

@@ -198,6 +198,19 @@ func sendZstd(ctx context.Context, client ObjectStorage, gsURL string, content i
 		return fmt.Errorf("while parsing URL: %w", err)
 	}
 	tStart := time.Now()
+	if f, isFile := content.(*os.File); isFile {
+		fi, err := f.Stat()
+		if err != nil {
+			return fmt.Errorf("while reading the size of %q: %w", object, err)
+		}
+		if fi.Size() > uploadPartSize {
+			release, err := acquireLargeTransfer(ctx)
+			if err != nil {
+				return fmt.Errorf("while waiting to upload %q: %w", object, err)
+			}
+			defer release()
+		}
+	}
 	if sp, ok := client.(sparseFilePutter); ok {
 		if f, isFile := content.(*os.File); isFile {
 			res, err := sp.PutSparseFile(ctx, bucket, object, f)
