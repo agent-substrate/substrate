@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"reflect"
 	"testing"
 	"time"
@@ -417,7 +418,7 @@ func TestPoolMetricsAcquireOutcomes(t *testing.T) {
 		{"another unknown", t.Context(), errors.New("different details"), ateattr.StoreConnectionAcquireError, ateattr.StoreConnectionAcquireOtherError},
 		{"wrapped cancellation", cancelled, fmt.Errorf("acquire: %w", context.Canceled), ateattr.StoreConnectionAcquireCancelled, ""},
 		{"wrapped deadline", t.Context(), fmt.Errorf("acquire: %w", context.DeadlineExceeded), ateattr.StoreConnectionAcquireTimeout, ""},
-		{"connect wrapping cancellation", cancelled, errors.Join(connectErr, context.Canceled), ateattr.StoreConnectionAcquireCancelled, ""},
+		{"connect joined with cancellation", cancelled, errors.Join(connectErr, context.Canceled), ateattr.StoreConnectionAcquireError, ateattr.StoreConnectionAcquireConnectError},
 		{"success with cancelled context", cancelled, nil, ateattr.StoreConnectionAcquireSuccess, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -446,6 +447,99 @@ func TestPoolMetricsAcquireOutcomes(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPoolMetricsInternalConnectTimeout(t *testing.T) {
+	instruments, reader := newPoolMetrics(t)
+	cfg, err := pgxpool.ParseConfig("postgres://unused@127.0.0.1:1/test?sslmode=disable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.ConnConfig.ConnectTimeout = time.Millisecond
+	cfg.ConnConfig.DialFunc = func(ctx context.Context, _, _ string) (net.Conn, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	instruments.configurePool(cfg, ateattr.DBConnectionPoolMain)
+	pool, err := pgxpool.NewWithConfig(t.Context(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	conn, err := pool.Acquire(t.Context())
+	if err == nil {
+		conn.Release()
+		t.Fatal("expected connection timeout")
+	}
+	var connectErr *pgconn.ConnectError
+	if !errors.As(err, &connectErr) || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("acquisition error = %v, want ConnectError wrapping DeadlineExceeded", err)
+	}
+	if err := t.Context().Err(); err != nil {
+		t.Fatalf("caller context ended: %v", err)
+	}
+	histogram := collectPoolMetrics(t, reader)[connectionWaitMetric].Data.(metricdata.Histogram[float64])
+	want := attribute.NewSet(
+		ateattr.DBConnectionPoolNameKey.String(ateattr.DBConnectionPoolMain),
+		ateattr.StoreConnectionAcquireOutcomeKey.String(ateattr.StoreConnectionAcquireError),
+		ateattr.ErrorTypeKey.String(ateattr.StoreConnectionAcquireConnectError),
+	)
+	if len(histogram.DataPoints) != 1 {
+		t.Fatalf("acquisition histogram = %+v, want one series", histogram)
+	}
+	point := histogram.DataPoints[0]
+	if !point.Attributes.Equals(&want) || point.Count != 1 || point.Sum <= 0 {
+		t.Fatalf("acquisition point = %+v, want labels %v, count 1 and positive duration", point, want)
+	}
+	assertPendingAcquires(t, reader, map[string]int64{ateattr.DBConnectionPoolMain: 0})
+}
+
+func TestPoolMetricsCallerCancellationDuringConnect(t *testing.T) {
+	instruments, reader := newPoolMetrics(t)
+	cfg, err := pgxpool.ParseConfig("postgres://unused@127.0.0.1:1/test?sslmode=disable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.MaxConns = 1
+	dialStarted := make(chan struct{})
+	cfg.ConnConfig.DialFunc = func(ctx context.Context, _, _ string) (net.Conn, error) {
+		close(dialStarted)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	instruments.configurePool(cfg, ateattr.DBConnectionPoolMain)
+	pool, err := pgxpool.NewWithConfig(t.Context(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	go func() {
+		select {
+		case <-dialStarted:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	conn, err := pool.Acquire(ctx)
+	if err == nil {
+		conn.Release()
+		t.Fatal("expected caller cancellation")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("acquisition error = %v, want caller cancellation", err)
+	}
+	histogram := collectPoolMetrics(t, reader)[connectionWaitMetric].Data.(metricdata.Histogram[float64])
+	want := attribute.NewSet(
+		ateattr.DBConnectionPoolNameKey.String(ateattr.DBConnectionPoolMain),
+		ateattr.StoreConnectionAcquireOutcomeKey.String(ateattr.StoreConnectionAcquireCancelled),
+	)
+	if len(histogram.DataPoints) != 1 || !histogram.DataPoints[0].Attributes.Equals(&want) ||
+		histogram.DataPoints[0].Count != 1 {
+		t.Fatalf("acquisition histogram = %+v, want one cancelled sample without error.type", histogram)
+	}
+	assertPendingAcquires(t, reader, map[string]int64{ateattr.DBConnectionPoolMain: 0})
 }
 
 func assertPendingAcquires(t *testing.T, reader *sdkmetric.ManualReader, want map[string]int64) {
@@ -502,9 +596,6 @@ func TestPoolMetricsAcquireEndMissingStart(t *testing.T) {
 				tracer.TraceAcquireEnd(tc.ctx, nil, pgxpool.TraceAcquireEndData{})
 				assertPendingAcquires(t, reader, map[string]int64{ateattr.DBConnectionPoolMain: 0})
 			}
-			tracer.missingStartWarning.Do(func() {
-				t.Error("missing start time did not consume the warning guard")
-			})
 			if m, found := collectPoolMetrics(t, reader)[connectionWaitMetric]; found {
 				t.Fatalf("recorded duration without a start time: %+v", m)
 			}
