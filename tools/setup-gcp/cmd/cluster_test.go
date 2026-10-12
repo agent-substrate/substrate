@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"cloud.google.com/go/container/apiv1/containerpb"
+	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -391,5 +392,102 @@ func TestValidateClusterLocation(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 		})
+	}
+}
+
+func TestCheckExistingCluster(t *testing.T) {
+	cfg := Config{
+		ProjectID:         "proj",
+		Region:            "us-west1",
+		ClusterName:       "c",
+		Network:           "default",
+		Subnetwork:        "default",
+		EnableDataplaneV2: true,
+	}
+	clusterWith := func(network, subnetwork string, datapath containerpb.DatapathProvider) *containerpb.Cluster {
+		return &containerpb.Cluster{NetworkConfig: &containerpb.NetworkConfig{
+			Network:          network,
+			Subnetwork:       subnetwork,
+			DatapathProvider: datapath,
+		}}
+	}
+	const (
+		network    = "projects/proj/global/networks/default"
+		subnetwork = "projects/proj/regions/us-west1/subnetworks/default"
+		v2         = containerpb.DatapathProvider_ADVANCED_DATAPATH
+		legacy     = containerpb.DatapathProvider_LEGACY_DATAPATH
+	)
+
+	tests := []struct {
+		name    string
+		cluster *containerpb.Cluster
+		want    []string
+	}{
+		{
+			name:    "all match",
+			cluster: clusterWith(network, subnetwork, v2),
+		},
+		{
+			name:    "no network config and Dataplane V2 expected",
+			cluster: &containerpb.Cluster{},
+			want:    []string{"Dataplane V2 is false, want true (ENABLE_DATAPLANE_V2)"},
+		},
+		{
+			name:    "network mismatch",
+			cluster: clusterWith("projects/proj/global/networks/other", subnetwork, v2),
+			want:    []string{`network is "projects/proj/global/networks/other"`, "(NETWORK)"},
+		},
+		{
+			name:    "per-cluster subnetwork",
+			cluster: clusterWith(network, "projects/proj/regions/us-west1/subnetworks/gke-c-subnet-1a2b", v2),
+			want:    []string{`subnetwork is "projects/proj/regions/us-west1/subnetworks/gke-c-subnet-1a2b"`, "(SUBNETWORK)"},
+		},
+		{
+			name:    "legacy datapath",
+			cluster: clusterWith(network, subnetwork, legacy),
+			want:    []string{"Dataplane V2 is false, want true (ENABLE_DATAPLANE_V2)"},
+		},
+		{
+			name:    "every mismatch is reported",
+			cluster: clusterWith("projects/proj/global/networks/other", "projects/proj/regions/us-west1/subnetworks/other", legacy),
+			want:    []string{"(NETWORK)", "(SUBNETWORK)", "(ENABLE_DATAPLANE_V2)", "does not replace an existing cluster"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := checkExistingCluster(tt.cluster, &cfg)
+			if len(tt.want) == 0 {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tt.want)
+			}
+			for _, w := range tt.want {
+				if !strings.Contains(err.Error(), w) {
+					t.Errorf("got error %q, want containing %q", err.Error(), w)
+				}
+			}
+		})
+	}
+
+	t.Run("Dataplane V2 off matches legacy", func(t *testing.T) {
+		legacyCfg := cfg
+		legacyCfg.EnableDataplaneV2 = false
+		if err := checkExistingCluster(clusterWith(network, subnetwork, legacy), &legacyCfg); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+}
+
+// Both commands compare the cluster's Dataplane V2 setting, so both expose it.
+func TestDataplaneV2FlagOnClusterCommands(t *testing.T) {
+	for _, c := range []*cobra.Command{clusterCmd, bootstrapCmd} {
+		if c.Flags().Lookup("enable-dataplane-v2") == nil {
+			t.Errorf("%s has no --enable-dataplane-v2 flag", c.Name())
+		}
 	}
 }
