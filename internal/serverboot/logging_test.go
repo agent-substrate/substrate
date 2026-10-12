@@ -284,7 +284,7 @@ func TestInitLoggerInstallsRedactingHandler(t *testing.T) {
 	}
 
 	const token = "eyJhbGciOiJSUzI1NiJ9.secret-token"
-	slog.Info("Handle RPC", slog.Any("resp", &ateapipb.MintActorJWTResponse{ActorJwt: token}))
+	slog.Info("Handle RPC", slog.Any("resp", &ateapipb.MintActorJwtResponse{ActorJwt: token}))
 	got := buf.String()
 	if strings.Contains(got, token) {
 		t.Fatalf("default logger wrote a debug_redact field: %s", got)

@@ -964,7 +964,7 @@ func TestBuildAteomWorkloadSpecForwardsWakeupProbe(t *testing.T) {
 				Name:  "with-probe",
 				Image: "main",
 				WakeupProbe: &ateletpb.WakeupProbe{
-					HttpGet:        &ateletpb.HTTPGetAction{Path: "/health", Port: 8080},
+					HttpGet:        &ateletpb.HttpGetAction{Path: "/health", Port: 8080},
 					TimeoutSeconds: 45,
 				},
 			},
@@ -978,7 +978,7 @@ func TestBuildAteomWorkloadSpecForwardsWakeupProbe(t *testing.T) {
 			{
 				Name: "with-probe",
 				WakeupProbe: &ateompb.WakeupProbe{
-					HttpGet:        &ateompb.HTTPGetAction{Path: "/health", Port: 8080},
+					HttpGet:        &ateompb.HttpGetAction{Path: "/health", Port: 8080},
 					TimeoutSeconds: 45,
 				},
 			},

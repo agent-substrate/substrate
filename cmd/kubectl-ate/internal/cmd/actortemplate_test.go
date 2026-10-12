@@ -81,7 +81,7 @@ func TestActorTemplateFromManifest(t *testing.T) {
 			Image:   "ko://github.com/agent-substrate/substrate/demos/counter",
 			Command: []string{"/ko-app/counter", "--extra-port=9090"},
 			WakeupProbe: &ateapipb.ContainerWakeupProbe{
-				HttpGet: &ateapipb.HTTPGetAction{Path: "/readyz", Port: 80},
+				HttpGet: &ateapipb.HttpGetAction{Path: "/readyz", Port: 80},
 			},
 			VolumeMounts: []*ateapipb.VolumeMount{{Name: "data", MountPath: "/home/counter"}},
 		}},

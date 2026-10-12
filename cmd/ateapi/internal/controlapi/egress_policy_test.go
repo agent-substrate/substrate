@@ -65,7 +65,7 @@ func TestActorEgressPolicy(t *testing.T) {
 				Uid:      "ignored",
 				Version:  99,
 			}, Rules: []*ateapipb.EgressRule{{
-				Http: &ateapipb.HTTPRule{
+				Http: &ateapipb.HttpRule{
 					Hostnames: []string{"api.example.com"},
 					Effects: &ateapipb.HttpRuleEffects{
 						ReplaceHeaders: []*ateapipb.CredentialHeader{{
