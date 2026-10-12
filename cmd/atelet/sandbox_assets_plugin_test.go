@@ -349,7 +349,9 @@ func TestFetchAssetAnonymousFallback(t *testing.T) {
 	)
 	pluginErr := func(code codes.Code) error { return status.Error(code, pluginMsg) }
 
-	for _, code := range anonymousFallbackCodes {
+	// Pinned here rather than read from anonymousFallbackCodes, so dropping a
+	// code from production fails this test.
+	for _, code := range []codes.Code{codes.NotFound, codes.InvalidArgument, codes.Unimplemented, codes.Unavailable} {
 		t.Run(code.String()+" falls back", func(t *testing.T) {
 			logs := captureLogs(t)
 			f := newAssetHerderFixture(t)

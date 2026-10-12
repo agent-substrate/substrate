@@ -36,9 +36,8 @@ type AssetFile struct {
 	// URL is where to download the asset from (e.g. a gs:// URL). atelet
 	// fetches every URL through the node's object-store plugin, with the
 	// plugin's credentials. The plugin refuses URLs under a snapshot location.
-	// A gs:// URL the plugin has no object for or cannot serve, or any gs:// URL
-	// when no plugin is configured, is then read anonymously, which serves
-	// public buckets such as gs://gvisor.
+	// A gs:// URL the plugin has no object for or cannot serve is then read
+	// anonymously, which serves public buckets such as gs://gvisor.
 	//
 	// +required
 	// +kubebuilder:validation:MinLength=1

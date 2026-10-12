@@ -445,7 +445,7 @@ func (s *AteomHerder) pluginError(ctx context.Context, entry assetEntry, shown s
 	case codes.FailedPrecondition:
 		msg = fmt.Sprintf("the object-store plugin rejected its content (%s): larger than %d bytes or sha256 is not %s", code, maxAssetBytes, entry.SHA256)
 	case codes.InvalidArgument:
-		msg = fmt.Sprintf("the object-store plugin cannot serve this URL (%s)", code)
+		msg = fmt.Sprintf("the object-store plugin rejected the request (%s)", code)
 	default:
 		newErr, msg = apierror.Internal, fmt.Sprintf("the object-store plugin failed (%s)", code)
 	}

@@ -114,7 +114,7 @@ var (
 	drainDelay   = pflag.Duration("drain-delay", 0, "How long to keep accepting new RPCs after SIGTERM before starting the gRPC drain.")
 	drainTimeout = pflag.Duration("drain-timeout", 5*time.Minute, "Deadline for the graceful gRPC drain on shutdown. In-flight RPCs still running past it are forcefully cancelled.")
 
-	snapshotPluginSocket = pflag.String("snapshot-plugin-socket", "/run/snapshot-plugin/node.sock", "Unix socket of the node object-store plugin that external snapshots are fetched and uploaded through, and sandbox assets other than public gs:// objects are fetched through.")
+	snapshotPluginSocket = pflag.String("snapshot-plugin-socket", "/run/snapshot-plugin/node.sock", "Unix socket of the node object-store plugin that external snapshots are fetched and uploaded through, and every sandbox asset is fetched through. A gs:// asset the plugin cannot serve is then read anonymously.")
 )
 
 var _ imagecache.CandidateKeychain = (*credentialprovider.Keychain)(nil)
@@ -473,11 +473,12 @@ type AteomHerder struct {
 
 	ateomDialer *AteomDialer
 	imageCache  *imagecache.Store
-	// anonGCSClient reads public gs:// sandbox assets without credentials.
+	// anonGCSClient reads gs:// assets the plugin cannot serve, without credentials.
 	anonGCSClient objectstorage.ObjectStorage
 	// snapshotPlugin moves external snapshot files between the node and storage.
 	snapshotPlugin objectstorev1.NodeProviderClient
-	// assetPlugin fetches every sandbox asset anonGCSClient does not serve.
+	// assetPlugin fetches every sandbox asset first; anonGCSClient reads a gs://
+	// asset it cannot serve.
 	assetPlugin objectstorev1.AssetProviderClient
 	// pluginSocket is the object-store plugin's socket, for error messages.
 	pluginSocket string
