@@ -12,33 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package security holds the end-to-end tests for Substrate's security
-// boundaries. Every assertion here is negative: something must not be
-// possible. Each is paired with a positive control showing the probe could
-// have seen the violation, because a negative test that stops exercising its
-// boundary keeps passing.
-//
-// This file covers the boundary between two atespaces whose actors are
-// identical except for the atespace they run in. The victim actor runs, writes
-// state, and vacates its worker; the attacker actor, in the other atespace,
-// then reuses that worker and must find none of it. A single-worker pool
-// (fixtures/security/atespace-a-pool.yaml.tmpl) forces the reuse, and the test
-// checks that it happened.
+// This file covers security invariants that specifically depend on the
+// boundary between two distinct atespaces (for actor-level isolation within a
+// single atespace, see actor_isolation_test.go).
 package security
 
 import (
 	"context"
-	"encoding/json"
-	"io"
-	"net/http"
-	"net/url"
-	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/agent-substrate/substrate/internal/e2e"
-	"github.com/agent-substrate/substrate/internal/nodepath"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
@@ -46,54 +30,17 @@ import (
 )
 
 const (
-	// templateName is the ActorTemplate name both atespaces deploy.
-	templateName = "probe"
-
-	// dataMount is where atespace-template.yaml.tmpl mounts the durable-dir
-	// volume, and durableVolume is that volume's name, which is also the last
-	// segment of its mount point on the worker. Keep both in sync with the
-	// manifest.
-	dataMount     = "/data"
-	durableVolume = "data"
-
-	// writtenByProbe is the fixed body the probe's /writefile endpoint writes.
-	// Actors are told apart by the path they write, not by the content.
-	writtenByProbe = "written by probe"
-
-	// markerA and markerB are named for the atespace that owns them, so a file
-	// seen across the boundary is attributable.
+	// markerA is written by the actor in atespace A to verify that a same-atespace
+	// clone restored from atespace-a-tag carries the source actor's durable data.
 	markerA = dataMount + "/atespace-a-marker"
-	markerB = dataMount + "/atespace-b-marker"
-
-	// neverWritten is a path no actor creates. Reading it proves /readfile
-	// reports a missing file as an error, which every negative assertion in
-	// this file relies on.
-	neverWritten = dataMount + "/never-written"
 )
-
-// fileResponse mirrors the probe's /readfile and /writefile responses.
-type fileResponse struct {
-	Path    string `json:"path"`
-	Content string `json:"content"`
-	OK      string `json:"ok"`
-	Error   string `json:"error"`
-}
 
 // atespaces is the pair of atespaces under test.
 type atespaces struct {
 	a, b string
 }
 
-// TestCrossAtespaceIsolation checks that the atespace boundary holds across
-// worker reuse for an actor's stored data and its snapshots.
-//
-// The victim, in atespace B, runs, writes its durable marker, and is
-// suspended. The attacker, in atespace A, then starts on the worker the victim
-// left and must find none of its state.
-//
-// The fixture is deployed once for the whole test. Deploying waits for each
-// atespace's golden snapshot, which on the micro-VM lane is a cold boot plus a
-// checkpoint, so per-subtest fixtures would dominate the runtime.
+// TestCrossAtespaceIsolation validates isolation between two atespaces.
 func TestCrossAtespaceIsolation(t *testing.T) {
 	env, err := e2e.CheckEnv("BUCKET_NAME", "KO_DOCKER_REPO")
 	if err != nil {
@@ -110,109 +57,26 @@ func TestCrossAtespaceIsolation(t *testing.T) {
 	}
 	defer rc.Close()
 
-	// Victim: the actor in atespace B runs first. Its UID and worker are recorded while it is
-	// RUNNING: the attacker probes host paths keyed by that UID and must land
-	// on that worker.
-	const victim = "victim"
-	createAndResumeActor(t, ctx, clients, ns.b, victim)
-	victimActor := resources.ActorRef{Atespace: ns.b, Name: victim}
-	victimUID := actorUID(t, ctx, clients, ns.b, victim)
-	victimWorker := assignedWorker(t, ctx, clients, ns.b, victim)
+	const source = "actor-a"
+	createAndResumeActor(t, ctx, clients, ns.a, source)
+	sourceActor := resources.ActorRef{Atespace: ns.a, Name: source}
 
-	writeFile(t, ctx, rc, victimActor, markerB)
-	// Control: the victim reads back its own marker, so the attacker's failure
-	// to read it below means the boundary held, not that the marker was never
-	// written.
-	if got := readFile(t, ctx, rc, victimActor, markerB); got.Content != writtenByProbe {
-		t.Fatalf("control: victim %s reading its OWN %s = %q (error %q), want %q — the probe cannot see its own durable data, so nothing below is meaningful",
-			victimActor, markerB, got.Content, got.Error, writtenByProbe)
+	writeFile(t, ctx, rc, sourceActor, markerA)
+	if got := readFile(t, ctx, rc, sourceActor, markerA); got.Content != writtenByProbe {
+		t.Fatalf("control: actor %s reading its OWN %s = %q (error %q), want %q",
+			sourceActor, markerA, got.Content, got.Error, writtenByProbe)
 	}
 
-	// Suspend the victim to free the worker. The durable marker stays on the
-	// worker; the snapshot goes to object storage.
-	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: ns.b, Name: victim},
-	}); err != nil {
-		t.Fatalf("SuspendActor %s/%s: %v", ns.b, victim, err)
-	}
-	waitForActorState(t, ctx, clients, ns.b, victim, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
-
-	// Attacker: the actor in atespace A takes the freed worker.
-	const attacker = "attacker"
-	createAndResumeActor(t, ctx, clients, ns.a, attacker)
-	attackerActor := resources.ActorRef{Atespace: ns.a, Name: attacker}
-	requireReusedWorker(t, ctx, clients, ns.a, attacker, victimWorker)
-
-	// Controls for every negative assertion below. A failure is fatal: the
-	// probe cannot tell a denial from a missing file, so the subtests would
-	// pass for the wrong reason.
-	if got := readFile(t, ctx, rc, attackerActor, neverWritten); got.Error == "" {
-		t.Fatalf("control: attacker %s read %s, which nothing ever created, and reported no error (content %q) — /readfile does not report misses as errors, so every negative assertion here would pass vacuously",
-			attackerActor, neverWritten, got.Content)
-	}
-	writeFile(t, ctx, rc, attackerActor, markerA)
-	if got := readFile(t, ctx, rc, attackerActor, markerA); got.Content != writtenByProbe {
-		t.Fatalf("control: attacker %s reading its OWN %s = %q (error %q), want %q — the probe cannot see its own durable data",
-			attackerActor, markerA, got.Content, got.Error, writtenByProbe)
-	}
-
-	// Durable mount: the attacker's /data must be its own. The victim's
-	// marker is known to exist, so reading it through the attacker's mount
-	// means durable directories are shared or mis-keyed across reuse.
-	t.Run("VictimDurableMarkerNotVisibleThroughAttackerMount", func(t *testing.T) {
-		if got := readFile(t, ctx, rc, attackerActor, markerB); got.Error == "" {
-			t.Errorf("attacker %s read %s, the victim's durable marker in atespace %s, through its own mount: content %q — durable-dir volumes are shared across the worker-reuse boundary",
-				attackerActor, markerB, ns.b, got.Content)
-		}
-	})
-
-	// Host state: the mount is confined (above); this checks the sandbox
-	// does not expose the host directories that mount is built from. The paths
-	// come from internal/nodepath so they move with the worker layout; see
-	// actorHostPath.
-	t.Run("VictimHostStateNotReachableFromAttackerSandbox", func(t *testing.T) {
-		for _, probe := range []struct {
-			what string
-			path string
-		}{
-			{"the victim's durable marker on the host", actorHostPath(victimUID, "durable-dir", durableVolume, filepath.Base(markerB))},
-			{"the victim's projected actor identity", actorHostPath(victimUID, "system-info", "system-info", "actor-id")},
-			{"the victim's sandbox asset record", actorHostPath(victimUID, "sandbox-assets.json")},
-		} {
-			if got := readFile(t, ctx, rc, attackerActor, probe.path); got.Error == "" {
-				t.Errorf("attacker %s read %s (%s): content %q — the sandbox exposes the worker's per-actor host state across the reuse boundary",
-					attackerActor, probe.path, probe.what, got.Content)
-			}
-		}
-
-		// A write is the more serious direction of the same boundary: reaching the
-		// victim's durable directory means an actor can corrupt another atespace's data.
-		injected := actorHostPath(victimUID, "durable-dir", durableVolume, "injected")
-		if got := writeFileAllowingFailure(t, ctx, rc, attackerActor, injected); got.Error == "" {
-			t.Errorf("attacker %s wrote %s, inside the victim's durable directory (atespace %s) on the worker — an actor can corrupt another atespace's stored data",
-				attackerActor, injected, ns.b)
-		}
-	})
-
-	// Tag scope. Runs last: it suspends the attacker to snapshot it.
+	// ST-4 [space]: an ATESPACE-scoped tag in atespace A must not seed an
+	// actor in atespace B. Suspends `source` to snapshot it.
 	t.Run("TagScopedToAtespaceCannotSeedAnotherAtespace", func(t *testing.T) {
-		testTagScopeBoundary(t, ctx, clients, rc, ns, attacker)
+		t.Log("Invariant ST-4 [space]: A snapshot must not seed an actor in another atespace unless the tag is published")
+		testTagScopeBoundary(t, ctx, clients, rc, ns, source)
 	})
-}
-
-// actorHostPath is nodepath.ActorsDir/<uid>/<elem...> on the worker host. The
-// leaves (durable-dir, system-info, sandbox-assets.json) mirror
-// cmd/atelet/internal/ateletpath, which this suite cannot import.
-func actorHostPath(actorUID string, elem ...string) string {
-	return filepath.Join(append([]string{nodepath.ActorsDir, actorUID}, elem...)...)
 }
 
 // testTagScopeBoundary checks that an Actor cannot be seeded from a snapshot
-// taken in another atespace. A snapshot carries the source's memory, root filesystem
-// and durable data, so loading one across the boundary hands over everything.
-//
-// Substrate enforces this through the Tag's scope in ateapi's CreateActor. The
-// negative case matches the error message, not just the code.
+// taken in another atespace.
 //
 // source is a running actor in atespace A holding markerA; it is suspended here
 // to produce the snapshot the tag captures.
@@ -319,155 +183,4 @@ func deployAtespaces(t *testing.T, ctx context.Context, clients *e2e.Clients, bu
 		t.Fatalf("both fixtures rendered to atespace %q — the fixture no longer isolates anything", a)
 	}
 	return atespaces{a: a, b: b}
-}
-
-// requireReusedWorker fails unless the actor landed on priorWorker. The fixture
-// runs one worker for both atespaces, so any other worker means the attacker never
-// touched the host the victim left its state on and the test proves nothing.
-func requireReusedWorker(t *testing.T, ctx context.Context, clients *e2e.Clients, atespace, name, priorWorker string) {
-	t.Helper()
-	got := assignedWorker(t, ctx, clients, atespace, name)
-	if got != priorWorker {
-		t.Fatalf("actor %s/%s landed on worker %q, not the worker %q the victim vacated; the fixture deploys one worker for both atespaces, so the reuse boundary under test is not being exercised",
-			atespace, name, got, priorWorker)
-	}
-	t.Logf("actor %s/%s reused worker %s", atespace, name, priorWorker)
-}
-
-func assignedWorker(t *testing.T, ctx context.Context, clients *e2e.Clients, atespace, name string) string {
-	t.Helper()
-	actor, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: atespace, Name: name},
-	})
-	if err != nil {
-		t.Fatalf("GetActor %s/%s: %v", atespace, name, err)
-	}
-	worker := actor.GetStatus().GetWorkerAssignment().GetWorker().GetName()
-	if worker == "" {
-		t.Fatalf("actor %s/%s has no worker assignment while RUNNING", atespace, name)
-	}
-	return worker
-}
-
-func actorUID(t *testing.T, ctx context.Context, clients *e2e.Clients, atespace, name string) string {
-	t.Helper()
-	actor, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: atespace, Name: name},
-	})
-	if err != nil {
-		t.Fatalf("GetActor %s/%s: %v", atespace, name, err)
-	}
-	uid := actor.GetMetadata().GetUid()
-	if uid == "" {
-		t.Fatalf("actor %s/%s has no uid", atespace, name)
-	}
-	return uid
-}
-
-// createAndResumeActor creates an actor from its atespace's template and resumes
-// it from the golden snapshot, removing it when the test ends.
-func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Clients, atespace, name string) {
-	t.Helper()
-	ref := &ateapipb.ObjectRef{Atespace: atespace, Name: name}
-	// Actor records outlive the fixture namespace, so an interrupted run can
-	// leave one behind and wedge reruns on AlreadyExists. DeleteActor needs
-	// SUSPENDED or CRASHED, hence the suspend; both are best-effort.
-	_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: ref})
-	_, _ = clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref})
-	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-		Metadata:      &ateapipb.ResourceMetadata{Atespace: atespace, Name: name},
-		ActorTemplate: &ateapipb.ObjectRef{Atespace: atespace, Name: templateName},
-	}}); err != nil {
-		t.Fatalf("CreateActor %s/%s: %v", atespace, name, err)
-	}
-	t.Cleanup(func() {
-		cleanupCtx := context.Background()
-		_, _ = clients.SubstrateAPI.SuspendActor(cleanupCtx, &ateapipb.SuspendActorRequest{Actor: ref})
-		if _, err := clients.SubstrateAPI.DeleteActor(cleanupCtx, &ateapipb.DeleteActorRequest{Actor: ref}); err != nil {
-			t.Logf("cleanup: DeleteActor %s/%s failed, actor leaked (remove with: kubectl ate delete actor %s -a %s): %v", atespace, name, name, atespace, err)
-		}
-	})
-
-	if _, err := e2e.ResumeActorAwaitCapacity(t, ctx, clients, &ateapipb.ResumeActorRequest{Actor: ref}); err != nil {
-		t.Fatalf("ResumeActor %s/%s: %v", atespace, name, err)
-	}
-	waitForActorState(t, ctx, clients, atespace, name, ateapipb.ActorState_ACTOR_STATE_RUNNING)
-}
-
-func waitForActorState(t *testing.T, ctx context.Context, clients *e2e.Clients, atespace, name string, want ateapipb.ActorState) {
-	t.Helper()
-	deadline := time.Now().Add(60 * time.Second)
-	for time.Now().Before(deadline) {
-		resp, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: atespace, Name: name},
-		})
-		if err == nil && resp.GetStatus().GetState() == want {
-			return
-		}
-		time.Sleep(time.Second)
-	}
-	t.Fatalf("timed out waiting for actor %s/%s to reach state %v", atespace, name, want)
-}
-
-// writeFile writes the probe's fixed body at path and fails the test if the
-// write did not land, so a later negative assertion cannot pass on missing
-// state.
-func writeFile(t *testing.T, ctx context.Context, rc *e2e.RouterClient, actor resources.ActorRef, path string) {
-	t.Helper()
-	if got := writeFileAllowingFailure(t, ctx, rc, actor, path); got.OK != "true" {
-		t.Fatalf("actor %s writing %s: %q", actor, path, got.Error)
-	}
-}
-
-// writeFileAllowingFailure is writeFile for assertions that expect the write
-// to be refused; it returns the probe's report instead of failing.
-func writeFileAllowingFailure(t *testing.T, ctx context.Context, rc *e2e.RouterClient, actor resources.ActorRef, path string) fileResponse {
-	t.Helper()
-	return probeFileOp(t, ctx, rc, actor, "/writefile", path)
-}
-
-func readFile(t *testing.T, ctx context.Context, rc *e2e.RouterClient, actor resources.ActorRef, path string) fileResponse {
-	t.Helper()
-	return probeFileOp(t, ctx, rc, actor, "/readfile", path)
-}
-
-// probeFileOp calls one of the probe's file endpoints. A transport or HTTP
-// failure is fatal rather than returned: the probe never ran the operation,
-// which is not the same as the actor being denied.
-func probeFileOp(t *testing.T, ctx context.Context, rc *e2e.RouterClient, actor resources.ActorRef, endpoint, path string) fileResponse {
-	t.Helper()
-	resp, err := rc.Get(ctx, actor, endpoint+"?path="+url.QueryEscape(path))
-	if err != nil {
-		t.Fatalf("GET %s for %s: %v", endpoint, actor, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("GET %s for %s: status %d, body %q", endpoint, actor, resp.StatusCode, body)
-	}
-	var out fileResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		t.Fatalf("decoding %s for %s: %v", endpoint, actor, err)
-	}
-	return out
-}
-
-func durableSnapshotURI(status *ateapipb.ActorStatus) string {
-	var best *ateapipb.Snapshot
-	for _, snap := range status.GetSnapshots() {
-		if uri := snapshotURI(snap); uri != "" {
-			if best == nil || snap.GetGeneration() > best.GetGeneration() {
-				best = snap
-			}
-		}
-	}
-	return snapshotURI(best)
-}
-
-func snapshotURI(snap *ateapipb.Snapshot) string {
-	st := snap.GetDurableSnapshot()
-	if st.GetStatus() == ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED {
-		return st.GetObject().GetSnapshotUri()
-	}
-	return ""
 }
