@@ -158,8 +158,6 @@ func TestPoolMetricsNilSafe(t *testing.T) {
 	if registration != nil || err != nil {
 		t.Fatalf("nil instruments registration = %v, %v", registration, err)
 	}
-	var tracer *poolMetricsTracer
-	tracer.recordAcquire(t.Context(), time.Second, nil)
 }
 
 func newPoolMetricsTracer(t *testing.T, instruments *Instruments, name string) *poolMetricsTracer {
@@ -256,21 +254,28 @@ func TestPoolMetricsContention(t *testing.T) {
 		t.Fatal(err)
 	}
 	pool.Close()
-	if _, err := pool.Acquire(t.Context()); err == nil {
-		t.Fatal("closed pool acquisition succeeded")
+	if _, err := pool.Acquire(t.Context()); !errors.Is(err, puddle.ErrClosedPool) {
+		t.Fatalf("closed pool acquisition error = %v, want ErrClosedPool", err)
 	}
 	histogram := collectPoolMetrics(t, reader)[connectionWaitMetric].Data.(metricdata.Histogram[float64])
-	got := make(map[string]uint64)
+	type acquisitionResult struct {
+		outcome   string
+		errorType string
+	}
+	got := make(map[acquisitionResult]uint64)
 	for _, point := range histogram.DataPoints {
 		outcome, _ := point.Attributes.Value(ateattr.StoreConnectionAcquireOutcomeKey)
-		got[outcome.AsString()] = point.Count
+		errorType, _ := point.Attributes.Value(ateattr.ErrorTypeKey)
+		got[acquisitionResult{outcome.AsString(), errorType.AsString()}] += point.Count
 		if outcome.AsString() == ateattr.StoreConnectionAcquireTimeout && point.Sum < timeout.Seconds() {
 			t.Errorf("timeout acquisition duration = %g, want >= %g", point.Sum, timeout.Seconds())
 		}
 	}
-	want := map[string]uint64{
-		ateattr.StoreConnectionAcquireSuccess: 5, ateattr.StoreConnectionAcquireCancelled: 1,
-		ateattr.StoreConnectionAcquireTimeout: 1, ateattr.StoreConnectionAcquireError: 1,
+	want := map[acquisitionResult]uint64{
+		{ateattr.StoreConnectionAcquireSuccess, ""}:                                     5,
+		{ateattr.StoreConnectionAcquireCancelled, ""}:                                   1,
+		{ateattr.StoreConnectionAcquireTimeout, ""}:                                     1,
+		{ateattr.StoreConnectionAcquireError, ateattr.StoreConnectionAcquirePoolClosed}: 1,
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("acquisition counts = %v, want %v", got, want)
@@ -474,6 +479,35 @@ func TestPoolMetricsPendingRequests(t *testing.T) {
 		assertPendingAcquires(t, reader, map[string]int64{ateattr.DBConnectionPoolMain: 1})
 		tracer.TraceAcquireEnd(second, nil, pgxpool.TraceAcquireEndData{Err: err})
 		assertPendingAcquires(t, reader, map[string]int64{ateattr.DBConnectionPoolMain: 0})
+	}
+}
+
+func TestPoolMetricsAcquireEndMissingStart(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ctx  context.Context
+	}{
+		{"missing", t.Context()},
+		{"wrong type", context.WithValue(t.Context(), acquireStartKey{}, "invalid")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			instruments, reader := newPoolMetrics(t)
+			tracer := newPoolMetricsTracer(t, instruments, ateattr.DBConnectionPoolMain)
+			tracer.TraceAcquireStart(t.Context(), nil, pgxpool.TraceAcquireStartData{})
+			// Simulate another tracer replacing the acquisition context.
+			tracer.TraceAcquireEnd(tc.ctx, nil, pgxpool.TraceAcquireEndData{})
+			assertPendingAcquires(t, reader, map[string]int64{ateattr.DBConnectionPoolMain: 0})
+			if m, found := collectPoolMetrics(t, reader)[connectionWaitMetric]; found {
+				t.Fatalf("recorded duration without a start time: %+v", m)
+			}
+			ctx := tracer.TraceAcquireStart(t.Context(), nil, pgxpool.TraceAcquireStartData{})
+			tracer.TraceAcquireEnd(ctx, nil, pgxpool.TraceAcquireEndData{})
+			assertPendingAcquires(t, reader, map[string]int64{ateattr.DBConnectionPoolMain: 0})
+			histogram := collectPoolMetrics(t, reader)[connectionWaitMetric].Data.(metricdata.Histogram[float64])
+			if len(histogram.DataPoints) != 1 || histogram.DataPoints[0].Count != 1 {
+				t.Fatalf("subsequent acquisition not recorded correctly: %+v", histogram)
+			}
+		})
 	}
 }
 
