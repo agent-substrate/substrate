@@ -92,8 +92,20 @@ size. The lot upholds the same guarantee on its side: admission happens at the
 park transition, so fast-path requests never compete for slots (#1081).
 `--extproc-max-requests` overrides the derivation; explicit values are
 validated `>= --parked-request-max` at startup, because a breaker below the lot
-would silently truncate it — Envoy would reject the overflow itself, with 503s
-that never reach the lot and never count in `parking.rejected`.
+would silently truncate it — Envoy would reject the overflow itself, before it
+reaches the lot or counts in `parking.rejected`.
+
+### Synchronized bursts
+
+The breaker counts every ext_proc stream, parked or not. A burst of requests
+to running actors larger than the headroom cannot open its ext_proc streams,
+and the filter fails closed: Envoy answers with `status_on_error`, `500` by
+default (the router sets neither it nor `failure_mode_allow`), and the router
+never sees the request, so no parking metric counts it. Envoy's admin stats
+count it on the ext_proc cluster as `upstream_rq_active_overflow`. The router
+sets `max_requests` only; `max_connections` and `max_pending_requests` keep
+Envoy's default of `1024`. Size `--extproc-max-requests` for the largest
+synchronized burst plus the lot.
 
 Concurrent requests for the *same* actor are de-duplicated by the resumer's
 per-actor flight registry: they share a single in-flight `ResumeActor` call and

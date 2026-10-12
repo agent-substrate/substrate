@@ -790,9 +790,9 @@ what to set before the run:
   `atenet.router.parking.wait.duration{outcome="budget_exhausted"}`. See
   [docs/concepts/request-parking.md](../concepts/request-parking.md).
 * **Synchronized bursts.** Clients that step in lockstep send one request per
-  actor at the same instant. Above the ext_proc circuit breaker Envoy answers
-  `503 ... reset reason: overflow` and the router never sees it. Jitter the
-  clients, or size `--extproc-max-requests`.
+  actor at the same instant. Above the ext_proc circuit breaker the filter
+  fails closed with `status_on_error`, `500` by default, and the router never
+  sees the request. Jitter the clients, or size `--extproc-max-requests`.
 * **Kernel neighbor table.** Every sandbox has a link-local address, and
   `net.ipv4.neigh.default.gc_thresh3` is global across network namespaces.
   Above about a thousand sandboxes per host, raise the thresholds
