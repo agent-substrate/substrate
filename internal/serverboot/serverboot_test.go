@@ -439,26 +439,32 @@ func bridgedRegistry(t *testing.T) *prometheus.Registry {
 	return reg
 }
 
-// With the OTLP export, the bridged family and the OTel instrument are each
-// pushed once. The instrument must stay off the bridged registry: there the
-// bridge would push it a second time, under its Prometheus name.
+// With the OTLP export, whether selected or the default, the bridged family and
+// the OTel instrument are each pushed once. The instrument must stay off the
+// bridged registry: there the bridge would push it a second time, under its
+// Prometheus name.
 func TestInitMetricsBridgedPushesEachMetricOnce(t *testing.T) {
-	collector := startMetricsCollector(t, "otlp")
-	reg := bridgedRegistry(t)
-	mp, servePull, err := InitMetricsBridged(t.Context(), "test-bridged-otlp", reg, nil)
-	if err != nil {
-		t.Fatalf("InitMetricsBridged: %v", err)
-	}
-	if servePull {
-		t.Error("OTEL_METRICS_EXPORTER=otlp left the scrape endpoint on")
-	}
-	addOne(t, mp, "ate.test.bridged.count")
-	if gatheredNames(t, reg)["ate_test_bridged_count_total"] {
-		t.Error("the OTel instrument is registered on the bridged registry")
-	}
-	pushed := collector.flush(t, mp)
-	if pushed["ate.test.bridged.count"] != 1 || pushed["test_bridged_family"] != 1 || pushed["ate_test_bridged_count_total"] != 0 {
-		t.Errorf("want ate.test.bridged.count and test_bridged_family pushed once each and nothing else for them, got %v", pushed)
+	for _, tt := range []struct{ name, value string }{
+		{"unset", ""},
+		{"otlp", "otlp"},
+		{"list", "otlp,prometheus"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			collector := startMetricsCollector(t, tt.value)
+			reg := bridgedRegistry(t)
+			mp, _, err := InitMetricsBridged(t.Context(), "test-bridged-otlp", reg, nil)
+			if err != nil {
+				t.Fatalf("InitMetricsBridged: %v", err)
+			}
+			addOne(t, mp, "ate.test.bridged.count")
+			if gatheredNames(t, reg)["ate_test_bridged_count_total"] {
+				t.Error("the OTel instrument is registered on the bridged registry")
+			}
+			pushed := collector.flush(t, mp)
+			if pushed["ate.test.bridged.count"] != 1 || pushed["test_bridged_family"] != 1 || pushed["ate_test_bridged_count_total"] != 0 {
+				t.Errorf("want ate.test.bridged.count and test_bridged_family pushed once each and nothing else for them, got %v", pushed)
+			}
+		})
 	}
 }
 
