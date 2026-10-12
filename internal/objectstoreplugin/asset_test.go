@@ -35,16 +35,33 @@ import (
 )
 
 // countingObjects counts reads, so a test can tell that a request was refused
-// before anything was read.
+// before anything was read. With reportSize set, its readers report the
+// object's size, as the GCS and S3 clients' do.
 type countingObjects struct {
 	*memObjects
-	gets atomic.Int64
+	gets       atomic.Int64
+	reportSize bool
 }
 
 func (c *countingObjects) GetObject(ctx context.Context, bucket, object string) (io.ReadCloser, error) {
 	c.gets.Add(1)
-	return c.memObjects.GetObject(ctx, bucket, object)
+	rc, err := c.memObjects.GetObject(ctx, bucket, object)
+	if err != nil || !c.reportSize {
+		return rc, err
+	}
+	data, err := io.ReadAll(rc)
+	if err != nil {
+		return nil, err
+	}
+	return &sizedReader{ReadCloser: io.NopCloser(bytes.NewReader(data)), size: int64(len(data))}, nil
 }
+
+type sizedReader struct {
+	io.ReadCloser
+	size int64
+}
+
+func (r *sizedReader) ObjectSize() int64 { return r.size }
 
 // assetFixture is an AssetProvider served on a real Unix socket, as the
 // sidecar serves it, with a write root and a separate staging directory.
@@ -189,6 +206,25 @@ func TestFetchAsset(t *testing.T) {
 		})
 		if status.Code(err) != codes.FailedPrecondition {
 			t.Fatalf("FetchAsset of an object over max_bytes = %v, want %s", err, codes.FailedPrecondition)
+		}
+		assertContent(t, dst, untouched)
+		f.assertStagingEmpty(t)
+	})
+
+	t.Run("reported size over max_bytes fails before staging", func(t *testing.T) {
+		f := newAssetFixture(t)
+		f.backend.reportSize = true
+		sum := f.put(t, "kata-assets/vmlinux", content)
+		dst := f.writeFile(t, untouched)
+		_, err := f.client.FetchAsset(t.Context(), &objectstorev1.FetchAssetRequest{
+			AssetUri:  "gs://" + testBucket + "/kata-assets/vmlinux",
+			Sha256:    sum,
+			WritePath: dst,
+			MaxBytes:  int64(len(content)) - 1,
+		})
+		want := fmt.Sprintf("is %d bytes", len(content))
+		if status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), want) {
+			t.Fatalf("FetchAsset = %v, want %s naming the reported size (%q)", err, codes.FailedPrecondition, want)
 		}
 		assertContent(t, dst, untouched)
 		f.assertStagingEmpty(t)

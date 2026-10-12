@@ -60,8 +60,16 @@ func (p *AssetPlugin) FetchAsset(ctx context.Context, req *objectstorev1.FetchAs
 	if err != nil {
 		return nil, err
 	}
-	open := func(ctx context.Context) (io.ReadCloser, error) {
-		return p.client.GetObject(ctx, bucket, object)
+	open := func(ctx context.Context) (io.ReadCloser, int64, error) {
+		rc, err := p.client.GetObject(ctx, bucket, object)
+		if err != nil {
+			return nil, 0, err
+		}
+		size, ok := objectstorage.ObjectSize(rc)
+		if !ok {
+			size = -1
+		}
+		return rc, size, nil
 	}
 	if err := p.stager.Fetch(ctx, req, req.GetAssetUri(), open, toStatus); err != nil {
 		return nil, err

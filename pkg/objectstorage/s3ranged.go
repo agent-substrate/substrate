@@ -50,13 +50,28 @@ func (s *s3Client) GetObject(ctx context.Context, bucket, object string) (io.Rea
 		return nil, err
 	}
 	size, ok := totalFromContentRange(head.ContentRange)
-	if !ok || size <= downloadChunkSize {
-		// No Content-Range (a server that ignored the range, so this is the whole
-		// object) or small enough to be one request either way.
-		return head.Body, nil
+	if !ok {
+		// No Content-Range: a server that ignored the range, so this is the
+		// whole object, and Content-Length, if set, is its size.
+		if head.ContentLength == nil {
+			return head.Body, nil
+		}
+		return &s3Body{ReadCloser: head.Body, size: *head.ContentLength}, nil
+	}
+	if size <= downloadChunkSize {
+		return &s3Body{ReadCloser: head.Body, size: size}, nil
 	}
 	return newRangedReader(ctx, size, head.Body, s.fetchRange(bucket, object)), nil
 }
+
+// s3Body is an object read in one request, whose size the response reported.
+type s3Body struct {
+	io.ReadCloser
+	size int64
+}
+
+// ObjectSize implements SizedReader.
+func (b *s3Body) ObjectSize() int64 { return b.size }
 
 // fetchRange reads one range into buf.
 func (s *s3Client) fetchRange(bucket, object string) fetchRangeFunc {

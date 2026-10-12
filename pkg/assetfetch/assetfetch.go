@@ -145,8 +145,11 @@ func isResourceName(name string) bool {
 // The caller can therefore never read bytes it did not pin, such as a
 // snapshot's.
 //
-// Downloads in flight never hold more than the staging capacity: each reserves
-// up to its max_bytes of it before reading and waits until that much is free.
+// Downloads in flight never hold more than the staging capacity. Each opens
+// its object first, so a missing object or one larger than max_bytes or the
+// capacity fails without waiting for space. It then reserves the object's
+// size, or as much as max_bytes allows if the storage did not report one, and
+// waits until that much is free, with the object closed meanwhile.
 type Stager struct {
 	// root confines every local path a caller names.
 	root string
@@ -196,8 +199,10 @@ func NewStager(root, stagingDir string, capacity int64) (*Stager, error) {
 	return &Stager{root: root, stagingDir: stagingDir, capacity: capacity, reserved: semaphore.NewWeighted(capacity)}, nil
 }
 
-// OpenFunc opens the asset for reading.
-type OpenFunc func(ctx context.Context) (io.ReadCloser, error)
+// OpenFunc opens the asset for reading and returns its size in bytes as the
+// storage reported it, or a negative size if it reported none. Fetch may call
+// it twice, if it has to wait for staging space.
+type OpenFunc func(ctx context.Context) (rc io.ReadCloser, size int64, err error)
 
 // Fetch checks req's sha256, max_bytes and write_path, downloads the asset
 // open returns into the staging directory and, if it is at most max_bytes
@@ -238,15 +243,34 @@ func (s *Stager) Fetch(ctx context.Context, req *objectstorev1.FetchAssetRequest
 		return err
 	}
 
-	// An object larger than the capacity cannot be staged whatever max_bytes
-	// allows, so a request never reserves more than all of it.
-	reserve := min(req.GetMaxBytes(), s.capacity)
-	if err := s.reserved.Acquire(ctx, reserve); err != nil {
-		return toStatus(fmt.Errorf("while waiting for asset staging space: %w", err))
+	maxBytes := req.GetMaxBytes()
+	rc, size, err := s.open(ctx, open, uri, maxBytes, toStatus)
+	if err != nil {
+		return err
+	}
+	reserve := s.reservation(size, maxBytes)
+	if !s.reserved.TryAcquire(reserve) {
+		// Waiting can take as long as other downloads do. Closing the object
+		// meanwhile frees its connection and any read-ahead the storage
+		// client started.
+		rc.Close()
+		if err := s.reserved.Acquire(ctx, reserve); err != nil {
+			return toStatus(fmt.Errorf("while waiting for asset staging space: %w", err))
+		}
+		var reopened int64
+		rc, reopened, err = s.open(ctx, open, uri, maxBytes, toStatus)
+		if err == nil && reopened != size {
+			rc.Close()
+			err = status.Errorf(codes.Unavailable, "asset %s changed while waiting for staging space", uri)
+		}
+		if err != nil {
+			s.reserved.Release(reserve)
+			return err
+		}
 	}
 	defer s.reserved.Release(reserve)
 
-	staged, err := s.stage(ctx, open, uri, req.GetMaxBytes(), reserve, wantSum, toStatus)
+	staged, err := s.stage(rc, uri, maxBytes, size, reserve, wantSum, toStatus)
 	if err != nil {
 		return err
 	}
@@ -257,11 +281,45 @@ func (s *Stager) Fetch(ctx context.Context, req *objectstorev1.FetchAssetRequest
 	return replace(root, rel, info.Mode().Perm(), staged, uri, req.GetWritePath(), toStatus)
 }
 
-// stage downloads the asset into a new file in the staging directory and
-// returns it, positioned at its start, once its size and sha256 check out.
-// It writes at most limit bytes there, limit being at most maxBytes. The file
-// is removed on error; on success the caller removes it.
-func (s *Stager) stage(ctx context.Context, open OpenFunc, uri string, maxBytes, limit int64, wantSum []byte, toStatus func(error) error) (_ *os.File, retErr error) {
+// open opens the asset and checks the size the storage reported for it, if
+// any, against maxBytes and the staging capacity.
+func (s *Stager) open(ctx context.Context, open OpenFunc, uri string, maxBytes int64, toStatus func(error) error) (io.ReadCloser, int64, error) {
+	rc, size, err := open(ctx)
+	if err != nil {
+		return nil, 0, toStatus(fmt.Errorf("while opening asset %s: %w", uri, err))
+	}
+	switch {
+	case size > maxBytes:
+		rc.Close()
+		return nil, 0, status.Errorf(codes.FailedPrecondition, "asset %s is %d bytes, larger than max_bytes %d", uri, size, maxBytes)
+	case size > s.capacity:
+		rc.Close()
+		return nil, 0, status.Errorf(codes.FailedPrecondition, "asset %s is %d bytes, larger than the plugin's asset staging capacity of %d bytes", uri, size, s.capacity)
+	case size < 0:
+		size = -1
+	}
+	return rc, size, nil
+}
+
+// reservation is how much staging space a download of an object of the given
+// size, negative if unknown, reserves: its size, or else as much as maxBytes
+// allows. An object larger than the capacity cannot be staged whatever
+// max_bytes allows, so a download never reserves more than all of it.
+func (s *Stager) reservation(size, maxBytes int64) int64 {
+	if size >= 0 {
+		return size
+	}
+	return min(maxBytes, s.capacity)
+}
+
+// stage downloads the asset from rc, which it closes, into a new file in the
+// staging directory and returns it, positioned at its start, once its size
+// and sha256 check out. size is the object's size as the storage reported it,
+// or negative if unknown; reserve is the staging space reserved for it, which
+// bounds what is written there. The file is removed on error; on success the
+// caller removes it.
+func (s *Stager) stage(rc io.ReadCloser, uri string, maxBytes, size, reserve int64, wantSum []byte, toStatus func(error) error) (_ *os.File, retErr error) {
+	defer rc.Close()
 	f, err := os.CreateTemp(s.stagingDir, stagingPrefix)
 	if err != nil {
 		return nil, toStatus(fmt.Errorf("while creating staging file: %w", err))
@@ -273,23 +331,20 @@ func (s *Stager) stage(ctx context.Context, open OpenFunc, uri string, maxBytes,
 		}
 	}()
 
-	rc, err := open(ctx)
-	if err != nil {
-		return nil, toStatus(fmt.Errorf("while opening asset %s: %w", uri, err))
-	}
-	defer rc.Close()
 	hasher := sha256.New()
-	n, err := io.Copy(io.MultiWriter(f, hasher), io.LimitReader(rc, limit))
+	n, err := io.Copy(io.MultiWriter(f, hasher), io.LimitReader(rc, reserve))
 	if err != nil {
 		return nil, toStatus(fmt.Errorf("while downloading asset %s: %w", uri, err))
 	}
-	if n == limit {
+	if n == reserve {
 		// One more byte, read but not staged, tells a full-length object
 		// from an over-long one.
 		var probe [1]byte
 		switch _, err := io.ReadFull(rc, probe[:]); {
-		case err == nil && limit < maxBytes:
-			return nil, status.Errorf(codes.FailedPrecondition, "asset %s is larger than the plugin's asset staging capacity of %d bytes", uri, limit)
+		case err == nil && size >= 0:
+			return nil, status.Errorf(codes.Unavailable, "asset %s is longer than the %d bytes its storage reported", uri, size)
+		case err == nil && reserve < maxBytes:
+			return nil, status.Errorf(codes.FailedPrecondition, "asset %s is larger than the plugin's asset staging capacity of %d bytes", uri, reserve)
 		case err == nil:
 			return nil, status.Errorf(codes.FailedPrecondition, "asset %s is larger than max_bytes %d", uri, maxBytes)
 		case err != io.EOF:

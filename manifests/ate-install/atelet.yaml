@@ -161,8 +161,9 @@ spec:
         - --socket=/run/snapshot-plugin/node.sock
         - --root=/var/lib/ate
         - --asset-staging-dir=/var/lib/snapshot-plugin/asset-staging
-        # atelet's 8 GiB per-asset cap; downloads past it wait their turn, so
-        # the asset-staging volume below never fills up.
+        # atelet's 8 GiB per-asset cap, so any asset fits. Each download
+        # reserves its object's size; ones past the capacity wait their turn,
+        # so the asset-staging volume below never fills up.
         - --asset-staging-capacity=8Gi
         # The plugin listens on a Unix socket, which a gRPC probe cannot
         # reach, and the image has no shell, so the binary checks itself.

@@ -24,6 +24,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -217,29 +218,54 @@ func (f *stagerFixture) assertStagingEmpty(t *testing.T) {
 	}
 }
 
-// opener serves content and counts how often it is opened.
+// opener serves content and counts how often it is opened and closed. It
+// reports size as the object's size if sized is set, and no size otherwise.
 type opener struct {
 	content string
+	sized   bool
+	size    int64
 	err     error
 	opens   int
+	closes  int
 }
 
-func (o *opener) open(context.Context) (io.ReadCloser, error) {
+func (o *opener) open(context.Context) (io.ReadCloser, int64, error) {
 	o.opens++
 	if o.err != nil {
-		return nil, o.err
+		return nil, 0, o.err
 	}
-	return io.NopCloser(strings.NewReader(o.content)), nil
+	size := int64(-1)
+	if o.sized {
+		size = o.size
+	}
+	return &closeCounter{Reader: strings.NewReader(o.content), closes: &o.closes}, size, nil
 }
 
-var errBackend = errors.New("backend error")
+// closeCounter counts Close calls.
+type closeCounter struct {
+	io.Reader
+	closes *int
+}
 
-// testStatus maps errBackend to Unavailable, a context error to its code, and
-// everything else to Internal, like a plugin's own mapping.
+func (c *closeCounter) Close() error {
+	*c.closes++
+	return nil
+}
+
+var (
+	errBackend  = errors.New("backend error")
+	errNotFound = errors.New("no such object")
+)
+
+// testStatus maps errBackend to Unavailable, errNotFound to NotFound, a
+// context error to its code, and everything else to Internal, like a
+// plugin's own mapping.
 func testStatus(err error) error {
 	switch {
 	case errors.Is(err, errBackend):
 		return status.Error(codes.Unavailable, err.Error())
+	case errors.Is(err, errNotFound):
+		return status.Error(codes.NotFound, err.Error())
 	case errors.Is(err, context.Canceled):
 		return status.Error(codes.Canceled, err.Error())
 	}
@@ -284,6 +310,29 @@ func TestStagerFetch(t *testing.T) {
 			},
 			opener:    &opener{content: kernel},
 			want:      codes.FailedPrecondition,
+			wantOpens: 1,
+		},
+		{
+			name: "reported size over max_bytes fails before reading",
+			req: func(f *stagerFixture) *objectstorev1.FetchAssetRequest {
+				return req(sum(kernel), f.dst, int64(len(kernel)-1))
+			},
+			opener:    &opener{content: kernel, sized: true, size: int64(len(kernel))},
+			want:      codes.FailedPrecondition,
+			wantOpens: 1,
+		},
+		{
+			name:      "reported size over the staging capacity fails before reading",
+			req:       func(f *stagerFixture) *objectstorev1.FetchAssetRequest { return req(sum(kernel), f.dst, 1<<40) },
+			opener:    &opener{content: kernel, sized: true, size: 1 << 31},
+			want:      codes.FailedPrecondition,
+			wantOpens: 1,
+		},
+		{
+			name:      "object longer than its reported size",
+			req:       func(f *stagerFixture) *objectstorev1.FetchAssetRequest { return req(sum(kernel), f.dst, 1<<20) },
+			opener:    &opener{content: kernel, sized: true, size: int64(len(kernel) - 1)},
+			want:      codes.Unavailable,
 			wantOpens: 1,
 		},
 		{
@@ -373,10 +422,23 @@ func TestStagerFetch(t *testing.T) {
 			if tc.opener.opens != tc.wantOpens {
 				t.Errorf("Fetch opened the asset %d times, want %d", tc.opener.opens, tc.wantOpens)
 			}
+			if tc.opener.closes != tc.opener.opens && tc.opener.err == nil {
+				t.Errorf("Fetch opened the asset %d times and closed it %d times", tc.opener.opens, tc.opener.closes)
+			}
 			f.assertDst(t, untouched)
 			f.assertStagingEmpty(t)
 		})
 	}
+
+	t.Run("reported size", func(t *testing.T) {
+		f := newStagerFixture(t)
+		o := &opener{content: kernel, sized: true, size: int64(len(kernel))}
+		if err := f.stager.Fetch(t.Context(), req(sum(kernel), f.dst, 1<<20), "gs://bucket/vmlinux", o.open, testStatus); err != nil {
+			t.Fatalf("Fetch = %v, want success", err)
+		}
+		f.assertDst(t, kernel)
+		f.assertStagingEmpty(t)
+	})
 
 	t.Run("canceled context", func(t *testing.T) {
 		f := newStagerFixture(t)
@@ -525,26 +587,57 @@ func TestStagerFetchReplacesWritePathAtomically(t *testing.T) {
 	})
 }
 
-// gatedOpener serves content once release is closed, after reporting each
-// open on opened.
+// gatedOpener serves content, reporting its size if sized is set. Each
+// reader it returns reports its first Read on reading, and then blocks until
+// release is closed, and reports Close on closed. Opens and closes are
+// counted.
 type gatedOpener struct {
 	content string
-	opened  chan struct{}
+	sized   bool
+	reading chan struct{}
+	closed  chan struct{}
 	release chan struct{}
+	opens   atomic.Int64
+	closes  atomic.Int64
 }
 
 func newGatedOpener(content string) *gatedOpener {
-	return &gatedOpener{content: content, opened: make(chan struct{}, 2), release: make(chan struct{})}
+	return &gatedOpener{content: content, reading: make(chan struct{}, 4), closed: make(chan struct{}, 4), release: make(chan struct{})}
 }
 
-func (o *gatedOpener) open(ctx context.Context) (io.ReadCloser, error) {
-	o.opened <- struct{}{}
-	select {
-	case <-o.release:
-	case <-ctx.Done():
-		return nil, ctx.Err()
+func (o *gatedOpener) open(ctx context.Context) (io.ReadCloser, int64, error) {
+	o.opens.Add(1)
+	size := int64(-1)
+	if o.sized {
+		size = int64(len(o.content))
 	}
-	return io.NopCloser(strings.NewReader(o.content)), nil
+	return &gatedReader{o: o, ctx: ctx, r: strings.NewReader(o.content)}, size, nil
+}
+
+type gatedReader struct {
+	o       *gatedOpener
+	ctx     context.Context
+	r       io.Reader
+	started bool
+}
+
+func (g *gatedReader) Read(p []byte) (int, error) {
+	if !g.started {
+		g.started = true
+		g.o.reading <- struct{}{}
+		select {
+		case <-g.o.release:
+		case <-g.ctx.Done():
+			return 0, g.ctx.Err()
+		}
+	}
+	return g.r.Read(p)
+}
+
+func (g *gatedReader) Close() error {
+	g.o.closes.Add(1)
+	g.o.closed <- struct{}{}
+	return nil
 }
 
 func newStagerFixtureWithCapacity(t *testing.T, capacity int64) *stagerFixture {
@@ -572,23 +665,43 @@ func TestStagerFetchStagingCapacity(t *testing.T) {
 	const kernel = "kernel bytes"
 	const maxBytes = 60
 
+	// holdCapacity starts a download that reserves maxBytes and blocks in
+	// its first read until the returned opener's release is closed.
+	holdCapacity := func(t *testing.T, f *stagerFixture) (*gatedOpener, <-chan error) {
+		t.Helper()
+		first := newGatedOpener(kernel)
+		firstDone := make(chan error, 1)
+		dst := f.newCallerFile(t, "held")
+		go func() {
+			firstDone <- f.stager.Fetch(t.Context(), req(sum(kernel), dst, maxBytes), "gs://bucket/held", first.open, testStatus)
+		}()
+		<-first.reading
+		return first, firstDone
+	}
+
 	t.Run("a download waits while the capacity is reserved", func(t *testing.T) {
 		f := newStagerFixtureWithCapacity(t, 100)
-		first, second := newGatedOpener(kernel), newGatedOpener(kernel)
-		firstDone := make(chan error, 1)
-		go func() {
-			firstDone <- f.stager.Fetch(t.Context(), req(sum(kernel), f.dst, maxBytes), "gs://bucket/a", first.open, testStatus)
-		}()
-		<-first.opened
+		first, firstDone := holdCapacity(t, f)
+		second := newGatedOpener(kernel)
+		close(second.release)
 		secondDone := make(chan error, 1)
 		go func() {
 			secondDone <- f.stager.Fetch(t.Context(), req(sum(kernel), f.newCallerFile(t, "b"), maxBytes), "gs://bucket/b", second.open, testStatus)
 		}()
-		close(second.release)
+		// The second download opens its object, finds no space, and closes
+		// it to wait.
 		select {
-		case <-second.opened:
+		case <-second.closed:
+		case <-time.After(10 * time.Second):
+			t.Fatal("second download did not close its object to wait for space")
+		}
+		select {
+		case <-second.reading:
 			t.Fatal("second download started while the first held more than the remaining capacity")
-		case <-time.After(200 * time.Millisecond):
+		default:
+		}
+		if opens, closes := second.opens.Load(), second.closes.Load(); opens != 1 || closes != 1 {
+			t.Errorf("waiting download opened its object %d times and closed it %d times, want 1 and 1", opens, closes)
 		}
 		close(first.release)
 		if err := <-firstDone; err != nil {
@@ -597,42 +710,100 @@ func TestStagerFetchStagingCapacity(t *testing.T) {
 		if err := <-secondDone; err != nil {
 			t.Fatalf("second Fetch = %v", err)
 		}
+		if opens, closes := second.opens.Load(), second.closes.Load(); opens != 2 || closes != 2 {
+			t.Errorf("second download opened its object %d times and closed it %d times, want 2 and 2", opens, closes)
+		}
 		f.assertStagingEmpty(t)
 	})
 
 	t.Run("downloads that fit run together", func(t *testing.T) {
-		f := newStagerFixtureWithCapacity(t, 2*maxBytes)
-		o := newGatedOpener(kernel)
-		done := make(chan error, 2)
-		for _, name := range []string{"a", "b"} {
-			p := f.newCallerFile(t, name)
-			go func() {
-				done <- f.stager.Fetch(t.Context(), req(sum(kernel), p, maxBytes), "gs://bucket/"+name, o.open, testStatus)
-			}()
+		for _, tc := range []struct {
+			name     string
+			capacity int64
+			sized    bool
+		}{
+			{"max_bytes each", 2 * maxBytes, false},
+			// Each reserves its reported size, so both fit although their
+			// max_bytes together do not.
+			{"reported sizes", maxBytes + int64(len(kernel)), true},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				f := newStagerFixtureWithCapacity(t, tc.capacity)
+				o := newGatedOpener(kernel)
+				o.sized = tc.sized
+				done := make(chan error, 2)
+				for _, name := range []string{"a", "b"} {
+					p := f.newCallerFile(t, name)
+					go func() {
+						done <- f.stager.Fetch(t.Context(), req(sum(kernel), p, maxBytes), "gs://bucket/"+name, o.open, testStatus)
+					}()
+				}
+				for range 2 {
+					select {
+					case <-o.reading:
+					case <-time.After(10 * time.Second):
+						t.Fatal("two downloads within the capacity did not run together")
+					}
+				}
+				close(o.release)
+				for range 2 {
+					if err := <-done; err != nil {
+						t.Fatalf("Fetch = %v", err)
+					}
+				}
+			})
 		}
-		for range 2 {
-			select {
-			case <-o.opened:
-			case <-time.After(10 * time.Second):
-				t.Fatal("two downloads within the capacity did not run together")
+	})
+
+	t.Run("a missing object does not wait for space", func(t *testing.T) {
+		f := newStagerFixtureWithCapacity(t, maxBytes)
+		first, firstDone := holdCapacity(t, f)
+		o := &opener{err: errNotFound}
+		done := make(chan error, 1)
+		go func() {
+			done <- f.stager.Fetch(t.Context(), req(sum(kernel), f.dst, maxBytes), "gs://bucket/missing", o.open, testStatus)
+		}()
+		select {
+		case err := <-done:
+			if got := status.Code(err); got != codes.NotFound {
+				t.Errorf("Fetch = %v, want %s", err, codes.NotFound)
 			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("Fetch of a missing object waited for staging space")
 		}
-		close(o.release)
-		for range 2 {
-			if err := <-done; err != nil {
-				t.Fatalf("Fetch = %v", err)
-			}
+		close(first.release)
+		if err := <-firstDone; err != nil {
+			t.Fatalf("first Fetch = %v", err)
+		}
+	})
+
+	t.Run("object changed while waiting", func(t *testing.T) {
+		f := newStagerFixtureWithCapacity(t, maxBytes)
+		first, firstDone := holdCapacity(t, f)
+		o := &changingOpener{contents: []string{kernel, kernel + " v2"}, closed: make(chan struct{}, 2)}
+		done := make(chan error, 1)
+		go func() {
+			done <- f.stager.Fetch(t.Context(), req(sum(kernel), f.dst, maxBytes), "gs://bucket/vmlinux", o.open, testStatus)
+		}()
+		<-o.closed // found no space; waiting
+		close(first.release)
+		if err := <-firstDone; err != nil {
+			t.Fatalf("first Fetch = %v", err)
+		}
+		if err := <-done; status.Code(err) != codes.Unavailable {
+			t.Fatalf("Fetch = %v, want %s", err, codes.Unavailable)
+		}
+		f.assertDst(t, untouched)
+		f.assertStagingEmpty(t)
+		// Space reserved for the changed object was released.
+		if !f.stager.reserved.TryAcquire(maxBytes) {
+			t.Error("staging space is still reserved after the failed Fetch")
 		}
 	})
 
 	t.Run("canceled while waiting", func(t *testing.T) {
 		f := newStagerFixtureWithCapacity(t, maxBytes)
-		first := newGatedOpener(kernel)
-		firstDone := make(chan error, 1)
-		go func() {
-			firstDone <- f.stager.Fetch(t.Context(), req(sum(kernel), f.newCallerFile(t, "a"), maxBytes), "gs://bucket/a", first.open, testStatus)
-		}()
-		<-first.opened
+		first, firstDone := holdCapacity(t, f)
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
 		o := &opener{content: kernel}
@@ -640,8 +811,8 @@ func TestStagerFetchStagingCapacity(t *testing.T) {
 		if got := status.Code(err); got != codes.Canceled {
 			t.Fatalf("Fetch = %v, want %s", err, codes.Canceled)
 		}
-		if o.opens != 0 {
-			t.Errorf("Fetch opened the asset %d times while waiting, want 0", o.opens)
+		if o.opens != 1 || o.closes != 1 {
+			t.Errorf("Fetch opened the asset %d times and closed it %d times, want 1 and 1", o.opens, o.closes)
 		}
 		f.assertDst(t, untouched)
 		close(first.release)
@@ -693,8 +864,33 @@ type stagingWatcher struct {
 	maxStaged int64
 }
 
-func (w *stagingWatcher) open(context.Context) (io.ReadCloser, error) {
-	return io.NopCloser(w), nil
+func (w *stagingWatcher) open(context.Context) (io.ReadCloser, int64, error) {
+	return io.NopCloser(w), -1, nil
+}
+
+// changingOpener serves contents[i] with its size on the i-th open, and the
+// last one after that, as if the object were replaced between opens. It
+// reports each Close on closed.
+type changingOpener struct {
+	contents []string
+	opens    atomic.Int64
+	closed   chan struct{}
+}
+
+func (o *changingOpener) open(context.Context) (io.ReadCloser, int64, error) {
+	i := min(int(o.opens.Add(1))-1, len(o.contents)-1)
+	return &notifyCloser{Reader: strings.NewReader(o.contents[i]), closed: o.closed}, int64(len(o.contents[i])), nil
+}
+
+// notifyCloser reports each Close on closed.
+type notifyCloser struct {
+	io.Reader
+	closed chan<- struct{}
+}
+
+func (n *notifyCloser) Close() error {
+	n.closed <- struct{}{}
+	return nil
 }
 
 func (w *stagingWatcher) Read(p []byte) (int, error) {
