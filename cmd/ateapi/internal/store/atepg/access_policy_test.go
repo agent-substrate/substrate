@@ -36,6 +36,7 @@ func TestGlobalAccessPolicy_Lifecycle(t *testing.T) {
 	}
 
 	policy := &ateapipb.AccessPolicy{
+		Metadata: &ateapipb.ResourceMetadata{Name: "default"},
 		Bindings: []*ateapipb.Binding{
 			{Role: authz.RoleViewer, Members: []string{"user:bob"}},
 			{Role: authz.RoleOwner, Members: []string{"user:alice"}},
@@ -87,6 +88,7 @@ func TestAtespaceAccessPolicy_LifecycleAndCascade(t *testing.T) {
 	ctx := t.Context()
 
 	policy := &ateapipb.AccessPolicy{
+		Metadata: &ateapipb.ResourceMetadata{Name: "default"},
 		Bindings: []*ateapipb.Binding{
 			{Role: authz.RoleEditor, Members: []string{"user:bob"}},
 		},

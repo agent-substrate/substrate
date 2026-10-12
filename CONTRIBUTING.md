@@ -31,7 +31,9 @@ The [Quickstart (Development)](README.md#quickstart-development) in the README
 covers bringing up a local cluster with the default (gVisor) runtime. To run
 the microVM runtime locally — which needs `/dev/kvm`, or Lima nested
 virtualization on Apple Silicon — see
-[docs/dev/microvm-local.md](docs/dev/microvm-local.md).
+[docs/dev/microvm-local.md](docs/dev/microvm-local.md). To measure where a
+suspend or resume spends its time on such a cluster, follow
+[docs/dev/suspend-resume-phase-breakdown.md](docs/dev/suspend-resume-phase-breakdown.md).
 
 ## Contribution process
 

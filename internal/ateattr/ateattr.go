@@ -164,7 +164,7 @@ const (
 	WorkerStateKey         = attribute.Key("ate.worker.state")
 	SandboxClassKey        = attribute.Key("ate.sandbox.class")
 	SnapshotKindKey        = attribute.Key("ate.snapshot.kind")
-	SnapshotScopeKey       = attribute.Key("ate.snapshot.scope")
+	SnapshotFidelityKey    = attribute.Key("ate.snapshot.fidelity")
 	SnapshotPhaseKey       = attribute.Key("ate.snapshot.phase")
 	ImageCacheOutcomeKey   = attribute.Key("ate.imagecache.outcome")
 	SchedulerOutcomeKey    = attribute.Key("ate.scheduler.outcome")
@@ -190,6 +190,11 @@ const (
 	StatsMemoryWorkingSetKey = attribute.Key("ate.stats.memory.working_set")
 	StatsCPUTimeKey          = attribute.Key("ate.stats.cpu.time")
 )
+
+// SandboxOOMKillsKey is memory.events' oom_kill for the sandbox cgroup leaf, on
+// the record ateom-gvisor writes when a hosted actor's sandbox has no process
+// left. Logs only: it is only ever recorded beside actor identity.
+const SandboxOOMKillsKey = attribute.Key("ate.sandbox.oom_kills")
 
 // Values for StatsKindKey. An initial or final sample brackets an activation; a
 // periodic one is the timer's.
@@ -324,25 +329,28 @@ const (
 	SnapshotKindBoot   = "boot"
 )
 
-// Values for SnapshotScopeKey, mirroring ateletpb.SnapshotScope.
+// Values for SnapshotFidelityKey, mirroring ateletpb.SnapshotFidelity.
 const (
-	SnapshotScopeFull    = "full"
-	SnapshotScopeData    = "data"
-	SnapshotScopeUnknown = "unknown"
+	SnapshotFidelityVolumes = "volumes"
+	SnapshotFidelityRootfs  = "rootfs"
+	SnapshotFidelityMemory  = "memory"
+	SnapshotFidelityUnknown = "unknown"
 )
 
-// SnapshotScopeValue maps the wire enum onto its label value, shared so ateapi
-// (which sets the scope) and atelet (which receives it) cannot drift. An
-// unrecognized scope reports as unknown rather than stringified, so no wire
-// value can widen the label set.
-func SnapshotScopeValue(scope ateletpb.SnapshotScope) string {
-	switch scope {
-	case ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL:
-		return SnapshotScopeFull
-	case ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
-		return SnapshotScopeData
+// SnapshotFidelityValue maps the wire enum onto its label value, shared so
+// ateapi (which sets the fidelity) and atelet (which receives it) cannot
+// drift. An unrecognized fidelity reports as unknown rather than stringified,
+// so no wire value can widen the label set.
+func SnapshotFidelityValue(fidelity ateletpb.SnapshotFidelity) string {
+	switch fidelity {
+	case ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES:
+		return SnapshotFidelityVolumes
+	case ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS:
+		return SnapshotFidelityRootfs
+	case ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY:
+		return SnapshotFidelityMemory
 	default:
-		return SnapshotScopeUnknown
+		return SnapshotFidelityUnknown
 	}
 }
 

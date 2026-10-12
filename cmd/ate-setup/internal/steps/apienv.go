@@ -34,7 +34,8 @@ const envHashAnnotation = "ate.dev/env-hash"
 // CreateAPIServerEnvVars reconciles how ate-api-server reaches its PostgreSQL
 // store: both DSNs and the schema into the ate-api-server-secret-envvars Secret,
 // stable roles and Cloud SQL settings into the ConfigMap,
-// and an external server CA into postgres-server-ca.
+// and an external server CA into postgres-server-ca. The ConfigMap also
+// carries the actor JWT issuer.
 //
 // ate-api-server.yaml pulls both in through optional envFrom sources and
 // resolves the PostgreSQL connection, role, and schema flags from
@@ -112,6 +113,7 @@ func (e *Env) CreateAPIServerEnvVars(ctx context.Context) error {
 	if poolMaxConns != "" {
 		configVars["ATE_API_POSTGRES_POOL_MAX_CONNS"] = poolMaxConns
 	}
+	configVars["ATE_API_ACTOR_JWT_ISSUER"] = e.Cfg.ActorJWTIssuer
 	if err := e.Kube.ApplyConfigMap(ctx, e.Namespace(), ConfigMapAPIEnvVars, configVars); err != nil {
 		return err
 	}

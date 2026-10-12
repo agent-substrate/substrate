@@ -26,10 +26,6 @@ const (
 )
 
 const (
-	// testStorageLocation is the snapshot_config.storage_location the tests
-	// build snapshot URIs under.
-	testStorageLocation = "gs://bucket/root"
-
 	// someActorUID stands in for the UID the store assigns an Actor, for tests
 	// that need a well-formed snapshot URI but never exercise who owns it. Those
 	// seed their Actor in a single call, before a real UID exists.

@@ -21,11 +21,10 @@
 // Every read is scoped to a caller-supplied directory rather than a hardcoded
 // /sys/fs/cgroup path, which keeps the parsing testable from a fixture tree
 // without root or a live sandbox. The package deliberately does not know what a
-// sandbox is; it reads four numbers out of five files.
+// sandbox is; it reads what the kernel reports in a handful of files.
 package cgroupstats
 
 import (
-	"bufio"
 	"bytes"
 	"errors"
 	"fmt"
@@ -65,6 +64,16 @@ type Sample struct {
 	// to this cgroup (see ateomcgroup.Delegate, which enables controllers
 	// best-effort and carries on when one cannot be enabled).
 	CPUUsageUsec uint64
+
+	// OOMKills is memory.events' oom_kill: processes in the cgroup the kernel's
+	// OOM killer has killed over the cgroup's lifetime. Zero if the file is
+	// absent.
+	OOMKills uint64
+
+	// Empty is true when cgroup.events reports populated 0: no process is left
+	// in the cgroup. It reads false when the file is absent, so a kernel that
+	// does not say is never taken for a dead sandbox.
+	Empty bool
 }
 
 // Read returns a Sample for the cgroup v2 directory at dir.
@@ -80,6 +89,7 @@ type Sample struct {
 // memory controller's full accounting, and cpu.stat is absent when the cpu
 // controller was not delegated. Failing the sample for any of them would mean
 // reporting no memory numbers because the node could not report CPU.
+// memory.events and cgroup.events are optional in the same way.
 func Read(dir string) (Sample, error) {
 	current, ok, err := readUint(filepath.Join(dir, "memory.current"))
 	if err != nil {
@@ -95,6 +105,8 @@ func Read(dir string) (Sample, error) {
 	peak, _, _ := readUint(filepath.Join(dir, "memory.peak"))
 	inactiveFile, haveInactiveFile, _ := readKeyedUint(filepath.Join(dir, "memory.stat"), "inactive_file")
 	cpuUsage, _, _ := readKeyedUint(filepath.Join(dir, "cpu.stat"), "usage_usec")
+	oomKills, _, _ := readKeyedUint(filepath.Join(dir, "memory.events"), "oom_kill")
+	populated, havePopulated, _ := readKeyedUint(filepath.Join(dir, "cgroup.events"), "populated")
 
 	// Without inactive_file there is nothing to subtract, so the working set
 	// collapses to memory.current. That over-reports by however much reclaimable
@@ -117,6 +129,8 @@ func Read(dir string) (Sample, error) {
 		MemoryPeakBytes:       peak,
 		MemoryWorkingSetBytes: workingSet,
 		CPUUsageUsec:          cpuUsage,
+		OOMKills:              oomKills,
+		Empty:                 havePopulated && populated == 0,
 	}, nil
 }
 
@@ -150,23 +164,26 @@ func readKeyedUint(path, key string) (uint64, bool, error) {
 		return 0, false, fmt.Errorf("reading %q: %w", path, err)
 	}
 
-	sc := bufio.NewScanner(bytes.NewReader(b))
-	for sc.Scan() {
+	// The files are a few hundred bytes and read for every actor on every
+	// sweep, so lines are walked in place, and only one that starts with the
+	// key is split.
+	for line := range bytes.Lines(b) {
+		line = bytes.TrimLeft(line, " \t")
+		if !bytes.HasPrefix(line, []byte(key)) {
+			continue
+		}
 		// Fields, then a length check, rather than indexing straight into the
 		// split: a blank or single-token line is not worth a panic in an RPC
 		// handler, and these files are read on a timer for the life of a workload.
-		f := strings.Fields(sc.Text())
-		if len(f) != 2 || f[0] != key {
+		f := bytes.Fields(line)
+		if len(f) != 2 || string(f[0]) != key {
 			continue
 		}
-		v, err := strconv.ParseUint(f[1], 10, 64)
+		v, err := strconv.ParseUint(string(f[1]), 10, 64)
 		if err != nil {
 			return 0, false, fmt.Errorf("parsing %q of %q: %w", key, path, err)
 		}
 		return v, true, nil
-	}
-	if err := sc.Err(); err != nil {
-		return 0, false, fmt.Errorf("scanning %q: %w", path, err)
 	}
 	return 0, false, nil
 }

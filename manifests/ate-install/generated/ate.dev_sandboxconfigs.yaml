@@ -34,6 +34,9 @@ spec:
     - jsonPath: .spec.sandboxClass
       name: Class
       type: string
+    - jsonPath: .spec.defaultVersion
+      name: Default
+      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -41,10 +44,10 @@ spec:
     schema:
       openAPIV3Schema:
         description: |-
-          SandboxConfig is cluster-scoped configuration describing the sandbox binaries
-          for a sandbox runtime family. It is referenced by an ActorTemplate's
-          sandbox_config.config_name (required) and decouples
-          sandbox binary selection from the workload definition.
+          SandboxConfig is cluster-scoped configuration describing the versions of the
+          sandbox binaries for a sandbox runtime family. It is referenced by an
+          ActorTemplate's sandbox_config.config_name (required) and decouples sandbox
+          binary selection from the workload definition.
         properties:
           apiVersion:
             description: |-
@@ -66,60 +69,13 @@ spec:
           spec:
             description: spec defines the desired state of SandboxConfig
             properties:
-              assets:
-                additionalProperties:
-                  additionalProperties:
-                    description: |-
-                      AssetFile is one content-addressed file that atelet fetches for a sandbox
-                      runtime (e.g. the gVisor runsc binary, or a micro-VM kernel/firmware/config).
-                    properties:
-                      sha256:
-                        description: |-
-                          SHA256 is the lower-case hex SHA256 of the asset. It both names the cached
-                          file (preventing collisions) and verifies the download's integrity.
-                        pattern: ^[a-f0-9]{64}$
-                        type: string
-                      url:
-                        description: |-
-                          URL is where to download the asset from (e.g. a gs:// URL). It may be
-                          fetched anonymously or with credentials depending on atelet's
-                          configuration.
-                        minLength: 1
-                        type: string
-                    required:
-                    - sha256
-                    - url
-                    type: object
-                  type: object
+              defaultVersion:
                 description: |-
-                  Assets is the set of files atelet fetches for this runtime, keyed first by
-                  architecture (GOARCH, e.g. "amd64", "arm64") and then by asset name. The
-                  asset names are interpreted by the sandbox backend: gVisor expects a
-                  "gvisor" asset (the release's gvisor.tar.zstd, which atelet extracts so
-                  the gvisor-bin/ helpers sit next to runsc; a legacy bare-binary "runsc"
-                  asset is still accepted); a micro-VM backend expects several (e.g.
-                  "cloud-hypervisor", "kata-kernel", "kata-image"). The schema is
-                  intentionally generic; per-class requirements are enforced by a
-                  ValidatingAdmissionPolicy.
-                type: object
-              pauseImage:
-                description: |-
-                  PauseImage is the container image used as the root sandbox container.
-                  It holds the sandbox's namespaces and runs no workload code, so it is an
-                  implementation detail of the sandbox rather than something actor authors
-                  choose. Required for gvisor; not allowed for microvm, which runs no pause
-                  container. It is captured in the snapshot manifest alongside the sandbox
-                  binaries, so a restore always re-creates the sandbox from the same image
-                  the snapshot was taken with.
-
-                  Typically, set it to [1] for on-gcp, and [2] for off-gcp
-
-                    - [1] gcr.io/gke-release/pause@sha256:bcbd57ba5653580ec647b16d8163cdd1112df3609129b01f912a8032e48265da
-                    - [2] registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4
+                  defaultVersion names the entry in versions that new sandboxes boot with.
+                  It must name an existing, non-Disabled version.
+                maxLength: 63
+                minLength: 1
                 type: string
-                x-kubernetes-validations:
-                - message: All images must include a digest
-                  rule: self.contains('@')
               sandboxClass:
                 default: gvisor
                 description: |-
@@ -130,13 +86,112 @@ spec:
                 - gvisor
                 - microvm
                 type: string
+              versions:
+                description: versions are the sandbox versions this config offers,
+                  keyed by name.
+                items:
+                  description: |-
+                    SandboxVersionConfig is one version of a SandboxConfig: the exact pause image
+                    and asset set a sandbox boots with.
+                  properties:
+                    assets:
+                      additionalProperties:
+                        additionalProperties:
+                          description: |-
+                            AssetFile is one content-addressed file that atelet fetches for a sandbox
+                            runtime (e.g. the gVisor runsc binary, or a micro-VM kernel/firmware/config).
+                          properties:
+                            sha256:
+                              description: |-
+                                SHA256 is the lower-case hex SHA256 of the asset. It both names the cached
+                                file (preventing collisions) and verifies the download's integrity.
+                              pattern: ^[a-f0-9]{64}$
+                              type: string
+                            url:
+                              description: |-
+                                URL is where to download the asset from (e.g. a gs:// URL). It may be
+                                fetched anonymously or with credentials depending on atelet's
+                                configuration.
+                              minLength: 1
+                              type: string
+                          required:
+                          - sha256
+                          - url
+                          type: object
+                        type: object
+                      description: |-
+                        Assets is the set of files atelet fetches for this runtime, keyed first by
+                        architecture (GOARCH, e.g. "amd64", "arm64") and then by asset name. The
+                        asset names are interpreted by the sandbox backend: gVisor expects a
+                        "gvisor" asset (the release's gvisor.tar.zstd, which atelet extracts so
+                        the gvisor-bin/ helpers sit next to runsc; a legacy bare-binary "runsc"
+                        asset is still accepted); a micro-VM backend expects several (e.g.
+                        "cloud-hypervisor", "kata-kernel", "kata-image"). The schema is
+                        intentionally generic; per-class requirements are enforced by a
+                        ValidatingAdmissionPolicy.
+                      type: object
+                    name:
+                      description: |-
+                        name identifies this version within its SandboxConfig. It is a DNS label
+                        (lower-case alphanumerics and '-').
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                      type: string
+                    pauseImage:
+                      description: |-
+                        PauseImage is the container image used as the root sandbox container.
+                        It holds the sandbox's namespaces and runs no workload code, so it is an
+                        implementation detail of the sandbox rather than something actor authors
+                        choose. Required for gvisor; not allowed for microvm, which runs no pause
+                        container. It is captured in the snapshot manifest alongside the sandbox
+                        binaries, so a restore always re-creates the sandbox from the same image
+                        the snapshot was taken with.
+
+                        Typically, set it to [1] for on-gcp, and [2] for off-gcp
+
+                          - [1] gcr.io/gke-release/pause@sha256:bcbd57ba5653580ec647b16d8163cdd1112df3609129b01f912a8032e48265da
+                          - [2] registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4
+                      maxLength: 512
+                      minLength: 1
+                      type: string
+                      x-kubernetes-validations:
+                      - message: All images must include a digest
+                        rule: self.contains('@')
+                    state:
+                      default: Enabled
+                      description: |-
+                        state is whether this version may be used: Enabled (default) or
+                        Disabled.
+                      enum:
+                      - Enabled
+                      - Disabled
+                      type: string
+                  required:
+                  - name
+                  type: object
+                maxItems: 16
+                minItems: 1
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
             required:
+            - defaultVersion
             - sandboxClass
+            - versions
             type: object
             x-kubernetes-validations:
-            - message: pauseImage is required for gvisor and not allowed for other
-                sandbox classes
-              rule: 'self.sandboxClass == ''gvisor'' ? has(self.pauseImage) : !has(self.pauseImage)'
+            - message: defaultVersion must name an entry in versions
+              rule: self.versions.exists(v, v.name == self.defaultVersion)
+            - message: the version named by defaultVersion must not be Disabled
+              rule: '!self.versions.exists(v, v.name == self.defaultVersion && has(v.state)
+                && v.state == ''Disabled'')'
+            - message: pauseImage is required on every version for gvisor and not
+                allowed for other sandbox classes
+              rule: 'self.sandboxClass == ''gvisor'' ? self.versions.all(v, has(v.pauseImage)
+                && size(v.pauseImage) > 0) : self.versions.all(v, !has(v.pauseImage)
+                || size(v.pauseImage) == 0)'
         required:
         - spec
         type: object

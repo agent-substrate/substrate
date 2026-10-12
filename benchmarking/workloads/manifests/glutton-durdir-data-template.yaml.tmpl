@@ -44,7 +44,7 @@ volumes:
 - name: data
   durableDir: {}
 snapshotConfig:
-  onCommit: SNAPSHOT_CONTENT_SCOPE_DATA
+  preferredFidelity: SNAPSHOT_FIDELITY_VOLUMES
   storageLocation: gs://${BUCKET_NAME}/benchmark-workloads/glutton-durdir-data/
 sandboxConfig:
   sandboxClass: ${SANDBOX_CLASS_ENUM}

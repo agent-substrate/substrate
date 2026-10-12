@@ -152,6 +152,92 @@ func TestApplyPostgresSize10OverridesRejectsMissingObjects(t *testing.T) {
 	}
 }
 
+// dataClaimStorageClass returns the StorageClass of the postgres StatefulSet's
+// data claim, and whether it is set at all.
+func dataClaimStorageClass(t *testing.T, objs []*unstructured.Unstructured) (string, bool) {
+	t.Helper()
+	ss := findObject(objs, "StatefulSet", "postgres")
+	if ss == nil {
+		t.Fatal("no statefulset/postgres")
+	}
+	claims, _, _ := unstructured.NestedSlice(ss.Object, "spec", "volumeClaimTemplates")
+	for _, c := range claims {
+		claim := c.(map[string]any)
+		if name, _, _ := unstructured.NestedString(claim, "metadata", "name"); name == "data" {
+			class, found, _ := unstructured.NestedString(claim, "spec", "storageClassName")
+			return class, found
+		}
+	}
+	t.Fatal("statefulset/postgres has no data claim")
+	return "", false
+}
+
+// Runs over the real manifests, so a renamed claim fails here rather than on
+// an install that asked for a StorageClass.
+func TestSetPostgresStorageClass(t *testing.T) {
+	for _, kind := range []bool{false, true} {
+		objs := postgresObjects(t, kind)
+		if class, found := dataClaimStorageClass(t, objs); found {
+			t.Fatalf("kind=%v: manifest already names StorageClass %q", kind, class)
+		}
+		if err := setPostgresStorageClass(objs, "dynamic-rwo"); err != nil {
+			t.Fatalf("kind=%v: setPostgresStorageClass: %v", kind, err)
+		}
+		if class, _ := dataClaimStorageClass(t, objs); class != "dynamic-rwo" {
+			t.Errorf("kind=%v: StorageClass = %q, want dynamic-rwo", kind, class)
+		}
+	}
+}
+
+func TestSetPostgresStorageClassRejectsMissingObjects(t *testing.T) {
+	objs := postgresObjects(t, false)
+
+	var withoutStatefulSet []*unstructured.Unstructured
+	for _, obj := range objs {
+		if obj.GetKind() != "StatefulSet" {
+			withoutStatefulSet = append(withoutStatefulSet, obj)
+		}
+	}
+	if err := setPostgresStorageClass(withoutStatefulSet, "x"); err == nil {
+		t.Error("setPostgresStorageClass succeeded without a StatefulSet, want an error")
+	}
+
+	ss := findObject(objs, "StatefulSet", "postgres")
+	unstructured.RemoveNestedField(ss.Object, "spec", "volumeClaimTemplates")
+	if err := setPostgresStorageClass(objs, "x"); err == nil {
+		t.Error("setPostgresStorageClass succeeded without a data claim, want an error")
+	}
+}
+
+func TestPostgresObjectsStorageClass(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		class     string
+		size10    bool
+		wantClass string
+		wantSet   bool
+	}{
+		{name: "unset keeps the cluster default"},
+		{name: "set", class: "dynamic-rwo", wantClass: "dynamic-rwo", wantSet: true},
+		{name: "set with size10", class: "dynamic-rwo", size10: true, wantClass: "dynamic-rwo", wantSet: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &config.Config{Root: repoRoot(t), PostgresStorageClass: tc.class}
+			if tc.size10 {
+				cfg.ClusterSize = config.ClusterSizeSize10
+			}
+			objs, err := (&Env{Cfg: cfg}).postgresObjects()
+			if err != nil {
+				t.Fatalf("postgresObjects: %v", err)
+			}
+			class, set := dataClaimStorageClass(t, objs)
+			if class != tc.wantClass || set != tc.wantSet {
+				t.Errorf("StorageClass = %q (set %v), want %q (set %v)", class, set, tc.wantClass, tc.wantSet)
+			}
+		})
+	}
+}
+
 func TestPlanPostgres(t *testing.T) {
 	for _, tc := range []struct {
 		name       string

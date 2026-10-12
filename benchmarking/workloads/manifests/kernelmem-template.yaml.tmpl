@@ -31,7 +31,7 @@ containers:
   image: containerstack/alpine-stress:latest
   command: ["sh", "-c", "find /; for i in $(seq 50000); do sleep 10000 & done; sleep 10000"]
 snapshotConfig:
-  onCommit: SNAPSHOT_CONTENT_SCOPE_FULL
+  preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
   storageLocation: gs://${BUCKET_NAME}/benchmark-workloads/kernelmem/
 sandboxConfig:
   sandboxClass: ${SANDBOX_CLASS_ENUM}

@@ -38,7 +38,7 @@ resources:
   - name: memory
     quantity: 1Gi
 snapshotConfig:
-  onCommit: SNAPSHOT_CONTENT_SCOPE_FULL
+  preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
   storageLocation: gs://${BUCKET_NAME}/ate-demo-sandbox/
 sandboxConfig:
   sandboxClass: SANDBOX_CLASS_GVISOR

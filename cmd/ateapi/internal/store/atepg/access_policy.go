@@ -27,7 +27,6 @@ import (
 
 func (p *Persistence) CreateGlobalAccessPolicy(ctx context.Context, policy *ateapipb.AccessPolicy) (*ateapipb.AccessPolicy, error) {
 	dbPolicy := proto.Clone(policy).(*ateapipb.AccessPolicy)
-	dbPolicy.Metadata = &ateapipb.ResourceMetadata{Name: "default"}
 	setCreateMetadata(dbPolicy.Metadata)
 	protoBytes, err := proto.Marshal(dbPolicy)
 	if err != nil {
@@ -111,7 +110,6 @@ func (p *Persistence) UpdateGlobalAccessPolicy(ctx context.Context, precondition
 
 func (p *Persistence) CreateAtespaceAccessPolicy(ctx context.Context, name string, policy *ateapipb.AccessPolicy) (*ateapipb.AccessPolicy, error) {
 	dbPolicy := proto.Clone(policy).(*ateapipb.AccessPolicy)
-	dbPolicy.Metadata = &ateapipb.ResourceMetadata{Name: "default"}
 	setCreateMetadata(dbPolicy.Metadata)
 	protoBytes, err := proto.Marshal(dbPolicy)
 	if err != nil {

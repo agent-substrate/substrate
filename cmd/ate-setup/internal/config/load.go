@@ -24,6 +24,8 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/agent-substrate/substrate/cmd/ate-setup/internal/images"
+	"github.com/agent-substrate/substrate/internal/installdefaults"
+	"github.com/agent-substrate/substrate/internal/oidcdiscovery"
 )
 
 // ConfigPathEnv names the configuration document when --config is not given.
@@ -196,6 +198,10 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		ownerConnectionString = readWriteConnectionString
 	}
 	instance, _ := r.Value("ateapi.postgres.cloudsql.instance")
+	actorJWTIssuer := r.String("actorJWT.issuer")
+	if actorJWTIssuer == "" {
+		actorJWTIssuer = installdefaults.ActorJWTIssuer(r.String("namespace"))
+	}
 
 	cfg := &Config{
 		Root:               root,
@@ -211,6 +217,7 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		KODockerRepo:       r.String("ko.dockerRepo"),
 		KODefaultPlatforms: r.String("ko.defaultPlatforms"),
 		ActorJWTAlgorithm:  r.String("actorJWT.algorithm"),
+		ActorJWTIssuer:     actorJWTIssuer,
 		DockerBuildFlags:   strings.Fields(r.String("docker.buildFlags")),
 		Images: images.Source{
 			Repo: strings.TrimSuffix(r.String("images.repo"), "/"),
@@ -220,6 +227,7 @@ func buildConfig(root string, env map[string]string, r *Resolved) (*Config, erro
 		PostgresSchema:       r.String("ateapi.postgres.schema"),
 		PostgresPoolMaxConns: r.String("ateapi.postgres.poolMaxConns"),
 		PostgresServerCAFile: r.String("ateapi.postgres.serverCAFile"),
+		PostgresStorageClass: r.String("ateapi.postgres.storageClass"),
 
 		PostgresReadWriteConnectionString: readWriteConnectionString,
 		PostgresOwnerConnectionString:     ownerConnectionString,
@@ -365,6 +373,10 @@ func validateResolved(cfg *Config, r *Resolved) error {
 	default:
 		alg, _ := r.Value("actorJWT.algorithm")
 		return &InvalidError{Value: alg, Want: "ES256 or RS256"}
+	}
+	if err := oidcdiscovery.ValidateIssuer(cfg.ActorJWTIssuer); err != nil {
+		issuer, _ := r.Value("actorJWT.issuer")
+		return fmt.Errorf("%s: %w (from %s)", issuer.Setting.Key, err, issuer.From.Describe(issuer.Setting))
 	}
 	if cfg.AdditionalEgressExtprocService != "" {
 		extproc, _ := r.Value("atenet.egress.additionalExtprocService")

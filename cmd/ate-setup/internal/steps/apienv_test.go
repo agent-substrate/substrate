@@ -177,6 +177,28 @@ func TestCreateAPIServerEnvVarsPoolSize(t *testing.T) {
 	}
 }
 
+func TestCreateAPIServerEnvVarsActorJWTIssuer(t *testing.T) {
+	cfg := config.Config{
+		PostgresReadWriteConnectionString: "postgres://runtime@postgres/atepg",
+		ActorJWTIssuer:                    "https://idp.example.com/prod",
+	}
+	e := &Env{Cfg: &cfg, Kube: fakeKube(t,
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: NamespaceAteSystem}},
+		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: ConfigMapAPIEnvVars, Namespace: NamespaceAteSystem}},
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: SecretAPIEnvVars, Namespace: NamespaceAteSystem}},
+	)}
+	if err := e.CreateAPIServerEnvVars(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	cm, err := e.Kube.GetConfigMap(t.Context(), NamespaceAteSystem, ConfigMapAPIEnvVars)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cm.Data["ATE_API_ACTOR_JWT_ISSUER"]; got != cfg.ActorJWTIssuer {
+		t.Errorf("ATE_API_ACTOR_JWT_ISSUER = %q, want %q", got, cfg.ActorJWTIssuer)
+	}
+}
+
 func TestCreateAPIServerEnvVarsAdoptsPostgresIdentity(t *testing.T) {
 	const recordedDSN = "user=svc@p.iam host=127.0.0.1 dbname=atepg"
 	const explicitOwnerDSN = "user=new-owner@p.iam host=127.0.0.1 dbname=atepg"

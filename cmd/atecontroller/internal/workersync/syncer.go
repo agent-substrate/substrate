@@ -357,7 +357,7 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 			Ips:             podIPs(pod),
 			WorkerPodUid:    string(pod.UID),
 			NodeName:        pod.Spec.NodeName,
-			SandboxClass:    string(pool.Spec.SandboxClass),
+			SandboxClass:    string(pool.Spec.DefaultSandboxClass()),
 			Labels:          pool.GetLabels(),
 			Epoch:           podEpoch(pod),
 			// Capacity is the Worker's to report, not the syncer's to infer
@@ -395,7 +395,7 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 		w.Labels = pool.GetLabels()
 		changed = true
 	}
-	if w.GetSandboxClass() != string(pool.Spec.SandboxClass) {
+	if w.GetSandboxClass() != string(pool.Spec.DefaultSandboxClass()) {
 		// Expected mid-rollout: sandboxClass drives the worker pod's shape, so
 		// editing it on the pool replaces every pod rather than reclassifying
 		// any. This pod predates that edit and is on its way out; its successor
@@ -403,7 +403,7 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 		// back would be rejected, and would misreport this pod's shape to the
 		// scheduler if it were not.
 		slog.DebugContext(ctx, "Syncer: registered worker sandbox class predates its pool",
-			append(key.logAttrs(), slog.String("registered", w.GetSandboxClass()), slog.String("pool", string(pool.Spec.SandboxClass)))...)
+			append(key.logAttrs(), slog.String("registered", w.GetSandboxClass()), slog.String("pool", string(pool.Spec.DefaultSandboxClass())))...)
 	}
 	if ips := podIPs(pod); !slices.Equal(w.GetIps(), ips) {
 		// TODO: I don't think this is possible, but handling this case so we can

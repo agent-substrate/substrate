@@ -62,14 +62,14 @@ func TestActorRoutingFilterStateFilter(t *testing.T) {
 		{
 			name: "ordinary ingress",
 			want: map[string]string{
-				extproc.TargetActorFilterStateKey: "%REQ(ate-target-actor)%",
+				extproc.TargetActorFilterStateKey: "%CEL(request.headers['ate-target-actor'])%",
 			},
 		},
 		{
 			name:             "CONNECT termination",
 			captureAuthority: true,
 			want: map[string]string{
-				extproc.TargetActorFilterStateKey:      "%REQ(ate-target-actor)%",
+				extproc.TargetActorFilterStateKey:      "%CEL(request.headers['ate-target-actor'])%",
 				extproc.ConnectAuthorityFilterStateKey: "%REQ(:authority)%",
 			},
 		},

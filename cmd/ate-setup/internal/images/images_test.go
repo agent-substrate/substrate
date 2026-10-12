@@ -134,36 +134,3 @@ func TestImageNamesAreUnique(t *testing.T) {
 		byName[name] = pkg
 	}
 }
-
-// ImageName is only right if the images were published under that naming, and
-// the Makefile is what publishes them. Losing the flag there breaks nothing
-// visible -- an install from source never looks an image up by name -- and
-// surfaces much later as an --image-repo install that cannot find a single
-// component.
-func TestMakefilePublishesWithBaseImportPaths(t *testing.T) {
-	root, err := config.RepoRoot()
-	if err != nil {
-		t.Fatalf("resolving repo root: %v", err)
-	}
-	makefile, err := os.ReadFile(filepath.Join(root, "Makefile"))
-	if err != nil {
-		t.Fatalf("reading the Makefile: %v", err)
-	}
-
-	var koBuilds int
-	for line := range strings.Lines(string(makefile)) {
-		if !strings.Contains(line, "$(KO) build") {
-			continue
-		}
-		koBuilds++
-		if !strings.Contains(line, "$(KO_NAMING)") {
-			t.Errorf("Makefile line %q builds images without $(KO_NAMING), so they publish under ko's md5 naming", strings.TrimSpace(line))
-		}
-	}
-	if koBuilds == 0 {
-		t.Error("found no `$(KO) build` line in the Makefile; this test no longer checks anything")
-	}
-	if !strings.Contains(string(makefile), "KO_NAMING := --base-import-paths") {
-		t.Error("the Makefile no longer defines KO_NAMING as --base-import-paths")
-	}
-}

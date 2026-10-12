@@ -16,12 +16,10 @@ package ocispec
 
 import (
 	"encoding/json"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/sizing"
 	"github.com/opencontainers/runtime-spec/specs-go"
@@ -39,25 +37,20 @@ var parityActorDirs = &ateompb.ActorDirs{
 
 // parityOptions mounts one volume of every kind.
 var parityOptions = Options{
-	Args:                      []string{"/app"},
-	DurableDirVolumeMountsDir: parityActorDirs.GetDurableDirVolumeMountsDir(),
-	VolumesDir:                parityActorDirs.GetVolumesDir(),
-	SystemInfoVolumeRootsDir:  parityActorDirs.GetSystemInfoVolumeRootsDir(),
-	BundlePath:                filepath.Join(parityActorDirs.GetOciBundleDir(), "app"),
-	Volumes: []*ateletpb.Volume{
-		durableVolume("data"),
-		{Name: "sysinfo", Source: &ateletpb.Volume_SystemInfo{SystemInfo: &ateletpb.SystemInfoVolume{}}},
-		{Name: "csi", Source: &ateletpb.Volume_External{External: &ateletpb.ExternalVolumeSource{}}},
-		{Name: "agent", Source: &ateletpb.Volume_Image{Image: &ateletpb.ImageVolumeSource{}}},
-	},
-	VolumeMounts: []*ateletpb.VolumeMount{
-		{Name: "data", MountPath: "/var/data"},
-		// System-info volume mount.
-		{Name: "sysinfo", MountPath: "/run/ate"},
-		{Name: "csi", MountPath: "/mnt/csi"},
-		{Name: "agent", MountPath: "/ate"},
+	ActorUID:  testActorUID,
+	ActorDirs: parityActorDirs,
+	Container: &ateompb.Container{
+		Name:                   "app",
+		ContainerSpec:          &ateompb.ContainerSpec{Args: []string{"/app"}},
+		DurableDirVolumeMounts: []*ateompb.DurableDirVolumeMount{{VolumeName: "data", MountPath: "/var/data"}},
+		SystemInfoVolumeMounts: []*ateompb.SystemInfoVolumeMount{{VolumeName: "sysinfo", MountPath: "/run/ate"}},
+		CsiVolumeMounts:        []*ateompb.VolumeMount{{VolumeName: "csi", MountPath: "/mnt/csi"}},
+		ImageVolumeMounts:      []*ateompb.ImageVolumeMount{{VolumeName: "agent", MountPath: "/ate"}},
 	},
 }
+
+// parityMountPaths are where parityOptions mounts its volumes.
+var parityMountPaths = []string{"/var/data", "/run/ate", "/mnt/csi", "/ate"}
 
 var paritySize = sizing.SandboxSize{MilliCPU: 500, MemoryBytes: 512 << 20}
 
@@ -96,10 +89,9 @@ func TestShapers_PreserveEveryVolumeMount(t *testing.T) {
 			if err := tc.shape(spec); err != nil {
 				t.Fatalf("shaping the spec: %v", err)
 			}
-			for _, vm := range parityOptions.VolumeMounts {
-				m := mountFor(t, spec, vm.GetMountPath())
-				if m.Source == "" {
-					t.Errorf("mount %q has no source after shaping", vm.GetMountPath())
+			for _, dest := range parityMountPaths {
+				if m := mountFor(t, spec, dest); m.Source == "" {
+					t.Errorf("mount %q has no source after shaping", dest)
 				}
 			}
 			// Neither shaper overrides the hostname.
@@ -139,7 +131,7 @@ func TestShapeMicroVM_TranslatesSourcesIntoTheShare(t *testing.T) {
 
 // ShapeMicroVM errors on a bind that is not staged into the share.
 func TestShapeMicroVM_UnstagedSourceIsAnError(t *testing.T) {
-	spec := Build(Options{Args: []string{"/app"}})
+	spec := Build(Options{Container: &ateompb.Container{ContainerSpec: &ateompb.ContainerSpec{Args: []string{"/app"}}}})
 	spec.Mounts = append(spec.Mounts, specs.Mount{Destination: "/mnt/new", Type: "bind", Source: "/var/lib/ate/new-kind/x"})
 	if err := ShapeMicroVM(spec, MicroVMOptions{ActorDirs: parityActorDirs, ContainerID: "app"}); err == nil {
 		t.Fatal("ShapeMicroVM() = nil, want an error for a bind that is not staged into the share")
