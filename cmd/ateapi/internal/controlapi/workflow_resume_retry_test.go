@@ -16,9 +16,11 @@ package controlapi
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
+	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
@@ -122,5 +124,42 @@ func TestRecoverTransientResumeCrash(t *testing.T) {
 				t.Errorf("crash = %v, want %q kept", stored.GetStatus().GetCrash(), tt.crash)
 			}
 		})
+	}
+}
+
+// TestResumeActor_TransientCrashAfterTheCallEnded answers Unavailable for an
+// actor a resume crashed for a transient cause when the call's context has
+// already ended: the crash is read regardless, and the caller's retry returns
+// the actor to rest.
+func TestResumeActor_TransientCrashAfterTheCallEnded(t *testing.T) {
+	ctx := context.Background()
+	st, cleanup := storetest.SetupTestStore(t)
+	defer cleanup()
+	w := newTestActorWorkflow(t, st, "ns", "tmpl1")
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+	storetest.MustCreateAtespace(t, ctx, st, "team-a")
+	seedWorkflowActor(t, ctx, st, actorRef, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_CRASHED, func(a *ateapipb.Actor) {
+		a.Status.Crash = &ateapipb.ActorCrash{Message: wakeupProbeCancelledCrash}
+	})
+	ended, cancel := context.WithCancel(ctx)
+	cancel()
+
+	_, _, err := w.ResumeActor(ended, actorRef)
+	if got := apierror.Code(err); got != codes.Unavailable {
+		t.Fatalf("ResumeActor error = %v, want Unavailable", err)
+	}
+	if msg := err.Error(); !strings.Contains(msg, "wakeup probe cancelled") {
+		t.Errorf("ResumeActor error message = %q, want the crash's cause named", msg)
+	}
+
+	if _, recovered, err := w.recoverTransientResumeCrash(ctx, actorRef); err != nil || !recovered {
+		t.Fatalf("recoverTransientResumeCrash = (%v, %v), want the actor recovered", recovered, err)
+	}
+	stored, err := st.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("GetActor: %v", err)
+	}
+	if got := stored.GetStatus().GetState(); got != ateapipb.ActorState_ACTOR_STATE_SUSPENDED || stored.GetStatus().GetCrash() != nil {
+		t.Errorf("status = %v, want SUSPENDED and no crash", stored.GetStatus())
 	}
 }
