@@ -201,11 +201,13 @@ func TestPoolMetricsContention(t *testing.T) {
 	assertPoolCounts(t, reader, map[string][3]int64{ateattr.DBConnectionPoolMain: {1, 0, 1}})
 
 	const timeout = 25 * time.Millisecond
+	started := time.Now()
 	ctx, cancel := context.WithTimeout(t.Context(), timeout)
 	defer cancel()
 	if _, err := pool.Exec(ctx, "SELECT 1"); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("saturated Exec error = %v", err)
 	}
+	elapsed := time.Since(started)
 	ctx, cancelAcquire := context.WithCancel(t.Context())
 	cancelAcquire()
 	if _, err := pool.Acquire(ctx); !errors.Is(err, context.Canceled) {
@@ -267,8 +269,9 @@ func TestPoolMetricsContention(t *testing.T) {
 		outcome, _ := point.Attributes.Value(ateattr.StoreConnectionAcquireOutcomeKey)
 		errorType, _ := point.Attributes.Value(ateattr.ErrorTypeKey)
 		got[acquisitionResult{outcome.AsString(), errorType.AsString()}] += point.Count
-		if outcome.AsString() == ateattr.StoreConnectionAcquireTimeout && point.Sum < timeout.Seconds() {
-			t.Errorf("timeout acquisition duration = %g, want >= %g", point.Sum, timeout.Seconds())
+		if outcome.AsString() == ateattr.StoreConnectionAcquireTimeout &&
+			!(point.Sum > 0 && point.Sum <= elapsed.Seconds()) {
+			t.Errorf("timeout acquisition duration = %g, want > 0 and <= %g", point.Sum, elapsed.Seconds())
 		}
 	}
 	want := map[acquisitionResult]uint64{
@@ -493,10 +496,15 @@ func TestPoolMetricsAcquireEndMissingStart(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			instruments, reader := newPoolMetrics(t)
 			tracer := newPoolMetricsTracer(t, instruments, ateattr.DBConnectionPoolMain)
-			tracer.TraceAcquireStart(t.Context(), nil, pgxpool.TraceAcquireStartData{})
-			// Simulate another tracer replacing the acquisition context.
-			tracer.TraceAcquireEnd(tc.ctx, nil, pgxpool.TraceAcquireEndData{})
-			assertPendingAcquires(t, reader, map[string]int64{ateattr.DBConnectionPoolMain: 0})
+			for range 3 {
+				tracer.TraceAcquireStart(t.Context(), nil, pgxpool.TraceAcquireStartData{})
+				// Simulate another tracer replacing the acquisition context.
+				tracer.TraceAcquireEnd(tc.ctx, nil, pgxpool.TraceAcquireEndData{})
+				assertPendingAcquires(t, reader, map[string]int64{ateattr.DBConnectionPoolMain: 0})
+			}
+			tracer.missingStartWarning.Do(func() {
+				t.Error("missing start time did not consume the warning guard")
+			})
 			if m, found := collectPoolMetrics(t, reader)[connectionWaitMetric]; found {
 				t.Fatalf("recorded duration without a start time: %+v", m)
 			}
