@@ -408,10 +408,8 @@ func TestSandboxAssetPrewarmDownloads(t *testing.T) {
 	// The worker's own prewarm call returns only when the asset has landed
 	// and the pause-image pull has finished: it waits for the pull on a live
 	// context, while the pull runs detached from that context (see
-	// imagecache.Store.EnsureImage). Waiting for the call, rather than for
-	// the asset file or an image lookup, keeps the pull's last writes from
-	// racing the TempDir cleanup: a lookup already hits once the last layer
-	// dir lands, while the pull still rewrites the image record.
+	// imagecache.Store.EnsureImage). Waiting for the call keeps the pull's
+	// last writes from racing the TempDir cleanup.
 	prewarmed := make(chan error, 1)
 	prewarmFinished = func(_ string, err error) {
 		// Non-blocking: a failed attempt is retried, and the worker must not
