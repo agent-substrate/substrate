@@ -366,10 +366,11 @@ func (s *AteomHerder) downloadVerified(ctx context.Context, entry assetEntry, tm
 
 // anonymousFallbackCodes are the plugin codes after which atelet reads a gs://
 // asset anonymously: the plugin has no such object, cannot serve the URL, does
-// not implement AssetProvider, or cannot be reached. PermissionDenied (the URL
-// is under a snapshot location) and FailedPrecondition (wrong size or sha256)
-// are refusals another source must not override.
-var anonymousFallbackCodes = []codes.Code{codes.NotFound, codes.InvalidArgument, codes.Unimplemented, codes.Unavailable}
+// not implement AssetProvider, cannot be reached, or encountered an internal
+// storage failure. PermissionDenied (the URL is under a snapshot location),
+// FailedPrecondition (wrong size or sha256), and Canceled are refusals another
+// source must not override.
+var anonymousFallbackCodes = []codes.Code{codes.NotFound, codes.InvalidArgument, codes.Unimplemented, codes.Unavailable, codes.Internal}
 
 // downloadAnonymous streams the gs:// asset entry.URL into the existing file
 // at path with no credentials, replacing anything a failed plugin fetch left
