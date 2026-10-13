@@ -104,6 +104,19 @@ type runningActor struct {
 	// workloadIDs are the guest container ids of this actor's workloads, for the
 	// SIGTERM the graceful shutdown propagates into the guest (see shutdown.go).
 	workloadIDs []string
+
+	// checkpointDeactivatedTunnel is set once a CheckpointWorkload starts
+	// deactivating the actor's tunnel. Only a RunWorkload or RestoreWorkload
+	// activates it again, and they publish a new runningActor, so a later
+	// checkpoint of this VM sees the actor unreachable (guestQuiesce.freeze).
+	// Read and written under the actor's lock.
+	checkpointDeactivatedTunnel bool
+
+	// checkpointFrozeContainers is set once a CheckpointWorkload has frozen
+	// every container in workloadIDs. No checkpoint thaws them again (see
+	// guestQuiesce), so a later checkpoint of this VM skips the freeze. Read
+	// and written under the actor's lock.
+	checkpointFrozeContainers bool
 }
 
 // baseIDFile is a tiny snapshot file (under the checkpoint/restore dir) holding
