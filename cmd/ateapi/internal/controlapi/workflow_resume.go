@@ -43,7 +43,9 @@ type resumeSnapshotSource struct {
 	// Zero means cold boot from the spec (unless the actor holds a local
 	// snapshot, which takes precedence at restore).
 	SnapshotURI resources.SnapshotURI
-	Fidelity    ateapipb.SnapshotFidelity
+	// Snapshot is the actor's record of that durable snapshot: its uuid,
+	// generation and fidelity. Nil when SnapshotURI is zero.
+	Snapshot *ateapipb.Snapshot
 	// TemplateReplaced is true when the external snapshot's recorded template
 	// UID differs from the actor's current template.
 	TemplateReplaced bool
@@ -177,7 +179,7 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 		if src.SnapshotURI, err = resources.ParseSnapshotURI(st.GetObject().GetSnapshotUri()); err != nil {
 			return nil, nil, src, apierror.DataLoss("Actor %s external snapshot: %v", actorRef, err)
 		}
-		src.Fidelity = snap.GetFidelity()
+		src.Snapshot = snap
 		capturedUnder := snap.GetActorTemplateUid()
 		src.TemplateReplaced = capturedUnder != "" && capturedUnder != actorTemplate.GetMetadata().GetUid()
 	}
@@ -695,10 +697,40 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		return tele, fmt.Errorf("while resolving sandbox assets: %w", err)
 	}
 
+	// The request names the snapshot and carries both places it can be read
+	// from; atelet reads the local copy when it holds one. The control plane
+	// still records which it expects, for the resume metric.
+	var snapshot *ateletpb.Snapshot
 	if localSnap := findLatestLocalSnapshot(actor.GetStatus()); localSnap != nil {
 		slog.InfoContext(ctx, "Actor has snapshot; Restoring from snapshot")
 		tele.SnapshotKind = ateattr.SnapshotKindLocal
+		objectURI, err := localSnapshotObjectURI(actorTemplate, actor, localSnap)
+		if err != nil {
+			return tele, err
+		}
+		snapshot = &ateletpb.Snapshot{
+			SnapshotUuid: localSnap.GetUuid(),
+			Fidelity:     fidelityToAtelet(localSnap.GetFidelity()),
+			Object:       &ateletpb.ObjectStorage{SnapshotUri: objectURI},
+			Generation:   localSnap.GetGeneration(),
+		}
+	} else if !src.SnapshotURI.IsZero() {
+		slog.InfoContext(ctx, "Actor has durable snapshot; Restoring from snapshot")
+		tele.SnapshotKind = ateattr.SnapshotKindLatest
+		fidelity := fidelityToAtelet(src.Snapshot.GetFidelity())
+		if src.TemplateReplaced {
+			fidelity = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
+		}
+		snapshot = &ateletpb.Snapshot{
+			SnapshotUuid: src.Snapshot.GetUuid(),
+			Fidelity:     fidelity,
+			Object:       &ateletpb.ObjectStorage{SnapshotUri: src.SnapshotURI.String()},
+			Generation:   src.Snapshot.GetGeneration(),
+		}
+	}
 
+	if snapshot != nil {
+		tele.WireFidelity = ateattr.SnapshotFidelityValue(snapshot.GetFidelity())
 		req := &ateletpb.RestoreRequest{
 			WorkerPodUid:          assignment.GetWorkerPodUid(),
 			Atespace:              actor.GetMetadata().GetAtespace(),
@@ -706,46 +738,12 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			ActorTemplateAtespace: actor.GetActorTemplate().GetAtespace(),
 			ActorTemplateName:     actor.GetActorTemplate().GetName(),
 			Spec:                  workloadSpec,
+			Snapshot:              snapshot,
 			SandboxAssets:         sandboxAssets,
 			ActorUid:              actor.GetMetadata().Uid,
 			EgressGateway:         egressGateway,
 			CpuMilli:              cpuMilli,
 			MemoryBytes:           memBytes,
-		}
-		req.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
-		req.LocalConfig = &ateletpb.LocalCheckpointConfiguration{SnapshotName: localSnap.GetUuid()}
-		req.Fidelity = fidelityToAtelet(localSnap.GetFidelity())
-		tele.WireFidelity = ateattr.SnapshotFidelityValue(req.Fidelity)
-
-		if _, err = client.Restore(ctx, req); err != nil {
-			return tele, handleAteletError(ctx, w.store, actorRef, ateattr.OperationResume, "Restore", false, err)
-		}
-		return tele, nil
-	} else if !src.SnapshotURI.IsZero() {
-		slog.InfoContext(ctx, "Actor has durable snapshot; Restoring from snapshot")
-		tele.SnapshotKind = ateattr.SnapshotKindLatest
-		scope := fidelityToAtelet(src.Fidelity)
-		if src.TemplateReplaced {
-			scope = ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES
-		}
-		tele.WireFidelity = ateattr.SnapshotFidelityValue(scope)
-		req := &ateletpb.RestoreRequest{
-			WorkerPodUid:          assignment.GetWorkerPodUid(),
-			Atespace:              actor.GetMetadata().GetAtespace(),
-			ActorName:             actor.GetMetadata().GetName(),
-			ActorTemplateAtespace: actor.GetActorTemplate().GetAtespace(),
-			ActorTemplateName:     actor.GetActorTemplate().GetName(),
-			Spec:                  workloadSpec,
-			Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
-			ExternalConfig: &ateletpb.ExternalRestoreConfiguration{
-				SnapshotUri: src.SnapshotURI.String(),
-			},
-			Fidelity:      scope,
-			SandboxAssets: sandboxAssets,
-			ActorUid:      actor.GetMetadata().Uid,
-			EgressGateway: egressGateway,
-			CpuMilli:      cpuMilli,
-			MemoryBytes:   memBytes,
 		}
 		if _, err = client.Restore(ctx, req); err != nil {
 			return tele, handleAteletError(ctx, w.store, actorRef, ateattr.OperationResume, "Restore", false, err)
@@ -780,6 +778,20 @@ func (w *ActorWorkflow) egressGateway() *ateletpb.EgressGateway {
 		return nil
 	}
 	return &ateletpb.EgressGateway{Address: w.egressGatewayAddress}
+}
+
+// localSnapshotObjectURI is where a local snapshot's durable copy lives, which
+// every Restore carries: the recorded durable snapshot when the local copy has
+// been uploaded, and otherwise the URI an upload of it would write to.
+func localSnapshotObjectURI(actorTemplate *ateapipb.ActorTemplate, actor *ateapipb.Actor, snap *ateapipb.Snapshot) (string, error) {
+	if uri := snap.GetDurableSnapshot().GetObject().GetSnapshotUri(); uri != "" {
+		return uri, nil
+	}
+	uri, err := newInProgressSnapshotURI(actorTemplate, actor, snap.GetUuid())
+	if err != nil {
+		return "", err
+	}
+	return uri.String(), nil
 }
 
 // finalizeRunning re-reads the actor for a fresh version and commits RUNNING.

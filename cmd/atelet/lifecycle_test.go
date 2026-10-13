@@ -32,8 +32,21 @@ import (
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
+
+// restoreSnapshot names the snapshot a Restore reads: a local pause
+// checkpoint called name, with the durable copy every request must carry.
+func restoreSnapshot(name string, fidelity ateletpb.SnapshotFidelity) *ateletpb.Snapshot {
+	return &ateletpb.Snapshot{
+		SnapshotUuid: name,
+		Fidelity:     fidelity,
+		Object:       &ateletpb.ObjectStorage{SnapshotUri: pausedSnapshotURI},
+		Generation:   1,
+	}
+}
 
 // useTempNodeDirs roots atelet's on-node state in temp directories so a test
 // can drive the real filesystem layout. Not parallel-safe: the paths are
@@ -252,9 +265,7 @@ func runLocalSnapshotGC(t *testing.T, fidelity ateletpb.SnapshotFidelity) {
 		WorkerPodUid:          workerPodUID,
 		SandboxAssets:         sandboxAssets,
 		Spec:                  spec,
-		Fidelity:              fidelity,
-		Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
-		LocalConfig:           &ateletpb.LocalCheckpointConfiguration{SnapshotName: snapshotName},
+		Snapshot:              restoreSnapshot(snapshotName, fidelity),
 	}); err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
@@ -417,9 +428,7 @@ func TestRestoreUsesRequestSandboxAssets(t *testing.T) {
 		WorkerPodUid:          workerPodUID,
 		SandboxAssets:         assetsWithPause(restorePause),
 		Spec:                  spec,
-		Fidelity:              ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
-		Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
-		LocalConfig:           &ateletpb.LocalCheckpointConfiguration{SnapshotName: snapshotName},
+		Snapshot:              restoreSnapshot(snapshotName, ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY),
 	}); err != nil {
 		t.Fatalf("Restore: %v", err)
 	}
@@ -473,12 +482,20 @@ func TestActivationFailureBeforeRegistration(t *testing.T) {
 
 			content := []byte("runsc binary")
 			assetHash := fmt.Sprintf("%x", sha256.Sum256(content))
-			if tc.restore && tc.failure != "manifest" {
-				writeLocalSnapshot(t, ateletpath.LocalSnapshotDir(actorUID, snapshotName), sandboxAssetsRecord{
-					SandboxClass: "gvisor", PauseImage: testPauseImage,
-					Assets:        map[string]assetEntry{"runsc": {URL: "gs://test-bucket/runsc", SHA256: assetHash}},
-					SnapshotFiles: []string{"checkpoint.img"},
-				}, map[string]string{"checkpoint.img": "guest-memory"})
+			if tc.restore {
+				if tc.failure == "manifest" {
+					// A local copy without a manifest: present, so the restore
+					// reads it rather than the durable copy, and unusable.
+					if err := os.MkdirAll(ateletpath.LocalSnapshotDir(actorUID, snapshotName), 0o700); err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					writeLocalSnapshot(t, ateletpath.LocalSnapshotDir(actorUID, snapshotName), sandboxAssetsRecord{
+						SandboxClass: "gvisor", PauseImage: testPauseImage,
+						Assets:        map[string]assetEntry{"runsc": {URL: "gs://test-bucket/runsc", SHA256: assetHash}},
+						SnapshotFiles: []string{"checkpoint.img"},
+					}, map[string]string{"checkpoint.img": "guest-memory"})
+				}
 			}
 			if tc.failure == "reset" {
 				// Reset refuses to remove a populated external-volume directory,
@@ -511,8 +528,7 @@ func TestActivationFailureBeforeRegistration(t *testing.T) {
 				_, err = s.Restore(ctx, &ateletpb.RestoreRequest{
 					Atespace: "team-a", ActorName: "actor-1", ActorUid: actorUID, WorkerPodUid: "5f1c0d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f",
 					SandboxAssets: assets, Spec: spec,
-					Fidelity: ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, Type: ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
-					LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: snapshotName},
+					Snapshot: restoreSnapshot(snapshotName, ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY),
 				})
 			} else {
 				_, err = s.Run(ctx, &ateletpb.RunRequest{
@@ -652,10 +668,8 @@ func TestRestoreFailureAfterRegistrationRemovesOwnRegistration(t *testing.T) {
 				runscAssetName: {Url: "gs://test-bucket/runsc", Sha256: assetHash},
 			}}},
 		},
-		Spec:        spec,
-		Fidelity:    ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
-		Type:        ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
-		LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: snapshotName},
+		Spec:     spec,
+		Snapshot: restoreSnapshot(snapshotName, ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY),
 	})
 	if err == nil || !strings.Contains(err.Error(), "while creating pause OCI bundle") {
 		t.Fatalf("Restore error = %v, want the post-registration OCI preparation failure", err)
@@ -726,5 +740,56 @@ func TestTerminateWithoutWorkerPodUID(t *testing.T) {
 	}
 	if _, err := os.Stat(ateletpath.ActorPath(actorUID)); !os.IsNotExist(err) {
 		t.Errorf("actor dir survived terminate: %v", err)
+	}
+}
+
+// Restore picks its source from what the node holds: the snapshot's local
+// directory when it exists, the durable copy at snapshot.object otherwise.
+// Each case fails at the first step after the manifest, which pins where the
+// manifest came from without a full restore.
+func TestRestoreSourceFollowsLocalCopy(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		local   bool
+		wantErr string
+	}{
+		{name: "local copy present is read in place", local: true, wantErr: "asset unavailable"},
+		{name: "no local copy reads the durable copy", local: false, wantErr: "while fetching snapshot manifest"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			useTempNodeDirs(t)
+			const actorUID, snapshotName = "0f6c2b0e-1b7e-4b3f-9a6a-1d2c3e4f5a62", "pause-snap-1"
+			content := []byte("runsc binary")
+			assetHash := fmt.Sprintf("%x", sha256.Sum256(content))
+			if tc.local {
+				writeLocalSnapshot(t, ateletpath.LocalSnapshotDir(actorUID, snapshotName), sandboxAssetsRecord{
+					SandboxClass: "gvisor", PauseImage: testPauseImage,
+					Assets:        map[string]assetEntry{"runsc": {URL: "gs://test-bucket/runsc", SHA256: assetHash}},
+					SnapshotFiles: []string{"checkpoint.img"},
+				}, map[string]string{"checkpoint.img": "guest-memory"})
+			}
+			// The durable copy is unreachable and the asset bucket fails, so
+			// the error names the step the restore reached.
+			s := &AteomHerder{
+				objectStorePlugin:  failingNodePlugin{err: status.Error(codes.NotFound, "no manifest")},
+				snapshotScratchDir: t.TempDir(),
+				anonGCSClient:      fakeObjectStorage{err: fmt.Errorf("asset unavailable")},
+				systemInfoVolumes:  newSystemInfoVolumeRefresher(nil, nil),
+			}
+			_, err := s.Restore(t.Context(), &ateletpb.RestoreRequest{
+				Atespace: "team-a", ActorName: "actor-1", ActorUid: actorUID, WorkerPodUid: "5f1c0d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f",
+				SandboxAssets: &ateletpb.SandboxAssets{
+					SandboxClass: "gvisor", PauseImage: testPauseImage,
+					Assets: map[string]*ateletpb.ArchAssets{runtime.GOARCH: {Files: map[string]*ateletpb.AssetFile{
+						runscAssetName: {Url: "gs://test-bucket/runsc", Sha256: assetHash},
+					}}},
+				},
+				Spec:     &ateletpb.WorkloadSpec{},
+				Snapshot: restoreSnapshot(snapshotName, ateletpb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY),
+			})
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("Restore error = %v, want %q", err, tc.wantErr)
+			}
+		})
 	}
 }

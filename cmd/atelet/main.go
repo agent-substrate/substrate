@@ -1051,6 +1051,25 @@ func readSnapshotManifest(dir string) ([]byte, error) {
 	return root.ReadFile(sandboxManifestName)
 }
 
+// localSnapshotExists reports whether dir, a snapshot's directory under the
+// actor's local-checkpoint directory, is present on this node. A restore
+// reads the local copy when it is, and the snapshot's durable copy
+// otherwise. Only the directory is probed: a copy that is present but
+// unusable fails the restore rather than falling through to the durable one.
+func localSnapshotExists(dir string) (bool, error) {
+	info, err := os.Stat(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, wrapFileSystemErr("while probing local checkpoint directory", err)
+	}
+	if !info.IsDir() {
+		return false, fmt.Errorf("local checkpoint path %s is not a directory", dir)
+	}
+	return true, nil
+}
+
 func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (resp *ateletpb.RestoreResponse, err error) {
 	if errs := apivalidation.ValidateRestoreRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
@@ -1078,7 +1097,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	op := snapshotOp{
 		templateNamespace: req.GetActorTemplateAtespace(),
 		templateName:      req.GetActorTemplateName(),
-		fidelity:          ateattr.SnapshotFidelityValue(req.GetFidelity()),
+		fidelity:          ateattr.SnapshotFidelityValue(req.GetSnapshot().GetFidelity()),
 		sandboxClass:      req.GetSandboxAssets().GetSandboxClass(),
 	}
 	attribution := resources.ActorAttribution{
@@ -1118,10 +1137,18 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		return nil, mountErr
 	}
 
+	// The request names the snapshot, not where to read it from: atelet
+	// restores from its local copy when it holds one, and from the snapshot's
+	// durable copy otherwise.
+	localDir := ateletpath.LocalSnapshotDir(actorUID, req.GetSnapshot().GetSnapshotUuid())
+	snapshotURI := req.GetSnapshot().GetObject().GetSnapshotUri()
+	directLocal, err := localSnapshotExists(localDir)
+	if err != nil {
+		return nil, err
+	}
 	checkpointDir := ateletpath.RestoreStateDir(actorUID)
-	directLocal := req.GetType() == ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
 	if directLocal {
-		checkpointDir = ateletpath.LocalSnapshotDir(actorUID, req.GetLocalConfig().GetSnapshotName())
+		checkpointDir = localDir
 	}
 
 	// Fetch the snapshot manifest stored beside the checkpoint images
@@ -1135,25 +1162,22 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		}
 	}()
 	var sandboxRec *sandboxAssetsRecord
-	switch req.GetType() {
-	case ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL:
-		manifest, err := s.fetchManifest(ctx, req.GetExternalConfig().GetSnapshotUri())
-		if err != nil {
-			return nil, fmt.Errorf("while fetching snapshot manifest: %w", err)
-		}
-		if sandboxRec, err = unmarshalSandboxRecord(manifest); err != nil {
-			return nil, fmt.Errorf("while unmarshalling sandbox record: %w", err)
-		}
-	case ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL:
-		manifest, err := readSnapshotManifest(ateletpath.LocalSnapshotDir(actorUID, req.GetLocalConfig().GetSnapshotName()))
+	if directLocal {
+		manifest, err := readSnapshotManifest(localDir)
 		if err != nil {
 			return nil, wrapFileSystemErr("while reading local snapshot manifest", err)
 		}
 		if sandboxRec, err = unmarshalSandboxRecord(manifest); err != nil {
 			return nil, fmt.Errorf("while unmarshalling sandbox record: %w", err)
 		}
-	default:
-		return nil, fmt.Errorf("unexpected checkpoint type: %v", req.GetType())
+	} else {
+		manifest, err := s.fetchManifest(ctx, snapshotURI)
+		if err != nil {
+			return nil, fmt.Errorf("while fetching snapshot manifest: %w", err)
+		}
+		if sandboxRec, err = unmarshalSandboxRecord(manifest); err != nil {
+			return nil, fmt.Errorf("while unmarshalling sandbox record: %w", err)
+		}
 	}
 
 	dManifest = time.Since(tManifest)
@@ -1161,7 +1185,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 
 	// The manifest is what tells a golden restore from a latest one, so the
 	// snapshot kind only becomes knowable here.
-	op.kind = restoreSnapshotKind(req, sandboxRec)
+	op.kind = restoreSnapshotKind(directLocal, sandboxRec)
 
 	var registration *registeredActor
 	// Undo the Register if the restore fails. The errgroup join below happens
@@ -1191,18 +1215,11 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 			}
 			downloadErr = err
 		}()
-		switch req.GetType() {
-		case ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL:
-			if err := s.downloadExternalCheckpoint(gctx, req.GetExternalConfig().GetSnapshotUri(), checkpointDir, sandboxRec.SnapshotFiles); err != nil {
-				return err
-			}
-		case ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL:
+		if directLocal {
 			// Restore in place from LocalSnapshotDir; no staging.
-			if err := checkLocalSnapshotFiles(checkpointDir, sandboxRec.SnapshotFiles); err != nil {
-				return err
-			}
+			return checkLocalSnapshotFiles(checkpointDir, sandboxRec.SnapshotFiles)
 		}
-		return nil
+		return s.downloadExternalCheckpoint(gctx, snapshotURI, checkpointDir, sandboxRec.SnapshotFiles)
 	})
 	g.Go(func() (err error) {
 		defer func() { prepErr = err }()
@@ -1262,7 +1279,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		RunscPath:             runscPathFor(assetPaths),
 		RuntimeAssetPaths:     assetPaths,
 		Spec:                  spec,
-		Fidelity:              toAteomFidelity(req.GetFidelity()),
+		Fidelity:              toAteomFidelity(req.GetSnapshot().GetFidelity()),
 		ActorUid:              req.GetActorUid(),
 		ActorDirs:             actorDirs,
 		PreserveRestoreDir:    directLocal,

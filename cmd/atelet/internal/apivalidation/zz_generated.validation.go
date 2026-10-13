@@ -1353,51 +1353,6 @@ func Validate_ExternalCheckpointConfiguration(
 	return errs
 }
 
-// Validate_ExternalRestoreConfiguration validates an instance of ExternalRestoreConfiguration according
-// to declarative validation rules in the API schema.
-func Validate_ExternalRestoreConfiguration(
-	ctx context.Context, op operation.Operation, fldPath *field.Path,
-	obj, oldObj *ateletpb.ExternalRestoreConfiguration) (errs field.ErrorList) {
-
-	{ // field ateletpb.ExternalRestoreConfiguration.SnapshotUri
-		fn := func(
-			fldPath *field.Path,
-			obj, oldObj *string,
-			oldValueCorrelated bool) (errs field.ErrorList) {
-			// don't revalidate unchanged data
-			if oldValueCorrelated && op.Type == operation.Update {
-				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
-					return nil
-				}
-			}
-			// call field-attached validations
-			earlyReturn := false
-			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
-				earlyReturn = true
-			}
-			if earlyReturn {
-				return // do not proceed
-			}
-			// custom validation
-			if e := ValidateCustom_ExternalRestoreConfiguration_SnapshotUri(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 2048); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			return
-		}
-		oldVal := safe.Field(oldObj,
-			func(oldObj *ateletpb.ExternalRestoreConfiguration) *string {
-				return &oldObj.SnapshotUri
-			})
-		errs = append(errs, fn(fldPath.Child("snapshot_uri"), &obj.SnapshotUri, oldVal, oldObj != nil)...)
-	}
-
-	return errs
-}
-
 // Validate_ExternalVolumeSource validates an instance of ExternalVolumeSource according
 // to declarative validation rules in the API schema.
 func Validate_ExternalVolumeSource(
@@ -1923,6 +1878,51 @@ func Validate_MintActorCertificateRequest(
 	return errs
 }
 
+// Validate_ObjectStorage validates an instance of ObjectStorage according
+// to declarative validation rules in the API schema.
+func Validate_ObjectStorage(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ateletpb.ObjectStorage) (errs field.ErrorList) {
+
+	{ // field ateletpb.ObjectStorage.SnapshotUri
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// custom validation
+			if e := ValidateCustom_ObjectStorage_SnapshotUri(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			if e := validate.MaxLength(ctx, op, fldPath, obj, oldObj, 2048); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateletpb.ObjectStorage) *string {
+				return &oldObj.SnapshotUri
+			})
+		errs = append(errs, fn(fldPath.Child("snapshot_uri"), &obj.SnapshotUri, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
 // Validate_RegisterWorkerRequest validates an instance of RegisterWorkerRequest according
 // to declarative validation rules in the API schema.
 func Validate_RegisterWorkerRequest(
@@ -2268,33 +2268,11 @@ func Validate_Resources(
 	return errs
 }
 
-var unionMembershipFor_github_com_agent_substrate_substrate_internal_proto_ateletpb_RestoreRequest_ = validate.NewUnionMembership(validate.NewUnionMember("local_config"), validate.NewUnionMember("external_config"))
-
 // Validate_RestoreRequest validates an instance of RestoreRequest according
 // to declarative validation rules in the API schema.
 func Validate_RestoreRequest(
 	ctx context.Context, op operation.Operation, fldPath *field.Path,
 	obj, oldObj *ateletpb.RestoreRequest) (errs field.ErrorList) {
-
-	if e := validate.Union(ctx, op, fldPath, obj, oldObj, unionMembershipFor_github_com_agent_substrate_substrate_internal_proto_ateletpb_RestoreRequest_,
-		func(obj *ateletpb.RestoreRequest) bool {
-			if obj == nil {
-				return false
-			}
-			return obj.LocalConfig != nil
-		},
-		func(obj *ateletpb.RestoreRequest) bool {
-			if obj == nil {
-				return false
-			}
-			return obj.ExternalConfig != nil
-		}); len(e) != 0 {
-		errs = append(errs, e...)
-	}
-	// custom validation
-	if e := ValidateCustom_RestoreRequest(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
-		errs = append(errs, e...)
-	}
 
 	{ // field ateletpb.RestoreRequest.WorkerPodUid
 		fn := func(
@@ -2517,45 +2495,10 @@ func Validate_RestoreRequest(
 		errs = append(errs, fn(fldPath.Child("spec"), obj.Spec, oldVal, oldObj != nil)...)
 	}
 
-	{ // field ateletpb.RestoreRequest.Type
+	{ // field ateletpb.RestoreRequest.Snapshot
 		fn := func(
 			fldPath *field.Path,
-			obj, oldObj *ateletpb.CheckpointType,
-			oldValueCorrelated bool) (errs field.ErrorList) {
-			// don't revalidate unchanged data
-			if oldValueCorrelated && op.Type == operation.Update {
-				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
-					return nil
-				}
-			}
-			// call field-attached validations
-			earlyReturn := false
-			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
-				earlyReturn = true
-			}
-			if earlyReturn {
-				return // do not proceed
-			}
-			if e := validate.Maximum(ctx, op, fldPath, obj, oldObj, 2); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			if e := validate.Minimum(ctx, op, fldPath, obj, oldObj, 1); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			return
-		}
-		oldVal := safe.Field(oldObj,
-			func(oldObj *ateletpb.RestoreRequest) *ateletpb.CheckpointType {
-				return &oldObj.Type
-			})
-		errs = append(errs, fn(fldPath.Child("type"), &obj.Type, oldVal, oldObj != nil)...)
-	}
-
-	{ // field ateletpb.RestoreRequest.LocalConfig
-		fn := func(
-			fldPath *field.Path,
-			obj, oldObj *ateletpb.LocalCheckpointConfiguration,
+			obj, oldObj *ateletpb.Snapshot,
 			oldValueCorrelated bool) (errs field.ErrorList) {
 			// don't revalidate unchanged data
 			if oldValueCorrelated && op.Type == operation.Update {
@@ -2565,86 +2508,22 @@ func Validate_RestoreRequest(
 			}
 			// call field-attached validations
 			earlyReturn := false
-			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+			if e := validate.RequiredPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
 				earlyReturn = true
 			}
 			if earlyReturn {
 				return // do not proceed
 			}
 			// call the type's validation function
-			errs = append(errs, Validate_LocalCheckpointConfiguration(ctx, op, fldPath, obj, oldObj)...)
+			errs = append(errs, Validate_Snapshot(ctx, op, fldPath, obj, oldObj)...)
 			return
 		}
 		oldVal := safe.Field(oldObj,
-			func(oldObj *ateletpb.RestoreRequest) *ateletpb.LocalCheckpointConfiguration {
-				return oldObj.LocalConfig
+			func(oldObj *ateletpb.RestoreRequest) *ateletpb.Snapshot {
+				return oldObj.Snapshot
 			})
-		errs = append(errs, fn(fldPath.Child("local_config"), obj.LocalConfig, oldVal, oldObj != nil)...)
-	}
-
-	{ // field ateletpb.RestoreRequest.ExternalConfig
-		fn := func(
-			fldPath *field.Path,
-			obj, oldObj *ateletpb.ExternalRestoreConfiguration,
-			oldValueCorrelated bool) (errs field.ErrorList) {
-			// don't revalidate unchanged data
-			if oldValueCorrelated && op.Type == operation.Update {
-				if ateDeepEqual(obj, oldObj) {
-					return nil
-				}
-			}
-			// call field-attached validations
-			earlyReturn := false
-			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				earlyReturn = true
-			}
-			if earlyReturn {
-				return // do not proceed
-			}
-			// call the type's validation function
-			errs = append(errs, Validate_ExternalRestoreConfiguration(ctx, op, fldPath, obj, oldObj)...)
-			return
-		}
-		oldVal := safe.Field(oldObj,
-			func(oldObj *ateletpb.RestoreRequest) *ateletpb.ExternalRestoreConfiguration {
-				return oldObj.ExternalConfig
-			})
-		errs = append(errs, fn(fldPath.Child("external_config"), obj.ExternalConfig, oldVal, oldObj != nil)...)
-	}
-
-	{ // field ateletpb.RestoreRequest.Fidelity
-		fn := func(
-			fldPath *field.Path,
-			obj, oldObj *ateletpb.SnapshotFidelity,
-			oldValueCorrelated bool) (errs field.ErrorList) {
-			// don't revalidate unchanged data
-			if oldValueCorrelated && op.Type == operation.Update {
-				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
-					return nil
-				}
-			}
-			// call field-attached validations
-			earlyReturn := false
-			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
-				errs = append(errs, e...)
-				earlyReturn = true
-			}
-			if earlyReturn {
-				return // do not proceed
-			}
-			if e := validate.Maximum(ctx, op, fldPath, obj, oldObj, 3); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			if e := validate.Minimum(ctx, op, fldPath, obj, oldObj, 1); len(e) != 0 {
-				errs = append(errs, e...)
-			}
-			return
-		}
-		oldVal := safe.Field(oldObj,
-			func(oldObj *ateletpb.RestoreRequest) *ateletpb.SnapshotFidelity {
-				return &oldObj.Fidelity
-			})
-		errs = append(errs, fn(fldPath.Child("fidelity"), &obj.Fidelity, oldVal, oldObj != nil)...)
+		errs = append(errs, fn(fldPath.Child("snapshot"), obj.Snapshot, oldVal, oldObj != nil)...)
 	}
 
 	{ // field ateletpb.RestoreRequest.EgressGateway
@@ -3365,6 +3244,145 @@ func Validate_SecurityContext(
 				return oldObj.Capabilities
 			})
 		errs = append(errs, fn(fldPath.Child("capabilities"), obj.Capabilities, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
+// Validate_Snapshot validates an instance of Snapshot according
+// to declarative validation rules in the API schema.
+func Validate_Snapshot(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ateletpb.Snapshot) (errs field.ErrorList) {
+
+	{ // field ateletpb.Snapshot.SnapshotUuid
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *string,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.ShortName(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateletpb.Snapshot) *string {
+				return &oldObj.SnapshotUuid
+			})
+		errs = append(errs, fn(fldPath.Child("snapshot_uuid"), &obj.SnapshotUuid, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateletpb.Snapshot.Fidelity
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateletpb.SnapshotFidelity,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.Maximum(ctx, op, fldPath, obj, oldObj, 3); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			if e := validate.Minimum(ctx, op, fldPath, obj, oldObj, 1); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateletpb.Snapshot) *ateletpb.SnapshotFidelity {
+				return &oldObj.Fidelity
+			})
+		errs = append(errs, fn(fldPath.Child("fidelity"), &obj.Fidelity, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateletpb.Snapshot.Object
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ateletpb.ObjectStorage,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if ateDeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_ObjectStorage(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateletpb.Snapshot) *ateletpb.ObjectStorage {
+				return oldObj.Object
+			})
+		errs = append(errs, fn(fldPath.Child("object"), obj.Object, oldVal, oldObj != nil)...)
+	}
+
+	{ // field ateletpb.Snapshot.Generation
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *int32,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.Minimum(ctx, op, fldPath, obj, oldObj, 1); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ateletpb.Snapshot) *int32 {
+				return &oldObj.Generation
+			})
+		errs = append(errs, fn(fldPath.Child("generation"), &obj.Generation, oldVal, oldObj != nil)...)
 	}
 
 	return errs

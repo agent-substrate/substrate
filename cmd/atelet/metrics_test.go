@@ -281,51 +281,47 @@ func TestAssetsAfterCollateral(t *testing.T) {
 
 func TestRestoreSnapshotKind(t *testing.T) {
 	tests := []struct {
-		name string
-		req  *ateletpb.RestoreRequest
-		rec  *sandboxAssetsRecord
-		want string
+		name  string
+		local bool
+		rec   *sandboxAssetsRecord
+		want  string
 	}{
 		{
-			name: "local pause snapshot",
-			req:  &ateletpb.RestoreRequest{Type: ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL},
-			rec:  &sandboxAssetsRecord{Atespace: "team-a"},
-			want: ateattr.SnapshotKindLocal,
+			name:  "local pause snapshot",
+			local: true,
+			rec:   &sandboxAssetsRecord{Atespace: "team-a"},
+			want:  ateattr.SnapshotKindLocal,
 		},
 		{
-			name: "local restore is classifiable before the manifest is read",
-			req:  &ateletpb.RestoreRequest{Type: ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL},
-			rec:  nil,
-			want: ateattr.SnapshotKindLocal,
+			name:  "local restore is classifiable before the manifest is read",
+			local: true,
+			rec:   nil,
+			want:  ateattr.SnapshotKindLocal,
 		},
 		{
-			name: "external snapshot written by a golden actor",
-			req:  &ateletpb.RestoreRequest{Type: ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL},
+			name: "durable snapshot written by a golden actor",
 			rec:  &sandboxAssetsRecord{Atespace: resources.GoldenActorAtespace},
 			want: ateattr.SnapshotKindGolden,
 		},
 		{
-			name: "external snapshot written by a tenant actor",
-			req:  &ateletpb.RestoreRequest{Type: ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL},
+			name: "durable snapshot written by a tenant actor",
 			rec:  &sandboxAssetsRecord{Atespace: "team-a"},
 			want: ateattr.SnapshotKindLatest,
 		},
 		{
 			name: "manifest predating the identity fields",
-			req:  &ateletpb.RestoreRequest{Type: ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL},
 			rec:  &sandboxAssetsRecord{},
 			want: ateattr.SnapshotKindLatest,
 		},
 		{
-			name: "external kind is unknowable until the manifest is read",
-			req:  &ateletpb.RestoreRequest{Type: ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL},
+			name: "durable kind is unknowable until the manifest is read",
 			rec:  nil,
 			want: "",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := restoreSnapshotKind(tt.req, tt.rec); got != tt.want {
+			if got := restoreSnapshotKind(tt.local, tt.rec); got != tt.want {
 				t.Errorf("restoreSnapshotKind() = %q, want %q", got, tt.want)
 			}
 		})

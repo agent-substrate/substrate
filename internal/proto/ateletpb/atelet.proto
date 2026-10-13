@@ -802,18 +802,55 @@ enum SnapshotFidelity {
   // Keep this in sync with the maximums on fields of this type.
 }
 
-// ExternalRestoreConfiguration is an external snapshot a restore reads.
-// Split from the checkpoint-side ExternalCheckpointConfiguration (a write
-// destination) so read-side attributes of a restore source have a home.
-message ExternalRestoreConfiguration {
-  // The object storage URI of the snapshot to read. Object names are
-  // appended to it, so it addresses the snapshot as a whole rather than any
-  // one object.
+// ObjectStorage is a snapshot's location in object storage.
+message ObjectStorage {
+  // The object storage URI of the snapshot. Object names are appended to it,
+  // so it addresses the snapshot as a whole rather than any one object.
   //
   // +k8s:required
   // +k8s:maxLength=2048
   // +k8s:customValidation # a parseable snapshot URI
   string snapshot_uri = 1;
+}
+
+// Snapshot identifies one snapshot of an actor, and where its durable copy
+// lives.
+message Snapshot {
+  // ateapi Snapshot.uuid. Names the snapshot's directory under the actor's
+  // local-checkpoint directory, so this is a bare name and must not contain
+  // a path separator.
+  //
+  // +k8s:required
+  // +k8s:format=k8s-short-name
+  string snapshot_uuid = 1;
+
+  // On Checkpoint: the fidelity to capture.
+  // On Restore: the fidelity to restore the actor with.
+  // On DetachActor: the lowest fidelity the snapshot may hold. The call
+  // fails if its manifest records a lower one.
+  // In SnapshotReport: the fidelity the snapshot holds, read from its
+  // manifest.
+  //
+  // +k8s:required
+  // +k8s:minimum=1
+  // +k8s:maximum=3 # keep this in sync with the SnapshotFidelity enum
+  SnapshotFidelity fidelity = 2;
+
+  // The snapshot's durable copy in object storage. Required on every
+  // request: atelet uploads there, or reads from there when it holds no
+  // usable local copy.
+  //
+  // +k8s:required
+  ObjectStorage object = 3;
+
+  // ateapi Snapshot.generation, starting at 1. Orders the actor's snapshots.
+  // Checkpoint and DetachActor fail for a generation below atelet's newest
+  // for the actor, or for its newest under another snapshot_uuid: the
+  // caller's view is stale.
+  //
+  // +k8s:required
+  // +k8s:minimum=1
+  int32 generation = 4;
 }
 
 // +k8s:customValidation # the set config matches type
@@ -935,7 +972,6 @@ message UploadPausedCheckpointRequest {
 message UploadPausedCheckpointResponse {
 }
 
-// +k8s:customValidation # the set config matches type
 message RestoreRequest {
   // The UID of the worker pod whose ateom hosts the actor.
   //
@@ -968,28 +1004,13 @@ message RestoreRequest {
   // +k8s:required
   WorkloadSpec spec = 7;
 
-  // +k8s:required
-  // +k8s:minimum=1
-  // +k8s:maximum=2 # keep this in sync with the CheckpointType enum
-  CheckpointType type = 8;
-
-  // The checkpoint configuration: local_config when type is LOCAL,
-  // external_config when it is EXTERNAL. Exactly one is set.
-  //
-  // +k8s:optional
-  // +k8s:unionMember
-  LocalCheckpointConfiguration local_config = 9;
-
-  // +k8s:optional
-  // +k8s:unionMember
-  ExternalRestoreConfiguration external_config = 10;
-
-  // Fidelity to restore from the checkpoint.
+  // Snapshot to restore from. atelet reads its local copy if it holds a
+  // usable one, and `snapshot.object` otherwise. A local copy is unusable if
+  // its manifest does not parse or lists a missing file. Fails if neither
+  // copy exists: that generation is lost.
   //
   // +k8s:required
-  // +k8s:minimum=1
-  // +k8s:maximum=3 # keep this in sync with the SnapshotFidelity enum
-  SnapshotFidelity fidelity = 11;
+  Snapshot snapshot = 8;
 
   // When absent the actor has no egress: its TCP is captured and refused.
   //

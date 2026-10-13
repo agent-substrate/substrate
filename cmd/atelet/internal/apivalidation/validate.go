@@ -114,11 +114,6 @@ func ValidateCustom_CheckpointRequest(_ context.Context, _ operation.Operation, 
 	return validateConfigMatchesType(fldPath, value.GetType(), value.GetLocalConfig() != nil, value.GetExternalConfig() != nil)
 }
 
-// ValidateCustom_RestoreRequest requires the config that matches type.
-func ValidateCustom_RestoreRequest(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *ateletpb.RestoreRequest) field.ErrorList {
-	return validateConfigMatchesType(fldPath, value.GetType(), value.GetLocalConfig() != nil, value.GetExternalConfig() != nil)
-}
-
 // validateConfigMatchesType requires the config that matches a checkpoint
 // type. The union tags already require exactly one config.
 func validateConfigMatchesType(fldPath *field.Path, typ ateletpb.CheckpointType, hasLocal, hasExternal bool) field.ErrorList {
@@ -135,7 +130,7 @@ func ValidateCustom_ExternalCheckpointConfiguration_SnapshotUri(_ context.Contex
 	return validateSnapshotURI(fldPath, *value)
 }
 
-func ValidateCustom_ExternalRestoreConfiguration_SnapshotUri(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
+func ValidateCustom_ObjectStorage_SnapshotUri(_ context.Context, _ operation.Operation, fldPath *field.Path, value, _ *string) field.ErrorList {
 	return validateSnapshotURI(fldPath, *value)
 }
 
