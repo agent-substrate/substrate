@@ -24,7 +24,7 @@ use envoy_proxy_dynamic_modules_rust_sdk::{
   declare_init_functions, envoy_log_trace, EnvoyHttpFilter, EnvoyHttpFilterConfig, HttpFilter,
   HttpFilterConfig,
 };
-use substrate_envoy_common::egress_policy::{EgressPolicy, EgressPolicyFilterState};
+use substrate_envoy_common::egress_policy::EgressPolicy;
 
 /// Configuration for the egress-policy-store HTTP filter.
 pub struct EgressPolicyStoreFilterConfig;
@@ -84,13 +84,10 @@ fn new_http_filter_config_fn<EC: EnvoyHttpFilterConfig, EHF: EnvoyHttpFilter>(
 mod tests {
   use super::*;
   use envoy_proxy_dynamic_modules_rust_sdk::{
-    abi::{
-      envoy_dynamic_module_type_filter_state_life_span, envoy_dynamic_module_type_metadata_source,
-    },
-    EnvoyBuffer, MockEnvoyHttpFilter,
+    abi::envoy_dynamic_module_type_metadata_source, EnvoyBuffer, MockEnvoyHttpFilter,
   };
   use substrate_envoy_common::egress_policy::{
-    SniRule, ATE_POLICY_EGRESS_CACHE_KEY, ATE_POLICY_EGRESS_NAMESPACE, ATE_POLICY_JSON_KEY,
+    SniRule, ATE_POLICY_EGRESS_NAMESPACE, ATE_POLICY_JSON_KEY,
   };
 
   #[test]
@@ -113,34 +110,6 @@ mod tests {
         Some(EnvoyBuffer::new(
           br#"{"rules":[{"pattern":"api.example.com","mode":"mitm"},{"pattern":"*.example.com","mode":"passthrough"}]}"#,
         ))
-      })
-      .once();
-    mock_filter
-      .expect_set_filter_state_object()
-      .withf(|key, object, _, life_span| {
-        key == ATE_POLICY_EGRESS_CACHE_KEY
-          && !object.is_null()
-          && *life_span == envoy_dynamic_module_type_filter_state_life_span::Request
-      })
-      .returning(|_, object, destructor, _| {
-        let state = unsafe { &*(object as *const EgressPolicyFilterState) };
-        assert_eq!(
-          state.policy,
-          Rc::new(EgressPolicy {
-            rules: vec![
-              SniRule {
-                pattern: "api.example.com".to_string(),
-                mode: "mitm".to_string(),
-              },
-              SniRule {
-                pattern: "*.example.com".to_string(),
-                mode: "passthrough".to_string(),
-              },
-            ],
-          })
-        );
-        destructor(object);
-        true
       })
       .once();
 

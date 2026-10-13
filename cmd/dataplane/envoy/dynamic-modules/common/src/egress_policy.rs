@@ -14,11 +14,10 @@
 
 //! Shared egress policy types for Substrate Envoy dynamic modules.
 
-use std::{ffi::c_void, rc::Rc};
+use std::rc::Rc;
 
 use envoy_proxy_dynamic_modules_rust_sdk::{
-  abi::{envoy_dynamic_module_type_filter_state_life_span, envoy_dynamic_module_type_metadata_source},
-  EnvoyHttpFilter,
+  abi::envoy_dynamic_module_type_metadata_source, EnvoyHttpFilter,
 };
 use serde::Deserialize;
 
