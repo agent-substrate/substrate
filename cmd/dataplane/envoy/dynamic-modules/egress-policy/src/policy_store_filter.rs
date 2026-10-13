@@ -21,7 +21,8 @@ use envoy_proxy_dynamic_modules_rust_sdk::{
     envoy_dynamic_module_type_on_http_filter_request_headers_status,
     envoy_dynamic_module_type_on_http_filter_response_headers_status,
   },
-  envoy_log_trace, EnvoyHttpFilter, EnvoyHttpFilterConfig, HttpFilter, HttpFilterConfig,
+  envoy_log_trace, EnvoyGaugeId, EnvoyHttpFilter, EnvoyHttpFilterConfig, HttpFilter,
+  HttpFilterConfig,
 };
 use crate::egress_policy::EgressPolicy;
 use crate::egress_policy_store::GlobalEgressPolicyStore;
@@ -30,24 +31,30 @@ use crate::egress_policy_store::GlobalEgressPolicyStore;
 pub const ATE_POLICY_EGRESS_HASH_NOT_SHARED: &[u8] = b"dev.ate.policy.egress.hash.not_shared";
 
 /// Configuration for the egress-policy-store HTTP filter.
-pub struct EgressPolicyStoreFilterConfig;
+pub struct EgressPolicyStoreFilterConfig {
+  pub store_size: EnvoyGaugeId,
+}
 
 impl<EHF: EnvoyHttpFilter> HttpFilterConfig<EHF> for EgressPolicyStoreFilterConfig {
   fn new_http_filter(&self, _envoy: &mut EHF) -> Box<dyn HttpFilter<EHF>> {
-    Box::new(EgressPolicyStoreFilter::default())
+    Box::new(EgressPolicyStoreFilter {
+      policy: Rc::default(),
+      store_size: self.store_size,
+    })
   }
 }
 
 /// Per-stream HTTP filter instance for egress-policy-store.
-#[derive(Default)]
 pub struct EgressPolicyStoreFilter {
   pub policy: Rc<EgressPolicy>,
+  pub store_size: EnvoyGaugeId,
 }
 
-impl Drop for EgressPolicyStoreFilter {
-  fn drop(&mut self) {
-    if Rc::strong_count(&self.policy) == 2 {
-      GlobalEgressPolicyStore::get_local_store().remove(self.policy.hash);
+impl Default for EgressPolicyStoreFilter {
+  fn default() -> Self {
+    Self {
+      policy: Rc::default(),
+      store_size: EnvoyGaugeId(0),
     }
   }
 }
@@ -69,6 +76,7 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for EgressPolicyStoreFilter {
       self.policy = existing_policy;
     } else {
       local_store.store(policy.hash, &policy);
+      let _ = envoy_filter.increase_gauge(self.store_size, 1);
       self.policy = policy;
     }
     envoy_filter.set_filter_state_bytes(
@@ -85,15 +93,23 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for EgressPolicyStoreFilter {
   ) -> envoy_dynamic_module_type_on_http_filter_response_headers_status {
     envoy_dynamic_module_type_on_http_filter_response_headers_status::Continue
   }
+
+  fn on_stream_complete(&mut self, envoy_filter: &mut EHF) {
+    if Rc::strong_count(&self.policy) == 2 {
+      GlobalEgressPolicyStore::get_local_store().remove(self.policy.hash);
+      let _ = envoy_filter.decrease_gauge(self.store_size, 1);
+    }
+  }
 }
 
 /// Called when a new HTTP filter configuration is created.
 pub fn new_http_filter_config_fn<EC: EnvoyHttpFilterConfig, EHF: EnvoyHttpFilter>(
-  _envoy_filter_config: &mut EC,
+  envoy_filter_config: &mut EC,
   _name: &str,
   _config: &[u8],
 ) -> Option<Box<dyn HttpFilterConfig<EHF>>> {
-  Some(Box::new(EgressPolicyStoreFilterConfig))
+  let store_size = envoy_filter_config.define_gauge("store_size").ok()?;
+  Some(Box::new(EgressPolicyStoreFilterConfig { store_size }))
 }
 
 #[cfg(test)]
@@ -108,7 +124,13 @@ mod tests {
 
   #[test]
   fn test_on_request_headers_parses_policy() {
-    let mut filter = EgressPolicyStoreFilter::default();
+    let config = EgressPolicyStoreFilterConfig {
+      store_size: EnvoyGaugeId(1),
+    };
+    let mut filter = EgressPolicyStoreFilter {
+      policy: Rc::default(),
+      store_size: config.store_size,
+    };
     let mut mock_filter = MockEnvoyHttpFilter::default();
     mock_filter
       .expect_get_metadata_string()
@@ -122,6 +144,11 @@ mod tests {
           br#"{"rules":[{"pattern":"api.example.com","mode":"mitm"},{"pattern":"*.example.com","mode":"passthrough"}]}"#,
         ))
       })
+      .once();
+    mock_filter
+      .expect_increase_gauge()
+      .withf(|id, value| *id == EnvoyGaugeId(1) && *value == 1)
+      .returning(|_, _| Ok(()))
       .once();
     mock_filter
       .expect_set_filter_state_bytes()
@@ -162,8 +189,11 @@ mod tests {
       &filter.policy
     ));
 
-    // A second filter receiving the same policy reuses the stored Rc<EgressPolicy>.
-    let mut second_filter = EgressPolicyStoreFilter::default();
+    // A second filter receiving the same policy reuses the stored Rc<EgressPolicy> without incrementing store_size.
+    let mut second_filter = EgressPolicyStoreFilter {
+      policy: Rc::default(),
+      store_size: config.store_size,
+    };
     mock_filter
       .expect_get_metadata_string()
       .withf(|source, namespace, key| {
@@ -192,13 +222,20 @@ mod tests {
     );
     assert!(Rc::ptr_eq(&second_filter.policy, &filter.policy));
 
-    // Dropping the first filter keeps the policy in the local store while the second filter holds it.
+    // Completing and dropping the first filter keeps the policy in the local store while the second filter holds it.
+    filter.on_stream_complete(&mut mock_filter);
     drop(filter);
     assert!(GlobalEgressPolicyStore::get_local_store()
       .lookup(hash)
       .is_some());
 
-    // Dropping the last filter holding the policy removes it from the local store.
+    // Completing and dropping the last filter holding the policy decrements store_size and removes it from the local store.
+    mock_filter
+      .expect_decrease_gauge()
+      .withf(|id, value| *id == EnvoyGaugeId(1) && *value == 1)
+      .returning(|_, _| Ok(()))
+      .once();
+    second_filter.on_stream_complete(&mut mock_filter);
     drop(second_filter);
     assert!(GlobalEgressPolicyStore::get_local_store()
       .lookup(hash)
@@ -244,7 +281,9 @@ mod tests {
 
   #[test]
   fn test_on_response_headers() {
-    let config = EgressPolicyStoreFilterConfig;
+    let config = EgressPolicyStoreFilterConfig {
+      store_size: EnvoyGaugeId(0),
+    };
     let mut mock_filter = MockEnvoyHttpFilter::default();
     let mut filter = config.new_http_filter(&mut mock_filter);
     assert_eq!(
