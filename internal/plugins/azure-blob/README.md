@@ -94,6 +94,12 @@ the base manifest's `asset-staging` volume.
 The node identity needs `Storage Blob Data Reader` on each asset container
 that is not also a snapshot container.
 
+Without `--asset-containers`, atelet's plugin serves no assets and atelet gets
+`Unimplemented`: it still reads public `gs://` assets, such as the default
+gVisor release, anonymously, and fails any other asset URL. The `config/`
+component alone is therefore a snapshot-only install; see
+[Deployment](#deployment) for adding assets.
+
 ## Configuration
 
 | Flag | Environment fallback | Default | Purpose |
@@ -197,6 +203,28 @@ components:
 - ../../../internal/plugins/azure-blob/config
 ```
 
+To serve sandbox assets from blob containers as well, replace the
+`REPLACE_WITH_ASSET_CONTAINERS` placeholder in `config/assets/kustomization.yaml`
+with a comma-separated list of containers, grant the node identity read access
+to them, and list that component after the first:
+
+```yaml
+components:
+- ../../../internal/plugins/azure-blob/config
+- ../../../internal/plugins/azure-blob/config/assets
+```
+
+A `SandboxConfig` version then names each asset by its blob URL and sha256, for
+example:
+
+```yaml
+assets:
+  amd64:
+    vmlinux:
+      url: https://<account>.blob.core.windows.net/<container>/kata/vmlinux
+      sha256: <sha256 of the blob>
+```
+
 Then install from the repository root:
 
 ```bash
@@ -221,13 +249,6 @@ object storage settings of their own. atelet still needs the node's kubelet
 image credential provider from the chosen overlay to pull private actor
 images: `base` uses GKE's credential provider paths, and the kind overlay pulls
 actor images without credentials.
-
-This plugin has been run end to end on AKS with workload identity, the gVisor
-sandbox class and one node, through the kind overlay plus an AKS kubelet image
-credential provider for atelet: a golden snapshot, an actor restored from it,
-suspended, and resumed, then cleaned up. That run did not cover the micro-VM
-sandbox class or a restore on a different node from the one that took the
-snapshot.
 
 ## Actor templates
 
