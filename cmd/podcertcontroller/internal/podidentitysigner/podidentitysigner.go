@@ -106,10 +106,10 @@ func (h *Impl) MakeCert(ctx context.Context, pcr *certsv1beta1.PodCertificateReq
 		return fmt.Errorf("pod UID mismatch: expected %s, got %s", pcr.Spec.PodUID, pod.ObjectMeta.UID)
 	}
 	if pod.Spec.ServiceAccountName != pcr.Spec.ServiceAccountName {
-		return fmt.Errorf("pod ServiceAccount mismatch: expected %q, got %q", pcr.Spec.ServiceAccountName, pod.Spec.ServiceAccountName)
+		return fmt.Errorf("request is for ServiceAccount %q but pod %s/%s runs as %q", pcr.Spec.ServiceAccountName, pod.ObjectMeta.Namespace, pod.ObjectMeta.Name, pod.Spec.ServiceAccountName)
 	}
 	if pod.Spec.NodeName != string(pcr.Spec.NodeName) {
-		return fmt.Errorf("pod node mismatch: expected %q, got %q", pcr.Spec.NodeName, pod.Spec.NodeName)
+		return fmt.Errorf("request is for node %q but pod %s/%s is on node %q", pcr.Spec.NodeName, pod.ObjectMeta.Namespace, pod.ObjectMeta.Name, pod.Spec.NodeName)
 	}
 
 	subjectPublicKey, err := podcertificate.PublicKey(pcr)
