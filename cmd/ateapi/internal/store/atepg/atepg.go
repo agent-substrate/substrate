@@ -33,6 +33,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/authz"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/defaults"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/removedfields"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -344,12 +345,15 @@ type querier interface {
 
 // unmarshalStored decodes a stored proto, dropping fields this binary has no
 // descriptor for. This means a newer replica can have written such a field.
-// It also backfills defaults to make all resources are properly defaulted, even
-// the ones stored before a field with defaults was introduced.
+// A field the API removed that a client may still send is kept, so the client
+// reads back what it wrote (package removedfields). It also backfills defaults
+// to make all resources are properly defaulted, even the ones stored before a
+// field with defaults was introduced.
 func unmarshalStored(b []byte, m proto.Message) error {
-	if err := (proto.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(b, m); err != nil {
+	if err := proto.Unmarshal(b, m); err != nil {
 		return err
 	}
+	removedfields.DiscardUnknown(m.ProtoReflect())
 	defaults.Apply(m)
 	return nil
 }

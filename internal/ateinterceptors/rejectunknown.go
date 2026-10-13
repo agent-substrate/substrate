@@ -22,6 +22,7 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/principal"
+	"github.com/agent-substrate/substrate/internal/removedfields"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
@@ -31,38 +32,21 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
-// removedField is a field the API removed that a client built against an
-// older API may still send. It is matched by number and wire type, so a later
-// field that reuses the number with another type is never mistaken for it.
-type removedField struct {
-	name     protoreflect.Name
-	number   protowire.Number
-	wireType protowire.Type
-}
-
-// removedFields are dropped from a request before the unknown-field check, for
-// a transition: a client that still sets one keeps working, and the value is
-// ignored. Every other unknown field is refused.
-var removedFields = map[protoreflect.FullName][]removedField{
-	// on_pause: a pause captures the template's snapshot scope, so the value
-	// has nothing left to set.
-	"ateapi.SnapshotConfig": {{name: "on_pause", number: 1, wireType: protowire.VarintType}},
-}
-
 // removedFieldLogged holds the principal and field pairs already logged, so
 // each client is named once per process and not on every request.
 var removedFieldLogged sync.Map
 
 // RejectUnknownFieldsUnaryInterceptor refuses any request carrying a field
-// this binary has no descriptor for, at any level of nesting. A field in
-// removedFields is dropped and logged instead.
+// this binary has no descriptor for, at any level of nesting. A field the API
+// removed (package removedfields) is accepted and logged instead.
 func RejectUnknownFieldsUnaryInterceptor(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 	if msg, ok := req.(proto.Message); ok {
-		for _, path := range dropRemovedFields(msg) {
-			logRemovedField(ctx, info.FullMethod, path)
-		}
-		if errs := findUnknownFields(msg); len(errs) > 0 {
+		errs, removed := findUnknownFields(msg)
+		if len(errs) > 0 {
 			return nil, apierror.InvalidArgument("%v", errs.ToAggregate())
+		}
+		for _, path := range removed {
+			logRemovedField(ctx, info.FullMethod, path)
 		}
 	}
 	return handler(ctx, req)
@@ -82,58 +66,69 @@ func logRemovedField(ctx context.Context, method string, path *field.Path) {
 	)
 }
 
-// dropRemovedFields removes every field of removedFields from the unknown
-// fields of m and the messages it holds, and returns the path of each one it
-// removed.
-func dropRemovedFields(m proto.Message) []*field.Path {
+// findUnknownFields reports an error for every message in m, at every level of
+// nesting, that carries an unknown field other than a removed one, and
+// returns the path of each removed field it found. An unknown field on m
+// itself is reported at "request".
+func findUnknownFields(m proto.Message) (field.ErrorList, []*field.Path) {
 	r := m.ProtoReflect()
 	if !r.IsValid() {
-		return nil
+		return nil, nil
 	}
 
-	var dropped []*field.Path
-	_ = protorange.Range(r, func(p protopath.Values) error {
+	var errs field.ErrorList
+	var removed []*field.Path
+	if err := protorange.Range(r, func(p protopath.Values) error {
 		msg, ok := p.Index(-1).Value.Interface().(protoreflect.Message)
 		if !ok || len(msg.GetUnknown()) == 0 {
 			return nil
 		}
-		removed := removedFields[msg.Descriptor().FullName()]
-		if len(removed) == 0 {
+		path := toFieldPath(p.Path)
+		num, found, tolerated := firstRefusedField(msg.Descriptor().FullName(), msg.GetUnknown())
+		for _, f := range tolerated {
+			removed = append(removed, childPath(path, string(f.Name)))
+		}
+		if !found {
 			return nil
 		}
-		var kept protoreflect.RawFields
-		for b := msg.GetUnknown(); len(b) > 0; {
-			num, typ, n := protowire.ConsumeTag(b)
-			if n < 0 {
-				// Malformed: keep the rest for findUnknownFields to report.
-				kept = append(kept, b...)
-				break
-			}
-			vn := protowire.ConsumeFieldValue(num, typ, b[n:])
-			if vn < 0 {
-				kept = append(kept, b...)
-				break
-			}
-			if f, ok := matchRemoved(removed, num, typ); ok {
-				dropped = append(dropped, childPath(toFieldPath(p.Path), string(f.name)))
-			} else {
-				kept = append(kept, b[:n+vn]...)
-			}
-			b = b[n+vn:]
+		if path == nil {
+			// Use "request" for the root message which has no field path.
+			path = field.NewPath("request")
 		}
-		msg.SetUnknown(kept)
+		detail := "unknown field"
+		if num > 0 {
+			detail = "unknown field with protobuf tag " + strconv.Itoa(int(num))
+		}
+		errs = append(errs, field.Invalid(path, field.OmitValueType{}, detail))
 		return nil
-	})
-	return dropped
+	}); err != nil {
+		errs = append(errs, field.InternalError(field.NewPath("request"), err))
+	}
+	return errs, removed
 }
 
-func matchRemoved(removed []removedField, num protowire.Number, typ protowire.Type) (removedField, bool) {
-	for _, f := range removed {
-		if f.number == num && f.wireType == typ {
-			return f, true
+// firstRefusedField walks the unknown fields b of the message msg and returns
+// the number of the first one that is not a removed field (0 when b is
+// malformed there), whether there is one, and the removed fields b carries.
+func firstRefusedField(msg protoreflect.FullName, b protoreflect.RawFields) (protowire.Number, bool, []removedfields.Field) {
+	var tolerated []removedfields.Field
+	for len(b) > 0 {
+		num, typ, n := protowire.ConsumeTag(b)
+		if n < 0 {
+			return 0, true, tolerated
 		}
+		vn := protowire.ConsumeFieldValue(num, typ, b[n:])
+		if vn < 0 {
+			return num, true, tolerated
+		}
+		f, ok := removedfields.Lookup(msg, num, typ)
+		if !ok {
+			return num, true, tolerated
+		}
+		tolerated = append(tolerated, f)
+		b = b[n+vn:]
 	}
-	return removedField{}, false
+	return 0, false, tolerated
 }
 
 // childPath is p.Child(name), with a nil p (the root message) read as the
@@ -143,37 +138,6 @@ func childPath(p *field.Path, name string) *field.Path {
 		return field.NewPath("request", name)
 	}
 	return p.Child(name)
-}
-
-// findUnknownFields reports an error for every unknown field in m, at every
-// level of nesting. An unknown field on m itself is reported at "request".
-func findUnknownFields(m proto.Message) field.ErrorList {
-	r := m.ProtoReflect()
-	if !r.IsValid() {
-		return nil
-	}
-
-	var errs field.ErrorList
-	if err := protorange.Range(r, func(p protopath.Values) error {
-		msg, ok := p.Index(-1).Value.Interface().(protoreflect.Message)
-		if !ok || len(msg.GetUnknown()) == 0 {
-			return nil
-		}
-		path := toFieldPath(p.Path)
-		if path == nil {
-			// Use "request" for the root message which has no field path.
-			path = field.NewPath("request")
-		}
-		detail := "unknown field"
-		if num, _, n := protowire.ConsumeTag(msg.GetUnknown()); n > 0 {
-			detail = "unknown field with protobuf tag " + strconv.Itoa(int(num))
-		}
-		errs = append(errs, field.Invalid(path, field.OmitValueType{}, detail))
-		return nil
-	}); err != nil {
-		errs = append(errs, field.InternalError(field.NewPath("request"), err))
-	}
-	return errs
 }
 
 // toFieldPath renders a protopath as a field.Path. The root step renders as

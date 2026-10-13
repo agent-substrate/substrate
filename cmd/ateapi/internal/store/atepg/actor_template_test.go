@@ -15,6 +15,7 @@
 package atepg
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -24,6 +25,8 @@ import (
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
+	"google.golang.org/protobuf/encoding/protowire"
+	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/testing/protocmp"
 )
 
@@ -114,5 +117,37 @@ func TestGetActorTemplate_BackfillsDefaults(t *testing.T) {
 	}
 	if diff := cmp.Diff(want, page.Items[0].GetSnapshotConfig(), protocmp.Transform()); diff != "" {
 		t.Errorf("ListActorTemplates did not backfill snapshot_config defaults (-want +got):\n%s", diff)
+	}
+}
+
+// TestGetActorTemplate_KeepsRemovedOnPause stores a template whose
+// snapshot_config carries the removed on_pause, as a client built before its
+// removal writes it, next to another unknown field: a read returns on_pause as
+// it was written, so the client reads back what it wrote, and drops the other.
+func TestGetActorTemplate_KeepsRemovedOnPause(t *testing.T) {
+	s := setupPostgresPersistence(t)
+	ctx := context.Background()
+	createTestAtespace(t, s, "team-a")
+
+	onPause := protowire.AppendVarint(protowire.AppendTag(nil, 1, protowire.VarintType), 1)
+	other := protowire.AppendVarint(protowire.AppendTag(nil, 9999, protowire.VarintType), 1)
+	cfg := &ateapipb.SnapshotConfig{StorageLocation: "gs://my-bucket/snapshots"}
+	cfg.ProtoReflect().SetUnknown(append(append(protoreflect.RawFields{}, onPause...), other...))
+	if _, err := s.CreateActorTemplate(ctx, &ateapipb.ActorTemplate{
+		Metadata:       &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "template-a"},
+		SnapshotConfig: cfg,
+	}); err != nil {
+		t.Fatalf("CreateActorTemplate failed: %v", err)
+	}
+
+	stored, err := s.GetActorTemplate(ctx, resources.ActorTemplateRef{Atespace: "team-a", Name: "template-a"})
+	if err != nil {
+		t.Fatalf("GetActorTemplate failed: %v", err)
+	}
+	if got := stored.GetSnapshotConfig().ProtoReflect().GetUnknown(); !bytes.Equal(got, onPause) {
+		t.Errorf("stored snapshot_config unknown fields = %x, want only on_pause %x", got, onPause)
+	}
+	if got, want := stored.GetSnapshotConfig().GetStorageLocation(), "gs://my-bucket/snapshots"; got != want {
+		t.Errorf("storage_location = %q, want %q", got, want)
 	}
 }

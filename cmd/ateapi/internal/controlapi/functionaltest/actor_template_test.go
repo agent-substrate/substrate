@@ -15,6 +15,7 @@
 package functionaltest
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"testing"
@@ -344,7 +345,8 @@ func TestActorLifecycleWithoutGoldenSnapshot(t *testing.T) {
 
 // TestCreateActorTemplate_RemovedOnPause sends snapshot_config.on_pause (field
 // 1, a varint) on the wire, as a client built before its removal does: the
-// template is created with the field ignored, and any other unknown field is
+// template is created and returns the field as it was sent, on create and on
+// get, so the client reads back what it wrote; any other unknown field is
 // still refused.
 func TestCreateActorTemplate_RemovedOnPause(t *testing.T) {
 	ns := namespaceForTest("ns-template-removed-on-pause")
@@ -374,8 +376,15 @@ func TestCreateActorTemplate_RemovedOnPause(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateActorTemplate with on_pause: %v", err)
 	}
-	if unknown := created.GetSnapshotConfig().ProtoReflect().GetUnknown(); len(unknown) != 0 {
-		t.Errorf("created snapshot_config carries unknown fields %x, want none", unknown)
+	if got := created.GetSnapshotConfig().ProtoReflect().GetUnknown(); !bytes.Equal(got, onPause) {
+		t.Errorf("created snapshot_config unknown fields = %x, want %x", got, onPause)
+	}
+	got, err := tc.client.GetActorTemplate(ctx, &ateapipb.GetActorTemplateRequest{ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-on-pause"}})
+	if err != nil {
+		t.Fatalf("GetActorTemplate: %v", err)
+	}
+	if got := got.GetSnapshotConfig().ProtoReflect().GetUnknown(); !bytes.Equal(got, onPause) {
+		t.Errorf("stored snapshot_config unknown fields = %x, want %x", got, onPause)
 	}
 	if got, want := created.GetSnapshotConfig().GetStorageLocation(), "gs://my-bucket/snapshots"; got != want {
 		t.Errorf("storage_location = %q, want %q", got, want)

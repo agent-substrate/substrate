@@ -15,6 +15,7 @@
 package ateinterceptors
 
 import (
+	"bytes"
 	"context"
 	"strings"
 	"testing"
@@ -147,7 +148,7 @@ func TestFindUnknownFields(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := findUnknownFields(tt.in())
+			got, _ := findUnknownFields(tt.in())
 			field.ErrorMatcher{}.ByType().ByField().ByOrigin().Test(t, tt.want, got)
 		})
 	}
@@ -224,7 +225,7 @@ func TestRejectUnknownFieldsUnaryInterceptorRemovedFields(t *testing.T) {
 	info := &grpc.UnaryServerInfo{FullMethod: "/ateapi.Control/CreateActorTemplate"}
 	ctx := principal.InjectContext(context.Background(), principal.PrincipalInfo{ID: "spiffe://cluster.local/ns/kagent/sa/kagent-controller", Kind: principal.KindMTLS})
 
-	t.Run("on_pause is accepted and dropped", func(t *testing.T) {
+	t.Run("on_pause is accepted and kept as sent", func(t *testing.T) {
 		removedFieldLogged.Clear()
 		log := captureDefaultLog(t)
 		var got *ateapipb.CreateActorTemplateRequest
@@ -238,8 +239,10 @@ func TestRejectUnknownFieldsUnaryInterceptorRemovedFields(t *testing.T) {
 				t.Fatalf("interceptor error = %v, want nil", err)
 			}
 		}
-		if unknown := got.GetActorTemplate().GetSnapshotConfig().ProtoReflect().GetUnknown(); len(unknown) != 0 {
-			t.Errorf("snapshot_config unknown fields = %x, want none", unknown)
+		// Kept, so the stored template returns it to a client that compares
+		// what it reads back with what it wrote.
+		if got, want := got.GetActorTemplate().GetSnapshotConfig().ProtoReflect().GetUnknown(), onPause(); !bytes.Equal(got, want) {
+			t.Errorf("snapshot_config unknown fields = %x, want %x", got, want)
 		}
 		if got, want := got.GetActorTemplate().GetSnapshotConfig().GetStorageLocation(), "s3://bucket/snapshots"; got != want {
 			t.Errorf("storage_location = %q, want %q", got, want)
