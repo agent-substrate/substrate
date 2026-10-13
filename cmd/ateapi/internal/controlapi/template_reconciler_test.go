@@ -148,6 +148,7 @@ func (s *fakeTemplateStore) storedStatus(t *testing.T, ref resources.ActorTempla
 // goldenState / goldenSnapshot.
 type fakeGoldenControl struct {
 	mu           sync.Mutex
+	pausedLocal  bool
 	tag          *ateapi.Tag
 	tagErr       error
 	deleteErr    error
@@ -155,17 +156,23 @@ type fakeGoldenControl struct {
 	tagReqs      []*ateapi.CreateTagRequest
 	deleteReqs   []*ateapi.DeleteActorRequest
 
-	createErr  error
-	resumeErr  error
-	suspendErr error
-	getErr     error
+	createErr          error
+	resumeErr          error
+	suspendErr         error
+	getErr             error
+	deferredSuspendErr error
 
 	// exists seeds whether the golden actor pre-exists; goldenState and
 	// goldenSnapshot are its observed state and external snapshot while it
 	// does.
-	exists         bool
-	goldenState    ateapi.ActorState
-	goldenSnapshot string
+	actorUID            string
+	actorTemplate       *ateapi.ObjectRef
+	generation          int32
+	version             int64
+	deferredSuspendReqs []*ateapi.SuspendActorRequest
+	exists              bool
+	goldenState         ateapi.ActorState
+	goldenSnapshot      string
 	// snapshot is the external snapshot a completed suspend produces; empty
 	// simulates a suspend that wrote none.
 	snapshot string
@@ -183,13 +190,48 @@ func (c *fakeGoldenControl) CreateAtespace(_ context.Context, req *ateapi.Create
 	return req.GetAtespace(), nil
 }
 
+func (c *fakeGoldenControl) goldenActorUID() string {
+	if c.actorUID != "" {
+		return c.actorUID
+	}
+	return someActorUID
+}
+
+func (c *fakeGoldenControl) goldenActorVersion() int64 {
+	if c.version == 0 {
+		return 1
+	}
+	return c.version
+}
+
+func (c *fakeGoldenControl) goldenActorTemplate() *ateapi.ObjectRef {
+	if c.actorTemplate != nil {
+		return c.actorTemplate
+	}
+	return testTemplateRef.ToObjectRef()
+}
+
 func (c *fakeGoldenControl) goldenActorStatus() *ateapi.ActorStatus {
-	st := &ateapi.ActorStatus{State: c.goldenState}
-	if c.goldenSnapshot != "" {
+	st := &ateapi.ActorStatus{State: c.goldenState, LastAssignedGeneration: c.generation}
+	if c.goldenState == ateapi.ActorState_ACTOR_STATE_SUSPENDING && st.LastAssignedGeneration == 0 {
 		st.LastAssignedGeneration = 1
-		st.Snapshots = []*ateapi.Snapshot{
-			newDurableSnapshot(1, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, testTemplateUID, "golden-snapshot", c.goldenSnapshot, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+	}
+	if c.goldenSnapshot != "" {
+		if st.LastAssignedGeneration == 0 {
+			st.LastAssignedGeneration = 1
 		}
+		st.Snapshots = []*ateapi.Snapshot{
+			newDurableSnapshot(st.LastAssignedGeneration, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, testTemplateUID, "golden-snapshot", c.goldenSnapshot, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED),
+		}
+
+	}
+	if c.pausedLocal {
+		// The pause leaves the actor SUSPENDED with a node-local snapshot
+		// and no durable copy.
+		snap := newDurableSnapshot(st.LastAssignedGeneration, ateapi.SnapshotOwner_SNAPSHOT_OWNER_ACTOR, ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, testTemplateUID, "pause-snapshot", "", ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING)
+		snap.DurableSnapshot = nil
+		snap.Locality = "node-1"
+		st.Snapshots = append(st.Snapshots, snap)
 	}
 	return st
 }
@@ -201,6 +243,9 @@ func (c *fakeGoldenControl) CreateActor(_ context.Context, req *ateapi.CreateAct
 	// AlreadyExists means the actor does exist (e.g. a racing creation).
 	if c.createErr == nil || apierror.Code(c.createErr) == codes.AlreadyExists {
 		c.exists = true
+		c.actorTemplate = proto.CloneOf(req.GetActor().GetActorTemplate())
+		c.generation = 0
+		c.goldenSnapshot = ""
 		c.goldenState = ateapi.ActorState_ACTOR_STATE_SUSPENDED
 	}
 	if c.createErr != nil {
@@ -209,8 +254,9 @@ func (c *fakeGoldenControl) CreateActor(_ context.Context, req *ateapi.CreateAct
 	// Like the real Control service, return the stored actor: metadata plus
 	// a status observing the initial SUSPENDED state.
 	return &ateapi.Actor{
-		Metadata: req.GetActor().GetMetadata(),
-		Status:   c.goldenActorStatus(),
+		Metadata:      &ateapi.ResourceMetadata{Atespace: req.GetActor().GetMetadata().GetAtespace(), Name: req.GetActor().GetMetadata().GetName(), Uid: c.goldenActorUID(), Version: c.goldenActorVersion()},
+		Status:        c.goldenActorStatus(),
+		ActorTemplate: c.goldenActorTemplate(),
 	}, nil
 }
 
@@ -224,8 +270,9 @@ func (c *fakeGoldenControl) GetActor(_ context.Context, req *ateapi.GetActorRequ
 		return nil, apierror.NotFound("no such actor")
 	}
 	return &ateapi.Actor{
-		Metadata: &ateapi.ResourceMetadata{Atespace: req.GetActor().GetAtespace(), Name: req.GetActor().GetName()},
-		Status:   c.goldenActorStatus(),
+		Metadata:      &ateapi.ResourceMetadata{Atespace: req.GetActor().GetAtespace(), Name: req.GetActor().GetName(), Uid: c.goldenActorUID(), Version: c.goldenActorVersion()},
+		Status:        c.goldenActorStatus(),
+		ActorTemplate: c.goldenActorTemplate(),
 	}, nil
 }
 
@@ -236,8 +283,15 @@ func (c *fakeGoldenControl) ResumeActor(_ context.Context, req *ateapi.ResumeAct
 	if c.resumeErr != nil {
 		return nil, c.resumeErr
 	}
-	c.goldenState = ateapi.ActorState_ACTOR_STATE_RUNNING
+	if c.goldenState != ateapi.ActorState_ACTOR_STATE_RUNNING {
+		c.version = c.goldenActorVersion() + 1
+		c.goldenState = ateapi.ActorState_ACTOR_STATE_RUNNING
+	}
 	return &ateapi.ResumeActorResponse{}, nil
+}
+
+func (c *fakeGoldenControl) SuspendActor(ctx context.Context, req *ateapi.SuspendActorRequest) (*ateapi.SuspendActorResponse, error) {
+	return c.suspendActor(ctx, req, nil)
 }
 
 func (c *fakeGoldenControl) CreateActorEgressPolicy(context.Context, *ateapi.CreateActorEgressPolicyRequest) (*ateapi.EgressPolicy, error) {
@@ -246,22 +300,6 @@ func (c *fakeGoldenControl) CreateActorEgressPolicy(context.Context, *ateapi.Cre
 
 func (c *fakeGoldenControl) GetActorEgressPolicy(context.Context, *ateapi.GetActorEgressPolicyRequest) (*ateapi.EgressPolicy, error) {
 	return nil, errors.New("unexpected golden egress policy lookup")
-}
-
-func (c *fakeGoldenControl) SuspendActor(_ context.Context, req *ateapi.SuspendActorRequest) (*ateapi.SuspendActorResponse, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.suspendReqs = append(c.suspendReqs, req)
-	if c.suspendErr != nil {
-		return nil, c.suspendErr
-	}
-	c.goldenState = ateapi.ActorState_ACTOR_STATE_SUSPENDED
-	if c.goldenSnapshot == "" {
-		c.goldenSnapshot = c.snapshot
-	}
-	return &ateapi.SuspendActorResponse{
-		Actor: &ateapi.Actor{Status: c.goldenActorStatus()},
-	}, nil
 }
 
 func (c *fakeGoldenControl) GetTag(_ context.Context, _ *ateapi.GetTagRequest) (*ateapi.Tag, error) {
@@ -273,9 +311,12 @@ func (c *fakeGoldenControl) GetTag(_ context.Context, _ *ateapi.GetTagRequest) (
 	return proto.CloneOf(c.tag), nil
 }
 
-func (c *fakeGoldenControl) CreateTag(_ context.Context, req *ateapi.CreateTagRequest) (*ateapi.Tag, error) {
+func (c *fakeGoldenControl) createTag(_ context.Context, req *ateapi.CreateTagRequest, precondition *store.Precondition) (*ateapi.Tag, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if precondition != nil && (precondition.UID != c.goldenActorUID() || precondition.Version != c.goldenActorVersion()) {
+		return nil, apierror.Aborted("actor revision changed")
+	}
 	c.tagReqs = append(c.tagReqs, req)
 	if c.tagErr != nil {
 		return nil, c.tagErr
@@ -311,6 +352,53 @@ func (c *fakeGoldenControl) DeleteActor(_ context.Context, req *ateapi.DeleteAct
 	}
 	c.exists = false
 	return &ateapi.Actor{}, nil
+}
+
+func (c *fakeGoldenControl) suspendActor(_ context.Context, req *ateapi.SuspendActorRequest, precondition *store.Precondition) (*ateapi.SuspendActorResponse, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if precondition != nil && (precondition.UID != c.goldenActorUID() || precondition.Version != c.goldenActorVersion()) {
+		return nil, apierror.Aborted("actor revision changed")
+	}
+	c.suspendReqs = append(c.suspendReqs, req)
+	if c.suspendErr != nil {
+		return nil, c.suspendErr
+	}
+	if c.goldenState == ateapi.ActorState_ACTOR_STATE_RUNNING {
+		c.generation = c.goldenActorStatus().GetLastAssignedGeneration() + 1
+		c.version = c.goldenActorVersion() + 1
+	} else {
+		c.generation = c.goldenActorStatus().GetLastAssignedGeneration()
+	}
+	c.goldenState = ateapi.ActorState_ACTOR_STATE_SUSPENDED
+	if c.goldenSnapshot == "" {
+		c.goldenSnapshot = c.snapshot
+	}
+	return &ateapi.SuspendActorResponse{
+		Actor: &ateapi.Actor{Metadata: &ateapi.ResourceMetadata{Atespace: req.GetActor().GetAtespace(), Name: req.GetActor().GetName(), Uid: c.goldenActorUID(), Version: c.goldenActorVersion()}, Status: c.goldenActorStatus(), ActorTemplate: c.goldenActorTemplate()},
+	}, nil
+}
+
+func (c *fakeGoldenControl) suspendDeferred(_ context.Context, req *ateapi.SuspendActorRequest) (*ateapi.SuspendActorResponse, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.deferredSuspendReqs = append(c.deferredSuspendReqs, req)
+	if c.deferredSuspendErr != nil {
+		return nil, c.deferredSuspendErr
+	}
+	c.generation = c.goldenActorStatus().GetLastAssignedGeneration() + 1
+	c.version = c.goldenActorVersion() + 1
+	c.pausedLocal = true
+	c.goldenState = ateapi.ActorState_ACTOR_STATE_SUSPENDED
+	return &ateapi.SuspendActorResponse{}, nil
+}
+
+func (c *fakeGoldenControl) RevertActor(_ context.Context, _ *ateapi.RevertActorRequest) (*ateapi.RevertActorResponse, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.goldenState = ateapi.ActorState_ACTOR_STATE_SUSPENDED
+	c.version = c.goldenActorVersion() + 1
+	return &ateapi.RevertActorResponse{}, nil
 }
 
 func (c *fakeGoldenControl) callCounts() (creates, resumes, suspends int) {
@@ -367,7 +455,10 @@ func seededGoldenStatus(tmpl *ateapi.ActorTemplate) *ateapi.GoldenSnapshotStatus
 
 func withSnapshotDeadline(at time.Time) func(*ateapi.ActorTemplate) {
 	return func(tmpl *ateapi.ActorTemplate) {
-		seededGoldenStatus(tmpl).SnapshotTime = timestamppb.New(at)
+		status := seededGoldenStatus(tmpl)
+		status.SnapshotTime = timestamppb.New(at)
+		status.WarmupActorUid = someActorUID
+		status.WarmupActorVersion = 1
 	}
 }
 
@@ -493,17 +584,20 @@ func TestReconcileOne(t *testing.T) {
 			wantSuspends: 1,
 		},
 		{
-			name:         "suspending golden actor is completed and recorded",
+			name:         "suspending golden actor is completed and rewarmed",
 			template:     testTemplate(),
 			control:      &fakeGoldenControl{exists: true, goldenState: ateapi.ActorState_ACTOR_STATE_SUSPENDING, snapshot: goldenSnapshot},
 			wantTag:      true,
-			wantSuspends: 1,
+			wantResumes:  1,
+			wantSuspends: 2,
 		},
 		{
-			name:     "suspended golden actor with a snapshot is recorded without more control calls",
-			template: testTemplate(),
-			control:  &fakeGoldenControl{exists: true, goldenState: ateapi.ActorState_ACTOR_STATE_SUSPENDED, goldenSnapshot: goldenSnapshot},
-			wantTag:  true,
+			name:         "suspended golden actor with a snapshot is rewarmed before capture",
+			template:     testTemplate(),
+			control:      &fakeGoldenControl{exists: true, goldenState: ateapi.ActorState_ACTOR_STATE_SUSPENDED, goldenSnapshot: goldenSnapshot},
+			wantTag:      true,
+			wantResumes:  1,
+			wantSuspends: 1,
 		},
 		{
 			name:        "create AlreadyExists requeues for the retry to observe",
@@ -1190,8 +1284,8 @@ func TestReconcileOne_GoldenTagRecovery(t *testing.T) {
 			if tagDurableSnapshotURI(control.tag, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED) == "" {
 				t.Fatal("golden tag has no snapshot")
 			}
-			if len(control.createReqs) != 0 || len(control.resumeReqs) != 0 || len(control.suspendReqs) != 0 {
-				t.Fatal("repeated golden actor warmup")
+			if tagDurableSnapshotURI(tt.tag, ateapi.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED) != "" && (len(control.createReqs) != 0 || len(control.resumeReqs) != 0 || len(control.suspendReqs) != 0) {
+				t.Fatal("repeated warmup despite a completed tag")
 			}
 			if got := len(control.tagReqs); got != tt.wantCreateTags {
 				t.Fatalf("CreateTag calls = %d, want %d", got, tt.wantCreateTags)

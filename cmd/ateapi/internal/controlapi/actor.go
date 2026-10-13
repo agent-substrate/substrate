@@ -487,13 +487,17 @@ func (s *RPCService) ResumeActor(ctx context.Context, req *ateapi.ResumeActorReq
 }
 
 func (s *RPCService) SuspendActor(ctx context.Context, req *ateapi.SuspendActorRequest) (*ateapi.SuspendActorResponse, error) {
+	return s.suspendActor(ctx, req, nil)
+}
+
+func (s *RPCService) suspendActor(ctx context.Context, req *ateapi.SuspendActorRequest, precondition *store.Precondition) (*ateapi.SuspendActorResponse, error) {
 	if errs := apivalidation.ValidateSuspendActorRequest(ctx, req); len(errs) > 0 {
 		return nil, resources.ToAPIError(errs)
 	}
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	setSpanActorRefAttributes(ctx, actorRef)
 
-	actor, err := s.actorWorkflow.SuspendActor(ctx, actorRef, suspendModeFromOptions(req.GetOptions()))
+	actor, err := s.actorWorkflow.SuspendActor(ctx, actorRef, suspendModeFromOptions(req.GetOptions()), precondition)
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, apierror.Aborted("concurrent update conflict, please retry")
