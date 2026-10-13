@@ -38,6 +38,7 @@ import (
 // resumeSnapshotSource is the boot source resolved once by loadActorForResume
 // and passed by value to the restore step — never mutated after resolution.
 type resumeSnapshotSource struct {
+	SnapshotUUID string
 	// SnapshotURI is the storage location of the durable snapshot to restore
 	// from: the actor's latest snapshot, including a tag borrowed at creation.
 	// Zero means cold boot from the spec (unless the actor holds a local
@@ -106,6 +107,9 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 	if wasRunning = actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_RUNNING; wasRunning {
 		return actor, false, nil
 	}
+	if err = checkResumable(actorRef, actor); err != nil {
+		return nil, false, err
+	}
 	var created *ateapipb.Actor
 	if created, err = w.ensureVolumesCreated(leaseCtx, actorRef, actor, actorTemplate); err != nil {
 		return nil, false, err
@@ -113,7 +117,11 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 	actor = created
 	var worker *ateapipb.Worker
 	var assigned *ateapipb.Actor
-	if assigned, worker, err = w.ensureWorkerAssigned(leaseCtx, actorRef, actor, actorTemplate); err != nil {
+	assigned, worker, err = w.ensureWorkerAssigned(leaseCtx, actorRef, actor, actorTemplate)
+	if err != nil && shouldRescheduleOffNode(actor, err) {
+		assigned, worker, src, err = w.rescheduleOffNode(leaseCtx, actorRef, actor, actorTemplate, err)
+	}
+	if err != nil {
 		return nil, false, err
 	}
 	actor = assigned
@@ -172,17 +180,103 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 	if err != nil {
 		return nil, nil, src, err
 	}
-	if snap := findLatestDurableSnapshot(actor.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED); snap != nil {
-		st := snap.GetDurableSnapshot()
-		if src.SnapshotURI, err = resources.ParseSnapshotURI(st.GetObject().GetSnapshotUri()); err != nil {
-			return nil, nil, src, apierror.DataLoss("Actor %s external snapshot: %v", actorRef, err)
-		}
-		src.Fidelity = snap.GetFidelity()
-		capturedUnder := snap.GetActorTemplateUid()
-		src.TemplateReplaced = capturedUnder != "" && capturedUnder != actorTemplate.GetMetadata().GetUid()
+	if src, err = resumeSourceFor(actorRef, actor, actorTemplate); err != nil {
+		return nil, nil, src, err
 	}
-
 	return actor, actorTemplate, src, nil
+}
+
+// resumeSourceFor resolves the durable snapshot the actor would restore from.
+func resumeSourceFor(actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (resumeSnapshotSource, error) {
+	var src resumeSnapshotSource
+	snap := findLatestDurableSnapshot(actor.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_COMPLETED)
+	if snap == nil {
+		return src, nil
+	}
+	uri, err := resources.ParseSnapshotURI(snap.GetDurableSnapshot().GetObject().GetSnapshotUri())
+	if err != nil {
+		return src, apierror.DataLoss("Actor %s external snapshot: %v", actorRef, err)
+	}
+	src.SnapshotURI = uri
+	src.SnapshotUUID = snap.GetUuid()
+	src.Fidelity = snap.GetFidelity()
+	capturedUnder := snap.GetActorTemplateUid()
+	src.TemplateReplaced = capturedUnder != "" && capturedUnder != actorTemplate.GetMetadata().GetUid()
+	return src, nil
+}
+
+// checkResumable rejects an actor that resume cannot take: only a PAUSED or
+// SUSPENDED actor starts a resume, and a RESUMING one is a resume to finish.
+func checkResumable(actorRef resources.ActorRef, actor *ateapipb.Actor) error {
+	switch state := actor.GetStatus().GetState(); state {
+	case ateapipb.ActorState_ACTOR_STATE_PAUSED, ateapipb.ActorState_ACTOR_STATE_SUSPENDED, ateapipb.ActorState_ACTOR_STATE_RESUMING:
+		return nil
+	case ateapipb.ActorState_ACTOR_STATE_SUSPENDING:
+		// A suspend did not finish, maybe one a resume started to move the
+		// actor off a full node. Only SuspendActor knows how to finish it.
+		return apierror.FailedPrecondition("Actor %s is %s: call SuspendActor to finish the suspend, then resume it", actorRef, state)
+	default:
+		return apierror.FailedPrecondition("Actor %s cannot be resumed from %s (want %s or %s)", actorRef, state, ateapipb.ActorState_ACTOR_STATE_PAUSED, ateapipb.ActorState_ACTOR_STATE_SUSPENDED)
+	}
+}
+
+// shouldRescheduleOffNode reports true if a failed worker assignment should
+// suspend the actor off the node holding its local snapshot and try again on
+// any node: the actor is PAUSED there, and that node has no room for it.
+func shouldRescheduleOffNode(actor *ateapipb.Actor, assignErr error) bool {
+	return errors.Is(assignErr, errNoWorkerRoom) &&
+		actor.GetStatus().GetState() == ateapipb.ActorState_ACTOR_STATE_PAUSED &&
+		actor.GetStatus().GetAssignedNode() != "" &&
+		findLatestLocalSnapshot(actor.GetStatus()) != nil
+}
+
+// rescheduleOffNode suspends a PAUSED actor off its full node and places it
+// on any node, when some node has room for it. Otherwise it returns assignErr
+// and the actor stays PAUSED: a suspend would cost an upload and the local
+// snapshot, and still leave the actor without a worker.
+func (w *ActorWorkflow) rescheduleOffNode(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate, assignErr error) (*ateapipb.Actor, *ateapipb.Worker, resumeSnapshotSource, error) {
+	room, err := w.anyNodeHasRoom(ctx, actor, actorTemplate)
+	if err != nil {
+		return nil, nil, resumeSnapshotSource{}, err
+	}
+	if !room {
+		return nil, nil, resumeSnapshotSource{}, assignErr
+	}
+	return w.suspendAndAssign(ctx, actorRef, actor, actorTemplate)
+}
+
+// anyNodeHasRoom asks the scheduler, without claiming a worker, whether a
+// worker on any node has room for the actor.
+func (w *ActorWorkflow) anyNodeHasRoom(ctx context.Context, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (bool, error) {
+	constraints, err := schedulingConstraints(actor, actorTemplate)
+	if err != nil {
+		return false, err
+	}
+	constraints.RequiredNodes = nil
+	if _, err := w.scheduler.Schedule(ctx, constraints); err != nil {
+		if errors.Is(err, scheduling.ErrNoCapacity) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// suspendAndAssign suspends a PAUSED actor, moving its local snapshot to
+// durable storage so it is no longer pinned to the node, then assigns it a
+// worker on any node. It also returns the durable snapshot the actor now
+// restores from.
+func (w *ActorWorkflow) suspendAndAssign(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *ateapipb.ActorTemplate) (*ateapipb.Actor, *ateapipb.Worker, resumeSnapshotSource, error) {
+	suspended, err := w.suspendPausedActor(ctx, actorRef, actor, actorTemplate)
+	if err != nil {
+		return nil, nil, resumeSnapshotSource{}, err
+	}
+	src, err := resumeSourceFor(actorRef, suspended, actorTemplate)
+	if err != nil {
+		return nil, nil, src, err
+	}
+	assigned, worker, err := w.ensureWorkerAssigned(ctx, actorRef, suspended, actorTemplate)
+	return assigned, worker, src, err
 }
 
 // ensureVolumesCreated provisions any initial actor volumes that are in
@@ -489,7 +583,7 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 		if err != nil {
 			if errors.Is(err, scheduling.ErrNoCapacity) {
 				outcome = ateattr.SchedulerOutcomeNoCapacity
-				return nil, nil, apierror.ResourceExhausted("no worker has room for the actor")
+				return nil, nil, apierror.ResourceExhausted("%w", errNoWorkerRoom)
 			}
 			return nil, nil, err
 		}
@@ -563,6 +657,10 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 	logActorStateChanged(ctx, storedActor, ateattr.OperationResume)
 	return storedActor, assignedWorker, nil
 }
+
+// errNoWorkerRoom reports that the scheduler found no worker with room for the
+// actor under its constraints.
+var errNoWorkerRoom = errors.New("no worker has room for the actor")
 
 // errWorkerFilledUp reports that the Worker the scheduler picked would not take
 // the Actor once the store asked under its row lock. Retryable: the next
@@ -699,6 +797,7 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 		slog.InfoContext(ctx, "Actor has snapshot; Restoring from snapshot")
 		tele.SnapshotKind = ateattr.SnapshotKindLocal
 
+		fidelity := fidelityToAtelet(localSnap.GetFidelity())
 		req := &ateletpb.RestoreRequest{
 			WorkerPodUid:          assignment.GetWorkerPodUid(),
 			Atespace:              actor.GetMetadata().GetAtespace(),
@@ -706,16 +805,17 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			ActorTemplateAtespace: actor.GetActorTemplate().GetAtespace(),
 			ActorTemplateName:     actor.GetActorTemplate().GetName(),
 			Spec:                  workloadSpec,
-			SandboxAssets:         sandboxAssets,
-			ActorUid:              actor.GetMetadata().Uid,
-			EgressGateway:         egressGateway,
-			CpuMilli:              cpuMilli,
-			MemoryBytes:           memBytes,
+			Snapshot: &ateletpb.Snapshot{
+				SnapshotUuid: localSnap.GetUuid(),
+				Fidelity:     fidelity,
+			},
+			SandboxAssets: sandboxAssets,
+			ActorUid:      actor.GetMetadata().Uid,
+			EgressGateway: egressGateway,
+			CpuMilli:      cpuMilli,
+			MemoryBytes:   memBytes,
 		}
-		req.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
-		req.LocalConfig = &ateletpb.LocalCheckpointConfiguration{SnapshotName: localSnap.GetUuid()}
-		req.Fidelity = fidelityToAtelet(localSnap.GetFidelity())
-		tele.WireFidelity = ateattr.SnapshotFidelityValue(req.Fidelity)
+		tele.WireFidelity = ateattr.SnapshotFidelityValue(fidelity)
 
 		if _, err = client.Restore(ctx, req); err != nil {
 			return tele, handleAteletError(ctx, w.store, actorRef, ateattr.OperationResume, "Restore", false, err)
@@ -736,11 +836,13 @@ func (w *ActorWorkflow) ensureAteletRestored(ctx context.Context, actorRef resou
 			ActorTemplateAtespace: actor.GetActorTemplate().GetAtespace(),
 			ActorTemplateName:     actor.GetActorTemplate().GetName(),
 			Spec:                  workloadSpec,
-			Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
-			ExternalConfig: &ateletpb.ExternalRestoreConfiguration{
-				SnapshotUri: src.SnapshotURI.String(),
+			Snapshot: &ateletpb.Snapshot{
+				SnapshotUuid: src.SnapshotUUID,
+				Fidelity:     scope,
+				Object: &ateletpb.ObjectStorage{
+					SnapshotUri: src.SnapshotURI.String(),
+				},
 			},
-			Fidelity:      scope,
 			SandboxAssets: sandboxAssets,
 			ActorUid:      actor.GetMetadata().Uid,
 			EgressGateway: egressGateway,
