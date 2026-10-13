@@ -8,7 +8,9 @@ This directory contains the build definition and custom extensions for the Envoy
 cmd/dataplane/envoy/
 ├── Dockerfile                       # Multi-stage build for the Envoy dataplane image
 └── dynamic-modules/
-    └── egress-policy/               # Rust Envoy Dynamic Module for egress policy enforcement
+    ├── Cargo.toml                   # Rust Cargo workspace manifest
+    ├── egress-policy/               # Rust Envoy Dynamic Module for egress policy enforcement
+    └── egress-policy-store/         # Rust Envoy HTTP Filter Dynamic Module for egress policy store
 ```
 
 - **`Dockerfile`**: Multi-stage container build that:

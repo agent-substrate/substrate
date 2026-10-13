@@ -1,0 +1,102 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//! The egress-policy-store HTTP filter dynamic module.
+
+use envoy_proxy_dynamic_modules_rust_sdk::{
+  abi::{
+    envoy_dynamic_module_type_on_http_filter_request_headers_status,
+    envoy_dynamic_module_type_on_http_filter_response_headers_status,
+  },
+  declare_init_functions, EnvoyHttpFilter, EnvoyHttpFilterConfig, HttpFilter, HttpFilterConfig,
+};
+
+/// Configuration for the egress-policy-store HTTP filter.
+pub struct EgressPolicyStoreFilterConfig;
+
+impl<EHF: EnvoyHttpFilter> HttpFilterConfig<EHF> for EgressPolicyStoreFilterConfig {
+  fn new_http_filter(&self, _envoy: &mut EHF) -> Box<dyn HttpFilter<EHF>> {
+    Box::new(EgressPolicyStoreFilter)
+  }
+}
+
+/// Per-stream HTTP filter instance for egress-policy-store.
+pub struct EgressPolicyStoreFilter;
+
+impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for EgressPolicyStoreFilter {
+  fn on_request_headers(
+    &mut self,
+    _envoy_filter: &mut EHF,
+    _end_of_stream: bool,
+  ) -> envoy_dynamic_module_type_on_http_filter_request_headers_status {
+    envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue
+  }
+
+  fn on_response_headers(
+    &mut self,
+    _envoy_filter: &mut EHF,
+    _end_of_stream: bool,
+  ) -> envoy_dynamic_module_type_on_http_filter_response_headers_status {
+    envoy_dynamic_module_type_on_http_filter_response_headers_status::Continue
+  }
+}
+
+declare_init_functions!(init, new_http_filter_config_fn);
+
+/// Called when the dynamic module is loaded into Envoy.
+fn init() -> bool {
+  true
+}
+
+/// Called when a new HTTP filter configuration is created.
+fn new_http_filter_config_fn<EC: EnvoyHttpFilterConfig, EHF: EnvoyHttpFilter>(
+  _envoy_filter_config: &mut EC,
+  _name: &str,
+  _config: &[u8],
+) -> Option<Box<dyn HttpFilterConfig<EHF>>> {
+  Some(Box::new(EgressPolicyStoreFilterConfig))
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use envoy_proxy_dynamic_modules_rust_sdk::MockEnvoyHttpFilter;
+
+  #[test]
+  fn test_init() {
+    assert!(init());
+  }
+
+  #[test]
+  fn test_on_request_headers() {
+    let config = EgressPolicyStoreFilterConfig;
+    let mut mock_filter = MockEnvoyHttpFilter::default();
+    let mut filter = config.new_http_filter(&mut mock_filter);
+    assert_eq!(
+      filter.on_request_headers(&mut mock_filter, false),
+      envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue
+    );
+  }
+
+  #[test]
+  fn test_on_response_headers() {
+    let config = EgressPolicyStoreFilterConfig;
+    let mut mock_filter = MockEnvoyHttpFilter::default();
+    let mut filter = config.new_http_filter(&mut mock_filter);
+    assert_eq!(
+      filter.on_response_headers(&mut mock_filter, false),
+      envoy_dynamic_module_type_on_http_filter_response_headers_status::Continue
+    );
+  }
+}
