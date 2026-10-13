@@ -20,6 +20,7 @@ package imagecache
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -33,21 +34,24 @@ import (
 func mountPointsIn(r io.Reader, dir string) ([]string, error) {
 	dir = filepath.Clean(dir)
 	var points []string
-	scanner := bufio.NewScanner(r)
-	for scanner.Scan() {
-		fields := strings.Fields(scanner.Text())
-		if len(fields) < 5 {
-			continue
+	// No line-length cap: an overlay's record lists every lowerdir path, and
+	// a long chain outgrows bufio.Scanner's 64 KiB default token size.
+	br := bufio.NewReader(r)
+	for {
+		line, err := br.ReadString('\n')
+		if fields := strings.Fields(line); len(fields) >= 5 {
+			mp := unescapeMountPath(fields[4])
+			if mp == dir || strings.HasPrefix(mp, dir+"/") {
+				points = append(points, mp)
+			}
 		}
-		mp := unescapeMountPath(fields[4])
-		if mp == dir || strings.HasPrefix(mp, dir+"/") {
-			points = append(points, mp)
+		if errors.Is(err, io.EOF) {
+			return points, nil
+		}
+		if err != nil {
+			return nil, fmt.Errorf("while reading mountinfo: %w", err)
 		}
 	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("while reading mountinfo: %w", err)
-	}
-	return points, nil
 }
 
 // unescapeMountPath decodes the octal escapes mountinfo uses for space, tab,

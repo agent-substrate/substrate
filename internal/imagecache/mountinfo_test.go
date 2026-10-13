@@ -15,6 +15,7 @@
 package imagecache
 
 import (
+	"bufio"
 	"slices"
 	"strings"
 	"testing"
@@ -55,6 +56,30 @@ func TestMountPointsIn_ExactDirMatch(t *testing.T) {
 	}
 	if !slices.Equal(got, []string{"/mnt/target"}) {
 		t.Errorf("mount points = %v, want the exact dir itself", got)
+	}
+}
+
+// An overlay's record lists every lowerdir path, so one line can be longer
+// than bufio.Scanner's default token size; the lines after it must still be
+// read.
+func TestMountPointsIn_LongLine(t *testing.T) {
+	long := `40 21 8:1 / /mnt/target/rootfs rw - overlay overlay rw,lowerdir=` + strings.Repeat("/l", 40_000)
+	if len(long) <= bufio.MaxScanTokenSize {
+		t.Fatalf("test line is %d bytes, not exceeding bufio's %d-byte default", len(long), bufio.MaxScanTokenSize)
+	}
+	mountinfo := strings.Join([]string{
+		long,
+		`41 21 8:1 / /mnt/target/volumes/agent rw - overlay overlay rw`,
+		``,
+	}, "\n")
+
+	got, err := mountPointsIn(strings.NewReader(mountinfo), "/mnt/target")
+	if err != nil {
+		t.Fatalf("mountPointsIn: %v", err)
+	}
+	want := []string{"/mnt/target/rootfs", "/mnt/target/volumes/agent"}
+	if !slices.Equal(got, want) {
+		t.Errorf("mount points = %v, want %v", got, want)
 	}
 }
 
