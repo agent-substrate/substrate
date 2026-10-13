@@ -30,7 +30,7 @@ pub const ATE_POLICY_EGRESS_NAMESPACE: &str = "dev.ate.policy.egress";
 pub const ATE_POLICY_JSON_KEY: &str = "policy_json";
 
 /// The SNI rules for a connection.
-#[derive(Debug, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Default, Deserialize, PartialEq, Eq, Hash)]
 pub struct EgressPolicy {
   /// Most specific first; the first match wins.
   pub rules: Vec<SniRule>,

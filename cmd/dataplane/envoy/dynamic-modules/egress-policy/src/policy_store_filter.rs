@@ -41,7 +41,7 @@ impl<EHF: EnvoyHttpFilter> HttpFilterConfig<EHF> for EgressPolicyStoreFilterConf
 /// Per-stream HTTP filter instance for egress-policy-store.
 #[derive(Default)]
 pub struct EgressPolicyStoreFilter {
-  pub policy: Option<Rc<EgressPolicy>>,
+  pub policy: Rc<EgressPolicy>,
 }
 
 impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for EgressPolicyStoreFilter {
@@ -59,10 +59,10 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for EgressPolicyStoreFilter {
     let hash = policy.hash();
     let mut local_store = GlobalEgressPolicyStore::get_local_store();
     if let Some(existing_policy) = local_store.lookup(hash) {
-      self.policy = Some(existing_policy);
+      self.policy = existing_policy;
     } else {
       local_store.store(hash, &policy);
-      self.policy = Some(policy);
+      self.policy = policy;
     }
     envoy_filter.set_filter_state_bytes(
       ATE_POLICY_EGRESS_HASH_NOT_SHARED,
@@ -141,9 +141,9 @@ mod tests {
       filter.on_request_headers(&mut mock_filter, false),
       envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue
     );
-    assert_eq!(filter.policy, Some(Rc::new(expected_policy)));
+    assert_eq!(filter.policy, Rc::new(expected_policy));
 
-    let first_rc = filter.policy.as_ref().unwrap().clone();
+    let first_rc = filter.policy.clone();
     let hash = first_rc.hash();
     assert!(Rc::ptr_eq(
       &GlobalEgressPolicyStore::get_local_store()
@@ -180,7 +180,7 @@ mod tests {
       second_filter.on_request_headers(&mut mock_filter, false),
       envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue
     );
-    assert!(Rc::ptr_eq(second_filter.policy.as_ref().unwrap(), &first_rc));
+    assert!(Rc::ptr_eq(&second_filter.policy, &first_rc));
   }
 
   #[test]
@@ -201,7 +201,7 @@ mod tests {
       filter.on_request_headers(&mut mock_filter, false),
       envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue
     );
-    assert_eq!(filter.policy, None);
+    assert_eq!(filter.policy, Rc::default());
 
     mock_filter
       .expect_get_metadata_string()
@@ -217,7 +217,7 @@ mod tests {
       filter.on_request_headers(&mut mock_filter, false),
       envoy_dynamic_module_type_on_http_filter_request_headers_status::Continue
     );
-    assert_eq!(filter.policy, None);
+    assert_eq!(filter.policy, Rc::default());
   }
 
   #[test]
