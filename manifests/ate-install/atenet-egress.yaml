@@ -229,7 +229,7 @@ data:
                 typed_config:
                   "@type": type.googleapis.com/envoy.extensions.filters.http.dynamic_modules.v3.DynamicModuleFilter
                   dynamic_module_config:
-                    name: envoy_substrate_egress_policy_store
+                    name: envoy_substrate_egress_policy
                   filter_name: envoy_substrate_egress_policy_store
               # The CONNECT leg's answers, copied into filter state shared with
               # the inner listener. Must stay after ext_proc.

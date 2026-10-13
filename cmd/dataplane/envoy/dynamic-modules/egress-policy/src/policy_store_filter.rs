@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! The egress-policy-store HTTP filter dynamic module.
+//! HTTP filter implementation for storing the egress policy.
 
 use std::rc::Rc;
 
@@ -21,8 +21,7 @@ use envoy_proxy_dynamic_modules_rust_sdk::{
     envoy_dynamic_module_type_on_http_filter_request_headers_status,
     envoy_dynamic_module_type_on_http_filter_response_headers_status,
   },
-  declare_init_functions, envoy_log_trace, EnvoyHttpFilter, EnvoyHttpFilterConfig, HttpFilter,
-  HttpFilterConfig,
+  envoy_log_trace, EnvoyHttpFilter, EnvoyHttpFilterConfig, HttpFilter, HttpFilterConfig,
 };
 use substrate_envoy_common::egress_policy::EgressPolicy;
 
@@ -64,15 +63,8 @@ impl<EHF: EnvoyHttpFilter> HttpFilter<EHF> for EgressPolicyStoreFilter {
   }
 }
 
-declare_init_functions!(init, new_http_filter_config_fn);
-
-/// Called when the dynamic module is loaded into Envoy.
-fn init() -> bool {
-  true
-}
-
 /// Called when a new HTTP filter configuration is created.
-fn new_http_filter_config_fn<EC: EnvoyHttpFilterConfig, EHF: EnvoyHttpFilter>(
+pub fn new_http_filter_config_fn<EC: EnvoyHttpFilterConfig, EHF: EnvoyHttpFilter>(
   _envoy_filter_config: &mut EC,
   _name: &str,
   _config: &[u8],
@@ -89,11 +81,6 @@ mod tests {
   use substrate_envoy_common::egress_policy::{
     SniRule, ATE_POLICY_EGRESS_NAMESPACE, ATE_POLICY_JSON_KEY,
   };
-
-  #[test]
-  fn test_init() {
-    assert!(init());
-  }
 
   #[test]
   fn test_on_request_headers_parses_policy() {

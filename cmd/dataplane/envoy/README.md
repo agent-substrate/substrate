@@ -9,8 +9,8 @@ cmd/dataplane/envoy/
 ├── Dockerfile                       # Multi-stage build for the Envoy dataplane image
 └── dynamic-modules/
     ├── Cargo.toml                   # Rust Cargo workspace manifest
-    ├── egress-policy/               # Rust Envoy Dynamic Module for egress policy enforcement
-    └── egress-policy-store/         # Rust Envoy HTTP Filter Dynamic Module for egress policy store
+    ├── common/                      # Shared types for Envoy dynamic modules
+    └── egress-policy/               # Rust Envoy Dynamic Module for egress policy enforcement
 ```
 
 - **`Dockerfile`**: Multi-stage container build that:

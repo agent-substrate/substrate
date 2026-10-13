@@ -12,15 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! The egress-policy listener filter picks the filter chain for a tunneled
-//! connection. See the README in this directory.
+//! The egress-policy dynamic module provides listener and HTTP filters for
+//! egress policy evaluation and storage. See the README in this directory.
 
 pub mod listener_filter;
+pub mod policy_store_filter;
 
-use envoy_proxy_dynamic_modules_rust_sdk::declare_listener_filter_init_functions;
+use envoy_proxy_dynamic_modules_rust_sdk::declare_all_init_functions;
 pub use listener_filter::*;
+pub use policy_store_filter::*;
 
-declare_listener_filter_init_functions!(init, listener_filter::new_listener_filter_config_fn);
+declare_all_init_functions!(
+  init,
+  http: policy_store_filter::new_http_filter_config_fn,
+  listener: listener_filter::new_listener_filter_config_fn,
+);
 
 /// Called when the dynamic module is loaded into Envoy.
 fn init() -> bool {

@@ -17,7 +17,6 @@ resolver = "3"
 members = [
   "common",
   "egress-policy",
-  "egress-policy-store",
 ]
 
 [workspace.package]
