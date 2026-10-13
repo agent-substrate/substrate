@@ -102,7 +102,7 @@ func TestRestoreDurationShape(t *testing.T) {
 		templateNamespace: testTemplateNamespace,
 		templateName:      testTemplateName,
 		kind:              ateattr.SnapshotKindLatest,
-		scope:             ateattr.SnapshotScopeData,
+		fidelity:          ateattr.SnapshotFidelityVolumes,
 		sandboxClass:      "gvisor",
 	}
 	inst.recordRestore(context.Background(), op,
@@ -129,7 +129,7 @@ func TestRestoreDurationShape(t *testing.T) {
 		{ateattr.TemplateAtespaceKey, testTemplateNamespace},
 		{ateattr.TemplateNameKey, testTemplateName},
 		{ateattr.SnapshotKindKey, ateattr.SnapshotKindLatest},
-		{ateattr.SnapshotScopeKey, ateattr.SnapshotScopeData},
+		{ateattr.SnapshotFidelityKey, ateattr.SnapshotFidelityVolumes},
 		{ateattr.SandboxClassKey, "gvisor"},
 	} {
 		if v := attrString(t, got, tc.key); v != tc.want {
@@ -151,7 +151,7 @@ func TestCheckpointDurationShape(t *testing.T) {
 		templateNamespace: testTemplateNamespace,
 		templateName:      testTemplateName,
 		kind:              ateattr.SnapshotKindLocal,
-		scope:             ateattr.SnapshotScopeFull,
+		fidelity:          ateattr.SnapshotFidelityMemory,
 		sandboxClass:      "microvm",
 	}, phase{ateattr.SnapshotPhasePersist, time.Second})
 
@@ -174,7 +174,7 @@ func TestRecordPhasesSkipsZeroPhases(t *testing.T) {
 	inst, reader := newTestInstruments(t)
 
 	inst.recordRestore(context.Background(),
-		snapshotOp{scope: ateattr.SnapshotScopeFull},
+		snapshotOp{fidelity: ateattr.SnapshotFidelityMemory},
 		phase{ateattr.SnapshotPhaseManifestFetch, 50 * time.Millisecond},
 		phase{ateattr.SnapshotPhaseDownload, 2 * time.Second},
 		phase{ateattr.SnapshotPhaseAteomRestore, 0},
@@ -196,7 +196,7 @@ func TestSnapshotOpAttrsOmitsUnknownDimensions(t *testing.T) {
 	attrs := snapshotOp{
 		templateNamespace: testTemplateNamespace,
 		templateName:      testTemplateName,
-		scope:             ateattr.SnapshotScopeFull,
+		fidelity:          ateattr.SnapshotFidelityMemory,
 	}.attrs()
 	for _, kv := range attrs {
 		if kv.Key == ateattr.SnapshotKindKey || kv.Key == ateattr.SandboxClassKey {

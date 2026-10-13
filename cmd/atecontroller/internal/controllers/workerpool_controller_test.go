@@ -80,10 +80,27 @@ func TestMain(m *testing.M) {
 	}
 
 	if err := (&WorkerPoolReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:    mgr.GetClient(),
+		Scheme:    mgr.GetScheme(),
+		Recorder:  mgr.GetEventRecorder("workerpool-controller"),
+		APIReader: mgr.GetAPIReader(),
 	}).SetupWithManager(mgr); err != nil {
 		fmt.Fprintf(os.Stderr, "controller setup failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	if err := (&SandboxConfigProtectionReconciler{
+		Client:    mgr.GetClient(),
+		APIReader: mgr.GetAPIReader(),
+	}).SetupWithManager(mgr); err != nil {
+		fmt.Fprintf(os.Stderr, "sandboxconfig protection controller setup failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	// makeWorkerPool omits configRef, so every gvisor pool resolves to this
+	// class default. Tests that need to control the class default use microvm.
+	if err := k8sClient.Create(context.Background(), makeSandboxConfig(testGvisorDefault, atev1alpha1.SandboxClassGvisor, true)); err != nil {
+		fmt.Fprintf(os.Stderr, "create default SandboxConfig: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -590,8 +607,9 @@ func makeWorkerPool(name, ns string, replicas int32, image string) *atev1alpha1.
 	return &atev1alpha1.WorkerPool{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
 		Spec: atev1alpha1.WorkerPoolSpec{
-			Replicas:    replicas,
-			WorkerImage: image,
+			Replicas:       replicas,
+			WorkerImage:    image,
+			SandboxClasses: []atev1alpha1.WorkerPoolSandboxClass{{Name: atev1alpha1.SandboxClassGvisor}},
 		},
 	}
 }

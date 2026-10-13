@@ -31,6 +31,8 @@ func TestParseTargetActor(t *testing.T) {
 		{name: "empty actor", value: "team-a/", wantErr: true},
 		{name: "invalid atespace", value: "TEAM-A/actor-1", wantErr: true},
 		{name: "invalid actor", value: "team-a/ACTOR-1", wantErr: true},
+		{name: "comma-joined actors", value: "demo/a,secret/x", wantErr: true},
+		{name: "comma-separated with space", value: "demo/a, demo/b", wantErr: true},
 	}
 
 	for _, tt := range tests {

@@ -159,7 +159,7 @@ ones every new metric meets:
 * **Normalize at the producer.** When a value arrives from the wire or from a
   file nothing validated, map it onto the bounded set before recording:
   `ateattr.NormalizeSandboxClass`, `ateattr.NormalizeOperationName`,
-  `ateattr.SnapshotScopeValue`. An unrecognized value reports `unknown`, never
+  `ateattr.SnapshotFidelityValue`. An unrecognized value reports `unknown`, never
   the raw string.
 * **Omit a label you do not know rather than emit it empty.** A resume that
   failed before a worker was picked has no pool; the pool keys are absent, not
@@ -278,9 +278,9 @@ component name as the scope (`"atelet"`, `"ateapi"`, `"atecontroller"`):
 The meter provider itself is set up once per binary by
 `serverboot.InitMetrics` (Prometheus reader plus OTLP push),
 `serverboot.InitMetricsBridged` (OTLP push with a foreign Prometheus registry
-bridged onto it, or that registry alone under `OTEL_METRICS_EXPORTER=none`;
-atecontroller), or `serverboot.InitMetricsPushOnlyVia` (OTLP push only, over
-the atelet relay when given one; ateom).
+bridged onto it, or that registry alone under `OTEL_METRICS_EXPORTER=prometheus`,
+and whether to serve it; atecontroller), or `serverboot.InitMetricsPushOnlyVia`
+(OTLP push only, over the atelet relay when given one; ateom).
 A new component calls one of these and defers `ShutdownProvider`; a new package
 inside an existing component adds nothing there.
 

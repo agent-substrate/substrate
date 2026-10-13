@@ -25,7 +25,6 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/apierror"
 	"github.com/agent-substrate/substrate/internal/ateattr"
-	"github.com/agent-substrate/substrate/internal/objectstore"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel/attribute"
@@ -200,9 +199,10 @@ func (w *ActorWorkflow) ensureInProgressSnapshotDiscarded(ctx context.Context, a
 	ctx, done := stepSpan(ctx, "DiscardInProgressSnapshot")
 	defer func() { err = done(err) }()
 
-	inProgress := actor.GetStatus().GetInProgressSnapshotUri()
+	inProgressSnap := findLatestDurableSnapshot(actor.GetStatus(), ateapipb.SnapshotStorageStatus_SNAPSHOT_STORAGE_STATUS_PENDING)
+	inProgress := inProgressSnap.GetDurableSnapshot().GetObject().GetSnapshotUri()
 	switch {
-	case w.objectStore == nil:
+	case w.objectStorePlugin == nil:
 		markSkipped(ctx, "no object store configured")
 		return nil
 	case inProgress == "":
@@ -223,7 +223,7 @@ func (w *ActorWorkflow) ensureInProgressSnapshotDiscarded(ctx context.Context, a
 	}
 	// Only the abandoned snapshot goes, not the actor's whole prefix: the
 	// external snapshot the revert returns the actor to lives under it too.
-	return objectstore.DeletePrefix(ctx, w.objectStore, uri.Prefix())
+	return w.cleanupSnapshot(ctx, uri.Prefix())
 }
 
 // ensureRevertedFinalized commits SUSPENDED and drops every pointer to the
@@ -246,9 +246,13 @@ func (w *ActorWorkflow) ensureRevertedFinalized(ctx context.Context, actorRef re
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_SUSPENDED
 		toUpdate.Status.WorkerAssignment = nil
 		toUpdate.Status.AssignedNode = ""
-		toUpdate.Status.InProgressSnapshotUri = ""
-		toUpdate.Status.InProgressLocalSnapshotName = ""
-		toUpdate.Status.LocalSnapshot = nil
+		// We revert back to the latest durable snapshot, so all local snapshots
+		// and pending durable snapshots are removed.
+		// We already cleaned up the node before this in ensureWorkerDiscarded,
+		// and any in-progress durable snapshot in ensureInProgressSnapshotDiscarded.
+		// Even during revert, we do not decrease LastAssignedGeneration so that we
+		// can keep track of stale snapshots that need to be cleaned up.
+		pruneSnapshots(toUpdate.Status, nil)
 		toUpdate.Status.Crash = nil
 		return nil
 	})

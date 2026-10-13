@@ -18,9 +18,14 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
+	"slices"
 	"testing"
 
+	"github.com/opencontainers/runtime-spec/specs-go"
 	"google.golang.org/grpc/codes"
 
 	"github.com/agent-substrate/substrate/internal/actorlock"
@@ -32,6 +37,50 @@ import (
 var testActorDirs = &ateompb.ActorDirs{
 	RootDir:      "/node/actors/test-actor-123",
 	OciBundleDir: "/node/actors/test-actor-123/bundle",
+}
+
+// writeSpec builds a workload container's spec from the request and the pause
+// container's from ateom's own description.
+func TestWriteSpec(t *testing.T) {
+	root := t.TempDir()
+	actorDirs := &ateompb.ActorDirs{RootDir: root, OciBundleDir: filepath.Join(root, "bundles")}
+	r := &runsc{
+		actorUID:   "uid-a",
+		actorDirs:  actorDirs,
+		containers: []*ateompb.Container{{Name: "app", ContainerSpec: &ateompb.ContainerSpec{Args: []string{"/app", "serve"}}}},
+	}
+	for name, wantArgs := range map[string][]string{
+		"app":                  {"/app", "serve"},
+		ocispec.PauseContainer: {"/pause"},
+	} {
+		bundle := ociBundlePath(actorDirs, name)
+		if err := os.MkdirAll(bundle, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.writeSpec(name); err != nil {
+			t.Fatalf("writeSpec(%q) = %v", name, err)
+		}
+		b, err := os.ReadFile(filepath.Join(bundle, "config.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var spec specs.Spec
+		if err := json.Unmarshal(b, &spec); err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(spec.Process.Args, wantArgs) {
+			t.Errorf("%s args = %v, want %v", name, spec.Process.Args, wantArgs)
+		}
+		if got := spec.Annotations["io.kubernetes.cri.container-name"]; got != name {
+			t.Errorf("%s container-name annotation = %q, want the spec shaped for gVisor", name, got)
+		}
+		if name == ocispec.PauseContainer && len(spec.Process.Capabilities.Bounding) != 0 {
+			t.Errorf("pause capabilities = %v, want none", spec.Process.Capabilities.Bounding)
+		}
+	}
+	if err := r.writeSpec("missing"); err == nil {
+		t.Error("writeSpec() = nil for a container outside the workload spec")
+	}
 }
 
 func TestKillArgs(t *testing.T) {
@@ -77,45 +126,52 @@ func TestWaitArgs(t *testing.T) {
 	}
 }
 
-func TestPauseArgs(t *testing.T) {
+func TestCheckpointArgs(t *testing.T) {
 	r := &runsc{
 		path:      "/usr/bin/runsc",
 		actorUID:  "test-actor-123",
 		actorDirs: testActorDirs,
 	}
+	checkpointDir := "/node/actors/test-actor-123/checkpoints/snap-1"
 
-	got := r.pauseArgs(ocispec.PauseContainer)
+	got := r.checkpointArgs(ocispec.PauseContainer, checkpointDir, []string{"app:/var/data", "app:/var/cache"})
 	want := []string{
 		"-log-format", "json",
 		"--alsologtostderr",
 		"-root", "/node/actors/test-actor-123/runsc-state",
-		"pause",
+		"checkpoint",
+		"-image-path", checkpointDir,
+		"-fs-checkpoint-paths", "app:/var/data,app:/var/cache",
 		ocispec.PauseContainer,
 	}
 
 	if !reflect.DeepEqual(got, want) {
-		t.Errorf("pauseArgs() = %v, want %v", got, want)
+		t.Errorf("checkpointArgs() = %v, want %v", got, want)
 	}
 }
 
-func TestResumeArgs(t *testing.T) {
+func TestFsCheckpointArgs(t *testing.T) {
 	r := &runsc{
 		path:      "/usr/bin/runsc",
 		actorUID:  "test-actor-123",
 		actorDirs: testActorDirs,
 	}
+	checkpointDir := "/node/actors/test-actor-123/checkpoints/snap-1"
 
-	got := r.resumeArgs(ocispec.PauseContainer)
+	got := r.fsCheckpointArgs(ocispec.PauseContainer, checkpointDir, []string{"app:/var/data", "app:/var/cache"})
 	want := []string{
 		"-log-format", "json",
 		"--alsologtostderr",
 		"-root", "/node/actors/test-actor-123/runsc-state",
-		"resume",
+		"fscheckpoint",
+		"-image-path", filepath.Join(checkpointDir, "fs"),
+		"-path", "app:/var/data",
+		"-path", "app:/var/cache",
 		ocispec.PauseContainer,
 	}
 
 	if !reflect.DeepEqual(got, want) {
-		t.Errorf("resumeArgs() = %v, want %v", got, want)
+		t.Errorf("fsCheckpointArgs() = %v, want %v", got, want)
 	}
 }
 

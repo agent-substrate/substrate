@@ -43,8 +43,7 @@ func renderPhaseRecord(t *testing.T, attrs []slog.Attr) map[string]any {
 }
 
 // TestRestoreTimingPhases pins the keys a Full restore record carries, in
-// the layout benchmarking tooling joins with atelet's record on, and that a
-// phase which never ran stays off it.
+// the layout benchmarking tooling joins with atelet's record on.
 func TestRestoreTimingPhases(t *testing.T) {
 	t.Parallel()
 
@@ -52,20 +51,18 @@ func TestRestoreTimingPhases(t *testing.T) {
 		prep:          10 * time.Millisecond,
 		egressPrepare: 120 * time.Millisecond,
 		netSetup:      30 * time.Millisecond,
-		// No durable volumes: the phase never ran.
-		durableDir:   0,
-		pauseRootfs:  5 * time.Millisecond,
-		pauseCreate:  200 * time.Millisecond,
-		pauseRestore: 900 * time.Millisecond,
-		appRootfs:    15 * time.Millisecond,
-		appCreate:    50 * time.Millisecond,
-		appRestore:   400 * time.Millisecond,
-		wakeupProbe:  250 * time.Millisecond,
-		activate:     2 * time.Millisecond,
-		total:        2 * time.Second,
+		pauseRootfs:   5 * time.Millisecond,
+		pauseCreate:   200 * time.Millisecond,
+		pauseRestore:  900 * time.Millisecond,
+		appRootfs:     15 * time.Millisecond,
+		appCreate:     50 * time.Millisecond,
+		appRestore:    400 * time.Millisecond,
+		wakeupProbe:   250 * time.Millisecond,
+		activate:      2 * time.Millisecond,
+		total:         2 * time.Second,
 	}
 	attrs := ateomphaselog.SnapshotPhaseAttrs(resources.ActorAttribution{UID: "uid-abc"},
-		ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL, ateomphaselog.RestoreDurationKey, nil, timing.phases())
+		ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, ateomphaselog.RestoreDurationKey, nil, timing.phases())
 	attrs = append(attrs, slog.Int(containerCountKey, 2))
 
 	seen := make(map[string]bool, len(attrs))
@@ -99,38 +96,31 @@ func TestRestoreTimingPhases(t *testing.T) {
 			t.Errorf("%s = %v, want %v", k, got, want)
 		}
 	}
-	if v, ok := rec["ateom.actor.restore.duration.durable_dir"]; ok {
-		t.Errorf("durable_dir present with %v, want absent", v)
-	}
 	if rec["ate.actor.uid"] != "uid-abc" {
 		t.Errorf("ate.actor.uid = %v, want uid-abc", rec["ate.actor.uid"])
 	}
-	if rec["ate.snapshot.scope"] != "full" {
-		t.Errorf("ate.snapshot.scope = %v, want full", rec["ate.snapshot.scope"])
+	if rec["ate.snapshot.fidelity"] != "memory" {
+		t.Errorf("ate.snapshot.fidelity = %v, want memory", rec["ate.snapshot.fidelity"])
 	}
 }
 
-// TestCheckpointTimingPhases: a Data checkpoint pauses and resumes around the
-// durable capture and never runs the runsc checkpoint, and the record says so.
+// TestCheckpointTimingPhases: a Data checkpoint runs the durable capture and
+// never runs the full runsc checkpoint, and the record says so.
 func TestCheckpointTimingPhases(t *testing.T) {
 	t.Parallel()
 
 	timing := checkpointTiming{
 		prep:       20 * time.Millisecond,
-		pause:      3 * time.Millisecond,
 		durableDir: 300 * time.Millisecond,
-		resume:     4 * time.Millisecond,
 		teardown:   150 * time.Millisecond,
 		total:      500 * time.Millisecond,
 	}
 	rec := renderPhaseRecord(t, ateomphaselog.SnapshotPhaseAttrs(resources.ActorAttribution{UID: "uid-abc"},
-		ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA, ateomphaselog.CheckpointDurationKey, nil, timing.phases()))
+		ateompb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, ateomphaselog.CheckpointDurationKey, nil, timing.phases()))
 
 	for k, want := range map[string]float64{
 		"ateom.actor.checkpoint.duration.prep":        0.02,
-		"ateom.actor.checkpoint.duration.pause":       0.003,
 		"ateom.actor.checkpoint.duration.durable_dir": 0.3,
-		"ateom.actor.checkpoint.duration.resume":      0.004,
 		"ateom.actor.checkpoint.duration.teardown":    0.15,
 		"ateom.actor.checkpoint.duration.total":       0.5,
 	} {
@@ -144,8 +134,8 @@ func TestCheckpointTimingPhases(t *testing.T) {
 	if v, ok := rec["ateom.actor.checkpoint.duration.checkpoint"]; ok {
 		t.Errorf("checkpoint present with %v, want absent", v)
 	}
-	if rec["ate.snapshot.scope"] != "data" {
-		t.Errorf("ate.snapshot.scope = %v, want data", rec["ate.snapshot.scope"])
+	if rec["ate.snapshot.fidelity"] != "volumes" {
+		t.Errorf("ate.snapshot.fidelity = %v, want volumes", rec["ate.snapshot.fidelity"])
 	}
 }
 

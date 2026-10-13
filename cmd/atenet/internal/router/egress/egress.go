@@ -41,6 +41,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
 
+	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/egress/actorjwt"
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
 	"github.com/agent-substrate/substrate/internal/egresspolicy"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -83,9 +84,10 @@ type Handler struct {
 	actorIdentityRoots *x509.CertPool
 	// policies is the per-actor EgressPolicy cache every leg reads through.
 	policies *policyCache
-	// provider resolves an egress policy's credential injections. Nil means
-	// credential injection is not configured, and a request that needs one is
-	// denied.
+	// actorJWTs mints the actor JWTs that credential injections ask for.
+	actorJWTs *actorjwt.Minter
+	// provider resolves an egress policy's credential_uri injections. Nil
+	// means none are configured, and a request that needs one is denied.
 	provider credproviderpb.CredentialProviderClient
 	// providerName, when set, is the provider this gateway serves (the host of
 	// its ate-secret:// credential URIs); a credential URI naming another
@@ -97,16 +99,17 @@ type Handler struct {
 // trusted_ca; see verifyActorCertificate for why it is checked again here.
 // policyCacheTTL of 0 fetches the policy on every callout.
 //
-// provider resolves an allowed rule's credential injections on the
-// TLS-terminated MITM leg; nil leaves credential injection off, so a request
-// matching a rule that requires an injection is denied. providerName, when
-// set, is the provider this gateway serves; a credential URI naming another
-// provider is refused.
+// provider resolves an allowed rule's credential_uri injections on the
+// TLS-terminated MITM leg; nil leaves them off, so a request that needs one is
+// denied. Actor JWT injections need no provider. providerName, when set, is
+// the provider this gateway serves; a credential URI naming another provider
+// is refused.
 func New(apiClient ateapipb.ControlClient, actorIdentityRoots *x509.CertPool, policyCacheTTL time.Duration, provider credproviderpb.CredentialProviderClient, providerName string) *Handler {
 	return &Handler{
 		apiClient:          apiClient,
 		actorIdentityRoots: actorIdentityRoots,
 		policies:           newPolicyCache(apiClient, policyCacheTTL),
+		actorJWTs:          actorjwt.New(apiClient),
 		provider:           provider,
 		providerName:       providerName,
 	}

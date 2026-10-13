@@ -229,7 +229,8 @@ func (s *AteomService) resolveRuntime(paths map[string]string) resolvedRuntime {
 // Contract with atelet:
 //   - The runtime assets (guest kernel, guest OS image, cloud-hypervisor, virtiofsd)
 //     are on disk and passed as runtime asset paths.
-//   - The OCI bundle (config.json + populated rootfs/) is prepared per container.
+//   - Each container's bundle holds the overlay spec its rootfs/ is composed
+//     from. ateom builds the OCI spec itself.
 func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkloadRequest) (resp *ateompb.RunWorkloadResponse, retErr error) {
 	if err := validateActorDirs(req.GetActorDirs()); err != nil {
 		return nil, err
@@ -294,7 +295,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 }
 
 // actorBootParams is what a cold boot needs about an actor. It comes from a Run
-// request, or from a Restore request whose snapshot scope covers only the
+// request, or from a Restore request whose snapshot fidelity covers only the
 // durable-dir volumes (the workload itself cold-starts).
 type actorBootParams struct {
 	actorRef         resources.ActorRef
@@ -311,6 +312,11 @@ type actorBootParams struct {
 	// memory); a container's own cgroup limit comes from its declared resources.
 	// Zero fields keep the kata defaults.
 	size sizing.SandboxSize
+	// rootfsUpperSnapshotDir, when set, names a snapshot directory holding the
+	// per-container rootfs upper tars; the cold boot re-materializes the uppers
+	// from it instead of starting from a pristine dir. A ROOTFS restore sets it
+	// to the restore dir.
+	rootfsUpperSnapshotDir string
 }
 
 func (p actorBootParams) attribution() resources.ActorAttribution {
@@ -415,6 +421,29 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 		}
 	}()
 
+	// Clean stale per-sandbox state before anything touches the host upper dir.
+	// Also  create the runtime dir for the sockets.
+
+	s.cleanupSandboxState(ctx, actorUID)
+	if err := os.MkdirAll(kata.VMDir(actorUID), 0o700); err != nil {
+		return fmt.Errorf("while creating VM dir: %w", err)
+	}
+
+	// Stage the host upper dir in the background (pristine, or from a ROOTFS
+	// snapshot's tars) and join it right before the overlay mounts need it,
+	// hiding it behind the bundle preparation below. Every return before the
+	// join must drain the goroutine, or a retry's staging would race it.
+	upperDone := make(chan error, 1)
+	upperJoined := false
+	go func() {
+		upperDone <- stageRootfsUpper(p.actorDirs, p.rootfsUpperSnapshotDir, containerNames(containers))
+	}()
+	defer func() {
+		if !upperJoined {
+			<-upperDone
+		}
+	}()
+
 	// Guest sizing + agent kernel params.
 	memMiB, vcpus, kparams := s.guestConfig()
 
@@ -423,8 +452,8 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 	// vCPUs round up; VM RAM reserves a fixed margin for the VMM + virtiofsd, which
 	// share the pod cgroup with the guest RAM. A declared memory limit the reserve
 	// leaves too small to boot is rejected (resolveGuestMemMiB) rather than silently
-	// falling back to the larger kata default. NB: a FULL-scope snapshot restore
-	// reuses the size baked into the snapshot (restoreFullScope), so resizing an
+	// falling back to the larger kata default. NB: a MEMORY snapshot restore
+	// reuses the size baked into the snapshot (restoreMemoryFidelity), so resizing an
 	// existing actor takes effect on its next cold boot.
 	sz := p.size
 	if v := sz.VCPUs(); v > 0 {
@@ -437,7 +466,7 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 
 	// Prepare each container's OCI spec + record its bundle rootfs (the overlay
 	// lower the host merges under the container's writable upper).
-	ctrs, err := s.buildActorContainers(p.actorDirs, containers)
+	ctrs, err := s.buildActorContainers(p.actorUID, p.actorDirs, containers)
 	if err != nil {
 		return err
 	}
@@ -455,15 +484,9 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 		return err
 	}
 
-	// Clean stale per-sandbox state + create the runtime dir for the sockets.
-	s.cleanupSandboxState(ctx, actorUID)
-	if err := os.MkdirAll(kata.VMDir(actorUID), 0o700); err != nil {
-		return fmt.Errorf("while creating VM dir: %w", err)
-	}
-
-	// A cold boot starts from the bare image: give it a pristine host upper dir
-	// (atelet's actor-dir reset does not know this directory; see rootfsupper.go).
-	if err := resetRootfsUpperDir(p.actorDirs); err != nil {
+	// The overlay mounts below need the upper dir in its final state.
+	upperJoined = true
+	if err := <-upperDone; err != nil {
 		return err
 	}
 
@@ -621,19 +644,16 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 }
 
 // buildActorContainers prepares each of the actor's containers for the shared
-// micro-VM: it loads the OCI spec from the per-container bundle, injects guest DNS,
+// micro-VM: it builds the OCI spec from the request, injects guest DNS,
 // and records the bundle rootfs that backs the overlay's RO lower. No host disk is
 // mounted here — the merged overlays are assembled in stageMergedRootfs after the
 // sandbox state is clean. Both RunWorkload and RestoreWorkload go through here.
-func (s *AteomService) buildActorContainers(actorDirs *ateompb.ActorDirs, containers []*ateompb.Container) ([]actorContainer, error) {
+func (s *AteomService) buildActorContainers(actorUID string, actorDirs *ateompb.ActorDirs, containers []*ateompb.Container) ([]actorContainer, error) {
 	ctrs := make([]actorContainer, len(containers))
 	for i, c := range containers {
 		cn := c.GetName()
 		bundle := ociBundlePath(actorDirs, cn)
-		spec, err := ocispec.Load(bundle)
-		if err != nil {
-			return nil, fmt.Errorf("while reading the OCI spec for %q: %w", cn, err)
-		}
+		spec := ocispec.Build(ocispec.Options{ActorUID: actorUID, ActorDirs: actorDirs, Container: c})
 		if err := ocispec.ShapeMicroVM(spec, ocispec.MicroVMOptions{ActorDirs: actorDirs, ContainerID: cn}); err != nil {
 			return nil, fmt.Errorf("while shaping the OCI spec for %q: %w", cn, err)
 		}
@@ -668,8 +688,7 @@ func (s *AteomService) buildActorContainers(actorDirs *ateompb.ActorDirs, contai
 // CSI volumes, and system-info volumes (if any) under SharedDir(id)/durable,
 // SharedDir(id)/csi, and SharedDir(id)/system-info,
 // then starts the ONE virtiofsd that serves them all. Must run AFTER CleanupSandboxState (which
-// wipes SharedDir) and resetRootfsUpperDir/untarRootfsUpper (which own the
-// upper contents). The returned virtiofsd cmd outlives this call (CH
+// wipes SharedDir) and stageRootfsUpper (which owns the upper contents). The returned virtiofsd cmd outlives this call (CH
 // demand-pages from it); the caller owns it (tracked on runningActor, killed
 // in teardownActor).
 func (s *AteomService) stageMergedRootfs(ctx context.Context, rr resolvedRuntime, id string, actorDirs *ateompb.ActorDirs, ctrs []actorContainer, containers []*ateompb.Container, procAttr *syscall.SysProcAttr) (*exec.Cmd, error) {

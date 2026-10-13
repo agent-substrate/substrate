@@ -57,7 +57,7 @@ resources:
   - name: memory
     quantity: 512Mi
 snapshotConfig:
-  onCommit: SNAPSHOT_CONTENT_SCOPE_FULL
+  preferredFidelity: SNAPSHOT_FIDELITY_MEMORY
   storageLocation: gs://ate-snapshots/ate-demo-counter/
 sandboxConfig:
   sandboxClass: SANDBOX_CLASS_GVISOR
@@ -81,7 +81,7 @@ func TestActorTemplateFromManifest(t *testing.T) {
 			Image:   "ko://github.com/agent-substrate/substrate/demos/counter",
 			Command: []string{"/ko-app/counter", "--extra-port=9090"},
 			WakeupProbe: &ateapipb.ContainerWakeupProbe{
-				HttpGet: &ateapipb.HTTPGetAction{Path: "/readyz", Port: 80},
+				HttpGet: &ateapipb.HttpGetAction{Path: "/readyz", Port: 80},
 			},
 			VolumeMounts: []*ateapipb.VolumeMount{{Name: "data", MountPath: "/home/counter"}},
 		}},
@@ -90,8 +90,8 @@ func TestActorTemplateFromManifest(t *testing.T) {
 			{Name: "memory", Quantity: "512Mi"},
 		}},
 		SnapshotConfig: &ateapipb.SnapshotConfig{
-			OnCommit:        ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
-			StorageLocation: "gs://ate-snapshots/ate-demo-counter/",
+			PreferredFidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY,
+			StorageLocation:   "gs://ate-snapshots/ate-demo-counter/",
 		},
 		SandboxConfig: &ateapipb.SandboxConfig{
 			SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,

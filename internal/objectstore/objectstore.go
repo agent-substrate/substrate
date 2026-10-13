@@ -41,6 +41,9 @@ import (
 // their round trips rather than about throughput.
 const prefixConcurrency = 8
 
+// ErrEmptySource reports that CopyPrefix found no objects to copy.
+var ErrEmptySource = errors.New("no objects to copy")
+
 // Store is the object-storage surface the control plane needs. Every method
 // addresses objects by name only.
 type Store interface {
@@ -120,7 +123,7 @@ func CopyPrefix(ctx context.Context, s Store, src, dst resources.StoragePrefix) 
 	// leave the destination naming an external snapshot that cannot be
 	// restored from.
 	if len(objects) == 0 {
-		return fmt.Errorf("external snapshot %s has no objects to copy", src)
+		return fmt.Errorf("external snapshot %s: %w", src, ErrEmptySource)
 	}
 	group, ctx := errgroup.WithContext(ctx)
 	group.SetLimit(prefixConcurrency)

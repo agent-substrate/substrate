@@ -299,7 +299,7 @@ func TestSandboxClassToleration(t *testing.T) {
 					Effect:   corev1.TaintEffectNoSchedule,
 				}},
 			})
-			wp.Spec.SandboxClass = tt.class
+			wp.Spec.SandboxClasses = []atev1alpha1.WorkerPoolSandboxClass{{Name: tt.class}}
 			ps := buildDeploymentApplyConfig(wp, ateomOTelSettings{}, installdefaults.SystemNamespace, installdefaults.AteletServiceAccount, installdefaults.RouterServiceAccount).Spec.Template.Spec
 
 			var classValues []string
@@ -347,7 +347,7 @@ func TestMicroVMPodShape(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			wp := testWorkerPoolApplyConfig(nil)
-			wp.Spec.SandboxClass = tt.class
+			wp.Spec.SandboxClasses = []atev1alpha1.WorkerPoolSandboxClass{{Name: tt.class}}
 			ps := buildDeploymentApplyConfig(wp, ateomOTelSettings{}, installdefaults.SystemNamespace, installdefaults.AteletServiceAccount, installdefaults.RouterServiceAccount).Spec.Template.Spec
 
 			// /dev/kvm must come from the device plugin, never a hostPath: a
@@ -434,7 +434,7 @@ func TestMicroVMDeviceRequestsPreserveTemplateResources(t *testing.T) {
 			Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("2Gi")},
 		},
 	})
-	wp.Spec.SandboxClass = atev1alpha1.SandboxClassMicroVM
+	wp.Spec.SandboxClasses = []atev1alpha1.WorkerPoolSandboxClass{{Name: atev1alpha1.SandboxClassMicroVM}}
 	c := buildDeploymentApplyConfig(wp, ateomOTelSettings{}, installdefaults.SystemNamespace, installdefaults.AteletServiceAccount, installdefaults.RouterServiceAccount).Spec.Template.Spec.Containers[0]
 
 	if got, ok := deviceLimit(c, string(corev1.ResourceMemory)); !ok || got != "2Gi" {

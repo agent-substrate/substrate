@@ -43,9 +43,9 @@ These were treated as contracts and reproduced exactly:
 - **Rendered bytes.** `authentication.yaml` is trimmed of its trailing newline
   because the shell built it inside `$(...)`, which strips them. Installing
   over a shell-installed cluster must not rewrite the ConfigMap.
-- **ko's ldflags.** `make ldflags` emitted `-X=<version pkg>.Version=$(git
+- **ko's ldflags.** The shell scripts stamped `-X=<version pkg>.Version=$(git
   describe --tags --always --dirty)`; `ko.Runner.ldflags` computes the identical
-  string without depending on make.
+  string.
 
 ## Execution model
 

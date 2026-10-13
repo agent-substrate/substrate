@@ -497,7 +497,7 @@ func TestUpdateWorker_DrainingWorkerKeepsLabelsMutable(t *testing.T) {
 	}
 
 	got, err := svc.UpdateWorker(ctx, &ateapipb.UpdateWorkerRequest{
-		Worker: updateFrom(drained, func(w *ateapipb.Worker) { w.Labels = map[string]string{"tier": "batch"} }),
+		Worker: updateFrom(drained.GetWorker(), func(w *ateapipb.Worker) { w.Labels = map[string]string{"tier": "batch"} }),
 	})
 	if err != nil {
 		t.Fatalf("UpdateWorker() failed: %v", err)
@@ -616,11 +616,11 @@ func TestDrainWorker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DrainWorker() failed: %v", err)
 	}
-	if got.GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_DRAINING {
-		t.Errorf("state = %v, want %v", got.GetStatus().GetState(), ateapipb.WorkerState_WORKER_STATE_DRAINING)
+	if got.GetWorker().GetStatus().GetState() != ateapipb.WorkerState_WORKER_STATE_DRAINING {
+		t.Errorf("state = %v, want %v", got.GetWorker().GetStatus().GetState(), ateapipb.WorkerState_WORKER_STATE_DRAINING)
 	}
-	if got.GetMetadata().GetVersion() != 2 {
-		t.Errorf("version = %d, want 2", got.GetMetadata().GetVersion())
+	if got.GetWorker().GetMetadata().GetVersion() != 2 {
+		t.Errorf("version = %d, want 2", got.GetWorker().GetMetadata().GetVersion())
 	}
 
 	// Draining again is a no-op, and specifically must not bump the version:
@@ -646,7 +646,7 @@ func TestDrainWorker_KeepsAssignment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DrainWorker() failed: %v", err)
 	}
-	if n := got.GetStatus().GetAllocated().GetActors(); n != 1 {
+	if n := got.GetWorker().GetStatus().GetAllocated().GetActors(); n != 1 {
 		t.Errorf("drained worker hosts %d actors, want the 1 left in place", n)
 	}
 }

@@ -77,8 +77,9 @@ rejects that option with agentgateway rather than silently omitting it.
 
 ## Components
 
-- **Egress app (`main.go`)** — the Actor: `POST /` with `{"url":"..."}` → fetches it → returns
-  status + body. It also serves `POST /grpc`, described below.
+- **Egress app (`main.go`)** — the Actor: `POST /` fetches an HTTP(S) URL and returns the status,
+  body, and observed protocol. `POST /websocket` probes a `ws` or `wss` origin; `POST /grpc` makes
+  unary and streaming gRPC calls, described below.
 - **Egress gateway** — the `atenet-egress` Deployment. Envoy uses a co-located atenet `ext_proc`
   container started with `--mode=egress`; agentgateway uses its built-in `substrateEgress` policy
   and does not need that sidecar. The installer renders the matching configuration and container.
@@ -131,6 +132,14 @@ then asserts:
   refused before any CONNECT is answered.
 
 Add `--cleanup` to remove everything the script created.
+
+### HTTPS and WebSocket E2E tests
+
+Both supported egress dataplanes intercept HTTPS policy traffic. The Actor
+trusts the gateway through its projected CA bundle; the gateway verifies each
+local test origin against the service-DNS CA. The [egress protocol test
+runbook](../../docs/dev/mitm-egress-test-runbook.md) sets up this trust on Kind
+and runs the HTTP, HTTPS, WebSocket, and delayed-restore tests.
 
 ## Manual walkthrough
 
