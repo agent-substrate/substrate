@@ -195,10 +195,8 @@ func (w *ActorWorkflow) ensureAteletPaused(ctx context.Context, actorRef resourc
 		ActorTemplateName:     actor.GetActorTemplate().GetName(),
 		Spec:                  workloadSpec,
 		Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
-		Config: &ateletpb.CheckpointRequest_LocalConfig{
-			LocalConfig: &ateletpb.LocalCheckpointConfiguration{
-				SnapshotName: inProgressSnap.GetUuid(),
-			},
+		LocalConfig: &ateletpb.LocalCheckpointConfiguration{
+			SnapshotName: inProgressSnap.GetUuid(),
 		},
 		Fidelity: fidelityToAtelet(actorTemplate.GetSnapshotConfig().GetPreferredFidelity()),
 		ActorUid: actor.GetMetadata().Uid,

@@ -37,8 +37,8 @@ func TestPrintEgressPolicyTo(t *testing.T) {
 			CreateTime: timestamppb.New(now.Add(-5 * time.Minute)),
 		},
 		Rules: []*ateapipb.EgressRule{
-			{Http: &ateapipb.HTTPRule{Hostnames: []string{"api.example.com"}}},
-			{Https: &ateapipb.HTTPSRule{Hostnames: []string{"www.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{8443}}}},
+			{Http: &ateapipb.HttpRule{Hostnames: []string{"api.example.com"}}},
+			{Https: &ateapipb.HttpsRule{Hostnames: []string{"www.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{8443}}}},
 		},
 	}
 	empty := &ateapipb.EgressPolicy{

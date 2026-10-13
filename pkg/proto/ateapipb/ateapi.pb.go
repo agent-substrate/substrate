@@ -990,13 +990,11 @@ type ExternalVolume struct {
 	VolumeType string `protobuf:"bytes,3,opt,name=volume_type,json=volumeType,proto3" json:"volume_type,omitempty"`
 	// volume_context contains metadata returned by the CSI driver during volume
 	// provisioning, needed by the node plugin for mounting (e.g. attachment
-	// info). Keys and values are the driver's own, so they are only bounded,
+	// info). Keys and values are the driver's own, so the map is only bounded,
 	// not validated.
 	//
 	// +k8s:optional
-	// +k8s:maxProperties=32
-	// +k8s:eachKey=+k8s:maxLength=128
-	// +k8s:eachVal=+k8s:maxLength=256
+	// +k8s:customValidation # at most 40 KiB in total, ten times the CSI limit for map fields
 	VolumeContext map[string]string `protobuf:"bytes,5,rep,name=volume_context,json=volumeContext,proto3" json:"volume_context,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1257,19 +1255,19 @@ type EgressRule struct {
 	//
 	// +k8s:optional
 	// +k8s:unionMember
-	Http *HTTPRule `protobuf:"bytes,1,opt,name=http,proto3" json:"http,omitempty"`
+	Http *HttpRule `protobuf:"bytes,1,opt,name=http,proto3" json:"http,omitempty"`
 	// HTTPS to the named hosts, intercepted (man-in-the-middle) so the gateway
 	// can authorize and modify each request. HTTP/1.1 and HTTP/2 inside the
 	// TLS connection; HTTP/3 is not supported.
 	//
 	// +k8s:optional
 	// +k8s:unionMember
-	Https *HTTPSRule `protobuf:"bytes,2,opt,name=https,proto3" json:"https,omitempty"`
+	Https *HttpsRule `protobuf:"bytes,2,opt,name=https,proto3" json:"https,omitempty"`
 	// TLS to the named servers, forwarded without decryption.
 	//
 	// +k8s:optional
 	// +k8s:unionMember
-	TlsPassthrough *TLSPassthroughRule `protobuf:"bytes,3,opt,name=tls_passthrough,json=tlsPassthrough,proto3" json:"tls_passthrough,omitempty"`
+	TlsPassthrough *TlsPassthroughRule `protobuf:"bytes,3,opt,name=tls_passthrough,json=tlsPassthrough,proto3" json:"tls_passthrough,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -1304,31 +1302,31 @@ func (*EgressRule) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{8}
 }
 
-func (x *EgressRule) GetHttp() *HTTPRule {
+func (x *EgressRule) GetHttp() *HttpRule {
 	if x != nil {
 		return x.Http
 	}
 	return nil
 }
 
-func (x *EgressRule) GetHttps() *HTTPSRule {
+func (x *EgressRule) GetHttps() *HttpsRule {
 	if x != nil {
 		return x.Https
 	}
 	return nil
 }
 
-func (x *EgressRule) GetTlsPassthrough() *TLSPassthroughRule {
+func (x *EgressRule) GetTlsPassthrough() *TlsPassthroughRule {
 	if x != nil {
 		return x.TlsPassthrough
 	}
 	return nil
 }
 
-// HTTPRule allows cleartext HTTP and is evaluated per request on the request
+// HttpRule allows cleartext HTTP and is evaluated per request on the request
 // authority (Host or :authority) and port. The gateway resolves the name and
 // dials it.
-type HTTPRule struct {
+type HttpRule struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Hostname patterns: a DNS name, or a DNS name with "*" as its leftmost
 	// label. The rule matches when any pattern matches.
@@ -1367,20 +1365,20 @@ type HTTPRule struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *HTTPRule) Reset() {
-	*x = HTTPRule{}
+func (x *HttpRule) Reset() {
+	*x = HttpRule{}
 	mi := &file_ateapi_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *HTTPRule) String() string {
+func (x *HttpRule) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*HTTPRule) ProtoMessage() {}
+func (*HttpRule) ProtoMessage() {}
 
-func (x *HTTPRule) ProtoReflect() protoreflect.Message {
+func (x *HttpRule) ProtoReflect() protoreflect.Message {
 	mi := &file_ateapi_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -1392,33 +1390,33 @@ func (x *HTTPRule) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use HTTPRule.ProtoReflect.Descriptor instead.
-func (*HTTPRule) Descriptor() ([]byte, []int) {
+// Deprecated: Use HttpRule.ProtoReflect.Descriptor instead.
+func (*HttpRule) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{9}
 }
 
-func (x *HTTPRule) GetHostnames() []string {
+func (x *HttpRule) GetHostnames() []string {
 	if x != nil {
 		return x.Hostnames
 	}
 	return nil
 }
 
-func (x *HTTPRule) GetPorts() *Ports {
+func (x *HttpRule) GetPorts() *Ports {
 	if x != nil {
 		return x.Ports
 	}
 	return nil
 }
 
-func (x *HTTPRule) GetEffects() *HttpRuleEffects {
+func (x *HttpRule) GetEffects() *HttpRuleEffects {
 	if x != nil {
 		return x.Effects
 	}
 	return nil
 }
 
-// HTTPSRule allows HTTPS that the gateway intercepts (MITM). Every Actor behind such
+// HttpsRule allows HTTPS that the gateway intercepts (MITM). Every Actor behind such
 // a rule must trust the gateway CA. Without it, TLS to these names fails in the
 // Actor.
 //
@@ -1429,10 +1427,10 @@ func (x *HTTPRule) GetEffects() *HttpRuleEffects {
 //
 // Interception is for HTTP. A connection that sends no SNI does not match,
 // and a non-HTTP protocol inside an intercepted connection fails.
-type HTTPSRule struct {
+type HttpsRule struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Server names matched against the SNI, in the pattern syntax of
-	// HTTPRule.hostnames.
+	// HttpRule.hostnames.
 	//
 	// +k8s:required
 	// +k8s:maxItems=256
@@ -1452,20 +1450,20 @@ type HTTPSRule struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *HTTPSRule) Reset() {
-	*x = HTTPSRule{}
+func (x *HttpsRule) Reset() {
+	*x = HttpsRule{}
 	mi := &file_ateapi_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *HTTPSRule) String() string {
+func (x *HttpsRule) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*HTTPSRule) ProtoMessage() {}
+func (*HttpsRule) ProtoMessage() {}
 
-func (x *HTTPSRule) ProtoReflect() protoreflect.Message {
+func (x *HttpsRule) ProtoReflect() protoreflect.Message {
 	mi := &file_ateapi_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -1477,43 +1475,43 @@ func (x *HTTPSRule) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use HTTPSRule.ProtoReflect.Descriptor instead.
-func (*HTTPSRule) Descriptor() ([]byte, []int) {
+// Deprecated: Use HttpsRule.ProtoReflect.Descriptor instead.
+func (*HttpsRule) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{10}
 }
 
-func (x *HTTPSRule) GetHostnames() []string {
+func (x *HttpsRule) GetHostnames() []string {
 	if x != nil {
 		return x.Hostnames
 	}
 	return nil
 }
 
-func (x *HTTPSRule) GetPorts() *Ports {
+func (x *HttpsRule) GetPorts() *Ports {
 	if x != nil {
 		return x.Ports
 	}
 	return nil
 }
 
-func (x *HTTPSRule) GetEffects() *HttpRuleEffects {
+func (x *HttpsRule) GetEffects() *HttpRuleEffects {
 	if x != nil {
 		return x.Effects
 	}
 	return nil
 }
 
-// TLSPassthroughRule allows TLS that the gateway forwards without decryption.
+// TlsPassthroughRule allows TLS that the gateway forwards without decryption.
 // It is evaluated once per connection at the ClientHello, on the SNI and
 // port, for any protocol carried over TLS. A connection that sends no SNI
 // does not match. Protocols that upgrade to TLS after a cleartext exchange
 // (STARTTLS) do not match. Because the gateway reads nothing after the
 // ClientHello, a passthrough rule has no effects, and a policy change reaches
 // an open connection only when it ends.
-type TLSPassthroughRule struct {
+type TlsPassthroughRule struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Server names matched against the SNI, in the pattern syntax of
-	// HTTPRule.hostnames.
+	// HttpRule.hostnames.
 	//
 	// +k8s:required
 	// +k8s:maxItems=256
@@ -1528,20 +1526,20 @@ type TLSPassthroughRule struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *TLSPassthroughRule) Reset() {
-	*x = TLSPassthroughRule{}
+func (x *TlsPassthroughRule) Reset() {
+	*x = TlsPassthroughRule{}
 	mi := &file_ateapi_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *TLSPassthroughRule) String() string {
+func (x *TlsPassthroughRule) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*TLSPassthroughRule) ProtoMessage() {}
+func (*TlsPassthroughRule) ProtoMessage() {}
 
-func (x *TLSPassthroughRule) ProtoReflect() protoreflect.Message {
+func (x *TlsPassthroughRule) ProtoReflect() protoreflect.Message {
 	mi := &file_ateapi_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -1553,19 +1551,19 @@ func (x *TLSPassthroughRule) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use TLSPassthroughRule.ProtoReflect.Descriptor instead.
-func (*TLSPassthroughRule) Descriptor() ([]byte, []int) {
+// Deprecated: Use TlsPassthroughRule.ProtoReflect.Descriptor instead.
+func (*TlsPassthroughRule) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{11}
 }
 
-func (x *TLSPassthroughRule) GetHostnames() []string {
+func (x *TlsPassthroughRule) GetHostnames() []string {
 	if x != nil {
 		return x.Hostnames
 	}
 	return nil
 }
 
-func (x *TLSPassthroughRule) GetPorts() *Ports {
+func (x *TlsPassthroughRule) GetPorts() *Ports {
 	if x != nil {
 		return x.Ports
 	}
@@ -1774,7 +1772,7 @@ type CredentialHeader struct {
 	//
 	// +k8s:optional
 	// +k8s:unionMember
-	ActorJwt      *ActorJWTSource `protobuf:"bytes,4,opt,name=actor_jwt,json=actorJwt,proto3" json:"actor_jwt,omitempty"`
+	ActorJwt      *ActorJwtSource `protobuf:"bytes,4,opt,name=actor_jwt,json=actorJwt,proto3" json:"actor_jwt,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1830,18 +1828,18 @@ func (x *CredentialHeader) GetCredentialUri() string {
 	return ""
 }
 
-func (x *CredentialHeader) GetActorJwt() *ActorJWTSource {
+func (x *CredentialHeader) GetActorJwt() *ActorJwtSource {
 	if x != nil {
 		return x.ActorJwt
 	}
 	return nil
 }
 
-// ActorJWTSource has the gateway mint a JWT for the Actor that sent the
+// ActorJwtSource has the gateway mint a JWT for the Actor that sent the
 // request. Relying parties verify it with OpenID Connect Discovery against its
 // issuer. The gateway reuses a JWT across requests while enough of its
 // lifetime remains, so its jti does not identify a single request.
-type ActorJWTSource struct {
+type ActorJwtSource struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The audiences the JWT is bound to, which become its aud claim.
 	//
@@ -1861,20 +1859,20 @@ type ActorJWTSource struct {
 	sizeCache         protoimpl.SizeCache
 }
 
-func (x *ActorJWTSource) Reset() {
-	*x = ActorJWTSource{}
+func (x *ActorJwtSource) Reset() {
+	*x = ActorJwtSource{}
 	mi := &file_ateapi_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *ActorJWTSource) String() string {
+func (x *ActorJwtSource) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*ActorJWTSource) ProtoMessage() {}
+func (*ActorJwtSource) ProtoMessage() {}
 
-func (x *ActorJWTSource) ProtoReflect() protoreflect.Message {
+func (x *ActorJwtSource) ProtoReflect() protoreflect.Message {
 	mi := &file_ateapi_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -1886,19 +1884,19 @@ func (x *ActorJWTSource) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use ActorJWTSource.ProtoReflect.Descriptor instead.
-func (*ActorJWTSource) Descriptor() ([]byte, []int) {
+// Deprecated: Use ActorJwtSource.ProtoReflect.Descriptor instead.
+func (*ActorJwtSource) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{16}
 }
 
-func (x *ActorJWTSource) GetAudiences() []string {
+func (x *ActorJwtSource) GetAudiences() []string {
 	if x != nil {
 		return x.Audiences
 	}
 	return nil
 }
 
-func (x *ActorJWTSource) GetExpirationSeconds() int64 {
+func (x *ActorJwtSource) GetExpirationSeconds() int64 {
 	if x != nil {
 		return x.ExpirationSeconds
 	}
@@ -3429,7 +3427,7 @@ type ContainerWakeupProbe struct {
 	// http_get is the request to poll.
 	//
 	// +k8s:required
-	HttpGet *HTTPGetAction `protobuf:"bytes,1,opt,name=http_get,json=httpGet,proto3" json:"http_get,omitempty"`
+	HttpGet *HttpGetAction `protobuf:"bytes,1,opt,name=http_get,json=httpGet,proto3" json:"http_get,omitempty"`
 	// timeout_seconds is how long to keep polling before giving up.
 	// Defaults to 30 when unset.
 	//
@@ -3471,7 +3469,7 @@ func (*ContainerWakeupProbe) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{36}
 }
 
-func (x *ContainerWakeupProbe) GetHttpGet() *HTTPGetAction {
+func (x *ContainerWakeupProbe) GetHttpGet() *HttpGetAction {
 	if x != nil {
 		return x.HttpGet
 	}
@@ -3485,8 +3483,8 @@ func (x *ContainerWakeupProbe) GetTimeoutSeconds() int32 {
 	return 0
 }
 
-// HTTPGetAction describes the HTTP GET the probe polls.
-type HTTPGetAction struct {
+// HttpGetAction describes the HTTP GET the probe polls.
+type HttpGetAction struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// path must be a URL path starting with "/", using only RFC 3986
 	// path-segment characters, without query or fragment.
@@ -3506,20 +3504,20 @@ type HTTPGetAction struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *HTTPGetAction) Reset() {
-	*x = HTTPGetAction{}
+func (x *HttpGetAction) Reset() {
+	*x = HttpGetAction{}
 	mi := &file_ateapi_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *HTTPGetAction) String() string {
+func (x *HttpGetAction) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*HTTPGetAction) ProtoMessage() {}
+func (*HttpGetAction) ProtoMessage() {}
 
-func (x *HTTPGetAction) ProtoReflect() protoreflect.Message {
+func (x *HttpGetAction) ProtoReflect() protoreflect.Message {
 	mi := &file_ateapi_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -3531,19 +3529,19 @@ func (x *HTTPGetAction) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use HTTPGetAction.ProtoReflect.Descriptor instead.
-func (*HTTPGetAction) Descriptor() ([]byte, []int) {
+// Deprecated: Use HttpGetAction.ProtoReflect.Descriptor instead.
+func (*HttpGetAction) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{37}
 }
 
-func (x *HTTPGetAction) GetPath() string {
+func (x *HttpGetAction) GetPath() string {
 	if x != nil {
 		return x.Path
 	}
 	return ""
 }
 
-func (x *HTTPGetAction) GetPort() int32 {
+func (x *HttpGetAction) GetPort() int32 {
 	if x != nil {
 		return x.Port
 	}
@@ -3811,7 +3809,7 @@ type SystemInfoVolumeSource struct {
 	// +k8s:optional
 	// +k8s:maxItems=8
 	// +k8s:listType=atomic
-	// +k8s:customValidation # paths unique across entries
+	// +k8s:customValidation # at most one actor_metadata; paths unique across entries
 	DataSources   []*SystemInfoDataSource `protobuf:"bytes,1,rep,name=data_sources,json=dataSources,proto3" json:"data_sources,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -5622,8 +5620,8 @@ func (x *GetTagRequest) GetTag() *ObjectRef {
 	return nil
 }
 
-// Request message for MintActorJWT.
-type MintActorJWTRequest struct {
+// Request message for MintActorJwt.
+type MintActorJwtRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The actor for which the JWT should be issued.
 	//
@@ -5649,20 +5647,20 @@ type MintActorJWTRequest struct {
 	sizeCache         protoimpl.SizeCache
 }
 
-func (x *MintActorJWTRequest) Reset() {
-	*x = MintActorJWTRequest{}
+func (x *MintActorJwtRequest) Reset() {
+	*x = MintActorJwtRequest{}
 	mi := &file_ateapi_proto_msgTypes[75]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *MintActorJWTRequest) String() string {
+func (x *MintActorJwtRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*MintActorJWTRequest) ProtoMessage() {}
+func (*MintActorJwtRequest) ProtoMessage() {}
 
-func (x *MintActorJWTRequest) ProtoReflect() protoreflect.Message {
+func (x *MintActorJwtRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_ateapi_proto_msgTypes[75]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -5674,34 +5672,34 @@ func (x *MintActorJWTRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use MintActorJWTRequest.ProtoReflect.Descriptor instead.
-func (*MintActorJWTRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use MintActorJwtRequest.ProtoReflect.Descriptor instead.
+func (*MintActorJwtRequest) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{75}
 }
 
-func (x *MintActorJWTRequest) GetActor() *ObjectRef {
+func (x *MintActorJwtRequest) GetActor() *ObjectRef {
 	if x != nil {
 		return x.Actor
 	}
 	return nil
 }
 
-func (x *MintActorJWTRequest) GetAudiences() []string {
+func (x *MintActorJwtRequest) GetAudiences() []string {
 	if x != nil {
 		return x.Audiences
 	}
 	return nil
 }
 
-func (x *MintActorJWTRequest) GetExpirationSeconds() int64 {
+func (x *MintActorJwtRequest) GetExpirationSeconds() int64 {
 	if x != nil {
 		return x.ExpirationSeconds
 	}
 	return 0
 }
 
-// Response message for MintActorJWT.
-type MintActorJWTResponse struct {
+// Response message for MintActorJwt.
+type MintActorJwtResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The signed actor JWT. Relying parties verify it with OpenID Connect
 	// Discovery against its issuer.
@@ -5724,20 +5722,20 @@ type MintActorJWTResponse struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *MintActorJWTResponse) Reset() {
-	*x = MintActorJWTResponse{}
+func (x *MintActorJwtResponse) Reset() {
+	*x = MintActorJwtResponse{}
 	mi := &file_ateapi_proto_msgTypes[76]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *MintActorJWTResponse) String() string {
+func (x *MintActorJwtResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*MintActorJWTResponse) ProtoMessage() {}
+func (*MintActorJwtResponse) ProtoMessage() {}
 
-func (x *MintActorJWTResponse) ProtoReflect() protoreflect.Message {
+func (x *MintActorJwtResponse) ProtoReflect() protoreflect.Message {
 	mi := &file_ateapi_proto_msgTypes[76]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -5749,19 +5747,19 @@ func (x *MintActorJWTResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use MintActorJWTResponse.ProtoReflect.Descriptor instead.
-func (*MintActorJWTResponse) Descriptor() ([]byte, []int) {
+// Deprecated: Use MintActorJwtResponse.ProtoReflect.Descriptor instead.
+func (*MintActorJwtResponse) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{76}
 }
 
-func (x *MintActorJWTResponse) GetActorJwt() string {
+func (x *MintActorJwtResponse) GetActorJwt() string {
 	if x != nil {
 		return x.ActorJwt
 	}
 	return ""
 }
 
-func (x *MintActorJWTResponse) GetExpiresAt() *timestamppb.Timestamp {
+func (x *MintActorJwtResponse) GetExpiresAt() *timestamppb.Timestamp {
 	if x != nil {
 		return x.ExpiresAt
 	}
@@ -8597,18 +8595,18 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x05rules\x18\x02 \x03(\v2\x12.ateapi.EgressRuleR\x05rules\"\xa0\x01\n" +
 	"\n" +
 	"EgressRule\x12$\n" +
-	"\x04http\x18\x01 \x01(\v2\x10.ateapi.HTTPRuleR\x04http\x12'\n" +
-	"\x05https\x18\x02 \x01(\v2\x11.ateapi.HTTPSRuleR\x05https\x12C\n" +
-	"\x0ftls_passthrough\x18\x03 \x01(\v2\x1a.ateapi.TLSPassthroughRuleR\x0etlsPassthrough\"\x80\x01\n" +
-	"\bHTTPRule\x12\x1c\n" +
+	"\x04http\x18\x01 \x01(\v2\x10.ateapi.HttpRuleR\x04http\x12'\n" +
+	"\x05https\x18\x02 \x01(\v2\x11.ateapi.HttpsRuleR\x05https\x12C\n" +
+	"\x0ftls_passthrough\x18\x03 \x01(\v2\x1a.ateapi.TlsPassthroughRuleR\x0etlsPassthrough\"\x80\x01\n" +
+	"\bHttpRule\x12\x1c\n" +
 	"\thostnames\x18\x01 \x03(\tR\thostnames\x12#\n" +
 	"\x05ports\x18\x02 \x01(\v2\r.ateapi.PortsR\x05ports\x121\n" +
 	"\aeffects\x18\x03 \x01(\v2\x17.ateapi.HttpRuleEffectsR\aeffects\"\x81\x01\n" +
-	"\tHTTPSRule\x12\x1c\n" +
+	"\tHttpsRule\x12\x1c\n" +
 	"\thostnames\x18\x01 \x03(\tR\thostnames\x12#\n" +
 	"\x05ports\x18\x02 \x01(\v2\r.ateapi.PortsR\x05ports\x121\n" +
 	"\aeffects\x18\x03 \x01(\v2\x17.ateapi.HttpRuleEffectsR\aeffects\"W\n" +
-	"\x12TLSPassthroughRule\x12\x1c\n" +
+	"\x12TlsPassthroughRule\x12\x1c\n" +
 	"\thostnames\x18\x01 \x03(\tR\thostnames\x12#\n" +
 	"\x05ports\x18\x02 \x01(\v2\r.ateapi.PortsR\x05ports\"E\n" +
 	"\x05Ports\x12\"\n" +
@@ -8622,8 +8620,8 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x06header\x18\x01 \x01(\tR\x06header\x12\x16\n" +
 	"\x06prefix\x18\x02 \x01(\tR\x06prefix\x12%\n" +
 	"\x0ecredential_uri\x18\x03 \x01(\tR\rcredentialUri\x123\n" +
-	"\tactor_jwt\x18\x04 \x01(\v2\x16.ateapi.ActorJWTSourceR\bactorJwt\"]\n" +
-	"\x0eActorJWTSource\x12\x1c\n" +
+	"\tactor_jwt\x18\x04 \x01(\v2\x16.ateapi.ActorJwtSourceR\bactorJwt\"]\n" +
+	"\x0eActorJwtSource\x12\x1c\n" +
 	"\taudiences\x18\x01 \x03(\tR\taudiences\x12-\n" +
 	"\x12expiration_seconds\x18\x02 \x01(\x03R\x11expirationSeconds\"\xfa\x02\n" +
 	"\vActorStatus\x12(\n" +
@@ -8716,9 +8714,9 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x19\n" +
 	"\x05value\x18\x02 \x01(\tB\x03\x80\x01\x01R\x05value\"q\n" +
 	"\x14ContainerWakeupProbe\x120\n" +
-	"\bhttp_get\x18\x01 \x01(\v2\x15.ateapi.HTTPGetActionR\ahttpGet\x12'\n" +
+	"\bhttp_get\x18\x01 \x01(\v2\x15.ateapi.HttpGetActionR\ahttpGet\x12'\n" +
 	"\x0ftimeout_seconds\x18\x02 \x01(\x05R\x0etimeoutSeconds\"7\n" +
-	"\rHTTPGetAction\x12\x12\n" +
+	"\rHttpGetAction\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x12\n" +
 	"\x04port\x18\x02 \x01(\x05R\x04port\"\xa9\x02\n" +
 	"\x06Volume\x12\x12\n" +
@@ -8823,11 +8821,11 @@ const file_ateapi_proto_rawDesc = "" +
 	"\aoptions\x18\x03 \x01(\v2\x15.ateapi.DeleteOptionsR\aoptions\"4\n" +
 	"\rGetTagRequest\x12#\n" +
 	"\x03tag\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x03tag\"\x8b\x01\n" +
-	"\x13MintActorJWTRequest\x12'\n" +
+	"\x13MintActorJwtRequest\x12'\n" +
 	"\x05actor\x18\x05 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\x12\x1c\n" +
 	"\taudiences\x18\x01 \x03(\tR\taudiences\x12-\n" +
 	"\x12expiration_seconds\x18\b \x01(\x03R\x11expirationSeconds\"s\n" +
-	"\x14MintActorJWTResponse\x12 \n" +
+	"\x14MintActorJwtResponse\x12 \n" +
 	"\tactor_jwt\x18\x01 \x01(\tB\x03\x80\x01\x01R\bactorJwt\x129\n" +
 	"\n" +
 	"expires_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\"\xa3\x01\n" +
@@ -9039,7 +9037,7 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x17CreateActorEgressPolicy\x12&.ateapi.CreateActorEgressPolicyRequest\x1a\x14.ateapi.EgressPolicy\"\x00\x12Y\n" +
 	"\x17UpdateActorEgressPolicy\x12&.ateapi.UpdateActorEgressPolicyRequest\x1a\x14.ateapi.EgressPolicy\"\x00\x12Y\n" +
 	"\x17DeleteActorEgressPolicy\x12&.ateapi.DeleteActorEgressPolicyRequest\x1a\x14.ateapi.EgressPolicy\"\x00\x12K\n" +
-	"\fMintActorJWT\x12\x1b.ateapi.MintActorJWTRequest\x1a\x1c.ateapi.MintActorJWTResponse\"\x00\x12c\n" +
+	"\fMintActorJwt\x12\x1b.ateapi.MintActorJwtRequest\x1a\x1c.ateapi.MintActorJwtResponse\"\x00\x12c\n" +
 	"\x14MintActorCertificate\x12#.ateapi.MintActorCertificateRequest\x1a$.ateapi.MintActorCertificateResponse\"\x00\x124\n" +
 	"\tCreateTag\x12\x18.ateapi.CreateTagRequest\x1a\v.ateapi.Tag\"\x00\x12.\n" +
 	"\x06GetTag\x12\x15.ateapi.GetTagRequest\x1a\v.ateapi.Tag\"\x00\x12?\n" +
@@ -9108,14 +9106,14 @@ var file_ateapi_proto_goTypes = []any{
 	(*Actor)(nil),                              // 15: ateapi.Actor
 	(*EgressPolicy)(nil),                       // 16: ateapi.EgressPolicy
 	(*EgressRule)(nil),                         // 17: ateapi.EgressRule
-	(*HTTPRule)(nil),                           // 18: ateapi.HTTPRule
-	(*HTTPSRule)(nil),                          // 19: ateapi.HTTPSRule
-	(*TLSPassthroughRule)(nil),                 // 20: ateapi.TLSPassthroughRule
+	(*HttpRule)(nil),                           // 18: ateapi.HttpRule
+	(*HttpsRule)(nil),                          // 19: ateapi.HttpsRule
+	(*TlsPassthroughRule)(nil),                 // 20: ateapi.TlsPassthroughRule
 	(*Ports)(nil),                              // 21: ateapi.Ports
 	(*AllPorts)(nil),                           // 22: ateapi.AllPorts
 	(*HttpRuleEffects)(nil),                    // 23: ateapi.HttpRuleEffects
 	(*CredentialHeader)(nil),                   // 24: ateapi.CredentialHeader
-	(*ActorJWTSource)(nil),                     // 25: ateapi.ActorJWTSource
+	(*ActorJwtSource)(nil),                     // 25: ateapi.ActorJwtSource
 	(*ActorStatus)(nil),                        // 26: ateapi.ActorStatus
 	(*ActorCrash)(nil),                         // 27: ateapi.ActorCrash
 	(*WorkerAssignment)(nil),                   // 28: ateapi.WorkerAssignment
@@ -9136,7 +9134,7 @@ var file_ateapi_proto_goTypes = []any{
 	(*Capabilities)(nil),                       // 43: ateapi.Capabilities
 	(*EnvVar)(nil),                             // 44: ateapi.EnvVar
 	(*ContainerWakeupProbe)(nil),               // 45: ateapi.ContainerWakeupProbe
-	(*HTTPGetAction)(nil),                      // 46: ateapi.HTTPGetAction
+	(*HttpGetAction)(nil),                      // 46: ateapi.HttpGetAction
 	(*Volume)(nil),                             // 47: ateapi.Volume
 	(*ImageVolumeSource)(nil),                  // 48: ateapi.ImageVolumeSource
 	(*DurableDirVolumeSource)(nil),             // 49: ateapi.DurableDirVolumeSource
@@ -9174,8 +9172,8 @@ var file_ateapi_proto_goTypes = []any{
 	(*UpdateActorEgressPolicyRequest)(nil),     // 81: ateapi.UpdateActorEgressPolicyRequest
 	(*DeleteActorEgressPolicyRequest)(nil),     // 82: ateapi.DeleteActorEgressPolicyRequest
 	(*GetTagRequest)(nil),                      // 83: ateapi.GetTagRequest
-	(*MintActorJWTRequest)(nil),                // 84: ateapi.MintActorJWTRequest
-	(*MintActorJWTResponse)(nil),               // 85: ateapi.MintActorJWTResponse
+	(*MintActorJwtRequest)(nil),                // 84: ateapi.MintActorJwtRequest
+	(*MintActorJwtResponse)(nil),               // 85: ateapi.MintActorJwtResponse
 	(*MintActorCertificateRequest)(nil),        // 86: ateapi.MintActorCertificateRequest
 	(*MintActorCertificateResponse)(nil),       // 87: ateapi.MintActorCertificateResponse
 	(*ListTagsRequest)(nil),                    // 88: ateapi.ListTagsRequest
@@ -9240,17 +9238,17 @@ var file_ateapi_proto_depIdxs = []int32{
 	26,  // 13: ateapi.Actor.status:type_name -> ateapi.ActorStatus
 	13,  // 14: ateapi.EgressPolicy.metadata:type_name -> ateapi.ResourceMetadata
 	17,  // 15: ateapi.EgressPolicy.rules:type_name -> ateapi.EgressRule
-	18,  // 16: ateapi.EgressRule.http:type_name -> ateapi.HTTPRule
-	19,  // 17: ateapi.EgressRule.https:type_name -> ateapi.HTTPSRule
-	20,  // 18: ateapi.EgressRule.tls_passthrough:type_name -> ateapi.TLSPassthroughRule
-	21,  // 19: ateapi.HTTPRule.ports:type_name -> ateapi.Ports
-	23,  // 20: ateapi.HTTPRule.effects:type_name -> ateapi.HttpRuleEffects
-	21,  // 21: ateapi.HTTPSRule.ports:type_name -> ateapi.Ports
-	23,  // 22: ateapi.HTTPSRule.effects:type_name -> ateapi.HttpRuleEffects
-	21,  // 23: ateapi.TLSPassthroughRule.ports:type_name -> ateapi.Ports
+	18,  // 16: ateapi.EgressRule.http:type_name -> ateapi.HttpRule
+	19,  // 17: ateapi.EgressRule.https:type_name -> ateapi.HttpsRule
+	20,  // 18: ateapi.EgressRule.tls_passthrough:type_name -> ateapi.TlsPassthroughRule
+	21,  // 19: ateapi.HttpRule.ports:type_name -> ateapi.Ports
+	23,  // 20: ateapi.HttpRule.effects:type_name -> ateapi.HttpRuleEffects
+	21,  // 21: ateapi.HttpsRule.ports:type_name -> ateapi.Ports
+	23,  // 22: ateapi.HttpsRule.effects:type_name -> ateapi.HttpRuleEffects
+	21,  // 23: ateapi.TlsPassthroughRule.ports:type_name -> ateapi.Ports
 	22,  // 24: ateapi.Ports.all:type_name -> ateapi.AllPorts
 	24,  // 25: ateapi.HttpRuleEffects.replace_headers:type_name -> ateapi.CredentialHeader
-	25,  // 26: ateapi.CredentialHeader.actor_jwt:type_name -> ateapi.ActorJWTSource
+	25,  // 26: ateapi.CredentialHeader.actor_jwt:type_name -> ateapi.ActorJwtSource
 	4,   // 27: ateapi.ActorStatus.state:type_name -> ateapi.ActorState
 	28,  // 28: ateapi.ActorStatus.worker_assignment:type_name -> ateapi.WorkerAssignment
 	14,  // 29: ateapi.ActorStatus.external_volumes:type_name -> ateapi.ExternalVolume
@@ -9286,7 +9284,7 @@ var file_ateapi_proto_depIdxs = []int32{
 	42,  // 59: ateapi.Container.security_context:type_name -> ateapi.SecurityContext
 	34,  // 60: ateapi.Container.resources:type_name -> ateapi.Resources
 	43,  // 61: ateapi.SecurityContext.capabilities:type_name -> ateapi.Capabilities
-	46,  // 62: ateapi.ContainerWakeupProbe.http_get:type_name -> ateapi.HTTPGetAction
+	46,  // 62: ateapi.ContainerWakeupProbe.http_get:type_name -> ateapi.HttpGetAction
 	49,  // 63: ateapi.Volume.durable_dir:type_name -> ateapi.DurableDirVolumeSource
 	50,  // 64: ateapi.Volume.external_volume_template:type_name -> ateapi.ExternalVolumeTemplate
 	51,  // 65: ateapi.Volume.system_info:type_name -> ateapi.SystemInfoVolumeSource
@@ -9327,8 +9325,8 @@ var file_ateapi_proto_depIdxs = []int32{
 	32,  // 100: ateapi.DeleteActorEgressPolicyRequest.actor:type_name -> ateapi.ObjectRef
 	93,  // 101: ateapi.DeleteActorEgressPolicyRequest.options:type_name -> ateapi.DeleteOptions
 	32,  // 102: ateapi.GetTagRequest.tag:type_name -> ateapi.ObjectRef
-	32,  // 103: ateapi.MintActorJWTRequest.actor:type_name -> ateapi.ObjectRef
-	131, // 104: ateapi.MintActorJWTResponse.expires_at:type_name -> google.protobuf.Timestamp
+	32,  // 103: ateapi.MintActorJwtRequest.actor:type_name -> ateapi.ObjectRef
+	131, // 104: ateapi.MintActorJwtResponse.expires_at:type_name -> google.protobuf.Timestamp
 	32,  // 105: ateapi.MintActorCertificateRequest.actor:type_name -> ateapi.ObjectRef
 	30,  // 106: ateapi.ListTagsResponse.tags:type_name -> ateapi.Tag
 	30,  // 107: ateapi.CreateTagRequest.tag:type_name -> ateapi.Tag
@@ -9392,7 +9390,7 @@ var file_ateapi_proto_depIdxs = []int32{
 	80,  // 165: ateapi.Control.CreateActorEgressPolicy:input_type -> ateapi.CreateActorEgressPolicyRequest
 	81,  // 166: ateapi.Control.UpdateActorEgressPolicy:input_type -> ateapi.UpdateActorEgressPolicyRequest
 	82,  // 167: ateapi.Control.DeleteActorEgressPolicy:input_type -> ateapi.DeleteActorEgressPolicyRequest
-	84,  // 168: ateapi.Control.MintActorJWT:input_type -> ateapi.MintActorJWTRequest
+	84,  // 168: ateapi.Control.MintActorJwt:input_type -> ateapi.MintActorJwtRequest
 	86,  // 169: ateapi.Control.MintActorCertificate:input_type -> ateapi.MintActorCertificateRequest
 	90,  // 170: ateapi.Control.CreateTag:input_type -> ateapi.CreateTagRequest
 	83,  // 171: ateapi.Control.GetTag:input_type -> ateapi.GetTagRequest
@@ -9437,7 +9435,7 @@ var file_ateapi_proto_depIdxs = []int32{
 	16,  // 210: ateapi.Control.CreateActorEgressPolicy:output_type -> ateapi.EgressPolicy
 	16,  // 211: ateapi.Control.UpdateActorEgressPolicy:output_type -> ateapi.EgressPolicy
 	16,  // 212: ateapi.Control.DeleteActorEgressPolicy:output_type -> ateapi.EgressPolicy
-	85,  // 213: ateapi.Control.MintActorJWT:output_type -> ateapi.MintActorJWTResponse
+	85,  // 213: ateapi.Control.MintActorJwt:output_type -> ateapi.MintActorJwtResponse
 	87,  // 214: ateapi.Control.MintActorCertificate:output_type -> ateapi.MintActorCertificateResponse
 	30,  // 215: ateapi.Control.CreateTag:output_type -> ateapi.Tag
 	30,  // 216: ateapi.Control.GetTag:output_type -> ateapi.Tag

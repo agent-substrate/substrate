@@ -23,19 +23,19 @@ import (
 )
 
 func httpRule(patterns ...string) *ateapipb.EgressRule {
-	return &ateapipb.EgressRule{Http: &ateapipb.HTTPRule{Hostnames: patterns}}
+	return &ateapipb.EgressRule{Http: &ateapipb.HttpRule{Hostnames: patterns}}
 }
 
 func httpRuleOnPorts(ports *ateapipb.Ports, patterns ...string) *ateapipb.EgressRule {
-	return &ateapipb.EgressRule{Http: &ateapipb.HTTPRule{Hostnames: patterns, Ports: ports}}
+	return &ateapipb.EgressRule{Http: &ateapipb.HttpRule{Hostnames: patterns, Ports: ports}}
 }
 
 func httpsRule(patterns ...string) *ateapipb.EgressRule {
-	return &ateapipb.EgressRule{Https: &ateapipb.HTTPSRule{Hostnames: patterns}}
+	return &ateapipb.EgressRule{Https: &ateapipb.HttpsRule{Hostnames: patterns}}
 }
 
 func passthroughRule(ports *ateapipb.Ports, patterns ...string) *ateapipb.EgressRule {
-	return &ateapipb.EgressRule{TlsPassthrough: &ateapipb.TLSPassthroughRule{Hostnames: patterns, Ports: ports}}
+	return &ateapipb.EgressRule{TlsPassthrough: &ateapipb.TlsPassthroughRule{Hostnames: patterns, Ports: ports}}
 }
 
 func ports(numbers ...int32) *ateapipb.Ports { return &ateapipb.Ports{Numbers: numbers} }
@@ -214,7 +214,7 @@ func TestEvaluateRequest(t *testing.T) {
 			CredentialUri: "ate-secret://k8s/default/token",
 		}},
 	}
-	withEffects := &ateapipb.EgressRule{Https: &ateapipb.HTTPSRule{
+	withEffects := &ateapipb.EgressRule{Https: &ateapipb.HttpsRule{
 		Hostnames: []string{"api.example.com"},
 		Effects:   effects,
 	}}
@@ -400,7 +400,7 @@ func TestEvaluateRequest(t *testing.T) {
 }
 
 func httpsRuleOnPorts(ports *ateapipb.Ports, patterns ...string) *ateapipb.EgressRule {
-	return &ateapipb.EgressRule{Https: &ateapipb.HTTPSRule{Hostnames: patterns, Ports: ports}}
+	return &ateapipb.EgressRule{Https: &ateapipb.HttpsRule{Hostnames: patterns, Ports: ports}}
 }
 
 func TestSNIRules(t *testing.T) {

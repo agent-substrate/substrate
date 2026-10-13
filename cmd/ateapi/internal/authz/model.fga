@@ -25,10 +25,17 @@ type user
 # Physical host node running atelet
 type node
 
-# Worker pod running ateom
+# Worker pod running ateom (global-scoped)
 type worker
   relations
+    define parent_global: [global]
     define host_node: [node]
+
+    define can_get: viewer from parent_global
+    define can_list_actor_assignments: viewer from parent_global
+    define can_update: owner from parent_global
+    define can_delete: owner from parent_global
+    define can_drain: owner from parent_global
 
 # Global Scope (singleton: there will only ever be one instance, e.g. 'global:root')
 type global
@@ -36,8 +43,14 @@ type global
     define owner: [user]
     define viewer: [user] or owner
 
+    # TODO: add system component roles (atenet-router, atenet-egress,
+    # ate-controller), granted from ateapi's configuration to their mTLS
+    # SPIFFE IDs, so they don't need global owner to call ateapi.
+
     define can_create_atespace: owner
     define can_list_atespaces: viewer
+    define can_create_worker: owner
+    define can_list_workers: viewer
     define can_get: viewer
 
     # Listing across all atespaces (List RPCs with an empty atespace).
@@ -99,6 +112,12 @@ type actor
     define can_update: editor from parent_atespace
     define can_delete: editor from parent_atespace
 
+    # Egress policy: one per actor, so its permissions live on the actor.
+    define can_get_egress_policy: viewer from parent_atespace
+    define can_create_egress_policy: editor from parent_atespace
+    define can_update_egress_policy: editor from parent_atespace
+    define can_delete_egress_policy: editor from parent_atespace
+
     # --- Hardened System & Infrastructure Operations ---
 
     # Node Restriction: Only the node hosting the scheduled worker can mint ateom actor credentials
@@ -108,5 +127,6 @@ type actor
     define can_resume: [user] or editor from parent_atespace
 
     # Lifecycle Operations
+    define can_pause: [user] or editor from parent_atespace
     define can_suspend: [user] or editor from parent_atespace
     define can_revert: [user] or editor from parent_atespace

@@ -39,9 +39,9 @@ func TestEgressPolicyFromManifest(t *testing.T) {
 	t.Parallel()
 
 	fullMetadata := &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "default"}
-	httpRules := []*ateapipb.EgressRule{{Http: &ateapipb.HTTPRule{Hostnames: []string{"api.example.com"}}}}
-	tlsRules := []*ateapipb.EgressRule{{TlsPassthrough: &ateapipb.TLSPassthroughRule{Hostnames: []string{"*.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{443}}}}}
-	anyRules := []*ateapipb.EgressRule{{Http: &ateapipb.HTTPRule{Hostnames: []string{"*"}}}}
+	httpRules := []*ateapipb.EgressRule{{Http: &ateapipb.HttpRule{Hostnames: []string{"api.example.com"}}}}
+	tlsRules := []*ateapipb.EgressRule{{TlsPassthrough: &ateapipb.TlsPassthroughRule{Hostnames: []string{"*.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{443}}}}}
+	anyRules := []*ateapipb.EgressRule{{Http: &ateapipb.HttpRule{Hostnames: []string{"*"}}}}
 
 	tests := []struct {
 		name     string
@@ -283,7 +283,7 @@ rules:
 func TestOverrideEgressPolicyMetadata(t *testing.T) {
 	t.Parallel()
 
-	rules := []*ateapipb.EgressRule{{Http: &ateapipb.HTTPRule{Hostnames: []string{"*"}}}}
+	rules := []*ateapipb.EgressRule{{Http: &ateapipb.HttpRule{Hostnames: []string{"*"}}}}
 	filled := &ateapipb.EgressPolicy{Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "default"}, Rules: rules}
 	pinned := &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "default", Uid: "3f2b1c0e-8d5a-4b6e-9c1d-2a7e4f6b8c0d", Version: 2}
 
@@ -365,11 +365,11 @@ func TestEgressPolicyManifest_RoundTrip(t *testing.T) {
 			UpdateTime: timestamppb.New(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)),
 		},
 		Rules: []*ateapipb.EgressRule{
-			{Http: &ateapipb.HTTPRule{Hostnames: []string{"*.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{80, 8080}}}},
-			{Https: &ateapipb.HTTPSRule{Hostnames: []string{"api.example.com"}, Effects: &ateapipb.HttpRuleEffects{
+			{Http: &ateapipb.HttpRule{Hostnames: []string{"*.example.com"}, Ports: &ateapipb.Ports{Numbers: []int32{80, 8080}}}},
+			{Https: &ateapipb.HttpsRule{Hostnames: []string{"api.example.com"}, Effects: &ateapipb.HttpRuleEffects{
 				ReplaceHeaders: []*ateapipb.CredentialHeader{{Header: "authorization", Prefix: "Bearer ", CredentialUri: "ate-secret://k8s/default/token"}},
 			}}},
-			{TlsPassthrough: &ateapipb.TLSPassthroughRule{Hostnames: []string{"*"}, Ports: &ateapipb.Ports{All: &ateapipb.AllPorts{}}}},
+			{TlsPassthrough: &ateapipb.TlsPassthroughRule{Hostnames: []string{"*"}, Ports: &ateapipb.Ports{All: &ateapipb.AllPorts{}}}},
 		},
 	}
 
@@ -496,7 +496,7 @@ func TestGetEgressPolicyRunner_Run(t *testing.T) {
 			Version:    1,
 			CreateTime: timestamppb.New(now.Add(-5 * time.Minute)), // table row prints AGE 5m
 		},
-		Rules: []*ateapipb.EgressRule{{Http: &ateapipb.HTTPRule{Hostnames: []string{"api.example.com"}}}},
+		Rules: []*ateapipb.EgressRule{{Http: &ateapipb.HttpRule{Hostnames: []string{"api.example.com"}}}},
 	}
 
 	tests := []struct {
@@ -623,7 +623,7 @@ func TestCreateEgressPolicyRunner_Run(t *testing.T) {
 	pinTime(t, now)
 
 	actor := &ateapipb.ObjectRef{Atespace: "team-a", Name: "c1"}
-	rules := []*ateapipb.EgressRule{{Http: &ateapipb.HTTPRule{Hostnames: []string{"api.example.com"}}}}
+	rules := []*ateapipb.EgressRule{{Http: &ateapipb.HttpRule{Hostnames: []string{"api.example.com"}}}}
 	// A manifest cloned from another actor still carries that actor's
 	// server-managed fields; the CLI sends them as is and the server scrubs them.
 	manifest := &ateapipb.EgressPolicy{
@@ -739,8 +739,8 @@ func TestUpdateEgressPolicyRunner_Run(t *testing.T) {
 	actor := &ateapipb.ObjectRef{Atespace: "team-a", Name: "c1"}
 	const uid = "3f2b1c0e-8d5a-4b6e-9c1d-2a7e4f6b8c0d"
 	rules := []*ateapipb.EgressRule{
-		{Http: &ateapipb.HTTPRule{Hostnames: []string{"api.example.com"}}},
-		{Https: &ateapipb.HTTPSRule{Hostnames: []string{"www.example.com"}}},
+		{Http: &ateapipb.HttpRule{Hostnames: []string{"api.example.com"}}},
+		{Https: &ateapipb.HttpsRule{Hostnames: []string{"www.example.com"}}},
 	}
 	// The manifest is what `get -o yaml` printed, edited: it still carries the
 	// uid, version, and timestamps of the policy being replaced.
@@ -967,7 +967,7 @@ func TestDeleteEgressPolicyRunner_Run(t *testing.T) {
 	actor := &ateapipb.ObjectRef{Atespace: "team-a", Name: "c1"}
 	deleted := &ateapipb.EgressPolicy{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "default", Version: 1},
-		Rules:    []*ateapipb.EgressRule{{Http: &ateapipb.HTTPRule{Hostnames: []string{"api.example.com"}}}},
+		Rules:    []*ateapipb.EgressRule{{Http: &ateapipb.HttpRule{Hostnames: []string{"api.example.com"}}}},
 	}
 	unguarded := &ateapipb.DeleteActorEgressPolicyRequest{Actor: actor, Name: resources.SingletonName}
 	wantActorReq := &ateapipb.GetActorRequest{Actor: actor}
@@ -1103,19 +1103,19 @@ func TestEgressPolicyFromManifest_NighthawkEgress(t *testing.T) {
 		},
 		Rules: []*ateapipb.EgressRule{
 			{
-				Http: &ateapipb.HTTPRule{
+				Http: &ateapipb.HttpRule{
 					Hostnames: []string{"*"},
 					Ports:     &ateapipb.Ports{Numbers: []int32{80}},
 				},
 			},
 			{
-				Https: &ateapipb.HTTPSRule{
+				Https: &ateapipb.HttpsRule{
 					Hostnames: []string{"*"},
 					Ports:     &ateapipb.Ports{Numbers: []int32{443}},
 				},
 			},
 			{
-				TlsPassthrough: &ateapipb.TLSPassthroughRule{
+				TlsPassthrough: &ateapipb.TlsPassthroughRule{
 					Hostnames: []string{"*"},
 					Ports:     &ateapipb.Ports{Numbers: []int32{8443}},
 				},

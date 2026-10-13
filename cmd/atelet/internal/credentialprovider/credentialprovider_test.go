@@ -25,6 +25,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"syscall"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -32,6 +33,19 @@ import (
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 )
+
+// writeExecutable writes script into dir/name as an executable. Forks are held
+// off until the file is closed: a child forked while it is open keeps the
+// write descriptor until it execs, and exec-ing the script meanwhile fails
+// with "text file busy" (ETXTBSY).
+func writeExecutable(t *testing.T, dir, name, script string) {
+	t.Helper()
+	syscall.ForkLock.RLock()
+	defer syscall.ForkLock.RUnlock()
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(script), 0o700); err != nil {
+		t.Fatalf("Failed to write fake plugin %q: %v", name, err)
+	}
+}
 
 // fakePlugin writes an executable named name into dir that records each
 // request it is handed (one JSON object per line in <dir>/<name>.requests) and
@@ -46,9 +60,7 @@ cat <<'RESPONSE'
 %s
 RESPONSE
 `, requests, requests, response)
-	if err := os.WriteFile(filepath.Join(dir, pluginName), []byte(script), 0o700); err != nil {
-		t.Fatalf("Failed to write fake plugin: %v", err)
-	}
+	writeExecutable(t, dir, pluginName, script)
 	return requests
 }
 
@@ -56,10 +68,7 @@ RESPONSE
 // non-zero.
 func failingPlugin(t *testing.T, dir, pluginName, message string) {
 	t.Helper()
-	script := fmt.Sprintf("#!/bin/sh\necho %q >&2\nexit 7\n", message)
-	if err := os.WriteFile(filepath.Join(dir, pluginName), []byte(script), 0o700); err != nil {
-		t.Fatalf("Failed to write failing plugin: %v", err)
-	}
+	writeExecutable(t, dir, pluginName, fmt.Sprintf("#!/bin/sh\necho %q >&2\nexit 7\n", message))
 }
 
 // writeConfig writes a CredentialProviderConfig into dir and returns its path.
@@ -659,9 +668,7 @@ cat <<RESPONSE
 {"kind":"CredentialProviderResponse","apiVersion":"credentialprovider.kubelet.k8s.io/v1","cacheKeyType":"Registry","auth":{"gcr.io":{"username":"$FROM_CONFIG","password":"$FROM_PROCESS"}}}
 RESPONSE
 `
-	if err := os.WriteFile(filepath.Join(dir, "fake-provider"), []byte(script), 0o700); err != nil {
-		t.Fatalf("Failed to write fake plugin: %v", err)
-	}
+	writeExecutable(t, dir, "fake-provider", script)
 	t.Setenv("FROM_PROCESS", "inherited")
 
 	kc, err := New(writeConfig(t, dir, `kind: CredentialProviderConfig
@@ -697,9 +704,7 @@ cat <<RESPONSE
 {"kind":"CredentialProviderResponse","apiVersion":"credentialprovider.kubelet.k8s.io/v1","cacheKeyType":"Registry","auth":{"gcr.io":{"username":"$1","password":"$2"}}}
 RESPONSE
 `
-	if err := os.WriteFile(filepath.Join(dir, "fake-provider"), []byte(script), 0o700); err != nil {
-		t.Fatalf("Failed to write fake plugin: %v", err)
-	}
+	writeExecutable(t, dir, "fake-provider", script)
 
 	kc, err := New(writeConfig(t, dir, `kind: CredentialProviderConfig
 apiVersion: kubelet.config.k8s.io/v1
@@ -725,9 +730,7 @@ providers:
 func TestKeychainRespectsContextCancellation(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "fake-provider"), []byte("#!/bin/sh\nsleep 60\n"), 0o700); err != nil {
-		t.Fatalf("Failed to write fake plugin: %v", err)
-	}
+	writeExecutable(t, dir, "fake-provider", "#!/bin/sh\nsleep 60\n")
 
 	kc, err := New(writeConfig(t, dir, gcpLikeConfig), dir)
 	if err != nil {
