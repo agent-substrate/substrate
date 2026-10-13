@@ -76,7 +76,8 @@ func fromDir(dir string, actors int) *ateletpb.WorkerResources {
 }
 
 // defaultRuntime is the runtime actors hosted by this ateom start under: its
-// sandbox class on this host's hardware.
+// sandbox class on this host's hardware, probed for the attributes that class's
+// restore path depends on.
 //
 // TODO: Report the pool's SandboxConfig so atelet can complete the identity
 // with the digests of the default version's assets and list its other
@@ -84,7 +85,7 @@ func fromDir(dir string, actors int) *ateletpb.WorkerResources {
 func defaultRuntime(sandboxClass string) *ateletpb.SandboxRuntime {
 	return &ateletpb.SandboxRuntime{
 		SandboxClass: sandboxClass,
-		Version:      hardware.ProbeHost(),
+		Version:      hardware.ProbeHost(hardware.ProfileFor(sandboxClass)),
 	}
 }
 

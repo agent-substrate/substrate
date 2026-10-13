@@ -15,20 +15,216 @@
 package hardware
 
 import (
+	"os"
+	"path/filepath"
+	"regexp"
 	"runtime"
+	"slices"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
+	"google.golang.org/protobuf/testing/protocmp"
+
+	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
-func TestProbeHost(t *testing.T) {
-	compat := ProbeHost()
-	if got := compat.GetSchemaVersion(); got != SchemaVersionV1 {
-		t.Errorf("ProbeHost() schema_version = %q, want %q", got, SchemaVersionV1)
+const (
+	intelCPUInfo = `processor	: 0
+vendor_id	: GenuineIntel
+cpu family	: 6
+model		: 143
+model name	: Intel(R) Xeon(R) Platinum 8481C CPU @ 2.70GHz
+stepping	: 8
+flags		: fpu vme avx2 aes fma avx2
+
+processor	: 1
+vendor_id	: GenuineIntel
+cpu family	: 6
+model		: 143
+flags		: fpu vme avx2 aes fma
+`
+
+	amdCPUInfo = `processor	: 0
+vendor_id	: AuthenticAMD
+cpu family	: 25
+model		: 17
+model name	: AMD EPYC 9B14
+flags		: fpu vme sse4_2 avx2 sha_ni
+`
+
+	arm64CPUInfo = `processor	: 0
+BogoMIPS	: 50.00
+Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics
+CPU implementer	: 0x41
+CPU architecture: 8
+CPU variant	: 0x1
+CPU part	: 0xd40
+CPU revision	: 1
+`
+)
+
+func writeCPUInfo(t *testing.T, content string) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "cpuinfo")
+	if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
+		t.Fatalf("writing cpuinfo fixture: %v", err)
 	}
-	attrs := compat.GetAttributes()
-	if len(attrs) != 1 || attrs[0].GetKey() != AttrArchitecture || attrs[0].GetValue() != runtime.GOARCH {
-		t.Errorf("ProbeHost() attributes = %v, want [{%s: %s}]", attrs, AttrArchitecture, runtime.GOARCH)
+	return p
+}
+
+func entries(kv ...string) []*ateletpb.AttributeEntry {
+	var out []*ateletpb.AttributeEntry
+	for i := 0; i+1 < len(kv); i += 2 {
+		out = append(out, &ateletpb.AttributeEntry{Key: kv[i], Value: kv[i+1]})
+	}
+	return out
+}
+
+func TestRegistry(t *testing.T) {
+	snakeCase := regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+	seen := make(map[string]bool, len(allAttributes))
+	for _, attr := range allAttributes {
+		if !snakeCase.MatchString(attr.key) {
+			t.Errorf("attribute key %q is not snake_case", attr.key)
+		}
+		if seen[attr.key] {
+			t.Errorf("duplicate attribute key %q in allAttributes", attr.key)
+		}
+		seen[attr.key] = true
+		if attr.derive == nil {
+			t.Errorf("attribute %q has nil derive", attr.key)
+		}
+	}
+
+	for name, tc := range map[string]struct {
+		profile  Profile
+		wantKeys []string
+	}{
+		"Base":    {Base, []string{AttrArchitecture}},
+		"GVisor":  {GVisor, []string{AttrArchitecture}},
+		"MicroVM": {MicroVM, []string{AttrArchitecture, AttrCPUVendor, AttrCPUModel}},
+	} {
+		gotKeys := tc.profile.Keys()
+		if diff := cmp.Diff(tc.wantKeys, gotKeys); diff != "" {
+			t.Errorf("%s.Keys() mismatch (-want +got):\n%s", name, diff)
+		}
+		for _, key := range gotKeys {
+			if !seen[key] {
+				t.Errorf("profile %s references unregistered attribute %q", name, key)
+			}
+		}
+	}
+}
+
+func TestProfileFor(t *testing.T) {
+	for class, want := range map[string]Profile{
+		"gvisor":  GVisor,
+		"microvm": MicroVM,
+		"":        Base,
+		"unknown": Base,
+	} {
+		if got := ProfileFor(class); !cmp.Equal(want.Keys(), got.Keys()) {
+			t.Errorf("ProfileFor(%q) keys = %v, want %v", class, got.Keys(), want.Keys())
+		}
+	}
+}
+
+func TestProbeHost(t *testing.T) {
+	for _, p := range []Profile{GVisor, MicroVM} {
+		got := ProbeHost(p)
+		if got.GetSchemaVersion() != SchemaVersionV1 {
+			t.Errorf("ProbeHost() schema_version = %q, want %q", got.GetSchemaVersion(), SchemaVersionV1)
+		}
+		// Only architecture is knowable on every test host; the rest depends
+		// on /proc/cpuinfo and is covered by fixtures below.
+		if len(got.GetAttributes()) == 0 || got.GetAttributes()[0].GetKey() != AttrArchitecture || got.GetAttributes()[0].GetValue() != runtime.GOARCH {
+			t.Errorf("ProbeHost() attributes = %v, want %s=%s first", got.GetAttributes(), AttrArchitecture, runtime.GOARCH)
+		}
+		for _, a := range got.GetAttributes() {
+			if !slices.Contains(p.Keys(), a.GetKey()) {
+				t.Errorf("ProbeHost() reported %q outside profile %v", a.GetKey(), p.Keys())
+			}
+		}
+	}
+}
+
+func TestCompat(t *testing.T) {
+	tests := []struct {
+		name    string
+		profile Profile
+		arch    string
+		cpuinfo string
+		want    []*ateletpb.AttributeEntry
+	}{
+		{
+			name:    "gvisor reports architecture only",
+			profile: GVisor,
+			arch:    "amd64",
+			cpuinfo: intelCPUInfo,
+			want:    entries(AttrArchitecture, "amd64"),
+		},
+		{
+			name:    "missing cpuinfo falls back to architecture only",
+			profile: MicroVM,
+			arch:    "amd64",
+			want:    entries(AttrArchitecture, "amd64"),
+		},
+		{
+			name:    "x86_64 Intel vendor and family/model from the first core",
+			profile: MicroVM,
+			arch:    "amd64",
+			cpuinfo: intelCPUInfo,
+			want:    entries(AttrArchitecture, "amd64", AttrCPUVendor, "GenuineIntel", AttrCPUModel, "6/143"),
+		},
+		{
+			name:    "x86_64 AMD vendor and family/model",
+			profile: MicroVM,
+			arch:    "amd64",
+			cpuinfo: amdCPUInfo,
+			want:    entries(AttrArchitecture, "amd64", AttrCPUVendor, "AuthenticAMD", AttrCPUModel, "25/17"),
+		},
+		{
+			name:    "x86_64 model without cpu family omits cpu_model",
+			profile: MicroVM,
+			arch:    "amd64",
+			cpuinfo: "vendor_id : GenuineIntel\nmodel : 143\n",
+			want:    entries(AttrArchitecture, "amd64", AttrCPUVendor, "GenuineIntel"),
+		},
+		{
+			name:    "arm64 implementer and variant/part",
+			profile: MicroVM,
+			arch:    "arm64",
+			cpuinfo: arm64CPUInfo,
+			want:    entries(AttrArchitecture, "arm64", AttrCPUVendor, "0x41", AttrCPUModel, "0x1/0xd40"),
+		},
+		{
+			name:    "arm64 part without variant still reports part",
+			profile: MicroVM,
+			arch:    "arm64",
+			cpuinfo: "CPU implementer : 0x41\nCPU part : 0xd40\n",
+			want:    entries(AttrArchitecture, "arm64", AttrCPUVendor, "0x41", AttrCPUModel, "0xd40"),
+		},
+		{
+			name:    "unknown architecture reports vendor but no model",
+			profile: MicroVM,
+			arch:    "riscv64",
+			cpuinfo: "vendor_id : X\ncpu family : 1\nmodel : 2\n",
+			want:    entries(AttrArchitecture, "riscv64", AttrCPUVendor, "X"),
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "missing")
+			if tc.cpuinfo != "" {
+				path = writeCPUInfo(t, tc.cpuinfo)
+			}
+			got := compat(readHost(path, tc.arch), tc.profile)
+			want := &ateletpb.VersionedSandboxCompat{SchemaVersion: SchemaVersionV1, Attributes: tc.want}
+			if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
+				t.Errorf("compat() mismatch (-want +got):\n%s", diff)
+			}
+		})
 	}
 }
 
