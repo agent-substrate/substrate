@@ -30,7 +30,6 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/apiauthn"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/authz"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/controlapi"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/oidcjwt"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/atepg"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workerservice"
@@ -40,7 +39,9 @@ import (
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/localjwtauthority"
 	"github.com/agent-substrate/substrate/internal/oidcdiscovery"
+	"github.com/agent-substrate/substrate/internal/oidcjwt"
 	"github.com/agent-substrate/substrate/internal/pluginsocket"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/agent-substrate/substrate/internal/volume"
@@ -56,6 +57,7 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/reflection"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -69,6 +71,7 @@ const minResyncInterval = 250 * time.Millisecond
 var (
 	listenAddr           = pflag.String("grpc-listen-addr", ":443", "Address and port the gRPC server should listen on.")
 	metricsListenAddr    = pflag.String("metrics-listen-addr", ":9090", "Address and port the prometheus metrics server should listen on.")
+	healthListenAddr     = pflag.String("health-listen-addr", ":9091", "Address and port the /readyz and /healthz probe server should listen on.")
 	grpcServerCredBundle = pflag.String("grpc-server-cred-bundle", "", "File with the server TLS credential bundle.")
 
 	authenticationConfigFile          = pflag.String("authentication-config", "", "YAML file configuring trusted JWT providers.")
@@ -96,7 +99,7 @@ var (
 	drainDelay   = pflag.Duration("drain-delay", 13*time.Second, "How long to keep accepting new work after SIGTERM, before starting the gRPC drain.")
 	drainTimeout = pflag.Duration("drain-timeout", 15*time.Second, "Deadline for the graceful gRPC drain on shutdown. In-flight RPCs still running past it are forcefully cancelled.")
 
-	snapshotPluginSocket = pflag.String("snapshot-plugin-socket", "/run/snapshot-plugin/control.sock", "Unix socket of the control snapshot plugin that external snapshots are deleted and copied through.")
+	objectStorePluginSocket = pflag.String("objectstore-plugin-socket", "/run/objectstore-plugin/control.sock", "Unix socket of the control object-store plugin that external snapshots are deleted and copied through.")
 
 	templateResyncInterval = pflag.Duration("template-resync-interval", 20*time.Second, fmt.Sprintf("Interval between actor template resyncs. Must be at least %s.", minResyncInterval))
 
@@ -119,7 +122,7 @@ func main() {
 		serverboot.Fatal(ctx, "Invalid PostgreSQL configuration", err)
 	}
 	if err := rejectStorageEnv(); err != nil {
-		serverboot.Fatal(ctx, "Storage settings moved to the snapshot-plugin sidecar", err)
+		serverboot.Fatal(ctx, "Storage settings moved to the objectstore-plugin sidecar", err)
 	}
 	slog.InfoContext(ctx, "ateapi starting", slog.String("version", version.Version))
 	if *templateResyncInterval < minResyncInterval {
@@ -127,6 +130,11 @@ func main() {
 	}
 	if err := validateActorJWTIssuer(*actorJWTIssuer); err != nil {
 		serverboot.Fatal(ctx, "Invalid --actor-jwt-issuer", err)
+	}
+	// atelet applies the same rule to EgressGateway.address on every Run and
+	// Restore; a value it would refuse must fail the rollout, not the actors.
+	if errs := resources.ValidateHostPort(field.NewPath("default-egress-gateway-address"), *defaultEgressGatewayAddress); len(errs) > 0 {
+		serverboot.Fatal(ctx, "Invalid --default-egress-gateway-address", errs.ToAggregate())
 	}
 
 	// Kept separate from ctx so that in-progress work (clients, informers) is
@@ -149,6 +157,9 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to initialize metrics", err)
 	}
 	defer serverboot.ShutdownProvider("MeterProvider", mp.Shutdown)
+	// The probes have their own server, so /metrics starts here and serves
+	// during the store connect and the schema migrations.
+	go serverboot.StartMetricsServer(ctx, *metricsListenAddr)
 
 	lp, err := serverboot.InitLogging(ctx, serverboot.LoggingOptions{
 		ServiceName: "ateapi",
@@ -259,18 +270,18 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to create metric instruments", err)
 	}
 
-	snapshotPluginConn, err := pluginsocket.Dial(*snapshotPluginSocket, pluginsocket.ReadyWait)
+	objectStorePluginConn, err := pluginsocket.Dial(*objectStorePluginSocket, pluginsocket.ReadyWait)
 	if err != nil {
-		serverboot.Fatal(ctx, "Failed to set up the snapshot plugin client", err)
+		serverboot.Fatal(ctx, "Failed to set up the object-store plugin client", err)
 	}
-	defer snapshotPluginConn.Close()
+	defer objectStorePluginConn.Close()
 	// A plugin that never serves would fail every call. Fail at startup
 	// instead, giving the sidecar time to come up.
 	readyCtx, cancelReady := context.WithTimeout(ctx, time.Minute)
-	err = pluginsocket.WaitReady(readyCtx, snapshotPluginConn)
+	err = pluginsocket.WaitReady(readyCtx, objectStorePluginConn)
 	cancelReady()
 	if err != nil {
-		serverboot.Fatal(ctx, "Snapshot plugin is not serving", err)
+		serverboot.Fatal(ctx, "Object-store plugin is not serving", err)
 	}
 
 	volPlugins := make(map[string]volume.VolumePluginControlPlane)
@@ -296,7 +307,7 @@ func main() {
 		instruments,
 		*defaultEgressGatewayAddress,
 		volPlugins,
-		objectstorev1.NewControlProviderClient(snapshotPluginConn),
+		objectstorev1.NewControlProviderClient(objectStorePluginConn),
 		*actorJWTIssuer,
 		actorIDJWTAuthorityPool,
 		actorIDCAPool,
@@ -348,11 +359,7 @@ func main() {
 	ateapipb.RegisterWorkerServiceServer(mux, workerservice.New(persistence, controlSrv, ateletSPIFFEID, actorIDCAPool))
 
 	readiness := &serverboot.Readiness{}
-	go serverboot.StartMetricsServer(ctx, serverboot.MetricsServerOptions{
-		Addr:          *metricsListenAddr,
-		Readiness:     readiness,
-		EnableHealthz: true,
-	})
+	go serverboot.StartHealthServer(ctx, *healthListenAddr, readiness)
 
 	drainDone := drainOnShutdown(shutdownCtx, mux, readiness)
 
@@ -432,7 +439,7 @@ func loadFlagsFromEnv() error {
 // sets AWS_* in every container.
 func rejectStorageEnv() error {
 	if v, ok := os.LookupEnv("ATE_STORAGE_BACKEND"); ok {
-		return fmt.Errorf("ATE_STORAGE_BACKEND=%q is set on ate-api-server, which no longer reads it; set the storage backend on its snapshot-plugin sidecar", v)
+		return fmt.Errorf("ATE_STORAGE_BACKEND=%q is set on ate-api-server, which no longer reads it; set the storage backend on its objectstore-plugin sidecar", v)
 	}
 	return nil
 }

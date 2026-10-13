@@ -15,28 +15,48 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 )
+
+// echoedHeaders is the /echoheaders response body.
+type echoedHeaders struct {
+	// Headers holds the request headers the origin received, keyed by
+	// canonical name, with repeated values joined by ",".
+	Headers map[string]string `json:"headers"`
+}
 
 // newHTTPHandler is the HTTP/1.1 origin an Actor's egress lands on. It exists so
 // a test can assert the destination port is recovered from SO_ORIGINAL_DST
 // rather than defaulted from the URL scheme: the actor fetches its /healthz on a
 // non-standard port, and the gateway's access log is expected to carry that
 // port. The optional body makes the same fixture useful for assertions about a
-// response inside the egress tunnel.
-// The/fetch handler for e2e tests that need test requests with bodies.
+// response inside the egress tunnel. /echoheaders returns the request headers as
+// they arrived, which is how a suite sees what the gateway put on the wire.
+// The /fetch handler for e2e tests that need test requests with bodies.
 func newHTTPHandler(body string) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		if body != "" {
 			_, _ = io.WriteString(w, body)
+		}
+	})
+	mux.HandleFunc("/echoheaders", func(w http.ResponseWriter, r *http.Request) {
+		echoed := echoedHeaders{Headers: make(map[string]string, len(r.Header))}
+		for name, values := range r.Header {
+			echoed.Headers[name] = strings.Join(values, ",")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(echoed); err != nil {
+			log.Printf("testserver http: encoding /echoheaders response: %v", err)
 		}
 	})
 	mux.HandleFunc("POST /fetch", func(w http.ResponseWriter, r *http.Request) {
@@ -58,7 +78,7 @@ func newHTTPCmd() *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:   "http",
-		Short: "Serve an HTTP/1.1 origin answering /healthz and POST /fetch.",
+		Short: "Serve an HTTP/1.1 origin answering /healthz, /echoheaders and POST /fetch.",
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			server := &http.Server{

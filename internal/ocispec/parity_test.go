@@ -153,7 +153,7 @@ func TestShapeGVisor_ResolvConfPrecedesVolumes(t *testing.T) {
 // Shaping a spec twice does not accumulate mounts.
 func TestShapeGVisor_Idempotent(t *testing.T) {
 	spec := Build(parityOptions)
-	o := GVisorOptions{ActorUID: testActorUID, ContainerName: PauseContainer, DurableVolumes: []string{"data"}, Size: paritySize}
+	o := GVisorOptions{ActorUID: testActorUID, ActorDirs: parityActorDirs, ContainerName: PauseContainer, DurableVolumes: []string{"data"}, Size: paritySize}
 	ShapeGVisor(spec, o)
 	first := len(spec.Mounts)
 	ShapeGVisor(spec, o)
@@ -162,6 +162,15 @@ func TestShapeGVisor_Idempotent(t *testing.T) {
 	}
 	if got := spec.Annotations["io.kubernetes.cri.container-type"]; got != "sandbox" {
 		t.Errorf("pause container-type = %q, want sandbox", got)
+	}
+	if got := spec.Annotations["dev.gvisor.spec.mount.data.type"]; got != "tmpfs" {
+		t.Errorf("durable-dir mount type annotation = %q, want tmpfs", got)
+	}
+	if got := spec.Annotations["dev.gvisor.spec.mount.data.share"]; got != "container" {
+		t.Errorf("durable-dir mount share annotation = %q, want container", got)
+	}
+	if got, want := spec.Annotations["dev.gvisor.spec.mount.data.source"], "/node/actors/a/durable-dir/data"; got != want {
+		t.Errorf("durable-dir mount source annotation = %q, want %q", got, want)
 	}
 }
 

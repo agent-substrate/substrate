@@ -31,7 +31,7 @@ var (
 	ImageCacheDir = filepath.Join(nodepath.BasePath, "image-cache")
 
 	// SnapshotScratchDir holds short-lived directories for snapshot manifests
-	// moved through the snapshot plugin. It lives under BasePath, which the
+	// moved through the object-store plugin. It lives under BasePath, which the
 	// node plugin shares with atelet.
 	SnapshotScratchDir = filepath.Join(nodepath.BasePath, "snapshot-scratch")
 )

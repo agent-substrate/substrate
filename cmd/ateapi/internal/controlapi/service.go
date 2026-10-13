@@ -49,7 +49,7 @@ type RPCService struct {
 	instruments           *Instruments
 	mu                    sync.RWMutex
 	volumePlugins         map[string]volume.VolumePluginControlPlane
-	snapshotPlugin        objectstorev1.ControlProviderClient
+	objectStorePlugin     objectstorev1.ControlProviderClient
 
 	actorJWTIssuer string
 	actorIDJWTPool localjwtauthority.Pool
@@ -68,7 +68,7 @@ type VolumePluginRegistry interface {
 //
 // instruments may be nil; the record helpers no-op.
 //
-// snapshotPlugin may be nil, which leaves external snapshots in place instead
+// objectStorePlugin may be nil, which leaves external snapshots in place instead
 // of copying and releasing them. Only tests that never reach those steps pass
 // nil; ate-api always builds one.
 //
@@ -83,7 +83,7 @@ func NewRPCService(
 	instruments *Instruments,
 	egressGatewayAddress string,
 	volumePlugins map[string]volume.VolumePluginControlPlane,
-	snapshotPlugin objectstorev1.ControlProviderClient,
+	objectStorePlugin objectstorev1.ControlProviderClient,
 	actorJWTIssuer string,
 	actorIDJWTPool localjwtauthority.Pool,
 	actorIDCAPool localca.Pool,
@@ -98,12 +98,12 @@ func NewRPCService(
 		dialer:                dialer,
 		instruments:           instruments,
 		volumePlugins:         volumePlugins,
-		snapshotPlugin:        snapshotPlugin,
+		objectStorePlugin:     objectStorePlugin,
 		actorJWTIssuer:        actorJWTIssuer,
 		actorIDJWTPool:        actorIDJWTPool,
 		actorIDCAPool:         actorIDCAPool,
 	}
-	s.actorWorkflow = NewActorWorkflow(impl, workerCache, dialer, sandboxConfigLister, storageClassLister, instruments, egressGatewayAddress, s, snapshotPlugin)
+	s.actorWorkflow = NewActorWorkflow(impl, workerCache, dialer, sandboxConfigLister, storageClassLister, instruments, egressGatewayAddress, s, objectStorePlugin)
 	s.workerWorkflow = NewWorkerWorkflow(impl)
 	return s
 }

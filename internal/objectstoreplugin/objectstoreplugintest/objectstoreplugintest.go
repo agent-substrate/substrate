@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package objectstoreplugintest provides snapshot plugin clients that call the
+// Package objectstoreplugintest provides object-store plugin clients that call the
 // object-store plugins directly, without a socket, for tests that drive atelet
 // or ate-api-server through the real plugin.
 package objectstoreplugintest
@@ -41,6 +41,19 @@ func (c nodeClient) FetchSnapshot(ctx context.Context, in *objectstorev1.FetchSn
 
 func (c nodeClient) UploadSnapshot(ctx context.Context, in *objectstorev1.UploadSnapshotRequest, _ ...grpc.CallOption) (*objectstorev1.UploadSnapshotResponse, error) {
 	return c.p.UploadSnapshot(ctx, in)
+}
+
+// AssetClient returns a client that calls p directly.
+func AssetClient(p *objectstoreplugin.AssetPlugin) objectstorev1.AssetProviderClient {
+	return assetClient{p}
+}
+
+type assetClient struct {
+	p *objectstoreplugin.AssetPlugin
+}
+
+func (c assetClient) FetchAsset(ctx context.Context, in *objectstorev1.FetchAssetRequest, _ ...grpc.CallOption) (*objectstorev1.FetchAssetResponse, error) {
+	return c.p.FetchAsset(ctx, in)
 }
 
 // ControlClient returns a client that calls a ControlPlugin on store directly.

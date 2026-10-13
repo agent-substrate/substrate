@@ -98,8 +98,8 @@ func herderCalls(h *herder) map[string]func(context.Context) error {
 
 func externalCheckpoint(uri string) *ateletpb.CheckpointRequest {
 	return &ateletpb.CheckpointRequest{
-		Type:   ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
-		Config: &ateletpb.CheckpointRequest_ExternalConfig{ExternalConfig: &ateletpb.ExternalCheckpointConfiguration{SnapshotUri: uri}},
+		Type:           ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
+		ExternalConfig: &ateletpb.ExternalCheckpointConfiguration{SnapshotUri: uri},
 	}
 }
 

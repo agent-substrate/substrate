@@ -261,10 +261,8 @@ func (w *ActorWorkflow) ensureAteletSuspended(ctx context.Context, actorRef reso
 		ActorTemplateName:     actor.GetActorTemplate().GetName(),
 		Spec:                  workloadSpec,
 		Type:                  ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
-		Config: &ateletpb.CheckpointRequest_ExternalConfig{
-			ExternalConfig: &ateletpb.ExternalCheckpointConfiguration{
-				SnapshotUri: inProgressSnap.GetDurableSnapshot().GetObject().GetSnapshotUri(),
-			},
+		ExternalConfig: &ateletpb.ExternalCheckpointConfiguration{
+			SnapshotUri: inProgressSnap.GetDurableSnapshot().GetObject().GetSnapshotUri(),
 		},
 		Fidelity: fidelityToAtelet(preferredFidelity(actor.GetMetadata().GetAtespace(), actorTemplate)),
 		ActorUid: actor.GetMetadata().Uid,
@@ -456,7 +454,7 @@ func (w *ActorWorkflow) releaseReplacedSnapshot(ctx context.Context, actor *atea
 	defer func() { err = done(err) }()
 
 	switch {
-	case w.snapshotPlugin == nil:
+	case w.objectStorePlugin == nil:
 		markSkipped(ctx, "no object store configured")
 		return nil
 	case previous == "":

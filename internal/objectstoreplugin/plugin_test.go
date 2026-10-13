@@ -164,10 +164,14 @@ func TestUploadFetchRoundTrip(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if err := os.Mkdir(filepath.Join(src, "fs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	files := map[string][]byte{
-		"memory.img": bytes.Repeat([]byte("abcdefgh"), 1<<16),
-		"state.bin":  []byte("vm state"),
-		manifestFile: []byte(`{"snapshotFiles":["memory.img","state.bin"]}`),
+		"memory.img":         bytes.Repeat([]byte("abcdefgh"), 1<<16),
+		"state.bin":          []byte("vm state"),
+		"fs/fscheckpoint.pb": []byte("fs manifest"),
+		manifestFile:         []byte(`{"snapshotFiles":["memory.img","state.bin","fs/fscheckpoint.pb"]}`),
 	}
 	for name, content := range files {
 		if err := os.WriteFile(filepath.Join(src, name), content, 0o644); err != nil {
@@ -176,7 +180,7 @@ func TestUploadFetchRoundTrip(t *testing.T) {
 	}
 
 	if _, err := client.UploadSnapshot(ctx, &objectstorev1.UploadSnapshotRequest{
-		SnapshotUri: testURI, LocalPath: src, Files: []string{"memory.img", "state.bin"},
+		SnapshotUri: testURI, LocalPath: src, Files: []string{"memory.img", "state.bin", "fs/fscheckpoint.pb"},
 	}); err != nil {
 		t.Fatalf("UploadSnapshot(data) = %v", err)
 	}
@@ -188,6 +192,7 @@ func TestUploadFetchRoundTrip(t *testing.T) {
 
 	// The stored layout is the one atelet has always written.
 	want := []string{
+		testBucket + "/" + testPrefix + "/fs/fscheckpoint.pb.zstd",
 		testBucket + "/" + testPrefix + "/manifest.json",
 		testBucket + "/" + testPrefix + "/memory.img.zstd",
 		testBucket + "/" + testPrefix + "/state.bin.zstd",
@@ -195,12 +200,12 @@ func TestUploadFetchRoundTrip(t *testing.T) {
 	if got := backend.keys(); !equal(got, want) {
 		t.Fatalf("stored objects = %v, want %v", got, want)
 	}
-	if got := backend.m[want[0]]; !bytes.Equal(got, files[manifestFile]) {
+	if got := backend.m[want[1]]; !bytes.Equal(got, files[manifestFile]) {
 		t.Errorf("stored manifest = %q, want it uncompressed", got)
 	}
 
 	if _, err := client.FetchSnapshot(ctx, &objectstorev1.FetchSnapshotRequest{
-		SnapshotUri: testURI, WritePath: dst, Files: []string{manifestFile, "memory.img", "state.bin"},
+		SnapshotUri: testURI, WritePath: dst, Files: []string{manifestFile, "memory.img", "state.bin", "fs/fscheckpoint.pb"},
 	}); err != nil {
 		t.Fatalf("FetchSnapshot = %v", err)
 	}

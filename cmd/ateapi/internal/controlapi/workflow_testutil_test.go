@@ -42,7 +42,7 @@ func testWorkerUID(podName string) string {
 // unit tests never reach (worker cache, atelet dialer, k8s clients) are nil,
 // so a step that unexpectedly executes against them fails the test loudly.
 // External snapshots go to an in-memory object store through the control
-// snapshot plugin.
+// object-store plugin.
 func newTestActorWorkflow(t *testing.T, st store.Interface, tmplAtespace, tmplName string) *ActorWorkflow {
 	t.Helper()
 	storetest.MustCreateAtespace(t, context.Background(), st, tmplAtespace)
@@ -66,7 +66,7 @@ func newTestActorWorkflow(t *testing.T, st store.Interface, tmplAtespace, tmplNa
 // directly rather than going through newTestActorWorkflow.
 func newFinalizeWorkflow(persistence store.Interface) (*ActorWorkflow, *objectstoretest.Fake) {
 	objects := objectstoretest.New()
-	return &ActorWorkflow{store: persistence, snapshotPlugin: objectstoreplugintest.ControlClient(objects)}, objects
+	return &ActorWorkflow{store: persistence, objectStorePlugin: objectstoreplugintest.ControlClient(objects)}, objects
 }
 
 // mustActorSnapshotURI builds the URI of a snapshot the actor took under

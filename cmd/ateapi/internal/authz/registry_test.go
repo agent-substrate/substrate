@@ -29,6 +29,7 @@ func TestDefaultRPCPermissions(t *testing.T) {
 	actorMeta := &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "runner"}
 	localTemplate := &ateapipb.ObjectRef{Atespace: "team-a", Name: "tmpl"}
 	sharedTemplate := &ateapipb.ObjectRef{Atespace: "shared", Name: "tmpl"}
+	workerRef := &ateapipb.ObjectRef{Name: "w-1"}
 
 	tests := []struct {
 		name       string
@@ -138,6 +139,104 @@ func TestDefaultRPCPermissions(t *testing.T) {
 			fullMethod: ateapipb.Control_DeleteActor_FullMethodName,
 			req:        &ateapipb.DeleteActorRequest{Actor: actorRef},
 			want:       []check{{RelationCanDelete, "actor:team-a/runner"}},
+		},
+
+		// Actor lifecycle.
+		{
+			name:       "PauseActor",
+			fullMethod: ateapipb.Control_PauseActor_FullMethodName,
+			req:        &ateapipb.PauseActorRequest{Actor: actorRef},
+			want:       []check{{RelationCanPause, "actor:team-a/runner"}},
+		},
+		{
+			name:       "ResumeActor",
+			fullMethod: ateapipb.Control_ResumeActor_FullMethodName,
+			req:        &ateapipb.ResumeActorRequest{Actor: actorRef},
+			want:       []check{{RelationCanResume, "actor:team-a/runner"}},
+		},
+		{
+			name:       "SuspendActor",
+			fullMethod: ateapipb.Control_SuspendActor_FullMethodName,
+			req:        &ateapipb.SuspendActorRequest{Actor: actorRef},
+			want:       []check{{RelationCanSuspend, "actor:team-a/runner"}},
+		},
+		{
+			name:       "RevertActor",
+			fullMethod: ateapipb.Control_RevertActor_FullMethodName,
+			req:        &ateapipb.RevertActorRequest{Actor: actorRef},
+			want:       []check{{RelationCanRevert, "actor:team-a/runner"}},
+		},
+
+		// Actor egress policies.
+		{
+			name:       "GetActorEgressPolicy",
+			fullMethod: ateapipb.Control_GetActorEgressPolicy_FullMethodName,
+			req:        &ateapipb.GetActorEgressPolicyRequest{Actor: actorRef},
+			want:       []check{{RelationCanGetEgressPolicy, "actor:team-a/runner"}},
+		},
+		{
+			name:       "CreateActorEgressPolicy",
+			fullMethod: ateapipb.Control_CreateActorEgressPolicy_FullMethodName,
+			req:        &ateapipb.CreateActorEgressPolicyRequest{Actor: actorRef},
+			want:       []check{{RelationCanCreateEgressPolicy, "actor:team-a/runner"}},
+		},
+		{
+			name:       "UpdateActorEgressPolicy",
+			fullMethod: ateapipb.Control_UpdateActorEgressPolicy_FullMethodName,
+			req:        &ateapipb.UpdateActorEgressPolicyRequest{Actor: actorRef},
+			want:       []check{{RelationCanUpdateEgressPolicy, "actor:team-a/runner"}},
+		},
+		{
+			name:       "DeleteActorEgressPolicy",
+			fullMethod: ateapipb.Control_DeleteActorEgressPolicy_FullMethodName,
+			req:        &ateapipb.DeleteActorEgressPolicyRequest{Actor: actorRef},
+			want:       []check{{RelationCanDeleteEgressPolicy, "actor:team-a/runner"}},
+		},
+
+		// Workers.
+		{
+			name:       "CreateWorker",
+			fullMethod: ateapipb.Control_CreateWorker_FullMethodName,
+			req:        &ateapipb.CreateWorkerRequest{},
+			want:       []check{{RelationCanCreateWorker, GlobalRootObject}},
+		},
+		{
+			name:       "ListWorkers",
+			fullMethod: ateapipb.Control_ListWorkers_FullMethodName,
+			req:        &ateapipb.ListWorkersRequest{},
+			want:       []check{{RelationCanListWorkers, GlobalRootObject}},
+		},
+		{
+			name:       "GetWorker",
+			fullMethod: ateapipb.Control_GetWorker_FullMethodName,
+			req:        &ateapipb.GetWorkerRequest{Worker: workerRef},
+			want:       []check{{RelationCanGet, "worker:w-1"}},
+		},
+		{
+			name:       "UpdateWorker",
+			fullMethod: ateapipb.Control_UpdateWorker_FullMethodName,
+			req: &ateapipb.UpdateWorkerRequest{Worker: &ateapipb.Worker{
+				Metadata: &ateapipb.ResourceMetadata{Name: "w-1"},
+			}},
+			want: []check{{RelationCanUpdate, "worker:w-1"}},
+		},
+		{
+			name:       "DeleteWorker",
+			fullMethod: ateapipb.Control_DeleteWorker_FullMethodName,
+			req:        &ateapipb.DeleteWorkerRequest{Worker: workerRef},
+			want:       []check{{RelationCanDelete, "worker:w-1"}},
+		},
+		{
+			name:       "DrainWorker",
+			fullMethod: ateapipb.Control_DrainWorker_FullMethodName,
+			req:        &ateapipb.DrainWorkerRequest{Worker: workerRef},
+			want:       []check{{RelationCanDrain, "worker:w-1"}},
+		},
+		{
+			name:       "ListWorkerActorAssignments",
+			fullMethod: ateapipb.Control_ListWorkerActorAssignments_FullMethodName,
+			req:        &ateapipb.ListWorkerActorAssignmentsRequest{Worker: workerRef},
+			want:       []check{{RelationCanListActorAssignments, "worker:w-1"}},
 		},
 	}
 
@@ -295,6 +394,84 @@ func TestDefaultRPCPermissions_MalformedIdentifierFailsClosed(t *testing.T) {
 			fullMethod: ateapipb.Control_DeleteActor_FullMethodName,
 			req:        &ateapipb.DeleteActorRequest{Actor: &ateapipb.ObjectRef{Atespace: "team:a", Name: "runner"}},
 			wantField:  "actor.atespace",
+		},
+		{
+			name:       "PauseActor without an actor",
+			fullMethod: ateapipb.Control_PauseActor_FullMethodName,
+			req:        &ateapipb.PauseActorRequest{},
+			wantField:  "actor.atespace",
+		},
+		{
+			name:       "ResumeActor with an invalid name",
+			fullMethod: ateapipb.Control_ResumeActor_FullMethodName,
+			req:        &ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: "team-a", Name: "Runner"}},
+			wantField:  "actor.name",
+		},
+		{
+			name:       "SuspendActor without a name",
+			fullMethod: ateapipb.Control_SuspendActor_FullMethodName,
+			req:        &ateapipb.SuspendActorRequest{Actor: &ateapipb.ObjectRef{Atespace: "team-a"}},
+			wantField:  "actor.name",
+		},
+		{
+			name:       "RevertActor with an invalid atespace",
+			fullMethod: ateapipb.Control_RevertActor_FullMethodName,
+			req:        &ateapipb.RevertActorRequest{Actor: &ateapipb.ObjectRef{Atespace: "team/a", Name: "runner"}},
+			wantField:  "actor.atespace",
+		},
+		{
+			name:       "GetActorEgressPolicy without an atespace",
+			fullMethod: ateapipb.Control_GetActorEgressPolicy_FullMethodName,
+			req:        &ateapipb.GetActorEgressPolicyRequest{Actor: &ateapipb.ObjectRef{Name: "runner"}},
+			wantField:  "actor.atespace",
+		},
+		{
+			name:       "CreateActorEgressPolicy without an actor",
+			fullMethod: ateapipb.Control_CreateActorEgressPolicy_FullMethodName,
+			req:        &ateapipb.CreateActorEgressPolicyRequest{},
+			wantField:  "actor.atespace",
+		},
+		{
+			name:       "UpdateActorEgressPolicy with an invalid name",
+			fullMethod: ateapipb.Control_UpdateActorEgressPolicy_FullMethodName,
+			req:        &ateapipb.UpdateActorEgressPolicyRequest{Actor: &ateapipb.ObjectRef{Atespace: "team-a", Name: "a b"}},
+			wantField:  "actor.name",
+		},
+		{
+			name:       "DeleteActorEgressPolicy without a name",
+			fullMethod: ateapipb.Control_DeleteActorEgressPolicy_FullMethodName,
+			req:        &ateapipb.DeleteActorEgressPolicyRequest{Actor: &ateapipb.ObjectRef{Atespace: "team-a"}},
+			wantField:  "actor.name",
+		},
+		{
+			name:       "GetWorker without a worker",
+			fullMethod: ateapipb.Control_GetWorker_FullMethodName,
+			req:        &ateapipb.GetWorkerRequest{},
+			wantField:  "worker.name",
+		},
+		{
+			name:       "UpdateWorker without metadata",
+			fullMethod: ateapipb.Control_UpdateWorker_FullMethodName,
+			req:        &ateapipb.UpdateWorkerRequest{Worker: &ateapipb.Worker{}},
+			wantField:  "worker.metadata.name",
+		},
+		{
+			name:       "DeleteWorker with an invalid name",
+			fullMethod: ateapipb.Control_DeleteWorker_FullMethodName,
+			req:        &ateapipb.DeleteWorkerRequest{Worker: &ateapipb.ObjectRef{Name: "w/1"}},
+			wantField:  "worker.name",
+		},
+		{
+			name:       "DrainWorker with an over-long name",
+			fullMethod: ateapipb.Control_DrainWorker_FullMethodName,
+			req:        &ateapipb.DrainWorkerRequest{Worker: &ateapipb.ObjectRef{Name: strings.Repeat("w", 64)}},
+			wantField:  "worker.name",
+		},
+		{
+			name:       "ListWorkerActorAssignments without a name",
+			fullMethod: ateapipb.Control_ListWorkerActorAssignments_FullMethodName,
+			req:        &ateapipb.ListWorkerActorAssignmentsRequest{Worker: &ateapipb.ObjectRef{}},
+			wantField:  "worker.name",
 		},
 	}
 

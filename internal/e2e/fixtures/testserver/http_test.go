@@ -17,8 +17,10 @@ package main
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 )
@@ -42,6 +44,52 @@ func TestHTTPHandlerDefaultsToEmptyHealthz(t *testing.T) {
 	}
 	if len(body) != 0 {
 		t.Errorf("GET /healthz body = %q, want empty", body)
+	}
+}
+
+func TestHTTPHandlerEchoesRequestHeaders(t *testing.T) {
+	server := startOriginServer(t, newHTTPHandler(""), "", "")
+
+	// Long enough to catch a truncated value, the size of a JWT.
+	token := strings.Repeat("eyJhbGciOiJFUzI1NiJ9.", 64)
+	request, err := http.NewRequest(http.MethodGet, server.httpURL+"/echoheaders", nil)
+	if err != nil {
+		t.Fatalf("building request: %v", err)
+	}
+	// Sent lowercase on the wire; the origin reports it canonicalized.
+	request.Header["authorization"] = []string{"Bearer placeholder"}
+	request.Header.Set("X-Actor-Token", token)
+	request.Header.Add("X-Repeated", "one")
+	request.Header.Add("X-Repeated", "two")
+
+	client := &http.Client{Timeout: 2 * time.Second}
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatalf("GET /echoheaders: %v", err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("GET /echoheaders status = %d, want %d", response.StatusCode, http.StatusOK)
+	}
+	if got := response.Header.Get("Content-Type"); got != "application/json" {
+		t.Errorf("GET /echoheaders Content-Type = %q, want application/json", got)
+	}
+	var echoed echoedHeaders
+	if err := json.NewDecoder(response.Body).Decode(&echoed); err != nil {
+		t.Fatalf("decoding /echoheaders: %v", err)
+	}
+	for name, want := range map[string]string{
+		"Authorization": "Bearer placeholder",
+		"X-Actor-Token": token,
+		"X-Repeated":    "one,two",
+	} {
+		if got := echoed.Headers[name]; got != want {
+			t.Errorf("echoed %s = %q, want %q", name, got, want)
+		}
+	}
+	if got, ok := echoed.Headers["X-Absent"]; ok {
+		t.Errorf("echoed X-Absent = %q for a header the request did not carry, want it missing", got)
 	}
 }
 
