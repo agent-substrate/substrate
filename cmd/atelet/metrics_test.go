@@ -280,59 +280,48 @@ func TestAssetsAfterCollateral(t *testing.T) {
 }
 
 func TestRestoreSnapshotKind(t *testing.T) {
-	localSnapshot := &ateletpb.Snapshot{
-		SnapshotUuid: "snap-1",
-	}
-	externalSnapshot := &ateletpb.Snapshot{
-		SnapshotUuid: "snap-1",
-		Object:       &ateletpb.ObjectStorage{SnapshotUri: "gs://bucket/snap"},
-	}
 	tests := []struct {
-		name string
-		req  *ateletpb.RestoreRequest
-		rec  *sandboxAssetsRecord
-		want string
+		name        string
+		directLocal bool
+		rec         *sandboxAssetsRecord
+		want        string
 	}{
 		{
-			name: "local pause snapshot",
-			req:  &ateletpb.RestoreRequest{Snapshot: localSnapshot},
-			rec:  &sandboxAssetsRecord{Atespace: "team-a"},
-			want: ateattr.SnapshotKindLocal,
+			name:        "restored from the local copy",
+			directLocal: true,
+			rec:         &sandboxAssetsRecord{Atespace: "team-a"},
+			want:        ateattr.SnapshotKindLocal,
 		},
 		{
-			name: "local restore is classifiable before the manifest is read",
-			req:  &ateletpb.RestoreRequest{Snapshot: localSnapshot},
-			rec:  nil,
-			want: ateattr.SnapshotKindLocal,
+			name:        "a golden actor's snapshot served locally is still local",
+			directLocal: true,
+			rec:         &sandboxAssetsRecord{Atespace: resources.GoldenActorAtespace},
+			want:        ateattr.SnapshotKindLocal,
 		},
 		{
 			name: "external snapshot written by a golden actor",
-			req:  &ateletpb.RestoreRequest{Snapshot: externalSnapshot},
 			rec:  &sandboxAssetsRecord{Atespace: resources.GoldenActorAtespace},
 			want: ateattr.SnapshotKindGolden,
 		},
 		{
 			name: "external snapshot written by a tenant actor",
-			req:  &ateletpb.RestoreRequest{Snapshot: externalSnapshot},
 			rec:  &sandboxAssetsRecord{Atespace: "team-a"},
 			want: ateattr.SnapshotKindLatest,
 		},
 		{
 			name: "manifest predating the identity fields",
-			req:  &ateletpb.RestoreRequest{Snapshot: externalSnapshot},
 			rec:  &sandboxAssetsRecord{},
 			want: ateattr.SnapshotKindLatest,
 		},
 		{
 			name: "external kind is unknowable until the manifest is read",
-			req:  &ateletpb.RestoreRequest{Snapshot: externalSnapshot},
 			rec:  nil,
 			want: "",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := restoreSnapshotKind(tt.req, tt.rec); got != tt.want {
+			if got := restoreSnapshotKind(tt.directLocal, tt.rec); got != tt.want {
 				t.Errorf("restoreSnapshotKind() = %q, want %q", got, tt.want)
 			}
 		})

@@ -153,13 +153,13 @@ func assetsAfterCollateral(prepFailedPhase string, assets time.Duration) time.Du
 	return assets
 }
 
-// restoreSnapshotKind classifies which snapshot a restore reads. A local
-// restore is evident from the wire; golden and latest both arrive as an external
-// URI prefix, so they are told apart by the identity the manifest records for
-// the actor that wrote the snapshot. An empty result means the manifest has not
-// been read yet, so the kind is not knowable.
-func restoreSnapshotKind(req *ateletpb.RestoreRequest, rec *sandboxAssetsRecord) string {
-	if req.GetSnapshot().GetObject() == nil {
+// restoreSnapshotKind classifies which snapshot a restore reads: local when it
+// is served from the node-local copy, and otherwise golden or latest, told
+// apart by the identity the manifest records for the actor that wrote the
+// snapshot. An empty result means the manifest has not been read yet, so the
+// kind is not knowable.
+func restoreSnapshotKind(directLocal bool, rec *sandboxAssetsRecord) string {
+	if directLocal {
 		return ateattr.SnapshotKindLocal
 	}
 	if rec == nil {
