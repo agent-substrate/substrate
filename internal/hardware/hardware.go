@@ -21,6 +21,7 @@ import (
 
 	"go.ate.dev/substrate/internal/proto/ateletpb"
 	"go.ate.dev/substrate/pkg/proto/ateapipb"
+	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -50,8 +51,13 @@ const (
 	AttrCPUModel = "cpu_model"
 
 	// AttrHypervisor is the host hypervisor backend a micro-VM runtime drives
-	// ("kvm", "mshv"). Guest memory snapshots restore only on the same backend.
+	// (HypervisorKVM, HypervisorMSHV). Only guest memory depends on it, and
+	// only a memory restore requires a runtime match.
 	AttrHypervisor = "hypervisor"
+
+	// HypervisorKVM and HypervisorMSHV are the values of AttrHypervisor.
+	HypervisorKVM  = "kvm"
+	HypervisorMSHV = "mshv"
 )
 
 // ProbeHost returns a minimal v1 VersionedSandboxCompat with the current
@@ -68,6 +74,29 @@ func ProbeHost() *ateletpb.VersionedSandboxCompat {
 			},
 		},
 	}
+}
+
+// WithAttr returns a copy of rt with key set to value when rt has no key, and
+// rt itself otherwise.
+func WithAttr(rt *ateapipb.ActorSandboxRuntime, key, value string) *ateapipb.ActorSandboxRuntime {
+	if rt == nil || hasAttr(rt.GetVersion(), key) {
+		return rt
+	}
+	out := proto.CloneOf(rt)
+	if out.Version == nil {
+		out.Version = &ateapipb.VersionedSandboxCompat{}
+	}
+	out.Version.Attributes = append(out.Version.Attributes, &ateapipb.AttributeEntry{Key: key, Value: value})
+	return out
+}
+
+func hasAttr(v *ateapipb.VersionedSandboxCompat, key string) bool {
+	for _, a := range v.GetAttributes() {
+		if a.GetKey() == key {
+			return true
+		}
+	}
+	return false
 }
 
 // Requirement is what a worker must run to restore a snapshot: the
