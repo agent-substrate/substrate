@@ -110,3 +110,58 @@ func TestSetPodcertWorkersPerSignerRejectsMissingDeployment(t *testing.T) {
 		t.Error("setPodcertWorkersPerSigner succeeded without a Deployment, want an error")
 	}
 }
+
+// A stock cluster has no Managed Prometheus CRD, so no system bundle may carry
+// one: applying it would fail the whole install.
+func TestSystemBundlesNeedNoManagedPrometheusCRD(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cfg  config.Config
+	}{
+		{"base", config.Config{Router: config.RouterEnvoy}},
+		{"agentgateway", config.Config{Router: config.RouterAgentgateway}},
+		{"kind", config.Config{Router: config.RouterEnvoy, Kind: true}},
+		{"kind agentgateway", config.Config{Router: config.RouterAgentgateway, Kind: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := tc.cfg
+			cfg.Root = repoRoot(t)
+			e := &Env{Cfg: &cfg}
+			manifest, err := e.render(cfg.Path(SystemOverlay(&cfg)))
+			if err != nil {
+				t.Fatalf("render: %v", err)
+			}
+			objs, err := kube.DecodeManifestBytes(manifest)
+			if err != nil {
+				t.Fatalf("decoding the bundle: %v", err)
+			}
+			for _, obj := range objs {
+				if obj.GroupVersionKind().Group == "monitoring.googleapis.com" {
+					t.Errorf("bundle carries %s, which needs a Managed Prometheus CRD", kube.Describe(obj))
+				}
+			}
+		})
+	}
+}
+
+// Kind has no Managed Prometheus, so it never reaches the cluster for the
+// router monitoring. The nil Kube client panics if it does.
+func TestApplyRouterMonitoringSkipsKind(t *testing.T) {
+	e := &Env{Cfg: &config.Config{Root: repoRoot(t), Kind: true}}
+	if err := e.applyRouterMonitoring(t.Context()); err != nil {
+		t.Errorf("applyRouterMonitoring() = %v, want nil", err)
+	}
+}
+
+// The monitoring leaves the bundles, so the file the installer applies on its
+// own has to be the router's PodMonitoring.
+func TestRouterMonitoringManifest(t *testing.T) {
+	e := &Env{Cfg: &config.Config{Root: repoRoot(t)}}
+	objs, err := kube.LoadPath(e.Cfg.Manifest("atenet-router-monitoring.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(objs) != 1 || objs[0].GetKind() != "PodMonitoring" || objs[0].GetNamespace() != "ate-system" {
+		t.Errorf("manifest holds %v, want one PodMonitoring in ate-system", objs)
+	}
+}

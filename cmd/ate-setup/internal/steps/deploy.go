@@ -148,6 +148,9 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 	if err := e.applyWithAPIServerEnvHash(ctx, manifests); err != nil {
 		return err
 	}
+	if err := e.applyRouterMonitoring(ctx); err != nil {
+		return err
+	}
 
 	// After the bundle, which resets the pod template to the sidecar-free base.
 	if err := e.reconcileCloudSQLProxySidecar(ctx); err != nil {
@@ -195,6 +198,23 @@ func (e *Env) DeployAteSystem(ctx context.Context, opts DeployOptions) error {
 		}
 	}
 	return e.applyOtelEndpointOverride(ctx)
+}
+
+// applyRouterMonitoring applies the Managed Prometheus scrape of the router's
+// Envoy. Its PodMonitoring kind exists only where Google Managed Prometheus
+// does, so the object is skipped on a cluster that does not serve it, not
+// allowed to fail the install. Kind scrapes through its own collector.
+func (e *Env) applyRouterMonitoring(ctx context.Context) error {
+	if e.Cfg.Kind {
+		return nil
+	}
+	objs, err := kube.LoadPath(e.Cfg.Manifest("atenet-router-monitoring.yaml"))
+	if err != nil {
+		return err
+	}
+	return e.Kube.ApplyTolerant(ctx, objs, func(obj *unstructured.Unstructured, _ error) {
+		log.Warnf("skipping %s: its CRD is not installed on this cluster", kube.Describe(obj))
+	})
 }
 
 // DeployPodCertificateController applies the podcertificate controller and
