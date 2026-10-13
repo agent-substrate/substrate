@@ -156,6 +156,11 @@ be restored on a node that rebuilds the layer.
 `layerPullConcurrency` layers build at once and atelet runs without a memory
 limit, so size the node's memory reservation for the largest layers.
 
+With `--host-erofs-layers` on atelet (off by default; it requires EROFS in the
+host kernel, which atelet probes at startup), gVisor bundles and image volumes
+are pulled as `Form{EROFS: true}` too, and `SetupBundleRootfs` and
+`SetupBundleImageVolumes` mount the layer images on the host.
+
 `prepareOCIDirectory` in atelet then writes `rootfs-overlay.json`
 (`OverlaySpec`) into the bundle, listing the layer
 directories bottom-first plus any `ExtraDirs` (in-rootfs bind-mount targets,
@@ -219,8 +224,16 @@ fresh upper the directories the host writes into (such as `etc` for
 `resolv.conf`) and the implicit-parent repairs, so a directory like `/tmp`
 keeps its declared mode. Each gets the merged view's owner, mode, mtime and
 `user.*` / `security.capability` xattrs. `SetupBundleImageVolumes` composes
-only a bundle's image volumes. `SetupBundleRootfs` refuses a bundle on EROFS
-images.
+only a bundle's image volumes, for a guest that mounts the rootfs itself.
+
+On the host (`ateworker-gvisor` rootfs via `SetupBundleRootfs`, and image volumes
+via `SetupBundleImageVolumes`), each distinct `layer.erofs` is mounted
+read-only under the bundle (using file-backed EROFS on Linux 6.12+ or an
+autoclear loop device on older kernels) and passed as a lowerdir to
+`mountOverlay` (or mounted directly at the volume mount point for a
+single-layer image volume). `SetupBundleRootfs` repairs implicit parent
+directories in the bundle's upper with `PrepareEROFSUpper(...,
+UpperTrustedXattr)` before mounting the overlay.
 
 **Teardown**: `UnmountAllUnder(bundleDir)` lazily detaches every mount below
 an actor's bundle directory (via `/proc/self/mountinfo`) before atelet wipes

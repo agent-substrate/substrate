@@ -1678,12 +1678,24 @@ func TestWorkerCallError(t *testing.T) {
 	}
 }
 
-// rootfsForm picks EROFS layer images for micro-VM actors and fs/ trees for
-// everything else.
+// rootfsForm picks EROFS layer images for micro-VM actors whatever the flag,
+// follows --host-erofs-layers for gVisor actors, and fs/ trees for the rest.
 func TestRootfsForm(t *testing.T) {
-	for class, want := range map[string]imagecache.Form{"microvm": {EROFS: true}, "gvisor": {}, "": {}} {
-		if got := rootfsForm(class); got != want {
-			t.Errorf("rootfsForm(%q) = %+v, want %+v", class, got, want)
+	for _, tc := range []struct {
+		class string
+		flag  bool
+		want  imagecache.Form
+	}{
+		{class: "microvm", want: imagecache.Form{EROFS: true}},
+		{class: "microvm", flag: true, want: imagecache.Form{EROFS: true}},
+		{class: "gvisor", want: imagecache.Form{}},
+		{class: "gvisor", flag: true, want: imagecache.Form{EROFS: true}},
+		{class: "", flag: true, want: imagecache.Form{}},
+	} {
+		*hostEROFSLayers = tc.flag
+		if got := rootfsForm(tc.class); got != tc.want {
+			t.Errorf("rootfsForm(%q) with --host-erofs-layers=%v = %+v, want %+v", tc.class, tc.flag, got, tc.want)
 		}
 	}
+	*hostEROFSLayers = false
 }
