@@ -41,13 +41,13 @@ import (
 //
 // The tag captures whichever snapshot the actor holds when the workflow runs.
 // An actor keeps no snapshot history, so a suspend that lands first moves what
-// gets tagged; that race is inherent to naming an actor rather than a snapshot.
+// gets tagged. A caller can pin the observed Actor revision with a precondition.
 //
 // Not idempotent: the name is taken as soon as phase 1 lands, so a create that
 // dies after it leaves a pending tag and every later create under that name is
 // AlreadyExists. To retry, delete the tag, which collects whatever the failed
 // attempt stranded, and create it again.
-func (w *ActorWorkflow) TagActorSnapshot(ctx context.Context, tag *ateapipb.Tag) (*ateapipb.Tag, error) {
+func (w *ActorWorkflow) TagActorSnapshot(ctx context.Context, tag *ateapipb.Tag, precondition *store.Precondition) (*ateapipb.Tag, error) {
 	ctx = preview.ContextWithOptIn(ctx)
 	actorRef := resources.ActorRefFromObjectRef(tag.GetSourceActor())
 
@@ -68,7 +68,7 @@ func (w *ActorWorkflow) TagActorSnapshot(ctx context.Context, tag *ateapipb.Tag)
 	}
 	defer tagLease.Close()
 
-	actor, actorTemplate, err := w.loadActorForTag(leaseCtx, actorRef)
+	actor, actorTemplate, err := w.loadActorForTag(leaseCtx, actorRef, precondition)
 	if err != nil {
 		return nil, err
 	}
@@ -205,13 +205,18 @@ func (w *ActorWorkflow) finalizeTagDeleted(ctx context.Context, tagRef resources
 
 // loadActorForTag fetches the actor to tag and its template, and checks that
 // the actor holds an external snapshot a tag can be made from.
-func (w *ActorWorkflow) loadActorForTag(ctx context.Context, actorRef resources.ActorRef) (_ *ateapipb.Actor, _ *ateapipb.ActorTemplate, err error) {
+func (w *ActorWorkflow) loadActorForTag(ctx context.Context, actorRef resources.ActorRef, precondition *store.Precondition) (_ *ateapipb.Actor, _ *ateapipb.ActorTemplate, err error) {
 	ctx, done := stepSpan(ctx, "LoadActorForTag")
 	defer func() { err = done(err) }()
 
 	actor, err := w.store.GetActor(ctx, actorRef)
 	if err != nil {
 		return nil, nil, err
+	}
+	if precondition != nil {
+		if err := precondition.Check(actor.GetMetadata()); err != nil {
+			return nil, nil, apierror.Aborted("source actor changed before tagging: %w", err)
+		}
 	}
 	// Only a suspended actor's snapshot is complete. A running or
 	// suspending actor's is either stale or still being written.

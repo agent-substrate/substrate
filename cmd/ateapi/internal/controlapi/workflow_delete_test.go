@@ -489,7 +489,7 @@ func TestDeleteActor_CollectsSnapshotsAfterWorkerDelete(t *testing.T) {
 				}
 				return status.Error(codes.Unavailable, "worker pod is gone")
 			}
-			if _, err := actorWorkflow.SuspendActor(ctx, actorRef, suspendSync); apierror.Code(err) != codes.Unavailable {
+			if _, err := actorWorkflow.SuspendActor(ctx, actorRef, suspendSync, nil); apierror.Code(err) != codes.Unavailable {
 				t.Fatalf("SuspendActor err = %v, want Unavailable from the failed checkpoint", err)
 			}
 

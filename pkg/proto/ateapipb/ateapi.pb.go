@@ -2860,8 +2860,9 @@ type GoldenSnapshotStatus struct {
 	// +k8s:optional
 	// +k8s:subfield(atespace)=+k8s:required
 	GoldenTag *ObjectRef `protobuf:"bytes,1,opt,name=golden_tag,json=goldenTag,proto3" json:"golden_tag,omitempty"`
-	// snapshot_time is when the golden-actor warmup ends and the
-	// golden snapshot may be taken.
+	// snapshot_time is when uninterrupted warmup ends for the Actor identified
+	// by warmup_actor_uid and warmup_actor_version. It is set once RUNNING is
+	// observed and stays unset otherwise; capture waits for it.
 	//
 	// +k8s:optional
 	SnapshotTime *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=snapshot_time,json=snapshotTime,proto3" json:"snapshot_time,omitempty"`
@@ -2870,9 +2871,18 @@ type GoldenSnapshotStatus struct {
 	//
 	// +k8s:optional
 	// +k8s:maxLength=4096
-	ErrorMessage  string `protobuf:"bytes,3,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	ErrorMessage string `protobuf:"bytes,3,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	// warmup_actor_uid identifies the Actor whose RUNNING state starts the timer.
+	// +k8s:optional
+	// +k8s:format=k8s-uuid
+	WarmupActorUid string `protobuf:"bytes,4,opt,name=warmup_actor_uid,json=warmupActorUid,proto3" json:"warmup_actor_uid,omitempty"`
+	// warmup_actor_version is the RUNNING revision whose warmup is being timed.
+	// A different revision starts a fresh timer, even if the Actor is RUNNING again.
+	// +k8s:optional
+	// +k8s:minimum=1
+	WarmupActorVersion int64 `protobuf:"varint,5,opt,name=warmup_actor_version,json=warmupActorVersion,proto3" json:"warmup_actor_version,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *GoldenSnapshotStatus) Reset() {
@@ -2924,6 +2934,20 @@ func (x *GoldenSnapshotStatus) GetErrorMessage() string {
 		return x.ErrorMessage
 	}
 	return ""
+}
+
+func (x *GoldenSnapshotStatus) GetWarmupActorUid() string {
+	if x != nil {
+		return x.WarmupActorUid
+	}
+	return ""
+}
+
+func (x *GoldenSnapshotStatus) GetWarmupActorVersion() int64 {
+	if x != nil {
+		return x.WarmupActorVersion
+	}
+	return 0
 }
 
 type ActorTemplateStatus struct {
@@ -9580,12 +9604,14 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x06limits\x18\x01 \x03(\v2\x0e.ateapi.LimitsR\x06limits\"8\n" +
 	"\x06Limits\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1a\n" +
-	"\bquantity\x18\x02 \x01(\tR\bquantity\"\xae\x01\n" +
+	"\bquantity\x18\x02 \x01(\tR\bquantity\"\x8a\x02\n" +
 	"\x14GoldenSnapshotStatus\x120\n" +
 	"\n" +
 	"golden_tag\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\tgoldenTag\x12?\n" +
 	"\rsnapshot_time\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\fsnapshotTime\x12#\n" +
-	"\rerror_message\x18\x03 \x01(\tR\ferrorMessage\"i\n" +
+	"\rerror_message\x18\x03 \x01(\tR\ferrorMessage\x12(\n" +
+	"\x10warmup_actor_uid\x18\x04 \x01(\tR\x0ewarmupActorUid\x120\n" +
+	"\x14warmup_actor_version\x18\x05 \x01(\x03R\x12warmupActorVersion\"i\n" +
 	"\x13ActorTemplateStatus\x12R\n" +
 	"\x16golden_snapshot_status\x18\x01 \x01(\v2\x1c.ateapi.GoldenSnapshotStatusR\x14goldenSnapshotStatus\"\xd8\x01\n" +
 	"\x0eSnapshotConfig\x12)\n" +

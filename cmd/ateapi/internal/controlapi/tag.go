@@ -34,6 +34,10 @@ import (
 // again or deleted cannot collect it. The work is a workflow because it spans
 // two transactions around an object copy; see TagActorSnapshot.
 func (s *RPCService) CreateTag(ctx context.Context, req *ateapipb.CreateTagRequest) (*ateapipb.Tag, error) {
+	return s.createTag(ctx, req, nil)
+}
+
+func (s *RPCService) createTag(ctx context.Context, req *ateapipb.CreateTagRequest, precondition *store.Precondition) (*ateapipb.Tag, error) {
 	// First scrub any fields that users are not allowed to set, then fill the
 	// defaults so validation sees the final resource state.
 	inTag := req.Tag
@@ -49,7 +53,7 @@ func (s *RPCService) CreateTag(ctx context.Context, req *ateapipb.CreateTagReque
 	actorRef := resources.ActorRefFromObjectRef(req.GetTag().GetSourceActor())
 	setSpanActorRefAttributes(ctx, actorRef)
 
-	tag, err := s.actorWorkflow.TagActorSnapshot(ctx, req.GetTag())
+	tag, err := s.actorWorkflow.TagActorSnapshot(ctx, req.GetTag(), precondition)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, apierror.FailedPrecondition("Actor %s not found", actorRef)

@@ -87,7 +87,7 @@ func ReleaseWindowWorkflows() []ReleaseWindowWorkflow {
 			// and its first actor update is the finalize commit.
 			Finalize: func(t *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef, _ *ateapipb.Actor) error {
 				w, _ := newWireCaptureWorkflow(t, st)
-				_, err := w.SuspendActor(ctx, actorRef, suspendAsync)
+				_, err := w.SuspendActor(ctx, actorRef, suspendAsync, nil)
 				return err
 			},
 			WantRetry:      codes.OK,
@@ -102,7 +102,7 @@ func ReleaseWindowWorkflows() []ReleaseWindowWorkflow {
 			// As for the pause, the finalize commit is the first actor update.
 			Finalize: func(t *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef, _ *ateapipb.Actor) error {
 				w, _ := newWireCaptureWorkflow(t, st)
-				_, err := w.SuspendActor(ctx, actorRef, suspendSync)
+				_, err := w.SuspendActor(ctx, actorRef, suspendSync, nil)
 				return err
 			},
 			WantRetry:      codes.OK,
