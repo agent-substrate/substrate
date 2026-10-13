@@ -31,6 +31,11 @@ import (
 type fakeRunsc struct {
 	containers map[string]bool
 	calls      []string
+	// deleteFailures makes cmdDelete fail that many times for a container;
+	// a failure with removeOnFailure set still drops the record, like a
+	// delete killed after its work.
+	deleteFailures  map[string]int
+	removeOnFailure bool
 }
 
 func newFakeRunsc(containers ...string) *fakeRunsc {
@@ -53,6 +58,13 @@ func (f *fakeRunsc) cmdDelete(_ context.Context, name string) error {
 	f.calls = append(f.calls, "delete "+name)
 	if !f.containers[name] {
 		return errors.New("exit status 128")
+	}
+	if f.deleteFailures[name] > 0 {
+		f.deleteFailures[name]--
+		if f.removeOnFailure {
+			delete(f.containers, name)
+		}
+		return errors.New("signal: killed")
 	}
 	delete(f.containers, name)
 	return nil
@@ -129,4 +141,51 @@ func TestStopContainersLeavesTheSandboxToCleanup(t *testing.T) {
 		want = append(want, "kill "+c.GetName()+" SIGKILL", "wait "+c.GetName())
 	}
 	assertCalls(t, f, want...)
+}
+
+func TestCleanupContainers_RetriesAFailedDelete(t *testing.T) {
+	f := newFakeRunsc("app", "_pause")
+	f.deleteFailures = map[string]int{"_pause": 1}
+
+	if err := cleanupContainers(context.Background(), f, []*ateworkerpb.Container{{Name: "app"}}); err != nil {
+		t.Fatalf("cleanupContainers: %v", err)
+	}
+	if got := countCalls(f.calls, "delete "+"_pause"); got != 2 {
+		t.Errorf("pause container deleted %d times, want 2 (one retry)", got)
+	}
+	if len(f.containers) != 0 {
+		t.Errorf("containers left: %v", f.containers)
+	}
+}
+
+func TestCleanupContainers_AcceptsAFailedDeleteThatRemovedTheContainer(t *testing.T) {
+	f := newFakeRunsc("_pause")
+	f.deleteFailures = map[string]int{"_pause": 1}
+	f.removeOnFailure = true
+
+	if err := cleanupContainers(context.Background(), f, nil); err != nil {
+		t.Fatalf("cleanupContainers: %v", err)
+	}
+	if got := countCalls(f.calls, "delete "+"_pause"); got != 1 {
+		t.Errorf("pause container deleted %d times, want 1 (gone after the failure)", got)
+	}
+}
+
+func TestCleanupContainers_ReportsADeleteThatFailsTwice(t *testing.T) {
+	f := newFakeRunsc("_pause")
+	f.deleteFailures = map[string]int{"_pause": 2}
+
+	if err := cleanupContainers(context.Background(), f, nil); err == nil {
+		t.Fatal("cleanupContainers succeeded with a container runsc could not delete")
+	}
+}
+
+func countCalls(calls []string, want string) int {
+	n := 0
+	for _, c := range calls {
+		if c == want {
+			n++
+		}
+	}
+	return n
 }

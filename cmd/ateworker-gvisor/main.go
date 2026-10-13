@@ -99,6 +99,11 @@ const minUsageSampleInterval = 50 * time.Second
 // kubelet SIGKILL of ateworker itself.
 const workloadGracePeriod = 30 * time.Minute
 
+// terminateCleanupTimeout bounds the container cleanup of a terminate. Under a
+// burst of deletes `runsc delete` of a multi-GiB sandbox outran 30 s; the kill
+// failed the terminate and left the actor DELETING with its worker.
+const terminateCleanupTimeout = 120 * time.Second
+
 func main() {
 	pid1.RunIfPID1()
 	pflag.Parse()
@@ -937,8 +942,19 @@ func cleanupContainers(ctx context.Context, rcmd containerRuntime, containers []
 	}
 
 	for _, name := range present {
-		if err := rcmd.cmdDelete(ctx, name); err != nil {
-			return fmt.Errorf("while deleting %q container: %w", name, err)
+		err := rcmd.cmdDelete(ctx, name)
+		if err == nil {
+			continue
+		}
+		// A delete that was killed or raced another cleanup may still have
+		// removed the record; otherwise a second try finishes a partial one.
+		gone, listErr := isContainerAlreadyGone(ctx, rcmd, name)
+		if listErr == nil && gone {
+			slog.InfoContext(ctx, "runsc container gone after a failed delete", slog.String("container", name), slog.Any("err", err))
+			continue
+		}
+		if retryErr := rcmd.cmdDelete(ctx, name); retryErr != nil {
+			return fmt.Errorf("while deleting %q container: %w", name, errors.Join(err, retryErr))
 		}
 	}
 
@@ -1216,7 +1232,7 @@ func (s *AteWorkerService) terminateWorkload(ctx context.Context, actorRef resou
 
 	// Detached from the caller: a deadline mid-`runsc delete` would leave the
 	// container without its record and the actor unrecoverable.
-	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), terminateCleanupTimeout)
 	defer cancel()
 	// Stop the containers before deleting them, to avoid leaving a live container
 	// with no bundle on disk. Best-effort: if they are already stopped, the
