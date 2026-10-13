@@ -1,0 +1,43 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Add this component after ../ (the plugin's main component) to have atelet's
+# plugin serve sandbox assets, such as micro-VM kernels and root filesystems,
+# from the Azure Blob containers named below, by their native blob URLs
+# (https://<account>.blob.core.windows.net/<container>/<blob>). Replace the
+# placeholder with a comma-separated list of containers. The plugin downloads
+# each asset into the base manifest's asset-staging volume and verifies its
+# size and sha256 before atelet sees it, and refuses any blob stored under a
+# snapshot location, in any container.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+patches:
+- target:
+    kind: DaemonSet
+    labelSelector: app=atelet
+    namespace: ate-system
+  patch: |-
+    apiVersion: apps/v1
+    kind: DaemonSet
+    metadata:
+      name: ignored
+      namespace: ate-system
+    spec:
+      template:
+        spec:
+          initContainers:
+          - name: objectstore-plugin
+            env:
+            - name: AZURE_STORAGE_ASSET_CONTAINERS
+              value: REPLACE_WITH_ASSET_CONTAINERS

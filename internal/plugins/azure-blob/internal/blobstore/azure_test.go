@@ -179,6 +179,9 @@ func TestAzureStore(t *testing.T) {
 	if string(got) != string(data) {
 		t.Fatalf("download = %q, want %q", got, data)
 	}
+	if download.Size != int64(len(data)) {
+		t.Fatalf("download size = %d, want %d", download.Size, len(data))
+	}
 	if value := download.Metadata["Substrate_sha256"]; value == nil || *value != digest {
 		t.Fatalf("metadata = %v, want digest %q", download.Metadata, digest)
 	}

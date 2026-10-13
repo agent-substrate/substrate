@@ -32,9 +32,12 @@ var (
 	ErrUnavailable = errors.New("blob service unavailable")
 )
 
-// Download is a blob body and its metadata.
+// Download is a blob body, its size and its metadata.
 type Download struct {
-	Body     io.ReadCloser
+	Body io.ReadCloser
+	// Size is the blob's length in bytes as the service reported it, or
+	// negative if it reported none.
+	Size     int64
 	Metadata map[string]*string
 }
 

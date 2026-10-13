@@ -63,6 +63,101 @@ func TestDeploymentComponentReplacesObjectStorePluginSidecars(t *testing.T) {
 	}
 }
 
+// TestDeploymentAssetsComponent checks that the assets component only names
+// the asset containers of atelet's plugin, and that the main component's node
+// arguments serve them once it does.
+func TestDeploymentAssetsComponent(t *testing.T) {
+	var component struct {
+		Patches []struct {
+			Target struct {
+				Kind          string `json:"kind"`
+				LabelSelector string `json:"labelSelector"`
+			} `json:"target"`
+			Patch string `json:"patch"`
+		} `json:"patches"`
+	}
+	data, err := os.ReadFile("../../config/assets/kustomization.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := yaml.Unmarshal(data, &component); err != nil {
+		t.Fatalf("parsing assets component: %v", err)
+	}
+	if len(component.Patches) != 1 || component.Patches[0].Target.Kind != "DaemonSet" || component.Patches[0].Target.LabelSelector != "app=atelet" {
+		t.Fatalf("assets component patches %+v, want one patch of the atelet DaemonSet", component.Patches)
+	}
+	var patch workloadPatch
+	if err := yaml.Unmarshal([]byte(component.Patches[0].Patch), &patch); err != nil {
+		t.Fatalf("parsing assets patch: %v", err)
+	}
+	spec := patch.Spec.Template.Spec
+	if len(spec.Containers) != 0 || len(spec.Volumes) != 0 || len(spec.InitContainers) != 1 {
+		t.Fatalf("assets patch changes more than one init container: %+v", spec)
+	}
+	sidecar := spec.InitContainers[0]
+	if sidecar.Name != "objectstore-plugin" || sidecar.Args != nil || sidecar.StartupProbe != nil || len(sidecar.Env) != 1 ||
+		sidecar.Env[0].Name != "AZURE_STORAGE_ASSET_CONTAINERS" {
+		t.Fatalf("assets patch sidecar = %+v, want only AZURE_STORAGE_ASSET_CONTAINERS on objectstore-plugin", sidecar)
+	}
+
+	nodeArgs := componentNodeArgs(t)
+	t.Setenv("AZURE_STORAGE_ASSET_CONTAINERS", sidecar.Env[0].Value)
+	if err := run(t.Context(), nodeArgs, func(string, []string) (map[string]blobstore.Store, error) {
+		t.Errorf("node sidecar reached the store factory with the asset container placeholder")
+		return nil, errors.New("unexpected")
+	}); err == nil || !strings.Contains(err.Error(), "REPLACE_WITH_ASSET_CONTAINERS") {
+		t.Errorf("run() with the assets component's placeholder = %v, want it rejected", err)
+	}
+
+	t.Setenv("AZURE_STORAGE_ASSET_CONTAINERS", strings.ReplaceAll(sidecar.Env[0].Value, "REPLACE_WITH_ASSET_CONTAINERS", "assets"))
+	errStop := errors.New("stop after parsing flags")
+	var got []string
+	err = run(t.Context(), nodeArgs, func(_ string, containers []string) (map[string]blobstore.Store, error) {
+		got = containers
+		return nil, errStop
+	})
+	if want := []string{"snapshots", "assets"}; !errors.Is(err, errStop) || !slices.Equal(got, want) {
+		t.Errorf("run() with the assets component = %v with containers %v, want the store factory reached with %v", err, got, want)
+	}
+}
+
+// componentNodeArgs returns the main component's node sidecar arguments with
+// the snapshot container placeholder replaced by "snapshots".
+func componentNodeArgs(t *testing.T) []string {
+	t.Helper()
+	data, err := os.ReadFile("../../config/kustomization.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var component struct {
+		Patches []struct {
+			Target struct {
+				Kind string `json:"kind"`
+			} `json:"target"`
+			Patch string `json:"patch"`
+		} `json:"patches"`
+	}
+	if err := yaml.Unmarshal(data, &component); err != nil {
+		t.Fatalf("parsing component: %v", err)
+	}
+	for _, p := range component.Patches {
+		if p.Target.Kind != "DaemonSet" {
+			continue
+		}
+		var patch workloadPatch
+		if err := yaml.Unmarshal([]byte(p.Patch), &patch); err != nil {
+			t.Fatalf("parsing node patch: %v", err)
+		}
+		args := slices.Clone(findContainer(t, patch.Spec.Template.Spec.InitContainers, "objectstore-plugin").Args)
+		for i, arg := range args {
+			args[i] = strings.ReplaceAll(arg, "REPLACE_WITH_CONTAINERS", "snapshots")
+		}
+		return args
+	}
+	t.Fatal("component has no DaemonSet patch")
+	return nil
+}
+
 type workloadPatch struct {
 	Spec struct {
 		Template struct {
@@ -98,6 +193,7 @@ type container struct {
 	} `json:"startupProbe"`
 	Env []struct {
 		Name  string `json:"name"`
+		Value string `json:"value"`
 		Patch string `json:"$patch"`
 	} `json:"env"`
 	VolumeMounts []struct {
@@ -135,19 +231,37 @@ func assertSidecarPatch(t *testing.T, raw, mode string) {
 	}); err == nil || !strings.Contains(err.Error(), "REPLACE_WITH_CONTAINERS") {
 		t.Errorf("%s sidecar args %v: run() = %v, want the container placeholder rejected", mode, sidecar.Args, err)
 	}
-	// Once replaced, the component's arguments parse with this binary's flags.
 	args := slices.Clone(sidecar.Args)
 	for i, arg := range args {
 		args[i] = strings.ReplaceAll(arg, "REPLACE_WITH_CONTAINERS", "snapshots,other")
 	}
+	// Snapshot-only installs use this component as it is: no asset
+	// container flag to fill in or delete.
+	wantContainers := []string{"snapshots", "other"}
+	if mode == "node" {
+		if slices.ContainsFunc(args, func(arg string) bool { return strings.HasPrefix(arg, "--asset-containers") }) {
+			t.Errorf("node sidecar args %v set --asset-containers; only the assets component may", args)
+		}
+		// The base manifest's asset-staging volume, which only this
+		// container mounts, and its capacity.
+		for _, want := range []string{
+			"--asset-staging-dir=/var/lib/objectstore-plugin/asset-staging",
+			"--asset-staging-capacity=8Gi",
+		} {
+			if !slices.Contains(args, want) {
+				t.Errorf("node sidecar args %v do not include %s, as the base manifest does", args, want)
+			}
+		}
+	}
+	// Once replaced, the component's arguments parse with this binary's flags.
 	errStop := errors.New("stop after parsing flags")
 	var gotContainers []string
 	err := run(t.Context(), args, func(_ string, containers []string) (map[string]blobstore.Store, error) {
 		gotContainers = containers
 		return nil, errStop
 	})
-	if !errors.Is(err, errStop) || !slices.Equal(gotContainers, []string{"snapshots", "other"}) {
-		t.Errorf("%s sidecar args %v: run() = %v with containers %v, want the store factory reached with [snapshots other]", mode, args, err, gotContainers)
+	if !errors.Is(err, errStop) || !slices.Equal(gotContainers, wantContainers) {
+		t.Errorf("%s sidecar args %v: run() = %v with containers %v, want the store factory reached with %v", mode, args, err, gotContainers, wantContainers)
 	}
 	wantProbe := []string{"/ko-app/azure-blob-objectstore-plugin", "healthcheck", socket}
 	if sidecar.StartupProbe == nil || sidecar.StartupProbe.Exec == nil || !slices.Equal(sidecar.StartupProbe.Exec.Command, wantProbe) {

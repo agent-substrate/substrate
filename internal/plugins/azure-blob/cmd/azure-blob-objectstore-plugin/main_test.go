@@ -55,10 +55,16 @@ func TestRunRejectsInvalidConfiguration(t *testing.T) {
 		{name: "duplicate container", args: []string{"control", "--socket=/tmp/plugin.sock", "--account-url=https://account.example", "--containers=snapshots, snapshots"}, want: "twice"},
 		{name: "credential selection", args: []string{"control", "--socket=/tmp/plugin.sock", "--account-url=https://account.example", "--containers=snapshots", "--credential=managed-identity"}, want: "flag provided but not defined: -credential"},
 		{name: "bad flag", args: []string{"node", "--unknown"}, want: "flag provided but not defined"},
+		{name: "asset containers in control mode", args: []string{"control", "--socket=/tmp/plugin.sock", "--account-url=https://account.example", "--containers=snapshots", "--asset-containers=assets"}, want: "only served in node mode"},
+		{name: "invalid asset container", args: []string{"node", "--socket=/tmp/plugin.sock", "--account-url=https://account.example", "--containers=snapshots", "--asset-containers=Assets"}, want: "--asset-containers"},
+		{name: "duplicate asset container", args: []string{"node", "--socket=/tmp/plugin.sock", "--account-url=https://account.example", "--containers=snapshots", "--asset-containers=assets,assets"}, want: "twice"},
+		{name: "zero asset staging capacity", args: []string{"node", "--socket=/tmp/plugin.sock", "--account-url=https://account.example", "--containers=snapshots", "--asset-containers=assets", "--asset-staging-capacity=0"}, want: "--asset-staging-capacity"},
+		{name: "invalid asset staging capacity", args: []string{"node", "--socket=/tmp/plugin.sock", "--account-url=https://account.example", "--containers=snapshots", "--asset-containers=assets", "--asset-staging-capacity=lots"}, want: "--asset-staging-capacity"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("AZURE_STORAGE_ACCOUNT_URL", "")
 			t.Setenv("AZURE_STORAGE_CONTAINERS", "")
+			t.Setenv("AZURE_STORAGE_ASSET_CONTAINERS", "")
 			err := run(context.Background(), tc.args, func(string, []string) (map[string]blobstore.Store, error) {
 				t.Fatal("store factory called for invalid configuration")
 				return nil, nil
@@ -104,6 +110,11 @@ func TestRunServesSelectedModeAndHealth(t *testing.T) {
 			control := objectstorev1.NewControlProviderClient(conn)
 			_, nodeErr := node.FetchSnapshot(checkCtx, &objectstorev1.FetchSnapshotRequest{})
 			_, controlErr := control.CleanupSnapshot(checkCtx, &objectstorev1.CleanupSnapshotRequest{})
+			// Without --asset-containers, neither mode serves assets.
+			_, assetErr := objectstorev1.NewAssetProviderClient(conn).FetchAsset(checkCtx, &objectstorev1.FetchAssetRequest{})
+			if status.Code(assetErr) != codes.Unimplemented {
+				t.Fatalf("asset RPC code = %v, want Unimplemented", status.Code(assetErr))
+			}
 			if mode == "node" {
 				if status.Code(nodeErr) != codes.InvalidArgument {
 					t.Fatalf("node RPC code = %v, want InvalidArgument", status.Code(nodeErr))
@@ -130,6 +141,67 @@ func TestRunServesSelectedModeAndHealth(t *testing.T) {
 				t.Fatal("run did not stop after cancellation")
 			}
 		})
+	}
+}
+
+// TestRunServesAssets runs node mode with asset containers, one shared with
+// the snapshot containers, and fetches an asset from each through the socket.
+func TestRunServesAssets(t *testing.T) {
+	t.Setenv("AZURE_STORAGE_ASSET_CONTAINERS", "")
+	socket := testSocket(t, "plugin.sock")
+	root, staging := t.TempDir(), filepath.Join(t.TempDir(), "asset-staging")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errs := make(chan error, 1)
+	go func() {
+		errs <- run(ctx, []string{
+			"node",
+			"--socket=" + socket,
+			"--account-url=https://account.example",
+			"--containers=snapshots",
+			"--asset-containers=assets, snapshots",
+			"--asset-staging-dir=" + staging,
+			"--root=" + root,
+		}, func(_ string, containers []string) (map[string]blobstore.Store, error) {
+			if !slices.Equal(containers, []string{"snapshots", "assets"}) {
+				t.Errorf("factory called with containers %q, want [snapshots assets]", containers)
+			}
+			return map[string]blobstore.Store{"snapshots": &testStore{}, "assets": &testStore{}}, nil
+		})
+	}()
+
+	conn := dialPlugin(t, socket)
+	client := objectstorev1.NewAssetProviderClient(conn)
+	dst := filepath.Join(root, "asset")
+	if err := os.WriteFile(dst, []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const emptySHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	for _, uri := range []string{"https://account.example/assets/vmlinux", "https://account.example/snapshots/kata/vmlinux"} {
+		if _, err := client.FetchAsset(ctx, &objectstorev1.FetchAssetRequest{
+			AssetUri: uri, Sha256: emptySHA256, WritePath: dst, MaxBytes: 1,
+		}); err != nil {
+			t.Fatalf("FetchAsset(%s) = %v, want success", uri, err)
+		}
+	}
+	if info, err := os.Stat(staging); err != nil || !info.IsDir() || info.Mode().Perm() != 0o700 {
+		t.Errorf("asset staging directory: %v, %v; want a 0700 directory", info, err)
+	}
+	_, err := client.FetchAsset(ctx, &objectstorev1.FetchAssetRequest{
+		AssetUri: "https://account.example/other/vmlinux", Sha256: emptySHA256, WritePath: dst, MaxBytes: 1,
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Errorf("FetchAsset from a container not in --asset-containers = %v, want InvalidArgument", err)
+	}
+
+	cancel()
+	select {
+	case err := <-errs:
+		if err != nil {
+			t.Fatalf("run after cancellation: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("run did not stop after cancellation")
 	}
 }
 
@@ -429,7 +501,7 @@ func (s *testStore) CommitBlockList(context.Context, string, []string, map[strin
 }
 
 func (s *testStore) Download(context.Context, string) (blobstore.Download, error) {
-	return blobstore.Download{Body: io.NopCloser(strings.NewReader(""))}, nil
+	return blobstore.Download{Body: io.NopCloser(strings.NewReader("")), Size: 0}, nil
 }
 
 func (s *testStore) List(context.Context, string) ([]string, error) {
