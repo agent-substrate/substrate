@@ -27,6 +27,10 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/discovery/cached/memory"
+	fakediscovery "k8s.io/client-go/discovery/fake"
+	"k8s.io/client-go/restmapper"
+	clienttesting "k8s.io/client-go/testing"
 )
 
 // Teardown walks a fixed list of manifests covering every install shape, so a
@@ -156,5 +160,35 @@ func TestApplyWithRetryStopsOnCancellation(t *testing.T) {
 	}
 	if ri.attempts != 1 {
 		t.Errorf("apply attempted %d times, want 1", ri.attempts)
+	}
+}
+
+// ApplyTolerant skips a kind whose CRD the cluster does not serve and never
+// reaches the dynamic client for it: the zero-value Dynamic panics if it does.
+func TestApplyTolerantSkipsUnservedKind(t *testing.T) {
+	// A cluster serves at least the core group; only the Managed Prometheus
+	// group is missing.
+	served := &fakediscovery.FakeDiscovery{Fake: &clienttesting.Fake{Resources: []*metav1.APIResourceList{{
+		GroupVersion: "v1",
+		APIResources: []metav1.APIResource{{Name: "configmaps", Kind: "ConfigMap", Namespaced: true}},
+	}}}}
+	disco := memory.NewMemCacheClient(served)
+	c := &Client{discovery: disco, mapper: restmapper.NewDeferredDiscoveryRESTMapper(disco)}
+
+	pm := &unstructured.Unstructured{}
+	pm.SetAPIVersion("monitoring.googleapis.com/v1")
+	pm.SetKind("PodMonitoring")
+	pm.SetNamespace("ate-system")
+	pm.SetName("atenet-router-envoy")
+
+	var skipped []string
+	err := c.ApplyTolerant(t.Context(), []*unstructured.Unstructured{pm}, func(obj *unstructured.Unstructured, _ error) {
+		skipped = append(skipped, Describe(obj))
+	})
+	if err != nil {
+		t.Fatalf("ApplyTolerant() = %v, want the unserved kind skipped", err)
+	}
+	if len(skipped) != 1 {
+		t.Errorf("skipped %v, want the PodMonitoring reported once", skipped)
 	}
 }
