@@ -78,6 +78,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/util/validation/field"
+	kubeinformers "k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
@@ -326,8 +327,12 @@ func main() {
 	if _, err := startSandboxAssetPrewarm(ctx, sandboxConfigInformer, wmService, imageCache, microvmNodeCapable(hostDevRoot)); err != nil {
 		slog.ErrorContext(ctx, "Sandbox asset prewarm disabled", slog.Any("err", err))
 	}
-	// Start after the informer is registered: the factory only runs informers
-	// that exist when Start is called.
+	// WorkerPools tell which SandboxConfig each local worker's pool uses; see
+	// workerSandboxSyncer.
+	workerPoolInformer := ateFactory.Api().V1alpha1().WorkerPools()
+	workerPoolInformer.Informer()
+	// Start after the informers are registered: the factory only runs
+	// informers that exist when Start is called.
 	ateFactory.Start(stopCh)
 	dialOpts, err := ateapiauth.DialOptions(ateapiauth.ClientConfig{
 		K8sClient:        k8sClient,
@@ -364,6 +369,26 @@ func main() {
 	if ateletIdentity == nil {
 		serverboot.Fatal(ctx, "Failed to load atelet Pod identity", fmt.Errorf("credential bundle has no Pod identity"))
 	}
+
+	// Only this node's worker pods, as the kubelet watches its own: the
+	// apiserver indexes spec.nodeName, so this costs O(pods on the node).
+	// Never synced on, like ateFactory above.
+	workerPodFactory := kubeinformers.NewSharedInformerFactoryWithOptions(k8sClient, 0,
+		kubeinformers.WithTweakListOptions(func(o *metav1.ListOptions) {
+			o.FieldSelector = "spec.nodeName=" + ateletIdentity.NodeName
+			o.LabelSelector = workerPoolLabel
+		}))
+	// Keep each local worker's sandbox versions file current, so workers
+	// register the runtimes of their pool's config and pick up config
+	// changes without a restart. Best-effort like the prewarmer.
+	if _, err := startWorkerSandboxSyncer(ctx,
+		workerPodFactory.Core().V1().Pods(),
+		workerPoolInformer,
+		ateFactory.Api().V1alpha1().SandboxConfigs(),
+		wmService); err != nil {
+		slog.ErrorContext(ctx, "Worker sandbox versions syncer disabled", slog.Any("err", err))
+	}
+	workerPodFactory.Start(stopCh)
 
 	ateomFacingTLS := tlsCfg.Clone()
 	ateomFacingTLS.VerifyConnection = verifyClientOnSameNode(ateletIdentity)

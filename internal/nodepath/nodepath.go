@@ -56,9 +56,11 @@ func AteletOTLPSocketPath() string {
 	)
 }
 
-// AteomsDir is the parent of every per-ateom directory. Each ateom creates
-// AteomPath(podUID) under it when it boots, so listing this directory is how a
-// scraper with no prior knowledge discovers the node's ateoms.
+// AteomsDir is the parent of every per-ateom directory, so listing it is how
+// a scraper with no prior knowledge discovers the node's ateoms. atelet
+// creates AteomPath(podUID) when the worker pod is bound to the node and
+// removes it when the pod is deleted; the ateom also MkdirAlls it at boot. A
+// directory may exist before its ateom listens on its socket.
 func AteomsDir() string {
 	return filepath.Join(BasePath, "ateoms")
 }
@@ -72,6 +74,12 @@ func AteomSocketPath(podUID string) string {
 		AteomPath(podUID),
 		"ateom.sock",
 	)
+}
+
+// AteomSandboxVersionsFile is where atelet keeps the sandbox versions of a
+// worker's pool (an ateletpb.WorkerSandboxVersions) for the worker to read.
+func AteomSandboxVersionsFile(podUID string) string {
+	return filepath.Join(AteomPath(podUID), "sandbox-versions.json")
 }
 
 // ActorNetNSName names an actor's sandbox network namespace.
