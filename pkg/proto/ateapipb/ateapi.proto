@@ -2426,6 +2426,9 @@ service WorkerService {
   // control plane serves it only for an Actor on the caller's node.
   // Idempotent: each report carries the whole state and replaces the previous
   // one. Returns ABORTED while another operation holds the Actor; retry.
+  //
+  // TODO(#2570): not served yet. Every call returns UNIMPLEMENTED until the
+  // handler lands.
   rpc ReportActorSnapshotState(ReportActorSnapshotStateRequest) returns (ReportActorSnapshotStateResponse);
 }
 

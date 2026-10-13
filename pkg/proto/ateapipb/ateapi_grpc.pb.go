@@ -1885,6 +1885,9 @@ type WorkerServiceClient interface {
 	// control plane serves it only for an Actor on the caller's node.
 	// Idempotent: each report carries the whole state and replaces the previous
 	// one. Returns ABORTED while another operation holds the Actor; retry.
+	//
+	// TODO(#2570): not served yet. Every call returns UNIMPLEMENTED until the
+	// handler lands.
 	ReportActorSnapshotState(ctx context.Context, in *ReportActorSnapshotStateRequest, opts ...grpc.CallOption) (*ReportActorSnapshotStateResponse, error)
 }
 
@@ -1990,6 +1993,9 @@ type WorkerServiceServer interface {
 	// control plane serves it only for an Actor on the caller's node.
 	// Idempotent: each report carries the whole state and replaces the previous
 	// one. Returns ABORTED while another operation holds the Actor; retry.
+	//
+	// TODO(#2570): not served yet. Every call returns UNIMPLEMENTED until the
+	// handler lands.
 	ReportActorSnapshotState(context.Context, *ReportActorSnapshotStateRequest) (*ReportActorSnapshotStateResponse, error)
 	mustEmbedUnimplementedWorkerServiceServer()
 }
